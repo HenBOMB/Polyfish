@@ -2,6 +2,11 @@ import Tribe from '../core/tribe';
 import Score from './score';
 import { genUnitMoves, genEconomy, genArmy, genHires } from './generator';
 
+// TODO
+/*
+Doubt this will ever work..
+(incomplete)
+*/
 function nextMoves(tribe, depth, moves, cb)
 {
   let [_score, _ttr, _moves] = [Score(tribe), t2r(tribe), []];
@@ -49,79 +54,114 @@ function nextMoves(tribe, depth, moves, cb)
   return [_score, _ttr, _moves];
 }
 
+function getBest(tribe, moves, range, score): any[] {
+  return moves.sort((a, b) => {
+    const s1 = 0,
+      s2 = 0;
+
+    if (a.play(tribe))
+    {
+      s1 = Score(tribe) - score;
+      a.undo();
+    }
+
+    if (b.play(tribe))
+    {
+      s2 = Score(tribe) - score;
+      b.undo();
+    }
+
+    return s2 - s1;
+  }).slice(0, range);
+}
+
+var gen = null;
+var count = 0;
+
 // Define a function to generate all possible moves from the current game state
-function generateMoves(gameState) {
-  // Implementation to generate possible moves based on the current game state
+function generateMoves(tribe, cb = gen) {
+  if (cb && !gen) gen = cb;
+  return getBest(tribe, cb? cb : gen, 4, -999);
 }
 
-// Define a function to evaluate the current game state (Heuristic function)
-function evaluate(gameState) {
-  // Implementation to evaluate the game state and return a numeric score
-}
+function alphaBetaSearch(tribe, depth, alpha, beta, maximizingPlayer): void {
+  
+  if (depth === 0) return [Score(tribe), []];
 
-function alphaBetaSearch(gameState, depth, alpha, beta, maximizingPlayer) {
-  if (depth === 0) {
-    return [evaluate(gameState), []];
-  }
-
-  if (maximizingPlayer) {
-    let value = -Infinity;
+  if (maximizingPlayer) 
+  {
+    let score = -Infinity;
     let bestMoves = [];
 
-    const moves = generateMoves(gameState);
-    for (const move of moves) {
-      const newGameState = 0/* apply move to get the new game state */ ;
-      const [newValue, newMoves] = alphaBetaSearch(newGameState, depth - 1, alpha, beta, false);
+    const moves = generateMoves(tribe);
+    
+    for (let i = 0; i < moves.length; i++) {
+      const m = moves[i];
+      
+      if(!m.play(tribe)) continue;
+      
+      const [newScore, newMoves] = alphaBetaSearch(tribe, depth - 1, alpha, beta, false);
+      
+      m.undo();
 
-      if (newValue > value) {
-        value = newValue;
-        bestMoves = [move, ...newMoves];
+      if (newScore > score) {
+        score = newScore;
+        
+        bestMoves = [m._format, ...m._rewards, ...newMoves];
       }
 
-      alpha = Math.max(alpha, value);
+      alpha = Math.max(alpha, score);
       if (beta <= alpha) {
         break; // Beta cut-off
       }
     }
-    return [value, bestMoves];
-  } else {
-    let value = Infinity;
+    return [score, bestMoves];
+  } 
+  else 
+  {
+    let score = Infinity;
     let bestMoves = [];
 
-    const moves = generateMoves(gameState);
+    const moves = generateMoves(tribe);
     for (const move of moves) {
-      const newGameState = 0/* apply move to get the new game state */ ;
-      const [newValue, newMoves] = alphaBetaSearch(newGameState, depth - 1, alpha, beta, true);
-
-      if (newValue < value) {
-        value = newValue;
+      if(!move.play(tribe)) continue;
+      
+      const [newScore, newMoves] = alphaBetaSearch(tribe, depth - 1, alpha, beta, true);
+      
+      move.undo();
+      
+      if (newScore < score) {
+        score = newScore;
         bestMoves = [move, ...newMoves];
       }
 
-      beta = Math.min(beta, value);
+      beta = Math.min(beta, score);
       if (beta <= alpha) {
         break; // Alpha cut-off
       }
     }
-    return [value, bestMoves];
+    return [score, bestMoves];
   }
 }
 
 // Function to find the best list of moves using alpha-beta search
-function findBestMoves(gameState, depth) {
-  const moves = generateMoves(gameState);
+function findBestMoves(tribe, depth, gen) {
+  const moves = generateMoves(tribe, gen);
   let bestMoves = [];
-  let bestValue = -Infinity;
+  let bestScore = -Infinity;
   const alpha = -Infinity;
   const beta = Infinity;
   const maximizingPlayer = true;
 
   for (const move of moves) {
-    const newGameState = 0/* apply move to get the new game state */ ;
-    const [value, newMoves] = alphaBetaSearch(newGameState, depth - 1, alpha, beta, !maximizingPlayer);
-
-    if (value > bestValue) {
-      bestValue = value;
+    if(!move.play(tribe)) continue;
+    
+    const [score, newMoves] = alphaBetaSearch(tribe, depth - 1, alpha, beta, !maximizingPlayer);
+    
+    move.undo();
+    
+    if (score > bestScore) {
+      bestScore = score;
       bestMoves = [move, ...newMoves];
     }
   }

@@ -97,54 +97,99 @@ const weights: number[] = [
   ]
 ];
 
-const memCache = { };
+const tableEcoCache: { string: number } = {};
+
+function cacheEco(key: string, value: number | number[]): void {
+  tableEcoCache[key] = Array.isArray(value) ? value : [value];
+}
+
+function cacheScore(id, score): string {
+  return uid + [
+      ...Object.keys(cache).sort().map(k => state[k].join('_'))
+    ].join('-');
+}
+
+function serializeCache(cache): string {
+  return uid + [
+      ...Object.keys(cache).sort().map(k => state[k].join('_'))
+    ].join('-');
+}
 
 export default function Score(tribe: Tribe, _: number[]): number {
+  const state = cacheState('e', tableEcoCache);
 
-  let score = 0;
   // 1 - 5 / 5 - 12 / 12 - 
-  let stage = tribe._turn > 4 ? tribe._turn > 11 ? 2 : 1 : 0;
+  const stage = tribe._turn > 4 ? tribe._turn > 11 ? 2 : 1 : 0;
 
-  const [SxTu, SxL, SxP, SxST, SxSt, SxTc,
+  const [SxEa, SxEb, SxEc, SxEd, SxEe, SxEf,
   SxUf, SxUg, SxUa, SxUb, SxUc, SxUd, SxUe, SxUf, SxUg, SxUh, SxUi, SxUj, SxUk] = weights[stage];
 
-  score += SxST * tribe.getSpt();
+  let score = tableEcoCache[state] || 0;
 
-  // +(0-1) x city dist
-  tribe.getCities().forEach(c => {
-    const lvl = c.getLvl(tribe); // 2 = 3 pop
-    const pop = c.getPop(tribe); // 1/(lvl+1)
-    // ? Anything over lvl 4 is not recommended
-    const t = ((lvl > 4 ? 4 : lvl) / 4);
-    // ? Bonus city level
-    score += t * t * SxL;
-    // ? Small penalty for incomplete progress
-    const half = (lvl+1)*.5;
-    score += pop? ((pop-half) / half) * SxP : 0;
-  });
+  if (!score)
+  {
+    // TODO Caching must be put back in the tribe?
+    // ?! goCache(uid, key, value);
+    // ?! getCache(uid);
+    
+    score += SxEa * (tribe._turn + 1);
 
-  tribe.getTech().forEach(t =>
-    score += SxTc * t.getTier()
-  );
+    const spt = tribe.getSpt();
 
-  tribe.getStructures().forEach(c => {
-    score += SxSt;
-    // ? mine | ore
-    const adj = c._struct?.adjacent;
-    if (adj)
-    {
-      // only good if 3+ adj
-      const x = c.getAdjTerritory(tribe, c => adj.is(c._struct)).length;
+    // ?! CACHE SPT
+    cacheEco('sxed', spt);
 
-      // if any adj resource is potential struct
-      const y = c.getAdjTerritory(tribe, c => adj.required?.is(c.getResource(tribe))).length;
+    score += SxEd * spt;
 
-      // max 8 adjacent? but insaely rare
-      // 5 top, 3 base for good
-      score += ((x + y) - 1.5) * SxSt - y * SxSt * .7;
-    }
-  });
+    // ?! CACHE CITIES
+    cacheEco(
+      'sxec',
+      tribe.getCities().map(c => {
+        const lvl = c.getLvl(tribe); // 2 = 3 pop
+        const pop = c.getPop(tribe); // 1/(lvl+1)
+        // ? Anything over lvl 4 is not recommended
+        const t = ((lvl > 4 ? 4 : lvl) / 4);
+        // ? Bonus city level
+        score += t * t * SxEb;
+        // ? Small penalty for incomplete progress
+        const half = (lvl + 1) * .5;
+        score += pop ? ((pop - half) / half) * SxEc : 0;
+        return c.getCache();
+      })
+    );
+    
+    // ?! CACHE TECH
+    cacheEco(
+      'tech',
+      tribe.getTech().map(t => {
+        score += SxEf * t.getTier();
+        return t.getTier();
+      })
+    );
+   
 
+    tribe.getStructures().forEach(c => {
+      score += SxEe;
+      
+      // ? mine | ore
+      const adj = c._struct?.adjacent;
+      if (adj)
+      {
+        // only good if 3+ adj
+        const x = c.getAdjTerritory(tribe, c => adj.is(c._struct)).length;
+
+        // if any adj resource is potential struct
+        const y = c.getAdjTerritory(tribe, c => adj.required?.is(c.getResource(tribe))).length;
+
+        // max 8 adjacent? but insaely rare
+        // 5 top, 3 base for good
+        score += ((x + y) - 1.5) * SxEe - y * SxEe * .7;
+      }
+      return [];
+    });
+
+    tableEcoCache[state] = score;
+  }
   /* unit position score
    ★ Tiles attack / protected.
    ★ Tiles available for escape.
@@ -161,14 +206,13 @@ export default function Score(tribe: Tribe, _: number[]): number {
 
   // Penalize for moves that are protected by foes
   // Penalize if adj foes can kill this unit
-  
+
   const s = tribe.map.size;
 
   const scoreUnit = (u, vils) => {
     const cell = terrain[u._ix];
     const t = u.tribe;
     let _s = SxUf * u.worth();
-
 
     // ? Push for stacking kills
     _s += SxUg * ((u._kills > 3 ? 3 : u._kills) / 3) * u.getVitality();
@@ -177,12 +221,12 @@ export default function Score(tribe: Tribe, _: number[]): number {
     const uL = cell.getAdj(terrain, 'a').filter(c => !t.isExplored(c)).length;
 
     _s += SxUa * uL;
-    
+
     // ! THREAT ASSESSMENT
-    
+
     // !? Bonus when in foe land and sieging same city
     // !? Bonus when defending high-risk units
-    
+
     // ? Bonus when in foe territory
     // (only when has lot of health)
     const hpPenalty = u.getVitality() - .45;
@@ -196,12 +240,12 @@ export default function Score(tribe: Tribe, _: number[]): number {
     {
       _s += SxUc * hpPenalty;
     }
-    
+
     // ! SUPPORT AND SYNERGY
-    
+
     const adj = cell.getAdj(terrain, u.range);
-    const iR = u.range > 1? 1.7 : 1;
-    
+    const iR = u.range > 1 ? 1.7 : 1;
+
     // ? Make ranged units stay away from nearby foes
     if (iR > 1)
     {
@@ -214,7 +258,7 @@ export default function Score(tribe: Tribe, _: number[]): number {
     // ? Bonus for assisted allies
     // !? using ** causes weirdness
     _s += SxUe * adj.filter(c => c._unit && !c._unit.isFoe(t)).length * iR;
-  
+
     vils.forEach(c => {
       const x = u._ix % s,
         y = Math.floor(u._ix / s);
@@ -224,16 +268,16 @@ export default function Score(tribe: Tribe, _: number[]): number {
       let dist = c.is(u._ix) ? 0 : Math.max(Math.abs(xx - x), Math.abs(yy - y));
       const r = 3;
       const d = dist;
-      
+
       dist = (r - (dist > r ? r : dist)) / r;
-      
+
       // ? Push towards cities / villages
       _s += dist * SxUf;
 
       if (t.isExplored(c))
       {
-        const iF = c._city?.isFoe(t)? SxUk : 0;
-        
+        const iF = c._city?.isFoe(t) ? SxUk : 0;
+
         // ? Bonus if city is foe
         _s += dist * (c.isCity() ? SxUg - SxUf + iF : 0);
         // ? Is sieging?
@@ -260,14 +304,15 @@ export default function Score(tribe: Tribe, _: number[]): number {
     if (!u || !u.isFoe(tribe)) return;
     score -= scoreUnit(u, u.tribe.getExplored().filter(c => c.isVillage() || (c.isCity() && u.isFoe(c.city.tribe))));
   });
-  
+
   // TODO promote higher score moves by degrading moves that take longer (after a turn)
-  
-  score += SxTu * (tribe._turn + 1);
-  
+
+  // moved up ^
+  //score += SxTu * (tribe._turn + 1);
+
   // TODO
   // penalozd for high ttr?
   // ttr cant go below zero except for free stars
-  
+
   return Math.round(score * DECIMAL) / DECIMAL;
 }

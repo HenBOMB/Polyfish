@@ -7,17 +7,17 @@ import Structure from '../tech/structure';
 
 export default class Tribe
 {
-  // ! tmp
-  _turn: number = 0;
-  
   id: string;
   terrain: Cell[];
   foes: Tribe[] = [];
-
+  cache: { string: { string: number[] } } = {};
+  
   // ? sometimes after loosing a city, it will not get rmoved from the list
   // ? this is to keep track of winning the city back in the future or smth idk..
   private _cities: City[] = [];
 
+  // ! tmp
+  _turn: number = 0
   _score: number = 0;
   _stars: number = 5;
   _spent: number = 0;
@@ -32,34 +32,23 @@ export default class Tribe
     this.id = id;
     this._tech = [tech];
     this._truetech = [tech];
-
     this.addScore(100 * tech.getTier());
   }
   
-  // ? only values used in Score()
-  // ?! very bad, no perf gain
-  toState(): string {
-    return [
-      this._turn,
-      this.getSpt(),
-      this.getCities().map(c => [c.getLvl(this), c.getPop(this)]).join('/'),
-      this.getTech().map(t => t.getTier()).join('/'),
-      /*
-      this.getStructures().map(c => {
-        const adj = c._struct?.adjacent;
-        if (adj)
-        {
-          return [
-            c.getAdjTerritory(tribe, c => adj.is(c._struct)).length, 
-            c.getAdjTerritory(tribe, c => adj.required?.is(c.getResource(tribe))).length
-          ];
-        }
-        return [];
-      }).join('/'),
-      */
-    ].join(';');
+  setCache(uid: string, key: string, value: number | number[]): void {
+    
   }
-
+  
+  getCache(uid: string, key: string): number[] {
+    const cache = this.cache[uid] && this.cache[uid][key] || [];
+    return cache;
+  }
+  
+  packCache(uid): string {
+    const cache = this.cache[uid] || [];
+    return uid + Object.keys(cache).sort().map(k => cache[k].join('_')).join('-');
+  }
+  
   doMoveUnit(from: Cell, to: Cell)
   {
     if (!from._unit || to._unit)
@@ -76,7 +65,7 @@ export default class Tribe
     };
   }
 
-  // ? do's dont return undo
+  // ?! do's dont return undo
 
   doEnable()
   {
@@ -110,7 +99,7 @@ export default class Tribe
   {
     return this._explored.some(c => c.is(cell));
   }
-  
+
   isBuyable(item)
   {
     return this._stars >= item.getCost(this);
@@ -119,6 +108,10 @@ export default class Tribe
   hasTech(tech: Tech | string, abs: boolean)
   {
     return [this._truetech, this._tech][abs ? 0 : 1].some(t => t.is(tech));
+  }
+
+  getCache(key: string): any[] {
+    return this._cacheEco[key] ? this._cacheEco[key] : [];
   }
 
   // returns all unowned but unlocked tech
@@ -199,7 +192,7 @@ export default class Tribe
     if (!cities.length) return 0;
     return cities.map(c => c.getSpt(this)).reduce((p, c) => p + c);
   }
-  
+
   getTtr(): number {
     const t = this._spent / this.getSpt();
     return Math.round(t * 1000) / 1000;
@@ -231,19 +224,19 @@ export default class Tribe
   }
 
   // ACTIONS
-  
+
   // private
   goBuy(item: 'Buyable')
   {
     const tribe = this;
-    const cost = Number.isInteger(item)? item : item.getCost(tribe, true);
-    
-    if(tribe._stars < cost)
+    const cost = Number.isInteger(item) ? item : item.getCost(tribe, true);
+
+    if (tribe._stars < cost)
     {
       console.error('negative stars');
       console.trace();
     }
-    
+
     tribe._stars -= cost;
     tribe._spent += cost;
 
@@ -256,18 +249,18 @@ export default class Tribe
   goExplore(cell: Cell, terrain: Cell[], radius: number = 1)
   {
     const tribe = this;
-    
+
     const uncharted = [cell, ...cell.getAdj(terrain, radius)];
 
     const explored = uncharted.filter(u => !tribe._explored.some(e => u.is(e)));
-    
+
     const l = tribe._explored.length;
     tribe._explored.push(...explored);
-    
+
     const sUndo = tribe.addScore(5 * explored.length);
-    
+
     return () => {
-      tribe._explored = tribe._explored.slice(0,l-1);
+      tribe._explored = tribe._explored.slice(0, l - 1);
       sUndo();
     };
   }
@@ -285,11 +278,11 @@ export default class Tribe
     {
       return false;
     }
-    
+
     const tribe = this;
-    
+
     this._tech = [...this._tech, tech];
-    
+
     const bUndo = this.goBuy(tech);
     const sUndo = this.addScore(100 * tech.getTier())
 
@@ -403,12 +396,12 @@ export default class Tribe
   doPass()
   {
     this._truetech = [...this._tech];
-    
+
     this._memArmy.forEach(u => {
       const c = this.map.terrain[u._ix];
       c._unit = null;
     });
-    
+
     this._memArmy = [];
 
     this.goPass();
@@ -417,12 +410,12 @@ export default class Tribe
   goPass()
   {
     const tribe = this;
-    
+
     const bUndo = this.goBuy(-tribe.getSpt());
     const rUndo = tribe.getArmy().map(u => u.goReplenish());
-    
+
     tribe._turn++;
-    
+
     return () => {
       rUndo.forEach(u => u());
       bUndo();

@@ -14,29 +14,15 @@ export default function evaluate(tribe: Tribe, depth = 5)
 {
   count = 0;
 
-  /*
-  const score = Score(tribe);
- 
-  let aMoves = nextMoves(tribe, 3, null, genArmy);
- 
-  aMoves[2] = aMoves[2].slice(0, aMoves[2].findIndex(o => o[2].type === 'skip'));
-  aMoves[2].forEach(o => o[2].play(tribe));
-  */
-
-  //const eMoves = nextMoves(tribe, depth, null, (t) => [/*...genArmy(t), */...genHires(t), ...genEconomy(t)]);
-
-  const eMoves = nextMoves(tribe, depth, null, (t) => {
-    const army = t.getArmy().map(u => getBest(t, genUnitMoves(u), 3, 0)).reduce((a, b) => [...a, ...b]);
-    return [...army, ...genEconomy(t)];
-  });
-
-  //return [0, 0, [], count];
-
-
-  //aMoves[2].forEach(o => o[2].undo());
-
-  //eMoves[2] = [...aMoves[2], ...eMoves[2]];
-
+  const eMoves = nextMoves(
+    tribe,
+    depth,
+    (t) => {
+    const army = t.getArmy().map(u => getBest(t, genUnitMoves(u), 3, 0)).reduce((a, b)   => [...a, ...b]);
+      return [...army, ...genEconomy(t)];
+    }
+  );
+  
   return [...eMoves, count];
 }
 
@@ -61,7 +47,7 @@ function getBest(tribe, moves, range, score): any[] {
   }).slice(0, range);
 }
 
-function nextMoves(tribe, depth, moves, cb)
+function nextMoves(tribe, depth, cb, moves)
 {
   // ?! Get cached score state
   let [_score, _ttr, _moves] = [Score(tribe), tribe.getTtr(), []];
@@ -86,8 +72,8 @@ function nextMoves(tribe, depth, moves, cb)
     const [sc, ttr, ms] = nextMoves(
       tribe,
       depth - 1,
-      m.type === 'skip' ? null : moves.filter((_, x) => i !== x),
-      cb
+      cb,
+      m.type === 'skip' ? null : moves.filter((_, x) => i !== x)
     );
 
     m.undo();

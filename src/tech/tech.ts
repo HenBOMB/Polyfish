@@ -26,6 +26,12 @@ export default class Tech
     this.unlocks = {};
   }
   
+  getCache(): string {
+    return [
+      this.getTier()
+    ].join(',');
+  }
+  
   // obsolete
   // ? retuns if can afford and is unlocked
   // bad practice

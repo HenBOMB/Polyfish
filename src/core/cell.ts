@@ -140,7 +140,7 @@ export default class Cell
       }
     }
     
-    if(!cacheAdj[i]) Cell.cacheAdj[i] = {};
+    if(!Cell.cacheAdj[i]) Cell.cacheAdj[i] = {};
     
     Cell.cacheAdj[i][r] = out;
     

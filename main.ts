@@ -41,7 +41,7 @@ tribe.doPass();
 capital.goHire(Warrior(capital));
 unit.goMove(cell(70), [terrain]);
 tribe.doPass();
-   
+
 // ?! after playing a true move that explores tiles, like a step, ai can re-calc to find better path
 
 //unit.goMove(cell(71), [terrain]);
