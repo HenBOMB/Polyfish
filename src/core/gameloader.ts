@@ -733,6 +733,7 @@ export default class GameLoader {
             const tribe = state.tribes[owner];
             if(tribe._cities.length != 1) throw Error(`Tribe ${TribeType[tribe.tribeType]} has ${tribe._cities.length} cities`);
             state.settings._pov = tribe.owner;
+            tribe._cities[0]._unitCount = 1;
             summonUnit(
                 state, 
                 TribeSettings[tribe.tribeType].uniqueStartingUnit || UnitType.Warrior, 

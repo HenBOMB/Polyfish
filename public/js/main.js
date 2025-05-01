@@ -258,7 +258,7 @@ function generateMap(newState = null) {
             e.appendChild(document.createElement('div')).innerHTML = `
             <p>
             <span class="${tile.capitalOf > 0? 'capital' : ''}">${city.name}</span> (+${city._production})<br>
-            ${city._progress} / ${city._level + 1} (${city._population})<br>
+            ${city._progress} / ${city._level + 1} (${city._population}) (${city._unitCount})<br>
             </p>
             `;
         }

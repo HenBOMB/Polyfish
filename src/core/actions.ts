@@ -518,7 +518,7 @@ export function summonUnit(state: GameState, unitType: UnitType, spawnTileIndex:
         _owner: tribe.owner,
         createdTurn: state.settings._turn,
         // If its not from a ruin or special unit
-        _homeIndex: costs && !isSkilledIn(unitType, SkillType.Independent)? -1 : spawnTileIndex,
+        _homeIndex: isSkilledIn(unitType, SkillType.Independent) || !costs? -1 : spawnTileIndex,
         _tileIndex: spawnTileIndex,
         _effects: [],
         _attacked: true,
@@ -541,9 +541,7 @@ export function summonUnit(state: GameState, unitType: UnitType, spawnTileIndex:
     return () => {
         undoFrozen();
         undoDiscover();
-        if(cityHome) {
-            cityHome._unitCount--;
-        }
+        if(cityHome) cityHome._unitCount--;
         spawnTile._unitIdx = oldUnitIdx;
         spawnTile._unitOwner = oldUnitOwner;
         if(costs) tribe._stars += settings.cost;
