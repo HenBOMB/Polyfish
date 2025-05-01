@@ -1,0 +1,952 @@
+// import { getNeighborIndexes, getDefenseBonus, getAlliesNearTile, getClosestEnemyCity, getEnemiesNearTile, getMaxHealth, isAquaticOrCanFly, isWaterTerrain, isNavalUnit, isResourceVisible, getClosestOwnedStructureTile, getCityProduction, computeReachablePath, isSteppable, getUnitSettings, getClosestOwnedTile, getUnitAtTile, getEnemyAtTile } from "../core/functions";
+// import { ResourceSettings } from "../core/settings/ResourceSettings";
+// import { StructureSettings } from "../core/settings/StructureSettings";
+// import { TechnologySettings } from "../core/settings/TechnologySettings";
+// import { UnitSettings } from "../core/settings/UnitSettings";
+// import { GameState, StructureState, UnitState } from "../core/states";
+// import { UnitType, StructureType, TechnologyType, CaptureType, TerrainType, TribeType, ResourceType } from "../core/types";
+
+// const SCORE_PRODUCTION          = [8.0, 7.0, 6.0];
+// const SCORE_CITY                = [9.0, 7.0, 5.0];
+// const SCORE_RUINS               = [2.0, 1.9, 1.8]; // also starfish
+// const SCORE_DISCOVER_TERRAIN    = [0.25, 0.2, 0.15];
+
+// const PENALTY_CITY_POPULATION = [0.8, 0.4, 0.2];
+
+// const SCORE_UNIT_MULT    = 2.1,
+//     PENALTY_UNIT_HEALTH   = 1.5,
+//     PENALTY_ENEMY_UNIT_HEALTH = 2;
+
+// const SCORE_STARS = [0.2, 0.1, 0.05],
+//     SCORE_GOOD_PURCHSE = [0.5, 0.9, 0.8];
+
+// const SCORE_ADJACENT_MATCHING_STRUCTURES = [0.1, 0.2, 0.3];
+
+// const UNIT_SCORES: Record<UnitType, number> = {
+//     [UnitType.None]:        0.0,
+//     // S tier
+//     [UnitType.Shaman]: 2.5,
+//     [UnitType.Rider]: 2.0,
+//     [UnitType.Hexapod]: 1.9,
+//     // TODO Jelly (aquarion)
+//     [UnitType.BattleSled]: 2.3,
+//     // A tier
+//     [UnitType.Archer]:      1.4,
+//     [UnitType.Knight]:      1.7,
+//     [UnitType.Dinghy]:      1.9,
+//     [UnitType.Cloak]:       1.8,
+//     [UnitType.Dagger]:      1.1,
+//     [UnitType.Pirate]:      1.0,
+//     [UnitType.Polytaur]:    1.75,
+//     [UnitType.Rammer]:      1.6,
+//     [UnitType.Scout]:       1.6,
+//     [UnitType.Centipede]:   15.0,
+//     [UnitType.Segment]:     2.0,
+//     [UnitType.FireDragon]:  18.0,
+//     [UnitType.BabyDragon]:  6.0,
+//     [UnitType.DragonEgg]:   5.0,
+//     [UnitType.Crab]:        16.0,
+//     // B tier
+//     [UnitType.Warrior]: 1.2,
+//     [UnitType.Defender]: 1.5,
+//     [UnitType.Catapult]: 1.4,
+//     [UnitType.Kiton]: 1.3,
+//     [UnitType.Tridention]: 1.4,
+//     [UnitType.Mooni]: 1.6,
+//     [UnitType.Raychi]: 1.5,
+//     [UnitType.Giant]: 10.0,
+//     [UnitType.Gaami]: 12.0,
+//     [UnitType.Phychi]: 1.5,
+//     [UnitType.Exida]: 1.5,
+//     [UnitType.Doomux]: 14.0,
+//     // C tier
+//     [UnitType.Swordsman]: 1.3,
+//     [UnitType.IceArcher]: 1.4,
+//     [UnitType.Bomber]: 2.1,
+//     [UnitType.Juggernaut]: 8.0,
+//     // TODO Shark
+//     // F tier
+//     [UnitType.MindBender]: 0.5,
+//     [UnitType.IceFortress]: 0.6,
+//     [UnitType.Raft]: 0.9,
+//     // TODO Pufferfish
+//     // Unclasified
+//     [UnitType.Amphibian]: 1.6,
+// };
+
+// const CAPTURE_POTENTIAL: Record<UnitType, number> = {
+//     [UnitType.None]:        0.0,
+//     [UnitType.Gaami]:       6.0,
+//     [UnitType.Crab]:        5.5,
+//     [UnitType.Juggernaut]:  5.4,
+//     [UnitType.Giant]:       5.0,
+//     [UnitType.Shaman]:      4.0,
+//     [UnitType.Dinghy]:      2.6,
+//     [UnitType.Cloak]:       2.5,
+//     [UnitType.Dagger]:      1.7,
+//     [UnitType.Pirate]:      1.4,
+//     [UnitType.Hexapod]:     2.5,
+//     [UnitType.Amphibian]:   2.2,
+//     [UnitType.Rider]:       2.0,
+//     [UnitType.Tridention]:  2.0,
+//     [UnitType.Swordsman]:   1.7,
+//     [UnitType.BattleSled]:  1.6,
+//     [UnitType.Knight]:      1.4,
+//     [UnitType.Polytaur]:    1.3,
+//     [UnitType.Warrior]:     1.2,
+//     [UnitType.Defender]:    1.1,
+//     [UnitType.Rammer]:      1.1,
+//     [UnitType.Scout]:       1.1,
+//     [UnitType.Archer]:      0.7,
+//     [UnitType.Bomber]:      0.6,
+//     [UnitType.Catapult]:    0.3,
+//     [UnitType.MindBender]:  0.5,
+//     [UnitType.Mooni]:       0.6,
+//     [UnitType.IceFortress]: 0.9,
+//     [UnitType.IceArcher]:   0.6,
+//     [UnitType.Kiton]:       1.1,
+//     [UnitType.Raychi]:      1.5,
+//     [UnitType.Raft]:        0.6,
+//     [UnitType.DragonEgg]:   0,
+//     [UnitType.BabyDragon]:  0,
+//     [UnitType.FireDragon]:  0,
+//     [UnitType.Doomux]:      0,
+//     [UnitType.Phychi]:      0,
+//     [UnitType.Exida]:       0,
+//     [UnitType.Centipede]:   0,
+//     [UnitType.Segment]:     0,
+// };
+
+// Object.freeze(UNIT_SCORES);
+// Object.freeze(CAPTURE_POTENTIAL);
+
+// function calculateDistance(tileIndex1: number, tileIndex2: number, size: number) {
+//     const dx = Math.abs((tileIndex1 % size) - (tileIndex2 % size));
+//     const dy = Math.abs(Math.floor(tileIndex1 / size) - Math.floor(tileIndex2 / size));
+//     return dx + dy;
+// }
+
+// export function rewardUnitMove(state: GameState, unit: UnitState, ipX: number, ipY: number): number {
+//     return 0;
+//     let score = 0;
+//     const struct = state.structures[unit._tileIndex];
+//     const stage = state.settings._turn < 10? 0 : state.settings._turn < 20? 1 : 2;
+
+//     const prevTile = state.tiles[unit.prevX + unit.prevY * state.settings.size];
+//     const nowTile = state.tiles[unit._tileIndex];
+//     const settings = UnitSettings[unit._unitType];
+
+//     // Reward the unit for disembarking near a city
+
+//     const isFromWaterTile = isWaterTerrain(prevTile);
+//     const isToWaterTile = isWaterTerrain(nowTile);
+//     const aquaticOrCanFly = isAquaticOrCanFly(unit);
+
+//     const discoveredPredictions =  state._prediction._villages? state._potentialDiscovery.filter(x => state._prediction._villages![x]).length : 0;
+//     score += discoveredPredictions * SCORE_DISCOVER_TERRAIN[stage] * 1.5;
+
+//     // Disembarked
+//     if(isFromWaterTile && !isToWaterTile && !aquaticOrCanFly) {
+//         const nearestEnemyCity = getClosestEnemyCity(state, unit._tileIndex, 2)[0] as CityState;
+
+//         // Near a city
+//         if(nearestEnemyCity) {
+//             score += 1.2 * (state.tiles[nearestEnemyCity.tileIndex].capitalOf > 0? 2.0 : 1.0);
+//         }
+//         // Unnescessary? Hm..
+//         else {
+//             score -= 1.5
+//         }
+//     }
+//     // Moved onto some other water tile
+//     else if(isFromWaterTile && isToWaterTile && aquaticOrCanFly) {
+//         // If we are a raft and we moved outside our territory
+//         // Unless its important, like near some ruins, starfish or city.. its not worth it
+//         if(nowTile._owner != state.settings._pov) {
+//             score -= 0.05;
+//         }
+//     }
+
+//     // Custom ranged units
+//     if(settings.range > 1 && settings.attack > 0) {
+//         // Reward for having enemies in the range of attack
+//         score += 2.5 * getEnemiesNearTile(state, unit._tileIndex, settings.range).length;
+//     }
+
+//     // Reward if unit is sieging a village or city
+//     if(struct && struct.id == StructureType.Village && struct._owner != unit._owner && unit._health > 6) {
+//         score += SCORE_CITY[stage] * 0.1;
+//     }
+
+//     if(state._prediction._villages) {
+//         const nearestPrediction = Object.keys(state._prediction._villages).sort((a, b) => {
+//             const da = calculateDistance(unit._tileIndex, Number(a), state.settings.size);
+//             const db = calculateDistance(unit._tileIndex, Number(b), state.settings.size);
+//             return da - db;
+//         })[0];
+
+//         const path = computeReachablePath(state, unit._tileIndex, Number(nearestPrediction), (state: GameState, tileIndex: number) => {
+//             return isSteppable(state, unit, state.tiles[tileIndex]) || !state.tiles[tileIndex].explorers.includes(unit._owner);
+//         }, true, UnitSettings[unit._unitType].movement);
+        
+//         score -= path.length * 0.05;
+//     }
+
+//     // Reward unit for moving in the same direction
+//     // Calculate movement direction
+//     // const dx = unit.x - unit.prevX;
+//     // const dy = unit.y - unit.prevY;
+//     // const prevDx = unit.prevX - ipX;
+//     // const prevDy = unit.prevY - ipY;
+//     // if (dx === prevDx && dy === prevDy) {
+//     //     score += 10;
+//     // }
+
+//     // Not doing anything?
+//     // else if(!unit._moved && !unit._attacked) {
+//     //     score -= SCORE_CITY[stage] * .02;
+//     // }
+    
+//     return score;
+// }
+
+// export function rewardUnitAttack(state: GameState, unit: UnitState, enemy: UnitState): number {
+//     return 0;
+//     let score = 0;
+//     // const struct = state.structures[unit._tileIndex];
+//     // const stage = state.settings.turn < 10? 0 : state.settings.turn < 20? 1 : 2;
+
+//     // TODO
+//     // Penalize for attacking from a city, unless defender or sum
+
+//     // score += 1;
+    
+//     return score;
+// }
+
+// export function rewardCapture(state: GameState, unit: UnitState, captureType: CaptureType): number {
+//     return 0;
+//     let score = 0;
+//     const stage = state.settings._turn < 10? 0 : state.settings._turn < 20? 1 : 2;
+//     const turnInverse = Math.max(1/20, (1 - Math.min(state.settings._turn, 20) / 20));
+
+//     switch (captureType) {
+//         case CaptureType.Ruins:
+//             score += SCORE_RUINS[stage];
+//             break;
+//         case CaptureType.Starfish:
+//             score += SCORE_RUINS[stage];
+//             break;
+//         case CaptureType.Village:
+//             score += SCORE_CITY[stage];
+//             break;
+//         case CaptureType.City:
+//             score += SCORE_CITY[stage] * 1.5
+//             score *= CAPTURE_POTENTIAL[unit._unitType];
+//             break;
+//         default:
+//             break;
+//     }
+
+//     return score * turnInverse;
+// }
+
+// export function rewardTech(state: GameState, techType: TechnologyType): number {
+//     return 0;
+//     const stage = state.settings._turn < 10? 0 : state.settings._turn < 20? 1 : 2;
+//     const tribe = state.tribes[state.settings._pov];
+
+//     const goodPurchase = SCORE_GOOD_PURCHSE[stage];
+
+//     let score = 0,
+//         mountainCount = 0,
+//         waterCount = 0,
+//         oceanCount = 0,
+//         forestCount = 0;
+//     const resourceMap: Partial<Record<TechnologyType, number>> = {};
+    
+//     for (let i = 0; i < state._visibleTiles.length; i++) {
+//         const tile = state.tiles[state._visibleTiles[i]];
+//         const struct = state.structures[state._visibleTiles[i]];
+//         const resource = state.resources[state._visibleTiles[i]];
+
+//         // Ruins and starfish have are same thing
+//         if(struct?.id == StructureType.Ruin || resource?.id == ResourceType.Starfish) {
+//             switch (tile.terrainType) {
+//                 case TerrainType.Mountain:
+//                     if(techType == TechnologyType.Mining || techType == TechnologyType.Climbing) {
+//                         score += goodPurchase;
+//                         continue;
+//                     }
+//                     break;
+//                 case TerrainType.Water:
+//                     if(techType == TechnologyType.Sailing || techType == TechnologyType.Fishing) {
+//                         score += goodPurchase;
+//                         continue;
+//                     }
+//                     break;
+//                 case TerrainType.Ocean:
+//                     if(techType == TechnologyType.Sailing || techType == TechnologyType.Fishing) {
+//                         score += goodPurchase;
+//                         continue;
+//                     }
+//             }
+//         }
+
+//         if(struct?.id == StructureType.Village && (struct._owner < 0 || struct._owner == tribe.owner)) {
+//             const rulingCity = tribe._cities.find(x => x.tileIndex == state._visibleTiles[i]);
+//             const territory = rulingCity?._territory || struct._potentialTerritory!;
+
+//             for (let j = 0; j < territory.length; j++) {
+//                 const resource = state.resources[territory[j]];
+//                 if(resource
+//                     && !state.structures[territory[j]]
+//                     && (rulingCity || (isResourceVisible(tribe, resource.id) && state.tiles[territory[j]].explorers.includes(tribe.owner)))
+//                 ) {
+//                     const techType = ResourceSettings[resource.id].techRequired;
+//                     resourceMap[techType] = (resourceMap[techType] || 0) + 1;
+//                 }
+//             }
+//         }
+//         else {
+//             switch (tile.terrainType) {
+//                 case TerrainType.Mountain:
+//                     mountainCount++;
+//                     break;
+//                 case TerrainType.Ocean:
+//                     oceanCount++;
+//                     break;
+//                 case TerrainType.Water:
+//                     waterCount++;
+//                     break;
+//                 case TerrainType.Forest:
+//                     forestCount++;
+//                     break;
+//             }
+//         }
+//     }
+
+//     switch (techType) {
+//         case TechnologyType.Forestry:
+//             if(forestCount > 3) {
+//                 score += goodPurchase * Math.max(6, forestCount) * .7;
+//             }
+//             else {
+//                 score -= goodPurchase;
+//             }
+//             break;
+
+//         case TechnologyType.Climbing:
+//         case TechnologyType.Mining:
+//             // Vengir Mining #opening
+//             if(mountainCount > 1) {
+//                 score += goodPurchase * (tribe.tribeType == TribeType.Vengir? 3 : 1) * Math.min(4, mountainCount);
+//             }
+//             else {
+//                 score -= goodPurchase;
+//             }
+//             break;
+
+//         case TechnologyType.Sailing:
+//             if(oceanCount > 2) {
+//                 const aquaticCount = tribe._units.filter(x => isAquaticOrCanFly(x, false)).length;
+//                 score += goodPurchase * Math.max(6, oceanCount) * aquaticCount * .5;
+//             }
+//             else {
+//                 score -= goodPurchase;
+//             }
+//             break;
+//         case TechnologyType.Fishing:
+//             // Promote ports / fishing by water tiles
+//             if(waterCount > 2) {
+//                 score += goodPurchase * Math.max(6, waterCount) * .5;
+//             }
+//             else {
+//                 score -= goodPurchase;
+//             }
+//             break;
+
+//         case TechnologyType.Diplomacy:
+//             // Quetzali cloak #opening
+//             if(tribe.tribeType == TribeType.Quetzali) {
+//                 score += goodPurchase * 10;
+//                 // 2 cities is ok, any thing more reduce score
+//                 if(tribe._cities.length > 2) {
+//                     score -= goodPurchase * (tribe._cities.length - 2) * 2;
+//                 }
+//             }
+//             // Diplomacy is good in general
+//             else {
+//                 score += goodPurchase * 4;
+//             }
+//             return score;
+//         default:
+//             break;
+//     }
+
+//     // Promote based on resource abundance: Organization / Hunting / Mining
+//     const resourcesCount = resourceMap[techType] || 0;
+
+//     if(resourcesCount > 0) {
+//         const idealCount = 6;
+
+//         score += Math.min(idealCount, resourcesCount) * goodPurchase;
+
+//         if(resourcesCount % 2 == 0) {
+//             score += goodPurchase;
+//         }
+
+//         if(resourcesCount >= idealCount) {
+//             score += goodPurchase * 2;
+//         }
+
+//         if(resourcesCount < 3) {
+//             score -= goodPurchase * 2;
+//         }
+//     }
+
+//     // Add bonus if its in the same tech tree
+//     if(tribe._tech.some(x => TechnologySettings[x].next?.includes(techType))) {
+//         score += goodPurchase / 2;
+//     }
+
+//     return Math.max(-1, score);
+// }
+
+// export function rewardStructure(state: GameState, struct: StructureState): number {
+//     return 0;
+//     let score = 0;
+//     const structTile = state.tiles[struct.tileIndex];
+//     const tribe = state.tribes[state.settings._pov]; 
+
+//     const isPort = struct.id == StructureType.Port;
+
+//     if(isPort) {
+//         const neighbors = getNeighborIndexes(state, struct.tileIndex, 1);
+//         const neighbors2 = getNeighborIndexes(state, struct.tileIndex, 2);
+        
+//         let adjacentClouds = 8 - neighbors.length;
+//         let adjacentPorts = 0;
+//         let adjacentWater = 0;
+//         let adjacentOcean = 0;
+
+//         for (let i = 0; i < neighbors2.length; i++) {
+//             const tile = state.tiles[neighbors2[i]];
+//             // If its one of our ports and in our territory
+//             if(state.structures[tile.tileIndex]?.id == StructureType.Port
+//                  && tile._rulingCityIndex == structTile._rulingCityIndex
+//             ) {
+//                 adjacentPorts++;
+//                 continue;
+//             }
+//         }
+
+//         // TODO too strict?
+//         // Dont allow builing ports if there is one already
+//         if(adjacentPorts > 0) {
+//             return -1;
+//         }
+
+//         for (let i = 0; i < neighbors.length; i++) {
+//             const tile = state.tiles[neighbors[i]];
+//             if(!tile.explorers.includes(tribe.owner)) {
+//                 adjacentClouds++;
+//                 continue;
+//             }
+//             switch (tile.terrainType) {
+//                 case TerrainType.Water:
+//                     adjacentWater++;
+//                     break;
+//                 case TerrainType.Ocean:
+//                     adjacentOcean++;
+//                     break;
+//                 default:
+//                     break;
+//             }
+//         }
+
+//         if((adjacentWater + adjacentOcean) > 3) {
+//             score += adjacentClouds * 0.3
+//                 + adjacentWater * 0.1
+//                 + adjacentOcean * 0.15;
+//         }
+//     }
+
+//     // Built ontop of a resource;
+//     if(state.resources[struct.tileIndex]) {
+//         score *= 0.5;
+//     }
+    
+//     return score * 2;
+// }
+
+// /**
+//  * Evaluate the state of the economy.
+//  * @param state 
+//  * @param depth 
+//  * @returns 
+//  */
+// export function evaluateEconomy(state: GameState) {
+//     return 0;
+//     const tribe = state.tribes[state.settings._pov];
+//     // Early game < 10
+//     // Mid game < 20
+//     // Late game > 20
+//     const stage = state.settings._turn < 11? 0 : state.settings._turn < 20? 1 : 2;
+//     const turn = state.settings._turn;
+//     const turnInverse = Math.max(0.05, (1 - Math.min(turn, 20) / 20)) * .5;
+//     const turnInverseRush = 1 - Math.min(turn, 15) / 15;
+
+//     let score = 0;
+
+//     //--// Potentials //--//
+
+//     // score += state._potentialEconomy * 2;
+//     score += state._potentialTech * .04;
+//     score += state._scoreTech;
+
+//     // score -= turn * PENALTY_TURNS[stage];
+
+//     //--// Cities //--//
+
+//     for(const city of tribe._cities) {
+//         const tile = state.tiles[city.tileIndex];
+//         // City not under siege
+// 		if(tile._unitOwner > 0 && tile._unitOwner != tribe.owner || city._riot) {
+//             // score += SCORE_CITY[stage] * turnInverse * .45;
+//             continue;
+// 		}
+//         // score += city.population * SCORE_CITY_POPULATION[stage];
+//         // Penalize and reward production, promotes early development. Using inverse turn scaling.
+//         score += getCityProduction(city) * SCORE_PRODUCTION[stage] * turnInverse * 2;// * (city._level >= 5? 0.3 : 1);
+//         score += SCORE_CITY[stage] * turnInverse;
+
+//         // Some connected city
+//         if(city._connectedToCapital && tile.capitalOf < 1) {
+//             score += PENALTY_CITY_POPULATION[stage];
+//         }
+
+//         // // Upgrading to PopulationGrouth, penalize for not fully upgrading to lvl 5
+//         // if(city._rewards.includes(RewardType.PopulationGrowth) && city._level == 4) {
+//         //     score -= PENALTY_CITY_POPULATION[stage];
+//         // }
+
+//         // Get how much progress is left to reach next level and penalize for not having it full (aka empty)
+//         if(city._progress) {
+//             score -= PENALTY_CITY_POPULATION[stage] * 
+//                 ((city._progress / (city._level + 1)) ** 2) *
+//                 // Penalize lvl 5 cities
+//                 (city._level >= 5? 1.6 : 1) *
+//                 // Upgrading to PopulationGrouth, penalize for not fully upgrading to lvl 5
+//                 (city._level == 4? 2.0 : 1)
+//             ;
+//         }
+//     }
+
+//     //--// Stars //--//
+
+//     // Score per saved stars
+//     score += SCORE_STARS[stage] * tribe._stars;
+
+//     //--// Building //--//
+
+//     // Reward unique structures
+//     score += 0.8 * tribe._builtUniqueStructures.length;
+
+//     // Bonus per amount of adjacent matching structures
+//     const specialStructs = state._visibleTiles.filter(x => state.structures[x] && (StructureSettings[state.structures[x]!.id].adjacentTypes?.length || 0) > 0);
+//     score += SCORE_ADJACENT_MATCHING_STRUCTURES[stage] * (specialStructs.reduce((a: number, x: number) => {
+//         const adjacentTypes = StructureSettings[state.structures[x as any]!.id].adjacentTypes!;
+//         const aroundStructures = getNeighborIndexes(state, Number(x), 1).filter(x => state.structures[x] && adjacentTypes.includes(state.structures[x]!.id));
+//         // console.log(`Around ${StructureType[state.structures[x as any]!.id]}: ${aroundStructures.length} (${StructureType[adjacentTypes[0] as any]})`);
+//         return a + aroundStructures.length;
+//     }, 0) / 8);
+
+//     //--// Shared with Army plus Extras //--//
+
+//     let armyScore = 0;
+
+//     score += state._potentialDiscovery.length * SCORE_DISCOVER_TERRAIN[stage];
+
+//     // Reward and penalize units
+//     for (let i = 0; i < tribe._units.length; i++) {
+//         let unitScore = 0;
+
+//         const unit = tribe._units[i];
+//         const struct = state.structures[unit._tileIndex];
+
+//         // Base score for unit
+//         unitScore += UNIT_SCORES[unit._unitType] * SCORE_UNIT_MULT;
+
+//         // Reward if unit is sieging a village or city
+//         if (struct && struct.id == StructureType.Village && struct._owner != unit._owner) {
+//             if(!unit._moved && !unit._attacked) {
+//                 unitScore += SCORE_CITY[stage] * .5 * turnInverseRush;
+//             }
+//             else {
+//                 unitScore += SCORE_CITY[stage] * .25 * turnInverseRush;
+//             }
+//         }
+
+//         unitScore *= (unit._health / getMaxHealth(unit));
+
+//         armyScore += unitScore;
+
+//         // Reward unit for being close to any lighthouse in the corner
+//         // Discovering a lighthouse grants +1 pop to capital, there is 1 on each corner of the map
+//         for(const lighthouse of state._lighthouses) {
+//             // exception for lighthouses, they are predictable
+//             const dist = calculateDistance(unit._tileIndex, lighthouse, state.settings.size);
+//             score += 1.4 * (1 - Math.min(dist, 6) / 6);
+//         }
+
+//         // Reward for discovering the lighthouse (this cancels out the population penalty a bit?)
+//         score += 2.0 * (1 - state._lighthouses.length / 4);
+//     }
+
+//     armyScore -= scoreVisibleEnemyUnits(state);
+
+//     score += armyScore * .5;
+    
+//     return score;
+// }
+
+// /**
+//  * Evaluate how good spawning a unit is.
+//  * @param state 
+//  * @param tileIndex 
+//  * @param unitType 
+//  * @returns 
+//  */
+// export function evaluateUnitSpawn(state: GameState, tileIndex: number, unitType: UnitType): number {
+//     return 0;
+//     const settings = UnitSettings[unitType];
+
+//     // If is special unit we really dont care
+//     if(!settings.health || settings.health >= 20 && settings.techType == TechnologyType.Unbuildable) {
+//         return 1;
+//     }
+    
+//     // n units per city
+//     // n unit per enemy city
+//     // n units per enemy unit
+
+//     // n meelee units with high mov (preferred) per enemy city
+//     // n ranged unit per melee
+
+//     // reward ranged units for being (range - 1) tile close from ally melee units
+//     // reward (in move gen internal)
+
+//     // for spawning units with other enemies very close to our terrain
+//     // for spawning units on unprotected cities
+
+//     // temperature? how many enemy units are around a city
+//     const tribe = state.tribes[state.settings._pov];
+
+//     // TODO what if they belong to different tribes?
+
+//     const tribes = Object.values(state.tribes);
+
+//     const enemyCityCount = tribes.reduce((x, y) => x + (y.owner != tribe.owner?
+//         y._cities.filter(z => state.tiles[z.tileIndex].explorers.includes(tribe.owner)).length
+//         : 0)
+//     , 0);
+
+//     const enemyUnitCount = state._visibleTiles.filter(x => state.tiles[x]._unitOwner > 0 && state.tiles[x]._unitOwner != tribe.owner).length;
+
+//     const armyRequired = Math.max(Math.ceil(
+//         1.5 * tribe._cities.length +
+//         1.1 * enemyCityCount +
+//         1.1 * enemyUnitCount + 
+//         (state.settings._turn > 8? 1 : 0)
+//     ), 2); // minimum 2 troops
+
+//     const threat = 0.8 * (enemyCityCount + enemyUnitCount);
+
+//     const unitCountBonus = (armyRequired - tribe._units.length) * threat;
+
+//     // Hard Unit limit reached
+//     if(unitCountBonus < 0) {
+//         return -1;
+//     }
+
+//     const [ closestCity ] = getClosestEnemyCity(state, tileIndex, 5);
+
+//     const stratBonus = CAPTURE_POTENTIAL[unitType] * (closestCity? 1 : 0.4);
+
+//     const base = UNIT_SCORES[unitType] * SCORE_UNIT_MULT;
+
+//     // // For every warrior / rider, 0.8 archers
+//     // const warriorCount = tribe._units.filter(x => x.unitType == UnitType.Warrior || x.unitType == UnitType.Rider).length;
+//     // const archerCount = tribe._units.filter(x => x.unitType == UnitType.Archer).length;
+
+//     const typeBonus = 1;//1.2 * (warriorCount * 0.8 - archerCount);
+
+//     // ? 3.78 0 0.6 0.96
+//     // ? 2.94 -1 0.6 0.24
+
+//     // TODO bonus for cheaper unit with carry?
+//     // cause +5 health for -3 stars doesnt seem worth it
+//     // defender is same cost +5 health?
+    
+//     const turnInverse = Math.max(1/9, (1 - Math.min(state.settings._turn, 20) / 20));
+
+//     let score = (base + unitCountBonus + stratBonus) * typeBonus * turnInverse;
+
+//     switch (unitType) {
+//         // Dont allow spawning a cloak while surrpounded by enemies
+//         case UnitType.Cloak:
+//             if(getEnemiesNearTile(state, tileIndex, 2).length > 0) return -1;
+//             break;
+
+//         // Dont allow spawning a defender if there are no threats
+//         // Unless if city is adjacent to water
+//         case UnitType.Defender:
+//             if(getEnemiesNearTile(state, tileIndex, 2).length < 1) {
+//                 if(!getNeighborIndexes(state, tileIndex).some(x => state.tiles[x].terrainType == TerrainType.Water)) {
+//                     return -1;
+//                 }
+//             }
+//             break;
+    
+//         default:
+//             break;
+//     }
+
+//     const closesstPort = getClosestOwnedStructureTile(state, tileIndex, StructureType.Port);
+//     // Reward for being close to ports
+//     if(closesstPort && closesstPort[1] < 4) {
+//         score += 0.5;
+//     }
+//     // Penalty on how far away it is from the nearest claimed water tile
+//     else {
+//         const closestWater = getClosestOwnedTile(state, tileIndex, TerrainType.Water);
+//         // 4 tiles away is too much, +1 for spawn cooldown
+//         // TODO unless roads are built to half the travel time
+//         if(closestWater && closestWater[1] < 4) {
+//             score += 0.5;
+//         }
+//     }
+
+//     return score;
+// }
+
+// /**
+//  * Evaluate the state of the army.
+//  * @param state 
+//  * @returns 
+//  */
+// export function evaluateArmy(state: GameState) {
+//     return 0;
+//     const tribe = state.tribes[state.settings._pov];
+//     const stage = state.settings._turn < 9? 0 : state.settings._turn < 20? 1 : 2;
+//     const turn = state.settings._turn;
+//     const turnInverse = Math.max(1/20, (1 - Math.min(turn, 20) / 20));
+//     const size = state.settings.size;
+
+//     let score = 0;
+
+//     // Score for new discovered terrain
+//     score += state._potentialDiscovery.length * SCORE_DISCOVER_TERRAIN[stage];
+
+//     // Score based on good things done by the army (kill, ruins, etc)
+//     score += state._potentialArmy * turnInverse;
+//     score += state._scoreArmy;
+
+//     // if(state._potentialDiscovery.includes(66)) {
+//     //     console.log(state.settings.turn);
+//     // }
+    
+//     // Cities score
+//     for (let i = 0; i < tribe._cities.length; i++) {
+//         const city = tribe._cities[i];
+//         const tile = state.tiles[city.tileIndex];
+
+//         // City not under siege
+//         if(tile._unitOwner > 0 && tile._unitOwner != tribe.owner) {
+//             continue;
+// 		}
+
+//         // Score owning it
+//         score += SCORE_CITY[stage] * turnInverse * 2;
+
+//         // Reward defending units and punish attackers
+//         const nearbyThreats = getEnemiesNearTile(state, city.tileIndex, 2);
+//         const nearbyDefenders = getAlliesNearTile(state, city.tileIndex, 2);
+
+//         // Negative amount suges when there are more threats than defenders
+//         const netDefenders = nearbyDefenders.length - nearbyThreats.length;
+
+//         if(netDefenders < 0) {
+//             for(let i = 0; i < nearbyThreats.length; i++) {
+//                 const threat = nearbyThreats[i];
+//                 const dist2city = calculateDistance(threat._tileIndex, city.tileIndex, state.settings.size);
+    
+//                 // Handled by scoreVisibleEnemyUnits
+//                 if(dist2city == 0) continue;
+    
+//                 const proximityFactor = Math.min(3, dist2city) / 3;
+    
+//                 const penalty = (1 - proximityFactor);
+    
+//                 // 0.33 (1 tile away) = 1 - dist = penalty = 0.66
+//                 score -= penalty;
+//             }
+
+//             score += netDefenders * .2;
+//         }
+
+//         for (let j = 0; j < city._territory.length; j++) {
+//             const tileIndex = city._territory[j];
+//             const tile = state.tiles[tileIndex];
+
+//             // Port routes
+//             if(tile.hadRoute && isWaterTerrain(tile)) {
+//                 score += 0.2; // SCORE_NAVAL_ROUTE
+//             }
+
+//             const struct = state.structures[tileIndex];
+
+//             // Port reward
+//             if(struct?.id == StructureType.Port) {
+//                 score += rewardStructure(state, struct);
+//             }
+
+//             // Some connected city
+//             if(city._connectedToCapital && tile.capitalOf < 1) {
+//                 score += PENALTY_CITY_POPULATION[stage];
+//             }
+//         }
+//     }
+    
+    
+//     // Reward and penalize units
+//     for (let i = 0; i < tribe._units.length; i++) {
+//         let unitScore = 0;
+//         const unit = tribe._units[i];
+//         const settings = getUnitSettings(unit);
+//         // const struct = state.structures[unit._tileIndex];
+
+//         const nearbyThreats = getEnemiesNearTile(state, unit._tileIndex, settings.range + 2);
+
+//         // Base score for unit and/or passenger
+//         unitScore += unit._passenger? UNIT_SCORES[unit._passenger] * SCORE_UNIT_MULT : 0;
+
+//         // Score for defense bonus
+//         // Only if threatened
+//         unitScore += nearbyThreats.length == 0? 0 : (0.4 * getDefenseBonus(state, unit));
+
+//         // Reward unit for being closer to the center of the map
+//         // 0 - size
+//         const dist2center = calculateDistance(unit._tileIndex, 
+//             size / 2 + size * size / 2, 
+//             size
+//         );
+//         if(dist2center > 3) {
+//             score -= .01 * dist2center;
+//         }
+        
+//         // Exclusive Ranged units
+//         if(settings.range > 1 && settings.attack > 0) {
+//             // minDistanceToEnemyCity = 6;
+//             const nearbyThreats = getEnemiesNearTile(state, unit._tileIndex, 1);
+//             // Penalize for having melee enemies close to them
+//             unitScore -= 2.0 * nearbyThreats.filter(x => UnitSettings[x._unitType].range < 2).length;
+//         }
+//         // Exclusive Melee units
+//         else {
+//             // // Reward if unit is sieging a village or city
+//             // if (struct && struct.id == StructureType.Village && struct._owner != unit._owner) {
+//             //     // If the structure is owned by the enemy
+//             //     if(struct._owner != unit._owner && struct._owner > 0) {
+//             //         unitScore += SCORE_CITY[stage] * turnInverse * 1.5;
+//             //     }
+//             //     else {
+//             //         if(!unit._moved && !unit._attacked) {
+//             //             unitScore += SCORE_CITY[stage] * turnInverse;
+//             //         }
+//             //         else {
+//             //             unitScore += SCORE_CITY[stage] * .5 * turnInverse;
+//             //         }
+//             //     }
+//             // }
+//             // // Not doing anything?
+//             // else if(!unit._moved && !unit._attacked) {
+//             //     // unitScore -= SCORE_CITY[stage] * .02;
+//             // }
+//         }
+
+//         // If we have range attack and are naval, ocean tiles are better cause they are not near land and have 2 mobility
+//         if(isNavalUnit(unit) && settings.attack > 0) {
+//             score += 0.1 * (state.tiles[unit._tileIndex].terrainType == TerrainType.Ocean? 1.0 : 0.0);
+//         }
+
+//         // Reward units for being close to enemy cities
+//         // let minDistanceToEnemyCity = size - size / 8;
+//         // const [ closestCity, closestDistance ] = getClosestReachableEnemyCity(state, unit, minDistanceToEnemyCity);
+//         // if(closestCity && closestDistance < minDistanceToEnemyCity) {
+//         //     console.log(unit._tileIndex, closestDistance);
+//         //     unitScore += 4 * (1 - closestDistance / minDistanceToEnemyCity);
+//         //     unitScore += state.tiles[closestCity.tileIndex].capitalOf > 0?
+//         //         1.4 : 0;
+//         // }
+        
+//         // unitScore -= PENALTY_UNIT_HEALTH * (1 - (unit.health / getMaxHealth(unit)));
+
+//         // unitScore *= unit.health / getMaxHealth(unit);
+//         // Unit is useless if it lost 70% of its health
+//         // 10 0.208
+//         // score -= unitScore 
+//         //     * (1 - (unit.health / getMaxHealth(unit)))
+//         //     * PENALTY_UNIT_HEALTH;
+
+//         // Hidden villages: adjacent to fish there is always a village
+//         // The closer to unclaimed village, the better
+
+//         unitScore *= (unit._health / getMaxHealth(unit));
+
+//         // Score for kills, preferred 3 (veteran) (enemy penalty accumulative)
+//         unitScore += 1.4 * (Math.min(3, unit.kills) / 3) ** 2;
+
+//         score += unitScore;
+
+//         // if(unit.unitType == UnitType.Raft) {
+//         //     console.log('raft nigga!');
+//         // }
+//     }
+
+//     score -= scoreVisibleEnemyUnits(state) * .85;
+
+//     return score;
+// }
+
+// /**
+//  * Reward and penalize by enemy units in visible region.
+//  * @param state
+//  * @returns number
+//  */
+// function scoreVisibleEnemyUnits(state: GameState): number {
+//     return 0;
+//     const tribe = state.tribes[state.settings._pov];
+
+//     let score = 0;
+
+//     for (let i = 0; i < state._visibleTiles.length; i++) {
+//         const tile = state.tiles[state._visibleTiles[i]];
+        
+//         const enemy = getEnemyAtTile(state, tile.tileIndex, tribe.owner) as UnitState;
+
+//         if(!enemy) continue;
+
+//         // Base score for unit
+//         score += UNIT_SCORES[enemy._unitType] * SCORE_UNIT_MULT;
+
+//         // Score for defense bonus
+//         score += 0.6 * getDefenseBonus(state, enemy);
+
+//         // Reward for having more health
+//         score += PENALTY_ENEMY_UNIT_HEALTH * (enemy._health / getMaxHealth(enemy));
+//     }
+
+//     return score;
+// }

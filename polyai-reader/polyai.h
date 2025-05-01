@@ -1,0 +1,1 @@
+ssize_t read_process_memory(pid_t pid, unsigned long addr, void *buffer, size_t len);

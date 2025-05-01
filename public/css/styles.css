@@ -1,0 +1,114 @@
+body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    background-color: #222;
+    overflow: hidden;
+}
+
+#map {
+    position: relative;
+    height: 80vh;
+}
+
+.tile {
+    position: absolute;
+    width: 128px;
+    height: 128px;
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+}
+
+.debug {
+    border: 2px white dashed;
+}
+
+
+#moves {
+    overflow-y: auto;
+    position: absolute;
+    color: white;
+    display: flex;
+    flex-direction: column;
+    /* background: rgba(255,255,255,.6); */
+    padding: 1em;
+    height: 100%;
+    width: 400px;
+    right: 0;
+}
+
+#moves p {
+    font-weight: 800;
+    line-height: 0em;
+}
+
+#moves > div {
+    display: flex;
+    flex-direction: column;
+}
+
+#moves > div > div {
+    display: flex;
+    flex-direction: column;
+    padding-left: 1em;
+}
+
+#moves span {
+    padding-left: 1em;
+}
+
+#topbar {
+    position: absolute;
+    top: 0;
+    display: flex;
+    flex-direction: column;
+    color: white;
+}
+
+#topbar div {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-evenly;
+    gap: 1em;
+    background-color: rgba(0,0,0,.5);
+    padding: 0 5em;
+}
+
+#topbar > div:nth-child(1) {
+    font-style: italic;
+    font-size: medium;
+}
+
+#topbar > div:nth-child(2) {
+    font-size: larger;
+}
+
+.bright {
+    filter: brightness(1.5);
+}
+
+#pov {
+    position: absolute;
+    right: 0;
+    z-index: 100;
+    top: 0;
+}
+
+#step {
+    position: absolute;
+    right: 0;
+    z-index: 100;
+    top: 0;
+}
+
+#hovertile {
+    color: white;
+    background-color: rgba(0,0,0,.5);
+    position: absolute;
+    right: 0;
+    z-index: 100;
+    top: 1.5em;
+}
+

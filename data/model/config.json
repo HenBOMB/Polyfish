@@ -1,0 +1,12 @@
+{
+    "max_tribes": 3,
+    "max_size": 11,
+    "max_tech": 40,
+    "max_effects": 4,
+    "tile_channels": 19,
+    "max_actions": 300,
+    "max_stars": 100,
+    "max_turns": 20,
+    "settings_channels": 3,
+    "max_score": 50000
+}

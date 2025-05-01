@@ -1,0 +1,197 @@
+.forest {
+    width: 120px;
+    margin-left: 10px;
+    margin-top: -30px;
+}
+
+.mountain {
+    background-size: cover;
+    margin-left: 0px;
+    margin-top: -24px;
+}
+
+.structure {
+    width: 100px;
+    margin-left: 15px;
+    margin-top: -30px;
+    pointer-events: none;
+}
+
+.village {
+    width: 70px;
+    margin-left: 30px;
+    margin-top: -25px;
+}
+
+.ruins {
+    width: 124px;
+    margin-left: 5px;
+    margin-top: -25px;
+}
+
+.temple {
+    width: 60px;
+    margin-left: 40px;
+    margin-top: -22px;
+}
+
+.city {
+    width: 90px;
+    margin-left: 20px;
+    z-index: 4;
+    margin-top: -50px;
+}
+
+.city div {
+    transform: translateY(70px);
+    z-index: 5;
+    width: 8rem;
+    margin-left: -20px;
+    font-weight: bold;
+}
+
+.city p {
+    font-style: italic;
+    text-align: center;
+    color: white;
+    font-weight: bold;
+    padding: 0 .5em;
+    background-color: rgba(0, 0, 0, 0.35);
+    user-select: none;
+}
+
+.capital {
+    text-decoration: underline;
+}
+
+.resource {
+    width: 60px;
+    margin-left: 40px;
+    margin-top: -22px;
+}
+
+.animal {
+    width: 45px;
+    margin-left: 50px;
+}
+
+.fish {
+    width: 120px;
+    margin-left: 5px;
+    margin-top: -27px;
+}
+
+.crop {
+    width: 90px;
+    margin-left: 20px;
+    margin-top: -27px;
+}
+
+.fruit {
+    width: 50px;
+    margin-left: 40px;
+}
+
+.metal {
+    width: 40px;
+    margin-top: -25px;
+    margin-left: 55px;
+}
+
+.starfish {
+
+}
+
+.flipped {
+    transform: scaleX(-1);
+}
+
+.flipped .health {
+    transform: scaleX(-1);
+}
+
+.flipped .hint {
+    transform: scaleX(-1);
+}
+
+.unit {
+    width: 100px;
+    margin-left: 20px;
+    margin-top: -35px;
+    pointer-events: none;
+}
+
+.exausted {
+    opacity: .8;
+    filter: brightness(1.6) saturate(0);
+}
+
+
+[style*="textures/misc/missing.png"] {
+    z-index: 999 !important;
+    width: 100px;
+    aspect-ratio: 1/1;
+}
+
+.iceport {
+    width: 45px;
+    margin-left: 45px;
+    margin-top: -40px;
+}
+
+.lumberhut {
+    width: 60px;
+    margin-left: 45px;
+    margin-top: -25px;
+}
+
+.ground {
+    transition-duration: 300ms;
+}
+
+.ground:hover {
+    filter: brightness(1.2);
+}
+
+.ignoremouse {
+    pointer-events: none;
+}
+
+.mine {
+    width: 60px;
+    margin-left: 30px;
+    margin-top: -30px;
+}
+
+.forge {
+    width: 45px;
+    margin-left: 40px;
+    margin-top: -30px;
+}
+
+.health {
+    color: white;
+    font-weight: 800;
+    font-family: 'Mono'; 
+    margin-top: 30px;
+    text-align: left;
+    pointer-events: none;
+}
+
+.capturing {
+    position: absolute;
+    width: 25px;
+    margin-left: 31px;
+    margin-top: -54px;
+    object-position: center;
+    transform-origin: bottom;
+}
+
+.hint {
+    position: absolute;
+    width: 65px;
+    margin-left: 11px;
+    margin-top: -75px;
+    object-position: center;
+    transform-origin: bottom;
+}

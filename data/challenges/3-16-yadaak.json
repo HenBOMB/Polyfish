@@ -1,0 +1,6036 @@
+{
+  "tiles": {
+    "0": {
+      "_owner": -1,
+      "tileIndex": 0,
+      "climate": 11,
+      "terrainType": 3,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 0,
+      "y": 0,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "1": {
+      "_owner": -1,
+      "tileIndex": 1,
+      "climate": 11,
+      "terrainType": 3,
+      "explorers": [
+        8
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 1,
+      "y": 0,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "2": {
+      "_owner": -1,
+      "tileIndex": 2,
+      "climate": 11,
+      "terrainType": 3,
+      "explorers": [
+        8
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 2,
+      "y": 0,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "3": {
+      "_owner": -1,
+      "tileIndex": 3,
+      "climate": 11,
+      "terrainType": 3,
+      "explorers": [
+        8
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 3,
+      "y": 0,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "4": {
+      "_owner": -1,
+      "tileIndex": 4,
+      "climate": 3,
+      "terrainType": 5,
+      "explorers": [
+        8
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 4,
+      "y": 0,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "5": {
+      "_owner": -1,
+      "tileIndex": 5,
+      "climate": 3,
+      "terrainType": 3,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 5,
+      "y": 0,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "6": {
+      "_owner": -1,
+      "tileIndex": 6,
+      "climate": 3,
+      "terrainType": 5,
+      "explorers": [
+        9
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 6,
+      "y": 0,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "7": {
+      "_owner": -1,
+      "tileIndex": 7,
+      "climate": 3,
+      "terrainType": 3,
+      "explorers": [
+        9
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 7,
+      "y": 0,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "8": {
+      "_owner": -1,
+      "tileIndex": 8,
+      "climate": 3,
+      "terrainType": 5,
+      "explorers": [
+        9
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 8,
+      "y": 0,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "9": {
+      "_owner": -1,
+      "tileIndex": 9,
+      "climate": 3,
+      "terrainType": 5,
+      "explorers": [
+        9,
+        5
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 9,
+      "y": 0,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "10": {
+      "_owner": -1,
+      "tileIndex": 10,
+      "climate": 7,
+      "terrainType": 5,
+      "explorers": [
+        9,
+        5
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 10,
+      "y": 0,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "11": {
+      "_owner": -1,
+      "tileIndex": 11,
+      "climate": 7,
+      "terrainType": 3,
+      "explorers": [
+        5
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 11,
+      "y": 0,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "12": {
+      "_owner": -1,
+      "tileIndex": 12,
+      "climate": 7,
+      "terrainType": 4,
+      "explorers": [
+        5
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 12,
+      "y": 0,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "13": {
+      "_owner": -1,
+      "tileIndex": 13,
+      "climate": 7,
+      "terrainType": 3,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 13,
+      "y": 0,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "14": {
+      "_owner": -1,
+      "tileIndex": 14,
+      "climate": 11,
+      "terrainType": 5,
+      "explorers": [
+        8
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 0,
+      "y": 1,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "15": {
+      "_owner": 8,
+      "tileIndex": 15,
+      "climate": 11,
+      "terrainType": 3,
+      "explorers": [
+        8
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 8,
+      "skinType": -1,
+      "x": 1,
+      "y": 1,
+      "_rulingCityIndex": 30,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "16": {
+      "_owner": 8,
+      "tileIndex": 16,
+      "climate": 11,
+      "terrainType": 3,
+      "explorers": [
+        8
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 8,
+      "skinType": -1,
+      "x": 2,
+      "y": 1,
+      "_rulingCityIndex": 30,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "17": {
+      "_owner": 8,
+      "tileIndex": 17,
+      "climate": 11,
+      "terrainType": 3,
+      "explorers": [
+        8
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 8,
+      "skinType": -1,
+      "x": 3,
+      "y": 1,
+      "_rulingCityIndex": 30,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "18": {
+      "_owner": -1,
+      "tileIndex": 18,
+      "climate": 11,
+      "terrainType": 5,
+      "explorers": [
+        8
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 4,
+      "y": 1,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "19": {
+      "_owner": -1,
+      "tileIndex": 19,
+      "climate": 3,
+      "terrainType": 3,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 5,
+      "y": 1,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "20": {
+      "_owner": -1,
+      "tileIndex": 20,
+      "climate": 11,
+      "terrainType": 3,
+      "explorers": [
+        9
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 6,
+      "y": 1,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "21": {
+      "_owner": 9,
+      "tileIndex": 21,
+      "climate": 3,
+      "terrainType": 4,
+      "explorers": [
+        9
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 9,
+      "skinType": -1,
+      "x": 7,
+      "y": 1,
+      "_rulingCityIndex": 36,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "22": {
+      "_owner": 9,
+      "tileIndex": 22,
+      "climate": 3,
+      "terrainType": 3,
+      "explorers": [
+        9
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 9,
+      "skinType": -1,
+      "x": 8,
+      "y": 1,
+      "_rulingCityIndex": 36,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "23": {
+      "_owner": 9,
+      "tileIndex": 23,
+      "climate": 3,
+      "terrainType": 4,
+      "explorers": [
+        9,
+        5
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 9,
+      "skinType": -1,
+      "x": 9,
+      "y": 1,
+      "_rulingCityIndex": 36,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "24": {
+      "_owner": 5,
+      "tileIndex": 24,
+      "climate": 7,
+      "terrainType": 1,
+      "explorers": [
+        9,
+        5
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 5,
+      "skinType": -1,
+      "x": 10,
+      "y": 1,
+      "_rulingCityIndex": 39,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "25": {
+      "_owner": 5,
+      "tileIndex": 25,
+      "climate": 7,
+      "terrainType": 3,
+      "explorers": [
+        5
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 5,
+      "skinType": -1,
+      "x": 11,
+      "y": 1,
+      "_rulingCityIndex": 39,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "26": {
+      "_owner": 5,
+      "tileIndex": 26,
+      "climate": 7,
+      "terrainType": 5,
+      "explorers": [
+        5
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 5,
+      "skinType": -1,
+      "x": 12,
+      "y": 1,
+      "_rulingCityIndex": 39,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "27": {
+      "_owner": -1,
+      "tileIndex": 27,
+      "climate": 7,
+      "terrainType": 3,
+      "explorers": [
+        5
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 13,
+      "y": 1,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "28": {
+      "_owner": -1,
+      "tileIndex": 28,
+      "climate": 11,
+      "terrainType": 4,
+      "explorers": [
+        8
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 0,
+      "y": 2,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "29": {
+      "_owner": 8,
+      "tileIndex": 29,
+      "climate": 11,
+      "terrainType": 1,
+      "explorers": [
+        8
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 8,
+      "skinType": -1,
+      "x": 1,
+      "y": 2,
+      "_rulingCityIndex": 30,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "30": {
+      "_owner": 8,
+      "tileIndex": 30,
+      "climate": 11,
+      "terrainType": 3,
+      "explorers": [
+        8
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 8,
+      "skinType": -1,
+      "x": 2,
+      "y": 2,
+      "_rulingCityIndex": 30,
+      "_unitOwner": 8,
+      "_unitIdx": 7
+    },
+    "31": {
+      "_owner": 8,
+      "tileIndex": 31,
+      "climate": 11,
+      "terrainType": 4,
+      "explorers": [
+        8
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 8,
+      "skinType": -1,
+      "x": 3,
+      "y": 2,
+      "_rulingCityIndex": 30,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "32": {
+      "_owner": -1,
+      "tileIndex": 32,
+      "climate": 11,
+      "terrainType": 3,
+      "explorers": [
+        8
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 4,
+      "y": 2,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "33": {
+      "_owner": -1,
+      "tileIndex": 33,
+      "climate": 11,
+      "terrainType": 3,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 5,
+      "y": 2,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "34": {
+      "_owner": -1,
+      "tileIndex": 34,
+      "climate": 3,
+      "terrainType": 3,
+      "explorers": [
+        9
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 6,
+      "y": 2,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "35": {
+      "_owner": 9,
+      "tileIndex": 35,
+      "climate": 3,
+      "terrainType": 5,
+      "explorers": [
+        9
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 9,
+      "skinType": -1,
+      "x": 7,
+      "y": 2,
+      "_rulingCityIndex": 36,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "36": {
+      "_owner": 9,
+      "tileIndex": 36,
+      "climate": 3,
+      "terrainType": 3,
+      "explorers": [
+        9
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 9,
+      "skinType": -1,
+      "x": 8,
+      "y": 2,
+      "_rulingCityIndex": 36,
+      "_unitOwner": 9,
+      "_unitIdx": 8
+    },
+    "37": {
+      "_owner": 9,
+      "tileIndex": 37,
+      "climate": 3,
+      "terrainType": 4,
+      "explorers": [
+        9,
+        5
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 9,
+      "skinType": -1,
+      "x": 9,
+      "y": 2,
+      "_rulingCityIndex": 36,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "38": {
+      "_owner": 5,
+      "tileIndex": 38,
+      "climate": 7,
+      "terrainType": 5,
+      "explorers": [
+        9,
+        5
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 5,
+      "skinType": -1,
+      "x": 10,
+      "y": 2,
+      "_rulingCityIndex": 39,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "39": {
+      "_owner": 5,
+      "tileIndex": 39,
+      "climate": 7,
+      "terrainType": 3,
+      "explorers": [
+        5
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 5,
+      "skinType": -1,
+      "x": 11,
+      "y": 2,
+      "_rulingCityIndex": 39,
+      "_unitOwner": 5,
+      "_unitIdx": 4
+    },
+    "40": {
+      "_owner": 5,
+      "tileIndex": 40,
+      "climate": 7,
+      "terrainType": 1,
+      "explorers": [
+        5
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 5,
+      "skinType": -1,
+      "x": 12,
+      "y": 2,
+      "_rulingCityIndex": 39,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "41": {
+      "_owner": -1,
+      "tileIndex": 41,
+      "climate": 7,
+      "terrainType": 5,
+      "explorers": [
+        5
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 13,
+      "y": 2,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "42": {
+      "_owner": -1,
+      "tileIndex": 42,
+      "climate": 14,
+      "terrainType": 5,
+      "explorers": [
+        8,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 0,
+      "y": 3,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "43": {
+      "_owner": 8,
+      "tileIndex": 43,
+      "climate": 11,
+      "terrainType": 1,
+      "explorers": [
+        8,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 8,
+      "skinType": -1,
+      "x": 1,
+      "y": 3,
+      "_rulingCityIndex": 30,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "44": {
+      "_owner": 8,
+      "tileIndex": 44,
+      "climate": 11,
+      "terrainType": 3,
+      "explorers": [
+        8,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 8,
+      "skinType": -1,
+      "x": 2,
+      "y": 3,
+      "_rulingCityIndex": 30,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "45": {
+      "_owner": 8,
+      "tileIndex": 45,
+      "climate": 11,
+      "terrainType": 3,
+      "explorers": [
+        8,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 8,
+      "skinType": -1,
+      "x": 3,
+      "y": 3,
+      "_rulingCityIndex": 30,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "46": {
+      "_owner": -1,
+      "tileIndex": 46,
+      "climate": 11,
+      "terrainType": 4,
+      "explorers": [
+        8,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 4,
+      "y": 3,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "47": {
+      "_owner": -1,
+      "tileIndex": 47,
+      "climate": 11,
+      "terrainType": 3,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 5,
+      "y": 3,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "48": {
+      "_owner": -1,
+      "tileIndex": 48,
+      "climate": 9,
+      "terrainType": 5,
+      "explorers": [
+        9,
+        7
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 6,
+      "y": 3,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "49": {
+      "_owner": 9,
+      "tileIndex": 49,
+      "climate": 3,
+      "terrainType": 5,
+      "explorers": [
+        9,
+        7
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 9,
+      "skinType": -1,
+      "x": 7,
+      "y": 3,
+      "_rulingCityIndex": 36,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "50": {
+      "_owner": 9,
+      "tileIndex": 50,
+      "climate": 3,
+      "terrainType": 1,
+      "explorers": [
+        9,
+        7
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 9,
+      "skinType": -1,
+      "x": 8,
+      "y": 3,
+      "_rulingCityIndex": 36,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "51": {
+      "_owner": 9,
+      "tileIndex": 51,
+      "climate": 3,
+      "terrainType": 1,
+      "explorers": [
+        9,
+        5,
+        7,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 9,
+      "skinType": -1,
+      "x": 9,
+      "y": 3,
+      "_rulingCityIndex": 36,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "52": {
+      "_owner": 5,
+      "tileIndex": 52,
+      "climate": 7,
+      "terrainType": 1,
+      "explorers": [
+        9,
+        5,
+        7,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 5,
+      "skinType": -1,
+      "x": 10,
+      "y": 3,
+      "_rulingCityIndex": 39,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "53": {
+      "_owner": 5,
+      "tileIndex": 53,
+      "climate": 7,
+      "terrainType": 1,
+      "explorers": [
+        5,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 5,
+      "skinType": -1,
+      "x": 11,
+      "y": 3,
+      "_rulingCityIndex": 39,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "54": {
+      "_owner": 5,
+      "tileIndex": 54,
+      "climate": 7,
+      "terrainType": 1,
+      "explorers": [
+        5,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 5,
+      "skinType": -1,
+      "x": 12,
+      "y": 3,
+      "_rulingCityIndex": 39,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "55": {
+      "_owner": -1,
+      "tileIndex": 55,
+      "climate": 7,
+      "terrainType": 3,
+      "explorers": [
+        5,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 13,
+      "y": 3,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "56": {
+      "_owner": -1,
+      "tileIndex": 56,
+      "climate": 14,
+      "terrainType": 3,
+      "explorers": [
+        8,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 0,
+      "y": 4,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "57": {
+      "_owner": 1,
+      "tileIndex": 57,
+      "climate": 14,
+      "terrainType": 1,
+      "explorers": [
+        8,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 1,
+      "skinType": -1,
+      "x": 1,
+      "y": 4,
+      "_rulingCityIndex": 72,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "58": {
+      "_owner": 1,
+      "tileIndex": 58,
+      "climate": 14,
+      "terrainType": 1,
+      "explorers": [
+        8,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 1,
+      "skinType": -1,
+      "x": 2,
+      "y": 4,
+      "_rulingCityIndex": 72,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "59": {
+      "_owner": 1,
+      "tileIndex": 59,
+      "climate": 14,
+      "terrainType": 3,
+      "explorers": [
+        8,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 1,
+      "skinType": -1,
+      "x": 3,
+      "y": 4,
+      "_rulingCityIndex": 72,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "60": {
+      "_owner": -1,
+      "tileIndex": 60,
+      "climate": 11,
+      "terrainType": 5,
+      "explorers": [
+        8,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 4,
+      "y": 4,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "61": {
+      "_owner": -1,
+      "tileIndex": 61,
+      "climate": 3,
+      "terrainType": 3,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 5,
+      "y": 4,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "62": {
+      "_owner": -1,
+      "tileIndex": 62,
+      "climate": 3,
+      "terrainType": 5,
+      "explorers": [
+        9,
+        7
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 6,
+      "y": 4,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "63": {
+      "_owner": 7,
+      "tileIndex": 63,
+      "climate": 9,
+      "terrainType": 3,
+      "explorers": [
+        9,
+        7
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 7,
+      "skinType": -1,
+      "x": 7,
+      "y": 4,
+      "_rulingCityIndex": 78,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "64": {
+      "_owner": 7,
+      "tileIndex": 64,
+      "climate": 9,
+      "terrainType": 4,
+      "explorers": [
+        9,
+        7
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 7,
+      "skinType": -1,
+      "x": 8,
+      "y": 4,
+      "_rulingCityIndex": 78,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "65": {
+      "_owner": 7,
+      "tileIndex": 65,
+      "climate": 9,
+      "terrainType": 1,
+      "explorers": [
+        9,
+        5,
+        7,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 7,
+      "skinType": -1,
+      "x": 9,
+      "y": 4,
+      "_rulingCityIndex": 78,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "66": {
+      "_owner": 2,
+      "tileIndex": 66,
+      "climate": 10,
+      "terrainType": 2,
+      "explorers": [
+        9,
+        5,
+        7,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 2,
+      "skinType": -1,
+      "x": 10,
+      "y": 4,
+      "_rulingCityIndex": 81,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "67": {
+      "_owner": 2,
+      "tileIndex": 67,
+      "climate": 10,
+      "terrainType": 1,
+      "explorers": [
+        5,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 2,
+      "skinType": -1,
+      "x": 11,
+      "y": 4,
+      "_rulingCityIndex": 81,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "68": {
+      "_owner": 2,
+      "tileIndex": 68,
+      "climate": 10,
+      "terrainType": 1,
+      "explorers": [
+        5,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 2,
+      "skinType": -1,
+      "x": 12,
+      "y": 4,
+      "_rulingCityIndex": 81,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "69": {
+      "_owner": -1,
+      "tileIndex": 69,
+      "climate": 7,
+      "terrainType": 3,
+      "explorers": [
+        5,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 13,
+      "y": 4,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "70": {
+      "_owner": -1,
+      "tileIndex": 70,
+      "climate": 14,
+      "terrainType": 3,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 0,
+      "y": 5,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "71": {
+      "_owner": 1,
+      "tileIndex": 71,
+      "climate": 14,
+      "terrainType": 1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 1,
+      "skinType": -1,
+      "x": 1,
+      "y": 5,
+      "_rulingCityIndex": 72,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "72": {
+      "_owner": 1,
+      "tileIndex": 72,
+      "climate": 14,
+      "terrainType": 3,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 1,
+      "skinType": -1,
+      "x": 2,
+      "y": 5,
+      "_rulingCityIndex": 72,
+      "_unitOwner": 1,
+      "_unitIdx": 0
+    },
+    "73": {
+      "_owner": 1,
+      "tileIndex": 73,
+      "climate": 14,
+      "terrainType": 1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 1,
+      "skinType": -1,
+      "x": 3,
+      "y": 5,
+      "_rulingCityIndex": 72,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "74": {
+      "_owner": -1,
+      "tileIndex": 74,
+      "climate": 11,
+      "terrainType": 5,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 4,
+      "y": 5,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "75": {
+      "_owner": -1,
+      "tileIndex": 75,
+      "climate": 3,
+      "terrainType": 3,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 5,
+      "y": 5,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "76": {
+      "_owner": -1,
+      "tileIndex": 76,
+      "climate": 9,
+      "terrainType": 3,
+      "explorers": [
+        7
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 6,
+      "y": 5,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "77": {
+      "_owner": 7,
+      "tileIndex": 77,
+      "climate": 9,
+      "terrainType": 3,
+      "explorers": [
+        7
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 7,
+      "skinType": -1,
+      "x": 7,
+      "y": 5,
+      "_rulingCityIndex": 78,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "78": {
+      "_owner": 7,
+      "tileIndex": 78,
+      "climate": 9,
+      "terrainType": 3,
+      "explorers": [
+        7
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 7,
+      "skinType": -1,
+      "x": 8,
+      "y": 5,
+      "_rulingCityIndex": 78,
+      "_unitOwner": 7,
+      "_unitIdx": 6
+    },
+    "79": {
+      "_owner": 7,
+      "tileIndex": 79,
+      "climate": 9,
+      "terrainType": 1,
+      "explorers": [
+        7,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 7,
+      "skinType": -1,
+      "x": 9,
+      "y": 5,
+      "_rulingCityIndex": 78,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "80": {
+      "_owner": 2,
+      "tileIndex": 80,
+      "climate": 10,
+      "terrainType": 1,
+      "explorers": [
+        7,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 2,
+      "skinType": -1,
+      "x": 10,
+      "y": 5,
+      "_rulingCityIndex": 81,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "81": {
+      "_owner": 2,
+      "tileIndex": 81,
+      "climate": 10,
+      "terrainType": 3,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 2,
+      "skinType": -1,
+      "x": 11,
+      "y": 5,
+      "_rulingCityIndex": 81,
+      "_unitOwner": 2,
+      "_unitIdx": 1
+    },
+    "82": {
+      "_owner": 2,
+      "tileIndex": 82,
+      "climate": 10,
+      "terrainType": 1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 2,
+      "skinType": -1,
+      "x": 12,
+      "y": 5,
+      "_rulingCityIndex": 81,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "83": {
+      "_owner": -1,
+      "tileIndex": 83,
+      "climate": 7,
+      "terrainType": 3,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 13,
+      "y": 5,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "84": {
+      "_owner": -1,
+      "tileIndex": 84,
+      "climate": 14,
+      "terrainType": 3,
+      "explorers": [
+        1,
+        10
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 0,
+      "y": 6,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "85": {
+      "_owner": 1,
+      "tileIndex": 85,
+      "climate": 14,
+      "terrainType": 1,
+      "explorers": [
+        1,
+        10
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 1,
+      "skinType": -1,
+      "x": 1,
+      "y": 6,
+      "_rulingCityIndex": 72,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "86": {
+      "_owner": 1,
+      "tileIndex": 86,
+      "climate": 14,
+      "terrainType": 1,
+      "explorers": [
+        1,
+        10
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 1,
+      "skinType": -1,
+      "x": 2,
+      "y": 6,
+      "_rulingCityIndex": 72,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "87": {
+      "_owner": 1,
+      "tileIndex": 87,
+      "climate": 14,
+      "terrainType": 1,
+      "explorers": [
+        1,
+        10,
+        6
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 1,
+      "skinType": -1,
+      "x": 3,
+      "y": 6,
+      "_rulingCityIndex": 72,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "88": {
+      "_owner": -1,
+      "tileIndex": 88,
+      "climate": 14,
+      "terrainType": 1,
+      "explorers": [
+        1,
+        10,
+        6
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 4,
+      "y": 6,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "89": {
+      "_owner": -1,
+      "tileIndex": 89,
+      "climate": 11,
+      "terrainType": 5,
+      "explorers": [
+        6
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 5,
+      "y": 6,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "90": {
+      "_owner": -1,
+      "tileIndex": 90,
+      "climate": 9,
+      "terrainType": 3,
+      "explorers": [
+        7,
+        6
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 6,
+      "y": 6,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "91": {
+      "_owner": 7,
+      "tileIndex": 91,
+      "climate": 9,
+      "terrainType": 1,
+      "explorers": [
+        7,
+        6
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 7,
+      "skinType": -1,
+      "x": 7,
+      "y": 6,
+      "_rulingCityIndex": 78,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "92": {
+      "_owner": 7,
+      "tileIndex": 92,
+      "climate": 9,
+      "terrainType": 3,
+      "explorers": [
+        7
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 7,
+      "skinType": -1,
+      "x": 8,
+      "y": 6,
+      "_rulingCityIndex": 78,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "93": {
+      "_owner": 7,
+      "tileIndex": 93,
+      "climate": 9,
+      "terrainType": 5,
+      "explorers": [
+        7,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 7,
+      "skinType": -1,
+      "x": 9,
+      "y": 6,
+      "_rulingCityIndex": 78,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "94": {
+      "_owner": 2,
+      "tileIndex": 94,
+      "climate": 10,
+      "terrainType": 5,
+      "explorers": [
+        7,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 2,
+      "skinType": -1,
+      "x": 10,
+      "y": 6,
+      "_rulingCityIndex": 81,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "95": {
+      "_owner": 2,
+      "tileIndex": 95,
+      "climate": 10,
+      "terrainType": 5,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 2,
+      "skinType": -1,
+      "x": 11,
+      "y": 6,
+      "_rulingCityIndex": 81,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "96": {
+      "_owner": 2,
+      "tileIndex": 96,
+      "climate": 10,
+      "terrainType": 1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 2,
+      "skinType": -1,
+      "x": 12,
+      "y": 6,
+      "_rulingCityIndex": 81,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "97": {
+      "_owner": -1,
+      "tileIndex": 97,
+      "climate": 10,
+      "terrainType": 3,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 13,
+      "y": 6,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "98": {
+      "_owner": -1,
+      "tileIndex": 98,
+      "climate": 14,
+      "terrainType": 3,
+      "explorers": [
+        1,
+        10
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 0,
+      "y": 7,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "99": {
+      "_owner": 10,
+      "tileIndex": 99,
+      "climate": 15,
+      "terrainType": 3,
+      "explorers": [
+        1,
+        10
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 10,
+      "skinType": -1,
+      "x": 1,
+      "y": 7,
+      "_rulingCityIndex": 114,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "100": {
+      "_owner": 10,
+      "tileIndex": 100,
+      "climate": 15,
+      "terrainType": 6,
+      "explorers": [
+        1,
+        10
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 10,
+      "skinType": -1,
+      "x": 2,
+      "y": 7,
+      "_rulingCityIndex": 114,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "101": {
+      "_owner": 10,
+      "tileIndex": 101,
+      "climate": 15,
+      "terrainType": 5,
+      "explorers": [
+        1,
+        10,
+        6
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 10,
+      "skinType": -1,
+      "x": 3,
+      "y": 7,
+      "_rulingCityIndex": 114,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "102": {
+      "_owner": 6,
+      "tileIndex": 102,
+      "climate": 5,
+      "terrainType": 3,
+      "explorers": [
+        1,
+        10,
+        6
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 6,
+      "skinType": -1,
+      "x": 4,
+      "y": 7,
+      "_rulingCityIndex": 117,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "103": {
+      "_owner": 6,
+      "tileIndex": 103,
+      "climate": 5,
+      "terrainType": 1,
+      "explorers": [
+        6
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 6,
+      "skinType": -1,
+      "x": 5,
+      "y": 7,
+      "_rulingCityIndex": 117,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "104": {
+      "_owner": 6,
+      "tileIndex": 104,
+      "climate": 5,
+      "terrainType": 3,
+      "explorers": [
+        7,
+        6
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 6,
+      "skinType": -1,
+      "x": 6,
+      "y": 7,
+      "_rulingCityIndex": 117,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "105": {
+      "_owner": -1,
+      "tileIndex": 105,
+      "climate": 9,
+      "terrainType": 5,
+      "explorers": [
+        7,
+        6
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 7,
+      "y": 7,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "106": {
+      "_owner": -1,
+      "tileIndex": 106,
+      "climate": 9,
+      "terrainType": 3,
+      "explorers": [
+        7
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 8,
+      "y": 7,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "107": {
+      "_owner": -1,
+      "tileIndex": 107,
+      "climate": 9,
+      "terrainType": 4,
+      "explorers": [
+        7,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 9,
+      "y": 7,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "108": {
+      "_owner": -1,
+      "tileIndex": 108,
+      "climate": 10,
+      "terrainType": 3,
+      "explorers": [
+        7,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 10,
+      "y": 7,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "109": {
+      "_owner": -1,
+      "tileIndex": 109,
+      "climate": 10,
+      "terrainType": 5,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 11,
+      "y": 7,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "110": {
+      "_owner": -1,
+      "tileIndex": 110,
+      "climate": 10,
+      "terrainType": 1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 12,
+      "y": 7,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "111": {
+      "_owner": -1,
+      "tileIndex": 111,
+      "climate": 10,
+      "terrainType": 3,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 13,
+      "y": 7,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "112": {
+      "_owner": -1,
+      "tileIndex": 112,
+      "climate": 14,
+      "terrainType": 3,
+      "explorers": [
+        10
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 0,
+      "y": 8,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "113": {
+      "_owner": 10,
+      "tileIndex": 113,
+      "climate": 15,
+      "terrainType": 5,
+      "explorers": [
+        10
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 10,
+      "skinType": -1,
+      "x": 1,
+      "y": 8,
+      "_rulingCityIndex": 114,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "114": {
+      "_owner": 10,
+      "tileIndex": 114,
+      "climate": 15,
+      "terrainType": 3,
+      "explorers": [
+        10
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 10,
+      "skinType": -1,
+      "x": 2,
+      "y": 8,
+      "_rulingCityIndex": 114,
+      "_unitOwner": 10,
+      "_unitIdx": 9
+    },
+    "115": {
+      "_owner": 10,
+      "tileIndex": 115,
+      "climate": 15,
+      "terrainType": 5,
+      "explorers": [
+        10,
+        6
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 10,
+      "skinType": -1,
+      "x": 3,
+      "y": 8,
+      "_rulingCityIndex": 114,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "116": {
+      "_owner": 6,
+      "tileIndex": 116,
+      "climate": 5,
+      "terrainType": 3,
+      "explorers": [
+        10,
+        6
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 6,
+      "skinType": -1,
+      "x": 4,
+      "y": 8,
+      "_rulingCityIndex": 117,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "117": {
+      "_owner": 6,
+      "tileIndex": 117,
+      "climate": 5,
+      "terrainType": 3,
+      "explorers": [
+        6
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 6,
+      "skinType": -1,
+      "x": 5,
+      "y": 8,
+      "_rulingCityIndex": 117,
+      "_unitOwner": 6,
+      "_unitIdx": 5
+    },
+    "118": {
+      "_owner": 6,
+      "tileIndex": 118,
+      "climate": 5,
+      "terrainType": 3,
+      "explorers": [
+        6
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 6,
+      "skinType": -1,
+      "x": 6,
+      "y": 8,
+      "_rulingCityIndex": 117,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "119": {
+      "_owner": -1,
+      "tileIndex": 119,
+      "climate": 9,
+      "terrainType": 3,
+      "explorers": [
+        6
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 7,
+      "y": 8,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "120": {
+      "_owner": -1,
+      "tileIndex": 120,
+      "climate": 9,
+      "terrainType": 3,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 8,
+      "y": 8,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "121": {
+      "_owner": -1,
+      "tileIndex": 121,
+      "climate": 9,
+      "terrainType": 5,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 9,
+      "y": 8,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "122": {
+      "_owner": -1,
+      "tileIndex": 122,
+      "climate": 10,
+      "terrainType": 3,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 10,
+      "y": 8,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "123": {
+      "_owner": -1,
+      "tileIndex": 123,
+      "climate": 8,
+      "terrainType": 3,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 11,
+      "y": 8,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "124": {
+      "_owner": -1,
+      "tileIndex": 124,
+      "climate": 10,
+      "terrainType": 5,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 12,
+      "y": 8,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "125": {
+      "_owner": -1,
+      "tileIndex": 125,
+      "climate": 10,
+      "terrainType": 3,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 13,
+      "y": 8,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "126": {
+      "_owner": -1,
+      "tileIndex": 126,
+      "climate": 14,
+      "terrainType": 4,
+      "explorers": [
+        10
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 0,
+      "y": 9,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "127": {
+      "_owner": 10,
+      "tileIndex": 127,
+      "climate": 15,
+      "terrainType": 3,
+      "explorers": [
+        10
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 10,
+      "skinType": -1,
+      "x": 1,
+      "y": 9,
+      "_rulingCityIndex": 114,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "128": {
+      "_owner": 10,
+      "tileIndex": 128,
+      "climate": 15,
+      "terrainType": 3,
+      "explorers": [
+        10
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 10,
+      "skinType": -1,
+      "x": 2,
+      "y": 9,
+      "_rulingCityIndex": 114,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "129": {
+      "_owner": 10,
+      "tileIndex": 129,
+      "climate": 15,
+      "terrainType": 3,
+      "explorers": [
+        10,
+        6
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 10,
+      "skinType": -1,
+      "x": 3,
+      "y": 9,
+      "_rulingCityIndex": 114,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "130": {
+      "_owner": 6,
+      "tileIndex": 130,
+      "climate": 5,
+      "terrainType": 3,
+      "explorers": [
+        10,
+        6
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 6,
+      "skinType": -1,
+      "x": 4,
+      "y": 9,
+      "_rulingCityIndex": 117,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "131": {
+      "_owner": 6,
+      "tileIndex": 131,
+      "climate": 5,
+      "terrainType": 3,
+      "explorers": [
+        6
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 6,
+      "skinType": -1,
+      "x": 5,
+      "y": 9,
+      "_rulingCityIndex": 117,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "132": {
+      "_owner": 6,
+      "tileIndex": 132,
+      "climate": 5,
+      "terrainType": 1,
+      "explorers": [
+        6,
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 6,
+      "skinType": -1,
+      "x": 6,
+      "y": 9,
+      "_rulingCityIndex": 117,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "133": {
+      "_owner": -1,
+      "tileIndex": 133,
+      "climate": 13,
+      "terrainType": 5,
+      "explorers": [
+        6,
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 7,
+      "y": 9,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "134": {
+      "_owner": -1,
+      "tileIndex": 134,
+      "climate": 9,
+      "terrainType": 3,
+      "explorers": [
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 8,
+      "y": 9,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "135": {
+      "_owner": -1,
+      "tileIndex": 135,
+      "climate": 10,
+      "terrainType": 5,
+      "explorers": [
+        3,
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 9,
+      "y": 9,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "136": {
+      "_owner": -1,
+      "tileIndex": 136,
+      "climate": 8,
+      "terrainType": 5,
+      "explorers": [
+        3,
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 10,
+      "y": 9,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "137": {
+      "_owner": -1,
+      "tileIndex": 137,
+      "climate": 8,
+      "terrainType": 4,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 11,
+      "y": 9,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "138": {
+      "_owner": -1,
+      "tileIndex": 138,
+      "climate": 10,
+      "terrainType": 5,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 12,
+      "y": 9,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "139": {
+      "_owner": -1,
+      "tileIndex": 139,
+      "climate": 8,
+      "terrainType": 3,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 13,
+      "y": 9,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "140": {
+      "_owner": -1,
+      "tileIndex": 140,
+      "climate": 14,
+      "terrainType": 4,
+      "explorers": [
+        10
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 0,
+      "y": 10,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "141": {
+      "_owner": -1,
+      "tileIndex": 141,
+      "climate": 14,
+      "terrainType": 3,
+      "explorers": [
+        10
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 1,
+      "y": 10,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "142": {
+      "_owner": -1,
+      "tileIndex": 142,
+      "climate": 5,
+      "terrainType": 3,
+      "explorers": [
+        10
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 2,
+      "y": 10,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "143": {
+      "_owner": -1,
+      "tileIndex": 143,
+      "climate": 5,
+      "terrainType": 4,
+      "explorers": [
+        10,
+        6
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 3,
+      "y": 10,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "144": {
+      "_owner": -1,
+      "tileIndex": 144,
+      "climate": 5,
+      "terrainType": 1,
+      "explorers": [
+        10,
+        6
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 4,
+      "y": 10,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "145": {
+      "_owner": -1,
+      "tileIndex": 145,
+      "climate": 5,
+      "terrainType": 1,
+      "explorers": [
+        6
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 5,
+      "y": 10,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "146": {
+      "_owner": -1,
+      "tileIndex": 146,
+      "climate": 13,
+      "terrainType": 1,
+      "explorers": [
+        6,
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 6,
+      "y": 10,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "147": {
+      "_owner": 3,
+      "tileIndex": 147,
+      "climate": 13,
+      "terrainType": 4,
+      "explorers": [
+        6,
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 3,
+      "skinType": -1,
+      "x": 7,
+      "y": 10,
+      "_rulingCityIndex": 162,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "148": {
+      "_owner": 3,
+      "tileIndex": 148,
+      "climate": 13,
+      "terrainType": 3,
+      "explorers": [
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 3,
+      "skinType": -1,
+      "x": 8,
+      "y": 10,
+      "_rulingCityIndex": 162,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "149": {
+      "_owner": 3,
+      "tileIndex": 149,
+      "climate": 13,
+      "terrainType": 5,
+      "explorers": [
+        3,
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 3,
+      "skinType": -1,
+      "x": 9,
+      "y": 10,
+      "_rulingCityIndex": 162,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "150": {
+      "_owner": 4,
+      "tileIndex": 150,
+      "climate": 8,
+      "terrainType": 5,
+      "explorers": [
+        3,
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 4,
+      "skinType": -1,
+      "x": 10,
+      "y": 10,
+      "_rulingCityIndex": 165,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "151": {
+      "_owner": 4,
+      "tileIndex": 151,
+      "climate": 8,
+      "terrainType": 5,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 4,
+      "skinType": -1,
+      "x": 11,
+      "y": 10,
+      "_rulingCityIndex": 165,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "152": {
+      "_owner": 4,
+      "tileIndex": 152,
+      "climate": 8,
+      "terrainType": 1,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 4,
+      "skinType": -1,
+      "x": 12,
+      "y": 10,
+      "_rulingCityIndex": 165,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "153": {
+      "_owner": -1,
+      "tileIndex": 153,
+      "climate": 10,
+      "terrainType": 3,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 13,
+      "y": 10,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "154": {
+      "_owner": -1,
+      "tileIndex": 154,
+      "climate": 14,
+      "terrainType": 5,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 0,
+      "y": 11,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "155": {
+      "_owner": -1,
+      "tileIndex": 155,
+      "climate": 5,
+      "terrainType": 5,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 1,
+      "y": 11,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "156": {
+      "_owner": -1,
+      "tileIndex": 156,
+      "climate": 5,
+      "terrainType": 5,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 2,
+      "y": 11,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "157": {
+      "_owner": -1,
+      "tileIndex": 157,
+      "climate": 5,
+      "terrainType": 3,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 3,
+      "y": 11,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "158": {
+      "_owner": -1,
+      "tileIndex": 158,
+      "climate": 5,
+      "terrainType": 1,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 4,
+      "y": 11,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "159": {
+      "_owner": -1,
+      "tileIndex": 159,
+      "climate": 5,
+      "terrainType": 2,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 5,
+      "y": 11,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "160": {
+      "_owner": -1,
+      "tileIndex": 160,
+      "climate": 13,
+      "terrainType": 1,
+      "explorers": [
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 6,
+      "y": 11,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "161": {
+      "_owner": 3,
+      "tileIndex": 161,
+      "climate": 13,
+      "terrainType": 3,
+      "explorers": [
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 3,
+      "skinType": -1,
+      "x": 7,
+      "y": 11,
+      "_rulingCityIndex": 162,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "162": {
+      "_owner": 3,
+      "tileIndex": 162,
+      "climate": 13,
+      "terrainType": 3,
+      "explorers": [
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 3,
+      "skinType": -1,
+      "x": 8,
+      "y": 11,
+      "_rulingCityIndex": 162,
+      "_unitOwner": 3,
+      "_unitIdx": 2
+    },
+    "163": {
+      "_owner": 3,
+      "tileIndex": 163,
+      "climate": 13,
+      "terrainType": 3,
+      "explorers": [
+        3,
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 3,
+      "skinType": -1,
+      "x": 9,
+      "y": 11,
+      "_rulingCityIndex": 162,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "164": {
+      "_owner": 4,
+      "tileIndex": 164,
+      "climate": 8,
+      "terrainType": 1,
+      "explorers": [
+        3,
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 4,
+      "skinType": -1,
+      "x": 10,
+      "y": 11,
+      "_rulingCityIndex": 165,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "165": {
+      "_owner": 4,
+      "tileIndex": 165,
+      "climate": 8,
+      "terrainType": 3,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 4,
+      "skinType": -1,
+      "x": 11,
+      "y": 11,
+      "_rulingCityIndex": 165,
+      "_unitOwner": 4,
+      "_unitIdx": 3
+    },
+    "166": {
+      "_owner": 4,
+      "tileIndex": 166,
+      "climate": 8,
+      "terrainType": 1,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 4,
+      "skinType": -1,
+      "x": 12,
+      "y": 11,
+      "_rulingCityIndex": 165,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "167": {
+      "_owner": -1,
+      "tileIndex": 167,
+      "climate": 8,
+      "terrainType": 3,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 13,
+      "y": 11,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "168": {
+      "_owner": -1,
+      "tileIndex": 168,
+      "climate": 10,
+      "terrainType": 5,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 0,
+      "y": 12,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "169": {
+      "_owner": -1,
+      "tileIndex": 169,
+      "climate": 13,
+      "terrainType": 5,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 1,
+      "y": 12,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "170": {
+      "_owner": -1,
+      "tileIndex": 170,
+      "climate": 10,
+      "terrainType": 5,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 2,
+      "y": 12,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "171": {
+      "_owner": -1,
+      "tileIndex": 171,
+      "climate": 10,
+      "terrainType": 3,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 3,
+      "y": 12,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "172": {
+      "_owner": -1,
+      "tileIndex": 172,
+      "climate": 10,
+      "terrainType": 1,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 4,
+      "y": 12,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "173": {
+      "_owner": -1,
+      "tileIndex": 173,
+      "climate": 10,
+      "terrainType": 1,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 5,
+      "y": 12,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "174": {
+      "_owner": -1,
+      "tileIndex": 174,
+      "climate": 13,
+      "terrainType": 1,
+      "explorers": [
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 6,
+      "y": 12,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "175": {
+      "_owner": 3,
+      "tileIndex": 175,
+      "climate": 13,
+      "terrainType": 5,
+      "explorers": [
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 3,
+      "skinType": -1,
+      "x": 7,
+      "y": 12,
+      "_rulingCityIndex": 162,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "176": {
+      "_owner": 3,
+      "tileIndex": 176,
+      "climate": 13,
+      "terrainType": 5,
+      "explorers": [
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 3,
+      "skinType": -1,
+      "x": 8,
+      "y": 12,
+      "_rulingCityIndex": 162,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "177": {
+      "_owner": 3,
+      "tileIndex": 177,
+      "climate": 13,
+      "terrainType": 3,
+      "explorers": [
+        3,
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 3,
+      "skinType": -1,
+      "x": 9,
+      "y": 12,
+      "_rulingCityIndex": 162,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "178": {
+      "_owner": 4,
+      "tileIndex": 178,
+      "climate": 8,
+      "terrainType": 1,
+      "explorers": [
+        3,
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 4,
+      "skinType": -1,
+      "x": 10,
+      "y": 12,
+      "_rulingCityIndex": 165,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "179": {
+      "_owner": 4,
+      "tileIndex": 179,
+      "climate": 8,
+      "terrainType": 1,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 4,
+      "skinType": -1,
+      "x": 11,
+      "y": 12,
+      "_rulingCityIndex": 165,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "180": {
+      "_owner": 4,
+      "tileIndex": 180,
+      "climate": 8,
+      "terrainType": 1,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 4,
+      "skinType": -1,
+      "x": 12,
+      "y": 12,
+      "_rulingCityIndex": 165,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "181": {
+      "_owner": -1,
+      "tileIndex": 181,
+      "climate": 8,
+      "terrainType": 5,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 13,
+      "y": 12,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "182": {
+      "_owner": -1,
+      "tileIndex": 182,
+      "climate": 13,
+      "terrainType": 3,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 0,
+      "y": 13,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "183": {
+      "_owner": -1,
+      "tileIndex": 183,
+      "climate": 10,
+      "terrainType": 4,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 1,
+      "y": 13,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "184": {
+      "_owner": -1,
+      "tileIndex": 184,
+      "climate": 13,
+      "terrainType": 4,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 2,
+      "y": 13,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "185": {
+      "_owner": -1,
+      "tileIndex": 185,
+      "climate": 10,
+      "terrainType": 3,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 3,
+      "y": 13,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "186": {
+      "_owner": -1,
+      "tileIndex": 186,
+      "climate": 10,
+      "terrainType": 3,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 4,
+      "y": 13,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "187": {
+      "_owner": -1,
+      "tileIndex": 187,
+      "climate": 13,
+      "terrainType": 5,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 5,
+      "y": 13,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "188": {
+      "_owner": -1,
+      "tileIndex": 188,
+      "climate": 13,
+      "terrainType": 3,
+      "explorers": [
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 6,
+      "y": 13,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "189": {
+      "_owner": -1,
+      "tileIndex": 189,
+      "climate": 13,
+      "terrainType": 5,
+      "explorers": [
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 7,
+      "y": 13,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "190": {
+      "_owner": -1,
+      "tileIndex": 190,
+      "climate": 13,
+      "terrainType": 3,
+      "explorers": [
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 8,
+      "y": 13,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "191": {
+      "_owner": -1,
+      "tileIndex": 191,
+      "climate": 8,
+      "terrainType": 3,
+      "explorers": [
+        3,
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 9,
+      "y": 13,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "192": {
+      "_owner": -1,
+      "tileIndex": 192,
+      "climate": 8,
+      "terrainType": 5,
+      "explorers": [
+        3,
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 10,
+      "y": 13,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "193": {
+      "_owner": -1,
+      "tileIndex": 193,
+      "climate": 8,
+      "terrainType": 3,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 11,
+      "y": 13,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "194": {
+      "_owner": -1,
+      "tileIndex": 194,
+      "climate": 8,
+      "terrainType": 5,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 12,
+      "y": 13,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    },
+    "195": {
+      "_owner": -1,
+      "tileIndex": 195,
+      "climate": 8,
+      "terrainType": 3,
+      "explorers": [],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": -1,
+      "skinType": -1,
+      "x": 13,
+      "y": 13,
+      "_rulingCityIndex": -1,
+      "_unitOwner": -1,
+      "_unitIdx": -1
+    }
+  },
+  "structures": {
+    "19": {
+      "id": 1,
+      "_level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 19,
+      "_name": "Village",
+      "_owner": -1,
+      "_potentialTerritory": [
+        4,
+        18,
+        32,
+        5,
+        33,
+        6,
+        20,
+        34
+      ]
+    },
+    "30": {
+      "id": 1,
+      "_level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 30,
+      "_name": "Village",
+      "_owner": 8
+    },
+    "36": {
+      "id": 1,
+      "_level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 36,
+      "_name": "Village",
+      "_owner": 9
+    },
+    "39": {
+      "id": 1,
+      "_level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 39,
+      "_name": "Village",
+      "_owner": 5
+    },
+    "61": {
+      "id": 1,
+      "_level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 61,
+      "_name": "Village",
+      "_owner": -1,
+      "_potentialTerritory": [
+        46,
+        60,
+        74,
+        47,
+        75,
+        48,
+        62,
+        76
+      ]
+    },
+    "72": {
+      "id": 1,
+      "_level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 72,
+      "_name": "Village",
+      "_owner": 1
+    },
+    "78": {
+      "id": 1,
+      "_level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 78,
+      "_name": "Village",
+      "_owner": 7
+    },
+    "81": {
+      "id": 1,
+      "_level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 81,
+      "_name": "Village",
+      "_owner": 2
+    },
+    "114": {
+      "id": 1,
+      "_level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 114,
+      "_name": "Village",
+      "_owner": 10
+    },
+    "117": {
+      "id": 1,
+      "_level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 117,
+      "_name": "Village",
+      "_owner": 6
+    },
+    "120": {
+      "id": 2,
+      "_level": 0,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 120,
+      "_name": "Ruin",
+      "_owner": -1
+    },
+    "122": {
+      "id": 1,
+      "_level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 122,
+      "_name": "Village",
+      "_owner": -1,
+      "_potentialTerritory": [
+        107,
+        121,
+        135,
+        108,
+        136,
+        109,
+        123,
+        137
+      ]
+    },
+    "125": {
+      "id": 2,
+      "_level": 0,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 125,
+      "_name": "Ruin",
+      "_owner": -1
+    },
+    "154": {
+      "id": 2,
+      "_level": 0,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 154,
+      "_name": "Ruin",
+      "_owner": -1
+    },
+    "157": {
+      "id": 1,
+      "_level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 157,
+      "_name": "Village",
+      "_owner": -1,
+      "_potentialTerritory": [
+        142,
+        156,
+        170,
+        143,
+        171,
+        144,
+        158,
+        172
+      ]
+    },
+    "162": {
+      "id": 1,
+      "_level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 162,
+      "_name": "Village",
+      "_owner": 3
+    },
+    "165": {
+      "id": 1,
+      "_level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 165,
+      "_name": "Village",
+      "_owner": 4
+    },
+    "186": {
+      "id": 2,
+      "_level": 0,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 186,
+      "_name": "Ruin",
+      "_owner": -1
+    }
+  },
+  "resources": {
+    "6": {
+      "id": 1,
+      "tileIndex": 6,
+      "_owner": -1,
+      "name": "WildAnimal"
+    },
+    "7": {
+      "id": 6,
+      "tileIndex": 7,
+      "_owner": -1,
+      "name": "Fruit"
+    },
+    "8": {
+      "id": 1,
+      "tileIndex": 8,
+      "_owner": -1,
+      "name": "WildAnimal"
+    },
+    "16": {
+      "id": 6,
+      "tileIndex": 16,
+      "_owner": 8,
+      "name": "Fruit"
+    },
+    "17": {
+      "id": 6,
+      "tileIndex": 17,
+      "_owner": 8,
+      "name": "Fruit"
+    },
+    "22": {
+      "id": 6,
+      "tileIndex": 22,
+      "_owner": 9,
+      "name": "Fruit"
+    },
+    "24": {
+      "id": 3,
+      "tileIndex": 24,
+      "_owner": 5,
+      "name": "Fish"
+    },
+    "26": {
+      "id": 1,
+      "tileIndex": 26,
+      "_owner": 5,
+      "name": "WildAnimal"
+    },
+    "27": {
+      "id": 6,
+      "tileIndex": 27,
+      "_owner": -1,
+      "name": "Fruit"
+    },
+    "29": {
+      "id": 3,
+      "tileIndex": 29,
+      "_owner": 8,
+      "name": "Fish"
+    },
+    "35": {
+      "id": 1,
+      "tileIndex": 35,
+      "_owner": 9,
+      "name": "WildAnimal"
+    },
+    "38": {
+      "id": 1,
+      "tileIndex": 38,
+      "_owner": 5,
+      "name": "WildAnimal"
+    },
+    "40": {
+      "id": 3,
+      "tileIndex": 40,
+      "_owner": 5,
+      "name": "Fish"
+    },
+    "43": {
+      "id": 3,
+      "tileIndex": 43,
+      "_owner": 8,
+      "name": "Fish"
+    },
+    "44": {
+      "id": 6,
+      "tileIndex": 44,
+      "_owner": 8,
+      "name": "Fruit"
+    },
+    "48": {
+      "id": 1,
+      "tileIndex": 48,
+      "_owner": -1,
+      "name": "WildAnimal"
+    },
+    "49": {
+      "id": 1,
+      "tileIndex": 49,
+      "_owner": 9,
+      "name": "WildAnimal"
+    },
+    "51": {
+      "id": 3,
+      "tileIndex": 51,
+      "_owner": 9,
+      "name": "Fish"
+    },
+    "53": {
+      "id": 3,
+      "tileIndex": 53,
+      "_owner": 5,
+      "name": "Fish"
+    },
+    "55": {
+      "id": 6,
+      "tileIndex": 55,
+      "_owner": -1,
+      "name": "Fruit"
+    },
+    "59": {
+      "id": 6,
+      "tileIndex": 59,
+      "_owner": 1,
+      "name": "Fruit"
+    },
+    "62": {
+      "id": 1,
+      "tileIndex": 62,
+      "_owner": -1,
+      "name": "WildAnimal"
+    },
+    "63": {
+      "id": 6,
+      "tileIndex": 63,
+      "_owner": 7,
+      "name": "Fruit"
+    },
+    "66": {
+      "id": 3,
+      "tileIndex": 66,
+      "_owner": 2,
+      "name": "Fish"
+    },
+    "69": {
+      "id": 6,
+      "tileIndex": 69,
+      "_owner": -1,
+      "name": "Fruit"
+    },
+    "71": {
+      "id": 3,
+      "tileIndex": 71,
+      "_owner": 1,
+      "name": "Fish"
+    },
+    "73": {
+      "id": 3,
+      "tileIndex": 73,
+      "_owner": 1,
+      "name": "Fish"
+    },
+    "75": {
+      "id": 6,
+      "tileIndex": 75,
+      "_owner": -1,
+      "name": "Fruit"
+    },
+    "82": {
+      "id": 3,
+      "tileIndex": 82,
+      "_owner": 2,
+      "name": "Fish"
+    },
+    "85": {
+      "id": 3,
+      "tileIndex": 85,
+      "_owner": 1,
+      "name": "Fish"
+    },
+    "86": {
+      "id": 3,
+      "tileIndex": 86,
+      "_owner": 1,
+      "name": "Fish"
+    },
+    "87": {
+      "id": 3,
+      "tileIndex": 87,
+      "_owner": 1,
+      "name": "Fish"
+    },
+    "91": {
+      "id": 3,
+      "tileIndex": 91,
+      "_owner": 7,
+      "name": "Fish"
+    },
+    "93": {
+      "id": 1,
+      "tileIndex": 93,
+      "_owner": 7,
+      "name": "WildAnimal"
+    },
+    "94": {
+      "id": 1,
+      "tileIndex": 94,
+      "_owner": 2,
+      "name": "WildAnimal"
+    },
+    "95": {
+      "id": 1,
+      "tileIndex": 95,
+      "_owner": 2,
+      "name": "WildAnimal"
+    },
+    "99": {
+      "id": 6,
+      "tileIndex": 99,
+      "_owner": 10,
+      "name": "Fruit"
+    },
+    "102": {
+      "id": 6,
+      "tileIndex": 102,
+      "_owner": 6,
+      "name": "Fruit"
+    },
+    "103": {
+      "id": 3,
+      "tileIndex": 103,
+      "_owner": 6,
+      "name": "Fish"
+    },
+    "105": {
+      "id": 1,
+      "tileIndex": 105,
+      "_owner": -1,
+      "name": "WildAnimal"
+    },
+    "113": {
+      "id": 1,
+      "tileIndex": 113,
+      "_owner": 10,
+      "name": "WildAnimal"
+    },
+    "115": {
+      "id": 1,
+      "tileIndex": 115,
+      "_owner": 10,
+      "name": "WildAnimal"
+    },
+    "118": {
+      "id": 6,
+      "tileIndex": 118,
+      "_owner": 6,
+      "name": "Fruit"
+    },
+    "128": {
+      "id": 6,
+      "tileIndex": 128,
+      "_owner": 10,
+      "name": "Fruit"
+    },
+    "132": {
+      "id": 3,
+      "tileIndex": 132,
+      "_owner": 6,
+      "name": "Fish"
+    },
+    "135": {
+      "id": 1,
+      "tileIndex": 135,
+      "_owner": -1,
+      "name": "WildAnimal"
+    },
+    "144": {
+      "id": 3,
+      "tileIndex": 144,
+      "_owner": -1,
+      "name": "Fish"
+    },
+    "149": {
+      "id": 1,
+      "tileIndex": 149,
+      "_owner": 3,
+      "name": "WildAnimal"
+    },
+    "150": {
+      "id": 1,
+      "tileIndex": 150,
+      "_owner": 4,
+      "name": "WildAnimal"
+    },
+    "151": {
+      "id": 1,
+      "tileIndex": 151,
+      "_owner": 4,
+      "name": "WildAnimal"
+    },
+    "155": {
+      "id": 1,
+      "tileIndex": 155,
+      "_owner": -1,
+      "name": "WildAnimal"
+    },
+    "158": {
+      "id": 3,
+      "tileIndex": 158,
+      "_owner": -1,
+      "name": "Fish"
+    },
+    "163": {
+      "id": 6,
+      "tileIndex": 163,
+      "_owner": 3,
+      "name": "Fruit"
+    },
+    "171": {
+      "id": 6,
+      "tileIndex": 171,
+      "_owner": -1,
+      "name": "Fruit"
+    },
+    "175": {
+      "id": 1,
+      "tileIndex": 175,
+      "_owner": 3,
+      "name": "WildAnimal"
+    },
+    "176": {
+      "id": 1,
+      "tileIndex": 176,
+      "_owner": 3,
+      "name": "WildAnimal"
+    }
+  },
+  "settings": {
+    "mode": 1,
+    "size": 14,
+    "_turn": 0,
+    "maxTurns": 30,
+    "_pov": 1,
+    "live": false,
+    "unitIdx": 10,
+    "tribeCount": 10,
+    "_gameOver": false
+  },
+  "tribes": {
+    "1": {
+      "owner": 1,
+      "username": "Player",
+      "bot": false,
+      "tribeType": 14,
+      "_score": 615,
+      "_stars": 5,
+      "_killedTurn": -1,
+      "_resignedTurn": -1,
+      "_killerId": -1,
+      "_tech": [
+        0,
+        4
+      ],
+      "_kills": 0,
+      "tasks": [],
+      "_builtUniqueStructures": [],
+      "_cities": [
+        {
+          "name": "Yadakk Capital",
+          "_population": 0,
+          "_progress": 0,
+          "_rewards": [],
+          "_borderSize": 1,
+          "_connectedToCapital": false,
+          "_level": 1,
+          "_production": 2,
+          "_owner": 1,
+          "tileIndex": 72,
+          "_territory": [
+            72,
+            57,
+            71,
+            85,
+            58,
+            86,
+            59,
+            73,
+            87
+          ],
+          "_unitCount": 1
+        }
+      ],
+      "_units": [
+        {
+          "idx": 0,
+          "x": 2,
+          "y": 5,
+          "_unitType": 2,
+          "health": 100,
+          "kills": 0,
+          "prevX": -1,
+          "prevY": -1,
+          "direction": 0,
+          "_owner": 1,
+          "createdTurn": 0,
+          "_homeIndex": 72,
+          "_tileIndex": 72,
+          "_effects": [],
+          "_attacked": false,
+          "_moved": false
+        }
+      ],
+      "_resources": [
+        59,
+        71,
+        73,
+        85,
+        86,
+        87
+      ],
+      "_structures": [],
+      "_trueTech": [
+        0,
+        4
+      ],
+      "_knownPlayers": [],
+      "relations": {
+        "1": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "2": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "3": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "4": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "5": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "6": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "7": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "8": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "9": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "10": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        }
+      }
+    },
+    "2": {
+      "owner": 2,
+      "username": "AiMo",
+      "bot": true,
+      "tribeType": 2,
+      "_score": 615,
+      "_stars": 5,
+      "_killedTurn": -1,
+      "_resignedTurn": -1,
+      "_killerId": -1,
+      "_tech": [
+        0,
+        21
+      ],
+      "_kills": 0,
+      "tasks": [],
+      "_builtUniqueStructures": [],
+      "_cities": [
+        {
+          "name": "AiMo Capital",
+          "_population": 0,
+          "_progress": 0,
+          "_rewards": [],
+          "_borderSize": 1,
+          "_connectedToCapital": false,
+          "_level": 1,
+          "_production": 2,
+          "_owner": 2,
+          "tileIndex": 81,
+          "_territory": [
+            81,
+            66,
+            80,
+            94,
+            67,
+            95,
+            68,
+            82,
+            96
+          ],
+          "_unitCount": 1
+        }
+      ],
+      "_units": [
+        {
+          "idx": 1,
+          "x": 11,
+          "y": 5,
+          "_unitType": 2,
+          "health": 100,
+          "kills": 0,
+          "prevX": -1,
+          "prevY": -1,
+          "direction": 0,
+          "_owner": 2,
+          "createdTurn": 0,
+          "_homeIndex": 81,
+          "_tileIndex": 81,
+          "_effects": [],
+          "_attacked": true,
+          "_moved": true
+        }
+      ],
+      "_resources": [
+        66,
+        82,
+        94,
+        95
+      ],
+      "_structures": [],
+      "_trueTech": [
+        0,
+        21
+      ],
+      "_knownPlayers": [],
+      "relations": {
+        "1": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "2": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "3": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "4": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "5": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "6": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "7": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "8": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "9": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "10": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        }
+      }
+    },
+    "3": {
+      "owner": 3,
+      "username": "Elyrion",
+      "bot": true,
+      "tribeType": 5,
+      "_score": 515,
+      "_stars": 5,
+      "_killedTurn": -1,
+      "_resignedTurn": -1,
+      "_killerId": -1,
+      "_tech": [
+        0,
+        28
+      ],
+      "_kills": 0,
+      "tasks": [],
+      "_builtUniqueStructures": [],
+      "_cities": [
+        {
+          "name": "Elyrion Capital",
+          "_population": 0,
+          "_progress": 0,
+          "_rewards": [],
+          "_borderSize": 1,
+          "_connectedToCapital": false,
+          "_level": 1,
+          "_production": 2,
+          "_owner": 3,
+          "tileIndex": 162,
+          "_territory": [
+            162,
+            147,
+            161,
+            175,
+            148,
+            176,
+            149,
+            163,
+            177
+          ],
+          "_unitCount": 1
+        }
+      ],
+      "_units": [
+        {
+          "idx": 2,
+          "x": 8,
+          "y": 11,
+          "_unitType": 2,
+          "health": 100,
+          "kills": 0,
+          "prevX": -1,
+          "prevY": -1,
+          "direction": 0,
+          "_owner": 3,
+          "createdTurn": 0,
+          "_homeIndex": 162,
+          "_tileIndex": 162,
+          "_effects": [],
+          "_attacked": true,
+          "_moved": true
+        }
+      ],
+      "_resources": [
+        149,
+        163,
+        175,
+        176
+      ],
+      "_structures": [],
+      "_trueTech": [
+        0,
+        28
+      ],
+      "_knownPlayers": [],
+      "relations": {
+        "1": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "2": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "3": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "4": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "5": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "6": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "7": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "8": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "9": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "10": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        }
+      }
+    },
+    "4": {
+      "owner": 4,
+      "username": "Vengir",
+      "bot": true,
+      "tribeType": 12,
+      "_score": 725,
+      "_stars": 5,
+      "_killedTurn": -1,
+      "_resignedTurn": -1,
+      "_killerId": -1,
+      "_tech": [
+        0,
+        24
+      ],
+      "_kills": 0,
+      "tasks": [],
+      "_builtUniqueStructures": [],
+      "_cities": [
+        {
+          "name": "Vengir Capital",
+          "_population": 0,
+          "_progress": 0,
+          "_rewards": [],
+          "_borderSize": 1,
+          "_connectedToCapital": false,
+          "_level": 1,
+          "_production": 2,
+          "_owner": 4,
+          "tileIndex": 165,
+          "_territory": [
+            165,
+            150,
+            164,
+            178,
+            151,
+            179,
+            152,
+            166,
+            180
+          ],
+          "_unitCount": 1
+        }
+      ],
+      "_units": [
+        {
+          "idx": 3,
+          "x": 11,
+          "y": 11,
+          "_unitType": 11,
+          "health": 150,
+          "kills": 0,
+          "prevX": -1,
+          "prevY": -1,
+          "direction": 0,
+          "_owner": 4,
+          "createdTurn": 0,
+          "_homeIndex": 165,
+          "_tileIndex": 165,
+          "_effects": [],
+          "_attacked": true,
+          "_moved": true
+        }
+      ],
+      "_resources": [
+        150,
+        151
+      ],
+      "_structures": [],
+      "_trueTech": [
+        0,
+        24
+      ],
+      "_knownPlayers": [],
+      "relations": {
+        "1": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "2": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "3": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "4": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "5": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "6": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "7": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "8": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "9": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "10": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        }
+      }
+    },
+    "5": {
+      "owner": 5,
+      "username": "Luxidoor",
+      "bot": true,
+      "tribeType": 9,
+      "_score": 410,
+      "_stars": 5,
+      "_killedTurn": -1,
+      "_resignedTurn": -1,
+      "_killerId": -1,
+      "_tech": [
+        0
+      ],
+      "_kills": 0,
+      "tasks": [],
+      "_builtUniqueStructures": [],
+      "_cities": [
+        {
+          "name": "Luxidoor Capital",
+          "_population": 0,
+          "_progress": 0,
+          "_rewards": [],
+          "_borderSize": 1,
+          "_connectedToCapital": false,
+          "_level": 1,
+          "_production": 3,
+          "_owner": 5,
+          "tileIndex": 39,
+          "_territory": [
+            39,
+            24,
+            38,
+            52,
+            25,
+            53,
+            26,
+            40,
+            54
+          ],
+          "_unitCount": 1
+        }
+      ],
+      "_units": [
+        {
+          "idx": 4,
+          "x": 11,
+          "y": 2,
+          "_unitType": 2,
+          "health": 100,
+          "kills": 0,
+          "prevX": -1,
+          "prevY": -1,
+          "direction": 0,
+          "_owner": 5,
+          "createdTurn": 0,
+          "_homeIndex": 39,
+          "_tileIndex": 39,
+          "_effects": [],
+          "_attacked": true,
+          "_moved": true
+        }
+      ],
+      "_resources": [
+        24,
+        26,
+        38,
+        40,
+        53
+      ],
+      "_structures": [],
+      "_trueTech": [
+        0
+      ],
+      "_knownPlayers": [],
+      "relations": {
+        "1": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "2": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "3": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "4": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "5": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "6": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "7": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "8": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "9": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "10": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        }
+      }
+    },
+    "6": {
+      "owner": 6,
+      "username": "Kickoo",
+      "bot": true,
+      "tribeType": 8,
+      "_score": 515,
+      "_stars": 5,
+      "_killedTurn": -1,
+      "_resignedTurn": -1,
+      "_killerId": -1,
+      "_tech": [
+        0,
+        10
+      ],
+      "_kills": 0,
+      "tasks": [],
+      "_builtUniqueStructures": [],
+      "_cities": [
+        {
+          "name": "Kickoo Capital",
+          "_population": 0,
+          "_progress": 0,
+          "_rewards": [],
+          "_borderSize": 1,
+          "_connectedToCapital": false,
+          "_level": 1,
+          "_production": 2,
+          "_owner": 6,
+          "tileIndex": 117,
+          "_territory": [
+            117,
+            102,
+            116,
+            130,
+            103,
+            131,
+            104,
+            118,
+            132
+          ],
+          "_unitCount": 1
+        }
+      ],
+      "_units": [
+        {
+          "idx": 5,
+          "x": 5,
+          "y": 8,
+          "_unitType": 2,
+          "health": 100,
+          "kills": 0,
+          "prevX": -1,
+          "prevY": -1,
+          "direction": 0,
+          "_owner": 6,
+          "createdTurn": 0,
+          "_homeIndex": 117,
+          "_tileIndex": 117,
+          "_effects": [],
+          "_attacked": true,
+          "_moved": true
+        }
+      ],
+      "_resources": [
+        102,
+        103,
+        118,
+        132
+      ],
+      "_structures": [],
+      "_trueTech": [
+        0,
+        10
+      ],
+      "_knownPlayers": [],
+      "relations": {
+        "1": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "2": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "3": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "4": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "5": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "6": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "7": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "8": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "9": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "10": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        }
+      }
+    },
+    "7": {
+      "owner": 7,
+      "username": "Zebasi",
+      "bot": true,
+      "tribeType": 15,
+      "_score": 615,
+      "_stars": 5,
+      "_killedTurn": -1,
+      "_resignedTurn": -1,
+      "_killerId": -1,
+      "_tech": [
+        0,
+        8
+      ],
+      "_kills": 0,
+      "tasks": [],
+      "_builtUniqueStructures": [],
+      "_cities": [
+        {
+          "name": "Zebasi Capital",
+          "_population": 0,
+          "_progress": 0,
+          "_rewards": [],
+          "_borderSize": 1,
+          "_connectedToCapital": false,
+          "_level": 1,
+          "_production": 2,
+          "_owner": 7,
+          "tileIndex": 78,
+          "_territory": [
+            78,
+            63,
+            77,
+            91,
+            64,
+            92,
+            65,
+            79,
+            93
+          ],
+          "_unitCount": 1
+        }
+      ],
+      "_units": [
+        {
+          "idx": 6,
+          "x": 8,
+          "y": 5,
+          "_unitType": 2,
+          "health": 100,
+          "kills": 0,
+          "prevX": -1,
+          "prevY": -1,
+          "direction": 0,
+          "_owner": 7,
+          "createdTurn": 0,
+          "_homeIndex": 78,
+          "_tileIndex": 78,
+          "_effects": [],
+          "_attacked": true,
+          "_moved": true
+        }
+      ],
+      "_resources": [
+        63,
+        91,
+        93
+      ],
+      "_structures": [],
+      "_trueTech": [
+        0,
+        8
+      ],
+      "_knownPlayers": [],
+      "relations": {
+        "1": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "2": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "3": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "4": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "5": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "6": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "7": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "8": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "9": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "10": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        }
+      }
+    },
+    "8": {
+      "owner": 8,
+      "username": "Aquarion",
+      "bot": true,
+      "tribeType": 3,
+      "_score": 515,
+      "_stars": 5,
+      "_killedTurn": -1,
+      "_resignedTurn": -1,
+      "_killerId": -1,
+      "_tech": [
+        0,
+        1
+      ],
+      "_kills": 0,
+      "tasks": [],
+      "_builtUniqueStructures": [],
+      "_cities": [
+        {
+          "name": "Aquarion Capital",
+          "_population": 0,
+          "_progress": 0,
+          "_rewards": [],
+          "_borderSize": 1,
+          "_connectedToCapital": false,
+          "_level": 1,
+          "_production": 2,
+          "_owner": 8,
+          "tileIndex": 30,
+          "_territory": [
+            30,
+            15,
+            29,
+            43,
+            16,
+            44,
+            17,
+            31,
+            45
+          ],
+          "_unitCount": 1
+        }
+      ],
+      "_units": [
+        {
+          "idx": 7,
+          "x": 2,
+          "y": 2,
+          "_unitType": 20,
+          "health": 100,
+          "kills": 0,
+          "prevX": -1,
+          "prevY": -1,
+          "direction": 0,
+          "_owner": 8,
+          "createdTurn": 0,
+          "_homeIndex": 30,
+          "_tileIndex": 30,
+          "_effects": [],
+          "_attacked": true,
+          "_moved": true
+        }
+      ],
+      "_resources": [
+        16,
+        17,
+        29,
+        43,
+        44
+      ],
+      "_structures": [],
+      "_trueTech": [
+        0,
+        1
+      ],
+      "_knownPlayers": [],
+      "relations": {
+        "1": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "2": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "3": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "4": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "5": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "6": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "7": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "8": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "9": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "10": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        }
+      }
+    },
+    "9": {
+      "owner": 9,
+      "username": "Bardur",
+      "bot": true,
+      "tribeType": 4,
+      "_score": 515,
+      "_stars": 5,
+      "_killedTurn": -1,
+      "_resignedTurn": -1,
+      "_killerId": -1,
+      "_tech": [
+        0,
+        15
+      ],
+      "_kills": 0,
+      "tasks": [],
+      "_builtUniqueStructures": [],
+      "_cities": [
+        {
+          "name": "Bardur Capital",
+          "_population": 0,
+          "_progress": 0,
+          "_rewards": [],
+          "_borderSize": 1,
+          "_connectedToCapital": false,
+          "_level": 1,
+          "_production": 2,
+          "_owner": 9,
+          "tileIndex": 36,
+          "_territory": [
+            36,
+            21,
+            35,
+            49,
+            22,
+            50,
+            23,
+            37,
+            51
+          ],
+          "_unitCount": 1
+        }
+      ],
+      "_units": [
+        {
+          "idx": 8,
+          "x": 8,
+          "y": 2,
+          "_unitType": 2,
+          "health": 100,
+          "kills": 0,
+          "prevX": -1,
+          "prevY": -1,
+          "direction": 0,
+          "_owner": 9,
+          "createdTurn": 0,
+          "_homeIndex": 36,
+          "_tileIndex": 36,
+          "_effects": [],
+          "_attacked": true,
+          "_moved": true
+        }
+      ],
+      "_resources": [
+        22,
+        35,
+        49,
+        51
+      ],
+      "_structures": [],
+      "_trueTech": [
+        0,
+        15
+      ],
+      "_knownPlayers": [],
+      "relations": {
+        "1": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "2": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "3": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "4": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "5": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "6": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "7": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "8": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "9": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "10": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        }
+      }
+    },
+    "10": {
+      "owner": 10,
+      "username": "Polaris",
+      "bot": true,
+      "tribeType": 16,
+      "_score": 530,
+      "_stars": 5,
+      "_killedTurn": -1,
+      "_resignedTurn": -1,
+      "_killerId": -1,
+      "_tech": [
+        0,
+        30
+      ],
+      "_kills": 0,
+      "tasks": [],
+      "_builtUniqueStructures": [],
+      "_cities": [
+        {
+          "name": "Polaris Capital",
+          "_population": 0,
+          "_progress": 0,
+          "_rewards": [],
+          "_borderSize": 1,
+          "_connectedToCapital": false,
+          "_level": 1,
+          "_production": 2,
+          "_owner": 10,
+          "tileIndex": 114,
+          "_territory": [
+            114,
+            99,
+            113,
+            127,
+            100,
+            128,
+            101,
+            115,
+            129
+          ],
+          "_unitCount": 1
+        }
+      ],
+      "_units": [
+        {
+          "idx": 9,
+          "x": 2,
+          "y": 8,
+          "_unitType": 22,
+          "health": 100,
+          "kills": 0,
+          "prevX": -1,
+          "prevY": -1,
+          "direction": 0,
+          "_owner": 10,
+          "createdTurn": 0,
+          "_homeIndex": 114,
+          "_tileIndex": 114,
+          "_effects": [],
+          "_attacked": true,
+          "_moved": true
+        }
+      ],
+      "_resources": [
+        99,
+        113,
+        115,
+        128
+      ],
+      "_structures": [],
+      "_trueTech": [
+        0,
+        30
+      ],
+      "_knownPlayers": [],
+      "relations": {
+        "1": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "2": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "3": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "4": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "5": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "6": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "7": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "8": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "9": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        },
+        "10": {
+          "state": 0,
+          "lastAttackTurn": -1,
+          "embassyLevel": -1,
+          "lastPeaceBrokenTurn": -1,
+          "firstMeet": -1,
+          "embassyBuildTurn": -1,
+          "previousAttackTurn": -1
+        }
+      }
+    }
+  },
+  "_potentialDiscovery": [],
+  "_potentialArmy": 0,
+  "_potentialTech": 0,
+  "_potentialEconomy": 0,
+  "_visibleTiles": [
+    72,
+    42,
+    56,
+    70,
+    84,
+    98,
+    43,
+    57,
+    71,
+    85,
+    99,
+    44,
+    58,
+    86,
+    100,
+    45,
+    59,
+    73,
+    87,
+    101,
+    46,
+    60,
+    74,
+    88,
+    102,
+    84,
+    98,
+    85,
+    99,
+    86,
+    100,
+    87,
+    101,
+    88,
+    102,
+    87,
+    101,
+    88,
+    102
+  ],
+  "_lighthouses": [],
+  "_scoreArmy": 0,
+  "_scoreTech": 0,
+  "_scoreEconomy": 0,
+  "__": 0,
+  "___": 0,
+  "_prediction": {
+    "_cityRewards": [
+      6
+    ]
+  }
+}

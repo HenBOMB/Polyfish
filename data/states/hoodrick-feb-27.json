@@ -1,0 +1,6696 @@
+{
+  "tiles": {
+    "0": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 0,
+      "y": 0,
+      "_tileIndex": 0,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "1": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 1,
+      "y": 0,
+      "_tileIndex": 1,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "2": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 2,
+      "y": 0,
+      "_tileIndex": 2,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "3": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 3,
+      "y": 0,
+      "_tileIndex": 3,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "4": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        3,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 4,
+      "y": 0,
+      "_tileIndex": 4,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "5": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 5,
+      "y": 0,
+      "_tileIndex": 5,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "6": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 6,
+      "y": 0,
+      "_tileIndex": 6,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "7": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 7,
+      "y": 0,
+      "_tileIndex": 7,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "8": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 8,
+      "y": 0,
+      "_tileIndex": 8,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "9": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 9,
+      "y": 0,
+      "_tileIndex": 9,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "10": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 10,
+      "y": 0,
+      "_tileIndex": 10,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "11": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 11,
+      "y": 0,
+      "_tileIndex": 11,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "12": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 12,
+      "y": 0,
+      "_tileIndex": 12,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "13": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 13,
+      "y": 0,
+      "_tileIndex": 13,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "14": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 14,
+      "y": 0,
+      "_tileIndex": 14,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "15": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 15,
+      "y": 0,
+      "_tileIndex": 15,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "16": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 0,
+      "y": 1,
+      "_tileIndex": 16,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "17": {
+      "terrainType": 5,
+      "_owner": 3,
+      "explorers": [
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 1,
+      "y": 1,
+      "_tileIndex": 17,
+      "_rulingCityIndex": 34,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "18": {
+      "terrainType": 4,
+      "_owner": 3,
+      "explorers": [
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 2,
+      "y": 1,
+      "_tileIndex": 18,
+      "_rulingCityIndex": 34,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "19": {
+      "terrainType": 4,
+      "_owner": 3,
+      "explorers": [
+        3,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 3,
+      "y": 1,
+      "_tileIndex": 19,
+      "_rulingCityIndex": 34,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "20": {
+      "terrainType": 4,
+      "_owner": -1,
+      "explorers": [
+        3,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 4,
+      "y": 1,
+      "_tileIndex": 20,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "21": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 5,
+      "y": 1,
+      "_tileIndex": 21,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "22": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 6,
+      "y": 1,
+      "_tileIndex": 22,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "23": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 7,
+      "y": 1,
+      "_tileIndex": 23,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "24": {
+      "terrainType": 4,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 8,
+      "y": 1,
+      "_tileIndex": 24,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "25": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 9,
+      "y": 1,
+      "_tileIndex": 25,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "26": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 10,
+      "y": 1,
+      "_tileIndex": 26,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "27": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 11,
+      "y": 1,
+      "_tileIndex": 27,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "28": {
+      "terrainType": 1,
+      "_owner": 2,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 12,
+      "y": 1,
+      "_tileIndex": 28,
+      "_rulingCityIndex": 45,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "29": {
+      "terrainType": 3,
+      "_owner": 2,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 13,
+      "y": 1,
+      "_tileIndex": 29,
+      "_rulingCityIndex": 45,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "30": {
+      "terrainType": 3,
+      "_owner": 2,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 14,
+      "y": 1,
+      "_tileIndex": 30,
+      "_rulingCityIndex": 45,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "31": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 15,
+      "y": 1,
+      "_tileIndex": 31,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "32": {
+      "terrainType": 4,
+      "_owner": -1,
+      "explorers": [
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 0,
+      "y": 2,
+      "_tileIndex": 32,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "33": {
+      "terrainType": 3,
+      "_owner": 3,
+      "explorers": [
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 1,
+      "y": 2,
+      "_tileIndex": 33,
+      "_rulingCityIndex": 34,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "34": {
+      "terrainType": 3,
+      "_owner": 3,
+      "explorers": [
+        3,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 3,
+      "climate": 12,
+      "skinType": 0,
+      "x": 2,
+      "y": 2,
+      "_tileIndex": 34,
+      "_rulingCityIndex": 34,
+      "_unitIndex": 1,
+      "_unitOwner": 3,
+      "_cityOf": 3
+    },
+    "35": {
+      "terrainType": 5,
+      "_owner": 3,
+      "explorers": [
+        3,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 3,
+      "y": 2,
+      "_tileIndex": 35,
+      "_rulingCityIndex": 34,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "36": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        3,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 4,
+      "y": 2,
+      "_tileIndex": 36,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "37": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 5,
+      "y": 2,
+      "_tileIndex": 37,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "38": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        1,
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 6,
+      "y": 2,
+      "_tileIndex": 38,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "39": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        1,
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 7,
+      "y": 2,
+      "_tileIndex": 39,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "40": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        1,
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 8,
+      "y": 2,
+      "_tileIndex": 40,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "41": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 9,
+      "y": 2,
+      "_tileIndex": 41,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "42": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 10,
+      "y": 2,
+      "_tileIndex": 42,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "43": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 11,
+      "y": 2,
+      "_tileIndex": 43,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "44": {
+      "terrainType": 4,
+      "_owner": 2,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 12,
+      "y": 2,
+      "_tileIndex": 44,
+      "_rulingCityIndex": 45,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "45": {
+      "terrainType": 3,
+      "_owner": 2,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 2,
+      "climate": 10,
+      "skinType": 0,
+      "x": 13,
+      "y": 2,
+      "_tileIndex": 45,
+      "_rulingCityIndex": 45,
+      "_unitIndex": -1,
+      "_unitOwner": -1,
+      "_cityOf": 2
+    },
+    "46": {
+      "terrainType": 5,
+      "_owner": 2,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 14,
+      "y": 2,
+      "_tileIndex": 46,
+      "_rulingCityIndex": 45,
+      "_unitIndex": 3,
+      "_unitOwner": 2
+    },
+    "47": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 15,
+      "y": 2,
+      "_tileIndex": 47,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "48": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 0,
+      "y": 3,
+      "_tileIndex": 48,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "49": {
+      "terrainType": 3,
+      "_owner": 3,
+      "explorers": [
+        3,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 1,
+      "y": 3,
+      "_tileIndex": 49,
+      "_rulingCityIndex": 34,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "50": {
+      "terrainType": 3,
+      "_owner": 3,
+      "explorers": [
+        3,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 2,
+      "y": 3,
+      "_tileIndex": 50,
+      "_rulingCityIndex": 34,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "51": {
+      "terrainType": 5,
+      "_owner": 3,
+      "explorers": [
+        3,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 3,
+      "y": 3,
+      "_tileIndex": 51,
+      "_rulingCityIndex": 34,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "52": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        3,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 4,
+      "y": 3,
+      "_tileIndex": 52,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "53": {
+      "terrainType": 3,
+      "_owner": 3,
+      "explorers": [
+        3,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 5,
+      "y": 3,
+      "_tileIndex": 53,
+      "_rulingCityIndex": 70,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "54": {
+      "terrainType": 3,
+      "_owner": 3,
+      "explorers": [
+        3,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 6,
+      "y": 3,
+      "_tileIndex": 54,
+      "_rulingCityIndex": 70,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "55": {
+      "terrainType": 5,
+      "_owner": 3,
+      "explorers": [
+        3,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 7,
+      "y": 3,
+      "_tileIndex": 55,
+      "_rulingCityIndex": 70,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "56": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        1,
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 8,
+      "y": 3,
+      "_tileIndex": 56,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "57": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 9,
+      "y": 3,
+      "_tileIndex": 57,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "58": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 10,
+      "y": 3,
+      "_tileIndex": 58,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "59": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 11,
+      "y": 3,
+      "_tileIndex": 59,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "60": {
+      "terrainType": 5,
+      "_owner": 2,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 12,
+      "y": 3,
+      "_tileIndex": 60,
+      "_rulingCityIndex": 45,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "61": {
+      "terrainType": 3,
+      "_owner": 2,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 13,
+      "y": 3,
+      "_tileIndex": 61,
+      "_rulingCityIndex": 45,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "62": {
+      "terrainType": 4,
+      "_owner": 2,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 14,
+      "y": 3,
+      "_tileIndex": 62,
+      "_rulingCityIndex": 45,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "63": {
+      "terrainType": 4,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 15,
+      "y": 3,
+      "_tileIndex": 63,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "64": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 0,
+      "y": 4,
+      "_tileIndex": 64,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "65": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        3,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 1,
+      "y": 4,
+      "_tileIndex": 65,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "66": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        3,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 2,
+      "y": 4,
+      "_tileIndex": 66,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "67": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        3,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 3,
+      "y": 4,
+      "_tileIndex": 67,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "68": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        3,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 4,
+      "y": 4,
+      "_tileIndex": 68,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "69": {
+      "terrainType": 3,
+      "_owner": 3,
+      "explorers": [
+        3,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 5,
+      "y": 4,
+      "_tileIndex": 69,
+      "_rulingCityIndex": 70,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "70": {
+      "terrainType": 3,
+      "_owner": 3,
+      "explorers": [
+        3,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 6,
+      "y": 4,
+      "_tileIndex": 70,
+      "_rulingCityIndex": 70,
+      "_unitIndex": 0,
+      "_unitOwner": 3,
+      "_cityOf": 3
+    },
+    "71": {
+      "terrainType": 3,
+      "_owner": 3,
+      "explorers": [
+        3,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 7,
+      "y": 4,
+      "_tileIndex": 71,
+      "_rulingCityIndex": 70,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "72": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        1,
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 8,
+      "y": 4,
+      "_tileIndex": 72,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "73": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 9,
+      "y": 4,
+      "_tileIndex": 73,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "74": {
+      "terrainType": 1,
+      "_owner": 2,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 10,
+      "y": 4,
+      "_tileIndex": 74,
+      "_rulingCityIndex": 91,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "75": {
+      "terrainType": 5,
+      "_owner": 2,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 11,
+      "y": 4,
+      "_tileIndex": 75,
+      "_rulingCityIndex": 91,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "76": {
+      "terrainType": 5,
+      "_owner": 2,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 12,
+      "y": 4,
+      "_tileIndex": 76,
+      "_rulingCityIndex": 91,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "77": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 13,
+      "y": 4,
+      "_tileIndex": 77,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "78": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 14,
+      "y": 4,
+      "_tileIndex": 78,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "79": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 15,
+      "y": 4,
+      "_tileIndex": 79,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "80": {
+      "terrainType": 4,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 0,
+      "y": 5,
+      "_tileIndex": 80,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "81": {
+      "terrainType": 4,
+      "_owner": 1,
+      "explorers": [
+        3,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 1,
+      "y": 5,
+      "_tileIndex": 81,
+      "_rulingCityIndex": 98,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "82": {
+      "terrainType": 3,
+      "_owner": 1,
+      "explorers": [
+        1,
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 2,
+      "y": 5,
+      "_tileIndex": 82,
+      "_rulingCityIndex": 98,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "83": {
+      "terrainType": 5,
+      "_owner": 1,
+      "explorers": [
+        1,
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 3,
+      "y": 5,
+      "_tileIndex": 83,
+      "_rulingCityIndex": 98,
+      "_unitIndex": 6,
+      "_unitOwner": 1
+    },
+    "84": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        1,
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 4,
+      "y": 5,
+      "_tileIndex": 84,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "85": {
+      "terrainType": 5,
+      "_owner": 3,
+      "explorers": [
+        1,
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 5,
+      "y": 5,
+      "_tileIndex": 85,
+      "_rulingCityIndex": 70,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "86": {
+      "terrainType": 4,
+      "_owner": 3,
+      "explorers": [
+        3,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 6,
+      "y": 5,
+      "_tileIndex": 86,
+      "_rulingCityIndex": 70,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "87": {
+      "terrainType": 3,
+      "_owner": 3,
+      "explorers": [
+        3,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 7,
+      "y": 5,
+      "_tileIndex": 87,
+      "_rulingCityIndex": 70,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "88": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        1,
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 8,
+      "y": 5,
+      "_tileIndex": 88,
+      "_rulingCityIndex": -1,
+      "_unitIndex": 5,
+      "_unitOwner": 1
+    },
+    "89": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 9,
+      "y": 5,
+      "_tileIndex": 89,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "90": {
+      "terrainType": 1,
+      "_owner": 2,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 10,
+      "y": 5,
+      "_tileIndex": 90,
+      "_rulingCityIndex": 91,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "91": {
+      "terrainType": 3,
+      "_owner": 2,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 11,
+      "y": 5,
+      "_tileIndex": 91,
+      "_rulingCityIndex": 91,
+      "_unitIndex": -1,
+      "_unitOwner": -1,
+      "_cityOf": 2
+    },
+    "92": {
+      "terrainType": 5,
+      "_owner": 2,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 12,
+      "y": 5,
+      "_tileIndex": 92,
+      "_rulingCityIndex": 91,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "93": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 13,
+      "y": 5,
+      "_tileIndex": 93,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "94": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 14,
+      "y": 5,
+      "_tileIndex": 94,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "95": {
+      "terrainType": 4,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 15,
+      "y": 5,
+      "_tileIndex": 95,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "96": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 0,
+      "y": 6,
+      "_tileIndex": 96,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "97": {
+      "terrainType": 3,
+      "_owner": 1,
+      "explorers": [
+        1,
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 1,
+      "y": 6,
+      "_tileIndex": 97,
+      "_rulingCityIndex": 98,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "98": {
+      "terrainType": 3,
+      "_owner": 1,
+      "explorers": [
+        1,
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 2,
+      "y": 6,
+      "_tileIndex": 98,
+      "_rulingCityIndex": 98,
+      "_unitIndex": 4,
+      "_unitOwner": 1,
+      "_cityOf": 1
+    },
+    "99": {
+      "terrainType": 3,
+      "_owner": 1,
+      "explorers": [
+        1,
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 3,
+      "y": 6,
+      "_tileIndex": 99,
+      "_rulingCityIndex": 98,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "100": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        1,
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 4,
+      "y": 6,
+      "_tileIndex": 100,
+      "_rulingCityIndex": -1,
+      "_unitIndex": 3,
+      "_unitOwner": 1
+    },
+    "101": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        1,
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 5,
+      "y": 6,
+      "_tileIndex": 101,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "102": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        1,
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 6,
+      "y": 6,
+      "_tileIndex": 102,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "103": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 7,
+      "y": 6,
+      "_tileIndex": 103,
+      "_rulingCityIndex": -1,
+      "_unitIndex": 2,
+      "_unitOwner": 1
+    },
+    "104": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        1,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 8,
+      "y": 6,
+      "_tileIndex": 104,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "105": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        2,
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 9,
+      "y": 6,
+      "_tileIndex": 105,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "106": {
+      "terrainType": 1,
+      "_owner": 2,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 10,
+      "y": 6,
+      "_tileIndex": 106,
+      "_rulingCityIndex": 91,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "107": {
+      "terrainType": 5,
+      "_owner": 2,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 11,
+      "y": 6,
+      "_tileIndex": 107,
+      "_rulingCityIndex": 91,
+      "_unitIndex": 2,
+      "_unitOwner": 2
+    },
+    "108": {
+      "terrainType": 5,
+      "_owner": 2,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 12,
+      "y": 6,
+      "_tileIndex": 108,
+      "_rulingCityIndex": 91,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "109": {
+      "terrainType": 4,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 13,
+      "y": 6,
+      "_tileIndex": 109,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "110": {
+      "terrainType": 4,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 14,
+      "y": 6,
+      "_tileIndex": 110,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "111": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 15,
+      "y": 6,
+      "_tileIndex": 111,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "112": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 0,
+      "y": 7,
+      "_tileIndex": 112,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "113": {
+      "terrainType": 5,
+      "_owner": 1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 1,
+      "y": 7,
+      "_tileIndex": 113,
+      "_rulingCityIndex": 98,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "114": {
+      "terrainType": 5,
+      "_owner": 1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 2,
+      "y": 7,
+      "_tileIndex": 114,
+      "_rulingCityIndex": 98,
+      "_unitIndex": 1,
+      "_unitOwner": 1
+    },
+    "115": {
+      "terrainType": 1,
+      "_owner": 1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 3,
+      "y": 7,
+      "_tileIndex": 115,
+      "_rulingCityIndex": 98,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "116": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 4,
+      "y": 7,
+      "_tileIndex": 116,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "117": {
+      "terrainType": 5,
+      "_owner": 1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 5,
+      "y": 7,
+      "_tileIndex": 117,
+      "_rulingCityIndex": 134,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "118": {
+      "terrainType": 5,
+      "_owner": 1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 6,
+      "y": 7,
+      "_tileIndex": 118,
+      "_rulingCityIndex": 134,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "119": {
+      "terrainType": 1,
+      "_owner": 1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 7,
+      "y": 7,
+      "_tileIndex": 119,
+      "_rulingCityIndex": 134,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "120": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        1,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 8,
+      "y": 7,
+      "_tileIndex": 120,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "121": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 9,
+      "y": 7,
+      "_tileIndex": 121,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "122": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 10,
+      "y": 7,
+      "_tileIndex": 122,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "123": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 11,
+      "y": 7,
+      "_tileIndex": 123,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "124": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 12,
+      "y": 7,
+      "_tileIndex": 124,
+      "_rulingCityIndex": -1,
+      "_unitIndex": 1,
+      "_unitOwner": 2
+    },
+    "125": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 13,
+      "y": 7,
+      "_tileIndex": 125,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "126": {
+      "terrainType": 4,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 14,
+      "y": 7,
+      "_tileIndex": 126,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "127": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 15,
+      "y": 7,
+      "_tileIndex": 127,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "128": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 0,
+      "y": 8,
+      "_tileIndex": 128,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "129": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 1,
+      "y": 8,
+      "_tileIndex": 129,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "130": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 2,
+      "y": 8,
+      "_tileIndex": 130,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "131": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 3,
+      "y": 8,
+      "_tileIndex": 131,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "132": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 4,
+      "y": 8,
+      "_tileIndex": 132,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "133": {
+      "terrainType": 1,
+      "_owner": 1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 5,
+      "y": 8,
+      "_tileIndex": 133,
+      "_rulingCityIndex": 134,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "134": {
+      "terrainType": 3,
+      "_owner": 1,
+      "explorers": [
+        1,
+        3
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 1,
+      "climate": 6,
+      "skinType": 1,
+      "x": 6,
+      "y": 8,
+      "_tileIndex": 134,
+      "_rulingCityIndex": 134,
+      "_unitIndex": 0,
+      "_unitOwner": 1,
+      "_cityOf": 1
+    },
+    "135": {
+      "terrainType": 1,
+      "_owner": 1,
+      "explorers": [
+        1,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 7,
+      "y": 8,
+      "_tileIndex": 135,
+      "_rulingCityIndex": 134,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "136": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        1,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 8,
+      "y": 8,
+      "_tileIndex": 136,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "137": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 9,
+      "y": 8,
+      "_tileIndex": 137,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "138": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 10,
+      "y": 8,
+      "_tileIndex": 138,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "139": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 11,
+      "y": 8,
+      "_tileIndex": 139,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "140": {
+      "terrainType": 4,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 12,
+      "y": 8,
+      "_tileIndex": 140,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "141": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 13,
+      "y": 8,
+      "_tileIndex": 141,
+      "_rulingCityIndex": -1,
+      "_unitIndex": 0,
+      "_unitOwner": 2
+    },
+    "142": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 14,
+      "y": 8,
+      "_tileIndex": 142,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "143": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 15,
+      "y": 8,
+      "_tileIndex": 143,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "144": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 0,
+      "y": 9,
+      "_tileIndex": 144,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "145": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 1,
+      "y": 9,
+      "_tileIndex": 145,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "146": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 2,
+      "y": 9,
+      "_tileIndex": 146,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "147": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 3,
+      "y": 9,
+      "_tileIndex": 147,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "148": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 4,
+      "y": 9,
+      "_tileIndex": 148,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "149": {
+      "terrainType": 2,
+      "_owner": 1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 5,
+      "y": 9,
+      "_tileIndex": 149,
+      "_rulingCityIndex": 134,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "150": {
+      "terrainType": 1,
+      "_owner": 1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 6,
+      "y": 9,
+      "_tileIndex": 150,
+      "_rulingCityIndex": 134,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "151": {
+      "terrainType": 1,
+      "_owner": 1,
+      "explorers": [
+        1,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 7,
+      "y": 9,
+      "_tileIndex": 151,
+      "_rulingCityIndex": 134,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "152": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        1,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 8,
+      "y": 9,
+      "_tileIndex": 152,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "153": {
+      "terrainType": 3,
+      "_owner": 4,
+      "explorers": [
+        2,
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 9,
+      "y": 9,
+      "_tileIndex": 153,
+      "_rulingCityIndex": 170,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "154": {
+      "terrainType": 5,
+      "_owner": 4,
+      "explorers": [
+        2,
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 10,
+      "y": 9,
+      "_tileIndex": 154,
+      "_rulingCityIndex": 170,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "155": {
+      "terrainType": 5,
+      "_owner": 4,
+      "explorers": [
+        2,
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 11,
+      "y": 9,
+      "_tileIndex": 155,
+      "_rulingCityIndex": 170,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "156": {
+      "terrainType": 4,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 12,
+      "y": 9,
+      "_tileIndex": 156,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "157": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 13,
+      "y": 9,
+      "_tileIndex": 157,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "158": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 14,
+      "y": 9,
+      "_tileIndex": 158,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "159": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 15,
+      "y": 9,
+      "_tileIndex": 159,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "160": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 0,
+      "y": 10,
+      "_tileIndex": 160,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "161": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 1,
+      "y": 10,
+      "_tileIndex": 161,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "162": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 2,
+      "y": 10,
+      "_tileIndex": 162,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "163": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 3,
+      "y": 10,
+      "_tileIndex": 163,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "164": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 4,
+      "y": 10,
+      "_tileIndex": 164,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "165": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 5,
+      "y": 10,
+      "_tileIndex": 165,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "166": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 6,
+      "y": 10,
+      "_tileIndex": 166,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "167": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        1,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 7,
+      "y": 10,
+      "_tileIndex": 167,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "168": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        1,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 8,
+      "y": 10,
+      "_tileIndex": 168,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "169": {
+      "terrainType": 3,
+      "_owner": 4,
+      "explorers": [
+        2,
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 9,
+      "y": 10,
+      "_tileIndex": 169,
+      "_rulingCityIndex": 170,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "170": {
+      "terrainType": 3,
+      "_owner": 4,
+      "explorers": [
+        2,
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 10,
+      "y": 10,
+      "_tileIndex": 170,
+      "_rulingCityIndex": 170,
+      "_unitIndex": 0,
+      "_unitOwner": 4,
+      "_cityOf": 4
+    },
+    "171": {
+      "terrainType": 5,
+      "_owner": 4,
+      "explorers": [
+        2,
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 11,
+      "y": 10,
+      "_tileIndex": 171,
+      "_rulingCityIndex": 170,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "172": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        2,
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 12,
+      "y": 10,
+      "_tileIndex": 172,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "173": {
+      "terrainType": 4,
+      "_owner": -1,
+      "explorers": [
+        2,
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 13,
+      "y": 10,
+      "_tileIndex": 173,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "174": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 14,
+      "y": 10,
+      "_tileIndex": 174,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "175": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 15,
+      "y": 10,
+      "_tileIndex": 175,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "176": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 0,
+      "y": 11,
+      "_tileIndex": 176,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "177": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 1,
+      "y": 11,
+      "_tileIndex": 177,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "178": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 2,
+      "y": 11,
+      "_tileIndex": 178,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "179": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 3,
+      "y": 11,
+      "_tileIndex": 179,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "180": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 4,
+      "y": 11,
+      "_tileIndex": 180,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "181": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 5,
+      "y": 11,
+      "_tileIndex": 181,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "182": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 6,
+      "y": 11,
+      "_tileIndex": 182,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "183": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 7,
+      "y": 11,
+      "_tileIndex": 183,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "184": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        4,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 8,
+      "y": 11,
+      "_tileIndex": 184,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "185": {
+      "terrainType": 5,
+      "_owner": 4,
+      "explorers": [
+        4,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 9,
+      "y": 11,
+      "_tileIndex": 185,
+      "_rulingCityIndex": 170,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "186": {
+      "terrainType": 3,
+      "_owner": 4,
+      "explorers": [
+        4,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 10,
+      "y": 11,
+      "_tileIndex": 186,
+      "_rulingCityIndex": 170,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "187": {
+      "terrainType": 5,
+      "_owner": 4,
+      "explorers": [
+        4,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 11,
+      "y": 11,
+      "_tileIndex": 187,
+      "_rulingCityIndex": 170,
+      "_unitIndex": 1,
+      "_unitOwner": 4
+    },
+    "188": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        4,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 12,
+      "y": 11,
+      "_tileIndex": 188,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "189": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        4,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 13,
+      "y": 11,
+      "_tileIndex": 189,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "190": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 14,
+      "y": 11,
+      "_tileIndex": 190,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "191": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 10,
+      "skinType": 0,
+      "x": 15,
+      "y": 11,
+      "_tileIndex": 191,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "192": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 0,
+      "y": 12,
+      "_tileIndex": 192,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "193": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 1,
+      "y": 12,
+      "_tileIndex": 193,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "194": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 2,
+      "y": 12,
+      "_tileIndex": 194,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "195": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 3,
+      "y": 12,
+      "_tileIndex": 195,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "196": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 4,
+      "y": 12,
+      "_tileIndex": 196,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "197": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 5,
+      "y": 12,
+      "_tileIndex": 197,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "198": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 6,
+      "y": 12,
+      "_tileIndex": 198,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "199": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 7,
+      "y": 12,
+      "_tileIndex": 199,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "200": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 8,
+      "y": 12,
+      "_tileIndex": 200,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "201": {
+      "terrainType": 5,
+      "_owner": 4,
+      "explorers": [
+        4,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 9,
+      "y": 12,
+      "_tileIndex": 201,
+      "_rulingCityIndex": 218,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "202": {
+      "terrainType": 4,
+      "_owner": 4,
+      "explorers": [
+        4,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 10,
+      "y": 12,
+      "_tileIndex": 202,
+      "_rulingCityIndex": 218,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "203": {
+      "terrainType": 3,
+      "_owner": 4,
+      "explorers": [
+        4,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 11,
+      "y": 12,
+      "_tileIndex": 203,
+      "_rulingCityIndex": 218,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "204": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        4,
+        2
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 12,
+      "y": 12,
+      "_tileIndex": 204,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "205": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 13,
+      "y": 12,
+      "_tileIndex": 205,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "206": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 14,
+      "y": 12,
+      "_tileIndex": 206,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "207": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 15,
+      "y": 12,
+      "_tileIndex": 207,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "208": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 0,
+      "y": 13,
+      "_tileIndex": 208,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "209": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 1,
+      "y": 13,
+      "_tileIndex": 209,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "210": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 2,
+      "y": 13,
+      "_tileIndex": 210,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "211": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 3,
+      "y": 13,
+      "_tileIndex": 211,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "212": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 4,
+      "y": 13,
+      "_tileIndex": 212,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "213": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 5,
+      "y": 13,
+      "_tileIndex": 213,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "214": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 6,
+      "y": 13,
+      "_tileIndex": 214,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "215": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 7,
+      "y": 13,
+      "_tileIndex": 215,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "216": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 8,
+      "y": 13,
+      "_tileIndex": 216,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "217": {
+      "terrainType": 1,
+      "_owner": 4,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 9,
+      "y": 13,
+      "_tileIndex": 217,
+      "_rulingCityIndex": 218,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "218": {
+      "terrainType": 3,
+      "_owner": 4,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 4,
+      "climate": 9,
+      "skinType": 0,
+      "x": 10,
+      "y": 13,
+      "_tileIndex": 218,
+      "_rulingCityIndex": 218,
+      "_unitIndex": 2,
+      "_unitOwner": 4,
+      "_cityOf": 4
+    },
+    "219": {
+      "terrainType": 3,
+      "_owner": 4,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 11,
+      "y": 13,
+      "_tileIndex": 219,
+      "_rulingCityIndex": 218,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "220": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 12,
+      "y": 13,
+      "_tileIndex": 220,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "221": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 13,
+      "y": 13,
+      "_tileIndex": 221,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "222": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 14,
+      "y": 13,
+      "_tileIndex": 222,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "223": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 15,
+      "y": 13,
+      "_tileIndex": 223,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "224": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 0,
+      "y": 14,
+      "_tileIndex": 224,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "225": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 1,
+      "y": 14,
+      "_tileIndex": 225,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "226": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 2,
+      "y": 14,
+      "_tileIndex": 226,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "227": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 3,
+      "y": 14,
+      "_tileIndex": 227,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "228": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 4,
+      "y": 14,
+      "_tileIndex": 228,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "229": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 5,
+      "y": 14,
+      "_tileIndex": 229,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "230": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 6,
+      "y": 14,
+      "_tileIndex": 230,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "231": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 7,
+      "y": 14,
+      "_tileIndex": 231,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "232": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 8,
+      "y": 14,
+      "_tileIndex": 232,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "233": {
+      "terrainType": 1,
+      "_owner": 4,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 9,
+      "y": 14,
+      "_tileIndex": 233,
+      "_rulingCityIndex": 218,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "234": {
+      "terrainType": 3,
+      "_owner": 4,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 10,
+      "y": 14,
+      "_tileIndex": 234,
+      "_rulingCityIndex": 218,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "235": {
+      "terrainType": 4,
+      "_owner": 4,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 11,
+      "y": 14,
+      "_tileIndex": 235,
+      "_rulingCityIndex": 218,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "236": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 12,
+      "y": 14,
+      "_tileIndex": 236,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "237": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 13,
+      "y": 14,
+      "_tileIndex": 237,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "238": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 14,
+      "y": 14,
+      "_tileIndex": 238,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "239": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 15,
+      "y": 14,
+      "_tileIndex": 239,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "240": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 0,
+      "y": 15,
+      "_tileIndex": 240,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "241": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 6,
+      "skinType": 1,
+      "x": 1,
+      "y": 15,
+      "_tileIndex": 241,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "242": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 12,
+      "skinType": 0,
+      "x": 2,
+      "y": 15,
+      "_tileIndex": 242,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "243": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 3,
+      "y": 15,
+      "_tileIndex": 243,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "244": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 4,
+      "y": 15,
+      "_tileIndex": 244,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "245": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 5,
+      "y": 15,
+      "_tileIndex": 245,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "246": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 6,
+      "y": 15,
+      "_tileIndex": 246,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "247": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 7,
+      "y": 15,
+      "_tileIndex": 247,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "248": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 8,
+      "y": 15,
+      "_tileIndex": 248,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "249": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 9,
+      "y": 15,
+      "_tileIndex": 249,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "250": {
+      "terrainType": 4,
+      "_owner": -1,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 10,
+      "y": 15,
+      "_tileIndex": 250,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "251": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 11,
+      "y": 15,
+      "_tileIndex": 251,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "252": {
+      "terrainType": 3,
+      "_owner": -1,
+      "explorers": [
+        4
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 12,
+      "y": 15,
+      "_tileIndex": 252,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "253": {
+      "terrainType": 5,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 13,
+      "y": 15,
+      "_tileIndex": 253,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "254": {
+      "terrainType": 1,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 14,
+      "y": 15,
+      "_tileIndex": 254,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    },
+    "255": {
+      "terrainType": 2,
+      "_owner": -1,
+      "explorers": [
+        -1
+      ],
+      "hasRoad": false,
+      "hasRoute": false,
+      "hadRoute": false,
+      "capitalOf": 0,
+      "climate": 9,
+      "skinType": 0,
+      "x": 15,
+      "y": 15,
+      "_tileIndex": 255,
+      "_rulingCityIndex": -1,
+      "_unitIndex": -1,
+      "_unitOwner": -1
+    }
+  },
+  "structures": {
+    "0": {
+      "id": 47,
+      "level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 0,
+      "_owner": -1,
+      "_name": "Lighthouse"
+    },
+    "15": {
+      "id": 47,
+      "level": 2,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 15,
+      "_owner": -1,
+      "_name": "Lighthouse"
+    },
+    "21": {
+      "id": 2,
+      "level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 21,
+      "_owner": -1,
+      "_name": "Ruin"
+    },
+    "22": {
+      "id": 1,
+      "level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 22,
+      "_owner": -1,
+      "_name": "Village",
+      "_potentialTerritory": [
+        5,
+        21,
+        37,
+        6,
+        38,
+        7,
+        23,
+        39
+      ]
+    },
+    "28": {
+      "id": 8,
+      "level": 0,
+      "turn": 7,
+      "reward": 0,
+      "tileIndex": 28,
+      "_owner": 2,
+      "_name": "Port"
+    },
+    "34": {
+      "id": 1,
+      "level": 2,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 34,
+      "_owner": 3,
+      "_name": "Village",
+      "_potentialTerritory": [
+        17,
+        33,
+        49,
+        18,
+        50,
+        19,
+        35,
+        51
+      ]
+    },
+    "41": {
+      "id": 1,
+      "level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 41,
+      "_owner": -1,
+      "_name": "Village",
+      "_potentialTerritory": [
+        24,
+        40,
+        56,
+        25,
+        57,
+        26,
+        42,
+        58
+      ]
+    },
+    "45": {
+      "id": 1,
+      "level": 2,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 45,
+      "_owner": 2,
+      "_name": "Village",
+      "_potentialTerritory": [
+        28,
+        44,
+        60,
+        29,
+        61,
+        30,
+        46,
+        62
+      ]
+    },
+    "70": {
+      "id": 1,
+      "level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 70,
+      "_owner": 3,
+      "_name": "Village",
+      "_potentialTerritory": [
+        53,
+        69,
+        85,
+        54,
+        86,
+        55,
+        71,
+        87
+      ]
+    },
+    "74": {
+      "id": 23,
+      "level": 0,
+      "turn": 5,
+      "reward": 400,
+      "tileIndex": 74,
+      "_owner": 2,
+      "_name": "AltarOfPeace"
+    },
+    "91": {
+      "id": 1,
+      "level": 3,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 91,
+      "_owner": 2,
+      "_name": "Village",
+      "_potentialTerritory": [
+        74,
+        90,
+        106,
+        75,
+        107,
+        76,
+        92,
+        108
+      ]
+    },
+    "94": {
+      "id": 1,
+      "level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 94,
+      "_owner": -1,
+      "_name": "Village",
+      "_potentialTerritory": [
+        77,
+        93,
+        109,
+        78,
+        110,
+        79,
+        95,
+        111
+      ]
+    },
+    "98": {
+      "id": 1,
+      "level": 2,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 98,
+      "_owner": 1,
+      "_name": "Village",
+      "_potentialTerritory": [
+        81,
+        97,
+        113,
+        82,
+        114,
+        83,
+        99,
+        115
+      ]
+    },
+    "134": {
+      "id": 1,
+      "level": 3,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 134,
+      "_owner": 1,
+      "_name": "Village",
+      "_potentialTerritory": [
+        117,
+        133,
+        149,
+        118,
+        150,
+        119,
+        135,
+        151
+      ]
+    },
+    "138": {
+      "id": 2,
+      "level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 138,
+      "_owner": -1,
+      "_name": "Ruin"
+    },
+    "141": {
+      "id": 1,
+      "level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 141,
+      "_owner": -1,
+      "_name": "Village",
+      "_potentialTerritory": [
+        124,
+        140,
+        156,
+        125,
+        157,
+        126,
+        142,
+        158
+      ]
+    },
+    "161": {
+      "id": 1,
+      "level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 161,
+      "_owner": -1,
+      "_name": "Village",
+      "_potentialTerritory": [
+        144,
+        160,
+        176,
+        145,
+        177,
+        146,
+        162,
+        178
+      ]
+    },
+    "170": {
+      "id": 1,
+      "level": 2,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 170,
+      "_owner": 4,
+      "_name": "Village",
+      "_potentialTerritory": [
+        153,
+        169,
+        185,
+        154,
+        186,
+        155,
+        171,
+        187
+      ]
+    },
+    "186": {
+      "id": 5,
+      "level": 0,
+      "turn": 7,
+      "reward": 0,
+      "tileIndex": 186,
+      "_owner": 4,
+      "_name": "Farm"
+    },
+    "189": {
+      "id": 1,
+      "level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 189,
+      "_owner": -1,
+      "_name": "Village",
+      "_potentialTerritory": [
+        172,
+        188,
+        204,
+        173,
+        205,
+        174,
+        190,
+        206
+      ]
+    },
+    "197": {
+      "id": 1,
+      "level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 197,
+      "_owner": -1,
+      "_name": "Village",
+      "_potentialTerritory": [
+        180,
+        196,
+        212,
+        181,
+        213,
+        182,
+        198,
+        214
+      ]
+    },
+    "210": {
+      "id": 2,
+      "level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 210,
+      "_owner": -1,
+      "_name": "Ruin"
+    },
+    "214": {
+      "id": 2,
+      "level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 214,
+      "_owner": -1,
+      "_name": "Ruin"
+    },
+    "218": {
+      "id": 1,
+      "level": 2,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 218,
+      "_owner": 4,
+      "_name": "Village",
+      "_potentialTerritory": [
+        201,
+        217,
+        233,
+        202,
+        234,
+        203,
+        219,
+        235
+      ]
+    },
+    "219": {
+      "id": 5,
+      "level": 0,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 219,
+      "_owner": 4,
+      "_name": "Farm"
+    },
+    "240": {
+      "id": 47,
+      "level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 240,
+      "_owner": -1,
+      "_name": "Lighthouse"
+    },
+    "255": {
+      "id": 47,
+      "level": 1,
+      "turn": 0,
+      "reward": 0,
+      "tileIndex": 255,
+      "_owner": -1,
+      "_name": "Lighthouse"
+    }
+  },
+  "resources": {
+    "1": {
+      "id": 6,
+      "name": "Fruit",
+      "tileIndex": 1,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "6": {
+      "id": 6,
+      "name": "Fruit",
+      "tileIndex": 6,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "8": {
+      "id": 1,
+      "name": "WildAnimal",
+      "tileIndex": 8,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "12": {
+      "id": 3,
+      "name": "Fish",
+      "tileIndex": 12,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "17": {
+      "id": 1,
+      "name": "WildAnimal",
+      "tileIndex": 17,
+      "_owner": 3,
+      "_rulingCityIndex": 34
+    },
+    "18": {
+      "id": 5,
+      "name": "Metal",
+      "tileIndex": 18,
+      "_owner": 3,
+      "_rulingCityIndex": 0
+    },
+    "19": {
+      "id": 5,
+      "name": "Metal",
+      "tileIndex": 19,
+      "_owner": 3,
+      "_rulingCityIndex": 0
+    },
+    "23": {
+      "id": 1,
+      "name": "WildAnimal",
+      "tileIndex": 23,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "24": {
+      "id": 5,
+      "name": "Metal",
+      "tileIndex": 24,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "26": {
+      "id": 1,
+      "name": "WildAnimal",
+      "tileIndex": 26,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "30": {
+      "id": 6,
+      "name": "Fruit",
+      "tileIndex": 30,
+      "_owner": 2,
+      "_rulingCityIndex": 45
+    },
+    "33": {
+      "id": 6,
+      "name": "Fruit",
+      "tileIndex": 33,
+      "_owner": 3,
+      "_rulingCityIndex": 34
+    },
+    "35": {
+      "id": 1,
+      "name": "WildAnimal",
+      "tileIndex": 35,
+      "_owner": 3,
+      "_rulingCityIndex": 34
+    },
+    "36": {
+      "id": 6,
+      "name": "Fruit",
+      "tileIndex": 36,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "38": {
+      "id": 6,
+      "name": "Fruit",
+      "tileIndex": 38,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "39": {
+      "id": 6,
+      "name": "Fruit",
+      "tileIndex": 39,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "42": {
+      "id": 1,
+      "name": "WildAnimal",
+      "tileIndex": 42,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "44": {
+      "id": 5,
+      "name": "Metal",
+      "tileIndex": 44,
+      "_owner": 2,
+      "_rulingCityIndex": 0
+    },
+    "47": {
+      "id": 6,
+      "name": "Fruit",
+      "tileIndex": 47,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "49": {
+      "id": 6,
+      "name": "Fruit",
+      "tileIndex": 49,
+      "_owner": 3,
+      "_rulingCityIndex": 34
+    },
+    "50": {
+      "id": 2,
+      "name": "Crop",
+      "tileIndex": 50,
+      "_owner": 3,
+      "_rulingCityIndex": 34
+    },
+    "51": {
+      "id": 1,
+      "name": "WildAnimal",
+      "tileIndex": 51,
+      "_owner": 3,
+      "_rulingCityIndex": 34
+    },
+    "53": {
+      "id": 6,
+      "name": "Fruit",
+      "tileIndex": 53,
+      "_owner": 3,
+      "_rulingCityIndex": 70
+    },
+    "54": {
+      "id": 6,
+      "name": "Fruit",
+      "tileIndex": 54,
+      "_owner": 3,
+      "_rulingCityIndex": 70
+    },
+    "56": {
+      "id": 6,
+      "name": "Fruit",
+      "tileIndex": 56,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "57": {
+      "id": 6,
+      "name": "Fruit",
+      "tileIndex": 57,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "61": {
+      "id": 6,
+      "name": "Fruit",
+      "tileIndex": 61,
+      "_owner": 2,
+      "_rulingCityIndex": 45
+    },
+    "66": {
+      "id": 6,
+      "name": "Fruit",
+      "tileIndex": 66,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "75": {
+      "id": 1,
+      "name": "WildAnimal",
+      "tileIndex": 75,
+      "_owner": 2,
+      "_rulingCityIndex": 91
+    },
+    "77": {
+      "id": 6,
+      "name": "Fruit",
+      "tileIndex": 77,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "78": {
+      "id": 6,
+      "name": "Fruit",
+      "tileIndex": 78,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "79": {
+      "id": 6,
+      "name": "Fruit",
+      "tileIndex": 79,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "81": {
+      "id": 5,
+      "name": "Metal",
+      "tileIndex": 81,
+      "_owner": 1,
+      "_rulingCityIndex": 0
+    },
+    "85": {
+      "id": 1,
+      "name": "WildAnimal",
+      "tileIndex": 85,
+      "_owner": 3,
+      "_rulingCityIndex": 70
+    },
+    "86": {
+      "id": 5,
+      "name": "Metal",
+      "tileIndex": 86,
+      "_owner": 3,
+      "_rulingCityIndex": 0
+    },
+    "87": {
+      "id": 2,
+      "name": "Crop",
+      "tileIndex": 87,
+      "_owner": 3,
+      "_rulingCityIndex": 70
+    },
+    "93": {
+      "id": 6,
+      "name": "Fruit",
+      "tileIndex": 93,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "95": {
+      "id": 5,
+      "name": "Metal",
+      "tileIndex": 95,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "96": {
+      "id": 6,
+      "name": "Fruit",
+      "tileIndex": 96,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "99": {
+      "id": 6,
+      "name": "Fruit",
+      "tileIndex": 99,
+      "_owner": 1,
+      "_rulingCityIndex": 98
+    },
+    "102": {
+      "id": 2,
+      "name": "Crop",
+      "tileIndex": 102,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "109": {
+      "id": 5,
+      "name": "Metal",
+      "tileIndex": 109,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "110": {
+      "id": 5,
+      "name": "Metal",
+      "tileIndex": 110,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "117": {
+      "id": 1,
+      "name": "WildAnimal",
+      "tileIndex": 117,
+      "_owner": 1,
+      "_rulingCityIndex": 134
+    },
+    "118": {
+      "id": 1,
+      "name": "WildAnimal",
+      "tileIndex": 118,
+      "_owner": 1,
+      "_rulingCityIndex": 134
+    },
+    "120": {
+      "id": 3,
+      "name": "Fish",
+      "tileIndex": 120,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "124": {
+      "id": 1,
+      "name": "WildAnimal",
+      "tileIndex": 124,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "125": {
+      "id": 6,
+      "name": "Fruit",
+      "tileIndex": 125,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "126": {
+      "id": 5,
+      "name": "Metal",
+      "tileIndex": 126,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "140": {
+      "id": 5,
+      "name": "Metal",
+      "tileIndex": 140,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "142": {
+      "id": 6,
+      "name": "Fruit",
+      "tileIndex": 142,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "147": {
+      "id": 3,
+      "name": "Fish",
+      "tileIndex": 147,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "153": {
+      "id": 2,
+      "name": "Crop",
+      "tileIndex": 153,
+      "_owner": 4,
+      "_rulingCityIndex": 170
+    },
+    "156": {
+      "id": 5,
+      "name": "Metal",
+      "tileIndex": 156,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "158": {
+      "id": 1,
+      "name": "WildAnimal",
+      "tileIndex": 158,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "160": {
+      "id": 3,
+      "name": "Fish",
+      "tileIndex": 160,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "172": {
+      "id": 2,
+      "name": "Crop",
+      "tileIndex": 172,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "173": {
+      "id": 5,
+      "name": "Metal",
+      "tileIndex": 173,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "174": {
+      "id": 2,
+      "name": "Crop",
+      "tileIndex": 174,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "176": {
+      "id": 3,
+      "name": "Fish",
+      "tileIndex": 176,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "179": {
+      "id": 3,
+      "name": "Fish",
+      "tileIndex": 179,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "181": {
+      "id": 3,
+      "name": "Fish",
+      "tileIndex": 181,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "183": {
+      "id": 8,
+      "name": "Starfish",
+      "tileIndex": 183,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "185": {
+      "id": 1,
+      "name": "WildAnimal",
+      "tileIndex": 185,
+      "_owner": 4,
+      "_rulingCityIndex": 170
+    },
+    "187": {
+      "id": 1,
+      "name": "WildAnimal",
+      "tileIndex": 187,
+      "_owner": 4,
+      "_rulingCityIndex": 170
+    },
+    "198": {
+      "id": 3,
+      "name": "Fish",
+      "tileIndex": 198,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "201": {
+      "id": 1,
+      "name": "WildAnimal",
+      "tileIndex": 201,
+      "_owner": 4,
+      "_rulingCityIndex": 218
+    },
+    "203": {
+      "id": 2,
+      "name": "Crop",
+      "tileIndex": 203,
+      "_owner": 4,
+      "_rulingCityIndex": 218
+    },
+    "211": {
+      "id": 3,
+      "name": "Fish",
+      "tileIndex": 211,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "213": {
+      "id": 3,
+      "name": "Fish",
+      "tileIndex": 213,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "216": {
+      "id": 8,
+      "name": "Starfish",
+      "tileIndex": 216,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "217": {
+      "id": 3,
+      "name": "Fish",
+      "tileIndex": 217,
+      "_owner": 4,
+      "_rulingCityIndex": 218
+    },
+    "222": {
+      "id": 8,
+      "name": "Starfish",
+      "tileIndex": 222,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "226": {
+      "id": 8,
+      "name": "Starfish",
+      "tileIndex": 226,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "228": {
+      "id": 8,
+      "name": "Starfish",
+      "tileIndex": 228,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "231": {
+      "id": 3,
+      "name": "Fish",
+      "tileIndex": 231,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "235": {
+      "id": 5,
+      "name": "Metal",
+      "tileIndex": 235,
+      "_owner": 4,
+      "_rulingCityIndex": 0
+    },
+    "236": {
+      "id": 2,
+      "name": "Crop",
+      "tileIndex": 236,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "246": {
+      "id": 8,
+      "name": "Starfish",
+      "tileIndex": 246,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    },
+    "250": {
+      "id": 5,
+      "name": "Metal",
+      "tileIndex": 250,
+      "_owner": -1,
+      "_rulingCityIndex": 0
+    }
+  },
+  "settings": {
+    "size": 16,
+    "turn": 8,
+    "pov": 1,
+    "production": false,
+    "unitIdx": 16,
+    "tribeCount": 4
+  },
+  "tribes": {
+    "1": {
+      "owner": 1,
+      "username": "Anonymous",
+      "bot": false,
+      "score": -1,
+      "stars": 10,
+      "_tech": [
+        0,
+        18,
+        10,
+        6
+      ],
+      "tribeType": 6,
+      "killerId": 0,
+      "_kills": 3,
+      "tasks": [
+        {
+          "started": true,
+          "completed": false,
+          "customData": 0
+        },
+        {
+          "started": true,
+          "completed": false,
+          "customData": 3
+        }
+      ],
+      "_builtUniqueStructures": [
+        -1
+      ],
+      "_cities": [
+        {
+          "name": "Oldon",
+          "population": 5,
+          "progress": 0,
+          "_rewards": [
+            3,
+            7
+          ],
+          "borderSize": 1,
+          "connectedToCapital": false,
+          "level": 3,
+          "_production": 5,
+          "_owner": 1,
+          "_tileIndex": 134,
+          "_territory": [
+            117,
+            133,
+            149,
+            118,
+            150,
+            119,
+            135,
+            151
+          ],
+          "_unitCount": 4
+        },
+        {
+          "name": "Donry",
+          "population": 2,
+          "progress": 0,
+          "_rewards": [
+            4
+          ],
+          "borderSize": 1,
+          "connectedToCapital": false,
+          "level": 2,
+          "_production": 2,
+          "_owner": 1,
+          "_tileIndex": 98,
+          "_territory": [
+            81,
+            97,
+            113,
+            82,
+            114,
+            83,
+            99,
+            115
+          ],
+          "_unitCount": 3
+        }
+      ],
+      "_units": [
+        {
+          "idx": 1,
+          "_owner": 1,
+          "x": 6,
+          "y": 8,
+          "unitType": 9,
+          "health": 100,
+          "veteran": false,
+          "kills": 0,
+          "prevX": 0,
+          "prevY": 0,
+          "direction": 5,
+          "flipped": false,
+          "createdTurn": 7,
+          "_homeIndex": 134,
+          "_tileIndex": 134,
+          "_boosted": false,
+          "_hidden": false,
+          "_moved": false,
+          "_attacked": false,
+          "_effects": [
+            0
+          ],
+          "_index": 0,
+          "_passenger": 0
+        },
+        {
+          "idx": 3,
+          "_owner": 1,
+          "x": 2,
+          "y": 7,
+          "unitType": 9,
+          "health": 100,
+          "veteran": false,
+          "kills": 1,
+          "prevX": 0,
+          "prevY": 0,
+          "direction": 7,
+          "flipped": false,
+          "createdTurn": 0,
+          "_homeIndex": 98,
+          "_tileIndex": 114,
+          "_boosted": false,
+          "_hidden": false,
+          "_moved": false,
+          "_attacked": false,
+          "_effects": [
+            0
+          ],
+          "_index": 1,
+          "_passenger": 0
+        },
+        {
+          "idx": 5,
+          "_owner": 1,
+          "x": 7,
+          "y": 6,
+          "unitType": 9,
+          "health": 100,
+          "veteran": false,
+          "kills": 1,
+          "prevX": 0,
+          "prevY": 0,
+          "direction": 7,
+          "flipped": false,
+          "createdTurn": 6,
+          "_homeIndex": 134,
+          "_tileIndex": 103,
+          "_boosted": false,
+          "_hidden": false,
+          "_moved": true,
+          "_attacked": true,
+          "_effects": [
+            0
+          ],
+          "_index": 2,
+          "_passenger": 0
+        },
+        {
+          "idx": 6,
+          "_owner": 1,
+          "x": 4,
+          "y": 6,
+          "unitType": 9,
+          "health": 100,
+          "veteran": false,
+          "kills": 0,
+          "prevX": 0,
+          "prevY": 0,
+          "direction": 6,
+          "flipped": false,
+          "createdTurn": 3,
+          "_homeIndex": 134,
+          "_tileIndex": 100,
+          "_boosted": false,
+          "_hidden": false,
+          "_moved": false,
+          "_attacked": false,
+          "_effects": [
+            0
+          ],
+          "_index": 3,
+          "_passenger": 0
+        },
+        {
+          "idx": 7,
+          "_owner": 1,
+          "x": 2,
+          "y": 6,
+          "unitType": 9,
+          "health": 100,
+          "veteran": false,
+          "kills": 0,
+          "prevX": 0,
+          "prevY": 0,
+          "direction": 5,
+          "flipped": false,
+          "createdTurn": 7,
+          "_homeIndex": 98,
+          "_tileIndex": 98,
+          "_boosted": false,
+          "_hidden": false,
+          "_moved": false,
+          "_attacked": false,
+          "_effects": [
+            0
+          ],
+          "_index": 4,
+          "_passenger": 0
+        },
+        {
+          "idx": 8,
+          "_owner": 1,
+          "x": 8,
+          "y": 5,
+          "unitType": 9,
+          "health": 100,
+          "veteran": false,
+          "kills": 1,
+          "prevX": 0,
+          "prevY": 0,
+          "direction": 0,
+          "flipped": true,
+          "createdTurn": 4,
+          "_homeIndex": 134,
+          "_tileIndex": 88,
+          "_boosted": false,
+          "_hidden": false,
+          "_moved": false,
+          "_attacked": false,
+          "_effects": [
+            0
+          ],
+          "_index": 5,
+          "_passenger": 0
+        },
+        {
+          "idx": 9,
+          "_owner": 1,
+          "x": 3,
+          "y": 5,
+          "unitType": 9,
+          "health": 100,
+          "veteran": false,
+          "kills": 0,
+          "prevX": 0,
+          "prevY": 0,
+          "direction": 6,
+          "flipped": false,
+          "createdTurn": 6,
+          "_homeIndex": 98,
+          "_tileIndex": 83,
+          "_boosted": false,
+          "_hidden": false,
+          "_moved": false,
+          "_attacked": false,
+          "_effects": [
+            0
+          ],
+          "_index": 6,
+          "_passenger": 0
+        }
+      ],
+      "_terrirory": [],
+      "_resources": [
+        99,
+        117,
+        118
+      ],
+      "_structures": [],
+      "_territory": [],
+      "_trueTech": [
+        0,
+        18,
+        10,
+        6
+      ]
+    },
+    "2": {
+      "owner": 2,
+      "username": "Lïfïdee",
+      "bot": true,
+      "score": -1,
+      "stars": 2,
+      "_tech": [
+        0,
+        21,
+        15,
+        1,
+        10
+      ],
+      "tribeType": 2,
+      "killerId": 0,
+      "_kills": 0,
+      "tasks": [
+        {
+          "started": true,
+          "completed": true,
+          "customData": 5
+        },
+        {
+          "started": true,
+          "completed": false,
+          "customData": 0
+        },
+        {
+          "started": true,
+          "completed": false,
+          "customData": 0
+        }
+      ],
+      "_builtUniqueStructures": [
+        23
+      ],
+      "_cities": [
+        {
+          "name": "Pïkï",
+          "population": 4,
+          "progress": 2,
+          "_rewards": [
+            3
+          ],
+          "borderSize": 1,
+          "connectedToCapital": false,
+          "level": 2,
+          "_production": 4,
+          "_owner": 2,
+          "_tileIndex": 45,
+          "_territory": [],
+          "_unitCount": 1
+        },
+        {
+          "name": "Kïpïso",
+          "population": 5,
+          "progress": 0,
+          "_rewards": [
+            4,
+            7
+          ],
+          "borderSize": 1,
+          "connectedToCapital": false,
+          "level": 3,
+          "_production": 3,
+          "_owner": 2,
+          "_tileIndex": 91,
+          "_territory": [],
+          "_unitCount": 3
+        }
+      ],
+      "_units": [
+        {
+          "idx": 0,
+          "_owner": 2,
+          "x": 13,
+          "y": 8,
+          "unitType": 2,
+          "health": 100,
+          "veteran": false,
+          "kills": 0,
+          "prevX": 0,
+          "prevY": 0,
+          "direction": 3,
+          "flipped": true,
+          "createdTurn": 0,
+          "_homeIndex": 91,
+          "_tileIndex": 141,
+          "_boosted": false,
+          "_hidden": false,
+          "_moved": false,
+          "_attacked": false,
+          "_effects": [
+            0
+          ],
+          "_index": 0,
+          "_passenger": 0
+        },
+        {
+          "idx": 2,
+          "_owner": 2,
+          "x": 12,
+          "y": 7,
+          "unitType": 2,
+          "health": 100,
+          "veteran": false,
+          "kills": 0,
+          "prevX": 0,
+          "prevY": 0,
+          "direction": 3,
+          "flipped": true,
+          "createdTurn": 5,
+          "_homeIndex": 91,
+          "_tileIndex": 124,
+          "_boosted": false,
+          "_hidden": false,
+          "_moved": false,
+          "_attacked": false,
+          "_effects": [
+            0
+          ],
+          "_index": 1,
+          "_passenger": 0
+        },
+        {
+          "idx": 4,
+          "_owner": 2,
+          "x": 11,
+          "y": 6,
+          "unitType": 2,
+          "health": 100,
+          "veteran": false,
+          "kills": 0,
+          "prevX": 0,
+          "prevY": 0,
+          "direction": 3,
+          "flipped": true,
+          "createdTurn": 6,
+          "_homeIndex": 91,
+          "_tileIndex": 107,
+          "_boosted": false,
+          "_hidden": false,
+          "_moved": false,
+          "_attacked": false,
+          "_effects": [
+            0
+          ],
+          "_index": 2,
+          "_passenger": 0
+        },
+        {
+          "idx": 11,
+          "_owner": 2,
+          "x": 14,
+          "y": 2,
+          "unitType": 2,
+          "health": 100,
+          "veteran": false,
+          "kills": 0,
+          "prevX": 0,
+          "prevY": 0,
+          "direction": 3,
+          "flipped": true,
+          "createdTurn": 5,
+          "_homeIndex": 45,
+          "_tileIndex": 46,
+          "_boosted": false,
+          "_hidden": false,
+          "_moved": false,
+          "_attacked": false,
+          "_effects": [
+            0
+          ],
+          "_index": 3,
+          "_passenger": 0
+        }
+      ],
+      "_terrirory": [],
+      "_resources": [
+        30,
+        61,
+        75
+      ],
+      "_structures": [],
+      "_territory": [],
+      "_trueTech": [
+        0,
+        21,
+        15,
+        1,
+        10
+      ]
+    },
+    "3": {
+      "owner": 3,
+      "username": "Chotek",
+      "bot": true,
+      "score": -1,
+      "stars": 0,
+      "_tech": [
+        0,
+        7,
+        38,
+        1
+      ],
+      "tribeType": 11,
+      "killerId": 0,
+      "_kills": 0,
+      "tasks": [
+        {
+          "started": true,
+          "completed": false,
+          "customData": 0
+        }
+      ],
+      "_builtUniqueStructures": [
+        -1
+      ],
+      "_cities": [
+        {
+          "name": "Qutek",
+          "population": 3,
+          "progress": 1,
+          "_rewards": [
+            3
+          ],
+          "borderSize": 1,
+          "connectedToCapital": false,
+          "level": 2,
+          "_production": 4,
+          "_owner": 3,
+          "_tileIndex": 34,
+          "_territory": [
+            49,
+            50,
+            19,
+            35,
+            51
+          ],
+          "_unitCount": 1
+        },
+        {
+          "name": "Quill",
+          "population": 0,
+          "progress": 0,
+          "_rewards": [
+            -1
+          ],
+          "borderSize": 1,
+          "connectedToCapital": false,
+          "level": 1,
+          "_production": 1,
+          "_owner": 3,
+          "_tileIndex": 70,
+          "_territory": [
+            53,
+            69,
+            85,
+            54,
+            86,
+            55,
+            71,
+            87
+          ],
+          "_unitCount": 1
+        }
+      ],
+      "_units": [
+        {
+          "idx": 10,
+          "_owner": 3,
+          "x": 6,
+          "y": 4,
+          "unitType": 5,
+          "health": 150,
+          "veteran": false,
+          "kills": 0,
+          "prevX": 0,
+          "prevY": 0,
+          "direction": 4,
+          "flipped": false,
+          "createdTurn": 7,
+          "_homeIndex": 70,
+          "_tileIndex": 70,
+          "_boosted": false,
+          "_hidden": false,
+          "_moved": false,
+          "_attacked": false,
+          "_effects": [
+            0
+          ],
+          "_index": 0,
+          "_passenger": 0
+        },
+        {
+          "idx": 12,
+          "_owner": 3,
+          "x": 2,
+          "y": 2,
+          "unitType": 2,
+          "health": 100,
+          "veteran": false,
+          "kills": 0,
+          "prevX": 0,
+          "prevY": 0,
+          "direction": 4,
+          "flipped": false,
+          "createdTurn": 7,
+          "_homeIndex": 34,
+          "_tileIndex": 34,
+          "_boosted": false,
+          "_hidden": false,
+          "_moved": false,
+          "_attacked": false,
+          "_effects": [
+            0
+          ],
+          "_index": 1,
+          "_passenger": 0
+        }
+      ],
+      "_terrirory": [],
+      "_resources": [
+        54,
+        53,
+        51,
+        50,
+        49,
+        35,
+        33,
+        17,
+        85,
+        87
+      ],
+      "_structures": [],
+      "_territory": [],
+      "_trueTech": [
+        0,
+        7,
+        38,
+        1
+      ]
+    },
+    "4": {
+      "owner": 4,
+      "username": "Bozu",
+      "bot": true,
+      "score": -1,
+      "stars": 2,
+      "_tech": [
+        0,
+        8,
+        6,
+        10
+      ],
+      "tribeType": 15,
+      "killerId": 0,
+      "_kills": 0,
+      "tasks": [
+        {
+          "started": true,
+          "completed": false,
+          "customData": 0
+        }
+      ],
+      "_builtUniqueStructures": [
+        -1
+      ],
+      "_cities": [
+        {
+          "name": "Zanzan",
+          "population": 2,
+          "progress": 0,
+          "_rewards": [
+            3
+          ],
+          "borderSize": 1,
+          "connectedToCapital": false,
+          "level": 2,
+          "_production": 4,
+          "_owner": 4,
+          "_tileIndex": 218,
+          "_territory": [],
+          "_unitCount": 2
+        },
+        {
+          "name": "Coco",
+          "population": 2,
+          "progress": 0,
+          "_rewards": [
+            3
+          ],
+          "borderSize": 1,
+          "connectedToCapital": false,
+          "level": 2,
+          "_production": 3,
+          "_owner": 4,
+          "_tileIndex": 170,
+          "_territory": [],
+          "_unitCount": 1
+        }
+      ],
+      "_units": [
+        {
+          "idx": 13,
+          "_owner": 4,
+          "x": 10,
+          "y": 10,
+          "unitType": 2,
+          "health": 100,
+          "veteran": false,
+          "kills": 0,
+          "prevX": 0,
+          "prevY": 0,
+          "direction": 0,
+          "flipped": true,
+          "createdTurn": 0,
+          "_homeIndex": 170,
+          "_tileIndex": 170,
+          "_boosted": false,
+          "_hidden": false,
+          "_moved": false,
+          "_attacked": false,
+          "_effects": [
+            0
+          ],
+          "_index": 0,
+          "_passenger": 0
+        },
+        {
+          "idx": 14,
+          "_owner": 4,
+          "x": 11,
+          "y": 11,
+          "unitType": 2,
+          "health": 100,
+          "veteran": false,
+          "kills": 0,
+          "prevX": 0,
+          "prevY": 0,
+          "direction": 1,
+          "flipped": true,
+          "createdTurn": 3,
+          "_homeIndex": 218,
+          "_tileIndex": 187,
+          "_boosted": false,
+          "_hidden": false,
+          "_moved": false,
+          "_attacked": false,
+          "_effects": [
+            0
+          ],
+          "_index": 1,
+          "_passenger": 0
+        },
+        {
+          "idx": 15,
+          "_owner": 4,
+          "x": 10,
+          "y": 13,
+          "unitType": 2,
+          "health": 100,
+          "veteran": false,
+          "kills": 0,
+          "prevX": 0,
+          "prevY": 0,
+          "direction": 2,
+          "flipped": true,
+          "createdTurn": 5,
+          "_homeIndex": 218,
+          "_tileIndex": 218,
+          "_boosted": false,
+          "_hidden": false,
+          "_moved": false,
+          "_attacked": false,
+          "_effects": [
+            0
+          ],
+          "_index": 2,
+          "_passenger": 0
+        }
+      ],
+      "_terrirory": [],
+      "_resources": [
+        217,
+        203,
+        201,
+        187,
+        185,
+        153
+      ],
+      "_structures": [],
+      "_territory": [],
+      "_trueTech": [
+        0,
+        8,
+        6,
+        10
+      ]
+    }
+  },
+  "_potentialDiscovery": [],
+  "_potentialArmy": 0,
+  "_potentialTech": 0,
+  "_potentialEconomy": 0
+}

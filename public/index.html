@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PolyAI</title>
+    <link rel="stylesheet" href="css/styles.css">
+    <link rel="stylesheet" href="css/game.css">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' http: https: file: blob: wss:;
+    font-src 'self' 'unsafe-inline' https: file:;
+    style-src 'self' 'unsafe-inline' https:; 
+    media-src 'self' file: blob:; 
+    script-src 'self' https: 'unsafe-inline'; 
+    img-src 'self' data: https: file:" />
+</head>
+<body>
+    <div id="map"></div>
+    <script src="js/main.js"></script>
+    <div id="topbar">
+        <div>
+            <span>Score</span>
+            <span>Stars (+<span id="production">69</span>)</span>
+            <span>Turn</span>
+        </div>
+        <div>
+            <span id="score">420</span>
+            <span id="stars">999</span>
+            <span id="turn">1</span>
+        </div>
+    </div>
+    <button id="step" onclick="autoStep()">
+        Step
+    </button>
+    <!-- <button id="pov" onclick="changePov(this)">
+        Pov: 1
+    </button> -->
+    <div id="hovertile">
+
+    </div>
+    <div id="moves" style="pointer-events: none;">
+        <!-- <div class="contain-moves" id="unit-container">
+            <p>Units</p>
+            <div>
+                <p>Warrior</p>
+                <span>Move (10, 2) to (0, 0)</span>
+                <span>Move (10, 2) to (0, 0)</span>
+            </div>
+        </div>
+        <div class="contain-moves" id="tech-container">
+            <p>Technology</p>
+            <span>Research <strong>Organization</strong> for 5 stars</span>
+            <span>Research <strong>Sailing</strong> for 6 stars</span>
+        </div>
+        <div class="contain-harvest" id="harvest-container">
+            <p>Harvest</p>
+            <div>
+                <p>Fruit</p>
+                <span>At 174</span>
+            </div>
+        </div>
+        <div class="contain-moves" id="build-container">
+            <p>Buildings</p>
+            <div>
+                <p>Altar of Babies</p>
+                <span>Build at (0, 0)</span>
+                <span>Build at (3, 4)</span>
+            </div>
+        </div> -->
+    </div>
+</body>
+</html>
