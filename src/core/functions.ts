@@ -6,6 +6,56 @@ import { TechnologySettings } from "./settings/TechnologySettings";
 import Game from "../game";
 
 /**
+ * Attempts to discover any undiscovered tribes and overrides the passed state
+ * @param state 
+ * @returns if the disovery was successfull
+ */
+export function tryDiscoverRewardOtherTribes(state: GameState): boolean {
+	const us = getPovTribe(state);
+
+	// Already discovered all the tribes or all the tiles
+	if(us._knownPlayers.length == state.settings.tribeCount) return false;
+
+	const tribesMet: number[] = [];
+
+	// Try to meet new tribes, if they they have been seen and not discovered
+
+	state._visibleTiles.forEach(x => {
+		// If we can see any other tribe's unit, we have met them
+		const standing = getUnitAtTile(state, x);
+		if(standing 
+			&& standing._owner != us.owner
+			&& !us._knownPlayers.includes(standing._owner)
+			&& !tribesMet.includes(standing._owner)
+		) {
+			tribesMet.push(standing._owner);
+		}
+	});
+
+	// Reward stars for met tribes
+	tribesMet.forEach(owner => {
+		const them = state.tribes[owner];
+		us._knownPlayers.push(owner);
+		us._stars += getStarExchange(state, them);
+
+		if(them._knownPlayers.includes(us.owner)) {
+			return;
+		}
+
+		// If they also too just met us
+		for(const unit of us._units) {
+			if(state.tiles[unit._tileIndex].explorers.includes(them.owner)) {
+				them._knownPlayers.push(us.owner);
+				them._stars += getStarExchange(state, us);
+				break;
+			}
+		}
+	});
+
+	return true;
+}
+
+/**
 * Uses initial state tech to verify if the tribe can see the resource
 * @param tribe 
 * @param resourceId 
@@ -46,8 +96,10 @@ export function getTechCost(tribe: TribeState, techType: TechnologyType): number
 	return cost;
 }
 
-export function getCityProduction(city: CityState): number {
-	return city._riot? 0 : city._production;
+/** Returns the correct city production */
+export function getCityProduction(state: GameState, ...city: CityState[]): number {
+	// If riot or tile is occupied by an enemy unit = 0
+	return city.reduce((a, b) => a + (b._riot || getEnemyAtTile(state, b.tileIndex)? 0 : b._production), 0);
 }
 
 export function getTerritorryTiles(state: GameState, tribe: TribeState): TileState[] {
@@ -319,7 +371,7 @@ export function isAdjacentToEnemy(state: GameState, tile: TileState): boolean {
 
 export function isGameOver(state: GameState): boolean {
 	const tribe = getPovTribe(state);
-	return state.settings._turn > state.settings.maxTurns || tribe._resignedTurn > 0 || tribe._killedTurn > 0 || isGameWon(state);
+	return state.settings._gameOver || state.settings._turn > state.settings.maxTurns || tribe._resignedTurn > 0 || tribe._killedTurn > 0 || isGameWon(state);
 }
 
 export function isGameLost(state: GameState): boolean {

@@ -19,7 +19,7 @@ import { predictBestNextCityReward, predictOuterFogTerrain, predictVillages } fr
 import { TribeSettings } from "./settings/TribeSettings";
 import { summonUnit } from "./actions";
 
-export const STARTING_PLAYER = 1;
+export const STARTING_OWNER_ID = 1;
 export const DEBUG_SEED = undefined;
 
 export default class GameLoader {
@@ -103,7 +103,7 @@ export default class GameLoader {
                 size: this.parseRawInt(size),
                 _turn: this.parseRawInt(turn),
                 maxTurns: 30, // TODO
-                _pov: STARTING_PLAYER,
+                _pov: STARTING_OWNER_ID,
                 live: false,
                 unitIdx: 0,
                 tribeCount: 0,
@@ -337,7 +337,7 @@ export default class GameLoader {
             state.tiles[tileIndex] = tileData;
         }
 
-        this.changePov(state, STARTING_PLAYER);
+        this.changePov(state, STARTING_OWNER_ID);
 
         for(const tribeId in state.tribes) {
             const tribe = state.tribes[Number(tribeId)];
@@ -822,7 +822,7 @@ export default class GameLoader {
         pov = pov || state.settings._pov;
 
         if(pov > state.settings.tribeCount) {
-            pov = STARTING_PLAYER;
+            pov = STARTING_OWNER_ID;
         }
        
         state.settings._pov = pov;

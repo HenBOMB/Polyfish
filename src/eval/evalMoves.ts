@@ -650,6 +650,7 @@ export function bestUnitMoves(state: GameState, spawnsToo: boolean = false): Mov
                     // Spawn a unit if possible
                     ...(bestSpawn? [bestSpawn] : []),
                     // Only allow to pass if we did something good
+                    // NOT HOW END TURN IS USED!
                     ...(state._potentialArmy > 1 || state._scoreTech > 1 ? [generateEndTurnMove()] : []),
                     // Add a pass move, to skip turn if all moves are bad!
                     // TODO

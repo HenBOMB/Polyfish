@@ -1,3 +1,4 @@
+import { tryDiscoverRewardOtherTribes } from "./functions";
 import { Branch } from "./moves";
 import { GameState } from "./states";
 import { CaptureType, ResourceType, RewardType, StructureType, TechnologyType, UnitType } from "./types";
@@ -39,7 +40,12 @@ export default class Move {
 
     execute(state: GameState): Branch {
         try {
-            return this.executeCb(state);
+            const br = this.executeCb(state);
+            // Only if we moved or attacked which causes new disovered tiles
+            if(this.moveType == MoveType.Step || this.moveType == MoveType.Attack) {
+                tryDiscoverRewardOtherTribes(state);
+            }
+            return br;
         } catch (error) {
             console.log(`CRITICAL\nMOVE FAILED "${MoveType[this.moveType]}"`);
             console.error(error);

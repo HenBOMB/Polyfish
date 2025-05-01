@@ -181,7 +181,7 @@ export default class AIState {
         const newTribe = newState.tribes[pov];
 
         const calculateProduction = () => {
-            return 0.25 * (newTribe._cities.reduce((a, b) => a + getCityProduction(b), 0) - oldTribe._cities.reduce((a, b) => a + getCityProduction(b), 0));
+            return 0.25 * (newTribe._cities.reduce((a, b) => a + getCityProduction(newState, b), 0) - oldTribe._cities.reduce((a, b) => a + getCityProduction(oldState, b), 0));
         }
 
         if(move) {
@@ -282,8 +282,8 @@ export default class AIState {
         
         // Production
         const production_diff = 
-            pov._cities.reduce((x, y) => x + getCityProduction(y), 0) - 
-            enemyPov._cities.reduce((x, y) => x + getCityProduction(y), 0);
+            pov._cities.reduce((x, y) => x + getCityProduction(state, y), 0) - 
+            enemyPov._cities.reduce((x, y) => x + getCityProduction(state, y), 0);
 
         return 1.0 * city_diff + 0.1 * unit_diff + production_diff * 0.3;
     }

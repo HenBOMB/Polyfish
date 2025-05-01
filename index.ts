@@ -126,7 +126,8 @@ app.post("/autostep", async (req: Request, res: Response) => {
 
         if(req.body.mcts) {
             if(movez.length == 1) {
-                moves = [generateEndTurnMove(true)];
+                // Used just to translate to "end turn" (Move.stringify)
+                moves = [generateEndTurnMove()];
                 game.playMove(0);
             }
             else {

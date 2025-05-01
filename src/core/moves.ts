@@ -55,77 +55,17 @@ export function generateEcoMoves(state: GameState): Move[] {
 	return moves;
 }
 
-export function generateEndTurnMove(pass=true): Move {
+/** Placeholder for the End Turn move, doesnt do anything */
+export function generateEndTurnMove(): Move {
 	return new Move(
 		MoveType.EndTurn,
 		0, 0, 0,
 		// id: 'endturn-'+state.settings._turn,
 		(state: GameState) => {
-			const tribe = state.tribes[state.settings._pov];
-
-			if(pass) state.settings._turn++;
-
-			const oldStars: number = tribe._stars;
-
-			// Update stars
-			// Only cities not under siege can produce stars
-			tribe._stars += tribe._cities.reduce((acc, city) => {
-				const tile = state.tiles[city.tileIndex];
-				if(city._riot) return acc;
-				if(tile._unitOwner < 0 || tile._unitOwner == tribe.owner) {
-					acc += city._production;
-				}
-				return acc;
-			}, 0);
-
-			const oldPotentialEconomy = state._potentialEconomy;
-			const oldPotentialArmy = state._potentialArmy;
-
-			// EVAL 
-			// Punish for skipping turns and not doing anything
-
-			if(state._potentialEconomy <= 0 && state._potentialArmy <= 0) {
-				state._potentialEconomy -= state.settings._turn * .1;
-			}
-
-			// Update unit states and evaluate
-
-			const savedStates: any = {};
-
-			for (let i = 0; i < tribe._units.length; i++) {
-				const unit = tribe._units[i];
-				savedStates[i] = [unit._moved, unit._attacked];
-
-				// EVAL: Punish the unit for not having done anything
-				if(!unit._moved && !unit._attacked) {
-					state._potentialArmy -= 2.0;
-				}
-
-				if(unit._effects.includes(EffectType.Frozen)) {
-					unit._effects = [];
-					unit._moved = unit._attacked = true;
-					continue;
-				}
-
-				unit._effects = [];
-				unit._moved = unit._attacked = false;
-			}
-
 			// TODO temples logic
-
 			return {
 				moves: [],
-				undo: () => {
-					for (let i = 0; i < tribe._units.length; i++) {
-						const unit = tribe._units[i];
-						unit._moved = savedStates[i][0];
-						unit._attacked = savedStates[i][1];
-					}
-					state._potentialEconomy = oldPotentialEconomy;
-					state._potentialArmy = oldPotentialArmy;
-					if(pass) state.settings._turn--;
-					tribe._stars = oldStars;
-				},
+				undo: () => { },
 			};
 		},
 	)
