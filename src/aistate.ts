@@ -2,12 +2,13 @@ import { readFileSync } from "fs";
 import { GameState } from "./core/states";
 import { cloneState, getPovTribe, getUnitAtTile, isResourceVisible, getMaxHealth, isGameWon, isGameLost, getCity, getCityProduction, getRealUnitSettings, getTechCost, isTempleStructure, getNeighborIndexes } from "./core/functions";
 import { CaptureType, Climate2Tribe, EffectType, ModeType, ResourceType, TerrainType, UnitType } from "./core/types";
-import Move, { MoveType } from "./core/move";
+import Move, { CallbackResult, MoveType } from "./core/move";
 import { TechnologySettings } from "./core/settings/TechnologySettings";
 import { predictBestNextCityReward } from "./eval/prediction";
 import { ResourceSettings } from "./core/settings/ResourceSettings";
 import { StructureSettings } from "./core/settings/StructureSettings";
 import { UnitSettings } from "./core/settings/UnitSettings";
+import { UndoCallback } from "./core/moves";
 
 const PRECISION = 2;
 
@@ -164,11 +165,11 @@ export default class AIState {
         }
     }
 
-    static executeBestReward(state: GameState, moves: Move[]) {
+    static executeBestReward(state: GameState, moves: Move[]): CallbackResult {
         const city = getPovTribe(state)._cities.find(x => moves.some(y => y.src == x.tileIndex));
         const rewardType = predictBestNextCityReward(state, city)[0];
         const move = moves.find(x => x.type == rewardType)!;
-        move.execute(state);
+        return move.execute(state);
     }
 
     static calculateReward(oldState: GameState, newState: GameState, move: Move | null = null): number {

@@ -146,7 +146,13 @@ app.post("/autostep", async (req: Request, res: Response) => {
             }
         }
         else {
-            moves = game.playMove(action < 0 || action >= movez.length? pi.indexOf(Math.max(...pi.slice(0, movez.length))) : action);
+            const result = game.playMove(action < 0 || action >= movez.length? pi.indexOf(Math.max(...pi.slice(0, movez.length))) : action);
+
+            if(!result) {
+                throw 'Illegal Move';
+            }
+
+            moves = result!;
         }
 
         res.json({

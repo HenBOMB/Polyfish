@@ -514,7 +514,11 @@ export function getTribeCrudeScore(state: GameState, owner?: number): number {
  * @returns 
  */
 export function getRealUnitSettings(unit: UnitState) {
-	return unit._passenger? UnitSettings[unit._passenger!] : getUnitSettings(unit);
+	return getUnitSettings(getRealUnitType(unit));
+}
+
+export function getRealUnitType(unit: UnitState): UnitType {
+	return unit._passenger || unit._unitType;
 }
 
 /**

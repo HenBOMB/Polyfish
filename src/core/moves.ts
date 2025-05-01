@@ -1,15 +1,19 @@
 import { CityState, GameState, TileState, UnitState } from "./states";
-import { getNeighborTiles, getTerritorryTiles, isTechLocked, isResourceVisible, getNeighborIndexes, isAdjacentToEnemy, isAquaticOrCanFly, isSteppable, isWaterTerrain, getEnemiesInRange, isNavalUnit, getTechCost, getPovTribe, isSkilledIn, getCapitalCity, getRealUnitSettings, getUnitSettings, getUnitRange, getUnitAttack, getUnitMovement, isRoadpathAndUsable, getTrueUnitAtTile, getUnitAtTile, getHomeCity, isInvisible, getMaxHealth, isInTerritory, getAlliesNearTile } from './functions';
+import { getNeighborTiles, getTerritorryTiles, isTechLocked, isResourceVisible, getNeighborIndexes, isAdjacentToEnemy, isAquaticOrCanFly, isSteppable, isWaterTerrain, getEnemiesInRange, isNavalUnit, getTechCost, getPovTribe, isSkilledIn, getCapitalCity, getRealUnitSettings, getUnitSettings, getUnitRange, getUnitAttack, getUnitMovement, isRoadpathAndUsable, getTrueUnitAtTile, getUnitAtTile, getHomeCity, isInvisible, getMaxHealth, isInTerritory, getAlliesNearTile, getRealUnitType } from './functions';
 import { StructureByTerrain, StructureSettings } from "./settings/StructureSettings";
 import { ResourceSettings } from "./settings/ResourceSettings";
 import { SkillType, CaptureType, EffectType, ResourceType, RewardType, StructureType, TechnologyType, TerrainType, TribeType, UnitType, AbilityType } from "./types";
 import { TechnologySettings } from "./settings/TechnologySettings";
 import { addPopulationToCity, attackUnit, buildStructure, discoverTiles, freezeArea, harvestResource, healUnit, pushUnit, removeUnit, splashDamageArea, summonUnit } from "./actions";
-import { evaluateArmy, evaluateEconomy, rewardCapture, rewardTech, rewardUnitAttack, rewardUnitMove } from "../eval/eval";
+import { rewardCapture, rewardTech, rewardUnitAttack, rewardUnitMove } from "../eval/eval";
 import { UnitSettings } from "./settings/UnitSettings";
 import { TribeSettings } from "./settings/TribeSettings";
-import Move, { MoveType } from "./move";
-import { MODEL_CONFIG } from "../aistate";
+import Move, { CallbackResult, MoveType } from "./move";
+import AIState, { MODEL_CONFIG } from "../aistate";
+import { Logger } from "../polyfish/logger";
+import Upgrade from "./moves/Upgrade";
+import Summon from "./moves/Summon";
+import Step from "./moves/Step";
 
 export interface ReachableNode {
 	index: number;
@@ -385,7 +389,7 @@ export function generateRewardMoves(state: GameState, rulingCityIndex: number, r
 					}
 					break;
 				default:
-					throw `Invalid reward type: ${rewardType}`;
+					return Logger.illegal(MoveType.Reward, `Invalid type ${rewardType}`);
 			}
 			
 			city._rewards.push(rewardType);
@@ -401,9 +405,7 @@ export function generateRewardMoves(state: GameState, rulingCityIndex: number, r
 					city._progress = oldProgress;
 				},
 			};
-		},
-		city.name,
-		RewardType[rewardType],
+		}
 	)) as Move[];
 }
 
@@ -424,19 +426,21 @@ export default class UnitMoveGenerator {
 
 		UnitMoveGenerator.captures(state, unitTarget, moves);
 
-		// EVAL sort by what leads to the highest score
+		// ! MCTS EVAL !
+		// Prioritize moves
+		// Capture -> Ability -> Attack -> Step
 
-		const scoreEcoInitial = evaluateEconomy(state);
-		const scoreArmyInitial = evaluateArmy(state);
+		const TABLE: { [moveType: number]: number } = {
+			[MoveType.Capture]: 4,
+			[MoveType.Ability]: 3,
+			[MoveType.Attack]: 2,
+			[MoveType.Step]: 1,
+		};
+		const MAX = 7;
 
-		const movesXScore: [Move, number][] = moves.map(x => {
-			const undo = x.execute(state).undo;
-			const totalIncrease = evaluateEconomy(state) - scoreEcoInitial + evaluateArmy(state) - scoreArmyInitial;
-			undo();
-			return [x, totalIncrease];
-		})
+		moves.sort((a, b) => (TABLE[a.moveType] || Math.floor(Math.random() * MAX)) - (TABLE[b.moveType] || Math.floor(Math.random() * MAX)));
 
-		return movesXScore.sort((x, y) => y[1] - x[1]).map(x => x[0]);
+		return moves;
 	}
 
 	/**
@@ -482,9 +486,7 @@ export default class UnitMoveGenerator {
 							undoHeal();
 						}
 					};
-				},
-				`Recover ${unitTarget._health} -> ${getMaxHealth(unitTarget)}`,
-				'Recover',
+				}
 			));
 		}
 
@@ -506,8 +508,6 @@ export default class UnitMoveGenerator {
 						}
 					}
 				},
-				`Healed ${adjAllies.length} units`,
-				'Heal Others',
 			));
 		}
 
@@ -745,8 +745,6 @@ export default class UnitMoveGenerator {
 						}
 					};
 				},
-				`${UnitType[sieger._unitType]},${targetCityIndex}`,
-				`Capture ${struct._owner < 1 ? 'Village' : 'City'}:${targetCityIndex}`,
 			);
 		}
 		else if (struct && struct.id == StructureType.Ruin) {
@@ -819,8 +817,6 @@ export default class UnitMoveGenerator {
 						}
 					};
 				},
-				`${UnitType[sieger._unitType]},${targetCityIndex}`,
-				'Capture Ruins',
 			);
 		}
 		else if (resource && resource.id == ResourceType.Starfish && !isTechLocked(us, TechnologyType.Navigation)) {
@@ -858,8 +854,6 @@ export default class UnitMoveGenerator {
 						}
 					};
 				},
-				`${UnitType[sieger._unitType]},${sieger._tileIndex}`,
-				'Capture Starfish:' + sieger._tileIndex,
 			);
 		}
 
@@ -1034,11 +1028,11 @@ export default class UnitMoveGenerator {
 				attacker._tileIndex, defender._tileIndex, defender._unitType, 
 				(state: GameState) => {
 					if(!enemyTribe._units.find(x => x.idx == enemyTile._unitIdx)) {
-						throw 'enemy does not exist!!';
+						return Logger.illegal(MoveType.Attack, `Enemy does not exist ${TribeType[enemyTribe.tribeType]}, ${enemyTile._unitIdx}`);
 					}
 
 					if(defender._health < 1) {
-						throw 'unit is already dead! x-x';
+						return Logger.illegal(MoveType.Attack, `Unit is already dead! ${TribeType[enemyTribe.tribeType]}, ${enemyTile._unitIdx}, ${defender._health}`);
 					}
 
 					const oldMoved = attacker._moved;
@@ -1122,11 +1116,16 @@ export default class UnitMoveGenerator {
 			}
 			
 			for(const unitType of unitTypes) {
+				// Raft is not purchasable, it requires moving a unit to a port
+				if(unitType == UnitType.Raft) continue;
+
 				const settings = UnitSettings[unitType];
 				
 				// If its purchasable, can afford it and is the same type
-				// Raft is not purchasable, it requires moving a unit to a port
-				if (!settings.cost || tribe._stars < settings.cost || (settings.tribeType && settings.tribeType != tribe.tribeType)) {
+				if (!settings.cost 
+					|| tribe._stars < settings.cost 
+					|| (settings.tribeType && settings.tribeType != tribe.tribeType)
+				) {
 					continue;
 				}
 	
@@ -1135,8 +1134,6 @@ export default class UnitMoveGenerator {
 					upgradeOptions.push(unitType);
 					continue;
 				}
-
-				if(isNavalUnit(unitType)) continue;
 
 				acc.push(unitType);
 			}
@@ -1148,81 +1145,36 @@ export default class UnitMoveGenerator {
 			const cities = cityTarget ? [cityTarget] : tribe._cities;
 
 			for (let i = 0; i < cities.length; i++) {
-				const city = cities[i];
-	
 				// City at max capacity
-				if (city._unitCount > city._level) {
-					continue;
-				}
-	
-				const spawn = city.tileIndex;
-	
 				// Skip if tile is occupied by some other units
-				if(state.tiles[spawn]._unitOwner > 0) {
-					continue;
-				}
-	
 				// Not occupied, double check
-				if (getUnitAtTile(state, spawn)) {
-					throw Error(`spawn occupied! ${getUnitAtTile(state, spawn)!.idx} ${spawn}`);
+				if(cities[i]._unitCount > cities[i]._level
+					|| state.tiles[cities[i].tileIndex]._unitOwner > 0
+					|| getUnitAtTile(state, cities[i].tileIndex)
+				) {
+					continue;
 				}
 	
 				for (let i = 0; i < spawnableUnits.length; i++) {
-					const unitType = spawnableUnits[i];
-					
-					moves.push(new Move(
-						MoveType.Summon,
-						spawn, 0, unitType,
-						(state: GameState) => {
-							if (tribe._stars < UnitSettings[unitType].cost) {
-								throw Error(`Cant afford ${UnitType[unitType]} ${tribe._stars} / ${UnitSettings[unitType].cost}"`);
-							}
-							const undo = summonUnit(state, unitType, spawn, true);
-							return {
-								moves: [],
-								undo,
-							};
-						},
-					));
+					moves.push(new Summon(cities[i].tileIndex, 0, spawnableUnits[i]))
 				}
 			}
 		}
 
 		if(upgradeOptions.length) {
-			// Get rafts in territory
+			// Get rafts ONLY in territory
 			const upgradableUnits = tribe._units.reduce<UnitState[]>((acc, cur) => {
 				if(cur._unitType != UnitType.Raft) return acc;
 				if(state.tiles[cur._tileIndex]._owner != tribe.owner) return acc;
 				return [...acc, cur];
 			}, []);
-	
+
 			for (let i = 0; i < upgradeOptions.length; i++) {
 				const upgradeType = upgradeOptions[i];
 
 				for (let j = 0; j < upgradableUnits.length; j++) {
 					const unit = upgradableUnits[j];
-
-					moves.push(new Move(
-						MoveType.Summon,
-						unit._tileIndex, 0, upgradeType,
-						// moveType: `upgrade-${unit._unitType}-${unit._tileIndex}-${upgradeType}`,
-						(state: GameState) => {
-							const upgradeFrom = unit._unitType;
-
-							if (tribe._stars < UnitSettings[upgradeFrom].cost) {
-								throw Error(`Cant afford ${UnitType[upgradeFrom]} ${tribe._stars} / ${UnitSettings[upgradeFrom].cost}"`);
-							}
-
-							unit._unitType = upgradeType;
-
-							return {
-								moves: [],
-								undo: () => {
-									unit._unitType = upgradeFrom;
-								},
-							};
-						},
-					));
+					moves.push(new Upgrade(unit._tileIndex, 0, upgradeType))
 				}
 			}
 		}
@@ -1230,7 +1182,7 @@ export default class UnitMoveGenerator {
 		return moves;
 	}
 
-	static steps(state: GameState, unit: UnitState, moves?: Move[] | null, targetTileIndex?: number): Move[] {
+	static steps(state: GameState, unit: UnitState, moves?: Move[] | null, targetTileIndex?: number): Move[] | null {
 		if (unit._moved) return [];
 		moves = moves || [];
 
@@ -1240,58 +1192,21 @@ export default class UnitMoveGenerator {
 			if (unit._tileIndex == tileIndex) {
 				continue;
 			}
-			
-			// TODO Cloak is on tile will cause a collision if re-simulating the enemy moves after our simulated move
-			let cloakisontile = false;
-
-			if (state.tiles[tileIndex]._unitOwner > 0) {
-				const cloak = getTrueUnitAtTile(state, tileIndex)?._unitType!;
-				// If cloak is on tile, then it must be revealed
-				if(cloak == UnitType.Cloak) {
-					cloakisontile = true;
-				}
-				else {
-					throw Error(`tile occupied! ${unit._tileIndex} -> ${tileIndex}, ${UnitType[unit._unitType]} -> ${UnitType[cloak]}`);
-				}
-			}
-
-			moves.push(new Move(
-				MoveType.Step,
-				unit._tileIndex, tileIndex, unit._unitType,
-				(state: GameState) => {
-					// If we are live, reveal the cloaked unit
-					if(cloakisontile && state.settings.live) {
-						// reaveal the cloak
-
-						let effectIndex = unit._effects.indexOf(EffectType.Invisible);
-						const cloak = getTrueUnitAtTile(state, tileIndex)!;
-						cloak._hidden = false;
-						cloak._effects.splice(effectIndex, 1);
-
-						return {
-							moves: [],
-							undo: () => {
-								cloak._hidden = true;
-								cloak._effects.splice(effectIndex, 0, EffectType.Invisible);
-							}
-						};
-					}
-					return UnitMoveGenerator.stepCallback(state, unit, tileIndex, cloakisontile);
-				},
-			));
+		
+			moves.push(new Step(unit._tileIndex, tileIndex, unit._unitType));
 		}
 
 		return moves;
 	}
 
-	static stepCallback(state: GameState, unitTarget: UnitState, toTileIndex: number, forced = false): Branch {
+	static stepCallback(state: GameState, unitTarget: UnitState, toTileIndex: number, forced = false): CallbackResult {
 		if (!forced && (unitTarget._moved || state.tiles[toTileIndex]._unitOwner > 0 || unitTarget._tileIndex == toTileIndex)) {
-			throw Error(`invalid step ${unitTarget._tileIndex} -> ${toTileIndex} (${unitTarget._moved})`);
+			return Logger.illegal(MoveType.Step, `${unitTarget._tileIndex} -> ${toTileIndex}, ${getRealUnitType(unitTarget)} -> ${getRealUnitType(getTrueUnitAtTile(state, toTileIndex)!)} -${forced}-`);
 		}
 
 		let chainMoves = undefined;
 
-		const scoreArmy = state._scoreArmy;
+		// const scoreArmy = state._scoreArmy;
 
 		const iX = unitTarget.x;
 		const iY = unitTarget.y;
@@ -1345,8 +1260,20 @@ export default class UnitMoveGenerator {
 			const capitalCity = getCapitalCity(state);
 			if(capitalCity) {
 				const branch = addPopulationToCity(state, capitalCity, 1);
-				chainMoves = branch.chainMoves;
-				undoDiscoverLighthouse = branch.undo;
+				// TODO Chained moves is disable and algorithm will auto pick
+				// chainMoves = branch.chainMoves;
+				if(branch.chainMoves) {
+					const result2 = AIState.executeBestReward(state, branch.chainMoves)!;
+					undoDiscoverLighthouse = () => {
+						result2.undo();
+						branch.undo();
+					};
+				}
+				else {
+					undoDiscoverLighthouse = () => {
+						branch.undo();
+					};
+				}
 			}
 		}
 
@@ -1390,15 +1317,11 @@ export default class UnitMoveGenerator {
 					break;
 				default:
 					newType = oldPassenger!;
-					if(!newType) {
-						console.log(unitTarget);
-						console.trace();
-						throw 'missing special unit handle';
-					}
 					break;
 			}
 		}
 		// Allows a unit to attack after moving if there are any enemies in range
+		// And if it had moved before
 		else if(!forced && !oldMoved && isSkilledIn(unitTarget, SkillType.Dash) && getEnemiesInRange(state, unitTarget).length > 0) {
 			unitTarget._attacked = false;
 		}

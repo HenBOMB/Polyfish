@@ -2,7 +2,7 @@ import { appendFileSync } from "fs";
 import AIState, { MODEL_CONFIG } from "../aistate";
 import { cloneState, getPovTribe, isGameOver } from "../core/functions";
 import GameLoader from "../core/gameloader";
-import { MoveType } from "../core/move";
+import Move, { MoveType } from "../core/move";
 import { generateAllMoves } from "../core/moves";
 import { GameSettings, GameState } from "../core/states";
 import { TribeType } from "../core/types";
@@ -132,6 +132,7 @@ export class MCTSNode {
 			// Prevent ending the turn when no moves are played (end turn is always action at index 0)
 			if(a == 0 && this.state.settings._playedMoves.length < 3 && this.count > 3) {
 				// console.log('no!');
+				// Skips this turn
 				continue;
 			}
 			else {
@@ -210,9 +211,10 @@ export async function SelfPlay(
 
 			let moveIndex: number = 0;
 			let fullProbs: number[] = [];
+			let pseudoLegalMoves = generateAllMoves(game.state);
 
 			// If there's literally only one legal move (EndTurn), skip simulating pointless turns
-			if(generateAllMoves(game.state).length == 1) {
+			if(pseudoLegalMoves.length == 1) {
 				moveIndex = 0;
 				fullProbs = new Array<number>(MODEL_CONFIG.max_actions).fill(0);
 				fullProbs[0] = 1;
@@ -231,28 +233,32 @@ export async function SelfPlay(
 
 			// Step the game and compute the *immediate* shaped reward
 			const oldPot = AIState.calculatePotential(game.state);
-			const movesPlayed = game.playMove(moveIndex);
-			const isEnd = movesPlayed[0].moveType === MoveType.EndTurn;
-			const moveReward = isEnd ? 0 : AIState.calculateReward(game.stateBefore, game.state, movesPlayed[0]);
-			const newPot     = isEnd ? 0 : AIState.calculatePotential(game.state);
-			const r_t        = isEnd ? 0 : (moveReward + gamma * newPot - oldPot);
+			const movesPlayed = game.playMove(moveIndex)!;
 
-			// Verbose output for debugging
-			if(!isEnd) {
-				for(const move of movesPlayed) {
-					console.log(move.stringify());
+			// Make sure move was legal
+			if(movesPlayed) {
+				const isEnd = movesPlayed[0].moveType === MoveType.EndTurn;
+				const moveReward = isEnd ? 0 : AIState.calculateReward(game.stateBefore, game.state, movesPlayed[0]);
+				const newPot     = isEnd ? 0 : AIState.calculatePotential(game.state);
+				const r_t        = isEnd ? 0 : (moveReward + gamma * newPot - oldPot);
+				// Verbose output for debugging
+				if(!isEnd) {
+					for(const move of movesPlayed) {
+						console.log(move.stringify());
+					}
+					if(moveReward || newPot) {
+						console.log(Number(moveReward.toFixed(3)), '', Number(newPot.toFixed(3)), '', Number(r_t.toFixed(3)));
+					}
 				}
-
-				if(moveReward || newPot) {
-					console.log(Number(moveReward.toFixed(3)), '', Number(newPot.toFixed(3)), '', Number(r_t.toFixed(3)));
+				else {
+					const povTribe = getPovTribe(game);
+					console.log('\n' + TribeType[povTribe.tribeType].toLowerCase(), povTribe._stars);
 				}
+				episode.push({ obs, pi: fullProbs, r: r_t });
 			}
 			else {
-				const povTribe = getPovTribe(game);
-				console.log('\n' + TribeType[povTribe.tribeType].toLowerCase(), povTribe._stars);
+				episode.push({ obs, pi: fullProbs, r: -0.1 });
 			}
-			
-			episode.push({ obs, pi: fullProbs, r: r_t });
 		}
 
 		// Game is over, now compute discounted returns G_t for each step

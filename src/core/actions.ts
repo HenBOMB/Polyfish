@@ -1,3 +1,4 @@
+import AIState from "../aistate";
 import { rewardStructure } from "../eval/eval";
 import { predictBestNextCityReward } from "../eval/prediction";
 import { getNeighborTiles, calaulatePushablePosition, getNeighborIndexes, computeReachablePath, isSkilledIn, getPovTribe, getUnitAtTile, getTrueUnitAtTile, getHomeCity, getRulingCity, getMaxHealth, getEnemiesInRange, getEnemiesNearTile, isFrozen, calculateCombat, getUnitRange, getTrueEnemyAtTile, calculateAttack, isSteppable, isWaterTerrain, isPoisoned } from "./functions";
@@ -289,7 +290,7 @@ export function addMissingConnections(state: GameState, targetCity: CityState, t
             const branch = addPopulationToCity(state, rewardedCities[i], 1);
             undoChain.push(branch.undo);
             if(branch.chainMoves) {
-                branch.chainMoves.forEach(x => undoChain.push(x.execute(state).undo));
+                branch.chainMoves.forEach(x => undoChain.push(x.execute(state)!.undo));
                 // console.log('Auto Chosen: ' + RewardType[Number(branch.chainMoves[0].id.split('-')[1])]);
             }
         }
@@ -708,7 +709,14 @@ export function pushUnit(state: GameState, tileIndex: number) {
         undoPush = removeUnit(state, pushed);
     }
     else {
-        undoPush = UnitMoveGenerator.stepCallback(state, pushed, movedTo, true).undo;
+        const result = UnitMoveGenerator.stepCallback(state, pushed, movedTo, true);
+
+        if(!result) {
+            undoPush = removeUnit(state, pushed);
+        }
+        else {
+            undoPush = result.undo;
+        }
     }
 
     return () => {
@@ -753,8 +761,8 @@ export function attackUnit(state: GameState, attacker: UnitState | number, defen
             undoChain.push(removeUnit(state, defender, attacker));
             // Move to the enemy position, if not a ranged unit
             if (getUnitRange(attacker) < 2 && isSteppable(state, attacker, defender._tileIndex)) {
-                const moveBranch = UnitMoveGenerator.stepCallback(state, attacker, defender._tileIndex, true);
-                undoChain.push(moveBranch.undo);
+                const result = UnitMoveGenerator.stepCallback(state, attacker, defender._tileIndex, true)!;
+                undoChain.push(result.undo);
             }
         }
         // Retaliate

@@ -1,11 +1,8 @@
-import { GameState, TribeState } from "./core/states";
+import { GameState } from "./core/states";
 import AIState from "./aistate";
 import { STARTING_OWNER_ID } from "./core/gameloader";
-import UnitMoveGenerator, { generateAllMoves, generateEcoMoves, generateEndTurnMove, UndoCallback } from "./core/moves";
-import { cloneState, getCityProduction, getNeighborIndexes, getPovTribe, getStarExchange, getUnitAtTile, isFrozen, isGameOver, isGameWon, tryDiscoverRewardOtherTribes } from "./core/functions";
-import { evaluateArmy, evaluateEconomy } from "./eval/eval";
-import { evaluateBestMove, logAndUndoMoves } from "./eval/evalMoves";
-import { deepCompare } from "./main";
+import { generateAllMoves } from "./core/moves";
+import { cloneState, getCityProduction, getNeighborIndexes, getPovTribe, isFrozen, isGameOver, tryDiscoverRewardOtherTribes } from "./core/functions";
 import Move, { MoveType } from "./core/move";
 import { EffectType } from "./core/types";
 
@@ -30,97 +27,107 @@ export default class Game {
         this.state = cloneState(this.initialState);
     }
 
-    playMove(moveIndex: number): Move[] {
-        const moveTypes = [];
+    playMove(moveIndex: number): Move[] | null {
         this.stateBefore = cloneState(this.state);
         this.state.settings.live = true;
-        const move = generateAllMoves(this.state)[moveIndex];
-        moveTypes.push(move);
-        if(move.moveType == MoveType.EndTurn) {
+        const moves = [generateAllMoves(this.state)[moveIndex]];
+
+        if(moves[0].moveType == MoveType.EndTurn) {
             // TODO how about updating the state in here? to compare start to end of current turn?
             this.endTurn();
             this.state.settings._playedMoves = [];
         }
         else {
-            this.state.settings._playedMoves.push(move.moveType);
-            const br = move.execute(this.state);
-            // TODO figure out how to have the ai play reward moves (0/1)
-            if(br.chainMoves?.length) {
-                AIState.executeBestReward(this.state, br.chainMoves);
-                moveTypes.push(br.chainMoves[0]);
+            const result = moves[0].execute(this.state);
+
+            if(!result) {
+                this.state.settings.live = false;
+                return null;
+            }
+            else {
+                // Forced moves dont count
+                this.state.settings._playedMoves.push(moves[0].moveType);
+
+                // TODO figure out how to have the ai play reward moves (0/1)
+                if(result.chainMoves?.length) {
+                    AIState.executeBestReward(this.state, result.chainMoves);
+                    moves.push(result.chainMoves[0]);
+                }
             }
         }
+
         this.state.settings.live = false;
-        return moveTypes;
+
+        return moves;
     }
     
-    /**
-     * Generates random moves by selecting random moves and shuffling them
-     */
-    getGoodMoves(randomChance = 0.7): Move[] {
-        const actual = cloneState(this.state);
-        const doRandom = Math.random() < randomChance;
+    // /**
+    //  * Generates random moves by selecting random moves and shuffling them
+    //  */
+    // getGoodMoves(randomChance = 0.7): Move[] {
+    //     const actual = cloneState(this.state);
+    //     const doRandom = Math.random() < randomChance;
 
-        const maxMoves = 7;
-        const maxDepth = doRandom? 1 : 2;
-        const maxArmyMoves = 10;
-        const maxArmyDepth = doRandom? 1 : 2;
+    //     const maxMoves = 7;
+    //     const maxDepth = doRandom? 1 : 2;
+    //     const maxArmyMoves = 10;
+    //     const maxArmyDepth = doRandom? 1 : 2;
 
-        // Use actual state to generate moves, or state will not match
+    //     // Use actual state to generate moves, or state will not match
 
-        // const ecoMoves: BestMoves = null as any;
-        const ecoMoves = evaluateBestMove(
-            this.state, 
-            (state: GameState) => generateEcoMoves(state)
-                .sort(() => 0.5 - Math.random())
-                // .slice(minMoves, minMoves + Math.floor(Math.random() * (maxMoves - minMoves + 1)))
-                .slice(0, maxMoves)
-                .filter(Boolean), 
-                doRandom? () => Math.random() * 10 : evaluateEconomy, 
-            maxDepth
-        );
+    //     // const ecoMoves: BestMoves = null as any;
+    //     const ecoMoves = evaluateBestMove(
+    //         this.state, 
+    //         (state: GameState) => generateEcoMoves(state)
+    //             .sort(() => 0.5 - Math.random())
+    //             // .slice(minMoves, minMoves + Math.floor(Math.random() * (maxMoves - minMoves + 1)))
+    //             .slice(0, maxMoves)
+    //             .filter(Boolean), 
+    //             doRandom? () => Math.random() * 10 : evaluateEconomy, 
+    //         maxDepth
+    //     );
 
-        if(!deepCompare(actual, this.state, 'state', true)) {
-            throw Error('ECO COMPARE');
-        }
+    //     if(!deepCompare(actual, this.state, 'state', true)) {
+    //         throw Error('ECO COMPARE');
+    //     }
 
-        const undoChain: UndoCallback[] = [];
+    //     const undoChain: UndoCallback[] = [];
 
-        if(ecoMoves?.moves.length) {
-            logAndUndoMoves(ecoMoves.moves, this.state, false, undoChain);
-        }
+    //     if(ecoMoves?.moves.length) {
+    //         logAndUndoMoves(ecoMoves.moves, this.state, false, undoChain);
+    //     }
 
-        const unitMoves = evaluateBestMove(
-            this.state, 
-            (state: GameState) => [
-                ...getPovTribe(state)._units.map(x => UnitMoveGenerator.all(state, x)).flat(),
-                ...UnitMoveGenerator.spawns(state),
-            ].sort(() => 0.5 - Math.random()).slice(0, maxArmyMoves).filter(Boolean), 
-            doRandom? () => Math.random() * 10 : evaluateArmy, 
-            maxArmyDepth
-        );
+    //     const unitMoves = evaluateBestMove(
+    //         this.state, 
+    //         (state: GameState) => [
+    //             ...getPovTribe(state)._units.map(x => UnitMoveGenerator.all(state, x)).flat(),
+    //             ...UnitMoveGenerator.spawns(state),
+    //         ].sort(() => 0.5 - Math.random()).slice(0, maxArmyMoves).filter(Boolean), 
+    //         doRandom? () => Math.random() * 10 : evaluateArmy, 
+    //         maxArmyDepth
+    //     );
 
-        undoChain.reverse().forEach(x => x());
+    //     undoChain.reverse().forEach(x => x());
 
-        if(!deepCompare(actual, this.state, 'state', true)) {
-            throw Error('ARMY COMPARE');
-        }
+    //     if(!deepCompare(actual, this.state, 'state', true)) {
+    //         throw Error('ARMY COMPARE');
+    //     }
 
-        // if(ecoMoves) {
-        //     const start = ecoMoves.moves.findIndex(x => x.id.startsWith('end'));
-        //     ecoMoves.moves = ecoMoves.moves.slice(0, start);
-        // }
+    //     // if(ecoMoves) {
+    //     //     const start = ecoMoves.moves.findIndex(x => x.id.startsWith('end'));
+    //     //     ecoMoves.moves = ecoMoves.moves.slice(0, start);
+    //     // }
 
-        // if(unitMoves) {
-        //     const start = unitMoves.moves.findIndex(x => x.id.startsWith('end'));
-        //     unitMoves.moves = unitMoves.moves.slice(0, start);
-        // }
+    //     // if(unitMoves) {
+    //     //     const start = unitMoves.moves.findIndex(x => x.id.startsWith('end'));
+    //     //     unitMoves.moves = unitMoves.moves.slice(0, start);
+    //     // }
         
-        return [
-            ...ecoMoves?.moves || [],
-            ...unitMoves?.moves || [],
-        ];
-    }
+    //     return [
+    //         ...ecoMoves?.moves || [],
+    //         ...unitMoves?.moves || [],
+    //     ];
+    // }
     
     /**
      * Ends the current tribe's turn. Overwrites the passed state. Can NOT be undone 

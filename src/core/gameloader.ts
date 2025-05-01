@@ -737,7 +737,7 @@ export default class GameLoader {
             summonUnit(
                 state, 
                 TribeSettings[tribe.tribeType].uniqueStartingUnit || UnitType.Warrior, 
-                tribe._cities[0].tileIndex
+                tribe._cities[0].tileIndex,
             );
             if(tribe.owner == pov) {
                 tribe._units[0]._moved = false;

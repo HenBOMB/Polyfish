@@ -18,30 +18,32 @@ export enum MoveType {
 	EndTurn 	= 11,
 }
 
+export type CallbackResult = Branch | null;
+
+export type CallbackExecution = (state: GameState, ...args: number[]) => CallbackResult;
+
 export default class Move {
     readonly moveType: MoveType;
     readonly src: number;
     readonly target: number;
     readonly type: number;
-    readonly targetName?: string;
-    readonly moveName?: string;
-    readonly executeCb: (state: GameState) => Branch;
+    readonly executeCb: CallbackExecution | null;
 
-    constructor(id: MoveType, src: number, target: number, type: number, execute: (state: GameState) => Branch, targetName?: string, moveName?: string) {
-        if(!MoveType[id]) throw Error(`Invalid move type: ${id}`);
+    constructor(id: MoveType, src: number, target: number, type: number, execute: CallbackExecution | null = null) {
         this.moveType = id;
         this.src = src < 0? 0 : src;
         this.target = target < 0? 0 : target;
         this.type = type < 0? 0 : type;
         this.executeCb = execute;
-        this.targetName = targetName;
-        this.moveName = moveName;
     }
 
-    execute(state: GameState): Branch {
+    execute(state: GameState): CallbackResult {
+        if(!this.executeCb) {
+            throw "FATAL: EXECUTE CALLBACK NOT IMPLEMENTED"
+        }
         try {
-            const br = this.executeCb(state);
-            // Only if we moved or attacked which causes new disovered tiles
+            const br = this.executeCb(state, this.src, this.target, this.type);
+            // Moving or attacking causes discovering tiles, so we may discover other tribes
             if(this.moveType == MoveType.Step || this.moveType == MoveType.Attack) {
                 tryDiscoverRewardOtherTribes(state);
             }
