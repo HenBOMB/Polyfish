@@ -1,8 +1,7 @@
 import { Logger } from "../../polyfish/logger";
-import { getPovTribe, getTrueUnitAtTile, getUnitAtTile } from "../functions";
+import { getTrueUnitAtTile, getUnitAtTile } from "../functions";
 import Move, { CallbackResult, MoveType } from "../move";
 import UnitMoveGenerator from "../moves";
-import { UnitSettings } from "../settings/UnitSettings";
 import { GameState } from "../states";
 import { EffectType, UnitType } from "../types";
 
@@ -12,13 +11,7 @@ export default class Step extends Move {
     }
 
     execute(state: GameState): CallbackResult {
-        const pov = getPovTribe(state);
         const unitType = this.type as UnitType;
-
-        if (pov._stars < UnitSettings[unitType].cost) {
-            return Logger.illegal(MoveType.None, `Oppsie`);
-        }
-
         const unit = getUnitAtTile(state, this.src);
 
         if(!unit) {
