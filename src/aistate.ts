@@ -1,7 +1,7 @@
 import { readFileSync } from "fs";
 import { GameState } from "./core/states";
 import { cloneState, getPovTribe, getUnitAtTile, isResourceVisible, getMaxHealth, isGameWon, isGameLost, getCity, getCityProduction, getRealUnitSettings, getTechCost, isTempleStructure, getNeighborIndexes } from "./core/functions";
-import { Climate2Tribe, EffectType, ModeType, ResourceType, TerrainType, UnitType } from "./core/types";
+import { CaptureType, Climate2Tribe, EffectType, ModeType, ResourceType, TerrainType, UnitType } from "./core/types";
 import Move, { MoveType } from "./core/move";
 import { TechnologySettings } from "./core/settings/TechnologySettings";
 import { predictBestNextCityReward } from "./eval/prediction";
@@ -229,6 +229,12 @@ export default class AIState {
                     reward += 0.02 * rating;
                 }
                 return reward + calculateProduction();
+            }
+            // Reward capturing starfish and ruins
+            else if(move.moveType == MoveType.Capture) {
+                if(move.type == CaptureType.Starfish || move.type == CaptureType.Ruins) {
+                    return 0.5 + calculateProduction();
+                }
             }
         }
 
