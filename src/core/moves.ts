@@ -1155,8 +1155,8 @@ export default class UnitMoveGenerator {
 					continue;
 				}
 	
-				for (let i = 0; i < spawnableUnits.length; i++) {
-					moves.push(new Summon(cities[i].tileIndex, 0, spawnableUnits[i]))
+				for (let j = 0; j < spawnableUnits.length; j++) {
+					moves.push(new Summon(cities[i].tileIndex, 0, spawnableUnits[j]))
 				}
 			}
 		}
