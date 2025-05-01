@@ -240,10 +240,10 @@ export default class AIState {
 
         // Victory Condition //
         if(isGameWon(newState)) {
-            return 5.0;
+            return 10.0;
         }
         else if(isGameLost(newState)) {
-            return -5.0;
+            return -10.0;
         }
         
         // Kills //

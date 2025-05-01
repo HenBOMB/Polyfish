@@ -18,13 +18,15 @@ logger = logging.getLogger()
 config: dict = {}
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-def load(filename: str, config: dict, n_res_blocks: int = 10) -> PolytopiaZeroNet:
+def load(filename: str, config: dict, n_res_blocks: int = 15) -> PolytopiaZeroNet:
     if not filename.endswith('.zip'):
         filename += '.zip'
     net = PolytopiaZeroNet(n_res_blocks, config).to(device)
     if path.exists(filename):
         net.load_state_dict(torch.load(filename, map_location=device))
         logger.info(f"loaded {filename}")
+    else:
+        logger.warning(f"failed to load {filename}")
     net.eval()
     return net
 

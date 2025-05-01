@@ -9,9 +9,9 @@ with open('data/model/config.json', 'r') as f:
     config = json.load(f)
     config['tile_count'] = config['max_size'] ** 2
 
-root_path = 'models/polyfish-'
+root_path = 'models/polyfish'
 prefix = ''
-net = model.load(root_path + 'latest', config)
+net = model.load(root_path + '-latest', config)
 training = False
 train_thread = None
 
