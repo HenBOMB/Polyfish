@@ -1,7 +1,7 @@
 import { readFileSync } from "fs";
 import { GameState } from "./core/states";
 import { cloneState, getPovTribe, getUnitAtTile, isResourceVisible, getMaxHealth, isGameWon, isGameLost, getCity, getCityProduction, getRealUnitSettings, getTechCost, isTempleStructure, getNeighborIndexes } from "./core/functions";
-import { CaptureType, Climate2Tribe, EffectType, ModeType, ResourceType, TerrainType, UnitType } from "./core/types";
+import { CaptureType, Climate2Tribe, EffectType, ModeType, ResourceType, StructureType, TerrainType, UnitType } from "./core/types";
 import Move, { CallbackResult, MoveType } from "./core/move";
 import { TechnologySettings } from "./core/settings/TechnologySettings";
 import { predictBestNextCityReward } from "./eval/prediction";
@@ -241,60 +241,50 @@ export default class AIState {
             }
         }
 
+        // Many different moves can trigger pop increase
         let reward = increasedProduction();
 
-        if(move) {
-            switch (move.moveType) {
-                // Technology
-                // Penalize if unlocked a new tech and that tech hasnt been used
-                case MoveType.Research: {
-                    const settings = TechnologySettings[move.type as keyof typeof TechnologySettings];
-                    // Order of importance: Resource -> Structure (except temples) -> Ability -> Unit -> Structure (temples)
-                    // NOTE Using this order to reduce bad bias and potentially better moves, not sure tho..
-                    const cost = (
-                        settings.unlocksResource? ResourceSettings[settings.unlocksResource] :
-                        settings.unlocksStructure && !isTempleStructure(settings.unlocksStructure)? StructureSettings[settings.unlocksStructure] :
-                        settings.unlocksUnit? UnitSettings[settings.unlocksUnit] :
-                        settings.unlocksAbility? { cost: 0 } :
-                        settings.unlocksStructure && isTempleStructure(settings.unlocksStructure)? StructureSettings[settings.unlocksStructure] : 
-                        null
-                    )?.cost || 0;
-                    return cost && newTribe._stars < cost? SCORE_BAD_TECH : SCORE_COST_TECH;
+        // Tiny turn cost
+        reward -= 0.001;
+
+        switch (move.moveType) {
+            // Technology
+            // Penalize if unlocked a new tech and that tech hasnt been used
+            case MoveType.Research:
+                const settings = TechnologySettings[move.type as keyof typeof TechnologySettings];
+                // Order of importance: Resource -> Structure (except temples) -> Ability -> Unit -> Structure (temples)
+                // NOTE Using this order to reduce bad bias and potentially better moves, not sure tho..
+                const cost = (
+                    settings.unlocksResource? ResourceSettings[settings.unlocksResource] :
+                    settings.unlocksStructure && !isTempleStructure(settings.unlocksStructure)? StructureSettings[settings.unlocksStructure] :
+                    settings.unlocksUnit? UnitSettings[settings.unlocksUnit] :
+                    settings.unlocksAbility? { cost: 0 } :
+                    settings.unlocksStructure && isTempleStructure(settings.unlocksStructure)? StructureSettings[settings.unlocksStructure] : 
+                    null
+                )?.cost || 0;
+                reward += cost && newTribe._stars < cost? SCORE_BAD_TECH : SCORE_COST_TECH;
+                break;
+
+            // Reward well placed structures that require other adjacent structures
+            case MoveType.Build:
+                const adjStructTypes = StructureSettings[move.type as StructureType].adjacentTypes;
+                if(adjStructTypes) {
+                    const aroundStructs = getNeighborIndexes(newState, move.src, 1).filter(
+                        x => newState.structures[x] && adjStructTypes.includes(newState.structures[x].id)
+                    );
+                    const perc = aroundStructs.length / 8; 
+                    reward += SCORE_GOOD_STRUCT[0] + (SCORE_GOOD_STRUCT[1] - SCORE_GOOD_STRUCT[0]) * perc;
                 }
-                // Reward well placed structures that require other adjacent structures
-                case MoveType.Build: {
-                    const settings = StructureSettings[move.type as keyof typeof StructureSettings];
-                    if(settings.adjacentTypes) {
-                        const perc = newState._visibleTiles.reduce((a: number, x: number) => {
-                            if(!x || !newState.structures[x]) return a;
-                            const adjacentTypes = StructureSettings[newState.structures[x].id].adjacentTypes;
-                            if(!adjacentTypes) return a;
-                            const aroundStructures = getNeighborIndexes(newState, Number(x), 1).filter(x => newState.structures[x] && adjacentTypes.includes(newState.structures[x].id));
-                            return a + aroundStructures.length;
-                        }, 0) / 8; // 8 is max surrounding tiles (ignoring edges)
-                        // Slerp
-                        reward += SCORE_GOOD_STRUCT[0] + (SCORE_GOOD_STRUCT[1] - SCORE_GOOD_STRUCT[0]) * perc;
-                    }
-                    return reward;
-                }
-                // Reward capturing starfish and ruins
-                case MoveType.Capture: {
-                    switch (move.type) {
-                        case CaptureType.Starfish:
-                        case CaptureType.Ruins:
-                            return SCORE_CAPTURE_RUINS_STARFISH + increasedProduction();
-                        case CaptureType.Village:
-                            return SCORE_CAPTURE_VILLAGE;
-                        case CaptureType.City:
-                            return SCORE_CAPTURE_CITY;
-                        default:
-                            break;
-                    }
-                    break;
-                }
-                default:
-                    break;
-            }
+                break;
+
+            // Reward capturing starfish and ruins
+            case MoveType.Capture:
+                reward += CaptureType.City? SCORE_CAPTURE_CITY : CaptureType.Village? SCORE_CAPTURE_VILLAGE : SCORE_CAPTURE_RUINS_STARFISH;
+                break;
+            
+            // Reward kills
+            case MoveType.Attack:
+                break;
         }
 
         // Kills //
@@ -310,12 +300,6 @@ export default class AIState {
         if(move?.moveType == MoveType.Capture && oldState.tiles[move.src]._owner > 0 && oldState.tiles[move.src]._owner != newState.tiles[move.src]._owner) {
             reward += 0.01;
         }
-
-        // Production //
-        reward += increasedProduction();
-    
-        // Tiny time cost
-        reward -= 0.001;
 
         // clip to [-1,1] to keep returns stable
         return Math.max(-1, Math.min(1, reward));
