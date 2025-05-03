@@ -1,7 +1,9 @@
-import { appendFileSync, existsSync } from "fs";
-import { MoveType } from "../core/move";
+import { appendFileSync, writeFileSync } from "fs";
+import Move, { MoveType } from "../core/move";
+import { TribeState } from "../core/states";
+import { TribeType } from "../core/types";
 
-export const DEFAULT_LOG_FILE = 'training.log';
+export const DEFAULT_LOG_FILE = 'training.poly.log';
 export const DEFAULT_TIME_FORMAT = 'HH:mm:ss';
 
 function getTimestamp(): string {
@@ -13,8 +15,18 @@ function getTimestamp(): string {
 }
 
 export class Logger {
+    static clear(): void {
+        writeFileSync(DEFAULT_LOG_FILE, '');
+    }
+    
     static log(message: string): null {
         appendFileSync(DEFAULT_LOG_FILE, `${getTimestamp()} - ${message}\n`);
+        return null;
+    }
+
+    static logPlay(tribe: TribeState, score: number, ...moves: Move[]): null {
+        const name = TribeType[tribe.tribeType];
+        appendFileSync(DEFAULT_LOG_FILE, `${tribe.owner} - ${name} - ${moves.map(x => x.stringify()).join(', ')} (${score})\n`);
         return null;
     }
 

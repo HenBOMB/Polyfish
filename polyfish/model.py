@@ -6,7 +6,7 @@ from random import shuffle
 import torch, logging
 import torch.nn.functional as F
 
-type Dataset = list[tuple[dict,list[float]]]
+Dataset = list[tuple[dict, list[float]]]
                          
 logging.basicConfig(
     level=logging.INFO, 
@@ -50,9 +50,10 @@ def train_network(net: PolytopiaZeroNet, dataset: Dataset, batch_size: int, epoc
             log_probs = F.log_softmax(policy_logits, dim=1)
             policy_loss = -torch.mean(torch.sum(target_policy * log_probs, dim=1))
             # Compute value loss (MSE between network's value and the outcome)
-            value_loss = F.mse_loss(value.squeeze(), target_value)
-            # dirty fix? hmmm what causes this shape mismatch? [] != [1]
-            # value_loss = F.mse_loss(value.view(1), target_value.view(1))
+            # value_loss = F.mse_loss(value.squeeze(), target_value)
+            value = value.view(-1)          # value.shape == [B]
+            target_value = target_value.view(-1)  # target_value.shape == [B]
+            value_loss = F.mse_loss(value, target_value)
             loss = policy_loss + value_loss
             loss.backward()
             optimizer.step()

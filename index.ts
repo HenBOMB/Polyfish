@@ -9,6 +9,7 @@ import { DefaultGameSettings, GameSettings, GameState } from "./src/core/states"
 import { generateAllMoves, generateEndTurnMove } from "./src/core/moves";
 import Game from "./src/game";
 import Move from "./src/core/move";
+import { Logger } from "./src/polyfish/logger";
 
 const app = express();
 const py = spawn(".venv/bin/python3", ["polyfish/main.py"]);
@@ -67,6 +68,10 @@ app.get('/', (req: Request, res: Response) => {
 
 app.get('/random', async (req: Request, res: Response) => {
     const settings: GameSettings = req.query as any;
+    if(req.query.size && Number(req.query.size) < 8) {
+        res.status(400).json({ error: "Size must be at least 8." });
+        return
+    }
     if(req.query.tribes) {
         settings.tribes = String(req.query.tribes || "Imperius,Bardur").split(',').map(x => TribeType[x.trim() as keyof typeof TribeType]) as TribeType[];
     }
@@ -181,8 +186,12 @@ app.post("/autostep", async (req: Request, res: Response) => {
     }
 });
 
-
 app.post('/selfplay', async (req: Request, res: Response) => {
+    const settings = req.body.settings || DefaultGameSettings;
+    const tribes = settings.tribes;
+    if(typeof tribes == 'string') {
+        settings.tribes = tribes.split(',').map(x => TribeType[x.trim() as keyof typeof TribeType]) as TribeType[];
+    }
     res.json(await SelfPlay(
         predict,
         req.body.n_games || 3, 
@@ -193,7 +202,7 @@ app.post('/selfplay', async (req: Request, res: Response) => {
         req.body.deterministic || false,
         req.body.dirichlet || true,
         req.body.rollouts || 50,
-        req.body.settings || DefaultGameSettings,
+        settings,
     ));
 })
 
@@ -208,6 +217,7 @@ app.post('/train', async (req: Request, res: Response) => {
 })
 
 app.listen(3000, async () => {
+    Logger.clear();
     console.log(`INITIALIZED ON PORT 3000\n`);
     console.log('FOW DISABLED\n');
     const loader = new GameLoader();

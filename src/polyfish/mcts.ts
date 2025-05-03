@@ -211,8 +211,6 @@ export class MCTS {
 		return { path, value };
 	}
 
-	// TODO Apply shaped reward with old calculateReward
-
 	// Plays random heuristic moves until either the turn ends or hit a max depth
 	private rollout(game: Game, prevPot: number): number {
 		let depth = 0;
@@ -304,29 +302,29 @@ export async function SelfPlay(
 	cPuct: number,
 	gamma: number,
 	deterministic = false,
-	settings: GameSettings,
 	dirichlet: boolean = true,
 	rollouts: number,
+	settings: GameSettings,
 ): Promise<Array<[any, number[], number]>> {
 	const trainingData: Array<[any, number[], number]> = [];
 	const loader = new GameLoader(settings);
 
-	for (let g = 0; g < nGames; g++) {
+	for (let i = 0; i < nGames; i++) {
 		// load a fresh random game
 		const game = new Game();
 		game.load(await loader.loadRandom());
 
 		// For this one game, we store triples of (obs, π, r)
 		const episode: Array<{ obs: any; pi: number[]; r: number; pov: number }> = [];
-		const povTribe = getPovTribe(game);
-		console.log('\n' + TribeType[povTribe.tribeType].toLowerCase(), povTribe._stars);
+		// Logger.logPlay(getPovTribe(game), 0, ...[{ stringify: () => 'start turn' }] as any);
 
 		// Keep going until terminal
-		while (true) {
+		while (!isGameOver(game.state)) {
 			const obs = AIState.extract(game.state);
 			const pi: number[] = new Array<number>(MODEL_CONFIG.max_actions).fill(0);
 			const pseudoLegalMoves = generateAllMoves(game.state);
-			
+			const povTribe = getPovTribe(game);
+
 			let moveIndex: number = 0;
 			
 			// Skip simulating if there are no more turns (only EndTurn remains)
@@ -345,41 +343,33 @@ export async function SelfPlay(
 					: sampleFromDistribution(probs);
 			}
 			
-			// Last reward is always terminal
-			if(isGameOver(game.state)) {
-				episode.push({ obs, pi, r: isGameWon(game.state)? 1 :isGameLost(game.state)? -1 : 0, pov: getPovTribe(game).owner });
-				break;
-			}
+			// // Last reward is always terminal
+			// if(isGameOver(game.state)) {
+			// 	episode.push({ obs, pi, r: isGameWon(game.state)? 1 : isGameLost(game.state)? -1 : 0, pov: getPovTribe(game).owner });
+			// 	break;
+			// }
 			
 			const movesPlayed = game.playMove(moveIndex)!;
 			
 			// Make sure move was legal
 			if(movesPlayed) {
-				// Very minimal ~(-0.1 ... 0.1)
-				const shaped = gamma * AIState.calculatePotential(game.state) - AIState.calculatePotential(game.stateBefore); 
-				// Resulting value is roughly ~(-0.85 ... 0.85)
-				// calculateReward returns [-0.75 ... 0.75]
-				const r_t = AIState.calculateReward(game, ...movesPlayed) + shaped;
-				
-				// Spam output for debugging
-				if(movesPlayed[0].moveType === MoveType.EndTurn) {
-					const povTribe = getPovTribe(game);
-					console.log('\n' + TribeType[povTribe.tribeType].toLowerCase(), povTribe._stars);
-				}
-				else {
-					for(const move of movesPlayed) {
-						console.log(move.stringify());
-					}
-					console.log(...[
-						(await predict(game.state)).v,
-						shaped,
-						r_t,
-					].map(x => Number(x.toFixed(3))));
-				}
-				episode.push({ obs, pi, r: r_t, pov: getPovTribe(game).owner });
+				// const shaped = gamma * AIState.calculatePotential(game.state) - AIState.calculatePotential(game.stateBefore); 
+				// const r_t = AIState.calculateReward(game, ...movesPlayed) + shaped;
+				const r_t = isGameWon(game.state)? 1 : isGameLost(game.state)? -1 : 0;
+
+				Logger.logPlay(povTribe, r_t, ...movesPlayed);
+				// if(movesPlayed[0].moveType === MoveType.EndTurn) {
+				// 	Logger.log(`${TribeType[povTribe.tribeType]}`);
+				// }
+				// else {
+				// 	const str = movesPlayed.map(x => x.stringify()).join(', ');
+				// 	// Logger.log(`${str} ${(await predict(game.state)).v.toFixed(4)}, ${r_t.toFixed(4)}, ${shaped.toFixed(4)}`);
+				// 	Logger.log(`${str} (${(await predict(game.state)).v.toFixed(4)})`);
+				// }
+				episode.push({ obs, pi, r: r_t, pov: povTribe.owner });
 			}
 			else {
-				Logger.illegal(pseudoLegalMoves[moveIndex].moveType, `Move wasnt legal`);
+				Logger.illegal(pseudoLegalMoves[moveIndex].moveType, `FATAL - Move wasnt legal`);
 			}
 		}
 
@@ -400,16 +390,16 @@ export async function SelfPlay(
 			winRate.push(0);
 		}
 
-		winRate = winRate.slice(-20);
+		winRate = winRate.slice(-10);
 
-		const returns = episode.map(x => x.r);
-		const maxG = Math.max(...returns);
-		const minG = Math.min(...returns);
-		const avrG = returns.reduce((a, b) => a + b, 0) / returns.length;
-
-		Logger.log(`G: ${minG.toFixed(3)}, ${maxG.toFixed(3)}, ${avrG.toFixed(3)}`);
-		Logger.log(`WR: ${winRate.filter(x => x == 1).length}, ${Math.floor((winRate.reduce((a, b) => a + b, 0) / winRate.length) * 100) / 100}`);
+		Logger.log(`Finished game (${(i+1)}/${nGames})`);
+		Logger.log(`state: ${isGameWon(game.state)? 'Won' :isGameLost(game.state)? 'Lost' : 'Truncated'}`);
+		Logger.log(`turn: ${game.state.settings._turn}`);
 	}
+	
+	Logger.log(`\nSelf play ended`);
+	Logger.log(`collected: ${trainingData.length}`);
+	Logger.log(`win rate: ${Math.floor((winRate.reduce((a, b) => a + b, 0) / winRate.length) * 100)}%\n`);
 
 	return trainingData;
 }

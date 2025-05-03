@@ -1,5 +1,4 @@
 import { Logger } from "../../polyfish/logger";
-import { summonUnit } from "../actions";
 import { getPovTribe, getUnitAtTile } from "../functions";
 import Move, { CallbackResult, MoveType } from "../move";
 import { UnitSettings } from "../settings/UnitSettings";
@@ -22,7 +21,7 @@ export default class None extends Move {
         const unit = getUnitAtTile(state, this.src);
 
         if(!unit) {
-            return Logger.illegal(MoveType.None, `Upgrade - Unit does not exist: ${UnitType[unitType]}`);
+            return Logger.illegal(MoveType.Step, `Unit does not exist: ${UnitType[unitType]}`);
         }
 
         return {

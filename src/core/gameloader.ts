@@ -22,6 +22,7 @@ import { summonUnit } from "./actions";
 export const STARTING_OWNER_ID = 1;
 export const DEBUG_SEED = undefined;
 export const MAX_SEED = 10000;
+// Standard max turns when loaded live games
 export const MAX_TURNS = 50;
 
 export default class GameLoader {
@@ -382,6 +383,7 @@ export default class GameLoader {
                 const cmd = `.venv/bin/python mapgen/main.py --seed ${seed} --size ${this.settings.size} --tribes ${this.settings.tribes.map(x => TribeType[x]).join(" ")}`
                 exec(cmd, (error: any, stdout: string, stderr: any) => {
                     if(error) {
+                        console.log(error);
                         return reject(error || stderr);
                     }
                     resolve(stdout.trim());
@@ -428,6 +430,8 @@ export default class GameLoader {
                 return state;
             } catch (error) {
                 tries--;
+                console.log(error);
+                break;
             }
         }
 
@@ -621,7 +625,10 @@ export default class GameLoader {
             else if(TribeMap[structureOrTribeType]) {
                 const tribeType = TribeMap[structureOrTribeType];
                 const territory = [tileIndex, ...getNeighborIndexes(state, tileIndex, 1, false, true)];
-                const tribe = Object.values(state.tribes).find(x => x.tribeType == tribeType)!;
+                // const tribe = Object.values(state.tribes).find(x => x.tribeType == tribeType)!;
+                const tribe = Object.values(state.tribes)
+                    .filter(x => x.tribeType === tribeType)
+                    .find(x => x._cities.length === 0)!;
 
                 for(const tile of territory) {
                     state.tiles[tile] = {

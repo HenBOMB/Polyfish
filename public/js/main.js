@@ -727,7 +727,7 @@ async function autoStep() {
     generateMap(result.state);
 }
 
-fetch('/random').then(x => x.json()).then(x => {
+fetch('/random?size=9').then(x => x.json()).then(x => {
     state = x.state;
 
     POV = state.settings._pov;

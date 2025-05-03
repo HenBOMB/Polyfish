@@ -13,8 +13,15 @@ parser.add_argument('--deterministic', action='store_true', default=False)
 parser.add_argument('--dirichlet', type=bool, default=True)
 parser.add_argument('--rollouts', type=int, default=50)
 parser.add_argument('--prefix', type=str, default="0.0.0")
+parser.add_argument('--mapsize', type=int, default=11)
+parser.add_argument('--tribes', type=str, default="Imperius, Imperius")
 
 args = parser.parse_args()
+
+settings = {
+    'size': args.mapsize,
+    'tribes': args.tribes
+}
 
 model.request_train(
     args.iterations,
@@ -28,4 +35,5 @@ model.request_train(
     args.dirichlet,
     args.rollouts,
     args.prefix,
+    settings
 )
