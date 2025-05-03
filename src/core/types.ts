@@ -277,7 +277,7 @@ export enum AbilityType {
 	
 	// Starfish Harvesting is an ability that can only be used on a tile with a Starfish, removes the Starfish from the tile, and gives the player 8 stars. The ability is unlocked by the Navigation technology. 
 	// Moving any naval unit onto a Starfish, even in neutral or enemy territory, will allow it to collect 8 stars by removing the Starfish the next turn. This consumes the unit's turn, much like if it were examining a ruin. 
-	StarfishHarvesting = 6,
+	// StarfishHarvesting = 6,
 
 	/**
 	 * Heals a unit by up to 4 HP in friendly territory and 2 HP elsewhere. (Cannot heal past maximum health.) 

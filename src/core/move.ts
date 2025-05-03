@@ -13,8 +13,7 @@ export enum MoveType {
 	Research 	= 7,
 	Capture 	= 8,
 	Reward 	    = 9,
-	Action 	    = 10,
-	EndTurn 	= 11,
+	EndTurn 	= 10,
 }
 
 export type UndoCallback = () => void;

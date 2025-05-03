@@ -146,6 +146,7 @@ export default class GameLoader {
                         _killedTurn: this.parseRawInt(killedTurn),
                         _resignedTurn: this.parseRawInt(resignedTurn),
                         _kills: this.parseRawInt(kills),
+                        _casualties: 0,
                         tasks: tasks.split("&").map((values) => {
                             const [started, completed, turn] = values.split("-");
                             return {
@@ -228,8 +229,6 @@ export default class GameLoader {
                 capitalOf: this.parseRawInt(rawTile[6]),
                 climate: this.parseRawInt(rawTile[9]),
                 skinType: this.parseRawInt(rawTile[10]),
-                // x: this.parseRawInt(rawTile[11]),
-                // y: this.parseRawInt(rawTile[12]),
                 x: tileIndex % state.settings.size,
                 y: Math.floor(tileIndex / state.settings.size),
                 tileIndex,
@@ -502,6 +501,7 @@ export default class GameLoader {
                     _killerId: -1,
                     _tech: [TechnologyType.None, ...TribeSettings[type].startingTech? [TribeSettings[type].startingTech] : []],
                     _kills: 0,
+                    _casualties: 0,
                     tasks: [],
                     _builtUniqueStructures: [],
                     _cities: [],

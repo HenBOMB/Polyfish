@@ -136,6 +136,7 @@ export interface TribeState {
 	tribeType: TribeType;
 	_killerId: number;
 	_kills: number;
+	_casualties: number;
 	_tech: TechnologyType[];
 	_cities: CityState[];
 	_units: UnitState[];

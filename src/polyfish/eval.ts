@@ -200,19 +200,32 @@ export const CAPTURE_POTENTIAL: Record<UnitType, number> = {
 export function SCORE_MOVE_PRIORITY(move: Move): number {
     switch (move.moveType) {
         case MoveType.Capture:
-            switch (move.type as CaptureType) {
-                case CaptureType.City:
-                    return 20;
-                case CaptureType.Village:
-                    return 19;
-                case CaptureType.Ruins:
-                    return 18;
-                case CaptureType.Starfish:
-                    return 17;
-                default:
-                    break;
+            if(move.type == CaptureType.City) {
+                return 20;
             }
-            break;
+            else if(move.type == CaptureType.Village) {
+                return 10;
+            }
+            else if(move.type == CaptureType.Ruins || move.type == CaptureType.Starfish) {
+                return 10;
+            }
+            else {
+                return 9;
+            }
+        case MoveType.Ability:
+            return 9;
+        case MoveType.Step:
+            return 7;
+        case MoveType.Attack:
+            return 6;
+        case MoveType.Summon:
+            return 5;
+        case MoveType.Harvest:
+            return 7;
+        case MoveType.Build:
+            return 7;
+        case MoveType.Research:
+            return 15;
     }
     return 1;
 }

@@ -446,7 +446,7 @@ export default class UnitMoveGenerator {
 		// Disband
 		if(!isTechLocked(getPovTribe(state), TechnologyType.FreeSpirit)) {
 			moves.push(new Move(
-				MoveType.Action,
+				MoveType.Ability,
 				AbilityType.Disband, 0, 0,
 				(state: GameState) => {
 					const tribe = getPovTribe(state);
@@ -467,7 +467,7 @@ export default class UnitMoveGenerator {
 		// Recover
 		if(unitTarget._health < getMaxHealth(unitTarget)) {
 			moves.push(new Move(
-				MoveType.Action,
+				MoveType.Ability,
 				AbilityType.Recover, 0, 0,
 				(state: GameState) => {
 					const undoHeal = healUnit(unitTarget, isInTerritory(state, unitTarget)? 4 : 2)
@@ -485,7 +485,7 @@ export default class UnitMoveGenerator {
 		if(isSkilledIn(unitTarget, SkillType.Heal)) {
 			const adjAllies = getAlliesNearTile(state, unitTarget._tileIndex);
 			moves.push(new Move(
-				MoveType.Action,
+				MoveType.Ability,
 				AbilityType.HealOthers, 0, 0,
 				(state: GameState) => {
 					const chain: UndoCallback[] = [];
@@ -882,7 +882,7 @@ export default class UnitMoveGenerator {
 				// This damage is equivalent to what a unit with an attack of 2 would deal.
 				if(enemyTarget) {
 					enemyTarget._health -= 2;
-					if (enemyTarget._health < 1) {
+					if(enemyTarget._health < 1) {
 						const undoRemove = removeUnit(state, enemyTarget);
 						tribe._kills++;
 						undoKillEnemy = () => {

@@ -567,12 +567,14 @@ export function removeUnit(state: GameState, removed: UnitState, credit?: UnitSt
     if(cityHome) cityHome._unitCount--;
 
     if(credit) {
+        tribe._casualties++;
         credit.kills++;
         state.tribes[credit._owner]._kills++;
     }
     
     return () => {
         if(credit) {
+            tribe._casualties--;
             credit.kills--;
             state.tribes[credit._owner]._kills--;
         }

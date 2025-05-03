@@ -1,7 +1,7 @@
 import { readFileSync } from "fs";
 import { GameState } from "./core/states";
-import { cloneState, getPovTribe, getUnitAtTile, isResourceVisible, getMaxHealth, isGameWon, isGameLost, getCity, getCityProduction, getRealUnitSettings, getTechCost, isTempleStructure, getNeighborIndexes } from "./core/functions";
-import { CaptureType, Climate2Tribe, EffectType, ModeType, ResourceType, StructureType, TerrainType, UnitType } from "./core/types";
+import { cloneState, getPovTribe, getUnitAtTile, isResourceVisible, getMaxHealth, isGameWon, isGameLost, getCity, getCityProduction, getRealUnitSettings, getTechCost, isTempleStructure, getNeighborIndexes, getEnemyAtTile } from "./core/functions";
+import { AbilityType, CaptureType, Climate2Tribe, EffectType, ModeType, ResourceType, StructureType, TerrainType, UnitType } from "./core/types";
 import Move, { CallbackResult, MoveType } from "./core/move";
 import { TechnologySettings } from "./core/settings/TechnologySettings";
 import { predictBestNextCityReward } from "./eval/prediction";
@@ -213,43 +213,57 @@ export default class AIState {
         };
 
         // Capturing Villages and enemy Cities
-        const SCORE_CAPTURE_VILLAGE = HowGood.Great;
         const SCORE_CAPTURE_CITY = HowGood.Awesome;
+        const SCORE_CAPTURE_VILLAGE = HowGood.Great;
         // Capturing ruins and starfish
         const SCORE_CAPTURE_RUINS_STARFISH = HowGood.Good;
-        // Penalize for not being able to use the tech properly
+        // Penalize if unlocked a new tech and that tech hasnt been used
         const SCORE_BAD_TECH = HowGood.Worse;
         // Stanadard penalty, researching isnt free and comes with consecuenses!
         const SCORE_COST_TECH = HowGood.Bleh;
-        // This is for structures that require adjacent structures
-        // This is a MIN MAX range
+        // Reward well placed structures that require other adjacent structures
         const SCORE_GOOD_STRUCT = [HowGood.None, HowGood.Good];
-        // Reward for killing enemy units
-        const SCORE_KILLS = HowGood.Great;
+        // Reward killing enemy units, the more the merrier (0 - 3 kills)
+        const SCORE_KILLS = [HowGood.None, HowGood.Great, HowGood.Great + 0.1, HowGood.Awesome];
+        // Penalize suicide
+        const SCORE_SUICIDE = HowGood.Bad;
+
+        // Abilities, based on how many they affect, the higher the score
+        // [0] = If it didnt do anything or did worse (worse reward)
+        // [1] = The max reward based on how *much* that ability did (good reward)
+        const MAX_AFFECTABLE        = 5;
+        const SCORE_ABILITY_BOOST   = HowGood.Great;
+        const SCORE_ABILITY_EXPLODE = [HowGood.Bad, HowGood.Great];
+        // Heal others
+        const SCORE_ABILITY_HEAL    = HowGood.Great;
+        // When not in territory, reward is halved
+        const SCORE_ABILITY_RECOVER = HowGood.Good;
+        // Generally not good to disband, unless unit is low on health and its pretty much pointless
+        // If health porcentage is less than 40%, then its Meh to disband
+        // Also special units yield Bad reward
+        const SCORE_ABILITY_DISBAND_TRHRESHOLD = 0.4;
+        const SCORE_ABILITY_DISBAND = [HowGood.Bad, HowGood.Meh];
+        // Default reward for untracked abilities
+        const SCORE_ABILITY_DEFAULT = HowGood.Meh;
 
         // Penzalize units that are not doing anything??
+        // Penalize: capture city -> research?
+        // because capturing a (village or city) increases all tech cost dramatically
 
         const increasedProduction = () => {
-            if(
-                newTribe._cities.reduce((a, b) => a + getCityProduction(newState, b), 0) > 
-                oldTribe._cities.reduce((a, b) => a + getCityProduction(oldState, b), 0)
-            ) {
-                return HowGood.Great;
-            }
-            else {
-                return HowGood.Worse;
-            }
+            const a = newTribe._cities.reduce((a, b) => a + getCityProduction(newState, b), 0);
+            const b = oldTribe._cities.reduce((a, b) => a + getCityProduction(oldState, b), 0);
+            return a > b? HowGood.Great : a < b? HowGood.Worse : HowGood.None;
         }
 
         // Many different moves can trigger pop increase
-        let reward = increasedProduction();
+        let reward = increasedProduction() + (rewardMove? HowGood.Meh : HowGood.None);
 
         // Tiny turn cost
-        reward -= 0.001;
+        reward -= 0.0001;
 
+        // TODO
         switch (move.moveType) {
-            // Technology
-            // Penalize if unlocked a new tech and that tech hasnt been used
             case MoveType.Research:
                 const settings = TechnologySettings[move.type as keyof typeof TechnologySettings];
                 // Order of importance: Resource -> Structure (except temples) -> Ability -> Unit -> Structure (temples)
@@ -265,44 +279,92 @@ export default class AIState {
                 reward += cost && newTribe._stars < cost? SCORE_BAD_TECH : SCORE_COST_TECH;
                 break;
 
-            // Reward well placed structures that require other adjacent structures
             case MoveType.Build:
                 const adjStructTypes = StructureSettings[move.type as StructureType].adjacentTypes;
                 if(adjStructTypes) {
                     const aroundStructs = getNeighborIndexes(newState, move.src, 1).filter(
                         x => newState.structures[x] && adjStructTypes.includes(newState.structures[x].id)
                     );
-                    const perc = aroundStructs.length / 8; 
+                    const perc = aroundStructs.length / MAX_AFFECTABLE; 
                     reward += SCORE_GOOD_STRUCT[0] + (SCORE_GOOD_STRUCT[1] - SCORE_GOOD_STRUCT[0]) * perc;
                 }
                 break;
 
-            // Reward capturing starfish and ruins
             case MoveType.Capture:
-                reward += CaptureType.City? SCORE_CAPTURE_CITY : CaptureType.Village? SCORE_CAPTURE_VILLAGE : SCORE_CAPTURE_RUINS_STARFISH;
+                reward += CaptureType.City? SCORE_CAPTURE_CITY : 
+                    CaptureType.Village? SCORE_CAPTURE_VILLAGE : SCORE_CAPTURE_RUINS_STARFISH;
                 break;
             
-            // Reward kills
             case MoveType.Attack:
+                const casualties = newTribe._casualties - oldTribe._casualties;
+                reward += casualties > 0? SCORE_SUICIDE : SCORE_KILLS[Math.min(3, newTribe._kills - oldTribe._kills)];
+                break;
+            
+            case MoveType.Ability:
+                switch (move.type as AbilityType) {
+                    case AbilityType.Boost:
+                        const boosted = getNeighborIndexes(newState, move.src).filter(x => getUnitAtTile(oldState, x));
+                        reward += SCORE_ABILITY_BOOST * (boosted.length / MAX_AFFECTABLE);
+                        break;
+                    case AbilityType.Explode:
+                        const poisoned = getNeighborIndexes(newState, move.src).filter(x => {
+                            if(!getEnemyAtTile(oldState, x)) return false;
+                            // Enemy got killed by the poison
+                            if(!getEnemyAtTile(newState, x)) {
+                                reward += HowGood.Good;
+                            }
+                            // Enemy got affected
+                            return true;
+                        });
+                        // Explore worth value
+                        reward += poisoned? SCORE_ABILITY_EXPLODE[1] * (poisoned.length / MAX_AFFECTABLE) : SCORE_ABILITY_EXPLODE[0];
+                        break
+                    case AbilityType.HealOthers:
+                        const healed = getNeighborIndexes(newState, move.src).filter(x => getUnitAtTile(oldState, x));
+                        reward += SCORE_ABILITY_HEAL * (healed.length / MAX_AFFECTABLE);
+                        break;
+                    case AbilityType.Recover:
+                        const isInTerritory = newState.settings._pov == newState.tiles[move.src]._owner;
+                        reward += SCORE_ABILITY_RECOVER * (isInTerritory? 1 : 0.5);
+                        break;
+                    case AbilityType.Disband:
+                        const unit = getUnitAtTile(oldState, move.src)!;
+                        const perc = unit._health / getMaxHealth(unit);
+                        reward += getRealUnitSettings(unit).cost != 10 && perc > SCORE_ABILITY_DISBAND_TRHRESHOLD? SCORE_ABILITY_DISBAND[0] : SCORE_ABILITY_DISBAND[1];
+                        break;
+                    default:
+                        reward += SCORE_ABILITY_DEFAULT;
+                        break;
+                }
+                break;
+
+            case MoveType.Step:
+                break;
+
+            case MoveType.Summon:
+                break;
+
+            case MoveType.Harvest:
+                break;
+
+            case MoveType.Reward:
+                break;
+
+            case MoveType.EndTurn:
                 break;
         }
 
-        // Kills //
-        reward += 0.006 * Math.min(newTribe._kills - oldTribe._kills);
-
-        // Cities //
-        reward += 0.01 * Math.min(6, newTribe._cities.length - oldTribe._cities.length);
+    
         // Bonus connecting cities
-        reward += 0.0001 * (
-            newTribe._cities.reduce((a, b) => a + (b._connectedToCapital? 1 : 0), 0) -
-            oldTribe._cities.reduce((a, b) => a + (b._connectedToCapital? 1 : 0), 0));
-        // Bonus capturing enemy cities
-        if(move?.moveType == MoveType.Capture && oldState.tiles[move.src]._owner > 0 && oldState.tiles[move.src]._owner != newState.tiles[move.src]._owner) {
-            reward += 0.01;
-        }
+        // reward += 0.0001 * (
+        //     newTribe._cities.reduce((a, b) => a + (b._connectedToCapital? 1 : 0), 0) -
+        //     oldTribe._cities.reduce((a, b) => a + (b._connectedToCapital? 1 : 0), 0));
+        // // Bonus capturing enemy cities
+        // if(move?.moveType == MoveType.Capture && oldState.tiles[move.src]._owner > 0 && oldState.tiles[move.src]._owner != newState.tiles[move.src]._owner) {
+        //     reward += 0.01;
+        // }
 
-        // clip to [-1,1] to keep returns stable
-        return Math.max(-1, Math.min(1, reward));
+        return Math.max(-.8, Math.min(.8, reward));
     }
 
     static calculatePotential(state: GameState, maxReward=1.0): number {
@@ -315,7 +377,7 @@ export default class AIState {
         // Army strength
         // Super units are worth x3.0
         // With a maximum advantage strength of 5 = 0.25
-        // Will this cause unit spam?
+        // TODO unit value relative to health
         const unit_diff = 0.05 * Math.min(5, 
             pov._units.reduce((a, b) => a + (getRealUnitSettings(b).cost == 10? 3 : 1), 0) - 
             enemyPov._units.reduce((a, b) => a + (getRealUnitSettings(b).cost == 10? 3 : 1), 0)
