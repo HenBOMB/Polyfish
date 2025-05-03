@@ -17,6 +17,12 @@ export default class Game {
         this.stateBefore = {} as any;
     }
 
+    deepClone() {
+        const game = new Game();
+        game.load(this.initialState);
+        return game;
+    }
+
     load(state: GameState) {
         this.initialState = state;
         this.reset();
@@ -32,10 +38,10 @@ export default class Game {
         this.state.settings.live = true;
         const moves = [generateAllMoves(this.state)[moveIndex]];
 
-        if(moves[0].moveType == MoveType.EndTurn) {
+        if(moves[0].moveType === MoveType.EndTurn) {
             // TODO how about updating the state in here? to compare start to end of current turn?
             this.endTurn();
-            this.state.settings._playedMoves = [];
+            this.state.settings._recentMoves = [];
         }
         else {
             const result = moves[0].execute(this.state);
@@ -46,7 +52,7 @@ export default class Game {
             }
             else {
                 // Forced moves dont count
-                this.state.settings._playedMoves.push(moves[0].moveType);
+                this.state.settings._recentMoves.push(moves[0].moveType);
 
                 // TODO figure out how to have the ai play reward moves (0/1)
                 if(result.chainMoves?.length) {
@@ -156,7 +162,7 @@ export default class Game {
         }
 
         // If we are back at the start, a new turn has started
-        if(this.state.settings._pov == STARTING_OWNER_ID) {
+        if(this.state.settings._pov === STARTING_OWNER_ID) {
             this.state.settings._turn++;
         }
 

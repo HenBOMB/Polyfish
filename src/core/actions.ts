@@ -1,9 +1,10 @@
 import AIState from "../aistate";
-import { rewardStructure } from "../eval/eval";
+import { rewardStructure } from "../polyfish/eval";
 import { predictBestNextCityReward } from "../eval/prediction";
 import { getNeighborTiles, calaulatePushablePosition, getNeighborIndexes, computeReachablePath, isSkilledIn, getPovTribe, getUnitAtTile, getTrueUnitAtTile, getHomeCity, getRulingCity, getMaxHealth, getEnemiesInRange, getEnemiesNearTile, isFrozen, calculateCombat, getUnitRange, getTrueEnemyAtTile, calculateAttack, isSteppable, isWaterTerrain, isPoisoned } from "./functions";
 import Move, { MoveType } from "./move";
-import UnitMoveGenerator, { Branch, UndoCallback } from "./moves";
+import UnitMoveGenerator, {  } from "./moves";
+import { Branch, UndoCallback } from "./move";
 import { ResourceSettings } from "./settings/ResourceSettings";
 import { StructureSettings } from "./settings/StructureSettings";
 import { TribeSettings } from "./settings/TribeSettings";

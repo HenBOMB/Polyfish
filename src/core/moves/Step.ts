@@ -15,16 +15,15 @@ export default class Step extends Move {
         const unit = getUnitAtTile(state, this.src);
 
         if(!unit) {
-            return Logger.illegal(MoveType.None, `Upgrade - Unit does not exist: ${UnitType[unitType]}`);
+            return Logger.illegal(MoveType.Step, `Unit does not exist: ${UnitType[unitType]}`);
         }
 
-        // TODO Cloak is on tile will cause a collision if re-simulating the enemy moves after our simulated move
-        // Superposition is required!
+        // TODO If a unit moves onto a cloak when in not live mode, then the stepper will override the cloak
 
         if (state.tiles[this.target]._unitOwner > 0) {
-            const cloak = getTrueUnitAtTile(state, this.target)?._unitType!;
+            const unitType = getTrueUnitAtTile(state, this.target)?._unitType!;
             // If cloak is on tile, then it must be revealed
-            if(cloak == UnitType.Cloak) {
+            if(unitType == UnitType.Cloak) {
                 if(state.settings.live) {
                     let effectIndex = unit._effects.indexOf(EffectType.Invisible);
                     const cloak = getTrueUnitAtTile(state, this.target)!;
@@ -39,11 +38,11 @@ export default class Step extends Move {
                     };
                 }
                 else {
-                    return Logger.illegal(MoveType.Step, `Unit -> Cloak SUPERPOSITION is required`);
+                    return Logger.illegal(MoveType.Step, `${UnitType[unit._unitType]} -> Cloak SUPERPOSITION is required`);
                 }
             }
             else {
-                return Logger.illegal(MoveType.Step, `Step ${unit._tileIndex} -> ${this.target}, ${UnitType[unit._unitType]} -> ${UnitType[cloak]}`);
+                return Logger.illegal(MoveType.Step, `${unit._tileIndex} -> ${this.target}, ${UnitType[unit._unitType]} -> ${UnitType[unitType]}`);
             }
         }
 

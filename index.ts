@@ -8,7 +8,7 @@ import { spawn } from "child_process";
 import { DefaultGameSettings, GameSettings, GameState } from "./src/core/states";
 import { generateAllMoves, generateEndTurnMove } from "./src/core/moves";
 import Game from "./src/game";
-import Move, { MoveType } from "./src/core/move";
+import Move from "./src/core/move";
 
 const app = express();
 const py = spawn(".venv/bin/python3", ["polyfish/main.py"]);
@@ -133,7 +133,13 @@ app.post("/autostep", async (req: Request, res: Response) => {
             else {
                 let probs: number[] = [];
                 // let start = Date.now();
-                const root = await new MCTS(game.state, predict, req.body.cpuct || 1.0, req.body.gamma || 0.997).search(req.body.iterations || 200);
+                const root = await new MCTS(
+                    game.state, predict, 
+                    req.body.cpuct || 1.0, 
+                    req.body.gamma || 0.997, 
+                    req.body.dirichlet || true, 
+                    req.body.rollouts || 50, 
+                ).search(req.body.iterations || 100);
                 probs = root.distribution(req.body.temperature || 0.7);
                 // console.log(`took: ${Date.now() - start}ms`);
                 const fullProbs = new Array<number>(MODEL_CONFIG.max_actions).fill(0);
@@ -159,8 +165,8 @@ app.post("/autostep", async (req: Request, res: Response) => {
             moves: moves.map(x => x.stringify()),
             value: v,
             state: game.state,
-            potential: AIState.calculatePotential(game.state),
-            reward: AIState.calculateReward(prevState, game.state),
+            potential:  AIState.calculatePotential(prevState) - AIState.calculatePotential(game.state),
+            reward: AIState.calculateReward(game, ...moves),
         });
     } catch (err: any) {
         console.error("autostep error:", err);
@@ -185,7 +191,9 @@ app.post('/selfplay', async (req: Request, res: Response) => {
         req.body.cPuct || 1.0,
         req.body.gamma || 0.997,
         req.body.deterministic || false,
-        req.body.settings || DefaultGameSettings
+        req.body.dirichlet || true,
+        req.body.rollouts || 50,
+        req.body.settings || DefaultGameSettings,
     ));
 })
 
@@ -204,5 +212,7 @@ app.listen(3000, async () => {
     console.log('FOW DISABLED\n');
     const loader = new GameLoader();
     await loader.loadRandom();
-    await predict(loader.currentState);
+    // console.time('test');
+    // console.log(await predict(loader.currentState));
+    // console.timeEnd('test');
 });

@@ -21,6 +21,8 @@ import { summonUnit } from "./actions";
 
 export const STARTING_OWNER_ID = 1;
 export const DEBUG_SEED = undefined;
+export const MAX_SEED = 10000;
+export const MAX_TURNS = 50;
 
 export default class GameLoader {
     public currentState: GameState;
@@ -102,13 +104,13 @@ export default class GameLoader {
                 mode: ModeType.Domination,
                 size: this.parseRawInt(size),
                 _turn: this.parseRawInt(turn),
-                maxTurns: 30, // TODO
+                maxTurns: MAX_TURNS, // TODO
                 _pov: STARTING_OWNER_ID,
                 live: false,
                 unitIdx: 0,
                 tribeCount: 0,
                 _gameOver: false,
-                _playedMoves: [],
+                _recentMoves: [],
             },
             tribes: playerStates.reduce((arr, line) => {
                 const [
@@ -372,8 +374,8 @@ export default class GameLoader {
         return this.loadGame(state);
     }
 
-    public async loadRandom(): Promise<GameState> {
-        const seed = this.settings.seed? this.settings.seed : Math.floor(Math.random() * 10000000);
+    public async loadRandom(_seed?: number): Promise<GameState> {
+        const seed = _seed || (this.settings.seed? this.settings.seed : Math.floor(Math.random() * MAX_SEED));
         console.log('SEED', seed);
         
         const randomNotation = async () => {
@@ -527,7 +529,7 @@ export default class GameLoader {
                 unitIdx: 0,
                 tribeCount: Object.keys(tribes).length,
                 _gameOver: false,
-                _playedMoves: [],
+                _recentMoves: [],
             },
             tribes,
             _potentialDiscovery: [],

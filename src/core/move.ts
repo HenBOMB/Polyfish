@@ -1,5 +1,4 @@
 import { tryDiscoverRewardOtherTribes } from "./functions";
-import { Branch } from "./moves";
 import { GameState } from "./states";
 import { CaptureType, ResourceType, RewardType, StructureType, TechnologyType, UnitType } from "./types";
 
@@ -17,6 +16,15 @@ export enum MoveType {
 	Action 	    = 10,
 	EndTurn 	= 11,
 }
+
+export type UndoCallback = () => void;
+
+export interface Branch {
+	moves?: Move[];
+	chainMoves?: Move[];
+	undo: UndoCallback;
+}
+
 
 export type CallbackResult = Branch | null;
 

@@ -68,19 +68,19 @@ export function isResourceVisible(tribe: TribeState, resourceId: ResourceType | 
 }
 
 export function isTileVisible(state: GameState, tileIndex: TileState | number, matchOwner?: number): boolean {
-	return state.tiles[typeof tileIndex == 'number'? tileIndex : tileIndex.tileIndex].explorers.includes(matchOwner || state.settings._pov);
+	return state.tiles[typeof tileIndex === 'number'? tileIndex : tileIndex.tileIndex].explorers.includes(matchOwner || state.settings._pov);
 }
 
 export function isTechLocked(tribe: TribeState, techId: TechnologyType): boolean {
-	return techId == TechnologyType.Unbuildable || !((techId == TechnologyType.None || tribe._tech.some(x => (x == techId))));
+	return techId === TechnologyType.Unbuildable || !((techId === TechnologyType.None || tribe._tech.some(x => (x === techId))));
 }
 
 export function isTempleStructure(structType: StructureType) {
-	return structType == StructureType.Temple 
-		|| structType == StructureType.MountainTemple 
-		|| structType == StructureType.ForestTemple 
-		|| structType == StructureType.IceTemple 
-		|| structType == StructureType.WaterTemple;
+	return structType === StructureType.Temple 
+		|| structType === StructureType.MountainTemple 
+		|| structType === StructureType.ForestTemple 
+		|| structType === StructureType.IceTemple 
+		|| structType === StructureType.WaterTemple;
 }
 
 export function getTechTier(tech: TechnologyType): number {
@@ -145,10 +145,10 @@ export function getNeighborTiles(state: GameState, index: number, range = 1, uno
 }
 
 export function getTrueUnitAtTile(state: GameState, tileIndex: TileState | number, matchOwner?: number): UnitState | null {
-	const tile = state.tiles[typeof tileIndex == 'number'? tileIndex : tileIndex.tileIndex];
+	const tile = state.tiles[typeof tileIndex === 'number'? tileIndex : tileIndex.tileIndex];
 	if(tile._unitIdx < 0) return null;
-	const found = state.tribes[tile._unitOwner]._units.find(x => x.idx == tile._unitIdx) || null;
-	return found && matchOwner? found._owner == matchOwner? found : null : found;
+	const found = state.tribes[tile._unitOwner]._units.find(x => x.idx === tile._unitIdx) || null;
+	return found && matchOwner? found._owner === matchOwner? found : null : found;
 }
 
 export function getUnitAtTile(state: GameState, tileIndex: TileState | number, matchOwner?: number): UnitState | null {
@@ -161,11 +161,11 @@ export function getUnitAtTile(state: GameState, tileIndex: TileState | number, m
 	if(!found) return null;
 
 	// If enemy unit is hidden, then we cant see it!
-	if(isInvisible(found) && found._owner != state.settings._pov) {
+	if(isInvisible(found) && found._owner !== state.settings._pov) {
 		return null;
 	}
 
-	return matchOwner && found? found._owner == matchOwner? found : null : found;
+	return matchOwner && found? found._owner === matchOwner? found : null : found;
 }
 
 export function getCity(state: GameState, tileIndex: number, matchOwner?: number): CityState | null {
@@ -203,7 +203,7 @@ export function getEnemiesNearTile(state: GameState, tileIndex: number, range = 
 	return getNeighborIndexes(state, tileIndex, range)
 		.reduce((acc: UnitState[], cur: number) => {
 			const owner = state.tiles[cur]._unitOwner;
-			if(owner < 1 || owner == state.settings._pov) return acc;
+			if(owner < 1 || owner === state.settings._pov) return acc;
 			const enemy = (real? getTrueEnemyAtTile  : getEnemyAtTile)(state, cur);
 			if(!enemy) return acc;
 			if(cur != enemy._tileIndex) {
@@ -221,10 +221,10 @@ export function getClosestEnemyCity(state: GameState, tileIndex: number, range =
 	let closestDistance = range;
 	let closestCity = null;
 	for (let i = 1; i < state.settings.tribeCount; i++) {
-		if(i == state.settings._pov) continue;
+		if(i === state.settings._pov) continue;
 		for (const city of state.tribes[i]._cities.filter(x => state._visibleTiles.includes(x.tileIndex))) {
 			const distance = calculateDistance(tileIndex, city.tileIndex, state.settings.size);
-			if (distance < closestDistance || (distance == closestDistance && state.tiles[i].capitalOf)) {
+			if (distance < closestDistance || (distance === closestDistance && state.tiles[i].capitalOf)) {
 				closestDistance = distance;
 				closestCity = city;
 			}
@@ -244,7 +244,7 @@ export function getClosestReachableEnemyCity(state: GameState, unit: UnitState, 
 		const tileIndex = state._visibleTiles[i];
 		const tile = state.tiles[tileIndex];
 			
-		if(tile._rulingCityIndex != tileIndex || tile._owner == state.settings._pov) continue;
+		if(tile._rulingCityIndex != tileIndex || tile._owner === state.settings._pov) continue;
 		
 		let ported = false;
 
@@ -257,9 +257,9 @@ export function getClosestReachableEnemyCity(state: GameState, unit: UnitState, 
 		if(distance < 1) continue;
 
 		// EVAL Deadly bias preferring capital over potentially closer cities
-		if (distance < closestDistance || (distance == closestDistance && state.tiles[i].capitalOf)) {
+		if (distance < closestDistance || (distance === closestDistance && state.tiles[i].capitalOf)) {
 			closestDistance = distance;
-			closestCity = state.tribes[tile._owner]._cities.find(x => x.tileIndex == tileIndex)!;
+			closestCity = state.tribes[tile._owner]._cities.find(x => x.tileIndex === tileIndex)!;
 		}
 	}
 
@@ -267,16 +267,16 @@ export function getClosestReachableEnemyCity(state: GameState, unit: UnitState, 
 }
 
 export function isWaterTerrain(tile: TileState): boolean {
-	return tile.terrainType == TerrainType.Water || tile.terrainType == TerrainType.Ocean;
+	return tile.terrainType === TerrainType.Water || tile.terrainType === TerrainType.Ocean;
 }
 
 export function isIceTerrain(tile: TileState): boolean {
 	// TODO THIS SHOULD BE: tile.frozen?
-	return tile.terrainType == TerrainType.Ice;
+	return tile.terrainType === TerrainType.Ice;
 }
 
 export function isSkilledIn(unit: UnitState | UnitType, ...skills: SkillType[]): boolean {
-	const settings = UnitSettings[typeof unit == "number"? unit : unit._unitType];
+	const settings = UnitSettings[typeof unit === "number"? unit : unit._unitType];
 	const passengerSettings = typeof unit != "number" && unit._passenger? UnitSettings[unit._passenger] : null;
 	return skills.some(x => settings.skills.includes(x) || passengerSettings?.skills.includes(x));
 }
@@ -361,7 +361,7 @@ export function getDefenseBonus(state: GameState, unit: UnitState): number {
 
 export function canCapture(state: GameState, unit: UnitState): boolean {
 	const struct = state.structures[unit._tileIndex];
-	return Boolean(struct && struct.id == StructureType.Village && struct._owner != unit._owner && !unit._moved && !unit._attacked);
+	return Boolean(struct && struct.id === StructureType.Village && struct._owner != unit._owner && !unit._moved && !unit._attacked);
 }
 
 export function isAdjacentToEnemy(state: GameState, tile: TileState): boolean {
@@ -369,9 +369,10 @@ export function isAdjacentToEnemy(state: GameState, tile: TileState): boolean {
 	return getNeighborIndexes(state, tile.tileIndex).some(x => getTrueEnemyAtTile(state, x));
 }
 
+// TODO THIS IS AMBIGUOUS, ONLY WORKS WITH 1v1
 export function isGameOver(state: GameState): boolean {
 	const tribe = getPovTribe(state);
-	return state.settings._gameOver || state.settings._turn > state.settings.maxTurns || tribe._resignedTurn > 0 || tribe._killedTurn > 0 || isGameWon(state);
+	return state.settings._gameOver || state.settings._turn > state.settings.maxTurns || isGameLost(state) || isGameWon(state);
 }
 
 export function isGameLost(state: GameState): boolean {
@@ -380,16 +381,16 @@ export function isGameLost(state: GameState): boolean {
 }
 
 export function isGameWon(state: GameState): boolean {
-	return Object.values(state.tribes).every(x => x.owner == state.settings._pov? true : x._resignedTurn > 0 || x._killedTurn > 0);
+	return Object.values(state.tribes).every(x => x.owner === state.settings._pov? true : x._resignedTurn > 0 || x._killedTurn > 0);
 }
 
 export function getWipeouts(state: GameState, owner?: number): TribeState[] {
 	owner = owner || state.settings._pov;
-	return Object.values(state.tribes).filter(x => x._killerId == owner);
+	return Object.values(state.tribes).filter(x => x._killerId === owner);
 }
 
 export function isSteppable(state: GameState, unit: UnitState, tileOrIndex: TileState | number, overrideAquatic?: boolean) {
-	const tile = typeof tileOrIndex == "number"? state.tiles[tileOrIndex] : tileOrIndex;
+	const tile = typeof tileOrIndex === "number"? state.tiles[tileOrIndex] : tileOrIndex;
 
 	// Unexplored
 	if (!tile.explorers.includes(unit._owner)) {
@@ -416,11 +417,11 @@ export function isSteppable(state: GameState, unit: UnitState, tileOrIndex: Tile
 	const isAquatic = overrideAquatic? true : isAquaticOrCanFly(unit, false);
 
 	// Port
-	const isPort = state.structures[tile.tileIndex]?.id == StructureType.Port;
+	const isPort = state.structures[tile.tileIndex]?.id === StructureType.Port;
 	if (isPort) {
 		// Sailing must be unlocked to enter a port
 		if(!isTechLocked(tribe, TechnologyType.Sailing)) return false;
-		return isAquatic || !isAquatic && tile._owner == unit._owner;
+		return isAquatic || !isAquatic && tile._owner === unit._owner;
 	}
 	
 	if (tile.terrainType === TerrainType.Water || tile.terrainType === TerrainType.Ocean) {
@@ -464,7 +465,7 @@ export function getPovTribe(stateOrState: GameState | Game): TribeState {
 
 export function getCapitalCity(state: GameState, owner?: number): CityState | null {
 	const pov = owner || state.settings._pov;
-	return state.tribes[pov]._cities.find(x => state.tiles[x.tileIndex].capitalOf == pov) || null;
+	return state.tribes[pov]._cities.find(x => state.tiles[x.tileIndex].capitalOf === pov) || null;
 }
 
 export function getTribeCrudeScore(state: GameState, owner?: number): number {
@@ -527,7 +528,7 @@ export function getRealUnitType(unit: UnitState): UnitType {
  * @returns 
  */
 export function getUnitSettings(unit: UnitState | UnitType) {
-	return UnitSettings[typeof unit == "number"? unit : unit._unitType];
+	return UnitSettings[typeof unit === "number"? unit : unit._unitType];
 }
 
 export function getMaxHealth(unit: UnitState) {
@@ -558,7 +559,7 @@ export function getUnitRange(unit: UnitState) {
 }
 
 export function getStarExchange(state: GameState, owner: TribeState | number) {
-	const score = state.tribes[typeof owner == "number"? owner : owner.owner]._score;
+	const score = state.tribes[typeof owner === "number"? owner : owner.owner]._score;
 	if(score < 1000) return 3;
 	if(score < 2000) return 6;
 	if(score < 3000) return 9;
@@ -577,7 +578,7 @@ export function getClosestOwnedTile(state: GameState, tileIndex: number, tileTyp
 
 export function getClosestOwnedStructureTile(state: GameState, tileIndex: number, structType: StructureType): [number, number] | null {
 	return state._visibleTiles.reduce((best: any, cur: number) => {
-		if(cur == tileIndex) return best;
+		if(cur === tileIndex) return best;
 		if(state.tiles[cur]._owner != state.settings._pov || state.structures[cur]?.id != structType) {
 			return best;
 		}
@@ -591,9 +592,9 @@ export function getHomeCity(state: GameState, unit: UnitState): CityState | null
 }
 
 export function getRulingCity(state: GameState, tileIndex: number): CityState | null {
-	// state.tribes[themOwner]!._cities.find(x => x.tileIndex == targetCityIndex)
+	// state.tribes[themOwner]!._cities.find(x => x.tileIndex === targetCityIndex)
 	const tile = state.tiles[tileIndex];
-	return state.tribes[tile._owner]?._cities.find(x => x.tileIndex == tile._rulingCityIndex) || null;
+	return state.tribes[tile._owner]?._cities.find(x => x.tileIndex === tile._rulingCityIndex) || null;
 }
 
 
@@ -603,7 +604,7 @@ export function calculateDistance(tileIndex1: number, tileIndex2: number, size: 
 	const cache = distanceCache.get(tileIndex1);
 	if (cache) {
 		const cachedDistance = cache.get(tileIndex2);
-		if (cachedDistance !== undefined) return cachedDistance;
+		if (cachedDistance != undefined) return cachedDistance;
 	} else {
 		distanceCache.set(tileIndex1, new Map());
 	}

@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import json, torch, sys, os
 import threading
 import model
+from predictor import PredictorBatcher
 
 with open('data/model/config.json', 'r') as f:
     config = json.load(f)
@@ -14,6 +15,7 @@ prefix = ''
 net = model.load(root_path + '-latest', config)
 training = False
 train_thread = None
+predictor = PredictorBatcher(net)
 
 def reply(data):
     sys.stdout.write(json.dumps(data))
@@ -48,7 +50,7 @@ while True:
         training = True
 
         def _train_wrapper():
-            global training
+            global training, net
             try:
                 model.self_train(
                     net,
@@ -61,7 +63,10 @@ while True:
                     data.get('gamma', 0.997),
                     data.get('deterministic', False),
                     data.get('batch_size', 16),
-                    filepath
+                    data.get('dirichlet', True),
+                    data.get('rollouts', 50),
+                    filepath,
+                    data.get('settings', {}),
                 )
             except Exception as e:
                 model.logger.exception("Training thread crashed")
@@ -74,11 +79,13 @@ while True:
         reply({ "status": 'success' })
 
     elif cmd == 'predict':
-        with torch.no_grad():
-            pi, value = net(obs_to_tensor(data))
-            pi = F.softmax(pi, dim=1).detach().cpu().numpy()[0]
+        obs = obs_to_tensor(data)
+        pi_logits, v_scalar = predictor.predict(obs)
 
-        reply({
-            "pi": pi.tolist(),
-            "v": value.item()
-        })
+        # Twice as long
+        # with torch.no_grad():
+        #     pi_logits, v_scalar = net(obs)
+        #     pis = F.softmax(pi_logits, dim=1).cpu().numpy()
+        #     v_scalar  = v_scalar.cpu().numpy()
+
+        reply({ "pi": pi_logits.tolist(), "v": v_scalar.item() })

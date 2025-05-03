@@ -8,9 +8,10 @@ import { predictBestNextCityReward } from "./eval/prediction";
 import { ResourceSettings } from "./core/settings/ResourceSettings";
 import { StructureSettings } from "./core/settings/StructureSettings";
 import { UnitSettings } from "./core/settings/UnitSettings";
-import { UndoCallback } from "./core/moves";
+import Game from "./game";
 
-const PRECISION = 2;
+// forgot what this was
+const LIVE_TO_CAST_PRECISION = 3;
 
 /** @type {ModelConfig} */
 export const MODEL_CONFIG: {
@@ -47,7 +48,7 @@ function safeFloat(f: number | undefined): number {
     if(typeof(f) != "number") {
         throw new Error("NaN");
     }
-    return !f || f < 0? 0 : Number(f.toFixed(PRECISION)) 
+    return !f || f < 0? 0 : Number(f.toFixed(LIVE_TO_CAST_PRECISION)) 
 }
 
 function safeID(n: number | undefined): number { return !n? 0 : n > 0? n : 0 }
@@ -154,11 +155,13 @@ function extractPlayer(_state: GameState): number[] {
     ].flat();
 }
 
+export type Observation = {
+    map: number[][][],
+    player: number[],
+};
+
 export default class AIState {
-    static extract(state: GameState): {
-        map: number[][][],
-        player: number[],
-    } {
+    static extract(state: GameState): Observation {
         return {
             map: extractMap(state),
             player: extractPlayer(state),
@@ -172,126 +175,179 @@ export default class AIState {
         return move.execute(state);
     }
 
-    static calculateReward(oldState: GameState, newState: GameState, move: Move | null = null): number {
-        // ! ASSUMES NO FOW
+    // TODO NORMALIZE -1 ... 1
+    /**
+     * Returns a value between -0.75 and 0.75. Uses game.stateBefore and game.state
+     * @param moves Moves recently played
+     * @returns 
+     */
+    static calculateReward(game: Game, ...moves: Move[]): number {
+        const move: Move = moves[0];
+        // The forced reward move, caused by upgrading a city
+        const rewardMove: Move = moves[1];
 
-        let reward = 0;
+        // ! ASSUMES NO FOW
+        const oldState = game.stateBefore;
+        const newState = game.state;
 
         const pov = newState.settings._pov;
         const oldTribe = oldState.tribes[pov];
         const newTribe = newState.tribes[pov];
 
-        const calculateProduction = () => {
-            return 0.25 * (newTribe._cities.reduce((a, b) => a + getCityProduction(newState, b), 0) - oldTribe._cities.reduce((a, b) => a + getCityProduction(oldState, b), 0));
+        // LOSS = -1
+        // ... EVERYTHING ELSE IN BETWEEN ...
+        // WIN = 1
+
+        enum HowGood {
+            // Defeat  = -1.00,
+            Nasty   = -0.75,
+            Worse   = -0.5,
+            Bad     = -0.25,
+            Bleh    = -0.10,
+            None    = 0.00,
+            Meh     = 0.10,
+            Good    = 0.25,
+            Great   = 0.50,
+            Awesome = 0.75,
+            // Victory = 1.00,
+        };
+
+        // Capturing Villages and enemy Cities
+        const SCORE_CAPTURE_VILLAGE = HowGood.Great;
+        const SCORE_CAPTURE_CITY = HowGood.Awesome;
+        // Capturing ruins and starfish
+        const SCORE_CAPTURE_RUINS_STARFISH = HowGood.Good;
+        // Penalize for not being able to use the tech properly
+        const SCORE_BAD_TECH = HowGood.Worse;
+        // Stanadard penalty, researching isnt free and comes with consecuenses!
+        const SCORE_COST_TECH = HowGood.Bleh;
+        // This is for structures that require adjacent structures
+        // This is a MIN MAX range
+        const SCORE_GOOD_STRUCT = [HowGood.None, HowGood.Good];
+        // Reward for killing enemy units
+        const SCORE_KILLS = HowGood.Great;
+
+        // Penzalize units that are not doing anything??
+
+        const increasedProduction = () => {
+            if(
+                newTribe._cities.reduce((a, b) => a + getCityProduction(newState, b), 0) > 
+                oldTribe._cities.reduce((a, b) => a + getCityProduction(oldState, b), 0)
+            ) {
+                return HowGood.Great;
+            }
+            else {
+                return HowGood.Worse;
+            }
         }
+
+        let reward = increasedProduction();
 
         if(move) {
-            // Technology
-            // Penalize if unlocked a new tech and that tech hasnt been used
-            // Penalize units that are not doing anything
-            if (move.moveType === MoveType.Research) {
-                const settings = TechnologySettings[move.type as keyof typeof TechnologySettings];
-                
-                // Get cost to "use" what this tech has unlocked
-                // Order of importance: Resource -> Structure (except temples) -> Ability -> Unit -> Structure (temples)
-                // TODO Using this order to reduce bad bias and potentially better moves, not sure tho..
-
-                const cost = (
-                    settings.unlocksResource? ResourceSettings[settings.unlocksResource] :
-                    settings.unlocksStructure && !isTempleStructure(settings.unlocksStructure)? StructureSettings[settings.unlocksStructure] :
-                    settings.unlocksUnit? UnitSettings[settings.unlocksUnit] :
-                    settings.unlocksAbility? { cost: 0 } :
-                    settings.unlocksStructure && isTempleStructure(settings.unlocksStructure)? StructureSettings[settings.unlocksStructure] : 
-                    null
-                )?.cost || 0;
-    
-                // Penalize for not being able to use the tech properly
-                if(cost && newTribe._stars < cost) {
-                    reward -= 0.4;
+            switch (move.moveType) {
+                // Technology
+                // Penalize if unlocked a new tech and that tech hasnt been used
+                case MoveType.Research: {
+                    const settings = TechnologySettings[move.type as keyof typeof TechnologySettings];
+                    // Order of importance: Resource -> Structure (except temples) -> Ability -> Unit -> Structure (temples)
+                    // NOTE Using this order to reduce bad bias and potentially better moves, not sure tho..
+                    const cost = (
+                        settings.unlocksResource? ResourceSettings[settings.unlocksResource] :
+                        settings.unlocksStructure && !isTempleStructure(settings.unlocksStructure)? StructureSettings[settings.unlocksStructure] :
+                        settings.unlocksUnit? UnitSettings[settings.unlocksUnit] :
+                        settings.unlocksAbility? { cost: 0 } :
+                        settings.unlocksStructure && isTempleStructure(settings.unlocksStructure)? StructureSettings[settings.unlocksStructure] : 
+                        null
+                    )?.cost || 0;
+                    return cost && newTribe._stars < cost? SCORE_BAD_TECH : SCORE_COST_TECH;
                 }
-                // Stanadard penalty, researching isnt free and comes with consecuenses!
-                else {
-                    reward -= 0.1;
+                // Reward well placed structures that require other adjacent structures
+                case MoveType.Build: {
+                    const settings = StructureSettings[move.type as keyof typeof StructureSettings];
+                    if(settings.adjacentTypes) {
+                        const perc = newState._visibleTiles.reduce((a: number, x: number) => {
+                            if(!x || !newState.structures[x]) return a;
+                            const adjacentTypes = StructureSettings[newState.structures[x].id].adjacentTypes;
+                            if(!adjacentTypes) return a;
+                            const aroundStructures = getNeighborIndexes(newState, Number(x), 1).filter(x => newState.structures[x] && adjacentTypes.includes(newState.structures[x].id));
+                            return a + aroundStructures.length;
+                        }, 0) / 8; // 8 is max surrounding tiles (ignoring edges)
+                        // Slerp
+                        reward += SCORE_GOOD_STRUCT[0] + (SCORE_GOOD_STRUCT[1] - SCORE_GOOD_STRUCT[0]) * perc;
+                    }
+                    return reward;
                 }
-    
-                return reward;
-            }
-            // Reward well placed structures that require other adjacent structures
-            else if(move.moveType == MoveType.Build) {
-                const settings = StructureSettings[move.type as keyof typeof StructureSettings];
-                if(settings.adjacentTypes) {
-                    const rating = newState._visibleTiles.reduce((a: number, x: number) => {
-                        if(!x || !newState.structures[x]) return a;
-                        const adjacentTypes = StructureSettings[newState.structures[x].id].adjacentTypes;
-                        if(!adjacentTypes) return a;
-                        const aroundStructures = getNeighborIndexes(newState, Number(x), 1).filter(x => newState.structures[x] && adjacentTypes.includes(newState.structures[x].id));
-                        return a + aroundStructures.length;
-                    }, 0) / 8; // 8 is max surrounding tiles (ignoring edges)
-                    reward += 0.02 * rating;
+                // Reward capturing starfish and ruins
+                case MoveType.Capture: {
+                    switch (move.type) {
+                        case CaptureType.Starfish:
+                        case CaptureType.Ruins:
+                            return SCORE_CAPTURE_RUINS_STARFISH + increasedProduction();
+                        case CaptureType.Village:
+                            return SCORE_CAPTURE_VILLAGE;
+                        case CaptureType.City:
+                            return SCORE_CAPTURE_CITY;
+                        default:
+                            break;
+                    }
+                    break;
                 }
-                return reward + calculateProduction();
-            }
-            // Reward capturing starfish and ruins
-            else if(move.moveType == MoveType.Capture) {
-                if(move.type == CaptureType.Starfish || move.type == CaptureType.Ruins) {
-                    return 0.5 + calculateProduction();
-                }
+                default:
+                    break;
             }
         }
 
-        // Victory Condition //
-        if(isGameWon(newState)) {
-            return 10.0;
-        }
-        else if(isGameLost(newState)) {
-            return -10.0;
-        }
-        
         // Kills //
-        reward += 0.6 * (newTribe._kills - oldTribe._kills);
+        reward += 0.006 * Math.min(newTribe._kills - oldTribe._kills);
 
         // Cities //
-        reward += 1.0 * (newTribe._cities.length - oldTribe._cities.length);
+        reward += 0.01 * Math.min(6, newTribe._cities.length - oldTribe._cities.length);
         // Bonus connecting cities
-        reward += 0.05 * (
+        reward += 0.0001 * (
             newTribe._cities.reduce((a, b) => a + (b._connectedToCapital? 1 : 0), 0) -
             oldTribe._cities.reduce((a, b) => a + (b._connectedToCapital? 1 : 0), 0));
         // Bonus capturing enemy cities
         if(move?.moveType == MoveType.Capture && oldState.tiles[move.src]._owner > 0 && oldState.tiles[move.src]._owner != newState.tiles[move.src]._owner) {
-            reward += 1.0;
+            reward += 0.01;
         }
 
         // Production //
-        reward += calculateProduction();
+        reward += increasedProduction();
     
         // Tiny time cost
-        reward -= 0.01;
+        reward -= 0.001;
 
         // clip to [-1,1] to keep returns stable
         return Math.max(-1, Math.min(1, reward));
     }
 
-    static calculatePotential(state: GameState): number {
-        // TODO Using 1 enemy pov as reference, for more enemies.. figure it out
-        // ! ASSUMES NO FOW
+    static calculatePotential(state: GameState, maxReward=1.0): number {
+        // ! Assumes 1v1 and FOW is disabled
+        // Uses absolutes that will lead to better biases
 
         const pov = getPovTribe(state);
         const [ enemyPov ] = Object.values(state.tribes).filter(x => x.owner != pov.owner);
 
-        // Kills / Army
-        // Super units are worth triple!
-        const unit_diff = 
+        // Army strength
+        // Super units are worth x3.0
+        // With a maximum advantage strength of 5 = 0.25
+        // Will this cause unit spam?
+        const unit_diff = 0.05 * Math.min(5, 
             pov._units.reduce((a, b) => a + (getRealUnitSettings(b).cost == 10? 3 : 1), 0) - 
-            enemyPov._units.reduce((a, b) => a + (getRealUnitSettings(b).cost == 10? 3 : 1), 0);
+            enemyPov._units.reduce((a, b) => a + (getRealUnitSettings(b).cost == 10? 3 : 1), 0)
+        );
         
-        // Cities
-        const city_diff = pov._cities.length - enemyPov._cities.length;
-        
-        // Production
-        const production_diff = 
+        // Cities Production
+        // With a maximum advantage of 20 SPT (stars per turn) = 0.6
+        const production_diff = 0.03 * Math.min(20,
             pov._cities.reduce((x, y) => x + getCityProduction(state, y), 0) - 
-            enemyPov._cities.reduce((x, y) => x + getCityProduction(state, y), 0);
+            enemyPov._cities.reduce((x, y) => x + getCityProduction(state, y), 0)
+        );
+        // 
 
-        return 1.0 * city_diff + 0.1 * unit_diff + production_diff * 0.3;
+        // MAX = 0.6 + 0.25 = 0.85
+        const reward = unit_diff + production_diff;
+
+        return Math.max(-maxReward, Math.min(maxReward, reward)) / 5;
     }
 }

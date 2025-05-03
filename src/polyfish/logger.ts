@@ -29,7 +29,7 @@ export class Logger {
     }
 
     static illegal(moveType: MoveType, reason: string): null {
-        appendFileSync(DEFAULT_LOG_FILE, `${getTimestamp()} - ILLEGAL -${moveType != MoveType.None? MoveType[moveType] + ',' : ''}, ${reason}\n`);
+        appendFileSync(DEFAULT_LOG_FILE, `${getTimestamp()} - ILLEGAL - ${moveType != MoveType.None? MoveType[moveType] + ' ' : ''}${reason}\n`);
         return null;
     }
 }

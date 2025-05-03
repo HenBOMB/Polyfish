@@ -175,7 +175,7 @@ export interface GameState {
 		tribeCount: number,
 		mode: ModeType,
 		_gameOver: boolean,
-		_playedMoves: MoveType[],
+		_recentMoves: MoveType[],
 	};
 	tiles: Record<number, TileState>;
 	structures: Record<number, StructureState | null>;

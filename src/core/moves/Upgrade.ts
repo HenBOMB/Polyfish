@@ -25,7 +25,7 @@ export default class Upgrade extends Move {
         }
 
         if(upgradeType != UnitType.Raft) {
-            return Logger.illegal(MoveType.None, `Upgrade - Unit does not exist: ${UnitType[upgradeType]}`);
+            return Logger.illegal(MoveType.None, `Upgrade - Unit must be a Raft, got: ${UnitType[upgradeType]}`);
         }
         
         const oldUnitType = unit._unitType;

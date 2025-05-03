@@ -62,13 +62,16 @@ def train_network(net: PolytopiaZeroNet, dataset: Dataset, batch_size: int, epoc
     avg_value_loss = np.mean(value_losses)
     return avg_policy_loss, avg_value_loss
 
-def self_train(net: PolytopiaZeroNet, iterations, n_games: int, epochs: int, n_sims: int, temperature: float, cPuct: float, gamma: float, deterministic: bool, batch_size: int, filename: str | None = None):
+def self_train(net: PolytopiaZeroNet, iterations, n_games: int, epochs: int, n_sims: int, 
+    temperature: float, cPuct: float, gamma: float, deterministic: bool, 
+    batch_size: int, dirichlet: bool, rollouts: int, filename: str | None = None, settings: dict = {}
+):
     logger.info("training started")
     logger.info(f"iterations={iterations}, n_games={n_games}, epochs={epochs}, n_sims={n_sims}, temperature={temperature}, cPuct={cPuct}, gamma={gamma}, deterministic={deterministic}, batch_size={batch_size}")
     
     for iteration in range(iterations):
         try:
-            dataset = request_self_play(n_games, n_sims, temperature, cPuct, gamma, deterministic)
+            dataset = request_self_play(n_games, n_sims, temperature, cPuct, gamma, deterministic, dirichlet, rollouts, settings)
             rewards_data = np.array([x[2] for x in dataset])
             logger.info(f"collected {len(dataset)} plays")
             policy, value = train_network(net, dataset, batch_size, epochs)
@@ -81,7 +84,10 @@ def self_train(net: PolytopiaZeroNet, iterations, n_games: int, epochs: int, n_s
         except Exception as e:
             logger.error(e)
 
-def request_train(iterations: int, epochs: int, n_games: int, n_sims: int, temperature: float, cPuct: float, gamma: float, deterministic: bool, batch_size: int, prefix: str):
+def request_train(iterations: int, epochs: int, n_games: int, n_sims: int, 
+    temperature: float, cPuct: float, gamma: float, deterministic: bool, 
+    dirichlet: bool, rollouts: int, prefix: str, settings={}
+):
     return post("http://localhost:3000/train", json={
         "iterations": iterations,
         "n_games": n_games,
@@ -91,11 +97,15 @@ def request_train(iterations: int, epochs: int, n_games: int, n_sims: int, tempe
         "cPuct": cPuct,
         "gamma": gamma,
         "deterministic": deterministic,
-        "batch_size": batch_size,
         "prefix": prefix,
+        "dirichlet": dirichlet,
+        "rollouts": rollouts,
+        "settings": settings,
     }).json()
 
-def request_self_play(n_games: int, n_sims: int, temperature: float, cPuct: float, gamma: float, deterministic: bool, game_settings={}) -> Dataset:
+def request_self_play(n_games: int, n_sims: int, temperature: float, cPuct: float, gamma: float, 
+    deterministic: bool, dirichlet: bool, rollouts: int, settings={}
+) -> Dataset:
     return post("http://localhost:3000/selfplay", json={
         "n_games": n_games,
         "n_sims": n_sims, 
@@ -103,6 +113,8 @@ def request_self_play(n_games: int, n_sims: int, temperature: float, cPuct: floa
         "cPuct": cPuct,
         "gamma": gamma,
         "deterministic": deterministic,
-        "settings": game_settings, 
+        "dirichlet": dirichlet, 
+        "rollouts": rollouts, 
+        "settings": settings, 
     }).json()
 

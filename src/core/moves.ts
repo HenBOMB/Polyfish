@@ -5,10 +5,10 @@ import { ResourceSettings } from "./settings/ResourceSettings";
 import { SkillType, CaptureType, EffectType, ResourceType, RewardType, StructureType, TechnologyType, TerrainType, TribeType, UnitType, AbilityType } from "./types";
 import { TechnologySettings } from "./settings/TechnologySettings";
 import { addPopulationToCity, attackUnit, buildStructure, discoverTiles, freezeArea, harvestResource, healUnit, pushUnit, removeUnit, splashDamageArea, summonUnit } from "./actions";
-import { rewardCapture, rewardTech, rewardUnitAttack, rewardUnitMove } from "../eval/eval";
+import { rewardCapture, rewardTech, rewardUnitAttack, rewardUnitMove } from "../polyfish/eval";
 import { UnitSettings } from "./settings/UnitSettings";
 import { TribeSettings } from "./settings/TribeSettings";
-import Move, { CallbackResult, MoveType } from "./move";
+import Move, { CallbackResult, MoveType, UndoCallback } from "./move";
 import AIState, { MODEL_CONFIG } from "../aistate";
 import { Logger } from "../polyfish/logger";
 import Upgrade from "./moves/Upgrade";
@@ -19,14 +19,6 @@ export interface ReachableNode {
 	index: number;
 	cost: number;
 	terminal?: boolean;
-}
-
-export type UndoCallback = () => void;
-
-export interface Branch {
-	moves?: Move[];
-	chainMoves?: Move[];
-	undo: UndoCallback;
 }
 
 /**
@@ -41,7 +33,8 @@ export function generateAllMoves(state: GameState): Move[] {
 		...generateArmyMoves(state),
 	];
 	if(moves.length > MODEL_CONFIG.max_actions) {
-		console.warn(`Too many actions! ${moves.length}/${MODEL_CONFIG.max_actions}`);
+		Logger.warn(`Too many actions! ${moves.length}/${MODEL_CONFIG.max_actions}`);
+		return moves.slice(0, MODEL_CONFIG.max_actions);
 	}
 	return moves;
 }
@@ -84,7 +77,6 @@ export function generateResourceMoves(state: GameState, cityTarget?: CityState |
 		return [new Move(
 			MoveType.Harvest,
 			targetTileIndex, 0, resource.id,
-			// id: `harvest-${resource.id}-${targetTileIndex}`,
 			(state: GameState) => harvestResource(state, targetTileIndex),
 		)];
 	}
@@ -120,7 +112,6 @@ export function generateResourceMoves(state: GameState, cityTarget?: CityState |
 		moves.push(new Move(
 			MoveType.Harvest,
 			tileIndex, 0, resource.id,
-			// id: `harvest-${resource.id}-${tileIndex}`,
 			(state: GameState) => harvestResource(state, tileIndex),
 		));
 	}
@@ -416,16 +407,15 @@ export default class UnitMoveGenerator {
 		if (!unitTarget || unitTarget._health < 1) return [];
 		const moves: Move[] = [];
 
+		UnitMoveGenerator.captures(state, unitTarget, moves);
+		UnitMoveGenerator.actions(state, unitTarget, moves);
+
 		if (!actionsOnly) {
-			UnitMoveGenerator.steps(state, unitTarget, moves);
 			UnitMoveGenerator.attacks(state, unitTarget, moves);
+			UnitMoveGenerator.steps(state, unitTarget, moves);
 			moves.push(...UnitMoveGenerator.spawns(state));
 		}
-
-		// UnitMoveGenerator.actions(state, unitTarget, moves);
-
-		UnitMoveGenerator.captures(state, unitTarget, moves);
-
+		
 		// ! MCTS EVAL !
 		// Prioritize moves
 		// Capture -> Ability -> Attack -> Step
@@ -435,6 +425,7 @@ export default class UnitMoveGenerator {
 			[MoveType.Ability]: 3,
 			[MoveType.Attack]: 2,
 			[MoveType.Step]: 1,
+			[MoveType.Summon]: 0,
 		};
 		const MAX = 7;
 
@@ -1124,6 +1115,7 @@ export default class UnitMoveGenerator {
 				// If its purchasable, can afford it and is the same type
 				if (!settings.cost 
 					|| tribe._stars < settings.cost 
+					// If it doesnt belong to us
 					|| (settings.tribeType && settings.tribeType != tribe.tribeType)
 				) {
 					continue;
@@ -1162,19 +1154,12 @@ export default class UnitMoveGenerator {
 		}
 
 		if(upgradeOptions.length) {
-			// Get rafts ONLY in territory
-			const upgradableUnits = tribe._units.reduce<UnitState[]>((acc, cur) => {
-				if(cur._unitType != UnitType.Raft) return acc;
-				if(state.tiles[cur._tileIndex]._owner != tribe.owner) return acc;
-				return [...acc, cur];
-			}, []);
-
-			for (let i = 0; i < upgradeOptions.length; i++) {
-				const upgradeType = upgradeOptions[i];
-
-				for (let j = 0; j < upgradableUnits.length; j++) {
-					const unit = upgradableUnits[j];
-					moves.push(new Upgrade(unit._tileIndex, 0, upgradeType))
+			for(let i = 0; i < tribe._units.length; i++) {
+				// Only Rafts in ally territory are upgradable
+				if(tribe._units[i]._unitType != UnitType.Raft) continue;
+				if(state.tiles[tribe._units[i]._tileIndex]._owner != tribe.owner) continue;
+				for (let j = 0; j < upgradeOptions.length; j++) {
+					moves.push(new Upgrade(tribe._units[i]._tileIndex, 0, upgradeOptions[j]))
 				}
 			}
 		}
