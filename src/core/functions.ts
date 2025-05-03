@@ -71,8 +71,9 @@ export function isTileVisible(state: GameState, tileIndex: TileState | number, m
 	return state.tiles[typeof tileIndex === 'number'? tileIndex : tileIndex.tileIndex].explorers.includes(matchOwner || state.settings._pov);
 }
 
-export function isTechLocked(tribe: TribeState, techId: TechnologyType): boolean {
-	return techId === TechnologyType.Unbuildable || !((techId === TechnologyType.None || tribe._tech.some(x => (x === techId))));
+export function isTechResearched(tribe: TribeState, techId: TechnologyType): boolean {
+	if(techId == TechnologyType.Unbuildable) return false;
+	return techId === TechnologyType.None || tribe._tech.some(x => x === techId);
 }
 
 export function isTempleStructure(structType: StructureType) {
@@ -90,7 +91,7 @@ export function getTechTier(tech: TechnologyType): number {
 
 export function getTechCost(tribe: TribeState, techType: TechnologyType): number {
 	let cost = getTechTier(techType) * tribe._cities.length + 4;
-	if(cost != 0 && !isTechLocked(tribe, TechnologyType.Philosophy)) {
+	if(cost != 0 && isTechResearched(tribe, TechnologyType.Philosophy)) {
 		cost = Math.ceil(cost * .77);
 	}
 	return cost;
@@ -333,17 +334,17 @@ export function getDefenseBonus(state: GameState, unit: UnitState): number {
 	switch (state.tiles[unit._tileIndex].terrainType) {
 		case TerrainType.Water:
 		case TerrainType.Ocean:
-			if(!isTechLocked(tribe, TechnologyType.Aquatism)) {
+			if(isTechResearched(tribe, TechnologyType.Aquatism)) {
 				return 1.5;
 			}
 			break;
 		case TerrainType.Forest:
-			if(!isTechLocked(tribe, TechnologyType.Archery)) {
+			if(isTechResearched(tribe, TechnologyType.Archery)) {
 				return 1.5;
 			}
 			break;
 		case TerrainType.Mountain:
-			if(!isTechLocked(tribe, TechnologyType.Climbing)) {
+			if(isTechResearched(tribe, TechnologyType.Climbing)) {
 				return 1.5;
 			}
 		break;
@@ -411,7 +412,7 @@ export function isSteppable(state: GameState, unit: UnitState, tileOrIndex: Tile
 
 	// Mountain
 	if (tile.terrainType === TerrainType.Mountain) {
-		return !isTechLocked(tribe, TechnologyType.Climbing);
+		return isTechResearched(tribe, TechnologyType.Climbing);
 	}
 
 	const isAquatic = overrideAquatic? true : isAquaticOrCanFly(unit, false);
@@ -420,7 +421,7 @@ export function isSteppable(state: GameState, unit: UnitState, tileOrIndex: Tile
 	const isPort = state.structures[tile.tileIndex]?.id === StructureType.Port;
 	if (isPort) {
 		// Sailing must be unlocked to enter a port
-		if(!isTechLocked(tribe, TechnologyType.Sailing)) return false;
+		if(isTechResearched(tribe, TechnologyType.Sailing)) return false;
 		return isAquatic || !isAquatic && tile._owner === unit._owner;
 	}
 	
@@ -436,7 +437,7 @@ export function isSteppable(state: GameState, unit: UnitState, tileOrIndex: Tile
 		}
 
 		// Shallow requires fishing, ocean requires sailing
-		return !isTechLocked(tribe, tile.terrainType === TerrainType.Water? TechnologyType.Fishing : TechnologyType.Sailing);
+		return isTechResearched(tribe, tile.terrainType === TerrainType.Water? TechnologyType.Fishing : TechnologyType.Sailing);
 	}
 
 	return true;
@@ -445,13 +446,13 @@ export function isSteppable(state: GameState, unit: UnitState, tileOrIndex: Tile
 export function isTribeSteppable(state: GameState, tileIndex: number) {
 	switch (state.tiles[tileIndex].terrainType) {
 		case TerrainType.Water:	
-			return !isTechLocked(state.tribes[state.settings._pov], TechnologyType.Fishing);
+			return isTechResearched(state.tribes[state.settings._pov], TechnologyType.Fishing);
 			
 		case TerrainType.Ocean:	
-			return !isTechLocked(state.tribes[state.settings._pov], TechnologyType.Sailing);
+			return isTechResearched(state.tribes[state.settings._pov], TechnologyType.Sailing);
 
 		case TerrainType.Mountain:	
-			return !isTechLocked(state.tribes[state.settings._pov], TechnologyType.Climbing);
+			return isTechResearched(state.tribes[state.settings._pov], TechnologyType.Climbing);
 
 		default:
 			return true;

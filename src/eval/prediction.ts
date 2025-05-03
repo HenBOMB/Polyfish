@@ -1,4 +1,4 @@
-import { calculateDistance, getCapitalCity, getEnemiesNearTile, getNeighborIndexes, getPovTribe, isResourceVisible, isSkilledIn, isTechLocked, isTribeSteppable } from "../core/functions";
+import { calculateDistance, getCapitalCity, getEnemiesNearTile, getNeighborIndexes, getPovTribe, isResourceVisible, isTribeSteppable } from "../core/functions";
 import { CityState, GameState } from "../core/states";
 import { SkillType, ClimateType, ModeType, RewardType, StructureType, TechnologyType, TerrainType, TribeType, Climate2Tribe } from "../core/types";
 

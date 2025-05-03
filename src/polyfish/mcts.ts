@@ -247,11 +247,13 @@ export class MCTS {
 			return isGameWon(game.state) ? 1 : isGameLost(game.state) ? -1 : 0;
 		}
 
-		// Shaped reward from potential delta
-		const newPot = AIState.calculatePotential(game.state);
-		const shapedR = newPot - prevPot;
+		return 0;
 
-		return shapedR;
+		// // Shaped reward from potential delta
+		// const newPot = AIState.calculatePotential(game.state);
+		// const shapedR = newPot - prevPot;
+
+		// return shapedR;
 	}
 	
 	async search(nSims: number): Promise<MCTSNode> {
@@ -301,8 +303,8 @@ export async function SelfPlay(
 	temperature: number,
 	cPuct: number,
 	gamma: number,
-	deterministic = false,
-	dirichlet: boolean = true,
+	deterministic: boolean,
+	dirichlet: boolean,
 	rollouts: number,
 	settings: GameSettings,
 ): Promise<Array<[any, number[], number]>> {
@@ -343,12 +345,6 @@ export async function SelfPlay(
 					: sampleFromDistribution(probs);
 			}
 			
-			// // Last reward is always terminal
-			// if(isGameOver(game.state)) {
-			// 	episode.push({ obs, pi, r: isGameWon(game.state)? 1 : isGameLost(game.state)? -1 : 0, pov: getPovTribe(game).owner });
-			// 	break;
-			// }
-			
 			const movesPlayed = game.playMove(moveIndex)!;
 			
 			// Make sure move was legal
@@ -383,14 +379,7 @@ export async function SelfPlay(
 			trainingData.push([obs, pi, signedG]);
 		}	
 
-		if(isGameWon(game.state)) {
-			winRate.push(1);
-		}
-		else {
-			winRate.push(0);
-		}
-
-		winRate = winRate.slice(-10);
+		winRate.push(isGameWon(game.state) || isGameLost(game.state)? 1 : 0);
 
 		Logger.log(`Finished game (${(i+1)}/${nGames})`);
 		Logger.log(`state: ${isGameWon(game.state)? 'Won' :isGameLost(game.state)? 'Lost' : 'Truncated'}`);

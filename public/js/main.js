@@ -708,7 +708,11 @@ function changePov(element) {
 }
 
 async function autoStep() {
-    const result = await fetch('/autostep', { method: 'POST', body: JSON.stringify({ state, mcts: true }), headers: { 'Content-Type': 'application/json' } }).then(x => x.json());
+    const result = await fetch('/autostep', { method: 'POST', body: JSON.stringify({
+        state, 
+        mcts: true,
+        iterations: 1000,
+    }), headers: { 'Content-Type': 'application/json' } }).then(x => x.json());
     if(result.error) {
         return alert(result.error);
     }
@@ -727,7 +731,7 @@ async function autoStep() {
     generateMap(result.state);
 }
 
-fetch('/random?size=9').then(x => x.json()).then(x => {
+fetch('/random?size=9&tribes=Imperius,Imperius').then(x => x.json()).then(x => {
     state = x.state;
 
     POV = state.settings._pov;

@@ -1,5 +1,5 @@
 import { CityState, GameState, TileState, UnitState } from "./states";
-import { getNeighborTiles, getTerritorryTiles, isTechLocked, isResourceVisible, getNeighborIndexes, isAdjacentToEnemy, isAquaticOrCanFly, isSteppable, isWaterTerrain, getEnemiesInRange, isNavalUnit, getTechCost, getPovTribe, isSkilledIn, getCapitalCity, getRealUnitSettings, getUnitSettings, getUnitRange, getUnitAttack, getUnitMovement, isRoadpathAndUsable, getTrueUnitAtTile, getUnitAtTile, getHomeCity, isInvisible, getMaxHealth, isInTerritory, getAlliesNearTile, getRealUnitType } from './functions';
+import { getNeighborTiles, getTerritorryTiles, isResourceVisible, getNeighborIndexes, isAdjacentToEnemy, isAquaticOrCanFly, isSteppable, isWaterTerrain, getEnemiesInRange, isNavalUnit, getTechCost, getPovTribe, isSkilledIn, getCapitalCity, getRealUnitSettings, getUnitAttack, getUnitMovement, isRoadpathAndUsable, getTrueUnitAtTile, getUnitAtTile, getHomeCity, isInvisible, getMaxHealth, isInTerritory, getAlliesNearTile, getRealUnitType, isTechResearched } from './functions';
 import { StructureByTerrain, StructureSettings } from "./settings/StructureSettings";
 import { ResourceSettings } from "./settings/ResourceSettings";
 import { SkillType, CaptureType, EffectType, ResourceType, RewardType, StructureType, TechnologyType, TerrainType, TribeType, UnitType, AbilityType } from "./types";
@@ -104,7 +104,7 @@ export function generateResourceMoves(state: GameState, cityTarget?: CityState |
 		if(tile._unitOwner > 0 && tile._unitOwner != tribe.tribeType) continue;
 
 		// Resource is unharvestable
-		if(isTechLocked(tribe, settings.techRequired)) continue;
+		if(!isTechResearched(tribe, settings.techRequired)) continue;
 
 		// Resource is limited by tech visibility
 		if(!isResourceVisible(tribe, resource.id)) continue;
@@ -144,7 +144,7 @@ export function generateStructureMoves(state: GameState, cityTarget?: CityState 
 
 			if((settings.cost || 0) > tribe._stars) continue;
 
-			if(isTechLocked(tribe, settings.techRequired)) continue;
+			if(!isTechResearched(tribe, settings.techRequired)) continue;
 
 			// ! Resource is required (and is visible)
 			if(settings.resourceType) {
@@ -234,7 +234,10 @@ export function generateTechMoves(state: GameState, techType?: TechnologyType): 
 	for(const techId of Object.keys(TechnologySettings)) {
 		const unlockedTech: TechnologyType = Number(techId);
 
-		if(unlockedTech == TechnologyType.Unbuildable) continue;
+		if(unlockedTech == TechnologyType.Unbuildable || unlockedTech == TechnologyType.None) continue;
+
+		// ! Already unlocked
+		if(isTechResearched(tribe, unlockedTech)) continue;
 
 		if(dissalowed.includes(unlockedTech)) continue;
 
@@ -247,11 +250,8 @@ export function generateTechMoves(state: GameState, techType?: TechnologyType): 
 		// ! Owner doesnt match
 		if(settings.tribeType && settings.tribeType != tribe.tribeType) continue;
 
-		// ! Already unlocked
-		if(!isTechLocked(tribe, unlockedTech)) continue;
-
 		// ! Previous tier tech not unlocked
-		if(settings.requires && isTechLocked(tribe, settings.requires)) continue;
+		if(settings.requires && !isTechResearched(tribe, settings.requires)) continue;
 
 		const cost = getTechCost(tribe, unlockedTech);
 
@@ -444,7 +444,7 @@ export default class UnitMoveGenerator {
 		const moves = [];
 
 		// Disband
-		if(!isTechLocked(getPovTribe(state), TechnologyType.FreeSpirit)) {
+		if(isTechResearched(getPovTribe(state), TechnologyType.FreeSpirit)) {
 			moves.push(new Move(
 				MoveType.Ability,
 				AbilityType.Disband, 0, 0,
@@ -751,7 +751,7 @@ export default class UnitMoveGenerator {
 
 					// If Tech tree is not completed
 					// +10 stars
-					if (us._tech.some(x => TechnologySettings[x].next && TechnologySettings[x].next.some(x => isTechLocked(us, x)))) {
+					if (us._tech.some(x => TechnologySettings[x].next && TechnologySettings[x].next.some(x => !isTechResearched(us, x)))) {
 						potentialRewards += 1;
 					}
 					// If player owns a capital city
@@ -810,7 +810,7 @@ export default class UnitMoveGenerator {
 				},
 			);
 		}
-		else if (resource && resource.id == ResourceType.Starfish && !isTechLocked(us, TechnologyType.Navigation)) {
+		else if (resource && resource.id == ResourceType.Starfish && isTechResearched(us, TechnologyType.Navigation)) {
 			move = new Move(
 				MoveType.Capture,
 				sieger._tileIndex, 0, CaptureType.Starfish,
@@ -903,17 +903,17 @@ export default class UnitMoveGenerator {
 					if(tile._unitOwner > 0 || x == cityIndex) return;
 					switch (tile.terrainType) {
 						case TerrainType.Mountain:
-							if(!isTechLocked(tribe, TechnologyType.Climbing)) {
+							if(isTechResearched(tribe, TechnologyType.Climbing)) {
 								defTiles.push(x);
 							}
 							return
 						case TerrainType.Forest:
-							if(!isTechLocked(tribe, TechnologyType.Archery)) {
+							if(isTechResearched(tribe, TechnologyType.Archery)) {
 								defTiles.push(x);
 							}
 							return
 						case TerrainType.Water:
-							if(!isTechLocked(tribe, TechnologyType.Sailing)) {
+							if(isTechResearched(tribe, TechnologyType.Sailing)) {
 								waterTiles.push(x);
 							}
 							return

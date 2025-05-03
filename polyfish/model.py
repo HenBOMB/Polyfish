@@ -80,8 +80,7 @@ def self_train(net: PolytopiaZeroNet, iterations, n_games: int, epochs: int, n_s
             if filename:
                 if iteration % 2 == 0:
                     torch.save(net.state_dict(), f"{filename}-{iteration}.zip")
-                else:
-                    torch.save(net.state_dict(), f"{filename}-latest.zip")
+                torch.save(net.state_dict(), f"{filename}-latest.zip")
         except Exception as e:
             logger.error(e)
 

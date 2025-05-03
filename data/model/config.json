@@ -6,7 +6,7 @@
     "tile_channels": 19,
     "max_actions": 250,
     "max_stars": 100,
-    "max_turns": 30,
+    "max_turns": 10,
     "settings_channels": 3,
     "max_score": 50000
 }
