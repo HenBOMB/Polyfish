@@ -1,11 +1,9 @@
 import AIState from "./aistate";
-import { isGameOver } from "./core/functions";
 import GameLoader from "./core/gameloader";
 import { UndoCallback } from "./core/move";
 import { MoveGenerator } from "./core/moves";
+import { MoveType } from "./core/types";
 import Game from "./game";
-
-let finishedComputing = true;
 
 export function deepCompare<T>(a: T, b: T, key: string, ignoreObjKeyLength?: boolean) {
     let success = true;
@@ -40,8 +38,7 @@ export function deepCompare<T>(a: T, b: T, key: string, ignoreObjKeyLength?: boo
     return success;
 }
 
-export default async function main() {
-    const loader = new GameLoader();
+export default async function main(loader: GameLoader) {
     await loader.loadRandom();
     // console.time('test');
     // console.log(await predict(loader.currentState));
@@ -57,25 +54,56 @@ export default async function main() {
 
     const superchain: UndoCallback[] = [];
 
-    while(!isGameOver(game.state)) {
-        const moves = MoveGenerator.legal(game.state);
+    // while(!isGameOver(game.state)) {
+    //     const moves = MoveGenerator.legal(game.state);
+    //     const move = moves[Math.floor(Math.random() * moves.length)];
+    //     const result = game.playMove(move);
+
+    //     if(result) {
+    //         const [ played, undo ] = result;
+    //         console.log(played.stringify(game.stateBefore, game.state));
+    //         superchain.push(undo);            
+    //     }
+
+    //     depth--;
+        
+    //     if(depth === 0) {
+    //         // console.log(moves.map(x => x.stringify(game.stateBefore, game.state)));
+    //         break;
+    //     }
+    // }
+
+    const sequence = [
+        // MoveType.Step,
+        // MoveType.EndTurn,
+        // MoveType.Step,
+        MoveType.Harvest,
+        // MoveType.EndTurn,
+    ];
+
+    for(const moveType of sequence) {
+        const moves = MoveGenerator.legal(game.state).filter(x => x.moveType == moveType);
         const move = moves[Math.floor(Math.random() * moves.length)];
         const result = game.playMove(move);
-
+        
         if(result) {
             const [ played, undo ] = result;
-            console.log(played.stringify(game.stateBefore, game.state));
+            // console.log(played.stringify(game.stateBefore, game.state));
             superchain.push(undo);            
-        }
-
-        depth--;
-        
-        if(depth === 0) {
-            console.log(moves.map(x => x.stringify(game.stateBefore, game.state)));
-            break;
         }
     }
 
+    console.log('--- moves --');
+    console.log(game.state.settings._pov);
+    MoveGenerator.legal(game.state).forEach(x => 
+        console.log(x.stringify(game.stateBefore, game.state))
+    );
+    console.log('--- moves --');
+
+    loader.currentState = game.state;
+
+    return;
+    
     superchain.reverse().forEach(x => x());
 
     deepCompare(
@@ -95,10 +123,9 @@ export default async function main() {
             t: game.state.tiles, 
             T: game.state.tribes
         } },
-        'state'
+        'state',
+        true
     );
-
-    console.log(superchain.length);
 
     // loader.loadFromSpawnNotation(
     //     'domination,0,30,1'
@@ -239,12 +266,3 @@ export default async function main() {
     //     console.log('\n---DEEP COMPARE FAILED---');
     // }
 }
-
-// const interval = setInterval(() => {
-//     main();
-// }, 3 * 1000);
-
-// process.on('SIGINT', () => {
-//     clearInterval(interval);
-//     process.exit(2);
-// });

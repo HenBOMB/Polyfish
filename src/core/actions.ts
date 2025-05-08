@@ -315,7 +315,7 @@ export function buildStructure(state: GameState, strctureType: StructureType, ti
         tribe._stars += rewardStarCount;
     }
 
-    settings.task && tribe._builtUniqueStructures.pop();
+    settings.task && tribe._builtUniqueStructures.push(strctureType);
 
     const popBranch = addPopulationToCity(state, rulingCity, rewardPopCount);
    

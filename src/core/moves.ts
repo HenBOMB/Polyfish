@@ -90,11 +90,13 @@ export class MoveGenerator {
 			return state.settings._pendingRewards;
 		}
 
-		return [
-			new EndTurn(),
-			...ArmyMovesGenerator.all(state),
-			...EconMovesGenerator.all(state),
-		];
+		const moves: Move[] = [new EndTurn()];
+
+		ArmyMovesGenerator.all(state, moves);
+
+		EconMovesGenerator.all(state, moves);
+
+		return moves;
 	}
 
 	static legalActions(state: GameState): Action[] {
@@ -103,15 +105,11 @@ export class MoveGenerator {
 }
 
 export class EconMovesGenerator {
-	static all(state: GameState): Move[] {
-		const moves: Move[] = [];
-		
+	static all(state: GameState, moves: Move[]) {
 		EconMovesGenerator.actions(state, moves);
 		EconMovesGenerator.resources(state, moves);
 		EconMovesGenerator.structures(state, moves);
 		EconMovesGenerator.research(state, moves);
-
-		return moves;
 	}
 
 	static actions(state: GameState, moves: Move[]) {
@@ -218,9 +216,7 @@ interface ReachableNode {
 }
 
 export class ArmyMovesGenerator {
-	static all(state: GameState): Move[] {
-		const moves: Move[] = [];
-
+	static all(state: GameState, moves: Move[]) {
 		getPovTribe(state)._units.forEach(x => {
 			if(x._health > 0) {
 				ArmyMovesGenerator.captures(state, x, moves);
@@ -229,10 +225,7 @@ export class ArmyMovesGenerator {
 				ArmyMovesGenerator.steps(state, x, moves);
 			}
 		});
-		
 		ArmyMovesGenerator.summons(state, moves);
-
-		return moves;
 	}
 
 	static actions(state: GameState, unit: UnitState, _moves: Move[]) {
@@ -386,22 +379,17 @@ export class ArmyMovesGenerator {
 		return moves;
 	}
 
-	static steps(state: GameState, unit: UnitState, moves?: Move[] | null, targetTileIndex?: number): Move[] | null {
-		if (unit._moved) return [];
+	static steps(state: GameState, unit: UnitState, moves: Move[]) {
+		if (unit._moved) return;
 
-		moves = moves || [];
+		const steps = Array.from(ArmyMovesGenerator.computeReachableTiles(state, unit).values());
 
-		const steps = targetTileIndex ? [[targetTileIndex, 1]] : Array.from(ArmyMovesGenerator.computeReachableTiles(state, unit).entries());
-
-		for (const [tileIndex, cost] of steps) {
+		for (const tileIndex of steps) {
 			if (unit._tileIndex == tileIndex) {
 				continue;
 			}
-		
 			moves.push(new Step(unit._tileIndex, tileIndex));
 		}
-
-		return moves;
 	}
 
 	static computeStep(state: GameState, stepper: UnitState, toTileIndex: number, forced = false): CallbackResult {
@@ -446,18 +434,17 @@ export class ArmyMovesGenerator {
 
 		// Apply movement skills
 
-		// Stomp
+		// TODO what other skills are missing?
 
+		// Stomp
 		if(isSkilledIn(stepper, SkillType.Stomp)) {
 			chain.push(splashDamageArea(state, stepper, 4));
 		}
 
 		// AutoFreeze
-
 		chain.push(freezeArea(state, stepper));
 
 		// Discover terrain
-
 		const preLighthouseCount = state._lighthouses.length;
 		const resultDiscover = discoverTiles(state, stepper)!;
 		rewards.push(...resultDiscover.rewards);
@@ -561,6 +548,7 @@ export class ArmyMovesGenerator {
 	*/
 	static computeReachableTiles(state: GameState, unit: UnitState): Map<number, number> {
 		const effectiveMovement = getUnitMovement(unit);
+		
 		const reachable = new Map<number, number>();
 		const openList: ReachableNode[] = [];
 

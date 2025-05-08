@@ -14,14 +14,15 @@ import { MoveGenerator } from "./src/core/moves";
 import main from "./src/main";
 
 const app = express();
-const py = spawn(".venv/bin/python3", ["polyfish/main.py"]);
+const py = {} as any;//spawn(".venv/bin/python3", ["polyfish/main.py"]);
 type Task = { data: string, resolve: (value: Prediction) => void };
 const queue: Task[] = [];
 let current: Task | null = null;
+const loader = new GameLoader();
 
-py.stderr.on("data", (data) => {
-    console.log(data.toString());
-})
+// py.stderr.on("data", (data: any) => {
+//     console.log(data.toString());
+// })
 
 const next = () => {
     if(current) {
@@ -34,7 +35,7 @@ const next = () => {
         return;
     }
     
-    py.stdout.once("data", (data) => {
+    py.stdout.once("data", (data: any) => {
         try {
             current!.resolve(JSON.parse(data.toString()));
         } catch (error) {
@@ -77,8 +78,9 @@ app.get('/random', async (req: Request, res: Response) => {
     if(req.query.tribes) {
         settings.tribes = String(req.query.tribes || "Imperius,Bardur").split(',').map(x => TribeType[x.trim() as keyof typeof TribeType]) as TribeType[];
     }
-    const loader = new GameLoader(settings);
-    const state = await loader.loadRandom();
+    // const loader = new GameLoader(settings);
+    // const state = await loader.loadRandom();
+    const state = loader.currentState;
     res.json({
         state,
         obs: AIState.extract(state),
@@ -246,5 +248,5 @@ app.listen(3000, async () => {
     Logger.clear();
     console.log(`INITIALIZED ON PORT 3000\n`);
     console.log('FOW DISABLED\n');
-    main();
+    main(loader);
 });

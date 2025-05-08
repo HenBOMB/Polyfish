@@ -5,17 +5,20 @@ import { ResourceSettings } from "./settings/ResourceSettings";
 import { UnitSettings } from "./settings/UnitSettings";
 import { TechnologyReplacements, TechnologySetting, TechnologySettings } from "./settings/TechnologySettings";
 import Game from "../game";
+import { UndoCallback } from "./move";
 
 /**
  * Attempts to discover any undiscovered tribes and overrides the passed state
  * @param state 
  * @returns if the disovery was successfull
  */
-export function tryDiscoverRewardOtherTribes(state: GameState): boolean {
+export function tryDiscoverRewardOtherTribes(state: GameState): UndoCallback {
 	const us = getPovTribe(state);
 
 	// Already discovered all the tribes or all the tiles
-	if(us._knownPlayers.length == state.settings.tribeCount) return false;
+	if(us._knownPlayers.length == state.settings.tribeCount) {
+		return () => { };
+	}
 
 	const tribesMet: number[] = [];
 
@@ -33,11 +36,19 @@ export function tryDiscoverRewardOtherTribes(state: GameState): boolean {
 		}
 	});
 
+	const chain: UndoCallback[] = [];
+
 	// Reward stars for met tribes
 	tribesMet.forEach(owner => {
 		const them = state.tribes[owner];
+		const stars = getStarExchange(state, them);
 		us._knownPlayers.push(owner);
-		us._stars += getStarExchange(state, them);
+		us._stars += stars;
+
+		chain.push(() => {
+			us._knownPlayers.pop();
+			us._stars -= stars;
+		});
 
 		if(them._knownPlayers.includes(us.owner)) {
 			return;
@@ -46,14 +57,21 @@ export function tryDiscoverRewardOtherTribes(state: GameState): boolean {
 		// If they also too just met us
 		for(const unit of us._units) {
 			if(state.tiles[unit._tileIndex]._explorers.includes(them.owner)) {
+				const stars = getStarExchange(state, us);
 				them._knownPlayers.push(us.owner);
-				them._stars += getStarExchange(state, us);
+				them._stars += stars;
+				chain.push(() => {
+					them._knownPlayers.pop();
+					them._stars -= stars;
+				});
 				break;
 			}
 		}
 	});
 
-	return true;
+	return () => {
+		chain.reverse().forEach(x => x());
+	}
 }
 
 export function indexToCoord(state: GameState, tileIndex: number) {

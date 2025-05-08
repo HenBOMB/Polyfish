@@ -35,6 +35,10 @@ export default class Game {
     }
 
     playMove(moveOrIndex: number | Move): [Move, UndoCallback] | null {
+        if(this.state.settings._gameOver) {
+            return null;
+        }
+
         this.stateBefore = cloneState(this.state);
 
         const move = typeof moveOrIndex == "number" ? MoveGenerator.legal(this.state)[moveOrIndex] : moveOrIndex;
@@ -44,12 +48,7 @@ export default class Game {
 
         if(move.moveType === MoveType.EndTurn) {
             // TODO how about updating the state in here? to compare start to end of current turn?
-            this.endTurn();
-            // TODO make compatible and undo EVERYTHIN!
-            const state = cloneState(this.stateBefore)
-            undo = () => {
-                this.state = state;
-            }
+            undo = this.endTurn();
             this.state.settings._recentMoves = [];
         }
         else {
@@ -130,62 +129,88 @@ export default class Game {
     // }
     
     /**
-     * Ends the current tribe's turn. Overwrites the passed state. Can NOT be undone 
+     * Ends the current tribe's turn
      */
-    endTurn() {
-        // TODO Add relations? (for polytopia default bots)
+    endTurn(): UndoCallback {
+        const state = this.state;
 
-        // Cycle turns without overflow
+        // TODO Add relations? (for polytopia default bots)
+        const chain: UndoCallback[] = [];
+
+        // Cycles turns without overflow
         const nextPov = () => {
             // Continue with next tribe
-            this.state.settings._pov += 1;
+            state.settings._pov += 1;
             // If overflowing, go back to start
-            if(this.state.settings._pov > this.state.settings.tribeCount) {
-                this.state.settings._pov = STARTING_OWNER_ID;
+            if(state.settings._pov > state.settings.tribeCount) {
+                state.settings._pov = STARTING_OWNER_ID;
             }
         }
+        
+        const oldpov = state.settings._pov;
+        const oldTurn = state.settings._turn;
+
+        chain.push(() => {
+            state.settings._pov = oldpov;
+            state.settings._turn = oldTurn;
+        });
 
         nextPov();
 
-        let povTribe = getPovTribe(this.state);
+        let pov = getPovTribe(state);
 
         // Search for the next tribe
-        while(povTribe._killedTurn > 0 || povTribe._resignedTurn > 0) {
+        while(pov._killedTurn > 0 || pov._resignedTurn > 0) {
             nextPov();
-            povTribe = getPovTribe(this.state);
+            pov = getPovTribe(state);
         }
 
         // If we are back at the start, a new turn has started
-        if(this.state.settings._pov === STARTING_OWNER_ID) {
-            this.state.settings._turn++;
+        if(state.settings._pov === STARTING_OWNER_ID) {
+            state.settings._turn++;
         }
 
-        // Properly wait for new turn and check if the game has ended
-        if(isGameOver(this.state)) {
-            this.state.settings._gameOver = true;
-            return;
+        // Dont continue if the game has ended
+        if(isGameOver(state)) {
+            state.settings._gameOver = true;
+            return () => {
+                state.settings._gameOver = false;
+                chain.reverse().forEach(x => x());
+            }
         }
 
-        // TODO BOOST LOGIC
-        // The Shaman, a unit unique to the Cymanti tribe, can boost friendly units. Boosted units get +0.5 attack and +1 movement. This effect lasts until the boosted unit attacks another unit, is attacked, uses most abilities, examines a ruin, captures a village/city, or is poisoned.
-        // TODO POISON LOGIC
-        // Poison is applied by Cymanti units and buildings. It reduces defence by 30%, prevents the unit from being healed, prevents the unit from receiving any defence bonus, and causes the unit to drop spores (on land) or Algae (in water) upon death. Poison can be removed by healing once. This can be through self-healing, a Mind Bender, or a Mycelium. When healed in this way, the poison is removed but the unit does not get any health back.
+        // New tribe POV
 
-        // Reward tribe with its production
-        // EXCEPT IF THE GAME HAS JUST STARTED!
-        if(this.state.settings._turn > 1) {
-            povTribe._stars += getCityProduction(this.state, ...povTribe._cities);
+        const oldStars = pov._stars;
+
+        // Reward tribe with its production if its not the first turn
+        if(state.settings._turn > 1) {
+            pov._stars += getCityProduction(state, ...pov._cities);
         }
         
+        chain.push(() => {
+            pov._stars = oldStars;
+        });
+
         // Update all unit states
-		for (let i = 0; i < povTribe._units.length; i++) {
-			const unit = povTribe._units[i];
+		for (let i = 0; i < pov._units.length; i++) {
+			const unit = pov._units[i];
+            const moved = unit._moved;
+            const attacked = unit._attacked;
+
+            chain.push(() => {
+                unit._moved = moved;
+                unit._attacked = attacked;
+            });
 
             // Frozen units get unfrozen but that consumes their turn
-            // NOTE not in wiki but i assume this is how it works
+            // not in wiki but i assume this is how it works from gameplay
 			if(isFrozen(unit)) {
-                // Remove ONLY the frozen effect
-				unit._effects.splice(unit._effects.indexOf(EffectType.Frozen), 1);
+                const index = unit._effects.indexOf(EffectType.Frozen);
+				unit._effects.splice(index, 1);
+                chain.push(() => {
+                    unit._effects.splice(index, 0, EffectType.Frozen);
+                });
 				unit._moved = unit._attacked = true;
 				continue;
 			}
@@ -194,50 +219,34 @@ export default class Game {
 		}
 
         // Trigger disovery if some other tribes moved into our visible terrain
-        tryDiscoverRewardOtherTribes(this.state);
+        chain.push(tryDiscoverRewardOtherTribes(state));
 
-        this.updatePov();
-    }
+        // Update the new tribe's visibility
+        const visible = [...state._visibleTiles];
+        const lighthouses = [...state._lighthouses];
 
-    /**
-     * Updates the state's POV
-     * @param state 
-     * @param pov
-     */
-    public updatePov() {
-        let pov = this.state.settings._pov;
+        chain.push(() => {
+            state._visibleTiles = visible;
+            state._lighthouses = lighthouses;
+        });
 
-        if(pov > this.state.settings.tribeCount) {
-            pov = STARTING_OWNER_ID;
-        }
-       
-        this.state.settings._pov = pov;
-        this.state._visibleTiles = [];
+        state._visibleTiles = [];
 
-        Object.values(this.state.tiles).forEach(tile => {
-            if(tile._explorers.includes(pov)) {
-                this.state._visibleTiles.push(tile.tileIndex);
+        Object.values(state.tiles).forEach(tile => {
+            if(tile._explorers.includes(pov.owner)) {
+                state._visibleTiles.push(tile.tileIndex);
             }
         });
 
-        this.state._lighthouses = [
+        state._lighthouses = [
             0,
-            this.state.settings.size - 1,
-            this.state.settings.size * this.state.settings.size - 1,
-            1 + this.state.settings.size * this.state.settings.size - this.state.settings.size
-        ].filter(x => !this.state.tiles[x]._explorers.includes(pov));
+            state.settings.size - 1,
+            state.settings.size * state.settings.size - 1,
+            1 + state.settings.size * state.settings.size - state.settings.size
+        ].filter(x => !state.tiles[x]._explorers.includes(pov.owner));
 
-        this.state = {
-            ...this.state,
-            _potentialDiscovery: [],
-            _potentialArmy: 0,
-            _potentialTech: 0,
-            _potentialEconomy: 0,
-            _scoreArmy: 0,
-            _scoreTech: 0,
-            _scoreEconomy: 0,
-            __: 0,
-            ___: 0,
+        return () => {
+            chain.reverse().forEach(x => x());
         }
     }
 }
