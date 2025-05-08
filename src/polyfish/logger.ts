@@ -1,7 +1,9 @@
 import { appendFileSync, writeFileSync } from "fs";
-import Move, { MoveType } from "../core/move";
-import { TribeState } from "../core/states";
+import Move from "../core/move";
+import { MoveType } from "../core/types";
+import { GameState, TribeState } from "../core/states";
 import { TribeType } from "../core/types";
+import { getPovTribe } from "../core/functions";
 
 export const DEFAULT_LOG_FILE = 'training.poly.log';
 export const DEFAULT_TIME_FORMAT = 'HH:mm:ss';
@@ -24,9 +26,10 @@ export class Logger {
         return null;
     }
 
-    static logPlay(tribe: TribeState, score: number, ...moves: Move[]): null {
-        const name = TribeType[tribe.tribeType];
-        appendFileSync(DEFAULT_LOG_FILE, `${tribe.owner} - ${name} - ${moves.map(x => x.stringify()).join(', ')} (${score})\n`);
+    static logPlay(oldState: GameState, newState: GameState, moves: Move[], scores: number[]): null {
+        const pov = getPovTribe(oldState);
+        const name = TribeType[pov.tribeType];
+        appendFileSync(DEFAULT_LOG_FILE, `${pov.owner} - ${name} - ${moves.map(x => x.stringify(oldState, newState).toLowerCase()).join(', ')} (${scores.map(x => x.toFixed(4)).join(', ')})\n`);
         return null;
     }
 

@@ -1,10 +1,11 @@
 import { MODEL_CONFIG } from "../aistate";
-import { MoveType } from "./move";
+import Move from "./move";
+import { MoveType } from "./types";
 import { TerrainType, ResourceType, TribeType, StructureType, UnitType, TechnologyType, RewardType, EffectType, ModeType, ClimateType } from "./types";
 
 export interface TileState {
 	terrainType: TerrainType;
-	explorers: number[];
+	_explorers: number[];
 	hasRoad: boolean;
 	hasRoute: boolean;
 	hadRoute: boolean;
@@ -26,15 +27,11 @@ export interface StructureState {
 	turn: number;
 	reward: number;
 	tileIndex: number;
-	_name: string;
-	_owner: number;
-	_potentialTerritory?: number[];
 }
 
 export interface ResourceState {
 	id: ResourceType;
 	tileIndex: number;
-	_owner: number;
 }
 
 export interface AbilityState {
@@ -64,7 +61,6 @@ export interface UnitState {
 	_health: number;
 	veteran?: boolean;
 	kills: number;
-	// class: UnitClass;
 	prevX: number;
 	prevY: number;
 	direction: number;
@@ -75,7 +71,6 @@ export interface UnitState {
 	_homeIndex: number;
 	_tileIndex: number;
 	_boosted?: boolean;
-	_hidden?: boolean;
 	_moved: boolean;
 	_attacked: boolean;
 	_effects: EffectType[];
@@ -137,11 +132,10 @@ export interface TribeState {
 	_killerId: number;
 	_kills: number;
 	_casualties: number;
-	_tech: TechnologyType[];
+	/** List of all unlcocked TIER `TechnologyType`, not special tech (eg `TechnologyType.ShockTactics`) */
+	_tech: TechnologyState[];
 	_cities: CityState[];
 	_units: UnitState[];
-	_resources: number[],
-	_trueTech: TechnologyType[];
 	relations: Record<number, DiplomacyRelationState>;
 	_killedTurn: number; 
 	_resignedTurn: number;
@@ -155,8 +149,13 @@ export interface GameSettings {
 	tribes: TribeType[] 
 }
 
+export interface TechnologyState { 
+	techType: TechnologyType,
+	discovered: boolean,
+}
+
 export const DefaultGameSettings: Readonly<GameSettings> = {
-	size: MODEL_CONFIG.max_size,
+	size: MODEL_CONFIG.dim_map_size,
 	mode: ModeType.Domination,
 	maxTurns: MODEL_CONFIG.max_turns,
 	seed: undefined,
@@ -171,12 +170,13 @@ export interface GameState {
 		_turn: number;
 		maxTurns: number;
 		_pov: number;
-		live: boolean;
+		areYouSure: boolean;
 		unitIdx: number;
 		tribeCount: number,
 		mode: ModeType,
 		_gameOver: boolean,
 		_recentMoves: MoveType[],
+		_pendingRewards: Move[],
 	};
 	tiles: Record<number, TileState>;
 	structures: Record<number, StructureState | null>;
@@ -202,4 +202,18 @@ export interface PredictionState {
 	_terrain?: { [tileIndex: number]: [TerrainType, ClimateType] };
 	_enemyCapitalSuspects?: number[];
 	_cityRewards: RewardType[];
+}
+
+export interface CombatResult {
+	/** Damage dealt by the attacker */
+	attackDamage: number;
+	/**
+	 * Damage dealt by the defender as retaliation.
+	 * When defender dies this is 0.
+	 */
+	defenseDamage: number;
+	/**
+	 * The splash damage calculated from the attacker’s damage. (float)
+	 */
+	splashDamage: number;
 }

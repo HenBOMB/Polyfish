@@ -11,7 +11,7 @@ export enum TerrainType {
 	Mountain		= 4,
 	Forest 			= 5,
 	Ice 			= 6,
-	GroundWater		= 7, // used by task structures, empty land tile and shallow water
+	Capital			= 7,
 }
 
 export enum TechnologyType {
@@ -26,8 +26,7 @@ export enum TechnologyType {
 	Farming 		= 8,
 	Construction 	= 9,
 	Fishing 		= 10,
-	// Aquaculture		= 11, // removed?
-	Aquaculture		= 39, // new id
+	Ramming			= 39, // previously aquaculture
 	Aquatism 		= 12,
 	Sailing 		= 13,
 	Navigation 		= 14,
@@ -52,13 +51,12 @@ export enum TechnologyType {
 	Recycling 		= 36,
 	Hydrology 		= 37,
 	Diplomacy		= 38,
-	// CymantiFishing 	= 40,
 	Sledding		= 41,
 	IceFishing		= 42,
 	Pascetism		= 43,
 	Unbuildable 	= -1, 
-	// TODO = Aquarion: https://polytopia.fandom.com/wiki/Aquarion (Modified Technology)
-};
+	// TODO = Aquarion
+}
 
 export enum TribeType {
 	None			= 0,
@@ -101,47 +99,6 @@ export enum ClimateType {
 	Cymanti			= 16,
 }
 
-export const Climate2Tribe: { [key in ClimateType]: TribeType } = {
-	[ClimateType.XinXi]: TribeType.XinXi,
-	[ClimateType.Imperius]: TribeType.Imperius,
-	[ClimateType.Bardur]: TribeType.Bardur,
-	[ClimateType.Oumaji]: TribeType.Oumaji,
-	[ClimateType.Kickoo]: TribeType.Kickoo,
-	[ClimateType.Hoodrick]: TribeType.Hoodrick,
-	[ClimateType.Luxidoor]: TribeType.Luxidoor,
-	[ClimateType.Vengir]: TribeType.Vengir,
-	[ClimateType.Zebasi]: TribeType.Zebasi,
-	[ClimateType.AiMo]: TribeType.AiMo,
-	[ClimateType.Aquarion]: TribeType.Aquarion,
-	[ClimateType.Quetzali]: TribeType.Quetzali,
-	[ClimateType.Elyrion]: TribeType.Elyrion,
-	[ClimateType.Yadakk]: TribeType.Yadakk,
-	[ClimateType.Polaris]: TribeType.Polaris,
-	[ClimateType.Cymanti]: TribeType.Cymanti,
-	[ClimateType.Nature]: TribeType.Nature
-};
-
-export const Tribe2Climate: { [key in TribeType]: ClimateType } = {
-	[TribeType.XinXi]: ClimateType.XinXi,
-	[TribeType.Imperius]: ClimateType.Imperius,
-	[TribeType.Bardur]: ClimateType.Bardur,
-	[TribeType.Oumaji]: ClimateType.Oumaji,
-	[TribeType.Kickoo]: ClimateType.Kickoo,
-	[TribeType.Hoodrick]: ClimateType.Hoodrick,
-	[TribeType.Luxidoor]: ClimateType.Luxidoor,
-	[TribeType.Vengir]: ClimateType.Vengir,
-	[TribeType.Zebasi]: ClimateType.Zebasi,
-	[TribeType.AiMo]: ClimateType.AiMo,
-	[TribeType.Aquarion]: ClimateType.Aquarion,
-	[TribeType.Quetzali]: ClimateType.Quetzali,
-	[TribeType.Elyrion]: ClimateType.Elyrion,
-	[TribeType.Yadakk]: ClimateType.Yadakk,
-	[TribeType.Polaris]: ClimateType.Polaris,
-	[TribeType.Cymanti]: ClimateType.Cymanti,
-	[TribeType.None]: ClimateType.Nature,
-	[TribeType.Nature]: ClimateType.Nature
-};
-
 export enum RewardType {
 	None 			 = 0,
 	CityWall 		 = 1,
@@ -161,7 +118,7 @@ export enum UnitType {
 	Rider         	= 3,
 	Knight        	= 4,
 	Defender      	= 5,
-	// Ship          	= 6, // ? old boat
+	// Ship          	= 6, // ? removed from game
 	// Battleship    	= 7, // removed from game
 	Catapult      	= 8,
 	Archer        	= 9,
@@ -180,14 +137,14 @@ export enum UnitType {
 	IceFortress		= 24,
 	IceArcher 		= 25,
 	Crab          	= 26,
-	Gaami       	= 27, // polaris giant
+	Gaami       	= 27,
 	Hexapod       	= 28,
 	Doomux       	= 29,
 	Phychi       	= 30,
 	Kiton			= 31,
-	Exida			= 32, // Cymanti bug
-	Centipede		= 33, // Cymanti bug
-	Segment        	= 34, // Cymanti piece of unit
+	Exida			= 32,
+	Centipede		= 33,
+	Segment        	= 34,
 	Raychi        	= 35,
 	Shaman        	= 36,
 	Dagger         	= 37,
@@ -195,18 +152,17 @@ export enum UnitType {
 	Dinghy         	= 39,
 	Pirate         	= 40,
 	Bomber        	= 41,
-	Scout     		= 42, // new scoutship, replaced by old boat
+	Scout     		= 42,
 	Raft			= 43,
 	Rammer    		= 44,
-	Juggernaut		= 45, // giant in boat
-};
+	Juggernaut		= 45,
+}
 
 export enum SkillType {
 	None 			= 0,
 	Dash          	= 1,
 	Escape        	= 2,
 	Scout         	= 3,
-	// Sneak         	= 4, // removed
 	Hide          	= 5,
 	Build         	= 6,
 	Persist       	= 7,
@@ -230,23 +186,21 @@ export enum SkillType {
 	Independent   	= 25,
 	Poison        	= 26,
 	Eat           	= 27,
-	// None
-	Unique          = 29, // ! No description
+	Unique          = 29, 
 	Explode			= 30,
 	Surprise		= 31,
 	Agent			= 32, // ! This unit can be built on enemy terrirory?
 	Infiltrate		= 35,
 	Detect			= 36, // This unit can detect nearby invisible units
-	Intercept		= 37, // ! No description
+	Intercept		= 37, 
 	Stiff           = 38, // Cannot retaliate
 	Protect         = 39, // No description
 	Stomp           = 40, // Damage all surrounding units when moving
-	AutoHeal        = 41, // ! No description
-	Static        	= 42, // ! No description (Prevents a unit from becoming a veteran)
-	AutoFlood		= 79, // crab
-};
+	AutoHeal        = 41,
+	Static        	= 42, // ! Prevents a unit from becoming a veteran
+	AutoFlood		= 79, // Unique to crab
+}
 
-// TODO Add to moves and allow ai to play
 export enum AbilityType {
 	None = 0,
 	// Burn Forest is an ability that turns a forest tile into a field tile with crop at a cost of two stars. 
@@ -277,7 +231,9 @@ export enum AbilityType {
 	
 	// Starfish Harvesting is an ability that can only be used on a tile with a Starfish, removes the Starfish from the tile, and gives the player 8 stars. The ability is unlocked by the Navigation technology. 
 	// Moving any naval unit onto a Starfish, even in neutral or enemy territory, will allow it to collect 8 stars by removing the Starfish the next turn. This consumes the unit's turn, much like if it were examining a ruin. 
-	StarfishHarvesting = 6,
+	// Handles by Capture move and Navigation tech
+	// TODO not sure if other special tribes CAN NOT capture / harvest starfish
+	// StarfishHarvesting = 6,
 
 	/**
 	 * Heals a unit by up to 4 HP in friendly territory and 2 HP elsewhere. (Cannot heal past maximum health.) 
@@ -315,12 +271,12 @@ export enum AbilityType {
 	 * Turns a flooded tile into an unflooded tile.
 	 * Available to any unit occupying a flooded tile (even ships).
 	 */
-	Fill 			= 11, // should be named "drain"
+	Drain 			= 11,
 	/**
 	 * Floods the tile that a unit is on. Can only be used on unflooded fields and forests.
 	 * Only available to Aquarion units once the Waterways technology has been researched.
 	 */
-	FloodTile 		= 12,
+	// FloodTile 		= 12,
 	/**
 	 * Freezes all adjacent water and ocean tiles into ice and converts all adjacent land tiles into Polaris land (if and only if the unit belongs to the Polaris tribe). Also freezes all adjacent units.
 	 * Only available to units with the freeze area skill (i.e., the Mooni and the Gaami).
@@ -337,6 +293,8 @@ export enum AbilityType {
 	 * Only available to units with the explode skill (i.e., the Segment, Raychi, and Doomux).
 	 */
 	Explode 		= 15,
+
+	Promote 		= 16,
 }
 
 export enum StructureType {
@@ -361,15 +319,16 @@ export enum StructureType {
 	GateOfPower     = 27,
 	ParkOfFortune   = 28,
 	EyeOfGod        = 29,
-	IcePort         = 33,
+	Outpost         = 33,
 	Spores          = 37,
 	Swamp           = 38,
 	Mycelium        = 39,
 	Lighthouse      = 47,
 	Bridge          = 48,
 	Market          = 50,
-	IceTemple       = 69,  // TODO IceTemple ID MISSING
-	// Road       		= 420, // TODO Road ID MISSING
+	IceTemple       = 69, // TODO find id
+	Embassy         = 70, // TODO find id
+	Road         	= 71, // TODO find id
 }
 
 export enum ResourceType {
@@ -382,28 +341,14 @@ export enum ResourceType {
 	Fruit 			= 6,
 	Spores 			= 7,
 	Starfish 		= 8,
-};
+}
 
 export enum EffectType {
 	None 		= 0,
 	Poison		= 1,
 	Boost		= 2,
 	Invisible	= 3,
-	Frozen		= 69, // TODO find correct id
-}
-
-export interface CombatResult {
-	/** Damage dealt by the attacker */
-	attackDamage: number;
-	/**
-	 * Damage dealt by the defender as retaliation.
-	 * When defender dies this is 0.
-	 */
-	defenseDamage: number;
-	/**
-	 * The splash damage calculated from the attacker’s damage. (float)
-	 */
-	splashDamage: number;
+	Frozen		= 10, // TODO ID does not match live polytopia game, fix
 }
 
 export enum CaptureType {
@@ -413,3 +358,32 @@ export enum CaptureType {
 	Village  = 3,
 	City 	 = 4,
 }
+
+export enum MoveType {
+    None 	 = 0,
+    Step 	 = 1,
+    Attack   = 2,
+    Ability  = 3,
+    Summon   = 4,
+    Harvest  = 5,
+    Build    = 6,
+    Research = 7,
+    Capture  = 8,
+    Reward   = 9,
+    EndTurn  = 10
+}
+
+export const EconomyAbilityTypes: AbilityType[] = [
+	AbilityType.BreakIce, AbilityType.BurnForest, AbilityType.ClearForest, 
+	AbilityType.Decompose, AbilityType.Destroy, AbilityType.Drain, 
+	AbilityType.GrowForest
+] as any;
+
+export const ArmyAbilityTypes: AbilityType[] = [
+	AbilityType.Boost, AbilityType.Disband, AbilityType.Explode, 
+	AbilityType.FreezeArea, AbilityType.HealOthers, AbilityType.Recover, 
+	AbilityType.Promote
+] as any;
+
+Object.freeze(EconomyAbilityTypes);
+Object.freeze(ArmyAbilityTypes);

@@ -1,9 +1,10 @@
 import { GameState } from "./core/states";
 import AIState from "./aistate";
 import { STARTING_OWNER_ID } from "./core/gameloader";
-import { generateAllMoves } from "./core/moves";
+import { MoveGenerator, safelyExecuteMove } from "./core/moves";
 import { cloneState, getCityProduction, getNeighborIndexes, getPovTribe, isFrozen, isGameOver, tryDiscoverRewardOtherTribes } from "./core/functions";
-import Move, { MoveType } from "./core/move";
+import Move, { Branch, CallbackResult, UndoCallback } from "./core/move";
+import { MoveType } from "./core/types";
 import { EffectType } from "./core/types";
 
 export default class Game {
@@ -33,38 +34,31 @@ export default class Game {
         this.state = cloneState(this.initialState);
     }
 
-    playMove(moveIndex: number): Move[] | null {
+    playMove(moveOrIndex: number | Move): [Move, UndoCallback] | null {
         this.stateBefore = cloneState(this.state);
-        this.state.settings.live = true;
-        const moves = [generateAllMoves(this.state)[moveIndex]];
 
-        if(moves[0].moveType === MoveType.EndTurn) {
+        const move = typeof moveOrIndex == "number" ? MoveGenerator.legal(this.state)[moveOrIndex] : moveOrIndex;
+        let undo: UndoCallback;
+
+        this.state.settings.areYouSure = true;
+
+        if(move.moveType === MoveType.EndTurn) {
             // TODO how about updating the state in here? to compare start to end of current turn?
             this.endTurn();
+            // TODO make compatible and undo EVERYTHIN!
+            const state = cloneState(this.stateBefore)
+            undo = () => {
+                this.state = state;
+            }
             this.state.settings._recentMoves = [];
         }
         else {
-            const result = moves[0].execute(this.state);
-
-            if(!result) {
-                this.state.settings.live = false;
-                return null;
-            }
-            else {
-                // Forced moves dont count
-                this.state.settings._recentMoves.push(moves[0].moveType);
-
-                // TODO figure out how to have the ai play reward moves (0/1)
-                if(result.chainMoves?.length) {
-                    AIState.executeBestReward(this.state, result.chainMoves);
-                    moves.push(result.chainMoves[0]);
-                }
-            }
+            undo = safelyExecuteMove(this.state, move) || (() => {});
         }
 
-        this.state.settings.live = false;
+        this.state.settings.areYouSure = false;
 
-        return moves;
+        return [move, undo];
     }
     
     // /**
@@ -178,7 +172,10 @@ export default class Game {
         // Poison is applied by Cymanti units and buildings. It reduces defence by 30%, prevents the unit from being healed, prevents the unit from receiving any defence bonus, and causes the unit to drop spores (on land) or Algae (in water) upon death. Poison can be removed by healing once. This can be through self-healing, a Mind Bender, or a Mycelium. When healed in this way, the poison is removed but the unit does not get any health back.
 
         // Reward tribe with its production
-        povTribe._stars += getCityProduction(this.state, ...povTribe._cities);
+        // EXCEPT IF THE GAME HAS JUST STARTED!
+        if(this.state.settings._turn > 1) {
+            povTribe._stars += getCityProduction(this.state, ...povTribe._cities);
+        }
         
         // Update all unit states
 		for (let i = 0; i < povTribe._units.length; i++) {
@@ -218,7 +215,7 @@ export default class Game {
         this.state._visibleTiles = [];
 
         Object.values(this.state.tiles).forEach(tile => {
-            if(tile.explorers.includes(pov)) {
+            if(tile._explorers.includes(pov)) {
                 this.state._visibleTiles.push(tile.tileIndex);
             }
         });
@@ -228,7 +225,7 @@ export default class Game {
             this.state.settings.size - 1,
             this.state.settings.size * this.state.settings.size - 1,
             1 + this.state.settings.size * this.state.settings.size - this.state.settings.size
-        ].filter(x => !this.state.tiles[x].explorers.includes(pov));
+        ].filter(x => !this.state.tiles[x]._explorers.includes(pov));
 
         this.state = {
             ...this.state,
@@ -241,12 +238,6 @@ export default class Game {
             _scoreEconomy: 0,
             __: 0,
             ___: 0,
-        }
-        
-        for(const strTileIndex in this.state.structures) {
-            const structure = this.state.structures[strTileIndex];
-            if(!structure || structure._owner > 0) continue;
-            structure._potentialTerritory = getNeighborIndexes(this.state, structure.tileIndex, 1, true, true);
         }
     }
 }

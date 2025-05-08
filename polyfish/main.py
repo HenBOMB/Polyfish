@@ -8,7 +8,7 @@ from predictor import PredictorBatcher
 
 with open('data/model/config.json', 'r') as f:
     config = json.load(f)
-    config['tile_count'] = config['max_size'] ** 2
+    config['max_tile_count'] = config['dim_map_size'] ** 2
 
 root_path = 'models/polyfish'
 prefix = ''

@@ -1,10 +1,55 @@
-import { calculateDistance, getCapitalCity, getEnemiesNearTile, getNeighborIndexes, getPovTribe, isResourceVisible, isTribeSteppable } from "../core/functions";
+import { calculateDistance, getCapitalCity, getEnemiesNearTile, getNeighborIndexes, getPovTribe, isResourceVisible, isTechUnlocked, isTribeSteppable } from "../core/functions";
 import { CityState, GameState } from "../core/states";
-import { SkillType, ClimateType, ModeType, RewardType, StructureType, TechnologyType, TerrainType, TribeType, Climate2Tribe } from "../core/types";
+import { SkillType, ClimateType, ModeType, RewardType, StructureType, TechnologyType, TerrainType, TribeType } from "../core/types";
 
 // TODO use adjacent climate tiles to reveal cities
 
 // Mapping from ClimateType to TribeType
+
+export const Climate2Tribe: { [key in ClimateType]: TribeType } = {
+	[ClimateType.XinXi]: TribeType.XinXi,
+	[ClimateType.Imperius]: TribeType.Imperius,
+	[ClimateType.Bardur]: TribeType.Bardur,
+	[ClimateType.Oumaji]: TribeType.Oumaji,
+	[ClimateType.Kickoo]: TribeType.Kickoo,
+	[ClimateType.Hoodrick]: TribeType.Hoodrick,
+	[ClimateType.Luxidoor]: TribeType.Luxidoor,
+	[ClimateType.Vengir]: TribeType.Vengir,
+	[ClimateType.Zebasi]: TribeType.Zebasi,
+	[ClimateType.AiMo]: TribeType.AiMo,
+	[ClimateType.Aquarion]: TribeType.Aquarion,
+	[ClimateType.Quetzali]: TribeType.Quetzali,
+	[ClimateType.Elyrion]: TribeType.Elyrion,
+	[ClimateType.Yadakk]: TribeType.Yadakk,
+	[ClimateType.Polaris]: TribeType.Polaris,
+	[ClimateType.Cymanti]: TribeType.Cymanti,
+	[ClimateType.Nature]: TribeType.Nature
+};
+
+export const Tribe2Climate: { [key in TribeType]: ClimateType } = {
+	[TribeType.XinXi]: ClimateType.XinXi,
+	[TribeType.Imperius]: ClimateType.Imperius,
+	[TribeType.Bardur]: ClimateType.Bardur,
+	[TribeType.Oumaji]: ClimateType.Oumaji,
+	[TribeType.Kickoo]: ClimateType.Kickoo,
+	[TribeType.Hoodrick]: ClimateType.Hoodrick,
+	[TribeType.Luxidoor]: ClimateType.Luxidoor,
+	[TribeType.Vengir]: ClimateType.Vengir,
+	[TribeType.Zebasi]: ClimateType.Zebasi,
+	[TribeType.AiMo]: ClimateType.AiMo,
+	[TribeType.Aquarion]: ClimateType.Aquarion,
+	[TribeType.Quetzali]: ClimateType.Quetzali,
+	[TribeType.Elyrion]: ClimateType.Elyrion,
+	[TribeType.Yadakk]: ClimateType.Yadakk,
+	[TribeType.Polaris]: ClimateType.Polaris,
+	[TribeType.Cymanti]: ClimateType.Cymanti,
+	[TribeType.None]: ClimateType.Nature,
+	[TribeType.Nature]: ClimateType.Nature
+};
+
+
+Object.freeze(Climate2Tribe);
+Object.freeze(Tribe2Climate);
 
 // Predict climate for a fogged tile based on visible neighbors
 function predictClimate(state: GameState, tileIndex: number): ClimateType {
@@ -69,7 +114,7 @@ export function predictVillages(state: GameState): { [tileIndex: number]: [Tribe
                 // if (calculateDistance(neighbor, capital.tileIndex, state.settings.size) < domainSize) {
                 //     return;
                 // }
-                if (!state.tiles[neighbor].explorers.includes(pov)) {
+                if (!state.tiles[neighbor]._explorers.includes(pov)) {
                     candidates[neighbor] = (candidates[neighbor] || 0) + 1;
                 }
             });
@@ -93,7 +138,7 @@ export function predictVillagesOld(state: GameState): { [tileIndex: number]: [Tr
     const size = state.settings.size;
     const totalTiles = size * size;
     const density = new Float32Array(totalTiles);
-    const tribe = state.tribes[state.settings._pov];
+    const pov = getPovTribe(state);
     
     // Step 1: Track known village/city tiles
     const knownVillageTiles = new Set<number>();
@@ -108,7 +153,7 @@ export function predictVillagesOld(state: GameState): { [tileIndex: number]: [Tr
     for (let i = 0; i < state._visibleTiles.length; i++) {
         const tileIndex = state._visibleTiles[i];
         const tile = state.tiles[tileIndex];
-        const resource = state.resources[tileIndex] && isResourceVisible(tribe, state.resources[tileIndex].id);
+        const resource = state.resources[tileIndex] && isResourceVisible(pov, state.resources[tileIndex].id);
 
         if (resource) {
             resourceTiles.push(tileIndex);
@@ -441,18 +486,18 @@ export function predictOuterFogTerrain(
  * Filters the neighboring tiles to those the explorer can move onto.
  */
 function getAllowedNeighbors(state: GameState, tileIndex: number, includeUnexplored: boolean = true): number[] {
-    const tribe = state.tribes[state.settings._pov];
+    const pov = getPovTribe(state);
     const odds = 
         0.45 +
-        (tribe._tech.includes(TechnologyType.Fishing)? .25 : 0) +
-        (tribe._tech.includes(TechnologyType.Sailing)? .1 : 0) +
-        (tribe._tech.includes(TechnologyType.Climbing)? .1 : 0);
+        (isTechUnlocked(pov, TechnologyType.Fishing)?  0.25 : 0) +
+        (isTechUnlocked(pov, TechnologyType.Sailing)?  0.10 : 0) +
+        (isTechUnlocked(pov, TechnologyType.Climbing)? 0.10 : 0);
     return shuffleArray(
         getNeighborIndexes(state, tileIndex, 1, false, includeUnexplored)
         // Only if its absolutely visible and steppable, if not then we dont really know what is there
         .filter(x => 
             // isTribeSteppable(state, x) // (cheating)
-            state.tiles[x].explorers.includes(tribe.owner)? isTribeSteppable(state, x) : 
+            state.tiles[x]._explorers.includes(pov.owner)? isTribeSteppable(state, x) : 
             Math.random() < odds
         )
     );
@@ -497,7 +542,7 @@ function findNearestCloud(state: GameState, startIndex: number, maxDistance: num
             }
             // If we have not exceeded maxDistance, add allowed neighbors.
             if (path.length - 1 < maxDistance) {
-                const neighbors = getAllowedNeighbors(state, tile);
+                const neighbors = shuffleArray(getAllowedNeighbors(state, tile));
                 for (const neighbor of neighbors) {
                     if (!visited.has(neighbor)) {
                         visited.add(neighbor);
@@ -529,9 +574,9 @@ function findNearestCloud(state: GameState, startIndex: number, maxDistance: num
  * 
  * @param state - The game state.
  * @param tileIndex - The starting tile of the explorer.
- * @returns tiles explored (an array of tile indices for each move).
+ * @returns [path taken, tiles explored]
  */
-export function predictExplorer(state: GameState, tileIndex: number): number[][] {
+export function predictExplorer(state: GameState, tileIndex: number): number[] {
     const visible = [...state._visibleTiles];
     const path: number[] = [];
     let currentTile = tileIndex;
@@ -566,7 +611,8 @@ export function predictExplorer(state: GameState, tileIndex: number): number[][]
 
     state._visibleTiles = [...visible];
 
-    return [path, explored];
+    // return [path, explored];
+    return explored;
 }
 
 
@@ -578,7 +624,7 @@ export function predictEnemyCapitalsAndSurroundings(state: GameState): number[] 
     const totalDomains = gridSize * gridSize; // 4 domains
 
     // Step 1: Find your domain based on your capital
-    const tribe = state.tribes[state.settings._pov];
+    const tribe = getPovTribe(state);
     const yourDomains = new Set<number>();
     tribe._cities.forEach(city => {
         if (state.tiles[city.tileIndex].capitalOf > 0) {

@@ -1,5 +1,6 @@
 import { getDefenseBonus, getRealUnitSettings, getRealUnitType } from "../core/functions";
-import Move, { MoveType } from "../core/move";
+import Move from "../core/move";
+import { MoveType } from "../core/types";
 import { GameState, StructureState, UnitState } from "../core/states";
 import { UnitType, TechnologyType, CaptureType } from "../core/types";
 
@@ -7,6 +8,7 @@ export type StagedValue = number[];
 
 /**
  * Minimum amount of moves the AI is forced to play before they can end the turn.
+ * NOT PROPERLY IMPLEMENTED
  */
 export const MIN_PLAYED_MOVES: StagedValue = [3, 6, 6, 8];
 
@@ -35,8 +37,8 @@ export function SCORE_UNIT_POWER(state: GameState, unit: UnitState) {
     const bonus = getDefenseBonus(state, unit);
     const { 
         attack, defense, cost, movement, range, 
-        skills, techType, becomes, health, explodeOnly, 
-        tribeType, veteran, upgradeFrom 
+        skills, becomes, health, 
+        veteran, upgradeFrom 
     } = settings;
     const hp = unit._health;
     const isNaval = unit._passenger;
@@ -200,13 +202,14 @@ export const CAPTURE_POTENTIAL: Record<UnitType, number> = {
 export function SCORE_MOVE_PRIORITY(move: Move): number {
     switch (move.moveType) {
         case MoveType.Capture:
-            if(move.type == CaptureType.City) {
+            const captureType = move.getType<CaptureType>();
+            if(captureType == CaptureType.City) {
                 return 20;
             }
-            else if(move.type == CaptureType.Village) {
+            else if(captureType == CaptureType.Village) {
                 return 10;
             }
-            else if(move.type == CaptureType.Ruins || move.type == CaptureType.Starfish) {
+            else if(captureType == CaptureType.Ruins || captureType == CaptureType.Starfish) {
                 return 10;
             }
             else {

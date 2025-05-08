@@ -1,6 +1,6 @@
 import numpy as np
 from os import path
-from net import PolytopiaZeroNet
+from net import PolytopiaNet
 from requests import post
 from random import shuffle
 import torch, logging
@@ -15,13 +15,23 @@ logging.basicConfig(
     filename='training.log'
 )
 logger = logging.getLogger()
-config: dict = {}
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-def load(filename: str, config: dict, n_res_blocks: int = 15) -> PolytopiaZeroNet:
+def load(filename: str, config: dict, n_res_blocks: int = 12) -> PolytopiaNet:
     if not filename.endswith('.zip'):
         filename += '.zip'
-    net = PolytopiaZeroNet(n_res_blocks, config).to(device)
+    net = PolytopiaNet(
+        dim_map_channels=config['dim_map_tile'],
+        dim_map_size=config['dim_map_size'],
+        dim_player=config['dim_player'],
+        dim_struct=config['dim_tech'],
+        dim_skill=config['dim_ability'],
+        dim_unit=config['dim_tech'],
+        num_action_types=config['dim_moves'],
+        dim_tech=config['dim_tech'],
+        num_res_blocks=n_res_blocks,
+        num_hidden_channels=config['hidden_channels'],
+    ).to(device)
     if path.exists(filename):
         net.load_state_dict(torch.load(filename, map_location=device))
         logger.info(f"loaded {filename}")
@@ -30,7 +40,7 @@ def load(filename: str, config: dict, n_res_blocks: int = 15) -> PolytopiaZeroNe
     net.eval()
     return net
 
-def train_network(net: PolytopiaZeroNet, dataset: Dataset, batch_size: int, epochs: int):
+def train_network(net: PolytopiaNet, dataset: Dataset, batch_size: int, epochs: int):
     optimizer = torch.optim.Adam(net.parameters(), lr=0.001)
     net.train()
     policy_losses, value_losses = [], []
@@ -63,7 +73,7 @@ def train_network(net: PolytopiaZeroNet, dataset: Dataset, batch_size: int, epoc
     avg_value_loss = np.mean(value_losses)
     return avg_policy_loss, avg_value_loss
 
-def self_train(net: PolytopiaZeroNet, iterations, n_games: int, epochs: int, n_sims: int, 
+def self_train(net: PolytopiaNet, iterations, n_games: int, epochs: int, n_sims: int, 
     temperature: float, cPuct: float, gamma: float, deterministic: bool, 
     batch_size: int, dirichlet: bool, rollouts: int, filename: str | None = None, settings: dict = {}
 ):

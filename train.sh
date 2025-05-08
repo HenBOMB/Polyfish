@@ -1,5 +1,5 @@
 .venv/bin/python polyfish/trainer.py \
- --games 5 --simulations 100 --prefix "" --epochs 10 \
- --cpuct 1.0 --gamma 0.99 --rollouts 50 --temperature 0.7  \
- --mapsize 9 --tribes "Imperius,Imperius" \
+ --games 20 --simulations 200 --prefix "" --epochs 20 \
+ --cpuct 1.5 --gamma 0.997 --rollouts 20 --temperature 0.9  \
+ --mapsize 9 --tribes "Imperius,Imperius" --dirichlet false \
 && clear && tail -f training.log

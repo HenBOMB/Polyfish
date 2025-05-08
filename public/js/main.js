@@ -127,9 +127,9 @@ function generateMap(newState = null) {
     }
 
     document.getElementById('turn').textContent = `${state.settings._turn} / ${state.settings.maxTurns}`;
-    document.getElementById('stars').textContent = state.tribes[1]._stars;
-    document.getElementById('production').textContent = state.tribes[1]._cities.reduce((acc, cur) => acc + cur._production, 0);
-    document.getElementById('score').textContent = state.tribes[1]._score || 69;
+    document.getElementById('stars').textContent = state.tribes[state.settings._pov]._stars;
+    document.getElementById('production').textContent = state.tribes[state.settings._pov]._cities.reduce((acc, cur) => acc + cur._production, 0);
+    document.getElementById('score').textContent = state.tribes[state.settings._pov]._score || 69;
 
     const mapSize = state.settings.size;
    
@@ -215,7 +215,7 @@ function generateMap(newState = null) {
         }
 
         /** @type { { _index: number, id: number } } */
-        const resource = state['resources'][tile.tileIndex];
+        const resource = state['resources'][tile.tileIndex] || (state['_hiddenResources'] || {})[tile.tileIndex];
         
         /** @type { { _index: number, id: number, _level: number, _turn: number, reward: number } } */
         const structure = state['structures'][tile.tileIndex];
@@ -707,12 +707,15 @@ function changePov(element) {
     generateFOW();
 }
 
-async function autoStep() {
+async function autoStep(e) {
+    e.disabled = true;
     const result = await fetch('/autostep', { method: 'POST', body: JSON.stringify({
         state, 
         mcts: true,
-        iterations: 1000,
+        iterations: 100,
+        temperature: 0,
     }), headers: { 'Content-Type': 'application/json' } }).then(x => x.json());
+    e.disabled = false;
     if(result.error) {
         return alert(result.error);
     }
@@ -729,6 +732,19 @@ async function autoStep() {
         console.log('\n' + TRIBE_IDS[povTribe.tribeType].toLowerCase(), povTribe._stars);
     }
     generateMap(result.state);
+}
+
+async function mcts(e) {
+    e.disabled = true;
+    const result = await fetch('/mcts', { method: 'POST', body: JSON.stringify({
+        state, 
+        mcts: true,
+        iterations: 1000,
+        temperature: 0.8,
+    }), headers: { 'Content-Type': 'application/json' } }).then(x => x.json());
+    console.log(result.move);
+    console.log(result.probs);
+    e.disabled = false;
 }
 
 fetch('/random?size=9&tribes=Imperius,Imperius').then(x => x.json()).then(x => {

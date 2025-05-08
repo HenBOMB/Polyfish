@@ -3,13 +3,15 @@ import { join } from "path";
 import GameLoader from "./src/core/gameloader";
 import AIState, { MODEL_CONFIG } from "./src/aistate";
 import { ModeType, TribeType } from "./src/core/types";
-import { MCTS, Prediction, sampleFromDistribution, SelfPlay } from "./src/polyfish/mcts";
+import { MCTS, Prediction, SelfPlay } from "./src/polyfish/mcts";
 import { spawn } from "child_process";
 import { DefaultGameSettings, GameSettings, GameState } from "./src/core/states";
-import { generateAllMoves, generateEndTurnMove } from "./src/core/moves";
 import Game from "./src/game";
 import Move from "./src/core/move";
 import { Logger } from "./src/polyfish/logger";
+import { sampleFromDistribution } from "./src/polyfish/util";
+import { MoveGenerator } from "./src/core/moves";
+import main from "./src/main";
 
 const app = express();
 const py = spawn(".venv/bin/python3", ["polyfish/main.py"]);
@@ -100,7 +102,8 @@ app.post('/predict', async (req: Request, res: Response) => {
     }
     
     try {
-        const moves = generateAllMoves(state);
+        const moves = MoveGenerator.legal(state);
+
         if (moves.length === 0) {
             res.status(200).json({ move: null, reason: "No available moves." });
             return;
@@ -118,60 +121,83 @@ app.post('/predict', async (req: Request, res: Response) => {
     }
 });
 
+app.post("/mcts", async (req: Request, res: Response) => {
+    try {
+        const prevState: GameState = req.body.state;
+        const game = new Game();
+        game.load(prevState);
+        const moves = MoveGenerator.legal(prevState);
+        const root = await new MCTS(
+            game.state, predict, 
+            req.body.cpuct || 1.0, 
+            req.body.gamma || 0.997, 
+            req.body.dirichlet || true, 
+            req.body.rollouts || 50, 
+        ).search(req.body.iterations || 100);
+        const probs = root.distribution(req.body.temperature || 0.7);
+        const moveIndex = (req.body.deterministic || false)
+            ? probs.indexOf(Math.max(...probs))
+            : sampleFromDistribution(probs);
+        res.json({
+            probs: probs,
+            move: moves[moveIndex].stringify(game.stateBefore, game.state).toLowerCase(),
+        });
+    } catch (err: any) {
+        console.error("autostep error:", err);
+        res.status(500).send({
+            move: null,
+            state: req.body.state,
+            value: 0,
+            potential: 0,
+            reward: 0,
+            error: err.message || err
+        });
+    }
+});
+
 app.post("/autostep", async (req: Request, res: Response) => {
     try {
         const prevState: GameState = req.body.state;
         const game = new Game();
         game.load(prevState);
         
-        const movez = generateAllMoves(prevState);
-        const { pi, v } = await predict(prevState);
-        const action = pi.indexOf(Math.max(...pi));
+        const movez = MoveGenerator.legal(prevState);
         let moves: Move[] = [];
-
+        const { pi, v } = await predict(prevState);
+        
         if(req.body.mcts) {
-            if(movez.length == 1) {
-                // Used just to translate to "end turn" (Move.stringify)
-                moves = [generateEndTurnMove()];
-                game.playMove(0);
-            }
-            else {
-                let probs: number[] = [];
-                // let start = Date.now();
-                const root = await new MCTS(
-                    game.state, predict, 
-                    req.body.cpuct || 1.0, 
-                    req.body.gamma || 0.997, 
-                    req.body.dirichlet || true, 
-                    req.body.rollouts || 50, 
-                ).search(req.body.iterations || 100);
-                probs = root.distribution(req.body.temperature || 0.7);
-                // console.log(`took: ${Date.now() - start}ms`);
-                const fullProbs = new Array<number>(MODEL_CONFIG.max_actions).fill(0);
-                probs.forEach((p, idx) => { fullProbs[idx] = p; });
-                const moveIndex = false
-                    ? probs.indexOf(Math.max(...probs))
-                    : sampleFromDistribution(probs);
-                moves = [movez[moveIndex]];
-                game.playMove(moveIndex);
-            }
+            let probs: number[] = [];
+            // let start = Date.now();
+            const root = await new MCTS(
+                game.state, predict, 
+                req.body.cpuct || 1.0, 
+                req.body.gamma || 0.997, 
+                req.body.dirichlet || true, 
+                req.body.rollouts || 50, 
+            ).search(req.body.iterations || 100);
+            probs = root.distribution(req.body.temperature || 0.7);
+            // console.log(`took: ${Date.now() - start}ms`);
+            const moveIndex = (req.body.deterministic || false)
+                ? probs.indexOf(Math.max(...probs))
+                : sampleFromDistribution(probs);
+            moves = [movez[moveIndex]];
+            game.playMove(moveIndex);
         }
         else {
+            const action = pi.indexOf(Math.max(...pi));
             const result = game.playMove(action < 0 || action >= movez.length? pi.indexOf(Math.max(...pi.slice(0, movez.length))) : action);
-
             if(!result) {
                 throw 'Illegal Move';
             }
-
-            moves = result!;
+            moves = [result![0]];
         }
 
         res.json({
-            moves: moves.map(x => x.stringify()),
-            value: v,
+            moves: moves.map(x => x.stringify(game.stateBefore, game.state).toLowerCase()),
             state: game.state,
             potential:  AIState.calculatePotential(prevState) - AIState.calculatePotential(game.state),
             reward: AIState.calculateReward(game, ...moves),
+            value: v,
         });
     } catch (err: any) {
         console.error("autostep error:", err);
@@ -220,9 +246,5 @@ app.listen(3000, async () => {
     Logger.clear();
     console.log(`INITIALIZED ON PORT 3000\n`);
     console.log('FOW DISABLED\n');
-    const loader = new GameLoader();
-    await loader.loadRandom();
-    // console.time('test');
-    // console.log(await predict(loader.currentState));
-    // console.timeEnd('test');
+    main();
 });

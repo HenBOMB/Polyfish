@@ -25,7 +25,7 @@ def generate(map_size, initial_land, smoothing, relief, tribes, seed=None):
     X1_0 = 1.0
     X0_5 = 0.5
     X0_4 = 0.4
-    X0_3 = 0.3
+    # X0_3 = 0.3
     X0_2 = 0.2
     X0_1 = 0.1
     X0_0 = 0.0
@@ -89,7 +89,9 @@ def generate(map_size, initial_land, smoothing, relief, tribes, seed=None):
         }}
 
     general_probs = {
-        'mountain': 0.14, 
+        # 'mountain': 0.14, 
+        # reduced for early training
+        'mountain': 0.02, 
         'forest': 0.38,
         'fruit': 0.18,
         'crop': 0.18,
@@ -115,7 +117,8 @@ def generate(map_size, initial_land, smoothing, relief, tribes, seed=None):
             j += 1
             world_map[cell]['type'] = 'ground'
 
-    land_coefficient = (0.5 + relief) / 9
+    # disabled for early training
+    land_coefficient = 1#(0.5 + relief) / 9
 
     for i in range(smoothing):
         for cell in range(map_size ** 2):
@@ -135,36 +138,43 @@ def generate(map_size, initial_land, smoothing, relief, tribes, seed=None):
             else:
                 world_map[cell]['type'] = 'ocean'
 
-    capital_cells = []
-    capital_map = {}
+        capital_cells = []
+    min_separation = 3  # no two capitals will be closer than this (in tile‐to‐tile distance)
     for tribe in tribes:
+        # build a map of "valid" ground cells that are far enough from existing capitals
+        capital_map = {}
         for row in range(2, map_size - 2):
             for column in range(2, map_size - 2):
-                if world_map[row * map_size + column]['type'] == 'ground':
-                    capital_map[row * map_size + column] = 0
+                idx = row * map_size + column
+                if world_map[idx]['type'] != 'ground':
+                    continue
 
-    for tribe in tribes:
-        max_ = 0
-        for cell in capital_map:
-            capital_map[cell] = map_size
-            for capital_cell in capital_cells:
-                capital_map[cell] = min(capital_map[cell], utils.distance(cell, capital_cell, map_size))
-            max_ = max(max_, capital_map[cell])
-        len_ = 0
-        for cell in capital_map:
-            if capital_map[cell] == max_:
-                len_ += 1
-        rand_cell = random.randrange(0, len_)
-        for cell in capital_map.items():
-            if cell[1] == max_:
-                if rand_cell == 0:
-                    capital_cells.append(int(cell[0]))
-                rand_cell -= 1
-    for i in range(len(capital_cells)):
-        idx = (capital_cells[i] // map_size) * map_size + (capital_cells[i] % map_size)
-        world_map[idx]['above'] = 'capital'
-        world_map[idx]['tribe'] = tribes[i]
-        world_map[idx]['otribe']  = tribes[i]
+                # enforce minimum distance from every capital already placed
+                too_close = False
+                for cap in capital_cells:
+                    if utils.distance(idx, cap, map_size) < min_separation:
+                        too_close = True
+                        break
+                if not too_close:
+                    # start its “score” high – we’ll reduce it by distance to each existing capital
+                    capital_map[idx] = map_size
+
+        # now pick the furthest‐away cell among the filtered ones
+        max_dist = 0
+        for cell, _ in capital_map.items():
+            # compute actual min‐distance to existing capitals
+            for cap in capital_cells:
+                capital_map[cell] = min(capital_map[cell], utils.distance(cell, cap, map_size))
+            max_dist = max(max_dist, capital_map[cell])
+
+        # choose one of the cells whose score equals max_dist
+        choices = [c for c, d in capital_map.items() if d == max_dist]
+        chosen = random.choice(choices)
+        capital_cells.append(chosen)
+        world_map[chosen]['above'] = 'capital'
+        world_map[chosen]['tribe'] = tribe
+        world_map[chosen]['otribe'] = tribe
+
 
     done_tiles = []
     active_tiles = []

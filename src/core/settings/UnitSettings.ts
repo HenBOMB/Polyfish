@@ -1,7 +1,6 @@
 import { SkillType, TechnologyType, TribeType, UnitType } from "../types";
 
 export const UnitSettings: Record<UnitType, { 
-    techType: TechnologyType,
     cost: number, 
     attack: number, 
     movement: number, 
@@ -10,15 +9,14 @@ export const UnitSettings: Record<UnitType, {
     health?: number, 
     upgradeFrom?: UnitType,
     veteran?: boolean | true,
-    explodeOnly?: boolean | true,
+    unique?: boolean,
     skills: SkillType[],
     becomes?: UnitType;
-    tribeType?: TribeType;
+    super?: boolean;
 }> = {
     [UnitType.None]: {
-        techType: TechnologyType.Unbuildable,
         cost: -1,
-        attack: 0,
+        attack: -1,
         movement: 0,
         defense: 0,
         range: 0,
@@ -26,7 +24,6 @@ export const UnitSettings: Record<UnitType, {
         skills: []
     },
     [UnitType.Warrior]: {
-        techType: TechnologyType.None,
         cost: 2,
         attack: 2,
         movement: 1,
@@ -36,7 +33,6 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Dash, SkillType.Fortify]
     },
     [UnitType.Rider]: {
-        techType: TechnologyType.Riding,
         cost: 3,
         attack: 2,
         movement: 2,
@@ -46,7 +42,6 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Dash, SkillType.Escape, SkillType.Fortify]
     },
     [UnitType.Knight]: {
-        techType: TechnologyType.Chivalry,
         cost: 8,
         attack: 3.5,
         movement: 3,
@@ -56,7 +51,6 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Dash, SkillType.Persist, SkillType.Fortify]
     },
     [UnitType.Defender]: {
-        techType: TechnologyType.Strategy,
         cost: 3,
         attack: 1,
         movement: 1,
@@ -66,7 +60,6 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Fortify]
     },
     [UnitType.Catapult]: {
-        techType: TechnologyType.Mathematics,
         cost: 8,
         attack: 4,
         movement: 1,
@@ -76,7 +69,6 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Stiff]
     },
     [UnitType.Archer]: {
-        techType: TechnologyType.Archery,
         cost: 3,
         health: 10,
         attack: 2,
@@ -86,7 +78,6 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Dash, SkillType.Fortify]
     },
     [UnitType.MindBender]: {
-        techType: TechnologyType.Philosophy,
         cost: 5,
         health: 10,
         attack: 0,
@@ -96,7 +87,6 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Heal, SkillType.Convert]
     },
     [UnitType.Swordsman]: {
-        techType: TechnologyType.Smithery,
         cost: 5,
         health: 15,
         attack: 3,
@@ -106,8 +96,8 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Dash]
     },
     [UnitType.Giant]: {
-        techType: TechnologyType.Unbuildable,
         cost: 10,
+        super: true,
         health: 40,
         attack: 5,
         movement: 1,
@@ -116,7 +106,6 @@ export const UnitSettings: Record<UnitType, {
         skills: []
     },    
     [UnitType.Cloak]: {
-        techType: TechnologyType.Diplomacy,
         cost: 8,
         health: 5,
         attack: 0,
@@ -127,9 +116,8 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Hide, SkillType.Infiltrate, SkillType.Dash, SkillType.Scout, SkillType.Creep]
     },
     [UnitType.Dagger]: {
-        techType: TechnologyType.Diplomacy,
-        cost: 5, // TODO is this accurate?
-        health: 5,
+        cost: 2,
+        health: 10,
         attack: 2,
         movement: 1,
         defense: 2,
@@ -138,8 +126,8 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Dash, SkillType.Surprise, SkillType.Independent]
     },
     [UnitType.Pirate]: {
-        techType: TechnologyType.Sailing,
-        cost: 5, // TODO is this accurate?
+        cost: 2,
+        health: 10,
         attack: 2,
         movement: 2,
         defense: 2,
@@ -148,8 +136,7 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Carry, SkillType.Float, SkillType.Dash, SkillType.Surprise, SkillType.Independent]
     },
     [UnitType.Dinghy]: {
-        techType: TechnologyType.Diplomacy,
-        cost: 8,
+        cost: 2,
         health: 5,
         attack: 0,
         movement: 2,
@@ -161,9 +148,8 @@ export const UnitSettings: Record<UnitType, {
 
     // Navy
     [UnitType.Raft]: {
-        techType: TechnologyType.Sailing,
         cost: 0,
-        attack: 0,
+        attack: -1,
         movement: 2,
         defense: 2,
         range: 2,
@@ -171,7 +157,6 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Carry, SkillType.Float]
     },
     [UnitType.Scout]: {
-        techType: TechnologyType.Sailing,
         cost: 5,
         attack: 2,
         movement: 3,
@@ -182,7 +167,6 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Carry, SkillType.Dash, SkillType.Float]
     },
     [UnitType.Rammer]: {
-        techType: TechnologyType.Aquatism,
         upgradeFrom: UnitType.Raft,
         cost: 5,
         attack: 3,
@@ -192,7 +176,6 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Dash, SkillType.Float, SkillType.Carry]
     },
     [UnitType.Bomber]: {
-        techType: TechnologyType.Navigation,
         cost: 5,
         attack: 3,
         movement: 2,
@@ -202,22 +185,20 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Carry, SkillType.Float, SkillType.Splash, SkillType.Stiff]
     },
     [UnitType.Juggernaut]: {
-        techType: TechnologyType.Unbuildable,
         cost: 10,
-        health: 40,
         attack: 4,
         movement: 2,
         defense: 4,
         range: 1,
+        super: true,
         veteran: false,
         skills: [SkillType.Float, SkillType.Carry, SkillType.Stiff, SkillType.Stomp]
     },
 
     // Aquarion
     [UnitType.Crab]: {
-        tribeType: TribeType.Aquarion,
-        techType: TechnologyType.Unbuildable,
         cost: 10,
+        super: true,
         health: 40,
         attack: 4,
         movement: 2,
@@ -227,8 +208,6 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Escape, SkillType.Float]
     },   
     [UnitType.Amphibian]: {
-        tribeType: TribeType.Aquarion,
-        techType: TechnologyType.Amphibian,
         cost: 3,
         health: 10,
         attack: 2,
@@ -238,8 +217,6 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Float, SkillType.Dash, SkillType.Escape, SkillType.Fortify]
     },
     [UnitType.Tridention]: {
-        tribeType: TribeType.Aquarion,
-        techType: TechnologyType.Spearing,
         cost: 8,
         health: 10,
         attack: 2.5,
@@ -251,9 +228,8 @@ export const UnitSettings: Record<UnitType, {
 
     // Polaris
     [UnitType.Gaami]: {
-        tribeType: TribeType.Polaris,
-        techType: TechnologyType.Unbuildable,
         cost: 10,
+        super: true,
         health: 30,
         attack: 4,
         movement: 1,
@@ -263,31 +239,27 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.AutoFreeze, SkillType.FreezeArea]
     },
     [UnitType.Mooni]: {
-        tribeType: TribeType.Polaris,
-        techType: TechnologyType.Frostwork,
+        veteran: false,
         cost: 5,
         health: 10,
-        attack: 0,
+        attack: -1,
         movement: 1,
         defense: 1,
         range: 1, 
-        veteran: false,
+        unique: true,
         skills: [SkillType.AutoFreeze, SkillType.Skate]
     },
     [UnitType.BattleSled]: {
-        tribeType: TribeType.Polaris,
-        techType: TechnologyType.Sledding,
         cost: 5,
         health: 15,
         attack: 3,
         movement: 2,
         defense: 2,
         range: 1, 
+        unique: true,
         skills: [SkillType.Dash, SkillType.Escape, SkillType.Skate]
     },
     [UnitType.IceArcher]: {
-        tribeType: TribeType.Polaris,
-        techType: TechnologyType.Archery,
         cost: 3,
         health: 10,
         attack: 0.1,
@@ -297,8 +269,6 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Dash, SkillType.Freeze, SkillType.Fortify]
     },
     [UnitType.IceFortress]: {
-        tribeType: TribeType.Polaris,
-        techType: TechnologyType.PolarWarfare,
         health: 20,
         cost: 15,
         attack: 4,
@@ -306,14 +276,14 @@ export const UnitSettings: Record<UnitType, {
         defense: 3,
         range: 2,
         veteran: false,
+        unique: true,
         skills: [SkillType.Skate, SkillType.Scout]
     },
 
     // Cymanti
     [UnitType.Centipede]: {
-        tribeType: TribeType.Cymanti,
-        techType: TechnologyType.Unbuildable,
         cost: 10,
+        super: true,
         health: 20,
         attack: 4,
         movement: 2,
@@ -322,9 +292,7 @@ export const UnitSettings: Record<UnitType, {
         veteran: false,
         skills: [SkillType.Dash, SkillType.Eat, SkillType.Creep]
     },
-    [UnitType.Segment]:     {
-        tribeType: TribeType.Cymanti,
-        techType: TechnologyType.Unbuildable,
+    [UnitType.Segment]: {
         cost: -1,
         health: 10,
         attack: 2,
@@ -332,12 +300,9 @@ export const UnitSettings: Record<UnitType, {
         defense: 2,
         range: 1,
         veteran: false,
-        explodeOnly: true,
         skills: [SkillType.Independent, SkillType.Creep, SkillType.Explode]
     },
     [UnitType.Doomux]: {
-        tribeType: TribeType.Cymanti,
-        techType: TechnologyType.ShockTactics,
         cost: 10,
         health: 20,
         attack: 4,
@@ -348,8 +313,6 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Dash, SkillType.Creep, SkillType.Explode]
     },
     [UnitType.Shaman]: {
-        tribeType: TribeType.Cymanti,
-        techType: TechnologyType.Philosophy,
         cost: 10,
         health: 10,
         attack: 1,
@@ -360,8 +323,6 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Convert, SkillType.Boost]
     },
     [UnitType.Kiton]: {
-        tribeType: TribeType.Cymanti,
-        techType: TechnologyType.Strategy,
         cost: 3,
         health: 15,
         attack: 1,
@@ -371,8 +332,6 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Poison]
     },
     [UnitType.Hexapod]: {
-        tribeType: TribeType.Cymanti,
-        techType: TechnologyType.Riding,
         cost: 3,
         health: 5,
         attack: 3,
@@ -382,8 +341,7 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Dash, SkillType.Escape, SkillType.Creep]
     },
     [UnitType.Raychi]: {
-        tribeType: TribeType.Cymanti,
-        techType: TechnologyType.Pascetism,
+        unique: true,
         cost: 8,
         health: 15,
         attack: 3,
@@ -393,8 +351,6 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Dash, SkillType.Float, SkillType.Creep, SkillType.Navigate, SkillType.Explode]
     },
     [UnitType.Phychi]: {
-        tribeType: TribeType.Cymanti,
-        techType: TechnologyType.Archery,
         cost: 3,
         health: 5,
         attack: 1,
@@ -405,8 +361,6 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Dash, SkillType.Fly, SkillType.Poison, SkillType.Surprise]
     },
     [UnitType.Exida]: {
-        tribeType: TribeType.Cymanti,
-        techType: TechnologyType.Mathematics,
         cost: 8,
         health: 10,
         attack: 3,
@@ -419,11 +373,10 @@ export const UnitSettings: Record<UnitType, {
     
     // Elyron
     [UnitType.DragonEgg]:   {
-        tribeType: TribeType.Elyrion,
-        techType: TechnologyType.Unbuildable,
         health: 10,
+        super: true,
         cost: 10,
-        attack: 0,
+        attack: -1,
         movement: 1,
         defense: 2,
         range: 1,
@@ -432,8 +385,7 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Grow, SkillType.Fortify]
     },
     [UnitType.BabyDragon]:  {
-        tribeType: TribeType.Elyrion,
-        techType: TechnologyType.Unbuildable,
+        super: true,
         health: 15,
         cost: 10,
         attack: 3,
@@ -445,8 +397,7 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Grow, SkillType.Dash, SkillType.Fly, SkillType.Escape, SkillType.Scout]
     },
     [UnitType.FireDragon]:  {
-        tribeType: TribeType.Elyrion,
-        techType: TechnologyType.Unbuildable,
+        super: true,
         health: 20,
         cost: 10,
         attack: 4,
@@ -457,8 +408,6 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Dash, SkillType.Fly, SkillType.Splash, SkillType.Scout]
     },
     [UnitType.Polytaur]: {
-        tribeType: TribeType.Elyrion,
-        techType: TechnologyType.ForestMagic,
         cost: 2,
         health: 15,
         attack: 3,
@@ -469,3 +418,21 @@ export const UnitSettings: Record<UnitType, {
         skills: [SkillType.Dash, SkillType.Fortify, SkillType.Independent]
     },
 };
+
+export const UnitUpgradables: [UnitType.Scout, UnitType.Rammer, UnitType.Bomber] = [
+    UnitType.Scout, 
+    UnitType.Rammer, 
+    UnitType.Bomber
+];
+
+export const UnitSuperTypes: Record<TribeType.Polaris | TribeType.Aquarion | TribeType.Elyrion | TribeType.Cymanti | TribeType.None, UnitType> = {
+    [TribeType.Polaris]: UnitType.Gaami,
+    [TribeType.Aquarion]: UnitType.Crab,
+    [TribeType.Elyrion]: UnitType.DragonEgg,
+    [TribeType.Cymanti]: UnitType.Centipede,
+    [TribeType.None]: UnitType.Giant
+};
+
+Object.freeze(UnitSettings);
+Object.freeze(UnitUpgradables);
+Object.freeze(UnitSuperTypes);

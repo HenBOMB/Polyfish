@@ -1,4 +1,9 @@
+import AIState from "./aistate";
+import { isGameOver } from "./core/functions";
 import GameLoader from "./core/gameloader";
+import { UndoCallback } from "./core/move";
+import { MoveGenerator } from "./core/moves";
+import Game from "./game";
 
 let finishedComputing = true;
 
@@ -36,9 +41,64 @@ export function deepCompare<T>(a: T, b: T, key: string, ignoreObjKeyLength?: boo
 }
 
 export default async function main() {
-    if(!finishedComputing) return;
+    const loader = new GameLoader();
+    await loader.loadRandom();
+    // console.time('test');
+    // console.log(await predict(loader.currentState));
+    // console.timeEnd('test');
+    // Inside your game logic or a test script where you have 'state'
 
-    finishedComputing = false;
+    AIState.assertConfig(loader.currentState);
+    
+    const game = new Game();
+    game.load(loader.currentState);
+
+    let depth = 2;
+
+    const superchain: UndoCallback[] = [];
+
+    while(!isGameOver(game.state)) {
+        const moves = MoveGenerator.legal(game.state);
+        const move = moves[Math.floor(Math.random() * moves.length)];
+        const result = game.playMove(move);
+
+        if(result) {
+            const [ played, undo ] = result;
+            console.log(played.stringify(game.stateBefore, game.state));
+            superchain.push(undo);            
+        }
+
+        depth--;
+        
+        if(depth === 0) {
+            console.log(moves.map(x => x.stringify(game.stateBefore, game.state)));
+            break;
+        }
+    }
+
+    superchain.reverse().forEach(x => x());
+
+    deepCompare(
+        { state: { 
+            l: loader.currentState._lighthouses, 
+            v: loader.currentState._visibleTiles, 
+            r: loader.currentState.resources, 
+            s: loader.currentState.structures, 
+            t: loader.currentState.tiles, 
+            T: loader.currentState.tribes
+        } },
+        { state: { 
+            l: game.state._lighthouses, 
+            v: game.state._visibleTiles, 
+            r: game.state.resources, 
+            s: game.state.structures, 
+            t: game.state.tiles, 
+            T: game.state.tribes
+        } },
+        'state'
+    );
+
+    console.log(superchain.length);
 
     // loader.loadFromSpawnNotation(
     //     'domination,0,30,1'
@@ -120,7 +180,6 @@ export default async function main() {
 
     // loader.saveTo('spawns/imperius-05');
 
-    new GameLoader().loadRandom();
 
     // const game = new Game(loader.currentState);
 

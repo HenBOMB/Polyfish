@@ -1,1165 +1,384 @@
 import { CityState, GameState, TileState, UnitState } from "./states";
-import { getNeighborTiles, getTerritorryTiles, isResourceVisible, getNeighborIndexes, isAdjacentToEnemy, isAquaticOrCanFly, isSteppable, isWaterTerrain, getEnemiesInRange, isNavalUnit, getTechCost, getPovTribe, isSkilledIn, getCapitalCity, getRealUnitSettings, getUnitAttack, getUnitMovement, isRoadpathAndUsable, getTrueUnitAtTile, getUnitAtTile, getHomeCity, isInvisible, getMaxHealth, isInTerritory, getAlliesNearTile, getRealUnitType, isTechResearched } from './functions';
-import { StructureByTerrain, StructureSettings } from "./settings/StructureSettings";
-import { ResourceSettings } from "./settings/ResourceSettings";
-import { SkillType, CaptureType, EffectType, ResourceType, RewardType, StructureType, TechnologyType, TerrainType, TribeType, UnitType, AbilityType } from "./types";
-import { TechnologySettings } from "./settings/TechnologySettings";
-import { addPopulationToCity, attackUnit, buildStructure, discoverTiles, freezeArea, harvestResource, healUnit, pushUnit, removeUnit, splashDamageArea, summonUnit } from "./actions";
-import { rewardCapture, rewardTech, rewardUnitAttack, rewardUnitMove } from "../polyfish/eval";
+import { getNeighborTiles, getTerritorry, getNeighborIndexes, isAdjacentToEnemy, isAquaticOrCanFly, isSteppable, isWaterTerrain, getEnemiesInRange, isNavalUnit, getTechCost, getPovTribe, isSkilledIn, getCapitalCity, getRealUnitSettings, getUnitAttack, getUnitMovement, isRoadpathAndUsable, getTrueUnitAt, getUnitAt, getHomeCity, isInvisible, getMaxHealth, getAlliesNearTile, getRealUnitType, isTechUnlocked, isLighthouse, tryDiscoverRewardOtherTribes, isEnemyCity, isUnderSiege, getCityAt, getTechSettings, getTechUnitType, isTileOccupied, isBoosted, getEnemiesNearTile, isFrozen, isTileFrozen, getStarExchange } from './functions';
+import { StructureByTerrain } from "./settings/StructureSettings";
+import { SkillType, EffectType, ResourceType, RewardType, StructureType, TechnologyType, TerrainType, UnitType, AbilityType } from "./types";
+import { TechnologyUnlockableList } from "./settings/TechnologySettings";
+import { addPopulationToCity, discoverTiles, freezeArea, splashDamageArea } from "./actions";
 import { UnitSettings } from "./settings/UnitSettings";
-import { TribeSettings } from "./settings/TribeSettings";
-import Move, { CallbackResult, MoveType, UndoCallback } from "./move";
-import AIState, { MODEL_CONFIG } from "../aistate";
+import Move, { Action, CallbackResult, UndoCallback } from "./move";
+import { MoveType } from "./types";
 import { Logger } from "../polyfish/logger";
 import Upgrade from "./moves/Upgrade";
 import Summon from "./moves/Summon";
 import Step from "./moves/Step";
+import Research from "./moves/Research";
+import Reward from "./moves/Reward";
+import EndTurn from "./moves/EndTurn";
+import Harvest from "./moves/Harvest";
+import Structure from "./moves/Structure";
+import Recover from "./moves/abilities/Recover";
+import Disband from "./moves/abilities/Disband";
+import HealOthers from "./moves/abilities/HealOthers";
+import Promote from "./moves/abilities/Promote";
+import Attack from "./moves/Attack";
+import Capture from "./moves/Capture";
+import Boost from "./moves/abilities/Boost";
+import Explode from "./moves/abilities/Explode";
+import FreezeArea from "./moves/abilities/FreezeArea";
+import Destroy from "./moves/abilities/Destroy";
+import Decompose from "./moves/abilities/Decompose";
+import BurnForest from "./moves/abilities/BurnForest";
+import GrowForest from "./moves/abilities/GrowForest";
+import ClearForest from "./moves/abilities/ClearForest";
+// import EconomyAbility from "./moves/EconomyAbility.old";
 
-export interface ReachableNode {
+/**
+ * Safely executes a move and overrides the state. 
+ * Rewards (forced moves) are queued in legal() and no other moves are returned.
+ * @param state 
+ * @param move 
+ * @returns 
+ */
+export function safelyExecuteMove(state: GameState, move: Move): UndoCallback | null {
+	try {
+		const tribe = getPovTribe(state);
+
+		if(move.costs && tribe._stars < move.costs) {
+            return Logger.illegal(move.moveType, `Too expensive: ${move.costs} > ${tribe._stars} (${move.getType()})`);
+        }
+
+		if(!move.safeguard(state)) {
+            return Logger.illegal(move.moveType, `Guard caught illegal move`);
+		}
+
+		const result = move.execute(state);
+		
+		if(!result) {
+			return Logger.illegal(move.moveType, `Move failed, something went wrong`);
+		}
+
+		if(tribe._stars < 0) {
+			return Logger.illegal(move.moveType, `Move failed, negative stars: ${tribe._stars}, ${move.costs}`)
+		}
+
+		// Moving or attacking causes discovering tiles, so we may discover other tribes
+		if(move.moveType == MoveType.Step || move.moveType == MoveType.Attack) {
+			tryDiscoverRewardOtherTribes(state);
+		}
+
+		// If we just played a reward move, clear the first two
+		if(move.moveType == MoveType.Reward) {
+			state.settings._pendingRewards.splice(0, 2);
+		}
+
+		// If playing the move lead to more rewards, queue them
+		if(result.rewards) {
+			state.settings._pendingRewards.push(...result.rewards);
+		}
+
+		return result.undo;
+	} catch (error) {
+		console.log(`CRITICAL\nMOVE FAILED "${MoveType[move.moveType]}"`);
+		console.error(error);
+		return null;
+	}
+}
+
+export class MoveGenerator {
+	static legal(state: GameState): Move[] {
+		if(state.settings._pendingRewards.length) {
+			return state.settings._pendingRewards;
+		}
+
+		return [
+			new EndTurn(),
+			...ArmyMovesGenerator.all(state),
+			...EconMovesGenerator.all(state),
+		];
+	}
+
+	static legalActions(state: GameState): Action[] {
+		return MoveGenerator.legal(state).map(x => x.toAction());
+	}
+}
+
+export class EconMovesGenerator {
+	static all(state: GameState): Move[] {
+		const moves: Move[] = [];
+		
+		EconMovesGenerator.actions(state, moves);
+		EconMovesGenerator.resources(state, moves);
+		EconMovesGenerator.structures(state, moves);
+		EconMovesGenerator.research(state, moves);
+
+		return moves;
+	}
+
+	static actions(state: GameState, moves: Move[]) {
+		const pov = getPovTribe(state);
+		const territory = getTerritorry(state);
+
+		const abilities = getPovTribe(state)._tech.reduce((a: any[], b) => ([
+			...a,
+			...(getTechSettings(b).unlocksAbility ? [getTechSettings(b).unlocksAbility] : [])
+		]), []) as AbilityType[];
+
+		for (let i = 0; i < territory.length; i++) {
+			const tile = state.tiles[territory[i]];
+			const struct = state.structures[tile.tileIndex];
+
+			if(struct && tile._owner == pov.owner) {
+				if(abilities.some(x => x == AbilityType.Destroy)) {
+					moves.push(new Decompose(tile.tileIndex));	
+				}
+				else if(abilities.some(x => x == AbilityType.Decompose)) {
+					moves.push(new Destroy(tile.tileIndex));	
+				}
+			}
+
+			if(tile.terrainType === TerrainType.Forest) {
+				if(abilities.some(x => x == AbilityType.ClearForest)) {
+					moves.push(new ClearForest(tile.tileIndex));
+				}
+				if(abilities.some(x => x == AbilityType.GrowForest)) {
+					moves.push(new GrowForest(tile.tileIndex));
+				}
+				if(abilities.some(x => x == AbilityType.BurnForest)) {
+					moves.push(new BurnForest(tile.tileIndex));
+				}
+			}
+
+			// TODO should use internal ice boolean
+			// Same with Drain
+			// if(tile.terrainType === TerrainType.Ice) {
+			// }
+		}
+	}
+
+	static resources(state: GameState, moves: Move[]) {
+		const territory = getTerritorry(state);
+
+		for (let i = 0; i < territory.length; i++) {
+			const move = new Harvest(territory[i]);
+			
+			if(!move.safeguard(state)) continue;
+	
+			moves.push(move);
+		}
+	}
+	
+	static structures(state: GameState, moves: Move[]) {
+		const placebleTiles = (
+			getTerritorry(state)
+		).filter(x => !state.structures[x] && !isLighthouse(state, x));
+	
+		for(let i = 0; i < placebleTiles.length; i++) {
+			const tile = state.tiles[placebleTiles[i]];
+			for(let j = 0; j < StructureByTerrain[tile.terrainType].length; j++) {
+				const move = new Structure(
+					tile.tileIndex,
+					StructureByTerrain[tile.terrainType][j]
+				);
+			
+				if(!move.safeguard(state)) continue;
+	
+				moves.push(move);
+			};
+		}
+	}
+	
+	static research(state: GameState, moves: Move[]) {
+		for (let i = 0; i < TechnologyUnlockableList.length; i++) {
+			const techType = TechnologyUnlockableList[i];
+			const move = new Research(techType, getTechCost(techType));
+			
+			if(!move.safeguard(state)) continue;
+	
+			moves.push(move);
+		}
+	}
+	
+	static rewards(city: CityState): Move[] {
+		const rewards = [
+			[ RewardType.Workshop, RewardType.Explorer ],
+			[ RewardType.CityWall, RewardType.Resources ],
+			[ RewardType.PopulationGrowth, RewardType.BorderGrowth ],
+		][city._level-2] || [ RewardType.Park, RewardType.SuperUnit ];
+		if(city._rewards.some(x => rewards.includes(x))) {
+			return [];
+		}
+		return rewards.map(rewardType => new Reward(city.tileIndex, rewardType));
+	}
+}
+
+interface ReachableNode {
 	index: number;
 	cost: number;
 	terminal?: boolean;
 }
 
-/**
- * Format: EndTurn, Eco(Resouce, Struct, Tech)[], Army[]
- * @param state 
- * @returns 
- */
-export function generateAllMoves(state: GameState): Move[] {
-	const moves = [
-		generateEndTurnMove(),
-		...generateEcoMoves(state),
-		...generateArmyMoves(state),
-	];
-	if(moves.length > MODEL_CONFIG.max_actions) {
-		Logger.warn(`Too many actions! ${moves.length}/${MODEL_CONFIG.max_actions}`);
-		return moves.slice(0, MODEL_CONFIG.max_actions);
-	}
-	return moves;
-}
-
-export function generateArmyMoves(state: GameState): Move[] {
-	return getPovTribe(state)._units.map(x => UnitMoveGenerator.all(state, x)).flat();
-}
-
-export function generateEcoMoves(state: GameState): Move[] {
-	const moves = [
-		...generateResourceMoves(state),
-		...generateStructureMoves(state),
-		...generateTechMoves(state),
-	];
-	return moves;
-}
-
-/** Placeholder for the End Turn move, doesnt do anything */
-export function generateEndTurnMove(): Move {
-	return new Move(
-		MoveType.EndTurn,
-		0, 0, 0,
-		// id: 'endturn-'+state.settings._turn,
-		(state: GameState) => {
-			// TODO temples logic
-			return {
-				moves: [],
-				undo: () => { },
-			};
-		},
-	)
-}
-
-export function generateResourceMoves(state: GameState, cityTarget?: CityState | null, targetTileIndex?: number): Move[] {
-	const moves: Move[] = [];
-	const tribe = state.tribes[state.settings._pov];
-	
-	if(targetTileIndex) {
-		const resource = state.resources[targetTileIndex]!;
-		return [new Move(
-			MoveType.Harvest,
-			targetTileIndex, 0, resource.id,
-			(state: GameState) => harvestResource(state, targetTileIndex),
-		)];
-	}
-
-	for (const tileIndex of cityTarget? cityTarget._territory : tribe._resources) {
-		const resource = state.resources[tileIndex];
-
-		if(!resource) continue;
-
-		const settings = ResourceSettings[resource.id];
-
-		// Cant afford it
-		if((settings.cost || 0) > tribe._stars) continue;
-
-		// Resource requires a structure
-		if(settings.structType) continue;
-
-		// Cant harvest while there is a structure built
-		const struct = state.structures[tileIndex];
-		if(struct && struct.id != StructureType.None) continue;
-
-		const tile = state.tiles[tileIndex];
-
-		// If enemy is standing on resource, tile is blocked
-		if(tile._unitOwner > 0 && tile._unitOwner != tribe.tribeType) continue;
-
-		// Resource is unharvestable
-		if(!isTechResearched(tribe, settings.techRequired)) continue;
-
-		// Resource is limited by tech visibility
-		if(!isResourceVisible(tribe, resource.id)) continue;
-
-		moves.push(new Move(
-			MoveType.Harvest,
-			tileIndex, 0, resource.id,
-			(state: GameState) => harvestResource(state, tileIndex),
-		));
-	}
-
-	return moves;
-}
-
-export function generateStructureMoves(state: GameState, cityTarget?: CityState | null, indexAndType?: [number, StructureType]): Move[] {
-	const moves: Move[] = [];
-	const tribe = state.tribes[state.settings._pov];
-
-	if(indexAndType) {
-		const [tileIndex, structId] = indexAndType;
-		return [new Move(
-			MoveType.Build,
-			tileIndex, 0, structId,
-			(state: GameState) => buildStructure(state, structId, tileIndex),
-		)];
-	}
-
-	const territory = cityTarget? cityTarget._territory.map(x => state.tiles[x]) : getTerritorryTiles(state, tribe);
-	const placebleTiles = territory.filter(x => !state.structures[x.tileIndex]);
-
-	for(const targetTile of placebleTiles) {
-		for(const structId of StructureByTerrain[targetTile.terrainType]) {
-			const settings = StructureSettings[structId];
-
-			// ! Struct does not belong to this tribe
-			if(settings.tribeType && settings.tribeType != tribe.tribeType) continue;
-
-			if((settings.cost || 0) > tribe._stars) continue;
-
-			if(!isTechResearched(tribe, settings.techRequired)) continue;
-
-			// ! Resource is required (and is visible)
-			if(settings.resourceType) {
-				if(state.resources[targetTile.tileIndex]?.id != settings.resourceType) continue;
-				if(!isResourceVisible(tribe, settings.resourceType)) continue;
-			}
-			// EVAL: If doesnt require a resource but we are building ontop of a resource, assume bad move
-			else if(state.resources[targetTile.tileIndex]) {
-				continue;
-			}
-
-			// ! If enemy is standing on resource, tile is blocked
-			if(targetTile._unitOwner > 0 && targetTile._unitOwner != tribe.owner) continue;
-
-			// ! Task already built or not completed
-			if(settings.task) {
-				if(tribe._builtUniqueStructures.some(x => x == structId) || !settings.task(tribe, state.tiles)) continue;
-				// EVAL Skip building it if it doesnt level up the city
-				const city = tribe._cities.find(x => targetTile._rulingCityIndex)!;
-				const isLvlUp = (city._progress + (settings.rewardPop || 3)) >= city._level + 1;
-				if(!isLvlUp) {
-					continue;
-				}
-			}
-
-			// ! Structure has already been built in this city's territory
-			if(settings.limitedPerCity) {
-				if(territory.some(x => state.structures[x.tileIndex]?.id == structId && x._rulingCityIndex == targetTile._rulingCityIndex)) {
-					continue;
-				}
-			}
-
-			// ! Adjacent tiles do not contain matching structure
-			if(settings.adjacentTypes != undefined &&
-				!getNeighborTiles(state, targetTile.tileIndex).some(x => state.structures[x.tileIndex]? settings.adjacentTypes!.includes(state.structures[x.tileIndex]!.id) : false)
-			) continue;
-
-			return [new Move(
-				MoveType.Build,
-				targetTile.tileIndex, 0, structId,
-				(state: GameState) => 
-					buildStructure(state, structId, targetTile.tileIndex),
-			)];
-		};
-	}
-
-	return moves;
-}
-
-export function generateTechMoves(state: GameState, techType?: TechnologyType): Move[] {
-	const moves: Move[] = [];
-	const tribe = state.tribes[state.settings._pov];
-
-	if(techType) {
-		const cost = getTechCost(tribe, techType);
-
-		return [new Move(
-			MoveType.Research,
-			0, 0, techType,
-			(state: GameState) => {
-				tribe._tech.push(techType);
-
-				if(state.settings.live) {
-					tribe._trueTech.push(techType);
-				}
-				
-				tribe._stars -= cost;
-
-				const oldScoreEconomy = state._scoreTech;
-
-				state._scoreTech += rewardTech(state, techType);
-
-				return {
-					moves: [],
-					undo: () => {
-						state._scoreTech = oldScoreEconomy;
-						tribe._stars += cost;
-						tribe._tech.pop();
-					}
-				};
-			},
-		)];
-	}
-
-	const dissalowed: TechnologyType[] = [];
-	
-	for(const techId of Object.keys(TechnologySettings)) {
-		const unlockedTech: TechnologyType = Number(techId);
-
-		if(unlockedTech == TechnologyType.Unbuildable || unlockedTech == TechnologyType.None) continue;
-
-		// ! Already unlocked
-		if(isTechResearched(tribe, unlockedTech)) continue;
-
-		if(dissalowed.includes(unlockedTech)) continue;
-
-		let settings = TechnologySettings[unlockedTech];
-
-		if(settings.replaced && settings.tribeType == tribe.tribeType) {
-			dissalowed.push(settings.replaced);
-		}
-
-		// ! Owner doesnt match
-		if(settings.tribeType && settings.tribeType != tribe.tribeType) continue;
-
-		// ! Previous tier tech not unlocked
-		if(settings.requires && !isTechResearched(tribe, settings.requires)) continue;
-
-		const cost = getTechCost(tribe, unlockedTech);
-
-		if(cost > tribe._stars) continue;
-
-		moves.push(new Move(
-			MoveType.Research,
-			0, 0, unlockedTech,
-			(state: GameState) => {
-				tribe._tech.push(unlockedTech);
-				tribe._stars -= cost;
-
-				const oldScoreEconomy = state._scoreTech;
-
-				state._scoreTech += rewardTech(state, unlockedTech);
-
-				return {
-					moves: [],
-					undo: () => {
-						state._scoreTech = oldScoreEconomy;
-						tribe._tech = tribe._tech.filter(x => x != unlockedTech);
-						tribe._stars += cost;
-					}
-				};
-			},
-		));
-	}
-
-	return moves.filter(x => !dissalowed.some(y => y == x.type));
-}
-
-// Does not work with generator, deep compare fails
-export function generateRewardMoves(state: GameState, rulingCityIndex: number, rewardType?: RewardType): Move[] {
-	const tribe = state.tribes[state.settings._pov];
-	const city = tribe._cities.find(x => x.tileIndex == rulingCityIndex);
-	
-	if(!city) return [];
-
-	const options: RewardType[] = rewardType? [rewardType] : ([
-		[ RewardType.Workshop, RewardType.Explorer ],
-		[ RewardType.CityWall, RewardType.Resources ],
-		[ RewardType.PopulationGrowth, RewardType.BorderGrowth ],
-	][city._level-2] || [ RewardType.Park, RewardType.SuperUnit ]);
-
-	return options.map(rewardType => new Move(
-		MoveType.Reward,
-		0, 0, rewardType,
-		(state: GameState) => {
-			let undoReward: UndoCallback = () => { };
-			const oldProduction = city._production;
-			const oldPopulation = city._population;
-			const oldProgress = city._progress;
-
-			switch (rewardType) {
-				case RewardType.Workshop:
-					city._production++;
-					break;
-				case RewardType.Explorer:
-					const amount = Math.floor(Math.random() * 11) + 9;
-					state._potentialDiscovery.push(...Array(amount).fill(-1));
-					undoReward = () => { 
-						state._potentialDiscovery.splice(state._potentialDiscovery.length - amount, amount);
-					};
-					break;
-				case RewardType.CityWall:
-					city._walls = true;
-					undoReward = () => {
-						city._walls = false;
-					};
-					break;
-				case RewardType.Resources:
-					tribe._stars += 5;
-					undoReward = () => {
-						tribe._stars -= 5;
-					}
-					break;
-				case RewardType.PopulationGrowth:
-					city._population += 3;
-					city._progress += 3;
-					break;
-				case RewardType.BorderGrowth:
-					city._borderSize++;
-					const tileIndex = city.tileIndex;
-					const undiscovered = getNeighborTiles(state, tileIndex, city._borderSize, false, true)
-						.filter(x => !x.explorers.includes(tribe.owner) && !state._potentialDiscovery.includes(x.tileIndex));
-					state._potentialDiscovery.push(...undiscovered.map(x => x.tileIndex));
-					if(state.settings.live) {
-						for(const tile of undiscovered) {
-							state._visibleTiles.push(tileIndex);
-							tile.explorers.push(tribe.owner);
-						}
-						const unowned = undiscovered.filter(x => x._owner < 1);
-						for(const tile of unowned) {
-							tile._owner = tribe.owner;
-							tile._rulingCityIndex = tileIndex;
-							const struct = state.structures[tileIndex];
-							const resource = state.resources[tileIndex];
-							if(struct) {
-								struct._owner = tribe.owner;
-							}
-							if(resource) {
-								resource._owner = tribe.owner;
-								tribe._resources.push(tileIndex);
-							}
-						}
-					}
-					undoReward = () => {
-						state._potentialDiscovery = state._potentialDiscovery.slice(0, state._potentialDiscovery.length - undiscovered.length);
-						city._borderSize--;
-					}
-				break;
-				case RewardType.Park:
-					city._production++;
-					break;
-				case RewardType.SuperUnit:
-					let undoPush: UndoCallback = pushUnit(state, city.tileIndex);
-					
-					const undoSummon = summonUnit(state, 
-						TribeSettings[tribe.tribeType].uniqueSuperUnit || UnitType.Giant, 
-						city.tileIndex
-					);
-					
-					undoReward = () => {
-						undoSummon();
-						undoPush();
-					}
-					break;
-				default:
-					return Logger.illegal(MoveType.Reward, `Invalid type ${rewardType}`);
-			}
-			
-			city._rewards.push(rewardType);
-			
-			return {
-				moves: [],
-				undo: () => {
-					// state._potentialEconomy -= 0;
-					city._rewards.pop();
-					undoReward();
-					city._production = oldProduction;
-					city._population = oldPopulation;
-					city._progress = oldProgress;
-				},
-			};
-		}
-	)) as Move[];
-}
-
-// TODO move to actions.ts
-
-export default class UnitMoveGenerator {
-	static all(state: GameState, unitTarget: UnitState, actionsOnly = false): Move[] {
-		if (!unitTarget || unitTarget._health < 1) return [];
+export class ArmyMovesGenerator {
+	static all(state: GameState): Move[] {
 		const moves: Move[] = [];
 
-		UnitMoveGenerator.captures(state, unitTarget, moves);
-		UnitMoveGenerator.actions(state, unitTarget, moves);
-
-		if (!actionsOnly) {
-			UnitMoveGenerator.attacks(state, unitTarget, moves);
-			UnitMoveGenerator.steps(state, unitTarget, moves);
-			moves.push(...UnitMoveGenerator.spawns(state));
-		}
+		getPovTribe(state)._units.forEach(x => {
+			if(x._health > 0) {
+				ArmyMovesGenerator.captures(state, x, moves);
+				ArmyMovesGenerator.actions(state, x, moves);
+				ArmyMovesGenerator.attacks(state, x, moves);
+				ArmyMovesGenerator.steps(state, x, moves);
+			}
+		});
 		
-		// ! MCTS EVAL !
-		// Prioritize moves
-		// Capture -> Ability -> Attack -> Step
-
-		const TABLE: { [moveType: number]: number } = {
-			[MoveType.Capture]: 4,
-			[MoveType.Ability]: 3,
-			[MoveType.Attack]: 2,
-			[MoveType.Step]: 1,
-			[MoveType.Summon]: 0,
-		};
-		const MAX = 7;
-
-		moves.sort((a, b) => (TABLE[a.moveType] || Math.floor(Math.random() * MAX)) - (TABLE[b.moveType] || Math.floor(Math.random() * MAX)));
+		ArmyMovesGenerator.summons(state, moves);
 
 		return moves;
 	}
 
-	/**
-	 * TODO
-	 * Generate all unit actions for a unit
-	 * @param state 
-	 * @param unitTarget 
-	 */
-	static actions(state: GameState, unitTarget: UnitState, _moves?: Move[]): Move[] {
-		const moves = [];
+	static actions(state: GameState, unit: UnitState, _moves: Move[]) {
+		const tileIndex = unit._tileIndex;
+
+		// Promote
+		if(!unit.veteran && unit.kills >= 3) {
+			_moves.push(new Promote(tileIndex));
+		}
+
+		if(unit._moved || unit._attacked) return [];
 
 		// Disband
-		if(isTechResearched(getPovTribe(state), TechnologyType.FreeSpirit)) {
-			moves.push(new Move(
-				MoveType.Ability,
-				AbilityType.Disband, 0, 0,
-				(state: GameState) => {
-					const tribe = getPovTribe(state);
-					const undoRemove = removeUnit(state, unitTarget);
-					const cost = Math.floor(getRealUnitSettings(unitTarget).cost / 2);
-					tribe._stars += cost;
-					return {
-						moves: [],
-						undo: () => {
-							tribe._stars -= cost;
-							undoRemove()
-						}
-					}
-				}
-			));
+		if(isTechUnlocked(getPovTribe(state), TechnologyType.FreeSpirit)) {
+			_moves.push(new Disband(tileIndex));
 		}
 
 		// Recover
-		if(unitTarget._health < getMaxHealth(unitTarget)) {
-			moves.push(new Move(
-				MoveType.Ability,
-				AbilityType.Recover, 0, 0,
-				(state: GameState) => {
-					const undoHeal = healUnit(unitTarget, isInTerritory(state, unitTarget)? 4 : 2)
-					return {
-						moves: [],
-						undo: () => {
-							undoHeal();
-						}
-					};
-				}
-			));
+		if(unit._health < getMaxHealth(unit)) {
+			_moves.push(new Recover(tileIndex));
 		}
 
 		// Heal Others
-		if(isSkilledIn(unitTarget, SkillType.Heal)) {
-			const adjAllies = getAlliesNearTile(state, unitTarget._tileIndex);
-			moves.push(new Move(
-				MoveType.Ability,
-				AbilityType.HealOthers, 0, 0,
-				(state: GameState) => {
-					const chain: UndoCallback[] = [];
-					for(const unit of adjAllies) {
-						chain.push(healUnit(unit, 4));
-					}
-					return {
-						moves: [],
-						undo: () => {
-							chain.forEach(x => x());
-						}
-					}
-				},
-			));
+		if(isSkilledIn(unit, SkillType.Heal)) {
+			const damagedAround = getAlliesNearTile(state, tileIndex).some(x => x._health < getMaxHealth(x));
+			if(damagedAround) {
+				_moves.push(new HealOthers(tileIndex));
+			}
 		}
 
-		// TODO Promotion
+		// Boost
+		if(isSkilledIn(unit, SkillType.Boost)) {
+			const unboostedAround = getAlliesNearTile(state, tileIndex).some(x => !isBoosted(x));
+			if(unboostedAround) {
+				_moves.push(new Boost(tileIndex));
+			}
+		}
+		
+		// Explode
+		if(isSkilledIn(unit, SkillType.Explode)) {
+			const enemiesAround = getEnemiesNearTile(state, tileIndex, 1, true).length;
+			if(enemiesAround) {
+				_moves.push(new Explode(tileIndex));
+			}
+		}
 
-		// TODO 
-		// ? tile state filed required frozen
-		// UnitActionType.BreakIce;
-		// ? tile state filed required flodded
-		// UnitActionType.Fill;
-		// UnitActionType.FloodTile;
-		// TODO finish this
-		// UnitActionType.FreezeArea;
-		// UnitActionType.Boost;
-		// UnitActionType.Explode;
+		// Freeze Area
+		if(isSkilledIn(unit, SkillType.FreezeArea)) {
+			const unitsAround = getEnemiesNearTile(state, tileIndex, 1, true).some(x => !isFrozen(x) || !isTileFrozen(state, x._tileIndex));
+			if(unitsAround) {
+				_moves.push(new FreezeArea(tileIndex));
+			}
+		}
 
-		return moves;
+		return _moves;
 	}
 
-	static captures(state: GameState, sieger: UnitState, _moves?: Move[]): Move | null {
-		if (sieger._moved || sieger._attacked) return null;
+	static captures(state: GameState, capturer: UnitState, moves: Move[]) {
+		if (capturer._moved || capturer._attacked) return null;
 
-		const us = state.tribes[sieger._owner || 1]!;
-		const targetCityIndex = sieger._tileIndex;
+		const pov = state.tribes[capturer._owner];
+		const targetCityIndex = capturer._tileIndex;
 		const struct = state.structures[targetCityIndex];
 		const resource = state.resources[targetCityIndex];
-		const scoreArmy = state._scoreArmy;
-
-		let move: Move | null = null;
-
-		if (struct && struct.id == StructureType.Village && struct._owner != sieger._owner) {
-			move = new Move(
-				MoveType.Capture,
-				sieger._tileIndex, 0, struct._owner < 1 ? CaptureType.Village : CaptureType.City,
-				// id: `capture-${sieger.idx}-${sieger._tileIndex}-${targetCityIndex}`,
-				(state: GameState) => {
-					let undoCapture: UndoCallback = () => { };
-
-					const oldMoved = sieger._moved;
-					const oldAttacked = sieger._attacked;
-					const oldHome = sieger._homeIndex;
-					const usOwner = sieger._owner;
-					const cityTile = state.tiles[targetCityIndex];
-					const cityStruct = state.structures[targetCityIndex]!;
-
-					if (getHomeCity(state, sieger)) {
-						sieger._homeIndex = targetCityIndex;
-					}
-
-					sieger._moved = true;
-					sieger._attacked = true;
-
-					// Belongs to no tribe
-					if (struct._owner < 1) {
-						state._potentialArmy++;
-						state._potentialEconomy++;
-						state._scoreArmy += rewardCapture(state, sieger, CaptureType.Village);
-
-						const createdCity: CityState = {
-							name: `${TribeType[us.tribeType]} City`,
-							_population: 0,
-							_progress: 0,
-							_borderSize: 1,
-							_connectedToCapital: false,
-							_level: 1,
-							_production: 1,
-							_owner: usOwner,
-							tileIndex: cityTile.tileIndex,
-							_rewards: [],
-							_territory: struct._potentialTerritory!.filter(x => state.tiles[x]._rulingCityIndex < 0),
-							_unitCount: 1,
-						} as CityState;
-
-						us._cities.push(createdCity);
-						// Claim unowned terrirory
-						cityStruct!._owner = usOwner;
-						cityTile._owner = usOwner;
-
-						for (const tileIndex of createdCity._territory) {
-							const tile = state.tiles[tileIndex];
-							tile._owner = usOwner;
-							tile._rulingCityIndex = cityTile.tileIndex;
-							const struct = state.structures[tileIndex];
-							const resource = state.resources[tileIndex];
-							if (struct) {
-								struct._owner = usOwner;
-							}
-							if (resource) {
-								resource._owner = usOwner;
-								us._resources.push(tileIndex);
-							}
-						}
-
-						// console.log(unclaimedTerrirory.length);
-						undoCapture = () => {
-							// console.log(getNeighborTiles(state, tileIndex, 1).filter(x => x._rulingCityIndex == tileIndex).length);
-							for (const tileIndex of createdCity._territory) {
-								const tile = state.tiles[tileIndex];
-								tile._owner = -1;
-								tile._rulingCityIndex = -1;
-								const struct = state.structures[tileIndex];
-								const resource = state.resources[tileIndex];
-								if (struct) {
-									struct._owner = -1;
-								}
-								if (resource) {
-									resource._owner = -1;
-									us._resources.pop();
-								}
-							}
-							cityStruct!._owner = -1;
-							cityTile._owner = -1;
-							us._cities.pop();
-							state._potentialArmy--;
-							state._potentialEconomy--;
-						};
-					}
-					// Belongs to an enemy tribe
-					else {
-						const them = state.tribes[struct._owner];
-						const themOwner = struct._owner;
-						const capturedCity = state.tribes[themOwner]!._cities.find(x => x.tileIndex == targetCityIndex)!;
-						// TODO SHOULD BE THIS INSTEAD OF ABOVE
-						// const capturedCity = getRulingCity(state, targetCityIndex)!;
-						const oldName = capturedCity.name;
-
-						capturedCity.name = `${TribeType[us.tribeType]} ${state.tiles[targetCityIndex].capitalOf > 0? 'Capital' : 'City'}`;
-
-						// EVAL Reward for capturing enemy city
-						state._potentialArmy += 2;
-						state._potentialEconomy += 2;
-						state._scoreArmy += rewardCapture(state, sieger, CaptureType.City);
-
-						let totalExplored = 0;
-
-						capturedCity._owner = usOwner;
-						// TODO enemyCity.progress neg population logic (also on unit death it should add if already neg)
-
-						const cityListIndex = them._cities.indexOf(capturedCity);
-
-						them._cities.splice(cityListIndex, 1)
-						us._cities.push(capturedCity);
-						
-						cityStruct!._owner = usOwner;
-						cityTile._owner = usOwner;
-
-						// Claim the city's territory
-						const enemyResources: number[] = [...them._resources];
-
-						for (let i = 0; i < capturedCity._territory.length; i++) {
-							const tileIndex = capturedCity._territory[i];
-							const tile = state.tiles[tileIndex];
-							
-							if(tile.explorers.includes(usOwner) || state.settings.live) {
-								const struct = state.structures[tileIndex];
-								const resource = state.resources[tileIndex];
-
-								tile._owner = usOwner;
-								if (tile.capitalOf > 0) tile.capitalOf = usOwner;
-
-								if (struct) {
-									struct._owner = usOwner;
-								}
-	
-								if (resource) {
-									us._resources.push(tileIndex);
-									them._resources.splice(them._resources.indexOf(tileIndex), 1);
-								}
-							}
-							else {
-								totalExplored++;
-								state._potentialDiscovery.push(tileIndex);
-							}
-						}
-
-						// If they ran out of cities, then they have lost
-						if(state.settings.live) {
-							// Tribe ran out of cities
-							if(!them._cities.length) {
-								// console.log(`${TribeType[them.tribeType]} has been eliminated by ${TribeType[us.tribeType]}!`);
-
-								// Remove all units
-								for(const unit of them._units) {
-									removeUnit(state, unit);
-								}
-
-								them._killedTurn = state.settings._turn;
-								them._killerId = us.owner;
-							}
-						}
-
-						undoCapture = () => {
-							for (let i = 0; i < capturedCity._territory.length; i++) {
-								const tileIndex = capturedCity._territory[i];
-								const tile = state.tiles[tileIndex];
-								
-								if(tile.explorers.includes(usOwner)) {
-									const struct = state.structures[tileIndex];
-									const resource = state.resources[tileIndex];
-	
-									tile._owner = themOwner;
-									if (tile.capitalOf > 0) tile.capitalOf = themOwner;
-	
-									if (struct) {
-										struct._owner = themOwner;
-									}
 		
-									if (resource) {
-										us._resources.pop();
-									}
-								}
-							}
-							// TODO negative population logic
-							them._resources = [...enemyResources];
-							cityTile._owner = themOwner;
-							cityStruct!._owner = themOwner;
-							us._cities.pop();
-							them._cities.splice(cityListIndex, 0, capturedCity);
-							capturedCity._owner = themOwner;
-							state._potentialDiscovery = state._potentialDiscovery.slice(0, state._potentialDiscovery.length - totalExplored);
-							state._potentialEconomy -= 2;
-							state._potentialArmy -= 2;
-							capturedCity.name = oldName;
-						};
-					}
-
-					return {
-						moves: [],
-						undo: () => {
-							state._scoreArmy = scoreArmy;
-							undoCapture();
-							sieger._moved = oldMoved;
-							sieger._attacked = oldAttacked;
-							sieger._homeIndex = oldHome;
-						}
-					};
-				},
-			);
-		}
-		else if (struct && struct.id == StructureType.Ruin) {
-			move = new Move(
-				MoveType.Capture,
-				sieger._tileIndex, 0, CaptureType.Ruins,
-				// id: `ruins-${sieger.idx}-${targetCityIndex}`,
-				(state: GameState) => {
-					sieger._attacked = true;
-					sieger._moved = true;
-
-					let potentialRewards: number = 1;
-
-					// If Tech tree is not completed
-					// +10 stars
-					if (us._tech.some(x => TechnologySettings[x].next && TechnologySettings[x].next.some(x => !isTechResearched(us, x)))) {
-						potentialRewards += 1;
-					}
-					// If player owns a capital city
-					// +3 pop
-					if (us._cities.some(x => state.tiles[x.tileIndex].capitalOf > 0)) {
-						potentialRewards += 2;
-					}
-					// Any tile within a 5x5 radius that has not been explored will be that explorers' first move
-					if (getNeighborIndexes(state, targetCityIndex, 2, false, true).some(x => !state.tiles[x].explorers.includes(us.owner))) {
-						// Cymanti cannot get explorers from water tiles
-						if (!(us.tribeType == TribeType.Cymanti && isWaterTerrain(state.tiles[targetCityIndex]))) {
-							potentialRewards += 2;
-						}
-					}
-					// If Ruin is not on water
-					// Spwans a veteran Swordsman
-					if (!isWaterTerrain(state.tiles[targetCityIndex])) {
-						potentialRewards += 3;
-					}
-
-					// If Ruin is on water
-					// Spwans a veteran Rammer (Carries warrior)
-					else {
-						potentialRewards += 3;
-					}
-					// Aquarion, if ruin is on ocean tile
-					// Spawns a level 3 city with a city wall and 4 adjacent shallow water tiles
-					if (us.tribeType == TribeType.Aquarion && state.tiles[targetCityIndex].terrainType == TerrainType.Ocean) {
-						potentialRewards += 5;
-					}
-
-					potentialRewards *= .5;
-
-					const ruins = state.structures[targetCityIndex];
-					state._potentialArmy += potentialRewards;
-					delete state.structures[targetCityIndex];
-
-					state._scoreArmy += rewardCapture(state, sieger, CaptureType.Ruins);
-
-					const oldHidden = sieger._hidden;
-					sieger._hidden = false;
-					sieger._effects.push(EffectType.Invisible);
-
-					return {
-						moves: [],
-						undo: () => {
-							sieger._effects.pop();
-							sieger._hidden = oldHidden;
-							state._scoreArmy = scoreArmy;
-							state.structures[targetCityIndex] = ruins;
-							state._potentialArmy -= potentialRewards;
-							sieger._attacked = false;
-							sieger._moved = false;
-						}
-					};
-				},
-			);
-		}
-		else if (resource && resource.id == ResourceType.Starfish && isTechResearched(us, TechnologyType.Navigation)) {
-			move = new Move(
-				MoveType.Capture,
-				sieger._tileIndex, 0, CaptureType.Starfish,
-				// id: `starfish-${sieger.idx}-${sieger._tileIndex}`,
-				(state: GameState) => {
-					const tile = state.tiles[sieger._tileIndex];
-					us._stars += 8;
-					sieger._attacked = true;
-					sieger._moved = true;
-					const starfish = state.resources[tile.tileIndex];
-					delete state.resources[tile.tileIndex];
-					let resourceIndex = -1;
-					if (tile._owner > 0) {
-						resourceIndex = state.tribes[tile._owner]._resources.indexOf(tile.tileIndex);
-						state.tribes[tile._owner]._resources.splice(resourceIndex, 1);
-					}
-					state._scoreArmy += rewardCapture(state, sieger, CaptureType.Starfish);
-					const oldHidden = sieger._hidden;
-					sieger._hidden = false;
-					return {
-						moves: [],
-						undo: () => {
-							sieger._hidden = oldHidden;
-							state._scoreArmy = scoreArmy;
-							if (resourceIndex > 0) {
-								state.tribes[tile._owner]._resources.splice(resourceIndex, 0, tile.tileIndex);
-							}
-							state.resources[tile.tileIndex] = starfish;
-							us._stars -= 8;
-							sieger._attacked = false;
-							sieger._moved = false;
-						}
-					};
-				},
-			);
-		}
-
-		if (move && _moves) _moves.push(move);
-
-		return move;
-	}
-
-	static riot(state: GameState, unitTarget: UnitState, cityIndex: number, moves?: Move[]): Move[] {
-		if (unitTarget._attacked) return [];
-
-		moves = moves || [];
-
-		const tribe = state.tribes[state.settings._pov];
-		const cityTile = state.tiles[cityIndex];
-		const enemyTribe = state.tribes[cityTile._owner];
-		const cityTarget = enemyTribe._cities.find(x => x.tileIndex == cityIndex)!;
-
-		if(!cityTarget || cityTarget._riot) return [];
-
-		moves.push(new Move(
-			MoveType.Attack,
-			unitTarget._tileIndex, cityIndex, 0,
-			(state: GameState) => {
-				if(cityTarget._riot) return { moves: [], undo: () => { } };
-				
-				// It is consumed
-				const undoConsume = removeUnit(state, unitTarget);
-
-				// Any enemy unit in the city at the time will be damaged. 
-				const enemyTarget = getUnitAtTile(state, cityIndex);
-
-				let undoKillEnemy = () => {};
-
-				// This damage is equivalent to what a unit with an attack of 2 would deal.
-				if(enemyTarget) {
-					enemyTarget._health -= 2;
-					if(enemyTarget._health < 1) {
-						const undoRemove = removeUnit(state, enemyTarget);
-						tribe._kills++;
-						undoKillEnemy = () => {
-							tribe._kills--;
-							undoRemove();
-						};
-					}
-				}
-
-				// A group of Daggers will spawn in the city's tile. 
-				// Daggers will prioritize spawning on terrain whey they can benefit from a defense bonus.
-				let defTiles: number[] = [];
-				let waterTiles: number[] = [];
-				let otherTiles: number[] = [];
-				
-				cityTarget._territory.forEach(x => {
-					const tile = state.tiles[x];
-					if(tile._unitOwner > 0 || x == cityIndex) return;
-					switch (tile.terrainType) {
-						case TerrainType.Mountain:
-							if(isTechResearched(tribe, TechnologyType.Climbing)) {
-								defTiles.push(x);
-							}
-							return
-						case TerrainType.Forest:
-							if(isTechResearched(tribe, TechnologyType.Archery)) {
-								defTiles.push(x);
-							}
-							return
-						case TerrainType.Water:
-							if(isTechResearched(tribe, TechnologyType.Sailing)) {
-								waterTiles.push(x);
-							}
-							return
-					}
-					otherTiles.push(x);
-					return;
-				});
-				
-				otherTiles.sort(() => Math.random() - 0.5);
-				defTiles.sort(() => Math.random() - 0.5);
-				waterTiles.sort(() => Math.random() - 0.5);
-
-				// If the enemy died or there wasnt any, then a dagger spawns on the city tile
-				if(enemyTarget && enemyTarget._health < 0) {
-					// Move to front, guarentee the unit spawns there first
-					if(otherTiles.includes(cityIndex)) {
-						otherTiles.splice(otherTiles.indexOf(cityIndex), 1);
-						otherTiles = [cityIndex, ...otherTiles];
-					}
-				}
-
-				// They will not be able to perform any actions until the next turn.
-				// On water tiles, pirates spawn in stead of daggers
-				// A Dagger will only spawn as a Pirate if there are no empty land tiles remaining within the borders of an infiltrated city. 
-				// The number of daggers is relative to the city's size, with a max of 5 daggers.
-
-				const daggers: UndoCallback[] = [];
-
-				for (let j = 0; j < Math.min(5, cityTarget._production); j++) {
-					let tileIndex = defTiles.pop() || otherTiles.pop();
-					let unitType = UnitType.Dagger;
-					if(!tileIndex)  {
-						// water tile
-						tileIndex = waterTiles.pop();
-						if(!tileIndex) break;
-						unitType = UnitType.Pirate;
-					} 
-					daggers.push(summonUnit(state, unitType, tileIndex));
-				}
-
-				// The infiltrating player will immediately gain a number of stars equal to the income of the city.
-
-				tribe._stars += daggers.length;
-
-				// The city will produce zero stars on their opponent's next turn. 
-
-				cityTarget._riot = true;
-
-				// This does not affect other methods of star production.
-
-				return {
-					moves: [],
-					undo: () => {
-						cityTarget._riot = false;
-						tribe._stars -= daggers.length;
-						daggers.forEach(x => x());
-						undoKillEnemy();
-						if(enemyTarget) enemyTarget._health += 2;
-						undoConsume();
-					}
-				};
+		if(struct) {
+			if(struct.id == StructureType.Village && state.tiles[targetCityIndex]._owner !== capturer._owner) {
+				moves.push(new Capture(capturer._tileIndex));
 			}
-		));
-
-		return moves;
+			if(struct.id == StructureType.Ruin) {
+				moves.push(new Capture(capturer._tileIndex));
+			}
+		}
+		else if(resource && resource.id == ResourceType.Starfish && isTechUnlocked(pov, TechnologyType.Navigation)) {
+			moves.push(new Capture(capturer._tileIndex));
+		}
 	}
 
-	static attacks(state: GameState, attacker: UnitState, moves?: Move[]): Move[] {
+	static attacks(state: GameState, attacker: UnitState, moves: Move[]) {
 		if (attacker._attacked) return [];
 
-		moves = moves || [];
-
-		const tribe = state.tribes[attacker?._owner || 1]!;
-
-		// If it can infiltrate, then we can "attack" an enemy city
 		if (isSkilledIn(attacker, SkillType.Infiltrate)) {
-			// Look for any nearby enemy cities
-			const [ targetCityIndex ] = getNeighborIndexes(state, attacker._tileIndex)
-				.filter(x => state.tiles[x]._rulingCityIndex > 0 && state.tiles[x]._owner != tribe.owner);
-
-			if(targetCityIndex) {
-				UnitMoveGenerator.riot(state, attacker, targetCityIndex, moves);
-			}
-
-			return moves;
+			moves.push(
+				...getNeighborIndexes(state, attacker._tileIndex)
+					.filter(x => isEnemyCity(state, x) && !isUnderSiege(state, x))
+					.map(x => new Attack(attacker._tileIndex, x))
+			);
 		}
-
-
-		const enemiesInRange = getUnitAttack(attacker) === 0? [] : getEnemiesInRange(state, attacker);
-		// TODO Allows a unit to convert an enemy unit into a friendly unit by attacking it
-		// Converted units take up population in the attacker's city but do not change score for either players
-		// const hasConvert = isSkilledIn(unitTarget, SkillType.Convert);
-
-		// Normal attack
-
-		for (let i = 0; i < enemiesInRange.length; i++) {
-			const defender = enemiesInRange[i];
-			const enemyTribe = state.tribes[defender._owner];
-			const enemyTile = state.tiles[defender._tileIndex];
-
-			moves.push(new Move(
-				MoveType.Attack,
-				attacker._tileIndex, defender._tileIndex, defender._unitType, 
-				(state: GameState) => {
-					if(!enemyTribe._units.find(x => x.idx == enemyTile._unitIdx)) {
-						return Logger.illegal(MoveType.Attack, `Enemy does not exist ${TribeType[enemyTribe.tribeType]}, ${enemyTile._unitIdx}`);
-					}
-
-					if(defender._health < 1) {
-						return Logger.illegal(MoveType.Attack, `Unit is already dead! ${TribeType[enemyTribe.tribeType]}, ${enemyTile._unitIdx}, ${defender._health}`);
-					}
-
-					const oldMoved = attacker._moved;
-					const oldAttacked = attacker._attacked;
-					const oldScore = state._scoreArmy;
-
-					const undoAttack = attackUnit(state, attacker, defender);
-
-					state._scoreArmy += rewardUnitAttack(state, attacker, defender);
-
-					// Units with Persist skill can keep on killing if they one shot the defender
-					if(attacker._health > 0 && isSkilledIn(attacker, SkillType.Persist) && defender._health < 1) {
-						attacker._attacked = false;
-					}
-					else {
-						attacker._attacked = true;
-					}
-
-					// Units with Escape can move after they attacked
-					if (attacker._health > 0 && isSkilledIn(attacker, SkillType.Escape)) {
-						attacker._moved = false;
-					}
-					else {
-						attacker._moved = true;
-					}
-
-					return {
-						moves: [],
-						undo: () => {
-							attacker._moved = oldMoved;
-							attacker._attacked = oldAttacked;
-							state._scoreArmy = oldScore;
-							undoAttack();
-						}
-					};
-				}
-			));
+		else {
+			// Skip other units that cant attack, eg: raft, mooni
+			if(getUnitAttack(attacker) < 0){
+				return [];
+			}
+			moves.push(
+				...getEnemiesInRange(state, attacker).map(x => new Attack(attacker._tileIndex, x._tileIndex))
+			);
 		}
 
 		return moves;
 	}
 
-	static spawns(state: GameState, cityTarget?: CityState, unitType?: UnitType): Move[] {
-		const moves: Move[] = [];
+	static summons(state: GameState, moves: Move[]) {
 		const tribe = state.tribes[state.settings._pov];
+		const upgradables: UnitType[] = [];
+		const spawnables: UnitType[] = [];
+		
+		tribe._tech.map(x => {
+			const unitType = getTechUnitType(tribe, x);
 
-		if(unitType) {
-			const spawn = cityTarget!.tileIndex;
-			return [new Move(
-				MoveType.Summon,
-				spawn, 0, unitType,
-				(state: GameState) => {
-					const settings = UnitSettings[unitType];
-					if (tribe._stars < settings.cost) return { moves: [], undo: () => { } };
-					const undo = summonUnit(state, unitType, spawn, true);
-					return {
-						moves: [],
-						undo,
-					};
-				},
-			)];
-		}
-
-		const upgradeOptions: UnitType[] = [];
-
-		// Register spawnable units and upgradable units
-		const spawnableUnits = (tribe._tech.reduce<UnitType[]>((acc, techType) => {
-			const techSettings = TechnologySettings[techType];
-
-			// Its fine to skip cause special units also include a base unlockable unit
-			if(!techSettings.unlocksUnit) return acc;
-			
-			let unitTypes: UnitType[] = [techSettings.unlocksUnit];
-			
-			// This overrides the base unit
-			if(techSettings.unlocksSpecialUnits) {
-				const special = techSettings.unlocksSpecialUnits.filter(x => UnitSettings[x].tribeType == tribe.tribeType);
-				if(special.length) {
-					unitTypes = special;
-				}
+			if(!unitType) {
+				return null;
 			}
-			
-			for(const unitType of unitTypes) {
-				// Raft is not purchasable, it requires moving a unit to a port
-				if(unitType == UnitType.Raft) continue;
 
-				const settings = UnitSettings[unitType];
-				
-				// If its purchasable, can afford it and is the same type
-				if (!settings.cost 
-					|| tribe._stars < settings.cost 
-					// If it doesnt belong to us
-					|| (settings.tribeType && settings.tribeType != tribe.tribeType)
-				) {
-					continue;
-				}
-	
-				// Is naval upgrade
-				if(settings.upgradeFrom || !settings.health) {
-					upgradeOptions.push(unitType);
-					continue;
-				}
+			const settings = UnitSettings[unitType];
 
-				acc.push(unitType);
+			if(tribe._stars < settings.cost) {
+				return null;
 			}
-			
-			return acc;
-		}, []));
 
-		if (spawnableUnits.length) {
-			const cities = cityTarget ? [cityTarget] : tribe._cities;
+			if(settings.upgradeFrom) {
+				upgradables.push(unitType);
+			}
+			else {
+				spawnables.push(unitType);
+			}
+		});
 
+		if (spawnables.length) {
+			const cities = tribe._cities;
 			for (let i = 0; i < cities.length; i++) {
-				// City at max capacity
-				// Skip if tile is occupied by some other units
-				// Not occupied, double check
-				if(cities[i]._unitCount > cities[i]._level
-					|| state.tiles[cities[i].tileIndex]._unitOwner > 0
-					|| getUnitAtTile(state, cities[i].tileIndex)
-				) {
+				if(cities[i]._unitCount > cities[i]._level || isTileOccupied(state, cities[i].tileIndex)) {
 					continue;
 				}
-	
-				for (let j = 0; j < spawnableUnits.length; j++) {
-					moves.push(new Summon(cities[i].tileIndex, 0, spawnableUnits[j]))
+				for (let j = 0; j < spawnables.length; j++) {
+					moves.push(new Summon(cities[i].tileIndex, spawnables[j]))
 				}
 			}
 		}
 
-		if(upgradeOptions.length) {
+		if(upgradables.length) {
 			for(let i = 0; i < tribe._units.length; i++) {
-				// Only Rafts in ally territory are upgradable
-				if(tribe._units[i]._unitType != UnitType.Raft) continue;
-				if(state.tiles[tribe._units[i]._tileIndex]._owner != tribe.owner) continue;
-				for (let j = 0; j < upgradeOptions.length; j++) {
-					moves.push(new Upgrade(tribe._units[i]._tileIndex, 0, upgradeOptions[j]))
+				if(tribe._units[i]._unitType != UnitType.Raft || isTileOccupied(state, tribe._units[i]._tileIndex)) {
+					continue;
+				}
+				for (let j = 0; j < upgradables.length; j++) {
+					moves.push(new Upgrade(tribe._units[i]._tileIndex, upgradables[j]))
 				}
 			}
 		}
@@ -1169,42 +388,43 @@ export default class UnitMoveGenerator {
 
 	static steps(state: GameState, unit: UnitState, moves?: Move[] | null, targetTileIndex?: number): Move[] | null {
 		if (unit._moved) return [];
+
 		moves = moves || [];
 
-		const steps = targetTileIndex ? [[targetTileIndex, 1]] : Array.from(UnitMoveGenerator.computeReachableTiles(state, unit).entries());
+		const steps = targetTileIndex ? [[targetTileIndex, 1]] : Array.from(ArmyMovesGenerator.computeReachableTiles(state, unit).entries());
 
 		for (const [tileIndex, cost] of steps) {
 			if (unit._tileIndex == tileIndex) {
 				continue;
 			}
 		
-			moves.push(new Step(unit._tileIndex, tileIndex, unit._unitType));
+			moves.push(new Step(unit._tileIndex, tileIndex));
 		}
 
 		return moves;
 	}
 
-	static stepCallback(state: GameState, unitTarget: UnitState, toTileIndex: number, forced = false): CallbackResult {
-		if (!forced && (unitTarget._moved || state.tiles[toTileIndex]._unitOwner > 0 || unitTarget._tileIndex == toTileIndex)) {
-			return Logger.illegal(MoveType.Step, `${unitTarget._tileIndex} -> ${toTileIndex}, ${getRealUnitType(unitTarget)} -> ${getRealUnitType(getTrueUnitAtTile(state, toTileIndex)!)} -${forced}-`);
+	static computeStep(state: GameState, stepper: UnitState, toTileIndex: number, forced = false): CallbackResult {
+		if (!forced && (stepper._moved || state.tiles[toTileIndex]._unitOwner > 0 || stepper._tileIndex == toTileIndex)) {
+			return Logger.illegal(MoveType.Step, `${stepper._tileIndex} -> ${toTileIndex}, ${getRealUnitType(stepper)} -> ${getRealUnitType(getTrueUnitAt(state, toTileIndex)!)} -${forced}-`);
 		}
 
-		let chainMoves = undefined;
+		const chain: UndoCallback[] = [];
+		const rewards = [];
 
 		// const scoreArmy = state._scoreArmy;
 
-		const iX = unitTarget.x;
-		const iY = unitTarget.y;
-		const ipX = unitTarget.prevX;
-		const ipY = unitTarget.prevY;
+		const iX = stepper.x;
+		const iY = stepper.y;
+		const ipX = stepper.prevX;
+		const ipY = stepper.prevY;
 
-		const oldTileIndex = unitTarget._tileIndex;
-		const oldMoved = unitTarget._moved;
-		const oldAttacked = unitTarget._attacked;
+		const oldTileIndex = stepper._tileIndex;
+		const oldMoved = stepper._moved;
+		const oldAttacked = stepper._attacked;
 		const oldTile = state.tiles[oldTileIndex];
-		const oldType = unitTarget._unitType;
-		const oldPassenger = unitTarget._passenger;
-		const oldHidden = unitTarget._hidden;
+		const oldType = stepper._unitType;
+		const oldPassenger = stepper._passenger;
 
 		const newTile = state.tiles[toTileIndex];
 		let newType = oldType;
@@ -1213,62 +433,54 @@ export default class UnitMoveGenerator {
 		const oldNewTileUnitIdx = newTile._unitIdx;
 
 		// TODO; this is not how prev works, it must be applies at the end of the turn
-		unitTarget.prevX = iX;
-		unitTarget.prevY = iY;
-		unitTarget.x = toTileIndex % state.settings.size;
-		unitTarget.y = Math.floor(toTileIndex / state.settings.size);
-		unitTarget._tileIndex = toTileIndex;
+		stepper.prevX = iX;
+		stepper.prevY = iY;
+		stepper.x = toTileIndex % state.settings.size;
+		stepper.y = Math.floor(toTileIndex / state.settings.size);
+		stepper._tileIndex = toTileIndex;
 
 		oldTile._unitIdx = -1;
 		oldTile._unitOwner = -1;
-		newTile._unitIdx = unitTarget.idx;
-		newTile._unitOwner = unitTarget._owner;
+		newTile._unitIdx = stepper.idx;
+		newTile._unitOwner = stepper._owner;
 
 		// Apply movement skills
 
 		// Stomp
 
-		const undoStomp: UndoCallback = splashDamageArea(state, unitTarget, 4);
+		if(isSkilledIn(stepper, SkillType.Stomp)) {
+			chain.push(splashDamageArea(state, stepper, 4));
+		}
 
 		// AutoFreeze
 
-		const undoFrozen: UndoCallback = freezeArea(state, unitTarget);
+		chain.push(freezeArea(state, stepper));
 
 		// Discover terrain
 
 		const preLighthouseCount = state._lighthouses.length;
-		const undoDiscover = discoverTiles(state, unitTarget);
-		const discoveredLighthouse = state._lighthouses.length != preLighthouseCount;
+		const resultDiscover = discoverTiles(state, stepper)!;
+		rewards.push(...resultDiscover.rewards);
+		chain.push(resultDiscover.undo);
 
-		let undoDiscoverLighthouse: UndoCallback = () => { };
-		if(discoveredLighthouse) {
+		if(state._lighthouses.length != preLighthouseCount) {
 			const capitalCity = getCapitalCity(state);
 			if(capitalCity) {
-				const branch = addPopulationToCity(state, capitalCity, 1);
-				// TODO Chained moves is disable and algorithm will auto pick
-				// chainMoves = branch.chainMoves;
-				if(branch.chainMoves) {
-					const result2 = AIState.executeBestReward(state, branch.chainMoves)!;
-					undoDiscoverLighthouse = () => {
-						result2.undo();
-						branch.undo();
-					};
-				}
-				else {
-					undoDiscoverLighthouse = () => {
-						branch.undo();
-					};
+				const result = addPopulationToCity(state, capitalCity, 1)!;
+				chain.push(result.undo);
+				if(result.rewards) {
+					rewards.push(...result.rewards);
 				}
 			}
 		}
 
-		unitTarget._moved = unitTarget._attacked = true;
+		stepper._moved = stepper._attacked = true;
 
 		// Moved to port
 		// If ground non floatable or aquatic unit is moving to port, place into boat
-		if (state.structures[toTileIndex]?.id == StructureType.Port && !isAquaticOrCanFly(unitTarget)) {
+		if (state.structures[toTileIndex]?.id == StructureType.Port && !isAquaticOrCanFly(stepper)) {
 			// Add embark special units
-			switch (unitTarget._unitType) {
+			switch (stepper._unitType) {
 				case UnitType.Cloak:
 					newType = UnitType.Dinghy;
 					break;
@@ -1280,17 +492,16 @@ export default class UnitMoveGenerator {
 					break;
 				default:
 					newType = UnitType.Raft;
-					unitTarget._passenger = oldType;
+					stepper._passenger = oldType;
 					break;
 			}
 		}
 		// Carry allows a unit to carry another unit inside
 		// A unit with the carry skill can move to a land tile adjacent to water
 		// Doing so releases the unit it was carrying and ends the unit's turn
-		else if(isSkilledIn(unitTarget, SkillType.Carry) && !isWaterTerrain(newTile)) {
-			unitTarget._passenger = undefined;
-			// Add disembark special units
-			switch (unitTarget._unitType) {
+		else if(isSkilledIn(stepper, SkillType.Carry) && !isWaterTerrain(newTile)) {
+			stepper._passenger = undefined;
+			switch (stepper._unitType) {
 				case UnitType.Dinghy:
 					newType = UnitType.Cloak;
 					break;
@@ -1307,96 +518,87 @@ export default class UnitMoveGenerator {
 		}
 		// Allows a unit to attack after moving if there are any enemies in range
 		// And if it had moved before
-		else if(!forced && !oldMoved && isSkilledIn(unitTarget, SkillType.Dash) && getEnemiesInRange(state, unitTarget).length > 0) {
-			unitTarget._attacked = false;
+		else if(!forced && !oldMoved && isSkilledIn(stepper, SkillType.Dash) && getEnemiesInRange(state, stepper).length > 0) {
+			stepper._attacked = false;
 		}
 		
 		// Going stealth mode uses up our attack
 		let wasNotInvis = false;
-		if(isSkilledIn(unitTarget, SkillType.Hide) && !isInvisible(unitTarget)) {
-			unitTarget._hidden = unitTarget._attacked = true;
-			unitTarget._effects.push(EffectType.Invisible);
+		if(isSkilledIn(stepper, SkillType.Hide) && !isInvisible(stepper)) {
+			stepper._attacked = true;
+			stepper._effects.push(EffectType.Invisible);
 			wasNotInvis = true;
 		}
 
-		unitTarget._unitType = newType;
+		stepper._unitType = newType;
 		
-		state._scoreArmy += rewardUnitMove(state, unitTarget, ipX, ipY);
-
 		return {
-			chainMoves,
-			moves: [],
+            rewards,
 			undo: () => {
-				// state._scoreArmy = scoreArmy;
-				unitTarget._unitType = oldType;
+				stepper._unitType = oldType;
 				if(wasNotInvis) {
-					unitTarget._effects.pop();
+					stepper._effects.pop();
 				}
-				unitTarget._hidden = oldHidden;
-				unitTarget._passenger = oldPassenger;
-				unitTarget._attacked = oldAttacked;
-				unitTarget._moved = oldMoved;
-				undoDiscoverLighthouse();
-				undoDiscover();
-				undoFrozen();
-				undoStomp();
+				stepper._passenger = oldPassenger;
+				stepper._attacked = oldAttacked;
+				stepper._moved = oldMoved;
+				chain.reverse().forEach(x => x());
 				newTile._unitOwner = oldNewTileUnitOwner;
 				newTile._unitIdx = oldNewTileUnitIdx;
-				oldTile._unitIdx = unitTarget.idx;
-				oldTile._unitOwner = unitTarget._owner;
-				unitTarget._tileIndex = oldTileIndex;
-				unitTarget.y = iY;
-				unitTarget.x = iX;
-				unitTarget.prevX = ipX;
-				unitTarget.prevY = ipY;
+				oldTile._unitIdx = stepper.idx;
+				oldTile._unitOwner = stepper._owner;
+				stepper._tileIndex = oldTileIndex;
+				stepper.y = iY;
+				stepper.x = iX;
+				stepper.prevX = ipX;
+				stepper.prevY = ipY;
 			}
 		};
 	}
 
 	/**
 	* Returns a map of reachable positions to the cost required to get there.
-	* Will return positions with units included standing in the way.
 	*/
 	static computeReachableTiles(state: GameState, unit: UnitState): Map<number, number> {
-		const effectiveMovement = getUnitMovement(unit) + (unit._boosted? 1 : 0);
-		
+		const effectiveMovement = getUnitMovement(unit);
 		const reachable = new Map<number, number>();
-
 		const openList: ReachableNode[] = [];
+
 		openList.push({ index: unit._tileIndex, cost: 0 });
 		reachable.set(unit._tileIndex, 0);
 
 		while (openList.length > 0) {
-				openList.sort((a, b) => a.cost - b.cost);
-				const current = openList.shift()!;
+			openList.sort((a, b) => a.cost - b.cost);
+			const current = openList.shift()!;
 	
-				if (current.terminal) {
-					continue;
+			if (current.terminal) {
+				continue;
+			}
+	
+			const neighbors = getNeighborTiles(state, current.index);
+	
+			for (let i = 0; i < neighbors.length; i++) {
+				const tile = neighbors[i];
+				const index = tile.tileIndex;
+				if (index == unit._tileIndex) continue;
+	
+				if (!isSteppable(state, unit, tile)) continue;
+	
+				const moveCost = this.computeMovementCost(state, unit, current.index, tile);
+				if (moveCost < 0) continue;
+	
+				let newCost = current.cost + moveCost;
+	
+				if (newCost - effectiveMovement > 1e-6) continue;
+	
+				const terminal = this.isTerminal(state, unit, tile);
+	
+				const existingCost = reachable.get(index);
+				if (existingCost === undefined || newCost < existingCost) {
+					reachable.set(index, newCost);
+					openList.push({ index, cost: newCost, terminal });
 				}
-	
-				const neighbors = getNeighborTiles(state, current.index);
-	
-				for (const tile of neighbors) {
-					const index = tile.tileIndex;
-					if (index == unit._tileIndex) continue;
-	
-					if (!isSteppable(state, unit, tile)) continue;
-	
-					const moveCost = this.computeMovementCost(state, unit, current.index, tile);
-					if (moveCost < 0) continue;
-	
-					let newCost = current.cost + moveCost;
-	
-					if (newCost - effectiveMovement > 1e-6) continue;
-	
-					const terminal = this.isTerminalTile(state, unit, tile);
-	
-					const existingCost = reachable.get(index);
-					if (existingCost === undefined || newCost < existingCost) {
-						reachable.set(index, newCost);
-						openList.push({ index, cost: newCost, terminal });
-					}
-				}
+			}
 		}
 
 		return reachable;
@@ -1415,21 +617,19 @@ export default class UnitMoveGenerator {
 			cost = 0.5;
 		}
 
-		// ----- ICE / SKATE -----
-		// - Ice: Glide (and/or Skate) skills reduce cost when moving into ice.
+		// Skate doubles movement on ice (i.e. halves cost)
 		if (toTile.terrainType === TerrainType.Ice && isSkilledIn(unit, SkillType.Skate)) {
-			cost *= 0.5; // Skate doubles movement on ice (i.e. halves cost)
+			cost *= 0.5; 
 		}
 
 		return cost;
 	}
 
-	static isTerminalTile(state: GameState, unit: UnitState, tile: TileState): boolean {
+	static isTerminal(state: GameState, unit: UnitState, tile: TileState): boolean {
 		if(isSkilledIn(unit, SkillType.Fly)) {
 			return false;
 		}
 
-		// ROUGH TERRAIN
 		// (mountains/forests without bypass skills) blocks further movement.
 		// roads allow movement on forest if it has a road
 		switch (tile.terrainType) {
@@ -1447,14 +647,14 @@ export default class UnitMoveGenerator {
 				break;
 		}
 
-		// PORTS
+		// Ports
 		const isPort = state.structures[tile.tileIndex]?.id == StructureType.Port && tile._owner == unit._owner;
 		// Entering a Port for non-fly units turns them into Rafts (ending their turn).
 		if (isPort) {
 			return !isAquaticOrCanFly(unit, false);
 		}
 
-		// WATER MOVEMENT / DISEMBARKING
+		// Water movement / Disembarking
 		if (isNavalUnit(unit)) {
 			if(isWaterTerrain(tile)) {
 				return false;
@@ -1470,9 +670,9 @@ export default class UnitMoveGenerator {
 			}
 		}
 
-		// ZONE-OF-CONTROL
+		// ZoC (zone of control)
 		// Moving adjacent to an enemy stops further movement (unless Creep).
-		// The rule about re-entry is ambiguous
+		// TODO The rule about re-entry is ambiguous
 		return isSkilledIn(unit, SkillType.Creep) || isAdjacentToEnemy(state, tile);
 	}
 }

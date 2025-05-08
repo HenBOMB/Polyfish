@@ -1,12 +1,22 @@
 {
     "max_tribes": 3,
-    "max_size": 11,
-    "max_tech": 40,
-    "max_effects": 4,
-    "tile_channels": 19,
-    "max_actions": 250,
-    "max_stars": 100,
+    "max_kills": 40,
+    "max_casualties": 40,
+    "max_production": 50,
+    "max_score": 50000,
+    "max_cities": 5,
     "max_turns": 10,
-    "settings_channels": 3,
-    "max_score": 50000
+    "max_units": 20,
+    "max_stars": 100,
+    
+    "dim_map_tile": 34,
+    "dim_map_size": 11,
+    "dim_player": 36,
+    "dim_ability": 250,
+    "dim_moves": 10,
+    "dim_tech": 25,
+    "dim_effects": 4,
+
+    "res_blocks": 12,
+    "hidden_channels": 128
 }

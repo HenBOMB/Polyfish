@@ -1,10 +1,12 @@
 import { TileState, TribeState } from "../states";
 import { TechnologyType, TerrainType, ResourceType, StructureType, TribeType } from "../types";
+import { TechnologyUnlockable } from "./TechnologySettings";
 
+// ! Sorted by tier and clockwise per branch
 export const StructureSettings: Record<StructureType, { 
     techRequired: TechnologyType,
     cost?: number, 
-    terrainType: TerrainType, 
+    terrainType?: TerrainType[], 
     adjacentTypes?: StructureType[], 
     resourceType?: ResourceType, 
     limitedPerCity?: true,
@@ -13,98 +15,165 @@ export const StructureSettings: Record<StructureType, {
     rewardStars?: number;
     tribeType?: TribeType;
 }> = {
-    [StructureType.None]:           {
+    [StructureType.None]: {
         techRequired: TechnologyType.Unbuildable,
-        terrainType: TerrainType.None,
     },
     [StructureType.Village]: {
         techRequired: TechnologyType.Unbuildable,
-        terrainType: TerrainType.Field,
+        terrainType: [TerrainType.Field],
     },
     [StructureType.Ruin]: {
         techRequired: TechnologyType.Unbuildable,
-        terrainType: TerrainType.None,
     },
-    [StructureType.Farm]: {
-        cost: 5,
-        rewardPop: 2,
-        techRequired: TechnologyType.Farming,
-        resourceType: ResourceType.Crop,
-        terrainType: TerrainType.Field,
+    // TODO not sure how this works but, i think harvesting spores leads to swamp? or sumthin
+    [StructureType.Spores]: {
+        techRequired: TechnologyType.Unbuildable,
+        resourceType: ResourceType.Spores,
+        terrainType: [TerrainType.Forest],
+        tribeType: TribeType.Cymanti,
     },
-    [StructureType.Windmill]: {
-        cost: 5,
-        techRequired: TechnologyType.Construction,
-        terrainType: TerrainType.Field,
-        adjacentTypes: [StructureType.Farm],
+    [StructureType.Swamp]: {
+        // TODO Spores
+        techRequired: TechnologyType.Unbuildable,
+        // techType: TechnologyType.None,
+        terrainType: [TerrainType.Ocean],
+    },
+    // TODO Mycelium
+    [StructureType.Mycelium]: {
+        techRequired: TechnologyType.Unbuildable,
+        // techType: TechnologyType.None,
+        terrainType: [TerrainType.Field],
         limitedPerCity: true,
-        rewardPop: 1,
+        tribeType: TribeType.Cymanti,
     },
-    [StructureType.Port]: {
-        cost: 7,
-        rewardPop: 1,
-        techRequired: TechnologyType.Fishing,
-        terrainType: TerrainType.Water,
+    [StructureType.Lighthouse]: {
+        techRequired: TechnologyType.Unbuildable,
     },
-    [StructureType.LumberHut]: {
+
+    // Riding
+    [StructureType.Road]: {
         cost: 3,
-        rewardPop: 1,
-        techRequired: TechnologyType.Forestry,
-        terrainType: TerrainType.Forest,
+        techRequired: TechnologyType.Roads,
+        terrainType: [TerrainType.Field, TerrainType.Forest], 
     },
-    [StructureType.Sawmill]: {
-        cost: 5,
-        rewardPop: 1,
-        techRequired: TechnologyType.Mathematics,
-        terrainType: TerrainType.Field,
-        adjacentTypes: [StructureType.LumberHut],
-        limitedPerCity: true,
+    [StructureType.Bridge]: {
+        techRequired: TechnologyType.Unbuildable,
+        terrainType: [TerrainType.Water],
+        // techType: TechnologyType.Roads,
+        // terrainType: TerrainType.Water,
+        // TODO Bridge logic for connected adjacent ground tiles or whatever
     },
     [StructureType.Temple]: {
         cost: 20,
         rewardPop: 1,
         techRequired: TechnologyType.FreeSpirit,
-        terrainType: TerrainType.Field,
+        terrainType: [TerrainType.Field],
     },
-    [StructureType.ForestTemple]: {
-        cost: 15,
+    [StructureType.Market]: {
+        cost: 5,
+        rewardStars: 1,
+        techRequired: TechnologyType.Trade,
+        terrainType: [TerrainType.Field],
+        adjacentTypes: [StructureType.Sawmill, StructureType.Windmill, StructureType.Forge],
+        limitedPerCity: true,
+    },
+
+    // Organization
+    [StructureType.Farm]: {
+        cost: 5,
+        rewardPop: 2,
+        techRequired: TechnologyType.Farming,
+        resourceType: ResourceType.Crop,
+        terrainType: [TerrainType.Field],
+    },
+    [StructureType.Windmill]: {
+        cost: 5,
+        techRequired: TechnologyType.Construction,
+        terrainType: [TerrainType.Field],
+        adjacentTypes: [StructureType.Farm],
+        limitedPerCity: true,
         rewardPop: 1,
-        techRequired: TechnologyType.Spiritualism,
-        terrainType: TerrainType.Forest,
     },
-    [StructureType.WaterTemple]: {
-        cost: 20,
-        rewardPop: 1,
-        techRequired: TechnologyType.Aquatism,
-        terrainType: TerrainType.Ocean,
+    [StructureType.Embassy]: {
+        cost: 5,
+        techRequired: TechnologyType.Unbuildable
     },
-    [StructureType.MountainTemple]: {
-        cost: 20,
-        rewardPop: 1,
-        techRequired: TechnologyType.Meditation,
-        terrainType: TerrainType.Mountain,
-    },
-    [StructureType.IceTemple]: {
-        cost: 20,
-        rewardPop: 1,
-        techRequired: TechnologyType.Polarism,
-        terrainType: TerrainType.Ice,
-    },
+
+    // Climbing
     [StructureType.Mine]: {
         cost: 5,
         rewardPop: 2,
         techRequired: TechnologyType.Mining,
         resourceType: ResourceType.Metal,
-        terrainType: TerrainType.Mountain,
+        terrainType: [TerrainType.Mountain],
     },
     [StructureType.Forge]: {
         rewardPop: 2,
         cost: 5,
         techRequired: TechnologyType.Smithery,
-        terrainType: TerrainType.Field,
+        terrainType: [TerrainType.Field],
         adjacentTypes: [StructureType.Mine],
         limitedPerCity: true,
     },
+    [StructureType.MountainTemple]: {
+        cost: 20,
+        rewardPop: 1,
+        techRequired: TechnologyType.Meditation,
+        terrainType: [TerrainType.Mountain],
+    },
+
+    // Fishing
+    [StructureType.Port]: {
+        cost: 7,
+        rewardPop: 1,
+        techRequired: TechnologyType.Fishing,
+        terrainType: [TerrainType.Water],
+    },
+    [StructureType.WaterTemple]: {
+        cost: 20,
+        rewardPop: 1,
+        techRequired: TechnologyType.Aquatism,
+        terrainType: [TerrainType.Water, TerrainType.Ocean],
+    },
+
+    // Hunting
+    [StructureType.LumberHut]: {
+        cost: 3,
+        rewardPop: 1,
+        techRequired: TechnologyType.Forestry,
+        terrainType: [TerrainType.Forest],
+    },
+    [StructureType.Sawmill]: {
+        cost: 5,
+        rewardPop: 1,
+        techRequired: TechnologyType.Mathematics,
+        terrainType: [TerrainType.Field],
+        adjacentTypes: [StructureType.LumberHut],
+        limitedPerCity: true,
+    },
+    [StructureType.ForestTemple]: {
+        cost: 15,
+        rewardPop: 1,
+        techRequired: TechnologyType.Spiritualism,
+        terrainType: [TerrainType.Forest],
+    },
+    
+    // Special
+    [StructureType.Outpost]: {
+        cost: 5,
+        rewardPop: 1,
+        techRequired: TechnologyType.Unbuildable,
+        tribeType: TribeType.Polaris,
+        terrainType: [TerrainType.Ice],
+        // TODO, requires replacing StructureType.Port
+    },
+    [StructureType.IceTemple]: {
+        cost: 20,
+        rewardPop: 1,
+        techRequired: TechnologyType.Polarism,
+        terrainType: [TerrainType.Ice],
+    },
+
     [StructureType.AltarOfPeace]: {
         rewardPop: 3,
         techRequired: TechnologyType.Unbuildable, // TODO
@@ -116,160 +185,71 @@ export const StructureSettings: Record<StructureType, {
         // 	return hasTech(tribe, TechnologyType.Meditation); 
         // },
         // ! no way to track streak (maybe customData from task?)
-        terrainType: TerrainType.GroundWater,
+        terrainType: [TerrainType.Field, TerrainType.Forest, TerrainType.Water],
     },
     [StructureType.TowerOfWisdom]: {
         rewardPop: 3,
         techRequired: TechnologyType.Philosophy,
-        // ! philosophy, research all technologies
-        terrainType: TerrainType.GroundWater,
+        terrainType: [TerrainType.Field, TerrainType.Forest, TerrainType.Water],
         task: (tribe: TribeState, _: any) => {
-            return tribe._tech.length >= Object.values(TechnologyType).length - 2; // none and unbuildable
+            return tribe._tech.length == Object.values(TechnologyUnlockable).length;
         }
     },
     [StructureType.GrandBazaar]: {
         rewardPop: 3,
         techRequired: TechnologyType.Roads,
-        terrainType: TerrainType.GroundWater,
-        // ! roads, 5 cities connected to capital
+        terrainType: [TerrainType.Field, TerrainType.Forest, TerrainType.Water],
         task: (tribe: TribeState, _: any) => {
             return tribe._cities.reduce((acc, cur) => acc + (cur._connectedToCapital? 1 : 0), 0) > 4;
         }
     },
-    [StructureType.EmperorsTomb]:   {
+    [StructureType.EmperorsTomb]: {
         rewardPop: 3,
         techRequired: TechnologyType.Trade,
-        terrainType: TerrainType.GroundWater,
-        // ! trade, 100 stars
+        terrainType: [TerrainType.Field, TerrainType.Forest, TerrainType.Water],
         task: (tribe: TribeState, _: any) => {
             return tribe._stars > 99;
         }
     },
-    [StructureType.GateOfPower]:    {
+    [StructureType.GateOfPower]: {
         rewardPop: 3,
         techRequired: TechnologyType.None,
-        terrainType: TerrainType.GroundWater,
-        // ! kill, 10 kills
+        terrainType: [TerrainType.Field, TerrainType.Forest, TerrainType.Water],
         task: (tribe: TribeState, _: any) => {
             return tribe._kills > 9;
         }
     },
-    [StructureType.ParkOfFortune]:  {
+    [StructureType.ParkOfFortune]: {
         rewardPop: 3,
         techRequired: TechnologyType.None,
-        terrainType: TerrainType.GroundWater,
+        terrainType: [TerrainType.Field, TerrainType.Forest, TerrainType.Water],
         // ! level up, any level 5 city
         task: (tribe: TribeState, _: any) => { 
             return tribe._cities.some(city => city._level > 4);
         }
     },
-    [StructureType.EyeOfGod]:       {
+    [StructureType.EyeOfGod]: {
         rewardPop: 3,
         techRequired: TechnologyType.Navigation,
-        terrainType: TerrainType.GroundWater,
+        terrainType: [TerrainType.Field, TerrainType.Forest, TerrainType.Water],
         // ! navigation, all tiles explored
         task: (tribe: TribeState, tiles: Record<number, TileState>) => {
-            return Object.values(tiles).every(x => x.explorers.includes(tribe.owner));
+            return Object.values(tiles).every(x => x._explorers.includes(tribe.owner));
         }
     },
-    [StructureType.IcePort]:        {
-        techRequired: TechnologyType.Unbuildable,
-        terrainType: TerrainType.Ice,
-        tribeType: TribeType.Polaris,
-        // TODO IcePort
-        // techType: TechnologyType.Fishing,
-        // terrainType: TerrainType.Ice,
-    },
-    [StructureType.Spores]:         {
-        techRequired: TechnologyType.Farming,
-        resourceType: ResourceType.Spores,
-        terrainType: TerrainType.Forest,
-        tribeType: TribeType.Cymanti,
-    },
-    [StructureType.Swamp]:          {
-        // TODO Spores
-        techRequired: TechnologyType.Unbuildable,
-        // techType: TechnologyType.None,
-        terrainType: TerrainType.Ocean,
-    },
-    [StructureType.Mycelium]:       {
-        techRequired: TechnologyType.Unbuildable,
-        // techType: TechnologyType.None,
-        terrainType: TerrainType.Field,
-        limitedPerCity: true,
-        tribeType: TribeType.Cymanti,
-        // TODO Mycelium
-    },
-    [StructureType.Lighthouse]:     {
-        techRequired: TechnologyType.Unbuildable,
-        terrainType: TerrainType.None,
-    },
-    [StructureType.Bridge]:         {
-        techRequired: TechnologyType.Unbuildable,
-        terrainType: TerrainType.Water,
-        // techType: TechnologyType.Roads,
-        // terrainType: TerrainType.Water,
-        // TODO Bridge logic for connected adjacent ground tiles or whatever
-    },
-    [StructureType.Market]:         {
-        cost: 5,
-        rewardStars: 1,
-        techRequired: TechnologyType.Trade,
-        terrainType: TerrainType.Field,
-        adjacentTypes: [StructureType.Sawmill, StructureType.Windmill, StructureType.Forge],
-        limitedPerCity: true,
-    },
-    // [StructureType.Road]:           {
-    //     cost: 3,
-    //     techRequired: TechnologyType.Roads,
-    //     TODO any terrain type except mountains, water, ice, and Algae
-    //     terrainType: TerrainType.Field, 
-    //     adjacentTypes: [StructureType.Sawmill, StructureType.Windmill, StructureType.Forge],
-    //     limitedPerCity: true,
-    // },
 };
 
 // ! pre calculate terrain types for all structures, quick lookup
 export const StructureByTerrain: Record<TerrainType, StructureType[]> = Object.keys(StructureSettings).reduce((acc: Record<TerrainType, StructureType[]>, numId: unknown) => {
     const structType = numId as StructureType;
-    const setting = StructureSettings[structType];
-    
-    if(!setting) {
-        console.warn(`No settings found for structure "${structType}", skipping..`);
-        return acc;
-    }
+    const settings = StructureSettings[structType];
 
-    // ! skip invalid, none, unbuildable, unknown terrain
-    if(setting.techRequired == TechnologyType.Unbuildable || !setting.terrainType) return acc;
-    
-    const terrainType = setting.terrainType! as TerrainType;
-    
-    acc[terrainType].push(structType);
-    
-    switch (terrainType) {
-        // ! ocean can also be placed on water
-        case TerrainType.Ocean:
-        acc[TerrainType.Water].push(structType);
-        break;
-        
-        // ! land can also be placed on forest
-        case TerrainType.Field:
-        acc[TerrainType.Forest].push(structType);
-        break;
-        
-        // ! unique to task structures, can be placed on water, but not ocean and land but not forest
-        case TerrainType.GroundWater:
-        acc[TerrainType.Field].push(structType);
-        acc[TerrainType.Water].push(structType);
-        break;
-        
-        // ! i think ice can be placed on water as well
-        case TerrainType.Ice:
-        acc[TerrainType.Water].push(structType);
-        break;
-        
-        default:
-        break;
+    if(settings.techRequired == TechnologyType.Unbuildable) return acc;
+
+    if(settings.terrainType) {
+        for(const terrainType of settings.terrainType) {
+            acc[terrainType].push(structType);
+        }
     }
     
     return acc;

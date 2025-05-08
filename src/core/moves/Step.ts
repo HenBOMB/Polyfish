@@ -1,38 +1,32 @@
 import { Logger } from "../../polyfish/logger";
-import { getTrueUnitAtTile, getUnitAtTile } from "../functions";
-import Move, { CallbackResult, MoveType } from "../move";
-import UnitMoveGenerator from "../moves";
+import { getTrueUnitAt, getUnitAt } from "../functions";
+import Move, { CallbackResult } from "../move";
+import { MoveType } from "../types";
+import { ArmyMovesGenerator } from "../moves";
 import { GameState } from "../states";
 import { EffectType, UnitType } from "../types";
 
 export default class Step extends Move {
-    constructor(src: number, target: number, type: number) {
-        super(MoveType.Step, src, target, type);
+    constructor(src: number, target: number) {
+        super(MoveType.Step, src, target);
     }
 
     execute(state: GameState): CallbackResult {
-        const unitType = this.type as UnitType;
-        const unit = getUnitAtTile(state, this.src);
-
-        if(!unit) {
-            return Logger.illegal(MoveType.Step, `Unit does not exist: ${UnitType[unitType]}`);
-        }
+        const unit = getUnitAt(state, this.getSrc())!;
+        const target = this.getTarget();
 
         // TODO If a unit moves onto a cloak when in not live mode, then the stepper will override the cloak
-
-        if (state.tiles[this.target]._unitOwner > 0) {
-            const unitType = getTrueUnitAtTile(state, this.target)?._unitType!;
+        if (state.tiles[target]._unitOwner > 0) {
+            const unitType = getTrueUnitAt(state, target)?._unitType!;
             // If cloak is on tile, then it must be revealed
             if(unitType == UnitType.Cloak) {
-                if(state.settings.live) {
+                if(state.settings.areYouSure) {
                     let effectIndex = unit._effects.indexOf(EffectType.Invisible);
-                    const cloak = getTrueUnitAtTile(state, this.target)!;
-                    cloak._hidden = false;
+                    const cloak = getTrueUnitAt(state, target)!;
                     cloak._effects.splice(effectIndex, 1);
                     return {
-                        moves: [],
+                        rewards: [],
                         undo: () => {
-                            cloak._hidden = true;
                             cloak._effects.splice(effectIndex, 0, EffectType.Invisible);
                         }
                     };
@@ -42,10 +36,10 @@ export default class Step extends Move {
                 }
             }
             else {
-                return Logger.illegal(MoveType.Step, `${unit._tileIndex} -> ${this.target}, ${UnitType[unit._unitType]} -> ${UnitType[unitType]}`);
+                return Logger.illegal(MoveType.Step, `${unit._tileIndex} -> ${target}, ${UnitType[unit._unitType]} -> ${UnitType[unitType]}`);
             }
         }
 
-        return UnitMoveGenerator.stepCallback(state, unit, this.target);
+        return ArmyMovesGenerator.computeStep(state, unit, target);
     }
 }

@@ -1,83 +1,39 @@
 import AIState, { MODEL_CONFIG } from "../aistate";
 import { getPovTribe, isGameLost, isGameOver, isGameWon } from "../core/functions";
 import GameLoader, { STARTING_OWNER_ID } from "../core/gameloader";
-import { MoveType } from "../core/move";
-import { generateAllMoves } from "../core/moves";
+import { MoveType } from "../core/types";
+import { MoveGenerator } from "../core/moves";
 import { GameSettings, GameState } from "../core/states";
-import { TribeType } from "../core/types";
 import { MIN_PLAYED_MOVES, lerpViaGameStage, SCORE_MOVE_PRIORITY } from "./eval";
 import Game from "../game";
 import { Logger } from "./logger";
+import { Opening } from "./opening";
+import { sampleFromDistribution, sampleDirichlet } from "./util";
+import { CaptureType } from "../core/types";
 
 export type Prediction = { pi: number[]; v: number };
 
-// obs -> Command[]
-
-// var transpositionCache: Map<Observation, Command[]> = new Map();
-
-/**
- * Sample from a symmetric Dirichlet(α) distribution of given size.
- */
-export function sampleDirichlet(alpha: number, size: number): number[] {
-	function randGamma(k: number): number {
-		if (k < 1) {
-			const u = Math.random();
-			return randGamma(k + 1) * Math.pow(u, 1 / k);
-		}
-		const d = k - 1 / 3;
-		const c = 1 / Math.sqrt(9 * d);
-		while (true) {
-			let x: number, v: number;
-			do {
-				const u1 = Math.random(), u2 = Math.random();
-				x = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
-				v = 1 + c * x;
-			} while (v <= 0);
-			v = v * v * v;
-			const u = Math.random();
-			if (u < 1 - 0.0331 * x * x * x * x) return d * v;
-			if (Math.log(u) < 0.5 * x * x + d * (1 - v + Math.log(v))) return d * v;
-		}
-	}
-  
-	const xs = Array.from({ length: size }, () => randGamma(alpha));
-	const sum = xs.reduce((a, b) => a + b, 0);
-	return xs.map(x => x / sum);
-}
-
-export function sampleFromDistribution(dist: number[]): number {
-	const r = Math.random();
-	let cum = 0;
-	for (let i = 0; i < dist.length; i++) {
-		cum += dist[i];
-		if (r < cum) {
-			return i;
-		}
-	}
-	return dist.length - 1;
-}
-
 export class MCTSNode {
 	count: number;
+	recent: number;
 	pov: number;
-	P: Record<number, number> = {};
-	N: Record<number, number> = {};
-	W: Record<number, number> = {};
-	Q: Record<number, number> = {};
-	expanded = false;
+	P: number[] = new Array(/*MODEL_CONFIG.max_actions*/1).fill(0);
+	N: number[] = new Array(/*MODEL_CONFIG.max_actions*/1).fill(0);
+	W: number[] = new Array(/*MODEL_CONFIG.max_actions*/1).fill(0);
+	Q: number[] = new Array(/*MODEL_CONFIG.max_actions*/1).fill(0);
+	expanded: boolean;
 	children: Map<number, MCTSNode> = new Map();
-
-	// Keep track of which moves we’ve pruned (illegal)
-	private pruned = new Set<number>();
+	pruned = new Set<number>();
 
 	constructor(state: GameState) {
+		this.expanded = false;
 		this.pov = getPovTribe(state).owner;
-		this.count = generateAllMoves(state).length;
+		this.count = MoveGenerator.legal(state).length;
+		this.recent = state.settings._recentMoves.length;
 	}
 
 	pruneMove(a: number) {
 		this.pruned.add(a);
-		// Optionally shrink count or mark P[a]=0, etc.
 		this.P[a] = 0;
 	}
 
@@ -104,9 +60,8 @@ export class MCTSNode {
 		}
 	}
 
-	select(cPuct: number, state: GameState): number {
+	select(cPuct: number): number {
 		let totalN = 0;
-		this.count = generateAllMoves(state).length;
 		for (let a = 0; a < this.count; a++) {
 			totalN += this.N[a];
 		}
@@ -116,10 +71,9 @@ export class MCTSNode {
 		for (let a = 0; a < this.count; a++) {
 			if(this.pruned.has(a)) continue;
 
-			const min = lerpViaGameStage(state, MIN_PLAYED_MOVES);
-
-			// Prevent losing too early
-			if(a === 0 && state.settings._recentMoves.length < min && this.count > min) {
+			// const min = lerpViaGameStage(state, MIN_PLAYED_MOVES);
+			// Prevent losing too early, at least 1 turn
+			if(a === 0 && this.recent < 1 && this.count > 1) {
 				continue;
 			}
 
@@ -159,7 +113,7 @@ export class MCTSNode {
 }
 
 export class MCTS {
-	private iState: GameState;
+	private state: GameState;
 	private cPuct: number;
 	private gamma: number;
 	private dirichlet: boolean;
@@ -167,7 +121,7 @@ export class MCTS {
 	private rollouts: number;
 	
 	constructor(state: GameState, predict: (state: GameState) => Promise<Prediction>, cPuct: number, gamma: number, dirichlet: boolean, rollouts: number) {
-		this.iState = state;
+		this.state = state;
 		this.cPuct = cPuct;
 		this.predict = predict;
 		this.gamma = gamma;
@@ -179,29 +133,23 @@ export class MCTS {
 		const path: [MCTSNode, number][] = [];
 		let currentNode = root;
 		let value: number = 0;
-		let prevPotential = AIState.calculatePotential(game.state);
 		
-		while (currentNode.isExpanded() && !isGameOver(game.state)) {
-			let moveIndex = currentNode.select(this.cPuct, game.state);
-
-			// If illegal, prune it permanently from this node
-			if (!game.playMove(moveIndex)) {
+		while(currentNode.isExpanded() && !isGameOver(game.state)) {
+			let moveIndex = currentNode.select(this.cPuct);
+			const moves = game.playMove(moveIndex);
+			if(!moves) {
 				currentNode.pruneMove(moveIndex);
-				continue;
+				break;
 			}
-
 			const child = currentNode.getOrCreateChild(moveIndex, game.state);
 			path.push([currentNode, moveIndex]);
 			currentNode = child;
 		}
 		
 		if(isGameOver(game.state)) {
+			isGameWon(game.state) && console.log("Simulator victory detected!");
 			value = isGameWon(game.state)? 1.0 : isGameLost(game.state)? -1.0 : 0.0;
 		}
-		else if (currentNode.isExpanded()) {
-			// If we somehow arrived at an already-expanded leaf, do a quick rollout
-			value = this.rollout(game.deepClone(), prevPotential);
-		} 
 		else {
 			const prediction = await this.predict(game.state);
 			currentNode.expand(prediction);
@@ -211,13 +159,12 @@ export class MCTS {
 		return { path, value };
 	}
 
-	// Plays random heuristic moves until either the turn ends or hit a max depth
 	private rollout(game: Game, prevPot: number): number {
 		let depth = 0;
 	  
 		while (!isGameOver(game.state) && depth < this.rollouts) {
 			const min = lerpViaGameStage(game.state, MIN_PLAYED_MOVES);
-			const weights = generateAllMoves(game.state).map(x => {
+			const weights = MoveGenerator.legal(game.state).map(x => {
 				switch (x.moveType) {
 					case MoveType.EndTurn:
 					  	return game.state.settings._recentMoves.length >= min? 10 : 0.1;
@@ -226,7 +173,6 @@ export class MCTS {
 				}
 			});
 		
-			// Sample a move index according to these weights
 			const totalW = weights.reduce((a, b) => a + b, 0);
 			let pick = Math.random() * totalW;
 			let moveIdx = 0;
@@ -237,58 +183,42 @@ export class MCTS {
 	  
 			const moves = game.playMove(moveIdx);
 
-		  	if (!moves) continue;
-	  
-		  	depth++;
+			depth++;
+
+		  	if(!moves) continue;
 		}
 	  
-		// Terminal override
 		if (isGameOver(game.state)) {
+			isGameWon(game.state) && console.log("Rollout victory detected!");
 			return isGameWon(game.state) ? 1 : isGameLost(game.state) ? -1 : 0;
 		}
 
-		return 0;
-
-		// // Shaped reward from potential delta
-		// const newPot = AIState.calculatePotential(game.state);
-		// const shapedR = newPot - prevPot;
-
-		// return shapedR;
+		const newPot = AIState.calculatePotential(game.state);
+		const shapedR = newPot - prevPot;
+		return shapedR;
 	}
 	
 	async search(nSims: number): Promise<MCTSNode> {
-		const batchSize = 3;
-        const root = new MCTSNode(this.iState);
+        const root = new MCTSNode(this.state);
         const rootGame = new Game();
-        rootGame.load(this.iState);
-		root.expand(await this.predict(this.iState));
+        rootGame.load(this.state);
+		root.expand(await this.predict(this.state));
+		const count = MoveGenerator.legal(this.state).length;
+		
+        // if (this.dirichlet) {
+		// 	const table = [0, 0.2, 0.3];
+		// 	const alpha = 0.3 * (count / MODEL_CONFIG.max_actions) * (1 + lerpViaGameStage(this.state, table));
+		// 	const eps = 0.25;
+        //     const noise = sampleDirichlet(alpha, count);
+        //     for (let a = 0; a < count; a++) {
+        //         root.P[a] = (1 - eps) * root.P[a] + eps * noise[a];
+        //     }
+        // }
 
-		root.count;
-        if (this.dirichlet) {
-			// Derive a custom alpha table based on how many moves there are
-			const table = [0, 0.2, 0.3];
-			const alpha = 0.3 * (root.count / MODEL_CONFIG.max_actions) * (1 + lerpViaGameStage(this.iState, table));
-			const eps = 0.25;
-            const moves = Array.from({ length: root.count }, (_, i) => i);
-            const priors = moves.map(a => root.P[a]);
-            const noise = sampleDirichlet(alpha, moves.length);
-            for (let i = 0; i < moves.length; i++) {
-                const a = moves[i];
-                root.P[a] = (1 - eps) * priors[i] + eps * noise[i];
-            }
-        }
-
-        for (let start = 0; start < nSims; start += batchSize) {
-            const end = Math.min(start + batchSize, nSims);
-            const batchPromises = [];
-            for (let i = start; i < end; i++) {
-                batchPromises.push(this.simulate(root, rootGame.deepClone()));
-            }
-            const results = await Promise.all(batchPromises);
-            for (const { path, value } of results) {
-                root.backpropagate(path, value, root.pov);
-            }
-        }
+		// for (let i = 0; i < nSims; i++) {
+		// 	const { path, value } = await this.simulate(root, rootGame.deepClone());
+		// 	root.backpropagate(path, value, root.pov);
+		// }
 	
 		return root;
 	}
@@ -312,61 +242,55 @@ export async function SelfPlay(
 	const loader = new GameLoader(settings);
 
 	for (let i = 0; i < nGames; i++) {
-		// load a fresh random game
 		const game = new Game();
 		game.load(await loader.loadRandom());
 
-		// For this one game, we store triples of (obs, π, r)
 		const episode: Array<{ obs: any; pi: number[]; r: number; pov: number }> = [];
-		// Logger.logPlay(getPovTribe(game), 0, ...[{ stringify: () => 'start turn' }] as any);
 
 		// Keep going until terminal
 		while (!isGameOver(game.state)) {
-			const obs = AIState.extract(game.state);
-			const pi: number[] = new Array<number>(MODEL_CONFIG.max_actions).fill(0);
-			const pseudoLegalMoves = generateAllMoves(game.state);
-			const povTribe = getPovTribe(game);
+			// TODO update
+			// const obs = AIState.extract(game.state);
+			// const pi: number[] = new Array<number>(MODEL_CONFIG.max_actions).fill(0);
+			// const pseudoLegalMoves = MoveGenerator.legal(game.state);
+			// const povTribe = getPovTribe(game);
 
-			let moveIndex: number = 0;
+			// let moveIndex: number = Opening.recommend(game.state, pseudoLegalMoves) || 0;
 			
-			// Skip simulating if there are no more turns (only EndTurn remains)
-			if(pseudoLegalMoves.length == 1) {
-				moveIndex = 0;
-				pi[0] = 1;
-			}
-			else {
-				// console.time('search');
-				const root = await new MCTS(game.state, predict, cPuct, gamma, dirichlet, rollouts).search(nSims);
-				// console.timeEnd('search');
-				const probs = root.distribution(temperature);
-				probs.forEach((p, idx) => { pi[idx] = p; });
-				moveIndex = deterministic
-					? probs.indexOf(Math.max(...probs))
-					: sampleFromDistribution(probs);
-			}
+			// if(!moveIndex) {
+			// 	// Skip simulating if there are no more turns (only EndTurn remains)
+			// 	if(pseudoLegalMoves.length == 1) {
+			// 		moveIndex = 0;
+			// 		pi[0] = 1;
+			// 	}
+			// 	else {
+			// 		// console.time('search');
+			// 		const root = await new MCTS(game.state, predict, cPuct, gamma, dirichlet, rollouts).search(nSims);
+			// 		// console.timeEnd('search');
+			// 		const probs = root.distribution(temperature);
+			// 		probs.forEach((p, idx) => { pi[idx] = p; });
+			// 		moveIndex = deterministic
+			// 			? probs.indexOf(Math.max(...probs))
+			// 			: sampleFromDistribution(probs);
+			// 	}
+			// }
 			
-			const movesPlayed = game.playMove(moveIndex)!;
+			// const result = game.playMove(moveIndex);
 			
-			// Make sure move was legal
-			if(movesPlayed) {
-				// const shaped = gamma * AIState.calculatePotential(game.state) - AIState.calculatePotential(game.stateBefore); 
-				// const r_t = AIState.calculateReward(game, ...movesPlayed) + shaped;
-				const r_t = isGameWon(game.state)? 1 : isGameLost(game.state)? -1 : 0;
-
-				Logger.logPlay(povTribe, r_t, ...movesPlayed);
-				// if(movesPlayed[0].moveType === MoveType.EndTurn) {
-				// 	Logger.log(`${TribeType[povTribe.tribeType]}`);
-				// }
-				// else {
-				// 	const str = movesPlayed.map(x => x.stringify()).join(', ');
-				// 	// Logger.log(`${str} ${(await predict(game.state)).v.toFixed(4)}, ${r_t.toFixed(4)}, ${shaped.toFixed(4)}`);
-				// 	Logger.log(`${str} (${(await predict(game.state)).v.toFixed(4)})`);
-				// }
-				episode.push({ obs, pi, r: r_t, pov: povTribe.owner });
-			}
-			else {
-				Logger.illegal(pseudoLegalMoves[moveIndex].moveType, `FATAL - Move wasnt legal`);
-			}
+			// // Make sure move was legal
+			// if(result) {
+			// 	const [move, undo] = result;
+			// 	const shaped = gamma * AIState.calculatePotential(game.state) - AIState.calculatePotential(game.stateBefore); 
+			// 	const reward = AIState.calculateReward(game, move) + shaped;
+			// 	const r_t = isGameWon(game.state)? 1 : 
+			// 		isGameLost(game.state)? -1 : 
+			// 		(reward * 0.25);
+			// 	Logger.logPlay(game.stateBefore, game.state, [move], [(await predict(game.state)).v]);
+			// 	episode.push({ obs, pi, r: r_t, pov: povTribe.owner });
+			// }
+			// else {
+			// 	Logger.illegal(pseudoLegalMoves[moveIndex].moveType, `FATAL - Move wasnt legal`);
+			// }
 		}
 
 		let G = 0;
@@ -385,10 +309,12 @@ export async function SelfPlay(
 		Logger.log(`state: ${isGameWon(game.state)? 'Won' :isGameLost(game.state)? 'Lost' : 'Truncated'}`);
 		Logger.log(`turn: ${game.state.settings._turn}`);
 	}
-	
-	Logger.log(`\nSelf play ended`);
+
+	Logger.log(`Self play ended`);
 	Logger.log(`collected: ${trainingData.length}`);
 	Logger.log(`win rate: ${Math.floor((winRate.reduce((a, b) => a + b, 0) / winRate.length) * 100)}%\n`);
+
+	winRate = [];
 
 	return trainingData;
 }
