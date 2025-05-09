@@ -2,7 +2,7 @@ import AIState from "./aistate";
 import GameLoader from "./core/gameloader";
 import { UndoCallback } from "./core/move";
 import { MoveGenerator } from "./core/moves";
-import { MoveType } from "./core/types";
+import { MoveType, StructureType, TechnologyType } from "./core/types";
 import Game from "./game";
 
 export function deepCompare<T>(a: T, b: T, key: string, ignoreObjKeyLength?: boolean) {
@@ -39,6 +39,7 @@ export function deepCompare<T>(a: T, b: T, key: string, ignoreObjKeyLength?: boo
 }
 
 export default async function main(loader: GameLoader) {
+    console.clear();
     await loader.loadRandom();
     // console.time('test');
     // console.log(await predict(loader.currentState));
@@ -46,14 +47,14 @@ export default async function main(loader: GameLoader) {
     // Inside your game logic or a test script where you have 'state'
 
     AIState.assertConfig(loader.currentState);
-    
+
     const game = new Game();
     game.load(loader.currentState);
 
     let depth = 2;
 
     const superchain: UndoCallback[] = [];
-
+    
     // while(!isGameOver(game.state)) {
     //     const moves = MoveGenerator.legal(game.state);
     //     const move = moves[Math.floor(Math.random() * moves.length)];
@@ -62,11 +63,11 @@ export default async function main(loader: GameLoader) {
     //     if(result) {
     //         const [ played, undo ] = result;
     //         console.log(played.stringify(game.stateBefore, game.state));
-    //         superchain.push(undo);            
+    //         superchain.push(undo);
     //     }
 
     //     depth--;
-        
+
     //     if(depth === 0) {
     //         // console.log(moves.map(x => x.stringify(game.stateBefore, game.state)));
     //         break;
@@ -74,53 +75,88 @@ export default async function main(loader: GameLoader) {
     // }
 
     const sequence = [
-        // MoveType.Step,
+        MoveType.EndTurn,
+        MoveType.EndTurn,
+
+        // MoveType.Build,
         // MoveType.EndTurn,
-        // MoveType.Step,
-        MoveType.Harvest,
+      
+        // MoveType.Build,
         // MoveType.EndTurn,
     ];
 
+    const p1 = game.state.tribes[1];
+    const p2 = game.state.tribes[2];
+
+    // why cant build eye of god?
+
+    p1._tech.push({ discovered: true, techType: TechnologyType.Fishing});
+    p1._stars += 100;
+
+    p2._tech.push({ discovered: true, techType: TechnologyType.Fishing});
+    p2._stars += 100;
+
     for(const moveType of sequence) {
-        const moves = MoveGenerator.legal(game.state).filter(x => x.moveType == moveType);
-        const move = moves[Math.floor(Math.random() * moves.length)];
-        const result = game.playMove(move);
-        
-        if(result) {
-            const [ played, undo ] = result;
-            // console.log(played.stringify(game.stateBefore, game.state));
-            superchain.push(undo);            
+        try {
+            const oldState = game.cloneState();
+            const moves = MoveGenerator.legal(game.state).filter(x => {
+                if(x.moveType === moveType) return true;
+                if(x.moveType == MoveType.Build) {
+                    // filter all ports
+                    return x.getType<StructureType>() === StructureType.Port;
+                }
+                return false;
+            });
+            const move = moves[Math.floor(Math.random() * moves.length)];
+            const result = game.playMove(move);
+
+            if(result) {
+                const [ played, undo ] = result;
+                console.log('+', played.stringify(oldState, game.state));
+                superchain.push(undo);
+            }
+
+            // const nets = game.network.updateConnectionsAfterChange();
+            // if(nets) {
+            //     console.log('NET!');
+            //     console.log(nets);
+            // }
+        } catch (error) {
+            console.log(error);
+            if(error == 'Move is undefiend!') continue;
+            console.log(MoveGenerator.legal(game.state));
+            return
         }
     }
 
     console.log('--- moves --');
     console.log(game.state.settings._pov);
-    MoveGenerator.legal(game.state).forEach(x => 
-        console.log(x.stringify(game.stateBefore, game.state))
+    MoveGenerator.legal(game.state).forEach(x =>
+        console.log('-', x.stringify(game.state, game.state))
     );
     console.log('--- moves --');
 
     loader.currentState = game.state;
 
-    return;
-    
+    // return;
+
     superchain.reverse().forEach(x => x());
 
     deepCompare(
-        { state: { 
-            l: loader.currentState._lighthouses, 
-            v: loader.currentState._visibleTiles, 
-            r: loader.currentState.resources, 
-            s: loader.currentState.structures, 
-            t: loader.currentState.tiles, 
+        { state: {
+            l: loader.currentState._lighthouses,
+            v: loader.currentState._visibleTiles,
+            r: loader.currentState.resources,
+            s: loader.currentState.structures,
+            t: loader.currentState.tiles,
             T: loader.currentState.tribes
         } },
-        { state: { 
-            l: game.state._lighthouses, 
-            v: game.state._visibleTiles, 
-            r: game.state.resources, 
-            s: game.state.structures, 
-            t: game.state.tiles, 
+        { state: {
+            l: game.state._lighthouses,
+            v: game.state._visibleTiles,
+            r: game.state.resources,
+            s: game.state.structures,
+            t: game.state.tiles,
             T: game.state.tribes
         } },
         'state',
@@ -129,9 +165,9 @@ export default async function main(loader: GameLoader) {
 
     // loader.loadFromSpawnNotation(
     //     'domination,0,30,1'
-    //     + ';' + 
+    //     + ';' +
     //     'yaaielvelukizeaqbapo'
-    //     + ';' + 
+    //     + ';' +
     //     [   // Replace water tiles with 0
     //         'aqaqaqaqbabababababalulululu',
     //         'aqaqaqaqaqbaaqbababalulululu',
@@ -200,9 +236,9 @@ export default async function main(loader: GameLoader) {
     //         '--------rs------------------',
     //     ].join('')
     // );
-    
+
     // loader.saveState(loader.currentState, 'challenges/3-16-yadaak');
-    
+
     // await loader.loadLive();
 
     // loader.saveTo('spawns/imperius-05');
@@ -213,13 +249,13 @@ export default async function main(loader: GameLoader) {
     // console.log(await game.simulate(false, 30));
 
     // loader.currentState = game.state;
-    
+
     // loader.currentState = cloneState(game.state);
 
     // const state = loader.loadFromSave(`challenges/3-16-yadaak`);
 
     // const oState: GameState = cloneState(state);
- 
+
     // const undoChain: UndoCallback[] = [];
 
     // Find the moves and apply them
@@ -228,7 +264,7 @@ export default async function main(loader: GameLoader) {
 
     // playMove(state, ...besties);
     // endTurn(loader, state); // end bardur
-    
+
     // playRandomMoves(state);
     // endTurn(loader, state); // end kickoo
 
@@ -245,7 +281,7 @@ export default async function main(loader: GameLoader) {
 
     // // move oumaji rider
     // playMove(
-    //     state, 
+    //     state,
     //     ...UnitMoveGenerator.steps(state, getPovTribe(state)._units[0]!, null, 60)
     // );
     // endTurn(state); // end oumaji

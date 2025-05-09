@@ -373,6 +373,37 @@ export enum MoveType {
     EndTurn  = 10
 }
 
+export enum TaskType {
+	/**
+	 * meditation, dont attack for 5 turns
+	 */
+    Pacifist   = 0,
+	/**
+	 * philosophy, unlock all tech
+	 */
+    Genius 	   = 1,
+	/**
+	 * trade, have 100 stars
+	 */
+    Wealth     = 2,
+	/**
+	 * discover every lighthouse
+	 */
+    Explorer   = 3,
+	/**
+	 * kill 10 units
+	 */
+    Killer     = 4,
+	/**
+	 * connect 5 cities to capital
+	 */
+    Network    = 5,
+	/**
+	 * lvl 5 city
+	 */
+    Metropolis = 6,
+}
+
 export const EconomyAbilityTypes: AbilityType[] = [
 	AbilityType.BreakIce, AbilityType.BurnForest, AbilityType.ClearForest, 
 	AbilityType.Decompose, AbilityType.Destroy, AbilityType.Drain, 

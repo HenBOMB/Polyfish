@@ -81,6 +81,8 @@ app.get('/random', async (req: Request, res: Response) => {
     // const loader = new GameLoader(settings);
     // const state = await loader.loadRandom();
     const state = loader.currentState;
+    Logger.clear();
+    main(loader);
     res.json({
         state,
         obs: AIState.extract(state),
@@ -127,6 +129,7 @@ app.post("/mcts", async (req: Request, res: Response) => {
     try {
         const prevState: GameState = req.body.state;
         const game = new Game();
+        const oldState = game.cloneState();
         game.load(prevState);
         const moves = MoveGenerator.legal(prevState);
         const root = await new MCTS(
@@ -142,7 +145,7 @@ app.post("/mcts", async (req: Request, res: Response) => {
             : sampleFromDistribution(probs);
         res.json({
             probs: probs,
-            move: moves[moveIndex].stringify(game.stateBefore, game.state).toLowerCase(),
+            move: moves[moveIndex].stringify(oldState, game.state).toLowerCase(),
         });
     } catch (err: any) {
         console.error("autostep error:", err);
@@ -163,6 +166,7 @@ app.post("/autostep", async (req: Request, res: Response) => {
         const game = new Game();
         game.load(prevState);
         
+        const oldState = game.cloneState();
         const movez = MoveGenerator.legal(prevState);
         let moves: Move[] = [];
         const { pi, v } = await predict(prevState);
@@ -195,10 +199,10 @@ app.post("/autostep", async (req: Request, res: Response) => {
         }
 
         res.json({
-            moves: moves.map(x => x.stringify(game.stateBefore, game.state).toLowerCase()),
+            moves: moves.map(x => x.stringify(oldState, game.state).toLowerCase()),
             state: game.state,
             potential:  AIState.calculatePotential(prevState) - AIState.calculatePotential(game.state),
-            reward: AIState.calculateReward(game, ...moves),
+            reward: AIState.calculateReward(oldState, game, ...moves),
             value: v,
         });
     } catch (err: any) {

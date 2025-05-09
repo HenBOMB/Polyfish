@@ -1,4 +1,4 @@
-import { getPovTribe, getTechCost, getTechSettings, isTechUnlocked } from "../functions";
+import { getPovTribe } from "../functions";
 import Move, { CallbackResult } from "../move";
 import { MoveType, TechnologyType } from "../types";
 import { GameState, TechnologyState } from "../states";
@@ -28,29 +28,5 @@ export default class Research extends Move {
                 }
             }
         };
-    }
-
-    safeguard(state: GameState): 1 | null {
-        const techType = this.getType<TechnologyType>();
-        const pov = getPovTribe(state);
-
-        // ! Already unlocked
-        if(isTechUnlocked(pov, techType)) {
-            return null;
-        }
-        
-        // ! Too expensive
-        if(getTechCost(techType) > pov._stars) {
-            return null;
-        }
-
-        const settings = getTechSettings(techType);
-
-        // ! Previous tier tech not unlocked
-        if(settings.requires && !isTechUnlocked(pov, settings.requires)) {
-            return null;
-        }
-        
-        return 1;
     }
 }

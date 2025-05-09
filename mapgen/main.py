@@ -253,7 +253,7 @@ def generate(map_size, initial_land, smoothing, relief, tribes, seed=None):
     def proc(cell_, probability):
         return (village_map[cell_] == 2 and random.random() < probability) or\
             (village_map[cell_] == 1 and random.random() < probability * BORDER_EXPANSION)
-
+    
     for cell in range(map_size**2):
         tribe_key = world_map[cell].get('otribe', world_map[cell]['tribe'])
         if world_map[cell]['type'] == 'ground':

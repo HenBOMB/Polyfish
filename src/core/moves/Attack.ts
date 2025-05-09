@@ -1,6 +1,5 @@
-import { Logger } from "../../polyfish/logger";
 import { attackUnit, removeUnit, summonUnit } from "../actions";
-import { getCityAt, getEnemyAt, getUnitAt, isSkilledIn, isTechUnlocked, isUnderSiege } from "../functions";
+import { getEnemyAt, getUnitAt, isSkilledIn, isTechUnlocked } from "../functions";
 import Move, { CallbackResult, UndoCallback } from "../move";
 import { GameState } from "../states";
 import { MoveType, SkillType, TechnologyType, TerrainType, UnitType } from "../types";
@@ -189,39 +188,5 @@ export default class Attack extends Move {
                 undoConsume();
             }
         };
-    }
-
-    safeguard(state: GameState): 1 | null {
-        const attacker = getUnitAt(state, this.getSrc());
-        
-        if(!attacker || attacker._attacked || attacker._health < 1) {
-            if(state.settings.areYouSure) {
-                Logger.illegal(MoveType.Attack, `Invalid attacker ${attacker?.idx}, ${attacker? attacker._health : -1} (${attacker?._moved})`);
-            }
-            return null;
-        }
-        
-        if (isSkilledIn(attacker, SkillType.Infiltrate)) {
-            const city = getCityAt(state, this.getTarget());
-            // Cloaks cannot infiltrate cities that are already under siege.
-            if(!city || isUnderSiege(state, city) || city._riot) {
-                if(state.settings.areYouSure) {
-                    Logger.illegal(MoveType.Attack, `City ${city?.tileIndex} already under siege or riot! (${city? isUnderSiege(state, city) : null}, ${city?._riot})`);
-                }
-                return null;
-            }
-            return 1;
-        }
-        
-        const defender = getEnemyAt(state, this.getTarget());
-        
-        if(!defender || defender._health < 1) {
-            if(state.settings.areYouSure) {
-                Logger.illegal(MoveType.Attack, `Invalid defender ${defender?.idx}, ${defender? defender._health : -1}`);
-            }
-            return null;
-        }
-        
-        return 1;
     }
 }

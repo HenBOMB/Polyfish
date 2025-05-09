@@ -224,13 +224,12 @@ export default class AIState {
      * @param moves Moves recently played
      * @returns 
      */
-    static calculateReward(game: Game, ...moves: Move[]): number {
+    static calculateReward(oldState: GameState, game: Game, ...moves: Move[]): number {
         const move: Move = moves[0];
         // The forced reward move, caused by upgrading a city
         const rewardMove: Move = moves[1];
 
         // ! ASSUMES NO FOW
-        const oldState = game.stateBefore;
         const newState = game.state;
 
         const pov = newState.settings._pov;

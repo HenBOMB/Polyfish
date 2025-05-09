@@ -178,7 +178,7 @@ export interface GameState {
 		_recentMoves: MoveType[],
 		_pendingRewards: Move[],
 	};
-	tiles: Record<number, TileState>;
+	tiles: TileState[];
 	structures: Record<number, StructureState | null>;
 	resources: Record<number, ResourceState | null>;
 	tribes: Record<number, TribeState>;

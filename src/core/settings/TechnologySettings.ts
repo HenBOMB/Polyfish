@@ -1,4 +1,4 @@
-import { AbilityType, ResourceType, StructureType, TechnologyType, TribeType, UnitType } from "../types";
+import { AbilityType, ResourceType, StructureType, TaskType, TechnologyType, TribeType, UnitType } from "../types";
 
 export type TechnologySetting =  {
     tier?: number,
@@ -19,6 +19,7 @@ export const TechnologySettings: Record<TechnologyType, TechnologySetting> = {
     [TechnologyType.None]: {
         tier: 0,
         unlocksUnit: UnitType.Warrior,
+        next: [TechnologyType.Riding, TechnologyType.Organization, TechnologyType.Climbing, TechnologyType.Fishing, TechnologyType.Hunting],
     },
     [TechnologyType.Riding]: {
         tier: 1,
@@ -276,3 +277,5 @@ Object.freeze(TechnologySettings);
 Object.freeze(TechnologyReplacements);
 Object.freeze(TechnologyUnlockable);
 Object.freeze(TechnologyUnlockableList);
+
+console.log();

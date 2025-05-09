@@ -12,7 +12,7 @@ export default class GrowForest extends Ability {
     execute(state: GameState): CallbackResult {
         const target = this.getTarget();
         const pov = getPovTribe(state);
-        const tile = state.tiles[target]!;
+        const tile = state.tiles[target];
 
         tile.terrainType = TerrainType.Forest;
         pov._stars -= 5;

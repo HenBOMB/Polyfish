@@ -1,4 +1,4 @@
-import { getCityAt, getEnemyAt, getPovTribe, getTrueUnitAt, getUnitAt, indexToCoord, tryDiscoverRewardOtherTribes } from "./functions";
+import { getCityAt, getEnemyAt, getUnitAt } from "./functions";
 import { GameState } from "./states";
 import { AbilityType, CaptureType, ArmyAbilityTypes, MoveType, ResourceType, RewardType, EconomyAbilityTypes, StructureType, TechnologyType, TerrainType, TribeType, UnitType } from "./types";
 
@@ -41,10 +41,6 @@ export default class Move {
 
     execute(_: GameState): CallbackResult {
         throw "execute(state) Not implemented";
-    }
-
-    safeguard(_: GameState, ...args: any[]): 1 | null {
-        return 1;
     }
 
     stringify(oldState: GameState, newState: GameState) {

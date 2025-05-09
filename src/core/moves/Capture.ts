@@ -1,4 +1,3 @@
-import { Logger } from "../../polyfish/logger";
 import { getCityAt, getHomeCity, getNeighborIndexes, getNextTech, getPovTribe, getUnitAt, indexToCoord, isTechUnlocked } from "../functions";
 import Move, { CallbackResult, UndoCallback } from "../move";
 import { EffectType, MoveType, RewardType, StructureType, TechnologyType, TerrainType, TribeType, UnitType } from "../types";
@@ -351,14 +350,5 @@ export default class Capture extends Move {
 
         }
     }
-    
-    safeguard(state: GameState): 1 | null {
-        const unit = getUnitAt(state, this.getSrc());
-        
-        if(!unit) {
-            return Logger.illegal(MoveType.None, `Unit does not exist: ${this.getSrc()}`);
-        }
-        
-        return 1;
-    }
+
 }

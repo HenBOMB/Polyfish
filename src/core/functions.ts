@@ -117,6 +117,10 @@ export function getTechResource(tribe: TribeLike, tech: TechLike): ResourceType 
 	return getReplacedOrTechSettings(tribe, tech).unlocksResource || null;
 }
 
+export function getTechStructure(tribe: TribeLike, tech: TechLike): StructureType | null {
+	return getReplacedOrTechSettings(tribe, tech).unlocksStructure || null;
+}
+
 export function getTechAbility(like: TribeLike, tierTech: number): AbilityType | null {
 	return getReplacedOrTechSettings(like, tierTech).unlocksAbility || null;
 }
@@ -137,7 +141,7 @@ export function getTribeProduction(state: GameState, tribe: TribeState): number 
 	return tribe._cities.reduce((a, b) => a + getCityProduction(state, b), 0);
 }
 
-export function getTerritorry(state: GameState, tribe?: TribeState, cityTarget?: CityState): number[] {
+export function getPovTerritorry(state: GameState, tribe?: TribeState, cityTarget?: CityState): number[] {
 	tribe = tribe || getPovTribe(state);
 	return (cityTarget? [cityTarget] : tribe._cities).map(x => x._territory).flat();
 }
@@ -212,6 +216,14 @@ export function getCityAt(state: GameState, tileIndex: number, matchOwner?: numb
 		return null;
 	}
 	return state.tribes[cityOwner]._cities.find(x => x.tileIndex == tileIndex) || null;
+}
+
+export function getCityOwningTile(state: GameState, tileIndex: number, playerCities?: CityState[]): CityState | null {
+	const cityTileIndex = state.tiles[tileIndex]._rulingCityIndex;
+	if(cityTileIndex < 0) {
+		return null;
+	}
+	return state.tribes[state.settings._pov]._cities.filter(x => playerCities? playerCities.includes(x) : true).find(x => x.tileIndex == cityTileIndex) || null;
 }
 
 
@@ -305,14 +317,17 @@ export function getClosestReachableEnemyCity(state: GameState, unit: UnitState, 
 	return [closestCity, closestDistance];
 }
 
-
-export function isLighthouse(state: GameState, tileIndex: number) {
+export function getLighthouses(state: GameState) {
 	return [
 		0,
 		state.settings.size - 1,
 		state.settings.size * state.settings.size - 1,
 		1 + state.settings.size * state.settings.size - state.settings.size
-	].includes(tileIndex);
+	];
+}
+
+export function isLighthouse(state: GameState, tileIndex: number) {
+	return getLighthouses(state).includes(tileIndex);
 }
 
 /**
@@ -337,8 +352,8 @@ export function isTileExplored(state: GameState, tileIndex: TileState | number, 
 	return state.tiles[typeof tileIndex === 'number'? tileIndex : tileIndex.tileIndex]._explorers.includes(matchOwner || state.settings._pov);
 }
 
-export function isTileOccupied(state: GameState, tileIndex: number): boolean {
-	return state.tiles[tileIndex]._unitOwner > 0;
+export function isTileOccupied(state: GameState, tileIndex: number, strictEnemy = false): boolean {
+	return state.tiles[tileIndex]._unitOwner > 0 && (strictEnemy? state.tiles[tileIndex]._unitOwner != state.settings._pov : true);
 }
 
 export function isTileFrozen(state: GameState, tileIndex: number): boolean {

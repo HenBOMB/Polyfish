@@ -98,7 +98,7 @@ export default class GameLoader {
         let [ [ size, turn ], playerStates, mapdata ] = data;
 
         const state: GameState = {
-            tiles: {},
+            tiles: [],
             structures: {},
             resources: {},
             settings: {
@@ -370,9 +370,8 @@ export default class GameLoader {
     }
 
     public async loadRandom(_seed?: number): Promise<GameState> {
-        let seed = _seed || (this.settings.seed? this.settings.seed : Math.floor(Math.random() * MAX_SEED));
         
-        const randomNotation = async () => {
+        const randomNotation = async (seed: number) => {
             const mapdata: { type: string, tribe: string, above: string | null, road: boolean }[] = JSON.parse(await new Promise((resolve, reject) => {
                 const cmd = `.venv/bin/python mapgen/main.py --seed ${seed} --size ${this.settings.size} --tribes ${this.settings.tribes.map(x => TribeType[x]).join(" ")}`
                 exec(cmd, (error: any, stdout: string, stderr: any) => {
@@ -418,9 +417,10 @@ export default class GameLoader {
 
         // Safeguard for inconsistent map generation
         let tries = 100
+        let seed = _seed || (this.settings.seed? this.settings.seed : Math.floor(Math.random() * MAX_SEED));
         while(tries > 0) {
             try {
-                const not = await randomNotation().catch(() => null);
+                const not = await randomNotation(seed).catch(() => null);
                 if(!not) throw 'err';
                 const state = this.loadNotation(not);
                 this.emergencyState = cloneState(state);
@@ -521,7 +521,7 @@ export default class GameLoader {
         }, {}) as { [key: number]: TribeState };
 
         const state: GameState = {
-            tiles: {},
+            tiles: [],
             structures: {},
             resources: {},
             settings: {

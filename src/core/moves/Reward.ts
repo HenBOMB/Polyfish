@@ -1,12 +1,11 @@
-import { Logger } from "../../polyfish/logger";
-import { getCityAt, getNeighborIndexes, getNeighborTiles, getPovTribe, getTechSettings, getUnitAt } from "../functions";
-import Move, { CallbackResult, UndoCallback } from "../move";
-import { MoveType, RewardType, TechnologyType } from "../types";
+import { getCityAt, getNeighborIndexes, getPovTribe } from "../functions";
+import Move, { CallbackResult } from "../move";
+import { MoveType, RewardType } from "../types";
 import { GameState } from "../states";
 import { UnitType } from "../types";
 import { TribeSettings } from "../settings/TribeSettings";
 import { predictExplorer } from "../../eval/prediction";
-import { discoverTiles, pushUnit, summonUnit } from "../actions";
+import { discoverTiles, summonUnit } from "../actions";
 
 export default class Reward extends Move {
     constructor(src: number, type: number) {
@@ -90,15 +89,5 @@ export default class Reward extends Move {
                 undoReward();
             },
         };
-    }
-
-    safeguard(state: GameState): 1 | null {
-        const city = getCityAt(state, this.getSrc())!;
-
-        if(!city || city._rewards.includes(this.getType<RewardType>())) {
-            return null;
-        }
-
-        return 1;
     }
 }

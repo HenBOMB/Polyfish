@@ -69,6 +69,8 @@ export function addPopulationToCity(state: GameState, targetCity: CityState, amo
     }
 }
 
+// Not sure if this method is 100% accurate
+
 export function addMissingConnections(state: GameState, targetCity: CityState, tileIndex: number): CallbackResult {
     // If we built a port, we must connect it to any nearby ports and reward connected cities
     const structType = state.structures[tileIndex]?.id;
@@ -77,14 +79,14 @@ export function addMissingConnections(state: GameState, targetCity: CityState, t
     const tribe = state.tribes[state.settings._pov];
     const undoChain: UndoCallback[] = [];
     const rewards: Move[] = [];
+
+    // max range 5 tiles
     const nearbyStructureIndexes = getNeighborIndexes(state, tileIndex, 5);
     const connectedPorts: [number, number[]][] = [];
     const connectedCities: [number, number[]][] = [];
     const potentialNewConnections: [CityState, [number, number[]]][] = [];
     let rewardedCities: CityState[] = [];
     const isTargetCapital = state.tiles[targetCity.tileIndex].capitalOf > 0;
-    
-    // Not sure if this method is 100% accurate
     
     for (let i = 0; i < nearbyStructureIndexes.length; i++) {
         const structTileIndex = nearbyStructureIndexes[i];
@@ -158,7 +160,7 @@ export function addMissingConnections(state: GameState, targetCity: CityState, t
 
     // If we were not connected and now we are
     // Capitals go first
-    if((!targetCity._connectedToCapital) && rewardedCities.length) {
+    if(!targetCity._connectedToCapital && rewardedCities.length) {
         if(state.tiles[targetCity.tileIndex].capitalOf > 0) {
             rewardedCities = [targetCity, ...rewardedCities];
         }
@@ -237,18 +239,7 @@ export function addMissingConnections(state: GameState, targetCity: CityState, t
         });
     }
 
-    // EVAL Reward for having connected a port with a city
-    if(rewardedCities.length > 1) {
-        state._potentialEconomy += 1;
-    }
-
-    state._potentialArmy += routedTiles.length * .8;
-
     undoChain.push(() => {
-        state._potentialArmy -= routedTiles.length * .8;
-        if(rewardedCities.length > 1) {
-            state._potentialEconomy -= 1;
-        }
         for (let i = 0; i < routedTiles.length; i++) {
             state.tiles[routedTiles[i]].hasRoute = false;
         }
@@ -458,7 +449,6 @@ export function discoverTiles(state: GameState, unit?: UnitState | null, tileInd
     ) : [])).filter(x => !state._visibleTiles.includes(x));
 
     const lighthouses = [...state._lighthouses];
-    let potential = 0;
     
     let chain: UndoCallback[] = [];
     let rewards: Move[] = [];
@@ -492,7 +482,6 @@ export function discoverTiles(state: GameState, unit?: UnitState | null, tileInd
                     state.tiles[x]._explorers.pop();
                 });
             }
-            state._potentialDiscovery = state._potentialDiscovery.slice(0, state._potentialDiscovery.length - potential);
             state._lighthouses = lighthouses;
         }
     }

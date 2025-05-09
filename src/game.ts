@@ -1,21 +1,21 @@
 import { GameState } from "./core/states";
-import AIState from "./aistate";
 import { STARTING_OWNER_ID } from "./core/gameloader";
-import { MoveGenerator, safelyExecuteMove } from "./core/moves";
-import { cloneState, getCityProduction, getNeighborIndexes, getPovTribe, isFrozen, isGameOver, tryDiscoverRewardOtherTribes } from "./core/functions";
-import Move, { Branch, CallbackResult, UndoCallback } from "./core/move";
+import { MoveGenerator } from "./core/moves";
+import { cloneState, getCityProduction, getPovTribe, isFrozen, isGameOver, tryDiscoverRewardOtherTribes } from "./core/functions";
+import Move, {UndoCallback } from "./core/move";
 import { MoveType } from "./core/types";
 import { EffectType } from "./core/types";
+import NetworkManager from "./core/network";
 
 export default class Game {
     initialState: GameState;
-    stateBefore: GameState;
     state: GameState;
+    network: NetworkManager;
 
     constructor() {
         this.initialState = {} as any;
         this.state = {} as any;
-        this.stateBefore = {} as any;
+        this.network = null as any;
     }
 
     deepClone() {
@@ -24,22 +24,27 @@ export default class Game {
         return game;
     }
 
+    cloneState() {
+        return cloneState(this.state);
+    }
+
     load(state: GameState) {
         this.initialState = state;
         this.reset();
     }
 
     reset() {
-        this.stateBefore = cloneState(this.initialState);
         this.state = cloneState(this.initialState);
+        this.network = new NetworkManager(this.state);
     }
 
     playMove(moveOrIndex: number | Move): [Move, UndoCallback] | null {
+        if(moveOrIndex === null || moveOrIndex === undefined) {
+            throw new Error('Move is undefiend!');
+        }
         if(this.state.settings._gameOver) {
             return null;
         }
-
-        this.stateBefore = cloneState(this.state);
 
         const move = typeof moveOrIndex == "number" ? MoveGenerator.legal(this.state)[moveOrIndex] : moveOrIndex;
         let undo: UndoCallback;
@@ -52,81 +57,29 @@ export default class Game {
             this.state.settings._recentMoves = [];
         }
         else {
-            undo = safelyExecuteMove(this.state, move) || (() => {});
+		    const result = move.execute(this.state)!;
+            undo = result.undo;
+
+            // If we just played a reward move, clear the first two
+            if(move.moveType == MoveType.Reward) {
+                this.state.settings._pendingRewards.splice(0, 2);
+            }
+
+            // If playing the move lead to rewards, queue them
+            if(result.rewards) {
+                this.state.settings._pendingRewards.push(...result.rewards);
+            }
         }
+
+		const undoDiscover = tryDiscoverRewardOtherTribes(this.state);
 
         this.state.settings.areYouSure = false;
 
-        return [move, undo];
+        return [move, () => {
+            undoDiscover();
+            undo();
+        }];
     }
-    
-    // /**
-    //  * Generates random moves by selecting random moves and shuffling them
-    //  */
-    // getGoodMoves(randomChance = 0.7): Move[] {
-    //     const actual = cloneState(this.state);
-    //     const doRandom = Math.random() < randomChance;
-
-    //     const maxMoves = 7;
-    //     const maxDepth = doRandom? 1 : 2;
-    //     const maxArmyMoves = 10;
-    //     const maxArmyDepth = doRandom? 1 : 2;
-
-    //     // Use actual state to generate moves, or state will not match
-
-    //     // const ecoMoves: BestMoves = null as any;
-    //     const ecoMoves = evaluateBestMove(
-    //         this.state, 
-    //         (state: GameState) => generateEcoMoves(state)
-    //             .sort(() => 0.5 - Math.random())
-    //             // .slice(minMoves, minMoves + Math.floor(Math.random() * (maxMoves - minMoves + 1)))
-    //             .slice(0, maxMoves)
-    //             .filter(Boolean), 
-    //             doRandom? () => Math.random() * 10 : evaluateEconomy, 
-    //         maxDepth
-    //     );
-
-    //     if(!deepCompare(actual, this.state, 'state', true)) {
-    //         throw Error('ECO COMPARE');
-    //     }
-
-    //     const undoChain: UndoCallback[] = [];
-
-    //     if(ecoMoves?.moves.length) {
-    //         logAndUndoMoves(ecoMoves.moves, this.state, false, undoChain);
-    //     }
-
-    //     const unitMoves = evaluateBestMove(
-    //         this.state, 
-    //         (state: GameState) => [
-    //             ...getPovTribe(state)._units.map(x => UnitMoveGenerator.all(state, x)).flat(),
-    //             ...UnitMoveGenerator.spawns(state),
-    //         ].sort(() => 0.5 - Math.random()).slice(0, maxArmyMoves).filter(Boolean), 
-    //         doRandom? () => Math.random() * 10 : evaluateArmy, 
-    //         maxArmyDepth
-    //     );
-
-    //     undoChain.reverse().forEach(x => x());
-
-    //     if(!deepCompare(actual, this.state, 'state', true)) {
-    //         throw Error('ARMY COMPARE');
-    //     }
-
-    //     // if(ecoMoves) {
-    //     //     const start = ecoMoves.moves.findIndex(x => x.id.startsWith('end'));
-    //     //     ecoMoves.moves = ecoMoves.moves.slice(0, start);
-    //     // }
-
-    //     // if(unitMoves) {
-    //     //     const start = unitMoves.moves.findIndex(x => x.id.startsWith('end'));
-    //     //     unitMoves.moves = unitMoves.moves.slice(0, start);
-    //     // }
-        
-    //     return [
-    //         ...ecoMoves?.moves || [],
-    //         ...unitMoves?.moves || [],
-    //     ];
-    // }
     
     /**
      * Ends the current tribe's turn
