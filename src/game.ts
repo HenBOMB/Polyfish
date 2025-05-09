@@ -6,16 +6,19 @@ import Move, {UndoCallback } from "./core/move";
 import { MoveType } from "./core/types";
 import { EffectType } from "./core/types";
 import NetworkManager from "./core/network";
+import PoseManager from "./core/pose";
 
 export default class Game {
     initialState: GameState;
     state: GameState;
     network: NetworkManager;
+    pose: PoseManager;
 
     constructor() {
         this.initialState = {} as any;
         this.state = {} as any;
         this.network = null as any;
+        this.pose = new PoseManager()
     }
 
     deepClone() {
@@ -58,7 +61,11 @@ export default class Game {
         }
         else {
 		    const result = move.execute(this.state)!;
-            undo = result.undo;
+            const undoDiscover = tryDiscoverRewardOtherTribes(this.state);
+            undo = () => {
+                undoDiscover();
+                result.undo();
+            }
 
             // If we just played a reward move, clear the first two
             if(move.moveType == MoveType.Reward) {
@@ -71,12 +78,10 @@ export default class Game {
             }
         }
 
-		const undoDiscover = tryDiscoverRewardOtherTribes(this.state);
 
         this.state.settings.areYouSure = false;
 
         return [move, () => {
-            undoDiscover();
             undo();
         }];
     }

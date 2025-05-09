@@ -1,8 +1,9 @@
 import AIState from "./aistate";
+import { isGameOver } from "./core/functions";
 import GameLoader from "./core/gameloader";
 import { UndoCallback } from "./core/move";
 import { MoveGenerator } from "./core/moves";
-import { MoveType, StructureType, TechnologyType } from "./core/types";
+import { MoveType, TechnologyType } from "./core/types";
 import Game from "./game";
 
 export function deepCompare<T>(a: T, b: T, key: string, ignoreObjKeyLength?: boolean) {
@@ -51,95 +52,45 @@ export default async function main(loader: GameLoader) {
     const game = new Game();
     game.load(loader.currentState);
 
-    let depth = 2;
+    let depth = 10000;
 
     const superchain: UndoCallback[] = [];
-    
-    // while(!isGameOver(game.state)) {
-    //     const moves = MoveGenerator.legal(game.state);
-    //     const move = moves[Math.floor(Math.random() * moves.length)];
-    //     const result = game.playMove(move);
+    const superOldState = game.cloneState();
 
-    //     if(result) {
-    //         const [ played, undo ] = result;
-    //         console.log(played.stringify(game.stateBefore, game.state));
-    //         superchain.push(undo);
-    //     }
-
-    //     depth--;
-
-    //     if(depth === 0) {
-    //         // console.log(moves.map(x => x.stringify(game.stateBefore, game.state)));
-    //         break;
-    //     }
-    // }
-
-    const sequence = [
-        MoveType.EndTurn,
-        MoveType.EndTurn,
-
-        // MoveType.Build,
-        // MoveType.EndTurn,
-      
-        // MoveType.Build,
-        // MoveType.EndTurn,
-    ];
-
-    const p1 = game.state.tribes[1];
-    const p2 = game.state.tribes[2];
-
-    // why cant build eye of god?
-
-    p1._tech.push({ discovered: true, techType: TechnologyType.Fishing});
-    p1._stars += 100;
-
-    p2._tech.push({ discovered: true, techType: TechnologyType.Fishing});
-    p2._stars += 100;
-
-    for(const moveType of sequence) {
-        try {
+    try {
+        while(!isGameOver(game.state)) {
             const oldState = game.cloneState();
-            const moves = MoveGenerator.legal(game.state).filter(x => {
-                if(x.moveType === moveType) return true;
-                if(x.moveType == MoveType.Build) {
-                    // filter all ports
-                    return x.getType<StructureType>() === StructureType.Port;
-                }
-                return false;
-            });
+            const moves = MoveGenerator.legal(game.state);
             const move = moves[Math.floor(Math.random() * moves.length)];
             const result = game.playMove(move);
-
+    
             if(result) {
                 const [ played, undo ] = result;
-                console.log('+', played.stringify(oldState, game.state));
+                console.log(played.stringify(oldState, game.state));
                 superchain.push(undo);
             }
-
-            // const nets = game.network.updateConnectionsAfterChange();
-            // if(nets) {
-            //     console.log('NET!');
-            //     console.log(nets);
-            // }
-        } catch (error) {
-            console.log(error);
-            if(error == 'Move is undefiend!') continue;
-            console.log(MoveGenerator.legal(game.state));
-            return
+    
+            depth--;
+    
+            if(depth === 0) {
+                // console.log(moves.map(x => x.stringify(oldState, game.state)));
+                break;
+            }
         }
+    } catch (error) {
+        console.log(error);
     }
 
-    console.log('--- moves --');
-    console.log(game.state.settings._pov);
-    MoveGenerator.legal(game.state).forEach(x =>
-        console.log('-', x.stringify(game.state, game.state))
-    );
-    console.log('--- moves --');
+    MoveGenerator.legal(game.state).map(x => x.stringify(superOldState, game.state));
 
-    loader.currentState = game.state;
+    const modified = game.cloneState();
 
-    // return;
-
+    // const chain = playSequence(
+    //     game,
+    //     MoveType.EndTurn,
+    //     MoveType.EndTurn,
+    // );
+    
     superchain.reverse().forEach(x => x());
 
     deepCompare(
@@ -162,6 +113,8 @@ export default async function main(loader: GameLoader) {
         'state',
         true
     );
+
+    loader.currentState = modified;
 
     // loader.loadFromSpawnNotation(
     //     'domination,0,30,1'
@@ -301,4 +254,51 @@ export default async function main(loader: GameLoader) {
     // if(!deepCompare(oState, state, 'state', true)) {
     //     console.log('\n---DEEP COMPARE FAILED---');
     // }
+}
+
+function playSequence(game: Game, ...moves: MoveType[]) {
+    const chain = [];
+    const p1 = game.state.tribes[1];
+    const p2 = game.state.tribes[2];
+
+    p1._tech.push({ discovered: true, techType: TechnologyType.Fishing});
+    p1._stars += 100;
+
+    p2._tech.push({ discovered: true, techType: TechnologyType.Fishing});
+    p2._stars += 100;
+
+    for(const moveType of moves) {
+        try {
+            const oldState = game.cloneState();
+            const moves = MoveGenerator.legal(game.state).filter(x => x.moveType === moveType);
+            const move = moves[Math.floor(Math.random() * moves.length)];
+            const result = game.playMove(move);
+
+            if(result) {
+                const [ played, undo ] = result;
+                console.log('+', played.stringify(oldState, game.state));
+                chain.push(undo);
+            }
+
+            // const nets = game.network.updateConnectionsAfterChange();
+            // if(nets) {
+            //     console.log('NET!');
+            //     console.log(nets);
+            // }
+        } catch (error) {
+            console.log(error);
+            if(error == 'Move is undefiend!') continue;
+            console.log(MoveGenerator.legal(game.state));
+            return
+        }
+    }
+
+    console.log('--- moves --');
+    console.log(game.state.settings._pov);
+    MoveGenerator.legal(game.state).forEach(x =>
+        console.log('-', x.stringify(game.state, game.state))
+    );
+    console.log('--- moves --');
+
+    return chain;
 }

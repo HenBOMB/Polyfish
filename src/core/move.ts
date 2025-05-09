@@ -46,7 +46,7 @@ export default class Move {
     stringify(oldState: GameState, newState: GameState) {
         switch (this.moveType) {
             case MoveType.Step: {
-                return `${MoveType[this.moveType]} ${UnitType[getUnitAt(oldState, this.getSrc())!._unitType]}`;
+                return `${MoveType[this.moveType]} ${UnitType[(getUnitAt(oldState, this.getSrc()) || getUnitAt(newState, this.getSrc()))!._unitType]}`;
             }
             case MoveType.Attack: {
                 const oldAtk = getUnitAt(oldState, this.getSrc())!;

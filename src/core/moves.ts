@@ -77,9 +77,8 @@ export class EconMovesGenerator {
 
 		for (let i = 0; i < territory.length; i++) {
 			const tile = state.tiles[territory[i]];
-			const struct = state.structures[tile.tileIndex];
 
-			if(struct && tile._owner == pov.owner) {
+			if(state.structures[tile.tileIndex]) {
 				if(abilities.some(x => x == AbilityType.Destroy)) {
 					moves.push(new Decompose(tile.tileIndex));	
 				}
@@ -92,11 +91,13 @@ export class EconMovesGenerator {
 				if(abilities.some(x => x == AbilityType.ClearForest)) {
 					moves.push(new ClearForest(tile.tileIndex));
 				}
+				if(pov._stars >= 2 && abilities.some(x => x == AbilityType.BurnForest)) {
+					moves.push(new BurnForest(tile.tileIndex));
+				}
+			}
+			else if(pov._stars >= 5 && tile.terrainType == TerrainType.Field) {
 				if(abilities.some(x => x == AbilityType.GrowForest)) {
 					moves.push(new GrowForest(tile.tileIndex));
-				}
-				if(abilities.some(x => x == AbilityType.BurnForest)) {
-					moves.push(new BurnForest(tile.tileIndex));
 				}
 			}
 
@@ -219,7 +220,6 @@ export class EconMovesGenerator {
 	
 	static research(state: GameState, moves: Move[]) {
 		const pov = getPovTribe(state);
-		const techUnlocks: TechnologyType[] = [];
 
 		for (let i = 0; i < pov._tech.length; i++) {
 			const techState = pov._tech[i];
@@ -335,11 +335,23 @@ export class ArmyMovesGenerator {
 		const resource = state.resources[targetCityIndex];
 		
 		if(struct) {
-			if(struct.id == StructureType.Village && state.tiles[targetCityIndex]._owner !== capturer._owner) {
-				moves.push(new Capture(capturer._tileIndex));
-			}
-			if(struct.id == StructureType.Ruin) {
-				moves.push(new Capture(capturer._tileIndex));
+			switch (struct.id) {
+				case StructureType.Village:
+					if(state.tiles[targetCityIndex]._owner < 0) {
+						moves.push(new Capture(capturer._tileIndex));
+
+					}
+					else if(state.tiles[targetCityIndex]._owner !== capturer._owner) {
+						moves.push(new Capture(capturer._tileIndex));
+					}
+					break;
+
+				case StructureType.Ruin:
+					moves.push(new Capture(capturer._tileIndex));
+					break;
+			
+				default:
+					break;
 			}
 		}
 		else if(resource && resource.id == ResourceType.Starfish && isTechUnlocked(pov, TechnologyType.Navigation)) {

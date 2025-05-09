@@ -15,7 +15,8 @@ export default class BurnForest extends Ability {
         const resource = state.resources[tile.tileIndex];
 
         tile.terrainType = TerrainType.Field;
-        pov._stars++;
+        pov._stars -= 2;
+
         state.resources[tile.tileIndex] = {
             id: ResourceType.Crop,
             tileIndex: tile.tileIndex
@@ -30,7 +31,7 @@ export default class BurnForest extends Ability {
                 else {
                     state.resources[tile.tileIndex] = resource;
                 }
-                pov._stars--;
+                pov._stars += 2;
                 tile.terrainType = TerrainType.Forest;
             }
         };

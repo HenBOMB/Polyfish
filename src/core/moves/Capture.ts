@@ -62,7 +62,7 @@ export default class Capture extends Move {
     
     village(state: GameState): CallbackResult {
         const pov = getPovTribe(state);        
-        const captureIndex = this.getTarget();
+        const captureIndex = this.getSrc();
         const villageTile = state.tiles[captureIndex];
         const territory = getNeighborIndexes(state, captureIndex, 1, true, true);
         
