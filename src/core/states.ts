@@ -3,9 +3,19 @@ import Move from "./move";
 import { MoveType } from "./types";
 import { TerrainType, ResourceType, TribeType, StructureType, UnitType, TechnologyType, RewardType, EffectType, ModeType, ClimateType } from "./types";
 
+export interface DiplomacyRelationState {
+	state: boolean;
+	lastAttackTurn: number;
+	embassyLevel: number;
+	lastPeaceBrokenTurn: number;
+	firstMeet: number;
+	embassyBuildTurn: number;
+	previousAttackTurn: number;
+}
+
 export interface TileState {
 	terrainType: TerrainType;
-	_explorers: number[];
+	_explorers: Set<number>;
 	hasRoad: boolean;
 	hasRoute: boolean;
 	hadRoute: boolean;
@@ -18,7 +28,6 @@ export interface TileState {
 	_owner: number;
 	tileIndex: number;
 	_unitOwner: number;
-	_unitIdx: number;
 }
 
 export interface StructureState {
@@ -34,27 +43,7 @@ export interface ResourceState {
 	tileIndex: number;
 }
 
-export interface AbilityState {
-	id: number;
-	name: string;
-}
-
-export interface UnitClass {
-	name: string;
-	id: number;
-	health: number;
-	defense: number;
-	movement: number;
-	attack: number;
-	cost: number;
-	hidden: boolean;
-	weapon: number;
-	range: number;
-	abilities: AbilityState[];
-}
-
 export interface UnitState {
-	idx: number;
 	x: number;
 	y: number;
 	_unitType: UnitType;
@@ -70,10 +59,9 @@ export interface UnitState {
 	_owner: number;
 	_homeIndex: number;
 	_tileIndex: number;
-	_boosted?: boolean;
 	_moved: boolean;
 	_attacked: boolean;
-	_effects: EffectType[];
+	_effects: Set<EffectType>;
 }
 
 export interface RewardState {
@@ -91,40 +79,18 @@ export interface CityState {
 	_level: number;
 	_production: number;
 	_owner: number;
-	_rewards: RewardType[];
+	_rewards: Set<RewardType>;
 	_territory: number[];
 	_walls?: boolean;
 	_unitCount: number;
 	_riot?: boolean;
 }
 
-export interface TaskState {
-	started: boolean;
-	completed: boolean;
-	customData: number;
-}
-
-export interface AbilityState {
-	id: number;
-	name: string;
-}
-
-export interface DiplomacyRelationState {
-	state: boolean;
-	lastAttackTurn: number;
-	embassyLevel: number;
-	lastPeaceBrokenTurn: number;
-	firstMeet: number;
-	embassyBuildTurn: number;
-	previousAttackTurn: number;
-}
-
 export interface TribeState {
 	owner: number;
 	username: string;
-	tasks: TaskState[];
-	_builtUniqueStructures: StructureType[];
-	_knownPlayers: number[];
+	_builtUniqueStructures: Set<StructureType>;
+	_knownPlayers: Set<number>;
 	bot: boolean;
 	_score: number;
 	_stars: number;
@@ -141,17 +107,41 @@ export interface TribeState {
 	_resignedTurn: number;
 }
 
-export interface GameSettings { 
-	size?: number, 
-	mode?: ModeType, 
-	maxTurns?: number, 
-	seed?: number, 
-	tribes: TribeType[] 
-}
 
 export interface TechnologyState { 
 	techType: TechnologyType,
 	discovered: boolean,
+}
+
+export interface GameState {
+	hash: bigint;
+	settings: {
+		size: number;
+		_turn: number;
+		maxTurns: number;
+		_pov: number;
+		areYouSure: boolean;
+		unitIdx: number;
+		tribeCount: number;
+		mode: ModeType;
+		_gameOver: boolean;
+		_recentMoves: MoveType[];
+		_pendingRewards: Move[];
+	};
+	tiles: TileState[];
+	structures: Record<number, StructureState | null>;
+	resources: Record<number, ResourceState | null>;
+	tribes: Record<number, TribeState>;
+	_visibleTiles: Record<number, boolean>;
+	_prediction?: PredictionState;
+}
+
+export interface GameSettings { 
+	size?: number; 
+	mode?: ModeType; 
+	maxTurns?: number; 
+	seed?: number; 
+	tribes: TribeType[];
 }
 
 export const DefaultGameSettings: Readonly<GameSettings> = {
@@ -163,39 +153,6 @@ export const DefaultGameSettings: Readonly<GameSettings> = {
 }
 
 Object.freeze(DefaultGameSettings);
-
-export interface GameState {
-	settings: {
-		size: number;
-		_turn: number;
-		maxTurns: number;
-		_pov: number;
-		areYouSure: boolean;
-		unitIdx: number;
-		tribeCount: number,
-		mode: ModeType,
-		_gameOver: boolean,
-		_recentMoves: MoveType[],
-		_pendingRewards: Move[],
-	};
-	tiles: TileState[];
-	structures: Record<number, StructureState | null>;
-	resources: Record<number, ResourceState | null>;
-	tribes: Record<number, TribeState>;
-	_potentialDiscovery: number[];
-	_potentialArmy: number;
-	_potentialTech: number;
-	_potentialEconomy: number;
-	_visibleTiles: number[];
-	_scoreArmy: number;
-	_scoreTech: number;
-	_scoreEconomy: number;
-	__: number;
-	___: number;
-	/** Undiscovered lighthouses, tileIndex[] */
-	_lighthouses: number[];
-	_prediction: PredictionState;
-}
 
 export interface PredictionState {
 	_villages?: { [tileIndex: number]: [TribeType, boolean]; };
@@ -217,3 +174,4 @@ export interface CombatResult {
 	 */
 	splashDamage: number;
 }
+

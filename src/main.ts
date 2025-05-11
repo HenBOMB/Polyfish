@@ -41,7 +41,16 @@ export function deepCompare<T>(a: T, b: T, key: string, ignoreObjKeyLength?: boo
 
 export default async function main(loader: GameLoader) {
     console.clear();
-    await loader.loadRandom();
+
+    await loader.loadRandom(6);
+
+    const game = new Game();
+    game.load(loader.currentState);
+
+    console.log(game.state.hash.toString() === '16459832259115826859');
+
+    return;
+
     // console.time('test');
     // console.log(await predict(loader.currentState));
     // console.timeEnd('test');
@@ -49,39 +58,65 @@ export default async function main(loader: GameLoader) {
 
     AIState.assertConfig(loader.currentState);
 
-    const game = new Game();
-    game.load(loader.currentState);
-
-    let depth = 10000;
+    let depth = 100_000;
 
     const superchain: UndoCallback[] = [];
-    const superOldState = game.cloneState();
+    const label = `play ${depth} depth`;
+    console.time(label);
+
+    const map = { };
 
     try {
-        while(!isGameOver(game.state)) {
-            const oldState = game.cloneState();
+        while(depth > 0) {
+        // while(!isGameOver(game.state)) {
+            // const oldState = game.cloneState();
+            // const str = keyify(game.state);
+            // check there
+            // if(state.settings._pendingRewards.length) {
+            //     return state.settings._pendingRewards;
+            // }
             const moves = MoveGenerator.legal(game.state);
+            // const moves = game.poser.get(game);
             const move = moves[Math.floor(Math.random() * moves.length)];
-            const result = game.playMove(move);
+            let result;
+            try {
+                result = game.
+                playMove(move);
+            } catch (error) {
+                console.log(move);
+                console.log(error);
+                break;
+            }
     
             if(result) {
                 const [ played, undo ] = result;
-                console.log(played.stringify(oldState, game.state));
+                // console.log(played.stringify(oldState, game.state));
                 superchain.push(undo);
             }
     
             depth--;
-    
-            if(depth === 0) {
-                // console.log(moves.map(x => x.stringify(oldState, game.state)));
-                break;
+            
+            if(isGameOver(game.state)) {
+                game.reset();
             }
+
+            // if(depth === 0) {
+            //     // console.log(moves.map(x => x.stringify(oldState, game.state)));
+            //     break;
+            // }
         }
     } catch (error) {
         console.log(error);
     }
 
-    MoveGenerator.legal(game.state).map(x => x.stringify(superOldState, game.state));
+    console.log(MoveGenerator.transpose.size);
+
+    game.poser.close();
+
+    console.timeEnd(label);
+    // game.poser.save();
+
+    // MoveGenerator.legal(game.state).map(x => x.stringify(superOldState, game.state));
 
     const modified = game.cloneState();
 
@@ -95,20 +130,18 @@ export default async function main(loader: GameLoader) {
 
     deepCompare(
         { state: {
-            l: loader.currentState._lighthouses,
-            v: loader.currentState._visibleTiles,
             r: loader.currentState.resources,
             s: loader.currentState.structures,
             t: loader.currentState.tiles,
-            T: loader.currentState.tribes
+            T: loader.currentState.tribes,
+            S: loader.currentState.settings,
         } },
         { state: {
-            l: game.state._lighthouses,
-            v: game.state._visibleTiles,
             r: game.state.resources,
             s: game.state.structures,
             t: game.state.tiles,
-            T: game.state.tribes
+            T: game.state.tribes,
+            S: game.state.settings,
         } },
         'state',
         true

@@ -11,3 +11,5 @@ notes*
 
 */**/*.so
 */**/*.cmd
+
+data/poses

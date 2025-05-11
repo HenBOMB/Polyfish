@@ -8,18 +8,23 @@ export type TechnologySetting =  {
     next?: TechnologyType[],
     unlocksResource?: ResourceType,
     unlocksStructure?: StructureType,
+    unlocksTask?: TaskType[],
     unlocksAbility?: AbilityType,
     unlocksUnit?: UnitType,
     unlocksSpecialUnits?: UnitType[],
     unlocksOther?: number, // starfish, ocean navigation, etc
+    explicitCost?: number,
 }
 
 // ! Sorted by tier and clockwise per branch
 export const TechnologySettings: Record<TechnologyType, TechnologySetting> = {
+    [TechnologyType.Unbuildable]: {
+    },
     [TechnologyType.None]: {
         tier: 0,
         unlocksUnit: UnitType.Warrior,
         next: [TechnologyType.Riding, TechnologyType.Organization, TechnologyType.Climbing, TechnologyType.Fishing, TechnologyType.Hunting],
+        unlocksTask: [TaskType.Explorer, TaskType.Killer, TaskType.Network, TaskType.Metropolis],
     },
     [TechnologyType.Riding]: {
         tier: 1,
@@ -38,6 +43,7 @@ export const TechnologySettings: Record<TechnologyType, TechnologySetting> = {
         requires: TechnologyType.Roads,
         unlocksStructure: StructureType.Market,
         unlocksOther: 1, // wealth
+        unlocksTask: [TaskType.Wealth],
     },
     [TechnologyType.FreeSpirit]: {
         tier: 2,
@@ -70,7 +76,8 @@ export const TechnologySettings: Record<TechnologyType, TechnologySetting> = {
         tier: 3,
         requires: TechnologyType.Farming,
         unlocksStructure: StructureType.Windmill,
-        unlocksAbility: AbilityType.BurnForest
+        unlocksAbility: AbilityType.BurnForest,
+        explicitCost: 2,
     },
     [TechnologyType.Strategy]: {
         tier: 2,
@@ -109,6 +116,7 @@ export const TechnologySettings: Record<TechnologyType, TechnologySetting> = {
         requires: TechnologyType.Climbing,
         next: [TechnologyType.Philosophy],
         unlocksStructure: StructureType.MountainTemple,
+        unlocksTask: [TaskType.Pacifist],
     },
     [TechnologyType.Philosophy]: {
         tier: 3,
@@ -116,6 +124,7 @@ export const TechnologySettings: Record<TechnologyType, TechnologySetting> = {
         unlocksUnit: UnitType.MindBender,
         unlocksSpecialUnits: [UnitType.Shaman],
         unlocksOther: 1, // discount
+        unlocksTask: [TaskType.Genius],
     },
     [TechnologyType.Fishing]: {
         tier: 1,
@@ -166,6 +175,7 @@ export const TechnologySettings: Record<TechnologyType, TechnologySetting> = {
         requires: TechnologyType.Archery,
         unlocksStructure: StructureType.ForestTemple,
         unlocksAbility: AbilityType.GrowForest,
+        explicitCost: 5,
     },
     [TechnologyType.Forestry]: {
         tier: 2,
@@ -254,8 +264,6 @@ export const TechnologySettings: Record<TechnologyType, TechnologySetting> = {
         replacesTech: TechnologyType.Hunting,
         tribeType: TribeType.Elyrion,
         next: [TechnologyType.Archery, TechnologyType.Forestry],
-    },
-    [TechnologyType.Unbuildable]: {
     }
 };
 

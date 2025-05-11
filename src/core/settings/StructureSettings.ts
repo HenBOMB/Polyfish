@@ -1,14 +1,12 @@
-import { TileState, TribeState } from "../states";
 import { TerrainType, ResourceType, StructureType, TribeType } from "../types";
 
 // ! Sorted by tier and clockwise per branch
 export const StructureSettings: Record<StructureType, { 
     cost?: number, 
-    terrainType?: TerrainType[], 
-    adjacentTypes?: StructureType[], 
+    terrainType?: Set<TerrainType>, 
+    adjacentTypes?: Set<StructureType>, 
     resourceType?: ResourceType, 
     limitedPerCity?: true,
-    task?: (tribe: TribeState, tiles: Record<number, TileState>) => boolean,
     rewardPop?: number;
     rewardStars?: number;
     tribeType?: TribeType;
@@ -22,18 +20,18 @@ export const StructureSettings: Record<StructureType, {
     // TODO not sure how this works but, i think harvesting spores leads to swamp? or sumthin
     [StructureType.Spores]: {
         resourceType: ResourceType.Spores,
-        terrainType: [TerrainType.Forest],
+        terrainType: new Set([TerrainType.Forest]),
         tribeType: TribeType.Cymanti,
     },
     [StructureType.Swamp]: {
         // TODO Spores
         // techType: TechnologyType.None,
-        terrainType: [TerrainType.Ocean],
+        terrainType: new Set([TerrainType.Ocean]),
     },
     // TODO Mycelium
     [StructureType.Mycelium]: {
         // techType: TechnologyType.None,
-        terrainType: [TerrainType.Field],
+        terrainType: new Set([TerrainType.Field]),
         limitedPerCity: true,
         tribeType: TribeType.Cymanti,
     },
@@ -43,24 +41,24 @@ export const StructureSettings: Record<StructureType, {
     // Riding
     [StructureType.Road]: {
         cost: 3,
-        terrainType: [TerrainType.Field, TerrainType.Forest], 
+        terrainType: new Set([TerrainType.Field, TerrainType.Forest],) 
     },
     [StructureType.Bridge]: {
-        terrainType: [TerrainType.Water],
+        terrainType: new Set([TerrainType.Water]),
         // techType: TechnologyType.Roads,
-        // terrainType: TerrainType.Water,
+        // terrainType: new Set(TerrainType.Water),
         // TODO Bridge logic for connected adjacent ground tiles or whatever
     },
     [StructureType.Temple]: {
         cost: 20,
         rewardPop: 1,
-        terrainType: [TerrainType.Field],
+        terrainType: new Set([TerrainType.Field]),
     },
     [StructureType.Market]: {
         cost: 5,
         rewardStars: 1,
-        terrainType: [TerrainType.Field],
-        adjacentTypes: [StructureType.Sawmill, StructureType.Windmill, StructureType.Forge],
+        terrainType: new Set([TerrainType.Field]),
+        adjacentTypes: new Set([StructureType.Sawmill, StructureType.Windmill, StructureType.Forge]),
         limitedPerCity: true,
     },
 
@@ -69,12 +67,12 @@ export const StructureSettings: Record<StructureType, {
         cost: 5,
         rewardPop: 2,
         resourceType: ResourceType.Crop,
-        terrainType: [TerrainType.Field],
+        terrainType: new Set([TerrainType.Field]),
     },
     [StructureType.Windmill]: {
         cost: 5,
-        terrainType: [TerrainType.Field],
-        adjacentTypes: [StructureType.Farm],
+        terrainType: new Set([TerrainType.Field]),
+        adjacentTypes: new Set([StructureType.Farm]),
         limitedPerCity: true,
         rewardPop: 1,
     },
@@ -87,50 +85,50 @@ export const StructureSettings: Record<StructureType, {
         cost: 5,
         rewardPop: 2,
         resourceType: ResourceType.Metal,
-        terrainType: [TerrainType.Mountain],
+        terrainType: new Set([TerrainType.Mountain]),
     },
     [StructureType.Forge]: {
         rewardPop: 2,
         cost: 5,
-        terrainType: [TerrainType.Field],
-        adjacentTypes: [StructureType.Mine],
+        terrainType: new Set([TerrainType.Field]),
+        adjacentTypes: new Set([StructureType.Mine]),
         limitedPerCity: true,
     },
     [StructureType.MountainTemple]: {
         cost: 20,
         rewardPop: 1,
-        terrainType: [TerrainType.Mountain],
+        terrainType: new Set([TerrainType.Mountain]),
     },
 
     // Fishing
     [StructureType.Port]: {
         cost: 7,
         rewardPop: 1,
-        terrainType: [TerrainType.Water],
+        terrainType: new Set([TerrainType.Water]),
     },
     [StructureType.WaterTemple]: {
         cost: 20,
         rewardPop: 1,
-        terrainType: [TerrainType.Water, TerrainType.Ocean],
+        terrainType: new Set([TerrainType.Water, TerrainType.Ocean]),
     },
 
     // Hunting
     [StructureType.LumberHut]: {
         cost: 3,
         rewardPop: 1,
-        terrainType: [TerrainType.Forest],
+        terrainType: new Set([TerrainType.Forest]),
     },
     [StructureType.Sawmill]: {
         cost: 5,
         rewardPop: 1,
-        terrainType: [TerrainType.Field],
-        adjacentTypes: [StructureType.LumberHut],
+        terrainType: new Set([TerrainType.Field]),
+        adjacentTypes: new Set([StructureType.LumberHut]),
         limitedPerCity: true,
     },
     [StructureType.ForestTemple]: {
         cost: 15,
         rewardPop: 1,
-        terrainType: [TerrainType.Forest],
+        terrainType: new Set([TerrainType.Forest]),
     },
     
     // Special
@@ -138,59 +136,42 @@ export const StructureSettings: Record<StructureType, {
         cost: 5,
         rewardPop: 1,
         tribeType: TribeType.Polaris,
-        terrainType: [TerrainType.Ice],
+        terrainType: new Set([TerrainType.Ice]),
         // TODO, requires replacing StructureType.Port
     },
     [StructureType.IceTemple]: {
         cost: 20,
         rewardPop: 1,
-        terrainType: [TerrainType.Ice],
+        terrainType: new Set([TerrainType.Ice]),
     },
 
     [StructureType.AltarOfPeace]: {
         rewardPop: 3,
-        terrainType: [TerrainType.Field, TerrainType.Forest, TerrainType.Water],
+        terrainType: new Set([TerrainType.Field, TerrainType.Forest, TerrainType.Water]),
     },
     [StructureType.TowerOfWisdom]: {
         rewardPop: 3,
-        terrainType: [TerrainType.Field, TerrainType.Forest, TerrainType.Water],
+        terrainType: new Set([TerrainType.Field, TerrainType.Forest, TerrainType.Water]),
     },
     [StructureType.GrandBazaar]: {
         rewardPop: 3,
-        terrainType: [TerrainType.Field, TerrainType.Forest, TerrainType.Water],
-        task: (tribe: TribeState, _: any) => {
-            return tribe._cities.reduce((acc, cur) => acc + (cur._connectedToCapital? 1 : 0), 0) > 4;
-        }
+        terrainType: new Set([TerrainType.Field, TerrainType.Forest, TerrainType.Water]),
     },
     [StructureType.EmperorsTomb]: {
         rewardPop: 3,
-        terrainType: [TerrainType.Field, TerrainType.Forest, TerrainType.Water],
-        task: (tribe: TribeState, _: any) => {
-            return tribe._stars > 99;
-        }
+        terrainType: new Set([TerrainType.Field, TerrainType.Forest, TerrainType.Water]),
     },
     [StructureType.GateOfPower]: {
         rewardPop: 3,
-        terrainType: [TerrainType.Field, TerrainType.Forest, TerrainType.Water],
-        task: (tribe: TribeState, _: any) => {
-            return tribe._kills > 9;
-        }
+        terrainType: new Set([TerrainType.Field, TerrainType.Forest, TerrainType.Water]),
     },
     [StructureType.ParkOfFortune]: {
         rewardPop: 3,
-        terrainType: [TerrainType.Field, TerrainType.Forest, TerrainType.Water],
-        // ! level up, any level 5 city
-        task: (tribe: TribeState, _: any) => { 
-            return tribe._cities.some(city => city._level > 4);
-        }
+        terrainType: new Set([TerrainType.Field, TerrainType.Forest, TerrainType.Water]),
     },
     [StructureType.EyeOfGod]: {
         rewardPop: 3,
-        terrainType: [TerrainType.Field, TerrainType.Forest, TerrainType.Water],
-        // ! navigation, all tiles explored
-        task: (tribe: TribeState, tiles: Record<number, TileState>) => {
-            return Object.values(tiles).every(x => x._explorers.includes(tribe.owner));
-        }
+        terrainType: new Set([TerrainType.Field, TerrainType.Forest, TerrainType.Water]),
     },
 };
 

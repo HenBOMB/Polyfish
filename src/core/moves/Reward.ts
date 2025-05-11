@@ -80,12 +80,12 @@ export default class Reward extends Move {
                 break;
         }
         
-        city._rewards.push(rewardType);
+        city._rewards.add(rewardType);
         
         return {
             rewards,
             undo: () => {
-                city._rewards.pop();
+                city._rewards.delete(rewardType);
                 undoReward();
             },
         };

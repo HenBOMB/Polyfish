@@ -1,16 +1,16 @@
 import { SkillType, TechnologyType, TribeType, UnitType } from "../types";
 
 export const UnitSettings: Record<UnitType, { 
-    cost: number, 
-    attack: number, 
-    movement: number, 
-    defense: number, 
-    range: number, 
-    health?: number, 
-    upgradeFrom?: UnitType,
-    veteran?: boolean | true,
-    unique?: boolean,
-    skills: SkillType[],
+    cost: number; 
+    attack: number; 
+    movement: number; 
+    defense: number; 
+    range: number; 
+    health?: number;
+    upgradeFrom?: UnitType
+    veteran?: boolean | true;
+    unique?: boolean;
+    skills: Set<SkillType>;
     becomes?: UnitType;
     super?: boolean;
 }> = {
@@ -21,7 +21,7 @@ export const UnitSettings: Record<UnitType, {
         defense: 0,
         range: 0,
         health: 1,
-        skills: []
+        skills: new Set([]),
     },
     [UnitType.Warrior]: {
         cost: 2,
@@ -30,7 +30,7 @@ export const UnitSettings: Record<UnitType, {
         defense: 2,
         range: 1,
         health: 10,
-        skills: [SkillType.Dash, SkillType.Fortify]
+        skills: new Set([SkillType.Dash, SkillType.Fortify]),
     },
     [UnitType.Rider]: {
         cost: 3,
@@ -39,7 +39,7 @@ export const UnitSettings: Record<UnitType, {
         defense: 1,
         range: 1,
         health: 10,
-        skills: [SkillType.Dash, SkillType.Escape, SkillType.Fortify]
+        skills: new Set([SkillType.Dash, SkillType.Escape, SkillType.Fortify]),
     },
     [UnitType.Knight]: {
         cost: 8,
@@ -48,7 +48,7 @@ export const UnitSettings: Record<UnitType, {
         defense: 1,
         range: 1,
         health: 10,
-        skills: [SkillType.Dash, SkillType.Persist, SkillType.Fortify]
+        skills: new Set([SkillType.Dash, SkillType.Persist, SkillType.Fortify]),
     },
     [UnitType.Defender]: {
         cost: 3,
@@ -57,7 +57,7 @@ export const UnitSettings: Record<UnitType, {
         defense: 3,
         range: 1,
         health: 15,
-        skills: [SkillType.Fortify]
+        skills: new Set([SkillType.Fortify]),
     },
     [UnitType.Catapult]: {
         cost: 8,
@@ -66,7 +66,7 @@ export const UnitSettings: Record<UnitType, {
         defense: 0,
         range: 3,
         health: 10,
-        skills: [SkillType.Stiff]
+        skills: new Set([SkillType.Stiff]),
     },
     [UnitType.Archer]: {
         cost: 3,
@@ -75,7 +75,7 @@ export const UnitSettings: Record<UnitType, {
         movement: 1,
         defense: 1,
         range: 2,
-        skills: [SkillType.Dash, SkillType.Fortify]
+        skills: new Set([SkillType.Dash, SkillType.Fortify]),
     },
     [UnitType.MindBender]: {
         cost: 5,
@@ -84,7 +84,7 @@ export const UnitSettings: Record<UnitType, {
         movement: 1,
         defense: 1,
         range: 1,
-        skills: [SkillType.Heal, SkillType.Convert]
+        skills: new Set([SkillType.Heal, SkillType.Convert]),
     },
     [UnitType.Swordsman]: {
         cost: 5,
@@ -93,7 +93,7 @@ export const UnitSettings: Record<UnitType, {
         movement: 1,
         defense: 3,
         range: 1,
-        skills: [SkillType.Dash]
+        skills: new Set([SkillType.Dash]),
     },
     [UnitType.Giant]: {
         cost: 10,
@@ -103,7 +103,7 @@ export const UnitSettings: Record<UnitType, {
         movement: 1,
         defense: 4,
         range: 1,
-        skills: []
+        skills: new Set([]),
     },    
     [UnitType.Cloak]: {
         cost: 8,
@@ -113,7 +113,7 @@ export const UnitSettings: Record<UnitType, {
         defense: 0.5,
         range: 1,
         veteran: false,
-        skills: [SkillType.Hide, SkillType.Infiltrate, SkillType.Dash, SkillType.Scout, SkillType.Creep]
+        skills: new Set([SkillType.Hide, SkillType.Infiltrate, SkillType.Dash, SkillType.Scout, SkillType.Creep]),
     },
     [UnitType.Dagger]: {
         cost: 2,
@@ -123,7 +123,7 @@ export const UnitSettings: Record<UnitType, {
         defense: 2,
         range: 1,
         veteran: false,
-        skills: [SkillType.Dash, SkillType.Surprise, SkillType.Independent]
+        skills: new Set([SkillType.Dash, SkillType.Surprise, SkillType.Independent]),
     },
     [UnitType.Pirate]: {
         cost: 2,
@@ -133,7 +133,7 @@ export const UnitSettings: Record<UnitType, {
         defense: 2,
         range: 1,
         veteran: false,
-        skills: [SkillType.Carry, SkillType.Float, SkillType.Dash, SkillType.Surprise, SkillType.Independent]
+        skills: new Set([SkillType.Carry, SkillType.Float, SkillType.Dash, SkillType.Surprise, SkillType.Independent]),
     },
     [UnitType.Dinghy]: {
         cost: 2,
@@ -143,7 +143,7 @@ export const UnitSettings: Record<UnitType, {
         defense: 0.5,
         range: 1,
         veteran: false,
-        skills: [SkillType.Carry, SkillType.Float, SkillType.Hide, SkillType.Infiltrate, SkillType.Dash, SkillType.Scout]
+        skills: new Set([SkillType.Carry, SkillType.Float, SkillType.Hide, SkillType.Infiltrate, SkillType.Dash, SkillType.Scout]),
     },
 
     // Navy
@@ -154,7 +154,7 @@ export const UnitSettings: Record<UnitType, {
         defense: 2,
         range: 2,
         veteran: false,
-        skills: [SkillType.Carry, SkillType.Float]
+        skills: new Set([SkillType.Carry, SkillType.Float]),
     },
     [UnitType.Scout]: {
         cost: 5,
@@ -164,7 +164,7 @@ export const UnitSettings: Record<UnitType, {
         range: 2,
         veteran: false,
         upgradeFrom: UnitType.Raft,
-        skills: [SkillType.Carry, SkillType.Dash, SkillType.Float]
+        skills: new Set([SkillType.Carry, SkillType.Dash, SkillType.Float]),
     },
     [UnitType.Rammer]: {
         upgradeFrom: UnitType.Raft,
@@ -173,7 +173,7 @@ export const UnitSettings: Record<UnitType, {
         movement: 3,
         defense: 3,
         range: 1,
-        skills: [SkillType.Dash, SkillType.Float, SkillType.Carry]
+        skills: new Set([SkillType.Dash, SkillType.Float, SkillType.Carry]),
     },
     [UnitType.Bomber]: {
         cost: 5,
@@ -182,7 +182,7 @@ export const UnitSettings: Record<UnitType, {
         defense: 2,
         range: 3,
         upgradeFrom: UnitType.Raft,
-        skills: [SkillType.Carry, SkillType.Float, SkillType.Splash, SkillType.Stiff]
+        skills: new Set([SkillType.Carry, SkillType.Float, SkillType.Splash, SkillType.Stiff]),
     },
     [UnitType.Juggernaut]: {
         cost: 10,
@@ -192,7 +192,7 @@ export const UnitSettings: Record<UnitType, {
         range: 1,
         super: true,
         veteran: false,
-        skills: [SkillType.Float, SkillType.Carry, SkillType.Stiff, SkillType.Stomp]
+        skills: new Set([SkillType.Float, SkillType.Carry, SkillType.Stiff, SkillType.Stomp]),
     },
 
     // Aquarion
@@ -205,7 +205,7 @@ export const UnitSettings: Record<UnitType, {
         defense: 5,
         range: 1,
         veteran: false,
-        skills: [SkillType.Escape, SkillType.Float]
+        skills: new Set([SkillType.Escape, SkillType.Float]),
     },   
     [UnitType.Amphibian]: {
         cost: 3,
@@ -214,7 +214,7 @@ export const UnitSettings: Record<UnitType, {
         movement: 2,
         defense: 1,
         range: 1,
-        skills: [SkillType.Float, SkillType.Dash, SkillType.Escape, SkillType.Fortify]
+        skills: new Set([SkillType.Float, SkillType.Dash, SkillType.Escape, SkillType.Fortify]),
     },
     [UnitType.Tridention]: {
         cost: 8,
@@ -223,7 +223,7 @@ export const UnitSettings: Record<UnitType, {
         movement: 2,
         defense: 1,
         range: 2,
-        skills: [SkillType.Float, SkillType.Dash, SkillType.Escape, SkillType.Fortify]
+        skills: new Set([SkillType.Float, SkillType.Dash, SkillType.Escape, SkillType.Fortify]),
     },
 
     // Polaris
@@ -236,7 +236,7 @@ export const UnitSettings: Record<UnitType, {
         defense: 3,
         range: 1,
         veteran: false,
-        skills: [SkillType.AutoFreeze, SkillType.FreezeArea]
+        skills: new Set([SkillType.AutoFreeze, SkillType.FreezeArea]),
     },
     [UnitType.Mooni]: {
         veteran: false,
@@ -247,7 +247,7 @@ export const UnitSettings: Record<UnitType, {
         defense: 1,
         range: 1, 
         unique: true,
-        skills: [SkillType.AutoFreeze, SkillType.Skate]
+        skills: new Set([SkillType.AutoFreeze, SkillType.Skate]),
     },
     [UnitType.BattleSled]: {
         cost: 5,
@@ -257,7 +257,7 @@ export const UnitSettings: Record<UnitType, {
         defense: 2,
         range: 1, 
         unique: true,
-        skills: [SkillType.Dash, SkillType.Escape, SkillType.Skate]
+        skills: new Set([SkillType.Dash, SkillType.Escape, SkillType.Skate]),
     },
     [UnitType.IceArcher]: {
         cost: 3,
@@ -266,7 +266,7 @@ export const UnitSettings: Record<UnitType, {
         movement: 1,
         defense: 1,
         range: 2,
-        skills: [SkillType.Dash, SkillType.Freeze, SkillType.Fortify]
+        skills: new Set([SkillType.Dash, SkillType.Freeze, SkillType.Fortify]),
     },
     [UnitType.IceFortress]: {
         health: 20,
@@ -277,7 +277,7 @@ export const UnitSettings: Record<UnitType, {
         range: 2,
         veteran: false,
         unique: true,
-        skills: [SkillType.Skate, SkillType.Scout]
+        skills: new Set([SkillType.Skate, SkillType.Scout]),
     },
 
     // Cymanti
@@ -290,7 +290,7 @@ export const UnitSettings: Record<UnitType, {
         defense: 3,
         range: 1,
         veteran: false,
-        skills: [SkillType.Dash, SkillType.Eat, SkillType.Creep]
+        skills: new Set([SkillType.Dash, SkillType.Eat, SkillType.Creep]),
     },
     [UnitType.Segment]: {
         cost: -1,
@@ -300,7 +300,7 @@ export const UnitSettings: Record<UnitType, {
         defense: 2,
         range: 1,
         veteran: false,
-        skills: [SkillType.Independent, SkillType.Creep, SkillType.Explode]
+        skills: new Set([SkillType.Independent, SkillType.Creep, SkillType.Explode]),
     },
     [UnitType.Doomux]: {
         cost: 10,
@@ -310,7 +310,7 @@ export const UnitSettings: Record<UnitType, {
         defense: 2,
         range: 1,
         veteran: true,
-        skills: [SkillType.Dash, SkillType.Creep, SkillType.Explode]
+        skills: new Set([SkillType.Dash, SkillType.Creep, SkillType.Explode]),
     },
     [UnitType.Shaman]: {
         cost: 10,
@@ -320,7 +320,7 @@ export const UnitSettings: Record<UnitType, {
         defense: 1,
         range: 1,
         veteran: false,
-        skills: [SkillType.Convert, SkillType.Boost]
+        skills: new Set([SkillType.Convert, SkillType.Boost]),
     },
     [UnitType.Kiton]: {
         cost: 3,
@@ -329,7 +329,7 @@ export const UnitSettings: Record<UnitType, {
         movement: 1,
         defense: 3,
         range: 1,
-        skills: [SkillType.Poison]
+        skills: new Set([SkillType.Poison]),
     },
     [UnitType.Hexapod]: {
         cost: 3,
@@ -338,7 +338,7 @@ export const UnitSettings: Record<UnitType, {
         movement: 2,
         defense: 1,
         range: 1,
-        skills: [SkillType.Dash, SkillType.Escape, SkillType.Creep]
+        skills: new Set([SkillType.Dash, SkillType.Escape, SkillType.Creep]),
     },
     [UnitType.Raychi]: {
         unique: true,
@@ -348,7 +348,7 @@ export const UnitSettings: Record<UnitType, {
         movement: 3,
         defense: 2,
         range: 1,
-        skills: [SkillType.Dash, SkillType.Float, SkillType.Creep, SkillType.Navigate, SkillType.Explode]
+        skills: new Set([SkillType.Dash, SkillType.Float, SkillType.Creep, SkillType.Navigate, SkillType.Explode]),
     },
     [UnitType.Phychi]: {
         cost: 3,
@@ -358,7 +358,7 @@ export const UnitSettings: Record<UnitType, {
         defense: 2,
         range: 2,
         veteran: true,
-        skills: [SkillType.Dash, SkillType.Fly, SkillType.Poison, SkillType.Surprise]
+        skills: new Set([SkillType.Dash, SkillType.Fly, SkillType.Poison, SkillType.Surprise]),
     },
     [UnitType.Exida]: {
         cost: 8,
@@ -368,7 +368,7 @@ export const UnitSettings: Record<UnitType, {
         defense: 1,
         range: 3,
         veteran: true,
-        skills: [SkillType.Poison, SkillType.Splash]
+        skills: new Set([SkillType.Poison, SkillType.Splash]),
     },
     
     // Elyron
@@ -382,7 +382,7 @@ export const UnitSettings: Record<UnitType, {
         range: 1,
         veteran: false,
         becomes: UnitType.BabyDragon,
-        skills: [SkillType.Grow, SkillType.Fortify]
+        skills: new Set([SkillType.Grow, SkillType.Fortify]),
     },
     [UnitType.BabyDragon]:  {
         super: true,
@@ -394,7 +394,7 @@ export const UnitSettings: Record<UnitType, {
         range: 1,
         veteran: false,
         becomes: UnitType.FireDragon,
-        skills: [SkillType.Grow, SkillType.Dash, SkillType.Fly, SkillType.Escape, SkillType.Scout]
+        skills: new Set([SkillType.Grow, SkillType.Dash, SkillType.Fly, SkillType.Escape, SkillType.Scout]),
     },
     [UnitType.FireDragon]:  {
         super: true,
@@ -405,7 +405,7 @@ export const UnitSettings: Record<UnitType, {
         defense: 3,
         range: 2,
         veteran: false,
-        skills: [SkillType.Dash, SkillType.Fly, SkillType.Splash, SkillType.Scout]
+        skills: new Set([SkillType.Dash, SkillType.Fly, SkillType.Splash, SkillType.Scout]),
     },
     [UnitType.Polytaur]: {
         cost: 2,
@@ -415,7 +415,7 @@ export const UnitSettings: Record<UnitType, {
         defense: 1,
         range: 2,
         veteran: false,
-        skills: [SkillType.Dash, SkillType.Fortify, SkillType.Independent]
+        skills: new Set([SkillType.Dash, SkillType.Fortify, SkillType.Independent]),
     },
 };
 

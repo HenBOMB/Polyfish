@@ -11,7 +11,6 @@ export enum TerrainType {
 	Mountain		= 4,
 	Forest 			= 5,
 	Ice 			= 6,
-	Capital			= 7,
 }
 
 export enum TechnologyType {
@@ -228,13 +227,11 @@ export enum AbilityType {
 	// The Cymanti tribe has the Decompose ability instead of Destroy. 
 	// The two abilities are identical except that the Decompose ability removes the building or ruin at the end of the turn (instead of immediately) and returns a building's full cost. 
 	Decompose 		= 5,
-	
 	// Starfish Harvesting is an ability that can only be used on a tile with a Starfish, removes the Starfish from the tile, and gives the player 8 stars. The ability is unlocked by the Navigation technology. 
 	// Moving any naval unit onto a Starfish, even in neutral or enemy territory, will allow it to collect 8 stars by removing the Starfish the next turn. This consumes the unit's turn, much like if it were examining a ruin. 
 	// Handles by Capture move and Navigation tech
 	// TODO not sure if other special tribes CAN NOT capture / harvest starfish
 	// StarfishHarvesting = 6,
-
 	/**
 	 * Heals a unit by up to 4 HP in friendly territory and 2 HP elsewhere. (Cannot heal past maximum health.) 
 	 * Removes poison and heals 0 HP if the unit is poisoned. 
@@ -348,7 +345,7 @@ export enum EffectType {
 	Poison		= 1,
 	Boost		= 2,
 	Invisible	= 3,
-	Frozen		= 10, // TODO ID does not match live polytopia game, fix
+	Frozen		= 4, // TODO ID does not match live polytopia game, fix
 }
 
 export enum CaptureType {

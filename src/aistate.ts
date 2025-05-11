@@ -45,9 +45,10 @@ export const MODEL_CONFIG: {
     max_units: number;
     max_turns: number;
     max_stars: number;
+    max_unit_kills: number;
+    max_structure_level: number;
     
     max_tile_count: number;
-
     dim_map_tile: number;
     dim_map_size: number;
     dim_player: number;
@@ -85,7 +86,7 @@ function safeFloat(f: number | boolean | undefined): number {
 function extractTile(state: GameState, tileIndex: number, force = false): number[] {
     const pov = getPovTribe(state);
     const tile = state.tiles[tileIndex];
-    const explored = tile._explorers.includes(pov.owner);
+    const explored = tile._explorers.has(pov.owner);
 
     if(!explored && !force) {
         return Array(MODEL_CONFIG.dim_map_tile).fill(0);
@@ -97,7 +98,7 @@ function extractTile(state: GameState, tileIndex: number, force = false): number
     const maxUnitTypeCount = Object.keys(UnitSettings).length - 1;
    
     const isOwnedByUs = tile._owner === pov.owner;
-    const isOwnedByEnemy = tile._owner > 0 && tile._owner !== pov.owner;
+    const isOwnedByEnemy = tile._owner && tile._owner !== pov.owner;
     const unitIsOurs = unit && unit._owner === pov.owner? unit : null;
     const unitIsEnemy = unit && unit._owner !== pov.owner? unit : null;
 
@@ -341,7 +342,7 @@ export default class AIState {
                 const adjStructTypes = StructureSettings[move.getType<StructureType>()].adjacentTypes;
                 if(adjStructTypes) {
                     const aroundStructs = getNeighborIndexes(newState, move.getSrc(), 1).filter(
-                        x => newState.structures[x] && adjStructTypes.includes(newState.structures[x].id)
+                        x => newState.structures[x] && adjStructTypes.has(newState.structures[x].id)
                     );
                     const perc = aroundStructs.length / MAX_AFFECTABLE; 
                     reward += SCORE_GOOD_STRUCT[0] + (SCORE_GOOD_STRUCT[1] - SCORE_GOOD_STRUCT[0]) * perc;

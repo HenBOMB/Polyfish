@@ -1,16 +1,16 @@
-import { getPovTribe } from "../functions";
+import { getPovTribe, getTechCost } from "../functions";
 import Move, { CallbackResult } from "../move";
 import { MoveType, TechnologyType } from "../types";
 import { GameState, TechnologyState } from "../states";
 
 export default class Research extends Move {
-    constructor(type: number, costs: number) {
-        super(MoveType.Research, null, null, type, costs);
+    constructor(type: number) {
+        super(MoveType.Research, null, null, type);
     }
 
     execute(state: GameState): CallbackResult {
         const pov = getPovTribe(state);
-        const cost = this.costs!;
+        const cost = getTechCost(pov, this.getType<TechnologyType>());
         const tech: TechnologyState = {
             techType: this.getType<TechnologyType>(),
             discovered: state.settings.areYouSure,

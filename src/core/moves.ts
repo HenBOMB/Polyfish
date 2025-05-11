@@ -1,5 +1,5 @@
 import { CityState, GameState, TileState, UnitState } from "./states";
-import { getNeighborTiles, getPovTerritorry, getNeighborIndexes, isAdjacentToEnemy, isAquaticOrCanFly, isSteppable, isWaterTerrain, getEnemiesInRange, isNavalUnit, getTechCost, getPovTribe, isSkilledIn, getCapitalCity, getRealUnitSettings, getUnitAttack, getUnitMovement, isRoadpathAndUsable, getTrueUnitAt, getUnitAt, getHomeCity, isInvisible, getMaxHealth, getAlliesNearTile, getRealUnitType, isTechUnlocked, isLighthouse, tryDiscoverRewardOtherTribes, isEnemyCity, isUnderSiege, getCityAt, getTechSettings, getTechUnitType, isTileOccupied, isBoosted, getEnemiesNearTile, isFrozen, isTileFrozen, getStarExchange, getTechStructure, getCityOwningTile, isResourceVisible } from './functions';
+import { getNeighborTiles, getPovTerritorry, getNeighborIndexes, isAdjacentToEnemy, isAquaticOrCanFly, isSteppable, isWaterTerrain, getEnemiesInRange, isNavalUnit, getTechCost, getPovTribe, isSkilledIn, getCapitalCity, getRealUnitSettings, getUnitAttack, getUnitMovement, isRoadpathAndUsable, getTrueUnitAt, getUnitAt, getHomeCity, isInvisible, getMaxHealth, getAlliesNearTile, getRealUnitType, isTechUnlocked, isLighthouse, tryDiscoverRewardOtherTribes, isEnemyCity, isUnderSiege, getCityAt, getTechSettings, getTechUnitType, isTileOccupied, isBoosted, getEnemiesNearTile, isFrozen, isTileFrozen, getStarExchange, getTechStructure, getCityOwningTile, isResourceVisible, getLighthouses, getEnemyIndexesInRange, getReplacedOrTechSettings, isTileExplored } from './functions';
 import { StructureSettings } from "./settings/StructureSettings";
 import { SkillType, EffectType, ResourceType, RewardType, StructureType, TechnologyType, TerrainType, UnitType, AbilityType } from "./types";
 import { addPopulationToCity, discoverTiles, freezeArea, splashDamageArea } from "./actions";
@@ -31,6 +31,8 @@ import GrowForest from "./moves/abilities/GrowForest";
 import ClearForest from "./moves/abilities/ClearForest";
 import { TaskSettings } from "./settings/TaskSettings";
 import { ResourceSettings } from "./settings/ResourceSettings";
+import BreakIce from "./moves/abilities/BreakIce";
+import Drain from "./moves/abilities/Drain";
 
 interface ReachableNode {
 	index: number;
@@ -39,64 +41,273 @@ interface ReachableNode {
 }
 
 export class MoveGenerator {
+	static actionToMove(action: Action): Move {
+		switch (action.action) {
+			case MoveType.Attack:
+				return new Attack(action.from!, action.to!);
+			case MoveType.Step:
+				return new Step(action.from!, action.to!);
+			case MoveType.Summon:
+				return new Summon(action.from!, action.unit!);
+			case MoveType.Research:
+				return new Research(action.tech!);
+			case MoveType.Harvest:
+				return new Harvest(action.to!);
+			case MoveType.Build:
+				return new Structure(action.to!, action.struct!);
+			case MoveType.Reward:
+				return new Reward(action.from!, action.reward!);
+			case MoveType.Capture:
+				return new Capture(action.from!);
+			case MoveType.Ability:
+				switch (action.ability) {
+					case AbilityType.BurnForest:
+						return new BurnForest(action.to!);
+					case AbilityType.ClearForest:
+						return new ClearForest(action.to!);
+					case AbilityType.GrowForest:
+						return new GrowForest(action.to!);
+					case AbilityType.Destroy:
+						return new Destroy(action.to!);
+					case AbilityType.Decompose:
+						return new Decompose(action.to!);
+					case AbilityType.Recover:
+						return new Recover(action.from!);
+					case AbilityType.Disband:
+						return new Disband(action.from!);
+					case AbilityType.HealOthers:
+						return new HealOthers(action.from!);
+					case AbilityType.BreakIce:
+						return new BreakIce(action.to!);
+					case AbilityType.Drain:
+						return new Drain(action.to!);
+					case AbilityType.FreezeArea:
+						return new FreezeArea(action.from!);
+					case AbilityType.Boost:
+						return new Boost(action.from!);
+					case AbilityType.Explode:
+						return new Explode(action.from!);
+					case AbilityType.Promote:
+						return new Promote(action.from!);
+				}
+			case MoveType.EndTurn:
+				return new EndTurn();
+			default:
+				throw new Error(`MoveType ${action.action} not implemented`);
+		}
+	}
+
+	static fromActions(actions: Action[]): Move[] {
+		return actions.map(x => MoveGenerator.actionToMove(x));
+	}
+
+	static transpose: Map<string, Move[]> = new Map();
+
 	static legal(state: GameState): Move[] {
 		if(state.settings._pendingRewards.length) {
 			return state.settings._pendingRewards;
 		}
-
 		const moves: Move[] = [new EndTurn()];
 
-		ArmyMovesGenerator.all(state, moves);
+		// ArmyMovesGenerator.all(state, moves);
 
 		EconMovesGenerator.all(state, moves);
-
+		
 		return moves;
 	}
 
-	static legalActions(state: GameState): Action[] {
-		return MoveGenerator.legal(state).map(x => x.toAction());
+	static serialize(moves: Move[]): string {
+		return moves.map(Move.serialize).join('#');
 	}
 }
 
 export class EconMovesGenerator {
 	static all(state: GameState, moves: Move[]) {
-		EconMovesGenerator.actions(state, moves);
-		EconMovesGenerator.resources(state, moves);
-		EconMovesGenerator.structures(state, moves);
-		EconMovesGenerator.research(state, moves);
+		// EconMovesGenerator.actions(state, moves);
+		// EconMovesGenerator.resources(state, moves);
+		// EconMovesGenerator.structures(state, moves);
+		// EconMovesGenerator.research(state, moves);
+		EconMovesGenerator.all_fast(state, moves);
+	}
+
+	static all_fast(state: GameState, moves: Move[]) {
+		const pov = getPovTribe(state);
+		const territory = getPovTerritorry(state);
+
+		const abilities: Set<AbilityType> = new Set();
+		const structures: Set<StructureType> = new Set();
+
+		pov._tech.forEach(x => {
+			const settings = getTechSettings(x);
+
+			// Tasks
+			if(settings.unlocksTask) {
+				settings.unlocksTask.forEach(y => {
+					const settings = TaskSettings[y];
+					if(!pov._builtUniqueStructures.has(settings.structureType)) {
+						if(settings.task(state)) {
+							structures.add(settings.structureType);
+						}
+					}
+				})
+			}
+
+			const realSettings = getReplacedOrTechSettings(pov, x);
+
+			// Actions
+			if(realSettings.unlocksAbility) {
+				if(!settings.explicitCost || settings.explicitCost <= pov._stars) {
+					abilities.add(realSettings.unlocksAbility);
+				}
+			}
+
+			// Structures
+			if(realSettings.unlocksStructure && pov._stars >= (StructureSettings[realSettings.unlocksStructure].cost || 0)) {
+				structures.add(realSettings.unlocksStructure);
+			}
+
+			// Other tech
+			if(settings.next) {
+				for (let j = 0; j < settings.next.length; j++) {
+					if(isTechUnlocked(pov, settings.next[j])) {
+						continue;
+					}
+	
+					const cost = getTechCost(pov, settings.next[j]);
+	
+					if(cost > pov._stars) {
+						continue;
+					}
+	
+					moves.push(new Research(settings.next[j]));
+				}
+			}
+		});
+
+		for (let i = 0; i < territory.length; i++) {
+			const tileIndex = territory[i];
+			const enemyOnTile = isTileOccupied(state, tileIndex, true);
+			
+			if(enemyOnTile) {
+				continue;
+			}
+
+			if(!isTileExplored(state, tileIndex)) {
+				continue
+			}
+
+			const tile = state.tiles[tileIndex];
+			const resource = state.resources[tileIndex];
+			const structure = state.structures[tileIndex];
+			
+			if(resource) {
+				const settings = ResourceSettings[resource!.id];
+				if((settings.cost || 0) <= pov._stars
+					&& !settings.structType
+					&& !structure
+					&& !enemyOnTile
+					&& isTechUnlocked(pov, settings.techRequired)
+				) {
+					moves.push(new Harvest(tileIndex));
+				}
+			}
+
+			if(!structure) {
+				for(const x in structures) {
+					const structType = Number(x) as StructureType;
+					const settings = StructureSettings[structType];
+	
+					if(!settings.terrainType?.has(tile.terrainType)) {
+						if(tile.capitalOf !== pov.owner || structType !== StructureType.Embassy) {
+							continue;
+						}
+					}
+					
+					if(settings.limitedPerCity) {
+						const limited = getCityOwningTile(state, tile.tileIndex)!._territory.some(x => state.structures[x]?.id == structType);
+						if(limited) {
+							continue;
+						}
+					}
+	
+					if(settings.adjacentTypes && !getNeighborIndexes(state, tile.tileIndex).some(x => state.structures[x]? 
+						settings.adjacentTypes!.has(state.structures[x]!.id) : false
+					)) {
+						continue;
+					}
+		
+					moves.push(new Structure(
+						tile.tileIndex,
+						structType
+					));
+				}
+			}
+
+			if(structure) {
+				if(StructureSettings[state.structures[tile.tileIndex]!.id].cost) {
+					if(abilities.has(AbilityType.Destroy)) {
+						moves.push(new Destroy(tile.tileIndex));	
+					}
+					else if(abilities.has(AbilityType.Decompose)) {
+						moves.push(new Decompose(tile.tileIndex));	
+					}
+				}
+			}
+			else if(tile.terrainType === TerrainType.Forest) {
+				if(abilities.has(AbilityType.ClearForest)) {
+					moves.push(new ClearForest(tile.tileIndex));
+				}
+				if(abilities.has(AbilityType.BurnForest)) {
+					moves.push(new BurnForest(tile.tileIndex));
+				}
+			}
+			else if(tile.terrainType == TerrainType.Field) {
+				if(abilities.has(AbilityType.GrowForest)) {
+					moves.push(new GrowForest(tile.tileIndex));
+				}
+			}
+
+			// TODO should use internal ice boolean
+			// Same with Drain
+			// if(tile.terrainType === TerrainType.Ice) {
+			// }
+		}
 	}
 
 	static actions(state: GameState, moves: Move[]) {
 		const pov = getPovTribe(state);
 		const territory = getPovTerritorry(state);
-
-		const abilities = getPovTribe(state)._tech.reduce((a: any[], b) => ([
-			...a,
-			...(getTechSettings(b).unlocksAbility ? [getTechSettings(b).unlocksAbility] : [])
-		]), []) as AbilityType[];
+		const abilities = new Set(pov._tech.filter(x => {
+			const settings = getTechSettings(x);
+			if(settings.explicitCost && settings.explicitCost > pov._stars) {
+				return false;
+			}
+			return settings.unlocksAbility;
+		}).map(x => getTechSettings(x).unlocksAbility));
 
 		for (let i = 0; i < territory.length; i++) {
 			const tile = state.tiles[territory[i]];
 
 			if(state.structures[tile.tileIndex]) {
-				if(abilities.some(x => x == AbilityType.Destroy)) {
-					moves.push(new Decompose(tile.tileIndex));	
-				}
-				else if(abilities.some(x => x == AbilityType.Decompose)) {
-					moves.push(new Destroy(tile.tileIndex));	
+				if(StructureSettings[state.structures[tile.tileIndex]!.id].cost) {
+					if(abilities.has(AbilityType.Destroy)) {
+						moves.push(new Destroy(tile.tileIndex));	
+					}
+					else if(abilities.has(AbilityType.Decompose)) {
+						moves.push(new Decompose(tile.tileIndex));	
+					}
 				}
 			}
-
-			if(tile.terrainType === TerrainType.Forest) {
-				if(abilities.some(x => x == AbilityType.ClearForest)) {
+			else if(tile.terrainType === TerrainType.Forest) {
+				if(abilities.has(AbilityType.ClearForest)) {
 					moves.push(new ClearForest(tile.tileIndex));
 				}
-				if(pov._stars >= 2 && abilities.some(x => x == AbilityType.BurnForest)) {
+				if(abilities.has(AbilityType.BurnForest)) {
 					moves.push(new BurnForest(tile.tileIndex));
 				}
 			}
-			else if(pov._stars >= 5 && tile.terrainType == TerrainType.Field) {
-				if(abilities.some(x => x == AbilityType.GrowForest)) {
+			else if(tile.terrainType == TerrainType.Field) {
+				if(abilities.has(AbilityType.GrowForest)) {
 					moves.push(new GrowForest(tile.tileIndex));
 				}
 			}
@@ -143,35 +354,29 @@ export class EconMovesGenerator {
 	
 	static structures(state: GameState, moves: Move[]) {
 		const pov = getPovTribe(state);
-		const structTypes:StructureType[] = [];
+		const structTypes: Set<StructureType> = new Set();
 
 		for (let i = 0; i < 7; i++) {
 			const task = TaskSettings[i as keyof typeof TaskSettings];
 			if(task.techType && !isTechUnlocked(pov, task.techType)) {
 				continue;
 			}
-			if(pov._builtUniqueStructures.includes(task.structureType)) {
+			if(pov._builtUniqueStructures.has(task.structureType)) {
 				continue;
 			}
 			if(task.task(state)) {
-				structTypes.push(task.structureType);
+				structTypes.add(task.structureType);
 			}
 		}
 
 		for (let i = 0; i < pov._tech.length; i++) {
 			const structType = getTechStructure(pov, pov._tech[i]);
 	
-			if(!structType) {
+			if(!structType || pov._stars < getTechCost(pov, pov._tech[i])) {
 				continue
 			}
 	
-			const settings = StructureSettings[structType];
-	
-			if(!settings.cost || settings.cost < 1 || pov._stars < settings.cost) {
-				continue
-			}
-	
-			structTypes.push(structType);
+			structTypes.add(structType);
 		}
 
 		const territory = getPovTerritorry(state);
@@ -187,27 +392,27 @@ export class EconMovesGenerator {
 				continue
 			}
 
-			for(let j = 0; j < structTypes.length; j++) {
-				const structType = structTypes[j];
+			for(const x in structTypes) {
+				const structType = Number(x) as StructureType;
 				const settings = StructureSettings[structType];
 
-				if(!settings.terrainType?.includes(tile.terrainType)) {
+				if(!settings.terrainType?.has(tile.terrainType)) {
 					if(tile.capitalOf !== pov.owner || structType !== StructureType.Embassy) {
 						continue;
 					}
 				}
 				
 				if(settings.limitedPerCity) {
-					const limited = getCityOwningTile(state, tile.tileIndex)!._territory.some(x => state.structures[x]?.id == structTypes[i]);
+					const limited = getCityOwningTile(state, tile.tileIndex)!._territory.some(x => state.structures[x]?.id == structType);
 					if(limited) {
 						continue;
 					}
 				}
 
-				if(settings.adjacentTypes && !getNeighborTiles(state, tile.tileIndex).some(x => state.structures[x.tileIndex]? 
-					settings.adjacentTypes!.includes(state.structures[x.tileIndex]!.id) : false
+				if(settings.adjacentTypes && !getNeighborIndexes(state, tile.tileIndex).some(x => state.structures[x]? 
+					settings.adjacentTypes!.has(state.structures[x]!.id) : false
 				)) {
-					continue
+					continue;
 				}
 	
 				moves.push(new Structure(
@@ -234,13 +439,13 @@ export class EconMovesGenerator {
 					continue;
 				}
 
-				const cost = getTechCost(next[j]);
+				const cost = getTechCost(pov, next[j]);
 
 				if(cost > pov._stars) {
 					continue;
 				}
 
-				moves.push(new Research(next[j], cost));
+				moves.push(new Research(next[j]));
 			}
 		}
 	}
@@ -251,7 +456,7 @@ export class EconMovesGenerator {
 			[ RewardType.CityWall, RewardType.Resources ],
 			[ RewardType.PopulationGrowth, RewardType.BorderGrowth ],
 		][city._level-2] || [ RewardType.Park, RewardType.SuperUnit ];
-		if(city._rewards.some(x => rewards.includes(x))) {
+		if(rewards.some(x => city._rewards.has(x))) {
 			return [];
 		}
 		return rewards.map(rewardType => new Reward(city.tileIndex, rewardType));
@@ -291,35 +496,37 @@ export class ArmyMovesGenerator {
 			_moves.push(new Recover(tileIndex));
 		}
 
-		// Heal Others
-		if(isSkilledIn(unit, SkillType.Heal)) {
-			const damagedAround = getAlliesNearTile(state, tileIndex).some(x => x._health < getMaxHealth(x));
-			if(damagedAround) {
-				_moves.push(new HealOthers(tileIndex));
+		if(isSkilledIn(unit, SkillType.Heal, SkillType.Boost, SkillType.Explode, SkillType.FreezeArea)) {
+			// Heal Others
+			if(isSkilledIn(unit, SkillType.Heal)) {
+				const damagedAround = getAlliesNearTile(state, tileIndex).some(x => x._health < getMaxHealth(x));
+				if(damagedAround) {
+					_moves.push(new HealOthers(tileIndex));
+				}
 			}
-		}
-
-		// Boost
-		if(isSkilledIn(unit, SkillType.Boost)) {
-			const unboostedAround = getAlliesNearTile(state, tileIndex).some(x => !isBoosted(x));
-			if(unboostedAround) {
-				_moves.push(new Boost(tileIndex));
+	
+			// Boost
+			else if(isSkilledIn(unit, SkillType.Boost)) {
+				const unboostedAround = getAlliesNearTile(state, tileIndex).some(x => !isBoosted(x));
+				if(unboostedAround) {
+					_moves.push(new Boost(tileIndex));
+				}
 			}
-		}
-		
-		// Explode
-		if(isSkilledIn(unit, SkillType.Explode)) {
-			const enemiesAround = getEnemiesNearTile(state, tileIndex, 1, true).length;
-			if(enemiesAround) {
-				_moves.push(new Explode(tileIndex));
+			
+			// Explode
+			else if(isSkilledIn(unit, SkillType.Explode)) {
+				const enemiesAround = getEnemiesNearTile(state, tileIndex, 1, true).length;
+				if(enemiesAround) {
+					_moves.push(new Explode(tileIndex));
+				}
 			}
-		}
-
-		// Freeze Area
-		if(isSkilledIn(unit, SkillType.FreezeArea)) {
-			const unitsAround = getEnemiesNearTile(state, tileIndex, 1, true).some(x => !isFrozen(x) || !isTileFrozen(state, x._tileIndex));
-			if(unitsAround) {
-				_moves.push(new FreezeArea(tileIndex));
+	
+			// Freeze Area
+			else if(isSkilledIn(unit, SkillType.FreezeArea)) {
+				const unitsAround = getEnemiesNearTile(state, tileIndex, 1, true).some(x => !isFrozen(x) || !isTileFrozen(state, x._tileIndex));
+				if(unitsAround) {
+					_moves.push(new FreezeArea(tileIndex));
+				}
 			}
 		}
 
@@ -337,9 +544,8 @@ export class ArmyMovesGenerator {
 		if(struct) {
 			switch (struct.id) {
 				case StructureType.Village:
-					if(state.tiles[targetCityIndex]._owner < 0) {
+					if(!state.tiles[targetCityIndex]._owner) {
 						moves.push(new Capture(capturer._tileIndex));
-
 					}
 					else if(state.tiles[targetCityIndex]._owner !== capturer._owner) {
 						moves.push(new Capture(capturer._tileIndex));
@@ -375,7 +581,7 @@ export class ArmyMovesGenerator {
 				return [];
 			}
 			moves.push(
-				...getEnemiesInRange(state, attacker).map(x => new Attack(attacker._tileIndex, x._tileIndex))
+				...getEnemyIndexesInRange(state, attacker).map(x => new Attack(attacker._tileIndex, x))
 			);
 		}
 
@@ -473,7 +679,6 @@ export class ArmyMovesGenerator {
 		let newType = oldType;
 
 		const oldNewTileUnitOwner = newTile._unitOwner;
-		const oldNewTileUnitIdx = newTile._unitIdx;
 
 		// TODO; this is not how prev works, it must be applies at the end of the turn
 		stepper.prevX = iX;
@@ -482,9 +687,7 @@ export class ArmyMovesGenerator {
 		stepper.y = Math.floor(toTileIndex / state.settings.size);
 		stepper._tileIndex = toTileIndex;
 
-		oldTile._unitIdx = -1;
-		oldTile._unitOwner = -1;
-		newTile._unitIdx = stepper.idx;
+		oldTile._unitOwner = 0;
 		newTile._unitOwner = stepper._owner;
 
 		// Apply movement skills
@@ -500,21 +703,9 @@ export class ArmyMovesGenerator {
 		chain.push(freezeArea(state, stepper));
 
 		// Discover terrain
-		const preLighthouseCount = state._lighthouses.length;
 		const resultDiscover = discoverTiles(state, stepper)!;
 		rewards.push(...resultDiscover.rewards);
 		chain.push(resultDiscover.undo);
-
-		if(state._lighthouses.length != preLighthouseCount) {
-			const capitalCity = getCapitalCity(state);
-			if(capitalCity) {
-				const result = addPopulationToCity(state, capitalCity, 1)!;
-				chain.push(result.undo);
-				if(result.rewards) {
-					rewards.push(...result.rewards);
-				}
-			}
-		}
 
 		stepper._moved = stepper._attacked = true;
 
@@ -568,7 +759,7 @@ export class ArmyMovesGenerator {
 		let wasNotInvis = false;
 		if(isSkilledIn(stepper, SkillType.Hide) && !isInvisible(stepper)) {
 			stepper._attacked = true;
-			stepper._effects.push(EffectType.Invisible);
+			stepper._effects.add(EffectType.Invisible);
 			wasNotInvis = true;
 		}
 
@@ -579,15 +770,13 @@ export class ArmyMovesGenerator {
 			undo: () => {
 				stepper._unitType = oldType;
 				if(wasNotInvis) {
-					stepper._effects.pop();
+					stepper._effects.delete(EffectType.Invisible);
 				}
 				stepper._passenger = oldPassenger;
 				stepper._attacked = oldAttacked;
 				stepper._moved = oldMoved;
 				chain.reverse().forEach(x => x());
 				newTile._unitOwner = oldNewTileUnitOwner;
-				newTile._unitIdx = oldNewTileUnitIdx;
-				oldTile._unitIdx = stepper.idx;
 				oldTile._unitOwner = stepper._owner;
 				stepper._tileIndex = oldTileIndex;
 				stepper.y = iY;

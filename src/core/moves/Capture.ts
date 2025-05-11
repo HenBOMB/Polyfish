@@ -1,4 +1,4 @@
-import { getCityAt, getHomeCity, getNeighborIndexes, getNextTech, getPovTribe, getUnitAt, indexToCoord, isTechUnlocked } from "../functions";
+import { getCityAt, getHomeCity, getNeighborIndexes, getNextTech, getPovTribe, getUnitAt, indexToCoord, isTechUnlocked, unBoost } from "../functions";
 import Move, { CallbackResult, UndoCallback } from "../move";
 import { EffectType, MoveType, RewardType, StructureType, TechnologyType, TerrainType, TribeType, UnitType } from "../types";
 import { CityState, GameState, TechnologyState } from "../states";
@@ -30,7 +30,7 @@ export default class Capture extends Move {
                     oldCity._unitCount--;
                 }
                 
-                const result = (tile._owner > 0? this.city(state) : this.village(state))!;
+                const result = (tile._owner? this.city(state) : this.village(state))!;
                 rewards.push(...result.rewards);
 
                 undo = () => {
@@ -51,9 +51,12 @@ export default class Capture extends Move {
             undo = this.starfish(state);
         }
         
+        const undoBoost = unBoost(capturer);
+        
         return {
             rewards,
             undo: () => {
+                undoBoost();
                 undo();
                 capturer._moved = capturer._attacked = false;
             },
@@ -76,7 +79,7 @@ export default class Capture extends Move {
             _production: 1,
             _owner: pov.owner,
             tileIndex: captureIndex,
-            _rewards: [],
+            _rewards: new Set(),
             _territory: territory,
             _unitCount: 1,
         };
@@ -94,10 +97,10 @@ export default class Capture extends Move {
             undo: () => {
                 for(const tileIndex of createdCity._territory) {
                     const tile = state.tiles[tileIndex];
-                    tile._owner = -1;
+                    tile._owner = 0;
                     tile._rulingCityIndex = -1;
                 }
-                villageTile._owner = -1;
+                villageTile._owner = 0;
                 pov._cities.pop();
             }
         }
@@ -228,7 +231,7 @@ export default class Capture extends Move {
             )
         ) {
             const around = getNeighborIndexes(state, tileIndex, 2, true);
-            if(around.some(x => state._visibleTiles.includes(x))) {
+            if(around.some(x => state._visibleTiles[x])) {
                 possibleRewards.push(() => discoverTiles(state, null, predictExplorer(state, tileIndex)));
             }
         }
@@ -257,7 +260,7 @@ export default class Capture extends Move {
                     name: `${TribeType[pov.tribeType]} City`,
                     _population: 2,
                     _progress: 0,
-                    _rewards: [RewardType.Explorer, RewardType.CityWall],
+                    _rewards: new Set([RewardType.Explorer, RewardType.CityWall]),
                     _borderSize: 1,
                     _connectedToCapital: false,
                     _level: 3,
@@ -318,10 +321,10 @@ export default class Capture extends Move {
         delete state.structures[tileIndex];
         
         // Reveal hidden unit
-        const effectIndex = capturer._effects.indexOf(EffectType.Invisible);
+        const inInvis = capturer._effects.has(EffectType.Invisible);
 
-        if(effectIndex !== -1) {
-            capturer._effects.splice(effectIndex, 1);
+        if(inInvis) {
+            capturer._effects.delete(EffectType.Invisible);
         }
 
         const rewardResult = possibleRewards[Math.floor(Math.random() * possibleRewards.length)]();
@@ -331,8 +334,8 @@ export default class Capture extends Move {
             undo: () => {
                 rewardResult?.undo();
 
-                if(effectIndex !== -1) {
-                    capturer._effects.splice(effectIndex, 0, EffectType.Invisible);
+                if(inInvis) {
+                    capturer._effects.add(EffectType.Invisible);
                 }
     
                 state.structures[tileIndex] = ruins;
@@ -344,10 +347,16 @@ export default class Capture extends Move {
     }
     
     starfish(state: GameState): UndoCallback {
+        const pov = getPovTribe(state);
         const capturer = getUnitAt(state, this.getSrc())!;
+        const resource = state.resources[capturer._tileIndex];
+
+        pov._stars += 8;
+        delete state.resources[capturer._tileIndex];
         
         return () => {
-
+            pov._stars -= 8;
+            state.resources[capturer._tileIndex] = resource;
         }
     }
 

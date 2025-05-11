@@ -242,8 +242,9 @@ export async function SelfPlay(
 	const loader = new GameLoader(settings);
 
 	for (let i = 0; i < nGames; i++) {
+		await loader.loadRandom();
 		const game = new Game();
-		game.load(await loader.loadRandom());
+		game.load(loader.currentState);
 
 		const episode: Array<{ obs: any; pi: number[]; r: number; pov: number }> = [];
 

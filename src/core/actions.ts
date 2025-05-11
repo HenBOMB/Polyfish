@@ -1,12 +1,12 @@
-import { getNeighborTiles, calaulatePushablePosition, getNeighborIndexes, computeReachablePath, isSkilledIn, getPovTribe, getUnitAt, getTrueUnitAt, getHomeCity, getRulingCity, getMaxHealth, getEnemiesInRange, getEnemiesNearTile, isFrozen, calculateCombat, getUnitRange, getTrueEnemyAt, calculateAttack, isSteppable, isWaterTerrain, isPoisoned, getCapitalCity } from "./functions";
+import { getNeighborTiles, calaulatePushablePosition, getNeighborIndexes, computeReachablePath, isSkilledIn, getPovTribe, getTrueUnitAt, getHomeCity, getRulingCity, getMaxHealth, getEnemiesInRange, getEnemiesNearTile, isFrozen, calculateCombat, getUnitRange, getTrueEnemyAt, calculateAttack, isSteppable, isWaterTerrain, isPoisoned, getCapitalCity, getLighthouses, unPoison, addFreeze } from "./functions";
 import { ArmyMovesGenerator, EconMovesGenerator } from "./moves";
 import Move, { Branch, CallbackResult, UndoCallback } from "./move";
 import { ResourceSettings } from "./settings/ResourceSettings";
 import { StructureSettings } from "./settings/StructureSettings";
 import { UnitSettings } from "./settings/UnitSettings";
 import { CityState, GameState, StructureState, UnitState } from "./states";
-import { UnitType, StructureType, SkillType, TerrainType, EffectType, ClimateType, TribeType, MoveType } from "./types";
-import { Logger } from "../polyfish/logger";
+import { UnitType, StructureType, SkillType, TerrainType, EffectType, ClimateType, TribeType } from "./types";
+import { IsStructureTask } from "./settings/TaskSettings";
 
 export function addPopulationToCity(state: GameState, targetCity: CityState, amount: number): CallbackResult {
     if(!amount) {
@@ -258,6 +258,7 @@ export function harvestResource(state: GameState, tileIndex: number): Branch {
     const harvested = state.resources[tileIndex]!;
     const settings = ResourceSettings[harvested.id];
     const rulingCity = tribe._cities.find(x => x.tileIndex == state.tiles[tileIndex]._rulingCityIndex)!;
+    
     const cost = settings.cost || 0;
     
     tribe._stars -= cost;
@@ -297,7 +298,8 @@ export function buildStructure(state: GameState, strctureType: StructureType, ti
     let rewardStarCount = settings.rewardStars || 0;
     
     if(settings.adjacentTypes !== undefined) {
-        const adjCount = getNeighborTiles(state, tileIndex).filter(x => state.structures[x.tileIndex]? settings.adjacentTypes!.includes(state.structures[x.tileIndex]!.id) : false).length;
+        const adjCount = getNeighborTiles(state, tileIndex)
+            .filter(x => state.structures[x.tileIndex]? settings.adjacentTypes!.has(state.structures[x.tileIndex]!.id) : false).length;
         rewardStarCount *= adjCount;
         rewardPopCount *= adjCount;
     }
@@ -306,7 +308,7 @@ export function buildStructure(state: GameState, strctureType: StructureType, ti
         tribe._stars += rewardStarCount;
     }
 
-    settings.task && tribe._builtUniqueStructures.push(strctureType);
+    IsStructureTask[strctureType] && tribe._builtUniqueStructures.has(strctureType);
 
     const popBranch = addPopulationToCity(state, rulingCity, rewardPopCount);
    
@@ -318,7 +320,7 @@ export function buildStructure(state: GameState, strctureType: StructureType, ti
         undo: () => {
             portBranch?.undo();
             popBranch?.undo();
-            settings.task && tribe._builtUniqueStructures.pop();
+            IsStructureTask[strctureType] && tribe._builtUniqueStructures.delete(strctureType);
             if(rewardStarCount) {
                 tribe._stars -= rewardStarCount;
             }
@@ -338,13 +340,11 @@ export function summonUnit(state: GameState, unitType: UnitType, spawnTileIndex:
     // Push occupied unit away (if any)
     let resultPush = pushUnit(state, spawnTile.tileIndex);
     
-    const oldUnitIdx = spawnTile._unitIdx;
     const oldUnitOwner = spawnTile._unitOwner;
     
     if(costs) pov._stars -= settings.cost;
     
     const spawnedUnit = {
-        idx: state.settings.unitIdx++,
         x: spawnTileIndex % state.settings.size, 
         y: Math.floor(spawnTileIndex / state.settings.size),
         _unitType: unitType,
@@ -358,14 +358,13 @@ export function summonUnit(state: GameState, unitType: UnitType, spawnTileIndex:
         // If its not from a ruin or special unit
         _homeIndex: forceIndependent || isSkilledIn(unitType, SkillType.Independent) || !costs? -1 : spawnTileIndex,
         _tileIndex: spawnTileIndex,
-        _effects: [],
+        _effects: new Set(),
         _attacked: true,
         _moved: true,
     } as UnitState;
 
     pov._units.push(spawnedUnit);
 
-    spawnTile._unitIdx = spawnedUnit.idx;
     spawnTile._unitOwner = spawnedUnit._owner;
     
     const cityHome = forceIndependent? null : getHomeCity(state, spawnedUnit);
@@ -381,7 +380,6 @@ export function summonUnit(state: GameState, unitType: UnitType, spawnTileIndex:
             undoFrozen();
             resultDiscover?.undo();
             if(cityHome) cityHome._unitCount--;
-            spawnTile._unitIdx = oldUnitIdx;
             spawnTile._unitOwner = oldUnitOwner;
             if(costs) pov._stars += settings.cost;
             state.settings.unitIdx--;
@@ -395,13 +393,11 @@ export function removeUnit(state: GameState, removed: UnitState, credit?: UnitSt
     const tribe = state.tribes[removed._owner];
     const tile = state.tiles[removed._tileIndex];
     const oldOwner = removed._owner;
-    const oldIdx = tile._unitIdx;
     const cityHome = getHomeCity(state, removed);
-    const atIndex = tribe._units.findIndex(x => x.idx == removed.idx);
+    const atIndex = tribe._units.findIndex(x => x._tileIndex == removed._tileIndex);
 
     tribe._units.splice(atIndex, 1);
-    tile._unitIdx = -1;
-    tile._unitOwner = -1;
+    tile._unitOwner = 0;
     if(cityHome) cityHome._unitCount--;
     if(credit) {
         tribe._casualties++;
@@ -417,18 +413,13 @@ export function removeUnit(state: GameState, removed: UnitState, credit?: UnitSt
         }
         if(cityHome) cityHome._unitCount++;
         tile._unitOwner = oldOwner;
-        tile._unitIdx = oldIdx;
         tribe._units.splice(atIndex, 0, removed);
     };
 }
 
 export function healUnit(unit: UnitState, amount: number): UndoCallback {
     if(isPoisoned(unit))	{
-        const index = unit._effects.indexOf(EffectType.Poison);
-        unit._effects.splice(index, 1);
-        return () => {
-            unit._effects.splice(index, 0, EffectType.Poison);
-        }
+        return unPoison(unit);
     }
     const oldHealth = unit._health;
     unit._health += amount;
@@ -446,16 +437,16 @@ export function discoverTiles(state: GameState, unit?: UnitState | null, tileInd
         state.tiles[unit._tileIndex].terrainType == TerrainType.Mountain || isSkilledIn(unit, SkillType.Scout)? 2 : 1,
         false,
         true
-    ) : [])).filter(x => !state._visibleTiles.includes(x));
+    ) : [])).filter(x => !state._visibleTiles[x]);
 
-    const lighthouses = [...state._lighthouses];
+    // Get undiscovered lightouses
+    const lighthouses = getLighthouses(state, false);
     
     let chain: UndoCallback[] = [];
     let rewards: Move[] = [];
 
     for (const tileIndex of discovered) {
-        if(state._lighthouses.includes(tileIndex)) {
-            state._lighthouses.splice(state._lighthouses.indexOf(tileIndex), 1);
+        if(lighthouses.includes(tileIndex)) {
             const city = getCapitalCity(state);
             if(city) {
                 const result = addPopulationToCity(state, city, 1);
@@ -466,23 +457,20 @@ export function discoverTiles(state: GameState, unit?: UnitState | null, tileInd
             }
         }
         if (state.settings.areYouSure) {
-            state.tiles[tileIndex]._explorers.push(owner);
+            state.tiles[tileIndex]._explorers.add(owner);
         }
-        if(!state._visibleTiles.includes(tileIndex)) {
-            state._visibleTiles.push(tileIndex);
-        }
+        state._visibleTiles[tileIndex] = true;
     }
 
     return {
         rewards,
         undo: () => {
-            state._visibleTiles.splice(state._visibleTiles.length - discovered.length, discovered.length);
+            discovered.forEach(x => state._visibleTiles[x] = false);
             if(state.settings.areYouSure) {
                 discovered.forEach(x => {
-                    state.tiles[x]._explorers.pop();
+                    state.tiles[x]._explorers.delete(owner);
                 });
             }
-            state._lighthouses = lighthouses;
         }
     }
 }
@@ -507,10 +495,7 @@ export function freezeArea(state: GameState, freezer: UnitState): UndoCallback {
         const occupied = getTrueEnemyAt(state, tile, freezer._owner);
         if(occupied) {
             if(!isFrozen(occupied)) {
-                occupied._effects.push(EffectType.Frozen);
-                undoChain.push(() => {
-                    occupied._effects.pop();
-                });
+                undoChain.push(addFreeze(occupied));
             }
         }
         if(tile.terrainType == TerrainType.Water || tile.terrainType == TerrainType.Ocean) {
@@ -550,14 +535,8 @@ export function pushUnit(state: GameState, tileIndex: number): CallbackResult {
         undoPush = removeUnit(state, pushed);
     }
     else {
-        const result = ArmyMovesGenerator.computeStep(state, pushed, movedTo, true);
-        if(result) {
-            rewards.push(...result.rewards);
-            undoPush = result.undo;
-        }
-        else {
-            return Logger.illegal(MoveType.Step, `Failed to push Unit`)
-        }
+        const result = ArmyMovesGenerator.computeStep(state, pushed, movedTo, true)!;
+        rewards.push(...result.rewards);
     }
 
     return {
@@ -578,7 +557,7 @@ export function attackUnit(state: GameState, attacker: UnitState | number, defen
 
         defender._health -= atk;
 
-        if (defender._health < 1) {
+        if (defender._health <= 0) {
             undoChain.push(removeUnit(state, defender, attackerPov));
         }
 
@@ -601,7 +580,7 @@ export function attackUnit(state: GameState, attacker: UnitState | number, defen
         }
 
         // We killed their unit
-        if(defender._health < 1) {
+        if(defender._health <= 0) {
             undoChain.push(removeUnit(state, defender, attacker));
             // Move to the enemy position, if not a ranged unit
             if (getUnitRange(attacker) < 2 && isSteppable(state, attacker, defender._tileIndex)) {
@@ -613,15 +592,14 @@ export function attackUnit(state: GameState, attacker: UnitState | number, defen
         else {
             // If we have have freeze, then they cant retaliate
             if(isSkilledIn(attacker, SkillType.Freeze)) {
-                result.defenseDamage = 0;
                 let wasFrozen = false;
                 if(!isFrozen(defender)) {
-                    defender._effects.push(EffectType.Frozen);
+                    defender._effects.add(EffectType.Frozen);
                     wasFrozen = true;
                 }
                 undoChain.push(() => {
                     if(wasFrozen) {
-                        defender._effects.pop();
+                        defender._effects.delete(EffectType.Frozen);
                     }
                 });
             }
@@ -647,7 +625,7 @@ export function attackUnit(state: GameState, attacker: UnitState | number, defen
                 });
     
                 // Our unit died
-                if (attacker._health < 1) {
+                if (attacker._health <= 0) {
                     undoChain.push(removeUnit(state, attacker, defender));
                 }
             }

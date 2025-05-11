@@ -1,8 +1,8 @@
 import { attackUnit, removeUnit, summonUnit } from "../actions";
-import { getEnemyAt, getUnitAt, isSkilledIn, isTechUnlocked } from "../functions";
+import { getEnemyAt, getUnitAt, isBoosted, isSkilledIn, isTechUnlocked, unBoost } from "../functions";
 import Move, { CallbackResult, UndoCallback } from "../move";
 import { GameState } from "../states";
-import { MoveType, SkillType, TechnologyType, TerrainType, UnitType } from "../types";
+import { EffectType, MoveType, SkillType, TechnologyType, TerrainType, UnitType } from "../types";
 
 export default class Attack extends Move {
     constructor(src: number, target: number) {
@@ -22,12 +22,13 @@ export default class Attack extends Move {
         const enemy = state.tribes[defender._owner];
         
         let undoAttack = () => {};
-        
+        let undoExtra = () => {};
+
         // Allows a unit to convert an enemy unit into a friendly unit by attacking it
         // TODO verify if working: Converted units take up population in the attacker's city but do not change score for either players
         if(isSkilledIn(attacker, SkillType.Convert)) {
             const owner = defender._owner;
-            const index = enemy._units.findIndex(x => x.idx == defender.idx);
+            const index = enemy._units.findIndex(x => x._tileIndex == defender._tileIndex);
             
             defender._owner = attacker._owner;
             enemy._units.splice(index, 1);
@@ -43,12 +44,22 @@ export default class Attack extends Move {
         else {
             undoAttack = attackUnit(state, attacker, defender);
             
+            // If defender was not killed 
+            if(defender._health > 0) {
+                
+            }
             // Units with Persist skill can keep on killing if they one shot the defender
-            if(attacker._health > 0 && isSkilledIn(attacker, SkillType.Persist) && defender._health < 1) {
+            else if(attacker._health > 0 && isSkilledIn(attacker, SkillType.Persist)) {
                 attacker._attacked = false;
             }
             else {
                 attacker._attacked = true;
+            }
+
+            // attacker is still alive
+            if(attacker._health > 0) {
+                // if unit was boosted, unboost
+                undoExtra = unBoost(attacker);
             }
             
             // Units with Escape can move after they attacked
@@ -65,6 +76,7 @@ export default class Attack extends Move {
             undo: () => {
                 attacker._moved = moved;
                 attacker._attacked = false;
+                undoExtra();
                 undoAttack();
             }
         };
@@ -90,7 +102,7 @@ export default class Attack extends Move {
         // This damage is equivalent to what a unit with an attack of 2 would deal.
         if(enemyTarget) {
                 enemyTarget._health -= 2;
-                if(enemyTarget._health < 1) {
+                if(enemyTarget._health <= 0) {
                     const undoRemove = removeUnit(state, enemyTarget);
                     tribe._kills++;
                     undoKillEnemy = () => {

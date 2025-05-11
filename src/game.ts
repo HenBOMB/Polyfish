@@ -6,19 +6,19 @@ import Move, {UndoCallback } from "./core/move";
 import { MoveType } from "./core/types";
 import { EffectType } from "./core/types";
 import NetworkManager from "./core/network";
-import PoseManager from "./core/pose";
+import PoseManager from "./core/poser";
 
 export default class Game {
     initialState: GameState;
     state: GameState;
     network: NetworkManager;
-    pose: PoseManager;
+    poser: PoseManager;
 
     constructor() {
         this.initialState = {} as any;
         this.state = {} as any;
         this.network = null as any;
-        this.pose = new PoseManager()
+        this.poser = new PoseManager();
     }
 
     deepClone() {
@@ -37,8 +37,12 @@ export default class Game {
     }
 
     reset() {
-        this.state = cloneState(this.initialState);
+        this.state = this.initialState;
+        // this.state = cloneState(this.initialState);
         this.network = new NetworkManager(this.state);
+        this.state.tiles.forEach(tile => {
+            this.state._visibleTiles[tile.tileIndex] = tile._explorers.has(this.state.settings._pov);
+        });
     }
 
     playMove(moveOrIndex: number | Move): [Move, UndoCallback] | null {
@@ -81,9 +85,7 @@ export default class Game {
 
         this.state.settings.areYouSure = false;
 
-        return [move, () => {
-            undo();
-        }];
+        return [move, undo];
     }
     
     /**
@@ -91,6 +93,7 @@ export default class Game {
      */
     endTurn(): UndoCallback {
         const state = this.state;
+        const oldOwner = state.settings._pov;
 
         // TODO Add relations? (for polytopia default bots)
         const chain: UndoCallback[] = [];
@@ -164,12 +167,11 @@ export default class Game {
             // Frozen units get unfrozen but that consumes their turn
             // not in wiki but i assume this is how it works from gameplay
 			if(isFrozen(unit)) {
-                const index = unit._effects.indexOf(EffectType.Frozen);
-				unit._effects.splice(index, 1);
+                unit._effects.delete(EffectType.Frozen);
                 chain.push(() => {
-                    unit._effects.splice(index, 0, EffectType.Frozen);
+                    unit._effects.add(EffectType.Frozen);
                 });
-				unit._moved = unit._attacked = true;
+                unit._moved = unit._attacked = true;
 				continue;
 			}
 
@@ -180,31 +182,26 @@ export default class Game {
         chain.push(tryDiscoverRewardOtherTribes(state));
 
         // Update the new tribe's visibility
-        const visible = [...state._visibleTiles];
-        const lighthouses = [...state._lighthouses];
-
-        chain.push(() => {
-            state._visibleTiles = visible;
-            state._lighthouses = lighthouses;
+        state.tiles.forEach(tile => {
+            state._visibleTiles[tile.tileIndex] = tile._explorers.has(pov.owner);
         });
-
-        state._visibleTiles = [];
-
-        Object.values(state.tiles).forEach(tile => {
-            if(tile._explorers.includes(pov.owner)) {
-                state._visibleTiles.push(tile.tileIndex);
-            }
-        });
-
-        state._lighthouses = [
-            0,
-            state.settings.size - 1,
-            state.settings.size * state.settings.size - 1,
-            1 + state.settings.size * state.settings.size - state.settings.size
-        ].filter(x => !state.tiles[x]._explorers.includes(pov.owner));
 
         return () => {
+            state.tiles.forEach(tile => {
+                state._visibleTiles[tile.tileIndex] = tile._explorers.has(oldOwner);
+            });
             chain.reverse().forEach(x => x());
         }
+    }
+
+    serialize() {
+        return JSON.stringify([
+            this.state.settings,
+            this.state.tribes,
+            this.state.tiles,
+            this.state.structures,
+            // get rid of lighthouses
+            // this.state._lighthouses,
+        ]);
     }
 }

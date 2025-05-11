@@ -16,25 +16,24 @@ export function tryDiscoverRewardOtherTribes(state: GameState): UndoCallback {
 	const us = getPovTribe(state);
 
 	// Already discovered all the tribes or all the tiles
-	if(us._knownPlayers.length == state.settings.tribeCount) {
+	if(us._knownPlayers.size == state.settings.tribeCount - 1) {
 		return () => { };
 	}
 
-	const tribesMet: number[] = [];
+	const tribesMet: Set<number> = new Set();
 
 	// Try to meet new tribes, if they they have been seen and not discovered
-
-	state._visibleTiles.forEach(x => {
+	for(const x in state._visibleTiles) {
 		// If we can see any other tribe's unit, we have met them
-		const standing = getUnitAt(state, x);
+		const standing = getUnitAt(state, Number(x));
 		if(standing 
 			&& standing._owner != us.owner
-			&& !us._knownPlayers.includes(standing._owner)
-			&& !tribesMet.includes(standing._owner)
+			&& !us._knownPlayers.has(standing._owner)
+			&& !tribesMet.has(standing._owner)
 		) {
-			tribesMet.push(standing._owner);
+			tribesMet.add(standing._owner);
 		}
-	});
+	}
 
 	const chain: UndoCallback[] = [];
 
@@ -42,26 +41,26 @@ export function tryDiscoverRewardOtherTribes(state: GameState): UndoCallback {
 	tribesMet.forEach(owner => {
 		const them = state.tribes[owner];
 		const stars = getStarExchange(state, them);
-		us._knownPlayers.push(owner);
+		us._knownPlayers.add(owner);
 		us._stars += stars;
 
 		chain.push(() => {
-			us._knownPlayers.pop();
+			us._knownPlayers.delete(owner);
 			us._stars -= stars;
 		});
 
-		if(them._knownPlayers.includes(us.owner)) {
+		if(them._knownPlayers.has(us.owner)) {
 			return;
 		}
 
 		// If they also too just met us
 		for(const unit of us._units) {
-			if(state.tiles[unit._tileIndex]._explorers.includes(them.owner)) {
+			if(state.tiles[unit._tileIndex]._explorers.has(them.owner)) {
 				const stars = getStarExchange(state, us);
-				them._knownPlayers.push(us.owner);
+				them._knownPlayers.add(us.owner);
 				them._stars += stars;
 				chain.push(() => {
-					them._knownPlayers.pop();
+					them._knownPlayers.delete(us.owner);
 					them._stars -= stars;
 				});
 				break;
@@ -125,8 +124,8 @@ export function getTechAbility(like: TribeLike, tierTech: number): AbilityType |
 	return getReplacedOrTechSettings(like, tierTech).unlocksAbility || null;
 }
 
-export function getTechCost(tech: TechLike): number {
-	return getTechSettings(tech).tier!;
+export function getTechCost(like: TribeState, tierTech: TechLike): number {
+	return getTechSettings(tierTech).tier! && (isTechUnlocked(like, TechnologyType.Philosophy)? 0.77 : 1);
 }
 
 /** Returns the correct city production */
@@ -146,11 +145,20 @@ export function getPovTerritorry(state: GameState, tribe?: TribeState, cityTarge
 	return (cityTarget? [cityTarget] : tribe._cities).map(x => x._territory).flat();
 }
 
-export function getNeighborIndexes(state: GameState, index: number, range = 1, unowned = false, includeUnexplored=false): number[] {
+const neighborCache = new Map<number, number[]>();
+
+export function getNeighborIndexes(state: GameState, index: number, range = 1, unowned = false, includeUnexplored = false): number[] {
 	const width = state.settings.size;
 	const neighbors: number[] = [];
 	const [x, y] = indexToCoord(state, index);
 	
+	if(!unowned && !includeUnexplored) {
+		const neighs = neighborCache.get(index);
+		if(neighs) {
+			return neighs;
+		}
+	}
+
 	for (let dx = -range; dx <= range; dx++) {
 		for (let dy = -range; dy <= range; dy++) {
 			if (dx === 0 && dy === 0) continue;
@@ -163,7 +171,7 @@ export function getNeighborIndexes(state: GameState, index: number, range = 1, u
 			const neighborIndex = neighborY * width + neighborX;
 			
 			if(!includeUnexplored || unowned) {
-				const explored = state._visibleTiles.includes(neighborIndex);
+				const explored = state._visibleTiles[neighborIndex];
 	
 				// Skip unexplored
 				if(!includeUnexplored && !explored) continue;
@@ -175,6 +183,10 @@ export function getNeighborIndexes(state: GameState, index: number, range = 1, u
 			neighbors.push(neighborIndex);
 		}
 	}
+
+	if(!unowned && !includeUnexplored) {
+		neighborCache.set(index, neighbors);
+	}
 	
 	return neighbors;
 }
@@ -185,8 +197,8 @@ export function getNeighborTiles(state: GameState, index: number, range = 1, uno
 
 export function getTrueUnitAt(state: GameState, tileIndex: TileState | number, matchOwner?: number): UnitState | null {
 	const tile = state.tiles[typeof tileIndex === 'number'? tileIndex : tileIndex.tileIndex];
-	if(tile._unitIdx < 0) return null;
-	const found = state.tribes[tile._unitOwner]._units.find(x => x.idx === tile._unitIdx) || null;
+	if(!tile._unitOwner) return null;
+	const found = state.tribes[tile._unitOwner]._units.find(x => x._tileIndex === tile.tileIndex) || null;
 	return found && matchOwner? found._owner === matchOwner? found : null : found;
 }
 
@@ -257,9 +269,6 @@ export function getEnemiesNearTile(state: GameState, tileIndex: number, range = 
 			if(owner < 1 || owner === state.settings._pov) return acc;
 			const enemy = (strict? getTrueEnemyAt  : getEnemyAt)(state, cur);
 			if(!enemy) return acc;
-			if(cur != enemy._tileIndex) {
-				throw 'FATAL MISMATCH';
-			}
 			return [...acc, enemy];
 		}, []);
 }
@@ -268,12 +277,17 @@ export function getEnemiesInRange(state: GameState, unit: UnitState) {
 	return getEnemiesNearTile(state, unit._tileIndex, getUnitRange(unit));
 }
 
+export function getEnemyIndexesInRange(state: GameState, unit: UnitState) {
+	return getNeighborIndexes(state, unit._tileIndex, getUnitRange(unit))
+		.filter(x => isTileOccupied(state, x, true));
+}
+
 export function getClosestEnemyCity(state: GameState, tileIndex: number, range = 1): [null | CityState, number] {
 	let closestDistance = range;
 	let closestCity = null;
 	for (let i = 1; i < state.settings.tribeCount; i++) {
 		if(i === state.settings._pov) continue;
-		for (const city of state.tribes[i]._cities.filter(x => state._visibleTiles.includes(x.tileIndex))) {
+		for (const city of state.tribes[i]._cities.filter(x => state._visibleTiles[x.tileIndex])) {
 			const distance = calculateDistance(tileIndex, city.tileIndex, state.settings.size);
 			if (distance < closestDistance || (distance === closestDistance && state.tiles[i].capitalOf)) {
 				closestDistance = distance;
@@ -284,46 +298,20 @@ export function getClosestEnemyCity(state: GameState, tileIndex: number, range =
 	return [closestCity, closestDistance];
 }
 
-/** @Obsolete */
-export function getClosestReachableEnemyCity(state: GameState, unit: UnitState, range = -1): [CityState | null, number] {
-	range = range < 0? state.settings.size + 1 : range;
-
-	let closestDistance = Number.POSITIVE_INFINITY;
-	let closestCity = null;
-
-	for (let i = 0; i < state._visibleTiles.length; i++) {
-		const tileIndex = state._visibleTiles[i];
-		const tile = state.tiles[tileIndex];
-			
-		if(tile._rulingCityIndex != tileIndex || tile._owner === state.settings._pov) continue;
-		
-		let ported = false;
-
-		const path = computeReachablePath(state, unit._tileIndex, tileIndex, (state: GameState, index: number) => {
-			return isSteppable(state, unit, tile);
-		});
-
-		const distance = path.length;
-
-		if(distance < 1) continue;
-
-		// EVAL Deadly bias preferring capital over potentially closer cities
-		if (distance < closestDistance || (distance === closestDistance && state.tiles[i].capitalOf)) {
-			closestDistance = distance;
-			closestCity = state.tribes[tile._owner]._cities.find(x => x.tileIndex === tileIndex)!;
-		}
-	}
-
-	return [closestCity, closestDistance];
-}
-
-export function getLighthouses(state: GameState) {
-	return [
+/**
+ * Returns all tile indexes of lighthouses
+ * @param state 
+ * @param explored if passed as true or false, will return only the lighthouses that are explored or not
+ * @returns 
+ */
+export function getLighthouses(state: GameState, explored?: boolean) {
+	const lighhouses = [
 		0,
 		state.settings.size - 1,
 		state.settings.size * state.settings.size - 1,
 		1 + state.settings.size * state.settings.size - state.settings.size
 	];
+	return explored !== undefined? lighhouses.filter(x => explored === state._visibleTiles[x]) : lighhouses;
 }
 
 export function isLighthouse(state: GameState, tileIndex: number) {
@@ -349,7 +337,7 @@ export function isResourceVisible(tribe: TribeState, resType?: ResourceType): bo
  * Checks in tile.explorers
  */
 export function isTileExplored(state: GameState, tileIndex: TileState | number, matchOwner?: number): boolean {
-	return state.tiles[typeof tileIndex === 'number'? tileIndex : tileIndex.tileIndex]._explorers.includes(matchOwner || state.settings._pov);
+	return state.tiles[typeof tileIndex === 'number'? tileIndex : tileIndex.tileIndex]._explorers.has(matchOwner || state.settings._pov);
 }
 
 export function isTileOccupied(state: GameState, tileIndex: number, strictEnemy = false): boolean {
@@ -396,8 +384,8 @@ export function isIceTerrain(tile: TileState): boolean {
 
 export function isSkilledIn(unit: UnitState | UnitType, ...skills: SkillType[]): boolean {
 	const settings = UnitSettings[typeof unit === "number"? unit : unit._unitType];
-	const passengerSettings = typeof unit != "number" && unit._passenger? UnitSettings[unit._passenger].skills : [];
-	return skills.some(x => settings.skills.includes(x) || passengerSettings.includes(x));
+	const passengerSettings = typeof unit != "number" && unit._passenger? UnitSettings[unit._passenger].skills : new Set();
+	return skills.some(x => settings.skills.has(x) || passengerSettings.has(x));
 }
 
 export function isAquaticOrCanFly(unit: UnitState | UnitType, canfly: boolean = true): boolean {
@@ -415,19 +403,99 @@ export function isNavalUnit(unit: UnitState | UnitType): boolean {
 }
 
 export function isInvisible(unit: UnitState): boolean {
-	return unit._effects.includes(EffectType.Invisible);
+	return unit._effects.has(EffectType.Invisible);
+}
+
+export function addInvisible(unit: UnitState): UndoCallback {
+	if(!unit._effects.has(EffectType.Invisible)) {
+		unit._effects.add(EffectType.Invisible);
+		return () => {
+			unit._effects.delete(EffectType.Invisible);
+		}
+	}
+	return () => {};
+}
+
+export function unInvisible(unit: UnitState): UndoCallback {
+	if(unit._effects.has(EffectType.Invisible)) {
+		unit._effects.delete(EffectType.Invisible);
+		return () => {
+			unit._effects.add(EffectType.Invisible);
+		}
+	}
+	return () => {};
 }
 
 export function isFrozen(unit: UnitState): boolean {
-	return unit._effects.includes(EffectType.Frozen);
+	return unit._effects.has(EffectType.Frozen);
+}
+
+export function addFreeze(unit: UnitState): UndoCallback {
+	if(!unit._effects.has(EffectType.Frozen)) {
+		unit._effects.add(EffectType.Frozen);
+		return () => {
+			unit._effects.delete(EffectType.Frozen);
+		}
+	}
+	return () => {};
+}
+
+export function unFreeze(unit: UnitState): UndoCallback {
+	if(unit._effects.has(EffectType.Frozen)) {
+		unit._effects.delete(EffectType.Frozen);
+		return () => {
+			unit._effects.add(EffectType.Frozen);
+		}
+	}
+	return () => {};
 }
 
 export function isPoisoned(unit: UnitState): boolean {
-	return unit._effects.includes(EffectType.Poison);
+	return unit._effects.has(EffectType.Poison);
+}
+
+export function addPoison(unit: UnitState): UndoCallback {
+	if(!unit._effects.has(EffectType.Poison)) {
+		unit._effects.add(EffectType.Poison);
+		return () => {
+			unit._effects.delete(EffectType.Poison);
+		}
+	}
+	return () => {};
+}
+
+export function unPoison(unit: UnitState): UndoCallback {
+	if(unit._effects.has(EffectType.Poison)) {
+		unit._effects.delete(EffectType.Poison);
+		return () => {
+			unit._effects.add(EffectType.Poison);
+		}
+	}
+	return () => {};
 }
 
 export function isBoosted(unit: UnitState): boolean {
-	return unit._effects.includes(EffectType.Boost);
+	return unit._effects.has(EffectType.Boost);
+}
+
+export function addBoost(unit: UnitState): UndoCallback {
+	if(!unit._effects.has(EffectType.Boost)) {
+		unit._effects.add(EffectType.Boost);
+		return () => {
+			unit._effects.delete(EffectType.Boost);
+		}
+	}
+	return () => {};
+}
+
+export function unBoost(unit: UnitState): UndoCallback {
+	if(unit._effects.has(EffectType.Boost)) {
+		unit._effects.delete(EffectType.Boost);
+		return () => {
+			unit._effects.add(EffectType.Boost);
+		}
+	}
+	return () => {};
 }
 
 export function isInTerritory(state: GameState, unit: UnitState) {
@@ -455,7 +523,7 @@ export function isRoadpathAndUsable(state: GameState, unit: UnitState, tileIndex
 
 export function getDefenseBonus(state: GameState, unit: UnitState): number {
 	// Poisoned units cannot recieve defense bonus
-	if (unit._effects.includes(EffectType.Poison)) {
+	if (unit._effects.has(EffectType.Poison)) {
 		return 1;
 	}
 	
@@ -482,7 +550,7 @@ export function getDefenseBonus(state: GameState, unit: UnitState): number {
 			const ownCity = state.tribes[unit._owner]._cities.find(x => x.tileIndex == unit._tileIndex);
 			//  City defense
 			if(ownCity && isSkilledIn(unit, SkillType.Fortify)) {
-				return ownCity._rewards.includes(RewardType.CityWall)? 4 : 1.5;
+				return ownCity._rewards.has(RewardType.CityWall)? 4 : 1.5;
 			}
 			break;
 	}
@@ -522,7 +590,7 @@ export function isSteppable(state: GameState, unit: UnitState, tileOrIndex: Tile
 	const tile = typeof tileOrIndex === "number"? state.tiles[tileOrIndex] : tileOrIndex;
 
 	// Unexplored
-	if (!state._visibleTiles.includes(tile.tileIndex)) {
+	if (!state._visibleTiles[tile.tileIndex]) {
 		return false;
 	}
 
@@ -613,15 +681,15 @@ export function getTribeCrudeScore(state: GameState, owner?: number): number {
 		// Not sure if this is correct
 		// 40 for the city itself, 5 for each reward after the first (border growth is not counted)
 		// Clamping to a max level of 6 to avoid negative values
-		score += city._rewards.length > 1? 40 + Math.max((city._rewards.length - 1), 6) * 5 : 0;
+		score += city._rewards.size > 1? 40 + Math.max((city._rewards.size - 1), 6) * 5 : 0;
 
-		if(city._rewards.includes(RewardType.Park)) {
+		if(city._rewards.has(RewardType.Park)) {
 			score += 300;
 		}
 	}
 
 	// 5 xp per revealed tile
-	score += Object.values(state.tiles).reduce((x, y) => x + (y._explorers.includes(pov.owner)? 1 : 0), 0) * 5;
+	score += state.tiles.filter(x => x._explorers.has(pov.owner)).length * 5;
 
 	// 5 xp per star of cost
 	for(const unit of pov._units) {
@@ -703,27 +771,6 @@ export function getStarExchange(state: GameState, owner: TribeState | number) {
 	if(score < 2000) return 6;
 	if(score < 3000) return 9;
 	return 12;
-}
-
-export function getClosestOwnedTile(state: GameState, tileIndex: number, tileType: TerrainType) {
-	return state._visibleTiles.reduce((best: any, cur: number) => {
-		if(state.tiles[cur]._owner != state.settings._pov || state.tiles[cur].terrainType != tileType) {
-			return best;
-		}
-		const dist = calculateDistance(tileIndex, cur, state.settings.size);
-		return best == null || dist < best[1]? [cur, dist] : best;
-	}, null);
-}
-
-export function getClosestOwnedStructureTile(state: GameState, tileIndex: number, structType: StructureType): [number, number] | null {
-	return state._visibleTiles.reduce((best: any, cur: number) => {
-		if(cur === tileIndex) return best;
-		if(state.tiles[cur]._owner != state.settings._pov || state.structures[cur]?.id != structType) {
-			return best;
-		}
-		const dist = calculateDistance(tileIndex, cur, state.settings.size);
-		return best == null || dist < best[1]? [cur, dist] : best;
-	}, null);
 }
 
 export function getHomeCity(state: GameState, unit: UnitState): CityState | null {
@@ -856,6 +903,7 @@ export function calculateCombat(state: GameState, attacker: UnitState, defender:
 	// Surprise skill makes defender not retaliate
 	const defenseDamage = 
 		isSkilledIn(attacker, SkillType.Surprise) ||
+		isSkilledIn(attacker, SkillType.Freeze)? 0 :
 		isSkilledIn(defender, SkillType.Stiff)? 0 : (Math.round(
 		(defenseForce / totalForce) * getUnitDefense(defender) * 4.5
 	) * 10);
@@ -993,5 +1041,5 @@ export function computeReachablePath(
 }
 
 export function cloneState(state: GameState): GameState {
-    return JSON.parse(JSON.stringify(state));
+    return { ...state };
 }

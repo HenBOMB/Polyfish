@@ -1,3 +1,4 @@
+import { ZobristKeys } from "../zorbist/generateZorbist";
 import { getCityAt, getEnemyAt, getUnitAt } from "./functions";
 import { GameState } from "./states";
 import { AbilityType, CaptureType, ArmyAbilityTypes, MoveType, ResourceType, RewardType, EconomyAbilityTypes, StructureType, TechnologyType, TerrainType, TribeType, UnitType } from "./types";
@@ -29,14 +30,12 @@ export default class Move {
     private src: number | null;
     private target: number | null;
     private type: number | null;
-    readonly costs: number | null;
 
-    constructor(id: MoveType, src: number | null = null, target: number | null = null, type: number | null = null, costs: number | null = null) {
+    constructor(id: MoveType, src: number | null = null, target: number | null = null, type: number | null = null) {
         this.moveType = id;
         this.src = src && src < 0? null : src;
         this.target = target && target < 0? null : target;
         this.type = type && type < 0? null : type;
-        this.costs = costs && costs < 0? null : costs;
     }
 
     execute(_: GameState): CallbackResult {
@@ -92,20 +91,34 @@ export default class Move {
         }
     }
 
-    serialize(): string {
-        const action = this.toAction();
+    static serialize(move: Move): string {
         return JSON.stringify([
-            action.action,
-            this.getSrc(),
-            this.getTarget(),
-            this.moveType == MoveType.Build? this.getType() : null,
-            this.moveType == MoveType.Summon? this.getType() : null,
-            this.moveType == MoveType.Research? this.getType() : null,
-            this.moveType == MoveType.Ability? this.getType() : null,
-            this.moveType == MoveType.Reward? this.getType() : null,
-        ].filter(Boolean));
+            move.moveType,
+            move.hasSrc()? move.getSrc() : null,
+            move.hasTarget()? move.getTarget() : null,
+            move.moveType == MoveType.Build? move.getType() : null,
+            move.moveType == MoveType.Summon? move.getType() : null,
+            move.moveType == MoveType.Research? move.getType() : null,
+            move.moveType == MoveType.Ability? move.getType() : null,
+            move.moveType == MoveType.Reward? move.getType() : null,
+        ]);
     }
 
+    static deserialize(ser: string): Action {
+        const list = JSON.parse(ser) as string[];
+        const [ action, src, target, struct, unit, tech, ability, reward ] = list.map(x => Number(x));
+        return {
+            action,
+            from: src,
+            to: target,
+            struct: struct,
+            unit: unit,
+            tech: tech,
+            ability: ability,
+            reward: reward,
+        };
+    }
+    
     getSrc(): number {
         return this.src!;
     }
@@ -130,98 +143,7 @@ export default class Move {
         return this.type !== null;
     }
 
-    toAction(): Action {
-        const action: Action = {
-            action: this.moveType,
-            from: null,
-            to: null,
-            struct: null,
-            unit: null,
-            tech: null,
-            ability: null,
-            reward: null
-        };
-
-        try {
-            switch (this.moveType) {
-                case MoveType.Attack:
-                case MoveType.Step:
-                    action.from = this.getSrc();
-                    action.to = this.getTarget();
-                    if(!action.from || !action.to) {
-                        throw Error(`src: ${action.from}, to: ${action.to}`);
-                    }
-                    break;
-                case MoveType.Summon:
-                    action.from = this.getSrc();
-                    action.unit = this.getType<UnitType>();
-                    if(!action.from || !action.unit) {
-                        throw Error(`src: ${action.from}, type: ${action.unit}`);
-                    }
-                    break;
-                case MoveType.Research:
-                    action.tech = this.getType<TechnologyType>();
-                    if(!action.tech) {
-                        throw Error(`type: ${action.tech}`);
-                    }
-                    break;
-                case MoveType.Harvest:
-                    action.to = this.getTarget();
-                    if(!action.to) {
-                        throw Error(`to: ${action.to}`);
-                    }
-                    break;
-                case MoveType.Build:
-                    action.to = this.getTarget();
-                    action.struct = this.getType<StructureType>();
-                    if(!action.to || !action.struct) {
-                        throw Error(`src: ${action.to}, type: ${action.struct}`);
-                    }
-                    break;
-                case MoveType.Reward:
-                    action.reward = this.getType<RewardType>();
-                    if(!action.reward) {
-                        throw Error(`type: ${action.reward}`);
-                    }
-                    break;
-                case MoveType.Capture:
-                    action.from = this.getSrc();
-                    if(!action.from) {
-                        throw Error(`src: ${action.from}`);
-                    }
-                    break;
-                case MoveType.Ability:
-                    action.ability = this.getType<AbilityType>();
-                    if(!action.ability) {
-                        throw Error(`type: ${action.ability}`);
-                    }
-                    if(EconomyAbilityTypes[action.ability]) {
-                        action.to = this.getTarget();
-                        if(!action.to) {
-                            throw Error(`to: ${action.to}`);
-                        }
-                    }
-                    else if(ArmyAbilityTypes.includes(action.ability)) {
-                        action.from = this.getSrc();
-                        if(!action.from) {
-                            throw Error(`from: ${action.from}`);
-                        }
-                    }
-                    else {
-                        throw Error(`missing: ${AbilityType[this.getType<AbilityType>()]}`);
-                    }
-                    throw 'check notes';
-                    break;
-                case MoveType.EndTurn:
-                    break;
-                default:
-                    throw Error(`wtf`)
-                    break;
-            }
-        } catch (error: any) {
-            throw Error(`${MoveType[this.moveType]} invalid, ${error.message || error}`);
-        }
-        
-        return action;
+    hash(state: GameState, keys: ZobristKeys): bigint {
+        throw 'Hash not implemented';
     }
 }

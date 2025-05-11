@@ -134,7 +134,7 @@ export default class NetworkManager {
                         // Java version also checks tribe.isVisible(i,j) and notEnemy
                         // Adapt this predicate based on your game's specific rules for trade routes
                         return (tile.terrainType === TerrainType.Water || tile.terrainType === TerrainType.Ocean) &&
-                                (s.tiles[tileIdx]._owner === this.pov.owner || s.tiles[tileIdx]._owner === -1); // Own or neutral water
+                                (s.tiles[tileIdx]._owner === this.pov.owner || !s.tiles[tileIdx]._owner); // Own or neutral water
                                 // && s.getVisibility(tileIdx, this.tribeOwner); // If visibility matters
                     },
                     false,
@@ -346,7 +346,7 @@ export default class NetworkManager {
                             (s, tileIdx) => {
                                 const t = s.tiles[tileIdx];
                                 return (t.terrainType === TerrainType.Water || t.terrainType === TerrainType.Ocean) &&
-                                       (s.tiles[tileIdx]._owner === pov.owner || s.tiles[tileIdx]._owner === -1);
+                                       (s.tiles[tileIdx]._owner === pov.owner || !s.tiles[tileIdx]._owner);
                             },
                             false,
                             MAX_PORT_TRADE_DISTANCE);

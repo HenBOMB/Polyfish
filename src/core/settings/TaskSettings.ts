@@ -39,7 +39,7 @@ export const TaskSettings: Record<TaskType, {
     [TaskType.Explorer]: {
         structureType: StructureType.EyeOfGod,
         task: (state: GameState) => {
-            return getLighthouses(state).every(x => state.tiles[x]._explorers.includes(state.settings._pov));
+            return getLighthouses(state).every(x => state.tiles[x]._explorers.has(state.settings._pov));
         }
     },
     [TaskType.Killer]: {
@@ -61,3 +61,6 @@ export const TaskSettings: Record<TaskType, {
         }
     }
 }
+
+export const IsStructureTask: Record<StructureType, boolean> = Object.values(TaskSettings)
+    .reduce((a, b) => ({ ...a, [b.structureType]: true }), {}) as any;

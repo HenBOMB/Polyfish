@@ -1,10 +1,12 @@
 import { Logger } from "../../polyfish/logger";
-import { getTrueUnitAt, getUnitAt } from "../functions";
+import { getEnemyAt, getTrueEnemyAt, getTrueUnitAt, getUnitAt, unInvisible } from "../functions";
 import Move, { CallbackResult } from "../move";
-import { MoveType } from "../types";
+import { EffectType, MoveType } from "../types";
 import { ArmyMovesGenerator } from "../moves";
 import { GameState } from "../states";
-import { EffectType, UnitType } from "../types";
+import { UnitType } from "../types";
+import { ZobristKeys } from "../../zorbist/generateZorbist";
+import { xorUnit } from "../../zorbist/hasher";
 
 export default class Step extends Move {
     constructor(src: number, target: number) {
@@ -21,14 +23,11 @@ export default class Step extends Move {
             // If cloak is on tile, then it must be revealed
             if(unitType == UnitType.Cloak) {
                 if(state.settings.areYouSure) {
-                    let effectIndex = unit._effects.indexOf(EffectType.Invisible);
                     const cloak = getTrueUnitAt(state, target)!;
-                    cloak._effects.splice(effectIndex, 1);
+                    const undo = unInvisible(cloak);
                     return {
                         rewards: [],
-                        undo: () => {
-                            cloak._effects.splice(effectIndex, 0, EffectType.Invisible);
-                        }
+                        undo,
                     };
                 }
                 else {
@@ -41,5 +40,27 @@ export default class Step extends Move {
         }
 
         return ArmyMovesGenerator.computeStep(state, unit, target);
+    }
+
+    hashUndo(state: GameState, keys: ZobristKeys) {
+        const source = this.getSrc();
+        const stepper = getUnitAt(state, source)!;
+        state.hash = xorUnit(state.hash, stepper, keys);
+    }
+
+    hashApply(state: GameState, keys: ZobristKeys) {
+        const target = this.getTarget();
+        const enemyCloak = getEnemyAt(state, target);
+
+        // this means the unit tried to move onto a tile where there was an invisible cloak
+        // the cloak gets revealed so the pov now knows and must update the entire unit tile
+        if(enemyCloak) {
+            const stepper = getUnitAt(state, this.getSrc())!;
+            state.hash = xorUnit(state.hash, stepper, keys);
+            state.hash = xorUnit(state.hash, enemyCloak, keys);
+        }
+        else {
+            state.hash = xorUnit(state.hash, getUnitAt(state, target)!, keys);
+        }
     }
 }
