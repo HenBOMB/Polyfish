@@ -1,4 +1,4 @@
-import { getPovTribe } from "../../functions";
+import { consumeResource, modifyTerrain, spendStars } from "../../actions";
 import { CallbackResult } from "../../move";
 import { GameState } from "../../states";
 import { AbilityType, ResourceType, TerrainType } from "../../types";
@@ -10,29 +10,15 @@ export default class BurnForest extends Ability {
     }
 
     execute(state: GameState): CallbackResult {
-        const pov = getPovTribe(state);
-        const tile = state.tiles[this.getTarget()];
-        const resource = state.resources[tile.tileIndex];
-
-        tile.terrainType = TerrainType.Field;
-        pov._stars -= 2;
-
-        state.resources[tile.tileIndex] = {
-            id: ResourceType.Crop,
-            tileIndex: tile.tileIndex
-        }
-
+        const undoTerrain = modifyTerrain(state, this.getTarget(), TerrainType.Field);
+        const undoStars = spendStars(state, 2);
+        const undoResource = consumeResource(state, this.getTarget(), ResourceType.Crop);
         return {
             rewards: [],
             undo: () => {
-                if(!resource) {
-                    delete state.resources[tile.tileIndex];
-                }
-                else {
-                    state.resources[tile.tileIndex] = resource;
-                }
-                pov._stars += 2;
-                tile.terrainType = TerrainType.Forest;
+                undoResource();
+                undoStars();
+                undoTerrain();
             }
         };
     }

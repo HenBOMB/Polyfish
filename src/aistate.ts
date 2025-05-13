@@ -1,7 +1,7 @@
 import { readFileSync } from "fs";
 import { GameState } from "./core/states";
-import { getPovTribe, getUnitAt, isResourceVisible, getMaxHealth, getCityAt, getCityProduction, getRealUnitSettings, isTempleStructure, getNeighborIndexes, getEnemyAt, isTechUnlocked, isAdjacentToEnemy, getRealUnitType, getTribeProduction, indexToCoord, isPoisoned, isInvisible, isBoosted, isFrozen, getTechSettings } from "./core/functions";
-import { AbilityType, CaptureType, RewardType, StructureType, TechnologyType, UnitType } from "./core/types";
+import { getPovTribe, getUnitAt, isResourceVisible, getMaxHealth, getCityAt, getCityProduction, getRealUnitSettings, isTempleStructure, getNeighborIndexes, getEnemyAt, isTechUnlocked, isAdjacentToEnemy, getRealUnitType, getTribeProduction, getTechSettings, hasEffect } from "./core/functions";
+import { AbilityType, CaptureType, EffectType, RewardType, StructureType, TechnologyType, UnitType } from "./core/types";
 import Move, { CallbackResult } from "./core/move";
 import { MoveType } from "./core/types";
 import { TechnologyUnlockable } from "./core/settings/TechnologySettings";
@@ -127,10 +127,10 @@ function extractTile(state: GameState, tileIndex: number, force = false): number
         safeFloat(unitIsOurs? unitIsOurs._moved : 0),
         safeFloat(unitIsOurs? unitIsOurs._attacked : 0),
         safeFloat(unitIsOurs? Math.min(unitIsOurs.kills, 3) / 3 : 0),
-        safeFloat(unitIsOurs? isInvisible(unitIsOurs) : 0),
-        safeFloat(unitIsOurs? isPoisoned(unitIsOurs) : 0),
-        safeFloat(unitIsOurs? isBoosted(unitIsOurs) : 0),
-        safeFloat(unitIsOurs? isFrozen(unitIsOurs) : 0),
+        safeFloat(unitIsOurs? hasEffect(unitIsOurs, EffectType.Invisible) : 0),
+        safeFloat(unitIsOurs? hasEffect(unitIsOurs, EffectType.Poison) : 0),
+        safeFloat(unitIsOurs? hasEffect(unitIsOurs, EffectType.Boost) : 0),
+        safeFloat(unitIsOurs? hasEffect(unitIsOurs, EffectType.Frozen) : 0),
         // Hidden enemy[cloak] nearby (its invisible to us but we can still detect it via [Skilltype.Detect])
         safeFloat(unitIsOurs? isAdjacentToEnemy(state, tile, UnitType.Cloak) : 0),
 
@@ -142,10 +142,10 @@ function extractTile(state: GameState, tileIndex: number, force = false): number
         safeFloat(unitIsEnemy? unitIsEnemy._moved : 0),
         safeFloat(unitIsEnemy? unitIsEnemy._attacked : 0),
         safeFloat(unitIsEnemy? Math.min(unitIsEnemy.kills, 3) / 3 : 0),
-        safeFloat(unitIsEnemy? isInvisible(unitIsEnemy) : 0),
-        safeFloat(unitIsEnemy? isPoisoned(unitIsEnemy) : 0),
-        safeFloat(unitIsEnemy? isBoosted(unitIsEnemy) : 0),
-        safeFloat(unitIsEnemy? isFrozen(unitIsEnemy) : 0),
+        safeFloat(unitIsEnemy? hasEffect(unitIsEnemy, EffectType.Invisible) : 0),
+        safeFloat(unitIsEnemy? hasEffect(unitIsEnemy, EffectType.Poison) : 0),
+        safeFloat(unitIsEnemy? hasEffect(unitIsEnemy, EffectType.Boost) : 0),
+        safeFloat(unitIsEnemy? hasEffect(unitIsEnemy, EffectType.Frozen) : 0),
     ];
 }
 

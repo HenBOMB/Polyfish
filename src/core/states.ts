@@ -44,8 +44,6 @@ export interface ResourceState {
 }
 
 export interface UnitState {
-	x: number;
-	y: number;
 	_unitType: UnitType;
 	_health: number;
 	veteran?: boolean;
@@ -80,6 +78,9 @@ export interface CityState {
 	_production: number;
 	_owner: number;
 	_rewards: Set<RewardType>;
+	/**
+	 * The cities OUTER territory, city tileIndex where the city resides is not included
+	 */
 	_territory: number[];
 	_walls?: boolean;
 	_unitCount: number;
@@ -87,6 +88,7 @@ export interface CityState {
 }
 
 export interface TribeState {
+	hash: bigint;
 	owner: number;
 	username: string;
 	_builtUniqueStructures: Set<StructureType>;
@@ -107,14 +109,12 @@ export interface TribeState {
 	_resignedTurn: number;
 }
 
-
 export interface TechnologyState { 
 	techType: TechnologyType,
 	discovered: boolean,
 }
 
 export interface GameState {
-	hash: bigint;
 	settings: {
 		size: number;
 		_turn: number;

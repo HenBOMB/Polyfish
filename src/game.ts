@@ -1,12 +1,13 @@
 import { GameState } from "./core/states";
 import { STARTING_OWNER_ID } from "./core/gameloader";
 import { MoveGenerator } from "./core/moves";
-import { cloneState, getCityProduction, getPovTribe, isFrozen, isGameOver, tryDiscoverRewardOtherTribes } from "./core/functions";
+import { cloneState, getCityProduction, getPovTribe, hasEffect, isGameOver, tryDiscoverRewardOtherTribes } from "./core/functions";
 import Move, {UndoCallback } from "./core/move";
 import { MoveType } from "./core/types";
 import { EffectType } from "./core/types";
 import NetworkManager from "./core/network";
 import PoseManager from "./core/poser";
+import { gainStars, tryRemoveEffect } from "./core/actions";
 
 export default class Game {
     initialState: GameState;
@@ -140,18 +141,12 @@ export default class Game {
             }
         }
 
-        // New tribe POV
-
-        const oldStars = pov._stars;
+        // NEW TRIBE POV //
 
         // Reward tribe with its production if its not the first turn
         if(state.settings._turn > 1) {
-            pov._stars += getCityProduction(state, ...pov._cities);
+            chain.push(gainStars(state, getCityProduction(state, ...pov._cities)));
         }
-        
-        chain.push(() => {
-            pov._stars = oldStars;
-        });
 
         // Update all unit states
 		for (let i = 0; i < pov._units.length; i++) {
@@ -166,11 +161,8 @@ export default class Game {
 
             // Frozen units get unfrozen but that consumes their turn
             // not in wiki but i assume this is how it works from gameplay
-			if(isFrozen(unit)) {
-                unit._effects.delete(EffectType.Frozen);
-                chain.push(() => {
-                    unit._effects.add(EffectType.Frozen);
-                });
+			if(hasEffect(unit, EffectType.Frozen)) {
+                chain.push(tryRemoveEffect(state, unit, EffectType.Frozen));
                 unit._moved = unit._attacked = true;
 				continue;
 			}

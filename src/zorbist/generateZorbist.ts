@@ -22,16 +22,16 @@ const MAX_GAME_TURNS = MODEL_CONFIG.max_turns + 1;
 const MAX_CITY_UNIT_COUNT = MODEL_CONFIG.max_structure_level + 1;
 
 export interface ZobristKeys {
-    turn: bigint[]; // number[]
-    pov: bigint[]; // ownerID[]
-    gameOver: bigint[]; // boolean[]
+    turn: bigint[];                 // number[]
+    pov: bigint[];                  // ownerID[]
+    gameOver: bigint[];             // boolean[]
 
 	// *[tileIndex] -> ...
 
     tiles: {
-        terrainType: bigint[];       // TerrainType[]
-        explored: [bigint, bigint];  // bool[]
-        owner: bigint[];             // ownerID[]
+        terrainType: bigint[];      // TerrainType[]
+        explored: [bigint, bigint]; // bool[]
+        owner: bigint[];            // ownerID[]
     }[];
 
     // Units
@@ -47,15 +47,14 @@ export interface ZobristKeys {
     }[];
 
     // Structures
-	// StructureType[]
-    structure: bigint[][]; 
+    structure: bigint[][];          // StructureType[]
 
     // Resources
-	// ResourceType[]
-    resource: bigint[][];
+    resource: bigint[][];           // ResourceType[]    
 
     // Cities
     city: {
+        level: bigint[];            // number[]
         unitCount: bigint[];        // number[]
         riot: [bigint, bigint];     // bool[]
         owner: bigint[];            // ownerID[]
@@ -63,10 +62,10 @@ export interface ZobristKeys {
 
     // Tribes/Players
     player: {
-        builtUniqueStructures: bigint[]; // StructureType[]
-        stars: bigint[]; 				 // number[]
-        tribeType: bigint[]; 			 // TribeType[]
-        hasTech: bigint[]; 				 // TechnologyType[]
+        unique: bigint[];           // StructureType[]
+        stars: bigint[];            // number[]
+        tribeType: bigint[];        // TribeType[]
+        hasTech: bigint[];          // TechnologyType[]
     }[];
 }
 
@@ -94,6 +93,7 @@ function generateAllZobristKeys(): ZobristKeys {
         terrainType: initializeKeys(terrainTypeCount, generateRandom64BitBigInt),
     }));
 
+    // Units
     keys.units = initializeKeys(MAX_TILES, () => ({
         owner: initializeKeys(MAX_PLAYERS, generateRandom64BitBigInt),
         type: initializeKeys(unitTypeCount, generateRandom64BitBigInt),
@@ -118,14 +118,15 @@ function generateAllZobristKeys(): ZobristKeys {
 
     // Cities
     keys.city = initializeKeys(MAX_TILES, () => ({
+        level: initializeKeys(MAX_CITY_UNIT_COUNT, generateRandom64BitBigInt),
         unitCount: initializeKeys(MAX_CITY_UNIT_COUNT, generateRandom64BitBigInt),
         riot: initializeKeys(2, generateRandom64BitBigInt) as [bigint, bigint],
         owner: initializeKeys(MAX_PLAYERS, generateRandom64BitBigInt),
     }));
 
-    // Players/Tribes
+    // Players
     keys.player = initializeKeys(MAX_PLAYERS, () => ({
-        builtUniqueStructures: initializeKeys(structureTypeCount, generateRandom64BitBigInt),
+        unique: initializeKeys(structureTypeCount, generateRandom64BitBigInt),
         stars: initializeKeys(MAX_STARS_PER_PLAYER, generateRandom64BitBigInt),
         tribeType: initializeKeys(tribeTypeCount, generateRandom64BitBigInt),
         hasTech: initializeKeys(technologyTypeCount, generateRandom64BitBigInt),
@@ -145,6 +146,8 @@ export function generateFile() {
     }, 2);
 
     const fileContent = `// This file is auto-generated. Do not edit manually.
+import { ZobristKeys } from "./generateZorbist";
+
 export const zobristKeyStrings = ${stringifiedZobristKeys};
 
 function parseZobristKeys(obj: any): any {
@@ -166,7 +169,7 @@ function parseZobristKeys(obj: any): any {
     return newObj;
 }
 
-export const zobristKeys = parseZobristKeys(zobristKeyStrings);
+export const zobristKeys: ZobristKeys = parseZobristKeys(zobristKeyStrings);
 `;
     
     fs.writeFileSync(outputFilePath, fileContent);

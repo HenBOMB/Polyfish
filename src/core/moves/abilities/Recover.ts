@@ -12,7 +12,7 @@ export default class Recover extends Ability {
 
     execute(state: GameState): CallbackResult {
         const unit = getUnitAt(state, this.getSrc())!;
-        const undoHeal = healUnit(unit, isInTerritory(state, unit)? 4 : 2);
+        const undoHeal = healUnit(state, unit, isInTerritory(state, unit)? 4 : 2);
         return {
             rewards: [],
             undo: () => {

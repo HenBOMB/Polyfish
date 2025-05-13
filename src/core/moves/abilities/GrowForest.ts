@@ -1,3 +1,4 @@
+import { modifyTerrain, spendStars } from "../../actions";
 import { getPovTribe } from "../../functions";
 import { CallbackResult } from "../../move";
 import { GameState } from "../../states";
@@ -10,18 +11,14 @@ export default class GrowForest extends Ability {
     }
 
     execute(state: GameState): CallbackResult {
-        const target = this.getTarget();
-        const pov = getPovTribe(state);
-        const tile = state.tiles[target];
-
-        tile.terrainType = TerrainType.Forest;
-        pov._stars -= 5;
+        const undoTerrain = modifyTerrain(state, this.getTarget(), TerrainType.Forest);
+        const undoStars = spendStars(state, 5);
 
         return {
             rewards: [],
             undo: () => {
-                pov._stars += 5;
-                tile.terrainType = TerrainType.Field;
+                undoStars();
+                undoTerrain();
             }
         };
     }

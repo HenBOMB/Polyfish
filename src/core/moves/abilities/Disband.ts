@@ -1,5 +1,5 @@
-import { removeUnit } from "../../actions";
-import { getPovTribe, getRealUnitSettings, getUnitAt } from "../../functions";
+import { gainStars, removeUnit } from "../../actions";
+import { getRealUnitSettings, getUnitAt } from "../../functions";
 import { CallbackResult } from "../../move";
 import { GameState } from "../../states";
 import { AbilityType } from "../../types";
@@ -12,14 +12,14 @@ export default class Disband extends Ability {
 
     execute(state: GameState): CallbackResult {
         const unit = getUnitAt(state, this.getSrc())!;
-        const tribe = getPovTribe(state);
+
         const undoRemove = removeUnit(state, unit);
-        const cost = Math.floor(getRealUnitSettings(unit).cost / 2);
-        tribe._stars += cost;
+        const undoStars = gainStars(state, Math.floor(getRealUnitSettings(unit).cost / 2));
+
         return {
             rewards: [],
             undo: () => {
-                tribe._stars -= cost;
+                undoStars();
                 undoRemove()
             }
         }

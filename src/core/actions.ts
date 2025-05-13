@@ -1,61 +1,73 @@
-import { getNeighborTiles, calaulatePushablePosition, getNeighborIndexes, computeReachablePath, isSkilledIn, getPovTribe, getTrueUnitAt, getHomeCity, getRulingCity, getMaxHealth, getEnemiesInRange, getEnemiesNearTile, isFrozen, calculateCombat, getUnitRange, getTrueEnemyAt, calculateAttack, isSteppable, isWaterTerrain, isPoisoned, getCapitalCity, getLighthouses, unPoison, addFreeze } from "./functions";
+import { getNeighborTiles, calaulatePushablePosition, getNeighborIndexes, computeReachablePath, isSkilledIn, getPovTribe, getTrueUnitAt, getHomeCity, getRulingCity, getMaxHealth, getEnemiesNearTile, calculateCombat, getUnitRange, getTrueEnemyAt, calculateAttack, isSteppable, isWaterTerrain, getCapitalCity, getLighthouses, getCityOwningTile, hasEffect, getEnemiesInRange, isAquaticOrCanFly, calculateDistance } from "./functions";
 import { ArmyMovesGenerator, EconMovesGenerator } from "./moves";
 import Move, { Branch, CallbackResult, UndoCallback } from "./move";
 import { ResourceSettings } from "./settings/ResourceSettings";
 import { StructureSettings } from "./settings/StructureSettings";
 import { UnitSettings } from "./settings/UnitSettings";
 import { CityState, GameState, StructureState, UnitState } from "./states";
-import { UnitType, StructureType, SkillType, TerrainType, EffectType, ClimateType, TribeType } from "./types";
+import { UnitType, StructureType, SkillType, TerrainType, EffectType, ClimateType, TribeType, ResourceType } from "./types";
 import { IsStructureTask } from "./settings/TaskSettings";
+import { xorCity, xorPlayer, xorResource, xorStructure, xorTile, xorUnit } from "../zorbist/hasher";
+import { Logger } from "../polyfish/logger";
 
-export function addPopulationToCity(state: GameState, targetCity: CityState, amount: number): CallbackResult {
+export function addPopulationToCity(state: GameState, city: CityState, amount: number): CallbackResult {
+    const pov = getPovTribe(state);
+
     if(!amount) {
         return null;
     }
     
-    const cityStruct = state.structures[targetCity.tileIndex]!;
+    const cityStruct = state.structures[city.tileIndex]!;
     
-    targetCity._population += amount;
-    targetCity._progress += amount;
+    city._population += amount;
+    city._progress += amount;
 
-    const next = targetCity._level + 1;
+    const next = city._level + 1;
     
-    if(targetCity._progress >= next) {
+    if(city._progress >= next) {
+        xorCity.level(pov, city, city._level);
+
         cityStruct._level++;
-        targetCity._level++;
-        targetCity._progress -= next;
-        targetCity._production++;
+        city._level++;
+        city._progress -= next;
+        city._production++;
 
-        let rewards = EconMovesGenerator.rewards(targetCity);
+        let rewards = EconMovesGenerator.rewards(city);
         let lol = false;
 
-        if(targetCity._progress - next >= (next + 1)) {
-            console.warn('LMAOOO');
+        if(city._progress - next >= (next + 1)) {
+            console.warn('MEGA CHAIN!');
             lol = true;
             cityStruct._level++;
-            targetCity._level++;
-            targetCity._progress -= next + 1;
-            targetCity._production++;
-            rewards.push(...EconMovesGenerator.rewards(targetCity));
+            city._level++;
+            city._progress -= next + 1;
+            city._production++;
+            rewards.push(...EconMovesGenerator.rewards(city));
         }
+
+        xorCity.level(pov, city, city._level);
 
         return {
             rewards,
             undo: () => {
+                xorCity.level(pov, city, city._level);
+
                 if(lol) {
-                    targetCity._production--;
-                    targetCity._progress += next + 1;
-                    targetCity._level--;
+                    city._production--;
+                    city._progress += next + 1;
+                    city._level--;
                     cityStruct._level--;
                 }
 
-                targetCity._production--;
-                targetCity._progress += next;
-                targetCity._level--;
+                city._production--;
+                city._progress += next;
+                city._level--;
                 cityStruct._level--;
 
-                targetCity._progress -= amount;
-                targetCity._population -= amount;
+                xorCity.level(pov, city, city._level);
+
+                city._progress -= amount;
+                city._population -= amount;
             },
         }
     }
@@ -63,275 +75,195 @@ export function addPopulationToCity(state: GameState, targetCity: CityState, amo
     return {
         rewards: [],
         undo: () => {
-            targetCity._progress -= amount;
-            targetCity._population -= amount;
+            city._progress -= amount;
+            city._population -= amount;
         }
     }
 }
 
-// Not sure if this method is 100% accurate
-
-export function addMissingConnections(state: GameState, targetCity: CityState, tileIndex: number): CallbackResult {
-    // If we built a port, we must connect it to any nearby ports and reward connected cities
-    const structType = state.structures[tileIndex]?.id;
-    if(structType != StructureType.Port) return null;
+export function modifyTerrain(state: GameState, tileIndex: number, terrainType: TerrainType): UndoCallback {
+    const tile = state.tiles[tileIndex];
+    const oTerrainType = tile.terrainType;
     
-    const tribe = state.tribes[state.settings._pov];
-    const undoChain: UndoCallback[] = [];
-    const rewards: Move[] = [];
+    xorTile.terrain(state, tileIndex, oTerrainType, terrainType);
+    tile.terrainType = terrainType;
 
-    // max range 5 tiles
-    const nearbyStructureIndexes = getNeighborIndexes(state, tileIndex, 5);
-    const connectedPorts: [number, number[]][] = [];
-    const connectedCities: [number, number[]][] = [];
-    const potentialNewConnections: [CityState, [number, number[]]][] = [];
-    let rewardedCities: CityState[] = [];
-    const isTargetCapital = state.tiles[targetCity.tileIndex].capitalOf > 0;
+    return () => {
+        tile.terrainType = oTerrainType;
+        xorTile.terrain(state, tileIndex, terrainType, oTerrainType);
+    }
+}
+
+export function consumeResource(state: GameState, tileIndex: number, replaceType?: ResourceType): UndoCallback {
+    const oldResource = state.resources[tileIndex]!;
+    const newResource = replaceType? replaceType : ResourceType.None;
+
+    xorResource(state, tileIndex, oldResource.id, newResource);
+
+    if(replaceType) {
+        state.resources[tileIndex] = {
+            id: replaceType,
+            tileIndex
+        }
+    }
+    else {
+        delete state.resources[tileIndex];
+    }
+
+    return () => {
+        xorResource(state, tileIndex, newResource, oldResource.id);
+        state.resources[tileIndex] = oldResource;
+    }
+}
+
+export function createStructure(state: GameState, tileIndex: number, strctureType: StructureType, level = 1): UndoCallback {
+    // specific to ruins -> aquarion free city
+    const oldStruct = state.structures[tileIndex];
     
-    for (let i = 0; i < nearbyStructureIndexes.length; i++) {
-        const structTileIndex = nearbyStructureIndexes[i];
-        const tile = state.tiles[structTileIndex];
-        
-        const nearbyStructure = state.structures[structTileIndex];
-        
-        // If there is any structure and we own it
-        if(!nearbyStructure || tile._owner != tribe.owner) continue;
-        
-        const ownerCity = getRulingCity(state, structTileIndex);
-        
-        if(!ownerCity) continue;
-        
-        const isOwnerCapital = state.tiles[ownerCity.tileIndex].capitalOf > 0;
-        
-        // 3 is for types TerrainType.Water (1) and TerrainType.Ocean (2)
-        const shortestPathToStruct = computeReachablePath(state, tileIndex, structTileIndex, 
-            (state, index) => state.tiles[index].terrainType < 3);
-        
-        // If struct is not reachable
-        if(shortestPathToStruct.length < 1 || shortestPathToStruct.length > 5) continue;
-        
-        if(nearbyStructure.id == StructureType.Port) {
-            // Nearby port is not connected!
-            if((targetCity._connectedToCapital || isTargetCapital) && (!ownerCity._connectedToCapital && !isOwnerCapital)) {
-                // console.log('reconnect!');
-                if(!potentialNewConnections.some(x => x[0] == ownerCity)) {
-                    potentialNewConnections.push([ownerCity, [structTileIndex, shortestPathToStruct]]);
-                }
-            }
-            // Connect to the port
-            else if((!targetCity._connectedToCapital && !isTargetCapital) 
-                && (ownerCity._connectedToCapital || isOwnerCapital)
-            ) {
-                // console.log('reward!');
-                connectedPorts.push([structTileIndex, shortestPathToStruct]);
-                if(!rewardedCities.includes(ownerCity)) {
-                    rewardedCities.push(ownerCity);
-                }
-            }
-            // If its not a capital
-            else {
-                // console.log('just route!');
-                connectedPorts.push([structTileIndex, shortestPathToStruct]);
-            }
-        }
-        // If we found one of our cities
-        else if(nearbyStructure.id == StructureType.Village) {
-            // Nearby city is not connected!
-            if((targetCity._connectedToCapital || isTargetCapital) && (!ownerCity._connectedToCapital && !isOwnerCapital)) {
-                if(!potentialNewConnections.some(x => x[0] == ownerCity)) {
-                    potentialNewConnections.push([ownerCity, [structTileIndex, shortestPathToStruct]]);
-                }
-            }
-            // Connect to the city
-            if((!targetCity._connectedToCapital && !isTargetCapital) 
-                && (ownerCity._connectedToCapital || isOwnerCapital)
-            ) {
-                connectedCities.push([structTileIndex, shortestPathToStruct]);
-                if(!rewardedCities.includes(ownerCity)) {
-                    rewardedCities.push(ownerCity);
-                }
-            }
-        }
-    }
+    const structure: StructureState = {
+        id: strctureType,
+        _level: level,
+        turn: state.settings._turn,
+        tileIndex,
+        reward: 0,
+    };
     
-    if(!nearbyStructureIndexes.length || (!connectedPorts.length && !connectedCities.length)) {
-        return null;
-    }
-
-    // If we were not connected and now we are
-    // Capitals go first
-    if(!targetCity._connectedToCapital && rewardedCities.length) {
-        if(state.tiles[targetCity.tileIndex].capitalOf > 0) {
-            rewardedCities = [targetCity, ...rewardedCities];
-        }
-        else {
-            rewardedCities.push(targetCity);
-        }
-        for(let i = 0; i < potentialNewConnections.length; i++) {
-            const city = potentialNewConnections[i][0];
-            if(state.tiles[city.tileIndex].capitalOf > 0) {
-                rewardedCities = [city, ...rewardedCities];
-            }
-            else {
-                rewardedCities.push(city);
-                connectedPorts.push(potentialNewConnections[i][1]);
-            }
-        }
-    }
-
-    // If more than 1 city was connected, apply rewards
-    if(rewardedCities.length > 1) {
-        // Calculate it anyway
-        for (let i = 0; i < rewardedCities.length; i++) {
-            const branch = addPopulationToCity(state, rewardedCities[i], 1);
-            if(branch) {
-                undoChain.push(branch.undo);
-                rewards.push(...branch.rewards);
-            }
-        }
-        
-        // Modify only unconnected cities
-        const unconnectedCities = rewardedCities.filter(x => !x._connectedToCapital);
-        for (let i = 0; i < unconnectedCities.length; i++) {
-            unconnectedCities[i]._connectedToCapital = true;
-        }
-        undoChain.push(() => {
-            for (let i = 0; i < unconnectedCities.length; i++) {
-                unconnectedCities[i]._connectedToCapital = false;
-            }
-        });
-    }
-
-    // Apply missing routes
-    const routedTiles: number[] = [];
-    for (let i = 0; i < connectedPorts.length; i++) {
-        // If the city's path is closer than the port's path, connect the city instead of the port
-        const index = connectedCities.findIndex(x => connectedPorts[i][0] == state.tiles[x[0]]._rulingCityIndex)
-        if(index > -1) {
-            if(connectedCities[index][1].length < connectedPorts[i][1].length) {
-                console.log('LMAO CITY PATH IS CLOSER');
-                connectedCities[index][1].forEach(x => {
-                    const tile = state.tiles[x];
-                    if(tile.hasRoute) return;
-                    routedTiles.push(x);
-                    state.tiles[x].hasRoute = true;
-                });
-                connectedCities.splice(index, 1);
-                continue;
-            }
-            else {
-                console.log('LMAO PORT PATH IS CLOSER');
-            }
-        }
-        connectedPorts[i][1].forEach(x => {
-            if(state.tiles[x].hasRoute) return;
-            routedTiles.push(x);
-            state.tiles[x].hasRoute = true;
-        });
-    }
+    xorStructure(state, tileIndex, oldStruct? oldStruct.id : StructureType.None, strctureType);
+    state.structures[tileIndex] = structure;
     
-    // Try to connect any remaining unconnected cities
-    for (let i = 0; i < connectedCities.length; i++) {
-        connectedCities[i][1].forEach(x => {
-            if(state.tiles[x].hasRoute) return;
-            routedTiles.push(x);
-            state.tiles[x].hasRoute = true;
-        });
+    return () => {
+        xorStructure(state, tileIndex, strctureType, oldStruct? oldStruct.id : StructureType.None);
+        state.structures[tileIndex] = oldStruct;
+    }
+}
+
+export function destroyStructure(state: GameState, tileIndex: number): UndoCallback {
+    const pov = getPovTribe(state);
+    const struct = state.structures[tileIndex]!;
+
+    xorStructure(state, tileIndex, struct.id, StructureType.None);
+
+    if(struct.id === StructureType.Ruin) {
+        delete state.structures[tileIndex];
+        return () => {
+            state.structures[tileIndex] = struct;
+            xorStructure(state, tileIndex, StructureType.None, struct.id);
+        }
     }
 
-    undoChain.push(() => {
-        for (let i = 0; i < routedTiles.length; i++) {
-            state.tiles[routedTiles[i]].hasRoute = false;
-        }
-    });
+    const city = getCityOwningTile(state, tileIndex)!;
+    const settings = StructureSettings[struct.id];
 
-    return {
-        rewards,
-        undo: () => {
-            undoChain.reverse().forEach(x => x());
+    delete state.structures[tileIndex];
+
+    if(settings.rewardPop) {
+        city._population -= settings.rewardPop;
+        city._progress -= settings.rewardPop;
+        if(city._progress < 0) {
+            xorCity.level(pov, city, city._level);
+            city._level--;
+            xorCity.level(pov, city, city._level);
         }
+    }
+
+    // TODO Remove score
+
+    return () => {
+        if(settings.rewardPop) {
+            if(city._progress < 0) {
+                xorCity.level(pov, city, city._level);
+                city._level++;
+                xorCity.level(pov, city, city._level);
+            }
+            city._progress += settings.rewardPop;
+            city._population += settings.rewardPop;
+        }
+        state.structures[tileIndex] = struct;
+        xorStructure(state, tileIndex, StructureType.None, struct.id);
+    }
+}
+
+export function gainStars(state: GameState, cost: number): UndoCallback {
+    return spendStars(state, -cost);
+}
+
+export function spendStars(state: GameState, cost: number): UndoCallback {
+    if(!cost) return () => {};
+    const pov = getPovTribe(state);
+
+    xorPlayer.stars(pov, pov._stars);
+    pov._stars -= cost;
+    xorPlayer.stars(pov, pov._stars);
+
+    return () => {
+        xorPlayer.stars(pov, pov._stars);
+        pov._stars += cost;
+        xorPlayer.stars(pov, pov._stars);
     }
 }
 
 export function harvestResource(state: GameState, tileIndex: number): Branch {
-    const tribe = getPovTribe(state);
     const harvested = state.resources[tileIndex]!;
     const settings = ResourceSettings[harvested.id];
-    const rulingCity = tribe._cities.find(x => x.tileIndex == state.tiles[tileIndex]._rulingCityIndex)!;
+    const rulingCity = getCityOwningTile(state, tileIndex)!;
     
-    const cost = settings.cost || 0;
-    
-    tribe._stars -= cost;
-    delete state.resources[tileIndex];
+    const undoPurchase = spendStars(state, settings.cost || 0);
+    const undoResource = consumeResource(state, tileIndex);
     const popBranch = addPopulationToCity(state, rulingCity, settings.rewardPop);
     
     return {
         rewards: (popBranch?.rewards || []),
         undo: () => {
             popBranch?.undo();
-            state.resources[tileIndex] = harvested;
-            tribe._stars += cost;
+            undoResource();
+            undoPurchase();
         }
     };
 }
 
 export function buildStructure(state: GameState, strctureType: StructureType, tileIndex: number): Branch {
-    const tribe = state.tribes[state.settings._pov];
+    const pov = state.tribes[state.settings._pov];
     const settings = StructureSettings[strctureType];
     const rulingCity = getRulingCity(state, tileIndex)!;
     const cost = settings.cost || 0;
-    const oldStruct = state.structures[tileIndex];
 
-    tribe._stars -= cost;
-    
-    const structure: StructureState = {
-        id: strctureType,
-        _level: 1,
-        turn: state.settings._turn,
-        tileIndex,
-        reward: 0,
-    };
-    
-    state.structures[tileIndex] = structure;
+    const undoPurchase = spendStars(state, cost);
+    const undoCreate = createStructure(state, tileIndex, strctureType);
     
     let rewardPopCount = settings.rewardPop || 0;
-    let rewardStarCount = settings.rewardStars || 0;
     
     if(settings.adjacentTypes !== undefined) {
         const adjCount = getNeighborTiles(state, tileIndex)
             .filter(x => state.structures[x.tileIndex]? settings.adjacentTypes!.has(state.structures[x.tileIndex]!.id) : false).length;
-        rewardStarCount *= adjCount;
         rewardPopCount *= adjCount;
     }
-    
-    if(rewardStarCount) {
-        tribe._stars += rewardStarCount;
+
+    if(IsStructureTask[strctureType]) {
+        pov._builtUniqueStructures.add(strctureType);
+        xorPlayer.unique(pov, strctureType);
     }
 
-    IsStructureTask[strctureType] && tribe._builtUniqueStructures.has(strctureType);
-
     const popBranch = addPopulationToCity(state, rulingCity, rewardPopCount);
-   
-    // TODO This should really return a branch
-    const portBranch = addMissingConnections(state, rulingCity, tileIndex);
+    // const portBranch = addMissingConnections(state, rulingCity, tileIndex);
     
     return {
-        rewards: [ ...(popBranch?.rewards || []), ...(portBranch?.rewards || []) ],
+        // rewards: [ ...(popBranch?.rewards || []), ...(portBranch?.rewards || []) ],
+        rewards: (popBranch?.rewards || []),
         undo: () => {
-            portBranch?.undo();
+            // portBranch?.undo();
             popBranch?.undo();
-            IsStructureTask[strctureType] && tribe._builtUniqueStructures.delete(strctureType);
-            if(rewardStarCount) {
-                tribe._stars -= rewardStarCount;
+            if(IsStructureTask[strctureType]) {
+                pov._builtUniqueStructures.delete(strctureType);
+                xorPlayer.unique(pov, strctureType);
             }
-            state.structures[tileIndex] = oldStruct;
-            tribe._stars += cost;
+            undoCreate();
+            undoPurchase();
         }
     };
 }
 
 export function summonUnit(state: GameState, unitType: UnitType, spawnTileIndex: number, costs = false, forceIndependent = false): CallbackResult {
-    const pov = state.tribes[state.settings._pov];
+    const pov = getPovTribe(state);
     const settings = UnitSettings[unitType];
     const health = UnitSettings[unitType].health!;
     
@@ -342,11 +274,9 @@ export function summonUnit(state: GameState, unitType: UnitType, spawnTileIndex:
     
     const oldUnitOwner = spawnTile._unitOwner;
     
-    if(costs) pov._stars -= settings.cost;
+    const undoPurchase = costs? spendStars(state, settings.cost) : () => {};
     
     const spawnedUnit = {
-        x: spawnTileIndex % state.settings.size, 
-        y: Math.floor(spawnTileIndex / state.settings.size),
         _unitType: unitType,
         _health: health * 10,
         kills: 0,
@@ -363,13 +293,19 @@ export function summonUnit(state: GameState, unitType: UnitType, spawnTileIndex:
         _moved: true,
     } as UnitState;
 
+    xorUnit.set(state, spawnedUnit);
+
     pov._units.push(spawnedUnit);
 
     spawnTile._unitOwner = spawnedUnit._owner;
     
     const cityHome = forceIndependent? null : getHomeCity(state, spawnedUnit);
 
-    if(cityHome) cityHome._unitCount++;
+    if(cityHome) {
+        xorCity.unitCount(pov, cityHome, cityHome._unitCount);
+        cityHome._unitCount++;
+        xorCity.unitCount(pov, cityHome, cityHome._unitCount);
+    }
     
 	const resultDiscover = discoverTiles(state, spawnedUnit);
     const undoFrozen: UndoCallback = freezeArea(state, spawnedUnit);
@@ -379,47 +315,72 @@ export function summonUnit(state: GameState, unitType: UnitType, spawnTileIndex:
         undo: () => {
             undoFrozen();
             resultDiscover?.undo();
-            if(cityHome) cityHome._unitCount--;
+            if(cityHome) {
+                xorCity.unitCount(pov, cityHome, cityHome._unitCount);
+                cityHome._unitCount--;
+                xorCity.unitCount(pov, cityHome, cityHome._unitCount);
+            }
             spawnTile._unitOwner = oldUnitOwner;
-            if(costs) pov._stars += settings.cost;
+            undoPurchase();
             state.settings.unitIdx--;
             pov._units.pop();
             resultPush?.undo();
+            xorUnit.set(state, spawnedUnit);
         }
     }
 }
 
-export function removeUnit(state: GameState, removed: UnitState, credit?: UnitState): UndoCallback {
-    const tribe = state.tribes[removed._owner];
+export function removeUnit(state: GameState, removed: UnitState, killer?: UnitState): UndoCallback {
+    const pov = state.tribes[removed._owner];
     const tile = state.tiles[removed._tileIndex];
     const oldOwner = removed._owner;
     const cityHome = getHomeCity(state, removed);
-    const atIndex = tribe._units.findIndex(x => x._tileIndex == removed._tileIndex);
+    const atIndex = pov._units.findIndex(x => x._tileIndex == removed._tileIndex);
 
-    tribe._units.splice(atIndex, 1);
+    xorUnit.set(state, removed);
+
+    pov._units.splice(atIndex, 1);
     tile._unitOwner = 0;
-    if(cityHome) cityHome._unitCount--;
-    if(credit) {
-        tribe._casualties++;
-        credit.kills++;
-        state.tribes[credit._owner]._kills++;
+
+    if(cityHome) {
+        xorCity.unitCount(pov, cityHome, cityHome._unitCount);
+        cityHome._unitCount--
+        xorCity.unitCount(pov, cityHome, cityHome._unitCount);
+    }
+
+    if(killer) {
+        xorUnit.kills(pov, killer, killer.kills);
+        killer.kills++;
+        xorUnit.kills(pov, killer, killer.kills);
+        pov._casualties++;
+        state.tribes[killer._owner]._kills++;
     }
     
     return () => {
-        if(credit) {
-            tribe._casualties--;
-            credit.kills--;
-            state.tribes[credit._owner]._kills--;
+        if(killer) {
+            state.tribes[killer._owner]._kills--;
+            pov._casualties--;
+            xorUnit.kills(pov, killer, killer.kills);
+            killer.kills--;
+            xorUnit.kills(pov, killer, killer.kills);
         }
-        if(cityHome) cityHome._unitCount++;
+        
+        if(cityHome) {
+            xorCity.unitCount(pov, cityHome, cityHome._unitCount);
+            cityHome._unitCount++;
+            xorCity.unitCount(pov, cityHome, cityHome._unitCount);
+        }
+
         tile._unitOwner = oldOwner;
-        tribe._units.splice(atIndex, 0, removed);
+        pov._units.splice(atIndex, 0, removed);
+
+        xorUnit.set(state, removed);
     };
 }
 
-export function healUnit(unit: UnitState, amount: number): UndoCallback {
-    if(isPoisoned(unit))	{
-        return unPoison(unit);
+export function healUnit(state: GameState, unit: UnitState, amount: number): UndoCallback {
+    if(hasEffect(unit, EffectType.Poison))	{
+        return tryRemoveEffect(state, unit, EffectType.Poison);
     }
     const oldHealth = unit._health;
     unit._health += amount;
@@ -429,8 +390,32 @@ export function healUnit(unit: UnitState, amount: number): UndoCallback {
     };
 }
 
+export function tryAddEffect(state: GameState, unit: UnitState, effect: EffectType): UndoCallback {
+    if(hasEffect(unit, effect)) {
+        return () => { };
+    }
+    xorUnit.effect(getPovTribe(state), unit, effect);
+    unit._effects.add(effect);
+    return () => {
+        unit._effects.delete(effect);
+        xorUnit.effect(getPovTribe(state), unit, effect);
+    }
+}
+
+export function tryRemoveEffect(state: GameState, unit: UnitState, effect: EffectType): UndoCallback {
+    if(!hasEffect(unit, effect)) {
+        return () => { };
+    }
+    xorUnit.effect(getPovTribe(state), unit, effect);
+    unit._effects.delete(effect);
+    return () => {
+        unit._effects.add(effect);
+        xorUnit.effect(getPovTribe(state), unit, effect);
+    }
+}
+
 export function discoverTiles(state: GameState, unit?: UnitState | null, tileIndexes?: number[]): CallbackResult {
-    const owner = state.settings._pov;
+    const pov = getPovTribe(state);
     const discovered = (tileIndexes || (unit? getNeighborIndexes(
         state,
         unit._tileIndex,
@@ -439,14 +424,15 @@ export function discoverTiles(state: GameState, unit?: UnitState | null, tileInd
         true
     ) : [])).filter(x => !state._visibleTiles[x]);
 
-    // Get undiscovered lightouses
-    const lighthouses = getLighthouses(state, false);
-    
+    const missingLighthouses = getLighthouses(state, false);
+
     let chain: UndoCallback[] = [];
     let rewards: Move[] = [];
 
-    for (const tileIndex of discovered) {
-        if(lighthouses.includes(tileIndex)) {
+    for(const tileIndex of discovered) {
+        xorTile.discover(state, state.tiles[tileIndex]);
+
+        if(missingLighthouses.includes(tileIndex)) {
             const city = getCapitalCity(state);
             if(city) {
                 const result = addPopulationToCity(state, city, 1);
@@ -456,59 +442,57 @@ export function discoverTiles(state: GameState, unit?: UnitState | null, tileInd
                 }
             }
         }
-        if (state.settings.areYouSure) {
-            state.tiles[tileIndex]._explorers.add(owner);
+
+        if(state.settings.areYouSure) {
+            state.tiles[tileIndex]._explorers.add(pov.owner);
         }
+
         state._visibleTiles[tileIndex] = true;
     }
 
     return {
         rewards,
         undo: () => {
-            discovered.forEach(x => state._visibleTiles[x] = false);
-            if(state.settings.areYouSure) {
-                discovered.forEach(x => {
-                    state.tiles[x]._explorers.delete(owner);
-                });
-            }
+            chain.forEach(x => x());
+
+            discovered.forEach(x => {
+                xorTile.discover(state, state.tiles[x]);
+
+                if(state.settings.areYouSure) {
+                    state.tiles[x]._explorers.delete(pov.owner);
+                }
+
+                state._visibleTiles[x] = false;
+            });
         }
     }
 }
 
 export function freezeArea(state: GameState, freezer: UnitState): UndoCallback {
     if(!isSkilledIn(freezer, SkillType.AutoFreeze, SkillType.FreezeArea)) return () => { };
+    
+    // const freezeArea = isSkilledIn(freezer, SkillType.FreezeArea);
 
-    const freezeArea = isSkilledIn(freezer, SkillType.FreezeArea);
-    const undoChain: UndoCallback[] = [];
+    const chain: UndoCallback[] = [];
+    const adjacent = getNeighborIndexes(state, freezer._tileIndex, 1, false, true);
 
-    // Freeze adjacent water tiles and units
-    getNeighborTiles(state, freezer._tileIndex, 1, false, true).filter(tile => {
-        // Converts tile to the style of the tribe the unit belongs to
-        if(freezeArea && !isWaterTerrain(tile)) {
-            const oldClimate = tile.climate;
-            // TODO verify this
-            tile.climate = Number(ClimateType[TribeType[freezer._owner] as any]);
-            undoChain.push(() => {
-                tile.climate = oldClimate;
-            });
-        }
-        const occupied = getTrueEnemyAt(state, tile, freezer._owner);
+    for (let i = 0; i < adjacent.length; i++) {
+        const tile = state.tiles[adjacent[i]];
+        const occupied = getTrueEnemyAt(state, tile.tileIndex, freezer._owner);
+
+        // Freeze any adjacent enemy unit
         if(occupied) {
-            if(!isFrozen(occupied)) {
-                undoChain.push(addFreeze(occupied));
-            }
+            chain.push(tryAddEffect(state, occupied, EffectType.Frozen));
         }
+
+        // Freeze any adjacent freezable tiles
         if(tile.terrainType == TerrainType.Water || tile.terrainType == TerrainType.Ocean) {
-            const oldTerrain = tile.terrainType;
-            tile.terrainType = TerrainType.Ice;
-            undoChain.push(() => {
-                tile.terrainType = oldTerrain;
-            });
+            chain.push(modifyTerrain(state, tile.tileIndex, TerrainType.Ice));
         }
-    });
+    }
 
     return () => {
-        undoChain.reverse().forEach(x => x());
+        chain.reverse().forEach(x => x());
     }
 }
 
@@ -516,7 +500,7 @@ export function splashDamageArea(state: GameState, attacker: UnitState, atk: num
     const undoChain = getEnemiesNearTile(state, attacker._tileIndex)
         .map(enemy => attackUnit(state, atk, enemy, attacker));
     return () => {
-        undoChain.reverse().forEach(x => x());
+        undoChain.forEach(x => x());
     }
 }
 
@@ -535,7 +519,7 @@ export function pushUnit(state: GameState, tileIndex: number): CallbackResult {
         undoPush = removeUnit(state, pushed);
     }
     else {
-        const result = ArmyMovesGenerator.computeStep(state, pushed, movedTo, true)!;
+        const result = stepUnit(state, pushed, movedTo, true)!;
         rewards.push(...result.rewards);
     }
 
@@ -584,7 +568,7 @@ export function attackUnit(state: GameState, attacker: UnitState | number, defen
             undoChain.push(removeUnit(state, defender, attacker));
             // Move to the enemy position, if not a ranged unit
             if (getUnitRange(attacker) < 2 && isSteppable(state, attacker, defender._tileIndex)) {
-                const result = ArmyMovesGenerator.computeStep(state, attacker, defender._tileIndex, true)!;
+                const result = stepUnit(state, attacker, defender._tileIndex, true)!;
                 undoChain.push(result.undo);
             }
         }
@@ -592,29 +576,22 @@ export function attackUnit(state: GameState, attacker: UnitState | number, defen
         else {
             // If we have have freeze, then they cant retaliate
             if(isSkilledIn(attacker, SkillType.Freeze)) {
-                let wasFrozen = false;
-                if(!isFrozen(defender)) {
-                    defender._effects.add(EffectType.Frozen);
-                    wasFrozen = true;
-                }
-                undoChain.push(() => {
-                    if(wasFrozen) {
-                        defender._effects.delete(EffectType.Frozen);
-                    }
-                });
+                undoChain.push(tryAddEffect(state, defender, EffectType.Frozen));
             }
             // If we're attacking with range
             else if(getUnitRange(attacker) > 1 && result.defenseDamage > 0) {
-                const dist2enemy = Math.floor(Math.hypot(attacker.x - defender.x, attacker.y - defender.y));
-                // If they cant reach us, they cant retaliate
-                if (dist2enemy > getUnitRange(defender)) {
+                const dist = calculateDistance(attacker._tileIndex, defender._tileIndex, state.settings.size);
+                // if defender cant reach us, they cant retaliate
+                if(dist > getUnitRange(defender)) {
                     result.defenseDamage = 0;
                 }
-                // THIS IS CHEATING! (use enemy visibility predictions)
-                // If they cant see us, they cant retaliate
-                // else if (!enemyTile.explorers.includes(defender._owner)) {
-                // 	result.defenseDamage = 0;
-                // }
+                // technically not cheating
+                // if defender that cannot see us, they cant retaliate
+                else if(state.settings.areYouSure) {
+                    if (!state.tiles[defender._tileIndex]._explorers.has(defender._owner)) {
+                        result.defenseDamage = 0;
+                    }
+                }
             }
 
             if(result.defenseDamage > 0) {
@@ -635,4 +612,130 @@ export function attackUnit(state: GameState, attacker: UnitState | number, defen
     return () => {
         undoChain.reverse().forEach(x => x());
     };
+}
+
+// TODO XOR
+export function stepUnit(state: GameState, stepper: UnitState, toTileIndex: number, forced = false): CallbackResult {
+	const chain: UndoCallback[] = [];
+	const rewards = [];
+
+	// const ipX = stepper.prevX;
+	// const ipY = stepper.prevY;
+
+	const oldTileIndex = stepper._tileIndex;
+	const oldMoved = stepper._moved;
+	const oldAttacked = stepper._attacked;
+	const oldTile = state.tiles[oldTileIndex];
+	const oldType = stepper._unitType;
+	const oldPassenger = stepper._passenger;
+
+	const newTile = state.tiles[toTileIndex];
+	let newType = oldType;
+
+	const oldNewTileUnitOwner = newTile._unitOwner;
+
+	// // TODO; this is not how prev works, it must be applies at the end of the turn
+	// stepper.prevX = iX;
+	// stepper.prevY = iY;
+	stepper._tileIndex = toTileIndex;
+
+	oldTile._unitOwner = 0;
+	newTile._unitOwner = stepper._owner;
+
+	// TODO what other skills are missing?
+
+	// Discover terrain
+	const resultDiscover = discoverTiles(state, stepper)!;
+	rewards.push(...resultDiscover.rewards);
+	chain.push(resultDiscover.undo);
+
+	stepper._moved = stepper._attacked = true;
+
+    // ! Stomp ! //
+
+	if(isSkilledIn(stepper, SkillType.Stomp)) {
+		chain.push(splashDamageArea(state, stepper, 4));
+	}
+
+    // ! AutoFreeze //
+
+	chain.push(freezeArea(state, stepper));
+
+	// ! Embark ! //
+    
+	// If a non aquatic unit is moving to port, place into boat
+    // TODO what if a gaami moves onto a port? lol. or some other special troop
+	if (state.structures[toTileIndex]?.id == StructureType.Port && !isAquaticOrCanFly(stepper)) {
+		switch (stepper._unitType) {
+			case UnitType.Cloak:
+				newType = UnitType.Dinghy;
+				break;
+			case UnitType.Dagger:
+				newType = UnitType.Pirate;
+				break;
+			case UnitType.Giant:
+				newType = UnitType.Juggernaut;
+				break;
+			default:
+				newType = UnitType.Raft;
+				stepper._passenger = oldType;
+				break;
+		}
+	}
+
+    // ! Disembark ! //
+
+	// Carry allows a unit to carry another unit inside
+	// A unit with the carry skill can move to a land tile adjacent to water
+	// Doing so releases the unit it was carrying and ends the unit's turn
+	else if(isSkilledIn(stepper, SkillType.Carry) && !isWaterTerrain(newTile)) {
+		stepper._passenger = undefined;
+		switch (stepper._unitType) {
+			case UnitType.Dinghy:
+				newType = UnitType.Cloak;
+				break;
+			case UnitType.Pirate:
+				newType = UnitType.Dagger;
+				break;
+			case UnitType.Juggernaut:
+				newType = UnitType.Giant;
+				break;
+			default:
+				newType = oldPassenger!;
+				break;
+		}
+	}
+
+    // ! Dash ! //
+
+	// Allows a unit to attack after moving if there are any enemies in range
+	// And if it HAS moved before (this avoids infinite move -> attack loop)
+	else if(!forced && !oldMoved && isSkilledIn(stepper, SkillType.Dash) && getEnemiesInRange(state, stepper).length > 0) {
+		stepper._attacked = false;
+	}
+	
+    // ! Hide ! //
+	// Going stealth mode uses up our attack
+	if(isSkilledIn(stepper, SkillType.Hide) && !hasEffect(stepper, EffectType.Invisible)) {
+		stepper._attacked = true;
+        chain.push(tryAddEffect(state, stepper, EffectType.Invisible));
+	}
+
+	stepper._unitType = newType;
+	
+	return {
+        rewards,
+		undo: () => {
+			stepper._unitType = oldType;
+			stepper._passenger = oldPassenger;
+			stepper._attacked = oldAttacked;
+			stepper._moved = oldMoved;
+			chain.reverse().forEach(x => x());
+			newTile._unitOwner = oldNewTileUnitOwner;
+			oldTile._unitOwner = stepper._owner;
+			stepper._tileIndex = oldTileIndex;
+			// stepper.prevX = ipX;
+			// stepper.prevY = ipY;
+		}
+	};
 }

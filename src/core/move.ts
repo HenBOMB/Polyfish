@@ -142,8 +142,4 @@ export default class Move {
     hasType(): boolean {
         return this.type !== null;
     }
-
-    hash(state: GameState, keys: ZobristKeys): bigint {
-        throw 'Hash not implemented';
-    }
 }

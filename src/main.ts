@@ -5,6 +5,7 @@ import { UndoCallback } from "./core/move";
 import { MoveGenerator } from "./core/moves";
 import { MoveType, TechnologyType } from "./core/types";
 import Game from "./game";
+// import { generateFile } from "./zorbist/generateZorbist";
 
 export function deepCompare<T>(a: T, b: T, key: string, ignoreObjKeyLength?: boolean) {
     let success = true;
@@ -40,16 +41,20 @@ export function deepCompare<T>(a: T, b: T, key: string, ignoreObjKeyLength?: boo
 }
 
 export default async function main(loader: GameLoader) {
+    // generateFile();
+    // return;
+
     console.clear();
 
     await loader.loadRandom(6);
+    
+    return;
 
     const game = new Game();
     game.load(loader.currentState);
 
-    console.log(game.state.hash.toString() === '16459832259115826859');
+    // console.log(game.state.hash.toString() === '16459832259115826859');
 
-    return;
 
     // console.time('test');
     // console.log(await predict(loader.currentState));
@@ -295,10 +300,7 @@ function playSequence(game: Game, ...moves: MoveType[]) {
     const p2 = game.state.tribes[2];
 
     p1._tech.push({ discovered: true, techType: TechnologyType.Fishing});
-    p1._stars += 100;
-
     p2._tech.push({ discovered: true, techType: TechnologyType.Fishing});
-    p2._stars += 100;
 
     for(const moveType of moves) {
         try {

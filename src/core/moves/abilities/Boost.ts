@@ -1,7 +1,8 @@
-import { getAlliesNearTile, unBoost } from "../../functions";
+import { tryRemoveEffect } from "../../actions";
+import { getAlliesNearTile } from "../../functions";
 import { CallbackResult } from "../../move";
 import { GameState } from "../../states";
-import { AbilityType } from "../../types";
+import { AbilityType, EffectType } from "../../types";
 import Ability from "../Ability";
 
 export default class Boost extends Ability {
@@ -11,7 +12,7 @@ export default class Boost extends Ability {
 
     execute(state: GameState): CallbackResult {
         const chain = getAlliesNearTile(state, this.getSrc())
-            .map(x => unBoost(x));
+            .map(x => tryRemoveEffect(state, x, EffectType.Boost));
         return {
             rewards: [],
             undo: () => {

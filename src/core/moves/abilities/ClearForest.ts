@@ -1,4 +1,4 @@
-import { getPovTribe } from "../../functions";
+import { gainStars, modifyTerrain } from "../../actions";
 import { CallbackResult } from "../../move";
 import { GameState } from "../../states";
 import { AbilityType, TerrainType } from "../../types";
@@ -10,17 +10,14 @@ export default class ClearForest extends Ability {
     }
 
     execute(state: GameState): CallbackResult {
-        const pov = getPovTribe(state);
-        const tile = state.tiles[this.getTarget()];
-
-        tile.terrainType = TerrainType.Field;
-        pov._stars++;
+        const undoTerrain = modifyTerrain(state, this.getTarget(), TerrainType.Field);
+        const undoStars = gainStars(state, 1);
 
         return {
             rewards: [],
             undo: () => {
-                pov._stars--;
-                tile.terrainType = TerrainType.Forest;
+                undoStars();
+                undoTerrain();
             }
         };
     }

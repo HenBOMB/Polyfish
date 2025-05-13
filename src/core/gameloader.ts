@@ -17,8 +17,7 @@ import { UnitSettings } from "./settings/UnitSettings";
 import { predictBestNextCityReward, predictOuterFogTerrain, predictVillages } from "../eval/prediction";
 import { TribeSettings } from "./settings/TribeSettings";
 import { summonUnit } from "./actions";
-import { calculateInitialZobristHash } from "../zorbist/hasher";
-import { zobristKeys } from "../zorbist/zobristKeys";
+import { xorState } from "../zorbist/hasher";
 
 export const STARTING_OWNER_ID = 1;
 export const DEBUG_SEED = undefined;
@@ -46,7 +45,6 @@ export default class GameLoader {
   
     private defaultState(): GameState {
         return {
-            hash: 0n,
             settings: {
                 size: 0,
                 _turn: 0,
@@ -109,7 +107,15 @@ export default class GameLoader {
             }
         }
 
-        state.hash = calculateInitialZobristHash(this.currentState, zobristKeys);
+        const pov = state.settings._pov;
+
+        for(const tribe of Object.values(state.tribes)) {
+            state.settings._pov = tribe.owner
+            tribe.hash = xorState(state);
+        }
+
+        state.settings._pov = pov;
+
     }
 
     public async loadLive() {
@@ -160,6 +166,7 @@ export default class GameLoader {
                 return {
                     ...arr,
                     [index]: {
+                        hash: 0n,
                         owner: index,
                         username,
                         bot: this.parseRawBool(bot),
@@ -284,8 +291,6 @@ export default class GameLoader {
                 const unitData: UnitState = {
                     _tileIndex: -1,
                     _owner: this.parseRawInt(rawUnit[0]),
-                    x: this.parseRawInt(rawUnit[1]),
-                    y: this.parseRawInt(rawUnit[2]),
                     _unitType: this.parseRawInt(rawUnit[3]),
                     _health: this.parseRawInt(rawUnit[4]),
                     veteran: this.parseRawBool(rawUnit[5]),
@@ -306,7 +311,7 @@ export default class GameLoader {
                     throw new Error(`Unit type "${unitData._unitType}" not found!`);
                 }
 
-                unitData._tileIndex = unitData.x + unitData.y * state.settings.size;
+                unitData._tileIndex = this.parseRawInt(rawUnit[1]) + this.parseRawInt(rawUnit[2]) * state.settings.size;
 
                 state.tribes[unitData._owner]._units.push(unitData);
             }
@@ -498,6 +503,7 @@ export default class GameLoader {
             return {
                 ...arr,
                 [owner]: {
+                    hash: 0n,
                     owner,
                     username: owner == pov? "Player" : TribeType[type],
                     bot: owner != pov,
@@ -576,7 +582,7 @@ export default class GameLoader {
             const climate = TribeMap[climateTypes[i]]? ClimateType[TribeType[TribeMap[climateTypes[i]]] as any] as unknown as ClimateType : ClimateType.Nature;
             
             state.tiles[i] = {
-                _owner: -1,
+                _owner: 0,
                 tileIndex: i,
                 climate,
                 // If tile is ocean tile, then its nature??
@@ -744,7 +750,7 @@ export default class GameLoader {
     public saveTo(filename: string) {
         writeFileSync(`data/${filename}.json`, JSON.stringify({ 
             ...this.currentState,
-            hash: this.currentState.hash.toString(), 
+            hash: this.currentState.tribes[this.currentState.settings._pov].hash.toString(), 
         } as any, null, 2));
         console.log(`Saved state to data/${filename}.json`);
     }

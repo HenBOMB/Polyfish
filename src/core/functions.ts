@@ -1,4 +1,4 @@
-import { CityState, GameState, TechnologyState, TileState, TribeState, UnitState } from "./states";
+import { CityState, GameState, ResourceState, StructureState, TechnologyState, TileState, TribeState, UnitState } from "./states";
 import { TechnologyType, ResourceType, RewardType, SkillType, TerrainType, StructureType, EffectType, UnitType, AbilityType, TribeType } from "./types";
 import { CombatResult } from "./states";
 import { ResourceSettings } from "./settings/ResourceSettings";
@@ -6,6 +6,7 @@ import { UnitSettings } from "./settings/UnitSettings";
 import { TechnologyReplacements, TechnologySetting, TechnologySettings } from "./settings/TechnologySettings";
 import Game from "../game";
 import { UndoCallback } from "./move";
+import { spendStars } from "./actions";
 
 /**
  * Attempts to discover any undiscovered tribes and overrides the passed state
@@ -40,28 +41,24 @@ export function tryDiscoverRewardOtherTribes(state: GameState): UndoCallback {
 	// Reward stars for met tribes
 	tribesMet.forEach(owner => {
 		const them = state.tribes[owner];
-		const stars = getStarExchange(state, them);
 		us._knownPlayers.add(owner);
-		us._stars += stars;
+		
+		chain.push(spendStars(state, -getStarExchange(state, them)));
 
 		chain.push(() => {
 			us._knownPlayers.delete(owner);
-			us._stars -= stars;
 		});
 
+		// If they also too just met us
 		if(them._knownPlayers.has(us.owner)) {
 			return;
 		}
-
-		// If they also too just met us
 		for(const unit of us._units) {
 			if(state.tiles[unit._tileIndex]._explorers.has(them.owner)) {
-				const stars = getStarExchange(state, us);
 				them._knownPlayers.add(us.owner);
-				them._stars += stars;
+				chain.push(spendStars(state, -getStarExchange(state, us)));
 				chain.push(() => {
 					them._knownPlayers.delete(us.owner);
-					them._stars -= stars;
 				});
 				break;
 			}
@@ -195,6 +192,14 @@ export function getNeighborTiles(state: GameState, index: number, range = 1, uno
 	return getNeighborIndexes(state, index, range, unowned, includeUnexplored).map(i => state.tiles[i]);
 }
 
+export function getResourceAt(state: GameState, tileIndex: TileState | number): ResourceType | null {
+	return state.resources[typeof tileIndex === 'number'? tileIndex : tileIndex.tileIndex]?.id || null;
+}
+
+export function getStructureAt(state: GameState, tileIndex: TileState | number): StructureType | null {
+	return state.structures[typeof tileIndex === 'number'? tileIndex : tileIndex.tileIndex]?.id || null;
+}
+
 export function getTrueUnitAt(state: GameState, tileIndex: TileState | number, matchOwner?: number): UnitState | null {
 	const tile = state.tiles[typeof tileIndex === 'number'? tileIndex : tileIndex.tileIndex];
 	if(!tile._unitOwner) return null;
@@ -212,7 +217,7 @@ export function getUnitAt(state: GameState, tileIndex: TileState | number, match
 	if(!found) return null;
 
 	// If enemy unit is hidden, then we cant see it!
-	if(isInvisible(found) && found._owner !== state.settings._pov) {
+	if(hasEffect(found, EffectType.Invisible) && found._owner !== state.settings._pov) {
 		return null;
 	}
 
@@ -224,7 +229,7 @@ export function getCityAt(state: GameState, tileIndex: number, matchOwner?: numb
 		return null;
 	}
 	const cityOwner = state.tiles[tileIndex]._owner;
-	if(cityOwner < 0) {
+	if(cityOwner < 1) {
 		return null;
 	}
 	return state.tribes[cityOwner]._cities.find(x => x.tileIndex == tileIndex) || null;
@@ -402,100 +407,8 @@ export function isNavalUnit(unit: UnitState | UnitType): boolean {
 	return isSkilledIn(unit, SkillType.Carry, SkillType.Float, SkillType.Splash);
 }
 
-export function isInvisible(unit: UnitState): boolean {
-	return unit._effects.has(EffectType.Invisible);
-}
-
-export function addInvisible(unit: UnitState): UndoCallback {
-	if(!unit._effects.has(EffectType.Invisible)) {
-		unit._effects.add(EffectType.Invisible);
-		return () => {
-			unit._effects.delete(EffectType.Invisible);
-		}
-	}
-	return () => {};
-}
-
-export function unInvisible(unit: UnitState): UndoCallback {
-	if(unit._effects.has(EffectType.Invisible)) {
-		unit._effects.delete(EffectType.Invisible);
-		return () => {
-			unit._effects.add(EffectType.Invisible);
-		}
-	}
-	return () => {};
-}
-
-export function isFrozen(unit: UnitState): boolean {
-	return unit._effects.has(EffectType.Frozen);
-}
-
-export function addFreeze(unit: UnitState): UndoCallback {
-	if(!unit._effects.has(EffectType.Frozen)) {
-		unit._effects.add(EffectType.Frozen);
-		return () => {
-			unit._effects.delete(EffectType.Frozen);
-		}
-	}
-	return () => {};
-}
-
-export function unFreeze(unit: UnitState): UndoCallback {
-	if(unit._effects.has(EffectType.Frozen)) {
-		unit._effects.delete(EffectType.Frozen);
-		return () => {
-			unit._effects.add(EffectType.Frozen);
-		}
-	}
-	return () => {};
-}
-
-export function isPoisoned(unit: UnitState): boolean {
-	return unit._effects.has(EffectType.Poison);
-}
-
-export function addPoison(unit: UnitState): UndoCallback {
-	if(!unit._effects.has(EffectType.Poison)) {
-		unit._effects.add(EffectType.Poison);
-		return () => {
-			unit._effects.delete(EffectType.Poison);
-		}
-	}
-	return () => {};
-}
-
-export function unPoison(unit: UnitState): UndoCallback {
-	if(unit._effects.has(EffectType.Poison)) {
-		unit._effects.delete(EffectType.Poison);
-		return () => {
-			unit._effects.add(EffectType.Poison);
-		}
-	}
-	return () => {};
-}
-
-export function isBoosted(unit: UnitState): boolean {
-	return unit._effects.has(EffectType.Boost);
-}
-
-export function addBoost(unit: UnitState): UndoCallback {
-	if(!unit._effects.has(EffectType.Boost)) {
-		unit._effects.add(EffectType.Boost);
-		return () => {
-			unit._effects.delete(EffectType.Boost);
-		}
-	}
-	return () => {};
-}
-
-export function unBoost(unit: UnitState): UndoCallback {
-	if(unit._effects.has(EffectType.Boost)) {
-		unit._effects.delete(EffectType.Boost);
-		return () => {
-			unit._effects.add(EffectType.Boost);
-		}
-	}
-	return () => {};
+export function hasEffect(unit: UnitState, effect: EffectType): boolean {
+	return unit._effects.has(effect);
 }
 
 export function isInTerritory(state: GameState, unit: UnitState) {
@@ -735,7 +648,7 @@ export function getMaxHealth(unit: UnitState) {
 
 export function getUnitAttack(unit: UnitState) {
 	let atk = getRealUnitSettings(unit).attack;
-	if(isBoosted(unit)) {
+	if(hasEffect(unit, EffectType.Boost)) {
 		atk += 0.5;
 	}
 	return atk;
@@ -744,7 +657,7 @@ export function getUnitAttack(unit: UnitState) {
 export function getUnitMovement(unit: UnitState) {
 	let movement = getUnitSettings(unit).movement;
 	if(!movement) throw Error(`Yo no movement bro tf "${unit._unitType}" -> ${movement}`);
-	if(isBoosted(unit)) {
+	if(hasEffect(unit, EffectType.Boost)) {
 		movement += 1;
 	}
 	return movement;
@@ -753,7 +666,7 @@ export function getUnitMovement(unit: UnitState) {
 export function getUnitDefense(unit: UnitState) {
 	let def = getRealUnitSettings(unit).defense;
 	// 30% damage reduction if poisoned
-	if(isPoisoned(unit)) {
+	if(hasEffect(unit, EffectType.Poison)) {
 		def *= 0.7;
 	}
 	return getRealUnitSettings(unit).defense;
@@ -808,10 +721,9 @@ export function calculateDistance(tileIndex1: number, tileIndex2: number, size: 
  * @returns - The index of the tile where it ended up. -1 if it failed to move the unit.
  */
 export function calaulatePushablePosition(state: GameState, pushed: UnitState): number {
-	let initialX = pushed.x;
-	let initialY = pushed.y;
-	let modifiedX = pushed.x;
-	let modifiedY = pushed.y;
+	const [ initialX, initialY ] = indexToCoord(state, pushed._tileIndex);
+	let modifiedX = initialX;
+	let modifiedY = initialY;
 
 	const doPush = (dx: number, dy: number) => {
 		const newX = modifiedX + dx;
@@ -834,8 +746,8 @@ export function calaulatePushablePosition(state: GameState, pushed: UnitState): 
 		modifiedX != initialX &&
 		pushed.prevY != initialY)
 	{
-		dx = modifiedX === pushed.x ? 0 : modifiedX < pushed.x ? 1 : -1;
-		dy = pushed.prevY === pushed.y ? 0 : pushed.prevY < pushed.y ? 1 : -1;
+		dx = modifiedX === initialX ? 0 : modifiedX < initialX ? 1 : -1;
+		dy = pushed.prevY === initialY ? 0 : pushed.prevY < initialY ? 1 : -1;
 
 		if (pushed._owner != state.settings._pov) {
 			dx = -dx;
@@ -854,8 +766,8 @@ export function calaulatePushablePosition(state: GameState, pushed: UnitState): 
 		dy = dir.dy;
 	}
 	else {
-		dx = pushed.x < centerTile.x ? 1 : pushed.x > centerTile.x ? -1 : 0;
-		dy = pushed.y < centerTile.y ? 1 : pushed.y > centerTile.y ? -1 : 0;
+		dx = initialX < centerTile.x ? 1 : initialX > centerTile.x ? -1 : 0;
+		dy = initialY < centerTile.y ? 1 : initialY > centerTile.y ? -1 : 0;
 		if (dx === 0 && dy === 0) {
 			dy = 1;
 		}

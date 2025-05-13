@@ -15,7 +15,7 @@ export default class HealOthers extends Ability {
         const adjAllies = getAlliesNearTile(state, this.getSrc());
 
         for(const unit of adjAllies) {
-            chain.push(healUnit(unit, 4));
+            chain.push(healUnit(state, unit, 4));
         }
 
         return {

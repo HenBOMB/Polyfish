@@ -1,12 +1,10 @@
 import { CityState, GameState, TileState, UnitState } from "./states";
-import { getNeighborTiles, getPovTerritorry, getNeighborIndexes, isAdjacentToEnemy, isAquaticOrCanFly, isSteppable, isWaterTerrain, getEnemiesInRange, isNavalUnit, getTechCost, getPovTribe, isSkilledIn, getCapitalCity, getRealUnitSettings, getUnitAttack, getUnitMovement, isRoadpathAndUsable, getTrueUnitAt, getUnitAt, getHomeCity, isInvisible, getMaxHealth, getAlliesNearTile, getRealUnitType, isTechUnlocked, isLighthouse, tryDiscoverRewardOtherTribes, isEnemyCity, isUnderSiege, getCityAt, getTechSettings, getTechUnitType, isTileOccupied, isBoosted, getEnemiesNearTile, isFrozen, isTileFrozen, getStarExchange, getTechStructure, getCityOwningTile, isResourceVisible, getLighthouses, getEnemyIndexesInRange, getReplacedOrTechSettings, isTileExplored } from './functions';
+import { getNeighborTiles, getPovTerritorry, getNeighborIndexes, isAdjacentToEnemy, isAquaticOrCanFly, isSteppable, isWaterTerrain, isNavalUnit, getTechCost, getPovTribe, isSkilledIn, getUnitAttack, getUnitMovement, isRoadpathAndUsable, getMaxHealth, getAlliesNearTile, isTechUnlocked, isEnemyCity, isUnderSiege, getTechSettings, getTechUnitType, isTileOccupied, getEnemiesNearTile, isTileFrozen, getTechStructure, getCityOwningTile, isResourceVisible, getEnemyIndexesInRange, getReplacedOrTechSettings, isTileExplored, hasEffect } from './functions';
 import { StructureSettings } from "./settings/StructureSettings";
-import { SkillType, EffectType, ResourceType, RewardType, StructureType, TechnologyType, TerrainType, UnitType, AbilityType } from "./types";
-import { addPopulationToCity, discoverTiles, freezeArea, splashDamageArea } from "./actions";
+import { SkillType, ResourceType, RewardType, StructureType, TechnologyType, TerrainType, UnitType, AbilityType, EffectType } from "./types";
 import { UnitSettings } from "./settings/UnitSettings";
-import Move, { Action, CallbackResult, UndoCallback } from "./move";
+import Move, { Action } from "./move";
 import { MoveType } from "./types";
-import { Logger } from "../polyfish/logger";
 import Upgrade from "./moves/Upgrade";
 import Summon from "./moves/Summon";
 import Step from "./moves/Step";
@@ -507,7 +505,7 @@ export class ArmyMovesGenerator {
 	
 			// Boost
 			else if(isSkilledIn(unit, SkillType.Boost)) {
-				const unboostedAround = getAlliesNearTile(state, tileIndex).some(x => !isBoosted(x));
+				const unboostedAround = getAlliesNearTile(state, tileIndex).some(x => !hasEffect(x, EffectType.Boost));
 				if(unboostedAround) {
 					_moves.push(new Boost(tileIndex));
 				}
@@ -523,8 +521,8 @@ export class ArmyMovesGenerator {
 	
 			// Freeze Area
 			else if(isSkilledIn(unit, SkillType.FreezeArea)) {
-				const unitsAround = getEnemiesNearTile(state, tileIndex, 1, true).some(x => !isFrozen(x) || !isTileFrozen(state, x._tileIndex));
-				if(unitsAround) {
+				const stuffAround = getEnemiesNearTile(state, tileIndex, 1, true).some(x => !hasEffect(x, EffectType.Frozen) || !isTileFrozen(state, x._tileIndex));
+				if(stuffAround) {
 					_moves.push(new FreezeArea(tileIndex));
 				}
 			}
@@ -651,140 +649,6 @@ export class ArmyMovesGenerator {
 			}
 			moves.push(new Step(unit._tileIndex, tileIndex));
 		}
-	}
-
-	static computeStep(state: GameState, stepper: UnitState, toTileIndex: number, forced = false): CallbackResult {
-		if (!forced && (stepper._moved || state.tiles[toTileIndex]._unitOwner > 0 || stepper._tileIndex == toTileIndex)) {
-			return Logger.illegal(MoveType.Step, `${stepper._tileIndex} -> ${toTileIndex}, ${getRealUnitType(stepper)} -> ${getRealUnitType(getTrueUnitAt(state, toTileIndex)!)} -${forced}-`);
-		}
-
-		const chain: UndoCallback[] = [];
-		const rewards = [];
-
-		// const scoreArmy = state._scoreArmy;
-
-		const iX = stepper.x;
-		const iY = stepper.y;
-		const ipX = stepper.prevX;
-		const ipY = stepper.prevY;
-
-		const oldTileIndex = stepper._tileIndex;
-		const oldMoved = stepper._moved;
-		const oldAttacked = stepper._attacked;
-		const oldTile = state.tiles[oldTileIndex];
-		const oldType = stepper._unitType;
-		const oldPassenger = stepper._passenger;
-
-		const newTile = state.tiles[toTileIndex];
-		let newType = oldType;
-
-		const oldNewTileUnitOwner = newTile._unitOwner;
-
-		// TODO; this is not how prev works, it must be applies at the end of the turn
-		stepper.prevX = iX;
-		stepper.prevY = iY;
-		stepper.x = toTileIndex % state.settings.size;
-		stepper.y = Math.floor(toTileIndex / state.settings.size);
-		stepper._tileIndex = toTileIndex;
-
-		oldTile._unitOwner = 0;
-		newTile._unitOwner = stepper._owner;
-
-		// Apply movement skills
-
-		// TODO what other skills are missing?
-
-		// Stomp
-		if(isSkilledIn(stepper, SkillType.Stomp)) {
-			chain.push(splashDamageArea(state, stepper, 4));
-		}
-
-		// AutoFreeze
-		chain.push(freezeArea(state, stepper));
-
-		// Discover terrain
-		const resultDiscover = discoverTiles(state, stepper)!;
-		rewards.push(...resultDiscover.rewards);
-		chain.push(resultDiscover.undo);
-
-		stepper._moved = stepper._attacked = true;
-
-		// Moved to port
-		// If ground non floatable or aquatic unit is moving to port, place into boat
-		if (state.structures[toTileIndex]?.id == StructureType.Port && !isAquaticOrCanFly(stepper)) {
-			// Add embark special units
-			switch (stepper._unitType) {
-				case UnitType.Cloak:
-					newType = UnitType.Dinghy;
-					break;
-				case UnitType.Dagger:
-					newType = UnitType.Pirate;
-					break;
-				case UnitType.Giant:
-					newType = UnitType.Juggernaut;
-					break;
-				default:
-					newType = UnitType.Raft;
-					stepper._passenger = oldType;
-					break;
-			}
-		}
-		// Carry allows a unit to carry another unit inside
-		// A unit with the carry skill can move to a land tile adjacent to water
-		// Doing so releases the unit it was carrying and ends the unit's turn
-		else if(isSkilledIn(stepper, SkillType.Carry) && !isWaterTerrain(newTile)) {
-			stepper._passenger = undefined;
-			switch (stepper._unitType) {
-				case UnitType.Dinghy:
-					newType = UnitType.Cloak;
-					break;
-				case UnitType.Pirate:
-					newType = UnitType.Dagger;
-					break;
-				case UnitType.Juggernaut:
-					newType = UnitType.Giant;
-					break;
-				default:
-					newType = oldPassenger!;
-					break;
-			}
-		}
-		// Allows a unit to attack after moving if there are any enemies in range
-		// And if it had moved before
-		else if(!forced && !oldMoved && isSkilledIn(stepper, SkillType.Dash) && getEnemiesInRange(state, stepper).length > 0) {
-			stepper._attacked = false;
-		}
-		
-		// Going stealth mode uses up our attack
-		let wasNotInvis = false;
-		if(isSkilledIn(stepper, SkillType.Hide) && !isInvisible(stepper)) {
-			stepper._attacked = true;
-			stepper._effects.add(EffectType.Invisible);
-			wasNotInvis = true;
-		}
-
-		stepper._unitType = newType;
-		
-		return {
-            rewards,
-			undo: () => {
-				stepper._unitType = oldType;
-				if(wasNotInvis) {
-					stepper._effects.delete(EffectType.Invisible);
-				}
-				stepper._passenger = oldPassenger;
-				stepper._attacked = oldAttacked;
-				stepper._moved = oldMoved;
-				chain.reverse().forEach(x => x());
-				newTile._unitOwner = oldNewTileUnitOwner;
-				oldTile._unitOwner = stepper._owner;
-				stepper._tileIndex = oldTileIndex;
-				stepper.y = iY;
-				stepper.x = iX;
-				stepper.prevX = ipX;
-				stepper.prevY = ipY;
-			}
-		};
 	}
 
 	/**

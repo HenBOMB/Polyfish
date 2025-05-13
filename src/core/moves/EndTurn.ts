@@ -4,6 +4,7 @@ import { GameState } from "../states";
 import { getPovTribe } from "../functions";
 import { TechnologySettings } from "../settings/TechnologySettings";
 import { StructureSettings } from "../settings/StructureSettings";
+import { destroyStructure, gainStars } from "../actions";
 
 export default class EndTurn extends Move {
     constructor() {
@@ -19,13 +20,11 @@ export default class EndTurn extends Move {
             for (const strTileIndex in state.structures) {
                 if(state.structures[strTileIndex]?.turn === -2) {
                     const struct = state.structures[strTileIndex];
-                    const cost = StructureSettings[struct.id].cost || 0;
-                    delete state.structures[struct.tileIndex];
-                    tribe._stars += cost;
-                    // Remove score
+                    const undoDestroy = destroyStructure(state, struct.tileIndex);
+                    const undoStars = gainStars(state, StructureSettings[struct.id].cost || 0);
                     decomposed.push(() => {
-                        tribe._stars -= cost;
-                        state.structures[struct.tileIndex] = struct;
+                        undoStars();
+                        undoDestroy();
                     });
                 }
             }

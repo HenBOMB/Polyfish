@@ -1,10 +1,11 @@
-import { getCityAt, getHomeCity, getNeighborIndexes, getNextTech, getPovTribe, getUnitAt, indexToCoord, isTechUnlocked, unBoost } from "../functions";
+import { getCityAt, getHomeCity, getNeighborIndexes, getNextTech, getPovTribe, getUnitAt, hasEffect, indexToCoord, isTechUnlocked } from "../functions";
 import Move, { CallbackResult, UndoCallback } from "../move";
 import { EffectType, MoveType, RewardType, StructureType, TechnologyType, TerrainType, TribeType, UnitType } from "../types";
 import { CityState, GameState, TechnologyState } from "../states";
-import { addPopulationToCity, discoverTiles, removeUnit, summonUnit } from "../actions";
+import { addPopulationToCity, discoverTiles, spendStars, removeUnit, summonUnit, gainStars, consumeResource, createStructure, destroyStructure, modifyTerrain, tryRemoveEffect } from "../actions";
 import { TechnologyUnlockableList } from "../settings/TechnologySettings";
 import { predictExplorer } from "../../eval/prediction";
+import { xorCity, xorPlayer, xorTile } from "../../zorbist/hasher";
 
 export default class Capture extends Move {
     constructor(src: number) {
@@ -15,7 +16,8 @@ export default class Capture extends Move {
         const tile = state.tiles[this.getSrc()];
         const struct = state.structures[this.getSrc()];
         const capturer = getUnitAt(state, this.getSrc())!;
-        
+        const pov = getPovTribe(state);
+
         const rewards = [];
         let undo: UndoCallback = () => { };
         
@@ -27,16 +29,21 @@ export default class Capture extends Move {
                 
                 if(oldCity) {
                     capturer._homeIndex = capturer._tileIndex;
+                    xorCity.unitCount(pov, oldCity, oldCity._unitCount);
                     oldCity._unitCount--;
+                    xorCity.unitCount(pov, oldCity, oldCity._unitCount);
                 }
-                
+
                 const result = (tile._owner? this.city(state) : this.village(state))!;
                 rewards.push(...result.rewards);
 
                 undo = () => {
                     result.undo();
+
                     if(oldCity) {
+                        xorCity.unitCount(pov, oldCity, oldCity._unitCount);
                         oldCity._unitCount++;
+                        xorCity.unitCount(pov, oldCity, oldCity._unitCount);
                         capturer._homeIndex = oldCity.tileIndex;
                     }
                 }
@@ -51,7 +58,7 @@ export default class Capture extends Move {
             undo = this.starfish(state);
         }
         
-        const undoBoost = unBoost(capturer);
+        const undoBoost = tryRemoveEffect(state, capturer, EffectType.Boost);
         
         return {
             rewards,
@@ -83,13 +90,18 @@ export default class Capture extends Move {
             _territory: territory,
             _unitCount: 1,
         };
+
+        xorCity.set(state, createdCity);
         
         pov._cities.push(createdCity);
         villageTile._owner = pov.owner;
+        xorTile.owner(state, villageTile.tileIndex, 0, pov.owner);
+        
         for(const tileIndex of createdCity._territory) {
             const tile = state.tiles[tileIndex];
             tile._owner = pov.owner;
             tile._rulingCityIndex = villageTile.tileIndex;
+            xorTile.owner(state, villageTile.tileIndex, 0, pov.owner);
         }
         
         return {
@@ -99,9 +111,15 @@ export default class Capture extends Move {
                     const tile = state.tiles[tileIndex];
                     tile._owner = 0;
                     tile._rulingCityIndex = -1;
+                    xorTile.owner(state, tileIndex, pov.owner, 0);
                 }
+
+                xorTile.owner(state, villageTile.tileIndex, pov.owner, 0);
+
                 villageTile._owner = 0;
                 pov._cities.pop();
+
+                xorCity.set(state, createdCity);
             }
         }
     }
@@ -118,6 +136,9 @@ export default class Capture extends Move {
         
         const cityListIndex = enemy._cities.indexOf(city);
         
+        xorCity.owner(state, city, enemy.owner, pov.owner);
+        xorTile.owner(state, city.tileIndex, enemy.owner, pov.owner);
+
         // Claim the enemy's city
         enemy._cities.splice(cityListIndex, 1)
         pov._cities.push(city);
@@ -130,6 +151,7 @@ export default class Capture extends Move {
         for(let i = 0; i < city._territory.length; i++) {
             const tile = state.tiles[city._territory[i]];
             tile._owner = pov.owner;
+            xorTile.owner(state, tile.tileIndex, enemy.owner, pov.owner);
         }
         
         // If enemy runs out of cities they loose all their units
@@ -156,14 +178,18 @@ export default class Capture extends Move {
                 for(let i = 0; i < city._territory.length; i++) {
                     const tile = state.tiles[city._territory[i]];
                     tile._owner = enemy.owner;
+                    xorTile.owner(state, tile.tileIndex, pov.owner, enemy.owner);
                 }
-                
+
                 if(tile.capitalOf > 0) tile.capitalOf = enemy.owner;
                 tile._owner = enemy.owner;
                 city._owner = enemy.owner;
                 city.name = cityName;
                 pov._cities.pop();
                 enemy._cities.splice(cityListIndex, 0, city);
+
+                xorTile.owner(state, city.tileIndex, pov.owner, enemy.owner);
+                xorCity.owner(state, city, pov.owner, enemy.owner);
             }
         }
     }
@@ -179,12 +205,10 @@ export default class Capture extends Move {
 
         // free 5 stars
         possibleRewards.push(() => {
-            pov._stars += 5;
+            const undoStars = gainStars(state, 5);
             return {
                 rewards: [],
-                undo: () => {
-                    pov._stars -= 5;
-                }
+                undo: undoStars
             }
         });
 
@@ -197,16 +221,17 @@ export default class Capture extends Move {
                     techType: scrolls[Math.floor(Math.random() * scrolls.length)],
                     discovered: state.settings.areYouSure,
                 };
+
+                xorPlayer.tech(pov, scroll.techType);
                 pov._tech.push(scroll);
-                pov._stars += 5;
+                const undoPurchase = spendStars(state, -5);
+
                 return {
                     rewards: [],
                     undo: () => {
-                        pov._stars -= 5;
+                        undoPurchase();
                         pov._tech.pop();
-                        if(state.settings.areYouSure) {
-                            scroll.discovered = false;
-                        }   
+                        xorPlayer.tech(pov, scroll.techType);
                     }
                 }
             });
@@ -256,7 +281,7 @@ export default class Capture extends Move {
         // spawns a level 3 city with a city wall and 4 adjacent shallow water tiles	
         if(pov.tribeType == TribeType.Aquarion && terrainType === TerrainType.Ocean) {
             possibleRewards.push(() => {
-                const cityData: CityState = {
+                const createdCity: CityState = {
                     name: `${TribeType[pov.tribeType]} City`,
                     _population: 2,
                     _progress: 0,
@@ -271,36 +296,25 @@ export default class Capture extends Move {
                     _unitCount: 0,
                 };
 
-                const oldStruct = state.structures[tileIndex];
-    
-                state.structures[tileIndex] = {
-                    id: StructureType.Village,
-                    _level: cityData._level,
-                    turn: state.settings._turn,
-                    reward: 0,
-                    tileIndex,
-                }
-    
-                const adjWaterTiles = [
+                xorCity.set(state, createdCity);
+
+                const undoCreate = createStructure(state, tileIndex, StructureType.Village);
+
+                const chain: UndoCallback[] = [];
+                [
                     tileIndex + 1,
                     tileIndex - 1,
                     tileIndex + state.settings.size,
                     tileIndex - state.settings.size,
-                ].filter(index => {
+                ].forEach(index => {
                     const [x, y] = indexToCoord(state, index);
                     if (x < 0 || x >= state.settings.size || y < 0 || y >= state.settings.size) {
-                        return false;
+                        return;
                     }
-                    return true;
+                    chain.push(modifyTerrain(state, x, TerrainType.Water));
                 });
     
-                adjWaterTiles.forEach((x, i) => {
-                    const old = state.tiles[x].terrainType;
-                    state.tiles[x].terrainType = TerrainType.Water;
-                    adjWaterTiles[i] =- old;
-                });
-                
-                pov._cities.push(cityData);
+                pov._cities.push(createdCity);
 
                 // TODO recalculate network connections
 
@@ -308,24 +322,18 @@ export default class Capture extends Move {
                     rewards: [],
                     undo: () => {
                         pov._cities.pop();
-                        adjWaterTiles.forEach((x) => {
-                            state.tiles[x].terrainType = x;
-                        });
-                        state.structures[tileIndex] = oldStruct;
+                        chain.forEach(x => x());
+                        undoCreate();
+                        xorCity.set(state, createdCity);
                     }
                 }
             });
         }
 
-        const ruins = state.structures[tileIndex];
-        delete state.structures[tileIndex];
+        const undoDestroyRuins = destroyStructure(state, tileIndex);
         
-        // Reveal hidden unit
-        const inInvis = capturer._effects.has(EffectType.Invisible);
-
-        if(inInvis) {
-            capturer._effects.delete(EffectType.Invisible);
-        }
+        // Capturing reveals the hidden unit
+        const undoInvis = tryRemoveEffect(state, capturer, EffectType.Invisible);
 
         const rewardResult = possibleRewards[Math.floor(Math.random() * possibleRewards.length)]();
         
@@ -333,13 +341,8 @@ export default class Capture extends Move {
             rewards: rewardResult?.rewards || [],
             undo: () => {
                 rewardResult?.undo();
-
-                if(inInvis) {
-                    capturer._effects.add(EffectType.Invisible);
-                }
-    
-                state.structures[tileIndex] = ruins;
-                
+                undoInvis();
+                undoDestroyRuins();
                 capturer._attacked = false;
                 capturer._moved = false;
             }
@@ -347,17 +350,12 @@ export default class Capture extends Move {
     }
     
     starfish(state: GameState): UndoCallback {
-        const pov = getPovTribe(state);
         const capturer = getUnitAt(state, this.getSrc())!;
-        const resource = state.resources[capturer._tileIndex];
-
-        pov._stars += 8;
-        delete state.resources[capturer._tileIndex];
-        
+        const undoResource = consumeResource(state, capturer._tileIndex);
+        const undoStars = gainStars(state, 8);
         return () => {
-            pov._stars -= 8;
-            state.resources[capturer._tileIndex] = resource;
+            undoStars();
+            undoResource();
         }
     }
-
 }

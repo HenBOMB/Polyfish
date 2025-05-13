@@ -2,6 +2,8 @@ import { getPovTribe, getTechCost } from "../functions";
 import Move, { CallbackResult } from "../move";
 import { MoveType, TechnologyType } from "../types";
 import { GameState, TechnologyState } from "../states";
+import { spendStars } from "../actions";
+import { xorPlayer } from "../../zorbist/hasher";
 
 export default class Research extends Move {
     constructor(type: number) {
@@ -15,17 +17,17 @@ export default class Research extends Move {
             techType: this.getType<TechnologyType>(),
             discovered: state.settings.areYouSure,
         }
+
+        xorPlayer.tech(pov, tech.techType);
         pov._tech.push(tech);
-        pov._stars -= cost;
+        const undoPurchase = spendStars(state, cost);
         
         return {
             rewards: [],
             undo: () => {
-                pov._stars += cost;
+                undoPurchase();
                 pov._tech.pop();
-                if(state.settings.areYouSure) {
-                    tech.discovered = false;
-                }
+                xorPlayer.tech(pov, tech.techType);
             }
         };
     }

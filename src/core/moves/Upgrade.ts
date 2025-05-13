@@ -5,6 +5,7 @@ import { MoveType } from "../types";
 import { UnitSettings } from "../settings/UnitSettings";
 import { GameState } from "../states";
 import { UnitType } from "../types";
+import { spendStars } from "../actions";
 
 export default class Upgrade extends Move {
     constructor(from: number, type: number) {
@@ -33,14 +34,14 @@ export default class Upgrade extends Move {
 
         unit._passenger = oldUnitType;
         unit._unitType = upgradeType;
-        pov._stars -= UnitSettings[upgradeType].cost;
+        const undoStars = spendStars(state, UnitSettings[upgradeType].cost);
 
         return {
             rewards: [],
             undo: () => {
+                undoStars();
                 unit._passenger = undefined;
                 unit._unitType = oldUnitType;
-                pov._stars += UnitSettings[upgradeType].cost;
             },
         };
     }
