@@ -1,12 +1,10 @@
 import { Logger } from "../../polyfish/logger";
-import { getEnemyAt, getTrueUnitAt, getUnitAt } from "../functions";
+import { getTrueUnitAt, getUnitAt } from "../functions";
 import Move, { CallbackResult } from "../move";
 import { EffectType, MoveType } from "../types";
 import { GameState } from "../states";
 import { UnitType } from "../types";
 import { stepUnit, tryRemoveEffect } from "../actions";
-import { xorUnit } from "../../zorbist/hasher";
-import { zobristKeys } from "../../zorbist/zobristKeys";
 
 export default class Step extends Move {
     constructor(src: number, target: number) {
@@ -23,12 +21,6 @@ export default class Step extends Move {
                 const cloak = getTrueUnitAt(state, target)!;
                 const enemy = state.tribes[cloak._owner];
 
-                // xor out the enemy owner, cause it will be re-added automatically after
-                enemy.hash ^= zobristKeys.units[cloak._tileIndex].owner[cloak._owner];
-
-                // xor the owner for all tribes who can see it
-                xorUnit.owner(state, cloak, cloak._owner);
-
                 // reveal the cloak
                 const undo = tryRemoveEffect(state, cloak, EffectType.Invisible);
 
@@ -36,8 +28,6 @@ export default class Step extends Move {
                     rewards: [],
                     undo: () => {
                         undo();
-                        xorUnit.owner(state, cloak, cloak._owner);
-                        enemy.hash ^= zobristKeys.units[cloak._tileIndex].owner[cloak._owner];
                     },
                 };
             }

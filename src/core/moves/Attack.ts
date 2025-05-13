@@ -198,16 +198,14 @@ export default class Attack extends Move {
         // The city will produce zero stars on their opponent's next turn. 
         // but will not affect other methods of star production. (eg: markets, diplomacy)
         
-        xorCity.riot(pov, cityTarget, false);
+        xorCity.riot(state, cityTarget, false);
         cityTarget._riot = true;
-        xorCity.riot(pov, cityTarget, true);
         
         return {
             rewards: rewards,
             undo: () => {
-                xorCity.riot(pov, cityTarget, true);
+                xorCity.riot(state, cityTarget, true);
                 cityTarget._riot = false;
-                xorCity.riot(pov, cityTarget, false);
                 undoStars();
                 daggers.forEach(x => x());
                 undoKillEnemy();

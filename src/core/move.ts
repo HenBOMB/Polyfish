@@ -1,7 +1,6 @@
-import { ZobristKeys } from "../zorbist/generateZorbist";
 import { getCityAt, getEnemyAt, getUnitAt } from "./functions";
 import { GameState } from "./states";
-import { AbilityType, CaptureType, ArmyAbilityTypes, MoveType, ResourceType, RewardType, EconomyAbilityTypes, StructureType, TechnologyType, TerrainType, TribeType, UnitType } from "./types";
+import { AbilityType, CaptureType, MoveType, ResourceType, RewardType, StructureType, TechnologyType, TerrainType, UnitType } from "./types";
 
 export type UndoCallback = () => void;
 

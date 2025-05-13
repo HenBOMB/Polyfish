@@ -47,7 +47,7 @@ export interface UnitState {
 	_unitType: UnitType;
 	_health: number;
 	veteran?: boolean;
-	kills: number;
+	_kills: number;
 	prevX: number;
 	prevY: number;
 	direction: number;

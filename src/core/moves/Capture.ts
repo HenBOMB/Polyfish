@@ -28,10 +28,9 @@ export default class Capture extends Move {
                 const oldCity = getHomeCity(state, capturer);
                 
                 if(oldCity) {
+                    xorCity.unitCount(state, oldCity, oldCity._unitCount, oldCity._unitCount - 1);
                     capturer._homeIndex = capturer._tileIndex;
-                    xorCity.unitCount(pov, oldCity, oldCity._unitCount);
                     oldCity._unitCount--;
-                    xorCity.unitCount(pov, oldCity, oldCity._unitCount);
                 }
 
                 const result = (tile._owner? this.city(state) : this.village(state))!;
@@ -41,9 +40,8 @@ export default class Capture extends Move {
                     result.undo();
 
                     if(oldCity) {
-                        xorCity.unitCount(pov, oldCity, oldCity._unitCount);
+                        xorCity.unitCount(state, oldCity, oldCity._unitCount, oldCity._unitCount + 1);
                         oldCity._unitCount++;
-                        xorCity.unitCount(pov, oldCity, oldCity._unitCount);
                         capturer._homeIndex = oldCity.tileIndex;
                     }
                 }
@@ -273,7 +271,7 @@ export default class Capture extends Move {
             const summoned = pov._units[pov._units.length-1];
 
             summoned.veteran = true;
-            summoned.kills = 3;
+            summoned._kills = 3;
 
             return summon;
         });

@@ -436,7 +436,7 @@ export function isRoadpathAndUsable(state: GameState, unit: UnitState, tileIndex
 
 export function getDefenseBonus(state: GameState, unit: UnitState): number {
 	// Poisoned units cannot recieve defense bonus
-	if (unit._effects.has(EffectType.Poison)) {
+	if (hasEffect(unit, EffectType.Poison)) {
 		return 1;
 	}
 	

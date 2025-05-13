@@ -478,7 +478,7 @@ export class ArmyMovesGenerator {
 		const tileIndex = unit._tileIndex;
 
 		// Promote
-		if(!unit.veteran && unit.kills >= 3) {
+		if(!unit.veteran && unit._kills >= 3) {
 			_moves.push(new Promote(tileIndex));
 		}
 

@@ -294,7 +294,7 @@ export default class GameLoader {
                     _unitType: this.parseRawInt(rawUnit[3]),
                     _health: this.parseRawInt(rawUnit[4]),
                     veteran: this.parseRawBool(rawUnit[5]),
-                    kills: this.parseRawInt(rawUnit[6]),
+                    _kills: this.parseRawInt(rawUnit[6]),
                     prevX: this.parseRawInt(rawUnit[7]),
                     prevY: this.parseRawInt(rawUnit[8]),
                     _homeIndex: this.parseRawInt(rawUnit[9]) + this.parseRawInt(rawUnit[10]) * state.settings.size,

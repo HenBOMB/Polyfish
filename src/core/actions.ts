@@ -1,14 +1,13 @@
-import { getNeighborTiles, calaulatePushablePosition, getNeighborIndexes, computeReachablePath, isSkilledIn, getPovTribe, getTrueUnitAt, getHomeCity, getRulingCity, getMaxHealth, getEnemiesNearTile, calculateCombat, getUnitRange, getTrueEnemyAt, calculateAttack, isSteppable, isWaterTerrain, getCapitalCity, getLighthouses, getCityOwningTile, hasEffect, getEnemiesInRange, isAquaticOrCanFly, calculateDistance } from "./functions";
-import { ArmyMovesGenerator, EconMovesGenerator } from "./moves";
+import { getNeighborTiles, calaulatePushablePosition, getNeighborIndexes, isSkilledIn, getPovTribe, getTrueUnitAt, getHomeCity, getRulingCity, getMaxHealth, getEnemiesNearTile, calculateCombat, getUnitRange, getTrueEnemyAt, calculateAttack, isSteppable, isWaterTerrain, getCapitalCity, getLighthouses, getCityOwningTile, hasEffect, getEnemiesInRange, isAquaticOrCanFly, calculateDistance } from "./functions";
+import { EconMovesGenerator } from "./moves";
 import Move, { Branch, CallbackResult, UndoCallback } from "./move";
 import { ResourceSettings } from "./settings/ResourceSettings";
 import { StructureSettings } from "./settings/StructureSettings";
 import { UnitSettings } from "./settings/UnitSettings";
 import { CityState, GameState, StructureState, UnitState } from "./states";
-import { UnitType, StructureType, SkillType, TerrainType, EffectType, ClimateType, TribeType, ResourceType } from "./types";
+import { UnitType, StructureType, SkillType, TerrainType, EffectType, ResourceType } from "./types";
 import { IsStructureTask } from "./settings/TaskSettings";
 import { xorCity, xorPlayer, xorResource, xorStructure, xorTile, xorUnit } from "../zorbist/hasher";
-import { Logger } from "../polyfish/logger";
 
 export function addPopulationToCity(state: GameState, city: CityState, amount: number): CallbackResult {
     const pov = getPovTribe(state);
@@ -25,7 +24,7 @@ export function addPopulationToCity(state: GameState, city: CityState, amount: n
     const next = city._level + 1;
     
     if(city._progress >= next) {
-        xorCity.level(pov, city, city._level);
+        const lvl = city._level;
 
         cityStruct._level++;
         city._level++;
@@ -45,12 +44,12 @@ export function addPopulationToCity(state: GameState, city: CityState, amount: n
             rewards.push(...EconMovesGenerator.rewards(city));
         }
 
-        xorCity.level(pov, city, city._level);
+        xorCity.level(state, city, lvl, city._level);
 
         return {
             rewards,
             undo: () => {
-                xorCity.level(pov, city, city._level);
+                xorCity.level(state, city, city._level, lvl);
 
                 if(lol) {
                     city._production--;
@@ -63,8 +62,6 @@ export function addPopulationToCity(state: GameState, city: CityState, amount: n
                 city._progress += next;
                 city._level--;
                 cityStruct._level--;
-
-                xorCity.level(pov, city, city._level);
 
                 city._progress -= amount;
                 city._population -= amount;
@@ -160,9 +157,8 @@ export function destroyStructure(state: GameState, tileIndex: number): UndoCallb
         city._population -= settings.rewardPop;
         city._progress -= settings.rewardPop;
         if(city._progress < 0) {
-            xorCity.level(pov, city, city._level);
+            xorCity.level(state, city, city._level, city._level - 1);
             city._level--;
-            xorCity.level(pov, city, city._level);
         }
     }
 
@@ -171,9 +167,8 @@ export function destroyStructure(state: GameState, tileIndex: number): UndoCallb
     return () => {
         if(settings.rewardPop) {
             if(city._progress < 0) {
-                xorCity.level(pov, city, city._level);
+                xorCity.level(state, city, city._level, city._level + 1);
                 city._level++;
-                xorCity.level(pov, city, city._level);
             }
             city._progress += settings.rewardPop;
             city._population += settings.rewardPop;
@@ -279,7 +274,7 @@ export function summonUnit(state: GameState, unitType: UnitType, spawnTileIndex:
     const spawnedUnit = {
         _unitType: unitType,
         _health: health * 10,
-        kills: 0,
+        _kills: 0,
         prevX: -1,
         prevY: -1,
         direction: 0,
@@ -302,9 +297,8 @@ export function summonUnit(state: GameState, unitType: UnitType, spawnTileIndex:
     const cityHome = forceIndependent? null : getHomeCity(state, spawnedUnit);
 
     if(cityHome) {
-        xorCity.unitCount(pov, cityHome, cityHome._unitCount);
+        xorCity.unitCount(state, cityHome, cityHome._unitCount, cityHome._unitCount + 1);
         cityHome._unitCount++;
-        xorCity.unitCount(pov, cityHome, cityHome._unitCount);
     }
     
 	const resultDiscover = discoverTiles(state, spawnedUnit);
@@ -316,9 +310,8 @@ export function summonUnit(state: GameState, unitType: UnitType, spawnTileIndex:
             undoFrozen();
             resultDiscover?.undo();
             if(cityHome) {
-                xorCity.unitCount(pov, cityHome, cityHome._unitCount);
+                xorCity.unitCount(state, cityHome, cityHome._unitCount, cityHome._unitCount - 1);
                 cityHome._unitCount--;
-                xorCity.unitCount(pov, cityHome, cityHome._unitCount);
             }
             spawnTile._unitOwner = oldUnitOwner;
             undoPurchase();
@@ -343,15 +336,13 @@ export function removeUnit(state: GameState, removed: UnitState, killer?: UnitSt
     tile._unitOwner = 0;
 
     if(cityHome) {
-        xorCity.unitCount(pov, cityHome, cityHome._unitCount);
+        xorCity.unitCount(state, cityHome, cityHome._unitCount, cityHome._unitCount - 1);
         cityHome._unitCount--
-        xorCity.unitCount(pov, cityHome, cityHome._unitCount);
     }
 
     if(killer) {
-        xorUnit.kills(pov, killer, killer.kills);
-        killer.kills++;
-        xorUnit.kills(pov, killer, killer.kills);
+        xorUnit.kills(state, killer, killer._kills, killer._kills + 1);
+        killer._kills++;
         pov._casualties++;
         state.tribes[killer._owner]._kills++;
     }
@@ -360,15 +351,13 @@ export function removeUnit(state: GameState, removed: UnitState, killer?: UnitSt
         if(killer) {
             state.tribes[killer._owner]._kills--;
             pov._casualties--;
-            xorUnit.kills(pov, killer, killer.kills);
-            killer.kills--;
-            xorUnit.kills(pov, killer, killer.kills);
+            xorUnit.kills(state, killer, killer._kills, killer._kills - 1);
+            killer._kills--;
         }
         
         if(cityHome) {
-            xorCity.unitCount(pov, cityHome, cityHome._unitCount);
+            xorCity.unitCount(state, cityHome, cityHome._unitCount, cityHome._unitCount - 1);
             cityHome._unitCount++;
-            xorCity.unitCount(pov, cityHome, cityHome._unitCount);
         }
 
         tile._unitOwner = oldOwner;
@@ -394,11 +383,11 @@ export function tryAddEffect(state: GameState, unit: UnitState, effect: EffectTy
     if(hasEffect(unit, effect)) {
         return () => { };
     }
-    xorUnit.effect(getPovTribe(state), unit, effect);
+    xorUnit.effect(state, unit, effect);
     unit._effects.add(effect);
     return () => {
         unit._effects.delete(effect);
-        xorUnit.effect(getPovTribe(state), unit, effect);
+        xorUnit.effect(state, unit, effect);
     }
 }
 
@@ -406,11 +395,11 @@ export function tryRemoveEffect(state: GameState, unit: UnitState, effect: Effec
     if(!hasEffect(unit, effect)) {
         return () => { };
     }
-    xorUnit.effect(getPovTribe(state), unit, effect);
+    xorUnit.effect(state, unit, effect);
     unit._effects.delete(effect);
     return () => {
         unit._effects.add(effect);
-        xorUnit.effect(getPovTribe(state), unit, effect);
+        xorUnit.effect(state, unit, effect);
     }
 }
 
