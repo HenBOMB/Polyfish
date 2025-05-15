@@ -17,7 +17,7 @@ import { UnitSettings } from "./settings/UnitSettings";
 import { predictBestNextCityReward, predictOuterFogTerrain, predictVillages } from "../eval/prediction";
 import { TribeSettings } from "./settings/TribeSettings";
 import { summonUnit } from "./actions";
-import { xorState } from "../zorbist/hasher";
+import { xorState } from "../zobrist/hasher";
 
 export const STARTING_OWNER_ID = 1;
 export const DEBUG_SEED = undefined;
@@ -293,7 +293,7 @@ export default class GameLoader {
                     _owner: this.parseRawInt(rawUnit[0]),
                     _unitType: this.parseRawInt(rawUnit[3]),
                     _health: this.parseRawInt(rawUnit[4]),
-                    veteran: this.parseRawBool(rawUnit[5]),
+                    _veteran: this.parseRawBool(rawUnit[5]),
                     _kills: this.parseRawInt(rawUnit[6]),
                     prevX: this.parseRawInt(rawUnit[7]),
                     prevY: this.parseRawInt(rawUnit[8]),

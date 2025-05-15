@@ -3,7 +3,7 @@ import Move, { CallbackResult } from "../move";
 import { MoveType, TechnologyType } from "../types";
 import { GameState, TechnologyState } from "../states";
 import { spendStars } from "../actions";
-import { xorPlayer } from "../../zorbist/hasher";
+import { xorPlayer } from "../../zobrist/hasher";
 
 export default class Research extends Move {
     constructor(type: number) {

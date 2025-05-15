@@ -1,6 +1,6 @@
-import { xorCity, xorUnit } from "../../zorbist/hasher";
-import { attackUnit, removeUnit, summonUnit, gainStars, tryRemoveEffect } from "../actions";
-import { getEnemyAt, getPovTribe, getUnitAt, hasEffect, isSkilledIn, isTechUnlocked } from "../functions";
+import { xorCity, xorUnit } from "../../zobrist/hasher";
+import { attackUnit, removeUnit, summonUnit, gainStars, tryRemoveEffect, endUnitTurn } from "../actions";
+import { getCityProduction, getEnemyAt, getPovTribe, getUnitAt, isSkilledIn, isTechUnlocked } from "../functions";
 import Move, { CallbackResult, UndoCallback } from "../move";
 import { GameState } from "../states";
 import { EffectType, MoveType, SkillType, TechnologyType, TerrainType, UnitType } from "../types";
@@ -14,74 +14,72 @@ export default class Attack extends Move {
         const attacker = getUnitAt(state, this.getSrc())!;
         
         // Units with infiltrate cannot attack units, instead they attack cities
-        if (isSkilledIn(attacker, SkillType.Infiltrate)) {
+        if(isSkilledIn(attacker, SkillType.Infiltrate)) {
             return this.riot(state);
         }
         
         const pov = getPovTribe(state);
         const defender = getEnemyAt(state, this.getTarget())!;
-        const moved = attacker._moved;
         const enemy = state.tribes[defender._owner];
         
-        let undoAttack = () => {};
+        const result = attackUnit(state, attacker, defender);
+
+        const undoChain: UndoCallback[] = [
+            endUnitTurn(state, attacker)
+        ];
+        
+        const undoEndTurn = endUnitTurn(state, attacker);
         let undoExtra = () => {};
 
-        // Allows a unit to convert an enemy unit into a friendly unit by attacking it
-        // TODO verify if working: Converted units take up population in the attacker's city but do not change score for either players
+        // allows a unit to convert an enemy unit into a friendly unit by attacking it
+        // converted units take up population in the attacker's city but do not change score for either players
         if(isSkilledIn(attacker, SkillType.Convert)) {
-            const owner = defender._owner;
             const index = enemy._units.findIndex(x => x._tileIndex == defender._tileIndex);
             
             xorUnit.owner(state, defender, enemy.owner, pov.owner);
             defender._owner = attacker._owner;
             enemy._units.splice(index, 1);
-            attacker._attacked = attacker._moved = true;
             
-            undoAttack = () => {
+            undoChain.push(() => {
                 xorUnit.owner(state, defender, pov.owner, enemy.owner);
-                attacker._attacked = false;
-                attacker._moved = moved;
                 enemy._units.splice(index, 0, defender);
-                defender._owner = owner;
-            }
+                defender._owner = enemy.owner;
+            });
         }
-        else {
-            undoAttack = attackUnit(state, attacker, defender);
-            
-            // If defender was not killed 
-            if(defender._health > 0) {
-                
-            }
-            // Units with Persist skill can keep on killing if they one shot the defender
-            else if(attacker._health > 0 && isSkilledIn(attacker, SkillType.Persist)) {
+        // normal attack, and attacker is still alive
+        else if(attacker._health > 0) {
+            // if unit was boosted, unboost
+            undoChain.push(tryRemoveEffect(state, attacker, EffectType.Boost));
+
+            // Units with Persist skill can keep on attacking
+            if(defender._health <= 0 && isSkilledIn(attacker, SkillType.Persist)) {
                 attacker._attacked = false;
-            }
-            else {
-                attacker._attacked = true;
+                xorUnit.attacked(state, attacker);    
+
+                undoChain.push(() => {
+                    xorUnit.attacked(state, attacker);    
+                    attacker._attacked = true;
+                });
             }
 
-            // attacker is still alive
-            if(attacker._health > 0) {
-                // if unit was boosted, unboost
-                undoExtra = tryRemoveEffect(state, attacker, EffectType.Boost);
-            }
-            
-            // Units with Escape can move after they attacked
-            if (attacker._health > 0 && isSkilledIn(attacker, SkillType.Escape)) {
+            // Units with Escape skill can move after attacking
+            if(attacker._health > 0 && isSkilledIn(attacker, SkillType.Escape)) {
                 attacker._moved = false;
-            }
-            else {
-                attacker._moved = true;
+                xorUnit.moved(state, attacker);    
+
+                undoChain.push(() => {
+                    xorUnit.moved(state, attacker);    
+                    attacker._moved = true;
+                });
             }
         }
-        
+
         return {
-            rewards: [],
+            rewards: result?.rewards || [],
             undo: () => {
-                attacker._moved = moved;
-                attacker._attacked = false;
                 undoExtra();
-                undoAttack();
+                undoEndTurn();
+                result?.undo();
             }
         };
     }
@@ -93,15 +91,14 @@ export default class Attack extends Move {
         const cityTile = state.tiles[cityIndex];
         const enemyTribe = state.tribes[cityTile._owner];
         const cityTarget = enemyTribe._cities.find(x => x.tileIndex == cityIndex)!;
+        const enemyTarget = getUnitAt(state, cityIndex);
         
         // Cloak is consumed
         const undoConsume = removeUnit(state, infiltrator);
-        
-        // Any enemy unit in the city at the time will be damaged
-        const enemyTarget = getUnitAt(state, cityIndex);
-        
+
         let undoKillEnemy = () => {};
         
+        // Any enemy unit in the city at the time will be damaged
         // This damage is equivalent to what a unit with an attack of 2 would deal
         if(enemyTarget) {
             // TODO not sure if they mean literally or by a calculated attack
@@ -130,27 +127,29 @@ export default class Attack extends Move {
         let otherTiles: number[] = [];
         
         cityTarget._territory.forEach(x => {
-            const tile = state.tiles[x];
-            if(tile._unitOwner > 0 || x == cityIndex) return;
-            switch (tile.terrainType) {
-                case TerrainType.Mountain:
-                if(isTechUnlocked(pov, TechnologyType.Climbing)) {
-                    defTiles.push(x);
-                }
-                return
-                case TerrainType.Forest:
-                if(isTechUnlocked(pov, TechnologyType.Archery)) {
-                    defTiles.push(x);
-                }
-                return
-                case TerrainType.Water:
-                if(isTechUnlocked(pov, TechnologyType.Sailing)) {
-                    waterTiles.push(x);
-                }
-                return
+            if(state.tiles[x]._unitOwner > 0 || x == cityIndex) {
+                return;
             }
-            otherTiles.push(x);
-            return;
+            switch (state.tiles[x].terrainType) {
+                case TerrainType.Mountain:
+                    if(isTechUnlocked(pov, TechnologyType.Climbing)) {
+                        defTiles.push(x);
+                    }
+                    break;
+                case TerrainType.Forest:
+                    if(isTechUnlocked(pov, TechnologyType.Archery)) {
+                        defTiles.push(x);
+                    }
+                    break;
+                case TerrainType.Water:
+                    if(isTechUnlocked(pov, TechnologyType.Sailing)) {
+                        waterTiles.push(x);
+                    }
+                    break;
+                default:
+                    otherTiles.push(x);
+                    break;
+            }
         });
         
         otherTiles.sort(() => Math.random() - 0.5);
@@ -173,8 +172,9 @@ export default class Attack extends Move {
         
         const daggers: UndoCallback[] = [];
         const rewards = [];
+        const income = Math.min(5, getCityProduction(state, cityTarget));
 
-        for (let j = 0; j < Math.min(5, cityTarget._production); j++) {
+        for (let _ = 0; _ < income; _++) {
             let tileIndex = defTiles.pop() || otherTiles.pop();
             let unitType = UnitType.Dagger;
             if(!tileIndex)  {
@@ -191,20 +191,18 @@ export default class Attack extends Move {
         }
         
         // The infiltrating player will immediately gain a number of stars equal to the income of the city.
-        // TODO re-verify: THIS IS INCORRECT, I TESTED IT AND ITS THE AMOUNT OF DAGGERS SPAWNED!
-        
-        const undoStars = gainStars(state, daggers.length);
+        const undoStars = gainStars(state, income);
 
         // The city will produce zero stars on their opponent's next turn. 
         // but will not affect other methods of star production. (eg: markets, diplomacy)
         
-        xorCity.riot(state, cityTarget, false);
+        xorCity.riot(state, cityTarget);
         cityTarget._riot = true;
         
         return {
             rewards: rewards,
             undo: () => {
-                xorCity.riot(state, cityTarget, true);
+                xorCity.riot(state, cityTarget);
                 cityTarget._riot = false;
                 undoStars();
                 daggers.forEach(x => x());

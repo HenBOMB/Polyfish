@@ -30,7 +30,7 @@ export interface ZobristKeys {
 
     tiles: {
         terrainType: bigint[];      // TerrainType[]
-        explored: [bigint, bigint]; // bool[]
+        explored: bigint;           // bool
         owner: bigint[];            // ownerID[]
     }[];
 
@@ -40,9 +40,9 @@ export interface ZobristKeys {
 		kills: bigint[];            // number[]
         type: bigint[];             // UnitType[]
         passenger: bigint[];        // UnitType[]
-		veteran: [bigint, bigint];  // bool[]
-        moved: [bigint, bigint];    // bool[]
-        attacked: [bigint, bigint]; // bool[]
+		veteran: bigint;            // bool
+        moved: bigint;              // bool
+        attacked: bigint;           // bool
         effect: bigint[];           // EffectType[]
     }[];
 
@@ -56,7 +56,7 @@ export interface ZobristKeys {
     city: {
         level: bigint[];            // number[]
         unitCount: bigint[];        // number[]
-        riot: [bigint, bigint];     // bool[]
+        riot: bigint;               // bool
         owner: bigint[];            // ownerID[]
     }[];
 
@@ -88,7 +88,7 @@ function generateAllZobristKeys(): ZobristKeys {
 
     // Tiles
     keys.tiles = initializeKeys(MAX_TILES, () => ({
-        explored: initializeKeys(2, generateRandom64BitBigInt) as [bigint, bigint],
+        explored: generateRandom64BitBigInt(),
         owner: initializeKeys(MAX_PLAYERS, generateRandom64BitBigInt),
         terrainType: initializeKeys(terrainTypeCount, generateRandom64BitBigInt),
     }));
@@ -99,9 +99,9 @@ function generateAllZobristKeys(): ZobristKeys {
         type: initializeKeys(unitTypeCount, generateRandom64BitBigInt),
         passenger: initializeKeys(unitTypeCount, generateRandom64BitBigInt),
         kills: initializeKeys(MAX_KILLS, generateRandom64BitBigInt),
-        veteran: initializeKeys(2, generateRandom64BitBigInt) as [bigint, bigint],
-        moved: initializeKeys(2, generateRandom64BitBigInt) as [bigint, bigint],
-        attacked: initializeKeys(2, generateRandom64BitBigInt) as [bigint, bigint],
+        veteran: generateRandom64BitBigInt(),
+        moved: generateRandom64BitBigInt(),
+        attacked: generateRandom64BitBigInt(),
         effect: initializeKeys(effectTypeCount, generateRandom64BitBigInt),
     }));
 
@@ -120,7 +120,7 @@ function generateAllZobristKeys(): ZobristKeys {
     keys.city = initializeKeys(MAX_TILES, () => ({
         level: initializeKeys(MAX_CITY_UNIT_COUNT, generateRandom64BitBigInt),
         unitCount: initializeKeys(MAX_CITY_UNIT_COUNT, generateRandom64BitBigInt),
-        riot: initializeKeys(2, generateRandom64BitBigInt) as [bigint, bigint],
+        riot: generateRandom64BitBigInt(),
         owner: initializeKeys(MAX_PLAYERS, generateRandom64BitBigInt),
     }));
 
@@ -136,7 +136,7 @@ function generateAllZobristKeys(): ZobristKeys {
 }
 
 export function generateFile() {
-    const outputFilePath = 'src/zorbist/zobristKeys.ts';
+    const outputFilePath = 'src/zobrist/zobristKeys.ts';
     const zobristKeysData = generateAllZobristKeys();
     const stringifiedZobristKeys = JSON.stringify(zobristKeysData, (key, value) => {
         if (typeof value === 'bigint') {

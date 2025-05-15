@@ -1,13 +1,14 @@
 import { GameState } from "./core/states";
 import { STARTING_OWNER_ID } from "./core/gameloader";
 import { MoveGenerator } from "./core/moves";
-import { cloneState, getCityProduction, getPovTribe, hasEffect, isGameOver, tryDiscoverRewardOtherTribes } from "./core/functions";
+import { cloneState, getCityProduction, getPovTribe, hasEffect, isGameOver } from "./core/functions";
+import { tryDiscoverRewardOtherTribes } from "./core/actions";
 import Move, {UndoCallback } from "./core/move";
 import { MoveType } from "./core/types";
 import { EffectType } from "./core/types";
 import NetworkManager from "./core/network";
 import PoseManager from "./core/poser";
-import { gainStars, tryRemoveEffect } from "./core/actions";
+import { endUnitTurn, gainStars, startUnitTurn, tryRemoveEffect } from "./core/actions";
 
 export default class Game {
     initialState: GameState;
@@ -46,6 +47,8 @@ export default class Game {
         });
     }
 
+    // TODO XOR?
+
     playMove(moveOrIndex: number | Move): [Move, UndoCallback] | null {
         if(moveOrIndex === null || moveOrIndex === undefined) {
             throw new Error('Move is undefiend!');
@@ -60,13 +63,16 @@ export default class Game {
         this.state.settings.areYouSure = true;
 
         if(move.moveType === MoveType.EndTurn) {
-            // TODO how about updating the state in here? to compare start to end of current turn?
             undo = this.endTurn();
             this.state.settings._recentMoves = [];
         }
         else {
 		    const result = move.execute(this.state)!;
             const undoDiscover = tryDiscoverRewardOtherTribes(this.state);
+
+            // TODO also need a function to update the diplomacy vision of the discovered tribes
+            // if researched tech
+            
             undo = () => {
                 undoDiscover();
                 result.undo();
@@ -89,41 +95,36 @@ export default class Game {
         return [move, undo];
     }
     
+    // TODO XOR
+
     /**
      * Ends the current tribe's turn
      */
     endTurn(): UndoCallback {
         const state = this.state;
-        const oldOwner = state.settings._pov;
 
         // TODO Add relations? (for polytopia default bots)
         const chain: UndoCallback[] = [];
 
-        // Cycles turns without overflow
-        const nextPov = () => {
-            // Continue with next tribe
-            state.settings._pov += 1;
-            // If overflowing, go back to start
-            if(state.settings._pov > state.settings.tribeCount) {
-                state.settings._pov = STARTING_OWNER_ID;
-            }
-        }
-        
+        // ! CURRENT TURN ! //
+
         const oldpov = state.settings._pov;
         const oldTurn = state.settings._turn;
 
-        chain.push(() => {
+        chain.unshift(() => {
             state.settings._pov = oldpov;
             state.settings._turn = oldTurn;
         });
 
-        nextPov();
-
+        state.settings._pov++;
+        if(state.settings._pov > state.settings.tribeCount) {
+            state.settings._pov = STARTING_OWNER_ID;
+        }
         let pov = getPovTribe(state);
 
         // Search for the next tribe
         while(pov._killedTurn > 0 || pov._resignedTurn > 0) {
-            nextPov();
+            state.settings._pov++;
             pov = getPovTribe(state);
         }
 
@@ -137,63 +138,49 @@ export default class Game {
             state.settings._gameOver = true;
             return () => {
                 state.settings._gameOver = false;
-                chain.reverse().forEach(x => x());
+                chain.forEach(x => x());
             }
         }
 
-        // NEW TRIBE POV //
+        // ! NEW TRIBE TURN ! //
+    
+        // Update the new tribe's visibility
+        const oldVisibility = { ...state._visibleTiles };
+        
+        state.tiles.forEach(tile => {
+            state._visibleTiles[tile.tileIndex] = tile._explorers.has(pov.owner);
+        });
+
+        chain.unshift(() => {
+            state._visibleTiles = oldVisibility;
+        });
+
+        // Trigger disovery if some other tribes moved into our visible terrain
+        chain.unshift(tryDiscoverRewardOtherTribes(state));
+
+        // TODO also need a function to update the diplomacy vision of the discovered tribes
 
         // Reward tribe with its production if its not the first turn
         if(state.settings._turn > 1) {
-            chain.push(gainStars(state, getCityProduction(state, ...pov._cities)));
+            chain.unshift(gainStars(state, getCityProduction(state, ...pov._cities)));
         }
 
         // Update all unit states
 		for (let i = 0; i < pov._units.length; i++) {
 			const unit = pov._units[i];
-            const moved = unit._moved;
-            const attacked = unit._attacked;
 
-            chain.push(() => {
-                unit._moved = moved;
-                unit._attacked = attacked;
-            });
-
-            // Frozen units get unfrozen but that consumes their turn
-            // not in wiki but i assume this is how it works from gameplay
+            // Frozen units get unfrozen but that end their turn
 			if(hasEffect(unit, EffectType.Frozen)) {
-                chain.push(tryRemoveEffect(state, unit, EffectType.Frozen));
-                unit._moved = unit._attacked = true;
-				continue;
+                chain.unshift(tryRemoveEffect(state, unit, EffectType.Frozen));
+                chain.unshift(endUnitTurn(state, unit));
 			}
-
-			unit._moved = unit._attacked = false;
+            else {
+                chain.unshift(startUnitTurn(state, unit));
+            }
 		}
 
-        // Trigger disovery if some other tribes moved into our visible terrain
-        chain.push(tryDiscoverRewardOtherTribes(state));
-
-        // Update the new tribe's visibility
-        state.tiles.forEach(tile => {
-            state._visibleTiles[tile.tileIndex] = tile._explorers.has(pov.owner);
-        });
-
         return () => {
-            state.tiles.forEach(tile => {
-                state._visibleTiles[tile.tileIndex] = tile._explorers.has(oldOwner);
-            });
-            chain.reverse().forEach(x => x());
+            chain.forEach(x => x());
         }
-    }
-
-    serialize() {
-        return JSON.stringify([
-            this.state.settings,
-            this.state.tribes,
-            this.state.tiles,
-            this.state.structures,
-            // get rid of lighthouses
-            // this.state._lighthouses,
-        ]);
     }
 }

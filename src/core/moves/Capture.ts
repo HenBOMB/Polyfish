@@ -2,10 +2,10 @@ import { getCityAt, getHomeCity, getNeighborIndexes, getNextTech, getPovTribe, g
 import Move, { CallbackResult, UndoCallback } from "../move";
 import { EffectType, MoveType, RewardType, StructureType, TechnologyType, TerrainType, TribeType, UnitType } from "../types";
 import { CityState, GameState, TechnologyState } from "../states";
-import { addPopulationToCity, discoverTiles, spendStars, removeUnit, summonUnit, gainStars, consumeResource, createStructure, destroyStructure, modifyTerrain, tryRemoveEffect } from "../actions";
+import { addPopulationToCity, discoverTiles, spendStars, removeUnit, summonUnit, gainStars, consumeResource, createStructure, destroyStructure, modifyTerrain, tryRemoveEffect, endUnitTurn } from "../actions";
 import { TechnologyUnlockableList } from "../settings/TechnologySettings";
 import { predictExplorer } from "../../eval/prediction";
-import { xorCity, xorPlayer, xorTile } from "../../zorbist/hasher";
+import { xorCity, xorPlayer, xorTile, xorUnit } from "../../zobrist/hasher";
 
 export default class Capture extends Move {
     constructor(src: number) {
@@ -16,13 +16,11 @@ export default class Capture extends Move {
         const tile = state.tiles[this.getSrc()];
         const struct = state.structures[this.getSrc()];
         const capturer = getUnitAt(state, this.getSrc())!;
-        const pov = getPovTribe(state);
 
         const rewards = [];
-        let undo: UndoCallback = () => { };
-        
-        capturer._moved = capturer._attacked = true;
-        
+        const undoTurn = endUnitTurn(state, capturer);
+        let undoCapture: UndoCallback = () => { };
+
         if(struct) {
             if(struct.id == StructureType.Village) {
                 const oldCity = getHomeCity(state, capturer);
@@ -36,7 +34,7 @@ export default class Capture extends Move {
                 const result = (tile._owner? this.city(state) : this.village(state))!;
                 rewards.push(...result.rewards);
 
-                undo = () => {
+                undoCapture = () => {
                     result.undo();
 
                     if(oldCity) {
@@ -49,11 +47,11 @@ export default class Capture extends Move {
             else {
                 const result = this.ruins(state)!;
                 rewards.push(...result.rewards);
-                undo = result.undo;
+                undoCapture = result.undo;
             }
         }
         else {
-            undo = this.starfish(state);
+            undoCapture = this.starfish(state);
         }
         
         const undoBoost = tryRemoveEffect(state, capturer, EffectType.Boost);
@@ -62,8 +60,8 @@ export default class Capture extends Move {
             rewards,
             undo: () => {
                 undoBoost();
-                undo();
-                capturer._moved = capturer._attacked = false;
+                undoCapture();
+                undoTurn();
             },
         }
     }
@@ -90,10 +88,10 @@ export default class Capture extends Move {
         };
 
         xorCity.set(state, createdCity);
+        xorTile.owner(state, villageTile.tileIndex, 0, pov.owner);
         
         pov._cities.push(createdCity);
         villageTile._owner = pov.owner;
-        xorTile.owner(state, villageTile.tileIndex, 0, pov.owner);
         
         for(const tileIndex of createdCity._territory) {
             const tile = state.tiles[tileIndex];
@@ -113,11 +111,10 @@ export default class Capture extends Move {
                 }
 
                 xorTile.owner(state, villageTile.tileIndex, pov.owner, 0);
+                xorCity.set(state, createdCity);
 
                 villageTile._owner = 0;
                 pov._cities.pop();
-
-                xorCity.set(state, createdCity);
             }
         }
     }
@@ -198,9 +195,6 @@ export default class Capture extends Move {
         const possibleRewards: (() => CallbackResult)[] = [];
         const tileIndex = capturer._tileIndex;
         
-        capturer._attacked = true;
-        capturer._moved = true;
-
         // free 5 stars
         possibleRewards.push(() => {
             const undoStars = gainStars(state, 5);
@@ -222,7 +216,7 @@ export default class Capture extends Move {
 
                 xorPlayer.tech(pov, scroll.techType);
                 pov._tech.push(scroll);
-                const undoPurchase = spendStars(state, -5);
+                const undoPurchase = spendStars(state, 5);
 
                 return {
                     rewards: [],
@@ -246,15 +240,14 @@ export default class Capture extends Move {
         // free explorer if 5x5 adj area is unexplored
         // note: cymanti cannot get explorers from water tiles
         const terrainType = state.tiles[tileIndex].terrainType;
-        if(
-            terrainType !== TerrainType.Mountain &&
-            (
-                pov.tribeType !== TribeType.Cymanti || 
-                (terrainType !== TerrainType.Ocean && pov.tribeType === TribeType.Cymanti)
+        if(terrainType !== TerrainType.Mountain && (
+                pov.tribeType !== TribeType.Cymanti 
+                || (terrainType !== TerrainType.Ocean && pov.tribeType === TribeType.Cymanti)
             )
         ) {
             const around = getNeighborIndexes(state, tileIndex, 2, true);
-            if(around.some(x => state._visibleTiles[x])) {
+            // If there is any neaby unexplored tile
+            if(around.some(x => !state._visibleTiles[x])) {
                 possibleRewards.push(() => discoverTiles(state, null, predictExplorer(state, tileIndex)));
             }
         }
@@ -265,15 +258,26 @@ export default class Capture extends Move {
                 state, 
                 terrainType !== TerrainType.Ocean? UnitType.Swordsman : UnitType.Rammer, 
                 tileIndex, 
-                false, true
+                false, 
+                true
             )!;
 
             const summoned = pov._units[pov._units.length-1];
 
-            summoned.veteran = true;
+            xorUnit.kills(state, summoned, 0, 3);
+            xorUnit.veteran(state, summoned);
+
+            summoned._veteran = true;
             summoned._kills = 3;
 
-            return summon;
+            return {
+                rewards: summon.rewards,
+                undo: () => {
+                    xorUnit.kills(state, summoned, 3, 0);
+                    xorUnit.veteran(state, summoned);
+                    summon.undo();
+                }
+            };
         });
 
         // spawns a level 3 city with a city wall and 4 adjacent shallow water tiles	
@@ -298,6 +302,7 @@ export default class Capture extends Move {
 
                 const undoCreate = createStructure(state, tileIndex, StructureType.Village);
 
+                // Transform adjacent tiles from ocean to water
                 const chain: UndoCallback[] = [];
                 [
                     tileIndex + 1,
@@ -341,8 +346,6 @@ export default class Capture extends Move {
                 rewardResult?.undo();
                 undoInvis();
                 undoDestroyRuins();
-                capturer._attacked = false;
-                capturer._moved = false;
             }
         }
     }

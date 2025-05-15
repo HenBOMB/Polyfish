@@ -46,7 +46,7 @@ export interface ResourceState {
 export interface UnitState {
 	_unitType: UnitType;
 	_health: number;
-	veteran?: boolean;
+	_veteran: boolean;
 	_kills: number;
 	prevX: number;
 	prevY: number;

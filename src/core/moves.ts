@@ -1,5 +1,5 @@
 import { CityState, GameState, TileState, UnitState } from "./states";
-import { getNeighborTiles, getPovTerritorry, getNeighborIndexes, isAdjacentToEnemy, isAquaticOrCanFly, isSteppable, isWaterTerrain, isNavalUnit, getTechCost, getPovTribe, isSkilledIn, getUnitAttack, getUnitMovement, isRoadpathAndUsable, getMaxHealth, getAlliesNearTile, isTechUnlocked, isEnemyCity, isUnderSiege, getTechSettings, getTechUnitType, isTileOccupied, getEnemiesNearTile, isTileFrozen, getTechStructure, getCityOwningTile, isResourceVisible, getEnemyIndexesInRange, getReplacedOrTechSettings, isTileExplored, hasEffect } from './functions';
+import { getNeighborTiles, getPovTerritorry, getNeighborIndexes, isAdjacentToEnemy, isAquaticOrCanFly, isSteppable, isWaterTerrain, isNavalUnit, getTechCost, getPovTribe, isSkilledIn, getUnitAttack, getUnitMovement, isRoadpathAndUsable, getMaxHealth, getAlliesNearTile, isTechUnlocked, isEnemyCity, isUnderSiege, getTechSettings, getTechUnitType, isTileOccupied, getEnemiesNearTile, isTileFrozen, getTechStructure, getCityOwningTile, isResourceVisible, getEnemyIndexesInRange, getReplacedOrTechSettings, isTileExplored, hasEffect, getStructureAt } from './functions';
 import { StructureSettings } from "./settings/StructureSettings";
 import { SkillType, ResourceType, RewardType, StructureType, TechnologyType, TerrainType, UnitType, AbilityType, EffectType } from "./types";
 import { UnitSettings } from "./settings/UnitSettings";
@@ -478,11 +478,21 @@ export class ArmyMovesGenerator {
 		const tileIndex = unit._tileIndex;
 
 		// Promote
-		if(!unit.veteran && unit._kills >= 3) {
+		if(!unit._veteran && unit._kills >= 3) {
 			_moves.push(new Promote(tileIndex));
 		}
 
-		if(unit._moved || unit._attacked) return [];
+		// Explode
+		if(!unit._attacked && isSkilledIn(unit, SkillType.Explode)) {
+			const enemiesAround = getEnemiesNearTile(state, tileIndex, 1, true).length;
+			if(enemiesAround) {
+				_moves.push(new Explode(tileIndex));
+			}
+		}
+
+		if(unit._moved || unit._attacked) {
+			return [];
+		}
 
 		// Disband
 		if(isTechUnlocked(getPovTribe(state), TechnologyType.FreeSpirit)) {
@@ -494,7 +504,7 @@ export class ArmyMovesGenerator {
 			_moves.push(new Recover(tileIndex));
 		}
 
-		if(isSkilledIn(unit, SkillType.Heal, SkillType.Boost, SkillType.Explode, SkillType.FreezeArea)) {
+		if(isSkilledIn(unit, SkillType.Heal, SkillType.Boost, SkillType.FreezeArea)) {
 			// Heal Others
 			if(isSkilledIn(unit, SkillType.Heal)) {
 				const damagedAround = getAlliesNearTile(state, tileIndex).some(x => x._health < getMaxHealth(x));
@@ -508,14 +518,6 @@ export class ArmyMovesGenerator {
 				const unboostedAround = getAlliesNearTile(state, tileIndex).some(x => !hasEffect(x, EffectType.Boost));
 				if(unboostedAround) {
 					_moves.push(new Boost(tileIndex));
-				}
-			}
-			
-			// Explode
-			else if(isSkilledIn(unit, SkillType.Explode)) {
-				const enemiesAround = getEnemiesNearTile(state, tileIndex, 1, true).length;
-				if(enemiesAround) {
-					_moves.push(new Explode(tileIndex));
 				}
 			}
 	
@@ -615,11 +617,21 @@ export class ArmyMovesGenerator {
 		if (spawnables.length) {
 			const cities = tribe._cities;
 			for (let i = 0; i < cities.length; i++) {
-				if(cities[i]._unitCount > cities[i]._level || isTileOccupied(state, cities[i].tileIndex)) {
+				const targetIndex = cities[i].tileIndex;
+				if(cities[i]._unitCount > cities[i]._level || isTileOccupied(state, targetIndex)) {
 					continue;
 				}
 				for (let j = 0; j < spawnables.length; j++) {
-					moves.push(new Summon(cities[i].tileIndex, spawnables[j]))
+					const unitType = spawnables[j];
+					// If the unit has navigate, it tipically cannot move onto land
+					// allow spawning if the unit has at least 1 tile to move to
+					if(isSkilledIn(unitType, SkillType.Navigate)) {
+						const hasWater = getNeighborIndexes(state, targetIndex).some(x => isWaterTerrain(state.tiles[x]));
+						if(!hasWater) {
+							continue;
+						}
+					}
+					moves.push(new Summon(targetIndex, unitType))
 				}
 			}
 		}
@@ -721,54 +733,54 @@ export class ArmyMovesGenerator {
 		return cost;
 	}
 
+	// TODO verify logic
 	static isTerminal(state: GameState, unit: UnitState, tile: TileState): boolean {
 		if(isSkilledIn(unit, SkillType.Fly)) {
 			return false;
 		}
 
-		// (mountains/forests without bypass skills) blocks further movement.
+		// Embark
+		const isPort = getStructureAt(state, tile.tileIndex) == StructureType.Port && tile._owner == unit._owner;
+		if(isPort && !isAquaticOrCanFly(unit, false)) {
+			return true;
+		}
+
+		// All enemy units excert a Zone of Control and stops further movement
+		if(isAdjacentToEnemy(state, tile)) {
+			return true;
+		}
+	
+		if(isWaterTerrain(tile)) {
+			// Navigate on to village
+			if(isSkilledIn(unit, SkillType.Navigate) && getStructureAt(state, tile.tileIndex) === StructureType.Village) {
+				return true;
+			}
+
+			// this should return cause naval or aquatic units dont suffer zoc?
+			// plus tehre is no need to check for forest or mountain
+		}
+		else {
+			// Disembark
+			if(isNavalUnit(unit)) {
+				return true;
+			}
+		}
+
+		// mountains and forests blocks further movement
 		// roads allow movement on forest if it has a road
 		switch (tile.terrainType) {
 			case TerrainType.Forest:
-				if(isSkilledIn(unit, SkillType.Creep)) {
-					return false;
+				if(!isSkilledIn(unit, SkillType.Creep) || !isRoadpathAndUsable(state, unit, tile.tileIndex)) {
+					return true;
 				}
-				else {
-					return !isRoadpathAndUsable(state, unit, tile.tileIndex);
-				}
+				break;
 			case TerrainType.Mountain:
-				if(isSkilledIn(unit, SkillType.Creep)) {
-					return false;
+				if(!isSkilledIn(unit, SkillType.Creep)) {
+					return true;
 				}
 				break;
 		}
 
-		// Ports
-		const isPort = state.structures[tile.tileIndex]?.id == StructureType.Port && tile._owner == unit._owner;
-		// Entering a Port for non-fly units turns them into Rafts (ending their turn).
-		if (isPort) {
-			return !isAquaticOrCanFly(unit, false);
-		}
-
-		// Water movement / Disembarking
-		if (isNavalUnit(unit)) {
-			if(isWaterTerrain(tile)) {
-				return false;
-			}
-			else {
-				return true;
-			}
-		}
-		else {
-			// If unit has Navigate, it cannot move onto land, except for capturing cities
-			if (isSkilledIn(unit, SkillType.Navigate)) {
-				return state.structures[tile.tileIndex]?.id == StructureType.Village;
-			}
-		}
-
-		// ZoC (zone of control)
-		// Moving adjacent to an enemy stops further movement (unless Creep).
-		// TODO The rule about re-entry is ambiguous
-		return isSkilledIn(unit, SkillType.Creep) || isAdjacentToEnemy(state, tile);
+		return false;
 	}
 }

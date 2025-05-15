@@ -1,4 +1,4 @@
-import { getNeighborTiles, calaulatePushablePosition, getNeighborIndexes, isSkilledIn, getPovTribe, getTrueUnitAt, getHomeCity, getRulingCity, getMaxHealth, getEnemiesNearTile, calculateCombat, getUnitRange, getTrueEnemyAt, calculateAttack, isSteppable, isWaterTerrain, getCapitalCity, getLighthouses, getCityOwningTile, hasEffect, getEnemiesInRange, isAquaticOrCanFly, calculateDistance } from "./functions";
+import { getNeighborTiles, calaulatePushablePosition, getNeighborIndexes, isSkilledIn, getPovTribe, getTrueUnitAt, getHomeCity, getRulingCity, getMaxHealth, getEnemiesNearTile, calculateCombat, getUnitRange, getTrueEnemyAt, calculateAttack, isSteppable, isWaterTerrain, getCapitalCity, getLighthouses, getCityOwningTile, hasEffect, getEnemiesInRange, isAquaticOrCanFly, calculateDistance, getStructureAt, getEnemyAt, getStarExchange } from "./functions";
 import { EconMovesGenerator } from "./moves";
 import Move, { Branch, CallbackResult, UndoCallback } from "./move";
 import { ResourceSettings } from "./settings/ResourceSettings";
@@ -7,7 +7,7 @@ import { UnitSettings } from "./settings/UnitSettings";
 import { CityState, GameState, StructureState, UnitState } from "./states";
 import { UnitType, StructureType, SkillType, TerrainType, EffectType, ResourceType } from "./types";
 import { IsStructureTask } from "./settings/TaskSettings";
-import { xorCity, xorPlayer, xorResource, xorStructure, xorTile, xorUnit } from "../zorbist/hasher";
+import { xorCity, xorPlayer, xorResource, xorStructure, xorTile, xorUnit } from "../zobrist/hasher";
 
 export function addPopulationToCity(state: GameState, city: CityState, amount: number): CallbackResult {
     const pov = getPovTribe(state);
@@ -76,6 +76,40 @@ export function addPopulationToCity(state: GameState, city: CityState, amount: n
             city._population -= amount;
         }
     }
+}
+
+/**
+ * Attempts to discover any undiscovered tribes and rewards with exchange
+ * @param state
+ * @returns if the disovery was successfull
+ */
+export function tryDiscoverRewardOtherTribes(state: GameState): UndoCallback {
+	const us = getPovTribe(state);
+
+	// Already discovered all the other tribes
+	if (us._knownPlayers.size == state.settings.tribeCount - 1) {
+		return () => { };
+	}
+
+	const chain: UndoCallback[] = [];
+
+	// Try to meet new tribes, if they they have been seen and not discovered
+	for (const x in state._visibleTiles) {
+		// If we can see any other tribe's unit, we have met them
+		const standing = getEnemyAt(state, Number(x));
+		const them = standing?._owner;
+		if (them && !us._knownPlayers.has(them)) {
+			us._knownPlayers.add(them);
+			chain.unshift(gainStars(state, getStarExchange(state, them)));
+			chain.unshift(() => {
+				us._knownPlayers.delete(them);
+			});
+		}
+	}
+
+	return () => {
+		chain.forEach(x => x());
+	};
 }
 
 export function modifyTerrain(state: GameState, tileIndex: number, terrainType: TerrainType): UndoCallback {
@@ -302,7 +336,9 @@ export function summonUnit(state: GameState, unitType: UnitType, spawnTileIndex:
     }
     
 	const resultDiscover = discoverTiles(state, spawnedUnit);
-    const undoFrozen: UndoCallback = freezeArea(state, spawnedUnit);
+
+    const undoFrozen: UndoCallback = isSkilledIn(spawnedUnit, SkillType.AutoFreeze, SkillType.FreezeArea)? 
+        freezeArea(state, spawnedUnit) : () => { };
 
     return {
         rewards: [...(resultDiscover?.rewards || []), ...(resultPush?.rewards || [])],
@@ -457,11 +493,78 @@ export function discoverTiles(state: GameState, unit?: UnitState | null, tileInd
     }
 }
 
-export function freezeArea(state: GameState, freezer: UnitState): UndoCallback {
-    if(!isSkilledIn(freezer, SkillType.AutoFreeze, SkillType.FreezeArea)) return () => { };
-    
-    // const freezeArea = isSkilledIn(freezer, SkillType.FreezeArea);
 
+export function setUnitMove(state: GameState, unit: UnitState): UndoCallback {
+    xorUnit.moved(state, unit);
+
+    return () => {
+        xorUnit.moved(state, unit);
+    }
+}
+
+export function setUnitAttack(state: GameState, unit: UnitState): UndoCallback {
+    xorUnit.attacked(state, unit);
+
+    return () => {
+        xorUnit.attacked(state, unit);
+    }
+}
+
+export function endUnitTurn(state: GameState, unit: UnitState): UndoCallback {
+    const moved = unit._moved;
+    const attacked = unit._attacked;
+
+    if(!attacked) {
+        xorUnit.attacked(state, unit);
+        unit._attacked = true;
+    }
+
+    if(!moved) {
+        xorUnit.moved(state, unit);
+        unit._moved = true;
+    }
+
+    return () => {
+        if(!attacked) {
+            xorUnit.attacked(state, unit);
+            unit._attacked = false;
+        }
+
+        if(!moved) {
+            xorUnit.moved(state, unit);
+            unit._moved = false;
+        }
+    }
+}
+
+export function startUnitTurn(state: GameState, unit: UnitState): UndoCallback {
+    const moved = unit._moved;
+    const attacked = unit._attacked;
+
+    if(attacked) {
+        xorUnit.attacked(state, unit);
+        unit._attacked = false;
+    }
+
+    if(moved) {
+        xorUnit.moved(state, unit);
+        unit._moved = false;
+    }
+
+    return () => {
+        if(attacked) {
+            xorUnit.attacked(state, unit);
+            unit._attacked = true;
+        }
+
+        if(moved) {
+            xorUnit.moved(state, unit);
+            unit._moved = true;
+        }
+    }
+}
+
+export function freezeArea(state: GameState, freezer: UnitState): UndoCallback {
     const chain: UndoCallback[] = [];
     const adjacent = getNeighborIndexes(state, freezer._tileIndex, 1, false, true);
 
@@ -481,13 +584,13 @@ export function freezeArea(state: GameState, freezer: UnitState): UndoCallback {
     }
 
     return () => {
-        chain.reverse().forEach(x => x());
+        chain.forEach(x => x());
     }
 }
 
 export function splashDamageArea(state: GameState, attacker: UnitState, atk: number): UndoCallback {
     const undoChain = getEnemiesNearTile(state, attacker._tileIndex)
-        .map(enemy => attackUnit(state, atk, enemy, attacker));
+        .map(enemy => attackUnit(state, atk, enemy, attacker)?.undo!);
     return () => {
         undoChain.forEach(x => x());
     }
@@ -495,6 +598,7 @@ export function splashDamageArea(state: GameState, attacker: UnitState, atk: num
 
 export function pushUnit(state: GameState, tileIndex: number): CallbackResult {
     const pushed = getTrueUnitAt(state, tileIndex);
+
     if(!pushed) return null;
 
     const oldAttacked = pushed._attacked;
@@ -522,15 +626,16 @@ export function pushUnit(state: GameState, tileIndex: number): CallbackResult {
     }
 }
 
-export function attackUnit(state: GameState, attacker: UnitState | number, defender: UnitState, attackerPov?: UnitState): UndoCallback {
+export function attackUnit(state: GameState, attacker: UnitState | number, defender: UnitState, attackerPov?: UnitState): CallbackResult {
     const undoChain: UndoCallback[] = [];
+    const rewards = [];
 
     if(typeof attacker == 'number') {
         const atk = calculateAttack(state, attacker, defender);
 
         defender._health -= atk;
 
-        if (defender._health <= 0) {
+        if(defender._health <= 0) {
             undoChain.push(removeUnit(state, defender, attackerPov));
         }
 
@@ -558,6 +663,7 @@ export function attackUnit(state: GameState, attacker: UnitState | number, defen
             // Move to the enemy position, if not a ranged unit
             if (getUnitRange(attacker) < 2 && isSteppable(state, attacker, defender._tileIndex)) {
                 const result = stepUnit(state, attacker, defender._tileIndex, true)!;
+                rewards.push(...result.rewards);
                 undoChain.push(result.undo);
             }
         }
@@ -591,45 +697,39 @@ export function attackUnit(state: GameState, attacker: UnitState | number, defen
                 });
     
                 // Our unit died
-                if (attacker._health <= 0) {
+                if(attacker._health <= 0) {
                     undoChain.push(removeUnit(state, attacker, defender));
                 }
             }
         }        
     }
 
-    return () => {
-        undoChain.reverse().forEach(x => x());
-    };
+    return {
+        rewards: rewards,
+        undo: () => {
+            undoChain.reverse().forEach(x => x());
+        }
+    }
 }
 
-// TODO XOR
-export function stepUnit(state: GameState, stepper: UnitState, toTileIndex: number, forced = false): CallbackResult {
+export function stepUnit(state: GameState, stepper: UnitState, toTileIndex: number, involuntary = false): CallbackResult {
 	const chain: UndoCallback[] = [];
 	const rewards = [];
-
-	// const ipX = stepper.prevX;
-	// const ipY = stepper.prevY;
-
+	const movedBefore = stepper._moved;
 	const oldTileIndex = stepper._tileIndex;
-	const oldMoved = stepper._moved;
-	const oldAttacked = stepper._attacked;
-	const oldTile = state.tiles[oldTileIndex];
 	const oldType = stepper._unitType;
 	const oldPassenger = stepper._passenger;
-
-	const newTile = state.tiles[toTileIndex];
-	let newType = oldType;
-
-	const oldNewTileUnitOwner = newTile._unitOwner;
 
 	// // TODO; this is not how prev works, it must be applies at the end of the turn
 	// stepper.prevX = iX;
 	// stepper.prevY = iY;
-	stepper._tileIndex = toTileIndex;
 
-	oldTile._unitOwner = 0;
-	newTile._unitOwner = stepper._owner;
+    // xor out the current unit
+    xorUnit.set(state, stepper);
+
+	state.tiles[stepper._tileIndex]._unitOwner = 0;
+	stepper._tileIndex = toTileIndex;
+	state.tiles[stepper._tileIndex]._unitOwner = stepper._owner;
 
 	// TODO what other skills are missing?
 
@@ -638,7 +738,11 @@ export function stepUnit(state: GameState, stepper: UnitState, toTileIndex: numb
 	rewards.push(...resultDiscover.rewards);
 	chain.push(resultDiscover.undo);
 
-	stepper._moved = stepper._attacked = true;
+    // Units with skate do not loose their turn when pushed
+    if(!involuntary || !isSkilledIn(stepper, SkillType.Skate)) {
+        // xor to true
+        chain.push(endUnitTurn(state, stepper));
+    }
 
     // ! Stomp ! //
 
@@ -648,25 +752,26 @@ export function stepUnit(state: GameState, stepper: UnitState, toTileIndex: numb
 
     // ! AutoFreeze //
 
-	chain.push(freezeArea(state, stepper));
+    if(isSkilledIn(stepper, SkillType.AutoFreeze, SkillType.FreezeArea)) {
+	    chain.push(freezeArea(state, stepper));
+    }
 
 	// ! Embark ! //
     
-	// If a non aquatic unit is moving to port, place into boat
-    // TODO what if a gaami moves onto a port? lol. or some other special troop
-	if (state.structures[toTileIndex]?.id == StructureType.Port && !isAquaticOrCanFly(stepper)) {
+	// If a non aquatic unit is moving to our port, place into boat
+	if(getStructureAt(state, toTileIndex) && !isAquaticOrCanFly(stepper)) {
 		switch (stepper._unitType) {
 			case UnitType.Cloak:
-				newType = UnitType.Dinghy;
+				stepper._unitType = UnitType.Dinghy;
 				break;
 			case UnitType.Dagger:
-				newType = UnitType.Pirate;
+				stepper._unitType = UnitType.Pirate;
 				break;
 			case UnitType.Giant:
-				newType = UnitType.Juggernaut;
+				stepper._unitType = UnitType.Juggernaut;
 				break;
 			default:
-				newType = UnitType.Raft;
+				stepper._unitType = UnitType.Raft;
 				stepper._passenger = oldType;
 				break;
 		}
@@ -677,54 +782,68 @@ export function stepUnit(state: GameState, stepper: UnitState, toTileIndex: numb
 	// Carry allows a unit to carry another unit inside
 	// A unit with the carry skill can move to a land tile adjacent to water
 	// Doing so releases the unit it was carrying and ends the unit's turn
-	else if(isSkilledIn(stepper, SkillType.Carry) && !isWaterTerrain(newTile)) {
+	else if(isSkilledIn(stepper, SkillType.Carry) && !isWaterTerrain(state.tiles[stepper._tileIndex])) {
 		stepper._passenger = undefined;
 		switch (stepper._unitType) {
 			case UnitType.Dinghy:
-				newType = UnitType.Cloak;
+				stepper._unitType = UnitType.Cloak;
 				break;
 			case UnitType.Pirate:
-				newType = UnitType.Dagger;
+				stepper._unitType = UnitType.Dagger;
 				break;
 			case UnitType.Juggernaut:
-				newType = UnitType.Giant;
+				stepper._unitType = UnitType.Giant;
 				break;
 			default:
-				newType = oldPassenger!;
+				stepper._unitType = oldPassenger!;
 				break;
 		}
+	}
+
+    // ! Hide ! //
+
+	// Going stealth mode uses up our attack
+	else if(isSkilledIn(stepper, SkillType.Hide) && !hasEffect(stepper, EffectType.Invisible)) {
+        chain.push(tryAddEffect(state, stepper, EffectType.Invisible));
 	}
 
     // ! Dash ! //
 
 	// Allows a unit to attack after moving if there are any enemies in range
 	// And if it HAS moved before (this avoids infinite move -> attack loop)
-	else if(!forced && !oldMoved && isSkilledIn(stepper, SkillType.Dash) && getEnemiesInRange(state, stepper).length > 0) {
+	else if(!involuntary && !movedBefore && isSkilledIn(stepper, SkillType.Dash) && getEnemiesInRange(state, stepper).length > 0) {
 		stepper._attacked = false;
 	}
-	
-    // ! Hide ! //
-	// Going stealth mode uses up our attack
-	if(isSkilledIn(stepper, SkillType.Hide) && !hasEffect(stepper, EffectType.Invisible)) {
-		stepper._attacked = true;
-        chain.push(tryAddEffect(state, stepper, EffectType.Invisible));
-	}
 
-	stepper._unitType = newType;
-	
+    // xor back out true attack
+    if(!stepper._attacked) {
+        xorUnit.attacked(state, stepper);    
+    }
+
+    // xor in the new unit
+    xorUnit.set(state, stepper);
+
 	return {
         rewards,
 		undo: () => {
-			stepper._unitType = oldType;
+            // xor out the new unit
+            xorUnit.set(state, stepper);
+
+            if(!stepper._attacked) {
+                xorUnit.attacked(state, stepper);    
+            }
+
+            stepper._unitType = oldType;
 			stepper._passenger = oldPassenger;
-			stepper._attacked = oldAttacked;
-			stepper._moved = oldMoved;
+
 			chain.reverse().forEach(x => x());
-			newTile._unitOwner = oldNewTileUnitOwner;
-			oldTile._unitOwner = stepper._owner;
+
+			state.tiles[stepper._tileIndex]._unitOwner = 0;
 			stepper._tileIndex = oldTileIndex;
-			// stepper.prevX = ipX;
-			// stepper.prevY = ipY;
+			state.tiles[stepper._tileIndex]._unitOwner = stepper._owner;
+
+            // xor in the current unit
+            xorUnit.set(state, stepper);
 		}
 	};
 }

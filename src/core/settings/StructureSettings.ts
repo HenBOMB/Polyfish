@@ -44,9 +44,8 @@ export const StructureSettings: Record<StructureType, {
         terrainType: new Set([TerrainType.Field, TerrainType.Forest],) 
     },
     [StructureType.Bridge]: {
+        cost: 5,
         terrainType: new Set([TerrainType.Water]),
-        // techType: TechnologyType.Roads,
-        // terrainType: new Set(TerrainType.Water),
         // TODO Bridge logic for connected adjacent ground tiles or whatever
     },
     [StructureType.Temple]: {

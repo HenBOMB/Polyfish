@@ -336,6 +336,12 @@ export default class AIState {
                 if(settings.unlocksOther) {
                     reward += HowGood.Meh;
                 }
+                if(settings.unlocksTerrain) {
+                    reward += HowGood.Meh;
+                }
+                if(settings.unlocksTask) {
+                    reward += HowGood.Meh;
+                }
                 break;
 
             case MoveType.Build:

@@ -1,4 +1,4 @@
-import { AbilityType, ResourceType, StructureType, TaskType, TechnologyType, TribeType, UnitType } from "../types";
+import { AbilityType, ResourceType, StructureType, TaskType, TechnologyType, TerrainType, TribeType, UnitType } from "../types";
 
 export type TechnologySetting =  {
     tier?: number,
@@ -14,6 +14,7 @@ export type TechnologySetting =  {
     unlocksSpecialUnits?: UnitType[],
     unlocksOther?: number, // starfish, ocean navigation, etc
     explicitCost?: number,
+    unlocksTerrain?: TerrainType,
 }
 
 // ! Sorted by tier and clockwise per branch
@@ -36,13 +37,13 @@ export const TechnologySettings: Record<TechnologyType, TechnologySetting> = {
         tier: 2,
         requires: TechnologyType.Riding,
         next: [TechnologyType.Trade],
+        // TODO bridge
         unlocksStructure: StructureType.Bridge,
     },
     [TechnologyType.Trade]: {
         tier: 3,
         requires: TechnologyType.Roads,
         unlocksStructure: StructureType.Market,
-        unlocksOther: 1, // wealth
         unlocksTask: [TaskType.Wealth],
     },
     [TechnologyType.FreeSpirit]: {
@@ -96,6 +97,7 @@ export const TechnologySettings: Record<TechnologyType, TechnologySetting> = {
         tier: 1,
         next: [TechnologyType.Mining, TechnologyType.Meditation],
         unlocksStructure: StructureType.MountainTemple,
+        unlocksTerrain: TerrainType.Mountain,
         unlocksOther: 1, // pacifist
     },
     [TechnologyType.Mining]: {
@@ -131,13 +133,14 @@ export const TechnologySettings: Record<TechnologyType, TechnologySetting> = {
         next: [TechnologyType.Sailing, TechnologyType.Ramming],
         unlocksResource: ResourceType.Fish,
         unlocksUnit: UnitType.Raft,
+        unlocksTerrain: TerrainType.Water,
     },
     [TechnologyType.Sailing]: {
         tier: 2,
         requires: TechnologyType.Fishing,
         next: [TechnologyType.Navigation],
         unlocksUnit: UnitType.Scout,
-        unlocksOther: 1, // ocean movement, also its just good
+        unlocksTerrain: TerrainType.Ocean,
     },
     [TechnologyType.Navigation]: {
         tier: 3,
@@ -183,7 +186,6 @@ export const TechnologySettings: Record<TechnologyType, TechnologySetting> = {
         unlocksStructure: StructureType.LumberHut,
         unlocksAbility: AbilityType.ClearForest,
         next: [TechnologyType.Mathematics],
-        unlocksOther: 1,
     },
     [TechnologyType.Mathematics]: {
         tier: 3,
@@ -244,6 +246,11 @@ export const TechnologySettings: Record<TechnologyType, TechnologySetting> = {
         tribeType: TribeType.Cymanti,
         next: [TechnologyType.Aquatism],
     },
+    [TechnologyType.Oceantology]: {
+        replacesTech: TechnologyType.Navigation,
+        tribeType: TribeType.Cymanti,
+        unlocksResource: ResourceType.Starfish,
+    },
     // ! aquarion
     [TechnologyType.Spearing]: {
         replacesTech: TechnologyType.Chivalry,
@@ -253,11 +260,13 @@ export const TechnologySettings: Record<TechnologyType, TechnologySetting> = {
         replacesTech: TechnologyType.Riding,
         tribeType: TribeType.Aquarion,
         unlocksUnit: UnitType.Tridention,
+        unlocksTerrain: TerrainType.Water,
     },
     [TechnologyType.FreeDiving]: {
         replacesTech: TechnologyType.FreeSpirit,
         tribeType: TribeType.Aquarion,
         next: [TechnologyType.Chivalry],
+        unlocksTerrain: TerrainType.Ocean,
     },
     // ! elyrion
     [TechnologyType.ForestMagic]: {

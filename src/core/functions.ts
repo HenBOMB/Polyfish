@@ -5,70 +5,6 @@ import { ResourceSettings } from "./settings/ResourceSettings";
 import { UnitSettings } from "./settings/UnitSettings";
 import { TechnologyReplacements, TechnologySetting, TechnologySettings } from "./settings/TechnologySettings";
 import Game from "../game";
-import { UndoCallback } from "./move";
-import { spendStars } from "./actions";
-
-/**
- * Attempts to discover any undiscovered tribes and overrides the passed state
- * @param state 
- * @returns if the disovery was successfull
- */
-export function tryDiscoverRewardOtherTribes(state: GameState): UndoCallback {
-	const us = getPovTribe(state);
-
-	// Already discovered all the tribes or all the tiles
-	if(us._knownPlayers.size == state.settings.tribeCount - 1) {
-		return () => { };
-	}
-
-	const tribesMet: Set<number> = new Set();
-
-	// Try to meet new tribes, if they they have been seen and not discovered
-	for(const x in state._visibleTiles) {
-		// If we can see any other tribe's unit, we have met them
-		const standing = getUnitAt(state, Number(x));
-		if(standing 
-			&& standing._owner != us.owner
-			&& !us._knownPlayers.has(standing._owner)
-			&& !tribesMet.has(standing._owner)
-		) {
-			tribesMet.add(standing._owner);
-		}
-	}
-
-	const chain: UndoCallback[] = [];
-
-	// Reward stars for met tribes
-	tribesMet.forEach(owner => {
-		const them = state.tribes[owner];
-		us._knownPlayers.add(owner);
-		
-		chain.push(spendStars(state, -getStarExchange(state, them)));
-
-		chain.push(() => {
-			us._knownPlayers.delete(owner);
-		});
-
-		// If they also too just met us
-		if(them._knownPlayers.has(us.owner)) {
-			return;
-		}
-		for(const unit of us._units) {
-			if(state.tiles[unit._tileIndex]._explorers.has(them.owner)) {
-				them._knownPlayers.add(us.owner);
-				chain.push(spendStars(state, -getStarExchange(state, us)));
-				chain.push(() => {
-					them._knownPlayers.delete(us.owner);
-				});
-				break;
-			}
-		}
-	});
-
-	return () => {
-		chain.reverse().forEach(x => x());
-	}
-}
 
 export function indexToCoord(state: GameState, tileIndex: number) {
 	return [state.tiles[tileIndex].x, state.tiles[tileIndex].y];
@@ -89,10 +25,13 @@ export function getTechSettings(tech: TechLike): TechnologySetting {
 	return TechnologySettings[parseToTechType(tech)];
 }
 
-export function getReplacedOrTechSettings(like: TribeLike, tech: TechLike): TechnologySetting {
+export function getReplacedOrTechType(like: TribeLike, tech: TechLike): TechnologyType {
 	const techType = parseToTechType(tech);
-	const specialTechType = TechnologyReplacements[parseToTribeType(like)]?.find(x => x == techType);
-	return specialTechType? TechnologySettings[specialTechType] : getTechSettings(tech);
+	return TechnologyReplacements[parseToTribeType(like)]?.find(x => x == techType) || techType;
+}
+
+export function getReplacedOrTechSettings(like: TribeLike, tech: TechLike): TechnologySetting {
+	return TechnologySettings[getReplacedOrTechType(like, tech)];
 }
 
 export function getNextTech(tech: TechLike): TechnologyType[] | null {
@@ -358,7 +297,7 @@ export function isTileFrozen(state: GameState, tileIndex: number): boolean {
 /**
  * Checks if the tribe has unlocked this tech
  * @param tribe
- * @param tech 
+ * @param tech
  * @param strict Wether to check if the move is NOT simulated
  * @returns 
  */
@@ -368,6 +307,22 @@ export function isTechUnlocked(tribe: TribeState, tech: TechLike, strict = false
 	if(techType == TechnologyType.None) return true;
 	const tierTech = getTechSettings(techType).replacesTech || techType;
 	return tribe._tech.some(x => x.techType == tierTech && (strict? x.discovered : true));
+}
+
+export function isNavigationable(tribe: TribeState, unit: UnitState, tile: TileState): boolean {
+	if(isSkilledIn(unit, SkillType.Fly, SkillType.Navigate)) {
+		return true;
+	}
+	switch (tile.terrainType) {
+		case TerrainType.Water:
+			return tribe._tech.some(x => getReplacedOrTechSettings(tribe, x).unlocksTerrain === TerrainType.Water);
+		case TerrainType.Ocean:
+			return tribe._tech.some(x => getReplacedOrTechSettings(tribe, x).unlocksTerrain === TerrainType.Ocean);
+		case TerrainType.Mountain:
+			return tribe._tech.some(x => getReplacedOrTechSettings(tribe, x).unlocksTerrain === TerrainType.Mountain);
+		default:
+			return true;
+	}
 }
 
 export function isTempleStructure(structType: StructureType) {
@@ -399,7 +354,6 @@ export function isAquaticOrCanFly(unit: UnitState | UnitType, canfly: boolean = 
 		SkillType.Carry,
 		SkillType.Float,
 		SkillType.Navigate,
-		SkillType.Splash,
 	);
 }
 
@@ -481,8 +435,10 @@ export function isAdjacentToEnemy(state: GameState, tile: TileState, matchUnitTy
 
 // TODO THIS IS AMBIGUOUS, ONLY WORKS WITH 1v1
 export function isGameOver(state: GameState): boolean {
-	const tribe = getPovTribe(state);
-	return state.settings._gameOver || state.settings._turn > state.settings.maxTurns || isGameLost(state) || isGameWon(state);
+	return state.settings._gameOver 
+		|| state.settings._turn > state.settings.maxTurns 
+		|| isGameLost(state) 
+		|| isGameWon(state);
 }
 
 export function isGameLost(state: GameState): boolean {
@@ -491,7 +447,20 @@ export function isGameLost(state: GameState): boolean {
 }
 
 export function isGameWon(state: GameState): boolean {
-	return Object.values(state.tribes).every(x => x.owner === state.settings._pov? true : x._resignedTurn > 0 || x._killedTurn > 0);
+	for (let owner = 1; owner <= state.settings.tribeCount; owner++) {
+		if(state.tribes[owner]._resignedTurn > 0 || state.tribes[owner]._killedTurn > 0) {
+			if(owner === state.settings._pov) {
+				return false;
+			}
+			continue;
+		}
+		else if(owner === state.settings._pov) {
+			continue;
+		}
+
+		return false;
+	}
+	return true;
 }
 
 export function getWipeouts(state: GameState, owner?: number): TribeState[] {
@@ -499,54 +468,43 @@ export function getWipeouts(state: GameState, owner?: number): TribeState[] {
 	return Object.values(state.tribes).filter(x => x._killerId === owner);
 }
 
-export function isSteppable(state: GameState, unit: UnitState, tileOrIndex: TileState | number, overrideAquatic?: boolean) {
+export function isSteppable(state: GameState, unit: UnitState, tileOrIndex: TileState | number) {
 	const tile = typeof tileOrIndex === "number"? state.tiles[tileOrIndex] : tileOrIndex;
 
 	// Unexplored
-	if (!state._visibleTiles[tile.tileIndex]) {
-		return false;
-	}
-
 	// Occupied
-	if(getUnitAt(state, tile.tileIndex)) {
+	if(!state._visibleTiles[tile.tileIndex]
+		|| getUnitAt(state, tile.tileIndex)
+	) {
 		return false;
 	}
 
 	// Fly
-	if (isSkilledIn(unit, SkillType.Fly)) {
+	if(isSkilledIn(unit, SkillType.Fly)) {
 		return true;
 	}
 
 	const tribe = state.tribes[unit._owner];
-
-	// Mountain
-	if (tile.terrainType === TerrainType.Mountain) {
-		return isTechUnlocked(tribe, TechnologyType.Climbing);
-	}
-
-	const isAquatic = overrideAquatic? true : isAquaticOrCanFly(unit, false);
-
-	// Port
-	const isPort = state.structures[tile.tileIndex]?.id === StructureType.Port;
-	if (isPort) {
-		// Sailing must be unlocked to enter a port
-		if(isTechUnlocked(tribe, TechnologyType.Sailing)) return false;
-		return isAquatic || !isAquatic && tile._owner === unit._owner;
-	}
 	
-	if (tile.terrainType === TerrainType.Water || tile.terrainType === TerrainType.Ocean) {
-		if (!isAquatic) return false;
+	// Checks for: Water, Ocean, Mountain, Fly & Navigation skills
+	if(!isNavigationable(tribe, unit, tile)) {
+		return false;
+	}
 
-		// If unit has Navigate, it cannot move onto land, except for capturing cities
-		if (isSkilledIn(unit, SkillType.Navigate)) {
-			if(!isWaterTerrain(tile) && state.structures[tile.tileIndex]?.id !== StructureType.Village) {
-				return false;
-			}
-			return true;
+	const isAquatic = isAquaticOrCanFly(unit, false);
+
+	// Port and non aquatic units
+	if(!isAquatic) {
+		const isPort = getStructureAt(state, tile.tileIndex) === StructureType.Port;
+		return isPort && tile._owner === unit._owner;
+	}
+	// Port
+	
+	// If unit has Navigate, it cannot move onto land, except for capturing cities
+	if(isSkilledIn(unit, SkillType.Navigate)) {
+		if(!isWaterTerrain(tile) && getStructureAt(state, tile.tileIndex) !== StructureType.Village) {
+			return false;
 		}
-
-		// Shallow requires fishing, ocean requires sailing
-		return isTechUnlocked(tribe, tile.terrainType === TerrainType.Water? TechnologyType.Fishing : TechnologyType.Sailing);
 	}
 
 	return true;
@@ -642,7 +600,7 @@ export function getUnitSettings(unit: UnitState | UnitType) {
 export function getMaxHealth(unit: UnitState) {
 	let hp = getRealUnitSettings(unit).health;
 	if(!hp) throw Error(`Yo no health bro tf "${unit._unitType}, ${unit._passenger}, ${unit._tileIndex}"`);
-	if(unit.veteran) hp += 5;
+	if(unit._veteran) hp += 5;
 	return hp * 10;
 }
 
@@ -656,7 +614,6 @@ export function getUnitAttack(unit: UnitState) {
 
 export function getUnitMovement(unit: UnitState) {
 	let movement = getUnitSettings(unit).movement;
-	if(!movement) throw Error(`Yo no movement bro tf "${unit._unitType}" -> ${movement}`);
 	if(hasEffect(unit, EffectType.Boost)) {
 		movement += 1;
 	}
@@ -735,17 +692,31 @@ export function calaulatePushablePosition(state: GameState, pushed: UnitState): 
 			modifiedY = newY;
 			return true;
 		}
+
 		return false;
 	};
 
 	let dx = 0, dy = 0;
 	const centerTile = state.tiles[Math.floor((state.settings.size * state.settings.size) / 2)];
 
-	if (modifiedX !== -1 &&
-		pushed.prevY !== -1 &&
-		modifiedX != initialX &&
-		pushed.prevY != initialY)
-	{
+	// TODO
+
+	// Friendly units that previously moved will be pushed in the same direction of their movement
+	// Enemy units are pushed the opposite direction
+
+	// Ranged units get pushed in the direction of their last move or last attack
+
+	// Units that were not previously moved will be pushed toward the center of the map
+
+	// If the city where the units spawns is on the exact center of the map,
+	// the unit will be pushed south
+	
+	// If the tile where the unit is supposed to go is occpied or impassable, 
+	// it will try counterclockwise and then clockwise one tile at a time, 
+	// until it finds a free tile, if none, the unit gets removed, without ganting a kill
+
+	// If there is a direction the unit moved in
+	if(initialX !== pushed.prevX || initialY !== pushed.prevY) {
 		dx = modifiedX === initialX ? 0 : modifiedX < initialX ? 1 : -1;
 		dy = pushed.prevY === initialY ? 0 : pushed.prevY < initialY ? 1 : -1;
 
@@ -754,7 +725,7 @@ export function calaulatePushablePosition(state: GameState, pushed: UnitState): 
 			dy = -dy;
 		}
 	}
-	else if (UnitSettings[pushed._unitType].range > 1) {
+	else if(UnitSettings[pushed._unitType].range > 1) {
 		const directions = [
 			{ dx: 0, dy: -1 }, // North
 			{ dx: 1, dy: 0 }, // East
@@ -773,7 +744,7 @@ export function calaulatePushablePosition(state: GameState, pushed: UnitState): 
 		}
 	}
 
-	if (!doPush(dx, dy)) {
+	if(!doPush(dx, dy)) {
 		const tryDirections = (clockwise: boolean) => {
 			for (let i = 1; i <= 8; i++) {
 				const angle = i * (Math.PI / 4) * (clockwise ? 1 : -1);
@@ -784,7 +755,7 @@ export function calaulatePushablePosition(state: GameState, pushed: UnitState): 
 			return false;
 		};
 
-		if (!tryDirections(false) && !tryDirections(true)) {
+		if(!tryDirections(false) && !tryDirections(true)) {
 			return -1;
 		}
 	}
@@ -799,7 +770,7 @@ export function calculateCombat(state: GameState, attacker: UnitState, defender:
 	
 	const totalForce = attackForce + defenseForce;
 	
-	if (totalForce === 0) {
+	if(totalForce === 0) {
 		return {
 			attackDamage: 0,
 			defenseDamage: 0,

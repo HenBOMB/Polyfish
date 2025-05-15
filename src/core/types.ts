@@ -50,6 +50,7 @@ export enum TechnologyType {
 	Recycling 		= 36,
 	Hydrology 		= 37,
 	Diplomacy		= 38,
+	Oceantology		= 49, // TODO Cymanti, Verify ID
 	Sledding		= 41,
 	IceFishing		= 42,
 	Pascetism		= 43,

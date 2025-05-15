@@ -1,11 +1,11 @@
-import { Logger } from "../../polyfish/logger";
-import { getPovTribe, getUnitAt } from "../functions";
+import { getUnitAt } from "../functions";
 import Move, { CallbackResult } from "../move";
 import { MoveType } from "../types";
 import { UnitSettings } from "../settings/UnitSettings";
 import { GameState } from "../states";
 import { UnitType } from "../types";
 import { spendStars } from "../actions";
+import { xorUnit } from "../../zobrist/hasher";
 
 export default class Upgrade extends Move {
     constructor(from: number, type: number) {
@@ -13,32 +13,23 @@ export default class Upgrade extends Move {
     }
 
     execute(state: GameState): CallbackResult {
-        const pov = getPovTribe(state);
         const upgradeType = this.getType<UnitType>();
-
-        if (pov._stars < UnitSettings[upgradeType].cost) {
-            return Logger.illegal(MoveType.None, `Upgrade - Cant afford ${UnitType[upgradeType]} ${pov._stars} / ${UnitSettings[upgradeType].cost} stars`);
-        }
-
-        const unit = getUnitAt(state, this.getSrc());
-
-        if(!unit) {
-            return Logger.illegal(MoveType.None, `Upgrade - Unit does not exist: ${UnitType[upgradeType]}`);
-        }
-
-        if(upgradeType != UnitType.Raft) {
-            return Logger.illegal(MoveType.None, `Upgrade - Unit must be a Raft, got: ${UnitType[upgradeType]}`);
-        }
-        
+        const unit = getUnitAt(state, this.getSrc())!;
         const oldUnitType = unit._unitType;
+
+        xorUnit.passenger(state, unit, UnitType.None, oldUnitType);
+        xorUnit.type(state, unit, oldUnitType, upgradeType);
 
         unit._passenger = oldUnitType;
         unit._unitType = upgradeType;
+
         const undoStars = spendStars(state, UnitSettings[upgradeType].cost);
 
         return {
             rewards: [],
             undo: () => {
+                xorUnit.type(state, unit, upgradeType, oldUnitType);
+                xorUnit.passenger(state, unit, oldUnitType, UnitType.None);
                 undoStars();
                 unit._passenger = undefined;
                 unit._unitType = oldUnitType;

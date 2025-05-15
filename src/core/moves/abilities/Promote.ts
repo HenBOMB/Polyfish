@@ -1,3 +1,4 @@
+import { xorUnit } from "../../../zobrist/hasher";
 import { getMaxHealth, getUnitAt } from "../../functions";
 import { CallbackResult } from "../../move";
 import { GameState } from "../../states";
@@ -13,14 +14,16 @@ export default class Promote extends Ability {
         const unit = getUnitAt(state, this.getSrc())!;
         const hp = unit._health;
 
-        unit.veteran = true;
+        xorUnit.veteran(state, unit)
+        unit._veteran = true;
         unit._health = getMaxHealth(unit);
         
         return {
             rewards: [],
             undo: () => {
+                xorUnit.veteran(state, unit)
                 unit._health = hp;
-                unit.veteran = false;
+                unit._veteran = false;
             }
         };
     }
