@@ -85,7 +85,7 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
 
     if (!turnBase || !mapBase || !unitsBase || !tribesBase) return -1;
 
-    uint16_t turn, tileCount, unitCount, tribeCount, mapSize;
+    uint16_t turn, tileCount, unitCount, tryTribeCount, mapSize;
     
     // ! STATE ! //
 
@@ -93,8 +93,10 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
 
     // ! TRIBES ! //
     
-    readPiece(pid, getPlace(pid, tribesBase, { 0x18 }), tribeCount);
-    for (uint32_t index = 0; index < tribeCount; ++index) {
+    uint16_t tribeCount = 0;
+    
+    readPiece(pid, getPlace(pid, tribesBase, { 0x18 }), tryTribeCount);
+    for (uint32_t index = 0; index < tryTribeCount; ++index) {
         uintptr_t tribeBase = getPlace(pid, tribesBase, { index * 0x8 + 0x20 });
         if (tribeBase == 0) break;
 
@@ -114,6 +116,11 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
             killerId = *(uint16_t*)&tribeBuffer[168];    // 0xB8
             killedTurn = *(uint16_t*)&tribeBuffer[172];  // 0xBC
         }
+        else {
+            break;
+        }
+
+        tribeCount++;
 
         username = readString(pid, getPlace(pid, tribeBase, { 0x18 }));
         readSingleList(pid, getPlace(pid, tribeBase, { 0x60 }), tech);
@@ -162,7 +169,7 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
         // Relations (dictionary)
 
         uintptr_t relationsBase = getPlace(pid, tribeBase, { 0x88, 0x18 });
-        for (uint32_t i = 0; i < tribeCount; i++) {
+        for (uint32_t i = 0; i < tryTribeCount; i++) {
             uint16_t keyOwner = 0;
             readBlock(pid, getPlace(pid, relationsBase, { 0x20 + i * 0x18 }), &keyOwner, 1);
             unsigned char relationsBuffer[24 + 4];
@@ -176,6 +183,9 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
                       + '-' + std::to_string(*(uint16_t*)&relationsBuffer[20])  // 0x24 (embassyBuildTurn)
                       + '-' + std::to_string(*(uint16_t*)&relationsBuffer[24]); // 0x28 (previousAttackTurn)
                 relations += "&";
+            }
+            else {
+                break;
             }
         }
         if (!relations.empty()) relations.pop_back();
@@ -413,9 +423,10 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
 
 int main(int argc, char** argv) {
     if (argc < 2) return 1;
-
+    
     // Exit if running in secure mode (e.g., setuid)
     if (getauxval(AT_SECURE)) {
+        std::cerr << "Exited in secure mode" << std::endl;
         return 1;
     }
 
@@ -432,7 +443,7 @@ int main(int argc, char** argv) {
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
     if (duration > 1000) {
-        // std::cerr << "Debugger detected, exiting." << std::endl;
+        std::cerr << "Debugger detected, exiting." << std::endl;
         exit(1);
         return 1;
     }
@@ -446,7 +457,10 @@ int main(int argc, char** argv) {
     
     uintptr_t modBase = getModuleBase(pid);
     
-    if (!modBase) return -1;
+    if (!modBase) {
+        std::cerr << "Failed to get module base address.\n";
+        return -1;
+    }
 
     return polyai(modBase, pid, prod);
 }

@@ -20,6 +20,7 @@ const MAX_STARS_PER_PLAYER = MODEL_CONFIG.max_stars + 1;
 const MAX_GAME_TURNS = MODEL_CONFIG.max_turns + 1;
 // ? the amount of units a city can own is the same as its level
 const MAX_CITY_UNIT_COUNT = MODEL_CONFIG.max_structure_level + 1;
+var _taken: Set<bigint> = new Set();
 
 export interface ZobristKeys {
     turn: bigint[];                 // number[]
@@ -70,8 +71,17 @@ export interface ZobristKeys {
 }
 
 function generateRandom64BitBigInt(): bigint {
-    const buffer = crypto.randomBytes(8);
-    return buffer.readBigUInt64BE(0);
+    let buffer = crypto.randomBytes(8);
+    let big = buffer.readBigUInt64BE(0);
+
+    while (_taken.has(big)) {
+        buffer = crypto.randomBytes(8);
+        big = buffer.readBigUInt64BE(0);
+    }
+
+    _taken.add(big);
+
+    return big;
 }
 
 function initializeKeys<T>(count1: number, generator: () => T): T[] {
@@ -105,7 +115,6 @@ function generateAllZobristKeys(): ZobristKeys {
         effect: initializeKeys(effectTypeCount, generateRandom64BitBigInt),
     }));
 
-
     // Structures
     keys.structure = initializeKeys(MAX_TILES, () => 
        	initializeKeys(structureTypeCount, generateRandom64BitBigInt),
@@ -136,42 +145,18 @@ function generateAllZobristKeys(): ZobristKeys {
 }
 
 export function generateFile() {
-    const outputFilePath = 'src/zobrist/zobristKeys.ts';
-    const zobristKeysData = generateAllZobristKeys();
-    const stringifiedZobristKeys = JSON.stringify(zobristKeysData, (key, value) => {
-        if (typeof value === 'bigint') {
+    _taken = new Set();
+    const out = 'src/zobrist/zobristKeys.ts';
+    const data = generateAllZobristKeys();
+    const strings = JSON.stringify(data, (key, value) => {
+        if(typeof value === 'bigint') {
             return value.toString() + 'n';
         }
         return value;
     }, 2);
 
-    const fileContent = `// This file is auto-generated. Do not edit manually.
-import { ZobristKeys } from "./generateZorbist";
-
-export const zobristKeyStrings = ${stringifiedZobristKeys};
-
-function parseZobristKeys(obj: any): any {
-    if (obj === null || typeof obj !== 'object') {
-        if (typeof obj === 'string' && obj.endsWith('n')) {
-            return BigInt(obj.slice(0, -1));
-        }
-        return obj;
-    }
-    if (Array.isArray(obj)) {
-        return obj.map(parseZobristKeys);
-    }
-    const newObj: any = {};
-    for (const key in obj) {
-        if (Object.prototype.hasOwnProperty.call(obj, key)) {
-            newObj[key] = parseZobristKeys(obj[key]);
-        }
-    }
-    return newObj;
-}
-
-export const zobristKeys: ZobristKeys = parseZobristKeys(zobristKeyStrings);
-`;
-    
-    fs.writeFileSync(outputFilePath, fileContent);
-    console.log(`Zobrist keys generated to ${outputFilePath}`);
+    fs.writeFileSync(out, `
+// These keys are auto-generated. Do not edit manually.
+export const zobristKeyStrings = ${strings};`);
+    console.log(`Zobrist keys generated to ${out}`);
 }

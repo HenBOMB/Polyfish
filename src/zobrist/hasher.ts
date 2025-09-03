@@ -6,7 +6,26 @@ import { TechnologySettings } from "../core/settings/TechnologySettings";
 import { UnitSettings } from "../core/settings/UnitSettings";
 import { CityState, GameState, TileState, TribeState, UnitState } from "../core/states";
 import { EffectType, ResourceType, StructureType, TechnologyType, TerrainType, TribeType, UnitType } from "../core/types";
-import { zobristKeys } from "./zobristKeys";
+import { zobristKeyStrings } from "./zobristKeys";
+import { ZobristKeys } from "./generateZorbist";
+
+export function parseZobristKeys(obj: any): any {
+    if(typeof obj === 'string' && obj.endsWith('n')) {
+        return BigInt(obj.slice(0, -1));
+    }
+    if(Array.isArray(obj)) {
+        return obj.map(parseZobristKeys);
+    }
+    const newObj: any = { };
+    for(const key in obj) {
+        if(Object.prototype.hasOwnProperty.call(obj, key)) {
+            newObj[key] = parseZobristKeys(obj[key]);
+        }
+    }
+    return newObj;
+}
+
+const zobristKeys: ZobristKeys = parseZobristKeys(zobristKeyStrings);
 
 // These are required because some Types do not have a value assigned, 
 // the types are used by the live game simulator so they must be normalized to an index
@@ -33,6 +52,7 @@ function getEnumID(value: number, map?: Record<number, number>): number {
 }
     
 export function xorState(state: GameState): bigint {
+        return 0n;
     const pov = getPovTribe(state);
 
     let hash: bigint = 0n;
@@ -99,6 +119,7 @@ function xorSetUnit(
     hash: bigint,
     unit: UnitState
 ): bigint {
+        return 0n;
     const uKey = zobristKeys.units[unit._tileIndex];
 
     hash ^= uKey.owner[unit._owner];
@@ -109,7 +130,7 @@ function xorSetUnit(
     if(unit._kills <= MODEL_CONFIG.max_unit_kills) {
         hash ^= uKey.kills[unit._kills];
     }
-    hash ^= uKey.passenger[unit._passenger? getEnumID(unit._passenger, UnitToID) : UnitType.None];
+    hash ^= uKey.passenger[unit._passenger? getEnumID(unit._passenger!, UnitToID) : UnitType.None];
     
     // TODO notes promotable
     unit._effects.forEach(effect => {
@@ -124,6 +145,7 @@ function xorSetStructure(
     structType: StructureType,
     tileIndex: number,
 ): bigint {
+        return 0n;
     return hash ^ zobristKeys.structure[tileIndex][getEnumID(structType, StructureToID)];
 }
 
@@ -132,6 +154,7 @@ function xorSetResource(
     resourceType: ResourceType,
     tileIndex: number,
 ): bigint {
+        return 0n;
     return hash ^ zobristKeys.resource[tileIndex][getEnumID(resourceType)];
 }
 
@@ -139,6 +162,7 @@ function xorSetCity(
     hash: bigint,
     city: CityState
 ): bigint {
+        return 0n;
     const cKey = zobristKeys.city[city.tileIndex];
 
     hash ^= cKey.owner[city._owner];
@@ -154,6 +178,7 @@ function xorSetTile(
     hash: bigint,
     tile: TileState
 ): bigint {
+        return 0n;
     const tKey = zobristKeys.tiles[tile.tileIndex];
 
     hash ^= tKey.explored;
@@ -194,8 +219,13 @@ export class xorPlayer {
     }
 
     static stars(tribe: TribeState, stars: number) {
-        if(stars > MODEL_CONFIG.max_stars) return;
-        tribe.hash ^= zobristKeys.player[tribe.owner].stars[stars];
+        stars = Math.min(stars, MODEL_CONFIG.max_stars);  
+        try {
+            tribe.hash ^= zobristKeys.player[tribe.owner].stars[stars];
+        } catch (error) {
+            console.log(error);
+            console.log('STARS', stars, tribe.owner, tribe.hash);
+        }
     }
 
     static tech(tribe: TribeState, techType: TechnologyType) {
@@ -426,6 +456,7 @@ export function xorResource(
     newResourceType: ResourceType,
 ): void {
     xorForAll(state, tileIndex, (hash) => {
+        return 0n;
         hash = xorSetResource(hash, resourceType, tileIndex);
         if(newResourceType) {
             hash = xorSetResource(hash, newResourceType, tileIndex);
@@ -441,6 +472,7 @@ export function xorStructure(
     newStructType: StructureType,
 ): void {
     xorForAll(state, tileIndex, (hash) => {
+        return 0n;
         hash = xorSetStructure(hash, structType, tileIndex);
         if(newStructType) {
             hash = xorSetStructure(hash, newStructType, tileIndex);

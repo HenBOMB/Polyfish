@@ -3,23 +3,21 @@ import Move from "../core/move";
 import { MoveType } from "../core/types";
 import { GameState } from "../core/states";
 import { TribeType } from "../core/types";
-import { MoveGenerator } from "../core/moves";
-import EndTurn from "../core/moves/EndTurn";
 
 export class Opening {
     /**
      * Returns a list of opening-best moves based on the current pov tribe and turn
      * @param state 
-     * @param legalMoves legal moves to search instead
-     * @returns returns [EndTurn] if NO opening moves were found
+     * @param legal legal moves to search in
+     * @returns returns a list of move indexes that are book moves
      */
-    static recommend(state: GameState, legalMoves?: Move[]): Move[] {
+    static recommend(state: GameState, legal: Move[]): Move[] {
         const pov = getPovTribe(state);
         const moveTypes = OpeningBook[pov.tribeType][state.settings._turn];
-        const legal = legalMoves || MoveGenerator.legal(state);
-        if(!moveTypes) return legal;
-        const moves = legal.filter(x => moveTypes.some(y => x.moveType == y));
-        return moves.length? moves : [new EndTurn()];
+        if(!moveTypes || legal.length < 2) return [];
+        return legal.reduce((a: any, b, i) => ([
+            ...a, ...(moveTypes.some(y => b.moveType == y)? [i] : [])
+        ]), []).map((x: number) => legal[x]);
     }
 }
 

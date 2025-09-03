@@ -106,11 +106,11 @@ class PolytopiaNet(nn.Module):
         # v_win: Scalar in [-1,1] for win probability
         self.v_win_fc = nn.Linear(num_hidden_channels, 1)
 
-        # v_econ: Predicted future economic score (normalized)
-        self.v_econ_fc = nn.Linear(num_hidden_channels, 1)
+        # # v_eco: Predicted future economic score (normalized)
+        # self.v_eco_fc = nn.Linear(num_hidden_channels, 1)
 
-        # v_mil: Predicted future military strength (normalized)
-        self.v_mil_fc = nn.Linear(num_hidden_channels, 1)
+        # # v_mil: Predicted future military strength (normalized)
+        # self.v_mil_fc = nn.Linear(num_hidden_channels, 1)
 
     def forward(self, obs):
         map_input = obs['map'] # [B, C_map, H, W]
@@ -139,7 +139,7 @@ class PolytopiaNet(nn.Module):
         # [B, num_hidden, H, W] 
         shared_representation = self.post_fusion_resblock(fused_features) 
 
-        # --- Policy Head Calculations ---
+        # --- Policy Head ---
         # [B, num_hidden]
         policy_pooled = self.policy_pool(shared_representation).view(batch_size, -1) 
         policy_latent = self.policy_fc_shared(policy_pooled)
@@ -170,104 +170,27 @@ class PolytopiaNet(nn.Module):
         # Logit > 0 -> choose option 1 (second presented)
         pi_reward_logits = self.pi_reward_fc(policy_latent) # [B, 1]
 
-        # --- Value Head Calculations ---
+        # --- Value Head ---
         value_pooled = self.value_pool(shared_representation).view(batch_size, -1)
         value_latent = self.value_fc_shared(value_pooled)
         value_latent = self.value_fc_relu(value_latent)
 
-        # v_win prediction
         v_win = torch.tanh(self.v_win_fc(value_latent))
 
-        # v_econ prediction
-        v_econ = self.v_econ_fc(value_latent)
+        # v_eco = self.v_eco_fc(value_latent)
 
-        # v_mil prediction
-        v_mil = self.v_mil_fc(value_latent)
+        # v_mil = self.v_mil_fc(value_latent)
 
         return {
-            # Policy Logits
-            'pi_action_logits': pi_action_logits,
-            'pi_actor_logits': pi_actor_logits,
-            'pi_target_logits': pi_target_logits,
-            'pi_option_struct_logits': pi_option_struct_logits,
-            'pi_option_skill_logits': pi_option_skill_logits,
-            'pi_option_unit_logits': pi_option_unit_logits,
-            'pi_tech_logits': pi_tech_logits,
-            'pi_reward_logits': pi_reward_logits,
-
-            # Value Predictions
+            'pi_action': pi_action_logits,
+            'pi_source': pi_actor_logits,
+            'pi_target': pi_target_logits,
+            'pi_struct': pi_option_struct_logits,
+            'pi_skill': pi_option_skill_logits,
+            'pi_unit': pi_option_unit_logits,
+            'pi_tech': pi_tech_logits,
+            'pi_reward': pi_reward_logits,
             'v_win': v_win,
-            'v_econ': v_econ,
-            'v_mil': v_mil
+            # 'v_eco': v_eco,
+            # 'v_mil': v_mil
         }
-
-if __name__ == '__main__':
-    # Dummy dimensions
-    DIM_MAP_CHANNELS = 20
-    DIM_MAP_SIZE = 15
-    DIM_PLAYER = 50
-    DIM_STRUCT = 15
-    DIM_SKILL = 10
-    DIM_UNIT = 30
-    DIM_TECH = 35
-
-    # Hyperparameters
-    BATCH_SIZE = 4
-    NUM_RES_BLOCKS = 12
-    NUM_HIDDEN_CHANNELS = 128
-    NUM_ACTION_TYPES = 9
-
-    # Create dummy input
-    dummy_obs = {
-        'map': torch.randn(BATCH_SIZE, DIM_MAP_CHANNELS, DIM_MAP_SIZE, DIM_MAP_SIZE),
-        'player': torch.randn(BATCH_SIZE, DIM_PLAYER)
-    }
-
-    # Instantiate the network
-    model = PolytopiaNet(
-        dim_map_channels=DIM_MAP_CHANNELS,
-        dim_map_size=DIM_MAP_SIZE,
-        dim_player=DIM_PLAYER,
-        dim_struct=DIM_STRUCT,
-        dim_skill=DIM_SKILL,
-        dim_unit=DIM_UNIT,
-        dim_tech=DIM_TECH,
-        num_res_blocks=NUM_RES_BLOCKS,
-        num_hidden_channels=NUM_HIDDEN_CHANNELS,
-        num_action_types=NUM_ACTION_TYPES
-    )
-
-    # Perform a forward pass
-    model.eval() # Set model to evaluation mode for consistent output if using dropout/batchnorm etc.
-    with torch.no_grad(): # Disable gradient calculation for inference
-        output = model(dummy_obs)
-
-    # Print shapes of the outputs
-    print("Output Shapes:")
-    for key, value in output.items():
-        print(f"{key}: {value.shape}")
-
-    # Example: Get probabilities for action types (requires softmax)
-    action_probs = F.softmax(output['pi_action_logits'], dim=-1)
-    print("\nExample Action Type Probabilities (first batch element):\n", action_probs[0])
-
-    # Example: Get probabilities for structure options (requires softmax)
-    # Note: You would only apply softmax/use these if the chosen action type was 'build'
-    struct_option_probs = F.softmax(output['pi_option_struct_logits'], dim=-1)
-    print("\nExample Struct Option Probabilities (first batch element):\n", struct_option_probs[0])
-
-    # Example: Interpret the reward choice logits
-    reward_choice_logits = output['pi_reward_choice_logits']
-    # Apply sigmoid to get probability of choosing the *second* option
-    reward_choice_prob_option1 = torch.sigmoid(reward_choice_logits)
-    # Probability of choosing the *first* option is 1 - prob(option1)
-    reward_choice_prob_option0 = 1.0 - reward_choice_prob_option1
-
-    print(f"\nExample Reward Choice Logits (batch):\n{reward_choice_logits.squeeze(-1)}")
-    print(f"\nExample Reward Choice Prob[Choose Option 1] (batch):\n{reward_choice_prob_option1.squeeze(-1)}")
-    print(f"\nExample Reward Choice Prob[Choose Option 0] (batch):\n{reward_choice_prob_option0.squeeze(-1)}")
-
-    # Decision rule based on logits:
-    # choose_option_1 = reward_choice_logits > 0
-    # choose_option_0 = reward_choice_logits <= 0
-    print(f"\nDecision (Choose Option 1?): {reward_choice_logits.squeeze(-1) > 0}")

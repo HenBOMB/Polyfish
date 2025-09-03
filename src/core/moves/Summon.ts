@@ -1,4 +1,4 @@
-import { Logger } from "../../polyfish/logger";
+import { Logger } from "../../ai/logger";
 import { summonUnit } from "../actions";
 import { getPovTribe } from "../functions";
 import Move, { CallbackResult } from "../move";

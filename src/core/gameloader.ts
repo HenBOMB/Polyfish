@@ -11,10 +11,10 @@ import {
     UnitType,
 } from "./types";
 import { UnitState, CityState, GameState, TribeState, TileState, ResourceState, StructureState, DiplomacyRelationState, GameSettings, DefaultGameSettings } from "./states";
-import { isResourceVisible, getNeighborTiles, getNeighborIndexes, isWaterTerrain, isIceTerrain, getTribeCrudeScore, getHomeCity, cloneState } from "./functions";
+import { isResourceVisible, getNeighborTiles, getNeighborIndexes, isWaterTerrain, isIceTerrain, getTribeCrudeScore, getHomeCity } from "./functions";
 import { readFileSync, writeFileSync } from "fs";
 import { UnitSettings } from "./settings/UnitSettings";
-import { predictBestNextCityReward, predictOuterFogTerrain, predictVillages } from "../eval/prediction";
+import { predictBestNextCityReward, predictOuterFogTerrain, predictVillages } from "../ai/prediction";
 import { TribeSettings } from "./settings/TribeSettings";
 import { summonUnit } from "./actions";
 import { xorState } from "../zobrist/hasher";
@@ -27,11 +27,11 @@ export const MAX_TURNS = 50;
 
 export default class GameLoader {
     public currentState: GameState;
-    readonly fow: boolean;
+    public fow: boolean;
     readonly settings: GameSettings;
 
     constructor(settings?: GameSettings) {
-        this.fow = false;
+        this.fow = true;
         this.currentState = { } as any;
         this.settings = {
             ...DefaultGameSettings,
@@ -61,8 +61,8 @@ export default class GameLoader {
             tiles: [],
             structures: {},
             resources: {},
-            tribes: { },
-            _visibleTiles: []
+            tribes: {},
+            _visibleTiles: {}
         }    
     }
     
@@ -124,7 +124,10 @@ export default class GameLoader {
             return null;
         });
 
-        if(!data) return null;
+        if(!data) {
+            throw Error("NO LIVE DATA PROVIDED")
+            return null;
+        }
         
         let [ [ size, turn ], playerStates, mapdata ] = data;
 
@@ -215,8 +218,13 @@ export default class GameLoader {
                     } as TribeState,
                 };
             }, {}),
-            _visibleTiles: [],
+            _visibleTiles: {},
         };
+
+        if (state.settings._turn > MAX_TURNS) {
+            console.log(`WARN: turn is "${state.settings._turn}", set to 0`);
+            state.settings._turn = 0;
+        }
 
         const tribes = Object.values(state.tribes);
         state.settings.tribeCount = tribes.length;
@@ -239,6 +247,11 @@ export default class GameLoader {
             
             const explorers = this.fow? rawTile[2].split("&").map((x) => this.parseRawInt(x)).filter(x => x > 0) : tribes.map(x => x.owner);
             
+            if(tileIndex === 285) {
+                console.log(explorers)
+                console.log(new Set(explorers))
+            }
+
             const tileData: TileState = {
                 terrainType: this.parseRawInt(rawTile[0]),
                 _owner: tileOwner,
@@ -281,6 +294,9 @@ export default class GameLoader {
                 state.resources[tileIndex] = resourceData;
 
                 if(!isResourceVisible(playerTribe, resourceId)) {
+                    if(!(state as any)._hiddenResources) {
+                        (state as any)._hiddenResources = {};
+                    }
                     (state as any)._hiddenResources[tileIndex] = resourceId;
                 }
             }
@@ -386,71 +402,72 @@ export default class GameLoader {
         this.loadGame(state);
     }
 
-    public async loadRandom(_seed?: number) {
-        const randomNotation = async (seed: number) => {
-            const mapdata: { type: string, tribe: string, above: string | null, road: boolean }[] = JSON.parse(await new Promise((resolve, reject) => {
-                const cmd = `.venv/bin/python mapgen/main.py --seed ${seed} --size ${this.settings.size} --tribes ${this.settings.tribes.map(x => TribeType[x]).join(" ")}`
-                exec(cmd, (error: any, stdout: string, stderr: any) => {
-                    if(error) {
-                        // console.log(error);
-                        return reject(error || stderr);
-                    }
-                    resolve(stdout.trim());
-                });
-            }));
+    public async randomNotation(seed: number): Promise<string> {
+        const mapdata: { type: string, tribe: string, above: string | null, road: boolean }[] = JSON.parse(await new Promise((resolve, reject) => {
+            const cmd = `.venv/bin/python mapgen/main.py --seed ${seed} --size ${this.settings.size} --tribes ${this.settings.tribes.map(x => TribeType[x]).join(" ")}`
+            exec(cmd, (error: any, stdout: string, stderr: any) => {
+                if(error) {
+                    // console.log(error);
+                    return reject(error || stderr);
+                }
+                resolve(stdout.trim());
+            });
+        }));
     
-            // Convert mapdata to notation for simplicity
-            return [
-                // Settings
-                [`${ModeType[this.settings.mode!].toLowerCase()},0,${this.settings.maxTurns},1`],
-                // Tribes
-                this.settings.tribes.map(x => TribeType[x].slice(0, 2).toLowerCase()),
-                // Climate
-                mapdata.map(x => x.tribe.slice(0, 2).toLowerCase()),
-                // Terrain Type
-                mapdata.map(x => {
-                    switch (x.type) {
-                        case 'village':
-                        case 'ruin':
-                        case 'ground':
-                            return '-';
-                        default:
-                            return x.type[0];
-                    }
-                }),
-                // Resource y/n
-                mapdata.map(x => x.above ? 'y' : '-'),
-                // Villages & Capitals & Ruins TODO CAPITALS
-                mapdata.map((x) => 
-                    x.above == 'capital'? x.tribe.slice(0, 2).toLowerCase() : 
-                    x.above == 'ruin' ? 'rs' : 
-                    x.above == 'starfish' ? 'sf' : 
-                    x.above == 'village' ? 'vv' : 
-                    '--'
-                ),
-            ].map(x => x.join('')).join(';');
-        }
+        // Convert mapdata to notation for simplicity
+        return [
+            // Settings
+            [`${ModeType[this.settings.mode!].toLowerCase()},0,${this.settings.maxTurns},1`],
+            // Tribes
+            this.settings.tribes.map(x => TribeType[x].slice(0, 2).toLowerCase()),
+            // Climate
+            mapdata.map(x => x.tribe.slice(0, 2).toLowerCase()),
+            // Terrain Type
+            mapdata.map(x => {
+                switch (x.type) {
+                    case 'village':
+                    case 'ruin':
+                    case 'ground':
+                        return '-';
+                    default:
+                        return x.type[0];
+                }
+            }),
+            // Resource y/n
+            mapdata.map(x => x.above ? 'y' : '-'),
+            // Villages & Capitals & Ruins TODO CAPITALS
+            mapdata.map((x) => 
+                x.above == 'capital'? x.tribe.slice(0, 2).toLowerCase() : 
+                x.above == 'ruin' ? 'rs' : 
+                x.above == 'starfish' ? 'sf' : 
+                x.above == 'village' ? 'vv' : 
+                '--'
+            ),
+        ].map(x => x.join('')).join(';');
+    }
 
-        // Safeguard for inconsistent map generation
-        let tries = 100
+    public async loadRandom(_seed?: number, verbose = true) {
+        // Safeguard for inconsistency map generation
+        let tries = 1000
         let seed = _seed || (this.settings.seed? this.settings.seed : Math.floor(Math.random() * MAX_SEED));
-
+       
         while(tries > 0) {
             try {
-                const not = await randomNotation(seed).catch(() => null);
+                const not = await this.randomNotation(seed).catch(() => null);
                 if(!not) throw 'err';
                 this.loadNotation(not);
-                console.log('SEED', seed);
-                return;
+                if(verbose) {
+                    console.log('SEED', seed);
+                }
+                return [this.loadNotation(not)];
             } catch (error) {
                 console.log(error);
                 tries--;
                 seed++;
-                // console.log(error);
             }
         }
 
-        console.log(`TRIED ${100} TIMES AND ALL FAILED! USING EMERGENCY STATE!`);
+        console.log(`TRIED ${1000} TIMES AND ALL FAILED! USING EMERGENCY STATE!`);
     }
 
     public loadSave(filename: string) {

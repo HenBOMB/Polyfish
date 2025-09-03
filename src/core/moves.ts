@@ -1,5 +1,5 @@
 import { CityState, GameState, TileState, UnitState } from "./states";
-import { getNeighborTiles, getPovTerritorry, getNeighborIndexes, isAdjacentToEnemy, isAquaticOrCanFly, isSteppable, isWaterTerrain, isNavalUnit, getTechCost, getPovTribe, isSkilledIn, getUnitAttack, getUnitMovement, isRoadpathAndUsable, getMaxHealth, getAlliesNearTile, isTechUnlocked, isEnemyCity, isUnderSiege, getTechSettings, getTechUnitType, isTileOccupied, getEnemiesNearTile, isTileFrozen, getTechStructure, getCityOwningTile, isResourceVisible, getEnemyIndexesInRange, getReplacedOrTechSettings, isTileExplored, hasEffect, getStructureAt } from './functions';
+import { getNeighborTiles, getPovTerritorry, getNeighborIndexes, isAdjacentToEnemy, isAquaticOrCanFly, isSteppable, isWaterTerrain, isNavalUnit, getTechCost, getPovTribe, isSkilledIn, getUnitAttack, getUnitMovement, isRoadpathAndUsable, getMaxHealth, getAlliesNearTile, isTechUnlocked, isEnemyCity, isUnderSiege, getTechSettings, getTechUnitType, isTileOccupied, getEnemiesNearTile, isTileFrozen, getTechStructure, getCityOwningTile, isResourceVisible, getEnemyIndexesInRange, getReplacedOrTechSettings, isTileExplored, hasEffect, getStructureAt, getUnitSettings, getUnitAt } from './functions';
 import { StructureSettings } from "./settings/StructureSettings";
 import { SkillType, ResourceType, RewardType, StructureType, TechnologyType, TerrainType, UnitType, AbilityType, EffectType } from "./types";
 import { UnitSettings } from "./settings/UnitSettings";
@@ -32,10 +32,177 @@ import { ResourceSettings } from "./settings/ResourceSettings";
 import BreakIce from "./moves/abilities/BreakIce";
 import Drain from "./moves/abilities/Drain";
 
+export type Prediction = { 
+	pi_action: number[]; 
+	pi_source: number[]; 
+	pi_target: number[]; 
+	pi_struct: number[]; 
+	pi_skill: number[]; 
+	pi_unit: number[]; 
+	pi_tech: number[]; 
+	pi_reward: number[]; 
+	v_win: number 
+	// v_eco: number 
+	// v_mil: number 
+};
+
 interface ReachableNode {
 	index: number;
 	cost: number;
 	terminal?: boolean;
+}
+
+const UnitToSpawnableID: Record<UnitType, number> = {
+	[UnitType.None]: 		-1,
+	[UnitType.Dinghy]: 		-1,
+	[UnitType.Pirate]: 		-1,
+	[UnitType.Giant]: 		-1,
+	[UnitType.DragonEgg]: 	-1,
+	[UnitType.BabyDragon]: 	-1,
+	[UnitType.FireDragon]: 	-1,
+	[UnitType.Crab]: 		-1,
+	[UnitType.Centipede]: 	-1,
+	[UnitType.Segment]: 	-1,
+	[UnitType.Gaami]: 		-1,
+	[UnitType.Dagger]: 		-1,
+	[UnitType.Raft]: 		-1,
+	[UnitType.Juggernaut]: 	-1,
+
+	[UnitType.Warrior]:		0,
+	[UnitType.Rider]: 	    1,
+	[UnitType.Amphibian]:   2,
+	[UnitType.Hexapod]: 	3,
+
+	[UnitType.Knight]: 	    4,
+	[UnitType.Tridention]:  5,
+	[UnitType.Doomux]: 		6,
+	
+	[UnitType.Defender]: 	7,
+	[UnitType.Cloak]: 	 	8,
+	[UnitType.Kiton]: 		9,
+
+	[UnitType.Swordsman]: 	10,
+
+	[UnitType.MindBender]: 	11,
+	[UnitType.Shaman]: 		12,
+
+	[UnitType.Archer]: 		13,
+	[UnitType.IceArcher]: 	14,
+	[UnitType.Phychi]: 		15,
+	[UnitType.Catapult]: 	16,
+	[UnitType.Exida]: 		17,
+	
+	[UnitType.Raychi]: 		18,
+	[UnitType.Scout]: 		19,
+	[UnitType.Bomber]: 		20,
+	[UnitType.Rammer]: 		21,
+	
+	[UnitType.Polytaur]: 	22,
+	[UnitType.Mooni]: 		23,
+	[UnitType.IceFortress]: 24,
+	[UnitType.BattleSled]: 	25,
+}
+
+const StructToBuildableID: Record<StructureType, number> = {
+	[StructureType.None]: 			-1,
+	[StructureType.Village]: 		-1,
+	[StructureType.Ruin]: 			-1,
+	[StructureType.Lighthouse]: 	-1,
+	
+	[StructureType.Road]: 			0,
+	[StructureType.Bridge]: 		1,
+	[StructureType.Market]: 		2,
+	[StructureType.Outpost]: 		3,
+
+	[StructureType.Farm]: 			4,
+	[StructureType.Windmill]: 		5,
+	[StructureType.Embassy]: 		6,
+	[StructureType.Temple]: 		7,
+
+	[StructureType.Mine]: 			8,
+	[StructureType.Forge]: 			9,
+	[StructureType.MountainTemple]: 10,
+
+	[StructureType.Port]: 			11,
+	[StructureType.WaterTemple]: 	12,
+	[StructureType.IceTemple]: 		13,
+
+	[StructureType.LumberHut]: 		14,
+	[StructureType.Sawmill]: 		15,
+	[StructureType.ForestTemple]: 	16,
+
+	[StructureType.AltarOfPeace]: 	17,
+	[StructureType.TowerOfWisdom]: 	18,
+	[StructureType.GrandBazaar]: 	19,
+	[StructureType.EmperorsTomb]: 	20,
+	[StructureType.GateOfPower]: 	21,
+	[StructureType.ParkOfFortune]: 	22,
+	[StructureType.EyeOfGod]: 		23,
+	
+	[StructureType.Spores]: 		24,
+	[StructureType.Swamp]: 			25,
+	[StructureType.Mycelium]: 		26,
+}
+
+const TechToResearchableID: Record<TechnologyType, number> = {
+	[TechnologyType.None]:			-1,
+	[TechnologyType.Unbuildable]: 	-1,
+
+	[TechnologyType.Riding]: 		0,
+	[TechnologyType.Amphibian]: 	0,
+	[TechnologyType.Roads]: 		1,
+	[TechnologyType.Trade]: 		2,
+	[TechnologyType.FreeSpirit]: 	3,
+	[TechnologyType.FreeDiving]: 	3,
+	[TechnologyType.Chivalry]: 		4,
+	[TechnologyType.Spearing]: 		4,
+	[TechnologyType.ShockTactics]: 	4,
+
+	[TechnologyType.Organization]: 	5,
+	[TechnologyType.Farming]: 		6,
+	[TechnologyType.Construction]: 	7,
+	[TechnologyType.Recycling]: 	7,
+	[TechnologyType.Strategy]: 		8,
+	[TechnologyType.Diplomacy]: 	9,
+	
+	[TechnologyType.Climbing]: 		10,
+	[TechnologyType.Mining]: 		11,
+	[TechnologyType.Smithery]: 		12,
+	[TechnologyType.Meditation]: 	13,
+	[TechnologyType.Philosophy]: 	14,
+
+	[TechnologyType.Fishing]: 		15,
+	[TechnologyType.IceFishing]: 	15,
+	[TechnologyType.Frostwork]: 	15,
+	[TechnologyType.Sailing]: 		16,
+	[TechnologyType.Sledding]: 		16,
+	[TechnologyType.Pascetism]: 	16,
+	[TechnologyType.Navigation]: 	17,
+	[TechnologyType.PolarWarfare]: 	17,
+	[TechnologyType.Oceantology]: 	17,
+	[TechnologyType.Ramming]: 		18,
+	[TechnologyType.Hydrology]: 	18,
+	[TechnologyType.Aquatism]: 		19,
+	[TechnologyType.Polarism]: 		19,
+
+	[TechnologyType.Hunting]: 		20,
+	[TechnologyType.Archery]: 		21,
+	[TechnologyType.Spiritualism]: 	22,
+	[TechnologyType.Forestry]: 		23,
+	[TechnologyType.ForestMagic]: 	23,
+	[TechnologyType.Mathematics]: 	24,
+}
+
+const RewardToRewardableID: Record<RewardType, number> = {
+	[RewardType.None]: 			-1,
+	[RewardType.Workshop]: 		0,
+	[RewardType.Explorer]: 		1,
+	[RewardType.Resources]: 	0,
+	[RewardType.CityWall]: 		1,
+	[RewardType.PopGrowth]: 	0,
+	[RewardType.BorderGrowth]:	1,
+	[RewardType.Park]: 			0,
+	[RewardType.SuperUnit]: 	1,
 }
 
 export class MoveGenerator {
@@ -107,7 +274,7 @@ export class MoveGenerator {
 		}
 		const moves: Move[] = [new EndTurn()];
 
-		// ArmyMovesGenerator.all(state, moves);
+		ArmyMovesGenerator.all(state, moves);
 
 		EconMovesGenerator.all(state, moves);
 		
@@ -116,6 +283,60 @@ export class MoveGenerator {
 
 	static serialize(moves: Move[]): string {
 		return moves.map(Move.serialize).join('#');
+	}
+
+	static fromPrediction(state: GameState, prediction: Prediction, legal?: Move[]): [Move, number, number][] {
+		const {
+            pi_action, pi_source: pi_actor, pi_target,
+            pi_struct, pi_skill, pi_unit,
+            pi_tech, pi_reward,
+            // v_win
+        } = prediction;
+		
+		return (legal || MoveGenerator.legal(state)).map((move, i) => {
+			let prob = pi_action[move.moveType-1];
+			
+			if(move.hasSrc()) {
+				prob *= pi_actor[move.getSrc()];
+			}
+
+			if(move.hasTarget()) {
+				prob *= pi_target[move.getTarget()];
+			}
+	
+			switch (move.moveType) {
+				case MoveType.Ability:
+					prob *= pi_skill[move.getType<AbilityType>()];
+					break;
+				
+				case MoveType.Summon:
+					prob *= pi_unit[UnitToSpawnableID[move.getType<UnitType>()]];
+					break;
+	
+				case MoveType.Build:
+					prob *= pi_struct[StructToBuildableID[move.getType<StructureType>()]];
+					break;
+	
+				case MoveType.Research:
+					prob *= pi_tech[TechToResearchableID[move.getType<TechnologyType>()]];
+					break;
+	
+				case MoveType.Reward:
+					const rewardChoiceType = RewardToRewardableID[move.getType<RewardType>()];
+					if(rewardChoiceType === 0) {
+						prob *= (1 - pi_reward[0]);
+					} 
+					else if (rewardChoiceType === 1) {
+						prob *= pi_reward[0];
+					}
+					break;
+	
+				default:
+					break;
+			}
+
+			return [move, prob, i];
+		}).sort((a: any, b: any) => b[1] - a[1]) as any;
 	}
 }
 
@@ -182,7 +403,7 @@ export class EconMovesGenerator {
 			}
 		});
 
-		for (let i = 0; i < territory.length; i++) {
+ 		for(let i = 0; i < territory.length; i++) {
 			const tileIndex = territory[i];
 			const enemyOnTile = isTileOccupied(state, tileIndex, true);
 			
@@ -198,6 +419,8 @@ export class EconMovesGenerator {
 			const resource = state.resources[tileIndex];
 			const structure = state.structures[tileIndex];
 			
+			// ! Harvesting ! //
+
 			if(resource) {
 				const settings = ResourceSettings[resource!.id];
 				if((settings.cost || 0) <= pov._stars
@@ -210,15 +433,15 @@ export class EconMovesGenerator {
 				}
 			}
 
+			// ! Building ! //
+
 			if(!structure) {
 				for(const x in structures) {
 					const structType = Number(x) as StructureType;
 					const settings = StructureSettings[structType];
 	
 					if(!settings.terrainType?.has(tile.terrainType)) {
-						if(tile.capitalOf !== pov.owner || structType !== StructureType.Embassy) {
-							continue;
-						}
+						continue;
 					}
 					
 					if(settings.limitedPerCity) {
@@ -241,7 +464,12 @@ export class EconMovesGenerator {
 				}
 			}
 
+			// ! Abilities ! //
+
 			if(structure) {
+				// TODO Embassy
+				// if(tile.capitalOf > 0 && tile.capitalOf !== pov.owner && structType !== StructureType.Embassy) {
+				// }
 				if(StructureSettings[state.structures[tile.tileIndex]!.id].cost) {
 					if(abilities.has(AbilityType.Destroy)) {
 						moves.push(new Destroy(tile.tileIndex));	
@@ -283,7 +511,7 @@ export class EconMovesGenerator {
 			return settings.unlocksAbility;
 		}).map(x => getTechSettings(x).unlocksAbility));
 
-		for (let i = 0; i < territory.length; i++) {
+		for(let i = 0; i < territory.length; i++) {
 			const tile = state.tiles[territory[i]];
 
 			if(state.structures[tile.tileIndex]) {
@@ -321,7 +549,7 @@ export class EconMovesGenerator {
 		const pov = getPovTribe(state);
 		const territory = getPovTerritorry(state);
 
-		for (let i = 0; i < territory.length; i++) {
+		for(let i = 0; i < territory.length; i++) {
 			const tileIndex = territory[i];
 			const resource = state.resources[tileIndex];
 
@@ -354,7 +582,7 @@ export class EconMovesGenerator {
 		const pov = getPovTribe(state);
 		const structTypes: Set<StructureType> = new Set();
 
-		for (let i = 0; i < 7; i++) {
+		for(let i = 0; i < 7; i++) {
 			const task = TaskSettings[i as keyof typeof TaskSettings];
 			if(task.techType && !isTechUnlocked(pov, task.techType)) {
 				continue;
@@ -367,7 +595,7 @@ export class EconMovesGenerator {
 			}
 		}
 
-		for (let i = 0; i < pov._tech.length; i++) {
+		for(let i = 0; i < pov._tech.length; i++) {
 			const structType = getTechStructure(pov, pov._tech[i]);
 	
 			if(!structType || pov._stars < getTechCost(pov, pov._tech[i])) {
@@ -452,7 +680,7 @@ export class EconMovesGenerator {
 		const rewards = [
 			[ RewardType.Workshop, RewardType.Explorer ],
 			[ RewardType.CityWall, RewardType.Resources ],
-			[ RewardType.PopulationGrowth, RewardType.BorderGrowth ],
+			[ RewardType.PopGrowth, RewardType.BorderGrowth ],
 		][city._level-2] || [ RewardType.Park, RewardType.SuperUnit ];
 		if(rewards.some(x => city._rewards.has(x))) {
 			return [];
@@ -464,12 +692,10 @@ export class EconMovesGenerator {
 export class ArmyMovesGenerator {
 	static all(state: GameState, moves: Move[]) {
 		getPovTribe(state)._units.forEach(x => {
-			if(x._health > 0) {
-				ArmyMovesGenerator.captures(state, x, moves);
-				ArmyMovesGenerator.actions(state, x, moves);
-				ArmyMovesGenerator.attacks(state, x, moves);
-				ArmyMovesGenerator.steps(state, x, moves);
-			}
+			ArmyMovesGenerator.captures(state, x, moves);
+			ArmyMovesGenerator.actions(state, x, moves);
+			ArmyMovesGenerator.attacks(state, x, moves);
+			ArmyMovesGenerator.steps(state, x, moves);
 		});
 		ArmyMovesGenerator.summons(state, moves);
 	}
@@ -614,14 +840,14 @@ export class ArmyMovesGenerator {
 			}
 		});
 
-		if (spawnables.length) {
+		if(spawnables.length) {
 			const cities = tribe._cities;
-			for (let i = 0; i < cities.length; i++) {
+			for(let i = 0; i < cities.length; i++) {
 				const targetIndex = cities[i].tileIndex;
 				if(cities[i]._unitCount > cities[i]._level || isTileOccupied(state, targetIndex)) {
 					continue;
 				}
-				for (let j = 0; j < spawnables.length; j++) {
+				for(let j = 0; j < spawnables.length; j++) {
 					const unitType = spawnables[j];
 					// If the unit has navigate, it tipically cannot move onto land
 					// allow spawning if the unit has at least 1 tile to move to
@@ -651,12 +877,12 @@ export class ArmyMovesGenerator {
 	}
 
 	static steps(state: GameState, unit: UnitState, moves: Move[]) {
-		if (unit._moved) return;
+		if(unit._moved) return;
 
 		const steps = Array.from(ArmyMovesGenerator.computeReachableTiles(state, unit).entries());
 
-		for (const [tileIndex, ] of steps) {
-			if (unit._tileIndex == tileIndex) {
+		for(const [tileIndex, ] of steps) {
+			if(unit._tileIndex == tileIndex) {
 				continue;
 			}
 			moves.push(new Step(unit._tileIndex, tileIndex));
@@ -675,7 +901,7 @@ export class ArmyMovesGenerator {
 		openList.push({ index: unit._tileIndex, cost: 0 });
 		reachable.set(unit._tileIndex, 0);
 
-		while (openList.length > 0) {
+		while(openList.length > 0) {
 			openList.sort((a, b) => a.cost - b.cost);
 			const current = openList.shift()!;
 	
@@ -685,7 +911,7 @@ export class ArmyMovesGenerator {
 	
 			const neighbors = getNeighborTiles(state, current.index);
 	
-			for (let i = 0; i < neighbors.length; i++) {
+			for(let i = 0; i < neighbors.length; i++) {
 				const tile = neighbors[i];
 				const index = tile.tileIndex;
 				if (index == unit._tileIndex) continue;
@@ -716,7 +942,7 @@ export class ArmyMovesGenerator {
 		let cost = 1;
 
 		// If the unit is NOT flying or creeping (which disable road bonuses),
-		if (isSkilledIn(unit, SkillType.Fly, SkillType.Creep)) {
+		if(isSkilledIn(unit, SkillType.Fly, SkillType.Creep)) {
 			return cost;
 		}
 
@@ -726,7 +952,7 @@ export class ArmyMovesGenerator {
 		}
 
 		// Skate doubles movement on ice (i.e. halves cost)
-		if (toTile.terrainType === TerrainType.Ice && isSkilledIn(unit, SkillType.Skate)) {
+		if(toTile.terrainType === TerrainType.Ice && isSkilledIn(unit, SkillType.Skate)) {
 			cost *= 0.5; 
 		}
 

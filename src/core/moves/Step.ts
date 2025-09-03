@@ -1,4 +1,4 @@
-import { Logger } from "../../polyfish/logger";
+import { Logger } from "../../ai/logger";
 import { getTrueUnitAt, getUnitAt } from "../functions";
 import Move, { CallbackResult } from "../move";
 import { EffectType, MoveType } from "../types";

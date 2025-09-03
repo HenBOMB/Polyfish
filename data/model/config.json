@@ -11,12 +11,14 @@
     "max_stars": 100,
     "max_structure_level": 7,
     
-    "dim_map_tile": 34,
+    "dim_map_channels": 34,
     "dim_map_size": 11,
     "dim_player": 36,
-    "dim_ability": 250,
+    "dim_unit": 26,
+    "dim_ability": 15,
     "dim_moves": 10,
     "dim_tech": 25,
+    "dim_struct": 27,
     "dim_effects": 4,
 
     "res_blocks": 12,

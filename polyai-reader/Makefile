@@ -1,13 +1,17 @@
-CONFIG_MODULE_SIG=n
-CONFIG_MODULE_SIG_ALL=n
+CXX := g++
+CXXFLAGS := -O2 -std=c++17
 
-obj-m += polyai.o
+SRC := polyai-reader.cpp reader_util.cpp
+OBJ := $(SRC:.cpp=.o)
+TARGET := polyai-reader
 
-KDIR := /lib/modules/$(shell uname -r)/build
-PWD := $(shell pwd)
+all: $(TARGET)
 
-all:
-	make -C $(KDIR) M=$(PWD) modules
+$(TARGET): $(OBJ)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+%.o: %.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 clean:
-	make -C $(KDIR) M=$(PWD) clean
+	rm -f $(OBJ) $(TARGET)

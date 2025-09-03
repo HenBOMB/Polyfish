@@ -108,7 +108,7 @@ export enum RewardType {
 	BorderGrowth 	 = 5,
 	SuperUnit 		 = 6,
 	Resources 		 = 7,
-	PopulationGrowth = 8,
+	PopGrowth = 8,
 }
 
 export enum UnitType {

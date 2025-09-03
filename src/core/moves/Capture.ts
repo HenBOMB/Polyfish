@@ -4,7 +4,7 @@ import { EffectType, MoveType, RewardType, StructureType, TechnologyType, Terrai
 import { CityState, GameState, TechnologyState } from "../states";
 import { addPopulationToCity, discoverTiles, spendStars, removeUnit, summonUnit, gainStars, consumeResource, createStructure, destroyStructure, modifyTerrain, tryRemoveEffect, endUnitTurn } from "../actions";
 import { TechnologyUnlockableList } from "../settings/TechnologySettings";
-import { predictExplorer } from "../../eval/prediction";
+import { predictExplorer } from "../../ai/prediction";
 import { xorCity, xorPlayer, xorTile, xorUnit } from "../../zobrist/hasher";
 
 export default class Capture extends Move {

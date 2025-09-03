@@ -3,26 +3,35 @@ import { join } from "path";
 import GameLoader from "./src/core/gameloader";
 import AIState, { MODEL_CONFIG } from "./src/aistate";
 import { ModeType, TribeType } from "./src/core/types";
-import { MCTS, Prediction, SelfPlay } from "./src/polyfish/mcts";
+import { MCTS, SelfPlay } from "./src/ai/mcts";
 import { spawn } from "child_process";
 import { DefaultGameSettings, GameSettings, GameState } from "./src/core/states";
 import Game from "./src/game";
 import Move from "./src/core/move";
-import { Logger } from "./src/polyfish/logger";
-import { sampleFromDistribution } from "./src/polyfish/util";
-import { MoveGenerator } from "./src/core/moves";
+import { Logger } from "./src/ai/logger";
+import { sampleFromDistribution } from "./src/ai/util";
+import { MoveGenerator, Prediction } from "./src/core/moves";
 import main from "./src/main";
+import { getPovTribe } from "./src/core/functions";
 
 const app = express();
-const py = {} as any;//spawn(".venv/bin/python3", ["polyfish/main.py"]);
+const py = spawn(".venv/bin/python3", ["polyfish/main.py"]);
 type Task = { data: string, resolve: (value: Prediction) => void };
 const queue: Task[] = [];
 let current: Task | null = null;
 const loader = new GameLoader();
 
-// py.stderr.on("data", (data: any) => {
-//     console.log(data.toString());
-// })
+(BigInt.prototype as any).toJSON = function() {
+  return this.toString();
+};
+
+(Set.prototype as any).toJSON = function() {
+  return Array.from(this);
+};
+
+py.stderr.on("data", (data: any) => {
+    console.log(data.toString());
+})
 
 const next = () => {
     if(current) {
@@ -42,7 +51,7 @@ const next = () => {
             console.log(error);
             console.log('CONTENT');
             console.log(data.toString());
-            current!.resolve({ pi: [], v: 0 });
+            current!.resolve({ } as any);
         } finally {
             current = null;
             next();
@@ -67,6 +76,22 @@ app.use(express.json({ limit: '1mb' }));
 
 app.get('/', (req: Request, res: Response) => {
     res.sendFile(join(process.cwd(), "public", "index.html"));
+});
+
+app.get('/live', async (req: Request, res: Response) => {
+    loader.fow = (req.query.fow? true : false) || true;
+    await loader.loadLive();
+    const state = loader.currentState;
+    Logger.clear();
+    // main(loader);
+    res.json({
+        state,
+        // obs: AIState.extract(state),
+        info: loader.settings,
+        reward: 0,
+        done: false,
+        truncated: false,
+    });
 });
 
 app.get('/random', async (req: Request, res: Response) => {
@@ -114,10 +139,11 @@ app.post('/predict', async (req: Request, res: Response) => {
         }
         
         const prediction = await predict(state);
-        const bestIndex = prediction.pi.indexOf(Math.max(...prediction.pi));
+        throw "TODO CONVERSION"
+        // const bestIndex = prediction.pi.indexOf(Math.max(...prediction.pi));
         
-        const move = moves[bestIndex] ?? null;
-        res.json({ move, value: prediction.v });
+        // const move = moves[bestIndex] ?? null;
+        // res.json({ move, value: prediction.v });
         
     } catch (err) {
         console.error("Error in /predict:", err);
@@ -127,25 +153,26 @@ app.post('/predict', async (req: Request, res: Response) => {
 
 app.post("/mcts", async (req: Request, res: Response) => {
     try {
-        const prevState: GameState = req.body.state;
-        const game = new Game();
-        const oldState = game.cloneState();
-        game.load(prevState);
-        const moves = MoveGenerator.legal(prevState);
-        const root = await new MCTS(
-            game.state, predict, 
-            req.body.cpuct || 1.0, 
-            req.body.gamma || 0.997, 
-            req.body.dirichlet || true, 
-            req.body.rollouts || 50, 
-        ).search(req.body.iterations || 100);
-        const probs = root.distribution(req.body.temperature || 0.7);
-        const moveIndex = (req.body.deterministic || false)
-            ? probs.indexOf(Math.max(...probs))
-            : sampleFromDistribution(probs);
+        // const prevState: GameState = req.body.state;
+        // const game = new Game();
+        // // const oldState = game.cloneState();
+        // game.load(prevState);
+        // const moves = MoveGenerator.legal(prevState);
+        // const root = await new MCTS(
+        //     game.state, predict, 
+        //     req.body.cpuct || 1.0, 
+        //     req.body.gamma || 0.997, 
+        //     req.body.dirichlet || true, 
+        //     req.body.rollouts || 50, 
+        // ).search(req.body.iterations || 100);
+        // const probs = root.distribution(req.body.temperature || 0.7);
+        // // const moveIndex = (req.body.deterministic || false)
+        // //     ? probs.indexOf(Math.max(...probs))
+        // //     : sampleFromDistribution(probs);
         res.json({
-            probs: probs,
-            move: moves[moveIndex].stringify(oldState, game.state).toLowerCase(),
+            // probs: probs,
+            move: 'not working',
+            // move: moves[moveIndex].stringify(oldState, game.state).toLowerCase(),
         });
     } catch (err: any) {
         console.error("autostep error:", err);
@@ -166,45 +193,48 @@ app.post("/autostep", async (req: Request, res: Response) => {
         const game = new Game();
         game.load(prevState);
         
-        const oldState = game.cloneState();
+        // const oldState = game.cloneState();
         const movez = MoveGenerator.legal(prevState);
         let moves: Move[] = [];
-        const { pi, v } = await predict(prevState);
+        throw "TODO CONVERSION"
+        // const { pi, v } = await predict(prevState);
         
-        if(req.body.mcts) {
-            let probs: number[] = [];
-            // let start = Date.now();
-            const root = await new MCTS(
-                game.state, predict, 
-                req.body.cpuct || 1.0, 
-                req.body.gamma || 0.997, 
-                req.body.dirichlet || true, 
-                req.body.rollouts || 50, 
-            ).search(req.body.iterations || 100);
-            probs = root.distribution(req.body.temperature || 0.7);
-            // console.log(`took: ${Date.now() - start}ms`);
-            const moveIndex = (req.body.deterministic || false)
-                ? probs.indexOf(Math.max(...probs))
-                : sampleFromDistribution(probs);
-            moves = [movez[moveIndex]];
-            game.playMove(moveIndex);
-        }
-        else {
-            const action = pi.indexOf(Math.max(...pi));
-            const result = game.playMove(action < 0 || action >= movez.length? pi.indexOf(Math.max(...pi.slice(0, movez.length))) : action);
-            if(!result) {
-                throw 'Illegal Move';
-            }
-            moves = [result![0]];
-        }
+        // if(req.body.mcts) {
+        //     let probs: number[] = [];
+        //     // let start = Date.now();
+        //     const root = await new MCTS(
+        //         game.state, predict, 
+        //         req.body.cpuct || 1.0, 
+        //         req.body.gamma || 0.997, 
+        //         req.body.dirichlet || true, 
+        //         req.body.rollouts || 50, 
+        //     ).search(req.body.iterations || 100);
+        //     probs = root.distribution(req.body.temperature || 0.7);
+        //     // console.log(`took: ${Date.now() - start}ms`);
+        //     const moveIndex = (req.body.deterministic || false)
+        //         ? probs.indexOf(Math.max(...probs))
+        //         : sampleFromDistribution(probs);
+        //     moves = [movez[moveIndex]];
+        //     game.playMove(moveIndex);
+        // }
+        // else {
+        //     const action = pi.indexOf(Math.max(...pi));
+        //     const result = game.playMove(action < 0 || action >= movez.length? pi.indexOf(Math.max(...pi.slice(0, movez.length))) : action);
+        //     if(!result) {
+        //         throw 'Illegal Move';
+        //     }
+        //     moves = [result![0]];
+        // }
 
-        res.json({
-            moves: moves.map(x => x.stringify(oldState, game.state).toLowerCase()),
-            state: game.state,
-            potential:  AIState.calculatePotential(prevState) - AIState.calculatePotential(game.state),
-            reward: AIState.calculateReward(oldState, game, ...moves),
-            value: v,
-        });
+        // res.json({
+        //     moves: ['not working'],
+        //     // moves: moves.map(x => x.stringify(oldState, game.state).toLowerCase()),
+        //     state: game.state,
+        //     potential:  AIState.calculatePotential(prevState) - AIState.calculatePotential(game.state),
+        //     // reward: AIState.calculateReward(oldState, game, ...moves),
+        //     reward: -1,
+        //     value: v,
+        // });
     } catch (err: any) {
         console.error("autostep error:", err);
         res.status(500).send({
@@ -252,5 +282,8 @@ app.listen(3000, async () => {
     Logger.clear();
     console.log(`INITIALIZED ON PORT 3000\n`);
     console.log('FOW DISABLED\n');
-    main(loader);
+    // main(loader);
+    // await loader.loadRandom();
+    // const prediction = await predict(loader.currentState);
+    // console.log(MoveGenerator.fromPrediction(loader.currentState, prediction));
 });

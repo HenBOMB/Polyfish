@@ -1,11 +1,11 @@
 import { readFileSync } from "fs";
 import { GameState } from "./core/states";
-import { getPovTribe, getUnitAt, isResourceVisible, getMaxHealth, getCityAt, getCityProduction, getRealUnitSettings, isTempleStructure, getNeighborIndexes, getEnemyAt, isTechUnlocked, isAdjacentToEnemy, getRealUnitType, getTribeProduction, getTechSettings, hasEffect } from "./core/functions";
-import { AbilityType, CaptureType, EffectType, RewardType, StructureType, TechnologyType, UnitType } from "./core/types";
+import { getPovTribe, getUnitAt, isResourceVisible, getMaxHealth, getCityAt, getCityProduction, getRealUnitSettings, isTempleStructure, getNeighborIndexes, getEnemyAt, isTechUnlocked, isAdjacentToEnemy, getRealUnitType, getTribeSPT, getTechSettings, hasEffect } from "./core/functions";
+import { AbilityType, CaptureType, EffectType, ResourceType, RewardType, StructureType, TechnologyType, UnitType } from "./core/types";
 import Move, { CallbackResult } from "./core/move";
 import { MoveType } from "./core/types";
 import { TechnologyUnlockable } from "./core/settings/TechnologySettings";
-import { predictBestNextCityReward } from "./eval/prediction";
+import { predictBestNextCityReward } from "./ai/prediction";
 import { ResourceSettings } from "./core/settings/ResourceSettings";
 import { StructureSettings } from "./core/settings/StructureSettings";
 import { UnitSettings } from "./core/settings/UnitSettings";
@@ -49,12 +49,13 @@ export const MODEL_CONFIG: {
     max_structure_level: number;
     
     max_tile_count: number;
-    dim_map_tile: number;
+    dim_map_channels: number;
     dim_map_size: number;
     dim_player: number;
     dim_ability: number;
     dim_moves: number;
     dim_tech: number;
+    dim_unit: number;
     dim_effects: number;
 
     hidden_channels: number;
@@ -89,7 +90,7 @@ function extractTile(state: GameState, tileIndex: number, force = false): number
     const explored = tile._explorers.has(pov.owner);
 
     if(!explored && !force) {
-        return Array(MODEL_CONFIG.dim_map_tile).fill(0);
+        return Array(MODEL_CONFIG.dim_map_channels).fill(0);
     }
     
     const city = getCityAt(state, tileIndex);
@@ -103,17 +104,17 @@ function extractTile(state: GameState, tileIndex: number, force = false): number
     const unitIsEnemy = unit && unit._owner !== pov.owner? unit : null;
 
     return [
-        // Tile (terrain, owned by us, owned by enemy, above, path)
+        // Tile (terrain, owned by us, owned by enemy, resourceType, path)
         safeFloat(tile.terrainType / 6),
         safeFloat(isOwnedByUs),
         safeFloat(isOwnedByEnemy),
-        safeFloat(resource? 1 : 0),
+        safeFloat((resource?.id || ResourceType.None) / 8),
         safeFloat(Boolean(city) || tile.hasRoad || tile.hasRoute),
 
         // City (city tile, is capital, level, progress, walls, riot)
         safeFloat(city? 1 : 0),
         safeFloat(city? tile.capitalOf > 0 : 0),
-        safeFloat(city? Math.min(city._level, 7) / 7 : 0),
+        safeFloat(city? Math.min(city._level, MODEL_CONFIG.max_structure_level) / MODEL_CONFIG.max_structure_level : 0),
         safeFloat(city? (city._progress / (city._level + 1)) : 0),
         safeFloat(city? city._walls : 0),
         safeFloat(city? city._riot : 0),
@@ -126,7 +127,7 @@ function extractTile(state: GameState, tileIndex: number, force = false): number
         safeFloat(unitIsOurs? unitIsOurs._health / getMaxHealth(unitIsOurs) : 0),
         safeFloat(unitIsOurs? unitIsOurs._moved : 0),
         safeFloat(unitIsOurs? unitIsOurs._attacked : 0),
-        safeFloat(unitIsOurs? Math.min(unitIsOurs._kills, 3) / 3 : 0),
+        safeFloat(unitIsOurs? Math.min(unitIsOurs._kills, MODEL_CONFIG.max_unit_kills) / MODEL_CONFIG.max_unit_kills : 0),
         safeFloat(unitIsOurs? hasEffect(unitIsOurs, EffectType.Invisible) : 0),
         safeFloat(unitIsOurs? hasEffect(unitIsOurs, EffectType.Poison) : 0),
         safeFloat(unitIsOurs? hasEffect(unitIsOurs, EffectType.Boost) : 0),
@@ -141,7 +142,7 @@ function extractTile(state: GameState, tileIndex: number, force = false): number
         safeFloat(unitIsEnemy? unitIsEnemy._health / getMaxHealth(unitIsEnemy) : 0),
         safeFloat(unitIsEnemy? unitIsEnemy._moved : 0),
         safeFloat(unitIsEnemy? unitIsEnemy._attacked : 0),
-        safeFloat(unitIsEnemy? Math.min(unitIsEnemy._kills, 3) / 3 : 0),
+        safeFloat(unitIsEnemy? Math.min(unitIsEnemy._kills, MODEL_CONFIG.max_unit_kills) / MODEL_CONFIG.max_unit_kills : 0),
         safeFloat(unitIsEnemy? hasEffect(unitIsEnemy, EffectType.Invisible) : 0),
         safeFloat(unitIsEnemy? hasEffect(unitIsEnemy, EffectType.Poison) : 0),
         safeFloat(unitIsEnemy? hasEffect(unitIsEnemy, EffectType.Boost) : 0),
@@ -151,7 +152,7 @@ function extractTile(state: GameState, tileIndex: number, force = false): number
 
 function extractMap(state: GameState): number[][][] {
     const offset = Math.floor((MODEL_CONFIG.dim_map_size - state.settings.size) / 2);
-    const grid: number[][][] = Array(MODEL_CONFIG.dim_map_tile).fill(0).map(() =>
+    const grid: number[][][] = Array(MODEL_CONFIG.dim_map_channels).fill(0).map(() =>
         Array(MODEL_CONFIG.dim_map_size).fill(0).map(() => Array(MODEL_CONFIG.dim_map_size).fill(0))
     );
     for (const i in state.tiles) {
@@ -161,7 +162,7 @@ function extractMap(state: GameState): number[][][] {
         const gridX = tile.x + offset;
         if (gridY >= 0 && gridY < MODEL_CONFIG.dim_map_size && gridX >= 0 && gridX < MODEL_CONFIG.dim_map_size) {
             const result = extractTile(state, tileIndex);
-            for (let c = 0; c < MODEL_CONFIG.dim_map_tile; c++) {
+            for (let c = 0; c < MODEL_CONFIG.dim_map_channels; c++) {
                 if (grid[c] && grid[c][gridY]) {
                     grid[c][gridY][gridX] = result[c];
                 } else {
@@ -184,7 +185,7 @@ function extractPlayer(state: GameState): number[] {
         // Us (tribetype, stars, spt, kills, casualties, unit count, city count, ...tech[0/1])
         pov.tribeType / TribeTypeCount,
         Math.min(pov._stars, MODEL_CONFIG.max_stars) / MODEL_CONFIG.max_stars,
-        Math.min(getTribeProduction(state, pov), MODEL_CONFIG.max_production) / MODEL_CONFIG.max_production,
+        Math.min(getTribeSPT(state, pov), MODEL_CONFIG.max_production) / MODEL_CONFIG.max_production,
         Math.min(pov._kills, MODEL_CONFIG.max_kills) / MODEL_CONFIG.max_kills,
         Math.min(pov._casualties, MODEL_CONFIG.max_casualties) / MODEL_CONFIG.max_casualties,
         Math.min(pov._units.length, MODEL_CONFIG.max_units) / MODEL_CONFIG.max_units,
@@ -194,7 +195,7 @@ function extractPlayer(state: GameState): number[] {
         // average score, tech
         // Them (tribetype, spt, unit count, city count)
         enemy.tribeType / TribeTypeCount,
-        Math.min(getTribeProduction(state, enemy), MODEL_CONFIG.max_production) / MODEL_CONFIG.max_production,
+        Math.min(getTribeSPT(state, enemy), MODEL_CONFIG.max_production) / MODEL_CONFIG.max_production,
         Math.min(enemy._units.length, MODEL_CONFIG.max_units) / MODEL_CONFIG.max_units,
         Math.min(enemy._cities.length, MODEL_CONFIG.max_cities) / MODEL_CONFIG.max_cities,
     ].map(x => safeFloat(x));
@@ -480,15 +481,15 @@ export default class AIState {
 
         const tileChannels = extractTile(state, 0, true);
 
-        if(tileChannels.length !== MODEL_CONFIG.dim_map_tile) {
+        if(tileChannels.length !== MODEL_CONFIG.dim_map_channels) {
             console.log(extractTile(state, 0, true));
-            throw new Error(`Tile channel count mismatch: ${MODEL_CONFIG.dim_map_tile} -> ${tileChannels.length}`);
+            throw new Error(`Tile channel count mismatch: ${MODEL_CONFIG.dim_map_channels} -> ${tileChannels.length}`);
         }
 
         const map = extractMap(state);
 
-        if(map.length !== MODEL_CONFIG.dim_map_tile) {
-            throw new Error(`Map channel count mismatch: ${MODEL_CONFIG.dim_map_tile} -> ${map.length}`);
+        if(map.length !== MODEL_CONFIG.dim_map_channels) {
+            throw new Error(`Map channel count mismatch: ${MODEL_CONFIG.dim_map_channels} -> ${map.length}`);
         }
 
         // why tile channels same as settings channelsdASDAd

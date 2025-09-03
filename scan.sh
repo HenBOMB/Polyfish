@@ -7,7 +7,8 @@ fi
 
 PROCESS_NAME="Polytopia.exe"
 
-pid=$(pgrep -f "$PROCESS_NAME")
+pid=$(ps -eo pid,lstart,cmd | grep "$PROCESS_NAME" | grep -v grep | sort -k2 | tail -n1 | awk '{print $1}')
+# pid=$(pgrep -f "$PROCESS_NAME")
 
 if [[ -z "$pid" ]]; then
     echo "Error: Process '$PROCESS_NAME' not found!"

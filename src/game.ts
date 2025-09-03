@@ -1,7 +1,7 @@
-import { GameState } from "./core/states";
+import { GameState, TileState, TribeState } from "./core/states";
 import { STARTING_OWNER_ID } from "./core/gameloader";
 import { MoveGenerator } from "./core/moves";
-import { cloneState, getCityProduction, getPovTribe, hasEffect, isGameOver } from "./core/functions";
+import { getCityProduction, getPovTribe, hasEffect, isGameOver } from "./core/functions";
 import { tryDiscoverRewardOtherTribes } from "./core/actions";
 import Move, {UndoCallback } from "./core/move";
 import { MoveType } from "./core/types";
@@ -11,41 +11,75 @@ import PoseManager from "./core/poser";
 import { endUnitTurn, gainStars, startUnitTurn, tryRemoveEffect } from "./core/actions";
 
 export default class Game {
-    initialState: GameState;
+    // initialState: GameState;
     state: GameState;
     network: NetworkManager;
     poser: PoseManager;
 
     constructor() {
-        this.initialState = {} as any;
+        // this.initialState = {} as any;
         this.state = {} as any;
         this.network = null as any;
         this.poser = new PoseManager();
     }
 
-    deepClone() {
-        const game = new Game();
-        game.load(this.initialState);
-        return game;
-    }
+    cloneState(): GameState {
+        const hashes: string[] = [];
 
-    cloneState() {
-        return cloneState(this.state);
+        for(const tribe in this.state.tribes) {
+            hashes.push(this.state.tribes[tribe].hash.toString());
+            this.state.tribes[tribe].hash = 0 as any;
+        }
+
+        const copied: GameState = JSON.parse(JSON.stringify(this.state));
+        
+        for (let i = 0; i < hashes.length; i++) {
+            this.state.tribes[i + 1].hash = BigInt(hashes[i]);
+        }
+
+        return {
+            _visibleTiles: { ...copied._visibleTiles },
+            resources: { ...copied.resources },
+            structures: { ...copied.structures },
+            tiles: copied.tiles.map(x => ({ 
+                ...x, 
+                _explorers: new Set(Object.values(x._explorers))
+            })) as TileState[],
+            settings: { ...copied.settings },
+            tribes: Object.values(copied.tribes).reduce((a, b, i) => ({ 
+                ...a,
+                [i+1]: {   
+                    ...b,
+                    hash: BigInt(b.hash.toString()),
+                    _tech: b._tech.map(t => ({ ...t })),
+                    _builtUniqueStructures: new Set(Object.values(b._builtUniqueStructures)),
+                    _knownPlayers: new Set(Object.values(b._knownPlayers)),
+                    _cities: b._cities.map(c => ({ ...c })),
+                    _units: b._units.map(u => ({ ...u, _effects: new Set(Object.values(u._effects)) })),
+                    relations: Object.entries(b.relations).reduce((r, [k, v]) => ({ ...r, [k]: { ...v } }), {})
+                }
+            }), {}),
+        };
     }
 
     load(state: GameState) {
-        this.initialState = state;
-        this.reset();
-    }
-
-    reset() {
-        this.state = this.initialState;
-        // this.state = cloneState(this.initialState);
+        // this.initialState = state;
+        // this.network = new NetworkManager(this.state);
+        // this.reset();
+        this.state = state;
         this.network = new NetworkManager(this.state);
         this.state.tiles.forEach(tile => {
             this.state._visibleTiles[tile.tileIndex] = tile._explorers.has(this.state.settings._pov);
         });
     }
+
+    // reset() {
+    //     this.state = this.initialState;
+    //     this.network = new NetworkManager(this.state);
+    //     this.state.tiles.forEach(tile => {
+    //         this.state._visibleTiles[tile.tileIndex] = tile._explorers.has(this.state.settings._pov);
+    //     });
+    // }
 
     // TODO XOR?
 
@@ -102,25 +136,30 @@ export default class Game {
      */
     endTurn(): UndoCallback {
         const state = this.state;
-
-        // TODO Add relations? (for polytopia default bots)
-        const chain: UndoCallback[] = [];
-
-        // ! CURRENT TURN ! //
-
         const oldpov = state.settings._pov;
         const oldTurn = state.settings._turn;
 
-        chain.unshift(() => {
-            state.settings._pov = oldpov;
-            state.settings._turn = oldTurn;
-        });
+        // TODO Add relations? (for polytopia default bots)
+        const chain: UndoCallback[] = [
+            () => {
+                state.settings._pov = oldpov;
+                state.settings._turn = oldTurn;
+            }
+        ];
+
+        let pov = getPovTribe(state);
+
+        // ! CURRENT TURN ! //
+
+        // TODO units auto-recover?
+        
+        // ! CHANGE TURN ! //
 
         state.settings._pov++;
         if(state.settings._pov > state.settings.tribeCount) {
             state.settings._pov = STARTING_OWNER_ID;
         }
-        let pov = getPovTribe(state);
+        pov = getPovTribe(state);
 
         // Search for the next tribe
         while(pov._killedTurn > 0 || pov._resignedTurn > 0) {

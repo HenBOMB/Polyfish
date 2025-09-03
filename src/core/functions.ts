@@ -60,19 +60,34 @@ export function getTechAbility(like: TribeLike, tierTech: number): AbilityType |
 	return getReplacedOrTechSettings(like, tierTech).unlocksAbility || null;
 }
 
-export function getTechCost(like: TribeState, tierTech: TechLike): number {
-	return getTechSettings(tierTech).tier! && (isTechUnlocked(like, TechnologyType.Philosophy)? 0.77 : 1);
+export function getTechCost(tribe: TribeState, tierTech: TechLike): number {
+	const baseCost = 4 + getTechSettings(tierTech).tier! * tribe._cities.length;
+	if(isTechUnlocked(tribe, TechnologyType.Philosophy)) {
+		return Math.ceil(baseCost * 0.77);
+	}
+	return baseCost;
 }
 
-/** Returns the correct city production */
+/** 
+ * Returns the accurate city production depending on every factor
+ * @param state 
+ * @param city
+ */
 export function getCityProduction(state: GameState, ...city: CityState[]): number {
-	// If riot or tile is occupied by an enemy unit = 0
+	// If city is on riot or the tile is occupied by an enemy then production is nullified
 	return city.reduce((a, b) => a + 
 		(b._riot || getEnemyAt(state, b.tileIndex)? 0 : b._production
 	), 0);
 }
 
-export function getTribeProduction(state: GameState, tribe: TribeState): number {
+/**
+ * Returns the tribe's SPT (stars per turn)
+ * @param state 
+ * @param tribe
+ * @returns 
+ */
+export function getTribeSPT(state: GameState, tribe?: TribeState): number {
+	if(!tribe) tribe = getPovTribe(state);
 	return tribe._cities.reduce((a, b) => a + getCityProduction(state, b), 0);
 }
 
@@ -654,6 +669,10 @@ export function getRulingCity(state: GameState, tileIndex: number): CityState | 
 }
 
 
+export function getTerrainType(state: GameState, tileIndex: number): TerrainType {
+	return state.tiles[tileIndex].terrainType;
+}
+
 let distanceCache = new Map<number, Map<number, number>>();
 
 export function calculateDistance(tileIndex1: number, tileIndex2: number, size: number, manhattan = false) {
@@ -923,6 +942,11 @@ export function computeReachablePath(
 	return [];
 }
 
-export function cloneState(state: GameState): GameState {
-    return { ...state };
-}
+// Doesnt work
+// export function cloneState(state: GameState): GameState {
+// 	const clone = {
+// 		...state,
+// 		tribes: Object.values(state.tribes).reduce((a, b, i) => ({ ...a, [i+1]: { ...b, hash: String(b.hash) + 'b' } }), {}),
+// 	}
+//     return JSON.parse(JSON.stringify(clone));
+// }

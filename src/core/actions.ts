@@ -126,10 +126,10 @@ export function modifyTerrain(state: GameState, tileIndex: number, terrainType: 
 }
 
 export function consumeResource(state: GameState, tileIndex: number, replaceType?: ResourceType): UndoCallback {
-    const oldResource = state.resources[tileIndex]!;
+    const oldResource = state.resources[tileIndex];
     const newResource = replaceType? replaceType : ResourceType.None;
 
-    xorResource(state, tileIndex, oldResource.id, newResource);
+    xorResource(state, tileIndex, oldResource? oldResource.id : ResourceType.None, newResource);
 
     if(replaceType) {
         state.resources[tileIndex] = {
@@ -142,7 +142,7 @@ export function consumeResource(state: GameState, tileIndex: number, replaceType
     }
 
     return () => {
-        xorResource(state, tileIndex, newResource, oldResource.id);
+        xorResource(state, tileIndex, newResource, oldResource? oldResource.id : ResourceType.None);
         state.resources[tileIndex] = oldResource;
     }
 }
@@ -392,7 +392,7 @@ export function removeUnit(state: GameState, removed: UnitState, killer?: UnitSt
         }
         
         if(cityHome) {
-            xorCity.unitCount(state, cityHome, cityHome._unitCount, cityHome._unitCount - 1);
+            xorCity.unitCount(state, cityHome, cityHome._unitCount, cityHome._unitCount + 1);
             cityHome._unitCount++;
         }
 

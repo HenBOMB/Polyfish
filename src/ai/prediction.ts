@@ -665,7 +665,7 @@ export function predictBestNextCityReward(state: GameState, targetCity?: CitySta
                     rewards.push(RewardType.BorderGrowth);
                 }
                 else {
-                    rewards.push(RewardType.PopulationGrowth);
+                    rewards.push(RewardType.PopGrowth);
                 }
                 break;
             default:

@@ -23,8 +23,8 @@ def reply(data):
 
 def obs_to_tensor(value: dict):
     return {
-        'map': torch.tensor(np.array(value['map'])).to(model.device).unsqueeze(0),
-        'player': torch.tensor(np.array(value['player'])).to(model.device).unsqueeze(0)
+        'map': torch.tensor(np.array(value['map'])).to(model.device).unsqueeze(0).float(),
+        'player': torch.tensor(np.array(value['player'])).to(model.device).unsqueeze(0).float()
     }
 
 while True:
@@ -79,13 +79,17 @@ while True:
         reply({ "status": 'success' })
 
     elif cmd == 'predict':
-        obs = obs_to_tensor(data)
-        pi_logits, v_scalar = predictor.predict(obs)
-
-        # Twice as long
-        # with torch.no_grad():
-        #     pi_logits, v_scalar = net(obs)
-        #     pis = F.softmax(pi_logits, dim=1).cpu().numpy()
-        #     v_scalar  = v_scalar.cpu().numpy()
-
-        reply({ "pi": pi_logits.tolist(), "v": v_scalar.item() })
+        output = predictor.predict(obs_to_tensor(data))
+        reply({
+            'pi_action': output[0],
+            'pi_actor': output[1],
+            'pi_target': output[2],
+            'pi_struct': output[3],
+            'pi_skill': output[4],
+            'pi_unit': output[5],
+            'pi_tech': output[6],
+            'pi_reward': output[7],
+            'v_win': output[8],
+            'v_eco': output[9],
+            'v_mil': output[10],
+        })

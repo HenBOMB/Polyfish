@@ -195,8 +195,8 @@ function generateMap(newState = null) {
     
     let tiledata = state['tiles'];
     tiledata = rotate1DArray90(Object.keys(state['tiles']).reduce((arr, index, i) => [...arr, { ...tiledata[index], index }], []), mapSize);
-    
-    const suspects = state._prediction._enemyCapitalSuspects || [];
+
+    const suspects = state._prediction?._enemyCapitalSuspects || [];
     
     state['cities'] = Object.values(state.tribes).reduce((arr, tribe, i) => ({...arr, ...(tribe._cities.reduce((a, b) => ({...a, [b.tileIndex]: b}), {}))}), {});
     state['units'] = Object.values(state.tribes).reduce((arr, tribe, i) => ({...arr, ...(tribe._units.reduce((a, b) => ({...a, [b._tileIndex]: b}), {}))}), {});
@@ -215,8 +215,8 @@ function generateMap(newState = null) {
         }
 
         /** @type { { _index: number, id: number } } */
-        const resource = state['resources'][tile.tileIndex] || (state['_hiddenResources'] || {})[tile.tileIndex];
-        
+        let resource = state._hiddenResources[tile.tileIndex]? {} : state['resources'][tile.tileIndex] || (state['_hiddenResources'] || {})[tile.tileIndex];
+
         /** @type { { _index: number, id: number, _level: number, _turn: number, reward: number } } */
         const structure = state['structures'][tile.tileIndex];
         
@@ -392,9 +392,9 @@ function generateMap(newState = null) {
         }
     }
 
-    return;
-
     generateFOW();
+
+    return;
     
     state._prediction._villages &&  Object.keys(state._prediction._villages).forEach(tileIndex => {
         let x = tileIndex % mapSize;
@@ -493,12 +493,12 @@ function generateFOW() {
     const vals = Object.values(TILE_ELEMENTS);
     const mapSize = state.settings.size;
     
-    const suspects = state._prediction._enemyCapitalSuspects || [];
-    const terrainPredictions = state._prediction._terrain? Object.keys(state._prediction._terrain) : [];
+    const suspects = state._prediction?._enemyCapitalSuspects || [];
+    const terrainPredictions = state._prediction?._terrain? Object.keys(state._prediction._terrain) : [];
 
     for (let index = 0; index < vals.length; index++) {
         const tiles = vals[index];
-        if(state.tiles[tiles[0].dataset.tileIndex].explorers.includes(POV)) {
+        if(state.tiles[tiles[0].dataset.tileIndex]._explorers.includes(POV)) {
             for(const tile of tiles) {
                 tile.style.visibility = 'visible';
             }
@@ -515,7 +515,7 @@ function generateFOW() {
         const tile = document.createElement("div");
         tile.classList.add("tile");
         tile.style.backgroundImage = `url('textures/terrain/tiles/undiscovered.png')`;
-        if(suspects.includes(Number(tiles[0].dataset.tileIndex))) {
+        if(suspects?.includes(Number(tiles[0].dataset.tileIndex))) {
             tile.style.filter = 'hue-rotate(170deg)';
         }
         const x = index % mapSize;
@@ -747,7 +747,8 @@ async function mcts(e) {
     e.disabled = false;
 }
 
-fetch('/random?size=9&tribes=Imperius,Imperius').then(x => x.json()).then(x => {
+// fetch('/random?size=9&tribes=Imperius,Imperius').then(x => x.json()).then(x => {
+fetch('/live').then(x => x.json()).then(x => {
     state = x.state;
 
     POV = state.settings._pov;

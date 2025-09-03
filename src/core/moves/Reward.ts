@@ -4,7 +4,7 @@ import { MoveType, RewardType } from "../types";
 import { GameState } from "../states";
 import { UnitType } from "../types";
 import { TribeSettings } from "../settings/TribeSettings";
-import { predictExplorer } from "../../eval/prediction";
+import { predictExplorer } from "../../ai/prediction";
 import { discoverTiles, gainStars, spendStars, summonUnit } from "../actions";
 
 export default class Reward extends Move {
@@ -41,7 +41,7 @@ export default class Reward extends Move {
             case RewardType.Resources:
                 undoReward = gainStars(state, 5);
                 break;
-            case RewardType.PopulationGrowth:
+            case RewardType.PopGrowth:
                 city._population += 3;
                 city._progress += 3;
                 undoReward = () => {
