@@ -98,6 +98,33 @@ export class GMath {
 
 		return out as T;
 	}
+
+	static randGamma(k: number): number {
+		if (k < 1) {
+			const u = Math.random();
+			return this.randGamma(k + 1) * Math.pow(u, 1 / k);
+		}
+		const d = k - 1 / 3;
+		const c = 1 / Math.sqrt(9 * d);
+		while (true) {
+			let x: number, v: number;
+			do {
+				const u1 = Math.random(), u2 = Math.random();
+				x = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+				v = 1 + c * x;
+			} while (v <= 0);
+			v = v * v * v;
+			const u = Math.random();
+			if (u < 1 - 0.0331 * x * x * x * x) return d * v;
+			if (Math.log(u) < 0.5 * x * x + d * (1 - v + Math.log(v))) return d * v;
+		}
+	}
+
+	static dirichlet(alpha: number, size: number): number[] {
+		const xs = Array.from({ length: size }, () => this.randGamma(alpha));
+		const sum = xs.reduce((a, b) => a + b, 0);
+		return xs.map(x => x / sum);
+	}
 }
 
 export let distanceCache = new Map<number, Map<number, number>>();

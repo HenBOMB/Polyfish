@@ -1,25 +1,36 @@
-import Move from "../core/move";
-import { MoveGenerator } from "../core/moves";
-import { GameState } from "../core/states";
 import Game from "../game";
-import { evaluateEconomy, evaluateState } from "./eval";
-import { MCTS } from "./mcts";
+import { evaluateState } from "./eval";
+import { MCTS } from "./mctsCpu";
 import { Opening } from "./opening";
 
-export function CalculateBestMoves(game: Game): [Move[], number, number, number] {
+export function CalculateBestMoves(
+    game: Game, 
+    depth=1000, 
+    deterministic=false,
+    dirichlet=false,
+    cPuct=1.5
+): [number[], number, number, number] {
     console.log(`[BRUTE] Calculating for turn ${game.state.settings._turn}`);
 
     const state = game.state;
     
-    const legal = MoveGenerator.legal(state);
+    const mcts = new MCTS(game, cPuct, dirichlet);
+    const rootNode = mcts.search(depth);
 
-    const recommended = Opening.recommend(state, legal);
+    // T=0 picks the best move
+    // T=1 picks based on visit counts
+    const moveProbabilities = rootNode.distribution(deterministic? 0 : 1); 
 
-    if (recommended.length) {
-        return [recommended, ...evaluateState(state)];
-    }
+    // 4. Find the index of the best move
+    const bestMoveIndex = moveProbabilities.indexOf(Math.max(...moveProbabilities));
+    
+    
+    // const recommended = Opening.recommend(state, legal);
+    // if (recommended.length) {
+    //     return [recommended, ...evaluateState(game)];
+    // }
 
-    console.warn("BRUTE NOT FULLY IMPLEMENTED")
+    console.warn("[BRUTE] finished")
 
-    return [[], ...evaluateState(state)];
+    return [[bestMoveIndex], ...evaluateState(game)];
 }

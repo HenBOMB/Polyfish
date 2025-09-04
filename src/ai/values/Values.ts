@@ -30,9 +30,9 @@ export default class Values<T extends string | number | symbol> {
         this.values[unitType] = value;
     }
 
-    load(name: string = this.name): void {
+    load(): void {
         const folder = `${DATA_DIR}/${TribeType[this.tribeType]}`;
-        const path = `${folder}/${name}.json`;
+        const path = `${folder}/${this.name}.json`;
 
         if(!existsSync(path)) {
             // throw new Error(`No such file: ${path}`);
@@ -49,21 +49,22 @@ export default class Values<T extends string | number | symbol> {
             this.save();
             return
         }
-        this.load(JSON.parse(readFileSync(path, 'utf8')));
+
+        this.load_values(JSON.parse(readFileSync(path, 'utf8')));
     }
 
     load_values(values: Record<T, number>): void {
         this.values = values;
     }
 
-    save(name: string = this.name): void {
+    save(): void {
         const folder = `${DATA_DIR}/${TribeType[this.tribeType]}`;
 
         if(!existsSync(folder)) {
             mkdirSync(folder)
         }
 
-        writeFileSync(`${folder}/${name}.json`, JSON.stringify(this.values, null, 2));
+        writeFileSync(`${folder}/${this.name}.json`, JSON.stringify(this.values, null, 2));
     }
 
     recommend(): void {

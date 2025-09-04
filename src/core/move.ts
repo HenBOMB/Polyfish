@@ -41,16 +41,21 @@ export default class Move {
         throw "execute(state) Not implemented";
     }
 
-    stringify(oldState: GameState, newState: GameState) {
+    stringify(oldState: GameState, newState?: GameState) {
         switch (this.moveType) {
             case MoveType.Step: {
-                return `${MoveType[this.moveType]} ${UnitType[(getUnitAt(oldState, this.getSrc()) || getUnitAt(newState, this.getSrc()))!._unitType]}`;
+                if(!newState) {
+                    return `${MoveType[this.moveType]} ${UnitType[(getUnitAt(oldState, this.getSrc()) || getUnitAt(newState!, this.getSrc()))!._unitType]}`;
+                }
+                else {
+                    return `${MoveType[this.moveType]} ${UnitType[(getUnitAt(oldState, this.getSrc()))!._unitType]}`;
+                }
             }
             case MoveType.Attack: {
                 const oldAtk = getUnitAt(oldState, this.getSrc())!;
                 const oldDef = getEnemyAt(oldState, this.getTarget())!;
                 const who = `${UnitType[oldAtk._unitType]} -> ${UnitType[oldDef._unitType]}`;
-                const what = !getUnitAt(newState, this.getSrc())? 'suicide' : getEnemyAt(newState, this.getTarget())? 'kill' : 'hit';
+                const what = !newState? null : !getUnitAt(newState, this.getSrc())? 'suicide' : getEnemyAt(newState, this.getTarget())? 'kill' : 'hit';
                 return `${MoveType[this.moveType]} ${what} ${who}`;
             }
             case MoveType.Summon: {

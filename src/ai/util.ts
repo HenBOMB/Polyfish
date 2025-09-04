@@ -1,4 +1,5 @@
 /**
+ * @Obsolete use GMath.dirichlet
  * Sample from a symmetric Dirichlet(α) distribution of given size.
  */
 export function sampleDirichlet(alpha: number, size: number): number[] {

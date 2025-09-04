@@ -14,6 +14,7 @@ import { getPovTribe } from "./src/core/functions";
 import { Logger } from "./src/ai/logger";
 import { SelfPlay } from "./src/ai/mcts";
 import { evaluateState } from "./src/ai/eval";
+import { CalculateBestMoves } from "./src/ai/brute";
 
 const app = express();
 const py = spawn(".venv/bin/python3", ["polyfish/main.py"]);
@@ -288,7 +289,20 @@ app.listen(3000, async () => {
     // RUN SOME TESTS
     await currentGame.loadRandom();
 
-    console.log(evaluateState(currentGame));
+    // console.log(evaluateState(currentGame));
+    
+    const moves = MoveGenerator.legal(currentGame.state);
+    console.log(moves.length);
+    
+    const [ [ bestMove ] ] = CalculateBestMoves(
+        currentGame,
+        1_000,
+        false,
+        false,
+        1.5
+    );
+
+    console.log(moves[bestMove].stringify(currentGame.state, currentGame.state));
 
     // main(loader);
     // await loader.loadRandom();

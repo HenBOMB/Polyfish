@@ -1,40 +1,12 @@
-import AIState, { MODEL_CONFIG } from "../aistate";
+import AIState from "../aistate";
 import { getPovTribe, isGameLost, isGameOver, isGameWon } from "../core/functions";
-import GameLoader, { STARTING_OWNER_ID } from "../core/gameloader";
 import { MoveType } from "../core/types";
 import { MoveGenerator, Prediction } from "../core/moves";
 import { GameSettings, GameState } from "../core/states";
-import { MIN_PLAYED_MOVES, lerpViaGameStage, scoreMovePriority } from "./eval";
+import { MIN_PLAYED_MOVES, calculateStageValue, evaluateState, lerpViaGameStage, scoreMovePriority } from "./eval";
 import Game from "../game";
-import { Logger } from "./logger";
-import { Opening } from "./opening";
-import { sampleFromDistribution, sampleDirichlet } from "./util";
-import { CaptureType } from "../core/types";
 import Move, { UndoCallback } from "../core/move";
-
-interface ObsDict { 
-	map: number[][][]; 
-	player: number[];
-}
-
-interface TargetPoliciesDict {
-    pi_action?: number[];
-    pi_source?: number[];
-    pi_target?: number[];
-    pi_struct?: number[];
-    pi_unit?: number[];
-    pi_skill?: number[];
-    pi_tech?: number[];
-    pi_reward?: number;
-}
-
-interface TargetValuesDict {
-    v_win: number;
-    v_econ?: number;
-    v_mil?: number;
-}
-
-type TrainingSample = [ObsDict, TargetPoliciesDict, TargetValuesDict];
+import { GMath } from "./gmath";
 
 export class MCTSNode {
 	private legal: Move[];
@@ -73,14 +45,26 @@ export class MCTSNode {
 		return this.expanded;
 	}
 	
-	expand(state: GameState, pred: Prediction) {
+	expand() {
 		if(this.expanded) return;
 		this.expanded = true;
-		// [move, probability, moveIndex]
-		const result = MoveGenerator.fromPrediction(state, pred, this.legal);
-		const sum = result.reduce((s: any, x: any) => s[1] + x[1], [null, 0]) || 1;
+
+		const movePriorities = this.legal.map(move => scoreMovePriority(move));
+        const sumPriorities = movePriorities.reduce((sum, priority) => sum + priority, 0);
+
+		if (sumPriorities === 0) {
+            // If all priorities are 0, use a uniform distribution
+            for(let a = 0; a < this.count; a++) {
+                this.P[a] = 1 / this.count;
+            }
+        } else {
+            // Normalize the priorities to create probabilities
+            for(let a = 0; a < this.count; a++) {
+                this.P[a] = movePriorities[a] / sumPriorities;
+            }
+        }
+
 		for(let a = 0; a < this.count; a++) {
-			this.P[a] = result[a][1] / sum;
 			this.N[a] = this.W[a] = this.Q[a] = 0;
 		}
 	}
@@ -110,11 +94,11 @@ export class MCTSNode {
 	}
 	
 	backpropagate(path: [MCTSNode, number][], value: number, rootPov: number) {
-		// ? For now its just 1v1
+		// TODO assuming now its always a 1v1
 		for (let i = path.length - 1; i >= 0; i--) {
 			const [node, a] = path[i];
 			node.N[a] += 1;
-			node.W[a] += (node.pov === rootPov? 1 : -1) * value;
+			node.W[a] += node.pov === rootPov? value : -value;
 			node.Q[a] = node.W[a] / node.N[a];
 		}
 	}
@@ -136,33 +120,30 @@ export class MCTSNode {
 }
 
 export class MCTS {
-	private state: GameState;
+	private game: Game;
 	private cPuct: number;
-	private gamma: number;
 	private dirichlet: boolean;
-	private predict: (state: GameState) => Promise<Prediction>;
-	private rollouts: number;
 	
-	constructor(state: GameState, predict: (state: GameState) => Promise<Prediction>, cPuct: number, gamma: number, dirichlet: boolean, rollouts: number) {
-		this.state = state;
+	constructor(game: Game, cPuct: number, dirichlet = false) {
+		this.game = game;
 		this.cPuct = cPuct;
-		this.predict = predict;
-		this.gamma = gamma;
 		this.dirichlet = dirichlet;
-		this.rollouts = rollouts;
 	}
 
-	private async simulate(root: MCTSNode, game: Game): Promise<{ 
+	private simulate(root: MCTSNode, game: Game): { 
 		path: Array<[MCTSNode, number]>;
-		v_win: number;
-	}> {
+		value: number;
+	} {
 		const path: [MCTSNode, number][] = [];
 		let currentNode = root;
-		let v_win: number = 0;
+		let value: number = 0;
 		let undos: UndoCallback[] = [];
 		
-		while(currentNode.isExpanded() && !isGameOver(game.state)) {
+		while (currentNode.isExpanded() && !isGameOver(game.state)) {
+			// console.log(`[MCTS] legal: ${(currentNode as any).legal.length}`);
 			let moveIndex = currentNode.select(this.cPuct);
+			// console.log(`[MCTS] playing: ${moveIndex} -> ${(currentNode as any).legal[moveIndex].stringify(game.state, game.state)}`);
+			
 			const [_, undo] = game.playMove(moveIndex)!;
 			undos.unshift(undo);
 			const child = currentNode.getOrCreateChild(moveIndex, game.state);
@@ -170,207 +151,44 @@ export class MCTS {
 			currentNode = child;
 		}
 		
-		if(isGameOver(game.state)) {
-			isGameWon(game.state) && console.log("Simulator victory detected!");
-			v_win = isGameWon(game.state)? 1 : isGameLost(game.state)? -1 : 0;
+		if (isGameOver(game.state)) {
+			isGameWon(game.state) && console.log("[MCTS] victory detected! woah!");
+			value = isGameWon(game.state)? 1 : isGameLost(game.state)? -1 : 0;
 		}
 		else {
-			const prediction = await this.predict(game.state);
-			currentNode.expand(game.state, prediction);
-			v_win = prediction.v_win;
+			currentNode.expand();
+			const [ eco, army, finalScore ] = evaluateState(game);
+			value = finalScore;
 		}
 
 		undos.forEach(x => x());
 
-		return { 
-			path, 
-			v_win,
-		};
+		return { path, value };
 	}
 
-	private rollout(game: Game, prevPot: number): number {
-		let depth = 0;
-	  
-		while (!isGameOver(game.state) && depth < this.rollouts) {
-			const min = lerpViaGameStage(game.state, MIN_PLAYED_MOVES);
-			const weights = MoveGenerator.legal(game.state).map(x => {
-				switch (x.moveType) {
-					case MoveType.EndTurn:
-					  	return game.state.settings._recentMoves.length >= min? 10 : 0.1;
-					default:
-					  	return scoreMovePriority(x);
-				}
-			});
-		
-			const totalW = weights.reduce((a, b) => a + b, 0);
-			let pick = Math.random() * totalW;
-			let moveIdx = 0;
-			for (; moveIdx < weights.length; moveIdx++) {
-				pick -= weights[moveIdx];
-				if (pick <= 0) break;
-		  	}
-	  
-			const moves = game.playMove(moveIdx);
+	public search(nSims: number): MCTSNode {
+        const root = new MCTSNode(this.game.state);
+		root.expand();
 
-			depth++;
-
-		  	if(!moves) continue;
-		}
-	  
-		if (isGameOver(game.state)) {
-			isGameWon(game.state) && console.log("Rollout victory detected!");
-			return isGameWon(game.state) ? 1 : isGameLost(game.state) ? -1 : 0;
-		}
-
-		const newPot = AIState.calculatePotential(game.state);
-		const shapedR = newPot - prevPot;
-		return shapedR;
-	}
-	
-	async search(nSims: number): Promise<MCTSNode> {
-        const root = new MCTSNode(this.state);
-        const rootGame = new Game();
-        rootGame.load(this.state);
-		root.expand(this.state, await this.predict(this.state));
-		const count = MoveGenerator.legal(this.state).length;
+		const count = MoveGenerator.legal(this.game.state).length;
 		
         if(this.dirichlet) {
-			const table = [0, 0.2, 0.3];
-			const alpha = -1;
-			// const alpha = 0.3 * (count / count * 2) * (1 + lerpViaGameStage(this.state, table));
-			throw Error("Disabled temporarily")
+			let stageMult = calculateStageValue(this.game.state);
+			// TODO Use the strongest multiplier?
+			const alpha = 0.3 * (count / count * 2) * (1 + (stageMult[1] > stageMult[0]? stageMult[1] : stageMult[0]));
 			const eps = 0.25;
-            const noise = sampleDirichlet(alpha, count);
+            const noise = GMath.dirichlet(alpha, count);
             for (let a = 0; a < count; a++) {
                 root.P[a] = (1 - eps) * root.P[a] + eps * noise[a];
             }
         }
 
 		for(let i = 0; i < nSims; i++) {
-			const { path, v_win } = await this.simulate(root, rootGame);
-			root.backpropagate(path, v_win, root.pov);
+			// console.log(`\n[MCTS] simulating: ${i}/${nSims}`);
+			const { path, value } = this.simulate(root, this.game);
+			root.backpropagate(path, value, root.pov);
 		}
 	
 		return root;
 	}
 }
-
-let winRate: number[] = [];
-
-export async function SelfPlay(
-	predict: (state: GameState) => Promise<Prediction>,
-	nGames: number,
-	nSims: number,
-	temperature: number,
-	cPuct: number,
-	gamma: number,
-	deterministic: boolean,
-	dirichlet: boolean,
-	rollouts: number,
-	game_settings: GameSettings
-) {
-	throw new Error("Not implemented");
-}
-
-// export async function SelfPlay(
-// 	predict: (state: GameState) => Promise<Prediction>,
-// 	nGames: number,
-// 	nSims: number,
-// 	temperature: number,
-// 	cPuct: number,
-// 	gamma: number,
-// 	deterministic: boolean,
-// 	dirichlet: boolean,
-// 	rollouts: number,
-// 	game_settings: GameSettings,
-// ): Promise<Array<TrainingSample>> {
-// 	const allTrainingData: Array<TrainingSample> = [];
-// 	const loader = new GameLoader(game_settings);
-	
-// 	for (let i = 0; i < nGames; i++) {
-// 		await loader.loadRandom();
-// 		const game = new Game();
-// 		const undos: UndoCallback[] = [];
-
-// 		game.load(loader.currentState);
-
-// 		const episode_buffer: Array<{
-//             obs_dict: ObsDict;
-//             chosen_move_object: Move;
-//             current_player_pov: number;
-//         }> = [];
-
-// 		// Keep going until terminal
-// 		while (!isGameOver(game.state)) {
-// 			// TODO update
-// 			const obs = AIState.extract(game.state);
-// 			// max_actions doesnt exist anymore, old
-// 			const pi: number[] = new Array<number>(MODEL_CONFIG.max_actions).fill(0);
-// 			const legal = MoveGenerator.legal(game.state);
-// 			const pov = getPovTribe(game);
-
-// 			// instead of forcing the move, reward it for being a book move.
-// 			// returns always good move indexes from the legal moves list
-// 			let book: number[] = Opening.recommend(game.state, legal);
-// 			let moveIndex: number;
-
-// 			// Skip simulating if there are no more turns (only EndTurn remains)
-// 			if(legal.length == 1) {
-// 				moveIndex = 0;
-// 				pi[0] = 1;
-// 			}
-// 			else {
-// 				// console.time('search');
-// 				const root = await new MCTS(game.state, predict, cPuct, gamma, dirichlet, rollouts).search(nSims);
-// 				// console.timeEnd('search');
-// 				const probs = root.distribution(temperature);
-// 				probs.forEach((p, idx) => { pi[idx] = p; });
-// 				moveIndex = deterministic
-// 					? probs.indexOf(Math.max(...probs))
-// 					: sampleFromDistribution(probs);
-// 			}
-			
-// 			const [ move, undo ] = game.playMove(moveIndex)!;
-// 			undos.unshift(undo);
-
-// 			const shaped = gamma * AIState.calculatePotential(game.state) - AIState.calculatePotential(game.stateBefore); 
-// 			const reward = AIState.calculateReward(game, move) + shaped;
-// 			const v_win = isGameWon(game.state)? 1 : 
-// 				isGameLost(game.state)? -1 : 
-// 				(reward * 0.25);
-// 			Logger.logPlay(game.stateBefore, game.state, [move], [(await predict(game.state)).v]);
-// 			episode.push({ 
-// 				obs, 
-// 				pi,
-// 				v_win, 
-// 				pov: pov.owner 
-// 			});
-// 		}
-
-// 		let G = 0;
-// 		for (let t = episode.length - 1; t >= 0; t--) {
-// 			const { obs, pi, pov, v_win } = episode[t];
-// 			G = v_win + gamma * G;
-// 			// In case the previous state's tribe's turn is not the current tribe's turn
-// 			// STARTING_OWNER_ID = Hack for now, since entire simulator uses this and it never changes
-// 			const signedG = pov === STARTING_OWNER_ID? G : -G;
-// 			trainingData.push([obs, pi, signedG]);
-// 		}	
-
-// 		winRate.push(isGameWon(game.state) || isGameLost(game.state)? 1 : 0);
-
-// 		Logger.log(`Finished game (${(i+1)}/${nGames})`);
-// 		Logger.log(`state: ${isGameWon(game.state)? 'Won' :isGameLost(game.state)? 'Lost' : 'Truncated'}`);
-// 		Logger.log(`turn: ${game.state.settings._turn}`);
-
-// 		undos.forEach(x => x());
-// 	}
-
-// 	Logger.log(`Self play ended`);
-// 	Logger.log(`collected: ${trainingData.length}`);
-// 	Logger.log(`win rate: ${Number((winRate.reduce((a, b) => a + b, 0) / winRate.length).toFixed(2))}%\n`);
-
-// 	winRate = [];
-
-// 	return trainingData;
-// }

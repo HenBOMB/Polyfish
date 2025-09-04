@@ -436,7 +436,7 @@ export class EconMovesGenerator {
 			// ! Building ! //
 
 			if(!structure) {
-				for(const x in structures) {
+				for(const x of structures) {
 					const structType = Number(x) as StructureType;
 					const settings = StructureSettings[structType];
 	
@@ -618,7 +618,9 @@ export class EconMovesGenerator {
 				continue
 			}
 
-			for(const x in structTypes) {
+			for(const x of structTypes) {
+				console.log('asssddsd', x);
+				
 				const structType = Number(x) as StructureType;
 				const settings = StructureSettings[structType];
 

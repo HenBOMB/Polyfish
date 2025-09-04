@@ -54,7 +54,7 @@ Object.freeze(STAGE_THRESH);
  * @param state 
  * @returns [EconomyMult, ArmyMult]
  */
-function calculateStageValue(state: GameState): [number, number] {
+export function calculateStageValue(state: GameState): [number, number] {
     const p = state.settings._turn / state.settings.maxTurns;
 
     if(p < STAGE_THRESH[0]) {
@@ -341,20 +341,20 @@ export function evaluateState(game: Game): [number, number, number] {
     
     // TODO use stage values?
 
-    console.log('\n--Evaluation--')
-    console.log(`my tribe score: ${getPovTribe(state)._score}`);
-    // console.log(`my eco score: ${myEcoScore.toFixed(4)}`);
-    // console.log(`my army score: ${myArmyScore.toFixed(4)}`);
-    console.log(`their tribe score: ${theirTribeScore}`);
-    // console.log(`their eco score: ${theirEcoScore.toFixed(4)}`);
-    // console.log(`their army score: ${theirArmyScore.toFixed(4)}`);
-    console.log(`my score: ${myScore.toFixed(4)}`);
-    console.log(`their score: ${theirScore.toFixed(4)}`);
+    // console.log('\n--Evaluation--')
+    // console.log(`my tribe score: ${getPovTribe(state)._score}`);
+    // // console.log(`my eco score: ${myEcoScore.toFixed(4)}`);
+    // // console.log(`my army score: ${myArmyScore.toFixed(4)}`);
+    // console.log(`their tribe score: ${theirTribeScore}`);
+    // // console.log(`their eco score: ${theirEcoScore.toFixed(4)}`);
+    // // console.log(`their army score: ${theirArmyScore.toFixed(4)}`);
+    // console.log(`my score: ${myScore.toFixed(4)}`);
+    // console.log(`their score: ${theirScore.toFixed(4)}`);
 
     // 0.1 is a small boost to our own score
     const finalScore = (myScore - theirScore);// + (myScore * 0.01)
 
-    console.log(`net score: ${finalScore}`);
+    // console.log(`net score: ${finalScore}`);
 
     return [
         myEcoScore, 

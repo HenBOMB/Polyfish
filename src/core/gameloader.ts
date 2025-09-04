@@ -362,7 +362,7 @@ export default class GameLoader {
                         _territory: [],
                         _unitCount: 0,
                     };
-
+                    
                     let count = 0;
                     cityData._rewards.forEach(x => {
                         if(x === RewardType.Workshop || x === RewardType.Park) {
@@ -461,7 +461,6 @@ export default class GameLoader {
     public async loadRandom(_seed?: number, verbose = true) {
         // Safeguard for inconsistency map generation
         let tries = 1000
-        console.log(this.settings)
         let seed = _seed || (this.settings.seed? this.settings.seed : Math.floor(Math.random() * MAX_SEED));
        
         while(tries > 0) {

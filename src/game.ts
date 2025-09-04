@@ -63,12 +63,22 @@ export default class Game {
                 [i+1]: {   
                     ...b,
                     hash: BigInt(b.hash.toString()),
-                    _tech: b._tech.map(t => ({ ...t })),
+                    _tech: b._tech.map(x => ({ 
+                        ...x 
+                    })),
                     _builtUniqueStructures: new Set(Object.values(b._builtUniqueStructures)),
                     _knownPlayers: new Set(Object.values(b._knownPlayers)),
-                    _cities: b._cities.map(c => ({ ...c })),
-                    _units: b._units.map(u => ({ ...u, _effects: new Set(Object.values(u._effects)) })),
-                    relations: Object.entries(b.relations).reduce((r, [k, v]) => ({ ...r, [k]: { ...v } }), {})
+                    _cities: b._cities.map(x => ({ 
+                        ...x, 
+                        _rewards: new Set(Object.values(x._rewards))
+                    })),
+                    _units: b._units.map(x => ({ 
+                        ...x, 
+                        _effects: new Set(Object.values(x._effects)) 
+                    })),
+                    relations: Object.entries(b.relations).reduce((x, [k, v]) => ({ 
+                        ...x, [k]: { ...v } 
+                    }), {})
                 }
             }), {}),
         };
@@ -91,6 +101,7 @@ export default class Game {
         // this.network = new NetworkManager(this.state);
         // this.reset();
         this.state = state;
+        this.state = this.cloneState();
         this.network = new NetworkManager(this.state);
         this.state.tiles.forEach(tile => {
             this.state._visibleTiles[tile.tileIndex] = tile._explorers.has(this.state.settings._pov);
@@ -121,7 +132,12 @@ export default class Game {
             return null;
         }
 
-        const move = typeof moveOrIndex == "number" ? MoveGenerator.legal(this.state)[moveOrIndex] : moveOrIndex;
+        const legal = MoveGenerator.legal(this.state);
+        const move = typeof moveOrIndex == "number" ? legal[moveOrIndex] : moveOrIndex;
+
+        // console.log(`[Game] legal: ${legal.length}`);
+        // console.log(`[Game] playing ${moveOrIndex} -> ${move?.stringify(this.state, this.state) || '???'}`);
+        
         let undo: UndoCallback;
 
         this.state.settings.areYouSure = true;
@@ -136,11 +152,8 @@ export default class Game {
 
             // TODO also need a function to update the diplomacy vision of the discovered tribes
             // if researched tech
-            
-            undo = () => {
-                undoDiscover();
-                result.undo();
-            }
+
+            const oldRewards = [...this.state.settings._pendingRewards];
 
             // If we just played a reward move, clear the first two
             if(move.moveType == MoveType.Reward) {
@@ -151,8 +164,13 @@ export default class Game {
             if(result.rewards) {
                 this.state.settings._pendingRewards.push(...result.rewards);
             }
-        }
 
+            undo = () => {
+                this.state.settings._pendingRewards = oldRewards;
+                undoDiscover();
+                result.undo();
+            }
+        }
 
         this.state.settings.areYouSure = false;
 
