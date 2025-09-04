@@ -150,8 +150,8 @@ function extractTile(state: GameState, tileIndex: number, force = false): number
     ];
 }
 
-function extractMap(state: GameState): number[][][] {\
-    console.log(state)
+function extractMap(state: GameState): number[][][] {
+    console.log(state);
     const offset = Math.floor((MODEL_CONFIG.dim_map_size - state.settings.size) / 2);
     const grid: number[][][] = Array(MODEL_CONFIG.dim_map_channels).fill(0).map(() =>
         Array(MODEL_CONFIG.dim_map_size).fill(0).map(() => Array(MODEL_CONFIG.dim_map_size).fill(0))

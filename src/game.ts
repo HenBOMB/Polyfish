@@ -28,7 +28,9 @@ export default class Game {
     constructor() {
         this.state = {} as any;
         this.network = null as any;
-        this.poser = new PoseManager();
+        // this.poser = new PoseManager();
+        this.poser = null as any;
+        console.log(`[Game] Poser disabled`)
         this.values = { } as any;
     }
 

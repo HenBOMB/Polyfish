@@ -27,11 +27,9 @@ export const MAX_TURNS = 50;
 
 export default class GameLoader {
     public currentState: GameState;
-    public fow: boolean;
     readonly settings: GameSettings;
 
     constructor(settings?: GameSettings) {
-        this.fow = true;
         this.currentState = { } as any;
         this.settings = {
             ...DefaultGameSettings,
@@ -56,7 +54,8 @@ export default class GameLoader {
                 mode: ModeType.Perfection,
                 _gameOver: false,
                 _recentMoves: [],
-                _pendingRewards: []
+                _pendingRewards: [],
+                fow: true,
             },
             tiles: [],
             structures: {},
@@ -92,11 +91,12 @@ export default class GameLoader {
 
     private loadGame(state: GameState) {
         this.currentState = state;
+        state.settings.fow = true;
 
         // this.updatePredictions(state);
 
         // If FOW is disabled, then tribes shouldn't claim discovering other tribes
-        if(!this.fow) {
+        if(!this.settings.fow) {
             const tribesObj = Object.values(state.tribes);
             for(const tribe of tribesObj) {
                 tribesObj.forEach(x => {
@@ -105,6 +105,7 @@ export default class GameLoader {
                     }
                 });
             }
+            state.settings.fow = false;
         }
 
         const pov = state.settings._pov;
@@ -245,7 +246,7 @@ export default class GameLoader {
             
             const tileOwner: number = this.parseRawInt(rawTile[1]) < 1? -1 : this.parseRawInt(rawTile[1]);
             
-            const explorers = this.fow? rawTile[2].split("&").map((x) => this.parseRawInt(x)).filter(x => x > 0) : tribes.map(x => x.owner);
+            const explorers = state.settings.fow? rawTile[2].split("&").map((x) => this.parseRawInt(x)).filter(x => x > 0) : tribes.map(x => x.owner);
             
             if(tileIndex === 285) {
                 console.log(explorers)
@@ -594,7 +595,7 @@ export default class GameLoader {
 
         const climateTypes = climateRaw.match(/.{1,2}/g)!;
         const terrainTypes = terrainRaw.match(/./g)!;
-        const owners = this.fow? [] : Object.values(tribes).map(x => x.owner);
+        const owners = state.settings.fow? [] : Object.values(tribes).map(x => x.owner);
         for(let i = 0; i < climateTypes.length; i++) {
             const climate = TribeMap[climateTypes[i]]? ClimateType[TribeType[TribeMap[climateTypes[i]]] as any] as unknown as ClimateType : ClimateType.Nature;
             
@@ -650,7 +651,7 @@ export default class GameLoader {
                 }
                 
                 // Reveal surrounding land
-                if(this.fow) {
+                if(state.settings.fow) {
                     for(const tile of [
                         tileIndex, 
                         ...getAdjacentIndexes(state, tileIndex, 2, false, true).filter(x => !lighthouses.includes(x))

@@ -131,6 +131,7 @@ export interface GameState {
 		_gameOver: boolean;
 		_recentMoves: MoveType[];
 		_pendingRewards: Move[];
+		fow?: boolean;
 	};
 	tiles: TileState[];
 	structures: Record<number, StructureState | null>;
@@ -146,6 +147,7 @@ export interface GameSettings {
 	maxTurns?: number; 
 	seed?: number; 
 	tribes: TribeType[];
+	fow: boolean;
 }
 
 export const DefaultGameSettings: Readonly<GameSettings> = {
@@ -154,6 +156,7 @@ export const DefaultGameSettings: Readonly<GameSettings> = {
 	maxTurns: MODEL_CONFIG.max_turns,
 	seed: undefined,
 	tribes: [TribeType.Imperius, TribeType.Bardur],
+	fow: true
 }
 
 Object.freeze(DefaultGameSettings);

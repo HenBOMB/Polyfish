@@ -10,6 +10,7 @@ body {
 #map {
     position: relative;
     height: 80vh;
+    margin-top: 400px;
 }
 
 .tile {

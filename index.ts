@@ -19,7 +19,7 @@ const py = spawn(".venv/bin/python3", ["polyfish/main.py"]);
 type Task = { data: string, resolve: (value: Prediction) => void };
 const queue: Task[] = [];
 let current: Task | null = null;
-const loader = new GameLoader();
+let loader = new GameLoader();
 
 (BigInt.prototype as any).toJSON = function() {
   return this.toString();
@@ -79,7 +79,8 @@ app.get('/', (req: Request, res: Response) => {
 });
 
 app.get('/live', async (req: Request, res: Response) => {
-    loader.fow = (req.query.fow == 'true' || req.query.fow == undefined? true : false) || true;
+    const fow = req.query.fow == 'true' || req.query.fow == undefined? true : false;
+    loader.settings.fow = fow;
     await loader.loadLive();
     const state = loader.currentState;
     Logger.clear();
@@ -95,7 +96,9 @@ app.get('/live', async (req: Request, res: Response) => {
 });
 
 app.get('/random', async (req: Request, res: Response) => {
+    const fow = req.query.fow == 'true' || req.query.fow == undefined? true : false;
     const settings: GameSettings = req.query as any;
+    settings.fow = fow;
     if(req.query.size && Number(req.query.size) < 8) {
         res.status(400).json({ error: "Size must be at least 8." });
         return
@@ -103,14 +106,14 @@ app.get('/random', async (req: Request, res: Response) => {
     if(req.query.tribes) {
         settings.tribes = String(req.query.tribes || "Imperius,Bardur").split(',').map(x => TribeType[x.trim() as keyof typeof TribeType]) as TribeType[];
     }
-    // const loader = new GameLoader(settings);
-    // const state = await loader.loadRandom();
+    loader = new GameLoader(settings);
+    await loader.loadRandom();
     const state = loader.currentState;
     Logger.clear();
-    main(loader);
+    // main(loader);
     res.json({
         state,
-        obs: AIState.extract(state),
+        // obs: AIState.extract(state),
         info: { 
             tribes: settings.tribes,
             mode: ModeType[state.settings.mode],
