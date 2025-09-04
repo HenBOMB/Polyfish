@@ -5,7 +5,7 @@ import { EffectType, MoveType } from "../types";
 import { GameState } from "../states";
 import { UnitType } from "../types";
 import { tryRemoveEffect } from "../actions";
-import { stepUnit } from "../actions/units/Step";
+import stepUnit from "../actions/units/Step";
 
 export default class Step extends Move {
     constructor(src: number, target: number) {

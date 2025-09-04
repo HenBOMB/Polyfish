@@ -1,7 +1,6 @@
 import { xorUnit, xorCity } from "../../../zobrist/hasher";
-import { spendStars } from "../../actions";
+import { freezeArea, spendStars } from "../../actions";
 import { discoverTiles } from "../DiscoverTiles";
-import { freezeArea } from "../FreezeArea";
 import pushUnit from "./Push";
 import { getPovTribe, isSkilledIn, getHomeCity } from "../../functions";
 import { CallbackResult, UndoCallback } from "../../move";
@@ -80,3 +79,4 @@ export default function(state: GameState, unitType: UnitType, spawnTileIndex: nu
         }
     };
 }
+

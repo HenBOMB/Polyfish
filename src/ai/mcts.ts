@@ -236,7 +236,9 @@ export class MCTS {
 		
         if(this.dirichlet) {
 			const table = [0, 0.2, 0.3];
-			const alpha = 0.3 * (count / count * 2) * (1 + lerpViaGameStage(this.state, table));
+			const alpha = -1;
+			// const alpha = 0.3 * (count / count * 2) * (1 + lerpViaGameStage(this.state, table));
+			throw Error("Disabled temporarily")
 			const eps = 0.25;
             const noise = sampleDirichlet(alpha, count);
             for (let a = 0; a < count; a++) {

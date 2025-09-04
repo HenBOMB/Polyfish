@@ -125,7 +125,7 @@ export default class GameLoader {
         });
 
         if(!data) {
-            throw Error("NO LIVE DATA PROVIDED")
+            console.error("NO LIVE DATA FOUND")
             return null;
         }
         

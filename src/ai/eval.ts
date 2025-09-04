@@ -18,7 +18,7 @@ const MAX_IDEAL_SCORE = 100_000;
  * Minimum amount of moves the AI is forced to play before they can end the turn.
  * NOT PROPERLY IMPLEMENTED
  */
-// const MIN_PLAYED_MOVES: StageValue = [3, 6, 6, 8];
+export const MIN_PLAYED_MOVES = [3, 6, 6, 8];
 
 /**
  * The weight of the economy and army score depending on the current stage of the game.
@@ -75,7 +75,7 @@ function calculateStageValue(state: GameState): [number, number] {
  * @param state 
  * @param value 
  */
-export function lerpViaGameStage(state: GameState, value: [number, number, number]): number {
+export function lerpViaGameStage(state: GameState, value: number[]): number {
     const stage = state.settings._turn / state.settings.maxTurns;
     const t = stage * (value.length - 1);
     const index1 = Math.floor(t);
