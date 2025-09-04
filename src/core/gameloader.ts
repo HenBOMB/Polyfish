@@ -27,18 +27,26 @@ export const MAX_TURNS = 50;
 
 export default class GameLoader {
     public currentState: GameState;
-    readonly settings: GameSettings;
+    private settings: GameSettings = DefaultGameSettings;
 
-    constructor(settings?: GameSettings) {
+    constructor(settings?: any) {
         this.currentState = { } as any;
+        if(settings) {
+            this.setSettings(settings)
+        }
+    }
+
+    public setSettings(settings: any) {
         this.settings = {
             ...DefaultGameSettings,
             seed: DEBUG_SEED,
             ...(settings || {})
         };
-        if(!this.settings.mode) throw new Error("mode is required");
-        if(!this.settings.maxTurns) throw new Error("maxTurns is required");
-        if(!this.settings.size) throw new Error("size is required");
+        this.settings.size = Number(this.settings.size);
+    }
+
+    public getSettings() {
+        return this.settings;
     }
   
     private defaultState(): GameState {
@@ -450,6 +458,7 @@ export default class GameLoader {
     public async loadRandom(_seed?: number, verbose = true) {
         // Safeguard for inconsistency map generation
         let tries = 1000
+        console.log(this.settings)
         let seed = _seed || (this.settings.seed? this.settings.seed : Math.floor(Math.random() * MAX_SEED));
        
         while(tries > 0) {

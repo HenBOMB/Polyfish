@@ -1,21 +1,21 @@
 import { GameState, TileState, TribeState } from "./core/states";
-import { STARTING_OWNER_ID } from "./core/gameloader";
+import GameLoader, { STARTING_OWNER_ID } from "./core/gameloader";
 import { MoveGenerator } from "./core/moves";
 import { getCityProduction, getPovTribe, hasEffect, isGameOver } from "./core/functions";
 import { tryDiscoverRewardOtherTribes } from "./core/actions";
 import Move, {UndoCallback } from "./core/move";
-import { MoveType, UnitType } from "./core/types";
+import { MoveType } from "./core/types";
 import { EffectType } from "./core/types";
 import NetworkManager from "./core/network";
 import PoseManager from "./core/poser";
 import { endUnitTurn, gainStars, startUnitTurn, tryRemoveEffect } from "./core/actions";
-import Values from "./ai/values/Values";
 import UnitValues from "./ai/values/Units";
 import TechnologyValues from "./ai/values/Technology";
 import CapturePotentialValues from "./ai/values/CapturePotential";
 
 export default class Game {
     // initialState: GameState;
+    readonly loader: GameLoader;
     state: GameState;
     network: NetworkManager;
     poser: PoseManager;
@@ -25,8 +25,9 @@ export default class Game {
         capturePotential: CapturePotentialValues,
     };
 
-    constructor() {
-        this.state = {} as any;
+    constructor(loader?: GameLoader) {
+        this.loader = loader || new GameLoader();
+        this.state = loader?.currentState as any;
         this.network = null as any;
         // this.poser = new PoseManager();
         this.poser = null as any;

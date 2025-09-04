@@ -1,4 +1,3 @@
-import { MODEL_CONFIG } from "../aistate";
 import Move from "./move";
 import { MoveType } from "./types";
 import { TerrainType, ResourceType, TribeType, StructureType, UnitType, TechnologyType, RewardType, EffectType, ModeType, ClimateType } from "./types";
@@ -151,9 +150,9 @@ export interface GameSettings {
 }
 
 export const DefaultGameSettings: Readonly<GameSettings> = {
-	size: MODEL_CONFIG.dim_map_size,
+	size: 11,
 	mode: ModeType.Domination,
-	maxTurns: MODEL_CONFIG.max_turns,
+	maxTurns: 30,
 	seed: undefined,
 	tribes: [TribeType.Imperius, TribeType.Bardur],
 	fow: true

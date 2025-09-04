@@ -19,7 +19,7 @@ const py = spawn(".venv/bin/python3", ["polyfish/main.py"]);
 type Task = { data: string, resolve: (value: Prediction) => void };
 const queue: Task[] = [];
 let current: Task | null = null;
-let loader = new GameLoader();
+let currentGame = new Game();
 
 (BigInt.prototype as any).toJSON = function() {
   return this.toString();
@@ -80,15 +80,17 @@ app.get('/', (req: Request, res: Response) => {
 
 app.get('/live', async (req: Request, res: Response) => {
     const fow = req.query.fow == 'true' || req.query.fow == undefined? true : false;
-    loader.settings.fow = fow;
-    await loader.loadLive();
-    const state = loader.currentState;
+    currentGame.loader.setSettings({
+        fow
+    });
+    await currentGame.loader.loadLive();
+    const state = currentGame.state;
     Logger.clear();
     // main(loader);
     res.json({
         state,
         // obs: AIState.extract(state),
-        info: loader.settings,
+        info: currentGame.loader.getSettings(),
         reward: 0,
         done: false,
         truncated: false,
@@ -106,9 +108,9 @@ app.get('/random', async (req: Request, res: Response) => {
     if(req.query.tribes) {
         settings.tribes = String(req.query.tribes || "Imperius,Bardur").split(',').map(x => TribeType[x.trim() as keyof typeof TribeType]) as TribeType[];
     }
-    loader = new GameLoader(settings);
-    await loader.loadRandom();
-    const state = loader.currentState;
+    currentGame.loader.setSettings(settings);
+    await currentGame.loader.loadRandom();
+    const state = currentGame.state;
     Logger.clear();
     // main(loader);
     res.json({
