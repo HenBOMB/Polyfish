@@ -1,4 +1,4 @@
-import { healUnit } from "../../actions";
+import healUnit from "../../actions/units/Heal";
 import { getAlliesNearTile } from "../../functions";
 import { CallbackResult } from "../../move";
 import { GameState } from "../../states";

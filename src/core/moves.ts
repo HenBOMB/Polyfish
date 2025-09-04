@@ -1,5 +1,5 @@
 import { CityState, GameState, TileState, UnitState } from "./states";
-import { getNeighborTiles, getPovTerritorry, getNeighborIndexes, isAdjacentToEnemy, isAquaticOrCanFly, isSteppable, isWaterTerrain, isNavalUnit, getTechCost, getPovTribe, isSkilledIn, getUnitAttack, getUnitMovement, isRoadpathAndUsable, getMaxHealth, getAlliesNearTile, isTechUnlocked, isEnemyCity, isUnderSiege, getTechSettings, getTechUnitType, isTileOccupied, getEnemiesNearTile, isTileFrozen, getTechStructure, getCityOwningTile, isResourceVisible, getEnemyIndexesInRange, getReplacedOrTechSettings, isTileExplored, hasEffect, getStructureAt, getUnitSettings, getUnitAt } from './functions';
+import { getAdjacentTiles, getPovTerritorry, getAdjacentIndexes, isAdjacentToEnemy, isAquaticOrCanFly, isSteppable, isWaterTerrain, isNavalUnit, getTechCost, getPovTribe, isSkilledIn, getUnitAttack, getUnitMovement, isRoadpathAndUsable, getMaxHealth, getAlliesNearTile, isTechUnlocked, isEnemyCity, isUnderSiege, getTechSettings, getTechUnitType, isTileOccupied, getEnemiesNearTile, isTileFrozen, getTechStructure, getCityOwningTile, isResourceVisible, getEnemyIndexesInRange, getReplacedOrTechSettings, isTileExplored, hasEffect, getStructureAt, getUnitSettings, getUnitAt } from './functions';
 import { StructureSettings } from "./settings/StructureSettings";
 import { SkillType, ResourceType, RewardType, StructureType, TechnologyType, TerrainType, UnitType, AbilityType, EffectType } from "./types";
 import { UnitSettings } from "./settings/UnitSettings";
@@ -451,7 +451,7 @@ export class EconMovesGenerator {
 						}
 					}
 	
-					if(settings.adjacentTypes && !getNeighborIndexes(state, tile.tileIndex).some(x => state.structures[x]? 
+					if(settings.adjacentTypes && !getAdjacentIndexes(state, tile.tileIndex).some(x => state.structures[x]? 
 						settings.adjacentTypes!.has(state.structures[x]!.id) : false
 					)) {
 						continue;
@@ -635,7 +635,7 @@ export class EconMovesGenerator {
 					}
 				}
 
-				if(settings.adjacentTypes && !getNeighborIndexes(state, tile.tileIndex).some(x => state.structures[x]? 
+				if(settings.adjacentTypes && !getAdjacentIndexes(state, tile.tileIndex).some(x => state.structures[x]? 
 					settings.adjacentTypes!.has(state.structures[x]!.id) : false
 				)) {
 					continue;
@@ -796,7 +796,7 @@ export class ArmyMovesGenerator {
 
 		if (isSkilledIn(attacker, SkillType.Infiltrate)) {
 			moves.push(
-				...getNeighborIndexes(state, attacker._tileIndex)
+				...getAdjacentIndexes(state, attacker._tileIndex)
 					.filter(x => isEnemyCity(state, x) && !isUnderSiege(state, x))
 					.map(x => new Attack(attacker._tileIndex, x))
 			);
@@ -852,7 +852,7 @@ export class ArmyMovesGenerator {
 					// If the unit has navigate, it tipically cannot move onto land
 					// allow spawning if the unit has at least 1 tile to move to
 					if(isSkilledIn(unitType, SkillType.Navigate)) {
-						const hasWater = getNeighborIndexes(state, targetIndex).some(x => isWaterTerrain(state.tiles[x]));
+						const hasWater = getAdjacentIndexes(state, targetIndex).some(x => isWaterTerrain(state.tiles[x]));
 						if(!hasWater) {
 							continue;
 						}
@@ -909,7 +909,7 @@ export class ArmyMovesGenerator {
 				continue;
 			}
 	
-			const neighbors = getNeighborTiles(state, current.index);
+			const neighbors = getAdjacentTiles(state, current.index);
 	
 			for(let i = 0; i < neighbors.length; i++) {
 				const tile = neighbors[i];

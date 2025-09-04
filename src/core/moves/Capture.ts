@@ -1,8 +1,17 @@
-import { getCityAt, getHomeCity, getNeighborIndexes, getNextTech, getPovTribe, getUnitAt, hasEffect, indexToCoord, isTechUnlocked } from "../functions";
+import { getCityAt, getHomeCity, getAdjacentIndexes, getNextTech, getPovTribe, getUnitAt, indexToCoord, isTechUnlocked } from "../functions";
 import Move, { CallbackResult, UndoCallback } from "../move";
 import { EffectType, MoveType, RewardType, StructureType, TechnologyType, TerrainType, TribeType, UnitType } from "../types";
 import { CityState, GameState, TechnologyState } from "../states";
-import { addPopulationToCity, discoverTiles, spendStars, removeUnit, summonUnit, gainStars, consumeResource, createStructure, destroyStructure, modifyTerrain, tryRemoveEffect, endUnitTurn } from "../actions";
+import { spendStars, gainStars, modifyTerrain, tryRemoveEffect, endUnitTurn } from "../actions";
+import consumeResource from "../actions/resource/Consume";
+import addPopulationToCity from "../actions/AddPopulation";
+import unlockTechnology from "../actions/UnlockTech";
+import claimTerritory from "../actions/ClaimTerritory";
+import { destroyStructure } from "../actions/structure/Destroy";
+import { createStructure } from "../actions/structure/Create";
+import { discoverTiles } from "../actions/DiscoverTiles";
+import removeUnit from "../actions/units/Remove";
+import summonUnit from "../actions/units/Summon";
 import { TechnologyUnlockableList } from "../settings/TechnologySettings";
 import { predictExplorer } from "../../ai/prediction";
 import { xorCity, xorPlayer, xorTile, xorUnit } from "../../zobrist/hasher";
@@ -70,7 +79,7 @@ export default class Capture extends Move {
         const pov = getPovTribe(state);        
         const captureIndex = this.getSrc();
         const villageTile = state.tiles[captureIndex];
-        const territory = getNeighborIndexes(state, captureIndex, 1, true, true);
+        const territory = getAdjacentIndexes(state, captureIndex, 1, true, true);
         
         const createdCity: CityState = {
             name: `${TribeType[pov.tribeType]} City`,
@@ -88,33 +97,15 @@ export default class Capture extends Move {
         };
 
         xorCity.set(state, createdCity);
-        xorTile.owner(state, villageTile.tileIndex, 0, pov.owner);
-        
         pov._cities.push(createdCity);
-        villageTile._owner = pov.owner;
-        
-        for(const tileIndex of createdCity._territory) {
-            const tile = state.tiles[tileIndex];
-            tile._owner = pov.owner;
-            tile._rulingCityIndex = villageTile.tileIndex;
-            xorTile.owner(state, villageTile.tileIndex, 0, pov.owner);
-        }
-        
+        const claimBranch = claimTerritory(state, createdCity._territory, false, villageTile.tileIndex);
+
         return {
-            rewards: [],
+            rewards: claimBranch.rewards,
             undo: () => {
-                for(const tileIndex of createdCity._territory) {
-                    const tile = state.tiles[tileIndex];
-                    tile._owner = 0;
-                    tile._rulingCityIndex = -1;
-                    xorTile.owner(state, tileIndex, pov.owner, 0);
-                }
-
-                xorTile.owner(state, villageTile.tileIndex, pov.owner, 0);
-                xorCity.set(state, createdCity);
-
-                villageTile._owner = 0;
+                claimBranch.undo();
                 pov._cities.pop();
+                xorCity.set(state, createdCity);
             }
         }
     }
@@ -132,7 +123,6 @@ export default class Capture extends Move {
         const cityListIndex = enemy._cities.indexOf(city);
         
         xorCity.owner(state, city, enemy.owner, pov.owner);
-        xorTile.owner(state, city.tileIndex, enemy.owner, pov.owner);
 
         // Claim the enemy's city
         enemy._cities.splice(cityListIndex, 1)
@@ -143,11 +133,7 @@ export default class Capture extends Move {
         if(tile.capitalOf > 0) tile.capitalOf = pov.owner;
         
         // Claim the enemy's territory
-        for(let i = 0; i < city._territory.length; i++) {
-            const tile = state.tiles[city._territory[i]];
-            tile._owner = pov.owner;
-            xorTile.owner(state, tile.tileIndex, enemy.owner, pov.owner);
-        }
+        const claimBranch = claimTerritory(state, city._territory, true);
         
         // If enemy runs out of cities they loose all their units
         const chain: UndoCallback[] = [];
@@ -159,10 +145,10 @@ export default class Capture extends Move {
             }
         }
         
-        // Update networks
-        
+        // TODO recalculate networks
+
         return {
-            rewards: [],
+            rewards: claimBranch.rewards,
             undo: () => {
                 if(!enemy._cities.length) {
                     chain.reverse().forEach(x => x());
@@ -170,11 +156,7 @@ export default class Capture extends Move {
                     enemy._killedTurn = -1;
                 }
                 
-                for(let i = 0; i < city._territory.length; i++) {
-                    const tile = state.tiles[city._territory[i]];
-                    tile._owner = enemy.owner;
-                    xorTile.owner(state, tile.tileIndex, pov.owner, enemy.owner);
-                }
+                claimBranch.undo();
 
                 if(tile.capitalOf > 0) tile.capitalOf = enemy.owner;
                 tile._owner = enemy.owner;
@@ -208,25 +190,7 @@ export default class Capture extends Move {
         const scrolls: TechnologyType[] = TechnologyUnlockableList.filter(x => getNextTech(x)?.some(x => !isTechUnlocked(pov, x)))
         
         if (scrolls.length) {
-            possibleRewards.push(() => {
-                const scroll: TechnologyState = {
-                    techType: scrolls[Math.floor(Math.random() * scrolls.length)],
-                    discovered: state.settings.areYouSure,
-                };
-
-                xorPlayer.tech(pov, scroll.techType);
-                pov._tech.push(scroll);
-                const undoPurchase = spendStars(state, 5);
-
-                return {
-                    rewards: [],
-                    undo: () => {
-                        undoPurchase();
-                        pov._tech.pop();
-                        xorPlayer.tech(pov, scroll.techType);
-                    }
-                }
-            });
+            possibleRewards.push(() => unlockTechnology(state, scrolls[Math.floor(Math.random() * scrolls.length)]));
         }
 
         // 3 free pop to highest level capital
@@ -245,7 +209,7 @@ export default class Capture extends Move {
                 || (terrainType !== TerrainType.Ocean && pov.tribeType === TribeType.Cymanti)
             )
         ) {
-            const around = getNeighborIndexes(state, tileIndex, 2, true);
+            const around = getAdjacentIndexes(state, tileIndex, 2, true);
             // If there is any neaby unexplored tile
             if(around.some(x => !state._visibleTiles[x])) {
                 possibleRewards.push(() => discoverTiles(state, null, predictExplorer(state, tileIndex)));
@@ -294,7 +258,7 @@ export default class Capture extends Move {
                     _production: 3,
                     _owner: pov.owner,
                     tileIndex,
-                    _territory: getNeighborIndexes(state, tileIndex, 1, true, true),
+                    _territory: getAdjacentIndexes(state, tileIndex, 1, true, true),
                     _unitCount: 0,
                 };
 
@@ -319,11 +283,14 @@ export default class Capture extends Move {
     
                 pov._cities.push(createdCity);
 
+                const claimBranch = claimTerritory(state, createdCity._territory, false, createdCity.tileIndex)
+
                 // TODO recalculate network connections
 
                 return {
-                    rewards: [],
+                    rewards: claimBranch.rewards,
                     undo: () => {
+                        claimBranch.undo();
                         pov._cities.pop();
                         chain.forEach(x => x());
                         undoCreate();

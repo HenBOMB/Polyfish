@@ -39,20 +39,34 @@ export enum TechnologyType {
 	Philosophy 		= 22,
 	Mining 			= 23,
 	Smithery 		= 24,
+	/** Aquarion. Replaces FreeSpirit */
 	FreeDiving 		= 25,
+	/** Aquarion. Replaces Chivalry */
 	Spearing 		= 26,
+	/** Aquarion. Replaces Spearing */
 	Amphibian 		= 27,
+	/** Elyrion. Replaces Forestry */
 	ForestMagic	    = 28,
+	/** Polaris. Replaces Fishing */
 	Frostwork		= 30,
+	/** Polaris. Replaces Navigation */
 	PolarWarfare	= 31,
+	/** Polaris. Replaces Aquatism */
 	Polarism		= 32,
+	/** Replaces Chivalry */
 	ShockTactics    = 35,
+	/** Cymanti. Replaces Construction */
 	Recycling 		= 36,
+	/** Cymanti. Replaces Ramming */
 	Hydrology 		= 37,
 	Diplomacy		= 38,
+	/** Replaces Navigation */
 	Oceantology		= 49, // TODO Cymanti, Verify ID
+	/** Polaris. Replaces Sailing */
 	Sledding		= 41,
+	/** Polaris. Replaces Ramming */
 	IceFishing		= 42,
+	/** Cymanti. Replaces Sailing */
 	Pascetism		= 43,
 	Unbuildable 	= -1, 
 	// TODO = Aquarion

@@ -4,23 +4,32 @@ import { MoveGenerator } from "./core/moves";
 import { getCityProduction, getPovTribe, hasEffect, isGameOver } from "./core/functions";
 import { tryDiscoverRewardOtherTribes } from "./core/actions";
 import Move, {UndoCallback } from "./core/move";
-import { MoveType } from "./core/types";
+import { MoveType, UnitType } from "./core/types";
 import { EffectType } from "./core/types";
 import NetworkManager from "./core/network";
 import PoseManager from "./core/poser";
 import { endUnitTurn, gainStars, startUnitTurn, tryRemoveEffect } from "./core/actions";
+import Values from "./ai/values/Values";
+import UnitValues from "./ai/values/Units";
+import TechnologyValues from "./ai/values/Technology";
+import CapturePotentialValues from "./ai/values/CapturePotential";
 
 export default class Game {
     // initialState: GameState;
     state: GameState;
     network: NetworkManager;
     poser: PoseManager;
+    values: {
+        unitStrength: UnitValues,
+        technology: TechnologyValues,
+        capturePotential: CapturePotentialValues,
+    };
 
     constructor() {
-        // this.initialState = {} as any;
         this.state = {} as any;
         this.network = null as any;
         this.poser = new PoseManager();
+        this.values = { } as any;
     }
 
     cloneState(): GameState {
@@ -39,13 +48,13 @@ export default class Game {
 
         return {
             _visibleTiles: { ...copied._visibleTiles },
-            resources: { ...copied.resources },
-            structures: { ...copied.structures },
+            resources:     { ...copied.resources },
+            structures:    { ...copied.structures },
+            settings:      { ...copied.settings },
             tiles: copied.tiles.map(x => ({ 
                 ...x, 
                 _explorers: new Set(Object.values(x._explorers))
             })) as TileState[],
-            settings: { ...copied.settings },
             tribes: Object.values(copied.tribes).reduce((a, b, i) => ({ 
                 ...a,
                 [i+1]: {   
@@ -71,6 +80,12 @@ export default class Game {
         this.state.tiles.forEach(tile => {
             this.state._visibleTiles[tile.tileIndex] = tile._explorers.has(this.state.settings._pov);
         });
+        const pov = getPovTribe(state);
+        this.values = {
+            unitStrength: new UnitValues(pov.tribeType),
+            technology: new TechnologyValues(pov.tribeType),
+            capturePotential: new CapturePotentialValues(pov.tribeType),
+        }
     }
 
     // reset() {

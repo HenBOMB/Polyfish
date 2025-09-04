@@ -4,7 +4,7 @@ import GameLoader, { STARTING_OWNER_ID } from "../core/gameloader";
 import { MoveType } from "../core/types";
 import { MoveGenerator, Prediction } from "../core/moves";
 import { GameSettings, GameState } from "../core/states";
-import { MIN_PLAYED_MOVES, lerpViaGameStage, SCORE_MOVE_PRIORITY } from "./eval";
+import { MIN_PLAYED_MOVES, lerpViaGameStage, scoreMovePriority } from "./eval";
 import Game from "../game";
 import { Logger } from "./logger";
 import { Opening } from "./opening";
@@ -198,7 +198,7 @@ export class MCTS {
 					case MoveType.EndTurn:
 					  	return game.state.settings._recentMoves.length >= min? 10 : 0.1;
 					default:
-					  	return SCORE_MOVE_PRIORITY(x);
+					  	return scoreMovePriority(x);
 				}
 			});
 		

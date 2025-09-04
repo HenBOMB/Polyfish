@@ -1,5 +1,5 @@
 import { Logger } from "../../ai/logger";
-import { summonUnit } from "../actions";
+import summonUnit from "../actions/units/Summon";
 import { getPovTribe } from "../functions";
 import Move, { CallbackResult } from "../move";
 import { MoveType, TribeType } from "../types";

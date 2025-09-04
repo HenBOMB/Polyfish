@@ -1,5 +1,8 @@
 import { xorCity, xorUnit } from "../../zobrist/hasher";
-import { attackUnit, removeUnit, summonUnit, gainStars, tryRemoveEffect, endUnitTurn } from "../actions";
+import { gainStars, tryRemoveEffect, endUnitTurn } from "../actions";
+import attackUnit from "../actions/units/Attack";
+import removeUnit from "../actions/units/Remove";
+import summonUnit from "../actions/units/Summon";
 import { getCityProduction, getEnemyAt, getPovTribe, getUnitAt, isSkilledIn, isTechUnlocked } from "../functions";
 import Move, { CallbackResult, UndoCallback } from "../move";
 import { GameState } from "../states";

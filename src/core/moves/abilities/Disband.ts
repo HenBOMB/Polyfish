@@ -1,4 +1,5 @@
-import { gainStars, removeUnit } from "../../actions";
+import { gainStars } from "../../actions";
+import removeUnit from "../../actions/units/Remove";
 import { getRealUnitSettings, getUnitAt } from "../../functions";
 import { CallbackResult } from "../../move";
 import { GameState } from "../../states";

@@ -21,6 +21,11 @@ export class Opening {
     }
 }
 
+/**
+ * Opening book, each record contains the turn at which to apply a good recommended move. 
+ * May not always be accurate, since the terrain generation is random.
+ * TODO: make dynamic like `ai.values`
+ */
 const OpeningBook: { [key in TribeType]: { [key: number]: MoveType[] } } = {
     [TribeType.None]: { },
     [TribeType.Nature]: { },

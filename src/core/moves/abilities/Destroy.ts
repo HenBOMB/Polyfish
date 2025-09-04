@@ -1,4 +1,4 @@
-import { destroyStructure } from "../../actions";
+import { destroyStructure } from "../../actions/structure/Destroy";
 import { CallbackResult } from "../../move";
 import { GameState } from "../../states";
 import { AbilityType } from "../../types";

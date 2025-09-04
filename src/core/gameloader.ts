@@ -11,12 +11,12 @@ import {
     UnitType,
 } from "./types";
 import { UnitState, CityState, GameState, TribeState, TileState, ResourceState, StructureState, DiplomacyRelationState, GameSettings, DefaultGameSettings } from "./states";
-import { isResourceVisible, getNeighborTiles, getNeighborIndexes, isWaterTerrain, isIceTerrain, getTribeCrudeScore, getHomeCity } from "./functions";
+import { isResourceVisible, getAdjacentTiles, getAdjacentIndexes, isWaterTerrain, isIceTerrain, calculateInitialTribeScore, getHomeCity } from "./functions";
 import { readFileSync, writeFileSync } from "fs";
 import { UnitSettings } from "./settings/UnitSettings";
 import { predictBestNextCityReward, predictOuterFogTerrain, predictVillages } from "../ai/prediction";
 import { TribeSettings } from "./settings/TribeSettings";
-import { summonUnit } from "./actions";
+import summonUnit from "./actions/units/Summon";
 import { xorState } from "../zobrist/hasher";
 
 export const STARTING_OWNER_ID = 1;
@@ -394,7 +394,7 @@ export default class GameLoader {
             }
             for(const city of tribe._cities) {
                 state.tiles[city.tileIndex]._rulingCityIndex = city.tileIndex
-                city._territory = getNeighborTiles(state, city.tileIndex, city._borderSize)
+                city._territory = getAdjacentTiles(state, city.tileIndex, city._borderSize)
                     .filter(x => x._rulingCityIndex == city.tileIndex).map(x => x.tileIndex);
             }
         }
@@ -634,7 +634,7 @@ export default class GameLoader {
             }
             else if(TribeMap[structureOrTribeType]) {
                 const tribeType = TribeMap[structureOrTribeType];
-                const territory = [tileIndex, ...getNeighborIndexes(state, tileIndex, 1, false, true)];
+                const territory = [tileIndex, ...getAdjacentIndexes(state, tileIndex, 1, false, true)];
                 // const tribe = Object.values(state.tribes).find(x => x.tribeType == tribeType)!;
                 const tribe = Object.values(state.tribes)
                     .filter(x => x.tribeType === tribeType)
@@ -653,7 +653,7 @@ export default class GameLoader {
                 if(this.fow) {
                     for(const tile of [
                         tileIndex, 
-                        ...getNeighborIndexes(state, tileIndex, 2, false, true).filter(x => !lighthouses.includes(x))
+                        ...getAdjacentIndexes(state, tileIndex, 2, false, true).filter(x => !lighthouses.includes(x))
                     ]) {
                         state.tiles[tile]._explorers.add(tribe.owner);
                     }
@@ -756,7 +756,7 @@ export default class GameLoader {
                 tribe._units[0]._moved = false;
                 tribe._units[0]._attacked = false;
             }
-            tribe._score = getTribeCrudeScore(state, tribe.owner);
+            tribe._score = calculateInitialTribeScore(state, tribe.owner);
         }
 
         state.settings._pov = pov;
@@ -791,7 +791,7 @@ export default class GameLoader {
                     climateType,
                     true
                 ];
-                getNeighborIndexes(state, Number(tileIndex), 1, false, true).forEach(x => {
+                getAdjacentIndexes(state, Number(tileIndex), 1, false, true).forEach(x => {
                     fogPredictions[x] = [
                         TerrainType.Field, 
                         climateType,

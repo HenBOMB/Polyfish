@@ -748,7 +748,7 @@ async function mcts(e) {
 }
 
 // fetch('/random?size=9&tribes=Imperius,Imperius').then(x => x.json()).then(x => {
-fetch('/live').then(x => x.json()).then(x => {
+fetch('/live?fow=false').then(x => x.json()).then(x => {
     state = x.state;
 
     POV = state.settings._pov;

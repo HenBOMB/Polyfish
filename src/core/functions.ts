@@ -5,6 +5,7 @@ import { ResourceSettings } from "./settings/ResourceSettings";
 import { UnitSettings } from "./settings/UnitSettings";
 import { TechnologyReplacements, TechnologySetting, TechnologySettings } from "./settings/TechnologySettings";
 import Game from "../game";
+import { calculateDistance } from "../ai/gmath";
 
 export function indexToCoord(state: GameState, tileIndex: number) {
 	return [state.tiles[tileIndex].x, state.tiles[tileIndex].y];
@@ -60,6 +61,13 @@ export function getTechAbility(like: TribeLike, tierTech: number): AbilityType |
 	return getReplacedOrTechSettings(like, tierTech).unlocksAbility || null;
 }
 
+// Should not use cause we NEVER use the replaced as a base for the tech list
+// export function getOriginalTech(tierTech: TechLike) {
+// 	const settings = TechnologySettings[parseToTechType(tierTech)];
+// 	return settings.tier? 
+// 		settings : TechnologySettings[settings.replacesTech!];
+// }
+
 export function getTechCost(tribe: TribeState, tierTech: TechLike): number {
 	const baseCost = 4 + getTechSettings(tierTech).tier! * tribe._cities.length;
 	if(isTechUnlocked(tribe, TechnologyType.Philosophy)) {
@@ -98,7 +106,7 @@ export function getPovTerritorry(state: GameState, tribe?: TribeState, cityTarge
 
 const neighborCache = new Map<number, number[]>();
 
-export function getNeighborIndexes(state: GameState, index: number, range = 1, unowned = false, includeUnexplored = false): number[] {
+export function getAdjacentIndexes(state: GameState, index: number, range = 1, unowned = false, includeUnexplored = false): number[] {
 	const width = state.settings.size;
 	const neighbors: number[] = [];
 	const [x, y] = indexToCoord(state, index);
@@ -142,8 +150,8 @@ export function getNeighborIndexes(state: GameState, index: number, range = 1, u
 	return neighbors;
 }
 
-export function getNeighborTiles(state: GameState, index: number, range = 1, unowned = false, includeUnexplored = false): TileState[] {
-	return getNeighborIndexes(state, index, range, unowned, includeUnexplored).map(i => state.tiles[i]);
+export function getAdjacentTiles(state: GameState, index: number, range = 1, unowned = false, includeUnexplored = false): TileState[] {
+	return getAdjacentIndexes(state, index, range, unowned, includeUnexplored).map(i => state.tiles[i]);
 }
 
 export function getResourceAt(state: GameState, tileIndex: TileState | number): ResourceType | null {
@@ -211,7 +219,7 @@ export function getTrueEnemyAt(state: GameState, tileIndex: TileState | number, 
 }
 
 export function getAlliesNearTile(state: GameState, tileIndex: number, range = 1): UnitState[] {
-	return getNeighborIndexes(state, tileIndex, range)
+	return getAdjacentIndexes(state, tileIndex, range)
 		.reduce((acc: UnitState[], cur: number) => {
 			const ally = getTrueUnitAt(state, cur, state.settings._pov);
 			return [
@@ -222,7 +230,7 @@ export function getAlliesNearTile(state: GameState, tileIndex: number, range = 1
 }
 
 export function getEnemiesNearTile(state: GameState, tileIndex: number, range = 1, strict = false): UnitState[] {
-	return getNeighborIndexes(state, tileIndex, range)
+	return getAdjacentIndexes(state, tileIndex, range)
 		.reduce((acc: UnitState[], cur: number) => {
 			const owner = state.tiles[cur]._unitOwner;
 			if(owner < 1 || owner === state.settings._pov) return acc;
@@ -237,14 +245,15 @@ export function getEnemiesInRange(state: GameState, unit: UnitState) {
 }
 
 export function getEnemyIndexesInRange(state: GameState, unit: UnitState) {
-	return getNeighborIndexes(state, unit._tileIndex, getUnitRange(unit))
+	return getAdjacentIndexes(state, unit._tileIndex, getUnitRange(unit))
 		.filter(x => isTileOccupied(state, x, true));
 }
 
-export function getClosestEnemyCity(state: GameState, tileIndex: number, range = 1): [null | CityState, number] {
-	let closestDistance = range;
+export function getClosestEnemyCity(state: GameState, tileIndex: number, maxRange = 1): [CityState, number] | null {
+	let closestDistance = maxRange;
 	let closestCity = null;
-	for (let i = 1; i < state.settings.tribeCount; i++) {
+	for (let j = 0; j < state.settings.tribeCount; j++) {
+		const i = j + 1;
 		if(i === state.settings._pov) continue;
 		for (const city of state.tribes[i]._cities.filter(x => state._visibleTiles[x.tileIndex])) {
 			const distance = calculateDistance(tileIndex, city.tileIndex, state.settings.size);
@@ -254,7 +263,7 @@ export function getClosestEnemyCity(state: GameState, tileIndex: number, range =
 			}
 		}
 	}
-	return [closestCity, closestDistance];
+	return closestCity? [closestCity, closestDistance] : null;
 }
 
 /**
@@ -307,7 +316,6 @@ export function isTileFrozen(state: GameState, tileIndex: number): boolean {
 	// TODO should use internal 'frozen' boolean
 	return state.tiles[tileIndex].terrainType === TerrainType.Ice;
 }
-
 
 /**
  * Checks if the tribe has unlocked this tech
@@ -440,10 +448,10 @@ export function getDefenseBonus(state: GameState, unit: UnitState): number {
 	return 1;
 }
 
-export function isAdjacentToEnemy(state: GameState, tile: TileState, matchUnitType?: UnitType): boolean {
+export function isAdjacentToEnemy(state: GameState, tile: TileState, matchUnitType?: UnitType, checkForControl=true): boolean {
 	// Get true enemy because invisible units (cloaks) can also control terrain
-	return getNeighborIndexes(state, tile.tileIndex).some(x => {
-		const e = getTrueEnemyAt(state, x);
+	return getAdjacentIndexes(state, tile.tileIndex).some(x => {
+		const e = checkForControl? getTrueEnemyAt(state, x) : getEnemyAt(state, x);
 		return e && (!matchUnitType || e._unitType === matchUnitType);
 	});
 }
@@ -551,8 +559,23 @@ export function getCapitalCity(state: GameState, owner?: number): CityState | nu
 	return state.tribes[pov]._cities.find(x => state.tiles[x.tileIndex].capitalOf === pov) || null;
 }
 
-export function getTribeCrudeScore(state: GameState, owner?: number): number {
-	const pov = state.tribes[owner || state.settings._pov];
+export function calculateTribeScore(state: GameState, owner?: number) {
+	const pov = owner? state.tribes[owner] : getPovTribe(state);
+
+	let score = 0;
+
+	score += pov._cities.reduce((total, city) => {
+		return total + 20 * city._territory.length;
+	}, 0);
+
+	for(const unit of pov._units) {
+		score += 5 * UnitSettings[unit._unitType].cost;
+	}
+
+}
+
+export function calculateInitialTribeScore(state: GameState, owner?: number): number {
+	const pov = owner? state.tribes[owner] : getPovTribe(state);
 
 	// ! https://docs.google.com/document/d/1HYiUbT-3RtP4b2SwlMQEZB4bTdAUtN_6K8DOvY6wNsk/edit?tab=t.0
 
@@ -673,23 +696,6 @@ export function getTerrainType(state: GameState, tileIndex: number): TerrainType
 	return state.tiles[tileIndex].terrainType;
 }
 
-let distanceCache = new Map<number, Map<number, number>>();
-
-export function calculateDistance(tileIndex1: number, tileIndex2: number, size: number, manhattan = false) {
-	const cache = distanceCache.get(tileIndex1);
-	if (cache) {
-		const cachedDistance = cache.get(tileIndex2);
-		if (cachedDistance != undefined) return cachedDistance;
-	} else {
-		distanceCache.set(tileIndex1, new Map());
-	}
-	const dx = Math.abs((tileIndex1 % size) - (tileIndex2 % size));
-	const dy = Math.abs(Math.floor(tileIndex1 / size) - Math.floor(tileIndex2 / size));
-	const distance = manhattan? Math.abs(dx + dy) : Math.max(dx, dy);
-	distanceCache.get(tileIndex1)!.set(tileIndex2, distance);
-	return distance;
-}
-
 /**
  * Pushes a unit away from its current tile.
  * @param state
@@ -718,7 +724,7 @@ export function calaulatePushablePosition(state: GameState, pushed: UnitState): 
 	let dx = 0, dy = 0;
 	const centerTile = state.tiles[Math.floor((state.settings.size * state.settings.size) / 2)];
 
-	// TODO
+	// TODO verify
 
 	// Friendly units that previously moved will be pushed in the same direction of their movement
 	// Enemy units are pushed the opposite direction
@@ -922,7 +928,7 @@ export function computeReachablePath(
 
 		closedSet.add(current);
 		
-		for (const neighbor of getNeighborTiles(state, current, maxMoveRange, false, ignoreVisibility).map(t => t.tileIndex)) {
+		for (const neighbor of getAdjacentTiles(state, current, maxMoveRange, false, ignoreVisibility).map(t => t.tileIndex)) {
 			if (closedSet.has(neighbor) || !canStepOnLogic(state, neighbor)) continue;
 			
 			const tentativeGScore = gScore.get(current) || 0;

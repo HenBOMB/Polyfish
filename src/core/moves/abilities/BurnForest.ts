@@ -1,4 +1,5 @@
-import { consumeResource, modifyTerrain, spendStars } from "../../actions";
+import { modifyTerrain, spendStars } from "../../actions";
+import consumeResource from "../../actions/resource/Consume";
 import { CallbackResult } from "../../move";
 import { GameState } from "../../states";
 import { AbilityType, ResourceType, TerrainType } from "../../types";

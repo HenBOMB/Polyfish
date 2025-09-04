@@ -1,4 +1,4 @@
-import { getCapitalCity, getEnemiesNearTile, getNeighborIndexes, getPovTribe, isResourceVisible, isTechUnlocked, isTribeSteppable } from "../core/functions";
+import { getCapitalCity, getEnemiesNearTile, getAdjacentIndexes, getPovTribe, isResourceVisible, isTechUnlocked, isTribeSteppable } from "../core/functions";
 import { CityState, GameState } from "../core/states";
 import { SkillType, ClimateType, ModeType, RewardType, StructureType, TechnologyType, TerrainType, TribeType } from "../core/types";
 
@@ -53,7 +53,7 @@ Object.freeze(Tribe2Climate);
 
 // Predict climate for a fogged tile based on visible neighbors
 function predictClimate(state: GameState, tileIndex: number): ClimateType {
-    const neighbors = getNeighborIndexes(state, tileIndex, 1, false, false); // Only visible neighbors
+    const neighbors = getAdjacentIndexes(state, tileIndex, 1, false, false); // Only visible neighbors
     const climateCounts: { [key in ClimateType]?: number } = {};
 
     // Count climates of visible neighbors
@@ -106,7 +106,7 @@ export function predictVillages(state: GameState): { [tileIndex: number]: [Tribe
         const tileIndex = Number(x);
         const tile = state.tiles[tileIndex];
         if (tile.climate === targetClimate && tile._owner !== pov) {
-            getNeighborIndexes(state, tileIndex, 2, false, true).forEach(neighbor => {
+            getAdjacentIndexes(state, tileIndex, 2, false, true).forEach(neighbor => {
                 const tileX = neighbor % state.settings.size;
                 const tileY = Math.floor(neighbor / state.settings.size);
                 if (tileX <= 1 || tileX >= state.settings.size - 2 || tileY <= 1 || tileY >= state.settings.size - 2) {
@@ -169,8 +169,8 @@ function detectEnemyRows(state: GameState): RowInfo[] {
                     state.tiles[tile2]._owner === tile._owner
                 ) {
                     // The tile with most fog is the center tile
-                    const count1 = getNeighborIndexes(state, tile1, 1, false, true).filter(i => !state._visibleTiles[i]).length;
-                    const count2 = getNeighborIndexes(state, tile2, 1, false, true).filter(i => !state._visibleTiles[i]).length;
+                    const count1 = getAdjacentIndexes(state, tile1, 1, false, true).filter(i => !state._visibleTiles[i]).length;
+                    const count2 = getAdjacentIndexes(state, tile2, 1, false, true).filter(i => !state._visibleTiles[i]).length;
                     if (count1 > count2) {
                         rows.push([tile1, 1]);
                     } else {
@@ -199,8 +199,8 @@ function detectEnemyRows(state: GameState): RowInfo[] {
                     state.tiles[tile2]._owner === tile._owner
                 ) {
                     // The tile with most fog is the center tile
-                    const count1 = getNeighborIndexes(state, tile1, 1, false, true).filter(i => !state._visibleTiles[i]).length;
-                    const count2 = getNeighborIndexes(state, tile2, 1, false, true).filter(i => !state._visibleTiles[i]).length;
+                    const count1 = getAdjacentIndexes(state, tile1, 1, false, true).filter(i => !state._visibleTiles[i]).length;
+                    const count2 = getAdjacentIndexes(state, tile2, 1, false, true).filter(i => !state._visibleTiles[i]).length;
                     if (count1 > count2) {
                         rows.push([tile1, 0]);
                         
@@ -223,7 +223,7 @@ export function getBorderClouds(state: GameState): number[] {
     const borderClouds = new Set<number>();
 
     for(const x in state._visibleTiles) {
-        const neighbors = getNeighborIndexes(state, Number(x), 1, false, true);
+        const neighbors = getAdjacentIndexes(state, Number(x), 1, false, true);
         neighbors.forEach(neighbor => {
             // Ensure the neighbor is within bounds and not visible
             if (neighbor >= 0 && neighbor < totalTiles && !visibleTiles[neighbor]) {
@@ -249,7 +249,7 @@ export function predictOuterFogTerrain(
     const outerTiles: { [tileIndex: number]: [TerrainType | null, ClimateType | null] } = {};
     fogTiles.forEach(fogIndex => {
         outerTiles[fogIndex] = [fogPredictions[fogIndex][0], fogPredictions[fogIndex][1]];
-        const neighbors = getNeighborIndexes(state, fogIndex, 1, false, true);
+        const neighbors = getAdjacentIndexes(state, fogIndex, 1, false, true);
         neighbors.forEach(neighbor => {
             if (!state._visibleTiles[neighbor] && !fogTiles.includes(neighbor)) {
                 outerTiles[neighbor] = [null, null];
@@ -262,11 +262,11 @@ export function predictOuterFogTerrain(
         const [outerTerrain, outerClimate] = outerTiles[outerIndex];
         const tileIndex = Number(outerIndex);
 
-        let neighbors = getNeighborIndexes(state, tileIndex, 1, false, true);
+        let neighbors = getAdjacentIndexes(state, tileIndex, 1, false, true);
         if(neighbors.length == 0) {
-            neighbors = getNeighborIndexes(state, tileIndex, 2, false, true);
+            neighbors = getAdjacentIndexes(state, tileIndex, 2, false, true);
             if(neighbors.length == 0) {
-                neighbors = getNeighborIndexes(state, tileIndex, 3, false, true);
+                neighbors = getAdjacentIndexes(state, tileIndex, 3, false, true);
             }
         }
 
@@ -339,7 +339,7 @@ function getAllowedNeighbors(state: GameState, tileIndex: number, includeUnexplo
         (isTechUnlocked(pov, TechnologyType.Sailing)?  0.10 : 0) +
         (isTechUnlocked(pov, TechnologyType.Climbing)? 0.10 : 0);
     return shuffleArray(
-        getNeighborIndexes(state, tileIndex, 1, false, includeUnexplored)
+        getAdjacentIndexes(state, tileIndex, 1, false, includeUnexplored)
         // Only if its absolutely visible and steppable, if not then we dont really know what is there
         .filter(x => 
             // isTribeSteppable(state, x) // (cheating)
@@ -445,7 +445,7 @@ export function predictExplorer(state: GameState, tileIndex: number): number[] {
             }
         }
         state._visibleTiles[nextTile] = true;
-        getNeighborIndexes(state, nextTile, 1, false, true).forEach(x => state._visibleTiles[x] = true);
+        getAdjacentIndexes(state, nextTile, 1, false, true).forEach(x => state._visibleTiles[x] = true);
         path.push(nextTile);
         currentTile = nextTile;
     }
@@ -528,7 +528,7 @@ export function predictEnemyCapitalsAndSurroundings(state: GameState): number[] 
     // Step 4: Add surrounding tiles (e.g., range 1 around each capital)
     const adjacentTiles: number[] = [];
     predictedCapitals.forEach(capitalTile => {
-        const neighbors = getNeighborIndexes(state, capitalTile, 1, false, true);
+        const neighbors = getAdjacentIndexes(state, capitalTile, 1, false, true);
         adjacentTiles.push(...neighbors);
     });
 

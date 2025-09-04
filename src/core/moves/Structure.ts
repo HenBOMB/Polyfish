@@ -1,7 +1,7 @@
 import Move, { CallbackResult } from "../move";
 import { MoveType, StructureType } from "../types";
 import { GameState } from "../states";
-import { buildStructure } from "../actions";
+import buildStructure from "../actions/structure/Build";
 
 export default class Structure extends Move {
     constructor(target: number, type: number) {

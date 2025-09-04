@@ -1,6 +1,6 @@
 import { readFileSync } from "fs";
 import { GameState } from "./core/states";
-import { getPovTribe, getUnitAt, isResourceVisible, getMaxHealth, getCityAt, getCityProduction, getRealUnitSettings, isTempleStructure, getNeighborIndexes, getEnemyAt, isTechUnlocked, isAdjacentToEnemy, getRealUnitType, getTribeSPT, getTechSettings, hasEffect } from "./core/functions";
+import { getPovTribe, getUnitAt, isResourceVisible, getMaxHealth, getCityAt, getCityProduction, getRealUnitSettings, isTempleStructure, getAdjacentIndexes, getEnemyAt, isTechUnlocked, isAdjacentToEnemy, getRealUnitType, getTribeSPT, getTechSettings, hasEffect } from "./core/functions";
 import { AbilityType, CaptureType, EffectType, ResourceType, RewardType, StructureType, TechnologyType, UnitType } from "./core/types";
 import Move, { CallbackResult } from "./core/move";
 import { MoveType } from "./core/types";
@@ -348,7 +348,7 @@ export default class AIState {
             case MoveType.Build:
                 const adjStructTypes = StructureSettings[move.getType<StructureType>()].adjacentTypes;
                 if(adjStructTypes) {
-                    const aroundStructs = getNeighborIndexes(newState, move.getSrc(), 1).filter(
+                    const aroundStructs = getAdjacentIndexes(newState, move.getSrc(), 1).filter(
                         x => newState.structures[x] && adjStructTypes.has(newState.structures[x].id)
                     );
                     const perc = aroundStructs.length / MAX_AFFECTABLE; 
@@ -369,11 +369,11 @@ export default class AIState {
             case MoveType.Ability:
                 switch (move.getType<AbilityType>()) {
                     case AbilityType.Boost:
-                        const boosted = getNeighborIndexes(newState, move.getSrc()).filter(x => getUnitAt(oldState, x));
+                        const boosted = getAdjacentIndexes(newState, move.getSrc()).filter(x => getUnitAt(oldState, x));
                         reward += SCORE_ABILITY_BOOST * (boosted.length / MAX_AFFECTABLE);
                         break;
                     case AbilityType.Explode:
-                        const poisoned = getNeighborIndexes(newState, move.getSrc()).filter(x => {
+                        const poisoned = getAdjacentIndexes(newState, move.getSrc()).filter(x => {
                             if(!getEnemyAt(oldState, x)) return false;
                             // Enemy got killed by the poison
                             if(!getEnemyAt(newState, x)) {
@@ -386,7 +386,7 @@ export default class AIState {
                         reward += poisoned? SCORE_ABILITY_EXPLODE[1] * (poisoned.length / MAX_AFFECTABLE) : SCORE_ABILITY_EXPLODE[0];
                         break
                     case AbilityType.HealOthers:
-                        const healed = getNeighborIndexes(newState, move.getSrc()).filter(x => getUnitAt(oldState, x));
+                        const healed = getAdjacentIndexes(newState, move.getSrc()).filter(x => getUnitAt(oldState, x));
                         reward += SCORE_ABILITY_HEAL * (healed.length / MAX_AFFECTABLE);
                         break;
                     case AbilityType.Recover:

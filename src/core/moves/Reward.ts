@@ -1,11 +1,14 @@
-import { getCityAt, getNeighborIndexes, getPovTribe } from "../functions";
+import { getCityAt, getAdjacentIndexes, getPovTribe } from "../functions";
 import Move, { CallbackResult } from "../move";
 import { MoveType, RewardType } from "../types";
 import { GameState } from "../states";
 import { UnitType } from "../types";
 import { TribeSettings } from "../settings/TribeSettings";
 import { predictExplorer } from "../../ai/prediction";
-import { discoverTiles, gainStars, spendStars, summonUnit } from "../actions";
+import { gainStars, spendStars } from "../actions";
+import claimTerritory from "../actions/ClaimTerritory";
+import { discoverTiles } from "../actions/DiscoverTiles";
+import summonUnit from "../actions/units/Summon";
 
 export default class Reward extends Move {
     constructor(src: number, type: number) {
@@ -19,6 +22,8 @@ export default class Reward extends Move {
 
         let rewards = [];
         let undoReward = () => { };
+
+
 
         switch (rewardType) {
             case RewardType.Workshop:
@@ -44,25 +49,27 @@ export default class Reward extends Move {
             case RewardType.PopGrowth:
                 city._population += 3;
                 city._progress += 3;
+                pov._score += 15; // 3 pop x 5 stars each
                 undoReward = () => {
+                    pov._score -= 15;
                     city._progress -= 3;
                     city._population -= 3;
                 }
                 break;
             case RewardType.BorderGrowth:
                 city._borderSize++;
-                const undoDiscover = discoverTiles(state, null, getNeighborIndexes(state, city.tileIndex, 2))!;
-                rewards.push(...undoDiscover.rewards);
+                const undoClaim = claimTerritory(state, getAdjacentIndexes(state, city.tileIndex, 2, undefined, true));
+                rewards.push(...undoClaim.rewards);
                 undoReward = () => {
-                    undoDiscover.undo();
+                    undoClaim.undo();
                     city._borderSize--;
                 }
             break;
             case RewardType.Park:
                 city._production++;
-                pov._score += 300;
+                pov._score += 250;
                 undoReward = () => {
-                    pov._score -= 300;
+                    pov._score -= 250;
                     city._production--;
                 }
                 break;

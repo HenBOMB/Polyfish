@@ -1,5 +1,5 @@
-import { addPopulationToCity } from "./actions";
-import { computeReachablePath, getCityAt, getCityOwningTile, getNeighborIndexes, getPovTribe } from "./functions";
+import addPopulationToCity from "./actions/AddPopulation";
+import { computeReachablePath, getCityAt, getCityOwningTile, getAdjacentIndexes, getPovTribe } from "./functions";
 import Move, { UndoCallback, CallbackResult } from "./move";
 import { GameState, CityState, TribeState } from "./states";
 import { StructureType, TerrainType } from "./types";
@@ -197,7 +197,7 @@ export default class NetworkManager {
 
 
             // I. Explore via ROADS (like Java's Pathfinder on `connectedTiles`)
-            const roadNeighbors = getNeighborIndexes(this.state, currentTileIndex, 1); // Direct adjacency
+            const roadNeighbors = getAdjacentIndexes(this.state, currentTileIndex, 1); // Direct adjacency
             for (const neighborIdx of roadNeighbors) {
                 if (visitedTiles.has(neighborIdx)) continue;
 

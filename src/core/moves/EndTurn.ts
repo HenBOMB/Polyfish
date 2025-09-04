@@ -4,7 +4,8 @@ import { GameState } from "../states";
 import { getPovTribe } from "../functions";
 import { TechnologySettings } from "../settings/TechnologySettings";
 import { StructureSettings } from "../settings/StructureSettings";
-import { destroyStructure, gainStars } from "../actions";
+import { gainStars } from "../actions";
+import { destroyStructure } from "../actions/structure/Destroy";
 
 export default class EndTurn extends Move {
     constructor() {

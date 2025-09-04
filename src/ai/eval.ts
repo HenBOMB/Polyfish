@@ -1,45 +1,81 @@
-import { getDefenseBonus, getPovTerritorry, getPovTribe, getRealUnitSettings, getRealUnitType, getTribeSPT } from "../core/functions";
+import { getClosestEnemyCity, getDefenseBonus, getPovTerritorry, getPovTribe, getRealUnitSettings, getRealUnitType, getTribeSPT, hasEffect, isAdjacentToEnemy, getAdjacentTiles, getAdjacentIndexes, calculateTribeScore } from "../core/functions";
 import Move from "../core/move";
-import { MoveType } from "../core/types";
-import { GameState, StructureState, UnitState } from "../core/states";
-import { UnitType, TechnologyType, CaptureType } from "../core/types";
+import { EffectType, ModeType, MoveType } from "../core/types";
+import { GameState, UnitState } from "../core/states";
+import { CaptureType } from "../core/types";
 import { GMath } from "./gmath";
+import Game from "../game";
 
-export type StageValue = number[];
+// export type StageValue = [number, number];
+
+
+/**
+ * The maximum ideal score an AI can get in the 30 turns perfection gamemode.
+ */
+const MAX_IDEAL_SCORE = 100_000;
 
 /**
  * Minimum amount of moves the AI is forced to play before they can end the turn.
  * NOT PROPERLY IMPLEMENTED
  */
-export const MIN_PLAYED_MOVES: StageValue = [3, 6, 6, 8];
+// const MIN_PLAYED_MOVES: StageValue = [3, 6, 6, 8];
 
 /**
  * The weight of the economy and army score depending on the current stage of the game.
- * EarlyGame, MidGame, EndGame
+ * [EarlyGame, MidGame, EndGame]
+ * [[Economy, Army], ...]
+ * Values always adds up to 1.
  */
-export const STAGE_SCORE: [StageValue, StageValue, StageValue] = [
-    [1.0, 0.8],
-    [0.9, 1.0],
-    [0.5, 1.0],
+const STAGE_SCORE_PERFECTION: [[number, number], [number, number], [number, number]] = [
+    GMath.probabilities(GMath.zeros(2), 0, 0.90),
+    GMath.probabilities(GMath.zeros(2), 0, 0.85),
+    GMath.probabilities(GMath.zeros(2), 0, 0.70),
 ];
+// ! [[0.9, ??], [0.85, ??], [0.70, ??]]
+// ? focus more on the economy rather than the military
+STAGE_SCORE_PERFECTION.forEach(arr => Object.freeze(arr));
+Object.freeze(STAGE_SCORE_PERFECTION);
+// TODO also for Domination
 
 /**
  * The thresholds that determine the stages of the game from the start to end.
- * Adds up to ~1.
+ * Always adds up to 1.
  */
-export const STAGE_THRESH: [number, number, number] = [
-    0.333,
-    0.333,
-    0.333,
+const STAGE_THRESH: [number, number, number] = [
+    0.2, 
+    1 - (0.2 + 0.2), 
+    0.2
 ];
+// ? the early game lasts 20% of the first turns, and the endgame 20% of the last turns
+Object.freeze(STAGE_THRESH);
 
 /**
+ * Calculates the current economy and army multiplies depensing on the game stage
+ * @param state 
+ * @returns [EconomyMult, ArmyMult]
+ */
+function calculateStageValue(state: GameState): [number, number] {
+    const p = state.settings._turn / state.settings.maxTurns;
+
+    if(p < STAGE_THRESH[0]) {
+        return STAGE_SCORE_PERFECTION[0];
+    }
+    else if(p < STAGE_THRESH[1]) {
+        return STAGE_SCORE_PERFECTION[1];
+    }
+    else {
+        return STAGE_SCORE_PERFECTION[2];
+    }
+}
+
+/**
+ * @Obsolete
  * TODO NOT IMPLEMENTED WITH STAGE_THRESH
  * Uses slerp to interpolate between the start game and the end game
  * @param state 
  * @param value 
  */
-export function lerpViaGameStage(state: GameState, value: StageValue): number {
+export function lerpViaGameStage(state: GameState, value: [number, number, number]): number {
     const stage = state.settings._turn / state.settings.maxTurns;
     const t = stage * (value.length - 1);
     const index1 = Math.floor(t);
@@ -49,190 +85,66 @@ export function lerpViaGameStage(state: GameState, value: StageValue): number {
 }
 
 /**
- * Returns a score based on the unit's current on-field attributes.
- * Naval units inherit original their base class type.
+ * Returns a sort-of normalized score based on the unit's current on-field attributes.
+ * This acts as a multiplier on the unit's base strength.
+ * @param state 
  * @param unit 
  */
-export function SCORE_UNIT_POWER(state: GameState, unit: UnitState) {
-    let score = 0;
+export function scoreUnitPower(game: Game, unit: UnitState): number {
+    const state = game.state;
     const settings = getRealUnitSettings(unit);
-    const unitType = getRealUnitType(unit);
-    const isNaval = Boolean(unit._passenger);
+    
+    const n_values = 2;
 
-    // 1.0x (default), 1.5x (some units like defender), or 4.0x (unit in city walls)
-    const defBonus = getDefenseBonus(state, unit);
+    // A unit's value is directly proportional to its health, a 1hp unit is far less valuable
+    // Even its atk is proportional
+    const healthMultiplier = unit._health / settings.health!;
 
-    const { 
-        attack, defense, cost, movement, range, 
-        skills: skillTypes, health: maxHealth, 
-        veteran: isVeteran
-    } = settings;
+    // A unit in a walled city is much stronger
+    // 1.0 (normal), 1.5 (forest, water, etc), 4.0 (city wall)
+    // A unit's maximum defense is 5.0 and bonus is 4.0
+    const defenseValue = (getDefenseBonus(state, unit) * settings.defense) / (4.0 * 5.0); 
 
-    const hp = unit._health;
+    // Status effects
+    let effectMultiplier = 1.0;
+    if (hasEffect(unit, EffectType.Poison)) {
+        // Poison is bad, reduces survivability
+        effectMultiplier *= 0.7; 
+    }
+    if (hasEffect(unit, EffectType.Boost)) {
+        // Boost is a significant advantage cause it boosts attack and defense
+        effectMultiplier *= 1.2; 
+    }
+    // Frozen is complete trash, renders the unit useless for an entire turn
+    if (hasEffect(unit, EffectType.Frozen)) {
+        effectMultiplier *= 0.1;
+    }
+    // Having invisibility is pointless if we are not using it (cloaks)
+    if (hasEffect(unit, EffectType.Invisible)) {
+        // TODO if the unit has an adjacent enemy unit, then its bad because they can see partially see them!
+        // and potentially get revealed and insta-killed
 
-    // EffectType, poisoned, frozen and boosted
-    // poisoned reduces def to 1.0 regardless defBonus
-    // boosted gives +0.5 atk
-    // frozen units cant move or do anything until and a turn is wasted
-    const effect = unit._effects;
+        // But dont include invisible units because we cant actually see them and there is no indicator they are there or can see us.
+        // (eye icon on the enemy unit reveals this so its not cheating)
+        if (isAdjacentToEnemy(state, state.tiles[unit._tileIndex], undefined, false)) {
+            effectMultiplier *= 0.5; 
+        }
+        else {
+            effectMultiplier *= 1.3; 
+        }
+    }
 
-    return score;
+    // Veteran units are more resilient and are worth keeping alive
+    const veteranBonus = 1;//unit._veteran ? 1.15 : 1.0;
+    // Disabled because it only boosts the health and restores it completely, which is handled by healthMultiplier
+
+    // Combine everything
+    let finalScore = healthMultiplier * defenseValue * effectMultiplier * veteranBonus;
+
+    finalScore *= game.values.unitStrength.get(unit._unitType);
+
+    return finalScore / n_values;
 }
-
-/**
- * Multiplier on generally how worth it or good the unit is.
- */
-export const SCORE_UNIT_STRENGTH: Record<UnitType, number> = {
-    [UnitType.None]:        0.0,
-    // Super Units
-    // S tier
-    [UnitType.Shaman]:      15.0,
-    // A tier
-    [UnitType.FireDragon]:  10.0,
-    [UnitType.BabyDragon]:  8.0,
-    [UnitType.DragonEgg]:   7.0,
-    [UnitType.Centipede]:   9.0,
-    [UnitType.Segment]:     5.0,
-    [UnitType.Crab]:        9.0,
-    // B tier
-    [UnitType.Giant]:       7.0,
-    [UnitType.Gaami]:       7.0,
-    // C tier
-    [UnitType.Juggernaut]:  6.0,
-
-    // Spawnable Units
-    // S tier
-    [UnitType.Rider]:       3.2,
-    [UnitType.Hexapod]:     3.1,
-    [UnitType.BattleSled]:  3.0,
-    [UnitType.Amphibian]:   3.0,
-    // A tier
-    [UnitType.Archer]:      2.7,
-    [UnitType.Knight]:      2.6,
-    [UnitType.Cloak]:       2.5,
-    [UnitType.Dinghy]:      2.3,
-    [UnitType.Dagger]:      2.3,
-    [UnitType.Pirate]:      2.3,
-    [UnitType.Polytaur]:    2.2,
-    [UnitType.Rammer]:      2.1,
-    [UnitType.Scout]:       2.0,
-    // B tier
-    [UnitType.Warrior]:     1.9,
-    [UnitType.Defender]:    1.8,
-    [UnitType.Catapult]:    1.7,
-    [UnitType.Kiton]:       1.6,
-    [UnitType.Tridention]:  1.6,
-    [UnitType.Mooni]:       1.6,
-    [UnitType.Raychi]:      1.5,
-    [UnitType.Phychi]:      1.5,
-    [UnitType.Exida]:       1.5,
-    [UnitType.Doomux]:      1.4,
-    // C tier
-    [UnitType.Swordsman]:   0.9,
-    [UnitType.IceArcher]:   0.9,
-    [UnitType.Bomber]:      0.7,
-    // F tier
-    [UnitType.MindBender]:  0.5,
-    [UnitType.IceFortress]: 0.6,
-    [UnitType.Raft]:        0.6,
-};
-
-/**
- * Score based on how good it is in the game.
- */
-export const SCORE_UNIT_TIER: Record<UnitType, number> = {
-    [UnitType.None]:        0,
-    // S tier
-    [UnitType.Shaman]:      3,
-    [UnitType.Rider]:       3,
-    [UnitType.Hexapod]:     3,
-    [UnitType.BattleSled]:  3,
-    [UnitType.Amphibian]:   3,
-    // A tier
-    [UnitType.Archer]:      2,
-    [UnitType.Knight]:      2,
-    [UnitType.Dinghy]:      2,
-    [UnitType.Cloak]:       2,
-    [UnitType.Dagger]:      2,
-    [UnitType.Pirate]:      2,
-    [UnitType.Polytaur]:    2,
-    [UnitType.Rammer]:      2,
-    [UnitType.Scout]:       2,
-    [UnitType.Centipede]:   2,
-    [UnitType.Segment]:     2,
-    [UnitType.FireDragon]:  2,
-    [UnitType.BabyDragon]:  2,
-    [UnitType.DragonEgg]:   2,
-    [UnitType.Crab]:        2,
-    // B tier
-    [UnitType.Warrior]:     1,
-    [UnitType.Defender]:    1,
-    [UnitType.Catapult]:    1,
-    [UnitType.Kiton]:       1,
-    [UnitType.Tridention]:  1,
-    [UnitType.Mooni]:       1,
-    [UnitType.Raychi]:      1,
-    [UnitType.Giant]:       1,
-    [UnitType.Gaami]:       1,
-    [UnitType.Phychi]:      1,
-    [UnitType.Exida]:       1,
-    [UnitType.Doomux]:      1,
-    // C tier
-    [UnitType.Swordsman]:   0.5,
-    [UnitType.IceArcher]:   0.5,
-    [UnitType.Bomber]:      0.5,
-    [UnitType.Juggernaut]:  0.5,
-    // F tier
-    [UnitType.MindBender]:  0,
-    [UnitType.IceFortress]: 0,
-    [UnitType.Raft]:        0,
-};
-
-/**
- * Multiplier on how effective it is closer to enemy city borders
- */
-export const CAPTURE_POTENTIAL: Record<UnitType, number> = {
-    [UnitType.None]:        0.0,
-    [UnitType.Crab]:        5.5,
-    [UnitType.Juggernaut]:  5.4,
-    [UnitType.Giant]:       5.0,
-    [UnitType.Gaami]:       4.0,
-    [UnitType.Shaman]:      4.0,
-    [UnitType.Dinghy]:      2.6,
-    [UnitType.Cloak]:       2.5,
-    [UnitType.Dagger]:      1.7,
-    [UnitType.Pirate]:      1.4,
-    [UnitType.Hexapod]:     2.5,
-    [UnitType.Amphibian]:   2.2,
-    [UnitType.Rider]:       2.0,
-    [UnitType.Tridention]:  2.0,
-    [UnitType.Swordsman]:   1.7,
-    [UnitType.BattleSled]:  1.6,
-    [UnitType.Knight]:      1.4,
-    [UnitType.Polytaur]:    1.3,
-    [UnitType.Warrior]:     1.2,
-    [UnitType.Defender]:    1.1,
-    [UnitType.Rammer]:      1.1,
-    [UnitType.Scout]:       1.1,
-    [UnitType.Archer]:      0.7,
-    [UnitType.Bomber]:      0.6,
-    [UnitType.Catapult]:    0.1,
-    [UnitType.MindBender]:  0.5,
-    [UnitType.Mooni]:       0.6,
-    [UnitType.IceFortress]: 0.9,
-    [UnitType.IceArcher]:   0.6,
-    [UnitType.Kiton]:       1.1,
-    [UnitType.Raychi]:      1.5,
-    [UnitType.Raft]:        0.6,
-    [UnitType.DragonEgg]:   1.0,
-    [UnitType.BabyDragon]:  1.0,
-    [UnitType.FireDragon]:  1.0,
-    [UnitType.Doomux]:      1.0,
-    [UnitType.Phychi]:      1.0,
-    [UnitType.Exida]:       1.0,
-    [UnitType.Centipede]:   1.0,
-    [UnitType.Segment]:     1.0,
-};
 
 /**
  * TODO NOT PEOPERLY IMPLEMENTED (REVISE)
@@ -240,7 +152,7 @@ export const CAPTURE_POTENTIAL: Record<UnitType, number> = {
  * @param move 
  * @returns 
  */
-export function SCORE_MOVE_PRIORITY(move: Move): number {
+export function scoreMovePriority(move: Move): number {
     switch (move.moveType) {
         case MoveType.Capture:
             const captureType = move.getType<CaptureType>();
@@ -277,63 +189,144 @@ export function SCORE_MOVE_PRIORITY(move: Move): number {
 /**
  * Evaluates the established economy for the POV tribe and returns a score.
  * @param state 
+ * @returns A number between 0 and 1
  */
 export function evaluateEconomy(state: GameState): number {    
     let score = 0;
 
     let spt = getTribeSPT(state);
+
     // Cap the SPT with a maximum ideal
     spt = GMath.clamp(spt, 60) / 60;
 
     score += spt;
-    
-    return score;
-}
 
-/**
- * Evaluates the military strength for the POV tribe and returns a score.
- * @param state 
- */
-export function evaluateArmy(state: GameState) {
-    let score = 0;
-    const tribe = getPovTribe(state);
-    
-    // Military strength:
-    // amount of units
-    // type of units
-    // map control (defense & offense)
+    // Add the tribe's score with some maximum if we're playing `Perfection` mode
+    if (state.settings.mode === ModeType.Perfection) {
 
-    const army = tribe._units;
+        score += GMath.clamp(getPovTribe(state)._score, MAX_IDEAL_SCORE) / MAX_IDEAL_SCORE;
 
-    let rawUnitStrength = 0;
-
-    for (let u = 0; u < army.length; u++) {
-        const unit = army[u];
-
-        rawUnitStrength += SCORE_UNIT_TIER[unit._unitType];
-        rawUnitStrength += SCORE_UNIT_STRENGTH[unit._unitType];
-
-        rawUnitStrength += SCORE_UNIT_POWER(state, unit);
-        
+        // 2 is to normalize the value to 0-1, since we've added the spt (1) and tribe score (2)
+        return score / 2;
     }
 
     return score;
 }
 
 /**
+ * Evaluates the military strength for the POV tribe and returns a score.
+ * @param state 
+ * @returns A number between 0 and 1
+ */
+export function evaluateArmy(game: Game): number {
+    const state = game.state;
+    const povTribe = getPovTribe(state);
+    // const povTerritory = getPovTerritorry(state);
+
+    let armyScore = 0;
+    let captureScore = 0;
+    let tilesControlled = new Set();
+
+    // Calculate the total army score
+    for (let i = 0; i < povTribe._units.length; i++) {
+        const unit = povTribe._units[i];
+
+        // Army Strength //
+
+        // Calculate raw power on the current battlefield
+        armyScore += scoreUnitPower(game, unit);
+
+        // Calculate map control and positioning
+        const control = getAdjacentIndexes(state, unit._tileIndex);
+
+        for (let i = 0; i < control.length; i++) {
+            if (!tilesControlled.has(state.tiles[control[i]].tileIndex)) {
+                tilesControlled.add(state.tiles[control[i]].tileIndex);
+            }
+        }
+
+        // Capture Potential //
+
+        // Search in a maximum of 6 tiles
+        const closestData = getClosestEnemyCity(state, unit._tileIndex, 6);
+        
+        // If there are no cities, then there will never be one for any of our units
+        if (!closestData) {
+            break;
+        }
+
+        const tile = state.tiles[closestData[0].tileIndex];
+        // Add a score bonus for being close, the bonus diminishes with distance
+        // Add a small bonus if its a capital
+        captureScore += GMath.clamp(
+            game.values.capturePotential.get(getRealUnitType(unit)) 
+                + (tile.capitalOf > 0? 0.2 : 0) ,
+            1
+        ) / (closestData[1] + 1);
+    }
+
+    // Control maximally 80% of the map
+    const maxControl = state.settings.size * 0.8;
+    let controlScore = GMath.clamp(tilesControlled.size, maxControl);
+
+    // Normalize all scores
+    armyScore /= povTribe._units.length;
+    captureScore /= povTribe._units.length;
+    controlScore /= maxControl;
+
+    // The final army score is a combination of the raw power of our units and their strategic positioning
+    const finalScore = 
+        0.6 * armyScore + 
+        0.15 * captureScore + 
+        0.25 * controlScore;
+
+    return finalScore;
+}
+
+/**
  * Evaluates the entire state of the game for the POV tribe and returns a score.
  * @param state 
  */
-export function evaluateState(state: GameState): [number, number, number] {
-    let eco = evaluateEconomy(state);
-    let army = evaluateArmy(state);
-    let score = 0;
+export function evaluateState(game: Game): [number, number, number] {
+    const state = game.state;
+    const ecoScore = evaluateEconomy(state);
+    const armyScore = evaluateArmy(game);
 
-    return [eco, army, score];
+    // Going with perfection gamemode for now, simpler but essential for the future Domination gamemode
+    // We should only get the opponent's top score and use that as reference
+
+    let topOppScore = 0;
+
+    for (const owner in state.tribes) {
+        if (state.settings._pov === Number(owner)) {
+            continue;
+        }
+        
+        const tribeScore = state.tribes[owner]._score;
+        
+        if (tribeScore > topOppScore) {
+            topOppScore = tribeScore;
+        }
+    }
+
+    // A 0 value means there are no opponents left
+    if (topOppScore !== 0) {
+        topOppScore = GMath.clamp(topOppScore, MAX_IDEAL_SCORE) / MAX_IDEAL_SCORE;
+    }
+
+    const [ecoMult, armyMult] = calculateStageValue(state);
+    
+    // TODO use stage values?
+    const myScore = 
+        ecoMult * ecoScore + 
+        armyMult * armyScore;
+
+    // 0.1 is a small boost to our own score
+    const finalScore = (myScore - topOppScore) + (myScore * 0.01)
+
+    return [
+        ecoScore, 
+        armyScore, 
+        finalScore
+    ];
 }
-
-Object.freeze(SCORE_UNIT_STRENGTH);
-Object.freeze(STAGE_SCORE);
-Object.freeze(STAGE_THRESH);
-Object.freeze(SCORE_UNIT_TIER);
-Object.freeze(CAPTURE_POTENTIAL);

@@ -60,6 +60,10 @@ export interface UnitState {
 	_moved: boolean;
 	_attacked: boolean;
 	_effects: Set<EffectType>;
+	_meta?: {
+		// TODO properly implement
+		converted: boolean;
+	}
 }
 
 export interface RewardState {

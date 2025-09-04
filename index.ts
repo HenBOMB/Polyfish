@@ -3,16 +3,16 @@ import { join } from "path";
 import GameLoader from "./src/core/gameloader";
 import AIState, { MODEL_CONFIG } from "./src/aistate";
 import { ModeType, TribeType } from "./src/core/types";
-import { MCTS, SelfPlay } from "./src/ai/mcts";
 import { spawn } from "child_process";
 import { DefaultGameSettings, GameSettings, GameState } from "./src/core/states";
 import Game from "./src/game";
 import Move from "./src/core/move";
-import { Logger } from "./src/ai/logger";
-import { sampleFromDistribution } from "./src/ai/util";
+// import { sampleFromDistribution } from "./src/polyfish/util";
 import { MoveGenerator, Prediction } from "./src/core/moves";
 import main from "./src/main";
 import { getPovTribe } from "./src/core/functions";
+import { Logger } from "./src/ai/logger";
+import { SelfPlay } from "./src/ai/mcts";
 
 const app = express();
 const py = spawn(".venv/bin/python3", ["polyfish/main.py"]);
@@ -79,7 +79,7 @@ app.get('/', (req: Request, res: Response) => {
 });
 
 app.get('/live', async (req: Request, res: Response) => {
-    loader.fow = (req.query.fow? true : false) || true;
+    loader.fow = (req.query.fow == 'true' || req.query.fow == undefined? true : false) || true;
     await loader.loadLive();
     const state = loader.currentState;
     Logger.clear();
@@ -286,4 +286,5 @@ app.listen(3000, async () => {
     // await loader.loadRandom();
     // const prediction = await predict(loader.currentState);
     // console.log(MoveGenerator.fromPrediction(loader.currentState, prediction));
+    
 });
