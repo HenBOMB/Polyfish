@@ -31,12 +31,12 @@ export default class Values<T extends string | number | symbol> {
     }
 
     load(name: string = this.name): void {
-        const folder = `${DATA_DIR}/${this.tribeType}`;
+        const folder = `${DATA_DIR}/${TribeType[this.tribeType]}`;
         const path = `${folder}/${name}.json`;
 
         if(!existsSync(path)) {
             // throw new Error(`No such file: ${path}`);
-            console.warn(`No load file found, generating from recommendations`);
+            console.warn(`No load file "${this.name}" found for ${TribeType[this.tribeType]}, generating from recommendations`);
             try {
                 this.recommend();
             }
@@ -57,13 +57,13 @@ export default class Values<T extends string | number | symbol> {
     }
 
     save(name: string = this.name): void {
-        const folder = `${DATA_DIR}/${this.tribeType}`;
+        const folder = `${DATA_DIR}/${TribeType[this.tribeType]}`;
 
         if(!existsSync(folder)) {
             mkdirSync(folder)
         }
 
-        writeFileSync(`${folder}/${name}.json`, JSON.stringify(this.values));
+        writeFileSync(`${folder}/${name}.json`, JSON.stringify(this.values, null, 2));
     }
 
     recommend(): void {

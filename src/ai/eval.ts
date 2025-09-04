@@ -227,8 +227,12 @@ export function evaluateArmy(game: Game): number {
     let captureScore = 0;
     let tilesControlled = new Set();
 
+    // If we dont add this then at lower unit amounts there will be biased higher scores
+    const maxUnitCount = 20;
+    // It may skip important units if the tribe has more than this amount, if so, just increase this value
+
     // Calculate the total army score
-    for (let i = 0; i < povTribe._units.length; i++) {
+    for (let i = 0; i < GMath.clamp(povTribe._units.length, maxUnitCount); i++) {
         const unit = povTribe._units[i];
 
         // Army Strength //
@@ -267,11 +271,12 @@ export function evaluateArmy(game: Game): number {
 
     // Control maximally 80% of the map
     const maxControl = state.settings.size * 0.8;
+    
     let controlScore = GMath.clamp(tilesControlled.size, maxControl);
 
     // Normalize all scores
-    armyScore /= povTribe._units.length;
-    captureScore /= povTribe._units.length;
+    armyScore /= maxUnitCount;
+    captureScore /= maxUnitCount;
     controlScore /= maxControl;
 
     // The final army score is a combination of the raw power of our units and their strategic positioning

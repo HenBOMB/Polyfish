@@ -36,7 +36,10 @@ export default class GameLoader {
         }
     }
 
-    public setSettings(settings: any) {
+    public setSettings(settings?: any) {
+        if (!settings) {
+            return;
+        }
         this.settings = {
             ...DefaultGameSettings,
             seed: DEBUG_SEED,

@@ -1,4 +1,4 @@
-import { GameState, TileState, TribeState } from "./core/states";
+import { GameSettings, GameState, TileState, TribeState } from "./core/states";
 import GameLoader, { STARTING_OWNER_ID } from "./core/gameloader";
 import { MoveGenerator } from "./core/moves";
 import { getCityProduction, getPovTribe, hasEffect, isGameOver } from "./core/functions";
@@ -15,7 +15,7 @@ import CapturePotentialValues from "./ai/values/CapturePotential";
 
 export default class Game {
     // initialState: GameState;
-    readonly loader: GameLoader;
+    private loader: GameLoader;
     state: GameState;
     network: NetworkManager;
     poser: PoseManager;
@@ -31,7 +31,7 @@ export default class Game {
         this.network = null as any;
         // this.poser = new PoseManager();
         this.poser = null as any;
-        console.log(`[Game] Poser disabled`)
+        console.log(`[Game] Poser disabled`);
         this.values = { } as any;
     }
 
@@ -74,7 +74,19 @@ export default class Game {
         };
     }
 
-    load(state: GameState) {
+    public async loadRandom(settings?: any | GameSettings) {
+        this.loader.setSettings(settings);
+        await this.loader.loadRandom();
+        this.load(this.loader.currentState);
+    }
+
+    public async loadLive(settings?: any | GameSettings) {
+        this.loader.setSettings(settings);
+        await this.loader.loadRandom();
+        this.load(this.loader.currentState);
+    }
+
+    public load(state: GameState) {
         // this.initialState = state;
         // this.network = new NetworkManager(this.state);
         // this.reset();

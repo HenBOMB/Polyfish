@@ -13,6 +13,7 @@ import main from "./src/main";
 import { getPovTribe } from "./src/core/functions";
 import { Logger } from "./src/ai/logger";
 import { SelfPlay } from "./src/ai/mcts";
+import { evaluateState } from "./src/ai/eval";
 
 const app = express();
 const py = spawn(".venv/bin/python3", ["polyfish/main.py"]);
@@ -80,17 +81,14 @@ app.get('/', (req: Request, res: Response) => {
 
 app.get('/live', async (req: Request, res: Response) => {
     const fow = req.query.fow == 'true' || req.query.fow == undefined? true : false;
-    currentGame.loader.setSettings({
-        fow
-    });
-    await currentGame.loader.loadLive();
+    await currentGame.loadLive({ fow });
     const state = currentGame.state;
     Logger.clear();
     // main(loader);
     res.json({
         state,
         // obs: AIState.extract(state),
-        info: currentGame.loader.getSettings(),
+        // info: currentGame.loader.getSettings(),
         reward: 0,
         done: false,
         truncated: false,
@@ -108,8 +106,7 @@ app.get('/random', async (req: Request, res: Response) => {
     if(req.query.tribes) {
         settings.tribes = String(req.query.tribes || "Imperius,Bardur").split(',').map(x => TribeType[x.trim() as keyof typeof TribeType]) as TribeType[];
     }
-    currentGame.loader.setSettings(settings);
-    await currentGame.loader.loadRandom();
+    await currentGame.loadRandom(settings);
     const state = currentGame.state;
     Logger.clear();
     // main(loader);
@@ -287,9 +284,14 @@ app.listen(3000, async () => {
     Logger.clear();
     console.log(`INITIALIZED ON PORT 3000\n`);
     console.log('FOW DISABLED\n');
+    
+    // RUN SOME TESTS
+    await currentGame.loadRandom();
+
+    console.log(evaluateState(currentGame));
+
     // main(loader);
     // await loader.loadRandom();
     // const prediction = await predict(loader.currentState);
     // console.log(MoveGenerator.fromPrediction(loader.currentState, prediction));
-    
 });

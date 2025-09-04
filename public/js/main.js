@@ -747,6 +747,19 @@ async function mcts(e) {
     e.disabled = false;
 }
 
+async function brute(e) {
+    e.disabled = true;
+    // const result = await fetch('/brute', { method: 'POST', body: JSON.stringify({
+    //     state, 
+    //     mcts: true,
+    //     iterations: 1000,
+    //     temperature: 0.8,
+    // }), headers: { 'Content-Type': 'application/json' } }).then(x => x.json());
+    // console.log(result.move);
+    // console.log(result.probs);
+    e.disabled = false;
+}
+
 fetch('/random?fow=false&size=9&tribes=Imperius,Imperius').then(x => x.json()).then(x => {
 // fetch('/live?fow=false').then(x => x.json()).then(x => {
     state = x.state;
