@@ -294,40 +294,57 @@ export function evaluateArmy(game: Game): number {
  */
 export function evaluateState(game: Game): [number, number, number] {
     const state = game.state;
+    
+    const pov = state.settings._pov;
+    const [ecoMult, armyMult] = calculateStageValue(state);
+
     const ecoScore = evaluateEconomy(state);
     const armyScore = evaluateArmy(game);
+    const myScore = 
+        ecoMult * ecoScore + 
+        armyMult * armyScore;
 
     // Going with perfection gamemode for now, simpler but essential for the future Domination gamemode
     // We should only get the opponent's top score and use that as reference
 
     let topOppScore = 0;
+    let topOppTribeScore = 0;
 
     for (const owner in state.tribes) {
         if (state.settings._pov === Number(owner)) {
             continue;
         }
         
-        const tribeScore = state.tribes[owner]._score;
-        
+        state.settings._pov = Number(owner);
+        const tribeEcoScore = evaluateEconomy(state);
+        const tribeArmyScore = evaluateArmy(game);
+        const tribeScore = 
+            tribeEcoScore * ecoScore + 
+            tribeArmyScore * armyScore;
+
         if (tribeScore > topOppScore) {
             topOppScore = tribeScore;
+            topOppTribeScore = getPovTribe(state)._score;
         }
     }
+
+    state.settings._pov = pov;
 
     // A 0 value means there are no opponents left
     if (topOppScore !== 0) {
         topOppScore = GMath.clamp(topOppScore, MAX_IDEAL_SCORE) / MAX_IDEAL_SCORE;
     }
-
-    const [ecoMult, armyMult] = calculateStageValue(state);
     
     // TODO use stage values?
-    const myScore = 
-        ecoMult * ecoScore + 
-        armyMult * armyScore;
+
+    console.log('-- Evaluation Stats --');
+    console.log(`our tribe score: ${getPovTribe(state)._score}`);
+    console.log(`top opponent tribe score: ${topOppTribeScore}`);
+    console.log(`our score: ${myScore}`);
+    console.log(`top opponent score: ${topOppScore}`);
 
     // 0.1 is a small boost to our own score
-    const finalScore = (myScore - topOppScore) + (myScore * 0.01)
+    const finalScore = (myScore - topOppScore);// + (myScore * 0.01)
 
     return [
         ecoScore, 
