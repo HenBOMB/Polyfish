@@ -1,4 +1,4 @@
-import { GameSettings, GameState, TileState, TribeState } from "./core/states";
+import { GameSettings, GameState, PartialGameSettings, TileState, TribeState } from "./core/states";
 import GameLoader, { STARTING_OWNER_ID } from "./core/gameloader";
 import { MoveGenerator } from "./core/moves";
 import { getCityProduction, getPovTribe, hasEffect, isGameOver } from "./core/functions";
@@ -88,12 +88,12 @@ export default class Game {
         return clonedState;
     }
 
-    public async loadRandom(settings?: any | GameSettings) {
+    public async loadRandom(settings?: PartialGameSettings) {
         await this.loader.loadRandom(settings);
         this.load(this.loader.currentState);
     }
 
-    public async loadLive(settings?: any | GameSettings) {
+    public async loadLive(settings?: PartialGameSettings) {
         await this.loader.loadRandom(settings);
         this.load(this.loader.currentState);
     }
@@ -171,7 +171,10 @@ export default class Game {
                 this.state.settings._pendingRewards.push(...result.rewards);
             }
 
+            this.state.settings._recentMoves.push(move.moveType);
+
             undo = () => {
+                this.state.settings._recentMoves.pop()
                 this.state.settings._pendingRewards = oldRewards;
                 undoDiscover();
                 result.undo();

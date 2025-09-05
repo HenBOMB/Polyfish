@@ -7,21 +7,21 @@ import { MCTS } from "./mctsCpu";
 
 type StopFunction = 'lol';
 
-type SettingsMCTSOptional = {
+type PartialMCTSSEttings = {
     depth?: number;
     deterministic?: boolean;
     dirichlet?: boolean;
     cPuct?: number;
 }
 
-type SettingsMCTS = {
+type MCTSSettings = {
     depth: number;
     deterministic: boolean;
     dirichlet: boolean;
     cPuct: number;
 }
 
-function parseSettings(settings?: SettingsMCTSOptional): SettingsMCTS {
+function parseSettings(settings: PartialMCTSSEttings | null = null): MCTSSettings {
     return {
         depth: 1000,
         deterministic: false,
@@ -33,7 +33,7 @@ function parseSettings(settings?: SettingsMCTSOptional): SettingsMCTS {
 
 export function CalculateBestMove(
     game: Game, 
-    settings?: SettingsMCTSOptional
+    settings?: PartialMCTSSEttings
 ): [number, number, number, number] {
     const { depth, cPuct, dirichlet, deterministic } = parseSettings(settings);
 
@@ -57,15 +57,15 @@ export function CalculateBestMove(
 /**
  * 
  * @param game The game class in use
- * @param turnsAhead Amount of turns (i*tribeCount) to search and return, set to -1 to let the AI decide based on the current game stage
+ * @param turnsAhead Amount of turns (i*tribeCount) to return moves for
  * @param settings Settings for the MCTS solver
  * @returns 
  */
 export function CalculateBestMoves(
     game: Game,
-    turnsAhead: number,
+    turnsAhead=1,
     // stopFn: StopFunction = 'limit',
-    settings?: SettingsMCTS
+    settings: PartialMCTSSEttings | null = null
 ): [Move[], number, number, number] {
     const { depth, cPuct, dirichlet, deterministic } = parseSettings(settings);
     const mcts = new MCTS(game, cPuct, dirichlet);
@@ -75,12 +75,16 @@ export function CalculateBestMoves(
     const bestMoves: Move[] = [];
 
     console.log('[BRUTE] Started loop');
-    let _remaining = turnsAhead;
+    let _remaining = turnsAhead + 1;
     let _prevPov = 0;
 
-    while (!isGameOver(state) && state.settings._turn <= maxTurn && _remaining > 0) {
+    while (!isGameOver(state) && state.settings._turn <= maxTurn) {
         if (_prevPov != state.settings._pov) {
-            console.log(`[BRUTE-loop] ${TribeType[getPovTribe(state).tribeType]}'s turn`);
+            _remaining--;
+            if(_remaining < 0) {
+                break;
+            }
+            console.log(`\n${TribeType[getPovTribe(state).tribeType]}'s turn`);
             _prevPov = state.settings._pov;
         }
 
@@ -93,25 +97,30 @@ export function CalculateBestMoves(
         
         // careful, cloning is expensive
         const oldState = game.cloneState();
+        const oldEval = evaluateState(game);
         const playData = game.playMove(bestMoveIndex);
 
-        if(!playData) {
+        if (!playData) {
             break;
         }
         
         const [ playedMove, undo ] = playData;
         
-        console.log('[BRUTE-loop] played', playData[0].stringify(oldState, state));
+        const newEval = evaluateState(game);
+        console.log('- played', playData[0].stringify(oldState, state));
+        const diff = newEval[2] - oldEval[2];
+        if (diff != 0) {
+            console.log(`> score ${diff > 0? '+' : ''}${diff.toFixed(3)}`);
+        }
 
         if (playedMove.moveType === MoveType.EndTurn) {
-            _remaining--;
             // TODO -->
             // We cant play the enemies turns because that would give us access to their entire POV and kill the FOW
             // BUT since we're not playing with FOW, we can!
 
             if (state.settings.fow) {
                 console.log(state.settings);
-                console.error("[BRUTE-loop] FOW not supported... yet!");
+                console.error("FOW not supported... yet!");
                 break
             }
             else {
@@ -123,7 +132,8 @@ export function CalculateBestMoves(
 
         bestMoves.push(playedMove);
 
-        undoChain.push(undo);
+        // Backwards so it undoes properly forward
+        undoChain.unshift(undo);
     }
 
     if (isGameOver(state)) {

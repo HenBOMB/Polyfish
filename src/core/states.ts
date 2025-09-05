@@ -141,11 +141,19 @@ export interface GameState {
 }
 
 export interface GameSettings { 
+	size: number; 
+	mode: ModeType; 
+	maxTurns: number; 
+	tribes: TribeType[];
+	fow: boolean;
+}
+
+export interface PartialGameSettings { 
 	size?: number; 
 	mode?: ModeType; 
 	maxTurns?: number; 
-	tribes: TribeType[];
-	fow: boolean;
+	tribes?: TribeType[];
+	fow?: boolean;
 }
 
 export const DefaultGameSettings: Readonly<GameSettings> = {

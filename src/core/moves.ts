@@ -270,8 +270,10 @@ export class MoveGenerator {
 
 	static legal(state: GameState): Move[] {
 		if(state.settings._pendingRewards.length) {
-			return state.settings._pendingRewards;
+			// Return a copy to prevent the game from mutating it and causing madness
+			return state.settings._pendingRewards.slice();
 		}
+		
 		const moves: Move[] = [new EndTurn()];
 
 		ArmyMovesGenerator.all(state, moves);

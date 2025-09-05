@@ -10,7 +10,7 @@ import {
     TribeType,
     UnitType,
 } from "./types";
-import { UnitState, CityState, GameState, TribeState, TileState, ResourceState, StructureState, DiplomacyRelationState, GameSettings, DefaultGameSettings } from "./states";
+import { UnitState, CityState, GameState, TribeState, TileState, ResourceState, StructureState, DiplomacyRelationState, GameSettings, DefaultGameSettings, PartialGameSettings } from "./states";
 import { isResourceVisible, getAdjacentTiles, getAdjacentIndexes, isWaterTerrain, isIceTerrain, calculateInitialTribeScore, getHomeCity } from "./functions";
 import { readFileSync, writeFileSync } from "fs";
 import { UnitSettings } from "./settings/UnitSettings";
@@ -24,13 +24,13 @@ export const MAX_SEED = 10;
 // Standard max turns when loaded live games
 export const MAX_TURNS = 50;
 
-function parseSettings(settings?: GameSettings): GameSettings {
+function parseSettings(settings?: PartialGameSettings | GameSettings): GameSettings {
     settings = {
         ...DefaultGameSettings,
         ...(settings || {})
     };
     settings.size = Number(settings.size);
-    return settings;
+    return settings as GameSettings;
 }
 
 export default class GameLoader {
@@ -454,8 +454,8 @@ export default class GameLoader {
         ].map(x => x.join('')).join(';');
     }
 
-    public async loadRandom(settings?: GameSettings, seed?: number, verbose = true) {
-        settings = parseSettings(settings);
+    public async loadRandom(psettings?: PartialGameSettings, seed?: number, verbose = true) {
+        const settings = parseSettings(psettings);
         // Safeguard for inconsistency map generation
         let tries = 1000
         seed = seed? seed : Math.floor(Math.random() * MAX_SEED);

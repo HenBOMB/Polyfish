@@ -23,8 +23,6 @@ export default class Reward extends Move {
         let rewards = [];
         let undoReward = () => { };
 
-
-
         switch (rewardType) {
             case RewardType.Workshop:
                 city._production++;

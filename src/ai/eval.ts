@@ -146,9 +146,23 @@ export function scoreUnitPower(game: Game, unit: UnitState): number {
     return finalScore / n_values;
 }
 
+const MOVE_PRIORITY_MAP: Record<MoveType, number> = {
+    [MoveType.Attack]:   6.0,
+    [MoveType.Step]:     5.0,
+    [MoveType.Ability]:  5.0,
+    [MoveType.Summon]:   3.0,
+    [MoveType.EndTurn]:  2.5,
+    [MoveType.Harvest]:  2.0,
+    [MoveType.Build]:    2.0,
+    [MoveType.Reward]:   1.0,
+    [MoveType.Research]: 0.0,
+    [MoveType.None]:     0.0,
+    [MoveType.Capture]:  0.0,
+}
+Object.freeze(MOVE_PRIORITY_MAP);
+
 /**
- * TODO NOT PEOPERLY IMPLEMENTED (REVISE)
- * Simple heuristic to weigh a move. EndTurn is always mid priority.
+ * Simple heuristic to weigh a move.
  * @param move 
  * @returns 
  */
@@ -157,33 +171,20 @@ export function scoreMovePriority(move: Move): number {
         case MoveType.Capture:
             const captureType = move.getType<CaptureType>();
             if(captureType == CaptureType.City) {
-                return 20;
+                return 10;
             }
             else if(captureType == CaptureType.Village) {
-                return 10;
-            }
-            else if(captureType == CaptureType.Ruins || captureType == CaptureType.Starfish) {
-                return 10;
-            }
-            else {
                 return 9;
             }
-        case MoveType.Ability:
-            return 9;
-        case MoveType.Step:
-            return 7;
-        case MoveType.Attack:
-            return 6;
-        case MoveType.Summon:
-            return 5;
-        case MoveType.Harvest:
-            return 7;
-        case MoveType.Build:
-            return 7;
-        case MoveType.Research:
-            return 5;
+            else if(captureType == CaptureType.Ruins || captureType == CaptureType.Starfish) {
+                return 8;
+            }
+            else {
+                return 7;
+            }
+        default:
+            return MOVE_PRIORITY_MAP[move.moveType];
     }
-    return 1;
 }
 
 /**
@@ -307,30 +308,30 @@ export function evaluateState(game: Game): [number, number, number] {
     // Going with perfection gamemode for now, simpler but essential for the future Domination gamemode
     // We should only get the opponent's top score and use that as reference
 
-    let theirScore = 0;
-    let theirEcoScore = 0;
-    let theirArmyScore = 0;
-    let theirTribeScore = 0;
+    // let theirScore = 0;
+    // let theirEcoScore = 0;
+    // let theirArmyScore = 0;
+    // let theirTribeScore = 0;
 
-    for (const owner in state.tribes) {
-        if (state.settings._pov === Number(owner)) {
-            continue;
-        }
+    // for (const owner in state.tribes) {
+    //     if (state.settings._pov === Number(owner)) {
+    //         continue;
+    //     }
         
-        state.settings._pov = Number(owner);
-        const _theirEcoScore = evaluateEconomy(state);
-        const _theirArmyScore = evaluateArmy(game);
-        const curScore = 
-            ecoMult * _theirEcoScore + 
-            armyMult * _theirArmyScore;
+    //     state.settings._pov = Number(owner);
+    //     const _theirEcoScore = evaluateEconomy(state);
+    //     const _theirArmyScore = evaluateArmy(game);
+    //     const curScore = 
+    //         ecoMult * _theirEcoScore + 
+    //         armyMult * _theirArmyScore;
 
-        if (curScore > theirScore) {
-            theirScore = curScore;
-            theirTribeScore = getPovTribe(state)._score;
-            theirEcoScore = _theirEcoScore;
-            theirArmyScore = _theirArmyScore;
-        }
-    }
+    //     if (curScore > theirScore) {
+    //         theirScore = curScore;
+    //         theirTribeScore = getPovTribe(state)._score;
+    //         theirEcoScore = _theirEcoScore;
+    //         theirArmyScore = _theirArmyScore;
+    //     }
+    // }
 
     state.settings._pov = pov;
 
@@ -339,20 +340,34 @@ export function evaluateState(game: Game): [number, number, number] {
     //     theirScore = GMath.clamp(theirScore, MAX_IDEAL_SCORE) / MAX_IDEAL_SCORE;
     // }
     
-    // TODO use stage values?
-
-    // console.log('\n--Evaluation--')
-    // console.log(`my tribe score: ${getPovTribe(state)._score}`);
+    // // console.log('\n--Evaluation--')
+    // // console.log(`my tribe score: ${getPovTribe(state)._score}`);
     // // console.log(`my eco score: ${myEcoScore.toFixed(4)}`);
     // // console.log(`my army score: ${myArmyScore.toFixed(4)}`);
-    // console.log(`their tribe score: ${theirTribeScore}`);
+    // // console.log(`their tribe score: ${theirTribeScore}`);
     // // console.log(`their eco score: ${theirEcoScore.toFixed(4)}`);
     // // console.log(`their army score: ${theirArmyScore.toFixed(4)}`);
-    // console.log(`my score: ${myScore.toFixed(4)}`);
-    // console.log(`their score: ${theirScore.toFixed(4)}`);
+    // // console.log(`my score: ${myScore.toFixed(4)}`);
+    // // console.log(`their score: ${theirScore.toFixed(4)}`);
 
+    // disabled because it doesnt work with mcts
     // 0.1 is a small boost to our own score
-    const finalScore = (myScore - theirScore);// + (myScore * 0.01)
+    // let finalScore = (myScore - theirScore);
+    let finalScore = myScore;
+    // let finalScore = (myScore + theirScore) > 0 
+    //     ? (myScore / (myScore + theirScore)) * 2 - 1 
+    //     : 0;
+
+    // lower the score gradually the closer we get to the end
+    // this prevents the ai from playing good moves late
+    const turn = state.settings._turn;
+    const maxTurns = state.settings.maxTurns;
+    const turnInverse = Math.max(
+        1 / maxTurns, 
+        1 - Math.min(turn, maxTurns) / maxTurns
+    );
+
+    finalScore *= turnInverse;
 
     // console.log(`net score: ${finalScore}`);
 

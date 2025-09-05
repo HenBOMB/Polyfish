@@ -296,17 +296,21 @@ app.listen(3000, async () => {
     console.log(`INITIALIZED ON PORT 3000\n`);
     
     // RUN SOME TESTS
-    await currentGame.loadRandom();
+    await currentGame.loadRandom({ fow: false, tribes: [TribeType.Imperius, TribeType.Bardur] });
 
     // console.log(evaluateState(currentGame));
     
     const moves = MoveGenerator.legal(currentGame.state);
-    console.log(moves.length);
     
-    // const [ bestMoves ] = CalculateBestMoves(
-    //     currentGame,
-    //     2
-    // );
+    const [ bestMoves ] = CalculateBestMoves(
+        currentGame,
+        1,
+        { depth: 1000, cPuct: 1.0 }
+    );
+
+    // TODO why is it picking explorer over workshop?
+    // workshop gives +0.015 guarenteed!
+    // explorer gives nothing cause all tiles have already been explored!
 
     // console.log(moves[bestMove].stringify(currentGame.state, currentGame.state));
 
