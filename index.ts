@@ -80,6 +80,16 @@ app.get('/', (req: Request, res: Response) => {
     res.sendFile(join(process.cwd(), "public", "index.html"));
 });
 
+app.get('/current', async (req: Request, res: Response) => {
+    const state = currentGame.state;
+    res.json({
+        state,
+        reward: 0,
+        done: false,
+        truncated: false,
+    });
+});
+
 app.get('/live', async (req: Request, res: Response) => {
     const fow = req.query.fow == 'true' || req.query.fow == undefined? true : false;
     await currentGame.loadLive({ fow });
@@ -108,7 +118,7 @@ app.get('/random', async (req: Request, res: Response) => {
         settings.tribes = String(req.query.tribes || "Imperius,Bardur").split(',').map(x => TribeType[x.trim() as keyof typeof TribeType]) as TribeType[];
     }
     await currentGame.loadRandom(settings);
-    const state = currentGame.state;
+    const state = currentGame.state;    
     Logger.clear();
     // main(loader);
     res.json({
@@ -284,7 +294,6 @@ app.post('/train', async (req: Request, res: Response) => {
 app.listen(3000, async () => {
     Logger.clear();
     console.log(`INITIALIZED ON PORT 3000\n`);
-    console.log('FOW DISABLED\n');
     
     // RUN SOME TESTS
     await currentGame.loadRandom();
@@ -294,15 +303,12 @@ app.listen(3000, async () => {
     const moves = MoveGenerator.legal(currentGame.state);
     console.log(moves.length);
     
-    const [ [ bestMove ] ] = CalculateBestMoves(
-        currentGame,
-        1_000,
-        false,
-        false,
-        1.5
-    );
+    // const [ bestMoves ] = CalculateBestMoves(
+    //     currentGame,
+    //     2
+    // );
 
-    console.log(moves[bestMove].stringify(currentGame.state, currentGame.state));
+    // console.log(moves[bestMove].stringify(currentGame.state, currentGame.state));
 
     // main(loader);
     // await loader.loadRandom();

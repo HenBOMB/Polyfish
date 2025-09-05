@@ -49,7 +49,7 @@ export default class Game {
             this.state.tribes[i + 1].hash = BigInt(hashes[i]);
         }
 
-        return {
+        const clonedState = {
             _visibleTiles: { ...copied._visibleTiles },
             resources:     { ...copied.resources },
             structures:    { ...copied.structures },
@@ -82,17 +82,19 @@ export default class Game {
                 }
             }), {}),
         };
+
+        (clonedState as any)._hiddenResources = (this.state as any)._hiddenResources;
+
+        return clonedState;
     }
 
     public async loadRandom(settings?: any | GameSettings) {
-        this.loader.setSettings(settings);
-        await this.loader.loadRandom();
+        await this.loader.loadRandom(settings);
         this.load(this.loader.currentState);
     }
 
     public async loadLive(settings?: any | GameSettings) {
-        this.loader.setSettings(settings);
-        await this.loader.loadRandom();
+        await this.loader.loadRandom(settings);
         this.load(this.loader.currentState);
     }
 
@@ -135,6 +137,10 @@ export default class Game {
         const legal = MoveGenerator.legal(this.state);
         const move = typeof moveOrIndex == "number" ? legal[moveOrIndex] : moveOrIndex;
 
+        if(!move) {
+            console.log(moveOrIndex, legal.length);
+            throw new Error('Move is undefiend!');
+        }
         // console.log(`[Game] legal: ${legal.length}`);
         // console.log(`[Game] playing ${moveOrIndex} -> ${move?.stringify(this.state, this.state) || '???'}`);
         
@@ -182,7 +188,7 @@ export default class Game {
     /**
      * Ends the current tribe's turn
      */
-    endTurn(): UndoCallback {
+    private endTurn(): UndoCallback {
         const state = this.state;
         const oldpov = state.settings._pov;
         const oldTurn = state.settings._turn;
@@ -199,7 +205,7 @@ export default class Game {
 
         // ! CURRENT TURN ! //
 
-        // TODO units auto-recover?
+        // TODO units auto-recover if they didnt use up any of their moves
         
         // ! CHANGE TURN ! //
 

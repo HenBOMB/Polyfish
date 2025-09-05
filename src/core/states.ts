@@ -144,7 +144,6 @@ export interface GameSettings {
 	size?: number; 
 	mode?: ModeType; 
 	maxTurns?: number; 
-	seed?: number; 
 	tribes: TribeType[];
 	fow: boolean;
 }
@@ -153,7 +152,6 @@ export const DefaultGameSettings: Readonly<GameSettings> = {
 	size: 11,
 	mode: ModeType.Domination,
 	maxTurns: 30,
-	seed: undefined,
 	tribes: [TribeType.Imperius, TribeType.Bardur],
 	fow: true
 }

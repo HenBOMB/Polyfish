@@ -60,7 +60,7 @@ export default async function main(loader: GameLoader) {
     // await loader.loadRandom(6);
     // await game.load(seed).catch(() => null);
     
-    const not = await loader.randomNotation(6);
+    const not = await loader.randomNotation(undefined, 6);
 
     loader.loadNotation(not);
     game.load(loader.currentState);
@@ -321,7 +321,7 @@ export default async function main(loader: GameLoader) {
     // }
 }
 
-function playSequence(game: Game, ...moves: MoveType[]) {
+export function playSequence(game: Game, ...moves: MoveType[]) {
     const chain = [];
     const p1 = game.state.tribes[1];
     const p2 = game.state.tribes[2];

@@ -20,38 +20,26 @@ import summonUnit from "./actions/units/Summon";
 import { xorState } from "../zobrist/hasher";
 
 export const STARTING_OWNER_ID = 1;
-export const DEBUG_SEED = undefined;
 export const MAX_SEED = 10;
 // Standard max turns when loaded live games
 export const MAX_TURNS = 50;
 
+function parseSettings(settings?: GameSettings): GameSettings {
+    settings = {
+        ...DefaultGameSettings,
+        ...(settings || {})
+    };
+    settings.size = Number(settings.size);
+    return settings;
+}
+
 export default class GameLoader {
     public currentState: GameState;
-    private settings: GameSettings = DefaultGameSettings;
 
-    constructor(settings?: any) {
+    constructor() {
         this.currentState = { } as any;
-        if(settings) {
-            this.setSettings(settings)
-        }
     }
 
-    public setSettings(settings?: any) {
-        if (!settings) {
-            return;
-        }
-        this.settings = {
-            ...DefaultGameSettings,
-            seed: DEBUG_SEED,
-            ...(settings || {})
-        };
-        this.settings.size = Number(this.settings.size);
-    }
-
-    public getSettings() {
-        return this.settings;
-    }
-  
     private defaultState(): GameState {
         return {
             settings: {
@@ -73,9 +61,9 @@ export default class GameLoader {
             resources: {},
             tribes: {},
             _visibleTiles: {}
-        }    
+        }
     }
-    
+
     private async readLiveGameData(): Promise<string[][]> {
         return new Promise((resolve, reject) => {
             exec("bash scan.sh -y", (error: any, stdout: string, stderr: any) => {
@@ -102,12 +90,11 @@ export default class GameLoader {
 
     private loadGame(state: GameState) {
         this.currentState = state;
-        state.settings.fow = true;
-
+        // TODO: predictions disabled
         // this.updatePredictions(state);
 
         // If FOW is disabled, then tribes shouldn't claim discovering other tribes
-        if(!this.settings.fow) {
+        if(!state.settings.fow) {
             const tribesObj = Object.values(state.tribes);
             for(const tribe of tribesObj) {
                 tribesObj.forEach(x => {
@@ -116,6 +103,7 @@ export default class GameLoader {
                     }
                 });
             }
+            // if undefined
             state.settings.fow = false;
         }
 
@@ -127,7 +115,6 @@ export default class GameLoader {
         }
 
         state.settings._pov = pov;
-
     }
 
     public async loadLive() {
@@ -140,7 +127,7 @@ export default class GameLoader {
             console.error("NO LIVE DATA FOUND")
             return null;
         }
-        
+
         let [ [ size, turn ], playerStates, mapdata ] = data;
 
         const state: GameState = {
@@ -212,7 +199,7 @@ export default class GameLoader {
                         _structures: [],
                         _knownPlayers: new Set(knownPlayers.split("&").map((x) => this.parseRawInt(x))),
                         relations: relations.split("&").reduce((acc, data) => {
-                            const [key, values] = data.split("_");                            
+                            const [key, values] = data.split("_");
                             const [state, lastAttackTurn, embassyLevel, lastPeaceBrokenTurn, firstMeet, embassyBuildTurn, previousAttackTurn] = values.split("-");
                             return {
                                 ...acc,
@@ -233,6 +220,8 @@ export default class GameLoader {
             _visibleTiles: {},
         };
 
+        (state as any)._hiddenResources = { };
+
         if (state.settings._turn > MAX_TURNS) {
             console.log(`WARN: turn is "${state.settings._turn}", set to 0`);
             state.settings._turn = 0;
@@ -240,29 +229,31 @@ export default class GameLoader {
 
         const tribes = Object.values(state.tribes);
         state.settings.tribeCount = tribes.length;
-        
+
         // ! used only for resources custom visibility
         const playerTribe = state.tribes[1]!;
 
         for (const segment of mapdata) {
             const values = segment.split(";").map((x) => x.split(","));
-            
+
             if(!values[1]) continue;
 
             const tileIndex = this.parseRawInt(values[0][0]);
 
             const [ , rawTile, rawStructure, rawResource, rawUnit, city ] = values;
-            
+
             if (!rawTile || rawTile.length === 0) break;
-            
+
             const tileOwner: number = this.parseRawInt(rawTile[1]) < 1? -1 : this.parseRawInt(rawTile[1]);
-            
-            const explorers = state.settings.fow? rawTile[2].split("&").map((x) => this.parseRawInt(x)).filter(x => x > 0) : tribes.map(x => x.owner);
-            
-            if(tileIndex === 285) {
-                console.log(explorers)
-                console.log(new Set(explorers))
-            }
+
+            const explorers = state.settings.fow?
+                rawTile[2].split("&").map((x) => this.parseRawInt(x)).filter(x => x > 0) :
+                tribes.map(x => x.owner);
+
+            // if(tileIndex === 285) {
+            //     console.log(explorers)
+            //     console.log(new Set(explorers))
+            // }
 
             const tileData: TileState = {
                 terrainType: this.parseRawInt(rawTile[0]),
@@ -280,7 +271,7 @@ export default class GameLoader {
                 _rulingCityIndex: this.parseRawInt(rawTile[8]) < 0 || this.parseRawInt(rawTile[7]) < 0? -1 : (this.parseRawInt(rawTile[7]) + this.parseRawInt(rawTile[8]) * state.settings.size),
                 _unitOwner: 0,
             };
-            
+
             // ! if there is a structure
             if (rawStructure && rawStructure[0]) {
                 const [ id, level, turn, reward ] = rawStructure;
@@ -294,7 +285,7 @@ export default class GameLoader {
 
                 state.structures[tileIndex] = structureData;
             }
-            
+
             // ! if there is a resource
             if (rawResource && rawResource[0]) {
                 const resourceId = this.parseRawInt(rawResource[0]);
@@ -306,13 +297,10 @@ export default class GameLoader {
                 state.resources[tileIndex] = resourceData;
 
                 if(!isResourceVisible(playerTribe, resourceId)) {
-                    if(!(state as any)._hiddenResources) {
-                        (state as any)._hiddenResources = {};
-                    }
                     (state as any)._hiddenResources[tileIndex] = resourceId;
                 }
             }
-            
+
             // ! unit in data not bound to tile index, first N count tile index are always units
             if (rawUnit && rawUnit[0]) {
                 const effects = rawUnit[17].split("&").map((x) => this.parseRawInt(x));
@@ -343,7 +331,7 @@ export default class GameLoader {
 
                 state.tribes[unitData._owner]._units.push(unitData);
             }
-            
+
             if (city && city[0]) {
                 // City
                 if(tileOwner > 0) {
@@ -362,19 +350,19 @@ export default class GameLoader {
                         _territory: [],
                         _unitCount: 0,
                     };
-                    
+
                     let count = 0;
                     cityData._rewards.forEach(x => {
                         if(x === RewardType.Workshop || x === RewardType.Park) {
                             count++;
                         }
                     })
-    
+
                     cityData._production =
                         cityData._level +
                         (tileData.capitalOf > 0? 1 : 0) +
                         count;
-    
+
                     state.tribes[cityData._owner]._cities.push(cityData);
                 }
             }
@@ -398,7 +386,7 @@ export default class GameLoader {
                 }
 
                 // Skip units rewarded by ruins, or stray units (idk really)
-                
+
                 const city = getHomeCity(state, unit);
 
                 if(city) city._unitCount++;
@@ -414,9 +402,17 @@ export default class GameLoader {
         this.loadGame(state);
     }
 
-    public async randomNotation(seed: number): Promise<string> {
+    public async randomNotation(settings?: GameSettings, seed?: number): Promise<string> {
+        if(seed === undefined) {
+            seed = Math.floor(Math.random() * MAX_SEED);
+        }
+
+        if(!settings) {
+            settings = parseSettings(settings);
+        }
+
         const mapdata: { type: string, tribe: string, above: string | null, road: boolean }[] = JSON.parse(await new Promise((resolve, reject) => {
-            const cmd = `.venv/bin/python mapgen/main.py --seed ${seed} --size ${this.settings.size} --tribes ${this.settings.tribes.map(x => TribeType[x]).join(" ")}`
+            const cmd = `.venv/bin/python mapgen/main.py --seed ${seed} --size ${settings.size} --tribes ${settings.tribes.map(x => TribeType[x]).join(" ")}`
             exec(cmd, (error: any, stdout: string, stderr: any) => {
                 if(error) {
                     // console.log(error);
@@ -425,13 +421,13 @@ export default class GameLoader {
                 resolve(stdout.trim());
             });
         }));
-    
+
         // Convert mapdata to notation for simplicity
         return [
             // Settings
-            [`${ModeType[this.settings.mode!].toLowerCase()},0,${this.settings.maxTurns},1`],
+            [`${ModeType[settings.mode!].toLowerCase()},0,${settings.maxTurns},1`],
             // Tribes
-            this.settings.tribes.map(x => TribeType[x].slice(0, 2).toLowerCase()),
+            settings.tribes.map(x => TribeType[x].slice(0, 2).toLowerCase()),
             // Climate
             mapdata.map(x => x.tribe.slice(0, 2).toLowerCase()),
             // Terrain Type
@@ -448,30 +444,31 @@ export default class GameLoader {
             // Resource y/n
             mapdata.map(x => x.above ? 'y' : '-'),
             // Villages & Capitals & Ruins TODO CAPITALS
-            mapdata.map((x) => 
-                x.above == 'capital'? x.tribe.slice(0, 2).toLowerCase() : 
-                x.above == 'ruin' ? 'rs' : 
-                x.above == 'starfish' ? 'sf' : 
-                x.above == 'village' ? 'vv' : 
+            mapdata.map((x) =>
+                x.above == 'capital'? x.tribe.slice(0, 2).toLowerCase() :
+                x.above == 'ruin' ? 'rs' :
+                x.above == 'starfish' ? 'sf' :
+                x.above == 'village' ? 'vv' :
                 '--'
             ),
         ].map(x => x.join('')).join(';');
     }
 
-    public async loadRandom(_seed?: number, verbose = true) {
+    public async loadRandom(settings?: GameSettings, seed?: number, verbose = true) {
+        settings = parseSettings(settings);
         // Safeguard for inconsistency map generation
         let tries = 1000
-        let seed = _seed || (this.settings.seed? this.settings.seed : Math.floor(Math.random() * MAX_SEED));
-       
+        seed = seed? seed : Math.floor(Math.random() * MAX_SEED);
+
         while(tries > 0) {
             try {
-                const not = await this.randomNotation(seed).catch(() => null);
+                const not = await this.randomNotation(settings, seed).catch(() => null);
                 if(!not) throw 'err';
-                this.loadNotation(not);
+                this.loadNotation(not, settings);
                 if(verbose) {
                     console.log('SEED', seed);
                 }
-                return [this.loadNotation(not)];
+                return [this.loadNotation(not, settings)];
             } catch (error) {
                 console.log(error);
                 tries--;
@@ -485,15 +482,15 @@ export default class GameLoader {
     public loadSave(filename: string) {
         const state = JSON.parse(readFileSync(`data/${filename}.json`, 'utf-8')) as GameState;
         this.loadGame(state);
-    }   
+    }
 
-    public loadNotation(notation: string) {
+    public loadNotation(notation: string, someSettings?: GameSettings) {
         const [settingsRaw, tribeRaw, climateRaw, terrainRaw, resourceRaw, structuresRaw] = notation.split(';');
 
         // Settings (mode, turn, maxturn, pov)
-        const settings = settingsRaw.split(',');
+        const notSettings = settingsRaw.split(',');
 
-        const pov = Number(settings[3]);
+        const pov = Number(notSettings[3]);
 
         const TribeMap: { [key: string]: TribeType } = {
             ai: TribeType.AiMo,
@@ -559,14 +556,16 @@ export default class GameLoader {
                 } as TribeState,
             };
         }, {}) as { [key: number]: TribeState };
+        
+        someSettings = parseSettings(someSettings);
 
         const state: GameState = {
             ...this.defaultState(),
             settings: {
-                mode: settings[0] == 'domination'? ModeType.Domination : ModeType.Perfection,
+                mode: someSettings.mode!,
                 size: Math.sqrt(Number(climateRaw.length / 2)),
-                _turn: Number(settings[1]),
-                maxTurns: Number(settings[2]),
+                _turn: Number(notSettings[1]),
+                maxTurns: someSettings.maxTurns!,
                 _pov: pov,
                 areYouSure: false,
                 unitIdx: 0,
@@ -574,9 +573,12 @@ export default class GameLoader {
                 _gameOver: false,
                 _recentMoves: [],
                 _pendingRewards: [],
+                fow: someSettings.fow
             },
             tribes
         };
+
+        (state as any)._hiddenResources = { };
 
         for(const owner in state.tribes) {
             state.tribes[owner].relations = Object.values(state.tribes).reduce((acc: any, tribe) => ({
@@ -593,7 +595,7 @@ export default class GameLoader {
             }), {});
         }
 
-        // ! Always assuming this is turn 0
+        // TODO: always assuming this is turn 0
 
         const lighthouses = [
             0,
@@ -606,17 +608,18 @@ export default class GameLoader {
 
         const climateTypes = climateRaw.match(/.{1,2}/g)!;
         const terrainTypes = terrainRaw.match(/./g)!;
-        const owners = state.settings.fow? [] : Object.values(tribes).map(x => x.owner);
+        const explorerOwners = state.settings.fow? [] : Object.values(tribes).map(x => x.owner);
+
         for(let i = 0; i < climateTypes.length; i++) {
             const climate = TribeMap[climateTypes[i]]? ClimateType[TribeType[TribeMap[climateTypes[i]]] as any] as unknown as ClimateType : ClimateType.Nature;
-            
+
             state.tiles[i] = {
                 _owner: 0,
                 tileIndex: i,
                 climate,
                 // If tile is ocean tile, then its nature??
                 terrainType: TerrainMap[terrainTypes[i]],
-                _explorers: new Set(owners),
+                _explorers: new Set(explorerOwners),
                 hasRoad: false,
                 hasRoute: false,
                 hadRoute: false,
@@ -660,11 +663,11 @@ export default class GameLoader {
                         _rulingCityIndex: tileIndex,
                     }
                 }
-                
+
                 // Reveal surrounding land
                 if(state.settings.fow) {
                     for(const tile of [
-                        tileIndex, 
+                        tileIndex,
                         ...getAdjacentIndexes(state, tileIndex, 2, false, true).filter(x => !lighthouses.includes(x))
                     ]) {
                         state.tiles[tile]._explorers.add(tribe.owner);
@@ -688,7 +691,7 @@ export default class GameLoader {
                 };
 
                 state.tribes[tribe.owner]._cities.push(cityData);
-                
+
                 state.structures[tileIndex] = {
                     id: StructureType.Village,
                     _level: cityData._level,
@@ -710,13 +713,11 @@ export default class GameLoader {
 
         // Set resources
 
-        (state as any)._hiddenResources = [];
-
         for (let i = 0; i < resourceRaw.length; i++) {
             const pResource = resourceRaw[i];
-            
+
             if(pResource != 'y') continue;
-            
+
             if(state.structures[i] && state.structures[i]!.id != StructureType.Ruin) continue;
 
             let resourceType = ResourceType.None;
@@ -739,12 +740,11 @@ export default class GameLoader {
                 default:
                     break;
             }
-            
+
             if(!isResourceVisible(state.tribes[state.settings._pov], resourceType)) {
                 (state as any)._hiddenResources[i] = resourceType;
-                continue;
             }
-
+    
             state.resources[i] = {
                 id: resourceType,
                 tileIndex: i
@@ -760,8 +760,8 @@ export default class GameLoader {
             state.settings._pov = tribe.owner;
             tribe._cities[0]._unitCount = 1;
             summonUnit(
-                state, 
-                TribeSettings[tribe.tribeType].uniqueStartingUnit || UnitType.Warrior, 
+                state,
+                TribeSettings[tribe.tribeType].uniqueStartingUnit || UnitType.Warrior,
                 tribe._cities[0].tileIndex,
             );
             if(tribe.owner == pov) {
@@ -777,9 +777,9 @@ export default class GameLoader {
     }
 
     public saveTo(filename: string) {
-        writeFileSync(`data/${filename}.json`, JSON.stringify({ 
+        writeFileSync(`data/${filename}.json`, JSON.stringify({
             ...this.currentState,
-            hash: this.currentState.tribes[this.currentState.settings._pov].hash.toString(), 
+            hash: this.currentState.tribes[this.currentState.settings._pov].hash.toString(),
         } as any, null, 2));
         console.log(`Saved state to data/${filename}.json`);
     }
@@ -791,7 +791,7 @@ export default class GameLoader {
         const prediction: any = { };
 
         prediction._villages = villagePredictions;
-    
+
         if(!Object.keys(villagePredictions).length) {
             prediction._villages = undefined;
         }
@@ -799,20 +799,20 @@ export default class GameLoader {
             Object.entries(villagePredictions).forEach(([tileIndex, tribeType]) => {
                 const climateType = ClimateType[TribeType[tribeType[0]] as keyof typeof ClimateType];
                 fogPredictions[Number(tileIndex)] = [
-                    TerrainType.Field, 
+                    TerrainType.Field,
                     climateType,
                     true
                 ];
                 getAdjacentIndexes(state, Number(tileIndex), 1, false, true).forEach(x => {
                     fogPredictions[x] = [
-                        TerrainType.Field, 
+                        TerrainType.Field,
                         climateType,
                         false
                     ];
                 });
             });
         }
-        
+
         prediction._terrain = predictOuterFogTerrain(state, fogPredictions);
 
         if(!Object.keys(prediction._terrain).length) {
@@ -833,7 +833,7 @@ export default class GameLoader {
     private parseRawBool(x: string): boolean {
         return x === "0" ? false : true;
     }
-    
+
     /**
     * Parses a string into a number.
     * Returns -1 if the parsed number is greater than some large impossible number.
