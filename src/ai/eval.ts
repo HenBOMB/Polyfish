@@ -42,8 +42,8 @@ Object.freeze(STAGE_SCORE_PERFECTION);
  * Always adds up to 1.
  */
 const STAGE_THRESH: [number, number, number] = [
-    0.2, 
-    1 - (0.2 + 0.2), 
+    0.3, 
+    1 - (0.3 + 0.2), 
     0.2
 ];
 // ? the early game lasts 20% of the first turns, and the endgame 20% of the last turns
@@ -361,7 +361,10 @@ export function evaluateState(game: Game): [number, number, number] {
     // lower the score gradually the closer we get to the end
     // this prevents the ai from playing good moves late
     const turn = state.settings._turn;
-    const maxTurns = state.settings.maxTurns;
+    // divided by two because if not then we require much deeper searches in order to get
+    // the same optimal moves
+    // it will pick pointless and bad moves if the scope is longer
+    const maxTurns = state.settings.maxTurns / 2;
     const turnInverse = Math.max(
         1 / maxTurns, 
         1 - Math.min(turn, maxTurns) / maxTurns

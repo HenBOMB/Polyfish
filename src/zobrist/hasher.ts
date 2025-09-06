@@ -52,7 +52,7 @@ function getEnumID(value: number, map?: Record<number, number>): number {
 }
     
 export function xorState(state: GameState): bigint {
-        return 0n;
+    return 0n;
     const pov = getPovTribe(state);
 
     let hash: bigint = 0n;
@@ -119,7 +119,7 @@ function xorSetUnit(
     hash: bigint,
     unit: UnitState
 ): bigint {
-        return 0n;
+    return 0n;
     const uKey = zobristKeys.units[unit._tileIndex];
 
     hash ^= uKey.owner[unit._owner];
@@ -145,7 +145,7 @@ function xorSetStructure(
     structType: StructureType,
     tileIndex: number,
 ): bigint {
-        return 0n;
+    return 0n;
     return hash ^ zobristKeys.structure[tileIndex][getEnumID(structType, StructureToID)];
 }
 
@@ -154,7 +154,7 @@ function xorSetResource(
     resourceType: ResourceType,
     tileIndex: number,
 ): bigint {
-        return 0n;
+    return 0n;
     return hash ^ zobristKeys.resource[tileIndex][getEnumID(resourceType)];
 }
 
@@ -162,7 +162,7 @@ function xorSetCity(
     hash: bigint,
     city: CityState
 ): bigint {
-        return 0n;
+    return 0n;
     const cKey = zobristKeys.city[city.tileIndex];
 
     hash ^= cKey.owner[city._owner];
@@ -178,7 +178,7 @@ function xorSetTile(
     hash: bigint,
     tile: TileState
 ): bigint {
-        return 0n;
+    return 0n;
     const tKey = zobristKeys.tiles[tile.tileIndex];
 
     hash ^= tKey.explored;
@@ -193,6 +193,7 @@ export function xorForAll(
     tileIndex: number,
     xorCb: (hash: bigint) => bigint,
 ) {
+    return 0n;
     state.tiles[tileIndex]._explorers.forEach(x => {
         state.tribes[x].hash = xorCb(state.tribes[x].hash);
     });
@@ -200,6 +201,7 @@ export function xorForAll(
 
 export class xorPlayer {
     static set(tribe: TribeState) {
+        return;
         xorPlayer.type(tribe, tribe.tribeType);
 
         xorPlayer.stars(tribe, tribe._stars);
@@ -214,11 +216,13 @@ export class xorPlayer {
     }
 
     static type(tribe: TribeState, tribeType: TribeType) {
+        return;
         tribeType = tribeType ?? tribe.tribeType;
         tribe.hash ^= zobristKeys.player[tribe.owner].tribeType[tribeType];
     }
 
     static stars(tribe: TribeState, stars: number) {
+        return;
         stars = Math.min(stars, MODEL_CONFIG.max_stars);  
         try {
             tribe.hash ^= zobristKeys.player[tribe.owner].stars[stars];
@@ -229,10 +233,12 @@ export class xorPlayer {
     }
 
     static tech(tribe: TribeState, techType: TechnologyType) {
+        return;
         tribe.hash ^= zobristKeys.player[tribe.owner].hasTech[getEnumID(techType, TechnologyToID)];
     }
 
     static unique(tribe: TribeState, structType: StructureType) {
+        return;
         tribe.hash ^= zobristKeys.player[tribe.owner].unique[getEnumID(structType, StructureToID)];
     }
 }
@@ -240,6 +246,7 @@ export class xorPlayer {
 export class xorUnit {
     /** Assumes there was NO unit previously on this tile, or this EXACT unit with its EXACT variables */
     static set(state: GameState, unit: UnitState) {
+        return;
         const unitHash = xorSetUnit(0n, unit);
         xorForAll(state, unit._tileIndex, (hash) => hash ^ unitHash);
     }
@@ -252,6 +259,7 @@ export class xorUnit {
      * @param newOwner
      */
     static owner(state: GameState, unit: UnitState, curOwner: number, newOwner: number) {
+        return;
         xorForAll(state, unit._tileIndex, (hash) => {
             hash ^= zobristKeys.units[unit._tileIndex].owner[curOwner];
             if(newOwner) {
@@ -269,6 +277,7 @@ export class xorUnit {
      * @param newUnitType
      */
     static type(state: GameState, unit: UnitState, curUnitType: UnitType, newUnitType: UnitType) {
+        return;
         xorForAll(state, unit._tileIndex, (hash) => {
             hash ^= zobristKeys.units[unit._tileIndex].type[getEnumID(curUnitType, UnitToID)];
             hash ^= zobristKeys.units[unit._tileIndex].type[getEnumID(newUnitType, UnitToID)];
@@ -283,6 +292,7 @@ export class xorUnit {
      * @param veteran 
      */
     static veteran(state: GameState, unit: UnitState) {
+        return;
         xorForAll(state, unit._tileIndex, (hash) => {
             hash ^= zobristKeys.units[unit._tileIndex].veteran;
             return hash;
@@ -296,6 +306,7 @@ export class xorUnit {
      * @param moved 
      */
     static moved(state: GameState, unit: UnitState) {
+        return;
         xorForAll(state, unit._tileIndex, (hash) => {
             hash ^= zobristKeys.units[unit._tileIndex].moved;
             return hash;
@@ -309,6 +320,7 @@ export class xorUnit {
      * @param attacked 
      */
     static attacked(state: GameState, unit: UnitState) {
+        return;
         xorForAll(state, unit._tileIndex, (hash) => {
             hash ^= zobristKeys.units[unit._tileIndex].attacked;
             return hash;
@@ -323,13 +335,14 @@ export class xorUnit {
      * @param newKills
      */
     static kills(state: GameState, unit: UnitState, curKills: number, newKills?: number) {
+        return;
         curKills = Math.min(MODEL_CONFIG.max_unit_kills, curKills);
         // kill count can never decrease, so this is fine
         newKills = Math.min(MODEL_CONFIG.max_unit_kills, newKills || 0);
         xorForAll(state, unit._tileIndex, (hash) => {
             hash ^= zobristKeys.units[unit._tileIndex].kills[curKills];
-            if(newKills > 0) {
-                hash ^= zobristKeys.units[unit._tileIndex].kills[newKills];
+            if(newKills! > 0) {
+                hash ^= zobristKeys.units[unit._tileIndex].kills[newKills!];
             }
             return hash;
         });
@@ -343,6 +356,7 @@ export class xorUnit {
      * @param newPassenger
      */
     static passenger(state: GameState, unit: UnitState, curPassenger: UnitType, newPassenger: UnitType) {
+        return;
         xorForAll(state, unit._tileIndex, (hash) => {
             hash ^= zobristKeys.units[unit._tileIndex].passenger[getEnumID(curPassenger, UnitToID)];
             hash ^= zobristKeys.units[unit._tileIndex].passenger[getEnumID(newPassenger, UnitToID)];
@@ -357,6 +371,7 @@ export class xorUnit {
      * @param effect
      */
     static effect(state: GameState, unit: UnitState, effect: EffectType) {
+        return;
         xorForAll(state, unit._tileIndex, (hash) => {
             hash ^= zobristKeys.units[unit._tileIndex].effect[getEnumID(effect)];
             return hash;
@@ -366,10 +381,12 @@ export class xorUnit {
 
 export class xorCity {
     static set(state: GameState, city: CityState) {
+        return;
         xorForAll(state, city.tileIndex, (hash) => xorSetCity(hash, city));
     }
 
     static owner(state: GameState, city: CityState, curOwner: number, newOwner: number) {
+        return;
         xorForAll(state, city.tileIndex, (hash) => {
             hash ^= zobristKeys.city[city.tileIndex].owner[curOwner];
             hash ^= zobristKeys.city[city.tileIndex].owner[newOwner];
@@ -378,6 +395,7 @@ export class xorCity {
     }
 
     static unitCount(state: GameState, city: CityState, curCount: number, newCount: number) {
+        return;
         curCount = Math.min(MODEL_CONFIG.max_structure_level, curCount);
         newCount = Math.min(MODEL_CONFIG.max_structure_level, newCount);
         xorForAll(state, city.tileIndex, (hash) => {
@@ -388,6 +406,7 @@ export class xorCity {
     }
 
     static level(state: GameState, city: CityState, curLevel: number, newLevel: number) {
+        return;
         curLevel = Math.min(MODEL_CONFIG.max_structure_level, curLevel);
         newLevel = Math.min(MODEL_CONFIG.max_structure_level, newLevel);
         xorForAll(state, city.tileIndex, (hash) => {
@@ -398,6 +417,7 @@ export class xorCity {
     }
 
     static riot(state: GameState, city: CityState) {
+        return;
         xorForAll(state, city.tileIndex, (hash) => {
             hash ^= zobristKeys.city[city.tileIndex].riot;
             return hash;
@@ -408,6 +428,7 @@ export class xorCity {
 export class xorTile {
     // when a new tile is discovered we must update whatever new discovered structs, resources, cities or units are on it
     static discover(state: GameState, tile: TileState) {
+        return;
         const pov = getPovTribe(state);
 
         // Tile
@@ -416,7 +437,7 @@ export class xorTile {
         // Unit
         const unitAt = getTrueUnitAt(state, tile.tileIndex);
         if(unitAt) {
-            pov.hash = xorSetUnit(pov.hash, unitAt);
+            pov.hash = xorSetUnit(pov.hash, unitAt!);
         }
 
         // Structure
@@ -428,7 +449,7 @@ export class xorTile {
         // Cities
         const city = getCityAt(state, tile.tileIndex);
         if (city) {
-            pov.hash = xorSetCity(pov.hash, city);
+            pov.hash = xorSetCity(pov.hash, city!);
         }
     }
 

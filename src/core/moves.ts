@@ -194,7 +194,7 @@ const TechToResearchableID: Record<TechnologyType, number> = {
 }
 
 const RewardToRewardableID: Record<RewardType, number> = {
-	[RewardType.None]: 			-1,
+	[RewardType.None]: 		   -1,
 	[RewardType.Workshop]: 		0,
 	[RewardType.Explorer]: 		1,
 	[RewardType.Resources]: 	0,
@@ -351,7 +351,7 @@ export class EconMovesGenerator {
 		EconMovesGenerator.all_fast(state, moves);
 	}
 
-	static all_fast(state: GameState, moves: Move[]) {
+	static all_fast(state: GameState, moves: Move[]): void {
 		const pov = getPovTribe(state);
 		const territory = getPovTerritorry(state);
 
@@ -882,9 +882,9 @@ export class ArmyMovesGenerator {
 
 	static steps(state: GameState, unit: UnitState, moves: Move[]) {
 		if(unit._moved) return;
-
+		
 		const steps = Array.from(ArmyMovesGenerator.computeReachableTiles(state, unit).entries());
-
+		
 		for(const [tileIndex, ] of steps) {
 			if(unit._tileIndex == tileIndex) {
 				continue;
@@ -898,7 +898,6 @@ export class ArmyMovesGenerator {
 	*/
 	static computeReachableTiles(state: GameState, unit: UnitState): Map<number, number> {
 		const effectiveMovement = getUnitMovement(unit);
-		
 		const reachable = new Map<number, number>();
 		const openList: ReachableNode[] = [];
 
@@ -920,7 +919,11 @@ export class ArmyMovesGenerator {
 				const index = tile.tileIndex;
 				if (index == unit._tileIndex) continue;
 	
-				if (!isSteppable(state, unit, tile)) continue;
+				if (!isSteppable(state, unit, tile)) {
+					console.log('nope');
+					
+					continue;
+				}
 	
 				const moveCost = this.computeMovementCost(state, unit, current.index, tile);
 				if (moveCost < 0) continue;

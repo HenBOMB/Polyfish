@@ -6,7 +6,7 @@
   "type": "commonjs",
   "scripts": {
     "start": "clear && ts-node index.ts",
-    "dev": "nodemon --watch '**/*.ts' --exec 'ts-node' index.ts",
+    "dev": "clear && nodemon --watch '**/*.ts' --exec 'clear && ts-node' index.ts",
     "load": "sudo insmod polyai-reader/polyai.ko",
     "unload": "sudo rmmod polyai-reader/polyai.ko",
     "scan": "bash scan.sh",
@@ -26,7 +26,7 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/express": "^5.0.0",
-    "@types/node": "^22.13.2",
+    "@types/node": "^22.18.1",
     "nodemon": "^3.1.9",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.3"

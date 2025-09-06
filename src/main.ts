@@ -7,16 +7,14 @@ import { MoveType, TechnologyType } from "./core/types";
 import Game from "./game";
 import { generateFile } from "./zobrist/generateZorbist";
 
-export function deepCompare<T>(a: T, b: T, key: string, ignoreObjKeyLength?: boolean) {
+export function deepCompare<T>(a: T, b: T, key: string, ignoreObjKeyLength?: boolean): boolean {
     let success = true;
     if(a === null || a === undefined || b === null || b === undefined) {
         if(a == b) return true;
-        console.log('Count', key, 'is', b, '!=', a);
         success = false;
     }
     if(Array.isArray(a) && Array.isArray(b)) {
         if(a.length !== b.length) {
-            console.log('Count', key, 'is', b.length, '!=', a.length);
             success = false;
         } 
         else {
@@ -27,7 +25,6 @@ export function deepCompare<T>(a: T, b: T, key: string, ignoreObjKeyLength?: boo
     } 
     else if (typeof a === 'object' && typeof b === 'object') {
         if(Object.keys(a as any).length !== Object.keys(b as any).length && !ignoreObjKeyLength) {
-            console.log('Count', key, 'is', Object.keys(b as any), '!=', Object.keys(a as any));
             success = false;
         } 
         else {
@@ -142,7 +139,7 @@ export default async function main(loader: GameLoader) {
     console.timeEnd('took');
 
     // console.log(MoveGenerator.transpose.size);
-    console.log(game.poser.pending.size, 'saved');
+    // console.log(game.poser.pending.size, 'saved');
     // game.poser.close();
 
     console.log(count_moves, 'moves');

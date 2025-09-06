@@ -4,17 +4,18 @@ import GameLoader from "./src/core/gameloader";
 import AIState, { MODEL_CONFIG } from "./src/aistate";
 import { ModeType, TribeType } from "./src/core/types";
 import { spawn } from "child_process";
-import { DefaultGameSettings, GameSettings, GameState } from "./src/core/states";
+import { CityState, DefaultGameSettings, GameSettings, GameState } from "./src/core/states";
 import Game from "./src/game";
 import Move from "./src/core/move";
 // import { sampleFromDistribution } from "./src/polyfish/util";
-import { MoveGenerator, Prediction } from "./src/core/moves";
-import main from "./src/main";
+import { ArmyMovesGenerator, EconMovesGenerator, MoveGenerator, Prediction } from "./src/core/moves";
+import main, { deepCompare } from "./src/main";
 import { getPovTribe } from "./src/core/functions";
 import { Logger } from "./src/ai/logger";
-import { SelfPlay } from "./src/ai/mcts";
+import { SelfPlay } from "./src/ai/mcts.old";
 import { evaluateState } from "./src/ai/eval";
 import { CalculateBestMoves } from "./src/ai/brute";
+import { MCTS } from "./src/ai/mcts/mcts";
 
 const app = express();
 const py = spawn(".venv/bin/python3", ["polyfish/main.py"]);
@@ -291,6 +292,75 @@ app.post('/train', async (req: Request, res: Response) => {
     }));
 })
 
+async function benchmarkThreadPerformance(
+    currentGame: Game,
+    simulations: number = 2000,
+    maxThreads: number = 6,
+    runsPerSetting: number = 3
+) {
+    console.log(`Starting MCTS benchmark...`);
+    console.log(`- Simulations per search: ${simulations}`);
+    console.log(`- Runs per thread setting: ${runsPerSetting}`);
+    console.log(`- Max threads to test: ${maxThreads}\n`);
+
+    const results: { [threads: number]: number } = {};
+
+    for (let threadCount = 1; threadCount <= maxThreads; threadCount++) {
+        const timings: number[] = [];
+        console.log(`--- Testing with ${threadCount} thread(s) ---`);
+
+        const mcts = new MCTS(currentGame, 1.0, false, 3, threadCount);
+        await mcts.prepare();
+
+        for (let run = 1; run <= runsPerSetting; run++) {
+            const startTime = performance.now();
+            const root = await mcts.search(simulations, false);
+            const endTime = performance.now();
+            const duration = endTime - startTime;
+            timings.push(duration);
+            console.log(`  Run #${run}: ${duration.toFixed(2)} ms`);
+
+            if (run === 1) {
+                const probs = root.distribution(1.0);
+                const bestMoveIndex = probs.indexOf(Math.max(...probs));
+                const legalMoves = MoveGenerator.legal(currentGame.state);
+                const bestMove = legalMoves[bestMoveIndex];
+                if (bestMove) {
+                    console.log(`  -> Best move found: ${bestMove.stringify(currentGame.state, currentGame.state)}`);
+                } else {
+                    console.log(`  -> No best move found.`);
+                }
+            }
+        }
+        
+        mcts.destroy();
+
+        // Calculate and store the average time for the current thread count
+        const averageTime = timings.reduce((sum, time) => sum + time, 0) / timings.length;
+        results[threadCount] = averageTime;
+        console.log(`-----------------------------------------`);
+        console.log(`Average for ${threadCount} thread(s): ${averageTime.toFixed(2)} ms`);
+        console.log(`-----------------------------------------\n`);
+    }
+
+    console.log("======== MCTS Benchmark Summary ========");
+    let bestTime = Infinity;
+    let optimalThreads = 0;
+
+    for (const threads in results) {
+        const time = results[threads];
+        if (time < bestTime) {
+            bestTime = time;
+            optimalThreads = parseInt(threads);
+        }
+        console.log(`- ${threads} Thread(s): ${time.toFixed(2)} ms`);
+    }
+
+    console.log("\n========================================");
+    console.log(`Optimal thread count found: ${optimalThreads} threads (${bestTime.toFixed(2)} ms)`);
+    console.log("========================================");
+}
+
 app.listen(3000, async () => {
     Logger.clear();
     console.log(`INITIALIZED ON PORT 3000\n`);
@@ -299,14 +369,52 @@ app.listen(3000, async () => {
     await currentGame.loadRandom({ fow: false, tribes: [TribeType.Imperius, TribeType.Bardur] });
 
     // console.log(evaluateState(currentGame));
+    // benchmarkThreadPerformance(currentGame, 1500, 16, 100);
     
-    const moves = MoveGenerator.legal(currentGame.state);
-    
-    const [ bestMoves ] = CalculateBestMoves(
-        currentGame,
-        1,
-        { depth: 1000, cPuct: 1.0 }
-    );
+    // const [ bestMoves ] = await CalculateBestMoves(
+    //     currentGame,
+    //     1,
+    //     { depth: 1500, cPuct: 1.0, nThreads: 6 }
+    // );
+
+    MoveGenerator.legal(currentGame.state).forEach(x => {
+        console.log(x.stringify(currentGame.state, currentGame.state));
+    });
+
+    const move: any[] = [];
+    console.log(ArmyMovesGenerator.all(currentGame.state, move));
+    console.log(move);
+
+    // const mcts = new MCTS(currentGame, 1.0, false, 3, 16);
+    // console.time('prepare');
+    // await mcts.prepare();
+    // console.timeEnd('prepare');
+
+    // const l = `took ${mcts.numThreads} threads`
+    // console.time(l);
+    // await mcts.search(
+    //     1500, 
+    //     true/*,
+    //     // ! Not supported because Game.playMove doesnt support custom legal move generation
+    //     (state: any) => {
+    //         if(state.settings._pendingRewards.length) {
+    //             return state.settings._pendingRewards.slice();
+    //         }
+    //         const moves: any = [new EndTurn()];
+    //         EconMovesGenerator.all_fast(state, moves);
+    //         return moves;
+    //     }*/
+    // );
+    // console.timeEnd(l);
+    // console.time(l);
+    // await mcts.search(1500, true);
+    // console.timeEnd(l);
+    // mcts.destroy();
+
+    // console.log(currentGame.state.settings._pendingRewards.push(...EconMovesGenerator.rewards(
+    //     { _level: 3, _rewards: new Set([]), tileIndex: 0 } as any as CityState,
+    // )));
+    // console.log(currentGame.state.settings);
 
     // TODO why is it picking explorer over workshop?
     // workshop gives +0.015 guarenteed!
@@ -318,4 +426,10 @@ app.listen(3000, async () => {
     // await loader.loadRandom();
     // const prediction = await predict(loader.currentState);
     // console.log(MoveGenerator.fromPrediction(loader.currentState, prediction));
+
+    // const rebuiltGame = Game.deserialize(Game.serialize(currentGame));
+    // console.log(deepCompare(currentGame, rebuiltGame, 'state', true)? "success" : "failed");
+
+    // const rebuiltState = Game.deserializeState(Game.serializeState(currentGame.state));
+    // console.log(deepCompare(currentGame.state, rebuiltState, 'state', true)? "success" : "failed");
 });

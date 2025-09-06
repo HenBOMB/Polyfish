@@ -4,7 +4,6 @@ import { Branch, CallbackResult } from "../move";
 import { EconMovesGenerator } from "../moves";
 import { GameState, CityState } from "../states";
 
-
 export default function(state: GameState, city: CityState, amount: number): Branch {
     const pov = getPovTribe(state);
 
@@ -28,7 +27,11 @@ export default function(state: GameState, city: CityState, amount: number): Bran
         let amountScore = (city._level > 1 ? 50 - (city._level - 2) * 5 : 0) + amount * 5;
 
         if (city._progress - next >= (next + 1)) {
+            // useful for debugging multithread
+            // if it prints it means there is something wrong..
+            // it should ONLY print when connecting cities and getting a huge pop increase
             console.warn('MEGA CHAIN!');
+            // process.exit(1)
             lol = true;
             cityStruct._level++;
             city._level++;

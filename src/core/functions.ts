@@ -493,7 +493,7 @@ export function getWipeouts(state: GameState, owner?: number): TribeState[] {
 
 export function isSteppable(state: GameState, unit: UnitState, tileOrIndex: TileState | number) {
 	const tile = typeof tileOrIndex === "number"? state.tiles[tileOrIndex] : tileOrIndex;
-
+	
 	// Unexplored
 	// Occupied
 	if(!state._visibleTiles[tile.tileIndex]
@@ -519,7 +519,9 @@ export function isSteppable(state: GameState, unit: UnitState, tileOrIndex: Tile
 	// Port and non aquatic units
 	if(!isAquatic) {
 		const isPort = getStructureAt(state, tile.tileIndex) === StructureType.Port;
-		return isPort && tile._owner === unit._owner;
+		if(isPort) {
+			return tile._owner === unit._owner;
+		}
 	}
 	// Port
 	
