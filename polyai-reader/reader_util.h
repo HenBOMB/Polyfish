@@ -2,24 +2,23 @@
 #define READER_UTIL_H
 
 #include "reader_types.h"
-
 #include <vector>
 #include <sys/uio.h>
 #include <cstdint>
 
+uintptr_t getPlace(pid_t pid, uintptr_t base, const std::vector<uintptr_t>& offsets);
+
 bool readBlock(pid_t pid, uintptr_t addr, void* buffer, size_t size);
 
 template <typename T>
-bool readPiece(pid_t pid, uintptr_t addr, T &value) {
-    return readBlock(pid, addr, &value, sizeof(T));
+bool readPiece(pid_t pid, uintptr_t addr, T &result) {
+    return readBlock(pid, addr, &result, sizeof(T));
 }
 
-uintptr_t getPlace(pid_t pid, uintptr_t base, const std::vector<uintptr_t>& offsets);
-
-std::string readString(pid_t pid, uintptr_t addr);
-
-bool readSplitValue(pid_t pid, uintptr_t address, uint16_t &value1, uint16_t &value2);
+bool readWord(pid_t pid, uintptr_t addr, std::string &result);
 
 bool readSingleList(pid_t pid, uintptr_t address, std::string &result);
+
+bool readDictionary(pid_t pid, uintptr_t address, std::string &result, std::string(*callback)(uint16_t, unsigned char*), size_t objSize = 0x18);
 
 #endif
