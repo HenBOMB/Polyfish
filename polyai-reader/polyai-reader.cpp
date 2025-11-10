@@ -725,31 +725,30 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
             uint8_t owner, founder;
             bool connectedToCapitalOfPlayer;
             std::string name, effects;
-            std::vector<int32_t> rewards;
 
             type        = *(int16_t*)&structureBuffer[Offsets::ImprovementState_Type];
             level       = *(int16_t*)&structureBuffer[Offsets::ImprovementState_Level];
             founded     = *(int16_t*)&structureBuffer[Offsets::ImprovementState_Founded];
             progress    = *(int16_t*)&structureBuffer[Offsets::ImprovementState_XP];
-            population  = *(int16_t*)&structureBuffer[Offsets::ImprovementState_Population];
-            production  = *(uint16_t*)&structureBuffer[Offsets::ImprovementState_Production];
             baseScore   = *(uint16_t*)&structureBuffer[Offsets::ImprovementState_BaseScore];
-            borderSize  = *(uint16_t*)&structureBuffer[Offsets::ImprovementState_BorderSize];
             upgrade     = *(uint16_t*)&structureBuffer[Offsets::ImprovementState_Upgrade];
             owner       = *(uint8_t*)&structureBuffer[Offsets::ImprovementState_Owner];
             founder     = *(uint8_t*)&structureBuffer[Offsets::ImprovementState_Founder];
             // TODO verify == 1
-            connectedToCapitalOfPlayer = *(uint8_t*)&structureBuffer[Offsets::ImprovementState_ConnectedToCapital] == 1;
-
+            
             uintptr_t nameBase = getPlace(pid, *(uintptr_t*)&structureBuffer[Offsets::ImprovementState_Name], {  });
-
+            
             if (readWord(pid, nameBase, name)) {
+                std::vector<int32_t> rewards;
+                connectedToCapitalOfPlayer = *(uint8_t*)&structureBuffer[Offsets::ImprovementState_ConnectedToCapital] == 1;
                 readSingleListMagic(pid, improvementBase + Offsets::ImprovementState_Rewards, rewards);
+                population  = *(int16_t*)&structureBuffer[Offsets::ImprovementState_Population];
+                production  = *(uint16_t*)&structureBuffer[Offsets::ImprovementState_Production];
+                borderSize  = *(uint16_t*)&structureBuffer[Offsets::ImprovementState_BorderSize];
                 cityMap[index] = { 
                     name, population, progress, rewards, production,
                     borderSize, connectedToCapitalOfPlayer, level 
                 };
-                
             }
             
             structMap[index] = { type, level, founded, baseScore };
@@ -931,6 +930,8 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
             // _walls?: boolean;
             // _riot?: boolean;
             tribes[std::to_string(t.owner)]["cities"].push_back(std::move(jc));
+
+            // tiles[std::to_string(idx)] = jt;
         }
     }
 
