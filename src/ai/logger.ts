@@ -28,8 +28,8 @@ export class Logger {
 
     static logPlay(oldState: GameState, newState: GameState, moves: Move[], scores: number[]): null {
         const pov = getPovTribe(oldState);
-        const name = TribeType[pov.tribeType];
-        appendFileSync(DEFAULT_LOG_FILE, `${pov.owner} - ${name} - ${moves.map(x => x.stringify(oldState, newState).toLowerCase()).join(', ')} (${scores.map(x => x.toFixed(4)).join(', ')})\n`);
+        const name = TribeType[pov.type];
+        appendFileSync(DEFAULT_LOG_FILE, `${pov.id} - ${name} - ${moves.map(x => x.stringify(oldState, newState).toLowerCase()).join(', ')} (${scores.map(x => x.toFixed(4)).join(', ')})\n`);
         return null;
     }
 

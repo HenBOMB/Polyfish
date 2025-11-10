@@ -9,7 +9,7 @@ export default class Destroy extends Ability {
         super(null, target, AbilityType.Destroy);
     }
 
-    execute(state: GameState): CallbackResult {
+    execute(state: GameState) {
         return {
             rewards: [],
             undo: destroyStructure(state, this.getTarget()),

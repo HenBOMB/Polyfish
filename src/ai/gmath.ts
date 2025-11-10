@@ -125,6 +125,10 @@ export class GMath {
 		const sum = xs.reduce((a, b) => a + b, 0);
 		return xs.map(x => x / sum);
 	}
+
+	static randArr<T>(from: Array<T>): T {
+		return from[Math.floor(Math.random() * from.length)];
+	}
 }
 
 export let distanceCache = new Map<number, Map<number, number>>();

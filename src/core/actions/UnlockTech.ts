@@ -6,35 +6,35 @@ import { GameState } from "../states";
 import { TechnologyType } from "../types";
 
 
-export default function(state: GameState, techType: TechnologyType, free = false): Branch {
+export default function(state: GameState, type: TechnologyType, free=false): Branch {
     const pov = getPovTribe(state);
 
     const scroll = {
-        techType,
-        discovered: state.settings.areYouSure,
+        type,
+        discovered: state.settings._areYouSure,
     };
 
-    xorPlayer.tech(pov, scroll.techType);
+    xorPlayer.tech(pov, scroll.type);
 
-    pov._tech.push(scroll);
+    pov.tech_vanilla.push(scroll);
 
-    const undoPurchase = free ? () => { } : spendStars(state, getTechCost(pov, techType));
+    const undoPurchase = free? () => { } : spendStars(state, getTechCost(pov, type));
 
-    // const score = 100 * getOriginalTech(techType).tier!;
-    const score = 100 * getTechSettings(techType).tier!;
+    // const score = 100 * getOriginalTech(type).tier!;
+    const score = 100 * getTechSettings(type).tier!;
 
-    pov._score += score;
+    pov.score += score;
 
     return {
         rewards: [],
         undo: () => {
-            pov._score -= score;
+            pov.score -= score;
 
             undoPurchase();
 
-            pov._tech.pop();
+            pov.tech_vanilla.pop();
 
-            xorPlayer.tech(pov, scroll.techType);
+            xorPlayer.tech(pov, scroll.type);
         }
     };
 }

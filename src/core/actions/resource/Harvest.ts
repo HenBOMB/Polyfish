@@ -9,7 +9,7 @@ import { GameState } from "../../states";
 
 export default function(state: GameState, tileIndex: number): Branch {
     const harvested = state.resources[tileIndex]!;
-    const settings = ResourceSettings[harvested.id];
+    const settings = ResourceSettings[harvested.type];
     const rulingCity = getCityOwningTile(state, tileIndex)!;
 
     const undoPurchase = spendStars(state, settings.cost || 0);

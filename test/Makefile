@@ -1,9 +1,9 @@
 CXX := g++
 CXXFLAGS := -O2 -std=c++17
 
-SRC :=  json.hpp polyai-reader.cpp reader_util.cpp
+SRC := check_runtime.cpp
 OBJ := $(SRC:.cpp=.o)
-TARGET := polyai-reader
+TARGET := check_runtime
 
 all: $(TARGET)
 

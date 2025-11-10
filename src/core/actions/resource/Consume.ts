@@ -4,24 +4,24 @@ import { GameState } from "../../states";
 import { ResourceType } from "../../types";
 
 
-export default function(state: GameState, tileIndex: number, replaceType?: ResourceType): UndoCallback {
-    const oldResource = state.resources[tileIndex];
+export default function(state: GameState, idx: number, replaceType?: ResourceType): UndoCallback {
+    const oldResource = state.resources[idx];
     const newResource = replaceType ? replaceType : ResourceType.None;
 
-    xorResource(state, tileIndex, oldResource ? oldResource.id : ResourceType.None, newResource);
+    xorResource(state, idx, oldResource ? oldResource.type : ResourceType.None, newResource);
 
     if (replaceType) {
-        state.resources[tileIndex] = {
-            id: replaceType,
-            tileIndex
+        state.resources[idx] = {
+            type: replaceType,
+            tileIndex: idx
         };
     }
     else {
-        delete state.resources[tileIndex];
+        delete state.resources[idx];
     }
 
     return () => {
-        xorResource(state, tileIndex, newResource, oldResource ? oldResource.id : ResourceType.None);
-        state.resources[tileIndex] = oldResource;
+        xorResource(state, idx, newResource, oldResource ? oldResource.type : ResourceType.None);
+        state.resources[idx] = oldResource;
     };
 }

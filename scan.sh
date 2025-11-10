@@ -7,7 +7,8 @@ fi
 
 PROCESS_NAME="Polytopia.exe"
 
-pid=$(ps -eo pid,lstart,cmd | grep "$PROCESS_NAME" | grep -v grep | sort -k2 | tail -n1 | awk '{print $1}')
+pid=$(ps -eo pid,lstart,cmd | grep "$PROCESS_NAME" | grep -v grep  | tail -n1 | awk '{print $1}')
+# pid=$(ps -eo pid,lstart,cmd | grep "$PROCESS_NAME" | grep -v grep | sort -k2 | tail -n1 | awk '{print $1}')
 # pid=$(pgrep -f "$PROCESS_NAME")
 
 if [[ -z "$pid" ]]; then
@@ -15,13 +16,13 @@ if [[ -z "$pid" ]]; then
     exit 1
 fi
 
-echo "Running polyai-reader with PID: $pid" >/dev/null
+# echo "Running polyai-reader with PID: $pid"
 
-start_time=$(date +%s)
+# start_time=$(date +%s)
 
 polyai-reader/polyai-reader "$pid" "$1"
 
-end_time=$(date +%s)
-elapsed_time=$((end_time - start_time))
+# end_time=$(date +%s)
+# elapsed_time=$((end_time - start_time))
 
-echo "Took: $elapsed_time seconds" >/dev/null
+# echo "Took: $elapsed_time seconds"

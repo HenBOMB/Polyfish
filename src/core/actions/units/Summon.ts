@@ -3,12 +3,12 @@ import { freezeArea, spendStars } from "../../actions";
 import { discoverTiles } from "../DiscoverTiles";
 import pushUnit from "./Push";
 import { getPovTribe, isSkilledIn, getHomeCity } from "../../functions";
-import { CallbackResult, UndoCallback } from "../../move";
+import { Branch } from "../../move";
 import { UnitSettings } from "../../settings/UnitSettings";
-import { GameState, UnitState } from "../../states";
+import { Coords, GameState, UnitState } from "../../states";
 import { UnitType, SkillType } from "../../types";
 
-export default function(state: GameState, unitType: UnitType, spawnTileIndex: number, costs = false, forceIndependent = false): CallbackResult {
+export default function summonUnit(state: GameState, unitType: UnitType, spawnTileIndex: number, costs = false, forceIndependent = false): Branch {
     const pov = getPovTribe(state);
     const settings = UnitSettings[unitType];
     const health = UnitSettings[unitType].health!;
@@ -16,64 +16,53 @@ export default function(state: GameState, unitType: UnitType, spawnTileIndex: nu
     const spawnTile = state.tiles[spawnTileIndex];
 
     // Push occupied unit away (if any)
-    let resultPush = pushUnit(state, spawnTile.tileIndex);
+    const resultPush = pushUnit(state, spawnTile.coords.idx);
 
-    const oldUnitOwner = spawnTile._unitOwner;
+    const oldUnitOwner = spawnTile._unitOwnerID;
 
     const undoPurchase = costs ? spendStars(state, settings.cost) : () => { };
+    
+    const indepentent = forceIndependent || isSkilledIn(unitType, SkillType.Independent);
 
-    const spawnedUnit = {
-        _unitType: unitType,
-        _health: health * 10,
-        _kills: 0,
-        prevX: -1,
-        prevY: -1,
+    const spawnedUnit: UnitState = {
+        type: unitType,
+        health: health * 10,
+        prevCoords: new Coords(),
         direction: 0,
-        _owner: pov.owner,
-        createdTurn: state.settings._turn,
+        veteran: false,
+        kills: 0,
+        createdTurn: state.settings.turn,
+        owner: pov.id,
         // If its not from a ruin or special unit
-        _homeIndex: forceIndependent || isSkilledIn(unitType, SkillType.Independent) || !costs ? -1 : spawnTileIndex,
-        _tileIndex: spawnTileIndex,
-        _effects: new Set(),
-        _attacked: true,
-        _moved: true,
-    } as UnitState;
+        homeCoords: indepentent? undefined : new Coords(spawnTileIndex, state),
+        coords: new Coords(spawnTileIndex, state),
+        moved: true,
+        attacked: true,
+        effects: new Set(),
+    };
 
     xorUnit.set(state, spawnedUnit);
 
-    pov._units.push(spawnedUnit);
+    pov.units.push(spawnedUnit);
 
-    spawnTile._unitOwner = spawnedUnit._owner;
-
-    const cityHome = forceIndependent ? null : getHomeCity(state, spawnedUnit);
-
-    if (cityHome) {
-        xorCity.unitCount(state, cityHome, cityHome._unitCount, cityHome._unitCount + 1);
-        cityHome._unitCount++;
-    }
+    spawnTile._unitOwnerID = spawnedUnit.owner;
 
     const resultDiscover = discoverTiles(state, spawnedUnit);
 
-    const undoFrozen: UndoCallback = isSkilledIn(spawnedUnit, SkillType.AutoFreeze, SkillType.FreezeArea) ?
+    const undoFrozen = isSkilledIn(spawnedUnit, SkillType.AutoFreeze, SkillType.FreezeArea) ?
         freezeArea(state, spawnedUnit) : () => { };
 
-    pov._score += 5 * (settings.super ? 10 : settings.cost!);
+    pov.score += 5 * (settings.super ? 10 : settings.cost!);
 
     return {
-        rewards: [...(resultDiscover?.rewards || []), ...(resultPush?.rewards || [])],
+        rewards: [...resultDiscover.rewards, ...(resultPush?.rewards || [])],
         undo: () => {
-            pov._score -= 5 * (settings.super ? 10 : settings.cost!);
-
+            pov.score -= 5 * (settings.super ? 10 : settings.cost!);
             undoFrozen();
-            resultDiscover?.undo();
-            if (cityHome) {
-                xorCity.unitCount(state, cityHome, cityHome._unitCount, cityHome._unitCount - 1);
-                cityHome._unitCount--;
-            }
-            spawnTile._unitOwner = oldUnitOwner;
+            resultDiscover.undo();
+            spawnTile._unitOwnerID = oldUnitOwner;
+            pov.units.pop();
             undoPurchase();
-            state.settings.unitIdx--;
-            pov._units.pop();
             resultPush?.undo();
             xorUnit.set(state, spawnedUnit);
         }

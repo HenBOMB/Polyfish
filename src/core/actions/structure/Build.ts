@@ -10,30 +10,29 @@ import { GameState } from "../../states";
 import { StructureType } from "../../types";
 
 
-export default function(state: GameState, strctureType: StructureType, tileIndex: number): Branch {
-    const pov = state.tribes[state.settings._pov];
+export default function(state: GameState, strctureType: StructureType, idx: number): Branch {
+    const pov = state.tribes[state.settings.currentPlayerTurnId];
     const settings = StructureSettings[strctureType];
-    const rulingCity = getRulingCity(state, tileIndex)!;
-    const cost = settings.cost || 0;
+    const rulingCity = getRulingCity(state, idx)!;
 
-    const undoPurchase = spendStars(state, cost);
-    const undoCreate = createStructure(state, tileIndex, strctureType);
+    const undoPurchase = !settings.cost? () => { } : spendStars(state, settings.cost);
+    const undoCreate = createStructure(state, idx, strctureType);
 
     let rewardPopCount = settings.rewardPop || 0;
 
     if (settings.adjacentTypes !== undefined) {
-        const adjCount = getAdjacentTiles(state, tileIndex)
-            .filter(x => state.structures[x.tileIndex] ? settings.adjacentTypes!.has(state.structures[x.tileIndex]!.id) : false).length;
+        const adjCount = getAdjacentTiles(state, idx)
+            .filter(x => state.structures[x.coords.idx] ? settings.adjacentTypes!.has(state.structures[x.coords.idx]!.type) : false).length;
         rewardPopCount *= adjCount;
     }
 
     if (IsStructureTask[strctureType]) {
-        pov._builtUniqueStructures.add(strctureType);
+        pov.builtUniqueImprovements.add(strctureType);
         xorPlayer.unique(pov, strctureType);
     }
 
     const popBranch = addPopulationToCity(state, rulingCity, rewardPopCount);
-    // const portBranch = addMissingConnections(state, rulingCity, tileIndex);
+    // const portBranch = addMissingConnections(state, rulingCity, idx);
     return {
         // rewards: [ ...(popBranch?.rewards || []), ...(portBranch?.rewards || []) ],
         rewards: popBranch.rewards,
@@ -41,7 +40,7 @@ export default function(state: GameState, strctureType: StructureType, tileIndex
             // portBranch?.undo();
             popBranch.undo();
             if (IsStructureTask[strctureType]) {
-                pov._builtUniqueStructures.delete(strctureType);
+                pov.builtUniqueImprovements.delete(strctureType);
                 xorPlayer.unique(pov, strctureType);
             }
             undoCreate();

@@ -8,7 +8,7 @@ export default class Harvest extends Move {
         super(MoveType.Harvest, null, target, null);
     }
 
-    execute(state: GameState): CallbackResult {
+    execute(state: GameState) {
         return harvestResource(state, this.getTarget());
     }
 }

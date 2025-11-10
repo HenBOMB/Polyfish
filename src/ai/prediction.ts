@@ -63,7 +63,7 @@ function predictClimate(state: GameState, tileIndex: number): ClimateType {
             // If we are not the one who has this climate
             // then we decrease our chances of predicting this climate type
             // this is to promote predicting other tribes
-            if(Climate2Tribe[state.tiles[neighbor].climate] == getPovTribe(state).tribeType) {
+            if(Climate2Tribe[state.tiles[neighbor].climate] == getPovTribe(state).type) {
                 climateCounts[climate] = (climateCounts[climate] || 0) + 1;
             }
             climateCounts[climate] = (climateCounts[climate] || 0) + 1;
@@ -89,7 +89,7 @@ function predictClimate(state: GameState, tileIndex: number): ClimateType {
 
 export function predictVillages(state: GameState): { [tileIndex: number]: [TribeType, boolean] } {
     const targetClimate = ClimateType.Oumaji;
-    const pov = state.settings._pov;
+    const pov = state.settings.currentPlayerTurnId;
     const predictedTribe = Climate2Tribe[targetClimate];
     const capital = getCapitalCity(state, pov);
 
@@ -105,7 +105,7 @@ export function predictVillages(state: GameState): { [tileIndex: number]: [Tribe
     for (const x in state._visibleTiles) {
         const tileIndex = Number(x);
         const tile = state.tiles[tileIndex];
-        if (tile.climate === targetClimate && tile._owner !== pov) {
+        if (tile.climate === targetClimate && tile.owner !== pov) {
             getAdjacentIndexes(state, tileIndex, 2, false, true).forEach(neighbor => {
                 const tileX = neighbor % state.settings.size;
                 const tileY = Math.floor(neighbor / state.settings.size);
@@ -115,7 +115,7 @@ export function predictVillages(state: GameState): { [tileIndex: number]: [Tribe
                 // if (calculateDistance(neighbor, capital.tileIndex, state.settings.size) < domainSize) {
                 //     return;
                 // }
-                if (!state.tiles[neighbor]._explorers.has(pov)) {
+                if (!state.tiles[neighbor].explorers.has(pov)) {
                     candidates[neighbor] = (candidates[neighbor] || 0) + 1;
                 }
             });
@@ -145,7 +145,7 @@ function detectEnemyRows(state: GameState): RowInfo[] {
         const tileIndex = Number(x); 
         const tile = state.tiles[tileIndex];
         // Check if tile is enemy-owned
-        if (tile._owner !== state.settings._pov && tile._owner) {
+        if (tile.owner !== state.settings.currentPlayerTurnId && tile.owner) {
             const x = tileIndex % size;
             const y = Math.floor(tileIndex / size);
 
@@ -158,15 +158,15 @@ function detectEnemyRows(state: GameState): RowInfo[] {
                 if (
                     state._visibleTiles[tile2] &&
                     state._visibleTiles[tile3] &&
-                    state.tiles[tile2]._owner === tile._owner &&
-                    state.tiles[tile3]._owner === tile._owner
+                    state.tiles[tile2].owner === tile.owner &&
+                    state.tiles[tile3].owner === tile.owner
                 ) {
                     rows.push([tile2, 1]); // tile2 is the middle tile
                 }
                 else if (
                     state._visibleTiles[tile2] &&
                     !state._visibleTiles[tile3] &&
-                    state.tiles[tile2]._owner === tile._owner
+                    state.tiles[tile2].owner === tile.owner
                 ) {
                     // The tile with most fog is the center tile
                     const count1 = getAdjacentIndexes(state, tile1, 1, false, true).filter(i => !state._visibleTiles[i]).length;
@@ -188,15 +188,15 @@ function detectEnemyRows(state: GameState): RowInfo[] {
                 if (
                     state._visibleTiles[tile2] &&
                     state._visibleTiles[tile3] &&
-                    state.tiles[tile2]._owner === tile._owner &&
-                    state.tiles[tile3]._owner === tile._owner
+                    state.tiles[tile2].owner === tile.owner &&
+                    state.tiles[tile3].owner === tile.owner
                 ) {
                     rows.push([tile2, 0]); // tile2 is the middle tile
                 }
                 else if (
                     state._visibleTiles[tile2] &&
                     !state._visibleTiles[tile3] &&
-                    state.tiles[tile2]._owner === tile._owner
+                    state.tiles[tile2].owner === tile.owner
                 ) {
                     // The tile with most fog is the center tile
                     const count1 = getAdjacentIndexes(state, tile1, 1, false, true).filter(i => !state._visibleTiles[i]).length;
@@ -277,7 +277,7 @@ export function predictOuterFogTerrain(
         neighbors.forEach(neighbor => {
             if (state._visibleTiles[neighbor]) {
                 const tile = state.tiles[neighbor];
-                const terrain = tile.terrainType;
+                const terrain = tile.type;
                 terrainCounts[terrain] = (terrainCounts[terrain] || 0) + 1;
                 climateCounts[tile.climate] = (climateCounts[tile.climate] || 0) + 1;
             } else if (fogPredictions[neighbor]) {
@@ -343,7 +343,7 @@ function getAllowedNeighbors(state: GameState, tileIndex: number, includeUnexplo
         // Only if its absolutely visible and steppable, if not then we dont really know what is there
         .filter(x => 
             // isTribeSteppable(state, x) // (cheating)
-            state.tiles[x]._explorers.has(pov.owner)? isTribeSteppable(state, x) : 
+            state.tiles[x].explorers.has(pov.id)? isTribeSteppable(state, x) : 
             Math.random() < odds
         )
     );
@@ -469,13 +469,13 @@ export function predictExplorer(state: GameState, tileIndex: number): number[] {
 
 export function predictEnemyCapitalsAndSurroundings(state: GameState): number[] {
     const mapSize = state.settings.size;
-    const gridSize = getDomainGrid(state.settings.tribeCount); // 2x2 grid
+    const gridSize = getDomainGrid(state.settings._maxTribeCount); // 2x2 grid
     const totalDomains = gridSize * gridSize; // 4 domains
 
     // Step 1: Find your domain based on your capital
     const tribe = getPovTribe(state);
     const yourDomains = new Set<number>();
-    tribe._cities.forEach(city => {
+    tribe.cities.forEach(city => {
         if (state.tiles[city.tileIndex].capitalOf > 0) {
             const x = city.tileIndex % mapSize;
             const y = Math.floor(city.tileIndex / mapSize);
@@ -488,7 +488,7 @@ export function predictEnemyCapitalsAndSurroundings(state: GameState): number[] 
     for(const x in state._visibleTiles) {
         const tileIndex = Number(x);
         const tile = state.tiles[tileIndex];
-        const ownedByEnemy = tile._owner && tile._owner !== tribe.owner;
+        const ownedByEnemy = tile.owner && tile.owner !== tribe.id;
         // TODO recently spawned so climate can reveal where their city might be at
         // const recentlySpawned = state.settings.turn < 7 && state.tribes[] (convert climate to tribe? find?)
         if (ownedByEnemy) {
@@ -620,9 +620,9 @@ export function predictBestNextCityReward(state: GameState, targetCity?: CitySta
     const minAmountOfSus = 3;
     const minPotentialPop = 4;
 
-    for(const city of targetCity? [targetCity] : state.tribes[state.settings._pov]._cities) {
+    for(const city of targetCity? [targetCity] : state.tribes[state.settings.currentPlayerTurnId].cities) {
         const tileIndex = city.tileIndex;
-        switch (city._level) {
+        switch (city.level) {
             case 2:
                 // EVAL Dont waste explore with the capital
                 // Workshop or Explorer
@@ -659,7 +659,7 @@ export function predictBestNextCityReward(state: GameState, targetCity?: CitySta
             case 4:
                 let potentialPop = 0;
                 for(const tileIndex of city._territory) {
-                    if(state.resources[tileIndex] && isResourceVisible(tribe, state.resources[tileIndex].id)) potentialPop++;
+                    if(state.resources[tileIndex] && isResourceVisible(tribe, state.resources[tileIndex].type)) potentialPop++;
                 }
                 if(potentialPop >= minPotentialPop) {
                     rewards.push(RewardType.BorderGrowth);

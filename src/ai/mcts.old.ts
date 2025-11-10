@@ -50,7 +50,7 @@ export class MCTSNode {
 
 	constructor(state: GameState) {
 		this.expanded = false;
-		this.pov = getPovTribe(state).owner;
+		this.pov = getPovTribe(state).id;
 		this.legal = MoveGenerator.legal(state);
 		this.count = this.legal.length;
 		this.recent = state.settings._recentMoves.length;

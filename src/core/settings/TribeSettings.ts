@@ -52,7 +52,7 @@ export const TribeSettings: Record<TribeType, {
     [TribeType.Luxidoor]: {
         specialStart: (tribe: TribeState) => {
             // TODO UPDATE WITH XOR
-            tribe._cities[0]._level++;
+            tribe.cities[0].level++;
         },
         color: "#ab3bd6",
         specialName: "Aumux",

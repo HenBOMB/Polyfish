@@ -19,9 +19,9 @@ export type TechnologySetting =  {
 
 // ! Sorted by tier and clockwise per branch
 export const TechnologySettings: Record<TechnologyType, TechnologySetting> = {
-    [TechnologyType.Unbuildable]: {
+    [TechnologyType.BeyondComprehension]: {
     },
-    [TechnologyType.None]: {
+    [TechnologyType.Unrequired]: {
         tier: 0,
         unlocksUnit: UnitType.Warrior,
         next: [TechnologyType.Riding, TechnologyType.Organization, TechnologyType.Climbing, TechnologyType.Fishing, TechnologyType.Hunting],
@@ -163,7 +163,7 @@ export const TechnologySettings: Record<TechnologyType, TechnologySetting> = {
     [TechnologyType.Hunting]: {
         tier: 1,
         next: [TechnologyType.Archery, TechnologyType.Forestry],
-        unlocksResource: ResourceType.WildAnimal,
+        unlocksResource: ResourceType.Game,
     },
     [TechnologyType.Archery]: {
         tier: 2,

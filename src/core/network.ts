@@ -27,18 +27,18 @@ export default class NetworkManager {
         this.undoChain = [];
         this.rewards = [];
 
-        const capital = this.pov._cities.find(c => this.state.tiles[c.tileIndex].capitalOf === this.pov.owner);
+        const capital = this.pov.cities.find(c => this.state.tiles[c.tileIndex].capitalOf === this.pov.id);
 
         if (!capital) {
-            console.warn("NetworkManager: No capital found for tribe owner:", this.pov.owner);
+            console.warn("NetworkManager: No capital found for tribe owner:", this.pov.id);
             return null;
         }
 
         // 1. Snapshot current _connectedToCapital status
         const previousConnectionStatus = new Map<number, boolean>();
-        this.pov._cities.forEach(city => {
+        this.pov.cities.forEach(city => {
             if (city !== capital) {
-                previousConnectionStatus.set(city.tileIndex, city._connectedToCapital);
+                previousConnectionStatus.set(city.tileIndex, city.connectedToCapital);
             }
         });
 
@@ -48,7 +48,7 @@ export default class NetworkManager {
 
         // 3. Recalculate all _connectedToCapital flags using BFS with roads and port jumps
         const connectedCityEntities = this.recalculateCapitalConnections(
-            this.pov._cities,
+            this.pov.cities,
             capital,
             previousConnectionStatus,
             portJumpLinks
@@ -59,7 +59,7 @@ export default class NetworkManager {
         for (const city of connectedCityEntities) {
             if (city !== capital) {
                 const wasConnected = previousConnectionStatus.get(city.tileIndex);
-                if (city._connectedToCapital && !wasConnected) {
+                if (city.connectedToCapital && !wasConnected) {
                     newlyConnectedCities.push(city);
                 }
             }
@@ -67,7 +67,7 @@ export default class NetworkManager {
         this.applyPopulationRewards(newlyConnectedCities, capital);
 
         // 5. Update visual routes (hasRoute on tiles)
-        this.updateAllVisualRoutes(this.pov._cities, capital, connectedCityEntities, portJumpLinks, allPlayerPorts);
+        this.updateAllVisualRoutes(this.pov.cities, capital, connectedCityEntities, portJumpLinks, allPlayerPorts);
 
         if (this.undoChain.length === 0 && this.rewards.length === 0) {
             return null; // No effective changes
@@ -82,9 +82,9 @@ export default class NetworkManager {
     }
 
     private setCityConnected(city: CityState, isConnected: boolean, previousState: boolean): void {
-        if (city._connectedToCapital !== isConnected) {
-            city._connectedToCapital = isConnected;
-            this.undoChain.push(() => { city._connectedToCapital = previousState; });
+        if (city.connectedToCapital !== isConnected) {
+            city.connectedToCapital = isConnected;
+            this.undoChain.push(() => { city.connectedToCapital = previousState; });
         }
     }
 
@@ -93,13 +93,13 @@ export default class NetworkManager {
      */
     private getAllPlayerPorts(): number[] {
         const portTiles: number[] = [];
-        for (const city of this.pov._cities) {
+        for (const city of this.pov.cities) {
             const cityTerritoryTiles = [city.tileIndex, ...(getCityAt(this.state, city.tileIndex)?._territory || [])];
             for (let i = 0; i < cityTerritoryTiles.length; i++) {
-                const tileIndex = cityTerritoryTiles[i];
-                if (this.state.structures[tileIndex]?.id === StructureType.Port &&
-                    this.state.tiles[tileIndex]?._owner === this.pov.owner) {
-                    portTiles.push(tileIndex);
+                const idx = cityTerritoryTiles[i];
+                if (this.state.structures[idx]?.type === StructureType.Port &&
+                    this.state.tiles[idx]?.owner === this.pov.id) {
+                    portTiles.push(idx);
                 }
             }
         }
@@ -133,8 +133,8 @@ export default class NetworkManager {
                         const tile = s.tiles[tileIdx];
                         // Java version also checks tribe.isVisible(i,j) and notEnemy
                         // Adapt this predicate based on your game's specific rules for trade routes
-                        return (tile.terrainType === TerrainType.Water || tile.terrainType === TerrainType.Ocean) &&
-                                (s.tiles[tileIdx]._owner === this.pov.owner || !s.tiles[tileIdx]._owner); // Own or neutral water
+                        return (tile.type === TerrainType.Water || tile.type === TerrainType.Ocean) &&
+                                (s.tiles[tileIdx].owner === this.pov.id || !s.tiles[tileIdx].owner); // Own or neutral water
                                 // && s.getVisibility(tileIdx, this.tribeOwner); // If visibility matters
                     },
                     false,
@@ -166,10 +166,10 @@ export default class NetworkManager {
         // Reset _connectedToCapital flags for non-capitals and prepare undo
         playerCities.forEach(city => {
             if (city !== capital) {
-                const wasConnected = city._connectedToCapital; // State before this function call began
-                city._connectedToCapital = false; // Tentatively set to false
+                const wasConnected = city.connectedToCapital; // State before this function call began
+                city.connectedToCapital = false; // Tentatively set to false
                 // Undo will revert to its state *before* this recalculation pass
-                this.undoChain.push(() => { city._connectedToCapital = wasConnected; });
+                this.undoChain.push(() => { city.connectedToCapital = wasConnected; });
             }
         });
 
@@ -190,7 +190,7 @@ export default class NetworkManager {
 
             // If currentTileIndex is a city's main tile, ensure its city entity is marked
             const cityAtCurrent = getCityAt(this.state, currentTileIndex);
-            if (cityAtCurrent && playerCities.includes(cityAtCurrent) && !cityAtCurrent._connectedToCapital && cityAtCurrent !==capital) {
+            if (cityAtCurrent && playerCities.includes(cityAtCurrent) && !cityAtCurrent.connectedToCapital && cityAtCurrent !==capital) {
                 this.setCityConnected(cityAtCurrent, true, previousStatus.get(cityAtCurrent.tileIndex) ?? false); // Update and record specific undo for this change
                 connectedCitiesSet.add(cityAtCurrent);
             }
@@ -202,13 +202,13 @@ export default class NetworkManager {
                 if (visitedTiles.has(neighborIdx)) continue;
 
                 const neighborTile = this.state.tiles[neighborIdx];
-                if (neighborTile._owner !== this.pov.owner) continue; // Must be our tile
+                if (neighborTile.owner !== this.pov.id) continue; // Must be our tile
 
                 // Road Link Condition: (current is road AND neighbor is road) OR
                 // (current is road AND neighbor is city) OR (current is city AND neighbor is road)
                 // This defines "connectedTiles" implicitly.
-                const currentIsRoad = this.state.structures[currentTileIndex]?.id === StructureType.Road;
-                const neighborIsRoad = this.state.structures[neighborIdx]?.id === StructureType.Road;
+                const currentIsRoad = this.state.structures[currentTileIndex]?.type === StructureType.Road;
+                const neighborIsRoad = this.state.structures[neighborIdx]?.type === StructureType.Road;
 
                 let canTraverseViaRoad = false;
                 if(currentIsRoad && neighborIsRoad) canTraverseViaRoad = true;
@@ -221,7 +221,7 @@ export default class NetworkManager {
                     queue.push(neighborIdx);
 
                     const cityOwningNeighbor = getCityOwningTile(this.state, neighborIdx, playerCities);
-                    if (cityOwningNeighbor && cityOwningNeighbor !== capital && !cityOwningNeighbor._connectedToCapital) {
+                    if (cityOwningNeighbor && cityOwningNeighbor !== capital && !cityOwningNeighbor.connectedToCapital) {
                         this.setCityConnected(cityOwningNeighbor, true, previousStatus.get(cityOwningNeighbor.tileIndex) ?? false);
                         connectedCitiesSet.add(cityOwningNeighbor);
                         // If a city becomes connected, explore from all its tiles
@@ -233,7 +233,7 @@ export default class NetworkManager {
             }
 
             // II. Explore via pre-calculated PORT JUMP LINKS
-            const isCurrentTileAPort = this.state.structures[currentTileIndex]?.id === StructureType.Port;
+            const isCurrentTileAPort = this.state.structures[currentTileIndex]?.type === StructureType.Port;
             if (isCurrentTileAPort && portJumpLinks.has(currentTileIndex)) {
                 const linkedPorts = portJumpLinks.get(currentTileIndex)!;
                 for (const remotePortIdx of linkedPorts) {
@@ -243,7 +243,7 @@ export default class NetworkManager {
                     queue.push(remotePortIdx); // Add the port tile itself to explore from it
 
                     const cityOwningRemotePort = getCityOwningTile(this.state, remotePortIdx, playerCities);
-                    if (cityOwningRemotePort && cityOwningRemotePort !== capital && !cityOwningRemotePort._connectedToCapital) {
+                    if (cityOwningRemotePort && cityOwningRemotePort !== capital && !cityOwningRemotePort.connectedToCapital) {
                         this.setCityConnected(cityOwningRemotePort, true, previousStatus.get(cityOwningRemotePort.tileIndex) ?? false);
                         connectedCitiesSet.add(cityOwningRemotePort);
                         // If a city becomes connected via this port, explore from all its tiles
@@ -298,8 +298,8 @@ export default class NetworkManager {
     ): void {
         const pov = getPovTribe(this.state);
         const initiallyRoutedTiles: number[] = [];
-        for (let i = 0; i < this.state.tiles.length; i++) { // Assuming tiles is flat array
-            if (this.state.tiles[i]._owner === pov.owner && this.state.tiles[i].hasRoute) {
+        for (let i = 0; i < this.state.settings.size**2; i++) { // Assuming tiles is flat array
+            if (this.state.tiles[i].owner === pov.id && this.state.tiles[i].hasRoute) {
                 initiallyRoutedTiles.push(i);
                 this.state.tiles[i].hasRoute = false;
             }
@@ -314,7 +314,7 @@ export default class NetworkManager {
         for(const i in Object.keys(this.state.structures)) {
             const structure = this.state.structures[i];
             const tile = this.state.tiles[i];
-            if (structure?.id === StructureType.Road && tile?._owner === pov.owner) {
+            if (structure?.type === StructureType.Road && tile?.owner === pov.id) {
                 const owningCity = getCityOwningTile(this.state, Number(i), playerCities);
                 // Roads are active if they are in a connected city's territory OR connect two connected cities
                 // Simpler: if road is on a tile whose ruling city is connected.
@@ -345,8 +345,8 @@ export default class NetworkManager {
                         const waterPath = computeReachablePath(this.state, port1Idx, port2Idx,
                             (s, tileIdx) => {
                                 const t = s.tiles[tileIdx];
-                                return (t.terrainType === TerrainType.Water || t.terrainType === TerrainType.Ocean) &&
-                                       (s.tiles[tileIdx]._owner === pov.owner || !s.tiles[tileIdx]._owner);
+                                return (t.type === TerrainType.Water || t.type === TerrainType.Ocean) &&
+                                       (s.tiles[tileIdx].owner === pov.id || !s.tiles[tileIdx].owner);
                             },
                             false,
                             MAX_PORT_TRADE_DISTANCE);

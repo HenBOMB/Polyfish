@@ -1,17 +1,17 @@
 import { xorTile } from "../../zobrist/hasher";
 import addPopulationToCity from "./AddPopulation";
 import { getPovTribe, getAdjacentIndexes, isSkilledIn, getLighthouses, getCapitalCity } from "../functions";
-import Move, { CallbackResult, UndoCallback } from "../move";
+import Move, { Branch, CallbackResult, UndoCallback } from "../move";
 import { GameState, UnitState } from "../states";
 import { TerrainType, SkillType } from "../types";
 
 
-export function discoverTiles(state: GameState, unit?: UnitState | null, tileIndexes?: number[]): CallbackResult {
+export function discoverTiles(state: GameState, unit?: UnitState | null, tileIndexes?: number[]): Branch {
     const pov = getPovTribe(state);
     const discovered = (tileIndexes || (unit ? getAdjacentIndexes(
         state,
-        unit._tileIndex,
-        state.tiles[unit._tileIndex].terrainType == TerrainType.Mountain || isSkilledIn(unit, SkillType.Scout) ? 2 : 1,
+        unit.coords.idx,
+        state.tiles[unit.coords.idx].type == TerrainType.Mountain || isSkilledIn(unit, SkillType.Scout) ? 2 : 1,
         false,
         true
     ) : [])).filter(x => !state._visibleTiles[x]);
@@ -33,27 +33,27 @@ export function discoverTiles(state: GameState, unit?: UnitState | null, tileInd
             }
         }
 
-        if (state.settings.areYouSure) {
-            state.tiles[tileIndex]._explorers.add(pov.owner);
+        if (state.settings._areYouSure) {
+            state.tiles[tileIndex].explorers.add(pov.id);
         }
 
         state._visibleTiles[tileIndex] = true;
     }
 
-    pov._score += 5 * discovered.length;
+    pov.score += 5 * discovered.length;
 
     return {
         rewards,
         undo: () => {
             chain.forEach(x => x());
 
-            pov._score -= 5 * discovered.length;
+            pov.score -= 5 * discovered.length;
 
             discovered.forEach(x => {
                 xorTile.discover(state, state.tiles[x]);
 
-                if (state.settings.areYouSure) {
-                    state.tiles[x]._explorers.delete(pov.owner);
+                if (state.settings._areYouSure) {
+                    state.tiles[x].explorers.delete(pov.id);
                 }
 
                 state._visibleTiles[x] = false;

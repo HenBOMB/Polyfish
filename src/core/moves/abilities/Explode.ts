@@ -10,7 +10,7 @@ export default class Explode extends Ability {
         super(src, null, AbilityType.Explode);
     }
 
-    execute(state: GameState): CallbackResult {
+    execute(state: GameState) {
         const attacker = getUnitAt(state, this.getSrc())!;
         // explode deals half damage the unit deals, i guess its the same as splash logic
         return {

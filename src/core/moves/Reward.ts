@@ -15,8 +15,9 @@ export default class Reward extends Move {
         super(MoveType.Reward, src, null, type);
     }
 
-    execute(state: GameState): CallbackResult {
+    execute(state: GameState) {
         const city = getCityAt(state, this.getSrc())!;
+        // console.log(city);
         const rewardType = this.getType<RewardType>();
         const pov = getPovTribe(state);
 
@@ -25,9 +26,9 @@ export default class Reward extends Move {
 
         switch (rewardType) {
             case RewardType.Workshop:
-                city._production++;
+                city.production++;
                 undoReward = () => {
-                    city._production--;
+                    city.production--;
                 }
                 break;
             case RewardType.Explorer:
@@ -45,36 +46,36 @@ export default class Reward extends Move {
                 undoReward = gainStars(state, 5);
                 break;
             case RewardType.PopGrowth:
-                city._population += 3;
-                city._progress += 3;
-                pov._score += 15; // 3 pop x 5 stars each
+                city.population += 3;
+                city.progress += 3;
+                pov.score += 15; // 3 pop x 5 stars each
                 undoReward = () => {
-                    pov._score -= 15;
-                    city._progress -= 3;
-                    city._population -= 3;
+                    pov.score -= 15;
+                    city.progress -= 3;
+                    city.population -= 3;
                 }
                 break;
             case RewardType.BorderGrowth:
-                city._borderSize++;
+                city.borderSize++;
                 const undoClaim = claimTerritory(state, getAdjacentIndexes(state, city.tileIndex, 2, undefined, true));
                 rewards.push(...undoClaim.rewards);
                 undoReward = () => {
                     undoClaim.undo();
-                    city._borderSize--;
+                    city.borderSize--;
                 }
             break;
             case RewardType.Park:
-                city._production++;
-                pov._score += 250;
+                city.production++;
+                pov.score += 250;
                 undoReward = () => {
-                    pov._score -= 250;
-                    city._production--;
+                    pov.score -= 250;
+                    city.production--;
                 }
                 break;
             case RewardType.SuperUnit:
                 const resultSummon = summonUnit(
                     state, 
-                    TribeSettings[pov.tribeType].uniqueSuperUnit || UnitType.Giant, 
+                    TribeSettings[pov.type].uniqueSuperUnit || UnitType.Giant, 
                     city.tileIndex
                 )!;
                 rewards.push(...resultSummon.rewards);
@@ -82,12 +83,12 @@ export default class Reward extends Move {
                 break;
         }
         
-        city._rewards.add(rewardType);
+        city.rewards.add(rewardType);
         
         return {
             rewards,
             undo: () => {
-                city._rewards.delete(rewardType);
+                city.rewards.delete(rewardType);
                 undoReward();
             },
         };

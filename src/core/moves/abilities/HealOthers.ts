@@ -10,7 +10,7 @@ export default class HealOthers extends Ability {
         super(src, null, AbilityType.HealOthers);
     }
 
-    execute(state: GameState): CallbackResult {
+    execute(state: GameState) {
         const chain: any[] = [];
         const adjAllies = getAlliesNearTile(state, this.getSrc());
 

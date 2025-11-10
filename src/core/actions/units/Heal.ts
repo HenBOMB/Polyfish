@@ -10,12 +10,12 @@ export default function(state: GameState, unit: UnitState, amount: number): Undo
         return tryRemoveEffect(state, unit, EffectType.Poison);
     }
 
-    const oldHealth = unit._health;
+    const oldHealth = unit.health;
     
-    unit._health += amount;
-    unit._health = Math.min(unit._health, getMaxHealth(unit));
+    unit.health += amount;
+    unit.health = Math.min(unit.health, getMaxHealth(unit));
 
     return () => {
-        unit._health = oldHealth;
+        unit.health = oldHealth;
     };
 }

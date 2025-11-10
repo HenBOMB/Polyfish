@@ -17,6 +17,7 @@
 #include <sys/auxv.h>
 #include "reader_util.h"
 #include <random>
+#include "json.hpp"
 
 #define NAME "polyai-reader"
 
@@ -24,7 +25,7 @@
 #define ANTI_DEBUG() if (ptrace(PTRACE_TRACEME, 0, nullptr, nullptr) == -1) { \
     std::cerr << "Debugger detected, exiting." << std::endl; exit(1); }
 
-
+using json = nlohmann::json;
 
 extern char** environ;
 
@@ -73,27 +74,91 @@ uintptr_t getModuleBase(pid_t pid, std::string modName) {
     return 0;
 }
 
+// quick UTF-8 validity check
+static bool isValidUtf8(const std::string& s) {
+    const unsigned char *bytes = reinterpret_cast<const unsigned char*>(s.data());
+    size_t len = s.size();
+    size_t i = 0;
+    while (i < len) {
+        if (bytes[i] <= 0x7F) { i += 1; continue; }
+        if ((bytes[i] & 0xE0) == 0xC0) { if (i+1>=len) return false; if ((bytes[i+1] & 0xC0) != 0x80) return false; i+=2; continue; }
+        if ((bytes[i] & 0xF0) == 0xE0) { if (i+2>=len) return false; if ((bytes[i+1] & 0xC0) != 0x80) return false; if ((bytes[i+2] & 0xC0) != 0x80) return false; i+=3; continue; }
+        if ((bytes[i] & 0xF8) == 0xF0) { if (i+3>=len) return false; if ((bytes[i+1] & 0xC0) != 0x80) return false; if ((bytes[i+2] & 0xC0) != 0x80) return false; if ((bytes[i+3] & 0xC0) != 0x80) return false; i+=4; continue; }
+        return false;
+    }
+    return true;
+}
+
+// Try to convert a byte-buffer that looks like UTF-16LE to UTF-8
+static bool tryUtf16LeToUtf8(const std::string &in, std::string &out) {
+    if (in.size() % 2 != 0) return false;
+    // interpret bytes as char16_t sequence
+    const char16_t *p16 = reinterpret_cast<const char16_t*>(in.data());
+    size_t count = in.size() / 2;
+    try {
+        std::u16string u16(p16, p16 + count);
+        std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t> conv;
+        out = conv.to_bytes(u16);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+// Remove NULs and other low-control chars (fallback sanitization)
+static std::string sanitizeStripControls(const std::string &in) {
+    std::string out;
+    out.reserve(in.size());
+    for (unsigned char c : in) {
+        if (c == 0) continue;            // drop NUL
+        // optionally drop other control chars except newline/tab:
+        if (c < 0x20 && c != '\n' && c != '\t' && c != '\r') continue;
+        out.push_back(char(c));
+    }
+    return out;
+}
+
+// Main sanitize helper: returns a valid UTF-8 string (or a safe replacement)
+static std::string toValidUtf8(const std::string &raw) {
+    if (isValidUtf8(raw)) return raw;
+
+    // If it contains lots of NULs, try UTF-16LE decode
+    bool hasNull = raw.find('\0') != std::string::npos;
+    if (hasNull) {
+        std::string converted;
+        if (tryUtf16LeToUtf8(raw, converted) && isValidUtf8(converted)) return converted;
+    }
+
+    // fallback: strip NULs and other control chars
+    std::string stripped = sanitizeStripControls(raw);
+    if (isValidUtf8(stripped)) return stripped;
+
+    // final fallback: produce escaped hex (so we never throw) or base64 encode
+    // Here we hex-escape non-printables:
+    std::ostringstream oss;
+    for (unsigned char c : raw) {
+        if (c >= 0x20 && c <= 0x7E) oss << char(c);
+        else {
+            oss << "\\x";
+            oss << std::hex << std::setw(2) << std::setfill('0') << (int)c << std::dec;
+        }
+    }
+    return oss.str();
+}
+
 int polyai(uintptr_t modBase, pid_t pid, bool prod) {
     std::unordered_map<uint16_t, TileInfo> tileMap;
     std::unordered_map<uint16_t, StructureInfo> structMap;
-    std::unordered_map<uint16_t, ResourceInfo> resourceMap;
+    std::unordered_map<uint16_t, Data::ResourceState> resourceMap;
     std::unordered_map<uint16_t, CityInfo> cityMap;
-    std::unordered_map<uint16_t, UnitInfo> unitMap;
-    std::unordered_map<uint16_t, PlayerState> tribesMap;
-    
-    /**
+    std::unordered_map<uint16_t, Data::UnitData> unitMap;
+    std::unordered_map<uint16_t, Data::PlayerState> tribesMap;
+
+    /**=
      * BotDifficulty / BaseGameMode / UnitEffect
      *   0x10: Int32, value (enum)
      * 
      *   other interesting ones like: current viewing player, curlocalplaerindex
-     * 
-     * 
-     *  
-     * MapData
-     *   0x10: UInt16, width
-     *   0x12: UInt16, height
-     *   0x18: TileData[] tiles
-     *   0x20: WorldContinent[] continents
      * 
      * Shoreline
      *   0x10 Bool visible
@@ -128,17 +193,6 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
      *   0x54: Int32 LandTileCount
      *   0x54: Int32 NumerOfCapitals
      *   0x54: Int32 MaxSize
-     * 
-     * GameState
-     *   0x10: Int32 version
-     *   0x14: Int32 seed
-     *   0x18: UInt32 currentTurn (<--- turnBase[0] !!!)
-     *   0x1C: Byte currentPlayerIndex
-     *   0x20: UInt32 currentUnitId
-     *   0x24: GameState currentState
-     *   0x28: GameSettings settings
-     *   0x30: MapData map (<--- mapBase[1] !!!)
-     *   0x38: List<PlayerState> playerStates (<--- tribesBase[1] !!!)
      *   ...
      * 
      * PlayerData
@@ -153,46 +207,12 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
      *   0x30: PlayerProfileState profile 
      *   0x38: String defaultName
      * 
-     * ClientBase
-     *   0x10: ClientType clientType
-     *   0x18: ActionManager clientActionManager
-     *   0x20: gameId
-     *   0x30: GameState initialGameState
-     *   0x38: GameState currentGameState (<--- mapBase[0] !!!)
-     *   ...
-     *   0x78: Int32 lastTurnGameState (<--- turnBase[0] !!!)
-     * 
-     * GameManager
-     *   0x20: GameSettings, settings
-     *   0x28: ClientBase, client
-     *   0x50: Int32, aiOpponents
-     *   0x54: Int32, playerOpponents
-     *   0x64: TribeType, startingTribe
-     * 
-     *   other interesting ones like: ladderManager, tornamentManager, lobbyMana, replaysMana
-     * 
-     * GameSettings
-     *   0x10: BotDifficulty, difficulty
-     *   0x14: BaseGameMode, baseGameMode
-     *   0x18: BaseGameMode, rulesGameMode
-     *   0x30: List<TribeType>, selectedSkins
-     *   0x38: List<PlayerData>, players
-     *   0x40: List<PlayerData>, spectators
-     *   0x48: MapPreset, mapPreset
-     *   0x50: GameRules, rules
-     *   0x58: String, gameName
-     *   0x60: GameType, gameType
-     *   0x64: Int32, mapSize
-     *   0x68: Int32, timeLimit
-     *   ...
-     *   0x80: Int32, opponentcount
-     * 
      * TerrainData
-     *   0x10: Int32, idx
+     *   0x10: Int32 idx
      * 
      * WorldCoords
-     *   0x10: Int32, x
-     *   0x14: Int32, y
+     *   0x10: Int32 x
+     *   0x14: Int32 y
      * 
      * ImprovementData.Type
      *   IceTemple, IceBank, polarisClimate, Algae, Funci, Mycelium, Outpost, EnchantWhale, Monument6, Sanctuary, Monument7, EnchantAnimal, Monument5, BurnSpores, HiddenSanctuary, Market, Aquafarm, Atoll, Fertilize, Canal, Clathrus, Bridge, StarFishing, HarvestSpores, LightHouse, NullBuilding, Cultivate, Landfill, Monument2, Windmill, Farm, Fishing, Hunting, Port, Monument3, CustomsHouse, Ruin, Road, None, City, BurnForest, ClearForest, Sawmill, Mine, MountainTemple, Forge, Monument1, LumberHut, WaterTemple, Temple, GrowForest, ForestTemple, Algae Spawn, Whale Hunting, HarvestFruit
@@ -282,13 +302,35 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
      *   0x68: List<GrowthRewards> growthRewards
      */
 
+    /*
+     * ClientBase
+     *   0x10: ClientType clientType
+     *   0x18: ActionManager clientActionManager
+     *   0x20: gameId
+     *   0x30: GameState initialGameState
+     *   0x38: GameState currentGameState (<--- mapBase[0] !!!)
+     *   ...
+     *   0x78: Int32 lastTurnGameState (<--- turnBase[0] !!!)
+     * 
+     * GameManager
+     *   0x20: GameSettings settings
+     *   0x28: ClientBase client
+     *   0x50: Int32 aiOpponents
+     *   0x54: Int32 playerOpponents
+     *   0x64: TribeType startingTribe
+     * 
+     *   other interesting ones like: ladderManager, tornamentManager, lobbyMana, replaysMana
+     *   ...
+     *   0x80: Int32 opponentcount
+     */
+    
     uintptr_t gameManager = getPlace(pid, modBase + 0x3674378, { 0xB8, 0x0 });
-    // std::cout << "Game manager address: " << std::hex << gameManager << std::endl;
     uintptr_t playersBase = getPlace(pid, gameManager, {_0x_GAMEMANAGER_CLIENT, _0x_CLIENT_CUR_STATE, _0x_STATE_PLAYERS, _0x_IN_LIST});
     uintptr_t currentTurnBase = getPlace(pid, gameManager, {_0x_GAMEMANAGER_CLIENT, _0x_CLIENT_CUR_STATE, _0x_STATE_CUR_TURN});
-    // TODO units are now handled per tile, using TileState -> UnitState
-    // uintptr_t unitsBase = getPlace(pid, gameManager, {0xB8, 0x0, 0x40});
     uintptr_t mapBase = getPlace(pid, gameManager, {_0x_GAMEMANAGER_CLIENT, _0x_CLIENT_CUR_STATE, _0x_STATE_MAP, _0x_MAP_TILES});
+    std::string _logPlayers = "";
+
+    // std::cout << "Game manager address: " << std::hex << gameManager << std::endl;
 
     if (!gameManager || !currentTurnBase || !mapBase || !playersBase) {
         if (!gameManager) {
@@ -308,126 +350,177 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
 
     // ! SETTINGS ! //
 
-    uint16_t turn;
+    // // ClientInteraction.SelectTile
+    // uintptr_t FN_ADDR = modBase + 0x1AD6f90;
+    // static const uintptr_t CLIENT_INSTANCE_ADDR = 0x7112D1D0;
+    // static const uintptr_t TILE_ADDR = 0x74018280;
+    // using FnType = void(*)(void*, void*);
+    // FnType fn = reinterpret_cast<FnType>(FN_ADDR);
 
-    readPiece(pid, currentTurnBase, turn);
+    // // std::cout << "fn: " << std::hex << FN_ADDR << std::dec << std::endl;
+    // // std::cout << "tile: " << std::hex << CLIENT_INSTANCE_ADDR << std::dec << std::endl;
+    // // std::cout << "selectTile: " << std::hex << TILE_ADDR << std::dec << std::endl;
+
+    // volatile void* inst = reinterpret_cast<void*>(CLIENT_INSTANCE_ADDR);
+    // volatile void* tile = reinterpret_cast<void*>(TILE_ADDR);
+
+    // // std::cout << "invoking function..." << std::endl;
+
+    // // call
+    // fn((void*)tile, (void*)inst);
+
+    // std::cout << "function returned (if it returned)." << std::endl;
+
+    // return 1;
+
+
+    /*
+     * GameSettings
+     *   0x10: BotDifficulty difficulty
+     *   0x14: BaseGameMode baseGameMode
+     *   0x18: BaseGameMode rulesGameMode
+     *   0x30: List<TribeType> selectedSkins
+     *   0x38: List<PlayerData> players
+     *   0x40: List<PlayerData> spectators
+     *   0x48: MapPreset mapPreset
+     *   0x50: GameRules rules
+     *   0x58: String gameName
+     *   0x60: GameType gameType
+     *   0x64: Int32 mapSize
+     *   0x68: Int32 timeLimit
+     */
+    
+    uintptr_t gameSettingsRoot = getPlace(pid, gameManager, {_0x_GAMEMANAGER_SETTINGS});
+    unsigned char settingsBuffer[Offsets::GameSettings_Size_]; 
+    readBlock(pid, getPlace(pid, gameSettingsRoot, {0x0}), settingsBuffer, sizeof(settingsBuffer));
+
+    // std::cout << "Game settings address: " << std::hex << gameSettingsRoot << std::endl;
+    int32_t mapSize, baseGameMode, timeLimit;
+    std::string gameName;
+    bool winByCapital, winByExtermination, allowMirrorPick, allowSpecialTribe, allowTechSharing;
+    readPiece(pid, getPlace(pid, gameSettingsRoot, {Offsets::GameSettings_BaseGameMode}), baseGameMode);
+    readPiece(pid, getPlace(pid, gameSettingsRoot, {Offsets::GameSettings_TimeLimit}), timeLimit);
+    readWord(pid, getPlace(pid, gameSettingsRoot, {Offsets::GameSettings_GameName, 0x0}), gameName);
+    // readPiece(pid, getPlace(pid, gameSettingsRoot, {Offsets::GameSettings_MapSize}), mapSize);
+
+    mapSize = *(int32_t*)&settingsBuffer[Offsets::GameSettings_MapSize];
+    // std::cout << "Name: " << gameName << std::endl;
+
+    /*
+     * MapData
+     *   0x10: UInt16, width
+     *   0x12: UInt16, height
+     *   0x18: TileData[] tiles
+     *   0x20: WorldContinent[] continents
+     */
+
+    readPiece(pid, getPlace(pid, gameManager, {_0x_GAMEMANAGER_CLIENT, _0x_CLIENT_CUR_STATE, Offsets::GameState_Map, 0x12 }), mapSize);
+    // std::cout << "Map size: " << mapSize << std::endl;
+
+    /*
+     * GameRules
+     *   0x10: Int32 turnLimit
+     *   0x14: Int32 scoreLimit
+     *   0x18: Bool winByCapital
+     *   0x19: Bool winByExtermination
+     *   0x1a: Bool allowMirrorPick
+     *   0x1b: Bool allowSpecialTribe
+     *   0x1c: Bool allowTechSharing
+     *   0x20: GameRules.DeathCondition playerDeathCondition
+     * 
+     * GameRules.DeathCondition
+     *   0x10: Int32 type
+     */
+
+    readPiece(pid, getPlace(pid, gameSettingsRoot, {Offsets::GameSettings_Rules, Offsets::GameRules_WinByCapital}), winByCapital);
+    readPiece(pid, getPlace(pid, gameSettingsRoot, {Offsets::GameSettings_Rules, Offsets::GameRules_WinByExtermination}), winByExtermination);
+    readPiece(pid, getPlace(pid, gameSettingsRoot, {Offsets::GameSettings_Rules, Offsets::GameRules_AllowMirrorPick}), allowMirrorPick);
+    readPiece(pid, getPlace(pid, gameSettingsRoot, {Offsets::GameSettings_Rules, Offsets::GameRules_AllowSpecialTribe}), allowSpecialTribe);
+    readPiece(pid, getPlace(pid, gameSettingsRoot, {Offsets::GameSettings_Rules, Offsets::GameRules_AllowTechSharing}), allowTechSharing);
+    
+    /*
+     * GameState
+     *   0x24: GameState currentState
+     *   0x28: GameSettings settings
+     *   0x30: MapData map
+     *   0x38: List<PlayerState> playerStates
+     */
+
+    int32_t seed, version;
+    uint32_t currentTurn, currentUnitID;
+    uint8_t currentPlayerIndex;
+
+    uintptr_t gameStateBase = getPlace(pid, gameManager, {_0x_GAMEMANAGER_CLIENT, _0x_CLIENT_CUR_STATE, 0x0});
+
+    readPiece(pid, gameStateBase + Offsets::GameState_Version, version);
+    readPiece(pid, gameStateBase + Offsets::GameState_Seed, seed);
+    readPiece(pid, gameStateBase + Offsets::GameState_CurrentTurn, currentTurn);
+    readPiece(pid, gameStateBase + Offsets::GameState_CurrentUnitID, currentUnitID);
+    readPiece(pid, gameStateBase + Offsets::GameState_CurrentPlayerIndex, currentPlayerIndex);
 
     // ! TRIBES ! //
     
     uint16_t tribeCount = 0;
-    
     readPiece(pid, getPlace(pid, playersBase, { _0x_IN_LIST_COUNT }), tribeCount);
-
     // The last one is always "Nature"
     tribeCount -= 1;
 
-    // TODO Fix
     for (uint32_t index = 0; index < tribeCount; ++index) {
         uintptr_t playerRoot = getPlace(pid, playersBase, { index * 0x8 + _0x_IN_LIST_START_SHIFT });
         uintptr_t playerBase = getPlace(pid, playerRoot, { 0x0 });
-        unsigned char playerBuffer[PlayerStateOffsets::BUFF_SIZE]; 
+        unsigned char playerBuffer[PlayerStateOffsets::SIZE_]; 
 
         if (playerRoot == 0 || playerBase == 0 || !readBlock(pid, playerBase, playerBuffer, sizeof(playerBuffer))) {
             break;
         }
         
-        int32_t currency, resignedTurn, killedTurn, score, kills;
+        int32_t currency, resignedTurn, killedTurn, score, kills, casualties;
         int16_t startingTileX, startingTileY, tribeType;
         uint8_t id, killerId;
-        std::string tech, tasks, builtUniqueImprovements, knownPlayers, username, relations; 
+        std::vector<int32_t> builtUniqueImprovements, tech;
+        std::vector<uint8_t> knownPlayers;
+        std::unordered_map<uint16_t, Data::DiplomacyRelation> relations;
+        std::string tasks, username; 
         bool autoplay; 
-        
-        // ! PlayerState
-        /*
-        *   0x10: Byte id
-        *   0x18: String username
-        *   0x20: Guid accountId
-        *   0x34: Bool autoplay
-        *   0x38: WorldCoordinates, startTile
-        *   0x40: TribeType tribe
-        *   0x44: TribeType tribeMix
-        *   ...
-        *   0x50: Int32 resignedTurn
-        *   0x50: Int32 resignedAtCommandIndex
-        *   0x58: Int32 wipedAtCommandIndex
-        *   0x60: List<TechData.Type> availableTech
-        *   0x68: List<TaskBase> tasks
-        *   0x70: Dictionary<Byte,Int32> aggressions
-        *   0x78: List<Byte> knownPlayers
-        *   0x80: List<ImprovementData> builtUniqueImprovements
-        *   0x88: Dictionary<Byte,DiplomacyRelation> relations
-        *   0x90: List<Diplomacymessage> messages
-        *   0x98: SkinType skinType
-        *   0x9C: Int32 currency
-        *   0xA0: Int32 score
-        *   0xA4: Int32 endScore
-        *   0xA8: Int32 cities
-        *   0xAC: Int32 kills
-        *   0xB0: Int32 casualties
-        *   0xB4: Int32 wipeOuts
-        *   0xB8: Byte killerId
-        *   0xBC: Int32 killedTurn
-        *   0xC0: Int32 color
-        *   0xC8: AIState aiState
-        */
-
-        // ! DiplomacyRelation
-        /* 
-         *  0x10: DiplomacyRelationState state
-         *  0x14: Int32 lastAttackTurn
-         *  0x18: Int32 embassyLevel
-         *  0x1C: Int32 lastPeaceBrokenTurn
-         *  0x20: Int32 firstMeet
-         *  0x24: Int32 embassyBuildTurn
-         *  0x28: Int32 previousAttackTurn
-         *
-         * DiplomacyRelationState
-         *  0x10: Int32 value
-         */
 
         uintptr_t usernameRoot = getPlace(pid, *(uintptr_t*)&playerBuffer[PlayerStateOffsets::USERNAME], {  });
         readWord(pid, usernameRoot, username);
+        
         // std::cout << "[player]: " << username << std::endl;
+        _logPlayers += username + ", ";
+
         // std::cout << "[address]: 0x" << std::hex << usernameRoot << std::endl << std::dec;
-        id            = *(uint8_t*)&playerBuffer[PlayerStateOffsets::OWNER];
+        id            = *(uint8_t*)&playerBuffer[PlayerStateOffsets::ID];
         autoplay      = *(bool*)&playerBuffer[PlayerStateOffsets::AUTOPLAY];
         startingTileX = *(int16_t*)&playerBuffer[PlayerStateOffsets::START_TILE_X];
         startingTileY = *(int16_t*)&playerBuffer[PlayerStateOffsets::START_TILE_Y];
         tribeType     = *(int16_t*)&playerBuffer[PlayerStateOffsets::TRIBE_TYPE];
         resignedTurn  = *(int32_t*)&playerBuffer[PlayerStateOffsets::RESIGNED_TURN];
-        readSingleList(pid, getPlace(pid, playerRoot, { PlayerStateOffsets::AVAILABLE_TECH }), tech);
+        casualties    = *(int32_t*)&playerBuffer[PlayerStateOffsets::CASUALTIES];
+        readSingleListMagic(pid, getPlace(pid, playerRoot, { PlayerStateOffsets::AVAILABLE_TECH }), tech);
         // TODO tasks
         // TODO aggressions
-        readSingleList(pid, getPlace(pid, playerRoot, { PlayerStateOffsets::KNOWN_PLAYERS }), knownPlayers);
+        readSingleListMagic(pid, getPlace(pid, playerRoot, { PlayerStateOffsets::KNOWN_PLAYERS }), knownPlayers);
         // std::cout << "[address]: 0x" << std::hex << getPlace(pid, playerRoot, { PlayerStateOffsets::RELATIONS }) << std::endl << std::dec;
-        readDictionary(
+        readDictionaryMagic(
             pid, 
             getPlace(pid, playerRoot, { PlayerStateOffsets::RELATIONS }), 
             relations, 
-            [](uint16_t key, unsigned char *buffer) -> std::string {
-                int32_t state               = *(int32_t*)&buffer[0x10];
-                int32_t lastAttackTurn      = *(int32_t*)&buffer[0x14];
-                int32_t embassyLevel        = *(int32_t*)&buffer[0x18];
-                int32_t lastPeaceBrokenTurn = *(int32_t*)&buffer[0x1C];
-                int32_t firstMeet           = *(int32_t*)&buffer[0x20];
-                int32_t embassyBuildTurn    = *(int32_t*)&buffer[0x24];
-                int32_t previousAttackTurn  = *(int32_t*)&buffer[0x28];
-                // std::cout << "[" << key << "]: " << state << ", " << lastAttackTurn << ", " << embassyLevel << ", " << lastPeaceBrokenTurn << ", " << firstMeet << ", " << embassyBuildTurn << ", " << previousAttackTurn << std::endl;
-                return std::to_string(key) 
-                    + '_' + std::to_string(state)
-                    + '-' + std::to_string(lastAttackTurn)
-                    + '-' + std::to_string(embassyLevel)
-                    + '-' + std::to_string(lastPeaceBrokenTurn)
-                    + '-' + std::to_string(firstMeet)
-                    + '-' + std::to_string(embassyBuildTurn)
-                    + '-' + std::to_string(previousAttackTurn);;
+            [](uint16_t key, unsigned char *buffer) -> Data::DiplomacyRelation {
+                int32_t state               = *(int32_t*)&buffer[DiplomacyRelationOffsets::STATE];
+                int32_t lastAttackTurn      = *(int32_t*)&buffer[DiplomacyRelationOffsets::LAST_ATTACK_TURN];
+                int32_t embassyLevel        = *(int32_t*)&buffer[DiplomacyRelationOffsets::EMBASSY_LEVEL];
+                int32_t lastPeaceBrokenTurn = *(int32_t*)&buffer[DiplomacyRelationOffsets::LAST_PEACE_BROKEN_TURN];
+                int32_t firstMeet           = *(int32_t*)&buffer[DiplomacyRelationOffsets::FIRST_MEET];
+                int32_t embassyBuildTurn    = *(int32_t*)&buffer[DiplomacyRelationOffsets::EMBASSY_BUILD_TURN];
+                int32_t previousAttackTurn  = *(int32_t*)&buffer[DiplomacyRelationOffsets::PREVIOUS_ATTACK_TURN];
+                return { state, lastAttackTurn, embassyLevel, lastPeaceBrokenTurn, firstMeet, embassyBuildTurn, previousAttackTurn };
             },
-            0x28
+            Offsets::DiplomacyRelation_Size_
         );
-        // std::cout << std::endl;
-        // std::cout << "[relations]: " << relations << std::endl;
-
+        
         // TODO messages
+        // PlayerStateOffsets::MESSAGES;
         // TODO skinType
         currency      = *(int32_t*)&playerBuffer[PlayerStateOffsets::CURRENCY];
         score         = *(int32_t*)&playerBuffer[PlayerStateOffsets::SCORE];
@@ -436,27 +529,24 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
         // TODO wipeOuts
         killerId      = *(uint8_t*)&playerBuffer[PlayerStateOffsets::KILLER_ID];
         killedTurn    = *(int32_t*)&playerBuffer[PlayerStateOffsets::KILLED_TURN];
-
-        readSingleList(pid, getPlace(pid, playerRoot, { PlayerStateOffsets::BUILT_UNIQUE_IMPROVEMENTS }), builtUniqueImprovements);
-
+        
+        readSingleListMagic(pid, getPlace(pid, playerRoot, { PlayerStateOffsets::BUILT_UNIQUE_IMPROVEMENTS }), builtUniqueImprovements);
+      
         // TODO apply new startingTileXY to output
 
         tribesMap[index] = { 
             id, username, currency, score, autoplay, tech, tribeType, 
             killerId, kills, tasks, builtUniqueImprovements, knownPlayers, 
-            relations, killedTurn, resignedTurn, startingTileX, startingTileY
+            relations, killedTurn, resignedTurn, startingTileX, startingTileY,
+            casualties
         };
     }
     
     // ! MAP ! //
     
-    uint16_t tileCount, unitCount = 0;
+    uint16_t tileCount = mapSize * mapSize, unitCount = 0;
     
-    readPiece(pid, getPlace(pid, mapBase, { _0x_IN_LIST_COUNT }), tileCount);
-
-    uint16_t mapSize = static_cast<uint16_t>(std::sqrt(tileCount));
-
-    for (uint32_t index = 0; index < tileCount; ++index) {
+    for (int32_t index = 0; index < tileCount; ++index) {
         uintptr_t tileRoot = getPlace(pid, mapBase, { index * 0x8 + _0x_IN_LIST_START_SHIFT });
         uintptr_t tileBase = getPlace(pid, tileRoot, { 0x0 });
         unsigned char tileBuffer[_0x_TILE_HAD_ROUTE + _0x_TRAILING_OFFSET]; 
@@ -465,12 +555,12 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
             break;
         }
 
-        uint16_t terrainType, tileX, tileY, rulingCityX, rulingCityY, 
-            skinType, climateType, owner, capitalOf, explorersCount;
-        uint8_t byteTribeIndex, byteCapitalOf;
+        int32_t type, tileX, tileY, rulingCityX, rulingCityY, 
+            skinType, climateType, explorersCount;
+        uint8_t owner, capitalOf, byteTribeIndex, byteCapitalOf;
         bool hasRoad, hasRoute, hadRoute; 
-        std::string explorers;
-        uintptr_t unitRoot, resourceRoot, improvementRoot;  
+        std::vector<uint8_t> explorers;
+        uintptr_t unitBase, resourceBase, improvementBase;  
         
         // ! TileData
         /*
@@ -499,22 +589,23 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
          *   0x10: ResourceType type
          */
 
-        tileX           = *(uint16_t*)&tileBuffer[_0x_TILE_X];
-        tileY           = *(uint16_t*)&tileBuffer[_0x_TILE_Y];
-        terrainType     = *(uint16_t*)&tileBuffer[_0x_TILE_TERRAIN_TYPE];
-        climateType     = *(uint16_t*)&tileBuffer[_0x_TILE_CLIMATE_TYPE]; 
-        skinType        = *(uint16_t*)&tileBuffer[_0x_TILE_SKIN_TYPE];    
+        tileX           = *(int32_t*)&tileBuffer[_0x_TILE_X];
+        tileY           = *(int32_t*)&tileBuffer[_0x_TILE_Y];
+        type            = *(int32_t*)&tileBuffer[_0x_TILE_TERRAIN_TYPE];
+        climateType     = *(int32_t*)&tileBuffer[_0x_TILE_CLIMATE_TYPE]; 
+        skinType        = *(int32_t*)&tileBuffer[_0x_TILE_SKIN_TYPE];    
         owner           = *(uint8_t*)&tileBuffer[_0x_TILE_OWNER];
         capitalOf       = *(uint8_t*)&tileBuffer[_0x_TILE_CAPITAL_OF];
-        rulingCityX     = *(uint16_t*)&tileBuffer[_0x_TILE_RULING_CITY_X];
-        rulingCityY     = *(uint16_t*)&tileBuffer[_0x_TILE_RULING_CITY_Y];
-        improvementRoot = *(uintptr_t*)&tileBuffer[_0x_TILE_IMPROVEMENT];
-        resourceRoot    = *(uintptr_t*)&tileBuffer[_0x_TILE_RESOURCE];
-        unitRoot        = *(uintptr_t*)&tileBuffer[_0x_TILE_UNIT];
+        rulingCityX     = *(int32_t*)&tileBuffer[_0x_TILE_RULING_CITY_X];
+        rulingCityY     = *(int32_t*)&tileBuffer[_0x_TILE_RULING_CITY_Y];
+        improvementBase = *(uintptr_t*)&tileBuffer[_0x_TILE_IMPROVEMENT];
+        resourceBase    = *(uintptr_t*)&tileBuffer[_0x_TILE_RESOURCE];
+        unitBase        = *(uintptr_t*)&tileBuffer[_0x_TILE_UNIT];
         hasRoad         = *(bool*)&tileBuffer[_0x_TILE_HAS_ROAD];                  
         hasRoute        = *(bool*)&tileBuffer[_0x_TILE_HAS_ROUTE];                 
         hadRoute        = *(bool*)&tileBuffer[_0x_TILE_HAD_ROUTE];  
-        readSingleList(pid, getPlace(pid, tileRoot, { _0x_TILE_EXPLORERS }), explorers);
+
+        readSingleListMagic(pid, tileBase + _0x_TILE_EXPLORERS, explorers);
 
         // ! UnitState
         /*
@@ -542,10 +633,10 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
         */
 
         unsigned char unitBuffer[_0x_UNIT_EFFECTS + _0x_TRAILING_OFFSET]; 
-        if (unitRoot != 0 && readBlock(pid, unitRoot, unitBuffer, sizeof(unitBuffer))) {
+        if (unitBase != 0 && readBlock(pid, unitBase, unitBuffer, sizeof(unitBuffer))) {
             unitCount += 1;
             // std::cout << "[-] " << std::hex << unitBase << std::endl << std::dec;
-            // std::cout << "~unit detected~ 0x" << std::hex << unitRoot << std::endl << std::dec;
+            // std::cout << "~unit detected~ 0x" << std::hex << unitBase << std::endl << std::dec;
             
             /*
              * UnitData
@@ -565,16 +656,16 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
              *   0x58: Int32 growthRate
              */ 
 
-            std::string effects; 
+            std::vector<int32_t> effects;
             bool moved, attacked, flipped; 
-            // uint8_t owner;
-            uint16_t promoted, owner, type, tileX, tileY, hp, kills, prevTileX, prevTileY, 
+            uint8_t owner;
+            uint16_t promoted, type, tileX, tileY, hp, xp, prevTileX, prevTileY, 
                 homeX, homeY, direction, createdTurn;
             // uint16_t classId, classHp, classCost, classDef, classMov, classAtk, classWpn, classRange;
             // bool classHidden;
             
             // ... id
-            owner       = *(uint16_t*)&unitBuffer[_0x_UNIT_OWNER];
+            owner       = *(uint8_t*)&unitBuffer[_0x_UNIT_OWNER];
             // ... style, skinType
             type        = *(uint16_t*)&unitBuffer[_0x_UNIT_TYPE];
             prevTileX   = *(uint16_t*)&unitBuffer[_0x_UNIT_PREV_TURN_END_X];
@@ -585,30 +676,25 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
             homeY       = *(uint16_t*)&unitBuffer[_0x_UNIT_HOME_Y];
             hp          = *(uint16_t*)&unitBuffer[_0x_UNIT_HEALTH];
             promoted    = *(uint16_t*)&unitBuffer[_0x_UNIT_PROMOTION_LEVEL]; 
-            kills       = *(uint16_t*)&unitBuffer[_0x_UNIT_XP];
+            xp          = *(uint16_t*)&unitBuffer[_0x_UNIT_XP];
             direction   = *(uint16_t*)&unitBuffer[_0x_UNIT_DIRECTION];
             createdTurn = *(uint16_t*)&unitBuffer[_0x_UNIT_CREATED_TURN];
             moved       = *(bool*)&unitBuffer[_0x_UNIT_MOVED];
             attacked    = *(bool*)&unitBuffer[_0x_UNIT_ATTACKED];
             flipped     = *(bool*)&unitBuffer[_0x_UNIT_FLIPPED];
 
-            // std::cout << "[pos] " << tileX << "," << *(int32_t*)&unitBuffer[_0x_UNIT_Y] << std::endl;
-            // std::cout << "[home] " << homeX << "," << homeY << std::endl;
-            // std::cout << "[hp] " << hp << std::endl;
-            // std::cout << [status] " << moved << ", " << attacked << std::endl;
+            readSingleListMagic(pid, getPlace(pid, tileBase, {_0x_TILE_UNIT, _0x_UNIT_EFFECTS}), effects);
 
-            readSingleList(pid, getPlace(pid, unitRoot, { _0x_UNIT_EFFECTS }), effects);
-
-            uint16_t passengerId;
-            uintptr_t passengerBase = getPlace(pid, unitRoot, { _0x_UNIT_PASSENGER_UNIT, _0x_UNIT_TYPE });  
+            uint16_t passengerType;
+            uintptr_t passengerBase = getPlace(pid, tileBase, {_0x_TILE_UNIT, _0x_UNIT_PASSENGER_UNIT, _0x_UNIT_TYPE});  
             if(passengerBase != 0) {
-                readPiece(pid, passengerBase, passengerId);
+                readPiece(pid, passengerBase, passengerType);
             }
 
             unitMap[index] = { 
-                owner, tileX, tileY, type, hp, promoted, kills, 
+                owner, tileX, tileY, type, hp, promoted, xp, 
                 prevTileX, prevTileY, homeX, homeY, direction,
-                flipped, createdTurn, moved, attacked, passengerId,
+                flipped, createdTurn, moved, attacked, passengerType,
                 effects
             };
         }
@@ -632,44 +718,39 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
          *   0x38: List<ImprovementEffect> effects 
          */
 
-        unsigned char structureBuffer[_0x_IMPROVEMENT_EFFECTS + _0x_TRAILING_OFFSET]; 
-        if (improvementRoot != 0 && readPiece(pid, improvementRoot, structureBuffer)) {
+        unsigned char structureBuffer[Offsets::ImprovementState_Effects + _0x_TRAILING_OFFSET]; 
+        if (improvementBase != 0 && readPiece(pid, improvementBase, structureBuffer)) {
             int16_t type, level, founded, progress, population;
             uint16_t production, baseScore, borderSize, upgrade;
             uint8_t owner, founder;
             bool connectedToCapitalOfPlayer;
-            std::string name, rewards, effects;
+            std::string name, effects;
+            std::vector<int32_t> rewards;
 
-            type        = *(int16_t*)&structureBuffer[_0x_IMPROVEMENT_TYPE];
-            level       = *(int16_t*)&structureBuffer[_0x_IMPROVEMENT_LEVEL];
-            founded     = *(int16_t*)&structureBuffer[_0x_IMPROVEMENT_FOUNDED];
-            progress    = *(int16_t*)&structureBuffer[_0x_IMPROVEMENT_XP];
-            population  = *(int16_t*)&structureBuffer[_0x_IMPROVEMENT_POPULATION];
-            production  = *(uint16_t*)&structureBuffer[_0x_IMPROVEMENT_PRODUCTION];
-            baseScore   = *(uint16_t*)&structureBuffer[_0x_IMPROVEMENT_BASE_SCORE];
-            borderSize  = *(uint16_t*)&structureBuffer[_0x_IMPROVEMENT_BORDER_SIZE];
-            upgrade     = *(uint16_t*)&structureBuffer[_0x_IMPROVEMENT_UPGRADE];
-            owner       = *(uint8_t*)&structureBuffer[_0x_IMPROVEMENT_OWNER];
-            founder     = *(uint8_t*)&structureBuffer[_0x_IMPROVEMENT_FOUNDER];
+            type        = *(int16_t*)&structureBuffer[Offsets::ImprovementState_Type];
+            level       = *(int16_t*)&structureBuffer[Offsets::ImprovementState_Level];
+            founded     = *(int16_t*)&structureBuffer[Offsets::ImprovementState_Founded];
+            progress    = *(int16_t*)&structureBuffer[Offsets::ImprovementState_XP];
+            population  = *(int16_t*)&structureBuffer[Offsets::ImprovementState_Population];
+            production  = *(uint16_t*)&structureBuffer[Offsets::ImprovementState_Production];
+            baseScore   = *(uint16_t*)&structureBuffer[Offsets::ImprovementState_BaseScore];
+            borderSize  = *(uint16_t*)&structureBuffer[Offsets::ImprovementState_BorderSize];
+            upgrade     = *(uint16_t*)&structureBuffer[Offsets::ImprovementState_Upgrade];
+            owner       = *(uint8_t*)&structureBuffer[Offsets::ImprovementState_Owner];
+            founder     = *(uint8_t*)&structureBuffer[Offsets::ImprovementState_Founder];
             // TODO verify == 1
-            connectedToCapitalOfPlayer = *(uint8_t*)&structureBuffer[_0x_IMPROVEMENT_CONNECTED_TO_CAPITAL] == 1;
+            connectedToCapitalOfPlayer = *(uint8_t*)&structureBuffer[Offsets::ImprovementState_ConnectedToCapital] == 1;
 
-            uintptr_t nameRoot = getPlace(pid, *(uintptr_t*)&structureBuffer[_0x_IMPROVEMENT_NAME], {  });
+            uintptr_t nameBase = getPlace(pid, *(uintptr_t*)&structureBuffer[Offsets::ImprovementState_Name], {  });
 
-            if (readWord(pid, nameRoot, name)) {
-                // std::cout << "[city] 0x" << std::hex << improvementRoot << std::endl << std::dec;
-                // std::cout << "name: " << name << std::endl;
-                // std::cout << "pop: " << population << std::endl;
-                // std::cout << "prg: " << progress << std::endl;
-                // std::cout << "pro: " << production << std::endl;
-                // std::cout << "lvl: " << level << std::endl;
+            if (readWord(pid, nameBase, name)) {
+                readSingleListMagic(pid, improvementBase + Offsets::ImprovementState_Rewards, rewards);
                 cityMap[index] = { 
                     name, population, progress, rewards, production,
                     borderSize, connectedToCapitalOfPlayer, level 
                 };
+                
             }
-
-            readSingleList(pid, *(uintptr_t*)&structureBuffer[_0x_IMPROVEMENT_REWARDS], rewards);
             
             structMap[index] = { type, level, founded, baseScore };
         }
@@ -680,16 +761,16 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
          */
         
         int16_t resourceId = 0;
-        if(resourceRoot != 0 && readPiece(pid, resourceRoot + 0x10, resourceId)) {
-        // if(resourceRoot != 0 && readPiece(pid, getPlace(pid, tileRoot, {_0x_TILE_RESOURCE, 0x10}), resourceId)) {
-        // if(resourceRoot != 0 && readPiece(pid, getPlace(pid, tileBase + _0x_TILE_RESOURCE, {0x10}), resourceId)) {
-            // std::cout << "[resource] 0x" << std::hex << resourceRoot << std::endl << std::dec;
+        if(resourceBase != 0 && readPiece(pid, resourceBase + 0x10, resourceId)) {
+        // if(resourceBase != 0 && readPiece(pid, getPlace(pid, tileRoot, {_0x_TILE_RESOURCE, 0x10}), resourceId)) {
+        // if(resourceBase != 0 && readPiece(pid, getPlace(pid, tileBase + _0x_TILE_RESOURCE, {0x10}), resourceId)) {
+            // std::cout << "[resource] 0x" << std::hex << resourceBase << std::endl << std::dec;
             // std::cout << "resourceId: " << resourceId << std::endl;
             resourceMap[index] = { resourceId };
         }
 
         tileMap[index] = { 
-            index, terrainType, owner, explorers, hasRoad, hasRoute, hadRoute, 
+            index, type, owner, explorers, hasRoad, hasRoute, hadRoute, 
             capitalOf, rulingCityX, rulingCityY, skinType, climateType,
             tileX, tileY,
         };
@@ -698,71 +779,193 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
     // ! WRITE OUT ! //
 
     if(!prod) {
-        std::cout << std::dec << "Turn: " << turn 
+        _logPlayers.pop_back();
+        _logPlayers.pop_back();
+        std::cout << std::dec << "Turn: " << currentTurn 
             << " | Map size: " << mapSize << "x" << mapSize << " (" << tileCount << ")" 
             << " | Units: " << unitCount 
-            << " | Tribes: " << tribeCount 
+            << " | Tribes: " << _logPlayers 
+            // << " | Game: " << gameName
             << std::endl;
         return 0;
     }
-    
-    std::ostringstream out;
-    appendFields(out, ',', mapSize, turn);
 
-    out << "\n";
+    auto coord_to_index = [](uint16_t x, uint16_t y, int max_size) {
+        return y * max_size + x;
+    };
+
+    json root, tribes, tiles, settings, resources, structures;
     
-    for (const auto& [i, p] : tribesMap) {
-        appendFields(out, ',', 
-            p.id, p.username, p.autoplay, p.score, p.currency, 
-            p.tech, p.tribeType, p.killerId, p.kills, p.tasks, 
-            p.builtUniqueImprovements, p.knownPlayers, p.relations,
-            p.killedTurn, p.resignedTurn);
-        out << ";";
+    // settings
+    settings["version"] = version;
+    settings["mode"] = baseGameMode;
+    settings["size"] = mapSize;
+    settings["tileCount"] = mapSize * mapSize;
+    settings["turn"] = currentTurn;
+    settings["seed"] = seed;
+    settings["maxTurns"] = baseGameMode == 1? 30 : baseGameMode == 2? 0 : timeLimit;
+    settings["currentPlayerTurnId"] = tribesMap[currentPlayerIndex].id;
+    settings["gameName"] = toValidUtf8(gameName);
+    settings["winByCapital"] = winByCapital;
+    settings["winByExtermination"] = winByExtermination;
+    settings["_lastPlayerTurnId"] = -1;
+    settings["_fow"] = true;
+    settings["_gameOver"] = false;
+    settings["_areYouSure"] = false;
+    settings["_recentMoves"] = json::array();
+    settings["_pendingRewards"] = json::array();
+    settings["_maxTribeCount"] = tribesMap.size();
+
+    // tribes
+    for (const auto &kv : tribesMap) {
+        const auto &p = kv.second;
+        json j;
+        j["id"] = p.id;
+        j["username"] = toValidUtf8(p.username);
+        j["bot"] = p.autoplay;
+        j["score"] = p.score;
+        j["stars"] = p.currency;
+        j["startingTileCoords"] = json::array({p.startingTileX, p.startingTileY});
+        j["type"] = p.tribeType;
+        j["killerId"] = p.killerId;
+        j["kills"] = p.kills;
+        j["tasks"] = p.tasks;
+        j["builtUniqueImprovements"] = p.builtUniqueImprovements;
+        j["knownPlayers"] = p.knownPlayers;
+        j["killedTurn"] = p.killedTurn;
+        j["resignedTurn"] = p.resignedTurn;
+        j["casualties"] = p.casualties;
+
+        json tech = json::array();
+        for (const auto &kv : p.tech) {
+            json jm;
+            if (kv > 255) break;
+            jm["type"] = kv;
+            jm["discovered"] = true;
+            tech.push_back(std::move(jm));
+        }
+
+        json relations = json::object();
+        for (const auto &kv : p.relations) {
+            const auto &r = kv.second;
+            json jr;
+            jr["state"] = r.state;
+            jr["lastAttackTurn"] = r.lastAttackTurn;
+            jr["embassyLevel"] = r.embassyLevel;
+            jr["lastPeaceBrokenTurn"] = r.lastPeaceBrokenTurn;
+            jr["firstMeet"] = r.firstMeet;
+            jr["embassyBuildTurn"] = r.embassyBuildTurn;
+            jr["previousAttackTurn"] = r.previousAttackTurn;
+            relations[std::to_string(kv.first)] = jr;
+        }
+
+        j["tech_vanilla"] = tech;
+        j["relations"] = relations;
+        j["units"] = json::array();
+        j["cities"] = json::array();
+
+        tribes[std::to_string(p.id)] = j;
+    }
+
+    // tiles, resources, structures, cities
+    for (const auto &kv : tileMap) {
+        const auto &t = kv.second;
+        const auto idx = coord_to_index(t.tileX, t.tileY, mapSize);
+        json jt;
+        jt["owner"] = t.owner;
+        jt["coords"] = json::array({t.tileX, t.tileY});
+        jt["type"] = t.type;
+        jt["explorers"] = t.explorers;
+        jt["hasRoad"] = (bool)t.hasRoad;
+        jt["hasRoute"] = (bool)t.hasRoute;
+        jt["hadRoute"] = (bool)t.hadRoute;
+        jt["capitalOf"] = t.capitalOf;
+        jt["climate"] = t.climate;
+        jt["skinType"] = t.skinType;
+        if (t.rulingCityX != -1) {
+            jt["rulingCityCoords"] = json::array({t.rulingCityX, t.rulingCityY});
+        }
+        else {
+            jt["rulingCityCoords"] = nullptr;
+        }
+        tiles[std::to_string(idx)] = jt;
+
+        // structure
+        auto itS = structMap.find(idx);
+        if (itS != structMap.end() && itS->second.type) {
+            json js;
+            const auto &s = itS->second;
+            js["type"]          = s.type;
+            js["level"]         = s.level;
+            js["founded"]       = s.founded;
+            js["score"]         = s.score;
+            js["tileIndex"]     = idx;
+            structures[std::to_string(idx)] = js;
+        }
+
+        // resource
+        auto itR = resourceMap.find(idx);
+        if (itR != resourceMap.end() && itR->second.type) {
+            json jr;
+            jr["type"]         = itR->second.type;
+            jr["tileIndex"]    = idx;
+            resources[std::to_string(idx)] = jr;
+        }
+
+        // city
+        auto itC = cityMap.find(idx);
+        if (itC != cityMap.end() && !itC->second.name.empty()) {
+            json jc;
+            const auto &c = itC->second;
+            jc["name"]          = toValidUtf8(c.name);
+            jc["tileIndex"]     = idx;
+            jc["population"]    = c.population;
+            jc["progress"]      = c.progress;
+            jc["borderSize"]    = c.borderSize;
+            jc["connectedToCapital"] = c.connectedToCapital;
+            jc["level"]         = c.level;
+            jc["production"]    = c.production;
+            jc["rewards"]       = c.rewards;
+            jc["owner"]       = t.owner;
+            // _territory: number[];
+            // _walls?: boolean;
+            // _riot?: boolean;
+            tribes[std::to_string(t.owner)]["cities"].push_back(std::move(jc));
+        }
+    }
+
+    // units
+    for (const auto &kv : unitMap) {
+        const auto &u = kv.second;
+        json ju;
+        ju["owner"] = u.owner;
+        ju["coords"] = json::array({u.unitX, u.unitY});
+        ju["type"] = u.type;
+        ju["health"] = u.health;
+        ju["veteran"] = u.promoted;
+        ju["kills"] = u.xp;
+        ju["prevCoords"] = json::array({u.prevTileX, u.prevTileX});
+        ju["homeCoords"] = json::array({u.homeX, u.homeY});
+        ju["direction"] = u.direction;
+        ju["flipped"] = u.flipped;
+        ju["createdTurn"] = u.createdTurn;
+        ju["moved"] = u.moved;
+        ju["attacked"] = u.attacked;
+        ju["passengerType"] = u.passengerType;
+        ju["effects"] = u.effects;
+        
+        tiles[std::to_string(coord_to_index(u.unitX, u.unitY, mapSize))]["_unitOwnerID"] = u.owner;
+        tribes[std::to_string(u.owner)]["units"].push_back(std::move(ju));
     }
     
-    out << "\n";
-    
-    for (const auto& [index, t] : tileMap) {
-        out << t.index << ";";
-        
-        appendFields(out, ',', t.tileId, t.owner, t.explorers, t.hasRoad, t.hasRoute, t.hadRoute,
-            t.capitalOf, t.rulingCityX, t.rulingCityY, t.climate, t.skinType, t.tileX, t.tileY);
-        
-        out << ";";
+    root["tiles"] = tiles;
+    root["tribes"] = tribes;
+    root["settings"] = settings;
+    root["resources"] = resources;
+    root["structures"] = structures;
 
-        const auto& s = structMap[t.index];
-        if(s.structureId) {
-            appendFields(out, ',', s.structureId, s.structureLevel, s.structureFounded, s.structureBaseScore);
-        }
-        
-        out << ";";
-
-        const auto& r = resourceMap[t.index];
-        if(r.resourceId) {
-            out << r.resourceId;
-        }
-        
-        // out << ";";
-
-        // const auto& u = unitMap[t.index];
-        // if(u.unitId) { 
-        //     appendFields(out, ',', u.owner, u.unitX, u.unitY, u.unitId, u.unitHp, u.unitIsVeteran,
-        //         u.unitKills, u.prevTileX, u.prevTileY, u.homeX, u.homeY, u.direction,
-        //         u.flipped, u.createdTurn, u.moved, u.attacked, u.passengerId, u.unitEffects);
-        // }
-        
-        out << ";";
-
-        const auto& c = cityMap[t.index];
-        if(c.name.size()) {
-            appendFields(out, ',', c.name, c.population, c.progress, c.rewards, c.production,
-                c.borderSize, c.connectedToCapital, c.level);
-        }
-        
-        out << "+";
-    }
-    
-    ssize_t bytes_written = write(1, out.str().c_str(), out.str().size());
+    std::string out = root.dump();
+    ssize_t bytes_written = write(1, out.data(), out.size());
 
     return 0;
 }

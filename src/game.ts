@@ -1,7 +1,7 @@
-import { GameSettings, GameState, PartialGameSettings, TileState, TribeState } from "./core/states";
+import { Coords, GameSettings, GameState, PartialGameSettings, TileState, TribeState } from "./core/states";
 import GameLoader, { STARTING_OWNER_ID } from "./core/gameloader";
 import { MoveGenerator } from "./core/moves";
-import { getCityProduction, getPovTribe, hasEffect, isGameOver } from "./core/functions";
+import { _setVisibleTiles, getCityProduction, getPovTribe, hasEffect, isGameOver } from "./core/functions";
 import { tryDiscoverRewardOtherTribes } from "./core/actions";
 import Move, {UndoCallback } from "./core/move";
 import { MoveType } from "./core/types";
@@ -39,9 +39,9 @@ export default class Game {
         clone.load(this.state);
         const pov = getPovTribe(clone.state);
         clone.values = {
-            unitStrength: new UnitValues(pov.tribeType),
-            technology: new TechnologyValues(pov.tribeType),
-            capturePotential: new CapturePotentialValues(pov.tribeType),
+            unitStrength: new UnitValues(pov.type),
+            technology: new TechnologyValues(pov.type),
+            capturePotential: new CapturePotentialValues(pov.type),
         }
         return clone;
     }
@@ -69,6 +69,7 @@ export default class Game {
     }
 
     static deserializeState(json: string): GameState {
+        const parseCoords = (coords: { x: number, y: number, idx: number }) => Coords.from(coords.x, coords.y, state);
         const state = JSON.parse(json) as GameState;
         const rebuilt = {
             _visibleTiles: { ...state._visibleTiles },
@@ -80,32 +81,43 @@ export default class Game {
                     state.settings._pendingRewards.map(x => Move.deserialize(x as any))
                 )
             },
-            tiles: state.tiles.map(x => ({ 
-                ...x, 
-                _explorers: new Set(Object.values(x._explorers))
-            })) as TileState[],
-            tribes: Object.values(state.tribes).reduce((a, b, i) => ({ 
-                ...a,
-                [i+1]: {   
-                    ...b,
-                    hash: BigInt(b.hash.toString()),
-                    _tech: b._tech.map(x => ({ 
+            tiles: Object.keys(state.tiles).reduce((acc, idx) => {
+                const tile = state.tiles[Number(idx)];
+                return { 
+                    ...acc, 
+                    [idx]: {
+                        ...tile,
+                        coords: parseCoords(tile.coords),
+                        rulingCityCoords: tile.rulingCityCoords? parseCoords(tile.rulingCityCoords) : undefined,
+                        explorers: new Set(Object.values(tile.explorers)),
+                    } as TileState
+                };
+            }, { }),
+            tribes: Object.values(state.tribes).reduce((acc, tribe) => ({ 
+                ...acc,
+                [tribe.id]: {   
+                    ...tribe,
+                    _hash: BigInt(tribe._hash.toString()),
+                    tech_vanilla: tribe.tech_vanilla.map(x => ({ 
                         ...x 
                     })),
-                    _builtUniqueStructures: new Set(Object.values(b._builtUniqueStructures)),
-                    _knownPlayers: new Set(Object.values(b._knownPlayers)),
-                    _cities: b._cities.map(x => ({ 
+                    builtUniqueImprovements: new Set(Object.values(tribe.builtUniqueImprovements)),
+                    knownPlayers: new Set(Object.values(tribe.knownPlayers)),
+                    cities: tribe.cities.map(x => ({ 
                         ...x, 
-                        _rewards: new Set(Object.values(x._rewards))
+                        rewards: new Set(Object.values(x.rewards))
                     })),
-                    _units: b._units.map(x => ({ 
-                        ...x, 
-                        _effects: new Set(Object.values(x._effects)) 
+                    units: tribe.units.map(unit => ({ 
+                        ...unit, 
+                        effects: new Set(Object.values(unit.effects)),
+                        coords: parseCoords(unit.coords),
+                        homeCoords: unit.homeCoords && unit.homeCoords?.x != -1? parseCoords(unit.homeCoords!) : undefined,
+                        prevCoords: parseCoords(unit.prevCoords),
                     })),
-                    relations: Object.entries(b.relations).reduce((x, [k, v]) => ({ 
+                    relations: Object.entries(tribe.relations).reduce((x, [k, v]) => ({ 
                         ...x, [k]: { ...v } 
                     }), {})
-                }
+                } as TribeState
             }), {}),
         };
         (rebuilt as any)._hiddenResources = (state as any)._hiddenResources;
@@ -125,9 +137,9 @@ export default class Game {
         game.load(state);
         const pov = getPovTribe(state);
         game.values = {
-            unitStrength: new UnitValues(pov.tribeType),
-            technology: new TechnologyValues(pov.tribeType),
-            capturePotential: new CapturePotentialValues(pov.tribeType),
+            unitStrength: new UnitValues(pov.type),
+            technology: new TechnologyValues(pov.type),
+            capturePotential: new CapturePotentialValues(pov.type),
         }
         return game;
     }
@@ -140,7 +152,11 @@ export default class Game {
 
     public async loadLive(settings?: PartialGameSettings) {
         const loader = new GameLoader();
-        await loader.loadRandom(settings);
+        await loader.loadLive(settings).catch((err) => {
+            console.log('Failed to load live, trying random');
+            console.log(err);
+            return loader.loadRandom();
+        });
         this.load(loader.currentState);
     }
 
@@ -151,24 +167,28 @@ export default class Game {
         this.state = state;
         this.state = this.cloneState();
         // this.network = new NetworkManager(this.state);
-        this.state.tiles.forEach(tile => {
-            this.state._visibleTiles[tile.tileIndex] = tile._explorers.has(this.state.settings._pov);
-        });
+        _setVisibleTiles(this.state, this.state.settings.currentPlayerTurnId);
         const pov = getPovTribe(state);
         this.values = {
-            unitStrength: new UnitValues(pov.tribeType),
-            technology: new TechnologyValues(pov.tribeType),
-            capturePotential: new CapturePotentialValues(pov.tribeType),
+            unitStrength: new UnitValues(pov.type),
+            technology: new TechnologyValues(pov.type),
+            capturePotential: new CapturePotentialValues(pov.type),
         }
     }
 
-    // reset() {
-    //     this.state = this.initialState;
-    //     this.network = new NetworkManager(this.state);
-    //     this.state.tiles.forEach(tile => {
-    //         this.state._visibleTiles[tile.tileIndex] = tile._explorers.has(this.state.settings._pov);
-    //     });
-    // }
+    playSequence(...legalMoveIndexes: number[]): UndoCallback[] {
+        const undos = [];
+        for (let i = 0; i < legalMoveIndexes.length; i++) {
+            const id = legalMoveIndexes[i];
+            const move = MoveGenerator.legal(this.state)[id];
+            const moveData = this.playMove(move);
+            if (!moveData) {
+                throw new Error('Invalid move');
+            }
+            undos.unshift(moveData[1]);
+        }
+        return undos;
+    }
 
     // TODO XOR?
 
@@ -192,14 +212,14 @@ export default class Game {
         
         let undo: UndoCallback;
 
-        this.state.settings.areYouSure = true;
+        this.state.settings._areYouSure = true;
 
         if(move.moveType === MoveType.EndTurn) {
             undo = this.endTurn();
             this.state.settings._recentMoves = [];
         }
         else {
-		    const result = move.execute(this.state)!;
+		    const result = move.execute(this.state);
             const undoDiscover = tryDiscoverRewardOtherTribes(this.state);
 
             // TODO also need a function to update the diplomacy vision of the discovered tribes
@@ -227,7 +247,7 @@ export default class Game {
             }
         }
 
-        this.state.settings.areYouSure = false;
+        this.state.settings._areYouSure = false;
 
         return [move, undo];
     }
@@ -239,14 +259,14 @@ export default class Game {
      */
     private endTurn(): UndoCallback {
         const state = this.state;
-        const oldpov = state.settings._pov;
-        const oldTurn = state.settings._turn;
+        const oldpov = state.settings.currentPlayerTurnId;
+        const oldTurn = state.settings.turn;
 
         // TODO Add relations? (for polytopia default bots)
         const chain: UndoCallback[] = [
             () => {
-                state.settings._pov = oldpov;
-                state.settings._turn = oldTurn;
+                state.settings.currentPlayerTurnId = oldpov;
+                state.settings.turn = oldTurn;
             }
         ];
 
@@ -257,22 +277,23 @@ export default class Game {
         // TODO units auto-recover if they didnt use up any of their moves
         
         // ! CHANGE TURN ! //
-
-        state.settings._pov++;
-        if(state.settings._pov > state.settings.tribeCount) {
-            state.settings._pov = STARTING_OWNER_ID;
+        const lastPov = state.settings._lastPlayerTurnId;
+        state.settings._lastPlayerTurnId = state.settings.currentPlayerTurnId;
+        state.settings.currentPlayerTurnId++;
+        if(state.settings.currentPlayerTurnId > state.settings._maxTribeCount) {
+            state.settings.currentPlayerTurnId = STARTING_OWNER_ID;
         }
         pov = getPovTribe(state);
 
         // Search for the next tribe
-        while(pov._killedTurn > 0 || pov._resignedTurn > 0) {
-            state.settings._pov++;
+        while(pov.killedTurn > 0 || pov.resignedTurn > 0) {
+            state.settings.currentPlayerTurnId++;
             pov = getPovTribe(state);
         }
 
         // If we are back at the start, a new turn has started
-        if(state.settings._pov === STARTING_OWNER_ID) {
-            state.settings._turn++;
+        if(state.settings.currentPlayerTurnId === STARTING_OWNER_ID) {
+            state.settings.turn++;
         }
 
         // Dont continue if the game has ended
@@ -289,9 +310,7 @@ export default class Game {
         // Update the new tribe's visibility
         const oldVisibility = { ...state._visibleTiles };
         
-        state.tiles.forEach(tile => {
-            state._visibleTiles[tile.tileIndex] = tile._explorers.has(pov.owner);
-        });
+        _setVisibleTiles(state, pov.id);
 
         chain.unshift(() => {
             state._visibleTiles = oldVisibility;
@@ -303,13 +322,16 @@ export default class Game {
         // TODO also need a function to update the diplomacy vision of the discovered tribes
 
         // Reward tribe with its production if its not the first turn
-        if(state.settings._turn > 1) {
-            chain.unshift(gainStars(state, getCityProduction(state, ...pov._cities)));
+        if(state.settings.turn > 1) {
+            const spt = getCityProduction(state, ...pov.cities);
+            if (spt > 0) {
+                chain.unshift(gainStars(state, spt));
+            }
         }
 
         // Update all unit states
-		for (let i = 0; i < pov._units.length; i++) {
-			const unit = pov._units[i];
+		for (let i = 0; i < pov.units.length; i++) {
+			const unit = pov.units[i];
 
             // Frozen units get unfrozen but that end their turn
 			if(hasEffect(unit, EffectType.Frozen)) {
@@ -323,6 +345,7 @@ export default class Game {
 
         return () => {
             chain.forEach(x => x());
+            state.settings._lastPlayerTurnId = lastPov;
         }
     }
 
@@ -346,7 +369,7 @@ export default class Game {
         
         let undo: UndoCallback;
 
-        state.settings.areYouSure = true;
+        state.settings._areYouSure = true;
 
         if(move.moveType === MoveType.EndTurn) {
             undo = this.endTurn(state);
@@ -381,7 +404,7 @@ export default class Game {
             }
         }
 
-        state.settings.areYouSure = false;
+        state.settings._areYouSure = false;
 
         return [move, undo];
     }
@@ -392,14 +415,14 @@ export default class Game {
      * @returns 
      */
     static endTurn(state: GameState): UndoCallback {
-        const oldpov = state.settings._pov;
-        const oldTurn = state.settings._turn;
+        const oldpov = state.settings.currentPlayerTurnId;
+        const oldTurn = state.settings.turn;
 
         // TODO Add relations? (for polytopia default bots)
         const chain: UndoCallback[] = [
             () => {
-                state.settings._pov = oldpov;
-                state.settings._turn = oldTurn;
+                state.settings.currentPlayerTurnId = oldpov;
+                state.settings.turn = oldTurn;
             }
         ];
 
@@ -411,21 +434,21 @@ export default class Game {
         
         // ! CHANGE TURN ! //
 
-        state.settings._pov++;
-        if(state.settings._pov > state.settings.tribeCount) {
-            state.settings._pov = STARTING_OWNER_ID;
+        state.settings.currentPlayerTurnId++;
+        if(state.settings.currentPlayerTurnId > state.settings._maxTribeCount) {
+            state.settings.currentPlayerTurnId = STARTING_OWNER_ID;
         }
         pov = getPovTribe(state);
 
         // Search for the next tribe
-        while(pov._killedTurn > 0 || pov._resignedTurn > 0) {
-            state.settings._pov++;
+        while(pov.killedTurn > 0 || pov.resignedTurn > 0) {
+            state.settings.currentPlayerTurnId++;
             pov = getPovTribe(state);
         }
 
         // If we are back at the start, a new turn has started
-        if(state.settings._pov === STARTING_OWNER_ID) {
-            state.settings._turn++;
+        if(state.settings.currentPlayerTurnId === STARTING_OWNER_ID) {
+            state.settings.turn++;
         }
 
         // Dont continue if the game has ended
@@ -442,9 +465,7 @@ export default class Game {
         // Update the new tribe's visibility
         const oldVisibility = { ...state._visibleTiles };
         
-        state.tiles.forEach(tile => {
-            state._visibleTiles[tile.tileIndex] = tile._explorers.has(pov.owner);
-        });
+        _setVisibleTiles(state, pov.id);
 
         chain.unshift(() => {
             state._visibleTiles = oldVisibility;
@@ -456,13 +477,13 @@ export default class Game {
         // TODO also need a function to update the diplomacy vision of the discovered tribes
 
         // Reward tribe with its production if its not the first turn
-        if(state.settings._turn > 1) {
-            chain.unshift(gainStars(state, getCityProduction(state, ...pov._cities)));
+        if(state.settings.turn > 1) {
+            chain.unshift(gainStars(state, getCityProduction(state, ...pov.cities)));
         }
 
         // Update all unit states
-		for (let i = 0; i < pov._units.length; i++) {
-			const unit = pov._units[i];
+		for (let i = 0; i < pov.units.length; i++) {
+			const unit = pov.units[i];
 
             // Frozen units get unfrozen but that end their turn
 			if(hasEffect(unit, EffectType.Frozen)) {
@@ -479,3 +500,4 @@ export default class Game {
         }
     }
 }
+

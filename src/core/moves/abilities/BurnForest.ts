@@ -10,7 +10,7 @@ export default class BurnForest extends Ability {
         super(null, target, AbilityType.BurnForest);
     }
 
-    execute(state: GameState): CallbackResult {
+    execute(state: GameState) {
         const undoTerrain = modifyTerrain(state, this.getTarget(), TerrainType.Field);
         const undoStars = spendStars(state, 2);
         const undoResource = consumeResource(state, this.getTarget(), ResourceType.Crop);

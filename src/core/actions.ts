@@ -14,7 +14,7 @@ export function tryDiscoverRewardOtherTribes(state: GameState): UndoCallback {
 	const us = getPovTribe(state);
 
 	// Already discovered all the other tribes
-	if (us._knownPlayers.size == state.settings.tribeCount - 1) {
+	if (us.knownPlayers.size == state.settings._maxTribeCount - 1) {
 		return () => { };
 	}
 
@@ -24,12 +24,12 @@ export function tryDiscoverRewardOtherTribes(state: GameState): UndoCallback {
 	for (const x in state._visibleTiles) {
 		// If we can see any other tribe's unit, we have met them
 		const standing = getEnemyAt(state, Number(x));
-		const them = standing?._owner;
-		if (them && !us._knownPlayers.has(them)) {
-			us._knownPlayers.add(them);
+		const them = standing?.owner;
+		if (them && !us.knownPlayers.has(them)) {
+			us.knownPlayers.add(them);
 			chain.unshift(gainStars(state, getStarExchange(state, them)));
 			chain.unshift(() => {
-				us._knownPlayers.delete(them);
+				us.knownPlayers.delete(them);
 			});
 		}
 	}
@@ -39,16 +39,16 @@ export function tryDiscoverRewardOtherTribes(state: GameState): UndoCallback {
 	};
 }
 
-export function modifyTerrain(state: GameState, tileIndex: number, terrainType: TerrainType): UndoCallback {
-    const tile = state.tiles[tileIndex];
-    const oTerrainType = tile.terrainType;
+export function modifyTerrain(state: GameState, idx: number, terrainType: TerrainType): UndoCallback {
+    const tile = state.tiles[idx];
+    const oTerrainType = tile.type;
     
-    xorTile.terrain(state, tileIndex, oTerrainType, terrainType);
-    tile.terrainType = terrainType;
+    xorTile.terrain(state, idx, oTerrainType, terrainType);
+    tile.type = terrainType;
 
     return () => {
-        tile.terrainType = oTerrainType;
-        xorTile.terrain(state, tileIndex, terrainType, oTerrainType);
+        tile.type = oTerrainType;
+        xorTile.terrain(state, idx, terrainType, oTerrainType);
     }
 }
 
@@ -57,116 +57,105 @@ export function gainStars(state: GameState, amount: number): UndoCallback {
 }
 
 export function spendStars(state: GameState, amount: number): UndoCallback {
-    if(!amount) return () => {};
+    if (!amount) {
+        console.trace()
+        throw "Cannot spend 0 stars";
+        return () => {};
+    }
+    
     const pov = getPovTribe(state);
 
-    xorPlayer.stars(pov, pov._stars);
-    pov._stars -= amount;
-    xorPlayer.stars(pov, pov._stars);
+    xorPlayer.stars(pov, pov.stars);
+    pov.stars -= amount;
+    xorPlayer.stars(pov, pov.stars);
 
     return () => {
-        xorPlayer.stars(pov, pov._stars);
-        pov._stars += amount;
-        xorPlayer.stars(pov, pov._stars);
+        xorPlayer.stars(pov, pov.stars);
+        pov.stars += amount;
+        xorPlayer.stars(pov, pov.stars);
     }
 }
 
 export function tryAddEffect(state: GameState, unit: UnitState, effect: EffectType): UndoCallback {
-    if(hasEffect(unit, effect)) {
+    if (hasEffect(unit, effect)) {
         return () => { };
     }
     xorUnit.effect(state, unit, effect);
-    unit._effects.add(effect);
+    unit.effects.add(effect);
     return () => {
-        unit._effects.delete(effect);
+        unit.effects.delete(effect);
         xorUnit.effect(state, unit, effect);
     }
 }
 
 export function tryRemoveEffect(state: GameState, unit: UnitState, effect: EffectType): UndoCallback {
-    if(!hasEffect(unit, effect)) {
+    if (!hasEffect(unit, effect)) {
         return () => { };
     }
     xorUnit.effect(state, unit, effect);
-    unit._effects.delete(effect);
+    unit.effects.delete(effect);
     return () => {
-        unit._effects.add(effect);
+        unit.effects.add(effect);
         xorUnit.effect(state, unit, effect);
     }
 }
 
-export function setUnitMove(state: GameState, unit: UnitState): UndoCallback {
-    xorUnit.moved(state, unit);
-
-    return () => {
-        xorUnit.moved(state, unit);
-    }
-}
-
-export function setUnitAttack(state: GameState, unit: UnitState): UndoCallback {
-    xorUnit.attacked(state, unit);
-
-    return () => {
-        xorUnit.attacked(state, unit);
-    }
-}
-
 export function endUnitTurn(state: GameState, unit: UnitState): UndoCallback {
-    const moved = unit._moved;
-    const attacked = unit._attacked;
+    const moved = unit.moved;
+    const attacked = unit.attacked;
 
-    if(!attacked) {
+    if (!attacked) {
         xorUnit.attacked(state, unit);
-        unit._attacked = true;
+        unit.attacked = true;
     }
 
-    if(!moved) {
+    if (!moved) {
         xorUnit.moved(state, unit);
-        unit._moved = true;
+        unit.moved = true;
     }
 
     return () => {
-        if(!attacked) {
+        if (!attacked) {
             xorUnit.attacked(state, unit);
-            unit._attacked = false;
+            unit.attacked = false;
         }
 
-        if(!moved) {
+        if (!moved) {
             xorUnit.moved(state, unit);
-            unit._moved = false;
+            unit.moved = false;
         }
     }
 }
 
 export function startUnitTurn(state: GameState, unit: UnitState): UndoCallback {
-    const moved = unit._moved;
-    const attacked = unit._attacked;
+    const moved = unit.moved;
+    const attacked = unit.attacked;
 
-    if(attacked) {
+    if (attacked) {
         xorUnit.attacked(state, unit);
-        unit._attacked = false;
+        unit.attacked = false;
     }
 
-    if(moved) {
+    if (moved) {
         xorUnit.moved(state, unit);
-        unit._moved = false;
+        unit.moved = false;
     }
 
     return () => {
-        if(attacked) {
+        if (attacked) {
             xorUnit.attacked(state, unit);
-            unit._attacked = true;
+            unit.attacked = true;
         }
 
-        if(moved) {
+        if (moved) {
             xorUnit.moved(state, unit);
-            unit._moved = true;
+            unit.moved = true;
         }
     }
 }
 
 export function splashDamageArea(state: GameState, attacker: UnitState, atk: number): UndoCallback {
-    const undoChain = getEnemiesNearTile(state, attacker._tileIndex)
+    const undoChain = getEnemiesNearTile(state, attacker.coords.idx)
         .map(enemy => attackUnit(state, atk, enemy, attacker)?.undo!);
     return () => {
         undoChain.forEach(x => x());
@@ -175,11 +164,11 @@ export function splashDamageArea(state: GameState, attacker: UnitState, atk: num
 
 export function freezeArea(state: GameState, freezer: UnitState): UndoCallback {
     const chain: UndoCallback[] = [];
-    const adjacent = getAdjacentIndexes(state, freezer._tileIndex, 1, false, true);
+    const adjacent = getAdjacentIndexes(state, freezer.coords.idx, 1, false, true);
 
     for (let i = 0; i < adjacent.length; i++) {
         const tile = state.tiles[adjacent[i]];
-        const occupied = getTrueEnemyAt(state, tile.tileIndex, freezer._owner);
+        const occupied = getTrueEnemyAt(state, tile.coords.idx, freezer.owner);
 
         // Freeze any adjacent enemy unit
         if (occupied) {
@@ -187,8 +176,8 @@ export function freezeArea(state: GameState, freezer: UnitState): UndoCallback {
         }
 
         // Freeze any adjacent freezable tiles
-        if (tile.terrainType == TerrainType.Water || tile.terrainType == TerrainType.Ocean) {
-            chain.push(modifyTerrain(state, tile.tileIndex, TerrainType.Ice));
+        if (tile.type == TerrainType.Water || tile.type == TerrainType.Ocean) {
+            chain.push(modifyTerrain(state, tile.coords.idx, TerrainType.Ice));
         }
     }
 

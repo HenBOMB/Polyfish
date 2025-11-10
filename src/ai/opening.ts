@@ -13,7 +13,7 @@ export class Opening {
      */
     static recommend(state: GameState, legal: Move[]): Move[] {
         const pov = getPovTribe(state);
-        const moveTypes = OpeningBook[pov.tribeType][state.settings._turn];
+        const moveTypes = OpeningBook[pov.type][state.settings.turn];
         if(!moveTypes || legal.length < 2) return [];
         return legal.reduce((a: any, b, i) => ([
             ...a, ...(moveTypes.some(y => b.moveType == y)? [i] : [])

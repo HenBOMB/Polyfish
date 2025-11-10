@@ -48,8 +48,8 @@ export default class TechnologyValues extends Values<TechnologyType> {
             [TechnologyType.Spiritualism]:  0.20,
             
             // Unused
-            [TechnologyType.None]:         -1.00,
-            [TechnologyType.Unbuildable]:  -1.00,
+            [TechnologyType.Unrequired]:         -1.00,
+            [TechnologyType.BeyondComprehension]:  -1.00,
             [TechnologyType.Oceantology]:  -1.00,
             [TechnologyType.PolarWarfare]: -1.00,
             [TechnologyType.ShockTactics]: -1.00,

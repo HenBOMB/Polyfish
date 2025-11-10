@@ -55,8 +55,7 @@ Object.freeze(STAGE_THRESH);
  * @returns [EconomyMult, ArmyMult]
  */
 export function calculateStageValue(state: GameState): [number, number] {
-    const p = state.settings._turn / state.settings.maxTurns;
-
+    const p = state.settings.turn / state.settings.maxTurns;
     if(p < STAGE_THRESH[0]) {
         return STAGE_SCORE_PERFECTION[0];
     }
@@ -76,7 +75,7 @@ export function calculateStageValue(state: GameState): [number, number] {
  * @param value 
  */
 export function lerpViaGameStage(state: GameState, value: number[]): number {
-    const stage = state.settings._turn / state.settings.maxTurns;
+    const stage = state.settings.turn / state.settings.maxTurns;
     const t = stage * (value.length - 1);
     const index1 = Math.floor(t);
     const index2 = Math.ceil(t);
@@ -98,7 +97,7 @@ export function scoreUnitPower(game: Game, unit: UnitState): number {
 
     // A unit's value is directly proportional to its health, a 1hp unit is far less valuable
     // Even its atk is proportional
-    const healthMultiplier = unit._health / settings.health!;
+    const healthMultiplier = unit.health / settings.health!;
 
     // A unit in a walled city is much stronger
     // 1.0 (normal), 1.5 (forest, water, etc), 4.0 (city wall)
@@ -126,7 +125,7 @@ export function scoreUnitPower(game: Game, unit: UnitState): number {
 
         // But dont include invisible units because we cant actually see them and there is no indicator they are there or can see us.
         // (eye icon on the enemy unit reveals this so its not cheating)
-        if (isAdjacentToEnemy(state, state.tiles[unit._tileIndex], undefined, false)) {
+        if (isAdjacentToEnemy(state, state.tiles[unit.coords.idx], undefined, false)) {
             effectMultiplier *= 0.5; 
         }
         else {
@@ -141,7 +140,7 @@ export function scoreUnitPower(game: Game, unit: UnitState): number {
     // Combine everything
     let finalScore = healthMultiplier * defenseValue * effectMultiplier * veteranBonus;
 
-    finalScore *= game.values.unitStrength.get(unit._unitType);
+    finalScore *= game.values.unitStrength.get(unit.type);
 
     return finalScore / n_values;
 }
@@ -198,14 +197,14 @@ export function evaluateEconomy(state: GameState): number {
     let spt = getTribeSPT(state);
 
     // Cap the SPT with a maximum ideal
-    spt = GMath.clamp(spt, 60) / 60;
+    spt = GMath.clamp(spt, 30) / 30;
 
     score += spt;
 
     // Add the tribe's score with some maximum if we're playing `Perfection` mode
     if (state.settings.mode === ModeType.Perfection) {
 
-        score += GMath.clamp(getPovTribe(state)._score, MAX_IDEAL_SCORE) / MAX_IDEAL_SCORE;
+        score += GMath.clamp(getPovTribe(state).score, MAX_IDEAL_SCORE) / MAX_IDEAL_SCORE;
 
         // 2 is to normalize the value to 0-1, since we've added the spt (1) and tribe score (2)
         return score / 2;
@@ -233,8 +232,8 @@ export function evaluateArmy(game: Game): number {
     // It may skip important units if the tribe has more than this amount, if so, just increase this value
 
     // Calculate the total army score
-    for (let i = 0; i < GMath.clamp(povTribe._units.length, maxUnitCount); i++) {
-        const unit = povTribe._units[i];
+    for (let i = 0; i < GMath.clamp(povTribe.units.length, maxUnitCount); i++) {
+        const unit = povTribe.units[i];
 
         // Army Strength //
 
@@ -242,18 +241,18 @@ export function evaluateArmy(game: Game): number {
         armyScore += scoreUnitPower(game, unit);
 
         // Calculate map control and positioning
-        const control = getAdjacentIndexes(state, unit._tileIndex);
+        const control = getAdjacentIndexes(state, unit.coords.idx);
 
         for (let i = 0; i < control.length; i++) {
-            if (!tilesControlled.has(state.tiles[control[i]].tileIndex)) {
-                tilesControlled.add(state.tiles[control[i]].tileIndex);
+            if (!tilesControlled.has(state.tiles[control[i]].coords.idx)) {
+                tilesControlled.add(state.tiles[control[i]].coords.idx);
             }
         }
 
         // Capture Potential //
 
         // Search in a maximum of 6 tiles
-        const closestData = getClosestEnemyCity(state, unit._tileIndex, 6);
+        const closestData = getClosestEnemyCity(state, unit.coords.idx, 6);
         
         // If there are no cities, then there will never be one for any of our units
         if (!closestData) {
@@ -296,7 +295,7 @@ export function evaluateArmy(game: Game): number {
 export function evaluateState(game: Game): [number, number, number] {
     const state = game.state;
     
-    const pov = state.settings._pov;
+    const pov = state.settings.currentPlayerTurnId;
     const [ecoMult, armyMult] = calculateStageValue(state);
 
     const myEcoScore = evaluateEconomy(state);
@@ -333,7 +332,7 @@ export function evaluateState(game: Game): [number, number, number] {
     //     }
     // }
 
-    state.settings._pov = pov;
+    state.settings.currentPlayerTurnId = pov;
 
     // A 0 value means there are no opponents left
     // if (theirScore !== 0) {
@@ -360,7 +359,7 @@ export function evaluateState(game: Game): [number, number, number] {
 
     // lower the score gradually the closer we get to the end
     // this prevents the ai from playing good moves late
-    const turn = state.settings._turn;
+    const turn = state.settings.turn;
     // divided by two because if not then we require much deeper searches in order to get
     // the same optimal moves
     // it will pick pointless and bad moves if the scope is longer
@@ -370,7 +369,7 @@ export function evaluateState(game: Game): [number, number, number] {
         1 - Math.min(turn, maxTurns) / maxTurns
     );
 
-    finalScore *= turnInverse;
+    // finalScore *= turnInverse;
 
     // console.log(`net score: ${finalScore}`);
 
@@ -379,4 +378,19 @@ export function evaluateState(game: Game): [number, number, number] {
         myArmyScore, 
         finalScore
     ];
+}
+
+export function evaluateAllStates(game: Game): number[] {
+    const state = game.state;
+    if (!state) return [];
+    const pov = state.settings.currentPlayerTurnId;
+    state.settings.currentPlayerTurnId = 0;
+    const results: number[] = [];
+    // TODO: maxTribeCount is very dangerous
+    for (let i = 0; i < state.settings._maxTribeCount; i++) {
+        state.settings.currentPlayerTurnId = (i+1);
+        results.push(evaluateState(game)[2]);
+    }
+    state.settings.currentPlayerTurnId = pov;
+    return results;
 }

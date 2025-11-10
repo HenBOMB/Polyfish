@@ -8,17 +8,17 @@ export default class Decompose extends Ability {
         super(null, target, AbilityType.BurnForest);
     }
 
-    execute(state: GameState): CallbackResult {
+    execute(state: GameState) {
         const target = this.getTarget();
         const struct = state.structures[target]!;
-        const turn = struct.turn;
+        const turn = struct.founded;
 
-        struct.turn = -2;
+        struct.founded = -2;
 
         return {
             rewards: [],
             undo: () => {
-                struct.turn = turn;
+                struct.founded = turn;
             }
         };
     }

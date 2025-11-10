@@ -105,7 +105,7 @@ export default async function main(loader: GameLoader) {
                 count_moves--;
                 console.log('Illegal move caught:', error.message);
                 console.log(move);
-                console.log(moves.length, MoveGenerator.legal(game.state).length, game.state.tribes[game.state.settings._pov].hash);
+                console.log(moves.length, MoveGenerator.legal(game.state).length, game.state.tribes[game.state.settings.currentPlayerTurnId]._hash);
                 
                 // await loader.loadRandom(6);
                 // game.load(loader.currentState);
@@ -323,8 +323,8 @@ export function playSequence(game: Game, ...moves: MoveType[]) {
     const p1 = game.state.tribes[1];
     const p2 = game.state.tribes[2];
 
-    p1._tech.push({ discovered: true, techType: TechnologyType.Fishing});
-    p2._tech.push({ discovered: true, techType: TechnologyType.Fishing});
+    p1.tech_vanilla.push({ discovered: true, type: TechnologyType.Fishing});
+    p2.tech_vanilla.push({ discovered: true, type: TechnologyType.Fishing});
 
     for(const moveType of moves) {
         try {
@@ -353,7 +353,7 @@ export function playSequence(game: Game, ...moves: MoveType[]) {
     }
 
     console.log('--- moves --');
-    console.log(game.state.settings._pov);
+    console.log(game.state.settings.currentPlayerTurnId);
     MoveGenerator.legal(game.state).forEach(x =>
         console.log('-', x.stringify(game.state, game.state))
     );

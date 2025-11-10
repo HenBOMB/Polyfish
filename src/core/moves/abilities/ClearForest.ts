@@ -9,7 +9,7 @@ export default class ClearForest extends Ability {
         super(null, target, AbilityType.ClearForest);
     }
 
-    execute(state: GameState): CallbackResult {
+    execute(state: GameState) {
         const undoTerrain = modifyTerrain(state, this.getTarget(), TerrainType.Field);
         const undoStars = gainStars(state, 1);
 

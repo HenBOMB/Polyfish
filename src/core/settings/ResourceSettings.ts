@@ -11,10 +11,10 @@ export const ResourceSettings: Record<ResourceType, {
     tribeType?: TribeType;
 }> = {
     [ResourceType.None]:           {
-        techRequired: TechnologyType.None,
+        techRequired: TechnologyType.Unrequired,
         rewardPop: 0,
     },
-    [ResourceType.WildAnimal]:     {
+    [ResourceType.Game]:     {
         cost: 2,
         techRequired: TechnologyType.Hunting,
         rewardPop: 1,
@@ -36,8 +36,8 @@ export const ResourceSettings: Record<ResourceType, {
         visibleRequired: [TechnologyType.Climbing, TechnologyType.Mining, TechnologyType.Smithery],
         rewardPop: 0,
     },
-    [ResourceType.Unknown1]:           {
-        techRequired: TechnologyType.None,
+    [ResourceType.Whale]:           {
+        techRequired: TechnologyType.Unrequired,
         rewardPop: 0,
     },
     [ResourceType.Fruit]:          {
@@ -46,7 +46,7 @@ export const ResourceSettings: Record<ResourceType, {
         rewardPop: 1
     },
     [ResourceType.Spores]:         {
-        techRequired: TechnologyType.None,
+        techRequired: TechnologyType.Unrequired,
         structType: StructureType.Spores,
         rewardPop: 1,
         tribeType: TribeType.Cymanti,
@@ -56,6 +56,10 @@ export const ResourceSettings: Record<ResourceType, {
         visibleRequired: [TechnologyType.Fishing, TechnologyType.Sailing, TechnologyType.Navigation],
         requiresCapture: true,
         rewardStars: 5,
+        rewardPop: 0,
+    },
+    [ResourceType.AquaCrop]:           {
+        techRequired: TechnologyType.BeyondComprehension,
         rewardPop: 0,
     },
 };

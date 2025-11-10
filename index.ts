@@ -1,19 +1,14 @@
 import express, { Request, Response } from "express";
 import { join } from "path";
-import GameLoader from "./src/core/gameloader";
-import AIState, { MODEL_CONFIG } from "./src/aistate";
+import AIState from "./src/aistate";
 import { ModeType, TribeType } from "./src/core/types";
 import { spawn } from "child_process";
-import { CityState, DefaultGameSettings, GameSettings, GameState } from "./src/core/states";
+import { GameSettings, GameState, UnitState } from "./src/core/states";
 import Game from "./src/game";
-import Move from "./src/core/move";
-// import { sampleFromDistribution } from "./src/polyfish/util";
-import { ArmyMovesGenerator, EconMovesGenerator, MoveGenerator, Prediction } from "./src/core/moves";
-import main, { deepCompare } from "./src/main";
-import { getPovTribe } from "./src/core/functions";
+import {  MoveGenerator, Prediction } from "./src/core/moves";
+import { deepCompare } from "./src/main";
 import { Logger } from "./src/ai/logger";
-import { SelfPlay } from "./src/ai/mcts.old";
-import { evaluateState } from "./src/ai/eval";
+import { evaluateAllStates } from "./src/ai/eval";
 import { CalculateBestMoves } from "./src/ai/brute";
 import { MCTS } from "./src/ai/mcts/mcts";
 
@@ -22,7 +17,7 @@ const py = spawn(".venv/bin/python3", ["polyfish/main.py"]);
 type Task = { data: string, resolve: (value: Prediction) => void };
 const queue: Task[] = [];
 let current: Task | null = null;
-let currentGame = new Game();
+let game = new Game();
 
 (BigInt.prototype as any).toJSON = function() {
   return this.toString();
@@ -81,8 +76,12 @@ app.get('/', (req: Request, res: Response) => {
     res.sendFile(join(process.cwd(), "public", "index.html"));
 });
 
+app.get('/eval', async (req: Request, res: Response) => {
+    res.json(evaluateAllStates(game));    
+});
+
 app.get('/current', async (req: Request, res: Response) => {
-    const state = currentGame.state;
+    const state = game.state;
     res.json({
         state,
         reward: 0,
@@ -93,8 +92,8 @@ app.get('/current', async (req: Request, res: Response) => {
 
 app.get('/live', async (req: Request, res: Response) => {
     const fow = req.query.fow == 'true' || req.query.fow == undefined? true : false;
-    await currentGame.loadLive({ fow });
-    const state = currentGame.state;
+    await game.loadLive({ fow });
+    const state = game.state;
     Logger.clear();
     // main(loader);
     res.json({
@@ -105,6 +104,45 @@ app.get('/live', async (req: Request, res: Response) => {
         done: false,
         truncated: false,
     });
+});
+
+app.post('/sequence', async (req: Request, res: Response) => {
+    game.playSequence(...((req.body?.ids || [0]) as number[]));
+    res.json({
+        state: game.state
+    });
+});
+
+app.post('/bestmoves', (req: Request, res: Response) => {
+    try {
+        CalculateBestMoves(
+            game,
+            6,
+            { 
+                depth: 1500,
+                cPuct: 1.0,
+                nThreads: 6,
+                maxTurnsAhead: 5,
+                deterministic: true
+            }
+        ).then(async ([ ,,,, bestMoves ]) => {
+            if (bestMoves.length === 0) {
+                res.status(200).json({ move: null, reason: "No available moves." });
+                return;
+            }
+
+            // currentGame.playSequence(...bestMoves);
+
+            res.json({
+                bestMoves
+            });
+        }).catch((e) => {
+            throw Error(e);
+        });
+    } catch (err) {
+        console.error("Error in /predict:", err);
+        res.status(500).json({ error: "Prediction failed." });
+    }
 });
 
 app.get('/random', async (req: Request, res: Response) => {
@@ -118,8 +156,8 @@ app.get('/random', async (req: Request, res: Response) => {
     if(req.query.tribes) {
         settings.tribes = String(req.query.tribes || "Imperius,Bardur").split(',').map(x => TribeType[x.trim() as keyof typeof TribeType]) as TribeType[];
     }
-    await currentGame.loadRandom(settings);
-    const state = currentGame.state;    
+    await game.loadRandom(settings);
+    const state = game.state;    
     Logger.clear();
     // main(loader);
     res.json({
@@ -137,33 +175,33 @@ app.get('/random', async (req: Request, res: Response) => {
     });
 });
 
-app.post('/predict', async (req: Request, res: Response) => {
-    const state: GameState = req.body.state;
-    if (!state) {
-        res.status(400).json({ error: "Missing 'state' in request body." });
-        return;
-    }
+// app.post('/predict', async (req: Request, res: Response) => {
+//     const state: GameState = req.body.state;
+//     if (!state) {
+//         res.status(400).json({ error: "Missing 'state' in request body." });
+//         return;
+//     }
     
-    try {
-        const moves = MoveGenerator.legal(state);
+//     try {
+//         const moves = MoveGenerator.legal(state);
 
-        if (moves.length === 0) {
-            res.status(200).json({ move: null, reason: "No available moves." });
-            return;
-        }
+//         if (moves.length === 0) {
+//             res.status(200).json({ move: null, reason: "No available moves." });
+//             return;
+//         }
         
-        const prediction = await predict(state);
-        throw "TODO CONVERSION"
-        // const bestIndex = prediction.pi.indexOf(Math.max(...prediction.pi));
+//         const prediction = await predict(state);
+//         throw "TODO CONVERSION"
+//         // const bestIndex = prediction.pi.indexOf(Math.max(...prediction.pi));
         
-        // const move = moves[bestIndex] ?? null;
-        // res.json({ move, value: prediction.v });
+//         // const move = moves[bestIndex] ?? null;
+//         // res.json({ move, value: prediction.v });
         
-    } catch (err) {
-        console.error("Error in /predict:", err);
-        res.status(500).json({ error: "Prediction failed." });
-    }
-});
+//     } catch (err) {
+//         console.error("Error in /predict:", err);
+//         res.status(500).json({ error: "Prediction failed." });
+//     }
+// });
 
 app.post("/mcts", async (req: Request, res: Response) => {
     try {
@@ -201,86 +239,25 @@ app.post("/mcts", async (req: Request, res: Response) => {
     }
 });
 
-app.post("/autostep", async (req: Request, res: Response) => {
-    try {
-        const prevState: GameState = req.body.state;
-        const game = new Game();
-        game.load(prevState);
-        
-        // const oldState = game.cloneState();
-        const movez = MoveGenerator.legal(prevState);
-        let moves: Move[] = [];
-        throw "TODO CONVERSION"
-        // const { pi, v } = await predict(prevState);
-        
-        // if(req.body.mcts) {
-        //     let probs: number[] = [];
-        //     // let start = Date.now();
-        //     const root = await new MCTS(
-        //         game.state, predict, 
-        //         req.body.cpuct || 1.0, 
-        //         req.body.gamma || 0.997, 
-        //         req.body.dirichlet || true, 
-        //         req.body.rollouts || 50, 
-        //     ).search(req.body.iterations || 100);
-        //     probs = root.distribution(req.body.temperature || 0.7);
-        //     // console.log(`took: ${Date.now() - start}ms`);
-        //     const moveIndex = (req.body.deterministic || false)
-        //         ? probs.indexOf(Math.max(...probs))
-        //         : sampleFromDistribution(probs);
-        //     moves = [movez[moveIndex]];
-        //     game.playMove(moveIndex);
-        // }
-        // else {
-        //     const action = pi.indexOf(Math.max(...pi));
-        //     const result = game.playMove(action < 0 || action >= movez.length? pi.indexOf(Math.max(...pi.slice(0, movez.length))) : action);
-        //     if(!result) {
-        //         throw 'Illegal Move';
-        //     }
-        //     moves = [result![0]];
-        // }
-
-        // res.json({
-        //     moves: ['not working'],
-        //     // moves: moves.map(x => x.stringify(oldState, game.state).toLowerCase()),
-        //     state: game.state,
-        //     potential:  AIState.calculatePotential(prevState) - AIState.calculatePotential(game.state),
-        //     // reward: AIState.calculateReward(oldState, game, ...moves),
-        //     reward: -1,
-        //     value: v,
-        // });
-    } catch (err: any) {
-        console.error("autostep error:", err);
-        res.status(500).send({
-            moves: [],
-            state: req.body.state,
-            value: 0,
-            potential: 0,
-            reward: 0,
-            error: err.message || err
-        });
-    }
-});
-
-app.post('/selfplay', async (req: Request, res: Response) => {
-    const settings = req.body.settings || DefaultGameSettings;
-    const tribes = settings.tribes;
-    if(typeof tribes == 'string') {
-        settings.tribes = tribes.split(',').map(x => TribeType[x.trim() as keyof typeof TribeType]) as TribeType[];
-    }
-    res.json(await SelfPlay(
-        predict,
-        req.body.n_games || 3, 
-        req.body.n_sims || 100, 
-        req.body.temperature || 0.7, 
-        req.body.cPuct || 1.0,
-        req.body.gamma || 0.997,
-        req.body.deterministic || false,
-        req.body.dirichlet || true,
-        req.body.rollouts || 50,
-        settings,
-    ));
-})
+// app.post('/selfplay', async (req: Request, res: Response) => {
+//     const settings = req.body.settings || DefaultGameSettings;
+//     const tribes = settings.tribes;
+//     if(typeof tribes == 'string') {
+//         settings.tribes = tribes.split(',').map(x => TribeType[x.trim() as keyof typeof TribeType]) as TribeType[];
+//     }
+//     res.json(await SelfPlay(
+//         predict,
+//         req.body.n_games || 3, 
+//         req.body.n_sims || 100, 
+//         req.body.temperature || 0.7, 
+//         req.body.cPuct || 1.0,
+//         req.body.gamma || 0.997,
+//         req.body.deterministic || false,
+//         req.body.dirichlet || true,
+//         req.body.rollouts || 50,
+//         settings,
+//     ));
+// })
 
 app.post('/train', async (req: Request, res: Response) => {
     res.json(new Promise((resolve) => {
@@ -290,6 +267,14 @@ app.post('/train', async (req: Request, res: Response) => {
         }), resolve });
         next();
     }));
+})
+
+app.post('/unitmoves', async (req: Request, res: Response) => {
+    const unit = req.body.unit as UnitState;
+
+    const legalMoves = MoveGenerator.legal(game.state);
+
+    res.json(legalMoves.map(x => x.serialize('array')));
 })
 
 async function benchmarkThreadPerformance(
@@ -363,27 +348,61 @@ async function benchmarkThreadPerformance(
 
 app.listen(3000, async () => {
     Logger.clear();
-    console.log(`INITIALIZED ON PORT 3000\n`);
+    console.log(`\nReady on: **http://localhost:3000/**\n`);
     
+    await game.loadLive({ fow: true, fallback: 'data/gamestate.json' });
+
+    game.state.settings._fow = false;
+
     // RUN SOME TESTS
-    await currentGame.loadRandom({ fow: false, tribes: [TribeType.Imperius, TribeType.Bardur] });
+    // await currentGame.loadRandom({ 
+    //     fow: false,
+    //     tribes: [TribeType.Imperius, TribeType.Bardur],
+    //     seed: 8
+    // });
 
     // console.log(evaluateState(currentGame));
     // benchmarkThreadPerformance(currentGame, 1500, 16, 100);
     
-    // const [ bestMoves ] = await CalculateBestMoves(
-    //     currentGame,
-    //     1,
-    //     { depth: 1500, cPuct: 1.0, nThreads: 6 }
-    // );
+    // currentGame.playSequence(...[6, 8, 5, 0, 1, 0, 0, 4, 9, 0, 1, 1, 0, 3, 0, 1, 1, 0, 1, 1, 1, 0, 2, 1, 1, 0]);
+    // currentGame.playSequence(...[1, 5, 0, 1, 1, 0, 1, 5, 0, 1, 1, 0, 4, 6, 0, 4, 3, 0, 1, 1, 4, 1, 7, 7, 0, 0, 5, 1, 5, 0, 0, 5, 9, 8, 1, 1, 0, 12, 1, 1, 1, 0, 6, 7, 1, 1, 1, 1, 0, 7, 3, 1, 1, 0, 15, 5, 5, 1, 1, 0, 6, 6, 1, 9, 1]);
 
-    MoveGenerator.legal(currentGame.state).forEach(x => {
-        console.log(x.stringify(currentGame.state, currentGame.state));
+    const iState = game.cloneState();
+
+    await CalculateBestMoves(
+        game,
+        20,
+        { 
+            depth: 10,
+            cPuct: 1.0,
+            nThreads: 6,
+            maxTurnsAhead: 1,
+            deterministic: true
+        }
+    ).then(x => {
+        // console.log(x[0].map(x => x.stringify(game.state, game.state)));
+    }).catch((e) => {
+        console.error(e);
     });
 
-    const move: any[] = [];
-    console.log(ArmyMovesGenerator.all(currentGame.state, move));
-    console.log(move);
+    deepCompare(
+        { state: {
+            r: iState.resources,
+            s: iState.structures,
+            t: iState.tiles,
+            T: iState.tribes,
+            S: iState.settings,
+        } },
+        { state: {
+            r: game.state.resources,
+            s: game.state.structures,
+            t: game.state.tiles,
+            T: game.state.tribes,
+            S: game.state.settings,
+        } },
+        'state',
+        true
+    );
 
     // const mcts = new MCTS(currentGame, 1.0, false, 3, 16);
     // console.time('prepare');

@@ -6,6 +6,12 @@
 #include <chrono>
 #include <thread>
 #include <iostream>
+#include <unistd.h>
+#include <sstream>
+#include <string>
+#include <iomanip>
+#include <vector>
+#include <map>
 
 static std::random_device rd;
 static std::mt19937 gen(rd());
@@ -21,7 +27,7 @@ uintptr_t getPlace(pid_t pid, uintptr_t base, const std::vector<uintptr_t>& offs
     return addr;
 }
 
-bool readDictionary(pid_t pid, uintptr_t address,  std::string &result, std::string(*callback)(uint16_t, unsigned char*), size_t objSize) {
+bool readDictionary(pid_t pid, uintptr_t address,  std::string &result, std::string(*callback)(uint16_t, unsigned char*), std::size_t objSize) {
     uint16_t size;
 
     if (!readPiece(pid, getPlace(pid, address, { _0x_IN_DICT_COUNT }), size)) {

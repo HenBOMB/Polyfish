@@ -10,24 +10,24 @@ export default class Research extends Move {
         super(MoveType.Research, null, null, type);
     }
 
-    execute(state: GameState): CallbackResult {
+    execute(state: GameState) {
         const pov = getPovTribe(state);
         const cost = getTechCost(pov, this.getType<TechnologyType>());
         const tech: TechnologyState = {
-            techType: this.getType<TechnologyType>(),
-            discovered: state.settings.areYouSure,
+            type: this.getType<TechnologyType>(),
+            discovered: state.settings._areYouSure,
         }
 
-        xorPlayer.tech(pov, tech.techType);
-        pov._tech.push(tech);
+        xorPlayer.tech(pov, tech.type);
+        pov.tech_vanilla.push(tech);
         const undoPurchase = spendStars(state, cost);
         
         return {
             rewards: [],
             undo: () => {
                 undoPurchase();
-                pov._tech.pop();
-                xorPlayer.tech(pov, tech.techType);
+                pov.tech_vanilla.pop();
+                xorPlayer.tech(pov, tech.type);
             }
         };
     }

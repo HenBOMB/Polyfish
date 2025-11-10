@@ -12,12 +12,14 @@ export default class Summon extends Move {
         super(MoveType.Summon, src, null, type);
     }
 
-    execute(state: GameState): CallbackResult {
+    execute(state: GameState) {
         const pov = getPovTribe(state);
         const unitType = this.getType<UnitType>();
 
-        if(pov._stars < UnitSettings[unitType].cost) {
-            return Logger.illegal(MoveType.Summon, `Cant afford ${UnitType[unitType]} ${pov._stars} / ${UnitSettings[unitType].cost} stars`);
+        if(pov.stars < UnitSettings[unitType].cost) {
+            console.trace();
+            throw new Error(`${TribeType[pov.type]} cant afford ${UnitType[unitType]} ${pov.stars} / ${UnitSettings[unitType].cost} stars`);
+            // return Logger.illegal(MoveType.Summon, );
         }
 
         return summonUnit(state, unitType, this.getSrc(), true)

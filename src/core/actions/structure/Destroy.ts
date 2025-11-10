@@ -6,45 +6,45 @@ import { GameState } from "../../states";
 import { StructureType } from "../../types";
 
 
-export function destroyStructure(state: GameState, tileIndex: number): UndoCallback {
+export function destroyStructure(state: GameState, idx: number): UndoCallback {
     const pov = getPovTribe(state);
-    const struct = state.structures[tileIndex]!;
+    const struct = state.structures[idx]!;
 
-    xorStructure(state, tileIndex, struct.id, StructureType.None);
+    xorStructure(state, idx, struct.type, StructureType.None);
 
-    if (struct.id === StructureType.Ruin) {
-        delete state.structures[tileIndex];
+    if (struct.type === StructureType.Ruin) {
+        delete state.structures[idx];
         return () => {
-            state.structures[tileIndex] = struct;
-            xorStructure(state, tileIndex, StructureType.None, struct.id);
+            state.structures[idx] = struct;
+            xorStructure(state, idx, StructureType.None, struct.type);
         };
     }
 
-    const city = getCityOwningTile(state, tileIndex)!;
-    const settings = StructureSettings[struct.id];
+    const city = getCityOwningTile(state, idx)!;
+    const settings = StructureSettings[struct.type];
 
-    delete state.structures[tileIndex];
+    delete state.structures[idx];
 
     if (settings.rewardPop) {
-        city._population -= settings.rewardPop;
-        city._progress -= settings.rewardPop;
-        if (city._progress < 0) {
-            xorCity.level(state, city, city._level, city._level - 1);
-            city._level--;
+        city.population -= settings.rewardPop;
+        city.progress -= settings.rewardPop;
+        if (city.progress < 0) {
+            xorCity.level(state, city, city.level, city.level - 1);
+            city.level--;
         }
     }
 
     // TODO Remove score
     return () => {
         if (settings.rewardPop) {
-            if (city._progress < 0) {
-                xorCity.level(state, city, city._level, city._level + 1);
-                city._level++;
+            if (city.progress < 0) {
+                xorCity.level(state, city, city.level, city.level + 1);
+                city.level++;
             }
-            city._progress += settings.rewardPop;
-            city._population += settings.rewardPop;
+            city.progress += settings.rewardPop;
+            city.population += settings.rewardPop;
         }
-        state.structures[tileIndex] = struct;
-        xorStructure(state, tileIndex, StructureType.None, struct.id);
+        state.structures[idx] = struct;
+        xorStructure(state, idx, StructureType.None, struct.type);
     };
 }

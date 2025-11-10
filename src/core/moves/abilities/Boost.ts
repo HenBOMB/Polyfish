@@ -10,7 +10,7 @@ export default class Boost extends Ability {
         super(src, null, AbilityType.Boost);
     }
 
-    execute(state: GameState): CallbackResult {
+    execute(state: GameState) {
         const chain = getAlliesNearTile(state, this.getSrc())
             .map(x => tryRemoveEffect(state, x, EffectType.Boost));
         return {

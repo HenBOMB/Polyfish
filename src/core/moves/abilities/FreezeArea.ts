@@ -10,7 +10,7 @@ export default class FreezeArea extends Ability {
         super(src, null, AbilityType.FreezeArea);
     }
 
-    execute(state: GameState): CallbackResult {
+    execute(state: GameState) {
         return {
             rewards: [],
             undo: freezeArea(state, getUnitAt(state, this.getSrc())!)

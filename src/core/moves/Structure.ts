@@ -8,7 +8,7 @@ export default class Structure extends Move {
         super(MoveType.Build, null, target, type);
     }
 
-    execute(state: GameState): CallbackResult {
+    execute(state: GameState) {
         const strucType = this.getType<StructureType>();
         return buildStructure(state, strucType, this.getTarget());
     }

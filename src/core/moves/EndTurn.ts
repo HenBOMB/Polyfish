@@ -12,17 +12,17 @@ export default class EndTurn extends Move {
         super(MoveType.EndTurn, null, null, null);
     }
 
-    execute(state: GameState): CallbackResult {
+    execute(state: GameState) {
         // Special case: decompose, removes the structure at full cost
         const tribe = getPovTribe(state);
-        if(tribe.tribeType === TribeType.Cymanti && tribe._tech.some(x => TechnologySettings[x.techType].unlocksAbility === AbilityType.Decompose)) {
+        if(tribe.type === TribeType.Cymanti && tribe.tech_vanilla.some(x => TechnologySettings[x.type].unlocksAbility === AbilityType.Decompose)) {
             const decomposed: UndoCallback[] = [];
 
             for (const strTileIndex in state.structures) {
-                if(state.structures[strTileIndex]?.turn === -2) {
+                if(state.structures[strTileIndex]?.founded === -2) {
                     const struct = state.structures[strTileIndex];
                     const undoDestroy = destroyStructure(state, struct.tileIndex);
-                    const undoStars = gainStars(state, StructureSettings[struct.id].cost || 0);
+                    const undoStars = gainStars(state, StructureSettings[struct.type].cost || 0);
                     decomposed.push(() => {
                         undoStars();
                         undoDestroy();

@@ -11,7 +11,7 @@ export default class Disband extends Ability {
         super(src, null, AbilityType.Disband);
     }
 
-    execute(state: GameState): CallbackResult {
+    execute(state: GameState) {
         const unit = getUnitAt(state, this.getSrc())!;
 
         const undoRemove = removeUnit(state, unit);

@@ -14,7 +14,7 @@ export enum TerrainType {
 }
 
 export enum TechnologyType {
-	None 			= 0,
+	Unrequired 			= 0,
 	Riding 			= 1,
 	FreeSpirit 		= 2, 
 	Chivalry 		= 3,
@@ -68,7 +68,8 @@ export enum TechnologyType {
 	IceFishing		= 42,
 	/** Cymanti. Replaces Sailing */
 	Pascetism		= 43,
-	Unbuildable 	= -1, 
+	/** Cannot be interacted witi in any way */
+	BeyondComprehension = -1, 
 	// TODO = Aquarion
 }
 
@@ -122,7 +123,8 @@ export enum RewardType {
 	BorderGrowth 	 = 5,
 	SuperUnit 		 = 6,
 	Resources 		 = 7,
-	PopGrowth = 8,
+	PopGrowth 		 = 8,
+	Rebellion 		 = 9,
 }
 
 export enum UnitType {
@@ -345,14 +347,15 @@ export enum StructureType {
 
 export enum ResourceType {
 	None 		    = 0,
-	WildAnimal 		= 1,
+	Game 			= 1,
 	Crop 			= 2,
 	Fish 			= 3,
-	Unknown1        = 4,
+	Whale           = 4,
 	Metal 			= 5,
 	Fruit 			= 6,
 	Spores 			= 7,
 	Starfish 		= 8,
+	AquaCrop 		= 9,
 }
 
 export enum EffectType {

@@ -9,63 +9,63 @@ export default function(state: GameState, city: CityState, amount: number): Bran
 
     const cityStruct = state.structures[city.tileIndex]!;
 
-    city._population += amount;
-    city._progress += amount;
+    city.population += amount;
+    city.progress += amount;
 
-    const next = city._level + 1;
+    const next = city.level + 1;
 
-    if (city._progress >= next) {
-        const lvl = city._level;
+    if (city.progress >= next) {
+        const lvl = city.level;
 
-        cityStruct._level++;
-        city._level++;
-        city._progress -= next;
-        city._production++;
+        cityStruct.level++;
+        city.level++;
+        city.progress -= next;
+        city.production++;
 
         let rewards = EconMovesGenerator.rewards(city);
         let lol = false;
-        let amountScore = (city._level > 1 ? 50 - (city._level - 2) * 5 : 0) + amount * 5;
+        let amountScore = (city.level > 1 ? 50 - (city.level - 2) * 5 : 0) + amount * 5;
 
-        if (city._progress - next >= (next + 1)) {
+        if (city.progress - next >= (next + 1)) {
             // useful for debugging multithread
             // if it prints it means there is something wrong..
             // it should ONLY print when connecting cities and getting a huge pop increase
             console.warn('MEGA CHAIN!');
             // process.exit(1)
             lol = true;
-            cityStruct._level++;
-            city._level++;
-            city._progress -= next + 1;
-            city._production++;
+            cityStruct.level++;
+            city.level++;
+            city.progress -= next + 1;
+            city.production++;
             rewards.push(...EconMovesGenerator.rewards(city));
-            amountScore += (city._level > 1 ? 50 - (city._level - 2) * 5 : 0) + amount * 5;
+            amountScore += (city.level > 1 ? 50 - (city.level - 2) * 5 : 0) + amount * 5;
         }
 
-        xorCity.level(state, city, lvl, city._level);
+        xorCity.level(state, city, lvl, city.level);
 
-        pov._score += amountScore;
+        pov.score += amountScore;
 
         return {
             rewards,
             undo: () => {
-                pov._score -= amountScore;
+                pov.score -= amountScore;
 
-                xorCity.level(state, city, city._level, lvl);
+                xorCity.level(state, city, city.level, lvl);
 
                 if (lol) {
-                    city._production--;
-                    city._progress += next + 1;
-                    city._level--;
-                    cityStruct._level--;
+                    city.production--;
+                    city.progress += next + 1;
+                    city.level--;
+                    cityStruct.level--;
                 }
 
-                city._production--;
-                city._progress += next;
-                city._level--;
-                cityStruct._level--;
+                city.production--;
+                city.progress += next;
+                city.level--;
+                cityStruct.level--;
 
-                city._progress -= amount;
-                city._population -= amount;
+                city.progress -= amount;
+                city.population -= amount;
             },
         };
     }
@@ -73,8 +73,8 @@ export default function(state: GameState, city: CityState, amount: number): Bran
     return {
         rewards: [],
         undo: () => {
-            city._progress -= amount;
-            city._population -= amount;
+            city.progress -= amount;
+            city.population -= amount;
         }
     };
 }

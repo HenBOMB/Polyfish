@@ -10,20 +10,20 @@ export default class Promote extends Ability {
         super(src, null, AbilityType.Promote);
     }
 
-    execute(state: GameState): CallbackResult {
+    execute(state: GameState) {
         const unit = getUnitAt(state, this.getSrc())!;
-        const hp = unit._health;
+        const hp = unit.health;
 
         xorUnit.veteran(state, unit)
-        unit._veteran = true;
-        unit._health = getMaxHealth(unit);
+        unit.veteran = true;
+        unit.health = getMaxHealth(unit);
         
         return {
             rewards: [],
             undo: () => {
                 xorUnit.veteran(state, unit)
-                unit._health = hp;
-                unit._veteran = false;
+                unit.health = hp;
+                unit.veteran = false;
             }
         };
     }

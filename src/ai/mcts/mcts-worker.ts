@@ -29,10 +29,10 @@ function simulate(root: MCTSNode, game: Game, cPuct: number, stopTurn: number): 
 	let value: number = 0;
 	let undos: UndoCallback[] = [];
 	
-	while (currentNode.isExpanded() && !isGameOver(game.state) && stopTurn > game.state.settings._turn) {
+	while (currentNode.isExpanded() && !isGameOver(game.state) && stopTurn > game.state.settings.turn) {
 		let moveIndex = currentNode.select(cPuct);
 		
-		const [played, undo] = game.playMove(moveIndex)!;
+		const [played, undo] = game.playMove(currentNode.legal[moveIndex])!;
 		
 		undos.unshift(undo);
 

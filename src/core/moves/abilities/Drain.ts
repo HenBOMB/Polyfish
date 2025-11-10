@@ -8,7 +8,7 @@ export default class Drain extends Ability {
         super(null, target, AbilityType.Drain);
     }
 
-    execute(state: GameState): CallbackResult {
+    execute(state: GameState) {
         return {
             rewards: [],
             undo: () => {

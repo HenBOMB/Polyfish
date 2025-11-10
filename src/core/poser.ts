@@ -57,7 +57,7 @@ export default class PoseManager {
     }
 
     get(game: Game): Move[] {
-        const key = getPovTribe(game.state).hash.toString();
+        const key = getPovTribe(game.state)._hash.toString();
         const hot = this.inMemory.get(key);
 
         if(hot) {

@@ -15,6 +15,7 @@ type PartialMCTSSEttings = {
     dirichlet?: boolean;
     cPuct?: number;
     nThreads?: number;
+    maxTurnsAhead?: number;
 }
 
 type MCTSSettings = {
@@ -23,6 +24,7 @@ type MCTSSettings = {
     dirichlet: boolean;
     cPuct: number;
     nThreads: number;
+    maxTurnsAhead: number;
 }
 
 function parseSettings(settings: PartialMCTSSEttings | null = null): MCTSSettings {
@@ -32,6 +34,7 @@ function parseSettings(settings: PartialMCTSSEttings | null = null): MCTSSetting
         dirichlet: false,
         cPuct: 1.5,
         nThreads: 2,
+        maxTurnsAhead: 3,
         ...(settings || { })
     };
 }
@@ -67,31 +70,36 @@ function parseSettings(settings: PartialMCTSSEttings | null = null): MCTSSetting
  */
 export async function CalculateBestMoves(
     game: Game,
-    turnsAhead=1,
+    turnsAhead=3,
     // stopFn: StopFunction = 'limit',
     settings: PartialMCTSSEttings | null = null
-): Promise<[Move[], number, number, number]> {
-    const { depth, cPuct, dirichlet, deterministic, nThreads } = parseSettings(settings);
-    const mcts = new MCTS(game, cPuct, dirichlet, nThreads);
+): Promise<[Move[], number, number, number, number[]]> {
+    const { depth, cPuct, dirichlet, deterministic, nThreads, maxTurnsAhead } = parseSettings(settings);
+    const mcts = new MCTS(game, cPuct, dirichlet, nThreads, maxTurnsAhead);
     await mcts.prepare();
     
     const state = game.state;
-    const maxTurn = Math.min(state.settings._turn + turnsAhead, state.settings.maxTurns);
+    const maxTurn = Math.min(state.settings.turn + turnsAhead, state.settings.maxTurns);
     const undoChain: UndoCallback[] = [];
     const bestMoves: Move[] = [];
 
     console.log('[BRUTE] Started loop');
-    let _remaining = turnsAhead + 1;
+    let _remaining = turnsAhead;
     let _prevPov = 0;
+    let _result = 0;
+    let _sequence = [];
+    const oPov = state.settings.currentPlayerTurnId;
 
-    while (!isGameOver(state) && state.settings._turn <= maxTurn) {
-        if (_prevPov != state.settings._pov) {
+    while (!isGameOver(state) && state.settings.turn <= maxTurn) {
+        if (_prevPov != state.settings.currentPlayerTurnId) {
             _remaining--;
             if(_remaining < 0) {
                 break;
             }
-            console.log(`\n${TribeType[getPovTribe(state).tribeType]}'s turn`);
-            _prevPov = state.settings._pov;
+            console.log(`  (${_result > 0? '+' : ''}${_result.toFixed(8)})`);
+            console.log(`\n${TribeType[getPovTribe(state).type]}'s turn`);
+            _prevPov = state.settings.currentPlayerTurnId;
+            _result = 0;
         }
 
         // Play moves until a stop function, for now case the end turn move
@@ -112,6 +120,8 @@ export async function CalculateBestMoves(
         );
         const probs = root.distribution(deterministic? 0 : 1); 
         const bestMoveIndex = probs.indexOf(Math.max(...probs));
+
+        _sequence.push(bestMoveIndex);
         
         // careful, cloning is expensive
         const oldState = game.cloneState();
@@ -119,18 +129,36 @@ export async function CalculateBestMoves(
         const playData = game.playMove(bestMoveIndex);
 
         if (!playData) {
+            console.log('dead');
             break;
         }
         
         const [ playedMove, undo ] = playData;
         
-        const newEval = evaluateState(game);
-        const diff = newEval[2] - oldEval[2];
+        
+        let diff = 0;
+        
+        if (playedMove.moveType !== MoveType.EndTurn) {
+            const newEval = evaluateState(game);
+            diff = newEval[2] - oldEval[2];
+        }
+
+        _result += diff;
+
         if (diff != 0) {
-            console.log(`> ${diff > 0? '+' : ''}${diff.toFixed(3)} ${playData[0].stringify(oldState, state)}`);
+            if (playedMove.moveType == MoveType.Step) {
+                console.log('  ', playedMove.stringifyNow(state));
+            }
+            else {
+                console.log(`  ${diff > 0? '+' : ''}${diff.toFixed(4)} ${playData[0].stringify(oldState, state)}`);
+            }
         }
         else {
-            console.log(`> ${playData[0].stringify(oldState, state)}`);
+            console.log(`  ${playData[0].stringify(oldState, state)}`);
+        }
+
+        if (state.settings.currentPlayerTurnId === oPov) {
+            bestMoves.push(playedMove);
         }
 
         if (playedMove.moveType === MoveType.EndTurn) {
@@ -138,7 +166,7 @@ export async function CalculateBestMoves(
             // We cant play the enemies turns because that would give us access to their entire POV and kill the FOW
             // BUT since we're not playing with FOW, we can!
 
-            if (state.settings.fow) {
+            if (state.settings._fow) {
                 console.log(state.settings);
                 console.error("FOW not supported... yet!");
                 break
@@ -150,8 +178,6 @@ export async function CalculateBestMoves(
             }
         }
 
-        bestMoves.push(playedMove);
-
         // Backwards so it undoes properly forward
         undoChain.unshift(undo);
     }
@@ -161,19 +187,22 @@ export async function CalculateBestMoves(
     if (isGameOver(state)) {
         console.log('[BRUTE] Halted by game end')
     }
-    else if (state.settings._turn > maxTurn) {
+    else if (state.settings.turn > maxTurn) {
         console.log('[BRUTE] Halted by game limit')
     }
-    else if (_remaining < 1) {
+    else if (_remaining < 0) {
         console.log('[BRUTE] Halted by stop function')
     }
     else {
         console.error("Fatal, something internally went south! :(");
     }
 
+    console.log('--SEQUENCE--');
+    console.log(`  [${_sequence.join(', ')}]`);
+
     for(const undo of undoChain) {
         undo();
     }
 
-    return [bestMoves, ...evaluateState(game)];
+    return [bestMoves, ...evaluateState(game), _sequence];
 }

@@ -87,7 +87,7 @@ function safeFloat(f: number | boolean | undefined): number {
 function extractTile(state: GameState, tileIndex: number, force = false): number[] {
     const pov = getPovTribe(state);
     const tile = state.tiles[tileIndex];
-    const explored = tile._explorers.has(pov.owner);
+    const explored = tile.explorers.has(pov.id);
 
     if(!explored && !force) {
         return Array(MODEL_CONFIG.dim_map_channels).fill(0);
@@ -95,27 +95,27 @@ function extractTile(state: GameState, tileIndex: number, force = false): number
     
     const city = getCityAt(state, tileIndex);
     const unit = getUnitAt(state, tileIndex);
-    const resource = !city && isResourceVisible(pov, state.resources[tileIndex]?.id)? state.resources[tileIndex] : null;
+    const resource = !city && isResourceVisible(pov, state.resources[tileIndex]?.type)? state.resources[tileIndex] : null;
     const maxUnitTypeCount = Object.keys(UnitSettings).length - 1;
    
-    const isOwnedByUs = tile._owner === pov.owner;
-    const isOwnedByEnemy = tile._owner && tile._owner !== pov.owner;
-    const unitIsOurs = unit && unit._owner === pov.owner? unit : null;
-    const unitIsEnemy = unit && unit._owner !== pov.owner? unit : null;
+    const isOwnedByUs = tile.owner === pov.id;
+    const isOwnedByEnemy = tile.owner && tile.owner !== pov.id;
+    const unitIsOurs = unit && unit.owner === pov.id? unit : null;
+    const unitIsEnemy = unit && unit.owner !== pov.id? unit : null;
 
     return [
         // Tile (terrain, owned by us, owned by enemy, resourceType, path)
-        safeFloat(tile.terrainType / 6),
+        safeFloat(tile.type / 6),
         safeFloat(isOwnedByUs),
         safeFloat(isOwnedByEnemy),
-        safeFloat((resource?.id || ResourceType.None) / 8),
+        safeFloat((resource?.type || ResourceType.None) / 8),
         safeFloat(Boolean(city) || tile.hasRoad || tile.hasRoute),
 
         // City (city tile, is capital, level, progress, walls, riot)
         safeFloat(city? 1 : 0),
         safeFloat(city? tile.capitalOf > 0 : 0),
-        safeFloat(city? Math.min(city._level, MODEL_CONFIG.max_structure_level) / MODEL_CONFIG.max_structure_level : 0),
-        safeFloat(city? (city._progress / (city._level + 1)) : 0),
+        safeFloat(city? Math.min(city.level, MODEL_CONFIG.max_structure_level) / MODEL_CONFIG.max_structure_level : 0),
+        safeFloat(city? (city.progress / (city.level + 1)) : 0),
         safeFloat(city? city._walls : 0),
         safeFloat(city? city._riot : 0),
 
@@ -123,11 +123,11 @@ function extractTile(state: GameState, tileIndex: number, force = false): number
         // unit standing, is enemy, unit type, navy type, health, moved, attacked, kills, invisible, effects, cloak nearby
         safeFloat(Boolean(unitIsOurs)),
         safeFloat(unitIsOurs? getRealUnitType(unitIsOurs) / maxUnitTypeCount : 0),
-        safeFloat(unitIsOurs? unitIsOurs._passenger? unitIsOurs._passenger / maxUnitTypeCount : 0 : 0),
-        safeFloat(unitIsOurs? unitIsOurs._health / getMaxHealth(unitIsOurs) : 0),
-        safeFloat(unitIsOurs? unitIsOurs._moved : 0),
-        safeFloat(unitIsOurs? unitIsOurs._attacked : 0),
-        safeFloat(unitIsOurs? Math.min(unitIsOurs._kills, MODEL_CONFIG.max_unit_kills) / MODEL_CONFIG.max_unit_kills : 0),
+        safeFloat(unitIsOurs? unitIsOurs.passengerType? unitIsOurs.passengerType / maxUnitTypeCount : 0 : 0),
+        safeFloat(unitIsOurs? unitIsOurs.health / getMaxHealth(unitIsOurs) : 0),
+        safeFloat(unitIsOurs? unitIsOurs.moved : 0),
+        safeFloat(unitIsOurs? unitIsOurs.attacked : 0),
+        safeFloat(unitIsOurs? Math.min(unitIsOurs.kills, MODEL_CONFIG.max_unit_kills) / MODEL_CONFIG.max_unit_kills : 0),
         safeFloat(unitIsOurs? hasEffect(unitIsOurs, EffectType.Invisible) : 0),
         safeFloat(unitIsOurs? hasEffect(unitIsOurs, EffectType.Poison) : 0),
         safeFloat(unitIsOurs? hasEffect(unitIsOurs, EffectType.Boost) : 0),
@@ -138,11 +138,11 @@ function extractTile(state: GameState, tileIndex: number, force = false): number
         // Enemy units
         safeFloat(Boolean(unitIsEnemy)),
         safeFloat(unitIsEnemy? getRealUnitType(unitIsEnemy) / maxUnitTypeCount : 0),
-        safeFloat(unitIsEnemy? unitIsEnemy._passenger? unitIsEnemy._passenger / maxUnitTypeCount : 0 : 0),
-        safeFloat(unitIsEnemy? unitIsEnemy._health / getMaxHealth(unitIsEnemy) : 0),
-        safeFloat(unitIsEnemy? unitIsEnemy._moved : 0),
-        safeFloat(unitIsEnemy? unitIsEnemy._attacked : 0),
-        safeFloat(unitIsEnemy? Math.min(unitIsEnemy._kills, MODEL_CONFIG.max_unit_kills) / MODEL_CONFIG.max_unit_kills : 0),
+        safeFloat(unitIsEnemy? unitIsEnemy.passengerType? unitIsEnemy.passengerType / maxUnitTypeCount : 0 : 0),
+        safeFloat(unitIsEnemy? unitIsEnemy.health / getMaxHealth(unitIsEnemy) : 0),
+        safeFloat(unitIsEnemy? unitIsEnemy.moved : 0),
+        safeFloat(unitIsEnemy? unitIsEnemy.attacked : 0),
+        safeFloat(unitIsEnemy? Math.min(unitIsEnemy.kills, MODEL_CONFIG.max_unit_kills) / MODEL_CONFIG.max_unit_kills : 0),
         safeFloat(unitIsEnemy? hasEffect(unitIsEnemy, EffectType.Invisible) : 0),
         safeFloat(unitIsEnemy? hasEffect(unitIsEnemy, EffectType.Poison) : 0),
         safeFloat(unitIsEnemy? hasEffect(unitIsEnemy, EffectType.Boost) : 0),
@@ -159,8 +159,8 @@ function extractMap(state: GameState): number[][][] {
     for (const i in state.tiles) {
         const tileIndex = Number(i);
         const tile = state.tiles[tileIndex];
-        const gridY = tile.y + offset;
-        const gridX = tile.x + offset;
+        const gridY = tile.coords.y + offset;
+        const gridX = tile.coords.x + offset;
         if (gridY >= 0 && gridY < MODEL_CONFIG.dim_map_size && gridX >= 0 && gridX < MODEL_CONFIG.dim_map_size) {
             const result = extractTile(state, tileIndex);
             for (let c = 0; c < MODEL_CONFIG.dim_map_channels; c++) {
@@ -172,7 +172,7 @@ function extractMap(state: GameState): number[][][] {
             }
         } 
         else {
-            throw new Error(`Warning: Tile coordinates (${tile.x}, ${tile.y}) are outside the padded grid size ${MODEL_CONFIG.dim_map_size} after applying offset ${offset}.`);
+            throw new Error(`Warning: Tile coordinates (${tile.coords.x}, ${tile.coords.y}) are outside the padded grid size ${MODEL_CONFIG.dim_map_size} after applying offset ${offset}.`);
         }
     }
     return grid;
@@ -180,25 +180,25 @@ function extractMap(state: GameState): number[][][] {
 
 function extractPlayer(state: GameState): number[] {
     const pov = getPovTribe(state);
-    const [ enemy ] = Object.values(state.tribes).filter(x => x.owner != pov.owner);
+    const [ enemy ] = Object.values(state.tribes).filter(x => x.id != pov.id);
     // TODO Assumed no FOW
     return [
         // Us (tribetype, stars, spt, kills, casualties, unit count, city count, ...tech[0/1])
-        pov.tribeType / TribeTypeCount,
-        Math.min(pov._stars, MODEL_CONFIG.max_stars) / MODEL_CONFIG.max_stars,
+        pov.type / TribeTypeCount,
+        Math.min(pov.stars, MODEL_CONFIG.max_stars) / MODEL_CONFIG.max_stars,
         Math.min(getTribeSPT(state, pov), MODEL_CONFIG.max_production) / MODEL_CONFIG.max_production,
-        Math.min(pov._kills, MODEL_CONFIG.max_kills) / MODEL_CONFIG.max_kills,
-        Math.min(pov._casualties, MODEL_CONFIG.max_casualties) / MODEL_CONFIG.max_casualties,
-        Math.min(pov._units.length, MODEL_CONFIG.max_units) / MODEL_CONFIG.max_units,
-        Math.min(pov._cities.length, MODEL_CONFIG.max_cities) / MODEL_CONFIG.max_cities,
+        Math.min(pov.kills, MODEL_CONFIG.max_kills) / MODEL_CONFIG.max_kills,
+        Math.min(pov.casualties, MODEL_CONFIG.max_casualties) / MODEL_CONFIG.max_casualties,
+        Math.min(pov.units.length, MODEL_CONFIG.max_units) / MODEL_CONFIG.max_units,
+        Math.min(pov.cities.length, MODEL_CONFIG.max_cities) / MODEL_CONFIG.max_cities,
         ...Object.keys(TechnologyUnlockable).map(x => isTechUnlocked(pov, Number(x))? 1 : 0),
         // TODO Optional later on for enemy:
         // average score, tech
         // Them (tribetype, spt, unit count, city count)
-        enemy.tribeType / TribeTypeCount,
+        enemy.type / TribeTypeCount,
         Math.min(getTribeSPT(state, enemy), MODEL_CONFIG.max_production) / MODEL_CONFIG.max_production,
-        Math.min(enemy._units.length, MODEL_CONFIG.max_units) / MODEL_CONFIG.max_units,
-        Math.min(enemy._cities.length, MODEL_CONFIG.max_cities) / MODEL_CONFIG.max_cities,
+        Math.min(enemy.units.length, MODEL_CONFIG.max_units) / MODEL_CONFIG.max_units,
+        Math.min(enemy.cities.length, MODEL_CONFIG.max_cities) / MODEL_CONFIG.max_cities,
     ].map(x => safeFloat(x));
 }
 
@@ -216,7 +216,7 @@ export default class AIState {
     }
 
     static executeBestReward(state: GameState, moves: Move[]): CallbackResult {
-        const city = getPovTribe(state)._cities.find(x => moves.some(y => y.getSrc() == x.tileIndex));
+        const city = getPovTribe(state).cities.find(x => moves.some(y => y.getSrc() == x.tileIndex));
         const rewardType = predictBestNextCityReward(state, city)[0];
         const move = moves.find(x => x.getType<RewardType>() == rewardType)!;
         return move.execute(state);
@@ -235,7 +235,7 @@ export default class AIState {
         // ! ASSUMES NO FOW
         const newState = game.state;
 
-        const pov = newState.settings._pov;
+        const pov = newState.settings.currentPlayerTurnId;
         const oldTribe = oldState.tribes[pov];
         const newTribe = newState.tribes[pov];
 
@@ -298,8 +298,8 @@ export default class AIState {
         // because capturing a (village or city) increases all tech cost dramatically
 
         const increasedProduction = () => {
-            const a = newTribe._cities.reduce((a, b) => a + getCityProduction(newState, b), 0);
-            const b = oldTribe._cities.reduce((a, b) => a + getCityProduction(oldState, b), 0);
+            const a = newTribe.cities.reduce((a, b) => a + getCityProduction(newState, b), 0);
+            const b = oldTribe.cities.reduce((a, b) => a + getCityProduction(oldState, b), 0);
             return a > b? HowGood.Nice : a < b? HowGood.Worse : HowGood.None;
         }
 
@@ -322,7 +322,7 @@ export default class AIState {
                     settings.unlocksStructure && isTempleStructure(settings.unlocksStructure)? StructureSettings[settings.unlocksStructure] : 
                     null
                 )?.cost || 0;
-                reward += cost && newTribe._stars < cost? SCORE_BAD_TECH : SCORE_COST_TECH;
+                reward += cost && newTribe.stars < cost? SCORE_BAD_TECH : SCORE_COST_TECH;
                 if(settings.unlocksUnit) {
                     reward += HowGood.Meh;
                 }
@@ -350,7 +350,7 @@ export default class AIState {
                 const adjStructTypes = StructureSettings[move.getType<StructureType>()].adjacentTypes;
                 if(adjStructTypes) {
                     const aroundStructs = getAdjacentIndexes(newState, move.getSrc(), 1).filter(
-                        x => newState.structures[x] && adjStructTypes.has(newState.structures[x].id)
+                        x => newState.structures[x] && adjStructTypes.has(newState.structures[x].type)
                     );
                     const perc = aroundStructs.length / MAX_AFFECTABLE; 
                     reward += SCORE_GOOD_STRUCT[0] + (SCORE_GOOD_STRUCT[1] - SCORE_GOOD_STRUCT[0]) * perc;
@@ -363,8 +363,8 @@ export default class AIState {
                 break;
             
             case MoveType.Attack:
-                const casualties = newTribe._casualties - oldTribe._casualties;
-                reward += casualties > 0? SCORE_SUICIDE : SCORE_KILLS[Math.min(3, newTribe._kills - oldTribe._kills)];
+                const casualties = newTribe.casualties - oldTribe.casualties;
+                reward += casualties > 0? SCORE_SUICIDE : SCORE_KILLS[Math.min(3, newTribe.kills - oldTribe.kills)];
                 break;
             
             case MoveType.Ability:
@@ -391,12 +391,12 @@ export default class AIState {
                         reward += SCORE_ABILITY_HEAL * (healed.length / MAX_AFFECTABLE);
                         break;
                     case AbilityType.Recover:
-                        const isInTerritory = newState.settings._pov == newState.tiles[move.getSrc()]._owner;
+                        const isInTerritory = newState.settings.currentPlayerTurnId == newState.tiles[move.getSrc()].owner;
                         reward += SCORE_ABILITY_RECOVER * (isInTerritory? 1 : 0.5);
                         break;
                     case AbilityType.Disband:
                         const unit = getUnitAt(oldState, move.getSrc())!;
-                        const perc = unit._health / getMaxHealth(unit);
+                        const perc = unit.health / getMaxHealth(unit);
                         reward += getRealUnitSettings(unit).cost != 10 && perc > SCORE_ABILITY_DISBAND_TRHRESHOLD? SCORE_ABILITY_DISBAND[0] : SCORE_ABILITY_DISBAND[1];
                         break;
                     default:
@@ -439,22 +439,22 @@ export default class AIState {
         // Uses absolutes that will lead to better biases
 
         const pov = getPovTribe(state);
-        const [ enemyPov ] = Object.values(state.tribes).filter(x => x.owner != pov.owner);
+        const [ enemyPov ] = Object.values(state.tribes).filter(x => x.id != pov.id);
 
         // Army strength
         // Super units are worth x3.0
         // With a maximum advantage strength of 5 = 0.25
         // TODO unit value relative to health
         const unit_diff = 0.05 * Math.min(5, 
-            pov._units.reduce((a, b) => a + (getRealUnitSettings(b).super? 3 : 1), 0) - 
-            enemyPov._units.reduce((a, b) => a + (getRealUnitSettings(b).super? 3 : 1), 0)
+            pov.units.reduce((a, b) => a + (getRealUnitSettings(b).super? 3 : 1), 0) - 
+            enemyPov.units.reduce((a, b) => a + (getRealUnitSettings(b).super? 3 : 1), 0)
         );
         
         // Cities Production
         // With a maximum advantage of 20 SPT (stars per turn) = 0.6
         const production_diff = 0.03 * Math.min(20,
-            pov._cities.reduce((x, y) => x + getCityProduction(state, y), 0) - 
-            enemyPov._cities.reduce((x, y) => x + getCityProduction(state, y), 0)
+            pov.cities.reduce((x, y) => x + getCityProduction(state, y), 0) - 
+            enemyPov.cities.reduce((x, y) => x + getCityProduction(state, y), 0)
         );
 
         // MAX = 0.6 + 0.25 = 0.85

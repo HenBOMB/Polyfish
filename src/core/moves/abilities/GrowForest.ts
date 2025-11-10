@@ -10,7 +10,7 @@ export default class GrowForest extends Ability {
         super(null, target, AbilityType.GrowForest);
     }
 
-    execute(state: GameState): CallbackResult {
+    execute(state: GameState) {
         const undoTerrain = modifyTerrain(state, this.getTarget(), TerrainType.Forest);
         const undoStars = spendStars(state, 5);
 

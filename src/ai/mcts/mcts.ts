@@ -24,7 +24,7 @@ export class MCTSNode {
 	
 	constructor(state: GameState, legalGen: (state: GameState) => Move[]) {
 		this.expanded = false;
-		this.pov = getPovTribe(state).owner;
+		this.pov = getPovTribe(state).id;
 		this.legal = legalGen(state);
 		this.count = this.legal.length;
 		this.state = state;
@@ -146,7 +146,7 @@ export class MCTS {
 		this.game = game;
 		this.cPuct = cPuct;
 		this.dirichlet = dirichlet;
-		this.stopTurn = maxTurnsAhead + game.state.settings._turn;
+		this.stopTurn = maxTurnsAhead + game.state.settings.turn;
 		this.numThreads = numThreads;
 		this.workers = [];
         
@@ -161,14 +161,13 @@ export class MCTS {
 		let value: number = 0;
 		let undos: UndoCallback[] = [];
 		
-		while (currentNode.isExpanded() && !isGameOver(game.state) && this.stopTurn > game.state.settings._turn) {
+		while (currentNode.isExpanded() && !isGameOver(game.state) && this.stopTurn > game.state.settings.turn) {
 			// console.log(`[MCTS] legal: ${(currentNode as any).legal.length}`);
 			let moveIndex = currentNode.select(this.cPuct);
 			// console.log(`[MCTS] playing: ${moveIndex} -> ${(currentNode as any).legal[moveIndex].stringify(game.state, game.state)}`);
 			
 			// const old = game.cloneState();
-			const [played, undo] = game.playMove(moveIndex)!;
-			// console.log('played', played.stringify(old, game.state));
+			const [played, undo] = game.playMove(currentNode.legal[moveIndex])!;
 			
 			// if (played.getType<RewardType>() === RewardType.Workshop) {
 			// 	console.log('workshop!');

@@ -6,7 +6,8 @@
   "type": "commonjs",
   "scripts": {
     "start": "clear && ts-node index.ts",
-    "dev": "clear && nodemon --watch '**/*.ts' --exec 'clear && ts-node' index.ts",
+    "dev": "clear && nodemon --watch '**/*.ts' --exec 'ts-node' index.ts",
+    "devc": "clear && nodemon --watch '**/*.ts' --exec 'clear && ts-node' index.ts",
     "load": "sudo insmod polyai-reader/polyai.ko",
     "unload": "sudo rmmod polyai-reader/polyai.ko",
     "scan": "bash scan.sh",

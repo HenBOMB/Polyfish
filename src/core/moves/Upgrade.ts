@@ -12,16 +12,16 @@ export default class Upgrade extends Move {
         super(MoveType.Summon, from, null, type);
     }
 
-    execute(state: GameState): CallbackResult {
+    execute(state: GameState) {
         const upgradeType = this.getType<UnitType>();
         const unit = getUnitAt(state, this.getSrc())!;
-        const oldUnitType = unit._unitType;
+        const oldUnitType = unit.type;
 
         xorUnit.passenger(state, unit, UnitType.None, oldUnitType);
         xorUnit.type(state, unit, oldUnitType, upgradeType);
 
-        unit._passenger = oldUnitType;
-        unit._unitType = upgradeType;
+        unit.passengerType = oldUnitType;
+        unit.type = upgradeType;
 
         const undoStars = spendStars(state, UnitSettings[upgradeType].cost);
 
@@ -31,8 +31,8 @@ export default class Upgrade extends Move {
                 xorUnit.type(state, unit, upgradeType, oldUnitType);
                 xorUnit.passenger(state, unit, oldUnitType, UnitType.None);
                 undoStars();
-                unit._passenger = undefined;
-                unit._unitType = oldUnitType;
+                unit.passengerType = undefined;
+                unit.type = oldUnitType;
             },
         };
     }

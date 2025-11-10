@@ -8,7 +8,7 @@ export default class BreakIce extends Ability {
         super(null, target, AbilityType.BreakIce);
     }
 
-    execute(state: GameState): CallbackResult {
+    execute(state: GameState) {
         throw 'TODO';
         return {
             rewards: [],
