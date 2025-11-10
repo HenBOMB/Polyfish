@@ -203,7 +203,6 @@ export function evaluateEconomy(state: GameState): number {
 
     // Add the tribe's score with some maximum if we're playing `Perfection` mode
     if (state.settings.mode === ModeType.Perfection) {
-
         score += GMath.clamp(getPovTribe(state).score, MAX_IDEAL_SCORE) / MAX_IDEAL_SCORE;
 
         // 2 is to normalize the value to 0-1, since we've added the spt (1) and tribe score (2)
@@ -291,6 +290,7 @@ export function evaluateArmy(game: Game): number {
 /**
  * Evaluates the entire state of the game for the POV tribe and returns a score.
  * @param state 
+ * @returns [myEcoScore, myArmyScore, myScore]
  */
 export function evaluateState(game: Game): [number, number, number] {
     const state = game.state;

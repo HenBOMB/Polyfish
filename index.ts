@@ -8,7 +8,7 @@ import Game from "./src/game";
 import {  MoveGenerator, Prediction } from "./src/core/moves";
 import { deepCompare } from "./src/main";
 import { Logger } from "./src/ai/logger";
-import { evaluateAllStates } from "./src/ai/eval";
+import { evaluateAllStates, evaluateState } from "./src/ai/eval";
 import { CalculateBestMoves } from "./src/ai/brute";
 import { MCTS } from "./src/ai/mcts/mcts";
 
@@ -369,21 +369,31 @@ app.listen(3000, async () => {
 
     const iState = game.cloneState();
 
-    await CalculateBestMoves(
-        game,
-        20,
-        { 
-            depth: 10,
-            cPuct: 1.0,
-            nThreads: 6,
-            maxTurnsAhead: 1,
-            deterministic: true
-        }
-    ).then(x => {
-        // console.log(x[0].map(x => x.stringify(game.state, game.state)));
-    }).catch((e) => {
-        console.error(e);
-    });
+    console.log(MoveGenerator.legal(game.state).map(x => {
+        const evalBefore = evaluateState(game)[2];
+        const play = x.execute(game.state);
+        const evalNow = evaluateState(game)[2];
+        const evalDiff = evalNow - evalBefore;
+        const str = x.stringify(iState, game.state);
+        play.undo();
+        return `[${str}] ${evalDiff>0?'+':'-'}${evalDiff.toFixed(3)}`;
+    }).filter(x => !x.includes('Step')));
+    
+    // await CalculateBestMoves(
+    //     game,
+    //     1,
+    //     { 
+    //         depth: 10000,
+    //         cPuct: 1.0,
+    //         nThreads: 6,
+    //         maxTurnsAhead: 3,
+    //         deterministic: false
+    //     }
+    // ).then(x => {
+    //     // console.log(x[0].map(x => x.stringify(game.state, game.state)));
+    // }).catch((e) => {
+    //     console.error(e);
+    // });
 
     deepCompare(
         { state: {

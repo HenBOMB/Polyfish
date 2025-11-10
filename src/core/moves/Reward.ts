@@ -21,6 +21,15 @@ export default class Reward extends Move {
         const rewardType = this.getType<RewardType>();
         const pov = getPovTribe(state);
 
+        if (!city) {
+            console.log(`creampie ${this.getSrc()}, ${state.settings.currentPlayerTurnId}`);
+            // console.log('xs', state.tiles[this.getSrc()]);
+            // console.log('x', state.structures[this.getSrc()]);
+            // console.log('x', state.tribes[state.settings.currentPlayerTurnId].cities);
+            console.log('ssdsds');
+            // throw Error('City not found');
+        }
+
         let rewards = [];
         let undoReward = () => { };
 
@@ -57,7 +66,7 @@ export default class Reward extends Move {
                 break;
             case RewardType.BorderGrowth:
                 city.borderSize++;
-                const undoClaim = claimTerritory(state, getAdjacentIndexes(state, city.tileIndex, 2, undefined, true));
+                const undoClaim = claimTerritory(state, getAdjacentIndexes(state, city.tileIndex, 2, undefined, true), city);
                 rewards.push(...undoClaim.rewards);
                 undoReward = () => {
                     undoClaim.undo();

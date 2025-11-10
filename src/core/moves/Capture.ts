@@ -77,7 +77,6 @@ export default class Capture extends Move {
     village(state: GameState): CallbackResult {
         const pov = getPovTribe(state);        
         const captureIndex = this.getSrc();
-        const villageTile = state.tiles[captureIndex];
         const territory = getAdjacentIndexes(state, captureIndex, 1, true, true);
         
         const createdCity: CityState = {
@@ -96,7 +95,7 @@ export default class Capture extends Move {
 
         xorCity.set(state, createdCity);
         pov.cities.push(createdCity);
-        const claimBranch = claimTerritory(state, createdCity._territory, false, villageTile.coords.idx);
+        const claimBranch = claimTerritory(state, createdCity._territory, createdCity);
 
         return {
             rewards: claimBranch.rewards,
@@ -131,7 +130,7 @@ export default class Capture extends Move {
         if (tile.capitalOf > 0) tile.capitalOf = pov.id;
         
         // Claim the enemy's territory
-        const claimBranch = claimTerritory(state, city._territory, true);
+        const claimBranch = claimTerritory(state, city._territory, city);
         
         // If enemy runs out of cities they loose all their units
         const chain: UndoCallback[] = [];
@@ -287,7 +286,7 @@ export default class Capture extends Move {
     
                 pov.cities.push(createdCity);
 
-                const claimBranch = claimTerritory(state, createdCity._territory, false, createdCity.tileIndex)
+                const claimBranch = claimTerritory(state, createdCity._territory, createdCity)
 
                 // TODO recalculate network connections
 

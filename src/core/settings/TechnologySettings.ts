@@ -96,7 +96,6 @@ export const TechnologySettings: Record<TechnologyType, TechnologySetting> = {
     [TechnologyType.Climbing]: {
         tier: 1,
         next: [TechnologyType.Mining, TechnologyType.Meditation],
-        unlocksStructure: StructureType.MountainTemple,
         unlocksTerrain: TerrainType.Mountain,
         unlocksOther: 1, // pacifist
     },
@@ -134,6 +133,7 @@ export const TechnologySettings: Record<TechnologyType, TechnologySetting> = {
         unlocksResource: ResourceType.Fish,
         unlocksUnit: UnitType.Raft,
         unlocksTerrain: TerrainType.Water,
+        unlocksStructure: StructureType.Port,
     },
     [TechnologyType.Sailing]: {
         tier: 2,

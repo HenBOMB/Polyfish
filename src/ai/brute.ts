@@ -141,6 +141,10 @@ export async function CalculateBestMoves(
         if (playedMove.moveType !== MoveType.EndTurn) {
             const newEval = evaluateState(game);
             diff = newEval[2] - oldEval[2];
+
+            if (diff == 0) {
+                diff = newEval[1] - oldEval[1];
+            }
         }
 
         _result += diff;

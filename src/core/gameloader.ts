@@ -142,6 +142,7 @@ export default class GameLoader {
                 return { 
                     ...acc, [tribeState.id]: {
                         ...tribeState,
+                        username: tribeState.username.replace(/\x00/g, ''),
                         knownPlayers: new Set(tribeState.knownPlayers),
                         builtUniqueImprovements: new Set(tribeState.builtUniqueImprovements),
                         startingTileCoords: parseCoords(tribeState.startingTileCoords),
@@ -152,6 +153,10 @@ export default class GameLoader {
         , {});
 
         state._visibleTiles = { };
+
+        if (state.settings.gameName) {
+            state.settings.gameName = state.settings.gameName.replace(/\x00/g, '');
+        }
 
         (state as any)._hiddenResources = { };
 
@@ -222,6 +227,7 @@ export default class GameLoader {
 
             // City
             for(const city of tribe.cities) {
+                city.name = city.name.replace(/\x00/g, '');
                 city.rewards = new Set(city.rewards);
                 city._territory = getAdjacentTiles(state, city.tileIndex, city.borderSize)
                     .filter(x => x.rulingCityCoords?.idx == city.tileIndex).map(x => x.coords.idx);

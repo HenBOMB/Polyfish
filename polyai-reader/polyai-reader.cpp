@@ -324,25 +324,25 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
      *   0x80: Int32 opponentcount
      */
     
-    uintptr_t gameManager = getPlace(pid, modBase + 0x3674378, { 0xB8, 0x0 });
-    uintptr_t playersBase = getPlace(pid, gameManager, {_0x_GAMEMANAGER_CLIENT, _0x_CLIENT_CUR_STATE, _0x_STATE_PLAYERS, _0x_IN_LIST});
-    uintptr_t currentTurnBase = getPlace(pid, gameManager, {_0x_GAMEMANAGER_CLIENT, _0x_CLIENT_CUR_STATE, _0x_STATE_CUR_TURN});
-    uintptr_t mapBase = getPlace(pid, gameManager, {_0x_GAMEMANAGER_CLIENT, _0x_CLIENT_CUR_STATE, _0x_STATE_MAP, _0x_MAP_TILES});
+    uintptr_t gameManagerRoot = getPlace(pid, modBase + 0x3674378, { 0xB8, 0x0 });
+    uintptr_t playersRoot = getPlace(pid, gameManagerRoot, {_0x_GAMEMANAGER_CLIENT, _0x_CLIENT_CUR_STATE, _0x_STATE_PLAYERS, _0x_IN_LIST});
+    uintptr_t currentTurnRoot = getPlace(pid, gameManagerRoot, {_0x_GAMEMANAGER_CLIENT, _0x_CLIENT_CUR_STATE, _0x_STATE_CUR_TURN});
+    uintptr_t mapRoot = getPlace(pid, gameManagerRoot, {_0x_GAMEMANAGER_CLIENT, _0x_CLIENT_CUR_STATE, _0x_STATE_MAP, _0x_MAP_TILES});
     std::string _logPlayers = "";
 
     // std::cout << "Game manager address: " << std::hex << gameManager << std::endl;
 
-    if (!gameManager || !currentTurnBase || !mapBase || !playersBase) {
-        if (!gameManager) {
+    if (!gameManagerRoot || !currentTurnRoot || !mapRoot || !playersRoot) {
+        if (!gameManagerRoot) {
             std::cerr << "Failed to get game manager address\n";
         }
-        if (!currentTurnBase) {
+        if (!currentTurnRoot) {
             std::cerr << "Failed to get current turn address\n";
         }
-        if (!mapBase) {
+        if (!mapRoot) {
             std::cerr << "Failed to get map address\n";
         }
-        if (!playersBase) {
+        if (!playersRoot) {
             std::cerr << "Failed to get players address\n";
         }
         return -1;
@@ -390,7 +390,7 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
      *   0x68: Int32 timeLimit
      */
     
-    uintptr_t gameSettingsRoot = getPlace(pid, gameManager, {_0x_GAMEMANAGER_SETTINGS});
+    uintptr_t gameSettingsRoot = getPlace(pid, gameManagerRoot, {_0x_GAMEMANAGER_SETTINGS});
     unsigned char settingsBuffer[Offsets::GameSettings_Size_]; 
     readBlock(pid, getPlace(pid, gameSettingsRoot, {0x0}), settingsBuffer, sizeof(settingsBuffer));
 
@@ -414,7 +414,7 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
      *   0x20: WorldContinent[] continents
      */
 
-    readPiece(pid, getPlace(pid, gameManager, {_0x_GAMEMANAGER_CLIENT, _0x_CLIENT_CUR_STATE, Offsets::GameState_Map, 0x12 }), mapSize);
+    readPiece(pid, getPlace(pid, gameManagerRoot, {_0x_GAMEMANAGER_CLIENT, _0x_CLIENT_CUR_STATE, Offsets::GameState_Map, 0x12 }), mapSize);
     // std::cout << "Map size: " << mapSize << std::endl;
 
     /*
@@ -450,7 +450,7 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
     uint32_t currentTurn, currentUnitID;
     uint8_t currentPlayerIndex;
 
-    uintptr_t gameStateBase = getPlace(pid, gameManager, {_0x_GAMEMANAGER_CLIENT, _0x_CLIENT_CUR_STATE, 0x0});
+    uintptr_t gameStateBase = getPlace(pid, gameManagerRoot, {_0x_GAMEMANAGER_CLIENT, _0x_CLIENT_CUR_STATE, 0x0});
 
     readPiece(pid, gameStateBase + Offsets::GameState_Version, version);
     readPiece(pid, gameStateBase + Offsets::GameState_Seed, seed);
@@ -461,12 +461,12 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
     // ! TRIBES ! //
     
     uint16_t tribeCount = 0;
-    readPiece(pid, getPlace(pid, playersBase, { _0x_IN_LIST_COUNT }), tribeCount);
+    readPiece(pid, getPlace(pid, playersRoot, { _0x_IN_LIST_COUNT }), tribeCount);
     // The last one is always "Nature"
     tribeCount -= 1;
 
     for (uint32_t index = 0; index < tribeCount; ++index) {
-        uintptr_t playerRoot = getPlace(pid, playersBase, { index * 0x8 + _0x_IN_LIST_START_SHIFT });
+        uintptr_t playerRoot = getPlace(pid, playersRoot, { index * 0x8 + _0x_IN_LIST_START_SHIFT });
         uintptr_t playerBase = getPlace(pid, playerRoot, { 0x0 });
         unsigned char playerBuffer[PlayerStateOffsets::SIZE_]; 
 
@@ -547,7 +547,7 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
     uint16_t tileCount = mapSize * mapSize, unitCount = 0;
     
     for (int32_t index = 0; index < tileCount; ++index) {
-        uintptr_t tileRoot = getPlace(pid, mapBase, { index * 0x8 + _0x_IN_LIST_START_SHIFT });
+        uintptr_t tileRoot = getPlace(pid, mapRoot, { index * 0x8 + _0x_IN_LIST_START_SHIFT });
         uintptr_t tileBase = getPlace(pid, tileRoot, { 0x0 });
         unsigned char tileBuffer[_0x_TILE_HAD_ROUTE + _0x_TRAILING_OFFSET]; 
 
@@ -683,10 +683,10 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
             attacked    = *(bool*)&unitBuffer[_0x_UNIT_ATTACKED];
             flipped     = *(bool*)&unitBuffer[_0x_UNIT_FLIPPED];
 
-            readSingleListMagic(pid, getPlace(pid, tileBase, {_0x_TILE_UNIT, _0x_UNIT_EFFECTS}), effects);
+            readSingleListMagic(pid, getPlace(pid, tileBase + _0x_TILE_UNIT, {_0x_UNIT_EFFECTS}), effects);
 
             uint16_t passengerType;
-            uintptr_t passengerBase = getPlace(pid, tileBase, {_0x_TILE_UNIT, _0x_UNIT_PASSENGER_UNIT, _0x_UNIT_TYPE});  
+            uintptr_t passengerBase = getPlace(pid, tileBase + _0x_TILE_UNIT, {_0x_UNIT_PASSENGER_UNIT, _0x_UNIT_TYPE});  
             if(passengerBase != 0) {
                 readPiece(pid, passengerBase, passengerType);
             }

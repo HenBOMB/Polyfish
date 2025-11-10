@@ -375,13 +375,14 @@ export class EconMovesGenerator {
 			}
 
 			const realSettings = getReplacedOrTechSettings(pov, x);
-
+			
 			// Actions
 			if(realSettings.unlocksAbility) {
 				if(!settings.explicitCost || settings.explicitCost <= pov.stars) {
 					abilities.add(realSettings.unlocksAbility);
 				}
 			}
+
 
 			// Structures
 			if(realSettings.unlocksStructure && pov.stars >= (StructureSettings[realSettings.unlocksStructure].cost || 0)) {
@@ -422,6 +423,7 @@ export class EconMovesGenerator {
 			const resource = state.resources[idx];
 			const structure = state.structures[idx];
 			
+			
 			// ! Harvesting ! //
 
 			if(resource) {
@@ -442,7 +444,8 @@ export class EconMovesGenerator {
 				for(const x of structures) {
 					const structType = Number(x) as StructureType;
 					const settings = StructureSettings[structType];
-	
+
+					
 					if(!settings.terrainType?.has(tile.type)) {
 						continue;
 					}
