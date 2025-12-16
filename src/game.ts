@@ -192,7 +192,7 @@ export default class Game {
 
     // TODO XOR?
 
-    playMove(moveOrIndex: number | Move): [Move, UndoCallback] | null {
+    playMove(moveOrIndex: number | Move, legalFn?: (state: GameState) => Move[] | undefined): [Move, UndoCallback] | null {
         if(moveOrIndex === null || moveOrIndex === undefined) {
             throw new Error('Move is undefiend!');
         }
@@ -200,7 +200,7 @@ export default class Game {
             return null;
         }
 
-        const legal = MoveGenerator.legal(this.state);
+        const legal = (legalFn || MoveGenerator.legal)(this.state)!;
         const move = typeof moveOrIndex == "number" ? legal[moveOrIndex] : moveOrIndex;
 
         if(!move) {

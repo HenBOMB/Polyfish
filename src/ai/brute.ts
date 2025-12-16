@@ -1,13 +1,10 @@
-import { getPovTerritorry, getPovTribe, isGameOver } from "../core/functions";
+import { getPovTribe, isGameOver } from "../core/functions";
 import Move, { UndoCallback } from "../core/move";
-import { EconMovesGenerator, MoveGenerator } from "../core/moves";
-import EndTurn from "../core/moves/EndTurn";
+import { GameState } from "../core/states";
 import { MoveType, TribeType } from "../core/types";
 import Game from "../game";
 import { evaluateState } from "./eval";
 import { MCTS } from "./mcts/mcts";
-
-type StopFunction = 'lol';
 
 type PartialMCTSSEttings = {
     depth?: number;
@@ -16,6 +13,7 @@ type PartialMCTSSEttings = {
     cPuct?: number;
     nThreads?: number;
     maxTurnsAhead?: number;
+    legalFn?: (state: GameState) => Move[] | undefined;
 }
 
 type MCTSSettings = {
@@ -25,6 +23,7 @@ type MCTSSettings = {
     cPuct: number;
     nThreads: number;
     maxTurnsAhead: number;
+    legalFn?: (state: GameState) => Move[] | undefined;
 }
 
 function parseSettings(settings: PartialMCTSSEttings | null = null): MCTSSettings {
@@ -39,29 +38,6 @@ function parseSettings(settings: PartialMCTSSEttings | null = null): MCTSSetting
     };
 }
 
-// export function CalculateBestMove(
-//     game: Game, 
-//     settings?: PartialMCTSSEttings
-// ): [number, number, number, number] {
-//     const { depth, cPuct, dirichlet, deterministic } = parseSettings(settings);
-
-//     const mcts = new MCTS(game, cPuct, dirichlet);
-//     const root = mcts.search(depth);
-
-//     const probs = root.distribution(deterministic? 0 : 1); 
-
-//     const bestMoveIndex = probs.indexOf(
-//         Math.max(...probs)
-//     );
-    
-//     // const recommended = Opening.recommend(state, legal);
-//     // if (recommended.length) {
-//     //     return [recommended, ...evaluateState(game)];
-//     // }
-
-//     return [bestMoveIndex, ...evaluateState(game)];
-// }
-
 /**
  * @param game The game class in use
  * @param turnsAhead Amount of turns (i*tribeCount) to return moves for
@@ -71,11 +47,10 @@ function parseSettings(settings: PartialMCTSSEttings | null = null): MCTSSetting
 export async function CalculateBestMoves(
     game: Game,
     turnsAhead=3,
-    // stopFn: StopFunction = 'limit',
     settings: PartialMCTSSEttings | null = null
 ): Promise<[Move[], number, number, number, number[]]> {
-    const { depth, cPuct, dirichlet, deterministic, nThreads, maxTurnsAhead } = parseSettings(settings);
-    const mcts = new MCTS(game, cPuct, dirichlet, nThreads, maxTurnsAhead);
+    const { depth, cPuct, dirichlet, deterministic, nThreads, maxTurnsAhead, legalFn } = parseSettings(settings);
+    const mcts = new MCTS(game, cPuct, dirichlet, nThreads, maxTurnsAhead, legalFn as any);
     await mcts.prepare();
     
     const state = game.state;
@@ -107,19 +82,15 @@ export async function CalculateBestMoves(
         
         const root = await mcts.search(
             depth, 
-            true/*,
-            // ! Not supported because Game.playMove doesnt support custom legal move generation
-            (state: any) => {
-                if(state.settings._pendingRewards.length) {
-                    return state.settings._pendingRewards.slice();
-                }
-                const moves: any = [new EndTurn()];
-                EconMovesGenerator.all_fast(state, moves);
-                return moves;
-            }*/
+            true,
         );
         const probs = root.distribution(deterministic? 0 : 1); 
         const bestMoveIndex = probs.indexOf(Math.max(...probs));
+
+        if (bestMoveIndex == -1) {
+            console.log(probs);
+            throw Error("YO WTF");
+        }
 
         _sequence.push(bestMoveIndex);
         
@@ -141,6 +112,10 @@ export async function CalculateBestMoves(
         if (playedMove.moveType !== MoveType.EndTurn) {
             const newEval = evaluateState(game);
             diff = newEval[2] - oldEval[2];
+
+            if (diff == 0) {
+                diff = newEval[1] - oldEval[1];
+            }
         }
 
         _result += diff;

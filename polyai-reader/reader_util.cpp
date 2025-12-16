@@ -30,7 +30,7 @@ uintptr_t getPlace(pid_t pid, uintptr_t base, const std::vector<uintptr_t>& offs
 bool readDictionary(pid_t pid, uintptr_t address,  std::string &result, std::string(*callback)(uint16_t, unsigned char*), std::size_t objSize) {
     uint16_t size;
 
-    if (!readPiece(pid, getPlace(pid, address, { _0x_IN_DICT_COUNT }), size)) {
+    if (!readPiece(pid, getPlace(pid, address, { 0x20 }), size)) {
         return false;
     }
 
@@ -43,7 +43,7 @@ bool readDictionary(pid_t pid, uintptr_t address,  std::string &result, std::str
     size_t bufferSize = size * dictItemSize;
     unsigned char dictBuffer[bufferSize];
 
-    uintptr_t dictBase = getPlace(pid, address, { _0x_IN_DICT_ENTRIES });
+    uintptr_t dictBase = getPlace(pid, address, { 0x18 });
     if (!readBlock(pid, dictBase, dictBuffer, bufferSize)) {
         return false;
     }
@@ -54,8 +54,8 @@ bool readDictionary(pid_t pid, uintptr_t address,  std::string &result, std::str
         uint8_t key;
         unsigned char valueBuff[objSize + _0x_TRAILING_OFFSET];
         
-        if (!readPiece(pid, getPlace(pid, dictBase, { _0x_IN_DICT_KEY_SHIFT + i * dictItemSize }), key) ||
-            !readBlock(pid, getPlace(pid, dictBase, { _0x_IN_DICT_VAL_SHIFT + i * dictItemSize, 0x0 }), valueBuff, objSize)) {
+        if (!readPiece(pid, getPlace(pid, dictBase, { 0x20 + i * dictItemSize }), key) ||
+            !readBlock(pid, getPlace(pid, dictBase, { 0x30 + i * dictItemSize, 0x0 }), valueBuff, objSize)) {
             break;
         }
 
@@ -69,8 +69,8 @@ bool readDictionary(pid_t pid, uintptr_t address,  std::string &result, std::str
 }
 
 bool readBlock(pid_t pid, uintptr_t addr, void* buffer, size_t size) {
-    static std::uniform_int_distribution<> dis(69, 333);
-    std::this_thread::sleep_for(std::chrono::microseconds(dis(gen)));
+    // static std::uniform_int_distribution<> dis(69, 333);
+    // std::this_thread::sleep_for(std::chrono::microseconds(dis(gen)));
 
     struct iovec local[1];
     struct iovec remote[1];

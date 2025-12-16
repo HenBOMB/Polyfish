@@ -277,9 +277,9 @@ export class MoveGenerator {
 		
 		const moves: Move[] = [new EndTurn()];
 
-		ArmyMovesGenerator.all(state, moves);
+		ArmyMovesGenerator.legal(state, moves);
 
-		EconMovesGenerator.all(state, moves);
+		EconMovesGenerator.legal(state, moves);
 		
 		return moves;
 	}
@@ -344,15 +344,12 @@ export class MoveGenerator {
 }
 
 export class EconMovesGenerator {
-	static all(state: GameState, moves: Move[]) {
-		// EconMovesGenerator.actions(state, moves);
-		// EconMovesGenerator.resources(state, moves);
-		// EconMovesGenerator.structures(state, moves);
-		// EconMovesGenerator.research(state, moves);
-		EconMovesGenerator.all_fast(state, moves);
-	}
+	static legal(state: GameState, moves: Move[]): void {
+		if(state.settings._pendingRewards.length) {
+			moves = state.settings._pendingRewards.slice();
+			return
+		}
 
-	static all_fast(state: GameState, moves: Move[]): void {
 		const pov = getPovTribe(state);
 		const territory = getPovTerritorry(state);
 
@@ -375,13 +372,14 @@ export class EconMovesGenerator {
 			}
 
 			const realSettings = getReplacedOrTechSettings(pov, x);
-
+			
 			// Actions
 			if(realSettings.unlocksAbility) {
 				if(!settings.explicitCost || settings.explicitCost <= pov.stars) {
 					abilities.add(realSettings.unlocksAbility);
 				}
 			}
+
 
 			// Structures
 			if(realSettings.unlocksStructure && pov.stars >= (StructureSettings[realSettings.unlocksStructure].cost || 0)) {
@@ -422,6 +420,7 @@ export class EconMovesGenerator {
 			const resource = state.resources[idx];
 			const structure = state.structures[idx];
 			
+			
 			// ! Harvesting ! //
 
 			if(resource) {
@@ -442,7 +441,8 @@ export class EconMovesGenerator {
 				for(const x of structures) {
 					const structType = Number(x) as StructureType;
 					const settings = StructureSettings[structType];
-	
+
+					
 					if(!settings.terrainType?.has(tile.type)) {
 						continue;
 					}
@@ -693,7 +693,12 @@ export class EconMovesGenerator {
 }
 
 export class ArmyMovesGenerator {
-	static all(state: GameState, moves: Move[]) {
+	static legal(state: GameState, moves: Move[]) {
+		if(state.settings._pendingRewards.length) {
+			moves = state.settings._pendingRewards.slice();
+			return
+		}
+
 		getPovTribe(state).units.forEach(unit => {
 			ArmyMovesGenerator.captures(state, unit, moves);
 			ArmyMovesGenerator.actions(state, unit, moves);

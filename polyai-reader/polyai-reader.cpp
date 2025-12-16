@@ -18,6 +18,9 @@
 #include "reader_util.h"
 #include <random>
 #include "json.hpp"
+#include <iomanip>
+#include <codecvt>
+#include <locale>
 
 #define NAME "polyai-reader"
 
@@ -72,78 +75,6 @@ uintptr_t getModuleBase(pid_t pid, std::string modName) {
     }
     maps.close();
     return 0;
-}
-
-// quick UTF-8 validity check
-static bool isValidUtf8(const std::string& s) {
-    const unsigned char *bytes = reinterpret_cast<const unsigned char*>(s.data());
-    size_t len = s.size();
-    size_t i = 0;
-    while (i < len) {
-        if (bytes[i] <= 0x7F) { i += 1; continue; }
-        if ((bytes[i] & 0xE0) == 0xC0) { if (i+1>=len) return false; if ((bytes[i+1] & 0xC0) != 0x80) return false; i+=2; continue; }
-        if ((bytes[i] & 0xF0) == 0xE0) { if (i+2>=len) return false; if ((bytes[i+1] & 0xC0) != 0x80) return false; if ((bytes[i+2] & 0xC0) != 0x80) return false; i+=3; continue; }
-        if ((bytes[i] & 0xF8) == 0xF0) { if (i+3>=len) return false; if ((bytes[i+1] & 0xC0) != 0x80) return false; if ((bytes[i+2] & 0xC0) != 0x80) return false; if ((bytes[i+3] & 0xC0) != 0x80) return false; i+=4; continue; }
-        return false;
-    }
-    return true;
-}
-
-// Try to convert a byte-buffer that looks like UTF-16LE to UTF-8
-static bool tryUtf16LeToUtf8(const std::string &in, std::string &out) {
-    if (in.size() % 2 != 0) return false;
-    // interpret bytes as char16_t sequence
-    const char16_t *p16 = reinterpret_cast<const char16_t*>(in.data());
-    size_t count = in.size() / 2;
-    try {
-        std::u16string u16(p16, p16 + count);
-        std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t> conv;
-        out = conv.to_bytes(u16);
-        return true;
-    } catch (...) {
-        return false;
-    }
-}
-
-// Remove NULs and other low-control chars (fallback sanitization)
-static std::string sanitizeStripControls(const std::string &in) {
-    std::string out;
-    out.reserve(in.size());
-    for (unsigned char c : in) {
-        if (c == 0) continue;            // drop NUL
-        // optionally drop other control chars except newline/tab:
-        if (c < 0x20 && c != '\n' && c != '\t' && c != '\r') continue;
-        out.push_back(char(c));
-    }
-    return out;
-}
-
-// Main sanitize helper: returns a valid UTF-8 string (or a safe replacement)
-static std::string toValidUtf8(const std::string &raw) {
-    if (isValidUtf8(raw)) return raw;
-
-    // If it contains lots of NULs, try UTF-16LE decode
-    bool hasNull = raw.find('\0') != std::string::npos;
-    if (hasNull) {
-        std::string converted;
-        if (tryUtf16LeToUtf8(raw, converted) && isValidUtf8(converted)) return converted;
-    }
-
-    // fallback: strip NULs and other control chars
-    std::string stripped = sanitizeStripControls(raw);
-    if (isValidUtf8(stripped)) return stripped;
-
-    // final fallback: produce escaped hex (so we never throw) or base64 encode
-    // Here we hex-escape non-printables:
-    std::ostringstream oss;
-    for (unsigned char c : raw) {
-        if (c >= 0x20 && c <= 0x7E) oss << char(c);
-        else {
-            oss << "\\x";
-            oss << std::hex << std::setw(2) << std::setfill('0') << (int)c << std::dec;
-        }
-    }
-    return oss.str();
 }
 
 int polyai(uintptr_t modBase, pid_t pid, bool prod) {
@@ -324,29 +255,34 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
      *   0x80: Int32 opponentcount
      */
     
-    uintptr_t gameManager = getPlace(pid, modBase + 0x3674378, { 0xB8, 0x0 });
-    uintptr_t playersBase = getPlace(pid, gameManager, {_0x_GAMEMANAGER_CLIENT, _0x_CLIENT_CUR_STATE, _0x_STATE_PLAYERS, _0x_IN_LIST});
-    uintptr_t currentTurnBase = getPlace(pid, gameManager, {_0x_GAMEMANAGER_CLIENT, _0x_CLIENT_CUR_STATE, _0x_STATE_CUR_TURN});
-    uintptr_t mapBase = getPlace(pid, gameManager, {_0x_GAMEMANAGER_CLIENT, _0x_CLIENT_CUR_STATE, _0x_STATE_MAP, _0x_MAP_TILES});
+    uintptr_t gameManagerRoot = getPlace(pid, modBase + 0x36700C0, { 0xB8, 0x0 });
+    // std::cout << "GM: 0x" << std::hex << gameManagerRoot << std::endl << std::dec;
+    uintptr_t playersRoot = getPlace(pid, gameManagerRoot, {Offsets::GameManager_ClientBase, Offsets::ClientBase_CurrentGameState, Offsets::GameState_PlayerStates, _0x_IN_LIST});
+    uintptr_t currentTurnRoot = getPlace(pid, gameManagerRoot, {Offsets::GameManager_ClientBase, Offsets::ClientBase_CurrentGameState, Offsets::GameState_CurrentTurn});
+    uintptr_t mapRoot = getPlace(pid, gameManagerRoot, {Offsets::GameManager_ClientBase, Offsets::ClientBase_CurrentGameState, Offsets::GameState_Map, _0x_MAP_TILES});
     std::string _logPlayers = "";
 
     // std::cout << "Game manager address: " << std::hex << gameManager << std::endl;
 
-    if (!gameManager || !currentTurnBase || !mapBase || !playersBase) {
-        if (!gameManager) {
+    if (!gameManagerRoot || !currentTurnRoot || !mapRoot || !playersRoot) {
+        if (!gameManagerRoot) {
             std::cerr << "Failed to get game manager address\n";
         }
-        if (!currentTurnBase) {
+        if (!currentTurnRoot) {
             std::cerr << "Failed to get current turn address\n";
         }
-        if (!mapBase) {
+        if (!mapRoot) {
             std::cerr << "Failed to get map address\n";
         }
-        if (!playersBase) {
+        if (!playersRoot) {
             std::cerr << "Failed to get players address\n";
         }
         return -1;
     }
+
+    int32_t gameId;
+
+    readPiece(pid, getPlace(pid, gameManagerRoot, { Offsets::GameManager_ClientBase, Offsets::ClientBase_GameID }), gameId);
 
     // ! SETTINGS ! //
 
@@ -373,7 +309,6 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
 
     // return 1;
 
-
     /*
      * GameSettings
      *   0x10: BotDifficulty difficulty
@@ -390,7 +325,7 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
      *   0x68: Int32 timeLimit
      */
     
-    uintptr_t gameSettingsRoot = getPlace(pid, gameManager, {_0x_GAMEMANAGER_SETTINGS});
+    uintptr_t gameSettingsRoot = getPlace(pid, gameManagerRoot, {Offsets::GameManager_Settings});
     unsigned char settingsBuffer[Offsets::GameSettings_Size_]; 
     readBlock(pid, getPlace(pid, gameSettingsRoot, {0x0}), settingsBuffer, sizeof(settingsBuffer));
 
@@ -400,7 +335,7 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
     bool winByCapital, winByExtermination, allowMirrorPick, allowSpecialTribe, allowTechSharing;
     readPiece(pid, getPlace(pid, gameSettingsRoot, {Offsets::GameSettings_BaseGameMode}), baseGameMode);
     readPiece(pid, getPlace(pid, gameSettingsRoot, {Offsets::GameSettings_TimeLimit}), timeLimit);
-    readWord(pid, getPlace(pid, gameSettingsRoot, {Offsets::GameSettings_GameName, 0x0}), gameName);
+    BRUHMOTHERFUCKINGSHIT(pid, getPlace(pid, gameSettingsRoot, {Offsets::GameSettings_GameName, 0x0}), gameName);
     // readPiece(pid, getPlace(pid, gameSettingsRoot, {Offsets::GameSettings_MapSize}), mapSize);
 
     mapSize = *(int32_t*)&settingsBuffer[Offsets::GameSettings_MapSize];
@@ -414,7 +349,7 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
      *   0x20: WorldContinent[] continents
      */
 
-    readPiece(pid, getPlace(pid, gameManager, {_0x_GAMEMANAGER_CLIENT, _0x_CLIENT_CUR_STATE, Offsets::GameState_Map, 0x12 }), mapSize);
+    readPiece(pid, getPlace(pid, gameManagerRoot, {Offsets::GameManager_ClientBase, Offsets::ClientBase_CurrentGameState, Offsets::GameState_Map, 0x12 }), mapSize);
     // std::cout << "Map size: " << mapSize << std::endl;
 
     /*
@@ -450,7 +385,7 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
     uint32_t currentTurn, currentUnitID;
     uint8_t currentPlayerIndex;
 
-    uintptr_t gameStateBase = getPlace(pid, gameManager, {_0x_GAMEMANAGER_CLIENT, _0x_CLIENT_CUR_STATE, 0x0});
+    uintptr_t gameStateBase = getPlace(pid, gameManagerRoot, {_0x_GAMEMANAGER_CLIENT, _0x_CLIENT_CUR_STATE, 0x0});
 
     readPiece(pid, gameStateBase + Offsets::GameState_Version, version);
     readPiece(pid, gameStateBase + Offsets::GameState_Seed, seed);
@@ -458,15 +393,14 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
     readPiece(pid, gameStateBase + Offsets::GameState_CurrentUnitID, currentUnitID);
     readPiece(pid, gameStateBase + Offsets::GameState_CurrentPlayerIndex, currentPlayerIndex);
 
-    // ! TRIBES ! //
-    
+    // ! TRIBES ! //    
     uint16_t tribeCount = 0;
-    readPiece(pid, getPlace(pid, playersBase, { _0x_IN_LIST_COUNT }), tribeCount);
+    readPiece(pid, getPlace(pid, playersRoot, { _0x_IN_LIST_COUNT }), tribeCount);
     // The last one is always "Nature"
     tribeCount -= 1;
 
     for (uint32_t index = 0; index < tribeCount; ++index) {
-        uintptr_t playerRoot = getPlace(pid, playersBase, { index * 0x8 + _0x_IN_LIST_START_SHIFT });
+        uintptr_t playerRoot = getPlace(pid, playersRoot, { index * 0x8 + _0x_IN_LIST_START_SHIFT });
         uintptr_t playerBase = getPlace(pid, playerRoot, { 0x0 });
         unsigned char playerBuffer[PlayerStateOffsets::SIZE_]; 
 
@@ -484,10 +418,10 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
         bool autoplay; 
 
         uintptr_t usernameRoot = getPlace(pid, *(uintptr_t*)&playerBuffer[PlayerStateOffsets::USERNAME], {  });
-        readWord(pid, usernameRoot, username);
+        BRUHMOTHERFUCKINGSHIT(pid, usernameRoot, username);
         
         // std::cout << "[player]: " << username << std::endl;
-        _logPlayers += username + ", ";
+        _logPlayers += "\n" + username;
 
         // std::cout << "[address]: 0x" << std::hex << usernameRoot << std::endl << std::dec;
         id            = *(uint8_t*)&playerBuffer[PlayerStateOffsets::ID];
@@ -547,7 +481,7 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
     uint16_t tileCount = mapSize * mapSize, unitCount = 0;
     
     for (int32_t index = 0; index < tileCount; ++index) {
-        uintptr_t tileRoot = getPlace(pid, mapBase, { index * 0x8 + _0x_IN_LIST_START_SHIFT });
+        uintptr_t tileRoot = getPlace(pid, mapRoot, { index * 0x8 + _0x_IN_LIST_START_SHIFT });
         uintptr_t tileBase = getPlace(pid, tileRoot, { 0x0 });
         unsigned char tileBuffer[_0x_TILE_HAD_ROUTE + _0x_TRAILING_OFFSET]; 
 
@@ -682,13 +616,22 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
             moved       = *(bool*)&unitBuffer[_0x_UNIT_MOVED];
             attacked    = *(bool*)&unitBuffer[_0x_UNIT_ATTACKED];
             flipped     = *(bool*)&unitBuffer[_0x_UNIT_FLIPPED];
-
-            readSingleListMagic(pid, getPlace(pid, tileBase, {_0x_TILE_UNIT, _0x_UNIT_EFFECTS}), effects);
+            
+            if (homeX > 6553 || homeY > 6553) {
+                homeX = -1;
+                homeY = -1;
+            }
+            
+            readSingleListMagic(pid, getPlace(pid, tileBase + _0x_TILE_UNIT, {_0x_UNIT_EFFECTS}), effects);
 
             uint16_t passengerType;
-            uintptr_t passengerBase = getPlace(pid, tileBase, {_0x_TILE_UNIT, _0x_UNIT_PASSENGER_UNIT, _0x_UNIT_TYPE});  
-            if(passengerBase != 0) {
+            uintptr_t passengerBase = getPlace(pid, tileBase + _0x_TILE_UNIT, {_0x_UNIT_PASSENGER_UNIT, _0x_UNIT_TYPE});  
+            if (passengerBase != 0) {
                 readPiece(pid, passengerBase, passengerType);
+
+                if (passengerType > 255) {
+                    passengerType = 0;
+                }
             }
 
             unitMap[index] = { 
@@ -738,7 +681,7 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
             
             uintptr_t nameBase = getPlace(pid, *(uintptr_t*)&structureBuffer[Offsets::ImprovementState_Name], {  });
             
-            if (readWord(pid, nameBase, name)) {
+            if (BRUHMOTHERFUCKINGSHIT(pid, nameBase, name)) {
                 std::vector<int32_t> rewards;
                 connectedToCapitalOfPlayer = *(uint8_t*)&structureBuffer[Offsets::ImprovementState_ConnectedToCapital] == 1;
                 readSingleListMagic(pid, improvementBase + Offsets::ImprovementState_Rewards, rewards);
@@ -778,12 +721,11 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
     // ! WRITE OUT ! //
 
     if(!prod) {
-        _logPlayers.pop_back();
-        _logPlayers.pop_back();
         std::cout << std::dec << "Turn: " << currentTurn 
             << " | Map size: " << mapSize << "x" << mapSize << " (" << tileCount << ")" 
             << " | Units: " << unitCount 
             << " | Tribes: " << _logPlayers 
+            << " | GameID: " << gameId 
             // << " | Game: " << gameName
             << std::endl;
         return 0;
@@ -797,6 +739,7 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
     
     // settings
     settings["version"] = version;
+    settings["gameId"] = gameId;
     settings["mode"] = baseGameMode;
     settings["size"] = mapSize;
     settings["tileCount"] = mapSize * mapSize;
@@ -804,7 +747,7 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
     settings["seed"] = seed;
     settings["maxTurns"] = baseGameMode == 1? 30 : baseGameMode == 2? 0 : timeLimit;
     settings["currentPlayerTurnId"] = tribesMap[currentPlayerIndex].id;
-    settings["gameName"] = toValidUtf8(gameName);
+    settings["gameName"] = gameName;
     settings["winByCapital"] = winByCapital;
     settings["winByExtermination"] = winByExtermination;
     settings["_lastPlayerTurnId"] = -1;
@@ -820,7 +763,7 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
         const auto &p = kv.second;
         json j;
         j["id"] = p.id;
-        j["username"] = toValidUtf8(p.username);
+        j["username"] = p.username;
         j["bot"] = p.autoplay;
         j["score"] = p.score;
         j["stars"] = p.currency;
@@ -916,7 +859,7 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
         if (itC != cityMap.end() && !itC->second.name.empty()) {
             json jc;
             const auto &c = itC->second;
-            jc["name"]          = toValidUtf8(c.name);
+            jc["name"]          = c.name;
             jc["tileIndex"]     = idx;
             jc["population"]    = c.population;
             jc["progress"]      = c.progress;

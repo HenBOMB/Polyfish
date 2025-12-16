@@ -14,21 +14,21 @@ export class MCTSNode {
 	readonly count: number;
 	readonly state: GameState;
 	readonly pov: number;
-	readonly legalGen: (state: GameState) => Move[];
 	readonly children: Map<number, MCTSNode> = new Map();
+	private legalFn: (state: GameState) => Move[];
 	private expanded: boolean;
 	public P: number[];
 	public N: number[];
 	public W: number[];
 	public Q: number[];
 	
-	constructor(state: GameState, legalGen: (state: GameState) => Move[]) {
+	constructor(state: GameState, legalFn: (state: GameState) => Move[]) {
 		this.expanded = false;
 		this.pov = getPovTribe(state).id;
-		this.legal = legalGen(state);
+		this.legal = legalFn(state);
 		this.count = this.legal.length;
 		this.state = state;
-		this.legalGen = legalGen;
+		this.legalFn = legalFn;
 		this.P = new Array(this.count).fill(0);
 		this.N = Array(this.count).fill(0);
 		this.W = Array(this.count).fill(0);
@@ -38,7 +38,7 @@ export class MCTSNode {
 	getOrCreateChild(a: number, state: GameState): MCTSNode {
 		let child = this.children.get(a);
 		if(!child) {
-			child = new MCTSNode(state, this.legalGen);
+			child = new MCTSNode(state, this.legalFn);
 			this.children.set(a, child);
 		}
 		return child;
@@ -135,13 +135,15 @@ export class MCTS {
 	readonly numThreads: number = 0;
 	private game: Game;
 	private workers: Worker[] = [];
-	
+	private legalFn: (state: GameState) => Move[];
+
 	constructor(
 		game: Game, 
 		cPuct=1.0, 
 		dirichlet=false, 
 		maxTurnsAhead=3,
-		numThreads=1
+		numThreads=1,
+		legalFn=undefined,
 	) {
 		this.game = game;
 		this.cPuct = cPuct;
@@ -149,95 +151,94 @@ export class MCTS {
 		this.stopTurn = maxTurnsAhead + game.state.settings.turn;
 		this.numThreads = numThreads;
 		this.workers = [];
-        
+        this.legalFn = legalFn || MoveGenerator.legal;
 	}
 	
-	private simulate_old(root: MCTSNode, game: Game): { 
-		path: Array<[MCTSNode, number]>;
-		value: number;
-	} {
-		const path: [MCTSNode, number][] = [];
-		let currentNode = root;
-		let value: number = 0;
-		let undos: UndoCallback[] = [];
+	// private simulate_old(root: MCTSNode, game: Game): { 
+	// 	path: Array<[MCTSNode, number]>;
+	// 	value: number;
+	// } {
+	// 	const path: [MCTSNode, number][] = [];
+	// 	let currentNode = root;
+	// 	let value: number = 0;
+	// 	let undos: UndoCallback[] = [];
 		
-		while (currentNode.isExpanded() && !isGameOver(game.state) && this.stopTurn > game.state.settings.turn) {
-			// console.log(`[MCTS] legal: ${(currentNode as any).legal.length}`);
-			let moveIndex = currentNode.select(this.cPuct);
-			// console.log(`[MCTS] playing: ${moveIndex} -> ${(currentNode as any).legal[moveIndex].stringify(game.state, game.state)}`);
+	// 	while (currentNode.isExpanded() && !isGameOver(game.state) && this.stopTurn > game.state.settings.turn) {
+	// 		// console.log(`[MCTS] legal: ${(currentNode as any).legal.length}`);
+	// 		let moveIndex = currentNode.select(this.cPuct);
+	// 		// console.log(`[MCTS] playing: ${moveIndex} -> ${(currentNode as any).legal[moveIndex].stringify(game.state, game.state)}`);
 			
-			// const old = game.cloneState();
-			const [played, undo] = game.playMove(currentNode.legal[moveIndex])!;
+	// 		// const old = game.cloneState();
+	// 		const [played, undo] = game.playMove(currentNode.legal[moveIndex], this.legalFn)!;
 			
-			// if (played.getType<RewardType>() === RewardType.Workshop) {
-			// 	console.log('workshop!');
-			// }
+	// 		// if (played.getType<RewardType>() === RewardType.Workshop) {
+	// 		// 	console.log('workshop!');
+	// 		// }
 			
-			undos.unshift(undo);
+	// 		undos.unshift(undo);
 			
-			const child = currentNode.getOrCreateChild(moveIndex, game.state);
+	// 		const child = currentNode.getOrCreateChild(moveIndex, game.state);
 			
-			path.push([currentNode, moveIndex]);
+	// 		path.push([currentNode, moveIndex]);
 			
-			currentNode = child;
-		}
+	// 		currentNode = child;
+	// 	}
 		
-		if (isGameOver(game.state)) {
-			isGameWon(game.state) && console.log("[MCTS] victory detected! woah!");
-			value = isGameWon(game.state)? 1 : isGameLost(game.state)? -1 : 0;
-		}
-		else {
-			currentNode.expand();
-			const [ eco, army, finalScore ] = evaluateState(game);
-			value = finalScore;
-		}
+	// 	if (isGameOver(game.state)) {
+	// 		isGameWon(game.state) && console.log("[MCTS] victory detected! woah!");
+	// 		value = isGameWon(game.state)? 1 : isGameLost(game.state)? -1 : 0;
+	// 	}
+	// 	else {
+	// 		currentNode.expand();
+	// 		const [ eco, army, finalScore ] = evaluateState(game);
+	// 		value = finalScore;
+	// 	}
 		
-		undos.forEach(x => x());
+	// 	undos.forEach(x => x());
 		
-		// magnify the evalutaion score
-		// value = Math.max(-1, Math.min(1, value / 0.01));
+	// 	// magnify the evalutaion score
+	// 	// value = Math.max(-1, Math.min(1, value / 0.01));
 		
-		return { path, value };
-	}
+	// 	return { path, value };
+	// }
 	
-	public search_old(
-		nSims: number, 
-		debug=false,
-		legalGen=(state: GameState) => MoveGenerator.legal(state)
-	): MCTSNode {
-		const root = new MCTSNode(this.game.state, legalGen);
-		root.expand();
+	// public search_old(
+	// 	nSims: number, 
+	// 	debug=false,
+	// ): MCTSNode {
+	// 	const root = new MCTSNode(this.game.state, this.legalFn);
+	// 	root.expand();
 		
-		if(this.dirichlet) {
-			const count = legalGen(this.game.state).length;
+	// 	if(this.dirichlet) {
+	// 		const count = this.legalFn(this.game.state).length;
 			
-			let stageMult = calculateStageValue(this.game.state);
+	// 		let stageMult = calculateStageValue(this.game.state);
 			
-			// TODO Use the strongest multiplier?
-			const alpha = 0.3 * (count / count * 2) * (1 + (stageMult[1] > stageMult[0]? stageMult[1] : stageMult[0]));
-			const eps = 0.25;
-			const noise = GMath.dirichlet(alpha, count);
+	// 		// TODO Use the strongest multiplier?
+	// 		const alpha = 0.3 * (count / count * 2) * (1 + (stageMult[1] > stageMult[0]? stageMult[1] : stageMult[0]));
+	// 		const eps = 0.25;
+	// 		const noise = GMath.dirichlet(alpha, count);
 			
-			for (let a = 0; a < count; a++) {
-				root.P[a] = (1 - eps) * root.P[a] + eps * noise[a];
-			}
-		}
+	// 		for (let a = 0; a < count; a++) {
+	// 			root.P[a] = (1 - eps) * root.P[a] + eps * noise[a];
+	// 		}
+	// 	}
 		
-		for (let i = 0; i < nSims; i++) {
-			const { path, value } = this.simulate_old(root, this.game);
-			root.backpropagate(path, value, root.pov);
-		}
+	// 	for (let i = 0; i < nSims; i++) {
+	// 		const { path, value } = this.simulate_old(root, this.game);
+	// 		root.backpropagate(path, value, root.pov);
+	// 	}
 		
-		if (debug) {
-			console.log("[MCTS] Root stats:");
-			for (let a = 0; a < root.count; a++) {
-				const move = root.legal[a];
-				console.log(`N=${root.N[a]}\tQ=${root.Q[a].toFixed(4)}   [${move.stringify(this.game.state)}]`);
-			}
-		}
+	// 	if (debug) {
+	// 		console.log("[MCTS] Root stats:");
+	// 		for (let a = 0; a < root.count; a++) {
+	// 			const move = root.legal[a];
+	// 			console.log(`N=${root.N[a]}\tQ=${root.Q[a].toFixed(4)}   [${move.stringify(this.game.state)}]`);
+	// 		}
+	// 	}
 		
-		return root;
-	}
+	// 	return root;
+	// }
 
 	public async prepare(): Promise<void> {
 		const workerPromises = [];
@@ -270,14 +271,13 @@ export class MCTS {
 
 	public async search(
 		nSims: number, 
-		debug=false,
-		legalGen=(state: GameState) => MoveGenerator.legal(state)
+		debug=false
 	): Promise<MCTSNode> {
-		const root = new MCTSNode(this.game.state, legalGen);
+		const root = new MCTSNode(this.game.state, this.legalFn);
 		root.expand();
 		
 		if(this.dirichlet) {
-			const count = legalGen(this.game.state).length;
+			const count = this.legalFn(this.game.state).length;
 			let stageMult = calculateStageValue(this.game.state);
 			const alpha = 0.3 * (count / count * 2) * (1 + (stageMult[1] > stageMult[0]? stageMult[1] : stageMult[0]));
 			const eps = 0.25;

@@ -89,10 +89,11 @@ export function getTechCost(tribe: TribeState, tierTech: TechLike): number {
  * @param state 
  * @param city
  */
-export function getCityProduction(state: GameState, ...city: CityState[]): number {
+export function getCityProduction(state: GameState, ...cities: CityState[]): number {
 	// If city is on riot or the tile is occupied by an enemy then production is nullified
-	return city.reduce((a, b) => a + 
-		(b._riot || getEnemyAt(state, b.tileIndex)? 0 : b.production
+	return cities.reduce((acc, city) => acc + 
+		(city._riot || getEnemyAt(state, city.tileIndex)? 0 
+		: (city.production + Object.values(city.rewards).filter(x => x == RewardType.Park || x == RewardType.Workshop).length)
 	), 0);
 }
 
@@ -107,9 +108,9 @@ export function getTribeSPT(state: GameState, tribe?: TribeState): number {
 	return tribe.cities.reduce((a, b) => a + getCityProduction(state, b), 0);
 }
 
-export function getPovTerritorry(state: GameState, tribe?: TribeState, cityTarget?: CityState): number[] {
+export function getPovTerritorry(state: GameState, tribe?: TribeState, city?: CityState): number[] {
 	tribe = tribe || getPovTribe(state);
-	return (cityTarget? [cityTarget] : tribe.cities).map(x => x._territory).flat();
+	return city? city._territory : tribe.cities.map(x => x._territory).flat();
 }
 
 const neighborCache = new Map<number, number[]>();
@@ -138,13 +139,14 @@ export function getAdjacentIndexes(state: GameState, idx: number, range = 1, uno
 			const neighborIndex = neighborY * width + neighborX;
 			
 			if (!includeUnexplored || unowned) {
-				const explored = state._visibleTiles[neighborIndex];
+				// const explored = state._visibleTiles[neighborIndex];
+				const explored = state.tiles[neighborIndex].explorers;
 	
 				// Skip unexplored
-				if (!includeUnexplored && !explored) continue;
+				if (!includeUnexplored && !explored.size) continue;
 				
 				// Optionally filter for owned tiles.
-				if (unowned && (explored? state.tiles[neighborIndex].owner > 0 : false)) continue;
+				if (unowned && (explored.size? state.tiles[neighborIndex].owner > 0 : false)) continue;
 			}
 			
 			neighbors.push(neighborIndex);

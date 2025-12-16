@@ -1,7 +1,7 @@
 #!/bin/bash
 
 if ! command -v g++ &>/dev/null; then
-    echo "Error: g++ is not installed!"
+    echo "Error: g++ is not installed!" 1>&2
     exit 1
 fi
 
@@ -12,7 +12,7 @@ pid=$(ps -eo pid,lstart,cmd | grep "$PROCESS_NAME" | grep -v grep  | tail -n1 | 
 # pid=$(pgrep -f "$PROCESS_NAME")
 
 if [[ -z "$pid" ]]; then
-    echo "Error: Process '$PROCESS_NAME' not found!"
+    echo "Error: Process '$PROCESS_NAME' not found!" 1>&2
     exit 1
 fi
 

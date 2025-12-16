@@ -2,6 +2,8 @@
 #include <cstdint>
 #ifndef READER_TYPES_H
 #define READER_TYPES_H
+#include <vector>
+#include <unordered_map>
 
 struct TileInfo {
     int32_t index;
@@ -93,22 +95,32 @@ enum Offsets: size_t {
     GameSettings_TimeLimit                  = 0x68, // Int32 timeLimit
     GameSettings_Size_                      = GameSettings_TimeLimit + _0x_TRAILING_OFFSET,
 
-    GameState_Version                        = 0x10, // Int32 version
-    GameState_Seed                           = 0x14, // Int32 seed
-    GameState_CurrentTurn                    = 0x18, // UInt32 currentTurn
-    GameState_CurrentPlayerIndex             = 0x1C, // Byte currentPlayerIndex
-    GameState_CurrentUnitID                  = 0x20, // UInt32 currentUnitId
-    GameState_CurrentState                   = 0x24, // GameState currentState
-    GameState_Settings                       = 0x28, // GameSettings settings
-    GameState_Map                            = 0x30, // MapData map
-    GameState_PlayerStates                   = 0x38, // List<PlayerState> playerStates
-    GameState_Size_                          = GameState_PlayerStates + _0x_TRAILING_OFFSET,
+    
+    GameState_Version                       = 0x10, // Int32 version
+    GameState_Seed                          = 0x14, // Int32 seed
+    GameState_CurrentTurn                   = 0x18, // UInt32 currentTurn
+    GameState_CurrentPlayerIndex            = 0x1C, // Byte currentPlayerIndex
+    GameState_CurrentUnitID                 = 0x20, // UInt32 currentUnitId
+    GameState_CurrentState                  = 0x24, // GameState currentState
+    GameState_Settings                      = 0x28, // GameSettings settings
+    GameState_Map                           = 0x30, // MapData map
+    GameState_PlayerStates                  = 0x38, // List<PlayerState> playerStates
+    GameState_Size_                         = GameState_PlayerStates + _0x_TRAILING_OFFSET,
+
+
+    GameManager_Settings                    = 0x20, // GameManager -> GameSettings settings
+    GameManager_ClientBase                  = 0x28, // GameManager -> ClientBase client
+    GameManager_AIOpponents                 = 0x50, // GameManager -> Int32 aiOpponents
+    GameManager_HumanOpponents              = 0x54, // GameManager -> Int32 playerOpponents
+    GameManager_StartingTribe               = 0x64, // GameManager -> TribeType startingTribe
+
     
     Create_Terrain                          = 0x10, // TerrainData terrain
     Create_Resource                         = 0x18, // ResourceData resource
     Create_Unit                             = 0x20, // UnitData unit
     Create_Effect                           = 0x28, // TileData.EffectType effect
     Create_Size_                            = Create_Effect + _0x_TRAILING_OFFSET,
+
 
     ImprovementData_IDX                     = 0x10, // Int32 idx
     ImprovementData_Hidden                  = 0x14, // Bool hidden
@@ -128,6 +140,7 @@ enum Offsets: size_t {
     ImprovementData_Grouth_Rewards          = 0x68, // List<GrowthRewards> growthRewards
     ImprovementData_Size_                   = ImprovementData_Grouth_Rewards + _0x_TRAILING_OFFSET,
 
+
     GameRules_TurnLimit                     = 0x10, // Int32 turnLimit
     GameRules_ScoreLimit                    = 0x14, // Int32 scoreLimit
     GameRules_WinByCapital                  = 0x18, // Bool winByCapital
@@ -137,6 +150,7 @@ enum Offsets: size_t {
     GameRules_AllowTechSharing              = 0x1c, // Bool allowTechSharing
     GameRules_PlayerDeathCondition          = 0x20, // GameRules.DeathCondition playerDeathCondition
     GameRules_Size_                         = GameRules_PlayerDeathCondition + _0x_TRAILING_OFFSET,
+
 
     ImprovementState_Type                   = 0x10, // ImprovementData.Type type
     ImprovementState_Owner                  = 0x14, // Byte owner
@@ -155,6 +169,7 @@ enum Offsets: size_t {
     ImprovementState_Effects                = 0x38, // List<ImprovementEffect> effects
     ImprovementState_Size_                  = ImprovementState_Effects + _0x_TRAILING_OFFSET,
 
+
     DiplomacyRelation_State                 = 0x10, // DiplomacyRelationState -> [0x10] -> Int32 state
     DiplomacyRelation_LastAttackTurn        = 0x14, // Int32 lastAttackTurn
     DiplomacyRelation_EmbassyLevel          = 0x18, // Int32 embassyLevel
@@ -162,7 +177,14 @@ enum Offsets: size_t {
     DiplomacyRelation_FirstMeet             = 0x18, // Int32 firstMeet
     DiplomacyRelation_EmbassyBuildTurn      = 0x24, // Int32 embassyBuildTurn
     DiplomacyRelation_PreviousAttackTurn    = 0x28, // Int32 previousAttackTurn
-    DiplomacyRelation_Size_                 = DiplomacyRelation_PreviousAttackTurn + _0x_TRAILING_OFFSET
+    DiplomacyRelation_Size_                 = DiplomacyRelation_PreviousAttackTurn + _0x_TRAILING_OFFSET,
+
+
+    ClientBase_ClientType                   = 0x10, // Clienttype clientType
+    ClientBase_ClientActionManager          = 0x18, // ActionManager clientActionManager
+    ClientBase_GameID                       = 0x20, //
+    ClientBase_InitialGameState             = 0x30, // GameState initialGameState
+    ClientBase_CurrentGameState             = 0x38, // GameState currentGameState
 };
 
 namespace Data {

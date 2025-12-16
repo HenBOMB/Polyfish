@@ -5,12 +5,14 @@ import { ModeType, TribeType } from "./src/core/types";
 import { spawn } from "child_process";
 import { GameSettings, GameState, UnitState } from "./src/core/states";
 import Game from "./src/game";
-import {  MoveGenerator, Prediction } from "./src/core/moves";
+import {  ArmyMovesGenerator, EconMovesGenerator, MoveGenerator, Prediction } from "./src/core/moves";
 import { deepCompare } from "./src/main";
 import { Logger } from "./src/ai/logger";
-import { evaluateAllStates } from "./src/ai/eval";
+import { evaluateAllStates, evaluateState } from "./src/ai/eval";
 import { CalculateBestMoves } from "./src/ai/brute";
 import { MCTS } from "./src/ai/mcts/mcts";
+import Move from "./src/core/move";
+import EndTurn from "./src/core/moves/EndTurn";
 
 const app = express();
 const py = spawn(".venv/bin/python3", ["polyfish/main.py"]);
@@ -368,41 +370,57 @@ app.listen(3000, async () => {
     // currentGame.playSequence(...[1, 5, 0, 1, 1, 0, 1, 5, 0, 1, 1, 0, 4, 6, 0, 4, 3, 0, 1, 1, 4, 1, 7, 7, 0, 0, 5, 1, 5, 0, 0, 5, 9, 8, 1, 1, 0, 12, 1, 1, 1, 0, 6, 7, 1, 1, 1, 1, 0, 7, 3, 1, 1, 0, 15, 5, 5, 1, 1, 0, 6, 6, 1, 9, 1]);
 
     const iState = game.cloneState();
+    // let moves: Move[] = [];
+    // console.log(moves.map(x => {
+    //     const evalBefore = evaluateState(game)[2];
+    //     const play = x.execute(game.state);
+    //     const evalNow = evaluateState(game)[2];
+    //     const evalDiff = evalNow - evalBefore;
+    //     const str = x.stringify(iState, game.state);
+    //     play.undo();
+    //     return `[${str}] ${evalDiff>0?'+':'-'}${evalDiff.toFixed(3)}`;
+    // }).length);
+    
+    // await CalculateBestMoves(
+    //     game,
+    //     1,
+    //     { 
+    //         depth: 2000,
+    //         cPuct: 1.0,
+    //         nThreads: 6,
+    //         maxTurnsAhead: 2,
+    //         deterministic: false,
+    //         legalFn: (state) => {
+    //             const moves: Move[] = [];
+    //             ArmyMovesGenerator.legal(state, moves);
+    //             moves.unshift(new EndTurn());
+    //             return moves;
+    //         },
+    //     }
+    // ).then(x => {
+    //     // console.log(x[0].map(x => x.stringify(game.state, game.state)));
+    // }).catch((e) => {
+    //     console.error(e);
+    // });
 
-    await CalculateBestMoves(
-        game,
-        20,
-        { 
-            depth: 10,
-            cPuct: 1.0,
-            nThreads: 6,
-            maxTurnsAhead: 1,
-            deterministic: true
-        }
-    ).then(x => {
-        // console.log(x[0].map(x => x.stringify(game.state, game.state)));
-    }).catch((e) => {
-        console.error(e);
-    });
-
-    deepCompare(
-        { state: {
-            r: iState.resources,
-            s: iState.structures,
-            t: iState.tiles,
-            T: iState.tribes,
-            S: iState.settings,
-        } },
-        { state: {
-            r: game.state.resources,
-            s: game.state.structures,
-            t: game.state.tiles,
-            T: game.state.tribes,
-            S: game.state.settings,
-        } },
-        'state',
-        true
-    );
+    // deepCompare(
+    //     { state: {
+    //         r: iState.resources,
+    //         s: iState.structures,
+    //         t: iState.tiles,
+    //         T: iState.tribes,
+    //         S: iState.settings,
+    //     } },
+    //     { state: {
+    //         r: game.state.resources,
+    //         s: game.state.structures,
+    //         t: game.state.tiles,
+    //         T: game.state.tribes,
+    //         S: game.state.settings,
+    //     } },
+    //     'state',
+    //     true
+    // );
 
     // const mcts = new MCTS(currentGame, 1.0, false, 3, 16);
     // console.time('prepare');
