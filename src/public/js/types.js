@@ -6,9 +6,9 @@ const CLIMATE_IDS = [
 ];
 
 const TRIBE_ID_2_NAME = [
-    null, 'Nature', 'Ai-Mo', 'Aquarion', 'Bardur', 
-    '∑∫ỹriȱŋ', 'Hoodrick', 'Imperius', 'Kickoo', 
-    'Luxidoor', 'Oumaji', 'Quetzali', 'Vengir', 
+    null, 'Nature', 'Ai-Mo', 'Aquarion', 'Bardur',
+    '∑∫ỹriȱŋ', 'Hoodrick', 'Imperius', 'Kickoo',
+    'Luxidoor', 'Oumaji', 'Quetzali', 'Vengir',
     'Xin-xi', 'Yădakk', 'Zebasi', 'Polaris', 'Cymanti'
 ];
 
@@ -45,7 +45,7 @@ const ClassNameToId = {
 };
 
 const CLIMATE_TO_ANIMAL = [
-    'Invalid', 
+    'Invalid',
     'horse0001', // xinxi,
     'horse0002', // imperius,
     'horse0003', // bardur,
@@ -69,17 +69,27 @@ const OWNER_TO_ID_INDEX = [
 ]
 
 const TerrainType = {
-	0: "None",
-	1: "Water",
-	2: "Ocean",
-	3: "Land",
-	4: "Mountain",
-	5: "Forest",
-	6: "Ice",
-	7: "GroundWater",
+    0: "None",
+    1: "Water",
+    2: "Ocean",
+    3: "Land",
+    4: "Mountain",
+    5: "Forest",
+    6: "Ice",
+    7: "GroundWater",
 }
 
 const RewardType = {
-	"Workshop": 3,
-	"Park": 2,
+    "Workshop": 3,
+    "Park": 2,
 }
+
+const TechnologyNames = {
+    1: "Riding", 2: "Free Spirit", 3: "Chivalry", 4: "Roads", 5: "Trade",
+    6: "Organization", 7: "Strategy", 8: "Farming", 9: "Construction",
+    10: "Fishing", 12: "Aquatism", 13: "Sailing", 14: "Navigation",
+    15: "Hunting", 16: "Forestry", 17: "Mathematics", 18: "Archery", 19: "Spiritualism",
+    20: "Climbing", 21: "Meditation", 22: "Philosophy", 23: "Mining", 24: "Smithery",
+    30: "Frostwork", 31: "Polar Warfare", 32: "Polarism", 36: "Recycling", 37: "Hydrology"
+}
+

@@ -346,12 +346,12 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
         },
         U::Doomux => UnitSetting {
             cost: 10,
-            attack: 4.0,
+            attack: 3.5,
             movement: 3,
             defense: 2.0,
             range: 1,
             health: 20,
-            skills: skills![S::Dash, S::Creep, S::Explode],
+            skills: skills![S::Dash, S::Creep, S::Explode, S::Static],
             ..Default::default()
         },
         U::Shaman => UnitSetting {

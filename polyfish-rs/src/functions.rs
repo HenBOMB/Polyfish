@@ -322,9 +322,14 @@ pub fn get_city_production(state: &GameState, city: &CityState) -> i32 {
         return 0;
     }
 
-    // TS bug note: city.rewards is a Set, and TS uses Object.values(city.rewards).filter(...)
-    // Object.values on a Set returns [], so rewards are NOT double-counted in TS.
-    city.production
+    let mut prod = city.production;
+    // Capitals get a +1 star bonus
+    if let Some(tile) = state.tiles.get(&city.tile_index) {
+        if tile.capital_of == city.owner && tile.capital_of != 0 {
+            prod += 1;
+        }
+    }
+    prod
 }
 
 /// Get total production for a list of cities
@@ -651,6 +656,17 @@ pub fn calculate_detailed_tribe_score(state: &GameState, player_id: PlayerId) ->
     }
 
     score
+}
+
+/// Sync all tribes' scores based on current state
+pub fn sync_scores(state: &mut GameState) {
+    let ids: Vec<PlayerId> = state.tribes.keys().cloned().collect();
+    for id in ids {
+        let score = calculate_detailed_tribe_score(state, id);
+        if let Some(tribe) = state.tribes.get_mut(&id) {
+            tribe.score = score;
+        }
+    }
 }
 
 /// Get the star exchange rate based on score

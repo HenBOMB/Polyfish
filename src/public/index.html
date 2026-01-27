@@ -1,106 +1,106 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PolyAI</title>
-    <link rel="stylesheet" href="css/styles.css">
+    <title>PolyAI Simulator</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/premium.css">
     <link rel="stylesheet" href="css/game.css">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self' http: https: file: blob: wss:;
-    font-src 'self' 'unsafe-inline' https: file:;
-    style-src 'self' 'unsafe-inline' https:; 
-    media-src 'self' file: blob:; 
-    script-src 'self' https: 'unsafe-inline'; 
-    img-src 'self' data: https: file:" />
 </head>
-
-<!-- Score Bar -->
-<div class="fixed top-0 left-0">
-    <div class="text-3xl font-bold underline z-1 m-1 border-black border-4 rounded-lg">
-        <div id="score-meter" class="w-6 h-96 bg-gray-600 flex flex-col overflow-hidden">
-            <div id="my-score" class="bg-white" style="height: var(--my-score-height, 50%);"></div>
-            <div id="enemy-score" class="bg-blue-800" style="height: var(--enemy-score-height, 50%);"></div>
-        </div>
-    </div>
-</div>
-
-<div class="fixed bottom-0 w-full bg-white h-30 z-1 flex justify-center items-center">
-    <div class="h-full w-1/3 bg-black p-4 flex justify-evenly items-center">
-        <!-- Back -->
-        <button onclick="controlsBck()" class="bg-gray-300 hover:bg-gray-400 duration-300 h-full aspect-square">
-            
-        </button>
-        <!-- Autostep -->
-        <button onclick="controlsAutostep()" class="bg-gray-300 hover:bg-gray-400 duration-300 h-full aspect-square">
-            
-        </button>
-        <!-- Forward -->
-        <button onclick="controlsFwd()" class="bg-gray-300 hover:bg-gray-400 duration-300 h-full aspect-square">
-            
-        </button>
-    </div>
-</div>
-
-<!-- Map -->
 <body>
-    <div id="map"></div>
+    <div id="app-container">
+        <!-- Sidebar: Stats & Tech -->
+        <aside id="left-sidebar" class="glass">
+            <header>
+                <h1 class="glow-text">PolyAI</h1>
+                <div class="turn-badge">Turn <span id="turn-val">1</span>/30</div>
+            </header>
+
+            <section id="tribe-info">
+                <div class="stat-card">
+                    <label>Current Tribe</label>
+                    <div id="tribe-name" class="stat-value">Luxidoor</div>
+                </div>
+                <div class="stats-row">
+                    <div class="stat-card mini">
+                        <label>Stars</label>
+                        <div id="stars-val" class="stat-value gold">10</div>
+                    </div>
+                    <div class="stat-card mini">
+                        <label>Score</label>
+                        <div id="score-val" class="stat-value">69</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <label>Income</label>
+                    <div id="income-val" class="stat-value green">+2</div>
+                </div>
+            </section>
+
+            <section id="tech-tree-container">
+                <h3>Technology Tree</h3>
+                <div id="tech-list" class="tech-grid">
+                    <!-- Tech badges will be injected here -->
+                </div>
+            </section>
+        </aside>
+
+        <!-- Main Area: Map -->
+        <main id="main-view">
+            <div id="map-viewport">
+                <div id="map"></div>
+            </div>
+            
+            <!-- Floating Hover Info -->
+            <div id="hovertile" class="glass hidden"></div>
+
+            <!-- Bottom Controls -->
+            <footer id="control-bar" class="glass">
+                <div class="control-group">
+                    <button id="btn-reset" class="btn secondary" title="Reset Game">
+                        <span class="icon">↺</span> Reset
+                    </button>
+                </div>
+                
+                <div class="control-group central">
+                    <button id="btn-rng" class="btn highlight" title="Perform Random Move">
+                        <span class="icon">🎲</span> RNG
+                    </button>
+                    
+                    <div class="mcts-control">
+                        <button id="btn-step" class="btn primary" title="Run MCTS Search">
+                            <span class="icon">🤖</span> MCTS Step
+                        </button>
+                        <div class="slider-wrapper">
+                            <label>Depth (Iterations)</label>
+                            <input type="range" id="mcts-depth" min="10" max="500" value="100" step="10">
+                            <span id="mcts-depth-val">100</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <div id="last-move-label">Last Move: <span id="last-move-val" class="move-name">None</span></div>
+                </div>
+            </footer>
+        </main>
+
+        <!-- Right Sidebar: Available Moves -->
+        <aside id="right-sidebar" class="glass">
+            <h3>Legal Moves</h3>
+            <div id="moves-list-container">
+                <ul id="moves-list">
+                    <!-- Moves will be injected here -->
+                </ul>
+            </div>
+        </aside>
+    </div>
+
+    <!-- Scripts -->
     <script src="js/types.js"></script>
     <script src="js/main.js"></script>
-    <script src="js/scoreBar.js"></script>
-    
-    <div id="topbar">
-        <div>
-            <span>Score</span>
-            <span>Stars (+<span id="production">69</span>)</span>
-            <span>Turn</span>
-        </div>
-        <div>
-            <span id="score">420</span>
-            <span id="stars">999</span>
-            <span id="turn">1</span>
-        </div> 
-        </div>
-    <button id="step" onclick="autoStep(this)">
-        Step
-    </button>
-    <button id="step" onclick="brute(this)" style="transform: translateY(130px);">
-        Brute
-    </button>
-    <!-- <button id="pov" onclick="changePov(this)">
-        Pov: 1
-    </button> -->
-    <div id="hovertile" />
-    <div id="moves" style="pointer-events: none;">
-        <!-- <div class="contain-moves" id="unit-container">
-            <p>Units</p>
-            <div>
-                <p>Warrior</p>
-                <span>Move (10, 2) to (0, 0)</span>
-                <span>Move (10, 2) to (0, 0)</span>
-            </div>
-        </div>
-        <div class="contain-moves" id="tech-container">
-            <p>Technology</p>
-            <span>Research <strong>Organization</strong> for 5 stars</span>
-            <span>Research <strong>Sailing</strong> for 6 stars</span>
-        </div>
-        <div class="contain-harvest" id="harvest-container">
-            <p>Harvest</p>
-            <div>
-                <p>Fruit</p>
-                <span>At 174</span>
-            </div>
-        </div>
-        <div class="contain-moves" id="build-container">
-            <p>Buildings</p>
-            <div>
-                <p>Altar of Babies</p>
-                <span>Build at (0, 0)</span>
-                <span>Build at (3, 4)</span>
-            </div>
-        </div> -->
-    </div>
 </body>
-
 </html>

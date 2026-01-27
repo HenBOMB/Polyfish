@@ -1,15 +1,14 @@
 //! Main Game struct
-//! 
+//!
 //! This is the primary interface for running the Polytopia simulation.
 //! Translated from the TypeScript Game class.
 
 use crate::actions::{
-    self, chain_undos, end_unit_turn, gain_stars,
-    has_effect, noop_undo, set_visible_tiles, start_unit_turn, 
-    try_discover_other_tribes, try_remove_effect, UndoCallback,
+    self, chain_undos, end_unit_turn, gain_stars, has_effect, noop_undo, set_visible_tiles,
+    start_unit_turn, try_discover_other_tribes, try_remove_effect, UndoCallback,
 };
 use crate::functions::{
-    get_pov_tribe, get_pov_tribe_mut, is_game_over, get_total_production
+    get_pov_tribe, get_pov_tribe_mut, get_total_production, is_game_over, sync_scores,
 };
 use crate::moves::{generate_legal_moves, Move, MoveResult};
 use crate::states::*;
@@ -22,7 +21,7 @@ use std::path::Path;
 pub const STARTING_OWNER_ID: PlayerId = 1;
 
 /// The main game controller
-/// 
+///
 /// Provides the interface for loading game states, playing moves, and managing turns.
 #[derive(Debug)]
 pub struct Game {
@@ -53,9 +52,9 @@ impl Game {
     }
 
     /// Post-load initialization (visibility, coord indices, etc.)
-    fn post_load(&mut self) {
+    pub fn post_load(&mut self) {
         let map_size = self.state.settings.size;
-        
+
         // Compute coord indices for all tiles
         for (idx, tile) in self.state.tiles.iter_mut() {
             tile.coords.compute_idx(map_size);
@@ -63,7 +62,7 @@ impl Game {
                 rc.compute_idx(map_size);
             }
         }
-        
+
         // Compute coord indices for all units
         for tribe in self.state.tribes.values_mut() {
             for unit in &mut tribe.units {
@@ -75,10 +74,13 @@ impl Game {
             }
             tribe.starting_tile_coords.compute_idx(map_size);
         }
-        
+
         // Set visibility for current player
         let pov_id = self.state.settings.current_player_turn_id;
         actions::set_visible_tiles(&mut self.state, pov_id);
+
+        // Update scores
+        sync_scores(&mut self.state);
     }
 
     /// Serialize game state to JSON
@@ -108,7 +110,7 @@ impl Game {
     /// Play a sequence of moves by their indices in the legal moves list
     pub fn play_sequence(&mut self, move_indices: &[usize]) -> Vec<UndoCallback> {
         let mut undos = Vec::new();
-        
+
         for &idx in move_indices {
             let legal = self.legal_moves();
             if idx < legal.len() {
@@ -117,12 +119,12 @@ impl Game {
                 }
             }
         }
-        
+
         undos
     }
 
     /// Play a move and return an undo callback
-    /// 
+    ///
     /// Returns None if the game is over.
     pub fn play_move(&mut self, game_move: &dyn Move) -> Option<UndoCallback> {
         if self.state.settings._game_over {
@@ -137,17 +139,23 @@ impl Game {
             end_undo
         } else {
             let result = game_move.execute(&mut self.state);
-            
+
             // Try discovering new tribes after the move
             let discover_undo = try_discover_other_tribes(&mut self.state);
-            
+
+            // Sync scores after move
+            sync_scores(&mut self.state);
+
             // Track the move type in recent moves
-            self.state.settings._recent_moves.push(game_move.move_type());
-            
+            self.state
+                .settings
+                ._recent_moves
+                .push(game_move.move_type());
+
             // Collect undos
-            let move_type = game_move.move_type();
+            let _move_type = game_move.move_type();
             let move_undo = result.undo;
-            
+
             Box::new(move |s: &mut GameState| {
                 s.settings._recent_moves.pop();
                 discover_undo(s);
@@ -161,7 +169,7 @@ impl Game {
     }
 
     /// End the current tribe's turn
-    /// 
+    ///
     /// This handles:
     /// - Changing to the next alive tribe
     /// - Incrementing turn counter when wrapping around
@@ -171,51 +179,53 @@ impl Game {
     /// - Resetting/updating unit states (frozen, moved, attacked)
     fn end_turn(&mut self) -> UndoCallback {
         let state = &mut self.state;
-        
+
         // Save old state for undo
         let old_pov = state.settings.current_player_turn_id;
         let old_turn = state.settings.turn;
         let old_last = state.settings._last_player_turn_id;
         let old_visibility = state._visible_tiles.clone();
         let old_game_over = state.settings._game_over;
-        
+
         // Track all undos in a chain
         let mut undos: Vec<UndoCallback> = Vec::new();
-        
+
         // === CHANGE TURN === //
-        
+
         let active_pov = state.settings.current_player_turn_id;
         undos.push(actions::process_end_turn_effects(state, active_pov));
 
         state.settings._last_player_turn_id = active_pov;
         state.settings.current_player_turn_id += 1;
-        
+
         // Wrap around to first player
         if state.settings.current_player_turn_id > state.settings._max_tribe_count {
             state.settings.current_player_turn_id = STARTING_OWNER_ID;
         }
-        
+
         // Skip dead/resigned tribes
         loop {
-            let should_skip = state.tribes.get(&state.settings.current_player_turn_id)
+            let should_skip = state
+                .tribes
+                .get(&state.settings.current_player_turn_id)
                 .map(|t| t.killed_turn > 0 || t.resigned_turn > 0)
                 .unwrap_or(false);
-            
+
             if !should_skip {
                 break;
             }
-            
+
             state.settings.current_player_turn_id += 1;
             if state.settings.current_player_turn_id > state.settings._max_tribe_count {
                 state.settings.current_player_turn_id = STARTING_OWNER_ID;
             }
         }
-        
+
         // If we wrapped around to the start, increment turn
         if state.settings.current_player_turn_id == STARTING_OWNER_ID {
             state.settings.turn += 1;
         }
-        
+
         // Check for game over
         if is_game_over(state) {
             state.settings._game_over = true;
@@ -226,20 +236,20 @@ impl Game {
                 s.settings._last_player_turn_id = old_last;
             });
         }
-        
+
         // === NEW TRIBE TURN === //
-        
+
         let new_pov = state.settings.current_player_turn_id;
-        
+
         // Update visibility for new tribe
         set_visible_tiles(state, new_pov);
-        
+
         // Process start turn effects
         undos.push(actions::process_start_turn_effects(state, new_pov));
 
         // Try discovering tribes that moved into view
         undos.push(try_discover_other_tribes(state));
-        
+
         // Reward production if not the first turn
         if state.settings.turn > 1 {
             if let Some(tribe) = state.tribes.get(&new_pov) {
@@ -250,19 +260,26 @@ impl Game {
                 }
             }
         }
-        
+
         // Update all unit states
         if let Some(tribe) = state.tribes.get(&new_pov) {
             let unit_count = tribe.units.len();
-            let frozen_units: Vec<(usize, bool)> = tribe.units.iter()
+            let frozen_units: Vec<(usize, bool)> = tribe
+                .units
+                .iter()
                 .enumerate()
                 .map(|(i, u)| (i, has_effect(u, EffectType::Frozen)))
                 .collect();
-            
+
             for (unit_idx, is_frozen) in frozen_units {
                 if is_frozen {
                     // Frozen units get unfrozen but their turn ends
-                    undos.push(try_remove_effect(state, new_pov, unit_idx, EffectType::Frozen));
+                    undos.push(try_remove_effect(
+                        state,
+                        new_pov,
+                        unit_idx,
+                        EffectType::Frozen,
+                    ));
                     undos.push(end_unit_turn(state, new_pov, unit_idx));
                 } else {
                     // Normal units get their turn reset
@@ -270,17 +287,17 @@ impl Game {
                 }
             }
         }
-        
+
         // Create the combined undo callback
         Box::new(move |s| {
             // Undo all collected operations in reverse
             for undo in undos.into_iter().rev() {
                 undo(s);
             }
-            
+
             // Restore visibility
             s._visible_tiles = old_visibility;
-            
+
             // Restore turn state
             s.settings._game_over = old_game_over;
             s.settings.current_player_turn_id = old_pov;
@@ -304,8 +321,9 @@ impl Game {
         } else {
             let result = game_move.execute(state);
             let discover_undo = try_discover_other_tribes(state);
+            sync_scores(state);
             state.settings._recent_moves.push(game_move.move_type());
-            
+
             let move_undo = result.undo;
             Box::new(move |s: &mut GameState| {
                 s.settings._recent_moves.pop();
@@ -325,9 +343,9 @@ impl Game {
         let old_pov = state.settings.current_player_turn_id;
         let old_turn = state.settings.turn;
         let old_visibility = state._visible_tiles.clone();
-        
+
         let mut undos: Vec<UndoCallback> = Vec::new();
-        
+
         // Change turn
         let active_pov = state.settings.current_player_turn_id;
         undos.push(actions::process_end_turn_effects(state, active_pov));
@@ -336,27 +354,29 @@ impl Game {
         if state.settings.current_player_turn_id > state.settings._max_tribe_count {
             state.settings.current_player_turn_id = STARTING_OWNER_ID;
         }
-        
+
         // Skip dead tribes
         loop {
-            let should_skip = state.tribes.get(&state.settings.current_player_turn_id)
+            let should_skip = state
+                .tribes
+                .get(&state.settings.current_player_turn_id)
                 .map(|t| t.killed_turn > 0 || t.resigned_turn > 0)
                 .unwrap_or(false);
-            
+
             if !should_skip {
                 break;
             }
-            
+
             state.settings.current_player_turn_id += 1;
             if state.settings.current_player_turn_id > state.settings._max_tribe_count {
                 state.settings.current_player_turn_id = STARTING_OWNER_ID;
             }
         }
-        
+
         if state.settings.current_player_turn_id == STARTING_OWNER_ID {
             state.settings.turn += 1;
         }
-        
+
         if is_game_over(state) {
             state.settings._game_over = true;
             return Box::new(move |s| {
@@ -365,12 +385,12 @@ impl Game {
                 s.settings.turn = old_turn;
             });
         }
-        
+
         let new_pov = state.settings.current_player_turn_id;
         set_visible_tiles(state, new_pov);
         undos.push(actions::process_start_turn_effects(state, new_pov));
         undos.push(try_discover_other_tribes(state));
-        
+
         if state.settings.turn > 1 {
             if let Some(tribe) = state.tribes.get(&new_pov) {
                 let cities: Vec<_> = tribe.cities.clone();
@@ -380,23 +400,30 @@ impl Game {
                 }
             }
         }
-        
+
         if let Some(tribe) = state.tribes.get(&new_pov) {
-            let frozen_units: Vec<(usize, bool)> = tribe.units.iter()
+            let frozen_units: Vec<(usize, bool)> = tribe
+                .units
+                .iter()
                 .enumerate()
                 .map(|(i, u)| (i, has_effect(u, EffectType::Frozen)))
                 .collect();
-            
+
             for (unit_idx, is_frozen) in frozen_units {
                 if is_frozen {
-                    undos.push(try_remove_effect(state, new_pov, unit_idx, EffectType::Frozen));
+                    undos.push(try_remove_effect(
+                        state,
+                        new_pov,
+                        unit_idx,
+                        EffectType::Frozen,
+                    ));
                     undos.push(end_unit_turn(state, new_pov, unit_idx));
                 } else {
                     undos.push(start_unit_turn(state, new_pov, unit_idx));
                 }
             }
         }
-        
+
         Box::new(move |s| {
             for undo in undos.into_iter().rev() {
                 undo(s);

@@ -878,9 +878,11 @@ pub fn generate(settings: MapGenSettings) -> GameState {
 
                     if gen_tile.tribe_affinity == Some(TribeType::Luxidoor) {
                         city.level = 3;
+                        city.production = 3;
                         city.border_size = 1; // "doesn't get the first reward" (border expansion/workshop)
                     } else {
                         city.level = 1;
+                        city.production = 1;
                         city.border_size = 1;
                     }
 
