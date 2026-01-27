@@ -1,0 +1,14 @@
+/mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/target/release/deps/serde-ca058fde53b5ddeb.d: /home/henry/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/henry/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/henry/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/henry/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/henry/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/target/release/build/serde-9d08b465ff0b51b1/out/private.rs
+
+/mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/target/release/deps/libserde-ca058fde53b5ddeb.rlib: /home/henry/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/henry/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/henry/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/henry/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/henry/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/target/release/build/serde-9d08b465ff0b51b1/out/private.rs
+
+/mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/target/release/deps/libserde-ca058fde53b5ddeb.rmeta: /home/henry/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/henry/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/henry/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/henry/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/henry/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/target/release/build/serde-9d08b465ff0b51b1/out/private.rs
+
+/home/henry/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/home/henry/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/home/henry/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/home/henry/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/home/henry/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/target/release/build/serde-9d08b465ff0b51b1/out/private.rs:
+
+# env-dep:OUT_DIR=/mnt/hen480/henry/Escritorio/Coding/PolyAI/polyfish-rs/target/release/build/serde-9d08b465ff0b51b1/out
