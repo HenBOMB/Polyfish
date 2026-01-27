@@ -93,3 +93,50 @@ const TechnologyNames = {
     30: "Frostwork", 31: "Polar Warfare", 32: "Polarism", 36: "Recycling", 37: "Hydrology"
 }
 
+// Tech tree dependencies: tech_id -> [next techs that require it]
+const TechTree = {
+    // Unrequired (implicit) -> Tier 1 roots
+    0: [1, 6, 20, 10, 15], // Riding, Organization, Climbing, Fishing, Hunting
+    // Riding branch
+    1: [2, 4],    // Riding -> Free Spirit, Roads
+    4: [5],       // Roads -> Trade
+    2: [3],       // Free Spirit -> Chivalry
+    // Organization branch
+    6: [7, 8],    // Organization -> Strategy, Farming
+    8: [9],       // Farming -> Construction
+    // Climbing branch
+    20: [23, 21], // Climbing -> Mining, Meditation
+    23: [24],     // Mining -> Smithery
+    21: [22],     // Meditation -> Philosophy
+    // Fishing branch
+    10: [13, 11], // Fishing -> Sailing, Ramming (11 is placeholder for Ramming if needed)
+    13: [14],     // Sailing -> Navigation
+    // Hunting branch
+    15: [18, 16], // Hunting -> Archery, Forestry
+    18: [19],     // Archery -> Spiritualism
+    16: [17],     // Forestry -> Mathematics
+};
+
+
+const StructureNames = {
+    1: "Village", 2: "Ruin", 5: "Farm", 6: "Windmill", 8: "Port",
+    12: "Lumber Hut", 13: "Sawmill", 17: "Temple", 18: "Forest Temple",
+    19: "Water Temple", 20: "Mountain Temple", 21: "Mine", 22: "Forge",
+    23: "Altar of Peace", 24: "Tower of Wisdom", 25: "Grand Bazaar",
+    26: "Emperor's Tomb", 27: "Gate of Power", 28: "Park of Fortune", 29: "Eye of God",
+    33: "Outpost", 37: "Spores", 38: "Swamp", 39: "Mycelium", 40: "Algae",
+    47: "Lighthouse", 48: "Bridge", 50: "Market", 69: "Ice Temple",
+    70: "Embassy", 71: "Road"
+};
+
+const ResourceType = {
+    0: "None",
+    1: "Game",
+    2: "Crop",
+    3: "Fish",
+    5: "Metal",
+    6: "Fruit",
+    7: "Spores",
+    8: "Starfish",
+    9: "AquaCrop",
+};

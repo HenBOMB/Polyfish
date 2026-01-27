@@ -2,12 +2,14 @@
     width: 120px;
     margin-left: 10px;
     margin-top: -30px;
+    pointer-events: none !important;
 }
 
 .mountain {
     background-size: cover !important;
     margin-left: 0px;
     margin-top: -24px;
+    pointer-events: none !important;
 }
 
 .structure {
@@ -21,18 +23,21 @@
     width: 70px !important;
     margin-left: 30px !important;
     margin-top: -25px !important;
+    pointer-events: none !important;
 }
 
 .ruins {
     width: 124px !important;
     margin-left: 5px !important;
     margin-top: -25px !important;
+    pointer-events: none !important;
 }
 
 .temple {
     width: 60px !important;
     margin-left: 40px !important;
     margin-top: -22px !important;
+    pointer-events: none !important;
 }
 
 .city {
@@ -40,6 +45,7 @@
     margin-left: 30px !important;
     z-index: 4;
     margin-top: -50px;
+    pointer-events: none !important;
 }
 
 .city div {
@@ -68,6 +74,7 @@
     width: 60px !important;
     margin-left: 40px !important;
     margin-top: -22px !important;
+    pointer-events: none !important;
 }
 
 .animal {
@@ -120,8 +127,48 @@
 }
 
 .exausted {
-    opacity: .8;
-    filter: brightness(1.6) saturate(0);
+    opacity: 0.6 !important;
+    filter: grayscale(100%) !important;
+}
+
+.selected-unit-highlight {
+    filter: drop-shadow(0 0 5px white) !important;
+    animation: pulse-unit 1.5s infinite;
+}
+
+@keyframes pulse-unit {
+    0% {
+        transform: scale(1);
+        filter: drop-shadow(0 0 2px white);
+    }
+
+    50% {
+        transform: scale(1.05);
+        filter: drop-shadow(0 0 8px gold);
+    }
+
+    100% {
+        transform: scale(1);
+        filter: drop-shadow(0 0 2px white);
+    }
+}
+
+.flipped.selected-unit-highlight {
+    animation: pulse-unit-flipped 1.5s infinite;
+}
+
+@keyframes pulse-unit-flipped {
+    0% {
+        transform: scaleX(-1) scale(1);
+    }
+
+    50% {
+        transform: scaleX(-1) scale(1.05);
+    }
+
+    100% {
+        transform: scaleX(-1) scale(1);
+    }
 }
 
 
@@ -167,6 +214,10 @@
     margin-top: -30px;
 }
 
+.move-item:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
 .health {
     color: white;
     font-weight: 800;
@@ -201,4 +252,8 @@
     background-size: contain;
     background-repeat: no-repeat;
     background-position: center;
+}
+
+.fog {
+    filter: brightness(0.6) grayscale(0.5) !important;
 }

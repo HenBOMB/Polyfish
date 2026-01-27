@@ -188,7 +188,21 @@ pub fn set_visible_tiles(state: &mut GameState, player_id: PlayerId) -> UndoCall
     let old_visibility = state._visible_tiles.clone();
 
     // Clear current visibility
+    // Clear current visibility
     state._visible_tiles.clear();
+
+    // Check Internal FOW Toggle (God Mode for AI Training)
+    if !state.settings._fow {
+        for (idx, tile) in state.tiles.iter_mut() {
+            state._visible_tiles.insert(*idx, true);
+            tile.explorers.insert(player_id); // Grant exploration too (breaks score, but requested)
+        }
+
+        return Box::new(move |s| {
+            s._visible_tiles = old_visibility;
+            // Note: We don't undo explorer status as it's complex and this mode is for training/debug
+        });
+    }
 
     // Get the tribe
     if let Some(tribe) = state.tribes.get(&player_id) {

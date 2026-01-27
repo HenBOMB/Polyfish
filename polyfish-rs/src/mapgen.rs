@@ -3,6 +3,7 @@
 //! Generates a GameState with a procedural map.
 
 use crate::coords::Coords;
+use crate::default_fow;
 use crate::states::GameSettings;
 use crate::states::{GameState, TileState, TribeState};
 use crate::types::{ClimateType, ModeType, ResourceType, TerrainType, TribeType};
@@ -778,7 +779,8 @@ pub fn generate(settings: MapGenSettings) -> GameState {
     let mut game_state = GameState::default();
     game_state.settings.size = size;
     game_state.settings.tile_count = tile_count;
-    game_state.settings._fow = false;
+    game_state.settings._fow = default_fow();
+    game_state.settings._max_tribe_count = settings.tribes.len() as i32;
 
     let mut tribe_id_map: HashMap<TribeType, i32> = HashMap::new();
     for (i, &tribe) in settings.tribes.iter().enumerate() {
@@ -879,7 +881,12 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                     if gen_tile.tribe_affinity == Some(TribeType::Luxidoor) {
                         city.level = 3;
                         city.production = 3;
-                        city.border_size = 1; // "doesn't get the first reward" (border expansion/workshop)
+                        city.border_size = 1;
+                        // Luxidoor starts at level 3 but doesn't get to pick the first 2 rewards
+                        // Pre-fill them so the reward generator skips them
+                        use crate::types::RewardType;
+                        city.rewards.insert(RewardType::Workshop);
+                        city.rewards.insert(RewardType::Resources);
                     } else {
                         city.level = 1;
                         city.production = 1;
@@ -975,7 +982,21 @@ pub fn generate(settings: MapGenSettings) -> GameState {
     // Territory and Ruling City Coords
     for tribe in game_state.tribes.values_mut() {
         for city in &mut tribe.cities {
-            city._territory = circle(city.tile_index, city.border_size, size);
+            // Generate filled square for territory (Polytopia style), replacing perimeter-only 'circle'
+            let mut territory = Vec::new();
+            let (cx, cy) = get_coords(city.tile_index, size);
+            let r = city.border_size;
+
+            for dy in -r..=r {
+                for dx in -r..=r {
+                    let nx = cx + dx;
+                    let ny = cy + dy;
+                    if nx >= 0 && nx < size && ny >= 0 && ny < size {
+                        territory.push(ny * size + nx);
+                    }
+                }
+            }
+            city._territory = territory;
         }
     }
 
@@ -1005,12 +1026,24 @@ pub fn generate(settings: MapGenSettings) -> GameState {
             for &idx in &city._territory {
                 if let Some(t) = game_state.tiles.get_mut(&idx) {
                     t.ruling_city_coords = Some(city_coords_obj);
-                    t.explorers.insert(tribe.id);
                 }
             }
-            // Also reveal city tile itself
-            if let Some(t) = game_state.tiles.get_mut(&city.tile_index) {
-                t.explorers.insert(tribe.id);
+
+            // Mark vision area as explored (Radius = border_size + 1)
+            // This is square vision as per Polytopia rules
+            let vision_dist = city.border_size + 1;
+            let (cx, cy) = (city_coords.0, city_coords.1);
+            for dy in -vision_dist..=vision_dist {
+                for dx in -vision_dist..=vision_dist {
+                    let nx = cx + dx;
+                    let ny = cy + dy;
+                    if nx >= 0 && nx < size && ny >= 0 && ny < size {
+                        let idx = ny * size + nx;
+                        if let Some(t) = game_state.tiles.get_mut(&idx) {
+                            t.explorers.insert(tribe.id);
+                        }
+                    }
+                }
             }
         }
     }

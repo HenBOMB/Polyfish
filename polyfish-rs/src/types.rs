@@ -145,7 +145,6 @@ pub enum RewardType {
     SuperUnit = 6,
     Resources = 7,
     PopGrowth = 8,
-    Rebellion = 9,
 }
 
 /// Unit types

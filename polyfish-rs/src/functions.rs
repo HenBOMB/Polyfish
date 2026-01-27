@@ -617,17 +617,18 @@ pub fn calculate_detailed_tribe_score(state: &GameState, player_id: PlayerId) ->
 
     // 100 per level, 20 per territory
     for city in &tribe.cities {
-        score += city.level * 100 + (city._territory.len() as i32 * 20);
+        // City score: 100 + 50 per level above 1
+        let city_score = if city.level >= 1 {
+            100 + (city.level - 1) * 50
+        } else {
+            0
+        };
+        // Territory: 20 per tile
+        score += city_score + (city._territory.len() as i32 * 20);
 
-        // Monuments and special rewards
-        // 40 for city itself, 5 for each reward after first (capped)
-        if city.rewards.len() > 1 {
-            let count = city.rewards.len().min(6) as i32;
-            score += 40 + (count - 1) * 5;
-        }
-
+        // Park: 250 points
         if city.rewards.contains(&RewardType::Park) {
-            score += 300;
+            score += 250;
         }
     }
 

@@ -364,14 +364,14 @@ pub struct GameSettings {
     pub _max_tribe_count: i32,
 }
 
-fn default_turn() -> i32 {
+pub fn default_turn() -> i32 {
     1
 }
-fn default_max_turns() -> i32 {
+pub fn default_max_turns() -> i32 {
     30
 }
-fn default_fow() -> bool {
-    true
+pub fn default_fow() -> bool {
+    false
 }
 
 impl Default for GameSettings {
