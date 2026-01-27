@@ -1,5 +1,6 @@
 import { CityState, GameState, TileState, UnitState } from "./states";
 import { getAdjacentTiles, getPovTerritorry, getAdjacentIndexes, isAdjacentToEnemy, isAquaticOrCanFly, isSteppable, isWaterTerrain, isNavalUnit, getTechCost, getPovTribe, isSkilledIn, getUnitAttack, getUnitMovement, isRoadpathAndUsable, getMaxHealth, getAlliesNearTile, isTechUnlocked, isEnemyCity, isUnderSiege, getTechSettings, getTechUnitType, isTileOccupied, getEnemiesNearTile, isTileFrozen, getTechStructure, getCityOwningTile, isResourceVisible, getEnemyIndexesInRange, getReplacedOrTechSettings, isTileExplored, hasEffect, getStructureAt, getUnitSettings, getUnitAt, getCityUnitCount } from './functions';
+import { MODEL_CONFIG } from "../aistate";
 import { StructureSettings } from "./settings/StructureSettings";
 import { SkillType, ResourceType, RewardType, StructureType, TechnologyType, TerrainType, UnitType, AbilityType, EffectType } from "./types";
 import { UnitSettings } from "./settings/UnitSettings";
@@ -32,16 +33,16 @@ import { ResourceSettings } from "./settings/ResourceSettings";
 import BreakIce from "./moves/abilities/BreakIce";
 import Drain from "./moves/abilities/Drain";
 
-export type Prediction = { 
-	pi_action: number[]; 
-	pi_source: number[]; 
-	pi_target: number[]; 
-	pi_struct: number[]; 
-	pi_skill: number[]; 
-	pi_unit: number[]; 
-	pi_tech: number[]; 
-	pi_reward: number[]; 
-	v_win: number 
+export type Prediction = {
+	pi_action: number[];
+	pi_source: number[];
+	pi_target: number[];
+	pi_struct: number[];
+	pi_skill: number[];
+	pi_unit: number[];
+	pi_tech: number[];
+	pi_reward: number[];
+	v_win: number
 	// v_eco: number 
 	// v_mil: number 
 };
@@ -53,157 +54,157 @@ interface ReachableNode {
 }
 
 const UnitToSpawnableID: Record<UnitType, number> = {
-	[UnitType.None]: 		-1,
-	[UnitType.Dinghy]: 		-1,
-	[UnitType.Pirate]: 		-1,
-	[UnitType.Giant]: 		-1,
-	[UnitType.DragonEgg]: 	-1,
-	[UnitType.BabyDragon]: 	-1,
-	[UnitType.FireDragon]: 	-1,
-	[UnitType.Crab]: 		-1,
-	[UnitType.Centipede]: 	-1,
-	[UnitType.Segment]: 	-1,
-	[UnitType.Gaami]: 		-1,
-	[UnitType.Dagger]: 		-1,
-	[UnitType.Raft]: 		-1,
-	[UnitType.Juggernaut]: 	-1,
+	[UnitType.None]: -1,
+	[UnitType.Dinghy]: -1,
+	[UnitType.Pirate]: -1,
+	[UnitType.Giant]: -1,
+	[UnitType.DragonEgg]: -1,
+	[UnitType.BabyDragon]: -1,
+	[UnitType.FireDragon]: -1,
+	[UnitType.Crab]: -1,
+	[UnitType.Centipede]: -1,
+	[UnitType.Segment]: -1,
+	[UnitType.Gaami]: -1,
+	[UnitType.Dagger]: -1,
+	[UnitType.Raft]: -1,
+	[UnitType.Juggernaut]: -1,
 
-	[UnitType.Warrior]:		0,
-	[UnitType.Rider]: 	    1,
-	[UnitType.Amphibian]:   2,
-	[UnitType.Hexapod]: 	3,
+	[UnitType.Warrior]: 0,
+	[UnitType.Rider]: 1,
+	[UnitType.Amphibian]: 2,
+	[UnitType.Hexapod]: 3,
 
-	[UnitType.Knight]: 	    4,
-	[UnitType.Tridention]:  5,
-	[UnitType.Doomux]: 		6,
-	
-	[UnitType.Defender]: 	7,
-	[UnitType.Cloak]: 	 	8,
-	[UnitType.Kiton]: 		9,
+	[UnitType.Knight]: 4,
+	[UnitType.Tridention]: 5,
+	[UnitType.Doomux]: 6,
 
-	[UnitType.Swordsman]: 	10,
+	[UnitType.Defender]: 7,
+	[UnitType.Cloak]: 8,
+	[UnitType.Kiton]: 9,
 
-	[UnitType.MindBender]: 	11,
-	[UnitType.Shaman]: 		12,
+	[UnitType.Swordsman]: 10,
 
-	[UnitType.Archer]: 		13,
-	[UnitType.IceArcher]: 	14,
-	[UnitType.Phychi]: 		15,
-	[UnitType.Catapult]: 	16,
-	[UnitType.Exida]: 		17,
-	
-	[UnitType.Raychi]: 		18,
-	[UnitType.Scout]: 		19,
-	[UnitType.Bomber]: 		20,
-	[UnitType.Rammer]: 		21,
-	
-	[UnitType.Polytaur]: 	22,
-	[UnitType.Mooni]: 		23,
+	[UnitType.MindBender]: 11,
+	[UnitType.Shaman]: 12,
+
+	[UnitType.Archer]: 13,
+	[UnitType.IceArcher]: 14,
+	[UnitType.Phychi]: 15,
+	[UnitType.Catapult]: 16,
+	[UnitType.Exida]: 17,
+
+	[UnitType.Raychi]: 18,
+	[UnitType.Scout]: 19,
+	[UnitType.Bomber]: 20,
+	[UnitType.Rammer]: 21,
+
+	[UnitType.Polytaur]: 22,
+	[UnitType.Mooni]: 23,
 	[UnitType.IceFortress]: 24,
-	[UnitType.BattleSled]: 	25,
+	[UnitType.BattleSled]: 25,
 }
 
 const StructToBuildableID: Record<StructureType, number> = {
-	[StructureType.None]: 			-1,
-	[StructureType.Village]: 		-1,
-	[StructureType.Ruin]: 			-1,
-	[StructureType.Lighthouse]: 	-1,
-	
-	[StructureType.Road]: 			0,
-	[StructureType.Bridge]: 		1,
-	[StructureType.Market]: 		2,
-	[StructureType.Outpost]: 		3,
+	[StructureType.None]: -1,
+	[StructureType.Village]: -1,
+	[StructureType.Ruin]: -1,
+	[StructureType.Lighthouse]: -1,
 
-	[StructureType.Farm]: 			4,
-	[StructureType.Windmill]: 		5,
-	[StructureType.Embassy]: 		6,
-	[StructureType.Temple]: 		7,
+	[StructureType.Road]: 0,
+	[StructureType.Bridge]: 1,
+	[StructureType.Market]: 2,
+	[StructureType.Outpost]: 3,
 
-	[StructureType.Mine]: 			8,
-	[StructureType.Forge]: 			9,
+	[StructureType.Farm]: 4,
+	[StructureType.Windmill]: 5,
+	[StructureType.Embassy]: 6,
+	[StructureType.Temple]: 7,
+
+	[StructureType.Mine]: 8,
+	[StructureType.Forge]: 9,
 	[StructureType.MountainTemple]: 10,
 
-	[StructureType.Port]: 			11,
-	[StructureType.WaterTemple]: 	12,
-	[StructureType.IceTemple]: 		13,
+	[StructureType.Port]: 11,
+	[StructureType.WaterTemple]: 12,
+	[StructureType.IceTemple]: 13,
 
-	[StructureType.LumberHut]: 		14,
-	[StructureType.Sawmill]: 		15,
-	[StructureType.ForestTemple]: 	16,
+	[StructureType.LumberHut]: 14,
+	[StructureType.Sawmill]: 15,
+	[StructureType.ForestTemple]: 16,
 
-	[StructureType.AltarOfPeace]: 	17,
-	[StructureType.TowerOfWisdom]: 	18,
-	[StructureType.GrandBazaar]: 	19,
-	[StructureType.EmperorsTomb]: 	20,
-	[StructureType.GateOfPower]: 	21,
-	[StructureType.ParkOfFortune]: 	22,
-	[StructureType.EyeOfGod]: 		23,
-	
-	[StructureType.Spores]: 		24,
-	[StructureType.Swamp]: 			25,
-	[StructureType.Mycelium]: 		26,
+	[StructureType.AltarOfPeace]: 17,
+	[StructureType.TowerOfWisdom]: 18,
+	[StructureType.GrandBazaar]: 19,
+	[StructureType.EmperorsTomb]: 20,
+	[StructureType.GateOfPower]: 21,
+	[StructureType.ParkOfFortune]: 22,
+	[StructureType.EyeOfGod]: 23,
+
+	[StructureType.Spores]: 24,
+	[StructureType.Swamp]: 25,
+	[StructureType.Mycelium]: 26,
 }
 
 const TechToResearchableID: Record<TechnologyType, number> = {
-	[TechnologyType.Unrequired]:			-1,
-	[TechnologyType.BeyondComprehension]: 	-1,
+	[TechnologyType.Unrequired]: -1,
+	[TechnologyType.BeyondComprehension]: -1,
 
-	[TechnologyType.Riding]: 		0,
-	[TechnologyType.Amphibian]: 	0,
-	[TechnologyType.Roads]: 		1,
-	[TechnologyType.Trade]: 		2,
-	[TechnologyType.FreeSpirit]: 	3,
-	[TechnologyType.FreeDiving]: 	3,
-	[TechnologyType.Chivalry]: 		4,
-	[TechnologyType.Spearing]: 		4,
-	[TechnologyType.ShockTactics]: 	4,
+	[TechnologyType.Riding]: 0,
+	[TechnologyType.Amphibian]: 0,
+	[TechnologyType.Roads]: 1,
+	[TechnologyType.Trade]: 2,
+	[TechnologyType.FreeSpirit]: 3,
+	[TechnologyType.FreeDiving]: 3,
+	[TechnologyType.Chivalry]: 4,
+	[TechnologyType.Spearing]: 4,
+	[TechnologyType.ShockTactics]: 4,
 
-	[TechnologyType.Organization]: 	5,
-	[TechnologyType.Farming]: 		6,
-	[TechnologyType.Construction]: 	7,
-	[TechnologyType.Recycling]: 	7,
-	[TechnologyType.Strategy]: 		8,
-	[TechnologyType.Diplomacy]: 	9,
-	
-	[TechnologyType.Climbing]: 		10,
-	[TechnologyType.Mining]: 		11,
-	[TechnologyType.Smithery]: 		12,
-	[TechnologyType.Meditation]: 	13,
-	[TechnologyType.Philosophy]: 	14,
+	[TechnologyType.Organization]: 5,
+	[TechnologyType.Farming]: 6,
+	[TechnologyType.Construction]: 7,
+	[TechnologyType.Recycling]: 7,
+	[TechnologyType.Strategy]: 8,
+	[TechnologyType.Diplomacy]: 9,
 
-	[TechnologyType.Fishing]: 		15,
-	[TechnologyType.IceFishing]: 	15,
-	[TechnologyType.Frostwork]: 	15,
-	[TechnologyType.Sailing]: 		16,
-	[TechnologyType.Sledding]: 		16,
-	[TechnologyType.Pascetism]: 	16,
-	[TechnologyType.Navigation]: 	17,
-	[TechnologyType.PolarWarfare]: 	17,
-	[TechnologyType.Oceantology]: 	17,
-	[TechnologyType.Ramming]: 		18,
-	[TechnologyType.Hydrology]: 	18,
-	[TechnologyType.Aquatism]: 		19,
-	[TechnologyType.Polarism]: 		19,
+	[TechnologyType.Climbing]: 10,
+	[TechnologyType.Mining]: 11,
+	[TechnologyType.Smithery]: 12,
+	[TechnologyType.Meditation]: 13,
+	[TechnologyType.Philosophy]: 14,
 
-	[TechnologyType.Hunting]: 		20,
-	[TechnologyType.Archery]: 		21,
-	[TechnologyType.Spiritualism]: 	22,
-	[TechnologyType.Forestry]: 		23,
-	[TechnologyType.ForestMagic]: 	23,
-	[TechnologyType.Mathematics]: 	24,
+	[TechnologyType.Fishing]: 15,
+	[TechnologyType.IceFishing]: 15,
+	[TechnologyType.Frostwork]: 15,
+	[TechnologyType.Sailing]: 16,
+	[TechnologyType.Sledding]: 16,
+	[TechnologyType.Pascetism]: 16,
+	[TechnologyType.Navigation]: 17,
+	[TechnologyType.PolarWarfare]: 17,
+	[TechnologyType.Oceantology]: 17,
+	[TechnologyType.Ramming]: 18,
+	[TechnologyType.Hydrology]: 18,
+	[TechnologyType.Aquatism]: 19,
+	[TechnologyType.Polarism]: 19,
+
+	[TechnologyType.Hunting]: 20,
+	[TechnologyType.Archery]: 21,
+	[TechnologyType.Spiritualism]: 22,
+	[TechnologyType.Forestry]: 23,
+	[TechnologyType.ForestMagic]: 23,
+	[TechnologyType.Mathematics]: 24,
 }
 
 const RewardToRewardableID: Record<RewardType, number> = {
-	[RewardType.None]: 		   -1,
-	[RewardType.Workshop]: 		0,
-	[RewardType.Explorer]: 		1,
-	[RewardType.Resources]: 	0,
-	[RewardType.CityWall]: 		1,
-	[RewardType.PopGrowth]: 	0,
-	[RewardType.BorderGrowth]:	1,
-	[RewardType.Park]: 			0,
-	[RewardType.SuperUnit]: 	1,
-	[RewardType.Rebellion]: 	0,
+	[RewardType.None]: -1,
+	[RewardType.Workshop]: 0,
+	[RewardType.Explorer]: 1,
+	[RewardType.Resources]: 0,
+	[RewardType.CityWall]: 1,
+	[RewardType.PopGrowth]: 0,
+	[RewardType.BorderGrowth]: 1,
+	[RewardType.Park]: 0,
+	[RewardType.SuperUnit]: 1,
+	[RewardType.Rebellion]: 0,
 }
 
 export class MoveGenerator {
@@ -270,17 +271,17 @@ export class MoveGenerator {
 	static transpose: Map<string, Move[]> = new Map();
 
 	static legal(state: GameState): Move[] {
-		if(state.settings._pendingRewards.length) {
+		if (state.settings._pendingRewards.length) {
 			// Return a copy to prevent the game from mutating it and causing madness
 			return state.settings._pendingRewards.slice();
 		}
-		
+
 		const moves: Move[] = [new EndTurn()];
 
 		ArmyMovesGenerator.legal(state, moves);
 
 		EconMovesGenerator.legal(state, moves);
-		
+
 		return moves;
 	}
 
@@ -290,50 +291,64 @@ export class MoveGenerator {
 
 	static fromPrediction(state: GameState, prediction: Prediction, legal?: Move[]): [Move, number, number][] {
 		const {
-            pi_action, pi_source: pi_actor, pi_target,
-            pi_struct, pi_skill, pi_unit,
-            pi_tech, pi_reward,
-            // v_win
-        } = prediction;
-		
+			pi_action, pi_source: pi_actor, pi_target,
+			pi_struct, pi_skill, pi_unit,
+			pi_tech, pi_reward,
+			// v_win
+		} = prediction;
+
+		// Convert tile index to network grid index (accounting for padding)
+		const dim_map_size = MODEL_CONFIG.dim_map_size;
+		const game_size = state.settings.size;
+		const offset = Math.floor((dim_map_size - game_size) / 2);
+		const tileToGridIndex = (tileIndex: number): number => {
+			const x = tileIndex % game_size;
+			const y = Math.floor(tileIndex / game_size);
+			const gridX = x + offset;
+			const gridY = y + offset;
+			return gridY * dim_map_size + gridX;
+		};
+
 		return (legal || MoveGenerator.legal(state)).map((move, i) => {
-			let prob = pi_action[move.moveType-1];
-			
-			if(move.hasSrc()) {
-				prob *= pi_actor[move.getSrc()];
+			let prob = pi_action[move.moveType - 1];
+
+			if (move.hasSrc()) {
+				const gridIndex = tileToGridIndex(move.getSrc());
+				prob *= pi_actor[gridIndex] || 0; // Use grid index for spatial predictions
 			}
 
-			if(move.hasTarget()) {
-				prob *= pi_target[move.getTarget()];
+			if (move.hasTarget()) {
+				const gridIndex = tileToGridIndex(move.getTarget());
+				prob *= pi_target[gridIndex] || 0; // Use grid index for spatial predictions
 			}
-	
+
 			switch (move.moveType) {
 				case MoveType.Ability:
 					prob *= pi_skill[move.getType<AbilityType>()];
 					break;
-				
+
 				case MoveType.Summon:
 					prob *= pi_unit[UnitToSpawnableID[move.getType<UnitType>()]];
 					break;
-	
+
 				case MoveType.Build:
 					prob *= pi_struct[StructToBuildableID[move.getType<StructureType>()]];
 					break;
-	
+
 				case MoveType.Research:
 					prob *= pi_tech[TechToResearchableID[move.getType<TechnologyType>()]];
 					break;
-	
+
 				case MoveType.Reward:
 					const rewardChoiceType = RewardToRewardableID[move.getType<RewardType>()];
-					if(rewardChoiceType === 0) {
+					if (rewardChoiceType === 0) {
 						prob *= (1 - pi_reward[0]);
-					} 
+					}
 					else if (rewardChoiceType === 1) {
 						prob *= pi_reward[0];
 					}
 					break;
-	
+
 				default:
 					break;
 			}
@@ -345,7 +360,7 @@ export class MoveGenerator {
 
 export class EconMovesGenerator {
 	static legal(state: GameState, moves: Move[]): void {
-		if(state.settings._pendingRewards.length) {
+		if (state.settings._pendingRewards.length) {
 			moves = state.settings._pendingRewards.slice();
 			return
 		}
@@ -360,11 +375,11 @@ export class EconMovesGenerator {
 			const settings = getTechSettings(x);
 
 			// Tasks
-			if(settings.unlocksTask) {
+			if (settings.unlocksTask) {
 				settings.unlocksTask.forEach(y => {
 					const settings = TaskSettings[y];
-					if(!pov.builtUniqueImprovements.has(settings.structureType)) {
-						if(settings.task(state)) {
+					if (!pov.builtUniqueImprovements.has(settings.structureType)) {
+						if (settings.task(state)) {
 							structures.add(settings.structureType);
 						}
 					}
@@ -372,60 +387,60 @@ export class EconMovesGenerator {
 			}
 
 			const realSettings = getReplacedOrTechSettings(pov, x);
-			
+
 			// Actions
-			if(realSettings.unlocksAbility) {
-				if(!settings.explicitCost || settings.explicitCost <= pov.stars) {
+			if (realSettings.unlocksAbility) {
+				if (!settings.explicitCost || settings.explicitCost <= pov.stars) {
 					abilities.add(realSettings.unlocksAbility);
 				}
 			}
 
 
 			// Structures
-			if(realSettings.unlocksStructure && pov.stars >= (StructureSettings[realSettings.unlocksStructure].cost || 0)) {
+			if (realSettings.unlocksStructure && pov.stars >= (StructureSettings[realSettings.unlocksStructure].cost || 0)) {
 				structures.add(realSettings.unlocksStructure);
 			}
 
 			// Other tech
-			if(settings.next) {
+			if (settings.next) {
 				for (let j = 0; j < settings.next.length; j++) {
-					if(isTechUnlocked(pov, settings.next[j])) {
+					if (isTechUnlocked(pov, settings.next[j])) {
 						continue;
 					}
-	
+
 					const cost = getTechCost(pov, settings.next[j]);
-	
-					if(cost > pov.stars) {
+
+					if (cost > pov.stars) {
 						continue;
 					}
-	
+
 					moves.push(new Research(settings.next[j]));
 				}
 			}
 		});
 
- 		for(let i = 0; i < territory.length; i++) {
+		for (let i = 0; i < territory.length; i++) {
 			const idx = territory[i];
 			const enemyOnTile = isTileOccupied(state, idx, true);
-			
-			if(enemyOnTile) {
+
+			if (enemyOnTile) {
 				continue;
 			}
 
-			if(!isTileExplored(state, idx)) {
+			if (!isTileExplored(state, idx)) {
 				continue
 			}
 
 			const tile = state.tiles[idx];
 			const resource = state.resources[idx];
 			const structure = state.structures[idx];
-			
-			
+
+
 			// ! Harvesting ! //
 
-			if(resource) {
+			if (resource) {
 				const settings = ResourceSettings[resource!.type];
-				if((settings.cost || 0) <= pov.stars
+				if ((settings.cost || 0) <= pov.stars
 					&& !settings.structType
 					&& !structure
 					&& !enemyOnTile
@@ -437,29 +452,29 @@ export class EconMovesGenerator {
 
 			// ! Building ! //
 
-			if(!structure) {
-				for(const x of structures) {
+			if (!structure) {
+				for (const x of structures) {
 					const structType = Number(x) as StructureType;
 					const settings = StructureSettings[structType];
 
-					
-					if(!settings.terrainType?.has(tile.type)) {
+
+					if (!settings.terrainType?.has(tile.type)) {
 						continue;
 					}
-					
-					if(settings.limitedPerCity) {
+
+					if (settings.limitedPerCity) {
 						const limited = getCityOwningTile(state, tile.coords.idx)!._territory.some(x => state.structures[x]?.type == structType);
-						if(limited) {
+						if (limited) {
 							continue;
 						}
 					}
-	
-					if(settings.adjacentTypes && !getAdjacentIndexes(state, tile.coords.idx).some(x => state.structures[x]? 
+
+					if (settings.adjacentTypes && !getAdjacentIndexes(state, tile.coords.idx).some(x => state.structures[x] ?
 						settings.adjacentTypes!.has(state.structures[x]!.type) : false
 					)) {
 						continue;
 					}
-		
+
 					moves.push(new Structure(
 						tile.coords.idx,
 						structType
@@ -469,29 +484,29 @@ export class EconMovesGenerator {
 
 			// ! Abilities ! //
 
-			if(structure) {
+			if (structure) {
 				// TODO Embassy
 				// if(tile.capitalOf > 0 && tile.capitalOf !== pov.owner && structType !== StructureType.Embassy) {
 				// }
-				if(StructureSettings[state.structures[tile.coords.idx]!.type].cost) {
-					if(abilities.has(AbilityType.Destroy)) {
-						moves.push(new Destroy(tile.coords.idx));	
+				if (StructureSettings[state.structures[tile.coords.idx]!.type].cost) {
+					if (abilities.has(AbilityType.Destroy)) {
+						moves.push(new Destroy(tile.coords.idx));
 					}
-					else if(abilities.has(AbilityType.Decompose)) {
-						moves.push(new Decompose(tile.coords.idx));	
+					else if (abilities.has(AbilityType.Decompose)) {
+						moves.push(new Decompose(tile.coords.idx));
 					}
 				}
 			}
-			else if(tile.type === TerrainType.Forest) {
-				if(abilities.has(AbilityType.ClearForest)) {
+			else if (tile.type === TerrainType.Forest) {
+				if (abilities.has(AbilityType.ClearForest)) {
 					moves.push(new ClearForest(tile.coords.idx));
 				}
-				if(abilities.has(AbilityType.BurnForest)) {
+				if (abilities.has(AbilityType.BurnForest)) {
 					moves.push(new BurnForest(tile.coords.idx));
 				}
 			}
-			else if(tile.type == TerrainType.Field) {
-				if(abilities.has(AbilityType.GrowForest)) {
+			else if (tile.type == TerrainType.Field) {
+				if (abilities.has(AbilityType.GrowForest)) {
 					moves.push(new GrowForest(tile.coords.idx));
 				}
 			}
@@ -508,35 +523,35 @@ export class EconMovesGenerator {
 		const territory = getPovTerritorry(state);
 		const abilities = new Set(pov.tech_vanilla.filter(x => {
 			const settings = getTechSettings(x);
-			if(settings.explicitCost && settings.explicitCost > pov.stars) {
+			if (settings.explicitCost && settings.explicitCost > pov.stars) {
 				return false;
 			}
 			return settings.unlocksAbility;
 		}).map(x => getTechSettings(x).unlocksAbility));
 
-		for(let i = 0; i < territory.length; i++) {
+		for (let i = 0; i < territory.length; i++) {
 			const tile = state.tiles[territory[i]];
 
-			if(state.structures[tile.coords.idx]) {
-				if(StructureSettings[state.structures[tile.coords.idx]!.type].cost) {
-					if(abilities.has(AbilityType.Destroy)) {
-						moves.push(new Destroy(tile.coords.idx));	
+			if (state.structures[tile.coords.idx]) {
+				if (StructureSettings[state.structures[tile.coords.idx]!.type].cost) {
+					if (abilities.has(AbilityType.Destroy)) {
+						moves.push(new Destroy(tile.coords.idx));
 					}
-					else if(abilities.has(AbilityType.Decompose)) {
-						moves.push(new Decompose(tile.coords.idx));	
+					else if (abilities.has(AbilityType.Decompose)) {
+						moves.push(new Decompose(tile.coords.idx));
 					}
 				}
 			}
-			else if(tile.type === TerrainType.Forest) {
-				if(abilities.has(AbilityType.ClearForest)) {
+			else if (tile.type === TerrainType.Forest) {
+				if (abilities.has(AbilityType.ClearForest)) {
 					moves.push(new ClearForest(tile.coords.idx));
 				}
-				if(abilities.has(AbilityType.BurnForest)) {
+				if (abilities.has(AbilityType.BurnForest)) {
 					moves.push(new BurnForest(tile.coords.idx));
 				}
 			}
-			else if(tile.type == TerrainType.Field) {
-				if(abilities.has(AbilityType.GrowForest)) {
+			else if (tile.type == TerrainType.Field) {
+				if (abilities.has(AbilityType.GrowForest)) {
 					moves.push(new GrowForest(tile.coords.idx));
 				}
 			}
@@ -552,22 +567,22 @@ export class EconMovesGenerator {
 		const pov = getPovTribe(state);
 		const territory = getPovTerritorry(state);
 
-		for(let i = 0; i < territory.length; i++) {
+		for (let i = 0; i < territory.length; i++) {
 			const idx = territory[i];
 			const resource = state.resources[idx];
 
-			if(!resource) {
+			if (!resource) {
 				continue;
 			}
-		
+
 			const settings = ResourceSettings[resource.type];
-		
+
 			// Too expensive
 			// Resource requires a structure
 			// There is a structure
 			// Tile blocked by enemy
 			// Limited by tech visibility or missing tech
-			if((settings.cost || 0) > pov.stars
+			if ((settings.cost || 0) > pov.stars
 				|| settings.structType
 				|| state.structures[idx]
 				|| isTileOccupied(state, idx, true)
@@ -576,74 +591,74 @@ export class EconMovesGenerator {
 			) {
 				continue;
 			}
-		
+
 			moves.push(new Harvest(idx));
 		}
 	}
-	
+
 	static structures(state: GameState, moves: Move[]) {
 		const pov = getPovTribe(state);
 		const structTypes: Set<StructureType> = new Set();
 
-		for(let i = 0; i < 7; i++) {
+		for (let i = 0; i < 7; i++) {
 			const task = TaskSettings[i as keyof typeof TaskSettings];
-			if(task.techType && !isTechUnlocked(pov, task.techType)) {
+			if (task.techType && !isTechUnlocked(pov, task.techType)) {
 				continue;
 			}
-			if(pov.builtUniqueImprovements.has(task.structureType)) {
+			if (pov.builtUniqueImprovements.has(task.structureType)) {
 				continue;
 			}
-			if(task.task(state)) {
+			if (task.task(state)) {
 				structTypes.add(task.structureType);
 			}
 		}
 
-		for(let i = 0; i < pov.tech_vanilla.length; i++) {
+		for (let i = 0; i < pov.tech_vanilla.length; i++) {
 			const structType = getTechStructure(pov, pov.tech_vanilla[i]);
-	
-			if(!structType || pov.stars < getTechCost(pov, pov.tech_vanilla[i])) {
+
+			if (!structType || pov.stars < getTechCost(pov, pov.tech_vanilla[i])) {
 				continue
 			}
-	
+
 			structTypes.add(structType);
 		}
 
 		const territory = getPovTerritorry(state);
-	
-		for(let i = 0; i < territory.length; i++) {
+
+		for (let i = 0; i < territory.length; i++) {
 			const tile = state.tiles[territory[i]];
 
-			if(state.structures[tile.coords.idx]) {
+			if (state.structures[tile.coords.idx]) {
 				continue
 			}
 
-			if(tile._unitOwnerID && tile._unitOwnerID != pov.id) {
+			if (tile._unitOwnerID && tile._unitOwnerID != pov.id) {
 				continue
 			}
 
-			for(const x of structTypes) {
+			for (const x of structTypes) {
 				const structType = Number(x) as StructureType;
 				const settings = StructureSettings[structType];
 
-				if(!settings.terrainType?.has(tile.type)) {
-					if(tile.capitalOf !== pov.id || structType !== StructureType.Embassy) {
-						continue;
-					}
-				}
-				
-				if(settings.limitedPerCity) {
-					const limited = getCityOwningTile(state, tile.coords.idx)!._territory.some(x => state.structures[x]?.type == structType);
-					if(limited) {
+				if (!settings.terrainType?.has(tile.type)) {
+					if (tile.capitalOf !== pov.id || structType !== StructureType.Embassy) {
 						continue;
 					}
 				}
 
-				if(settings.adjacentTypes && !getAdjacentIndexes(state, tile.coords.idx).some(x => state.structures[x]? 
+				if (settings.limitedPerCity) {
+					const limited = getCityOwningTile(state, tile.coords.idx)!._territory.some(x => state.structures[x]?.type == structType);
+					if (limited) {
+						continue;
+					}
+				}
+
+				if (settings.adjacentTypes && !getAdjacentIndexes(state, tile.coords.idx).some(x => state.structures[x] ?
 					settings.adjacentTypes!.has(state.structures[x]!.type) : false
 				)) {
 					continue;
 				}
-	
+
 				moves.push(new Structure(
 					tile.coords.idx,
 					structType
@@ -651,7 +666,7 @@ export class EconMovesGenerator {
 			};
 		}
 	}
-	
+
 	static research(state: GameState, moves: Move[]) {
 		const pov = getPovTribe(state);
 
@@ -659,18 +674,18 @@ export class EconMovesGenerator {
 			const techState = pov.tech_vanilla[i];
 			const next = getTechSettings(techState).next;
 
-			if(!next) {
+			if (!next) {
 				continue;
 			}
 
 			for (let j = 0; j < next.length; j++) {
-				if(isTechUnlocked(pov, next[j])) {
+				if (isTechUnlocked(pov, next[j])) {
 					continue;
 				}
 
 				const cost = getTechCost(pov, next[j]);
 
-				if(cost > pov.stars) {
+				if (cost > pov.stars) {
 					continue;
 				}
 
@@ -678,14 +693,14 @@ export class EconMovesGenerator {
 			}
 		}
 	}
-	
+
 	static rewards(city: CityState): Move[] {
 		const rewards = [
-			[ RewardType.Workshop, RewardType.Explorer ],
-			[ RewardType.CityWall, RewardType.Resources ],
-			[ RewardType.PopGrowth, RewardType.BorderGrowth ],
-		][city.level-2] || [ RewardType.Park, RewardType.SuperUnit ];
-		if(rewards.some(x => city.rewards.has(x))) {
+			[RewardType.Workshop, RewardType.Explorer],
+			[RewardType.CityWall, RewardType.Resources],
+			[RewardType.PopGrowth, RewardType.BorderGrowth],
+		][city.level - 2] || [RewardType.Park, RewardType.SuperUnit];
+		if (rewards.some(x => city.rewards.has(x))) {
 			return [];
 		}
 		return rewards.map(rewardType => new Reward(city.tileIndex, rewardType));
@@ -694,7 +709,7 @@ export class EconMovesGenerator {
 
 export class ArmyMovesGenerator {
 	static legal(state: GameState, moves: Move[]) {
-		if(state.settings._pendingRewards.length) {
+		if (state.settings._pendingRewards.length) {
 			moves = state.settings._pendingRewards.slice();
 			return
 		}
@@ -712,53 +727,53 @@ export class ArmyMovesGenerator {
 		const idx = unit.coords.idx;
 
 		// Promote
-		if(!unit.veteran && unit.kills >= 3) {
+		if (!unit.veteran && unit.kills >= 3) {
 			_moves.push(new Promote(idx));
 		}
 
 		// Explode
-		if(!unit.attacked && isSkilledIn(unit, SkillType.Explode)) {
+		if (!unit.attacked && isSkilledIn(unit, SkillType.Explode)) {
 			const enemiesAround = getEnemiesNearTile(state, idx, 1, true).length;
-			if(enemiesAround) {
+			if (enemiesAround) {
 				_moves.push(new Explode(idx));
 			}
 		}
 
-		if(unit.moved || unit.attacked) {
+		if (unit.moved || unit.attacked) {
 			return [];
 		}
 
 		// Disband
-		if(isTechUnlocked(getPovTribe(state), TechnologyType.FreeSpirit)) {
+		if (isTechUnlocked(getPovTribe(state), TechnologyType.FreeSpirit)) {
 			_moves.push(new Disband(idx));
 		}
 
 		// Recover
-		if(unit.health < getMaxHealth(unit)) {
+		if (unit.health < getMaxHealth(unit)) {
 			_moves.push(new Recover(idx));
 		}
 
-		if(isSkilledIn(unit, SkillType.Heal, SkillType.Boost, SkillType.FreezeArea)) {
+		if (isSkilledIn(unit, SkillType.HealOthers, SkillType.Boost, SkillType.FreezeArea)) {
 			// Heal Others
-			if(isSkilledIn(unit, SkillType.Heal)) {
+			if (isSkilledIn(unit, SkillType.HealOthers)) {
 				const damagedAround = getAlliesNearTile(state, idx).some(x => x.health < getMaxHealth(x));
-				if(damagedAround) {
+				if (damagedAround) {
 					_moves.push(new HealOthers(idx));
 				}
 			}
-	
+
 			// Boost
-			else if(isSkilledIn(unit, SkillType.Boost)) {
+			else if (isSkilledIn(unit, SkillType.Boost)) {
 				const unboostedAround = getAlliesNearTile(state, idx).some(x => !hasEffect(x, EffectType.Boost));
-				if(unboostedAround) {
+				if (unboostedAround) {
 					_moves.push(new Boost(idx));
 				}
 			}
-	
+
 			// Freeze Area
-			else if(isSkilledIn(unit, SkillType.FreezeArea)) {
+			else if (isSkilledIn(unit, SkillType.FreezeArea)) {
 				const stuffAround = getEnemiesNearTile(state, idx, 1, true).some(x => !hasEffect(x, EffectType.Frozen) || !isTileFrozen(state, x.coords.idx));
-				if(stuffAround) {
+				if (stuffAround) {
 					_moves.push(new FreezeArea(idx));
 				}
 			}
@@ -774,14 +789,14 @@ export class ArmyMovesGenerator {
 		const targetCityIndex = capturer.coords.idx;
 		const struct = state.structures[targetCityIndex];
 		const resource = state.resources[targetCityIndex];
-		
-		if(struct) {
+
+		if (struct) {
 			switch (struct.type) {
 				case StructureType.Village:
-					if(!state.tiles[targetCityIndex].owner) {
+					if (!state.tiles[targetCityIndex].owner) {
 						moves.push(new Capture(capturer.coords.idx));
 					}
-					else if(state.tiles[targetCityIndex].owner !== capturer.owner) {
+					else if (state.tiles[targetCityIndex].owner !== capturer.owner) {
 						moves.push(new Capture(capturer.coords.idx));
 					}
 					break;
@@ -789,12 +804,12 @@ export class ArmyMovesGenerator {
 				case StructureType.Ruin:
 					moves.push(new Capture(capturer.coords.idx));
 					break;
-			
+
 				default:
 					break;
 			}
 		}
-		else if(resource && resource.type == ResourceType.Starfish && isTechUnlocked(pov, TechnologyType.Navigation)) {
+		else if (resource && resource.type == ResourceType.Starfish && isTechUnlocked(pov, TechnologyType.Navigation)) {
 			moves.push(new Capture(capturer.coords.idx));
 		}
 	}
@@ -811,7 +826,7 @@ export class ArmyMovesGenerator {
 		}
 		else {
 			// Skip other units that cant attack, eg: raft, mooni
-			if(getUnitAttack(attacker) < 0){
+			if (getUnitAttack(attacker) < 0) {
 				return [];
 			}
 			moves.push(
@@ -826,21 +841,21 @@ export class ArmyMovesGenerator {
 		const tribe = state.tribes[state.settings.currentPlayerTurnId];
 		const upgradables: UnitType[] = [];
 		const spawnables: UnitType[] = [];
-		
+
 		tribe.tech_vanilla.map(x => {
 			const unitType = getTechUnitType(tribe, x);
 
-			if(!unitType) {
+			if (!unitType) {
 				return null;
 			}
 
 			const settings = UnitSettings[unitType];
 
-			if(settings.cost < 1 || tribe.stars < settings.cost) {
+			if (settings.cost < 1 || tribe.stars < settings.cost) {
 				return null;
 			}
 
-			if(settings.upgradeFrom) {
+			if (settings.upgradeFrom) {
 				upgradables.push(unitType);
 			}
 			else {
@@ -848,20 +863,20 @@ export class ArmyMovesGenerator {
 			}
 		});
 
-		if(spawnables.length) {
+		if (spawnables.length) {
 			const cities = tribe.cities;
-			for(let i = 0; i < cities.length; i++) {
+			for (let i = 0; i < cities.length; i++) {
 				const targetIndex = cities[i].tileIndex;
-				if(getCityUnitCount(state, cities[i]) > cities[i].level || isTileOccupied(state, targetIndex)) {
+				if (getCityUnitCount(state, cities[i]) > cities[i].level || isTileOccupied(state, targetIndex)) {
 					continue;
 				}
-				for(let j = 0; j < spawnables.length; j++) {
+				for (let j = 0; j < spawnables.length; j++) {
 					const unitType = spawnables[j];
 					// If the unit has navigate, it tipically cannot move onto land
 					// allow spawning if the unit has at least 1 tile to move to
-					if(isSkilledIn(unitType, SkillType.Navigate)) {
+					if (isSkilledIn(unitType, SkillType.Navigate)) {
 						const hasWater = getAdjacentIndexes(state, targetIndex).some(x => isWaterTerrain(state.tiles[x]));
-						if(!hasWater) {
+						if (!hasWater) {
 							continue;
 						}
 					}
@@ -870,9 +885,9 @@ export class ArmyMovesGenerator {
 			}
 		}
 
-		if(upgradables.length) {
-			for(let i = 0; i < tribe.units.length; i++) {
-				if(tribe.units[i].type != UnitType.Raft || isTileOccupied(state, tribe.units[i].coords.idx)) {
+		if (upgradables.length) {
+			for (let i = 0; i < tribe.units.length; i++) {
+				if (tribe.units[i].type != UnitType.Raft || isTileOccupied(state, tribe.units[i].coords.idx)) {
 					continue;
 				}
 				for (let j = 0; j < upgradables.length; j++) {
@@ -885,12 +900,12 @@ export class ArmyMovesGenerator {
 	}
 
 	static steps(state: GameState, unit: UnitState, moves: Move[]) {
-		if(unit.moved) return;
-		
+		if (unit.moved) return;
+
 		const steps = Array.from(ArmyMovesGenerator.computeReachableTiles(state, unit).entries());
-		
-		for(const [tileIndex, ] of steps) {
-			if(unit.coords.idx == tileIndex) {
+
+		for (const [tileIndex,] of steps) {
+			if (unit.coords.idx == tileIndex) {
 				continue;
 			}
 			moves.push(new Step(unit.coords.idx, tileIndex));
@@ -905,34 +920,34 @@ export class ArmyMovesGenerator {
 		openList.push({ index: unit.coords.idx, cost: 0 });
 		reachable.set(unit.coords.idx, 0);
 
-		while(openList.length > 0) {
+		while (openList.length > 0) {
 			openList.sort((a, b) => a.cost - b.cost);
 			const current = openList.shift()!;
-	
+
 			if (current.terminal) {
 				continue;
 			}
-	
+
 			const neighbors = getAdjacentTiles(state, current.index);
-	
-			for(let i = 0; i < neighbors.length; i++) {
+
+			for (let i = 0; i < neighbors.length; i++) {
 				const tile = neighbors[i];
 				const index = tile.coords.idx;
 				if (index == unit.coords.idx) continue;
-	
+
 				if (!isSteppable(state, unit, tile)) {
 					continue;
 				}
-	
+
 				const moveCost = this.computeMovementCost(state, unit, current.index, tile);
 				if (moveCost < 0) continue;
-	
+
 				let newCost = current.cost + moveCost;
-	
+
 				if (newCost - effectiveMovement > 1e-6) continue;
-	
+
 				const terminal = this.isTerminal(state, unit, tile);
-	
+
 				const existingCost = reachable.get(index);
 				if (existingCost === undefined || newCost < existingCost) {
 					reachable.set(index, newCost);
@@ -948,18 +963,18 @@ export class ArmyMovesGenerator {
 		let cost = 1;
 
 		// If the unit is NOT flying or creeping (which disable road bonuses),
-		if(isSkilledIn(unit, SkillType.Fly, SkillType.Creep)) {
+		if (isSkilledIn(unit, SkillType.Fly, SkillType.Creep)) {
 			return cost;
 		}
 
 		// Road bonus
-		if(isRoadpathAndUsable(state, unit, fromIndex) && isRoadpathAndUsable(state, unit, toTile.coords.idx)) {
+		if (isRoadpathAndUsable(state, unit, fromIndex) && isRoadpathAndUsable(state, unit, toTile.coords.idx)) {
 			cost = 0.5;
 		}
 
 		// Skate doubles movement on ice (i.e. halves cost)
-		if(toTile.type === TerrainType.Ice && isSkilledIn(unit, SkillType.Skate)) {
-			cost *= 0.5; 
+		if (toTile.type === TerrainType.Ice && isSkilledIn(unit, SkillType.Skate)) {
+			cost *= 0.5;
 		}
 
 		return cost;
@@ -967,24 +982,24 @@ export class ArmyMovesGenerator {
 
 	// TODO verify logic
 	static isTerminal(state: GameState, unit: UnitState, tile: TileState): boolean {
-		if(isSkilledIn(unit, SkillType.Fly)) {
+		if (isSkilledIn(unit, SkillType.Fly)) {
 			return false;
 		}
 
 		// Embark
 		const isPort = getStructureAt(state, tile.coords.idx) == StructureType.Port && tile.owner == unit.owner;
-		if(isPort && !isAquaticOrCanFly(unit, false)) {
+		if (isPort && !isAquaticOrCanFly(unit, false)) {
 			return true;
 		}
 
 		// All enemy units excert a Zone of Control and stops further movement
-		if(isAdjacentToEnemy(state, tile)) {
+		if (isAdjacentToEnemy(state, tile)) {
 			return true;
 		}
-	
-		if(isWaterTerrain(tile)) {
+
+		if (isWaterTerrain(tile)) {
 			// Navigate on to village
-			if(isSkilledIn(unit, SkillType.Navigate) && getStructureAt(state, tile.coords.idx) === StructureType.Village) {
+			if (isSkilledIn(unit, SkillType.Navigate) && getStructureAt(state, tile.coords.idx) === StructureType.Village) {
 				return true;
 			}
 
@@ -993,7 +1008,7 @@ export class ArmyMovesGenerator {
 		}
 		else {
 			// Disembark
-			if(isNavalUnit(unit)) {
+			if (isNavalUnit(unit)) {
 				return true;
 			}
 		}
@@ -1002,12 +1017,12 @@ export class ArmyMovesGenerator {
 		// roads allow movement on forest if it has a road
 		switch (tile.type) {
 			case TerrainType.Forest:
-				if(!isSkilledIn(unit, SkillType.Creep) || !isRoadpathAndUsable(state, unit, tile.coords.idx)) {
+				if (!isSkilledIn(unit, SkillType.Creep) && !isRoadpathAndUsable(state, unit, tile.coords.idx)) {
 					return true;
 				}
 				break;
 			case TerrainType.Mountain:
-				if(!isSkilledIn(unit, SkillType.Creep)) {
+				if (!isSkilledIn(unit, SkillType.Creep)) {
 					return true;
 				}
 				break;

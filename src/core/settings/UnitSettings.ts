@@ -1,11 +1,11 @@
 import { SkillType, TechnologyType, TribeType, UnitType } from "../types";
 
-export const UnitSettings: Record<UnitType, { 
-    cost: number; 
-    attack: number; 
-    movement: number; 
-    defense: number; 
-    range: number; 
+export const UnitSettings: Record<UnitType, {
+    cost: number;
+    attack: number;
+    movement: number;
+    defense: number;
+    range: number;
     health?: number;
     upgradeFrom?: UnitType
     veteran?: boolean | true;
@@ -84,7 +84,7 @@ export const UnitSettings: Record<UnitType, {
         movement: 1,
         defense: 1,
         range: 1,
-        skills: new Set([SkillType.Heal, SkillType.Convert]),
+        skills: new Set([SkillType.HealOthers, SkillType.Convert]),
     },
     [UnitType.Swordsman]: {
         cost: 5,
@@ -104,7 +104,7 @@ export const UnitSettings: Record<UnitType, {
         defense: 4,
         range: 1,
         skills: new Set([]),
-    },    
+    },
     [UnitType.Cloak]: {
         cost: 8,
         health: 5,
@@ -206,7 +206,7 @@ export const UnitSettings: Record<UnitType, {
         range: 1,
         veteran: false,
         skills: new Set([SkillType.Escape, SkillType.Float]),
-    },   
+    },
     [UnitType.Amphibian]: {
         cost: 3,
         health: 10,
@@ -223,7 +223,7 @@ export const UnitSettings: Record<UnitType, {
         movement: 2,
         defense: 1,
         range: 2,
-        skills: new Set([SkillType.Float, SkillType.Dash, SkillType.Escape, SkillType.Fortify]),
+        skills: new Set([SkillType.Float, SkillType.Persist, SkillType.Dash, SkillType.Escape, SkillType.Fortify]),
     },
 
     // Polaris
@@ -245,7 +245,7 @@ export const UnitSettings: Record<UnitType, {
         attack: -1,
         movement: 1,
         defense: 1,
-        range: 1, 
+        range: 1,
         unique: true,
         skills: new Set([SkillType.AutoFreeze, SkillType.Skate]),
     },
@@ -255,7 +255,7 @@ export const UnitSettings: Record<UnitType, {
         attack: 3,
         movement: 2,
         defense: 2,
-        range: 1, 
+        range: 1,
         unique: true,
         skills: new Set([SkillType.Dash, SkillType.Escape, SkillType.Skate]),
     },
@@ -370,9 +370,9 @@ export const UnitSettings: Record<UnitType, {
         veteran: true,
         skills: new Set([SkillType.Poison, SkillType.Splash]),
     },
-    
+
     // Elyron
-    [UnitType.DragonEgg]:   {
+    [UnitType.DragonEgg]: {
         health: 10,
         super: true,
         cost: 10,
@@ -384,7 +384,7 @@ export const UnitSettings: Record<UnitType, {
         becomes: UnitType.BabyDragon,
         skills: new Set([SkillType.Grow, SkillType.Fortify]),
     },
-    [UnitType.BabyDragon]:  {
+    [UnitType.BabyDragon]: {
         super: true,
         health: 15,
         cost: 10,
@@ -396,7 +396,7 @@ export const UnitSettings: Record<UnitType, {
         becomes: UnitType.FireDragon,
         skills: new Set([SkillType.Grow, SkillType.Dash, SkillType.Fly, SkillType.Escape, SkillType.Scout]),
     },
-    [UnitType.FireDragon]:  {
+    [UnitType.FireDragon]: {
         super: true,
         health: 20,
         cost: 10,
@@ -420,8 +420,8 @@ export const UnitSettings: Record<UnitType, {
 };
 
 export const UnitUpgradables: [UnitType.Scout, UnitType.Rammer, UnitType.Bomber] = [
-    UnitType.Scout, 
-    UnitType.Rammer, 
+    UnitType.Scout,
+    UnitType.Rammer,
     UnitType.Bomber
 ];
 

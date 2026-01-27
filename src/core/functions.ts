@@ -11,11 +11,11 @@ type TribeLike = TribeState | TribeType;
 type TechLike = TechnologyState | TechnologyType;
 
 export function parseToTribeType(tribe: TribeLike): TribeType {
-	return typeof(tribe) == 'number'? tribe as TribeType : tribe.type;
+	return typeof (tribe) == 'number' ? tribe as TribeType : tribe.type;
 }
 
 export function parseToTechType(techlike: TechLike): TechnologyType {
-	const _type = typeof(techlike);
+	const _type = typeof (techlike);
 	if (_type == 'object') {
 		return (techlike as TechnologyState).type;
 	}
@@ -54,7 +54,7 @@ export function getTechUnitType(tribe: TribeLike, tech: TechLike): UnitType | nu
 export function getTechUpgradeType(tribe: TribeLike, tech: TechLike): UnitType | null {
 	const unit = getTechUnitType(tribe, tech);
 	if (!unit) return null;
-	return UnitSettings[unit].upgradeFrom? unit : null;
+	return UnitSettings[unit].upgradeFrom ? unit : null;
 }
 
 export function getTechResource(tribe: TribeLike, tech: TechLike): ResourceType | null {
@@ -91,10 +91,10 @@ export function getTechCost(tribe: TribeState, tierTech: TechLike): number {
  */
 export function getCityProduction(state: GameState, ...cities: CityState[]): number {
 	// If city is on riot or the tile is occupied by an enemy then production is nullified
-	return cities.reduce((acc, city) => acc + 
-		(city._riot || getEnemyAt(state, city.tileIndex)? 0 
-		: (city.production + Object.values(city.rewards).filter(x => x == RewardType.Park || x == RewardType.Workshop).length)
-	), 0);
+	return cities.reduce((acc, city) => acc +
+		(city._riot || getEnemyAt(state, city.tileIndex) ? 0
+			: (city.production + Object.values(city.rewards).filter(x => x == RewardType.Park || x == RewardType.Workshop).length)
+		), 0);
 }
 
 /**
@@ -110,7 +110,7 @@ export function getTribeSPT(state: GameState, tribe?: TribeState): number {
 
 export function getPovTerritorry(state: GameState, tribe?: TribeState, city?: CityState): number[] {
 	tribe = tribe || getPovTribe(state);
-	return city? city._territory : tribe.cities.map(x => x._territory).flat();
+	return city ? city._territory : tribe.cities.map(x => x._territory).flat();
 }
 
 const neighborCache = new Map<number, number[]>();
@@ -119,7 +119,7 @@ export function getAdjacentIndexes(state: GameState, idx: number, range = 1, uno
 	const width = state.settings.size;
 	const neighbors: number[] = [];
 	const tile = state.tiles[idx];
-	
+
 	if (!unowned && !includeUnexplored) {
 		const neighs = neighborCache.get(idx);
 		if (neighs) {
@@ -130,25 +130,25 @@ export function getAdjacentIndexes(state: GameState, idx: number, range = 1, uno
 	for (let dx = -range; dx <= range; dx++) {
 		for (let dy = -range; dy <= range; dy++) {
 			if (dx === 0 && dy === 0) continue;
-			
+
 			const neighborX = tile.coords.x + dx;
 			const neighborY = tile.coords.y + dy;
-			
+
 			if (neighborX < 0 || neighborX >= width || neighborY < 0 || neighborY >= width) continue;
-			
+
 			const neighborIndex = neighborY * width + neighborX;
-			
+
 			if (!includeUnexplored || unowned) {
 				// const explored = state._visibleTiles[neighborIndex];
 				const explored = state.tiles[neighborIndex].explorers;
-	
+
 				// Skip unexplored
 				if (!includeUnexplored && !explored.size) continue;
-				
+
 				// Optionally filter for owned tiles.
-				if (unowned && (explored.size? state.tiles[neighborIndex].owner > 0 : false)) continue;
+				if (unowned && (explored.size ? state.tiles[neighborIndex].owner > 0 : false)) continue;
 			}
-			
+
 			neighbors.push(neighborIndex);
 		}
 	}
@@ -156,7 +156,7 @@ export function getAdjacentIndexes(state: GameState, idx: number, range = 1, uno
 	if (!unowned && !includeUnexplored) {
 		neighborCache.set(idx, neighbors);
 	}
-	
+
 	return neighbors;
 }
 
@@ -165,18 +165,18 @@ export function getAdjacentTiles(state: GameState, index: number, range = 1, uno
 }
 
 export function getResourceAt(state: GameState, tileOrState: TileState | number): ResourceType | null {
-	return state.resources[typeof tileOrState === 'number'? tileOrState : tileOrState.coords.idx]?.type || null;
+	return state.resources[typeof tileOrState === 'number' ? tileOrState : tileOrState.coords.idx]?.type || null;
 }
 
 export function getStructureAt(state: GameState, tileOrState: TileState | number): StructureType | null {
-	return state.structures[typeof tileOrState === 'number'? tileOrState : tileOrState.coords.idx]?.type || null;
+	return state.structures[typeof tileOrState === 'number' ? tileOrState : tileOrState.coords.idx]?.type || null;
 }
 
 export function getTrueUnitAt(state: GameState, tileOrState: TileState | number, matchOwner?: number): UnitState | null {
-	const tile = state.tiles[typeof tileOrState === 'number'? tileOrState : tileOrState.coords.idx];
+	const tile = state.tiles[typeof tileOrState === 'number' ? tileOrState : tileOrState.coords.idx];
 	if (!tile._unitOwnerID) return null;
 	const found = state.tribes[tile._unitOwnerID].units.find(x => x.coords.idx === tile.coords.idx) || null;
-	return found && matchOwner? found.owner === matchOwner? found : null : found;
+	return found && matchOwner ? found.owner === matchOwner ? found : null : found;
 }
 
 export function getUnitAt(state: GameState, tileOrState: TileState | number, matchOwner?: number): UnitState | null {
@@ -195,7 +195,7 @@ export function getUnitAt(state: GameState, tileOrState: TileState | number, mat
 		return null;
 	}
 
-	return matchOwner && found? found.owner === matchOwner? found : null : found;
+	return matchOwner && found ? found.owner === matchOwner ? found : null : found;
 }
 
 export function getCityAt(state: GameState, idx: number, matchOwner?: number): CityState | null {
@@ -217,7 +217,7 @@ export function getCityOwningTile(state: GameState, idx: number, playerCities?: 
 	if (!cityTileIndex) {
 		return null;
 	}
-	return state.tribes[state.settings.currentPlayerTurnId].cities.filter(x => playerCities? playerCities.includes(x) : true).find(x => x.tileIndex == cityTileIndex) || null;
+	return state.tribes[state.settings.currentPlayerTurnId].cities.filter(x => playerCities ? playerCities.includes(x) : true).find(x => x.tileIndex == cityTileIndex) || null;
 }
 
 
@@ -226,7 +226,19 @@ export function getEnemyAt(state: GameState, idx: TileState | number, notMatchOw
 	if (!found) {
 		return null;
 	}
-	return found.owner != (notMatchOwner || state.settings.currentPlayerTurnId)? found : null;
+	const explorer = notMatchOwner || state.settings.currentPlayerTurnId;
+	if (found.owner === explorer) return null;
+
+	// TODO check for peace here? 
+	// If it's an enemy, it must not be invisible
+	if (found.effects.has(EffectType.Frozen)) { // Wait, frozen is not invisible.
+	}
+
+	if (found.effects.has(EffectType.Invisible)) {
+		return null;
+	}
+
+	return found;
 }
 
 export function getTrueEnemyAt(state: GameState, idx: TileState | number, notMatchOwner?: number): UnitState | null {
@@ -234,7 +246,7 @@ export function getTrueEnemyAt(state: GameState, idx: TileState | number, notMat
 	if (!found) {
 		return null;
 	}
-	return found.owner != (notMatchOwner || state.settings.currentPlayerTurnId)? found : null;
+	return found.owner != (notMatchOwner || state.settings.currentPlayerTurnId) ? found : null;
 }
 
 export function getAlliesNearTile(state: GameState, idx: number, range = 1): UnitState[] {
@@ -243,7 +255,7 @@ export function getAlliesNearTile(state: GameState, idx: number, range = 1): Uni
 			const ally = getTrueUnitAt(state, cur, state.settings.currentPlayerTurnId);
 			return [
 				...acc,
-				...ally? [ally] : [],
+				...ally ? [ally] : [],
 			];
 		}, []);
 }
@@ -253,7 +265,7 @@ export function getEnemiesNearTile(state: GameState, idx: number, range = 1, str
 		.reduce((acc: UnitState[], cur: number) => {
 			const owner = state.tiles[cur]._unitOwnerID;
 			if (!owner || owner === state.settings.currentPlayerTurnId) return acc;
-			const enemy = (strict? getTrueEnemyAt  : getEnemyAt)(state, cur);
+			const enemy = (strict ? getTrueEnemyAt : getEnemyAt)(state, cur);
 			// cant cheat
 			if (!enemy) return acc;
 			return [...acc, enemy];
@@ -283,7 +295,7 @@ export function getClosestEnemyCity(state: GameState, tileIndex: number, maxRang
 			}
 		}
 	}
-	return closestCity? [closestCity, closestDistance] : null;
+	return closestCity ? [closestCity, closestDistance] : null;
 }
 
 /**
@@ -299,7 +311,7 @@ export function getLighthouses(state: GameState, explored?: boolean) {
 		state.settings.size * state.settings.size - 1,
 		1 + state.settings.size * state.settings.size - state.settings.size
 	];
-	return explored !== undefined? lighhouses.filter(x => explored === state._visibleTiles[x]) : lighhouses;
+	return explored !== undefined ? lighhouses.filter(x => explored === state._visibleTiles[x]) : lighhouses;
 }
 
 export function isLighthouse(state: GameState, tileIndex: number) {
@@ -325,16 +337,15 @@ export function isResourceVisible(tribe: TribeState, resType?: ResourceType): bo
  * Checks in tile.explorers
  */
 export function isTileExplored(state: GameState, idxOrState: number | TileState, matchOwner?: PlayerID): boolean {
-	return !state.settings._fow || state.tiles[typeof idxOrState === 'number'? idxOrState : idxOrState.coords.idx].explorers.has(matchOwner || state.settings.currentPlayerTurnId);
+	return !state.settings._fow || state.tiles[typeof idxOrState === 'number' ? idxOrState : idxOrState.coords.idx].explorers.has(matchOwner || state.settings.currentPlayerTurnId);
 }
 
 export function isTileOccupied(state: GameState, idx: number, strictEnemy = false): boolean {
-	return Boolean(state.tiles[idx]._unitOwnerID && (strictEnemy? state.tiles[idx]._unitOwnerID != state.settings.currentPlayerTurnId : true));
+	return Boolean(state.tiles[idx]._unitOwnerID && (strictEnemy ? state.tiles[idx]._unitOwnerID != state.settings.currentPlayerTurnId : true));
 }
 
 export function isTileFrozen(state: GameState, idx: number): boolean {
-	// TODO should use internal 'frozen' boolean
-	return state.tiles[idx].type === TerrainType.Ice;
+	return state.tiles[idx].frozen;
 }
 
 /**
@@ -349,7 +360,7 @@ export function isTechUnlocked(tribe: TribeState, tech: TechLike, strict = false
 	if (techType == TechnologyType.BeyondComprehension) return false;
 	if (techType == TechnologyType.Unrequired) return true;
 	const tierTech = getTechSettings(techType).replacesTech || techType;
-	return tribe.tech_vanilla.some(x => x.type == tierTech && (strict? x.discovered : true));
+	return tribe.tech_vanilla.some(x => x.type == tierTech && (strict ? x.discovered : true));
 }
 
 export function isNavigationable(tribe: TribeState, unit: UnitState, tile: TileState): boolean {
@@ -369,10 +380,10 @@ export function isNavigationable(tribe: TribeState, unit: UnitState, tile: TileS
 }
 
 export function isTempleStructure(structType: StructureType) {
-	return structType === StructureType.Temple 
-		|| structType === StructureType.MountainTemple 
-		|| structType === StructureType.ForestTemple 
-		|| structType === StructureType.IceTemple 
+	return structType === StructureType.Temple
+		|| structType === StructureType.MountainTemple
+		|| structType === StructureType.ForestTemple
+		|| structType === StructureType.IceTemple
 		|| structType === StructureType.WaterTemple;
 }
 
@@ -386,14 +397,14 @@ export function isIceTerrain(tile: TileState): boolean {
 }
 
 export function isSkilledIn(unit: UnitState | UnitType, ...skills: SkillType[]): boolean {
-	const settings = UnitSettings[typeof unit === "number"? unit : unit.type];
-	const passengerSettings = typeof unit != "number" && unit.passengerType? UnitSettings[unit.passengerType].skills : new Set();
+	const settings = UnitSettings[typeof unit === "number" ? unit : unit.type];
+	const passengerSettings = typeof unit != "number" && unit.passengerType ? UnitSettings[unit.passengerType].skills : new Set();
 	return skills.some(x => settings.skills.has(x) || passengerSettings.has(x));
 }
 
 export function isAquaticOrCanFly(unit: UnitState | UnitType, canfly: boolean = true): boolean {
-	return isSkilledIn(unit, 
-		...(canfly? [SkillType.Fly] : []),
+	return isSkilledIn(unit,
+		...(canfly ? [SkillType.Fly] : []),
 		SkillType.Carry,
 		SkillType.Float,
 		SkillType.Navigate,
@@ -413,7 +424,7 @@ export function isInTerritory(state: GameState, unit: UnitState) {
 }
 
 export function isUnderSiege(state: GameState, city: CityState | number): boolean {
-	const tile = state.tiles[typeof city === 'number'? city : city.tileIndex];
+	const tile = state.tiles[typeof city === 'number' ? city : city.tileIndex];
 	const enemy = getEnemyAt(state, tile.coords.idx, tile.owner);
 	return Boolean(enemy);
 }
@@ -433,7 +444,7 @@ export function isRoadpathAndUsable(state: GameState, unit: UnitState, idx: numb
 	const tile = state.tiles[idx];
 	// It must be owned by this unit or is neutral (ally)
 	// And the tile must have a road or a city
-	return (tile.owner == unit.owner || tile.owner < 1) && (tile.hasRoad || isCity(state, idx));	
+	return (tile.owner == unit.owner || tile.owner < 1) && (tile.hasRoad || isCity(state, idx));
 }
 
 export function getDefenseBonus(state: GameState, unit: UnitState): number {
@@ -441,7 +452,7 @@ export function getDefenseBonus(state: GameState, unit: UnitState): number {
 	if (hasEffect(unit, EffectType.Poison)) {
 		return 1;
 	}
-	
+
 	const tribe = state.tribes[unit.owner];
 
 	switch (state.tiles[unit.coords.idx].type) {
@@ -460,32 +471,32 @@ export function getDefenseBonus(state: GameState, unit: UnitState): number {
 			if (isTechUnlocked(tribe, TechnologyType.Climbing)) {
 				return 1.5;
 			}
-		break;
+			break;
 		default:
 			const ownCity = state.tribes[unit.owner].cities.find(x => x.tileIndex == unit.coords.idx);
 			//  City defense
 			if (ownCity && isSkilledIn(unit, SkillType.Fortify)) {
-				return ownCity.rewards.has(RewardType.CityWall)? 4 : 1.5;
+				return ownCity.rewards.has(RewardType.CityWall) ? 4 : 1.5;
 			}
 			break;
 	}
-	
+
 	return 1;
 }
 
-export function isAdjacentToEnemy(state: GameState, tile: TileState, matchUnitType?: UnitType, checkForControl=true): boolean {
+export function isAdjacentToEnemy(state: GameState, tile: TileState, matchUnitType?: UnitType, checkForControl = true): boolean {
 	// Get true enemy because invisible units (cloaks) can also control terrain
 	return getAdjacentIndexes(state, tile.coords.idx).some(x => {
-		const e = checkForControl? getTrueEnemyAt(state, x) : getEnemyAt(state, x);
+		const e = checkForControl ? getTrueEnemyAt(state, x) : getEnemyAt(state, x);
 		return e && (!matchUnitType || e.type === matchUnitType);
 	});
 }
 
 // TODO THIS IS AMBIGUOUS, ONLY WORKS WITH 1v1
 export function isGameOver(state: GameState): boolean {
-	return state.settings._gameOver 
-		|| state.settings.turn > state.settings.maxTurns 
-		|| isGameLost(state) 
+	return state.settings._gameOver
+		|| state.settings.turn > state.settings.maxTurns
+		|| isGameLost(state)
 		|| isGameWon(state);
 }
 
@@ -517,8 +528,8 @@ export function getWipeouts(state: GameState, owner?: number): TribeState[] {
 }
 
 export function isSteppable(state: GameState, unit: UnitState, tileOrIndex: TileState | number) {
-	const tile = typeof tileOrIndex === "number"? state.tiles[tileOrIndex] : tileOrIndex;
-	
+	const tile = typeof tileOrIndex === "number" ? state.tiles[tileOrIndex] : tileOrIndex;
+
 	// Unexplored
 	// Occupied
 	if (!state._visibleTiles[tile.coords.idx]
@@ -533,7 +544,7 @@ export function isSteppable(state: GameState, unit: UnitState, tileOrIndex: Tile
 	}
 
 	const tribe = state.tribes[unit.owner];
-	
+
 	// Checks for: Water, Ocean, Mountain, Fly & Navigation skills
 	if (!isNavigationable(tribe, unit, tile)) {
 		return false;
@@ -548,7 +559,7 @@ export function isSteppable(state: GameState, unit: UnitState, tileOrIndex: Tile
 			return tile.owner === unit.owner;
 		}
 	}
-	
+
 	// If unit has Navigate, it cannot move onto land, except for capturing cities
 	if (isSkilledIn(unit, SkillType.Navigate)) {
 		if (!isWaterTerrain(tile) && getStructureAt(state, tile.coords.idx) !== StructureType.Village) {
@@ -561,13 +572,13 @@ export function isSteppable(state: GameState, unit: UnitState, tileOrIndex: Tile
 
 export function isTribeSteppable(state: GameState, idx: number) {
 	switch (state.tiles[idx].type) {
-		case TerrainType.Water:	
+		case TerrainType.Water:
 			return isTechUnlocked(state.tribes[state.settings.currentPlayerTurnId], TechnologyType.Fishing);
-			
-		case TerrainType.Ocean:	
+
+		case TerrainType.Ocean:
 			return isTechUnlocked(state.tribes[state.settings.currentPlayerTurnId], TechnologyType.Sailing);
 
-		case TerrainType.Mountain:	
+		case TerrainType.Mountain:
 			return isTechUnlocked(state.tribes[state.settings.currentPlayerTurnId], TechnologyType.Climbing);
 
 		default:
@@ -576,9 +587,9 @@ export function isTribeSteppable(state: GameState, idx: number) {
 }
 
 export function getPovTribe(stateOrState: GameState | Game): TribeState {
-	const state = stateOrState instanceof Game? stateOrState.state : stateOrState;
+	const state = stateOrState instanceof Game ? stateOrState.state : stateOrState;
 	const tribe = state.tribes[state.settings.currentPlayerTurnId];
-	if(!tribe) {
+	if (!tribe) {
 		console.log(`${state.settings.currentPlayerTurnId}, ${Object.keys(state.tribes)}`);
 		throw Error("yo tf");
 	}
@@ -591,7 +602,7 @@ export function getCapitalCity(state: GameState, owner?: number): CityState | nu
 }
 
 export function calculateTribeScore(state: GameState, owner?: number) {
-	const pov = owner? state.tribes[owner] : getPovTribe(state);
+	const pov = owner ? state.tribes[owner] : getPovTribe(state);
 
 	let score = 0;
 
@@ -606,7 +617,7 @@ export function calculateTribeScore(state: GameState, owner?: number) {
 }
 
 export function calculateInitialTribeScore(state: GameState, owner?: number): number {
-	const pov = owner? state.tribes[owner] : getPovTribe(state);
+	const pov = owner ? state.tribes[owner] : getPovTribe(state);
 
 	// ! https://docs.google.com/document/d/1HYiUbT-3RtP4b2SwlMQEZB4bTdAUtN_6K8DOvY6wNsk/edit?tab=t.0
 
@@ -614,14 +625,14 @@ export function calculateInitialTribeScore(state: GameState, owner?: number): nu
 
 	// 100 xp per level, 20 xp per owned territory, 5 xp per population
 	for (const city of pov.cities) {
-		score += city.level * 100 
+		score += city.level * 100
 			+ city._territory.length * 20
 			+ city.population * 5;
 
 		// Not sure if this is correct
 		// 40 for the city itself, 5 for each reward after the first (border growth is not counted)
 		// Clamping to a max level of 6 to avoid negative values
-		score += city.rewards.size > 1? 40 + Math.max((city.rewards.size - 1), 6) * 5 : 0;
+		score += city.rewards.size > 1 ? 40 + Math.max((city.rewards.size - 1), 6) * 5 : 0;
 
 		if (city.rewards.has(RewardType.Park)) {
 			score += 300;
@@ -635,7 +646,7 @@ export function calculateInitialTribeScore(state: GameState, owner?: number): nu
 	for (const unit of pov.units) {
 		score += 5 * UnitSettings[unit.type].cost;
 	}
-	
+
 	// 5 100 per tech tier
 	for (const tech of pov.tech_vanilla) {
 		score += 100 * getTechSettings(tech).tier!;
@@ -663,7 +674,7 @@ export function getRealUnitType(unit: UnitState): UnitType {
  * @returns 
  */
 export function getUnitSettings(unit: UnitState | UnitType) {
-	return UnitSettings[typeof unit === "number"? unit : unit.type];
+	return UnitSettings[typeof unit === "number" ? unit : unit.type];
 }
 
 export function getMaxHealth(unit: UnitState) {
@@ -705,7 +716,7 @@ export function getUnitRange(unit: UnitState) {
 }
 
 export function getStarExchange(state: GameState, owner: TribeState | number) {
-	const score = state.tribes[typeof owner === "number"? owner : owner.id].score;
+	const score = state.tribes[typeof owner === "number" ? owner : owner.id].score;
 	if (score < 1000) return 3;
 	if (score < 2000) return 6;
 	if (score < 3000) return 9;
@@ -713,7 +724,7 @@ export function getStarExchange(state: GameState, owner: TribeState | number) {
 }
 
 export function getHomeCity(state: GameState, unit: UnitState): CityState | null {
-	return isSkilledIn(unit, SkillType.Independent) || !unit.homeCoords || unit.homeCoords.idx < 0? null : getPovTribe(state).cities.find(x => x.tileIndex == unit.homeCoords!.idx) || null;
+	return isSkilledIn(unit, SkillType.Independent) || !unit.homeCoords || unit.homeCoords.idx < 0 ? null : getPovTribe(state).cities.find(x => x.tileIndex == unit.homeCoords!.idx) || null;
 }
 
 export function getRulingCity(state: GameState, idx: number): CityState | null {
@@ -737,7 +748,7 @@ export function getTerrainType(state: GameState, idx: number): TerrainType {
 export function calaulatePushablePosition(state: GameState, pushed: UnitState): number {
 	const initialX = pushed.coords.x;
 	const initialY = pushed.coords.y;
-	
+
 	let modifiedX = initialX;
 	let modifiedY = initialY;
 
@@ -769,7 +780,7 @@ export function calaulatePushablePosition(state: GameState, pushed: UnitState): 
 
 	// If the city where the units spawns is on the exact center of the map,
 	// the unit will be pushed south
-	
+
 	// If the tile where the unit is supposed to go is occpied or impassable, 
 	// it will try counterclockwise and then clockwise one tile at a time, 
 	// until it finds a free tile, if none, the unit gets removed, without ganting a kill
@@ -826,9 +837,9 @@ export function calculateCombat(state: GameState, attacker: UnitState, defender:
 	const attackForce = getUnitAttack(attacker) * (attacker.health / getMaxHealth(attacker));
 	const defenseBonus = getDefenseBonus(state, defender);
 	const defenseForce = getUnitDefense(defender) * (defender.health / getMaxHealth(defender)) * defenseBonus;
-	
+
 	const totalForce = attackForce + defenseForce;
-	
+
 	if (totalForce === 0) {
 		return {
 			attackDamage: 0,
@@ -836,24 +847,24 @@ export function calculateCombat(state: GameState, attacker: UnitState, defender:
 			splashDamage: 0,
 		};
 	}
-	
+
 	const attackDamage = Math.round(
 		(attackForce / totalForce) * getUnitAttack(attacker) * 4.5
 	) * 10;
-	
+
 	// Stiff skill makes defender not retaliate
 	// Surprise skill makes defender not retaliate
-	const defenseDamage = 
+	const defenseDamage =
 		isSkilledIn(attacker, SkillType.Surprise) ||
-		isSkilledIn(attacker, SkillType.Freeze)? 0 :
-		isSkilledIn(defender, SkillType.Stiff)? 0 : (Math.round(
-		(defenseForce / totalForce) * getUnitDefense(defender) * 4.5
-	) * 10);
-	
-	const splashDamage = isSkilledIn(attacker, SkillType.Splash)? (attackDamage / 2) : 0;
-	
-	const finalDefenseDamage = attackDamage >= defender.health? 0 : defenseDamage;
-	
+			isSkilledIn(attacker, SkillType.Freeze) ? 0 :
+			isSkilledIn(defender, SkillType.Stiff) ? 0 : (Math.round(
+				(defenseForce / totalForce) * getUnitDefense(defender) * 4.5
+			) * 10);
+
+	const splashDamage = isSkilledIn(attacker, SkillType.Splash) ? (attackDamage / 2) : 0;
+
+	const finalDefenseDamage = attackDamage >= defender.health ? 0 : defenseDamage;
+
 	return {
 		attackDamage,
 		defenseDamage: finalDefenseDamage,
@@ -864,7 +875,7 @@ export function calculateCombat(state: GameState, attacker: UnitState, defender:
 export function calculateAttack(state: GameState, attack: number, defender: UnitState): number {
 	const defenseForce = getUnitDefense(defender) * (defender.health / getMaxHealth(defender)) * getDefenseBonus(state, defender);
 	const totalForce = attack + defenseForce;
-	return totalForce? 0 : Math.round(
+	return totalForce ? 0 : Math.round(
 		(attack / totalForce) * attack * 4.5
 	) * 10;
 }
@@ -965,10 +976,10 @@ export function computeReachablePath(
 		}
 
 		closedSet.add(current);
-		
+
 		for (const neighbor of getAdjacentTiles(state, current, maxMoveRange, false, ignoreVisibility).map(t => t.coords.idx)) {
 			if (closedSet.has(neighbor) || !canStepOnLogic(state, neighbor)) continue;
-			
+
 			const tentativeGScore = gScore.get(current) || 0;
 			if (tentativeGScore < (gScore.get(neighbor) ?? Infinity)) {
 				cameFrom.set(neighbor, current);
@@ -982,7 +993,7 @@ export function computeReachablePath(
 			}
 		}
 	}
-	
+
 	return [];
 }
 
@@ -997,8 +1008,10 @@ export function computeReachablePath(
 
 
 export function _setVisibleTiles(state: GameState, ownerId: PlayerID) {
-	state._visibleTiles = { };
-    for (let i = 0; i < state.settings.tileCount; i++) {
-        state._visibleTiles[i] = state.tiles[i].explorers.has(ownerId);
-    }
+	state._visibleTiles = {};
+	console.log(state.settings.tileCount, Object.keys(state.tiles).length);
+
+	for (let i = 0; i < state.settings.tileCount; i++) {
+		state._visibleTiles[i] = state.tiles[i].explorers.has(ownerId);
+	}
 }

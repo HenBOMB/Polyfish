@@ -1,0 +1,463 @@
+Skip to content
+
+Support
+DevBlog
+PolyNews
+Shop
+Press
+DEV BLOG
+January 26, 2026
+Blog
+0
+0
+Bug fixes in version 2.16.3
+The team has taken some time to fix a bunch of bugs and issues reported to us. Here is what’s new in the 2.16.3 release:
+
+Changelog
+New visuals for unit effects (poisoned, frozen etc)
+Color adjustments on New Dawn skin
+Bugfixes
+UI for hinting invisible nearby unit fixed
+Centipede segment connector blinks when scrubbing in replays (https://discord.com/channels/283436219780825088/1451122271044370546 )
+Crash when restoring purchases on iOS
+Freezing a flooded tile no longer drains the tile
+Changing climate on a tile no longer floods it if it was frozen
+Skate + attack on ice don’t grant extra movement
+Changing language in-game does not update building info pop-up
+Destroying bridges seems to leave a road showing on the ocean tile
+Centipede with multiple tails
+Capture city allowed during cooldown (https://discord.com/channels/283436219780825088/1289265196858343475 )
+Make sure you can resign on enemy turn in weekly challenges
+Show embassy income icon as heart in embassy income ui
+Make sure resource shows correct icon in pass and play and replays when one player has the New Dawn skin
+Adjust audio to be more responsive when clicking a tile
+Skin command descriptions
+Always focus on player capital when opening a game, even if auto focus is off
+Make sure the UI icon for nearby invisible units use correct data to determine to show or not
+Units could get stuck at incorrect y-position during a “sway” animation (on click) if moving the unit very quickly afterwards
+Correct battle preview results for ice archer
+Reduced number of moves an explorer makes: 15 → 12
+Changed how ruin rewards are calculated
+increase consistency in weekly challenge ruins
+don’t reward water unit if you don’t have water movement (i.e. moth explore water ruin)
+Change end screen for domination showing 3won/3lost as 57% instead of 50%
+Happy gaming! /Midjiate
+
+December 11, 2025
+Uncategorized
+0
+5
+First Polytopia World Champion Crowned!
+The Battle of Polytopia has officially crowned its first-ever World Champion, and what a journey it’s been. After months of tribe-by-tribe qualifiers and thousands of players battling for a spot on the main stage, the grand final in Stockholm delivered exactly the kind of high-level strategy fans hoped for.
+
+Six of the world’s strongest players met live in the studio, with spectators following every tech choice, city upgrade, and surprise attack through Polytopia’s enhanced spectator tools. In the end, ArthurL248 stood out with calm decision-making, efficient expansion, and sharp timing, winning 2–1 over Slimmingboy in a tight match series filled with drama — capital sieges, giant pushes, and even a game where ArthurL248 activated the Chipmunk Mode easter egg.
+
+It has been a long road to the finals, and the final weekend was extremely memorable.
+
+
+
+
+
+
+December 8, 2025
+Blog
+19
+268
+Witness a New Dawn for the Cymanti!
+
+“The are killing us! “We are losing this war. “We must adapt.”
+These were the thoughts of a cabal of Cymanti Shamans who would band together to revolutionize the Hive. There was no doubt about it, the Cymanti needed to change its approach or face elimination. It was decided that attempting to appeal to the hearts of their enemies might improve their chances of survival, leading to Cymanti geneticists breeding new creatures with bigger eyes and cuter appearances. Of course, not everyone in the Hive is convinced that this is the new way forward, but that hasn’t deterred the New Dawn Movement, who hope to prove to the others that this is how they must change.
+
+
+The New Stuff
+So, let’s delve into what the New Dawn Movement has come up with.
+
+
+It all began with genetically modifying the Ciru Bug into a new form, adding giant eyes, changing the color, adding cosmetic whiskers, and making it look more like a friend and not a horrifying insect that merges with your brain. It is still a horrifying insect that merges with your brain, but this one looks a lot more friendly, wouldn’t you agree?
+
+
+The first ones to adopt these new Cirus were the Gurus, appointed by the New Dawn Movement as the group’s leaders instead of normal Shamans. Their Ciru Bugs have been specially adjusted to grow a “beard” made of silk, which the Gurus believe makes them look more distinguished, wise, and approachable. They are tasked with “convincing” others to join their Movement by bestowing Ciru Bugs…whether they like it or not.
+
+
+Publicity is the game of the New Dawn Movement, and not only to the other tribes, but also to you! The rank-and-file troops have been renamed to Hoomans to be more relatable and endearing to us, the Earthlings who love to watch the Polytopians fight. They may be 10cm tall, have floating hands and feet, and have a bug on their heads, but as you can see, they’re pretty much identical to the average human.
+
+
+This tall, rounded thing is a heavily modified Hexapod often referred to as a “Top Hat“. One part bug, one part fungi, and still a cheap, highly mobile killer. Their high speed is not impeded by the giant mushroom on their heads, surprisingly!
+
+
+In their attempts to further blur the line between “plant” and “animal,” the New Dawn geneticists created the Cacti to replace the Kiton. Its sharp spines are laced with poison, harming anyone who gets close enough to attack it, all while looking absolutely innocent.
+
+
+This is a “Ruby“, a very experimental blending of animal and mineral cooked up by the eggheads in the New Dawn’s genetic science cabal. No one’s quite too sure how they managed to blend the two, but the Ruby does its job as a replacement for the Mantis quite well anyway! It is sharp, resilient, and a complete enigma to Zebasi biologists. The mountains where the New Dawn Movement set up shop happen to be filled with rubies, so they probably figured this would be a great way to use the local resources.
+
+
+
+“Shoo” is what you’ll be saying when you find these colorful buggers sliding up to your frontlines before exploding into a poisonous cloud of biological shrapnel! If it isn’t obvious, a Shoo is a modified Doomux, but is far prettier to look at. I mean, just look at those iridescent scales and big, ‘ol eyes! Awww!
+
+
+This is a “Claude“, which is a very special strain of Phychi meant to look like a cloud. No one is sure how the New Dawn geneticists managed to remove the wings and completely change the shape while also keeping the flight and poisonous double-strike, but it’s believed that Claudes use a specialized air bladder filled with gaseous toxins to keep afloat.
+
+
+This modified Exida is affectionally known as a “Lily“, due to its delicate nature. It’s a blending of normal insect biology with the flowers native to the region, and that flower is used to hurl toxic blobs of goo that can infect an entire regiment of troops easily.
+
+And more new stuff!
+
+
+
+The New Dawn’s naval power is comprised of “Squishies”, “Axolotls“, and “Super-Sponges”, respectively. The “plantimal” Squishies replace the Boomchi, and are designed to explode on both land and water! Axolotls are a replacement for the Raychi, and function as an all-rounder naval unit able to sink ships and capture coastal cities. Super-Sponges replace the Living Island, working as a way to easily spawn Foam, the Algae replacement, allowing your troops to move over the water effortlessly.
+
+
+
+
+This is a “Fairy”, along with the “Kodama” and “Eggy”, its growth forms. Fairies aren’t actually magical forest sprites, but that doesn’t make them any less effective than the Moth, their standard counterpart. Get these adorable little bugs into enemy cities and watch as the civilians panic as they are infested with a deadly toxin and multiple eggs waiting to renew the cycle.
+
+
+
+After the New Dawn Movement modified the local plants and fungi to better appeal to the hearts of their enemies, timid Snulles and delightfully sweet Pupli Nectar began to appear, functioning as their iconic animal and fruit, respectively.
+
+
+
+
+And of course, there’s plenty of other things that the New Dawn Movement has made that you’ll be able to find for yourself! Flowers, mushrooms, honeycombs, new techs, and more are all waiting in the sugary-sweet realm of the New Dawn.
+
+You can also find the New Dawn skin on Steam by tapping this link!
+
+November 10, 2025
+Uncategorized
+0
+7
+Secon Round of Qualifications Completed!
+Four more players have qualified for the finals stage of the Polytopia World Championship 2025. We now know which players will represent Oumaji, Hoodrick, Yadakk, and Quetzali in the Face-Offs, where 12 players will compete for 6 spots in the Finals in Stockholm on December 6th. Over a thousand high-level matches have been played, and now there are only 4 spots left in the Face Off stage. You can track progress on the official Tournament Page.
+
+
+October 29, 2025
+Blog, Uncategorized
+52
+523
+It’s Time for the Cymanti Rework!
+
+Hey Polytopians! It turns out old bugs can learn new tricks!
+
+We told you recently that we’d be reworking the Cymanti, and sure enough, we’ve delivered! There’s a lot of changes in this update, and we’ve got a lot to cover, so join me as I talk about what we’ve been doing to our chitinous friends. So, without further ado, let’s start with their naval mechanics.
+
+This Post Was Edited to Reflect New Information On: 22/10/25
+
+
+A New Kind of Waterbug
+
+Algae has gotten some big changes. First, it’s no longer just a tile improvement, but is now a whole new tile effect, kinda like Aquarion’s “Flooded”. That means that it completely changes the tile, itself, and can now have things built on top of it. As a nice little bonus, whenever you spawn Algae, you don’t get a free pop, but it does come with a free dollop of Aphea Nectar (the Cymanti fruit). Algae also no longer limits movement for naval units, but will still slow down land units.
+
+The Raychi has been sliced in twain, budding into a new “Boomchi” which takes the explosive abilities of the Raychi and puts it to better use. Raychi have now been adjusted into a more standard naval unit, while the Boomchi is a similar unit that has very little in the way of self-preservation. Blow them up to create algae or deter foes, they don’t mind! Boomchi can also work their way on land with the “Amphibious” trait, but I wouldn’t call them “land units” because of it.
+
+
+
+We’ve also given the Cymanti the “Living Island”, a large, hulking, aquatic leviathan that naturally spawns fruitless Algae as it roams the waters, dealing area damage. It’s effectively the Cymanti answer to Juggernauts while making it easier for them to move their land-based armies across the sea.
+
+
+Also worth noting, the Clathrus is now a land building that works off of Fungi, not Algae. It’s poisonous, like Fungi, but no longer creates network connections. Thankfully, Mycellium can now be built on Algae, so, don’t fret. Also, Cymanti explorers can now move on the water like anyone else!
+
+But What About Stuff on Land?
+The naval side of Cymanti isn’t all that’s gotten some adjustments. The big stuff on land involves a new unit and other changes. 
+
+* Fungi are now limited to 2 levels, but the “Recycling” tech add the “Microbes” ability, which unlocks a 3rd level for them.
+* Creep no longer negates the terrain movement penalty of mountains, but the Kiton now has Creep.
+* Poison defense debuff was increased to 50%, but the defense bonuses, themselves, are now intact. That means a Wall will give you some protection. Poison also slows down enemy units, to help compensate for no longer fully negating defensive bonuses.
+* Phychi now have the “Double Attack” trait, allowing them to spread Poison more easily
+* The Doomux can no longer become a veteran and its attack has been brought down to 3.5, but now all explosive units can Explode after attacking. That way, it’s better at digging into the enemy’s frontline or catapults and doing plenty of damage.
+* The Swordsman has been replaced with the Mantis, which is the same thing, but now with Creep, so it can benefit from the Shaman’s speed boost. Not really a point in giving it its own little section on this blog post, so here’s a picture.
+
+
+Here’s where things get really fun, though. We’ve replaced the Cloak with the Moth, which is very similar, but…different, obviously. Like Cloaks, a Moth’s primary job is to infiltrate cities, but they can fly! They don’t spawn Daggers when they infiltrate, but they will Poison the city’s defenses and lay Eggs. Eggs can’t move (but can explode), and after a turn, they’ll hatch into Larva, which are similar to Daggers. 3 more turns later, and any remaining Larva will transform into Moths, and the cycle continues! Moths do not have the Hide skill, which means they aren’t invisible.
+
+
+
+
+The Shaman has also gotten some changes. “Boost” has been renamed to “Swarm,” and no longer applies a damage bonus, it only buffs movement. The Shaman has also been moved to the “Meditation” tech (now known as “Rituals”), to make them easier to replace if you lose one too early, and the Mountain Temple has been moved to “Philosophy,” now known as “Mysticism. Most importantly, though, the Cymanti aren’t big into “being pacifists”, so the “Pacifist” task has been replaced with the “Converter” task, granting them the “Church of Converts” Monument if they can convert 3 enemies to the swarm.
+
+Oh yeah, and I forgot to mention, any unit that changes into a different unit, like, “Baby Dragons” -> “Fire Dragons” will inherit any damage their previous form had. Same goes for things like Centipedes, Larva, etc, so you can’t just transform them to heal to full, you actually have to care about them as they grow.
+
+And that’s that! We look forward to seeing what you think of this new, revamped Cymanti! You can talk all about them on our Discord!
+
+-Zoythrus
+
+Full Changelog
+Naval changes
+– Cymanti explorer can now move on water like other tribes
+– Moved around naval techs to replicate Path of the Ocean changes
+– Algae is now a tile effect instead of an improvement, other improvements can be built on top of it. Spawns with a fruit on top
+– Algae does not cripple movement for naval units (but still for land units)
+– Clathrus is now a land building and grows from spores instead of algae. It is poisonous, but no longer creates networks (Mycelium can now be built on Algae instead)
+– Raychi is split into two units; Boomchi that explodes to create algae, and a slightly adjusted Raychi
+– Boomchi get “amphibious” ability so they can move on land
+– ’Floating Island’ unit in navigation, spawns algae + area damage
+
+Other changes
+– ’Mantis’ replaces Swordsman, same stats but with ‘creep’ ability
+– Fungi is limited to level 2
+– ’Microbes’ ability in ‘Recycling’ allows Fungi to grow 1 additional level
+– Growing units (centipede head, dragons, larva etc.) inherit the damage from their previous state
+– ’Kiton’ get ‘creep’
+– Creep no longer overcomes mountain movement penalty
+– Phychi get a “double attack” ability
+– Poison defense debuff increased to 50% but defense bonuses are intact
+– Poison now slow down enemy units
+– Explode units can explode even after attacking
+– Doomux cannot become veteran
+– Doomux attack down to 3.5
+
+Diplomacy changes
+– Cloaks replaced by Moths, they can fly but are not invisible. When they infiltrate a city they poison defenses and lay Eggs
+– Eggs can’t move but can explode, and if you wait 1 tur,n they will hatch into Larva that are similar to Daggers
+– After 3 turns, Larva will turn into Moths, making the circle complete
+
+Shaman changes
+– ‘Boost’-ability replaced by ‘Swarm’ that only buffs movement
+– Movement buff is retained until the unit gets attacked
+– ’Shaman moved to ‘meditation’ so it is easier to replace
+– ’Mountain temple’ moved to ‘Philosophy’
+– ‘Pacifist’ task is replaced by ‘Converter’ (convert 3 enemies to build ‘Church of Converts’ monument)
+
+Non-Cymanti adjustments
+– Improved explorer movement
+– Score penalty for starving cities
+– Adjusted look of UI
+
+October 9, 2025
+Blog, Uncategorized
+31
+152
+It’s Time for the Cymanti Rework Beta!
+
+Hey Polytopians! It turns out old bugs can learn new tricks!
+
+We told you recently that we’d be reworking the Cymanti, and sure enough, we’ve delivered! There’s a lot of changes in this playtest, and we’ve got a lot to cover, so join me as I talk about what we’ve been doing to our chitinous friends. So, without further ado, let’s start with their naval mechanics.
+
+This Post Was Edited to Reflect New Information On: 22/10/25
+
+
+A New Kind of Waterbug
+
+Algae has gotten some big changes. First, it’s no longer just a tile improvement, but is now a whole new tile effect, kinda like Aquarion’s “Flooded”. That means that it completely changes the tile, itself, and can now have things built on top of it. As a nice little bonus, whenever you spawn Algae, you don’t get a free pop, but it does come with a free dollop of Aphea Nectar (the Cymanti fruit). Algae also no longer limits movement for naval units, but will still slow down land units.
+
+The Raychi has been sliced in twain, budding into a new “Boomchi” which takes the explosive abilities of the Raychi and puts it to better use. Raychi have now been adjusted into a more standard naval unit, while the Boomchi is a similar unit that has very little in the way of self-preservation. Blow them up to create algae or deter foes, they don’t mind! Boomchi can also work their way on land with the “Amphibious” trait, but I wouldn’t call them “land units” because of it.
+
+
+
+We’ve also given the Cymanti the “Living Island”, a large, hulking, aquatic leviathan that naturally spawns fruitless Algae as it roams the waters, dealing area damage. It’s effectively the Cymanti answer to Juggernauts while making it easier for them to move their land-based armies across the sea.
+
+
+Also worth noting, the Clathrus is now a land building that works off of Fungi, not Algae. It’s poisonous, like Fungi, but no longer creates network connections. Thankfully, Mycellium can now be built on Algae, so, don’t fret. Also, Cymanti explorers can now move on the water like anyone else!
+
+But What About Stuff on Land?
+The naval side of Cymanti isn’t all that’s gotten some adjustments. The big stuff on land involves a new unit and other changes. 
+
+* Fungi are now limited to 2 levels, but the “Recycling” tech add the “Microbes” ability, which unlocks a 3rd level for them.
+* Creep no longer negates the terrain movement penalty of mountains, but the Kiton now has Creep.
+* Poison defense debuff was increased to 50%, but the defense bonuses, themselves, are now intact. That means a Wall will give you some protection. Poison also slows down enemy units, to help compensate for no longer fully negating defensive bonuses.
+* Phychi now have the “Double Attack” trait, allowing them to spread Poison more easily
+* The Doomux can no longer become a veteran and its attack has been brought down to 3.5, but now all explosive units can Explode after attacking. That way, it’s better at digging into the enemy’s frontline or catapults and doing plenty of damage.
+* The Swordsman has been replaced with the Mantis, which is the same thing, but now with Creep, so it can benefit from the Shaman’s speed boost. Not really a point in giving it its own little section on this blog post, so here’s a picture.
+
+
+Here’s where things get really fun, though. We’ve replaced the Cloak with the Moth, which is very similar, but…different, obviously. Like Cloaks, a Moth’s primary job is to infiltrate cities, but they can fly! They don’t spawn Daggers when they infiltrate, but they will Poison the city’s defenses and lay Eggs. Eggs can’t move (but can explode), and after a turn, they’ll hatch into Larva, which are similar to Daggers. 3 more turns later, and any remaining Larva will transform into Moths, and the cycle continues! Moths do not have the Hide skill, which means they aren’t invisible.
+
+
+
+
+The Shaman has also gotten some changes. “Boost” has been renamed to “Swarm,” and no longer applies a damage bonus, it only buffs movement. The Shaman has also been moved to the “Meditation” tech (now known as “Rituals”), to make them easier to replace if you lose one too early, and the Mountain Temple has been moved to “Philosophy,” now known as “Mysticism. Most importantly, though, the Cymanti aren’t big into “being pacifists”, so the “Pacifist” task has been replaced with the “Converter” task, granting them the “Church of Converts” Monument if they can convert 3 enemies to the swarm.
+
+Oh yeah, and I forgot to mention, any unit that changes into a different unit, like, “Baby Dragons” -> “Fire Dragons” will inherit any damage their previous form had. Same goes for things like Centipedes, Larva, etc, so you can’t just transform them to heal to full, you actually have to care about them as they grow.
+
+And that’s that! We look forward to seeing what you think of this new, revamped Cymanti! You can talk all about them on our Discord!
+
+-Zoythrus
+
+Full Changelog
+Naval changes
+– Cymanti explorer can now move on water like other tribes
+– Moved around naval techs to replicate Path of the Ocean changes
+– Algae is now a tile effect instead of an improvement, other improvements can be built on top of it. Spawns with a fruit on top
+– Algae does not cripple movement for naval units (but still for land units)
+– Clathrus is now a land building and grows from spores instead of algae. It is poisonous, but no longer creates networks (Mycelium can now be built on Algae instead)
+– Raychi is split into two units; Boomchi that explodes to create algae, and a slightly adjusted Raychi
+– Boomchi get “amphibious” ability so they can move on land
+– ’Living Island’ unit in navigation, spawns algae + area damage
+
+Other changes
+– ’Mantis’ replaces Swordsman, same stats but with ‘creep’ ability
+– Fungi is limited to level 2
+– ’Microbes’ ability in ‘Recycling’ allows Fungi to grow 1 additional level
+– Growing units (centipede head, dragons, larva etc.) inherit the damage from their previous state
+– ’Kiton’ get ‘creep’
+– Creep no longer overcomes mountain movement penalty
+– Phychi get a “double attack” ability
+– Poison defense debuff increased to 50% but defense bonuses are intact
+– Poison now slow down enemy units
+– Explode units can explode even after attacking
+– Doomux cannot become veteran
+– Doomux attack down to 3.5
+
+Diplomacy changes
+– Cloaks replaced by Moths, they can fly but are not invisible. When they infiltrate a city they poison defenses and lay Eggs
+– Eggs can’t move but can explode, and if you wait 1 tur,n they will hatch into Larva that are similar to Daggers
+– After 3 turns, Larva will turn into Moths, making the circle complete
+
+Shaman changes
+– ‘Boost’-ability replaced by ‘Swarm’ that only buffs movement
+– Movement buff is retained until the unit gets attacked
+– ’Shaman moved to ‘meditation’ so it is easier to replace
+– ’Mountain temple’ moved to ‘Philosophy’
+– ‘Pacifist’ task is replaced by ‘Converter’ (convert 3 enemies to build ‘Church of Converts’ monument)
+
+Non-Cymanti adjustments
+– Improved explorer movement
+– Score penalty for starving cities
+– Adjusted look of UI
+
+September 17, 2025
+Blog
+20
+15
+First Round of Qualifications Completed!
+In case you missed it, the first round of qualifications for the Polytopia World Championship took place last weekend. Thousands of players signed up, but with only 512 slots available, demand far exceeded supply. The tournaments featured Bardur, Kickoo, Imperius, and Zebasi, producing 32 winners who have now qualified for the tribe finals in early October. Over a thousand high-level matches were played, and you can find replays on the official Tournament Page.
+
+
+Screenshot from one of the Qualifiers last weekend.
+From these 32 winners, one player from each tribe will advance to the Face-Off round in November and compete for a place in the live Finals in Stockholm on December 6th — and a share of the $10,000 prize pool.
+
+You can read more about how to enter the Polytopia World Championship 2025 here.
+
+Slots are limited and demand is high — but don’t worry if you missed out last weekend. Qualifications are running every weekend, so you’ll have another chance!
+
+Join tournaments directly in the game by going to Multiplayer > Tournaments — or sign up here.
+
+September 1, 2025
+Blog
+117
+469
+What’s That? The 2025 Balance Pass is Here?!
+
+Hey Polytopians!
+
+What’s changed? Let’s talk about it, but before we do, we’d like you to know that there are ZERO Cymanti changes in this update. We agree with you that they need to be adjusted, and we tested out some ideas in the beta, but we feel that they need more time in the workshop before we’re happy with them. We’ll be implementing a Cymanti Rework in the near future, so stay tuned.
+
+Without further ado, here’s the changes:
+
+* Ai-Mo now starts with Philosophy instead of Meditation, and a Mind Bender to go with it
+* Extra starting Stars for some tribes to help them out:
+* Xin-xi begins with 7 Stars
+* Oumaji begins with 6 Stars ( that’s not a typo, they begin with 6)
+* Hoodrick begins with 7 Stars
+* Quetzali begins with 7 Stars
+* Yădakk begins with 7 Stars
+* Luxidoor begins with 2 Stars in addition to their upgraded Capital (to match their wealth)
+* All other tribes begin with 5 Stars
+* Tech can be researched “backwards,” so Vengir can go from Smithery to Mining without Climbing
+* Forges can be built on Forests
+* Temples give 100p per level of growth instead of 50p
+* Cost of “Burn Forest” down to 3*
+* Polytaur cost up to 3*
+* Cost of new Embassies begins cheaper, but increases based on the number of Embassies you have
+
+Polaris changes:
+* Corrected Glide ability to give 1 extra move (instead of double)
+* Adjusted Skate ability so Battle Sled only has 3 movement on ice (instead of 4)
+* Ice Fortress now has Escape and Static
+* Ice Archers get 1 attack
+
+General changes:
+* Multiplayer should not fall back to “60 days” turn time limit
+* Multiplayer should not fall back to “Perfection” game mode
+* Solaris Crater stays a Crater when an opponent takes over territory
+* Solaris Lava Bank stays a Lava Bank when an opponent takes over territory
+
+That is all the changes for now, but don’t be surprised if we make more adjustments over time. If you’d like to give us your feedback on these changes, or just want to say “Hi”, stop on by our Discord!
+
+Have fun out there!
+
+June 23, 2025
+Blog
+0
+11
+Testing the New Dev Blog
+We’re in the middle of building a shiny new layout for our upcoming Dev Blog — and let’s just say, it’s been a little more complicated than dragging and dropping a few boxes. Turns out, making something look simple takes a lot of work. We imagined a smooth ride, but it’s been more like:
+
+* “This layout looks perfect!” → breaks on mobile
+* “Let’s just tweak the font size…” → entire site explodes
+* “Should this header be bold or bold-bold?”
+
+
+We’re taking the time to get it right because we want the Dev Blog to be more than just a wall of text. Our goal is to make it:
+
+Visually clean and fun to readEasy to navigate, even on a toaster (or phone)
+A proper home for game dev insights, behind-the-scenes chaos, and sneak peeks
+A happy place!
+Thanks for bearing with us while we sort it out. It’ll be worth the wait — pinky promise…
+
+June 9, 2025
+Blog
+1
+31
+Weekly Challenges are Now Here!
+Hey Polytopians!
+
+If you were playing on our beta branch for the past few weeks, you probably know all about Weekly Challenges. If you haven’t, let’s give you a rundown on what Weekly Challenges are! It is a completely new way of playing Polytopia.
+
+
+What are these “Weak Challenges?
+Haha, no, “Weekly”, as in, every week we’ll be giving all players the exact same seed to play with in this all-new single-player challenge! After you’ve played 5 regular games, you’ll be able to jump into Weekly Challenges. There, we give everyone the same landmass, same tribe, same opponents, etc, and you’ll have the entire week to get the highest score you can! You’ll only get one chance to play it per day, so that’s 7 total tries!
+
+
+But why would I want to play the same thing over and over again?
+
+Bragging rights? Personal accomplishment? Oh, yeah, LEAGUES!
+
+There are 4 leagues that you can join based on how well you did in the previous week.
+When you first play Weekly Challenges, you’re placed in the Entry League. After you leave it, you’ll never be able to demote back to it. After that, there’s Bronze -> Silver -> Gold Leagues as well! Every week, the top 1/3rd of players will move up a League, the bottom 1/3rd of players will move down a League, and the final 1/3rd keeps their spot. Don’t worry, you won’t be demoted if you don’t play for a week, this only applies if you attempted a Weekly Challenge. What happens if you get top 1/3rd in Gold League? You get to wait for us to realize that we should have probably added more Leagues….
+
+Everyone will still use the same seed and settings regardless of League, but the difficulty of the bots will be adjusted per League, starting with Easy in Entry and ending with Crazy in Gold.
+
+What else should I know about Weekly Challenges?
+
+You do not need to own the tribe or skin that you’re playing with in a Weekly Challenge. Think of it like, a sneak-preview of what a tribe or skin is like.
+To keep things fast and to encourage quick maximization of points, we’ve reduced all Weekly Challenge matches to 20 turns. Normal games are untouched.
+You’ll see this little symbol telling you that a new Weekly Challenge has started, but only if you played the week before.
+
+Now what?
+What are you waiting for?! Go show us your skills, as Weekly Challenges are available for all to play!
+
+Or you could watch this video….and then play!
+
+Facebook-f
+ Instagram
+ Twitter
+ Youtube
+Contact
+Midjiwan AB
+Magnus Ladulåsgatan 65
+118 27 Stockholm
+Sweden
+www.midjiwan.com
+
+Useful Polytopia Links
+World Championship
+Tournaments
+Wikia
+Game Graphics
+Game Asset Guidelines
+Foldables
+More Useful Polytopia Links
+Community Works
+Calendar
+Ringtones
+Music (Full versions)
+Music Stems
+Giphys
+Polytopia Community Channels
+Discord
+ Facebook-f
+ Instagram
+ Twitter
+ Youtube
+ Reddit
+ Tiktok

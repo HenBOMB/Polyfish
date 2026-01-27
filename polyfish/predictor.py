@@ -56,31 +56,28 @@ class PredictorBatcher:
                     'map': batched_map,
                     'player': batched_player
                 })
-                pi_action = F.softmax(output['pi_action_logits'], dim=-1)
-                pi_actor = F.softmax(output['pi_actor_logits'], dim=-1)
-                pi_target = F.softmax(output['pi_target_logits'], dim=-1)
-                pi_option_struct = F.softmax(output['pi_option_struct_logits'], dim=-1)
-                pi_option_skill = F.softmax(output['pi_option_skill_logits'], dim=-1)
-                pi_option_unit = F.softmax(output['pi_option_unit_logits'], dim=-1)
-                pi_option_tech = F.softmax(output['pi_tech_logits'], dim=-1)
-                pi_option_reward = torch.sigmoid(output['pi_reward_logits'])
+                # Network outputs logits, convert to probabilities
+                pi_action = F.softmax(output['pi_action'], dim=-1)
+                pi_source = F.softmax(output['pi_source'], dim=-1)  # This is the actor/source spatial head
+                pi_target = F.softmax(output['pi_target'], dim=-1)
+                pi_struct = F.softmax(output['pi_struct'], dim=-1)
+                pi_skill = F.softmax(output['pi_skill'], dim=-1)
+                pi_unit = F.softmax(output['pi_unit'], dim=-1)
+                pi_tech = F.softmax(output['pi_tech'], dim=-1)
+                pi_reward = torch.sigmoid(output['pi_reward'])
                 v_win = output['v_win'].cpu().numpy()
-                v_eco = output['v_eco'].cpu().numpy()
-                v_mil = output['v_mil'].cpu().numpy()
 
             # Scatter results back to requests
             for i, req in enumerate(batch):
                 req.result = (
                     [_.item() for _ in pi_action[i]], 
-                    [_.item() for _ in pi_actor[i]], 
+                    [_.item() for _ in pi_source[i]],  # Return as pi_source to match TypeScript
                     [_.item() for _ in pi_target[i]], 
-                    [_.item() for _ in pi_option_struct[i]], 
-                    [_.item() for _ in pi_option_skill[i]], 
-                    [_.item() for _ in pi_option_unit[i]], 
-                    [_.item() for _ in pi_option_tech[i]], 
-                    [_.item() for _ in pi_option_reward[i]], 
-                    v_win[i].item(),
-                    v_eco[i].item(),
-                    v_mil[i].item()
+                    [_.item() for _ in pi_struct[i]], 
+                    [_.item() for _ in pi_skill[i]], 
+                    [_.item() for _ in pi_unit[i]], 
+                    [_.item() for _ in pi_tech[i]], 
+                    [_.item() for _ in pi_reward[i]], 
+                    v_win[i].item()
                 )
                 req.event.set()

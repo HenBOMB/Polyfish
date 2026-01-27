@@ -1,13 +1,16 @@
 import path from "path";
 import { getPovTribe, isGameOver, isGameWon, isGameLost } from "../../core/functions";
 import Move, { UndoCallback } from "../../core/move";
-import { MoveGenerator } from "../../core/moves";
+import { MoveGenerator, Prediction } from "../../core/moves";
 import { GameState } from "../../core/states";
 import { MoveType } from "../../core/types";
 import Game from "../../game";
 import { scoreMovePriority, evaluateState, calculateStageValue } from "../eval";
 import { GMath } from "../gmath";
 import { Worker } from 'worker_threads';
+import GameLoader from "../../core/gameloader";
+import AIState from "../../aistate";
+import { sampleFromDistribution } from "../util";
 
 export class MCTSNode {
 	readonly legal: Move[];
@@ -48,25 +51,37 @@ export class MCTSNode {
 		return this.expanded;
 	}
 	
-	expand() {
+	expand(prediction?: Prediction) {
 		if(this.expanded) return;
 		this.expanded = true;
 		
 		const epsFloor = 1e-6;
+		
+		if (prediction) {
+			// Use neural network predictions
+			const result = MoveGenerator.fromPrediction(this.state, prediction, this.legal);
+			const sum = result.reduce((sum, x) => sum + x[1], 0) || 1;
+			
+			for (let a = 0; a < this.count; a++) {
+				// Find the probability for this move index
+				const moveResult = result.find(r => r[2] === a);
+				this.P[a] = Math.max(moveResult ? moveResult[1] / sum : epsFloor, epsFloor);
+			}
+		} else {
+			// Fallback to heuristic priorities if no prediction available
 		const movePriorities = this.legal.map(move => scoreMovePriority(move));
 		const sumPriorities = movePriorities.reduce((sum, priority) => sum + priority, 0);
 		
-		// This should never happen but just in case then the priorities are setup wrong
 		if (sumPriorities === 0) {
 			throw new Error("Sum of move priorities is 0");
 		}
 		
 		for (let a = 0; a < this.count; a++) {
 			this.P[a] = Math.max(movePriorities[a] / sumPriorities, epsFloor);
+			}
 		}
 		
 		const s = this.P.reduce((x, y) => x + y, 0);
-		
 		for (let a = 0; a < this.count; a++) this.P[a] /= s;
 	}
 	
@@ -128,6 +143,103 @@ export class MCTSNode {
 	}
 }
 
+export async function SelfPlay(
+	predict: (state: GameState) => Promise<Prediction>,
+	nGames: number,
+	nSims: number,
+	temperature: number,
+	cPuct: number,
+	gamma: number,
+	deterministic: boolean,
+	dirichlet: boolean,
+	rollouts: number,
+	game_settings: any
+) {
+	const allTrainingData: Array<any> = [];
+	const loader = new GameLoader();
+
+	for (let i = 0; i < nGames; i++) {
+		try {
+			await loader.loadRandom(game_settings as any);
+		} catch (err) {
+			console.error('GameLoader.loadRandom failed', err);
+			continue;
+		}
+
+		const game = new Game();
+		try {
+			game.load(loader.currentState);
+		} catch (err) {
+			console.error('Game.load failed', err);
+			continue;
+		}
+
+		const episode: Array<any> = [];
+		const undos: Array<() => void> = [];
+
+		while (!isGameOver(game.state)) {
+			let obs;
+			try {
+				obs = AIState.extract(game.state);
+			} catch (err) {
+				console.error('AIState.extract failed', err);
+				break;
+			}
+			const legal = MoveGenerator.legal(game.state);
+
+			let pi: number[] = new Array(legal.length).fill(0);
+			let moveIndex: number;
+
+			if (legal.length === 1) {
+				moveIndex = 0;
+				pi[0] = 1;
+			} else {
+				const mcts = new MCTS(game, cPuct, dirichlet, rollouts, 0, undefined, predict);
+				// prepare workers not needed for single-thread
+				const root = await mcts.search(nSims);
+				const probs = root.distribution(temperature);
+				for (let j = 0; j < probs.length; j++) pi[j] = probs[j];
+				moveIndex = deterministic ? probs.indexOf(Math.max(...probs)) : sampleFromDistribution(probs);
+			}
+
+			const playRes = game.playMove(moveIndex);
+			if (!playRes) break;
+			const [move, undo] = playRes;
+			undos.unshift(undo);
+
+			// compute v_win approx: use immediate prediction value
+			let v_win = 0;
+			try {
+				const prediction = await predict(game.state);
+				v_win = prediction.v_win;
+			} catch (err) {
+				console.error('predict failed', err);
+			}
+
+			episode.push({ obs, pi, v_win, pov: game.state.settings.currentPlayerTurnId });
+		}
+
+		// compute discounted returns
+		let G = 0;
+		for (let t = episode.length - 1; t >= 0; t--) {
+			const item = episode[t];
+			G = item.v_win + gamma * G;
+			const signedG = item.pov === (Object.values(loader.currentState.tribes)[0]?.id || 1) ? G : -G;
+			// dataset tuple: [obsDict, targetPoliciesDict, targetValuesDict, tag]
+			allTrainingData.push([
+				item.obs,
+				{ pi_action: item.pi },
+				{ v_win: signedG },
+				'SelfPlay'
+			]);
+		}
+
+		undos.forEach(u => u());
+	}
+
+	return allTrainingData;
+}
+
 export class MCTS {
 	readonly cPuct: number;
 	readonly dirichlet: boolean;
@@ -136,6 +248,7 @@ export class MCTS {
 	private game: Game;
 	private workers: Worker[] = [];
 	private legalFn: (state: GameState) => Move[];
+	private predict?: (state: GameState) => Promise<Prediction>;
 
 	constructor(
 		game: Game, 
@@ -144,6 +257,7 @@ export class MCTS {
 		maxTurnsAhead=3,
 		numThreads=1,
 		legalFn=undefined,
+		predict?: (state: GameState) => Promise<Prediction>,
 	) {
 		this.game = game;
 		this.cPuct = cPuct;
@@ -152,6 +266,7 @@ export class MCTS {
 		this.numThreads = numThreads;
 		this.workers = [];
         this.legalFn = legalFn || MoveGenerator.legal;
+		this.predict = predict;
 	}
 	
 	// private simulate_old(root: MCTSNode, game: Game): { 
@@ -274,7 +389,15 @@ export class MCTS {
 		debug=false
 	): Promise<MCTSNode> {
 		const root = new MCTSNode(this.game.state, this.legalFn);
-		root.expand();
+		
+		// Get neural network prediction for root node if available
+		let rootPrediction: Prediction | undefined;
+		if (this.predict) {
+			rootPrediction = await this.predict(this.game.state);
+			root.expand(rootPrediction);
+		} else {
+			root.expand(); // Fallback to heuristic
+		}
 		
 		if(this.dirichlet) {
 			const count = this.legalFn(this.game.state).length;
@@ -311,6 +434,7 @@ export class MCTS {
                     gameJson: gameJson,
                     cPuct: this.cPuct,
                     stopTurn: this.stopTurn,
+                    hasPredict: !!this.predict, // Tell worker if predictions are available
                 });
             });
             workerPromises.push(promise);

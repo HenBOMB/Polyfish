@@ -403,7 +403,7 @@ export default class GameLoader {
             settings: {
                 mode: someSettings.mode!,
                 size: Math.sqrt(Number(climateRaw.length / 2)),
-                tileCount: climateRaw.length,
+                tileCount: Number(climateRaw.length / 2), // Fix: tileCount should be size^2, not climateRaw.length
                 turn: Number(notSettings[1]),
                 _lastPlayerTurnId: -1,
                 maxTurns: someSettings.maxTurns!,
@@ -610,6 +610,10 @@ export default class GameLoader {
 
         state.settings.currentPlayerTurnId = pov;
 
+        // Sanitize generated state to ensure all numeric/enumeration fields are within expected ranges.
+        // Some external map generators may produce out-of-spec values; clamp them here as a defensive measure.
+        this.sanitizeState?.(state);
+
         this.loadGame(state);
     }
 
@@ -619,6 +623,56 @@ export default class GameLoader {
             hash: this.currentState.tribes[this.currentState.settings.currentPlayerTurnId]._hash.toString(),
         } as any, null, 2));
         console.log(`Saved state to data/${filename}.json`);
+    }
+
+    // Defensive sanitization to keep generated states within expected ranges for the AI extractor.
+    private sanitizeState(state: GameState) {
+        // Clamp tile types and climates
+        for (const i in state.tiles) {
+            const tile = state.tiles[Number(i)];
+            if (typeof tile.type !== 'number' || tile.type < 0 || tile.type > TerrainType.Ice) {
+                tile.type = TerrainType.Field;
+            }
+            if (typeof tile.climate !== 'number' || tile.climate < 0) {
+                tile.climate = ClimateType.Nature as any;
+            }
+            // Ensure explorers is a Set
+            if (!tile.explorers || !(tile.explorers instanceof Set)) {
+                tile.explorers = new Set();
+            }
+        }
+
+        // Clamp resources
+        for (const idx in state.resources) {
+            const r = state.resources[Number(idx)];
+            if (!r) continue;
+            if (typeof r.type !== 'number' || r.type < 0 || r.type > ResourceType.AquaCrop) {
+                r.type = ResourceType.None;
+            }
+            if (typeof r.tileIndex !== 'number') {
+                r.tileIndex = Number(idx);
+            }
+        }
+
+        // Clamp tribes, cities and units fields that feed into AIState.extract
+        for (const owner in state.tribes) {
+            const tribe = state.tribes[owner];
+            // Units
+            for (const u of tribe.units) {
+                if (typeof u.health !== 'number' || u.health < 0) u.health = 0;
+                if (typeof u.moved !== 'boolean') u.moved = false;
+                if (typeof u.attacked !== 'boolean') u.attacked = false;
+                if (typeof u.kills !== 'number' || u.kills < 0) u.kills = 0;
+            }
+            // Cities
+            for (const c of tribe.cities) {
+                if (typeof c.level !== 'number' || c.level < 0) c.level = 1;
+                if (typeof c.progress !== 'number' || c.progress < 0) c.progress = 0;
+                if (typeof c._walls !== 'boolean') c._walls = false;
+                if (typeof c._riot !== 'boolean') c._riot = false;
+                if (!Array.isArray(c._territory)) c._territory = [];
+            }
+        }
     }
 
     private updatePredictions(state: GameState) {

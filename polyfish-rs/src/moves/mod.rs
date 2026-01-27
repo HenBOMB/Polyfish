@@ -1,0 +1,683 @@
+//! Move generation and move types
+//!
+//! This module contains the Move trait and all move type implementations.
+
+pub mod abilities;
+pub mod attack;
+pub mod build;
+pub mod capture;
+pub mod disband;
+pub mod harvest;
+pub mod recover;
+pub mod research;
+pub mod reward;
+pub mod step;
+pub mod summon;
+pub mod upgrade;
+
+pub use abilities::*;
+pub use attack::AttackMove;
+pub use build::BuildMove;
+pub use capture::CaptureMove;
+pub use disband::DisbandMove;
+pub use harvest::HarvestMove;
+pub use recover::RecoverMove;
+pub use research::ResearchMove;
+pub use reward::RewardMove;
+pub use step::StepMove;
+pub use summon::SummonMove;
+pub use upgrade::UpgradeMove;
+
+use crate::actions::UndoCallback;
+use crate::functions::{
+    get_adjacent_indices, get_enemy_at, get_structure_at, get_structure_type_at,
+};
+use crate::settings::resources::get_resource_setting;
+use crate::settings::{get_unit_setting, has_skill};
+use crate::states::*;
+use crate::types::*;
+
+/// Result of executing a move
+pub struct MoveResult {
+    /// Undo callback to reverse the move
+    pub undo: UndoCallback,
+    /// Optional reward moves generated
+    pub rewards: Option<Vec<Box<dyn Move>>>,
+}
+
+/// A game move that can be executed and undone
+pub trait Move: std::fmt::Debug {
+    /// Get the move type
+    fn move_type(&self) -> MoveType;
+
+    /// Execute the move on the game state
+    fn execute(&self, state: &mut GameState) -> MoveResult;
+
+    /// Human-readable description
+    fn describe(&self, state: &GameState) -> String;
+
+    /// Serialize to JSON for network/storage
+    fn serialize(&self) -> serde_json::Value;
+}
+
+/// End turn move
+#[derive(Debug, Clone)]
+pub struct EndTurnMove;
+
+impl Move for EndTurnMove {
+    fn move_type(&self) -> MoveType {
+        MoveType::EndTurn
+    }
+
+    fn execute(&self, _state: &mut GameState) -> MoveResult {
+        // EndTurn is handled specially in Game::play_move
+        MoveResult {
+            undo: Box::new(|_| {}),
+            rewards: None,
+        }
+    }
+
+    fn describe(&self, _state: &GameState) -> String {
+        "End Turn".to_string()
+    }
+
+    fn serialize(&self) -> serde_json::Value {
+        serde_json::json!({ "moveType": MoveType::EndTurn })
+    }
+}
+
+/// Generate all legal moves for the current player
+pub fn generate_legal_moves(state: &GameState) -> Vec<Box<dyn Move>> {
+    let mut moves: Vec<Box<dyn Move>> = Vec::new();
+
+    // 1. Check for pending rewards (logical blocking as in TS MoveGenerator.legal)
+    crate::moves::reward::generate_reward_moves(state, &mut moves);
+    if !moves.is_empty() {
+        return moves;
+    }
+
+    // EndTurn is always available
+    moves.push(Box::new(EndTurnMove));
+
+    // 2. Army Moves (Units, Summons, Upgrades)
+    generate_unit_moves(state, &mut moves);
+    crate::moves::summon::generate_summon_moves(state, &mut moves);
+    crate::moves::upgrade::generate_upgrade_moves(state, &mut moves);
+    crate::moves::abilities::unit_actions::generate_unit_action_moves(state, &mut moves);
+
+    // 3. Econ Moves (Research, Build, Harvest, Econ Abilities)
+    generate_econ_moves(state, &mut moves);
+    crate::moves::abilities::unit_actions::generate_economic_ability_moves(state, &mut moves);
+    crate::moves::abilities::diplomacy::generate_break_peace_moves(state, &mut moves);
+
+    moves
+}
+
+fn generate_unit_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
+    let pov_id = state.settings.current_player_turn_id;
+
+    // Get current player's tribe
+    let tribe = match state.tribes.get(&pov_id) {
+        Some(t) => t,
+        None => return,
+    };
+
+    for unit in &tribe.units {
+        // PER UNIT ORDER: captures, actions, attacks, steps
+
+        // 1. Capture
+        if !unit.moved && !unit.attacked {
+            generate_capture_moves(state, unit, moves);
+        }
+
+        // 2. Actions (Promote, Disband, Recover, Ability skills)
+        crate::moves::abilities::unit_actions::generate_unit_action_moves_for_unit(
+            state, tribe, unit, moves,
+        );
+
+        // 3. Attack (Requires positive health)
+        if !unit.attacked && unit.health > 0 {
+            generate_attack_moves(state, unit, unit.coords.idx, moves);
+        }
+
+        // 4. Steps
+        if !unit.moved {
+            generate_step_moves(state, unit, moves);
+        }
+    }
+}
+
+/// Generate capture moves
+fn generate_capture_moves(state: &GameState, unit: &UnitState, moves: &mut Vec<Box<dyn Move>>) {
+    let idx = unit.coords.idx;
+    if let Some(structure) = get_structure_at(state, idx) {
+        match structure.structure_type {
+            StructureType::Village => {
+                let tile = state.tiles.get(&idx);
+                let tile_owner = tile.map(|t| t.owner);
+                // Village is capturable if it has no owner or is owned by an enemy
+                if tile_owner.is_none() || tile_owner != Some(unit.owner) {
+                    moves.push(Box::new(CaptureMove::new(idx)));
+                }
+            }
+            StructureType::Ruin => {
+                moves.push(Box::new(CaptureMove::new(idx)));
+            }
+            _ => {}
+        }
+    }
+
+    // Check Starfish (resource)
+    if let Some(Some(resource)) = state.resources.get(&idx).as_ref() {
+        if resource.resource_type == ResourceType::Starfish {
+            let tribe = &state.tribes[&unit.owner];
+            if crate::settings::technology::has_technology(
+                &tribe.tech_vanilla,
+                TechnologyType::Navigation,
+            ) {
+                moves.push(Box::new(CaptureMove::new(idx)));
+            }
+        }
+    }
+}
+
+/// Generate economy moves
+fn generate_econ_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
+    let pov_id = state.settings.current_player_turn_id;
+
+    // Get current player's tribe
+    let tribe = match state.tribes.get(&pov_id) {
+        Some(t) => t,
+        None => return,
+    };
+
+    // Iterate cities for territory-based econ moves
+    for city in &tribe.cities {
+        for &tile_idx in &city._territory {
+            // Check for enemy unit
+            if get_enemy_at(state, tile_idx, pov_id).is_some() {
+                continue;
+            }
+
+            // Check for harvesting
+            if let Some(Some(resource)) = state.resources.get(&tile_idx).as_ref() {
+                // Must not have a structure
+                if get_structure_at(state, tile_idx).is_some() {
+                    continue;
+                }
+
+                let settings = get_resource_setting(resource.resource_type);
+                let tech_ok = match settings.tech_required {
+                    TechnologyType::Unrequired => true,
+                    tech => crate::settings::technology::has_technology(&tribe.tech_vanilla, tech),
+                };
+
+                if tech_ok && tribe.stars >= settings.cost.unwrap_or(0) {
+                    moves.push(Box::new(HarvestMove::new(tile_idx)));
+                }
+            }
+        }
+    }
+
+    // Generate research moves
+    crate::moves::research::generate_research_moves(state, moves);
+
+    // Generate build moves
+    crate::moves::build::generate_build_moves(state, moves);
+
+    // Generate forest moves (Clear/Grow/Burn)
+    crate::moves::abilities::forest::generate_forest_moves(state, moves);
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct ReachableNode {
+    index: i32,
+    cost: f32,
+    terminal: bool,
+}
+
+impl Eq for ReachableNode {}
+
+impl std::cmp::Ord for ReachableNode {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        other
+            .cost
+            .partial_cmp(&self.cost)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }
+}
+
+impl std::cmp::PartialOrd for ReachableNode {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Generate step moves for a unit using pathfinding
+fn generate_step_moves(state: &GameState, unit: &UnitState, moves: &mut Vec<Box<dyn Move>>) {
+    if unit.moved {
+        return;
+    }
+
+    let reachable = compute_reachable_tiles(state, unit);
+
+    for (&tile_index, _) in &reachable {
+        if unit.coords.idx == tile_index {
+            continue;
+        }
+
+        // Cannot end turn on a tile occupied by another unit (own or enemy)
+        // Friendly units can be passed through but not occupied.
+        if crate::functions::get_true_unit_at(state, tile_index).is_some() {
+            continue;
+        }
+
+        moves.push(Box::new(StepMove::new(unit.coords.idx, tile_index)));
+    }
+}
+
+fn compute_reachable_tiles(
+    state: &GameState,
+    unit: &UnitState,
+) -> std::collections::HashMap<i32, f32> {
+    let effective_movement = get_unit_setting(unit.unit_type).movement as f32;
+    let mut reachable = std::collections::HashMap::new();
+    let mut open_list = std::collections::BinaryHeap::new();
+
+    open_list.push(ReachableNode {
+        index: unit.coords.idx,
+        cost: 0.0,
+        terminal: false,
+    });
+    reachable.insert(unit.coords.idx, 0.0);
+
+    while let Some(current) = open_list.pop() {
+        // If current path already exists and is better, skip
+        if let Some(&best_cost) = reachable.get(&current.index) {
+            if current.cost > best_cost {
+                continue;
+            }
+        }
+
+        if current.terminal {
+            continue;
+        }
+
+        // If we have exhausted movement, we cannot expand further.
+        // But we allow the node itself to be reachable (moved into).
+        // The "Round Up" rule allows moving INTO a tile as long as we had > 0 movement remaining.
+        // So checking >= effective_movement means we have 0 remaining capacity to START a move.
+        // Exception: if cost is exactly 0.0 (unlikely for steps), infinite loop?
+        // Game costs are > 0.
+        if current.cost >= effective_movement {
+            continue;
+        }
+
+        for n_idx in get_adjacent_indices(state, current.index, 1) {
+            if n_idx == unit.coords.idx {
+                continue;
+            }
+
+            if !is_steppable(state, unit, n_idx) {
+                continue;
+            }
+
+            let move_cost = compute_movement_cost(state, unit, current.index, n_idx);
+            if move_cost < 0.0 {
+                continue;
+            }
+
+            let new_cost = current.cost + move_cost;
+
+            // "Rounding up" rule: We allow the move even if new_cost > effective_movement,
+            // provided current.cost < effective_movement (checked above).
+
+            let terminal = is_terminal(state, unit, n_idx);
+
+            let existing_cost = reachable.get(&n_idx);
+            if existing_cost.is_none() || new_cost < *existing_cost.unwrap() {
+                reachable.insert(n_idx, new_cost);
+                open_list.push(ReachableNode {
+                    index: n_idx,
+                    cost: new_cost,
+                    terminal,
+                });
+            }
+        }
+    }
+
+    reachable
+}
+
+fn compute_movement_cost(state: &GameState, unit: &UnitState, from_idx: i32, to_idx: i32) -> f32 {
+    let mut cost: f32 = 1.0;
+
+    let settings = get_unit_setting(unit.unit_type);
+
+    // Flying and creeping disable road bonuses
+    if settings.skills.contains(&SkillType::Fly) || settings.skills.contains(&SkillType::Creep) {
+        return cost;
+    }
+
+    // Road bonus
+    if is_roadpath_and_usable(state, unit, from_idx) && is_roadpath_and_usable(state, unit, to_idx)
+    {
+        return 0.5;
+    }
+
+    // Terrain specific costs
+    if let Some(tile) = state.tiles.get(&to_idx) {
+        // Glide/Skate doubles movement on frozen tiles (halves cost)
+        if tile.frozen {
+            if settings.skills.contains(&SkillType::Skate) {
+                return 0.5;
+            }
+        }
+
+        // Amphibious units moving on land are slowed (Cost = 2.0)
+        // "slows movement on land". Land is any non-water, non-flooded tile.
+        if crate::functions::is_amphibious(state, unit) {
+            let is_water_like = is_water_terrain(tile.terrain_type) || tile.flooded;
+            if !is_water_like {
+                return 2.0;
+            }
+        }
+    }
+
+    cost
+}
+
+fn is_terminal(state: &GameState, unit: &UnitState, tile_idx: i32) -> bool {
+    let settings = get_unit_setting(unit.unit_type);
+    if settings.skills.contains(&SkillType::Fly) {
+        return false;
+    }
+
+    let tile = state.tiles.get(&tile_idx).unwrap();
+
+    // Skate units are restricted to 1 movement on land (non-ice tiles)
+    if settings.skills.contains(&SkillType::Skate) && !tile.frozen {
+        return true;
+    }
+
+    // Embark (Land unit to Port)
+    let is_port = get_structure_type_at(state, tile_idx) == Some(StructureType::Port)
+        && tile.owner == unit.owner;
+
+    // "Most land units moving into a Port... unable to perform actions... applied to land units"
+    // Exceptions: Water, Amphibious, Flying.
+    let is_aquatic = settings.skills.contains(&SkillType::Float);
+    let is_amphibious = crate::functions::is_amphibious(state, unit);
+
+    if is_port && !is_aquatic && !is_amphibious {
+        return true;
+    }
+
+    // Zone of Control (ZOC)
+    if is_adjacent_to_enemy(state, tile_idx, unit.owner) {
+        let ignores_zoc = settings.skills.contains(&SkillType::Infiltrate)
+            || settings.skills.contains(&SkillType::Creep)
+            || unit.effects.contains(&EffectType::Invisible);
+        if !ignores_zoc {
+            return true;
+        }
+    }
+
+    if is_water_terrain(tile.terrain_type) {
+        // Navigate on to village
+        if settings.skills.contains(&SkillType::Navigate)
+            && get_structure_type_at(state, tile_idx) == Some(StructureType::Village)
+        {
+            return true;
+        }
+    } else {
+        // Disembark (Water unit to Land)
+        // If Amphibious, land is not terminal (just slow, handled in cost).
+        if is_naval_unit(unit.unit_type) && !is_amphibious {
+            return true;
+        }
+    }
+
+    // blocking terrain (Rough Terrain)
+    // "Units cannot move through them (they can move onto them, but no further in the same turn)"
+    // Flooded rough terrain usually acts like water (not terminal for aquatic)
+    if !tile.flooded {
+        match tile.terrain_type {
+            TerrainType::Forest => {
+                let has_creep = settings.skills.contains(&SkillType::Creep);
+                let has_usable_road = is_roadpath_and_usable(state, unit, tile_idx);
+                // Forest blocks unless Creep or Road
+                if !has_creep && !has_usable_road {
+                    return true;
+                }
+            }
+            TerrainType::Mountain => {
+                // Mountain blocks unless Creep (and Climbing must be unlocked to enter, checked in is_steppable)
+                if !settings.skills.contains(&SkillType::Creep) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    false
+}
+
+fn is_roadpath_and_usable(state: &GameState, unit: &UnitState, idx: i32) -> bool {
+    let tile = match state.tiles.get(&idx) {
+        Some(t) => t,
+        None => return false,
+    };
+
+    let has_road = tile.has_road || crate::functions::get_city_at(state, idx).is_some();
+    if !has_road {
+        return false;
+    }
+
+    // Usable if friendly or neutral or Infiltrate
+    tile.owner == unit.owner
+        || tile.owner == 0
+        || get_unit_setting(unit.unit_type)
+            .skills
+            .contains(&SkillType::Infiltrate)
+}
+
+fn is_water_terrain(terrain: TerrainType) -> bool {
+    matches!(terrain, TerrainType::Water | TerrainType::Ocean)
+}
+
+fn is_naval_unit(unit_type: UnitType) -> bool {
+    matches!(
+        unit_type,
+        UnitType::Raft
+            | UnitType::Scout
+            | UnitType::Rammer
+            | UnitType::Bomber
+            | UnitType::Juggernaut
+    )
+}
+
+fn is_aquatic_or_can_fly(unit: &UnitState, allow_boats: bool) -> bool {
+    let settings = get_unit_setting(unit.unit_type);
+    if settings.skills.contains(&SkillType::Float) || settings.skills.contains(&SkillType::Fly) {
+        return true;
+    }
+    if allow_boats && is_naval_unit(unit.unit_type) {
+        return true;
+    }
+    false
+}
+
+fn is_adjacent_to_enemy(state: &GameState, idx: i32, owner: PlayerId) -> bool {
+    for n_idx in get_adjacent_indices(state, idx, 1) {
+        if let Some(enemy) = get_enemy_at(state, n_idx, owner) {
+            if !enemy.effects.contains(&EffectType::Invisible) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Generate attack moves for a unit
+fn generate_attack_moves(
+    state: &GameState,
+    unit: &UnitState,
+    from_idx: i32,
+    moves: &mut Vec<Box<dyn Move>>,
+) {
+    // If unit has moved, it needs Dash to attack
+    // Skate units on land cannot use Dash
+    let on_ice = crate::functions::is_tile_frozen(state, from_idx);
+    let can_dash = crate::functions::has_skill(unit, SkillType::Dash)
+        && (!crate::functions::has_skill(unit, SkillType::Skate) || on_ice);
+
+    if unit.moved && !can_dash {
+        return;
+    }
+
+    if crate::functions::has_skill(unit, SkillType::Infiltrate) {
+        for target_idx in get_adjacent_indices(state, from_idx, 1) {
+            if crate::functions::is_enemy_city(state, target_idx, unit.owner)
+                && !crate::functions::is_under_siege(state, target_idx)
+            {
+                moves.push(Box::new(AttackMove::new(from_idx, target_idx)));
+            }
+        }
+    } else {
+        if crate::functions::get_unit_attack(unit) < 0.0 {
+            return;
+        }
+
+        let range = get_unit_setting(unit.unit_type).range;
+
+        // Check all tiles in range
+        for target_idx in get_tiles_in_range(state, from_idx, range) {
+            if let Some(enemy) = get_enemy_at(state, target_idx, unit.owner) {
+                if !crate::functions::is_at_peace(state, unit.owner, enemy.owner) {
+                    moves.push(Box::new(AttackMove::new(from_idx, target_idx)));
+                }
+            }
+        }
+    }
+}
+
+/// Get all tile indices within range (for ranged units)
+fn get_tiles_in_range(state: &GameState, from_idx: i32, range: i32) -> Vec<i32> {
+    let map_size = state.settings.size;
+    let fx = from_idx % map_size;
+    let fy = from_idx / map_size;
+
+    let mut tiles = Vec::new();
+
+    for dy in -range..=range {
+        for dx in -range..=range {
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+
+            let nx = fx + dx;
+            let ny = fy + dy;
+
+            if nx >= 0 && nx < map_size && ny >= 0 && ny < map_size {
+                if dx.abs().max(dy.abs()) <= range {
+                    tiles.push(ny * map_size + nx);
+                }
+            }
+        }
+    }
+
+    tiles
+}
+
+fn is_steppable(state: &GameState, unit: &UnitState, idx: i32) -> bool {
+    if !state._visible_tiles.contains_key(&idx) {
+        return false;
+    }
+
+    let settings = get_unit_setting(unit.unit_type);
+
+    // Flying units can pass through everything except tiles with enemy units
+    if settings.skills.contains(&SkillType::Fly) {
+        return get_enemy_at(state, idx, unit.owner).is_none();
+    }
+
+    let tribe = state.tribes.get(&unit.owner).unwrap();
+    let tile = state.tiles.get(&idx).unwrap();
+
+    // tech check
+    if !is_navigationable(tribe, unit.unit_type, tile) {
+        return false;
+    }
+
+    // cannot pass through enemy unit (unless Creep)
+    if get_enemy_at(state, idx, unit.owner).is_some() {
+        if !settings.skills.contains(&SkillType::Creep) {
+            return false;
+        }
+    }
+
+    let is_aquatic =
+        settings.skills.contains(&SkillType::Float) || settings.skills.contains(&SkillType::Fly);
+
+    if !is_aquatic {
+        if let Some(structure) = get_structure_at(state, idx) {
+            if structure.structure_type == StructureType::Port {
+                return tile.owner == unit.owner;
+            }
+        }
+    }
+
+    if settings.skills.contains(&SkillType::Navigate) {
+        let is_water = is_water_terrain(tile.terrain_type);
+        if !is_water {
+            if let Some(structure) = get_structure_at(state, idx) {
+                match structure.structure_type {
+                    StructureType::Village | StructureType::Ruin => return true,
+                    _ => return false,
+                }
+            } else {
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
+fn is_navigationable(tribe: &TribeState, unit_type: UnitType, tile: &TileState) -> bool {
+    if has_skill(unit_type, SkillType::Fly) || has_skill(unit_type, SkillType::Navigate) {
+        return true;
+    }
+
+    if tile.frozen {
+        return true;
+    }
+
+    match tile.terrain_type {
+        TerrainType::Water => tribe.tech_vanilla.iter().any(|t| {
+            let s = crate::settings::technology::get_technology_setting(t.tech_type);
+            s.unlocks_terrain == Some(TerrainType::Water)
+        }),
+        TerrainType::Ocean => tribe.tech_vanilla.iter().any(|t| {
+            let s = crate::settings::technology::get_technology_setting(t.tech_type);
+            s.unlocks_terrain == Some(TerrainType::Ocean)
+        }),
+        TerrainType::Mountain => tribe.tech_vanilla.iter().any(|t| {
+            let s = crate::settings::technology::get_technology_setting(t.tech_type);
+            s.unlocks_terrain == Some(TerrainType::Mountain)
+        }),
+        _ => {
+            // If not water/mountain, it's walkable land unless it's flooded.
+            // Flooded land is treated like water.
+            if tile.flooded {
+                return tribe.tech_vanilla.iter().any(|t| {
+                    let s = crate::settings::technology::get_technology_setting(t.tech_type);
+                    s.unlocks_terrain == Some(TerrainType::Water)
+                });
+            }
+            true
+        }
+    }
+}

@@ -69,31 +69,38 @@ export default class Game {
     }
 
     static deserializeState(json: string): GameState {
-        const parseCoords = (coords: { x: number, y: number, idx: number }) => Coords.from(coords.x, coords.y, state);
-        const state = JSON.parse(json) as GameState;
-        const rebuilt = {
-            _visibleTiles: { ...state._visibleTiles },
-            resources:     { ...state.resources },
-            structures:    { ...state.structures },
+        const parsed = JSON.parse(json) as GameState;
+        // Create a temporary state for coordinate parsing
+        const tempState = { settings: { size: parsed.settings.size } } as GameState;
+        const parseCoords = (coords: { x: number, y: number, idx: number }) => Coords.from(coords.x, coords.y, tempState);
+        
+        const rebuilt: GameState = {
+            _visibleTiles: { ...parsed._visibleTiles },
+            resources:     { ...parsed.resources },
+            structures:    { ...parsed.structures },
             settings:      { 
-                ...state.settings,
+                ...parsed.settings,
                 _pendingRewards: MoveGenerator.fromActions(
-                    state.settings._pendingRewards.map(x => Move.deserialize(x as any))
+                    parsed.settings._pendingRewards.map(x => Move.deserialize(x as any))
                 )
             },
-            tiles: Object.keys(state.tiles).reduce((acc, idx) => {
-                const tile = state.tiles[Number(idx)];
+            tiles: Object.keys(parsed.tiles).reduce((acc, idx) => {
+                const tile = parsed.tiles[Number(idx)];
+                // Handle explorers: convert array to Set if needed
+                const explorersArray = Array.isArray(tile.explorers) 
+                    ? tile.explorers 
+                    : Array.from(tile.explorers || []);
                 return { 
                     ...acc, 
                     [idx]: {
                         ...tile,
                         coords: parseCoords(tile.coords),
                         rulingCityCoords: tile.rulingCityCoords? parseCoords(tile.rulingCityCoords) : undefined,
-                        explorers: new Set(Object.values(tile.explorers)),
+                        explorers: new Set(explorersArray),
                     } as TileState
                 };
-            }, { }),
-            tribes: Object.values(state.tribes).reduce((acc, tribe) => ({ 
+            }, { } as Record<number, TileState>),
+            tribes: Object.values(parsed.tribes).reduce((acc, tribe) => ({ 
                 ...acc,
                 [tribe.id]: {   
                     ...tribe,
@@ -101,11 +108,11 @@ export default class Game {
                     tech_vanilla: tribe.tech_vanilla.map(x => ({ 
                         ...x 
                     })),
-                    builtUniqueImprovements: new Set(Object.values(tribe.builtUniqueImprovements)),
-                    knownPlayers: new Set(Object.values(tribe.knownPlayers)),
+                    builtUniqueImprovements: new Set(Array.isArray(tribe.builtUniqueImprovements) ? tribe.builtUniqueImprovements : Array.from(tribe.builtUniqueImprovements || [])),
+                    knownPlayers: new Set(Array.isArray(tribe.knownPlayers) ? tribe.knownPlayers : Array.from(tribe.knownPlayers || [])),
                     cities: tribe.cities.map(x => ({ 
                         ...x, 
-                        rewards: new Set(Object.values(x.rewards))
+                        rewards: new Set(Array.isArray(x.rewards) ? x.rewards : Array.from(x.rewards || []))
                     })),
                     units: tribe.units.map(unit => ({ 
                         ...unit, 
@@ -120,7 +127,7 @@ export default class Game {
                 } as TribeState
             }), {}),
         };
-        (rebuilt as any)._hiddenResources = (state as any)._hiddenResources;
+        (rebuilt as any)._hiddenResources = (parsed as any)._hiddenResources;
         return rebuilt;
     }
 

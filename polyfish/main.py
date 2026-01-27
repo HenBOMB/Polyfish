@@ -79,17 +79,20 @@ while True:
         reply({ "status": 'success' })
 
     elif cmd == 'predict':
-        output = predictor.predict(obs_to_tensor(data))
-        reply({
-            'pi_action': output[0],
-            'pi_actor': output[1],
-            'pi_target': output[2],
-            'pi_struct': output[3],
-            'pi_skill': output[4],
-            'pi_unit': output[5],
-            'pi_tech': output[6],
-            'pi_reward': output[7],
-            'v_win': output[8],
-            'v_eco': output[9],
-            'v_mil': output[10],
-        })
+        try:
+            obs_tensor = obs_to_tensor(data)
+            output = predictor.predict(obs_tensor)
+            reply({
+                'pi_action': output[0],
+                'pi_source': output[1],  # Changed from pi_actor to pi_source to match TypeScript
+                'pi_target': output[2],
+                'pi_struct': output[3],
+                'pi_skill': output[4],
+                'pi_unit': output[5],
+                'pi_tech': output[6],
+                'pi_reward': output[7],
+                'v_win': output[8],
+            })
+        except Exception as e:
+            model.logger.exception("Prediction failed")
+            reply({ 'error': str(e) })

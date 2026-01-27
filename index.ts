@@ -3,14 +3,14 @@ import { join } from "path";
 import AIState from "./src/aistate";
 import { ModeType, TribeType } from "./src/core/types";
 import { spawn } from "child_process";
-import { GameSettings, GameState, UnitState } from "./src/core/states";
+import { GameSettings, GameState, UnitState, DefaultGameSettings } from "./src/core/states";
 import Game from "./src/game";
 import {  ArmyMovesGenerator, EconMovesGenerator, MoveGenerator, Prediction } from "./src/core/moves";
 import { deepCompare } from "./src/main";
 import { Logger } from "./src/ai/logger";
 import { evaluateAllStates, evaluateState } from "./src/ai/eval";
 import { CalculateBestMoves } from "./src/ai/brute";
-import { MCTS } from "./src/ai/mcts/mcts";
+import { MCTS, SelfPlay } from "./src/ai/mcts/mcts";
 import Move from "./src/core/move";
 import EndTurn from "./src/core/moves/EndTurn";
 
@@ -46,11 +46,11 @@ const next = () => {
     
     py.stdout.once("data", (data: any) => {
         try {
-            current!.resolve(JSON.parse(data.toString()));
+            const result = JSON.parse(data.toString());
+            current!.resolve(result);
         } catch (error) {
-            console.log(error);
-            console.log('CONTENT');
-            console.log(data.toString());
+            console.error('JSON Parse Error:', error);
+            console.error('Raw Python output:', data.toString());
             current!.resolve({ } as any);
         } finally {
             current = null;
@@ -125,7 +125,8 @@ app.post('/bestmoves', (req: Request, res: Response) => {
                 cPuct: 1.0,
                 nThreads: 6,
                 maxTurnsAhead: 5,
-                deterministic: true
+                deterministic: true,
+                predict: predict  // Pass the neural network predict function
             }
         ).then(async ([ ,,,, bestMoves ]) => {
             if (bestMoves.length === 0) {
@@ -177,89 +178,117 @@ app.get('/random', async (req: Request, res: Response) => {
     });
 });
 
-// app.post('/predict', async (req: Request, res: Response) => {
-//     const state: GameState = req.body.state;
-//     if (!state) {
-//         res.status(400).json({ error: "Missing 'state' in request body." });
-//         return;
-//     }
+app.post('/predict', async (req: Request, res: Response) => {
+    const rawState: GameState = req.body.state;
+    if (!rawState) {
+        res.status(400).json({ error: "Missing 'state' in request body." });
+        return;
+    }
     
-//     try {
-//         const moves = MoveGenerator.legal(state);
-
-//         if (moves.length === 0) {
-//             res.status(200).json({ move: null, reason: "No available moves." });
-//             return;
-//         }
-        
-//         const prediction = await predict(state);
-//         throw "TODO CONVERSION"
-//         // const bestIndex = prediction.pi.indexOf(Math.max(...prediction.pi));
-        
-//         // const move = moves[bestIndex] ?? null;
-//         // res.json({ move, value: prediction.v });
-        
-//     } catch (err) {
-//         console.error("Error in /predict:", err);
-//         res.status(500).json({ error: "Prediction failed." });
-//     }
-// });
-
-app.post("/mcts", async (req: Request, res: Response) => {
     try {
-        // const prevState: GameState = req.body.state;
-        // const game = new Game();
-        // // const oldState = game.cloneState();
-        // game.load(prevState);
-        // const moves = MoveGenerator.legal(prevState);
-        // const root = await new MCTS(
-        //     game.state, predict, 
-        //     req.body.cpuct || 1.0, 
-        //     req.body.gamma || 0.997, 
-        //     req.body.dirichlet || true, 
-        //     req.body.rollouts || 50, 
-        // ).search(req.body.iterations || 100);
-        // const probs = root.distribution(req.body.temperature || 0.7);
-        // // const moveIndex = (req.body.deterministic || false)
-        // //     ? probs.indexOf(Math.max(...probs))
-        // //     : sampleFromDistribution(probs);
+        // Normalize state: convert JSON arrays back to Sets, etc.
+        // Use Game.deserializeState to properly restore Sets from JSON
+        const normalizedState = Game.deserializeState(JSON.stringify(rawState));
+        
+        console.log('[PREDICT] Extracting observation...');
+        const obs = AIState.extract(normalizedState);
+        console.log('[PREDICT] Observation extracted, map shape:', obs.map.length, obs.map[0]?.length, obs.map[0]?.[0]?.length);
+        console.log('[PREDICT] Player vector length:', obs.player.length);
+        
+        const prediction = await predict(normalizedState);
+        console.log('[PREDICT] Got prediction, keys:', Object.keys(prediction));
+        
+        if (!prediction || Object.keys(prediction).length === 0) {
+            throw new Error("Empty prediction received from Python");
+        }
+        
+        res.json(prediction);
+    } catch (err: any) {
+        console.error("Error in /predict:", err);
+        console.error("Stack:", err.stack);
+        res.status(500).json({ error: "Prediction failed.", details: err.message });
+    }
+});
+
+app.post("/play", async (req: Request, res: Response) => {
+    try {
+        const rawState: GameState = req.body.state || game.state;
+        // Normalize state: convert JSON arrays back to Sets, etc.
+        const normalizedState = rawState === game.state 
+            ? rawState 
+            : Game.deserializeState(JSON.stringify(rawState));
+        const tempGame = new Game();
+        tempGame.load(normalizedState);
+        
+        const moves = MoveGenerator.legal(tempGame.state);
+        if (moves.length === 0) {
+            res.json({ move: null, reason: "No available moves." });
+            return;
+        }
+        
+        const mcts = new MCTS(
+            tempGame,
+            req.body.cPuct || 1.0,
+            req.body.dirichlet || false,
+            req.body.maxTurnsAhead || 3,
+            req.body.nThreads || 1,
+            undefined,
+            predict
+        );
+        await mcts.prepare();
+        
+        const root = await mcts.search(req.body.iterations || 100);
+        mcts.destroy();
+        
+        const probs = root.distribution(req.body.temperature || 0.7);
+        const moveIndex = (req.body.deterministic || false)
+            ? probs.indexOf(Math.max(...probs))
+            : (() => {
+                const rand = Math.random();
+                let cumsum = 0;
+                for (let i = 0; i < probs.length; i++) {
+                    cumsum += probs[i];
+                    if (rand < cumsum) return i;
+                }
+                return probs.length - 1;
+            })();
+        
+        const selectedMove = moves[moveIndex];
+        
         res.json({
-            // probs: probs,
-            move: 'not working',
-            // move: moves[moveIndex].stringify(oldState, game.state).toLowerCase(),
+            move: selectedMove.serialize('array'),
+            moveIndex: moveIndex,
+            probabilities: probs,
+            value: root.Q[moveIndex] || 0,
         });
     } catch (err: any) {
-        console.error("autostep error:", err);
+        console.error("play error:", err);
         res.status(500).send({
             move: null,
-            state: req.body.state,
-            value: 0,
-            potential: 0,
-            reward: 0,
             error: err.message || err
         });
     }
 });
 
-// app.post('/selfplay', async (req: Request, res: Response) => {
-//     const settings = req.body.settings || DefaultGameSettings;
-//     const tribes = settings.tribes;
-//     if(typeof tribes == 'string') {
-//         settings.tribes = tribes.split(',').map(x => TribeType[x.trim() as keyof typeof TribeType]) as TribeType[];
-//     }
-//     res.json(await SelfPlay(
-//         predict,
-//         req.body.n_games || 3, 
-//         req.body.n_sims || 100, 
-//         req.body.temperature || 0.7, 
-//         req.body.cPuct || 1.0,
-//         req.body.gamma || 0.997,
-//         req.body.deterministic || false,
-//         req.body.dirichlet || true,
-//         req.body.rollouts || 50,
-//         settings,
-//     ));
-// })
+app.post('/selfplay', async (req: Request, res: Response) => {
+    const settings = req.body.settings || DefaultGameSettings;
+    const tribes = settings.tribes;
+    if(typeof tribes == 'string') {
+        settings.tribes = tribes.split(',').map(x => TribeType[x.trim() as keyof typeof TribeType]) as TribeType[];
+    }
+    res.json(await SelfPlay(
+        predict,
+        req.body.n_games || 3, 
+        req.body.n_sims || 100, 
+        req.body.temperature || 0.7, 
+        req.body.cPuct || 1.0,
+        req.body.gamma || 0.997,
+        req.body.deterministic || false,
+        req.body.dirichlet || true,
+        req.body.rollouts || 50,
+        settings,
+    ));
+})
 
 app.post('/train', async (req: Request, res: Response) => {
     res.json(new Promise((resolve) => {
@@ -350,11 +379,11 @@ async function benchmarkThreadPerformance(
 
 app.listen(3000, async () => {
     Logger.clear();
-    console.log(`\nReady on: **http://localhost:3000/**\n`);
+    console.log(`\nReady on: http://localhost:3000/\n`);
     
-    await game.loadLive({ fow: true, fallback: 'data/gamestate.json' });
+    // await game.loadLive({ fow: true, fallback: 'data/gamestate.json' });
 
-    game.state.settings._fow = false;
+    // game.state.settings._fow = false;
 
     // RUN SOME TESTS
     // await currentGame.loadRandom({ 
@@ -369,7 +398,7 @@ app.listen(3000, async () => {
     // currentGame.playSequence(...[6, 8, 5, 0, 1, 0, 0, 4, 9, 0, 1, 1, 0, 3, 0, 1, 1, 0, 1, 1, 1, 0, 2, 1, 1, 0]);
     // currentGame.playSequence(...[1, 5, 0, 1, 1, 0, 1, 5, 0, 1, 1, 0, 4, 6, 0, 4, 3, 0, 1, 1, 4, 1, 7, 7, 0, 0, 5, 1, 5, 0, 0, 5, 9, 8, 1, 1, 0, 12, 1, 1, 1, 0, 6, 7, 1, 1, 1, 1, 0, 7, 3, 1, 1, 0, 15, 5, 5, 1, 1, 0, 6, 6, 1, 9, 1]);
 
-    const iState = game.cloneState();
+    // const iState = game.cloneState();
     // let moves: Move[] = [];
     // console.log(moves.map(x => {
     //     const evalBefore = evaluateState(game)[2];

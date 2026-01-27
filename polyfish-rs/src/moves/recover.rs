@@ -1,0 +1,75 @@
+//! Recover move
+//!
+//! Unit recovers health and ends turn.
+
+use crate::actions::units::{end_unit_turn, heal_unit};
+use crate::actions::{chain_undos, UndoCallback};
+use crate::functions::is_in_own_territory;
+use crate::moves::{Move, MoveResult};
+use crate::states::GameState;
+use crate::types::MoveType;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoverMove {
+    pub target: i32,
+}
+
+impl RecoverMove {
+    pub fn new(target: i32) -> Self {
+        Self { target }
+    }
+}
+
+impl Move for RecoverMove {
+    fn move_type(&self) -> MoveType {
+        MoveType::Recover
+    }
+
+    fn execute(&self, state: &mut GameState) -> MoveResult {
+        let target = self.target;
+        // Find unit at tile
+        let unit_owner = state
+            .tiles
+            .get(&target)
+            .and_then(|t| t._unit_owner_id)
+            .unwrap_or(0);
+
+        let unit_idx = if let Some(tribe) = state.tribes.get(&unit_owner) {
+            tribe.units.iter().position(|u| u.coords.idx == target)
+        } else {
+            None
+        };
+
+        if let Some(idx) = unit_idx {
+            // Calculate heal amount
+            let in_territory = is_in_own_territory(state, target, unit_owner);
+            let amount = if in_territory { 40 } else { 20 };
+
+            let mut undos = Vec::new();
+            undos.push(heal_unit(state, unit_owner, idx, amount));
+            undos.push(end_unit_turn(state, unit_owner, idx));
+
+            MoveResult {
+                undo: chain_undos(undos),
+                rewards: None,
+            }
+        } else {
+            MoveResult {
+                undo: Box::new(|_| {}),
+                rewards: None,
+            }
+        }
+    }
+
+    fn describe(&self, _state: &GameState) -> String {
+        format!("Recover at {}", self.target)
+    }
+
+    fn serialize(&self) -> serde_json::Value {
+        serde_json::json!({
+            "moveType": MoveType::Recover,
+            "target": self.target,
+        })
+    }
+}

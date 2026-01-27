@@ -1,14 +1,16 @@
 import { xorUnit } from "../../../zobrist/hasher";
 import { endUnitTurn, splashDamageArea, tryAddEffect } from "../../actions";
+import attackUnit from "./Attack";
+import removeUnit from "./Remove";
 import { discoverTiles } from "../DiscoverTiles";
-import { isSkilledIn, getStructureAt, isAquaticOrCanFly, isWaterTerrain, hasEffect, getEnemiesInRange } from "../../functions";
+import { isSkilledIn, getStructureAt, isAquaticOrCanFly, isWaterTerrain, hasEffect, getEnemiesInRange, getTrueUnitAt } from "../../functions";
 import { Branch, UndoCallback } from "../../move";
 import { GameState, UnitState } from "../../states";
 import { SkillType, UnitType, EffectType, StructureType } from "../../types";
-import { freezeArea } from "../../actions";
+import { freezeArea, tryRemoveEffect } from "../../actions";
 
 export default function stepUnit(state: GameState, stepper: UnitState, toTileIndex: number, involuntary = false): Branch {
-    if(!stepper) {
+    if (!stepper) {
         console.trace();
         console.log(toTileIndex, state.tribes[state.settings.currentPlayerTurnId].units, involuntary);
         throw 'no unit';
@@ -20,6 +22,20 @@ export default function stepUnit(state: GameState, stepper: UnitState, toTileInd
     const oldType = stepper.type;
     const oldPassenger = stepper.passengerType;
     const oldAttack = stepper.attacked;
+
+    // Collision detection for invisible units
+    const otherUnit = getTrueUnitAt(state, toTileIndex);
+    if (otherUnit && otherUnit.owner !== stepper.owner && hasEffect(otherUnit, EffectType.Invisible)) {
+        // Reveal the cloak
+        const undoReveal = tryRemoveEffect(state, otherUnit, EffectType.Invisible);
+
+        return {
+            rewards: [],
+            undo: () => {
+                undoReveal();
+            }
+        };
+    }
 
     // // TODO; this is not how prev works, it must be applies at the end of the turn
     // stepper.prevX = iX;

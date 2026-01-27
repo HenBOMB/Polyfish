@@ -23,17 +23,22 @@ settings = {
     'tribes': args.tribes
 }
 
-model.request_train(
-    args.iterations,
-    args.epochs,
-    args.games,
-    args.simulations,
-    args.temperature,
-    args.cpuct,
-    args.gamma,
-    args.deterministic,
-    args.dirichlet,
-    args.rollouts,
-    args.prefix,
-    settings
-)
+# Build a JSON payload and send it as the request body. The previous call passed
+# positional arguments which caused a primitive (int) to be sent as JSON and the
+# server returned HTTP 400. Send an object instead.
+payload = {
+    'iterations': args.iterations,
+    'epochs': args.epochs,
+    'n_games': args.games,
+    'n_sims': args.simulations,
+    'temperature': args.temperature,
+    'cPuct': args.cpuct,
+    'gamma': args.gamma,
+    'deterministic': args.deterministic,
+    'dirichlet': args.dirichlet,
+    'rollouts': args.rollouts,
+    'prefix': args.prefix,
+    'settings': settings,
+}
+
+model.request_train(json=payload)

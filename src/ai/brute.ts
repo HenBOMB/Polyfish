@@ -2,6 +2,7 @@ import { getPovTribe, isGameOver } from "../core/functions";
 import Move, { UndoCallback } from "../core/move";
 import { GameState } from "../core/states";
 import { MoveType, TribeType } from "../core/types";
+import { Prediction } from "../core/moves";
 import Game from "../game";
 import { evaluateState } from "./eval";
 import { MCTS } from "./mcts/mcts";
@@ -14,6 +15,7 @@ type PartialMCTSSEttings = {
     nThreads?: number;
     maxTurnsAhead?: number;
     legalFn?: (state: GameState) => Move[] | undefined;
+    predict?: (state: GameState) => Promise<Prediction>;
 }
 
 type MCTSSettings = {
@@ -24,6 +26,7 @@ type MCTSSettings = {
     nThreads: number;
     maxTurnsAhead: number;
     legalFn?: (state: GameState) => Move[] | undefined;
+    predict?: (state: GameState) => Promise<Prediction>;
 }
 
 function parseSettings(settings: PartialMCTSSEttings | null = null): MCTSSettings {
@@ -49,8 +52,8 @@ export async function CalculateBestMoves(
     turnsAhead=3,
     settings: PartialMCTSSEttings | null = null
 ): Promise<[Move[], number, number, number, number[]]> {
-    const { depth, cPuct, dirichlet, deterministic, nThreads, maxTurnsAhead, legalFn } = parseSettings(settings);
-    const mcts = new MCTS(game, cPuct, dirichlet, nThreads, maxTurnsAhead, legalFn as any);
+    const { depth, cPuct, dirichlet, deterministic, nThreads, maxTurnsAhead, legalFn, predict } = parseSettings(settings);
+    const mcts = new MCTS(game, cPuct, dirichlet, nThreads, maxTurnsAhead, legalFn as any, predict);
     await mcts.prepare();
     
     const state = game.state;

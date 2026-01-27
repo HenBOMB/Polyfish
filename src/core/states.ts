@@ -9,12 +9,12 @@ export class Coords {
 	x: number;
 	y: number;
 	idx: number;
-	
-	constructor(index: number=-1, state: GameState|null=null, x: number=-1, y: number=-1) {
+
+	constructor(index: number = -1, state: GameState | null = null, x: number = -1, y: number = -1) {
 		this.idx = index;
 		this.x = x;
 		this.y = y;
-		if(index > -1 && state) this.setAt(index, state);
+		if (index > -1 && state) this.setAt(index, state);
 	}
 
 	static from(x: number, y: number, state: GameState) {
@@ -67,6 +67,7 @@ export interface TileState {
 	climate: ClimateType;
 	owner: PlayerID;
 	_unitOwnerID?: PlayerID;
+	frozen: boolean;
 }
 
 export interface StructureState {
@@ -146,12 +147,12 @@ export interface TribeState {
 	cities: CityState[];
 	units: UnitState[];
 	relations: Record<PlayerID, DiplomacyRelationState>;
-	killedTurn: number; 
+	killedTurn: number;
 	resignedTurn: number;
 	startingTileCoords: Coords;
 }
 
-export interface TechnologyState { 
+export interface TechnologyState {
 	type: TechnologyType,
 	discovered: boolean,
 }
@@ -185,19 +186,19 @@ export interface GameState {
 	_prediction?: PredictionState;
 }
 
-export interface GameSettings { 
-	size: number; 
-	mode: ModeType; 
-	maxTurns: number; 
+export interface GameSettings {
+	size: number;
+	mode: ModeType;
+	maxTurns: number;
 	tribes: TribeType[];
 	fow: boolean;
 }
 
-export interface PartialGameSettings { 
-	size?: number; 
-	mode?: ModeType; 
-	maxTurns?: number; 
-	fallback?: string; 
+export interface PartialGameSettings {
+	size?: number;
+	mode?: ModeType;
+	maxTurns?: number;
+	fallback?: string;
 	tribes?: TribeType[];
 	fow?: boolean;
 	seed?: number;
