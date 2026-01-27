@@ -1,8 +1,8 @@
 import { TechnologyType, StructureType, ResourceType, TribeType } from "../types";
 
-export const ResourceSettings: Record<ResourceType, { 
+export const ResourceSettings: Record<ResourceType, {
     cost?: number;
-    techRequired: TechnologyType, 
+    techRequired: TechnologyType,
     structType?: StructureType,
     visibleRequired?: TechnologyType[],
     requiresCapture?: true,
@@ -10,57 +10,53 @@ export const ResourceSettings: Record<ResourceType, {
     rewardStars?: number;
     tribeType?: TribeType;
 }> = {
-    [ResourceType.None]:           {
+    [ResourceType.None]: {
         techRequired: TechnologyType.Unrequired,
         rewardPop: 0,
     },
-    [ResourceType.Game]:     {
+    [ResourceType.Game]: {
         cost: 2,
         techRequired: TechnologyType.Hunting,
         rewardPop: 1,
     },
-    [ResourceType.Crop]:           {
+    [ResourceType.Crop]: {
         techRequired: TechnologyType.Farming,
         structType: StructureType.Farm,
         visibleRequired: [TechnologyType.Organization, TechnologyType.Farming, TechnologyType.Construction],
-        rewardPop: 0,
+        rewardPop: 2,
     },
-    [ResourceType.Fish]:           {
+    [ResourceType.Fish]: {
         cost: 2,
         techRequired: TechnologyType.Fishing,
         rewardPop: 1,
     },
-    [ResourceType.Metal]:          {
+    [ResourceType.Metal]: {
         techRequired: TechnologyType.Mining,
         structType: StructureType.Mine,
         visibleRequired: [TechnologyType.Climbing, TechnologyType.Mining, TechnologyType.Smithery],
-        rewardPop: 0,
+        rewardPop: 2,
     },
-    [ResourceType.Whale]:           {
-        techRequired: TechnologyType.Unrequired,
-        rewardPop: 0,
-    },
-    [ResourceType.Fruit]:          {
+    [ResourceType.Fruit]: {
         cost: 2,
         techRequired: TechnologyType.Organization,
         rewardPop: 1
     },
-    [ResourceType.Spores]:         {
+    [ResourceType.Spores]: {
         techRequired: TechnologyType.Unrequired,
         structType: StructureType.Spores,
         rewardPop: 1,
         tribeType: TribeType.Cymanti,
     },
-    [ResourceType.Starfish]:       {
+    [ResourceType.Starfish]: {
         techRequired: TechnologyType.Navigation,
         visibleRequired: [TechnologyType.Fishing, TechnologyType.Sailing, TechnologyType.Navigation],
         requiresCapture: true,
         rewardStars: 5,
         rewardPop: 0,
     },
-    [ResourceType.AquaCrop]:           {
+    [ResourceType.AquaCrop]: {
         techRequired: TechnologyType.BeyondComprehension,
-        rewardPop: 0,
+        rewardPop: 2,
     },
 };
 

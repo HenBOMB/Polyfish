@@ -350,7 +350,8 @@ export enum ResourceType {
 	Game = 1,
 	Crop = 2,
 	Fish = 3,
-	Whale = 4,
+	// Removed from game, replaced by Starfish
+	// Whale = 4,
 	Metal = 5,
 	Fruit = 6,
 	Spores = 7,

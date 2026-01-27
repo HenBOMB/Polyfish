@@ -438,7 +438,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             health: 10,
             is_super: true,
             becomes: Some(U::BabyDragon),
-            skills: skills![S::Grow, S::Fortify, S::Static],
+            skills: skills![S::Grow, S::Fortify, S::Static, S::Stiff],
             ..Default::default()
         },
         U::BabyDragon => UnitSetting {

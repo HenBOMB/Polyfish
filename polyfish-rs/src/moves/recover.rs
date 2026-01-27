@@ -23,7 +23,7 @@ impl RecoverMove {
 
 impl Move for RecoverMove {
     fn move_type(&self) -> MoveType {
-        MoveType::Recover
+        MoveType::Ability
     }
 
     fn execute(&self, state: &mut GameState) -> MoveResult {
@@ -68,7 +68,8 @@ impl Move for RecoverMove {
 
     fn serialize(&self) -> serde_json::Value {
         serde_json::json!({
-            "moveType": MoveType::Recover,
+            "moveType": MoveType::Ability,
+            "abilityType": crate::types::AbilityType::Recover,
             "target": self.target,
         })
     }

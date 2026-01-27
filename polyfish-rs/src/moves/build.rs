@@ -33,10 +33,55 @@ impl Move for BuildMove {
     }
 
     fn execute(&self, state: &mut GameState) -> MoveResult {
-        // Default level 1 for new structures
-        let undo = create_structure(state, self.tile_index, self.structure_type, 1);
+        use crate::actions::city::add_population;
+        use crate::actions::{chain_undos, spend_stars};
+        use crate::functions::{get_adjacent_indices, get_city_owning_tile, get_structure_at};
+        use crate::settings::structures::get_structure_setting;
+
+        let mut undos = Vec::new();
+        let settings = get_structure_setting(self.structure_type);
+
+        // 1. Spend stars
+        if let Some(cost) = settings.cost {
+            undos.push(spend_stars(state, cost));
+        }
+
+        // 2. Create structure
+        undos.push(create_structure(
+            state,
+            self.tile_index,
+            self.structure_type,
+            1,
+        ));
+
+        // 3. Add population
+        if let Some(city) = get_city_owning_tile(state, self.tile_index) {
+            let city_tile_idx = city.tile_index;
+            let mut reward_pop = settings.reward_pop;
+
+            // Handle adjacent multipliers (Windmill, Sawmill, Forge)
+            if !settings.adjacent_types.is_empty() {
+                let adj = get_adjacent_indices(state, self.tile_index, 1);
+                let adj_count = adj
+                    .iter()
+                    .filter(|&&adj_idx| {
+                        if let Some(s) = get_structure_at(state, adj_idx) {
+                            settings.adjacent_types.contains(&s.structure_type)
+                        } else {
+                            false
+                        }
+                    })
+                    .count() as i32;
+                reward_pop *= adj_count;
+            }
+
+            if reward_pop > 0 {
+                undos.push(add_population(state, city_tile_idx, reward_pop));
+            }
+        }
+
         MoveResult {
-            undo,
+            undo: chain_undos(undos),
             rewards: None,
         }
     }

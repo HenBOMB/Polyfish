@@ -356,14 +356,93 @@ pub fn freeze_area(
 
 /// Process effects at the start of a player's turn
 pub fn process_start_turn_effects(state: &mut GameState, player_id: PlayerId) -> UndoCallback {
-    let tribe = match state.tribes.get(&player_id) {
-        Some(t) => t,
-        None => return noop_undo(),
-    };
+    let mut undos: Vec<UndoCallback> = Vec::new();
+    let mut growth_candidates = Vec::new();
+    let mut boat_indices = Vec::new();
+    let tribe_type;
 
-    let mut undos = Vec::new();
+    // Scope for immutable borrow of state.tribes
+    {
+        let tribe = match state.tribes.get(&player_id) {
+            Some(t) => t,
+            None => return noop_undo(),
+        };
+        tribe_type = tribe.tribe_type;
 
-    if tribe.tribe_type == TribeType::Polaris {
+        // Dragon Growth Logic
+        // Iterate through units to find growing dragons
+        for (unit_idx, unit) in tribe.units.iter().enumerate() {
+            if crate::functions::has_skill(unit, SkillType::Grow) {
+                growth_candidates.push(unit_idx);
+            }
+            // Also collect boat indices
+            if unit.passenger_type.is_some() {
+                boat_indices.push(unit_idx);
+            }
+        }
+    }
+
+    for unit_idx in growth_candidates {
+        // Re-borrow for mutation
+        if let Some(tribe) = state.tribes.get_mut(&player_id) {
+            if let Some(unit) = tribe.units.get_mut(unit_idx) {
+                let age = state.settings.turn - unit.created_turn;
+
+                // Checks for evolution
+                let mut new_type = None;
+
+                match unit.unit_type {
+                    UnitType::DragonEgg => {
+                        // Egg -> Baby Dragon after 3 turns
+                        if age >= 3 {
+                            new_type = Some(UnitType::BabyDragon);
+                        }
+                    }
+                    UnitType::BabyDragon => {
+                        // Baby -> Fire Dragon after 3 more turns (total 6 turns from creation)
+                        if age >= 6 {
+                            new_type = Some(UnitType::FireDragon);
+                        }
+                    }
+                    _ => {}
+                }
+
+                if let Some(target_type) = new_type {
+                    let old_type = unit.unit_type;
+                    unit.unit_type = target_type;
+
+                    // Add undo
+                    undos.push(Box::new(move |s| {
+                        if let Some(t) = s.tribes.get_mut(&player_id) {
+                            if let Some(u) = t.units.get_mut(unit_idx) {
+                                u.unit_type = old_type;
+                            }
+                        }
+                    }));
+                }
+            }
+        }
+    }
+
+    for boat_idx in boat_indices {
+        if let Some(tribe) = state.tribes.get_mut(&player_id) {
+            if let Some(_boat) = tribe.units.get_mut(boat_idx) {
+                // If passenger is Egg/Baby
+                // But wait, passenger is ONLY a UnitType. We don't have its `created_turn`!
+                // Major Issue: The current engine implementation of `passenger_type: Option<UnitType>` loses state (health, age, effects) of the passenger.
+                // This means we CANNOT track an Egg's age while it is inside a boat.
+                // The implementation plan assumes state tracking.
+                // However, fixing the entire carrier system to store full UnitState is out of scope for this task.
+                // For now, we only implement growth for units on the map.
+
+                // If the user insists "Dragon Egg can be carried by a Raft and continue growing", we'd need to store age in the carrier.
+                // But with `processed_start_turn_effects`, we only see on-board units.
+                // I will stick to map units for now as per current data model constraints.
+            }
+        }
+    }
+
+    if tribe_type == TribeType::Polaris {
         // TODO: Polaris disabled
     }
 

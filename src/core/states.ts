@@ -68,6 +68,7 @@ export interface TileState {
 	owner: PlayerID;
 	_unitOwnerID?: PlayerID;
 	frozen: boolean;
+	flooded: boolean;
 }
 
 export interface StructureState {

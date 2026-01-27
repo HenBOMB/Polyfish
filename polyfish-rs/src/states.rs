@@ -348,17 +348,18 @@ pub struct GameSettings {
     #[serde(default)]
     pub win_by_extermination: bool,
     #[serde(default)]
+    #[serde(rename = "_lastPlayerTurnId")]
     pub _last_player_turn_id: i32,
-    #[serde(default)]
+    #[serde(rename = "_areYouSure")]
     pub _are_you_sure: bool,
-    #[serde(default)]
+    #[serde(rename = "_gameOver")]
     pub _game_over: bool,
-    #[serde(default)]
+    #[serde(rename = "_recentMoves")]
     pub _recent_moves: Vec<MoveType>,
     // Note: _pending_rewards handled separately as it contains Move objects
-    #[serde(default = "default_fow")]
+    #[serde(rename = "_fow", default = "default_fow")]
     pub _fow: bool,
-    #[serde(default)]
+    #[serde(rename = "_maxTribeCount")]
     pub _max_tribe_count: i32,
 }
 

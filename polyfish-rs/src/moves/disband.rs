@@ -24,7 +24,7 @@ impl DisbandMove {
 
 impl Move for DisbandMove {
     fn move_type(&self) -> MoveType {
-        MoveType::Disband
+        MoveType::Ability
     }
 
     fn execute(&self, state: &mut GameState) -> MoveResult {
@@ -78,7 +78,8 @@ impl Move for DisbandMove {
 
     fn serialize(&self) -> serde_json::Value {
         serde_json::json!({
-            "moveType": MoveType::Disband,
+            "moveType": MoveType::Ability,
+            "abilityType": crate::types::AbilityType::Disband,
             "target": self.target,
         })
     }

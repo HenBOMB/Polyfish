@@ -36,7 +36,7 @@ pub fn is_game_over(state: &GameState) -> bool {
     let alive_count = state
         .tribes
         .values()
-        .filter(|t| t.killed_turn == 0 && t.resigned_turn == 0)
+        .filter(|t| t.killed_turn <= 0 && t.resigned_turn <= 0)
         .count();
 
     // Game over if only one tribe left
@@ -318,50 +318,17 @@ pub fn get_defense_bonus(state: &GameState, unit: &UnitState) -> f32 {
 /// Get city production (stars per turn)
 pub fn get_city_production(state: &GameState, city: &CityState) -> i32 {
     // If city is on riot or the tile is occupied by an enemy then production is nullified
-    if city._riot || get_enemy_at(state, city.tile_index, city.owner).is_some() {
+    if city._riot || crate::functions::get_enemy_at(state, city.tile_index, city.owner).is_some() {
         return 0;
     }
 
     // Base production + rewards (Park or Workshop add to production if present)
-    // Note: Workshop/Park usually increment the production field during Reward execution
-    // However, to be safe and match TS: production + count(Rewards)
-    let mut production = city.production;
-
-    // In TS, city.rewards.filter(x => x == Park || x == Workshop)
-    // But Park and Workshop increment city.production physically in Reward.ts.
-    // If city.production already reflects this, we don't double count.
-    // Assuming RewardMove.execute already applied the +1 to city.production.
-    // However, we should check if we need extra Market logic or Connection logic.
-
-    // Market income: counts adjacent production buildings (Windmill, Sawmill, Forge)
-    // Only if the tribe has researched Trade (obviously, since Markets exist)
-    let adj = get_adjacent_indices(state, city.tile_index, 1);
-    for &tile_idx in &city._territory {
-        if let Some(structure) = state.structures.get(&tile_idx).and_then(|s| s.as_ref()) {
-            if structure.structure_type == StructureType::Market {
-                let adj_m = get_adjacent_indices(state, tile_idx, 1);
-                for n_idx in adj_m {
-                    if let Some(n_struct) = state.structures.get(&n_idx).and_then(|s| s.as_ref()) {
-                        match n_struct.structure_type {
-                            StructureType::Windmill
-                            | StructureType::Sawmill
-                            | StructureType::Forge => {
-                                production += 1;
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Subtract 1 for capital connection if not connected (Capital is always connected)
-    if !city.connected_to_capital {
-        production = (production - 1).max(0);
-    }
-
-    production
+    city.production
+        + city
+            .rewards
+            .iter()
+            .filter(|&r| *r == RewardType::Park || *r == RewardType::Workshop)
+            .count() as i32
 }
 
 /// Get total production for a list of cities

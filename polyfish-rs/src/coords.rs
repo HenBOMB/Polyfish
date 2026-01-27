@@ -3,36 +3,11 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Represents a position on the game map with x, y and flat index
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub struct Coords {
     pub x: i32,
     pub y: i32,
     pub idx: i32,
-}
-
-// Custom serialization: serialize as [x, y] array to match TypeScript format
-impl Serialize for Coords {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        // Serialize as [x, y] array
-        (self.x, self.y).serialize(serializer)
-    }
-}
-
-// Custom deserialization: deserialize from [x, y] array
-impl<'de> Deserialize<'de> for Coords {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        // Deserialize as [x, y] tuple
-        let (x, y) = <(i32, i32)>::deserialize(deserializer)?;
-        // Note: idx will be computed later when we know the map size
-        // For now, compute assuming a reasonable default or leave as placeholder
-        Ok(Coords { x, y, idx: -1 })
-    }
 }
 
 impl Coords {
@@ -56,7 +31,11 @@ impl Coords {
 
     /// Create invalid/unset coords
     pub fn invalid() -> Self {
-        Self { x: -1, y: -1, idx: -1 }
+        Self {
+            x: -1,
+            y: -1,
+            idx: -1,
+        }
     }
 
     /// Check if coords are valid
@@ -126,13 +105,13 @@ mod tests {
         assert_eq!(a.distance_to(&b), 7);
         assert_eq!(a.chebyshev_distance_to(&b), 4);
     }
-    
+
     #[test]
     fn test_serde_roundtrip() {
         let coords = Coords::from_xy(5, 3, 11);
         let json = serde_json::to_string(&coords).unwrap();
-        assert_eq!(json, "[5,3]");
-        
+        assert_eq!(json, r#"{"x":5,"y":3,"idx":58}"#);
+
         let parsed: Coords = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.x, 5);
         assert_eq!(parsed.y, 3);

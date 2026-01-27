@@ -19,10 +19,10 @@ pub struct ResourceSetting {
 pub fn get_resource_setting(resource_type: ResourceType) -> ResourceSetting {
     use ResourceType::*;
     use TechnologyType::*;
-    
+
     match resource_type {
         None => ResourceSetting::default(),
-        
+
         Game => ResourceSetting {
             cost: Some(2),
             tech_required: Hunting,
@@ -33,6 +33,7 @@ pub fn get_resource_setting(resource_type: ResourceType) -> ResourceSetting {
             tech_required: Farming,
             struct_type: Some(StructureType::Farm),
             visible_required: vec![Organization, Farming, Construction],
+            reward_pop: 2,
             ..Default::default()
         },
         Fish => ResourceSetting {
@@ -45,10 +46,7 @@ pub fn get_resource_setting(resource_type: ResourceType) -> ResourceSetting {
             tech_required: Mining,
             struct_type: Some(StructureType::Mine),
             visible_required: vec![Climbing, Mining, Smithery],
-            ..Default::default()
-        },
-        Whale => ResourceSetting {
-            tech_required: Unrequired,
+            reward_pop: 2,
             ..Default::default()
         },
         Fruit => ResourceSetting {
@@ -73,6 +71,7 @@ pub fn get_resource_setting(resource_type: ResourceType) -> ResourceSetting {
         },
         AquaCrop => ResourceSetting {
             tech_required: BeyondComprehension,
+            reward_pop: 2,
             ..Default::default()
         },
     }

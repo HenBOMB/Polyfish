@@ -39,7 +39,7 @@ export default class GameLoader {
     public currentState: GameState;
 
     constructor() {
-        this.currentState = { } as any;
+        this.currentState = {} as any;
     }
 
     private defaultState(): GameState {
@@ -97,7 +97,7 @@ export default class GameLoader {
         // If FOW is disabled, then tribes shouldn't claim discovering other tribes
         if (!state.settings._fow) {
             const tribesObj = Object.values(state.tribes);
-            for(const tribe of tribesObj) {
+            for (const tribe of tribesObj) {
                 tribesObj.forEach(x => {
                     if (x.id != tribe.id) {
                         tribe.knownPlayers.add(x.id);
@@ -110,7 +110,7 @@ export default class GameLoader {
 
         const pov = state.settings.currentPlayerTurnId;
 
-        for(const tribe of Object.values(state.tribes)) {
+        for (const tribe of Object.values(state.tribes)) {
             state.settings.currentPlayerTurnId = tribe.id
             tribe._hash = xorState(state);
         }
@@ -139,7 +139,7 @@ export default class GameLoader {
 
         state.tribes = Object.values(state.tribes)
             .reduce((acc: Record<number, TribeState>, tribeState: TribeState) => {
-                return { 
+                return {
                     ...acc, [tribeState.id]: {
                         ...tribeState,
                         username: tribeState.username.replace(/\x00/g, ''),
@@ -147,18 +147,18 @@ export default class GameLoader {
                         builtUniqueImprovements: new Set(tribeState.builtUniqueImprovements),
                         startingTileCoords: parseCoords(tribeState.startingTileCoords),
                         _hash: 0n,
-                    } as TribeState 
+                    } as TribeState
                 }
             }
-        , {});
+                , {});
 
-        state._visibleTiles = { };
+        state._visibleTiles = {};
 
         if (state.settings.gameName) {
             state.settings.gameName = state.settings.gameName.replace(/\x00/g, '');
         }
 
-        (state as any)._hiddenResources = { };
+        (state as any)._hiddenResources = {};
 
         if (state.settings.turn > MAX_TURNS) {
             console.log(`WARN: turn is "${state.settings.turn}", set to 0`);
@@ -172,7 +172,7 @@ export default class GameLoader {
             const tileState = state.tiles[_];
 
             tileState.coords = parseCoords(tileState.coords);
-            
+
             // Tile
             if (tileState.rulingCityCoords) {
                 tileState.rulingCityCoords = parseCoords(tileState.rulingCityCoords);
@@ -183,7 +183,7 @@ export default class GameLoader {
 
         for (const _ in state.tiles) {
             const tileState = state.tiles[_];
-            
+
             // Resource
             const resource = state.resources[tileState.coords.idx];
             if (resource) {
@@ -208,25 +208,25 @@ export default class GameLoader {
             }
         }
 
-        for(const tribeId in state.tribes) {
+        for (const tribeId in state.tribes) {
             const tribe = state.tribes[tribeId];
 
             // Unit
             for (let i = 0; i < tribe.units.length; i++) {
                 const unit = tribe.units[i];
-                
+
                 unit.effects = new Set(unit.effects);
                 unit.coords = parseCoords(unit.coords);
-                unit.homeCoords =  unit.homeCoords && unit.homeCoords?.x != -1? parseCoords(unit.homeCoords) : undefined;
+                unit.homeCoords = unit.homeCoords && unit.homeCoords?.x != -1 ? parseCoords(unit.homeCoords) : undefined;
                 unit.prevCoords = parseCoords(unit.prevCoords);
-                
+
                 if (!UnitSettings[unit.type]) {
                     throw Error(`UnitType type=${unit.type} does isn't registered!`);
                 }
             }
 
             // City
-            for(const city of tribe.cities) {
+            for (const city of tribe.cities) {
                 city.name = city.name.replace(/\x00/g, '');
                 city.rewards = new Set(city.rewards);
                 city._territory = getAdjacentTiles(state, city.tileIndex, city.borderSize)
@@ -282,11 +282,11 @@ export default class GameLoader {
             mapdata.map(x => x.above ? 'y' : '-'),
             // Villages & Capitals & Ruins TODO CAPITALS
             mapdata.map((x) =>
-                x.above == 'capital'? x.tribe.slice(0, 2).toLowerCase() :
-                x.above == 'ruin' ? 'rs' :
-                x.above == 'starfish' ? 'sf' :
-                x.above == 'village' ? 'vv' :
-                '--'
+                x.above == 'capital' ? x.tribe.slice(0, 2).toLowerCase() :
+                    x.above == 'ruin' ? 'rs' :
+                        x.above == 'starfish' ? 'sf' :
+                            x.above == 'village' ? 'vv' :
+                                '--'
             ),
         ].map(x => x.join('')).join(';');
     }
@@ -295,9 +295,9 @@ export default class GameLoader {
         const settings = parseSettings(psettings);
         // Safeguard for inconsistency map generation
         let tries = 1000
-        let seed = psettings?.seed? psettings?.seed : Math.floor(Math.random() * MAX_SEED);
+        let seed = psettings?.seed ? psettings?.seed : Math.floor(Math.random() * MAX_SEED);
 
-        while(tries > 0) {
+        while (tries > 0) {
             try {
                 const not = await this.randomNotation(settings, seed).catch(() => null);
                 if (!not) throw 'err';
@@ -368,7 +368,7 @@ export default class GameLoader {
                 [owner]: {
                     _hash: 0n,
                     id: owner,
-                    username: owner == pov? "Player" : TribeType[type],
+                    username: owner == pov ? "Player" : TribeType[type],
                     bot: owner != pov,
                     type,
                     score: 0,
@@ -376,7 +376,7 @@ export default class GameLoader {
                     killedTurn: -1,
                     resignedTurn: -1,
                     killerId: -1,
-                    tech_vanilla: [TechnologyType.Unrequired, ...TribeSettings[type].startingTech? [TribeSettings[type].startingTech] : []].map(x => ({
+                    tech_vanilla: [TechnologyType.Unrequired, ...TribeSettings[type].startingTech ? [TribeSettings[type].startingTech] : []].map(x => ({
                         type: x as TechnologyType,
                         discovered: true,
                     })),
@@ -395,7 +395,7 @@ export default class GameLoader {
                 } as TribeState,
             };
         }, {}) as { [key: number]: TribeState };
-        
+
         someSettings = parseSettings(someSettings);
 
         const state: GameState = {
@@ -418,9 +418,9 @@ export default class GameLoader {
             tribes
         };
 
-        (state as any)._hiddenResources = { };
+        (state as any)._hiddenResources = {};
 
-        for(const owner in state.tribes) {
+        for (const owner in state.tribes) {
             state.tribes[owner].relations = Object.values(state.tribes).reduce((acc: any, tribe) => ({
                 ...acc,
                 [tribe.id]: {
@@ -448,10 +448,10 @@ export default class GameLoader {
 
         const climateTypes = climateRaw.match(/.{1,2}/g)!;
         const terrainTypes = terrainRaw.match(/./g)!;
-        const explorerOwners = state.settings._fow? [] : Object.values(tribes).map(x => x.id);
+        const explorerOwners = state.settings._fow ? [] : Object.values(tribes).map(x => x.id);
 
-        for(let i = 0; i < climateTypes.length; i++) {
-            const climate = TribeMap[climateTypes[i]]? ClimateType[TribeType[TribeMap[climateTypes[i]]] as any] as unknown as ClimateType : ClimateType.Nature;
+        for (let i = 0; i < climateTypes.length; i++) {
+            const climate = TribeMap[climateTypes[i]] ? ClimateType[TribeType[TribeMap[climateTypes[i]]] as any] as unknown as ClimateType : ClimateType.Nature;
 
             state.tiles[i] = {
                 owner: 0,
@@ -464,13 +464,15 @@ export default class GameLoader {
                 hadRoute: false,
                 capitalOf: -1,
                 skinType: -1,
-                coords: new Coords(i, state)
+                coords: new Coords(i, state),
+                frozen: false,
+                flooded: false,
             }
         }
 
         // Set spawning cities, ruins and starfish
 
-        for(let i = 0; i < structuresRaw.length; i += 2) {
+        for (let i = 0; i < structuresRaw.length; i += 2) {
             const tileIndex = i / 2;
             const structureOrTribeType = structuresRaw.substring(i, i + 2);
 
@@ -491,7 +493,7 @@ export default class GameLoader {
                     .filter(x => x.type === tribeType)
                     .find(x => x.cities.length === 0)!;
 
-                for(const tile of territory) {
+                for (const tile of territory) {
                     state.tiles[tile] = {
                         ...state.tiles[tile],
                         owner: tribe.id,
@@ -502,7 +504,7 @@ export default class GameLoader {
 
                 // Reveal surrounding land
                 if (state.settings._fow) {
-                    for(const tile of [
+                    for (const tile of [
                         tileIndex,
                         ...getAdjacentIndexes(state, tileIndex, 2, false, true).filter(x => !lighthouses.includes(x))
                     ]) {
@@ -512,7 +514,7 @@ export default class GameLoader {
 
                 const cityData: CityState = {
                     tileIndex,
-                    name: `${TribeType[tribeType]} ${state.tiles[tileIndex].capitalOf > 0? 'Capital' : 'City'}`,
+                    name: `${TribeType[tribeType]} ${state.tiles[tileIndex].capitalOf > 0 ? 'Capital' : 'City'}`,
                     population: 0,
                     progress: 0,
                     rewards: new Set(),
@@ -520,7 +522,7 @@ export default class GameLoader {
                     connectedToCapital: false,
                     level: 1,
                     // 1 level + 1 capital + 1 if luxidor
-                    production: 1 + 1 + (tribeType == TribeType.Luxidoor? 1 : 0),
+                    production: 1 + 1 + (tribeType == TribeType.Luxidoor ? 1 : 0),
                     owner: tribe.id,
                     _territory: territory,
                 };
@@ -579,7 +581,7 @@ export default class GameLoader {
             if (!isResourceVisible(state.tribes[state.settings.currentPlayerTurnId], resourceType)) {
                 (state as any)._hiddenResources[i] = resourceType;
             }
-    
+
             state.resources[i] = {
                 type: resourceType,
                 tileIndex: i
@@ -589,7 +591,7 @@ export default class GameLoader {
         // Spawn starting units
         // Validate state
 
-        for(const owner in state.tribes) {
+        for (const owner in state.tribes) {
             const tribe = state.tribes[owner];
             if (tribe.cities.length != 1) {
                 throw Error(`Tribe ${TribeType[tribe.type]} has ${tribe.cities.length} cities`);
@@ -679,7 +681,7 @@ export default class GameLoader {
         const villagePredictions = predictVillages(state);
         const fogPredictions: { [tileIndex: number]: [TerrainType, ClimateType, boolean] } = {};
 
-        const prediction: any = { };
+        const prediction: any = {};
 
         prediction._villages = villagePredictions;
 
@@ -732,6 +734,6 @@ export default class GameLoader {
     private parseRawInt(x: string, cap = true): number {
         if (x == null || x == "" || x == undefined) return -1;
         const parsed = Number.parseInt(x);
-        return cap && parsed > 60000 && parsed < 70000? -1 : parsed;
+        return cap && parsed > 60000 && parsed < 70000 ? -1 : parsed;
     }
 }

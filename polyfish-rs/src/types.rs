@@ -223,7 +223,7 @@ pub enum SkillType {
     Float = 10,
     /// Allows a unit to carry another unit inside. A unit with the carry skill can move to a land tile adjacent to water. Doing so releases the unit it was carrying and ends the unit's turn.
     Carry = 11,
-    /// Allows a unit to grow segments that move in tandem with the unit after killing units via attack (retaliation kills do not produce segments). A unit with segments attached is restricted to 1 movement and cannot enter ports (except those with algae; This is most likely due to a bug) until the segment attached to the unit is removed.
+    /// Allows a unit to grow into a different unit after a given number of turns.
     Grow = 12,
     /// Not affected by any terrain
     Fly = 13,
@@ -366,7 +366,7 @@ pub enum ResourceType {
     Game = 1,
     Crop = 2,
     Fish = 3,
-    Whale = 4,
+    // Whale = 4,
     Metal = 5,
     Fruit = 6,
     Spores = 7,
@@ -414,8 +414,6 @@ pub enum MoveType {
     Capture = 8,
     Reward = 9,
     EndTurn = 10,
-    Recover = 11,
-    Disband = 12,
 }
 
 /// Task types

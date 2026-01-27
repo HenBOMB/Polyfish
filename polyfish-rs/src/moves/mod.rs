@@ -280,7 +280,11 @@ fn compute_reachable_tiles(
     state: &GameState,
     unit: &UnitState,
 ) -> std::collections::HashMap<i32, f32> {
-    let effective_movement = get_unit_setting(unit.unit_type).movement as f32;
+    let mut effective_movement = get_unit_setting(unit.unit_type).movement as f32;
+    // Cap movement at 1 if unit has segments attached
+    if unit.child_unit_idx.is_some() {
+        effective_movement = 1.0;
+    }
     let mut reachable = std::collections::HashMap::new();
     let mut open_list = std::collections::BinaryHeap::new();
 

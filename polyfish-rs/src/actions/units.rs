@@ -46,6 +46,28 @@ pub fn remove_unit(
         tile._unit_owner_id = None;
     }
 
+    // Centipede head replacement logic
+    // If unit has a child segment, promote it to head
+    if let Some(child_idx) = removed_unit.child_unit_idx {
+        if let Some(tribe) = state.tribes.get_mut(&unit_owner) {
+            // Adjust index if child is after removed unit
+            let adj_child_idx = if child_idx > unit_idx {
+                child_idx - 1
+            } else {
+                child_idx
+            };
+
+            if let Some(child) = tribe.units.get_mut(adj_child_idx) {
+                // Promote segment to Centipede
+                if child.unit_type == crate::types::UnitType::Segment {
+                    child.unit_type = crate::types::UnitType::Centipede;
+                }
+                // Clear parent link since head is gone
+                child.parent_unit_idx = None;
+            }
+        }
+    }
+
     // Remove from tribe and update stats
     if let Some(tribe) = state.tribes.get_mut(&unit_owner) {
         if unit_idx < tribe.units.len() {
@@ -155,9 +177,32 @@ pub fn step_unit(
 
     let mut undos = Vec::new();
 
-    // AutoFreeze
-    if has_skill(old_type, SkillType::AutoFreeze) || has_skill(old_type, SkillType::FreezeArea) {
-        undos.push(crate::actions::freeze_area(state, unit_owner, to_tile_idx));
+    let tiles_to_reveal = if let Some(tribe) = state.tribes.get(&unit_owner) {
+        if let Some(unit) = tribe.units.get(unit_idx) {
+            let range = if state.tiles.get(&to_tile_idx).map_or(false, |t| {
+                t.terrain_type == crate::types::TerrainType::Mountain
+            }) || has_skill(unit.unit_type, SkillType::Scout)
+            {
+                2
+            } else {
+                1
+            };
+            let mut adj = crate::functions::get_adjacent_indices(state, to_tile_idx, range);
+            adj.push(to_tile_idx);
+            Some(adj)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    if let Some(indices) = tiles_to_reveal {
+        undos.push(crate::actions::discovery::discover_tiles(
+            state,
+            None,
+            Some(indices),
+        ));
     }
 
     // Algae: Auto-spawn algae on water tiles
@@ -426,6 +471,18 @@ pub fn step_unit(
         }
     }));
 
+    // Segment chain following: Move child to parent's old position
+    if let Some(child_idx) = {
+        state
+            .tribes
+            .get(&unit_owner)
+            .and_then(|t| t.units.get(unit_idx))
+            .and_then(|u| u.child_unit_idx)
+    } {
+        // Move child to this unit's previous position
+        undos.push(step_unit(state, unit_owner, child_idx, old_tile_idx, true));
+    }
+
     crate::actions::chain_undos(undos)
 }
 
@@ -618,8 +675,8 @@ pub fn attack_unit(
             Some(attacker_idx),
         ));
 
-        // Grow: Spawn segment when Centipede kills via attack (not retaliation)
-        if atk_skills.contains(&SkillType::Grow) {
+        // Eat: Spawn segment when Centipede kills via attack (not retaliation)
+        if atk_skills.contains(&SkillType::Eat) {
             let atk_prev_idx = {
                 state
                     .tribes
@@ -1310,4 +1367,35 @@ pub fn infiltrate_city(
     }
 
     crate::actions::chain_undos(undos)
+}
+
+/// Poison a unit
+pub fn poison_unit(state: &mut GameState, unit_owner: PlayerId, unit_idx: usize) -> UndoCallback {
+    let old_has_poison = if let Some(tribe) = state.tribes.get(&unit_owner) {
+        if let Some(unit) = tribe.units.get(unit_idx) {
+            unit.effects.contains(&crate::types::EffectType::Poison)
+        } else {
+            return Box::new(|_| {});
+        }
+    } else {
+        return Box::new(|_| {});
+    };
+
+    if old_has_poison {
+        return Box::new(|_| {});
+    }
+
+    if let Some(tribe) = state.tribes.get_mut(&unit_owner) {
+        if let Some(unit) = tribe.units.get_mut(unit_idx) {
+            unit.effects.insert(crate::types::EffectType::Poison);
+        }
+    }
+
+    Box::new(move |s| {
+        if let Some(tribe) = s.tribes.get_mut(&unit_owner) {
+            if let Some(unit) = tribe.units.get_mut(unit_idx) {
+                unit.effects.remove(&crate::types::EffectType::Poison);
+            }
+        }
+    })
 }
