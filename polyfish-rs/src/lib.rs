@@ -4,6 +4,7 @@
 //! translated from the original TypeScript implementation.
 
 pub mod actions;
+pub mod ai;
 pub mod coords;
 pub mod functions;
 pub mod game;

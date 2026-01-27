@@ -1,0 +1,155 @@
+use crate::ai::evaluator;
+use crate::game::Game;
+use crate::moves::Move;
+use crate::states::{GameState, PlayerId};
+use rand::seq::SliceRandom;
+use rand::thread_rng;
+use std::collections::HashMap;
+
+pub struct MctsAgent {
+    pub iterations: usize,
+    pub exploration_constant: f32,
+}
+
+struct Node {
+    visits: f32,
+    value: f32,
+    children: Vec<Node>,
+    move_to_here: Option<Box<dyn Move>>,
+    untried_moves: Option<Vec<Box<dyn Move>>>,
+}
+
+impl Node {
+    fn new(move_to_here: Option<Box<dyn Move>>, game: &mut Game) -> Self {
+        let untried = if game.state.settings._game_over {
+            None
+        } else {
+            Some(game.legal_moves())
+        };
+
+        Self {
+            visits: 0.0,
+            value: 0.0,
+            children: Vec::new(),
+            move_to_here,
+            untried_moves: untried,
+        }
+    }
+
+    fn uct_select_child(&mut self, c: f32) -> &mut Node {
+        let parent_visits = self.visits;
+        self.children
+            .iter_mut()
+            .max_by(|a, b| {
+                let a_val = (a.value / a.visits) + c * (parent_visits.ln() / a.visits).sqrt();
+                let b_val = (b.value / b.visits) + c * (parent_visits.ln() / b.visits).sqrt();
+                a_val.partial_cmp(&b_val).unwrap()
+            })
+            .unwrap()
+    }
+
+    fn is_fully_expanded(&self) -> bool {
+        match &self.untried_moves {
+            Some(v) => v.is_empty(),
+            None => true,
+        }
+    }
+}
+
+impl MctsAgent {
+    pub fn new(iterations: usize) -> Self {
+        Self {
+            iterations,
+            exploration_constant: 1.414,
+        }
+    }
+
+    pub fn select_move(&self, game: &mut Game) -> Option<Box<dyn Move>> {
+        let player_id = game.state.settings.current_player_turn_id;
+        let mut root = Node::new(None, game);
+
+        for _ in 0..self.iterations {
+            self.search_iteration(game, &mut root, player_id);
+        }
+
+        // Return child with most visits
+        root.children
+            .into_iter()
+            .max_by(|a, b| a.visits.partial_cmp(&b.visits).unwrap())
+            .and_then(|n| n.move_to_here)
+    }
+
+    fn search_iteration(&self, game: &mut Game, node: &mut Node, pov: PlayerId) -> f32 {
+        // 1. Selection
+        if node.is_fully_expanded() && !node.children.is_empty() {
+            let child = node.uct_select_child(self.exploration_constant);
+            if let Some(m) = &child.move_to_here {
+                if let Some(undo) = game.play_move(m.as_ref()) {
+                    let val = self.search_iteration(game, child, pov);
+                    undo(&mut game.state);
+                    node.visits += 1.0;
+                    node.value += val;
+                    return val;
+                }
+            }
+        }
+
+        // 2. Expansion
+        if let Some(untried) = &mut node.untried_moves {
+            if !untried.is_empty() {
+                let m = untried.pop().unwrap();
+                if let Some(undo) = game.play_move(m.as_ref()) {
+                    let mut child = Node::new(Some(m), game);
+                    let val = self.simulate(game, pov);
+                    undo(&mut game.state);
+
+                    child.visits = 1.0;
+                    child.value = val;
+                    node.children.push(child);
+                    node.visits += 1.0;
+                    node.value += val;
+                    return val;
+                }
+            }
+        }
+
+        // Game over or can't move
+        let val = evaluator::evaluate(&game.state, pov);
+        node.visits += 1.0;
+        node.value += val;
+        val
+    }
+
+    fn simulate(&self, game: &mut Game, pov: PlayerId) -> f32 {
+        let mut moves_played = 0;
+        let mut undos = Vec::new();
+
+        // Random rollout for simulation
+        let max_rollout_depth = 20;
+        let mut rng = thread_rng();
+
+        while !game.state.settings._game_over && moves_played < max_rollout_depth {
+            let moves = game.legal_moves();
+            if moves.is_empty() {
+                break;
+            }
+
+            let m = moves.choose(&mut rng).unwrap();
+            if let Some(undo) = game.play_move(m.as_ref()) {
+                undos.push(undo);
+                moves_played += 1;
+            } else {
+                break;
+            }
+        }
+
+        let val = evaluator::evaluate(&game.state, pov);
+
+        // Undo all rollout moves
+        while let Some(undo) = undos.pop() {
+            undo(&mut game.state);
+        }
+
+        val
+    }
+}

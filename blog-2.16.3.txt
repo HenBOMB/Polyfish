@@ -343,15 +343,6 @@ What’s changed? Let’s talk about it, but before we do, we’d like you to kn
 
 Without further ado, here’s the changes:
 
-* Ai-Mo now starts with Philosophy instead of Meditation, and a Mind Bender to go with it
-* Extra starting Stars for some tribes to help them out:
-* Xin-xi begins with 7 Stars
-* Oumaji begins with 6 Stars ( that’s not a typo, they begin with 6)
-* Hoodrick begins with 7 Stars
-* Quetzali begins with 7 Stars
-* Yădakk begins with 7 Stars
-* Luxidoor begins with 2 Stars in addition to their upgraded Capital (to match their wealth)
-* All other tribes begin with 5 Stars
 * Tech can be researched “backwards,” so Vengir can go from Smithery to Mining without Climbing
 * Forges can be built on Forests
 * Temples give 100p per level of growth instead of 50p
@@ -366,98 +357,5 @@ Polaris changes:
 * Ice Archers get 1 attack
 
 General changes:
-* Multiplayer should not fall back to “60 days” turn time limit
-* Multiplayer should not fall back to “Perfection” game mode
 * Solaris Crater stays a Crater when an opponent takes over territory
 * Solaris Lava Bank stays a Lava Bank when an opponent takes over territory
-
-That is all the changes for now, but don’t be surprised if we make more adjustments over time. If you’d like to give us your feedback on these changes, or just want to say “Hi”, stop on by our Discord!
-
-Have fun out there!
-
-June 23, 2025
-Blog
-0
-11
-Testing the New Dev Blog
-We’re in the middle of building a shiny new layout for our upcoming Dev Blog — and let’s just say, it’s been a little more complicated than dragging and dropping a few boxes. Turns out, making something look simple takes a lot of work. We imagined a smooth ride, but it’s been more like:
-
-* “This layout looks perfect!” → breaks on mobile
-* “Let’s just tweak the font size…” → entire site explodes
-* “Should this header be bold or bold-bold?”
-
-
-We’re taking the time to get it right because we want the Dev Blog to be more than just a wall of text. Our goal is to make it:
-
-Visually clean and fun to readEasy to navigate, even on a toaster (or phone)
-A proper home for game dev insights, behind-the-scenes chaos, and sneak peeks
-A happy place!
-Thanks for bearing with us while we sort it out. It’ll be worth the wait — pinky promise…
-
-June 9, 2025
-Blog
-1
-31
-Weekly Challenges are Now Here!
-Hey Polytopians!
-
-If you were playing on our beta branch for the past few weeks, you probably know all about Weekly Challenges. If you haven’t, let’s give you a rundown on what Weekly Challenges are! It is a completely new way of playing Polytopia.
-
-
-What are these “Weak Challenges?
-Haha, no, “Weekly”, as in, every week we’ll be giving all players the exact same seed to play with in this all-new single-player challenge! After you’ve played 5 regular games, you’ll be able to jump into Weekly Challenges. There, we give everyone the same landmass, same tribe, same opponents, etc, and you’ll have the entire week to get the highest score you can! You’ll only get one chance to play it per day, so that’s 7 total tries!
-
-
-But why would I want to play the same thing over and over again?
-
-Bragging rights? Personal accomplishment? Oh, yeah, LEAGUES!
-
-There are 4 leagues that you can join based on how well you did in the previous week.
-When you first play Weekly Challenges, you’re placed in the Entry League. After you leave it, you’ll never be able to demote back to it. After that, there’s Bronze -> Silver -> Gold Leagues as well! Every week, the top 1/3rd of players will move up a League, the bottom 1/3rd of players will move down a League, and the final 1/3rd keeps their spot. Don’t worry, you won’t be demoted if you don’t play for a week, this only applies if you attempted a Weekly Challenge. What happens if you get top 1/3rd in Gold League? You get to wait for us to realize that we should have probably added more Leagues….
-
-Everyone will still use the same seed and settings regardless of League, but the difficulty of the bots will be adjusted per League, starting with Easy in Entry and ending with Crazy in Gold.
-
-What else should I know about Weekly Challenges?
-
-You do not need to own the tribe or skin that you’re playing with in a Weekly Challenge. Think of it like, a sneak-preview of what a tribe or skin is like.
-To keep things fast and to encourage quick maximization of points, we’ve reduced all Weekly Challenge matches to 20 turns. Normal games are untouched.
-You’ll see this little symbol telling you that a new Weekly Challenge has started, but only if you played the week before.
-
-Now what?
-What are you waiting for?! Go show us your skills, as Weekly Challenges are available for all to play!
-
-Or you could watch this video….and then play!
-
-Facebook-f
- Instagram
- Twitter
- Youtube
-Contact
-Midjiwan AB
-Magnus Ladulåsgatan 65
-118 27 Stockholm
-Sweden
-www.midjiwan.com
-
-Useful Polytopia Links
-World Championship
-Tournaments
-Wikia
-Game Graphics
-Game Asset Guidelines
-Foldables
-More Useful Polytopia Links
-Community Works
-Calendar
-Ringtones
-Music (Full versions)
-Music Stems
-Giphys
-Polytopia Community Channels
-Discord
- Facebook-f
- Instagram
- Twitter
- Youtube
- Reddit
- Tiktok

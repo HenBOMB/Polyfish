@@ -448,6 +448,8 @@ pub struct GameState {
     pub _prediction: Option<PredictionState>,
     #[serde(default)]
     pub _end_of_turn_queue: Vec<EndOfTurnAction>,
+    #[serde(default)]
+    pub _hidden_resources: HashMap<i32, Option<ResourceState>>,
 }
 
 impl Default for GameState {
@@ -461,6 +463,7 @@ impl Default for GameState {
             _visible_tiles: HashMap::new(),
             _prediction: None,
             _end_of_turn_queue: Vec::new(),
+            _hidden_resources: HashMap::new(),
         }
     }
 }

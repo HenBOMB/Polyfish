@@ -778,6 +778,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
     let mut game_state = GameState::default();
     game_state.settings.size = size;
     game_state.settings.tile_count = tile_count;
+    game_state.settings._fow = false;
 
     let mut tribe_id_map: HashMap<TribeType, i32> = HashMap::new();
     for (i, &tribe) in settings.tribes.iter().enumerate() {
@@ -786,7 +787,43 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         t_state.id = id;
         t_state.tribe_type = tribe;
         t_state.score = 0;
-        t_state.stars = 5;
+        t_state.stars = match tribe {
+            TribeType::Luxidoor => 2,
+            TribeType::XinXi | TribeType::Hoodrick | TribeType::Quetzali | TribeType::Yadakk => 7,
+            TribeType::Oumaji => 6,
+            _ => 5,
+        };
+
+        // Correct starting technology
+        use crate::states::TechnologyState;
+        use crate::types::TechnologyType;
+        let mut starting_tech = Vec::new();
+        let tech_type = match tribe {
+            TribeType::Imperius => Some(TechnologyType::Organization),
+            TribeType::Bardur => Some(TechnologyType::Hunting),
+            TribeType::Kickoo => Some(TechnologyType::Fishing),
+            TribeType::Oumaji => Some(TechnologyType::Riding),
+            TribeType::XinXi => Some(TechnologyType::Climbing),
+            TribeType::Zebasi => Some(TechnologyType::Farming),
+            TribeType::AiMo => Some(TechnologyType::Philosophy),
+            TribeType::Hoodrick => Some(TechnologyType::Archery),
+            TribeType::Vengir => Some(TechnologyType::Smithery),
+            TribeType::Quetzali => Some(TechnologyType::Strategy),
+            TribeType::Yadakk => Some(TechnologyType::Roads),
+            TribeType::Polaris => Some(TechnologyType::Frostwork),
+            TribeType::Cymanti => Some(TechnologyType::Farming),
+            TribeType::Elyrion => Some(TechnologyType::ForestMagic),
+            _ => None,
+        };
+
+        if let Some(t) = tech_type {
+            starting_tech.push(TechnologyState {
+                tech_type: t,
+                discovered: true,
+            });
+        }
+        t_state.tech_vanilla = starting_tech;
+
         tribe_id_map.insert(tribe, id);
         game_state.tribes.insert(id, t_state);
     }
@@ -800,6 +837,29 @@ pub fn generate(settings: MapGenSettings) -> GameState {
             idx: gen_tile.idx,
         };
         t_state.terrain_type = gen_tile.terrain_type;
+
+        if let Some(tribe) = gen_tile.tribe_affinity {
+            t_state.climate = match tribe {
+                TribeType::None => ClimateType::Nature,
+                TribeType::Nature => ClimateType::Nature,
+                TribeType::AiMo => ClimateType::AiMo,
+                TribeType::Aquarion => ClimateType::Aquarion,
+                TribeType::Bardur => ClimateType::Bardur,
+                TribeType::Elyrion => ClimateType::Elyrion,
+                TribeType::Hoodrick => ClimateType::Hoodrick,
+                TribeType::Imperius => ClimateType::Imperius,
+                TribeType::Kickoo => ClimateType::Kickoo,
+                TribeType::Luxidoor => ClimateType::Luxidoor,
+                TribeType::Oumaji => ClimateType::Oumaji,
+                TribeType::Quetzali => ClimateType::Quetzali,
+                TribeType::Vengir => ClimateType::Vengir,
+                TribeType::XinXi => ClimateType::XinXi,
+                TribeType::Yadakk => ClimateType::Yadakk,
+                TribeType::Zebasi => ClimateType::Zebasi,
+                TribeType::Polaris => ClimateType::Polaris,
+                TribeType::Cymanti => ClimateType::Cymanti,
+            };
+        }
 
         if let Some(s) = gen_tile.above {
             match s.as_str() {
@@ -815,9 +875,16 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                     use crate::states::CityState;
                     let mut city = CityState::default();
                     city.tile_index = gen_tile.idx;
-                    city.level = 1;
+
+                    if gen_tile.tribe_affinity == Some(TribeType::Luxidoor) {
+                        city.level = 3;
+                        city.border_size = 1; // "doesn't get the first reward" (border expansion/workshop)
+                    } else {
+                        city.level = 1;
+                        city.border_size = 1;
+                    }
+
                     city.population = 0;
-                    city.border_size = 1;
 
                     if let Some(tribe) = gen_tile.tribe_affinity {
                         if let Some(&pid) = tribe_id_map.get(&tribe) {
@@ -937,6 +1004,54 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                 if let Some(t) = game_state.tiles.get_mut(&idx) {
                     t.ruling_city_coords = Some(city_coords_obj);
                 }
+            }
+        }
+    }
+
+    // Spawn starting units on capitals
+    use crate::states::PlayerId;
+    use crate::types::UnitType;
+    let mut tribe_ids: Vec<PlayerId> = game_state.tribes.keys().cloned().collect();
+    for pid in tribe_ids {
+        if let Some(tribe) = game_state.tribes.get_mut(&pid) {
+            let tribe_type = tribe.tribe_type;
+            let capital_tile_idx = if !tribe.cities.is_empty() {
+                tribe.cities[0].tile_index
+            } else {
+                continue;
+            };
+
+            let unit_type = match tribe_type {
+                TribeType::Hoodrick => UnitType::Archer,
+                TribeType::Vengir => UnitType::Swordsman,
+                TribeType::AiMo => UnitType::MindBender,
+                TribeType::Aquarion => UnitType::Amphibian,
+                TribeType::Oumaji => UnitType::Rider,
+                TribeType::Quetzali => UnitType::Defender,
+                TribeType::Polaris => UnitType::Mooni,
+                TribeType::Cymanti => UnitType::Shaman,
+                _ => UnitType::Warrior,
+            };
+
+            let coords = get_coords(capital_tile_idx, size);
+            let unit_coords = Coords {
+                x: coords.0,
+                y: coords.1,
+                idx: capital_tile_idx,
+            };
+
+            use crate::states::UnitState;
+            let mut unit = UnitState::default();
+            unit.owner = pid;
+            unit.unit_type = unit_type;
+            unit.coords = unit_coords;
+            unit.prev_coords = unit_coords;
+            unit.home_coords = Some(unit_coords);
+
+            tribe.units.push(unit);
+
+            if let Some(tile) = game_state.tiles.get_mut(&capital_tile_idx) {
+                tile._unit_owner_id = Some(pid);
             }
         }
     }
