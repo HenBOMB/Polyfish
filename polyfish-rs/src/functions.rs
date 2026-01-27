@@ -615,9 +615,9 @@ pub fn calculate_detailed_tribe_score(state: &GameState, player_id: PlayerId) ->
 
     let mut score = 0;
 
-    // 100 per level, 20 per territory, 5 per population
+    // 100 per level, 20 per territory
     for city in &tribe.cities {
-        score += city.level * 100 + (city._territory.len() as i32 * 20) + (city.population * 5);
+        score += city.level * 100 + (city._territory.len() as i32 * 20);
 
         // Monuments and special rewards
         // 40 for city itself, 5 for each reward after first (capped)

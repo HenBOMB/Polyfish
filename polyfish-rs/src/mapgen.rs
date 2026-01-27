@@ -1005,7 +1005,12 @@ pub fn generate(settings: MapGenSettings) -> GameState {
             for &idx in &city._territory {
                 if let Some(t) = game_state.tiles.get_mut(&idx) {
                     t.ruling_city_coords = Some(city_coords_obj);
+                    t.explorers.insert(tribe.id);
                 }
+            }
+            // Also reveal city tile itself
+            if let Some(t) = game_state.tiles.get_mut(&city.tile_index) {
+                t.explorers.insert(tribe.id);
             }
         }
     }
