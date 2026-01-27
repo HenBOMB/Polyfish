@@ -1,22 +1,31 @@
 //! Discovery actions
 
-use crate::actions::{chain_undos, UndoCallback};
 use crate::actions::city::add_population;
-use crate::functions::{get_adjacent_indices, get_pov_tribe, get_capital_city};
+use crate::actions::{chain_undos, UndoCallback};
+use crate::functions::{get_adjacent_indices, get_capital_city, get_pov_tribe};
 use crate::settings::has_skill;
 use crate::states::{GameState, UnitState};
 use crate::types::{SkillType, StructureType, TerrainType};
 
 /// Discover tiles around a unit or specific tiles
-pub fn discover_tiles(state: &mut GameState, unit: Option<&UnitState>, tile_indices: Option<Vec<i32>>) -> UndoCallback {
+pub fn discover_tiles(
+    state: &mut GameState,
+    unit: Option<&UnitState>,
+    tile_indices: Option<Vec<i32>>,
+) -> UndoCallback {
     let pov_id = state.settings.current_player_turn_id;
-    
+
     // Determine tiles to reveal
     let tiles_to_check = if let Some(indices) = tile_indices {
         indices
     } else if let Some(u) = unit {
-        let range = if state.tiles.get(&u.coords.idx).map(|t| t.terrain_type == TerrainType::Mountain).unwrap_or(false) 
-            || has_skill(u.unit_type, SkillType::Scout) {
+        let range = if state
+            .tiles
+            .get(&u.coords.idx)
+            .map(|t| t.terrain_type == TerrainType::Mountain)
+            .unwrap_or(false)
+            || has_skill(u.unit_type, SkillType::Scout)
+        {
             2
         } else {
             1
@@ -27,17 +36,18 @@ pub fn discover_tiles(state: &mut GameState, unit: Option<&UnitState>, tile_indi
     } else {
         Vec::new()
     };
-    
-    let newly_discovered: Vec<i32> = tiles_to_check.into_iter()
+
+    let newly_discovered: Vec<i32> = tiles_to_check
+        .into_iter()
         .filter(|&idx| !state._visible_tiles.contains_key(&idx))
         .collect();
-        
+
     if newly_discovered.is_empty() {
         return Box::new(|_| {});
     }
-    
+
     let mut undos: Vec<UndoCallback> = Vec::new();
-    
+
     // Update score
     let score_gain = 5 * newly_discovered.len() as i32;
     if let Some(tribe) = state.tribes.get_mut(&pov_id) {
@@ -48,12 +58,12 @@ pub fn discover_tiles(state: &mut GameState, unit: Option<&UnitState>, tile_indi
             tribe.score -= score_gain;
         }
     }));
-    
+
     // Process each tile
     for idx in newly_discovered {
         // Set visible
         state._visible_tiles.insert(idx, true);
-        
+
         // Mark explored
         if let Some(tile) = state.tiles.get_mut(&idx) {
             if !tile.explorers.contains(&pov_id) {
@@ -65,7 +75,7 @@ pub fn discover_tiles(state: &mut GameState, unit: Option<&UnitState>, tile_indi
                         t.explorers.remove(&tribe_id);
                     }
                 }));
-                
+
                 // Check if lighthouse
                 if let Some(Some(struct_state)) = state.structures.get(&idx) {
                     if struct_state.structure_type == StructureType::Lighthouse {
@@ -77,13 +87,15 @@ pub fn discover_tiles(state: &mut GameState, unit: Option<&UnitState>, tile_indi
                 }
             }
         }
-        
         // Undo visibility
         undos.push(Box::new(move |s| {
             s._visible_tiles.remove(&idx);
         }));
     }
-    
+
+    // Check for other tribes (integrated here or called separately)
+    undos.push(crate::actions::try_discover_other_tribes(state));
+
     chain_undos(undos)
 }
 
@@ -102,9 +114,13 @@ pub fn predict_explorer(state: &GameState, start_idx: i32) -> Vec<i32> {
     for _ in 0..15 {
         // Find nearest cloud within 4 moves
         let path = find_nearest_cloud(state, &current_visible, current_tile, 4);
-        
+
         let next_tile = if let Some(p) = path {
-            if p.len() > 1 { p[1] } else { current_tile }
+            if p.len() > 1 {
+                p[1]
+            } else {
+                current_tile
+            }
         } else {
             // Random allowed neighbor
             let allowed = get_allowed_neighbors(state, current_tile, false);
@@ -117,7 +133,7 @@ pub fn predict_explorer(state: &GameState, start_idx: i32) -> Vec<i32> {
 
         // Move and reveal
         current_tile = next_tile;
-        
+
         // Reveal tile and its neighbors
         let to_reveal = {
             let mut adj = get_adjacent_indices(state, next_tile, 1);
@@ -136,10 +152,15 @@ pub fn predict_explorer(state: &GameState, start_idx: i32) -> Vec<i32> {
     explored_tiles.into_iter().collect()
 }
 
-fn find_nearest_cloud(state: &GameState, visible: &std::collections::HashMap<i32, bool>, start_idx: i32, max_dist: i32) -> Option<Vec<i32>> {
+fn find_nearest_cloud(
+    state: &GameState,
+    visible: &std::collections::HashMap<i32, bool>,
+    start_idx: i32,
+    max_dist: i32,
+) -> Option<Vec<i32>> {
     let mut queue = VecDeque::new();
     let mut visited = HashSet::new();
-    
+
     queue.push_back((start_idx, vec![start_idx]));
     visited.insert(start_idx);
 
@@ -150,7 +171,7 @@ fn find_nearest_cloud(state: &GameState, visible: &std::collections::HashMap<i32
         let level_size = queue.len();
         for _ in 0..level_size {
             let (idx, path) = queue.pop_front().unwrap();
-            
+
             // Check if cloud
             if path.len() > 1 && !visible.contains_key(&idx) {
                 candidates.push(path.clone());
@@ -192,28 +213,38 @@ fn get_allowed_neighbors(state: &GameState, idx: i32, include_unexplored: bool) 
     };
 
     use crate::settings::{has_skill, has_technology};
-    use crate::types::{TechnologyType, SkillType};
+    use crate::types::{SkillType, TechnologyType};
 
     let mut odds = 0.45;
-    if has_technology(&tribe.tech_vanilla, TechnologyType::Fishing) { odds += 0.25; }
-    if has_technology(&tribe.tech_vanilla, TechnologyType::Sailing) { odds += 0.10; }
-    if has_technology(&tribe.tech_vanilla, TechnologyType::Climbing) { odds += 0.10; }
+    if has_technology(&tribe.tech_vanilla, TechnologyType::Fishing) {
+        odds += 0.25;
+    }
+    if has_technology(&tribe.tech_vanilla, TechnologyType::Sailing) {
+        odds += 0.10;
+    }
+    if has_technology(&tribe.tech_vanilla, TechnologyType::Climbing) {
+        odds += 0.10;
+    }
 
     let adj = get_adjacent_indices(state, idx, 1);
-    
+
     let mut allowed = Vec::new();
     let mut rng = thread_rng();
 
     for n_idx in adj {
         let is_visible = state._visible_tiles.contains_key(&n_idx);
-        
+
         if !is_visible && !include_unexplored {
             continue;
         }
 
         // Check if explorer already been there (mark in tile)
-        let been_there = state.tiles.get(&n_idx).map(|t| t.explorers.contains(&pov_id)).unwrap_or(false);
-        
+        let been_there = state
+            .tiles
+            .get(&n_idx)
+            .map(|t| t.explorers.contains(&pov_id))
+            .unwrap_or(false);
+
         if been_there {
             // If been there, use standard steppability (cheating slightly for simplicity as per TS)
             // TS: state.tiles[x].explorers.has(pov.id)? isTribeSteppable(state, x)
@@ -237,7 +268,7 @@ fn is_steppable_for_explorer(state: &GameState, idx: i32) -> bool {
     if let Some(tile) = state.tiles.get(&idx) {
         match tile.terrain_type {
             TerrainType::None => false,
-            _ => true
+            _ => true,
         }
     } else {
         false

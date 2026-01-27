@@ -2911,6 +2911,26 @@
   },
   "moves": [
     {
+      "type": 7,
+      "src": null,
+      "target": null,
+      "structType": null,
+      "unitType": null,
+      "techType": 20,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 1,
+      "src": 26,
+      "target": 27,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
       "type": 10,
       "src": null,
       "target": null,
@@ -2923,7 +2943,177 @@
     {
       "type": 1,
       "src": 91,
+      "target": 80,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 7,
+      "src": null,
+      "target": null,
+      "structType": null,
+      "unitType": null,
+      "techType": 20,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 10,
+      "src": null,
+      "target": null,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 1,
+      "src": 27,
+      "target": 16,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 10,
+      "src": null,
+      "target": null,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 1,
+      "src": 80,
       "target": 90,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 10,
+      "src": null,
+      "target": null,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 5,
+      "src": null,
+      "target": 38,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 1,
+      "src": 16,
+      "target": 17,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 10,
+      "src": null,
+      "target": null,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 1,
+      "src": 90,
+      "target": 79,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 5,
+      "src": null,
+      "target": 80,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 10,
+      "src": null,
+      "target": null,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 5,
+      "src": null,
+      "target": 25,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 9,
+      "src": 26,
+      "target": null,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": 3
+    },
+    {
+      "type": 1,
+      "src": 17,
+      "target": 28,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 10,
+      "src": null,
+      "target": null,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 1,
+      "src": 79,
+      "target": 80,
       "structType": null,
       "unitType": null,
       "techType": null,
@@ -2951,9 +3141,39 @@
       "rewardType": null
     },
     {
+      "type": 10,
+      "src": null,
+      "target": null,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
       "type": 1,
-      "src": 26,
-      "target": 36,
+      "src": 91,
+      "target": 90,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 1,
+      "src": 80,
+      "target": 91,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 10,
+      "src": null,
+      "target": null,
       "structType": null,
       "unitType": null,
       "techType": null,
@@ -2971,6 +3191,26 @@
       "rewardType": null
     },
     {
+      "type": 1,
+      "src": 28,
+      "target": 39,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 5,
+      "src": null,
+      "target": 27,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
       "type": 10,
       "src": null,
       "target": null,
@@ -2981,19 +3221,9 @@
       "rewardType": null
     },
     {
-      "type": 5,
-      "src": null,
-      "target": 103,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
       "type": 1,
       "src": 91,
-      "target": 102,
+      "target": 92,
       "structType": null,
       "unitType": null,
       "techType": null,
@@ -3021,179 +3251,9 @@
       "rewardType": null
     },
     {
-      "type": 1,
-      "src": 36,
-      "target": 24,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
       "type": 5,
       "src": null,
-      "target": 38,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 10,
-      "src": null,
-      "target": null,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 1,
-      "src": 80,
-      "target": 91,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 1,
-      "src": 102,
-      "target": 113,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 5,
-      "src": null,
-      "target": 80,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 9,
-      "src": 91,
-      "target": null,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": 3
-    },
-    {
-      "type": 10,
-      "src": null,
-      "target": null,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 5,
-      "src": null,
-      "target": 16,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 9,
-      "src": 26,
-      "target": null,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": 3
-    },
-    {
-      "type": 1,
-      "src": 24,
-      "target": 13,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 10,
-      "src": null,
-      "target": null,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 1,
-      "src": 91,
-      "target": 92,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 1,
-      "src": 113,
-      "target": 102,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 7,
-      "src": null,
-      "target": null,
-      "structType": null,
-      "unitType": null,
-      "techType": 1,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 10,
-      "src": null,
-      "target": null,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 5,
-      "src": null,
-      "target": 27,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 1,
-      "src": 13,
-      "target": 2,
+      "target": 15,
       "structType": null,
       "unitType": null,
       "techType": null,
@@ -3213,7 +3273,67 @@
     {
       "type": 1,
       "src": 92,
-      "target": 93,
+      "target": 102,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 1,
+      "src": 80,
+      "target": 91,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 7,
+      "src": null,
+      "target": null,
+      "structType": null,
+      "unitType": null,
+      "techType": 10,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 10,
+      "src": null,
+      "target": null,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 1,
+      "src": 39,
+      "target": 38,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 7,
+      "src": null,
+      "target": null,
+      "structType": null,
+      "unitType": null,
+      "techType": 7,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 10,
+      "src": null,
+      "target": null,
       "structType": null,
       "unitType": null,
       "techType": null,
@@ -3223,7 +3343,7 @@
     {
       "type": 1,
       "src": 102,
-      "target": 91,
+      "target": 112,
       "structType": null,
       "unitType": null,
       "techType": null,
@@ -3231,19 +3351,19 @@
       "rewardType": null
     },
     {
-      "type": 10,
-      "src": null,
+      "type": 9,
+      "src": 91,
       "target": null,
       "structType": null,
       "unitType": null,
       "techType": null,
       "abilityType": null,
-      "rewardType": null
+      "rewardType": 4
     },
     {
-      "type": 10,
-      "src": null,
-      "target": null,
+      "type": 1,
+      "src": 91,
+      "target": 81,
       "structType": null,
       "unitType": null,
       "techType": null,
@@ -3256,24 +3376,14 @@
       "target": null,
       "structType": null,
       "unitType": null,
-      "techType": 18,
+      "techType": 6,
       "abilityType": null,
       "rewardType": null
     },
     {
-      "type": 1,
-      "src": 91,
-      "target": 92,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 1,
-      "src": 93,
-      "target": 104,
+      "type": 10,
+      "src": null,
+      "target": null,
       "structType": null,
       "unitType": null,
       "techType": null,
@@ -3282,7 +3392,7 @@
     },
     {
       "type": 4,
-      "src": 91,
+      "src": 26,
       "target": null,
       "structType": null,
       "unitType": 2,
@@ -3291,39 +3401,19 @@
       "rewardType": null
     },
     {
-      "type": 10,
-      "src": null,
-      "target": null,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
       "type": 1,
-      "src": 2,
-      "target": 1,
+      "src": 38,
+      "target": 37,
       "structType": null,
       "unitType": null,
       "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 7,
-      "src": null,
-      "target": null,
-      "structType": null,
-      "unitType": null,
-      "techType": 20,
       "abilityType": null,
       "rewardType": null
     },
     {
       "type": 5,
       "src": null,
-      "target": 25,
+      "target": 16,
       "structType": null,
       "unitType": null,
       "techType": null,
@@ -3352,8 +3442,8 @@
     },
     {
       "type": 1,
-      "src": 92,
-      "target": 93,
+      "src": 81,
+      "target": 91,
       "structType": null,
       "unitType": null,
       "techType": null,
@@ -3361,19 +3451,9 @@
       "rewardType": null
     },
     {
-      "type": 1,
-      "src": 104,
-      "target": 103,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 1,
-      "src": 91,
-      "target": 92,
+      "type": 8,
+      "src": 112,
+      "target": null,
       "structType": null,
       "unitType": null,
       "techType": null,
@@ -3384,6 +3464,16 @@
       "type": 10,
       "src": null,
       "target": null,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 1,
+      "src": 37,
+      "target": 38,
       "structType": null,
       "unitType": null,
       "techType": null,
@@ -3396,164 +3486,14 @@
       "target": null,
       "structType": null,
       "unitType": null,
-      "techType": 1,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 10,
-      "src": null,
-      "target": null,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 7,
-      "src": null,
-      "target": null,
-      "structType": null,
-      "unitType": null,
-      "techType": 16,
+      "techType": 21,
       "abilityType": null,
       "rewardType": null
     },
     {
       "type": 1,
-      "src": 103,
-      "target": 102,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 1,
-      "src": 92,
-      "target": 104,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 3,
-      "src": null,
-      "target": 80,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": 2,
-      "rewardType": null
-    },
-    {
-      "type": 6,
-      "src": null,
-      "target": 81,
-      "structType": 12,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 1,
-      "src": 93,
-      "target": 82,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 3,
-      "src": null,
-      "target": 103,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": 2,
-      "rewardType": null
-    },
-    {
-      "type": 10,
-      "src": null,
-      "target": null,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 1,
-      "src": 1,
-      "target": 2,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 7,
-      "src": null,
-      "target": null,
-      "structType": null,
-      "unitType": null,
-      "techType": 23,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 10,
-      "src": null,
-      "target": null,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 6,
-      "src": null,
-      "target": 90,
-      "structType": 12,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 1,
-      "src": 102,
-      "target": 114,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 1,
-      "src": 104,
-      "target": 92,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 1,
-      "src": 82,
-      "target": 70,
+      "src": 26,
+      "target": 16,
       "structType": null,
       "unitType": null,
       "techType": null,
@@ -3581,9 +3521,89 @@
       "rewardType": null
     },
     {
+      "type": 7,
+      "src": null,
+      "target": null,
+      "structType": null,
+      "unitType": null,
+      "techType": 1,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
       "type": 1,
-      "src": 2,
-      "target": 3,
+      "src": 112,
+      "target": 102,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 1,
+      "src": 91,
+      "target": 90,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 10,
+      "src": null,
+      "target": null,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 1,
+      "src": 38,
+      "target": 49,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 1,
+      "src": 16,
+      "target": 17,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 10,
+      "src": null,
+      "target": null,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 1,
+      "src": 90,
+      "target": 100,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 1,
+      "src": 102,
+      "target": 101,
       "structType": null,
       "unitType": null,
       "techType": null,
@@ -3606,144 +3626,34 @@
       "target": null,
       "structType": null,
       "unitType": null,
-      "techType": 2,
+      "techType": 22,
       "abilityType": null,
       "rewardType": null
     },
     {
-      "type": 1,
-      "src": 70,
-      "target": 80,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 1,
-      "src": 92,
-      "target": 103,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 1,
-      "src": 114,
-      "target": 104,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 10,
-      "src": null,
-      "target": null,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 1,
-      "src": 3,
-      "target": 2,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 6,
-      "src": null,
-      "target": 14,
-      "structType": 5,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 10,
-      "src": null,
-      "target": null,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 1,
-      "src": 103,
-      "target": 115,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 3,
-      "src": 80,
-      "target": null,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": 8,
-      "rewardType": null
-    },
-    {
-      "type": 3,
-      "src": 104,
-      "target": null,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": 8,
-      "rewardType": null
-    },
-    {
-      "type": 10,
-      "src": null,
-      "target": null,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 6,
-      "src": null,
-      "target": 27,
-      "structType": 5,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 9,
+      "type": 4,
       "src": 26,
       "target": null,
       "structType": null,
-      "unitType": null,
+      "unitType": 5,
       "techType": null,
       "abilityType": null,
-      "rewardType": 5
+      "rewardType": null
     },
     {
       "type": 1,
-      "src": 2,
-      "target": 12,
+      "src": 49,
+      "target": 38,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 1,
+      "src": 17,
+      "target": 28,
       "structType": null,
       "unitType": null,
       "techType": null,
@@ -3754,6 +3664,16 @@
       "type": 10,
       "src": null,
       "target": null,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 1,
+      "src": 101,
+      "target": 91,
       "structType": null,
       "unitType": null,
       "techType": null,
@@ -3766,7 +3686,7 @@
       "target": null,
       "structType": null,
       "unitType": null,
-      "techType": 17,
+      "techType": 7,
       "abilityType": null,
       "rewardType": null
     },
@@ -3781,10 +3701,10 @@
       "rewardType": null
     },
     {
-      "type": 6,
-      "src": null,
-      "target": 15,
-      "structType": 5,
+      "type": 1,
+      "src": 28,
+      "target": 17,
+      "structType": null,
       "unitType": null,
       "techType": null,
       "abilityType": null,
@@ -3792,8 +3712,58 @@
     },
     {
       "type": 1,
-      "src": 12,
-      "target": 23,
+      "src": 38,
+      "target": 37,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 1,
+      "src": 26,
+      "target": 27,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 7,
+      "src": null,
+      "target": null,
+      "structType": null,
+      "unitType": null,
+      "techType": 18,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 10,
+      "src": null,
+      "target": null,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 1,
+      "src": 91,
+      "target": 101,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 1,
+      "src": 100,
+      "target": 112,
       "structType": null,
       "unitType": null,
       "techType": null,
@@ -3802,7 +3772,7 @@
     },
     {
       "type": 4,
-      "src": 26,
+      "src": 91,
       "target": null,
       "structType": null,
       "unitType": 2,
@@ -3822,20 +3792,10 @@
     },
     {
       "type": 1,
-      "src": 115,
-      "target": 116,
+      "src": 37,
+      "target": 25,
       "structType": null,
       "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 4,
-      "src": 91,
-      "target": null,
-      "structType": null,
-      "unitType": 9,
       "techType": null,
       "abilityType": null,
       "rewardType": null
@@ -3851,19 +3811,9 @@
       "rewardType": null
     },
     {
-      "type": 1,
-      "src": 23,
-      "target": 34,
-      "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
       "type": 6,
       "src": null,
-      "target": 37,
+      "target": 101,
       "structType": 5,
       "unitType": null,
       "techType": null,
@@ -3871,9 +3821,69 @@
       "rewardType": null
     },
     {
+      "type": 9,
+      "src": 91,
+      "target": null,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": 1
+    },
+    {
       "type": 1,
-      "src": 26,
-      "target": 36,
+      "src": 101,
+      "target": 102,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 1,
+      "src": 91,
+      "target": 101,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 10,
+      "src": null,
+      "target": null,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 7,
+      "src": null,
+      "target": null,
+      "structType": null,
+      "unitType": null,
+      "techType": 16,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 1,
+      "src": 27,
+      "target": 16,
+      "structType": null,
+      "unitType": null,
+      "techType": null,
+      "abilityType": null,
+      "rewardType": null
+    },
+    {
+      "type": 1,
+      "src": 25,
+      "target": 26,
       "structType": null,
       "unitType": null,
       "techType": null,
@@ -3892,19 +3902,9 @@
     },
     {
       "type": 1,
-      "src": 91,
-      "target": 80,
+      "src": 112,
+      "target": 113,
       "structType": null,
-      "unitType": null,
-      "techType": null,
-      "abilityType": null,
-      "rewardType": null
-    },
-    {
-      "type": 6,
-      "src": null,
-      "target": 79,
-      "structType": 13,
       "unitType": null,
       "techType": null,
       "abilityType": null,
@@ -3913,124 +3913,124 @@
   ],
   "finalState": {
     "_visibleTiles": {
-      "0": false,
-      "1": false,
-      "2": false,
-      "3": false,
-      "4": false,
-      "5": false,
-      "6": false,
-      "7": false,
-      "8": false,
-      "9": false,
-      "10": false,
-      "11": false,
-      "12": false,
-      "13": false,
-      "14": false,
-      "15": false,
-      "16": false,
-      "17": false,
-      "18": false,
-      "19": false,
-      "20": false,
-      "21": false,
-      "22": false,
-      "23": false,
-      "24": false,
-      "25": false,
-      "26": false,
-      "27": false,
+      "0": true,
+      "1": true,
+      "2": true,
+      "3": true,
+      "4": true,
+      "5": true,
+      "6": true,
+      "7": true,
+      "8": true,
+      "9": true,
+      "10": true,
+      "11": true,
+      "12": true,
+      "13": true,
+      "14": true,
+      "15": true,
+      "16": true,
+      "17": true,
+      "18": true,
+      "19": true,
+      "20": true,
+      "21": true,
+      "22": true,
+      "23": true,
+      "24": true,
+      "25": true,
+      "26": true,
+      "27": true,
       "28": false,
       "29": false,
       "30": false,
-      "31": false,
-      "32": false,
-      "33": false,
-      "34": false,
-      "35": false,
-      "36": false,
-      "37": false,
-      "38": false,
+      "31": true,
+      "32": true,
+      "33": true,
+      "34": true,
+      "35": true,
+      "36": true,
+      "37": true,
+      "38": true,
       "39": false,
       "40": false,
       "41": false,
       "42": false,
-      "43": false,
-      "44": false,
-      "45": false,
-      "46": false,
-      "47": false,
-      "48": false,
-      "49": false,
+      "43": true,
+      "44": true,
+      "45": true,
+      "46": true,
+      "47": true,
+      "48": true,
+      "49": true,
       "50": false,
       "51": false,
       "52": false,
       "53": false,
       "54": false,
-      "55": false,
-      "56": false,
-      "57": false,
+      "55": true,
+      "56": true,
+      "57": true,
       "58": true,
-      "59": true,
-      "60": true,
+      "59": false,
+      "60": false,
       "61": false,
       "62": false,
       "63": false,
       "64": false,
       "65": false,
-      "66": false,
+      "66": true,
       "67": true,
       "68": true,
       "69": true,
       "70": true,
       "71": true,
-      "72": true,
+      "72": false,
       "73": false,
       "74": false,
       "75": false,
       "76": false,
-      "77": false,
+      "77": true,
       "78": true,
       "79": true,
       "80": true,
       "81": true,
       "82": true,
-      "83": true,
+      "83": false,
       "84": false,
       "85": false,
       "86": false,
       "87": false,
-      "88": false,
+      "88": true,
       "89": true,
       "90": true,
       "91": true,
       "92": true,
       "93": true,
-      "94": true,
+      "94": false,
       "95": false,
       "96": false,
       "97": false,
       "98": false,
-      "99": false,
+      "99": true,
       "100": true,
       "101": true,
       "102": true,
       "103": true,
       "104": true,
-      "105": true,
-      "106": true,
+      "105": false,
+      "106": false,
       "107": false,
       "108": false,
       "109": false,
-      "110": false,
-      "111": false,
+      "110": true,
+      "111": true,
       "112": true,
       "113": true,
       "114": true,
       "115": true,
-      "116": true,
-      "117": true,
+      "116": false,
+      "117": false,
       "118": false,
       "119": false,
       "120": false
@@ -4051,10 +4051,6 @@
       "13": {
         "type": 1,
         "tileIndex": 13
-      },
-      "15": {
-        "type": 6,
-        "tileIndex": 15
       },
       "17": {
         "type": 6,
@@ -4096,6 +4092,10 @@
         "type": 6,
         "tileIndex": 97
       },
+      "103": {
+        "type": 1,
+        "tileIndex": 103
+      },
       "108": {
         "type": 6,
         "tileIndex": 108
@@ -4117,20 +4117,6 @@
         "score": 0,
         "tileIndex": 12
       },
-      "14": {
-        "type": 5,
-        "level": 1,
-        "founded": 10,
-        "tileIndex": 14,
-        "score": 0
-      },
-      "15": {
-        "type": 5,
-        "level": 1,
-        "founded": 12,
-        "tileIndex": 15,
-        "score": 0
-      },
       "18": {
         "type": 1,
         "level": 1,
@@ -4140,17 +4126,10 @@
       },
       "26": {
         "type": 1,
-        "level": 4,
+        "level": 3,
         "founded": 0,
         "score": 0,
         "tileIndex": 26
-      },
-      "27": {
-        "type": 5,
-        "level": 1,
-        "founded": 11,
-        "tileIndex": 27,
-        "score": 0
       },
       "31": {
         "type": 2,
@@ -4158,13 +4137,6 @@
         "founded": 0,
         "score": 0,
         "tileIndex": 31
-      },
-      "37": {
-        "type": 5,
-        "level": 1,
-        "founded": 13,
-        "tileIndex": 37,
-        "score": 0
       },
       "52": {
         "type": 1,
@@ -4180,33 +4152,12 @@
         "score": 0,
         "tileIndex": 58
       },
-      "79": {
-        "type": 13,
-        "level": 1,
-        "founded": 13,
-        "tileIndex": 79,
-        "score": 0
-      },
-      "81": {
-        "type": 12,
-        "level": 1,
-        "founded": 7,
-        "tileIndex": 81,
-        "score": 0
-      },
       "86": {
         "type": 1,
         "level": 1,
         "founded": 0,
         "score": 0,
         "tileIndex": 86
-      },
-      "90": {
-        "type": 12,
-        "level": 1,
-        "founded": 8,
-        "tileIndex": 90,
-        "score": 0
       },
       "91": {
         "type": 1,
@@ -4222,12 +4173,12 @@
         "score": 0,
         "tileIndex": 94
       },
-      "112": {
-        "type": 2,
-        "level": 0,
-        "founded": 0,
-        "score": 0,
-        "tileIndex": 112
+      "101": {
+        "type": 5,
+        "level": 1,
+        "founded": 13,
+        "tileIndex": 101,
+        "score": 0
       },
       "115": {
         "type": 2,
@@ -4241,7 +4192,7 @@
       "mode": 1,
       "size": 11,
       "tileCount": 121,
-      "turn": 13,
+      "turn": 14,
       "_lastPlayerTurnId": 1,
       "maxTurns": 50,
       "currentPlayerTurnId": 2,
@@ -4249,13 +4200,9 @@
       "_maxTribeCount": 2,
       "_gameOver": false,
       "_recentMoves": [
-        1,
-        6
+        1
       ],
-      "_pendingRewards": [
-        "[9,91,null,null,null,null,null,1]",
-        "[9,91,null,null,null,null,null,7]"
-      ],
+      "_pendingRewards": [],
       "_fow": true
     },
     "tiles": {
@@ -4264,7 +4211,7 @@
         "climate": 2,
         "type": 3,
         "explorers": [
-          1
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -4284,7 +4231,7 @@
         "climate": 2,
         "type": 3,
         "explorers": [
-          1
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -4300,11 +4247,12 @@
         "flooded": false
       },
       "2": {
-        "owner": 1,
+        "owner": 0,
         "climate": 2,
         "type": 3,
         "explorers": [
-          1
+          1,
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -4317,19 +4265,15 @@
           "y": 0
         },
         "frozen": false,
-        "flooded": false,
-        "rulingCityCoords": {
-          "idx": 26,
-          "x": 4,
-          "y": 2
-        }
+        "flooded": false
       },
       "3": {
-        "owner": 1,
+        "owner": 0,
         "climate": 2,
         "type": 3,
         "explorers": [
-          1
+          1,
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -4342,19 +4286,15 @@
           "y": 0
         },
         "frozen": false,
-        "flooded": false,
-        "rulingCityCoords": {
-          "idx": 26,
-          "x": 4,
-          "y": 2
-        }
+        "flooded": false
       },
       "4": {
-        "owner": 1,
+        "owner": 0,
         "climate": 2,
         "type": 3,
         "explorers": [
-          1
+          1,
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -4367,19 +4307,15 @@
           "y": 0
         },
         "frozen": false,
-        "flooded": false,
-        "rulingCityCoords": {
-          "idx": 26,
-          "x": 4,
-          "y": 2
-        }
+        "flooded": false
       },
       "5": {
-        "owner": 1,
+        "owner": 0,
         "climate": 2,
         "type": 3,
         "explorers": [
-          1
+          1,
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -4392,19 +4328,15 @@
           "y": 0
         },
         "frozen": false,
-        "flooded": false,
-        "rulingCityCoords": {
-          "idx": 26,
-          "x": 4,
-          "y": 2
-        }
+        "flooded": false
       },
       "6": {
-        "owner": 1,
+        "owner": 0,
         "climate": 2,
         "type": 3,
         "explorers": [
-          1
+          1,
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -4417,18 +4349,16 @@
           "y": 0
         },
         "frozen": false,
-        "flooded": false,
-        "rulingCityCoords": {
-          "idx": 26,
-          "x": 4,
-          "y": 2
-        }
+        "flooded": false
       },
       "7": {
         "owner": 0,
         "climate": 2,
         "type": 5,
-        "explorers": [],
+        "explorers": [
+          1,
+          2
+        ],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -4446,7 +4376,9 @@
         "owner": 0,
         "climate": 2,
         "type": 5,
-        "explorers": [],
+        "explorers": [
+          2
+        ],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -4464,7 +4396,9 @@
         "owner": 0,
         "climate": 2,
         "type": 5,
-        "explorers": [],
+        "explorers": [
+          2
+        ],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -4482,7 +4416,9 @@
         "owner": 0,
         "climate": 2,
         "type": 3,
-        "explorers": [],
+        "explorers": [
+          2
+        ],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -4501,7 +4437,7 @@
         "climate": 2,
         "type": 5,
         "explorers": [
-          1
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -4521,7 +4457,7 @@
         "climate": 2,
         "type": 3,
         "explorers": [
-          1
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -4537,11 +4473,12 @@
         "flooded": false
       },
       "13": {
-        "owner": 1,
+        "owner": 0,
         "climate": 2,
         "type": 5,
         "explorers": [
-          1
+          1,
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -4554,19 +4491,15 @@
           "y": 1
         },
         "frozen": false,
-        "flooded": false,
-        "rulingCityCoords": {
-          "idx": 26,
-          "x": 4,
-          "y": 2
-        }
+        "flooded": false
       },
       "14": {
         "owner": 1,
         "climate": 2,
         "type": 3,
         "explorers": [
-          1
+          1,
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -4591,7 +4524,8 @@
         "climate": 2,
         "type": 3,
         "explorers": [
-          1
+          1,
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -4616,7 +4550,8 @@
         "climate": 2,
         "type": 3,
         "explorers": [
-          1
+          1,
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -4634,14 +4569,16 @@
           "idx": 26,
           "x": 4,
           "y": 2
-        }
+        },
+        "_unitOwnerID": 1
       },
       "17": {
-        "owner": 1,
+        "owner": 0,
         "climate": 2,
         "type": 3,
         "explorers": [
-          1
+          1,
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -4655,17 +4592,16 @@
         },
         "frozen": false,
         "flooded": false,
-        "rulingCityCoords": {
-          "idx": 26,
-          "x": 4,
-          "y": 2
-        }
+        "_unitOwnerID": 1
       },
       "18": {
         "owner": 0,
         "climate": 2,
         "type": 3,
-        "explorers": [],
+        "explorers": [
+          1,
+          2
+        ],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -4683,7 +4619,9 @@
         "owner": 0,
         "climate": 2,
         "type": 3,
-        "explorers": [],
+        "explorers": [
+          2
+        ],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -4701,7 +4639,9 @@
         "owner": 0,
         "climate": 2,
         "type": 3,
-        "explorers": [],
+        "explorers": [
+          2
+        ],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -4719,7 +4659,9 @@
         "owner": 0,
         "climate": 2,
         "type": 5,
-        "explorers": [],
+        "explorers": [
+          2
+        ],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -4738,7 +4680,7 @@
         "climate": 2,
         "type": 3,
         "explorers": [
-          1
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -4758,7 +4700,7 @@
         "climate": 2,
         "type": 3,
         "explorers": [
-          1
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -4774,11 +4716,12 @@
         "flooded": false
       },
       "24": {
-        "owner": 1,
+        "owner": 0,
         "climate": 2,
         "type": 5,
         "explorers": [
-          1
+          1,
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -4791,19 +4734,15 @@
           "y": 2
         },
         "frozen": false,
-        "flooded": false,
-        "rulingCityCoords": {
-          "idx": 26,
-          "x": 4,
-          "y": 2
-        }
+        "flooded": false
       },
       "25": {
         "owner": 1,
         "climate": 2,
         "type": 3,
         "explorers": [
-          1
+          1,
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -4828,7 +4767,8 @@
         "climate": 2,
         "type": 3,
         "explorers": [
-          1
+          1,
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -4846,14 +4786,16 @@
           "idx": 26,
           "x": 4,
           "y": 2
-        }
+        },
+        "_unitOwnerID": 1
       },
       "27": {
         "owner": 1,
         "climate": 2,
         "type": 3,
         "explorers": [
-          1
+          1,
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -4874,7 +4816,7 @@
         }
       },
       "28": {
-        "owner": 1,
+        "owner": 0,
         "climate": 2,
         "type": 3,
         "explorers": [
@@ -4891,18 +4833,15 @@
           "y": 2
         },
         "frozen": false,
-        "flooded": false,
-        "rulingCityCoords": {
-          "idx": 26,
-          "x": 4,
-          "y": 2
-        }
+        "flooded": false
       },
       "29": {
         "owner": 0,
         "climate": 2,
         "type": 3,
-        "explorers": [],
+        "explorers": [
+          1
+        ],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -4938,7 +4877,9 @@
         "owner": 0,
         "climate": 2,
         "type": 5,
-        "explorers": [],
+        "explorers": [
+          2
+        ],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -4956,7 +4897,9 @@
         "owner": 0,
         "climate": 2,
         "type": 3,
-        "explorers": [],
+        "explorers": [
+          2
+        ],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -4975,7 +4918,7 @@
         "climate": 2,
         "type": 5,
         "explorers": [
-          1
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -4995,7 +4938,7 @@
         "climate": 2,
         "type": 5,
         "explorers": [
-          1
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -5008,15 +4951,15 @@
           "y": 3
         },
         "frozen": false,
-        "flooded": false,
-        "_unitOwnerID": 1
+        "flooded": false
       },
       "35": {
-        "owner": 1,
+        "owner": 0,
         "climate": 2,
         "type": 5,
         "explorers": [
-          1
+          1,
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -5029,19 +4972,15 @@
           "y": 3
         },
         "frozen": false,
-        "flooded": false,
-        "rulingCityCoords": {
-          "idx": 26,
-          "x": 4,
-          "y": 2
-        }
+        "flooded": false
       },
       "36": {
         "owner": 1,
         "climate": 2,
         "type": 3,
         "explorers": [
-          1
+          1,
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -5059,15 +4998,15 @@
           "idx": 26,
           "x": 4,
           "y": 2
-        },
-        "_unitOwnerID": 1
+        }
       },
       "37": {
         "owner": 1,
         "climate": 2,
         "type": 3,
         "explorers": [
-          1
+          1,
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -5092,7 +5031,8 @@
         "climate": 2,
         "type": 3,
         "explorers": [
-          1
+          1,
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -5113,7 +5053,7 @@
         }
       },
       "39": {
-        "owner": 1,
+        "owner": 0,
         "climate": 2,
         "type": 3,
         "explorers": [
@@ -5130,18 +5070,15 @@
           "y": 3
         },
         "frozen": false,
-        "flooded": false,
-        "rulingCityCoords": {
-          "idx": 26,
-          "x": 4,
-          "y": 2
-        }
+        "flooded": false
       },
       "40": {
         "owner": 0,
         "climate": 2,
         "type": 3,
-        "explorers": [],
+        "explorers": [
+          1
+        ],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -5195,7 +5132,9 @@
         "owner": 0,
         "climate": 2,
         "type": 5,
-        "explorers": [],
+        "explorers": [
+          2
+        ],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -5214,7 +5153,7 @@
         "climate": 3,
         "type": 5,
         "explorers": [
-          1
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -5234,7 +5173,7 @@
         "climate": 2,
         "type": 3,
         "explorers": [
-          1
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -5250,11 +5189,12 @@
         "flooded": false
       },
       "46": {
-        "owner": 1,
+        "owner": 0,
         "climate": 2,
         "type": 3,
         "explorers": [
-          1
+          1,
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -5267,19 +5207,15 @@
           "y": 4
         },
         "frozen": false,
-        "flooded": false,
-        "rulingCityCoords": {
-          "idx": 26,
-          "x": 4,
-          "y": 2
-        }
+        "flooded": false
       },
       "47": {
-        "owner": 1,
+        "owner": 0,
         "climate": 2,
         "type": 5,
         "explorers": [
-          1
+          1,
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -5292,19 +5228,15 @@
           "y": 4
         },
         "frozen": false,
-        "flooded": false,
-        "rulingCityCoords": {
-          "idx": 26,
-          "x": 4,
-          "y": 2
-        }
+        "flooded": false
       },
       "48": {
-        "owner": 1,
+        "owner": 0,
         "climate": 2,
         "type": 5,
         "explorers": [
-          1
+          1,
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -5317,19 +5249,15 @@
           "y": 4
         },
         "frozen": false,
-        "flooded": false,
-        "rulingCityCoords": {
-          "idx": 26,
-          "x": 4,
-          "y": 2
-        }
+        "flooded": false
       },
       "49": {
-        "owner": 1,
+        "owner": 0,
         "climate": 2,
         "type": 3,
         "explorers": [
-          1
+          1,
+          2
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -5342,15 +5270,10 @@
           "y": 4
         },
         "frozen": false,
-        "flooded": false,
-        "rulingCityCoords": {
-          "idx": 26,
-          "x": 4,
-          "y": 2
-        }
+        "flooded": false
       },
       "50": {
-        "owner": 1,
+        "owner": 0,
         "climate": 2,
         "type": 3,
         "explorers": [
@@ -5367,18 +5290,15 @@
           "y": 4
         },
         "frozen": false,
-        "flooded": false,
-        "rulingCityCoords": {
-          "idx": 26,
-          "x": 4,
-          "y": 2
-        }
+        "flooded": false
       },
       "51": {
         "owner": 0,
         "climate": 2,
         "type": 5,
-        "explorers": [],
+        "explorers": [
+          1
+        ],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -5450,7 +5370,9 @@
         "owner": 0,
         "climate": 3,
         "type": 3,
-        "explorers": [],
+        "explorers": [
+          2
+        ],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -5468,7 +5390,9 @@
         "owner": 0,
         "climate": 3,
         "type": 5,
-        "explorers": [],
+        "explorers": [
+          2
+        ],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -5486,7 +5410,9 @@
         "owner": 0,
         "climate": 3,
         "type": 5,
-        "explorers": [],
+        "explorers": [
+          2
+        ],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -5525,7 +5451,7 @@
         "climate": 2,
         "type": 5,
         "explorers": [
-          2
+          1
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -5545,7 +5471,7 @@
         "climate": 2,
         "type": 3,
         "explorers": [
-          2
+          1
         ],
         "hasRoad": false,
         "hasRoute": false,
@@ -5564,7 +5490,9 @@
         "owner": 0,
         "climate": 2,
         "type": 3,
-        "explorers": [],
+        "explorers": [
+          1
+        ],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -5654,7 +5582,9 @@
         "owner": 0,
         "climate": 3,
         "type": 5,
-        "explorers": [],
+        "explorers": [
+          2
+        ],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -5772,9 +5702,7 @@
         "owner": 0,
         "climate": 3,
         "type": 5,
-        "explorers": [
-          2
-        ],
+        "explorers": [],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -5864,7 +5792,9 @@
         "owner": 0,
         "climate": 3,
         "type": 5,
-        "explorers": [],
+        "explorers": [
+          2
+        ],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -5926,7 +5856,7 @@
       "80": {
         "owner": 2,
         "climate": 3,
-        "type": 3,
+        "type": 5,
         "explorers": [
           2
         ],
@@ -5946,8 +5876,7 @@
           "idx": 91,
           "x": 3,
           "y": 8
-        },
-        "_unitOwnerID": 2
+        }
       },
       "81": {
         "owner": 2,
@@ -5998,9 +5927,7 @@
         "owner": 0,
         "climate": 3,
         "type": 3,
-        "explorers": [
-          2
-        ],
+        "explorers": [],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -6090,7 +6017,9 @@
         "owner": 0,
         "climate": 3,
         "type": 3,
-        "explorers": [],
+        "explorers": [
+          2
+        ],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -6223,9 +6152,7 @@
         "owner": 0,
         "climate": 3,
         "type": 3,
-        "explorers": [
-          2
-        ],
+        "explorers": [],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -6315,7 +6242,9 @@
         "owner": 0,
         "climate": 3,
         "type": 5,
-        "explorers": [],
+        "explorers": [
+          2
+        ],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -6372,7 +6301,8 @@
           "idx": 91,
           "x": 3,
           "y": 8
-        }
+        },
+        "_unitOwnerID": 2
       },
       "102": {
         "owner": 2,
@@ -6397,12 +6327,13 @@
           "idx": 91,
           "x": 3,
           "y": 8
-        }
+        },
+        "_unitOwnerID": 2
       },
       "103": {
         "owner": 2,
         "climate": 3,
-        "type": 3,
+        "type": 5,
         "explorers": [
           2
         ],
@@ -6448,9 +6379,7 @@
         "owner": 0,
         "climate": 3,
         "type": 3,
-        "explorers": [
-          2
-        ],
+        "explorers": [],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -6468,9 +6397,7 @@
         "owner": 0,
         "climate": 3,
         "type": 3,
-        "explorers": [
-          2
-        ],
+        "explorers": [],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -6542,7 +6469,9 @@
         "owner": 0,
         "climate": 3,
         "type": 3,
-        "explorers": [],
+        "explorers": [
+          2
+        ],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -6560,7 +6489,9 @@
         "owner": 0,
         "climate": 3,
         "type": 3,
-        "explorers": [],
+        "explorers": [
+          2
+        ],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -6612,7 +6543,8 @@
           "y": 10
         },
         "frozen": false,
-        "flooded": false
+        "flooded": false,
+        "_unitOwnerID": 2
       },
       "114": {
         "owner": 0,
@@ -6658,9 +6590,7 @@
         "owner": 0,
         "climate": 3,
         "type": 3,
-        "explorers": [
-          2
-        ],
+        "explorers": [],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -6672,16 +6602,13 @@
           "y": 10
         },
         "frozen": false,
-        "flooded": false,
-        "_unitOwnerID": 2
+        "flooded": false
       },
       "117": {
         "owner": 0,
         "climate": 3,
         "type": 5,
-        "explorers": [
-          2
-        ],
+        "explorers": [],
         "hasRoad": false,
         "hasRoute": false,
         "hadRoute": false,
@@ -6757,8 +6684,8 @@
         "username": "Player",
         "bot": false,
         "type": 7,
-        "score": 1050,
-        "stars": 1,
+        "score": 665,
+        "stars": 5,
         "killedTurn": -1,
         "resignedTurn": -1,
         "killerId": -1,
@@ -6772,23 +6699,31 @@
             "discovered": true
           },
           {
-            "type": 15,
-            "discovered": true
-          },
-          {
             "type": 20,
             "discovered": true
           },
           {
-            "type": 1,
+            "type": 15,
             "discovered": true
           },
           {
-            "type": 23,
+            "type": 7,
             "discovered": true
           },
           {
-            "type": 8,
+            "type": 21,
+            "discovered": true
+          },
+          {
+            "type": 22,
+            "discovered": true
+          },
+          {
+            "type": 18,
+            "discovered": true
+          },
+          {
+            "type": 16,
             "discovered": true
           }
         ],
@@ -6800,17 +6735,16 @@
           {
             "tileIndex": 26,
             "name": "Imperius Capital",
-            "population": 13,
-            "progress": 4,
+            "population": 5,
+            "progress": 0,
             "rewards": [
               3,
-              1,
-              5
+              1
             ],
-            "borderSize": 2,
+            "borderSize": 1,
             "connectedToCapital": false,
-            "level": 4,
-            "production": 6,
+            "level": 3,
+            "production": 5,
             "owner": 1,
             "_territory": [
               26,
@@ -6847,9 +6781,9 @@
               "y": 2
             },
             "coords": {
-              "idx": 34,
-              "x": 1,
-              "y": 3
+              "idx": 26,
+              "x": 4,
+              "y": 2
             },
             "moved": true,
             "attacked": true,
@@ -6866,7 +6800,7 @@
             "direction": 0,
             "veteran": false,
             "kills": 0,
-            "createdTurn": 12,
+            "createdTurn": 8,
             "owner": 1,
             "homeCoords": {
               "idx": 26,
@@ -6874,9 +6808,36 @@
               "y": 2
             },
             "coords": {
-              "idx": 36,
-              "x": 3,
-              "y": 3
+              "idx": 17,
+              "x": 6,
+              "y": 1
+            },
+            "moved": false,
+            "attacked": false,
+            "effects": []
+          },
+          {
+            "type": 5,
+            "health": 150,
+            "prevCoords": {
+              "idx": -1,
+              "x": -1,
+              "y": -1
+            },
+            "direction": 0,
+            "veteran": false,
+            "kills": 0,
+            "createdTurn": 11,
+            "owner": 1,
+            "homeCoords": {
+              "idx": 26,
+              "x": 4,
+              "y": 2
+            },
+            "coords": {
+              "idx": 16,
+              "x": 5,
+              "y": 1
             },
             "moved": true,
             "attacked": true,
@@ -6918,8 +6879,8 @@
         "username": "Bardur",
         "bot": true,
         "type": 4,
-        "score": 680,
-        "stars": 3,
+        "score": 885,
+        "stars": 4,
         "killedTurn": -1,
         "resignedTurn": -1,
         "killerId": -1,
@@ -6933,23 +6894,27 @@
             "discovered": true
           },
           {
+            "type": 20,
+            "discovered": true
+          },
+          {
+            "type": 10,
+            "discovered": true
+          },
+          {
+            "type": 6,
+            "discovered": true
+          },
+          {
+            "type": 8,
+            "discovered": true
+          },
+          {
             "type": 1,
             "discovered": true
           },
           {
-            "type": 18,
-            "discovered": true
-          },
-          {
-            "type": 16,
-            "discovered": true
-          },
-          {
-            "type": 2,
-            "discovered": true
-          },
-          {
-            "type": 17,
+            "type": 7,
             "discovered": true
           }
         ],
@@ -6961,15 +6926,16 @@
           {
             "tileIndex": 91,
             "name": "Bardur Capital",
-            "population": 5,
-            "progress": 0,
+            "population": 6,
+            "progress": 1,
             "rewards": [
-              3
+              4,
+              1
             ],
             "borderSize": 1,
             "connectedToCapital": false,
             "level": 3,
-            "production": 5,
+            "production": 4,
             "owner": 2,
             "_territory": [
               91,
@@ -6982,11 +6948,38 @@
               92,
               103
             ],
-            "_walls": false,
+            "_walls": true,
             "_riot": false
           }
         ],
         "units": [
+          {
+            "type": 2,
+            "health": 100,
+            "prevCoords": {
+              "idx": -12,
+              "x": -1,
+              "y": -1
+            },
+            "direction": 0,
+            "veteran": false,
+            "kills": 0,
+            "createdTurn": 0,
+            "owner": 2,
+            "homeCoords": {
+              "idx": 91,
+              "x": 3,
+              "y": 8
+            },
+            "coords": {
+              "idx": 102,
+              "x": 3,
+              "y": 9
+            },
+            "moved": false,
+            "attacked": false,
+            "effects": []
+          },
           {
             "type": 2,
             "health": 100,
@@ -6998,7 +6991,7 @@
             "direction": 0,
             "veteran": false,
             "kills": 0,
-            "createdTurn": 5,
+            "createdTurn": 3,
             "owner": 2,
             "homeCoords": {
               "idx": 91,
@@ -7006,16 +6999,16 @@
               "y": 8
             },
             "coords": {
-              "idx": 116,
-              "x": 6,
+              "idx": 113,
+              "x": 3,
               "y": 10
             },
-            "moved": false,
-            "attacked": false,
+            "moved": true,
+            "attacked": true,
             "effects": []
           },
           {
-            "type": 9,
+            "type": 2,
             "health": 100,
             "prevCoords": {
               "idx": -1,
@@ -7033,18 +7026,20 @@
               "y": 8
             },
             "coords": {
-              "idx": 80,
-              "x": 3,
-              "y": 7
+              "idx": 101,
+              "x": 2,
+              "y": 9
             },
-            "moved": true,
-            "attacked": true,
+            "moved": false,
+            "attacked": false,
             "effects": []
           }
         ],
         "resources": [],
         "structures": [],
-        "knownPlayers": [],
+        "knownPlayers": [
+          1
+        ],
         "relations": {
           "1": {
             "state": 0,

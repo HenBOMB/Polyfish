@@ -282,6 +282,7 @@ pub struct TribeState {
     #[serde(default)]
     pub casualties: i32,
     #[serde(default)]
+    #[serde(rename = "tech_vanilla")]
     pub tech_vanilla: Vec<TechnologyState>,
     #[serde(default)]
     pub cities: Vec<CityState>,

@@ -62,10 +62,18 @@ pub fn spend_stars(state: &mut GameState, amount: i32) -> UndoCallback {
 
     let pov_id = state.settings.current_player_turn_id;
     if let Some(tribe) = state.tribes.get_mut(&pov_id) {
+        let old_stars = tribe.stars;
         tribe.stars -= amount;
+
+        // Polytopia/TS doesn't usually allow debt, but if we are here we already validated
+        // Let's clamp to 0 just in case to match TS state behavior if moves were forced.
+        if tribe.stars < 0 {
+            tribe.stars = 0;
+        }
+
         Box::new(move |s| {
             if let Some(tribe) = s.tribes.get_mut(&pov_id) {
-                tribe.stars += amount;
+                tribe.stars = old_stars;
             }
         })
     } else {
@@ -247,28 +255,11 @@ pub fn try_discover_other_tribes(state: &mut GameState) -> UndoCallback {
 
     let mut undos: Vec<UndoCallback> = Vec::new();
 
-    // Check visible tiles for enemy units
+    // Check visible tiles (not revelation score, just meeting)
+    // REVELATION SCORE is handled in discover_tiles action.
     let visible_tiles: Vec<i32> = state._visible_tiles.keys().cloned().collect();
 
     for idx in visible_tiles {
-        // Revelation score (5 XP per newly revealed tile)
-        if let Some(tile) = state.tiles.get_mut(&idx) {
-            if !tile.explorers.contains(&pov_id) {
-                tile.explorers.insert(pov_id);
-                if let Some(tribe) = state.tribes.get_mut(&pov_id) {
-                    tribe.score += 5;
-                }
-                undos.push(Box::new(move |s| {
-                    if let Some(t) = s.tiles.get_mut(&idx) {
-                        t.explorers.remove(&pov_id);
-                    }
-                    if let Some(tr) = s.tribes.get_mut(&pov_id) {
-                        tr.score -= 5;
-                    }
-                }));
-            }
-        }
-
         if let Some(enemy) = get_enemy_at(state, idx, pov_id) {
             let enemy_owner = enemy.owner;
 
@@ -281,6 +272,7 @@ pub fn try_discover_other_tribes(state: &mut GameState) -> UndoCallback {
 
             if !already_known {
                 // Discover and get stars
+                // Star exchange based on recipients score
                 let stars = get_star_exchange(state, pov_id);
                 undos.push(gain_stars(state, stars));
 

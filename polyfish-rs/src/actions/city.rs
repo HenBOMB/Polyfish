@@ -43,46 +43,37 @@ pub fn add_population(state: &mut GameState, city_tile_idx: i32, amount: i32) ->
             city.population += amount;
             city.progress += amount;
 
-            // Check for level up/down
-            if amount > 0 {
-                let next_level = city.level + 1;
-                if city.progress >= next_level {
-                    let overflow = city.progress - next_level;
-                    city.level += 1;
-                    city.progress = overflow;
-                    city.production += 1;
+            // Check for level up
+            let next = city.level + 1;
+            if city.progress >= next {
+                city.level += 1;
+                city.progress -= next;
+                city.production += 1; // Level up bonus
 
-                    let lvl_score = (city.level > 1) as i32 * (50 - (city.level - 2) * 5);
-                    tribe.score += lvl_score;
-                    undos.push(Box::new(move |s: &mut GameState| {
-                        if let Some(t) = s.tribes.get_mut(&pov_id) {
-                            t.score -= lvl_score;
-                        }
-                    }));
+                // Update structure level if it exists
+                if let Some(Some(struct_state)) = state.structures.get_mut(&city_tile_idx) {
+                    struct_state.level += 1;
                 }
-            } else if amount < 0 {
-                if city.progress < 0 {
-                    city.level -= 1;
-                    city.progress += city.level + 1; // Simplify: back to previous level progress state
-                    city.production -= 1;
 
-                    tribe.score -= 100;
-                    undos.push(Box::new(move |s: &mut GameState| {
-                        if let Some(t) = s.tribes.get_mut(&pov_id) {
-                            t.score += 100;
-                        }
-                    }));
-                }
+                // Score is ONLY awarded on level up!
+                // Formula: (level > 1 ? 50 - (level * 5) : 0) + amount * 5
+                let amount_score = (if city.level > 1 {
+                    50 - (city.level * 5)
+                } else {
+                    0
+                }) + amount * 5;
+
+                tribe.score += amount_score;
+
+                undos.push(Box::new(move |s: &mut GameState| {
+                    if let Some(t) = s.tribes.get_mut(&pov_id) {
+                        t.score -= amount_score;
+                    }
+                }));
+
+                // TODO: Generate rewards (Workshop, etc.) - this usually happens via Moves
             }
-
-            // Score increase for population: 5 points per pop
-            let pop_score = amount * 5;
-            tribe.score += pop_score;
-            undos.push(Box::new(move |s: &mut GameState| {
-                if let Some(t) = s.tribes.get_mut(&pov_id) {
-                    t.score -= pop_score;
-                }
-            }));
+            // No level up = NO score awarded (matching TS behavior)
         }
     }
 

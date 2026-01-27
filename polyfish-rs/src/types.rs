@@ -9,7 +9,7 @@ use serde_repr::{Deserialize_repr, Serialize_repr};
 
 /// Game mode types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize_repr, Deserialize_repr)]
-#[repr(i8)]
+#[repr(u8)]
 pub enum ModeType {
     Perfection = 0,
     Domination = 1,
@@ -17,7 +17,7 @@ pub enum ModeType {
 
 /// Terrain types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize_repr, Deserialize_repr, Default)]
-#[repr(i8)]
+#[repr(u8)]
 pub enum TerrainType {
     #[default]
     None = 0,

@@ -322,13 +322,9 @@ pub fn get_city_production(state: &GameState, city: &CityState) -> i32 {
         return 0;
     }
 
-    // Base production + rewards (Park or Workshop add to production if present)
+    // TS bug note: city.rewards is a Set, and TS uses Object.values(city.rewards).filter(...)
+    // Object.values on a Set returns [], so rewards are NOT double-counted in TS.
     city.production
-        + city
-            .rewards
-            .iter()
-            .filter(|&r| *r == RewardType::Park || *r == RewardType::Workshop)
-            .count() as i32
 }
 
 /// Get total production for a list of cities

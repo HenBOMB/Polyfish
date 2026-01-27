@@ -4,7 +4,7 @@ import { Branch, CallbackResult } from "../move";
 import { EconMovesGenerator } from "../moves";
 import { GameState, CityState } from "../states";
 
-export default function(state: GameState, city: CityState, amount: number): Branch {
+export default function (state: GameState, city: CityState, amount: number): Branch {
     const pov = getPovTribe(state);
 
     const cityStruct = state.structures[city.tileIndex]!;
@@ -24,7 +24,7 @@ export default function(state: GameState, city: CityState, amount: number): Bran
 
         let rewards = EconMovesGenerator.rewards(city);
         let lol = false;
-        let amountScore = (city.level > 1 ? 50 - (city.level - 2) * 5 : 0) + amount * 5;
+        let amountScore = (city.level > 1 ? 50 - (city.level * 5) : 0) + amount * 5;
 
         if (city.progress - next >= (next + 1)) {
             // useful for debugging multithread

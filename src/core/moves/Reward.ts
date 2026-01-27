@@ -22,11 +22,9 @@ export default class Reward extends Move {
         const pov = getPovTribe(state);
 
         if (!city) {
-            console.log(`creampie ${this.getSrc()}, ${state.settings.currentPlayerTurnId}`);
             // console.log('xs', state.tiles[this.getSrc()]);
             // console.log('x', state.structures[this.getSrc()]);
             // console.log('x', state.tribes[state.settings.currentPlayerTurnId].cities);
-            console.log('ssdsds');
             // throw Error('City not found');
         }
 
@@ -72,7 +70,7 @@ export default class Reward extends Move {
                     undoClaim.undo();
                     city.borderSize--;
                 }
-            break;
+                break;
             case RewardType.Park:
                 city.production++;
                 pov.score += 250;
@@ -83,17 +81,17 @@ export default class Reward extends Move {
                 break;
             case RewardType.SuperUnit:
                 const resultSummon = summonUnit(
-                    state, 
-                    TribeSettings[pov.type].uniqueSuperUnit || UnitType.Giant, 
+                    state,
+                    TribeSettings[pov.type].uniqueSuperUnit || UnitType.Giant,
                     city.tileIndex
                 )!;
                 rewards.push(...resultSummon.rewards);
                 undoReward = () => resultSummon.undo;
                 break;
         }
-        
+
         city.rewards.add(rewardType);
-        
+
         return {
             rewards,
             undo: () => {
