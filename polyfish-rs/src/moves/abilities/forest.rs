@@ -143,9 +143,13 @@ pub fn generate_forest_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
         None => return,
     };
 
-    let has_clear = has_technology(&tribe.tech_vanilla, TechnologyType::Forestry);
+    let is_elyrion = tribe.tribe_type == crate::types::TribeType::Elyrion;
+
+    let has_clear = !is_elyrion && has_technology(&tribe.tech_vanilla, TechnologyType::Forestry);
     let has_grow = has_technology(&tribe.tech_vanilla, TechnologyType::Spiritualism);
-    let has_burn = has_technology(&tribe.tech_vanilla, TechnologyType::Construction);
+    let has_burn = !is_elyrion
+        && tribe.tribe_type != crate::types::TribeType::Cymanti
+        && has_technology(&tribe.tech_vanilla, TechnologyType::Construction);
 
     if !has_clear && !has_grow && !has_burn {
         return;
@@ -172,7 +176,7 @@ pub fn generate_forest_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
                     if has_clear {
                         moves.push(Box::new(ClearForestMove::new(tile_idx)));
                     }
-                    if has_burn && tribe.stars >= 2 {
+                    if has_burn && tribe.stars >= 3 {
                         moves.push(Box::new(BurnForestMove::new(tile_idx)));
                     }
                 }

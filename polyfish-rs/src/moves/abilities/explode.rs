@@ -1,7 +1,7 @@
 use crate::actions::chain_undos;
 use crate::moves::{Move, MoveResult};
 use crate::states::GameState;
-use crate::types::{AbilityType, MoveType};
+use crate::types::{AbilityType, MoveType, TerrainType};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -74,7 +74,7 @@ impl Move for ExplodeMove {
             // Sort by unit index descending
             units_to_explode.sort_by(|a, b| b.0.cmp(&a.0));
 
-            for (explode_u_idx, explode_tile_idx) in units_to_explode {
+            for &(explode_u_idx, explode_tile_idx) in &units_to_explode {
                 let atk = 4.0; // Segment/Centipede attack is 4
 
                 // 1. Deal AOE Damage
@@ -108,16 +108,65 @@ impl Move for ExplodeMove {
 
                 // 2. Create Spores (if land/ice and no structure)
                 if let Some(tile) = state.tiles.get(&explode_tile_idx) {
-                    let is_water = tile.terrain_type == crate::types::TerrainType::Water;
+                    let is_water_like = matches!(
+                        tile.terrain_type,
+                        crate::types::TerrainType::Water | crate::types::TerrainType::Ocean
+                    );
                     let has_structure =
                         crate::functions::get_structure_at(state, explode_tile_idx).is_some();
 
-                    if !is_water && !has_structure {
-                        undos.push(crate::actions::structure::create_structure(
-                            state,
-                            explode_tile_idx,
-                            crate::types::StructureType::Spores,
-                            owner,
+                    if !is_water_like && !has_structure {
+                        // Spawn Spores Resource (for Fungi)
+                        let resource = crate::states::ResourceState {
+                            resource_type: crate::types::ResourceType::Spores,
+                            tile_index: explode_tile_idx,
+                        };
+                        // Note: we just checked no structure, but we didn't check resource.
+                        // Assuming explode overwrites existing resource if any?
+                        // "Exploding... leaves behind spores".
+                        let old_resource =
+                            state.resources.get(&explode_tile_idx).cloned().flatten();
+                        state.resources.insert(explode_tile_idx, Some(resource));
+
+                        undos.push(Box::new(move |s| {
+                            if let Some(old) = old_resource {
+                                s.resources.insert(explode_tile_idx, Some(old));
+                            } else {
+                                s.resources.remove(&explode_tile_idx);
+                            }
+                        }));
+                    } else if is_water_like && tile.terrain_type != TerrainType::Algae {
+                        // Convert Water/Ocean to Algae
+                        if let Some(t) = state.tiles.get_mut(&explode_tile_idx) {
+                            let old_terrain = t.terrain_type;
+                            t.terrain_type = TerrainType::Algae;
+                            undos.push(Box::new(move |s| {
+                                if let Some(t) = s.tiles.get_mut(&explode_tile_idx) {
+                                    t.terrain_type = old_terrain;
+                                }
+                            }));
+                        }
+
+                        // Spawn Fruit
+                        let resource = crate::states::ResourceState {
+                            resource_type: crate::types::ResourceType::Fruit,
+                            tile_index: explode_tile_idx,
+                        };
+                        let old_resource =
+                            state.resources.get(&explode_tile_idx).cloned().flatten();
+                        state.resources.insert(explode_tile_idx, Some(resource));
+
+                        undos.push(Box::new(move |s| {
+                            if let Some(old) = old_resource {
+                                s.resources.insert(explode_tile_idx, Some(old));
+                            } else {
+                                s.resources.remove(&explode_tile_idx);
+                            }
+                        }));
+
+                        // Update connections
+                        undos.push(crate::actions::connection::update_capital_connections(
+                            state, owner,
                         ));
                     }
                 }
@@ -130,6 +179,26 @@ impl Move for ExplodeMove {
                     None,
                     None,
                 ));
+            }
+
+            // Mark the tribe as having attacked this turn if they explode near enemies
+            let mut any_enemies = false;
+            for (_, explode_tile_idx) in &units_to_explode {
+                let adj = crate::functions::get_adjacent_indices(state, *explode_tile_idx, 1);
+                for t_idx in adj {
+                    if crate::functions::get_enemy_at(state, t_idx, owner).is_some() {
+                        any_enemies = true;
+                        break;
+                    }
+                }
+                if any_enemies {
+                    break;
+                }
+            }
+            if any_enemies {
+                if let Some(tribe) = state.tribes.get_mut(&owner) {
+                    tribe.attacked_this_turn = true;
+                }
             }
 
             Ok(MoveResult {

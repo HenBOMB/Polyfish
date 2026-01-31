@@ -188,8 +188,18 @@ impl Game {
         let mut undos: Vec<UndoCallback> = Vec::new();
 
         // === CHANGE TURN === //
-
         let active_pov = state.settings.current_player_turn_id;
+
+        // Update pacifist turns
+        if let Some(tribe) = state.tribes.get_mut(&active_pov) {
+            if tribe.attacked_this_turn {
+                tribe.pacifist_turns = 0;
+            } else {
+                tribe.pacifist_turns += 1;
+            }
+            tribe.attacked_this_turn = false;
+        }
+
         undos.push(actions::process_end_turn_effects(state, active_pov));
 
         state.settings._last_player_turn_id = active_pov;
@@ -345,6 +355,17 @@ impl Game {
 
         // Change turn
         let active_pov = state.settings.current_player_turn_id;
+
+        // Update pacifist turns
+        if let Some(tribe) = state.tribes.get_mut(&active_pov) {
+            if tribe.attacked_this_turn {
+                tribe.pacifist_turns = 0;
+            } else {
+                tribe.pacifist_turns += 1;
+            }
+            tribe.attacked_this_turn = false;
+        }
+
         undos.push(actions::process_end_turn_effects(state, active_pov));
 
         state.settings.current_player_turn_id += 1;

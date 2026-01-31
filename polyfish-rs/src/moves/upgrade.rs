@@ -2,6 +2,8 @@
 //!
 //! Upgrade a unit (e.g. Boat -> Ship).
 
+use crate::functions::get_tech_unit_type;
+use crate::functions::is_tile_occupied;
 use crate::moves::{Move, MoveResult};
 use crate::settings::get_unit_setting;
 use crate::states::GameState;
@@ -33,7 +35,6 @@ impl Move for UpgradeMove {
         let pov_id = state.settings.current_player_turn_id;
 
         // Check validation
-        use crate::settings::get_unit_setting;
         let settings = get_unit_setting(self.target_type);
         if let Some(tribe) = state.tribes.get(&pov_id) {
             if tribe.stars < settings.cost {
@@ -69,10 +70,6 @@ impl Move for UpgradeMove {
 
 /// Generate upgrade moves
 pub fn generate_upgrade_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
-    crate::moves::upgrade::generate_upgrade_moves_internal(state, moves);
-}
-
-fn generate_upgrade_moves_internal(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
     let pov_id = state.settings.current_player_turn_id;
     let tribe = match state.tribes.get(&pov_id) {
         Some(t) => t,
@@ -86,7 +83,7 @@ fn generate_upgrade_moves_internal(state: &GameState, moves: &mut Vec<Box<dyn Mo
             continue;
         }
 
-        if let Some(u_type) = get_tech_unit_type(tribe, tech_state.tech_type) {
+        if let Some(u_type) = get_tech_unit_type(tech_state.tech_type) {
             let settings = get_unit_setting(u_type);
             if settings.cost >= 1 && tribe.stars >= settings.cost && settings.upgrade_from.is_some()
             {
@@ -102,6 +99,7 @@ fn generate_upgrade_moves_internal(state: &GameState, moves: &mut Vec<Box<dyn Mo
     for unit in &tribe.units {
         // Polytopia/TS Rule: Only Raft can be upgraded (usually Boat/Ship/etc. handled via Navy)
         // and tile must not be "occupied" (TS weirdness)
+
         if unit.unit_type != UnitType::Raft || is_tile_occupied(state, unit.coords.idx) {
             continue;
         }
@@ -110,15 +108,4 @@ fn generate_upgrade_moves_internal(state: &GameState, moves: &mut Vec<Box<dyn Mo
             moves.push(Box::new(UpgradeMove::new(unit.coords.idx, u_type)));
         }
     }
-}
-
-fn get_tech_unit_type(
-    _tribe: &crate::states::TribeState,
-    tech: crate::types::TechnologyType,
-) -> Option<UnitType> {
-    crate::settings::technology::get_technology_setting(tech).unlocks_unit
-}
-
-fn is_tile_occupied(state: &GameState, idx: i32) -> bool {
-    crate::functions::get_unit_at(state, idx).is_some()
 }

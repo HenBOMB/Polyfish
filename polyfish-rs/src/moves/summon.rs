@@ -3,10 +3,11 @@
 //! Train a new unit at a city or specific tile.
 
 use crate::actions::units::summon_unit;
-use crate::functions;
+use crate::functions::get_city_unit_count;
+use crate::functions::get_tech_unit_type;
+use crate::functions::{self, is_tile_occupied, is_water_terrain};
 use crate::moves::{Move, MoveResult};
 use crate::settings::get_unit_setting;
-use crate::settings::technology;
 use crate::states::GameState;
 use crate::types::{MoveType, SkillType, TerrainType, UnitType};
 
@@ -78,7 +79,7 @@ pub fn generate_summon_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
             continue;
         }
 
-        if let Some(u_type) = get_tech_unit_type(tribe, tech_state.tech_type) {
+        if let Some(u_type) = get_tech_unit_type(tech_state.tech_type) {
             let settings = get_unit_setting(u_type);
             if settings.cost >= 1 && tribe.stars >= settings.cost && settings.upgrade_from.is_none()
             {
@@ -103,9 +104,13 @@ pub fn generate_summon_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
         for &u_type in &spawnables {
             let settings = get_unit_setting(u_type);
 
-            // Navigate check: typically cannot move onto land except capture.
-            // TS logic: allow spawning if unit has at least 1 adjacent water tile.
-            if settings.skills.contains(&SkillType::Navigate) {
+            // Training restriction: Water/Navigate units require adjacent water,
+            // UNLESS they are Amphibious (like the Boomchi).
+            let is_naval = settings.skills.contains(&SkillType::Navigate)
+                || settings.skills.contains(&SkillType::Water);
+            let is_amphibious = settings.skills.contains(&SkillType::Amphibious);
+
+            if is_naval && !is_amphibious {
                 let has_water = functions::get_adjacent_indices(state, target_idx, 1)
                     .iter()
                     .any(|&idx| {
@@ -126,39 +131,4 @@ pub fn generate_summon_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
             moves.push(Box::new(SummonMove::new(target_idx, u_type)));
         }
     }
-}
-
-fn get_tech_unit_type(
-    _tribe: &crate::states::TribeState,
-    tech: crate::types::TechnologyType,
-) -> Option<UnitType> {
-    // In TS: getReplacedOrTechSettings(tribe, tech).unlocksUnit
-    // We can simulate this by checking our technology settings
-
-    // Actually, tribe.tech_vanilla usually contains the SPECIFIC tech the tribe has.
-    // E.g. if Polaris, they HAVE Frostwork, not Fishing.
-    // So get_technology_setting(tech) is already the "replaced" one.
-    technology::get_technology_setting(tech).unlocks_unit
-}
-
-fn get_city_unit_count(_state: &GameState, city: &crate::states::CityState) -> i32 {
-    let mut count = 0;
-    for tribe in _state.tribes.values() {
-        for unit in &tribe.units {
-            if let Some(home) = &unit.home_coords {
-                if home.idx == city.tile_index {
-                    count += 1;
-                }
-            }
-        }
-    }
-    count
-}
-
-fn is_tile_occupied(state: &GameState, idx: i32) -> bool {
-    functions::get_unit_at(state, idx).is_some()
-}
-
-fn is_water_terrain(terrain: TerrainType) -> bool {
-    matches!(terrain, TerrainType::Water | TerrainType::Ocean)
 }

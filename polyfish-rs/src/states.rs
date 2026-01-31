@@ -296,6 +296,12 @@ pub struct TribeState {
     pub resigned_turn: i32,
     #[serde(default)]
     pub starting_tile_coords: Coords,
+    #[serde(default)]
+    pub attacked_this_turn: bool,
+    #[serde(default)]
+    pub pacifist_turns: i32,
+    #[serde(default)]
+    pub conversions: i32,
 }
 
 impl Default for TribeState {
@@ -320,6 +326,9 @@ impl Default for TribeState {
             killed_turn: 0,
             resigned_turn: 0,
             starting_tile_coords: Coords::default(),
+            attacked_this_turn: false,
+            pacifist_turns: 0,
+            conversions: 0,
         }
     }
 }

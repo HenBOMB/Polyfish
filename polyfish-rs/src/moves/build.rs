@@ -4,7 +4,7 @@
 
 use crate::moves::{Move, MoveResult};
 use crate::states::GameState;
-use crate::types::{MoveType, StructureType};
+use crate::types::{MoveType, StructureType, TerrainType};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -137,6 +137,10 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
 
                     if struct_type != StructureType::Road {
                         if get_structure_at(state, idx).is_some() {
+                            // Can build on Algae? Algae is a tile effect now (StructureType::Algae is deprecated).
+                            // But usually `get_structure_at` returns structures.
+                            // If `tile.has_algae` implies it's buildable, we should be fine as long as there is no *other* structure.
+                            // The current check works: `get_structure_at` returns None if only Algae effect is there.
                             continue;
                         }
                     } else {
@@ -148,8 +152,20 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
 
                     let settings = get_structure_setting(struct_type);
 
-                    // Check terrain validity
-                    if !settings.terrain_types.contains(&tile.terrain_type) {
+                    // Terrain validity:
+                    // 1. Standard match (e.g. Temple on Field, Port on Water)
+                    // 2. Algae bonus: Algae makes Water/Ocean act like "Field" (land) for structures that accept Field.
+                    //    It also counts as Water for structures that accept Water (Clathrus).
+                    //    It does NOT count as Mountain or Forest.
+                    let terrain_valid = settings.terrain_types.contains(&tile.terrain_type)
+                        || (tile.terrain_type == TerrainType::Algae
+                            && (settings
+                                .terrain_types
+                                .contains(&crate::types::TerrainType::Field)
+                                || settings
+                                    .terrain_types
+                                    .contains(&crate::types::TerrainType::Water)));
+                    if !terrain_valid {
                         continue;
                     }
 
@@ -168,23 +184,33 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                             }
                         }
 
-                        // Special check for Market
-                        if struct_type == StructureType::Market {
+                        // Adjacency check for "hub" buildings (Market, Sawmill, Forge, Windmill, etc.)
+                        if !settings.adjacent_types.is_empty() {
                             let adj = crate::functions::get_adjacent_indices(state, idx, 1);
-                            let has_prod_building = adj.iter().any(|&n_idx| {
+                            let has_required_adj = adj.iter().any(|&n_idx| {
                                 if let Some(s) = crate::functions::get_structure_at(state, n_idx) {
-                                    matches!(
-                                        s.structure_type,
-                                        StructureType::Sawmill
-                                            | StructureType::Windmill
-                                            | StructureType::Forge
-                                    )
+                                    settings.adjacent_types.contains(&s.structure_type)
                                 } else {
                                     false
                                 }
                             });
 
-                            if !has_prod_building {
+                            if !has_required_adj {
+                                continue;
+                            }
+                        }
+
+                        // Special check for Clathrus: Needs adjacent Algae to be effective
+                        if struct_type == StructureType::Clathrus {
+                            let adj = crate::functions::get_adjacent_indices(state, idx, 1);
+                            let has_adj_algae = adj.iter().any(|&n_idx| {
+                                state
+                                    .tiles
+                                    .get(&n_idx)
+                                    .map_or(false, |t| t.terrain_type == TerrainType::Algae)
+                            });
+
+                            if !has_adj_algae {
                                 continue;
                             }
                         }

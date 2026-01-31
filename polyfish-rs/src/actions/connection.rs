@@ -244,10 +244,9 @@ fn has_mycelium(state: &GameState, idx: i32) -> bool {
 
 fn has_algae(state: &GameState, idx: i32) -> bool {
     state
-        .structures
+        .tiles
         .get(&idx)
-        .and_then(|s| s.as_ref())
-        .map(|s| s.structure_type == StructureType::Algae)
+        .map(|t| t.terrain_type == TerrainType::Algae)
         .unwrap_or(false)
 }
 
@@ -327,9 +326,12 @@ fn has_cymanti_path(state: &GameState, size: i32, src: i32, dest: i32) -> bool {
                 None => continue,
             };
 
-            // Path must be field, forest or algae
+            // Path must be any land terrain or algae on water
             let valid_terrain = match tile.terrain_type {
-                TerrainType::Field | TerrainType::Forest => true,
+                TerrainType::Field
+                | TerrainType::Forest
+                | TerrainType::Mountain
+                | TerrainType::Ice => true,
                 _ => has_algae(state, n),
             };
 

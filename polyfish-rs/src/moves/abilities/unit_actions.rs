@@ -34,7 +34,8 @@ pub fn generate_unit_action_moves_for_unit(
     }
 
     // Explode
-    if !unit.attacked && functions::has_skill(unit, SkillType::Explode) {
+    // new change: Explode units can explode even after attacking
+    if functions::has_skill(unit, SkillType::Explode) {
         let enemies_around = get_adjacent_indices(state, idx, 1)
             .iter()
             .any(|&adj| functions::get_enemy_at(state, adj, pov_id).is_some());
@@ -68,7 +69,7 @@ pub fn generate_unit_action_moves_for_unit(
         if damaged_around {
             moves.push(Box::new(HealOthersMove::new(idx)));
         }
-    } else if functions::has_skill(unit, SkillType::Boost) {
+    } else if functions::has_skill(unit, SkillType::Swarm) {
         let unboosted_around = get_adjacent_indices(state, idx, 1).iter().any(|&adj| {
             if let Some(target) = functions::get_unit_at(state, adj) {
                 return target.owner == pov_id && !has_effect(target, EffectType::Boost);

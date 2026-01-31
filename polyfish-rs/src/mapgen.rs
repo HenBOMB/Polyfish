@@ -811,6 +811,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
             TribeType::Polaris => Some(TechnologyType::Frostwork),
             TribeType::Cymanti => Some(TechnologyType::Farming),
             TribeType::Elyrion => Some(TechnologyType::ForestMagic),
+            TribeType::Aquarion => Some(TechnologyType::Riding),
             _ => None,
         };
 

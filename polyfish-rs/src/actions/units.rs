@@ -36,6 +36,52 @@ pub fn remove_unit(
         (unit.clone(), unit.coords.idx, unit.unit_type)
     };
 
+    let mut undos: Vec<UndoCallback> = Vec::new();
+
+    // 0. Drop Spores/Algae if Poisoned
+    if removed_unit.effects.contains(&EffectType::Poison) {
+        if let Some(tile) = state.tiles.get(&tile_idx) {
+            let is_water_like = crate::functions::is_water_terrain(tile.terrain_type)
+                || tile.terrain_type == TerrainType::Algae
+                || tile.flooded;
+
+            let has_struct = crate::functions::get_structure_at(state, tile_idx).is_some();
+
+            if is_water_like {
+                if tile.terrain_type != TerrainType::Algae && !has_struct {
+                    // Drop Algae (convert Water/Ocean to Algae)
+                    if let Some(t) = state.tiles.get_mut(&tile_idx) {
+                        let old_terrain = t.terrain_type;
+                        t.terrain_type = TerrainType::Algae;
+                        undos.push(Box::new(move |s| {
+                            if let Some(t) = s.tiles.get_mut(&tile_idx) {
+                                t.terrain_type = old_terrain;
+                            }
+                        }));
+                    }
+                }
+            } else {
+                // Drop Spores Resource (if no structure)
+                if !has_struct {
+                    let resource = crate::states::ResourceState {
+                        resource_type: crate::types::ResourceType::Spores,
+                        tile_index: tile_idx,
+                    };
+                    let old_res_opt = state.resources.insert(tile_idx, Some(resource));
+
+                    undos.push(Box::new(move |s| match old_res_opt {
+                        Some(r) => {
+                            s.resources.insert(tile_idx, r);
+                        }
+                        None => {
+                            s.resources.remove(&tile_idx);
+                        }
+                    }));
+                }
+            }
+        }
+    }
+
     // Get unit cost for score
     let settings = get_unit_setting(unit_type);
     let cost = if settings.is_super { 10 } else { settings.cost };
@@ -89,7 +135,7 @@ pub fn remove_unit(
         }
     }
 
-    Box::new(move |s| {
+    undos.push(Box::new(move |s| {
         // Undo killer stats
         if let (Some(k_owner), Some(k_idx)) = (killer_owner, killer_idx) {
             if let Some(killer_tribe) = s.tribes.get_mut(&k_owner) {
@@ -113,7 +159,9 @@ pub fn remove_unit(
         if let Some(tile) = s.tiles.get_mut(&tile_idx) {
             tile._unit_owner_id = Some(unit_owner);
         }
-    })
+    }));
+
+    crate::actions::chain_undos(undos)
 }
 
 /// Step a unit to a new tile
@@ -206,20 +254,51 @@ pub fn step_unit(
         ));
     }
 
-    // Algae: Auto-spawn algae on water tiles
+    // Algae: Auto-spawn algae on water/ocean tiles
     if has_skill(old_type, SkillType::Algae) {
         let tile = state.tiles.get(&to_tile_idx);
-        let is_water = tile.map_or(false, |t| {
-            t.terrain_type == crate::types::TerrainType::Water
+        let is_water_like = tile.map_or(false, |t| {
+            matches!(
+                t.terrain_type,
+                crate::types::TerrainType::Water | crate::types::TerrainType::Ocean
+            )
         });
-        let has_no_structure = crate::functions::get_structure_at(state, to_tile_idx).is_none();
+        let has_algae = tile.map_or(false, |t| t.terrain_type == TerrainType::Algae);
 
-        if is_water && has_no_structure {
-            undos.push(crate::actions::structure::create_structure(
-                state,
-                to_tile_idx,
-                crate::types::StructureType::Algae,
-                unit_owner,
+        if is_water_like && !has_algae {
+            // Convert Water/Ocean to Algae
+            if let Some(t) = state.tiles.get_mut(&to_tile_idx) {
+                let old_terrain = t.terrain_type;
+                t.terrain_type = TerrainType::Algae;
+
+                undos.push(Box::new(move |s| {
+                    if let Some(t) = s.tiles.get_mut(&to_tile_idx) {
+                        t.terrain_type = old_terrain;
+                    }
+                }));
+            }
+
+            // Spawn Fruit (according to rework spec, but LivingIsland spawns fruitless algae)
+            if old_type != UnitType::LivingIsland {
+                let resource = crate::states::ResourceState {
+                    resource_type: crate::types::ResourceType::Fruit,
+                    tile_index: to_tile_idx,
+                };
+                let old_resource = state.resources.get(&to_tile_idx).cloned().flatten();
+                state.resources.insert(to_tile_idx, Some(resource));
+
+                undos.push(Box::new(move |s| {
+                    if let Some(old) = old_resource {
+                        s.resources.insert(to_tile_idx, Some(old));
+                    } else {
+                        s.resources.remove(&to_tile_idx);
+                    }
+                }));
+            }
+
+            // Update connections (Algae acts as road for Cymanti)
+            undos.push(crate::actions::connection::update_capital_connections(
+                state, unit_owner,
             ));
         }
     }
@@ -228,11 +307,12 @@ pub fn step_unit(
     if has_skill(old_type, SkillType::Stomp) {
         let adjacent_tiles = crate::functions::get_adjacent_indices(state, to_tile_idx, 1);
         let stomp_damage = 4;
+        let mut stomp_targets = Vec::new();
 
+        // 1. Identification Phase
         for adj_idx in adjacent_tiles {
             if let Some(adj_enemy) = crate::functions::get_enemy_at(state, adj_idx, unit_owner) {
                 let adj_owner = adj_enemy.owner;
-                // Find the unit index
                 if let Some(adj_tribe) = state.tribes.get(&adj_owner) {
                     if let Some((adj_unit_idx, _)) = adj_tribe
                         .units
@@ -240,34 +320,53 @@ pub fn step_unit(
                         .enumerate()
                         .find(|(_, u)| u.coords.idx == adj_idx)
                     {
-                        // Apply stomp damage
-                        if let Some(tribe) = state.tribes.get_mut(&adj_owner) {
-                            if let Some(unit) = tribe.units.get_mut(adj_unit_idx) {
-                                unit.health -= stomp_damage;
-
-                                // Undo for this stomp damage
-                                undos.push(Box::new(move |s| {
-                                    if let Some(t) = s.tribes.get_mut(&adj_owner) {
-                                        if let Some(u) = t.units.get_mut(adj_unit_idx) {
-                                            u.health += stomp_damage;
-                                        }
-                                    }
-                                }));
-
-                                // Check if stomped unit died
-                                if unit.health <= 0 {
-                                    undos.push(remove_unit(
-                                        state,
-                                        adj_owner,
-                                        adj_unit_idx,
-                                        Some(unit_owner),
-                                        Some(unit_idx),
-                                    ));
-                                }
-                            }
-                        }
+                        stomp_targets.push((adj_owner, adj_unit_idx));
                     }
                 }
+            }
+        }
+
+        // 2. Application Phase
+        for (adj_owner, adj_unit_idx) in stomp_targets {
+            // Apply Damage
+            let mut unit_died = false;
+            if let Some(tribe) = state.tribes.get_mut(&adj_owner) {
+                if let Some(unit) = tribe.units.get_mut(adj_unit_idx) {
+                    unit.health -= stomp_damage;
+                    if unit.health <= 0 {
+                        unit_died = true;
+                    }
+
+                    // Undo for this damage
+                    undos.push(Box::new(move |s| {
+                        if let Some(t) = s.tribes.get_mut(&adj_owner) {
+                            if let Some(u) = t.units.get_mut(adj_unit_idx) {
+                                u.health += stomp_damage;
+                            }
+                        }
+                    }));
+                }
+            }
+
+            // Apply Poison (now safe)
+            if has_skill(old_type, SkillType::Poison) {
+                undos.push(crate::actions::try_add_effect(
+                    state,
+                    adj_owner,
+                    adj_unit_idx,
+                    EffectType::Poison,
+                ));
+            }
+
+            // Remove if dead (now safe)
+            if unit_died {
+                undos.push(remove_unit(
+                    state,
+                    adj_owner,
+                    adj_unit_idx,
+                    Some(unit_owner),
+                    Some(unit_idx),
+                ));
             }
         }
     }
@@ -282,6 +381,23 @@ pub fn step_unit(
                         t.flooded = false;
                     }
                 }));
+            }
+        }
+    }
+
+    // Clathrus: Poisons enemy units that move onto it
+    if let Some(dest_tile) = state.tiles.get(&to_tile_idx) {
+        if let Some(dest_struct) = get_structure_type_at(state, to_tile_idx) {
+            if dest_struct == StructureType::Clathrus {
+                // If the Clathrus belongs to an enemy
+                if dest_tile.owner != 0 && dest_tile.owner != unit_owner {
+                    undos.push(crate::actions::try_add_effect(
+                        state,
+                        unit_owner,
+                        unit_idx,
+                        EffectType::Poison,
+                    ));
+                }
             }
         }
     }
@@ -540,12 +656,12 @@ pub fn attack_unit(
     attacker_owner: PlayerId,
     attacker_idx: usize,
     defender_owner: PlayerId,
-    defender_idx: usize,
+    defender_idx: Option<usize>,
 ) -> UndoCallback {
     let mut undos: Vec<UndoCallback> = Vec::new();
 
-    // Get attacker and defender stats using dynamic helpers
-    let (atk_atk, atk_health, atk_max_health, atk_skills) = {
+    // Get attacker stats
+    let (atk_atk, atk_health, atk_max_health, atk_skills, atk_type, atk_coords) = {
         let tribe = state.tribes.get(&attacker_owner).unwrap();
         let unit = tribe.units.get(attacker_idx).unwrap();
         (
@@ -553,8 +669,141 @@ pub fn attack_unit(
             unit.health,
             get_max_health(unit),
             get_unit_setting(unit.unit_type).skills.clone(),
+            unit.unit_type,
+            unit.coords.idx,
         )
     };
+
+    // If defender_idx is None, this is an Infiltration attack on a city
+    if defender_idx.is_none() {
+        if atk_skills.contains(&SkillType::Infiltrate) {
+            // Determine spawn type (Moth -> InsectEgg, Cloak -> Daggers)
+            let is_moth = atk_type == UnitType::Moth;
+
+            // Logic for Infiltration
+            // 1. Defenses broken / Poisoned? (Moth poisons defenses)
+            // 2. Spawn units
+            // 3. Remove infiltrator
+
+            // Assume target is where the attack was directed
+            // Wait, we don't have target coord here if we don't look it up or pass it.
+            // AttackMove passed defender_owner based on City Owner. We don't have city coord directly from `defender_idx: None`.
+            // BUT `AttackMove` passes `self.target` which is the tile index. We usually pass indices to actions.
+            // Problem: `attack_unit` takes defender_idx (unit index). It doesn't take tile index.
+            // We need to find the city tile.
+            // Since we know defender_owner, iterating their cities to find one adjacent to attacker?
+            // Attack range is 1 for Infiltrate.
+
+            let target_city_idx = if let Some(def_tribe) = state.tribes.get(&defender_owner) {
+                def_tribe.cities.iter().find_map(|c| {
+                    if crate::functions::get_adjacent_indices(state, atk_coords, 1)
+                        .contains(&c.tile_index)
+                    {
+                        Some(c.tile_index)
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            };
+
+            if let Some(city_tile_idx) = target_city_idx {
+                // 1. Cause Riot
+                if let Some(def_tribe) = state.tribes.get_mut(&defender_owner) {
+                    if let Some(c) = def_tribe
+                        .cities
+                        .iter_mut()
+                        .find(|c| c.tile_index == city_tile_idx)
+                    {
+                        c._riot = true;
+                        // Add undo
+                        undos.push(Box::new(move |s| {
+                            if let Some(t) = s.tribes.get_mut(&defender_owner) {
+                                if let Some(c) =
+                                    t.cities.iter_mut().find(|c| c.tile_index == city_tile_idx)
+                                {
+                                    c._riot = false;
+                                }
+                            }
+                        }));
+                    }
+                }
+
+                // 2. Spawn Logic
+                if is_moth {
+                    // Moth: Poison adjacent units and spawn Eggs
+                    let adj = crate::functions::get_adjacent_indices(state, city_tile_idx, 1);
+                    for t_idx in &adj {
+                        if let Some(enemy) =
+                            crate::functions::get_enemy_at(state, *t_idx, attacker_owner)
+                        {
+                            // Poison enemy
+                            let enemy_owner = enemy.owner;
+                            if let Some(e_tribe) = state.tribes.get(&enemy_owner) {
+                                if let Some(e_idx) =
+                                    e_tribe.units.iter().position(|u| u.coords.idx == *t_idx)
+                                {
+                                    undos.push(crate::actions::try_add_effect(
+                                        state,
+                                        enemy_owner,
+                                        e_idx,
+                                        EffectType::Poison,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+
+                    // Spawn Eggs
+                    let mut spawn_count = 0;
+                    for t_idx in &adj {
+                        if spawn_count >= 3 {
+                            break;
+                        }
+                        if crate::functions::get_unit_at(state, *t_idx).is_none() {
+                            undos.push(spawn_unit(
+                                state,
+                                attacker_owner,
+                                UnitType::InsectEgg,
+                                *t_idx,
+                                false,
+                            ));
+                            spawn_count += 1;
+                        }
+                    }
+                } else {
+                    // Cloak: Spawn Daggers
+                    let adj = crate::functions::get_adjacent_indices(state, city_tile_idx, 1);
+                    let mut spawn_count = 0;
+                    for t_idx in &adj {
+                        if spawn_count >= 3 {
+                            break;
+                        }
+                        if crate::functions::get_unit_at(state, *t_idx).is_none() {
+                            undos.push(spawn_unit(
+                                state,
+                                attacker_owner,
+                                UnitType::Dagger,
+                                *t_idx,
+                                false,
+                            ));
+                            spawn_count += 1;
+                        }
+                    }
+                }
+
+                // 3. Remove Infiltrator
+                undos.push(remove_unit(state, attacker_owner, attacker_idx, None, None));
+            }
+
+            return crate::actions::chain_undos(undos);
+        } else {
+            return Box::new(|_| {}); // Should not happen given AttackMove checks
+        }
+    }
+
+    let defender_idx = defender_idx.unwrap(); // fast fail if logic error
 
     let (def_def, def_health, def_max_health, defense_bonus, def_coords) = {
         let tribe = state.tribes.get(&defender_owner).unwrap();
@@ -611,12 +860,13 @@ pub fn attack_unit(
     if atk_skills.contains(&SkillType::Splash) {
         let splash_damage = def_damage / 2; // 50% of primary damage, rounded down
         let adjacent_tiles = crate::functions::get_adjacent_indices(state, def_coords, 1);
+        let mut splash_targets = Vec::new();
 
+        // 1. Identification Phase
         for adj_idx in adjacent_tiles {
             if let Some(adj_enemy) = crate::functions::get_enemy_at(state, adj_idx, attacker_owner)
             {
                 let adj_owner = adj_enemy.owner;
-                // Find the unit index
                 if let Some(adj_tribe) = state.tribes.get(&adj_owner) {
                     if let Some((adj_unit_idx, _)) = adj_tribe
                         .units
@@ -624,34 +874,53 @@ pub fn attack_unit(
                         .enumerate()
                         .find(|(_, u)| u.coords.idx == adj_idx)
                     {
-                        // Apply splash damage
-                        if let Some(tribe) = state.tribes.get_mut(&adj_owner) {
-                            if let Some(unit) = tribe.units.get_mut(adj_unit_idx) {
-                                unit.health -= splash_damage;
-
-                                // Undo for this splash damage
-                                undos.push(Box::new(move |s| {
-                                    if let Some(t) = s.tribes.get_mut(&adj_owner) {
-                                        if let Some(u) = t.units.get_mut(adj_unit_idx) {
-                                            u.health += splash_damage;
-                                        }
-                                    }
-                                }));
-
-                                // Check if splashed unit died
-                                if unit.health <= 0 {
-                                    undos.push(remove_unit(
-                                        state,
-                                        adj_owner,
-                                        adj_unit_idx,
-                                        Some(attacker_owner),
-                                        Some(attacker_idx),
-                                    ));
-                                }
-                            }
-                        }
+                        splash_targets.push((adj_owner, adj_unit_idx));
                     }
                 }
+            }
+        }
+
+        // 2. Application Phase
+        for (adj_owner, adj_unit_idx) in splash_targets {
+            let mut unit_died = false;
+            // Apply Damage
+            if let Some(tribe) = state.tribes.get_mut(&adj_owner) {
+                if let Some(unit) = tribe.units.get_mut(adj_unit_idx) {
+                    unit.health -= splash_damage;
+                    if unit.health <= 0 {
+                        unit_died = true;
+                    }
+
+                    // Undo for this splash damage
+                    undos.push(Box::new(move |s| {
+                        if let Some(t) = s.tribes.get_mut(&adj_owner) {
+                            if let Some(u) = t.units.get_mut(adj_unit_idx) {
+                                u.health += splash_damage;
+                            }
+                        }
+                    }));
+                }
+            }
+
+            // Apply Poison (if attacker has it)
+            if atk_skills.contains(&SkillType::Poison) {
+                undos.push(crate::actions::try_add_effect(
+                    state,
+                    adj_owner,
+                    adj_unit_idx,
+                    EffectType::Poison,
+                ));
+            }
+
+            // Check if splashed unit died
+            if unit_died {
+                undos.push(remove_unit(
+                    state,
+                    adj_owner,
+                    adj_unit_idx,
+                    Some(attacker_owner),
+                    Some(attacker_idx),
+                ));
             }
         }
     }
@@ -1293,10 +1562,17 @@ pub fn infiltrate_city(
                         }
                     }
                     TerrainType::Water | TerrainType::Ocean => {
-                        if has_sailing {
+                        let is_cymanti = pov.tribe_type == TribeType::Cymanti;
+                        // Cymanti Explorer can now move on water like other tribes (requires Pascetism/Sailing equivalent)
+                        let has_pascetism = crate::settings::technology::has_technology(
+                            &pov.tech_vanilla,
+                            TechnologyType::Pascetism,
+                        );
+
+                        if has_sailing || (is_cymanti && has_pascetism) {
                             wat.push(idx);
                         }
-                    }
+                    } // End match TerrainType::Water
                     _ => oth.push(idx),
                 }
             }

@@ -30,7 +30,7 @@ pub use upgrade::UpgradeMove;
 
 use crate::actions::UndoCallback;
 use crate::functions::{
-    get_adjacent_indices, get_enemy_at, get_structure_at, get_structure_type_at,
+    get_adjacent_indices, get_enemy_at, get_structure_at, get_structure_type_at, is_water_terrain,
 };
 use crate::settings::resources::get_resource_setting;
 use crate::settings::{get_unit_setting, has_skill};
@@ -380,7 +380,7 @@ fn compute_movement_cost(state: &GameState, unit: &UnitState, from_idx: i32, to_
 
         // Amphibious units moving on land are slowed (Cost = 2.0)
         // "slows movement on land". Land is any non-water, non-flooded tile.
-        if crate::functions::is_amphibious(state, unit) {
+        if crate::functions::is_amphibious(unit) {
             let is_water_like = is_water_terrain(tile.terrain_type) || tile.flooded;
             if !is_water_like {
                 return 2.0;
@@ -411,7 +411,7 @@ fn is_terminal(state: &GameState, unit: &UnitState, tile_idx: i32) -> bool {
     // "Most land units moving into a Port... unable to perform actions... applied to land units"
     // Exceptions: Water, Amphibious, Flying.
     let is_aquatic = settings.skills.contains(&SkillType::Float);
-    let is_amphibious = crate::functions::is_amphibious(state, unit);
+    let is_amphibious = crate::functions::is_amphibious(unit);
 
     if is_port && !is_aquatic && !is_amphibious {
         return true;
@@ -421,6 +421,7 @@ fn is_terminal(state: &GameState, unit: &UnitState, tile_idx: i32) -> bool {
     if is_adjacent_to_enemy(state, tile_idx, unit.owner) {
         let ignores_zoc = settings.skills.contains(&SkillType::Infiltrate)
             || settings.skills.contains(&SkillType::Creep)
+            || settings.skills.contains(&SkillType::Sneak)
             || unit.effects.contains(&EffectType::Invisible);
         if !ignores_zoc {
             return true;
@@ -445,6 +446,16 @@ fn is_terminal(state: &GameState, unit: &UnitState, tile_idx: i32) -> bool {
     // blocking terrain (Rough Terrain)
     // "Units cannot move through them (they can move onto them, but no further in the same turn)"
     // Flooded rough terrain usually acts like water (not terminal for aquatic)
+    // Algae is Rough Terrain (stops movement)
+    if tile.terrain_type == TerrainType::Algae
+        && !settings.skills.contains(&SkillType::Creep)
+        && !settings.skills.contains(&SkillType::Fly)
+        && !settings.skills.contains(&SkillType::Water)
+    // Respect "no longer cripples naval unit movement"
+    {
+        return true;
+    }
+
     if !tile.flooded {
         match tile.terrain_type {
             TerrainType::Forest => {
@@ -456,10 +467,8 @@ fn is_terminal(state: &GameState, unit: &UnitState, tile_idx: i32) -> bool {
                 }
             }
             TerrainType::Mountain => {
-                // Mountain blocks unless Creep (and Climbing must be unlocked to enter, checked in is_steppable)
-                if !settings.skills.contains(&SkillType::Creep) {
-                    return true;
-                }
+                // Mountain blocks movement (Creep no longer overcomes this penalty)
+                return true;
             }
             _ => {}
         }
@@ -487,19 +496,10 @@ fn is_roadpath_and_usable(state: &GameState, unit: &UnitState, idx: i32) -> bool
             .contains(&SkillType::Infiltrate)
 }
 
-fn is_water_terrain(terrain: TerrainType) -> bool {
-    matches!(terrain, TerrainType::Water | TerrainType::Ocean)
-}
-
 fn is_naval_unit(unit_type: UnitType) -> bool {
-    matches!(
-        unit_type,
-        UnitType::Raft
-            | UnitType::Scout
-            | UnitType::Rammer
-            | UnitType::Bomber
-            | UnitType::Juggernaut
-    )
+    crate::settings::units::get_unit_setting(unit_type)
+        .skills
+        .contains(&SkillType::Carry)
 }
 
 fn is_adjacent_to_enemy(state: &GameState, idx: i32, owner: PlayerId) -> bool {
@@ -599,6 +599,13 @@ fn is_steppable(state: &GameState, unit: &UnitState, idx: i32) -> bool {
     let tribe = state.tribes.get(&unit.owner).unwrap();
     let tile = state.tiles.get(&idx).unwrap();
 
+    // SkillType::Water units can only move on water/ocean/flooded tiles
+    if settings.skills.contains(&SkillType::Water) {
+        if !is_water_terrain(tile.terrain_type) && !tile.flooded {
+            return false;
+        }
+    }
+
     // tech check
     if !is_navigationable(tribe, unit.unit_type, tile) {
         return false;
@@ -611,11 +618,15 @@ fn is_steppable(state: &GameState, unit: &UnitState, idx: i32) -> bool {
         }
     }
 
-    let is_aquatic =
-        settings.skills.contains(&SkillType::Float) || settings.skills.contains(&SkillType::Fly);
+    let is_aquatic = settings.skills.contains(&SkillType::Float)
+        || settings.skills.contains(&SkillType::Fly)
+        || settings.skills.contains(&SkillType::Water);
 
     if !is_aquatic {
-        if let Some(structure) = get_structure_at(state, idx) {
+        // Algae acts like a bridge for land units
+        if tile.terrain_type == TerrainType::Algae {
+            // Pass
+        } else if let Some(structure) = get_structure_at(state, idx) {
             if structure.structure_type == StructureType::Port {
                 return tile.owner == unit.owner;
             }
@@ -644,7 +655,16 @@ fn is_navigationable(tribe: &TribeState, unit_type: UnitType, tile: &TileState) 
         return true;
     }
 
-    if tile.frozen {
+    if has_skill(unit_type, SkillType::Water) {
+        // Restricted to water/ocean/algae/ice/flooded land
+        let is_water_like = crate::functions::is_water_terrain(tile.terrain_type)
+            || tile.terrain_type == TerrainType::Algae
+            || tile.frozen
+            || tile.flooded;
+        return is_water_like;
+    }
+
+    if tile.frozen || tile.terrain_type == TerrainType::Algae {
         return true;
     }
 

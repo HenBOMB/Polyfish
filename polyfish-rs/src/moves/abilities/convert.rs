@@ -24,11 +24,23 @@ impl Move for ConvertMove {
     }
 
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+        let owner = state
+            .tiles
+            .get(&self.unit_idx)
+            .and_then(|t| t._unit_owner_id)
+            .unwrap_or(0);
+
         match crate::actions::units::convert_unit(state, self.unit_idx, self.target_idx) {
-            Ok(undo) => Ok(MoveResult {
-                undo,
-                rewards: None,
-            }),
+            Ok(undo) => {
+                if let Some(tribe) = state.tribes.get_mut(&owner) {
+                    tribe.attacked_this_turn = true;
+                    tribe.conversions += 1; // Track for Converter task
+                }
+                Ok(MoveResult {
+                    undo,
+                    rewards: None,
+                })
+            }
             Err(e) => Err(e),
         }
     }

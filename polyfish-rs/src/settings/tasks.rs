@@ -36,6 +36,10 @@ pub fn get_task_setting(task_type: TaskType) -> TaskSetting {
             tech_type: None,
             structure_type: StructureType::ParkOfFortune,
         },
+        TaskType::Converter => TaskSetting {
+            tech_type: Some(TechnologyType::Rituals),
+            structure_type: StructureType::ChurchOfConverts,
+        },
     }
 }
 
@@ -47,7 +51,17 @@ pub fn check_task(state: &GameState, task_type: TaskType) -> bool {
     };
 
     match task_type {
-        TaskType::Pacifist => false, // TODO: Implement pacifist counting (requires turn history/stats)
+        TaskType::Pacifist => {
+            // Must have Meditation
+            if !crate::settings::technology::has_technology(
+                &tribe.tech_vanilla,
+                TechnologyType::Meditation,
+            ) {
+                return false;
+            }
+            // Must not have attacked for 5 turns
+            tribe.pacifist_turns >= 5
+        }
         TaskType::Genius => {
             // Must have Philosophy requirement (checked by caller usually, but explicit here too)
             if !crate::settings::technology::has_technology(
@@ -107,5 +121,16 @@ pub fn check_task(state: &GameState, task_type: TaskType) -> bool {
             connected_count > 4
         }
         TaskType::Metropolis => tribe.cities.iter().any(|c| c.level > 4),
+        TaskType::Converter => {
+            // Must have Rituals tech
+            if !crate::settings::technology::has_technology(
+                &tribe.tech_vanilla,
+                TechnologyType::Rituals,
+            ) {
+                return false;
+            }
+            // Must have converted 3+ enemies
+            tribe.conversions >= 3
+        }
     }
 }

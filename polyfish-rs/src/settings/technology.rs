@@ -64,6 +64,7 @@ pub fn get_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
             tier: Some(3),
             requires: Some(Roads),
             unlocks_structure: Some(StructureType::Market),
+            unlocks_special_structures: vec![StructureType::Clathrus],
             unlocks_task: vec![TaskType::Wealth],
             ..Default::default()
         },
@@ -96,6 +97,7 @@ pub fn get_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
             next: vec![Construction],
             unlocks_resource: Some(ResourceType::Crop),
             unlocks_structure: Some(StructureType::Farm),
+            unlocks_special_structures: vec![StructureType::Fungi],
             ..Default::default()
         },
         Construction => TechnologySetting {
@@ -142,13 +144,13 @@ pub fn get_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
             requires: Some(Mining),
             unlocks_structure: Some(StructureType::Forge),
             unlocks_unit: Some(UnitType::Swordsman),
+            unlocks_special_units: vec![UnitType::Mantis],
             ..Default::default()
         },
         Meditation => TechnologySetting {
             tier: Some(2),
             requires: Some(Climbing),
             next: vec![Philosophy],
-            unlocks_structure: Some(StructureType::MountainTemple),
             unlocks_task: vec![TaskType::Pacifist],
             ..Default::default()
         },
@@ -159,6 +161,7 @@ pub fn get_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
             unlocks_special_units: vec![UnitType::Shaman],
             unlocks_other: 1, // discount
             unlocks_task: vec![TaskType::Genius],
+            unlocks_structure: Some(StructureType::MountainTemple),
             ..Default::default()
         },
 
@@ -229,6 +232,7 @@ pub fn get_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
             requires: Some(Hunting),
             unlocks_structure: Some(StructureType::LumberHut),
             unlocks_ability: Some(AbilityType::ClearForest),
+            unlocks_special_structures: vec![StructureType::Sanctuary],
             next: vec![Mathematics],
             ..Default::default()
         },
@@ -285,20 +289,22 @@ pub fn get_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
             replaces_tech: Some(Sailing),
             tribe_type: Some(TribeType::Cymanti),
             next: vec![Navigation],
-            unlocks_unit: Some(UnitType::Raychi),
-            unlocks_structure: Some(StructureType::Algae),
+            unlocks_special_units: vec![UnitType::Raychi, UnitType::Boomchi],
+            ..Default::default()
+        },
+        Rituals => TechnologySetting {
+            replaces_tech: Some(Meditation),
+            tribe_type: Some(TribeType::Cymanti),
+            tier: Some(2),
+            requires: Some(Climbing),
+            next: vec![Philosophy],
+            unlocks_task: vec![TaskType::Converter],
             ..Default::default()
         },
         ShockTactics => TechnologySetting {
             replaces_tech: Some(Chivalry),
             tribe_type: Some(TribeType::Cymanti),
             unlocks_unit: Some(UnitType::Doomux),
-            ..Default::default()
-        },
-        Hydrology => TechnologySetting {
-            replaces_tech: Some(Ramming),
-            tribe_type: Some(TribeType::Cymanti),
-            next: vec![Aquatism],
             ..Default::default()
         },
         Oceantology => TechnologySetting {
@@ -308,24 +314,23 @@ pub fn get_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
             unlocks_resource: Some(ResourceType::Starfish),
             ..Default::default()
         },
+        Synergy => TechnologySetting {
+            replaces_tech: Some(Diplomacy),
+            tribe_type: Some(TribeType::Cymanti),
+            unlocks_unit: Some(UnitType::Moth),
+            ..Default::default()
+        },
 
         // Aquarion replacements
         Spearing => TechnologySetting {
             replaces_tech: Some(Chivalry),
             tribe_type: Some(TribeType::Aquarion),
-            ..Default::default()
-        },
-        Amphibian => TechnologySetting {
-            replaces_tech: Some(Riding),
-            tribe_type: Some(TribeType::Aquarion),
             unlocks_unit: Some(UnitType::Tridention),
-            unlocks_terrain: Some(TerrainType::Water),
-            next: vec![Waterways],
             ..Default::default()
         },
         Waterways => TechnologySetting {
             replaces_tech: Some(Roads),
-            requires: Some(Amphibian),
+            requires: Some(Riding),
             tribe_type: Some(TribeType::Aquarion),
             ..Default::default()
         },
@@ -404,35 +409,9 @@ pub fn get_tech_unlocking_unit(unit_type: UnitType) -> Option<TechnologyType> {
 
         // Special Units (Tribe Specific)
         UnitType::Hexapod => Some(Riding),   // Cymanti
-        UnitType::Amphibian => Some(Riding), // Aquarion? Actually Ride unlocks it in special tree?
-        // Wait, Aquarion tech tree: Riding replaced by Amphibian?
-        // Look at settings above: Amphibian (tech) unlocks Tridention (unit).
-        // What unlocks Amphibian (unit)?
-        // Riding (tech) unlocks special units: [Hexapod, Amphibian].
-        // So Riding unlocks it.
-        UnitType::Tridention => Some(Chivalry), // Or Amphibian tech?
-        // Settings above: Chivalry unlocks [Tridention] as special unit IF tribe matches?
-        // No, Chivalry above unlocks [Tridention].
-        // But Amphibian (Tech) unlocks Tridention too (line 309).
-        // If Aquarion uses Amphibian tech (replacing Riding), then Amphibian tech unlocks Tridention?
-        // Wait, line 309: unlocks_unit: Some(Tridention).
-        // So simple lookup works if I return the tech that unlocks it.
-        // If multiple techs unlock it (e.g. Riding for normal tribe vs Amphibian for Aquarion?),
-        // I should return the tech relevant for the tribe!
-        // But this function doesn't take tribe.
-        // It's "get_tech_unlocking_unit".
-        // If I assume 1-to-1 mapping, I might be wrong for replacements.
-        // E.g. Riding unlocks Rider.
-        // Amphibian (Tech) replaces Riding. Does it unlock Rider? No, it unlocks Tridention (line 309)?
-        // Wait, line 309 says `unlocks_unit: Some(Tridention)`.
-        // So Aquarion gets Tridention via Amphibian tech.
-        // Does Aquarion get Rider?
-        // Amphibian tech replaces Riding. So they don't get Riding.
-        // So they don't get Rider.
-        // This implies the unit type itself is unique to the tech path.
-        // If so, 1-to-1 works.
-        // Tridention -> Amphibian (Tech).
-        // Rider -> Riding.
+        UnitType::Amphibian => Some(Riding), // Aquarion
+
+        UnitType::Tridention => Some(Spearing),
 
         // Let's verify special units unlocking.
         UnitType::Kiton => Some(Strategy), // Cymanti stuff
@@ -450,14 +429,12 @@ pub fn get_tech_unlocking_unit(unit_type: UnitType) -> Option<TechnologyType> {
         // Cymanti Techs
         UnitType::Raychi => Some(Pascetism),
         UnitType::Doomux => Some(ShockTactics),
+        UnitType::Moth => Some(Synergy),
         // Hexapod is under Riding (special).
         // Centipede is super unit?
 
         // Elyrion
         UnitType::Polytaur => Some(ForestMagic),
-
-        // Aquarion
-        // UnitType::Tridention => Some(Amphibian),
         _ => None,
     }
 }

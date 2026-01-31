@@ -279,7 +279,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             range: 1,
             health: 40,
             is_super: true,
-            skills: skills![S::Escape, S::Float, S::Static],
+            skills: skills![S::Escape, S::Static, S::AutoFlood, S::Amphibious],
             ..Default::default()
         },
         U::Amphibian => UnitSetting {
@@ -289,7 +289,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             defense: 1.0,
             range: 1,
             health: 10,
-            skills: skills![S::Float, S::Dash, S::Escape, S::Fortify],
+            skills: skills![S::Dash, S::Escape, S::Fortify, S::Amphibious],
             ..Default::default()
         },
         U::Tridention => UnitSetting {
@@ -299,7 +299,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             defense: 1.0,
             range: 2,
             health: 10,
-            skills: skills![S::Float, S::Dash, S::Escape, S::Fortify],
+            skills: skills![S::Dash, S::Persist, S::Amphibious],
             ..Default::default()
         },
 
@@ -316,6 +316,17 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
         }
 
         // Cymanti
+        U::Mantis => UnitSetting {
+            cost: 15,
+            is_super: true,
+            attack: 3.0,
+            movement: 1,
+            defense: 3.0,
+            range: 1,
+            health: 20,
+            skills: skills![S::Dash, S::Creep],
+            ..Default::default()
+        },
         U::Centipede => UnitSetting {
             cost: 10,
             is_super: true,
@@ -361,7 +372,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             defense: 1.0,
             range: 1,
             health: 10,
-            skills: skills![S::Convert, S::Boost, S::Static],
+            skills: skills![S::Convert, S::Swarm, S::Static],
             ..Default::default()
         },
         U::Kiton => UnitSetting {
@@ -371,7 +382,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             defense: 3.0,
             range: 1,
             health: 15,
-            skills: skills![S::Poison],
+            skills: skills![S::Poison, S::Creep],
             ..Default::default()
         },
         U::Hexapod => UnitSetting {
@@ -381,23 +392,34 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             defense: 1.0,
             range: 1,
             health: 5,
-            skills: skills![S::Dash, S::Escape, S::Creep],
+            skills: skills![S::Dash, S::Escape, S::Creep, S::Sneak],
             ..Default::default()
         },
         U::Raychi => UnitSetting {
-            cost: 8,
+            cost: 5,
             attack: 3.0,
             movement: 3,
             defense: 2.0,
             range: 1,
-            health: 15,
+            health: 10,
             is_unique: true,
-            skills: skills![S::Dash, S::Float, S::Creep, S::Navigate, S::Explode],
+            skills: skills![S::Dash, S::Water],
+            ..Default::default()
+        },
+        U::Boomchi => UnitSetting {
+            cost: 5,
+            attack: 3.0,
+            movement: 2,
+            defense: 3.0,
+            range: 1,
+            health: 10,
+            is_unique: true,
+            skills: skills![S::Dash, S::Explode, S::Stiff, S::Amphibious],
             ..Default::default()
         },
         U::Phychi => UnitSetting {
             cost: 3,
-            attack: 1.0,
+            attack: 0.7,
             movement: 2,
             defense: 2.0,
             range: 2,
@@ -412,10 +434,9 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             defense: 1.0,
             range: 3,
             health: 10,
-            skills: skills![S::Poison, S::Splash],
+            skills: skills![S::Poison, S::Splash, S::Creep],
             ..Default::default()
         },
-        // Cymanti got a new unit?? lol
         U::LivingIsland => UnitSetting {
             cost: 20,
             attack: 4.0,
@@ -424,7 +445,58 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             range: 1,
             health: 20,
             is_super: false,
-            skills: skills![S::Water, S::Algae, S::Poison, S::Static],
+            skills: skills![S::Water, S::Algae, S::Stomp, S::Poison, S::Static],
+            ..Default::default()
+        },
+        U::InsectEgg => UnitSetting {
+            cost: 0,
+            attack: 2.0,
+            movement: 0,
+            defense: 3.0,
+            range: 1,
+            health: 10,
+            is_super: false,
+            becomes: Some(U::Larva),
+            skills: skills![S::Grow, S::Explode, S::Static, S::Stiff],
+            ..Default::default()
+        },
+        U::Larva => UnitSetting {
+            cost: 0,
+            attack: 2.0,
+            movement: 1,
+            defense: 2.0,
+            range: 1,
+            health: 10,
+            is_super: false,
+            becomes: Some(U::Moth),
+            skills: skills![
+                S::Dash,
+                S::Creep,
+                S::Surprise,
+                S::Independent,
+                S::Static,
+                S::Grow
+            ],
+            ..Default::default()
+        },
+
+        U::Moth => UnitSetting {
+            cost: 5,
+            attack: 2.0,
+            movement: 2,
+            defense: 0.1,
+            range: 1,
+            health: 10,
+            is_super: false,
+            skills: skills![
+                S::Fly,
+                S::Dash,
+                S::Sneak,
+                S::Infiltrate,
+                S::Poison,
+                S::Static,
+                S::Stiff
+            ],
             ..Default::default()
         },
 

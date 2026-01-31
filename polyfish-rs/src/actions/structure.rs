@@ -260,6 +260,39 @@ pub fn capture_ruin(state: &mut GameState, tile_idx: i32) -> UndoCallback {
         }));
     }
 
+    // 5. Veteran Unit (Swordsman or Mantis for Cymanti)
+    let unit_reward_type = if let Some(t) = state.tribes.get(&pov_id) {
+        if t.tribe_type == crate::types::TribeType::Cymanti {
+            crate::types::UnitType::Mantis
+        } else {
+            crate::types::UnitType::Swordsman
+        }
+    } else {
+        crate::types::UnitType::Swordsman
+    };
+
+    possible_rewards.push(Box::new(move |s: &mut GameState| {
+        let mut undos = Vec::new();
+        // Spawn unit
+        undos.push(crate::actions::units::spawn_unit(
+            s,
+            pov_id,
+            unit_reward_type,
+            tile_idx,
+            false,
+        ));
+        // Make veteran: find the unit we just spawned (it will be at tile_idx)
+        // We can't easily get the index from spawn_unit return, but we know where it is.
+        // Actually, we can use a closure that finds the unit at `tile_idx` and modifies it.
+        undos.push(Box::new(move |st| {
+            if let Some(u) = crate::functions::get_unit_at_mut(st, tile_idx) {
+                u.veteran = true;
+                u.health = crate::functions::get_max_health(u); // Heal to new max
+            }
+        }));
+        crate::actions::chain_undos(undos)
+    }));
+
     // Pick one
     if !possible_rewards.is_empty() {
         let mut rng = rand::thread_rng();

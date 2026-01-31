@@ -410,6 +410,18 @@ pub fn process_start_turn_effects(state: &mut GameState, player_id: PlayerId) ->
                             new_type = Some(UnitType::FireDragon);
                         }
                     }
+                    UnitType::InsectEgg => {
+                        // InsectEgg -> Larva after 2 turns
+                        if age >= 2 {
+                            new_type = Some(UnitType::Larva);
+                        }
+                    }
+                    UnitType::Larva => {
+                        // Larva -> Moth after 3 turns (Total 5 turns: 2 as Egg + 3 as Larva)
+                        if age >= 5 {
+                            new_type = Some(UnitType::Moth);
+                        }
+                    }
                     _ => {}
                 }
 
@@ -505,7 +517,86 @@ pub fn process_end_turn_effects(state: &mut GameState, _player_id: PlayerId) -> 
             }
         }
     }
+    // 2. Fungi Logic (Cymanti)
+    let current_player = state.settings.current_player_turn_id;
+    let fungi_indices: Vec<i32> = state
+        .structures
+        .iter()
+        .filter(|(_, s)| {
+            s.as_ref()
+                .map(|st| st.structure_type == StructureType::Fungi)
+                .unwrap_or(false)
+        })
+        .map(|(&idx, _)| idx)
+        .collect();
 
+    for f_idx in fungi_indices {
+        let owner_id = state.tiles.get(&f_idx).map(|t| t.owner).unwrap_or(0);
+
+        // A. Growth (Only on owner's turn)
+        if owner_id == current_player {
+            let mut leveled_up = false;
+            if let Some(structure) = state.structures.get_mut(&f_idx).and_then(|s| s.as_mut()) {
+                if structure.level < 3 {
+                    structure.level += 1;
+                    leveled_up = true;
+                    // Undo level change
+                    undos.push(Box::new(move |s| {
+                        if let Some(st) = s.structures.get_mut(&f_idx).and_then(|x| x.as_mut()) {
+                            st.level -= 1;
+                        }
+                    }));
+                }
+            }
+            if leveled_up {
+                // Add population to city
+                if let Some(city) = crate::functions::get_city_owning_tile(state, f_idx) {
+                    undos.push(crate::actions::city::add_population(
+                        state,
+                        city.tile_index,
+                        1,
+                    ));
+                }
+            }
+        }
+
+        // B. Poison (Safety Check)
+        // Poisons non-Cymanti units that step on it (except flying)
+        if let Some(unit) = crate::functions::get_unit_at(state, f_idx) {
+            // Find unit details
+            let unit_owner = unit.owner;
+            // Unit index
+            let unit_idx_opt = state
+                .tribes
+                .get(&unit_owner)
+                .and_then(|t| t.units.iter().position(|u| u.coords.idx == f_idx));
+
+            if let Some(unit_idx) = unit_idx_opt {
+                // Check exemptions
+                let is_cymanti = state
+                    .tribes
+                    .get(&unit_owner)
+                    .map(|t| t.tribe_type == crate::types::TribeType::Cymanti)
+                    .unwrap_or(false);
+                let is_flying = crate::functions::has_skill(unit, SkillType::Fly);
+                let is_ally = state
+                    .tribes
+                    .get(&owner_id)
+                    .and_then(|t| t.relations.get(&unit_owner))
+                    .map(|r| r.state == 1)
+                    .unwrap_or(false);
+
+                if !is_cymanti && !is_flying && !is_ally && unit_owner != owner_id {
+                    undos.push(crate::actions::try_add_effect(
+                        state,
+                        unit_owner,
+                        unit_idx,
+                        EffectType::Poison,
+                    ));
+                }
+            }
+        }
+    }
     // 2. End of turn queue
     let queue: Vec<EndOfTurnAction> = state._end_of_turn_queue.drain(..).collect();
     let old_queue = queue.clone();

@@ -135,6 +135,18 @@ pub fn get_true_unit_at<'a>(state: &'a GameState, idx: i32) -> Option<&'a UnitSt
     None
 }
 
+/// Find unit at a tile index (mutable)
+pub fn get_unit_at_mut<'a>(state: &'a mut GameState, idx: i32) -> Option<&'a mut UnitState> {
+    for tribe in state.tribes.values_mut() {
+        for unit in &mut tribe.units {
+            if unit.coords.idx == idx {
+                return Some(unit);
+            }
+        }
+    }
+    None
+}
+
 /// Get city at a tile index
 pub fn get_city_at<'a>(state: &'a GameState, idx: i32) -> Option<&'a CityState> {
     for tribe in state.tribes.values() {
@@ -193,14 +205,8 @@ pub fn has_skill(unit: &UnitState, skill: SkillType) -> bool {
 }
 
 /// Check if a unit is considered "Amphibious"
-/// Logic: Any Aquarion unit that has the Float skill.
-pub fn is_amphibious(state: &GameState, unit: &UnitState) -> bool {
-    let tribe_type = state
-        .tribes
-        .get(&unit.owner)
-        .map(|t| t.tribe_type)
-        .unwrap_or(TribeType::None);
-    tribe_type == TribeType::Aquarion && has_skill(unit, SkillType::Float)
+pub fn is_amphibious(unit: &UnitState) -> bool {
+    has_skill(unit, SkillType::Amphibious)
 }
 
 /// Get the maximum health of a unit (accounting for veteran status and pass-through)
@@ -231,16 +237,21 @@ pub fn get_unit_attack(unit: &UnitState) -> f32 {
 pub fn get_unit_defense(unit: &UnitState) -> f32 {
     let mut def = get_real_unit_setting(unit).defense;
     if has_effect(unit, EffectType::Poison) {
-        def *= 0.7; // 30% damage reduction
+        def *= 0.5; // 50% defense reduction
     }
     def
 }
 
-/// Get unit movement (accounting for Boost)
+/// Get unit movement (accounting for Boost and Poison)
 pub fn get_unit_movement(unit: &UnitState) -> i32 {
     let mut movement = crate::settings::units::get_unit_setting(unit.unit_type).movement;
     if has_effect(unit, EffectType::Boost) {
         movement += 1;
+    }
+    // Poison slows down enemy units.
+    // TODO: Verify exact slowdown amount (spec just says "slow down"). Assuming 50% for now.
+    if has_effect(unit, EffectType::Poison) {
+        movement /= 2;
     }
     movement
 }
@@ -252,12 +263,17 @@ pub fn get_tech_tier(tech_type: TechnologyType) -> i32 {
         .unwrap_or(1)
 }
 
+/// Get the unit type unlocked by a technology
+pub fn get_tech_unit_type(tech: crate::types::TechnologyType) -> Option<UnitType> {
+    crate::settings::technology::get_technology_setting(tech).unlocks_unit
+}
+
 /// Get defense bonus multiplier for a unit on its current tile
 pub fn get_defense_bonus(state: &GameState, unit: &UnitState) -> f32 {
-    // Poisoned units cannot receive defense bonus
-    if has_effect(unit, EffectType::Poison) {
+    // Poisoned units can now receive defense bonuses (defense is just reduced)
+    /*if has_effect(unit, EffectType::Poison) {
         return 1.0;
-    }
+    }*/
 
     let tribe = match state.tribes.get(&unit.owner) {
         Some(t) => t,
@@ -329,6 +345,44 @@ pub fn get_city_production(state: &GameState, city: &CityState) -> i32 {
             prod += 1;
         }
     }
+
+    // Clathrus and Market bonuses
+    for &idx in &city._territory {
+        if let Some(structure) = crate::functions::get_structure_at(state, idx) {
+            let setting =
+                crate::settings::structures::get_structure_setting(structure.structure_type);
+
+            // Adjacency Bonuses
+            match structure.structure_type {
+                StructureType::Clathrus => {
+                    // +X star for each adjacent Algae in friendly territory
+                    let adj = crate::functions::get_adjacent_indices(state, idx, 1);
+                    for n_idx in adj {
+                        if let Some(n_tile) = state.tiles.get(&n_idx) {
+                            if n_tile.terrain_type == TerrainType::Algae
+                                && n_tile.owner == city.owner
+                            {
+                                prod += setting.reward_stars;
+                            }
+                        }
+                    }
+                }
+                StructureType::Market => {
+                    // +X star for each adjacent "production" building (Windmill, Sawmill, Forge)
+                    let adj = crate::functions::get_adjacent_indices(state, idx, 1);
+                    for n_idx in adj {
+                        if let Some(n_struct) = crate::functions::get_structure_at(state, n_idx) {
+                            if setting.adjacent_types.contains(&n_struct.structure_type) {
+                                prod += setting.reward_stars;
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     prod
 }
 
@@ -387,6 +441,11 @@ pub fn is_in_bounds(x: i32, y: i32, size: i32) -> bool {
     x >= 0 && x < size && y >= 0 && y < size
 }
 
+/// Check if a tile is occupied by a unit
+pub fn is_tile_occupied(state: &GameState, idx: i32) -> bool {
+    crate::functions::get_unit_at(state, idx).is_some()
+}
+
 /// Check if a tile is explored by a player (Fog of War)
 pub fn is_tile_explored(state: &GameState, idx: i32, player_id: PlayerId) -> bool {
     if !state.settings._fow {
@@ -397,6 +456,11 @@ pub fn is_tile_explored(state: &GameState, idx: i32, player_id: PlayerId) -> boo
         .get(&idx)
         .map(|t| t.explorers.contains(&player_id))
         .unwrap_or(false)
+}
+
+/// Check if a tile is water terrain
+pub fn is_water_terrain(terrain: TerrainType) -> bool {
+    matches!(terrain, TerrainType::Water | TerrainType::Ocean)
 }
 
 /// Get the capital city of a tribe
@@ -412,7 +476,21 @@ pub fn get_capital_city(state: &GameState, player_id: PlayerId) -> Option<&CityS
     })
 }
 
-/// Calculate a valid position to push a unit to
+/// Get the number of units in a city
+pub fn get_city_unit_count(state: &GameState, city: &crate::states::CityState) -> i32 {
+    let mut count = 0;
+    for tribe in state.tribes.values() {
+        for unit in &tribe.units {
+            if let Some(home) = &unit.home_coords {
+                if home.idx == city.tile_index {
+                    count += 1;
+                }
+            }
+        }
+    }
+    count
+}
+
 /// Calculate a valid position to push a unit to
 pub fn calculate_pushable_position(state: &GameState, unit: &UnitState) -> Option<i32> {
     let size = state.settings.size;
@@ -582,7 +660,11 @@ fn is_steppable_for_push(state: &GameState, unit: &UnitState, idx: i32) -> bool 
                 return false;
             }
         }
-        _ => {}
+        _ => {
+            if settings.skills.contains(&SkillType::Water) && !tile.flooded {
+                return false;
+            }
+        }
     }
 
     true

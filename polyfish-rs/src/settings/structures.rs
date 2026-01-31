@@ -54,12 +54,21 @@ pub fn get_structure_setting(struct_type: StructureType) -> StructureSetting {
             ..Default::default()
         },
         StructureType::Mycelium => StructureSetting {
-            terrain_types: terrains![TerrainType::Field, TerrainType::Forest],
+            cost: Some(5),
+            terrain_types: terrains![
+                TerrainType::Field,
+                TerrainType::Forest,
+                TerrainType::Water,
+                TerrainType::Mountain,
+                TerrainType::Ocean
+            ], // Can be built on algae (which is on water)
             limited_per_city: true,
             tribe_type: Some(TribeType::Cymanti),
             ..Default::default()
         },
-        StructureType::Algae => StructureSetting {
+        StructureType::Clathrus => StructureSetting {
+            cost: Some(5),
+            reward_stars: 1,
             terrain_types: terrains![TerrainType::Water, TerrainType::Ocean],
             tribe_type: Some(TribeType::Cymanti),
             ..Default::default()
@@ -185,6 +194,31 @@ pub fn get_structure_setting(struct_type: StructureType) -> StructureSetting {
             ..Default::default()
         },
 
+        // Elyrion
+        // TODO: https://polytopia.fandom.com/wiki/Sanctuary
+        StructureType::Sanctuary => StructureSetting {
+            cost: Some(5),
+            reward_stars: 1,
+            tribe_type: Some(TribeType::Elyrion),
+            terrain_types: terrains![
+                TerrainType::Field,
+                TerrainType::Forest,
+                TerrainType::Mountain
+            ],
+            // required adjacent
+            limited_per_city: true,
+            ..Default::default()
+        },
+
+        StructureType::Fungi => StructureSetting {
+            cost: Some(5),
+            reward_pop: 1,
+            tribe_type: Some(TribeType::Cymanti),
+            terrain_types: terrains![TerrainType::Field],
+            resource_type: Some(ResourceType::Spores),
+            ..Default::default()
+        },
+
         // Monuments
         StructureType::AltarOfPeace
         | StructureType::TowerOfWisdom
@@ -192,7 +226,8 @@ pub fn get_structure_setting(struct_type: StructureType) -> StructureSetting {
         | StructureType::EmperorsTomb
         | StructureType::GateOfPower
         | StructureType::ParkOfFortune
-        | StructureType::EyeOfGod => StructureSetting {
+        | StructureType::EyeOfGod
+        | StructureType::ChurchOfConverts => StructureSetting {
             reward_pop: 3,
             reward_score: 400,
             terrain_types: terrains![TerrainType::Field, TerrainType::Forest, TerrainType::Water],
@@ -210,5 +245,5 @@ pub const PLACEABLE_STRUCTURES: &[StructureType] = &[
     StructureType::ForestTemple,
     StructureType::LumberHut,
     StructureType::Mycelium,
-    StructureType::Algae,
+    StructureType::Clathrus,
 ];

@@ -26,6 +26,7 @@ pub enum TerrainType {
     Mountain = 4,
     Forest = 5,
     Ice = 6,
+    Algae = 120,
 }
 
 /// Technology types
@@ -55,13 +56,14 @@ pub enum TechnologyType {
     Spiritualism = 19,
     Climbing = 20,
     Meditation = 21,
+    // Update "Philosophy" -> "Mysticism"
     Philosophy = 22,
     Mining = 23,
     Smithery = 24,
     // Aquarion
     FreeDiving = 25,
     Spearing = 26,
-    Amphibian = 27,
+    // Amphibian = 27,
     Waterways = 28,
     // Elyrion
     ForestMagic = 29,
@@ -72,13 +74,15 @@ pub enum TechnologyType {
     ShockTactics = 35,
     // Cymanti
     Recycling = 36,
-    Hydrology = 37,
+    // Hydrology = 37,
     Diplomacy = 38,
     Ramming = 39,
     Sledding = 41,
     IceFishing = 42,
     Pascetism = 43,
     Oceantology = 49,
+    Synergy = 120,
+    Rituals = 121, // Cymanti-specific (replaces Meditation)
 }
 
 /// Tribe types
@@ -193,6 +197,11 @@ pub enum UnitType {
     Juggernaut = 45,
 
     LivingIsland = 120,
+    Boomchi = 121,
+    Moth = 122,
+    Larva = 123,
+    InsectEgg = 124,
+    Mantis = 125,
 }
 
 /// Skill types
@@ -244,10 +253,10 @@ pub enum SkillType {
     Skate = 21,
     /// Allows a unit to receive a defence bonus in a city.
     Fortify = 22,
-    /// Allows a unit to ignore movement barriers imposed by terrain except mountains. Note that zone of control cannot be negated.
+    /// Allows a unit to ignore movement barriers imposed by terrain (e.g. Forests), but NOT mountains. Note that zone of control cannot be negated.
     Creep = 23,
-    /// Boosts all adjacent friendly units by increasing their movement by 1 until being attacked.
-    Boost = 24,
+    /// Gives a unit the Swarm unit action, which boosts all adjacent friendly units by increasing their movement by 1 until being attacked.
+    Swarm = 24,
     /// Units with this skill do not take up a population slot in or belong to any city.
     Independent = 25,
     /// Allows a unit to poison enemy units it attacks.
@@ -280,6 +289,7 @@ pub enum SkillType {
     Static = 42,
     /// Allows a unit to automatically flood any tile it moves onto.
     AutoFlood = 79,
+    /// Allows a unit to move on both land and water
 
     /// Restricts a unit to only being able to move on water tiles.
     Water = 120,
@@ -287,8 +297,10 @@ pub enum SkillType {
     Algae = 121,
     /// Allows a unit to attack twice in the same turn. After the first attack is performed, the unit can also still perform certain actions (such as draining or breaking ice, but not capturing cities or excavating ruins)
     DoubleAttack = 122,
-    // Allows a unit to flood any tile it attacks. Units with this skill can also attack tiles without an enemy unit present.
-    // Drench = ?,
+    /// Allows a unit to flood any tile it attacks. Units with this skill can also attack tiles without an enemy unit present.
+    Amphibious = 123,
+    /// Allows a unit to ignore movement barriers (ie. zone of control) imposed by enemy units. The units themselves still block movement (ie. units with sneak still cannot travel through enemy units).
+    Sneak = 124,
 }
 
 /// Ability types
@@ -346,13 +358,17 @@ pub enum StructureType {
     Spores = 37,
     Swamp = 38,
     Mycelium = 39,
-    Algae = 40, // Cymanti water road
+    // Algae = 40, // Changed to tile effect
     Lighthouse = 47,
     Bridge = 48,
     Market = 50,
     IceTemple = 69, // TODO: Polaris disabled
     Embassy = 70,
     Road = 71,
+    Clathrus = 120, // New Cymanti building
+    Sanctuary = 121,
+    Fungi = 122,
+    ChurchOfConverts = 123, // Cymanti monument for Converter task
 }
 
 /// Resource types
@@ -426,6 +442,7 @@ pub enum TaskType {
     Killer = 4,
     Network = 5,
     Metropolis = 6,
+    Converter = 7, // Cymanti-specific (replaces Pacifist)
 }
 
 /// Economy ability types
