@@ -19,7 +19,7 @@ impl Move for EnchantAnimalMove {
     fn move_type(&self) -> MoveType {
         MoveType::Ability
     }
-    fn execute(&self, state: &mut GameState) -> MoveResult {
+    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let mut undos = Vec::new();
         let tile_idx = self.tile_index;
         let pov_id = state.settings.current_player_turn_id;
@@ -50,10 +50,10 @@ impl Move for EnchantAnimalMove {
             state, pov_id, unit_type, tile_idx, false,
         ));
 
-        MoveResult {
+        Ok(MoveResult {
             undo: chain_undos(undos),
             rewards: None,
-        }
+        })
     }
     fn describe(&self, _state: &GameState) -> String {
         format!("Enchant Animal at {}", self.tile_index)

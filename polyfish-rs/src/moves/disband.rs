@@ -2,11 +2,7 @@
 //!
 //! Disband a unit to regain some stars.
 
-use crate::actions::chain_undos;
-use crate::actions::gain_stars;
-use crate::actions::units::remove_unit;
 use crate::moves::{Move, MoveResult};
-use crate::settings::get_unit_setting;
 use crate::states::GameState;
 use crate::types::MoveType;
 
@@ -27,7 +23,7 @@ impl Move for DisbandMove {
         MoveType::Ability
     }
 
-    fn execute(&self, state: &mut GameState) -> MoveResult {
+    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let target = self.target;
         // Find unit
         let unit_owner = state
@@ -50,25 +46,15 @@ impl Move for DisbandMove {
             (None, None)
         };
 
-        if let (Some(idx), Some(u_type)) = (unit_idx, unit_type) {
-            let settings = get_unit_setting(u_type);
-            let refund = (settings.cost as f32 * 0.5).floor() as i32;
+        if let (Some(idx), Some(_u_type)) = (unit_idx, unit_type) {
+            let undo = crate::actions::units::disband_unit(state, unit_owner, idx)?;
 
-            let mut undos = Vec::new();
-            if refund > 0 {
-                undos.push(gain_stars(state, refund));
-            }
-            undos.push(remove_unit(state, unit_owner, idx, None, None));
-
-            MoveResult {
-                undo: chain_undos(undos),
+            Ok(MoveResult {
+                undo,
                 rewards: None,
-            }
+            })
         } else {
-            MoveResult {
-                undo: Box::new(|_| {}),
-                rewards: None,
-            }
+            Err("Unit not found".to_string())
         }
     }
 

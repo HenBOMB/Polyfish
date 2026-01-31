@@ -6,7 +6,7 @@ use crate::actions::chain_undos;
 use crate::actions::city::add_population;
 use crate::actions::UndoCallback;
 use crate::functions::get_capital_city;
-use crate::states::{CityState, GameState, TileState};
+use crate::states::GameState;
 use crate::types::{StructureType, TerrainType, TribeType};
 use std::collections::{HashSet, VecDeque};
 
@@ -14,7 +14,7 @@ use std::collections::{HashSet, VecDeque};
 ///
 /// Should be called after building roads or ports.
 pub fn update_capital_connections(state: &mut GameState, tribe_id: i32) -> UndoCallback {
-    let map_size = state.settings.size;
+    let _map_size = state.settings.size;
 
     // Find capital
     let capital_idx = if let Some(cap) = get_capital_city(state, tribe_id) {
@@ -150,7 +150,7 @@ pub fn update_capital_connections(state: &mut GameState, tribe_id: i32) -> UndoC
     let mut updates = Vec::new(); // city_idx (in array or tile_idx?)
 
     if let Some(tribe) = state.tribes.get_mut(&tribe_id) {
-        for (idx, city) in tribe.cities.iter_mut().enumerate() {
+        for (_idx, city) in tribe.cities.iter_mut().enumerate() {
             if city.tile_index == capital_idx {
                 continue;
             }
@@ -200,7 +200,7 @@ pub fn update_capital_connections(state: &mut GameState, tribe_id: i32) -> UndoC
     // Wait, line 125: `city.connected_to_capital = true;`. Yes we did.
     // We need to undo that.
 
-    let changed_cities: Vec<i32> = connected_cities.into_iter().collect();
+    let _changed_cities: Vec<i32> = connected_cities.into_iter().collect();
     // Actually we only changed those in `updates`.
 
     // Correct logic: we used `updates` to track those who FLIPPED from false to true.

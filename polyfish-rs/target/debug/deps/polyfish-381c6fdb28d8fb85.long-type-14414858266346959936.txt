@@ -1,0 +1,1 @@
+Result<MoveResult, std::string::String>

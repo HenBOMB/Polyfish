@@ -21,7 +21,7 @@ impl Move for HealOthersMove {
         MoveType::Ability
     }
 
-    fn execute(&self, state: &mut GameState) -> MoveResult {
+    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let actor_owner = state
             .tiles
             .get(&self.unit_idx)
@@ -59,15 +59,12 @@ impl Move for HealOthersMove {
             }
 
             undos.push(end_unit_turn(state, actor_owner, a_idx));
-            MoveResult {
+            Ok(MoveResult {
                 undo: chain_undos(undos),
                 rewards: None,
-            }
+            })
         } else {
-            MoveResult {
-                undo: Box::new(|_| {}),
-                rewards: None,
-            }
+            Err("Unit not found".to_string())
         }
     }
     fn describe(&self, _state: &GameState) -> String {

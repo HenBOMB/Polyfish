@@ -19,7 +19,7 @@ impl Move for ExplodeMove {
     fn move_type(&self) -> MoveType {
         MoveType::Ability
     }
-    fn execute(&self, state: &mut GameState) -> MoveResult {
+    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let owner = state
             .tiles
             .get(&self.unit_idx)
@@ -132,15 +132,12 @@ impl Move for ExplodeMove {
                 ));
             }
 
-            MoveResult {
+            Ok(MoveResult {
                 undo: chain_undos(undos),
                 rewards: None,
-            }
+            })
         } else {
-            MoveResult {
-                undo: Box::new(|_| {}),
-                rewards: None,
-            }
+            Err("Unit not found".to_string())
         }
     }
     fn describe(&self, _state: &GameState) -> String {

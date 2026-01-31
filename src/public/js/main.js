@@ -1,10 +1,10 @@
 const tileSize = 128;
-const someOffset = 4;
+const TILE_OFFSET = 4;
 const mapContainer = document.getElementById("map");
 
 let GAME_STATE = {};
 let TILE_ELEMENTS = {};
-let lastLegalMoves = [];
+let currentLegalMoves = [];
 let selectedUnitIdx = null; // Currently selected unit's tile index
 let ENABLE_FOW = true; // Fog of War toggle
 
@@ -52,8 +52,10 @@ async function apiAction(endpoint, body) {
 
 function updateUI(data) {
     if (data.state) GAME_STATE = data.state;
-    if (data.legalMoves) lastLegalMoves = data.legalMoves;
+    if (data.legalMoves) currentLegalMoves = data.legalMoves;
     if (data.movePlayed) lastMoveVal.textContent = data.movePlayed;
+
+    renderMap();
 
     const currentTribeId = GAME_STATE.settings.currentPlayerTurnId;
     const currentTribe = GAME_STATE.tribes[currentTribeId.toString()] || GAME_STATE.tribes[currentTribeId];
@@ -125,7 +127,7 @@ function updateUI(data) {
         badge.textContent = `→ ${name}`;
 
         // Find if this is a legal move
-        const researchMove = lastLegalMoves.find(m =>
+        const researchMove = currentLegalMoves.find(m =>
             typeof m === 'object' && m.moveType === 7 && m.tech === techId
         );
 
@@ -160,7 +162,21 @@ function updateUI(data) {
         0: 'None', 1: 'Step', 2: 'Attack', 3: 'Ability', 4: 'Summon',
         5: 'Harvest', 6: 'Build', 7: 'Research', 8: 'Capture', 9: 'Reward', 10: 'EndTurn'
     };
-    lastLegalMoves.slice(0, 50).forEach(move => {
+
+    // Filter and deduplicate moves
+    const uniqueMoves = [];
+    const moveStrings = new Set();
+
+    (currentLegalMoves || []).forEach(move => {
+        if (!move) return;
+        const s = JSON.stringify(move);
+        if (!moveStrings.has(s)) {
+            moveStrings.add(s);
+            uniqueMoves.push(move);
+        }
+    });
+
+    uniqueMoves.filter(x => x.moveType).slice(0, 50).forEach(move => {
         const li = document.createElement('li');
         li.style.cursor = 'pointer';
         li.classList.add('move-item'); // Add style for hover if needed
@@ -168,6 +184,8 @@ function updateUI(data) {
         let moveText = '';
         if (typeof move === 'object') {
             const typeName = MoveTypeNames[move.moveType] || move.moveType;
+            console.log(move.moveType);
+
             if (move.moveType === 7) { // Research
                 const techName = TechnologyNames[move.tech] || move.tech;
                 moveText = `Research ${techName}`;
@@ -190,11 +208,12 @@ function updateUI(data) {
         li.onclick = () => playMove(move);
         movesList.appendChild(li);
     });
-    if (lastLegalMoves.length > 50) {
-        const li = document.createElement('li');
-        li.textContent = `... and ${lastLegalMoves.length - 50} more`;
-        movesList.appendChild(li);
-    }
+    // lastLegalMoves undefined
+    // if (lastLegalMoves.length > 50) {
+    //     const li = document.createElement('li');
+    //     li.textContent = `... and ${lastLegalMoves.length - 50} more`;
+    //     movesList.appendChild(li);
+    // }
 
     renderMap();
 }
@@ -216,8 +235,8 @@ function renderMap() {
         tile.classList.add("tile");
         tile.style.backgroundImage = `url('textures/${filename}.png')`;
 
-        const posX = (x - y) * (tileSize / 2 - someOffset);
-        const posY = (x + y) * (tileSize / 4 + someOffset);
+        const posX = (x - y) * (tileSize / 2 - TILE_OFFSET);
+        const posY = (x + y) * (tileSize / 4 + TILE_OFFSET);
 
         tile.style.left = `${posX}px`;
         tile.style.top = `${posY}px`;
@@ -318,28 +337,40 @@ function renderMap() {
             if (!isVisible) f.classList.add('fog');
         }
 
-        // Structures
         const struct = GAME_STATE.structures[tile.coords.idx];
-        if (struct) {
+        const res = GAME_STATE.resources[tile.coords.idx];
+
+        // 1. Road (Lower Z than buildings, same/lower than resource)
+        if (struct && struct.type === 71) {
             const file = getStructureFile(struct.type, tile.climate);
             if (file) {
-                const e = createTile(x, y, file, 3);
-                e.classList.add('structure');
-                if (struct.type === 1) e.classList.add('village');
-                if (struct.type === 2) e.classList.add('ruins');
+                const e = createTile(x, y, file, 4);
+                e.classList.add('structure', 'road');
                 if (!isVisible) e.classList.add('fog');
             }
         }
 
-        // Resources
-        const res = GAME_STATE.resources[tile.coords.idx];
+        // 2. Resources (On top of roads, Under buildings)
         if (res) {
             const file = getResourceFile(res.type, tile.climate);
             if (file) {
-                const e = createTile(x, y, file, 3);
+                const e = createTile(x, y, file, 4);
                 e.classList.add('resource');
                 const resClass = { 1: 'animal', 2: 'crop', 3: 'fish', 5: 'metal', 6: 'fruit' }[res.type];
                 if (resClass) e.classList.add(resClass);
+                if (!isVisible) e.classList.add('fog');
+            }
+        }
+
+        // 3. Buildings / Monuments (Cover resources)
+        if (struct && struct.type !== 71) {
+            const file = getStructureFile(struct.type, tile.climate);
+            if (file) {
+                const e = createTile(x, y, file, 5);
+                e.classList.add('structure');
+                if (struct.type === 1) e.classList.add('village');
+                if (struct.type === 2) e.classList.add('ruins');
+                if (struct.type === 29) e.classList.add('monument');
                 if (!isVisible) e.classList.add('fog');
             }
         }
@@ -392,7 +423,7 @@ function renderMoveOverlays() {
     // Find moves for this unit (src matches selected)
     // Move move: src is starting position
     // Attack move: src is attacker position
-    const unitMoves = lastLegalMoves.filter(m => {
+    const unitMoves = currentLegalMoves.filter(m => {
         if (!m || typeof m !== 'object') return false;
         return m.src === selectedUnitIdx;
     });
@@ -407,8 +438,8 @@ function renderMoveOverlays() {
         const overlay = document.createElement('div');
         overlay.classList.add('tile', 'move-overlay');
 
-        const posX = (tileRef.x - tileRef.y) * (tileSize / 2 - someOffset);
-        const posY = (tileRef.x + tileRef.y) * (tileSize / 4 + someOffset);
+        const posX = (tileRef.x - tileRef.y) * (tileSize / 2 - TILE_OFFSET);
+        const posY = (tileRef.x + tileRef.y) * (tileSize / 4 + TILE_OFFSET);
         overlay.style.left = `${posX}px`;
         overlay.style.top = `${posY}px`;
         overlay.style.zIndex = 999;
@@ -466,9 +497,19 @@ function getStructureFile(type, climate) {
         1: `buildings/common/Tribe`,
         2: `terrain/misc/ResourceGFX_ruin`,
         5: `buildings/common/Farm`,
+        6: `buildings/common/Windmill`,
+        8: `buildings/common/Port`,
         12: `buildings/common/Lumber Hut`,
-        21: `buildings/common/Mine`
+        13: `buildings/common/Sawmill`,
+        21: `buildings/common/Mine`,
+        22: `buildings/common/Forge`,
+        29: `buildings/${CLIMATE_IDS[climate]}/Default/Monuments/Monument7_${climate}`,
+        // ??: `misc/lighthouse`,
+        71: `misc/Road`
     };
+    if (!map[type]) {
+        alert(`No structure file for type ${type} and climate ${climate}`);
+    }
     return map[type];
 }
 
@@ -493,17 +534,14 @@ function updateTransform() {
     mapContainer.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
 }
 
-function centerOnMapMiddle() {
-    const mapSize = GAME_STATE.settings.size || 16;
-    // Center of the map is at approximately (size/2, size/2)
-    const centerTileX = mapSize / 2;
-    const centerTileY = mapSize / 2;
+function centerOnCoordinates(tX, tY) {
+    const posX = (tX - tY) * (tileSize / 2 - TILE_OFFSET);
+    const posY = (tX + tY) * (tileSize / 4 + TILE_OFFSET);
 
-    const posX = (centerTileX - centerTileY) * (tileSize / 2 - someOffset);
-    const posY = (centerTileX + centerTileY) * (tileSize / 4 + someOffset);
-
-    // Get viewport dimensions (the main map area, not full window)
+    // Get viewport dimensions
     const viewportRect = mapViewport.getBoundingClientRect();
+    if (viewportRect.width === 0 || viewportRect.height === 0) return; // Not visible yet
+
     const viewportCenterX = viewportRect.width / 2;
     const viewportCenterY = viewportRect.height / 2;
 
@@ -512,27 +550,86 @@ function centerOnMapMiddle() {
     updateTransform();
 }
 
+function focusCamera() {
+    if (!GAME_STATE.settings) return;
+
+    const currentTribeId = GAME_STATE.settings.currentPlayerTurnId;
+    const currentTribe = GAME_STATE.tribes[currentTribeId.toString()] || GAME_STATE.tribes[currentTribeId];
+
+    if (!currentTribe) {
+        // Fallback to map center
+        const size = GAME_STATE.settings.size || 16;
+        centerOnCoordinates(size / 2, size / 2);
+        return;
+    }
+
+    // Try to find capital
+    const capital = (currentTribe.cities || []).find(c => {
+        const t = GAME_STATE.tiles[c.tileIndex];
+        return t && t.capitalOf === currentTribeId;
+    });
+
+    if (capital) {
+        const t = GAME_STATE.tiles[capital.tileIndex];
+        if (t) {
+            centerOnCoordinates(t.coords.x, t.coords.y);
+            return;
+        }
+    }
+
+    // Try to find first unit
+    const firstUnit = (currentTribe.units || [])[0];
+    if (firstUnit) {
+        centerOnCoordinates(firstUnit.coords.x, firstUnit.coords.y);
+        return;
+    }
+
+    // Fallback: Map Center
+    const size = GAME_STATE.settings.size || 16;
+    centerOnCoordinates(size / 2, size / 2);
+}
+
 window.addEventListener('load', () => {
     fetch('/current').then(r => r.json()).then(data => {
         updateUI(data);
-        centerOnMapMiddle();
+        // Delay slightly to ensure layout? No, usually fine.
+        requestAnimationFrame(() => focusCamera());
     });
 
     let dragging = false, lx, ly;
-    document.addEventListener('mousedown', e => {
-        if (e.target.closest('.glass')) return;
-        dragging = true; lx = e.clientX; ly = e.clientY;
+
+    mapViewport.addEventListener('mousedown', e => {
+        // If clicking on a UI element inside map (like a button), don't drag?
+        // But map usually only has tiles.
+        if (e.button !== 0) return; // Only left click
+        dragging = true;
+        lx = e.clientX;
+        ly = e.clientY;
+        mapViewport.style.cursor = 'grabbing';
+        // e.preventDefault(); // Don't prevent default here to allow clicking check
     });
-    document.addEventListener('mousemove', e => {
+
+    window.addEventListener('mousemove', e => {
         if (!dragging) return;
-        translateX += e.clientX - lx;
-        translateY += e.clientY - ly;
-        lx = e.clientX; ly = e.clientY;
+        e.preventDefault(); // Prevent text selection while dragging
+
+        const dx = e.clientX - lx;
+        const dy = e.clientY - ly;
+
+        translateX += dx;
+        translateY += dy;
+
+        lx = e.clientX;
+        ly = e.clientY;
         updateTransform();
     });
-    document.addEventListener('mouseup', () => dragging = false);
 
-    // Zoom towards center of viewport
+    window.addEventListener('mouseup', () => {
+        dragging = false;
+        mapViewport.style.cursor = 'default';
+    });
+
+    // Zoom
     mapViewport.addEventListener('wheel', e => {
         e.preventDefault();
         const rect = mapViewport.getBoundingClientRect();
@@ -543,7 +640,7 @@ window.addEventListener('load', () => {
         const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
         scale = Math.min(2, Math.max(0.2, scale * zoomFactor));
 
-        // Adjust translate to zoom towards center
+        // Adjust translate to zoom around center
         translateX = centerX - (centerX - translateX) * (scale / oldScale);
         translateY = centerY - (centerY - translateY) * (scale / oldScale);
 

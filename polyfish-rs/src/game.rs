@@ -4,16 +4,13 @@
 //! Translated from the TypeScript Game class.
 
 use crate::actions::{
-    self, chain_undos, end_unit_turn, gain_stars, has_effect, noop_undo, set_visible_tiles,
-    start_unit_turn, try_discover_other_tribes, try_remove_effect, UndoCallback,
+    self, end_unit_turn, gain_stars, has_effect, set_visible_tiles, start_unit_turn,
+    try_discover_other_tribes, try_remove_effect, UndoCallback,
 };
-use crate::functions::{
-    get_pov_tribe, get_pov_tribe_mut, get_total_production, is_game_over, sync_scores,
-};
-use crate::moves::{generate_legal_moves, Move, MoveResult};
+use crate::functions::{get_pov_tribe, get_total_production, is_game_over, sync_scores};
+use crate::moves::{generate_legal_moves, Move};
 use crate::states::*;
 use crate::types::*;
-use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
@@ -56,7 +53,7 @@ impl Game {
         let map_size = self.state.settings.size;
 
         // Compute coord indices for all tiles
-        for (idx, tile) in self.state.tiles.iter_mut() {
+        for (_idx, tile) in self.state.tiles.iter_mut() {
             tile.coords.compute_idx(map_size);
             if let Some(ref mut rc) = tile.ruling_city_coords {
                 rc.compute_idx(map_size);
@@ -77,7 +74,7 @@ impl Game {
 
         // Set visibility for current player
         let pov_id = self.state.settings.current_player_turn_id;
-        actions::set_visible_tiles(&mut self.state, pov_id);
+        let _ = actions::set_visible_tiles(&mut self.state, pov_id);
 
         // Update scores
         sync_scores(&mut self.state);
@@ -154,7 +151,7 @@ impl Game {
 
             // Collect undos
             let _move_type = game_move.move_type();
-            let move_undo = result.undo;
+            let move_undo = result.unwrap().undo;
 
             Box::new(move |s: &mut GameState| {
                 s.settings._recent_moves.pop();
@@ -242,7 +239,7 @@ impl Game {
         let new_pov = state.settings.current_player_turn_id;
 
         // Update visibility for new tribe
-        set_visible_tiles(state, new_pov);
+        let _ = set_visible_tiles(state, new_pov);
 
         // Process start turn effects
         undos.push(actions::process_start_turn_effects(state, new_pov));
@@ -263,7 +260,7 @@ impl Game {
 
         // Update all unit states
         if let Some(tribe) = state.tribes.get(&new_pov) {
-            let unit_count = tribe.units.len();
+            let _unit_count = tribe.units.len();
             let frozen_units: Vec<(usize, bool)> = tribe
                 .units
                 .iter()
@@ -324,7 +321,7 @@ impl Game {
             sync_scores(state);
             state.settings._recent_moves.push(game_move.move_type());
 
-            let move_undo = result.undo;
+            let move_undo = result.unwrap().undo;
             Box::new(move |s: &mut GameState| {
                 s.settings._recent_moves.pop();
                 discover_undo(s);
@@ -387,7 +384,7 @@ impl Game {
         }
 
         let new_pov = state.settings.current_player_turn_id;
-        set_visible_tiles(state, new_pov);
+        let _ = set_visible_tiles(state, new_pov);
         undos.push(actions::process_start_turn_effects(state, new_pov));
         undos.push(try_discover_other_tribes(state));
 

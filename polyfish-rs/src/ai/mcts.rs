@@ -1,10 +1,9 @@
 use crate::ai::evaluator;
 use crate::game::Game;
 use crate::moves::Move;
-use crate::states::{GameState, PlayerId};
+use crate::states::PlayerId;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
-use std::collections::HashMap;
 
 pub struct MctsAgent {
     pub iterations: usize,

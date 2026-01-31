@@ -20,7 +20,7 @@ impl Move for FreezeAreaMove {
     fn move_type(&self) -> MoveType {
         MoveType::Ability
     }
-    fn execute(&self, state: &mut GameState) -> MoveResult {
+    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let owner = state
             .tiles
             .get(&self.unit_idx)
@@ -36,15 +36,12 @@ impl Move for FreezeAreaMove {
             let mut undos = Vec::new();
             undos.push(crate::actions::freeze_area(state, owner, self.unit_idx));
             undos.push(end_unit_turn(state, owner, a_idx));
-            MoveResult {
+            Ok(MoveResult {
                 undo: chain_undos(undos),
                 rewards: None,
-            }
+            })
         } else {
-            MoveResult {
-                undo: Box::new(|_| {}),
-                rewards: None,
-            }
+            Err("Unit not found".to_string())
         }
     }
     fn describe(&self, _state: &GameState) -> String {

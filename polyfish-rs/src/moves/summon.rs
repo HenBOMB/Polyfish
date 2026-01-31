@@ -32,20 +32,25 @@ impl Move for SummonMove {
         MoveType::Summon
     }
 
-    fn execute(&self, state: &mut GameState) -> MoveResult {
+    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+        // Validation check for cost
+        let settings = get_unit_setting(self.unit_type);
+        let cost = settings.cost;
+        let pov_id = state.settings.current_player_turn_id;
+
+        if let Some(tribe) = state.tribes.get(&pov_id) {
+            if tribe.stars < cost {
+                return Err(format!(
+                    "Insufficient stars for summon: need {}, have {}",
+                    cost, tribe.stars
+                ));
+            }
+        }
+
         // Costs are handled inside summon_unit if costs=true
         match summon_unit(state, self.unit_type, self.tile_index, true, false) {
-            Ok(res) => res,
-            Err(e) => {
-                // Should not happen if generated correctly
-                // Return empty result or panic?
-                // Let's print error and return no-op
-                eprintln!("Summon execution failed: {}", e);
-                MoveResult {
-                    undo: Box::new(|_| {}),
-                    rewards: None,
-                }
-            }
+            Ok(res) => Ok(res),
+            Err(e) => Err(e),
         }
     }
 

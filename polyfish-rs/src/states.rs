@@ -2,7 +2,7 @@
 
 use crate::coords::Coords;
 use crate::types::*;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 pub const HEALTH_SCALE: i32 = 10;

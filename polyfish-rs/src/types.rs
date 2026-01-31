@@ -4,7 +4,6 @@
 // WARNING: DO NOT EDIT ANY OF THESE IDS EVER
 // IDS FROM 120 ARE MISSING AND DO NOT MATCH THE REAL IDS AND MUST BE MANUALLY EDITIED BY A HUMAN WITH ACCESS TO THE REAL GAME ENGINE ON STEAM
 
-use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 
 /// Game mode types

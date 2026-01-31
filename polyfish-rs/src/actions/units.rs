@@ -176,6 +176,7 @@ pub fn step_unit(
     }
 
     let mut undos = Vec::new();
+    let _rewards: Option<()> = None; // Stars, task progress
 
     let tiles_to_reveal = if let Some(tribe) = state.tribes.get(&unit_owner) {
         if let Some(unit) = tribe.units.get(unit_idx) {
@@ -897,15 +898,6 @@ pub fn heal_unit(
             .unwrap_or(0)
     };
 
-    let max_health = {
-        state
-            .tribes
-            .get(&unit_owner)
-            .and_then(|t| t.units.get(unit_idx))
-            .map(|u| get_unit_setting(u.unit_type).health)
-            .unwrap_or(10)
-    };
-
     if let Some(tribe) = state.tribes.get_mut(&unit_owner) {
         if let Some(unit) = tribe.units.get_mut(unit_idx) {
             let max_hp = get_max_health(unit);
@@ -924,11 +916,6 @@ pub fn heal_unit(
 
 // Helper functions
 
-/// Check if a unit type is aquatic or can fly
-fn is_aquatic_or_flying(unit_type: UnitType) -> bool {
-    has_skill(unit_type, SkillType::Float) || has_skill(unit_type, SkillType::Fly)
-}
-
 /// Check if terrain is water
 fn is_water_terrain_type(terrain: TerrainType) -> bool {
     terrain == TerrainType::Water || terrain == TerrainType::Ocean
@@ -938,7 +925,7 @@ fn is_water_terrain_type(terrain: TerrainType) -> bool {
 fn has_enemies_in_range(state: &GameState, owner: PlayerId, from_idx: i32, range: i32) -> bool {
     let adjacent = get_adjacent_indices(state, from_idx, range);
     for idx in adjacent {
-        if let Some(enemy) = get_enemy_at(state, idx, owner) {
+        if let Some(_enemy) = get_enemy_at(state, idx, owner) {
             return true;
         }
     }
@@ -979,7 +966,7 @@ pub fn push_unit(state: &mut GameState, tile_idx: i32) -> Result<crate::moves::M
     let moved_to = calculate_pushable_position(state, unit);
 
     let undo_push: UndoCallback;
-    let mut rewards = None;
+    let rewards = None;
 
     if let Some(dest_idx) = moved_to {
         if get_true_unit_at(state, dest_idx).is_some() {
@@ -1398,4 +1385,225 @@ pub fn poison_unit(state: &mut GameState, unit_owner: PlayerId, unit_idx: usize)
             }
         }
     })
+}
+
+// Boost a unit
+pub fn boost_unit(state: &mut GameState, unit_idx: i32) -> UndoCallback {
+    let mut undos: Vec<UndoCallback> = Vec::new();
+    let unit_owner = if let Some(tile) = state.tiles.get(&unit_idx) {
+        tile._unit_owner_id.unwrap_or(0)
+    } else {
+        0
+    };
+
+    if unit_owner == 0 {
+        return Box::new(|_| {});
+    }
+
+    // Find adjacent friendly units
+    let adj = crate::functions::get_adjacent_indices(state, unit_idx, 1);
+    for adj_idx in adj {
+        if let Some(_target) = crate::functions::get_unit_at(state, adj_idx) {
+            if _target.owner == unit_owner {
+                // Apply boost
+                // Need to find unit index in tribe.
+                let target_owner = _target.owner;
+                if let Some(tribe) = state.tribes.get(&target_owner) {
+                    if let Some(idx) = tribe.units.iter().position(|u| u.coords.idx == adj_idx) {
+                        if !tribe.units[idx]
+                            .effects
+                            .contains(&crate::types::EffectType::Boost)
+                        {
+                            if let Some(tribe_mut) = state.tribes.get_mut(&target_owner) {
+                                tribe_mut.units[idx]
+                                    .effects
+                                    .insert(crate::types::EffectType::Boost);
+                            }
+                            undos.push(Box::new(move |s| {
+                                if let Some(t) = s.tribes.get_mut(&target_owner) {
+                                    if let Some(u) = t.units.get_mut(idx) {
+                                        u.effects.remove(&crate::types::EffectType::Boost);
+                                    }
+                                }
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    crate::actions::chain_undos(undos)
+}
+
+pub fn convert_unit(
+    state: &mut GameState,
+    converter_idx: i32,
+    target_idx: i32,
+) -> Result<UndoCallback, String> {
+    // 1. Validate
+    let converter_owner = state
+        .tiles
+        .get(&converter_idx)
+        .and_then(|t| t._unit_owner_id)
+        .ok_or("No converter")?;
+    let target_owner = state
+        .tiles
+        .get(&target_idx)
+        .and_then(|t| t._unit_owner_id)
+        .ok_or("No target")?;
+
+    // 2. Perform conversion (change owner)
+    // Find unit in old tribe
+    let (mut unit, _old_idx) = {
+        let tribe = state
+            .tribes
+            .get_mut(&target_owner)
+            .ok_or("Target tribe not found")?;
+        let idx = tribe
+            .units
+            .iter()
+            .position(|u| u.coords.idx == target_idx)
+            .ok_or("Target unit not found")?;
+        let unit = tribe.units.remove(idx); // Take it out
+        (unit, idx)
+    };
+
+    // Capture ORIGINAL state for undo
+    let original_unit = unit.clone();
+
+    // Insert into new tribe
+    let new_idx = {
+        let tribe = state
+            .tribes
+            .get_mut(&converter_owner)
+            .ok_or("Converter tribe not found")?;
+        // Update unit owner field
+        unit.owner = converter_owner;
+        unit.converted = true; // Mark as converted
+        unit.attacked = true;
+        unit.moved = true;
+        unit.effects.clear(); // Converted units lose effects
+
+        tribe.units.push(unit); // Move the modified unit
+        tribe.units.len() - 1
+    };
+
+    // Update tile owner
+    if let Some(tile) = state.tiles.get_mut(&target_idx) {
+        tile._unit_owner_id = Some(converter_owner);
+    }
+
+    // Undo
+    Ok(Box::new(move |s| {
+        // Restore to old tribe
+        // Remove from new tribe
+        if let Some(tribe) = s.tribes.get_mut(&converter_owner) {
+            if new_idx < tribe.units.len() {
+                tribe.units.remove(new_idx);
+            }
+        }
+        // Add back to old tribe
+        if let Some(tribe) = s.tribes.get_mut(&target_owner) {
+            // Restore exact original state
+            tribe.units.push(original_unit.clone());
+        }
+        // Restore tile
+        if let Some(tile) = s.tiles.get_mut(&target_idx) {
+            tile._unit_owner_id = Some(target_owner);
+        }
+    }))
+}
+
+/// Disband a unit and partial refund
+pub fn disband_unit(
+    state: &mut GameState,
+    unit_owner: i32,
+    unit_idx: usize,
+) -> Result<UndoCallback, String> {
+    use crate::actions::{chain_undos, gain_stars};
+    use crate::settings::get_unit_setting;
+
+    let unit_type = if let Some(tribe) = state.tribes.get(&unit_owner) {
+        if let Some(u) = tribe.units.get(unit_idx) {
+            u.unit_type
+        } else {
+            return Err("Unit not found".to_string());
+        }
+    } else {
+        return Err("Tribe not found".to_string());
+    };
+
+    let settings = get_unit_setting(unit_type);
+    let refund = (settings.cost as f32 * 0.5).floor() as i32;
+
+    let mut undos = Vec::new();
+    if refund > 0 {
+        undos.push(gain_stars(state, refund));
+    }
+    undos.push(remove_unit(state, unit_owner, unit_idx, None, None));
+
+    Ok(chain_undos(undos))
+}
+
+/// Upgrade a unit (e.g. Boat -> Ship)
+pub fn upgrade_unit(
+    state: &mut GameState,
+    tile_idx: i32,
+    target_type: crate::types::UnitType,
+) -> Result<UndoCallback, String> {
+    use crate::actions::spend_stars;
+    use crate::settings::get_unit_setting;
+
+    let settings = get_unit_setting(target_type);
+    let mut undos: Vec<UndoCallback> = Vec::new();
+
+    // 1. Spend stars
+    if settings.cost > 0 {
+        undos.push(spend_stars(state, settings.cost));
+    }
+
+    // 2. Find and update unit
+    let unit_owner = state
+        .tiles
+        .get(&tile_idx)
+        .and_then(|t| t._unit_owner_id)
+        .ok_or("No unit at tile")?;
+
+    if unit_owner == 0 {
+        return Err("No unit at tile".to_string());
+    }
+
+    let unit_idx = if let Some(tribe) = state.tribes.get(&unit_owner) {
+        tribe
+            .units
+            .iter()
+            .position(|u| u.coords.idx == tile_idx)
+            .ok_or("Unit not found in tribe")?
+    } else {
+        return Err("Tribe not found".to_string());
+    };
+
+    let old_type = if let Some(tribe) = state.tribes.get(&unit_owner) {
+        tribe.units[unit_idx].unit_type
+    } else {
+        return Err("Tribe not found".to_string());
+    };
+
+    // Update unit
+    if let Some(tribe) = state.tribes.get_mut(&unit_owner) {
+        if let Some(unit) = tribe.units.get_mut(unit_idx) {
+            unit.unit_type = target_type;
+        }
+    }
+
+    // Undo unit change
+    undos.push(Box::new(move |s| {
+        if let Some(tribe) = s.tribes.get_mut(&unit_owner) {
+            if let Some(unit) = tribe.units.get_mut(unit_idx) {
+                unit.unit_type = old_type;
+            }
+        }
+    }));
+
+    Ok(crate::actions::chain_undos(undos))
 }

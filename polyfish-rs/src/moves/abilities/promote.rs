@@ -1,11 +1,9 @@
 //! Promote unit ability (Veteran)
 
-use crate::actions::units::heal_unit;
 use crate::actions::{chain_undos, UndoCallback};
 use crate::moves::{Move, MoveResult};
-use crate::settings::get_unit_setting;
 use crate::states::GameState;
-use crate::types::{MoveType, UnitType};
+use crate::types::MoveType;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,31 +22,16 @@ impl Move for PromoteMove {
         MoveType::Ability // Or new implementation MoveType::Promote? No, TS uses Ability
     }
 
-    fn execute(&self, state: &mut GameState) -> MoveResult {
-        // Promote logic:
-        // 1. Increase max HP + 5 (Veteran) OR Heal to full?
-        //    Polytopia: Choosing "Veteran" increases max HP by 5 and refills HP.
-        //    Other option? Usually "Veteran" is the only choice for human?
-        //    Wait, Promote happens when unit kills 3 times (XP).
-        //    It's a reward (level up unit).
-        //    In TS, Promote.ts handles it.
-        //    It usually just sets maxHp += 5 and heals.
-
+    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let mut undos: Vec<UndoCallback> = Vec::new();
 
-        // Find unit
-        let tile = match state.tiles.get(&self.unit_idx) {
-            Some(t) => t,
-            None => {
-                return MoveResult {
-                    undo: Box::new(|_| {}),
-                    rewards: None,
-                }
-            }
-        };
-        let owner = tile._unit_owner_id.unwrap_or(0);
+        let unit_owner = state
+            .tiles
+            .get(&self.unit_idx)
+            .and_then(|t| t._unit_owner_id)
+            .unwrap_or(0);
 
-        let unit_idx = if let Some(tribe) = state.tribes.get(&owner) {
+        let unit_idx_in_tribe = if let Some(tribe) = state.tribes.get(&unit_owner) {
             tribe
                 .units
                 .iter()
@@ -57,13 +40,8 @@ impl Move for PromoteMove {
             None
         };
 
-        if let Some(idx) = unit_idx {
-            // Apply promotion
-            // Modifying GameState directly vs Action?
-            // Action `promote_unit`?
-            // Or manual modification.
-
-            if let Some(tribe) = state.tribes.get_mut(&owner) {
+        if let Some(idx) = unit_idx_in_tribe {
+            if let Some(tribe) = state.tribes.get_mut(&unit_owner) {
                 if let Some(unit) = tribe.units.get_mut(idx) {
                     let old_hp = unit.health;
                     let old_veteran = unit.veteran;
@@ -73,7 +51,7 @@ impl Move for PromoteMove {
                     unit.health = crate::functions::get_max_health(unit);
 
                     undos.push(Box::new(move |s: &mut GameState| {
-                        if let Some(tribe) = s.tribes.get_mut(&owner) {
+                        if let Some(tribe) = s.tribes.get_mut(&unit_owner) {
                             if let Some(unit) = tribe.units.get_mut(idx) {
                                 unit.veteran = old_veteran;
                                 unit.health = old_hp;
@@ -82,11 +60,13 @@ impl Move for PromoteMove {
                     }));
                 }
             }
-        }
 
-        MoveResult {
-            undo: chain_undos(undos),
-            rewards: None,
+            Ok(MoveResult {
+                undo: chain_undos(undos),
+                rewards: None,
+            })
+        } else {
+            Err("Unit not found".to_string())
         }
     }
 

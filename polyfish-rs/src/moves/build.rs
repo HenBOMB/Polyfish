@@ -2,8 +2,6 @@
 //!
 //! Build a structure on a tile.
 
-use crate::actions::structure::create_structure;
-use crate::actions::UndoCallback;
 use crate::moves::{Move, MoveResult};
 use crate::states::GameState;
 use crate::types::{MoveType, StructureType};
@@ -32,58 +30,32 @@ impl Move for BuildMove {
         MoveType::Build
     }
 
-    fn execute(&self, state: &mut GameState) -> MoveResult {
-        use crate::actions::city::add_population;
-        use crate::actions::{chain_undos, spend_stars};
-        use crate::functions::{get_adjacent_indices, get_city_owning_tile, get_structure_at};
+    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         use crate::settings::structures::get_structure_setting;
 
-        let mut undos = Vec::new();
+        let pov_id = state.settings.current_player_turn_id;
         let settings = get_structure_setting(self.structure_type);
 
-        // 1. Spend stars
+        // 0. Validation
         if let Some(cost) = settings.cost {
-            undos.push(spend_stars(state, cost));
-        }
-
-        // 2. Create structure
-        undos.push(create_structure(
-            state,
-            self.tile_index,
-            self.structure_type,
-            1,
-        ));
-
-        // 3. Add population
-        if let Some(city) = get_city_owning_tile(state, self.tile_index) {
-            let city_tile_idx = city.tile_index;
-            let mut reward_pop = settings.reward_pop;
-
-            // Handle adjacent multipliers (Windmill, Sawmill, Forge)
-            if !settings.adjacent_types.is_empty() {
-                let adj = get_adjacent_indices(state, self.tile_index, 1);
-                let adj_count = adj
-                    .iter()
-                    .filter(|&&adj_idx| {
-                        if let Some(s) = get_structure_at(state, adj_idx) {
-                            settings.adjacent_types.contains(&s.structure_type)
-                        } else {
-                            false
-                        }
-                    })
-                    .count() as i32;
-                reward_pop *= adj_count;
-            }
-
-            if reward_pop > 0 {
-                undos.push(add_population(state, city_tile_idx, reward_pop));
+            if let Some(tribe) = state.tribes.get(&pov_id) {
+                if tribe.stars < cost {
+                    return Err(format!(
+                        "Insufficient stars for build: need {}, have {}",
+                        cost, tribe.stars
+                    ));
+                }
+            } else {
+                return Err("Tribe not found".to_string());
             }
         }
 
-        MoveResult {
-            undo: chain_undos(undos),
+        use crate::actions::structure::build_structure;
+
+        Ok(MoveResult {
+            undo: build_structure(state, self.tile_index, self.structure_type),
             rewards: None,
-        }
+        })
     }
 
     fn describe(&self, _state: &GameState) -> String {
@@ -106,7 +78,6 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
         use crate::functions::{get_resource_at, get_structure_at};
         use crate::settings::resources::get_resource_setting;
         use crate::settings::structures::{get_structure_setting, PLACEABLE_STRUCTURES};
-        use crate::types::ResourceType;
 
         for city in &tribe.cities {
             for &idx in &city._territory {
@@ -115,8 +86,6 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                     continue;
                 }
 
-                // Check if tile is empty of structures
-                // (Except Roads can coexist? For simplicity assume 1 struct per tile for now or check override)
                 if get_structure_at(state, idx).is_some() {
                     // TODO: Handle Road + Structure combinations
                     continue;

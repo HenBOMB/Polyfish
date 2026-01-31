@@ -15,7 +15,7 @@ use polyfish::moves::{
     AttackMove, BuildMove, CaptureMove, DisbandMove, EndTurnMove, HarvestMove, Move, RecoverMove,
     ResearchMove, RewardMove, StepMove, SummonMove, UpgradeMove,
 };
-use polyfish::types::{AbilityType, MoveType, TribeType};
+use polyfish::types::{AbilityType, TribeType};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;

@@ -23,16 +23,16 @@ impl Move for ClearForestMove {
         MoveType::Ability
     }
 
-    fn execute(&self, state: &mut GameState) -> MoveResult {
+    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let mut undos = Vec::new();
         // Clear Forest -> Field + Gain 1 Star
         undos.push(modify_terrain(state, self.target, TerrainType::Field));
         undos.push(gain_stars(state, 1));
 
-        MoveResult {
+        Ok(MoveResult {
             undo: chain_undos(undos),
             rewards: None,
-        }
+        })
     }
 
     fn describe(&self, _state: &GameState) -> String {
@@ -64,16 +64,16 @@ impl Move for GrowForestMove {
         MoveType::Ability
     }
 
-    fn execute(&self, state: &mut GameState) -> MoveResult {
+    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let mut undos = Vec::new();
         // Spiritualism: Field -> Forest (Cost 5)
         undos.push(modify_terrain(state, self.target, TerrainType::Forest));
         undos.push(spend_stars(state, 5));
 
-        MoveResult {
+        Ok(MoveResult {
             undo: chain_undos(undos),
             rewards: None,
-        }
+        })
     }
     fn describe(&self, _state: &GameState) -> String {
         format!("Grow Forest at {}", self.target)
@@ -104,7 +104,7 @@ impl Move for BurnForestMove {
         MoveType::Ability
     }
 
-    fn execute(&self, state: &mut GameState) -> MoveResult {
+    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let mut undos = Vec::new();
         // Construction: Forest -> Field + Add Crop (Cost 2)
         undos.push(modify_terrain(state, self.target, TerrainType::Field));
@@ -115,10 +115,10 @@ impl Move for BurnForestMove {
             Some(ResourceType::Crop),
         ));
 
-        MoveResult {
+        Ok(MoveResult {
             undo: chain_undos(undos),
             rewards: None,
-        }
+        })
     }
     fn describe(&self, _state: &GameState) -> String {
         format!("Burn Forest at {}", self.target)
@@ -158,8 +158,12 @@ pub fn generate_forest_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
                 continue;
             }
             // Check structure
-            if crate::functions::get_structure_at(state, tile_idx).is_some() {
-                continue;
+            // User Request: "i shouldnt be able to use my abilities or do anything to that forest" if a structure is present.
+            // Exception: Roads do NOT block forest abilities.
+            if let Some(structure) = crate::functions::get_structure_at(state, tile_idx) {
+                if structure.structure_type != crate::types::StructureType::Road {
+                    continue;
+                }
             }
 
             if let Some(tile) = state.tiles.get(&tile_idx) {

@@ -29,7 +29,7 @@ impl Move for RewardMove {
         MoveType::Reward
     }
 
-    fn execute(&self, state: &mut GameState) -> MoveResult {
+    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let mut undos: Vec<UndoCallback> = Vec::new();
         let target = self.target;
         let reward_type = self.reward;
@@ -156,10 +156,10 @@ impl Move for RewardMove {
             }
         }
 
-        MoveResult {
+        Ok(MoveResult {
             undo: chain_undos(undos),
             rewards: None,
-        }
+        })
     }
 
     fn describe(&self, _state: &GameState) -> String {

@@ -1,7 +1,5 @@
 //! Attack move implementation
 
-use crate::actions::units::attack_unit;
-use crate::functions::{get_enemy_at, get_unit_at};
 use crate::moves::{Move, MoveResult};
 use crate::states::GameState;
 use crate::types::MoveType;
@@ -26,93 +24,46 @@ impl Move for AttackMove {
         MoveType::Attack
     }
 
-    fn execute(&self, state: &mut GameState) -> MoveResult {
-        let pov_id = state.settings.current_player_turn_id;
-
+    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         // Find attacker
         let (attacker_owner, attacker_idx) = {
-            let mut found = None;
-            if let Some(tribe) = state.tribes.get(&pov_id) {
-                for (idx, unit) in tribe.units.iter().enumerate() {
-                    if unit.coords.idx == self.src {
-                        found = Some((pov_id, idx));
-                        break;
-                    }
-                }
-            }
-            match found {
-                Some(f) => f,
-                None => {
-                    return MoveResult {
-                        undo: Box::new(|_| {}),
-                        rewards: None,
-                    }
-                }
-            }
+            let tile = state.tiles.get(&self.src).ok_or("Source tile not found")?;
+            let owner = tile._unit_owner_id.ok_or("No unit at source")?;
+            let tribe = state.tribes.get(&owner).ok_or("Tribe not found")?;
+            let idx = tribe
+                .units
+                .iter()
+                .position(|u| u.coords.idx == self.src)
+                .ok_or("Unit not found in tribe")?;
+            (owner, idx)
         };
-
-        // Infiltrate check
-        let attacker_unit = &state.tribes[&attacker_owner].units[attacker_idx];
-        if crate::functions::has_skill(attacker_unit, crate::types::SkillType::Infiltrate) {
-            return MoveResult {
-                undo: crate::actions::units::infiltrate_city(
-                    state,
-                    attacker_owner,
-                    attacker_idx,
-                    self.target,
-                ),
-                rewards: None,
-            };
-        }
 
         // Find defender
         let (defender_owner, defender_idx) = {
-            let mut found = None;
-            for (tribe_id, tribe) in &state.tribes {
-                if *tribe_id == pov_id {
-                    continue; // Skip our own units
-                }
-                for (idx, unit) in tribe.units.iter().enumerate() {
-                    if unit.coords.idx == self.target {
-                        found = Some((*tribe_id, idx));
-                        break;
-                    }
-                }
-                if found.is_some() {
-                    break;
-                }
-            }
-            match found {
-                Some(f) => f,
-                None => {
-                    return MoveResult {
-                        undo: Box::new(|_| {}),
-                        rewards: None,
-                    }
-                }
-            }
+            let tile = state
+                .tiles
+                .get(&self.target)
+                .ok_or("Target tile not found")?;
+            let owner = tile._unit_owner_id.ok_or("No unit at target")?;
+            let tribe = state.tribes.get(&owner).ok_or("Tribe not found")?;
+            let idx = tribe
+                .units
+                .iter()
+                .position(|u| u.coords.idx == self.target)
+                .ok_or("Unit not found in tribe")?;
+            (owner, idx)
         };
 
-        // Check for peace treaty
-        if crate::functions::is_at_peace(state, pov_id, defender_owner) {
-            return MoveResult {
-                undo: Box::new(|_| {}),
-                rewards: None,
-            };
-        }
-
-        let undo = attack_unit(
-            state,
-            attacker_owner,
-            attacker_idx,
-            defender_owner,
-            defender_idx,
-        );
-
-        MoveResult {
-            undo,
+        Ok(MoveResult {
+            undo: crate::actions::units::attack_unit(
+                state,
+                attacker_owner,
+                attacker_idx,
+                defender_owner,
+                defender_idx,
+            ),
             rewards: None,
-        }
+        })
     }
 
     fn describe(&self, _state: &GameState) -> String {

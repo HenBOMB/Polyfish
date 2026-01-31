@@ -457,8 +457,7 @@ pub fn get_tech_unlocking_unit(unit_type: UnitType) -> Option<TechnologyType> {
         UnitType::Polytaur => Some(ForestMagic),
 
         // Aquarion
-        UnitType::Tridention => Some(Amphibian),
-
+        // UnitType::Tridention => Some(Amphibian),
         _ => None,
     }
 }

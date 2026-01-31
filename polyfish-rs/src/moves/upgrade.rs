@@ -2,12 +2,8 @@
 //!
 //! Upgrade a unit (e.g. Boat -> Ship).
 
-use crate::actions::chain_undos;
-use crate::actions::spend_stars;
-use crate::functions;
 use crate::moves::{Move, MoveResult};
 use crate::settings::get_unit_setting;
-use crate::settings::technology;
 use crate::states::GameState;
 use crate::types::{MoveType, UnitType};
 
@@ -33,82 +29,30 @@ impl Move for UpgradeMove {
         MoveType::Summon // Reusing Summon type per TS implementation
     }
 
-    fn execute(&self, state: &mut GameState) -> MoveResult {
-        let mut undos = Vec::new();
+    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+        let pov_id = state.settings.current_player_turn_id;
 
-        // Find unit
-        let unit_owner = state
-            .tiles
-            .get(&self.tile_index)
-            .and_then(|t| t._unit_owner_id)
-            .unwrap_or(0);
-        let tribe = match state.tribes.get_mut(&unit_owner) {
-            Some(t) => t,
-            None => {
-                return MoveResult {
-                    undo: Box::new(|_| {}),
-                    rewards: None,
-                }
-            }
-        };
-
-        let unit_idx = match tribe
-            .units
-            .iter()
-            .position(|u| u.coords.idx == self.tile_index)
-        {
-            Some(i) => i,
-            None => {
-                return MoveResult {
-                    undo: Box::new(|_| {}),
-                    rewards: None,
-                }
-            }
-        };
-
-        let unit = &mut tribe.units[unit_idx];
-        let old_type = unit.unit_type;
+        // Check validation
+        use crate::settings::get_unit_setting;
         let settings = get_unit_setting(self.target_type);
-
-        // Spend stars
-        undos.push(spend_stars(state, settings.cost));
-
-        // Upgrade unit
-        if let Some(tribe) = state.tribes.get_mut(&unit_owner) {
-            if let Some(unit) = tribe.units.get_mut(unit_idx) {
-                unit.unit_type = self.target_type;
-                // Handle passenger logic for naval upgrades?
-                // Unit upgrading from Dinghy -> Ship usually keeps original passenger info?
-                // Or unit IS the boat?
-                // TS Upgrade.ts: `xorUnit.passenger(state, unit, UnitType.None, oldUnitType);`
-                // `unit.passengerType = oldUnitType;`
-                // Wait. If upgrading Dinghy -> Ship, the Dinghy becomes the passenger?
-                // No. `oldUnitType` was Dinghy?
-                // Usually: A Warrior enters Port -> becomes Dinghy (Warrior is passenger).
-                // Dinghy upgrades to Ship -> Ship (Warrior is still passenger).
-                // `unit.passengerType` should persist.
-                // TS: `unit.passengerType = oldUnitType;` ? That looks wrong if oldUnitType was Dinghy.
-                // Unless Upgrade is replacing the hull?
-                // Let's assume for now we just change unit_type. Passenger usually preserved.
-                // But wait, if we are upgrading Boat -> Ship, `unit_type` changes.
-                // Does `passenger_type` change? No.
+        if let Some(tribe) = state.tribes.get(&pov_id) {
+            if tribe.stars < settings.cost {
+                return Err(format!(
+                    "Insufficient stars for upgrade: need {}, have {}",
+                    settings.cost, tribe.stars
+                ));
             }
+        } else {
+            return Err("Tribe not found".to_string());
         }
 
-        let target_type = self.target_type;
-        undos.push(Box::new(move |s| {
-            if let Some(tribe) = s.tribes.get_mut(&unit_owner) {
-                if let Some(unit) = tribe.units.get_mut(unit_idx) {
-                    unit.unit_type = old_type;
-                    // Restore stars handled by spend_stars undo
-                }
-            }
-        }));
+        // Delegate to action
+        let undo = crate::actions::units::upgrade_unit(state, self.tile_index, self.target_type)?;
 
-        MoveResult {
-            undo: chain_undos(undos),
+        Ok(MoveResult {
+            undo,
             rewards: None,
-        }
+        })
     }
 
     fn describe(&self, _state: &GameState) -> String {

@@ -51,7 +51,7 @@ pub trait Move: std::fmt::Debug {
     fn move_type(&self) -> MoveType;
 
     /// Execute the move on the game state
-    fn execute(&self, state: &mut GameState) -> MoveResult;
+    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String>;
 
     /// Human-readable description
     fn describe(&self, state: &GameState) -> String;
@@ -69,12 +69,12 @@ impl Move for EndTurnMove {
         MoveType::EndTurn
     }
 
-    fn execute(&self, _state: &mut GameState) -> MoveResult {
+    fn execute(&self, _state: &mut GameState) -> Result<MoveResult, String> {
         // EndTurn is handled specially in Game::play_move
-        MoveResult {
+        Ok(MoveResult {
             undo: Box::new(|_| {}),
             rewards: None,
-        }
+        })
     }
 
     fn describe(&self, _state: &GameState) -> String {
@@ -354,7 +354,7 @@ fn compute_reachable_tiles(
 }
 
 fn compute_movement_cost(state: &GameState, unit: &UnitState, from_idx: i32, to_idx: i32) -> f32 {
-    let mut cost: f32 = 1.0;
+    let cost: f32 = 1.0;
 
     let settings = get_unit_setting(unit.unit_type);
 
@@ -500,17 +500,6 @@ fn is_naval_unit(unit_type: UnitType) -> bool {
             | UnitType::Bomber
             | UnitType::Juggernaut
     )
-}
-
-fn is_aquatic_or_can_fly(unit: &UnitState, allow_boats: bool) -> bool {
-    let settings = get_unit_setting(unit.unit_type);
-    if settings.skills.contains(&SkillType::Float) || settings.skills.contains(&SkillType::Fly) {
-        return true;
-    }
-    if allow_boats && is_naval_unit(unit.unit_type) {
-        return true;
-    }
-    false
 }
 
 fn is_adjacent_to_enemy(state: &GameState, idx: i32, owner: PlayerId) -> bool {

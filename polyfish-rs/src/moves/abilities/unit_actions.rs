@@ -1,7 +1,7 @@
 use crate::functions::{self, get_adjacent_indices, get_max_health, has_effect};
+use crate::moves::Move;
 use crate::moves::{DisbandMove, PromoteMove, RecoverMove};
-use crate::moves::{Move, MoveResult};
-use crate::settings::{get_unit_setting, technology};
+use crate::settings::technology;
 use crate::states::{GameState, TribeState, UnitState};
 use crate::types::{EffectType, SkillType, StructureType, TechnologyType};
 

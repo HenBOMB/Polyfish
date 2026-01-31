@@ -1,15 +1,17 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PolyAI Simulator</title>
+    <title>PolyAI Engine</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="css/premium.css">
     <link rel="stylesheet" href="css/game.css">
 </head>
+
 <body>
     <div id="app-container">
         <!-- Sidebar: Stats & Tech -->
@@ -53,7 +55,7 @@
             <div id="map-viewport">
                 <div id="map"></div>
             </div>
-            
+
             <!-- Floating Hover Info -->
             <div id="hovertile" class="glass hidden"></div>
 
@@ -67,12 +69,12 @@
                         <span class="icon">👁</span> FOW
                     </button>
                 </div>
-                
+
                 <div class="control-group central">
                     <button id="btn-rng" class="btn highlight" title="Perform Random Move">
                         <span class="icon">🎲</span> RNG
                     </button>
-                    
+
                     <div class="mcts-control">
                         <button id="btn-step" class="btn primary" title="Run MCTS Search">
                             <span class="icon">🤖</span> MCTS Step
@@ -106,4 +108,5 @@
     <script src="js/types.js"></script>
     <script src="js/main.js"></script>
 </body>
+
 </html>

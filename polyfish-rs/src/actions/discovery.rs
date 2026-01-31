@@ -2,7 +2,7 @@
 
 use crate::actions::city::add_population;
 use crate::actions::{chain_undos, UndoCallback};
-use crate::functions::{get_adjacent_indices, get_capital_city, get_pov_tribe};
+use crate::functions::{get_adjacent_indices, get_capital_city};
 use crate::settings::has_skill;
 use crate::states::{GameState, UnitState};
 use crate::types::{SkillType, StructureType, TerrainType};
@@ -108,8 +108,8 @@ pub fn predict_explorer(state: &GameState, start_idx: i32) -> Vec<i32> {
     let mut current_visible = state._visible_tiles.clone();
     let mut explored_tiles: HashSet<i32> = HashSet::new();
     let mut current_tile = start_idx;
-    let pov_id = state.settings.current_player_turn_id;
-    let map_size = state.settings.size;
+    let _pov_id = state.settings.current_player_turn_id;
+    let _map_size = state.settings.size;
 
     for _ in 0..15 {
         // Find nearest cloud within 4 moves
@@ -211,9 +211,8 @@ fn get_allowed_neighbors(state: &GameState, idx: i32, include_unexplored: bool) 
         Some(t) => t,
         None => return Vec::new(),
     };
-
-    use crate::settings::{has_skill, has_technology};
-    use crate::types::{SkillType, TechnologyType};
+    use crate::settings::has_technology;
+    use crate::types::TechnologyType;
 
     let mut odds = 0.45;
     if has_technology(&tribe.tech_vanilla, TechnologyType::Fishing) {

@@ -26,7 +26,7 @@ impl Move for StepMove {
         MoveType::Step
     }
 
-    fn execute(&self, state: &mut GameState) -> MoveResult {
+    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let pov_id = state.settings.current_player_turn_id;
 
         // Find the unit at src
@@ -43,10 +43,10 @@ impl Move for StepMove {
             match found {
                 Some(f) => f,
                 None => {
-                    return MoveResult {
+                    return Ok(MoveResult {
                         undo: Box::new(|_| {}),
                         rewards: None,
-                    }
+                    });
                 }
             }
         };
@@ -73,19 +73,19 @@ impl Move for StepMove {
                     crate::types::EffectType::Invisible,
                 );
 
-                return MoveResult {
+                return Ok(MoveResult {
                     undo: undo_reveal,
                     rewards: None,
-                };
+                });
             }
         }
 
         let undo = step_unit(state, unit_owner, unit_idx, self.target, false);
 
-        MoveResult {
+        Ok(MoveResult {
             undo,
             rewards: None,
-        }
+        })
     }
 
     fn describe(&self, _state: &GameState) -> String {

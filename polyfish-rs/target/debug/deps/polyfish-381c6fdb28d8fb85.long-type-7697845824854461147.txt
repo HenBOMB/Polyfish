@@ -1,0 +1,1 @@
+Vec<Box<(dyn for<'a> FnOnce(&'a mut states::GameState) + 'static)>>

@@ -4,9 +4,8 @@
 
 use crate::coords::Coords;
 use crate::default_fow;
-use crate::states::GameSettings;
 use crate::states::{GameState, TileState, TribeState};
-use crate::types::{ClimateType, ModeType, ResourceType, TerrainType, TribeType};
+use crate::types::{ClimateType, TerrainType, TribeType};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::collections::{HashMap, HashSet};
@@ -38,9 +37,8 @@ impl Default for MapGenSettings {
 #[derive(Clone, Debug)]
 struct GenTile {
     idx: i32,
-    terrain_type: TerrainType, // 'type' in python
-    above: Option<String>,     // 'above' in python (resource/structure/ruin tag)
-    road: bool,
+    terrain_type: TerrainType,         // 'type' in python
+    above: Option<String>,             // 'above' in python (resource/structure/ruin tag)
     tribe_affinity: Option<TribeType>, // 'tribe' in python (owner affinity)
     // 'otribe' seems to be original tribe affinity?
     orig_tribe_affinity: Option<TribeType>,
@@ -52,7 +50,6 @@ impl GenTile {
             idx,
             terrain_type: TerrainType::Ocean,
             above: None,
-            road: false,
             tribe_affinity: None,
             orig_tribe_affinity: None,
         }
@@ -63,10 +60,6 @@ impl GenTile {
 
 fn get_coords(idx: i32, size: i32) -> (i32, i32) {
     (idx % size, idx / size)
-}
-
-fn get_idx(x: i32, y: i32, size: i32) -> i32 {
-    y * size + x
 }
 
 fn distance(a: i32, b: i32, size: i32) -> i32 {
@@ -799,7 +792,10 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         // Correct starting technology
         use crate::states::TechnologyState;
         use crate::types::TechnologyType;
-        let mut starting_tech = Vec::new();
+        let mut starting_tech = vec![TechnologyState {
+            tech_type: TechnologyType::Unrequired,
+            discovered: true,
+        }];
         let tech_type = match tribe {
             TribeType::Imperius => Some(TechnologyType::Organization),
             TribeType::Bardur => Some(TechnologyType::Hunting),
@@ -907,6 +903,16 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                             }
                         }
                     }
+
+                    // Also add a StructureState for the capital (it counts as a Village/City structure)
+                    use crate::states::StructureState;
+                    use crate::types::StructureType;
+                    let mut s_state = StructureState::default();
+                    s_state.structure_type = StructureType::Village;
+                    s_state.tile_index = gen_tile.idx;
+                    // Cities are founded at the start
+                    s_state.founded = 0;
+                    game_state.structures.insert(gen_tile.idx, Some(s_state));
                 }
                 "ruin" => {
                     use crate::states::StructureState;
@@ -1049,9 +1055,9 @@ pub fn generate(settings: MapGenSettings) -> GameState {
     }
 
     // Spawn starting units on capitals
-    use crate::states::PlayerId;
     use crate::types::UnitType;
-    let mut tribe_ids: Vec<PlayerId> = game_state.tribes.keys().cloned().collect();
+    // Use set of all tribes
+    let tribe_ids: HashSet<i32> = game_state.tribes.keys().cloned().collect();
     for pid in tribe_ids {
         if let Some(tribe) = game_state.tribes.get_mut(&pid) {
             let tribe_type = tribe.tribe_type;

@@ -18,7 +18,7 @@ impl Move for DecomposeMove {
     fn move_type(&self) -> MoveType {
         MoveType::Ability
     }
-    fn execute(&self, state: &mut GameState) -> MoveResult {
+    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let pov_id = state.settings.current_player_turn_id;
         state
             ._end_of_turn_queue
@@ -27,12 +27,12 @@ impl Move for DecomposeMove {
                 owner_id: pov_id,
             });
 
-        MoveResult {
+        Ok(MoveResult {
             undo: Box::new(move |s: &mut GameState| {
                 s._end_of_turn_queue.pop();
             }),
             rewards: None,
-        }
+        })
     }
     fn describe(&self, _state: &GameState) -> String {
         format!("Decompose structure at {}", self.tile_index)
