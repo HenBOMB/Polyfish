@@ -153,9 +153,9 @@ class MapRenderer {
             cityEl.innerHTML = `<div class="city-stats">
                 <span>${tile.capitalOf > 0 ? '👑 ' : ''}${city.name || 'City'} Lvl ${city.level}</span>
                 <span>${city.connectedToCapital ? '🔗' : ''}${rewards}</span>
+                <span>${new Array(unitCount).fill('🪖').join('')}</span>
                 <span>+${city.production} 💰</span>
-                <span>${city.population}/${city.level + 1} 😀</span>
-                <span>${unitCount} 🪖</span>
+                <span>${city.population} 😀</span>
             </div>`;
         } else {
             this.removeLayer(idx, 'city');
@@ -429,7 +429,7 @@ function renderTechTree(tribe) {
         badge.style.color = 'var(--gold)';
         badge.textContent = `→ ${name}`;
 
-        const move = currentLegalMoves.find(m => m && m.moveType === 7 && m.tech === techId);
+        const move = currentLegalMoves.find(m => m && (m.moveType === 7 || m.tech !== undefined) && m.tech === techId);
         if (move) {
             badge.style.cursor = 'pointer';
             badge.onclick = () => playMove(move);
@@ -459,25 +459,27 @@ function renderMovesList(moves) {
         }
     });
 
-    uniqueMoves.filter(x => x.moveType).slice(0, 50).forEach(move => {
+    uniqueMoves.slice(0, 50).forEach(move => {
         const li = document.createElement('li');
         li.style.cursor = 'pointer';
         li.classList.add('move-item');
 
+        const moveType = move.moveType !== undefined ? move.moveType : (move.tech !== undefined ? 7 : (move.structure !== undefined ? 6 : (move.ability !== undefined ? 3 : (move.reward !== undefined ? 9 : 0))));
+
         let text = '';
-        const typeName = MoveTypeNames[move.moveType] || move.moveType;
+        const typeName = MoveTypeNames[moveType] || moveType;
         const resource = GAME_STATE.resources[move.target];
         const tile = GAME_STATE.tiles[move.target];
         const structure = GAME_STATE.structures[move.target];
 
-        if (move.moveType === 7) text = `Research ${TechnologyNames[move.tech] || move.tech}`;
-        else if (move.moveType === 6) text = `🔨 ${StructureNames[move.structure]} @ ${move.tileIndex}`;
-        else if (move.moveType === 5) text = `🥝 ${resource ? ResourceTypes[resource.type] : 'Resource'}`;
+        if (moveType === 7) text = `Research ${TechnologyNames[move.tech] || move.tech}`;
+        else if (moveType === 6) text = `🔨 ${StructureNames[move.structure]} @ ${move.tileIndex}`;
+        else if (moveType === 5) text = `🥝 ${resource ? ResourceTypes[resource.type] : 'Resource'}`;
         // capture
-        else if (move.moveType === 8) text = `🗿 ${tile && tile.owner > 0 ? 'City' : 'Village'} ${structure ? StructureNames[structure.type] : ''}`;
-        else if (move.moveType === 9) text = `${RewardEmojis[move.reward]} ${RewardTypes[move.reward]}`;
-        else if (move.moveType === 10) text = 'End Turn';
-        else text = `${typeName} (${move.moveType}) ${move.src ?? move.target ?? ''} → ${move.target ?? ''}`;
+        else if (moveType === 8) text = `🗿 ${tile && tile.owner > 0 ? 'City' : 'Village'} ${structure ? StructureNames[structure.type] : ''}`;
+        else if (moveType === 9) text = `${RewardEmojis[move.reward]} ${RewardTypes[move.reward]}`;
+        else if (moveType === 10) text = 'End Turn';
+        else text = `${typeName} (${moveType}) ${move.src ?? move.target ?? ''} → ${move.target ?? ''}`;
 
         li.textContent = text;
         li.onclick = () => playMove(move);

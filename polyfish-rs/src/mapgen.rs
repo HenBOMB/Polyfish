@@ -255,6 +255,78 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         let quad_size = size / quads_per_side;
 
         let mut available_quads: Vec<i32> = (0..quad_count).collect();
+
+        // --- FIX 1: Smart Quadrant Selection ---
+        for _ in 0..settings.tribes.len() {
+            if available_quads.is_empty() {
+                break;
+            }
+
+            let q_idx = if capital_cells.is_empty() {
+                // First player picks randomly
+                rng.gen_range(0..available_quads.len())
+            } else {
+                // Subsequent players pick the quadrant that maximizes distance to existing capitals
+                // We calculate the center of the available quadrants and compare to existing capitals
+                let mut best_idx = 0;
+                let mut max_min_dist = -1;
+
+                for (idx, &quad) in available_quads.iter().enumerate() {
+                    let qx = quad % quads_per_side;
+                    let qy = quad / quads_per_side;
+                    let center_x = qx * quad_size + (quad_size / 2);
+                    let center_y = qy * quad_size + (quad_size / 2);
+                    let center_idx = center_y * size + center_x;
+
+                    let mut min_dist_to_capitals = i32::MAX;
+                    for &cap in &capital_cells {
+                        min_dist_to_capitals =
+                            min_dist_to_capitals.min(distance(center_idx, cap, size));
+                    }
+
+                    if min_dist_to_capitals > max_min_dist {
+                        max_min_dist = min_dist_to_capitals;
+                        best_idx = idx;
+                    }
+                }
+                // Add a little randomness if multiple quadrants are equally good (like in 4 corners)
+                // but for 1v1 this effectively forces opposite corners.
+                best_idx
+            };
+
+            let quad = available_quads.remove(q_idx);
+
+            let qx = quad % quads_per_side;
+            let qy = quad / quads_per_side;
+
+            let margin = 2;
+            let start_x = (qx * quad_size + margin).min(size - 3);
+            let end_x = ((qx + 1) * quad_size - margin)
+                .max(start_x + 1)
+                .min(size - 2);
+            let start_y = (qy * quad_size + margin).min(size - 3);
+            let end_y = ((qy + 1) * quad_size - margin)
+                .max(start_y + 1)
+                .min(size - 2);
+
+            let cx = rng.gen_range(start_x..end_x);
+            let cy = rng.gen_range(start_y..end_y);
+            let chosen = cy * size + cx;
+
+            capital_cells.push(chosen);
+            // Assign affinity later when iterating tribes to match index
+        }
+
+        // Assign affinities now that positions are chosen
+        for (i, &cap) in capital_cells.iter().enumerate() {
+            let tribe = settings.tribes[i];
+            map[cap as usize].above = Some("capital".to_string());
+            map[cap as usize].tribe_affinity = Some(tribe);
+            map[cap as usize].orig_tribe_affinity = Some(tribe);
+            map[cap as usize].terrain_type = TerrainType::Field;
+        }
+
+        /*
         for &tribe in &settings.tribes {
             if available_quads.is_empty() {
                 break;
@@ -285,6 +357,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
             map[chosen as usize].orig_tribe_affinity = Some(tribe);
             map[chosen as usize].terrain_type = TerrainType::Field;
         }
+        */
     }
 
     // 2. Village Spawning (Pre-terrain / Suburbs)
@@ -421,8 +494,8 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                 if cx < 2 || cx >= size - 2 || cy < 2 || cy >= size - 2 {
                     continue;
                 }
-                // Keep at least 2 tiles from other continent seeds
-                let far_enough = seeds.iter().all(|&s| distance(candidate, s, size) >= 3);
+                // Keep at least 6 tiles from other continent seeds
+                let far_enough = seeds.iter().all(|&s| distance(candidate, s, size) >= 6);
                 if far_enough && !is_land[candidate as usize] {
                     seeds.push(candidate);
                     break;
@@ -600,14 +673,20 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                         dist_score = dist_score.min(distance(v, cap, size));
                     }
                     let landmass_bonus = if used_landmasses.contains(&landmass_id[v as usize]) {
-                        -50 // Penalty for already used landmass
+                        -20 // Penalty for already used landmass
                     } else {
-                        50 // Bonus for new landmass
+                        20 // Bonus for new landmass
                     };
-                    (
-                        v,
-                        dist_score + (if coastal { 10 } else { 0 }) + landmass_bonus,
-                    )
+                    let coastal_bonus = if coastal { 5 } else { 0 };
+
+                    let mut score = dist_score + coastal_bonus + landmass_bonus;
+
+                    // Strong penalty for being too close in 1v1
+                    if settings.tribes.len() == 2 && dist_score < size / 2 {
+                        score -= 50;
+                    }
+
+                    (v, score)
                 })
                 .collect();
 
@@ -619,6 +698,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                 // Find max score
                 let mut best_idx = 0;
                 let mut max_score = i32::MIN;
+
                 for (idx, &(_, score)) in scored_villages.iter().enumerate() {
                     if score > max_score {
                         max_score = score;
@@ -639,19 +719,31 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                 for (v, score) in &mut scored_villages {
                     let coastal_bonus = if plus_sign(*v, size).iter().any(|&n| !is_land[n as usize])
                     {
-                        10
+                        5
                     } else {
                         0
                     };
                     let landmass_bonus = if used_landmasses.contains(&landmass_id[*v as usize]) {
-                        -50
+                        -20
                     } else {
-                        50
+                        20
                     };
                     let old_dist = *score - coastal_bonus - landmass_bonus;
+                    // Restore potential distance penalty
+                    let old_dist = if settings.tribes.len() == 2 && old_dist < -20 {
+                        old_dist + 50
+                    } else {
+                        old_dist
+                    };
+
                     let new_dist = distance(*v, best_v, size);
                     let new_min_dist = old_dist.min(new_dist);
-                    *score = new_min_dist + coastal_bonus + landmass_bonus;
+
+                    let mut new_score = new_min_dist + coastal_bonus + landmass_bonus;
+                    if settings.tribes.len() == 2 && new_min_dist < size / 2 {
+                        new_score -= 50;
+                    }
+                    *score = new_score;
                 }
             }
         } else {
@@ -701,7 +793,15 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                     for &cap in &capital_cells {
                         dist_score = dist_score.min(distance(v, cap, size));
                     }
-                    (v, dist_score + (if coastal { 10 } else { 0 }))
+                    let coastal_bonus = if coastal { 5 } else { 0 };
+                    let mut score = dist_score + coastal_bonus;
+
+                    // Strong penalty for being too close in 1v1
+                    if settings.tribes.len() == 2 && dist_score < size / 2 {
+                        score -= 50;
+                    }
+
+                    (v, score)
                 })
                 .collect();
 
@@ -732,14 +832,26 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                 for (v, score) in &mut scored_villages {
                     let coastal_bonus = if plus_sign(*v, size).iter().any(|&n| !is_land[n as usize])
                     {
-                        10
+                        5
                     } else {
                         0
                     };
                     let old_dist = *score - coastal_bonus;
+                    // Restore potential distance penalty
+                    let old_dist = if settings.tribes.len() == 2 && old_dist < -20 {
+                        old_dist + 50
+                    } else {
+                        old_dist
+                    };
+
                     let new_dist = distance(*v, best_v, size);
                     let new_min_dist = old_dist.min(new_dist);
-                    *score = new_min_dist + coastal_bonus;
+
+                    let mut new_score = new_min_dist + coastal_bonus;
+                    if settings.tribes.len() == 2 && new_min_dist < size / 2 {
+                        new_score -= 50;
+                    }
+                    *score = new_score;
                 }
             }
         }
@@ -1313,6 +1425,15 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         game_state.tiles.insert(gen_tile.idx, t_state);
     }
 
+    // Assign capital_of to tiles
+    for &cap in &capital_cells {
+        let tribe = settings.tribes[capital_cells.iter().position(|&c| c == cap).unwrap()];
+        let pid = tribe_id_map[&tribe];
+        if let Some(tile) = game_state.tiles.get_mut(&cap) {
+            tile.capital_of = pid;
+        }
+    }
+
     // Capital/City Setup
     for &cap in &capital_cells {
         let tribe = settings.tribes[capital_cells.iter().position(|&c| c == cap).unwrap()];
@@ -1441,6 +1562,55 @@ mod tests {
                         );
                     }
                 }
+            }
+        }
+    }
+    #[test]
+    fn test_min_capital_distance_1v1() {
+        let map_types = [
+            MapType::Drylands,
+            MapType::Lakes,
+            MapType::Continents,
+            MapType::Pangea,
+            MapType::Archipelago,
+            MapType::WaterWorld,
+        ];
+        let map_sizes = [MapSize::Tiny, MapSize::Small, MapSize::Normal];
+
+        for &map_type in &map_types {
+            for &size in &map_sizes {
+                let mut min_dist = 100;
+                for seed in 0..2000 {
+                    let settings = MapGenSettings {
+                        size,
+                        map_type,
+                        tribes: vec![TribeType::Imperius, TribeType::Bardur],
+                        seed,
+                    };
+                    let state = generate(settings);
+                    let mut capitals = Vec::new();
+                    // Scan all tribes for their starting cities (capitals)
+                    for tribe in state.tribes.values() {
+                        for city in &tribe.cities {
+                            // In this engine, the first city added is the capital
+                            let (x, y) = get_coords(city.tile_index, size.get_size());
+                            capitals.push((x, y));
+                        }
+                    }
+
+                    if capitals.len() == 2 {
+                        let d = (capitals[0].0 - capitals[1].0)
+                            .abs()
+                            .max((capitals[0].1 - capitals[1].1).abs());
+                        if d < min_dist {
+                            min_dist = d;
+                        }
+                        if d <= 3 {
+                            println!("Found capitals too close (dist {}) on map type {:?} size {:?} seed {}", d, map_type, size, seed);
+                        }
+                    }
+                }
+                println!("Min distance for {:?} {:?}: {}", map_type, size, min_dist);
             }
         }
     }

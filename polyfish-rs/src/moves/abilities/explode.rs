@@ -1,7 +1,7 @@
 use crate::actions::chain_undos;
 use crate::moves::{Move, MoveResult};
 use crate::states::GameState;
-use crate::types::{AbilityType, MoveType, TerrainType};
+use crate::types::{MoveType, TerrainType};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -213,10 +213,10 @@ impl Move for ExplodeMove {
         format!("Explode unit at {}", self.unit_idx)
     }
     fn serialize(&self) -> serde_json::Value {
-        serde_json::json!({
-            "moveType": MoveType::Ability,
-            "ability": AbilityType::Explode,
-            "unitIdx": self.unit_idx
-        })
+        let mut value = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert("moveType".to_string(), serde_json::json!(MoveType::Ability));
+        }
+        value
     }
 }

@@ -293,13 +293,17 @@
 
 .click-mask {
     pointer-events: auto !important;
-    background: transparent !important;
+    /* background: rgba(255, 0, 0, 0.2) !important; */
     cursor: pointer;
     /* Isometric diamond shape */
     /* Perfect! */
     clip-path: polygon(50% 0%, 100% 30%, 50% 60%, 0% 30%);
     transition: background-color 0.1s ease;
 }
+
+/* .click-mask:hover {
+    background-color: rgba(255, 0, 0, 0.5) !important;
+} */
 
 
 .tile-hover-highlight {
@@ -330,6 +334,7 @@
     cursor: pointer;
     animation: fadeIn 0.3s ease;
     z-index: 5000;
+    clip-path: polygon(50% 0%, 100% 30%, 50% 60%, 0% 30%);
 }
 
 .move-overlay:hover {

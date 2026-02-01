@@ -59,10 +59,15 @@ impl Move for EnchantAnimalMove {
         format!("Enchant Animal at {}", self.tile_index)
     }
     fn serialize(&self) -> serde_json::Value {
-        serde_json::json!({
-            "moveType": MoveType::Ability,
-            "ability": AbilityType::EnchantAnimal,
-            "target": self.tile_index
-        })
+        let mut value = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert("moveType".to_string(), serde_json::json!(MoveType::Ability));
+            obj.insert(
+                "ability".to_string(),
+                serde_json::json!(AbilityType::EnchantAnimal),
+            );
+            obj.insert("target".to_string(), serde_json::json!(self.tile_index));
+        }
+        value
     }
 }

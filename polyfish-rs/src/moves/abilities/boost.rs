@@ -1,6 +1,6 @@
 use crate::moves::{Move, MoveResult};
 use crate::states::GameState;
-use crate::types::{AbilityType, MoveType};
+use crate::types::MoveType;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,10 +29,10 @@ impl Move for BoostMove {
         format!("Boost allies around {}", self.unit_idx)
     }
     fn serialize(&self) -> serde_json::Value {
-        serde_json::json!({
-            "moveType": MoveType::Ability,
-            "ability": AbilityType::Boost,
-            "unitIdx": self.unit_idx
-        })
+        let mut value = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert("moveType".to_string(), serde_json::json!(MoveType::Ability));
+        }
+        value
     }
 }
