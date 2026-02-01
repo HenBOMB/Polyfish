@@ -472,7 +472,11 @@ function renderMovesList(moves) {
         const tile = GAME_STATE.tiles[move.target];
         const structure = GAME_STATE.structures[move.target];
 
-        if (moveType === 7) text = `Research ${TechnologyNames[move.tech] || move.tech}`;
+        if (moveType === 4) {
+            const isUpgrade = move.upgrade === true;
+            text = `${isUpgrade ? 'Upgrade' : 'Summon'} ${UnitTypes[move.type] || move.type}`;
+        }
+        else if (moveType === 7) text = `Research ${TechnologyNames[move.tech] || move.tech}`;
         else if (moveType === 6) text = `🔨 ${StructureNames[move.structure]} @ ${move.tileIndex}`;
         else if (moveType === 5) text = `🥝 ${resource ? ResourceTypes[resource.type] : 'Resource'}`;
         // capture

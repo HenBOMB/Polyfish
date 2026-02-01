@@ -67,6 +67,7 @@ impl Move for UpgradeMove {
         let mut value = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
         if let Some(obj) = value.as_object_mut() {
             obj.insert("moveType".to_string(), serde_json::json!(MoveType::Summon));
+            obj.insert("upgrade".to_string(), serde_json::json!(true));
         }
         value
     }

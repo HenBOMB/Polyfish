@@ -258,17 +258,19 @@ async fn manual_step(
         }
         4 => {
             // Summon or Upgrade
-            if payload.get("type").is_some() {
-                let tile_index = payload["tileIndex"].as_i64().unwrap() as i32;
-                let type_val = payload["type"].as_i64().unwrap() as i8;
+            let tile_index = payload["tileIndex"].as_i64().unwrap() as i32;
+            let type_val = payload["type"].as_i64().unwrap() as i8;
+            if payload
+                .get("upgrade")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
                 Box::new(UpgradeMove::new(tile_index, unsafe {
                     std::mem::transmute(type_val)
                 }))
             } else {
-                let idx = payload["idx"].as_i64().unwrap() as i32;
-                let unit_type = payload["unitType"].as_i64().unwrap() as i8;
-                Box::new(SummonMove::new(idx, unsafe {
-                    std::mem::transmute(unit_type)
+                Box::new(SummonMove::new(tile_index, unsafe {
+                    std::mem::transmute(type_val)
                 }))
             }
         }

@@ -136,6 +136,12 @@ impl Game {
             end_undo
         } else {
             let result = game_move.execute(&mut self.state);
+            if let Err(e) = result {
+                eprintln!("Error executing move: {}", e);
+                self.state.settings._are_you_sure = false;
+                return None;
+            }
+            let res = result.unwrap();
 
             // Try discovering new tribes after the move
             let discover_undo = try_discover_other_tribes(&mut self.state);
@@ -150,8 +156,7 @@ impl Game {
                 .push(game_move.move_type());
 
             // Collect undos
-            let _move_type = game_move.move_type();
-            let move_undo = result.unwrap().undo;
+            let move_undo = res.undo;
 
             Box::new(move |s: &mut GameState| {
                 s.settings._recent_moves.pop();
@@ -327,11 +332,17 @@ impl Game {
             end_undo
         } else {
             let result = game_move.execute(state);
+            if let Err(e) = result {
+                eprintln!("Error executing move (static): {}", e);
+                state.settings._are_you_sure = false;
+                return None;
+            }
+            let res = result.unwrap();
             let discover_undo = try_discover_other_tribes(state);
             sync_scores(state);
             state.settings._recent_moves.push(game_move.move_type());
 
-            let move_undo = result.unwrap().undo;
+            let move_undo = res.undo;
             Box::new(move |s: &mut GameState| {
                 s.settings._recent_moves.pop();
                 discover_undo(s);
