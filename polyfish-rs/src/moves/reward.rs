@@ -180,9 +180,21 @@ impl Move for RewardMove {
 pub fn generate_reward_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
     let pov_id = state.settings.current_player_turn_id;
     if let Some(tribe) = state.tribes.get(&pov_id) {
+        use crate::types::TribeType;
+        let is_luxidoor = tribe.tribe_type == TribeType::Luxidoor;
+
         for city in &tribe.cities {
-            if city.level > 1 && city.rewards.len() < (city.level - 1) as usize {
-                let slot = city.rewards.len() + 1;
+            let mut required = (city.level - 1) as usize;
+            let mut offset = 0;
+
+            // Luxidoor skips rewards for level 2 and 3 of their starting capital
+            if is_luxidoor && city.tile_index == tribe.starting_tile_coords.idx {
+                required = required.saturating_sub(2);
+                offset = 2;
+            }
+
+            if city.level > 1 && city.rewards.len() < required {
+                let slot = city.rewards.len() + 1 + offset;
                 let (opt1, opt2) = match slot {
                     1 => (RewardType::Explorer, RewardType::Workshop),
                     2 => (RewardType::CityWall, RewardType::Resources),
@@ -193,5 +205,114 @@ pub fn generate_reward_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
                 moves.push(Box::new(RewardMove::new(city.tile_index, opt2)));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::coords::Coords;
+    use crate::states::{CityState, TribeState};
+    use crate::types::TribeType;
+
+    #[test]
+    fn test_luxidoor_no_initial_rewards() {
+        let mut state = GameState::default();
+        let p_id = 1;
+        state.settings.current_player_turn_id = p_id;
+
+        let mut tribe = TribeState::default();
+        tribe.id = p_id;
+        tribe.tribe_type = TribeType::Luxidoor;
+        tribe.starting_tile_coords = Coords::from_xy(0, 0, 11);
+
+        let mut city = CityState::default();
+        city.tile_index = 0; // matching (0,0) for size 11
+        city.level = 3;
+        city.owner = p_id;
+        tribe.cities.push(city);
+
+        state.tribes.insert(p_id, tribe);
+
+        let mut moves: Vec<Box<dyn Move>> = Vec::new();
+        generate_reward_moves(&state, &mut moves);
+
+        assert_eq!(
+            moves.len(),
+            0,
+            "Luxidoor level 3 city should have no pending rewards"
+        );
+    }
+
+    #[test]
+    fn test_luxidoor_reward_at_level_4() {
+        let mut state = GameState::default();
+        let p_id = 1;
+        state.settings.current_player_turn_id = p_id;
+
+        let mut tribe = TribeState::default();
+        tribe.id = p_id;
+        tribe.tribe_type = TribeType::Luxidoor;
+        tribe.starting_tile_coords = Coords::from_xy(0, 0, 11);
+
+        let mut city = CityState::default();
+        city.tile_index = 0;
+        city.level = 4;
+        city.owner = p_id;
+        tribe.cities.push(city);
+
+        state.tribes.insert(p_id, tribe);
+
+        let mut moves: Vec<Box<dyn Move>> = Vec::new();
+        generate_reward_moves(&state, &mut moves);
+
+        // Should have 2 moves (opt1, opt2) for the reward slot
+        assert_eq!(
+            moves.len(),
+            2,
+            "Luxidoor level 4 city should have 2 reward options"
+        );
+
+        // Slot should be 3 (PopGrowth/BorderGrowth)
+        // We can check the description or the move structure
+        let desc = moves[0].describe(&state);
+        assert!(
+            desc.contains("PopGrowth") || desc.contains("BorderGrowth"),
+            "Should be slot 3 rewards"
+        );
+    }
+
+    #[test]
+    fn test_normal_tribe_rewards() {
+        let mut state = GameState::default();
+        let p_id = 1;
+        state.settings.current_player_turn_id = p_id;
+
+        let mut tribe = TribeState::default();
+        tribe.id = p_id;
+        tribe.tribe_type = TribeType::Imperius;
+        tribe.starting_tile_coords = Coords::from_xy(0, 0, 11);
+
+        let mut city = CityState::default();
+        city.tile_index = 0;
+        city.level = 2;
+        city.owner = p_id;
+        tribe.cities.push(city);
+
+        state.tribes.insert(p_id, tribe);
+
+        let mut moves: Vec<Box<dyn Move>> = Vec::new();
+        generate_reward_moves(&state, &mut moves);
+
+        assert_eq!(
+            moves.len(),
+            2,
+            "Normal tribe level 2 city should have 2 reward options"
+        );
+        let desc = moves[0].describe(&state);
+        assert!(
+            desc.contains("Explorer") || desc.contains("Workshop"),
+            "Should be slot 1 rewards"
+        );
     }
 }

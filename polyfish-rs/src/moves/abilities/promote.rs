@@ -47,8 +47,8 @@ impl Move for PromoteMove {
                     let old_veteran = unit.veteran;
 
                     unit.veteran = true;
-                    // Max HP logic: base * 10
-                    unit.health = crate::functions::get_max_health(unit);
+                    unit.max_health = crate::functions::get_unit_max_health(unit);
+                    unit.health = unit.max_health;
 
                     undos.push(Box::new(move |s: &mut GameState| {
                         if let Some(tribe) = s.tribes.get_mut(&unit_owner) {

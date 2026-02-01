@@ -5,17 +5,15 @@
 use crate::coords::Coords;
 use crate::default_fow;
 use crate::states::{GameState, TileState, TribeState};
-use crate::types::{ClimateType, TerrainType, TribeType};
+use crate::types::{ClimateType, MapSize, MapType, TerrainType, TribeType};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
 pub struct MapGenSettings {
-    pub size: i32,
-    pub land_ratio: f32,
-    pub smoothing: i32,
-    pub relief: i32,
+    pub size: MapSize,
+    pub map_type: MapType,
     pub tribes: Vec<TribeType>,
     pub seed: u64,
 }
@@ -23,10 +21,8 @@ pub struct MapGenSettings {
 impl Default for MapGenSettings {
     fn default() -> Self {
         Self {
-            size: 16,
-            land_ratio: 0.5,
-            smoothing: 3,
-            relief: 4,
+            size: MapSize::Normal,
+            map_type: MapType::Continents,
             tribes: vec![TribeType::Imperius, TribeType::Bardur],
             seed: 0,
         }
@@ -68,78 +64,6 @@ fn distance(a: i32, b: i32, size: i32) -> i32 {
     (ax - bx).abs().max((ay - by).abs())
 }
 
-fn circle(center: i32, radius: i32, size: i32) -> Vec<i32> {
-    let mut indices = Vec::new();
-    let (row, col) = (center / size, center % size); // Python uses (row, col) -> (y, x) logic usually
-                                                     // But `distance` used (x,y). Let's stick to (row, col) as (y, x) for grid traversal logic matching python.
-
-    // Python code:
-    // row = center // size
-    // column = center % size
-
-    // Top edge: i = row - radius
-    let i = row - radius;
-    if i >= 0 && i < size {
-        for j in (col - radius)..(col + radius) {
-            if j >= 0 && j < size {
-                indices.push(i * size + j);
-            }
-        }
-    }
-
-    // Bottom edge: i = row + radius
-    let i = row + radius;
-    if i >= 0 && i < size {
-        for j in ((col - radius + 1)..=(col + radius)).rev() {
-            // python range(col+radius, col-radius, -1) -> inclusive start, exclusive end?
-            // Python: range(col + radius, col - radius, -1).
-            // Starts at col+radius (exclusive? No python range is start inclusive, stop exclusive).
-            // range(5, 2, -1) -> 5, 4, 3.
-            // So starts at rightmost, goes to left.
-            // My rust range `(col - radius + 1)..=(col + radius)` reversed is `col+radius` down to `col-radius+1`.
-            // Wait. Python: range(start, stop, step).
-            // Stop is `col - radius`.
-            // So it includes `col - radius + 1`.
-            // My logic seems correct.
-            if j >= 0 && j < size {
-                indices.push(i * size + j);
-            }
-        }
-    }
-
-    // Left edge: j = col - radius
-    let j = col - radius;
-    if j >= 0 && j < size {
-        for i in ((row - radius + 1)..=(row + radius)).rev() {
-            // Python: range(row + radius, row - radius, -1)
-            if i >= 0 && i < size {
-                indices.push(i * size + j);
-            }
-        }
-    }
-
-    // Right edge: j = col + radius
-    let j = col + radius;
-    if j >= 0 && j < size {
-        for i in (row - radius)..(row + radius) {
-            if i >= 0 && i < size {
-                indices.push(i * size + j);
-            }
-        }
-    }
-
-    indices
-}
-
-fn get_round(center: i32, radius: i32, size: i32) -> Vec<i32> {
-    let mut indices = Vec::new();
-    for r in 1..=radius {
-        indices.extend(circle(center, r, size));
-    }
-    indices.push(center);
-    indices
-}
-
 fn plus_sign(center: i32, size: i32) -> Vec<i32> {
     let mut indices = Vec::new();
     let (row, col) = (center / size, center % size);
@@ -164,611 +88,1066 @@ fn plus_sign(center: i32, size: i32) -> Vec<i32> {
 // We return a multiplier (f32) for a given Tribe and Terrain/Resource type.
 // Python `terrain_probs` dictionary.
 
-fn get_terrain_prob(tribe: TribeType, key: &str) -> f32 {
-    let x0_0 = 0.0;
-    let x0_1 = 0.1;
-    let x0_2 = 0.2;
-    let x0_4 = 0.4;
-    let x0_5 = 0.5;
-    let x1_0 = 1.0;
-    let x1_2 = 1.2;
-    let x1_5 = 1.5;
-    let x2_0 = 2.0;
-
-    // Default fallbacks if tribe not list (e.g. specialized tribes treated as Xin-Xi or similar?)
-    // python dict has keys for all standard tribes.
-    // If we have a new tribe, we'll default to 1.0 or Xin-Xi logic.
-    // For now I'll map TribeType to the python logic.
-
-    // Match based on key (resource/terrain)
-    match key {
-        "water" => match tribe {
-            TribeType::Kickoo => x0_4,
-            TribeType::Aquarion => x1_5,
-            TribeType::Cymanti => x1_0,
-            _ => x0_0, // Most are 0.0
-        },
-        "forest" => match tribe {
-            TribeType::Oumaji => x0_2,
-            TribeType::Hoodrick => x1_5,
-            TribeType::Zebasi | TribeType::Yadakk | TribeType::Aquarion => x0_5,
-            _ => x1_0,
-        },
-        "mountain" => match tribe {
-            TribeType::XinXi | TribeType::AiMo => x1_5,
-            TribeType::Oumaji
-            | TribeType::Kickoo
-            | TribeType::Hoodrick
-            | TribeType::Zebasi
-            | TribeType::Yadakk
-            | TribeType::Elyrion => x0_5,
-            TribeType::Quetzali
-            | TribeType::Imperius
-            | TribeType::Bardur
-            | TribeType::Luxidoor
-            | TribeType::Vengir
-            | TribeType::Aquarion
-            | TribeType::Cymanti => x1_0,
-            _ => x1_0,
-        },
-        "metal" => match tribe {
-            TribeType::XinXi => x1_5,
-            TribeType::Vengir => x2_0,
-            TribeType::Quetzali => x0_1,
-            _ => x1_0,
-        },
-        "fruit" => match tribe {
-            TribeType::Imperius | TribeType::Quetzali => x2_0,
-            TribeType::Bardur | TribeType::Yadakk => x1_5,
-            TribeType::Vengir => x0_1,
-            TribeType::Zebasi => x0_5,
-            _ => x1_0,
-        },
-        "crop" => match tribe {
-            TribeType::Bardur | TribeType::AiMo | TribeType::Quetzali => x0_1,
-            TribeType::Elyrion => x1_5,
-            TribeType::Cymanti => x0_0,
-            _ => x1_0,
-        },
-        "spore" => match tribe {
-            TribeType::Cymanti => x1_2,
-            _ => x0_0,
-        },
-        "game" => match tribe {
-            TribeType::Imperius => x0_5,
-            TribeType::Oumaji => x0_2,
-            TribeType::Luxidoor => x1_5,
-            TribeType::Vengir => x0_1,
-            _ => x1_0,
-        },
-        "fish" => match tribe {
-            TribeType::Kickoo => x1_5,
-            TribeType::Vengir => x0_1,
-            _ => x1_0,
-        },
-        _ => x1_0,
+// area utils
+fn get_square(center: i32, radius: i32, size: i32) -> Vec<i32> {
+    let mut indices = Vec::new();
+    let cx = center % size;
+    let cy = center / size;
+    for y in (cy - radius)..=(cy + radius) {
+        for x in (cx - radius)..=(cx + radius) {
+            if x >= 0 && x < size && y >= 0 && y < size {
+                indices.push(y * size + x);
+            }
+        }
     }
+    indices
 }
 
-// General probs (from python code)
-fn get_general_prob(key: &str) -> f32 {
-    match key {
-        "mountain" => 0.02, // Reduced for early training as per python comment
-        "forest" => 0.38,
-        "fruit" => 0.18,
-        "crop" => 0.18,
-        "fish" => 0.50,
-        "game" => 0.19,
-        "starfish" => 0.4,
-        "metal" => 0.5,
-        _ => 0.0,
+#[derive(Debug, Clone, Copy)]
+struct BiomeRates {
+    mountain: f32,
+    forest: f32,
+    field: f32,
+}
+
+fn get_tribe_biome_rates(tribe: TribeType) -> BiomeRates {
+    let mut rates = BiomeRates {
+        mountain: 0.14,
+        forest: 0.38,
+        field: 0.48,
+    };
+
+    let m_mult = match tribe {
+        TribeType::XinXi | TribeType::AiMo => 1.5,
+        TribeType::Oumaji
+        | TribeType::Kickoo
+        | TribeType::Zebasi
+        | TribeType::Hoodrick
+        | TribeType::Yadakk
+        | TribeType::Elyrion => 0.5,
+        TribeType::Cymanti => 1.2,
+        _ => 1.0,
+    };
+
+    if m_mult != 1.0 {
+        let old_m = rates.mountain;
+        rates.mountain *= m_mult;
+        let diff = rates.mountain - old_m;
+        let non_m_total = rates.forest + rates.field;
+        if non_m_total > 0.0 {
+            rates.forest -= diff * (rates.forest / non_m_total);
+            rates.field -= diff * (rates.field / non_m_total);
+        }
     }
+
+    let f_mult = match tribe {
+        TribeType::Hoodrick => 1.5,
+        TribeType::Bardur => 0.8,
+        TribeType::Oumaji => 0.2,
+        TribeType::Zebasi | TribeType::Yadakk | TribeType::Aquarion => 0.5,
+        _ => 1.0,
+    };
+
+    if f_mult != 1.0 {
+        let old_f = rates.forest;
+        rates.forest *= f_mult;
+        let diff = rates.forest - old_f;
+        rates.field -= diff;
+    }
+
+    rates.mountain = rates.mountain.clamp(0.0, 1.0);
+    rates.forest = rates.forest.clamp(0.0, 1.0);
+    rates.field = rates.field.clamp(0.0, 1.0);
+
+    rates
+}
+
+fn get_resource_prob(key: &str, tribe: TribeType, inner: bool) -> f32 {
+    let base = match key {
+        "fruit" => {
+            if inner {
+                0.18
+            } else {
+                0.06
+            }
+        }
+        "crop" | "spores" => {
+            if inner {
+                0.18
+            } else {
+                0.06
+            }
+        }
+        "game" => {
+            if inner {
+                0.19
+            } else {
+                0.06
+            }
+        }
+        "metal" => {
+            if inner {
+                0.11
+            } else {
+                0.03
+            }
+        }
+        "fish" => 0.50,
+        _ => 0.0,
+    };
+
+    let mult = match (key, tribe) {
+        // Metal modifiers
+        ("metal", TribeType::XinXi) => 1.5,
+        ("metal", TribeType::Vengir) => 2.0,
+        // Fruit modifiers
+        ("fruit", TribeType::Imperius) => 2.0,
+        ("fruit", TribeType::Vengir) => 0.1,
+        ("fruit", TribeType::Zebasi) => 0.5,
+        ("fruit", TribeType::Quetzali) => 2.0,
+        ("fruit", TribeType::Yadakk) => 1.5,
+        // Game modifiers
+        ("game", TribeType::Imperius) => 0.5,
+        ("game", TribeType::Oumaji) => 0.2,
+        ("game", TribeType::Vengir) => 0.1,
+        // Crop modifiers
+        ("crop", TribeType::Bardur) => 0.0,
+        ("crop", TribeType::AiMo) => 0.1,
+        ("crop", TribeType::Quetzali) => 0.1,
+        ("crop", TribeType::Elyrion) => 1.5,
+        ("crop", TribeType::Cymanti) => 0.0,
+        // Fish modifiers
+        ("fish", TribeType::Kickoo) => 1.5,
+        ("fish", TribeType::Vengir) => 0.1,
+        _ => 1.0,
+    };
+
+    base * mult
 }
 
 /// The main generation function
 pub fn generate(settings: MapGenSettings) -> GameState {
     let mut rng = StdRng::seed_from_u64(settings.seed);
-    let size = settings.size;
+    let size = settings.size.get_size();
     let tile_count = size * size;
 
     // Initialize map
     let mut map: Vec<GenTile> = (0..tile_count).map(|i| GenTile::new(i as i32)).collect();
 
-    // 1. Initial Land Generation
-    // Python: while j < ... initial_land: pick random, turn ocean to ground
-    let target_land = (tile_count as f32 * settings.land_ratio) as usize;
-    let mut land_count = 0;
-
-    while land_count < target_land {
-        let idx = rng.gen_range(0..tile_count) as usize;
-        if map[idx].terrain_type == TerrainType::Ocean {
-            map[idx].terrain_type = TerrainType::Field; // 'ground' -> Field
-            land_count += 1;
-        }
-    }
-
-    let land_coeff = 1.0; // Hardcoded in python
-
-    // 2. Smoothing
-    for _ in 0..settings.smoothing {
-        let mut road_flags = vec![false; tile_count as usize];
-
-        for i in 0..tile_count {
-            let mut water_count = 0;
-            let mut total_count = 0;
-            let neighbours = get_round(i, 1, size);
-            for &n_idx in &neighbours {
-                if map[n_idx as usize].terrain_type == TerrainType::Ocean {
-                    water_count += 1;
-                }
-                total_count += 1;
-            }
-
-            if (water_count as f32 / total_count as f32) <= land_coeff {
-                road_flags[i as usize] = true; // Temporary use of 'road' flag for swapping
-            }
-        }
-
-        for i in 0..tile_count {
-            if road_flags[i as usize] {
-                map[i as usize].terrain_type = TerrainType::Field; // Ground
-            } else {
-                map[i as usize].terrain_type = TerrainType::Ocean;
-            }
-        }
-    }
-
-    // 3. Capital Placement
+    // 1. Capital Placement
+    let player_count = settings.tribes.len();
     let mut capital_cells: Vec<i32> = Vec::new();
-    let min_separation = 3;
 
-    for &tribe in &settings.tribes {
-        // Build capital map
-        let mut candidates: HashMap<i32, i32> = HashMap::new();
+    let use_quadrants = matches!(
+        settings.map_type,
+        MapType::Drylands | MapType::Lakes | MapType::Archipelago | MapType::WaterWorld
+    );
 
-        for row in 2..(size - 2) {
-            for col in 2..(size - 2) {
-                let idx = row * size + col;
-                if map[idx as usize].terrain_type != TerrainType::Field {
-                    // Must be ground
-                    continue;
-                }
+    if use_quadrants {
+        let quad_count = if player_count <= 4 {
+            4
+        } else if player_count <= 9 {
+            9
+        } else {
+            16
+        };
+        let quads_per_side = (quad_count as f32).sqrt() as i32;
+        let quad_size = size / quads_per_side;
 
-                let mut too_close = false;
-                for &cap in &capital_cells {
-                    if distance(idx, cap, size) < min_separation {
-                        too_close = true;
-                        break;
-                    }
-                }
-
-                if !too_close {
-                    candidates.insert(idx, size); // Initialize score with max possible val
-                }
+        let mut available_quads: Vec<i32> = (0..quad_count).collect();
+        for &tribe in &settings.tribes {
+            if available_quads.is_empty() {
+                break;
             }
-        }
+            let q_idx = rng.gen_range(0..available_quads.len());
+            let quad = available_quads.remove(q_idx);
 
-        // Pick furthest
-        let mut max_dist = 0;
-        let mut final_scores: HashMap<i32, i32> = HashMap::new();
+            let qx = quad % quads_per_side;
+            let qy = quad / quads_per_side;
 
-        for (&cell, &_) in &candidates {
-            let mut dist_score = candidates[&cell];
-            for &cap in &capital_cells {
-                dist_score = dist_score.min(distance(cell, cap, size));
-            }
-            final_scores.insert(cell, dist_score);
-            max_dist = max_dist.max(dist_score);
-        }
+            let margin = 2;
+            let start_x = (qx * quad_size + margin).min(size - 3);
+            let end_x = ((qx + 1) * quad_size - margin)
+                .max(start_x + 1)
+                .min(size - 2);
+            let start_y = (qy * quad_size + margin).min(size - 3);
+            let end_y = ((qy + 1) * quad_size - margin)
+                .max(start_y + 1)
+                .min(size - 2);
 
-        let best_cells: Vec<i32> = final_scores
-            .iter()
-            .filter(|&(_, &d)| d == max_dist)
-            .map(|(&c, _)| c)
-            .collect();
-
-        if !best_cells.is_empty() {
-            let chosen_idx = rng.gen_range(0..best_cells.len());
-            let chosen = best_cells[chosen_idx];
+            let cx = rng.gen_range(start_x..end_x);
+            let cy = rng.gen_range(start_y..end_y);
+            let chosen = cy * size + cx;
 
             capital_cells.push(chosen);
             map[chosen as usize].above = Some("capital".to_string());
             map[chosen as usize].tribe_affinity = Some(tribe);
             map[chosen as usize].orig_tribe_affinity = Some(tribe);
+            map[chosen as usize].terrain_type = TerrainType::Field;
         }
     }
 
-    // 4. Territory Expansion (Biome determination)
-    let mut done_tiles: HashSet<i32> = HashSet::new();
-    let mut active_tiles: Vec<Vec<i32>> = Vec::new();
-
+    // 2. Village Spawning (Pre-terrain / Suburbs)
+    let mut village_map = vec![0; tile_count as usize];
     for &cap in &capital_cells {
-        done_tiles.insert(cap);
-        active_tiles.push(vec![cap]);
+        village_map[cap as usize] = 2;
     }
 
-    while done_tiles.len() < tile_count as usize {
-        for i in 0..settings.tribes.len() {
-            if i >= active_tiles.len() {
-                continue;
-            } // Should match
-
-            // Skip Polaris logic for now (unimplemented in detailed generation in python usually or special case)
-            // Python: `if len(active_tiles[i]) and tribes[i] != 'Polaris':`
-            if active_tiles[i].is_empty() {
-                continue;
-            }
-            if settings.tribes[i] == TribeType::Polaris {
-                continue;
-            } // Simplified
-
-            let rand_idx = rng.gen_range(0..active_tiles[i].len());
-            let rand_cell = active_tiles[i][rand_idx];
-
-            let neighbours = circle(rand_cell, 1, size);
-
-            // Valid neighbours: not done, not water (Python: type != 'water' but implies ocean too?)
-            // Python: `world_map[tile]['type'] != 'water'`. In python generator 'water' is specific?
-            // Actually 'ocean' is the base.
-            // Let's assume Ocean prevents expansion initially?
-            // "valid_neighbours = list(filter(lambda tile: tile not in done_tiles and world_map[tile]['type'] != 'water', neighbours))"
-            // Wait, Python generator uses 'ocean' as default water. 'water' is shallow?
-            // In python gen `world_map` initializes `type: 'ocean'`.
-            // So if it checks `!= 'water'`, it allows 'ocean'?
-            // Maybe `water` means "Deep Ocean"? Or logic is to allow expansion into Ocean?
-            // Let's assume expansion into Land first.
-
-            let mut valid_neighbours: Vec<i32> = neighbours
-                .iter()
-                .cloned()
-                .filter(|&n| {
-                    !done_tiles.contains(&n)
-                        && map[n as usize].terrain_type != TerrainType::Water
-                        && map[n as usize].terrain_type != TerrainType::Ocean
+    if settings.map_type == MapType::Lakes || settings.map_type == MapType::Archipelago {
+        // Suburbs (1-2 per capital, within radius 3, distance >= 3)
+        for &cap in &capital_cells {
+            let mut sub_count = rng.gen_range(1..=2);
+            let mut candidates: Vec<i32> = get_square(cap, 3, size)
+                .into_iter()
+                .filter(|&idx| {
+                    village_map[idx as usize] == 0 && distance(idx, cap, size) >= 3 && {
+                        let (x, y) = get_coords(idx, size);
+                        x > 0 && x < size - 1 && y > 0 && y < size - 1 // At least 1 tile from edge
+                    }
                 })
                 .collect();
 
-            if valid_neighbours.is_empty() {
-                // Formatting fallback in python: allow water if no land
-                valid_neighbours = neighbours
-                    .iter()
-                    .cloned()
-                    .filter(|&n| !done_tiles.contains(&n))
-                    .collect();
-            }
-
-            if !valid_neighbours.is_empty() {
-                let new_rand_idx = rng.gen_range(0..valid_neighbours.len());
-                let new_cell = valid_neighbours[new_rand_idx];
-
-                map[new_cell as usize].tribe_affinity = Some(settings.tribes[i]);
-                active_tiles[i].push(new_cell);
-                done_tiles.insert(new_cell);
-            } else {
-                active_tiles[i].swap_remove(rand_idx);
+            while sub_count > 0 && !candidates.is_empty() {
+                let idx = candidates.remove(rng.gen_range(0..candidates.len()));
+                village_map[idx as usize] = 1;
+                map[idx as usize].above = Some("village".to_string());
+                map[idx as usize].terrain_type = TerrainType::Field;
+                sub_count -= 1;
+                candidates.retain(|&c| distance(c, idx, size) >= 3);
             }
         }
+    }
 
-        // Break if stuck (all queues empty)
-        if active_tiles.iter().all(|q| q.is_empty()) {
-            // Check for remaining tiles not done?
-            // If Polaris excluded, we might have holes.
-            // Just fill remaining with None/Default affinity.
-            for idx in 0..tile_count {
-                if !done_tiles.contains(&idx) {
-                    done_tiles.insert(idx);
+    if settings.map_type == MapType::Lakes
+        || settings.map_type == MapType::Archipelago
+        || settings.map_type == MapType::WaterWorld
+    {
+        // Pre-terrain villages
+        let cap_sub_count = village_map.iter().filter(|&&v| v > 0).count() as f32;
+        let density = if settings.map_type == MapType::WaterWorld {
+            0.1
+        } else {
+            0.3
+        };
+        let pre_terrain_count =
+            (((size as f32 / 3.0).floor().powi(2) - cap_sub_count) * density) as i32;
+        let mut all_candidates: Vec<i32> = (0..tile_count)
+            .filter(|&idx| {
+                let (x, y) = get_coords(idx, size);
+                village_map[idx as usize] == 0
+                    && x > 0
+                    && x < size - 1
+                    && y > 0
+                    && y < size - 1 // At least 1 tile from edge
+                    && village_map
+                        .iter()
+                        .enumerate()
+                        .filter(|&(_, &v)| v > 0)
+                        .all(|(v_idx, _)| distance(idx, v_idx as i32, size) >= 3)
+            })
+            .collect();
+
+        let mut placed = 0;
+        while placed < pre_terrain_count && !all_candidates.is_empty() {
+            let idx = all_candidates.remove(rng.gen_range(0..all_candidates.len()));
+            village_map[idx as usize] = 1;
+            map[idx as usize].above = Some("village".to_string());
+            map[idx as usize].terrain_type = TerrainType::Field;
+            placed += 1;
+            all_candidates.retain(|&c| distance(c, idx, size) >= 3);
+        }
+    }
+
+    // 3. Terrain Generation
+    let land_ratio = match settings.map_type {
+        MapType::Drylands => 0.95,
+        MapType::Lakes => 0.72,
+        MapType::Continents => 0.45,
+        MapType::Pangea => 0.50,
+        MapType::Archipelago => 0.30,
+        MapType::WaterWorld => 0.05,
+    };
+
+    let mut is_land = vec![false; tile_count as usize];
+    for i in 0..tile_count {
+        if village_map[i as usize] > 0 {
+            is_land[i as usize] = true;
+        }
+    }
+
+    let target_land = (tile_count as f32 * land_ratio) as usize;
+    let mut current_land = is_land.iter().filter(|&&l| l).count();
+
+    if settings.map_type == MapType::Pangea {
+        // Flood-fill growth from center
+        let center = (size / 2) * size + (size / 2);
+        is_land[center as usize] = true;
+        current_land += 1;
+
+        let mut frontier: Vec<i32> = vec![center];
+        while current_land < target_land && !frontier.is_empty() {
+            let idx = frontier.remove(rng.gen_range(0..frontier.len()));
+            for n in plus_sign(idx, size) {
+                if !is_land[n as usize] && current_land < target_land {
+                    // Probability decreases with distance from center
+                    let (nx, ny) = get_coords(n, size);
+                    let dist_from_center = ((nx - size / 2).abs() + (ny - size / 2).abs()) as f32;
+                    let prob = 1.0 - (dist_from_center / size as f32).min(0.9);
+                    if rng.gen::<f32>() < prob {
+                        is_land[n as usize] = true;
+                        current_land += 1;
+                        frontier.push(n);
+                    }
                 }
             }
-            break;
         }
-    }
+    } else if settings.map_type == MapType::Continents {
+        // Discrete continents generation
+        let continent_count = match player_count {
+            1..=2 => 2,
+            3..=4 => 3,
+            _ => 4,
+        };
+        let min_continent_size = 30.max(target_land / (continent_count * 2));
+        let max_continent_size = 200.min(target_land / continent_count + 50);
 
-    // 5. Biome Details (Forest/Mountain/Ocean/Water)
-    for cell in 0..tile_count {
-        if map[cell as usize].terrain_type == TerrainType::Field
-            && map[cell as usize].above.is_none()
-        {
-            let tribe = map[cell as usize]
-                .orig_tribe_affinity
-                .or(map[cell as usize].tribe_affinity)
-                .unwrap_or(TribeType::Imperius); // Fallback
-
-            let rand_val: f32 = rng.gen();
-
-            // Forest?
-            if rand_val < get_general_prob("forest") * get_terrain_prob(tribe, "forest") {
-                map[cell as usize].terrain_type = TerrainType::Forest;
-            } else if rand_val
-                > 1.0 - (get_general_prob("mountain") * get_terrain_prob(tribe, "mountain"))
-            {
-                map[cell as usize].terrain_type = TerrainType::Mountain;
-            }
-
-            // Convert to Ocean?
-            let rand_val2: f32 = rng.gen();
-            if rand_val2 < get_terrain_prob(tribe, "water") {
-                map[cell as usize].terrain_type = TerrainType::Ocean;
-            }
-        }
-    }
-
-    // 6. Village Map (Proximity to capitals)
-    let mut village_map = vec![-1; tile_count as usize];
-    // Init village map (-1 for forbidden, 0 for allowed)
-    for cell in 0..tile_count {
-        let (row, col) = get_coords(cell, size);
-        let t_type = map[cell as usize].terrain_type;
-
-        if t_type == TerrainType::Ocean || t_type == TerrainType::Mountain {
-            village_map[cell as usize] = -1;
-        } else if row == 0 || row == size - 1 || col == 0 || col == size - 1 {
-            // Edges no village
-            village_map[cell as usize] = -1;
-        } else {
-            village_map[cell as usize] = 0;
-        }
-    }
-
-    // Apply shallow water (around land)
-    // Python: "for cell in ocean: if neighbor in land, become water (shallow)"
-    // We iterate all ocean cells.
-    // Check neighbors.
-    // Note: iterating 0..tile_count. modifying map. need to avoid cascade or use copy?
-    // Python uses `world_map[cell]` directly. But order matters.
-    // Python logic iterates all cells once.
-    let old_map = map.clone(); // Snapshot for neighbor checks
-    for cell in 0..tile_count {
-        if old_map[cell as usize].terrain_type == TerrainType::Ocean {
-            let neighbors = plus_sign(cell, size);
-            for &n in &neighbors {
-                if matches!(
-                    old_map[n as usize].terrain_type,
-                    TerrainType::Field | TerrainType::Forest | TerrainType::Mountain
-                ) {
-                    map[cell as usize].terrain_type = TerrainType::Water;
+        let mut seeds: Vec<i32> = Vec::new();
+        for _ in 0..continent_count {
+            // Find a seed position far from existing continents
+            for _ in 0..100 {
+                let candidate = rng.gen_range(0..tile_count);
+                let (cx, cy) = get_coords(candidate, size);
+                // Keep away from edges
+                if cx < 2 || cx >= size - 2 || cy < 2 || cy >= size - 2 {
+                    continue;
+                }
+                // Keep at least 2 tiles from other continent seeds
+                let far_enough = seeds.iter().all(|&s| distance(candidate, s, size) >= 3);
+                if far_enough && !is_land[candidate as usize] {
+                    seeds.push(candidate);
                     break;
                 }
             }
         }
-    }
 
-    // Villages
-    for &cap in &capital_cells {
-        village_map[cap as usize] = 3;
-        for n in circle(cap, 1, size) {
-            village_map[n as usize] = village_map[n as usize].max(2);
-        }
-        for n in circle(cap, 2, size) {
-            village_map[n as usize] = village_map[n as usize].max(1);
-        }
-    }
+        // Grow each continent
+        for seed in seeds {
+            let continent_size = rng.gen_range(min_continent_size..=max_continent_size);
+            let mut frontier = vec![seed];
+            let mut grown = 0;
+            is_land[seed as usize] = true;
+            current_land += 1;
+            grown += 1;
 
-    // Add more villages until full
-    while village_map.contains(&0) {
-        let candidates: Vec<i32> = village_map
-            .iter()
-            .enumerate()
-            .filter(|(_, &v)| v == 0)
-            .map(|(i, _)| i as i32)
-            .collect();
-
-        if candidates.is_empty() {
-            break;
-        }
-
-        let new_village = candidates[rng.gen_range(0..candidates.len())];
-        village_map[new_village as usize] = 3;
-
-        map[new_village as usize].above = Some("village".to_string());
-
-        for n in circle(new_village, 1, size) {
-            village_map[n as usize] = village_map[n as usize].max(2);
-        }
-        for n in circle(new_village, 2, size) {
-            village_map[n as usize] = village_map[n as usize].max(1);
-        }
-    }
-
-    // 7. Resources
-    let border_expansion = 1.0 / 3.0; // Python: 1/3
-
-    for cell in 0..tile_count {
-        let tribe = map[cell as usize]
-            .orig_tribe_affinity
-            .or(map[cell as usize].tribe_affinity)
-            .unwrap_or(TribeType::Imperius);
-
-        let proc = |prob: f32, rand_val: f32| -> bool {
-            let vm = village_map[cell as usize];
-            if vm == 2 {
-                rand_val < prob
-            } else if vm == 1 {
-                rand_val < prob * border_expansion
-            } else {
-                false
-            }
-        };
-
-        match map[cell as usize].terrain_type {
-            TerrainType::Field => {
-                let fruit_prob = get_general_prob("fruit") * get_terrain_prob(tribe, "fruit");
-                let crop_prob = get_general_prob("crop") * get_terrain_prob(tribe, "crop");
-
-                if map[cell as usize]
-                    .above
-                    .as_ref()
-                    .map_or(true, |s| s != "capital" && s != "village")
-                {
-                    if proc(fruit_prob * (1.0 - crop_prob / 2.0), rng.gen()) {
-                        map[cell as usize].above = Some("fruit".to_string());
-                    } else if proc(crop_prob * (1.0 - fruit_prob / 2.0), rng.gen()) {
-                        map[cell as usize].above = Some("crop".to_string());
-                    }
-                }
-            }
-            TerrainType::Forest => {
-                if map[cell as usize]
-                    .above
-                    .as_ref()
-                    .map_or(true, |s| s != "capital")
-                {
-                    if village_map[cell as usize] == 3 {
-                        map[cell as usize].terrain_type = TerrainType::Field;
-                        map[cell as usize].above = Some("village".to_string());
-                    } else {
-                        let game_prob = get_general_prob("game") * get_terrain_prob(tribe, "game");
-                        if proc(game_prob, rng.gen()) {
-                            map[cell as usize].above = Some("game".to_string());
+            while grown < continent_size && !frontier.is_empty() && current_land < target_land {
+                let idx = frontier.remove(rng.gen_range(0..frontier.len()));
+                for n in plus_sign(idx, size) {
+                    if !is_land[n as usize] && grown < continent_size && current_land < target_land
+                    {
+                        if rng.gen::<f32>() < 0.7 {
+                            is_land[n as usize] = true;
+                            current_land += 1;
+                            grown += 1;
+                            frontier.push(n);
                         }
                     }
                 }
             }
-            TerrainType::Water => {
-                let fish_prob = get_general_prob("fish") * get_terrain_prob(tribe, "fish");
-                if proc(fish_prob, rng.gen()) {
-                    map[cell as usize].above = Some("fish".to_string());
-                }
+        }
+    } else {
+        // Generic random scatter for other map types
+        while current_land < target_land {
+            let idx = rng.gen_range(0..tile_count) as usize;
+            if !is_land[idx] {
+                is_land[idx] = true;
+                current_land += 1;
             }
-            TerrainType::Ocean => {
-                let star_prob = get_general_prob("starfish") * get_terrain_prob(tribe, "starfish");
-                if proc(star_prob, rng.gen()) {
-                    map[cell as usize].above = Some("starfish".to_string());
-                }
-            }
-            TerrainType::Mountain => {
-                let metal_prob = get_general_prob("metal") * get_terrain_prob(tribe, "metal");
-                if proc(metal_prob, rng.gen()) {
-                    map[cell as usize].above = Some("metal".to_string());
-                }
-            }
-            _ => {}
         }
     }
 
-    // 8. Ruins
-    let ruins_number = ((size * size) as f32 / 40.0).round() as i32;
-    let water_ruins_number = (ruins_number as f32 / 3.0).round() as i32;
-    let mut ruins_count = 0;
-    let mut water_ruins_count = 0;
+    // Smoothing pass (except Drylands)
+    if settings.map_type != MapType::Drylands {
+        for _ in 0..3 {
+            let mut next_land = is_land.clone();
+            for i in 0..tile_count {
+                if village_map[i as usize] > 0 {
+                    continue;
+                }
+                let land_neighbors = get_square(i, 1, size)
+                    .iter()
+                    .filter(|&&n| is_land[n as usize])
+                    .count();
+                if land_neighbors >= 5 {
+                    next_land[i as usize] = true;
+                } else if land_neighbors <= 3 {
+                    next_land[i as usize] = false;
+                }
+            }
+            is_land = next_land;
+        }
+    }
 
-    let mut attempts = 0;
-    while ruins_count < ruins_number && attempts < 2000 {
-        attempts += 1;
+    for i in 0..tile_count {
+        map[i as usize].terrain_type = if is_land[i as usize] {
+            TerrainType::Field
+        } else {
+            TerrainType::Ocean
+        };
+    }
 
-        let candidates: Vec<i32> = village_map
-            .iter()
-            .enumerate()
-            .filter(|(_, &v)| v == -1 || v == 0 || v == 1)
-            .map(|(i, _)| i as i32)
-            .collect();
+    if !use_quadrants {
+        if settings.map_type == MapType::Continents {
+            // Continents: Identify landmasses and place villages
+            // First, identify all distinct landmasses using flood-fill
+            let mut landmass_id = vec![-1i32; tile_count as usize];
+            let mut current_landmass = 0;
 
-        if candidates.is_empty() {
+            for start_idx in 0..tile_count {
+                if !is_land[start_idx as usize] || landmass_id[start_idx as usize] != -1 {
+                    continue;
+                }
+
+                // Flood-fill to mark this landmass
+                let mut queue = vec![start_idx];
+                landmass_id[start_idx as usize] = current_landmass;
+
+                while let Some(idx) = queue.pop() {
+                    for n in plus_sign(idx, size) {
+                        if is_land[n as usize] && landmass_id[n as usize] == -1 {
+                            landmass_id[n as usize] = current_landmass;
+                            queue.push(n);
+                        }
+                    }
+                }
+
+                current_landmass += 1;
+            }
+
+            let num_landmasses = current_landmass;
+
+            // Place one village per landmass first
+            for landmass in 0..num_landmasses {
+                let candidates: Vec<i32> = (0..tile_count)
+                    .filter(|&i| {
+                        landmass_id[i as usize] == landmass
+                            && village_map[i as usize] == 0
+                            && map[i as usize].terrain_type != TerrainType::Mountain
+                            && {
+                                let (x, y) = get_coords(i, size);
+                                x > 1 && x < size - 2 && y > 1 && y < size - 2
+                            }
+                            && village_map
+                                .iter()
+                                .enumerate()
+                                .all(|(v_idx, &v)| v == 0 || distance(i, v_idx as i32, size) >= 4)
+                    })
+                    .collect();
+
+                if let Some(&idx) = candidates.get(rng.gen_range(0..candidates.len().max(1))) {
+                    village_map[idx as usize] = 1;
+                    if map[idx as usize].terrain_type == TerrainType::Forest {
+                        map[idx as usize].terrain_type = TerrainType::Field;
+                    }
+                    map[idx as usize].above = Some("village".to_string());
+                }
+            }
+
+            // Then place additional villages randomly (fill phase)
+            loop {
+                let candidates: Vec<i32> = (0..tile_count)
+                    .filter(|&i| {
+                        let (x, y) = get_coords(i, size);
+                        let dist_x = x.min(size - 1 - x);
+                        let dist_y = y.min(size - 1 - y);
+                        let edge_dist = dist_x.min(dist_y);
+
+                        is_land[i as usize]
+                            && village_map[i as usize] == 0
+                            && map[i as usize].terrain_type != TerrainType::Mountain
+                            && edge_dist >= 2     // Not within two tiles
+                            && edge_dist != 3     // Not three tiles from edge
+                            && village_map
+                                .iter()
+                                .enumerate()
+                                .all(|(v_idx, &v)| v == 0 || distance(i, v_idx as i32, size) >= 3)
+                    })
+                    .collect();
+
+                if candidates.is_empty() {
+                    break;
+                }
+
+                let idx = candidates[rng.gen_range(0..candidates.len())];
+                village_map[idx as usize] = 1;
+                if map[idx as usize].terrain_type == TerrainType::Forest {
+                    map[idx as usize].terrain_type = TerrainType::Field;
+                }
+                map[idx as usize].above = Some("village".to_string());
+            }
+
+            // Convert villages to capitals (prefer different landmasses, maximize distance, prefer coastal)
+            let available_villages: Vec<i32> = (0..tile_count)
+                .filter(|&i| village_map[i as usize] == 1)
+                .collect();
+
+            let mut used_landmasses: HashSet<i32> = HashSet::new();
+            let mut scored_villages: Vec<(i32, i32)> = available_villages
+                .iter()
+                .map(|&v| {
+                    let coastal = plus_sign(v, size).iter().any(|&n| !is_land[n as usize]);
+                    let mut dist_score = 100;
+                    for &cap in &capital_cells {
+                        dist_score = dist_score.min(distance(v, cap, size));
+                    }
+                    let landmass_bonus = if used_landmasses.contains(&landmass_id[v as usize]) {
+                        -50 // Penalty for already used landmass
+                    } else {
+                        50 // Bonus for new landmass
+                    };
+                    (
+                        v,
+                        dist_score + (if coastal { 10 } else { 0 }) + landmass_bonus,
+                    )
+                })
+                .collect();
+
+            for &tribe in &settings.tribes {
+                if scored_villages.is_empty() {
+                    break;
+                }
+
+                // Find max score
+                let mut best_idx = 0;
+                let mut max_score = i32::MIN;
+                for (idx, &(_, score)) in scored_villages.iter().enumerate() {
+                    if score > max_score {
+                        max_score = score;
+                        best_idx = idx;
+                    }
+                }
+
+                let (best_v, _) = scored_villages.remove(best_idx);
+
+                used_landmasses.insert(landmass_id[best_v as usize]);
+                capital_cells.push(best_v);
+                village_map[best_v as usize] = 2;
+                map[best_v as usize].above = Some("capital".to_string());
+                map[best_v as usize].tribe_affinity = Some(tribe);
+                map[best_v as usize].orig_tribe_affinity = Some(tribe);
+
+                // Update scores for remaining
+                for (v, score) in &mut scored_villages {
+                    let coastal_bonus = if plus_sign(*v, size).iter().any(|&n| !is_land[n as usize])
+                    {
+                        10
+                    } else {
+                        0
+                    };
+                    let landmass_bonus = if used_landmasses.contains(&landmass_id[*v as usize]) {
+                        -50
+                    } else {
+                        50
+                    };
+                    let old_dist = *score - coastal_bonus - landmass_bonus;
+                    let new_dist = distance(*v, best_v, size);
+                    let new_min_dist = old_dist.min(new_dist);
+                    *score = new_min_dist + coastal_bonus + landmass_bonus;
+                }
+            }
+        } else {
+            // Pangea: Place villages on land (fill phase)
+            loop {
+                let candidates: Vec<i32> = (0..tile_count)
+                    .filter(|&i| {
+                        let (x, y) = get_coords(i, size);
+                        let dist_x = x.min(size - 1 - x);
+                        let dist_y = y.min(size - 1 - y);
+                        let edge_dist = dist_x.min(dist_y);
+
+                        is_land[i as usize]
+                            && village_map[i as usize] == 0
+                            && map[i as usize].terrain_type != TerrainType::Mountain
+                            && edge_dist >= 2     // Not within two tiles
+                            && edge_dist != 3     // Not three tiles from edge
+                            && village_map
+                                .iter()
+                                .enumerate()
+                                .all(|(v_idx, &v)| v == 0 || distance(i, v_idx as i32, size) >= 3)
+                    })
+                    .collect();
+
+                if candidates.is_empty() {
+                    break;
+                }
+
+                let idx = candidates[rng.gen_range(0..candidates.len())];
+                village_map[idx as usize] = 1;
+                if map[idx as usize].terrain_type == TerrainType::Forest {
+                    map[idx as usize].terrain_type = TerrainType::Field;
+                }
+                map[idx as usize].above = Some("village".to_string());
+            }
+
+            // Convert some villages to capitals (maximize distance, prefer coastal)
+            let available_villages: Vec<i32> = (0..tile_count)
+                .filter(|&i| village_map[i as usize] == 1)
+                .collect();
+
+            let mut scored_villages: Vec<(i32, i32)> = available_villages
+                .iter()
+                .map(|&v| {
+                    let coastal = plus_sign(v, size).iter().any(|&n| !is_land[n as usize]);
+                    let mut dist_score = 100;
+                    for &cap in &capital_cells {
+                        dist_score = dist_score.min(distance(v, cap, size));
+                    }
+                    (v, dist_score + (if coastal { 10 } else { 0 }))
+                })
+                .collect();
+
+            for &tribe in &settings.tribes {
+                if scored_villages.is_empty() {
+                    break;
+                }
+
+                // Find max score
+                let mut best_idx = 0;
+                let mut max_score = -1;
+                for (idx, &(_, score)) in scored_villages.iter().enumerate() {
+                    if score > max_score {
+                        max_score = score;
+                        best_idx = idx;
+                    }
+                }
+
+                let (best_v, _) = scored_villages.remove(best_idx);
+
+                capital_cells.push(best_v);
+                village_map[best_v as usize] = 2;
+                map[best_v as usize].above = Some("capital".to_string());
+                map[best_v as usize].tribe_affinity = Some(tribe);
+                map[best_v as usize].orig_tribe_affinity = Some(tribe);
+
+                // Update scores for remaining
+                for (v, score) in &mut scored_villages {
+                    let coastal_bonus = if plus_sign(*v, size).iter().any(|&n| !is_land[n as usize])
+                    {
+                        10
+                    } else {
+                        0
+                    };
+                    let old_dist = *score - coastal_bonus;
+                    let new_dist = distance(*v, best_v, size);
+                    let new_min_dist = old_dist.min(new_dist);
+                    *score = new_min_dist + coastal_bonus;
+                }
+            }
+        }
+    }
+
+    // Biomes
+    let mut done = HashSet::new();
+    let mut active = vec![Vec::new(); settings.tribes.len()];
+    for (i, &cap) in capital_cells.iter().enumerate() {
+        active[i].push(cap);
+        done.insert(cap);
+    }
+    loop {
+        let mut changed = false;
+        for i in 0..settings.tribes.len() {
+            if active[i].is_empty() {
+                continue;
+            }
+            let idx = rng.gen_range(0..active[i].len());
+            let cell = active[i][idx];
+            let neighbors = get_square(cell, 1, size);
+            let mut valid: Vec<i32> = neighbors
+                .iter()
+                .cloned()
+                .filter(|&n| !done.contains(&n) && is_land[n as usize])
+                .collect();
+            if valid.is_empty() {
+                valid = neighbors
+                    .iter()
+                    .cloned()
+                    .filter(|&n| !done.contains(&n))
+                    .collect();
+            }
+            if !valid.is_empty() {
+                let chosen = valid[rng.gen_range(0..valid.len())];
+                map[chosen as usize].tribe_affinity = Some(settings.tribes[i]);
+                active[i].push(chosen);
+                done.insert(chosen);
+                changed = true;
+            } else {
+                active[i].swap_remove(idx);
+            }
+        }
+        if !changed {
             break;
         }
+    }
 
-        let ruin_idx = candidates[rng.gen_range(0..candidates.len())];
-        let t_type = map[ruin_idx as usize].terrain_type;
+    // Fill in orphan land tiles (isolated islands) with nearest tribe affinity
+    for i in 0..tile_count {
+        if is_land[i as usize] && map[i as usize].tribe_affinity.is_none() {
+            let mut min_dist = i32::MAX;
+            let mut best_tribe = settings.tribes[0]; // Fallback
 
-        if t_type != TerrainType::Water
-            && (water_ruins_count < water_ruins_number || t_type != TerrainType::Ocean)
-        {
-            map[ruin_idx as usize].above = Some("ruin".to_string());
-            if t_type == TerrainType::Ocean {
-                water_ruins_count += 1;
+            for &cap in &capital_cells {
+                let d = distance(i as i32, cap, size);
+                if d < min_dist {
+                    min_dist = d;
+                    // Safely unwrap or fallback, though capitals should always have affinity
+                    best_tribe = map[cap as usize]
+                        .tribe_affinity
+                        .unwrap_or(settings.tribes[0]);
+                }
             }
-            village_map[ruin_idx as usize] = village_map[ruin_idx as usize].max(2);
-            for n in circle(ruin_idx, 1, size) {
-                village_map[n as usize] = village_map[n as usize].max(2);
-            }
-            ruins_count += 1;
+            map[i as usize].tribe_affinity = Some(best_tribe);
+
+            // Also assign orig_tribe_affinity if needed
+            map[i as usize].orig_tribe_affinity = Some(best_tribe);
         }
     }
 
-    // 9. Post Generate (Guaranteed resources)
-    for &capital in &capital_cells {
-        let tribe = map[capital as usize]
+    for i in 0..tile_count {
+        if !is_land[i as usize] && plus_sign(i, size).iter().any(|&n| is_land[n as usize]) {
+            map[i as usize].terrain_type = TerrainType::Water;
+        } else if is_land[i as usize] && village_map[i as usize] == 0 {
+            let tribe = map[i as usize]
+                .tribe_affinity
+                .unwrap_or(TribeType::Luxidoor);
+            let rates = get_tribe_biome_rates(tribe);
+            let r: f32 = rng.gen();
+            if r < rates.mountain {
+                map[i as usize].terrain_type = TerrainType::Mountain;
+            } else if r < rates.mountain + rates.forest {
+                map[i as usize].terrain_type = TerrainType::Forest;
+            }
+        }
+    }
+
+    // Post-terrain Villages (only for quadrant-based maps: Drylands, Lakes, Archipelago, WaterWorld)
+    if matches!(
+        settings.map_type,
+        MapType::Drylands | MapType::Lakes | MapType::Archipelago | MapType::WaterWorld
+    ) {
+        loop {
+            let candidates: Vec<i32> = (0..tile_count)
+                .filter(|&i| {
+                    let (x, y) = get_coords(i, size);
+                    let dist_x = x.min(size - 1 - x);
+                    let dist_y = y.min(size - 1 - y);
+                    let edge_dist = dist_x.min(dist_y);
+
+                    is_land[i as usize]
+                        && village_map[i as usize] == 0
+                        && map[i as usize].terrain_type != TerrainType::Mountain
+                        && edge_dist >= 2     // Not within two tiles (0, 1)
+                        && edge_dist != 3     // Not three tiles from the edge
+                        && village_map
+                            .iter()
+                            .enumerate()
+                            .all(|(v_idx, &v)| v == 0 || distance(i, v_idx as i32, size) >= 3)
+                    // Not within two tiles (0, 1, 2)
+                })
+                .collect();
+
+            if candidates.is_empty() {
+                break;
+            }
+
+            let idx = candidates[rng.gen_range(0..candidates.len())];
+            village_map[idx as usize] = 1;
+            // Convert forest to field if needed
+            if map[idx as usize].terrain_type == TerrainType::Forest {
+                map[idx as usize].terrain_type = TerrainType::Field;
+            }
+            map[idx as usize].above = Some("village".to_string());
+        }
+    }
+
+    // Tiny Island Villages (Pangea/Continents/WaterWorld)
+    if settings.map_type == MapType::Pangea
+        || settings.map_type == MapType::Continents
+        || settings.map_type == MapType::WaterWorld
+    {
+        let island_count = match settings.size {
+            MapSize::Tiny => 0,
+            MapSize::Small => 1,
+            MapSize::Normal => 2,
+            MapSize::Large => 3,
+            MapSize::Huge => 4,
+            MapSize::Massive => 9,
+        };
+
+        // Find small isolated land tiles (surrounded mostly by water)
+        let mut island_candidates: Vec<i32> = (0..tile_count)
+            .filter(|&i| {
+                if !is_land[i as usize] || village_map[i as usize] > 0 {
+                    return false;
+                }
+                let neighbors = get_square(i, 1, size);
+                let water_count = neighbors.iter().filter(|&&n| !is_land[n as usize]).count();
+                // At least 6 of 8 neighbors are water (isolated)
+                water_count >= 6
+                    && village_map
+                        .iter()
+                        .enumerate()
+                        .all(|(v_idx, &v)| v == 0 || distance(i, v_idx as i32, size) >= 3)
+            })
+            .collect();
+
+        let mut placed = 0;
+        while placed < island_count && !island_candidates.is_empty() {
+            let idx = island_candidates.remove(rng.gen_range(0..island_candidates.len()));
+            village_map[idx as usize] = 1;
+            map[idx as usize].above = Some("village".to_string());
+            map[idx as usize].terrain_type = TerrainType::Field;
+            placed += 1;
+            island_candidates.retain(|&c| distance(c, idx, size) >= 3);
+        }
+    }
+
+    // Resources: Iterate villages and their 2-tile radius
+    // Pre-compute village positions for efficiency
+    let village_positions: Vec<i32> = (0..tile_count)
+        .filter(|&i| village_map[i as usize] > 0)
+        .collect();
+
+    for &v in &village_positions {
+        let tribe = map[v as usize]
+            .tribe_affinity
+            .unwrap_or(TribeType::Luxidoor);
+
+        // Iterate through radius 1 (inner) and radius 2 (outer)
+        for radius in 1..=2 {
+            let inner = radius == 1;
+            let square_tiles = get_square(v, radius, size);
+
+            for tile_idx in square_tiles {
+                // Ensure we only process tiles at the exact radius distance (manhattan distance check is approximate but sufficient for now, standard is square radius)
+                // Actually, duplicate processing is possible if radii overlap between villages.
+                // We should check if the tile already has a resource or if we've processed it.
+                // But map[i].above.is_some() check handles this.
+                // However, a tile might be radius 2 from V1 and radius 1 from V2.
+                // We typically want the closest village's influence.
+                // But the probability function relies on "inner/outer".
+                // Let's stick to the previous logic's intent but optimized:
+                // But simple iteration might process a tile twice.
+                // Best is to use a set or check if resource added.
+
+                if map[tile_idx as usize].above.is_some() {
+                    continue;
+                }
+
+                // Verify distance to THIS village is the deciding factor?
+                // The prompt suggests iterating villages.
+                // "So iterate villages, then iterate their 2-tile radius"
+
+                // Check if this tile is actually closest to this village?
+                // Or just apply logic.
+                // If we iterate all villages, a shared tile might get multiple chances.
+                // Let's assume first come first served for resource generation.
+
+                // We need to ensure we don't overwrite or double-roll.
+                // map[tile_idx].above check prevents overwrite.
+
+                match map[tile_idx as usize].terrain_type {
+                    TerrainType::Field => {
+                        let fp = get_resource_prob("fruit", tribe, inner);
+                        let (cp, res_name) = if tribe == TribeType::Cymanti {
+                            (get_resource_prob("spores", tribe, inner), "spores")
+                        } else {
+                            (get_resource_prob("crop", tribe, inner), "crop")
+                        };
+
+                        let r: f32 = rng.gen();
+                        if r < fp {
+                            map[tile_idx as usize].above = Some("fruit".to_string());
+                        } else if r < fp + cp {
+                            map[tile_idx as usize].above = Some(res_name.to_string());
+                        }
+                    }
+                    TerrainType::Forest => {
+                        if rng.gen::<f32>() < get_resource_prob("game", tribe, inner) {
+                            map[tile_idx as usize].above = Some("game".to_string());
+                        }
+                    }
+                    TerrainType::Mountain => {
+                        if rng.gen::<f32>() < get_resource_prob("metal", tribe, inner) {
+                            map[tile_idx as usize].above = Some("metal".to_string());
+                        }
+                    }
+                    TerrainType::Water => {
+                        if rng.gen::<f32>() < get_resource_prob("fish", tribe, inner) {
+                            map[tile_idx as usize].above = Some("fish".to_string());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // Drylands: Kickoo/Aquarion capitals get 2 water tiles with fish
+    if settings.map_type == MapType::Drylands {
+        for &cap in &capital_cells {
+            let tribe = map[cap as usize]
+                .tribe_affinity
+                .unwrap_or(TribeType::Imperius);
+            if tribe == TribeType::Kickoo || tribe == TribeType::Aquarion {
+                let neighbors = plus_sign(cap, size);
+                let mut placed = 0;
+                for n in neighbors {
+                    if placed >= 2 {
+                        break;
+                    }
+                    if map[n as usize].terrain_type != TerrainType::Water {
+                        map[n as usize].terrain_type = TerrainType::Water;
+                        map[n as usize].above = Some("fish".to_string());
+                        placed += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Guaranteed Starting Resources
+    for &cap in &capital_cells {
+        let tribe = map[cap as usize]
             .tribe_affinity
             .unwrap_or(TribeType::Imperius);
-
-        let (resource, underneath, quantity) = match tribe {
+        let (resource, target_terrain, quantity): (&str, TerrainType, i32) = match tribe {
             TribeType::Imperius => ("fruit", TerrainType::Field, 2),
             TribeType::Bardur => ("game", TerrainType::Forest, 2),
             TribeType::Zebasi => ("crop", TerrainType::Field, 1),
             TribeType::Elyrion => ("game", TerrainType::Forest, 2),
+            TribeType::Kickoo => ("fish", TerrainType::Water, 2),
+            TribeType::Aquarion => ("fish", TerrainType::Water, 2),
+            TribeType::Cymanti => ("spores", TerrainType::Field, 2),
             _ => ("", TerrainType::Field, 0),
         };
 
-        if !resource.is_empty() {
-            let mut current_qty = 0;
-            for n in circle(capital, 1, size) {
-                if map[n as usize].above.as_deref() == Some(resource) {
-                    current_qty += 1;
-                }
-            }
-
-            let circle1 = circle(capital, 1, size);
-            if !circle1.is_empty() {
-                let mut attempts = 0;
-                while current_qty < quantity && attempts < 100 {
-                    attempts += 1;
-                    let idx = circle1[rng.gen_range(0..circle1.len())] as usize;
-
-                    map[idx].terrain_type = underneath;
-                    map[idx].above = Some(resource.to_string());
-
-                    for n in plus_sign(idx as i32, size) {
-                        if map[n as usize].terrain_type == TerrainType::Ocean {
-                            map[n as usize].terrain_type = TerrainType::Water;
-                        }
-                    }
-
-                    current_qty = 0;
-                    for n in &circle1 {
-                        if map[*n as usize].above.as_deref() == Some(resource) {
-                            current_qty += 1;
-                        }
-                    }
-                }
-            }
-        } else if tribe == TribeType::Kickoo {
-            let quantity = 2;
-            let mut current_qty = 0;
-            for n in circle(capital, 1, size) {
-                if map[n as usize].above.as_deref() == Some("fish") {
-                    current_qty += 1;
-                }
-            }
-
-            let plus_neighbors = plus_sign(capital, size);
-            if !plus_neighbors.is_empty() {
-                let mut attempts = 0;
-                while current_qty < quantity && attempts < 100 {
-                    attempts += 1;
-                    let idx = plus_neighbors[rng.gen_range(0..plus_neighbors.len())] as usize;
-                    map[idx].terrain_type = TerrainType::Water;
-                    map[idx].above = Some("fish".to_string());
-
-                    current_qty = 0;
-                    for n in circle(capital, 1, size) {
-                        if map[n as usize].above.as_deref() == Some("fish") {
-                            current_qty += 1;
-                        }
-                    }
-                    if current_qty >= quantity {
-                        break;
-                    }
-                }
-            }
+        if resource.is_empty() {
+            continue;
         }
 
-        if tribe == TribeType::Polaris {
-            for n in circle(capital, 1, size) {
-                map[n as usize].tribe_affinity = Some(TribeType::Polaris);
+        // Count existing resources in radius 1
+        let radius1 = get_square(cap, 1, size);
+        let existing: i32 = radius1
+            .iter()
+            .filter(|&&n| map[n as usize].above.as_deref() == Some(resource))
+            .count() as i32;
+
+        let needed = quantity - existing;
+        if needed <= 0 {
+            continue;
+        }
+
+        // Find eligible tiles in radius 1
+        let mut candidates: Vec<i32> = radius1
+            .iter()
+            .cloned()
+            .filter(|&n| {
+                n != cap
+                    && map[n as usize].above.is_none()
+                    && (map[n as usize].terrain_type == target_terrain
+                        || map[n as usize].terrain_type == TerrainType::Field)
+            })
+            .collect();
+
+        for _ in 0..needed {
+            if candidates.is_empty() {
+                break;
+            }
+            let idx = candidates.remove(rng.gen_range(0..candidates.len()));
+            map[idx as usize].terrain_type = target_terrain;
+            map[idx as usize].above = Some(resource.to_string());
+        }
+    }
+
+    // Ruins & Starfish
+    let ruin_count = match settings.size {
+        MapSize::Tiny => 4,
+        MapSize::Small => 5,
+        MapSize::Normal => 7,
+        MapSize::Large => 9,
+        MapSize::Huge => 11,
+        MapSize::Massive => 23,
+    };
+    // On Lakes, a maximum of one third of these ruins are allowed to spawn on water.
+    let max_water_ruins = if settings.map_type == MapType::Lakes {
+        ruin_count / 3
+    } else {
+        0
+    };
+    let mut placed = 0;
+    let mut water_ruins = 0;
+    for _ in 0..2000 {
+        if placed >= ruin_count {
+            break;
+        }
+        let idx = rng.gen_range(0..tile_count);
+        let terrain = map[idx as usize].terrain_type;
+        let is_water = terrain == TerrainType::Water || terrain == TerrainType::Ocean;
+
+        if map[idx as usize].above.is_some() || village_map[idx as usize] > 0 {
+            continue;
+        }
+
+        // Water ruins only on Lakes, and only up to max_water_ruins
+        if is_water && water_ruins >= max_water_ruins {
+            continue;
+        }
+
+        // Adjacency check
+        let mut neighbors_ok = true;
+        for n in get_square(idx, 1, size) {
+            if map[n as usize].above.as_deref() == Some("ruin") || village_map[n as usize] > 0 {
+                neighbors_ok = false;
+                break;
+            }
+        }
+        if neighbors_ok {
+            map[idx as usize].above = Some("ruin".to_string());
+            placed += 1;
+            if is_water {
+                water_ruins += 1;
             }
         }
     }
 
-    // Convert to GameState
+    let starfish_count = tile_count / 25;
+    let mut placed_starfish = 0;
+    for _ in 0..1000 {
+        if placed_starfish >= starfish_count {
+            break;
+        }
+        let idx = rng.gen_range(0..tile_count);
+        if (map[idx as usize].terrain_type == TerrainType::Water
+            || map[idx as usize].terrain_type == TerrainType::Ocean)
+            && map[idx as usize].above.is_none()
+        {
+            // Starfish proximity check (cannot be next to other starfish, lighthouse, or city)
+            let neighbors = get_square(idx, 1, size);
+            let safe = neighbors.iter().all(|&n| {
+                let above = map[n as usize].above.as_deref();
+                above != Some("starfish")
+                    && above != Some("lighthouse")
+                    && above != Some("capital")
+                    && above != Some("village")
+            });
+
+            if safe {
+                map[idx as usize].above = Some("starfish".to_string());
+                placed_starfish += 1;
+            }
+        }
+    }
+
+    // Conversion to GameState
     let mut game_state = GameState::default();
     game_state.settings.size = size;
     game_state.settings.tile_count = tile_count;
@@ -781,15 +1160,14 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         let mut t_state = TribeState::default();
         t_state.id = id;
         t_state.tribe_type = tribe;
-        t_state.score = 0;
+        // Initial starting stars
         t_state.stars = match tribe {
             TribeType::Luxidoor => 2,
-            TribeType::XinXi | TribeType::Hoodrick | TribeType::Quetzali | TribeType::Yadakk => 7,
             TribeType::Oumaji => 6,
+            TribeType::Hoodrick | TribeType::XinXi | TribeType::Quetzali | TribeType::Yadakk => 7,
             _ => 5,
         };
 
-        // Correct starting technology
         use crate::states::TechnologyState;
         use crate::types::TechnologyType;
         let mut starting_tech = vec![TechnologyState {
@@ -814,7 +1192,6 @@ pub fn generate(settings: MapGenSettings) -> GameState {
             TribeType::Aquarion => Some(TechnologyType::Riding),
             _ => None,
         };
-
         if let Some(t) = tech_type {
             starting_tech.push(TechnologyState {
                 tech_type: t,
@@ -822,7 +1199,6 @@ pub fn generate(settings: MapGenSettings) -> GameState {
             });
         }
         t_state.tech_vanilla = starting_tech;
-
         tribe_id_map.insert(tribe, id);
         game_state.tribes.insert(id, t_state);
     }
@@ -836,11 +1212,8 @@ pub fn generate(settings: MapGenSettings) -> GameState {
             idx: gen_tile.idx,
         };
         t_state.terrain_type = gen_tile.terrain_type;
-
         if let Some(tribe) = gen_tile.tribe_affinity {
             t_state.climate = match tribe {
-                TribeType::None => ClimateType::Nature,
-                TribeType::Nature => ClimateType::Nature,
                 TribeType::AiMo => ClimateType::AiMo,
                 TribeType::Aquarion => ClimateType::Aquarion,
                 TribeType::Bardur => ClimateType::Bardur,
@@ -857,62 +1230,17 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                 TribeType::Zebasi => ClimateType::Zebasi,
                 TribeType::Polaris => ClimateType::Polaris,
                 TribeType::Cymanti => ClimateType::Cymanti,
+                _ => ClimateType::Nature,
             };
         }
-
-        if let Some(s) = gen_tile.above {
+        if let Some(ref s) = gen_tile.above {
             match s.as_str() {
-                "village" => {
+                "village" | "capital" => {
                     use crate::states::StructureState;
                     use crate::types::StructureType;
                     let mut s_state = StructureState::default();
                     s_state.structure_type = StructureType::Village;
                     s_state.tile_index = gen_tile.idx;
-                    game_state.structures.insert(gen_tile.idx, Some(s_state));
-                }
-                "capital" => {
-                    use crate::states::CityState;
-                    let mut city = CityState::default();
-                    city.tile_index = gen_tile.idx;
-
-                    if gen_tile.tribe_affinity == Some(TribeType::Luxidoor) {
-                        city.level = 3;
-                        city.production = 3;
-                        city.border_size = 1;
-                        // Luxidoor starts at level 3 but doesn't get to pick the first 2 rewards
-                        // Pre-fill them so the reward generator skips them
-                        use crate::types::RewardType;
-                        city.rewards.insert(RewardType::Workshop);
-                        city.rewards.insert(RewardType::Resources);
-                    } else {
-                        city.level = 1;
-                        city.production = 1;
-                        city.border_size = 1;
-                    }
-
-                    city.population = 0;
-
-                    if let Some(tribe) = gen_tile.tribe_affinity {
-                        if let Some(&pid) = tribe_id_map.get(&tribe) {
-                            city.owner = pid;
-                            t_state.owner = pid;
-                            t_state.capital_of = pid;
-
-                            if let Some(t) = game_state.tribes.get_mut(&pid) {
-                                t.cities.push(city.clone());
-                                t.starting_tile_coords = t_state.coords;
-                            }
-                        }
-                    }
-
-                    // Also add a StructureState for the capital (it counts as a Village/City structure)
-                    use crate::states::StructureState;
-                    use crate::types::StructureType;
-                    let mut s_state = StructureState::default();
-                    s_state.structure_type = StructureType::Village;
-                    s_state.tile_index = gen_tile.idx;
-                    // Cities are founded at the start
-                    s_state.founded = 0;
                     game_state.structures.insert(gen_tile.idx, Some(s_state));
                 }
                 "ruin" => {
@@ -971,7 +1299,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                     r_state.tile_index = gen_tile.idx;
                     game_state.resources.insert(gen_tile.idx, Some(r_state));
                 }
-                "spore" => {
+                "spores" => {
                     use crate::states::ResourceState;
                     use crate::types::ResourceType;
                     let mut r_state = ResourceState::default();
@@ -982,126 +1310,138 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                 _ => {}
             }
         }
-
         game_state.tiles.insert(gen_tile.idx, t_state);
     }
 
-    // Territory and Ruling City Coords
-    for tribe in game_state.tribes.values_mut() {
-        for city in &mut tribe.cities {
-            // Generate filled square for territory (Polytopia style), replacing perimeter-only 'circle'
-            let mut territory = Vec::new();
-            let (cx, cy) = get_coords(city.tile_index, size);
-            let r = city.border_size;
+    // Capital/City Setup
+    for &cap in &capital_cells {
+        let tribe = settings.tribes[capital_cells.iter().position(|&c| c == cap).unwrap()];
+        let pid = tribe_id_map[&tribe];
+        use crate::states::CityState;
+        let mut city = CityState::default();
+        city.id = cap;
+        city.tile_index = cap;
+        city.owner = pid;
+        city.level = if tribe == TribeType::Luxidoor { 3 } else { 1 };
+        city.production = city.level;
+        city.border_size = 1;
 
-            for dy in -r..=r {
-                for dx in -r..=r {
-                    let nx = cx + dx;
-                    let ny = cy + dy;
-                    if nx >= 0 && nx < size && ny >= 0 && ny < size {
-                        territory.push(ny * size + nx);
-                    }
-                }
-            }
-            city._territory = territory;
-        }
-    }
-
-    let mut territory_updates: Vec<(i32, i32)> = Vec::new(); // (tile_idx, owner_id)
-    for tribe in game_state.tribes.values() {
-        for city in &tribe.cities {
-            for &idx in &city._territory {
-                territory_updates.push((idx, tribe.id));
-            }
-        }
-    }
-
-    for (idx, owner) in territory_updates {
-        if let Some(t) = game_state.tiles.get_mut(&idx) {
-            t.owner = owner;
-        }
-    }
-
-    for tribe in game_state.tribes.values() {
-        for city in &tribe.cities {
-            let city_coords = get_coords(city.tile_index, size);
-            let city_coords_obj = Coords {
-                x: city_coords.0,
-                y: city_coords.1,
-                idx: city.tile_index,
-            };
-            for &idx in &city._territory {
-                if let Some(t) = game_state.tiles.get_mut(&idx) {
-                    t.ruling_city_coords = Some(city_coords_obj);
-                }
-            }
-
-            // Mark vision area as explored (Radius = border_size + 1)
-            // This is square vision as per Polytopia rules
-            let vision_dist = city.border_size + 1;
-            let (cx, cy) = (city_coords.0, city_coords.1);
-            for dy in -vision_dist..=vision_dist {
-                for dx in -vision_dist..=vision_dist {
-                    let nx = cx + dx;
-                    let ny = cy + dy;
-                    if nx >= 0 && nx < size && ny >= 0 && ny < size {
-                        let idx = ny * size + nx;
-                        if let Some(t) = game_state.tiles.get_mut(&idx) {
-                            t.explorers.insert(tribe.id);
-                        }
-                    }
+        let mut territory = Vec::new();
+        let (cx, cy) = get_coords(cap, size);
+        for dy in -city.border_size..=city.border_size {
+            for dx in -city.border_size..=city.border_size {
+                let nx = cx + dx;
+                let ny = cy + dy;
+                if nx >= 0 && nx < size && ny >= 0 && ny < size {
+                    territory.push(ny * size + nx);
                 }
             }
         }
+        city._territory = territory.clone();
+
+        let cap_coords = game_state.tiles[&cap].coords;
+        if let Some(t) = game_state.tribes.get_mut(&pid) {
+            t.cities.push(city);
+            t.starting_tile_coords = cap_coords;
+        }
+        for idx in territory {
+            if let Some(tile) = game_state.tiles.get_mut(&idx) {
+                tile.owner = pid;
+                tile.ruling_city_coords = Some(cap_coords);
+            }
+        }
     }
 
-    // Spawn starting units on capitals
+    // Starting units
     use crate::types::UnitType;
-    // Use set of all tribes
-    let tribe_ids: HashSet<i32> = game_state.tribes.keys().cloned().collect();
-    for pid in tribe_ids {
-        if let Some(tribe) = game_state.tribes.get_mut(&pid) {
-            let tribe_type = tribe.tribe_type;
-            let capital_tile_idx = if !tribe.cities.is_empty() {
-                tribe.cities[0].tile_index
-            } else {
-                continue;
-            };
-
-            let unit_type = match tribe_type {
-                TribeType::Hoodrick => UnitType::Archer,
-                TribeType::Vengir => UnitType::Swordsman,
-                TribeType::AiMo => UnitType::MindBender,
-                TribeType::Aquarion => UnitType::Amphibian,
-                TribeType::Oumaji => UnitType::Rider,
-                TribeType::Quetzali => UnitType::Defender,
-                TribeType::Polaris => UnitType::Mooni,
-                TribeType::Cymanti => UnitType::Shaman,
-                _ => UnitType::Warrior,
-            };
-
-            let coords = get_coords(capital_tile_idx, size);
-            let unit_coords = Coords {
-                x: coords.0,
-                y: coords.1,
-                idx: capital_tile_idx,
-            };
-
-            use crate::states::UnitState;
-            let mut unit = UnitState::default();
-            unit.owner = pid;
-            unit.unit_type = unit_type;
-            unit.coords = unit_coords;
-            unit.prev_coords = unit_coords;
-            unit.home_coords = Some(unit_coords);
-
-            tribe.units.push(unit);
-
-            if let Some(tile) = game_state.tiles.get_mut(&capital_tile_idx) {
-                tile._unit_owner_id = Some(pid);
-            }
+    for &cap in &capital_cells {
+        let tribe = settings.tribes[capital_cells.iter().position(|&c| c == cap).unwrap()];
+        let pid = tribe_id_map[&tribe];
+        let unit_type = match tribe {
+            TribeType::Hoodrick => UnitType::Archer,
+            TribeType::Vengir => UnitType::Swordsman,
+            TribeType::Oumaji => UnitType::Rider,
+            TribeType::Quetzali => UnitType::Defender,
+            TribeType::AiMo => UnitType::MindBender,
+            TribeType::Aquarion => UnitType::Amphibian,
+            TribeType::Polaris => UnitType::Mooni,
+            TribeType::Cymanti => UnitType::Shaman,
+            _ => UnitType::Warrior,
+        };
+        use crate::states::UnitState;
+        let mut unit = UnitState::default();
+        unit.owner = pid;
+        unit.unit_type = unit_type;
+        unit.coords = game_state.tiles[&cap].coords;
+        unit.prev_coords = unit.coords;
+        unit.home_coords = Some(unit.coords);
+        unit.city_id = cap;
+        if let Some(t) = game_state.tribes.get_mut(&pid) {
+            t.units.push(unit);
         }
     }
 
     game_state
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{MapSize, MapType, StructureType};
+
+    #[test]
+    fn test_no_edge_spawns() {
+        let map_types = [
+            MapType::Drylands,
+            MapType::Lakes,
+            MapType::Continents,
+            MapType::Pangea,
+            MapType::Archipelago,
+            MapType::WaterWorld,
+        ];
+        let map_sizes = [MapSize::Tiny, MapSize::Normal];
+
+        for &map_type in &map_types {
+            for &size in &map_sizes {
+                let settings = MapGenSettings {
+                    size,
+                    map_type,
+                    tribes: vec![TribeType::Imperius, TribeType::Bardur],
+                    seed: 42, // Fixed seed for reproducibility
+                };
+                let state = generate(settings);
+                let side_size = size.get_size();
+
+                for (idx, tile) in &state.tiles {
+                    let (x, y) = (tile.coords.x, tile.coords.y);
+
+                    if let Some(Some(structure)) = state.structures.get(idx) {
+                        match structure.structure_type {
+                            StructureType::Village => {
+                                assert!(
+                                    x > 1 && x < side_size - 2 && y > 1 && y < side_size - 2,
+                                    "Found Village at ({}, {}) on map type {:?} size {:?}",
+                                    x,
+                                    y,
+                                    map_type,
+                                    side_size
+                                );
+                            }
+                            _ => {}
+                        }
+                    }
+                    if tile.capital_of > 0 {
+                        assert!(
+                            x > 1 && x < side_size - 2 && y > 1 && y < side_size - 2,
+                            "Found Capital at ({}, {}) on map type {:?} size {:?}",
+                            x,
+                            y,
+                            map_type,
+                            side_size
+                        );
+                    }
+                }
+            }
+        }
+    }
 }

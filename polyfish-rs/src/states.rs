@@ -136,6 +136,8 @@ pub struct UnitState {
     #[serde(rename = "type")]
     pub unit_type: UnitType,
     pub health: i32,
+    #[serde(default)]
+    pub max_health: i32,
     #[serde(default, deserialize_with = "flex_bool::deserialize")]
     pub veteran: bool,
     #[serde(default)]
@@ -144,6 +146,8 @@ pub struct UnitState {
     pub prev_coords: Coords,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub home_coords: Option<Coords>,
+    #[serde(default)]
+    pub city_id: i32, // Convenience ID for home city (tile index)
     #[serde(default)]
     pub direction: i32,
     #[serde(default, deserialize_with = "flex_bool::deserialize")]
@@ -176,11 +180,13 @@ impl Default for UnitState {
             owner: 0,
             unit_type: UnitType::None,
             health: 10 * HEALTH_SCALE,
+            max_health: 10 * HEALTH_SCALE,
             veteran: false,
             kills: 0,
             coords: Coords::default(),
             prev_coords: Coords::default(),
             home_coords: None,
+            city_id: -1,
             direction: 0,
             flipped: false,
             created_turn: 0,
@@ -200,6 +206,7 @@ impl Default for UnitState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CityState {
+    pub id: i32, // Equal to tile_index for convenience
     pub name: String,
     pub tile_index: i32,
     #[serde(default)]
@@ -228,6 +235,7 @@ pub struct CityState {
 impl Default for CityState {
     fn default() -> Self {
         Self {
+            id: 0,
             name: String::new(),
             tile_index: 0,
             population: 0,

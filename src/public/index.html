@@ -68,11 +68,15 @@
                     <button id="btn-fow" class="btn secondary" title="Toggle Fog of War">
                         <span class="icon">👁</span> FOW
                     </button>
+                    <button id="btn-train" class="btn secondary" title="Start Training in Background">
+                        <span class="icon">🎓</span> Train
+                    </button>
                 </div>
 
                 <div class="control-group central">
                     <button id="btn-rng" class="btn highlight" title="Perform Random Move">
-                        <span class="icon">🎲</span> RNG
+                        <!-- Play random moves -->
+                        <span class="icon">🎲</span> PRM
                     </button>
 
                     <div class="mcts-control">
@@ -93,8 +97,16 @@
             </footer>
         </main>
 
-        <!-- Right Sidebar: Available Moves -->
+        <!-- Right Sidebar: Available Moves & training -->
         <aside id="right-sidebar" class="glass">
+            <div id="training-ui" class="hidden">
+                <h3>Training Progress</h3>
+                <div class="stat-card">
+                    <div id="training-indicator" class="stat-value small">Running...</div>
+                    <pre id="training-log" class="log-stream"></pre>
+                </div>
+            </div>
+
             <h3>Legal Moves</h3>
             <div id="moves-list-container">
                 <ul id="moves-list">

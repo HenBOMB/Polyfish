@@ -3,7 +3,6 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use polyfish::game::Game;
 use polyfish::mapgen::{generate, MapGenSettings};
 use polyfish::moves::{
     abilities::{
@@ -15,7 +14,8 @@ use polyfish::moves::{
     AttackMove, BuildMove, CaptureMove, DisbandMove, EndTurnMove, HarvestMove, Move, RecoverMove,
     ResearchMove, RewardMove, StepMove, SummonMove, UpgradeMove,
 };
-use polyfish::types::{AbilityType, TribeType};
+use polyfish::types::{AbilityType, MapSize, TribeType};
+use polyfish::{game::Game, MapType};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
@@ -23,15 +23,17 @@ use tower_http::services::ServeDir;
 
 struct AppState {
     game: Mutex<Game>,
+    training_status: Mutex<Option<u32>>, // Store PID of running training
 }
 
 #[tokio::main]
 async fn main() {
     // Initialize game
     let mut settings = MapGenSettings::default();
-    settings.size = 16;
+    settings.size = MapSize::Normal;
     settings.tribes = vec![TribeType::Luxidoor, TribeType::Imperius];
-    settings.seed = 42;
+    settings.seed = rand::random();
+    settings.map_type = MapType::Drylands;
 
     let initial_state = generate(settings);
     let mut game = Game::new();
@@ -40,6 +42,7 @@ async fn main() {
 
     let shared_state = Arc::new(AppState {
         game: Mutex::new(game),
+        training_status: Mutex::new(None),
     });
 
     // Build our application with routes
@@ -49,6 +52,8 @@ async fn main() {
         .route("/step", post(manual_step))
         .route("/rngstep", post(rng_step))
         .route("/reset", post(reset_game))
+        .route("/train", post(trigger_training))
+        .route("/train/status", get(get_training_status))
         .nest_service("/", ServeDir::new("../src/public"))
         .layer(CorsLayer::permissive())
         .with_state(shared_state);
@@ -230,7 +235,10 @@ async fn manual_step(
                 AbilityType::Destroy => Box::new(DestroyMove::new(src)),
                 AbilityType::Decompose => Box::new(DecomposeMove::new(src)),
                 AbilityType::Convert => {
-                    let target = payload["target"].as_i64().unwrap() as i32;
+                    let target = payload["targetIdx"]
+                        .as_i64()
+                        .or(payload["target"].as_i64())
+                        .unwrap() as i32;
                     Box::new(ConvertMove::new(src, target))
                 }
                 AbilityType::HealOthers => Box::new(HealOthersMove::new(src)),
@@ -239,7 +247,10 @@ async fn manual_step(
                 AbilityType::Explode => Box::new(ExplodeMove::new(src)),
                 AbilityType::EnchantAnimal => Box::new(EnchantAnimalMove::new(src)),
                 AbilityType::BreakPeace => {
-                    let target = payload["target"].as_i64().unwrap() as i32;
+                    let target = payload["target"]
+                        .as_i64()
+                        .or(payload["targetIdx"].as_i64())
+                        .unwrap() as i32;
                     Box::new(BreakPeaceMove::new(target))
                 }
                 _ => Box::new(EndTurnMove),
@@ -286,8 +297,14 @@ async fn manual_step(
         }
         9 => {
             // Reward
-            let idx = payload["idx"].as_i64().unwrap() as i32;
-            let reward_type = payload["rewardType"].as_i64().unwrap() as i8;
+            let idx = payload["target"]
+                .as_i64()
+                .or(payload["idx"].as_i64())
+                .unwrap() as i32;
+            let reward_type = payload["reward"]
+                .as_i64()
+                .or(payload["rewardType"].as_i64())
+                .unwrap() as i8;
             Box::new(RewardMove::new(idx, unsafe {
                 std::mem::transmute(reward_type)
             }))
@@ -324,7 +341,7 @@ async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {
     let mut game = state.game.lock().unwrap();
 
     let mut settings = MapGenSettings::default();
-    settings.size = 16;
+    settings.size = MapSize::Normal;
     settings.tribes = vec![TribeType::Luxidoor, TribeType::Imperius];
     settings.seed = rand::random();
 
@@ -332,7 +349,6 @@ async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {
     game.state = initial_state;
     game.post_load();
 
-    // Use existing get_current_state logic (just calling a helper would be better but let's keep it simple)
     let mut tiles: Vec<_> = game.state.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);
 
@@ -350,5 +366,72 @@ async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {
             "_prediction": game.state._prediction,
         },
         "legalMoves": legal_moves
+    }))
+}
+
+async fn trigger_training(State(state): State<Arc<AppState>>) -> Json<Value> {
+    use std::fs::File;
+    use std::process::{Command, Stdio};
+
+    // Redirect to training.poly.log
+    let log_file = match File::create("training.poly.log") {
+        Ok(f) => f,
+        Err(e) => return Json(serde_json::json!({ "status": "error", "message": e.to_string() })),
+    };
+
+    let child = Command::new("cargo")
+        .args(["run", "--bin", "self_play", "--release"])
+        .current_dir(".")
+        .stdout(Stdio::from(log_file.try_clone().unwrap()))
+        .stderr(Stdio::from(log_file))
+        .spawn();
+
+    match child {
+        Ok(c) => {
+            let pid = c.id();
+            let mut status = state.training_status.lock().unwrap();
+            *status = Some(pid);
+
+            Json(serde_json::json!({
+                "status": "success",
+                "message": format!("Training started (PID: {})", pid)
+            }))
+        }
+        Err(e) => Json(serde_json::json!({
+            "status": "error",
+            "message": format!("Failed to start training: {}", e)
+        })),
+    }
+}
+
+async fn get_training_status(State(state): State<Arc<AppState>>) -> Json<Value> {
+    use std::fs;
+    use std::process::Command;
+
+    let pid_opt = *state.training_status.lock().unwrap();
+    let mut is_running = false;
+
+    if let Some(pid) = pid_opt {
+        // Check if process still exists
+        let output = Command::new("ps").arg("-p").arg(pid.to_string()).output();
+
+        if let Ok(out) = output {
+            is_running = out.status.success();
+        }
+    }
+
+    // Read last 15 lines of log for more detail
+    let log_content = fs::read_to_string("training.poly.log").unwrap_or_default();
+    let lines: Vec<&str> = log_content.lines().collect();
+    let last_lines = if lines.len() > 15 {
+        lines[lines.len() - 15..].join("\n")
+    } else {
+        lines.join("\n")
+    };
+
+    Json(serde_json::json!({
+        "isRunning": is_running,
+        "pid": pid_opt,
+        "log": last_lines
     }))
 }

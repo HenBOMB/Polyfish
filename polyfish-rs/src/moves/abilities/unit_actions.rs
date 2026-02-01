@@ -1,4 +1,4 @@
-use crate::functions::{self, get_adjacent_indices, get_max_health, has_effect};
+use crate::functions::{self, get_adjacent_indices, get_unit_max_health, has_effect};
 use crate::moves::Move;
 use crate::moves::{DisbandMove, PromoteMove, RecoverMove};
 use crate::settings::technology;
@@ -54,7 +54,7 @@ pub fn generate_unit_action_moves_for_unit(
     }
 
     // Recover
-    if unit.health < get_max_health(unit) {
+    if unit.health < get_unit_max_health(unit) {
         moves.push(Box::new(RecoverMove::new(idx)));
     }
 
@@ -62,7 +62,7 @@ pub fn generate_unit_action_moves_for_unit(
     if functions::has_skill(unit, SkillType::HealOthers) {
         let damaged_around = get_adjacent_indices(state, idx, 1).iter().any(|&adj| {
             if let Some(target) = functions::get_unit_at(state, adj) {
-                return target.owner == pov_id && target.health < get_max_health(target);
+                return target.owner == pov_id && target.health < get_unit_max_health(target);
             }
             false
         });

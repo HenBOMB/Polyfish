@@ -2,7 +2,9 @@
 //!
 //! Build a structure on a tile.
 
+use crate::functions::{get_resource_at, get_structure_at};
 use crate::moves::{Move, MoveResult};
+use crate::settings::get_resource_setting;
 use crate::states::GameState;
 use crate::types::{MoveType, StructureType, TerrainType};
 
@@ -75,255 +77,169 @@ impl Move for BuildMove {
 pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
     let pov_id = state.settings.current_player_turn_id;
     if let Some(tribe) = state.tribes.get(&pov_id) {
-        use crate::functions::{get_resource_at, get_structure_at};
-        use crate::settings::resources::get_resource_setting;
-        use crate::settings::structures::{get_structure_setting, PLACEABLE_STRUCTURES};
+        use crate::settings::structures::get_structure_setting;
+        use crate::settings::tasks::{check_task, get_task_setting};
+        use strum::IntoEnumIterator;
+
+        // --- OPTIMIZATION: Pre-calculate tribe-wide data ---
+
+        let mut unlocked_structures = Vec::new();
+        for struct_type in crate::types::StructureType::iter() {
+            let settings = get_structure_setting(struct_type);
+
+            if settings.cost.is_none() || settings.resource_type.is_some() {
+                continue;
+            }
+
+            if tribe.stars < settings.cost.unwrap_or(0) {
+                continue;
+            }
+
+            if let Some(s_tribe) = settings.tribe_type {
+                if s_tribe != tribe.tribe_type {
+                    continue;
+                }
+            }
+
+            if is_structure_unlocked(tribe, struct_type) {
+                unlocked_structures.push((struct_type, settings));
+            }
+        }
+
+        let mut pending_monument_structures = Vec::new();
+        for task in crate::types::TaskType::iter() {
+            let setting = get_task_setting(task);
+
+            if let Some(tech) = setting.tech_type {
+                if !crate::settings::technology::has_technology(&tribe.tech_vanilla, tech) {
+                    continue;
+                }
+            }
+
+            let already_built = tribe.cities.iter().any(|c| {
+                c._territory.iter().any(|&t_idx| {
+                    if let Some(s) = crate::functions::get_structure_at(state, t_idx) {
+                        s.structure_type == setting.structure_type
+                    } else {
+                        false
+                    }
+                })
+            });
+            if already_built {
+                continue;
+            }
+
+            if check_task(state, task) {
+                let struct_settings = get_structure_setting(setting.structure_type);
+                if tribe.stars >= struct_settings.cost.unwrap_or(0) {
+                    pending_monument_structures.push((setting.structure_type, struct_settings));
+                }
+            }
+        }
+
+        // --- CORE LOOP ---
 
         for city in &tribe.cities {
             for &idx in &city._territory {
-                // Check enemy
                 if crate::functions::get_enemy_at(state, idx, pov_id).is_some() {
                     continue;
                 }
 
-                if get_structure_at(state, idx).is_some() {
-                    // TODO: Handle Road + Structure combinations
-                    continue;
-                }
-
-                // 1. Resource-based structures
-                if let Some(res_type) = get_resource_at(state, idx) {
-                    let res_settings = get_resource_setting(res_type);
-                    if let Some(struct_type) = res_settings.struct_type {
-                        // Check tech requirement for structure (or resource tech implies it?)
-                        // Usually structure has no tech req if resource requires it.
-                        // But we check structure settings.
-                        let struct_settings = get_structure_setting(struct_type);
-
-                        // Check if we have the tech for the resource itself (harvest tech usually unlocks build)
-                        // Actually e.g. Farming (tech) unlocks Crop (resource) AND Farm (structure).
-
-                        // Check cost
-                        let cost = struct_settings.cost.unwrap_or(0);
-
-                        // Check tribe stars
-                        if tribe.stars >= cost {
-                            // Check tech (if structure has specific tech req not covered by resource visible req)
-                            // Usually resource visibility implies we can build?
-                            // No, we need to have researched the tech.
-                            let tech_req = res_settings.tech_required;
-                            let has_tech = match tech_req {
-                                crate::types::TechnologyType::Unrequired => true,
-                                t => tribe.tech_vanilla.iter().any(|tech| tech.tech_type == t),
-                            };
-
-                            if has_tech {
-                                moves.push(Box::new(BuildMove::new(idx, struct_type)));
-                            }
-                        }
-                    }
-                }
-
-                // 2. Free placement structures (Road, Port, etc.)
+                let existing_struct = get_structure_at(state, idx);
                 let tile = match state.tiles.get(&idx) {
                     Some(t) => t,
                     None => continue,
                 };
 
-                for &struct_type in PLACEABLE_STRUCTURES {
-                    // Roads can be built on top of structures (and structures on roads).
-                    // If building a Road, we ignore existing structure check (but check if road exists on tile).
-                    // If building a Structure, we check if there is an existing Structure (but ignore Road representation if it's separate).
+                // 1. Resource-based structures
+                if existing_struct.is_none() {
+                    if let Some(res_type) = get_resource_at(state, idx) {
+                        let res_settings = get_resource_setting(res_type);
+                        if let Some(struct_type) = res_settings.struct_type {
+                            let struct_settings = get_structure_setting(struct_type);
+                            let cost = struct_settings.cost.unwrap_or(0);
 
-                    if struct_type != StructureType::Road {
-                        if get_structure_at(state, idx).is_some() {
-                            // Can build on Algae? Algae is a tile effect now (StructureType::Algae is deprecated).
-                            // But usually `get_structure_at` returns structures.
-                            // If `tile.has_algae` implies it's buildable, we should be fine as long as there is no *other* structure.
-                            // The current check works: `get_structure_at` returns None if only Algae effect is there.
-                            continue;
-                        }
-                    } else {
-                        // Check if already has road
-                        if tile.has_road {
-                            continue;
+                            if tribe.stars >= cost {
+                                let tech_req = res_settings.tech_required;
+                                let has_tech = match tech_req {
+                                    crate::types::TechnologyType::Unrequired => true,
+                                    t => tribe.tech_vanilla.iter().any(|tech| tech.tech_type == t),
+                                };
+
+                                if has_tech {
+                                    moves.push(Box::new(BuildMove::new(idx, struct_type)));
+                                }
+                            }
                         }
                     }
+                }
 
-                    let settings = get_structure_setting(struct_type);
+                // 2. Free placement structures
+                for &(struct_type, ref settings) in &unlocked_structures {
+                    if struct_type != StructureType::Road {
+                        if existing_struct.is_some() {
+                            continue;
+                        }
+                    } else if tile.has_road {
+                        continue;
+                    }
 
-                    // Terrain validity:
-                    // 1. Standard match (e.g. Temple on Field, Port on Water)
-                    // 2. Algae bonus: Algae makes Water/Ocean act like "Field" (land) for structures that accept Field.
-                    //    It also counts as Water for structures that accept Water (Clathrus).
-                    //    It does NOT count as Mountain or Forest.
                     let terrain_valid = settings.terrain_types.contains(&tile.terrain_type)
                         || (tile.terrain_type == TerrainType::Algae
-                            && (settings
-                                .terrain_types
-                                .contains(&crate::types::TerrainType::Field)
-                                || settings
-                                    .terrain_types
-                                    .contains(&crate::types::TerrainType::Water)));
+                            && (settings.terrain_types.contains(&TerrainType::Field)
+                                || settings.terrain_types.contains(&TerrainType::Water)));
                     if !terrain_valid {
                         continue;
                     }
 
-                    // Check cost
-                    let cost = settings.cost.unwrap_or(0);
-                    if tribe.stars < cost {
-                        continue;
+                    if !settings.adjacent_types.is_empty() {
+                        let adj = crate::functions::get_adjacent_indices(state, idx, 1);
+                        let has_required_adj = adj.iter().any(|&n_idx| {
+                            if let Some(s) = crate::functions::get_structure_at(state, n_idx) {
+                                settings.adjacent_types.contains(&s.structure_type)
+                            } else {
+                                false
+                            }
+                        });
+                        if !has_required_adj {
+                            continue;
+                        }
                     }
 
-                    // Check tech requirement
-                    if is_structure_unlocked(tribe, struct_type) {
-                        // Tribe-specific filters
-                        if let Some(s_tribe) = settings.tribe_type {
-                            if s_tribe != tribe.tribe_type {
-                                continue;
-                            }
+                    if struct_type == StructureType::Clathrus {
+                        let adj = crate::functions::get_adjacent_indices(state, idx, 1);
+                        let has_adj_algae = adj.iter().any(|&n_idx| {
+                            state
+                                .tiles
+                                .get(&n_idx)
+                                .map_or(false, |t| t.terrain_type == TerrainType::Algae)
+                        });
+                        if !has_adj_algae {
+                            continue;
                         }
-
-                        // Adjacency check for "hub" buildings (Market, Sawmill, Forge, Windmill, etc.)
-                        if !settings.adjacent_types.is_empty() {
-                            let adj = crate::functions::get_adjacent_indices(state, idx, 1);
-                            let has_required_adj = adj.iter().any(|&n_idx| {
-                                if let Some(s) = crate::functions::get_structure_at(state, n_idx) {
-                                    settings.adjacent_types.contains(&s.structure_type)
-                                } else {
-                                    false
-                                }
-                            });
-
-                            if !has_required_adj {
-                                continue;
-                            }
-                        }
-
-                        // Special check for Clathrus: Needs adjacent Algae to be effective
-                        if struct_type == StructureType::Clathrus {
-                            let adj = crate::functions::get_adjacent_indices(state, idx, 1);
-                            let has_adj_algae = adj.iter().any(|&n_idx| {
-                                state
-                                    .tiles
-                                    .get(&n_idx)
-                                    .map_or(false, |t| t.terrain_type == TerrainType::Algae)
-                            });
-
-                            if !has_adj_algae {
-                                continue;
-                            }
-                        }
-
-                        // Special check for Mycelium: one per city
-                        if struct_type == StructureType::Mycelium {
-                            let already_has_mycelium = city._territory.iter().any(|&t_idx| {
-                                if let Some(s) = crate::functions::get_structure_at(state, t_idx) {
-                                    s.structure_type == StructureType::Mycelium
-                                } else {
-                                    false
-                                }
-                            });
-                            if already_has_mycelium {
-                                continue;
-                            }
-                        }
-
-                        // Polaris disabled (except if tech allows, but explicit exclude in logic was requested or just placeholder?)
-                        // User said "im not sure what you mean", so I'll relax this check and rely on tech tree which replaces standard buildings.
-                        // Standard buildings (Port, etc) should be filtered by tech.
-                        // However, PLACEABLE_STRUCTURES might have standard ones.
-                        // Since `is_structure_unlocked` checks tech, and Polaris doesn't have standard techs (Fishing/Sailing/etc replaced),
-                        // this should be fine. I'll remove the explicit block.
-
-                        moves.push(Box::new(BuildMove::new(idx, struct_type)));
                     }
+
+                    if struct_type == StructureType::Mycelium {
+                        let already_has_mycelium = city._territory.iter().any(|&t_idx| {
+                            if let Some(s) = crate::functions::get_structure_at(state, t_idx) {
+                                s.structure_type == StructureType::Mycelium
+                            } else {
+                                false
+                            }
+                        });
+                        if already_has_mycelium {
+                            continue;
+                        }
+                    }
+
+                    moves.push(Box::new(BuildMove::new(idx, struct_type)));
                 }
 
                 // 3. Monuments (Tasks)
-                {
-                    use crate::settings::tasks::{check_task, get_task_setting};
-                    use crate::types::TaskType;
-
-                    // Iterate all tasks
-                    let tasks = [
-                        TaskType::Pacifist,
-                        TaskType::Genius,
-                        TaskType::Wealth,
-                        TaskType::Explorer,
-                        TaskType::Killer,
-                        TaskType::Network,
-                        TaskType::Metropolis,
-                    ];
-
-                    // Check if tile is empty (no structure)
-                    // Already checked above: `if get_structure_at(state, idx).is_some() { continue; }`
-                    // But we are inside the tile loop.
-
-                    // Monuments can be placed on any empty tile owned by the player?
-                    // TS check: `if (!settings.terrainType?.has(tile.type)) { ... }`
-                    // Monuments usually have specific terrain? Or any land?
-                    // StructureSettings for monuments usually allow any land.
-                    // We need to check if the structure is already built?
-                    // "Unique Improvements" - only 1 per tribe?
-                    // TS: `if (!pov.builtUniqueImprovements.has(settings.structureType))`
-                    // We need to track `builtUniqueImprovements` or check all structures.
-                    // For now, let's iterate all tribe structures to check uniqueness if expensive, or assume we have a set.
-                    // TribeState doesn't have `builtUniqueImprovements` set in Rust yet?
-                    // Let's sweep all cities/structures to check if we already have it.
-
-                    // Optimization: Build a set of existing structures once per tribe loop?
-                    // Currently `generate_build_moves` iterates cities.
-                    // Let's just check uniqueness.
-
-                    for task in tasks {
-                        let setting = get_task_setting(task);
-
-                        // Check if we have the tech (if required)
-                        if let Some(tech) = setting.tech_type {
-                            if !crate::settings::technology::has_technology(
-                                &tribe.tech_vanilla,
-                                tech,
-                            ) {
-                                continue;
-                            }
-                        }
-
-                        // Check if we already built it
-                        let already_built = tribe.cities.iter().any(|c| {
-                            c._territory.iter().any(|&t_idx| {
-                                if let Some(s) = crate::functions::get_structure_at(state, t_idx) {
-                                    s.structure_type == setting.structure_type
-                                } else {
-                                    false
-                                }
-                            })
-                        });
-
-                        if already_built {
-                            continue;
-                        }
-
-                        // Check task completion
-                        if check_task(state, task) {
-                            // Valid placement?
-                            // Monuments usually restricted to land?
-                            // Let's assume standard terrain rules apply (defined in StructureSettings).
-                            // If `StructureSettings` says "No terrain restriction" or matches tile.
-                            // We can use `get_structure_setting` to verify terrain.
-                            let struct_settings = get_structure_setting(setting.structure_type);
-                            if !struct_settings.terrain_types.contains(&tile.terrain_type) {
-                                continue;
-                            }
-
-                            // Cost? Monuments usually free? Or cost?
-                            // Eye of God etc are usually free if unlocked? Or cost stars?
-                            // TS code implies cost checks: `if (cost > pov.stars)`.
-                            // If cost is 0, it passes.
-                            let cost = struct_settings.cost.unwrap_or(0);
-                            if tribe.stars >= cost {
-                                moves.push(Box::new(BuildMove::new(idx, setting.structure_type)));
-                            }
+                if existing_struct.is_none() {
+                    for &(struct_type, ref settings) in &pending_monument_structures {
+                        if settings.terrain_types.contains(&tile.terrain_type) {
+                            moves.push(Box::new(BuildMove::new(idx, struct_type)));
                         }
                     }
                 }

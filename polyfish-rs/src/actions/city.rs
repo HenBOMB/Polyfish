@@ -210,6 +210,30 @@ pub fn capture_city(state: &mut GameState, tile_idx: i32) -> Result<UndoCallback
                 new_tribe.cities.push(city.clone());
             }
 
+            // Remove units belonging to this city from ALL tribes (Disband rule)
+            let mut all_units_to_remove: Vec<(i32, usize)> = Vec::new();
+            for (&tribe_id, tribe) in &state.tribes {
+                for (i, unit) in tribe.units.iter().enumerate() {
+                    if let Some(home) = &unit.home_coords {
+                        if home.idx == tile_idx {
+                            all_units_to_remove.push((tribe_id, i));
+                        }
+                    }
+                }
+            }
+
+            // Remove starting from highest index per tribe to prevent index shifting issues
+            all_units_to_remove.sort_by(|a, b| b.1.cmp(&a.1));
+            for (t_id, u_idx) in all_units_to_remove {
+                undos.push(crate::actions::units::remove_unit(
+                    state,
+                    t_id,
+                    u_idx,
+                    Some(pov_id),
+                    None,
+                ));
+            }
+
             // Tribe elimination check
             let is_eliminated = state
                 .tribes
@@ -283,6 +307,7 @@ pub fn capture_city(state: &mut GameState, tile_idx: i32) -> Result<UndoCallback
             .unwrap_or(TribeType::None);
 
         let created_city = CityState {
+            id: tile_idx,
             name: format!("{:?} City", tribe_type),
             population: 0,
             progress: 0,

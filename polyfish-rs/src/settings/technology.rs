@@ -373,68 +373,27 @@ pub fn has_technology(tech_list: &[crate::states::TechnologyState], tech: Techno
 
 /// Helper to find which technology unlocks a specific unit
 pub fn get_tech_unlocking_unit(unit_type: UnitType) -> Option<TechnologyType> {
-    use TechnologyType::*;
-
-    // Instead of iterating (which requires listing all enums or deriving EnumIter),
-    // we manually map known units to techs for performance and compile-time checking.
-    // This duplicates logic but avoids runtime search.
-
-    match unit_type {
-        // Base units
-        UnitType::Warrior => Some(Unrequired),
-
-        // Riding branch
-        UnitType::Rider => Some(Riding),
-        UnitType::Knight => Some(Chivalry),
-
-        // Strategy branch
-        UnitType::Defender => Some(Strategy),
-        UnitType::Cloak => Some(Diplomacy),
-
-        // Mining branch
-        UnitType::Swordsman => Some(Smithery),
-
-        // Philosophy branch
-        UnitType::MindBender => Some(Philosophy),
-
-        // Hunting branch
-        UnitType::Archer => Some(Archery),
-        UnitType::Catapult => Some(Mathematics),
-
-        // Fishing branch (Naval)
-        UnitType::Raft => Some(Fishing),
-        UnitType::Scout => Some(Sailing),
-        UnitType::Bomber => Some(Navigation),
-        UnitType::Rammer => Some(Ramming), // Was Ramming
-
-        // Special Units (Tribe Specific)
-        UnitType::Hexapod => Some(Riding),   // Cymanti
-        UnitType::Amphibian => Some(Riding), // Aquarion
-
-        UnitType::Tridention => Some(Spearing),
-
-        // Let's verify special units unlocking.
-        UnitType::Kiton => Some(Strategy), // Cymanti stuff
-        UnitType::Phychi => Some(Archery),
-        UnitType::IceArcher => Some(Archery), // Polaris stuff?
-        UnitType::Exida => Some(Mathematics),
-        UnitType::Shaman => Some(Philosophy),
-
-        // Polaris Techs
-        UnitType::Mooni => Some(Frostwork),
-        UnitType::BattleSled => Some(Sledding),
-        UnitType::IceFortress => Some(PolarWarfare),
-        // IceArcher is under Archery (special).
-
-        // Cymanti Techs
-        UnitType::Raychi => Some(Pascetism),
-        UnitType::Doomux => Some(ShockTactics),
-        UnitType::Moth => Some(Synergy),
-        // Hexapod is under Riding (special).
-        // Centipede is super unit?
-
-        // Elyrion
-        UnitType::Polytaur => Some(ForestMagic),
-        _ => None,
+    use strum::IntoEnumIterator;
+    for tech in TechnologyType::iter() {
+        let settings = get_technology_setting(tech);
+        if settings.unlocks_unit == Some(unit_type)
+            || settings.unlocks_special_units.contains(&unit_type)
+        {
+            return Some(tech);
+        }
     }
+    None
+}
+
+/// Resolve technology replacement for a specific tribe
+pub fn resolve_tech_for_tribe(tech: TechnologyType, tribe: TribeType) -> TechnologyType {
+    use strum::IntoEnumIterator;
+    for candidate_tech in TechnologyType::iter() {
+        let settings = get_technology_setting(candidate_tech);
+        if settings.replaces_tech == Some(tech) && settings.tribe_type == Some(tribe) {
+            return candidate_tech;
+        }
+    }
+
+    tech
 }

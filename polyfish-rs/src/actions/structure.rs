@@ -287,13 +287,13 @@ pub fn capture_ruin(state: &mut GameState, tile_idx: i32) -> UndoCallback {
         undos.push(Box::new(move |st| {
             if let Some(u) = crate::functions::get_unit_at_mut(st, tile_idx) {
                 u.veteran = true;
-                u.health = crate::functions::get_max_health(u); // Heal to new max
+                u.health = crate::functions::get_unit_max_health(u); // Heal to new max
             }
         }));
         crate::actions::chain_undos(undos)
     }));
 
-    // Pick one
+    // Pick one reward randomly
     if !possible_rewards.is_empty() {
         let mut rng = rand::thread_rng();
         let reward_fn = possible_rewards.remove(rng.gen_range(0..possible_rewards.len()));

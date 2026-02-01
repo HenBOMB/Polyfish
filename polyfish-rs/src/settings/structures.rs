@@ -133,7 +133,8 @@ pub fn get_structure_setting(struct_type: StructureType) -> StructureSetting {
         StructureType::Forge => StructureSetting {
             cost: Some(5),
             reward_pop: 2,
-            terrain_types: terrains![TerrainType::Field],
+            // Update: Forge can now be built on forest tiles (previously required clearing)
+            terrain_types: terrains![TerrainType::Field, TerrainType::Forest],
             adjacent_types: adjacent![StructureType::Mine],
             limited_per_city: true,
             ..Default::default()
@@ -235,15 +236,3 @@ pub fn get_structure_setting(struct_type: StructureType) -> StructureSetting {
         },
     }
 }
-/// List of structures that can be placed freely (not resource-dependent)
-pub const PLACEABLE_STRUCTURES: &[StructureType] = &[
-    StructureType::Road,
-    StructureType::Port,
-    StructureType::Temple,
-    StructureType::WaterTemple,
-    StructureType::MountainTemple,
-    StructureType::ForestTemple,
-    StructureType::LumberHut,
-    StructureType::Mycelium,
-    StructureType::Clathrus,
-];

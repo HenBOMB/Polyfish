@@ -227,11 +227,18 @@ pub fn set_visible_tiles(state: &mut GameState, player_id: PlayerId) -> UndoCall
         // Vision from units
         for unit in &tribe.units {
             // Standard vision range (could be enhanced by Scout skill)
-            let vision_range = if crate::functions::has_skill(unit, SkillType::Scout) {
+            let mut vision_range = if crate::functions::has_skill(unit, SkillType::Scout) {
                 2
             } else {
                 1
             };
+
+            // Units on mountains get +1 sight radius
+            if let Some(tile) = state.tiles.get(&unit.coords.idx) {
+                if tile.terrain_type == TerrainType::Mountain {
+                    vision_range += 1;
+                }
+            }
             for idx in get_adjacent_indices(state, unit.coords.idx, vision_range) {
                 state._visible_tiles.insert(idx, true);
             }
@@ -427,13 +434,22 @@ pub fn process_start_turn_effects(state: &mut GameState, player_id: PlayerId) ->
 
                 if let Some(target_type) = new_type {
                     let old_type = unit.unit_type;
+                    let old_health = unit.health;
+
+                    // Inherit damage: new_hp = new_max - (old_max - current_hp)
+                    let old_max_hp = crate::functions::get_unit_max_health(unit);
+                    let damage = old_max_hp - unit.health;
+
                     unit.unit_type = target_type;
+                    let new_max_hp = crate::functions::get_unit_max_health(unit);
+                    unit.health = (new_max_hp - damage).max(HEALTH_SCALE); // Minimum 1 HP scaled
 
                     // Add undo
                     undos.push(Box::new(move |s| {
                         if let Some(t) = s.tribes.get_mut(&player_id) {
                             if let Some(u) = t.units.get_mut(unit_idx) {
                                 u.unit_type = old_type;
+                                u.health = old_health;
                             }
                         }
                     }));
@@ -457,6 +473,63 @@ pub fn process_start_turn_effects(state: &mut GameState, player_id: PlayerId) ->
                 // But with `processed_start_turn_effects`, we only see on-board units.
                 // I will stick to map units for now as per current data model constraints.
             }
+        }
+    }
+
+    // Temple Growth Logic
+    let mut growing_temples = Vec::new();
+    // Only check temples owned by current player
+    // Iterate all structures is inefficient but simplest for now.
+    // Better: Iterate city territories?
+    // Given structure map is global, iterating it is O(S). S is small-ish.
+    for (idx, structure_opt) in state.structures.iter() {
+        if let Some(structure) = structure_opt {
+            let is_temple = matches!(
+                structure.structure_type,
+                StructureType::Temple
+                    | StructureType::WaterTemple
+                    | StructureType::ForestTemple
+                    | StructureType::MountainTemple
+                    | StructureType::IceTemple
+            );
+
+            if is_temple {
+                // Check owner
+                if let Some(tile) = state.tiles.get(idx) {
+                    if tile.owner == player_id {
+                        let age = state.settings.turn - structure.founded;
+                        // Level 1: Age 0-2 (or <3)
+                        // Level 2: Age 3-5 (or >=3)
+                        // Level 3: Age 6-8 (or >=6)
+                        // Level 4: Age 9-11 (or >=9)
+                        // Level 5: Age 12+ (or >=12)
+                        let mut expected_level = 1 + (age / 3);
+                        if expected_level > 5 {
+                            expected_level = 5;
+                        } else if expected_level < 1 {
+                            expected_level = 1;
+                        }
+
+                        if structure.level < expected_level {
+                            growing_temples.push((*idx, expected_level));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Apply growth
+    for (idx, new_level) in growing_temples {
+        if let Some(structure) = state.structures.get_mut(&idx).and_then(|s| s.as_mut()) {
+            let old_level = structure.level;
+            structure.level = new_level;
+
+            undos.push(Box::new(move |s| {
+                if let Some(st) = s.structures.get_mut(&idx).and_then(|x| x.as_mut()) {
+                    st.level = old_level;
+                }
+            }));
         }
     }
 

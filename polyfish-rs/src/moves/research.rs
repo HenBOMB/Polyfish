@@ -72,7 +72,29 @@ pub fn generate_research_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>
             let settings =
                 crate::settings::technology::get_technology_setting(tech_state.tech_type);
             for next_tech in settings.next {
-                available_techs.insert(next_tech);
+                let resolved = crate::settings::technology::resolve_tech_for_tribe(
+                    next_tech,
+                    tribe.tribe_type,
+                );
+                available_techs.insert(resolved);
+            }
+
+            // Backward: also allow researching the prerequisite of this tech
+            let mut req_opt = settings.requires;
+
+            // If checking a replacement tech that doesn't explicitly override requires, check the replaced tech
+            if req_opt.is_none() {
+                if let Some(replaced) = settings.replaces_tech {
+                    let replaced_settings =
+                        crate::settings::technology::get_technology_setting(replaced);
+                    req_opt = replaced_settings.requires;
+                }
+            }
+
+            if let Some(req_tech) = req_opt {
+                let resolved =
+                    crate::settings::technology::resolve_tech_for_tribe(req_tech, tribe.tribe_type);
+                available_techs.insert(resolved);
             }
         }
 

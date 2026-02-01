@@ -106,7 +106,13 @@ pub fn remove_unit(
             if let Some(child) = tribe.units.get_mut(adj_child_idx) {
                 // Promote segment to Centipede
                 if child.unit_type == crate::types::UnitType::Segment {
+                    let old_max_hp = crate::functions::get_unit_max_health(child);
+                    let damage = old_max_hp - child.health;
+
                     child.unit_type = crate::types::UnitType::Centipede;
+
+                    let new_max_hp = crate::functions::get_unit_max_health(child);
+                    child.health = (new_max_hp - damage).max(crate::states::HEALTH_SCALE);
                 }
                 // Clear parent link since head is gone
                 child.parent_unit_idx = None;
@@ -667,7 +673,7 @@ pub fn attack_unit(
         (
             get_unit_attack(unit),
             unit.health,
-            get_max_health(unit),
+            get_unit_max_health(unit),
             get_unit_setting(unit.unit_type).skills.clone(),
             unit.unit_type,
             unit.coords.idx,
@@ -811,7 +817,7 @@ pub fn attack_unit(
         (
             get_unit_defense(unit),
             unit.health,
-            get_max_health(unit),
+            get_unit_max_health(unit),
             get_defense_bonus(state, unit),
             unit.coords.idx,
         )
@@ -1169,7 +1175,7 @@ pub fn heal_unit(
 
     if let Some(tribe) = state.tribes.get_mut(&unit_owner) {
         if let Some(unit) = tribe.units.get_mut(unit_idx) {
-            let max_hp = get_max_health(unit);
+            let max_hp = get_unit_max_health(unit);
             unit.health = (unit.health + amount).min(max_hp);
         }
     }
@@ -1284,6 +1290,7 @@ pub fn spawn_unit(
         owner,
         unit_type,
         health: settings.health * crate::states::HEALTH_SCALE,
+        max_health: settings.health * crate::states::HEALTH_SCALE,
         prev_coords: Coords::invalid(),
         direction: 0,
         flipped: false,
@@ -1295,6 +1302,7 @@ pub fn spawn_unit(
         } else {
             Some(Coords::from_index(tile_idx, map_size))
         },
+        city_id: if independent { -1 } else { tile_idx },
         coords: Coords::from_index(tile_idx, map_size),
         moved: true,
         attacked: true,
@@ -1866,9 +1874,21 @@ pub fn upgrade_unit(
     };
 
     // Update unit
+    let old_health = if let Some(tribe) = state.tribes.get(&unit_owner) {
+        tribe.units[unit_idx].health
+    } else {
+        return Err("Tribe not found".to_string());
+    };
+
     if let Some(tribe) = state.tribes.get_mut(&unit_owner) {
         if let Some(unit) = tribe.units.get_mut(unit_idx) {
+            let old_max_hp = crate::functions::get_unit_max_health(unit);
+            let damage = old_max_hp - unit.health;
+
             unit.unit_type = target_type;
+
+            let new_max_hp = crate::functions::get_unit_max_health(unit);
+            unit.health = (new_max_hp - damage).max(crate::states::HEALTH_SCALE);
         }
     }
 
@@ -1877,6 +1897,7 @@ pub fn upgrade_unit(
         if let Some(tribe) = s.tribes.get_mut(&unit_owner) {
             if let Some(unit) = tribe.units.get_mut(unit_idx) {
                 unit.unit_type = old_type;
+                unit.health = old_health;
             }
         }
     }));

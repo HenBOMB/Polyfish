@@ -287,3 +287,20 @@ h3 {
     z-index: 1000;
     min-width: 150px;
 }
+.log-stream {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.7rem;
+    color: var(--gold);
+    background: rgba(0, 0, 0, 0.4);
+    padding: 8px;
+    border-radius: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    margin-top: 8px;
+    border-left: 2px solid var(--gold);
+}
+
+.stat-value.small {
+    font-size: 1rem;
+}

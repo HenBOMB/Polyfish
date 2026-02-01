@@ -15,7 +15,18 @@ pub enum ModeType {
 }
 
 /// Terrain types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize_repr, Deserialize_repr, Default)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize_repr,
+    Deserialize_repr,
+    Default,
+    strum_macros::EnumIter,
+)]
 #[repr(u8)]
 pub enum TerrainType {
     #[default]
@@ -30,7 +41,18 @@ pub enum TerrainType {
 }
 
 /// Technology types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize_repr, Deserialize_repr, Default)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize_repr,
+    Deserialize_repr,
+    Default,
+    strum_macros::EnumIter,
+)]
 #[repr(i8)]
 pub enum TechnologyType {
     BeyondComprehension = -1,
@@ -56,7 +78,7 @@ pub enum TechnologyType {
     Spiritualism = 19,
     Climbing = 20,
     Meditation = 21,
-    // Update "Philosophy" -> "Mysticism"
+    // Update "Philosophy" -> "Mysticism". not nescesary
     Philosophy = 22,
     Mining = 23,
     Smithery = 24,
@@ -86,7 +108,18 @@ pub enum TechnologyType {
 }
 
 /// Tribe types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize_repr, Deserialize_repr, Default)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize_repr,
+    Deserialize_repr,
+    Default,
+    strum_macros::EnumIter,
+)]
 #[repr(i8)]
 pub enum TribeType {
     #[default]
@@ -111,7 +144,18 @@ pub enum TribeType {
 }
 
 /// Climate types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize_repr, Deserialize_repr, Default)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize_repr,
+    Deserialize_repr,
+    Default,
+    strum_macros::EnumIter,
+)]
 #[repr(i8)]
 pub enum ClimateType {
     #[default]
@@ -135,7 +179,18 @@ pub enum ClimateType {
 }
 
 /// Reward types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize_repr, Deserialize_repr, Default)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize_repr,
+    Deserialize_repr,
+    Default,
+    strum_macros::EnumIter,
+)]
 #[repr(i8)]
 pub enum RewardType {
     #[default]
@@ -151,7 +206,18 @@ pub enum RewardType {
 }
 
 /// Unit types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize_repr, Deserialize_repr, Default)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize_repr,
+    Deserialize_repr,
+    Default,
+    strum_macros::EnumIter,
+)]
 #[repr(i8)]
 pub enum UnitType {
     #[default]
@@ -205,7 +271,18 @@ pub enum UnitType {
 }
 
 /// Skill types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize_repr, Deserialize_repr, Default)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize_repr,
+    Deserialize_repr,
+    Default,
+    strum_macros::EnumIter,
+)]
 #[repr(i8)]
 pub enum SkillType {
     #[default]
@@ -304,7 +381,18 @@ pub enum SkillType {
 }
 
 /// Ability types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize_repr, Deserialize_repr, Default)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize_repr,
+    Deserialize_repr,
+    Default,
+    strum_macros::EnumIter,
+)]
 #[repr(i8)]
 pub enum AbilityType {
     #[default]
@@ -329,7 +417,18 @@ pub enum AbilityType {
 }
 
 /// Structure types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize_repr, Deserialize_repr, Default)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize_repr,
+    Deserialize_repr,
+    Default,
+    strum_macros::EnumIter,
+)]
 #[repr(i8)]
 pub enum StructureType {
     #[default]
@@ -365,6 +464,7 @@ pub enum StructureType {
     IceTemple = 69, // TODO: Polaris disabled
     Embassy = 70,
     Road = 71,
+
     Clathrus = 120, // New Cymanti building
     Sanctuary = 121,
     Fungi = 122,
@@ -372,7 +472,18 @@ pub enum StructureType {
 }
 
 /// Resource types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize_repr, Deserialize_repr, Default)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize_repr,
+    Deserialize_repr,
+    Default,
+    strum_macros::EnumIter,
+)]
 #[repr(i8)]
 pub enum ResourceType {
     #[default]
@@ -389,7 +500,18 @@ pub enum ResourceType {
 }
 
 /// Effect types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize_repr, Deserialize_repr, Default)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize_repr,
+    Deserialize_repr,
+    Default,
+    strum_macros::EnumIter,
+)]
 #[repr(i8)]
 pub enum EffectType {
     #[default]
@@ -431,7 +553,18 @@ pub enum MoveType {
 }
 
 /// Task types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize_repr, Deserialize_repr, Default)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize_repr,
+    Deserialize_repr,
+    Default,
+    strum_macros::EnumIter,
+)]
 #[repr(i8)]
 pub enum TaskType {
     #[default]
@@ -442,25 +575,66 @@ pub enum TaskType {
     Killer = 4,
     Network = 5,
     Metropolis = 6,
-    Converter = 7, // Cymanti-specific (replaces Pacifist)
+    Converter = 7, // Cymanti-specific (replaces Pacifist). id is currently unknown but it may be that the pattern continues in this case
 }
 
-/// Economy ability types
-pub const ECONOMY_ABILITY_TYPES: &[AbilityType] = &[
-    AbilityType::BurnForest,
-    AbilityType::ClearForest,
-    AbilityType::HealOthers,
-    AbilityType::Drain,
-    AbilityType::FreezeArea,
-];
+/// Map sizes
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize_repr,
+    Deserialize_repr,
+    Default,
+    strum_macros::EnumIter,
+)]
+#[repr(i8)]
+pub enum MapSize {
+    Tiny = 0,  // 11x11, 121
+    Small = 1, // 14x14, 196
+    #[default]
+    Normal = 2, // 16x16, 256
+    Large = 3, // 18x18, 324
+    Huge = 4,  // 20x20, 400
+    Massive = 5, // 30x30, 900
+}
 
-/// Army ability types
-pub const ARMY_ABILITY_TYPES: &[AbilityType] = &[
-    AbilityType::Boost,
-    AbilityType::Disband,
-    AbilityType::Explode,
-    AbilityType::FreezeArea,
-    AbilityType::HealOthers,
-    AbilityType::Recover,
-    AbilityType::Promote,
-];
+impl MapSize {
+    pub fn get_size(&self) -> i32 {
+        match self {
+            MapSize::Tiny => 11,
+            MapSize::Small => 14,
+            MapSize::Normal => 16,
+            MapSize::Large => 18,
+            MapSize::Huge => 20,
+            MapSize::Massive => 30,
+        }
+    }
+}
+
+/// Map types (Wetness levels)
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize_repr,
+    Deserialize_repr,
+    Default,
+    strum_macros::EnumIter,
+)]
+#[repr(i8)]
+pub enum MapType {
+    #[default]
+    Drylands = 0,
+    Lakes = 1,
+    Continents = 2,
+    Pangea = 3,
+    Archipelago = 4,
+    WaterWorld = 5,
+}

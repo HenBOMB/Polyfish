@@ -82,14 +82,70 @@ pub fn get_adjacent_tiles<'a>(state: &'a GameState, idx: i32, range: i32) -> Vec
         .filter_map(|i| state.tiles.get(&i))
         .collect()
 }
+/// Check if a resource type is visible to a tribe (based on tech requirements)
+pub fn is_resource_visible_to_tribe(
+    state: &GameState,
+    resource_type: ResourceType,
+    tribe_id: PlayerId,
+) -> bool {
+    use crate::settings::technology::has_technology;
+    use crate::types::TechnologyType;
 
-/// Get resource at a tile
+    let tribe = match state.tribes.get(&tribe_id) {
+        Some(t) => t,
+        None => return false,
+    };
+
+    match resource_type {
+        // Fruit, Starfish, and Spores are always visible
+        ResourceType::Fruit
+        | ResourceType::Starfish
+        | ResourceType::Spores
+        | ResourceType::None => true,
+        // Crop requires Organization OR Farming
+        ResourceType::Crop => {
+            has_technology(&tribe.tech_vanilla, TechnologyType::Organization)
+                || has_technology(&tribe.tech_vanilla, TechnologyType::Farming)
+        }
+        // Metal requires Climbing
+        ResourceType::Metal => has_technology(&tribe.tech_vanilla, TechnologyType::Climbing),
+        // Game (animal) requires Hunting
+        ResourceType::Game => has_technology(&tribe.tech_vanilla, TechnologyType::Hunting),
+        // Fish requires Fishing
+        ResourceType::Fish => has_technology(&tribe.tech_vanilla, TechnologyType::Fishing),
+        // AquaCrop (Aquarion) - requires FreeDiving
+        ResourceType::AquaCrop => has_technology(&tribe.tech_vanilla, TechnologyType::FreeDiving),
+    }
+}
+
+/// Get resource at a tile (respects tech visibility and FOW for current player)
 pub fn get_resource_at(state: &GameState, idx: i32) -> Option<ResourceType> {
-    state
+    let pov_id = state.settings.current_player_turn_id;
+
+    // Check FOW: must be explored by current player to see resources
+    if !is_tile_explored(state, idx, pov_id) {
+        return None;
+    }
+
+    // Hide resource if there is a Ruin on the tile
+    if let Some(structure) = get_structure_at(state, idx) {
+        if structure.structure_type == StructureType::Ruin {
+            return None;
+        }
+    }
+
+    let resource_type = state
         .resources
         .get(&idx)
         .and_then(|r| r.as_ref())
-        .map(|r| r.resource_type)
+        .map(|r| r.resource_type)?;
+
+    // Check tech visibility for current player
+    if is_resource_visible_to_tribe(state, resource_type, pov_id) {
+        Some(resource_type)
+    } else {
+        None
+    }
 }
 
 /// Get structure at a tile
@@ -210,7 +266,8 @@ pub fn is_amphibious(unit: &UnitState) -> bool {
 }
 
 /// Get the maximum health of a unit (accounting for veteran status and pass-through)
-pub fn get_max_health(unit: &UnitState) -> i32 {
+/// Max HP logic: base * 10
+pub fn get_unit_max_health(unit: &UnitState) -> i32 {
     let mut hp = get_real_unit_setting(unit).health;
     if unit.veteran {
         hp += 5;
@@ -242,14 +299,25 @@ pub fn get_unit_defense(unit: &UnitState) -> f32 {
     def
 }
 
-/// Get unit movement (accounting for Boost and Poison)
-pub fn get_unit_movement(unit: &UnitState) -> i32 {
+/// Get unit movement (accounting for Boost, Poison, and Skate)
+pub fn get_unit_movement(state: &GameState, unit: &UnitState) -> i32 {
     let mut movement = crate::settings::units::get_unit_setting(unit.unit_type).movement;
+
+    // Boost bonus
     if has_effect(unit, EffectType::Boost) {
         movement += 1;
     }
+
+    // Skate bonus: +1 movement on Ice (Resulting in 3 movement for standard skating units)
+    if has_skill(unit, SkillType::Skate) {
+        if let Some(tile) = state.tiles.get(&unit.coords.idx) {
+            if tile.frozen {
+                movement += 1;
+            }
+        }
+    }
+
     // Poison slows down enemy units.
-    // TODO: Verify exact slowdown amount (spec just says "slow down"). Assuming 50% for now.
     if has_effect(unit, EffectType::Poison) {
         movement /= 2;
     }
@@ -707,6 +775,29 @@ pub fn calculate_detailed_tribe_score(state: &GameState, player_id: PlayerId) ->
         };
         // Territory: 20 per tile
         score += city_score + (city._territory.len() as i32 * 20);
+
+        // Structure scores (Temples & Monuments)
+        for &tile_idx in &city._territory {
+            if let Some(structure) = crate::functions::get_structure_at(state, tile_idx) {
+                match structure.structure_type {
+                    StructureType::Temple
+                    | StructureType::WaterTemple
+                    | StructureType::ForestTemple
+                    | StructureType::MountainTemple
+                    | StructureType::IceTemple => {
+                        // Temples: 100 per level
+                        score += structure.level * 100;
+                    }
+                    _ => {
+                        // Monuments and others
+                        let settings = crate::settings::structures::get_structure_setting(
+                            structure.structure_type,
+                        );
+                        score += settings.reward_score;
+                    }
+                }
+            }
+        }
 
         // Park: 250 points
         if city.rewards.contains(&RewardType::Park) {

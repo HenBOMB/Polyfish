@@ -55,6 +55,16 @@ impl Move for CaptureMove {
             Some(StructureType::Village) => {
                 let capture_undo = crate::actions::city::capture_city(state, self.src)?;
                 undos.push(capture_undo);
+
+                // Update capturer's home
+                let map_size = state.settings.size;
+                if let Some(tribe) = state.tribes.get_mut(&unit_owner) {
+                    if let Some(unit) = tribe.units.get_mut(capturer_idx) {
+                        unit.home_coords =
+                            Some(crate::coords::Coords::from_index(self.src, map_size));
+                        unit.city_id = self.src;
+                    }
+                }
             }
             Some(StructureType::Ruin) => {
                 undos.push(crate::actions::structure::capture_ruin(state, self.src));

@@ -61,3 +61,27 @@ Our architecture relies on a "Trust Model" between the Move Generator (`generate
 *   **Leveling**: Cities level up when `progress >= level + 1`.
 *   **Missing Features**: Reward generation (e.g., choosing "Workshop" vs "Explorer") is currently a TODO in `city.rs`.
 
+## Recent Improvements (2025-01-31)
+
+### 1. Mechanic System Updates
+*   **Terrain & Movement Rules**:
+    *   **Mountain**: Correctly implemented +1 vision bonus for units standing on mountains. Verified that `Creep` skill does not overcome the movement penalty (units stop upon entering).
+    *   **Polarism**: Implemented reduced movement cost (0.5) for non-skating units entering Ice for the first time in a turn, allowing extended movement range.
+*   **Backwards Research**:
+    *   Enabled mechanic allowing players to research a technology if they possess a technology that *requires* it (e.g., owning Smithery unlocks Mining).
+    *   Correctly handles tech replacements (e.g., Cymanti substitutions) by falling back to the original tech's requirements.
+
+### 2. Unit State Management
+*   **Damage Inheritance**:
+    *   **Growth/Evolution**: Units that evolve over time (Dragon Egg -> Baby -> Fire, Insect Egg -> Larva -> Moth) now preserve their absolute damage taken.
+    *   **Segment Promotion**: Centipede segments promoted to heads now inherit damage from their segment form.
+    *   **Upgrades**: Unit upgrades (Boat -> Ship -> Bomber) now preserve damage.
+    *   **Veterans**: Explicit exception made for Veteran promotion; these units continue to heal to full health upon promotion.
+
+### 3. Move Logic Refinements
+*   **Unit Actions**:
+    *   Refactored `upgrade_unit` and `remove_unit` to support complex state transitions with full undo capability.
+    *   Enhanced `process_start_turn_effects` to handle health inheritance during evolution.
+*   **Pathfinding**:
+    *   Updated `compute_movement_cost` to support conditional tech bonuses (Polarism) efficiently without creating new pathfinding nodes.
+

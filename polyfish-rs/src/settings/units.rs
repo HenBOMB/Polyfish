@@ -554,9 +554,6 @@ pub fn has_skill(unit_type: UnitType, skill: SkillType) -> bool {
     get_unit_setting(unit_type).skills.contains(&skill)
 }
 
-/// Units that can be upgraded from Raft
-pub const UNIT_UPGRADABLES: &[UnitType] = &[UnitType::Scout, UnitType::Rammer, UnitType::Bomber];
-
 /// Get super unit type for a tribe
 pub fn get_super_unit(tribe_type: TribeType) -> UnitType {
     match tribe_type {

@@ -3,7 +3,6 @@ const TILE_OFFSET = 4;
 const mapContainer = document.getElementById("map");
 
 let GAME_STATE = {};
-let TILE_ELEMENTS = {};
 let currentLegalMoves = [];
 let selectedUnitIdx = null; // Currently selected unit's tile index
 let ENABLE_FOW = true; // Fog of War toggle
@@ -20,18 +19,336 @@ const lastMoveVal = document.getElementById('last-move-val');
 const mctsDepth = document.getElementById('mcts-depth');
 const mctsDepthVal = document.getElementById('mcts-depth-val');
 
-// Event Listeners
-document.getElementById('btn-reset').onclick = () => apiAction('/reset', {});
-document.getElementById('btn-fow').onclick = () => {
-    ENABLE_FOW = !ENABLE_FOW;
-    renderMap();
-};
-document.getElementById('btn-rng').onclick = () => apiAction('/rngstep', {});
-document.getElementById('btn-step').onclick = () => {
-    const iterations = parseInt(mctsDepth.value);
-    apiAction('/autostep', { iterations });
-};
-mctsDepth.oninput = (e) => mctsDepthVal.textContent = e.target.value;
+class MapRenderer {
+    constructor(container) {
+        this.container = container;
+        this.elements = new Map(); // idx -> { ground, unit, city, structures, resources, fog }
+        this.selectedIdx = null;
+        this.visibleMap = {};
+    }
+
+    clear() {
+        this.container.innerHTML = '';
+        this.elements.clear();
+    }
+
+    getPos(x, y) {
+        const posX = (x - y) * (tileSize / 2 - TILE_OFFSET);
+        const posY = (x + y) * (tileSize / 4 + TILE_OFFSET);
+        return { x: posX, y: posY };
+    }
+
+    render(state, legalMoves) {
+        const currentTribeId = state.settings.currentPlayerTurnId;
+        this.visibleMap = state._visibleTiles || state.visibleTiles || state._visible_tiles || {};
+
+        const unitsByIndex = {};
+        const citiesByIndex = {};
+        Object.values(state.tribes).forEach(tribe => {
+            (tribe.units || []).forEach(u => unitsByIndex[u.coords.idx] = { ...u, tribe });
+            (tribe.cities || []).forEach(c => citiesByIndex[c.tileIndex] = { ...c, tribe });
+        });
+
+        const allTiles = Object.values(state.tiles).sort((a, b) => a.coords.idx - b.coords.idx);
+
+        allTiles.forEach(tile => {
+            this.renderTile(tile, state, unitsByIndex, citiesByIndex, currentTribeId);
+        });
+
+        this.renderMoveOverlays(legalMoves);
+    }
+
+    renderTile(tile, state, unitsByIndex, citiesByIndex, currentTribeId) {
+        const idx = tile.coords.idx;
+        const { x, y } = tile.coords;
+        const pos = this.getPos(x, y);
+
+        let data = this.elements.get(idx);
+        if (!data) {
+            data = { layers: {} };
+            this.elements.set(idx, data);
+        }
+
+        // FOW Logic
+        let isExplored = true;
+        let isVisible = true;
+        if (ENABLE_FOW) {
+            if (tile.explorers && !tile.explorers.includes(currentTribeId)) isExplored = false;
+            if (!this.visibleMap[idx] && !this.visibleMap[idx.toString()]) isVisible = false;
+        }
+
+        if (!isExplored) {
+            this.updateLayer(idx, 'ground', 'terrain/tiles/undiscovered', pos, 10, ['ground', 'undiscovered']);
+            this.removeLayer(idx, 'unit');
+            this.removeLayer(idx, 'city');
+            this.removeLayer(idx, 'resource');
+            this.removeLayer(idx, 'structure');
+            this.removeLayer(idx, 'ambient');
+            return;
+        }
+
+        // Ground
+        const tilefile = [null, 'terrain/water/water', 'terrain/water/ocean', null, null, null, 'terrain/tiles/ice'][tile.type]
+            || `terrain/tiles/ground_${tile.climate}`;
+
+        const groundEl = this.updateLayer(idx, 'ground', tilefile, pos, 0, ['ground']);
+        groundEl.dataset.tileIdx = idx;
+
+        if (!isVisible) groundEl.classList.add('fog');
+        else groundEl.classList.remove('fog');
+
+        // Ambient (Mountains/Forests)
+        if (tile.type === 4) { // Mountain
+            this.updateLayer(idx, 'ambient', `terrain/mountains/mountain_${tile.climate}`, pos, 2000, ['mountain', !isVisible ? 'fog' : '']);
+        } else if (tile.type === 5) { // Forest
+            this.updateLayer(idx, 'ambient', `terrain/forests/Forest_${tile.climate}`, pos, 2000, ['forest', !isVisible ? 'fog' : '']);
+        } else {
+            this.removeLayer(idx, 'ambient');
+        }
+
+        // Resources & Structures
+        const struct = state.structures[idx];
+        const res = state.resources[idx];
+
+        if (struct && struct.type === 71) { // Road
+            this.updateLayer(idx, 'road', 'misc/Road', pos, 1500, ['structure', 'road', !isVisible ? 'fog' : '']);
+        } else {
+            this.removeLayer(idx, 'road');
+        }
+
+        if (res) {
+            const resFile = getResourceFile(res.type, tile.climate);
+            const resClass = { 1: 'animal', 2: 'crop', 3: 'fish', 5: 'metal', 6: 'fruit' }[res.type];
+            this.updateLayer(idx, 'resource', resFile, pos, 2500, ['resource', resClass, !isVisible ? 'fog' : '']);
+        } else {
+            this.removeLayer(idx, 'resource');
+        }
+
+        if (struct && struct.type !== 71) {
+            // Skip rendering village if there's a city here
+            if (struct.type === 1 && citiesByIndex[idx]) {
+                this.removeLayer(idx, 'structure');
+            } else {
+                const structFile = getStructureFile(struct.type, tile.climate);
+                const classes = ['structure'];
+                if (struct.type === 1) classes.push('village');
+                if (struct.type === 2) classes.push('ruins');
+                if (struct.type === 29) classes.push('monument');
+                if (!isVisible) classes.push('fog');
+                this.updateLayer(idx, 'structure', structFile, pos, 3000, classes);
+            }
+        } else {
+            this.removeLayer(idx, 'structure');
+        }
+
+        // Cities
+        const city = citiesByIndex[idx];
+        if (city) {
+            const tribeName = TRIBE_ID_2_NAME[city.tribe.type];
+            const climateIndex = CLIMATE_IDS.indexOf(tribeName);
+            const cityEl = this.updateLayer(idx, 'city', `buildings/${tribeName}/Default/Houses/House_${climateIndex}_5`, pos, 4000, ['city', !isVisible ? 'fog' : '']);
+            const rewards = Object.keys(city.rewards).map(r => RewardEmojis[r]).join('');
+            // RewardEmojis[move.reward]
+            const unitCount = Object.values(GAME_STATE.tribes).flatMap(t => t.units).filter(u => u.cityId === city.id).length;
+            cityEl.innerHTML = `<div class="city-stats">
+                <span>${tile.capitalOf > 0 ? '👑 ' : ''}${city.name || 'City'} Lvl ${city.level}</span>
+                <span>${city.connectedToCapital ? '🔗' : ''}${rewards}</span>
+                <span>+${city.production} 💰</span>
+                <span>${city.population}/${city.level + 1} 😀</span>
+                <span>${unitCount} 🪖</span>
+            </div>`;
+        } else {
+            this.removeLayer(idx, 'city');
+        }
+
+        // Units
+        const unit = (isVisible || !ENABLE_FOW) ? unitsByIndex[idx] : null;
+        if (unit) {
+            const tribeName = TRIBE_ID_2_NAME[unit.tribe.type];
+            const className = ClassNameToId[unit.unitType || unit.type];
+            if (className) {
+                const classes = ['unit'];
+                if (unit.moved || unit.attacked) classes.push('exausted');
+                if (unit.flipped) classes.push('flipped');
+                if (this.selectedIdx === idx) classes.push('selected-unit-highlight');
+
+                const unitEl = this.updateLayer(idx, 'unit', `units/${tribeName}/default/${tribeName}_default_${className}`, pos, 5000, classes);
+                unitEl.innerHTML = `<div class="health">${Math.floor(unit.health / 10)}</div>`;
+            }
+        } else {
+            this.removeLayer(idx, 'unit');
+        }
+    }
+
+    updateLayer(idx, layerName, filename, pos, zIndex, classes = []) {
+        let data = this.elements.get(idx);
+        let el = data.layers[layerName];
+
+        if (!el) {
+            el = document.createElement('div');
+            el.classList.add('tile');
+            this.container.appendChild(el);
+            data.layers[layerName] = el;
+        }
+
+        el.style.backgroundImage = `url('textures/${filename}.png')`;
+        el.style.left = `${pos.x}px`;
+        el.style.top = `${pos.y}px`;
+        el.style.zIndex = Math.floor(pos.y + zIndex);
+
+        // Reset classes and apply new ones
+        el.className = 'tile';
+        classes.forEach(c => { if (c) el.classList.add(c) });
+
+        // If this is the ground layer, ensure it has a click mask
+        if (layerName === 'ground') {
+            this.updateClickMask(idx, pos);
+        }
+
+        return el;
+    }
+
+    updateClickMask(idx, pos) {
+        let data = this.elements.get(idx);
+        let mask = data.layers['click-mask'];
+
+        if (!mask) {
+            mask = document.createElement('div');
+            mask.classList.add('tile', 'click-mask');
+            this.container.appendChild(mask);
+            data.layers['click-mask'] = mask;
+        }
+
+        mask.style.left = `${pos.x}px`;
+        mask.style.top = `${pos.y}px`;
+        mask.style.zIndex = Math.floor(pos.y + 10000); // Topmost for interaction
+
+        mask.onclick = (e) => {
+            const unit = this.getUnitAt(idx);
+            this.handleTileClick(e, idx, unit, this.isTileVisible(idx));
+        };
+        this.setupHover(mask, idx, this.isTileVisible(idx));
+    }
+
+    isTileVisible(idx) {
+        if (!ENABLE_FOW) return true;
+        return !!(this.visibleMap[idx] || this.visibleMap[idx.toString()]);
+    }
+
+    removeLayer(idx, layerName) {
+        const data = this.elements.get(idx);
+        if (data && data.layers[layerName]) {
+            data.layers[layerName].remove();
+            delete data.layers[layerName];
+        }
+    }
+
+    handleTileClick(e, idx, unit, isVisible) {
+        e.stopPropagation();
+        if (ENABLE_FOW && !isVisible) {
+            if (this.selectedIdx !== null) {
+                this.selectedIdx = null;
+                this.render(GAME_STATE, currentLegalMoves);
+            }
+            return;
+        }
+
+        if (unit && (isVisible || !ENABLE_FOW)) {
+            // Priority selection if unit exists
+            this.selectedIdx = (this.selectedIdx === idx) ? null : idx;
+            selectedUnitIdx = this.selectedIdx;
+        } else {
+            this.selectedIdx = null;
+            selectedUnitIdx = null;
+        }
+        this.render(GAME_STATE, currentLegalMoves);
+    }
+
+    setupHover(el, idx, isVisible) {
+        el.onmouseenter = (e) => {
+            if (!this.isTileVisible(idx)) return;
+            const tile = GAME_STATE.tiles[idx];
+            if (!tile) return;
+
+            hoverEl.classList.remove('hidden');
+            const unit = (isVisible || !ENABLE_FOW) ? this.getUnitAt(idx) : null;
+            const struct = GAME_STATE.structures[idx];
+            const resource = GAME_STATE.resources[idx];
+
+            let html = `<strong>Tile ${idx} (${tile.coords.x}, ${tile.coords.y})</strong><br>`;
+            html += `⛰️ ${TerrainType[tile.type] || tile.type} (${tile.climate})<br>`;
+            if (unit) html += `🪖 ${TRIBE_ID_2_NAME[unit.tribe.type]} ${ClassNameToId[unit.type || unit.unitType]} (${unit.health / 10}/${unit.maxHealth / 10})<br>`;
+            if (struct) html += `🗼 ${StructureNames[struct.type] || struct.type}<br>`;
+            if (resource) html += `🥝 ${ResourceTypes[resource.type] || resource.type}<br>`;
+
+            hoverEl.innerHTML = html;
+
+            // Highlight the visual tile
+            const data = this.elements.get(idx);
+            if (data && data.layers['ground']) {
+                data.layers['ground'].classList.add('tile-hover-highlight');
+            }
+        };
+
+        el.onmousemove = (e) => {
+            hoverEl.style.left = `${e.clientX + 15}px`;
+            hoverEl.style.top = `${e.clientY + 15}px`;
+        };
+
+        el.onmouseleave = () => {
+            hoverEl.classList.add('hidden');
+            const data = this.elements.get(idx);
+            if (data && data.layers['ground']) {
+                data.layers['ground'].classList.remove('tile-hover-highlight');
+            }
+        };
+    }
+
+    getUnitAt(idx) {
+        let found = null;
+        Object.values(GAME_STATE.tribes).forEach(tribe => {
+            const u = (tribe.units || []).find(u => u.coords.idx === idx);
+            if (u) found = { ...u, tribe };
+        });
+        return found;
+    }
+
+    renderMoveOverlays(legalMoves) {
+        document.querySelectorAll('.move-overlay').forEach(el => el.remove());
+        if (this.selectedIdx === null) return;
+
+        const unitMoves = legalMoves.filter(m => m && typeof m === 'object' && m.src === this.selectedIdx);
+
+        unitMoves.forEach(move => {
+            const targetIdx = move.target;
+            if (targetIdx === undefined || targetIdx === null) return;
+
+            const targetTile = GAME_STATE.tiles[targetIdx];
+            if (!targetTile) return;
+
+            const pos = this.getPos(targetTile.coords.x, targetTile.coords.y);
+            const overlay = document.createElement('div');
+            overlay.classList.add('tile', 'move-overlay');
+            overlay.style.left = `${pos.x}px`;
+            overlay.style.top = `${pos.y}px`;
+            overlay.style.zIndex = Math.floor(pos.y + 20000); // Higher than click-mask (10000)
+
+            const img = document.createElement('img');
+            img.src = move.moveType === 2 ? 'textures/misc/attackTarget.png' : 'textures/misc/moveTarget.png';
+            img.style.width = '128px';
+            overlay.appendChild(img);
+
+            overlay.onclick = (e) => {
+                e.stopPropagation();
+                playMove(move);
+            };
+            this.container.appendChild(overlay);
+        });
+    }
+}
+
+const renderer = new MapRenderer(mapContainer);
+const hoverEl = document.getElementById('hovertile');
 
 async function apiAction(endpoint, body) {
     document.querySelectorAll('.btn').forEach(b => b.disabled = true);
@@ -55,25 +372,18 @@ function updateUI(data) {
     if (data.legalMoves) currentLegalMoves = data.legalMoves;
     if (data.movePlayed) lastMoveVal.textContent = data.movePlayed;
 
-    renderMap();
-
     const currentTribeId = GAME_STATE.settings.currentPlayerTurnId;
     const currentTribe = GAME_STATE.tribes[currentTribeId.toString()] || GAME_STATE.tribes[currentTribeId];
 
-    if (!currentTribe) {
-        console.error("Current tribe not found for ID:", currentTribeId);
-        return;
-    }
+    if (!currentTribe) return;
 
     // Update Stats
     turnVal.textContent = GAME_STATE.settings.turn;
-    // Mapgen.rs uses #[serde(rename = "type")] for tribe_type
     const currentTribeName = TRIBE_ID_2_NAME[currentTribe.type];
-    if (tribeNameLabel) tribeNameLabel.textContent = currentTribeName || 'Unknown';
+    tribeNameLabel.textContent = currentTribeName || 'Unknown';
     starsVal.textContent = currentTribe.stars;
     scoreVal.textContent = currentTribe.score;
 
-    // Calculate income: base production + 1 bonus only for capitals
     const income = currentTribe.cities.reduce((acc, cur) => {
         let prod = (cur.production || 0);
         const cityTile = GAME_STATE.tiles[cur.tileIndex];
@@ -82,92 +392,65 @@ function updateUI(data) {
     }, 0);
     incomeVal.textContent = `+${income}`;
 
-    // Update Tech Tree
-    techList.innerHTML = '';
-    // TechnologyState has #[serde(rename = "type")] for tech_type
-    const unlockedTechs = (currentTribe.tech_vanilla || []).map(t => t.type);
+    // Tech Tree update (kept similar but using helper if needed)
+    renderTechTree(currentTribe);
 
-    // Find researchable techs (techs whose prerequisites are met)
+    // Moves List update
+    renderMovesList(currentLegalMoves);
+
+    renderer.render(GAME_STATE, currentLegalMoves);
+}
+
+function renderTechTree(tribe) {
+    techList.innerHTML = '';
+    const unlockedTechs = (tribe.tech_vanilla || []).map(t => t.type);
     const researchableTechs = new Set();
-    // Start with tier 1 techs (always available via implicit Unrequired)
-    if (TechTree[0]) {
-        TechTree[0].forEach(t => {
-            if (!unlockedTechs.includes(t)) researchableTechs.add(t);
-        });
-    }
-    // Add techs unlocked by discovered techs
+
+    if (TechTree[0]) TechTree[0].forEach(t => { if (!unlockedTechs.includes(t)) researchableTechs.add(t); });
     unlockedTechs.forEach(techId => {
-        const nextTechs = TechTree[techId] || [];
-        nextTechs.forEach(t => {
-            if (!unlockedTechs.includes(t)) researchableTechs.add(t);
-        });
+        (TechTree[techId] || []).forEach(t => { if (!unlockedTechs.includes(t)) researchableTechs.add(t); });
     });
 
-    // Show unlocked techs first
     Object.entries(TechnologyNames).forEach(([id, name]) => {
         const techId = parseInt(id);
-        const isUnlocked = unlockedTechs.includes(techId);
-        if (!isUnlocked) return;
-
-        const badge = document.createElement('div');
-        badge.className = 'tech-badge unlocked';
-        badge.textContent = name;
-        techList.appendChild(badge);
+        if (unlockedTechs.includes(techId)) {
+            const badge = document.createElement('div');
+            badge.className = 'tech-badge unlocked';
+            badge.textContent = name;
+            techList.appendChild(badge);
+        }
     });
 
-    // Show researchable techs
     researchableTechs.forEach(techId => {
         const name = TechnologyNames[techId];
-        if (!name) return;
-
         const badge = document.createElement('div');
         badge.className = 'tech-badge';
         badge.style.border = '1px dashed var(--gold)';
         badge.style.color = 'var(--gold)';
         badge.textContent = `→ ${name}`;
 
-        // Find if this is a legal move
-        const researchMove = currentLegalMoves.find(m =>
-            typeof m === 'object' && m.moveType === 7 && m.tech === techId
-        );
-
-        if (researchMove) {
+        const move = currentLegalMoves.find(m => m && m.moveType === 7 && m.tech === techId);
+        if (move) {
             badge.style.cursor = 'pointer';
-            badge.onclick = () => playMove(researchMove);
-            badge.title = "Click to research";
-            badge.onmouseover = () => badge.style.backgroundColor = 'rgba(255, 215, 0, 0.1)';
-            badge.onmouseout = () => badge.style.backgroundColor = 'transparent';
+            badge.onclick = () => playMove(move);
         } else {
             badge.style.opacity = '0.5';
             badge.style.cursor = 'not-allowed';
-            badge.title = "Not enough stars";
         }
-
         techList.appendChild(badge);
     });
+}
 
-    if (unlockedTechs.length === 0 && researchableTechs.size === 0) {
-        const emptyMsg = document.createElement('div');
-        emptyMsg.className = 'tech-badge';
-        emptyMsg.style.background = 'transparent';
-        emptyMsg.style.border = '1px dashed var(--text-dim)';
-        emptyMsg.style.color = 'var(--text-dim)';
-        emptyMsg.textContent = 'No technologies';
-        techList.appendChild(emptyMsg);
-    }
-
-    // Update Moves List
+function renderMovesList(moves) {
     movesList.innerHTML = '';
     const MoveTypeNames = {
         0: 'None', 1: 'Step', 2: 'Attack', 3: 'Ability', 4: 'Summon',
         5: 'Harvest', 6: 'Build', 7: 'Research', 8: 'Capture', 9: 'Reward', 10: 'EndTurn'
     };
 
-    // Filter and deduplicate moves
     const uniqueMoves = [];
     const moveStrings = new Set();
-
-    (currentLegalMoves || []).forEach(move => {
+    (moves || []).forEach(move => {
         if (!move) return;
         const s = JSON.stringify(move);
         if (!moveStrings.has(s)) {
@@ -179,313 +462,38 @@ function updateUI(data) {
     uniqueMoves.filter(x => x.moveType).slice(0, 50).forEach(move => {
         const li = document.createElement('li');
         li.style.cursor = 'pointer';
-        li.classList.add('move-item'); // Add style for hover if needed
+        li.classList.add('move-item');
 
-        let moveText = '';
-        if (typeof move === 'object') {
-            const typeName = MoveTypeNames[move.moveType] || move.moveType;
-            console.log(move.moveType);
+        let text = '';
+        const typeName = MoveTypeNames[move.moveType] || move.moveType;
+        const resource = GAME_STATE.resources[move.target];
+        const tile = GAME_STATE.tiles[move.target];
+        const structure = GAME_STATE.structures[move.target];
 
-            if (move.moveType === 7) { // Research
-                const techName = TechnologyNames[move.tech] || move.tech;
-                moveText = `Research ${techName}`;
-            } else if (move.moveType === 6) { // Build
-                moveText = `Build ${StructureNames[move.structure]} @ ${move.tileIndex}`;
-            } else if (move.moveType === 5) { // Harvest
-                moveText = `Harvest @ ${ResourceType[move.target]}`;
-            } else if (move.moveType === 8) { // Capture
-                moveText = `Capture @ ${move.src}`;
-            } else if (move.moveType === 10) { // End Turn
-                moveText = 'End Turn';
-            } else {
-                moveText = `${typeName} ${move.src ?? move.target ?? ''} → ${move.target ?? ''}`;
-            }
-        } else {
-            moveText = String(move);
-        }
-        li.textContent = moveText;
+        if (move.moveType === 7) text = `Research ${TechnologyNames[move.tech] || move.tech}`;
+        else if (move.moveType === 6) text = `🔨 ${StructureNames[move.structure]} @ ${move.tileIndex}`;
+        else if (move.moveType === 5) text = `🥝 ${resource ? ResourceTypes[resource.type] : 'Resource'}`;
+        // capture
+        else if (move.moveType === 8) text = `🗿 ${tile && tile.owner > 0 ? 'City' : 'Village'} ${structure ? StructureNames[structure.type] : ''}`;
+        else if (move.moveType === 9) text = `${RewardEmojis[move.reward]} ${RewardTypes[move.reward]}`;
+        else if (move.moveType === 10) text = 'End Turn';
+        else text = `${typeName} (${move.moveType}) ${move.src ?? move.target ?? ''} → ${move.target ?? ''}`;
 
+        li.textContent = text;
         li.onclick = () => playMove(move);
         movesList.appendChild(li);
-    });
-    // lastLegalMoves undefined
-    // if (lastLegalMoves.length > 50) {
-    //     const li = document.createElement('li');
-    //     li.textContent = `... and ${lastLegalMoves.length - 50} more`;
-    //     movesList.appendChild(li);
-    // }
-
-    renderMap();
-}
-
-function renderMap() {
-    mapContainer.innerHTML = '';
-    TILE_ELEMENTS = {};
-
-    const mapSize = GAME_STATE.settings.size;
-    const currentTribeId = GAME_STATE.settings.currentPlayerTurnId;
-
-    // Determine visibility maps
-    // _visible_tiles renamed to _visibleTiles via camelCase?
-    // Let's handle likely cases
-    const visibleMap = GAME_STATE._visibleTiles || GAME_STATE.visibleTiles || GAME_STATE._visible_tiles || {};
-
-    function createTile(x, y, filename, z = 0) {
-        const tile = document.createElement("div");
-        tile.classList.add("tile");
-        tile.style.backgroundImage = `url('textures/${filename}.png')`;
-
-        const posX = (x - y) * (tileSize / 2 - TILE_OFFSET);
-        const posY = (x + y) * (tileSize / 4 + TILE_OFFSET);
-
-        tile.style.left = `${posX}px`;
-        tile.style.top = `${posY}px`;
-        tile.style.zIndex = Math.floor(posY + z);
-        mapContainer.appendChild(tile);
-        return tile;
-    }
-
-    const unitsByIndex = {};
-    const citiesByIndex = {};
-    Object.values(GAME_STATE.tribes).forEach(tribe => {
-        (tribe.units || []).forEach(u => unitsByIndex[u.coords.idx] = { ...u, tribe });
-        (tribe.cities || []).forEach(c => citiesByIndex[c.tileIndex] = { ...c, tribe });
-    });
-
-    // GAME_STATE.tiles is a HashMap (object)
-    const allTiles = Object.values(GAME_STATE.tiles).sort((a, b) => a.coords.idx - b.coords.idx);
-
-    allTiles.forEach(tile => {
-        const { x, y } = tile.coords;
-        const idx = tile.coords.idx;
-
-        // FOW Logic
-        let isExplored = true;
-        let isVisible = true;
-
-        if (ENABLE_FOW) {
-            // Check exploration
-            if (tile.explorers && !tile.explorers.includes(currentTribeId)) {
-                isExplored = false;
-            }
-            // Check visibility
-            // Map keys might be strings in JS
-            if (!visibleMap[idx] && !visibleMap[idx.toString()]) {
-                isVisible = false;
-            }
-        }
-
-        if (!isExplored) {
-            // Render Clouds / Undiscovered
-            const cloud = createTile(x, y, 'terrain/tiles/undiscovered', 10);
-            return; // Skip contents
-        }
-
-        // Ground
-        // TileState.terrain_type is renamed to "type"
-        const tilefile = [null, 'terrain/water/water', 'terrain/water/ocean', null, null, null, 'terrain/tiles/ice'][tile.type]
-            || `terrain/tiles/ground_${tile.climate}`;
-        const ground = createTile(x, y, tilefile);
-        ground.classList.add('ground');
-        ground.dataset.tileIdx = tile.coords.idx;
-
-        if (!isVisible) {
-            ground.classList.add('fog');
-        }
-
-        // Click handler for unit selection
-        ground.addEventListener('click', (e) => {
-            console.log('click', e);
-            e.stopPropagation();
-            const idx = parseInt(ground.dataset.tileIdx);
-
-            // Allow selecting only visible units? Or any if FOW off?
-            // If FOW is on and tile is in fog, we shouldn't see units, so no selection.
-            if (ENABLE_FOW && !isVisible) {
-                // Deselect if clicking into fog
-                if (selectedUnitIdx !== null) {
-                    selectedUnitIdx = null;
-                    renderMoveOverlays();
-                }
-                return;
-            }
-
-            const hasUnit = unitsByIndex[idx];
-            if (hasUnit && (isVisible || !ENABLE_FOW)) {
-                // Toggle selection
-                if (selectedUnitIdx === idx) {
-                    selectedUnitIdx = null;
-                } else {
-                    selectedUnitIdx = idx;
-                }
-            } else {
-                // Clicked on empty tile, deselect
-                selectedUnitIdx = null;
-            }
-            renderMoveOverlays();
-        });
-
-        // Ambient (Mountains/Forests)
-        if (tile.type === 4) {
-            const m = createTile(x, y, `terrain/mountains/mountain_${tile.climate}`, 3);
-            m.classList.add('mountain');
-            if (!isVisible) m.classList.add('fog');
-        }
-        if (tile.type === 5) {
-            const f = createTile(x, y, `terrain/forests/Forest_${tile.climate}`, 1);
-            f.classList.add('forest');
-            if (!isVisible) f.classList.add('fog');
-        }
-
-        const struct = GAME_STATE.structures[tile.coords.idx];
-        const res = GAME_STATE.resources[tile.coords.idx];
-
-        // 1. Road (Lower Z than buildings, same/lower than resource)
-        if (struct && struct.type === 71) {
-            const file = getStructureFile(struct.type, tile.climate);
-            if (file) {
-                const e = createTile(x, y, file, 4);
-                e.classList.add('structure', 'road');
-                if (!isVisible) e.classList.add('fog');
-            }
-        }
-
-        // 2. Resources (On top of roads, Under buildings)
-        if (res) {
-            const file = getResourceFile(res.type, tile.climate);
-            if (file) {
-                const e = createTile(x, y, file, 4);
-                e.classList.add('resource');
-                const resClass = { 1: 'animal', 2: 'crop', 3: 'fish', 5: 'metal', 6: 'fruit' }[res.type];
-                if (resClass) e.classList.add(resClass);
-                if (!isVisible) e.classList.add('fog');
-            }
-        }
-
-        // 3. Buildings / Monuments (Cover resources)
-        if (struct && struct.type !== 71) {
-            const file = getStructureFile(struct.type, tile.climate);
-            if (file) {
-                const e = createTile(x, y, file, 5);
-                e.classList.add('structure');
-                if (struct.type === 1) e.classList.add('village');
-                if (struct.type === 2) e.classList.add('ruins');
-                if (struct.type === 29) e.classList.add('monument');
-                if (!isVisible) e.classList.add('fog');
-            }
-        }
-
-        // Cities
-        const city = citiesByIndex[tile.coords.idx];
-        if (city) {
-            const tribeName = TRIBE_ID_2_NAME[city.tribe.type];
-            const climateIndex = CLIMATE_IDS.indexOf(tribeName);
-            const e = createTile(x, y, `buildings/${tribeName}/Default/Houses/House_${climateIndex}_5`, 50);
-            e.classList.add('city');
-            e.innerHTML = `<div><p class="${tile.capitalOf > 0 ? 'capital' : ''}">${city.name || 'City'} (${city.level})</p></div>`;
-            if (!isVisible) {
-                e.classList.add('fog');
-                // Maybe hide name?
-            }
-        }
-
-        // Units - Only render if visible (or FOW off)
-        if (isVisible || !ENABLE_FOW) {
-            const unit = unitsByIndex[tile.coords.idx];
-            if (unit) {
-                const tribeName = TRIBE_ID_2_NAME[unit.tribe.type];
-                const className = ClassNameToId[unit.type];
-                if (className) {
-                    const e = createTile(x, y, `units/${tribeName}/default/${tribeName}_default_${className}`, 500);
-                    e.classList.add('unit');
-                    if (unit.moved || unit.attacked) e.classList.add('exausted');
-                    if (unit.flipped) e.classList.add('flipped');
-                    if (selectedUnitIdx === tile.coords.idx) e.classList.add('selected-unit-highlight');
-                    e.innerHTML = `<div class="health">${Math.floor(unit.health / 10)}</div>`;
-                }
-            }
-        }
-
-        // Store tile ref for overlays
-        TILE_ELEMENTS[tile.coords.idx] = { x, y, ground };
-    });
-
-    // Add move overlays for selected unit
-    renderMoveOverlays();
-}
-
-function renderMoveOverlays() {
-    // Remove old overlays
-    document.querySelectorAll('.move-overlay').forEach(el => el.remove());
-
-    if (selectedUnitIdx === null) return;
-
-    // Find moves for this unit (src matches selected)
-    // Move move: src is starting position
-    // Attack move: src is attacker position
-    const unitMoves = currentLegalMoves.filter(m => {
-        if (!m || typeof m !== 'object') return false;
-        return m.src === selectedUnitIdx;
-    });
-
-    unitMoves.forEach(move => {
-        const targetIdx = move.target;
-        if (targetIdx === undefined || targetIdx === null) return;
-
-        const tileRef = TILE_ELEMENTS[targetIdx];
-        if (!tileRef) return;
-
-        const overlay = document.createElement('div');
-        overlay.classList.add('tile', 'move-overlay');
-
-        const posX = (tileRef.x - tileRef.y) * (tileSize / 2 - TILE_OFFSET);
-        const posY = (tileRef.x + tileRef.y) * (tileSize / 4 + TILE_OFFSET);
-        overlay.style.left = `${posX}px`;
-        overlay.style.top = `${posY}px`;
-        overlay.style.zIndex = 999;
-        overlay.style.pointerEvents = 'none';
-
-        // Use sprite image based on move type
-        const img = document.createElement('img');
-        img.style.width = '128px'; // Same as tile size
-        img.style.height = '64px'; // Half tile size usually for iso
-
-        if (move.moveType === 2) {
-            // Attack
-            img.src = 'textures/misc/attackTarget.png';
-        } else {
-            // Move/Step
-            img.src = 'textures/misc/moveTarget.png';
-        }
-
-        overlay.appendChild(img);
-
-        // Click to execute move
-        overlay.style.pointerEvents = 'auto'; // Enable clicks
-        overlay.style.cursor = 'pointer';
-        overlay.onclick = (e) => {
-            e.stopPropagation();
-            playMove(move);
-        };
-
-        mapContainer.appendChild(overlay);
     });
 }
 
 function playMove(move) {
-    console.log('Playing move:', move);
     fetch('/step', {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(move)
     })
         .then(r => r.json())
         .then(data => {
-            // Clear selection after move
-            // Unless it was a unit action that allows further actions? 
-            // For simplicity, clear it.
+            renderer.selectedIdx = null;
             selectedUnitIdx = null;
             updateUI(data);
         })
@@ -504,13 +512,9 @@ function getStructureFile(type, climate) {
         21: `buildings/common/Mine`,
         22: `buildings/common/Forge`,
         29: `buildings/${CLIMATE_IDS[climate]}/Default/Monuments/Monument7_${climate}`,
-        // ??: `misc/lighthouse`,
         71: `misc/Road`
     };
-    if (!map[type]) {
-        alert(`No structure file for type ${type} and climate ${climate}`);
-    }
-    return map[type];
+    return map[type] || 'misc/missing';
 }
 
 function getResourceFile(type, climate) {
@@ -519,15 +523,16 @@ function getResourceFile(type, climate) {
         2: `terrain/misc/ResourceGFX_crop`,
         3: `animals/fish`,
         5: `terrain/misc/ResourceGFX_metal`,
-        6: `fruits/ResourceGFX_fruit_${climate}`
+        6: `fruits/ResourceGFX_fruit_${climate}`,
+        8: `terrain/misc/ResourceGFX_starfish`
     };
-    return map[type];
+    return map[type] || 'misc/missing';
 }
 
+// Camera and Zoom logic (keeping existing as it works well)
 let scale = 0.5;
 let translateX = 0;
 let translateY = 0;
-
 const mapViewport = document.getElementById('map-viewport');
 
 function updateTransform() {
@@ -535,115 +540,104 @@ function updateTransform() {
 }
 
 function centerOnCoordinates(tX, tY) {
-    const posX = (tX - tY) * (tileSize / 2 - TILE_OFFSET);
-    const posY = (tX + tY) * (tileSize / 4 + TILE_OFFSET);
-
-    // Get viewport dimensions
+    const pos = renderer.getPos(tX, tY);
     const viewportRect = mapViewport.getBoundingClientRect();
-    if (viewportRect.width === 0 || viewportRect.height === 0) return; // Not visible yet
-
-    const viewportCenterX = viewportRect.width / 2;
-    const viewportCenterY = viewportRect.height / 2;
-
-    translateX = viewportCenterX - (posX * scale);
-    translateY = viewportCenterY - (posY * scale);
+    if (viewportRect.width === 0) return;
+    translateX = (viewportRect.width / 2) - (pos.x * scale);
+    translateY = (viewportRect.height / 2) - (pos.y * scale);
     updateTransform();
 }
 
 function focusCamera() {
     if (!GAME_STATE.settings) return;
-
     const currentTribeId = GAME_STATE.settings.currentPlayerTurnId;
-    const currentTribe = GAME_STATE.tribes[currentTribeId.toString()] || GAME_STATE.tribes[currentTribeId];
-
-    if (!currentTribe) {
-        // Fallback to map center
-        const size = GAME_STATE.settings.size || 16;
-        centerOnCoordinates(size / 2, size / 2);
-        return;
+    const tribe = GAME_STATE.tribes[currentTribeId] || Object.values(GAME_STATE.tribes)[0];
+    if (tribe && tribe.cities && tribe.cities.length > 0) {
+        const cityTile = GAME_STATE.tiles[tribe.cities[0].tileIndex];
+        centerOnCoordinates(cityTile.coords.x, cityTile.coords.y);
+    } else {
+        centerOnCoordinates(8, 8);
     }
-
-    // Try to find capital
-    const capital = (currentTribe.cities || []).find(c => {
-        const t = GAME_STATE.tiles[c.tileIndex];
-        return t && t.capitalOf === currentTribeId;
-    });
-
-    if (capital) {
-        const t = GAME_STATE.tiles[capital.tileIndex];
-        if (t) {
-            centerOnCoordinates(t.coords.x, t.coords.y);
-            return;
-        }
-    }
-
-    // Try to find first unit
-    const firstUnit = (currentTribe.units || [])[0];
-    if (firstUnit) {
-        centerOnCoordinates(firstUnit.coords.x, firstUnit.coords.y);
-        return;
-    }
-
-    // Fallback: Map Center
-    const size = GAME_STATE.settings.size || 16;
-    centerOnCoordinates(size / 2, size / 2);
 }
 
 window.addEventListener('load', () => {
     fetch('/current').then(r => r.json()).then(data => {
         updateUI(data);
-        // Delay slightly to ensure layout? No, usually fine.
-        requestAnimationFrame(() => focusCamera());
+        setTimeout(focusCamera, 100);
     });
 
+    // Drag, Zoom, Event listeners...
     let dragging = false, lx, ly;
-
     mapViewport.addEventListener('mousedown', e => {
-        // If clicking on a UI element inside map (like a button), don't drag?
-        // But map usually only has tiles.
-        if (e.button !== 0) return; // Only left click
-        dragging = true;
-        lx = e.clientX;
-        ly = e.clientY;
+        if (e.button !== 0) return;
+        dragging = true; lx = e.clientX; ly = e.clientY;
         mapViewport.style.cursor = 'grabbing';
-        // e.preventDefault(); // Don't prevent default here to allow clicking check
     });
-
     window.addEventListener('mousemove', e => {
         if (!dragging) return;
-        e.preventDefault(); // Prevent text selection while dragging
-
-        const dx = e.clientX - lx;
-        const dy = e.clientY - ly;
-
-        translateX += dx;
-        translateY += dy;
-
-        lx = e.clientX;
-        ly = e.clientY;
+        translateX += (e.clientX - lx);
+        translateY += (e.clientY - ly);
+        lx = e.clientX; ly = e.clientY;
         updateTransform();
     });
-
     window.addEventListener('mouseup', () => {
         dragging = false;
         mapViewport.style.cursor = 'default';
     });
-
-    // Zoom
     mapViewport.addEventListener('wheel', e => {
         e.preventDefault();
         const rect = mapViewport.getBoundingClientRect();
-        const centerX = rect.width / 2;
-        const centerY = rect.height / 2;
-
         const oldScale = scale;
-        const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
-        scale = Math.min(2, Math.max(0.2, scale * zoomFactor));
-
-        // Adjust translate to zoom around center
-        translateX = centerX - (centerX - translateX) * (scale / oldScale);
-        translateY = centerY - (centerY - translateY) * (scale / oldScale);
-
+        scale = Math.min(2, Math.max(0.2, scale * (e.deltaY > 0 ? 0.9 : 1.1)));
+        translateX = (rect.width / 2) - ((rect.width / 2) - translateX) * (scale / oldScale);
+        translateY = (rect.height / 2) - ((rect.height / 2) - translateY) * (scale / oldScale);
         updateTransform();
     }, { passive: false });
 });
+
+// Event Listeners for buttons
+const trainingUI = document.getElementById('training-ui');
+const trainingIndicator = document.getElementById('training-indicator');
+const trainingLog = document.getElementById('training-log');
+
+async function pollTrainingStatus() {
+    try {
+        const res = await fetch('/train/status');
+        if (!res.ok) return;
+        const data = await res.json();
+
+        if (data.pid) {
+            trainingUI.classList.remove('hidden');
+            if (data.isRunning) {
+                trainingIndicator.textContent = "Running (PID: " + data.pid + ")";
+                trainingIndicator.className = "stat-value small green";
+            } else {
+                trainingIndicator.textContent = "Finished / Stopped";
+                trainingIndicator.className = "stat-value small";
+            }
+            if (data.log) {
+                trainingLog.textContent = data.log;
+                trainingLog.scrollTop = trainingLog.scrollHeight;
+            }
+        } else {
+            trainingUI.classList.add('hidden');
+        }
+    } catch (e) {
+        console.error("Status check failed", e);
+    }
+}
+
+setInterval(pollTrainingStatus, 2000);
+
+document.getElementById('btn-reset').onclick = () => apiAction('/reset', {});
+document.getElementById('btn-fow').onclick = () => { ENABLE_FOW = !ENABLE_FOW; renderer.render(GAME_STATE, currentLegalMoves); };
+document.getElementById('btn-train').onclick = () => {
+    if (confirm("Start a background training session? This will run 'cargo run --bin self_play' on the server.")) {
+        apiAction('/train', {}).then(data => {
+            if (data && data.message) alert(data.message);
+        });
+    }
+};
+document.getElementById('btn-rng').onclick = () => apiAction('/rngstep', {});
+document.getElementById('btn-step').onclick = () => apiAction('/autostep', { iterations: parseInt(mctsDepth.value) });
+mctsDepth.oninput = (e) => mctsDepthVal.textContent = e.target.value;

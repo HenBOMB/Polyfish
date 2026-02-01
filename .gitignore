@@ -15,3 +15,7 @@ notes*
 data/*
 
 scraper/*
+
+polyfish-rs/target/*
+
+*safetensors

@@ -111,7 +111,7 @@ pub fn predict_explorer(state: &GameState, start_idx: i32) -> Vec<i32> {
     let _pov_id = state.settings.current_player_turn_id;
     let _map_size = state.settings.size;
 
-    for _ in 0..15 {
+    for _ in 0..12 {
         // Find nearest cloud within 4 moves
         let path = find_nearest_cloud(state, &current_visible, current_tile, 4);
 

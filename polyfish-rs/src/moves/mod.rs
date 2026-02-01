@@ -280,7 +280,7 @@ fn compute_reachable_tiles(
     state: &GameState,
     unit: &UnitState,
 ) -> std::collections::HashMap<i32, f32> {
-    let mut effective_movement = get_unit_setting(unit.unit_type).movement as f32;
+    let mut effective_movement = crate::functions::get_unit_movement(state, unit) as f32;
     // Cap movement at 1 if unit has segments attached
     if unit.child_unit_idx.is_some() {
         effective_movement = 1.0;
@@ -372,9 +372,23 @@ fn compute_movement_cost(state: &GameState, unit: &UnitState, from_idx: i32, to_
     // Terrain specific costs
     if let Some(tile) = state.tiles.get(&to_idx) {
         // Glide/Skate doubles movement on frozen tiles (halves cost)
+        // Glide/Skate doubles movement on frozen tiles (halves cost)
         if tile.frozen {
             if settings.skills.contains(&SkillType::Skate) {
-                return 0.5;
+                // Skate uses standard cost (1.0), but gets +1 movement range (handled in get_unit_movement)
+            }
+
+            // Polarism bonus: "gain an extra move when entering ice for the first time"
+            // We implement this as reduced cost (0.5) for the first step onto ice if the unit doesn't have Skate.
+            if unit.coords.idx == from_idx {
+                if let Some(tribe) = state.tribes.get(&unit.owner) {
+                    if crate::settings::technology::has_technology(
+                        &tribe.tech_vanilla,
+                        TechnologyType::Polarism,
+                    ) {
+                        return 0.5;
+                    }
+                }
             }
         }
 

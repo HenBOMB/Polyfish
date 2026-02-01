@@ -1,13 +1,13 @@
 use polyfish::game::Game;
 use polyfish::mapgen::{generate, MapGenSettings};
-use polyfish::types::TribeType;
+use polyfish::types::{MapSize, TribeType};
 use std::time::Instant;
 
 #[test]
 fn benchmark_simulator() {
     // Setup
     let mut settings = MapGenSettings::default();
-    settings.size = 16; // Standard size
+    settings.size = MapSize::Normal; // Standard size
     settings.tribes = vec![TribeType::Imperius, TribeType::Bardur];
     settings.seed = 42;
 

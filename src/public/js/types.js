@@ -79,9 +79,34 @@ const TerrainType = {
     7: "GroundWater",
 }
 
-const RewardType = {
-    "Workshop": 3,
+const RewardTypes = {
+    "CityWall": 1,
     "Park": 2,
+    "Workshop": 3,
+    "Explorer": 4,
+    "BorderGrowth": 5,
+    "SuperUnit": 6,
+    "Resources": 7,
+    "PopGrowth": 8,
+    1: "CityWall",
+    2: "Park",
+    3: "Workshop",
+    4: "Explorer",
+    5: "BorderGrowth",
+    6: "SuperUnit",
+    7: "Resources",
+    8: "PopGrowth",
+}
+
+const RewardEmojis = {
+    1: "🛡️",
+    2: "🌲",
+    3: "🪙",
+    4: "☁️",
+    5: "🧾",
+    6: "🎖️",
+    7: "⭐",
+    8: "😄",
 }
 
 const TechnologyNames = {
@@ -129,7 +154,7 @@ const StructureNames = {
     70: "Embassy", 71: "Road"
 };
 
-const ResourceType = {
+const ResourceTypes = {
     0: "None",
     1: "Game",
     2: "Crop",
