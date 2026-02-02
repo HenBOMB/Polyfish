@@ -12,7 +12,7 @@ use crate::states::{GameState, TileState, TribeState};
 use crate::types::{ClimateType, MapSize, MapType, TerrainType, TribeType};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
 pub struct MapGenSettings {
@@ -1227,7 +1227,6 @@ pub fn generate(settings: MapGenSettings) -> GameState {
     game_state.settings._fow = default_fow();
     game_state.settings._max_tribe_count = settings.tribes.len() as i32;
 
-    let mut tribe_id_map: HashMap<TribeType, i32> = HashMap::new();
     for (i, &tribe) in settings.tribes.iter().enumerate() {
         let id = (i + 1) as i32;
         let mut t_state = TribeState::default();
@@ -1272,7 +1271,6 @@ pub fn generate(settings: MapGenSettings) -> GameState {
             });
         }
         t_state.tech_vanilla = starting_tech;
-        tribe_id_map.insert(tribe, id);
         game_state.tribes.insert(id, t_state);
     }
 
@@ -1395,18 +1393,17 @@ pub fn generate(settings: MapGenSettings) -> GameState {
     }
 
     // Assign capital_of to tiles
-    for &cap in &capital_cells {
-        let tribe = settings.tribes[capital_cells.iter().position(|&c| c == cap).unwrap()];
-        let pid = tribe_id_map[&tribe];
+    for (i, &cap) in capital_cells.iter().enumerate() {
+        let pid = (i + 1) as i32;
         if let Some(tile) = game_state.tiles.get_mut(&cap) {
             tile.capital_of = pid;
         }
     }
 
     // Capital/City Setup
-    for &cap in &capital_cells {
-        let tribe = settings.tribes[capital_cells.iter().position(|&c| c == cap).unwrap()];
-        let pid = tribe_id_map[&tribe];
+    for (i, &cap) in capital_cells.iter().enumerate() {
+        let tribe = settings.tribes[i];
+        let pid = (i + 1) as i32;
         use crate::states::CityState;
         let mut city = CityState::default();
         city.id = cap;
@@ -1445,9 +1442,9 @@ pub fn generate(settings: MapGenSettings) -> GameState {
 
     // Starting units
     use crate::types::UnitType;
-    for &cap in &capital_cells {
-        let tribe = settings.tribes[capital_cells.iter().position(|&c| c == cap).unwrap()];
-        let pid = tribe_id_map[&tribe];
+    for (i, &cap) in capital_cells.iter().enumerate() {
+        let tribe = settings.tribes[i];
+        let pid = (i + 1) as i32;
         let unit_type = match tribe {
             TribeType::Hoodrick => UnitType::Archer,
             TribeType::Vengir => UnitType::Swordsman,
@@ -1478,6 +1475,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::states::PlayerId;
     use crate::types::{MapSize, MapType, StructureType};
 
     #[test]
@@ -1583,5 +1581,41 @@ mod tests {
                 println!("Min distance for {:?} {:?}: {}", map_type, size, min_dist);
             }
         }
+    }
+
+    #[test]
+    fn test_duplicate_tribes_ownership() {
+        let settings = MapGenSettings {
+            size: MapSize::Tiny,
+            map_type: MapType::Drylands,
+            tribes: vec![TribeType::Imperius, TribeType::Imperius],
+            seed: 123,
+        };
+        let state = generate(settings);
+
+        // Check that we have 2 tribes
+        assert_eq!(state.tribes.len(), 2);
+
+        // Check that each tribe has exactly one city and one unit
+        for (id, tribe) in &state.tribes {
+            assert_eq!(tribe.cities.len(), 1, "Tribe {} should have 1 city", id);
+            assert_eq!(tribe.units.len(), 1, "Tribe {} should have 1 unit", id);
+        }
+
+        // Check that the cities have different owners
+        let owners: HashSet<PlayerId> = state
+            .tribes
+            .values()
+            .flat_map(|t| t.cities.iter().map(|c| c.owner))
+            .collect();
+        assert_eq!(owners.len(), 2, "There should be 2 unique city owners");
+
+        // Check that units have different owners
+        let unit_owners: HashSet<PlayerId> = state
+            .tribes
+            .values()
+            .flat_map(|t| t.units.iter().map(|u| u.owner))
+            .collect();
+        assert_eq!(unit_owners.len(), 2, "There should be 2 unique unit owners");
     }
 }
