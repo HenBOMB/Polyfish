@@ -75,7 +75,7 @@ impl Move for RewardMove {
                 }
                 RewardType::Explorer => {
                     let predicted = predict_explorer(state, target);
-                    undos.push(discover_tiles(state, None, Some(predicted)));
+                    undos.push(discover_tiles(state, p_id, None, Some(predicted)));
                 }
                 RewardType::CityWall => {
                     if let Some(tribe) = state.tribes.get_mut(&p_id) {

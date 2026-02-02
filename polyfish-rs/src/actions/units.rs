@@ -234,10 +234,10 @@ pub fn step_unit(
 
     let tiles_to_reveal = if let Some(tribe) = state.tribes.get(&unit_owner) {
         if let Some(unit) = tribe.units.get(unit_idx) {
-            let range = if state.tiles.get(&to_tile_idx).map_or(false, |t| {
-                t.terrain_type == crate::types::TerrainType::Mountain
-            }) || has_skill(unit.unit_type, SkillType::Scout)
-            {
+            let range = if has_skill(unit.unit_type, SkillType::Scout)
+                || state.tiles.get(&to_tile_idx).map_or(false, |t| {
+                    t.terrain_type == crate::types::TerrainType::Mountain
+                }) {
                 2
             } else {
                 1
@@ -255,6 +255,7 @@ pub fn step_unit(
     if let Some(indices) = tiles_to_reveal {
         undos.push(crate::actions::discovery::discover_tiles(
             state,
+            unit_owner,
             None,
             Some(indices),
         ));
@@ -1386,7 +1387,7 @@ pub fn summon_unit(
         .get(&pov_id)
         .and_then(|t| t.units.last())
         .cloned();
-    let discover_undo = discover_tiles(state, unit_copy.as_ref(), None);
+    let discover_undo = discover_tiles(state, pov_id, unit_copy.as_ref(), None);
     undos.push(discover_undo);
 
     // AutoFreeze

@@ -368,6 +368,7 @@ async function apiAction(endpoint, body) {
 }
 
 function updateUI(data) {
+    const oldTribeId = (GAME_STATE.settings) ? GAME_STATE.settings.currentPlayerTurnId : null;
     if (data.state) GAME_STATE = data.state;
     if (data.legalMoves) currentLegalMoves = data.legalMoves;
     if (data.movePlayed) lastMoveVal.textContent = data.movePlayed;
@@ -399,6 +400,11 @@ function updateUI(data) {
     renderMovesList(currentLegalMoves);
 
     renderer.render(GAME_STATE, currentLegalMoves);
+
+    // If turn changed, pan smoothly to next player's capital
+    if (oldTribeId !== null && oldTribeId !== currentTribeId) {
+        setTimeout(() => focusCamera(true), 100);
+    }
 }
 
 function renderTechTree(tribe) {
@@ -470,7 +476,7 @@ function renderMovesList(moves) {
         const typeName = MoveTypeNames[moveType] || moveType;
         const resource = GAME_STATE.resources[move.target];
         const tile = GAME_STATE.tiles[move.target];
-        const structure = GAME_STATE.structures[move.target];
+        const structure = GAME_STATE.structures[move.target || move.src];
 
         if (moveType === 4) {
             const isUpgrade = move.upgrade === true;
@@ -479,8 +485,7 @@ function renderMovesList(moves) {
         else if (moveType === 7) text = `Research ${TechnologyNames[move.tech] || move.tech}`;
         else if (moveType === 6) text = `🔨 ${StructureNames[move.structure]} @ ${move.tileIndex}`;
         else if (moveType === 5) text = `🥝 ${resource ? ResourceTypes[resource.type] : 'Resource'}`;
-        // capture
-        else if (moveType === 8) text = `🗿 ${tile && tile.owner > 0 ? 'City' : 'Village'} ${structure ? StructureNames[structure.type] : ''}`;
+        else if (moveType === 8) text = `Capture ${tile && tile.owner > 0 ? 'City' : StructureNames[structure.type]}`;
         else if (moveType === 9) text = `${RewardEmojis[move.reward]} ${RewardTypes[move.reward]}`;
         else if (moveType === 10) text = 'End Turn';
         else text = `${typeName} (${moveType}) ${move.src ?? move.target ?? ''} → ${move.target ?? ''}`;
@@ -545,24 +550,42 @@ function updateTransform() {
     mapContainer.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
 }
 
-function centerOnCoordinates(tX, tY) {
+function centerOnCoordinates(tX, tY, smooth = false) {
     const pos = renderer.getPos(tX, tY);
     const viewportRect = mapViewport.getBoundingClientRect();
     if (viewportRect.width === 0) return;
     translateX = (viewportRect.width / 2) - (pos.x * scale);
     translateY = (viewportRect.height / 2) - (pos.y * scale);
-    updateTransform();
+
+    if (smooth) {
+        mapContainer.style.transition = 'transform 0.8s cubic-bezier(0.4, 0, 0.2, 1)';
+        updateTransform();
+        setTimeout(() => {
+            mapContainer.style.transition = '';
+        }, 850);
+    } else {
+        updateTransform();
+    }
 }
 
-function focusCamera() {
+function focusCamera(smooth = false) {
     if (!GAME_STATE.settings) return;
     const currentTribeId = GAME_STATE.settings.currentPlayerTurnId;
-    const tribe = GAME_STATE.tribes[currentTribeId] || Object.values(GAME_STATE.tribes)[0];
+    const tribe = GAME_STATE.tribes[currentTribeId.toString()] || GAME_STATE.tribes[currentTribeId] || Object.values(GAME_STATE.tribes)[0];
+
     if (tribe && tribe.cities && tribe.cities.length > 0) {
-        const cityTile = GAME_STATE.tiles[tribe.cities[0].tileIndex];
-        centerOnCoordinates(cityTile.coords.x, cityTile.coords.y);
+        // Find capital if possible
+        let cityToFocus = tribe.cities[0];
+        const capital = tribe.cities.find(c => {
+            const tile = GAME_STATE.tiles[c.tileIndex];
+            return tile && tile.capitalOf > 0;
+        });
+        if (capital) cityToFocus = capital;
+
+        const cityTile = GAME_STATE.tiles[cityToFocus.tileIndex];
+        centerOnCoordinates(cityTile.coords.x, cityTile.coords.y, smooth);
     } else {
-        centerOnCoordinates(8, 8);
+        centerOnCoordinates(8, 8, smooth);
     }
 }
 

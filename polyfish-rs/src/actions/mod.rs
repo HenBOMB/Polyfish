@@ -187,8 +187,7 @@ pub fn has_effect(unit: &UnitState, effect: EffectType) -> bool {
 pub fn set_visible_tiles(state: &mut GameState, player_id: PlayerId) -> UndoCallback {
     let old_visibility = state._visible_tiles.clone();
 
-    // Clear current visibility
-    // Clear current visibility
+    // Reset visibility for fresh calculation
     state._visible_tiles.clear();
 
     // Check Internal FOW Toggle (God Mode for AI Training)
@@ -218,7 +217,20 @@ pub fn set_visible_tiles(state: &mut GameState, player_id: PlayerId) -> UndoCall
                     let ny = city_coords.y + dy;
                     if nx >= 0 && nx < map_size && ny >= 0 && ny < map_size {
                         let idx = ny * map_size + nx;
+
+                        // Corner hidden rule: Capitals/Cities don't see corners unless they are ON them
+                        let is_corner = idx == 0
+                            || idx == map_size - 1
+                            || idx == map_size * (map_size - 1)
+                            || idx == map_size * map_size - 1;
+                        if is_corner && idx != city.tile_index {
+                            continue;
+                        }
+
                         state._visible_tiles.insert(idx, true);
+                        if let Some(tile) = state.tiles.get_mut(&idx) {
+                            tile.explorers.insert(player_id);
+                        }
                     }
                 }
             }
@@ -226,24 +238,28 @@ pub fn set_visible_tiles(state: &mut GameState, player_id: PlayerId) -> UndoCall
 
         // Vision from units
         for unit in &tribe.units {
-            // Standard vision range (could be enhanced by Scout skill)
-            let mut vision_range = if crate::functions::has_skill(unit, SkillType::Scout) {
+            // Standard vision range: 2 if Scout or on Mountain, else 1
+            let vision_range = if crate::functions::has_skill(unit, SkillType::Scout)
+                || state
+                    .tiles
+                    .get(&unit.coords.idx)
+                    .map_or(false, |t| t.terrain_type == TerrainType::Mountain)
+            {
                 2
             } else {
                 1
             };
-
-            // Units on mountains get +1 sight radius
-            if let Some(tile) = state.tiles.get(&unit.coords.idx) {
-                if tile.terrain_type == TerrainType::Mountain {
-                    vision_range += 1;
-                }
-            }
             for idx in get_adjacent_indices(state, unit.coords.idx, vision_range) {
                 state._visible_tiles.insert(idx, true);
+                if let Some(tile) = state.tiles.get_mut(&idx) {
+                    tile.explorers.insert(player_id);
+                }
             }
             // Unit's own tile
             state._visible_tiles.insert(unit.coords.idx, true);
+            if let Some(tile) = state.tiles.get_mut(&unit.coords.idx) {
+                tile.explorers.insert(player_id);
+            }
         }
     }
 

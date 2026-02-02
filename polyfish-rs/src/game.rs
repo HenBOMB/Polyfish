@@ -72,7 +72,13 @@ impl Game {
             tribe.starting_tile_coords.compute_idx(map_size);
         }
 
-        // Set visibility for current player
+        // Set initial visibility/exploration for all tribes
+        let ids: Vec<PlayerId> = self.state.tribes.keys().cloned().collect();
+        for id in ids {
+            let _ = actions::set_visible_tiles(&mut self.state, id);
+        }
+
+        // Ensure visibility is specifically set for the current player
         let pov_id = self.state.settings.current_player_turn_id;
         let _ = actions::set_visible_tiles(&mut self.state, pov_id);
 

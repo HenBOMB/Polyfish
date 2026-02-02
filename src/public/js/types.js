@@ -99,14 +99,15 @@ const RewardTypes = {
 }
 
 const RewardEmojis = {
-    0: "🛡️",
-    1: "🌲",
-    2: "🪙",
-    3: "☁️",
-    4: "🧾",
-    5: "🎖️",
-    6: "⭐",
-    7: "😄",
+    0: "none",
+    1: "🛡️",
+    2: "🌲",
+    3: "⚒️",
+    4: "☁️",
+    5: "🧾",
+    6: "🎖️",
+    7: "⭐",
+    8: "😄",
 }
 
 const TechnologyNames = {
@@ -215,4 +216,12 @@ const UnitTypes = {
     123: "Larva",
     124: "InsectEgg",
     125: "Mantis",
+}
+
+const CaptureTypes = {
+    0: 'None',
+    1: 'Ruins',
+    2: 'Starfish',
+    3: 'Village',
+    4: 'City',
 }

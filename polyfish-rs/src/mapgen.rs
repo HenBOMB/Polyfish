@@ -1259,6 +1259,12 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         }
     }
 
+    // Place Lighthouses on all 4 corners
+    let corners = [0, size - 1, size * (size - 1), size * size - 1];
+    for &idx in &corners {
+        map[idx as usize].above = Some("lighthouse".to_string());
+    }
+
     // Conversion to GameState
     let mut game_state = GameState::default();
     game_state.settings.size = size;
@@ -1352,6 +1358,14 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                     use crate::types::StructureType;
                     let mut s_state = StructureState::default();
                     s_state.structure_type = StructureType::Village;
+                    s_state.tile_index = gen_tile.idx;
+                    game_state.structures.insert(gen_tile.idx, Some(s_state));
+                }
+                "lighthouse" => {
+                    use crate::states::StructureState;
+                    use crate::types::StructureType;
+                    let mut s_state = StructureState::default();
+                    s_state.structure_type = StructureType::Lighthouse;
                     s_state.tile_index = gen_tile.idx;
                     game_state.structures.insert(gen_tile.idx, Some(s_state));
                 }

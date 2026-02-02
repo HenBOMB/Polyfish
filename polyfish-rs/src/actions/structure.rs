@@ -256,7 +256,7 @@ pub fn capture_ruin(state: &mut GameState, tile_idx: i32) -> UndoCallback {
     if fog_nearby {
         possible_rewards.push(Box::new(move |s: &mut GameState| {
             let revealed = crate::actions::discovery::predict_explorer(s, tile_idx);
-            discover_tiles(s, None, Some(revealed))
+            discover_tiles(s, pov_id, None, Some(revealed))
         }));
     }
 
