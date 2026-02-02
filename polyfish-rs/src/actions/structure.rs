@@ -212,7 +212,12 @@ pub fn capture_ruin(state: &mut GameState, tile_idx: i32) -> UndoCallback {
     let mut possible_rewards: Vec<Box<dyn FnOnce(&mut GameState) -> UndoCallback>> = Vec::new();
 
     // 1. Stars: 5 stars
-    possible_rewards.push(Box::new(|s: &mut GameState| gain_stars(s, 5)));
+    possible_rewards.push(Box::new(|s: &mut GameState| {
+        if s.settings.verbose {
+            s._messages.push("Ruin reward: 10 Stars! ⭐".to_string());
+        }
+        gain_stars(s, 10)
+    }));
 
     // 2. Tech: random unlockable
     if let Some(tribe) = state.tribes.get(&pov_id) {
@@ -231,6 +236,10 @@ pub fn capture_ruin(state: &mut GameState, tile_idx: i32) -> UndoCallback {
             possible_rewards.push(Box::new(move |s: &mut GameState| {
                 let mut rng = rand::thread_rng();
                 let picked = unlockable_cand[rng.gen_range(0..unlockable_cand.len())];
+                if s.settings.verbose {
+                    s._messages
+                        .push(format!("Ruin reward: Discovered {:?}! 💡", picked));
+                }
                 unlock_tech(s, picked, true).unwrap_or_else(|_| Box::new(|_| {}))
             }));
         }
@@ -240,6 +249,10 @@ pub fn capture_ruin(state: &mut GameState, tile_idx: i32) -> UndoCallback {
     if let Some(cap) = get_capital_city(state, pov_id) {
         let cap_tile_idx = cap.tile_index;
         possible_rewards.push(Box::new(move |s: &mut GameState| {
+            if s.settings.verbose {
+                s._messages
+                    .push("Ruin reward: Population growth! 👨‍👩‍👧‍👦".to_string());
+            }
             crate::actions::city::add_population(s, cap_tile_idx, 3)
         }));
     }
@@ -255,6 +268,9 @@ pub fn capture_ruin(state: &mut GameState, tile_idx: i32) -> UndoCallback {
     }
     if fog_nearby {
         possible_rewards.push(Box::new(move |s: &mut GameState| {
+            if s.settings.verbose {
+                s._messages.push("Ruin reward: Explorer! 🧭".to_string());
+            }
             let (_, revealed) = crate::actions::discovery::predict_explorer(s, tile_idx);
             discover_tiles(s, pov_id, None, Some(revealed))
         }));
@@ -273,6 +289,10 @@ pub fn capture_ruin(state: &mut GameState, tile_idx: i32) -> UndoCallback {
 
     possible_rewards.push(Box::new(move |s: &mut GameState| {
         let mut undos = Vec::new();
+        if s.settings.verbose {
+            s._messages
+                .push(format!("Ruin reward: Veteran {:?}! ⚔️", unit_reward_type));
+        }
         // Spawn unit
         undos.push(crate::actions::units::spawn_unit(
             s,

@@ -62,6 +62,11 @@ impl Move for RewardMove {
                 RewardType::Workshop => {
                     if let Some(tribe) = state.tribes.get_mut(&p_id) {
                         if let Some(city) = tribe.cities.get_mut(c_idx) {
+                            if state.settings.verbose {
+                                state
+                                    ._messages
+                                    .push(format!("City reward: Workshop (+1 Production) 🔨"));
+                            }
                             city.production += 1;
                             undos.push(Box::new(move |s: &mut GameState| {
                                 if let Some(t) = s.tribes.get_mut(&p_id) {
@@ -74,12 +79,22 @@ impl Move for RewardMove {
                     }
                 }
                 RewardType::Explorer => {
+                    if state.settings.verbose {
+                        state
+                            ._messages
+                            .push(format!("City reward: Explorer dispatched! 🧭"));
+                    }
                     let (_, predicted) = predict_explorer(state, target);
                     undos.push(discover_tiles(state, p_id, None, Some(predicted)));
                 }
                 RewardType::CityWall => {
                     if let Some(tribe) = state.tribes.get_mut(&p_id) {
                         if let Some(city) = tribe.cities.get_mut(c_idx) {
+                            if state.settings.verbose {
+                                state
+                                    ._messages
+                                    .push(format!("City reward: City Walls built! 🧱"));
+                            }
                             city._walls = true;
                             undos.push(Box::new(move |s: &mut GameState| {
                                 if let Some(t) = s.tribes.get_mut(&p_id) {
@@ -92,11 +107,19 @@ impl Move for RewardMove {
                     }
                 }
                 RewardType::Resources => {
+                    if state.settings.verbose {
+                        state._messages.push(format!("City reward: 5 Stars! ⭐"));
+                    }
                     undos.push(gain_stars(state, 5));
                 }
                 RewardType::PopGrowth => {
                     if let Some(tribe) = state.tribes.get_mut(&p_id) {
                         if let Some(city) = tribe.cities.get_mut(c_idx) {
+                            if state.settings.verbose {
+                                state
+                                    ._messages
+                                    .push(format!("City reward: Population growth! 👨‍👩‍👧‍👦"));
+                            }
                             city.population += 3;
                             city.progress += 3;
                             tribe.score += 15;
@@ -115,6 +138,11 @@ impl Move for RewardMove {
                 RewardType::BorderGrowth => {
                     if let Some(tribe) = state.tribes.get_mut(&p_id) {
                         if let Some(city) = tribe.cities.get_mut(c_idx) {
+                            if state.settings.verbose {
+                                state
+                                    ._messages
+                                    .push(format!("City reward: Border growth! 🗺️"));
+                            }
                             city.border_size += 1;
                             let adj = get_adjacent_indices(state, target, 2);
                             undos.push(claim_territory(state, &adj, target, false));
@@ -131,6 +159,11 @@ impl Move for RewardMove {
                 RewardType::Park => {
                     if let Some(tribe) = state.tribes.get_mut(&p_id) {
                         if let Some(city) = tribe.cities.get_mut(c_idx) {
+                            if state.settings.verbose {
+                                state
+                                    ._messages
+                                    .push(format!("City reward: Park (+250 Score) 🌳"));
+                            }
                             city.production += 1;
                             tribe.score += 250;
                             undos.push(Box::new(move |s: &mut GameState| {
@@ -147,6 +180,11 @@ impl Move for RewardMove {
                 RewardType::SuperUnit => {
                     let tribe_type = state.tribes.get(&p_id).map(|t| t.tribe_type).unwrap();
                     let unit_type = get_super_unit(tribe_type);
+                    if state.settings.verbose {
+                        state
+                            ._messages
+                            .push(format!("City reward: SUPER UNIT ({:?}) 🦖", unit_type));
+                    }
                     match summon_unit(state, unit_type, target, false, false) {
                         Ok(res) => undos.push(res.undo),
                         Err(_) => {}

@@ -116,7 +116,8 @@ const TechnologyNames = {
     10: "Fishing", 12: "Aquatism", 13: "Sailing", 14: "Navigation",
     15: "Hunting", 16: "Forestry", 17: "Mathematics", 18: "Archery", 19: "Spiritualism",
     20: "Climbing", 21: "Meditation", 22: "Philosophy", 23: "Mining", 24: "Smithery",
-    30: "Frostwork", 31: "Polar Warfare", 32: "Polarism", 36: "Recycling", 37: "Hydrology"
+    30: "Frostwork", 31: "Polar Warfare", 32: "Polarism", 36: "Recycling", 37: "Hydrology",
+    39: "Ramming", 41: "Sledding", 42: "IceFishing", 43: "Pascetism", 44: "Oceantology"
 }
 
 // Tech tree dependencies: tech_id -> [next techs that require it]
@@ -135,7 +136,7 @@ const TechTree = {
     23: [24],     // Mining -> Smithery
     21: [22],     // Meditation -> Philosophy
     // Fishing branch
-    10: [13, 11], // Fishing -> Sailing, Ramming (11 is placeholder for Ramming if needed)
+    10: [13, 39], // Fishing -> Sailing, Ramming
     13: [14],     // Sailing -> Navigation
     // Hunting branch
     15: [18, 16], // Hunting -> Archery, Forestry

@@ -41,6 +41,7 @@ async fn main() {
     let initial_state = generate(settings);
     let mut game = Game::new();
     game.state = initial_state;
+    game.state.settings.verbose = true;
     game.post_load();
 
     let shared_state = Arc::new(AppState {
@@ -114,6 +115,7 @@ async fn get_current_state(State(state): State<Arc<AppState>>) -> Json<Value> {
             "_visibleTiles": game.state._visible_tiles,
             "_hiddenResources": game.state._hidden_resources,
             "_prediction": game.state._prediction,
+            "_messages": game.state._messages,
         },
         "legalMoves": legal_moves
     }))
@@ -128,6 +130,7 @@ async fn auto_step(
     use polyfish::ai::MctsAgent;
     let agent = MctsAgent::new(params.iterations);
 
+    game.state._messages.clear();
     let (chosen_move, mcts_analysis) = agent.select_move_with_analysis(&mut game);
     let mut move_name = "none".to_string();
     if let Some(m) = chosen_move {
@@ -150,6 +153,7 @@ async fn auto_step(
             "_visibleTiles": game.state._visible_tiles,
             "_hiddenResources": game.state._hidden_resources,
             "_prediction": game.state._prediction,
+            "_messages": game.state._messages,
         },
         "movePlayed": move_name,
         "legalMoves": legal_moves,
@@ -163,6 +167,7 @@ async fn rng_step(State(state): State<Arc<AppState>>) -> Json<Value> {
     let mut move_name = "none".to_string();
 
     // Play at least one move
+    game.state._messages.clear();
     loop {
         let moves = game.legal_moves();
         if moves.is_empty() {
@@ -214,6 +219,7 @@ async fn rng_step(State(state): State<Arc<AppState>>) -> Json<Value> {
             "_visibleTiles": game.state._visible_tiles,
             "_hiddenResources": game.state._hidden_resources,
             "_prediction": game.state._prediction,
+            "_messages": game.state._messages,
         },
         "movePlayed": move_name,
         "legalMoves": legal_moves
@@ -339,6 +345,7 @@ async fn manual_step(
     };
 
     let move_name = format!("{:?}", move_obj.move_type());
+    game.state._messages.clear();
     game.play_move(move_obj.as_ref());
 
     let mut tiles: Vec<_> = game.state.tiles.values().collect();
@@ -356,6 +363,7 @@ async fn manual_step(
             "_visibleTiles": game.state._visible_tiles,
             "_hiddenResources": game.state._hidden_resources,
             "_prediction": game.state._prediction,
+            "_messages": game.state._messages,
         },
         "movePlayed": move_name,
         "legalMoves": legal_moves
@@ -372,6 +380,7 @@ async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {
 
     let initial_state = generate(settings);
     game.state = initial_state;
+    game.state.settings.verbose = true;
     game.post_load();
 
     let mut tiles: Vec<_> = game.state.tiles.values().collect();
@@ -389,6 +398,7 @@ async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {
             "_visibleTiles": game.state._visible_tiles,
             "_hiddenResources": game.state._hidden_resources,
             "_prediction": game.state._prediction,
+            "_messages": game.state._messages,
         },
         "legalMoves": legal_moves
     }))

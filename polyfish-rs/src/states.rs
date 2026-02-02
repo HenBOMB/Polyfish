@@ -379,6 +379,8 @@ pub struct GameSettings {
     pub _fow: bool,
     #[serde(rename = "_maxTribeCount")]
     pub _max_tribe_count: i32,
+    #[serde(default)]
+    pub verbose: bool,
 }
 
 pub fn default_turn() -> i32 {
@@ -411,6 +413,7 @@ impl Default for GameSettings {
             _recent_moves: Vec::new(),
             _fow: true,
             _max_tribe_count: 0,
+            verbose: false,
         }
     }
 }
@@ -467,6 +470,8 @@ pub struct GameState {
     pub _end_of_turn_queue: Vec<EndOfTurnAction>,
     #[serde(default)]
     pub _hidden_resources: HashMap<i32, Option<ResourceState>>,
+    #[serde(default)]
+    pub _messages: Vec<String>,
 }
 
 impl Default for GameState {
@@ -481,6 +486,7 @@ impl Default for GameState {
             _prediction: None,
             _end_of_turn_queue: Vec::new(),
             _hidden_resources: HashMap::new(),
+            _messages: Vec::new(),
         }
     }
 }

@@ -20,6 +20,20 @@ const movesList = document.getElementById('moves-list');
 const lastMoveVal = document.getElementById('last-move-val');
 const mctsDepth = document.getElementById('mcts-depth');
 const mctsDepthVal = document.getElementById('mcts-depth-val');
+const toastContainer = document.getElementById('toast-container');
+
+function showToast(message) {
+    if (!toastContainer) return;
+    const toast = document.createElement('div');
+    toast.className = 'toast';
+    toast.textContent = message;
+    toastContainer.appendChild(toast);
+
+    // Auto-remove after animation
+    setTimeout(() => {
+        toast.remove();
+    }, 3000);
+}
 
 // Combat Preview Calculator (mirrors Polytopia's damage formula)
 function calculateCombatPreview(attackerIdx, defenderIdx) {
@@ -203,7 +217,7 @@ class MapRenderer {
             // RewardEmojis[move.reward]
             const unitCount = Object.values(GAME_STATE.tribes).flatMap(t => t.units).filter(u => u.cityId === city.id).length;
             cityEl.innerHTML = `<div class="city-stats">
-                <span>${city.name || 'City'} lvl ${city.level}</span>
+                <span>${city.name?.replace(tribeName, '').trim() || 'City'} lvl ${city.level}</span>
                 <span>${tile.capitalOf > 0 ? '👑 ' : ''}${city.connectedToCapital ? '🔗' : ''}${rewards}</span>
                 <span>+${city.production} 💰</span>
                 <span>${city.progress} / ${city.level + 1} 😀</span>
@@ -333,11 +347,11 @@ class MapRenderer {
             const unit = (isVisible || !ENABLE_FOW) ? this.getUnitAt(idx) : null;
             const struct = GAME_STATE.structures[idx];
             const resource = GAME_STATE.resources[idx];
-
+            const isCity = tile.owner > 0 && struct && StructureNames[struct.type] === 'Village';
             let html = `<strong>Tile ${idx} (${tile.coords.x}, ${tile.coords.y})</strong><br>`;
             html += `⛰️ ${TerrainType[tile.type] || tile.type} (${tile.climate})<br>`;
-            if (unit) html += `🪖 ${TRIBE_ID_2_NAME[unit.tribe.type]} ${ClassNameToId[unit.type || unit.unitType]} (${unit.health / 10}/${unit.maxHealth / 10})<br>`;
-            if (struct) html += `🗼 ${StructureNames[struct.type] || struct.type}<br>`;
+            if (unit) html += `🪖 ${TRIBE_ID_2_NAME[unit.tribe.type]} ${ClassNameToId[unit.type || unit.unitType]} (${Math.floor(unit.health / 10)}/${Math.floor(unit.maxHealth / 10)})<br>`;
+            if (struct) html += `🗼 ${tile.capitalOf > 0 ? 'Capital' : isCity ? 'City' : StructureNames[struct.type] || struct.type}<br>`;
             if (resource) html += `🥝 ${ResourceTypes[resource.type] || resource.type}<br>`;
 
             hoverEl.innerHTML = html;
@@ -789,6 +803,13 @@ function updateUI(data) {
     if (oldTribeId !== null && oldTribeId !== currentTribeId) {
         setTimeout(() => focusCamera(true), 100);
     }
+
+    // Show messages as toasts
+    if (GAME_STATE._messages && GAME_STATE._messages.length > 0) {
+        GAME_STATE._messages.forEach(msg => showToast(msg));
+        // Clear them so they don't reappear on every UI sync if we don't have a fresh state
+        GAME_STATE._messages = [];
+    }
 }
 
 function renderTechTree(tribe) {
@@ -818,6 +839,7 @@ function renderTechTree(tribe) {
         badge.style.border = '1px dashed var(--gold)';
         badge.style.color = 'var(--gold)';
         badge.textContent = `→ ${name}`;
+        if (!name) console.log(techId);
 
         const move = currentLegalMoves.find(m => m && (m.moveType === 7 || m.tech !== undefined) && m.tech === techId);
         if (move) {
@@ -869,7 +891,7 @@ function renderMovesList(moves) {
         else if (moveType === 7) text = `Research ${TechnologyNames[move.tech] || move.tech}`;
         else if (moveType === 6) text = `🔨 ${StructureNames[move.structure]} @ ${move.tileIndex}`;
         else if (moveType === 5) text = `🥝 ${resource ? ResourceTypes[resource.type] : 'Resource'}`;
-        else if (moveType === 8) text = `Capture ${tile && tile.owner > 0 ? 'City' : StructureNames[structure.type]}`;
+        else if (moveType === 8) text = `Capture ${tile && tile.owner > 0 ? 'City' : StructureNames[structure.type]} (${move.src})`;
         else if (moveType === 9) text = `${RewardEmojis[move.reward]} ${RewardTypes[move.reward]}`;
         else if (moveType === 10) text = 'End Turn';
         else text = `${typeName} (${moveType}) ${move.src ?? move.target ?? ''} → ${move.target ?? ''}`;

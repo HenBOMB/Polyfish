@@ -146,7 +146,7 @@ pub fn claim_territory(
 /// Capture a city or village
 pub fn capture_city(state: &mut GameState, tile_idx: i32) -> Result<UndoCallback, String> {
     use crate::actions::units::remove_unit;
-    use crate::functions::get_adjacent_indices;
+    use crate::functions::get_square_indices;
     use crate::states::CityState;
     use crate::types::TribeType;
 
@@ -299,7 +299,7 @@ pub fn capture_city(state: &mut GameState, tile_idx: i32) -> Result<UndoCallback
         }
     } else {
         // Case 2: Capture Neutral Village (New City)
-        let territory = get_adjacent_indices(state, tile_idx, 1);
+        let territory = get_square_indices(tile_idx, 1, state.settings.size);
         let tribe_type = state
             .tribes
             .get(&pov_id)
