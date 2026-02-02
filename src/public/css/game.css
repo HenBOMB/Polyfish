@@ -423,10 +423,13 @@
 }
 
 @keyframes pulse-marker {
-    0%, 100% {
+
+    0%,
+    100% {
         transform: scale(1);
         opacity: 0.8;
     }
+
     50% {
         transform: scale(1.15);
         opacity: 1;
@@ -462,4 +465,43 @@
     background: rgba(239, 68, 68, 0.9);
     color: white;
     box-shadow: 0 0 10px rgba(239, 68, 68, 0.6);
+}
+
+/* Analysis Overlays (Expansion & Threats) */
+.analysis-overlay {
+    pointer-events: none;
+    clip-path: polygon(50% 0%, 100% 30%, 50% 60%, 0% 30%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: opacity 0.3s ease;
+}
+
+.expansion-overlay {
+    /* Background color set inline */
+}
+
+.threat-overlay {
+    background: transparent;
+    overflow: visible;
+    clip-path: none;
+    /* Allow markers to stick out */
+}
+
+.threat-marker {
+    position: absolute;
+    margin-top: -50px;
+    margin-left: 0;
+    font-size: 32px;
+    animation: bounce-threat 0.5s infinite alternate ease-in-out;
+}
+
+@keyframes bounce-threat {
+    from {
+        transform: translateY(0);
+    }
+
+    to {
+        transform: translateY(-8px);
+    }
 }

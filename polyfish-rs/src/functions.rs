@@ -952,6 +952,11 @@ pub fn analyze_expansion(state: &GameState, player_id: PlayerId) -> ExpansionAna
             continue; // Already owned
         }
 
+        // Anti-Cheat: Must have explored the tile to know its value
+        if !tile.explorers.contains(&player_id) {
+            continue;
+        }
+
         // Simple check for adjacency to our territory/units
         // This is expensive if we do it for all tiles.
         // Optimization: Only check tiles near our cities/units.
@@ -1018,6 +1023,11 @@ pub fn analyze_expansion(state: &GameState, player_id: PlayerId) -> ExpansionAna
             }
 
             for enemy in &other_tribe.units {
+                // Anti-Cheat: Enemy unit is only a threat if visible
+                if !state._visible_tiles.contains_key(&enemy.coords.idx) {
+                    continue;
+                }
+
                 // Approximate Threat: Distance <= Move + Range (Chebyshev for grid movement)
                 let dist = unit.coords.chebyshev_distance_to(&enemy.coords);
                 let enemy_settings = get_unit_setting(enemy.unit_type);

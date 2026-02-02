@@ -531,6 +531,73 @@ class MapRenderer {
             });
         }
     }
+    renderAnalysis(analysis) {
+        // Clear analysis overlays
+        document.querySelectorAll('.analysis-overlay').forEach(el => el.remove());
+
+        if (!analysis || !SHOW_PREDICTIONS) return;
+
+        // Render Expansion Values
+        if (analysis.tileValues) {
+            Object.entries(analysis.tileValues).forEach(([tileIdx, value]) => {
+                const idx = parseInt(tileIdx);
+                const tile = GAME_STATE.tiles[idx];
+                if (!tile) return;
+
+                const pos = this.getPos(tile.coords.x, tile.coords.y);
+                const overlay = document.createElement('div');
+                overlay.classList.add('tile', 'analysis-overlay', 'expansion-overlay');
+
+                // Opacity based on value (clamped 0.2 to 0.7)
+                const opacity = Math.min(0.7, Math.max(0.2, value / 10.0)).toFixed(2);
+                overlay.style.setProperty('--opacity', opacity);
+                overlay.style.backgroundColor = `rgba(138, 43, 226, ${opacity})`; // Violet
+
+                overlay.style.left = `${pos.x}px`;
+                overlay.style.top = `${pos.y}px`;
+                overlay.style.zIndex = Math.floor(pos.y + 14000); // Below units
+
+                // Add value label
+                /*
+                const label = document.createElement('div');
+                label.classList.add('mcts-label');
+                label.innerText = value.toFixed(1);
+                overlay.appendChild(label);
+                */
+
+                this.container.appendChild(overlay);
+            });
+        }
+
+        // Render Threats
+        if (analysis.threats) {
+            analysis.threats.forEach(threat => {
+                const idx = threat.targetTile;
+                const tile = GAME_STATE.tiles[idx];
+                if (!tile) return;
+
+                const pos = this.getPos(tile.coords.x, tile.coords.y);
+                const overlay = document.createElement('div');
+                overlay.classList.add('tile', 'analysis-overlay', 'threat-overlay');
+
+                overlay.style.left = `${pos.x}px`;
+                overlay.style.top = `${pos.y}px`;
+                overlay.style.zIndex = Math.floor(pos.y + 18000); // Above units
+
+                const marker = document.createElement('div');
+                marker.classList.add('village-marker', 'threat-marker');
+                marker.textContent = '⚠️';
+                marker.style.textShadow = '0 0 5px red';
+
+                if (threat.threatLevel >= 1.0) {
+                    marker.textContent = '💀'; // Lethal
+                }
+
+                overlay.appendChild(marker);
+                this.container.appendChild(overlay);
+            });
+        }
+    }
 }
 
 const renderer = new MapRenderer(mapContainer);
@@ -864,23 +931,32 @@ document.getElementById('btn-train').onclick = () => {
         });
     }
 };
-document.getElementById('btn-predictions').onclick = () => {
+document.getElementById('btn-predictions').onclick = async () => {
     SHOW_PREDICTIONS = !SHOW_PREDICTIONS;
     const btn = document.getElementById('btn-predictions');
     btn.classList.toggle('prediction-active', SHOW_PREDICTIONS);
 
-    // Re-render all prediction overlays
-    if (lastMctsAnalysis) {
-        renderer.renderMCTSHeatmap(lastMctsAnalysis);
-    } else {
+    // Clear all prediction overlays if disabled
+    if (!SHOW_PREDICTIONS) {
         document.querySelectorAll('.mcts-overlay').forEach(el => el.remove());
-    }
-
-    // Re-render FOW predictions
-    if (GAME_STATE._prediction) {
-        renderer.renderFOWPredictions(GAME_STATE._prediction);
-    } else {
         document.querySelectorAll('.village-marker').forEach(el => el.remove());
+        document.querySelectorAll('.analysis-overlay').forEach(el => el.remove());
+        document.querySelectorAll('.predicted-terrain').forEach(el => el.remove());
+    } else {
+        // Fetch Analysis Data
+        try {
+            const res = await fetch('/analyze');
+            if (res.ok) {
+                const analysis = await res.json();
+                renderer.renderAnalysis(analysis);
+            }
+        } catch (e) { console.error("Analysis fetch failed", e); }
+
+        // MCTS Heatmap
+        if (lastMctsAnalysis) renderer.renderMCTSHeatmap(lastMctsAnalysis);
+
+        // FOW Predictions
+        if (GAME_STATE._prediction) renderer.renderFOWPredictions(GAME_STATE._prediction);
     }
 
     // Re-render move overlays to show/hide combat previews
