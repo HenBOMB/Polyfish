@@ -41,7 +41,7 @@ fn test_explorer_tech_mountain() {
     // Fog at (3,0) - index 3
     // Explorer should want to go to index 3, but all paths are mountains.
 
-    let revealed = predict_explorer(&state, 0);
+    let (_, revealed) = predict_explorer(&state, 0);
     // Without climbing, it should NOT have revealed anything from index 1 (mountain)
     assert!(
         !revealed.contains(&2) && !revealed.contains(&3),
@@ -58,7 +58,7 @@ fn test_explorer_tech_mountain() {
             tech_type: TechnologyType::Climbing,
             discovered: true,
         });
-    let revealed_with_tech = predict_explorer(&state, 0);
+    let (_, revealed_with_tech) = predict_explorer(&state, 0);
     assert!(
         revealed_with_tech.contains(&3),
         "Explorer SHOULD reach distance 3 with Climbing"
@@ -81,7 +81,7 @@ fn test_explorer_lighthouse_priority() {
     s.tile_index = 2;
     state.structures.insert(2, Some(s));
 
-    let revealed = predict_explorer(&state, 0);
+    let (_, revealed) = predict_explorer(&state, 0);
 
     assert!(
         revealed.contains(&2),
@@ -104,7 +104,7 @@ fn test_explorer_no_backtracking() {
     state.tiles.get_mut(&12).unwrap().terrain_type = TerrainType::Mountain;
     state.tiles.get_mut(&13).unwrap().terrain_type = TerrainType::Mountain;
 
-    let revealed = predict_explorer(&state, 1);
+    let (_, revealed) = predict_explorer(&state, 1);
     assert!(
         revealed.contains(&3),
         "Explorer should avoid backtracking (0) and move to 2, revealing 3"

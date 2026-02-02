@@ -570,6 +570,82 @@ class MapRenderer {
             });
         }
     }
+
+    renderExplorerPath(path, revealed) {
+        // Clear previous explorer paths
+        document.querySelectorAll('.explorer-path-overlay').forEach(el => el.remove());
+
+        if (!path || path.length === 0) return;
+
+        // Render Path
+        for (let i = 0; i < path.length - 1; i++) {
+            const currentIdx = path[i];
+            const nextIdx = path[i + 1];
+
+            const t1 = GAME_STATE.tiles[currentIdx];
+            const t2 = GAME_STATE.tiles[nextIdx];
+            if (!t1 || !t2) continue;
+
+            const p1 = this.getPos(t1.coords.x, t1.coords.y);
+            // const p2 = this.getPos(t2.coords.x, t2.coords.y);
+
+            // Draw an arrow or marker at the next tile indicating flow
+            // Use a simple dot/arrow overlay on the 'next' tile
+            const overlay = document.createElement('div');
+            overlay.classList.add('tile', 'explorer-path-overlay');
+            overlay.style.left = `${(p1.x + 64)}px`; // Centerish? 
+            // Wait, coordinate system is isometric. 
+            // Let's just highlight the tiles in the path with numbers.
+
+        }
+
+        // Better: Highlight path tiles with step numbers
+        path.forEach((idx, step) => {
+            const tile = GAME_STATE.tiles[idx];
+            if (!tile) return;
+            const pos = this.getPos(tile.coords.x, tile.coords.y);
+
+            const overlay = document.createElement('div');
+            overlay.classList.add('tile', 'explorer-path-overlay');
+            overlay.style.left = `${pos.x}px`;
+            overlay.style.top = `${pos.y}px`;
+            overlay.style.zIndex = Math.floor(pos.y + 17000);
+
+            // Visual style
+            overlay.style.pointerEvents = 'none';
+            overlay.innerHTML = `<div style="
+                position: absolute; 
+                left: 50%; top: 50%; 
+                transform: translate(-50%, -50%);
+                font-size: 24px; 
+                font-weight: bold; 
+                color: #00ff00; 
+                text-shadow: 0 0 4px black;">
+                ${step}
+            </div>`;
+
+            this.container.appendChild(overlay);
+        });
+
+        // Highlight revealed tiles
+        revealed.forEach(idx => {
+            // explicit 'revealed-highlight'
+            const tile = GAME_STATE.tiles[idx];
+            if (!tile) return;
+            const pos = this.getPos(tile.coords.x, tile.coords.y);
+
+            const overlay = document.createElement('div');
+            overlay.classList.add('tile', 'explorer-path-overlay');
+            overlay.style.left = `${pos.x}px`;
+            overlay.style.top = `${pos.y}px`;
+            overlay.style.zIndex = Math.floor(pos.y + 16500);
+            overlay.style.backgroundColor = 'rgba(0, 255, 0, 0.2)';
+            overlay.style.border = '2px dashed #00ff00';
+
+            this.container.appendChild(overlay);
+        });
+    }
+
     renderAnalysis(analysis) {
         // Clear analysis overlays
         document.querySelectorAll('.analysis-overlay').forEach(el => el.remove());
@@ -795,6 +871,21 @@ function renderMovesList(moves) {
 
         li.textContent = text;
         li.onclick = () => playMove(move);
+
+        if (moveType === 9 && RewardTypes[move.reward] === 'Explorer') {
+            const simBtn = document.createElement('span');
+            simBtn.textContent = ' 👁️';
+            simBtn.title = 'Simulate Explorer Path';
+            simBtn.className = 'sim-btn';
+            simBtn.style.marginLeft = '10px';
+            simBtn.style.fontSize = '1.2em';
+            simBtn.onclick = (e) => {
+                e.stopPropagation();
+                simulateExplorer(move.target);
+            };
+            li.appendChild(simBtn);
+        }
+
         movesList.appendChild(li);
     });
 }
@@ -957,6 +1048,19 @@ async function pollTrainingStatus() {
     } catch (e) {
         console.error("Status check failed", e);
     }
+}
+
+async function simulateExplorer(startIdx) {
+    try {
+        const res = await fetch('/simulate/explorer', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ idx: startIdx })
+        });
+        const data = await res.json();
+        console.log("Simulation:", data);
+        renderer.renderExplorerPath(data.path, data.revealed);
+    } catch (e) { console.error(e); }
 }
 
 setInterval(pollTrainingStatus, 2000);

@@ -55,6 +55,7 @@ async fn main() {
         .route("/train", post(trigger_training))
         .route("/train/status", get(get_training_status))
         .route("/analyze", get(analyze_game))
+        .route("/simulate/explorer", post(simulate_explorer))
         .nest_service("/", ServeDir::new("../src/public"))
         .layer(CorsLayer::permissive())
         .with_state(shared_state);
@@ -454,5 +455,24 @@ async fn get_training_status(State(state): State<Arc<AppState>>) -> Json<Value> 
         "isRunning": is_running,
         "pid": pid_opt,
         "log": last_lines
+    }))
+}
+
+async fn simulate_explorer(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let mut game = state.game.lock().unwrap();
+    let idx = payload
+        .get("idx")
+        .and_then(|v| v.as_i64())
+        .map(|v| v as i32)
+        .unwrap_or(0);
+
+    let (path, revealed) = polyfish::actions::discovery::predict_explorer(&game.state, idx);
+
+    Json(serde_json::json!({
+        "path": path,
+        "revealed": revealed
     }))
 }

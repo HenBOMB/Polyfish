@@ -123,6 +123,14 @@ pub fn predict_villages(state: &GameState) -> HashMap<i32, (TribeType, bool)> {
                             continue;
                         }
 
+                        // Skip edges (villages don't spawn on map borders)
+                        let size = state.settings.size;
+                        let x = n_idx % size;
+                        let y = n_idx / size;
+                        if x == 0 || x == size - 1 || y == 0 || y == size - 1 {
+                            continue;
+                        }
+
                         // Boost score significantly
                         let entry = candidates.entry(n_idx).or_insert((0, t.climate));
                         entry.0 += 5; // Strong evidence

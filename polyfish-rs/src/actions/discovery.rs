@@ -80,9 +80,17 @@ pub fn discover_tiles(
                 // Check if lighthouse
                 if let Some(Some(struct_state)) = state.structures.get(&idx) {
                     if struct_state.structure_type == StructureType::Lighthouse {
-                        if let Some(capital) = get_capital_city(state, pov_id) {
-                            let cap_idx = capital.tile_index;
-                            undos.push(add_population(state, cap_idx, 1));
+                        let city_to_reward = get_capital_city(state, pov_id)
+                            .map(|c| c.tile_index)
+                            .or_else(|| {
+                                state
+                                    .tribes
+                                    .get(&pov_id)
+                                    .and_then(|t| t.cities.first().map(|c| c.tile_index))
+                            });
+
+                        if let Some(idx) = city_to_reward {
+                            undos.push(add_population(state, idx, 1));
                         }
                     }
                 }
@@ -104,12 +112,16 @@ use rand::seq::SliceRandom;
 use rand::thread_rng;
 use std::collections::HashSet;
 
-/// Predict where an explorer will go and return revealed tile indices
-pub fn predict_explorer(state: &GameState, start_idx: i32) -> Vec<i32> {
+/// Predict where an explorer will go and return (path, revealed_tiles)
+/// Predict where an explorer will go and return (path, revealed_tiles)
+pub fn predict_explorer(state: &GameState, start_idx: i32) -> (Vec<i32>, Vec<i32>) {
     let mut current_visible = state._visible_tiles.clone();
     let mut explored_tiles: HashSet<i32> = HashSet::new();
+    let mut path_indices: Vec<i32> = Vec::new();
     let mut current_tile = start_idx;
     let mut prev_tile = -1;
+
+    path_indices.push(current_tile);
 
     for _ in 0..12 {
         // 1. Calculate scores for all tiles (expensive but deterministic)
@@ -155,19 +167,12 @@ pub fn predict_explorer(state: &GameState, start_idx: i32) -> Vec<i32> {
         // Move and reveal
         prev_tile = current_tile;
         current_tile = next_tile;
+        path_indices.push(current_tile);
 
         // Reveal tile and its neighbors (vision range 1 for prediction,
         // mountain reveal happens in discover_tiles action but we predict it here too)
-        let range = if state
-            .tiles
-            .get(&current_tile)
-            .map(|t| t.terrain_type == TerrainType::Mountain)
-            .unwrap_or(false)
-        {
-            2
-        } else {
-            1
-        };
+        // Explorer has range 2 (5x5 area)
+        let range = 2;
 
         let mut to_reveal = get_adjacent_indices(state, current_tile, range);
         to_reveal.push(current_tile);
@@ -180,7 +185,7 @@ pub fn predict_explorer(state: &GameState, start_idx: i32) -> Vec<i32> {
         }
     }
 
-    explored_tiles.into_iter().collect()
+    (path_indices, explored_tiles.into_iter().collect())
 }
 
 fn calculate_explorer_scores(
@@ -232,7 +237,8 @@ fn score_fog_tile(
 
     // The 110-173 scoring is based on how many OTHER fog tiles are cleared
     // when THIS fog tile is cleared.
-    let adj = get_adjacent_indices(state, idx, 1);
+    // Explorers have 5x5 vision (Range 2)
+    let adj = get_adjacent_indices(state, idx, 2);
     let mut check_reveal = adj;
     check_reveal.push(idx);
 
