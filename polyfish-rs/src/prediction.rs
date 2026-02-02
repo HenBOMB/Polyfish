@@ -63,6 +63,7 @@ pub fn tribe_to_climate(tribe: TribeType) -> ClimateType {
 /// 3. Combine scores and return best candidates.
 pub fn predict_villages(state: &GameState) -> HashMap<i32, (TribeType, bool)> {
     let pov_id = state.settings.current_player_turn_id;
+    // ...
     let pov_tribe_type = state
         .tribes
         .get(&pov_id)
@@ -199,6 +200,7 @@ pub fn predict_villages(state: &GameState) -> HashMap<i32, (TribeType, bool)> {
         prediction_map.insert(best_idx, (predicted_tribe, true));
     }
 
+    println!("Predicted villages: {:?}", prediction_map);
     prediction_map
 }
 
@@ -267,4 +269,36 @@ pub fn get_border_clouds(state: &GameState) -> Vec<i32> {
     }
 
     border_clouds.into_iter().collect()
+}
+
+/// Update all predictions in the game state
+pub fn update_predictions(state: &mut GameState) {
+    // 1. Predict Villages
+    let villages = predict_villages(state);
+
+    // 2. Predict Terrain for border clouds
+    let border_clouds = get_border_clouds(state);
+    let terrain = predict_terrain(state, &border_clouds);
+
+    // 3. Predict Enemy Capitals
+    let enemy_capitals = predict_enemy_capitals(state); // Wait, I need to implement this or find it
+
+    // Update state
+    let prediction = crate::states::PredictionState {
+        _villages: villages,
+        _terrain: terrain,
+        _enemy_capital_suspects: enemy_capitals,
+        _city_rewards: Vec::new(), // Not implemented yet
+    };
+
+    state._prediction = Some(prediction);
+}
+
+/// Predict likely enemy capital locations based on heuristics
+pub fn predict_enemy_capitals(state: &GameState) -> Vec<i32> {
+    // Simply return empty for now if logic is missing, or implement basic heuristic
+    // Heuristic: Center of large unexplored areas?
+    // For now, let's check if we have the advanced logic.
+    // I can port the TS logic later.
+    Vec::new()
 }

@@ -66,10 +66,19 @@ async fn main() {
 }
 
 async fn analyze_game(State(state): State<Arc<AppState>>) -> Json<Value> {
-    let game = state.game.lock().unwrap();
+    let mut game = state.game.lock().unwrap();
+
+    // Recalculate predictions on demand
+    polyfish::prediction::update_predictions(&mut game.state);
+
     let current_player = game.state.settings.current_player_turn_id;
-    let analysis = polyfish::functions::analyze_expansion(&game.state, current_player);
-    Json(serde_json::to_value(analysis).unwrap())
+    let expansion_analysis = polyfish::functions::analyze_expansion(&game.state, current_player);
+
+    Json(serde_json::json!({
+        "tileValues": expansion_analysis.tile_values,
+        "threats": expansion_analysis.threats,
+        "prediction": game.state._prediction
+    }))
 }
 
 #[derive(serde::Deserialize)]
@@ -83,7 +92,8 @@ fn default_iterations() -> usize {
 }
 
 async fn get_current_state(State(state): State<Arc<AppState>>) -> Json<Value> {
-    let game = state.game.lock().unwrap();
+    let mut game = state.game.lock().unwrap();
+    polyfish::prediction::update_predictions(&mut game.state);
 
     let mut tiles: Vec<_> = game.state.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);

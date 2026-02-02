@@ -493,10 +493,12 @@ class MapRenderer {
         document.querySelectorAll('.predicted-terrain').forEach(el => el.remove());
 
         if (!prediction || !SHOW_PREDICTIONS) return;
+        console.log("Rendering Predictions:", prediction);
 
         // Render predicted villages
-        if (prediction._villages) {
-            Object.entries(prediction._villages).forEach(([tileIdx, [tribeType, isVillage]]) => {
+        const villages = prediction._villages || prediction.villages;
+        if (villages) {
+            Object.entries(villages).forEach(([tileIdx, [tribeType, isVillage]]) => {
                 const idx = parseInt(tileIdx);
                 const tile = GAME_STATE.tiles[idx];
                 if (!tile) return;
@@ -514,9 +516,10 @@ class MapRenderer {
         }
 
         // Render predicted terrain
-        if (prediction._terrain) {
+        const terrain = prediction._terrain || prediction.terrain;
+        if (terrain) {
             const currentTribeId = GAME_STATE.settings.currentPlayerTurnId;
-            Object.entries(prediction._terrain).forEach(([tileIdx, [terrainType, climate]]) => {
+            Object.entries(terrain).forEach(([tileIdx, [terrainType, climate]]) => {
                 const idx = parseInt(tileIdx);
                 const tile = GAME_STATE.tiles[idx];
                 if (!tile) return;
@@ -549,8 +552,9 @@ class MapRenderer {
         }
 
         // Render suspected enemy capitals
-        if (prediction._enemy_capital_suspects && prediction._enemy_capital_suspects.length > 0) {
-            prediction._enemy_capital_suspects.forEach(idx => {
+        const suspects = prediction._enemy_capital_suspects || prediction.enemyCapitalSuspects || prediction._enemyCapitalSuspects;
+        if (suspects && suspects.length > 0) {
+            suspects.forEach(idx => {
                 const tile = GAME_STATE.tiles[idx];
                 if (!tile) return;
 
@@ -984,14 +988,22 @@ document.getElementById('btn-predictions').onclick = async () => {
             if (res.ok) {
                 const analysis = await res.json();
                 renderer.renderAnalysis(analysis);
+
+                // Use FRESH predictions from analysis if available
+                if (analysis.prediction) {
+                    renderer.renderFOWPredictions(analysis.prediction);
+                } else if (GAME_STATE._prediction) {
+                    renderer.renderFOWPredictions(GAME_STATE._prediction);
+                }
             }
-        } catch (e) { console.error("Analysis fetch failed", e); }
+        } catch (e) {
+            console.error("Analysis fetch failed", e);
+            // Fallback
+            if (GAME_STATE._prediction) renderer.renderFOWPredictions(GAME_STATE._prediction);
+        }
 
         // MCTS Heatmap
         if (lastMctsAnalysis) renderer.renderMCTSHeatmap(lastMctsAnalysis);
-
-        // FOW Predictions
-        if (GAME_STATE._prediction) renderer.renderFOWPredictions(GAME_STATE._prediction);
     }
 
     // Re-render move overlays to show/hide combat previews
