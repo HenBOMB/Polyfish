@@ -57,7 +57,7 @@ pub fn get_resource_setting(resource_type: ResourceType) -> ResourceSetting {
         },
         Spores => ResourceSetting {
             tech_required: Unrequired,
-            struct_type: Some(StructureType::Spores),
+            struct_type: Some(StructureType::Fungi),
             reward_pop: 1,
             tribe_type: Some(TribeType::Cymanti),
             ..Default::default()
