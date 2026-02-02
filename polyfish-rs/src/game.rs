@@ -186,7 +186,8 @@ impl Game {
     /// Simulate a move for MCTS (does NOT set _are_you_sure, preventing exploration)
     ///
     /// This is specifically for MCTS simulations where we don't want to
-    /// permanently reveal tiles on the map.
+    /// permanently reveal tiles on the map. For EndTurn moves, this implements
+    /// single-player MCTS by skipping enemy turns and cycling back to the original player.
     pub fn simulate_move(&mut self, game_move: &dyn Move) -> Option<UndoCallback> {
         if self.state.settings._game_over {
             return None;
@@ -196,9 +197,32 @@ impl Game {
         // This prevents exploration during MCTS simulations
 
         let undo = if game_move.move_type() == MoveType::EndTurn {
-            let end_undo = self.end_turn();
+            // Single-player MCTS: skip enemy turns and return to original player
+            let original_player = self.state.settings.current_player_turn_id;
+            let mut undos = Vec::new();
+
+            // End our turn
+            undos.push(self.end_turn());
             self.state.settings._recent_moves.clear();
-            end_undo
+
+            // Keep ending turns until we're back at original player
+            // This effectively "skips" all enemy turns
+            let max_players = 16; // Safety limit to prevent infinite loop
+            let mut iterations = 0;
+            while self.state.settings.current_player_turn_id != original_player
+                && iterations < max_players
+                && !self.state.settings._game_over
+            {
+                undos.push(self.end_turn());
+                iterations += 1;
+            }
+
+            // Combine all undos
+            Box::new(move |s: &mut GameState| {
+                while let Some(undo) = undos.pop() {
+                    undo(s);
+                }
+            }) as UndoCallback
         } else {
             let result = game_move.execute(&mut self.state);
             if let Err(e) = result {

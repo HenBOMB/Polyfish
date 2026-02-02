@@ -128,6 +128,8 @@ async fn auto_step(
     Json(params): Json<StepParams>,
 ) -> Json<Value> {
     let mut game = state.game.lock().unwrap();
+    // dont spam the front end lol
+    game.state.settings.verbose = false;
 
     use polyfish::ai::MctsAgent;
     let agent = MctsAgent::new(params.iterations);
