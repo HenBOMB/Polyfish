@@ -35,48 +35,7 @@ function showToast(message) {
     }, 3000);
 }
 
-// Combat Preview Calculator (mirrors Polytopia's damage formula)
-function calculateCombatPreview(attackerIdx, defenderIdx) {
-    const attacker = getUnitAt(attackerIdx);
-    const defender = getUnitAt(defenderIdx);
-    if (!attacker || !defender) return null;
-
-    // Get base stats (simplified - would need full unit settings for accuracy)
-    const atkAttack = attacker.attack || 2;
-    const atkHealth = attacker.health || 100;
-    const atkMaxHealth = attacker.maxHealth || 100;
-
-    const defDefense = defender.defense || 2;
-    const defHealth = defender.health || 100;
-    const defMaxHealth = defender.maxHealth || 100;
-    const defenseBonus = 1.0; // Would need to check terrain/city
-
-    // Polytopia damage formula
-    const attackForce = atkAttack * (atkHealth / atkMaxHealth);
-    const defenseForce = (defDefense * defenseBonus) * (defHealth / defMaxHealth);
-    const totalForce = attackForce + defenseForce;
-
-    const damageToDefender = Math.round((attackForce / totalForce) * atkAttack * 4.5);
-
-    // Retaliation
-    const newDefHealth = defHealth - damageToDefender;
-    let damageToAttacker = 0;
-    if (newDefHealth > 0) {
-        const retForce = (defDefense * defenseBonus) * (newDefHealth / defMaxHealth);
-        const retTotal = atkAttack + retForce;
-        damageToAttacker = Math.round((retForce / retTotal) * (defDefense * defenseBonus) * 4.5);
-    }
-
-    const defenderDies = newDefHealth <= 0;
-    const attackerDies = atkHealth - damageToAttacker <= 0;
-
-    return {
-        damageToDefender,
-        damageToAttacker,
-        defenderDies,
-        attackerDies
-    };
-}
+// --- Move Interaction ---
 
 function getUnitAt(idx) {
     if (!GAME_STATE.tribes) return null;
@@ -390,7 +349,7 @@ class MapRenderer {
 
     renderMoveOverlays(legalMoves) {
         document.querySelectorAll('.move-overlay').forEach(el => el.remove());
-        document.querySelectorAll('.combat-preview').forEach(el => el.remove());
+        document.querySelectorAll('.combat-preview:not(.temp-highlight)').forEach(el => el.remove());
         if (this.selectedIdx === null) return;
 
         const unitMoves = legalMoves.filter(m => m && typeof m === 'object' && m.src === this.selectedIdx);
@@ -415,36 +374,124 @@ class MapRenderer {
             img.style.width = '128px';
             overlay.appendChild(img);
 
-            // Add combat preview for attack moves when predictions are enabled
+            // Add combat preview for attack moves when predictions are enabled (permanent)
             if (isAttack && SHOW_PREDICTIONS) {
-                const preview = calculateCombatPreview(this.selectedIdx, targetIdx);
-                if (preview) {
-                    const previewEl = document.createElement('div');
-                    previewEl.classList.add('combat-preview');
-
-                    // Color based on outcome
-                    if (preview.defenderDies && !preview.attackerDies) {
-                        previewEl.classList.add('combat-favorable');
-                    } else if (preview.attackerDies) {
-                        previewEl.classList.add('combat-deadly');
-                    } else {
-                        previewEl.classList.add('combat-risky');
-                    }
-
-                    // Show damage numbers
-                    previewEl.innerHTML = `⚔️ ${preview.damageToDefender} / -${preview.damageToAttacker}`;
-                    previewEl.style.left = `${pos.x}px`;
-                    previewEl.style.top = `${pos.y}px`;
-                    previewEl.style.zIndex = Math.floor(pos.y + 25000);
-                    this.container.appendChild(previewEl);
-                }
+                this.renderCombatPreview(this.selectedIdx, targetIdx, pos);
             }
 
             overlay.onclick = (e) => {
                 e.stopPropagation();
                 playMove(move);
             };
+
+            overlay.onmouseenter = () => this.highlightMove(move);
+            overlay.onmouseleave = () => this.clearMoveHighlight();
+
             this.container.appendChild(overlay);
+        });
+    }
+
+    async renderCombatPreview(srcIdx, targetIdx, pos, isTemp = false) {
+        try {
+            const res = await fetch('/simulate/attack', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ src: srcIdx, target: targetIdx })
+            });
+            const preview = await res.json();
+            if (preview.error) return;
+
+            const previewEl = document.createElement('div');
+            previewEl.classList.add('combat-preview');
+            if (isTemp) previewEl.classList.add('temp-highlight');
+
+            // Color based on outcome
+            if (preview.defenderDies && !preview.attackerDies) {
+                previewEl.classList.add('combat-favorable');
+            } else if (preview.attackerDies) {
+                previewEl.classList.add('combat-deadly');
+            } else {
+                previewEl.classList.add('combat-risky');
+            }
+
+            // Show damage numbers (Backend sends them in 10x scale, e.g. 45 for 4.5 hearts)
+            const dmgDef = (preview.damageToDefender / 10).toFixed(1);
+            const dmgAtk = (preview.damageToAttacker / 10).toFixed(1);
+
+            previewEl.innerHTML = `⚔️ ${dmgDef} / -${dmgAtk}`;
+            previewEl.style.left = `${pos.x}px`;
+            previewEl.style.top = `${pos.y}px`;
+            previewEl.style.zIndex = Math.floor(pos.y + 25000);
+            this.container.appendChild(previewEl);
+        } catch (e) {
+            console.error("Combat simulation failed", e);
+        }
+    }
+
+    highlightMove(move) {
+        this.clearMoveHighlight();
+        if (!move) return;
+
+        // Unified move type detection
+        const moveType = move.moveType !== undefined ? move.moveType :
+            (move.tech !== undefined ? 7 :
+                (move.structure !== undefined ? 6 :
+                    (move.ability !== undefined ? 3 :
+                        (move.reward !== undefined ? 9 : 0))));
+
+        const srcIdx = move.src;
+        const targetIdx = move.target !== undefined ? move.target : move.tileIndex;
+
+        // 1. Highlight source tile
+        if (srcIdx !== undefined && srcIdx !== null) {
+            const srcData = this.elements.get(srcIdx);
+            if (srcData && srcData.layers['ground']) srcData.layers['ground'].classList.add('source-tile-highlight');
+        }
+
+        // 2. Highlight target tile and show ghost/preview
+        if (targetIdx !== undefined && targetIdx !== null) {
+            const targetTile = GAME_STATE.tiles[targetIdx];
+            if (targetTile) {
+                const pos = this.getPos(targetTile.coords.x, targetTile.coords.y);
+
+                // Show Path Highlight
+                const overlay = document.createElement('div');
+                overlay.classList.add('tile', 'move-path-highlight', 'temp-highlight');
+                overlay.style.left = `${pos.x}px`;
+                overlay.style.top = `${pos.y}px`;
+                overlay.style.zIndex = Math.floor(pos.y + 100);
+                this.container.appendChild(overlay);
+
+                // Show Ghost Unit (only for movement/transport)
+                if (moveType === 1 || moveType === 2) {
+                    const srcUnit = (srcIdx !== undefined) ? this.getUnitAt(srcIdx) : null;
+                    if (srcUnit) {
+                        const tribeName = TRIBE_ID_2_NAME[srcUnit.tribe.type];
+                        const className = ClassNameToId[srcUnit.unitType || srcUnit.type];
+                        if (tribeName && className) {
+                            const classes = ['unit', 'ghost-unit', 'temp-highlight'];
+                            if (srcUnit.flipped) classes.push('flipped');
+                            this.updateLayer(targetIdx, 'ghost-unit', `units/${tribeName}/default/${tribeName}_default_${className}`, pos, 5500, classes);
+                        }
+
+                        // Show temporary combat preview on hover (always use backend simulator now)
+                        if (moveType === 2) {
+                            this.renderCombatPreview(srcIdx, targetIdx, pos, true);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    clearMoveHighlight() {
+        document.querySelectorAll('.temp-highlight').forEach(el => el.remove());
+        document.querySelectorAll('.source-tile-highlight').forEach(el => el.classList.remove('source-tile-highlight'));
+        this.elements.forEach(data => {
+            if (data.layers['ghost-unit']) {
+                data.layers['ghost-unit'].remove();
+                delete data.layers['ghost-unit'];
+            }
         });
     }
 
@@ -900,6 +947,8 @@ function renderMovesList(moves) {
 
         li.textContent = text;
         li.onclick = () => playMove(move);
+        li.onmouseenter = () => renderer.highlightMove(move);
+        li.onmouseleave = () => renderer.clearMoveHighlight();
 
         if (moveType === 9 && RewardTypes[move.reward] === 'Explorer') {
             const simBtn = document.createElement('span');

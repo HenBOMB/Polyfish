@@ -60,6 +60,7 @@ async fn main() {
         .route("/train/status", get(get_training_status))
         .route("/analyze", get(analyze_game))
         .route("/simulate/explorer", post(simulate_explorer))
+        .route("/simulate/attack", post(simulate_attack))
         .nest_service("/", ServeDir::new("../src/public"))
         .layer(CorsLayer::permissive())
         .with_state(shared_state);
@@ -488,4 +489,28 @@ async fn simulate_explorer(
         "path": path,
         "revealed": revealed
     }))
+}
+
+async fn simulate_attack(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<Value>,
+) -> Json<Value> {
+    let game = state.game.lock().unwrap();
+    let src = payload
+        .get("src")
+        .and_then(|v| v.as_i64())
+        .map(|v| v as i32)
+        .unwrap_or(0);
+    let target = payload
+        .get("target")
+        .and_then(|v| v.as_i64())
+        .map(|v| v as i32)
+        .unwrap_or(0);
+
+    let preview = polyfish::functions::calculate_combat_preview(&game.state, src, target);
+
+    match preview {
+        Some(p) => Json(serde_json::to_value(p).unwrap()),
+        None => Json(serde_json::json!({ "error": "No valid attack target found" })),
+    }
 }
