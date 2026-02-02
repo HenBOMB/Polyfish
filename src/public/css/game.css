@@ -574,3 +574,27 @@
         transform: translateY(-20px) scale(0.9);
     }
 }
+
+/* Pulsing Button for MCTS Play Confirmation */
+.pulsing-btn {
+    animation: btn-pulse 1.5s infinite;
+    background: linear-gradient(135deg, #10b981, #3b82f6) !important;
+    border-color: #34d399 !important;
+}
+
+@keyframes btn-pulse {
+    0% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+    }
+
+    70% {
+        transform: scale(1.05);
+        box-shadow: 0 0 0 10px rgba(16, 185, 129, 0);
+    }
+
+    100% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+    }
+}

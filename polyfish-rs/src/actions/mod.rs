@@ -185,9 +185,13 @@ pub fn has_effect(unit: &UnitState, effect: EffectType) -> bool {
 
 /// Update exploration for a player based on their units and cities.
 /// This marks tiles as explored (permanent, no undo).
-/// Note: This always runs - calculating visibility is not "cheating" for MCTS.
-/// The anti-cheat guard is on discover_tiles which awards score.
+/// Only runs during real moves (_are_you_sure = true) to prevent MCTS cheating.
 pub fn update_exploration(state: &mut GameState, player_id: PlayerId) {
+    // CRITICAL: Only modify explorers during real moves, not MCTS simulations
+    if !state.settings._are_you_sure {
+        return;
+    }
+
     // Check Internal FOW Toggle (God Mode for AI Training)
     if !state.settings._fow {
         for (_idx, tile) in state.tiles.iter_mut() {

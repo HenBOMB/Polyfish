@@ -72,7 +72,10 @@ impl Game {
             tribe.starting_tile_coords.compute_idx(map_size);
         }
 
-        // Set initial exploration for all tribes (real move, so this will work)
+        // Set initial exploration for all tribes
+        // Temporarily enable _are_you_sure so exploration actually happens
+        let old_are_you_sure = self.state.settings._are_you_sure;
+        self.state.settings._are_you_sure = true;
 
         let ids: Vec<PlayerId> = self.state.tribes.keys().cloned().collect();
         for id in ids {
@@ -82,6 +85,9 @@ impl Game {
         // Ensure exploration is specifically set for the current player
         let pov_id = self.state.settings.current_player_turn_id;
         actions::update_exploration(&mut self.state, pov_id);
+
+        // Restore original value
+        self.state.settings._are_you_sure = old_are_you_sure;
 
         // Update scores
         sync_scores(&mut self.state);
@@ -173,6 +179,55 @@ impl Game {
         };
 
         self.state.settings._are_you_sure = false;
+
+        Some(undo)
+    }
+
+    /// Simulate a move for MCTS (does NOT set _are_you_sure, preventing exploration)
+    ///
+    /// This is specifically for MCTS simulations where we don't want to
+    /// permanently reveal tiles on the map.
+    pub fn simulate_move(&mut self, game_move: &dyn Move) -> Option<UndoCallback> {
+        if self.state.settings._game_over {
+            return None;
+        }
+
+        // NOTE: We deliberately do NOT set _are_you_sure = true here
+        // This prevents exploration during MCTS simulations
+
+        let undo = if game_move.move_type() == MoveType::EndTurn {
+            let end_undo = self.end_turn();
+            self.state.settings._recent_moves.clear();
+            end_undo
+        } else {
+            let result = game_move.execute(&mut self.state);
+            if let Err(e) = result {
+                eprintln!("Error executing simulated move: {}", e);
+                return None;
+            }
+            let res = result.unwrap();
+
+            // Try discovering new tribes after the move (won't actually reveal in simulation)
+            let discover_undo = try_discover_other_tribes(&mut self.state);
+
+            // Sync scores after move
+            sync_scores(&mut self.state);
+
+            // Track the move type in recent moves
+            self.state
+                .settings
+                ._recent_moves
+                .push(game_move.move_type());
+
+            // Collect undos
+            let move_undo = res.undo;
+
+            Box::new(move |s: &mut GameState| {
+                s.settings._recent_moves.pop();
+                discover_undo(s);
+                move_undo(s);
+            }) as UndoCallback
+        };
 
         Some(undo)
     }
@@ -318,149 +373,6 @@ impl Game {
             s.settings.current_player_turn_id = old_pov;
             s.settings.turn = old_turn;
             s.settings._last_player_turn_id = old_last;
-        })
-    }
-
-    /// Static version: play a move on a state without a Game instance
-    pub fn play_move_static(state: &mut GameState, game_move: &dyn Move) -> Option<UndoCallback> {
-        if state.settings._game_over {
-            return None;
-        }
-
-        state.settings._are_you_sure = true;
-
-        let undo = if game_move.move_type() == MoveType::EndTurn {
-            let end_undo = Self::end_turn_static(state);
-            state.settings._recent_moves.clear();
-            end_undo
-        } else {
-            let result = game_move.execute(state);
-            if let Err(e) = result {
-                eprintln!("Error executing move (static): {}", e);
-                state.settings._are_you_sure = false;
-                return None;
-            }
-            let res = result.unwrap();
-            let discover_undo = try_discover_other_tribes(state);
-            sync_scores(state);
-            state.settings._recent_moves.push(game_move.move_type());
-
-            let move_undo = res.undo;
-            Box::new(move |s: &mut GameState| {
-                s.settings._recent_moves.pop();
-                discover_undo(s);
-                move_undo(s);
-            }) as UndoCallback
-        };
-
-        state.settings._are_you_sure = false;
-
-        Some(undo)
-    }
-
-    /// Static version: end turn on a state without a Game instance
-    pub fn end_turn_static(state: &mut GameState) -> UndoCallback {
-        // Save old state
-        let old_pov = state.settings.current_player_turn_id;
-        let old_turn = state.settings.turn;
-
-        let mut undos: Vec<UndoCallback> = Vec::new();
-
-        // Change turn
-        let active_pov = state.settings.current_player_turn_id;
-
-        // Update pacifist turns
-        if let Some(tribe) = state.tribes.get_mut(&active_pov) {
-            if tribe.attacked_this_turn {
-                tribe.pacifist_turns = 0;
-            } else {
-                tribe.pacifist_turns += 1;
-            }
-            tribe.attacked_this_turn = false;
-        }
-
-        undos.push(actions::process_end_turn_effects(state, active_pov));
-
-        state.settings.current_player_turn_id += 1;
-        if state.settings.current_player_turn_id > state.settings._max_tribe_count {
-            state.settings.current_player_turn_id = STARTING_OWNER_ID;
-        }
-
-        // Skip dead tribes
-        loop {
-            let should_skip = state
-                .tribes
-                .get(&state.settings.current_player_turn_id)
-                .map(|t| t.killed_turn > 0 || t.resigned_turn > 0)
-                .unwrap_or(false);
-
-            if !should_skip {
-                break;
-            }
-
-            state.settings.current_player_turn_id += 1;
-            if state.settings.current_player_turn_id > state.settings._max_tribe_count {
-                state.settings.current_player_turn_id = STARTING_OWNER_ID;
-            }
-        }
-
-        if state.settings.current_player_turn_id == STARTING_OWNER_ID {
-            state.settings.turn += 1;
-        }
-
-        if is_game_over(state) {
-            state.settings._game_over = true;
-            return Box::new(move |s| {
-                s.settings._game_over = false;
-                s.settings.current_player_turn_id = old_pov;
-                s.settings.turn = old_turn;
-            });
-        }
-
-        let new_pov = state.settings.current_player_turn_id;
-        update_exploration(state, new_pov);
-        undos.push(actions::process_start_turn_effects(state, new_pov));
-        undos.push(try_discover_other_tribes(state));
-
-        if state.settings.turn > 1 {
-            if let Some(tribe) = state.tribes.get(&new_pov) {
-                let cities: Vec<_> = tribe.cities.clone();
-                let spt = get_total_production(state, &cities);
-                if spt > 0 {
-                    undos.push(gain_stars(state, spt));
-                }
-            }
-        }
-
-        if let Some(tribe) = state.tribes.get(&new_pov) {
-            let frozen_units: Vec<(usize, bool)> = tribe
-                .units
-                .iter()
-                .enumerate()
-                .map(|(i, u)| (i, has_effect(u, EffectType::Frozen)))
-                .collect();
-
-            for (unit_idx, is_frozen) in frozen_units {
-                if is_frozen {
-                    undos.push(try_remove_effect(
-                        state,
-                        new_pov,
-                        unit_idx,
-                        EffectType::Frozen,
-                    ));
-                    undos.push(end_unit_turn(state, new_pov, unit_idx));
-                } else {
-                    undos.push(start_unit_turn(state, new_pov, unit_idx));
-                }
-            }
-        }
-
-        Box::new(move |s| {
-            for undo in undos.into_iter().rev() {
-                undo(s);
-            }
-            s.settings.current_player_turn_id = old_pov;
-            s.settings.turn = old_turn;
         })
     }
 

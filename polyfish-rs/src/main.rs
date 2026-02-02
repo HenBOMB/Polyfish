@@ -91,6 +91,8 @@ async fn analyze_game(State(state): State<Arc<AppState>>) -> Json<Value> {
 struct StepParams {
     #[serde(default = "default_iterations")]
     iterations: usize,
+    #[serde(default)]
+    dry_run: bool,
 }
 
 fn default_iterations() -> usize {
@@ -133,9 +135,15 @@ async fn auto_step(
     game.state._messages.clear();
     let (chosen_move, mcts_analysis) = agent.select_move_with_analysis(&mut game);
     let mut move_name = "none".to_string();
-    if let Some(m) = chosen_move {
-        move_name = format!("{:?}", m.move_type());
-        game.play_move(m.as_ref());
+
+    // Create serialized best move before potentially consuming it (though we use as_ref so it's fine)
+    let best_move_json = chosen_move.as_ref().map(|m| m.serialize());
+
+    if !params.dry_run {
+        if let Some(m) = chosen_move {
+            move_name = format!("{:?}", m.move_type());
+            game.play_move(m.as_ref());
+        }
     }
 
     let mut tiles: Vec<_> = game.state.tiles.values().collect();
@@ -155,6 +163,7 @@ async fn auto_step(
             "_messages": game.state._messages,
         },
         "movePlayed": move_name,
+        "bestMove": best_move_json,
         "legalMoves": legal_moves,
         "mctsAnalysis": mcts_analysis
     }))

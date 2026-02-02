@@ -784,6 +784,8 @@ class MapRenderer {
 const renderer = new MapRenderer(mapContainer);
 const hoverEl = document.getElementById('hovertile');
 
+let pendingMctsMove = null;
+
 async function apiAction(endpoint, body) {
     document.querySelectorAll('.btn').forEach(b => b.disabled = true);
     try {
@@ -794,6 +796,7 @@ async function apiAction(endpoint, body) {
         });
         const data = await res.json();
         updateUI(data);
+        return data;
     } catch (e) {
         console.error("API Error:", e);
     } finally {
@@ -810,7 +813,7 @@ function updateUI(data) {
     // Reset MCTS analysis if not provided in this update (e.g. manual move)
     if (data.mctsAnalysis) {
         lastMctsAnalysis = data.mctsAnalysis;
-    } else if (data.movePlayed) {
+    } else if (data.movePlayed && data.movePlayed !== 'none') {
         lastMctsAnalysis = null;
     }
 
@@ -823,6 +826,9 @@ function updateUI(data) {
     if (oldTribeId !== null && oldTribeId !== currentTribeId) {
         document.querySelectorAll('.village-marker').forEach(el => el.remove());
         document.querySelectorAll('.predicted-terrain').forEach(el => el.remove());
+
+        // Also clear pending MCTS move on turn change
+        resetMctsButton();
     }
 
     // Update Stats
@@ -978,10 +984,22 @@ function renderMovesList(moves) {
     });
 }
 
+function resetMctsButton() {
+    pendingMctsMove = null;
+    const btn = document.getElementById('btn-step');
+    if (btn) {
+        btn.innerHTML = '<span class="icon">🤖</span> MCTS Step';
+        btn.classList.remove('pulsing-btn');
+    }
+}
+
 function playMove(move) {
     renderer.clearMoveHighlight();
     document.querySelectorAll('.move-overlay').forEach(el => el.remove());
     document.querySelectorAll('.combat-preview').forEach(el => el.remove());
+
+    // Reset pending state whenever a move is played
+    resetMctsButton();
 
     fetch('/step', {
         method: 'POST',
@@ -996,6 +1014,8 @@ function playMove(move) {
         })
         .catch(err => console.error('Error playing move:', err));
 }
+
+
 
 function getStructureFile(type, climate) {
     const map = {
@@ -1211,5 +1231,25 @@ document.getElementById('btn-predictions').onclick = async () => {
     renderer.renderMoveOverlays(currentLegalMoves);
 };
 document.getElementById('btn-rng').onclick = () => apiAction('/rngstep', {});
-document.getElementById('btn-step').onclick = () => apiAction('/autostep', { iterations: parseInt(mctsDepth.value) });
+document.getElementById('btn-step').onclick = async () => {
+    const btn = document.getElementById('btn-step');
+
+    if (pendingMctsMove) {
+        // Play the pending move
+        playMove(pendingMctsMove);
+    } else {
+        // Run MCTS (Dry Run)
+        const data = await apiAction('/autostep', { iterations: parseInt(mctsDepth.value), dry_run: true });
+
+        if (data && data.bestMove) {
+            pendingMctsMove = data.bestMove;
+            btn.innerHTML = '<span class="icon">▶️</span> Play Best';
+            btn.classList.add('pulsing-btn');
+
+            // Highlight the move
+            renderer.highlightMove(data.bestMove);
+            showToast(`MCTS picked: ${data.movePlayed || 'Move'}`);
+        }
+    }
+};
 mctsDepth.oninput = (e) => mctsDepthVal.textContent = e.target.value;
