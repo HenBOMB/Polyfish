@@ -51,7 +51,6 @@ class MapRenderer {
         this.container = container;
         this.elements = new Map(); // idx -> { ground, unit, city, structures, resources, fog }
         this.selectedIdx = null;
-        this.visibleMap = {};
     }
 
     clear() {
@@ -67,7 +66,6 @@ class MapRenderer {
 
     render(state, legalMoves) {
         const currentTribeId = state.settings.currentPlayerTurnId;
-        this.visibleMap = state._visibleTiles || state.visibleTiles || state._visible_tiles || {};
 
         const unitsByIndex = {};
         const citiesByIndex = {};
@@ -98,10 +96,8 @@ class MapRenderer {
 
         // FOW Logic
         let isExplored = true;
-        let isVisible = true;
         if (ENABLE_FOW) {
             if (tile.explorers && !tile.explorers.includes(currentTribeId)) isExplored = false;
-            if (!this.visibleMap[idx] && !this.visibleMap[idx.toString()]) isVisible = false;
         }
 
         if (!isExplored) {
@@ -187,7 +183,7 @@ class MapRenderer {
         }
 
         // Units
-        const unit = (isVisible || !ENABLE_FOW) ? unitsByIndex[idx] : null;
+        const unit = (isExplored || !ENABLE_FOW) ? unitsByIndex[idx] : null;
         if (unit) {
             const tribeName = TRIBE_ID_2_NAME[unit.tribe.type];
             const className = ClassNameToId[unit.unitType || unit.type];
@@ -257,7 +253,8 @@ class MapRenderer {
 
     isTileVisible(idx) {
         if (!ENABLE_FOW) return true;
-        return !!(this.visibleMap[idx] || this.visibleMap[idx.toString()]);
+        const currentPov = GAME_STATE.settings.currentPlayerTurnId;
+        return GAME_STATE.tiles[idx].explorers.includes(currentPov);
     }
 
     removeLayer(idx, layerName) {
@@ -268,7 +265,7 @@ class MapRenderer {
         }
     }
 
-    handleTileClick(e, idx, unit, isVisible) {
+    handleTileClick(e, idx, unit, isExplored) {
         e.stopPropagation();
         if (ENABLE_FOW) {
             // Check if explored
@@ -285,7 +282,7 @@ class MapRenderer {
             }
         }
 
-        if (unit && (isVisible || !ENABLE_FOW)) {
+        if (unit && (isExplored || !ENABLE_FOW)) {
             // Priority selection if unit exists
             this.selectedIdx = (this.selectedIdx === idx) ? null : idx;
             selectedUnitIdx = this.selectedIdx;
@@ -296,14 +293,14 @@ class MapRenderer {
         this.render(GAME_STATE, currentLegalMoves);
     }
 
-    setupHover(el, idx, isVisible) {
+    setupHover(el, idx, isExplored) {
         el.onmouseenter = (e) => {
             if (!this.isTileVisible(idx)) return;
             const tile = GAME_STATE.tiles[idx];
             if (!tile) return;
 
             hoverEl.classList.remove('hidden');
-            const unit = (isVisible || !ENABLE_FOW) ? this.getUnitAt(idx) : null;
+            const unit = (isExplored || !ENABLE_FOW) ? this.getUnitAt(idx) : null;
             const struct = GAME_STATE.structures[idx];
             const resource = GAME_STATE.resources[idx];
             const isCity = tile.owner > 0 && struct && StructureNames[struct.type] === 'Village';

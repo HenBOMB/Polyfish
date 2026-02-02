@@ -1069,7 +1069,10 @@ pub fn analyze_expansion(state: &GameState, player_id: PlayerId) -> ExpansionAna
 
             for enemy in &other_tribe.units {
                 // Anti-Cheat: Enemy unit is only a threat if visible
-                if !state._visible_tiles.contains_key(&enemy.coords.idx) {
+                if !state.tiles[&enemy.coords.idx]
+                    .explorers
+                    .contains(&player_id)
+                {
                     continue;
                 }
 
