@@ -1458,6 +1458,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         city.tile_index = cap;
         city.owner = pid;
         city.level = if tribe == TribeType::Luxidoor { 3 } else { 1 };
+        city.population = if tribe == TribeType::Luxidoor { 5 } else { 0 };
         city.production = city.level;
         city.border_size = 1;
 

@@ -148,14 +148,13 @@ class MapRenderer {
         const groundEl = this.updateLayer(idx, 'ground', tilefile, pos, 0, ['ground']);
         groundEl.dataset.tileIdx = idx;
 
-        if (!isVisible) groundEl.classList.add('fog');
-        else groundEl.classList.remove('fog');
+        groundEl.classList.remove('fog');
 
         // Ambient (Mountains/Forests)
         if (tile.type === 4) { // Mountain
-            this.updateLayer(idx, 'ambient', `terrain/mountains/mountain_${tile.climate}`, pos, 2000, ['mountain', !isVisible ? 'fog' : '']);
+            this.updateLayer(idx, 'ambient', `terrain/mountains/mountain_${tile.climate}`, pos, 2000, ['mountain']);
         } else if (tile.type === 5) { // Forest
-            this.updateLayer(idx, 'ambient', `terrain/forests/Forest_${tile.climate}`, pos, 2000, ['forest', !isVisible ? 'fog' : '']);
+            this.updateLayer(idx, 'ambient', `terrain/forests/Forest_${tile.climate}`, pos, 2000, ['forest']);
         } else {
             this.removeLayer(idx, 'ambient');
         }
@@ -165,7 +164,7 @@ class MapRenderer {
         const res = state.resources[idx];
 
         if (struct && struct.type === 71) { // Road
-            this.updateLayer(idx, 'road', 'misc/Road', pos, 1500, ['structure', 'road', !isVisible ? 'fog' : '']);
+            this.updateLayer(idx, 'road', 'misc/Road', pos, 1500, ['structure', 'road']);
         } else {
             this.removeLayer(idx, 'road');
         }
@@ -173,7 +172,7 @@ class MapRenderer {
         if (res) {
             const resFile = getResourceFile(res.type, tile.climate);
             const resClass = { 1: 'animal', 2: 'crop', 3: 'fish', 5: 'metal', 6: 'fruit' }[res.type];
-            this.updateLayer(idx, 'resource', resFile, pos, 2500, ['resource', resClass, !isVisible ? 'fog' : '']);
+            this.updateLayer(idx, 'resource', resFile, pos, 2500, ['resource', resClass]);
         } else {
             this.removeLayer(idx, 'resource');
         }
@@ -188,7 +187,6 @@ class MapRenderer {
                 if (struct.type === 1) classes.push('village');
                 if (struct.type === 2) classes.push('ruins');
                 if (struct.type === 29) classes.push('monument');
-                if (!isVisible) classes.push('fog');
                 this.updateLayer(idx, 'structure', structFile, pos, 3000, classes);
             }
         } else {
@@ -200,16 +198,16 @@ class MapRenderer {
         if (city) {
             const tribeName = TRIBE_ID_2_NAME[city.tribe.type];
             const climateIndex = CLIMATE_IDS.indexOf(tribeName);
-            const cityEl = this.updateLayer(idx, 'city', `buildings/${tribeName}/Default/Houses/House_${climateIndex}_5`, pos, 4000, ['city', !isVisible ? 'fog' : '']);
-            const rewards = Object.keys(city.rewards).map(r => RewardEmojis[r]).join('');
+            const cityEl = this.updateLayer(idx, 'city', `buildings/${tribeName}/Default/Houses/House_${climateIndex}_5`, pos, 4000, ['city']);
+            const rewards = city.rewards.map(r => RewardEmojis[r]).join('');
             // RewardEmojis[move.reward]
             const unitCount = Object.values(GAME_STATE.tribes).flatMap(t => t.units).filter(u => u.cityId === city.id).length;
             cityEl.innerHTML = `<div class="city-stats">
-                <span>${tile.capitalOf > 0 ? '👑 ' : ''}${city.name || 'City'} Lvl ${city.level}</span>
-                <span>${city.connectedToCapital ? '🔗' : ''}${rewards}</span>
-                <span>${new Array(unitCount).fill('🪖').join('')}</span>
+                <span>${city.name || 'City'} lvl ${city.level}</span>
+                <span>${tile.capitalOf > 0 ? '👑 ' : ''}${city.connectedToCapital ? '🔗' : ''}${rewards}</span>
                 <span>+${city.production} 💰</span>
-                <span>${city.population} 😀</span>
+                <span>${city.population - city.level} / ${city.level + 1} 😀</span>
+                <span>${new Array(unitCount).fill('🪖').join('')}</span>
             </div>`;
         } else {
             this.removeLayer(idx, 'city');
@@ -299,12 +297,19 @@ class MapRenderer {
 
     handleTileClick(e, idx, unit, isVisible) {
         e.stopPropagation();
-        if (ENABLE_FOW && !isVisible) {
-            if (this.selectedIdx !== null) {
-                this.selectedIdx = null;
-                this.render(GAME_STATE, currentLegalMoves);
+        if (ENABLE_FOW) {
+            // Check if explored
+            const tile = GAME_STATE.tiles[idx];
+            const currentTribeId = GAME_STATE.settings.currentPlayerTurnId;
+            const isExplored = tile && tile.explorers && tile.explorers.includes(currentTribeId);
+
+            if (!isExplored) {
+                if (this.selectedIdx !== null) {
+                    this.selectedIdx = null;
+                    this.render(GAME_STATE, currentLegalMoves);
+                }
+                return;
             }
-            return;
         }
 
         if (unit && (isVisible || !ENABLE_FOW)) {
