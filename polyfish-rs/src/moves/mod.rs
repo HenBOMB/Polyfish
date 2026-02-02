@@ -599,7 +599,13 @@ fn get_tiles_in_range(state: &GameState, from_idx: i32, range: i32) -> Vec<i32> 
 }
 
 fn is_steppable(state: &GameState, unit: &UnitState, idx: i32) -> bool {
-    if !state._visible_tiles.contains_key(&idx) {
+    // Can only step on explored tiles
+    let is_explored = state
+        .tiles
+        .get(&idx)
+        .map(|t| t.explorers.contains(&unit.owner))
+        .unwrap_or(false);
+    if !is_explored {
         return false;
     }
 
@@ -613,15 +619,20 @@ fn is_steppable(state: &GameState, unit: &UnitState, idx: i32) -> bool {
     let tribe = state.tribes.get(&unit.owner).unwrap();
     let tile = state.tiles.get(&idx).unwrap();
 
+    // Use FOW-safe terrain access for MCTS anti-cheat
+    let terrain = crate::fow::get_terrain_at(state, idx, unit.owner);
+
     // SkillType::Water units can only move on water/ocean/flooded tiles
     if settings.skills.contains(&SkillType::Water) {
-        if !is_water_terrain(tile.terrain_type) && !tile.flooded {
+        let is_water_like =
+            matches!(terrain, TerrainType::Water | TerrainType::Ocean) || tile.flooded;
+        if !is_water_like {
             return false;
         }
     }
 
-    // tech check
-    if !is_navigationable(tribe, unit.unit_type, tile) {
+    // tech check using FOW-safe terrain
+    if !is_navigationable_terrain(tribe, unit.unit_type, terrain, tile) {
         return false;
     }
 
@@ -638,7 +649,7 @@ fn is_steppable(state: &GameState, unit: &UnitState, idx: i32) -> bool {
 
     if !is_aquatic {
         // Algae acts like a bridge for land units
-        if tile.terrain_type == TerrainType::Algae {
+        if terrain == TerrainType::Algae {
             // Pass
         } else if let Some(structure) = get_structure_at(state, idx) {
             if structure.structure_type == StructureType::Port {
@@ -648,7 +659,7 @@ fn is_steppable(state: &GameState, unit: &UnitState, idx: i32) -> bool {
     }
 
     if settings.skills.contains(&SkillType::Navigate) {
-        let is_water = is_water_terrain(tile.terrain_type);
+        let is_water = matches!(terrain, TerrainType::Water | TerrainType::Ocean);
         if !is_water {
             if let Some(structure) = get_structure_at(state, idx) {
                 match structure.structure_type {
@@ -664,25 +675,31 @@ fn is_steppable(state: &GameState, unit: &UnitState, idx: i32) -> bool {
     true
 }
 
-fn is_navigationable(tribe: &TribeState, unit_type: UnitType, tile: &TileState) -> bool {
+/// FOW-safe version that takes terrain as a parameter (may be predicted during MCTS)
+fn is_navigationable_terrain(
+    tribe: &TribeState,
+    unit_type: UnitType,
+    terrain: TerrainType,
+    tile: &TileState,
+) -> bool {
     if has_skill(unit_type, SkillType::Fly) || has_skill(unit_type, SkillType::Navigate) {
         return true;
     }
 
     if has_skill(unit_type, SkillType::Water) {
         // Restricted to water/ocean/algae/ice/flooded land
-        let is_water_like = crate::functions::is_water_terrain(tile.terrain_type)
-            || tile.terrain_type == TerrainType::Algae
+        let is_water_like = matches!(terrain, TerrainType::Water | TerrainType::Ocean)
+            || terrain == TerrainType::Algae
             || tile.frozen
             || tile.flooded;
         return is_water_like;
     }
 
-    if tile.frozen || tile.terrain_type == TerrainType::Algae {
+    if tile.frozen || terrain == TerrainType::Algae {
         return true;
     }
 
-    match tile.terrain_type {
+    match terrain {
         TerrainType::Water => tribe.tech_vanilla.iter().any(|t| {
             let s = crate::settings::technology::get_technology_setting(t.tech_type);
             s.unlocks_terrain == Some(TerrainType::Water)

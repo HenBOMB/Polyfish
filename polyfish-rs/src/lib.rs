@@ -6,6 +6,7 @@
 pub mod actions;
 pub mod ai;
 pub mod coords;
+pub mod fow;
 pub mod functions;
 pub mod game;
 pub mod mapgen;

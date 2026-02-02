@@ -4,8 +4,8 @@
 //! Translated from the TypeScript Game class.
 
 use crate::actions::{
-    self, end_unit_turn, gain_stars, has_effect, set_visible_tiles, start_unit_turn,
-    try_discover_other_tribes, try_remove_effect, UndoCallback,
+    self, end_unit_turn, gain_stars, has_effect, start_unit_turn, try_discover_other_tribes,
+    try_remove_effect, update_exploration, UndoCallback,
 };
 use crate::functions::{get_pov_tribe, get_total_production, is_game_over, sync_scores};
 use crate::moves::{generate_legal_moves, Move};
@@ -72,15 +72,16 @@ impl Game {
             tribe.starting_tile_coords.compute_idx(map_size);
         }
 
-        // Set initial visibility/exploration for all tribes
+        // Set initial exploration for all tribes (real move, so this will work)
+
         let ids: Vec<PlayerId> = self.state.tribes.keys().cloned().collect();
         for id in ids {
-            let _ = actions::set_visible_tiles(&mut self.state, id);
+            actions::update_exploration(&mut self.state, id);
         }
 
-        // Ensure visibility is specifically set for the current player
+        // Ensure exploration is specifically set for the current player
         let pov_id = self.state.settings.current_player_turn_id;
-        let _ = actions::set_visible_tiles(&mut self.state, pov_id);
+        actions::update_exploration(&mut self.state, pov_id);
 
         // Update scores
         sync_scores(&mut self.state);
@@ -192,7 +193,6 @@ impl Game {
         let old_pov = state.settings.current_player_turn_id;
         let old_turn = state.settings.turn;
         let old_last = state.settings._last_player_turn_id;
-        let old_visibility = state._visible_tiles.clone();
         let old_game_over = state.settings._game_over;
 
         // Track all undos in a chain
@@ -259,8 +259,8 @@ impl Game {
 
         let new_pov = state.settings.current_player_turn_id;
 
-        // Update visibility for new tribe
-        let _ = set_visible_tiles(state, new_pov);
+        // Update exploration for new tribe
+        update_exploration(state, new_pov);
 
         // Process start turn effects
         undos.push(actions::process_start_turn_effects(state, new_pov));
@@ -313,9 +313,6 @@ impl Game {
                 undo(s);
             }
 
-            // Restore visibility
-            s._visible_tiles = old_visibility;
-
             // Restore turn state
             s.settings._game_over = old_game_over;
             s.settings.current_player_turn_id = old_pov;
@@ -366,7 +363,6 @@ impl Game {
         // Save old state
         let old_pov = state.settings.current_player_turn_id;
         let old_turn = state.settings.turn;
-        let old_visibility = state._visible_tiles.clone();
 
         let mut undos: Vec<UndoCallback> = Vec::new();
 
@@ -422,7 +418,7 @@ impl Game {
         }
 
         let new_pov = state.settings.current_player_turn_id;
-        let _ = set_visible_tiles(state, new_pov);
+        update_exploration(state, new_pov);
         undos.push(actions::process_start_turn_effects(state, new_pov));
         undos.push(try_discover_other_tribes(state));
 
@@ -463,7 +459,6 @@ impl Game {
             for undo in undos.into_iter().rev() {
                 undo(s);
             }
-            s._visible_tiles = old_visibility;
             s.settings.current_player_turn_id = old_pov;
             s.settings.turn = old_turn;
         })

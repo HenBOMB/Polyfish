@@ -118,9 +118,6 @@ pub fn predict_villages(state: &GameState) -> HashMap<i32, (TribeType, bool)> {
             || (tile.explorers.contains(&pov_id)
                 && crate::functions::get_structure_type_at(state, idx)
                     == Some(crate::types::StructureType::Village))
-            || (state._visible_tiles.contains_key(&idx)
-                && crate::functions::get_structure_type_at(state, idx)
-                    == Some(crate::types::StructureType::Village))
         {
             known_cities.insert(idx);
         }
@@ -144,13 +141,21 @@ pub fn predict_villages(state: &GameState) -> HashMap<i32, (TribeType, bool)> {
         true
     };
 
-    // 1. Resource Heuristic
-    for (&tile_idx, _) in &state._visible_tiles {
+    // 1. Resource Heuristic - iterate over explored tiles
+    for (&tile_idx, tile) in &state.tiles {
+        if !tile.explorers.contains(&pov_id) {
+            continue;
+        }
         if let Some(res_opt) = state.resources.get(&tile_idx) {
             if res_opt.is_some() && is_orphan(tile_idx) {
                 let neighbors = get_adjacent_indices(state, tile_idx, 1);
                 for n_idx in neighbors {
-                    if !state._visible_tiles.contains_key(&n_idx) {
+                    let n_explored = state
+                        .tiles
+                        .get(&n_idx)
+                        .map(|t| t.explorers.contains(&pov_id))
+                        .unwrap_or(false);
+                    if !n_explored {
                         if !validate_village_candidate(state, n_idx, &HashMap::new(), &known_cities)
                         {
                             continue;
@@ -163,22 +168,28 @@ pub fn predict_villages(state: &GameState) -> HashMap<i32, (TribeType, bool)> {
         }
     }
 
-    // 2. Climate Heuristic
-    for (&tile_idx, _) in &state._visible_tiles {
-        if let Some(tile) = state.tiles.get(&tile_idx) {
-            if tile.owner != pov_id
-                && tile.climate != pov_climate
-                && tile.climate != ClimateType::Nature
-            {
-                let around = get_adjacent_indices(state, tile_idx, 2);
-                for idx in around {
-                    if !state._visible_tiles.contains_key(&idx) {
-                        if !validate_village_candidate(state, idx, &HashMap::new(), &known_cities) {
-                            continue;
-                        }
-                        let entry = candidates.entry(idx).or_insert((0, tile.climate));
-                        entry.0 += 1;
+    // 2. Climate Heuristic - iterate over explored tiles
+    for (&tile_idx, tile) in &state.tiles {
+        if !tile.explorers.contains(&pov_id) {
+            continue;
+        }
+        if tile.owner != pov_id
+            && tile.climate != pov_climate
+            && tile.climate != ClimateType::Nature
+        {
+            let around = get_adjacent_indices(state, tile_idx, 2);
+            for idx in around {
+                let idx_explored = state
+                    .tiles
+                    .get(&idx)
+                    .map(|t| t.explorers.contains(&pov_id))
+                    .unwrap_or(false);
+                if !idx_explored {
+                    if !validate_village_candidate(state, idx, &HashMap::new(), &known_cities) {
+                        continue;
                     }
+                    let entry = candidates.entry(idx).or_insert((0, tile.climate));
+                    entry.0 += 1;
                 }
             }
         }
@@ -246,6 +257,7 @@ pub fn predict_terrain(
     state: &GameState,
     fog_tiles: &[i32],
 ) -> HashMap<i32, (TerrainType, ClimateType)> {
+    let pov_id = state.settings.current_player_turn_id;
     let mut predictions = HashMap::new();
     for &tile_idx in fog_tiles {
         let neighbors = get_adjacent_indices(state, tile_idx, 1);
@@ -254,7 +266,7 @@ pub fn predict_terrain(
 
         for n_idx in neighbors {
             if let Some(tile) = state.tiles.get(&n_idx) {
-                if state._visible_tiles.contains_key(&n_idx) {
+                if tile.explorers.contains(&pov_id) {
                     *terrain_counts.entry(tile.terrain_type).or_insert(0) += 1;
                     *climate_counts.entry(tile.climate).or_insert(0) += 1;
                 }
@@ -283,11 +295,19 @@ pub fn predict_terrain(
 }
 
 pub fn get_border_clouds(state: &GameState) -> Vec<i32> {
+    let pov_id = state.settings.current_player_turn_id;
     let mut border = std::collections::HashSet::new();
-    for &idx in state._visible_tiles.keys() {
-        for n in get_adjacent_indices(state, idx, 1) {
-            if !state._visible_tiles.contains_key(&n) {
-                border.insert(n);
+    for (&idx, tile) in &state.tiles {
+        if tile.explorers.contains(&pov_id) {
+            for n in get_adjacent_indices(state, idx, 1) {
+                let n_explored = state
+                    .tiles
+                    .get(&n)
+                    .map(|t| t.explorers.contains(&pov_id))
+                    .unwrap_or(false);
+                if !n_explored {
+                    border.insert(n);
+                }
             }
         }
     }
@@ -328,7 +348,13 @@ pub fn predict_enemy_capitals(state: &GameState) -> Vec<i32> {
 
     get_adjacent_indices(state, target, 3)
         .into_iter()
-        .filter(|idx| !state._visible_tiles.contains_key(&idx))
+        .filter(|idx| {
+            !state
+                .tiles
+                .get(idx)
+                .map(|t| t.explorers.contains(&pov_id))
+                .unwrap_or(false)
+        })
         .collect()
 }
 

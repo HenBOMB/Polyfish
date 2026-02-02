@@ -462,8 +462,6 @@ pub struct GameState {
     #[serde(default)]
     pub resources: HashMap<i32, Option<ResourceState>>,
     pub tribes: HashMap<PlayerId, TribeState>,
-    #[serde(default)]
-    pub _visible_tiles: HashMap<i32, bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub _prediction: Option<PredictionState>,
     #[serde(default)]
@@ -482,7 +480,6 @@ impl Default for GameState {
             structures: HashMap::new(),
             resources: HashMap::new(),
             tribes: HashMap::new(),
-            _visible_tiles: HashMap::new(),
             _prediction: None,
             _end_of_turn_queue: Vec::new(),
             _hidden_resources: HashMap::new(),

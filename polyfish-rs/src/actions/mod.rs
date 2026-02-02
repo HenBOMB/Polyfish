@@ -183,33 +183,27 @@ pub fn has_effect(unit: &UnitState, effect: EffectType) -> bool {
     unit.effects.contains(&effect)
 }
 
-/// Set visible tiles for a player based on their units and cities
-pub fn set_visible_tiles(state: &mut GameState, player_id: PlayerId) -> UndoCallback {
-    let old_visibility = state._visible_tiles.clone();
-
-    // Reset visibility for fresh calculation
-    state._visible_tiles.clear();
-
+/// Update exploration for a player based on their units and cities.
+/// This marks tiles as explored (permanent, no undo).
+/// Note: This always runs - calculating visibility is not "cheating" for MCTS.
+/// The anti-cheat guard is on discover_tiles which awards score.
+pub fn update_exploration(state: &mut GameState, player_id: PlayerId) {
     // Check Internal FOW Toggle (God Mode for AI Training)
     if !state.settings._fow {
-        for (idx, tile) in state.tiles.iter_mut() {
-            state._visible_tiles.insert(*idx, true);
-            tile.explorers.insert(player_id); // Grant exploration too (breaks score, but requested)
+        for (_idx, tile) in state.tiles.iter_mut() {
+            tile.explorers.insert(player_id);
         }
-
-        return Box::new(move |s| {
-            s._visible_tiles = old_visibility;
-            // Note: We don't undo explorer status as it's complex and this mode is for training/debug
-        });
+        return;
     }
 
     // Get the tribe
     if let Some(tribe) = state.tribes.get(&player_id) {
         let map_size = state.settings.size;
 
-        // Vision from cities
+        // Collect tiles to explore from cities
+        let mut tiles_to_explore: Vec<i32> = Vec::new();
+
         for city in &tribe.cities {
-            // Cities see their territory plus adjacent
             let city_coords = Coords::from_index(city.tile_index, map_size);
             for dy in -(city.border_size + 1)..=(city.border_size + 1) {
                 for dx in -(city.border_size + 1)..=(city.border_size + 1) {
@@ -218,7 +212,7 @@ pub fn set_visible_tiles(state: &mut GameState, player_id: PlayerId) -> UndoCall
                     if nx >= 0 && nx < map_size && ny >= 0 && ny < map_size {
                         let idx = ny * map_size + nx;
 
-                        // Corner hidden rule: Capitals/Cities don't see corners unless they are ON them
+                        // Corner hidden rule: Lighthouses are hidden from capitals
                         let is_corner = idx == 0
                             || idx == map_size - 1
                             || idx == map_size * (map_size - 1)
@@ -227,16 +221,13 @@ pub fn set_visible_tiles(state: &mut GameState, player_id: PlayerId) -> UndoCall
                             continue;
                         }
 
-                        state._visible_tiles.insert(idx, true);
-                        if let Some(tile) = state.tiles.get_mut(&idx) {
-                            tile.explorers.insert(player_id);
-                        }
+                        tiles_to_explore.push(idx);
                     }
                 }
             }
         }
 
-        // Vision from units
+        // Collect tiles to explore from units
         for unit in &tribe.units {
             // Standard vision range: 2 if Scout or on Mountain, else 1
             let vision_range = if crate::functions::has_skill(unit, SkillType::Scout)
@@ -250,22 +241,26 @@ pub fn set_visible_tiles(state: &mut GameState, player_id: PlayerId) -> UndoCall
                 1
             };
             for idx in get_adjacent_indices(state, unit.coords.idx, vision_range) {
-                state._visible_tiles.insert(idx, true);
-                if let Some(tile) = state.tiles.get_mut(&idx) {
-                    tile.explorers.insert(player_id);
-                }
+                tiles_to_explore.push(idx);
             }
-            // Unit's own tile
-            state._visible_tiles.insert(unit.coords.idx, true);
-            if let Some(tile) = state.tiles.get_mut(&unit.coords.idx) {
+            tiles_to_explore.push(unit.coords.idx);
+        }
+
+        // Mark all collected tiles as explored (permanent)
+        for idx in tiles_to_explore {
+            if let Some(tile) = state.tiles.get_mut(&idx) {
                 tile.explorers.insert(player_id);
             }
         }
     }
+}
 
-    Box::new(move |s| {
-        s._visible_tiles = old_visibility;
-    })
+/// Legacy wrapper for compatibility - calls update_exploration
+/// Deprecated: Use update_exploration directly
+#[allow(dead_code)]
+pub fn set_visible_tiles(state: &mut GameState, player_id: PlayerId) -> UndoCallback {
+    update_exploration(state, player_id);
+    noop_undo()
 }
 
 /// Try to discover other tribes that are now visible and reward with star exchange
@@ -287,11 +282,15 @@ pub fn try_discover_other_tribes(state: &mut GameState) -> UndoCallback {
 
     let mut undos: Vec<UndoCallback> = Vec::new();
 
-    // Check visible tiles (not revelation score, just meeting)
-    // REVELATION SCORE is handled in discover_tiles action.
-    let visible_tiles: Vec<i32> = state._visible_tiles.keys().cloned().collect();
+    // Check explored tiles for enemy units
+    let explored_tiles: Vec<i32> = state
+        .tiles
+        .iter()
+        .filter(|(_, t)| t.explorers.contains(&pov_id))
+        .map(|(&idx, _)| idx)
+        .collect();
 
-    for idx in visible_tiles {
+    for idx in explored_tiles {
         if let Some(enemy) = get_enemy_at(state, idx, pov_id) {
             let enemy_owner = enemy.owner;
 

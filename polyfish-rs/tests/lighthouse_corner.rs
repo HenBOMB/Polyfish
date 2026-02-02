@@ -1,4 +1,4 @@
-use polyfish::actions::set_visible_tiles;
+use polyfish::actions::update_exploration;
 use polyfish::mapgen::{generate, MapGenSettings};
 use polyfish::types::{MapSize, MapType, StructureType, TribeType};
 
@@ -42,7 +42,7 @@ fn test_lighthouse_corner_visibility_hidden() {
     let corners = [0, size - 1, size * (size - 1), size * size - 1];
 
     // Imperius is Tribe 1
-    let _ = set_visible_tiles(&mut state, 1);
+    update_exploration(&mut state, 1);
 
     // Find where Tribe 1's city is
     let city_idx = state.tribes[&1].cities[0].tile_index;
@@ -60,11 +60,16 @@ fn test_lighthouse_corner_visibility_hidden() {
         let dist = (cx - kx).abs().max((cy - ky).abs());
 
         if dist <= 2 {
+            // Check that corners are NOT explored (hidden due to corner rule)
+            let is_explored = state
+                .tiles
+                .get(&idx)
+                .map(|t| t.explorers.contains(&1))
+                .unwrap_or(false);
             assert!(
-                !state._visible_tiles.contains_key(&idx),
+                !is_explored,
                 "Corner {} at distance {} should be hidden from initial city vision",
-                idx,
-                dist
+                idx, dist
             );
         }
     }

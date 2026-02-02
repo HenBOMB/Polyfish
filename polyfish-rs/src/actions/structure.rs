@@ -261,7 +261,12 @@ pub fn capture_ruin(state: &mut GameState, tile_idx: i32) -> UndoCallback {
     let mut fog_nearby = false;
     let around = get_adjacent_indices(state, tile_idx, 2);
     for &idx in &around {
-        if !state._visible_tiles.contains_key(&idx) {
+        let is_explored = state
+            .tiles
+            .get(&idx)
+            .map(|t| t.explorers.contains(&pov_id))
+            .unwrap_or(false);
+        if !is_explored {
             fog_nearby = true;
             break;
         }

@@ -266,22 +266,15 @@ pub fn state_to_tensor(state: &GameState, perspective: PlayerId) -> Result<Tenso
             }
             let idx = (y * map_size + x) as i32;
 
-            // Check visibility
-            let is_visible = state._visible_tiles.contains_key(&idx);
+            // Check visibility (now just use explorers - explored = visible)
             let is_explored = state
                 .tiles
                 .get(&idx)
                 .map(|t| t.explorers.contains(&perspective))
                 .unwrap_or(false);
 
-            // Set visibility channel
-            let vis_val = if is_visible {
-                1.0
-            } else if is_explored {
-                0.5
-            } else {
-                0.0
-            };
+            // Set visibility channel (explored tiles are visible)
+            let vis_val = if is_explored { 1.0 } else { 0.0 };
             set_feat(&mut data, CH_VISIBILITY, x, y, vis_val);
 
             // Set global channels (same for all tiles)
@@ -301,8 +294,8 @@ pub fn state_to_tensor(state: &GameState, perspective: PlayerId) -> Result<Tenso
             set_feat(&mut data, CH_TRIBE_CONVERSIONS, x, y, tribe_conversions);
             set_feat(&mut data, CH_ATTACKED_THIS_TURN, x, y, attacked_this_turn);
 
-            // Skip tile-specific data if not visible and not explored
-            if !is_visible && !is_explored {
+            // Skip tile-specific data if not explored
+            if !is_explored {
                 continue;
             }
 
@@ -360,8 +353,8 @@ pub fn state_to_tensor(state: &GameState, perspective: PlayerId) -> Result<Tenso
                     }
                 }
 
-                // Resources (only if visible, not just explored)
-                if is_visible {
+                // Resources (only if explored)
+                if is_explored {
                     if let Some(Some(resource)) = state.resources.get(&idx) {
                         let res_ch = resource_to_channel(resource.resource_type);
                         set_feat(&mut data, res_ch, x, y, 1.0);
@@ -371,7 +364,8 @@ pub fn state_to_tensor(state: &GameState, perspective: PlayerId) -> Result<Tenso
                 // Structures
                 if let Some(Some(structure)) = state.structures.get(&idx) {
                     // Ruins are special - Elyrion can see them through fog
-                    if is_visible || (is_elyrion && structure.structure_type == StructureType::Ruin)
+                    if is_explored
+                        || (is_elyrion && structure.structure_type == StructureType::Ruin)
                     {
                         let struct_ch = structure_to_channel(structure.structure_type);
                         set_feat(&mut data, struct_ch, x, y, 1.0);
@@ -392,8 +386,13 @@ pub fn state_to_tensor(state: &GameState, perspective: PlayerId) -> Result<Tenso
 
             let idx = unit.coords.idx;
 
-            // FOW: Only show units that are visible
-            if !state._visible_tiles.contains_key(&idx) {
+            // FOW: Only show units that are visible (explored by us)
+            let unit_explored = state
+                .tiles
+                .get(&idx)
+                .map(|t| t.explorers.contains(&perspective))
+                .unwrap_or(false);
+            if !unit_explored {
                 continue;
             }
 
@@ -495,8 +494,13 @@ pub fn state_to_tensor(state: &GameState, perspective: PlayerId) -> Result<Tenso
                 continue;
             }
 
-            // FOW: Only show cities we can see
-            if !state._visible_tiles.contains_key(&idx) {
+            // FOW: Only show cities we can see (explored by us)
+            let city_explored = state
+                .tiles
+                .get(&idx)
+                .map(|t| t.explorers.contains(&perspective))
+                .unwrap_or(false);
+            if !city_explored {
                 continue;
             }
 

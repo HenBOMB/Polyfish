@@ -38,9 +38,16 @@ pub fn discover_tiles(
         Vec::new()
     };
 
+    // Filter to tiles not yet explored by this player
     let newly_discovered: Vec<i32> = tiles_to_check
         .into_iter()
-        .filter(|&idx| !state._visible_tiles.contains_key(&idx))
+        .filter(|&idx| {
+            state
+                .tiles
+                .get(&idx)
+                .map(|t| !t.explorers.contains(&pov_id))
+                .unwrap_or(false)
+        })
         .collect();
 
     if newly_discovered.is_empty() {
@@ -60,22 +67,13 @@ pub fn discover_tiles(
         }
     }));
 
-    // Process each tile
+    // Process each tile - only mark as explored during real moves (not MCTS)
+    let is_real_move = state.settings._are_you_sure;
     for idx in newly_discovered {
-        // Set visible
-        state._visible_tiles.insert(idx, true);
-
-        // Mark explored
-        if let Some(tile) = state.tiles.get_mut(&idx) {
-            if !tile.explorers.contains(&pov_id) {
+        if is_real_move {
+            // Mark explored (permanent, no undo)
+            if let Some(tile) = state.tiles.get_mut(&idx) {
                 tile.explorers.insert(pov_id);
-                // Undo explorer mark
-                let tribe_id = pov_id;
-                undos.push(Box::new(move |s: &mut GameState| {
-                    if let Some(t) = s.tiles.get_mut(&idx) {
-                        t.explorers.remove(&tribe_id);
-                    }
-                }));
 
                 // Check if lighthouse
                 if let Some(Some(struct_state)) = state.structures.get(&idx) {
@@ -89,17 +87,13 @@ pub fn discover_tiles(
                                     .and_then(|t| t.cities.first().map(|c| c.tile_index))
                             });
 
-                        if let Some(idx) = city_to_reward {
-                            undos.push(add_population(state, idx, 1));
+                        if let Some(city_idx) = city_to_reward {
+                            undos.push(add_population(state, city_idx, 1));
                         }
                     }
                 }
             }
         }
-        // Undo visibility
-        undos.push(Box::new(move |s| {
-            s._visible_tiles.remove(&idx);
-        }));
     }
 
     // Check for other tribes (integrated here or called separately)
@@ -113,9 +107,15 @@ use rand::thread_rng;
 use std::collections::HashSet;
 
 /// Predict where an explorer will go and return (path, revealed_tiles)
-/// Predict where an explorer will go and return (path, revealed_tiles)
 pub fn predict_explorer(state: &GameState, start_idx: i32) -> (Vec<i32>, Vec<i32>) {
-    let mut current_visible = state._visible_tiles.clone();
+    let pov_id = state.settings.current_player_turn_id;
+    // Build current visibility from explorers
+    let mut current_visible: HashSet<i32> = state
+        .tiles
+        .iter()
+        .filter(|(_, t)| t.explorers.contains(&pov_id))
+        .map(|(&idx, _)| idx)
+        .collect();
     let mut explored_tiles: HashSet<i32> = HashSet::new();
     let mut path_indices: Vec<i32> = Vec::new();
     let mut current_tile = start_idx;
@@ -125,10 +125,10 @@ pub fn predict_explorer(state: &GameState, start_idx: i32) -> (Vec<i32>, Vec<i32
 
     for _ in 0..12 {
         // 1. Calculate scores for all tiles (expensive but deterministic)
-        let scores = calculate_explorer_scores(state, &current_visible);
+        let scores = calculate_explorer_scores(state, &current_visible, pov_id);
 
         // 2. Identify neighbors and pick the best one
-        let neighbors = get_allowed_neighbors(state, current_tile, true);
+        let neighbors = get_allowed_neighbors(state, current_tile, true, Some(&current_visible));
         if neighbors.is_empty() {
             break; // Poof
         }
@@ -178,8 +178,8 @@ pub fn predict_explorer(state: &GameState, start_idx: i32) -> (Vec<i32>, Vec<i32
         to_reveal.push(current_tile);
 
         for r_idx in to_reveal {
-            if !current_visible.contains_key(&r_idx) {
-                current_visible.insert(r_idx, true);
+            if !current_visible.contains(&r_idx) {
+                current_visible.insert(r_idx);
                 explored_tiles.insert(r_idx);
             }
         }
@@ -190,14 +190,15 @@ pub fn predict_explorer(state: &GameState, start_idx: i32) -> (Vec<i32>, Vec<i32
 
 fn calculate_explorer_scores(
     state: &GameState,
-    visible: &std::collections::HashMap<i32, bool>,
+    visible: &HashSet<i32>,
+    _pov_id: PlayerId,
 ) -> std::collections::HashMap<i32, i32> {
     let mut scores = std::collections::HashMap::new();
 
     // 1. Initial scoring for all fog tiles
     // We scan ALL tiles for fog
     for (&idx, _) in &state.tiles {
-        if !visible.contains_key(&idx) {
+        if !visible.contains(&idx) {
             scores.insert(idx, score_fog_tile(state, visible, idx));
         }
     }
@@ -221,11 +222,7 @@ fn calculate_explorer_scores(
     scores
 }
 
-fn score_fog_tile(
-    state: &GameState,
-    visible: &std::collections::HashMap<i32, bool>,
-    idx: i32,
-) -> i32 {
+fn score_fog_tile(state: &GameState, visible: &HashSet<i32>, idx: i32) -> i32 {
     let mut reveal_count = 0;
     let mut has_lighthouse = false;
 
@@ -243,7 +240,7 @@ fn score_fog_tile(
     check_reveal.push(idx);
 
     for r_idx in check_reveal {
-        if !visible.contains_key(&r_idx) {
+        if !visible.contains(&r_idx) {
             reveal_count += 1;
             if let Some(Some(s)) = state.structures.get(&r_idx) {
                 if s.structure_type == StructureType::Lighthouse {
@@ -268,7 +265,12 @@ fn score_fog_tile(
     }
 }
 
-fn get_allowed_neighbors(state: &GameState, idx: i32, include_unexplored: bool) -> Vec<i32> {
+fn get_allowed_neighbors(
+    state: &GameState,
+    idx: i32,
+    include_unexplored: bool,
+    simulated_visible: Option<&HashSet<i32>>,
+) -> Vec<i32> {
     let pov_id = state.settings.current_player_turn_id;
     let tribe = match state.tribes.get(&pov_id) {
         Some(t) => t,
@@ -279,11 +281,22 @@ fn get_allowed_neighbors(state: &GameState, idx: i32, include_unexplored: bool) 
     let mut allowed = Vec::new();
 
     for n_idx in adj {
-        if !include_unexplored && !state._visible_tiles.contains_key(&n_idx) {
+        // Check visibility using simulation context if provided, otherwise game state
+        let is_explored = if let Some(sim_vis) = simulated_visible {
+            sim_vis.contains(&n_idx)
+        } else {
+            state
+                .tiles
+                .get(&n_idx)
+                .map(|t| t.explorers.contains(&pov_id))
+                .unwrap_or(false)
+        };
+
+        if !include_unexplored && !is_explored {
             continue;
         }
 
-        if is_steppable_for_explorer(state, n_idx, tribe) {
+        if is_steppable_for_explorer(state, n_idx, tribe, is_explored) {
             allowed.push(n_idx);
         }
     }
@@ -295,16 +308,27 @@ fn is_steppable_for_explorer(
     state: &GameState,
     idx: i32,
     tribe: &crate::states::TribeState,
+    is_explored: bool,
 ) -> bool {
     use crate::settings::technology::has_technology;
     use crate::types::TechnologyType;
 
-    let tile = match state.tiles.get(&idx) {
-        Some(t) => t,
-        None => return false,
-    };
+    // Check tile exists
+    if state.tiles.get(&idx).is_none() {
+        return false;
+    }
 
-    match tile.terrain_type {
+    // If unexplored, be optimistic - assume it's passable
+    // This is for prediction/simulation purposes
+    if !is_explored {
+        return true;
+    }
+
+    // If explored, use FOW-safe terrain access
+    let pov_id = state.settings.current_player_turn_id;
+    let terrain = crate::fow::get_terrain_at(state, idx, pov_id);
+
+    match terrain {
         TerrainType::None => false,
         TerrainType::Mountain => has_technology(&tribe.tech_vanilla, TechnologyType::Climbing),
         TerrainType::Water => has_technology(&tribe.tech_vanilla, TechnologyType::Sailing),

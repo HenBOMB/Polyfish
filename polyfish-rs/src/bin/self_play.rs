@@ -78,9 +78,9 @@ fn main() -> anyhow::Result<()> {
         game.state.settings.mode = polyfish::types::ModeType::Perfection;
         game.state.settings.max_turns = 30;
 
-        // Ensure visibility
+        // Ensure exploration
         let pov_id = game.state.settings.current_player_turn_id;
-        let _ = polyfish::actions::set_visible_tiles(&mut game.state, pov_id);
+        polyfish::actions::update_exploration(&mut game.state, pov_id);
 
         let agent = ZeroMctsAgent::new(&network, mcts_iters);
 
