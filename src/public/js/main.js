@@ -348,6 +348,7 @@ class MapRenderer {
     }
 
     renderMoveOverlays(legalMoves) {
+        this.clearMoveHighlight();
         document.querySelectorAll('.move-overlay').forEach(el => el.remove());
         document.querySelectorAll('.combat-preview:not(.temp-highlight)').forEach(el => el.remove());
         if (this.selectedIdx === null) return;
@@ -808,12 +809,24 @@ function updateUI(data) {
     if (data.state) GAME_STATE = data.state;
     if (data.legalMoves) currentLegalMoves = data.legalMoves;
     if (data.movePlayed) lastMoveVal.textContent = data.movePlayed;
-    if (data.mctsAnalysis) lastMctsAnalysis = data.mctsAnalysis;
+
+    // Reset MCTS analysis if not provided in this update (e.g. manual move)
+    if (data.mctsAnalysis) {
+        lastMctsAnalysis = data.mctsAnalysis;
+    } else if (data.movePlayed) {
+        lastMctsAnalysis = null;
+    }
 
     const currentTribeId = GAME_STATE.settings.currentPlayerTurnId;
     const currentTribe = GAME_STATE.tribes[currentTribeId.toString()] || GAME_STATE.tribes[currentTribeId];
 
     if (!currentTribe) return;
+
+    // Clear predictions if turn changed or if move played (optional, but safer)
+    if (oldTribeId !== null && oldTribeId !== currentTribeId) {
+        document.querySelectorAll('.village-marker').forEach(el => el.remove());
+        document.querySelectorAll('.predicted-terrain').forEach(el => el.remove());
+    }
 
     // Update Stats
     turnVal.textContent = GAME_STATE.settings.turn;
@@ -969,6 +982,10 @@ function renderMovesList(moves) {
 }
 
 function playMove(move) {
+    renderer.clearMoveHighlight();
+    document.querySelectorAll('.move-overlay').forEach(el => el.remove());
+    document.querySelectorAll('.combat-preview').forEach(el => el.remove());
+
     fetch('/step', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
