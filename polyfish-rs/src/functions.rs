@@ -912,3 +912,144 @@ pub struct CombatPreview {
     pub defender_dies: bool,
     pub attacker_dies: bool,
 }
+
+use std::collections::HashMap;
+
+/// Phase 4: Expansion Analysis Result
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpansionAnalysis {
+    pub tile_values: HashMap<i32, f32>,
+    pub threats: Vec<Threat>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Threat {
+    pub target_tile: i32,
+    pub threat_level: f32,   // 0.0 to 1.0 (1.0 = lethal)
+    pub attackers: Vec<i32>, // tile indices of attackers
+}
+
+pub fn analyze_expansion(state: &GameState, player_id: PlayerId) -> ExpansionAnalysis {
+    let mut tile_values = HashMap::new();
+    let mut threats = Vec::new();
+
+    let tribe = match state.tribes.get(&player_id) {
+        Some(t) => t,
+        None => {
+            return ExpansionAnalysis {
+                tile_values,
+                threats,
+            }
+        }
+    };
+
+    // 1. Expansion Analysis
+    // Identify tiles adjacent to our territory or units that are valuable
+    for tile in state.tiles.values() {
+        if tile.owner == player_id {
+            continue; // Already owned
+        }
+
+        // Simple check for adjacency to our territory/units
+        // This is expensive if we do it for all tiles.
+        // Optimization: Only check tiles near our cities/units.
+        // For now, iterate all tiles but fast-fail if far? No, map is small enough (256-400 tiles).
+
+        let mut value = 0.0;
+
+        // Resource Value
+        if let Some(res_opt) = state.resources.get(&tile.coords.idx) {
+            if let Some(res) = res_opt {
+                match res.resource_type {
+                    ResourceType::Fruit | ResourceType::Game | ResourceType::Fish => value += 1.0,
+                    ResourceType::Crop | ResourceType::AquaCrop => value += 1.5,
+                    ResourceType::Metal => value += 2.0,
+                    // Whale/Gold not in enum
+                    _ => {}
+                }
+            }
+        }
+
+        // Village/Structure Value
+        if let Some(struct_type) = get_structure_type_at(state, tile.coords.idx) {
+            match struct_type {
+                StructureType::Village => value += 5.0,
+                StructureType::Ruin => value += 3.0,
+                StructureType::Port => value += 2.0,
+                _ => {}
+            }
+        }
+
+        // Enemy City Value
+        if tile.capital_of > 0 && tile.owner != player_id {
+            value += 8.0;
+        }
+
+        // Territory Connection Value (Adjacency)
+        let adj_indices = get_adjacent_indices(state, tile.coords.idx, 1);
+        let mut is_adj = false;
+        for adj_idx in &adj_indices {
+            if let Some(adj_tile) = state.tiles.get(adj_idx) {
+                if adj_tile.owner == player_id {
+                    value += 1.0;
+                    is_adj = true;
+                }
+            }
+        }
+
+        if value > 0.0 && is_adj {
+            tile_values.insert(tile.coords.idx, value);
+        }
+    }
+
+    // 2. Threat Analysis
+    // Iterate over our units and check for enemy threats
+    for unit in &tribe.units {
+        let u_idx = unit.coords.idx;
+        let mut attackers = Vec::new();
+        let mut max_damage = 0.0;
+
+        // Find all enemies
+        for (other_id, other_tribe) in &state.tribes {
+            if *other_id == player_id {
+                continue;
+            }
+
+            for enemy in &other_tribe.units {
+                // Approximate Threat: Distance <= Move + Range (Chebyshev for grid movement)
+                let dist = unit.coords.chebyshev_distance_to(&enemy.coords);
+                let enemy_settings = get_unit_setting(enemy.unit_type);
+                let threat_range = enemy_settings.movement + enemy_settings.range;
+
+                if dist <= threat_range {
+                    // Potential attacker
+                    // Calculate simplified damage
+                    let atk = get_unit_attack(enemy);
+                    let def = get_unit_defense(unit);
+
+                    // Polytopia simplified non-retaliation calculation
+                    let dmg = (atk / (atk + def)) * atk * 4.5;
+
+                    max_damage += dmg;
+                    attackers.push(enemy.coords.idx);
+                }
+            }
+        }
+
+        if !attackers.is_empty() {
+            let threat_level = (max_damage / unit.health as f32).min(1.0);
+            threats.push(Threat {
+                target_tile: u_idx,
+                threat_level,
+                attackers,
+            });
+        }
+    }
+
+    ExpansionAnalysis {
+        tile_values,
+        threats,
+    }
+}

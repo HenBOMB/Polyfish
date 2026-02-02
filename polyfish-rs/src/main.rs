@@ -54,9 +54,23 @@ async fn main() {
         .route("/reset", post(reset_game))
         .route("/train", post(trigger_training))
         .route("/train/status", get(get_training_status))
+        .route("/analyze", get(analyze_game))
         .nest_service("/", ServeDir::new("../src/public"))
         .layer(CorsLayer::permissive())
         .with_state(shared_state);
+
+    // Run our app
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    println!("Listening on http://localhost:3000");
+    axum::serve(listener, app).await.unwrap();
+}
+
+async fn analyze_game(State(state): State<Arc<AppState>>) -> Json<Value> {
+    let game = state.game.lock().unwrap();
+    let current_player = game.state.settings.current_player_turn_id;
+    let analysis = polyfish::functions::analyze_expansion(&game.state, current_player);
+    Json(serde_json::to_value(analysis).unwrap())
+}
 
     // Run our app
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
