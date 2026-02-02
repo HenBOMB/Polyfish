@@ -513,7 +513,42 @@ class MapRenderer {
             });
         }
 
-        // Render predicted terrain (showing suspected enemy capitals)
+        // Render predicted terrain
+        if (prediction._terrain) {
+            const currentTribeId = GAME_STATE.settings.currentPlayerTurnId;
+            Object.entries(prediction._terrain).forEach(([tileIdx, [terrainType, climate]]) => {
+                const idx = parseInt(tileIdx);
+                const tile = GAME_STATE.tiles[idx];
+                if (!tile) return;
+
+                // Only show if NOT explored (fog/clouds)
+                const isExplored = tile.explorers && tile.explorers.includes(currentTribeId);
+                if (isExplored) return;
+
+                const pos = this.getPos(tile.coords.x, tile.coords.y);
+                const overlay = document.createElement('div');
+                overlay.classList.add('tile', 'predicted-terrain');
+
+                // Map terrain type to texture
+                // 1: Water, 2: Ocean, 3: Field, 4: Mountain, 5: Forest, 6: Ice
+                const tilefile = [null, 'terrain/water/water', 'terrain/water/ocean', null, 'terrain/mountains/mountain', 'terrain/forests/Forest', 'terrain/tiles/ice'][terrainType]
+                    || `terrain/tiles/ground_${climate}`;
+
+                // Handle specific suffixes for mountain/forest
+                let finalFile = tilefile;
+                if (terrainType === 4) finalFile = `terrain/mountains/mountain_${climate}`;
+                if (terrainType === 5) finalFile = `terrain/forests/Forest_${climate}`;
+
+                overlay.style.backgroundImage = `url('textures/${finalFile}.png')`;
+                overlay.style.left = `${pos.x}px`;
+                overlay.style.top = `${pos.y}px`;
+                overlay.style.zIndex = Math.floor(pos.y + 20); // Just above ground
+
+                this.container.appendChild(overlay);
+            });
+        }
+
+        // Render suspected enemy capitals
         if (prediction._enemy_capital_suspects && prediction._enemy_capital_suspects.length > 0) {
             prediction._enemy_capital_suspects.forEach(idx => {
                 const tile = GAME_STATE.tiles[idx];

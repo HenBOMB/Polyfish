@@ -54,13 +54,13 @@ pub fn tribe_to_climate(tribe: TribeType) -> ClimateType {
     }
 }
 
-/// Predict village locations in fog based on climate density
+/// Predict village locations in fog based on climate density AND orphan resources
 ///
-/// Algorithm (from TS):
-/// 1. Find visible tiles with enemy climates (not owned by POV)
-/// 2. For each, check adjacent fog tiles within 2 range
-/// 3. Count density of candidates
-/// 4. Return highest density tile as predicted village
+/// Algorithm:
+/// 1. Resource Heuristic: Find visible resources that are too far from any known city/village.
+///    These must belong to a hidden village adjacent to them.
+/// 2. Climate Heuristic: Find visible tiles with enemy climates (not owned by POV).
+/// 3. Combine scores and return best candidates.
 pub fn predict_villages(state: &GameState) -> HashMap<i32, (TribeType, bool)> {
     let pov_id = state.settings.current_player_turn_id;
     let pov_tribe_type = state
@@ -72,6 +72,66 @@ pub fn predict_villages(state: &GameState) -> HashMap<i32, (TribeType, bool)> {
 
     let mut candidates: HashMap<i32, (i32, ClimateType)> = HashMap::new();
 
+    // Collect all known cities/villages (visible or explored) to check for orphan resources
+    let mut known_cities = std::collections::HashSet::new();
+    for (&idx, tile) in &state.tiles {
+        // If we own it, we know it
+        // If we explored it and found a village/city, we know it
+        // If it's visible and has a village/city, we know it
+        if tile.capital_of > 0
+            || (tile.explorers.contains(&pov_id)
+                && crate::functions::get_structure_type_at(state, idx)
+                    == Some(crate::types::StructureType::Village))
+            || (state._visible_tiles.contains_key(&idx)
+                && crate::functions::get_structure_type_at(state, idx)
+                    == Some(crate::types::StructureType::Village))
+        {
+            known_cities.insert(idx);
+        }
+    }
+
+    // Helper to check if a resource is orphaned
+    let is_orphan = |res_idx: i32| -> bool {
+        if known_cities.contains(&res_idx) {
+            return false;
+        } // Resource ON city?
+        let res_coords = crate::coords::Coords::from_index(res_idx, state.settings.size);
+        for &city_idx in &known_cities {
+            let city_coords = crate::coords::Coords::from_index(city_idx, state.settings.size);
+            if res_coords.distance_to(&city_coords) <= 1 {
+                return false; // Belong to this city
+            }
+        }
+        true
+    };
+
+    // 1. Resource Heuristic
+    for (&tile_idx, _) in &state._visible_tiles {
+        if let Some(res_opt) = state.resources.get(&tile_idx) {
+            if res_opt.is_some() && is_orphan(tile_idx) {
+                // This resource needs a home!
+                // Check neighbors for potential hidden village
+                let neighbors = get_adjacent_indices(state, tile_idx, 1);
+                for n_idx in neighbors {
+                    // Must be unexplored fog
+                    if let Some(t) = state.tiles.get(&n_idx) {
+                        if t.explorers.contains(&pov_id) {
+                            continue;
+                        }
+                        if state._visible_tiles.contains_key(&n_idx) {
+                            continue;
+                        }
+
+                        // Boost score significantly
+                        let entry = candidates.entry(n_idx).or_insert((0, t.climate));
+                        entry.0 += 5; // Strong evidence
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Climate Heuristic (existing)
     // Find visible tiles with enemy climates
     for (&tile_idx, _) in &state._visible_tiles {
         if let Some(tile) = state.tiles.get(&tile_idx) {
@@ -113,11 +173,29 @@ pub fn predict_villages(state: &GameState) -> HashMap<i32, (TribeType, bool)> {
         }
     }
 
-    // Sort by density (highest first) and return top prediction
+    // Sort by density (highest first) and return top predictions
     let mut prediction_map: HashMap<i32, (TribeType, bool)> = HashMap::new();
-    if let Some((&best_idx, (_, climate))) = candidates.iter().max_by_key(|(_, (count, _))| *count)
-    {
-        let predicted_tribe = climate_to_tribe(*climate);
+
+    // Return ALL likely candidates, not just one?
+    // Frontend handles multiple. Let's return top 5 or anything with score > 2?
+    // Original code returned just the MAX.
+    // Let's filter by threshold if we have strong resource hits.
+
+    let mut sorted: Vec<_> = candidates.into_iter().collect();
+    sorted.sort_by_key(|(_, (count, _))| -count); // Descending
+
+    for (best_idx, (count, climate)) in sorted.iter().take(5) {
+        if *count > 2 {
+            // Threshold
+            let predicted_tribe = climate_to_tribe(*climate);
+            prediction_map.insert(*best_idx, (predicted_tribe, true));
+        }
+    }
+
+    // Safety: If resource check found nothing but climate found something, return top 1
+    if prediction_map.is_empty() && !sorted.is_empty() {
+        let (best_idx, (_, climate)) = sorted[0];
+        let predicted_tribe = climate_to_tribe(climate);
         prediction_map.insert(best_idx, (predicted_tribe, true));
     }
 
