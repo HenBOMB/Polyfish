@@ -53,6 +53,49 @@ pub fn is_game_over(state: &GameState) -> bool {
     false
 }
 
+/// Get indices in a plus sign pattern (4 cardinal neighbors)
+pub fn get_plus_sign_indices(idx: i32, size: i32) -> Vec<i32> {
+    let mut indices = Vec::new();
+    let (x, y) = (idx % size, idx / size);
+
+    if x > 0 {
+        indices.push(idx - 1);
+    }
+    if x < size - 1 {
+        indices.push(idx + 1);
+    }
+    if y > 0 {
+        indices.push(idx - size);
+    }
+    if y < size - 1 {
+        indices.push(idx + size);
+    }
+
+    indices
+}
+
+/// Get indices in a square pattern (radius R, includes center)
+pub fn get_square_indices(idx: i32, radius: i32, size: i32) -> Vec<i32> {
+    let mut indices = Vec::new();
+    let cx = idx % size;
+    let cy = idx / size;
+    for y in (cy - radius)..=(cy + radius) {
+        for x in (cx - radius)..=(cx + radius) {
+            if x >= 0 && x < size && y >= 0 && y < size {
+                indices.push(y * size + x);
+            }
+        }
+    }
+    indices
+}
+
+/// Calculate chebyshev distance between two flat indices
+pub fn get_chebyshev_distance(a: i32, b: i32, size: i32) -> i32 {
+    let (ax, ay) = (a % size, a / size);
+    let (bx, by) = (b % size, b / size);
+    (ax - bx).abs().max((ay - by).abs())
+}
+
 /// Get adjacent tile indices
 pub fn get_adjacent_indices(state: &GameState, idx: i32, range: i32) -> Vec<i32> {
     let size = state.settings.size;

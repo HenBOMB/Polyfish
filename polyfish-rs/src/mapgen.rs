@@ -4,6 +4,10 @@
 
 use crate::coords::Coords;
 use crate::default_fow;
+use crate::functions::{
+    get_chebyshev_distance as distance, get_plus_sign_indices as plus_sign,
+    get_square_indices as get_square, idx_to_coords as get_coords,
+};
 use crate::states::{GameState, TileState, TribeState};
 use crate::types::{ClimateType, MapSize, MapType, TerrainType, TribeType};
 use rand::rngs::StdRng;
@@ -52,56 +56,7 @@ impl GenTile {
     }
 }
 
-// Utils ported from utils.py
-
-fn get_coords(idx: i32, size: i32) -> (i32, i32) {
-    (idx % size, idx / size)
-}
-
-fn distance(a: i32, b: i32, size: i32) -> i32 {
-    let (ax, ay) = get_coords(a, size);
-    let (bx, by) = get_coords(b, size);
-    (ax - bx).abs().max((ay - by).abs())
-}
-
-fn plus_sign(center: i32, size: i32) -> Vec<i32> {
-    let mut indices = Vec::new();
-    let (row, col) = (center / size, center % size);
-
-    if col > 0 {
-        indices.push(center - 1);
-    }
-    if col < size - 1 {
-        indices.push(center + 1);
-    }
-    if row > 0 {
-        indices.push(center - size);
-    }
-    if row < size - 1 {
-        indices.push(center + size);
-    }
-
-    indices
-}
-
-// Probability Tables
-// We return a multiplier (f32) for a given Tribe and Terrain/Resource type.
-// Python `terrain_probs` dictionary.
-
-// area utils
-fn get_square(center: i32, radius: i32, size: i32) -> Vec<i32> {
-    let mut indices = Vec::new();
-    let cx = center % size;
-    let cy = center / size;
-    for y in (cy - radius)..=(cy + radius) {
-        for x in (cx - radius)..=(cx + radius) {
-            if x >= 0 && x < size && y >= 0 && y < size {
-                indices.push(y * size + x);
-            }
-        }
-    }
-    indices
-}
+// BiomeRates logic moved below or kept here if it doesn't use the deleted utils
 
 #[derive(Debug, Clone, Copy)]
 struct BiomeRates {

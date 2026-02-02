@@ -206,7 +206,7 @@ class MapRenderer {
                 <span>${city.name || 'City'} lvl ${city.level}</span>
                 <span>${tile.capitalOf > 0 ? '👑 ' : ''}${city.connectedToCapital ? '🔗' : ''}${rewards}</span>
                 <span>+${city.production} 💰</span>
-                <span>${city.population - city.level} / ${city.level + 1} 😀</span>
+                <span>${city.progress} / ${city.level + 1} 😀</span>
                 <span>${new Array(unitCount).fill('🪖').join('')}</span>
             </div>`;
         } else {
@@ -940,7 +940,7 @@ function getResourceFile(type, climate) {
 }
 
 // Camera and Zoom logic (keeping existing as it works well)
-let scale = 0.5;
+let scale = 0.75;
 let translateX = 0;
 let translateY = 0;
 const mapViewport = document.getElementById('map-viewport');
@@ -953,8 +953,13 @@ function centerOnCoordinates(tX, tY, smooth = false) {
     const pos = renderer.getPos(tX, tY);
     const viewportRect = mapViewport.getBoundingClientRect();
     if (viewportRect.width === 0) return;
-    translateX = (viewportRect.width / 2) - (pos.x * scale);
-    translateY = (viewportRect.height / 2) - (pos.y * scale);
+    // Calculate the visual center of the tile (128x128 box) in map space.
+    // Horizontally it's centered (64), vertically the diamond top-surface center is approx 32px down.
+    const tileCenterX = pos.x + 64;
+    const tileCenterY = pos.y + 32;
+
+    translateX = (viewportRect.width / 2) - (tileCenterX * scale);
+    translateY = (viewportRect.height / 2) - (tileCenterY * scale);
 
     if (smooth) {
         mapContainer.style.transition = 'transform 0.8s cubic-bezier(0.4, 0, 0.2, 1)';

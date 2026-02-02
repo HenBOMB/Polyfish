@@ -53,8 +53,9 @@
         <!-- Main Area: Map -->
         <main id="main-view">
             <div id="map-viewport">
-                <canvas id="space-bg"></canvas>
-                <div id="map"></div>
+                <canvas id="space-bg"
+                    style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none;"></canvas>
+                <div id="map" style="position: absolute; transform-origin: 0 0; z-index: 1;"></div>
             </div>
 
             <!-- Floating Hover Info -->

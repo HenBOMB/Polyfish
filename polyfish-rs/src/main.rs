@@ -26,12 +26,15 @@ struct AppState {
     training_status: Mutex<Option<u32>>, // Store PID of running training
 }
 
+const DEFAULT_TRIBES: &[TribeType] = &[TribeType::Imperius, TribeType::Imperius];
+const DEFAULT_SIZE: MapSize = MapSize::Small;
+
 #[tokio::main]
 async fn main() {
     // Initialize game
     let mut settings = MapGenSettings::default();
-    settings.size = MapSize::Normal;
-    settings.tribes = vec![TribeType::Luxidoor, TribeType::Imperius];
+    settings.size = DEFAULT_SIZE;
+    settings.tribes = DEFAULT_TRIBES.to_vec();
     settings.seed = rand::random();
     settings.map_type = MapType::Drylands;
 
@@ -363,8 +366,8 @@ async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {
     let mut game = state.game.lock().unwrap();
 
     let mut settings = MapGenSettings::default();
-    settings.size = MapSize::Normal;
-    settings.tribes = vec![TribeType::Luxidoor, TribeType::Imperius];
+    settings.size = DEFAULT_SIZE;
+    settings.tribes = DEFAULT_TRIBES.to_vec();
     settings.seed = rand::random();
 
     let initial_state = generate(settings);
@@ -462,7 +465,7 @@ async fn simulate_explorer(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<Value>,
 ) -> Json<Value> {
-    let mut game = state.game.lock().unwrap();
+    let game = state.game.lock().unwrap();
     let idx = payload
         .get("idx")
         .and_then(|v| v.as_i64())

@@ -43,12 +43,12 @@ pub fn get_structure_setting(struct_type: StructureType) -> StructureSetting {
         | StructureType::Ruin
         | StructureType::Lighthouse => StructureSetting::default(),
 
-        StructureType::Spores => StructureSetting {
-            resource_type: Some(ResourceType::Spores),
-            terrain_types: terrains![TerrainType::Forest],
-            tribe_type: Some(TribeType::Cymanti),
-            ..Default::default()
-        },
+        // StructureType::Spores => StructureSetting {
+        //     resource_type: Some(ResourceType::Spores),
+        //     terrain_types: terrains![TerrainType::Forest],
+        //     tribe_type: Some(TribeType::Cymanti),
+        //     ..Default::default()
+        // },
         StructureType::Swamp => StructureSetting {
             terrain_types: terrains![TerrainType::Ocean],
             ..Default::default()

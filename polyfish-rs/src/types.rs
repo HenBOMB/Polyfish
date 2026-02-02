@@ -454,7 +454,7 @@ pub enum StructureType {
     ParkOfFortune = 28,
     EyeOfGod = 29,
     Outpost = 33,
-    Spores = 37,
+    // Spores = 37, // not a structure, depends on fungi. is this the real fungi id?
     Swamp = 38,
     Mycelium = 39,
     // Algae = 40, // Changed to tile effect

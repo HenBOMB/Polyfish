@@ -630,15 +630,23 @@ pub fn calculate_combat(
         (defender_defense * defense_bonus) * (defender_health as f32 / defender_max_health as f32);
 
     let total_force = attack_force + defense_force;
-    let attack_result = (attack_force / total_force * attacker_attack * 4.5).round();
+    let attack_result_unrounded =
+        (attack_force / total_force * attacker_attack * 4.5) * crate::states::HEALTH_SCALE as f32;
+    let attack_result = attack_result_unrounded.round();
 
     // Retaliation damage (if defender survives)
     let new_defender_health = defender_health as f32 - attack_result;
     let defense_damage = if new_defender_health > 0.0 {
         let ret_force =
             (defender_defense * defense_bonus) * (new_defender_health / defender_max_health as f32);
-        let ret_total = attacker_attack + ret_force;
-        (ret_force / ret_total * (defender_defense * defense_bonus) * 4.5).round()
+        // Attacker's force for retaliation calculation also depends on its health
+        let atk_force_ret = attacker_attack * (attacker_health as f32 / attacker_max_health as f32);
+        let ret_total = atk_force_ret + ret_force;
+        (ret_force / ret_total
+            * (defender_defense * defense_bonus)
+            * 4.5
+            * crate::states::HEALTH_SCALE as f32)
+            .round()
     } else {
         0.0
     };
