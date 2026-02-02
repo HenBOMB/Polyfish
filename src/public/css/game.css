@@ -357,3 +357,109 @@
 .fog {
     filter: brightness(0.6) grayscale(0.5) !important;
 }
+
+/* ================================================================
+   MCTS Prediction Heatmap Visualization
+   ================================================================ */
+
+.mcts-overlay {
+    pointer-events: none;
+    clip-path: polygon(50% 0%, 100% 30%, 50% 60%, 0% 30%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: opacity 0.3s ease;
+}
+
+.mcts-overlay.good {
+    background: radial-gradient(ellipse at 50% 30%, rgba(74, 222, 128, var(--opacity)) 0%, transparent 70%);
+}
+
+.mcts-overlay.neutral {
+    background: radial-gradient(ellipse at 50% 30%, rgba(250, 204, 21, var(--opacity)) 0%, transparent 70%);
+}
+
+.mcts-overlay.risky {
+    background: radial-gradient(ellipse at 50% 30%, rgba(248, 113, 113, var(--opacity)) 0%, transparent 70%);
+}
+
+.mcts-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: white;
+    text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.9), 0 0 8px rgba(0, 0, 0, 0.8);
+    margin-top: -20px;
+    pointer-events: none;
+    user-select: none;
+}
+
+.mcts-visits {
+    font-size: 9px;
+    opacity: 0.8;
+}
+
+/* Prediction toggle button active state */
+.btn.prediction-active {
+    background: linear-gradient(135deg, #a855f7, #6366f1);
+    box-shadow: 0 0 15px rgba(139, 92, 246, 0.5);
+}
+
+/* Predicted terrain in fog */
+.predicted-terrain {
+    opacity: 0.35;
+    filter: saturate(0.4) brightness(0.8);
+    border: 2px dashed rgba(255, 255, 255, 0.3);
+}
+
+/* Village prediction marker */
+.village-marker {
+    position: absolute;
+    font-size: 28px;
+    animation: pulse-marker 1.5s infinite ease-in-out;
+    pointer-events: none;
+    text-shadow: 0 0 10px rgba(255, 255, 255, 0.8);
+    margin-top: -10px;
+    margin-left: 50px;
+}
+
+@keyframes pulse-marker {
+    0%, 100% {
+        transform: scale(1);
+        opacity: 0.8;
+    }
+    50% {
+        transform: scale(1.15);
+        opacity: 1;
+    }
+}
+
+/* Combat preview indicators */
+.combat-preview {
+    position: absolute;
+    font-size: 14px;
+    font-weight: 800;
+    padding: 2px 6px;
+    border-radius: 4px;
+    pointer-events: none;
+    margin-top: -50px;
+    margin-left: 40px;
+    white-space: nowrap;
+}
+
+.combat-favorable {
+    background: rgba(34, 197, 94, 0.9);
+    color: white;
+    box-shadow: 0 0 10px rgba(34, 197, 94, 0.6);
+}
+
+.combat-risky {
+    background: rgba(245, 158, 11, 0.9);
+    color: white;
+    box-shadow: 0 0 10px rgba(245, 158, 11, 0.6);
+}
+
+.combat-deadly {
+    background: rgba(239, 68, 68, 0.9);
+    color: white;
+    box-shadow: 0 0 10px rgba(239, 68, 68, 0.6);
+}

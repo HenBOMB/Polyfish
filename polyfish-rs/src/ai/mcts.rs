@@ -2,8 +2,27 @@ use crate::ai::evaluator;
 use crate::game::Game;
 use crate::moves::Move;
 use crate::states::PlayerId;
+use crate::types::MoveType;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
+use serde::Serialize;
+
+/// Evaluation data for a single move candidate
+#[derive(Debug, Clone, Serialize)]
+pub struct MoveEvaluation {
+    pub src: i32,
+    pub target: i32,
+    pub visits: f32,
+    pub win_rate: f32,
+    pub move_type: MoveType,
+}
+
+/// Analysis results from MCTS search
+#[derive(Debug, Clone, Serialize)]
+pub struct MctsAnalysis {
+    pub evaluations: Vec<MoveEvaluation>,
+    pub total_iterations: usize,
+}
 
 pub struct MctsAgent {
     pub iterations: usize,
@@ -64,6 +83,15 @@ impl MctsAgent {
     }
 
     pub fn select_move(&self, game: &mut Game) -> Option<Box<dyn Move>> {
+        let (best_move, _) = self.select_move_with_analysis(game);
+        best_move
+    }
+
+    /// Run MCTS and return both the best move and analysis data for visualization
+    pub fn select_move_with_analysis(
+        &self,
+        game: &mut Game,
+    ) -> (Option<Box<dyn Move>>, MctsAnalysis) {
         let player_id = game.state.settings.current_player_turn_id;
         let mut root = Node::new(None, game);
 
@@ -71,11 +99,64 @@ impl MctsAgent {
             self.search_iteration(game, &mut root, player_id);
         }
 
+        // Extract evaluations from all children
+        let mut evaluations: Vec<MoveEvaluation> = root
+            .children
+            .iter()
+            .filter_map(|child| {
+                let m = child.move_to_here.as_ref()?;
+                let json = m.serialize();
+
+                // Extract src and target from move JSON
+                let src = json
+                    .get("src")
+                    .and_then(|v| v.as_i64())
+                    .map(|v| v as i32)
+                    .or_else(|| {
+                        json.get("tileIndex")
+                            .and_then(|v| v.as_i64())
+                            .map(|v| v as i32)
+                    })
+                    .unwrap_or(-1);
+
+                let target = json
+                    .get("target")
+                    .and_then(|v| v.as_i64())
+                    .map(|v| v as i32)
+                    .unwrap_or(src);
+
+                let win_rate = if child.visits > 0.0 {
+                    child.value / child.visits
+                } else {
+                    0.0
+                };
+
+                Some(MoveEvaluation {
+                    src,
+                    target,
+                    visits: child.visits,
+                    win_rate,
+                    move_type: m.move_type(),
+                })
+            })
+            .collect();
+
+        // Sort by visits (most visited first)
+        evaluations.sort_by(|a, b| b.visits.partial_cmp(&a.visits).unwrap());
+
+        let analysis = MctsAnalysis {
+            evaluations,
+            total_iterations: self.iterations,
+        };
+
         // Return child with most visits
-        root.children
+        let best_move = root
+            .children
             .into_iter()
             .max_by(|a, b| a.visits.partial_cmp(&b.visits).unwrap())
-            .and_then(|n| n.move_to_here)
+            .and_then(|n| n.move_to_here);
+
+        (best_move, analysis)
     }
 
     fn search_iteration(&self, game: &mut Game, node: &mut Node, pov: PlayerId) -> f32 {

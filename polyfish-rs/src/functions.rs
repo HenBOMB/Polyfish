@@ -856,3 +856,59 @@ pub fn get_star_exchange(state: &GameState, player_id: PlayerId) -> i32 {
         12
     }
 }
+
+/// Calculate a combat preview between an attacker and defender unit.
+/// Returns (attacker_damage_dealt, attacker_damage_taken, defender_dies, attacker_dies)
+pub fn calculate_combat_preview(
+    state: &GameState,
+    attacker_idx: i32,
+    defender_idx: i32,
+) -> Option<CombatPreview> {
+    let attacker = get_unit_at(state, attacker_idx)?;
+    let defender = get_enemy_at(state, defender_idx, attacker.owner)?;
+
+    let atk_attack = get_unit_attack(attacker);
+    let atk_health = attacker.health;
+    let atk_max_health = get_unit_max_health(attacker);
+
+    let def_defense = get_unit_defense(defender);
+    let def_health = defender.health;
+    let def_max_health = get_unit_max_health(defender);
+    let defense_bonus = get_defense_bonus(state, defender);
+
+    let result = crate::actions::units::calculate_combat(
+        atk_attack,
+        atk_health,
+        atk_max_health,
+        def_defense,
+        def_health,
+        def_max_health,
+        defense_bonus,
+    );
+
+    let damage_to_defender = result.attack_damage as i32;
+    let damage_to_attacker = result.defense_damage as i32;
+    let defender_dies = def_health - damage_to_defender <= 0;
+    let attacker_dies = atk_health - damage_to_attacker <= 0;
+
+    Some(CombatPreview {
+        attacker_tile: attacker_idx,
+        defender_tile: defender_idx,
+        damage_to_defender,
+        damage_to_attacker,
+        defender_dies,
+        attacker_dies,
+    })
+}
+
+/// Combat preview result for UI display
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CombatPreview {
+    pub attacker_tile: i32,
+    pub defender_tile: i32,
+    pub damage_to_defender: i32,
+    pub damage_to_attacker: i32,
+    pub defender_dies: bool,
+    pub attacker_dies: bool,
+}

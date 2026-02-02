@@ -5,5 +5,5 @@ pub mod mcts;
 pub mod network;
 
 pub use evaluator::evaluate;
-pub use mcts::MctsAgent;
+pub use mcts::{MctsAgent, MctsAnalysis, MoveEvaluation};
 pub mod mcts_zero;

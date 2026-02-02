@@ -106,7 +106,7 @@ async fn auto_step(
     use polyfish::ai::MctsAgent;
     let agent = MctsAgent::new(params.iterations);
 
-    let chosen_move = agent.select_move(&mut game);
+    let (chosen_move, mcts_analysis) = agent.select_move_with_analysis(&mut game);
     let mut move_name = "none".to_string();
     if let Some(m) = chosen_move {
         move_name = format!("{:?}", m.move_type());
@@ -130,7 +130,8 @@ async fn auto_step(
             "_prediction": game.state._prediction,
         },
         "movePlayed": move_name,
-        "legalMoves": legal_moves
+        "legalMoves": legal_moves,
+        "mctsAnalysis": mcts_analysis
     }))
 }
 

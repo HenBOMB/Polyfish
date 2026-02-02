@@ -6,6 +6,8 @@ let GAME_STATE = {};
 let currentLegalMoves = [];
 let selectedUnitIdx = null; // Currently selected unit's tile index
 let ENABLE_FOW = true; // Fog of War toggle
+let SHOW_PREDICTIONS = false; // AI Predictions overlay toggle
+let lastMctsAnalysis = null; // Store last MCTS analysis for visualization
 
 // UI Elements
 const turnVal = document.getElementById('turn-val');
@@ -18,6 +20,58 @@ const movesList = document.getElementById('moves-list');
 const lastMoveVal = document.getElementById('last-move-val');
 const mctsDepth = document.getElementById('mcts-depth');
 const mctsDepthVal = document.getElementById('mcts-depth-val');
+
+// Combat Preview Calculator (mirrors Polytopia's damage formula)
+function calculateCombatPreview(attackerIdx, defenderIdx) {
+    const attacker = getUnitAt(attackerIdx);
+    const defender = getUnitAt(defenderIdx);
+    if (!attacker || !defender) return null;
+
+    // Get base stats (simplified - would need full unit settings for accuracy)
+    const atkAttack = attacker.attack || 2;
+    const atkHealth = attacker.health || 100;
+    const atkMaxHealth = attacker.maxHealth || 100;
+
+    const defDefense = defender.defense || 2;
+    const defHealth = defender.health || 100;
+    const defMaxHealth = defender.maxHealth || 100;
+    const defenseBonus = 1.0; // Would need to check terrain/city
+
+    // Polytopia damage formula
+    const attackForce = atkAttack * (atkHealth / atkMaxHealth);
+    const defenseForce = (defDefense * defenseBonus) * (defHealth / defMaxHealth);
+    const totalForce = attackForce + defenseForce;
+
+    const damageToDefender = Math.round((attackForce / totalForce) * atkAttack * 4.5);
+
+    // Retaliation
+    const newDefHealth = defHealth - damageToDefender;
+    let damageToAttacker = 0;
+    if (newDefHealth > 0) {
+        const retForce = (defDefense * defenseBonus) * (newDefHealth / defMaxHealth);
+        const retTotal = atkAttack + retForce;
+        damageToAttacker = Math.round((retForce / retTotal) * (defDefense * defenseBonus) * 4.5);
+    }
+
+    const defenderDies = newDefHealth <= 0;
+    const attackerDies = atkHealth - damageToAttacker <= 0;
+
+    return {
+        damageToDefender,
+        damageToAttacker,
+        defenderDies,
+        attackerDies
+    };
+}
+
+function getUnitAt(idx) {
+    if (!GAME_STATE.tribes) return null;
+    for (const tribe of Object.values(GAME_STATE.tribes)) {
+        const unit = (tribe.units || []).find(u => u.coords.idx === idx);
+        if (unit) return { ...unit, tribe };
+    }
+    return null;
+}
 
 class MapRenderer {
     constructor(container) {
@@ -315,6 +369,7 @@ class MapRenderer {
 
     renderMoveOverlays(legalMoves) {
         document.querySelectorAll('.move-overlay').forEach(el => el.remove());
+        document.querySelectorAll('.combat-preview').forEach(el => el.remove());
         if (this.selectedIdx === null) return;
 
         const unitMoves = legalMoves.filter(m => m && typeof m === 'object' && m.src === this.selectedIdx);
@@ -331,12 +386,38 @@ class MapRenderer {
             overlay.classList.add('tile', 'move-overlay');
             overlay.style.left = `${pos.x}px`;
             overlay.style.top = `${pos.y}px`;
-            overlay.style.zIndex = Math.floor(pos.y + 20000); // Higher than click-mask (10000)
+            overlay.style.zIndex = Math.floor(pos.y + 20000);
 
             const img = document.createElement('img');
-            img.src = move.moveType === 2 ? 'textures/misc/attackTarget.png' : 'textures/misc/moveTarget.png';
+            const isAttack = move.moveType === 2;
+            img.src = isAttack ? 'textures/misc/attackTarget.png' : 'textures/misc/moveTarget.png';
             img.style.width = '128px';
             overlay.appendChild(img);
+
+            // Add combat preview for attack moves when predictions are enabled
+            if (isAttack && SHOW_PREDICTIONS) {
+                const preview = calculateCombatPreview(this.selectedIdx, targetIdx);
+                if (preview) {
+                    const previewEl = document.createElement('div');
+                    previewEl.classList.add('combat-preview');
+
+                    // Color based on outcome
+                    if (preview.defenderDies && !preview.attackerDies) {
+                        previewEl.classList.add('combat-favorable');
+                    } else if (preview.attackerDies) {
+                        previewEl.classList.add('combat-deadly');
+                    } else {
+                        previewEl.classList.add('combat-risky');
+                    }
+
+                    // Show damage numbers
+                    previewEl.innerHTML = `⚔️ ${preview.damageToDefender} / -${preview.damageToAttacker}`;
+                    previewEl.style.left = `${pos.x}px`;
+                    previewEl.style.top = `${pos.y}px`;
+                    previewEl.style.zIndex = Math.floor(pos.y + 25000);
+                    this.container.appendChild(previewEl);
+                }
+            }
 
             overlay.onclick = (e) => {
                 e.stopPropagation();
@@ -344,6 +425,111 @@ class MapRenderer {
             };
             this.container.appendChild(overlay);
         });
+    }
+
+    renderMCTSHeatmap(mctsAnalysis) {
+        // Clear existing heatmap overlays
+        document.querySelectorAll('.mcts-overlay').forEach(el => el.remove());
+
+        if (!mctsAnalysis || !mctsAnalysis.evaluations || mctsAnalysis.evaluations.length === 0) return;
+        if (!SHOW_PREDICTIONS) return;
+
+        const evaluations = mctsAnalysis.evaluations;
+        const maxVisits = Math.max(...evaluations.map(e => e.visits));
+        const gameSize = GAME_STATE.settings?.size || 11;
+
+        // Group evaluations by target tile for aggregation
+        const byTarget = {};
+        evaluations.forEach(ev => {
+            const key = ev.target >= 0 ? ev.target : ev.src;
+            if (!byTarget[key]) {
+                byTarget[key] = { totalVisits: 0, weightedWinRate: 0, count: 0 };
+            }
+            byTarget[key].totalVisits += ev.visits;
+            byTarget[key].weightedWinRate += ev.win_rate * ev.visits;
+            byTarget[key].count++;
+        });
+
+        Object.entries(byTarget).forEach(([tileIdx, data]) => {
+            const idx = parseInt(tileIdx);
+            const tile = GAME_STATE.tiles[idx];
+            if (!tile) return;
+
+            const visits = data.totalVisits;
+            const winRate = data.weightedWinRate / visits;
+
+            // Normalize opacity by visits (0.3 to 0.9)
+            const opacity = 0.3 + (visits / maxVisits) * 0.6;
+
+            // Determine color class based on win rate
+            // win_rate is from evaluator which can be large positive/negative
+            // Normalize to 0-1 range approximately
+            let colorClass = 'neutral';
+            if (winRate > 50) colorClass = 'good';
+            else if (winRate < -50) colorClass = 'risky';
+
+            const pos = this.getPos(tile.coords.x, tile.coords.y);
+            const overlay = document.createElement('div');
+            overlay.classList.add('tile', 'mcts-overlay', colorClass);
+            overlay.style.setProperty('--opacity', opacity.toFixed(2));
+            overlay.style.left = `${pos.x}px`;
+            overlay.style.top = `${pos.y}px`;
+            overlay.style.zIndex = Math.floor(pos.y + 15000);
+
+            // Add label with visit count
+            const label = document.createElement('div');
+            label.classList.add('mcts-label');
+            const displayRate = winRate > 0 ? `+${winRate.toFixed(0)}` : winRate.toFixed(0);
+            label.innerHTML = `<span class="mcts-visits">${Math.round(visits)}</span>`;
+            overlay.appendChild(label);
+
+            this.container.appendChild(overlay);
+        });
+    }
+
+    renderFOWPredictions(prediction) {
+        // Clear existing prediction overlays
+        document.querySelectorAll('.village-marker').forEach(el => el.remove());
+        document.querySelectorAll('.predicted-terrain').forEach(el => el.remove());
+
+        if (!prediction || !SHOW_PREDICTIONS) return;
+
+        // Render predicted villages
+        if (prediction._villages) {
+            Object.entries(prediction._villages).forEach(([tileIdx, [tribeType, isVillage]]) => {
+                const idx = parseInt(tileIdx);
+                const tile = GAME_STATE.tiles[idx];
+                if (!tile) return;
+
+                const pos = this.getPos(tile.coords.x, tile.coords.y);
+                const marker = document.createElement('div');
+                marker.classList.add('village-marker');
+                marker.textContent = '🏕️';
+                marker.title = `Predicted village (${TRIBE_ID_2_NAME[tribeType] || 'Unknown'})`;
+                marker.style.left = `${pos.x}px`;
+                marker.style.top = `${pos.y}px`;
+                marker.style.zIndex = Math.floor(pos.y + 16000);
+                this.container.appendChild(marker);
+            });
+        }
+
+        // Render predicted terrain (showing suspected enemy capitals)
+        if (prediction._enemy_capital_suspects && prediction._enemy_capital_suspects.length > 0) {
+            prediction._enemy_capital_suspects.forEach(idx => {
+                const tile = GAME_STATE.tiles[idx];
+                if (!tile) return;
+
+                const pos = this.getPos(tile.coords.x, tile.coords.y);
+                const marker = document.createElement('div');
+                marker.classList.add('village-marker');
+                marker.textContent = '👑';
+                marker.title = 'Suspected enemy capital';
+                marker.style.left = `${pos.x}px`;
+                marker.style.top = `${pos.y}px`;
+                marker.style.zIndex = Math.floor(pos.y + 16000);
+                this.container.appendChild(marker);
+            });
+        }
     }
 }
 
@@ -372,6 +558,7 @@ function updateUI(data) {
     if (data.state) GAME_STATE = data.state;
     if (data.legalMoves) currentLegalMoves = data.legalMoves;
     if (data.movePlayed) lastMoveVal.textContent = data.movePlayed;
+    if (data.mctsAnalysis) lastMctsAnalysis = data.mctsAnalysis;
 
     const currentTribeId = GAME_STATE.settings.currentPlayerTurnId;
     const currentTribe = GAME_STATE.tribes[currentTribeId.toString()] || GAME_STATE.tribes[currentTribeId];
@@ -400,6 +587,16 @@ function updateUI(data) {
     renderMovesList(currentLegalMoves);
 
     renderer.render(GAME_STATE, currentLegalMoves);
+
+    // Render MCTS heatmap if we have analysis data
+    if (lastMctsAnalysis) {
+        renderer.renderMCTSHeatmap(lastMctsAnalysis);
+    }
+
+    // Render FOW predictions (villages, enemy capitals)
+    if (GAME_STATE._prediction) {
+        renderer.renderFOWPredictions(GAME_STATE._prediction);
+    }
 
     // If turn changed, pan smoothly to next player's capital
     if (oldTribeId !== null && oldTribeId !== currentTribeId) {
@@ -666,6 +863,28 @@ document.getElementById('btn-train').onclick = () => {
             if (data && data.message) alert(data.message);
         });
     }
+};
+document.getElementById('btn-predictions').onclick = () => {
+    SHOW_PREDICTIONS = !SHOW_PREDICTIONS;
+    const btn = document.getElementById('btn-predictions');
+    btn.classList.toggle('prediction-active', SHOW_PREDICTIONS);
+
+    // Re-render all prediction overlays
+    if (lastMctsAnalysis) {
+        renderer.renderMCTSHeatmap(lastMctsAnalysis);
+    } else {
+        document.querySelectorAll('.mcts-overlay').forEach(el => el.remove());
+    }
+
+    // Re-render FOW predictions
+    if (GAME_STATE._prediction) {
+        renderer.renderFOWPredictions(GAME_STATE._prediction);
+    } else {
+        document.querySelectorAll('.village-marker').forEach(el => el.remove());
+    }
+
+    // Re-render move overlays to show/hide combat previews
+    renderer.renderMoveOverlays(currentLegalMoves);
 };
 document.getElementById('btn-rng').onclick = () => apiAction('/rngstep', {});
 document.getElementById('btn-step').onclick = () => apiAction('/autostep', { iterations: parseInt(mctsDepth.value) });
