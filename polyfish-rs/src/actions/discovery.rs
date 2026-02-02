@@ -80,17 +80,31 @@ pub fn discover_tiles(
                 // Check if lighthouse
                 if let Some(Some(struct_state)) = state.structures.get(&idx) {
                     if struct_state.structure_type == StructureType::Lighthouse {
+                        println!("Discovered a lighthouse at index {}!", idx);
+
                         let city_to_reward = get_capital_city(state, pov_id)
-                            .map(|c| c.tile_index)
+                            .map(|c| {
+                                println!("Found capital city to reward at index {}", c.tile_index);
+                                c.tile_index
+                            })
                             .or_else(|| {
-                                state
-                                    .tribes
-                                    .get(&pov_id)
-                                    .and_then(|t| t.cities.first().map(|c| c.tile_index))
+                                println!("No capital found. Checking for oldest city...");
+                                state.tribes.get(&pov_id).and_then(|t| {
+                                    t.cities.first().map(|c| {
+                                        println!("Found oldest city at index {}", c.tile_index);
+                                        c.tile_index
+                                    })
+                                })
                             });
 
-                        if let Some(idx) = city_to_reward {
-                            undos.push(add_population(state, idx, 1));
+                        if let Some(reward_idx) = city_to_reward {
+                            println!("Awarding +1 population to city at {}", reward_idx);
+                            undos.push(add_population(state, reward_idx, 1));
+                        } else {
+                            println!(
+                                "CRITICAL: Found lighthouse but no city to reward for tribe {}!",
+                                pov_id
+                            );
                         }
                     }
                 }

@@ -208,7 +208,7 @@ pub fn predict_villages(state: &GameState) -> HashMap<i32, (TribeType, bool)> {
         prediction_map.insert(best_idx, (predicted_tribe, true));
     }
 
-    println!("Predicted villages: {:?}", prediction_map);
+    // println!("Predicted villages: {:?}", prediction_map);
     prediction_map
 }
 
