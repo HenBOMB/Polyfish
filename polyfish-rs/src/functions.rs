@@ -889,15 +889,17 @@ pub fn sync_scores(state: &mut GameState) {
 /// Get the star exchange rate based on score
 pub fn get_star_exchange(state: &GameState, player_id: PlayerId) -> i32 {
     let score = state.tribes.get(&player_id).map(|t| t.score).unwrap_or(0);
-    if score < 1000 {
-        3
-    } else if score < 2000 {
-        6
-    } else if score < 3000 {
-        9
+    // Integer ceiling: (score - 1) / 1000 + 1 correctly buckets:
+    // 0-1000 -> 1
+    // 1001-2000 -> 2
+    // etc. For score 0, it yields 1.
+    let multiplier = if score <= 0 {
+        1
     } else {
-        12
-    }
+        (score - 1) / 1000 + 1
+    };
+    let stars = 1 + 2 * multiplier;
+    stars.min(11)
 }
 
 /// Calculate a combat preview between an attacker and defender unit.

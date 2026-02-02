@@ -268,11 +268,6 @@ pub fn set_visible_tiles(state: &mut GameState, player_id: PlayerId) -> UndoCall
     })
 }
 
-/// Get star exchange amount when discovering a new tribe
-pub fn get_star_exchange(state: &GameState, player_id: PlayerId) -> i32 {
-    crate::functions::get_star_exchange(state, player_id)
-}
-
 /// Try to discover other tribes that are now visible and reward with star exchange
 pub fn try_discover_other_tribes(state: &mut GameState) -> UndoCallback {
     let pov_id = state.settings.current_player_turn_id;
@@ -309,9 +304,23 @@ pub fn try_discover_other_tribes(state: &mut GameState) -> UndoCallback {
 
             if !already_known {
                 // Discover and get stars
-                // Star exchange based on recipients score
-                let stars = get_star_exchange(state, pov_id);
+                // Star exchange based on MET tribe's score
+                let stars = crate::functions::get_star_exchange(state, enemy_owner);
+
                 undos.push(gain_stars(state, stars));
+
+                if state.settings.verbose {
+                    if let Some(enemy_tribe) = state.tribes.get(&enemy_owner) {
+                        state._messages.push(format!(
+                            "Met the {:?}! ({}+ Stars) 🤝",
+                            enemy_tribe.tribe_type, stars
+                        ));
+                    } else {
+                        state
+                            ._messages
+                            .push(format!("Met a new tribe! ({}+ Stars) 🤝", stars));
+                    }
+                }
 
                 if let Some(tribe) = state.tribes.get_mut(&pov_id) {
                     tribe.known_players.insert(enemy_owner);

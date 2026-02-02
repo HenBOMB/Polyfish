@@ -348,10 +348,12 @@ class MapRenderer {
             const struct = GAME_STATE.structures[idx];
             const resource = GAME_STATE.resources[idx];
             const isCity = tile.owner > 0 && struct && StructureNames[struct.type] === 'Village';
+            const tribe = TRIBE_ID_2_NAME[GAME_STATE.tribes[tile.owner]?.type];
+
             let html = `<strong>Tile ${idx} (${tile.coords.x}, ${tile.coords.y})</strong><br>`;
-            html += `⛰️ ${TerrainType[tile.type] || tile.type} (${tile.climate})<br>`;
+            html += `⛰️ ${CLIMATE_IDS[tile.climate]} ${TerrainType[tile.type] || tile.type}<br>`;
             if (unit) html += `🪖 ${TRIBE_ID_2_NAME[unit.tribe.type]} ${ClassNameToId[unit.type || unit.unitType]} (${Math.floor(unit.health / 10)}/${Math.floor(unit.maxHealth / 10)})<br>`;
-            if (struct) html += `🗼 ${tile.capitalOf > 0 ? 'Capital' : isCity ? 'City' : StructureNames[struct.type] || struct.type}<br>`;
+            if (struct) html += `🗼 ${tile.capitalOf > 0 ? `${tribe} Capital` : isCity ? 'City' : StructureNames[struct.type] || struct.type}<br>`;
             if (resource) html += `🥝 ${ResourceTypes[resource.type] || resource.type}<br>`;
 
             hoverEl.innerHTML = html;
