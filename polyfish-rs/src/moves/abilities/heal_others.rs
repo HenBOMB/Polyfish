@@ -81,4 +81,9 @@ impl Move for HealOthersMove {
         }
         value
     }
+
+    #[inline]
+    fn action_coords(&self) -> (Option<i32>, Option<i32>) {
+        (Some(self.unit_idx), Some(self.unit_idx))
+    }
 }

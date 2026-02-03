@@ -71,6 +71,11 @@ impl Move for UpgradeMove {
         }
         value
     }
+
+    #[inline]
+    fn action_coords(&self) -> (Option<i32>, Option<i32>) {
+        (Some(self.tile_index), Some(self.tile_index))
+    }
 }
 
 /// Generate upgrade moves

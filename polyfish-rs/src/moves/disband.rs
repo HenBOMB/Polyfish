@@ -86,4 +86,9 @@ impl Move for DisbandMove {
         }
         value
     }
+
+    #[inline]
+    fn action_coords(&self) -> (Option<i32>, Option<i32>) {
+        (Some(self.target), Some(self.target))
+    }
 }

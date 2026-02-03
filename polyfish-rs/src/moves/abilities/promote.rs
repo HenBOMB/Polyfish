@@ -1,6 +1,6 @@
 //! Promote unit ability (Veteran)
 
-use crate::actions::{chain_undos, UndoCallback};
+use crate::actions::{UndoCallback, chain_undos};
 use crate::moves::{Move, MoveResult};
 use crate::states::GameState;
 use crate::types::MoveType;
@@ -80,6 +80,11 @@ impl Move for PromoteMove {
             obj.insert("moveType".to_string(), serde_json::json!(MoveType::Ability));
         }
         value
+    }
+
+    #[inline]
+    fn action_coords(&self) -> (Option<i32>, Option<i32>) {
+        (Some(self.unit_idx), Some(self.unit_idx))
     }
 }
 

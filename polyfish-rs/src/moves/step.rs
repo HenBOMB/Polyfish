@@ -99,4 +99,9 @@ impl Move for StepMove {
             "target": self.target,
         })
     }
+
+    #[inline]
+    fn action_coords(&self) -> (Option<i32>, Option<i32>) {
+        (Some(self.src), Some(self.target))
+    }
 }

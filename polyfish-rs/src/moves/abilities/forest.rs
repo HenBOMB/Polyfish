@@ -45,6 +45,11 @@ impl Move for ClearForestMove {
             "target": self.target
         })
     }
+
+    #[inline]
+    fn action_coords(&self) -> (Option<i32>, Option<i32>) {
+        (Some(self.target), Some(self.target))
+    }
 }
 
 // --- GrowForest ---
@@ -84,6 +89,11 @@ impl Move for GrowForestMove {
             "ability": AbilityType::GrowForest,
             "target": self.target
         })
+    }
+
+    #[inline]
+    fn action_coords(&self) -> (Option<i32>, Option<i32>) {
+        (Some(self.target), Some(self.target))
     }
 }
 
@@ -129,6 +139,11 @@ impl Move for BurnForestMove {
             "ability": AbilityType::BurnForest,
             "target": self.target
         })
+    }
+
+    #[inline]
+    fn action_coords(&self) -> (Option<i32>, Option<i32>) {
+        (Some(self.target), Some(self.target))
     }
 }
 

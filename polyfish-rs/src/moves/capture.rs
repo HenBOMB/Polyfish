@@ -91,4 +91,9 @@ impl Move for CaptureMove {
             "src": self.src,
         })
     }
+
+    #[inline]
+    fn action_coords(&self) -> (Option<i32>, Option<i32>) {
+        (Some(self.src), Some(self.src))
+    }
 }

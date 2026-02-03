@@ -3,7 +3,7 @@
 use crate::actions::city::claim_territory;
 use crate::actions::discovery::{discover_tiles, predict_explorer};
 use crate::actions::units::summon_unit;
-use crate::actions::{chain_undos, gain_stars, UndoCallback};
+use crate::actions::{UndoCallback, chain_undos, gain_stars};
 use crate::functions::get_adjacent_indices;
 use crate::moves::{Move, MoveResult};
 use crate::settings::units::get_super_unit;
@@ -212,6 +212,11 @@ impl Move for RewardMove {
             "target": self.target,
             "reward": self.reward
         })
+    }
+
+    #[inline]
+    fn action_coords(&self) -> (Option<i32>, Option<i32>) {
+        (Some(self.target), Some(self.target))
     }
 }
 
