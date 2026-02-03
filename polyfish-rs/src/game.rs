@@ -345,7 +345,9 @@ impl Game {
         undos.push(actions::process_start_turn_effects(state, new_pov));
 
         // Try discovering tribes that moved into view
-        undos.push(try_discover_other_tribes(state));
+        if state.settings._fow {
+            undos.push(try_discover_other_tribes(state));
+        }
 
         // Reward production if not the first turn
         if state.settings.turn > 1 {
