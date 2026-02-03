@@ -19,3 +19,8 @@ scraper/*
 polyfish-rs/target/*
 
 *safetensors
+
+# Production optimizations
+src/public/
+archive/
+.cursor/
