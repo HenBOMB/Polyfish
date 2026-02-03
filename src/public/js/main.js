@@ -121,7 +121,7 @@ class MapRenderer {
 
         // Ambient (Mountains/Forests)
         if (tile.type === 4) { // Mountain
-            this.updateLayer(idx, 'ambient', `terrain/mountains/mountain_${tile.climate}`, pos, 2000, ['mountain']);
+            this.updateLayer(idx, 'ambient', `terrain/mountains/mountain_${tile.climate}`, pos, 1200, ['mountain']);
         } else if (tile.type === 5) { // Forest
             this.updateLayer(idx, 'ambient', `terrain/forests/Forest_${tile.climate}`, pos, 2000, ['forest']);
         } else {
@@ -156,7 +156,7 @@ class MapRenderer {
                 if (struct.type === 1) classes.push('village');
                 if (struct.type === 2) classes.push('ruins');
                 if (struct.type === 29) classes.push('monument');
-                this.updateLayer(idx, 'structure', structFile, pos, 3000, classes);
+                this.updateLayer(idx, 'structure', structFile, pos, 2000, classes);
             }
         } else {
             this.removeLayer(idx, 'structure');
