@@ -155,7 +155,7 @@ impl Game {
             let mut discover_undo: UndoCallback = actions::noop_undo();
 
             // If FOW is disabled, then preload discoveries
-            if !self.state.settings._fow {
+            if self.state.settings._fow {
                 discover_undo = try_discover_other_tribes(&mut self.state);
             }
 

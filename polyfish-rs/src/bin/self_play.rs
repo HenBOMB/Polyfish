@@ -1,11 +1,11 @@
 use candle_core::{Device, Tensor};
+use polyfish::TribeType;
 use polyfish::ai::features::{self, state_to_tensor};
 use polyfish::ai::mapper::ActionMapper;
 use polyfish::ai::mcts_zero::ZeroMctsAgent;
 use polyfish::ai::network::PolyZeroNet;
 use polyfish::game::Game;
 use polyfish::types::MapSize;
-use polyfish::TribeType;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -49,11 +49,6 @@ fn main() -> anyhow::Result<()> {
     let mut total_score = 0;
     let mut max_score = 0;
     let mut total_turns = 0;
-
-    println!(
-        "Starting Self-Play for {} games in PERFECTION mode...",
-        num_games
-    );
 
     for i in 0..num_games {
         // Progress header
@@ -106,7 +101,7 @@ fn main() -> anyhow::Result<()> {
         let mut game_history: Vec<(Tensor, Vec<f32>, polyfish::states::PlayerId)> = Vec::new();
 
         let mut turn = 0;
-        while !polyfish::functions::is_game_over(&game.state) && turn < 500 {
+        while !polyfish::functions::is_game_over(&game.state) && turn < 40 {
             let pov = game.state.settings.current_player_turn_id;
 
             // Get state tensor
@@ -124,17 +119,17 @@ fn main() -> anyhow::Result<()> {
             if let Some(m) = best_move {
                 game_history.push((state_t, policy, pov));
                 let _ = game.play_move(m.as_ref());
-
-                // Progress indicator (dots to stderr so they show up during capture)
-                use std::io::Write;
-                eprint!(".");
-                let _ = std::io::stderr().flush();
+                eprint!("{:?}", m.as_ref().move_type());
             } else {
                 // If MCTS returns None, something is wrong or game is stuck
                 println!("Warning: MCTS returned None at turn {}", turn);
                 break;
             }
             turn += 1;
+
+            use std::io::Write;
+            eprint!("+ {}", game.state.settings.turn);
+            let _ = std::io::stderr().flush();
         }
 
         // Determine scores for backprop
