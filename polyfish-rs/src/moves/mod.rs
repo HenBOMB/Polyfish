@@ -46,7 +46,7 @@ pub struct MoveResult {
 }
 
 /// A game move that can be executed and undone
-pub trait Move: std::fmt::Debug {
+pub trait Move: std::fmt::Debug + Send + Sync {
     /// Get the move type
     fn move_type(&self) -> MoveType;
 
@@ -58,6 +58,13 @@ pub trait Move: std::fmt::Debug {
 
     /// Serialize to JSON for network/storage
     fn serialize(&self) -> serde_json::Value;
+
+    /// Get action coordinates for NN mapping (src, target)
+    /// This avoids expensive JSON serialization in hot paths
+    #[inline]
+    fn action_coords(&self) -> (Option<i32>, Option<i32>) {
+        (None, None)
+    }
 }
 
 /// End turn move

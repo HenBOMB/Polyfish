@@ -106,7 +106,7 @@ fn main() -> anyhow::Result<()> {
         while !polyfish::functions::is_game_over(&game.state) && turn < 10000 {
             if last_turn != game.state.settings.turn {
                 last_turn = game.state.settings.turn;
-                eprint!("+");
+                eprint!("{:?} ", game.state.settings.turn);
                 let _ = std::io::stderr().flush();
             }
 
@@ -127,7 +127,7 @@ fn main() -> anyhow::Result<()> {
             if let Some(m) = best_move {
                 game_history.push((state_t, policy, pov));
                 let _ = game.play_move(m.as_ref());
-                eprint!("_{:?}", m.as_ref().move_type());
+                // eprint!("_{:?}", m.as_ref().move_type());
             } else {
                 // If MCTS returns None, something is wrong or game is stuck
                 println!("Warning: MCTS returned None at turn {}", turn);

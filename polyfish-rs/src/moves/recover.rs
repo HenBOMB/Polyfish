@@ -57,6 +57,19 @@ impl Move for RecoverMove {
                 rewards: None,
             })
         } else {
+            eprintln!(
+                "Error: Unit not found for RecoverMove at target {}",
+                self.target
+            );
+            eprintln!("Tile owner: {}", unit_owner);
+            if let Some(tribe) = state.tribes.get(&unit_owner) {
+                eprintln!(
+                    "Tribe units: {:?}",
+                    tribe.units.iter().map(|u| u.coords.idx).collect::<Vec<_>>()
+                );
+            } else {
+                eprintln!("Tribe {} not found!", unit_owner);
+            }
             Err("Unit not found".to_string())
         }
     }

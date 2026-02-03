@@ -4,9 +4,12 @@ set -e
 # Configuration
 ITERATIONS=100
 GAMES_PER_ITER=30    # Higher count (30) ensures we don't overfit to lucky wins
-export MCTS_ITERS=50 # Deep search (100) is critical for strategy/tactics
+export MCTS_ITERS=50 # Deep search (50) is critical for strategy/tactics
 
-echo "Building self_play binary..."
+echo "Building simulator..."
+cargo build --bin polyfish --release
+
+echo "Building self play..."
 cargo build --release --bin self_play
 
 for ((i=1; i<=ITERATIONS; i++))

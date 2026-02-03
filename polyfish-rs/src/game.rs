@@ -145,7 +145,11 @@ impl Game {
         } else {
             let result = game_move.execute(&mut self.state);
             if let Err(e) = result {
-                eprintln!("Error executing move: {}", e);
+                eprintln!(
+                    "Error executing move [{}]: {}",
+                    game_move.describe(&self.state),
+                    e
+                );
                 self.state.settings._are_you_sure = false;
                 return None;
             }
