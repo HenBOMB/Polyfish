@@ -14,14 +14,16 @@ tokio = { version = "1.0", features = ["full"] }
 tower-http = { version = "0.5", features = ["fs", "cors"] }
 strum = "0.27.2"
 strum_macros = "0.27.2"
-candle-core = "0.8.2"
-candle-nn = "0.8.2"
+# Try git version for better CUDA 12.4 support
+candle-core = { git = "https://github.com/huggingface/candle.git", rev = "main" }
+candle-nn = { git = "https://github.com/huggingface/candle.git", rev = "main" }
 anyhow = "1.0.100"
 rayon = "1.10"
 
 [features]
 default = []
 cuda = ["candle-core/cuda", "candle-nn/cuda"]
+cudnn = ["candle-core/cudnn"]
 
 [dev-dependencies]
 pretty_assertions = "1.4"
