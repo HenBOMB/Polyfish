@@ -209,7 +209,11 @@ fn unit_to_channel(unit_type: UnitType) -> usize {
 // ============================================================================
 
 /// Convert game state to tensor
-pub fn state_to_tensor(state: &GameState, perspective: PlayerId) -> Result<Tensor> {
+pub fn state_to_tensor(
+    state: &GameState,
+    perspective: PlayerId,
+    device: &Device,
+) -> Result<Tensor> {
     let mut data = vec![0.0f32; NUM_CHANNELS * MAP_HEIGHT * MAP_WIDTH];
     let map_size = state.settings.size as usize;
 
@@ -564,7 +568,7 @@ pub fn state_to_tensor(state: &GameState, perspective: PlayerId) -> Result<Tenso
         }
     }
 
-    Tensor::from_vec(data, (1, NUM_CHANNELS, MAP_HEIGHT, MAP_WIDTH), &Device::Cpu)
+    Tensor::from_vec(data, (1, NUM_CHANNELS, MAP_HEIGHT, MAP_WIDTH), device)
 }
 
 // ============================================================================
@@ -591,7 +595,7 @@ mod tests {
     #[test]
     fn test_tensor_shape() {
         let game = Game::default();
-        let tensor = state_to_tensor(&game.state, 1).unwrap();
+        let tensor = state_to_tensor(&game.state, 1, &Device::Cpu).unwrap();
         let dims = tensor.dims();
         assert_eq!(dims, &[1, NUM_CHANNELS, MAP_HEIGHT, MAP_WIDTH]);
     }

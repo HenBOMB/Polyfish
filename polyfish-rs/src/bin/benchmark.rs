@@ -76,12 +76,12 @@ fn main() -> anyhow::Result<()> {
             // Benchmark: Feature extraction (standalone)
             let pov = game.state.settings.current_player_turn_id;
             let feature_start = Instant::now();
-            let _tensor = state_to_tensor(&game.state, pov);
+            let _tensor = state_to_tensor(&game.state, pov, &device);
             total_feature_time += feature_start.elapsed();
 
             // Benchmark: NN inference (standalone)
             let nn_start = Instant::now();
-            let input = state_to_tensor(&game.state, pov)?;
+            let input = state_to_tensor(&game.state, pov, &device)?;
             let (_policy, _value) = network.forward_t(&input, false)?;
             total_nn_time += nn_start.elapsed();
 

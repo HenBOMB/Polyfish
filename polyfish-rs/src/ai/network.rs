@@ -140,4 +140,10 @@ impl PolyZeroNet {
 
         Ok((policy, value))
     }
+
+    /// Get the device this network is on
+    pub fn device(&self) -> candle_core::Device {
+        // Get device from first conv layer's weight
+        self.conv1.weight().device().clone()
+    }
 }

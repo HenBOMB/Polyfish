@@ -56,7 +56,8 @@ fn play_single_game(
         let pov = game.state.settings.current_player_turn_id;
 
         // Get state tensor
-        let state_t = match state_to_tensor(&game.state, pov) {
+        let device = network.device();
+        let state_t = match state_to_tensor(&game.state, pov, &device) {
             Ok(t) => t,
             Err(_) => break,
         };

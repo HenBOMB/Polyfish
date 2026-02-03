@@ -41,14 +41,6 @@ impl ZeroNode {
         }
     }
 
-    fn value(&self) -> f32 {
-        if self.visits == 0.0 {
-            0.0
-        } else {
-            self.value_sum / self.visits
-        }
-    }
-
     /// Get effective visit count including virtual loss
     fn effective_visits(&self) -> f32 {
         self.visits + *self.virtual_loss.borrow()
@@ -86,16 +78,6 @@ impl ZeroNode {
                 a_score.partial_cmp(&b_score).unwrap()
             })
             .map(|(idx, _)| idx)
-    }
-
-    fn select_child(&mut self, c_puct: f32) -> Option<&mut ZeroNode> {
-        let sqrt_n = self.visits.sqrt();
-
-        self.children.iter_mut().max_by(|a, b| {
-            let a_score = a.value() + c_puct * a.prior * sqrt_n / (1.0 + a.visits);
-            let b_score = b.value() + c_puct * b.prior * sqrt_n / (1.0 + b.visits);
-            a_score.partial_cmp(&b_score).unwrap()
-        })
     }
 
     /// Add virtual loss to this node
@@ -260,7 +242,7 @@ impl<'a> ZeroMctsAgent<'a> {
         game: &mut Game,
         path: &mut SearchPath,
     ) -> Option<(LeafInfo, Game)> {
-        let mut current = root;
+        let current = root;
         let mut indices_stack = Vec::new();
 
         loop {
@@ -451,38 +433,13 @@ impl<'a> ZeroMctsAgent<'a> {
         }
     }
 
-    // Original search method for non-parallel use
-    fn search(&self, game: &mut Game, node: &mut ZeroNode) -> f32 {
-        if game.state.settings._game_over {
-            return 0.0;
-        }
-
-        if !node.is_expanded {
-            let value = self.expand_node(node, game, true);
-            return value;
-        }
-
-        if node.children.is_empty() {
-            return 0.0;
-        }
-
-        let child = node.select_child(self.c_puct).unwrap();
-        if let Some(m) = &child.move_to_here {
-            if let Some(undo) = game.play_move(m.as_ref()) {
-                let val = -self.search(game, child);
-                undo(&mut game.state);
-
-                node.visits += 1.0;
-                node.value_sum += val;
-                return val;
-            }
-        }
-
-        0.0
-    }
-
     fn expand_node(&self, node: &mut ZeroNode, game: &Game, allow_end_turn: bool) -> f32 {
-        let input = match state_to_tensor(&game.state, game.state.settings.current_player_turn_id) {
+        let device = self.network.device();
+        let input = match state_to_tensor(
+            &game.state,
+            game.state.settings.current_player_turn_id,
+            &device,
+        ) {
             Ok(t) => t,
             Err(_) => return 0.0,
         };
