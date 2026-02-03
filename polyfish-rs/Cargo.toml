@@ -14,8 +14,8 @@ tokio = { version = "1.0", features = ["full"] }
 tower-http = { version = "0.5", features = ["fs", "cors"] }
 strum = "0.27.2"
 strum_macros = "0.27.2"
-candle-core = "0.8.2"
-candle-nn = "0.8.2"
+candle-core = { version = "0.8.2", features = ["cuda"] }
+candle-nn = { version = "0.8.2", features = ["cuda"] }
 anyhow = "1.0.100"
 rayon = "1.10"
 

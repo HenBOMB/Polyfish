@@ -46,6 +46,8 @@ fn play_single_game(
 
     let agent = ZeroMctsAgent::new(network, mcts_iters);
 
+    // agent.
+
     // Store (StateTensor, PolicyVec, PlayerId)
     let mut game_history: Vec<(Tensor, Vec<f32>, PlayerId)> = Vec::new();
 
@@ -111,7 +113,8 @@ fn main() -> anyhow::Result<()> {
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(50);
-    let device = Device::Cpu;
+    let device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
+    println!("Using device: {:?}", device);
 
     // Load existing model if available
     let model_path = "model.safetensors";
