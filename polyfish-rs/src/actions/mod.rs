@@ -186,22 +186,26 @@ pub fn has_effect(unit: &UnitState, effect: EffectType) -> bool {
 /// Update exploration for a player based on their units and cities.
 /// This marks tiles as explored (permanent, no undo).
 /// Only runs during real moves (_are_you_sure = true) to prevent MCTS cheating.
-pub fn update_exploration(state: &mut GameState, player_id: PlayerId) {
+/// Update exploration for a player based on their units and cities.
+/// This marks tiles as explored.
+/// Only runs during real moves (_are_you_sure = true) to prevent MCTS cheating.
+pub fn update_exploration(state: &mut GameState, player_id: PlayerId) -> UndoCallback {
     // CRITICAL: Only modify explorers during real moves, not MCTS simulations
     if !state.settings._are_you_sure {
-        return;
+        return noop_undo();
     }
+
+    let mut modified_tiles: Vec<i32> = Vec::new();
 
     // Check Internal FOW Toggle (God Mode for AI Training)
     if !state.settings._fow {
-        for (_idx, tile) in state.tiles.iter_mut() {
-            tile.explorers.insert(player_id);
+        for (idx, tile) in state.tiles.iter_mut() {
+            if !tile.explorers.contains(&player_id) {
+                tile.explorers.insert(player_id);
+                modified_tiles.push(*idx);
+            }
         }
-        return;
-    }
-
-    // Get the tribe
-    if let Some(tribe) = state.tribes.get(&player_id) {
+    } else if let Some(tribe) = state.tribes.get(&player_id) {
         let map_size = state.settings.size;
 
         // Collect tiles to explore from cities
@@ -250,12 +254,27 @@ pub fn update_exploration(state: &mut GameState, player_id: PlayerId) {
             tiles_to_explore.push(unit.coords.idx);
         }
 
-        // Mark all collected tiles as explored (permanent)
+        // Mark all collected tiles as explored
         for idx in tiles_to_explore {
             if let Some(tile) = state.tiles.get_mut(&idx) {
-                tile.explorers.insert(player_id);
+                if !tile.explorers.contains(&player_id) {
+                    tile.explorers.insert(player_id);
+                    modified_tiles.push(idx);
+                }
             }
         }
+    }
+
+    if modified_tiles.is_empty() {
+        noop_undo()
+    } else {
+        Box::new(move |s| {
+            for idx in modified_tiles {
+                if let Some(t) = s.tiles.get_mut(&idx) {
+                    t.explorers.remove(&player_id);
+                }
+            }
+        })
     }
 }
 
@@ -263,8 +282,7 @@ pub fn update_exploration(state: &mut GameState, player_id: PlayerId) {
 /// Deprecated: Use update_exploration directly
 #[allow(dead_code)]
 pub fn set_visible_tiles(state: &mut GameState, player_id: PlayerId) -> UndoCallback {
-    update_exploration(state, player_id);
-    noop_undo()
+    update_exploration(state, player_id)
 }
 
 /// Try to discover other tribes that are now visible and reward with star exchange
@@ -585,11 +603,10 @@ pub fn process_end_turn_effects(state: &mut GameState, _player_id: PlayerId) -> 
         .collect();
 
     for m_idx in mycelium_tiles {
-        let m_owner =
-            state
-                .tiles
-                .get(&m_idx)
-                .and_then(|t| if t.owner != 0 { Some(t.owner) } else { None });
+        let m_owner = state
+            .tiles
+            .get(&m_idx)
+            .and_then(|t| if t.owner != 0 { Some(t.owner) } else { None });
         if let Some(owner_id) = m_owner {
             let adj = get_adjacent_indices(state, m_idx, 1);
             let mut targets = adj;

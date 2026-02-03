@@ -52,7 +52,7 @@ fn main() -> anyhow::Result<()> {
 
     for i in 0..num_games {
         // Progress header
-        eprint!("Game {}/{}: ", i + 1, num_games);
+        eprintln!("Game {}/{}: ", i + 1, num_games);
         use std::io::Write;
         let _ = std::io::stderr().flush();
 
@@ -65,6 +65,7 @@ fn main() -> anyhow::Result<()> {
             ..Default::default()
         };
         let mut state = polyfish::mapgen::generate(gen_settings);
+        eprintln!("Seed: {}", state.settings.seed);
 
         // Post-load initialization similar to Game::post_load
         let size = state.settings.size;
@@ -93,7 +94,7 @@ fn main() -> anyhow::Result<()> {
 
         // Ensure exploration
         let pov_id = game.state.settings.current_player_turn_id;
-        polyfish::actions::update_exploration(&mut game.state, pov_id);
+        let _ = polyfish::actions::update_exploration(&mut game.state, pov_id);
 
         let agent = ZeroMctsAgent::new(&network, mcts_iters);
 
@@ -101,7 +102,14 @@ fn main() -> anyhow::Result<()> {
         let mut game_history: Vec<(Tensor, Vec<f32>, polyfish::states::PlayerId)> = Vec::new();
 
         let mut turn = 0;
-        while !polyfish::functions::is_game_over(&game.state) && turn < 40 {
+        let mut last_turn = 0;
+        while !polyfish::functions::is_game_over(&game.state) && turn < 10000 {
+            if last_turn != game.state.settings.turn {
+                last_turn = game.state.settings.turn;
+                eprint!("+");
+                let _ = std::io::stderr().flush();
+            }
+
             let pov = game.state.settings.current_player_turn_id;
 
             // Get state tensor
@@ -119,17 +127,13 @@ fn main() -> anyhow::Result<()> {
             if let Some(m) = best_move {
                 game_history.push((state_t, policy, pov));
                 let _ = game.play_move(m.as_ref());
-                eprint!("{:?}", m.as_ref().move_type());
+                eprint!("_{:?}", m.as_ref().move_type());
             } else {
                 // If MCTS returns None, something is wrong or game is stuck
                 println!("Warning: MCTS returned None at turn {}", turn);
                 break;
             }
             turn += 1;
-
-            use std::io::Write;
-            eprint!("+ {}", game.state.settings.turn);
-            let _ = std::io::stderr().flush();
         }
 
         // Determine scores for backprop

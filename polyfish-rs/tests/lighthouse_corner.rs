@@ -1,5 +1,5 @@
 use polyfish::actions::update_exploration;
-use polyfish::mapgen::{generate, MapGenSettings};
+use polyfish::mapgen::{MapGenSettings, generate};
 use polyfish::types::{MapSize, MapType, StructureType, TribeType};
 
 #[test]
@@ -42,7 +42,7 @@ fn test_lighthouse_corner_visibility_hidden() {
     let corners = [0, size - 1, size * (size - 1), size * size - 1];
 
     // Imperius is Tribe 1
-    update_exploration(&mut state, 1);
+    let _ = update_exploration(&mut state, 1);
 
     // Find where Tribe 1's city is
     let city_idx = state.tribes[&1].cities[0].tile_index;

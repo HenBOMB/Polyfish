@@ -1227,6 +1227,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
     // Most important rule. Disabled = God mode
     game_state.settings._fow = default_fow();
     game_state.settings._max_tribe_count = settings.tribes.len() as i32;
+    game_state.settings.seed = settings.seed;
 
     for (i, &tribe) in settings.tribes.iter().enumerate() {
         let id = (i + 1) as i32;
@@ -1575,7 +1576,10 @@ mod tests {
                             min_dist = d;
                         }
                         if d <= 3 {
-                            println!("Found capitals too close (dist {}) on map type {:?} size {:?} seed {}", d, map_type, size, seed);
+                            println!(
+                                "Found capitals too close (dist {}) on map type {:?} size {:?} seed {}",
+                                d, map_type, size, seed
+                            );
                         }
                     }
                 }

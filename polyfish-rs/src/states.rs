@@ -360,7 +360,7 @@ pub struct GameSettings {
     #[serde(default)]
     pub game_name: String,
     #[serde(default)]
-    pub seed: i32,
+    pub seed: u64,
     #[serde(default)]
     pub win_by_capital: bool,
     #[serde(default)]

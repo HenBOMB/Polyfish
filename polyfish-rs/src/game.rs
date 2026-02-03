@@ -79,7 +79,7 @@ impl Game {
 
         let ids: Vec<PlayerId> = self.state.tribes.keys().cloned().collect();
         for id in ids {
-            actions::update_exploration(&mut self.state, id);
+            let _ = actions::update_exploration(&mut self.state, id);
         }
 
         // Restore original value
@@ -339,7 +339,7 @@ impl Game {
         let new_pov = state.settings.current_player_turn_id;
 
         // Update exploration for new tribe
-        update_exploration(state, new_pov);
+        undos.push(update_exploration(state, new_pov));
 
         // Process start turn effects
         undos.push(actions::process_start_turn_effects(state, new_pov));
