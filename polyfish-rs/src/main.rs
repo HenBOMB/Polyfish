@@ -1,21 +1,21 @@
 use axum::{
+    Json, Router,
     extract::State,
     routing::{get, post},
-    Json, Router,
 };
-use polyfish::mapgen::{generate, MapGenSettings};
+use polyfish::mapgen::{MapGenSettings, generate};
 use polyfish::moves::{
+    AttackMove, BuildMove, CaptureMove, DisbandMove, EndTurnMove, HarvestMove, Move, RecoverMove,
+    ResearchMove, RewardMove, StepMove, SummonMove, UpgradeMove,
     abilities::{
         boost::BoostMove, convert::ConvertMove, decompose::DecomposeMove, destroy::DestroyMove,
         diplomacy::BreakPeaceMove, enchant_animal::EnchantAnimalMove, explode::ExplodeMove,
         forest::BurnForestMove, forest::ClearForestMove, forest::GrowForestMove,
         freeze_area::FreezeAreaMove, heal_others::HealOthersMove, promote::PromoteMove,
     },
-    AttackMove, BuildMove, CaptureMove, DisbandMove, EndTurnMove, HarvestMove, Move, RecoverMove,
-    ResearchMove, RewardMove, StepMove, SummonMove, UpgradeMove,
 };
 use polyfish::types::{AbilityType, MapSize, TribeType};
-use polyfish::{game::Game, MapType};
+use polyfish::{MapType, game::Game};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;

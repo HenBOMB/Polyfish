@@ -9,6 +9,7 @@ use crate::actions::{
 };
 use crate::functions::{get_pov_tribe, get_total_production, is_game_over, sync_scores};
 use crate::moves::{Move, generate_legal_moves};
+use crate::settings::has_technology;
 use crate::states::*;
 use crate::types::*;
 use std::fs;
@@ -288,7 +289,9 @@ impl Game {
         if let Some(tribe) = state.tribes.get_mut(&active_pov) {
             if tribe.attacked_this_turn {
                 tribe.pacifist_turns = 0;
-            } else {
+            }
+            // Only track if required meditation tech has been unlocked
+            else if has_technology(&tribe.tech_vanilla, TechnologyType::Meditation) {
                 tribe.pacifist_turns += 1;
             }
             tribe.attacked_this_turn = false;

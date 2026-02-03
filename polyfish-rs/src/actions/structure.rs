@@ -1,11 +1,20 @@
 //! Structure-related actions (create, destroy)
 
 use crate::actions::city::add_population;
-use crate::actions::{chain_undos, UndoCallback};
+use crate::actions::{UndoCallback, chain_undos};
 use crate::functions::get_city_owning_tile;
 use crate::settings::structures::get_structure_setting;
 use crate::states::{GameState, StructureState};
 use crate::types::StructureType;
+
+/// Crate-local RNG helper (Linear Congruential Generator)
+/// Constants from MMIX by Knuth
+fn next_rng(seed: &mut u64) -> u64 {
+    *seed = seed
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
+    *seed
+}
 
 /// Create a structure at a tile
 pub fn create_structure(
@@ -51,11 +60,13 @@ pub fn create_structure(
     if settings.reward_score > 0 {
         if let Some(tribe) = state.tribes.get_mut(&pov_id) {
             tribe.score += settings.reward_score;
+            tribe.built_unique_improvements.insert(structure_type);
         }
         let score_gain = settings.reward_score;
         undos.push(Box::new(move |s| {
             if let Some(t) = s.tribes.get_mut(&pov_id) {
                 t.score -= score_gain;
+                t.built_unique_improvements.remove(&structure_type);
             }
         }));
     }
@@ -91,6 +102,21 @@ pub fn destroy_structure(state: &mut GameState, idx: i32) -> UndoCallback {
     state.structures.remove(&idx);
 
     let mut undos: Vec<UndoCallback> = Vec::new();
+    let pov_id = state.settings.current_player_turn_id;
+
+    // Handle score reduction (e.g. Monuments)
+    let settings = get_structure_setting(structure.structure_type);
+    if settings.reward_score > 0 {
+        if let Some(tribe) = state.tribes.get_mut(&pov_id) {
+            tribe.score -= settings.reward_score;
+        }
+        let score_loss = settings.reward_score;
+        undos.push(Box::new(move |s| {
+            if let Some(t) = s.tribes.get_mut(&pov_id) {
+                t.score += score_loss;
+            }
+        }));
+    }
 
     // Restore structure on undo
     let undo_structure = structure.clone();
@@ -198,20 +224,28 @@ pub fn build_structure(
 pub fn capture_ruin(state: &mut GameState, tile_idx: i32) -> UndoCallback {
     use crate::actions::discovery::discover_tiles;
     use crate::actions::tech::unlock_tech;
-    use crate::actions::{gain_stars, UndoCallback};
+    use crate::actions::{UndoCallback, gain_stars};
     use crate::functions::{get_adjacent_indices, get_capital_city};
     use crate::types::TechnologyType;
-    use rand::Rng;
 
     let pov_id = state.settings.current_player_turn_id;
     let mut undos: Vec<UndoCallback> = Vec::new();
+
+    // 0. Capture Seed & Setup RNG
+    let original_seed = state.settings.seed;
+    let mut current_seed = original_seed;
+
+    // Helper to restore seed
+    undos.push(Box::new(move |s: &mut GameState| {
+        s.settings.seed = original_seed;
+    }));
 
     // Destroy ruins
     undos.push(destroy_structure(state, tile_idx));
 
     let mut possible_rewards: Vec<Box<dyn FnOnce(&mut GameState) -> UndoCallback>> = Vec::new();
 
-    // 1. Stars: 5 stars
+    // 1. Stars: 10 stars
     possible_rewards.push(Box::new(|s: &mut GameState| {
         if s.settings.verbose {
             s._messages.push("Ruin reward: 10 Stars! ⭐".to_string());
@@ -233,9 +267,41 @@ pub fn capture_ruin(state: &mut GameState, tile_idx: i32) -> UndoCallback {
             }
         }
         if !unlockable_cand.is_empty() {
+            // Pre-calculate which tech to unlock using current seed state
+            // Note: We need to use 'next_rng' here locally if we want to pick *now*.
+            // But we only want to pick IF this reward is chosen.
+            // Actually, for "Bias Fairness", we should pick the tech *now* (speculatively)
+            // or we use the seed *after* we pick this reward category?
+            // To be purely seed based: We use the seed state AT THE MOMENT of execution.
+
+            // Let's defer execution but capture the *seed*? No, state.seed changes.
+            // Correct approach:
+            // The "Ruin Reward Choice" event is one RNG step.
+            // The "Which Tech" event is a sub-step.
+
+            // So it's okay to advance seed "conditionally" deep inside.
+
+            // Let's PRE-SELECT the tech candidate deterministically *outside*, so the closure captures it.
+            // We use 'next_rng' to pick it.
+            // Wait, if we use 'next_rng' here, we advance state.seed even if we DON'T pick Tech reward?
+            // That would mean "Ruin contents" affect global RNG even if not picked?
+            // Actually, we usually want:
+            // 1. RNG pick Reward Category.
+            // 2. If Category == Tech, RNG pick Tech.
+
+            // So:
             possible_rewards.push(Box::new(move |s: &mut GameState| {
-                let mut rng = rand::thread_rng();
-                let picked = unlockable_cand[rng.gen_range(0..unlockable_cand.len())];
+                // We utilize the state seed (which has been updated by the Reward Category pick)
+                // to pick the tech.
+                // We need to mutate the seed inside here too.
+
+                let mut seed = s.settings.seed;
+                let r = next_rng(&mut seed);
+                s.settings.seed = seed; // Commit update
+
+                let index = (r as usize) % unlockable_cand.len();
+                let picked = unlockable_cand[index];
+
                 if s.settings.verbose {
                     s._messages
                         .push(format!("Ruin reward: Discovered {:?}! 💡", picked));
@@ -318,10 +384,20 @@ pub fn capture_ruin(state: &mut GameState, tile_idx: i32) -> UndoCallback {
         crate::actions::chain_undos(undos)
     }));
 
-    // Pick one reward randomly
+    // Pick one reward using Seed RNG
     if !possible_rewards.is_empty() {
-        let mut rng = rand::thread_rng();
-        let reward_fn = possible_rewards.remove(rng.gen_range(0..possible_rewards.len()));
+        let r = next_rng(&mut current_seed);
+        let index = (r as usize) % possible_rewards.len();
+
+        let reward_fn = possible_rewards.remove(index);
+
+        // Execute reward
+        // NOTE: we do NOT update state.settings.seed here yet, because
+        // passing 'current_seed' locally tracked the change.
+        // We must sync the state seed before executing the reward,
+        // in case the reward itself (e.g. Tech) needs the updated seed.
+        state.settings.seed = current_seed;
+
         undos.push(reward_fn(state));
     }
 

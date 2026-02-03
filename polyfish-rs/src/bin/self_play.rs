@@ -36,36 +36,13 @@ fn play_single_game(
         seed,
         ..Default::default()
     };
-    let mut state = polyfish::mapgen::generate(gen_settings);
-
-    // Post-load initialization similar to Game::post_load
-    let size = state.settings.size;
-    for tile in state.tiles.values_mut() {
-        tile.coords.compute_idx(size);
-        if let Some(ref mut rc) = tile.ruling_city_coords {
-            rc.compute_idx(size);
-        }
-    }
-    for tribe in state.tribes.values_mut() {
-        for unit in &mut tribe.units {
-            unit.coords.compute_idx(size);
-            unit.prev_coords.compute_idx(size);
-            if let Some(ref mut hc) = unit.home_coords {
-                hc.compute_idx(size);
-            }
-        }
-        tribe.starting_tile_coords.compute_idx(size);
-    }
-    polyfish::functions::sync_scores(&mut state);
+    eprint!("Seed: {} -> ", seed);
 
     let mut game = Game::new();
-    game.state = state;
+    game.state = polyfish::mapgen::generate(gen_settings);
     game.state.settings.mode = polyfish::types::ModeType::Perfection;
     game.state.settings.max_turns = 30;
-
-    // Ensure exploration
-    let pov_id = game.state.settings.current_player_turn_id;
-    let _ = polyfish::actions::update_exploration(&mut game.state, pov_id);
+    game.post_load();
 
     let agent = ZeroMctsAgent::new(network, mcts_iters);
 
@@ -87,8 +64,8 @@ fn play_single_game(
 
         if let Some(m) = best_move {
             game_history.push((state_t, policy, pov));
+            eprint!("{} -> ", m.describe(&game.state));
             let _ = game.play_move(m.as_ref());
-            eprint!("{:?} -> ", m.move_type());
         } else {
             break;
         }
@@ -171,6 +148,7 @@ fn main() -> anyhow::Result<()> {
         .into_par_iter()
         .filter_map(|i| {
             let seed = base_seed + i as u64;
+            // let seed = 1770144423; // buggy seed
             play_single_game(&network, mcts_iters, i, seed)
         })
         .collect();

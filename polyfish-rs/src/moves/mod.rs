@@ -380,7 +380,6 @@ fn compute_movement_cost(state: &GameState, unit: &UnitState, from_idx: i32, to_
     // Terrain specific costs
     if let Some(tile) = state.tiles.get(&to_idx) {
         // Glide/Skate doubles movement on frozen tiles (halves cost)
-        // Glide/Skate doubles movement on frozen tiles (halves cost)
         if tile.frozen {
             if settings.skills.contains(&SkillType::Skate) {
                 // Skate uses standard cost (1.0), but gets +1 movement range (handled in get_unit_movement)
@@ -505,7 +504,11 @@ fn is_roadpath_and_usable(state: &GameState, unit: &UnitState, idx: i32) -> bool
         None => return false,
     };
 
-    let has_road = tile.has_road || crate::functions::get_city_at(state, idx).is_some();
+    // Bridges also act as roads!
+    let structure = get_structure_at(state, idx);
+    let has_road = tile.has_road
+        || crate::functions::get_city_at(state, idx).is_some()
+        || (structure.is_some() && structure.unwrap().structure_type == StructureType::Bridge);
     if !has_road {
         return false;
     }
@@ -515,6 +518,7 @@ fn is_roadpath_and_usable(state: &GameState, unit: &UnitState, idx: i32) -> bool
         || tile.owner == 0
         || get_unit_setting(unit.unit_type)
             .skills
+            // TODO not sure infiltrate influences movement range..?
             .contains(&SkillType::Infiltrate)
 }
 

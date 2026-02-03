@@ -47,8 +47,32 @@ impl Move for BuildMove {
                         cost, tribe.stars, tribe.stars
                     ));
                 }
+                // Check if already built unique structure
+                if settings.reward_score > 0
+                    && tribe
+                        .built_unique_improvements
+                        .contains(&self.structure_type)
+                {
+                    return Err(format!(
+                        "Unique structure {:?} already built",
+                        self.structure_type
+                    ));
+                }
             } else {
                 return Err("Tribe not found".to_string());
+            }
+        } else if settings.reward_score > 0 {
+            // Logic for free structures (monuments)
+            if let Some(tribe) = state.tribes.get(&pov_id) {
+                if tribe
+                    .built_unique_improvements
+                    .contains(&self.structure_type)
+                {
+                    return Err(format!(
+                        "Unique structure {:?} already built",
+                        self.structure_type
+                    ));
+                }
             }
         }
 
@@ -244,6 +268,9 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                 if existing_struct.is_none() {
                     for &(struct_type, ref settings) in &pending_monument_structures {
                         if settings.terrain_types.contains(&tile.terrain_type) {
+                            if tribe.built_unique_improvements.contains(&struct_type) {
+                                continue;
+                            }
                             // This if statement is dev specific behavior. Node: with god mode there is no need for this monument
                             if struct_type != StructureType::EyeOfGod || state.settings._fow {
                                 moves.push(Box::new(BuildMove::new(idx, struct_type)));

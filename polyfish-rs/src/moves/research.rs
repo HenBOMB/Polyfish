@@ -32,6 +32,13 @@ impl Move for ResearchMove {
         if let Some(tribe) = state.tribes.get(&pov_id) {
             let tech_cost = crate::functions::get_tech_cost(tribe, self.tech);
             if tribe.stars < tech_cost {
+                eprintln!("[DEBUG] Research Error: Insufficient stars.");
+                eprintln!(
+                    "[DEBUG] Turn: {}, Tribe: {}, Stars: {}, Cost: {}",
+                    state.settings.turn, pov_id, tribe.stars, tech_cost
+                );
+                eprintln!("[DEBUG] Recent Moves: {:?}", state.settings._recent_moves);
+                // Print last few actions if tracked?
                 return Err(format!(
                     "Insufficient stars for research: need {} (Cities: {}), have {}",
                     tech_cost,
