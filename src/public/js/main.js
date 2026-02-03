@@ -1248,6 +1248,7 @@ document.getElementById('btn-step').onclick = async () => {
 
             // Highlight the move
             renderer.highlightMove(data.bestMove);
+            console.log(data);
             showToast(`MCTS picked: ${data.movePlayed || 'Move'}`);
         }
     }

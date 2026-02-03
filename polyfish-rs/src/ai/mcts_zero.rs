@@ -2,7 +2,9 @@ use crate::ai::features::state_to_tensor;
 use crate::ai::mapper::ActionMapper;
 use crate::ai::network::PolyZeroNet;
 use crate::game::Game;
+use crate::moves::EndTurnMove;
 use crate::moves::Move;
+use crate::types::MoveType;
 
 use candle_core::Tensor;
 pub struct ZeroMctsAgent<'a> {
@@ -62,21 +64,24 @@ impl<'a> ZeroMctsAgent<'a> {
 
     pub fn select_move(&self, game: &mut Game) -> Option<Box<dyn Move>> {
         let mut root = ZeroNode::new(1.0, None);
-        self.expand_node(&mut root, game);
+        self.expand_node(&mut root, game, false);
 
         for _ in 0..self.iterations {
             self.search(game, &mut root);
         }
 
-        root.children
+        let best_move = root
+            .children
             .into_iter()
             .max_by(|a, b| a.visits.partial_cmp(&b.visits).unwrap())
-            .and_then(|n| n.move_to_here)
+            .and_then(|n| n.move_to_here);
+
+        move_or_end_turn(best_move)
     }
 
     pub fn select_move_with_stats(&self, game: &mut Game) -> (Option<Box<dyn Move>>, Vec<f32>) {
         let mut root = ZeroNode::new(1.0, None);
-        self.expand_node(&mut root, game);
+        self.expand_node(&mut root, game, false);
 
         for _ in 0..self.iterations {
             self.search(game, &mut root);
@@ -123,7 +128,7 @@ impl<'a> ZeroMctsAgent<'a> {
             None
         };
 
-        (best_move, policy)
+        (move_or_end_turn(best_move), policy)
     }
 
     fn search(&self, game: &mut Game, node: &mut ZeroNode) -> f32 {
@@ -133,7 +138,7 @@ impl<'a> ZeroMctsAgent<'a> {
         }
 
         if !node.is_expanded {
-            let value = self.expand_node(node, game);
+            let value = self.expand_node(node, game, true);
             return value;
         }
 
@@ -156,7 +161,7 @@ impl<'a> ZeroMctsAgent<'a> {
         0.0
     }
 
-    fn expand_node(&self, node: &mut ZeroNode, game: &Game) -> f32 {
+    fn expand_node(&self, node: &mut ZeroNode, game: &Game, allow_end_turn: bool) -> f32 {
         let input = match state_to_tensor(&game.state, game.state.settings.current_player_turn_id) {
             Ok(t) => t,
             Err(_) => return 0.0,
@@ -174,7 +179,17 @@ impl<'a> ZeroMctsAgent<'a> {
             .to_vec1::<f32>()
             .unwrap()[0];
 
-        let legal_moves = game.legal_moves();
+        let mut legal_moves = game.legal_moves();
+
+        if !allow_end_turn {
+            let has_other_moves = legal_moves
+                .iter()
+                .any(|m| m.move_type() != MoveType::EndTurn);
+            if has_other_moves {
+                legal_moves.retain(|m| m.move_type() != MoveType::EndTurn);
+            }
+        }
+
         if legal_moves.is_empty() {
             node.is_expanded = true;
             return value;
@@ -216,5 +231,15 @@ impl<'a> ZeroMctsAgent<'a> {
 
         node.is_expanded = true;
         value
+    }
+}
+
+fn move_or_end_turn(best_move: Option<Box<dyn Move>>) -> Option<Box<dyn Move>> {
+    if best_move.is_none() {
+        // If we filtered out EndTurn but found no other moves, default to End Turn
+        // We assume EndTurn is legal.
+        Some(Box::new(EndTurnMove))
+    } else {
+        best_move
     }
 }

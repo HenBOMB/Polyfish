@@ -1,5 +1,6 @@
 use crate::ai::evaluator;
 use crate::game::Game;
+use crate::moves::EndTurnMove;
 use crate::moves::Move;
 use crate::states::PlayerId;
 use crate::types::MoveType;
@@ -95,6 +96,16 @@ impl MctsAgent {
         let player_id = game.state.settings.current_player_turn_id;
         let mut root = Node::new(None, game);
 
+        // Filter out EndTurn from root moves if there are other options
+        let mut filtered_end_turn = false;
+        if let Some(moves) = &mut root.untried_moves {
+            let has_other_moves = moves.iter().any(|m| m.move_type() != MoveType::EndTurn);
+            if has_other_moves {
+                moves.retain(|m| m.move_type() != MoveType::EndTurn);
+                filtered_end_turn = true;
+            }
+        }
+
         for _ in 0..self.iterations {
             self.search_iteration(game, &mut root, player_id);
         }
@@ -150,11 +161,15 @@ impl MctsAgent {
         };
 
         // Return child with most visits
-        let best_move = root
+        let mut best_move = root
             .children
             .into_iter()
             .max_by(|a, b| a.visits.partial_cmp(&b.visits).unwrap())
             .and_then(|n| n.move_to_here);
+
+        if best_move.is_none() && filtered_end_turn {
+            best_move = Some(Box::new(EndTurnMove));
+        }
 
         (best_move, analysis)
     }
