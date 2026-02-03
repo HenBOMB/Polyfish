@@ -5,9 +5,124 @@ use polyfish::ai::mapper::ActionMapper;
 use polyfish::ai::mcts_zero::ZeroMctsAgent;
 use polyfish::ai::network::PolyZeroNet;
 use polyfish::game::Game;
+use polyfish::states::PlayerId;
 use polyfish::types::MapSize;
+use rayon::prelude::*;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Result from a single game - contains all data needed for training
+struct GameResult {
+    history: Vec<(Tensor, Vec<f32>, PlayerId)>,
+    scores: HashMap<i32, i32>,
+    turns: usize,
+    winner_id: i32,
+    winner_score: i32,
+}
+
+/// Play a single game and return the result
+fn play_single_game(
+    network: &PolyZeroNet,
+    mcts_iters: usize,
+    game_idx: usize,
+    seed: u64,
+) -> Option<GameResult> {
+    // Init Game using MapGen
+    let gen_settings = polyfish::mapgen::MapGenSettings {
+        size: MapSize::Small,
+        map_type: polyfish::types::MapType::Drylands,
+        tribes: vec![TribeType::Imperius, TribeType::Imperius],
+        seed,
+        ..Default::default()
+    };
+    let mut state = polyfish::mapgen::generate(gen_settings);
+
+    // Post-load initialization similar to Game::post_load
+    let size = state.settings.size;
+    for tile in state.tiles.values_mut() {
+        tile.coords.compute_idx(size);
+        if let Some(ref mut rc) = tile.ruling_city_coords {
+            rc.compute_idx(size);
+        }
+    }
+    for tribe in state.tribes.values_mut() {
+        for unit in &mut tribe.units {
+            unit.coords.compute_idx(size);
+            unit.prev_coords.compute_idx(size);
+            if let Some(ref mut hc) = unit.home_coords {
+                hc.compute_idx(size);
+            }
+        }
+        tribe.starting_tile_coords.compute_idx(size);
+    }
+    polyfish::functions::sync_scores(&mut state);
+
+    let mut game = Game::new();
+    game.state = state;
+    game.state.settings.mode = polyfish::types::ModeType::Perfection;
+    game.state.settings.max_turns = 30;
+
+    // Ensure exploration
+    let pov_id = game.state.settings.current_player_turn_id;
+    let _ = polyfish::actions::update_exploration(&mut game.state, pov_id);
+
+    let agent = ZeroMctsAgent::new(network, mcts_iters);
+
+    // Store (StateTensor, PolicyVec, PlayerId)
+    let mut game_history: Vec<(Tensor, Vec<f32>, PlayerId)> = Vec::new();
+
+    let mut turn = 0;
+    while !polyfish::functions::is_game_over(&game.state) && turn < 10000 {
+        let pov = game.state.settings.current_player_turn_id;
+
+        // Get state tensor
+        let state_t = match state_to_tensor(&game.state, pov) {
+            Ok(t) => t,
+            Err(_) => break,
+        };
+
+        // MCTS Search
+        let (best_move, policy) = agent.select_move_with_stats(&mut game);
+
+        if let Some(m) = best_move {
+            game_history.push((state_t, policy, pov));
+            let _ = game.play_move(m.as_ref());
+            eprint!("{:?} -> ", m.move_type());
+        } else {
+            break;
+        }
+        turn += 1;
+    }
+
+    // Determine scores
+    let mut scores: HashMap<i32, i32> = HashMap::new();
+    for (id, t) in &game.state.tribes {
+        scores.insert(*id, t.score);
+    }
+
+    let (winner_id, winner_score) = scores
+        .iter()
+        .max_by_key(|&(_, score)| score)
+        .map(|(&id, &score)| (id, score))
+        .unwrap_or((0, 0));
+
+    eprintln!(
+        "Game {} finished. Turns: {} | Winner: {} (Score: {})",
+        game_idx + 1,
+        turn,
+        winner_id,
+        winner_score
+    );
+
+    Some(GameResult {
+        history: game_history,
+        scores,
+        turns: turn,
+        winner_id,
+        winner_score,
+    })
+}
 
 fn main() -> anyhow::Result<()> {
     // Config
@@ -41,142 +156,62 @@ fn main() -> anyhow::Result<()> {
         ))?
     };
 
+    // Wrap network in Arc for thread-safe sharing
+    let network = Arc::new(network);
+
+    let base_seed = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+
+    println!(
+        "Starting parallel self-play: {} games with {} MCTS iterations",
+        num_games, mcts_iters
+    );
+
+    // Parallel game generation using rayon
+    let results: Vec<GameResult> = (0..num_games)
+        .into_par_iter()
+        .filter_map(|i| {
+            let seed = base_seed + i as u64;
+            play_single_game(&network, mcts_iters, i, seed)
+        })
+        .collect();
+
+    // Aggregate results (sequential, after all games complete)
     let mut collected_states: Vec<Tensor> = Vec::new();
-    let mut collected_policies: Vec<f32> = Vec::new(); // Flattened policies
+    let mut collected_policies: Vec<f32> = Vec::new();
     let mut collected_values: Vec<f32> = Vec::new();
 
-    // Metrics tracking
     let mut total_score = 0;
     let mut max_score = 0;
     let mut total_turns = 0;
 
-    for i in 0..num_games {
-        // Progress header
-        eprintln!("Game {}/{}: ", i + 1, num_games);
-        use std::io::Write;
-        let _ = std::io::stderr().flush();
-
-        // Init Game using MapGen
-        let gen_settings = polyfish::mapgen::MapGenSettings {
-            size: MapSize::Small,
-            map_type: polyfish::types::MapType::Drylands,
-            tribes: vec![TribeType::Imperius, TribeType::Imperius],
-            seed: i as u64 + SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
-            ..Default::default()
-        };
-        let mut state = polyfish::mapgen::generate(gen_settings);
-        eprintln!("Seed: {}", state.settings.seed);
-
-        // Post-load initialization similar to Game::post_load
-        let size = state.settings.size;
-        for tile in state.tiles.values_mut() {
-            tile.coords.compute_idx(size);
-            if let Some(ref mut rc) = tile.ruling_city_coords {
-                rc.compute_idx(size);
-            }
-        }
-        for tribe in state.tribes.values_mut() {
-            for unit in &mut tribe.units {
-                unit.coords.compute_idx(size);
-                unit.prev_coords.compute_idx(size);
-                if let Some(ref mut hc) = unit.home_coords {
-                    hc.compute_idx(size);
-                }
-            }
-            tribe.starting_tile_coords.compute_idx(size);
-        }
-        polyfish::functions::sync_scores(&mut state);
-
-        let mut game = Game::new();
-        game.state = state;
-        game.state.settings.mode = polyfish::types::ModeType::Perfection;
-        game.state.settings.max_turns = 30;
-
-        // Ensure exploration
-        let pov_id = game.state.settings.current_player_turn_id;
-        let _ = polyfish::actions::update_exploration(&mut game.state, pov_id);
-
-        let agent = ZeroMctsAgent::new(&network, mcts_iters);
-
-        // Store (StateTensor, PolicyVec, PlayerId)
-        let mut game_history: Vec<(Tensor, Vec<f32>, polyfish::states::PlayerId)> = Vec::new();
-
-        let mut turn = 0;
-        let mut last_turn = 0;
-        while !polyfish::functions::is_game_over(&game.state) && turn < 10000 {
-            if last_turn != game.state.settings.turn {
-                last_turn = game.state.settings.turn;
-                eprint!("{:?} ", game.state.settings.turn);
-                let _ = std::io::stderr().flush();
-            }
-
-            let pov = game.state.settings.current_player_turn_id;
-
-            // Get state tensor
-            let state_t = match state_to_tensor(&game.state, pov) {
-                Ok(t) => t,
-                Err(e) => {
-                    eprintln!("Error creating tensor: {:?}", e);
-                    break;
-                }
-            };
-
-            // MCTS Search
-            let (best_move, policy) = agent.select_move_with_stats(&mut game);
-
-            if let Some(m) = best_move {
-                game_history.push((state_t, policy, pov));
-                let _ = game.play_move(m.as_ref());
-                // eprint!("_{:?}", m.as_ref().move_type());
-            } else {
-                // If MCTS returns None, something is wrong or game is stuck
-                println!("Warning: MCTS returned None at turn {}", turn);
-                break;
-            }
-            turn += 1;
+    for result in results {
+        total_score += result.winner_score;
+        total_turns += result.turns;
+        if result.winner_score > max_score {
+            max_score = result.winner_score;
         }
 
-        // Determine scores for backprop
-        let mut scores: HashMap<i32, i32> = HashMap::new();
-        for (id, t) in &game.state.tribes {
-            scores.insert(*id, t.score);
-        }
-
-        let (winner_id, winner_score) = scores
-            .iter()
-            .max_by_key(|&(_, score)| score)
-            .map(|(&id, &score)| (id, score))
-            .unwrap_or((0, 0));
-
-        total_score += winner_score;
-        total_turns += turn;
-        if winner_score > max_score {
-            max_score = winner_score;
-        }
-
-        println!(
-            "Game {} finished. Turns: {} | Scores: {:?}",
-            i, turn, scores
-        );
-
-        // Finalize progress line on stderr
-        eprintln!(" Done. Winner: {} (Score: {})", winner_id, winner_score);
+        println!("Scores: {:?}", result.scores);
 
         // Backpropagate value
-        for (state_t, policy, p_id) in game_history {
+        for (state_t, policy, p_id) in result.history {
             match state_t.flatten_all() {
                 Ok(flat_t) => collected_states.push(flat_t),
                 Err(_) => continue,
             }
             collected_policies.extend_from_slice(&policy);
 
-            // Simple win/loss for now
-            let value = if p_id == winner_id { 1.0f32 } else { -1.0f32 };
+            // Simple win/loss
+            let value = if p_id == result.winner_id {
+                1.0f32
+            } else {
+                -1.0f32
+            };
             collected_values.push(value);
         }
     }
 
-    // Print Average Metrics for the Loop Script
+    // Print Average Metrics
     let avg_score = total_score as f32 / num_games as f32;
     let avg_turns = total_turns as f32 / num_games as f32;
     println!(
@@ -184,14 +219,13 @@ fn main() -> anyhow::Result<()> {
         avg_score, max_score, avg_turns
     );
 
-    // stack and save
+    // Stack and save
     if !collected_states.is_empty() {
         let total_steps = collected_states.len();
         println!("Saving {} steps...", total_steps);
 
         let state_dim = features::NUM_CHANNELS * features::MAP_HEIGHT * features::MAP_WIDTH;
 
-        // Concatenate all state tensors
         let states_tensor = Tensor::cat(&collected_states, 0)?;
         let states_tensor = states_tensor.reshape((total_steps, state_dim))?;
 

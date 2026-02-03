@@ -1,6 +1,6 @@
 //! City-related actions (population, territory)
 
-use crate::actions::{chain_undos, UndoCallback};
+use crate::actions::{UndoCallback, chain_undos};
 use crate::coords::Coords;
 use crate::states::GameState;
 
@@ -47,9 +47,14 @@ pub fn add_population(state: &mut GameState, city_tile_idx: i32, amount: i32) ->
                 city.production += 1; // Level up bonus
 
                 // Update structure level if it exists
-                if let Some(Some(struct_state)) = state.structures.get_mut(&city_tile_idx) {
-                    struct_state.level += 1;
-                }
+                let old_struct_level =
+                    if let Some(Some(struct_state)) = state.structures.get_mut(&city_tile_idx) {
+                        let old = struct_state.level;
+                        struct_state.level += 1;
+                        Some(old)
+                    } else {
+                        None
+                    };
 
                 // Score is ONLY awarded on level up!
                 // Formula: (level > 1 ? 50 - (level * 5) : 0) + amount * 5
@@ -64,6 +69,12 @@ pub fn add_population(state: &mut GameState, city_tile_idx: i32, amount: i32) ->
                 undos.push(Box::new(move |s: &mut GameState| {
                     if let Some(t) = s.tribes.get_mut(&pov_id) {
                         t.score -= amount_score;
+                    }
+                    // Restore structure level
+                    if let Some(old_lvl) = old_struct_level {
+                        if let Some(Some(st)) = s.structures.get_mut(&city_tile_idx) {
+                            st.level = old_lvl;
+                        }
                     }
                 }));
 
@@ -271,7 +282,16 @@ pub fn capture_city(state: &mut GameState, tile_idx: i32) -> Result<UndoCallback
                         .iter()
                         .position(|c| c.tile_index == c_clone.tile_index)
                     {
+                        println!(
+                            "[DEBUG] CaptureUndo: Removing city at {} from tribe {}",
+                            c_clone.tile_index, pov_id
+                        );
                         nt.cities.remove(p);
+                    } else {
+                        eprintln!(
+                            "[DEBUG] CaptureUndo: FAILED to find city at {} in tribe {}",
+                            c_clone.tile_index, pov_id
+                        );
                     }
                 }
                 // Restore tiles

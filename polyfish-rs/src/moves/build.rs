@@ -43,8 +43,8 @@ impl Move for BuildMove {
             if let Some(tribe) = state.tribes.get(&pov_id) {
                 if tribe.stars < cost {
                     return Err(format!(
-                        "Insufficient stars for build: need {}, have {}",
-                        cost, tribe.stars
+                        "Insufficient stars for build: need {} (Stars: {}), have {}",
+                        cost, tribe.stars, tribe.stars
                     ));
                 }
             } else {
@@ -95,6 +95,7 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                 continue;
             }
 
+            // Tribe-specific structure
             if let Some(s_tribe) = settings.tribe_type {
                 if s_tribe != tribe.tribe_type {
                     continue;
@@ -106,6 +107,7 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
             }
         }
 
+        // Structures rewarded from tasks
         let mut pending_monument_structures = Vec::new();
         for task in crate::types::TaskType::iter() {
             let setting = get_task_setting(task);
@@ -137,8 +139,7 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
             }
         }
 
-        // --- CORE LOOP ---
-
+        // Standard structures
         for city in &tribe.cities {
             for &idx in &city._territory {
                 if crate::functions::get_enemy_at(state, idx, pov_id).is_some() {

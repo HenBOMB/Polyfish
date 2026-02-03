@@ -30,7 +30,8 @@ pub use upgrade::UpgradeMove;
 
 use crate::actions::UndoCallback;
 use crate::functions::{
-    get_adjacent_indices, get_enemy_at, get_structure_at, get_structure_type_at, is_water_terrain,
+    get_adjacent_indices, get_enemy_at, get_structure_at, get_structure_type_at, get_unit_at,
+    is_water_terrain,
 };
 use crate::settings::resources::get_resource_setting;
 use crate::settings::{get_unit_setting, has_skill};
@@ -606,29 +607,29 @@ fn get_tiles_in_range(state: &GameState, from_idx: i32, range: i32) -> Vec<i32> 
 }
 
 fn is_steppable(state: &GameState, unit: &UnitState, idx: i32) -> bool {
-    // Can only step on explored tiles (unless God Mode is on)
-    let is_explored = !state.settings._fow
-        || state
-            .tiles
-            .get(&idx)
-            .map(|t| t.explorers.contains(&unit.owner))
-            .unwrap_or(false);
+    // Can only step on explored tiles, regardless F
+    let is_explored = state
+        .tiles
+        .get(&idx)
+        .map(|t| t.explorers.contains(&unit.owner))
+        .unwrap_or(false);
+
     if !is_explored {
         return false;
     }
 
     let settings = get_unit_setting(unit.unit_type);
 
-    // Flying units can pass through everything except tiles with enemy units
-    if settings.skills.contains(&SkillType::Fly) {
-        return get_enemy_at(state, idx, unit.owner).is_none();
-    }
-
     let tribe = state.tribes.get(&unit.owner).unwrap();
     let tile = state.tiles.get(&idx).unwrap();
 
     // Use FOW-safe terrain access for MCTS anti-cheat
     let terrain = crate::fow::get_terrain_at(state, idx, unit.owner);
+
+    // tech check using FOW-safe terrain
+    if !is_navigationable_terrain(tribe, unit.unit_type, terrain, tile) {
+        return false;
+    }
 
     // SkillType::Water units can only move on water/ocean/flooded tiles
     if settings.skills.contains(&SkillType::Water) {
@@ -639,16 +640,9 @@ fn is_steppable(state: &GameState, unit: &UnitState, idx: i32) -> bool {
         }
     }
 
-    // tech check using FOW-safe terrain
-    if !is_navigationable_terrain(tribe, unit.unit_type, terrain, tile) {
+    // cannot step if the tile is occupied
+    if get_unit_at(state, idx).is_some() {
         return false;
-    }
-
-    // cannot pass through enemy unit (unless Creep)
-    if get_enemy_at(state, idx, unit.owner).is_some() {
-        if !settings.skills.contains(&SkillType::Creep) {
-            return false;
-        }
     }
 
     let is_aquatic = settings.skills.contains(&SkillType::Float)
@@ -677,6 +671,13 @@ fn is_steppable(state: &GameState, unit: &UnitState, idx: i32) -> bool {
             } else {
                 return false;
             }
+        }
+    } else {
+        // Fallback to non-water units, unsteppable
+        let is_water = matches!(terrain, TerrainType::Water | TerrainType::Ocean);
+        if is_water {
+            // algae is steppable water
+            return terrain == TerrainType::Algae;
         }
     }
 

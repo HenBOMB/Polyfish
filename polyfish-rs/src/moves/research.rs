@@ -33,8 +33,10 @@ impl Move for ResearchMove {
             let tech_cost = crate::functions::get_tech_cost(tribe, self.tech);
             if tribe.stars < tech_cost {
                 return Err(format!(
-                    "Insufficient stars for research: need {}, have {}",
-                    tech_cost, tribe.stars
+                    "Insufficient stars for research: need {} (Cities: {}), have {}",
+                    tech_cost,
+                    tribe.cities.len(),
+                    tribe.stars
                 ));
             }
         } else {

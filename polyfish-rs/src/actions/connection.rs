@@ -2,9 +2,9 @@
 //!
 //! Handles detecting networks of cities connected by roads and ports.
 
+use crate::actions::UndoCallback;
 use crate::actions::chain_undos;
 use crate::actions::city::add_population;
-use crate::actions::UndoCallback;
 use crate::functions::get_capital_city;
 use crate::states::GameState;
 use crate::types::{StructureType, TerrainType, TribeType};
@@ -51,7 +51,8 @@ pub fn update_capital_connections(state: &mut GameState, tribe_id: i32) -> UndoC
         let is_port = has_port(state, current_idx);
         let current_has_road = has_road(state, current_idx)
             || city_indices.contains(&current_idx)
-            || has_algae(state, current_idx);
+            || has_algae(state, current_idx)
+            || is_port;
         let current_has_mycelium =
             has_mycelium(state, current_idx) || city_indices.contains(&current_idx);
 
@@ -61,7 +62,8 @@ pub fn update_capital_connections(state: &mut GameState, tribe_id: i32) -> UndoC
                 continue;
             }
 
-            let n_has_road = has_road(state, n_idx) || city_indices.contains(&n_idx);
+            let n_has_road =
+                has_road(state, n_idx) || city_indices.contains(&n_idx) || has_port(state, n_idx);
             let n_has_algae = has_algae(state, n_idx);
             let n_has_mycelium = has_mycelium(state, n_idx);
 
@@ -69,7 +71,7 @@ pub fn update_capital_connections(state: &mut GameState, tribe_id: i32) -> UndoC
 
             if tribe_type == TribeType::Cymanti {
                 // Cymanti connections: Mycelium/Cities connect via Algae/Roads (if any) or adjacency
-                // But specifically Mycelium has 3-range connection.
+                // But specifically Mycelium has 4-range connection.
                 if (current_has_mycelium || current_has_road || has_algae(state, current_idx))
                     && (n_has_road
                         || n_has_algae
@@ -80,6 +82,7 @@ pub fn update_capital_connections(state: &mut GameState, tribe_id: i32) -> UndoC
                 }
             } else if tribe_type == TribeType::Polaris {
                 // TODO: Polaris disabled
+                // TODO Outposts 5x5 ice connections
             } else {
                 // Standard road connection
                 if current_has_road && n_has_road {
@@ -96,9 +99,9 @@ pub fn update_capital_connections(state: &mut GameState, tribe_id: i32) -> UndoC
             }
         }
 
-        // Cymanti Mycelium long-range connection (3 radius)
+        // Cymanti Mycelium long-range connection (4 radius)
         if tribe_type == TribeType::Cymanti && current_has_mycelium {
-            let radius_indices = crate::functions::get_adjacent_indices(state, current_idx, 3);
+            let radius_indices = crate::functions::get_adjacent_indices(state, current_idx, 4);
             for target_idx in radius_indices {
                 if visited.contains(&target_idx) {
                     continue;
@@ -118,9 +121,9 @@ pub fn update_capital_connections(state: &mut GameState, tribe_id: i32) -> UndoC
             }
         }
 
-        // Port-to-Port connection (3 radius)
+        // Port-to-Port connection (4 radius)
         if is_port && tribe_type != TribeType::Cymanti {
-            let radius_indices = crate::functions::get_adjacent_indices(state, current_idx, 3);
+            let radius_indices = crate::functions::get_adjacent_indices(state, current_idx, 4);
             for target_idx in radius_indices {
                 if visited.contains(&target_idx) {
                     continue;
@@ -267,9 +270,9 @@ fn has_water_path(state: &GameState, src: i32, dest: i32) -> bool {
         }
 
         let dist = (curr % size - sx).abs().max((curr / size - sy).abs());
-        if dist >= 3 && curr != src {
+        if dist >= 4 && curr != src {
             continue;
-        } // Max radius 3
+        } // Max radius 4
 
         let adj = crate::functions::get_adjacent_indices(state, curr, 1);
         for n in adj {
@@ -312,9 +315,9 @@ fn has_cymanti_path(state: &GameState, size: i32, src: i32, dest: i32) -> bool {
         }
 
         let dist = (curr % size - sx).abs().max((curr / size - sy).abs());
-        if dist >= 3 && curr != src {
+        if dist >= 4 && curr != src {
             continue;
-        } // Max radius 3
+        } // Max radius 4
 
         let adj = crate::functions::get_adjacent_indices(state, curr, 1);
         for n in adj {

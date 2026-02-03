@@ -171,7 +171,6 @@ pub fn get_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
             unlocks_resource: Some(ResourceType::Fish),
             unlocks_unit: Some(UnitType::Raft),
             unlocks_terrain: Some(TerrainType::Water),
-            unlocks_structure: Some(StructureType::Port),
             ..Default::default()
         },
         Sailing => TechnologySetting {
@@ -180,6 +179,7 @@ pub fn get_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
             next: vec![Navigation],
             unlocks_unit: Some(UnitType::Scout),
             unlocks_terrain: Some(TerrainType::Ocean),
+            unlocks_structure: Some(StructureType::Port),
             ..Default::default()
         },
         Navigation => TechnologySetting {

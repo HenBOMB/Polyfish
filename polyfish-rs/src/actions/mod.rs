@@ -63,12 +63,13 @@ pub fn spend_stars(state: &mut GameState, amount: i32) -> UndoCallback {
     let pov_id = state.settings.current_player_turn_id;
     if let Some(tribe) = state.tribes.get_mut(&pov_id) {
         let old_stars = tribe.stars;
+
         tribe.stars -= amount;
 
-        // Polytopia/TS doesn't usually allow debt, but if we are here we already validated
-        // Let's clamp to 0 just in case to match TS state behavior if moves were forced.
+        // Polytopia/TS doesn't usually allow debt, if we are here we already validated
         if tribe.stars < 0 {
-            tribe.stars = 0;
+            eprintln!("[ERROR] Not enough stars to spend");
+            return noop_undo();
         }
 
         Box::new(move |s| {
