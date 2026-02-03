@@ -7,16 +7,18 @@ use crate::moves::Move;
 use crate::types::MoveType;
 
 use candle_core::Tensor;
+
 pub struct ZeroMctsAgent<'a> {
     pub network: &'a PolyZeroNet,
     pub iterations: usize,
     pub c_puct: f32,
+    pub batch_size: usize,
 }
 
 struct ZeroNode {
-    pub visits: f32,    // N
-    pub value_sum: f32, // W
-    pub prior: f32,     // P
+    pub visits: f32,
+    pub value_sum: f32,
+    pub prior: f32,
     pub children: Vec<ZeroNode>,
     pub move_to_here: Option<Box<dyn Move>>,
     pub is_expanded: bool,
@@ -59,6 +61,7 @@ impl<'a> ZeroMctsAgent<'a> {
             network,
             iterations,
             c_puct: 1.0,
+            batch_size: 8,
         }
     }
 
