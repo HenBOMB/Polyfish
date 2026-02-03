@@ -73,7 +73,7 @@ impl Move for BuildMove {
     }
 }
 
-/// Generate build moves
+/// Generate build / structure moves
 pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
     let pov_id = state.settings.current_player_turn_id;
     if let Some(tribe) = state.tribes.get(&pov_id) {
@@ -174,7 +174,7 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                     }
                 }
 
-                // 2. Free placement structures
+                // 2. Terrain-based structures
                 for &(struct_type, ref settings) in &unlocked_structures {
                     if struct_type != StructureType::Road {
                         if existing_struct.is_some() {
@@ -195,7 +195,9 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                     if !settings.adjacent_types.is_empty() {
                         let adj = crate::functions::get_adjacent_indices(state, idx, 1);
                         let has_required_adj = adj.iter().any(|&n_idx| {
-                            if let Some(s) = crate::functions::get_structure_at(state, n_idx) {
+                            if let Some(s) = crate::functions::get_structure_at(state, n_idx)
+                                && state.tiles.get(&n_idx).unwrap().owner == pov_id
+                            {
                                 settings.adjacent_types.contains(&s.structure_type)
                             } else {
                                 false
@@ -209,10 +211,10 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                     if struct_type == StructureType::Clathrus {
                         let adj = crate::functions::get_adjacent_indices(state, idx, 1);
                         let has_adj_algae = adj.iter().any(|&n_idx| {
-                            state
-                                .tiles
-                                .get(&n_idx)
-                                .map_or(false, |t| t.terrain_type == TerrainType::Algae)
+                            state.tiles.get(&n_idx).map_or(false, |t| {
+                                t.terrain_type == TerrainType::Algae
+                                    && state.tiles.get(&n_idx).unwrap().owner == pov_id
+                            })
                         });
                         if !has_adj_algae {
                             continue;
@@ -221,7 +223,9 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
 
                     if struct_type == StructureType::Mycelium {
                         let already_has_mycelium = city._territory.iter().any(|&t_idx| {
-                            if let Some(s) = crate::functions::get_structure_at(state, t_idx) {
+                            if let Some(s) = crate::functions::get_structure_at(state, t_idx)
+                                && state.tiles.get(&t_idx).unwrap().owner == pov_id
+                            {
                                 s.structure_type == StructureType::Mycelium
                             } else {
                                 false
@@ -239,7 +243,10 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                 if existing_struct.is_none() {
                     for &(struct_type, ref settings) in &pending_monument_structures {
                         if settings.terrain_types.contains(&tile.terrain_type) {
-                            moves.push(Box::new(BuildMove::new(idx, struct_type)));
+                            // This if statement is dev specific behavior. Node: with god mode there is no need for this monument
+                            if struct_type != StructureType::EyeOfGod || state.settings._fow {
+                                moves.push(Box::new(BuildMove::new(idx, struct_type)));
+                            }
                         }
                     }
                 }

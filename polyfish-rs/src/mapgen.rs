@@ -421,7 +421,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                     let (nx, ny) = get_coords(n, size);
                     let dist_from_center = ((nx - size / 2).abs() + (ny - size / 2).abs()) as f32;
                     let prob = 1.0 - (dist_from_center / size as f32).min(0.9);
-                    if rng.gen::<f32>() < prob {
+                    if rng.r#gen::<f32>() < prob {
                         is_land[n as usize] = true;
                         current_land += 1;
                         frontier.push(n);
@@ -472,7 +472,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                 for n in plus_sign(idx, size) {
                     if !is_land[n as usize] && grown < continent_size && current_land < target_land
                     {
-                        if rng.gen::<f32>() < 0.7 {
+                        if rng.r#gen::<f32>() < 0.7 {
                             is_land[n as usize] = true;
                             current_land += 1;
                             grown += 1;
@@ -886,7 +886,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                 .tribe_affinity
                 .unwrap_or(TribeType::Luxidoor);
             let rates = get_tribe_biome_rates(tribe);
-            let r: f32 = rng.gen();
+            let r: f32 = rng.r#gen();
             if r < rates.mountain {
                 map[i as usize].terrain_type = TerrainType::Mountain;
             } else if r < rates.mountain + rates.forest {
@@ -1030,7 +1030,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                             (get_resource_prob("crop", tribe, inner), "crop")
                         };
 
-                        let r: f32 = rng.gen();
+                        let r: f32 = rng.r#gen();
                         if r < fp {
                             map[tile_idx as usize].above = Some("fruit".to_string());
                         } else if r < fp + cp {
@@ -1038,17 +1038,17 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                         }
                     }
                     TerrainType::Forest => {
-                        if rng.gen::<f32>() < get_resource_prob("game", tribe, inner) {
+                        if rng.r#gen::<f32>() < get_resource_prob("game", tribe, inner) {
                             map[tile_idx as usize].above = Some("game".to_string());
                         }
                     }
                     TerrainType::Mountain => {
-                        if rng.gen::<f32>() < get_resource_prob("metal", tribe, inner) {
+                        if rng.r#gen::<f32>() < get_resource_prob("metal", tribe, inner) {
                             map[tile_idx as usize].above = Some("metal".to_string());
                         }
                     }
                     TerrainType::Water => {
-                        if rng.gen::<f32>() < get_resource_prob("fish", tribe, inner) {
+                        if rng.r#gen::<f32>() < get_resource_prob("fish", tribe, inner) {
                             map[tile_idx as usize].above = Some("fish".to_string());
                         }
                     }
@@ -1224,6 +1224,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
     let mut game_state = GameState::default();
     game_state.settings.size = size;
     game_state.settings.tile_count = tile_count;
+    // Most important rule. Disabled = God mode
     game_state.settings._fow = default_fow();
     game_state.settings._max_tribe_count = settings.tribes.len() as i32;
 

@@ -208,7 +208,7 @@ fn unit_to_channel(unit_type: UnitType) -> usize {
 // Main Feature Extraction
 // ============================================================================
 
-/// Convert game state to tensor with FOW enforcement
+/// Convert game state to tensor
 pub fn state_to_tensor(state: &GameState, perspective: PlayerId) -> Result<Tensor> {
     let mut data = vec![0.0f32; NUM_CHANNELS * MAP_HEIGHT * MAP_WIDTH];
     let map_size = state.settings.size as usize;
@@ -386,7 +386,6 @@ pub fn state_to_tensor(state: &GameState, perspective: PlayerId) -> Result<Tenso
 
             let idx = unit.coords.idx;
 
-            // FOW: Only show units that are visible (explored by us)
             let unit_explored = state
                 .tiles
                 .get(&idx)
@@ -494,7 +493,7 @@ pub fn state_to_tensor(state: &GameState, perspective: PlayerId) -> Result<Tenso
                 continue;
             }
 
-            // FOW: Only show cities we can see (explored by us)
+            // Only show cities we can see
             let city_explored = state
                 .tiles
                 .get(&idx)

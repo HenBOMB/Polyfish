@@ -599,12 +599,13 @@ fn get_tiles_in_range(state: &GameState, from_idx: i32, range: i32) -> Vec<i32> 
 }
 
 fn is_steppable(state: &GameState, unit: &UnitState, idx: i32) -> bool {
-    // Can only step on explored tiles
-    let is_explored = state
-        .tiles
-        .get(&idx)
-        .map(|t| t.explorers.contains(&unit.owner))
-        .unwrap_or(false);
+    // Can only step on explored tiles (unless God Mode is on)
+    let is_explored = !state.settings._fow
+        || state
+            .tiles
+            .get(&idx)
+            .map(|t| t.explorers.contains(&unit.owner))
+            .unwrap_or(false);
     if !is_explored {
         return false;
     }

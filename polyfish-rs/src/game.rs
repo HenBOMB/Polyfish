@@ -4,11 +4,11 @@
 //! Translated from the TypeScript Game class.
 
 use crate::actions::{
-    self, end_unit_turn, gain_stars, has_effect, start_unit_turn, try_discover_other_tribes,
-    try_remove_effect, update_exploration, UndoCallback,
+    self, UndoCallback, end_unit_turn, gain_stars, has_effect, start_unit_turn,
+    try_discover_other_tribes, try_remove_effect, update_exploration,
 };
 use crate::functions::{get_pov_tribe, get_total_production, is_game_over, sync_scores};
-use crate::moves::{generate_legal_moves, Move};
+use crate::moves::{Move, generate_legal_moves};
 use crate::states::*;
 use crate::types::*;
 use std::fs;
@@ -82,10 +82,6 @@ impl Game {
             actions::update_exploration(&mut self.state, id);
         }
 
-        // Ensure exploration is specifically set for the current player
-        let pov_id = self.state.settings.current_player_turn_id;
-        actions::update_exploration(&mut self.state, pov_id);
-
         // Restore original value
         self.state.settings._are_you_sure = old_are_you_sure;
 
@@ -134,7 +130,6 @@ impl Game {
     }
 
     /// Play a move and return an undo callback
-    ///
     /// Returns None if the game is over.
     pub fn play_move(&mut self, game_move: &dyn Move) -> Option<UndoCallback> {
         if self.state.settings._game_over {
@@ -157,7 +152,12 @@ impl Game {
             let res = result.unwrap();
 
             // Try discovering new tribes after the move
-            let discover_undo = try_discover_other_tribes(&mut self.state);
+            let mut discover_undo: UndoCallback = actions::noop_undo();
+
+            // If FOW is disabled, then preload discoveries
+            if !self.state.settings._fow {
+                discover_undo = try_discover_other_tribes(&mut self.state);
+            }
 
             // Sync scores after move
             sync_scores(&mut self.state);

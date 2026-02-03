@@ -390,7 +390,7 @@ pub fn default_max_turns() -> i32 {
     30
 }
 pub fn default_fow() -> bool {
-    true
+    false
 }
 
 impl Default for GameSettings {

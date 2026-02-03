@@ -7,7 +7,7 @@ import os
 
 # --- Configuration ---
 BATCH_SIZE = 64
-EPOCHS = 10
+EPOCHS = 5
 LEARNING_RATE = 0.001
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -108,7 +108,10 @@ def train():
     
     # Loaded from features.rs and mapper.rs
     MAP_SIZE = 30 
-    INPUT_CHANNELS = 27
+    # Must match NUM_CHANNELS in src/ai/features.rs
+    # 8 (Terrain) + 8 (Flags) + 9 (Resources) + 35 (Structures) + 46 (Units) 
+    # + 16 (UnitStats) + 13 (CityStats) + 20 (Global) = 155
+    INPUT_CHANNELS = 155
     NUM_ACTIONS = 30 * 30 * 64 # 57600
     
     model = PolyZeroNet(INPUT_CHANNELS, NUM_ACTIONS, MAP_SIZE, MAP_SIZE).to(DEVICE)
@@ -154,6 +157,9 @@ def train():
             
         print(f"Epoch {epoch+1}/{EPOCHS} Loss: {total_loss / (dataset_size / BATCH_SIZE):.4f}")
         
+    final_loss = total_loss / (dataset_size / BATCH_SIZE)
+    print(f"METRICS: {{\"loss\": {final_loss:.4f}}}")
+
     # 4. Save Model for Rust
     save_file(model.state_dict(), "model.safetensors")
     print("Saved model.safetensors")

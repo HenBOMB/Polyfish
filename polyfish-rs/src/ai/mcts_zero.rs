@@ -148,7 +148,7 @@ impl<'a> ZeroMctsAgent<'a> {
 
         let child = node.select_child(self.c_puct).unwrap();
         if let Some(m) = &child.move_to_here {
-            if let Some(undo) = game.simulate_move(m.as_ref()) {
+            if let Some(undo) = game.play_move(m.as_ref()) {
                 let val = -self.search(game, child);
                 undo(&mut game.state);
 
