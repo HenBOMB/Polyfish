@@ -2,9 +2,9 @@
 set -e
 
 # Configuration
-ITERATIONS=100
-GAMES_PER_ITER=1    # Higher count (30) ensures we don't overfit to lucky wins
-export MCTS_ITERS=50 # Deep search (50) is critical for strategy/tactics
+ITERATIONS=50
+GAMES_PER_ITER=20
+export MCTS_ITERS=25
 
 echo "Building simulator..."
 cargo build --bin polyfish --release
@@ -30,7 +30,7 @@ do
     
     # 2. Training
     echo "[Training] Updating model..."
-    TRAIN_OUTPUT=$(python3 train.py)
+    TRAIN_OUTPUT=$(.venv/bin/python3 train.py)
     echo "$TRAIN_OUTPUT"
     
     # Extract Loss

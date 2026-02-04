@@ -36,12 +36,12 @@ fn play_single_game(
         seed,
         ..Default::default()
     };
-    eprint!("Seed: {} -> ", seed);
+    eprintln!("[Game {}] Started with seed: {}", game_idx, seed);
 
     let mut game = Game::new();
     game.state = polyfish::mapgen::generate(gen_settings);
     game.state.settings.mode = polyfish::types::ModeType::Perfection;
-    game.state.settings.max_turns = 30;
+    game.state.settings.max_turns = 10;
     game.post_load();
 
     let agent = ZeroMctsAgent::new(network, mcts_iters);
@@ -67,7 +67,20 @@ fn play_single_game(
 
         if let Some(m) = best_move {
             game_history.push((state_t, policy, pov));
-            eprint!("{} -> ", m.describe(&game.state));
+            if turn > 0 && turn % 10 == 0 {
+                let current_scores: Vec<(PlayerId, i32)> = game
+                    .state
+                    .tribes
+                    .iter()
+                    .map(|(id, t)| (*id, t.score))
+                    .collect();
+                eprintln!(
+                    "[Game {}] Turn {}: Scores: {:?}",
+                    game_idx, game.state.settings.current_player_turn_id, current_scores
+                );
+            }
+            // eprint!("{} -> ", m.describe(&game.state));
+            // eprint!("+");
             let _ = game.play_move(m.as_ref());
         } else {
             break;
@@ -88,11 +101,8 @@ fn play_single_game(
         .unwrap_or((0, 0));
 
     eprintln!(
-        "Game {} finished. Turns: {} | Winner: {} (Score: {})",
-        game_idx + 1,
-        turn,
-        winner_id,
-        winner_score
+        "[Game {}] Finished. Turns: {} | Winner: {} (Score: {})",
+        game_idx, turn, winner_id, winner_score
     );
 
     Some(GameResult {

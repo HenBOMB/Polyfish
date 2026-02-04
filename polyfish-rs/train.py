@@ -132,6 +132,10 @@ def train():
             batch_states = states[batch_idx]
             batch_policies = policies[batch_idx]
             batch_values = values[batch_idx]
+
+            # Reshape flat input (B, C*H*W) -> (B, C, H, W)
+            batch_states = batch_states.view(-1, INPUT_CHANNELS, MAP_SIZE, MAP_SIZE)
+
             
             p_logits, v_pred = model(batch_states)
             
