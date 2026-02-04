@@ -16,7 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 struct GameResult {
     history: Vec<(Tensor, Vec<f32>, PlayerId)>,
     scores: HashMap<i32, i32>,
-    turns: usize,
+    moves: usize,
     winner_id: i32,
     winner_score: i32,
 }
@@ -51,8 +51,8 @@ fn play_single_game(
     // Store (StateTensor, PolicyVec, PlayerId)
     let mut game_history: Vec<(Tensor, Vec<f32>, PlayerId)> = Vec::new();
 
-    let mut turn = 0;
-    while !polyfish::functions::is_game_over(&game.state) && turn < 10000 {
+    let mut move_count = 0;
+    while !polyfish::functions::is_game_over(&game.state) && move_count < 1000000 {
         let pov = game.state.settings.current_player_turn_id;
 
         // Get state tensor
@@ -67,7 +67,7 @@ fn play_single_game(
 
         if let Some(m) = best_move {
             game_history.push((state_t, policy, pov));
-            if turn > 0 && turn % 10 == 0 {
+            if move_count > 0 && move_count % 10 == 0 {
                 let current_scores: Vec<(PlayerId, i32)> = game
                     .state
                     .tribes
@@ -75,8 +75,8 @@ fn play_single_game(
                     .map(|(id, t)| (*id, t.score))
                     .collect();
                 eprintln!(
-                    "[Game {}] Turn {}: Scores: {:?}",
-                    game_idx, game.state.settings.current_player_turn_id, current_scores
+                    "[Game {}]: Turn: {} Scores: {:?}",
+                    game_idx, game.state.settings.turn, current_scores
                 );
             }
             // eprint!("{} -> ", m.describe(&game.state));
@@ -85,7 +85,7 @@ fn play_single_game(
         } else {
             break;
         }
-        turn += 1;
+        move_count += 1;
     }
 
     // Determine scores
@@ -101,14 +101,14 @@ fn play_single_game(
         .unwrap_or((0, 0));
 
     eprintln!(
-        "[Game {}] Finished. Turns: {} | Winner: {} (Score: {})",
-        game_idx, turn, winner_id, winner_score
+        "[Game {}] Finished. Moves: {} | Winner: {} (Score: {})",
+        game_idx, move_count, winner_id, winner_score
     );
 
     Some(GameResult {
         history: game_history,
         scores,
-        turns: turn,
+        moves: move_count,
         winner_id,
         winner_score,
     })
@@ -174,11 +174,11 @@ fn main() -> anyhow::Result<()> {
 
     let mut total_score = 0;
     let mut max_score = 0;
-    let mut total_turns = 0;
+    let mut total_moves = 0;
 
     for result in results {
         total_score += result.winner_score;
-        total_turns += result.turns;
+        total_moves += result.moves;
         if result.winner_score > max_score {
             max_score = result.winner_score;
         }
@@ -205,10 +205,10 @@ fn main() -> anyhow::Result<()> {
 
     // Print Average Metrics
     let avg_score = total_score as f32 / num_games as f32;
-    let avg_turns = total_turns as f32 / num_games as f32;
+    let avr_moves = total_moves as f32 / num_games as f32;
     println!(
-        "METRICS: {{\"avg_score\": {:.2}, \"max_score\": {}, \"avg_turns\": {:.2}}}",
-        avg_score, max_score, avg_turns
+        "METRICS: {{\"avg_score\": {:.2}, \"max_score\": {}, \"avg_moves\": {:.2}}}",
+        avg_score, max_score, avr_moves
     );
 
     // Stack and save

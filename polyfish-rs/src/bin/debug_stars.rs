@@ -29,6 +29,7 @@ fn main() {
     test_game_over_undo();
 
     test_capture_ruin_determinism();
+    test_capture_ruin_stacking();
 }
 
 fn assert_stars(game: &Game, expected: i32, context: &str) {
@@ -577,5 +578,91 @@ fn test_capture_ruin_determinism() {
         println!("Results: {:?}", results);
     } else {
         println!("[PASS (?)] Capture Ruin appears deterministic (could be luck).");
+    }
+}
+
+fn test_capture_ruin_stacking() {
+    println!("\n--- Test Capture Ruin Stacking ---");
+    let mut game = setup_game();
+    let ruin_idx = 1;
+
+    // Setup Tribe with unit at ruin
+    if let Some(tribe) = game.state.tribes.get_mut(&1) {
+        tribe.stars = 0;
+        // Add unit at ruin_idx
+        let mut unit = polyfish::states::UnitState::default();
+        unit.owner = 1;
+        unit.coords = Coords::from_index(ruin_idx, game.state.settings.size);
+        unit.unit_type = UnitType::Warrior;
+        tribe.units.push(unit);
+
+        // Ensure unit on tile
+        let mut tile = TileState::default();
+        tile.coords = Coords::from_index(ruin_idx, game.state.settings.size);
+        tile._unit_owner_id = Some(1);
+        game.state.tiles.insert(ruin_idx, tile);
+
+        // Add Ruin Structure
+        let structure = StructureState {
+            structure_type: StructureType::Ruin,
+            level: 1,
+            founded: 0,
+            tile_index: ruin_idx,
+            score: 0,
+        };
+        game.state.structures.insert(ruin_idx, Some(structure));
+    }
+
+    // We iterate seeds to trigger the Unit reward
+    let mut unit_reward_triggered = false;
+    let move_ = polyfish::moves::CaptureMove::new(ruin_idx);
+
+    for i in 0..1000 {
+        game.state.settings.seed = i as u64;
+
+        // We know from logic that if we get a Unit reward, it spawns a Veteran Swordsman.
+        // Let's check if the move executes cleanly.
+        if let Some(undo) = game.play_move(&move_) {
+            let tribe = game.state.tribes.get(&1).unwrap();
+            let units_at_ruin = tribe
+                .units
+                .iter()
+                .filter(|u| u.coords.idx == ruin_idx)
+                .count();
+
+            // If we got a unit reward, units_at_ruin should be 1.
+            // (The original should be pushed).
+
+            if units_at_ruin > 1 {
+                panic!(
+                    "STACKING DETECTED! Seed {} produced {} units at {}",
+                    i, units_at_ruin, ruin_idx
+                );
+            }
+
+            // Check if we actually got a unit reward (swordsman check)
+            let unit_at_ruin = tribe
+                .units
+                .iter()
+                .find(|u| u.coords.idx == ruin_idx)
+                .unwrap();
+            if unit_at_ruin.unit_type == UnitType::Swordsman {
+                if unit_at_ruin.veteran {
+                    unit_reward_triggered = true;
+                } else {
+                    println!("Seed {}: Found Swordsman but NOT veteran?", i);
+                }
+            } else if unit_at_ruin.unit_type != UnitType::Warrior {
+                println!("Seed {}: Found {:?} at ruin.", i, unit_at_ruin.unit_type);
+            }
+
+            undo(&mut game.state);
+        }
+    }
+
+    if unit_reward_triggered {
+        println!("[PASS] Stacking check passed (Unit reward triggered & handled).");
+    } else {
+        println!("[WARNING] Unit reward was NOT triggered in 1000 seeds. Test inconclusive?");
     }
 }

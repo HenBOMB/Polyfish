@@ -365,22 +365,31 @@ pub fn capture_ruin(state: &mut GameState, tile_idx: i32) -> UndoCallback {
                 .push(format!("Ruin reward: Veteran {:?}! ⚔️", unit_reward_type));
         }
         // Spawn unit
-        undos.push(crate::actions::units::spawn_unit(
-            s,
-            pov_id,
-            unit_reward_type,
-            tile_idx,
-            false,
-        ));
-        // Make veteran: find the unit we just spawned (it will be at tile_idx)
-        // We can't easily get the index from spawn_unit return, but we know where it is.
-        // Actually, we can use a closure that finds the unit at `tile_idx` and modifies it.
-        undos.push(Box::new(move |st| {
-            if let Some(u) = crate::functions::get_unit_at_mut(st, tile_idx) {
-                u.veteran = true;
-                u.health = crate::functions::get_unit_max_health(u); // Heal to new max
+        let res = crate::actions::units::summon_unit(s, unit_reward_type, tile_idx, false, false);
+        match res {
+            Ok(r) => undos.push(r.undo),
+            Err(e) => {
+                if s.settings.verbose {
+                    s._messages.push(format!("Failed to spawn veteran: {}", e));
+                }
             }
-        }));
+        }
+
+        // Make veteran: find the unit we just spawned (it will be at tile_idx)
+        if let Some(u) = crate::functions::get_unit_at_mut(s, tile_idx) {
+            let old_veteran = u.veteran;
+            let old_health = u.health;
+
+            u.veteran = true;
+            u.health = crate::functions::get_unit_max_health(u);
+
+            undos.push(Box::new(move |st| {
+                if let Some(u) = crate::functions::get_unit_at_mut(st, tile_idx) {
+                    u.veteran = old_veteran;
+                    u.health = old_health;
+                }
+            }));
+        }
         crate::actions::chain_undos(undos)
     }));
 

@@ -3,7 +3,7 @@ set -e
 
 # Configuration
 ITERATIONS=50
-GAMES_PER_ITER=20
+GAMES_PER_ITER=15
 export MCTS_ITERS=25
 
 echo "Building simulator..."
@@ -40,6 +40,13 @@ do
     TIMESTAMP=$(date +%s)
     echo "$i,$TIMESTAMP,$AVG_SCORE,$MAX_SCORE,$LOSS" >> training_log.csv
     echo "Iteration $i complete. Avg: $AVG_SCORE | Max: $MAX_SCORE | Loss: $LOSS"
+    
+    # 4. Checkpoint (Every 5 iterations)
+    if (( i % 5 == 0 )); then
+        echo "Creating checkpoint for iteration $i..."
+        mkdir -p checkpoints
+        cp model.safetensors checkpoints/model_checkpoint_$i.safetensors
+    fi
     
     # 4. Cleanup (Fresh Games Only)
     # Move played games to archive so train.py only sees new ones next time

@@ -115,6 +115,9 @@ def train():
     NUM_ACTIONS = 30 * 30 * 64 # 57600
     
     model = PolyZeroNet(INPUT_CHANNELS, NUM_ACTIONS, MAP_SIZE, MAP_SIZE).to(DEVICE)
+    if os.path.exists("model.safetensors"):
+        print("Loading existing model for fine-tuning...")
+        model.load_state_dict(load_file("model.safetensors"))
     model.train()
     
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
