@@ -27,7 +27,8 @@ echo "Installing Python dependencies..."
 
 # 4. Build Project
 echo "Building PolyFish (Release)..."
-$HOME/.cargo/bin/cargo build --release --bin self_play
-$HOME/.cargo/bin/cargo build --release --bin polyfish
+$HOME/.cargo/bin/cargo build --release --bin self_play --features cuda
+$HOME/.cargo/bin/cargo build --release --bin polyfish --features cuda
+$HOME/.cargo/bin/cargo build --release --bin benchmark --features cuda
 
 echo "Setup Complete! You can now run the training loop."
