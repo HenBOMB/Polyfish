@@ -4,7 +4,7 @@ set -e
 # Configuration
 ITERATIONS=100
 GAMES_PER_ITER=25
-export MCTS_ITERS=200 # Optimized for RunPod GPU (~0.8s per move)
+export MCTS_ITERS=300 # Optimized for RunPod GPU (~0.8s per move)
 export RAYON_NUM_THREADS=8
 export OMP_NUM_THREADS=8
 

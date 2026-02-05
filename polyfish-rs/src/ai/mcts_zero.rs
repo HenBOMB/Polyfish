@@ -113,7 +113,7 @@ impl<'a> ZeroMctsAgent<'a> {
             network,
             iterations,
             c_puct: 1.5, // Increased from 1.0 for more exploration
-            batch_size: 8,
+            batch_size: 64,
             virtual_loss: 1.0,
         }
     }
@@ -660,28 +660,6 @@ impl<'a> ZeroMctsAgent<'a> {
         }
 
         node.is_expanded = true;
-    }
-
-    // Kept for compatibility if expand_node_at_path is needed, but we integrated it into parallel_search_batch
-    fn expand_node_at_path(
-        &self,
-        root: &mut ZeroNode,
-        indices: &[usize],
-        game: &Game,
-        allow_end_turn: bool,
-    ) -> f32 {
-        // This is a stub if used elsewhere, but in our new batch loop we don't use it directly in the same way.
-        // Actually we might need it for serial fallback or tests?
-        // Let's reimplement it using expand_node_single
-        let node = match self.get_node_by_path_mut(root, indices) {
-            Some(n) => n,
-            None => return 0.0,
-        };
-
-        // This is non-batched fallback
-        self.expand_node_single(node, game, allow_end_turn);
-        // We'd need to re-run network to get value to return it... efficiently we shouldn't use this method in batch loop.
-        0.0 // Placeholder
     }
 }
 
