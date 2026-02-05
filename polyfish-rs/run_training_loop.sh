@@ -14,6 +14,31 @@ cargo build --bin polyfish --release
 echo "Building self play..."
 cargo build --release --bin self_play
 
+# Parse arguments
+FORCE_TRAIN=false
+while getopts "f" opt; do
+  case $opt in
+    f)
+      FORCE_TRAIN=true
+      ;;
+    \?)
+      echo "Invalid option: -$OPTARG" >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [ "$FORCE_TRAIN" = true ]; then
+    echo "Force training flag detected! Running training immediately..."
+    echo "[Training] Training model..."
+    TRAIN_OUTPUT=$(.venv/bin/python3 train.py)
+    echo "$TRAIN_OUTPUT"
+    
+    # Extract Loss (optional logging, but good to see)
+    LOSS=$(echo "$TRAIN_OUTPUT" | grep "METRICS:" | grep -o 'loss": [0-9.]*' | awk '{print $2}')
+    echo "Immediate training complete. Loss: $LOSS"
+fi
+
 # 0. Initialize Model (if needed)
 echo "Initializing/Checking model..."
 .venv/bin/python3 init_model.py

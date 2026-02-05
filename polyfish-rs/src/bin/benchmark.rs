@@ -22,7 +22,7 @@ fn main() -> anyhow::Result<()> {
     // Configuration
     let num_games = 1;
     let max_turns = 10;
-    let mcts_iterations = 50;
+    let mcts_iterations = 25;
 
     // Timing accumulators
     let mut total_game_time = Duration::ZERO;

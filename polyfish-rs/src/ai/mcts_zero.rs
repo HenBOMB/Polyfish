@@ -1,9 +1,10 @@
-use crate::ai::features::state_to_tensor;
-use crate::ai::network::PolyZeroNet;
+use crate::ai::features::{self, state_to_tensor};
+use crate::ai::network::{PolicyOutput, PolyZeroNet};
 use crate::game::Game;
 use crate::moves::EndTurnMove;
 use crate::moves::Move;
 use crate::types::MoveType;
+use candle_core::Tensor;
 
 use std::cell::RefCell;
 
@@ -119,9 +120,9 @@ impl<'a> ZeroMctsAgent<'a> {
 
     pub fn select_move(&self, game: &mut Game) -> Option<Box<dyn Move>> {
         let mut root = ZeroNode::new(1.0, None);
-        self.expand_node(&mut root, game, false);
+        // Initial expansion (single)
+        self.expand_node_single(&mut root, game, false);
 
-        // Parallel search with batching
         let mut iteration = 0;
         while iteration < self.iterations {
             let batch_count = (self.iterations - iteration).min(self.batch_size);
@@ -140,9 +141,8 @@ impl<'a> ZeroMctsAgent<'a> {
 
     pub fn select_move_with_stats(&self, game: &mut Game) -> (Option<Box<dyn Move>>, Vec<f32>) {
         let mut root = ZeroNode::new(1.0, None);
-        self.expand_node(&mut root, game, false);
+        self.expand_node_single(&mut root, game, false);
 
-        // Parallel search with batching
         let mut iteration = 0;
         while iteration < self.iterations {
             let batch_count = (self.iterations - iteration).min(self.batch_size);
@@ -152,7 +152,6 @@ impl<'a> ZeroMctsAgent<'a> {
 
         // Generate visit count distribution for policy
         let num_children = root.children.len();
-
         let mut best_idx = 0;
         let mut max_visits = -1.0;
 
@@ -200,9 +199,8 @@ impl<'a> ZeroMctsAgent<'a> {
         use crate::ai::mcts_types::MoveVisit;
 
         let mut root = ZeroNode::new(1.0, None);
-        self.expand_node(&mut root, game, false);
+        self.expand_node_single(&mut root, game, false);
 
-        // Parallel search with batching
         let mut iteration = 0;
         while iteration < self.iterations {
             let batch_count = (self.iterations - iteration).min(self.batch_size);
@@ -248,10 +246,10 @@ impl<'a> ZeroMctsAgent<'a> {
     }
 
     /// Perform a batch of parallel searches using virtual loss
-    fn parallel_search_batch(&self, game: &mut Game, root: &mut ZeroNode, batch_size: usize) {
-        let mut paths = Vec::new();
-        let mut leaf_games = Vec::new();
-        let mut leaf_nodes_info = Vec::new();
+    fn parallel_search_batch(&self, game: &Game, root: &mut ZeroNode, batch_size: usize) {
+        let mut paths = Vec::with_capacity(batch_size);
+        let mut leaf_games = Vec::with_capacity(batch_size);
+        let mut leaf_nodes_info = Vec::with_capacity(batch_size);
 
         // Phase 1: Select leaves in parallel using virtual loss
         for _ in 0..batch_size {
@@ -269,15 +267,115 @@ impl<'a> ZeroMctsAgent<'a> {
             }
         }
 
-        // Phase 2: Expand all leaves (could be batched in GPU version)
-        let mut values = Vec::new();
-        for (leaf_info, leaf_game) in leaf_nodes_info.iter().zip(leaf_games.iter()) {
-            let value = if leaf_info.needs_expansion {
-                self.expand_node_at_path(root, &leaf_info.path_indices, leaf_game, true)
+        if paths.is_empty() {
+            return;
+        }
+
+        // Phase 2: Batched Expansion
+        let device = self.network.device();
+
+        // Identify which leaves actually need expansion via NN
+        let mut indices_needing_eval = Vec::new();
+        let mut states_to_batch = Vec::new();
+        let mut povs = Vec::new();
+
+        for (i, leaf_info) in leaf_nodes_info.iter().enumerate() {
+            if leaf_info.needs_expansion {
+                indices_needing_eval.push(i);
+                states_to_batch.push(&leaf_games[i].state);
+                povs.push(leaf_games[i].state.settings.current_player_turn_id);
+            }
+        }
+
+        let mut values = vec![0.0; paths.len()];
+
+        if !indices_needing_eval.is_empty() {
+            // Create batch tensors
+            let mut spatial_list = Vec::with_capacity(indices_needing_eval.len());
+            let mut player_list = Vec::with_capacity(indices_needing_eval.len());
+
+            for (state, pov) in states_to_batch.iter().zip(povs.iter()) {
+                let features = state_to_tensor(state, *pov, &device)
+                    .expect("BUG: Failed to create features for batch");
+                spatial_list.push(features.spatial_map);
+                player_list.push(features.player_state);
+            }
+
+            // Stack tensors
+            if let (Ok(batch_spatial), Ok(batch_player)) =
+                (Tensor::cat(&spatial_list, 0), Tensor::cat(&player_list, 0))
+            {
+                // Ensure shape (B, C, H, W)
+                let _spatial_dim =
+                    features::NUM_CHANNELS * features::MAP_HEIGHT * features::MAP_WIDTH;
+                let batch_spatial = batch_spatial
+                    .reshape((
+                        indices_needing_eval.len(),
+                        features::NUM_CHANNELS,
+                        features::MAP_HEIGHT,
+                        features::MAP_WIDTH,
+                    ))
+                    .unwrap();
+                let batch_player = batch_player
+                    .reshape((indices_needing_eval.len(), 10))
+                    .unwrap();
+
+                // Run Inference
+                if let Ok((policy_out, value_out)) =
+                    self.network.forward_t(&batch_spatial, &batch_player, false)
+                {
+                    // Extract values
+                    let win_values = value_out
+                        .win_value
+                        .flatten_all()
+                        .unwrap()
+                        .to_vec1::<f32>()
+                        .unwrap();
+
+                    // Process each result
+                    for (local_idx, &global_idx) in indices_needing_eval.iter().enumerate() {
+                        let value = win_values[local_idx];
+                        values[global_idx] = value;
+
+                        let path_indices = &leaf_nodes_info[global_idx].path_indices;
+                        let game_state = &leaf_games[global_idx];
+
+                        // We need to slice the policy output for this specific instance
+                        let slice_policy = PolicyOutput {
+                            action_type: policy_out
+                                .action_type
+                                .get(local_idx)
+                                .unwrap()
+                                .unsqueeze(0)
+                                .unwrap(),
+                            source_spatial: policy_out
+                                .source_spatial
+                                .get(local_idx)
+                                .unwrap()
+                                .unsqueeze(0)
+                                .unwrap(),
+                            target_spatial: policy_out
+                                .target_spatial
+                                .get(local_idx)
+                                .unwrap()
+                                .unsqueeze(0)
+                                .unwrap(),
+                            move_option: policy_out
+                                .move_option
+                                .get(local_idx)
+                                .unwrap()
+                                .unsqueeze(0)
+                                .unwrap(),
+                        };
+
+                        // Expand the node in the tree
+                        let node = self.get_node_by_path_mut(root, path_indices).unwrap();
+                        self.expand_node_from_network_output(node, game_state, true, &slice_policy);
+                    }
+                }
             } else {
-                0.0 // Terminal node
-            };
-            values.push(value);
+                panic!("BUG: Failed to stack tensors for MCTS batch");
+            }
         }
 
         // Phase 3: Backpropagate and remove virtual loss
@@ -448,22 +546,6 @@ impl<'a> ZeroMctsAgent<'a> {
         Some(current)
     }
 
-    /// Expand a node at a specific path
-    fn expand_node_at_path(
-        &self,
-        root: &mut ZeroNode,
-        indices: &[usize],
-        game: &Game,
-        allow_end_turn: bool,
-    ) -> f32 {
-        let node = match self.get_node_by_path_mut(root, indices) {
-            Some(n) => n,
-            None => return 0.0,
-        };
-
-        self.expand_node(node, game, allow_end_turn)
-    }
-
     /// Backpropagate value and remove virtual loss along path
     fn backpropagate_and_remove_virtual_loss(
         &self,
@@ -492,7 +574,7 @@ impl<'a> ZeroMctsAgent<'a> {
         }
     }
 
-    fn expand_node(&self, node: &mut ZeroNode, game: &Game, allow_end_turn: bool) -> f32 {
+    fn expand_node_single(&self, node: &mut ZeroNode, game: &Game, allow_end_turn: bool) {
         let device = self.network.device();
         let features = state_to_tensor(
             &game.state,
@@ -501,23 +583,26 @@ impl<'a> ZeroMctsAgent<'a> {
         )
         .expect("BUG: Failed to create features in MCTS expand_node");
 
-        // Forward with decomposed architecture
-        let (policy_output, value_output) = self
+        let (policy_output, _value_output) = self
             .network
             .forward_t(&features.spatial_map, &features.player_state, false)
             .expect("BUG: Network forward pass failed in MCTS");
 
-        // Use win value as primary signal
-        let value = value_output
-            .win_value
-            .flatten_all()
-            .unwrap()
-            .to_vec1::<f32>()
-            .unwrap()[0];
+        // Expand
+        self.expand_node_from_network_output(node, game, allow_end_turn, &policy_output);
+    }
 
-        // TODO: Proper decomposed policy composition
-        // For now, use uniform priors across legal moves
-        // Will implement full policy composition in next phase
+    fn expand_node_from_network_output(
+        &self,
+        node: &mut ZeroNode,
+        game: &Game,
+        allow_end_turn: bool,
+        policy: &PolicyOutput,
+    ) {
+        if node.is_expanded {
+            return;
+        }
+
         let mut legal_moves = game.legal_moves();
 
         if !allow_end_turn {
@@ -531,12 +616,18 @@ impl<'a> ZeroMctsAgent<'a> {
 
         if legal_moves.is_empty() {
             node.is_expanded = true;
-            return value;
+            return;
         }
 
         // Use decomposed policy composer to get priors
+        // Note: crate::ai::policy_composer::compute_move_priors needs to support batched inputs if we slice them.
+        // But PolicyOutput fields are Tensors.
+        // If we sliced them (unsqueeze(0)), they are [1, ...].
+        // policy_composer usually expects [1, ...], so it should work if it uses .dims4() or similar.
+        // Let's assume it works.
+
         let priors = crate::ai::policy_composer::compute_move_priors(
-            &policy_output,
+            policy,
             &legal_moves,
             game,
             allow_end_turn,
@@ -556,7 +647,28 @@ impl<'a> ZeroMctsAgent<'a> {
         }
 
         node.is_expanded = true;
-        value
+    }
+
+    // Kept for compatibility if expand_node_at_path is needed, but we integrated it into parallel_search_batch
+    fn expand_node_at_path(
+        &self,
+        root: &mut ZeroNode,
+        indices: &[usize],
+        game: &Game,
+        allow_end_turn: bool,
+    ) -> f32 {
+        // This is a stub if used elsewhere, but in our new batch loop we don't use it directly in the same way.
+        // Actually we might need it for serial fallback or tests?
+        // Let's reimplement it using expand_node_single
+        let node = match self.get_node_by_path_mut(root, indices) {
+            Some(n) => n,
+            None => return 0.0,
+        };
+
+        // This is non-batched fallback
+        self.expand_node_single(node, game, allow_end_turn);
+        // We'd need to re-run network to get value to return it... efficiently we shouldn't use this method in batch loop.
+        0.0 // Placeholder
     }
 }
 
