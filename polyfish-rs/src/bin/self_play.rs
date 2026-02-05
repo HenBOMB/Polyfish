@@ -77,10 +77,8 @@ fn play_single_game(
 
         // Get state tensor
         let device = network.device();
-        let state_t = match state_to_tensor(&game.state, pov, &device) {
-            Ok(t) => t,
-            Err(_) => break,
-        };
+        let state_t = state_to_tensor(&game.state, pov, &device)
+            .expect("BUG: Failed to create state tensor - game state is invalid");
 
         // Capture Eco (SPT) and Mil (Unit Count) metrics for the current player
         let current_tribe = game.state.tribes.get(&pov);
@@ -303,14 +301,17 @@ fn main() -> anyhow::Result<()> {
 
         // Backpropagate value
         for (features, policy_data, p_id, eco, mil) in result.history {
-            match features.spatial_map.flatten_all() {
-                Ok(flat_map) => collected_spatial_maps.push(flat_map),
-                Err(_) => continue,
-            }
-            match features.player_state.flatten_all() {
-                Ok(flat_player) => collected_player_states.push(flat_player),
-                Err(_) => continue,
-            }
+            let flat_map = features
+                .spatial_map
+                .flatten_all()
+                .expect("BUG: Failed to flatten spatial map tensor");
+            collected_spatial_maps.push(flat_map);
+
+            let flat_player = features
+                .player_state
+                .flatten_all()
+                .expect("BUG: Failed to flatten player state tensor");
+            collected_player_states.push(flat_player);
 
             collected_action_type.push(policy_data.action_type);
             collected_source_spatial.push(policy_data.source_spatial);

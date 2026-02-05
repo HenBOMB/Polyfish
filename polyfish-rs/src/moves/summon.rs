@@ -88,12 +88,26 @@ pub fn generate_summon_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
 
     // Find all spawnable unit types unlocked by researched techs
     let mut spawnables = Vec::new();
+
+    // Always include Warrior (base unit) if affordable
+    // Tech loop below might add it if "Unrequired" is present, but we ensure it here
+    // checking for duplicates later or just trusting it's fine (Warrior is cheap)
+    let warrior_settings = get_unit_setting(UnitType::Warrior);
+    if tribe.stars >= warrior_settings.cost {
+        spawnables.push(UnitType::Warrior);
+    }
+
     for tech_state in &tribe.tech_vanilla {
         if !tech_state.discovered {
             continue;
         }
 
         if let Some(u_type) = get_tech_unit_type(tech_state.tech_type) {
+            // Avoid duplicates (Warrior)
+            if u_type == UnitType::Warrior {
+                continue;
+            }
+
             let settings = get_unit_setting(u_type);
             if settings.cost >= 1 && tribe.stars >= settings.cost && settings.upgrade_from.is_none()
             {

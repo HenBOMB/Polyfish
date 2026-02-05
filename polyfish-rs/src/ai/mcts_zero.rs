@@ -339,17 +339,26 @@ impl<'a> ZeroMctsAgent<'a> {
 
             // Apply move
             if let Some(m) = &current.children[child_idx].move_to_here {
-                if let Some(_undo) = game.play_move(m.as_ref()) {
-                    // Don't store undo - we'll clone game states instead
-                    indices_stack.push(child_idx);
-                    path.push(child_idx);
+                let _undo = match game.play_move(m.as_ref()) {
+                    Some(u) => u,
+                    None => {
+                        let stars = game.current_tribe().map(|t| t.stars).unwrap_or(-1);
+                        let desc = m.describe(&game.state);
+                        let turn = game.state.settings.turn;
+                        let pid = game.state.settings.current_player_turn_id;
+                        panic!(
+                            "BUG: Legal move failed to execute in MCTS selection.\nMove: {}\nTurn: {}, PID: {}, Stars: {}\nState Hash: {}",
+                            desc, turn, pid, stars, game.state.settings.seed
+                        );
+                    }
+                };
+                // Don't store undo - we'll clone game states instead
+                indices_stack.push(child_idx);
+                path.push(child_idx);
 
-                    // Move to child (careful with borrow checker)
-                    // We can't hold a mutable reference, so we'll navigate by index
-                    break;
-                } else {
-                    return None;
-                }
+                // Move to child (careful with borrow checker)
+                // We can't hold a mutable reference, so we'll navigate by index
+                break;
             } else {
                 return None;
             }
@@ -406,12 +415,11 @@ impl<'a> ZeroMctsAgent<'a> {
                 current.select_child_with_virtual_loss(self.c_puct, -self.virtual_loss)?;
 
             if let Some(m) = &current.children[child_idx].move_to_here {
-                if game.play_move(m.as_ref()).is_some() {
-                    indices_stack.push(child_idx);
-                    path.push(child_idx);
-                } else {
-                    return None;
-                }
+                let _undo = game
+                    .play_move(m.as_ref())
+                    .expect("BUG: Legal move failed to execute in MCTS tree traversal");
+                indices_stack.push(child_idx);
+                path.push(child_idx);
             } else {
                 return None;
             }
@@ -486,24 +494,18 @@ impl<'a> ZeroMctsAgent<'a> {
 
     fn expand_node(&self, node: &mut ZeroNode, game: &Game, allow_end_turn: bool) -> f32 {
         let device = self.network.device();
-        let features = match state_to_tensor(
+        let features = state_to_tensor(
             &game.state,
             game.state.settings.current_player_turn_id,
             &device,
-        ) {
-            Ok(f) => f,
-            Err(_) => return 0.0,
-        };
+        )
+        .expect("BUG: Failed to create features in MCTS expand_node");
 
         // Forward with decomposed architecture
-        let (policy_output, value_output) =
-            match self
-                .network
-                .forward_t(&features.spatial_map, &features.player_state, false)
-            {
-                Ok(res) => res,
-                Err(_) => return 0.0,
-            };
+        let (policy_output, value_output) = self
+            .network
+            .forward_t(&features.spatial_map, &features.player_state, false)
+            .expect("BUG: Network forward pass failed in MCTS");
 
         // Use win value as primary signal
         let value = value_output
