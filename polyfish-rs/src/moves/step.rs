@@ -10,14 +10,17 @@ use crate::types::MoveType;
 #[derive(Debug, Clone)]
 pub struct StepMove {
     /// Source tile index
-    pub src: i32,
+    pub src_index: i32,
     /// Target tile index  
-    pub target: i32,
+    pub target_index: i32,
 }
 
 impl StepMove {
-    pub fn new(src: i32, target: i32) -> Self {
-        Self { src, target }
+    pub fn new(src_index: i32, target_index: i32) -> Self {
+        Self {
+            src_index,
+            target_index,
+        }
     }
 }
 
@@ -34,7 +37,7 @@ impl Move for StepMove {
             let mut found = None;
             if let Some(tribe) = state.tribes.get(&pov_id) {
                 for (idx, unit) in tribe.units.iter().enumerate() {
-                    if unit.coords.idx == self.src {
+                    if unit.coords.idx == self.src_index {
                         found = Some((pov_id, idx));
                         break;
                     }
@@ -52,7 +55,7 @@ impl Move for StepMove {
         };
 
         // Collision detection for invisible units
-        if let Some(other_unit) = get_true_unit_at(state, self.target) {
+        if let Some(other_unit) = get_true_unit_at(state, self.target_index) {
             if other_unit.owner != unit_owner
                 && other_unit
                     .effects
@@ -63,7 +66,7 @@ impl Move for StepMove {
                 let other_pos = state.tribes[&other_owner]
                     .units
                     .iter()
-                    .position(|u| u.coords.idx == self.target)
+                    .position(|u| u.coords.idx == self.target_index)
                     .unwrap();
 
                 let undo_reveal = crate::actions::try_remove_effect(
@@ -80,7 +83,7 @@ impl Move for StepMove {
             }
         }
 
-        let undo = step_unit(state, unit_owner, unit_idx, self.target, false);
+        let undo = step_unit(state, unit_owner, unit_idx, self.target_index, false);
 
         Ok(MoveResult {
             undo,
@@ -89,19 +92,24 @@ impl Move for StepMove {
     }
 
     fn describe(&self, _state: &GameState) -> String {
-        format!("Step: {} -> {}", self.src, self.target)
+        format!("Step: {} -> {}", self.src_index, self.target_index)
     }
 
     fn serialize(&self) -> serde_json::Value {
         serde_json::json!({
-            "moveType": MoveType::Step,
-            "src": self.src,
-            "target": self.target,
+            "moveType": self.move_type(),
+            "src": self.src_index,
+            "target": self.target_index,
         })
     }
 
     #[inline]
-    fn action_coords(&self) -> (Option<i32>, Option<i32>) {
-        (Some(self.src), Some(self.target))
+    fn source_idx(&self) -> Result<usize, String> {
+        Ok(self.src_index as usize)
+    }
+
+    #[inline]
+    fn target_idx(&self) -> Result<usize, String> {
+        Ok(self.target_index as usize)
     }
 }

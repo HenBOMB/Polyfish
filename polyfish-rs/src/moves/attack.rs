@@ -4,18 +4,18 @@ use crate::moves::{Move, MoveResult};
 use crate::states::GameState;
 use crate::types::MoveType;
 
-/// An attack move - a unit attacking another unit
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct AttackMove {
-    /// Attacker's tile index
-    pub src: i32,
-    /// Target tile index (where the defender is)
-    pub target: i32,
+    pub src_index: i32,
+    pub target_index: i32,
 }
 
 impl AttackMove {
-    pub fn new(src: i32, target: i32) -> Self {
-        Self { src, target }
+    pub fn new(src_index: i32, target_index: i32) -> Self {
+        Self {
+            src_index,
+            target_index,
+        }
     }
 }
 
@@ -27,13 +27,16 @@ impl Move for AttackMove {
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         // Find attacker
         let (attacker_owner, attacker_idx) = {
-            let tile = state.tiles.get(&self.src).ok_or("Source tile not found")?;
+            let tile = state
+                .tiles
+                .get(&self.src_index)
+                .ok_or("Source tile not found")?;
             let owner = tile._unit_owner_id.ok_or("No unit at source")?;
             let tribe = state.tribes.get(&owner).ok_or("Tribe not found")?;
             let idx = tribe
                 .units
                 .iter()
-                .position(|u| u.coords.idx == self.src)
+                .position(|u| u.coords.idx == self.src_index)
                 .ok_or("Unit not found in tribe")?;
             (owner, idx)
         };
@@ -42,7 +45,7 @@ impl Move for AttackMove {
         let (defender_owner, defender_idx) = {
             let tile = state
                 .tiles
-                .get(&self.target)
+                .get(&self.target_index)
                 .ok_or("Target tile not found")?;
 
             if let Some(owner) = tile._unit_owner_id {
@@ -50,7 +53,7 @@ impl Move for AttackMove {
                 let idx = tribe
                     .units
                     .iter()
-                    .position(|u| u.coords.idx == self.target)
+                    .position(|u| u.coords.idx == self.target_index)
                     .ok_or("Unit not found in tribe")?;
                 (owner, Some(idx))
             } else {
@@ -63,7 +66,11 @@ impl Move for AttackMove {
                             .skills
                             .contains(&crate::types::SkillType::Infiltrate)
                         {
-                            if crate::functions::is_enemy_city(state, self.target, attacker_owner) {
+                            if crate::functions::is_enemy_city(
+                                state,
+                                self.target_index,
+                                attacker_owner,
+                            ) {
                                 // Return city owner and None for unit index
                                 (tile.owner, None)
                             } else {
@@ -102,19 +109,24 @@ impl Move for AttackMove {
     }
 
     fn describe(&self, _state: &GameState) -> String {
-        format!("Attack: {} -> {}", self.src, self.target)
+        format!("Attack: {} -> {}", self.src_index, self.target_index)
     }
 
     fn serialize(&self) -> serde_json::Value {
         serde_json::json!({
             "moveType": MoveType::Attack,
-            "src": self.src,
-            "target": self.target,
+            "src": self.src_index,
+            "target": self.target_index,
         })
     }
 
     #[inline]
-    fn action_coords(&self) -> (Option<i32>, Option<i32>) {
-        (Some(self.src), Some(self.target))
+    fn source_idx(&self) -> Result<usize, String> {
+        Ok(self.src_index as usize)
+    }
+
+    #[inline]
+    fn target_idx(&self) -> Result<usize, String> {
+        Ok(self.target_index as usize)
     }
 }

@@ -14,15 +14,15 @@ use crate::types::{MoveType, SkillType, TerrainType, UnitType};
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SummonMove {
-    pub tile_index: i32,
+    pub src_index: i32,
     #[serde(rename = "type")]
     pub unit_type: UnitType,
 }
 
 impl SummonMove {
-    pub fn new(tile_index: i32, unit_type: UnitType) -> Self {
+    pub fn new(src_index: i32, unit_type: UnitType) -> Self {
         Self {
-            tile_index,
+            src_index,
             unit_type,
         }
     }
@@ -49,27 +49,32 @@ impl Move for SummonMove {
         }
 
         // Costs are handled inside summon_unit if costs=true
-        match summon_unit(state, self.unit_type, self.tile_index, true, false) {
+        match summon_unit(state, self.unit_type, self.src_index, true, false) {
             Ok(res) => Ok(res),
             Err(e) => Err(e),
         }
     }
 
     fn describe(&self, _state: &GameState) -> String {
-        format!("Train {:?} at {}", self.unit_type, self.tile_index)
+        format!("Train {:?} at {}", self.unit_type, self.src_index)
     }
 
     fn serialize(&self) -> serde_json::Value {
-        let mut value = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
-        if let Some(obj) = value.as_object_mut() {
-            obj.insert("moveType".to_string(), serde_json::json!(MoveType::Summon));
-        }
-        value
+        serde_json::json!({
+            "moveType": self.move_type(),
+            "src": self.src_index,
+            "type": self.unit_type,
+        })
     }
 
     #[inline]
-    fn action_coords(&self) -> (Option<i32>, Option<i32>) {
-        (Some(self.tile_index), Some(self.tile_index))
+    fn source_idx(&self) -> Result<usize, String> {
+        Ok(self.src_index as usize)
+    }
+
+    #[inline]
+    fn unit_type(&self) -> Result<UnitType, String> {
+        Ok(self.unit_type)
     }
 }
 

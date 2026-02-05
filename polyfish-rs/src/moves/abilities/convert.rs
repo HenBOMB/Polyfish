@@ -1,19 +1,19 @@
 use crate::moves::{Move, MoveResult};
 use crate::states::GameState;
-use crate::types::MoveType;
+use crate::types::{AbilityType, MoveType};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConvertMove {
-    pub unit_idx: i32,
-    pub target_idx: i32,
+    pub src_index: i32,
+    pub target_index: i32,
 }
 
 impl ConvertMove {
-    pub fn new(unit_idx: i32, target_idx: i32) -> Self {
+    pub fn new(src_index: i32, target_index: i32) -> Self {
         Self {
-            unit_idx,
-            target_idx,
+            src_index,
+            target_index,
         }
     }
 }
@@ -26,11 +26,11 @@ impl Move for ConvertMove {
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let owner = state
             .tiles
-            .get(&self.unit_idx)
+            .get(&self.src_index)
             .and_then(|t| t._unit_owner_id)
             .unwrap_or(0);
 
-        match crate::actions::units::convert_unit(state, self.unit_idx, self.target_idx) {
+        match crate::actions::units::convert_unit(state, self.src_index, self.target_index) {
             Ok(undo) => {
                 if let Some(tribe) = state.tribes.get_mut(&owner) {
                     tribe.attacked_this_turn = true;
@@ -44,19 +44,32 @@ impl Move for ConvertMove {
             Err(e) => Err(e),
         }
     }
+
     fn describe(&self, _state: &GameState) -> String {
-        format!("Convert unit at {}", self.target_idx)
+        format!("Convert unit at {}", self.target_index)
     }
+
     fn serialize(&self) -> serde_json::Value {
-        let mut value = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
-        if let Some(obj) = value.as_object_mut() {
-            obj.insert("moveType".to_string(), serde_json::json!(MoveType::Ability));
-        }
-        value
+        serde_json::json!({
+            "moveType": self.move_type(),
+            "type": self.ability_type(),
+            "src": self.src_index,
+            "target": self.target_index,
+        })
     }
 
     #[inline]
-    fn action_coords(&self) -> (Option<i32>, Option<i32>) {
-        (Some(self.unit_idx), Some(self.target_idx))
+    fn source_idx(&self) -> Result<usize, String> {
+        Ok(self.src_index as usize)
+    }
+
+    #[inline]
+    fn target_idx(&self) -> Result<usize, String> {
+        Ok(self.target_index as usize)
+    }
+
+    #[inline]
+    fn ability_type(&self) -> Result<AbilityType, String> {
+        Ok(AbilityType::Convert)
     }
 }

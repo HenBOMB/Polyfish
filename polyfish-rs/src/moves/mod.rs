@@ -60,11 +60,52 @@ pub trait Move: std::fmt::Debug + Send + Sync {
     /// Serialize to JSON for network/storage
     fn serialize(&self) -> serde_json::Value;
 
-    /// Get action coordinates for NN mapping (src, target)
-    /// This avoids expensive JSON serialization in hot paths
+    // === Policy Composition Helpers ===
+    // These methods extract components needed for decomposed policy heads
+
+    /// Get source tile index (for moves with 'from'concept)
     #[inline]
-    fn action_coords(&self) -> (Option<i32>, Option<i32>) {
-        (None, None)
+    fn source_idx(&self) -> Result<usize, String> {
+        Err(format!("Move {:?} requires source index", self.move_type()))
+    }
+
+    /// Get target tile index (for moves with 'to' concept)
+    #[inline]
+    fn target_idx(&self) -> Result<usize, String> {
+        Err(format!("Move {:?} requires target index", self.move_type()))
+    }
+
+    /// Get structure type (for Build moves)
+    #[inline]
+    fn structure_type(&self) -> Result<StructureType, String> {
+        Err(format!(
+            "Move {:?} requires structure type",
+            self.move_type()
+        ))
+    }
+
+    /// Get unit type (for Summon moves)
+    #[inline]
+    fn unit_type(&self) -> Result<UnitType, String> {
+        Err(format!("Move {:?} requires unit type", self.move_type()))
+    }
+
+    /// Get tech type (for Research moves)
+    #[inline]
+    fn tech_type(&self) -> Result<TechnologyType, String> {
+        Err(format!("Move {:?} requires tech type", self.move_type()))
+    }
+
+    /// Get ability type (for Ability moves)
+    #[inline]
+    fn ability_type(&self) -> Result<AbilityType, String> {
+        Err(format!("Move {:?} requires ability type", self.move_type()))
+    }
+
+    /// Get reward type (for Reward moves)
+    #[inline]
+    fn reward_type(&self) -> Result<RewardType, String> {
+        Err(format!("Move {:?} requires reward type", self.move_type()))
     }
 }
 

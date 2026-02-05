@@ -208,6 +208,7 @@ impl Game {
 
             // End our turn
             undos.push(self.end_turn());
+            sync_scores(&mut self.state);
             self.state.settings._recent_moves.clear();
 
             // Keep ending turns until we're back at original player

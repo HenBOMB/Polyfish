@@ -9,12 +9,12 @@ use crate::types::{MoveType, TechnologyType};
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResearchMove {
-    pub tech: TechnologyType,
+    pub tech_type: TechnologyType,
 }
 
 impl ResearchMove {
     pub fn new(tech: TechnologyType) -> Self {
-        Self { tech }
+        Self { tech_type: tech }
     }
 }
 
@@ -30,7 +30,7 @@ impl Move for ResearchMove {
 
         // Validation
         if let Some(tribe) = state.tribes.get(&pov_id) {
-            let tech_cost = crate::functions::get_tech_cost(tribe, self.tech);
+            let tech_cost = crate::functions::get_tech_cost(tribe, self.tech_type);
             if tribe.stars < tech_cost {
                 eprintln!("[DEBUG] Research Error: Insufficient stars.");
                 eprintln!(
@@ -51,7 +51,7 @@ impl Move for ResearchMove {
         }
 
         // Logic
-        let undo = crate::actions::tech::unlock_tech(state, self.tech, false)?;
+        let undo = crate::actions::tech::unlock_tech(state, self.tech_type, false)?;
         Ok(MoveResult {
             undo,
             rewards: None,
@@ -59,18 +59,19 @@ impl Move for ResearchMove {
     }
 
     fn describe(&self, _state: &GameState) -> String {
-        format!("Research {:?}", self.tech)
+        format!("Research {:?}", self.tech_type)
     }
 
     fn serialize(&self) -> serde_json::Value {
-        let mut value = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
-        if let Some(obj) = value.as_object_mut() {
-            obj.insert(
-                "moveType".to_string(),
-                serde_json::json!(MoveType::Research),
-            );
-        }
-        value
+        serde_json::json!({
+            "moveType": self.move_type(),
+            "type": self.tech_type,
+        })
+    }
+
+    #[inline]
+    fn tech_type(&self) -> Result<TechnologyType, String> {
+        Ok(self.tech_type)
     }
 }
 

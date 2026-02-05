@@ -5,6 +5,7 @@
 //!
 //! Channel ranges are dynamically computed from enum variants at compile time.
 
+use crate::functions::get_unit_max_health;
 use crate::states::{GameState, PlayerId};
 use crate::types::{
     EffectType, ModeType, ResourceType, StructureType, TerrainType, TribeType, UnitType,
@@ -92,25 +93,24 @@ pub const CH_UNIT_CONVERTED: usize = CH_UNIT_STATS_START + 13;
 pub const CH_UNIT_ATTACKS_PERFORMED: usize = CH_UNIT_STATS_START + 14;
 // +15 reserved
 
-// City stats (fixed count: 13)
+// City stats (fixed count: 12)
 pub const CH_CITY_STATS_START: usize = CH_UNIT_STATS_END;
-pub const CH_CITY_STATS_COUNT: usize = 13;
+pub const CH_CITY_STATS_COUNT: usize = 12;
 pub const CH_CITY_STATS_END: usize = CH_CITY_STATS_START + CH_CITY_STATS_COUNT;
 
 // City stat offsets
 pub const CH_CITY_PRESENT: usize = CH_CITY_STATS_START + 0;
 pub const CH_CITY_OWNER: usize = CH_CITY_STATS_START + 1;
 pub const CH_CITY_LEVEL: usize = CH_CITY_STATS_START + 2;
-pub const CH_CITY_POPULATION: usize = CH_CITY_STATS_START + 3;
-pub const CH_CITY_PRODUCTION: usize = CH_CITY_STATS_START + 4;
-pub const CH_CITY_IS_CAPITAL: usize = CH_CITY_STATS_START + 5;
-pub const CH_CITY_CONNECTED: usize = CH_CITY_STATS_START + 6;
-pub const CH_CITY_HAS_WALLS: usize = CH_CITY_STATS_START + 7;
-pub const CH_CITY_HAS_RIOT: usize = CH_CITY_STATS_START + 8;
-pub const CH_CITY_PENDING_REWARD: usize = CH_CITY_STATS_START + 9;
-pub const CH_CITY_BORDER_SIZE: usize = CH_CITY_STATS_START + 10;
-pub const CH_CITY_PROGRESS: usize = CH_CITY_STATS_START + 11;
-// +12 reserved
+pub const CH_CITY_PRODUCTION: usize = CH_CITY_STATS_START + 3;
+pub const CH_CITY_IS_CAPITAL: usize = CH_CITY_STATS_START + 4;
+pub const CH_CITY_CONNECTED: usize = CH_CITY_STATS_START + 5;
+pub const CH_CITY_HAS_WALLS: usize = CH_CITY_STATS_START + 6;
+pub const CH_CITY_HAS_RIOT: usize = CH_CITY_STATS_START + 7;
+pub const CH_CITY_PENDING_REWARD: usize = CH_CITY_STATS_START + 8;
+pub const CH_CITY_BORDER_SIZE: usize = CH_CITY_STATS_START + 9;
+pub const CH_CITY_PROGRESS: usize = CH_CITY_STATS_START + 10;
+// +11 reserved
 
 // Global/Meta (fixed count: 20)
 pub const CH_GLOBAL_START: usize = CH_CITY_STATS_END;
@@ -208,12 +208,18 @@ fn unit_to_channel(unit_type: UnitType) -> usize {
 // Main Feature Extraction
 // ============================================================================
 
-/// Convert game state to tensor
+/// Features output structure
+pub struct GameFeatures {
+    pub spatial_map: Tensor,  // [1, C, H, W] - tile-based features
+    pub player_state: Tensor, // [1, P] - global player features
+}
+
+/// Convert game state to tensor with decomposed player state
 pub fn state_to_tensor(
     state: &GameState,
     perspective: PlayerId,
     device: &Device,
-) -> Result<Tensor> {
+) -> Result<GameFeatures> {
     let mut data = vec![0.0f32; NUM_CHANNELS * MAP_HEIGHT * MAP_WIDTH];
     let map_size = state.settings.size as usize;
 
@@ -223,19 +229,29 @@ pub fn state_to_tensor(
     let is_elyrion = pov_tribe_type == TribeType::Elyrion;
 
     // Global stats (same for all tiles)
-    let turn_norm =
-        (state.settings.turn as f32 / state.settings.max_turns.max(1) as f32).clamp(0.0, 1.0);
-    let max_turns_norm = (state.settings.max_turns as f32 / 50.0).clamp(0.0, 1.0);
+    let turn_norm = (state.settings.turn as f32 / state.settings.max_turns as f32).clamp(0.0, 1.0);
+    let max_turns_norm = (state.settings.max_turns as f32
+        / crate::states::default_max_turns() as f32)
+        .clamp(0.0, 1.0);
     let stars_norm = pov_tribe
-        .map(|t| ((t.stars as f32 + 1.0).ln() / 100.0_f32.ln()).clamp(0.0, 1.0))
+        .map(|t| (t.stars as f32 / crate::states::default_max_stars() as f32).clamp(0.0, 1.0))
+        .unwrap_or(0.0);
+    let spt_norm = pov_tribe
+        .map(|t| {
+            (crate::functions::get_tribe_spt(state, t) as f32
+                / crate::states::default_max_spt() as f32)
+                .clamp(0.0, 1.0)
+        })
         .unwrap_or(0.0);
     let score_norm = pov_tribe
-        .map(|t| (t.score as f32 / 10000.0).clamp(0.0, 1.0))
+        .map(|t| (t.score as f32 / crate::states::default_max_score() as f32).clamp(0.0, 1.0))
         .unwrap_or(0.0);
     let tech_count = pov_tribe
         .map(|t| t.tech_vanilla.iter().filter(|tech| tech.discovered).count())
         .unwrap_or(0);
-    let tech_norm = (tech_count as f32 / 30.0).clamp(0.0, 1.0);
+    // maximum n of valid tech in the polytopia tree per tribe is 25
+    let tech_norm = (tech_count as f32 / 25.0).clamp(0.0, 1.0);
+    // 16 tribes + 1 cause index starts at 1
     let tribe_type_norm = (pov_tribe_type as i8 as f32 / 17.0).clamp(0.0, 1.0);
     let game_mode = if state.settings.mode == ModeType::Domination {
         1.0
@@ -244,19 +260,20 @@ pub fn state_to_tensor(
     };
     let game_over = if state.settings._game_over { 1.0 } else { 0.0 };
     let total_cities =
-        (pov_tribe.map(|t| t.cities.len()).unwrap_or(0) as f32 / 10.0).clamp(0.0, 1.0);
+        (pov_tribe.map(|t| t.cities.len()).unwrap_or(0) as f32 / 5.0).clamp(0.0, 1.0);
     let total_units = (pov_tribe.map(|t| t.units.len()).unwrap_or(0) as f32 / 20.0).clamp(0.0, 1.0);
+    // at turn 5 it stops tracking
     let pacifist_turns = pov_tribe
-        .map(|t| (t.pacifist_turns as f32 / 10.0).clamp(0.0, 1.0))
+        .map(|t| (t.pacifist_turns as f32 / 5.0).clamp(0.0, 1.0))
         .unwrap_or(0.0);
     let tribe_kills = pov_tribe
-        .map(|t| (t.kills as f32 / 20.0).clamp(0.0, 1.0))
+        .map(|t| (t.kills as f32 / crate::states::default_max_units() as f32).clamp(0.0, 1.0))
         .unwrap_or(0.0);
     let tribe_casualties = pov_tribe
-        .map(|t| (t.casualties as f32 / 20.0).clamp(0.0, 1.0))
+        .map(|t| (t.casualties as f32 / crate::states::default_max_units() as f32).clamp(0.0, 1.0))
         .unwrap_or(0.0);
     let tribe_conversions = pov_tribe
-        .map(|t| (t.conversions as f32 / 10.0).clamp(0.0, 1.0))
+        .map(|t| (t.conversions as f32 / crate::states::default_max_units() as f32).clamp(0.0, 1.0))
         .unwrap_or(0.0);
     let attacked_this_turn = pov_tribe
         .map(|t| if t.attacked_this_turn { 1.0 } else { 0.0 })
@@ -300,6 +317,16 @@ pub fn state_to_tensor(
 
             // Skip tile-specific data if not explored
             if !is_explored {
+                // Elyrion special ability lets see ruins in fog
+                if is_elyrion {
+                    if let Some(Some(structure)) = state.structures.get(&idx) {
+                        // Ruins are special - Elyrion can see them through fog
+                        if structure.structure_type == StructureType::Ruin {
+                            let struct_ch = structure_to_channel(structure.structure_type);
+                            set_feat(&mut data, struct_ch, x, y, 1.0);
+                        }
+                    }
+                }
                 continue;
             }
 
@@ -357,9 +384,13 @@ pub fn state_to_tensor(
                     }
                 }
 
-                // Resources (only if explored)
-                if is_explored {
-                    if let Some(Some(resource)) = state.resources.get(&idx) {
+                // Resources
+                if let Some(Some(resource)) = state.resources.get(&idx) {
+                    if crate::functions::is_resource_visible_to_tribe(
+                        state,
+                        resource.resource_type,
+                        perspective,
+                    ) {
                         let res_ch = resource_to_channel(resource.resource_type);
                         set_feat(&mut data, res_ch, x, y, 1.0);
                     }
@@ -368,12 +399,8 @@ pub fn state_to_tensor(
                 // Structures
                 if let Some(Some(structure)) = state.structures.get(&idx) {
                     // Ruins are special - Elyrion can see them through fog
-                    if is_explored
-                        || (is_elyrion && structure.structure_type == StructureType::Ruin)
-                    {
-                        let struct_ch = structure_to_channel(structure.structure_type);
-                        set_feat(&mut data, struct_ch, x, y, 1.0);
-                    }
+                    let struct_ch = structure_to_channel(structure.structure_type);
+                    set_feat(&mut data, struct_ch, x, y, 1.0);
                 }
             }
         }
@@ -406,12 +433,13 @@ pub fn state_to_tensor(
             // Unit stats
             let owner_val = if *player_id == perspective { 1.0 } else { -1.0 };
             set_feat(&mut data, CH_UNIT_OWNER, x, y, owner_val);
+
             set_feat(
                 &mut data,
                 CH_UNIT_HP,
                 x,
                 y,
-                unit.health as f32 / unit.max_health.max(1) as f32,
+                unit.health as f32 / get_unit_max_health(unit) as f32,
             );
             set_feat(
                 &mut data,
@@ -446,7 +474,7 @@ pub fn state_to_tensor(
                 CH_UNIT_KILLS,
                 x,
                 y,
-                (unit.kills as f32 / 10.0).clamp(0.0, 1.0),
+                (unit.kills as f32 / 3.0).clamp(0.0, 1.0),
             );
             set_feat(
                 &mut data,
@@ -520,13 +548,6 @@ pub fn state_to_tensor(
             );
             set_feat(
                 &mut data,
-                CH_CITY_POPULATION,
-                x,
-                y,
-                city.population as f32 / city.level.max(1) as f32,
-            );
-            set_feat(
-                &mut data,
                 CH_CITY_PRODUCTION,
                 x,
                 y,
@@ -537,7 +558,8 @@ pub fn state_to_tensor(
                 CH_CITY_BORDER_SIZE,
                 x,
                 y,
-                (city.border_size as f32 / 5.0).clamp(0.0, 1.0),
+                // default 1, + city border reward = 2
+                (city.border_size as f32 / 2.0).clamp(0.0, 1.0),
             );
 
             // Check if capital
@@ -563,12 +585,33 @@ pub fn state_to_tensor(
             }
 
             // City progress toward next population
-            let progress_norm = (city.progress as f32 / city.level.max(1) as f32).clamp(0.0, 1.0);
+            let progress_norm = (city.progress as f32 / (city.level + 1) as f32).clamp(0.0, 1.0);
             set_feat(&mut data, CH_CITY_PROGRESS, x, y, progress_norm);
         }
     }
 
-    Tensor::from_vec(data, (1, NUM_CHANNELS, MAP_HEIGHT, MAP_WIDTH), device)
+    // Create spatial map tensor
+    let spatial_map = Tensor::from_vec(data, (1, NUM_CHANNELS, MAP_HEIGHT, MAP_WIDTH), device)?;
+
+    // Extract player state vector (10 features)
+    let player_vec = vec![
+        turn_norm,
+        stars_norm,
+        spt_norm,
+        tech_norm,
+        total_cities,
+        total_units,
+        score_norm,
+        tribe_kills,
+        tribe_casualties,
+        attacked_this_turn,
+    ];
+    let player_state = Tensor::from_vec(player_vec, (1, 10), device)?;
+
+    Ok(GameFeatures {
+        spatial_map,
+        player_state,
+    })
 }
 
 // ============================================================================
@@ -595,9 +638,12 @@ mod tests {
     #[test]
     fn test_tensor_shape() {
         let game = Game::default();
-        let tensor = state_to_tensor(&game.state, 1, &Device::Cpu).unwrap();
-        let dims = tensor.dims();
+        let features = state_to_tensor(&game.state, 1, &Device::Cpu).unwrap();
+        let dims = features.spatial_map.dims();
         assert_eq!(dims, &[1, NUM_CHANNELS, MAP_HEIGHT, MAP_WIDTH]);
+        // Check player state dims
+        let player_dims = features.player_state.dims();
+        assert_eq!(player_dims, &[1, 10]);
     }
 
     #[test]

@@ -14,13 +14,16 @@ use crate::types::{MoveType, RewardType};
 #[serde(rename_all = "camelCase")]
 pub struct RewardMove {
     /// City tile index
-    pub target: i32,
+    pub target_index: i32,
     pub reward: RewardType,
 }
 
 impl RewardMove {
-    pub fn new(target: i32, reward: RewardType) -> Self {
-        Self { target, reward }
+    pub fn new(target_index: i32, reward: RewardType) -> Self {
+        Self {
+            target_index,
+            reward,
+        }
     }
 }
 
@@ -31,7 +34,7 @@ impl Move for RewardMove {
 
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let mut undos: Vec<UndoCallback> = Vec::new();
-        let target = self.target;
+        let target = self.target_index;
         let reward_type = self.reward;
         let p_id = state.settings.current_player_turn_id;
 
@@ -203,20 +206,25 @@ impl Move for RewardMove {
     fn describe(&self, _state: &GameState) -> String {
         format!(
             "Choose reward {:?} for city at {}",
-            self.reward, self.target
+            self.reward, self.target_index
         )
     }
     fn serialize(&self) -> serde_json::Value {
         serde_json::json!({
-            "moveType": MoveType::Reward,
-            "target": self.target,
-            "reward": self.reward
+            "moveType": self.move_type(),
+            "target": self.target_index,
+            "type": self.reward
         })
     }
 
     #[inline]
-    fn action_coords(&self) -> (Option<i32>, Option<i32>) {
-        (Some(self.target), Some(self.target))
+    fn target_idx(&self) -> Result<usize, String> {
+        Ok(self.target_index as usize)
+    }
+
+    #[inline]
+    fn reward_type(&self) -> Result<RewardType, String> {
+        Ok(self.reward)
     }
 }
 

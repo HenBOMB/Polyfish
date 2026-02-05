@@ -1,80 +1,223 @@
 use crate::moves::Move;
-use crate::types::MoveType;
+use crate::types::*;
+use std::collections::HashMap;
+use std::sync::LazyLock;
+use strum::IntoEnumIterator;
 
-pub struct ActionMapper;
+/// Decomposed training targets for a single move
+/// Each field represents the target value for one policy head
+#[derive(Debug, Clone)]
+pub struct DecomposedTargets {
+    pub action_type: usize, // 0-10: which action type (10 is EndTurn/None)
+    pub source_spatial: Option<usize>, // 0-899: which source tile (if applicable)
+    pub target_spatial: Option<usize>, // 0-899: which target tile (if applicable)
+    pub target_type: Option<usize>, // 0-191: unified option head
+}
 
-impl ActionMapper {
-    pub const TOTAL_CHANNELS: usize = 64;
-    pub const TOTAL_ACTIONS: usize = 30 * 30 * 64;
+impl Default for DecomposedTargets {
+    fn default() -> Self {
+        Self {
+            action_type: 10,
+            source_spatial: None,
+            target_spatial: None,
+            target_type: None,
+        }
+    }
+}
+
+// ============================================================================
+// Robust Mapping Lookups
+// ============================================================================
+
+const MAX_STRUCTURES: usize = 48;
+const MAX_UNITS: usize = 64;
+const MAX_TECHS: usize = 48;
+const MAX_ABILITIES: usize = 32;
+
+// Offset constants for 192-sized head
+pub const OFFSET_STRUCTURES: usize = 0;
+pub const OFFSET_UNITS: usize = 48;
+pub const OFFSET_TECHS: usize = 112;
+pub const OFFSET_ABILITIES: usize = 160;
+
+static STRUCTURE_MAP: LazyLock<HashMap<StructureType, usize>> = LazyLock::new(|| {
+    StructureType::iter()
+        .filter(|&s| s != StructureType::None)
+        .enumerate()
+        .map(|(i, s)| (s, i))
+        .collect()
+});
+
+static UNIT_MAP: LazyLock<HashMap<UnitType, usize>> = LazyLock::new(|| {
+    UnitType::iter()
+        .filter(|&u| u != UnitType::None)
+        .enumerate()
+        .map(|(i, u)| (u, i))
+        .collect()
+});
+
+static TECH_MAP: LazyLock<HashMap<TechnologyType, usize>> = LazyLock::new(|| {
+    TechnologyType::iter()
+        .filter(|&t| t != TechnologyType::Unrequired && t != TechnologyType::BeyondComprehension)
+        .enumerate()
+        .map(|(i, t)| (t, i))
+        .collect()
+});
+
+static ABILITY_MAP: LazyLock<HashMap<AbilityType, usize>> = LazyLock::new(|| {
+    AbilityType::iter()
+        .filter(|&a| a != AbilityType::None)
+        .enumerate()
+        .map(|(i, a)| (a, i))
+        .collect()
+});
+
+pub struct DecomposedMapper;
+
+impl DecomposedMapper {
+    pub fn move_type_to_idx(mt: MoveType) -> usize {
+        match mt {
+            MoveType::None => 0,
+            MoveType::Attack => 1,
+            MoveType::Step => 2,
+            MoveType::Capture => 3,
+            MoveType::Ability => 4,
+            MoveType::Summon => 5,
+            MoveType::Harvest => 6,
+            MoveType::Build => 7,
+            MoveType::Research => 8,
+            MoveType::Reward => 9,
+            MoveType::EndTurn => 10,
+        }
+    }
+
+    /// Convert a move into training targets for each policy head
+    pub fn move_to_targets(m: &dyn Move, map_size: usize) -> DecomposedTargets {
+        let move_type = m.move_type();
+        let move_index = Self::move_type_to_idx(move_type);
+
+        let source_spatial = m
+            .source_idx()
+            .ok()
+            .map(|idx| Self::tile_to_spatial_idx(idx, map_size));
+
+        let target_spatial = m
+            .target_idx()
+            .ok()
+            .map(|idx| Self::tile_to_spatial_idx(idx, map_size));
+
+        let target_type = match move_type {
+            MoveType::Build => m.structure_type().ok().and_then(|s| Self::map_structure(s)),
+            MoveType::Summon => m.unit_type().ok().and_then(|u| Self::map_unit(u)),
+            MoveType::Research => m.tech_type().ok().and_then(|t| Self::map_tech(t)),
+            MoveType::Ability => m.ability_type().ok().and_then(|a| Self::map_ability(a)),
+            MoveType::Reward => Some(191), // Last slot for generic rewards
+            // Harvesting / Capturing does not require a target type
+            _ => None,
+        };
+
+        DecomposedTargets {
+            action_type: move_index,
+            source_spatial,
+            target_spatial,
+            target_type,
+        }
+    }
+
+    pub fn move_visit_to_targets(
+        mv: &crate::ai::mcts_types::MoveVisit,
+        map_size: usize,
+    ) -> DecomposedTargets {
+        let action_type = Self::move_type_to_idx(mv.move_type);
+
+        let source_spatial = mv
+            .source_idx
+            .map(|idx| Self::tile_to_spatial_idx(idx, map_size));
+        let target_spatial = mv
+            .target_idx
+            .map(|idx| Self::tile_to_spatial_idx(idx, map_size));
+
+        let move_option = match mv.move_type {
+            MoveType::Build => mv.structure_type.and_then(|s| Self::map_structure(s)),
+            MoveType::Summon => mv.unit_type.and_then(|u| Self::map_unit(u)),
+            MoveType::Research => mv.tech_type.and_then(|t| Self::map_tech(t)),
+            MoveType::Ability => mv.ability_type.and_then(|a| Self::map_ability(a)),
+            MoveType::Reward => Some(191),
+            _ => None,
+        };
+
+        DecomposedTargets {
+            action_type,
+            source_spatial,
+            target_spatial,
+            target_type: move_option,
+        }
+    }
 
     #[inline]
-    pub fn move_to_idx(game_size: i32, m: &dyn Move) -> Option<usize> {
-        let mt = m.move_type();
+    fn tile_to_spatial_idx(tile_idx: usize, map_size: usize) -> usize {
+        let y = tile_idx / map_size;
+        let x = tile_idx % map_size;
+        y * map_size + x
+    }
 
-        // Use action_coords() instead of serialize() for performance
-        let (src_opt, target_opt) = m.action_coords();
-
-        // Panic if action_coords not implemented for moves that need tile info
-        // EndTurn and Research don't need coordinates
-        let src = match mt {
-            MoveType::EndTurn => 0,
-            MoveType::Research => 0,
-            _ => src_opt.unwrap_or_else(|| {
-                panic!(
-                    "action_coords() not implemented for {:?}: {:?}",
-                    mt,
-                    m.describe(&crate::states::GameState::default())
-                )
-            }),
-        };
-        let target = target_opt.unwrap_or(src);
-
-        let w = game_size;
-        let (sx, sy) = (src % w, src / w);
-        let (tx, ty) = (target % w, target / w);
-        let dx = tx - sx;
-        let dy = ty - sy;
-
-        let channel = match mt {
-            MoveType::Step => direction_channel(dx, dy, 0),
-            MoveType::Attack => attack_channel(dx, dy),
-            MoveType::Capture => Some(32),
-            MoveType::Ability => Some(33),
-            MoveType::Build => Some(35),
-            MoveType::EndTurn => Some(63),
-            _ => Some(62), // Others (Research, Reward, Summon, etc.)
-        }?;
-
-        let plane_size = (30 * 30) as usize;
-        let pixel_idx = (sy * 30 + sx) as usize;
-
-        if pixel_idx >= 900 {
+    pub fn map_structure(s: StructureType) -> Option<usize> {
+        if s == StructureType::None {
             return None;
         }
-
-        Some(channel * plane_size + pixel_idx)
+        STRUCTURE_MAP.get(&s).map(|&i| {
+            if i >= MAX_STRUCTURES {
+                eprintln!(
+                    "[Mapper Warning] Structure {:?} index {} exceeds MAX_STRUCTURES {}",
+                    s, i, MAX_STRUCTURES
+                );
+            }
+            OFFSET_STRUCTURES + i
+        })
     }
-}
 
-#[inline]
-fn direction_channel(dx: i32, dy: i32, base: usize) -> Option<usize> {
-    match (dx, dy) {
-        (0, -1) => Some(base + 0),
-        (1, -1) => Some(base + 1),
-        (1, 0) => Some(base + 2),
-        (1, 1) => Some(base + 3),
-        (0, 1) => Some(base + 4),
-        (-1, 1) => Some(base + 5),
-        (-1, 0) => Some(base + 6),
-        (-1, -1) => Some(base + 7),
-        _ => None,
+    pub fn map_unit(u: UnitType) -> Option<usize> {
+        if u == UnitType::None {
+            return None;
+        }
+        UNIT_MAP.get(&u).map(|&i| {
+            if i >= MAX_UNITS {
+                eprintln!(
+                    "[Mapper Warning] Unit {:?} index {} exceeds MAX_UNITS {}",
+                    u, i, MAX_UNITS
+                );
+            }
+            OFFSET_UNITS + i
+        })
     }
-}
 
-#[inline]
-fn attack_channel(dx: i32, dy: i32) -> Option<usize> {
-    if let Some(c) = direction_channel(dx, dy, 8) {
-        return Some(c);
+    pub fn map_tech(t: TechnologyType) -> Option<usize> {
+        if t == TechnologyType::Unrequired || t == TechnologyType::BeyondComprehension {
+            return None;
+        }
+        TECH_MAP.get(&t).map(|&i| {
+            if i >= MAX_TECHS {
+                eprintln!(
+                    "[Mapper Warning] Tech {:?} index {} exceeds MAX_TECHS {}",
+                    t, i, MAX_TECHS
+                );
+            }
+            OFFSET_TECHS + i
+        })
     }
-    Some(31)
+
+    pub fn map_ability(a: AbilityType) -> Option<usize> {
+        if a == AbilityType::None {
+            return None;
+        }
+        ABILITY_MAP.get(&a).map(|&i| {
+            if i >= MAX_ABILITIES {
+                eprintln!(
+                    "[Mapper Warning] Ability {:?} index {} exceeds MAX_ABILITIES {}",
+                    a, i, MAX_ABILITIES
+                );
+            }
+            OFFSET_ABILITIES + i
+        })
+    }
 }

@@ -10,11 +10,11 @@ use crate::types::{AbilityType, MoveType, ResourceType, TerrainType};
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClearForestMove {
-    pub target: i32,
+    pub target_index: i32,
 }
 impl ClearForestMove {
-    pub fn new(target: i32) -> Self {
-        Self { target }
+    pub fn new(target_index: i32) -> Self {
+        Self { target_index }
     }
 }
 
@@ -26,7 +26,7 @@ impl Move for ClearForestMove {
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let mut undos = Vec::new();
         // Clear Forest -> Field + Gain 1 Star
-        undos.push(modify_terrain(state, self.target, TerrainType::Field));
+        undos.push(modify_terrain(state, self.target_index, TerrainType::Field));
         undos.push(gain_stars(state, 1));
 
         Ok(MoveResult {
@@ -36,19 +36,25 @@ impl Move for ClearForestMove {
     }
 
     fn describe(&self, _state: &GameState) -> String {
-        format!("Clear Forest at {}", self.target)
+        format!("Clear Forest at {}", self.target_index)
     }
+
     fn serialize(&self) -> serde_json::Value {
         serde_json::json!({
-            "moveType": MoveType::Ability,
-            "ability": AbilityType::ClearForest,
-            "target": self.target
+            "moveType": self.move_type(),
+            "type": self.ability_type(),
+            "target": self.target_index,
         })
     }
 
     #[inline]
-    fn action_coords(&self) -> (Option<i32>, Option<i32>) {
-        (Some(self.target), Some(self.target))
+    fn target_idx(&self) -> Result<usize, String> {
+        Ok(self.target_index as usize)
+    }
+
+    #[inline]
+    fn ability_type(&self) -> Result<AbilityType, String> {
+        Ok(AbilityType::ClearForest)
     }
 }
 
@@ -56,11 +62,11 @@ impl Move for ClearForestMove {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GrowForestMove {
-    pub target: i32,
+    pub target_index: i32,
 }
 impl GrowForestMove {
-    pub fn new(target: i32) -> Self {
-        Self { target }
+    pub fn new(target_index: i32) -> Self {
+        Self { target_index }
     }
 }
 
@@ -72,7 +78,11 @@ impl Move for GrowForestMove {
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let mut undos = Vec::new();
         // Spiritualism: Field -> Forest (Cost 5)
-        undos.push(modify_terrain(state, self.target, TerrainType::Forest));
+        undos.push(modify_terrain(
+            state,
+            self.target_index,
+            TerrainType::Forest,
+        ));
         undos.push(spend_stars(state, 5));
 
         Ok(MoveResult {
@@ -80,20 +90,27 @@ impl Move for GrowForestMove {
             rewards: None,
         })
     }
+
     fn describe(&self, _state: &GameState) -> String {
-        format!("Grow Forest at {}", self.target)
+        format!("Grow Forest at {}", self.target_index)
     }
+
     fn serialize(&self) -> serde_json::Value {
         serde_json::json!({
-            "moveType": MoveType::Ability,
-            "ability": AbilityType::GrowForest,
-            "target": self.target
+            "moveType": self.move_type(),
+            "type": self.ability_type(),
+            "target": self.target_index,
         })
     }
 
     #[inline]
-    fn action_coords(&self) -> (Option<i32>, Option<i32>) {
-        (Some(self.target), Some(self.target))
+    fn target_idx(&self) -> Result<usize, String> {
+        Ok(self.target_index as usize)
+    }
+
+    #[inline]
+    fn ability_type(&self) -> Result<AbilityType, String> {
+        Ok(AbilityType::GrowForest)
     }
 }
 
@@ -101,11 +118,11 @@ impl Move for GrowForestMove {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BurnForestMove {
-    pub target: i32,
+    pub target_index: i32,
 }
 impl BurnForestMove {
-    pub fn new(target: i32) -> Self {
-        Self { target }
+    pub fn new(target_index: i32) -> Self {
+        Self { target_index }
     }
 }
 
@@ -117,11 +134,11 @@ impl Move for BurnForestMove {
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let mut undos = Vec::new();
         // Construction: Forest -> Field + Add Crop (Cost 2)
-        undos.push(modify_terrain(state, self.target, TerrainType::Field));
+        undos.push(modify_terrain(state, self.target_index, TerrainType::Field));
         undos.push(spend_stars(state, 2));
         undos.push(consume_resource(
             state,
-            self.target,
+            self.target_index,
             Some(ResourceType::Crop),
         ));
 
@@ -130,20 +147,27 @@ impl Move for BurnForestMove {
             rewards: None,
         })
     }
+
     fn describe(&self, _state: &GameState) -> String {
-        format!("Burn Forest at {}", self.target)
+        format!("Burn Forest at {}", self.target_index)
     }
+
     fn serialize(&self) -> serde_json::Value {
         serde_json::json!({
-            "moveType": MoveType::Ability,
-            "ability": AbilityType::BurnForest,
-            "target": self.target
+            "moveType": self.move_type(),
+            "type": self.ability_type(),
+            "target": self.target_index,
         })
     }
 
     #[inline]
-    fn action_coords(&self) -> (Option<i32>, Option<i32>) {
-        (Some(self.target), Some(self.target))
+    fn target_idx(&self) -> Result<usize, String> {
+        Ok(self.target_index as usize)
+    }
+
+    #[inline]
+    fn ability_type(&self) -> Result<AbilityType, String> {
+        Ok(AbilityType::BurnForest)
     }
 }
 
@@ -177,8 +201,6 @@ pub fn generate_forest_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
                 continue;
             }
             // Check structure
-            // User Request: "i shouldnt be able to use my abilities or do anything to that forest" if a structure is present.
-            // Exception: Roads do NOT block forest abilities.
             if let Some(structure) = crate::functions::get_structure_at(state, tile_idx) {
                 if structure.structure_type != crate::types::StructureType::Road {
                     continue;
@@ -195,10 +217,9 @@ pub fn generate_forest_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
                         moves.push(Box::new(BurnForestMove::new(tile_idx)));
                     }
                 }
-                // Grow: Needs Field (Can Elyrion also grow? Usually standard tribes need Field)
+                // Grow: Needs Field
                 if tile.terrain_type == TerrainType::Field || tile.terrain_type == TerrainType::None
                 {
-                    // Check implies Field usually.
                     if has_grow && tribe.stars >= 5 {
                         moves.push(Box::new(GrowForestMove::new(tile_idx)));
                     }

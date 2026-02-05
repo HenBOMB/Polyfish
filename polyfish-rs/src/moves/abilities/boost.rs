@@ -1,16 +1,16 @@
 use crate::moves::{Move, MoveResult};
 use crate::states::GameState;
-use crate::types::MoveType;
+use crate::types::{AbilityType, MoveType};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BoostMove {
-    pub unit_idx: i32,
+    pub src_index: i32,
 }
 
 impl BoostMove {
-    pub fn new(unit_idx: i32) -> Self {
-        Self { unit_idx }
+    pub fn new(src_index: i32) -> Self {
+        Self { src_index }
     }
 }
 
@@ -18,26 +18,34 @@ impl Move for BoostMove {
     fn move_type(&self) -> MoveType {
         MoveType::Ability
     }
+
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
-        let undo = crate::actions::units::boost_unit(state, self.unit_idx);
+        let undo = crate::actions::units::boost_unit(state, self.src_index);
         Ok(MoveResult {
             undo,
             rewards: None,
         })
     }
+
     fn describe(&self, _state: &GameState) -> String {
-        format!("Boost allies around {}", self.unit_idx)
+        format!("Boost allies around {}", self.src_index)
     }
+
     fn serialize(&self) -> serde_json::Value {
-        let mut value = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
-        if let Some(obj) = value.as_object_mut() {
-            obj.insert("moveType".to_string(), serde_json::json!(MoveType::Ability));
-        }
-        value
+        serde_json::json!({
+            "moveType": self.move_type(),
+            "type": self.ability_type(),
+            "src": self.src_index,
+        })
     }
 
     #[inline]
-    fn action_coords(&self) -> (Option<i32>, Option<i32>) {
-        (Some(self.unit_idx), Some(self.unit_idx))
+    fn source_idx(&self) -> Result<usize, String> {
+        Ok(self.src_index as usize)
+    }
+
+    #[inline]
+    fn ability_type(&self) -> Result<AbilityType, String> {
+        Ok(AbilityType::Boost)
     }
 }

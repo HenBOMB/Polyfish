@@ -1,12 +1,10 @@
 use crate::ai::features::state_to_tensor;
-use crate::ai::mapper::ActionMapper;
 use crate::ai::network::PolyZeroNet;
 use crate::game::Game;
 use crate::moves::EndTurnMove;
 use crate::moves::Move;
 use crate::types::MoveType;
 
-use candle_core::Tensor;
 use std::cell::RefCell;
 
 pub struct ZeroMctsAgent<'a> {
@@ -152,26 +150,23 @@ impl<'a> ZeroMctsAgent<'a> {
             iteration += batch_count;
         }
 
-        // Generate Policy Vector
-        let mut policy = vec![0.0; ActionMapper::TOTAL_ACTIONS];
-        let map_size = game.state.settings.size;
+        // Generate visit count distribution for policy
+        let num_children = root.children.len();
 
         let mut best_idx = 0;
         let mut max_visits = -1.0;
 
         for (i, child) in root.children.iter().enumerate() {
-            if let Some(m) = &child.move_to_here {
-                if let Some(idx) = ActionMapper::move_to_idx(map_size, m.as_ref()) {
-                    if idx < policy.len() {
-                        policy[idx] = child.visits;
-                    }
-                }
-
-                if child.visits > max_visits {
-                    max_visits = child.visits;
-                    best_idx = i;
-                }
+            if child.visits > max_visits {
+                max_visits = child.visits;
+                best_idx = i;
             }
+        }
+
+        // Create policy from visit counts
+        let mut policy = vec![0.0f32; num_children.max(1)];
+        for (i, child) in root.children.iter().enumerate() {
+            policy[i] = child.visits;
         }
 
         // Normalize policy
@@ -194,6 +189,62 @@ impl<'a> ZeroMctsAgent<'a> {
         };
 
         (move_or_end_turn(best_move), policy)
+    }
+
+    /// Select a move and return decomposed visit information for policy training
+    /// Returns best move + list of move visit data for decomposed policy targets
+    pub fn select_move_with_decomposed_visits(
+        &self,
+        game: &mut Game,
+    ) -> (Option<Box<dyn Move>>, Vec<crate::ai::mcts_types::MoveVisit>) {
+        use crate::ai::mcts_types::MoveVisit;
+
+        let mut root = ZeroNode::new(1.0, None);
+        self.expand_node(&mut root, game, false);
+
+        // Parallel search with batching
+        let mut iteration = 0;
+        while iteration < self.iterations {
+            let batch_count = (self.iterations - iteration).min(self.batch_size);
+            self.parallel_search_batch(game, &mut root, batch_count);
+            iteration += batch_count;
+        }
+
+        // Extract move visit information (decomposed components, no cloning needed)
+        let mut move_visits = Vec::new();
+        let mut best_idx = 0;
+        let mut max_visits = -1.0;
+
+        for (i, child) in root.children.iter().enumerate() {
+            if let Some(ref m) = child.move_to_here {
+                // Extract decomposed information from the move
+                let move_info = MoveVisit {
+                    move_type: m.move_type(),
+                    visits: child.visits,
+                    source_idx: m.source_idx().ok(),
+                    target_idx: m.target_idx().ok(),
+                    structure_type: m.structure_type().ok(),
+                    unit_type: m.unit_type().ok(),
+                    tech_type: m.tech_type().ok(),
+                    ability_type: m.ability_type().ok(),
+                };
+                move_visits.push(move_info);
+
+                if child.visits > max_visits {
+                    max_visits = child.visits;
+                    best_idx = i;
+                }
+            }
+        }
+
+        // Extract best move
+        let best_move = if !root.children.is_empty() && best_idx < root.children.len() {
+            root.children.swap_remove(best_idx).move_to_here
+        } else {
+            None
+        };
+
+        (move_or_end_turn(best_move), move_visits)
     }
 
     /// Perform a batch of parallel searches using virtual loss
@@ -435,27 +486,36 @@ impl<'a> ZeroMctsAgent<'a> {
 
     fn expand_node(&self, node: &mut ZeroNode, game: &Game, allow_end_turn: bool) -> f32 {
         let device = self.network.device();
-        let input = match state_to_tensor(
+        let features = match state_to_tensor(
             &game.state,
             game.state.settings.current_player_turn_id,
             &device,
         ) {
-            Ok(t) => t,
+            Ok(f) => f,
             Err(_) => return 0.0,
         };
 
-        let (policy_logits, value_tensor): (Tensor, Tensor) =
-            match self.network.forward_t(&input, false) {
+        // Forward with decomposed architecture
+        let (policy_output, value_output) =
+            match self
+                .network
+                .forward_t(&features.spatial_map, &features.player_state, false)
+            {
                 Ok(res) => res,
                 Err(_) => return 0.0,
             };
 
-        let value = value_tensor
+        // Use win value as primary signal
+        let value = value_output
+            .win_value
             .flatten_all()
             .unwrap()
             .to_vec1::<f32>()
             .unwrap()[0];
 
+        // TODO: Proper decomposed policy composition
+        // For now, use uniform priors across legal moves
+        // Will implement full policy composition in next phase
         let mut legal_moves = game.legal_moves();
 
         if !allow_end_turn {
@@ -472,38 +532,25 @@ impl<'a> ZeroMctsAgent<'a> {
             return value;
         }
 
-        let mut child_priors = Vec::new();
-        let prob_vec = policy_logits
-            .flatten_all()
-            .unwrap()
-            .to_vec1::<f32>()
-            .unwrap();
-        let map_size = game.state.settings.size;
+        // Use decomposed policy composer to get priors
+        let priors = crate::ai::policy_composer::compute_move_priors(
+            &policy_output,
+            &legal_moves,
+            game,
+            allow_end_turn,
+        );
 
-        for m in legal_moves {
-            if let Some(idx) = ActionMapper::move_to_idx(map_size, m.as_ref()) {
-                if idx < prob_vec.len() {
-                    let logit = prob_vec[idx];
-                    child_priors.push((m, logit));
-                }
-            }
-        }
+        // Normalize priors
+        let sum: f32 = priors.iter().sum();
+        let normalized_priors: Vec<f32> = if sum > 1e-8 {
+            priors.iter().map(|p| p / sum).collect()
+        } else {
+            vec![1.0 / priors.len() as f32; priors.len()]
+        };
 
-        let max_logit = child_priors
-            .iter()
-            .map(|(_, l)| *l)
-            .fold(f32::NEG_INFINITY, f32::max);
-        let mut sum_exp = 0.0;
-        let mut blobs = Vec::new();
-        for (m, l) in child_priors {
-            let p = (l - max_logit).exp();
-            sum_exp += p;
-            blobs.push((m, p));
-        }
-
-        for (m, p_raw) in blobs {
-            let prior = p_raw / sum_exp;
-            node.children.push(ZeroNode::new(prior, Some(m)));
+        // Create child nodes
+        for (m, prior) in legal_moves.into_iter().zip(normalized_priors.iter()) {
+            node.children.push(ZeroNode::new(*prior, Some(m)));
         }
 
         node.is_expanded = true;

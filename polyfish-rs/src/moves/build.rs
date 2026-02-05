@@ -11,15 +11,15 @@ use crate::types::{MoveType, StructureType, TerrainType};
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BuildMove {
-    pub tile_index: i32,
+    pub target_index: i32,
     #[serde(rename = "structure")]
     pub structure_type: StructureType,
 }
 
 impl BuildMove {
-    pub fn new(tile_index: i32, structure_type: StructureType) -> Self {
+    pub fn new(target_index: i32, structure_type: StructureType) -> Self {
         Self {
-            tile_index,
+            target_index,
             structure_type,
         }
     }
@@ -79,26 +79,30 @@ impl Move for BuildMove {
         use crate::actions::structure::build_structure;
 
         Ok(MoveResult {
-            undo: build_structure(state, self.tile_index, self.structure_type),
+            undo: build_structure(state, self.target_index, self.structure_type),
             rewards: None,
         })
     }
 
     fn describe(&self, _state: &GameState) -> String {
-        format!("Build {:?} at {}", self.structure_type, self.tile_index)
+        format!("Build {:?} at {}", self.structure_type, self.target_index)
     }
 
     fn serialize(&self) -> serde_json::Value {
-        let mut value = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
-        if let Some(obj) = value.as_object_mut() {
-            obj.insert("moveType".to_string(), serde_json::json!(MoveType::Build));
-        }
-        value
+        serde_json::json!({
+            "moveType": self.move_type(),
+            "target": self.target_index,
+        })
     }
 
     #[inline]
-    fn action_coords(&self) -> (Option<i32>, Option<i32>) {
-        (Some(self.tile_index), Some(self.tile_index))
+    fn target_idx(&self) -> Result<usize, String> {
+        Ok(self.target_index as usize)
+    }
+
+    #[inline]
+    fn structure_type(&self) -> Result<StructureType, String> {
+        Ok(self.structure_type)
     }
 }
 

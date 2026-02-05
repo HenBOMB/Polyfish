@@ -389,6 +389,18 @@ pub fn default_turn() -> i32 {
 pub fn default_max_turns() -> i32 {
     10
 }
+pub fn default_max_score() -> i32 {
+    5000
+}
+pub fn default_max_stars() -> i32 {
+    30
+}
+pub fn default_max_spt() -> i32 {
+    20
+}
+pub fn default_max_units() -> i32 {
+    20
+}
 pub fn default_fow() -> bool {
     true
 }

@@ -6,17 +6,17 @@ use crate::actions::chain_undos;
 use crate::actions::units::{end_unit_turn, heal_unit};
 use crate::moves::{Move, MoveResult};
 use crate::states::GameState;
-use crate::types::MoveType;
+use crate::types::{AbilityType, MoveType};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoverMove {
-    pub target: i32,
+    pub src_index: i32,
 }
 
 impl RecoverMove {
-    pub fn new(target: i32) -> Self {
-        Self { target }
+    pub fn new(src_index: i32) -> Self {
+        Self { src_index }
     }
 }
 
@@ -29,7 +29,7 @@ impl Move for RecoverMove {
 
         let unit_owner = state
             .tiles
-            .get(&self.target)
+            .get(&self.src_index)
             .and_then(|t| t._unit_owner_id)
             .unwrap_or(0);
 
@@ -38,7 +38,10 @@ impl Move for RecoverMove {
         }
 
         let unit_idx = if let Some(tribe) = state.tribes.get(&unit_owner) {
-            tribe.units.iter().position(|u| u.coords.idx == self.target)
+            tribe
+                .units
+                .iter()
+                .position(|u| u.coords.idx == self.src_index)
         } else {
             None
         };
@@ -46,7 +49,7 @@ impl Move for RecoverMove {
         if let Some(idx) = unit_idx {
             // Calculate heal amount
             let in_territory =
-                crate::functions::is_in_own_territory(state, self.target, unit_owner);
+                crate::functions::is_in_own_territory(state, self.src_index, unit_owner);
             let amount = if in_territory { 40 } else { 20 };
 
             undos.push(heal_unit(state, unit_owner, idx, amount));
@@ -57,41 +60,29 @@ impl Move for RecoverMove {
                 rewards: None,
             })
         } else {
-            eprintln!(
-                "Error: Unit not found for RecoverMove at target {}",
-                self.target
-            );
-            eprintln!("Tile owner: {}", unit_owner);
-            if let Some(tribe) = state.tribes.get(&unit_owner) {
-                eprintln!(
-                    "Tribe units: {:?}",
-                    tribe.units.iter().map(|u| u.coords.idx).collect::<Vec<_>>()
-                );
-            } else {
-                eprintln!("Tribe {} not found!", unit_owner);
-            }
             Err("Unit not found".to_string())
         }
     }
 
     fn describe(&self, _state: &GameState) -> String {
-        format!("Recover at {}", self.target)
+        format!("Recover at {}", self.src_index)
     }
 
     fn serialize(&self) -> serde_json::Value {
-        let mut value = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
-        if let Some(obj) = value.as_object_mut() {
-            obj.insert("moveType".to_string(), serde_json::json!(MoveType::Ability));
-            obj.insert(
-                "abilityType".to_string(),
-                serde_json::json!(crate::types::AbilityType::Recover),
-            );
-        }
-        value
+        serde_json::json!({
+            "moveType": self.move_type(),
+            "type": AbilityType::Recover,
+            "src": self.src_index,
+        })
     }
 
     #[inline]
-    fn action_coords(&self) -> (Option<i32>, Option<i32>) {
-        (Some(self.target), Some(self.target))
+    fn source_idx(&self) -> Result<usize, String> {
+        Ok(self.src_index as usize)
+    }
+
+    #[inline]
+    fn ability_type(&self) -> Result<AbilityType, String> {
+        Ok(AbilityType::Recover)
     }
 }

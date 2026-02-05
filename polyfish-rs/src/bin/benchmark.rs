@@ -81,8 +81,9 @@ fn main() -> anyhow::Result<()> {
 
             // Benchmark: NN inference (standalone)
             let nn_start = Instant::now();
-            let input = state_to_tensor(&game.state, pov, &device)?;
-            let (_policy, _value) = network.forward_t(&input, false)?;
+            let features = state_to_tensor(&game.state, pov, &device)?;
+            let (_policy, _value) =
+                network.forward_t(&features.spatial_map, &features.player_state, false)?;
             total_nn_time += nn_start.elapsed();
 
             // Benchmark: Full MCTS search

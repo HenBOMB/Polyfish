@@ -1,17 +1,17 @@
 use crate::actions::chain_undos;
 use crate::moves::{Move, MoveResult};
 use crate::states::GameState;
-use crate::types::{MoveType, TerrainType};
+use crate::types::{AbilityType, MoveType, TerrainType};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExplodeMove {
-    pub unit_idx: i32,
+    pub src_index: i32,
 }
 
 impl ExplodeMove {
-    pub fn new(unit_idx: i32) -> Self {
-        Self { unit_idx }
+    pub fn new(src_index: i32) -> Self {
+        Self { src_index }
     }
 }
 
@@ -19,14 +19,15 @@ impl Move for ExplodeMove {
     fn move_type(&self) -> MoveType {
         MoveType::Ability
     }
+
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let owner = state
             .tiles
-            .get(&self.unit_idx)
+            .get(&self.src_index)
             .and_then(|t| t._unit_owner_id)
             .unwrap_or(0);
         let unit_idx_in_tribe = if let Some(t) = state.tribes.get(&owner) {
-            t.units.iter().position(|u| u.coords.idx == self.unit_idx)
+            t.units.iter().position(|u| u.coords.idx == self.src_index)
         } else {
             None
         };
@@ -36,7 +37,7 @@ impl Move for ExplodeMove {
 
             // Collect all units in the chain to explode (this unit + all children)
             let mut units_to_explode = Vec::new();
-            units_to_explode.push((u_idx, self.unit_idx));
+            units_to_explode.push((u_idx, self.src_index));
 
             // Traverse chain to find children
             let mut current_idx = u_idx;
@@ -209,19 +210,26 @@ impl Move for ExplodeMove {
             Err("Unit not found".to_string())
         }
     }
+
     fn describe(&self, _state: &GameState) -> String {
-        format!("Explode unit at {}", self.unit_idx)
+        format!("Explode unit at {}", self.src_index)
     }
+
     fn serialize(&self) -> serde_json::Value {
-        let mut value = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
-        if let Some(obj) = value.as_object_mut() {
-            obj.insert("moveType".to_string(), serde_json::json!(MoveType::Ability));
-        }
-        value
+        serde_json::json!({
+            "moveType": self.move_type(),
+            "type": self.ability_type(),
+            "src": self.src_index,
+        })
     }
 
     #[inline]
-    fn action_coords(&self) -> (Option<i32>, Option<i32>) {
-        (Some(self.unit_idx), Some(self.unit_idx))
+    fn source_idx(&self) -> Result<usize, String> {
+        Ok(self.src_index as usize)
+    }
+
+    #[inline]
+    fn ability_type(&self) -> Result<AbilityType, String> {
+        Ok(AbilityType::Explode)
     }
 }

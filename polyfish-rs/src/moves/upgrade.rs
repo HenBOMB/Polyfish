@@ -12,15 +12,15 @@ use crate::types::{MoveType, UnitType};
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpgradeMove {
-    pub tile_index: i32,
+    pub src_index: i32,
     #[serde(rename = "type")]
     pub target_type: UnitType,
 }
 
 impl UpgradeMove {
-    pub fn new(tile_index: i32, target_type: UnitType) -> Self {
+    pub fn new(src_index: i32, target_type: UnitType) -> Self {
         Self {
-            tile_index,
+            src_index,
             target_type,
         }
     }
@@ -48,7 +48,7 @@ impl Move for UpgradeMove {
         }
 
         // Delegate to action
-        let undo = crate::actions::units::upgrade_unit(state, self.tile_index, self.target_type)?;
+        let undo = crate::actions::units::upgrade_unit(state, self.src_index, self.target_type)?;
 
         Ok(MoveResult {
             undo,
@@ -59,22 +59,26 @@ impl Move for UpgradeMove {
     fn describe(&self, _state: &GameState) -> String {
         format!(
             "Upgrade unit at {} to {:?}",
-            self.tile_index, self.target_type
+            self.src_index, self.target_type
         )
     }
 
     fn serialize(&self) -> serde_json::Value {
-        let mut value = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
-        if let Some(obj) = value.as_object_mut() {
-            obj.insert("moveType".to_string(), serde_json::json!(MoveType::Summon));
-            obj.insert("upgrade".to_string(), serde_json::json!(true));
-        }
-        value
+        serde_json::json!({
+            "moveType": self.move_type(),
+            "src": self.src_index,
+            "type": self.target_type,
+        })
     }
 
     #[inline]
-    fn action_coords(&self) -> (Option<i32>, Option<i32>) {
-        (Some(self.tile_index), Some(self.tile_index))
+    fn source_idx(&self) -> Result<usize, String> {
+        Ok(self.src_index as usize)
+    }
+
+    #[inline]
+    fn unit_type(&self) -> Result<UnitType, String> {
+        Ok(self.target_type)
     }
 }
 

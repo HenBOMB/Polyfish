@@ -3,7 +3,7 @@
 use crate::moves::{Move, MoveResult};
 use crate::states::GameState;
 use crate::states::PlayerId;
-use crate::types::MoveType;
+use crate::types::{AbilityType, MoveType};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,15 +68,21 @@ impl Move for BreakPeaceMove {
     }
 
     fn serialize(&self) -> serde_json::Value {
-        let mut value = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
-        if let Some(obj) = value.as_object_mut() {
-            obj.insert("moveType".to_string(), serde_json::json!(MoveType::Ability));
-            obj.insert(
-                "ability".to_string(),
-                serde_json::json!(crate::types::AbilityType::BreakPeace),
-            );
-        }
-        value
+        serde_json::json!({
+            "moveType": self.move_type(),
+            "type": self.ability_type(),
+            "target": self.target_tribe_id,
+        })
+    }
+
+    #[inline]
+    fn target_idx(&self) -> Result<usize, String> {
+        Ok(self.target_tribe_id as usize)
+    }
+
+    #[inline]
+    fn ability_type(&self) -> Result<AbilityType, String> {
+        Ok(AbilityType::BreakPeace)
     }
 }
 

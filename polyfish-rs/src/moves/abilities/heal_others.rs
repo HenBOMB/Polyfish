@@ -7,12 +7,12 @@ use crate::types::{AbilityType, MoveType};
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HealOthersMove {
-    pub unit_idx: i32,
+    pub src_index: i32,
 }
 
 impl HealOthersMove {
-    pub fn new(unit_idx: i32) -> Self {
-        Self { unit_idx }
+    pub fn new(src_index: i32) -> Self {
+        Self { src_index }
     }
 }
 
@@ -24,14 +24,14 @@ impl Move for HealOthersMove {
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let actor_owner = state
             .tiles
-            .get(&self.unit_idx)
+            .get(&self.src_index)
             .and_then(|t| t._unit_owner_id)
             .unwrap_or(0);
         let actor_idx = if let Some(tribe) = state.tribes.get(&actor_owner) {
             tribe
                 .units
                 .iter()
-                .position(|u| u.coords.idx == self.unit_idx)
+                .position(|u| u.coords.idx == self.src_index)
         } else {
             None
         };
@@ -40,7 +40,7 @@ impl Move for HealOthersMove {
             let mut undos = Vec::new();
 
             // Heal all adjacent allies
-            let adj = crate::functions::get_adjacent_indices(state, self.unit_idx, 1);
+            let adj = crate::functions::get_adjacent_indices(state, self.src_index, 1);
             for target_idx in adj {
                 let target_owner = state
                     .tiles
@@ -67,23 +67,26 @@ impl Move for HealOthersMove {
             Err("Unit not found".to_string())
         }
     }
+
     fn describe(&self, _state: &GameState) -> String {
-        format!("Heal allies around {}", self.unit_idx)
+        format!("Heal allies around {}", self.src_index)
     }
+
     fn serialize(&self) -> serde_json::Value {
-        let mut value = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
-        if let Some(obj) = value.as_object_mut() {
-            obj.insert("moveType".to_string(), serde_json::json!(MoveType::Ability));
-            obj.insert(
-                "ability".to_string(),
-                serde_json::json!(AbilityType::HealOthers),
-            );
-        }
-        value
+        serde_json::json!({
+            "moveType": self.move_type(),
+            "type": self.ability_type(),
+            "src": self.src_index,
+        })
     }
 
     #[inline]
-    fn action_coords(&self) -> (Option<i32>, Option<i32>) {
-        (Some(self.unit_idx), Some(self.unit_idx))
+    fn source_idx(&self) -> Result<usize, String> {
+        Ok(self.src_index as usize)
+    }
+
+    #[inline]
+    fn ability_type(&self) -> Result<AbilityType, String> {
+        Ok(AbilityType::HealOthers)
     }
 }

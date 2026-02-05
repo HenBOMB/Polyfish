@@ -24,6 +24,7 @@ use tower_http::services::ServeDir;
 struct AppState {
     game: Mutex<Game>,
     training_status: Mutex<Option<u32>>, // Store PID of running training
+    network: Arc<polyfish::ai::network::PolyZeroNet>, // Trained neural network
 }
 
 const DEFAULT_TRIBES: &[TribeType] = &[TribeType::Imperius, TribeType::Imperius];
@@ -44,9 +45,36 @@ async fn main() {
     game.state.settings.verbose = true;
     game.post_load();
 
+    // Load trained neural network
+    use candle_core::Device;
+    use candle_nn::VarMap;
+    let device = Device::Cpu;
+
+    let model_path = "model.safetensors";
+    let mut varmap = VarMap::new();
+
+    let network = if std::path::Path::new(model_path).exists() {
+        println!("✅ Loading trained AI model from {}", model_path);
+        varmap
+            .load(model_path)
+            .expect("Failed to load model weights");
+        polyfish::ai::network::PolyZeroNet::new(candle_nn::VarBuilder::from_varmap(
+            &varmap,
+            candle_core::DType::F32,
+            &device,
+        ))
+        .expect("Failed to build neural network")
+    } else {
+        panic!(
+            "Model file {} not found! Please run init_model.py first.",
+            model_path
+        );
+    };
+
     let shared_state = Arc::new(AppState {
         game: Mutex::new(game),
         training_status: Mutex::new(None),
+        network: Arc::new(network),
     });
 
     // Build our application with routes
@@ -131,11 +159,12 @@ async fn auto_step(
     // dont spam the front end lol
     game.state.settings.verbose = false;
 
-    use polyfish::ai::MctsAgent;
-    let agent = MctsAgent::new(params.iterations);
+    // Use trained AI model!
+    use polyfish::ai::mcts_zero::ZeroMctsAgent;
+    let agent = ZeroMctsAgent::new(&state.network, params.iterations);
 
     game.state._messages.clear();
-    let (chosen_move, mcts_analysis) = agent.select_move_with_analysis(&mut game);
+    let (chosen_move, policy) = agent.select_move_with_stats(&mut game);
     let mut move_name = "none".to_string();
 
     // Create serialized best move before potentially consuming it (though we use as_ref so it's fine)
@@ -167,7 +196,7 @@ async fn auto_step(
         "movePlayed": move_name,
         "bestMove": best_move_json,
         "legalMoves": legal_moves,
-        "mctsAnalysis": mcts_analysis
+        "policyDistribution": policy
     }))
 }
 
@@ -261,8 +290,11 @@ async fn manual_step(
         }
         3 => {
             // Ability
-            let src = payload["src"].as_i64().unwrap() as i32;
-            let ability = payload["ability"].as_i64().unwrap() as i8;
+            let src = payload["src"]
+                .as_i64()
+                .or(payload["target"].as_i64())
+                .unwrap_or(0) as i32;
+            let ability = payload["type"].as_i64().unwrap_or(0) as i8;
             match unsafe { std::mem::transmute(ability) } {
                 AbilityType::Recover => Box::new(RecoverMove::new(src)),
                 AbilityType::Promote => Box::new(PromoteMove::new(src)),
@@ -273,7 +305,7 @@ async fn manual_step(
                 AbilityType::Destroy => Box::new(DestroyMove::new(src)),
                 AbilityType::Decompose => Box::new(DecomposeMove::new(src)),
                 AbilityType::Convert => {
-                    let target = payload["targetIdx"]
+                    let target = payload["target"]
                         .as_i64()
                         .or(payload["target"].as_i64())
                         .unwrap() as i32;
@@ -287,7 +319,7 @@ async fn manual_step(
                 AbilityType::BreakPeace => {
                     let target = payload["target"]
                         .as_i64()
-                        .or(payload["targetIdx"].as_i64())
+                        .or(payload["target"].as_i64())
                         .unwrap() as i32;
                     Box::new(BreakPeaceMove::new(target))
                 }
@@ -296,7 +328,7 @@ async fn manual_step(
         }
         4 => {
             // Summon or Upgrade
-            let tile_index = payload["tileIndex"].as_i64().unwrap() as i32;
+            let tile_index = payload["src"].as_i64().unwrap() as i32;
             let type_val = payload["type"].as_i64().unwrap() as i8;
             if payload
                 .get("upgrade")
@@ -319,15 +351,15 @@ async fn manual_step(
         }
         6 => {
             // Build
-            let idx = payload["tileIndex"].as_i64().unwrap() as i32;
-            let construct = payload["structure"].as_i64().unwrap() as i8;
+            let idx = payload["target"].as_i64().unwrap() as i32;
+            let construct = payload["type"].as_i64().unwrap() as i8;
             Box::new(BuildMove::new(idx, unsafe {
                 std::mem::transmute(construct)
             }))
         }
         7 => {
             // Research
-            let tech = payload["tech"].as_i64().unwrap() as i8;
+            let tech = payload["type"].as_i64().unwrap() as i8;
             Box::new(ResearchMove::new(unsafe { std::mem::transmute(tech) }))
         }
         8 => {
@@ -337,14 +369,8 @@ async fn manual_step(
         }
         9 => {
             // Reward
-            let idx = payload["target"]
-                .as_i64()
-                .or(payload["idx"].as_i64())
-                .unwrap() as i32;
-            let reward_type = payload["reward"]
-                .as_i64()
-                .or(payload["rewardType"].as_i64())
-                .unwrap() as i8;
+            let idx = payload["target"].as_i64().unwrap() as i32;
+            let reward_type = payload["type"].as_i64().unwrap() as i8;
             Box::new(RewardMove::new(idx, unsafe {
                 std::mem::transmute(reward_type)
             }))

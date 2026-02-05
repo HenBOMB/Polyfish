@@ -4,6 +4,8 @@ import torch.optim as optim
 from safetensors.torch import load_file, save_file
 import glob
 import os
+import random
+import gc
 
 # --- Configuration ---
 BATCH_SIZE = 64
@@ -11,7 +13,7 @@ EPOCHS = 5
 LEARNING_RATE = 0.001
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Architecture must match Rust `network.rs`
+# Architecture matching Rust `network.rs` (decomposed policy + auxiliary values)
 class ResBlock(nn.Module):
     def __init__(self, channels):
         super().__init__()
@@ -30,70 +32,172 @@ class ResBlock(nn.Module):
         return out
 
 class PolyZeroNet(nn.Module):
-    def __init__(self, input_channels, num_actions, map_height, map_width):
+    """
+    Enhanced architecture with:
+    - Player state embedding (global context)
+    - 12 ResBlocks (increased capacity)
+    - 7 decomposed policy heads
+    - 3 value heads (win, eco, mil)
+    """
+    def __init__(self, spatial_channels, player_state_dim, map_height, map_width):
         super().__init__()
-        self.conv1 = nn.Conv2d(input_channels, 64, 3, padding=1)
+        self.map_height = map_height
+        self.map_width = map_width
+        
+        # Player state embedding: 10 -> 64 -> 64
+        self.player_fc1 = nn.Linear(player_state_dim, 64)
+        self.player_fc2 = nn.Linear(64, 64)
+        self.player_relu = nn.ReLU()
+        
+        # Initial conv on spatial features (will concatenate with player embedding)
+        # Input: spatial (149 channels) + player embedding (64 channels) = 213 total
+        self.conv1 = nn.Conv2d(spatial_channels + 64, 64, 3, padding=1)
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU()
         
-        # 8 Residual Blocks (matching Rust)
-        # We name them res0, res1, res2, res3, res4, res5, res6, res7 to match Rust's pp("res0"), etc.
-        self.res0 = ResBlock(64)
-        self.res1 = ResBlock(64)
-        self.res2 = ResBlock(64)
-        self.res3 = ResBlock(64)
-        self.res4 = ResBlock(64)
-        self.res5 = ResBlock(64)
-        self.res6 = ResBlock(64)
-        self.res7 = ResBlock(64)
+        # 12 Residual Blocks (matching Rust)
+        self.res_blocks = nn.ModuleList([ResBlock(64) for _ in range(12)])
         
-        # Policy Head (Fully Conv)
-        self.p_conv1 = nn.Conv2d(64, 32, 1)
-        self.p_bn1 = nn.BatchNorm2d(32)
-        self.p_conv2 = nn.Conv2d(32, 64, 1)
+        # --- Decomposed Policy Heads ---
         
-        # Value Head
-        self.v_conv = nn.Conv2d(64, 1, 1)
-        self.v_bn = nn.BatchNorm2d(1)
-        self.v_fc1 = nn.Linear(1 * map_height * map_width, 64)
-        self.v_fc2 = nn.Linear(64, 1)
+        # 1. Shared Policy Processing (Pooling -> FC)
+        self.p_pool_conv = nn.Conv2d(64, 1, 1)
+        self.p_pool_bn = nn.BatchNorm2d(1)
+        self.p_fc_shared = nn.Linear(map_height * map_width, 64)
+        
+        # 2. Categorical Heads (Linear from shared latent)
+        self.pi_action = nn.Linear(64, 10)      # vs.pp("pi_action")
+        self.pi_struct = nn.Linear(64, 35)      # vs.pp("pi_struct")
+        self.pi_unit = nn.Linear(64, 46)        # vs.pp("pi_unit")
+        self.pi_tech = nn.Linear(64, 24)        # vs.pp("pi_tech")
+        self.pi_ability = nn.Linear(64, 20)     # vs.pp("pi_ability")
+        self.pi_reward = nn.Linear(64, 2)       # vs.pp("pi_reward")
+        
+        # 3. Spatial Heads (Conv from backbone)
+        self.pi_source = nn.Conv2d(64, 1, 1)    # vs.pp("pi_source")
+        self.pi_target = nn.Conv2d(64, 1, 1)    # vs.pp("pi_target")
+        
+        # --- Value Heads ---
+        
+        # 1. Shared Value Processing
+        self.v_pool_conv = nn.Conv2d(64, 1, 1)
+        self.v_pool_bn = nn.BatchNorm2d(1)
+        self.v_fc_shared = nn.Linear(map_height * map_width, 64)
+        
+        # 2. Value Output Heads
+        self.v_win = nn.Linear(64, 1)
+        self.v_eco = nn.Linear(64, 1)
+        self.v_mil = nn.Linear(64, 1)
 
-    def forward(self, x):
+    def forward(self, spatial_map, player_state):
+        """
+        Args:
+            spatial_map: (B, 149, H, W) - tile features
+            player_state: (B, 10) - global player stats
+        
+        Returns:
+            Dictionary with policy and value outputs
+        """
+        batch_size = spatial_map.size(0)
+        
+        # Embed player state
+        player_emb = self.player_relu(self.player_fc1(player_state))
+        player_emb = self.player_relu(self.player_fc2(player_emb))
+        
+        # Broadcast player embedding to spatial dimensions
+        player_emb = player_emb.view(batch_size, 64, 1, 1)
+        player_emb = player_emb.expand(batch_size, 64, self.map_height, self.map_width)
+        
+        # Concatenate spatial features with player embedding
+        x = torch.cat([spatial_map, player_emb], dim=1)
+        
+        # Initial conv + resblocks
         x = self.relu(self.bn1(self.conv1(x)))
-        x = self.res0(x)
-        x = self.res1(x)
-        x = self.res2(x)
-        x = self.res3(x)
-        x = self.res4(x)
-        x = self.res5(x)
-        x = self.res6(x)
-        x = self.res7(x)
+        for res_block in self.res_blocks:
+            x = res_block(x)
         
-        # Policy
-        p = self.relu(self.p_bn1(self.p_conv1(x)))
-        p = self.p_conv2(p) # (B, 64, H, W)
-        p_logits = p.flatten(1) # (B, 57600)
+        # --- Policy Heads ---
+        # 1. Non-spatial policies (pooled -> shared latent)
+        p_pooled = self.relu(self.p_pool_bn(self.p_pool_conv(x)))
+        p_pooled = p_pooled.flatten(1)
+        p_latent = self.relu(self.p_fc_shared(p_pooled))
         
-        # Value
-        v = self.relu(self.v_bn(self.v_conv(x)))
-        v = v.flatten(1)
-        v = self.relu(self.v_fc1(v))
-        v_out = torch.tanh(self.v_fc2(v))
+        policy = {}
+        policy['action_type'] = self.pi_action(p_latent)
+        policy['structure_option'] = self.pi_struct(p_latent)
+        policy['unit_option'] = self.pi_unit(p_latent)
+        policy['tech_option'] = self.pi_tech(p_latent)
+        policy['ability_option'] = self.pi_ability(p_latent)
+        policy['reward_choice'] = self.pi_reward(p_latent)
         
-        return p_logits, v_out
+        # 2. Spatial policies (direct from backbone)
+        policy['source_spatial'] = self.pi_source(x).flatten(1)
+        policy['target_spatial'] = self.pi_target(x).flatten(1)
+        
+        # --- Value Heads ---
+        v_pooled = self.relu(self.v_pool_bn(self.v_pool_conv(x)))
+        v_pooled = v_pooled.flatten(1)
+        v_latent = self.relu(self.v_fc_shared(v_pooled))
+        
+        values = {}
+        values['win'] = torch.tanh(self.v_win(v_latent))
+        values['eco'] = self.v_eco(v_latent)
+        values['mil'] = self.v_mil(v_latent)
+        
+        return policy, values
+
+def compute_loss(policy_pred, values_pred, policy_targets, value_target):
+    """
+    Compute multi-head loss using decomposed targets.
+    policy_targets is a dict containing the 7 target tensors.
+    """
+    total_policy_loss = 0.0
+    
+    # Loss weights for each head (tune as needed)
+    weights = {
+        'action_type': 1.0,
+        'source_spatial': 0.5,  # harder, give it good weight
+        'target_spatial': 0.5,
+        'structure_option': 0.2,
+        'unit_option': 0.2,
+        'tech_option': 0.2,
+        'ability_option': 0.2,
+        'reward_choice': 0.1
+    }
+    
+    # Helper for cross entropy with soft targets (probabilities)
+    # Target shape: [B, C], Pred shape: [B, C] (logits)
+    def soft_cross_entropy(logits, targets):
+        log_probs = torch.nn.functional.log_softmax(logits, dim=1)
+        return -(targets * log_probs).sum(dim=1).mean()
+
+    for head_name, target in policy_targets.items():
+        if head_name in policy_pred:
+            pred = policy_pred[head_name]
+            # Verify shapes match (except batch dim)
+            if pred.shape != target.shape:
+                # print(f"Shape mismatch for {head_name}: pred {pred.shape}, target {target.shape}")
+                continue
+                
+            head_loss = soft_cross_entropy(pred, target)
+            total_policy_loss += head_loss * weights.get(head_name, 1.0)
+            
+    # Value loss (missing other losses)
+    value_loss = nn.MSELoss()(values_pred['win'], value_target)
+    
+    # Total loss
+    total_loss = total_policy_loss + value_loss
+    
+    return total_loss, total_policy_loss, value_loss
 
 def train():
     print(f"Training on {DEVICE}")
     
     # 1. Load Data
-    # 1. Load Data (Replay Buffer: Fresh + Archive)
-    # We load the fresh games AND the most recent archived games to prevent catastrophic forgetting.
     fresh_files = glob.glob("games_*.safetensors")
     archive_files = sorted(glob.glob("archive/games_*.safetensors"), key=os.path.getmtime, reverse=True)
     
-    # Keep window of last 20 batches instead of 50 (approx 300 games)
-    # Reduced to manage 16GB RAM during CPU training
-    replay_buffer_size = 5  # Reduced from 10
+    replay_buffer_size = 50
     game_files = fresh_files + archive_files[:replay_buffer_size]
 
     if not game_files:
@@ -101,136 +205,149 @@ def train():
         return
         
     print(f"Training on {len(game_files)} files ({len(fresh_files)} fresh, {len(game_files)-len(fresh_files)} archived).")
-
-    # Chunked loading implemented below
-
     
     # 2. Init Model
-    # Dimensions must match Rust constants in `features.rs` / `mapper.rs`
     MAP_SIZE = 30
-    INPUT_CHANNELS = 155
-    NUM_ACTIONS = 30 * 30 * 64
+    SPATIAL_CHANNELS = 155
+    PLAYER_STATE_DIM = 10
 
-    model = PolyZeroNet(INPUT_CHANNELS, NUM_ACTIONS, MAP_SIZE, MAP_SIZE).to(DEVICE)
+    model = PolyZeroNet(SPATIAL_CHANNELS, PLAYER_STATE_DIM, MAP_SIZE, MAP_SIZE).to(DEVICE)
     if os.path.exists("model.safetensors"):
         print("Loading existing model for fine-tuning...")
-        model.load_state_dict(load_file("model.safetensors"))
+        try:
+            model.load_state_dict(load_file("model.safetensors"))
+        except Exception as e:
+            print(f"Could not load model: {e}")
+            print("Starting from scratch.")
     model.train()
 
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.75)
 
-    # 3. Training Loop with Chunked Loading
-    # Shuffle files globally once per run or per epoch? 
-    # Better to shuffle per epoch if we could, but rebuilding dataset is expensive.
-    # We will iterate EPOCHS, and inside that, iterate chunks.
-    
-    import random
-    import gc
-    
+    # 3. Training Loop
     for epoch in range(EPOCHS):
         total_loss = 0
+        total_p_loss = 0
+        total_v_loss = 0
         total_batches = 0
         
-        # Shuffle files for this epoch
         random.shuffle(game_files)
         
-        # Process in chunks of 2 files (~2GB RAM)
+        # Process in chunks
         CHUNK_SIZE = 10
         
         for i in range(0, len(game_files), CHUNK_SIZE):
             chunk_files = game_files[i : i + CHUNK_SIZE]
             print(f"Epoch {epoch+1}: Loading chunk {i//CHUNK_SIZE + 1}/{(len(game_files)+CHUNK_SIZE-1)//CHUNK_SIZE} ({len(chunk_files)} files)...")
             
-            chunk_states = []
-            chunk_policies = []
-            chunk_values = []
+            # Temporary storage for chunk data
+            c_spatial = []
+            c_player = []
+            c_values = []
+            
+            c_heads = {
+                'action_type': [], 'source_spatial': [], 'target_spatial': [],
+                'structure_option': [], 'unit_option': [], 'tech_option': [], 'reward_choice': [], 'ability_option': []
+            }
             
             for f in chunk_files:
                 try:
                     data = load_file(f)
-                    chunk_states.append(data["states"])
-                    chunk_policies.append(data["policies"])
-                    chunk_values.append(data["values"])
+                    c_spatial.append(data["spatial_maps"])
+                    c_player.append(data["player_states"])
+                    c_values.append(data["values"])
+                    
+                    # Load all policy heads
+                    for head in c_heads.keys():
+                        if head in data:
+                            c_heads[head].append(data[head])
+                        else:
+                            # Fallback if old data format missing some heads?
+                            # Should ideally skip or default. For now assume data integrity.
+                            pass
+                            
                 except Exception as e:
                     print(f"Error loading {f}: {e}")
                     continue
             
-            if not chunk_states:
+            if not c_spatial:
                 continue
                 
-            # Move chunk to device (or keep on CPU and move batches? Move to device for speed if VRAM allows)
-            # 2GB of states might fit in VRAM (T4 has 16GB). 
-            # 2 files * 1GB = 2GB. 2GB * ~2 (tensors) = 4GB. Should fit easily.
+            # Stack into tensors
             try:
-                states = torch.cat(chunk_states).to(DEVICE)
-                policies = torch.cat(chunk_policies).to(DEVICE)
-                values = torch.cat(chunk_values).to(DEVICE)
+                spatial_maps = torch.cat(c_spatial)
+                player_states = torch.cat(c_player)
+                values = torch.cat(c_values)
+                
+                target_heads = {}
+                for head, tensors in c_heads.items():
+                    if tensors:
+                        target_heads[head] = torch.cat(tensors)
+                    
             except RuntimeError as e:
-                print(f"OOM loading chunk to GPU: {e}. Falling back to CPU for storage.")
-                states = torch.cat(chunk_states) # Keep on CPU
-                policies = torch.cat(chunk_policies)
-                values = torch.cat(chunk_values)
+                print(f"OOM loading chunk: {e}")
+                continue
             
-            # Clear temp lists
-            del chunk_states, chunk_policies, chunk_values
+            # Cleanup lists
+            del c_spatial, c_player, c_values, c_heads
             gc.collect()
             
-            dataset_size = len(states)
+            dataset_size = len(spatial_maps)
             print(f"  Loaded {dataset_size} samples.")
             
-            indices = torch.arange(dataset_size)
-            indices = indices[torch.randperm(dataset_size)]
-            
-            # Mini-epochs on this chunk? Or just one pass?
-            # Standard is one pass per global epoch.
+            indices = torch.randperm(dataset_size)
             
             for j in range(0, dataset_size, BATCH_SIZE):
                 batch_idx = indices[j : j + BATCH_SIZE]
                 
-                batch_states = states[batch_idx].to(DEVICE) # Ensure on device
-                batch_policies = policies[batch_idx].to(DEVICE)
+                batch_spatial = spatial_maps[batch_idx].to(DEVICE)
+                batch_player = player_states[batch_idx].to(DEVICE)
                 batch_values = values[batch_idx].to(DEVICE)
                 
-                # Reshape (B, C, H, W)
-                batch_states = batch_states.view(-1, INPUT_CHANNELS, MAP_SIZE, MAP_SIZE)
+                batch_targets = {}
+                for head, tensor in target_heads.items():
+                    batch_targets[head] = tensor[batch_idx].to(DEVICE)
                 
-                p_logits, v_pred = model(batch_states)
-                
-                log_probs = torch.log_softmax(p_logits, dim=1)
-                p_loss = -(batch_policies * log_probs).sum(dim=1).mean()
-                v_loss = nn.MSELoss()(v_pred, batch_values)
-                
-                loss = p_loss + v_loss
+                # Reshape spatial to (B, C, H, W)
+                batch_spatial = batch_spatial.view(-1, SPATIAL_CHANNELS, MAP_SIZE, MAP_SIZE)
                 
                 optimizer.zero_grad()
+                
+                policy_pred, values_pred = model(batch_spatial, batch_player)
+                
+                loss, p_loss, v_loss = compute_loss(policy_pred, values_pred, batch_targets, batch_values)
+                
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
                 
                 total_loss += loss.item()
+                total_p_loss += p_loss.item()
+                total_v_loss += v_loss.item()
                 total_batches += 1
             
-            # Cleanup chunk
-            del states, policies, values
+            del spatial_maps, player_states, values, target_heads
             if DEVICE == "cuda":
                 torch.cuda.empty_cache()
             gc.collect()
 
         if total_batches > 0:
-            print(f"Epoch {epoch+1}/{EPOCHS} Avg Loss: {total_loss / total_batches:.4f}")
+            avg_loss = total_loss / total_batches
+            avg_p_loss = total_p_loss / total_batches
+            avg_v_loss = total_v_loss / total_batches
+            print(f"Epoch {epoch+1}/{EPOCHS} - Loss: {avg_loss:.4f} (Policy: {avg_p_loss:.4f}, Value: {avg_v_loss:.4f})")
         else:
             print(f"Epoch {epoch+1}/{EPOCHS} - No data processed")
         
         scheduler.step()
-        print(f"Learning rate: {scheduler.get_last_lr()[0]:.6f}")
             
     final_loss = total_loss / total_batches if total_batches > 0 else 0.0
     print(f"METRICS: {{\"loss\": {final_loss:.4f}}}")
 
-    # 4. Save Model for Rust
+    # 4. Save Model
     save_file(model.state_dict(), "model.safetensors")
     print("Saved model.safetensors")
 
 if __name__ == "__main__":
     train()
+

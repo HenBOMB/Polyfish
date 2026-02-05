@@ -3,17 +3,17 @@
 use crate::actions::{UndoCallback, chain_undos};
 use crate::moves::{Move, MoveResult};
 use crate::states::GameState;
-use crate::types::MoveType;
+use crate::types::{AbilityType, MoveType};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PromoteMove {
-    pub unit_idx: i32, // tile index
+    pub src_index: i32, // tile index
 }
 
 impl PromoteMove {
-    pub fn new(unit_idx: i32) -> Self {
-        Self { unit_idx }
+    pub fn new(src_index: i32) -> Self {
+        Self { src_index }
     }
 }
 
@@ -27,7 +27,7 @@ impl Move for PromoteMove {
 
         let unit_owner = state
             .tiles
-            .get(&self.unit_idx)
+            .get(&self.src_index)
             .and_then(|t| t._unit_owner_id)
             .unwrap_or(0);
 
@@ -35,7 +35,7 @@ impl Move for PromoteMove {
             tribe
                 .units
                 .iter()
-                .position(|u| u.coords.idx == self.unit_idx)
+                .position(|u| u.coords.idx == self.src_index)
         } else {
             None
         };
@@ -71,20 +71,25 @@ impl Move for PromoteMove {
     }
 
     fn describe(&self, _state: &GameState) -> String {
-        format!("Promote unit at {}", self.unit_idx)
+        format!("Promote unit at {}", self.src_index)
     }
 
     fn serialize(&self) -> serde_json::Value {
-        let mut value = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
-        if let Some(obj) = value.as_object_mut() {
-            obj.insert("moveType".to_string(), serde_json::json!(MoveType::Ability));
-        }
-        value
+        serde_json::json!({
+            "moveType": self.move_type(),
+            "type": self.ability_type(),
+            "src": self.src_index,
+        })
     }
 
     #[inline]
-    fn action_coords(&self) -> (Option<i32>, Option<i32>) {
-        (Some(self.unit_idx), Some(self.unit_idx))
+    fn source_idx(&self) -> Result<usize, String> {
+        Ok(self.src_index as usize)
+    }
+
+    #[inline]
+    fn ability_type(&self) -> Result<AbilityType, String> {
+        Ok(AbilityType::Promote)
     }
 }
 
