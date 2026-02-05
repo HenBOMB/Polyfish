@@ -454,14 +454,6 @@ impl Clone for Game {
         // Direct clone without JSON serialization
         // This preserves exact state without re-running post_load()
 
-        // DEBUG: Log star counts before clone
-        for (id, tribe) in &self.state.tribes {
-            eprintln!(
-                "[CLONE DEBUG] Before: Tribe {} has {} stars",
-                id, tribe.stars
-            );
-        }
-
         let cloned = Self {
             state: self.state.clone(),
         };
