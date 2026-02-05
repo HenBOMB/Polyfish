@@ -5,6 +5,9 @@ set -e
 ITERATIONS=50
 GAMES_PER_ITER=15
 export MCTS_ITERS=25
+# Limit CPU usage to prevent overheating (50% of 16 threads)
+export RAYON_NUM_THREADS=8
+export OMP_NUM_THREADS=8
 
 echo "Building simulator..."
 cargo build --bin polyfish --release
@@ -29,7 +32,7 @@ do
     MAX_SCORE=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o 'max_score": [0-9]*' | awk '{print $2}')
     
     # 2. Training
-    echo "[Training] Updating model..."
+    echo "[Training] Training model..."
     TRAIN_OUTPUT=$(.venv/bin/python3 train.py)
     echo "$TRAIN_OUTPUT"
     
@@ -50,5 +53,7 @@ do
     
     # 4. Cleanup (Fresh Games Only)
     # Move played games to archive so train.py only sees new ones next time
+    mkdir -p archive
     mv games_*.safetensors archive/
+    
 done

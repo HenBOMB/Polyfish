@@ -78,10 +78,20 @@ def train():
     print(f"Training on {DEVICE}")
     
     # 1. Load Data
-    game_files = glob.glob("games_*.safetensors") # Matches format from Rust
+    # 1. Load Data (Replay Buffer: Fresh + Archive)
+    # We load the fresh games AND the most recent archived games to prevent catastrophic forgetting.
+    fresh_files = glob.glob("games_*.safetensors")
+    archive_files = sorted(glob.glob("archive/games_*.safetensors"), key=os.path.getmtime, reverse=True)
+    
+    # Keep window of last 50 batches (approx 750 games)
+    replay_buffer_size = 50
+    game_files = fresh_files + archive_files[:replay_buffer_size]
+
     if not game_files:
-        print("No training data found!")
+        print("No training data found (checked ./ and ./archive/)!")
         return
+        
+    print(f"Training on {len(game_files)} files ({len(fresh_files)} fresh, {len(game_files)-len(fresh_files)} archived).")
 
     all_states = []
     all_policies = []
