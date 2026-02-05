@@ -846,6 +846,16 @@ pub fn calculate_detailed_tribe_score(state: &GameState, player_id: PlayerId) ->
         if city.rewards.contains(&RewardType::Park) {
             score += 250;
         }
+
+        // Population: 5 points per population
+        score += city.population * 5;
+
+        // Except for Luxidoor, which already starts with a level 3 city
+        // lvl 1: 2 pop
+        // lvl 2: 3 pop
+        if state.tribes.get(&player_id).unwrap().tribe_type == TribeType::Luxidoor {
+            score -= 5 * 5;
+        }
     }
 
     // 5 per revealed tile (explored by our explorers)
@@ -858,8 +868,18 @@ pub fn calculate_detailed_tribe_score(state: &GameState, player_id: PlayerId) ->
 
     // 5 per star of unit cost
     for unit in &tribe.units {
-        let cost = crate::settings::units::get_unit_setting(unit.unit_type).cost;
-        score += cost * 5;
+        // Converted units do not change score (worth 0 for new owner)
+        if unit.converted {
+            continue;
+        }
+
+        let setting = crate::functions::get_real_unit_setting(unit);
+
+        if setting.is_super {
+            score += 50;
+        } else {
+            score += setting.cost * 5;
+        }
     }
 
     // 100 per tech tier
@@ -986,7 +1006,7 @@ pub fn analyze_expansion(state: &GameState, player_id: PlayerId) -> ExpansionAna
             return ExpansionAnalysis {
                 tile_values,
                 threats,
-            }
+            };
         }
     };
 

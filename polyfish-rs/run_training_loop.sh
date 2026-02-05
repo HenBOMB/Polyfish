@@ -2,18 +2,21 @@
 set -e
 
 # Configuration
-ITERATIONS=50
-GAMES_PER_ITER=15
-export MCTS_ITERS=25
-# Limit CPU usage to prevent overheating (50% of 16 threads)
-export RAYON_NUM_THREADS=8
-export OMP_NUM_THREADS=8
+ITERATIONS=100
+GAMES_PER_ITER=20
+export MCTS_ITERS=25 # its overkill actually for this simple 1v1 small map perfection mode
+export RAYON_NUM_THREADS=10
+export OMP_NUM_THREADS=10
 
 echo "Building simulator..."
 cargo build --bin polyfish --release
 
 echo "Building self play..."
 cargo build --release --bin self_play
+
+# 0. Initialize Model (if needed)
+echo "Initializing/Checking model..."
+.venv/bin/python3 init_model.py
 
 for ((i=1; i<=ITERATIONS; i++))
 do
@@ -28,8 +31,10 @@ do
     echo "$SP_OUTPUT"
     
     # Extract Avg Score and Max Score using grep and sed or awk
-    AVG_SCORE=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o 'avg_score": [0-9.]*' | awk '{print $2}')
-    MAX_SCORE=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o 'max_score": [0-9]*' | awk '{print $2}')
+    AVG_SCORE=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o '"avg_score": [0-9.]*' | awk -F': ' '{print $2}')
+    MAX_SCORE=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o '"max_score": [0-9]*' | awk -F': ' '{print $2}')
+    P1_AVG=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o '"p1_avg": [0-9.]*' | awk -F': ' '{print $2}')
+    P2_AVG=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o '"p2_avg": [0-9.]*' | awk -F': ' '{print $2}')
     
     # 2. Training
     echo "[Training] Training model..."
@@ -41,8 +46,8 @@ do
     
     # 3. Log
     TIMESTAMP=$(date +%s)
-    echo "$i,$TIMESTAMP,$AVG_SCORE,$MAX_SCORE,$LOSS" >> training_log.csv
-    echo "Iteration $i complete. Avg: $AVG_SCORE | Max: $MAX_SCORE | Loss: $LOSS"
+    echo "$i,$TIMESTAMP,$AVG_SCORE,$MAX_SCORE,$P1_AVG,$P2_AVG,$LOSS" >> training_log.csv
+    echo "Iteration $i complete. Avg: $AVG_SCORE | Max: $MAX_SCORE | P1: $P1_AVG | P2: $P2_AVG | Loss: $LOSS"
     
     # 4. Checkpoint (Every 5 iterations)
     if (( i % 5 == 0 )); then

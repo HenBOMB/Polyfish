@@ -68,7 +68,7 @@ pub struct PolyZeroNet {
 impl PolyZeroNet {
     pub fn new(vs: VarBuilder) -> Result<Self> {
         let filters = 64;
-        let blocks = 4;
+        let blocks = 8; // Increased from 4 for better capacity
         let input_channels = crate::ai::features::NUM_CHANNELS;
         let policy_channels = crate::ai::mapper::ActionMapper::TOTAL_CHANNELS; // 64
 

@@ -140,11 +140,10 @@ fn main() -> anyhow::Result<()> {
             &device,
         ))?
     } else {
-        println!("Starting with new random model.");
-        PolyZeroNet::new(candle_nn::VarBuilder::zeros(
-            candle_core::DType::F32,
-            &device,
-        ))?
+        panic!(
+            "Model file {} not found! Please run init_model.py first.",
+            model_path
+        );
     };
 
     // Wrap network in Arc for thread-safe sharing
@@ -176,6 +175,12 @@ fn main() -> anyhow::Result<()> {
     let mut max_score = 0;
     let mut total_moves = 0;
 
+    // Track per-player scores to detect asymmetric learning
+    let mut p1_total = 0;
+    let mut p2_total = 0;
+    let mut p1_count = 0;
+    let mut p2_count = 0;
+
     for result in results {
         total_score += result.winner_score;
         total_moves += result.moves;
@@ -185,6 +190,17 @@ fn main() -> anyhow::Result<()> {
 
         println!("Scores: {:?}", result.scores);
 
+        // Collect per-player scores (player IDs are 1 and 2)
+        for (id, score) in &result.scores {
+            if *id == 1 {
+                p1_total += score;
+                p1_count += 1;
+            } else if *id == 2 {
+                p2_total += score;
+                p2_count += 1;
+            }
+        }
+
         // Backpropagate value
         for (state_t, policy, p_id) in result.history {
             match state_t.flatten_all() {
@@ -193,12 +209,23 @@ fn main() -> anyhow::Result<()> {
             }
             collected_policies.extend_from_slice(&policy);
 
-            // Simple win/loss
-            let value = if p_id == result.winner_id {
-                1.0f32
-            } else {
-                -1.0f32
-            };
+            // Use normalized score differential as value
+            // This teaches the network to maximize score, not just win
+            let my_score = result.scores.get(&p_id).copied().unwrap_or(0) as f32;
+            let opponent_score = result
+                .scores
+                .iter()
+                .filter(|(id, _)| **id != p_id)
+                .map(|(_, score)| *score as f32)
+                .next()
+                .unwrap_or(0.0);
+
+            // Normalize to [-1, 1] using tanh
+            // For 10-turn games: typical score diff is ±500-1000
+            // For full games: can reach 100k+, so using 10k normalization
+            let score_diff = my_score - opponent_score;
+            let value = (score_diff / 10000.0).tanh();
+
             collected_values.push(value);
         }
     }
@@ -206,9 +233,21 @@ fn main() -> anyhow::Result<()> {
     // Print Average Metrics
     let avg_score = total_score as f32 / num_games as f32;
     let avr_moves = total_moves as f32 / num_games as f32;
+
+    let p1_avg = if p1_count > 0 {
+        p1_total as f32 / p1_count as f32
+    } else {
+        0.0
+    };
+    let p2_avg = if p2_count > 0 {
+        p2_total as f32 / p2_count as f32
+    } else {
+        0.0
+    };
+
     println!(
-        "METRICS: {{\"avg_score\": {:.2}, \"max_score\": {}, \"avg_moves\": {:.2}}}",
-        avg_score, max_score, avr_moves
+        "METRICS: {{\"avg_score\": {:.2}, \"max_score\": {}, \"avg_moves\": {:.2}, \"p1_avg\": {:.2}, \"p2_avg\": {:.2}}}",
+        avg_score, max_score, avr_moves, p1_avg, p2_avg
     );
 
     // Stack and save

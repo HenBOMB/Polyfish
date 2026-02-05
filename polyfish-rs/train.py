@@ -36,12 +36,16 @@ class PolyZeroNet(nn.Module):
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU()
         
-        # 4 Residual Blocks (matching Rust)
-        # We name them res0, res1, res2, res3 to match Rust's pp("res0"), etc.
+        # 8 Residual Blocks (matching Rust)
+        # We name them res0, res1, res2, res3, res4, res5, res6, res7 to match Rust's pp("res0"), etc.
         self.res0 = ResBlock(64)
         self.res1 = ResBlock(64)
         self.res2 = ResBlock(64)
         self.res3 = ResBlock(64)
+        self.res4 = ResBlock(64)
+        self.res5 = ResBlock(64)
+        self.res6 = ResBlock(64)
+        self.res7 = ResBlock(64)
         
         # Policy Head (Fully Conv)
         self.p_conv1 = nn.Conv2d(64, 32, 1)
@@ -60,6 +64,10 @@ class PolyZeroNet(nn.Module):
         x = self.res1(x)
         x = self.res2(x)
         x = self.res3(x)
+        x = self.res4(x)
+        x = self.res5(x)
+        x = self.res6(x)
+        x = self.res7(x)
         
         # Policy
         p = self.relu(self.p_bn1(self.p_conv1(x)))
@@ -83,8 +91,9 @@ def train():
     fresh_files = glob.glob("games_*.safetensors")
     archive_files = sorted(glob.glob("archive/games_*.safetensors"), key=os.path.getmtime, reverse=True)
     
-    # Keep window of last 50 batches (approx 750 games)
-    replay_buffer_size = 50
+    # Keep window of last 20 batches instead of 50 (approx 300 games)
+    # Reduced to manage 16GB RAM during CPU training
+    replay_buffer_size = 5  # Reduced from 10
     game_files = fresh_files + archive_files[:replay_buffer_size]
 
     if not game_files:
@@ -93,88 +102,130 @@ def train():
         
     print(f"Training on {len(game_files)} files ({len(fresh_files)} fresh, {len(game_files)-len(fresh_files)} archived).")
 
-    all_states = []
-    all_policies = []
-    all_values = []
-    
-    for f in game_files:
-        data = load_file(f)
-        all_states.append(data["states"])
-        all_policies.append(data["policies"])
-        all_values.append(data["values"])
-    
-    states = torch.cat(all_states).to(DEVICE)
-    policies = torch.cat(all_policies).to(DEVICE)
-    values = torch.cat(all_values).to(DEVICE)
-    
-    print(f"Loaded {len(states)} samples.")
+    # Chunked loading implemented below
+
     
     # 2. Init Model
     # Dimensions must match Rust constants in `features.rs` / `mapper.rs`
-    # You might want to pass these dynamically or parse from headers, 
-    # but for now we hardcode based on known Rust constants.
-    # Assuming Small Map (11x11? Or 256 tiles? MapSize::Small is 11x11 = 121 tiles usually, need to check `features.rs`)
-    # Wait, `features::MAP_HEIGHT` was used in `self_play.rs`
-    
-    # Loaded from features.rs and mapper.rs
-    MAP_SIZE = 30 
-    # Must match NUM_CHANNELS in src/ai/features.rs
-    # 8 (Terrain) + 8 (Flags) + 9 (Resources) + 35 (Structures) + 46 (Units) 
-    # + 16 (UnitStats) + 13 (CityStats) + 20 (Global) = 155
+    MAP_SIZE = 30
     INPUT_CHANNELS = 155
-    NUM_ACTIONS = 30 * 30 * 64 # 57600
-    
+    NUM_ACTIONS = 30 * 30 * 64
+
     model = PolyZeroNet(INPUT_CHANNELS, NUM_ACTIONS, MAP_SIZE, MAP_SIZE).to(DEVICE)
     if os.path.exists("model.safetensors"):
         print("Loading existing model for fine-tuning...")
         model.load_state_dict(load_file("model.safetensors"))
     model.train()
-    
+
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.75)
+
+    # 3. Training Loop with Chunked Loading
+    # Shuffle files globally once per run or per epoch? 
+    # Better to shuffle per epoch if we could, but rebuilding dataset is expensive.
+    # We will iterate EPOCHS, and inside that, iterate chunks.
     
-    # 3. Training Loop
-    dataset_size = len(states)
-    indices = torch.arange(dataset_size)
+    import random
+    import gc
     
     for epoch in range(EPOCHS):
         total_loss = 0
-        indices = indices[torch.randperm(dataset_size)]
+        total_batches = 0
         
-        for i in range(0, dataset_size, BATCH_SIZE):
-            batch_idx = indices[i : i + BATCH_SIZE]
-            batch_states = states[batch_idx]
-            batch_policies = policies[batch_idx]
-            batch_values = values[batch_idx]
-
-            # Reshape flat input (B, C*H*W) -> (B, C, H, W)
-            batch_states = batch_states.view(-1, INPUT_CHANNELS, MAP_SIZE, MAP_SIZE)
-
-            
-            p_logits, v_pred = model(batch_states)
-            
-            # Loss
-            # Policy: CrossEntropy (prob targets need Softmax? No, CrossEntropyLoss expects class indices usually, 
-            # but if we have prob distribution targets, we use KLDiv or CrossEntropy with soft targets)
-            # PyTorch `CrossEntropyLoss` supports probabilistic targets in newer versions, or we use `v_pred` vs `batch_policies`
-            
-            # Custom Cross Entropy for Probabilities: -sum(target * log_softmax(pred))
-            log_probs = torch.log_softmax(p_logits, dim=1)
-            p_loss = -(batch_policies * log_probs).sum(dim=1).mean()
-            
-            # Value: MSE
-            v_loss = nn.MSELoss()(v_pred, batch_values)
-            
-            loss = p_loss + v_loss
-            
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            
-            total_loss += loss.item()
-            
-        print(f"Epoch {epoch+1}/{EPOCHS} Loss: {total_loss / (dataset_size / BATCH_SIZE):.4f}")
+        # Shuffle files for this epoch
+        random.shuffle(game_files)
         
-    final_loss = total_loss / (dataset_size / BATCH_SIZE)
+        # Process in chunks of 2 files (~2GB RAM)
+        CHUNK_SIZE = 10
+        
+        for i in range(0, len(game_files), CHUNK_SIZE):
+            chunk_files = game_files[i : i + CHUNK_SIZE]
+            print(f"Epoch {epoch+1}: Loading chunk {i//CHUNK_SIZE + 1}/{(len(game_files)+CHUNK_SIZE-1)//CHUNK_SIZE} ({len(chunk_files)} files)...")
+            
+            chunk_states = []
+            chunk_policies = []
+            chunk_values = []
+            
+            for f in chunk_files:
+                try:
+                    data = load_file(f)
+                    chunk_states.append(data["states"])
+                    chunk_policies.append(data["policies"])
+                    chunk_values.append(data["values"])
+                except Exception as e:
+                    print(f"Error loading {f}: {e}")
+                    continue
+            
+            if not chunk_states:
+                continue
+                
+            # Move chunk to device (or keep on CPU and move batches? Move to device for speed if VRAM allows)
+            # 2GB of states might fit in VRAM (T4 has 16GB). 
+            # 2 files * 1GB = 2GB. 2GB * ~2 (tensors) = 4GB. Should fit easily.
+            try:
+                states = torch.cat(chunk_states).to(DEVICE)
+                policies = torch.cat(chunk_policies).to(DEVICE)
+                values = torch.cat(chunk_values).to(DEVICE)
+            except RuntimeError as e:
+                print(f"OOM loading chunk to GPU: {e}. Falling back to CPU for storage.")
+                states = torch.cat(chunk_states) # Keep on CPU
+                policies = torch.cat(chunk_policies)
+                values = torch.cat(chunk_values)
+            
+            # Clear temp lists
+            del chunk_states, chunk_policies, chunk_values
+            gc.collect()
+            
+            dataset_size = len(states)
+            print(f"  Loaded {dataset_size} samples.")
+            
+            indices = torch.arange(dataset_size)
+            indices = indices[torch.randperm(dataset_size)]
+            
+            # Mini-epochs on this chunk? Or just one pass?
+            # Standard is one pass per global epoch.
+            
+            for j in range(0, dataset_size, BATCH_SIZE):
+                batch_idx = indices[j : j + BATCH_SIZE]
+                
+                batch_states = states[batch_idx].to(DEVICE) # Ensure on device
+                batch_policies = policies[batch_idx].to(DEVICE)
+                batch_values = values[batch_idx].to(DEVICE)
+                
+                # Reshape (B, C, H, W)
+                batch_states = batch_states.view(-1, INPUT_CHANNELS, MAP_SIZE, MAP_SIZE)
+                
+                p_logits, v_pred = model(batch_states)
+                
+                log_probs = torch.log_softmax(p_logits, dim=1)
+                p_loss = -(batch_policies * log_probs).sum(dim=1).mean()
+                v_loss = nn.MSELoss()(v_pred, batch_values)
+                
+                loss = p_loss + v_loss
+                
+                optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
+                
+                total_loss += loss.item()
+                total_batches += 1
+            
+            # Cleanup chunk
+            del states, policies, values
+            if DEVICE == "cuda":
+                torch.cuda.empty_cache()
+            gc.collect()
+
+        if total_batches > 0:
+            print(f"Epoch {epoch+1}/{EPOCHS} Avg Loss: {total_loss / total_batches:.4f}")
+        else:
+            print(f"Epoch {epoch+1}/{EPOCHS} - No data processed")
+        
+        scheduler.step()
+        print(f"Learning rate: {scheduler.get_last_lr()[0]:.6f}")
+            
+    final_loss = total_loss / total_batches if total_batches > 0 else 0.0
     print(f"METRICS: {{\"loss\": {final_loss:.4f}}}")
 
     # 4. Save Model for Rust
