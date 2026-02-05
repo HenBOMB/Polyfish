@@ -6,6 +6,7 @@
 use crate::functions::get_adjacent_indices;
 use crate::states::GameState;
 use crate::types::{ClimateType, TerrainType, TribeType};
+use indexmap::IndexMap;
 use std::collections::HashMap;
 
 /// Maps ClimateType to corresponding TribeType
@@ -58,7 +59,7 @@ pub fn tribe_to_climate(tribe: TribeType) -> ClimateType {
 fn validate_village_candidate(
     state: &GameState,
     idx: i32,
-    current_predictions: &HashMap<i32, (TribeType, bool)>,
+    current_predictions: &IndexMap<i32, (TribeType, bool)>,
     known_cities: &std::collections::HashSet<i32>,
 ) -> bool {
     let size = state.settings.size;
@@ -100,7 +101,7 @@ fn validate_village_candidate(
 }
 
 /// Predict village locations in fog based on climate density AND orphan resources
-pub fn predict_villages(state: &GameState) -> HashMap<i32, (TribeType, bool)> {
+pub fn predict_villages(state: &GameState) -> IndexMap<i32, (TribeType, bool)> {
     let pov_id = state.settings.current_player_turn_id;
     let pov_tribe_type = state
         .tribes
@@ -109,7 +110,7 @@ pub fn predict_villages(state: &GameState) -> HashMap<i32, (TribeType, bool)> {
         .unwrap_or(TribeType::None);
     let pov_climate = tribe_to_climate(pov_tribe_type);
 
-    let mut candidates: HashMap<i32, (i32, ClimateType)> = HashMap::new();
+    let mut candidates: IndexMap<i32, (i32, ClimateType)> = IndexMap::new();
 
     // Collect all known cities/villages
     let mut known_cities = std::collections::HashSet::new();
@@ -156,8 +157,12 @@ pub fn predict_villages(state: &GameState) -> HashMap<i32, (TribeType, bool)> {
                         .map(|t| t.explorers.contains(&pov_id))
                         .unwrap_or(false);
                     if !n_explored {
-                        if !validate_village_candidate(state, n_idx, &HashMap::new(), &known_cities)
-                        {
+                        if !validate_village_candidate(
+                            state,
+                            n_idx,
+                            &IndexMap::new(),
+                            &known_cities,
+                        ) {
                             continue;
                         }
                         let entry = candidates.entry(n_idx).or_insert((0, ClimateType::Nature));
@@ -185,7 +190,7 @@ pub fn predict_villages(state: &GameState) -> HashMap<i32, (TribeType, bool)> {
                     .map(|t| t.explorers.contains(&pov_id))
                     .unwrap_or(false);
                 if !idx_explored {
-                    if !validate_village_candidate(state, idx, &HashMap::new(), &known_cities) {
+                    if !validate_village_candidate(state, idx, &IndexMap::new(), &known_cities) {
                         continue;
                     }
                     let entry = candidates.entry(idx).or_insert((0, tile.climate));
@@ -229,7 +234,7 @@ pub fn predict_villages(state: &GameState) -> HashMap<i32, (TribeType, bool)> {
         }
     }
 
-    let mut prediction_map: HashMap<i32, (TribeType, bool)> = HashMap::new();
+    let mut prediction_map: IndexMap<i32, (TribeType, bool)> = IndexMap::new();
     let mut sorted: Vec<_> = candidates.into_iter().collect();
     sorted.sort_by_key(|(_, (count, _))| -count);
 
@@ -256,9 +261,9 @@ pub fn predict_villages(state: &GameState) -> HashMap<i32, (TribeType, bool)> {
 pub fn predict_terrain(
     state: &GameState,
     fog_tiles: &[i32],
-) -> HashMap<i32, (TerrainType, ClimateType)> {
+) -> IndexMap<i32, (TerrainType, ClimateType)> {
     let pov_id = state.settings.current_player_turn_id;
-    let mut predictions = HashMap::new();
+    let mut predictions = IndexMap::new();
     for &tile_idx in fog_tiles {
         let neighbors = get_adjacent_indices(state, tile_idx, 1);
         let mut terrain_counts = HashMap::new();
@@ -363,7 +368,7 @@ mod tests {
     use super::*;
     use crate::states::{GameState, TileState, TribeState};
     use crate::types::{TerrainType, TribeType};
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashSet;
 
     #[test]
     fn test_village_prediction_constraints() {
@@ -390,7 +395,7 @@ mod tests {
         assert!(!validate_village_candidate(
             &state,
             adj_idx,
-            &HashMap::new(),
+            &IndexMap::new(),
             &known_cities
         ));
 
@@ -400,13 +405,13 @@ mod tests {
         assert!(!validate_village_candidate(
             &state,
             city_idx + 1,
-            &HashMap::new(),
+            &IndexMap::new(),
             &cities
         ));
         assert!(validate_village_candidate(
             &state,
             city_idx + 3,
-            &HashMap::new(),
+            &IndexMap::new(),
             &cities
         ));
     }

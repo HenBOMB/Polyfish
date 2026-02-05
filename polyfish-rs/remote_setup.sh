@@ -13,6 +13,15 @@ else
     echo "Rust is already installed."
 fi
 
+# Add paths to .bashrc for persistence across sessions
+if ! grep -q "export PATH=.*cargo/bin" ~/.bashrc; then
+    echo 'export PATH="$HOME/.cargo/bin:/usr/local/cuda/bin:$PATH"' >> ~/.bashrc
+    echo "Added Rust and CUDA to PATH in .bashrc"
+fi
+
+# Source for current session
+export PATH="$HOME/.cargo/bin:/usr/local/cuda/bin:$PATH"
+
 # 3. Setup Python Virtual Environment
 if [ ! -d ".venv" ]; then
     echo "Creating virtual environment..."

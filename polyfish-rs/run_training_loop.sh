@@ -3,16 +3,16 @@ set -e
 
 # Configuration
 ITERATIONS=100
-GAMES_PER_ITER=20
-export MCTS_ITERS=25 # its overkill actually for this simple 1v1 small map perfection mode
-export RAYON_NUM_THREADS=10
-export OMP_NUM_THREADS=10
+GAMES_PER_ITER=25
+export MCTS_ITERS=200 # Optimized for RunPod GPU (~0.8s per move)
+export RAYON_NUM_THREADS=8
+export OMP_NUM_THREADS=8
 
 echo "Building simulator..."
-cargo build --bin polyfish --release
+cargo build --bin polyfish --release --features cuda
 
 echo "Building self play..."
-cargo build --release --bin self_play
+cargo build --release --bin self_play --features cuda
 
 # Parse arguments
 FORCE_TRAIN=false

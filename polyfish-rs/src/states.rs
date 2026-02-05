@@ -2,8 +2,9 @@
 
 use crate::coords::Coords;
 use crate::types::*;
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 pub const HEALTH_SCALE: i32 = 10;
 
@@ -297,7 +298,7 @@ pub struct TribeState {
     #[serde(default)]
     pub units: Vec<UnitState>,
     #[serde(default)]
-    pub relations: HashMap<PlayerId, DiplomacyRelationState>,
+    pub relations: IndexMap<PlayerId, DiplomacyRelationState>,
     #[serde(default)]
     pub killed_turn: i32,
     #[serde(default)]
@@ -330,7 +331,7 @@ impl Default for TribeState {
             tech_vanilla: Vec::new(),
             cities: Vec::new(),
             units: Vec::new(),
-            relations: HashMap::new(),
+            relations: IndexMap::new(),
             killed_turn: 0,
             resigned_turn: 0,
             starting_tile_coords: Coords::default(),
@@ -435,9 +436,9 @@ impl Default for GameSettings {
 #[serde(rename_all = "camelCase")]
 pub struct PredictionState {
     #[serde(default)]
-    pub _villages: HashMap<i32, (TribeType, bool)>,
+    pub _villages: IndexMap<i32, (TribeType, bool)>,
     #[serde(default)]
-    pub _terrain: HashMap<i32, (TerrainType, ClimateType)>,
+    pub _terrain: IndexMap<i32, (TerrainType, ClimateType)>,
     #[serde(default)]
     pub _enemy_capital_suspects: Vec<i32>,
     #[serde(default)]
@@ -468,18 +469,18 @@ pub enum EndOfTurnAction {
 #[serde(rename_all = "camelCase")]
 pub struct GameState {
     pub settings: GameSettings,
-    pub tiles: HashMap<i32, TileState>,
+    pub tiles: IndexMap<i32, TileState>,
     #[serde(default)]
-    pub structures: HashMap<i32, Option<StructureState>>,
+    pub structures: IndexMap<i32, Option<StructureState>>,
     #[serde(default)]
-    pub resources: HashMap<i32, Option<ResourceState>>,
-    pub tribes: HashMap<PlayerId, TribeState>,
+    pub resources: IndexMap<i32, Option<ResourceState>>,
+    pub tribes: IndexMap<PlayerId, TribeState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub _prediction: Option<PredictionState>,
     #[serde(default)]
     pub _end_of_turn_queue: Vec<EndOfTurnAction>,
     #[serde(default)]
-    pub _hidden_resources: HashMap<i32, Option<ResourceState>>,
+    pub _hidden_resources: IndexMap<i32, Option<ResourceState>>,
     #[serde(default)]
     pub _messages: Vec<String>,
 }
@@ -488,13 +489,13 @@ impl Default for GameState {
     fn default() -> Self {
         Self {
             settings: GameSettings::default(),
-            tiles: HashMap::new(),
-            structures: HashMap::new(),
-            resources: HashMap::new(),
-            tribes: HashMap::new(),
+            tiles: IndexMap::new(),
+            structures: IndexMap::new(),
+            resources: IndexMap::new(),
+            tribes: IndexMap::new(),
             _prediction: None,
             _end_of_turn_queue: Vec::new(),
-            _hidden_resources: HashMap::new(),
+            _hidden_resources: IndexMap::new(),
             _messages: Vec::new(),
         }
     }

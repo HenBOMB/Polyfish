@@ -1,3 +1,5 @@
 torch
 safetensors
 numpy
+packaging
+tqdm
