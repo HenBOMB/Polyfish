@@ -458,14 +458,6 @@ impl Clone for Game {
             state: self.state.clone(),
         };
 
-        // DEBUG: Log star counts after clone
-        for (id, tribe) in &cloned.state.tribes {
-            eprintln!(
-                "[CLONE DEBUG] After: Tribe {} has {} stars",
-                id, tribe.stars
-            );
-        }
-
         cloned
     }
 }
