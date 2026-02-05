@@ -451,7 +451,11 @@ impl Default for Game {
 
 impl Clone for Game {
     fn clone(&self) -> Self {
-        self.clone_game()
+        // Direct clone without JSON serialization
+        // This preserves exact state without re-running post_load()
+        Self {
+            state: self.state.clone(),
+        }
     }
 }
 
