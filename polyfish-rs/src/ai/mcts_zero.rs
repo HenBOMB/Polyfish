@@ -513,24 +513,12 @@ impl<'a> ZeroMctsAgent<'a> {
                 current.select_child_with_virtual_loss(self.c_puct, -self.virtual_loss)?;
 
             if let Some(m) = &current.children[child_idx].move_to_here {
-                // DEBUG: Log state before move execution
-                let pov_id = game.state.settings.current_player_turn_id;
-                if let Some(tribe) = game.state.tribes.get(&pov_id) {
-                    eprintln!(
-                        "[MCTS] Before move {:?}: Tribe {} has {} stars, turn {}",
-                        m.move_type(),
-                        pov_id,
-                        tribe.stars,
-                        game.state.settings.turn
-                    );
-                }
-
                 let result = game.play_move(m.as_ref());
-                if let Err(ref e) = result {
+                if result.is_none() {
                     // ERROR: Dump detailed state
+                    let pov_id = game.state.settings.current_player_turn_id;
                     eprintln!("\n=== MOVE EXECUTION FAILED ===");
                     eprintln!("Move: {}", m.describe(&game.state));
-                    eprintln!("Error: {}", e);
                     eprintln!("Turn: {}", game.state.settings.turn);
                     eprintln!("Current player: {}", pov_id);
                     for (id, tribe) in &game.state.tribes {
