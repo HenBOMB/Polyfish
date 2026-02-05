@@ -513,9 +513,34 @@ impl<'a> ZeroMctsAgent<'a> {
                 current.select_child_with_virtual_loss(self.c_puct, -self.virtual_loss)?;
 
             if let Some(m) = &current.children[child_idx].move_to_here {
-                let _undo = game
-                    .play_move(m.as_ref())
-                    .expect("BUG: Legal move failed to execute in MCTS tree traversal");
+                // DEBUG: Log state before move execution
+                let pov_id = game.state.settings.current_player_turn_id;
+                if let Some(tribe) = game.state.tribes.get(&pov_id) {
+                    eprintln!(
+                        "[MCTS] Before move {:?}: Tribe {} has {} stars, turn {}",
+                        m.move_type(),
+                        pov_id,
+                        tribe.stars,
+                        game.state.settings.turn
+                    );
+                }
+
+                let result = game.play_move(m.as_ref());
+                if let Err(ref e) = result {
+                    // ERROR: Dump detailed state
+                    eprintln!("\n=== MOVE EXECUTION FAILED ===");
+                    eprintln!("Move: {}", m.describe(&game.state));
+                    eprintln!("Error: {}", e);
+                    eprintln!("Turn: {}", game.state.settings.turn);
+                    eprintln!("Current player: {}", pov_id);
+                    for (id, tribe) in &game.state.tribes {
+                        eprintln!("  Tribe {}: {} stars", id, tribe.stars);
+                    }
+                    eprintln!("Indices stack: {:?}", indices_stack);
+                    eprintln!("=============================\n");
+                }
+                let _undo =
+                    result.expect("BUG: Legal move failed to execute in MCTS tree traversal");
                 indices_stack.push(child_idx);
                 path.push(child_idx);
             } else {
