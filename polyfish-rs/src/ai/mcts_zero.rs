@@ -202,7 +202,7 @@ impl<'a> ZeroMctsAgent<'a> {
         self.expand_node_single(&mut root, game, false);
 
         // Add Dirichlet noise to root priors for diverse exploration during training
-        if !root.children.is_empty() {
+        if root.children.len() > 1 {
             use rand_distr::{Dirichlet, Distribution};
             // Alpha 0.3 is standard for Chess (~30 moves). Polytopia has variable moves but 0.3 is a safe default.
             // In polytopia by move ~7 it ramps upto 80!
