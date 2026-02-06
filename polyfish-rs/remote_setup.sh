@@ -41,3 +41,5 @@ $HOME/.cargo/bin/cargo build --release --bin polyfish --features cuda
 $HOME/.cargo/bin/cargo build --release --bin benchmark --features cuda
 
 echo "Setup Complete! You can now run the training loop."
+
+sudo apt-get update && sudo apt-get install -y tmux
