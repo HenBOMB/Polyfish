@@ -146,7 +146,11 @@ impl PolyZeroNet {
         // Policy heads - shared processing
         let p_pool_conv = conv(filters, 1, 1, 1, 0, vs.pp("p_pool_conv"))?;
         let p_pool_bn = batch_norm(1, vs.pp("p_pool_bn"))?;
-        let p_fc_shared = candle_nn::linear(1 * 30 * 30, filters, vs.pp("p_fc_shared"))?;
+        let p_fc_shared = candle_nn::linear(
+            1 * crate::ai::features::MAP_SIZE * crate::ai::features::MAP_SIZE,
+            filters,
+            vs.pp("p_fc_shared"),
+        )?;
 
         // Policy heads
         let pi_action_type = candle_nn::linear(filters, num_action_types, vs.pp("pi_action"))?;
@@ -157,7 +161,11 @@ impl PolyZeroNet {
         // Value heads - shared processing
         let v_pool_conv = conv(filters, 1, 1, 1, 0, vs.pp("v_pool_conv"))?;
         let v_pool_bn = batch_norm(1, vs.pp("v_pool_bn"))?;
-        let v_fc_shared = candle_nn::linear(1 * 30 * 30, filters, vs.pp("v_fc_shared"))?;
+        let v_fc_shared = candle_nn::linear(
+            1 * crate::ai::features::MAP_SIZE * crate::ai::features::MAP_SIZE,
+            filters,
+            vs.pp("v_fc_shared"),
+        )?;
 
         // 3 value heads
         let v_win = candle_nn::linear(filters, 1, vs.pp("v_win"))?;

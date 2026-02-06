@@ -28,7 +28,7 @@ struct AppState {
 }
 
 const DEFAULT_TRIBES: &[TribeType] = &[TribeType::Imperius, TribeType::Imperius];
-const DEFAULT_SIZE: MapSize = MapSize::Small;
+const DEFAULT_SIZE: MapSize = MapSize::Tiny;
 
 #[tokio::main]
 async fn main() {
