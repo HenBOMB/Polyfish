@@ -19,9 +19,15 @@ from train import PolyZeroNet
 
 def init_model():
     MAP_SIZE = 30
-    SPATIAL_CHANNELS = 155
+    SPATIAL_CHANNELS = 154  # Fixed: Match Rust (154) not 155
     PLAYER_STATE_DIM = 10
     
+    # Check if model already exists to avoid overwriting trained weights!
+    import os
+    if os.path.exists("model.safetensors"):
+        print("✅ model.safetensors already exists. Skipping initialization.")
+        return
+
     print("Initializing enhanced PolyZero network...")
     print(f"  Spatial input: {SPATIAL_CHANNELS} channels, {MAP_SIZE}x{MAP_SIZE}")
     print(f"  Player state: {PLAYER_STATE_DIM} features")
