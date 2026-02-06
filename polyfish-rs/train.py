@@ -229,7 +229,9 @@ def train():
     model.train()
 
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.75)
+    # Use CosineAnnealing with Warm Restarts for better convergence on short cycles
+    # T_0=5 means it resets every 5 epochs (which is exactly our run length)
+    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=EPOCHS, T_mult=1, eta_min=1e-5)
 
     # 3. Training Loop
     for epoch in range(EPOCHS):

@@ -201,6 +201,21 @@ impl<'a> ZeroMctsAgent<'a> {
         let mut root = ZeroNode::new(1.0, None);
         self.expand_node_single(&mut root, game, false);
 
+        // Add Dirichlet noise to root priors for diverse exploration during training
+        if !root.children.is_empty() {
+            use rand_distr::{Dirichlet, Distribution};
+            // Alpha 0.3 is standard for Chess (~30 moves). Polytopia has variable moves but 0.3 is a safe default.
+            // In polytopia by move ~7 it ramps upto 80!
+            let alpha = 0.3;
+            let epsilon = 0.25; // 25% noise
+            let dirichlet = Dirichlet::new_with_size(alpha, root.children.len()).unwrap();
+            let noise = dirichlet.sample(&mut rand::thread_rng());
+
+            for (child, n) in root.children.iter_mut().zip(noise.iter()) {
+                child.prior = (1.0 - epsilon) * child.prior + epsilon * n;
+            }
+        }
+
         let mut iteration = 0;
         while iteration < self.iterations {
             let batch_count = (self.iterations - iteration).min(self.batch_size);
