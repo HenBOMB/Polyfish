@@ -182,8 +182,15 @@ def compute_loss(policy_pred, values_pred, policy_targets, value_target):
             head_loss = soft_cross_entropy(pred, target)
             total_policy_loss += head_loss * weights.get(head_name, 1.0)
             
-    # Value loss (missing other losses)
-    value_loss = nn.MSELoss()(values_pred['win'], value_target)
+    # Value loss (Main Win + Aux Eco + Aux Mil)
+    # Target shape for aux might be missing in dict if not loaded?
+    # We passed 'value_target' as a dict of values now
+    
+    loss_win = nn.MSELoss()(values_pred['win'], value_target['win'])
+    loss_eco = nn.MSELoss()(values_pred['eco'], value_target['eco'])
+    loss_mil = nn.MSELoss()(values_pred['mil'], value_target['mil'])
+    
+    value_loss = loss_win + 0.2 * loss_eco + 0.2 * loss_mil
     
     # Total loss
     total_loss = total_policy_loss + value_loss
@@ -243,7 +250,9 @@ def train():
             # Temporary storage for chunk data
             c_spatial = []
             c_player = []
-            c_values = []
+            c_win = []
+            c_eco = []
+            c_mil = []
             
             c_heads = {
                 'action_type': [], 'source_spatial': [], 'target_spatial': [],
@@ -255,15 +264,18 @@ def train():
                     data = load_file(f)
                     c_spatial.append(data["spatial_maps"])
                     c_player.append(data["player_states"])
-                    c_values.append(data["values"])
+                    c_win.append(data["values"])
+                    
+                    if "eco_targets" in data:
+                        c_eco.append(data["eco_targets"])
+                    if "mil_targets" in data:
+                        c_mil.append(data["mil_targets"])
                     
                     # Load all policy heads
                     for head in c_heads.keys():
                         if head in data:
                             c_heads[head].append(data[head])
                         else:
-                            # Fallback if old data format missing some heads?
-                            # Should ideally skip or default. For now assume data integrity.
                             pass
                             
                 except Exception as e:
@@ -277,7 +289,11 @@ def train():
             try:
                 spatial_maps = torch.cat(c_spatial)
                 player_states = torch.cat(c_player)
-                values = torch.cat(c_values)
+                
+                targets_win = torch.cat(c_win)
+                # Handle cases where some files might miss eco/mil (though they should have them now)
+                targets_eco = torch.cat(c_eco) if c_eco else torch.zeros_like(targets_win)
+                targets_mil = torch.cat(c_mil) if c_mil else torch.zeros_like(targets_win)
                 
                 target_heads = {}
                 for head, tensors in c_heads.items():
@@ -289,7 +305,7 @@ def train():
                 continue
             
             # Cleanup lists
-            del c_spatial, c_player, c_values, c_heads
+            del c_spatial, c_player, c_win, c_eco, c_mil, c_heads
             gc.collect()
             
             dataset_size = len(spatial_maps)
@@ -302,7 +318,12 @@ def train():
                 
                 batch_spatial = spatial_maps[batch_idx].to(DEVICE)
                 batch_player = player_states[batch_idx].to(DEVICE)
-                batch_values = values[batch_idx].to(DEVICE)
+                
+                batch_values = {
+                    'win': targets_win[batch_idx].to(DEVICE),
+                    'eco': targets_eco[batch_idx].to(DEVICE),
+                    'mil': targets_mil[batch_idx].to(DEVICE)
+                }
                 
                 batch_targets = {}
                 for head, tensor in target_heads.items():
@@ -310,6 +331,44 @@ def train():
                 
                 # Reshape spatial to (B, C, H, W)
                 batch_spatial = batch_spatial.view(-1, SPATIAL_CHANNELS, MAP_SIZE, MAP_SIZE)
+                
+                # --- DATA AUGMENTATION (Dihedral Group D4) ---
+                # Randomly rotate and flip the batch to multiply effective data by 8x
+                # This is standard for grid-based games like Go/Chess/Polytopia
+                
+                # 1. Random k for rot90 (0, 1, 2, 3)
+                k = random.randint(0, 3)
+                # 2. Random flip (True/False)
+                do_flip = random.random() > 0.5
+                
+                if k > 0:
+                    batch_spatial = torch.rot90(batch_spatial, k, [2, 3])
+                    # Rotate spatial targets (source/target)
+                    # Requires reshaping targets to (B, 1, H, W) then flattening back
+                    if 'source_spatial' in batch_targets:
+                        t = batch_targets['source_spatial'].view(-1, 1, MAP_SIZE, MAP_SIZE)
+                        t = torch.rot90(t, k, [2, 3])
+                        batch_targets['source_spatial'] = t.flatten(1)
+                        
+                    if 'target_spatial' in batch_targets:
+                        t = batch_targets['target_spatial'].view(-1, 1, MAP_SIZE, MAP_SIZE)
+                        t = torch.rot90(t, k, [2, 3])
+                        batch_targets['target_spatial'] = t.flatten(1)
+                        
+                if do_flip:
+                    batch_spatial = torch.flip(batch_spatial, [3]) # Flip horizontal
+                    
+                    if 'source_spatial' in batch_targets:
+                        t = batch_targets['source_spatial'].view(-1, 1, MAP_SIZE, MAP_SIZE)
+                        t = torch.flip(t, [3])
+                        batch_targets['source_spatial'] = t.flatten(1)
+                        
+                    if 'target_spatial' in batch_targets:
+                        t = batch_targets['target_spatial'].view(-1, 1, MAP_SIZE, MAP_SIZE)
+                        t = torch.flip(t, [3])
+                        batch_targets['target_spatial'] = t.flatten(1)
+                
+                # --- END AUGMENTATION ---
                 
                 optimizer.zero_grad()
                 
