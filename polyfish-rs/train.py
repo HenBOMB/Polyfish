@@ -387,7 +387,7 @@ def train():
                 total_v_loss += v_loss.item()
                 total_batches += 1
             
-            del spatial_maps, player_states, values, target_heads
+            del spatial_maps, player_states, targets_win, targets_eco, targets_mil, target_heads
             if DEVICE == "cuda":
                 torch.cuda.empty_cache()
             gc.collect()
