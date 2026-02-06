@@ -13,7 +13,7 @@ fn main() -> anyhow::Result<()> {
     // 1. Setup a game scenario
     let mut game = Game::new();
     let gen_settings = polyfish::mapgen::MapGenSettings {
-        size: MapSize::Small,
+        size: MapSize::Tiny, // Must match features::MAP_SIZE (11)
         map_type: MapType::Drylands,
         tribes: vec![TribeType::Imperius, TribeType::Imperius],
         seed: 42,
@@ -29,9 +29,10 @@ fn main() -> anyhow::Result<()> {
 
     // 2. Generate mock policy heads (Random weights)
     // We use deterministic rand-like values for reproducibility
+    let map_dim = polyfish::ai::features::MAP_SIZE * polyfish::ai::features::MAP_SIZE;
     let action_type = Tensor::from_vec(vec![0.1f32; 11], (1, 11), &device)?;
-    let source_spatial = Tensor::from_vec(vec![0.1f32; 900], (1, 900), &device)?;
-    let target_spatial = Tensor::from_vec(vec![0.1f32; 900], (1, 900), &device)?;
+    let source_spatial = Tensor::from_vec(vec![0.1f32; map_dim], (1, map_dim), &device)?;
+    let target_spatial = Tensor::from_vec(vec![0.1f32; map_dim], (1, map_dim), &device)?;
     let move_option = Tensor::from_vec(vec![0.1f32; 192], (1, 192), &device)?;
 
     let mock_policy = PolicyOutput {

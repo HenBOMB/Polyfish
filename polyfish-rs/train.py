@@ -11,7 +11,17 @@ import gc
 BATCH_SIZE = 64
 EPOCHS = 5
 LEARNING_RATE = 0.001
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+# Handle RTX 5090 / CUDA Arch compatibility issues
+try:
+    if torch.cuda.is_available():
+        # Test a small tensor to see if kernels are actually available
+        t = torch.tensor([1.0], device="cuda")
+        DEVICE = "cuda"
+    else:
+        DEVICE = "cpu"
+except Exception as e:
+    print(f"Warning: CUDA available but failed to initialize ({e}). Fallback to CPU.")
+    DEVICE = "cpu"
 
 # Architecture matching Rust `network.rs` (decomposed policy + auxiliary values)
 class ResBlock(nn.Module):

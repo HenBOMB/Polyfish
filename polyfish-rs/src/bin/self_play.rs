@@ -15,8 +15,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Decomposed policy probability distributions for a single step
 struct DecomposedPolicyData {
     action_type: Vec<f32>,    // [11]
-    source_spatial: Vec<f32>, // [900]
-    target_spatial: Vec<f32>, // [900]
+    source_spatial: Vec<f32>, // [H * W]
+    target_spatial: Vec<f32>, // [H * W]
     move_option: Vec<f32>,    // [192]
 }
 
