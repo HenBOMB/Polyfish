@@ -18,7 +18,7 @@ sys.path.insert(0, '.')
 from train import PolyZeroNet
 
 def init_model():
-    MAP_SIZE = 30
+    MAP_SIZE = 11
     SPATIAL_CHANNELS = 154  # Fixed: Match Rust (154) not 155
     PLAYER_STATE_DIM = 10
     

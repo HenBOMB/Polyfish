@@ -4,7 +4,7 @@ set -e
 # Configuration
 ITERATIONS=100
 GAMES_PER_ITER=7
-export MCTS_ITERS=200 # 200 = Optimized for RunPod GPU (~0.8s per move)
+export MCTS_ITERS=50 # 200 = Optimized for RunPod GPU (~0.8s per move)
 export RAYON_NUM_THREADS=12
 export OMP_NUM_THREADS=12
 export RUST_BACKTRACE=1 # Enable full panic backtraces
@@ -77,10 +77,28 @@ do
     echo "Starting Iteration $i / $ITERATIONS"
     echo "=================================================="
     
-    # 1. Self Play
-    echo "[Self-Play] Generating games..."
+    # 1. League Training Logic (20% chance)
+    # Check if we have checkpoints to play against
+    OPPONENT_FLAG=""
+    MATCH_TYPE="Self-Play"
+    
+    # Simple random check (1-100 <= 20)
+    RAND_VAL=$((1 + RANDOM % 100))
+    
+    if [ "$RAND_VAL" -le 20 ] && [ -d "checkpoints" ] && [ "$(ls -A checkpoints)" ]; then
+        # Pick a random checkpoint
+        RANDOM_CHECKPOINT=$(ls checkpoints/*.safetensors | shuf -n 1)
+        if [ -n "$RANDOM_CHECKPOINT" ]; then
+             OPPONENT_FLAG="--opponent $RANDOM_CHECKPOINT"
+             MATCH_TYPE="League Match vs $(basename $RANDOM_CHECKPOINT)"
+        fi
+    fi
+
+    echo "[$MATCH_TYPE] Generative games..."
+    
     # Capture output to extract metrics
-    SP_OUTPUT=$(NUM_GAMES=$GAMES_PER_ITER ./target/release/self_play)
+    # We pass args via CLI now, not env vars alone
+    SP_OUTPUT=$(./target/release/self_play --num-games $GAMES_PER_ITER --mcts-iters $MCTS_ITERS $OPPONENT_FLAG)
     echo "$SP_OUTPUT"
     
     # Extract Avg Score and Max Score using grep and sed or awk
@@ -99,8 +117,9 @@ do
     
     # 3. Log
     TIMESTAMP=$(date +%s)
+    # Add match type column if needed, or just log to console
     echo "$i,$TIMESTAMP,$AVG_SCORE,$MAX_SCORE,$P1_AVG,$P2_AVG,$LOSS" >> training_log.csv
-    echo "Iteration $i complete. Avg: $AVG_SCORE | Max: $MAX_SCORE | P1: $P1_AVG | P2: $P2_AVG | Loss: $LOSS"
+    echo "Iteration $i complete. Type: $MATCH_TYPE | Avg: $AVG_SCORE | Max: $MAX_SCORE | P1: $P1_AVG | P2: $P2_AVG | Loss: $LOSS"
     
     # 4. Checkpoint (Every 5 iterations)
     if (( i % 5 == 0 )); then

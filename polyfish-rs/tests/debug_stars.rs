@@ -25,7 +25,6 @@ fn main() {
     test_interaction_sequence();
 
     // Test user's hypothesis: Turn 30 / Game Over boundary
-    // Test user's hypothesis: Turn 30 / Game Over boundary
     test_game_over_undo();
 
     test_capture_ruin_determinism();

@@ -25,7 +25,7 @@ pub fn compute_move_priors(
 
     // Convert tensors to probability distributions (Softmax)
     let action_probs = softmax_1d(&policy.action_type).unwrap_or_else(|_| vec![1.0 / 11.0; 11]);
-    let spatial_size = (features::MAP_HEIGHT * features::MAP_WIDTH) as f32;
+    let spatial_size = (features::MAP_SIZE * features::MAP_SIZE) as f32;
 
     let source_probs = softmax_1d(&policy.source_spatial)
         .unwrap_or_else(|_| vec![1.0 / spatial_size; spatial_size as usize]);
@@ -110,7 +110,7 @@ use crate::ai::features;
 fn coord_to_flat_index(idx: usize, map_size: usize) -> usize {
     let y = idx / map_size;
     let x = idx % map_size;
-    (y * features::MAP_WIDTH + x).min((features::MAP_HEIGHT * features::MAP_WIDTH) - 1)
+    (y * features::MAP_SIZE + x).min((features::MAP_SIZE * features::MAP_SIZE) - 1)
 }
 
 /// Softmax over 1D tensor

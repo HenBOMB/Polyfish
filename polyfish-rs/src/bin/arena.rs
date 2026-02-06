@@ -52,7 +52,7 @@ fn play_match(
 
     // Setup Game
     let gen_settings = MapGenSettings {
-        size: MapSize::Small,
+        size: MapSize::Tiny,
         map_type: MapType::Drylands,
         tribes: vec![TribeType::Imperius, TribeType::Imperius],
         seed,
@@ -62,7 +62,7 @@ fn play_match(
     let mut game = Game::new();
     game.state = generate(gen_settings);
     game.state.settings.mode = ModeType::Perfection;
-    game.state.settings.max_turns = 30; // 30 turns for a decent match
+    game.state.settings.max_turns = 10; // 30 turns for a decent match
     game.post_load();
 
     // Agents

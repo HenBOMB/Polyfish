@@ -31,14 +31,15 @@ struct GameResult {
 
 /// Play a single game and return the result
 fn play_single_game(
-    network: &PolyZeroNet,
+    network1: &PolyZeroNet,
+    network2: &PolyZeroNet, // Added network2
     mcts_iters: usize,
     game_idx: usize,
     seed: u64,
 ) -> Option<GameResult> {
     // Init Game using MapGen
     let gen_settings = polyfish::mapgen::MapGenSettings {
-        size: MapSize::Small,
+        size: MapSize::Tiny,
         map_type: polyfish::types::MapType::Drylands,
         tribes: vec![TribeType::Imperius, TribeType::Imperius],
         seed,
@@ -52,7 +53,9 @@ fn play_single_game(
     game.state.settings.max_turns = 10;
     game.post_load();
 
-    let agent = ZeroMctsAgent::new(network, mcts_iters);
+    // Create two agents (they might share the same network, or be different)
+    let agent1 = ZeroMctsAgent::new(network1, mcts_iters);
+    let agent2 = ZeroMctsAgent::new(network2, mcts_iters);
 
     // Game Loop
     // Updated: Tuple includes SPT and Unit Count
@@ -76,7 +79,8 @@ fn play_single_game(
         let pov = game.state.settings.current_player_turn_id;
 
         // Get state tensor
-        let device = network.device();
+        let current_network = if pov == 1 { network1 } else { network2 };
+        let device = current_network.device();
         let state_t = state_to_tensor(&game.state, pov, &device)
             .expect("BUG: Failed to create state tensor - game state is invalid");
 
@@ -93,14 +97,15 @@ fn play_single_game(
         let current_mil =
             (raw_units / polyfish::states::default_max_units() as f32).clamp(0.0, 1.0);
 
-        // MCTS Search - get decomposed visit info
-        let (best_move, move_visits) = agent.select_move_with_decomposed_visits(&mut game);
+        // MCTS Search - use the correct agent
+        let current_agent = if pov == 1 { &agent1 } else { &agent2 };
+        let (best_move, move_visits) = current_agent.select_move_with_decomposed_visits(&mut game);
 
         let map_size = game.state.settings.size as usize;
 
         // Initialize probability distributions
-        let fixed_map_width = features::MAP_WIDTH;
-        let fixed_spatial_size = features::MAP_HEIGHT * fixed_map_width;
+        let fixed_map_width = features::MAP_SIZE;
+        let fixed_spatial_size = features::MAP_SIZE * fixed_map_width;
 
         let mut p_action = vec![0.0; 11];
         let mut p_source = vec![0.0; fixed_spatial_size];
@@ -208,24 +213,35 @@ fn play_single_game(
 }
 
 fn main() -> anyhow::Result<()> {
-    // Config
-    let num_games = std::env::var("NUM_GAMES")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(10);
-    let mcts_iters = std::env::var("MCTS_ITERS")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(50);
+    use clap::Parser;
+
+    #[derive(Parser, Debug)]
+    #[command(author, version, about, long_about = None)]
+    struct Args {
+        /// Number of games to play
+        #[arg(long, default_value_t = 10)]
+        num_games: usize,
+
+        /// MCTS iterations per move
+        #[arg(long, default_value_t = 50)]
+        mcts_iters: usize,
+
+        /// Optional opponent model path (if not set, plays against self)
+        #[arg(long)]
+        opponent: Option<String>,
+    }
+
+    let args = Args::parse();
+
     let device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
     println!("Using device: {:?}", device);
 
-    // Load existing model if available
+    // Load Main Model (P1)
     let model_path = "model.safetensors";
     let mut varmap = candle_nn::VarMap::new();
 
-    let network = if std::path::Path::new(model_path).exists() {
-        println!("Loading existing model from {}", model_path);
+    let network1 = if std::path::Path::new(model_path).exists() {
+        println!("Loading main model from {}", model_path);
         varmap.load(model_path)?;
         PolyZeroNet::new(candle_nn::VarBuilder::from_varmap(
             &varmap,
@@ -238,23 +254,38 @@ fn main() -> anyhow::Result<()> {
             model_path
         );
     };
+    let network1 = Arc::new(network1);
 
-    // Wrap network in Arc for thread-safe sharing
-    let network = Arc::new(network);
+    // Load Opponent Model (P2) - Defaults to same as P1
+    let network2 = if let Some(opp_path) = args.opponent {
+        println!("Loading opponent model from {}", opp_path);
+        let mut varmap2 = candle_nn::VarMap::new();
+        varmap2.load(&opp_path)?;
+        let net = PolyZeroNet::new(candle_nn::VarBuilder::from_varmap(
+            &varmap2,
+            candle_core::DType::F32,
+            &device,
+        ))?;
+        Arc::new(net)
+    } else {
+        println!("No opponent specified. Playing against self.");
+        network1.clone()
+    };
 
     let base_seed = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
     println!(
         "Starting parallel self-play: {} games with {} MCTS iterations",
-        num_games, mcts_iters
+        args.num_games, args.mcts_iters
     );
 
     // Parallel game generation using rayon
-    let results: Vec<GameResult> = (0..num_games)
+    let results: Vec<GameResult> = (0..args.num_games)
         .into_par_iter()
         .filter_map(|i| {
             let seed = base_seed + i as u64;
-            play_single_game(&network, mcts_iters, i, seed)
+            // Play with (Net1, Net2)
+            play_single_game(&network1, &network2, args.mcts_iters, i, seed)
         })
         .collect();
 
@@ -339,8 +370,8 @@ fn main() -> anyhow::Result<()> {
     }
 
     // Print Average Metrics
-    let avg_score = total_score as f32 / num_games as f32;
-    let avr_moves = total_moves as f32 / num_games as f32;
+    let avg_score = total_score as f32 / args.num_games as f32;
+    let avr_moves = total_moves as f32 / args.num_games as f32;
     let p1_avg = if p1_count > 0 {
         p1_total as f32 / p1_count as f32
     } else {
@@ -362,7 +393,7 @@ fn main() -> anyhow::Result<()> {
         let total_steps = collected_spatial_maps.len();
         println!("Saving {} steps...", total_steps);
 
-        let spatial_dim = features::NUM_CHANNELS * features::MAP_HEIGHT * features::MAP_WIDTH;
+        let spatial_dim = features::NUM_CHANNELS * features::MAP_SIZE * features::MAP_SIZE;
         let player_dim = 10;
 
         let spatial_maps_tensor = Tensor::cat(&collected_spatial_maps, 0)?;

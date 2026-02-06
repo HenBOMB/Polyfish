@@ -14,8 +14,7 @@ use candle_core::{Device, Result, Tensor};
 use std::sync::LazyLock;
 use strum::IntoEnumIterator;
 
-pub const MAP_HEIGHT: usize = 30;
-pub const MAP_WIDTH: usize = 30;
+pub const MAP_SIZE: usize = 11;
 
 // ============================================================================
 // Dynamic Channel Counts
@@ -220,7 +219,7 @@ pub fn state_to_tensor(
     perspective: PlayerId,
     device: &Device,
 ) -> Result<GameFeatures> {
-    let mut data = vec![0.0f32; NUM_CHANNELS * MAP_HEIGHT * MAP_WIDTH];
+    let mut data = vec![0.0f32; NUM_CHANNELS * MAP_SIZE * MAP_SIZE];
     let map_size = state.settings.size as usize;
 
     // Get perspective tribe info
@@ -282,7 +281,7 @@ pub fn state_to_tensor(
     // Process each tile
     for y in 0..map_size {
         for x in 0..map_size {
-            if x >= MAP_WIDTH || y >= MAP_HEIGHT {
+            if x >= MAP_SIZE || y >= MAP_SIZE {
                 continue;
             }
             let idx = (y * map_size + x) as i32;
@@ -411,7 +410,7 @@ pub fn state_to_tensor(
         for unit in &tribe.units {
             let x = unit.coords.x as usize;
             let y = unit.coords.y as usize;
-            if x >= MAP_WIDTH || y >= MAP_HEIGHT {
+            if x >= MAP_SIZE || y >= MAP_SIZE {
                 continue;
             }
 
@@ -521,7 +520,7 @@ pub fn state_to_tensor(
             let idx = city.tile_index;
             let x = (idx % state.settings.size) as usize;
             let y = (idx / state.settings.size) as usize;
-            if x >= MAP_WIDTH || y >= MAP_HEIGHT {
+            if x >= MAP_SIZE || y >= MAP_SIZE {
                 continue;
             }
 
@@ -591,7 +590,7 @@ pub fn state_to_tensor(
     }
 
     // Create spatial map tensor
-    let spatial_map = Tensor::from_vec(data, (1, NUM_CHANNELS, MAP_HEIGHT, MAP_WIDTH), device)?;
+    let spatial_map = Tensor::from_vec(data, (1, NUM_CHANNELS, MAP_SIZE, MAP_SIZE), device)?;
 
     // Extract player state vector (10 features)
     let player_vec = vec![
@@ -620,7 +619,7 @@ pub fn state_to_tensor(
 
 #[inline]
 fn set_feat(data: &mut Vec<f32>, channel: usize, x: usize, y: usize, val: f32) {
-    let idx = channel * (MAP_HEIGHT * MAP_WIDTH) + (y * MAP_WIDTH + x);
+    let idx = channel * (MAP_SIZE * MAP_SIZE) + (y * MAP_SIZE + x);
     if idx < data.len() {
         data[idx] = val;
     }
@@ -640,7 +639,7 @@ mod tests {
         let game = Game::default();
         let features = state_to_tensor(&game.state, 1, &Device::Cpu).unwrap();
         let dims = features.spatial_map.dims();
-        assert_eq!(dims, &[1, NUM_CHANNELS, MAP_HEIGHT, MAP_WIDTH]);
+        assert_eq!(dims, &[1, NUM_CHANNELS, MAP_SIZE, MAP_SIZE]);
         // Check player state dims
         let player_dims = features.player_state.dims();
         assert_eq!(player_dims, &[1, 10]);

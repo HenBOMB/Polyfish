@@ -118,8 +118,8 @@ fn main() -> Result<()> {
 
     // Reshape spatial to BCHW
     let c = polyfish::ai::features::NUM_CHANNELS;
-    let h = polyfish::ai::features::MAP_HEIGHT;
-    let w = polyfish::ai::features::MAP_WIDTH;
+    let h = polyfish::ai::features::MAP_SIZE;
+    let w = polyfish::ai::features::MAP_SIZE;
     let spatial_maps = spatial_maps.reshape((n_samples, c, h, w))?;
 
     // Loss weights

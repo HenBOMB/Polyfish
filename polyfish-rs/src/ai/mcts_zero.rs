@@ -119,6 +119,21 @@ impl<'a> ZeroMctsAgent<'a> {
     }
 
     pub fn select_move(&self, game: &mut Game) -> Option<Box<dyn Move>> {
+        // 1. Check Opening Book
+        use crate::ai::opening::Opening;
+        use rand::seq::SliceRandom;
+        // recommend returns Vec<Box<dyn Move>>.
+        // We can't use .choose() because that returns &Box<dyn Move> which we can't clone.
+        // Instead, we shuffle and pop.
+        let mut book_moves = Opening::recommend(game);
+        if !book_moves.is_empty() {
+            let mut rng = rand::thread_rng();
+            book_moves.shuffle(&mut rng);
+            if let Some(m) = book_moves.pop() {
+                return Some(m);
+            }
+        }
+
         let mut root = ZeroNode::new(1.0, None);
         // Initial expansion (single)
         self.expand_node_single(&mut root, game, false);
@@ -140,6 +155,49 @@ impl<'a> ZeroMctsAgent<'a> {
     }
 
     pub fn select_move_with_stats(&self, game: &mut Game) -> (Option<Box<dyn Move>>, Vec<f32>) {
+        // 1. Check Opening Book
+        use crate::ai::opening::Opening;
+        use rand::seq::SliceRandom;
+
+        // We need to handle book moves but also return valid stats (policy) matching the legal moves order.
+        let mut book_moves = Opening::recommend(game);
+        if !book_moves.is_empty() {
+            let mut rng = rand::thread_rng();
+            book_moves.shuffle(&mut rng);
+            if let Some(book_move) = book_moves.pop() {
+                // To return correct policy vector, we must know the legal moves order.
+                // So we expand the root node once.
+                let mut root = ZeroNode::new(1.0, None);
+                self.expand_node_single(&mut root, game, false);
+
+                // Find the index of the book move in the children
+                let num_children = root.children.len();
+                let mut policy = vec![0.0f32; num_children.max(1)];
+
+                let mut found_idx = None;
+                for (i, child) in root.children.iter().enumerate() {
+                    if let Some(m) = &child.move_to_here {
+                        // Compare move types and critical fields
+                        // Simple equality might not work if Move doesn't implement partialEq correctly for all types,
+                        // but typically we can check describe() or similar.
+                        // For now, let's assume filtering in `recommend` ensured it's a legal move.
+                        // We key off move_type and target for strictness, or just trust `recommend` returned a valid match.
+                        // Let's match by description to be safe? Or simple type + indices.
+                        if m.describe(&game.state) == book_move.describe(&game.state) {
+                            found_idx = Some(i);
+                            break;
+                        }
+                    }
+                }
+
+                if let Some(idx) = found_idx {
+                    policy[idx] = 1.0;
+                    return (Some(book_move), policy);
+                }
+                // If not found (weird), fall through to normal MCTS
+            }
+        }
+
         let mut root = ZeroNode::new(1.0, None);
         self.expand_node_single(&mut root, game, false);
 
@@ -197,6 +255,30 @@ impl<'a> ZeroMctsAgent<'a> {
         game: &mut Game,
     ) -> (Option<Box<dyn Move>>, Vec<crate::ai::mcts_types::MoveVisit>) {
         use crate::ai::mcts_types::MoveVisit;
+
+        // 1. Check Opening Book
+        use crate::ai::opening::Opening;
+        use rand::seq::SliceRandom;
+
+        let mut book_moves = Opening::recommend(game);
+        if !book_moves.is_empty() {
+            let mut rng = rand::thread_rng();
+            book_moves.shuffle(&mut rng);
+            if let Some(selected_move) = book_moves.pop() {
+                // Create MoveVisit for this move with 100% probability (iterations count)
+                let move_info = MoveVisit {
+                    move_type: selected_move.move_type(),
+                    visits: self.iterations as f32,
+                    source_idx: selected_move.source_idx().ok(),
+                    target_idx: selected_move.target_idx().ok(),
+                    structure_type: selected_move.structure_type().ok(),
+                    unit_type: selected_move.unit_type().ok(),
+                    tech_type: selected_move.tech_type().ok(),
+                    ability_type: selected_move.ability_type().ok(),
+                };
+                return (Some(selected_move), vec![move_info]);
+            }
+        }
 
         let mut root = ZeroNode::new(1.0, None);
         self.expand_node_single(&mut root, game, false);
@@ -321,14 +403,13 @@ impl<'a> ZeroMctsAgent<'a> {
                 (Tensor::cat(&spatial_list, 0), Tensor::cat(&player_list, 0))
             {
                 // Ensure shape (B, C, H, W)
-                let _spatial_dim =
-                    features::NUM_CHANNELS * features::MAP_HEIGHT * features::MAP_WIDTH;
+                let _spatial_dim = features::NUM_CHANNELS * features::MAP_SIZE * features::MAP_SIZE;
                 let batch_spatial = batch_spatial
                     .reshape((
                         indices_needing_eval.len(),
                         features::NUM_CHANNELS,
-                        features::MAP_HEIGHT,
-                        features::MAP_WIDTH,
+                        features::MAP_SIZE,
+                        features::MAP_SIZE,
                     ))
                     .unwrap();
                 let batch_player = batch_player
@@ -632,6 +713,13 @@ impl<'a> ZeroMctsAgent<'a> {
         }
 
         let mut legal_moves = game.legal_moves();
+
+        // Filter prohibited moves from Opening Book (e.g. no Research on Turn 3)
+        use crate::ai::opening::Opening;
+        let prohibited = Opening::prohibited(game);
+        if !prohibited.is_empty() {
+            legal_moves.retain(|m| !prohibited.contains(&m.move_type()));
+        }
 
         if !allow_end_turn {
             let has_other_moves = legal_moves

@@ -204,7 +204,8 @@ def train():
     fresh_files = glob.glob("games_*.safetensors")
     archive_files = sorted(glob.glob("archive/games_*.safetensors"), key=os.path.getmtime, reverse=True)
     
-    replay_buffer_size = 50
+    # Increased buffer to prevent "Amnesia" / Mode Collapse
+    replay_buffer_size = 500 
     game_files = fresh_files + archive_files[:replay_buffer_size]
 
     if not game_files:
@@ -214,7 +215,7 @@ def train():
     print(f"Training on {len(game_files)} files ({len(fresh_files)} fresh, {len(game_files)-len(fresh_files)} archived).")
     
     # 2. Init Model
-    MAP_SIZE = 30
+    MAP_SIZE = 11
     SPATIAL_CHANNELS = 154
     PLAYER_STATE_DIM = 10
 
