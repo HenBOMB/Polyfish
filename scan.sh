@@ -16,11 +16,11 @@ if [[ -z "$pid" ]]; then
     exit 1
 fi
 
-# echo "Running polyai-reader with PID: $pid"
+# echo "Running polyfish-reader with PID: $pid"
 
 # start_time=$(date +%s)
 
-polyai-reader/polyai-reader "$pid" "$1"
+polyfish-reader/polyfish-reader "$pid" "$1"
 
 # end_time=$(date +%s)
 # elapsed_time=$((end_time - start_time))
