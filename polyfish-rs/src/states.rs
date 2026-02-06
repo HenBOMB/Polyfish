@@ -403,7 +403,7 @@ pub fn default_max_units() -> i32 {
     20
 }
 pub fn default_fow() -> bool {
-    false
+    true
 }
 
 impl Default for GameSettings {

@@ -21,10 +21,13 @@ use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
+use polyfish::recorder::GameRecorder;
+
 struct AppState {
     game: Mutex<Game>,
     training_status: Mutex<Option<u32>>, // Store PID of running training
     network: Arc<polyfish::ai::network::PolyZeroNet>, // Trained neural network
+    recorder: Arc<GameRecorder>,
 }
 
 const DEFAULT_TRIBES: &[TribeType] = &[TribeType::Imperius, TribeType::Imperius];
@@ -71,10 +74,13 @@ async fn main() {
         );
     };
 
+    let recorder = Arc::new(GameRecorder::new());
+
     let shared_state = Arc::new(AppState {
         game: Mutex::new(game),
         training_status: Mutex::new(None),
         network: Arc::new(network),
+        recorder,
     });
 
     // Build our application with routes
@@ -86,6 +92,7 @@ async fn main() {
         .route("/reset", post(reset_game))
         .route("/train", post(trigger_training))
         .route("/train/status", get(get_training_status))
+        .route("/save_training_data", post(save_training_data))
         .route("/analyze", get(analyze_game))
         .route("/simulate/explorer", post(simulate_explorer))
         .route("/simulate/attack", post(simulate_attack))
@@ -98,6 +105,8 @@ async fn main() {
     println!("Listening on http://localhost:3000");
     axum::serve(listener, app).await.unwrap();
 }
+
+// ... (stats helper functions omitted for brevity if needed) ...
 
 async fn analyze_game(State(state): State<Arc<AppState>>) -> Json<Value> {
     let mut game = state.game.lock().unwrap();
@@ -379,9 +388,35 @@ async fn manual_step(
         _ => Box::new(EndTurnMove),
     };
 
+    // RECORDING: Before we play the move, we capture the state and the move we ARE about to make.
+    // We only record moves for non-bots (or whatever the user is controlling).
+    // Assuming user controls the current tribe.
+    // Calculate simple heuristic values for Eco/Mil.
+    use polyfish::ai::heuristics::evaluate_state_heuristics;
+    let pid = game.state.settings.current_player_turn_id;
+    let (eco, mil) = evaluate_state_heuristics(&game.state, pid);
+
+    state
+        .recorder
+        .record_step(&game.state, move_obj.as_ref(), eco, mil);
+
     let move_name = format!("{:?}", move_obj.move_type());
     game.state._messages.clear();
     game.play_move(move_obj.as_ref());
+
+    let (eco1, mil1) = evaluate_state_heuristics(&game.state, pid);
+
+    println!(
+        "Manual step: player={}, move={:?}, eco={} ({}{}), mil={} ({}{})",
+        pid,
+        move_obj.move_type(),
+        eco,
+        if eco1 - eco > 0.0 { "+" } else { "" },
+        eco1 - eco,
+        mil,
+        if mil1 - mil > 0.0 { "+" } else { "" },
+        mil1 - mil,
+    );
 
     let mut tiles: Vec<_> = game.state.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);
@@ -402,6 +437,13 @@ async fn manual_step(
         "movePlayed": move_name,
         "legalMoves": legal_moves
     }))
+}
+
+async fn save_training_data(State(state): State<Arc<AppState>>) -> Json<Value> {
+    match state.recorder.save() {
+        Ok(msg) => Json(serde_json::json!({ "status": "success", "message": msg })),
+        Err(e) => Json(serde_json::json!({ "status": "error", "message": e.to_string() })),
+    }
 }
 
 async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {

@@ -7,5 +7,6 @@ pub mod opening;
 pub mod policy_composer;
 pub use evaluator::evaluate;
 pub use mcts::{MctsAgent, MctsAnalysis, MoveEvaluation};
+pub mod heuristics;
 pub mod mcts_types;
 pub mod mcts_zero;

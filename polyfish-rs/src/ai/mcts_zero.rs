@@ -533,7 +533,12 @@ impl<'a> ZeroMctsAgent<'a> {
 
             // Apply move
             if let Some(m) = &current.children[child_idx].move_to_here {
-                let _undo = match game.play_move(m.as_ref()) {
+                let undo = if game.state.settings._fow {
+                    game.play_move(m.as_ref())
+                } else {
+                    game.simulate_move(m.as_ref())
+                };
+                let _undo = match undo {
                     Some(u) => u,
                     None => {
                         let stars = game.current_tribe().map(|t| t.stars).unwrap_or(-1);
@@ -609,7 +614,11 @@ impl<'a> ZeroMctsAgent<'a> {
                 current.select_child_with_virtual_loss(self.c_puct, -self.virtual_loss)?;
 
             if let Some(m) = &current.children[child_idx].move_to_here {
-                let result = game.play_move(m.as_ref());
+                let result = if game.state.settings._fow {
+                    game.play_move(m.as_ref())
+                } else {
+                    game.simulate_move(m.as_ref())
+                };
                 if result.is_none() {
                     // ERROR: Dump detailed state
                     let pov_id = game.state.settings.current_player_turn_id;
