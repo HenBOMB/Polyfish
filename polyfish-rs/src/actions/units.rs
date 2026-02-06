@@ -1229,7 +1229,7 @@ pub fn push_unit(state: &mut GameState, tile_idx: i32) -> Result<crate::moves::M
                 return Ok(MoveResult {
                     undo: Box::new(|_| {}),
                     rewards: None,
-                })
+                });
             }
         };
 

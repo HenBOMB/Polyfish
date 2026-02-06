@@ -8,4 +8,6 @@ while getopts "m:" opt; do
   esac
 done
 
-git add . && git commit -m "$MESSAGE" && git push
+git add .
+git commit -m "$MESSAGE"
+git push
