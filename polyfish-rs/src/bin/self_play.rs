@@ -417,14 +417,17 @@ fn main() -> anyhow::Result<()> {
             (total_steps, 11),
             &device,
         )?;
+
+        let spatial_logit_dim = features::MAP_SIZE * features::MAP_SIZE;
+
         let source_tensor = Tensor::from_vec(
             flatten_vec(collected_source_spatial),
-            (total_steps, 900),
+            (total_steps, spatial_logit_dim),
             &device,
         )?;
         let target_tensor = Tensor::from_vec(
             flatten_vec(collected_target_spatial),
-            (total_steps, 900),
+            (total_steps, spatial_logit_dim),
             &device,
         )?;
         let option_tensor =
