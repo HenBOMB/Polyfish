@@ -31,7 +31,9 @@ fi
 echo "Installing Python dependencies..."
 .venv/bin/pip install --upgrade pip
 # Install specific pytorch with CUDA support (Nightly for RTX 5090 / CUDA 12.x)
-.venv/bin/pip install --pre --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu124
+# Split installation to avoid dependency resolution errors with nightly builds
+.venv/bin/pip install --pre --upgrade --no-cache-dir torch --index-url https://download.pytorch.org/whl/nightly/cu124
+.venv/bin/pip install --pre --upgrade --no-cache-dir torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu124
 .venv/bin/pip install -r requirements.txt
 
 # 4. Build Project
