@@ -32,8 +32,8 @@ fn main() -> anyhow::Result<()> {
 
     // Per-turn stats
     let mut moves_per_turn_sum = 0;
-    let mut current_turn_moves = 0;
-    let mut current_turn_id = 0;
+    let mut current_turn_moves;
+    let mut current_turn_id;
     let mut max_available_moves = 0;
 
     // Turn -> (Sum, Count, Max)

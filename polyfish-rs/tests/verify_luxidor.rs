@@ -1,9 +1,7 @@
 fn main() {
     use polyfish::functions;
     use polyfish::game::Game;
-    use polyfish::states::{CityState, TileState, TribeState, UnitState};
-    use polyfish::types::{TerrainType, TribeType, UnitType};
-    use std::collections::HashSet;
+    use polyfish::types::TribeType;
 
     use polyfish::mapgen::{MapGenSettings, generate};
     use polyfish::types::MapSize;
@@ -18,7 +16,7 @@ fn main() {
     let mut game = Game { state };
     game.post_load(); // Ensures scores are synced
 
-    let player_id = 1; // Luxidoor should be player 1 (index 0 in vec, but IDs usually 1-based?)
+    // let player_id = 1;
     // Need to find which ID is Luxidoor
     let lux_id = game
         .state

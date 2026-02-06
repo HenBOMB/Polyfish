@@ -1,13 +1,12 @@
 use candle_core::Device;
 use clap::Parser;
+use polyfish::PlayerId;
 use polyfish::ai::mcts_zero::ZeroMctsAgent;
 use polyfish::ai::network::PolyZeroNet;
 use polyfish::game::Game;
 use polyfish::mapgen::{MapGenSettings, generate};
-use polyfish::states::PlayerId;
 use polyfish::types::{MapSize, MapType, ModeType, TribeType};
 use rayon::prelude::*;
-use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 /// Arena: Battle two models against each other
@@ -42,7 +41,7 @@ fn load_model(path: &str, device: &Device) -> anyhow::Result<PolyZeroNet> {
 }
 
 fn play_match(
-    game_id: usize,
+    _game_id: usize,
     net1: &PolyZeroNet,
     net2: &PolyZeroNet,
     mcts: usize,

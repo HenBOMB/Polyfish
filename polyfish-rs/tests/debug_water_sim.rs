@@ -1,9 +1,7 @@
 use polyfish::ai::mcts_zero::ZeroMctsAgent;
 use polyfish::ai::network::PolyZeroNet;
 use polyfish::game::Game;
-use polyfish::states::PlayerId;
 use polyfish::types::{MapSize, MapType, TechnologyType, TribeType};
-use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn main() -> anyhow::Result<()> {

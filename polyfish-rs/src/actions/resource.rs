@@ -1,7 +1,7 @@
 //! Resource-related actions (consume, harvest)
 
 use crate::actions::city::add_population;
-use crate::actions::{spend_stars, UndoCallback};
+use crate::actions::{UndoCallback, spend_stars};
 use crate::functions::get_city_owning_tile;
 use crate::settings::resources::get_resource_setting;
 use crate::states::GameState;
@@ -28,7 +28,7 @@ pub fn consume_resource(
                 );
                 // Undo removes
                 return Box::new(move |s| {
-                    s.resources.remove(&tile_idx);
+                    s.resources.shift_remove(&tile_idx);
                 });
             }
             return Box::new(|_| {}); // Nothing to consume
@@ -38,14 +38,14 @@ pub fn consume_resource(
     // Remove or replace
     if let Some(rt) = replace_type {
         if rt == ResourceType::None {
-            state.resources.remove(&tile_idx);
+            state.resources.shift_remove(&tile_idx);
         } else {
             if let Some(Some(res)) = state.resources.get_mut(&tile_idx) {
                 res.resource_type = rt;
             }
         }
     } else {
-        state.resources.remove(&tile_idx);
+        state.resources.shift_remove(&tile_idx);
     }
 
     Box::new(move |s| {

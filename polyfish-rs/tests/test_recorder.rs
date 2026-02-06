@@ -1,10 +1,9 @@
 use polyfish::game::Game;
-use polyfish::mapgen::{MapGenSettings, MapType, generate};
+use polyfish::mapgen::{MapGenSettings, generate};
 use polyfish::moves::StepMove;
 use polyfish::recorder::GameRecorder;
-use polyfish::types::{MapSize, TribeType};
+use polyfish::types::{MapSize, MapType, TribeType};
 use std::fs;
-use std::sync::Arc;
 
 #[test]
 fn test_recorder_save() {

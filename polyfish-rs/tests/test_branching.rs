@@ -57,10 +57,9 @@ fn main() {
             if let Some(m) = legal_moves.choose(&mut rand::thread_rng()) {
                 let _ = game.play_move(m.as_ref());
                 turn_count += 1;
-            } else {
-                break;
             }
         }
+        total_total_moves += total_moves;
     }
 
     println!("\n=== STATISTICS ===");

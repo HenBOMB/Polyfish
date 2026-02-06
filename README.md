@@ -14,8 +14,8 @@ If you're interested in contributing HMU. (contact at the bottom)
 
 ## Training
 
-1. Install Python requirements: `.`
-- **`polyfish-rs/run_training_loop.sh`**: Helper script to launch the training loop.
+- **`polyfish-rs/local_setup.sh`**: Install Python requirements.
+- **`polyfish-rs/run_training_loop.sh`**: Launch the training loop.
 
 ## Game
 

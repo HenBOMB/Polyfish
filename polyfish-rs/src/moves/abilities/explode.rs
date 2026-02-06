@@ -133,7 +133,7 @@ impl Move for ExplodeMove {
                             if let Some(old) = old_resource {
                                 s.resources.insert(explode_tile_idx, Some(old));
                             } else {
-                                s.resources.remove(&explode_tile_idx);
+                                s.resources.shift_remove(&explode_tile_idx);
                             }
                         }));
                     } else if is_water_like && tile.terrain_type != TerrainType::Algae {
@@ -161,7 +161,7 @@ impl Move for ExplodeMove {
                             if let Some(old) = old_resource {
                                 s.resources.insert(explode_tile_idx, Some(old));
                             } else {
-                                s.resources.remove(&explode_tile_idx);
+                                s.resources.shift_remove(&explode_tile_idx);
                             }
                         }));
 

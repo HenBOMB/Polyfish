@@ -1,7 +1,7 @@
 use polyfish::functions;
 use polyfish::game::Game;
 use polyfish::mapgen::{self, MapGenSettings};
-use polyfish::types::{MoveType, UnitType};
+use polyfish::types::MoveType;
 
 fn main() {
     println!("Starting Summon check...");

@@ -74,7 +74,7 @@ pub fn remove_unit(
                             s.resources.insert(tile_idx, r);
                         }
                         None => {
-                            s.resources.remove(&tile_idx);
+                            s.resources.shift_remove(&tile_idx);
                         }
                     }));
                 }
@@ -298,7 +298,7 @@ pub fn step_unit(
                     if let Some(old) = old_resource {
                         s.resources.insert(to_tile_idx, Some(old));
                     } else {
-                        s.resources.remove(&to_tile_idx);
+                        s.resources.shift_remove(&to_tile_idx);
                     }
                 }));
             }

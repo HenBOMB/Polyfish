@@ -84,7 +84,7 @@ pub fn create_structure(
         if let Some(old) = old_struct {
             s.structures.insert(idx, old);
         } else {
-            s.structures.remove(&idx);
+            s.structures.shift_remove(&idx);
         }
     }));
 
@@ -99,7 +99,7 @@ pub fn destroy_structure(state: &mut GameState, idx: i32) -> UndoCallback {
     };
 
     // Remove structure
-    state.structures.remove(&idx);
+    state.structures.shift_remove(&idx);
 
     let mut undos: Vec<UndoCallback> = Vec::new();
     let pov_id = state.settings.current_player_turn_id;
