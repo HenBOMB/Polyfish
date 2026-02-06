@@ -7,6 +7,34 @@ GAMES_PER_ITER=7
 export MCTS_ITERS=200 # 200 = Optimized for RunPod GPU (~0.8s per move)
 export RAYON_NUM_THREADS=12
 export OMP_NUM_THREADS=12
+export RUST_BACKTRACE=1 # Enable full panic backtraces
+
+# Log all output to session.log while still showing on console
+LOG_FILE="session.log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+echo "Logging to $LOG_FILE"
+
+# Background System Monitor (Logs RAM/GPU every 10s)
+start_system_monitor() {
+   echo "Starting system monitor logging to system_stats.log..."
+   while true; do
+       TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+       echo "--- $TIMESTAMP ---" >> system_stats.log
+       echo "[RAM]" >> system_stats.log
+       free -h >> system_stats.log
+       echo "[GPU]" >> system_stats.log
+       # Check if nvidia-smi exists (for local testing vs runpod)
+       if command -v nvidia-smi &> /dev/null; then
+           nvidia-smi --query-gpu=utilization.gpu,utilization.memory,memory.total,memory.free,memory.used --format=csv,noheader >> system_stats.log
+       else
+           echo "No GPU detected" >> system_stats.log
+       fi
+       sleep 10
+   done &
+   MONITOR_PID=$!
+   trap "kill $MONITOR_PID" EXIT
+}
+start_system_monitor
 
 echo "Building simulator..."
 cargo build --bin polyfish --release --features cuda
