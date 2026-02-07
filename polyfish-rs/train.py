@@ -345,43 +345,43 @@ def train():
                 # Reshape spatial to (B, C, H, W)
                 batch_spatial = batch_spatial.view(-1, SPATIAL_CHANNELS, MAP_SIZE, MAP_SIZE)
                 
-                # --- DATA AUGMENTATION (Dihedral Group D4) ---
-                # Randomly rotate and flip the batch to multiply effective data by 8x
-                # This is standard for grid-based games like Go/Chess/Polytopia
+                # # --- DATA AUGMENTATION (Dihedral Group D4) ---
+                # # Randomly rotate and flip the batch to multiply effective data by 8x
+                # # This is standard for grid-based games like Go/Chess/Polytopia
                 
-                # 1. Random k for rot90 (0, 1, 2, 3)
-                k = random.randint(0, 3)
-                # 2. Random flip (True/False)
-                do_flip = random.random() > 0.5
+                # # 1. Random k for rot90 (0, 1, 2, 3)
+                # k = random.randint(0, 3)
+                # # 2. Random flip (True/False)
+                # do_flip = random.random() > 0.5
                 
-                if k > 0:
-                    batch_spatial = torch.rot90(batch_spatial, k, [2, 3])
-                    # Rotate spatial targets (source/target)
-                    # Requires reshaping targets to (B, 1, H, W) then flattening back
-                    if 'source_spatial' in batch_targets:
-                        t = batch_targets['source_spatial'].view(-1, 1, MAP_SIZE, MAP_SIZE)
-                        t = torch.rot90(t, k, [2, 3])
-                        batch_targets['source_spatial'] = t.flatten(1)
+                # if k > 0:
+                #     batch_spatial = torch.rot90(batch_spatial, k, [2, 3])
+                #     # Rotate spatial targets (source/target)
+                #     # Requires reshaping targets to (B, 1, H, W) then flattening back
+                #     if 'source_spatial' in batch_targets:
+                #         t = batch_targets['source_spatial'].view(-1, 1, MAP_SIZE, MAP_SIZE)
+                #         t = torch.rot90(t, k, [2, 3])
+                #         batch_targets['source_spatial'] = t.flatten(1)
                         
-                    if 'target_spatial' in batch_targets:
-                        t = batch_targets['target_spatial'].view(-1, 1, MAP_SIZE, MAP_SIZE)
-                        t = torch.rot90(t, k, [2, 3])
-                        batch_targets['target_spatial'] = t.flatten(1)
+                #     if 'target_spatial' in batch_targets:
+                #         t = batch_targets['target_spatial'].view(-1, 1, MAP_SIZE, MAP_SIZE)
+                #         t = torch.rot90(t, k, [2, 3])
+                #         batch_targets['target_spatial'] = t.flatten(1)
                         
-                if do_flip:
-                    batch_spatial = torch.flip(batch_spatial, [3]) # Flip horizontal
+                # if do_flip:
+                #     batch_spatial = torch.flip(batch_spatial, [3]) # Flip horizontal
                     
-                    if 'source_spatial' in batch_targets:
-                        t = batch_targets['source_spatial'].view(-1, 1, MAP_SIZE, MAP_SIZE)
-                        t = torch.flip(t, [3])
-                        batch_targets['source_spatial'] = t.flatten(1)
+                #     if 'source_spatial' in batch_targets:
+                #         t = batch_targets['source_spatial'].view(-1, 1, MAP_SIZE, MAP_SIZE)
+                #         t = torch.flip(t, [3])
+                #         batch_targets['source_spatial'] = t.flatten(1)
                         
-                    if 'target_spatial' in batch_targets:
-                        t = batch_targets['target_spatial'].view(-1, 1, MAP_SIZE, MAP_SIZE)
-                        t = torch.flip(t, [3])
-                        batch_targets['target_spatial'] = t.flatten(1)
+                #     if 'target_spatial' in batch_targets:
+                #         t = batch_targets['target_spatial'].view(-1, 1, MAP_SIZE, MAP_SIZE)
+                #         t = torch.flip(t, [3])
+                #         batch_targets['target_spatial'] = t.flatten(1)
                 
-                # --- END AUGMENTATION ---
+                # # --- END AUGMENTATION ---
                 
                 optimizer.zero_grad()
                 

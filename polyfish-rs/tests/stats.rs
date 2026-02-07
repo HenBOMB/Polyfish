@@ -45,9 +45,9 @@ fn main() -> anyhow::Result<()> {
 
     for _i in 0..args.games {
         let gen_settings = MapGenSettings {
-            size: MapSize::Tiny, // Simple 1v1
+            size: MapSize::Tiny,
             map_type: MapType::Drylands,
-            tribes: vec![TribeType::Bardur, TribeType::Imperius],
+            tribes: vec![TribeType::Luxidoor, TribeType::Imperius],
             seed: rand::random(),
             ..Default::default()
         };
@@ -57,8 +57,6 @@ fn main() -> anyhow::Result<()> {
         game.state.settings.mode = ModeType::Perfection;
         game.state.settings.max_turns = args.max_turns;
         game.post_load();
-
-        // Disable console logs for speed if possible, but we can't easily here.
 
         current_turn_id = game.state.settings.turn;
         current_turn_moves = 0;
