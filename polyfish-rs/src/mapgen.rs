@@ -977,6 +977,63 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         }
     }
 
+    // Guaranteed Starting Resources
+    for &cap in &capital_cells {
+        let tribe = map[cap as usize]
+            .tribe_affinity
+            .unwrap_or(TribeType::Imperius);
+        let (resource, target_terrain, quantity): (&str, TerrainType, i32) = match tribe {
+            TribeType::Imperius => ("fruit", TerrainType::Field, 2),
+            TribeType::Bardur => ("game", TerrainType::Forest, 2),
+            TribeType::Zebasi => ("crop", TerrainType::Field, 1),
+            TribeType::Elyrion => ("game", TerrainType::Forest, 2),
+            TribeType::Kickoo => ("fish", TerrainType::Water, 2),
+            TribeType::Aquarion => ("fish", TerrainType::Water, 2),
+            TribeType::Cymanti => ("spores", TerrainType::Field, 2),
+            _ => ("", TerrainType::Field, 0),
+        };
+
+        if resource.is_empty() {
+            continue;
+        }
+
+        // Count existing resources in radius 1
+        let radius1 = get_square(cap, 1, size);
+        let existing: i32 = radius1
+            .iter()
+            .filter(|&&n| map[n as usize].above.as_deref() == Some(resource))
+            .count() as i32;
+
+        let needed = quantity - existing;
+        if needed <= 0 {
+            continue;
+        }
+
+        // Find eligible tiles in radius 1
+        let mut candidates: Vec<i32> = radius1
+            .iter()
+            .cloned()
+            .filter(|&n| {
+                n != cap
+                    && map[n as usize].above.is_none()
+                    && (map[n as usize].terrain_type == target_terrain
+                        || map[n as usize].terrain_type == TerrainType::Field
+                        || map[n as usize].terrain_type == TerrainType::Forest
+                        || map[n as usize].terrain_type == TerrainType::Mountain
+                        || map[n as usize].terrain_type == TerrainType::Water)
+            })
+            .collect();
+
+        for _ in 0..needed {
+            if candidates.is_empty() {
+                break;
+            }
+            let idx = candidates.remove(rng.gen_range(0..candidates.len()));
+            map[idx as usize].terrain_type = target_terrain;
+            map[idx as usize].above = Some(resource.to_string());
+        }
+    }
+
     // Resources: Iterate villages and their 2-tile radius
     // Pre-compute village positions for efficiency
     let village_positions: Vec<i32> = (0..tile_count)
@@ -1078,60 +1135,6 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                     }
                 }
             }
-        }
-    }
-
-    // Guaranteed Starting Resources
-    for &cap in &capital_cells {
-        let tribe = map[cap as usize]
-            .tribe_affinity
-            .unwrap_or(TribeType::Imperius);
-        let (resource, target_terrain, quantity): (&str, TerrainType, i32) = match tribe {
-            TribeType::Imperius => ("fruit", TerrainType::Field, 2),
-            TribeType::Bardur => ("game", TerrainType::Forest, 2),
-            TribeType::Zebasi => ("crop", TerrainType::Field, 1),
-            TribeType::Elyrion => ("game", TerrainType::Forest, 2),
-            TribeType::Kickoo => ("fish", TerrainType::Water, 2),
-            TribeType::Aquarion => ("fish", TerrainType::Water, 2),
-            TribeType::Cymanti => ("spores", TerrainType::Field, 2),
-            _ => ("", TerrainType::Field, 0),
-        };
-
-        if resource.is_empty() {
-            continue;
-        }
-
-        // Count existing resources in radius 1
-        let radius1 = get_square(cap, 1, size);
-        let existing: i32 = radius1
-            .iter()
-            .filter(|&&n| map[n as usize].above.as_deref() == Some(resource))
-            .count() as i32;
-
-        let needed = quantity - existing;
-        if needed <= 0 {
-            continue;
-        }
-
-        // Find eligible tiles in radius 1
-        let mut candidates: Vec<i32> = radius1
-            .iter()
-            .cloned()
-            .filter(|&n| {
-                n != cap
-                    && map[n as usize].above.is_none()
-                    && (map[n as usize].terrain_type == target_terrain
-                        || map[n as usize].terrain_type == TerrainType::Field)
-            })
-            .collect();
-
-        for _ in 0..needed {
-            if candidates.is_empty() {
-                break;
-            }
-            let idx = candidates.remove(rng.gen_range(0..candidates.len()));
-            map[idx as usize].terrain_type = target_terrain;
-            map[idx as usize].above = Some(resource.to_string());
         }
     }
 
