@@ -120,12 +120,12 @@ impl<'a> ZeroMctsAgent<'a> {
 
     pub fn select_move(&self, game: &mut Game) -> Option<Box<dyn Move>> {
         // 1. Check Opening Book
-        use crate::ai::opening::Opening;
+        use crate::ai::book::Book;
         use rand::seq::SliceRandom;
         // recommend returns Vec<Box<dyn Move>>.
         // We can't use .choose() because that returns &Box<dyn Move> which we can't clone.
         // Instead, we shuffle and pop.
-        let mut book_moves = Opening::recommend(game);
+        let mut book_moves = Book::recommend(game);
         if !book_moves.is_empty() {
             let mut rng = rand::thread_rng();
             book_moves.shuffle(&mut rng);
@@ -156,11 +156,11 @@ impl<'a> ZeroMctsAgent<'a> {
 
     pub fn select_move_with_stats(&self, game: &mut Game) -> (Option<Box<dyn Move>>, Vec<f32>) {
         // 1. Check Opening Book
-        use crate::ai::opening::Opening;
+        use crate::ai::book::Book;
         use rand::seq::SliceRandom;
 
         // We need to handle book moves but also return valid stats (policy) matching the legal moves order.
-        let mut book_moves = Opening::recommend(game);
+        let mut book_moves = Book::recommend(game);
         if !book_moves.is_empty() {
             let mut rng = rand::thread_rng();
             book_moves.shuffle(&mut rng);
@@ -257,10 +257,10 @@ impl<'a> ZeroMctsAgent<'a> {
         use crate::ai::mcts_types::MoveVisit;
 
         // 1. Check Opening Book
-        use crate::ai::opening::Opening;
+        use crate::ai::book::Book;
         use rand::seq::SliceRandom;
 
-        let mut book_moves = Opening::recommend(game);
+        let mut book_moves = Book::recommend(game);
         if !book_moves.is_empty() {
             let mut rng = rand::thread_rng();
             book_moves.shuffle(&mut rng);
@@ -533,11 +533,7 @@ impl<'a> ZeroMctsAgent<'a> {
 
             // Apply move
             if let Some(m) = &current.children[child_idx].move_to_here {
-                let undo = if game.state.settings._fow {
-                    game.play_move(m.as_ref())
-                } else {
-                    game.simulate_move(m.as_ref())
-                };
+                let undo = game.simulate_move(m.as_ref());
                 let _undo = match undo {
                     Some(u) => u,
                     None => {
@@ -614,11 +610,7 @@ impl<'a> ZeroMctsAgent<'a> {
                 current.select_child_with_virtual_loss(self.c_puct, -self.virtual_loss)?;
 
             if let Some(m) = &current.children[child_idx].move_to_here {
-                let result = if game.state.settings._fow {
-                    game.play_move(m.as_ref())
-                } else {
-                    game.simulate_move(m.as_ref())
-                };
+                let result = game.simulate_move(m.as_ref());
                 if result.is_none() {
                     // ERROR: Dump detailed state
                     let pov_id = game.state.settings.current_player_turn_id;
@@ -723,13 +715,6 @@ impl<'a> ZeroMctsAgent<'a> {
 
         let mut legal_moves = game.legal_moves();
 
-        // Filter prohibited moves from Opening Book (e.g. no Research on Turn 3)
-        use crate::ai::opening::Opening;
-        let prohibited = Opening::prohibited(game);
-        if !prohibited.is_empty() {
-            legal_moves.retain(|m| !prohibited.contains(&m.move_type()));
-        }
-
         if !allow_end_turn {
             let has_other_moves = legal_moves
                 .iter()
@@ -758,12 +743,21 @@ impl<'a> ZeroMctsAgent<'a> {
             allow_end_turn,
         );
 
-        // Normalize priors
-        let sum: f32 = priors.iter().sum();
+        // Add heuristic bias to priors
+        let mut final_priors = Vec::with_capacity(priors.len());
+        for (m, &nn_prior) in legal_moves.iter().zip(priors.iter()) {
+            let h_score = crate::ai::ordering::score_move(game, m.as_ref());
+            // Tiny bias to help network focus on very obvious good moves or break ties.
+            // h_score ranges from 0 to 100.
+            final_priors.push(nn_prior + (h_score * 0.001));
+        }
+
+        // Normalize final_priors
+        let sum: f32 = final_priors.iter().sum();
         let normalized_priors: Vec<f32> = if sum > 1e-8 {
-            priors.iter().map(|p| p / sum).collect()
+            final_priors.iter().map(|p| p / sum).collect()
         } else {
-            vec![1.0 / priors.len() as f32; priors.len()]
+            vec![1.0 / final_priors.len() as f32; final_priors.len()]
         };
 
         // Create child nodes

@@ -59,13 +59,13 @@ impl GenTile {
 // BiomeRates logic moved below or kept here if it doesn't use the deleted utils
 
 #[derive(Debug, Clone, Copy)]
-struct BiomeRates {
-    mountain: f32,
-    forest: f32,
-    field: f32,
+pub struct BiomeRates {
+    pub mountain: f32,
+    pub forest: f32,
+    pub field: f32,
 }
 
-fn get_tribe_biome_rates(tribe: TribeType) -> BiomeRates {
+pub fn get_tribe_biome_rates(tribe: TribeType) -> BiomeRates {
     let mut rates = BiomeRates {
         mountain: 0.14,
         forest: 0.38,
@@ -117,7 +117,7 @@ fn get_tribe_biome_rates(tribe: TribeType) -> BiomeRates {
     rates
 }
 
-fn get_resource_prob(key: &str, tribe: TribeType, inner: bool) -> f32 {
+pub fn get_resource_prob(key: &str, tribe: TribeType, inner: bool) -> f32 {
     let base = match key {
         "fruit" => {
             if inner {
@@ -1223,6 +1223,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
     // Conversion to GameState
     let mut game_state = GameState::default();
     game_state.settings.size = size;
+    game_state.settings.map_type = settings.map_type;
     game_state.settings.tile_count = tile_count;
     // Most important rule. Disabled = God mode
     game_state.settings._fow = default_fow();

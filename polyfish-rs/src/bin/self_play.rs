@@ -22,7 +22,7 @@ struct DecomposedPolicyData {
 
 /// Result from a single game - contains all data needed for training
 struct GameResult {
-    // Added: current_spt and current_units for each step
+    // Added: current_spt and current_units for each step, eco, mil
     history: Vec<(GameFeatures, DecomposedPolicyData, PlayerId, f32, f32)>,
     scores: HashMap<i32, i32>,
     moves: usize,
@@ -58,7 +58,7 @@ fn play_single_game(
     let agent2 = ZeroMctsAgent::new(network2, mcts_iters);
 
     // Game Loop
-    // Updated: Tuple includes SPT and Unit Count
+    // Updated: Tuple includes SPT and Unit Count (Eco/Mil heuristic targets)
     let mut game_history: Vec<(GameFeatures, DecomposedPolicyData, PlayerId, f32, f32)> =
         Vec::new();
 
@@ -84,18 +84,11 @@ fn play_single_game(
         let state_t = state_to_tensor(&game.state, pov, &device)
             .expect("BUG: Failed to create state tensor - game state is invalid");
 
-        // Capture Eco (SPT) and Mil (Unit Count) metrics for the current player
-        let current_tribe = game.state.tribes.get(&pov);
-        let raw_spt = current_tribe
-            .map(|t| polyfish::functions::get_tribe_spt(&game.state, t) as f32)
-            .unwrap_or(0.0);
-
-        let raw_units = current_tribe.map(|t| t.units.len() as f32).unwrap_or(0.0);
-
-        // Normalize targets to [0, 1] for stable training
-        let current_eco = (raw_spt / polyfish::states::default_max_spt() as f32).clamp(0.0, 1.0);
+        // Use heuristic evaluators for training targets
+        let current_eco =
+            polyfish::ai::evaluator::economy::evaluate_economy(&game.state, pov).clamp(0.0, 1.0);
         let current_mil =
-            (raw_units / polyfish::states::default_max_units() as f32).clamp(0.0, 1.0);
+            polyfish::ai::evaluator::army::evaluate_army(&game.state, pov).clamp(0.0, 1.0);
 
         // MCTS Search - use the correct agent
         let current_agent = if pov == 1 { &agent1 } else { &agent2 };
@@ -349,6 +342,8 @@ fn main() -> anyhow::Result<()> {
             collected_target_spatial.push(policy_data.target_spatial);
             collected_option.push(policy_data.move_option);
 
+            // Calculate Value based on FINAL OUTCOME (Win/Loss/Score Diff)
+            // This is crucial: Value Head learns "Who Wins", not "What Heuristic Thinks"
             let my_score = result.scores.get(&p_id).copied().unwrap_or(0) as f32;
             let opponent_score = result
                 .scores
@@ -358,9 +353,9 @@ fn main() -> anyhow::Result<()> {
                 .next()
                 .unwrap_or(0.0);
 
-            // Win Value: Score Diff Normalized
             let score_diff = my_score - opponent_score;
             let value = (score_diff / polyfish::states::default_max_score() as f32).tanh();
+
             collected_values.push(value);
 
             collected_eco.push(eco.tanh());

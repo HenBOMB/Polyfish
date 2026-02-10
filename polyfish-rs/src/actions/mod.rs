@@ -66,10 +66,23 @@ pub fn spend_stars(state: &mut GameState, amount: i32) -> UndoCallback {
 
         tribe.stars -= amount;
 
+        // println!(
+        //     "[DEBUG] Tribe {} {} {} stars: {} -> {} (Turn {})",
+        //     pov_id,
+        //     if amount > 0 { "spent" } else { "gained" },
+        //     amount.abs(),
+        //     old_stars,
+        //     tribe.stars,
+        //     state.settings.turn
+        // );
+
         // Polytopia/TS doesn't usually allow debt, if we are here we already validated
         if tribe.stars < 0 {
-            eprintln!("[ERROR] Not enough stars to spend");
-            return noop_undo();
+            eprintln!(
+                "[ERROR] Not enough stars to spend: need {}, have {}",
+                amount, old_stars
+            );
+            // return noop_undo(); // Don't return, let it proceed to catch where validation failed
         }
 
         Box::new(move |s| {

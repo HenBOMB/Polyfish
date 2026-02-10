@@ -7,7 +7,6 @@ use crate::functions::get_adjacent_indices;
 use crate::states::GameState;
 use crate::types::{ClimateType, TerrainType, TribeType};
 use indexmap::IndexMap;
-use std::collections::HashMap;
 
 /// Maps ClimateType to corresponding TribeType
 pub fn climate_to_tribe(climate: ClimateType) -> TribeType {
@@ -257,45 +256,131 @@ pub fn predict_villages(state: &GameState) -> IndexMap<i32, (TribeType, bool)> {
     prediction_map
 }
 
-/// Predict terrain for fog tiles based on visible neighbors
+/// Find the tribe of the nearest known city/village to a given tile
+fn get_nearest_known_tribe(state: &GameState, idx: i32) -> Option<TribeType> {
+    let size = state.settings.size;
+    let pov_id = state.settings.current_player_turn_id;
+
+    let mut best_dist = i32::MAX;
+    let mut best_tribe = None;
+
+    // Check all tiles for known cities
+    for (&t_idx, tile) in &state.tiles {
+        // Must be visible or have a known capital/village
+        let is_known_city = tile.capital_of > 0
+            || (tile.explorers.contains(&pov_id)
+                && crate::functions::get_structure_type_at(state, t_idx)
+                    == Some(crate::types::StructureType::Village));
+
+        if is_known_city {
+            let dist = crate::functions::get_chebyshev_distance(idx, t_idx, size);
+            if dist < best_dist {
+                best_dist = dist;
+                // If it's a capital, use the owner's tribe. If it's a village, we might not know the original tribe,
+                // but we can guess from the climate if visible, or owner if visible.
+                // For now, use owner if present, else climate.
+                if let Some(owner) = state.tribes.get(&tile.owner) {
+                    best_tribe = Some(owner.tribe_type);
+                } else {
+                    best_tribe = Some(climate_to_tribe(tile.climate));
+                }
+            }
+        }
+    }
+
+    best_tribe
+}
+
+/// Predict terrain for fog tiles based on probabilistic mapgen rules
 pub fn predict_terrain(
     state: &GameState,
     fog_tiles: &[i32],
 ) -> IndexMap<i32, (TerrainType, ClimateType)> {
     let pov_id = state.settings.current_player_turn_id;
+    let map_type = state.settings.map_type;
+
+    // Base land chances for map types (rough estimates from mapgen.rs)
+    let base_land_prob = match map_type {
+        crate::types::MapType::Drylands => 0.95,
+        crate::types::MapType::Lakes => 0.72,
+        crate::types::MapType::Continents => 0.45,
+        crate::types::MapType::Pangea => 0.50,
+        crate::types::MapType::Archipelago => 0.30,
+        crate::types::MapType::WaterWorld => 0.05,
+    };
+
     let mut predictions = IndexMap::new();
+
     for &tile_idx in fog_tiles {
+        let nearest_tribe = get_nearest_known_tribe(state, tile_idx).unwrap_or(TribeType::Imperius); // Default to Imperius rates if totally lost
+        let biome_rates = crate::mapgen::get_tribe_biome_rates(nearest_tribe);
+
         let neighbors = get_adjacent_indices(state, tile_idx, 1);
-        let mut terrain_counts = HashMap::new();
-        let mut climate_counts = HashMap::new();
+        let mut land_neighbors = 0;
+        let mut total_neighbors = 0;
 
         for n_idx in neighbors {
             if let Some(tile) = state.tiles.get(&n_idx) {
                 if tile.explorers.contains(&pov_id) {
-                    *terrain_counts.entry(tile.terrain_type).or_insert(0) += 1;
-                    *climate_counts.entry(tile.climate).or_insert(0) += 1;
+                    match tile.terrain_type {
+                        TerrainType::Water | TerrainType::Ocean => {}
+                        _ => land_neighbors += 1,
+                    }
+                    total_neighbors += 1;
                 }
             }
         }
 
-        let terrain = terrain_counts
-            .into_iter()
-            .max_by_key(|&(_, c)| c)
-            .map(|(t, _)| t)
-            .unwrap_or(TerrainType::Field);
-        let climate = climate_counts
-            .into_iter()
-            .max_by_key(|&(_, c)| c)
-            .map(|(c, _)| c)
-            .unwrap_or(ClimateType::Nature);
-
-        let final_climate = if terrain == TerrainType::Water || terrain == TerrainType::Ocean {
-            ClimateType::Nature
+        // Adaptive Land Probability:
+        // If surrounded by water, likely water. If surrounded by land, likely land.
+        // If unknown, use global map type bias.
+        let local_land_prob = if total_neighbors > 0 {
+            (land_neighbors as f32 + 0.5) / (total_neighbors as f32 + 1.0)
         } else {
-            climate
+            base_land_prob
         };
-        predictions.insert(tile_idx, (terrain, final_climate));
+
+        // Weighted mix of local and global
+        let final_land_prob = 0.7 * local_land_prob + 0.3 * base_land_prob;
+
+        // Decide Terrain
+        let terrain_type = if final_land_prob < 0.5 {
+            // Likely water. Deep ocean if far from land?
+            // Simple heuristic: If we have land neighbors, it's Coast (Water). Else Ocean.
+            if land_neighbors > 0 {
+                TerrainType::Water
+            } else {
+                TerrainType::Ocean
+            }
+        } else {
+            // Land! Use biome rates.
+            // Normalize rates to 1.0 just in case
+            let total_rate = biome_rates.mountain + biome_rates.forest + biome_rates.field;
+
+            // deterministic pseudo-random from coord
+            let pseudo_rnd = ((tile_idx * 12345 + 67890) % 100) as f32 / 100.0;
+
+            if pseudo_rnd < (biome_rates.mountain / total_rate) {
+                TerrainType::Mountain
+            } else if pseudo_rnd < ((biome_rates.mountain + biome_rates.forest) / total_rate) {
+                TerrainType::Forest
+            } else {
+                TerrainType::Field
+            }
+        };
+
+        let climate = tribe_to_climate(nearest_tribe);
+
+        let final_climate =
+            if terrain_type == TerrainType::Water || terrain_type == TerrainType::Ocean {
+                ClimateType::Nature // Fluids are usually Nature or tribe-colored but functionally Nature for most things
+            } else {
+                climate
+            };
+
+        predictions.insert(tile_idx, (terrain_type, final_climate));
     }
+
     predictions
 }
 
@@ -321,8 +406,17 @@ pub fn get_border_clouds(state: &GameState) -> Vec<i32> {
 
 pub fn update_predictions(state: &mut GameState) {
     let villages = predict_villages(state);
-    let border_clouds = get_border_clouds(state);
-    let terrain = predict_terrain(state, &border_clouds);
+
+    // Prediction for ALL unexplored tiles (Mental Image)
+    let pov_id = state.settings.current_player_turn_id;
+    let mut fog_tiles = Vec::new();
+    for (&idx, tile) in &state.tiles {
+        if !tile.explorers.contains(&pov_id) {
+            fog_tiles.push(idx);
+        }
+    }
+
+    let terrain = predict_terrain(state, &fog_tiles);
     let enemy_capitals = predict_enemy_capitals(state);
 
     state._prediction = Some(crate::states::PredictionState {
@@ -413,6 +507,58 @@ mod tests {
             city_idx + 3,
             &IndexMap::new(),
             &cities
+        ));
+    }
+
+    #[test]
+    fn test_terrain_prediction_biomes() {
+        let mut state = GameState::default();
+        let size = 11;
+        state.settings.size = size;
+        state.settings.map_type = crate::types::MapType::Drylands; // 95% land
+
+        // Setup Bardur Tribe
+        let bardur_id = 2;
+        let mut bardur_tribe = TribeState::default();
+        bardur_tribe.id = bardur_id;
+        bardur_tribe.tribe_type = TribeType::Bardur;
+        state.tribes.insert(bardur_id, bardur_tribe);
+
+        let bardur_cap_idx = 2 * size + 2;
+        let mut cap_tile = TileState::default();
+        cap_tile.coords = crate::coords::Coords::from_index(bardur_cap_idx, size);
+        cap_tile.capital_of = bardur_id;
+        cap_tile.owner = bardur_id;
+        cap_tile.terrain_type = TerrainType::Field;
+        state.tiles.insert(bardur_cap_idx, cap_tile);
+
+        // Prediction Target: Tile near Bardur
+        let target_idx = 2 * size + 3; // Adjacent to Bardur Cap
+
+        // Let's predict!
+        let predictions = predict_terrain(&state, &[target_idx]);
+        let (pred_terrain, pred_climate) = predictions[&target_idx];
+
+        // 1. Should be Land (Drylands + Land Neighbor)
+        assert_ne!(pred_terrain, TerrainType::Water);
+        assert_ne!(pred_terrain, TerrainType::Ocean);
+
+        // 2. Should correspond to Bardur climate
+        assert_eq!(pred_climate, ClimateType::Bardur);
+
+        // 3. Terrain Type Check (Probabilistic but deterministic seed)
+        // With current deterministic RNG:
+        // idx = 25. pseudo_rnd = ((25 * 12345 + 67890) % 100) / 100.0 => 0.15
+        // Bardur Rates (approx): Mountain 0.14, Forest 0.30, Field 0.56
+        // 0.15 > 0.14 but < (0.14+0.30=0.44). So likely Forest.
+        // Wait, if 0.15 is slightly above 0.14, it falls into "Forest" bucket.
+        // Let's assert it is Forest or Field, ensuring it works.
+        // Actually, if I can force it to be Forest, great.
+        // If pseudo_rnd is 0.15, and mountain rate is ~0.14, then it IS Forest.
+        // Let's just assert it is valid land.
+        assert!(matches!(
+            pred_terrain,
+            TerrainType::Field | TerrainType::Forest | TerrainType::Mountain
         ));
     }
 }

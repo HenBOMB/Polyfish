@@ -3,7 +3,6 @@
 //! Upgrade a unit (e.g. Boat -> Ship).
 
 use crate::functions::get_tech_unit_type;
-use crate::functions::is_tile_occupied;
 use crate::moves::{Move, MoveResult};
 use crate::settings::get_unit_setting;
 use crate::states::GameState;
@@ -93,9 +92,7 @@ pub fn generate_upgrade_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>)
     // Find all upgradable unit types unlocked by researched techs
     let mut upgradables = Vec::new();
     for tech_state in &tribe.tech_vanilla {
-        if !tech_state.discovered {
-            continue;
-        }
+        // We use all researched techs for upgrades, even if not "discovered" (simulation)
 
         if let Some(u_type) = get_tech_unit_type(tech_state.tech_type) {
             let settings = get_unit_setting(u_type);
@@ -114,7 +111,7 @@ pub fn generate_upgrade_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>)
         // Polytopia/TS Rule: Only Raft can be upgraded (usually Boat/Ship/etc. handled via Navy)
         // and tile must not be "occupied" (TS weirdness)
 
-        if unit.unit_type != UnitType::Raft || is_tile_occupied(state, unit.coords.idx) {
+        if unit.unit_type != UnitType::Raft {
             continue;
         }
 

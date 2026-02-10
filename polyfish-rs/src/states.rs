@@ -347,6 +347,8 @@ impl Default for TribeState {
 #[serde(rename_all = "camelCase")]
 pub struct GameSettings {
     pub mode: ModeType,
+    #[serde(default)]
+    pub map_type: MapType,
     pub size: i32,
     #[serde(default)]
     pub tile_count: i32,
@@ -397,7 +399,7 @@ pub fn default_max_stars() -> i32 {
     30
 }
 pub fn default_max_spt() -> i32 {
-    20
+    25
 }
 pub fn default_max_units() -> i32 {
     20
@@ -410,6 +412,7 @@ impl Default for GameSettings {
     fn default() -> Self {
         Self {
             mode: ModeType::Domination,
+            map_type: MapType::Drylands,
             size: 11,
             tile_count: 121,
             turn: 1,

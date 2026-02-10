@@ -208,6 +208,7 @@ fn unit_to_channel(unit_type: UnitType) -> usize {
 // ============================================================================
 
 /// Features output structure
+#[derive(Clone)]
 pub struct GameFeatures {
     pub spatial_map: Tensor,  // [1, C, H, W] - tile-based features
     pub player_state: Tensor, // [1, P] - global player features

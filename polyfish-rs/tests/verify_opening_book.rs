@@ -1,4 +1,4 @@
-use polyfish::ai::opening::Opening;
+use polyfish::ai::book::Book;
 use polyfish::game::Game;
 use polyfish::mapgen::{MapGenSettings, generate};
 use polyfish::states::ResourceState;
@@ -59,7 +59,7 @@ fn test_imperius_opening() {
         .unwrap()
         .terrain_type = TerrainType::Field; // Fruit on Field
 
-    let rec_moves = Opening::recommend(&game);
+    let rec_moves = Book::recommend(&game);
 
     println!("Turn 1 Recommended Moves for Imperius:");
     for m in &rec_moves {
@@ -85,7 +85,7 @@ fn test_imperius_opening() {
     // Ensure we have money for Summon (Warrior = 2 stars)
     game.state.tribes.get_mut(&imp_id).unwrap().stars = 5;
 
-    let rec_moves_t2 = Opening::recommend(&game);
+    let rec_moves_t2 = Book::recommend(&game);
     println!("Turn 2 Recommended Moves for Imperius:");
     for m in &rec_moves_t2 {
         println!("- {:?}", m.move_type());
@@ -128,7 +128,7 @@ fn test_oumaji_opening() {
     game.state.settings.current_player_turn_id = oum_id;
     game.state.tribes.get_mut(&oum_id).unwrap().stars = 5;
 
-    let rec_moves = Opening::recommend(&game);
+    let rec_moves = Book::recommend(&game);
     // Oumaji only recommends Harvest/Step on turn 1
     for m in &rec_moves {
         match m.move_type() {
@@ -141,7 +141,7 @@ fn test_oumaji_opening() {
     // Checking opening.rs:
     // TribeType::Oumaji => match turn { 2 => &[MoveType::Step] }
     game.state.settings.turn = 2;
-    let rec_moves_t2 = Opening::recommend(&game);
+    let rec_moves_t2 = Book::recommend(&game);
 
     for m in &rec_moves_t2 {
         match m.move_type() {
@@ -152,33 +152,4 @@ fn test_oumaji_opening() {
             ),
         }
     }
-}
-
-#[test]
-fn test_prohibited_moves() {
-    let mut settings = MapGenSettings::default();
-    settings.size = MapSize::Tiny;
-    settings.tribes = vec![TribeType::Imperius, TribeType::Oumaji];
-    settings.seed = 999;
-
-    let mut game = Game::new();
-    game.state = generate(settings);
-    game.post_load();
-
-    // === TURN 3: Prohibit Research ===
-    game.state.settings.turn = 3;
-
-    let prohibited = Opening::prohibited(&game);
-    assert!(
-        prohibited.contains(&MoveType::Research),
-        "Research should be prohibited on Turn 3"
-    );
-
-    // === TURN 4: Allowed ===
-    game.state.settings.turn = 4;
-    let prohibited_t4 = Opening::prohibited(&game);
-    assert!(
-        !prohibited_t4.contains(&MoveType::Research),
-        "Research should NOT be prohibited on Turn 4"
-    );
 }

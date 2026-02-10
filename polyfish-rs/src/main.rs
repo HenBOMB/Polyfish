@@ -46,6 +46,7 @@ async fn main() {
     let mut game = Game::new();
     game.state = initial_state;
     game.state.settings.verbose = true;
+    game.state.settings.max_turns = 10;
     game.post_load();
 
     // Load trained neural network
@@ -94,8 +95,11 @@ async fn main() {
         .route("/train/status", get(get_training_status))
         .route("/save_training_data", post(save_training_data))
         .route("/analyze", get(analyze_game))
+        .route("/save", post(save_game))
+        .route("/load", post(load_game))
         .route("/simulate/explorer", post(simulate_explorer))
         .route("/simulate/attack", post(simulate_attack))
+        .route("/trainer/hint", post(get_trainer_hint))
         .nest_service("/", ServeDir::new("../src/public"))
         .layer(CorsLayer::permissive())
         .with_state(shared_state);
@@ -133,7 +137,7 @@ struct StepParams {
 }
 
 fn default_iterations() -> usize {
-    100
+    200
 }
 
 async fn get_current_state(State(state): State<Arc<AppState>>) -> Json<Value> {
@@ -392,9 +396,11 @@ async fn manual_step(
     // We only record moves for non-bots (or whatever the user is controlling).
     // Assuming user controls the current tribe.
     // Calculate simple heuristic values for Eco/Mil.
-    use polyfish::ai::heuristics::evaluate_state_heuristics;
+    // Calculate simple heuristic values for Eco/Mil.
+    use polyfish::ai::evaluator::{army, economy};
     let pid = game.state.settings.current_player_turn_id;
-    let (eco, mil) = evaluate_state_heuristics(&game.state, pid);
+    let eco = economy::evaluate_economy(&game.state, pid);
+    let mil = army::evaluate_army(&game.state, pid);
 
     state
         .recorder
@@ -404,10 +410,11 @@ async fn manual_step(
     game.state._messages.clear();
     game.play_move(move_obj.as_ref());
 
-    let (eco1, mil1) = evaluate_state_heuristics(&game.state, pid);
+    let eco1 = economy::evaluate_economy(&game.state, pid);
+    let mil1 = army::evaluate_army(&game.state, pid);
 
     println!(
-        "Manual step: player={}, move={:?}, eco={} ({}{}), mil={} ({}{})",
+        "Manual step: player={}, move={:?}, eco={:.4} ({}{:.4}), mil={:.4} ({}{:.4})",
         pid,
         move_obj.move_type(),
         eco,
@@ -587,4 +594,75 @@ async fn simulate_attack(
         Some(p) => Json(serde_json::to_value(p).unwrap()),
         None => Json(serde_json::json!({ "error": "No valid attack target found" })),
     }
+}
+
+async fn save_game(State(state): State<Arc<AppState>>) -> Json<Value> {
+    let game = state.game.lock().unwrap();
+    let json = serde_json::to_string_pretty(&game.state).unwrap();
+    std::fs::write("saved_state.json", json).expect("Failed to write saved_state.json");
+
+    Json(serde_json::json!({
+        "status": "success",
+        "message": "Game state saved to saved_state.json"
+    }))
+}
+
+async fn load_game(State(state): State<Arc<AppState>>) -> Json<Value> {
+    let mut game = state.game.lock().unwrap();
+    let json =
+        std::fs::read_to_string("saved_state.json").expect("Failed to read saved_state.json");
+    let loaded_state: polyfish::states::GameState =
+        serde_json::from_str(&json).expect("Failed to deserialize game state");
+
+    game.state = loaded_state;
+    game.post_load();
+
+    let mut tiles: Vec<_> = game.state.tiles.values().collect();
+    tiles.sort_by_key(|t| t.coords.idx);
+
+    let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
+
+    Json(serde_json::json!({
+        "state": {
+            "settings": game.state.settings,
+            "tiles": tiles,
+            "structures": game.state.structures,
+            "resources": game.state.resources,
+            "tribes": game.state.tribes,
+            "_hiddenResources": game.state._hidden_resources,
+            "_prediction": game.state._prediction,
+            "_messages": game.state._messages,
+        },
+        "legalMoves": legal_moves
+    }))
+}
+
+async fn get_trainer_hint(
+    State(state): State<Arc<AppState>>,
+    Json(params): Json<StepParams>,
+) -> Json<Value> {
+    let mut game = state.game.lock().unwrap();
+
+    // Use Zero MCTS Agent (Neural Network)
+    use polyfish::ai::mcts_zero::ZeroMctsAgent;
+    let agent = ZeroMctsAgent::new(&state.network, params.iterations);
+
+    // Run MCTS search
+    let (best_move, _) = agent.select_move_with_stats(&mut game);
+
+    let move_json = best_move.as_ref().map(|m| m.serialize());
+    let move_name = best_move
+        .as_ref()
+        .map(|m| format!("{:?}", m.move_type()))
+        .unwrap_or("None".to_string());
+    let move_description = best_move
+        .as_ref()
+        .map(|m| m.describe(&game.state))
+        .unwrap_or("No suggestion".to_string());
+
+    Json(serde_json::json!({
+        "proposedMove": move_json,
+        "moveName": move_name,
+        "moveDescription": move_description,
+    }))
 }

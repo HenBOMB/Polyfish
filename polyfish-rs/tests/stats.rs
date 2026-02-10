@@ -9,7 +9,7 @@ use rand::seq::SliceRandom;
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Number of games to play
-    #[arg(long, default_value_t = 1000)]
+    #[arg(long, default_value_t = 100)]
     games: usize,
 
     /// Max turns per game

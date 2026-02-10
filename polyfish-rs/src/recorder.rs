@@ -8,13 +8,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Records game states and human moves for training
 pub struct GameRecorder {
-    // Buffer stores: (Features, ActionType, SourceSpatial, TargetSpatial, TargetType, ValueTarget)
-    // We store raw indices/targets rather than one-hot vectors to save space/complexity here.
-    // The training loop (or a converter) will handle one-hot encoding if needed,
-    // but `self_play.rs` usually saves aggregated probability distributions.
-    // Since human play is "hard" labels (prob 1.0), we can just store the indices
-    // and expand them to one-hot tensors during save.
-    buffer: Mutex<Vec<(GameFeatures, DecomposedTargets, Vec<f32>)>>,
+    // Buffer stores: (Features, PlayerState, DecomposedTargets, ValueTargets)
+    buffer: Mutex<Vec<(GameFeatures, Tensor, DecomposedTargets, Vec<f32>)>>,
     device: Device,
 }
 
@@ -27,8 +22,8 @@ impl GameRecorder {
         }
     }
 
-    /// Record a step (State + Human Move)
-    /// We assume the human move is "correct" (probability 1.0)
+    /// Record a step (State + Human Move).
+    /// Assumes the move is the "ground truth" (prob 1.0).
     pub fn record_step(
         &self,
         state: &GameState,
@@ -51,14 +46,13 @@ impl GameRecorder {
         let targets = DecomposedMapper::move_to_targets(move_obj, map_size);
 
         // 3. Value target
-        // We'll assume Win=0.0 (unknown) for now, or maybe 1.0 if we assume human is god?
-        // Let's stick to 0.0 for now, as we don't know the outcome.
-        // Or we can update it later if we track the game result.
-        // For supervised learning of *policy*, value is less critical, but good to have Eco/Mil.
+        // We'll set Win=0.0 (unknown) for now
         let value_target = vec![0.0, eco_val, mil_val];
 
         let mut buf = self.buffer.lock().unwrap();
-        buf.push((features, targets, value_target));
+        // features.spatial_map is [1, C, H, W], features.player_state is [1, P_DIM]
+        let p_state = features.player_state.clone();
+        buf.push((features, p_state, targets, value_target));
     }
 
     /// Save buffered games to .safetensors
@@ -71,100 +65,101 @@ impl GameRecorder {
         let n = buf.len();
         println!("Saving {} human steps...", n);
 
-        // We need to collate data into tensors.
-        // features: [N, C, H, W]
-        // policy_action: [N, 11] (one-hot)
-        // policy_src: [N, H*W] (one-hot)
-        // policy_tgt: [N, H*W] (one-hot)
-        // policy_opt: [N, 192] (one-hot)
-        // value: [N, 3]
+        // We need to collate data into tensors matching train.rs expectations:
+        // "spatial_maps": [N, C, H, W]
+        // "player_states": [N, P_DIM]
+        // "action_type": [N, 11]
+        // "source_spatial": [N, H*W]
+        // "target_spatial": [N, H*W]
+        // "move_option": [N, 192]
+        // "values": [N, 1] (win)
+        // "eco_targets": [N, 1]
+        // "mil_targets": [N, 1] (optional in train.rs, but we can save them)
 
-        // Actually, `self_play.rs` saves them as:
-        // "input": [N, C, H, W]
-        // "policy_targets": [N, TOTAL_POLICY_SIZE] (concatenated flattened one-hots)
-        // "value_targets": [N, 3]
+        let (first_feats, _, _, _) = &buf[0];
+        let (_b, _c, h, w) = first_feats.spatial_map.shape().dims4()?;
+        let map_area = h * w;
 
-        // We need `TOTAL_POLICY_SIZE`.
-        // 11 + 900 + 900 + 192 = 2003 (for 30x30 map? No, map size varies).
-        // Let's assume standard map size or dynamic?
-        // PolyZeroNet uses dynamic map size, but policy heads are usually fixed size output?
-        // `network.rs` -> Output is usually MapSize*MapSize.
-        // If we train on multiple map sizes, we usually mask or pad.
-        // `self_play.rs` handles this.
+        // -- Accumulate Tensors --
+        let mut t_spatial = Vec::with_capacity(n);
+        let mut t_player = Vec::with_capacity(n);
 
-        // For simplicity, let's assume the map size of the FIRST sample in the buffer
-        if n == 0 {
-            return Ok("Empty".into());
-        }
+        // Policy
+        let mut t_action = Vec::with_capacity(n);
+        let mut t_source = Vec::with_capacity(n);
+        let mut t_target = Vec::with_capacity(n);
+        let mut t_option = Vec::with_capacity(n);
 
-        // Helper to create one-hot vector
-        fn one_hot(idx: Option<usize>, size: usize) -> Vec<f32> {
-            let mut v = vec![0.0; size];
+        // Value
+        let mut t_win = Vec::with_capacity(n);
+        let mut t_eco = Vec::with_capacity(n);
+        let mut t_mil = Vec::with_capacity(n);
+
+        // Helper for one-hot
+        fn one_hot_tensor(
+            idx: Option<usize>,
+            size: usize,
+            device: &Device,
+        ) -> anyhow::Result<Tensor> {
+            let mut v = vec![0.0f32; size];
             if let Some(i) = idx {
                 if i < size {
                     v[i] = 1.0;
                 }
             }
-            v
+            Ok(Tensor::from_vec(v, (1, size), device)?)
         }
 
-        // Assuming all samples have same map size for now (typical if user plays one game).
-        // But human might restart on different map sizes.
-        // That's tricky. Tensors must be uniform.
-        // We should Group by Map Size or just enforce Single Batch per Save.
-        // Given the use case, saving often is fine.
+        for (feat, p_state, tgt, val) in buf.iter() {
+            t_spatial.push(feat.spatial_map.clone());
+            t_player.push(p_state.clone());
 
-        let (first_feats, _, _) = &buf[0];
-        let (_b, _c, h, w) = first_feats.spatial_map.shape().dims4()?;
-        let map_area = h * w; // e.g. 11*11=121
+            t_action.push(one_hot_tensor(Some(tgt.action_type), 11, &self.device)?);
+            t_source.push(one_hot_tensor(tgt.source_spatial, map_area, &self.device)?);
+            t_target.push(one_hot_tensor(tgt.target_spatial, map_area, &self.device)?);
+            t_option.push(one_hot_tensor(tgt.target_type, 192, &self.device)?);
 
-        let mut input_list = Vec::with_capacity(n);
-        let mut policy_list = Vec::with_capacity(n);
-        let mut value_list = Vec::with_capacity(n);
-
-        for (feat, tgt, val_tgt) in buf.iter() {
-            // 1. Input
-            // feat.spatial_map is [1, C, H, W]
-            // We need to flatten or keep it... `Tensor::cat` expects [N, ...].
-            input_list.push(feat.spatial_map.clone());
-
-            // 2. Policy One-Hots
-            // Sizes: Action=11, Src=MapArea, Tgt=MapArea, Opt=192
-            let mut p_vec = Vec::new();
-            p_vec.extend(one_hot(Some(tgt.action_type), 11));
-            p_vec.extend(one_hot(tgt.source_spatial, map_area));
-            p_vec.extend(one_hot(tgt.target_spatial, map_area));
-            p_vec.extend(one_hot(tgt.target_type, 192));
-
-            // Convert to Tensor
-            let p_tensor = Tensor::from_vec(p_vec, (1, 11 + map_area * 2 + 192), &self.device)?;
-            policy_list.push(p_tensor);
-
-            // 3. Value
-            let v_tensor = Tensor::from_vec(val_tgt.clone(), (1, 3), &self.device)?;
-            value_list.push(v_tensor);
+            t_win.push(Tensor::from_vec(vec![val[0]], (1, 1), &self.device)?);
+            t_eco.push(Tensor::from_vec(vec![val[1]], (1, 1), &self.device)?);
+            t_mil.push(Tensor::from_vec(vec![val[2]], (1, 1), &self.device)?);
         }
 
-        let batch_input = Tensor::cat(&input_list, 0)?;
-        let batch_policy = Tensor::cat(&policy_list, 0)?;
-        let batch_value = Tensor::cat(&value_list, 0)?;
+        let batch_spatial = Tensor::cat(&t_spatial, 0)?;
+        let batch_player = Tensor::cat(&t_player, 0)?;
 
-        // Save to file
+        let batch_action = Tensor::cat(&t_action, 0)?;
+        let batch_source = Tensor::cat(&t_source, 0)?;
+        let batch_target = Tensor::cat(&t_target, 0)?;
+        let batch_option = Tensor::cat(&t_option, 0)?;
+
+        let batch_win = Tensor::cat(&t_win, 0)?;
+        let batch_eco = Tensor::cat(&t_eco, 0)?;
+        let batch_mil = Tensor::cat(&t_mil, 0)?;
+
+        // Save
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        let filename = format!("human_games_{}.safetensors", timestamp);
+        let filename = format!("games_human_{}.safetensors", timestamp);
 
         use candle_core::safetensors::save;
         let mut tensors = std::collections::HashMap::new();
-        tensors.insert("input".to_string(), batch_input);
-        tensors.insert("policy_targets".to_string(), batch_policy);
-        tensors.insert("value_targets".to_string(), batch_value);
+        tensors.insert("spatial_maps".to_string(), batch_spatial);
+        tensors.insert("player_states".to_string(), batch_player);
+
+        tensors.insert("action_type".to_string(), batch_action);
+        tensors.insert("source_spatial".to_string(), batch_source);
+        tensors.insert("target_spatial".to_string(), batch_target);
+        tensors.insert("move_option".to_string(), batch_option);
+
+        tensors.insert("values".to_string(), batch_win);
+        tensors.insert("eco_targets".to_string(), batch_eco);
+        tensors.insert("mil_targets".to_string(), batch_mil);
 
         save(&tensors, &filename)?;
 
-        // Clear buffer after save
+        // Clear buffer
         buf.clear();
 
         Ok(format!("Saved {} samples to {}", n, filename))

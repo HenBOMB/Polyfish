@@ -34,3 +34,35 @@ pretty_assertions = "1.4"
 [profile.release]
 lto = "fat"
 codegen-units = 1
+
+[[test]]
+name = "stats"
+harness = false
+
+[[test]]
+name = "debug_stars"
+harness = false
+
+[[test]]
+name = "debug_mcts_undo"
+harness = false
+
+[[test]]
+name = "debug_water_sim"
+harness = false
+
+[[test]]
+name = "inspect_seed"
+harness = false
+
+[[test]]
+name = "test_branching"
+harness = false
+
+[[test]]
+name = "verify_luxidor"
+harness = false
+
+[[test]]
+name = "verify_policy"
+harness = false

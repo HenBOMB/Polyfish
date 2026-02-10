@@ -1,31 +1,11 @@
 use crate::ai::evaluator;
+use crate::ai::mcts::{MctsAnalysis, MoveEvaluation};
 use crate::game::Game;
-use crate::moves::EndTurnMove;
-use crate::moves::Move;
+use crate::moves::{EndTurnMove, Move};
 use crate::states::PlayerId;
 use crate::types::MoveType;
-use rand::seq::SliceRandom;
-use rand::thread_rng;
-use serde::Serialize;
 
-/// Evaluation data for a single move candidate
-#[derive(Debug, Clone, Serialize)]
-pub struct MoveEvaluation {
-    pub src: i32,
-    pub target: i32,
-    pub visits: f32,
-    pub win_rate: f32,
-    pub move_type: MoveType,
-}
-
-/// Analysis results from MCTS search
-#[derive(Debug, Clone, Serialize)]
-pub struct MctsAnalysis {
-    pub evaluations: Vec<MoveEvaluation>,
-    pub total_iterations: usize,
-}
-
-pub struct MctsAgent {
+pub struct HeuristicMctsAgent {
     pub iterations: usize,
     pub exploration_constant: f32,
 }
@@ -43,7 +23,25 @@ impl Node {
         let untried = if game.state.settings._game_over {
             None
         } else {
-            Some(game.legal_moves())
+            let book_moves = crate::ai::book::Book::recommend(game);
+
+            let mut filtered = if !book_moves.is_empty() {
+                // If we have book recommendations, strictly follow them
+                book_moves
+            } else {
+                game.legal_moves()
+            };
+
+            // Move Ordering: Sort by heuristic score ascending (best moves at the end for .pop())
+            filtered.sort_by(|a, b| {
+                let score_a = crate::ai::ordering::score_move(game, a.as_ref());
+                let score_b = crate::ai::ordering::score_move(game, b.as_ref());
+                score_a
+                    .partial_cmp(&score_b)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+            Some(filtered)
         };
 
         Self {
@@ -60,8 +58,16 @@ impl Node {
         self.children
             .iter_mut()
             .max_by(|a, b| {
-                let a_val = (a.value / a.visits) + c * (parent_visits.ln() / a.visits).sqrt();
-                let b_val = (b.value / b.visits) + c * (parent_visits.ln() / b.visits).sqrt();
+                let a_val = if a.visits > 0.0 {
+                    (a.value / a.visits) + c * (parent_visits.ln() / a.visits).sqrt()
+                } else {
+                    f32::INFINITY
+                };
+                let b_val = if b.visits > 0.0 {
+                    (b.value / b.visits) + c * (parent_visits.ln() / b.visits).sqrt()
+                } else {
+                    f32::INFINITY
+                };
                 a_val.partial_cmp(&b_val).unwrap()
             })
             .unwrap()
@@ -75,7 +81,7 @@ impl Node {
     }
 }
 
-impl MctsAgent {
+impl HeuristicMctsAgent {
     pub fn new(iterations: usize) -> Self {
         Self {
             iterations,
@@ -88,7 +94,6 @@ impl MctsAgent {
         best_move
     }
 
-    /// Run MCTS and return both the best move and analysis data for visualization
     pub fn select_move_with_analysis(
         &self,
         game: &mut Game,
@@ -97,6 +102,7 @@ impl MctsAgent {
         let mut root = Node::new(None, game);
 
         // Filter out EndTurn from root moves if there are other options
+        // This encourages the AI to do actions before ending turn
         let mut filtered_end_turn = false;
         if let Some(moves) = &mut root.untried_moves {
             let has_other_moves = moves.iter().any(|m| m.move_type() != MoveType::EndTurn);
@@ -110,7 +116,7 @@ impl MctsAgent {
             self.search_iteration(game, &mut root, player_id);
         }
 
-        // Extract evaluations from all children
+        // Analysis extraction
         let mut evaluations: Vec<MoveEvaluation> = root
             .children
             .iter()
@@ -118,7 +124,6 @@ impl MctsAgent {
                 let m = child.move_to_here.as_ref()?;
                 let json = m.serialize();
 
-                // Extract src and target from move JSON
                 let src = json
                     .get("src")
                     .and_then(|v| v.as_i64())
@@ -152,7 +157,6 @@ impl MctsAgent {
             })
             .collect();
 
-        // Sort by visits (most visited first)
         evaluations.sort_by(|a, b| b.visits.partial_cmp(&a.visits).unwrap());
 
         let analysis = MctsAnalysis {
@@ -160,7 +164,6 @@ impl MctsAgent {
             total_iterations: self.iterations,
         };
 
-        // Return child with most visits
         let mut best_move = root
             .children
             .into_iter()
@@ -182,6 +185,8 @@ impl MctsAgent {
                 if let Some(undo) = game.simulate_move(m.as_ref()) {
                     let val = self.search_iteration(game, child, pov);
                     undo(&mut game.state);
+
+                    // Update stats
                     node.visits += 1.0;
                     node.value += val;
                     return val;
@@ -195,12 +200,13 @@ impl MctsAgent {
                 let m = untried.pop().unwrap();
                 if let Some(undo) = game.simulate_move(m.as_ref()) {
                     let mut child = Node::new(Some(m), game);
-                    let val = self.simulate(game, pov);
+                    let val = self.simulate_heuristic(game, pov); // Use Heuristic here
                     undo(&mut game.state);
 
                     child.visits = 1.0;
                     child.value = val;
                     node.children.push(child);
+
                     node.visits += 1.0;
                     node.value += val;
                     return val;
@@ -208,43 +214,22 @@ impl MctsAgent {
             }
         }
 
-        // Game over or can't move
-        let val = evaluator::evaluate_state(&game.state, pov);
+        // Terminal or Stalled
+        let val = self.simulate_heuristic(game, pov);
         node.visits += 1.0;
         node.value += val;
         val
     }
 
-    fn simulate(&self, game: &mut Game, pov: PlayerId) -> f32 {
-        let mut moves_played = 0;
-        let mut undos = Vec::new();
+    /// Instead of random rollout, we just evaluate the current state directly
+    /// This is "Heuristic MCTS"
+    fn simulate_heuristic(&self, game: &Game, pov: PlayerId) -> f32 {
+        let score = evaluator::evaluate_state(&game.state, pov);
+        // Map rough score -inf..inf to -1..1 or 0..1 for MCTS value
+        // evaluate_state generally returns (MyScore - OppScore)
+        // Let's sigmoid it to get 0.0 - 1.0
 
-        // Random rollout for simulation
-        let max_rollout_depth = 20;
-        let mut rng = thread_rng();
-
-        while !game.state.settings._game_over && moves_played < max_rollout_depth {
-            let moves = game.legal_moves();
-            if moves.is_empty() {
-                break;
-            }
-
-            let m = moves.choose(&mut rng).unwrap();
-            if let Some(undo) = game.simulate_move(m.as_ref()) {
-                undos.push(undo);
-                moves_played += 1;
-            } else {
-                break;
-            }
-        }
-
-        let val = evaluator::evaluate_state(&game.state, pov);
-
-        // Undo all rollout moves
-        while let Some(undo) = undos.pop() {
-            undo(&mut game.state);
-        }
-
-        val
+        let sigmoid = |x: f32| 1.0 / (1.0 + (-x * 0.1).exp());
+        sigmoid(score)
     }
 }

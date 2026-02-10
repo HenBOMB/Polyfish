@@ -1,7 +1,7 @@
 //! Discovery actions
 
 use crate::actions::city::add_population;
-use crate::actions::{chain_undos, UndoCallback};
+use crate::actions::{UndoCallback, chain_undos};
 use crate::functions::{get_adjacent_indices, get_capital_city};
 use crate::settings::has_skill;
 use crate::states::{GameState, PlayerId, UnitState};

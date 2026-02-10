@@ -41,6 +41,10 @@ impl Move for SummonMove {
 
         if let Some(tribe) = state.tribes.get(&pov_id) {
             if tribe.stars < cost {
+                println!(
+                    "[DEBUG] SummonMove::execute FAILED: {:?} at {}, need {}, have {} (Turn {})",
+                    self.unit_type, self.src_index, cost, tribe.stars, state.settings.turn
+                );
                 return Err(format!(
                     "Insufficient stars for summon: need {}, have {}",
                     cost, tribe.stars
@@ -90,18 +94,16 @@ pub fn generate_summon_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
     let mut spawnables = Vec::new();
 
     // Always include Warrior (base unit) if affordable
-    // Tech loop below might add it if "Unrequired" is present, but we ensure it here
-    // checking for duplicates later or just trusting it's fine (Warrior is cheap)
     let warrior_settings = get_unit_setting(UnitType::Warrior);
     if tribe.stars >= warrior_settings.cost {
         spawnables.push(UnitType::Warrior);
+    } else {
+        // Debug: print if Warrior is not affordable but we are generating moves
+        // println!("[DEBUG] Warrior not affordable: have {}, need {}", tribe.stars, warrior_settings.cost);
     }
 
     for tech_state in &tribe.tech_vanilla {
-        if !tech_state.discovered {
-            continue;
-        }
-
+        // We use all researched techs for summoning, even if not "discovered" (simulation)
         if let Some(u_type) = get_tech_unit_type(tech_state.tech_type) {
             // Avoid duplicates (Warrior)
             if u_type == UnitType::Warrior {
@@ -109,9 +111,10 @@ pub fn generate_summon_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
             }
 
             let settings = get_unit_setting(u_type);
-            if settings.cost >= 1 && tribe.stars >= settings.cost && settings.upgrade_from.is_none()
-            {
-                spawnables.push(u_type);
+            if settings.cost >= 1 && settings.upgrade_from.is_none() {
+                if tribe.stars >= settings.cost {
+                    spawnables.push(u_type);
+                }
             }
         }
     }

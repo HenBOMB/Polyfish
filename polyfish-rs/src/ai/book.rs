@@ -2,9 +2,9 @@ use crate::game::Game;
 use crate::moves::Move;
 use crate::types::{MoveType, TribeType};
 
-pub struct Opening;
+pub struct Book;
 
-impl Opening {
+impl Book {
     /// Returns a list of recommend moves from the opening book.
     /// Returns empty vector if no book moves are found.
     pub fn recommend(game: &Game) -> Vec<Box<dyn Move>> {
@@ -42,14 +42,12 @@ impl Opening {
         recommended
     }
 
+    // TODO most tribes dont use these openings
     fn get_book_moves(tribe: TribeType, turn: i32) -> &'static [MoveType] {
         match tribe {
             TribeType::Imperius => match turn {
                 1 => &[MoveType::Harvest, MoveType::Step],
-                2 => &[MoveType::Summon, MoveType::Step], // In Rust game turns are 1-based, TS might have been 0-based.
-                // TS: 0 -> Harvest, 1 -> Summon.
-                // In Polyfish Rust: Turn starts at 1.
-                // So TS Turn 0 is Rust Turn 1.
+                2 => &[MoveType::Summon, MoveType::Step],
                 _ => &[],
             },
             TribeType::Bardur | TribeType::Kickoo | TribeType::Zebasi | TribeType::Yadakk => {
@@ -64,9 +62,6 @@ impl Opening {
                 2 => &[MoveType::Step],
                 _ => &[],
             },
-            // Fallback for others to generic "Safe" opening if desired,
-            // or just copy strictly from TS.
-            // TS had explicit entries for all.
             TribeType::Luxidoor => match turn {
                 1 => &[MoveType::Harvest, MoveType::Step],
                 2 => &[MoveType::Step],
@@ -114,19 +109,5 @@ impl Opening {
             },
             _ => &[],
         }
-    }
-
-    /// Returns a list of forbidden move types for the current turn.
-    /// These moves should be pruned from MCTS expansion.
-    pub fn prohibited(game: &Game) -> Vec<MoveType> {
-        let turn = game.state.settings.turn;
-        let mut forbidden = Vec::new();
-
-        // User Rule: On turn 2, NEVER research tech containing
-        if turn == 2 {
-            forbidden.push(MoveType::Research);
-        }
-
-        forbidden
     }
 }
