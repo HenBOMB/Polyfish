@@ -16,6 +16,7 @@ pub struct MoveEvaluation {
     pub visits: f32,
     pub win_rate: f32,
     pub move_type: MoveType,
+    pub description: String,
 }
 
 /// Analysis results from MCTS search
@@ -23,6 +24,7 @@ pub struct MoveEvaluation {
 pub struct MctsAnalysis {
     pub evaluations: Vec<MoveEvaluation>,
     pub total_iterations: usize,
+    pub principal_variation: Vec<String>,
 }
 
 pub struct MctsAgent {
@@ -148,6 +150,7 @@ impl MctsAgent {
                     visits: child.visits,
                     win_rate,
                     move_type: m.move_type(),
+                    description: format!("{:?}", m.move_type()),
                 })
             })
             .collect();
@@ -158,6 +161,7 @@ impl MctsAgent {
         let analysis = MctsAnalysis {
             evaluations,
             total_iterations: self.iterations,
+            principal_variation: Vec::new(),
         };
 
         // Return child with most visits

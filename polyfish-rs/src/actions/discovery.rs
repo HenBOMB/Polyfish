@@ -171,8 +171,8 @@ pub fn predict_explorer(state: &GameState, start_idx: i32) -> (Vec<i32>, Vec<i32
 
         // Reveal tile and its neighbors (vision range 1 for prediction,
         // mountain reveal happens in discover_tiles action but we predict it here too)
-        // Explorer has range 2 (5x5 area)
-        let range = 2;
+        // Explorer has range 1 (3x3 area)
+        let range = 1;
 
         let mut to_reveal = get_adjacent_indices(state, current_tile, range);
         to_reveal.push(current_tile);

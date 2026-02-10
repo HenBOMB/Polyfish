@@ -92,7 +92,7 @@ impl Move for BuildMove {
         serde_json::json!({
             "moveType": self.move_type(),
             "target": self.target_index,
-            "structure": self.structure_type,
+            "type": self.structure_type,
         })
     }
 

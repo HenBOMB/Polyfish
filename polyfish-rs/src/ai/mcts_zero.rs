@@ -1,4 +1,4 @@
-use crate::ai::features::{self, state_to_tensor};
+use crate::ai::features::{self, GameFeatures, state_to_tensor};
 use crate::ai::network::{PolicyOutput, PolyZeroNet};
 use crate::game::Game;
 use crate::moves::EndTurnMove;
@@ -90,21 +90,18 @@ impl ZeroNode {
     }
 }
 
-/// Represents a path through the tree with indices
-struct SearchPath {
-    indices: Vec<usize>,
-}
-
-impl SearchPath {
-    fn new() -> Self {
-        Self {
-            indices: Vec::new(),
-        }
-    }
-
-    fn push(&mut self, idx: usize) {
-        self.indices.push(idx);
-    }
+/// Pre-computed data extracted at a leaf node before undoing moves.
+/// This replaces the old approach of cloning the entire `Game` at each leaf.
+struct LeafData {
+    path_indices: Vec<usize>,
+    /// Feature tensors for NN evaluation (None if leaf is terminal)
+    features: Option<GameFeatures>,
+    /// Legal moves at this leaf (wrapped in RefCell for interior mutability during take())
+    legal_moves: RefCell<Vec<Box<dyn Move>>>,
+    /// Pre-computed heuristic scores for each legal move
+    heuristic_scores: Vec<f32>,
+    /// Map size at leaf state
+    map_size: usize,
 }
 
 impl<'a> ZeroMctsAgent<'a> {
@@ -134,6 +131,7 @@ impl<'a> ZeroMctsAgent<'a> {
             }
         }
 
+        let start_turn = game.state.settings.turn;
         let mut root = ZeroNode::new(1.0, None);
         // Initial expansion (single)
         self.expand_node_single(&mut root, game, false);
@@ -141,7 +139,7 @@ impl<'a> ZeroMctsAgent<'a> {
         let mut iteration = 0;
         while iteration < self.iterations {
             let batch_count = (self.iterations - iteration).min(self.batch_size);
-            self.parallel_search_batch(game, &mut root, batch_count);
+            self.parallel_search_batch(game, &mut root, batch_count, start_turn);
             iteration += batch_count;
         }
 
@@ -198,13 +196,14 @@ impl<'a> ZeroMctsAgent<'a> {
             }
         }
 
+        let start_turn = game.state.settings.turn;
         let mut root = ZeroNode::new(1.0, None);
         self.expand_node_single(&mut root, game, false);
 
         let mut iteration = 0;
         while iteration < self.iterations {
             let batch_count = (self.iterations - iteration).min(self.batch_size);
-            self.parallel_search_batch(game, &mut root, batch_count);
+            self.parallel_search_batch(game, &mut root, batch_count, start_turn);
             iteration += batch_count;
         }
 
@@ -280,6 +279,7 @@ impl<'a> ZeroMctsAgent<'a> {
             }
         }
 
+        let start_turn = game.state.settings.turn;
         let mut root = ZeroNode::new(1.0, None);
         self.expand_node_single(&mut root, game, false);
 
@@ -301,7 +301,7 @@ impl<'a> ZeroMctsAgent<'a> {
         let mut iteration = 0;
         while iteration < self.iterations {
             let batch_count = (self.iterations - iteration).min(self.batch_size);
-            self.parallel_search_batch(game, &mut root, batch_count);
+            self.parallel_search_batch(game, &mut root, batch_count, start_turn);
             iteration += batch_count;
         }
 
@@ -343,67 +343,50 @@ impl<'a> ZeroMctsAgent<'a> {
     }
 
     /// Perform a batch of parallel searches using virtual loss
-    fn parallel_search_batch(&self, game: &Game, root: &mut ZeroNode, batch_size: usize) {
-        let mut paths = Vec::with_capacity(batch_size);
-        let mut leaf_games = Vec::with_capacity(batch_size);
-        let mut leaf_nodes_info = Vec::with_capacity(batch_size);
+    fn parallel_search_batch(
+        &self,
+        game: &mut Game,
+        root: &mut ZeroNode,
+        batch_size: usize,
+        start_turn: i32,
+    ) {
+        let device = self.network.device();
+        let turn_horizon = start_turn + max_turns_ahead(start_turn, game.state.settings.max_turns);
+        let mut leaves: Vec<LeafData> = Vec::with_capacity(batch_size);
 
-        // Phase 1: Select leaves in parallel using virtual loss
+        // Phase 1: Select leaves sequentially, using undo to restore game state
         for _ in 0..batch_size {
-            let mut path = SearchPath::new();
-            let mut current_game = game.clone();
-
-            if let Some((leaf_info, final_game)) =
-                self.select_leaf_with_virtual_loss(root, &mut current_game, &mut path)
-            {
-                paths.push(path);
-                leaf_games.push(final_game);
-                leaf_nodes_info.push(leaf_info);
+            if let Some(leaf) = self.select_and_extract_leaf(root, game, turn_horizon, &device) {
+                leaves.push(leaf);
             } else {
                 break;
             }
         }
 
-        if paths.is_empty() {
+        if leaves.is_empty() {
             return;
         }
 
-        // Phase 2: Batched Expansion
-        let device = self.network.device();
+        // Phase 2: Batched NN evaluation for leaves that need expansion
+        let mut indices_needing_eval: Vec<usize> = Vec::new();
+        let mut spatial_list = Vec::new();
+        let mut player_list = Vec::new();
 
-        // Identify which leaves actually need expansion via NN
-        let mut indices_needing_eval = Vec::new();
-        let mut states_to_batch = Vec::new();
-        let mut povs = Vec::new();
-
-        for (i, leaf_info) in leaf_nodes_info.iter().enumerate() {
-            if leaf_info.needs_expansion {
+        for (i, leaf) in leaves.iter().enumerate() {
+            if let Some(ref feat) = leaf.features {
                 indices_needing_eval.push(i);
-                states_to_batch.push(&leaf_games[i].state);
-                povs.push(leaf_games[i].state.settings.current_player_turn_id);
+                spatial_list.push(feat.spatial_map.clone());
+                player_list.push(feat.player_state.clone());
             }
         }
 
-        let mut values = vec![0.0; paths.len()];
+        let mut values = vec![0.0f32; leaves.len()];
 
         if !indices_needing_eval.is_empty() {
-            // Create batch tensors
-            let mut spatial_list = Vec::with_capacity(indices_needing_eval.len());
-            let mut player_list = Vec::with_capacity(indices_needing_eval.len());
-
-            for (state, pov) in states_to_batch.iter().zip(povs.iter()) {
-                let features = state_to_tensor(state, *pov, &device)
-                    .expect("BUG: Failed to create features for batch");
-                spatial_list.push(features.spatial_map);
-                player_list.push(features.player_state);
-            }
-
             // Stack tensors
             if let (Ok(batch_spatial), Ok(batch_player)) =
                 (Tensor::cat(&spatial_list, 0), Tensor::cat(&player_list, 0))
             {
-                // Ensure shape (B, C, H, W)
-                let _spatial_dim = features::NUM_CHANNELS * features::MAP_SIZE * features::MAP_SIZE;
                 let batch_spatial = batch_spatial
                     .reshape((
                         indices_needing_eval.len(),
@@ -416,11 +399,10 @@ impl<'a> ZeroMctsAgent<'a> {
                     .reshape((indices_needing_eval.len(), 10))
                     .unwrap();
 
-                // Run Inference
+                // Run NN inference
                 if let Ok((policy_out, value_out)) =
                     self.network.forward_t(&batch_spatial, &batch_player, false)
                 {
-                    // Extract values
                     let win_values = value_out
                         .win_value
                         .flatten_all()
@@ -428,15 +410,10 @@ impl<'a> ZeroMctsAgent<'a> {
                         .to_vec1::<f32>()
                         .unwrap();
 
-                    // Process each result
                     for (local_idx, &global_idx) in indices_needing_eval.iter().enumerate() {
-                        let value = win_values[local_idx];
-                        values[global_idx] = value;
+                        values[global_idx] = win_values[local_idx];
 
-                        let path_indices = &leaf_nodes_info[global_idx].path_indices;
-                        let game_state = &leaf_games[global_idx];
-
-                        // We need to slice the policy output for this specific instance
+                        // Slice policy for this leaf
                         let slice_policy = PolicyOutput {
                             action_type: policy_out
                                 .action_type
@@ -464,9 +441,17 @@ impl<'a> ZeroMctsAgent<'a> {
                                 .unwrap(),
                         };
 
-                        // Expand the node in the tree
-                        let node = self.get_node_by_path_mut(root, path_indices).unwrap();
-                        self.expand_node_from_network_output(node, game_state, true, &slice_policy);
+                        // Expand node using pre-computed data
+                        let leaf = &leaves[global_idx];
+                        let node = self.get_node_by_path_mut(root, &leaf.path_indices).unwrap();
+                        self.expand_node_from_precomputed(
+                            node,
+                            leaf.legal_moves.take(),
+                            &leaf.heuristic_scores,
+                            leaf.map_size,
+                            true,
+                            &slice_policy,
+                        );
                     }
                 }
             } else {
@@ -475,163 +460,157 @@ impl<'a> ZeroMctsAgent<'a> {
         }
 
         // Phase 3: Backpropagate and remove virtual loss
-        for (path, value) in paths.iter().zip(values.iter()) {
-            self.backpropagate_and_remove_virtual_loss(root, &path.indices, *value);
+        for (leaf, &value) in leaves.iter().zip(values.iter()) {
+            self.backpropagate_and_remove_virtual_loss(root, &leaf.path_indices, value);
         }
     }
 
-    /// Select a leaf node using virtual loss, returning path and game state
-    fn select_leaf_with_virtual_loss(
+    /// Select a leaf node, extract all needed data, and undo back to root.
+    /// Returns None if no valid leaf can be selected.
+    fn select_and_extract_leaf(
         &self,
         root: &ZeroNode,
         game: &mut Game,
-        path: &mut SearchPath,
-    ) -> Option<(LeafInfo, Game)> {
+        turn_horizon: i32,
+        device: &candle_core::Device,
+    ) -> Option<LeafData> {
+        let mut indices_stack: Vec<usize> = Vec::new();
+        let mut undos: Vec<crate::actions::UndoCallback> = Vec::new();
+
+        // Start at root
         let current = root;
-        let mut indices_stack = Vec::new();
+        current.add_virtual_loss(self.virtual_loss);
 
-        loop {
-            // Add virtual loss to current node
-            current.add_virtual_loss(self.virtual_loss);
-
-            // Check terminal condition
-            if game.state.settings._game_over {
-                return Some((
-                    LeafInfo {
-                        needs_expansion: false,
-                        path_indices: indices_stack,
-                    },
-                    game.clone(),
-                ));
+        // First iteration (root → first child) with direct reference
+        let leaf_result = loop {
+            // Terminal check
+            if game.state.settings._game_over || game.state.settings.turn > turn_horizon {
+                break Some(false); // needs_expansion = false
             }
-
-            // Check if node needs expansion
             if !current.is_expanded {
-                return Some((
-                    LeafInfo {
-                        needs_expansion: true,
-                        path_indices: indices_stack,
-                    },
-                    game.clone(),
-                ));
+                break Some(true); // needs_expansion = true
             }
-
-            // Check if terminal node (expanded but no children)
             if current.children.is_empty() {
-                return Some((
-                    LeafInfo {
-                        needs_expansion: false,
-                        path_indices: indices_stack,
-                    },
-                    game.clone(),
-                ));
+                break Some(false);
             }
 
-            // Select best child with virtual loss
+            // Select child
             let child_idx =
                 current.select_child_with_virtual_loss(self.c_puct, -self.virtual_loss)?;
 
             // Apply move
-            if let Some(m) = &current.children[child_idx].move_to_here {
-                let undo = game.simulate_move(m.as_ref());
-                let _undo = match undo {
-                    Some(u) => u,
-                    None => {
-                        let stars = game.current_tribe().map(|t| t.stars).unwrap_or(-1);
-                        let desc = m.describe(&game.state);
-                        let turn = game.state.settings.turn;
-                        let pid = game.state.settings.current_player_turn_id;
-                        panic!(
-                            "BUG: Legal move failed to execute in MCTS selection.\nMove: {}\nTurn: {}, PID: {}, Stars: {}\nState Hash: {}",
-                            desc, turn, pid, stars, game.state.settings.seed
-                        );
-                    }
-                };
-                // Don't store undo - we'll clone game states instead
-                indices_stack.push(child_idx);
-                path.push(child_idx);
+            let m = current.children[child_idx].move_to_here.as_ref()?;
+            let undo = game.simulate_move(m.as_ref());
+            let undo = match undo {
+                Some(u) => u,
+                None => {
+                    let stars = game.current_tribe().map(|t| t.stars).unwrap_or(-1);
+                    let desc = m.describe(&game.state);
+                    let turn = game.state.settings.turn;
+                    let pid = game.state.settings.current_player_turn_id;
+                    panic!(
+                        "BUG: Legal move failed in MCTS selection.\nMove: {}\nTurn: {}, PID: {}, Stars: {}",
+                        desc, turn, pid, stars
+                    );
+                }
+            };
+            undos.push(undo);
+            indices_stack.push(child_idx);
 
-                // Move to child (careful with borrow checker)
-                // We can't hold a mutable reference, so we'll navigate by index
-                break;
-            } else {
-                return None;
-            }
-        }
+            // Can't keep `current` borrow, switch to index-based traversal
+            break None; // signal: continue via indices
+        };
 
-        // Continue navigation using indices
-        self.continue_selection_by_indices(root, game, path, &mut indices_stack)
-    }
+        // Continue traversal by index if needed
+        let needs_expansion = if let Some(ne) = leaf_result {
+            ne
+        } else {
+            // Index-based traversal loop
+            loop {
+                let current = self.get_node_by_path(root, &indices_stack)?;
+                current.add_virtual_loss(self.virtual_loss);
 
-    /// Continue tree traversal using indices instead of references
-    fn continue_selection_by_indices(
-        &self,
-        root: &ZeroNode,
-        game: &mut Game,
-        path: &mut SearchPath,
-        indices_stack: &mut Vec<usize>,
-    ) -> Option<(LeafInfo, Game)> {
-        loop {
-            let current = self.get_node_by_path(root, indices_stack)?;
+                if game.state.settings._game_over || game.state.settings.turn > turn_horizon {
+                    break false;
+                }
+                if !current.is_expanded {
+                    break true;
+                }
+                if current.children.is_empty() {
+                    break false;
+                }
 
-            current.add_virtual_loss(self.virtual_loss);
+                let child_idx =
+                    current.select_child_with_virtual_loss(self.c_puct, -self.virtual_loss)?;
 
-            if game.state.settings._game_over {
-                return Some((
-                    LeafInfo {
-                        needs_expansion: false,
-                        path_indices: indices_stack.clone(),
-                    },
-                    game.clone(),
-                ));
-            }
-
-            if !current.is_expanded {
-                return Some((
-                    LeafInfo {
-                        needs_expansion: true,
-                        path_indices: indices_stack.clone(),
-                    },
-                    game.clone(),
-                ));
-            }
-
-            if current.children.is_empty() {
-                return Some((
-                    LeafInfo {
-                        needs_expansion: false,
-                        path_indices: indices_stack.clone(),
-                    },
-                    game.clone(),
-                ));
-            }
-
-            let child_idx =
-                current.select_child_with_virtual_loss(self.c_puct, -self.virtual_loss)?;
-
-            if let Some(m) = &current.children[child_idx].move_to_here {
+                let m = current.children[child_idx].move_to_here.as_ref()?;
                 let result = game.simulate_move(m.as_ref());
                 if result.is_none() {
-                    // ERROR: Dump detailed state
                     let pov_id = game.state.settings.current_player_turn_id;
                     eprintln!("\n=== MOVE EXECUTION FAILED ===");
                     eprintln!("Move: {}", m.describe(&game.state));
                     eprintln!("Turn: {}", game.state.settings.turn);
                     eprintln!("Current player: {}", pov_id);
-                    for (id, tribe) in &game.state.tribes {
-                        eprintln!("  Tribe {}: {} stars", id, tribe.stars);
-                    }
                     eprintln!("Indices stack: {:?}", indices_stack);
                     eprintln!("=============================\n");
                 }
-                let _undo =
+                let undo =
                     result.expect("BUG: Legal move failed to execute in MCTS tree traversal");
+                undos.push(undo);
                 indices_stack.push(child_idx);
-                path.push(child_idx);
-            } else {
-                return None;
             }
+        };
+
+        // --- At the leaf: extract data before undoing ---
+        let leaf_data = if needs_expansion {
+            // Pre-compute everything needed for later expansion
+            let map_size = game.state.settings.size as usize;
+
+            // Feature tensors for NN evaluation
+            let feat = state_to_tensor(
+                &game.state,
+                game.state.settings.current_player_turn_id,
+                device,
+            )
+            .expect("BUG: Failed to create features at MCTS leaf");
+
+            // Legal moves + heuristic scores
+            let mut legal_moves = game.legal_moves();
+            // In batched expansion we always allow EndTurn (allow_end_turn=true)
+            let has_other = legal_moves
+                .iter()
+                .any(|m| m.move_type() != MoveType::EndTurn);
+            if has_other {
+                legal_moves.retain(|m| m.move_type() != MoveType::EndTurn);
+            }
+            let heuristic_scores: Vec<f32> = legal_moves
+                .iter()
+                .map(|m| crate::ai::ordering::score_move(game, m.as_ref()))
+                .collect();
+
+            LeafData {
+                path_indices: indices_stack,
+                features: Some(feat),
+                legal_moves: RefCell::new(legal_moves),
+                heuristic_scores,
+                map_size,
+            }
+        } else {
+            LeafData {
+                path_indices: indices_stack,
+                features: None,
+                legal_moves: RefCell::new(Vec::new()),
+                heuristic_scores: Vec::new(),
+                map_size: 0,
+            }
+        };
+
+        // --- Undo all moves back to root state ---
+        while let Some(undo) = undos.pop() {
+            undo(&mut game.state);
         }
+
+        Some(leaf_data)
     }
 
     /// Get a node by following a path of indices
@@ -729,30 +708,57 @@ impl<'a> ZeroMctsAgent<'a> {
             return;
         }
 
-        // Use decomposed policy composer to get priors
-        // Note: crate::ai::policy_composer::compute_move_priors needs to support batched inputs if we slice them.
-        // But PolicyOutput fields are Tensors.
-        // If we sliced them (unsqueeze(0)), they are [1, ...].
-        // policy_composer usually expects [1, ...], so it should work if it uses .dims4() or similar.
-        // Let's assume it works.
+        let map_size = game.state.settings.size as usize;
+        let heuristic_scores: Vec<f32> = legal_moves
+            .iter()
+            .map(|m| crate::ai::ordering::score_move(game, m.as_ref()))
+            .collect();
+
+        self.expand_node_from_precomputed(
+            node,
+            legal_moves,
+            &heuristic_scores,
+            map_size,
+            allow_end_turn,
+            policy,
+        );
+    }
+
+    /// Expand a node using pre-computed legal moves and heuristic scores.
+    /// Used by both `expand_node_from_network_output` (initial root expansion)
+    /// and batched leaf expansion (where data was pre-computed before undo).
+    fn expand_node_from_precomputed(
+        &self,
+        node: &mut ZeroNode,
+        legal_moves: Vec<Box<dyn Move>>,
+        heuristic_scores: &[f32],
+        map_size: usize,
+        allow_end_turn: bool,
+        policy: &PolicyOutput,
+    ) {
+        if node.is_expanded {
+            return;
+        }
+
+        if legal_moves.is_empty() {
+            node.is_expanded = true;
+            return;
+        }
 
         let priors = crate::ai::policy_composer::compute_move_priors(
             policy,
             &legal_moves,
-            game,
+            map_size,
             allow_end_turn,
         );
 
         // Add heuristic bias to priors
         let mut final_priors = Vec::with_capacity(priors.len());
-        for (m, &nn_prior) in legal_moves.iter().zip(priors.iter()) {
-            let h_score = crate::ai::ordering::score_move(game, m.as_ref());
-            // Tiny bias to help network focus on very obvious good moves or break ties.
-            // h_score ranges from 0 to 100.
+        for (nn_prior, h_score) in priors.iter().zip(heuristic_scores.iter()) {
             final_priors.push(nn_prior + (h_score * 0.001));
         }
 
-        // Normalize final_priors
+        // Normalize
         let sum: f32 = final_priors.iter().sum();
         let normalized_priors: Vec<f32> = if sum > 1e-8 {
             final_priors.iter().map(|p| p / sum).collect()
@@ -760,7 +766,6 @@ impl<'a> ZeroMctsAgent<'a> {
             vec![1.0 / final_priors.len() as f32; final_priors.len()]
         };
 
-        // Create child nodes
         for (m, prior) in legal_moves.into_iter().zip(normalized_priors.iter()) {
             node.children.push(ZeroNode::new(*prior, Some(m)));
         }
@@ -769,15 +774,41 @@ impl<'a> ZeroMctsAgent<'a> {
     }
 }
 
-struct LeafInfo {
-    needs_expansion: bool,
-    path_indices: Vec<usize>,
-}
+// LeafData is defined above (near SearchPath replacement)
 
 fn move_or_end_turn(best_move: Option<Box<dyn Move>>) -> Option<Box<dyn Move>> {
     if best_move.is_none() {
         Some(Box::new(EndTurnMove))
     } else {
         best_move
+    }
+}
+
+/// Returns the maximum number of game turns the MCTS tree should look ahead
+/// from the current turn. This prevents the search from going absurdly deep
+/// and getting stuck in long rollouts during mid-game when branching is high.
+fn max_turns_ahead(current_turn: i32, max_turns: i32) -> i32 {
+    let is_last_turn = current_turn >= max_turns;
+    match current_turn {
+        1 => 1,
+        2 => 2,
+        3 => 2,
+        4 => 2,
+        5 => 2,
+        6 => 2,
+        7 => 2,
+        8 => 2,
+        9 => 2,
+        10 => {
+            if is_last_turn {
+                0
+            } else {
+                2
+            }
+        }
+        11 => 1,
+        12 => 1,
+        13 => 1,
+        _ => 1, // 14+
     }
 }

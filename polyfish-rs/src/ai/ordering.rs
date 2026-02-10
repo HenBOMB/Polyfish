@@ -195,79 +195,78 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                         }
                     }
 
-                // Road scoring: prioritize roads that connect cities
-                if s_type == StructureType::Road {
-                    score += score_road(state, target as i32);
-                }
+                    // Road scoring: prioritize roads that connect cities
+                    if s_type == StructureType::Road {
+                        score += score_road(state, target as i32);
+                    }
 
-                // Population efficiency scoring:
-                // Penalize moves that add population but don't result in a city level up.
-                // This encourages "finishing" cities rather than spreading population thin.
-                let mut pop_gain = 0;
-                match s_type {
-                    // Harvests (usually handled via Harvest move type, but StructureType might be set?)
-                    // The Move struct has variants. For Build, we check s_type.
-                    // For Harvest, we check resource type?
-                    // Let's check MoveType::Harvest explicitly below or handle it here if merged.
-                    // Actually, Harvest moves often don't have a structure_type set in the move?
-                    // Wait, `mv.structure_type()` returns result.
-                    
-                    StructureType::LumberHut | StructureType::Forge // Forge gives pop per adjacent mine? No, Forge gives pop based on adjacency.
-                    | StructureType::Sawmill | StructureType::Windmill | StructureType::Market => {
-                        // These give population based on adjacency.
-                        // We already calculated `adj_count` above for clustering.
-                        // Base pop is usually 0 plus adjacency bonus?
-                        // Standard: 
-                        // Lumber Hut: +1
-                        // Sawmill: 0 base, +1 per adj Lumber Hut
-                        // Forge: 0 base, +2 per adj Mine
-                        // Windmill: 0 base, +1 per adj Farm
-                        // Market: 0 base, +1 per adj Sawmill/Windmill/Forge
-                        // Let's approximate.
-                        match s_type {
-                            StructureType::LumberHut => pop_gain = 1,
-                            StructureType::Sawmill => pop_gain = 1 * adj_count as i32, // approx
-                            StructureType::Forge => pop_gain = 2 * adj_count as i32,
-                            StructureType::Windmill => pop_gain = 1 * adj_count as i32,
-                            StructureType::Market => pop_gain = 1 * adj_count as i32,
-                            _ => {}
+                    // Population efficiency scoring:
+                    // Penalize moves that add population but don't result in a city level up.
+                    // This encourages "finishing" cities rather than spreading population thin.
+                    let mut pop_gain = 0;
+                    match s_type {
+                        // Harvests (usually handled via Harvest move type, but StructureType might be set?)
+                        // The Move struct has variants. For Build, we check s_type.
+                        // For Harvest, we check resource type?
+                        // Let's check MoveType::Harvest explicitly below or handle it here if merged.
+                        // Actually, Harvest moves often don't have a structure_type set in the move?
+                        // Wait, `mv.structure_type()` returns result.
+                        
+                        StructureType::LumberHut | StructureType::Forge // Forge gives pop per adjacent mine? No, Forge gives pop based on adjacency.
+                        | StructureType::Sawmill | StructureType::Windmill | StructureType::Market => {
+                            // These give population based on adjacency.
+                            // We already calculated `adj_count` above for clustering.
+                            // Base pop is usually 0 plus adjacency bonus?
+                            // Standard: 
+                            // Lumber Hut: +1
+                            // Sawmill: 0 base, +1 per adj Lumber Hut
+                            // Forge: 0 base, +2 per adj Mine
+                            // Windmill: 0 base, +1 per adj Farm
+                            // Market: 0 base, +1 per adj Sawmill/Windmill/Forge
+                            // Let's approximate.
+                            match s_type {
+                                StructureType::LumberHut => pop_gain = 1,
+                                StructureType::Sawmill => pop_gain = 1 * adj_count as i32, // approx
+                                StructureType::Forge => pop_gain = 2 * adj_count as i32,
+                                StructureType::Windmill => pop_gain = 1 * adj_count as i32,
+                                StructureType::Market => pop_gain = 1 * adj_count as i32,
+                                _ => {}
+                            }
+                        }
+                        StructureType::Farm | StructureType::Mine | StructureType::Port => {
+                            pop_gain = 2; // Most tier 2 resources/structures give 2 pop
+                        }
+                        _ => {}
+                    }
+
+                    // If this is a Harvest move, we need to check resource type for pop gain
+                    if move_type == MoveType::Harvest {
+                        // Harvest fruits/fish/animals = +1
+                        // We don't have resource type easily accessible here without parsing move or looking at tile 
+                        // But typically simple harvest is +1.
+                        // Crop harvest (Construction) is +2? No, organization/fishing/hunting is +1.
+                        // Farming (Crop) is usually +2? In standard polytopia, yes.
+                        // Let's assume +1 minimum.
+                        if pop_gain == 0 { pop_gain = 1; }
+                    }
+
+                    if pop_gain > 0 {
+                        // Find the city this tile belongs to
+                        if let Some(tribe) = state.tribes.get(&state.settings.current_player_turn_id) {
+                            if let Some(city) = tribe.cities.iter().find(|c| c._territory.contains(&(target as i32))) {
+                                let needed = city.level + 1; 
+                                let current = city.population;
+                                
+                                if current + pop_gain < needed {
+                                    // Won't level up
+                                    score -= 4.0; 
+                                } else {
+                                    // Will level up! Bonus!
+                                    score += 5.0;
+                                }
+                            }
                         }
                     }
-                    StructureType::Farm | StructureType::Mine | StructureType::Port => {
-                         pop_gain = 2; // Most tier 2 resources/structures give 2 pop
-                    }
-                    _ => {}
-                }
-
-                // If this is a Harvest move, we need to check resource type for pop gain
-                if move_type == MoveType::Harvest {
-                     // Harvest fruits/fish/animals = +1
-                     // We don't have resource type easily accessible here without parsing move or looking at tile 
-                     // But typically simple harvest is +1.
-                     // Crop harvest (Construction) is +2? No, organization/fishing/hunting is +1.
-                     // Farming (Crop) is usually +2? In standard polytopia, yes.
-                     // Let's assume +1 minimum.
-                     if pop_gain == 0 { pop_gain = 1; }
-                }
-
-
-                if pop_gain > 0 {
-                    // Find the city this tile belongs to
-                    if let Some(tribe) = state.tribes.get(&state.settings.current_player_turn_id) {
-                         if let Some(city) = tribe.cities.iter().find(|c| c._territory.contains(&(target as i32))) {
-                             let needed = city.level + 1; 
-                             let current = city.population;
-                             
-                             if current + pop_gain < needed {
-                                 // Won't level up
-                                 score -= 4.0; 
-                             } else {
-                                 // Will level up! Bonus!
-                                 score += 5.0;
-                             }
-                         }
-                    }
-                }
                 }
             } // End of if let Ok(target)
 
@@ -349,11 +348,14 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                 5.0
             }
         }
-
+        
         MoveType::EndTurn => 0.0,
 
         _ => 5.0,
     }
+
+    // get only MoveType::EndTurn
+    
 }
 
 /// Score reward moves contextually based on game situation.

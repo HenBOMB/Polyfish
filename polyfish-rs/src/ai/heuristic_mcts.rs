@@ -153,15 +153,39 @@ impl HeuristicMctsAgent {
                     visits: child.visits,
                     win_rate,
                     move_type: m.move_type(),
+                    description: m.describe(&game.state),
                 })
             })
             .collect();
 
         evaluations.sort_by(|a, b| b.visits.partial_cmp(&a.visits).unwrap());
 
+        // Extract principal variation (best line) by following most-visited children
+        let mut pv = Vec::new();
+        let mut current = &root;
+        for _ in 0..10 {
+            if current.children.is_empty() {
+                break;
+            }
+            let best_child = current
+                .children
+                .iter()
+                .max_by(|a, b| a.visits.partial_cmp(&b.visits).unwrap());
+            match best_child {
+                Some(child) if child.visits > 0.0 => {
+                    if let Some(m) = &child.move_to_here {
+                        pv.push(m.describe(&game.state));
+                    }
+                    current = child;
+                }
+                _ => break,
+            }
+        }
+
         let analysis = MctsAnalysis {
             evaluations,
             total_iterations: self.iterations,
+            principal_variation: pv,
         };
 
         let mut best_move = root

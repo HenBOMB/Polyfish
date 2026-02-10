@@ -110,7 +110,22 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
-// ... (stats helper functions omitted for brevity if needed) ...
+fn build_evaluation_json(state: &polyfish::states::GameState) -> Value {
+    use polyfish::ai::evaluator::player::evaluate_player;
+    let mut players = serde_json::Map::new();
+    for &pid in state.tribes.keys() {
+        let score = evaluate_player(state, pid);
+        players.insert(pid.to_string(), serde_json::json!(score));
+    }
+    // Advantage from P1's perspective (player 1 minus best opponent)
+    let p1_score = players.get("1").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let p2_score = players.get("2").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let advantage = p1_score - p2_score;
+    serde_json::json!({
+        "players": players,
+        "advantage": advantage
+    })
+}
 
 async fn analyze_game(State(state): State<Arc<AppState>>) -> Json<Value> {
     let mut game = state.game.lock().unwrap();
@@ -149,6 +164,8 @@ async fn get_current_state(State(state): State<Arc<AppState>>) -> Json<Value> {
 
     let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
 
+    let evaluation = build_evaluation_json(&game.state);
+
     Json(serde_json::json!({
         "state": {
             "settings": game.state.settings,
@@ -160,7 +177,8 @@ async fn get_current_state(State(state): State<Arc<AppState>>) -> Json<Value> {
             "_prediction": game.state._prediction,
             "_messages": game.state._messages,
         },
-        "legalMoves": legal_moves
+        "legalMoves": legal_moves,
+        "evaluation": evaluation
     }))
 }
 
@@ -190,10 +208,20 @@ async fn auto_step(
         }
     }
 
+    // Run heuristic MCTS for analysis panel (move descriptions + PV)
+    use polyfish::ai::heuristic_mcts::HeuristicMctsAgent;
+    let analysis_agent = HeuristicMctsAgent {
+        iterations: std::cmp::min(params.iterations, 200),
+        exploration_constant: 0.4,
+    };
+    let (_, mcts_analysis) = analysis_agent.select_move_with_analysis(&mut game);
+
     let mut tiles: Vec<_> = game.state.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);
 
     let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
+
+    let evaluation = build_evaluation_json(&game.state);
 
     Json(serde_json::json!({
         "state": {
@@ -209,7 +237,9 @@ async fn auto_step(
         "movePlayed": move_name,
         "bestMove": best_move_json,
         "legalMoves": legal_moves,
-        "policyDistribution": policy
+        "policyDistribution": policy,
+        "evaluation": evaluation,
+        "mctsAnalysis": mcts_analysis
     }))
 }
 
@@ -261,6 +291,8 @@ async fn rng_step(State(state): State<Arc<AppState>>) -> Json<Value> {
 
     let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
 
+    let evaluation = build_evaluation_json(&game.state);
+
     Json(serde_json::json!({
         "state": {
             "settings": game.state.settings,
@@ -273,7 +305,8 @@ async fn rng_step(State(state): State<Arc<AppState>>) -> Json<Value> {
             "_messages": game.state._messages,
         },
         "movePlayed": move_name,
-        "legalMoves": legal_moves
+        "legalMoves": legal_moves,
+        "evaluation": evaluation
     }))
 }
 
@@ -430,6 +463,8 @@ async fn manual_step(
 
     let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
 
+    let evaluation = build_evaluation_json(&game.state);
+
     Json(serde_json::json!({
         "state": {
             "settings": game.state.settings,
@@ -442,7 +477,8 @@ async fn manual_step(
             "_messages": game.state._messages,
         },
         "movePlayed": move_name,
-        "legalMoves": legal_moves
+        "legalMoves": legal_moves,
+        "evaluation": evaluation
     }))
 }
 
@@ -471,6 +507,8 @@ async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {
 
     let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
 
+    let evaluation = build_evaluation_json(&game.state);
+
     Json(serde_json::json!({
         "state": {
             "settings": game.state.settings,
@@ -482,7 +520,8 @@ async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {
             "_prediction": game.state._prediction,
             "_messages": game.state._messages,
         },
-        "legalMoves": legal_moves
+        "legalMoves": legal_moves,
+        "evaluation": evaluation
     }))
 }
 
@@ -622,6 +661,8 @@ async fn load_game(State(state): State<Arc<AppState>>) -> Json<Value> {
 
     let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
 
+    let evaluation = build_evaluation_json(&game.state);
+
     Json(serde_json::json!({
         "state": {
             "settings": game.state.settings,
@@ -633,7 +674,8 @@ async fn load_game(State(state): State<Arc<AppState>>) -> Json<Value> {
             "_prediction": game.state._prediction,
             "_messages": game.state._messages,
         },
-        "legalMoves": legal_moves
+        "legalMoves": legal_moves,
+        "evaluation": evaluation
     }))
 }
 
@@ -646,9 +688,14 @@ async fn get_trainer_hint(
     // Use Zero MCTS Agent (Neural Network)
     use polyfish::ai::mcts_zero::ZeroMctsAgent;
     let agent = ZeroMctsAgent::new(&state.network, params.iterations);
+    // use polyfish::ai::heuristic_mcts::HeuristicMctsAgent;
+    // let agent = HeuristicMctsAgent {
+    //     iterations: params.iterations,
+    //     exploration_constant: 0.4,
+    // };
 
     // Run MCTS search
-    let (best_move, _) = agent.select_move_with_stats(&mut game);
+    let (best_move, mcts_analysis) = agent.select_move_with_stats(&mut game);
 
     let move_json = best_move.as_ref().map(|m| m.serialize());
     let move_name = best_move
@@ -664,5 +711,6 @@ async fn get_trainer_hint(
         "proposedMove": move_json,
         "moveName": move_name,
         "moveDescription": move_description,
+        "mctsAnalysis": mcts_analysis,
     }))
 }

@@ -47,7 +47,12 @@ fn main() -> anyhow::Result<()> {
     println!("Legal moves found: {}", legal_moves.len());
 
     // 4. Compute priors
-    let priors = compute_move_priors(&mock_policy, &legal_moves, &game, true);
+    let priors = compute_move_priors(
+        &mock_policy,
+        &legal_moves,
+        game.state.settings.size as usize,
+        true,
+    );
 
     // 5. Verify Mapping Detailed Breakdown
     println!(

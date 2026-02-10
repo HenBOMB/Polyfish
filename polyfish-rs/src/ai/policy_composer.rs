@@ -2,7 +2,6 @@
 
 use crate::ai::mapper::DecomposedMapper;
 use crate::ai::network::PolicyOutput;
-use crate::game::Game;
 use crate::moves::Move;
 use crate::types::*;
 use candle_core::Tensor;
@@ -17,10 +16,9 @@ use candle_core::Tensor;
 pub fn compute_move_priors(
     policy: &PolicyOutput,
     legal_moves: &[Box<dyn Move>],
-    game: &Game,
+    map_size: usize,
     _allow_end_turn: bool,
 ) -> Vec<f32> {
-    let map_size = game.state.settings.size as usize;
     let num_moves = legal_moves.len();
 
     // Convert tensors to probability distributions (Softmax)
