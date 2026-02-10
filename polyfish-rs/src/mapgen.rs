@@ -6,7 +6,7 @@ use crate::coords::Coords;
 use crate::default_fow;
 use crate::functions::{
     get_chebyshev_distance as distance, get_plus_sign_indices as plus_sign,
-    get_square_indices as get_square, idx_to_coords as get_coords,
+    get_square_indices as get_square, get_squared_euclidean_distance, idx_to_coords as get_coords,
 };
 use crate::states::{GameState, TileState, TribeState};
 use crate::types::{ClimateType, MapSize, MapType, TerrainType, TribeType};
@@ -235,8 +235,8 @@ pub fn generate(settings: MapGenSettings) -> GameState {
 
                     let mut min_dist_to_capitals = i32::MAX;
                     for &cap in &capital_cells {
-                        min_dist_to_capitals =
-                            min_dist_to_capitals.min(distance(center_idx, cap, size));
+                        min_dist_to_capitals = min_dist_to_capitals
+                            .min(get_squared_euclidean_distance(center_idx, cap, size));
                     }
 
                     if min_dist_to_capitals > max_min_dist {

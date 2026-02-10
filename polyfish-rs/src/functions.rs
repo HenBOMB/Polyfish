@@ -96,6 +96,15 @@ pub fn get_chebyshev_distance(a: i32, b: i32, size: i32) -> i32 {
     (ax - bx).abs().max((ay - by).abs())
 }
 
+/// Calculate squared euclidean distance between two flat indices (avoids sqrt)
+pub fn get_squared_euclidean_distance(a: i32, b: i32, size: i32) -> i32 {
+    let (ax, ay) = (a % size, a / size);
+    let (bx, by) = (b % size, b / size);
+    let dx = ax - bx;
+    let dy = ay - by;
+    dx * dx + dy * dy
+}
+
 /// Get adjacent tile indices
 pub fn get_adjacent_indices(state: &GameState, idx: i32, range: i32) -> Vec<i32> {
     let size = state.settings.size;
