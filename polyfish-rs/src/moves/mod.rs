@@ -261,7 +261,11 @@ fn generate_econ_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                     tech => crate::settings::technology::has_technology(&tribe.tech_vanilla, tech),
                 };
 
-                if tech_ok && tribe.stars >= settings.cost.unwrap_or(0) {
+                // Cannot harvest if structure is required
+                if settings.struct_required.is_none()
+                    && tech_ok
+                    && tribe.stars >= settings.cost.unwrap_or(0)
+                {
                     moves.push(Box::new(HarvestMove::new(tile_idx)));
                 }
             }

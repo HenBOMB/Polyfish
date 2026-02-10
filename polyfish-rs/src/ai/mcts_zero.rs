@@ -789,7 +789,8 @@ fn move_or_end_turn(best_move: Option<Box<dyn Move>>) -> Option<Box<dyn Move>> {
 /// and getting stuck in long rollouts during mid-game when branching is high.
 fn max_turns_ahead(current_turn: i32, max_turns: i32) -> i32 {
     let is_last_turn = current_turn >= max_turns;
-    match current_turn {
+    // +1 because we want to include the current turn in the lookahead
+    1 + match current_turn {
         1 => 1,
         2 => 2,
         3 => 2,

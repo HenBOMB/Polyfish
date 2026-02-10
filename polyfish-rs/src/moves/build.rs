@@ -190,7 +190,7 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                 if existing_struct.is_none() {
                     if let Some(res_type) = get_resource_at(state, idx) {
                         let res_settings = get_resource_setting(res_type);
-                        if let Some(struct_type) = res_settings.struct_type {
+                        if let Some(struct_type) = res_settings.struct_required {
                             let struct_settings = get_structure_setting(struct_type);
                             let cost = struct_settings.cost.unwrap_or(0);
 

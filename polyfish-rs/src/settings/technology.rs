@@ -1,8 +1,7 @@
 //! Technology settings and tech tree
 
 use crate::types::{
-    AbilityType, ResourceType, StructureType, TaskType, TechnologyType, TerrainType, TribeType,
-    UnitType,
+    AbilityType, StructureType, TaskType, TechnologyType, TerrainType, TribeType, UnitType,
 };
 
 /// Technology configuration
@@ -13,7 +12,6 @@ pub struct TechnologySetting {
     pub replaces_tech: Option<TechnologyType>,
     pub tribe_type: Option<TribeType>,
     pub next: Vec<TechnologyType>,
-    pub unlocks_resource: Option<ResourceType>,
     pub unlocks_structure: Option<StructureType>,
     pub unlocks_special_structures: Vec<StructureType>,
     pub unlocks_task: Vec<TaskType>,
@@ -88,14 +86,12 @@ pub fn get_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
         Organization => TechnologySetting {
             tier: Some(1),
             next: vec![Strategy, Farming],
-            unlocks_resource: Some(ResourceType::Fruit),
             ..Default::default()
         },
         Farming => TechnologySetting {
             tier: Some(2),
             requires: Some(Organization),
             next: vec![Construction],
-            unlocks_resource: Some(ResourceType::Crop),
             unlocks_structure: Some(StructureType::Farm),
             unlocks_special_structures: vec![StructureType::Fungi],
             ..Default::default()
@@ -135,7 +131,6 @@ pub fn get_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
             tier: Some(2),
             requires: Some(Climbing),
             next: vec![Smithery],
-            unlocks_resource: Some(ResourceType::Metal),
             unlocks_structure: Some(StructureType::Mine),
             ..Default::default()
         },
@@ -168,7 +163,6 @@ pub fn get_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
         Fishing => TechnologySetting {
             tier: Some(1),
             next: vec![Sailing, Ramming],
-            unlocks_resource: Some(ResourceType::Fish),
             unlocks_unit: Some(UnitType::Raft),
             unlocks_terrain: Some(TerrainType::Water),
             ..Default::default()
@@ -186,7 +180,6 @@ pub fn get_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
             tier: Some(3),
             requires: Some(Ramming),
             unlocks_unit: Some(UnitType::Bomber),
-            unlocks_resource: Some(ResourceType::Starfish),
             ..Default::default()
         },
         Ramming => TechnologySetting {
@@ -207,7 +200,6 @@ pub fn get_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
         Hunting => TechnologySetting {
             tier: Some(1),
             next: vec![Archery, Forestry],
-            unlocks_resource: Some(ResourceType::Game),
             ..Default::default()
         },
         Archery => TechnologySetting {
@@ -311,7 +303,6 @@ pub fn get_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
             replaces_tech: Some(Navigation),
             tribe_type: Some(TribeType::Cymanti),
             unlocks_unit: Some(UnitType::LivingIsland),
-            unlocks_resource: Some(ResourceType::Starfish),
             ..Default::default()
         },
         Synergy => TechnologySetting {

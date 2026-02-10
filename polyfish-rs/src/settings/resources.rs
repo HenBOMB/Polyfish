@@ -7,7 +7,7 @@ use crate::types::{ResourceType, StructureType, TechnologyType, TribeType};
 pub struct ResourceSetting {
     pub cost: Option<i32>,
     pub tech_required: TechnologyType,
-    pub struct_type: Option<StructureType>,
+    pub struct_required: Option<StructureType>,
     pub visible_required: Vec<TechnologyType>,
     pub requires_capture: bool,
     pub reward_pop: i32,
@@ -31,7 +31,7 @@ pub fn get_resource_setting(resource_type: ResourceType) -> ResourceSetting {
         },
         Crop => ResourceSetting {
             tech_required: Farming,
-            struct_type: Some(StructureType::Farm),
+            struct_required: Some(StructureType::Farm),
             visible_required: vec![Organization, Farming, Construction],
             reward_pop: 2,
             ..Default::default()
@@ -44,7 +44,7 @@ pub fn get_resource_setting(resource_type: ResourceType) -> ResourceSetting {
         },
         Metal => ResourceSetting {
             tech_required: Mining,
-            struct_type: Some(StructureType::Mine),
+            struct_required: Some(StructureType::Mine),
             visible_required: vec![Climbing, Mining, Smithery],
             reward_pop: 2,
             ..Default::default()
@@ -57,7 +57,7 @@ pub fn get_resource_setting(resource_type: ResourceType) -> ResourceSetting {
         },
         Spores => ResourceSetting {
             tech_required: Unrequired,
-            struct_type: Some(StructureType::Fungi),
+            struct_required: Some(StructureType::Fungi),
             reward_pop: 1,
             tribe_type: Some(TribeType::Cymanti),
             ..Default::default()
