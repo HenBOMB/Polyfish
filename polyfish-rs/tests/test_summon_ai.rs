@@ -2,8 +2,8 @@ use polyfish::ai::ordering::score_move;
 use polyfish::coords::Coords;
 use polyfish::game::Game;
 use polyfish::moves::summon::SummonMove;
-use polyfish::states::{CityState, UnitState};
-use polyfish::types::{MapSize, MapType, UnitType};
+use polyfish::states::{CityState, TribeState, UnitState};
+use polyfish::types::UnitType;
 
 #[test]
 fn test_summon_contextual_priority() {
@@ -12,6 +12,23 @@ fn test_summon_contextual_priority() {
     let enemy_id = 2;
     game.state.settings.current_player_turn_id = player_id;
     game.state.settings.turn = 2; // Enable summons
+    game.state.settings._max_tribe_count = 2;
+
+    // Initialize tribes in the map
+    game.state.tribes.insert(
+        player_id,
+        TribeState {
+            id: player_id,
+            ..Default::default()
+        },
+    );
+    game.state.tribes.insert(
+        enemy_id,
+        TribeState {
+            id: enemy_id,
+            ..Default::default()
+        },
+    );
 
     // Setup cities
     let city_idx = 10;
@@ -43,10 +60,20 @@ fn test_summon_contextual_priority() {
         enemy_unit.coords = Coords::from_index(enemy_idx, game.state.settings.size);
         enemy_tribe.units.push(enemy_unit);
     }
+    // We need to make sure the tile existence logic in score_summon doesn't fail
+    game.state.tiles.insert(
+        11,
+        polyfish::states::TileState {
+            coords: Coords::from_index(11, game.state.settings.size),
+            ..Default::default()
+        },
+    );
+
     let score_threat = score_move(&game, &mv);
     // Base 15.0 + Threat 15.0 + Small Army 10.0 = 40.0
     println!("Score Threat: {}", score_threat);
     assert!(score_threat > score_base);
+    assert_eq!(score_threat, 40.0);
 
     // --- Scenario 3: Large Army (No threat) ---
     // Remove enemy, add many units
@@ -64,7 +91,8 @@ fn test_summon_contextual_priority() {
         }
     }
     let score_bloat = score_move(&game, &mv);
-    // Base 15.0 - Bloat Penalty 10.0 = 5.0
+    // Base 15.0 + (-10.0 penalty) = 5.0
     println!("Score Bloat: {}", score_bloat);
     assert!(score_bloat < score_base);
+    assert_eq!(score_bloat, 5.0);
 }
