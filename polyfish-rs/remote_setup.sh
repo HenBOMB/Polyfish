@@ -30,17 +30,19 @@ fi
 
 echo "Installing Python dependencies..."
 .venv/bin/pip install --upgrade pip
-# Install specific pytorch with CUDA support (Nightly for RTX 5090 / CUDA 12.x)
-# Split installation to avoid dependency resolution errors with nightly builds
-.venv/bin/pip install --pre --upgrade --no-cache-dir torch --index-url https://download.pytorch.org/whl/nightly/cu124
+# Check if PyTorch is already installed
+if ! .venv/bin/python3 -c "import torch; print(torch.__version__)" &> /dev/null; then
+    echo "Installing PyTorch..."
+    .venv/bin/pip install --pre --upgrade torch --index-url https://download.pytorch.org/whl/nightly/cu124
+else
+    echo "PyTorch already installed. Skipping..."
+fi
 
 .venv/bin/pip install -r requirements.txt
 
 # 4. Build Project
 echo "Building PolyFish (Release)..."
-$HOME/.cargo/bin/cargo build --release --bin self_play --features cuda
-$HOME/.cargo/bin/cargo build --release --bin polyfish --features cuda
-$HOME/.cargo/bin/cargo build --release --bin benchmark --features cuda
+$HOME/.cargo/bin/cargo build --release --bin self_play --bin polyfish --bin benchmark --features cuda
 
 echo "Setup Complete! You can now run the training loop."
 
