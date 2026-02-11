@@ -98,8 +98,7 @@ struct LeafData {
     features: Option<GameFeatures>,
     /// Legal moves at this leaf (wrapped in RefCell for interior mutability during take())
     legal_moves: RefCell<Vec<Box<dyn Move>>>,
-    /// Pre-computed heuristic scores for each legal move
-    heuristic_scores: Vec<f32>,
+
     /// Map size at leaf state
     map_size: usize,
 }
@@ -447,7 +446,6 @@ impl<'a> ZeroMctsAgent<'a> {
                         self.expand_node_from_precomputed(
                             node,
                             leaf.legal_moves.take(),
-                            &leaf.heuristic_scores,
                             leaf.map_size,
                             true,
                             &slice_policy,
@@ -583,16 +581,10 @@ impl<'a> ZeroMctsAgent<'a> {
             if has_other {
                 legal_moves.retain(|m| m.move_type() != MoveType::EndTurn);
             }
-            let heuristic_scores: Vec<f32> = legal_moves
-                .iter()
-                .map(|m| crate::ai::ordering::score_move(game, m.as_ref()))
-                .collect();
-
             LeafData {
                 path_indices: indices_stack,
                 features: Some(feat),
                 legal_moves: RefCell::new(legal_moves),
-                heuristic_scores,
                 map_size,
             }
         } else {
@@ -600,7 +592,7 @@ impl<'a> ZeroMctsAgent<'a> {
                 path_indices: indices_stack,
                 features: None,
                 legal_moves: RefCell::new(Vec::new()),
-                heuristic_scores: Vec::new(),
+
                 map_size: 0,
             }
         };
@@ -709,19 +701,7 @@ impl<'a> ZeroMctsAgent<'a> {
         }
 
         let map_size = game.state.settings.size as usize;
-        let heuristic_scores: Vec<f32> = legal_moves
-            .iter()
-            .map(|m| crate::ai::ordering::score_move(game, m.as_ref()))
-            .collect();
-
-        self.expand_node_from_precomputed(
-            node,
-            legal_moves,
-            &heuristic_scores,
-            map_size,
-            allow_end_turn,
-            policy,
-        );
+        self.expand_node_from_precomputed(node, legal_moves, map_size, allow_end_turn, policy);
     }
 
     /// Expand a node using pre-computed legal moves and heuristic scores.
@@ -731,7 +711,6 @@ impl<'a> ZeroMctsAgent<'a> {
         &self,
         node: &mut ZeroNode,
         legal_moves: Vec<Box<dyn Move>>,
-        heuristic_scores: &[f32],
         map_size: usize,
         allow_end_turn: bool,
         policy: &PolicyOutput,
@@ -752,18 +731,12 @@ impl<'a> ZeroMctsAgent<'a> {
             allow_end_turn,
         );
 
-        // Add heuristic bias to priors
-        let mut final_priors = Vec::with_capacity(priors.len());
-        for (nn_prior, h_score) in priors.iter().zip(heuristic_scores.iter()) {
-            final_priors.push(nn_prior + (h_score * 0.001));
-        }
-
         // Normalize
-        let sum: f32 = final_priors.iter().sum();
+        let sum: f32 = priors.iter().sum();
         let normalized_priors: Vec<f32> = if sum > 1e-8 {
-            final_priors.iter().map(|p| p / sum).collect()
+            priors.iter().map(|p| p / sum).collect()
         } else {
-            vec![1.0 / final_priors.len() as f32; final_priors.len()]
+            vec![1.0 / priors.len() as f32; priors.len()]
         };
 
         for (m, prior) in legal_moves.into_iter().zip(normalized_priors.iter()) {

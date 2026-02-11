@@ -4,7 +4,7 @@ set -e
 # Configuration
 ITERATIONS=100
 GAMES_PER_ITER=7
-export MCTS_ITERS=50 # 200 = Optimized for RunPod GPU (~0.8s per move)
+export MCTS_ITERS=100 # 200 = Optimized for RunPod GPU (~0.8s per move)
 export RAYON_NUM_THREADS=12
 export OMP_NUM_THREADS=12
 export RUST_BACKTRACE=1 # Enable full panic backtraces
