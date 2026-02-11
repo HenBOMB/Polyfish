@@ -99,6 +99,9 @@ async fn main() {
         .route("/load", post(load_game))
         .route("/simulate/explorer", post(simulate_explorer))
         .route("/simulate/attack", post(simulate_attack))
+        .route("/replay/save", post(save_replay_endpoint))
+        .route("/replay/load", post(load_replay_endpoint))
+        .route("/replay/analyze", post(analyze_replay_step))
         .route("/trainer/hint", post(get_trainer_hint))
         .nest_service("/", ServeDir::new("../src/public"))
         .layer(CorsLayer::permissive())
@@ -353,7 +356,7 @@ async fn manual_step(
                 AbilityType::Convert => {
                     let target = payload["target"]
                         .as_i64()
-                        .or(payload["target"].as_i64())
+                        .or(payload["src"].as_i64())
                         .unwrap() as i32;
                     Box::new(ConvertMove::new(src, target))
                 }
@@ -365,7 +368,7 @@ async fn manual_step(
                 AbilityType::BreakPeace => {
                     let target = payload["target"]
                         .as_i64()
-                        .or(payload["target"].as_i64())
+                        .or(payload["src"].as_i64())
                         .unwrap() as i32;
                     Box::new(BreakPeaceMove::new(target))
                 }
@@ -496,6 +499,7 @@ async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {
     settings.size = DEFAULT_SIZE;
     settings.tribes = DEFAULT_TRIBES.to_vec();
     settings.seed = rand::random();
+    settings.map_type = MapType::Drylands;
 
     let initial_state = generate(settings);
     game.state = initial_state;
@@ -712,5 +716,274 @@ async fn get_trainer_hint(
         "moveName": move_name,
         "moveDescription": move_description,
         "mctsAnalysis": mcts_analysis,
+    }))
+}
+
+// === Replay System ===
+
+#[derive(serde::Deserialize)]
+struct SaveReplayParams {
+    name: String,
+}
+
+async fn save_replay_endpoint(
+    State(state): State<Arc<AppState>>,
+    Json(params): Json<SaveReplayParams>,
+) -> Json<Value> {
+    let game = state.game.lock().unwrap();
+
+    // Create replays directory if not exists
+    let _ = std::fs::create_dir_all("replays");
+
+    // Sanitize filename
+    let safe_name: String = params
+        .name
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let filename = format!("replays/{}_{}.json", safe_name, timestamp);
+
+    // Save full state (which includes history and initial_seed)
+    let json = serde_json::to_string_pretty(&game.state).unwrap();
+    match std::fs::write(&filename, json) {
+        Ok(_) => Json(serde_json::json!({
+            "status": "success",
+            "message": format!("Replay saved to {}", filename),
+            "filename": filename
+        })),
+        Err(e) => Json(serde_json::json!({
+            "status": "error",
+            "message": format!("Failed to save replay: {}", e)
+        })),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct LoadReplayParams {
+    filename: String,
+}
+
+async fn load_replay_endpoint(
+    State(state): State<Arc<AppState>>,
+    Json(params): Json<LoadReplayParams>,
+) -> Json<Value> {
+    let mut game = state.game.lock().unwrap();
+
+    // Security check: simple path traversal prevention
+    if params.filename.contains("..")
+        || params.filename.contains("/")
+        || params.filename.contains("\\")
+    {
+        // allow if it starts with "replays/"
+        if !params.filename.starts_with("replays/") {
+            return Json(serde_json::json!({ "status": "error", "message": "Invalid filename" }));
+        }
+    }
+
+    let path = if params.filename.starts_with("replays/") {
+        params.filename.clone()
+    } else {
+        format!("replays/{}", params.filename)
+    };
+
+    match std::fs::read_to_string(&path) {
+        Ok(json) => {
+            match serde_json::from_str::<polyfish::states::GameState>(&json) {
+                Ok(loaded_state) => {
+                    game.state = loaded_state;
+                    game.post_load();
+
+                    let mut tiles: Vec<_> = game.state.tiles.values().collect();
+                    tiles.sort_by_key(|t| t.coords.idx);
+                    let legal_moves: Vec<_> =
+                        game.legal_moves().iter().map(|m| m.serialize()).collect();
+                    let evaluation = build_evaluation_json(&game.state);
+
+                    Json(serde_json::json!({
+                        "status": "success",
+                        "filename": path, // Return filename for future calls
+                        "state": {
+                            "settings": game.state.settings,
+                            "tiles": tiles,
+                            "structures": game.state.structures,
+                            "resources": game.state.resources,
+                            "tribes": game.state.tribes,
+                            "_hiddenResources": game.state._hidden_resources,
+                            "_prediction": game.state._prediction,
+                            "_messages": game.state._messages,
+                            "history": game.state.history, // Explicitly include history
+                        },
+                        "legalMoves": legal_moves,
+                        "evaluation": evaluation
+                    }))
+                }
+                Err(e) => Json(
+                    serde_json::json!({ "status": "error", "message": format!("Failed to parse replay: {}", e) }),
+                ),
+            }
+        }
+        Err(e) => Json(
+            serde_json::json!({ "status": "error", "message": format!("Failed to read replay file: {}", e) }),
+        ),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct AnalyzeReplayParams {
+    filename: String,
+    step_index: usize,
+    iterations: usize,
+}
+
+async fn analyze_replay_step(
+    State(state): State<Arc<AppState>>,
+    Json(params): Json<AnalyzeReplayParams>,
+) -> Json<Value> {
+    // 1. Load the replay file to get initial seed and history
+    let path = if params.filename.starts_with("replays/") {
+        params.filename.clone()
+    } else {
+        format!("replays/{}", params.filename)
+    };
+
+    let replay_state: polyfish::states::GameState = match std::fs::read_to_string(&path) {
+        Ok(json) => serde_json::from_str(&json).unwrap_or_default(),
+        Err(e) => {
+            return Json(serde_json::json!({ "error": format!("Failed to load replay: {}", e) }));
+        }
+    };
+
+    if replay_state.history.len() <= params.step_index {
+        return Json(serde_json::json!({ "error": "Step index out of bounds" }));
+    }
+
+    // 2. Initialize a FRESH game with the SAME seed
+    let mut map_settings = MapGenSettings::default();
+    map_settings.size = match replay_state.settings.size {
+        11 => polyfish::types::MapSize::Tiny,
+        13 => polyfish::types::MapSize::Small,
+        16 => polyfish::types::MapSize::Normal,
+        24 => polyfish::types::MapSize::Large,
+        32 => polyfish::types::MapSize::Huge,
+        90 => polyfish::types::MapSize::Massive,
+        _ => polyfish::types::MapSize::Normal,
+    };
+    map_settings.seed = replay_state.initial_seed;
+    map_settings.map_type = replay_state.settings.map_type;
+
+    // Need to extract tribes from replay settings or state?
+    // GameSettings doesn't store the tribe list directly as TribeType enum vec, but state.tribes does
+    // Extract unique tribe types from replay_state.tribes
+    let mut tribes = Vec::new();
+    // Sort by ID to ensure consistent order if that matters
+    let mut sorted_tribes: Vec<_> = replay_state.tribes.values().collect();
+    sorted_tribes.sort_by_key(|t| t.id);
+    for t in sorted_tribes {
+        tribes.push(t.tribe_type);
+    }
+    map_settings.tribes = tribes;
+
+    let initial_state = generate(map_settings);
+    let mut game = Game::new();
+    game.state = initial_state;
+    // Restore initial seed again just in case generate() didn't set it (it should have used it)
+    game.state.initial_seed = replay_state.initial_seed;
+    game.post_load();
+
+    // 3. Replay moves up to step_index (exclusive? or inclusive? let's say we want to analyze the state BEFORE turn step_index is played)
+    // Wait, if we want to compare "User Move vs AI Move", we need the state *before* the user made the move at step_index.
+    // So we replay moves 0 to step_index - 1.
+
+    for i in 0..params.step_index {
+        if i >= replay_state.history.len() {
+            break;
+        }
+
+        let move_json = &replay_state.history[i];
+
+        // We need to parse this JSON back into a Box<dyn Move>
+        // Use a matching logic similar to manual_step... logic duplication is confusing.
+        // Better way: Implement Game::deserialize_move?
+        // For now, let's copy the deserialization logic or create a helper.
+        // Actually, since we only need to play it, we can identify it from legal moves if it matches?
+        // But some moves (like Build) have parameters that legal_moves might not fully capture if they are identical?
+        // Actually, `legal_moves` generates all distinct moves. We can find the one that matches the JSON.
+
+        // Find matching move in legal moves
+        let legal = game.legal_moves();
+        let mut found = false;
+
+        // serialized form comparison
+        for m in legal {
+            if m.serialize() == *move_json {
+                game.play_move(m.as_ref());
+                found = true;
+                break;
+            }
+        }
+
+        if !found {
+            return Json(serde_json::json!({
+                "error": format!("Failed to replay move at step {}: Move desync or invalid. JSON: {:?}", i, move_json)
+            }));
+        }
+    }
+
+    // 4. Now game is at the state just before the user played history[step_index]
+    // Run MCTS analysis
+    use polyfish::ai::mcts_zero::ZeroMctsAgent;
+    let agent = ZeroMctsAgent::new(&state.network, params.iterations);
+    let (best_move, mcts_analysis) = agent.select_move_with_stats(&mut game);
+
+    let ai_move_json = best_move.as_ref().map(|m| m.serialize());
+    let ai_move_desc = best_move
+        .as_ref()
+        .map(|m| m.describe(&game.state))
+        .unwrap_or("None".to_string());
+
+    // User's actual move
+    let user_move_json = &replay_state.history[params.step_index];
+    // Find desc for user move
+    let legal = game.legal_moves();
+    let mut user_move_desc = "Unknown Move".to_string();
+    for m in legal {
+        if m.serialize() == *user_move_json {
+            user_move_desc = m.describe(&game.state);
+            break;
+        }
+    }
+
+    // Build state for frontend
+    let mut tiles: Vec<_> = game.state.tiles.values().collect();
+    tiles.sort_by_key(|t| t.coords.idx);
+
+    Json(serde_json::json!({
+        "stepIndex": params.step_index,
+        "state": {
+            "settings": game.state.settings,
+            "tiles": tiles,
+            "structures": game.state.structures,
+            "resources": game.state.resources,
+            "tribes": game.state.tribes,
+            "_hiddenResources": game.state._hidden_resources,
+            "_prediction": game.state._prediction,
+            "_messages": game.state._messages,
+        },
+        "userMove": {
+            "json": user_move_json,
+            "description": user_move_desc
+        },
+        "aiMove": {
+            "json": ai_move_json,
+            "description": ai_move_desc
+        },
+        "mctsAnalysis": mcts_analysis,
+        "evaluation": build_evaluation_json(&game.state)
     }))
 }

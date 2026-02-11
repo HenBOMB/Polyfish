@@ -227,8 +227,14 @@ pub fn update_exploration(state: &mut GameState, player_id: PlayerId) -> UndoCal
 
         for city in &tribe.cities {
             let city_coords = Coords::from_index(city.tile_index, map_size);
-            for dy in -(city.border_size + 1)..=(city.border_size + 1) {
-                for dx in -(city.border_size + 1)..=(city.border_size + 1) {
+            let range = if state.tiles[city.tile_index as usize].capital_of > 0 {
+                2
+            } else {
+                city.border_size
+            };
+
+            for dy in -range..=range {
+                for dx in -range..=range {
                     let nx = city_coords.x + dx;
                     let ny = city_coords.y + dy;
                     if nx >= 0 && nx < map_size && ny >= 0 && ny < map_size {
@@ -239,7 +245,9 @@ pub fn update_exploration(state: &mut GameState, player_id: PlayerId) -> UndoCal
                             || idx == map_size - 1
                             || idx == map_size * (map_size - 1)
                             || idx == map_size * map_size - 1;
-                        if is_corner && idx != city.tile_index {
+                        if state.tiles[idx as usize].explorers.contains(&player_id)
+                            || (is_corner && idx != city.tile_index)
+                        {
                             continue;
                         }
 

@@ -64,7 +64,7 @@ impl Move for EnchantAnimalMove {
     fn serialize(&self) -> serde_json::Value {
         serde_json::json!({
             "moveType": self.move_type(),
-            "type": self.ability_type(),
+            "type": self.ability_type().unwrap(),
             "target": self.target_index,
         })
     }

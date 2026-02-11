@@ -218,7 +218,7 @@ impl Move for ExplodeMove {
     fn serialize(&self) -> serde_json::Value {
         serde_json::json!({
             "moveType": self.move_type(),
-            "type": self.ability_type(),
+            "type": self.ability_type().unwrap(),
             "src": self.src_index,
         })
     }

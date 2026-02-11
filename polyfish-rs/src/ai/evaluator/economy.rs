@@ -18,11 +18,11 @@ pub fn evaluate_economy(state: &GameState, player_id: PlayerId) -> f32 {
     for city in &tribe.cities {
         income += city.production as f32;
     }
-    let income_score = (income / crate::states::default_max_spt() as f32).clamp(0.0, 1.0);
+    let spt_score = (income / crate::states::default_max_spt() as f32).clamp(0.0, 1.0);
 
     // Stars (Liquid Cash) - Soft cap around 40
     let stars_score =
-        (tribe.stars as f32 / crate::states::default_max_spt() as f32).clamp(0.0, 1.0);
+        (tribe.stars as f32 / crate::states::default_max_stars() as f32).clamp(0.0, 1.0);
 
     // Tech - Sum net utility of all owned techs
     let mut total_tech_utility = 0.0;
@@ -54,7 +54,7 @@ pub fn evaluate_economy(state: &GameState, player_id: PlayerId) -> f32 {
     // Weighted Eco
     // Income is most important, then tech/stars
     // Weight income=50% stars=20% tech=30%
-    let raw = (income_score * 0.5) + (stars_score * 0.2) + (tech_score * 0.3);
+    let raw = (spt_score * 0.5) + (stars_score * 0.2) + (tech_score * 0.3);
     let score = raw + capital_bonus
         - partial_city_penalty
         - unused_tech_penalty

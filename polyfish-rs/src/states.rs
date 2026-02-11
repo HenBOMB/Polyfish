@@ -486,6 +486,10 @@ pub struct GameState {
     pub _hidden_resources: IndexMap<i32, Option<ResourceState>>,
     #[serde(default)]
     pub _messages: Vec<String>,
+    #[serde(default)]
+    pub history: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub initial_seed: u64,
 }
 
 impl Default for GameState {
@@ -500,6 +504,8 @@ impl Default for GameState {
             _end_of_turn_queue: Vec::new(),
             _hidden_resources: IndexMap::new(),
             _messages: Vec::new(),
+            history: Vec::new(),
+            initial_seed: 0,
         }
     }
 }

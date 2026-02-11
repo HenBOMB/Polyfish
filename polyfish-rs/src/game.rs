@@ -29,9 +29,9 @@ pub struct Game {
 impl Game {
     /// Create a new game with default state
     pub fn new() -> Self {
-        Self {
-            state: GameState::default(),
-        }
+        let mut state = GameState::default();
+        state.initial_seed = state.settings.seed;
+        Self { state }
     }
 
     /// Load game state from a JSON string
@@ -173,11 +173,15 @@ impl Game {
                 ._recent_moves
                 .push(game_move.move_type());
 
+            // Add to history
+            self.state.history.push(game_move.serialize());
+
             // Collect undos
             let move_undo = res.undo;
 
             Box::new(move |s: &mut GameState| {
                 s.settings._recent_moves.pop();
+                s.history.pop();
                 discover_undo(s);
                 move_undo(s);
             }) as UndoCallback

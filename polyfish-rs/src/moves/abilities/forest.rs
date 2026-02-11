@@ -25,9 +25,10 @@ impl Move for ClearForestMove {
 
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let mut undos = Vec::new();
-        // Clear Forest -> Field + Gain 1 Star
+        // Clear Forest -> Field + Gain 1 Star + Remove Resource (Game)
         undos.push(modify_terrain(state, self.target_index, TerrainType::Field));
         undos.push(gain_stars(state, 1));
+        undos.push(consume_resource(state, self.target_index, None));
 
         Ok(MoveResult {
             undo: chain_undos(undos),
@@ -42,7 +43,7 @@ impl Move for ClearForestMove {
     fn serialize(&self) -> serde_json::Value {
         serde_json::json!({
             "moveType": self.move_type(),
-            "type": self.ability_type(),
+            "type": self.ability_type().unwrap(),
             "target": self.target_index,
         })
     }
@@ -98,7 +99,7 @@ impl Move for GrowForestMove {
     fn serialize(&self) -> serde_json::Value {
         serde_json::json!({
             "moveType": self.move_type(),
-            "type": self.ability_type(),
+            "type": self.ability_type().unwrap(),
             "target": self.target_index,
         })
     }
@@ -155,7 +156,7 @@ impl Move for BurnForestMove {
     fn serialize(&self) -> serde_json::Value {
         serde_json::json!({
             "moveType": self.move_type(),
-            "type": self.ability_type(),
+            "type": self.ability_type().unwrap(),
             "target": self.target_index,
         })
     }
@@ -213,7 +214,7 @@ pub fn generate_forest_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
                     if has_clear {
                         moves.push(Box::new(ClearForestMove::new(tile_idx)));
                     }
-                    if has_burn && tribe.stars >= 3 {
+                    if has_burn && tribe.stars >= 5 {
                         moves.push(Box::new(BurnForestMove::new(tile_idx)));
                     }
                 }

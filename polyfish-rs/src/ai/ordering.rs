@@ -2,6 +2,7 @@ use crate::coords::Coords;
 use crate::functions::{calculate_combat_preview, get_adjacent_indices, get_structure_at};
 use crate::game::Game;
 use crate::moves::Move;
+use crate::settings::{get_resource_setting, get_structure_setting};
 use crate::types::{AbilityType, ModeType, MoveType, RewardType, StructureType};
 
 /// Score a move based on heuristics for move ordering
@@ -99,16 +100,75 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                     AbilityType::Destroy => -10.0, // Risky
 
                     AbilityType::ClearForest => {
-                        let stars = state
-                            .tribes
-                            .get(&state.settings.current_player_turn_id)
-                            .map(|t| t.stars)
-                            .unwrap_or(0);
-                        if stars < 5 {
-                            25.0 // Need cash
-                        } else {
-                            15.0 // Solid eco move
+                        let mut score = 8.0; // Lower base score
+                        let tribe_id = state.settings.current_player_turn_id;
+                        let tribe = state.tribes.get(&tribe_id);
+                        let stars = tribe.map(|t| t.stars).unwrap_or(0);
+                        let has_forestry = tribe.map_or(false, |t| {
+                            crate::settings::technology::has_technology(
+                                &t.tech_vanilla,
+                                crate::types::TechnologyType::Forestry,
+                            )
+                        });
+
+                        if let Ok(target) = mv.target_idx() {
+                            // 1. Penalty for destroying Game resource
+                            if let Some(Some(res)) = state.resources.get(&(target as i32)) {
+                                if res.resource_type == crate::types::ResourceType::Game {
+                                    score -= 25.0; // Heavy penalty
+                                }
+                            }
+
+                            // 2. Penalty for wasting potential Lumber Hut site (if we have the tech)
+                            // Skip penalty if city is already max targeted level (5)
+                            let mut growth_useful = true;
+                            if let Some(t) = tribe {
+                                if let Some(city) = t
+                                    .cities
+                                    .iter()
+                                    .find(|c| c._territory.contains(&(target as i32)))
+                                {
+                                    if city.level >= 5 {
+                                        growth_useful = false;
+                                    }
+                                }
+                            }
+
+                            if has_forestry && growth_useful {
+                                score -= 10.0;
+                            }
+
+                            // 3. Strategic bonus: extra star needed for a level-up
+                            if stars < 10 {
+                                let mut enables_level_up = false;
+                                if let Some(t) = tribe {
+                                    for city in &t.cities {
+                                        // If clearing gets us to the cost of a Road (2) or Harvest (2)
+                                        if stars == 1 {
+                                            let pop_needed = (city.level + 1) - city.population;
+
+                                            // Scenario A: Enables a 2-star building/harvest
+                                            if pop_needed <= 2 {
+                                                enables_level_up = true;
+                                                break;
+                                            }
+
+                                            // Scenario B: Enables a 2-star Road to connect capital (+1 pop)
+                                            if pop_needed == 1 && !city.connected_to_capital {
+                                                enables_level_up = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                if enables_level_up {
+                                    score += 18.0; // High priority to enable growth
+                                } else if stars < 5 {
+                                    score += 5.0; // Small desperation boost
+                                }
+                            }
                         }
+                        score
                     }
 
                     _ => 10.0,
@@ -119,20 +179,60 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
         }
 
         MoveType::Summon => {
+            let tribe_id = state.settings.current_player_turn_id;
+            let tribe = match state.tribes.get(&tribe_id) {
+                Some(t) => t,
+                None => return 5.0,
+            };
+
             if state.settings.turn < 2 {
-                -10.0 // Deprioritize Turn 1 summons to favor development/ending turn
-            } else {
-                25.0 // Prioritize Turn 2+ summons for expansion
+                return -10.0; // Favor development on turn 1
             }
+
+            let mut score = 15.0; // Lowered base score (Builds/Harvest are 22.0)
+
+            // 1. Enemy Proximity: High priority if threatened
+            let mut threatened = false;
+            for city in &tribe.cities {
+                let adj = crate::functions::get_adjacent_indices(state, city.tile_index, 3);
+                if adj
+                    .iter()
+                    .any(|&idx| crate::functions::get_enemy_at(state, idx, tribe_id).is_some())
+                {
+                    threatened = true;
+                    break;
+                }
+            }
+            if threatened {
+                score += 15.0;
+            }
+
+            // 2. Army Size relative to territory
+            let unit_count = tribe.units.len();
+            let city_count = tribe.cities.len();
+            if unit_count < city_count + 1 {
+                score += 10.0; // Need at least one unit per city + explorer
+            } else if unit_count > city_count * 2 && !threatened {
+                score -= 10.0; // Avoid bloat if safe
+            }
+
+            // 3. Super Unit / Giant preference
+            if let Ok(u_type) = mv.unit_type() {
+                if u_type == crate::types::UnitType::Giant {
+                    score += 15.0;
+                }
+            }
+
+            score
         }
 
         MoveType::Build | MoveType::Harvest => {
             let mut score = 22.0;
+            let player_id = state.settings.current_player_turn_id;
 
+            // 1. Structure specific logic (Temples, Adjacency, Roads, Clustering)
             if let Ok(s_type) = mv.structure_type() {
-                // Temple timing bonus in Perfection mode:
-                // Temples level up once per turn. To reach max Level 5 by Turn 30,
-                // they must be built by Turn 25 at latest. Building by Turn 19 is ideal.
+                // Temple timing bonus in Perfection mode
                 if state.settings.mode == ModeType::Perfection {
                     match s_type {
                         StructureType::Temple
@@ -150,13 +250,8 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                     }
                 }
 
-                // Adjacency structure scoring:
-                // Sawmill/Forge/Windmill/Market gain value from adjacent prerequisite structures.
-                // More adjacencies = more pop/stars, so prioritize clustered placement.
+                // Adjacency and Roads
                 if let Ok(target) = mv.target_idx() {
-                    let player_id = state.settings.current_player_turn_id;
-                    let adj = get_adjacent_indices(state, target as i32, 1);
-
                     let prereqs: &[StructureType] = match s_type {
                         StructureType::Sawmill => &[StructureType::LumberHut],
                         StructureType::Forge => &[StructureType::Mine],
@@ -169,10 +264,44 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                         _ => &[],
                     };
 
-                    let mut adj_count = 0;
+                    // Future Adjacency Prediction (Clustering Potential)
+                    // If building a prereq, value empty tiles that could host the Hub.
+                    // If multiple existing prereqs surround the same empty tile, reward it more.
+                    let matching_hub = match s_type {
+                        StructureType::LumberHut => Some(StructureType::Sawmill),
+                        StructureType::Mine => Some(StructureType::Forge),
+                        StructureType::Farm => Some(StructureType::Windmill),
+                        _ => None,
+                    };
+
+                    if let Some(_hub) = matching_hub {
+                        let adj = get_adjacent_indices(state, target as i32, 1);
+                        for empty_idx in adj
+                            .iter()
+                            .filter(|&&idx| get_structure_at(state, idx).is_none())
+                        {
+                            // How many other prereqs of this type border this empty tile?
+                            let neighbors_of_empty = get_adjacent_indices(state, *empty_idx, 1);
+                            let existing_prereqs = neighbors_of_empty
+                                .iter()
+                                .filter(|&&n| {
+                                    if n == target as i32 {
+                                        return false;
+                                    } // Don't count ourselves (we are about to build there)
+                                    crate::functions::get_structure_type_at(state, n)
+                                        == Some(s_type)
+                                })
+                                .count();
+
+                            // (Self + others) * weight.
+                            // 1 prereq = 2.5 bonus, 2 prereqs = 5.0 bonus, etc.
+                            score += (existing_prereqs + 1) as f32 * 2.5;
+                        }
+                    }
 
                     if !prereqs.is_empty() {
-                        adj_count = adj
+                        let adj = get_adjacent_indices(state, target as i32, 1);
+                        let adj_count = adj
                             .iter()
                             .filter(|&&idx| {
                                 if let Some(tile) = state.tiles.get(&idx) {
@@ -187,88 +316,97 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                             .count();
 
                         match adj_count {
-                            0 => {}             // Shouldn't happen (build gen checks adjacency), but safe
-                            1 => score -= 2.0,  // Lonely — discourage building alone
-                            2 => score += 5.0,  // Good cluster
-                            3 => score += 12.0, // Great cluster
-                            _ => score += 18.0, // Exceptional — 4+ adjacencies
+                            0 => {}
+                            1 => score -= 2.0,
+                            2 => score += 5.0,
+                            3 => score += 12.0,
+                            _ => score += 18.0,
                         }
                     }
 
-                    // Road scoring: prioritize roads that connect cities
                     if s_type == StructureType::Road {
                         score += score_road(state, target as i32);
                     }
+                }
+            }
 
-                    // Population efficiency scoring:
-                    // Penalize moves that add population but don't result in a city level up.
-                    // This encourages "finishing" cities rather than spreading population thin.
-                    let mut pop_gain = 0;
+            // 2. Population efficiency scoring (Unified for Build and Harvest)
+            if let Ok(target) = mv.target_idx() {
+                let mut pop_gain = 0;
+
+                // Determine pop gain for both MoveTypes
+                if move_type == MoveType::Harvest {
+                    if let Some(Some(res)) = state.resources.get(&(target as i32)) {
+                        pop_gain =
+                            crate::settings::resources::get_resource_setting(res.resource_type)
+                                .reward_pop;
+                    } else {
+                        pop_gain = 1; // Fallback
+                    }
+                } else if let Ok(s_type) = mv.structure_type() {
+                    pop_gain = get_structure_setting(s_type).reward_pop;
+
                     match s_type {
-                        // Harvests (usually handled via Harvest move type, but StructureType might be set?)
-                        // The Move struct has variants. For Build, we check s_type.
-                        // For Harvest, we check resource type?
-                        // Let's check MoveType::Harvest explicitly below or handle it here if merged.
-                        // Actually, Harvest moves often don't have a structure_type set in the move?
-                        // Wait, `mv.structure_type()` returns result.
-                        
-                        StructureType::LumberHut | StructureType::Forge // Forge gives pop per adjacent mine? No, Forge gives pop based on adjacency.
-                        | StructureType::Sawmill | StructureType::Windmill | StructureType::Market => {
-                            // These give population based on adjacency.
-                            // We already calculated `adj_count` above for clustering.
-                            // Base pop is usually 0 plus adjacency bonus?
-                            // Standard: 
-                            // Lumber Hut: +1
-                            // Sawmill: 0 base, +1 per adj Lumber Hut
-                            // Forge: 0 base, +2 per adj Mine
-                            // Windmill: 0 base, +1 per adj Farm
-                            // Market: 0 base, +1 per adj Sawmill/Windmill/Forge
-                            // Let's approximate.
-                            match s_type {
-                                StructureType::LumberHut => pop_gain = 1,
-                                StructureType::Sawmill => pop_gain = 1 * adj_count as i32, // approx
-                                StructureType::Forge => pop_gain = 2 * adj_count as i32,
-                                StructureType::Windmill => pop_gain = 1 * adj_count as i32,
-                                StructureType::Market => pop_gain = 1 * adj_count as i32,
-                                _ => {}
-                            }
-                        }
-                        StructureType::Farm | StructureType::Mine | StructureType::Port => {
-                            pop_gain = 2; // Most tier 2 resources/structures give 2 pop
+                        // Adjacency structures can give population if clustered
+                        StructureType::Sawmill
+                        | StructureType::Forge
+                        | StructureType::Windmill
+                        | StructureType::Market => {
+                            // Re-calculate adj_count for pop estimation
+                            let prereqs: &[StructureType] = match s_type {
+                                StructureType::Sawmill => &[StructureType::LumberHut],
+                                StructureType::Forge => &[StructureType::Mine],
+                                StructureType::Windmill => &[StructureType::Farm],
+                                StructureType::Market => &[
+                                    StructureType::Sawmill,
+                                    StructureType::Windmill,
+                                    StructureType::Forge,
+                                ],
+                                _ => &[],
+                            };
+                            let adj = get_adjacent_indices(state, target as i32, 1);
+                            let adj_count = adj
+                                .iter()
+                                .filter(|&&idx| {
+                                    if let Some(tile) = state.tiles.get(&idx) {
+                                        if tile.owner == player_id {
+                                            if let Some(s) = get_structure_at(state, idx) {
+                                                return prereqs.contains(&s.structure_type);
+                                            }
+                                        }
+                                    }
+                                    false
+                                })
+                                .count();
+
+                            pop_gain = match s_type {
+                                StructureType::Forge => adj_count as i32 * 2,
+                                _ => adj_count as i32,
+                            };
                         }
                         _ => {}
                     }
+                }
 
-                    // If this is a Harvest move, we need to check resource type for pop gain
-                    if move_type == MoveType::Harvest {
-                        // Harvest fruits/fish/animals = +1
-                        // We don't have resource type easily accessible here without parsing move or looking at tile 
-                        // But typically simple harvest is +1.
-                        // Crop harvest (Construction) is +2? No, organization/fishing/hunting is +1.
-                        // Farming (Crop) is usually +2? In standard polytopia, yes.
-                        // Let's assume +1 minimum.
-                        if pop_gain == 0 { pop_gain = 1; }
-                    }
+                if pop_gain > 0 {
+                    if let Some(tribe) = state.tribes.get(&player_id) {
+                        if let Some(city) = tribe
+                            .cities
+                            .iter()
+                            .find(|c| c._territory.contains(&(target as i32)))
+                        {
+                            let needed = city.level + 1;
+                            let current = city.population;
 
-                    if pop_gain > 0 {
-                        // Find the city this tile belongs to
-                        if let Some(tribe) = state.tribes.get(&state.settings.current_player_turn_id) {
-                            if let Some(city) = tribe.cities.iter().find(|c| c._territory.contains(&(target as i32))) {
-                                let needed = city.level + 1; 
-                                let current = city.population;
-                                
-                                if current + pop_gain < needed {
-                                    // Won't level up
-                                    score -= 4.0; 
-                                } else {
-                                    // Will level up! Bonus!
-                                    score += 5.0;
-                                }
+                            if current + pop_gain < needed {
+                                score -= 4.0; // Doesn't finish level
+                            } else {
+                                score += 5.0; // Finishes level!
                             }
                         }
                     }
                 }
-            } // End of if let Ok(target)
+            }
 
             score
         }
@@ -348,14 +486,13 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                 5.0
             }
         }
-        
+
         MoveType::EndTurn => 0.0,
 
         _ => 5.0,
     }
 
     // get only MoveType::EndTurn
-    
 }
 
 /// Score reward moves contextually based on game situation.

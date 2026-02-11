@@ -14,6 +14,28 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::collections::HashSet;
 
+fn tribe_to_climate(tribe: TribeType) -> ClimateType {
+    match tribe {
+        TribeType::AiMo => ClimateType::AiMo,
+        TribeType::Aquarion => ClimateType::Aquarion,
+        TribeType::Bardur => ClimateType::Bardur,
+        TribeType::Elyrion => ClimateType::Elyrion,
+        TribeType::Hoodrick => ClimateType::Hoodrick,
+        TribeType::Imperius => ClimateType::Imperius,
+        TribeType::Kickoo => ClimateType::Kickoo,
+        TribeType::Luxidoor => ClimateType::Luxidoor,
+        TribeType::Oumaji => ClimateType::Oumaji,
+        TribeType::Quetzali => ClimateType::Quetzali,
+        TribeType::Vengir => ClimateType::Vengir,
+        TribeType::XinXi => ClimateType::XinXi,
+        TribeType::Yadakk => ClimateType::Yadakk,
+        TribeType::Zebasi => ClimateType::Zebasi,
+        TribeType::Polaris => ClimateType::Polaris,
+        TribeType::Cymanti => ClimateType::Cymanti,
+        _ => ClimateType::Nature,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MapGenSettings {
     pub size: MapSize,
@@ -188,6 +210,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
 
     // Initialize map
     let mut map: Vec<GenTile> = (0..tile_count).map(|i| GenTile::new(i as i32)).collect();
+    let mut is_land = vec![false; tile_count as usize];
 
     // 1. Capital Placement
     let player_count = settings.tribes.len();
@@ -279,40 +302,8 @@ pub fn generate(settings: MapGenSettings) -> GameState {
             map[cap as usize].tribe_affinity = Some(tribe);
             map[cap as usize].orig_tribe_affinity = Some(tribe);
             map[cap as usize].terrain_type = TerrainType::Field;
+            is_land[cap as usize] = true;
         }
-
-        /*
-        for &tribe in &settings.tribes {
-            if available_quads.is_empty() {
-                break;
-            }
-            let q_idx = rng.gen_range(0..available_quads.len());
-            let quad = available_quads.remove(q_idx);
-
-            let qx = quad % quads_per_side;
-            let qy = quad / quads_per_side;
-
-            let margin = 2;
-            let start_x = (qx * quad_size + margin).min(size - 3);
-            let end_x = ((qx + 1) * quad_size - margin)
-                .max(start_x + 1)
-                .min(size - 2);
-            let start_y = (qy * quad_size + margin).min(size - 3);
-            let end_y = ((qy + 1) * quad_size - margin)
-                .max(start_y + 1)
-                .min(size - 2);
-
-            let cx = rng.gen_range(start_x..end_x);
-            let cy = rng.gen_range(start_y..end_y);
-            let chosen = cy * size + cx;
-
-            capital_cells.push(chosen);
-            map[chosen as usize].above = Some("capital".to_string());
-            map[chosen as usize].tribe_affinity = Some(tribe);
-            map[chosen as usize].orig_tribe_affinity = Some(tribe);
-            map[chosen as usize].terrain_type = TerrainType::Field;
-        }
-        */
     }
 
     // 2. Village Spawning (Pre-terrain / Suburbs)
@@ -340,6 +331,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                 village_map[idx as usize] = 1;
                 map[idx as usize].above = Some("village".to_string());
                 map[idx as usize].terrain_type = TerrainType::Field;
+                is_land[idx as usize] = true;
                 sub_count -= 1;
                 candidates.retain(|&c| distance(c, idx, size) >= 3);
             }
@@ -395,8 +387,6 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         MapType::Archipelago => 0.30,
         MapType::WaterWorld => 0.05,
     };
-
-    let mut is_land = vec![false; tile_count as usize];
     for i in 0..tile_count {
         if village_map[i as usize] > 0 {
             is_land[i as usize] = true;
@@ -818,6 +808,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
     for (i, &cap) in capital_cells.iter().enumerate() {
         active[i].push(cap);
         done.insert(cap);
+        map[cap as usize].tribe_affinity = Some(settings.tribes[i]);
     }
     loop {
         let mut changed = false;
@@ -1289,26 +1280,12 @@ pub fn generate(settings: MapGenSettings) -> GameState {
             idx: gen_tile.idx,
         };
         t_state.terrain_type = gen_tile.terrain_type;
-        if let Some(tribe) = gen_tile.tribe_affinity {
-            t_state.climate = match tribe {
-                TribeType::AiMo => ClimateType::AiMo,
-                TribeType::Aquarion => ClimateType::Aquarion,
-                TribeType::Bardur => ClimateType::Bardur,
-                TribeType::Elyrion => ClimateType::Elyrion,
-                TribeType::Hoodrick => ClimateType::Hoodrick,
-                TribeType::Imperius => ClimateType::Imperius,
-                TribeType::Kickoo => ClimateType::Kickoo,
-                TribeType::Luxidoor => ClimateType::Luxidoor,
-                TribeType::Oumaji => ClimateType::Oumaji,
-                TribeType::Quetzali => ClimateType::Quetzali,
-                TribeType::Vengir => ClimateType::Vengir,
-                TribeType::XinXi => ClimateType::XinXi,
-                TribeType::Yadakk => ClimateType::Yadakk,
-                TribeType::Zebasi => ClimateType::Zebasi,
-                TribeType::Polaris => ClimateType::Polaris,
-                TribeType::Cymanti => ClimateType::Cymanti,
-                _ => ClimateType::Nature,
-            };
+        if gen_tile.terrain_type == TerrainType::Water
+            || gen_tile.terrain_type == TerrainType::Ocean
+        {
+            t_state.climate = ClimateType::Nature;
+        } else if let Some(tribe) = gen_tile.tribe_affinity {
+            t_state.climate = tribe_to_climate(tribe);
         }
         if let Some(ref s) = gen_tile.above {
             match s.as_str() {
@@ -1442,6 +1419,12 @@ pub fn generate(settings: MapGenSettings) -> GameState {
             if let Some(tile) = game_state.tiles.get_mut(&idx) {
                 tile.owner = pid;
                 tile.ruling_city_coords = Some(cap_coords);
+                // Allowing this would be cheating
+                if tile.terrain_type != TerrainType::Water
+                    && tile.terrain_type != TerrainType::Ocean
+                {
+                    tile.climate = tribe_to_climate(tribe);
+                }
             }
         }
     }
