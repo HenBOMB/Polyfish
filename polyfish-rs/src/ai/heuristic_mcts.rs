@@ -1,5 +1,5 @@
 use crate::ai::evaluator;
-use crate::ai::mcts::{MctsAnalysis, MoveEvaluation};
+use crate::ai::mcts::{MctsAnalysis, MctsNodeData, MoveEvaluation};
 use crate::game::Game;
 use crate::moves::{EndTurnMove, Move};
 use crate::states::PlayerId;
@@ -85,7 +85,7 @@ impl HeuristicMctsAgent {
     pub fn new(iterations: usize) -> Self {
         Self {
             iterations,
-            exploration_constant: 1.414,
+            exploration_constant: 0.6,
         }
     }
 
@@ -186,6 +186,7 @@ impl HeuristicMctsAgent {
             evaluations,
             total_iterations: self.iterations,
             principal_variation: pv,
+            tree: Some(Self::build_tree_data(&root, &game.state, 0)),
         };
 
         let mut best_move = root
@@ -224,7 +225,7 @@ impl HeuristicMctsAgent {
                 let m = untried.pop().unwrap();
                 if let Some(undo) = game.simulate_move(m.as_ref()) {
                     let mut child = Node::new(Some(m), game);
-                    let val = self.simulate_heuristic(game, pov); // Use Heuristic here
+                    let val = self.simulate_to_turn_end(game, pov);
                     undo(&mut game.state);
 
                     child.visits = 1.0;
@@ -239,21 +240,119 @@ impl HeuristicMctsAgent {
         }
 
         // Terminal or Stalled
-        let val = self.simulate_heuristic(game, pov);
+        let val = self.simulate_to_turn_end(game, pov);
         node.visits += 1.0;
         node.value += val;
         val
     }
 
-    /// Instead of random rollout, we just evaluate the current state directly
-    /// This is "Heuristic MCTS"
-    fn simulate_heuristic(&self, game: &Game, pov: PlayerId) -> f32 {
-        let score = evaluator::evaluate_state(&game.state, pov);
-        // Map rough score -inf..inf to -1..1 or 0..1 for MCTS value
-        // evaluate_state generally returns (MyScore - OppScore)
-        // Let's sigmoid it to get 0.0 - 1.0
+    /// Greedy rollout to the end of the current turn, then evaluate.
+    /// Instead of evaluating mid-turn states (which punishes the start of
+    /// multi-step plans), we greedily pick the best-scored move until the
+    /// turn changes or EndTurn is played, then evaluate at the turn boundary.
+    fn simulate_to_turn_end(&self, game: &mut Game, pov: PlayerId) -> f32 {
+        let start_turn = game.state.settings.turn;
+        let current_player = game.state.settings.current_player_turn_id;
+        let mut undos: Vec<crate::actions::UndoCallback> = Vec::new();
+        let max_rollout = 30; // Safety cap to prevent infinite loops
 
-        let sigmoid = |x: f32| 1.0 / (1.0 + (-x * 0.1).exp());
-        sigmoid(score)
+        for _ in 0..max_rollout {
+            // Stop if turn changed (EndTurn was played) or game over
+            if game.state.settings.turn != start_turn
+                || game.state.settings.current_player_turn_id != current_player
+                || game.state.settings._game_over
+            {
+                break;
+            }
+
+            let mut moves = game.legal_moves();
+            if moves.is_empty() {
+                break;
+            }
+
+            // If EndTurn is the only move, play it and stop
+            if moves.len() == 1 && moves[0].move_type() == crate::types::MoveType::EndTurn {
+                if let Some(undo) = game.simulate_move(moves.remove(0).as_ref()) {
+                    undos.push(undo);
+                }
+                break;
+            }
+
+            // Remove EndTurn from candidates (we want to play all useful moves first)
+            moves.retain(|m| m.move_type() != crate::types::MoveType::EndTurn);
+            if moves.is_empty() {
+                break;
+            }
+
+            // Pick the highest-scored move greedily
+            let best_idx = moves
+                .iter()
+                .enumerate()
+                .max_by(|(_, a), (_, b)| {
+                    let sa = crate::ai::ordering::score_move(game, a.as_ref());
+                    let sb = crate::ai::ordering::score_move(game, b.as_ref());
+                    sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+
+            let best_move = moves.swap_remove(best_idx);
+            if let Some(undo) = game.simulate_move(best_move.as_ref()) {
+                undos.push(undo);
+            } else {
+                break; // Move failed, stop rollout
+            }
+        }
+
+        // Evaluate at turn boundary
+        let score = evaluator::evaluate_state(&game.state, pov);
+
+        // Undo all rollout moves
+        while let Some(undo) = undos.pop() {
+            undo(&mut game.state);
+        }
+
+        // Score is already clamped -1.0 to 1.0 in evaluate_state.
+        // Map linearly to 0.0 - 1.0 for MCTS value
+        (score + 1.0) / 2.0
+    }
+
+    fn build_tree_data(
+        node: &Node,
+        state: &crate::states::GameState,
+        depth: usize,
+    ) -> MctsNodeData {
+        let description = if let Some(m) = &node.move_to_here {
+            m.describe(state)
+        } else {
+            "Root".to_string()
+        };
+
+        // Recursively build children, limiting depth to avoid huge JSONs
+        let mut children: Vec<MctsNodeData> = if depth < 8 {
+            node.children
+                .iter()
+                .map(|child| Self::build_tree_data(child, state, depth + 1))
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        // Sort by visits (descending) and take top 5 to keep it readable
+        children.sort_by(|a, b| {
+            b.visits
+                .partial_cmp(&a.visits)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        if children.len() > 5 {
+            children.truncate(5);
+        }
+
+        MctsNodeData {
+            visits: node.visits,
+            value: node.value,
+            move_description: description,
+            children,
+        }
     }
 }

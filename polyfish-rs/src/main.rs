@@ -155,7 +155,7 @@ struct StepParams {
 }
 
 fn default_iterations() -> usize {
-    200
+    800
 }
 
 async fn get_current_state(State(state): State<Arc<AppState>>) -> Json<Value> {
@@ -213,9 +213,10 @@ async fn auto_step(
 
     // Run heuristic MCTS for analysis panel (move descriptions + PV)
     use polyfish::ai::heuristic_mcts::HeuristicMctsAgent;
+
     let analysis_agent = HeuristicMctsAgent {
-        iterations: std::cmp::min(params.iterations, 200),
-        exploration_constant: 0.4,
+        iterations: params.iterations,
+        exploration_constant: 0.1,
     };
     let (_, mcts_analysis) = analysis_agent.select_move_with_analysis(&mut game);
 

@@ -1,3 +1,5 @@
+use std::any::Any;
+
 use crate::functions::{get_adjacent_indices, get_structure_at};
 use crate::states::{GameState, PlayerId};
 use crate::types::{ModeType, ResourceType, StructureType, TechnologyType};
@@ -50,16 +52,19 @@ pub fn evaluate_economy(state: &GameState, player_id: PlayerId) -> f32 {
     let unused_tech_penalty = penalty_unused_tech(state, tribe);
     let bad_struct_penalty = penalty_bad_structures(state, tribe);
     let low_stars_penalty = penalty_low_stars(tribe);
-
+    let urgency_penalty = penalty_urgency(state);
     // Weighted Eco
     // Income is most important, then tech/stars
     // Weight income=50% stars=20% tech=30%
-    let raw = (spt_score * 0.5) + (stars_score * 0.2) + (tech_score * 0.3);
-    let score = raw + capital_bonus
+    // let raw = (spt_score * 0.5) + (stars_score * 0.2) + (tech_score * 0.3);
+    let base_score = (spt_score * 0.6) + (stars_score * 0.1) + (tech_score * 0.3);
+
+    let score = base_score + capital_bonus
         - partial_city_penalty
         - unused_tech_penalty
         - bad_struct_penalty
-        - low_stars_penalty;
+        - low_stars_penalty
+        - (urgency_penalty * 0.1);
     score.clamp(0.0, 1.0)
 }
 
@@ -390,7 +395,49 @@ fn penalty_bad_structures(state: &GameState, tribe: &crate::states::TribeState) 
                 }
             }
 
-            // --- 2. Dead-end roads ---
+            // --- 2. Crowded Prerequisite Structures ---
+            // Penalize LumberHut/Farm/Mine if they have NO access to a Hub or a Potential Hub (Empty Land Tile).
+            let (hub_type, is_prereq) = match structure.structure_type {
+                StructureType::LumberHut => (Some(StructureType::Sawmill), true),
+                StructureType::Farm => (Some(StructureType::Windmill), true),
+                StructureType::Mine => (Some(StructureType::Forge), true),
+                _ => (None, false),
+            };
+
+            if is_prereq {
+                if let Some(hub) = hub_type {
+                    let adj = get_adjacent_indices(state, tile_idx, 1);
+
+                    let has_access = adj.iter().any(|&idx| {
+                        // 1. Is it an existing Hub?
+                        if let Some(s) = get_structure_at(state, idx) {
+                            if s.structure_type == hub {
+                                return true;
+                            }
+                        }
+
+                        // 2. Is it a valid empty spot (Potential Hub)?
+                        if let Some(tile) = state.tiles.get(&idx) {
+                            // Must be land (not water/ocean where we can't build hubs)
+                            // Note: WaterTemple/Port are different.
+                            if tile.terrain_type == crate::types::TerrainType::Ocean
+                                || tile.terrain_type == crate::types::TerrainType::Water
+                            {
+                                return false;
+                            }
+                            // Must be empty
+                            return get_structure_at(state, idx).is_none();
+                        }
+                        false
+                    });
+
+                    if !has_access {
+                        penalty += 0.02; // Crowded / Wasted potential
+                    }
+                }
+            }
+
+            // --- 3. Dead-end roads ---
             if let Some(tile) = state.tiles.get(&tile_idx) {
                 if tile.has_road {
                     let adj = get_adjacent_indices(state, tile_idx, 1);
@@ -446,4 +493,24 @@ fn penalty_low_stars(tribe: &crate::states::TribeState) -> f32 {
 
     // Max penalty at 0 stars is 0.25 (significant chunk of the 0.0-1.0 range)
     deficit.powi(2) * 0.25
+}
+
+/// Penalizes for playing moves, this induces urgency to play and not waste moves
+fn penalty_urgency(state: &GameState) -> f32 {
+    let mut score = state.settings._recent_moves.len() as f32;
+    let current_turn = state.settings.turn;
+
+    if current_turn > 20 {
+        score = score / 15.0;
+    } else if current_turn > 15 {
+        score = score / 10.0;
+    } else if current_turn > 10 {
+        score = score / 8.0;
+    } else if current_turn > 5 {
+        score = score / 6.0;
+    } else {
+        score = score / 4.0;
+    }
+
+    score.min(1.0)
 }

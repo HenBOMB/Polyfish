@@ -1036,58 +1036,82 @@ pub fn generate(settings: MapGenSettings) -> GameState {
             .tribe_affinity
             .unwrap_or(TribeType::Luxidoor);
 
+        // Determine primary resource caps for initial territory (radius 1)
+        // User report: "5 or 6 fruit... is overkill". Guaranteed is 2. Cap at 3 for strictness.
+        let (primary_res, max_spawns) = match tribe {
+            TribeType::Imperius | TribeType::Quetzali | TribeType::Yadakk => ("fruit", 3),
+            TribeType::Bardur | TribeType::Elyrion | TribeType::Hoodrick => ("game", 3),
+            TribeType::Kickoo | TribeType::Aquarion => ("fish", 3),
+            TribeType::Zebasi => ("crop", 3),
+            TribeType::Cymanti => ("spores", 3),
+            _ => ("", 99),
+        };
+
+        let mut current_res_count = 0;
+        // Count existing primary resources in inner territory (radius 1)
+        if !primary_res.is_empty() {
+            let r1 = get_square(v, 1, size);
+            for &idx in &r1 {
+                if map[idx as usize].above.as_deref() == Some(primary_res) {
+                    current_res_count += 1;
+                }
+            }
+        }
+
         // Iterate through radius 1 (inner) and radius 2 (outer)
         for radius in 1..=2 {
             let inner = radius == 1;
             let square_tiles = get_square(v, radius, size);
 
             for tile_idx in square_tiles {
-                // Ensure we only process tiles at the exact radius distance (manhattan distance check is approximate but sufficient for now, standard is square radius)
-                // Actually, duplicate processing is possible if radii overlap between villages.
-                // We should check if the tile already has a resource or if we've processed it.
-                // But map[i].above.is_some() check handles this.
-                // However, a tile might be radius 2 from V1 and radius 1 from V2.
-                // We typically want the closest village's influence.
-                // But the probability function relies on "inner/outer".
-                // Let's stick to the previous logic's intent but optimized:
-                // But simple iteration might process a tile twice.
-                // Best is to use a set or check if resource added.
-
                 if map[tile_idx as usize].above.is_some() {
                     continue;
                 }
 
-                // Verify distance to THIS village is the deciding factor?
-                // The prompt suggests iterating villages.
-                // "So iterate villages, then iterate their 2-tile radius"
-
-                // Check if this tile is actually closest to this village?
-                // Or just apply logic.
-                // If we iterate all villages, a shared tile might get multiple chances.
-                // Let's assume first come first served for resource generation.
-
-                // We need to ensure we don't overwrite or double-roll.
-                // map[tile_idx].above check prevents overwrite.
-
                 match map[tile_idx as usize].terrain_type {
                     TerrainType::Field => {
-                        let fp = get_resource_prob("fruit", tribe, inner);
-                        let (cp, res_name) = if tribe == TribeType::Cymanti {
+                        let mut fp = get_resource_prob("fruit", tribe, inner);
+                        // Apply cap for fruit
+                        if primary_res == "fruit" && inner && current_res_count >= max_spawns {
+                            fp = 0.0;
+                        }
+
+                        let (mut cp, res_name) = if tribe == TribeType::Cymanti {
                             (get_resource_prob("spores", tribe, inner), "spores")
                         } else {
                             (get_resource_prob("crop", tribe, inner), "crop")
                         };
 
+                        // Apply cap for crop/spores
+                        if primary_res == res_name && inner && current_res_count >= max_spawns {
+                            cp = 0.0;
+                        }
+
                         let r: f32 = rng.r#gen();
                         if r < fp {
                             map[tile_idx as usize].above = Some("fruit".to_string());
+                            if primary_res == "fruit" && inner {
+                                current_res_count += 1;
+                            }
                         } else if r < fp + cp {
                             map[tile_idx as usize].above = Some(res_name.to_string());
+                            if primary_res == res_name && inner {
+                                current_res_count += 1;
+                            }
                         }
                     }
                     TerrainType::Forest => {
-                        if rng.r#gen::<f32>() < get_resource_prob("game", tribe, inner) {
+                        let mut gp = get_resource_prob("game", tribe, inner);
+                        // Apply cap for game
+                        if primary_res == "game" && inner && current_res_count >= max_spawns {
+                            gp = 0.0;
+                        }
+
+                        if rng.r#gen::<f32>() < gp {
                             map[tile_idx as usize].above = Some("game".to_string());
+                            if primary_res == "game" && inner {
+                                current_res_count += 1;
+                            }
                         }
                     }
                     TerrainType::Mountain => {
@@ -1096,8 +1120,17 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                         }
                     }
                     TerrainType::Water => {
-                        if rng.r#gen::<f32>() < get_resource_prob("fish", tribe, inner) {
+                        let mut fip = get_resource_prob("fish", tribe, inner);
+                        // Apply cap for fish
+                        if primary_res == "fish" && inner && current_res_count >= max_spawns {
+                            fip = 0.0;
+                        }
+
+                        if rng.r#gen::<f32>() < fip {
                             map[tile_idx as usize].above = Some("fish".to_string());
+                            if primary_res == "fish" && inner {
+                                current_res_count += 1;
+                            }
                         }
                     }
                     _ => {}
@@ -1609,5 +1642,41 @@ mod tests {
             .flat_map(|t| t.units.iter().map(|u| u.owner))
             .collect();
         assert_eq!(unit_owners.len(), 2, "There should be 2 unique unit owners");
+    }
+
+    #[test]
+    fn test_resource_density() {
+        use crate::types::{ResourceType, TribeType};
+        let mut settings = MapGenSettings::default();
+        settings.tribes = vec![TribeType::Imperius];
+
+        for i in 0..50 {
+            settings.seed = i as u64;
+            let game = generate(settings.clone());
+
+            let cap_tile = game
+                .tiles
+                .values()
+                .find(|t| t.capital_of == 1) // Imperius is player 1
+                .unwrap();
+
+            let size = game.settings.size;
+            let mut fruit_count = 0;
+
+            use crate::functions::get_square_indices;
+            for idx in get_square_indices(cap_tile.coords.idx, 1, size) {
+                if let Some(res) = game.resources.get(&idx).unwrap_or(&None) {
+                    if res.resource_type == ResourceType::Fruit {
+                        fruit_count += 1;
+                    }
+                }
+            }
+            assert!(
+                fruit_count <= 3,
+                "Seed {}: Found {} fruits, expected <= 3",
+                i,
+                fruit_count
+            );
+        }
     }
 }

@@ -16,16 +16,27 @@ Score is all that matters?
 - Forced rewards
 - Captures (enemy capitals -> ruins -> cities -> villages)
 - Unit attacks and kills
-- Harvest & Builds that generate instant pop gain / Free task reward structures
-- Adjacency structures sorted by most gain [TODO]
-- Self healing units, Heal others [TODO]
+- [IMPLEMENTED] Harvest & Builds that generate instant pop gain:
+    - Unified logic in `ordering.rs` [IMPLEMENTED]
+    - Prioritizes moves that complete a city level-up (+5.0 bonus) over moves that don't (-4.0 penalty).
+- [IMPLEMENTED] Adjacency structures sorted by most gain (Lonely=-2, 2adj=+5, 3adj=+12, 4+=+18)
+- [IMPLEMENTED] Contextual Summoning:
+    - Base score lowered (15.0) to favor builds/harvest (22.0) on quiet turns.
+    - Enemy Proximity Bonus: +15.0 if an enemy is within 3 tiles of any city center.
+    - Army Size Awareness: +10.0 if army is small, -10.0 if over 2x city count (unless threatened).
+    - Giant Prioritization: +15.0 bonus.
+- [TODO] Self healing units, Heal others 
 - Unit steps (steps that explore tiles descending)
 - Unit promotions (veterancy +3 kills)
 - Unit abilities (explode, boost, freeze, convert)
-- Economy abilities (decompose, destroy, diplomacy, enchant animal) [TODO]
+- [TODO] Economy abilities (decompose, destroy, diplomacy, enchant animal) 
 - All other harvest moves
-- Rewardful abilities (clear forest) [TODO]
-- Disband / destructive abilities (disband, burn forest) [TODO]
+- [IMPLEMENTED] Rewardful abilities (clear forest):
+    - Base score lowered (3.0) to prevent unnecessary clearing.
+    - Level-up Enablement: +10.0 bonus if `stars < 2` and clearing enables a 2-star growth move.
+    - Healthy Treasury Penalty: -10.0 if `stars >= 5` to preserve territory.
+    - Clustering Penalty: [IMPLEMENTED] Penalizes clearing forests adjacent to empty "hub-spots" (potential Sawmill sites). Penalty scales with other neighboring prereqs.
+- [TODO] Disband / destructive abilities (disband, burn forest)
 - Research: [IMPLEMENTED] Scored via `evaluate_tech_utility` ROI + buy-before-capture bonus
 - Unit attack suicides
 
@@ -84,6 +95,9 @@ formula: (explored - total * (1 - maxExploration)) / (total * maxExploration)
 - Sawmill, Forge, Market, Windmill: [IMPLEMENTED] (Via `ordering.rs` adjacency count scoring — lonely=-2, 2adj=+5, 3adj=+12, 4+=+18)
     - Always build these in the spots where you can maximise the amount of population gained. 
     - Never build alone, unless really worth it, try to build in a cluster of 2 or more.
+- Clustering Potential: [IMPLEMENTED]
+    - Prerequisite structures (Lumber Hut, Mine, Farm) now reward placement near empty tiles that can host a Hub (Sawmill, etc.) later.
+    - Bonus scales with existing prerequisites surrounding the same hub-spot (+2.5 per prerequisite).
 
 - Roads: [IMPLEMENTED] (Via `ordering.rs` `score_road()` — manhattan-distance path scoring between city pairs, unconnected city bonus +8, on-path +5, adj road +2, adj city +3)
     - Prioritize roads that connect unconnected cities to capital

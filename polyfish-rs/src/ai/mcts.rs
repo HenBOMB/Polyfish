@@ -25,6 +25,15 @@ pub struct MctsAnalysis {
     pub evaluations: Vec<MoveEvaluation>,
     pub total_iterations: usize,
     pub principal_variation: Vec<String>,
+    pub tree: Option<MctsNodeData>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MctsNodeData {
+    pub visits: f32,
+    pub value: f32,
+    pub move_description: String,
+    pub children: Vec<MctsNodeData>,
 }
 
 pub struct MctsAgent {
@@ -162,6 +171,7 @@ impl MctsAgent {
             evaluations,
             total_iterations: self.iterations,
             principal_variation: Vec::new(),
+            tree: None,
         };
 
         // Return child with most visits

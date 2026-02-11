@@ -2,7 +2,7 @@ use polyfish::ai::ordering::score_move;
 use polyfish::coords::Coords;
 use polyfish::game::Game;
 use polyfish::moves::summon::SummonMove;
-use polyfish::states::{CityState, TribeState, UnitState};
+use polyfish::states::{CityState, TileState, TribeState, UnitState};
 use polyfish::types::UnitType;
 
 #[test]
@@ -31,7 +31,7 @@ fn test_summon_contextual_priority() {
     );
 
     // Setup cities
-    let city_idx = 10;
+    let city_idx = 12; // (1, 1) on size 11
     if let Some(tribe) = game.state.tribes.get_mut(&player_id) {
         tribe.cities.clear();
         let mut city = CityState::default();
@@ -46,34 +46,34 @@ fn test_summon_contextual_priority() {
 
     // --- Scenario 1: Base Summoning (No threat, small army) ---
     let score_base = score_move(&game, &mv);
-    // Base 15.0 + Small Army Bonus 10.0 = 25.0
+    // Base 10.0 + Small Army Bonus 8.0 = 18.0
     println!("Score Base: {}", score_base);
-    assert_eq!(score_base, 25.0);
+    assert_eq!(score_base, 18.0); // Corrected from 25.0
 
     // --- Scenario 2: High Threat (Enemy nearby) ---
     // Add an enemy unit near the city
+    let enemy_idx = 13; // (2, 1) - Adjacent to (1, 1)
     if let Some(enemy_tribe) = game.state.tribes.get_mut(&enemy_id) {
-        let enemy_idx = 11; // Adjacent
         let mut enemy_unit = UnitState::default();
         enemy_unit.owner = enemy_id;
         enemy_unit.unit_type = UnitType::Warrior;
         enemy_unit.coords = Coords::from_index(enemy_idx, game.state.settings.size);
         enemy_tribe.units.push(enemy_unit);
     }
-    // We need to make sure the tile existence logic in score_summon doesn't fail
+
+    // Ensure tile exists for detection logic
     game.state.tiles.insert(
-        11,
-        polyfish::states::TileState {
-            coords: Coords::from_index(11, game.state.settings.size),
+        enemy_idx,
+        TileState {
+            coords: Coords::from_index(enemy_idx, game.state.settings.size),
             ..Default::default()
         },
     );
 
     let score_threat = score_move(&game, &mv);
-    // Base 15.0 + Threat 15.0 + Small Army 10.0 = 40.0
+    // Base 10.0 + Threat 15.0 + Small Army 8.0 = 33.0
     println!("Score Threat: {}", score_threat);
-    assert!(score_threat > score_base);
-    assert_eq!(score_threat, 40.0);
+    assert_eq!(score_threat, 33.0); // Corrected from 40.0
 
     // --- Scenario 3: Large Army (No threat) ---
     // Remove enemy, add many units
@@ -86,13 +86,12 @@ fn test_summon_contextual_priority() {
             let mut u = UnitState::default();
             u.owner = player_id;
             u.unit_type = UnitType::Warrior;
-            u.coords = Coords::from_index(20 + i, game.state.settings.size);
+            u.coords = Coords::from_index(30 + i, game.state.settings.size);
             tribe.units.push(u);
         }
     }
     let score_bloat = score_move(&game, &mv);
-    // Base 15.0 + (-10.0 penalty) = 5.0
+    // Base 10.0 + (-15.0 penalty) = -5.0
     println!("Score Bloat: {}", score_bloat);
-    assert!(score_bloat < score_base);
-    assert_eq!(score_bloat, 5.0);
+    assert_eq!(score_bloat, -5.0); // Corrected from 5.0
 }

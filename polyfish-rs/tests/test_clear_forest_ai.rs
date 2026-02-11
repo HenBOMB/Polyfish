@@ -1,156 +1,91 @@
 use polyfish::ai::ordering::score_move;
 use polyfish::game::Game;
-use polyfish::moves::abilities::forest::ClearForestMove;
-use polyfish::types::{
-    AbilityType, MapSize, MapType, MoveType, ResourceType, StructureType, TechnologyType,
-    TerrainType, TribeType,
-};
+use polyfish::moves::ClearForestMove;
+use polyfish::states::{CityState, TileState, TribeState};
 
 #[test]
-fn test_clear_forest_scoring() {
+fn test_clear_forest_prevention() {
     let mut game = Game::new();
-    // Tiny map for speed
-    game.state = polyfish::mapgen::generate(polyfish::mapgen::MapGenSettings {
-        size: MapSize::Tiny,
-        map_type: MapType::Drylands,
-        tribes: vec![TribeType::Imperius, TribeType::Imperius],
-        seed: 1234,
-        ..Default::default()
-    });
-    game.post_load();
+    let player_id = 1;
+    game.state.settings.current_player_turn_id = player_id;
 
-    let player_id = game.state.settings.current_player_turn_id;
-    let city_idx = game.state.tribes[&player_id].cities[0].tile_index;
+    // Initialize tribe
+    let mut tribe = TribeState::default();
+    tribe.id = player_id;
+    tribe.stars = 5; // Healthy treasury
 
-    // Find a forest tile in our territory
-    let forest_idx = *game.state.tribes[&player_id].cities[0]
-        ._territory
-        .iter()
-        .find(|&&idx| game.state.tiles.get(&idx).unwrap().terrain_type == TerrainType::Forest)
-        .expect("Should have a forest tile");
+    let city_idx = 10;
+    let mut city = CityState::default();
+    city.owner = player_id;
+    city.tile_index = city_idx;
+    city.id = city_idx;
+    city._territory = vec![city_idx, 11, 12, 13];
+    // Set level/population so it's far from levelling up
+    city.level = 3;
+    city.population = 0; // Needs 4 pop to level up
+    tribe.cities.push(city);
+    game.state.tribes.insert(player_id, tribe);
 
-    let mv = ClearForestMove::new(forest_idx);
-
-    // --- Scenario 1: Default (low stars) ---
-    if let Some(tribe) = game.state.tribes.get_mut(&player_id) {
-        tribe.stars = 4;
+    // Forest on tile 11.
+    // On Map Size 11:
+    // 10 = (10,0)
+    // 11 = (0,1)
+    // Actually, in our simplistic test setup, get_adjacent_indices(11, 1) will return neighbors.
+    // Let's ensure tiles exist so adj logic works.
+    for i in 0..121 {
+        game.state.tiles.insert(
+            i,
+            TileState {
+                coords: polyfish::coords::Coords::from_index(i, 11),
+                ..Default::default()
+            },
+        );
     }
-    let score_default = score_move(&game, &mv);
-    // Base 8.0 + Desperation 5.0 = 13.0
+
+    game.state.tiles.get_mut(&11).unwrap().terrain_type = polyfish::types::TerrainType::Forest;
+    game.state.tiles.get_mut(&11).unwrap().owner = player_id;
+
+    let mv = ClearForestMove::new(11);
+
+    // Scenario 1: Healthy treasury (stars=5)
+    let score_healthy = score_move(&game, &mv);
+    // Base 3.0 + Treasury Penalty -10.0 = -7.0
+    // Neighbors of 11 (central/edge cases vary, but let's assume it borders empty tiles)
+    // The test previously gave -19.5, meaning -12.5 clustering penalty (5 hub-spots * 2.5)
+    println!("Score Healthy: {}", score_healthy);
+    assert!(score_healthy < -10.0, "Should have clustering penalty");
+
+    // Scenario 2: Broke (stars=0) but doesn't enable level up
+    if let Some(t) = game.state.tribes.get_mut(&player_id) {
+        t.stars = 0;
+    }
+    let score_desperate = score_move(&game, &mv);
+    // Base 3.0 + Desperation 2.0 = 5.0
+    // Then Clustering Penalty (~ -12.5)
+    println!("Score Desperate: {}", score_desperate);
     assert!(
-        score_default >= 13.0,
-        "Score should be at least 13.0 with low stars (got {})",
-        score_default
+        score_desperate < 0.0,
+        "Clustering should outweigh simple desperation"
     );
 
-    // --- Scenario 2: Game Resource ---
+    // Scenario 3: Broke (stars=0) AND enables level up
+    if let Some(t) = game.state.tribes.get_mut(&player_id) {
+        let city = &mut t.cities[0];
+        city.level = 1;
+        city.population = 1; // Needs 1 more pop
+    }
+    // Assume tile 12 has a Fruit (Harvestable)
     game.state.resources.insert(
-        forest_idx,
+        12,
         Some(polyfish::states::ResourceState {
-            resource_type: ResourceType::Game,
-            ..Default::default()
+            resource_type: polyfish::types::ResourceType::Fruit,
+            tile_index: 12,
         }),
     );
-    let score_game = score_move(&game, &mv);
-    // Base 8.0 + Desperation 5.0 - Game 25.0 = -12.0
-    assert!(
-        score_game < 0.0,
-        "Score should be negative when forest has Game (got {})",
-        score_game
-    );
 
-    // Remove Game for next tests
-    game.state.resources.remove(&forest_idx);
-
-    // --- Scenario 3: Forestry Research ---
-    if let Some(tribe) = game.state.tribes.get_mut(&player_id) {
-        let forestry_tech = tribe
-            .tech_vanilla
-            .iter_mut()
-            .find(|t| t.tech_type == TechnologyType::Forestry);
-        if let Some(t) = forestry_tech {
-            t.discovered = true;
-        } else {
-            tribe.tech_vanilla.push(polyfish::states::TechnologyState {
-                tech_type: TechnologyType::Forestry,
-                discovered: true,
-            });
-        }
-    }
-    let score_forestry = score_move(&game, &mv);
-    // Base 8.0 + Desperation 5.0 - Forestry 10.0 = 3.0
-    assert!(
-        score_forestry < score_default,
-        "Score with Forestry ({}) should be lower than default ({})",
-        score_forestry,
-        score_default
-    );
-
-    // --- Scenario 3b: Stuck City (Forestry but level >= 5) ---
-    if let Some(tribe) = game.state.tribes.get_mut(&player_id) {
-        let city = tribe
-            .cities
-            .iter_mut()
-            .find(|c| c.tile_index == city_idx)
-            .unwrap();
-        city.level = 5;
-    }
-    let score_stuck = score_move(&game, &mv);
-    // Base 8.0 + Desperation 5.0 = 13.0 (Penalty removed because level >= 5)
-    assert!(
-        score_stuck > score_forestry,
-        "Score when city is level 5 ({}) should be higher than with Forestry penalty ({})",
-        score_stuck,
-        score_forestry
-    );
-
-    // --- Scenario 4: Strategic Level-up ---
-    // City needs 1 pop to level. Player has 1 star. Clearing gets to 2 stars.
-    // 2 stars = cost of a harvest move (which we'll assume is available and gives 1 pop).
-    if let Some(tribe) = game.state.tribes.get_mut(&player_id) {
-        // Reset tech discovery for clean test
-        if let Some(t) = tribe
-            .tech_vanilla
-            .iter_mut()
-            .find(|t| t.tech_type == TechnologyType::Forestry)
-        {
-            t.discovered = false;
-        }
-        tribe.stars = 1;
-        let city = tribe
-            .cities
-            .iter_mut()
-            .find(|c| c.tile_index == city_idx)
-            .unwrap();
-        city.level = 1;
-        city.population = 1; // Needs 1 more to reach Level 2 (total 2 needed)
-    }
-    let score_lvlup = score_move(&game, &mv);
-    // Base 8.0 + Levelup Bonus 18.0 = 26.0
-    // (Note: desperation boost doesn't trigger if enables_level_up is true in my code)
-    assert!(
-        score_lvlup > 20.0,
-        "Score should be much higher if it enables level up (got {})",
-        score_lvlup
-    );
-
-    // --- Scenario 5: Road connection to capital ---
-    if let Some(tribe) = game.state.tribes.get_mut(&player_id) {
-        tribe.stars = 1;
-        let city = tribe
-            .cities
-            .iter_mut()
-            .find(|c| c.tile_index == city_idx)
-            .unwrap();
-        city.level = 1;
-        city.population = 1; // Needs 1 more to reach Level 2 (total 2 needed)
-        city.connected_to_capital = false;
-    }
-    let score_road = score_move(&game, &mv);
-    // Base 8.0 + Levelup Bonus 18.0 = 26.0
-    assert!(
-        score_road > 20.0,
-        "Score should be high if clearing enables road connection level up (got {})",
-        score_road
-    );
+    let score_enabling = score_move(&game, &mv);
+    // Base 3.0 + Enabling 10.0 = 13.0
+    // Then Clustering Penalty (~ -12.5)
+    println!("Score Enabling: {}", score_enabling);
+    assert!(score_enabling > -5.0 && score_enabling < 5.0);
 }

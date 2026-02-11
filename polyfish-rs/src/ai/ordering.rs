@@ -2,13 +2,15 @@ use crate::coords::Coords;
 use crate::functions::{calculate_combat_preview, get_adjacent_indices, get_structure_at};
 use crate::game::Game;
 use crate::moves::Move;
-use crate::settings::{get_resource_setting, get_structure_setting};
+use crate::settings::get_structure_setting;
 use crate::types::{AbilityType, ModeType, MoveType, RewardType, StructureType};
 
 /// Score a move based on heuristics for move ordering
 pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
     let state = &game.state;
     let move_type = mv.move_type();
+    let tribe_id = state.settings.current_player_turn_id;
+    let tribe = state.tribes.get(&tribe_id).unwrap();
 
     match move_type {
         MoveType::Reward => score_reward(state, mv),
@@ -100,37 +102,29 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                     AbilityType::Destroy => -10.0, // Risky
 
                     AbilityType::ClearForest => {
-                        let mut score = 8.0; // Lower base score
-                        let tribe_id = state.settings.current_player_turn_id;
-                        let tribe = state.tribes.get(&tribe_id);
-                        let stars = tribe.map(|t| t.stars).unwrap_or(0);
-                        let has_forestry = tribe.map_or(false, |t| {
-                            crate::settings::technology::has_technology(
-                                &t.tech_vanilla,
-                                crate::types::TechnologyType::Forestry,
-                            )
-                        });
+                        let mut score = 3.0; // Very low base score
+                        let stars = tribe.stars;
+                        let has_forestry = crate::settings::technology::has_technology(
+                            &tribe.tech_vanilla,
+                            crate::types::TechnologyType::Forestry,
+                        );
 
                         if let Ok(target) = mv.target_idx() {
-                            // 1. Penalty for destroying Game resource
-                            if let Some(Some(res)) = state.resources.get(&(target as i32)) {
-                                if res.resource_type == crate::types::ResourceType::Game {
-                                    score -= 25.0; // Heavy penalty
-                                }
+                            // 1. Penalty for destroying resource
+                            if let Some(Some(_res)) = state.resources.get(&(target as i32)) {
+                                score -= 50.0; // Heavy penalty
                             }
 
                             // 2. Penalty for wasting potential Lumber Hut site (if we have the tech)
                             // Skip penalty if city is already max targeted level (5)
                             let mut growth_useful = true;
-                            if let Some(t) = tribe {
-                                if let Some(city) = t
-                                    .cities
-                                    .iter()
-                                    .find(|c| c._territory.contains(&(target as i32)))
-                                {
-                                    if city.level >= 5 {
-                                        growth_useful = false;
-                                    }
+                            if let Some(city) = tribe
+                                .cities
+                                .iter()
+                                .find(|c| c._territory.contains(&(target as i32)))
+                            {
+                                if city.level >= 5 {
+                                    growth_useful = false;
                                 }
                             }
 
@@ -138,34 +132,70 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                                 score -= 10.0;
                             }
 
-                            // 3. Strategic bonus: extra star needed for a level-up
-                            if stars < 10 {
+                            // 3. Clustering Penalty: Don't remove forests near potential hub-spots (Sawmills)
+                            // If this forest borders an empty tile, see how many other forests/huts also border it.
+                            let adj = get_adjacent_indices(state, target as i32, 1);
+                            for empty_idx in adj
+                                .iter()
+                                .filter(|&&idx| get_structure_at(state, idx).is_none())
+                            {
+                                let neighbors_of_empty = get_adjacent_indices(state, *empty_idx, 1);
+                                let existing_prereqs = neighbors_of_empty
+                                    .iter()
+                                    .filter(|&&n| {
+                                        if n == target as i32 {
+                                            return false;
+                                        } // Don't count ourselves
+                                        if crate::functions::get_structure_type_at(state, n)
+                                            == Some(StructureType::LumberHut)
+                                        {
+                                            return true;
+                                        }
+                                        if let Some(tile) = state.tiles.get(&n) {
+                                            if tile.terrain_type
+                                                == crate::types::TerrainType::Forest
+                                            {
+                                                return true;
+                                            }
+                                        }
+                                        false
+                                    })
+                                    .count();
+
+                                // Penalty per hub-spot we "weaken"
+                                score -= (existing_prereqs as f32 + 1.0) * 2.5;
+                            }
+
+                            // 4. Strategic bonus: extra star needed for a level-up
+                            // ONLY if we are critically short on stars.
+                            if stars < 2 {
                                 let mut enables_level_up = false;
-                                if let Some(t) = tribe {
-                                    for city in &t.cities {
-                                        // If clearing gets us to the cost of a Road (2) or Harvest (2)
-                                        if stars == 1 {
-                                            let pop_needed = (city.level + 1) - city.population;
+                                for city in &tribe.cities {
+                                    // If clearing gets us to the cost of a Road (2) or Harvest (2)
+                                    if stars <= 1 {
+                                        let pop_needed =
+                                            (city.level + 1).saturating_sub(city.population);
 
-                                            // Scenario A: Enables a 2-star building/harvest
-                                            if pop_needed <= 2 {
-                                                enables_level_up = true;
-                                                break;
-                                            }
+                                        // Scenario A: Enables a 2-star building/harvest
+                                        if pop_needed <= 2 {
+                                            enables_level_up = true;
+                                            break;
+                                        }
 
-                                            // Scenario B: Enables a 2-star Road to connect capital (+1 pop)
-                                            if pop_needed == 1 && !city.connected_to_capital {
-                                                enables_level_up = true;
-                                                break;
-                                            }
+                                        // Scenario B: Enables a 2-star Road to connect capital (+1 pop)
+                                        if pop_needed == 1 && !city.connected_to_capital {
+                                            enables_level_up = true;
+                                            break;
                                         }
                                     }
                                 }
                                 if enables_level_up {
-                                    score += 18.0; // High priority to enable growth
-                                } else if stars < 5 {
-                                    score += 5.0; // Small desperation boost
+                                    score += 10.0; // Moderate priority to enable growth
+                                } else {
+                                    score += 2.0; // Small desperation boost
                                 }
+                            } else if stars >= 5 {
+                                score -= 10.0; // Don't decimate if we have money
                             }
                         }
                         score
@@ -179,17 +209,11 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
         }
 
         MoveType::Summon => {
-            let tribe_id = state.settings.current_player_turn_id;
-            let tribe = match state.tribes.get(&tribe_id) {
-                Some(t) => t,
-                None => return 5.0,
-            };
-
             if state.settings.turn < 2 {
                 return -10.0; // Favor development on turn 1
             }
 
-            let mut score = 15.0; // Lowered base score (Builds/Harvest are 22.0)
+            let mut score = 10.0; // Lowered base score (Builds/Harvest are 22.0)
 
             // 1. Enemy Proximity: High priority if threatened
             let mut threatened = false;
@@ -211,9 +235,9 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
             let unit_count = tribe.units.len();
             let city_count = tribe.cities.len();
             if unit_count < city_count + 1 {
-                score += 10.0; // Need at least one unit per city + explorer
+                score += 8.0; // Need at least one unit per city + explorer (Total 18.0 < 22.0)
             } else if unit_count > city_count * 2 && !threatened {
-                score -= 10.0; // Avoid bloat if safe
+                score -= 15.0; // Avoid bloat if safe
             }
 
             // 3. Super Unit / Giant preference
@@ -491,8 +515,6 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
 
         _ => 5.0,
     }
-
-    // get only MoveType::EndTurn
 }
 
 /// Score reward moves contextually based on game situation.
@@ -529,7 +551,7 @@ fn score_reward(state: &crate::states::GameState, mv: &dyn Move) -> f32 {
         RewardType::CityWall => {
             // Preferred if enemies are nearby
             let city_idx = mv.target_idx().unwrap_or(0) as i32;
-            let adj = get_adjacent_indices(state, city_idx, 3);
+            let adj = get_adjacent_indices(state, city_idx, 1);
             let enemies_nearby = adj
                 .iter()
                 .any(|&idx| crate::functions::get_enemy_at(state, idx, player_id).is_some());
