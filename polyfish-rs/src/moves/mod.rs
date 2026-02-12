@@ -189,7 +189,7 @@ fn generate_unit_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
             generate_attack_moves(state, unit, unit.coords.idx, moves);
         }
 
-        // 4. Steps
+        // 4. Steps (Escape units will have moved=false after attacking, so this covers them)
         if !unit.moved {
             generate_step_moves(state, unit, moves);
         }

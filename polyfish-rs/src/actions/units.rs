@@ -534,6 +534,7 @@ pub fn step_unit(
     // If unit has dash, we might want to reset it.
     if !involuntary
         && !old_moved
+        && !old_attacked  // prevent Dash after Escape (which resets moved but not attacked)
         && crate::functions::has_skill(
             {
                 let tribe = state.tribes.get(&unit_owner).unwrap();
@@ -1144,7 +1145,10 @@ pub fn attack_unit(
             let can_escape = crate::functions::has_skill(unit, SkillType::Escape)
                 && (!crate::functions::has_skill(unit, SkillType::Skate) || on_ice);
 
-            if !can_escape {
+            if can_escape {
+                // Escape: allow moving after attack — reset moved even if step_unit set it
+                unit.moved = false;
+            } else {
                 unit.moved = true;
             }
 

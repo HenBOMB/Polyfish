@@ -1,13 +1,16 @@
 CXX := g++
 CXXFLAGS := -O2 -std=c++17
 
-SRC :=  json.hpp polyfish-reader.cpp reader_util.cpp
+SRC := polyfish-reader.cpp reader_util.cpp
 OBJ := $(SRC:.cpp=.o)
-TARGET := polyfish-reader
+TARGETS := polyfish-reader polyfish-scanner
 
-all: $(TARGET)
+all: $(TARGETS)
 
-$(TARGET): $(OBJ)
+polyfish-reader: polyfish-reader.o reader_util.o
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+polyfish-scanner: polyfish-scanner.o reader_util.o
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 %.o: %.cpp

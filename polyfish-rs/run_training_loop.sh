@@ -4,10 +4,10 @@ set -e
 # Configuration
 ITERATIONS=100
 GAMES_PER_ITER=20
-export MCTS_ITERS=200 # 200 = Optimized for RunPod GPU (~0.8s per move)
-export RAYON_NUM_THREADS=12
-export OMP_NUM_THREADS=12
-export RUST_BACKTRACE=1 # Enable full panic backtraces
+export MCTS_ITERS=200
+export RAYON_NUM_THREADS=6
+export OMP_NUM_THREADS=6
+export RUST_BACKTRACE=1
 
 # Log all output to session.log while still showing on console
 LOG_FILE="session.log"
@@ -37,7 +37,8 @@ start_system_monitor() {
 start_system_monitor
 
 echo "Building binaries..."
-cargo build --bin polyfish --bin self_play --release --features cuda
+# cargo build --bin polyfish --bin self_play --release --features cuda
+cargo build --bin polyfish --bin self_play --release
 
 # Parse arguments
 FORCE_TRAIN=false
@@ -68,14 +69,25 @@ fi
 echo "Initializing/Checking model..."
 .venv/bin/python3 init_model.py
 
-for ((i=1; i<=ITERATIONS; i++))
+# Determine starting iteration from log
+START_ITER=1
+if [ -f "training_log.csv" ]; then
+    LAST_ITER=$(tail -n 1 training_log.csv | cut -d',' -f1)
+    if [[ "$LAST_ITER" =~ ^[0-9]+$ ]]; then
+        START_ITER=$((LAST_ITER + 1))
+        echo "Resuming from iteration $START_ITER"
+    fi
+fi
+
+for ((i=START_ITER; i<=ITERATIONS+START_ITER; i++))
 do
     echo "=================================================="
-    echo "Starting Iteration $i / $ITERATIONS"
+    echo "Starting Iteration $i"
     echo "=================================================="
     
     # 1. League Training Logic (20% chance)
     # Check if we have checkpoints to play against
+    mkdir -p checkpoints
     OPPONENT_FLAG=""
     MATCH_TYPE="Self-Play"
     
@@ -118,12 +130,15 @@ do
     echo "$i,$TIMESTAMP,$AVG_SCORE,$MAX_SCORE,$P1_AVG,$P2_AVG,$LOSS" >> training_log.csv
     echo "Iteration $i complete. Type: $MATCH_TYPE | Avg: $AVG_SCORE | Max: $MAX_SCORE | P1: $P1_AVG | P2: $P2_AVG | Loss: $LOSS"
     
-    # 4. Checkpoint (Every 5 iterations)
-    if (( i % 5 == 0 )); then
-        echo "Creating checkpoint for iteration $i..."
-        mkdir -p checkpoints
-        cp model.safetensors checkpoints/model_checkpoint_$i.safetensors
-    fi
+    # 4. Checkpoint (Every iteration for safety)
+    TS=$(date +%Y%m%d_%H%M%S)
+    echo "Creating checkpoint for iteration $i (Timestamp: $TS)..."
+    cp model.safetensors "checkpoints/model_checkpoint_iter${i}_${TS}.safetensors"
+    
+    # keep only last 20 checkpoints to save space
+    # Matches files with 'model_checkpoint_iter' in the name
+    ls -t checkpoints/model_checkpoint_iter*.safetensors | tail -n +21 | xargs -r rm
+
     
     # 4. Cleanup (Fresh Games Only)
     # Move played games to archive so train.py only sees new ones next time

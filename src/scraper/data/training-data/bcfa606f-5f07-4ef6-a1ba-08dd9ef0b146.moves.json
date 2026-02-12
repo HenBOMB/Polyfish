@@ -1,0 +1,752 @@
+[
+  {
+    "desc": "Train Warrior at 96",
+    "move": {
+      "moveType": 4,
+      "src": 96,
+      "type": 2
+    },
+    "player": 2,
+    "row": 2,
+    "type": "Summon"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 2,
+    "row": 4,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "Step: 91 -> 81",
+    "move": {
+      "moveType": 1,
+      "src": 91,
+      "target": 81
+    },
+    "player": 1,
+    "row": 4,
+    "type": "Step"
+  },
+  {
+    "desc": "Research Riding",
+    "move": {
+      "moveType": 7,
+      "type": 1
+    },
+    "player": 1,
+    "row": 5,
+    "type": "Research"
+  },
+  {
+    "desc": "Train Rider at 91",
+    "move": {
+      "moveType": 4,
+      "src": 91,
+      "type": 3
+    },
+    "player": 1,
+    "row": 6,
+    "type": "Summon"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 1,
+    "row": 8,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "Step: 84 -> 83",
+    "move": {
+      "moveType": 1,
+      "src": 84,
+      "target": 83
+    },
+    "player": 2,
+    "row": 8,
+    "type": "Step"
+  },
+  {
+    "desc": "Step: 96 -> 84",
+    "move": {
+      "moveType": 1,
+      "src": 96,
+      "target": 84
+    },
+    "player": 2,
+    "row": 12,
+    "type": "Step"
+  },
+  {
+    "desc": "Train Warrior at 96",
+    "move": {
+      "moveType": 4,
+      "src": 96,
+      "type": 2
+    },
+    "player": 2,
+    "row": 13,
+    "type": "Summon"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 2,
+    "row": 16,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "Step: 81 -> 69",
+    "move": {
+      "moveType": 1,
+      "src": 81,
+      "target": 69
+    },
+    "player": 1,
+    "row": 16,
+    "type": "Step"
+  },
+  {
+    "desc": "Step: 91 -> 82",
+    "move": {
+      "moveType": 1,
+      "src": 91,
+      "target": 82
+    },
+    "player": 1,
+    "row": 20,
+    "type": "Step"
+  },
+  {
+    "desc": "Attack: 82 -> 83",
+    "move": {
+      "moveType": 2,
+      "src": 82,
+      "target": 83
+    },
+    "player": 1,
+    "row": 27,
+    "type": "Attack"
+  },
+  {
+    "desc": "Step: 82 -> 59",
+    "move": {
+      "moveType": 1,
+      "src": 82,
+      "target": 59
+    },
+    "player": 1,
+    "row": 29,
+    "type": "Step"
+  },
+  {
+    "desc": "Train Rider at 91",
+    "move": {
+      "moveType": 4,
+      "src": 91,
+      "type": 3
+    },
+    "player": 1,
+    "row": 37,
+    "type": "Summon"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 1,
+    "row": 40,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "Step: 84 -> 72",
+    "move": {
+      "moveType": 1,
+      "src": 84,
+      "target": 72
+    },
+    "player": 2,
+    "row": 40,
+    "type": "Step"
+  },
+  {
+    "desc": "Step: 83 -> 73",
+    "move": {
+      "moveType": 1,
+      "src": 83,
+      "target": 73
+    },
+    "player": 2,
+    "row": 44,
+    "type": "Step"
+  },
+  {
+    "desc": "Step: 96 -> 108",
+    "move": {
+      "moveType": 1,
+      "src": 96,
+      "target": 108
+    },
+    "player": 2,
+    "row": 46,
+    "type": "Step"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 2,
+    "row": 52,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "Step: 69 -> 58",
+    "move": {
+      "moveType": 1,
+      "src": 69,
+      "target": 58
+    },
+    "player": 1,
+    "row": 53,
+    "type": "Step"
+  },
+  {
+    "desc": "Step: 91 -> 67",
+    "move": {
+      "moveType": 1,
+      "src": 91,
+      "target": 67
+    },
+    "player": 1,
+    "row": 65,
+    "type": "Step"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 1,
+    "row": 71,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "Research Hunting",
+    "move": {
+      "moveType": 7,
+      "type": 15
+    },
+    "player": 2,
+    "row": 71,
+    "type": "Research"
+  },
+  {
+    "desc": "Research Climbing",
+    "move": {
+      "moveType": 7,
+      "type": 20
+    },
+    "player": 2,
+    "row": 83,
+    "type": "Research"
+  },
+  {
+    "desc": "Step: 72 -> 60",
+    "move": {
+      "moveType": 1,
+      "src": 72,
+      "target": 60
+    },
+    "player": 2,
+    "row": 84,
+    "type": "Step"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 2,
+    "row": 104,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "Attack: 59 -> 60",
+    "move": {
+      "moveType": 2,
+      "src": 59,
+      "target": 60
+    },
+    "player": 1,
+    "row": 105,
+    "type": "Attack"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 1,
+    "row": 106,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "Step: 73 -> 63",
+    "move": {
+      "moveType": 1,
+      "src": 73,
+      "target": 63
+    },
+    "player": 2,
+    "row": 106,
+    "type": "Step"
+  },
+  {
+    "desc": "Step: 108 -> 96",
+    "move": {
+      "moveType": 1,
+      "src": 108,
+      "target": 96
+    },
+    "player": 2,
+    "row": 110,
+    "type": "Step"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 2,
+    "row": 112,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "Step: 67 -> 69",
+    "move": {
+      "moveType": 1,
+      "src": 67,
+      "target": 69
+    },
+    "player": 1,
+    "row": 112,
+    "type": "Step"
+  },
+  {
+    "desc": "Attack: 59 -> 60",
+    "move": {
+      "moveType": 2,
+      "src": 59,
+      "target": 60
+    },
+    "player": 1,
+    "row": 113,
+    "type": "Attack"
+  },
+  {
+    "desc": "Step: 69 -> 89",
+    "move": {
+      "moveType": 1,
+      "src": 69,
+      "target": 89
+    },
+    "player": 1,
+    "row": 115,
+    "type": "Step"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 1,
+    "row": 119,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 2,
+    "row": 120,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "Step: 58 -> 59",
+    "move": {
+      "moveType": 1,
+      "src": 58,
+      "target": 59
+    },
+    "player": 1,
+    "row": 120,
+    "type": "Step"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 1,
+    "row": 128,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "Research Forestry",
+    "move": {
+      "moveType": 7,
+      "type": 16
+    },
+    "player": 2,
+    "row": 128,
+    "type": "Research"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 2,
+    "row": 148,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "Step: 89 -> 77",
+    "move": {
+      "moveType": 1,
+      "src": 89,
+      "target": 77
+    },
+    "player": 1,
+    "row": 148,
+    "type": "Step"
+  },
+  {
+    "desc": "Step: 59 -> 49",
+    "move": {
+      "moveType": 1,
+      "src": 59,
+      "target": 49
+    },
+    "player": 1,
+    "row": 149,
+    "type": "Step"
+  },
+  {
+    "desc": "Train Rider at 91",
+    "move": {
+      "moveType": 4,
+      "src": 91,
+      "type": 3
+    },
+    "player": 1,
+    "row": 155,
+    "type": "Summon"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 1,
+    "row": 160,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "Step: 63 -> 53",
+    "move": {
+      "moveType": 1,
+      "src": 63,
+      "target": 53
+    },
+    "player": 2,
+    "row": 160,
+    "type": "Step"
+  },
+  {
+    "desc": "Step: 96 -> 84",
+    "move": {
+      "moveType": 1,
+      "src": 96,
+      "target": 84
+    },
+    "player": 2,
+    "row": 167,
+    "type": "Step"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 2,
+    "row": 174,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "Step: 91 -> 111",
+    "move": {
+      "moveType": 1,
+      "src": 91,
+      "target": 111
+    },
+    "player": 1,
+    "row": 181,
+    "type": "Step"
+  },
+  {
+    "desc": "Step: 49 -> 39",
+    "move": {
+      "moveType": 1,
+      "src": 49,
+      "target": 39
+    },
+    "player": 1,
+    "row": 186,
+    "type": "Step"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 1,
+    "row": 198,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "Step: 53 -> 54",
+    "move": {
+      "moveType": 1,
+      "src": 53,
+      "target": 54
+    },
+    "player": 2,
+    "row": 198,
+    "type": "Step"
+  },
+  {
+    "desc": "Step: 84 -> 73",
+    "move": {
+      "moveType": 1,
+      "src": 84,
+      "target": 73
+    },
+    "player": 2,
+    "row": 201,
+    "type": "Step"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 2,
+    "row": 207,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "Step: 39 -> 29",
+    "move": {
+      "moveType": 1,
+      "src": 39,
+      "target": 29
+    },
+    "player": 1,
+    "row": 207,
+    "type": "Step"
+  },
+  {
+    "desc": "Research Organization",
+    "move": {
+      "moveType": 7,
+      "type": 6
+    },
+    "player": 1,
+    "row": 213,
+    "type": "Research"
+  },
+  {
+    "desc": "Step: 111 -> 91",
+    "move": {
+      "moveType": 1,
+      "src": 111,
+      "target": 91
+    },
+    "player": 1,
+    "row": 228,
+    "type": "Step"
+  },
+  {
+    "desc": "Step: 77 -> 56",
+    "move": {
+      "moveType": 1,
+      "src": 77,
+      "target": 56
+    },
+    "player": 1,
+    "row": 229,
+    "type": "Step"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 1,
+    "row": 253,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "Research Archery",
+    "move": {
+      "moveType": 7,
+      "type": 18
+    },
+    "player": 2,
+    "row": 300,
+    "type": "Research"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 2,
+    "row": 301,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 1,
+    "row": 302,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "Step: 73 -> 61",
+    "move": {
+      "moveType": 1,
+      "src": 73,
+      "target": 61
+    },
+    "player": 2,
+    "row": 302,
+    "type": "Step"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 2,
+    "row": 304,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "Step: 56 -> 44",
+    "move": {
+      "moveType": 1,
+      "src": 56,
+      "target": 44
+    },
+    "player": 1,
+    "row": 307,
+    "type": "Step"
+  },
+  {
+    "desc": "Step: 91 -> 92",
+    "move": {
+      "moveType": 1,
+      "src": 91,
+      "target": 92
+    },
+    "player": 1,
+    "row": 309,
+    "type": "Step"
+  },
+  {
+    "desc": "Step: 29 -> 17",
+    "move": {
+      "moveType": 1,
+      "src": 29,
+      "target": 17
+    },
+    "player": 1,
+    "row": 317,
+    "type": "Step"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 1,
+    "row": 329,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "Step: 60 -> 50",
+    "move": {
+      "moveType": 1,
+      "src": 60,
+      "target": 50
+    },
+    "player": 2,
+    "row": 329,
+    "type": "Step"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 2,
+    "row": 330,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "Research Roads",
+    "move": {
+      "moveType": 7,
+      "type": 4
+    },
+    "player": 1,
+    "row": 345,
+    "type": "Research"
+  },
+  {
+    "desc": "Step: 17 -> 18",
+    "move": {
+      "moveType": 1,
+      "src": 17,
+      "target": 18
+    },
+    "player": 1,
+    "row": 346,
+    "type": "Step"
+  },
+  {
+    "desc": "Step: 92 -> 69",
+    "move": {
+      "moveType": 1,
+      "src": 92,
+      "target": 69
+    },
+    "player": 1,
+    "row": 368,
+    "type": "Step"
+  }
+]

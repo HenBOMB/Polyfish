@@ -50,7 +50,7 @@ fn play_single_game(
     let mut game = Game::new();
     game.state = polyfish::mapgen::generate(gen_settings);
     game.state.settings.mode = polyfish::types::ModeType::Perfection;
-    game.state.settings.max_turns = 15;
+    game.state.settings.max_turns = 20;
     game.post_load();
 
     // Create two agents (they might share the same network, or be different)

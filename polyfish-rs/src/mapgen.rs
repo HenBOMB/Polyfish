@@ -244,9 +244,9 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                 // First player picks randomly
                 rng.gen_range(0..available_quads.len())
             } else {
-                // Subsequent players pick the quadrant that maximizes distance to existing capitals
-                // We calculate the center of the available quadrants and compare to existing capitals
-                let mut best_idx = 0;
+                // Subsequent players pick a quadrant that is reasonably far from existing capitals.
+                // We calculate the center of the available quadrants and compare to existing capitals.
+                let mut quads_with_dist = Vec::new();
                 let mut max_min_dist = -1;
 
                 for (idx, &quad) in available_quads.iter().enumerate() {
@@ -261,15 +261,22 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                         min_dist_to_capitals = min_dist_to_capitals
                             .min(get_squared_euclidean_distance(center_idx, cap, size));
                     }
-
                     if min_dist_to_capitals > max_min_dist {
                         max_min_dist = min_dist_to_capitals;
-                        best_idx = idx;
                     }
+                    quads_with_dist.push((idx, min_dist_to_capitals));
                 }
-                // Add a little randomness if multiple quadrants are equally good (like in 4 corners)
-                // but for 1v1 this effectively forces opposite corners.
-                best_idx
+
+                // Keep quads that are at least 50% of the maximum minimum distance found.
+                // In a 2x2 grid, this allows adjacent quadrants (dist 1) as well as opposite (dist 2).
+                let threshold = (max_min_dist as f32 * 0.5) as i32;
+                let candidates: Vec<usize> = quads_with_dist
+                    .into_iter()
+                    .filter(|&(_, dist)| dist >= threshold)
+                    .map(|(idx, _)| idx)
+                    .collect();
+
+                candidates[rng.gen_range(0..candidates.len())]
             };
 
             let quad = available_quads.remove(q_idx);
@@ -627,7 +634,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                     let mut score = dist_score + coastal_bonus + landmass_bonus;
 
                     // Strong penalty for being too close in 1v1
-                    if settings.tribes.len() == 2 && dist_score < size / 2 {
+                    if settings.tribes.len() == 2 && dist_score < size / 3 {
                         score -= 50;
                     }
 
@@ -685,7 +692,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                     let new_min_dist = old_dist.min(new_dist);
 
                     let mut new_score = new_min_dist + coastal_bonus + landmass_bonus;
-                    if settings.tribes.len() == 2 && new_min_dist < size / 2 {
+                    if settings.tribes.len() == 2 && new_min_dist < size / 3 {
                         new_score -= 50;
                     }
                     *score = new_score;
@@ -742,7 +749,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                     let mut score = dist_score + coastal_bonus;
 
                     // Strong penalty for being too close in 1v1
-                    if settings.tribes.len() == 2 && dist_score < size / 2 {
+                    if settings.tribes.len() == 2 && dist_score < size / 3 {
                         score -= 50;
                     }
 
@@ -793,7 +800,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                     let new_min_dist = old_dist.min(new_dist);
 
                     let mut new_score = new_min_dist + coastal_bonus;
-                    if settings.tribes.len() == 2 && new_min_dist < size / 2 {
+                    if settings.tribes.len() == 2 && new_min_dist < size / 3 {
                         new_score -= 50;
                     }
                     *score = new_score;
