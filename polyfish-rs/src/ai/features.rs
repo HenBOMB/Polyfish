@@ -5,7 +5,7 @@
 //!
 //! Channel ranges are dynamically computed from enum variants at compile time.
 
-use crate::functions::get_unit_max_health;
+use crate::functions::{get_city_production, get_unit_max_health};
 use crate::states::{GameState, PlayerId};
 use crate::types::{
     EffectType, ModeType, ResourceType, StructureType, TerrainType, TribeType, UnitType,
@@ -551,7 +551,7 @@ pub fn state_to_tensor(
                 CH_CITY_PRODUCTION,
                 x,
                 y,
-                (city.production as f32 / 10.0).clamp(0.0, 1.0),
+                (get_city_production(state, city) as f32 / 10.0).clamp(0.0, 1.0),
             );
             set_feat(
                 &mut data,

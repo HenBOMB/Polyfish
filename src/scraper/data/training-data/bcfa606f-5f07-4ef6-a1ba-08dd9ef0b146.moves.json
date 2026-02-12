@@ -1,5 +1,14 @@
 [
   {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 1,
+    "row": 2,
+    "type": "EndTurn"
+  },
+  {
     "desc": "Train Warrior at 96",
     "move": {
       "moveType": 4,
@@ -99,7 +108,7 @@
       "moveType": 10
     },
     "player": 2,
-    "row": 16,
+    "row": 15,
     "type": "EndTurn"
   },
   {
@@ -163,7 +172,7 @@
       "moveType": 10
     },
     "player": 1,
-    "row": 40,
+    "row": 39,
     "type": "EndTurn"
   },
   {
@@ -276,7 +285,7 @@
       "moveType": 10
     },
     "player": 2,
-    "row": 104,
+    "row": 103,
     "type": "EndTurn"
   },
   {
@@ -417,7 +426,7 @@
       "moveType": 10
     },
     "player": 2,
-    "row": 148,
+    "row": 146,
     "type": "EndTurn"
   },
   {
@@ -459,7 +468,7 @@
       "moveType": 10
     },
     "player": 1,
-    "row": 160,
+    "row": 158,
     "type": "EndTurn"
   },
   {
@@ -490,7 +499,7 @@
       "moveType": 10
     },
     "player": 2,
-    "row": 174,
+    "row": 170,
     "type": "EndTurn"
   },
   {
@@ -521,7 +530,7 @@
       "moveType": 10
     },
     "player": 1,
-    "row": 198,
+    "row": 197,
     "type": "EndTurn"
   },
   {
@@ -552,7 +561,7 @@
       "moveType": 10
     },
     "player": 2,
-    "row": 207,
+    "row": 205,
     "type": "EndTurn"
   },
   {
@@ -597,6 +606,24 @@
     "player": 1,
     "row": 229,
     "type": "Step"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 1,
+    "row": 251,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 2,
+    "row": 252,
+    "type": "EndTurn"
   },
   {
     "desc": "End Turn",
@@ -656,6 +683,24 @@
     "type": "EndTurn"
   },
   {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 1,
+    "row": 305,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 2,
+    "row": 306,
+    "type": "EndTurn"
+  },
+  {
     "desc": "Step: 56 -> 44",
     "move": {
       "moveType": 1,
@@ -694,6 +739,24 @@
       "moveType": 10
     },
     "player": 1,
+    "row": 326,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 2,
+    "row": 328,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 1,
     "row": 329,
     "type": "EndTurn"
   },
@@ -718,6 +781,24 @@
     "type": "EndTurn"
   },
   {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 1,
+    "row": 333,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 2,
+    "row": 334,
+    "type": "EndTurn"
+  },
+  {
     "desc": "Research Roads",
     "move": {
       "moveType": 7,
@@ -737,6 +818,24 @@
     "player": 1,
     "row": 346,
     "type": "Step"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 1,
+    "row": 366,
+    "type": "EndTurn"
+  },
+  {
+    "desc": "End Turn",
+    "move": {
+      "moveType": 10
+    },
+    "player": 2,
+    "row": 367,
+    "type": "EndTurn"
   },
   {
     "desc": "Step: 92 -> 69",

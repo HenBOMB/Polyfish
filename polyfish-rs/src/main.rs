@@ -102,6 +102,8 @@ async fn main() {
         .route("/replay/save", post(save_replay_endpoint))
         .route("/replay/load", post(load_replay_endpoint))
         .route("/replay/analyze", post(analyze_replay_step))
+        .route("/replay/load_initial", post(load_initial_endpoint))
+        .route("/replay/list_initial", get(list_initial_endpoint))
         .route("/trainer/hint", post(get_trainer_hint))
         .nest_service("/", ServeDir::new("../src/public"))
         .layer(CorsLayer::permissive())
@@ -794,10 +796,163 @@ async fn load_replay_endpoint(
     };
 
     match std::fs::read_to_string(&path) {
+        Ok(json) => match serde_json::from_str::<polyfish::states::GameState>(&json) {
+            Ok(loaded_state) => {
+                game.state = loaded_state;
+                game.post_load();
+
+                let mut tiles: Vec<_> = game.state.tiles.values().collect();
+                tiles.sort_by_key(|t| t.coords.idx);
+
+                let legal_moves: Vec<_> =
+                    game.legal_moves().iter().map(|m| m.serialize()).collect();
+
+                let evaluation = build_evaluation_json(&game.state);
+
+                Json(serde_json::json!({
+                    "status": "success",
+                    "filename": path,
+                    "state": {
+                        "settings": game.state.settings,
+                        "tiles": tiles,
+                        "structures": game.state.structures,
+                        "resources": game.state.resources,
+                        "tribes": game.state.tribes,
+                        "_hiddenResources": game.state._hidden_resources,
+                        "_prediction": game.state._prediction,
+                        "_messages": game.state._messages,
+                        "history": game.state.history,
+                    },
+                    "legalMoves": legal_moves,
+                    "evaluation": evaluation
+                }))
+            }
+            Err(e) => Json(
+                serde_json::json!({ "status": "error", "message": format!("Failed to parse replay: {}", e) }),
+            ),
+        },
+        Err(e) => Json(
+            serde_json::json!({ "status": "error", "message": format!("Failed to read replay file: {}", e) }),
+        ),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct LoadInitialParams {
+    id: String,
+}
+
+async fn load_initial_endpoint(
+    State(state): State<Arc<AppState>>,
+    Json(params): Json<LoadInitialParams>,
+) -> Json<Value> {
+    let mut game = state.game.lock().unwrap();
+
+    // Sanitize ID (simple alphanumeric check)
+    if !params.id.chars().all(|c| c.is_alphanumeric() || c == '-') {
+        return Json(serde_json::json!({ "status": "error", "message": "Invalid Game ID format" }));
+    }
+
+    // Construct path: ../src/scraper/data/training-data/{id}.initial.json
+    // We are running from polyfish-rs/
+    let path = format!(
+        "../src/scraper/data/training-data/{}.initial.json",
+        params.id
+    );
+
+    match std::fs::read_to_string(&path) {
         Ok(json) => {
-            match serde_json::from_str::<polyfish::states::GameState>(&json) {
-                Ok(loaded_state) => {
-                    game.state = loaded_state;
+            let mut root: Value = serde_json::from_str(&json).unwrap_or_default();
+
+            // --- FIXUP LOGIC START ---
+            let tile_count = root["tiles"].as_object().map(|o| o.len()).unwrap_or(0);
+            let map_size = (tile_count as f64).sqrt() as i32;
+
+            // Missing fields
+            if let Some(obj) = root.as_object_mut() {
+                if !obj.contains_key("settings") {
+                    obj.insert("settings".into(), serde_json::json!({}));
+                }
+                let settings = obj.get_mut("settings").unwrap().as_object_mut().unwrap();
+                // Ensure critical settings exist
+                if !settings.contains_key("version") {
+                    settings.insert("version".into(), serde_json::json!(0));
+                }
+                if !settings.contains_key("size") {
+                    settings.insert("size".into(), serde_json::json!(map_size));
+                }
+                //if !settings.contains_key("currentPlayerTurnId") {
+                // override to make sure p1 always starts
+                settings.insert("currentPlayerTurnId".into(), serde_json::json!(1));
+                //}
+
+                // Add fields stripped by scraper
+                if !settings.contains_key("_areYouSure") {
+                    settings.insert("_areYouSure".into(), serde_json::json!(false));
+                }
+                if !settings.contains_key("_gameOver") {
+                    settings.insert("_gameOver".into(), serde_json::json!(false));
+                }
+                if !settings.contains_key("_fow") {
+                    settings.insert("_fow".into(), serde_json::json!(true));
+                }
+                if !settings.contains_key("_lastPlayerTurnId") {
+                    settings.insert("_lastPlayerTurnId".into(), serde_json::json!(0));
+                }
+                if !settings.contains_key("_recentMoves") {
+                    settings.insert("_recentMoves".into(), serde_json::json!([]));
+                }
+                if !settings.contains_key("_maxTribeCount") {
+                    settings.insert("_maxTribeCount".into(), serde_json::json!(2));
+                }
+            }
+
+            // Fix cities: inject missing "id" field (equal to tileIndex)
+            if let Some(tribes) = root["tribes"].as_object_mut() {
+                for (_, tribe) in tribes.iter_mut() {
+                    if let Some(cities) = tribe["cities"].as_array_mut() {
+                        for city in cities {
+                            if let Some(city_obj) = city.as_object_mut() {
+                                if !city_obj.contains_key("id") {
+                                    if let Some(tid) = city_obj.get("tileIndex") {
+                                        city_obj.insert("id".into(), tid.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Recursive function to fix [x, y] coordinates into [x, y, idx]
+            fn fix_coords(val: &mut Value, map_size: i32) {
+                match val {
+                    Value::Array(arr) => {
+                        if arr.len() == 2 && arr[0].is_number() && arr[1].is_number() {
+                            let x = arr[0].as_i64().unwrap_or(0) as i32;
+                            let y = arr[1].as_i64().unwrap_or(0) as i32;
+                            let idx = y * map_size + x;
+                            arr.push(serde_json::json!(idx));
+                        } else {
+                            for item in arr {
+                                fix_coords(item, map_size);
+                            }
+                        }
+                    }
+                    Value::Object(obj) => {
+                        for (_, v) in obj.iter_mut() {
+                            fix_coords(v, map_size);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            fix_coords(&mut root, map_size);
+
+            match Game::from_json(&serde_json::to_string(&root).unwrap()) {
+                Ok(new_game) => {
+                    game.state = new_game.state;
                     game.post_load();
 
                     let mut tiles: Vec<_> = game.state.tiles.values().collect();
@@ -806,9 +961,16 @@ async fn load_replay_endpoint(
                         game.legal_moves().iter().map(|m| m.serialize()).collect();
                     let evaluation = build_evaluation_json(&game.state);
 
+                    let moves_path =
+                        format!("../src/scraper/data/training-data/{}.moves.json", params.id);
+                    let recorded_moves = std::fs::read_to_string(&moves_path)
+                        .ok()
+                        .and_then(|m| serde_json::from_str::<Value>(&m).ok())
+                        .unwrap_or(serde_json::json!([]));
+
                     Json(serde_json::json!({
                         "status": "success",
-                        "filename": path, // Return filename for future calls
+                        "recordedMoves": recorded_moves,
                         "state": {
                             "settings": game.state.settings,
                             "tiles": tiles,
@@ -818,20 +980,21 @@ async fn load_replay_endpoint(
                             "_hiddenResources": game.state._hidden_resources,
                             "_prediction": game.state._prediction,
                             "_messages": game.state._messages,
-                            "history": game.state.history, // Explicitly include history
                         },
                         "legalMoves": legal_moves,
                         "evaluation": evaluation
                     }))
                 }
-                Err(e) => Json(
-                    serde_json::json!({ "status": "error", "message": format!("Failed to parse replay: {}", e) }),
-                ),
+                Err(e) => Json(serde_json::json!({
+                   "status": "error",
+                   "message": format!("Failed to parse initial state: {}", e)
+                })),
             }
         }
-        Err(e) => Json(
-            serde_json::json!({ "status": "error", "message": format!("Failed to read replay file: {}", e) }),
-        ),
+        Err(e) => Json(serde_json::json!({
+            "status": "error",
+            "message": format!("Failed to read file {}: {}", path, e)
+        })),
     }
 }
 
@@ -986,5 +1149,28 @@ async fn analyze_replay_step(
         },
         "mctsAnalysis": mcts_analysis,
         "evaluation": build_evaluation_json(&game.state)
+    }))
+}
+
+async fn list_initial_endpoint() -> Json<Value> {
+    let path = "../src/scraper/data/training-data/";
+    let mut files = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            if let Ok(name) = entry.file_name().into_string() {
+                if name.ends_with(".initial.json") {
+                    let id = name.replace(".initial.json", "");
+                    files.push(id);
+                }
+            }
+        }
+    }
+
+    files.sort();
+
+    Json(serde_json::json!({
+        "status": "success",
+        "files": files
     }))
 }

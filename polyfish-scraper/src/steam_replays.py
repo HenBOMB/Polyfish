@@ -210,6 +210,21 @@ def print_diffs(diffs):
 # -1 = loss
 #  0 = draw
 #  2 = not yet defined
+def save_initial_state(state: dict, file_id: Optional[str] = None):
+    game_id = file_id if file_id else state['settings']['gameId']
+    path = DIR_ROOT + f"{game_id}.initial.json"
+    
+    # We want a clean version similar to base state
+    copy = json.loads(json.dumps(state))
+    for k in ['_recentMoves', '_pendingRewards', '_fow', '_areYouSure', '_gameOver',
+              '_lastPlayerTurnId', 'gameName', 'version', 'gameId', 'seed',
+              '_maxTribeCount', 'winByCapital', 'winByExtermination']:
+        copy.get('settings', {}).pop(k, None)
+
+    with open(path, "w") as f:
+        json.dump(copy, f, indent=2)
+    print(f"Saved initial state to {path}")
+
 def save_training_data(state: dict, old_state: Optional[dict] = None, winner_id: Optional[str] = None, file_id: Optional[str] = None):
     game_id = file_id if file_id else state['settings']['gameId']
     path = DIR_ROOT + f"{game_id}.csv"
@@ -364,6 +379,7 @@ def magic(target: Literal['discord', 'polysseum', 'reddit', 'yt', '*']):
                 if cur_turn != 0:
                     old_state = state
                     game_states.append((state, None))
+                    save_initial_state(state, file_id=file_id)
                 continue
 
             # Phase 2: Collecting replay states
@@ -512,6 +528,7 @@ if __name__ == "__main__":
                 if cur_turn != 0:
                     old_state = state
                     game_states.append((state, None))
+                    save_initial_state(state, file_id=file_id)
                 continue
 
             # Phase 2: Collecting replay states

@@ -458,13 +458,17 @@ pub fn get_city_production(state: &GameState, city: &CityState) -> i32 {
         return 0;
     }
 
-    let mut prod = city.production;
+    let mut prod = city.level;
     // Capitals get a +1 star bonus
     if let Some(tile) = state.tiles.get(&city.tile_index) {
         if tile.capital_of == city.owner && tile.capital_of != 0 {
             prod += 1;
         }
     }
+
+    let rewards = city.rewards.iter().filter(|r| **r == RewardType::Park);
+
+    prod += rewards.count() as i32;
 
     // Clathrus and Market bonuses
     for &idx in &city._territory {

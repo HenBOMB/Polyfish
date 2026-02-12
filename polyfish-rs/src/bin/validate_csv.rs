@@ -204,11 +204,7 @@ fn parse_delta(delta: &Value, keys: &[String]) -> DeltaInfo {
         }
 
         // Reward detection
-        if k.contains(".explorers")
-            || k.contains(".workshop")
-            || k.contains(".cityWall")
-            || k.contains(".resources") && k.contains("tribes.")
-        {
+        if k.contains(".explorers") || k.contains(".workshop") || k.contains(".cityWall") {
             has_reward = true;
         }
     }
@@ -437,6 +433,16 @@ fn match_build(legal: &[Box<dyn Move>], tile: i32) -> Option<usize> {
     None
 }
 
+/// Find a Reward move (e.g. choose explorer)
+fn match_reward(legal: &[Box<dyn Move>]) -> Option<usize> {
+    for (i, m) in legal.iter().enumerate() {
+        if m.move_type() == MoveType::Reward {
+            return Some(i);
+        }
+    }
+    None
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
@@ -479,24 +485,24 @@ fn main() {
 
     // Detect starting player from first action delta
     let mut starting_player = 1i32;
-    for i in (base_idx + 1)..end_idx {
-        let dp: Vec<&str> = lines[i].splitn(3, ',').collect();
-        if dp.len() < 3 {
-            continue;
-        }
-        let d: Value = serde_json::from_str(dp[2]).unwrap_or_default();
-        let keys: Vec<String> = d
-            .as_object()
-            .map(|o| o.keys().cloned().collect())
-            .unwrap_or_default();
-        let info = parse_delta(&d, &keys);
-        if !info.is_noise {
-            if let Some(p) = info.player {
-                starting_player = p;
-                break;
-            }
-        }
-    }
+    // for i in (base_idx + 1)..end_idx {
+    //     let dp: Vec<&str> = lines[i].splitn(3, ',').collect();
+    //     if dp.len() < 3 {
+    //         continue;
+    //     }
+    //     let d: Value = serde_json::from_str(dp[2]).unwrap_or_default();
+    //     let keys: Vec<String> = d
+    //         .as_object()
+    //         .map(|o| o.keys().cloned().collect())
+    //         .unwrap_or_default();
+    //     let info = parse_delta(&d, &keys);
+    //     if !info.is_noise {
+    //         if let Some(p) = info.player {
+    //             starting_player = p;
+    //             break;
+    //         }
+    //     }
+    // }
 
     add_missing_fields(&mut root, map_size);
     root["settings"]["currentPlayerTurnId"] = serde_json::json!(starting_player);
@@ -552,15 +558,6 @@ fn main() {
             .unwrap_or_default();
         let info = parse_delta(&delta, &keys);
 
-        if info.is_noise {
-            // Track stars even from noise (income changes, etc)
-            if let (Some(p), Some(s)) = (info.player, info.new_stars) {
-                last_known_stars.insert(p, s);
-            }
-            noise_count += 1;
-            continue;
-        }
-
         // Ensure correct player's turn
         if let Some(ap) = info.player {
             let cp = game.current_player_id();
@@ -587,11 +584,16 @@ fn main() {
                     failed_count += 1;
                     continue;
                 }
-            } else {
-                // If the very first action is by P2 (common in "Bullet" games where P1 skips T0),
-                // we've already handled the auto-EndTurn above, giving P1 their passive income.
-                // The sync logic below will further correct any production mismatch.
             }
+        }
+
+        if info.is_noise {
+            // Track stars even from noise (income changes, etc)
+            if let (Some(p), Some(s)) = (info.player, info.new_stars) {
+                last_known_stars.insert(p, s);
+            }
+            noise_count += 1;
+            continue;
         }
 
         let cp = game.current_player_id();
@@ -642,12 +644,12 @@ fn main() {
         } else if info.has_enemy_damage {
             // Attack result (enemy health changed)
             match_attack(&legal, &info.tiles_gained)
-        } else if let Some(tile) = info.resource_removed {
-            // Harvest
-            match_harvest(&legal, tile)
         } else if let Some(tile) = info.structure_added {
             // Build
             match_build(&legal, tile)
+        } else if let Some(tile) = info.resource_removed {
+            // Harvest
+            match_harvest(&legal, tile)
         } else if !info.tiles_gained.is_empty() {
             // Step without vacated tile? Try step first, then summon
             let step = match_step(&legal, &game, &info.tiles_gained, &info.tiles_vacated);
@@ -662,6 +664,9 @@ fn main() {
             } else {
                 step
             }
+        } else if info.has_reward {
+            // Reward (Explorer, Workshop, etc)
+            match_reward(&legal)
         } else {
             None
         };
@@ -680,6 +685,17 @@ fn main() {
             }
             moves_played.push((delta_row, cp, mt, desc, serialized));
         } else {
+            // Acceptable failure: if it was flagged as a reward but no reward move exists,
+            // it's likely just an automated update (like explorers moving or relations updating).
+            let has_reward_move = legal.iter().any(|m| m.move_type() == MoveType::Reward);
+            if info.has_reward && !has_reward_move {
+                if let (Some(p), Some(s)) = (info.player, info.new_stars) {
+                    last_known_stars.insert(p, s);
+                }
+                noise_count += 1;
+                continue;
+            }
+
             if verbose {
                 eprintln!(
                     "  ❌ Row {:3}: No match | gained={:?} vacated={:?} tech={} dmg={} stars={:?}",
