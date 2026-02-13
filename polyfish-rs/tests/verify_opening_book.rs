@@ -25,7 +25,7 @@ fn test_imperius_opening() {
         .unwrap();
 
     // === TURN 1: Expect Harvest or Step ===
-    game.state.settings.turn = 1;
+    game.state.settings.turn = 0;
     game.state.settings.current_player_turn_id = imp_id;
 
     // Ensure we have money for Harvest (typically 2 stars)
@@ -80,7 +80,7 @@ fn test_imperius_opening() {
     }
 
     // === TURN 2: Expect Summon or Step ===
-    game.state.settings.turn = 2;
+    game.state.settings.turn = 1;
 
     // Ensure we have money for Summon (Warrior = 2 stars)
     game.state.tribes.get_mut(&imp_id).unwrap().stars = 5;
@@ -124,7 +124,7 @@ fn test_oumaji_opening() {
         .unwrap();
 
     // === TURN 1: Expect Harvest or Step ===
-    game.state.settings.turn = 1;
+    game.state.settings.turn = 0;
     game.state.settings.current_player_turn_id = oum_id;
     game.state.tribes.get_mut(&oum_id).unwrap().stars = 5;
 
@@ -139,8 +139,8 @@ fn test_oumaji_opening() {
 
     // === TURN 2: Expect Step ONLY (Oumaji typically doesn't summon T2 in book?) ===
     // Checking opening.rs:
-    // TribeType::Oumaji => match turn { 2 => &[MoveType::Step] }
-    game.state.settings.turn = 2;
+    // TribeType::Oumaji => match turn { 1 => &[MoveType::Step] }
+    game.state.settings.turn = 1;
     let rec_moves_t2 = Book::recommend(&game);
 
     for m in &rec_moves_t2 {

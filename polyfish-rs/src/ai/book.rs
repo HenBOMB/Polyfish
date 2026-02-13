@@ -46,65 +46,65 @@ impl Book {
     fn get_book_moves(tribe: TribeType, turn: i32) -> &'static [MoveType] {
         match tribe {
             TribeType::Imperius => match turn {
-                1 => &[MoveType::Harvest, MoveType::Step, MoveType::Reward],
-                2 => &[MoveType::Summon, MoveType::Step],
+                0 => &[MoveType::Harvest, MoveType::Step, MoveType::Reward],
+                1 => &[MoveType::Summon, MoveType::Step],
                 _ => &[],
             },
             TribeType::Bardur | TribeType::Kickoo | TribeType::Zebasi | TribeType::Yadakk => {
                 match turn {
-                    1 => &[MoveType::Harvest, MoveType::Step, MoveType::Reward],
-                    2 => &[MoveType::Summon, MoveType::Step],
+                    0 => &[MoveType::Harvest, MoveType::Step, MoveType::Reward],
+                    1 => &[MoveType::Summon, MoveType::Step],
                     _ => &[],
                 }
             }
             TribeType::XinXi | TribeType::Oumaji => match turn {
-                1 => &[MoveType::Harvest, MoveType::Step, MoveType::Reward],
-                2 => &[MoveType::Step],
+                0 => &[MoveType::Harvest, MoveType::Step, MoveType::Reward],
+                1 => &[MoveType::Step],
                 _ => &[],
             },
             TribeType::Luxidoor => match turn {
-                1 => &[MoveType::Harvest, MoveType::Step, MoveType::Reward],
-                2 => &[MoveType::Step],
+                0 => &[MoveType::Harvest, MoveType::Step, MoveType::Reward],
+                1 => &[MoveType::Step],
                 _ => &[],
             },
             TribeType::Vengir => match turn {
-                1 => &[MoveType::Harvest, MoveType::Step, MoveType::Reward],
-                2 => &[MoveType::Step],
+                0 => &[MoveType::Harvest, MoveType::Step, MoveType::Reward],
+                1 => &[MoveType::Step],
                 _ => &[],
             },
             TribeType::AiMo => match turn {
-                1 => &[MoveType::Harvest, MoveType::Step, MoveType::Reward],
-                2 => &[MoveType::Step],
+                0 => &[MoveType::Harvest, MoveType::Step, MoveType::Reward],
+                1 => &[MoveType::Step],
                 _ => &[],
             },
             TribeType::Quetzali => match turn {
-                1 => &[MoveType::Harvest, MoveType::Step, MoveType::Reward],
-                2 => &[MoveType::Step],
+                0 => &[MoveType::Harvest, MoveType::Step, MoveType::Reward],
+                1 => &[MoveType::Step],
                 _ => &[],
             },
             TribeType::Hoodrick => match turn {
-                1 => &[MoveType::Harvest, MoveType::Step, MoveType::Reward],
-                2 => &[MoveType::Step],
+                0 => &[MoveType::Harvest, MoveType::Step, MoveType::Reward],
+                1 => &[MoveType::Step],
                 _ => &[],
             },
             TribeType::Elyrion => match turn {
-                1 => &[MoveType::Harvest, MoveType::Step, MoveType::Reward], // Enchanct? Harvest logic might cover EnchantAnimal
-                2 => &[MoveType::Step],
+                0 => &[MoveType::Harvest, MoveType::Step, MoveType::Reward], // Enchanct? Harvest logic might cover EnchantAnimal
+                1 => &[MoveType::Step],
                 _ => &[],
             },
             TribeType::Polaris => match turn {
-                1 => &[MoveType::Harvest, MoveType::Step, MoveType::Reward], // Mooni move?
-                2 => &[MoveType::Step],
+                0 => &[MoveType::Harvest, MoveType::Step, MoveType::Reward], // Mooni move?
+                1 => &[MoveType::Step],
                 _ => &[],
             },
             TribeType::Cymanti => match turn {
-                1 => &[MoveType::Harvest, MoveType::Step, MoveType::Reward], // Fungi?
-                2 => &[MoveType::Step],
+                0 => &[MoveType::Harvest, MoveType::Step, MoveType::Reward], // Fungi?
+                1 => &[MoveType::Step],
                 _ => &[],
             },
             TribeType::Aquarion => match turn {
-                1 => &[MoveType::Harvest, MoveType::Step, MoveType::Reward],
-                2 => &[MoveType::Summon, MoveType::Step],
+                0 => &[MoveType::Harvest, MoveType::Step, MoveType::Reward],
+                1 => &[MoveType::Summon, MoveType::Step],
                 _ => &[],
             },
             _ => &[],

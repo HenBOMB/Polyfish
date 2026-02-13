@@ -867,6 +867,7 @@ async fn load_initial_endpoint(
             // --- FIXUP LOGIC START ---
             let tile_count = root["tiles"].as_object().map(|o| o.len()).unwrap_or(0);
             let map_size = (tile_count as f64).sqrt() as i32;
+            let tribe_count = root["tribes"].as_object().map(|o| o.len()).unwrap_or(2);
 
             // Missing fields
             if let Some(obj) = root.as_object_mut() {
@@ -881,11 +882,15 @@ async fn load_initial_endpoint(
                 if !settings.contains_key("size") {
                     settings.insert("size".into(), serde_json::json!(map_size));
                 }
+                if !settings.contains_key("turn") {
+                    settings.insert("turn".into(), serde_json::json!(0));
+                } else if settings["turn"].as_i64().unwrap_or(0) == 0 {
+                    settings.insert("turn".into(), serde_json::json!(0));
+                }
                 //if !settings.contains_key("currentPlayerTurnId") {
                 // override to make sure p1 always starts
                 settings.insert("currentPlayerTurnId".into(), serde_json::json!(1));
                 //}
-
                 // Add fields stripped by scraper
                 if !settings.contains_key("_areYouSure") {
                     settings.insert("_areYouSure".into(), serde_json::json!(false));
@@ -897,13 +902,14 @@ async fn load_initial_endpoint(
                     settings.insert("_fow".into(), serde_json::json!(true));
                 }
                 if !settings.contains_key("_lastPlayerTurnId") {
-                    settings.insert("_lastPlayerTurnId".into(), serde_json::json!(0));
+                    // Tribe ids start at 1
+                    settings.insert("_lastPlayerTurnId".into(), serde_json::json!(1));
                 }
                 if !settings.contains_key("_recentMoves") {
                     settings.insert("_recentMoves".into(), serde_json::json!([]));
                 }
                 if !settings.contains_key("_maxTribeCount") {
-                    settings.insert("_maxTribeCount".into(), serde_json::json!(2));
+                    settings.insert("_maxTribeCount".into(), serde_json::json!(tribe_count));
                 }
             }
 

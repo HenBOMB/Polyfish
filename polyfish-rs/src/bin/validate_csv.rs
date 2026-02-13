@@ -46,6 +46,11 @@ fn add_missing_fields(root: &mut Value, map_size: i32) {
     if !obj.contains_key("settings") {
         obj.insert("settings".into(), serde_json::json!({}));
     }
+    let tribe_count = obj
+        .get("tribes")
+        .and_then(|t| t.as_object())
+        .map(|o| o.len())
+        .unwrap_or(0);
     let settings = obj.get_mut("settings").unwrap().as_object_mut().unwrap();
     for (k, v) in [
         ("turn", serde_json::json!(0)),
@@ -60,7 +65,7 @@ fn add_missing_fields(root: &mut Value, map_size: i32) {
         ("_recentMoves", serde_json::json!([])),
         ("_pendingRewards", serde_json::json!([])),
         ("_lastPlayerTurnId", serde_json::json!(-1)),
-        ("_maxTribeCount", serde_json::json!(2)),
+        ("_maxTribeCount", serde_json::json!(tribe_count)),
         ("gameId", serde_json::json!("")),
         ("gameName", serde_json::json!("")),
         ("seed", serde_json::json!(0)),
@@ -294,7 +299,7 @@ fn match_step(
 }
 
 /// Find an Attack move targeting a tile where enemy damage occurred
-fn match_attack(legal: &[Box<dyn Move>], gained: &[(i32, i32)]) -> Option<usize> {
+fn match_attack(legal: &[Box<dyn Move>], _gained: &[(i32, i32)]) -> Option<usize> {
     // The gained tile in an attack is where the enemy is (attacker didn't move there)
     // Actually, after attack the attacker stays in place. Look for Attack moves.
     for (i, m) in legal.iter().enumerate() {
@@ -308,12 +313,10 @@ fn match_attack(legal: &[Box<dyn Move>], gained: &[(i32, i32)]) -> Option<usize>
 /// Find a Research move (any, since the delta tells us one was researched)
 fn match_research(
     legal: &[Box<dyn Move>],
-    game: &Game,
+    _game: &Game,
     delta: &Value,
     keys: &[String],
 ) -> Option<usize> {
-    let pid = game.current_player_id();
-
     // Try to extract the tech type from the delta
     let mut target_type: Option<i32> = None;
     for k in keys {
@@ -484,7 +487,7 @@ fn main() {
     let map_size = (tile_count as f64).sqrt() as i32;
 
     // Detect starting player from first action delta
-    let mut starting_player = 1i32;
+    let starting_player = 1i32;
     // for i in (base_idx + 1)..end_idx {
     //     let dp: Vec<&str> = lines[i].splitn(3, ',').collect();
     //     if dp.len() < 3 {
