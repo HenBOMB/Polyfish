@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PolyAI Engine</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/premium.css">
+    <link rel="stylesheet" href="css/game.css">
+    <link rel="stylesheet" href="css/components/map.css">
+    <link rel="stylesheet" href="css/components/ui.css">
+    <link rel="stylesheet" href="css/components/eval.css">
+    <link rel="stylesheet" href="css/components/mcts.css">
+    <link rel="stylesheet" href="css/components/techtree.css">
+    <link rel="stylesheet" href="css/components/techtree.css">
+    <link rel="stylesheet" href="css/replay.css">
+    <link rel="stylesheet" href="css/assistant.css">
+</head>
+
+<body>
+    <div id="app-container">
+        <!-- Top RTS Bar: Full width, solid -->
+        <header id="top-rts-bar">
+            <div class="rts-group left">
+                <div class="game-logo">Polyfish <small>Polytopia AI</small></div>
+            </div>
+
+            <div class="rts-group center">
+                <div class="resource-item" title="Current Tribe">
+                    <span id="tribe-name" class="value">Imperius</span>
+                </div>
+                <div class="resource-item" title="Stars and Income">
+                    <span class="icon gold">⭐</span>
+                    <span id="stars-val" class="value">0</span>
+                    <span id="income-val" class="sub-value green">(+0)</span>
+                </div>
+                <div class="resource-item" title="Total Score">
+                    <span class="icon">🏆</span>
+                    <span id="score-val" class="value">0</span>
+                </div>
+                <div class="resource-item">
+                    <span class="label">Turn:</span>
+                    <span id="turn-val" class="value">1</span><span class="total">/</span><span id="turn-total"
+                        class="total">30</span>
+                </div>
+            </div>
+
+            <div class="rts-group right system-controls">
+                <button id="btn-fow" class="rts-sys-btn" title="Toggle Fog of War">FOW</button>
+                <button id="btn-predictions" class="rts-sys-btn" title="Toggle AI Predictions">AI VIS</button>
+                <div id="training-status" class="training-led hidden">Training Active</div>
+                <div id="ai-turn-indicator" class="turn-badge hidden">🤖 AI Thinking...</div>
+            </div>
+        </header>
+
+        <!-- Main Viewport -->
+        <main id="main-view">
+            <!-- Evaluation Bar (Stockfish-style) -->
+            <div id="eval-bar">
+                <div class="eval-label top">P1</div>
+                <div class="eval-track">
+                    <div id="eval-fill-p1" class="eval-fill p1"></div>
+                    <div id="eval-indicator" class="eval-indicator">0.00</div>
+                    <div id="eval-fill-p2" class="eval-fill p2"></div>
+                </div>
+                <div class="eval-label bottom">P2</div>
+            </div>
+            <!-- MCTS Analysis Panel -->
+            <div id="mcts-panel" class="mcts-panel">
+                <div class="mcts-panel-header" id="mcts-panel-toggle">
+                    <span class="mcts-panel-icon">🧠</span>
+                    <span class="mcts-panel-title">Analysis</span>
+                    <label class="mcts-toggle-label" title="Enable Passive Analysis" onclick="event.stopPropagation()">
+                        <input type="checkbox" id="mcts-passive-toggle">
+                        <span class="mcts-toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="mcts-panel-body">
+                    <div class="mcts-section">
+                        <div class="mcts-section-label">Recorded Moves</div>
+                        <div id="recorded-moves-list" class="mcts-moves-list"></div>
+                    </div>
+                    <div class="mcts-section">
+                        <div class="mcts-section-label">Top Moves</div>
+                        <div id="mcts-moves-list"></div>
+                    </div>
+                    <div class="mcts-section">
+                        <div class="mcts-section-label">Best Line</div>
+                        <div id="mcts-pv"></div>
+                    </div>
+                    <div class="mcts-section">
+                        <div class="mcts-section-label">MCTS Tree</div>
+                        <div id="mcts-tree"></div>
+                    </div>
+                </div>
+            </div>
+            <div id="map-viewport">
+                <canvas id="space-bg"></canvas>
+                <div id="map"></div>
+                <div id="tile-action-popup" class="hidden"></div>
+            </div>
+
+            <!-- Floating Hover Info: More subtle -->
+            <div id="hovertile" class="rts-tooltip hidden"></div>
+
+            <!-- Desktop RTS Command Console -->
+            <footer id="command-console">
+                <!-- Left: Rich Selection Info -->
+                <div id="selection-container" class="console-section info-panel">
+                    <div id="selection-rich-content">
+                        <!-- Polytopia-style content injected here -->
+                        <div id="selection-info">Select a unit or tile</div>
+                    </div>
+                </div>
+
+                <!-- Center: Core Gameplay Commands -->
+                <div class="console-section actions-panel">
+                    <div class="action-grid">
+                        <button id="btn-tech" class="rts-btn secondary" title="Technology Tree [T]">
+                            <span class="icon">📜</span> <span>Tech Tree</span>
+                        </button>
+                        <button id="btn-end-turn" class="rts-btn" title="End Turn [Space]">
+                            <span class="icon">⌛</span> <span>End Turn</span>
+                        </button>
+                    </div>
+                    <div class="action-grid secondary">
+                        <button id="btn-rng" class="rts-btn" title="Random Move">RNG</button>
+                        <button id="btn-reset" class="rts-btn" title="Reset Simulation">Reset</button>
+                    </div>
+                    <button id="btn-save-state" class="rts-btn mini green" title="Save Game State">Save State</button>
+                    <button id="btn-load-state" class="rts-btn mini blue" title="Load Game State">Load State</button>
+                    <button id="btn-save" class="rts-btn mini" title="Save Training Data">Dataset</button>
+                </div>
+
+                <!-- Right: AI Strategy / MCTS -->
+                <div class="console-section ai-panel">
+                    <div class="ai-controls-group">
+                        <div class="ai-status">
+                            <span class="label">AI Engine</span>
+                            <span id="last-move-val" class="value">Ready</span>
+                        </div>
+                        <div class="mcts-row">
+                            <button id="btn-step" class="rts-btn ai-step" title="Run AI Search">
+                                <span class="icon">🤖</span> AI STEP
+                            </button>
+                            <div class="depth-slider-container">
+                                <label>Depth: <span id="mcts-depth-val">300</span></label>
+                                <input type="range" id="mcts-depth" min="100" max="1000" value="300" step="100">
+                            </div>
+                        </div>
+
+                    </div>
+
+                </div>
+
+                <!-- Far Right: System -->
+                <div class="console-section sys-panel">
+                    <div class="sys-grid">
+                        <button id="btn-interactive" class="rts-btn mini"
+                            title="Toggle AI Assistant (Hints for your turn)">Assist</button>
+                        <button id="btn-train-mode" class="rts-btn mini"
+                            title="Toggle Train Mode (Auto-Play enemies)">AI Play</button>
+                        <button id="btn-train" class="rts-btn mini" title="Start Training">Train</button>
+                        <button id="btn-replay" class="rts-btn mini purple" title="Replay Mode"
+                            onclick="openReplayMenu()">Replay</button>
+                        <button id="btn-preview" class="rts-btn mini cyan" title="Preview Initial State"
+                            onclick="previewInitialState()">Preview</button>
+                    </div>
+                </div>
+            </footer>
+        </main>
+
+        <!-- AI Teacher / Assistant HUD -->
+        <div id="teacher-hud" class="hidden">
+            <div class="teacher-header">
+                <span class="icon">🎓</span> AI Suggestion
+            </div>
+            <div class="teacher-body">
+                <div class="teacher-visual">
+                    <div id="teacher-move-icon" class="move-icon">🎓</div>
+                    <div id="teacher-move-name" class="move-name">...</div>
+                </div>
+                <div class="teacher-actions">
+                    <button id="btn-teach-accept" class="rts-btn secondary mini green">Accept [Y]</button>
+                    <button id="btn-teach-override" class="rts-btn secondary mini red">Override [N]</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="toast-container"></div>
+
+    <!-- SVG Filter for Outline Shader -->
+    <svg style="position: absolute; width: 0; height: 0;" aria-hidden="true" focusable="false">
+        <defs>
+            <!-- Crisp White Outline -->
+            <filter id="outline-white" x="-20%" y="-20%" width="140%" height="140%">
+                <feMorphology in="SourceAlpha" result="dilated" operator="dilate" radius="2" />
+                <feFlood flood-color="white" result="white" />
+                <feComposite in="white" in2="dilated" operator="in" result="outline" />
+                <feMerge>
+                    <feMergeNode in="outline" />
+                    <feMergeNode in="SourceGraphic" />
+                </feMerge>
+            </filter>
+
+            <!-- Crisp Gold Outline -->
+            <filter id="outline-gold" x="-20%" y="-20%" width="140%" height="140%">
+                <feMorphology in="SourceAlpha" result="dilated" operator="dilate" radius="2" />
+                <feFlood flood-color="#fbbf24" result="gold" />
+                <feComposite in="gold" in2="dilated" operator="in" result="outline" />
+                <feMerge>
+                    <feMergeNode in="outline" />
+                    <feMergeNode in="SourceGraphic" />
+                </feMerge>
+            </filter>
+
+            <!-- Selected Blueprint (Blue) Outline -->
+            <filter id="outline-blue" x="-20%" y="-20%" width="140%" height="140%">
+                <feMorphology in="SourceAlpha" result="dilated" operator="dilate" radius="2" />
+                <feFlood flood-color="#3b82f6" result="blue" />
+                <feComposite in="blue" in2="dilated" operator="in" result="outline" />
+                <feMerge>
+                    <feMergeNode in="outline" />
+                    <feMergeNode in="SourceGraphic" />
+                </feMerge>
+            </filter>
+        </defs>
+    </svg>
+
+    <!-- Scripts -->
+    <script src="js/types.js"></script>
+    <script src="js/functions.js"></script>
+    <script src="js/actions.js"></script>
+    <script src="js/map.js"></script>
+    <script src="js/space-bg.js"></script>
+    <script src="js/replay.js"></script>
+    <script src="js/main.js"></script>
+
+    <!-- Replay UI Overlay -->
+    <div id="replay-controls" class="hidden">
+        <div class="replay-header">
+            <span class="icon">📼</span> Replay Analysis
+            <button class="replay-close" onclick="exitReplayMode()">✕</button>
+        </div>
+        <div class="replay-body">
+            <div class="replay-turn-info">
+                Step: <span id="replay-step-val">0 / 0</span>
+            </div>
+            <div class="replay-nav">
+                <button class="rts-btn mini" onclick="jumpToStep(0)">⏮</button>
+                <button class="rts-btn mini" onclick="prevReplayStep()">◀ Prev</button>
+                <button class="rts-btn mini" onclick="nextReplayStep()">Next ▶</button>
+                <button class="rts-btn mini" onclick="jumpToStep(REPLAY_HISTORY.length)">⏭</button>
+            </div>
+            <div class="replay-analysis">
+                <div class="analysis-box user">
+                    <div class="label">You Played</div>
+                    <div id="replay-user-move" class="value">...</div>
+                </div>
+                <div class="analysis-box ai">
+                    <div class="label">AI Suggests</div>
+                    <div id="replay-ai-move" class="value">...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Initial State Selection Modal -->
+    <div id="initial-state-modal" class="reward-overlay hidden">
+        <div class="reward-modal" style="width: 400px; min-height: 200px;">
+            <h2>Select Game State</h2>
+            <div style="width: 100%; display: flex; flex-direction: column; gap: 15px;">
+                <select id="initial-state-select"
+                    style="padding: 10px; background: rgba(255,255,255,0.1); color: white; border: 1px solid var(--rts-border); border-radius: 4px;">
+                    <option value="">Loading...</option>
+                </select>
+                <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                    <button class="rts-btn" onclick="closeInitialStateModal()">Cancel</button>
+                    <button class="rts-btn primary" onclick="confirmInitialStateSelection()">Load</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>
