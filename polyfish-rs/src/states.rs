@@ -224,7 +224,7 @@ pub struct CityState {
     pub production: i32,
     pub owner: PlayerId,
     #[serde(default)]
-    pub rewards: HashSet<RewardType>,
+    pub rewards: Vec<RewardType>,
     #[serde(default)]
     pub _territory: Vec<i32>,
     #[serde(default)]
@@ -246,7 +246,7 @@ impl Default for CityState {
             level: 1,
             production: 0,
             owner: 0,
-            rewards: HashSet::new(),
+            rewards: Vec::new(),
             _territory: Vec::new(),
             _walls: false,
             _riot: false,

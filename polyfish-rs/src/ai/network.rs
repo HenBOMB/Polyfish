@@ -104,8 +104,8 @@ pub struct PolyZeroNet {
     v_pool_bn: BatchNorm,
     v_fc_shared: Linear,
     v_win: Linear, // Win probability (score differential)
-    v_eco: Linear, // Economic strength (SPT prediction)
-    v_mil: Linear, // Military strength (unit count)
+    v_eco: Linear, // Economic strength
+    v_mil: Linear, // Military strength
 }
 
 impl PolyZeroNet {
@@ -263,8 +263,8 @@ impl PolyZeroNet {
         let v_latent = v_latent.relu()?;
 
         let v_win = self.v_win.forward(&v_latent)?.tanh()?; // [-1, 1]
-        let v_eco = self.v_eco.forward(&v_latent)?.tanh()?; // Normalized SPT
-        let v_mil = self.v_mil.forward(&v_latent)?.tanh()?; // Normalized units
+        let v_eco = self.v_eco.forward(&v_latent)?; // Linear (Eco prediction)
+        let v_mil = self.v_mil.forward(&v_latent)?; // Linear (Army prediction)
 
         let value_output = ValueOutput {
             win_value: v_win,

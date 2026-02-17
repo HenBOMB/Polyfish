@@ -36,16 +36,20 @@ fn play_single_game(
     mcts_iters: usize,
     game_idx: usize,
     seed: u64,
+    tribes: Vec<TribeType>,
 ) -> Option<GameResult> {
     // Init Game using MapGen
     let gen_settings = polyfish::mapgen::MapGenSettings {
         size: MapSize::Tiny,
         map_type: polyfish::types::MapType::Drylands,
-        tribes: vec![TribeType::Imperius, TribeType::Imperius],
+        tribes: tribes.clone(),
         seed,
         ..Default::default()
     };
-    eprintln!("[Game {}] Started with seed: {}", game_idx, seed);
+    eprintln!(
+        "[Game {}] Started with seed: {} Tribes: {:?}",
+        game_idx, seed, gen_settings.tribes
+    );
 
     let mut game = Game::new();
     game.state = polyfish::mapgen::generate(gen_settings);
@@ -75,7 +79,12 @@ fn play_single_game(
     );
 
     let mut move_count = 0;
-    while !polyfish::functions::is_game_over(&game.state) && move_count < 1000000 {
+    while !polyfish::functions::is_game_over(&game.state) {
+        if move_count > 1000000 {
+            eprintln!("[Game {}] Move count exceeded 1000000", game_idx);
+            break;
+        }
+
         let pov = game.state.settings.current_player_turn_id;
 
         // Get state tensor
@@ -172,6 +181,10 @@ fn play_single_game(
                     "[Game {}]: Turn: {} Scores: {:?}",
                     game_idx, game.state.settings.turn, current_scores
                 );
+                // Print last move to see if we are looping
+                if let Some(last_mv) = game.state.settings._recent_moves.last() {
+                    eprintln!("Last Move Type: {:?}", last_mv);
+                }
             }
             let _ = game.play_move(m.as_ref());
         } else {
@@ -222,6 +235,14 @@ fn main() -> anyhow::Result<()> {
         /// Optional opponent model path (if not set, plays against self)
         #[arg(long)]
         opponent: Option<String>,
+
+        /// First tribe (optional, defaults to random)
+        #[arg(long)]
+        tribe1: Option<String>,
+
+        /// Second tribe (optional, defaults to random)
+        #[arg(long)]
+        tribe2: Option<String>,
     }
 
     let args = Args::parse();
@@ -272,13 +293,119 @@ fn main() -> anyhow::Result<()> {
         args.num_games, args.mcts_iters
     );
 
+    // Parse tribes from args or use random if not specified (placeholder, logic moved inside loop or done here)
+    // Actually, user wants "per iteration it should pick only 2 and play those 20 games with only those tribes"
+    // So we pick them once here.
+
+    use std::str::FromStr;
+
+    // Helper to parse or pick random
+    let all_tribes = vec![
+        TribeType::Imperius,
+        TribeType::Bardur,
+        TribeType::Oumaji,
+        TribeType::Kickoo,
+        TribeType::XinXi,
+        TribeType::Zebasi,
+        TribeType::AiMo,
+        TribeType::Vengir,
+        TribeType::Luxidoor, // Luxidoor is valid but maybe check others?
+        TribeType::Quetzali,
+        TribeType::Hoodrick,
+        TribeType::Yadakk,
+        // TribeType::Aquarion, TribeType::Elyrion, TribeType::Polaris, TribeType::Cymanti // Special tribes might be too diff for now? user said "strict selection" but "random". Let's stick to standard human tribes first?
+        // User didn't specify subset, just "random strict selection".
+        // Let's include all standard tribes.
+    ];
+
+    let t1 = if let Some(s) = &args.tribe1 {
+        // We need a FromStr or manual matching since TribeType might not derive FromStr
+        // For now, let's implement a quick helper or match.
+        // Actually TribeType usually derives EnumString in other crates, let's assume we can match or defaults.
+        // Let's do a simple match for safety as I don't see EnumString derived in view_file(types.rs) - wait I haven't seen types.rs
+        // But mapgen used them.
+        // Let's rely on standard debug print matching if needed, or better:
+        // Let's just hardcode a parser here since we don't have FromStr confirmed.
+        match s.to_lowercase().as_str() {
+            "imperius" => TribeType::Imperius,
+            "bardur" => TribeType::Bardur,
+            "oumaji" => TribeType::Oumaji,
+            "kickoo" => TribeType::Kickoo,
+            "xinxi" => TribeType::XinXi,
+            "zebasi" => TribeType::Zebasi,
+            "aimo" => TribeType::AiMo,
+            "vengir" => TribeType::Vengir,
+            "luxidoor" => TribeType::Luxidoor,
+            "quetzali" => TribeType::Quetzali,
+            "hoodrick" => TribeType::Hoodrick,
+            "yadakk" => TribeType::Yadakk,
+            "aquarion" => TribeType::Aquarion,
+            "elyrion" => TribeType::Elyrion,
+            "polaris" => TribeType::Polaris,
+            "cymanti" => TribeType::Cymanti,
+            _ => {
+                eprintln!("Unknown tribe {}, using Imperius", s);
+                TribeType::Imperius
+            }
+        }
+    } else {
+        use rand::seq::SliceRandom;
+        let mut rng = rand::thread_rng();
+        *all_tribes.choose(&mut rng).unwrap()
+    };
+
+    let t2 = if let Some(s) = &args.tribe2 {
+        match s.to_lowercase().as_str() {
+            "imperius" => TribeType::Imperius,
+            "bardur" => TribeType::Bardur,
+            "oumaji" => TribeType::Oumaji,
+            "kickoo" => TribeType::Kickoo,
+            "xinxi" => TribeType::XinXi,
+            "zebasi" => TribeType::Zebasi,
+            "aimo" => TribeType::AiMo,
+            "vengir" => TribeType::Vengir,
+            "luxidoor" => TribeType::Luxidoor,
+            "quetzali" => TribeType::Quetzali,
+            "hoodrick" => TribeType::Hoodrick,
+            "yadakk" => TribeType::Yadakk,
+            "aquarion" => TribeType::Aquarion,
+            "elyrion" => TribeType::Elyrion,
+            "polaris" => TribeType::Polaris,
+            "cymanti" => TribeType::Cymanti,
+            _ => {
+                eprintln!("Unknown tribe {}, using Oumaji", s);
+                TribeType::Oumaji
+            }
+        }
+    } else {
+        use rand::seq::SliceRandom;
+        let mut rng = rand::thread_rng();
+        // Pick distinct from t1
+        loop {
+            let t = *all_tribes.choose(&mut rng).unwrap();
+            if t != t1 {
+                break t;
+            }
+        }
+    };
+
+    println!("Selected Tribes for this iteration: {:?} vs {:?}", t1, t2);
+    let selected_tribes = vec![t1, t2];
+
     // Parallel game generation using rayon
     let results: Vec<GameResult> = (0..args.num_games)
         .into_par_iter()
         .filter_map(|i| {
             let seed = base_seed + i as u64;
             // Play with (Net1, Net2)
-            play_single_game(&network1, &network2, args.mcts_iters, i, seed)
+            play_single_game(
+                &network1,
+                &network2,
+                args.mcts_iters,
+                i,
+                seed,
+                selected_tribes.clone(),
+            )
         })
         .collect();
 

@@ -16,6 +16,7 @@ data/*
 scraper/*
 
 polyfish-rs/target/*
+polyfish-rs/checkpoints/
 
 archive/
 .*/

@@ -4,9 +4,9 @@ set -e
 # Configuration
 ITERATIONS=100
 GAMES_PER_ITER=20
-export MCTS_ITERS=200
-export RAYON_NUM_THREADS=6
-export OMP_NUM_THREADS=6
+export MCTS_ITERS=100
+export RAYON_NUM_THREADS=12
+export OMP_NUM_THREADS=12
 export RUST_BACKTRACE=1
 
 # Log all output to session.log while still showing on console
@@ -103,11 +103,18 @@ do
         fi
     fi
 
-    echo "[$MATCH_TYPE] Generative games..."
+    # Pick 2 random tribes for this iteration
+    TRIBE_LIST=("Imperius" "Bardur" "Oumaji" "Kickoo" "XinXi" "Zebasi" "AiMo" "Vengir" "Luxidoor" "Quetzali" "Hoodrick" "Yadakk")
+    # Shuffle and pick top 2 (using shuf)
+    SELECTED_TRIBES=($(printf "%s\n" "${TRIBE_LIST[@]}" | shuf -n 2))
+    TRIBE1=${SELECTED_TRIBES[0]}
+    TRIBE2=${SELECTED_TRIBES[1]}
+    
+    echo "[$MATCH_TYPE] Generative games... Tribes: $TRIBE1 vs $TRIBE2"
     
     # Capture output to extract metrics
     # We pass args via CLI now, not env vars alone
-    SP_OUTPUT=$(./target/release/self_play --num-games $GAMES_PER_ITER --mcts-iters $MCTS_ITERS $OPPONENT_FLAG)
+    SP_OUTPUT=$(./target/release/self_play --num-games $GAMES_PER_ITER --mcts-iters $MCTS_ITERS $OPPONENT_FLAG --tribe1 "$TRIBE1" --tribe2 "$TRIBE2")
     echo "$SP_OUTPUT"
     
     # Extract Avg Score and Max Score using grep and sed or awk

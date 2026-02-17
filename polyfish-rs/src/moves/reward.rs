@@ -49,14 +49,16 @@ impl Move for RewardMove {
             // Add to rewards set
             if let Some(tribe) = state.tribes.get_mut(&p_id) {
                 if let Some(city) = tribe.cities.get_mut(c_idx) {
-                    city.rewards.insert(reward_type);
+                    city.rewards.push(reward_type);
                 }
             }
 
             undos.push(Box::new(move |s: &mut GameState| {
                 if let Some(t) = s.tribes.get_mut(&p_id) {
                     if let Some(c) = t.cities.get_mut(c_idx) {
-                        c.rewards.remove(&reward_type);
+                        if let Some(pos) = c.rewards.iter().rposition(|x| *x == reward_type) {
+                            c.rewards.remove(pos);
+                        }
                     }
                 }
             }) as UndoCallback);

@@ -1496,6 +1496,10 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         if let Some(t) = game_state.tribes.get_mut(&pid) {
             t.units.push(unit);
         }
+        // Fix: Set tile unit owner
+        if let Some(tile) = game_state.tiles.get_mut(&cap) {
+            tile._unit_owner_id = Some(pid);
+        }
     }
 
     game_state

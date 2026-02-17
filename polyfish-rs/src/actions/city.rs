@@ -337,7 +337,7 @@ pub fn capture_city(state: &mut GameState, tile_idx: i32) -> Result<UndoCallback
             production: 1,
             owner: pov_id,
             tile_index: tile_idx,
-            rewards: std::collections::HashSet::new(),
+            rewards: Vec::new(),
             _territory: territory.clone(),
             _riot: false,
             _walls: false,
