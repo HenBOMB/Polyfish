@@ -4,8 +4,6 @@ An `AI model` and `Rust` game simulator based on the Polytopia strategy game.
 
 I built the original version in TS then worked with AI to translate it to Rust.
 
-If you're interested in contributing HMU. (contact at the bottom)
-
 ## Quick Start
 
 1. Install Rust
@@ -37,8 +35,3 @@ If you're interested in contributing HMU. (contact at the bottom)
 
 - **`polyfish-reader/polyai-reader`**: C++ script that injects into the running Steam game and extracts the real game state. Ready to be parsed by the Rust simulator.
 - **`polyfish-reader/inputer`**: Failed attempt to manipulate the game's live state into playing AI moves.
-
-## Contact
-
-- **Discord**: henbomb._
-- **Email**: henbombx@gmail.com
