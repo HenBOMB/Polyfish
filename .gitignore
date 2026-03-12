@@ -20,3 +20,5 @@ polyfish-rs/checkpoints/
 
 archive/
 .*/
+
+commit.sh

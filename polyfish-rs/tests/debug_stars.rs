@@ -1,7 +1,6 @@
 use polyfish::coords::Coords;
 use polyfish::game::Game;
 use polyfish::moves::EndTurnMove;
-use polyfish::moves::Move;
 use polyfish::moves::build::BuildMove;
 use polyfish::moves::harvest::HarvestMove;
 use polyfish::moves::research::ResearchMove;
