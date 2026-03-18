@@ -104,8 +104,9 @@ pub fn remove_unit(
             };
 
             if let Some(child) = tribe.units.get_mut(adj_child_idx) {
-                // Promote segment to Centipede
                 if child.unit_type == crate::types::UnitType::Segment {
+                    let old_type = child.unit_type;
+                    let old_health = child.health;
                     let old_max_hp = crate::functions::get_unit_max_health(child);
                     let damage = old_max_hp - child.health;
 
@@ -113,9 +114,30 @@ pub fn remove_unit(
 
                     let new_max_hp = crate::functions::get_unit_max_health(child);
                     child.health = (new_max_hp - damage).max(crate::states::HEALTH_SCALE);
+
+                    // Undo for promotion - pushed early so it runs LAST in reverse
+                    let unit_owner_id = unit_owner;
+                    undos.push(Box::new(move |s| {
+                        if let Some(t) = s.tribes.get_mut(&unit_owner_id) {
+                            if let Some(child) = t.units.get_mut(child_idx) {
+                                child.unit_type = old_type;
+                                child.health = old_health;
+                            }
+                        }
+                    }));
                 }
                 // Clear parent link since head is gone
+                let old_parent = child.parent_unit_idx;
                 child.parent_unit_idx = None;
+
+                let unit_owner_id = unit_owner;
+                undos.push(Box::new(move |s| {
+                    if let Some(t) = s.tribes.get_mut(&unit_owner_id) {
+                        if let Some(child) = t.units.get_mut(child_idx) {
+                            child.parent_unit_idx = old_parent;
+                        }
+                    }
+                }));
             }
         }
     }

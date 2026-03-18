@@ -304,17 +304,17 @@ fn play_match(
         map_type: MapType::Drylands,
         tribes: vec![TribeType::Imperius, TribeType::Imperius],
         seed: 42 + seed_offset,
-        ..Default::default()
     };
 
     let mut game = Game::new();
     game.state = generate(settings);
+    game.state.settings.mode = ModeType::Perfection;
     game.post_load();
 
     let agent1 = HeuristicMctsAgent::with_genes(mcts_iters, genes1.clone());
     let agent2 = HeuristicMctsAgent::with_genes(mcts_iters, genes2.clone());
 
-    let mut turn_limit = 1000; // Increased limit
+    let mut turn_limit = 10000; // Increased limit
 
     while !game.state.settings._game_over && turn_limit > 0 {
         let pid = game.state.settings.current_player_turn_id;
