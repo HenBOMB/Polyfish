@@ -1045,19 +1045,24 @@ pub fn attack_unit(
             ));
         }
     } else {
-        // Apply retaliation damage to attacker (skip if defender has Stiff)
-        let def_skills = get_unit_setting({
+        // Apply retaliation damage to attacker (skip if defender has Stiff, attacker has Surprise, or is out of range)
+        let def_setting = get_unit_setting({
             state
                 .tribes
                 .get(&defender_owner)
                 .and_then(|t| t.units.get(defender_idx))
                 .map(|u| u.unit_type)
                 .unwrap_or(UnitType::Warrior)
-        })
-        .skills
-        .clone();
+        });
+        let def_range = def_setting.range;
+        let def_skills = &def_setting.skills;
 
-        let can_retaliate = !def_skills.contains(&SkillType::Stiff);
+        let distance = crate::functions::get_chebyshev_distance(atk_coords, def_coords, state.settings.size);
+
+        let can_retaliate = !def_skills.contains(&SkillType::Stiff)
+            && !atk_skills.contains(&SkillType::Surprise)
+            && distance <= def_range;
+
         let atk_damage = result.defense_damage as i32;
         if atk_damage > 0 && can_retaliate {
             if let Some(tribe) = state.tribes.get_mut(&attacker_owner) {

@@ -39,6 +39,9 @@ impl Move for BuildMove {
         let settings = get_structure_setting(self.structure_type);
 
         // 0. Validation
+        if self.structure_type == StructureType::Road && crate::functions::is_city(state, self.target_index) {
+            return Err("Cannot build road on a city".to_string());
+        }
         if let Some(cost) = settings.cost {
             if let Some(tribe) = state.tribes.get(&pov_id) {
                 if tribe.stars < cost {
@@ -215,7 +218,7 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                         if existing_struct.is_some() {
                             continue;
                         }
-                    } else if tile.has_road {
+                    } else if tile.has_road || crate::functions::is_city(state, idx) {
                         continue;
                     }
 
