@@ -1,3 +1,4 @@
+use crate::ai::genes::AIGenes;
 use crate::functions::{get_defense_bonus, get_unit_max_health, has_effect};
 use crate::states::{GameState, PlayerId, UnitState};
 use crate::types::{EffectType, UnitType};
@@ -86,59 +87,54 @@ lazy_static::lazy_static! {
 
 /// Calculate a unit's power score based on health, status, and position
 /// Returns Unit power 0.0 to 1.0 associated with a confidence of the unit's strength
-pub fn assess_unit_power(game: &GameState, unit: &UnitState) -> f32 {
-    // 1. Base Power (40%) - derived from meta strength
-    let base_score = UNIT_VALUES.get(unit.unit_type);
+pub fn assess_unit_power(game: &GameState, unit: &UnitState, genes: &AIGenes) -> f32 {
+    // 1. Base Power - derived from meta strength (uses gene values)
+    let base_score = genes.army.get_unit_value(unit.unit_type);
 
-    // 2. Health (30%) - % of max HP
+    // 2. Health - % of max HP
     let max_hp = get_unit_max_health(unit) as f32;
     let hp_score = (unit.health as f32 / max_hp).clamp(0.0, 1.0);
 
-    // 3. Status (20%) - Buffs/Debuffs
-    // Start at 0.5 (neutral)
+    // 3. Status - Buffs/Debuffs
     let mut status_val = 0.5;
 
     if unit.veteran {
-        status_val += 0.2;
+        status_val += genes.army.veteran_bonus;
     }
     if has_effect(unit, EffectType::Boost) {
-        status_val += 0.15;
+        status_val += genes.army.boost_bonus;
     }
 
-    // Kills (max 3 -> +0.15)
-    status_val += unit.kills.min(3) as f32 * 0.05;
+    // Kills (max 3)
+    status_val += unit.kills.min(3) as f32 * genes.army.kill_bonus_per;
 
     // Debuffs
     if has_effect(unit, EffectType::Poison) {
-        status_val -= 0.2;
+        status_val -= genes.army.poison_penalty;
     }
     if has_effect(unit, EffectType::Frozen) {
-        status_val -= 0.4;
-    } // Big penalty
+        status_val -= genes.army.frozen_penalty;
+    }
 
     let status_score = status_val.clamp(0.0, 1.0);
 
-    // 4. Defense (10%) - Terrain/Walls
-    // Defense bonus ranges from 1.0 (none) to 4.0 (walled city)
-    // We map 1.0 -> 0.0 and 4.0 -> 1.0
+    // 4. Defense - Terrain/Walls
     let def_bonus = get_defense_bonus(game, unit);
     let def_score = ((def_bonus - 1.0) / 3.0).clamp(0.0, 1.0);
 
     // 5. Loneliness / Support (Penalty)
-    // If unit is weak/mid (< 0.5 base) and has no friends nearby, penalize.
     let mut loneliness_penalty = 0.0;
-    if base_score < 0.6 {
-        // Check 2-tile radius for friends
+    if base_score < genes.army.loneliness_threshold {
         let adj = crate::functions::get_adjacent_indices(game, unit.coords.idx, 2);
         let friends = adj
             .iter()
             .filter(|&&idx| {
-                if let Some(other) = game
+                if let Some(_other) = game
                     .tribes
                     .get(&unit.owner)
                     .and_then(|t| t.units.iter().find(|u| u.coords.idx == idx))
                 {
-                    other.coords.idx != unit.coords.idx // Don't count self
+                    true
                 } else {
                     false
                 }
@@ -146,51 +142,42 @@ pub fn assess_unit_power(game: &GameState, unit: &UnitState) -> f32 {
             .count();
 
         if friends == 0 {
-            loneliness_penalty = 0.15;
+            loneliness_penalty = genes.army.loneliness_no_friends;
         } else if friends == 1 {
-            loneliness_penalty = 0.05;
+            loneliness_penalty = genes.army.loneliness_one_friend;
         }
     }
 
     // Final Weighted Sum
-    // Weights: Base=0.4, Health=0.3, Status=0.2, Defense=0.1
-    // Loneliness is a flat penalty
     let final_score =
-        (base_score * 0.4) + (hp_score * 0.3) + (status_score * 0.2) + (def_score * 0.1)
+        (base_score * genes.army.base_weight) + (hp_score * genes.army.hp_weight) + (status_score * genes.army.status_weight) + (def_score * genes.army.defense_weight)
             - loneliness_penalty;
 
     final_score.clamp(0.0, 1.0)
 }
 
 // Evaluates the power of the army, returns a score between 0.0 and 1.0
-pub fn evaluate_army(state: &GameState, player_id: PlayerId) -> f32 {
+pub fn evaluate_army(state: &GameState, player_id: PlayerId, genes: &AIGenes) -> f32 {
     let tribe_opt = state.tribes.get(&player_id);
     if tribe_opt.is_none() {
         return 0.0;
     }
     let tribe = tribe_opt.unwrap();
 
-    // --- 2. Military Score (0.0 - 1.0) ---
-    // Sum of unit power.
-    // A full army of 20 strong units (avg 0.7) = 14.0 score.
-    // Soft cap at 20.0 (allows for huge armies to saturate, but typically < 1.0)
     let mut score_army = 0.0;
     for unit in &tribe.units {
-        score_army += assess_unit_power(state, unit);
+        score_army += assess_unit_power(state, unit, genes);
     }
 
     let progress = (state.settings.turn as f32 / state.settings.max_turns as f32).clamp(0.0, 1.0);
     let mut max_units;
 
-    if progress < 0.3 {
-        // Early Game: At least 2.0 units per city + 1 extra unit
-        max_units = tribe.cities.len() as f32 * 2.0 + 1.0;
-    } else if progress < 0.7 {
-        // Mid Game: At least 2.0 units per city + 2 extra units
-        max_units = tribe.cities.len() as f32 * 2.0 + 2.0;
+    if progress < genes.stages.early_threshold {
+        max_units = tribe.cities.len() as f32 * genes.army.early_units_per_city + genes.army.early_extra_units;
+    } else if progress < genes.stages.late_threshold {
+        max_units = tribe.cities.len() as f32 * genes.army.mid_units_per_city + genes.army.mid_extra_units;
     } else {
-        // Late Game: At least 4.0 units per city + 4 extra units
-        max_units = tribe.cities.len() as f32 * 4.0 + 4.0;
+        max_units = tribe.cities.len() as f32 * genes.army.late_units_per_city + genes.army.late_extra_units;
     };
 
     max_units = max_units.min(crate::states::default_max_units() as f32);

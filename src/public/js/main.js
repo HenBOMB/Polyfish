@@ -1182,7 +1182,7 @@ function checkRewardPopup() {
     const rewardMoves = currentLegalMoves.filter(m => m && m.moveType === 9);
 
     // Polytopia usually forces selection if there are multiple rewards (e.g. Workshop vs Explorer)
-    if (rewardMoves.length >= 2) {
+    if (rewardMoves.length > 0) {
         // Debugging Teacher Mode Popup Prevention
         if (INTERACTIVE_MODE) {
             console.log("Teacher Mode Reward Check:", {
@@ -1198,10 +1198,10 @@ function checkRewardPopup() {
         }
 
         // Prevent multiple popups if one is already open
-        if (document.querySelector('.reward-overlay')) return;
+        if (document.querySelector('.dynamic-reward-overlay')) return;
 
         const overlay = document.createElement('div');
-        overlay.className = 'reward-overlay';
+        overlay.className = 'reward-overlay dynamic-reward-overlay';
 
         let cityTitle = "City level up!";
         // Try to find city name from the first reward move's target index
@@ -1214,7 +1214,7 @@ function checkRewardPopup() {
 
         overlay.innerHTML = `
             <div class="reward-modal">
-                <h1>${cityTitle}</h1>
+                <h2>${cityTitle}</h2>
                 <div class="reward-options"></div>
             </div>
         `;

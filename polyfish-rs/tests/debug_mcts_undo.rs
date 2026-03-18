@@ -45,7 +45,7 @@ fn fuzz_test_p2_moves() {
     city2.owner = p2;
     city2.production = 2;
     city2.level = 2;
-    city2.rewards.insert(RewardType::Workshop); // Resolve pending reward
+    city2.rewards.push(RewardType::Workshop); // Resolve pending reward
     city2._territory.push(100);
     city2._territory.push(101); // Add tile with resources
     // city2.capital_of -- removed

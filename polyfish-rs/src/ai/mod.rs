@@ -1,13 +1,8 @@
 pub mod book;
 pub mod evaluator;
-pub mod features;
+pub mod genes;
 pub mod heuristic_mcts;
-pub mod mapper;
 pub mod mcts;
 pub mod mcts_types;
-pub mod mcts_zero;
-pub mod network;
 pub mod ordering;
-pub mod policy_composer;
-pub use evaluator::evaluate_state;
 pub use mcts::{MctsAgent, MctsAnalysis, MoveEvaluation};

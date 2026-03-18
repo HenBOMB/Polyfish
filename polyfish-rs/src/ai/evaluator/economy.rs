@@ -1,10 +1,11 @@
+use crate::ai::genes::AIGenes;
 use crate::functions::{get_adjacent_indices, get_structure_at};
 use crate::states::{GameState, PlayerId};
 use crate::types::{ModeType, ResourceType, StructureType, TechnologyType};
 
 /// Evaluates the economy score for a given player.
 /// Returns a score roughly between 0.0 and 1.0.
-pub fn evaluate_economy(state: &GameState, player_id: PlayerId) -> f32 {
+pub fn evaluate_economy(state: &GameState, player_id: PlayerId, genes: &AIGenes) -> f32 {
     let tribe_opt = state.tribes.get(&player_id);
     if tribe_opt.is_none() {
         return 0.0;
@@ -32,6 +33,7 @@ pub fn evaluate_economy(state: &GameState, player_id: PlayerId) -> f32 {
                 state,
                 player_id,
                 tech_state.tech_type,
+                genes,
             );
         }
     }
@@ -43,33 +45,41 @@ pub fn evaluate_economy(state: &GameState, player_id: PlayerId) -> f32 {
     let tech_score = (total_tech_utility / 20.0).clamp(-1.0, 1.0);
 
     // --- 2. Bonuses ---
-    let capital_bonus = bonus_capital_connections(tribe);
+    let capital_bonus = bonus_capital_connections(tribe, genes);
 
     // --- 3. Penalties ---
     let partial_city_penalty = penalty_partial_cities(tribe, state.settings.mode);
     let unused_tech_penalty = penalty_unused_tech(state, tribe);
     let bad_struct_penalty = penalty_bad_structures(state, tribe);
-    let low_stars_penalty = penalty_low_stars(tribe);
+    let low_stars_penalty = penalty_low_stars(tribe, genes);
     let urgency_penalty = penalty_urgency(state);
     // Weighted Eco
     // Income is most important, then tech/stars
-    // Weight income=50% stars=20% tech=30%
-    // let raw = (spt_score * 0.5) + (stars_score * 0.2) + (tech_score * 0.3);
-    let base_score = (spt_score * 0.6) + (stars_score * 0.1) + (tech_score * 0.3);
+    // Weight income=50% stars=20% tech=30% (if genes match)
+    let score_bonus = if state.settings.mode == ModeType::Perfection {
+        (tribe.score as f32 / crate::states::default_max_score() as f32).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+
+    let base_score = (spt_score * genes.economy.income_weight)
+        + (stars_score * genes.economy.stars_weight)
+        + (tech_score * genes.economy.tech_weight)
+        + (score_bonus * genes.economy.score_weight);
 
     let score = base_score + capital_bonus
         - partial_city_penalty
         - unused_tech_penalty
         - bad_struct_penalty
         - low_stars_penalty
-        - (urgency_penalty * 0.1);
+        - (urgency_penalty * genes.economy.urgency_weight);
     score.clamp(0.0, 1.0)
 }
 
 /// Bonus for cities connected to the capital.
 /// Each connected city earns a small bonus, encouraging road networks.
 /// Max bonus: ~0.10 (capped to avoid dominating the score).
-fn bonus_capital_connections(tribe: &crate::states::TribeState) -> f32 {
+fn bonus_capital_connections(tribe: &crate::states::TribeState, genes: &AIGenes) -> f32 {
     if tribe.cities.len() <= 1 {
         return 0.0; // No bonus needed with 0-1 cities
     }
@@ -82,7 +92,7 @@ fn bonus_capital_connections(tribe: &crate::states::TribeState) -> f32 {
     // Ratio of connected cities (excluding the capital itself which is always "connected")
     let ratio = connected / total;
     // Scale: fully connected = 0.10 bonus
-    (ratio * 0.10).min(0.10)
+    (ratio * genes.economy.capital_connection_max_bonus).min(genes.economy.capital_connection_max_bonus)
 }
 
 /// Penalty/bonus for cities with population progress.
@@ -475,10 +485,10 @@ fn penalty_bad_structures(state: &GameState, tribe: &crate::states::TribeState) 
 
 /// Penalty for having low stars (danger zone).
 /// Encourages keeping a buffer for emergencies.
-fn penalty_low_stars(tribe: &crate::states::TribeState) -> f32 {
+fn penalty_low_stars(tribe: &crate::states::TribeState, genes: &AIGenes) -> f32 {
     let stars = tribe.stars as f32;
     // Safety buffer: we want at least ~8 stars for emergencies
-    let threshold = 8.0;
+    let threshold = genes.economy.low_stars_threshold;
 
     if stars >= threshold {
         return 0.0;
@@ -490,7 +500,7 @@ fn penalty_low_stars(tribe: &crate::states::TribeState) -> f32 {
     let deficit = 1.0 - (stars / threshold);
 
     // Max penalty at 0 stars is 0.25 (significant chunk of the 0.0-1.0 range)
-    deficit.powi(2) * 0.25
+    deficit.powi(2) * genes.economy.low_stars_max_penalty
 }
 
 /// Penalizes for playing moves, this induces urgency to play and not waste moves

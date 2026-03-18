@@ -12,7 +12,6 @@ pub mod game;
 pub mod mapgen;
 pub mod moves;
 pub mod prediction;
-pub mod recorder;
 pub mod settings;
 pub mod states;
 pub mod types;

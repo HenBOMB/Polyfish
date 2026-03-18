@@ -47,8 +47,9 @@ fn test_clear_forest_prevention() {
 
     let mv = ClearForestMove::new(11);
 
+    let genes = polyfish::ai::genes::AIGenes::default();
     // Scenario 1: Healthy treasury (stars=5)
-    let score_healthy = score_move(&game, &mv);
+    let score_healthy = score_move(&game, &mv, &genes);
     // Base 3.0 + Treasury Penalty -10.0 = -7.0
     // Neighbors of 11 (central/edge cases vary, but let's assume it borders empty tiles)
     // The test previously gave -19.5, meaning -12.5 clustering penalty (5 hub-spots * 2.5)
@@ -59,7 +60,7 @@ fn test_clear_forest_prevention() {
     if let Some(t) = game.state.tribes.get_mut(&player_id) {
         t.stars = 0;
     }
-    let score_desperate = score_move(&game, &mv);
+    let score_desperate = score_move(&game, &mv, &genes);
     // Base 3.0 + Desperation 2.0 = 5.0
     // Then Clustering Penalty (~ -12.5)
     println!("Score Desperate: {}", score_desperate);
@@ -83,7 +84,7 @@ fn test_clear_forest_prevention() {
         }),
     );
 
-    let score_enabling = score_move(&game, &mv);
+    let score_enabling = score_move(&game, &mv, &genes);
     // Base 3.0 + Enabling 10.0 = 13.0
     // Then Clustering Penalty (~ -12.5)
     println!("Score Enabling: {}", score_enabling);

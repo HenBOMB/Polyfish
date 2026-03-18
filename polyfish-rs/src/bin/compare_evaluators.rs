@@ -29,7 +29,8 @@ fn main() {
         state.tribes.insert(player_id, tribe.clone());
 
         // New Score (Actual function call)
-        let new_score = evaluate_economy(&state, player_id);
+        let genes = polyfish::ai::genes::AIGenes::default();
+        let new_score = evaluate_economy(&state, player_id, &genes);
 
         // Old Logic Simulation (Approximate)
         // Income score = (11 / 25).clamp(0,1) = 0.44
@@ -83,7 +84,8 @@ fn main() {
         high_income_tribe.stars = stars;
         state.tribes.insert(player_id, high_income_tribe.clone());
 
-        let new_score = evaluate_economy(&state, player_id);
+        let genes = polyfish::ai::genes::AIGenes::default();
+        let new_score = evaluate_economy(&state, player_id, &genes);
 
         // Old Logic Simulation (High Income)
         // Income score = (101 / 25).clamp(0,1) = 1.0

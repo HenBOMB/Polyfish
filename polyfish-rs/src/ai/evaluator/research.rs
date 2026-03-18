@@ -1,3 +1,4 @@
+use crate::ai::genes::AIGenes;
 use crate::functions::is_resource_visible_to_tribe;
 use crate::states::{GameState, PlayerId};
 use crate::types::{ResourceType, TechnologyType, TerrainType};
@@ -11,7 +12,12 @@ use crate::types::{ResourceType, TechnologyType, TerrainType};
 /// 3. Cost-Benefit: Value = (UnlockableCount * ResourceScore) + StrategicValue.
 ///
 /// If Value < Cost (in logical units), the tech is considered wasteful.
-pub fn evaluate_tech_utility(state: &GameState, player_id: PlayerId, tech: TechnologyType) -> f32 {
+pub fn evaluate_tech_utility(
+    state: &GameState,
+    player_id: PlayerId,
+    tech: TechnologyType,
+    genes: &AIGenes,
+) -> f32 {
     let tribe_opt = state.tribes.get(&player_id);
     if tribe_opt.is_none() {
         return 0.0;
@@ -21,56 +27,82 @@ pub fn evaluate_tech_utility(state: &GameState, player_id: PlayerId, tech: Techn
     let (utility, cost_offset) = match tech {
         // --- Resource Techs ---
         TechnologyType::Organization => (
-            count_resources_fair(state, tribe, ResourceType::Fruit) * 2.5,
-            2.0,
+            count_resources_fair(state, tribe, ResourceType::Fruit)
+                * genes.research.org_fruit_multiplier,
+            genes.research.tier_1_cost_offset,
         ),
         TechnologyType::Hunting => (
-            count_resources_fair(state, tribe, ResourceType::Game) * 2.5,
-            2.0,
+            count_resources_fair(state, tribe, ResourceType::Game)
+                * genes.research.hunting_game_multiplier,
+            genes.research.tier_1_cost_offset,
         ),
         TechnologyType::Fishing => (
-            count_resources_fair(state, tribe, ResourceType::Fish) * 2.5,
-            2.0,
+            count_resources_fair(state, tribe, ResourceType::Fish)
+                * genes.research.fishing_fish_multiplier,
+            genes.research.tier_1_cost_offset,
         ),
         TechnologyType::Farming => (
-            count_resources_fair(state, tribe, ResourceType::Crop) * 3.0,
-            3.0,
+            count_resources_fair(state, tribe, ResourceType::Crop)
+                * genes.research.farming_crop_multiplier,
+            genes.research.tier_2_cost_offset,
         ),
         TechnologyType::Mining => (
-            count_resources_fair(state, tribe, ResourceType::Metal) * 4.0,
-            3.0,
+            count_resources_fair(state, tribe, ResourceType::Metal)
+                * genes.research.mining_metal_multiplier,
+            genes.research.tier_2_cost_offset,
         ),
 
         // --- Terrain Techs ---
         TechnologyType::Forestry => (
-            count_terrain(state, tribe, TerrainType::Forest) as f32 * 1.5,
-            3.0,
+            count_terrain(state, tribe, TerrainType::Forest) as f32
+                * genes.research.forestry_forest_multiplier,
+            genes.research.tier_2_cost_offset,
         ),
         TechnologyType::Climbing => (
-            count_terrain(state, tribe, TerrainType::Mountain) as f32 * 1.0,
-            2.0,
+            count_terrain(state, tribe, TerrainType::Mountain) as f32
+                * genes.research.climbing_mountain_multiplier,
+            genes.research.tier_1_cost_offset,
         ),
         TechnologyType::Sailing => (
-            count_terrain(state, tribe, TerrainType::Water) as f32 * 2.0,
-            3.0,
+            count_terrain(state, tribe, TerrainType::Water) as f32
+                * genes.research.sailing_water_multiplier,
+            genes.research.tier_1_cost_offset,
         ),
         TechnologyType::Navigation => (
-            count_terrain(state, tribe, TerrainType::Ocean) as f32 * 2.5,
-            5.0,
+            count_terrain(state, tribe, TerrainType::Ocean) as f32
+                * genes.research.navigation_ocean_multiplier,
+            genes.research.tier_3_cost_offset,
         ),
 
         // --- Military Techs ---
         TechnologyType::Riding => (
-            2.0 + count_terrain(state, tribe, TerrainType::Field) as f32 * 0.2, // Base + Rider preference
-            2.0,
+            genes.research.riding_base
+                + count_terrain(state, tribe, TerrainType::Field) as f32
+                    * genes.research.riding_field_multiplier,
+            genes.research.tier_1_cost_offset,
         ),
-        TechnologyType::Archery => (1.5, 3.0),
-        TechnologyType::Strategy => (2.0, 3.0),
-        TechnologyType::Chivalry => (5.0, 6.0),
-        TechnologyType::Smithery => (6.0, 6.0),
+        TechnologyType::Archery => (
+            genes.research.archery_base,
+            genes.research.tier_2_cost_offset,
+        ),
+        TechnologyType::Strategy => (
+            genes.research.strategy_base,
+            genes.research.tier_2_cost_offset,
+        ),
+        TechnologyType::Chivalry => (
+            genes.research.chivalry_base,
+            genes.research.tier_3_cost_offset,
+        ),
+        TechnologyType::Smithery => (
+            genes.research.smithery_base,
+            genes.research.tier_3_cost_offset,
+        ),
 
         // --- Infrastructure ---
-        TechnologyType::Roads => (tribe.cities.len() as f32 * 0.5, 3.0),
+        TechnologyType::Roads => (
+            tribe.cities.len() as f32 * genes.research.roads_per_city_multiplier,
+            genes.research.tier_2_cost_offset,
+        ),
         TechnologyType::Trade => {
             let mut u = 0.0;
             // Reward based on Customs House potential (water adjacency to cities)
@@ -81,20 +113,26 @@ pub fn evaluate_tech_utility(state: &GameState, player_id: PlayerId, tech: Techn
                         if tile.terrain_type == TerrainType::Water
                             || tile.terrain_type == TerrainType::Ocean
                         {
-                            u += 1.0;
+                            u += genes.research.trade_customs_multiplier;
                         }
                     }
                 }
             }
-            (u, 5.0)
+            (u, genes.research.tier_3_cost_offset)
         }
 
         // --- Others ---
         TechnologyType::Philosophy => {
             let techs_left = 25 - tribe.tech_vanilla.iter().filter(|t| t.discovered).count();
-            (techs_left as f32 * 0.3, 3.0)
+            (
+                techs_left as f32 * genes.research.philosophy_per_tech_multiplier,
+                genes.research.tier_3_cost_offset,
+            )
         }
-        TechnologyType::Diplomacy => (tribe.known_players.len() as f32 * 1.5, 3.0),
+        TechnologyType::Diplomacy => (
+            tribe.known_players.len() as f32 * genes.research.diplomacy_per_player_multiplier,
+            genes.research.tier_2_cost_offset,
+        ),
 
         _ => (1.0, 2.0),
     };

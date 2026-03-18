@@ -44,8 +44,9 @@ fn test_summon_contextual_priority() {
 
     let mv = SummonMove::new(city_idx, UnitType::Warrior);
 
+    let genes = polyfish::ai::genes::AIGenes::default();
     // --- Scenario 1: Base Summoning (No threat, small army) ---
-    let score_base = score_move(&game, &mv);
+    let score_base = score_move(&game, &mv, &genes);
     // Base 10.0 + Small Army Bonus 8.0 = 18.0
     println!("Score Base: {}", score_base);
     assert_eq!(score_base, 18.0); // Corrected from 25.0
@@ -70,7 +71,7 @@ fn test_summon_contextual_priority() {
         },
     );
 
-    let score_threat = score_move(&game, &mv);
+    let score_threat = score_move(&game, &mv, &genes);
     // Base 10.0 + Threat 15.0 + Small Army 8.0 = 33.0
     println!("Score Threat: {}", score_threat);
     assert_eq!(score_threat, 33.0); // Corrected from 40.0
@@ -90,7 +91,7 @@ fn test_summon_contextual_priority() {
             tribe.units.push(u);
         }
     }
-    let score_bloat = score_move(&game, &mv);
+    let score_bloat = score_move(&game, &mv, &genes);
     // Base 10.0 + (-15.0 penalty) = -5.0
     println!("Score Bloat: {}", score_bloat);
     assert_eq!(score_bloat, -5.0); // Corrected from 5.0

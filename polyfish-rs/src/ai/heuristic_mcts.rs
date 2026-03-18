@@ -1,4 +1,5 @@
 use crate::ai::evaluator;
+use crate::ai::genes::AIGenes;
 use crate::ai::mcts::{MctsAnalysis, MctsNodeData, MoveEvaluation};
 use crate::game::Game;
 use crate::moves::{EndTurnMove, Move};
@@ -8,6 +9,7 @@ use crate::types::MoveType;
 pub struct HeuristicMctsAgent {
     pub iterations: usize,
     pub exploration_constant: f32,
+    pub genes: AIGenes,
 }
 
 struct Node {
@@ -19,7 +21,7 @@ struct Node {
 }
 
 impl Node {
-    fn new(move_to_here: Option<Box<dyn Move>>, game: &mut Game) -> Self {
+    fn new(move_to_here: Option<Box<dyn Move>>, game: &mut Game, genes: &AIGenes) -> Self {
         let untried = if game.state.settings._game_over {
             None
         } else {
@@ -34,8 +36,8 @@ impl Node {
 
             // Move Ordering: Sort by heuristic score ascending (best moves at the end for .pop())
             filtered.sort_by(|a, b| {
-                let score_a = crate::ai::ordering::score_move(game, a.as_ref());
-                let score_b = crate::ai::ordering::score_move(game, b.as_ref());
+                let score_a = crate::ai::ordering::score_move(game, a.as_ref(), genes);
+                let score_b = crate::ai::ordering::score_move(game, b.as_ref(), genes);
                 score_a
                     .partial_cmp(&score_b)
                     .unwrap_or(std::cmp::Ordering::Equal)
@@ -83,9 +85,21 @@ impl Node {
 
 impl HeuristicMctsAgent {
     pub fn new(iterations: usize) -> Self {
+        let genes = AIGenes::default();
+        let c = genes.mcts.exploration_constant;
         Self {
             iterations,
-            exploration_constant: 0.6,
+            exploration_constant: c,
+            genes,
+        }
+    }
+
+    pub fn with_genes(iterations: usize, genes: AIGenes) -> Self {
+        let c = genes.mcts.exploration_constant;
+        Self {
+            iterations,
+            exploration_constant: c,
+            genes,
         }
     }
 
@@ -99,7 +113,7 @@ impl HeuristicMctsAgent {
         game: &mut Game,
     ) -> (Option<Box<dyn Move>>, MctsAnalysis) {
         let player_id = game.state.settings.current_player_turn_id;
-        let mut root = Node::new(None, game);
+        let mut root = Node::new(None, game, &self.genes);
 
         // Filter out EndTurn from root moves if there are other options
         // This encourages the AI to do actions before ending turn
@@ -224,7 +238,7 @@ impl HeuristicMctsAgent {
             if !untried.is_empty() {
                 let m = untried.pop().unwrap();
                 if let Some(undo) = game.simulate_move(m.as_ref()) {
-                    let mut child = Node::new(Some(m), game);
+                    let mut child = Node::new(Some(m), game, &self.genes);
                     let val = self.simulate_to_turn_end(game, pov);
                     undo(&mut game.state);
 
@@ -289,8 +303,8 @@ impl HeuristicMctsAgent {
                 .iter()
                 .enumerate()
                 .max_by(|(_, a), (_, b)| {
-                    let sa = crate::ai::ordering::score_move(game, a.as_ref());
-                    let sb = crate::ai::ordering::score_move(game, b.as_ref());
+                    let sa = crate::ai::ordering::score_move(game, a.as_ref(), &self.genes);
+                    let sb = crate::ai::ordering::score_move(game, b.as_ref(), &self.genes);
                     sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .map(|(i, _)| i)
@@ -305,7 +319,7 @@ impl HeuristicMctsAgent {
         }
 
         // Evaluate at turn boundary
-        let score = evaluator::evaluate_state(&game.state, pov);
+        let score = evaluator::evaluate_state(&game.state, pov, &self.genes);
 
         // Undo all rollout moves
         while let Some(undo) = undos.pop() {

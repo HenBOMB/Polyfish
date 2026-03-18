@@ -68,8 +68,9 @@ fn test_harvest_level_up_prioritization() {
     let mv1 = HarvestMove::new(11); // Finishes city 1
     let mv2 = HarvestMove::new(21); // Doesn't finish city 2
 
-    let score1 = score_move(&game, &mv1);
-    let score2 = score_move(&game, &mv2);
+    let genes = polyfish::ai::genes::AIGenes::default();
+    let score1 = score_move(&game, &mv1, &genes);
+    let score2 = score_move(&game, &mv2, &genes);
 
     println!("Score 1 (Level up): {}", score1);
     println!("Score 2 (No level up): {}", score2);

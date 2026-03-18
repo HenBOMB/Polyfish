@@ -52,10 +52,7 @@ fn test_mcts_matches_ruin_capture_sequence() {
         MoveType::Capture, // Capture ruins
     ];
 
-    let agent = HeuristicMctsAgent {
-        iterations: 100,
-        exploration_constant: 0.4,
-    };
+    let agent = HeuristicMctsAgent::new(100);
     println!("Starting verification sequence...");
 
     for (i, &expected_type) in expected_sequence.iter().enumerate() {

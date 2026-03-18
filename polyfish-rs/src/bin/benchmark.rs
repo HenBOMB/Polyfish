@@ -1,210 +1,133 @@
-//! Benchmark script to identify performance bottlenecks
-//!
-//! Run with: cargo run --release --bin benchmark
-
-use candle_core::{DType, Device};
-use candle_nn::VarBuilder;
-use polyfish::TribeType;
-use polyfish::ai::features::state_to_tensor;
-use polyfish::ai::mcts_zero::ZeroMctsAgent;
-use polyfish::ai::network::PolyZeroNet;
+use clap::Parser;
+use polyfish::ai::genes::AIGenes;
+use polyfish::ai::heuristic_mcts::HeuristicMctsAgent;
 use polyfish::game::Game;
-use polyfish::types::{MapSize, MapType, ModeType};
-use std::time::{Duration, Instant};
+use polyfish::mapgen::{MapGenSettings, generate};
+use polyfish::types::{MapSize, MapType, TribeType};
+use std::path::Path;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Path to the candidate genes JSON
+    #[arg(long)]
+    genes: String,
+
+    /// Number of matches to play
+    #[arg(long, default_value_t = 20)]
+    matches: usize,
+
+    /// MCTS iterations per move
+    #[arg(long, default_value_t = 50)]
+    mcts: usize,
+}
 
 fn main() -> anyhow::Result<()> {
-    println!("=== MCTS Zero Performance Benchmark ===\n");
+    let args = Args::parse();
 
-    let device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
-    println!("Using device: {:?}\n", device);
-    let network = PolyZeroNet::new(VarBuilder::zeros(DType::F32, &device))?;
+    println!("=== Polyfish AI Benchmark ===");
+    println!("Candidate: {}", args.genes);
+    println!("Matches: {}, MCTS Iters: {}", args.matches, args.mcts);
 
-    // Configuration
-    let num_games = 1;
-    let max_turns = 10;
-    let mcts_iterations = 25;
+    let candidate_genes = AIGenes::load(&args.genes)?;
+    let baseline_genes = AIGenes::default();
 
-    // Timing accumulators
-    let mut total_game_time = Duration::ZERO;
-    let mut total_mcts_time = Duration::ZERO;
-    let mut total_feature_time = Duration::ZERO;
-    let mut total_nn_time = Duration::ZERO;
-    let mut total_move_gen_time = Duration::ZERO;
-    let mut total_move_exec_time = Duration::ZERO;
+    let mut candidate_wins = 0;
+    let mut baseline_wins = 0;
+    let mut draws = 0;
+    let mut candidate_total_score = 0;
+    let mut baseline_total_score = 0;
 
-    let mut total_moves = 0;
-    let mut total_legal_moves_generated = 0;
-
-    println!(
-        "Config: {} games, {} max turns, {} MCTS iterations\n",
-        num_games, max_turns, mcts_iterations
-    );
-
-    for game_idx in 0..num_games {
-        let game_start = Instant::now();
-        let seed = 12345 + game_idx as u64;
-
-        // Create game using mapgen (same as self_play)
-        let gen_settings = polyfish::mapgen::MapGenSettings {
-            size: MapSize::Small,
-            map_type: MapType::Drylands,
-            tribes: vec![TribeType::Imperius, TribeType::Bardur],
-            seed,
-            ..Default::default()
+    for i in 0..args.matches {
+        // Swap sides every match
+        let (p1_genes, p2_genes) = if i % 2 == 0 {
+            (&candidate_genes, &baseline_genes)
+        } else {
+            (&baseline_genes, &candidate_genes)
         };
 
-        let mut game = Game::new();
-        game.state = polyfish::mapgen::generate(gen_settings);
-        game.state.settings.mode = ModeType::Perfection;
-        game.state.settings.max_turns = max_turns;
-        game.post_load();
+        let seed = 1000 + i as u64;
+        let (s1, s2) = play_match(p1_genes, p2_genes, args.mcts, seed);
 
-        let agent = ZeroMctsAgent::new(&network, mcts_iterations);
-        let mut turn = 0;
+        let (c_score, b_score) = if i % 2 == 0 { (s1, s2) } else { (s2, s1) };
+        candidate_total_score += c_score;
+        baseline_total_score += b_score;
 
-        while !game.state.settings._game_over && turn < max_turns * 10 {
-            // Benchmark: Legal move generation
-            let move_gen_start = Instant::now();
-            let legal_moves = game.legal_moves();
-            total_move_gen_time += move_gen_start.elapsed();
-            total_legal_moves_generated += legal_moves.len();
-
-            if legal_moves.is_empty() {
-                break;
-            }
-
-            // Benchmark: Feature extraction (standalone)
-            let pov = game.state.settings.current_player_turn_id;
-            let feature_start = Instant::now();
-            let _tensor = state_to_tensor(&game.state, pov, &device);
-            total_feature_time += feature_start.elapsed();
-
-            // Benchmark: NN inference (standalone)
-            let nn_start = Instant::now();
-            let features = state_to_tensor(&game.state, pov, &device)?;
-            let (_policy, _value) =
-                network.forward_t(&features.spatial_map, &features.player_state, false)?;
-            total_nn_time += nn_start.elapsed();
-
-            // Benchmark: Full MCTS search
-            let mcts_start = Instant::now();
-            let best_move = agent.select_move(&mut game);
-            total_mcts_time += mcts_start.elapsed();
-
-            // Benchmark: Move execution
-            if let Some(m) = best_move {
-                let exec_start = Instant::now();
-                game.play_move(m.as_ref());
-                total_move_exec_time += exec_start.elapsed();
-                total_moves += 1;
-            }
-
-            turn += 1;
+        if c_score > b_score {
+            candidate_wins += 1;
+            print!("W");
+        } else if b_score > c_score {
+            baseline_wins += 1;
+            print!("L");
+        } else {
+            draws += 1;
+            print!("D");
         }
 
-        total_game_time += game_start.elapsed();
-        println!(
-            "Game {}: {} turns, {:.2}s",
-            game_idx + 1,
-            turn,
-            game_start.elapsed().as_secs_f64()
-        );
+        use std::io::{self, Write};
+        io::stdout().flush().unwrap();
     }
 
-    println!("\n=== TIMING BREAKDOWN ===\n");
-
-    let total_secs = total_game_time.as_secs_f64();
-
+    println!("\n\n--- Results ---");
     println!(
-        "{:<25} {:>10.3}s  ({:>5.1}%)",
-        "Total time:", total_secs, 100.0
-    );
-    println!("{:-<45}", "");
-
-    let print_timing = |name: &str, duration: Duration| {
-        let secs = duration.as_secs_f64();
-        let pct = (secs / total_secs) * 100.0;
-        println!("{:<25} {:>10.3}s  ({:>5.1}%)", name, secs, pct);
-    };
-
-    print_timing("MCTS search:", total_mcts_time);
-    print_timing("NN inference (isolated):", total_nn_time);
-    print_timing("Feature extraction:", total_feature_time);
-    print_timing("Legal move generation:", total_move_gen_time);
-    print_timing("Move execution:", total_move_exec_time);
-
-    println!("\n=== STATISTICS ===\n");
-
-    println!("Total moves played:      {}", total_moves);
-    println!("Total legal moves gen:   {}", total_legal_moves_generated);
-
-    if total_moves > 0 {
-        println!(
-            "Avg MCTS time/move:      {:.1}ms",
-            total_mcts_time.as_secs_f64() * 1000.0 / total_moves as f64
-        );
-        println!(
-            "Avg NN time/inference:   {:.1}ms",
-            total_nn_time.as_secs_f64() * 1000.0 / total_moves as f64
-        );
-        println!(
-            "Avg move gen time:       {:.3}ms",
-            total_move_gen_time.as_secs_f64() * 1000.0 / total_moves as f64
-        );
-        println!(
-            "Avg legal moves/turn:    {:.1}",
-            total_legal_moves_generated as f64 / total_moves as f64
-        );
-    }
-
-    println!("\n=== MCTS BREAKDOWN (estimated) ===\n");
-
-    let mcts_total = total_mcts_time.as_secs_f64();
-
-    // Each MCTS iteration does ~1 NN call during expansion
-    // Estimate: NN calls in MCTS ≈ iterations * moves
-    let estimated_nn_calls = mcts_iterations * total_moves;
-    let avg_nn_per_call = total_nn_time.as_secs_f64() / total_moves as f64;
-    let estimated_nn_time = avg_nn_per_call * estimated_nn_calls as f64;
-
-    println!(
-        "Estimated NN time in MCTS: {:.1}s ({:.1}% of MCTS)",
-        estimated_nn_time.min(mcts_total),
-        (estimated_nn_time / mcts_total * 100.0).min(100.0)
+        "Candidate Wins: {} ({:.1}%)",
+        candidate_wins,
+        (candidate_wins as f32 / args.matches as f32) * 100.0
     );
     println!(
-        "Remaining (selection/backprop): {:.1}s ({:.1}%)",
-        (mcts_total - estimated_nn_time).max(0.0),
-        ((mcts_total - estimated_nn_time) / mcts_total * 100.0).max(0.0)
+        "Baseline Wins:  {} ({:.1}%)",
+        baseline_wins,
+        (baseline_wins as f32 / args.matches as f32) * 100.0
+    );
+    println!("Draws:          {}", draws);
+    println!(
+        "Avg Score (Candidate): {:.0}",
+        candidate_total_score as f32 / args.matches as f32
+    );
+    println!(
+        "Avg Score (Baseline):  {:.0}",
+        baseline_total_score as f32 / args.matches as f32
     );
 
-    println!("\n=== BOTTLENECK ANALYSIS ===\n");
-
-    let nn_pct = total_nn_time.as_secs_f64() / total_secs * 100.0;
-    let mcts_pct = total_mcts_time.as_secs_f64() / total_secs * 100.0;
-    let move_gen_pct = total_move_gen_time.as_secs_f64() / total_secs * 100.0;
-
-    if mcts_pct > 80.0 {
-        println!(
-            "🔴 MCTS search is the dominant bottleneck ({:.1}%)",
-            mcts_pct
-        );
-        if nn_pct > 50.0 {
-            println!("   └─ NN inference is likely the main component");
-        }
-    } else if nn_pct > 50.0 {
-        println!(
-            "🔴 NN inference is the dominant bottleneck ({:.1}%)",
-            nn_pct
-        );
-    } else if move_gen_pct > 20.0 {
-        println!(
-            "🟡 Legal move generation is significant ({:.1}%)",
-            move_gen_pct
-        );
-    } else {
-        println!("🟢 No single dominant bottleneck detected");
-    }
+    let improvement = (candidate_total_score as f32 / baseline_total_score as f32 - 1.0) * 100.0;
+    println!("Raw Score Improvement: {:.2}%", improvement);
 
     Ok(())
+}
+
+fn play_match(genes1: &AIGenes, genes2: &AIGenes, mcts_iters: usize, seed: u64) -> (i32, i32) {
+    let settings = MapGenSettings {
+        size: MapSize::Tiny,
+        map_type: MapType::Drylands,
+        tribes: vec![TribeType::Imperius, TribeType::Imperius],
+        seed: seed,
+        ..Default::default()
+    };
+
+    let mut game = Game::new();
+    game.state = generate(settings);
+    game.post_load();
+
+    let agent1 = HeuristicMctsAgent::with_genes(mcts_iters, genes1.clone());
+    let agent2 = HeuristicMctsAgent::with_genes(mcts_iters, genes2.clone());
+
+    let mut turn_limit = 200;
+
+    while !game.state.settings._game_over && turn_limit > 0 {
+        let pid = game.state.settings.current_player_turn_id;
+        let agent = if pid == 1 { &agent1 } else { &agent2 };
+
+        if let (Some(m), _) = agent.select_move_with_analysis(&mut game) {
+            game.play_move(m.as_ref());
+        } else {
+            break;
+        }
+
+        turn_limit -= 1;
+    }
+
+    let s1 = game.state.tribes.get(&1).map(|t| t.score).unwrap_or(0);
+    let s2 = game.state.tribes.get(&2).map(|t| t.score).unwrap_or(0);
+
+    (s1, s2)
 }

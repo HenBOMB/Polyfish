@@ -8,6 +8,8 @@ An `AI NN` + MCTS `Rust` capable of playing the award winning `Polytopia` strate
 - **AI Engine**: A hybrid MCTS (Monte Carlo Tree Search) + Neural Network (Alpha-Zero style) approach.
 - **Game RIPPER**: C++ injection script that extracts live game states from the Steam version of Polytopia.
 
+![polyfish ai banner](src/public/images/banner.png)
+
 ## TODOs
 - Need monster compute to train the NN.
 - Elo rating system.

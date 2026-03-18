@@ -1,4 +1,5 @@
 use crate::ai::evaluator;
+use crate::ai::genes::AIGenes;
 use crate::game::Game;
 use crate::moves::EndTurnMove;
 use crate::moves::Move;
@@ -39,6 +40,7 @@ pub struct MctsNodeData {
 pub struct MctsAgent {
     pub iterations: usize,
     pub exploration_constant: f32,
+    pub genes: AIGenes,
 }
 
 struct Node {
@@ -88,9 +90,20 @@ impl Node {
 
 impl MctsAgent {
     pub fn new(iterations: usize) -> Self {
+        let genes = AIGenes::default();
         Self {
             iterations,
-            exploration_constant: 1.414,
+            exploration_constant: genes.mcts.exploration_constant,
+            genes,
+        }
+    }
+
+    pub fn with_genes(iterations: usize, genes: AIGenes) -> Self {
+        let c = genes.mcts.exploration_constant;
+        Self {
+            iterations,
+            exploration_constant: c,
+            genes,
         }
     }
 
@@ -223,7 +236,7 @@ impl MctsAgent {
         }
 
         // Game over or can't move
-        let val = evaluator::evaluate_state(&game.state, pov);
+        let val = evaluator::evaluate_state(&game.state, pov, &self.genes);
         node.visits += 1.0;
         node.value += val;
         val
@@ -252,7 +265,7 @@ impl MctsAgent {
             }
         }
 
-        let val = evaluator::evaluate_state(&game.state, pov);
+        let val = evaluator::evaluate_state(&game.state, pov, &self.genes);
 
         // Undo all rollout moves
         while let Some(undo) = undos.pop() {

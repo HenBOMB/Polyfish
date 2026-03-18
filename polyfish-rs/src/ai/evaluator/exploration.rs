@@ -1,3 +1,4 @@
+use crate::ai::genes::AIGenes;
 use crate::states::{GameState, PlayerId};
 
 /// Evaluates the exploration score (Fog of War revealed) for a given player.
@@ -6,9 +7,9 @@ use crate::states::{GameState, PlayerId};
 ///
 /// Mapping:
 /// - < 20% explored -> 0.0
-/// - 80% explored -> 1.0
-/// - > 80% explored -> 1.0
-pub fn evaluate_exploration(state: &GameState, player_id: PlayerId) -> f32 {
+/// - target% explored -> 1.0
+/// - > target% explored -> 1.0
+pub fn evaluate_exploration(state: &GameState, player_id: PlayerId, genes: &AIGenes) -> f32 {
     let tribe_opt = state.tribes.get(&player_id);
     if tribe_opt.is_none() {
         return 0.0;
@@ -27,15 +28,10 @@ pub fn evaluate_exploration(state: &GameState, player_id: PlayerId) -> f32 {
         }
     }
 
-    // Baseline: 20% (1 - 0.8)
-    // Target: 80%
-    let max_exploration_target = 0.8;
-    let min_threshold_pct = 1.0 - max_exploration_target; // 0.2
-
-    // Spread is the range between min (0.2) and max (0.8) = 0.6
+    let max_exploration_target = genes.exploration.max_exploration_target;
+    let min_threshold_pct = 1.0 - max_exploration_target;
     let spread = max_exploration_target - min_threshold_pct;
 
-    // Score = (Explored% - 0.2) / 0.6
     let score = (explored_count - total_tiles * min_threshold_pct) / (total_tiles * spread);
 
     score.clamp(0.0, 1.0)

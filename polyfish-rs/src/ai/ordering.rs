@@ -1,3 +1,4 @@
+use crate::ai::genes::AIGenes;
 use crate::coords::Coords;
 use crate::functions::{calculate_combat_preview, get_adjacent_indices, get_structure_at};
 use crate::game::Game;
@@ -6,29 +7,29 @@ use crate::settings::get_structure_setting;
 use crate::types::{AbilityType, ModeType, MoveType, RewardType, StructureType};
 
 /// Score a move based on heuristics for move ordering
-pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
+pub fn score_move(game: &Game, mv: &dyn Move, genes: &AIGenes) -> f32 {
     let state = &game.state;
     let move_type = mv.move_type();
     let tribe_id = state.settings.current_player_turn_id;
     let tribe = state.tribes.get(&tribe_id).unwrap();
 
     match move_type {
-        MoveType::Reward => score_reward(state, mv),
+        MoveType::Reward => score_reward(state, mv, genes),
 
         MoveType::Capture => {
             if let Ok(idx) = mv.source_idx() {
                 if let Some(s) = get_structure_at(state, idx as i32) {
                     match s.structure_type {
-                        StructureType::Ruin => 100.0,
-                        StructureType::Village => 99.8,
-                        _ => 100.1, // Capital or City
+                        StructureType::Ruin => genes.ordering.capture_ruin,
+                        StructureType::Village => genes.ordering.capture_village,
+                        _ => genes.ordering.capture_city, // Capital or City
                     }
                 } else {
                     // Likely starfish
-                    80.0
+                    genes.ordering.capture_starfish
                 }
             } else {
-                80.0
+                genes.ordering.capture_starfish
             }
         }
 
@@ -36,32 +37,32 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
             if let (Ok(src), Ok(target)) = (mv.source_idx(), mv.target_idx()) {
                 if let Some(preview) = calculate_combat_preview(state, src as i32, target as i32) {
                     if preview.defender_dies {
-                        45.0
+                        genes.ordering.attack_kill
                     } else if preview.attacker_dies {
-                        1.0 // Suicide is very low priority
-                    } else if preview.damage_to_defender > 5 {
-                        25.0
+                        genes.ordering.attack_suicide
+                    } else if preview.damage_to_defender >= genes.ordering.attack_heavy_threshold {
+                        genes.ordering.attack_heavy_damage
                     } else {
-                        15.0
+                        genes.ordering.attack_light_damage
                     }
                 } else {
                     // Infiltration or other special attack
-                    15.0
+                    genes.ordering.attack_light_damage
                 }
             } else {
-                15.0
+                genes.ordering.attack_light_damage
             }
         }
 
         MoveType::Ability => {
             if let Ok(ability) = mv.ability_type() {
                 match ability {
-                    AbilityType::Promote => 35.0,
+                    AbilityType::Promote => genes.ordering.ability_promote,
 
                     AbilityType::Explode
                     | AbilityType::Boost
                     | AbilityType::FreezeArea
-                    | AbilityType::Convert => 20.0,
+                    | AbilityType::Convert => genes.ordering.ability_combat,
 
                     AbilityType::Recover => {
                         if let Ok(unit_idx) = mv.source_idx() {
@@ -76,206 +77,322 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                                 let current_hp = unit.health as f32;
                                 let hp_pct = current_hp / max_hp;
 
-                                if hp_pct < 0.4 {
-                                    40.0 // Critical heal
+                                if hp_pct < genes.ordering.ability_recover_critical_threshold {
+                                    genes.ordering.ability_recover_critical
                                 } else if hp_pct < 0.9 {
                                     // Safe to heal?
                                     // If in city or mountain (defense bonus), encourages healing
-                                    let def_bonus =
-                                        crate::functions::get_defense_bonus(state, unit);
-                                    if def_bonus > 1.0 { 30.0 } else { 20.0 }
+                                    let def_bonus = crate::functions::get_defense_bonus(state, unit);
+                                    if def_bonus > 1.0 {
+                                        genes.ordering.ability_recover_safe
+                                    } else {
+                                        genes.ordering.ability_recover_waste
+                                    }
                                 } else {
-                                    5.0 // Waste of a turn if almost full
+                                    genes.ordering.ability_recover_waste
                                 }
                             } else {
-                                20.0
+                                genes.ordering.ability_default
                             }
                         } else {
-                            20.0
+                            genes.ordering.ability_default
                         }
                     }
 
-                    AbilityType::Disband => -50.0, // Generally avoid unless desperate
+                    AbilityType::Disband => genes.ordering.ability_disband,
 
-                    AbilityType::BurnForest => 5.0, // Low priority unless contextual
+                    AbilityType::BurnForest => genes.ordering.ability_burn_forest,
 
-                    AbilityType::Destroy => -10.0, // Risky
+                    AbilityType::Destroy => genes.ordering.ability_destroy,
 
-                    AbilityType::ClearForest => {
-                        let mut score = 3.0; // Very low base score
-                        let stars = tribe.stars;
-                        let has_forestry = crate::settings::technology::has_technology(
-                            &tribe.tech_vanilla,
-                            crate::types::TechnologyType::Forestry,
-                        );
+                    AbilityType::ClearForest => score_clear_forest(state, tribe, mv, genes),
 
-                        if let Ok(target) = mv.target_idx() {
-                            // 1. Penalty for destroying resource
-                            if let Some(Some(_res)) = state.resources.get(&(target as i32)) {
-                                score -= 50.0; // Heavy penalty
-                            }
-
-                            // 2. Penalty for wasting potential Lumber Hut site (if we have the tech)
-                            // Skip penalty if city is already max targeted level (5)
-                            let mut growth_useful = true;
-                            if let Some(city) = tribe
-                                .cities
-                                .iter()
-                                .find(|c| c._territory.contains(&(target as i32)))
-                            {
-                                if city.level >= 5 {
-                                    growth_useful = false;
-                                }
-                            }
-
-                            if has_forestry && growth_useful {
-                                score -= 10.0;
-                            }
-
-                            // 3. Clustering Penalty: Don't remove forests near potential hub-spots (Sawmills)
-                            // If this forest borders an empty tile, see how many other forests/huts also border it.
-                            let adj = get_adjacent_indices(state, target as i32, 1);
-                            for empty_idx in adj
-                                .iter()
-                                .filter(|&&idx| get_structure_at(state, idx).is_none())
-                            {
-                                let neighbors_of_empty = get_adjacent_indices(state, *empty_idx, 1);
-                                let existing_prereqs = neighbors_of_empty
-                                    .iter()
-                                    .filter(|&&n| {
-                                        if n == target as i32 {
-                                            return false;
-                                        } // Don't count ourselves
-                                        if crate::functions::get_structure_type_at(state, n)
-                                            == Some(StructureType::LumberHut)
-                                        {
-                                            return true;
-                                        }
-                                        if let Some(tile) = state.tiles.get(&n) {
-                                            if tile.terrain_type
-                                                == crate::types::TerrainType::Forest
-                                            {
-                                                return true;
-                                            }
-                                        }
-                                        false
-                                    })
-                                    .count();
-
-                                // Penalty per hub-spot we "weaken"
-                                score -= (existing_prereqs as f32 + 1.0) * 2.5;
-                            }
-
-                            // 4. Strategic bonus: extra star needed for a level-up
-                            // ONLY if we are critically short on stars.
-                            if stars < 2 {
-                                let mut enables_level_up = false;
-                                for city in &tribe.cities {
-                                    // If clearing gets us to the cost of a Road (2) or Harvest (2)
-                                    if stars <= 1 {
-                                        let pop_needed =
-                                            (city.level + 1).saturating_sub(city.population);
-
-                                        // Scenario A: Enables a 2-star building/harvest
-                                        if pop_needed <= 2 {
-                                            enables_level_up = true;
-                                            break;
-                                        }
-
-                                        // Scenario B: Enables a 2-star Road to connect capital (+1 pop)
-                                        if pop_needed == 1 && !city.connected_to_capital {
-                                            enables_level_up = true;
-                                            break;
-                                        }
-                                    }
-                                }
-                                if enables_level_up {
-                                    score += 10.0; // Moderate priority to enable growth
-                                } else {
-                                    score += 2.0; // Small desperation boost
-                                }
-                            } else if stars >= 5 {
-                                score -= 10.0; // Don't decimate if we have money
-                            }
-                        }
-                        score
-                    }
-
-                    _ => 10.0,
+                    _ => genes.ordering.ability_default,
                 }
             } else {
-                10.0
+                genes.ordering.ability_default
             }
         }
 
-        MoveType::Summon => {
-            if state.settings.turn < 2 {
-                return -10.0; // Favor development on turn 1
-            }
+        MoveType::Summon => score_summon(state, tribe, mv, genes),
 
-            let mut score = 10.0; // Lowered base score (Builds/Harvest are 22.0)
+        MoveType::Build | MoveType::Harvest => score_build(state, tribe, mv, genes),
 
-            // 1. Enemy Proximity: High priority if threatened
-            let mut threatened = false;
-            for city in &tribe.cities {
-                let adj = crate::functions::get_adjacent_indices(state, city.tile_index, 3);
-                if adj
-                    .iter()
-                    .any(|&idx| crate::functions::get_enemy_at(state, idx, tribe_id).is_some())
-                {
-                    threatened = true;
-                    break;
-                }
-            }
-            if threatened {
-                score += 15.0;
-            }
+        MoveType::Step => score_step(state, mv, genes),
 
-            // 2. Army Size relative to territory
-            let unit_count = tribe.units.len();
-            let city_count = tribe.cities.len();
-            if unit_count < city_count + 1 {
-                score += 8.0; // Need at least one unit per city + explorer (Total 18.0 < 22.0)
-            } else if unit_count > city_count * 2 && !threatened {
-                score -= 15.0; // Avoid bloat if safe
-            }
+        MoveType::Research => score_research(state, tribe, mv, genes),
 
-            // 3. Super Unit / Giant preference
-            if let Ok(u_type) = mv.unit_type() {
-                if u_type == crate::types::UnitType::Giant {
-                    score += 15.0;
-                }
-            }
+        MoveType::EndTurn => 0.0,
 
-            score
+        _ => 5.0,
+    }
+}
+
+fn score_clear_forest(
+    state: &crate::states::GameState,
+    tribe: &crate::states::TribeState,
+    mv: &dyn Move,
+    genes: &AIGenes,
+) -> f32 {
+    let mut score = genes.ordering.clear_forest_base;
+    let stars = tribe.stars;
+    let has_forestry = crate::settings::technology::has_technology(
+        &tribe.tech_vanilla,
+        crate::types::TechnologyType::Forestry,
+    );
+
+    if let Ok(target) = mv.target_idx() {
+        // 1. Penalty for destroying resource
+        if let Some(Some(_res)) = state.resources.get(&(target as i32)) {
+            score -= genes.ordering.clear_forest_resource_penalty;
         }
 
-        MoveType::Build | MoveType::Harvest => {
-            let mut score = 22.0;
-            let player_id = state.settings.current_player_turn_id;
+        // 2. Penalty for wasting potential Lumber Hut site (if we have the tech)
+        let mut growth_useful = true;
+        if let Some(city) = tribe
+            .cities
+            .iter()
+            .find(|c| c._territory.contains(&(target as i32)))
+        {
+            if city.level >= 5 {
+                growth_useful = false;
+            }
+        }
 
-            // 1. Structure specific logic (Temples, Adjacency, Roads, Clustering)
-            if let Ok(s_type) = mv.structure_type() {
-                // Temple timing bonus in Perfection mode
-                if state.settings.mode == ModeType::Perfection {
-                    match s_type {
-                        StructureType::Temple
-                        | StructureType::ForestTemple
-                        | StructureType::MountainTemple
-                        | StructureType::WaterTemple => {
-                            let turn = state.settings.turn;
-                            if turn <= 19 {
-                                score += 15.0 + (19 - turn) as f32;
-                            } else if turn <= 25 {
-                                score += 8.0;
-                            }
+        if has_forestry && growth_useful {
+            score -= genes.ordering.clear_forest_forestry_penalty;
+        }
+
+        // 3. Clustering Penalty
+        let adj = get_adjacent_indices(state, target as i32, 1);
+        for empty_idx in adj
+            .iter()
+            .filter(|&&idx| get_structure_at(state, idx).is_none())
+        {
+            let neighbors_of_empty = get_adjacent_indices(state, *empty_idx, 1);
+            let existing_prereqs = neighbors_of_empty
+                .iter()
+                .filter(|&&n| {
+                    if n == target as i32 {
+                        return false;
+                    }
+                    if crate::functions::get_structure_type_at(state, n)
+                        == Some(StructureType::LumberHut)
+                    {
+                        return true;
+                    }
+                    if let Some(tile) = state.tiles.get(&n) {
+                        if tile.terrain_type == crate::types::TerrainType::Forest {
+                            return true;
                         }
-                        _ => {}
+                    }
+                    false
+                })
+                .count();
+
+            score -= (existing_prereqs as f32 + 1.0) * genes.ordering.clear_forest_cluster_penalty_per;
+        }
+
+        // 4. Strategic bonus
+        if stars < 2 {
+            let mut enables_level_up = false;
+            for city in &tribe.cities {
+                if stars <= 1 {
+                    let pop_needed = (city.level + 1).saturating_sub(city.population);
+                    if pop_needed <= 2 {
+                        enables_level_up = true;
+                        break;
+                    }
+                    if pop_needed == 1 && !city.connected_to_capital {
+                        enables_level_up = true;
+                        break;
                     }
                 }
+            }
+            if enables_level_up {
+                score += genes.ordering.clear_forest_enables_levelup_bonus;
+            } else {
+                score += genes.ordering.clear_forest_desperation_bonus;
+            }
+        } else if stars >= 5 {
+            score -= genes.ordering.clear_forest_healthy_penalty;
+        }
+    }
+    score
+}
 
-                // Adjacency and Roads
-                if let Ok(target) = mv.target_idx() {
+fn score_summon(
+    state: &crate::states::GameState,
+    tribe: &crate::states::TribeState,
+    mv: &dyn Move,
+    genes: &AIGenes,
+) -> f32 {
+    let tribe_id = tribe.id;
+    if state.settings.turn < 2 {
+        return genes.ordering.summon_early_penalty;
+    }
+
+    let mut score = genes.ordering.summon_base;
+
+    let mut threatened = false;
+    for city in &tribe.cities {
+        let adj = crate::functions::get_adjacent_indices(state, city.tile_index, 3);
+        if adj
+            .iter()
+            .any(|&idx| crate::functions::get_enemy_at(state, idx, tribe_id).is_some())
+        {
+            threatened = true;
+            break;
+        }
+    }
+    if threatened {
+        score += genes.ordering.summon_threat_bonus;
+    }
+
+    let unit_count = tribe.units.len();
+    let city_count = tribe.cities.len();
+    if unit_count < city_count + 1 {
+        score += genes.ordering.summon_army_small_bonus;
+    } else if unit_count > city_count * 2 && !threatened {
+        score -= genes.ordering.summon_army_bloat_penalty;
+    }
+
+    if let Ok(u_type) = mv.unit_type() {
+        if u_type == crate::types::UnitType::Giant {
+            score += genes.ordering.summon_giant_bonus;
+        }
+    }
+
+    score
+}
+
+fn score_build(
+    state: &crate::states::GameState,
+    tribe: &crate::states::TribeState,
+    mv: &dyn Move,
+    genes: &AIGenes,
+) -> f32 {
+    let mut score = genes.ordering.build_base;
+    let player_id = tribe.id;
+
+    if let Ok(s_type) = mv.structure_type() {
+        // Temple timing bonus
+        if state.settings.mode == ModeType::Perfection {
+            match s_type {
+                StructureType::Temple
+                | StructureType::ForestTemple
+                | StructureType::MountainTemple
+                | StructureType::WaterTemple => {
+                    let turn = state.settings.turn;
+                    if turn <= 19 {
+                        score += genes.ordering.temple_early_bonus + (19 - turn) as f32;
+                    } else if turn <= 25 {
+                        score += genes.ordering.temple_mid_bonus;
+                    }
+                }
+                StructureType::AltarOfPeace
+                | StructureType::TowerOfWisdom
+                | StructureType::GrandBazaar
+                | StructureType::EmperorsTomb
+                | StructureType::GateOfPower
+                | StructureType::ParkOfFortune
+                | StructureType::EyeOfGod => {
+                    score += genes.ordering.monument_bonus;
+                }
+                _ => {}
+            }
+        }
+
+        if let Ok(target) = mv.target_idx() {
+            let prereqs: &[StructureType] = match s_type {
+                StructureType::Sawmill => &[StructureType::LumberHut],
+                StructureType::Forge => &[StructureType::Mine],
+                StructureType::Windmill => &[StructureType::Farm],
+                StructureType::Market => &[
+                    StructureType::Sawmill,
+                    StructureType::Windmill,
+                    StructureType::Forge,
+                ],
+                _ => &[],
+            };
+
+            let matching_hub = match s_type {
+                StructureType::LumberHut => Some(StructureType::Sawmill),
+                StructureType::Mine => Some(StructureType::Forge),
+                StructureType::Farm => Some(StructureType::Windmill),
+                _ => None,
+            };
+
+            if let Some(_hub) = matching_hub {
+                let adj = get_adjacent_indices(state, target as i32, 1);
+                for empty_idx in adj
+                    .iter()
+                    .filter(|&&idx| get_structure_at(state, idx).is_none())
+                {
+                    let neighbors_of_empty = get_adjacent_indices(state, *empty_idx, 1);
+                    let existing_prereqs = neighbors_of_empty
+                        .iter()
+                        .filter(|&&n| {
+                            if n == target as i32 {
+                                return false;
+                            }
+                            crate::functions::get_structure_type_at(state, n) == Some(s_type)
+                        })
+                        .count();
+
+                    score += (existing_prereqs + 1) as f32 * genes.ordering.clustering_prereq_bonus;
+                }
+            }
+
+            if !prereqs.is_empty() {
+                let adj = get_adjacent_indices(state, target as i32, 1);
+                let adj_count = adj
+                    .iter()
+                    .filter(|&&idx| {
+                        if let Some(tile) = state.tiles.get(&idx) {
+                            if tile.owner == player_id {
+                                if let Some(s) = get_structure_at(state, idx) {
+                                    return prereqs.contains(&s.structure_type);
+                                }
+                            }
+                        }
+                        false
+                    })
+                    .count();
+
+                match adj_count {
+                    0 => score -= genes.ordering.adjacency_lonely_penalty,
+                    1 => {} // Neutral
+                    2 => score += genes.ordering.adjacency_2_bonus,
+                    3 => score += genes.ordering.adjacency_3_bonus,
+                    _ => score += genes.ordering.adjacency_4plus_bonus,
+                }
+            }
+
+            if s_type == StructureType::Road {
+                score += score_road(state, target as i32, genes);
+            }
+        }
+    }
+
+    if let Ok(target) = mv.target_idx() {
+        let mut pop_gain = 0;
+
+        if mv.move_type() == MoveType::Harvest {
+            if let Some(Some(res)) = state.resources.get(&(target as i32)) {
+                pop_gain = crate::settings::resources::get_resource_setting(res.resource_type)
+                    .reward_pop;
+            } else {
+                pop_gain = 1;
+            }
+        } else if let Ok(s_type) = mv.structure_type() {
+            pop_gain = get_structure_setting(s_type).reward_pop;
+
+            match s_type {
+                StructureType::Sawmill
+                | StructureType::Forge
+                | StructureType::Windmill
+                | StructureType::Market => {
                     let prereqs: &[StructureType] = match s_type {
                         StructureType::Sawmill => &[StructureType::LumberHut],
                         StructureType::Forge => &[StructureType::Mine],
@@ -287,241 +404,120 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                         ],
                         _ => &[],
                     };
+                    let adj = get_adjacent_indices(state, target as i32, 1);
+                    let adj_count = adj
+                        .iter()
+                        .filter(|&&idx| {
+                            if let Some(tile) = state.tiles.get(&idx) {
+                                if tile.owner == player_id {
+                                    if let Some(s) = get_structure_at(state, idx) {
+                                        return prereqs.contains(&s.structure_type);
+                                    }
+                                }
+                            }
+                            false
+                        })
+                        .count();
 
-                    // Future Adjacency Prediction (Clustering Potential)
-                    // If building a prereq, value empty tiles that could host the Hub.
-                    // If multiple existing prereqs surround the same empty tile, reward it more.
-                    let matching_hub = match s_type {
-                        StructureType::LumberHut => Some(StructureType::Sawmill),
-                        StructureType::Mine => Some(StructureType::Forge),
-                        StructureType::Farm => Some(StructureType::Windmill),
-                        _ => None,
+                    pop_gain = match s_type {
+                        StructureType::Forge => adj_count as i32 * 2,
+                        _ => adj_count as i32,
                     };
-
-                    if let Some(_hub) = matching_hub {
-                        let adj = get_adjacent_indices(state, target as i32, 1);
-                        for empty_idx in adj
-                            .iter()
-                            .filter(|&&idx| get_structure_at(state, idx).is_none())
-                        {
-                            // How many other prereqs of this type border this empty tile?
-                            let neighbors_of_empty = get_adjacent_indices(state, *empty_idx, 1);
-                            let existing_prereqs = neighbors_of_empty
-                                .iter()
-                                .filter(|&&n| {
-                                    if n == target as i32 {
-                                        return false;
-                                    } // Don't count ourselves (we are about to build there)
-                                    crate::functions::get_structure_type_at(state, n)
-                                        == Some(s_type)
-                                })
-                                .count();
-
-                            // (Self + others) * weight.
-                            // 1 prereq = 2.5 bonus, 2 prereqs = 5.0 bonus, etc.
-                            score += (existing_prereqs + 1) as f32 * 2.5;
-                        }
-                    }
-
-                    if !prereqs.is_empty() {
-                        let adj = get_adjacent_indices(state, target as i32, 1);
-                        let adj_count = adj
-                            .iter()
-                            .filter(|&&idx| {
-                                if let Some(tile) = state.tiles.get(&idx) {
-                                    if tile.owner == player_id {
-                                        if let Some(s) = get_structure_at(state, idx) {
-                                            return prereqs.contains(&s.structure_type);
-                                        }
-                                    }
-                                }
-                                false
-                            })
-                            .count();
-
-                        match adj_count {
-                            0 => {}
-                            1 => score -= 2.0,
-                            2 => score += 5.0,
-                            3 => score += 12.0,
-                            _ => score += 18.0,
-                        }
-                    }
-
-                    if s_type == StructureType::Road {
-                        score += score_road(state, target as i32);
-                    }
                 }
+                _ => {}
             }
-
-            // 2. Population efficiency scoring (Unified for Build and Harvest)
-            if let Ok(target) = mv.target_idx() {
-                let mut pop_gain = 0;
-
-                // Determine pop gain for both MoveTypes
-                if move_type == MoveType::Harvest {
-                    if let Some(Some(res)) = state.resources.get(&(target as i32)) {
-                        pop_gain =
-                            crate::settings::resources::get_resource_setting(res.resource_type)
-                                .reward_pop;
-                    } else {
-                        pop_gain = 1; // Fallback
-                    }
-                } else if let Ok(s_type) = mv.structure_type() {
-                    pop_gain = get_structure_setting(s_type).reward_pop;
-
-                    match s_type {
-                        // Adjacency structures can give population if clustered
-                        StructureType::Sawmill
-                        | StructureType::Forge
-                        | StructureType::Windmill
-                        | StructureType::Market => {
-                            // Re-calculate adj_count for pop estimation
-                            let prereqs: &[StructureType] = match s_type {
-                                StructureType::Sawmill => &[StructureType::LumberHut],
-                                StructureType::Forge => &[StructureType::Mine],
-                                StructureType::Windmill => &[StructureType::Farm],
-                                StructureType::Market => &[
-                                    StructureType::Sawmill,
-                                    StructureType::Windmill,
-                                    StructureType::Forge,
-                                ],
-                                _ => &[],
-                            };
-                            let adj = get_adjacent_indices(state, target as i32, 1);
-                            let adj_count = adj
-                                .iter()
-                                .filter(|&&idx| {
-                                    if let Some(tile) = state.tiles.get(&idx) {
-                                        if tile.owner == player_id {
-                                            if let Some(s) = get_structure_at(state, idx) {
-                                                return prereqs.contains(&s.structure_type);
-                                            }
-                                        }
-                                    }
-                                    false
-                                })
-                                .count();
-
-                            pop_gain = match s_type {
-                                StructureType::Forge => adj_count as i32 * 2,
-                                _ => adj_count as i32,
-                            };
-                        }
-                        _ => {}
-                    }
-                }
-
-                if pop_gain > 0 {
-                    if let Some(tribe) = state.tribes.get(&player_id) {
-                        if let Some(city) = tribe
-                            .cities
-                            .iter()
-                            .find(|c| c._territory.contains(&(target as i32)))
-                        {
-                            let needed = city.level + 1;
-                            let current = city.population;
-
-                            if current + pop_gain < needed {
-                                score -= 4.0; // Doesn't finish level
-                            } else {
-                                score += 5.0; // Finishes level!
-                            }
-                        }
-                    }
-                }
-            }
-
-            score
         }
 
-        MoveType::Step => {
-            let mut score = 50.0;
-            if let Ok(target_idx) = mv.target_idx() {
-                let player_id = state.settings.current_player_turn_id;
+        if pop_gain > 0 {
+            if let Some(city) = tribe
+                .cities
+                .iter()
+                .find(|c| c._territory.contains(&(target as i32)))
+            {
+                let needed = city.level + 1;
+                let current = city.population;
 
-                // Prioritize stepping onto capture targets
-                if let Some(tile) = state.tiles.get(&(target_idx as i32)) {
-                    if let Some(s) = get_structure_at(state, target_idx as i32) {
-                        match s.structure_type {
-                            StructureType::Ruin
-                            | StructureType::Village
-                            | StructureType::Lighthouse => score += 40.0,
-                            _ => {
-                                // Enemy city potentially
-                                // TODO: Doesnt check for peace treaty
-                                if tile.owner != player_id && tile.owner != 0 {
-                                    score += 45.0;
-                                }
-                            }
-                        }
-                    }
-
-                    // Prioritize exploration (stepping into/near fog)
-                    let adj = crate::functions::get_adjacent_indices(state, target_idx as i32, 1);
-                    for n_idx in adj {
-                        if let Some(tile) = state.tiles.get(&n_idx) {
-                            if !tile.explorers.contains(&player_id) {
-                                score += 2.0; // Cumulative for each fog tile revealed
-                            }
-                        }
-                    }
-                }
-            }
-            score
-        }
-
-        MoveType::Research => {
-            if let Ok(tech) = mv.tech_type() {
-                let player_id = state.settings.current_player_turn_id;
-                let utility =
-                    crate::ai::evaluator::research::evaluate_tech_utility(state, player_id, tech);
-
-                // Map utility into 8-18 range:
-                //   utility of -2 or less -> 8.0 (low priority but still above default 5.0)
-                //   utility of +8 or more -> 18.0 (above build/harvest at 22 is too aggressive)
-                let base = 8.0 + (utility.clamp(-2.0, 8.0) + 2.0);
-
-                // "Buy before capture" bonus:
-                // If any of our units are sitting on an uncaptured village,
-                // tech cost will go up after we capture. Research now!
-                let has_village_opportunity = if let Some(tribe) = state.tribes.get(&player_id) {
-                    tribe.units.iter().any(|unit| {
-                        let idx = unit.coords.idx;
-                        if let Some(tile) = state.tiles.get(&idx) {
-                            if tile.owner != player_id {
-                                if let Some(s) = get_structure_at(state, idx) {
-                                    return s.structure_type == StructureType::Village;
-                                }
-                            }
-                        }
-                        false
-                    })
+                if current + pop_gain < needed {
+                    score -= genes.ordering.levelup_miss_penalty;
                 } else {
-                    false
-                };
-
-                if has_village_opportunity {
-                    base + 5.0 // Push above build/harvest (22.0) to encourage buying first
-                } else {
-                    base
+                    score += genes.ordering.levelup_completion_bonus;
                 }
-            } else {
-                5.0
             }
         }
+    }
 
-        MoveType::EndTurn => 0.0,
+    score
+}
 
-        _ => 5.0,
+fn score_step(state: &crate::states::GameState, mv: &dyn Move, genes: &AIGenes) -> f32 {
+    let mut score = genes.ordering.step_base;
+    if let Ok(target_idx) = mv.target_idx() {
+        let player_id = state.settings.current_player_turn_id;
+
+        if let Some(tile) = state.tiles.get(&(target_idx as i32)) {
+            if let Some(s) = get_structure_at(state, target_idx as i32) {
+                match s.structure_type {
+                    StructureType::Ruin | StructureType::Village | StructureType::Lighthouse => {
+                        score += genes.ordering.step_capture_target_bonus
+                    }
+                    _ => {
+                        if tile.owner != player_id && tile.owner != 0 {
+                            score += genes.ordering.step_enemy_city_bonus;
+                        }
+                    }
+                }
+            }
+
+            let adj = crate::functions::get_adjacent_indices(state, target_idx as i32, 1);
+            for n_idx in adj {
+                if let Some(tile) = state.tiles.get(&n_idx) {
+                    if !tile.explorers.contains(&player_id) {
+                        score += genes.ordering.step_fog_reveal_bonus;
+                    }
+                }
+            }
+        }
+    }
+    score
+}
+
+fn score_research(
+    state: &crate::states::GameState,
+    tribe: &crate::states::TribeState,
+    mv: &dyn Move,
+    genes: &AIGenes,
+) -> f32 {
+    if let Ok(tech) = mv.tech_type() {
+        let player_id = tribe.id;
+        let utility =
+            crate::ai::evaluator::research::evaluate_tech_utility(state, player_id, tech, genes);
+
+        let base = genes.ordering.research_base + (utility.clamp(-2.0, 8.0) + 2.0);
+
+        let has_village_opportunity = tribe.units.iter().any(|unit| {
+            let idx = unit.coords.idx;
+            if let Some(tile) = state.tiles.get(&idx) {
+                if tile.owner != player_id {
+                    if let Some(s) = get_structure_at(state, idx) {
+                        return s.structure_type == StructureType::Village;
+                    }
+                }
+            }
+            false
+        });
+
+        if has_village_opportunity {
+            base + genes.ordering.research_buy_before_capture_bonus
+        } else {
+            base
+        }
+    } else {
+        5.0
     }
 }
 
-/// Score reward moves contextually based on game situation.
-/// Rewards are always highest priority (200+ range), but this
-/// differentiates WHICH reward to prefer per slot.
-fn score_reward(state: &crate::states::GameState, mv: &dyn Move) -> f32 {
-    let base = 200.0;
+fn score_reward(state: &crate::states::GameState, mv: &dyn Move, genes: &AIGenes) -> f32 {
+    let base = genes.ordering.reward_base;
     let reward = match mv.reward_type() {
         Ok(r) => r,
         Err(_) => return base,
@@ -531,25 +527,16 @@ fn score_reward(state: &crate::states::GameState, mv: &dyn Move) -> f32 {
     let is_perfection = state.settings.mode == ModeType::Perfection;
 
     match reward {
-        // --- Slot 1: Explorer vs Workshop ---
-        RewardType::Workshop => {
-            // Safe best: +1 SPT is always valuable
-            base + 10.0
-        }
+        RewardType::Workshop => base + genes.ordering.reward_workshop_bonus,
         RewardType::Explorer => {
             if state.settings.turn <= 1 {
-                // Not best on first turn — little fog to clear
-                base + 3.0
+                base + genes.ordering.reward_explorer_early_penalty
             } else {
-                // Decent for multi-tribe maps (discovery stars)
                 let tribe_count = state.tribes.len() as f32;
-                base + 5.0 + tribe_count // More tribes = more discovery bonus
+                base + genes.ordering.reward_explorer_bonus + tribe_count
             }
         }
-
-        // --- Slot 2: Walls vs Resources ---
         RewardType::CityWall => {
-            // Preferred if enemies are nearby
             let city_idx = mv.target_idx().unwrap_or(0) as i32;
             let adj = get_adjacent_indices(state, city_idx, 1);
             let enemies_nearby = adj
@@ -557,28 +544,20 @@ fn score_reward(state: &crate::states::GameState, mv: &dyn Move) -> f32 {
                 .any(|&idx| crate::functions::get_enemy_at(state, idx, player_id).is_some());
 
             if enemies_nearby {
-                base + 12.0 // Strong preference when threatened
+                base + genes.ordering.reward_wall_threatened_bonus
             } else {
-                base + 4.0 // Low priority if safe
+                base + genes.ordering.reward_wall_safe_bonus
             }
         }
         RewardType::Resources => {
-            // +5 stars is great early game when economy is tight
             if state.settings.turn <= 5 {
-                base + 9.0
+                base + genes.ordering.reward_resources_early_bonus
             } else {
-                base + 6.0
+                base + genes.ordering.reward_resources_late_bonus
             }
         }
-
-        // --- Slot 3: PopGrowth vs BorderGrowth ---
-        RewardType::PopGrowth => {
-            // Generally better — +3 pop is solid and consistent
-            base + 8.0
-        }
+        RewardType::PopGrowth => base + genes.ordering.reward_pop_growth_bonus,
         RewardType::BorderGrowth => {
-            // Only worth it if border expansion covers valuable terrain
-            // Heuristic: smaller cities benefit more from border growth
             let city_idx = mv.target_idx().unwrap_or(0) as i32;
             if let Some(tribe) = state.tribes.get(&player_id) {
                 let city_territory = tribe
@@ -588,47 +567,37 @@ fn score_reward(state: &crate::states::GameState, mv: &dyn Move) -> f32 {
                     .map(|c| c._territory.len())
                     .unwrap_or(0);
                 if city_territory < 10 {
-                    base + 9.0 // Small city — border growth reveals/claims more
+                    base + genes.ordering.reward_border_growth_small_bonus
                 } else {
-                    base + 5.0 // Large city — pop growth is usually better
+                    base + genes.ordering.reward_border_growth_large_bonus
                 }
             } else {
-                base + 5.0
+                base + genes.ordering.reward_border_growth_large_bonus
             }
         }
-
-        // --- Slot 4+: Park vs SuperUnit ---
         RewardType::Park => {
             if is_perfection {
-                // Always choose Park in Perfection — +250 score is massive
-                base + 20.0
+                base + genes.ordering.reward_park_perfection_bonus
             } else {
-                // In Domination, Park is +1 SPT but no tactical advantage
-                base + 5.0
+                base + genes.ordering.reward_park_domination_bonus
             }
         }
         RewardType::SuperUnit => {
             if is_perfection {
-                // In Perfection, super unit matters less than score
-                base + 8.0
+                base + genes.ordering.reward_super_unit_perfection_bonus
             } else {
-                // In Domination, super unit is game-changing
-                base + 18.0
+                base + genes.ordering.reward_super_unit_domination_bonus
             }
         }
-
         _ => base,
     }
 }
 
-/// Score a road placement based on how well it connects cities.
-/// Returns a bonus/penalty relative to the base Build score.
-fn score_road(state: &crate::states::GameState, tile_idx: i32) -> f32 {
+fn score_road(state: &crate::states::GameState, tile_idx: i32, genes: &AIGenes) -> f32 {
     let player_id = state.settings.current_player_turn_id;
     let map_size = state.map_size();
     let road_pos = Coords::from_index(tile_idx, map_size);
 
-    // Gather our cities and their positions
     let tribe = match state.tribes.get(&player_id) {
         Some(t) => t,
         None => return 0.0,
@@ -646,12 +615,11 @@ fn score_road(state: &crate::states::GameState, tile_idx: i32) -> f32 {
         .collect();
 
     if cities.len() < 2 {
-        return -3.0; // Only 1 city — roads are not useful yet
+        return genes.ordering.road_single_city_penalty;
     }
 
     let adj = get_adjacent_indices(state, tile_idx, 1);
 
-    // Check adjacency context
     let adj_to_road = adj.iter().any(|&idx| {
         state
             .tiles
@@ -663,18 +631,16 @@ fn score_road(state: &crate::states::GameState, tile_idx: i32) -> f32 {
         .iter()
         .any(|&idx| tribe.cities.iter().any(|c| c.tile_index == idx));
 
-    // Find the best city pair this road could help connect
-    let mut best_score: f32 = -3.0;
+    let mut best_score: f32 = genes.ordering.road_single_city_penalty;
 
     for (i, (city_a, connected_a)) in cities.iter().enumerate() {
         for (city_b, connected_b) in cities.iter().skip(i + 1) {
-            // Most valuable: connecting an unconnected city to the capital
             let connection_bonus = if *connected_a != *connected_b {
-                8.0 // One connected, one not — this road helps connect them
+                genes.ordering.road_connection_unconnected_bonus
             } else if !*connected_a && !*connected_b {
-                4.0 // Neither connected — still useful
+                genes.ordering.road_connection_neither_bonus
             } else {
-                1.0 // Both already connected — lower priority
+                genes.ordering.road_connection_both_bonus
             };
 
             let city_dist = city_a.distance_to(city_b);
@@ -682,31 +648,25 @@ fn score_road(state: &crate::states::GameState, tile_idx: i32) -> f32 {
                 continue;
             }
 
-            // Check if this road tile lies roughly on the path between the two cities
-            // If dist(A, road) + dist(road, B) is close to dist(A, B), it's on-path
             let dist_a = road_pos.distance_to(city_a);
             let dist_b = road_pos.distance_to(city_b);
             let detour = (dist_a + dist_b) - city_dist;
 
             if detour <= 1 {
-                // On or very near the shortest path
-                let path_score = connection_bonus + 5.0 - (city_dist as f32 * 0.2).min(4.0);
+                let path_score = connection_bonus + genes.ordering.road_on_path_bonus - (city_dist as f32 * 0.2).min(4.0);
                 best_score = best_score.max(path_score);
             } else if detour <= 3 {
-                // Slightly off path but still reasonable
                 let path_score = connection_bonus + 1.0;
                 best_score = best_score.max(path_score);
             }
         }
     }
 
-    // Bonus for extending an existing road chain
     if adj_to_road {
-        best_score += 2.0;
+        best_score += genes.ordering.road_adj_road_bonus;
     }
-    // Bonus for being adjacent to a city (starting or ending a connection)
     if adj_to_city {
-        best_score += 3.0;
+        best_score += genes.ordering.road_adj_city_bonus;
     }
 
     best_score
@@ -719,12 +679,11 @@ mod tests {
     use crate::moves::EndTurnMove;
 
     #[test]
-    fn test_basic_ordering() {
+    fn test_basic_ordering_compiles() {
         let game = Game::new();
         let end_turn = EndTurnMove;
+        let genes = AIGenes::default();
 
-        // This is just a compilation test of the logic for now
-        // Real testing would require a populated game state
-        assert!(score_move(&game, &end_turn) == 0.0);
+        assert!(score_move(&game, &end_turn, &genes) == 0.0);
     }
 }

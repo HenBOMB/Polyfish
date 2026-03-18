@@ -1,5 +1,5 @@
 use polyfish::actions::units::{remove_unit, summon_unit};
-use polyfish::ai::heuristics;
+use polyfish::ai::evaluator::army;
 use polyfish::states::{GameState, TileState, TribeState};
 use polyfish::types::{TerrainType, TribeType};
 
@@ -39,7 +39,8 @@ fn evaluate_unit(state: &mut GameState, unit_type: polyfish::UnitType) -> f32 {
     // Get the unit (it should be the last one added)
     let unit_score = if let Some(tribe) = state.tribes.get(&tribe_id) {
         if let Some(unit) = tribe.units.last() {
-            heuristics::assess_unit_power(state, unit)
+            let genes = polyfish::ai::genes::AIGenes::default();
+            army::assess_unit_power(state, unit, &genes)
         } else {
             0.0
         }

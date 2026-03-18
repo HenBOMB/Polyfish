@@ -29,7 +29,8 @@ fn preview_evaluator() {
     let (mut state, params) = setup_state();
     let player_id = params;
 
-    let score_base = evaluator::evaluate_state(&state, player_id);
+    let genes = polyfish::ai::genes::AIGenes::default();
+    let score_base = evaluator::evaluate_state(&state, player_id, &genes);
     println!("Base Score (Turn 5): {:.4}", score_base);
 
     // 1. Add Economy
@@ -40,7 +41,7 @@ fn preview_evaluator() {
             discovered: true,
         });
     }
-    let score_eco = evaluator::evaluate_state(&state, player_id);
+    let score_eco = evaluator::evaluate_state(&state, player_id, &genes);
     println!("Score with +10 Stars + Tech: {:.4}", score_eco);
     assert!(score_eco > score_base);
 
@@ -51,13 +52,13 @@ fn preview_evaluator() {
         unit.health = 100; // max
         t.units.push(unit);
     }
-    let score_mil = evaluator::evaluate_state(&state, player_id);
+    let score_mil = evaluator::evaluate_state(&state, player_id, &genes);
     println!("Score with +1 Warrior: {:.4}", score_mil);
     assert!(score_mil > score_eco);
 
     // 3. Late Game Weighting
     state.settings.turn = 25; // Late game
-    let score_late = evaluator::evaluate_state(&state, player_id);
+    let score_late = evaluator::evaluate_state(&state, player_id, &genes);
     println!("Score Late Game (Turn 25): {:.4}", score_late);
 
     // In late game, military should be weighted higher.
@@ -79,7 +80,7 @@ fn preview_evaluator() {
     opponent.stars = 0; // Very poor opponent
     state.tribes.insert(opponent_id, opponent);
 
-    let relative_score = evaluator::evaluate_state(&state, player_id);
+    let relative_score = evaluator::evaluate_state(&state, player_id, &genes);
     println!("Relative Score vs Poor Opponent: {:.4}", relative_score);
     // My absolute score ~0.05. Opponent ~0.0. Relative ~0.05.
     assert!(relative_score > 0.0);
@@ -95,7 +96,7 @@ fn preview_evaluator() {
         }
     }
 
-    let relative_score_losing = evaluator::evaluate_state(&state, player_id);
+    let relative_score_losing = evaluator::evaluate_state(&state, player_id, &genes);
     println!(
         "Relative Score vs Rich Opponent: {:.4}",
         relative_score_losing
@@ -118,7 +119,7 @@ fn preview_evaluator() {
 
     // Let's go back to Early Game
     state.settings.turn = 5;
-    let index_score_early = evaluator::player::evaluate_player(&state, player_id);
+    let index_score_early = evaluator::player::evaluate_player(&state, player_id, &genes);
     println!(
         "Score Early Game (Turn 5) with 30 tiles explored: {:.4}",
         index_score_early

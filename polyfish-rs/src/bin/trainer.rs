@@ -4,7 +4,6 @@ use polyfish::ai::heuristic_mcts::HeuristicMctsAgent;
 use polyfish::game::Game;
 use polyfish::mapgen::{MapGenSettings, generate};
 use polyfish::moves::Move;
-use polyfish::recorder::GameRecorder;
 use polyfish::types::{MapSize, MapType, MoveType, TribeType};
 use std::io::{self, Write};
 
@@ -19,7 +18,6 @@ struct Args {
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let recorder = GameRecorder::new();
 
     println!("=== Polyfish Interactive Trainer ===");
     println!("You are commanding the Imperius (P1). AI is Imperius (P2).");
@@ -46,10 +44,10 @@ fn main() -> anyhow::Result<()> {
 
         if pid == 1 {
             // Human Turn
-            handle_human_turn(&mut game, &recorder)?;
+            handle_human_turn(&mut game)?;
         } else {
             // AI Turn
-            handle_ai_turn(&mut game, &agent, &recorder)?;
+            handle_ai_turn(&mut game, &agent)?;
         }
 
         // Save periodically?
@@ -57,7 +55,6 @@ fn main() -> anyhow::Result<()> {
     }
 
     println!("Game Over!");
-    recorder.save()?;
     Ok(())
 }
 
@@ -71,7 +68,7 @@ fn print_game_status(game: &Game) {
     );
 }
 
-fn handle_human_turn(game: &mut Game, recorder: &GameRecorder) -> anyhow::Result<()> {
+fn handle_human_turn(game: &mut Game) -> anyhow::Result<()> {
     // 1. List Legal Moves
     let moves = game.legal_moves();
     if moves.is_empty() {
@@ -101,11 +98,6 @@ fn handle_human_turn(game: &mut Game, recorder: &GameRecorder) -> anyhow::Result
             if idx < moves.len() {
                 let m = &moves[idx];
 
-                // Record
-                let eco = evaluator::economy::evaluate_economy(&game.state, 1);
-                let mil = evaluator::army::evaluate_army(&game.state, 1);
-                recorder.record_step(&game.state, m.as_ref(), eco, mil);
-
                 println!("Executing: {:?}", m.move_type());
                 game.play_move(m.as_ref());
                 return Ok(());
@@ -118,7 +110,6 @@ fn handle_human_turn(game: &mut Game, recorder: &GameRecorder) -> anyhow::Result
 fn handle_ai_turn(
     game: &mut Game,
     agent: &HeuristicMctsAgent,
-    recorder: &GameRecorder,
 ) -> anyhow::Result<()> {
     println!("AI is thinking...");
     let (best_move, _) = agent.select_move_with_analysis(game);
@@ -147,12 +138,6 @@ fn handle_ai_turn(
         let choice = input.trim().to_lowercase();
 
         if choice == "y" || choice == "" {
-            // Accept
-            let eco = evaluator::economy::evaluate_economy(&game.state, 2);
-            // Note: recording from P2's perspective
-            let mil = evaluator::army::evaluate_army(&game.state, 2);
-            recorder.record_step(&game.state, chosen_move.as_ref(), eco, mil);
-
             game.play_move(chosen_move.as_ref());
             break;
         } else if choice == "n" {
@@ -171,11 +156,6 @@ fn handle_ai_turn(
             if let Ok(idx) = corr_input.trim().parse::<usize>() {
                 if idx < moves.len() {
                     let m = &moves[idx];
-                    // Record Correction
-                    let eco = evaluator::economy::evaluate_economy(&game.state, 2);
-                    let mil = evaluator::army::evaluate_army(&game.state, 2);
-                    recorder.record_step(&game.state, m.as_ref(), eco, mil);
-
                     println!("Executing Correction: {:?}", m.move_type());
                     game.play_move(m.as_ref());
                     break;

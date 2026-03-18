@@ -282,10 +282,10 @@ pub fn capture_city(state: &mut GameState, tile_idx: i32) -> Result<UndoCallback
                         .iter()
                         .position(|c| c.tile_index == c_clone.tile_index)
                     {
-                        println!(
-                            "[DEBUG] CaptureUndo: Removing city at {} from tribe {}",
-                            c_clone.tile_index, pov_id
-                        );
+                        // println!(
+                        //     "[DEBUG] CaptureUndo: Removing city at {} from tribe {}",
+                        //     c_clone.tile_index, pov_id
+                        // );
                         nt.cities.remove(p);
                     } else {
                         eprintln!(

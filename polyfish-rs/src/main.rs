@@ -21,13 +21,10 @@ use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
-use polyfish::recorder::GameRecorder;
-
 struct AppState {
     game: Mutex<Game>,
     training_status: Mutex<Option<u32>>, // Store PID of running training
-    network: Arc<polyfish::ai::network::PolyZeroNet>, // Trained neural network
-    recorder: Arc<GameRecorder>,
+    best_genes: polyfish::ai::genes::AIGenes,
 }
 
 const DEFAULT_TRIBES: &[TribeType] = &[TribeType::Imperius, TribeType::Imperius];
@@ -48,40 +45,40 @@ async fn main() {
     game.state.settings.verbose = true;
     game.state.settings.max_turns = 10;
     game.post_load();
-
-    // Load trained neural network
-    use candle_core::Device;
-    use candle_nn::VarMap;
-    let device = Device::Cpu;
-
-    let model_path = "model.safetensors";
-    let mut varmap = VarMap::new();
-
-    let network = if std::path::Path::new(model_path).exists() {
-        println!("✅ Loading trained AI model from {}", model_path);
-        varmap
-            .load(model_path)
-            .expect("Failed to load model weights");
-        polyfish::ai::network::PolyZeroNet::new(candle_nn::VarBuilder::from_varmap(
-            &varmap,
-            candle_core::DType::F32,
-            &device,
-        ))
-        .expect("Failed to build neural network")
-    } else {
-        panic!(
-            "Model file {} not found! Please run init_model.py first.",
-            model_path
-        );
-    };
-
-    let recorder = Arc::new(GameRecorder::new());
+    
+    // Load best genes if they exist
+    let mut best_genes = polyfish::ai::genes::AIGenes::default();
+    if let Ok(entries) = std::fs::read_dir("evolution_results") {
+        let mut best_file: Option<std::path::PathBuf> = None;
+        let mut max_gen = -1;
+        
+        for entry in entries.flatten() {
+            if let Ok(name) = entry.file_name().into_string() {
+                if name.starts_with("gen_") && name.ends_with(".json") {
+                    if let Some(gen_part) = name.split('_').nth(1) {
+                        if let Ok(g_num) = gen_part.parse::<i32>() {
+                            if g_num > max_gen {
+                                max_gen = g_num;
+                                best_file = Some(entry.path());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        if let Some(path) = best_file {
+            println!("Loading best genes from: {:?}", path);
+            if let Ok(loaded) = polyfish::ai::genes::AIGenes::load(path.to_str().unwrap()) {
+                best_genes = loaded;
+            }
+        }
+    }
 
     let shared_state = Arc::new(AppState {
         game: Mutex::new(game),
         training_status: Mutex::new(None),
-        network: Arc::new(network),
-        recorder,
+        best_genes,
     });
 
     // Build our application with routes
@@ -115,11 +112,11 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
-fn build_evaluation_json(state: &polyfish::states::GameState) -> Value {
+fn build_evaluation_json(state: &polyfish::states::GameState, genes: &polyfish::ai::genes::AIGenes) -> Value {
     use polyfish::ai::evaluator::player::evaluate_player;
     let mut players = serde_json::Map::new();
     for &pid in state.tribes.keys() {
-        let score = evaluate_player(state, pid);
+        let score = evaluate_player(state, pid, genes);
         players.insert(pid.to_string(), serde_json::json!(score));
     }
     // Advantage from P1's perspective (player 1 minus best opponent)
@@ -169,7 +166,7 @@ async fn get_current_state(State(state): State<Arc<AppState>>) -> Json<Value> {
 
     let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
 
-    let evaluation = build_evaluation_json(&game.state);
+    let evaluation = build_evaluation_json(&game.state, &state.best_genes);
 
     Json(serde_json::json!({
         "state": {
@@ -195,15 +192,15 @@ async fn auto_step(
     // dont spam the front end lol
     game.state.settings.verbose = false;
 
-    // Use trained AI model!
-    use polyfish::ai::mcts_zero::ZeroMctsAgent;
-    let agent = ZeroMctsAgent::new(&state.network, params.iterations);
+    // Use the new evolutionary genes AI (HeuristicMctsAgent)
+    use polyfish::ai::heuristic_mcts::HeuristicMctsAgent;
+    let iterations = params.iterations;
+    let agent = HeuristicMctsAgent::with_genes(iterations, state.best_genes.clone());
 
     game.state._messages.clear();
-    let (chosen_move, policy) = agent.select_move_with_stats(&mut game);
+    let (chosen_move, mcts_analysis) = agent.select_move_with_analysis(&mut game);
     let mut move_name = "none".to_string();
 
-    // Create serialized best move before potentially consuming it (though we use as_ref so it's fine)
     let best_move_json = chosen_move.as_ref().map(|m| m.serialize());
 
     if !params.dry_run {
@@ -213,21 +210,14 @@ async fn auto_step(
         }
     }
 
-    // Run heuristic MCTS for analysis panel (move descriptions + PV)
-    use polyfish::ai::heuristic_mcts::HeuristicMctsAgent;
-
-    let analysis_agent = HeuristicMctsAgent {
-        iterations: params.iterations,
-        exploration_constant: 0.1,
-    };
-    let (_, mcts_analysis) = analysis_agent.select_move_with_analysis(&mut game);
+    // Simplified: we already used the one and only agent.
 
     let mut tiles: Vec<_> = game.state.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);
 
     let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
 
-    let evaluation = build_evaluation_json(&game.state);
+    // Simplified: evaluation is not used in the main response anymore.
 
     Json(serde_json::json!({
         "state": {
@@ -243,8 +233,6 @@ async fn auto_step(
         "movePlayed": move_name,
         "bestMove": best_move_json,
         "legalMoves": legal_moves,
-        "policyDistribution": policy,
-        "evaluation": evaluation,
         "mctsAnalysis": mcts_analysis
     }))
 }
@@ -297,7 +285,7 @@ async fn rng_step(State(state): State<Arc<AppState>>) -> Json<Value> {
 
     let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
 
-    let evaluation = build_evaluation_json(&game.state);
+    let evaluation = build_evaluation_json(&game.state, &state.best_genes);
 
     Json(serde_json::json!({
         "state": {
@@ -438,19 +426,17 @@ async fn manual_step(
     // Calculate simple heuristic values for Eco/Mil.
     use polyfish::ai::evaluator::{army, economy};
     let pid = game.state.settings.current_player_turn_id;
-    let eco = economy::evaluate_economy(&game.state, pid);
-    let mil = army::evaluate_army(&game.state, pid);
+    let genes = polyfish::ai::genes::AIGenes::default();
+    let eco = economy::evaluate_economy(&game.state, pid, &genes);
+    let mil = army::evaluate_army(&game.state, pid, &genes);
 
-    state
-        .recorder
-        .record_step(&game.state, move_obj.as_ref(), eco, mil);
 
     let move_name = format!("{:?}", move_obj.move_type());
     game.state._messages.clear();
     game.play_move(move_obj.as_ref());
 
-    let eco1 = economy::evaluate_economy(&game.state, pid);
-    let mil1 = army::evaluate_army(&game.state, pid);
+    let eco1 = economy::evaluate_economy(&game.state, pid, &genes);
+    let mil1 = army::evaluate_army(&game.state, pid, &genes);
 
     println!(
         "Manual step: player={}, move={:?}, eco={:.4} ({}{:.4}), mil={:.4} ({}{:.4})",
@@ -469,7 +455,7 @@ async fn manual_step(
 
     let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
 
-    let evaluation = build_evaluation_json(&game.state);
+    let evaluation = build_evaluation_json(&game.state, &state.best_genes);
 
     Json(serde_json::json!({
         "state": {
@@ -488,11 +474,8 @@ async fn manual_step(
     }))
 }
 
-async fn save_training_data(State(state): State<Arc<AppState>>) -> Json<Value> {
-    match state.recorder.save() {
-        Ok(msg) => Json(serde_json::json!({ "status": "success", "message": msg })),
-        Err(e) => Json(serde_json::json!({ "status": "error", "message": e.to_string() })),
-    }
+async fn save_training_data() -> Json<Value> {
+    Json(serde_json::json!({ "status": "info", "message": "Neural network recording is disabled." }))
 }
 
 async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {
@@ -514,7 +497,7 @@ async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {
 
     let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
 
-    let evaluation = build_evaluation_json(&game.state);
+    let evaluation = build_evaluation_json(&game.state, &state.best_genes);
 
     Json(serde_json::json!({
         "state": {
@@ -668,7 +651,7 @@ async fn load_game(State(state): State<Arc<AppState>>) -> Json<Value> {
 
     let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
 
-    let evaluation = build_evaluation_json(&game.state);
+    let evaluation = build_evaluation_json(&game.state, &state.best_genes);
 
     Json(serde_json::json!({
         "state": {
@@ -692,17 +675,10 @@ async fn get_trainer_hint(
 ) -> Json<Value> {
     let mut game = state.game.lock().unwrap();
 
-    // Use Zero MCTS Agent (Neural Network)
-    use polyfish::ai::mcts_zero::ZeroMctsAgent;
-    let agent = ZeroMctsAgent::new(&state.network, params.iterations);
-    // use polyfish::ai::heuristic_mcts::HeuristicMctsAgent;
-    // let agent = HeuristicMctsAgent {
-    //     iterations: params.iterations,
-    //     exploration_constant: 0.4,
-    // };
+    use polyfish::ai::heuristic_mcts::HeuristicMctsAgent;
+    let agent = HeuristicMctsAgent::with_genes(params.iterations, state.best_genes.clone());
 
-    // Run MCTS search
-    let (best_move, mcts_analysis) = agent.select_move_with_stats(&mut game);
+    let (best_move, mcts_analysis) = agent.select_move_with_analysis(&mut game);
 
     let move_json = best_move.as_ref().map(|m| m.serialize());
     let move_name = best_move
@@ -719,6 +695,7 @@ async fn get_trainer_hint(
         "moveName": move_name,
         "moveDescription": move_description,
         "mctsAnalysis": mcts_analysis,
+        "evaluation": build_evaluation_json(&game.state, &state.best_genes)
     }))
 }
 
@@ -807,7 +784,7 @@ async fn load_replay_endpoint(
                 let legal_moves: Vec<_> =
                     game.legal_moves().iter().map(|m| m.serialize()).collect();
 
-                let evaluation = build_evaluation_json(&game.state);
+                let evaluation = build_evaluation_json(&game.state, &state.best_genes);
 
                 Json(serde_json::json!({
                     "status": "success",
@@ -965,7 +942,7 @@ async fn load_initial_endpoint(
                     tiles.sort_by_key(|t| t.coords.idx);
                     let legal_moves: Vec<_> =
                         game.legal_moves().iter().map(|m| m.serialize()).collect();
-                    let evaluation = build_evaluation_json(&game.state);
+                    let evaluation = build_evaluation_json(&game.state, &state.best_genes);
 
                     let moves_path =
                         format!("../src/scraper/data/training-data/{}.moves.json", params.id);
@@ -1107,9 +1084,9 @@ async fn analyze_replay_step(
 
     // 4. Now game is at the state just before the user played history[step_index]
     // Run MCTS analysis
-    use polyfish::ai::mcts_zero::ZeroMctsAgent;
-    let agent = ZeroMctsAgent::new(&state.network, params.iterations);
-    let (best_move, mcts_analysis) = agent.select_move_with_stats(&mut game);
+    use polyfish::ai::heuristic_mcts::HeuristicMctsAgent;
+    let agent = HeuristicMctsAgent::with_genes(params.iterations, state.best_genes.clone());
+    let (best_move, mcts_analysis) = agent.select_move_with_analysis(&mut game);
 
     let ai_move_json = best_move.as_ref().map(|m| m.serialize());
     let ai_move_desc = best_move
@@ -1154,7 +1131,7 @@ async fn analyze_replay_step(
             "description": ai_move_desc
         },
         "mctsAnalysis": mcts_analysis,
-        "evaluation": build_evaluation_json(&game.state)
+        "evaluation": build_evaluation_json(&game.state, &state.best_genes)
     }))
 }
 

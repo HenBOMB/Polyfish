@@ -475,6 +475,11 @@ input[type=range] {
     animation: fadeIn 0.3s ease;
 }
 
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
 .reward-modal {
     background: rgba(15, 23, 42, 0.95);
     border: 1px solid rgba(255, 255, 255, 0.1);
@@ -539,7 +544,7 @@ input[type=range] {
     transform: scale(1.2) rotate(5deg);
 }
 
-.reward-btn span {
+.reward-btn .label {
     font-weight: 700;
     text-transform: uppercase;
     font-size: 14px;
