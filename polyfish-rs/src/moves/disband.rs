@@ -27,6 +27,7 @@ impl Move for DisbandMove {
         let target = self.src_index;
         // Find unit
         let unit_owner = state
+            .map
             .tiles
             .get(&target)
             .and_then(|t| t._unit_owner_id)

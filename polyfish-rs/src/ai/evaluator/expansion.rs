@@ -17,7 +17,7 @@ pub fn evaluate_expansion(state: &GameState, player_id: PlayerId) -> f32 {
     // Potential city bonus (units on neutral/enemy villages or ruins)
     for unit in &tribe.units {
         let idx = unit.coords.idx;
-        if let Some(tile) = state.tiles.get(&idx) {
+        if let Some(tile) = state.map.tiles.get(&idx) {
             if tile.owner != player_id {
                 if let Some(s) = crate::functions::get_structure_at(state, idx) {
                     match s.structure_type {

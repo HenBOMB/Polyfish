@@ -62,7 +62,7 @@ fn test_summon_contextual_priority() {
     }
 
     // Ensure tile exists for detection logic
-    game.state.tiles.insert(
+    game.state.map.tiles.insert(
         enemy_idx,
         TileState {
             coords: Coords::from_index(enemy_idx, game.state.settings.size),

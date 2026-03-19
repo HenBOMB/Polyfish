@@ -6,7 +6,7 @@ use crate::functions::{get_resource_at, get_structure_at};
 use crate::moves::{Move, MoveResult};
 use crate::settings::get_resource_setting;
 use crate::states::GameState;
-use crate::types::{MoveType, StructureType, TerrainType};
+use crate::types::{EffectType, MoveType, StructureType, TerrainType};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -184,7 +184,7 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                 }
 
                 let existing_struct = get_structure_at(state, idx);
-                let tile = match state.tiles.get(&idx) {
+                let tile = match state.map.tiles.get(&idx) {
                     Some(t) => t,
                     None => continue,
                 };
@@ -223,7 +223,7 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                     }
 
                     let terrain_valid = settings.terrain_types.contains(&tile.terrain_type)
-                        || (tile.terrain_type == TerrainType::Algae
+                        || (tile.has_effect(EffectType::Algae)
                             && (settings.terrain_types.contains(&TerrainType::Field)
                                 || settings.terrain_types.contains(&TerrainType::Water)));
                     if !terrain_valid {
@@ -234,7 +234,7 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                         let adj = crate::functions::get_adjacent_indices(state, idx, 1);
                         let has_required_adj = adj.iter().any(|&n_idx| {
                             if let Some(s) = crate::functions::get_structure_at(state, n_idx)
-                                && state.tiles.get(&n_idx).unwrap().owner == pov_id
+                                && state.map.tiles.get(&n_idx).unwrap().owner == pov_id
                             {
                                 settings.adjacent_types.contains(&s.structure_type)
                             } else {
@@ -249,9 +249,9 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                     if struct_type == StructureType::Clathrus {
                         let adj = crate::functions::get_adjacent_indices(state, idx, 1);
                         let has_adj_algae = adj.iter().any(|&n_idx| {
-                            state.tiles.get(&n_idx).map_or(false, |t| {
-                                t.terrain_type == TerrainType::Algae
-                                    && state.tiles.get(&n_idx).unwrap().owner == pov_id
+                            state.map.tiles.get(&n_idx).map_or(false, |t| {
+                                t.has_effect(EffectType::Algae)
+                                    && state.map.tiles.get(&n_idx).unwrap().owner == pov_id
                             })
                         });
                         if !has_adj_algae {
@@ -262,7 +262,7 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                     if struct_type == StructureType::Mycelium {
                         let already_has_mycelium = city._territory.iter().any(|&t_idx| {
                             if let Some(s) = crate::functions::get_structure_at(state, t_idx)
-                                && state.tiles.get(&t_idx).unwrap().owner == pov_id
+                                && state.map.tiles.get(&t_idx).unwrap().owner == pov_id
                             {
                                 s.structure_type == StructureType::Mycelium
                             } else {

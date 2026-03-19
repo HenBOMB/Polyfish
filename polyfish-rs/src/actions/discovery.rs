@@ -22,7 +22,7 @@ pub fn discover_tiles(
     } else if let Some(u) = unit {
         let range = if has_skill(u.unit_type, SkillType::Scout)
             || state
-                .tiles
+                .map.tiles
                 .get(&u.coords.idx)
                 .map(|t| t.terrain_type == TerrainType::Mountain)
                 .unwrap_or(false)
@@ -43,7 +43,7 @@ pub fn discover_tiles(
         .into_iter()
         .filter(|&idx| {
             state
-                .tiles
+                .map.tiles
                 .get(&idx)
                 .map(|t| !t.explorers.contains(&pov_id))
                 .unwrap_or(false)
@@ -72,7 +72,7 @@ pub fn discover_tiles(
     for idx in newly_discovered {
         if is_real_move {
             // Mark explored (permanent, no undo)
-            if let Some(tile) = state.tiles.get_mut(&idx) {
+            if let Some(tile) = state.map.tiles.get_mut(&idx) {
                 tile.explorers.insert(pov_id);
 
                 // Check if lighthouse
@@ -111,7 +111,7 @@ pub fn predict_explorer(state: &GameState, start_idx: i32) -> (Vec<i32>, Vec<i32
     let pov_id = state.settings.current_player_turn_id;
     // Build current visibility from explorers
     let mut current_visible: HashSet<i32> = state
-        .tiles
+        .map.tiles
         .iter()
         .filter(|(_, t)| t.explorers.contains(&pov_id))
         .map(|(&idx, _)| idx)
@@ -197,7 +197,7 @@ fn calculate_explorer_scores(
 
     // 1. Initial scoring for all fog tiles
     // We scan ALL tiles for fog
-    for (&idx, _) in &state.tiles {
+    for (&idx, _) in &state.map.tiles {
         if !visible.contains(&idx) {
             scores.insert(idx, score_fog_tile(state, visible, idx));
         }
@@ -286,7 +286,7 @@ fn get_allowed_neighbors(
             sim_vis.contains(&n_idx)
         } else {
             state
-                .tiles
+                .map.tiles
                 .get(&n_idx)
                 .map(|t| t.explorers.contains(&pov_id))
                 .unwrap_or(false)
@@ -314,7 +314,7 @@ fn is_steppable_for_explorer(
     use crate::types::TechnologyType;
 
     // Check tile exists
-    if state.tiles.get(&idx).is_none() {
+    if state.map.tiles.get(&idx).is_none() {
         return false;
     }
 

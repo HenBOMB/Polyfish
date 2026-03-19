@@ -76,7 +76,7 @@ fn fuzz_test_p2_moves() {
     t1.owner = p1;
     t1.terrain_type = TerrainType::Field;
     t1.ruling_city_coords = Some(Coords::from_index(0, 11));
-    game.state.tiles.insert(0, t1);
+    game.state.map.tiles.insert(0, t1);
 
     // P2 Tiles (City + Forest for Clear/Harvest)
     let mut t2 = TileState::default();
@@ -85,14 +85,14 @@ fn fuzz_test_p2_moves() {
     t2.terrain_type = TerrainType::Forest;
     t2.ruling_city_coords = Some(Coords::from_index(100, 11));
     t2.capital_of = p2;
-    game.state.tiles.insert(100, t2);
+    game.state.map.tiles.insert(100, t2);
 
     let mut t3 = TileState::default();
     t3.coords.idx = 101;
     t3.owner = p2;
     t3.terrain_type = TerrainType::Forest;
     t3.ruling_city_coords = Some(Coords::from_index(100, 11));
-    game.state.tiles.insert(101, t3);
+    game.state.map.tiles.insert(101, t3);
 
     // Resource for P2 (Fruit)
     game.state.resources.insert(

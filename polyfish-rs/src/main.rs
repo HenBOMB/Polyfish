@@ -164,7 +164,7 @@ async fn get_current_state(State(state): State<Arc<AppState>>) -> Json<Value> {
     let mut game = state.game.lock().unwrap();
     polyfish::prediction::update_predictions(&mut game.state);
 
-    let mut tiles: Vec<_> = game.state.tiles.values().collect();
+    let mut tiles: Vec<_> = game.state.map.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);
 
     let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
@@ -222,7 +222,7 @@ async fn auto_step(
     };
     let (_, mcts_analysis) = analysis_agent.select_move_with_analysis(&mut game);
 
-    let mut tiles: Vec<_> = game.state.tiles.values().collect();
+    let mut tiles: Vec<_> = game.state.map.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);
 
     let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
@@ -292,7 +292,7 @@ async fn rng_step(State(state): State<Arc<AppState>>) -> Json<Value> {
         }
     }
 
-    let mut tiles: Vec<_> = game.state.tiles.values().collect();
+    let mut tiles: Vec<_> = game.state.map.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);
 
     let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
@@ -464,7 +464,7 @@ async fn manual_step(
         mil1 - mil,
     );
 
-    let mut tiles: Vec<_> = game.state.tiles.values().collect();
+    let mut tiles: Vec<_> = game.state.map.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);
 
     let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
@@ -509,7 +509,7 @@ async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {
     game.state.settings.verbose = true;
     game.post_load();
 
-    let mut tiles: Vec<_> = game.state.tiles.values().collect();
+    let mut tiles: Vec<_> = game.state.map.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);
 
     let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
@@ -663,7 +663,7 @@ async fn load_game(State(state): State<Arc<AppState>>) -> Json<Value> {
     game.state = loaded_state;
     game.post_load();
 
-    let mut tiles: Vec<_> = game.state.tiles.values().collect();
+    let mut tiles: Vec<_> = game.state.map.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);
 
     let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
@@ -801,7 +801,7 @@ async fn load_replay_endpoint(
                 game.state = loaded_state;
                 game.post_load();
 
-                let mut tiles: Vec<_> = game.state.tiles.values().collect();
+                let mut tiles: Vec<_> = game.state.map.tiles.values().collect();
                 tiles.sort_by_key(|t| t.coords.idx);
 
                 let legal_moves: Vec<_> =
@@ -961,7 +961,7 @@ async fn load_initial_endpoint(
                     game.state = new_game.state;
                     game.post_load();
 
-                    let mut tiles: Vec<_> = game.state.tiles.values().collect();
+                    let mut tiles: Vec<_> = game.state.map.tiles.values().collect();
                     tiles.sort_by_key(|t| t.coords.idx);
                     let legal_moves: Vec<_> =
                         game.legal_moves().iter().map(|m| m.serialize()).collect();
@@ -1130,7 +1130,7 @@ async fn analyze_replay_step(
     }
 
     // Build state for frontend
-    let mut tiles: Vec<_> = game.state.tiles.values().collect();
+    let mut tiles: Vec<_> = game.state.map.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);
 
     Json(serde_json::json!({

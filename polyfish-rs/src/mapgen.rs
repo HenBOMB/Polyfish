@@ -1412,13 +1412,13 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                 _ => {}
             }
         }
-        game_state.tiles.insert(gen_tile.idx, t_state);
+        game_state.map.tiles.insert(gen_tile.idx, t_state);
     }
 
     // Assign capital_of to tiles
     for (i, &cap) in capital_cells.iter().enumerate() {
         let pid = (i + 1) as i32;
-        if let Some(tile) = game_state.tiles.get_mut(&cap) {
+        if let Some(tile) = game_state.map.tiles.get_mut(&cap) {
             tile.capital_of = pid;
         }
     }
@@ -1450,13 +1450,13 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         }
         city._territory = territory.clone();
 
-        let cap_coords = game_state.tiles[&cap].coords;
+        let cap_coords = game_state.map.tiles[&cap].coords;
         if let Some(t) = game_state.tribes.get_mut(&pid) {
             t.cities.push(city);
             t.starting_tile_coords = cap_coords;
         }
         for idx in territory {
-            if let Some(tile) = game_state.tiles.get_mut(&idx) {
+            if let Some(tile) = game_state.map.tiles.get_mut(&idx) {
                 tile.owner = pid;
                 tile.ruling_city_coords = Some(cap_coords);
                 // Allowing this would be cheating
@@ -1489,7 +1489,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         let mut unit = UnitState::default();
         unit.owner = pid;
         unit.unit_type = unit_type;
-        unit.coords = game_state.tiles[&cap].coords;
+        unit.coords = game_state.map.tiles[&cap].coords;
         unit.prev_coords = unit.coords;
         unit.home_coords = Some(unit.coords);
         unit.city_id = cap;
@@ -1497,7 +1497,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
             t.units.push(unit);
         }
         // Fix: Set tile unit owner
-        if let Some(tile) = game_state.tiles.get_mut(&cap) {
+        if let Some(tile) = game_state.map.tiles.get_mut(&cap) {
             tile._unit_owner_id = Some(pid);
         }
     }
@@ -1534,7 +1534,7 @@ mod tests {
                 let state = generate(settings);
                 let side_size = size.get_size();
 
-                for (idx, tile) in &state.tiles {
+                for (idx, tile) in &state.map.tiles {
                     let (x, y) = (tile.coords.x, tile.coords.y);
 
                     if let Some(Some(structure)) = state.structures.get(idx) {
@@ -1666,6 +1666,7 @@ mod tests {
             let game = generate(settings.clone());
 
             let cap_tile = game
+                .map
                 .tiles
                 .values()
                 .find(|t| t.capital_of == 1) // Imperius is player 1

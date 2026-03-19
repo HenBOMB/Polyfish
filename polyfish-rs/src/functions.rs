@@ -5,6 +5,7 @@
 /// Check if a tile is in the player's own territory
 pub fn is_in_own_territory(state: &GameState, idx: i32, owner: i32) -> bool {
     state
+        .map
         .tiles
         .get(&idx)
         .map(|t| t.owner == owner)
@@ -131,7 +132,7 @@ pub fn get_adjacent_indices(state: &GameState, idx: i32, range: i32) -> Vec<i32>
 pub fn get_adjacent_tiles<'a>(state: &'a GameState, idx: i32, range: i32) -> Vec<&'a TileState> {
     get_adjacent_indices(state, idx, range)
         .into_iter()
-        .filter_map(|i| state.tiles.get(&i))
+        .filter_map(|i| state.map.tiles.get(&i))
         .collect()
 }
 /// Check if a resource type is visible to a tribe (based on tech requirements)
@@ -269,7 +270,7 @@ pub fn get_city_at<'a>(state: &'a GameState, idx: i32) -> Option<&'a CityState> 
 
 /// Get the city that owns a tile
 pub fn get_city_owning_tile<'a>(state: &'a GameState, idx: i32) -> Option<&'a CityState> {
-    let tile = state.tiles.get(&idx)?;
+    let tile = state.map.tiles.get(&idx)?;
     let ruling_coords = tile.ruling_city_coords.as_ref()?;
     get_city_at(state, ruling_coords.idx)
 }
@@ -320,11 +321,11 @@ pub fn is_amphibious(unit: &UnitState) -> bool {
 /// Get the maximum health of a unit (accounting for veteran status and pass-through)
 /// Max HP logic: base * 10
 pub fn get_unit_max_health(unit: &UnitState) -> i32 {
-    let mut hp = get_real_unit_setting(unit).health;
+    let mut health = get_real_unit_setting(unit).health;
     if unit.veteran {
-        hp += 5;
+        health += 5;
     }
-    hp * crate::states::HEALTH_SCALE
+    health * crate::states::HEALTH_SCALE
 }
 
 /// Get the real unit setting (ignoring naval types if carrying a passenger)
@@ -362,7 +363,7 @@ pub fn get_unit_movement(state: &GameState, unit: &UnitState) -> i32 {
 
     // Skate bonus: +1 movement on Ice (Resulting in 3 movement for standard skating units)
     if has_skill(unit, SkillType::Skate) {
-        if let Some(tile) = state.tiles.get(&unit.coords.idx) {
+        if let Some(tile) = state.map.tiles.get(&unit.coords.idx) {
             if tile.frozen {
                 movement += 1;
             }
@@ -400,7 +401,7 @@ pub fn get_defense_bonus(state: &GameState, unit: &UnitState) -> f32 {
         None => return 1.0,
     };
 
-    let tile = match state.tiles.get(&unit.coords.idx) {
+    let tile = match state.map.tiles.get(&unit.coords.idx) {
         Some(t) => t,
         None => return 1.0,
     };
@@ -460,7 +461,7 @@ pub fn get_city_production(state: &GameState, city: &CityState) -> i32 {
 
     let mut prod = city.level;
     // Capitals get a +1 star bonus
-    if let Some(tile) = state.tiles.get(&city.tile_index) {
+    if let Some(tile) = state.map.tiles.get(&city.tile_index) {
         if tile.capital_of == city.owner && tile.capital_of != 0 {
             prod += 1;
         }
@@ -482,7 +483,7 @@ pub fn get_city_production(state: &GameState, city: &CityState) -> i32 {
                     // +X star for each adjacent Algae in friendly territory
                     let adj = crate::functions::get_adjacent_indices(state, idx, 1);
                     for n_idx in adj {
-                        if let Some(n_tile) = state.tiles.get(&n_idx) {
+                        if let Some(n_tile) = state.map.tiles.get(&n_idx) {
                             if n_tile.terrain_type == TerrainType::Algae
                                 && n_tile.owner == city.owner
                             {
@@ -532,7 +533,7 @@ pub fn is_at_peace(state: &GameState, tribe_a: PlayerId, tribe_b: PlayerId) -> b
 
 /// Check if a city is under siege (has enemy unit on its center)
 pub fn is_under_siege(state: &GameState, city_idx: i32) -> bool {
-    if let Some(tile) = state.tiles.get(&city_idx) {
+    if let Some(tile) = state.map.tiles.get(&city_idx) {
         return get_enemy_at(state, city_idx, tile.owner).is_some();
     }
     false
@@ -541,6 +542,7 @@ pub fn is_under_siege(state: &GameState, city_idx: i32) -> bool {
 /// Check if a tile is a city center
 pub fn is_city(state: &GameState, idx: i32) -> bool {
     state
+        .map
         .tiles
         .get(&idx)
         .and_then(|t| t.ruling_city_coords.as_ref())
@@ -552,12 +554,16 @@ pub fn is_enemy_city(state: &GameState, idx: i32, pov_id: PlayerId) -> bool {
     if !is_city(state, idx) {
         return false;
     }
-    state.tiles.get(&idx).map_or(false, |t| t.owner != pov_id)
+    state
+        .map
+        .tiles
+        .get(&idx)
+        .map_or(false, |t| t.owner != pov_id)
 }
 
 /// Check if a tile is frozen (has Ice terrain)
 pub fn is_tile_frozen(state: &GameState, idx: i32) -> bool {
-    state.tiles.get(&idx).map_or(false, |t| t.frozen)
+    state.map.tiles.get(&idx).map_or(false, |t| t.frozen)
 }
 
 /// Check if coordinate is in bounds
@@ -576,6 +582,7 @@ pub fn is_tile_explored(state: &GameState, idx: i32, player_id: PlayerId) -> boo
         return true;
     }
     state
+        .map
         .tiles
         .get(&idx)
         .map(|t| t.explorers.contains(&player_id))
@@ -592,6 +599,7 @@ pub fn get_capital_city(state: &GameState, player_id: PlayerId) -> Option<&CityS
     state.tribes.get(&player_id).and_then(|tribe| {
         tribe.cities.iter().find(|c| {
             state
+                .map
                 .tiles
                 .get(&c.tile_index)
                 .map(|t| t.capital_of == player_id)
@@ -771,7 +779,7 @@ fn is_steppable_for_push(state: &GameState, unit: &UnitState, idx: i32) -> bool 
 
     // Terrain validity
     let settings = crate::settings::units::get_unit_setting(unit.unit_type);
-    let tile = match state.tiles.get(&idx) {
+    let tile = match state.map.tiles.get(&idx) {
         Some(t) => t,
         None => return false,
     };
@@ -873,6 +881,7 @@ pub fn calculate_detailed_tribe_score(state: &GameState, player_id: PlayerId) ->
 
     // 5 per revealed tile (explored by our explorers)
     let explored_count = state
+        .map
         .tiles
         .values()
         .filter(|t| t.explorers.contains(&player_id))
@@ -1025,7 +1034,7 @@ pub fn analyze_expansion(state: &GameState, player_id: PlayerId) -> ExpansionAna
 
     // 1. Expansion Analysis
     // Identify tiles adjacent to our territory or units that are valuable
-    for tile in state.tiles.values() {
+    for tile in state.map.tiles.values() {
         if tile.owner == player_id {
             continue; // Already owned
         }
@@ -1074,7 +1083,7 @@ pub fn analyze_expansion(state: &GameState, player_id: PlayerId) -> ExpansionAna
         let adj_indices = get_adjacent_indices(state, tile.coords.idx, 1);
         let mut is_adj = false;
         for adj_idx in &adj_indices {
-            if let Some(adj_tile) = state.tiles.get(adj_idx) {
+            if let Some(adj_tile) = state.map.tiles.get(adj_idx) {
                 if adj_tile.owner == player_id {
                     value += 1.0;
                     is_adj = true;
@@ -1102,7 +1111,7 @@ pub fn analyze_expansion(state: &GameState, player_id: PlayerId) -> ExpansionAna
 
             for enemy in &other_tribe.units {
                 // Anti-Cheat: Enemy unit is only a threat if visible
-                if !state.tiles[&enemy.coords.idx]
+                if !state.map.tiles[&enemy.coords.idx]
                     .explorers
                     .contains(&player_id)
                 {

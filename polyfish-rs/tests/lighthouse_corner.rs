@@ -62,7 +62,7 @@ fn test_lighthouse_corner_visibility_hidden() {
         if dist <= 2 {
             // Check that corners are NOT explored (hidden due to corner rule)
             let is_explored = state
-                .tiles
+                .map.tiles
                 .get(&idx)
                 .map(|t| t.explorers.contains(&1))
                 .unwrap_or(false);

@@ -18,7 +18,7 @@ fn setup_basic_state() -> GameState {
     for i in 0..121 {
         let mut tile = TileState::default();
         tile.terrain_type = TerrainType::Field;
-        state.tiles.insert(i, tile);
+        state.map.tiles.insert(i, tile);
     }
 
     state
@@ -29,7 +29,7 @@ fn evaluate_unit(state: &mut GameState, unit_type: polyfish::UnitType) -> f32 {
     let tile_idx = 0; // Use tile 0 for testing
 
     // Ensure tile is empty/valid
-    if let Some(tile) = state.tiles.get_mut(&tile_idx) {
+    if let Some(tile) = state.map.tiles.get_mut(&tile_idx) {
         tile._unit_owner_id = None;
     }
 

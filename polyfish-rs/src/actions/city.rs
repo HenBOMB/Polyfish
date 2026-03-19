@@ -111,7 +111,14 @@ pub fn claim_territory(
         territory
             .iter()
             .cloned()
-            .filter(|&idx| state.tiles.get(&idx).map(|t| t.owner == 0).unwrap_or(false))
+            .filter(|&idx| {
+                state
+                    .map
+                    .tiles
+                    .get(&idx)
+                    .map(|t| t.owner == 0)
+                    .unwrap_or(false)
+            })
             .collect()
     } else {
         territory.to_vec()
@@ -125,7 +132,7 @@ pub fn claim_territory(
     let mut old_owners: Vec<(i32, i32, Option<Coords>)> = Vec::with_capacity(tiles_to_claim.len());
 
     for &idx in &tiles_to_claim {
-        if let Some(tile) = state.tiles.get_mut(&idx) {
+        if let Some(tile) = state.map.tiles.get_mut(&idx) {
             old_owners.push((idx, tile.owner, tile.ruling_city_coords.clone()));
             tile.owner = pov_id;
             tile.ruling_city_coords = Some(city_coords.clone());
@@ -146,7 +153,7 @@ pub fn claim_territory(
 
         // Restore tiles
         for (idx, owner, ruling_coords) in old_owners {
-            if let Some(tile) = s.tiles.get_mut(&idx) {
+            if let Some(tile) = s.map.tiles.get_mut(&idx) {
                 tile.owner = owner;
                 tile.ruling_city_coords = ruling_coords;
             }
@@ -163,7 +170,7 @@ pub fn capture_city(state: &mut GameState, tile_idx: i32) -> Result<UndoCallback
 
     let pov_id = state.settings.current_player_turn_id;
     let mut undos: Vec<UndoCallback> = Vec::new();
-    let tile_owner = state.tiles.get(&tile_idx).map(|t| t.owner).unwrap_or(0);
+    let tile_owner = state.map.tiles.get(&tile_idx).map(|t| t.owner).unwrap_or(0);
 
     // Case 1: Capture Enemy City
     if tile_owner > 0 && tile_owner != pov_id {
@@ -185,6 +192,7 @@ pub fn capture_city(state: &mut GameState, tile_idx: i32) -> Result<UndoCallback
         if let Some(mut city) = old_city {
             let city_name_old = city.name.clone();
             let old_capital_val = state
+                .map
                 .tiles
                 .get(&tile_idx)
                 .map(|t| t.capital_of)
@@ -209,7 +217,7 @@ pub fn capture_city(state: &mut GameState, tile_idx: i32) -> Result<UndoCallback
             );
 
             // Update tile
-            if let Some(tile) = state.tiles.get_mut(&tile_idx) {
+            if let Some(tile) = state.map.tiles.get_mut(&tile_idx) {
                 tile.owner = pov_id;
                 if tile.capital_of > 0 {
                     tile.capital_of = pov_id;
@@ -295,7 +303,7 @@ pub fn capture_city(state: &mut GameState, tile_idx: i32) -> Result<UndoCallback
                     }
                 }
                 // Restore tiles
-                if let Some(tile) = s.tiles.get_mut(&c_clone.tile_index) {
+                if let Some(tile) = s.map.tiles.get_mut(&c_clone.tile_index) {
                     tile.owner = tile_owner;
                     if old_capital_val > 0 {
                         tile.capital_of = tile_owner;

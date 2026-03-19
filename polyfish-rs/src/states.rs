@@ -31,6 +31,49 @@ mod flex_bool {
     }
 }
 
+/// Helper for deserializing a list of tiles into an IndexMap
+mod tiles_list_deserializer {
+    use super::TileState;
+    use indexmap::IndexMap;
+    use serde::{Deserialize, Deserializer};
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<IndexMap<i32, TileState>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let tiles: Vec<TileState> = Vec::deserialize(deserializer)?;
+        let mut map = IndexMap::new();
+        for (i, mut tile) in tiles.into_iter().enumerate() {
+            if tile.coords.idx == 0 && i > 0 {
+                tile.coords.idx = i as i32;
+            }
+            map.insert(tile.coords.idx, tile);
+        }
+        Ok(map)
+    }
+}
+
+/// Helper for deserializing a list of tech IDs into Vec<TechnologyState>
+mod tech_list_deserializer {
+    use super::TechnologyState;
+    use crate::types::TechnologyType;
+    use serde::{Deserialize, Deserializer};
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<TechnologyState>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let ids: Vec<i32> = Vec::deserialize(deserializer)?;
+        Ok(ids
+            .into_iter()
+            .map(|id| TechnologyState {
+                tech_type: unsafe { std::mem::transmute(id as i8) },
+                discovered: true,
+            })
+            .collect())
+    }
+}
+
 /// Player ID type (positive integer)
 pub type PlayerId = i32;
 
@@ -58,14 +101,13 @@ pub struct DiplomacyRelationState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TileState {
-    pub coords: Coords,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ruling_city_coords: Option<Coords>,
     #[serde(rename = "type")]
     pub terrain_type: TerrainType,
     #[serde(default)]
     pub explorers: HashSet<i32>,
-    #[serde(default)]
+    #[serde(alias = "hasRoad", default)]
     pub has_road: bool,
     #[serde(default)]
     pub has_route: bool,
@@ -85,6 +127,12 @@ pub struct TileState {
     pub frozen: bool,
     #[serde(default, deserialize_with = "flex_bool::deserialize")]
     pub flooded: bool,
+    #[serde(default)]
+    pub effects: HashSet<EffectType>,
+    #[serde(skip_serializing, default)]
+    pub unit: Option<UnitState>,
+    #[serde(flatten)]
+    pub coords: Coords,
 }
 
 impl Default for TileState {
@@ -104,7 +152,15 @@ impl Default for TileState {
             _unit_owner_id: None,
             frozen: false,
             flooded: false,
+            effects: HashSet::new(),
+            unit: None,
         }
+    }
+}
+
+impl TileState {
+    pub fn has_effect(&self, effect: EffectType) -> bool {
+        self.effects.contains(&effect)
     }
 }
 
@@ -116,7 +172,9 @@ pub struct StructureState {
     pub structure_type: StructureType,
     pub level: i32,
     pub founded: i32,
+    #[serde(alias = "progress")]
     pub score: i32,
+    #[serde(default)]
     pub tile_index: i32,
 }
 
@@ -136,14 +194,17 @@ pub struct UnitState {
     pub owner: PlayerId,
     #[serde(rename = "type")]
     pub unit_type: UnitType,
+    #[serde(alias = "hp")]
     pub health: i32,
-    #[serde(default)]
-    pub max_health: i32,
-    #[serde(default, deserialize_with = "flex_bool::deserialize")]
+    #[serde(
+        default,
+        alias = "promoted",
+        deserialize_with = "flex_bool::deserialize"
+    )]
     pub veteran: bool,
-    #[serde(default)]
+    #[serde(default, alias = "xp")]
     pub kills: i32,
-    pub coords: Coords,
+    #[serde(default)]
     pub prev_coords: Coords,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub home_coords: Option<Coords>,
@@ -173,6 +234,8 @@ pub struct UnitState {
     /// Index of child unit in the tribe's unit vector (for centipede head tracking first segment)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child_unit_idx: Option<usize>,
+    #[serde(flatten)]
+    pub coords: Coords,
 }
 
 impl Default for UnitState {
@@ -181,7 +244,6 @@ impl Default for UnitState {
             owner: 0,
             unit_type: UnitType::None,
             health: 10 * HEALTH_SCALE,
-            max_health: 10 * HEALTH_SCALE,
             veteran: false,
             kills: 0,
             coords: Coords::default(),
@@ -282,7 +344,7 @@ pub struct TribeState {
     pub score: i32,
     #[serde(default)]
     pub stars: i32,
-    #[serde(rename = "type")]
+    #[serde(rename = "type", alias = "tribe")]
     pub tribe_type: TribeType,
     #[serde(default)]
     pub killer_id: PlayerId,
@@ -290,7 +352,7 @@ pub struct TribeState {
     pub kills: i32,
     #[serde(default)]
     pub casualties: i32,
-    #[serde(default)]
+    #[serde(default, alias = "tech", deserialize_with = "tech_list_deserializer::deserialize")]
     #[serde(rename = "tech_vanilla")]
     pub tech_vanilla: Vec<TechnologyState>,
     #[serde(default)]
@@ -371,16 +433,16 @@ pub struct GameSettings {
     #[serde(default)]
     #[serde(rename = "_lastPlayerTurnId")]
     pub _last_player_turn_id: i32,
-    #[serde(rename = "_areYouSure")]
+    #[serde(rename = "_areYouSure", default)]
     pub _are_you_sure: bool,
-    #[serde(rename = "_gameOver")]
+    #[serde(rename = "_gameOver", default)]
     pub _game_over: bool,
-    #[serde(rename = "_recentMoves")]
+    #[serde(rename = "_recentMoves", default)]
     pub _recent_moves: Vec<MoveType>,
     // Note: _pending_rewards handled separately as it contains Move objects
     #[serde(rename = "_fow", default = "default_fow")]
     pub _fow: bool,
-    #[serde(rename = "_maxTribeCount")]
+    #[serde(rename = "_maxTribeCount", default)]
     pub _max_tribe_count: i32,
     #[serde(default)]
     pub verbose: bool,
@@ -467,12 +529,21 @@ pub enum EndOfTurnAction {
     Decompose { tile_index: i32, owner_id: PlayerId },
 }
 
+/// State of the map
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MapState {
+    pub size: i32,
+    #[serde(deserialize_with = "tiles_list_deserializer::deserialize")]
+    pub tiles: IndexMap<i32, TileState>,
+}
+
 /// Full game state
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GameState {
     pub settings: GameSettings,
-    pub tiles: IndexMap<i32, TileState>,
+    pub map: MapState,
     #[serde(default)]
     pub structures: IndexMap<i32, Option<StructureState>>,
     #[serde(default)]
@@ -496,7 +567,10 @@ impl Default for GameState {
     fn default() -> Self {
         Self {
             settings: GameSettings::default(),
-            tiles: IndexMap::new(),
+            map: MapState {
+                size: 11,
+                tiles: IndexMap::new(),
+            },
             structures: IndexMap::new(),
             resources: IndexMap::new(),
             tribes: IndexMap::new(),

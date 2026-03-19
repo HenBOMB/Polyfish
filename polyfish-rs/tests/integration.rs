@@ -20,7 +20,7 @@ fn test_load_game_state_from_json() {
             println!("  Map size: {}", game.map_size());
             println!("  Turn: {}", game.turn());
             println!("  Tribes: {}", game.state.tribes.len());
-            println!("  Tiles: {}", game.state.tiles.len());
+            println!("  Tiles: {}", game.state.map.tiles.len());
 
             // Verify basic properties
             assert!(game.map_size() > 0, "Map size should be positive");

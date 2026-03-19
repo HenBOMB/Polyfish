@@ -34,7 +34,7 @@ fn test_reproduce_summon_panic() {
     game.state.tribes.insert(1, tribe);
 
     // Set tile owner
-    if let Some(tile) = game.state.tiles.get_mut(&24) {
+    if let Some(tile) = game.state.map.tiles.get_mut(&24) {
         tile.owner = 1;
     }
 

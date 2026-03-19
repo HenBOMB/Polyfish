@@ -147,6 +147,7 @@ pub fn generate_summon_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
                     .any(|&idx| {
                         is_water_terrain(
                             state
+                                .map
                                 .tiles
                                 .get(&idx)
                                 .map(|t| t.terrain_type)

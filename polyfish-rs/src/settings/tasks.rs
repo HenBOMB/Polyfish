@@ -104,7 +104,7 @@ pub fn check_task(state: &GameState, task_type: TaskType) -> bool {
             let size = state.settings.size;
             let corners = [0, size - 1, size * size - 1, size * size - size];
             corners.iter().all(|&idx| {
-                if let Some(tile) = state.tiles.get(&idx) {
+                if let Some(tile) = state.map.tiles.get(&idx) {
                     tile.explorers.contains(&pov_id)
                 } else {
                     false

@@ -33,7 +33,7 @@ fn test_clear_forest_prevention() {
     // Actually, in our simplistic test setup, get_adjacent_indices(11, 1) will return neighbors.
     // Let's ensure tiles exist so adj logic works.
     for i in 0..121 {
-        game.state.tiles.insert(
+        game.state.map.tiles.insert(
             i,
             TileState {
                 coords: polyfish::coords::Coords::from_index(i, 11),
@@ -42,8 +42,8 @@ fn test_clear_forest_prevention() {
         );
     }
 
-    game.state.tiles.get_mut(&11).unwrap().terrain_type = polyfish::types::TerrainType::Forest;
-    game.state.tiles.get_mut(&11).unwrap().owner = player_id;
+    game.state.map.tiles.get_mut(&11).unwrap().terrain_type = polyfish::types::TerrainType::Forest;
+    game.state.map.tiles.get_mut(&11).unwrap().owner = player_id;
 
     let mv = ClearForestMove::new(11);
 

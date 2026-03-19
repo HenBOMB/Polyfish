@@ -26,7 +26,7 @@ impl Move for PromoteMove {
         let mut undos: Vec<UndoCallback> = Vec::new();
 
         let unit_owner = state
-            .tiles
+            .map.tiles
             .get(&self.src_index)
             .and_then(|t| t._unit_owner_id)
             .unwrap_or(0);
@@ -47,8 +47,7 @@ impl Move for PromoteMove {
                     let old_veteran = unit.veteran;
 
                     unit.veteran = true;
-                    unit.max_health = crate::functions::get_unit_max_health(unit);
-                    unit.health = unit.max_health;
+                    unit.health = crate::functions::get_unit_max_health(unit);
 
                     undos.push(Box::new(move |s: &mut GameState| {
                         if let Some(tribe) = s.tribes.get_mut(&unit_owner) {

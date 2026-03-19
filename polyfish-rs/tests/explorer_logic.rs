@@ -17,7 +17,7 @@ fn setup_basic_state() -> GameState {
     for i in 0..121 {
         let mut tile = TileState::default();
         tile.terrain_type = TerrainType::Field;
-        state.tiles.insert(i, tile);
+        state.map.tiles.insert(i, tile);
     }
 
     state
@@ -29,13 +29,13 @@ fn test_explorer_tech_mountain() {
     let tribe_id = 1;
 
     // Put a mountain at (1,0), (1,1), (0,1) to block all paths from (0,0)
-    state.tiles.get_mut(&1).unwrap().terrain_type = TerrainType::Mountain;
-    state.tiles.get_mut(&11).unwrap().terrain_type = TerrainType::Mountain;
-    state.tiles.get_mut(&12).unwrap().terrain_type = TerrainType::Mountain;
+    state.map.tiles.get_mut(&1).unwrap().terrain_type = TerrainType::Mountain;
+    state.map.tiles.get_mut(&11).unwrap().terrain_type = TerrainType::Mountain;
+    state.map.tiles.get_mut(&12).unwrap().terrain_type = TerrainType::Mountain;
 
     // Explorer at (0,0) - index 0
     // Visible: only (0,0)
-    state.tiles.get_mut(&0).unwrap().explorers.insert(tribe_id);
+    state.map.tiles.get_mut(&0).unwrap().explorers.insert(tribe_id);
 
     // Fog at (3,0) - index 3
     // Explorer should want to go to index 3, but all paths are mountains.
@@ -69,7 +69,7 @@ fn test_explorer_lighthouse_priority() {
     let mut state = setup_basic_state();
 
     // at (0,0) index 0
-    state.tiles.get_mut(&0).unwrap().explorers.insert(1);
+    state.map.tiles.get_mut(&0).unwrap().explorers.insert(1);
 
     // Fog tiles: (1,0) and (0,1)
     // Put lighthouse at (2,0) - index 2 (revealed by moving to 1,0)
@@ -92,14 +92,14 @@ fn test_explorer_no_backtracking() {
     let mut state = setup_basic_state();
 
     // at (1,0). (0,0) is visible. (2,0) is fog.
-    state.tiles.get_mut(&0).unwrap().explorers.insert(1);
-    state.tiles.get_mut(&1).unwrap().explorers.insert(1);
+    state.map.tiles.get_mut(&0).unwrap().explorers.insert(1);
+    state.map.tiles.get_mut(&1).unwrap().explorers.insert(1);
 
     // explorer at 1. neighbors are 0, 2, 11, 12, 13.
     // Block 11, 12, 13 to make it deterministic
-    state.tiles.get_mut(&11).unwrap().terrain_type = TerrainType::Mountain;
-    state.tiles.get_mut(&12).unwrap().terrain_type = TerrainType::Mountain;
-    state.tiles.get_mut(&13).unwrap().terrain_type = TerrainType::Mountain;
+    state.map.tiles.get_mut(&11).unwrap().terrain_type = TerrainType::Mountain;
+    state.map.tiles.get_mut(&12).unwrap().terrain_type = TerrainType::Mountain;
+    state.map.tiles.get_mut(&13).unwrap().terrain_type = TerrainType::Mountain;
 
     let (_, revealed) = predict_explorer(&state, 1);
     assert!(

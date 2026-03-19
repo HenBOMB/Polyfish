@@ -13,7 +13,7 @@ use crate::types::{ResourceType, TerrainType};
 /// - Returns actual terrain during real moves (`_are_you_sure = true`)
 /// - Returns predicted terrain during MCTS for unexplored tiles
 pub fn get_terrain_at(state: &GameState, idx: i32, pov_id: PlayerId) -> TerrainType {
-    let tile = match state.tiles.get(&idx) {
+    let tile = match state.map.tiles.get(&idx) {
         Some(t) => t,
         None => return TerrainType::None,
     };
@@ -30,6 +30,27 @@ pub fn get_terrain_at(state: &GameState, idx: i32, pov_id: PlayerId) -> TerrainT
 
     // MCTS simulation: return predicted terrain
     get_predicted_terrain(state, idx)
+}
+
+/// Check if tile has an effect, using ground truth for explored tiles
+pub fn has_effect_at(
+    state: &GameState,
+    idx: i32,
+    pov_id: PlayerId,
+    effect: crate::types::EffectType,
+) -> bool {
+    let tile = match state.map.tiles.get(&idx) {
+        Some(t) => t,
+        None => return false,
+    };
+
+    // If tile is explored, return actual
+    if tile.explorers.contains(&pov_id) || state.settings._are_you_sure {
+        return tile.has_effect(effect);
+    }
+
+    // MCTS simulation: currently we don't predict effects in fog
+    false
 }
 
 /// Get predicted terrain for a fog tile (for MCTS use)
@@ -52,7 +73,7 @@ pub fn get_predicted_terrain(state: &GameState, idx: i32) -> TerrainType {
 ///
 /// Returns None for unexplored tiles during MCTS (resources are hidden in fog).
 pub fn get_resource_at(state: &GameState, idx: i32, pov_id: PlayerId) -> Option<ResourceType> {
-    let tile = match state.tiles.get(&idx) {
+    let tile = match state.map.tiles.get(&idx) {
         Some(t) => t,
         None => return None,
     };
@@ -91,6 +112,11 @@ pub fn is_terrain_passable(
     has_navigation: bool,
 ) -> bool {
     let terrain = get_terrain_at(state, idx, pov_id);
+
+    // Algae acts as a bridge for land units
+    if has_effect_at(state, idx, pov_id, crate::types::EffectType::Algae) {
+        return true;
+    }
 
     match terrain {
         TerrainType::None => false,

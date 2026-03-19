@@ -1,7 +1,7 @@
 use crate::actions::chain_undos;
 use crate::moves::{Move, MoveResult};
 use crate::states::GameState;
-use crate::types::{AbilityType, MoveType, TerrainType};
+use crate::types::{AbilityType, EffectType, MoveType};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,6 +22,7 @@ impl Move for ExplodeMove {
 
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let owner = state
+            .map
             .tiles
             .get(&self.src_index)
             .and_then(|t| t._unit_owner_id)
@@ -108,7 +109,7 @@ impl Move for ExplodeMove {
                 }
 
                 // 2. Create Spores (if land/ice and no structure)
-                if let Some(tile) = state.tiles.get(&explode_tile_idx) {
+                if let Some(tile) = state.map.tiles.get(&explode_tile_idx) {
                     let is_water_like = matches!(
                         tile.terrain_type,
                         crate::types::TerrainType::Water | crate::types::TerrainType::Ocean
@@ -136,14 +137,13 @@ impl Move for ExplodeMove {
                                 s.resources.shift_remove(&explode_tile_idx);
                             }
                         }));
-                    } else if is_water_like && tile.terrain_type != TerrainType::Algae {
-                        // Convert Water/Ocean to Algae
-                        if let Some(t) = state.tiles.get_mut(&explode_tile_idx) {
-                            let old_terrain = t.terrain_type;
-                            t.terrain_type = TerrainType::Algae;
+                    } else if is_water_like && !tile.has_effect(EffectType::Algae) {
+                        // Create Algae effect on water/ocean
+                        if let Some(t) = state.map.tiles.get_mut(&explode_tile_idx) {
+                            t.effects.insert(EffectType::Algae);
                             undos.push(Box::new(move |s| {
-                                if let Some(t) = s.tiles.get_mut(&explode_tile_idx) {
-                                    t.terrain_type = old_terrain;
+                                if let Some(t) = s.map.tiles.get_mut(&explode_tile_idx) {
+                                    t.effects.remove(&EffectType::Algae);
                                 }
                             }));
                         }

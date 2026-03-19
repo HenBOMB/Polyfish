@@ -66,7 +66,7 @@ fn validate_village_candidate(
     // 1. Cardinal Neighbor Rule: No Ocean neighbors
     let cardinals = crate::functions::get_plus_sign_indices(idx, size);
     for n_idx in cardinals {
-        if let Some(tile) = state.tiles.get(&n_idx) {
+        if let Some(tile) = state.map.tiles.get(&n_idx) {
             if tile.terrain_type == TerrainType::Ocean {
                 return false;
             }
@@ -113,7 +113,7 @@ pub fn predict_villages(state: &GameState) -> IndexMap<i32, (TribeType, bool)> {
 
     // Collect all known cities/villages
     let mut known_cities = std::collections::HashSet::new();
-    for (&idx, tile) in &state.tiles {
+    for (&idx, tile) in &state.map.tiles {
         if tile.capital_of > 0
             || (tile.explorers.contains(&pov_id)
                 && crate::functions::get_structure_type_at(state, idx)
@@ -142,7 +142,7 @@ pub fn predict_villages(state: &GameState) -> IndexMap<i32, (TribeType, bool)> {
     };
 
     // 1. Resource Heuristic - iterate over explored tiles
-    for (&tile_idx, tile) in &state.tiles {
+    for (&tile_idx, tile) in &state.map.tiles {
         if !tile.explorers.contains(&pov_id) {
             continue;
         }
@@ -151,6 +151,7 @@ pub fn predict_villages(state: &GameState) -> IndexMap<i32, (TribeType, bool)> {
                 let neighbors = get_adjacent_indices(state, tile_idx, 1);
                 for n_idx in neighbors {
                     let n_explored = state
+                        .map
                         .tiles
                         .get(&n_idx)
                         .map(|t| t.explorers.contains(&pov_id))
@@ -173,7 +174,7 @@ pub fn predict_villages(state: &GameState) -> IndexMap<i32, (TribeType, bool)> {
     }
 
     // 2. Climate Heuristic - iterate over explored tiles
-    for (&tile_idx, tile) in &state.tiles {
+    for (&tile_idx, tile) in &state.map.tiles {
         if !tile.explorers.contains(&pov_id) {
             continue;
         }
@@ -184,6 +185,7 @@ pub fn predict_villages(state: &GameState) -> IndexMap<i32, (TribeType, bool)> {
             let around = get_adjacent_indices(state, tile_idx, 2);
             for idx in around {
                 let idx_explored = state
+                    .map
                     .tiles
                     .get(&idx)
                     .map(|t| t.explorers.contains(&pov_id))
@@ -265,7 +267,7 @@ fn get_nearest_known_tribe(state: &GameState, idx: i32) -> Option<TribeType> {
     let mut best_tribe = None;
 
     // Check all tiles for known cities
-    for (&t_idx, tile) in &state.tiles {
+    for (&t_idx, tile) in &state.map.tiles {
         // Must be visible or have a known capital/village
         let is_known_city = tile.capital_of > 0
             || (tile.explorers.contains(&pov_id)
@@ -320,7 +322,7 @@ pub fn predict_terrain(
         let mut total_neighbors = 0;
 
         for n_idx in neighbors {
-            if let Some(tile) = state.tiles.get(&n_idx) {
+            if let Some(tile) = state.map.tiles.get(&n_idx) {
                 if tile.explorers.contains(&pov_id) {
                     match tile.terrain_type {
                         TerrainType::Water | TerrainType::Ocean => {}
@@ -387,10 +389,11 @@ pub fn predict_terrain(
 pub fn get_border_clouds(state: &GameState) -> Vec<i32> {
     let pov_id = state.settings.current_player_turn_id;
     let mut border = std::collections::HashSet::new();
-    for (&idx, tile) in &state.tiles {
+    for (&idx, tile) in &state.map.tiles {
         if tile.explorers.contains(&pov_id) {
             for n in get_adjacent_indices(state, idx, 1) {
                 let n_explored = state
+                    .map
                     .tiles
                     .get(&n)
                     .map(|t| t.explorers.contains(&pov_id))
@@ -410,7 +413,7 @@ pub fn update_predictions(state: &mut GameState) {
     // Prediction for ALL unexplored tiles (Mental Image)
     let pov_id = state.settings.current_player_turn_id;
     let mut fog_tiles = Vec::new();
-    for (&idx, tile) in &state.tiles {
+    for (&idx, tile) in &state.map.tiles {
         if !tile.explorers.contains(&pov_id) {
             fog_tiles.push(idx);
         }
@@ -449,6 +452,7 @@ pub fn predict_enemy_capitals(state: &GameState) -> Vec<i32> {
         .into_iter()
         .filter(|idx| {
             !state
+                .map
                 .tiles
                 .get(idx)
                 .map(|t| t.explorers.contains(&pov_id))
@@ -473,7 +477,7 @@ mod tests {
             let mut tile = TileState::default();
             tile.coords = crate::coords::Coords::from_index(i, size);
             tile.terrain_type = TerrainType::Field;
-            state.tiles.insert(i, tile);
+            state.map.tiles.insert(i, tile);
         }
         let pov_id = 1;
         state.settings.current_player_turn_id = pov_id;
@@ -484,7 +488,7 @@ mod tests {
 
         let known_cities = HashSet::new();
         let ocean_idx = 2 * size + 2;
-        state.tiles.get_mut(&ocean_idx).unwrap().terrain_type = TerrainType::Ocean;
+        state.map.tiles.get_mut(&ocean_idx).unwrap().terrain_type = TerrainType::Ocean;
         let adj_idx = 2 * size + 3;
         assert!(!validate_village_candidate(
             &state,
@@ -530,7 +534,7 @@ mod tests {
         cap_tile.capital_of = bardur_id;
         cap_tile.owner = bardur_id;
         cap_tile.terrain_type = TerrainType::Field;
-        state.tiles.insert(bardur_cap_idx, cap_tile);
+        state.map.tiles.insert(bardur_cap_idx, cap_tile);
 
         // Prediction Target: Tile near Bardur
         let target_idx = 2 * size + 3; // Adjacent to Bardur Cap

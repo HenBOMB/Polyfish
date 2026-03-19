@@ -53,15 +53,36 @@ impl Game {
     pub fn post_load(&mut self) {
         let map_size = self.state.settings.size;
 
-        // Compute coord indices for all tiles
-        for (_idx, tile) in self.state.tiles.iter_mut() {
+        // 0. Compute coord indexes for all tiles
+        for (_idx, tile) in self.state.map.tiles.iter_mut() {
             tile.coords.compute_idx(map_size);
             if let Some(ref mut rc) = tile.ruling_city_coords {
                 rc.compute_idx(map_size);
             }
         }
 
-        // Compute coord indices for all units
+        // 1. Move units from tiles to tribes (for ingestion from mod)
+        // We do this by iterating all tiles and checking if a unit exists
+        let mut units_to_add = Vec::new();
+        for tile in self.state.map.tiles.values_mut() {
+            if let Some(mut unit) = tile.unit.take() {
+                // Ensure the unit's coordinates match the tile
+                unit.coords = tile.coords;
+                unit.prev_coords = tile.coords;
+                units_to_add.push(unit);
+            }
+        }
+
+        for unit in units_to_add {
+            if let Some(tribe) = self.state.tribes.get_mut(&unit.owner) {
+                // Check if unit already exists at these coords to avoid duplicates
+                if !tribe.units.iter().any(|u| u.coords == unit.coords) {
+                    tribe.units.push(unit);
+                }
+            }
+        }
+
+        // 2. Compute coord indices and scale health for units
         for tribe in self.state.tribes.values_mut() {
             for unit in &mut tribe.units {
                 unit.coords.compute_idx(map_size);
@@ -69,24 +90,21 @@ impl Game {
                 if let Some(ref mut hc) = unit.home_coords {
                     hc.compute_idx(map_size);
                 }
+
+                // Health Scaling: Game sends raw values (1-40), Simulator uses 10x scale (10-400)
+                if unit.health <= 40 {
+                    unit.health *= HEALTH_SCALE;
+                }
+
+                // Set tile unit owner correctly
+                if let Some(tile) = self.state.map.tiles.get_mut(&unit.coords.idx) {
+                    tile._unit_owner_id = Some(unit.owner);
+                }
             }
             tribe.starting_tile_coords.compute_idx(map_size);
         }
 
-        // Set initial exploration for all tribes
-        // Temporarily enable _are_you_sure so exploration actually happens
-        let old_are_you_sure = self.state.settings._are_you_sure;
-        self.state.settings._are_you_sure = true;
-
-        let ids: Vec<PlayerId> = self.state.tribes.keys().cloned().collect();
-        for id in ids {
-            let _ = actions::update_exploration(&mut self.state, id);
-        }
-
-        // Restore original value
-        self.state.settings._are_you_sure = old_are_you_sure;
-
-        // Update scores
+        // 3. Update scores
         sync_scores(&mut self.state);
     }
 

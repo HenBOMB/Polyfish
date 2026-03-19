@@ -593,7 +593,7 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
             std::vector<int32_t> effects;
             bool moved, attacked, flipped; 
             uint8_t owner;
-            uint16_t promoted, type, tileX, tileY, hp, xp, prevTileX, prevTileY, 
+            uint16_t promoted, type, tileX, tileY, health, xp, prevTileX, prevTileY, 
                 homeX, homeY, direction, createdTurn;
             // uint16_t classId, classHp, classCost, classDef, classMov, classAtk, classWpn, classRange;
             // bool classHidden;
@@ -608,7 +608,7 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
             tileY       = *(uint16_t*)&unitBuffer[_0x_UNIT_Y];
             homeX       = *(uint16_t*)&unitBuffer[_0x_UNIT_HOME_X];
             homeY       = *(uint16_t*)&unitBuffer[_0x_UNIT_HOME_Y];
-            hp          = *(uint16_t*)&unitBuffer[_0x_UNIT_HEALTH];
+            health          = *(uint16_t*)&unitBuffer[_0x_UNIT_HEALTH];
             promoted    = *(uint16_t*)&unitBuffer[_0x_UNIT_PROMOTION_LEVEL]; 
             xp          = *(uint16_t*)&unitBuffer[_0x_UNIT_XP];
             direction   = *(uint16_t*)&unitBuffer[_0x_UNIT_DIRECTION];
@@ -633,7 +633,7 @@ int polyai(uintptr_t modBase, pid_t pid, bool prod) {
             }
 
             unitMap[index] = { 
-                owner, tileX, tileY, type, hp, promoted, xp, 
+                owner, tileX, tileY, type, health, promoted, xp, 
                 prevTileX, prevTileY, homeX, homeY, direction,
                 flipped, createdTurn, moved, attacked, passengerType,
                 effects

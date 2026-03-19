@@ -23,7 +23,7 @@ impl Move for FreezeAreaMove {
 
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let owner = state
-            .tiles
+            .map.tiles
             .get(&self.src_index)
             .and_then(|t| t._unit_owner_id)
             .unwrap_or(0);

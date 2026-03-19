@@ -34,7 +34,7 @@ pub fn chain_undos(undos: Vec<UndoCallback>) -> UndoCallback {
 
 /// Modify terrain type at a tile index
 pub fn modify_terrain(state: &mut GameState, idx: i32, new_terrain: TerrainType) -> UndoCallback {
-    let tile = match state.tiles.get_mut(&idx) {
+    let tile = match state.map.tiles.get_mut(&idx) {
         Some(t) => t,
         None => return noop_undo(),
     };
@@ -43,7 +43,7 @@ pub fn modify_terrain(state: &mut GameState, idx: i32, new_terrain: TerrainType)
     tile.terrain_type = new_terrain;
 
     Box::new(move |s| {
-        if let Some(tile) = s.tiles.get_mut(&idx) {
+        if let Some(tile) = s.map.tiles.get_mut(&idx) {
             tile.terrain_type = old_terrain;
         }
     })
@@ -213,7 +213,7 @@ pub fn update_exploration(state: &mut GameState, player_id: PlayerId) -> UndoCal
 
     // Check Internal FOW Toggle (God Mode for AI Training)
     if !state.settings._fow {
-        for (idx, tile) in state.tiles.iter_mut() {
+        for (idx, tile) in state.map.tiles.iter_mut() {
             if !tile.explorers.contains(&player_id) {
                 tile.explorers.insert(player_id);
                 modified_tiles.push(*idx);
@@ -227,7 +227,7 @@ pub fn update_exploration(state: &mut GameState, player_id: PlayerId) -> UndoCal
 
         for city in &tribe.cities {
             let city_coords = Coords::from_index(city.tile_index, map_size);
-            let range = if state.tiles[city.tile_index as usize].capital_of > 0 {
+            let range = if state.map.tiles[city.tile_index as usize].capital_of > 0 {
                 2
             } else {
                 city.border_size
@@ -245,7 +245,7 @@ pub fn update_exploration(state: &mut GameState, player_id: PlayerId) -> UndoCal
                             || idx == map_size - 1
                             || idx == map_size * (map_size - 1)
                             || idx == map_size * map_size - 1;
-                        if state.tiles[idx as usize].explorers.contains(&player_id)
+                        if state.map.tiles[idx as usize].explorers.contains(&player_id)
                             || (is_corner && idx != city.tile_index)
                         {
                             continue;
@@ -262,7 +262,7 @@ pub fn update_exploration(state: &mut GameState, player_id: PlayerId) -> UndoCal
             // Standard vision range: 2 if Scout or on Mountain, else 1
             let vision_range = if crate::functions::has_skill(unit, SkillType::Scout)
                 || state
-                    .tiles
+                    .map.tiles
                     .get(&unit.coords.idx)
                     .map_or(false, |t| t.terrain_type == TerrainType::Mountain)
             {
@@ -278,7 +278,7 @@ pub fn update_exploration(state: &mut GameState, player_id: PlayerId) -> UndoCal
 
         // Mark all collected tiles as explored
         for idx in tiles_to_explore {
-            if let Some(tile) = state.tiles.get_mut(&idx) {
+            if let Some(tile) = state.map.tiles.get_mut(&idx) {
                 if !tile.explorers.contains(&player_id) {
                     tile.explorers.insert(player_id);
                     modified_tiles.push(idx);
@@ -292,7 +292,7 @@ pub fn update_exploration(state: &mut GameState, player_id: PlayerId) -> UndoCal
     } else {
         Box::new(move |s| {
             for idx in modified_tiles {
-                if let Some(t) = s.tiles.get_mut(&idx) {
+                if let Some(t) = s.map.tiles.get_mut(&idx) {
                     t.explorers.remove(&player_id);
                 }
             }
@@ -328,7 +328,7 @@ pub fn try_discover_other_tribes(state: &mut GameState) -> UndoCallback {
 
     // Check explored tiles for enemy units
     let explored_tiles: Vec<i32> = state
-        .tiles
+        .map.tiles
         .iter()
         .filter(|(_, t)| t.explorers.contains(&pov_id))
         .map(|(&idx, _)| idx)
@@ -393,7 +393,7 @@ pub fn freeze_area(
 
     for idx in adjacent {
         // Freeze terrain (All except Mountain)
-        if let Some(tile) = state.tiles.get_mut(&idx) {
+        if let Some(tile) = state.map.tiles.get_mut(&idx) {
             match tile.terrain_type {
                 TerrainType::Water
                 | TerrainType::Ocean
@@ -402,7 +402,7 @@ pub fn freeze_area(
                     if !tile.frozen {
                         tile.frozen = true;
                         undos.push(Box::new(move |s| {
-                            if let Some(t) = s.tiles.get_mut(&idx) {
+                            if let Some(t) = s.map.tiles.get_mut(&idx) {
                                 t.frozen = false;
                             }
                         }));
@@ -563,7 +563,7 @@ pub fn process_start_turn_effects(state: &mut GameState, player_id: PlayerId) ->
 
             if is_temple {
                 // Check owner
-                if let Some(tile) = state.tiles.get(idx) {
+                if let Some(tile) = state.map.tiles.get(idx) {
                     if tile.owner == player_id {
                         let age = state.settings.turn - structure.founded;
                         // Level 1: Age 0-2 (or <3)
@@ -626,7 +626,7 @@ pub fn process_end_turn_effects(state: &mut GameState, _player_id: PlayerId) -> 
 
     for m_idx in mycelium_tiles {
         let m_owner = state
-            .tiles
+            .map.tiles
             .get(&m_idx)
             .and_then(|t| if t.owner != 0 { Some(t.owner) } else { None });
         if let Some(owner_id) = m_owner {
@@ -635,7 +635,8 @@ pub fn process_end_turn_effects(state: &mut GameState, _player_id: PlayerId) -> 
             targets.push(m_idx);
 
             for t_idx in targets {
-                if let Some(unit_owner) = state.tiles.get(&t_idx).and_then(|t| t._unit_owner_id) {
+                if let Some(unit_owner) = state.map.tiles.get(&t_idx).and_then(|t| t._unit_owner_id)
+                {
                     if unit_owner == owner_id {
                         if let Some(tribe) = state.tribes.get(&unit_owner) {
                             if let Some(unit_pos) =
@@ -671,7 +672,7 @@ pub fn process_end_turn_effects(state: &mut GameState, _player_id: PlayerId) -> 
         .collect();
 
     for f_idx in fungi_indices {
-        let owner_id = state.tiles.get(&f_idx).map(|t| t.owner).unwrap_or(0);
+        let owner_id = state.map.tiles.get(&f_idx).map(|t| t.owner).unwrap_or(0);
 
         // A. Growth (Only on owner's turn)
         if owner_id == current_player {

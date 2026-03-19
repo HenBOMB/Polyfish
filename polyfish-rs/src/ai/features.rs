@@ -289,6 +289,7 @@ pub fn state_to_tensor(
 
             // Check visibility (now just use explorers - explored = visible)
             let is_explored = state
+                .map
                 .tiles
                 .get(&idx)
                 .map(|t| t.explorers.contains(&perspective))
@@ -330,7 +331,7 @@ pub fn state_to_tensor(
                 continue;
             }
 
-            if let Some(tile) = state.tiles.get(&idx) {
+            if let Some(tile) = state.map.tiles.get(&idx) {
                 // Terrain (always visible if explored)
                 let terrain_ch = terrain_to_channel(tile.terrain_type);
                 set_feat(&mut data, terrain_ch, x, y, 1.0);
@@ -418,6 +419,7 @@ pub fn state_to_tensor(
             let idx = unit.coords.idx;
 
             let unit_explored = state
+                .map
                 .tiles
                 .get(&idx)
                 .map(|t| t.explorers.contains(&perspective))
@@ -441,13 +443,8 @@ pub fn state_to_tensor(
                 y,
                 unit.health as f32 / get_unit_max_health(unit) as f32,
             );
-            set_feat(
-                &mut data,
-                CH_UNIT_MAX_HP,
-                x,
-                y,
-                (unit.max_health as f32 / 400.0).clamp(0.0, 1.0),
-            );
+            // Removed cause it was a bad keyword
+            set_feat(&mut data, CH_UNIT_MAX_HP, x, y, 0.0);
             set_feat(
                 &mut data,
                 CH_UNIT_VETERAN,
@@ -527,6 +524,7 @@ pub fn state_to_tensor(
 
             // Only show cities we can see
             let city_explored = state
+                .map
                 .tiles
                 .get(&idx)
                 .map(|t| t.explorers.contains(&perspective))
@@ -563,7 +561,7 @@ pub fn state_to_tensor(
             );
 
             // Check if capital
-            if let Some(tile) = state.tiles.get(&idx) {
+            if let Some(tile) = state.map.tiles.get(&idx) {
                 if tile.capital_of == *player_id {
                     set_feat(&mut data, CH_CITY_IS_CAPITAL, x, y, 1.0);
                 }

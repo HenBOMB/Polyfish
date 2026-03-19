@@ -6,6 +6,7 @@
 
 use serde_repr::{Deserialize_repr, Serialize_repr};
 
+
 /// Game mode types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize_repr, Deserialize_repr)]
 #[repr(u8)]
@@ -37,6 +38,9 @@ pub enum TerrainType {
     Mountain = 4,
     Forest = 5,
     Ice = 6,
+    Wetland = 7,
+    Mangrove = 8,
+    /// DEPRECATED: Use TileState.effects with EffectType::Algae instead.
     Algae = 120,
 }
 
@@ -520,6 +524,7 @@ pub enum EffectType {
     Boost = 2,
     Invisible = 3,
     Frozen = 4,
+    Algae = 5,
 }
 
 /// Capture types

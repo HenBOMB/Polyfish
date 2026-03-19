@@ -12,7 +12,7 @@ mod tests {
 
         // Setup tile with Forest and Structure
         let idx = 0;
-        state.tiles.insert(
+        state.map.tiles.insert(
             idx,
             TileState {
                 coords: polyfish::coords::Coords { x: 0, y: 0, idx },
@@ -69,7 +69,7 @@ mod tests {
         state.settings.current_player_turn_id = 1;
 
         let idx = 1;
-        state.tiles.insert(
+        state.map.tiles.insert(
             idx,
             TileState {
                 coords: polyfish::coords::Coords { x: 0, y: 1, idx },

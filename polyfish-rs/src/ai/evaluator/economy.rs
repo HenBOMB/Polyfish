@@ -211,6 +211,7 @@ fn penalty_unused_tech(state: &GameState, tribe: &crate::states::TribeState) -> 
         let has_any_terrain = tribe.cities.iter().any(|city| {
             city._territory.iter().any(|&idx| {
                 state
+                    .map
                     .tiles
                     .get(&idx)
                     .map_or(false, |t| terrains.contains(&t.terrain_type))
@@ -255,6 +256,7 @@ fn penalty_unused_tech(state: &GameState, tribe: &crate::states::TribeState) -> 
         let has_terrain = tribe.cities.iter().any(|city| {
             city._territory.iter().any(|&idx| {
                 state
+                    .map
                     .tiles
                     .get(&idx)
                     .map_or(false, |t| terrains.contains(&t.terrain_type))
@@ -375,7 +377,7 @@ fn penalty_bad_structures(state: &GameState, tribe: &crate::states::TribeState) 
                 let adj_count = adj
                     .iter()
                     .filter(|&&idx| {
-                        if let Some(tile) = state.tiles.get(&idx) {
+                        if let Some(tile) = state.map.tiles.get(&idx) {
                             if tile.owner == player_id {
                                 if let Some(s) = get_structure_at(state, idx) {
                                     return prereqs.contains(&s.structure_type);
@@ -415,7 +417,7 @@ fn penalty_bad_structures(state: &GameState, tribe: &crate::states::TribeState) 
                         }
 
                         // 2. Is it a valid empty spot (Potential Hub)?
-                        if let Some(tile) = state.tiles.get(&idx) {
+                        if let Some(tile) = state.map.tiles.get(&idx) {
                             // Must be land (not water/ocean where we can't build hubs)
                             // Note: WaterTemple/Port are different.
                             if tile.terrain_type == crate::types::TerrainType::Ocean
@@ -436,13 +438,13 @@ fn penalty_bad_structures(state: &GameState, tribe: &crate::states::TribeState) 
             }
 
             // --- 3. Dead-end roads ---
-            if let Some(tile) = state.tiles.get(&tile_idx) {
+            if let Some(tile) = state.map.tiles.get(&tile_idx) {
                 if tile.has_road {
                     let adj = get_adjacent_indices(state, tile_idx, 1);
                     let connections = adj
                         .iter()
                         .filter(|&&idx| {
-                            if let Some(adj_tile) = state.tiles.get(&idx) {
+                            if let Some(adj_tile) = state.map.tiles.get(&idx) {
                                 if adj_tile.owner != player_id {
                                     return false;
                                 }

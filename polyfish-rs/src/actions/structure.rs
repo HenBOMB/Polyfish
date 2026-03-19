@@ -37,11 +37,11 @@ pub fn create_structure(
 
     // Valid references for move closure
     let pov_id = state.settings.current_player_turn_id;
-    let old_has_road = state.tiles.get(&idx).map(|t| t.has_road).unwrap_or(false);
+    let old_has_road = state.map.tiles.get(&idx).map(|t| t.has_road).unwrap_or(false);
 
     // Sync has_road
     if structure_type == StructureType::Road {
-        if let Some(tile) = state.tiles.get_mut(&idx) {
+        if let Some(tile) = state.map.tiles.get_mut(&idx) {
             tile.has_road = true;
         }
     }
@@ -76,7 +76,7 @@ pub fn create_structure(
 
         // Restore has_road
         if structure_type == StructureType::Road {
-            if let Some(tile) = s.tiles.get_mut(&idx) {
+            if let Some(tile) = s.map.tiles.get_mut(&idx) {
                 tile.has_road = old_has_road;
             }
         }
@@ -139,11 +139,11 @@ pub fn destroy_structure(state: &mut GameState, idx: i32) -> UndoCallback {
 
     // Valid stats for undo
     let pov_id = state.settings.current_player_turn_id;
-    let old_has_road = state.tiles.get(&idx).map(|t| t.has_road).unwrap_or(false);
+    let old_has_road = state.map.tiles.get(&idx).map(|t| t.has_road).unwrap_or(false);
 
     // Sync has_road
     if structure.structure_type == StructureType::Road {
-        if let Some(tile) = state.tiles.get_mut(&idx) {
+        if let Some(tile) = state.map.tiles.get_mut(&idx) {
             tile.has_road = false;
         }
     }
@@ -160,7 +160,7 @@ pub fn destroy_structure(state: &mut GameState, idx: i32) -> UndoCallback {
     undos.push(Box::new(move |s: &mut GameState| {
         // Restore has_road
         if structure.structure_type == StructureType::Road {
-            if let Some(tile) = s.tiles.get_mut(&idx) {
+            if let Some(tile) = s.map.tiles.get_mut(&idx) {
                 tile.has_road = old_has_road;
             }
         }
@@ -328,7 +328,7 @@ pub fn capture_ruin(state: &mut GameState, tile_idx: i32) -> UndoCallback {
     let around = get_adjacent_indices(state, tile_idx, 2);
     for &idx in &around {
         let is_explored = state
-            .tiles
+            .map.tiles
             .get(&idx)
             .map(|t| t.explorers.contains(&pov_id))
             .unwrap_or(false);

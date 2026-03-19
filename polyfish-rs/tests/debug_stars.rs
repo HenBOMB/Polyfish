@@ -83,7 +83,7 @@ fn test_harvest_undo() {
     // Fix: Set ruling city coords so get_city_owning_tile works
     tile.ruling_city_coords = Some(Coords::from_index(city_idx, game.state.settings.size));
 
-    game.state.tiles.insert(city_idx, tile);
+    game.state.map.tiles.insert(city_idx, tile);
 
     assert_stars(&game, 10, "Initial");
 
@@ -130,7 +130,7 @@ fn test_build_undo() {
     tile.owner = 1;
     // Set ruling city
     tile.ruling_city_coords = Some(Coords::from_index(city_idx, game.state.settings.size));
-    game.state.tiles.insert(city_idx, tile);
+    game.state.map.tiles.insert(city_idx, tile);
 
     assert_stars(&game, 10, "Initial");
 
@@ -205,7 +205,7 @@ fn test_interaction_sequence() {
     tile.capital_of = 1; // Capital Bonus (+1 Prod)
     tile.terrain_type = TerrainType::Field;
     tile.ruling_city_coords = Some(Coords::from_index(city_idx, game.state.settings.size));
-    game.state.tiles.insert(city_idx, tile);
+    game.state.map.tiles.insert(city_idx, tile);
 
     assert_stars(&game, 10, "Initial");
 
@@ -332,7 +332,7 @@ fn test_summon_undo() {
     let mut tile = polyfish::states::TileState::default();
     tile.coords.idx = 0;
     tile._unit_owner_id = None;
-    game.state.tiles.insert(0, tile);
+    game.state.map.tiles.insert(0, tile);
 
     // Play
     let undo = game.play_move(&move_).expect("Move failed");
@@ -531,7 +531,7 @@ fn test_capture_ruin_determinism() {
         let mut tile = TileState::default();
         tile.coords = Coords::from_index(ruin_idx, game.state.settings.size);
         tile._unit_owner_id = Some(1);
-        game.state.tiles.insert(ruin_idx, tile);
+        game.state.map.tiles.insert(ruin_idx, tile);
 
         // Add Ruin Structure
         let structure = StructureState {
@@ -598,7 +598,7 @@ fn test_capture_ruin_stacking() {
         let mut tile = TileState::default();
         tile.coords = Coords::from_index(ruin_idx, game.state.settings.size);
         tile._unit_owner_id = Some(1);
-        game.state.tiles.insert(ruin_idx, tile);
+        game.state.map.tiles.insert(ruin_idx, tile);
 
         // Add Ruin Structure
         let structure = StructureState {

@@ -28,6 +28,7 @@ impl Move for RecoverMove {
         let mut undos = Vec::new();
 
         let unit_owner = state
+            .map
             .tiles
             .get(&self.src_index)
             .and_then(|t| t._unit_owner_id)

@@ -202,7 +202,7 @@ fn generate_capture_moves(state: &GameState, unit: &UnitState, moves: &mut Vec<B
     if let Some(structure) = get_structure_at(state, idx) {
         match structure.structure_type {
             StructureType::Village => {
-                let tile = state.tiles.get(&idx);
+                let tile = state.map.tiles.get(&idx);
                 let tile_owner = tile.map(|t| t.owner);
                 // Village is capturable if it has no owner or is owned by an enemy
                 if tile_owner.is_none() || tile_owner != Some(unit.owner) {
@@ -423,7 +423,7 @@ fn compute_movement_cost(state: &GameState, unit: &UnitState, from_idx: i32, to_
     }
 
     // Terrain specific costs
-    if let Some(tile) = state.tiles.get(&to_idx) {
+    if let Some(tile) = state.map.tiles.get(&to_idx) {
         // Glide/Skate doubles movement on frozen tiles (halves cost)
         if tile.frozen {
             if settings.skills.contains(&SkillType::Skate) {
@@ -463,7 +463,7 @@ fn is_terminal(state: &GameState, unit: &UnitState, tile_idx: i32) -> bool {
         return false;
     }
 
-    let tile = state.tiles.get(&tile_idx).unwrap();
+    let tile = state.map.tiles.get(&tile_idx).unwrap();
 
     // Skate units are restricted to 1 movement on land (non-ice tiles)
     if settings.skills.contains(&SkillType::Skate) && !tile.frozen {
@@ -513,7 +513,7 @@ fn is_terminal(state: &GameState, unit: &UnitState, tile_idx: i32) -> bool {
     // "Units cannot move through them (they can move onto them, but no further in the same turn)"
     // Flooded rough terrain usually acts like water (not terminal for aquatic)
     // Algae is Rough Terrain (stops movement)
-    if tile.terrain_type == TerrainType::Algae
+    if tile.has_effect(EffectType::Algae)
         && !settings.skills.contains(&SkillType::Creep)
         && !settings.skills.contains(&SkillType::Fly)
         && !settings.skills.contains(&SkillType::Water)
@@ -544,7 +544,7 @@ fn is_terminal(state: &GameState, unit: &UnitState, tile_idx: i32) -> bool {
 }
 
 fn is_roadpath_and_usable(state: &GameState, unit: &UnitState, idx: i32) -> bool {
-    let tile = match state.tiles.get(&idx) {
+    let tile = match state.map.tiles.get(&idx) {
         Some(t) => t,
         None => return false,
     };
@@ -658,7 +658,7 @@ fn get_tiles_in_range(state: &GameState, from_idx: i32, range: i32) -> Vec<i32> 
 fn is_steppable(state: &GameState, unit: &UnitState, idx: i32) -> bool {
     // Can only step on explored tiles, regardless F
     let is_explored = state
-        .tiles
+        .map.tiles
         .get(&idx)
         .map(|t| t.explorers.contains(&unit.owner))
         .unwrap_or(false);
@@ -670,7 +670,7 @@ fn is_steppable(state: &GameState, unit: &UnitState, idx: i32) -> bool {
     let settings = get_unit_setting(unit.unit_type);
 
     let tribe = state.tribes.get(&unit.owner).unwrap();
-    let tile = state.tiles.get(&idx).unwrap();
+    let tile = state.map.tiles.get(&idx).unwrap();
 
     // Use FOW-safe terrain access for MCTS anti-cheat
     let terrain = crate::fow::get_terrain_at(state, idx, unit.owner);
@@ -700,7 +700,7 @@ fn is_steppable(state: &GameState, unit: &UnitState, idx: i32) -> bool {
 
     if !is_aquatic {
         // Algae acts like a bridge for land units
-        if terrain == TerrainType::Algae {
+        if tile.has_effect(EffectType::Algae) {
             // Pass
         } else if let Some(structure) = get_structure_at(state, idx) {
             if structure.structure_type == StructureType::Port {
@@ -726,7 +726,7 @@ fn is_steppable(state: &GameState, unit: &UnitState, idx: i32) -> bool {
         let is_water = matches!(terrain, TerrainType::Water | TerrainType::Ocean);
         if is_water {
             // algae is steppable water
-            return terrain == TerrainType::Algae;
+            return tile.has_effect(EffectType::Algae);
         }
     }
 
@@ -747,13 +747,13 @@ fn is_navigationable_terrain(
     if has_skill(unit_type, SkillType::Water) {
         // Restricted to water/ocean/algae/ice/flooded land
         let is_water_like = matches!(terrain, TerrainType::Water | TerrainType::Ocean)
-            || terrain == TerrainType::Algae
+            || tile.has_effect(EffectType::Algae)
             || tile.frozen
             || tile.flooded;
         return is_water_like;
     }
 
-    if tile.frozen || terrain == TerrainType::Algae {
+    if tile.frozen || tile.has_effect(EffectType::Algae) {
         return true;
     }
 

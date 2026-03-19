@@ -233,7 +233,7 @@ fn has_port(state: &GameState, idx: i32) -> bool {
 }
 
 fn has_road(state: &GameState, idx: i32) -> bool {
-    state.tiles.get(&idx).map(|t| t.has_road).unwrap_or(false)
+    state.map.tiles.get(&idx).map(|t| t.has_road).unwrap_or(false)
 }
 
 fn has_mycelium(state: &GameState, idx: i32) -> bool {
@@ -247,9 +247,9 @@ fn has_mycelium(state: &GameState, idx: i32) -> bool {
 
 fn has_algae(state: &GameState, idx: i32) -> bool {
     state
-        .tiles
+        .map.tiles
         .get(&idx)
-        .map(|t| t.terrain_type == TerrainType::Algae)
+        .map(|t| t.has_effect(crate::types::EffectType::Algae))
         .unwrap_or(false)
 }
 
@@ -279,7 +279,7 @@ fn has_water_path(state: &GameState, src: i32, dest: i32) -> bool {
             if visited.contains(&n) {
                 continue;
             }
-            let tile = match state.tiles.get(&n) {
+            let tile = match state.map.tiles.get(&n) {
                 Some(t) => t,
                 None => continue,
             };
@@ -324,7 +324,7 @@ fn has_cymanti_path(state: &GameState, size: i32, src: i32, dest: i32) -> bool {
             if visited.contains(&n) {
                 continue;
             }
-            let tile = match state.tiles.get(&n) {
+            let tile = match state.map.tiles.get(&n) {
                 Some(t) => t,
                 None => continue,
             };
