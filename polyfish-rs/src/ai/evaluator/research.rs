@@ -75,9 +75,9 @@ pub fn evaluate_tech_utility(state: &GameState, player_id: PlayerId, tech: Techn
             let mut u = 0.0;
             // Reward based on Customs House potential (water adjacency to cities)
             for city in &tribe.cities {
-                let neighbors = get_neighbors(city.tile_index, state.settings.size);
+                let neighbors = get_neighbors(city.idx, state.settings.size);
                 for n_idx in neighbors {
-                    if let Some(tile) = state.map.tiles.get(&n_idx) {
+                    if let Some(tile) = state.tiles.get(&n_idx) {
                         if tile.terrain_type == TerrainType::Water
                             || tile.terrain_type == TerrainType::Ocean
                         {
@@ -123,7 +123,7 @@ fn count_resources_fair(
                 }
             } else {
                 // Estimation: Tech is NOT discovered (or in simulation), use terrain proxy
-                if let Some(tile) = state.map.tiles.get(&tile_idx) {
+                if let Some(tile) = state.tiles.get(&tile_idx) {
                     let is_proxy = match res_type {
                         ResourceType::Crop => tile.terrain_type == TerrainType::Field,
                         ResourceType::Metal => tile.terrain_type == TerrainType::Mountain,
@@ -151,7 +151,7 @@ fn count_terrain(
     let mut count = 0;
     for city in &tribe.cities {
         for &tile_idx in &city._territory {
-            if let Some(tile) = state.map.tiles.get(&tile_idx) {
+            if let Some(tile) = state.tiles.get(&tile_idx) {
                 if tile.terrain_type == terrain_type {
                     count += 1;
                 }

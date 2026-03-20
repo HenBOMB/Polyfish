@@ -21,7 +21,7 @@ pub fn evaluate_exploration(state: &GameState, player_id: PlayerId) -> f32 {
     }
 
     let mut explored_count = 0.0;
-    for tile in state.map.tiles.values() {
+    for tile in state.tiles.values() {
         if tile.explorers.contains(&player_id) {
             explored_count += 1.0;
         }

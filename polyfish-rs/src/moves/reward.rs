@@ -40,7 +40,7 @@ impl Move for RewardMove {
 
         // Find city
         let city_idx = if let Some(tribe) = state.tribes.get(&p_id) {
-            tribe.cities.iter().position(|c| c.tile_index == target)
+            tribe.cities.iter().position(|c| c.idx == target)
         } else {
             None
         };
@@ -67,7 +67,7 @@ impl Move for RewardMove {
                 RewardType::Workshop => {
                     if let Some(tribe) = state.tribes.get_mut(&p_id) {
                         if let Some(city) = tribe.cities.get_mut(c_idx) {
-                            if state.settings.verbose {
+                            if state.settings._verbose {
                                 state
                                     ._messages
                                     .push(format!("City reward: Workshop (+1 Production) 🔨"));
@@ -84,7 +84,7 @@ impl Move for RewardMove {
                     }
                 }
                 RewardType::Explorer => {
-                    if state.settings.verbose {
+                    if state.settings._verbose {
                         state
                             ._messages
                             .push(format!("City reward: Explorer dispatched! 🧭"));
@@ -93,26 +93,14 @@ impl Move for RewardMove {
                     undos.push(discover_tiles(state, p_id, None, Some(predicted)));
                 }
                 RewardType::CityWall => {
-                    if let Some(tribe) = state.tribes.get_mut(&p_id) {
-                        if let Some(city) = tribe.cities.get_mut(c_idx) {
-                            if state.settings.verbose {
-                                state
-                                    ._messages
-                                    .push(format!("City reward: City Walls built! 🧱"));
-                            }
-                            city._walls = true;
-                            undos.push(Box::new(move |s: &mut GameState| {
-                                if let Some(t) = s.tribes.get_mut(&p_id) {
-                                    if let Some(c) = t.cities.get_mut(c_idx) {
-                                        c._walls = false;
-                                    }
-                                }
-                            }) as UndoCallback);
-                        }
+                    if state.settings._verbose {
+                        state
+                            ._messages
+                            .push(format!("City reward: City Walls built! 🧱"));
                     }
                 }
                 RewardType::Resources => {
-                    if state.settings.verbose {
+                    if state.settings._verbose {
                         state._messages.push(format!("City reward: 5 Stars! ⭐"));
                     }
                     undos.push(gain_stars(state, 5));
@@ -120,7 +108,7 @@ impl Move for RewardMove {
                 RewardType::PopGrowth => {
                     if let Some(tribe) = state.tribes.get_mut(&p_id) {
                         if let Some(city) = tribe.cities.get_mut(c_idx) {
-                            if state.settings.verbose {
+                            if state.settings._verbose {
                                 state
                                     ._messages
                                     .push(format!("City reward: Population growth! 👨‍👩‍👧‍👦"));
@@ -143,7 +131,7 @@ impl Move for RewardMove {
                 RewardType::BorderGrowth => {
                     if let Some(tribe) = state.tribes.get_mut(&p_id) {
                         if let Some(city) = tribe.cities.get_mut(c_idx) {
-                            if state.settings.verbose {
+                            if state.settings._verbose {
                                 state
                                     ._messages
                                     .push(format!("City reward: Border growth! 🗺️"));
@@ -164,7 +152,7 @@ impl Move for RewardMove {
                 RewardType::Park => {
                     if let Some(tribe) = state.tribes.get_mut(&p_id) {
                         if let Some(city) = tribe.cities.get_mut(c_idx) {
-                            if state.settings.verbose {
+                            if state.settings._verbose {
                                 state
                                     ._messages
                                     .push(format!("City reward: Park (+250 Score) 🌳"));
@@ -185,7 +173,7 @@ impl Move for RewardMove {
                 RewardType::SuperUnit => {
                     let tribe_type = state.tribes.get(&p_id).map(|t| t.tribe_type).unwrap();
                     let unit_type = get_super_unit(tribe_type);
-                    if state.settings.verbose {
+                    if state.settings._verbose {
                         state
                             ._messages
                             .push(format!("City reward: SUPER UNIT ({:?}) 🦖", unit_type));
@@ -241,7 +229,7 @@ pub fn generate_reward_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
             let mut offset = 0;
 
             // Luxidoor skips rewards for level 2 and 3 of their starting capital
-            if is_luxidoor && city.tile_index == tribe.starting_tile_coords.idx {
+            if is_luxidoor && city.idx == tribe.starting_tile_coords.idx {
                 required = required.saturating_sub(2);
                 offset = 2;
             }
@@ -254,8 +242,8 @@ pub fn generate_reward_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
                     3 => (RewardType::PopGrowth, RewardType::BorderGrowth),
                     _ => (RewardType::Park, RewardType::SuperUnit),
                 };
-                moves.push(Box::new(RewardMove::new(city.tile_index, opt1)));
-                moves.push(Box::new(RewardMove::new(city.tile_index, opt2)));
+                moves.push(Box::new(RewardMove::new(city.idx, opt1)));
+                moves.push(Box::new(RewardMove::new(city.idx, opt2)));
             }
         }
     }
@@ -280,7 +268,7 @@ mod tests {
         tribe.starting_tile_coords = Coords::from_xy(0, 0, 11);
 
         let mut city = CityState::default();
-        city.tile_index = 0; // matching (0,0) for size 11
+        city.idx = 0; // matching (0,0) for size 11
         city.level = 3;
         city.owner = p_id;
         tribe.cities.push(city);
@@ -309,7 +297,7 @@ mod tests {
         tribe.starting_tile_coords = Coords::from_xy(0, 0, 11);
 
         let mut city = CityState::default();
-        city.tile_index = 0;
+        city.idx = 0;
         city.level = 4;
         city.owner = p_id;
         tribe.cities.push(city);
@@ -347,7 +335,7 @@ mod tests {
         tribe.starting_tile_coords = Coords::from_xy(0, 0, 11);
 
         let mut city = CityState::default();
-        city.tile_index = 0;
+        city.idx = 0;
         city.level = 2;
         city.owner = p_id;
         tribe.cities.push(city);

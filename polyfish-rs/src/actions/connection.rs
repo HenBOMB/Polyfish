@@ -18,7 +18,7 @@ pub fn update_capital_connections(state: &mut GameState, tribe_id: i32) -> UndoC
 
     // Find capital
     let capital_idx = if let Some(cap) = get_capital_city(state, tribe_id) {
-        cap.tile_index
+        cap.idx
     } else {
         return Box::new(|_| {});
     };
@@ -29,7 +29,7 @@ pub fn update_capital_connections(state: &mut GameState, tribe_id: i32) -> UndoC
         None => return Box::new(|_| {}),
     };
 
-    let city_indices: HashSet<i32> = tribe.cities.iter().map(|c| c.tile_index).collect();
+    let city_indices: HashSet<i32> = tribe.cities.iter().map(|c| c.idx).collect();
 
     // BFS to find all connected tiles from Capital
     // Connectivity rules:
@@ -154,21 +154,21 @@ pub fn update_capital_connections(state: &mut GameState, tribe_id: i32) -> UndoC
 
     if let Some(tribe) = state.tribes.get_mut(&tribe_id) {
         for (_idx, city) in tribe.cities.iter_mut().enumerate() {
-            if city.tile_index == capital_idx {
+            if city.idx == capital_idx {
                 continue;
             }
 
-            let is_connected_now = connected_cities.contains(&city.tile_index);
+            let is_connected_now = connected_cities.contains(&city.idx);
             if is_connected_now && !city.connected_to_capital {
                 city.connected_to_capital = true;
-                city_pop_changes.push((city.tile_index, 1));
-                updates.push(city.tile_index);
+                city_pop_changes.push((city.idx, 1));
+                updates.push(city.idx);
                 capital_pop_gain += 1;
             } else if !is_connected_now && city.connected_to_capital {
                 // Connection lost
                 city.connected_to_capital = false;
-                city_pop_changes.push((city.tile_index, -1));
-                updates.push(city.tile_index);
+                city_pop_changes.push((city.idx, -1));
+                updates.push(city.idx);
                 capital_pop_gain -= 1;
             }
         }
@@ -193,7 +193,7 @@ pub fn update_capital_connections(state: &mut GameState, tribe_id: i32) -> UndoC
                 // println!("DEBUG: Massive population loss for capital: {}", capital_pop_gain);
             }
 
-            undos.push(add_population(state, cap.tile_index, capital_pop_gain));
+            undos.push(add_population(state, cap.idx, capital_pop_gain));
         }
     }
 
@@ -213,7 +213,7 @@ pub fn update_capital_connections(state: &mut GameState, tribe_id: i32) -> UndoC
     undos.push(Box::new(move |s| {
         if let Some(t) = s.tribes.get_mut(&tribe_id) {
             for c in t.cities.iter_mut() {
-                if flipped_cities.contains(&c.tile_index) {
+                if flipped_cities.contains(&c.idx) {
                     c.connected_to_capital = false;
                 }
             }
@@ -233,7 +233,7 @@ fn has_port(state: &GameState, idx: i32) -> bool {
 }
 
 fn has_road(state: &GameState, idx: i32) -> bool {
-    state.map.tiles.get(&idx).map(|t| t.has_road).unwrap_or(false)
+    state.tiles.get(&idx).map(|t| t.has_road).unwrap_or(false)
 }
 
 fn has_mycelium(state: &GameState, idx: i32) -> bool {
@@ -247,9 +247,9 @@ fn has_mycelium(state: &GameState, idx: i32) -> bool {
 
 fn has_algae(state: &GameState, idx: i32) -> bool {
     state
-        .map.tiles
+        .tiles
         .get(&idx)
-        .map(|t| t.has_effect(crate::types::EffectType::Algae))
+        .map(|t| t.has_effect(crate::types::TileEffect::Algae))
         .unwrap_or(false)
 }
 
@@ -279,7 +279,7 @@ fn has_water_path(state: &GameState, src: i32, dest: i32) -> bool {
             if visited.contains(&n) {
                 continue;
             }
-            let tile = match state.map.tiles.get(&n) {
+            let tile = match state.tiles.get(&n) {
                 Some(t) => t,
                 None => continue,
             };
@@ -324,7 +324,7 @@ fn has_cymanti_path(state: &GameState, size: i32, src: i32, dest: i32) -> bool {
             if visited.contains(&n) {
                 continue;
             }
-            let tile = match state.map.tiles.get(&n) {
+            let tile = match state.tiles.get(&n) {
                 Some(t) => t,
                 None => continue,
             };

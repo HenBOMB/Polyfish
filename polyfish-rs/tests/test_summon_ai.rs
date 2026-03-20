@@ -36,8 +36,7 @@ fn test_summon_contextual_priority() {
         tribe.cities.clear();
         let mut city = CityState::default();
         city.owner = player_id;
-        city.tile_index = city_idx;
-        city.id = city_idx;
+        city.idx = city_idx;
         tribe.cities.push(city);
         tribe.units.clear();
     }
@@ -62,7 +61,7 @@ fn test_summon_contextual_priority() {
     }
 
     // Ensure tile exists for detection logic
-    game.state.map.tiles.insert(
+    game.state.tiles.insert(
         enemy_idx,
         TileState {
             coords: Coords::from_index(enemy_idx, game.state.settings.size),

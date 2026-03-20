@@ -24,9 +24,7 @@ impl Move for ConvertMove {
     }
 
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
-        let owner = state
-            .map
-            .tiles
+        let owner = state.tiles
             .get(&self.src_index)
             .and_then(|t| t._unit_owner_id)
             .unwrap_or(0);

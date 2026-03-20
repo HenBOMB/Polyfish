@@ -7,7 +7,9 @@ use crate::actions::{
     self, UndoCallback, end_unit_turn, gain_stars, has_effect, start_unit_turn,
     try_discover_other_tribes, try_remove_effect, update_exploration,
 };
-use crate::functions::{get_pov_tribe, get_total_production, is_game_over, sync_scores};
+use crate::functions::{
+    get_adjacent_indices, get_pov_tribe, get_total_production, is_game_over, sync_scores,
+};
 use crate::moves::{Move, generate_legal_moves};
 use crate::settings::has_technology;
 use crate::states::*;
@@ -53,32 +55,11 @@ impl Game {
     pub fn post_load(&mut self) {
         let map_size = self.state.settings.size;
 
-        // 0. Compute coord indexes for all tiles
-        for (_idx, tile) in self.state.map.tiles.iter_mut() {
+        // 1. Compute coord indexes for all tiles
+        for (_idx, tile) in self.state.tiles.iter_mut() {
             tile.coords.compute_idx(map_size);
             if let Some(ref mut rc) = tile.ruling_city_coords {
                 rc.compute_idx(map_size);
-            }
-        }
-
-        // 1. Move units from tiles to tribes (for ingestion from mod)
-        // We do this by iterating all tiles and checking if a unit exists
-        let mut units_to_add = Vec::new();
-        for tile in self.state.map.tiles.values_mut() {
-            if let Some(mut unit) = tile.unit.take() {
-                // Ensure the unit's coordinates match the tile
-                unit.coords = tile.coords;
-                unit.prev_coords = tile.coords;
-                units_to_add.push(unit);
-            }
-        }
-
-        for unit in units_to_add {
-            if let Some(tribe) = self.state.tribes.get_mut(&unit.owner) {
-                // Check if unit already exists at these coords to avoid duplicates
-                if !tribe.units.iter().any(|u| u.coords == unit.coords) {
-                    tribe.units.push(unit);
-                }
             }
         }
 
@@ -91,20 +72,42 @@ impl Game {
                     hc.compute_idx(map_size);
                 }
 
-                // Health Scaling: Game sends raw values (1-40), Simulator uses 10x scale (10-400)
-                if unit.health <= 40 {
-                    unit.health *= HEALTH_SCALE;
-                }
-
                 // Set tile unit owner correctly
-                if let Some(tile) = self.state.map.tiles.get_mut(&unit.coords.idx) {
+                if let Some(tile) = self.state.tiles.get_mut(&unit.coords.idx) {
                     tile._unit_owner_id = Some(unit.owner);
                 }
             }
             tribe.starting_tile_coords.compute_idx(map_size);
         }
 
-        // 3. Update scores
+        // 3. Calculate _territory for cities
+        let mut territory_updates = Vec::new();
+        for tribe in self.state.tribes.values() {
+            for city in &tribe.cities {
+                // fetch nearby tiles and filter the ones we own
+                let territory = get_adjacent_indices(&self.state, city.idx, 2)
+                    .into_iter()
+                    .filter(|&idx| {
+                        self.state
+                            .tiles
+                            .get(&idx)
+                            .map(|t| t.owner == city.owner)
+                            .unwrap_or(false)
+                    })
+                    .collect::<Vec<i32>>();
+                territory_updates.push((tribe.id, city.idx, territory));
+            }
+        }
+
+        for (tribe_id, city_idx, territory) in territory_updates {
+            if let Some(tribe) = self.state.tribes.get_mut(&tribe_id) {
+                if let Some(city) = tribe.cities.iter_mut().find(|c| c.idx == city_idx) {
+                    city._territory = territory;
+                }
+            }
+        }
+
+        // 4. Update scores
         sync_scores(&mut self.state);
     }
 
@@ -192,14 +195,14 @@ impl Game {
                 .push(game_move.move_type());
 
             // Add to history
-            self.state.history.push(game_move.serialize());
+            self.state._history.push(game_move.serialize());
 
             // Collect undos
             let move_undo = res.undo;
 
             Box::new(move |s: &mut GameState| {
                 s.settings._recent_moves.pop();
-                s.history.pop();
+                s._history.pop();
                 discover_undo(s);
                 move_undo(s);
             }) as UndoCallback
@@ -397,7 +400,7 @@ impl Game {
                 .units
                 .iter()
                 .enumerate()
-                .map(|(i, u)| (i, has_effect(u, EffectType::Frozen)))
+                .map(|(i, u)| (i, has_effect(u, UnitEffect::Frozen)))
                 .collect();
 
             for (unit_idx, is_frozen) in frozen_units {
@@ -407,7 +410,7 @@ impl Game {
                         state,
                         new_pov,
                         unit_idx,
-                        EffectType::Frozen,
+                        UnitEffect::Frozen,
                     ));
                     undos.push(end_unit_turn(state, new_pov, unit_idx));
                 } else {

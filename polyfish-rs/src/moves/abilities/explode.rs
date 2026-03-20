@@ -1,7 +1,7 @@
 use crate::actions::chain_undos;
 use crate::moves::{Move, MoveResult};
 use crate::states::GameState;
-use crate::types::{AbilityType, EffectType, MoveType};
+use crate::types::{AbilityType, MoveType, TileEffect};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,7 +22,6 @@ impl Move for ExplodeMove {
 
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let owner = state
-            .map
             .tiles
             .get(&self.src_index)
             .and_then(|t| t._unit_owner_id)
@@ -109,7 +108,7 @@ impl Move for ExplodeMove {
                 }
 
                 // 2. Create Spores (if land/ice and no structure)
-                if let Some(tile) = state.map.tiles.get(&explode_tile_idx) {
+                if let Some(tile) = state.tiles.get(&explode_tile_idx) {
                     let is_water_like = matches!(
                         tile.terrain_type,
                         crate::types::TerrainType::Water | crate::types::TerrainType::Ocean
@@ -121,7 +120,6 @@ impl Move for ExplodeMove {
                         // Spawn Spores Resource (for Fungi)
                         let resource = crate::states::ResourceState {
                             resource_type: crate::types::ResourceType::Spores,
-                            tile_index: explode_tile_idx,
                         };
                         // Note: we just checked no structure, but we didn't check resource.
                         // Assuming explode overwrites existing resource if any?
@@ -137,13 +135,13 @@ impl Move for ExplodeMove {
                                 s.resources.shift_remove(&explode_tile_idx);
                             }
                         }));
-                    } else if is_water_like && !tile.has_effect(EffectType::Algae) {
+                    } else if is_water_like && !tile.is_algae() {
                         // Create Algae effect on water/ocean
-                        if let Some(t) = state.map.tiles.get_mut(&explode_tile_idx) {
-                            t.effects.insert(EffectType::Algae);
+                        if let Some(t) = state.tiles.get_mut(&explode_tile_idx) {
+                            t.effects.insert(TileEffect::Algae);
                             undos.push(Box::new(move |s| {
-                                if let Some(t) = s.map.tiles.get_mut(&explode_tile_idx) {
-                                    t.effects.remove(&EffectType::Algae);
+                                if let Some(t) = s.tiles.get_mut(&explode_tile_idx) {
+                                    t.effects.remove(&TileEffect::Algae);
                                 }
                             }));
                         }
@@ -151,7 +149,6 @@ impl Move for ExplodeMove {
                         // Spawn Fruit
                         let resource = crate::states::ResourceState {
                             resource_type: crate::types::ResourceType::Fruit,
-                            tile_index: explode_tile_idx,
                         };
                         let old_resource =
                             state.resources.get(&explode_tile_idx).cloned().flatten();

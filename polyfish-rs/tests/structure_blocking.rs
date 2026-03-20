@@ -12,7 +12,7 @@ mod tests {
 
         // Setup tile with Forest and Structure
         let idx = 0;
-        state.map.tiles.insert(
+        state.tiles.insert(
             idx,
             TileState {
                 coords: polyfish::coords::Coords { x: 0, y: 0, idx },
@@ -27,7 +27,6 @@ mod tests {
             idx,
             Some(StructureState {
                 structure_type: StructureType::EyeOfGod,
-                tile_index: idx,
                 ..Default::default()
             }),
         );
@@ -43,7 +42,7 @@ mod tests {
 
         // Add city with territory
         let mut city = polyfish::states::CityState::default();
-        city.tile_index = 10; // capital elsewhere
+        city.idx = 10; // capital elsewhere
         city._territory.push(idx);
         tribe.cities.push(city);
 
@@ -69,7 +68,7 @@ mod tests {
         state.settings.current_player_turn_id = 1;
 
         let idx = 1;
-        state.map.tiles.insert(
+        state.tiles.insert(
             idx,
             TileState {
                 coords: polyfish::coords::Coords { x: 0, y: 1, idx },
@@ -84,7 +83,6 @@ mod tests {
             idx,
             Some(ResourceState {
                 resource_type: ResourceType::Fruit,
-                tile_index: idx,
                 ..Default::default()
             }),
         );
@@ -94,7 +92,6 @@ mod tests {
             idx,
             Some(StructureState {
                 structure_type: StructureType::EyeOfGod,
-                tile_index: idx,
                 ..Default::default()
             }),
         );

@@ -46,16 +46,16 @@ fn test_mcts_tech_unlock_logic() {
     );
 
     // 5. Move starting unit to free the city
-    let city_idx = game.state.tribes[&player_id].cities[0].tile_index;
+    let city_idx = game.state.tribes[&player_id].cities[0].idx;
     let adj = polyfish::functions::get_adjacent_indices(&game.state, city_idx, 1);
     let target_idx = adj[0];
 
     if let Some(tribe) = game.state.tribes.get_mut(&player_id) {
         if let Some(unit) = tribe.units.iter_mut().find(|u| u.coords.idx == city_idx) {
             unit.coords.set_at(target_idx, game.state.settings.size);
-            game.state.map.tiles.get_mut(&city_idx).unwrap()._unit_owner_id = None;
+            game.state.tiles.get_mut(&city_idx).unwrap()._unit_owner_id = None;
             game.state
-                .map.tiles
+                .tiles
                 .get_mut(&target_idx)
                 .unwrap()
                 ._unit_owner_id = Some(player_id);
@@ -105,7 +105,7 @@ fn test_mcts_tech_unlock_logic() {
         raft.coords.set_at(raft_tile_idx, game.state.settings.size);
         tribe.units.push(raft);
         game.state
-            .map.tiles
+            .tiles
             .get_mut(&raft_tile_idx)
             .unwrap()
             ._unit_owner_id = Some(player_id);

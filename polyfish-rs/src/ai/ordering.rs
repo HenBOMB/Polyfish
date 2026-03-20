@@ -151,7 +151,7 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                                         {
                                             return true;
                                         }
-                                        if let Some(tile) = state.map.tiles.get(&n) {
+                                        if let Some(tile) = state.tiles.get(&n) {
                                             if tile.terrain_type
                                                 == crate::types::TerrainType::Forest
                                             {
@@ -218,7 +218,7 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
             // 1. Enemy Proximity: High priority if threatened
             let mut threatened = false;
             for city in &tribe.cities {
-                let adj = crate::functions::get_adjacent_indices(state, city.tile_index, 3);
+                let adj = crate::functions::get_adjacent_indices(state, city.idx, 3);
                 if adj
                     .iter()
                     .any(|&idx| crate::functions::get_enemy_at(state, idx, tribe_id).is_some())
@@ -328,7 +328,7 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                         let adj_count = adj
                             .iter()
                             .filter(|&&idx| {
-                                if let Some(tile) = state.map.tiles.get(&idx) {
+                                if let Some(tile) = state.tiles.get(&idx) {
                                     if tile.owner == player_id {
                                         if let Some(s) = get_structure_at(state, idx) {
                                             return prereqs.contains(&s.structure_type);
@@ -392,7 +392,7 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                             let adj_count = adj
                                 .iter()
                                 .filter(|&&idx| {
-                                    if let Some(tile) = state.map.tiles.get(&idx) {
+                                    if let Some(tile) = state.tiles.get(&idx) {
                                         if tile.owner == player_id {
                                             if let Some(s) = get_structure_at(state, idx) {
                                                 return prereqs.contains(&s.structure_type);
@@ -441,7 +441,7 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                 let player_id = state.settings.current_player_turn_id;
 
                 // Prioritize stepping onto capture targets
-                if let Some(tile) = state.map.tiles.get(&(target_idx as i32)) {
+                if let Some(tile) = state.tiles.get(&(target_idx as i32)) {
                     if let Some(s) = get_structure_at(state, target_idx as i32) {
                         match s.structure_type {
                             StructureType::Ruin
@@ -460,7 +460,7 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                     // Prioritize exploration (stepping into/near fog)
                     let adj = crate::functions::get_adjacent_indices(state, target_idx as i32, 1);
                     for n_idx in adj {
-                        if let Some(tile) = state.map.tiles.get(&n_idx) {
+                        if let Some(tile) = state.tiles.get(&n_idx) {
                             if !tile.explorers.contains(&player_id) {
                                 score += 2.0; // Cumulative for each fog tile revealed
                             }
@@ -488,7 +488,7 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                 let has_village_opportunity = if let Some(tribe) = state.tribes.get(&player_id) {
                     tribe.units.iter().any(|unit| {
                         let idx = unit.coords.idx;
-                        if let Some(tile) = state.map.tiles.get(&idx) {
+                        if let Some(tile) = state.tiles.get(&idx) {
                             if tile.owner != player_id {
                                 if let Some(s) = get_structure_at(state, idx) {
                                     return s.structure_type == StructureType::Village;
@@ -584,7 +584,7 @@ fn score_reward(state: &crate::states::GameState, mv: &dyn Move) -> f32 {
                 let city_territory = tribe
                     .cities
                     .iter()
-                    .find(|c| c.tile_index == city_idx)
+                    .find(|c| c.idx == city_idx)
                     .map(|c| c._territory.len())
                     .unwrap_or(0);
                 if city_territory < 10 {
@@ -639,7 +639,7 @@ fn score_road(state: &crate::states::GameState, tile_idx: i32) -> f32 {
         .iter()
         .map(|c| {
             (
-                Coords::from_index(c.tile_index, map_size),
+                Coords::from_index(c.idx, map_size),
                 c.connected_to_capital,
             )
         })
@@ -654,14 +654,14 @@ fn score_road(state: &crate::states::GameState, tile_idx: i32) -> f32 {
     // Check adjacency context
     let adj_to_road = adj.iter().any(|&idx| {
         state
-            .map.tiles
+            .tiles
             .get(&idx)
             .map_or(false, |t| t.owner == player_id && t.has_road)
     });
 
     let adj_to_city = adj
         .iter()
-        .any(|&idx| tribe.cities.iter().any(|c| c.tile_index == idx));
+        .any(|&idx| tribe.cities.iter().any(|c| c.idx == idx));
 
     // Find the best city pair this road could help connect
     let mut best_score: f32 = -3.0;

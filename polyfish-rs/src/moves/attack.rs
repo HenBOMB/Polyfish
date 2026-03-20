@@ -28,7 +28,7 @@ impl Move for AttackMove {
         // Find attacker
         let (attacker_owner, attacker_idx) = {
             let tile = state
-                .map.tiles
+                .tiles
                 .get(&self.src_index)
                 .ok_or("Source tile not found")?;
             let owner = tile._unit_owner_id.ok_or("No unit at source")?;
@@ -44,7 +44,7 @@ impl Move for AttackMove {
         // Find defender (Unit or City for Infiltration)
         let (defender_owner, defender_idx) = {
             let tile = state
-                .map.tiles
+                .tiles
                 .get(&self.target_index)
                 .ok_or("Target tile not found")?;
 

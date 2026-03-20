@@ -387,6 +387,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
 
     // 3. Terrain Generation
     let land_ratio = match settings.map_type {
+        MapType::None => 0.5,
         MapType::Drylands => 0.95,
         MapType::Lakes => 0.72,
         MapType::Continents => 0.45,
@@ -1334,7 +1335,6 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                     use crate::types::StructureType;
                     let mut s_state = StructureState::default();
                     s_state.structure_type = StructureType::Village;
-                    s_state.tile_index = gen_tile.idx;
                     game_state.structures.insert(gen_tile.idx, Some(s_state));
                 }
                 "lighthouse" => {
@@ -1342,7 +1342,6 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                     use crate::types::StructureType;
                     let mut s_state = StructureState::default();
                     s_state.structure_type = StructureType::Lighthouse;
-                    s_state.tile_index = gen_tile.idx;
                     game_state.structures.insert(gen_tile.idx, Some(s_state));
                 }
                 "ruin" => {
@@ -1350,7 +1349,6 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                     use crate::types::StructureType;
                     let mut s_state = StructureState::default();
                     s_state.structure_type = StructureType::Ruin;
-                    s_state.tile_index = gen_tile.idx;
                     game_state.structures.insert(gen_tile.idx, Some(s_state));
                 }
                 "fruit" => {
@@ -1358,7 +1356,6 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                     use crate::types::ResourceType;
                     let mut r_state = ResourceState::default();
                     r_state.resource_type = ResourceType::Fruit;
-                    r_state.tile_index = gen_tile.idx;
                     game_state.resources.insert(gen_tile.idx, Some(r_state));
                 }
                 "crop" => {
@@ -1366,7 +1363,6 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                     use crate::types::ResourceType;
                     let mut r_state = ResourceState::default();
                     r_state.resource_type = ResourceType::Crop;
-                    r_state.tile_index = gen_tile.idx;
                     game_state.resources.insert(gen_tile.idx, Some(r_state));
                 }
                 "game" => {
@@ -1374,7 +1370,6 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                     use crate::types::ResourceType;
                     let mut r_state = ResourceState::default();
                     r_state.resource_type = ResourceType::Game;
-                    r_state.tile_index = gen_tile.idx;
                     game_state.resources.insert(gen_tile.idx, Some(r_state));
                 }
                 "fish" => {
@@ -1382,7 +1377,6 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                     use crate::types::ResourceType;
                     let mut r_state = ResourceState::default();
                     r_state.resource_type = ResourceType::Fish;
-                    r_state.tile_index = gen_tile.idx;
                     game_state.resources.insert(gen_tile.idx, Some(r_state));
                 }
                 "metal" => {
@@ -1390,7 +1384,6 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                     use crate::types::ResourceType;
                     let mut r_state = ResourceState::default();
                     r_state.resource_type = ResourceType::Metal;
-                    r_state.tile_index = gen_tile.idx;
                     game_state.resources.insert(gen_tile.idx, Some(r_state));
                 }
                 "starfish" => {
@@ -1398,7 +1391,6 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                     use crate::types::ResourceType;
                     let mut r_state = ResourceState::default();
                     r_state.resource_type = ResourceType::Starfish;
-                    r_state.tile_index = gen_tile.idx;
                     game_state.resources.insert(gen_tile.idx, Some(r_state));
                 }
                 "spores" => {
@@ -1406,19 +1398,18 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                     use crate::types::ResourceType;
                     let mut r_state = ResourceState::default();
                     r_state.resource_type = ResourceType::Spores;
-                    r_state.tile_index = gen_tile.idx;
                     game_state.resources.insert(gen_tile.idx, Some(r_state));
                 }
                 _ => {}
             }
         }
-        game_state.map.tiles.insert(gen_tile.idx, t_state);
+        game_state.tiles.insert(gen_tile.idx, t_state);
     }
 
     // Assign capital_of to tiles
     for (i, &cap) in capital_cells.iter().enumerate() {
         let pid = (i + 1) as i32;
-        if let Some(tile) = game_state.map.tiles.get_mut(&cap) {
+        if let Some(tile) = game_state.tiles.get_mut(&cap) {
             tile.capital_of = pid;
         }
     }
@@ -1429,8 +1420,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         let pid = (i + 1) as i32;
         use crate::states::CityState;
         let mut city = CityState::default();
-        city.id = cap;
-        city.tile_index = cap;
+        city.idx = cap;
         city.owner = pid;
         city.level = if tribe == TribeType::Luxidoor { 3 } else { 1 };
         city.population = if tribe == TribeType::Luxidoor { 5 } else { 0 };
@@ -1450,13 +1440,13 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         }
         city._territory = territory.clone();
 
-        let cap_coords = game_state.map.tiles[&cap].coords;
+        let cap_coords = game_state.tiles[&cap].coords;
         if let Some(t) = game_state.tribes.get_mut(&pid) {
             t.cities.push(city);
             t.starting_tile_coords = cap_coords;
         }
         for idx in territory {
-            if let Some(tile) = game_state.map.tiles.get_mut(&idx) {
+            if let Some(tile) = game_state.tiles.get_mut(&idx) {
                 tile.owner = pid;
                 tile.ruling_city_coords = Some(cap_coords);
                 // Allowing this would be cheating
@@ -1471,7 +1461,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
 
     // Starting units
     use crate::types::UnitType;
-    for (i, &cap) in capital_cells.iter().enumerate() {
+    for (i, &cap_idx) in capital_cells.iter().enumerate() {
         let tribe = settings.tribes[i];
         let pid = (i + 1) as i32;
         let unit_type = match tribe {
@@ -1489,15 +1479,14 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         let mut unit = UnitState::default();
         unit.owner = pid;
         unit.unit_type = unit_type;
-        unit.coords = game_state.map.tiles[&cap].coords;
+        unit.coords = game_state.tiles[&cap_idx].coords;
         unit.prev_coords = unit.coords;
         unit.home_coords = Some(unit.coords);
-        unit.city_id = cap;
         if let Some(t) = game_state.tribes.get_mut(&pid) {
             t.units.push(unit);
         }
         // Fix: Set tile unit owner
-        if let Some(tile) = game_state.map.tiles.get_mut(&cap) {
+        if let Some(tile) = game_state.tiles.get_mut(&cap_idx) {
             tile._unit_owner_id = Some(pid);
         }
     }
@@ -1534,7 +1523,7 @@ mod tests {
                 let state = generate(settings);
                 let side_size = size.get_size();
 
-                for (idx, tile) in &state.map.tiles {
+                for (idx, tile) in &state.tiles {
                     let (x, y) = (tile.coords.x, tile.coords.y);
 
                     if let Some(Some(structure)) = state.structures.get(idx) {
@@ -1594,7 +1583,7 @@ mod tests {
                     for tribe in state.tribes.values() {
                         for city in &tribe.cities {
                             // In this engine, the first city added is the capital
-                            let (x, y) = get_coords(city.tile_index, size.get_size());
+                            let (x, y) = get_coords(city.idx, size.get_size());
                             capitals.push((x, y));
                         }
                     }
@@ -1663,21 +1652,20 @@ mod tests {
 
         for i in 0..50 {
             settings.seed = i as u64;
-            let game = generate(settings.clone());
+            let gamestate = generate(settings.clone());
 
-            let cap_tile = game
-                .map
+            let cap_tile = gamestate
                 .tiles
                 .values()
                 .find(|t| t.capital_of == 1) // Imperius is player 1
                 .unwrap();
 
-            let size = game.settings.size;
+            let size = gamestate.settings.size;
             let mut fruit_count = 0;
 
             use crate::functions::get_square_indices;
             for idx in get_square_indices(cap_tile.coords.idx, 1, size) {
-                if let Some(res) = game.resources.get(&idx).unwrap_or(&None) {
+                if let Some(res) = gamestate.resources.get(&idx).unwrap_or(&None) {
                     if res.resource_type == ResourceType::Fruit {
                         fruit_count += 1;
                     }

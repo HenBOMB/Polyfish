@@ -5,11 +5,11 @@
 use crate::actions::units::summon_unit;
 use crate::functions::get_city_unit_count;
 use crate::functions::get_tech_unit_type;
-use crate::functions::{self, is_tile_occupied, is_water_terrain};
+use crate::functions::{self, is_tile_occupied};
 use crate::moves::{Move, MoveResult};
 use crate::settings::get_unit_setting;
 use crate::states::GameState;
-use crate::types::{MoveType, SkillType, TerrainType, UnitType};
+use crate::types::{MoveType, SkillType, UnitType};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -124,7 +124,7 @@ pub fn generate_summon_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
     }
 
     for city in &tribe.cities {
-        let target_idx = city.tile_index;
+        let target_idx = city.idx;
 
         // Polytopia/TS Rule: City unit count vs level
         // and cannot spawn on occupied tile.
@@ -145,14 +145,11 @@ pub fn generate_summon_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
                 let has_water = functions::get_adjacent_indices(state, target_idx, 1)
                     .iter()
                     .any(|&idx| {
-                        is_water_terrain(
-                            state
-                                .map
-                                .tiles
-                                .get(&idx)
-                                .map(|t| t.terrain_type)
-                                .unwrap_or(TerrainType::Field),
-                        )
+                        state
+                            .tiles
+                            .get(&idx)
+                            .map(|t| t.is_water_terrain())
+                            .unwrap_or(false)
                     });
 
                 if !has_water {

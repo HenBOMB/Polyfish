@@ -27,9 +27,7 @@ impl Move for RecoverMove {
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let mut undos = Vec::new();
 
-        let unit_owner = state
-            .map
-            .tiles
+        let unit_owner = state.tiles
             .get(&self.src_index)
             .and_then(|t| t._unit_owner_id)
             .unwrap_or(0);

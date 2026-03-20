@@ -30,8 +30,7 @@ fn test_harvest_level_up_prioritization() {
         // City 1: Needs 1 pop to level up
         let mut city1 = CityState::default();
         city1.owner = player_id;
-        city1.tile_index = city1_idx;
-        city1.id = city1_idx;
+        city1.idx = city1_idx;
         city1.level = 1;
         city1.population = 1; // Level 2 needs 2 pop.
         city1._territory = vec![city1_idx, 11];
@@ -40,8 +39,7 @@ fn test_harvest_level_up_prioritization() {
         // City 2: Needs 2 pop to level up
         let mut city2 = CityState::default();
         city2.owner = player_id;
-        city2.tile_index = city2_idx;
-        city2.id = city2_idx;
+        city2.idx = city2_idx;
         city2.level = 1;
         city2.population = 0; // Level 2 needs 2 pop.
         city2._territory = vec![city2_idx, 21];
@@ -53,14 +51,12 @@ fn test_harvest_level_up_prioritization() {
         11,
         Some(ResourceState {
             resource_type: ResourceType::Fruit,
-            tile_index: 11,
         }),
     );
     game.state.resources.insert(
         21,
         Some(ResourceState {
             resource_type: ResourceType::Fruit,
-            tile_index: 21,
         }),
     );
 

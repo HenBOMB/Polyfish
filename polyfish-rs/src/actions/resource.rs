@@ -21,10 +21,7 @@ pub fn consume_resource(
                 // Insert new
                 state.resources.insert(
                     tile_idx,
-                    Some(crate::states::ResourceState {
-                        resource_type: rt,
-                        tile_index: tile_idx,
-                    }),
+                    Some(crate::states::ResourceState { resource_type: rt }),
                 );
                 // Undo removes
                 return Box::new(move |s| {
@@ -71,7 +68,7 @@ pub fn harvest_resource(state: &mut GameState, tile_idx: i32) -> Result<UndoCall
 
     // Find ruling city
     let city_tile_idx = match get_city_owning_tile(state, tile_idx) {
-        Some(city) => city.tile_index,
+        Some(city) => city.idx,
         None => return Err("Resource not within city borders".to_string()),
     };
 

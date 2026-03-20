@@ -59,7 +59,7 @@ impl Move for StepMove {
             if other_unit.owner != unit_owner
                 && other_unit
                     .effects
-                    .contains(&crate::types::EffectType::Invisible)
+                    .contains(&crate::types::UnitEffect::Invisible)
             {
                 // Reveal the cloak
                 let other_owner = other_unit.owner;
@@ -73,7 +73,7 @@ impl Move for StepMove {
                     state,
                     other_owner,
                     other_pos,
-                    crate::types::EffectType::Invisible,
+                    crate::types::UnitEffect::Invisible,
                 );
 
                 return Ok(MoveResult {

@@ -6,13 +6,18 @@
 
 use serde_repr::{Deserialize_repr, Serialize_repr};
 
-
 /// Game mode types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize_repr, Deserialize_repr)]
 #[repr(u8)]
 pub enum ModeType {
-    Perfection = 0,
-    Domination = 1,
+    None = 0,
+    Perfection = 1,
+    Domination = 2,
+    Glory = 3,
+    Might = 4,
+    Custom = 5,
+    Sandbox = 6,
+    Tutorial = 7,
 }
 
 /// Terrain types
@@ -40,8 +45,6 @@ pub enum TerrainType {
     Ice = 6,
     Wetland = 7,
     Mangrove = 8,
-    /// DEPRECATED: Use TileState.effects with EffectType::Algae instead.
-    Algae = 120,
 }
 
 /// Technology types
@@ -503,7 +506,7 @@ pub enum ResourceType {
     AquaCrop = 9,
 }
 
-/// Effect types
+/// Unit effect types
 #[derive(
     Debug,
     Clone,
@@ -517,14 +520,41 @@ pub enum ResourceType {
     strum_macros::EnumIter,
 )]
 #[repr(i8)]
-pub enum EffectType {
+pub enum UnitEffect {
+    #[default]
+    Frozen = 0,
+    Poison = 1,
+    Boosted = 2,
+    Invisible = 3,
+    Bubble = 4,
+    Petrified = 5,
+    Swift = 6,
+    DoubleReady = 7,
+    Charmed = 8,
+}
+
+/// Tile effect types
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize_repr,
+    Deserialize_repr,
+    Default,
+    strum_macros::EnumIter,
+)]
+#[repr(i8)]
+pub enum TileEffect {
     #[default]
     None = 0,
-    Poison = 1,
-    Boost = 2,
-    Invisible = 3,
-    Frozen = 4,
-    Algae = 5,
+    Flooded = 1,
+    Swamped = 2,
+    Tentacle = 3,
+    Algae = 4,
+    Foam = 5,
 }
 
 /// Capture types
@@ -636,10 +666,11 @@ impl MapSize {
 #[repr(i8)]
 pub enum MapType {
     #[default]
-    Drylands = 0,
-    Lakes = 1,
-    Continents = 2,
-    Pangea = 3,
+    None = 0,
+    Drylands = 1,
+    Lakes = 2,
+    Continents = 3,
     Archipelago = 4,
     WaterWorld = 5,
+    Pangea = 6,
 }

@@ -68,7 +68,7 @@ function getCityProduction(state, city) {
     let prod = city.level || 0;
 
     // Capitals get a +1 star bonus
-    const centerTile = state.map.tiles[city.tileIndex];
+    const centerTile = state.tiles[city.tileIndex];
     if (centerTile && centerTile.capitalOf === city.owner && centerTile.capitalOf !== 0) {
         prod += 1;
     }
@@ -90,7 +90,7 @@ function getCityProduction(state, city) {
                 // +1 star for each adjacent Algae in friendly territory
                 const adj = getAdjacentIndices(idx, 1, size);
                 for (const nIdx of adj) {
-                    const nTile = state.map.tiles[nIdx];
+                    const nTile = state.tiles[nIdx];
                     if (nTile && nTile.terrainType === 120 && nTile.owner === city.owner) { // Algae terrain = 120
                         prod += 1;
                     }

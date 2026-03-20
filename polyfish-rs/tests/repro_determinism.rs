@@ -25,7 +25,6 @@ fn test_capture_ruin_determinism() {
     // Add a ruin at (0,0) -> index 0
     let ruin = StructureState {
         structure_type: StructureType::Ruin,
-        tile_index: 0,
         ..Default::default()
     };
     base_state.structures.insert(0, Some(ruin));

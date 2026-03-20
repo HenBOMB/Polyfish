@@ -26,9 +26,7 @@ impl Move for DisbandMove {
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let target = self.src_index;
         // Find unit
-        let unit_owner = state
-            .map
-            .tiles
+        let unit_owner = state.tiles
             .get(&target)
             .and_then(|t| t._unit_owner_id)
             .unwrap_or(0);

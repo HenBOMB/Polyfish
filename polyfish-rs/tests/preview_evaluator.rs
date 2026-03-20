@@ -105,13 +105,13 @@ fn preview_evaluator() {
 
     // 5. Exploration Check
     // Reveal a tile
-    if let Some(tile) = state.map.tiles.get_mut(&0) {
+    if let Some(tile) = state.tiles.get_mut(&0) {
         tile.explorers.insert(player_id);
     }
 
     // Let's explore 30 tiles.
     for i in 0..30 {
-        if let Some(tile) = state.map.tiles.get_mut(&i) {
+        if let Some(tile) = state.tiles.get_mut(&i) {
             tile.explorers.insert(player_id);
         }
     }

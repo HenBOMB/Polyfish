@@ -37,7 +37,7 @@ fn test_imperius_opening() {
     let unit_pos = game.state.tribes.get(&imp_id).unwrap().units[0].coords;
     let unit_tile_idx = game
         .state
-        .map.tiles
+        .tiles
         .iter()
         .find(|(_, t)| t.coords == unit_pos)
         .map(|(&i, _)| i)
@@ -49,12 +49,11 @@ fn test_imperius_opening() {
         unit_tile_idx,
         Some(ResourceState {
             resource_type: ResourceType::Fruit,
-            tile_index: unit_tile_idx,
         }),
     );
 
     game.state
-        .map.tiles
+        .tiles
         .get_mut(&unit_tile_idx)
         .unwrap()
         .terrain_type = TerrainType::Field; // Fruit on Field

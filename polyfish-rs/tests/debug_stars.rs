@@ -51,7 +51,7 @@ fn test_harvest_undo() {
 
     // Create city
     let mut city = CityState::default();
-    city.tile_index = city_idx;
+    city.idx = city_idx;
     city.owner = 1;
     city._territory.push(city_idx);
 
@@ -69,7 +69,6 @@ fn test_harvest_undo() {
     game.state.resources.insert(
         city_idx,
         Some(ResourceState {
-            tile_index: city_idx,
             resource_type: ResourceType::Fruit,
         }),
     );
@@ -83,7 +82,7 @@ fn test_harvest_undo() {
     // Fix: Set ruling city coords so get_city_owning_tile works
     tile.ruling_city_coords = Some(Coords::from_index(city_idx, game.state.settings.size));
 
-    game.state.map.tiles.insert(city_idx, tile);
+    game.state.tiles.insert(city_idx, tile);
 
     assert_stars(&game, 10, "Initial");
 
@@ -119,7 +118,7 @@ fn test_build_undo() {
     if let Some(tribe) = game.state.tribes.get_mut(&1) {
         tribe.stars = 10;
         let mut city = CityState::default();
-        city.tile_index = city_idx;
+        city.idx = city_idx;
         city.owner = 1;
         tribe.cities.push(city);
     }
@@ -130,7 +129,7 @@ fn test_build_undo() {
     tile.owner = 1;
     // Set ruling city
     tile.ruling_city_coords = Some(Coords::from_index(city_idx, game.state.settings.size));
-    game.state.map.tiles.insert(city_idx, tile);
+    game.state.tiles.insert(city_idx, tile);
 
     assert_stars(&game, 10, "Initial");
 
@@ -172,7 +171,7 @@ fn test_interaction_sequence() {
 
     // Create city (Pre-primed for Level Up)
     let mut city = CityState::default();
-    city.tile_index = city_idx;
+    city.idx = city_idx;
     city.owner = 1;
     city.population = 1; // Needs 1 more for Level 2
     city.progress = 1;
@@ -193,7 +192,6 @@ fn test_interaction_sequence() {
     game.state.resources.insert(
         city_idx,
         Some(ResourceState {
-            tile_index: city_idx,
             resource_type: ResourceType::Fruit,
         }),
     );
@@ -205,7 +203,7 @@ fn test_interaction_sequence() {
     tile.capital_of = 1; // Capital Bonus (+1 Prod)
     tile.terrain_type = TerrainType::Field;
     tile.ruling_city_coords = Some(Coords::from_index(city_idx, game.state.settings.size));
-    game.state.map.tiles.insert(city_idx, tile);
+    game.state.tiles.insert(city_idx, tile);
 
     assert_stars(&game, 10, "Initial");
 
@@ -332,7 +330,7 @@ fn test_summon_undo() {
     let mut tile = polyfish::states::TileState::default();
     tile.coords.idx = 0;
     tile._unit_owner_id = None;
-    game.state.map.tiles.insert(0, tile);
+    game.state.tiles.insert(0, tile);
 
     // Play
     let undo = game.play_move(&move_).expect("Move failed");
@@ -514,7 +512,6 @@ fn test_capture_ruin_determinism() {
     println!("\n--- Test Capture Ruin Determinism ---");
     let mut game = setup_game();
 
-    let city_idx = 0;
     let ruin_idx = 1;
 
     // Setup Tribe with unit at ruin
@@ -531,15 +528,13 @@ fn test_capture_ruin_determinism() {
         let mut tile = TileState::default();
         tile.coords = Coords::from_index(ruin_idx, game.state.settings.size);
         tile._unit_owner_id = Some(1);
-        game.state.map.tiles.insert(ruin_idx, tile);
+        game.state.tiles.insert(ruin_idx, tile);
 
         // Add Ruin Structure
         let structure = StructureState {
             structure_type: StructureType::Ruin,
             level: 1,
             founded: 0,
-            tile_index: ruin_idx,
-            score: 0,
         };
         game.state.structures.insert(ruin_idx, Some(structure));
     }
@@ -551,7 +546,7 @@ fn test_capture_ruin_determinism() {
 
     let mut results = Vec::new();
 
-    for i in 0..10 {
+    for _ in 0..10 {
         let undo = game.play_move(&move_).expect("Capture failed");
         let stars = game.current_tribe().unwrap().stars;
         let tech_count = game.current_tribe().unwrap().tech_vanilla.len();
@@ -598,15 +593,13 @@ fn test_capture_ruin_stacking() {
         let mut tile = TileState::default();
         tile.coords = Coords::from_index(ruin_idx, game.state.settings.size);
         tile._unit_owner_id = Some(1);
-        game.state.map.tiles.insert(ruin_idx, tile);
+        game.state.tiles.insert(ruin_idx, tile);
 
         // Add Ruin Structure
         let structure = StructureState {
             structure_type: StructureType::Ruin,
             level: 1,
             founded: 0,
-            tile_index: ruin_idx,
-            score: 0,
         };
         game.state.structures.insert(ruin_idx, Some(structure));
     }

@@ -5,7 +5,7 @@
 //! these functions return predicted data instead of actual data.
 
 use crate::states::{GameState, PlayerId};
-use crate::types::{ResourceType, TerrainType};
+use crate::types::{ResourceType, TerrainType, TileEffect};
 
 /// Get terrain at a tile, using prediction for unexplored tiles during MCTS
 ///
@@ -13,7 +13,7 @@ use crate::types::{ResourceType, TerrainType};
 /// - Returns actual terrain during real moves (`_are_you_sure = true`)
 /// - Returns predicted terrain during MCTS for unexplored tiles
 pub fn get_terrain_at(state: &GameState, idx: i32, pov_id: PlayerId) -> TerrainType {
-    let tile = match state.map.tiles.get(&idx) {
+    let tile = match state.tiles.get(&idx) {
         Some(t) => t,
         None => return TerrainType::None,
     };
@@ -33,13 +33,8 @@ pub fn get_terrain_at(state: &GameState, idx: i32, pov_id: PlayerId) -> TerrainT
 }
 
 /// Check if tile has an effect, using ground truth for explored tiles
-pub fn has_effect_at(
-    state: &GameState,
-    idx: i32,
-    pov_id: PlayerId,
-    effect: crate::types::EffectType,
-) -> bool {
-    let tile = match state.map.tiles.get(&idx) {
+pub fn has_effect_at(state: &GameState, idx: i32, pov_id: PlayerId, effect: TileEffect) -> bool {
+    let tile = match state.tiles.get(&idx) {
         Some(t) => t,
         None => return false,
     };
@@ -73,7 +68,7 @@ pub fn get_predicted_terrain(state: &GameState, idx: i32) -> TerrainType {
 ///
 /// Returns None for unexplored tiles during MCTS (resources are hidden in fog).
 pub fn get_resource_at(state: &GameState, idx: i32, pov_id: PlayerId) -> Option<ResourceType> {
-    let tile = match state.map.tiles.get(&idx) {
+    let tile = match state.tiles.get(&idx) {
         Some(t) => t,
         None => return None,
     };
@@ -114,7 +109,7 @@ pub fn is_terrain_passable(
     let terrain = get_terrain_at(state, idx, pov_id);
 
     // Algae acts as a bridge for land units
-    if has_effect_at(state, idx, pov_id, crate::types::EffectType::Algae) {
+    if has_effect_at(state, idx, pov_id, TileEffect::Algae) {
         return true;
     }
 

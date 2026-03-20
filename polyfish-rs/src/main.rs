@@ -45,7 +45,7 @@ async fn main() {
     let initial_state = generate(settings);
     let mut game = Game::new();
     game.state = initial_state;
-    game.state.settings.verbose = true;
+    game.state.settings._verbose = true;
     game.state.settings.max_turns = 10;
     game.post_load();
 
@@ -164,7 +164,7 @@ async fn get_current_state(State(state): State<Arc<AppState>>) -> Json<Value> {
     let mut game = state.game.lock().unwrap();
     polyfish::prediction::update_predictions(&mut game.state);
 
-    let mut tiles: Vec<_> = game.state.map.tiles.values().collect();
+    let mut tiles: Vec<_> = game.state.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);
 
     let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
@@ -178,7 +178,6 @@ async fn get_current_state(State(state): State<Arc<AppState>>) -> Json<Value> {
             "structures": game.state.structures,
             "resources": game.state.resources,
             "tribes": game.state.tribes,
-            "_hiddenResources": game.state._hidden_resources,
             "_prediction": game.state._prediction,
             "_messages": game.state._messages,
         },
@@ -193,7 +192,7 @@ async fn auto_step(
 ) -> Json<Value> {
     let mut game = state.game.lock().unwrap();
     // dont spam the front end lol
-    game.state.settings.verbose = false;
+    game.state.settings._verbose = false;
 
     // Use trained AI model!
     use polyfish::ai::mcts_zero::ZeroMctsAgent;
@@ -222,7 +221,7 @@ async fn auto_step(
     };
     let (_, mcts_analysis) = analysis_agent.select_move_with_analysis(&mut game);
 
-    let mut tiles: Vec<_> = game.state.map.tiles.values().collect();
+    let mut tiles: Vec<_> = game.state.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);
 
     let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
@@ -236,7 +235,6 @@ async fn auto_step(
             "structures": game.state.structures,
             "resources": game.state.resources,
             "tribes": game.state.tribes,
-            "_hiddenResources": game.state._hidden_resources,
             "_prediction": game.state._prediction,
             "_messages": game.state._messages,
         },
@@ -292,7 +290,7 @@ async fn rng_step(State(state): State<Arc<AppState>>) -> Json<Value> {
         }
     }
 
-    let mut tiles: Vec<_> = game.state.map.tiles.values().collect();
+    let mut tiles: Vec<_> = game.state.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);
 
     let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
@@ -306,7 +304,6 @@ async fn rng_step(State(state): State<Arc<AppState>>) -> Json<Value> {
             "structures": game.state.structures,
             "resources": game.state.resources,
             "tribes": game.state.tribes,
-            "_hiddenResources": game.state._hidden_resources,
             "_prediction": game.state._prediction,
             "_messages": game.state._messages,
         },
@@ -464,7 +461,7 @@ async fn manual_step(
         mil1 - mil,
     );
 
-    let mut tiles: Vec<_> = game.state.map.tiles.values().collect();
+    let mut tiles: Vec<_> = game.state.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);
 
     let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
@@ -478,7 +475,6 @@ async fn manual_step(
             "structures": game.state.structures,
             "resources": game.state.resources,
             "tribes": game.state.tribes,
-            "_hiddenResources": game.state._hidden_resources,
             "_prediction": game.state._prediction,
             "_messages": game.state._messages,
         },
@@ -506,10 +502,10 @@ async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {
 
     let initial_state = generate(settings);
     game.state = initial_state;
-    game.state.settings.verbose = true;
+    game.state.settings._verbose = true;
     game.post_load();
 
-    let mut tiles: Vec<_> = game.state.map.tiles.values().collect();
+    let mut tiles: Vec<_> = game.state.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);
 
     let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
@@ -523,7 +519,6 @@ async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {
             "structures": game.state.structures,
             "resources": game.state.resources,
             "tribes": game.state.tribes,
-            "_hiddenResources": game.state._hidden_resources,
             "_prediction": game.state._prediction,
             "_messages": game.state._messages,
         },
@@ -642,8 +637,29 @@ async fn simulate_attack(
     }
 }
 
-async fn save_game(State(state): State<Arc<AppState>>) -> Json<Value> {
-    let game = state.game.lock().unwrap();
+async fn save_game(
+    State(state): State<Arc<AppState>>,
+    body: Option<Json<Value>>,
+) -> Json<Value> {
+    let mut game = state.game.lock().unwrap();
+
+    // If we received a state in the body, try to ingest it
+    if let Some(Json(_val)) = body {
+        match serde_json::from_value::<polyfish::states::GameState>(_val) {
+            Ok(new_state) => {
+                game.state = new_state;
+                game.post_load();
+                println!("✅ Ingested GameState from request body");
+            }
+            Err(e) => {
+                return Json(serde_json::json!({
+                    "status": "error",
+                    "message": format!("Failed to parse GameState: {}", e)
+                }));
+            }
+        }
+    }
+
     let json = serde_json::to_string_pretty(&game.state).unwrap();
     std::fs::write("saved_state.json", json).expect("Failed to write saved_state.json");
 
@@ -663,7 +679,7 @@ async fn load_game(State(state): State<Arc<AppState>>) -> Json<Value> {
     game.state = loaded_state;
     game.post_load();
 
-    let mut tiles: Vec<_> = game.state.map.tiles.values().collect();
+    let mut tiles: Vec<_> = game.state.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);
 
     let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
@@ -677,7 +693,6 @@ async fn load_game(State(state): State<Arc<AppState>>) -> Json<Value> {
             "structures": game.state.structures,
             "resources": game.state.resources,
             "tribes": game.state.tribes,
-            "_hiddenResources": game.state._hidden_resources,
             "_prediction": game.state._prediction,
             "_messages": game.state._messages,
         },
@@ -724,37 +739,34 @@ async fn get_trainer_hint(
 
 // === Replay System ===
 
-#[derive(serde::Deserialize)]
-struct SaveReplayParams {
-    name: String,
-}
-
 async fn save_replay_endpoint(
     State(state): State<Arc<AppState>>,
-    Json(params): Json<SaveReplayParams>,
+    body: Json<Value>,
 ) -> Json<Value> {
-    let game = state.game.lock().unwrap();
-
     // Create replays directory if not exists
     let _ = std::fs::create_dir_all("replays");
-
-    // Sanitize filename
-    let safe_name: String = params
-        .name
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
-        .collect();
 
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();
 
-    let filename = format!("replays/{}_{}.json", safe_name, timestamp);
+    let (filename, content) = if body["turns"].is_array() {
+        println!("✅ Received full Replay data from mod");
+        (format!("replays/mod_replay_{}.json", timestamp), serde_json::to_string_pretty(&*body).unwrap())
+    } else if let Some(name) = body["name"].as_str() {
+        // Legacy: save current server state under this name
+        let game = state.game.lock().unwrap();
+        let safe_name: String = name
+            .chars()
+            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        (format!("replays/{}_{}.json", safe_name, timestamp), serde_json::to_string_pretty(&game.state).unwrap())
+    } else {
+        return Json(serde_json::json!({ "status": "error", "message": "Invalid replay data format" }));
+    };
 
-    // Save full state (which includes history and initial_seed)
-    let json = serde_json::to_string_pretty(&game.state).unwrap();
-    match std::fs::write(&filename, json) {
+    match std::fs::write(&filename, content) {
         Ok(_) => Json(serde_json::json!({
             "status": "success",
             "message": format!("Replay saved to {}", filename),
@@ -801,7 +813,7 @@ async fn load_replay_endpoint(
                 game.state = loaded_state;
                 game.post_load();
 
-                let mut tiles: Vec<_> = game.state.map.tiles.values().collect();
+                let mut tiles: Vec<_> = game.state.tiles.values().collect();
                 tiles.sort_by_key(|t| t.coords.idx);
 
                 let legal_moves: Vec<_> =
@@ -818,10 +830,9 @@ async fn load_replay_endpoint(
                         "structures": game.state.structures,
                         "resources": game.state.resources,
                         "tribes": game.state.tribes,
-                        "_hiddenResources": game.state._hidden_resources,
                         "_prediction": game.state._prediction,
                         "_messages": game.state._messages,
-                        "history": game.state.history,
+                        "history": game.state._history,
                     },
                     "legalMoves": legal_moves,
                     "evaluation": evaluation
@@ -961,7 +972,7 @@ async fn load_initial_endpoint(
                     game.state = new_game.state;
                     game.post_load();
 
-                    let mut tiles: Vec<_> = game.state.map.tiles.values().collect();
+                    let mut tiles: Vec<_> = game.state.tiles.values().collect();
                     tiles.sort_by_key(|t| t.coords.idx);
                     let legal_moves: Vec<_> =
                         game.legal_moves().iter().map(|m| m.serialize()).collect();
@@ -983,7 +994,6 @@ async fn load_initial_endpoint(
                             "structures": game.state.structures,
                             "resources": game.state.resources,
                             "tribes": game.state.tribes,
-                            "_hiddenResources": game.state._hidden_resources,
                             "_prediction": game.state._prediction,
                             "_messages": game.state._messages,
                         },
@@ -1029,7 +1039,7 @@ async fn analyze_replay_step(
         }
     };
 
-    if replay_state.history.len() <= params.step_index {
+    if replay_state._history.len() <= params.step_index {
         return Json(serde_json::json!({ "error": "Step index out of bounds" }));
     }
 
@@ -1071,11 +1081,11 @@ async fn analyze_replay_step(
     // So we replay moves 0 to step_index - 1.
 
     for i in 0..params.step_index {
-        if i >= replay_state.history.len() {
+        if i >= replay_state._history.len() {
             break;
         }
 
-        let move_json = &replay_state.history[i];
+        let move_json = &replay_state._history[i];
 
         // We need to parse this JSON back into a Box<dyn Move>
         // Use a matching logic similar to manual_step... logic duplication is confusing.
@@ -1118,7 +1128,7 @@ async fn analyze_replay_step(
         .unwrap_or("None".to_string());
 
     // User's actual move
-    let user_move_json = &replay_state.history[params.step_index];
+    let user_move_json = &replay_state._history[params.step_index];
     // Find desc for user move
     let legal = game.legal_moves();
     let mut user_move_desc = "Unknown Move".to_string();
@@ -1130,7 +1140,7 @@ async fn analyze_replay_step(
     }
 
     // Build state for frontend
-    let mut tiles: Vec<_> = game.state.map.tiles.values().collect();
+    let mut tiles: Vec<_> = game.state.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);
 
     Json(serde_json::json!({
@@ -1141,7 +1151,6 @@ async fn analyze_replay_step(
             "structures": game.state.structures,
             "resources": game.state.resources,
             "tribes": game.state.tribes,
-            "_hiddenResources": game.state._hidden_resources,
             "_prediction": game.state._prediction,
             "_messages": game.state._messages,
         },

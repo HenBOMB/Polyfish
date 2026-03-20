@@ -13,8 +13,8 @@ fn main() {
     let mut capitals = Vec::new();
     for tribe in state.tribes.values() {
         for city in &tribe.cities {
-            let (x, y) = (city.tile_index % 11, city.tile_index / 11);
-            capitals.push((x, y, city.tile_index));
+            let (x, y) = (city.idx % 11, city.idx / 11);
+            capitals.push((x, y, city.idx));
         }
     }
     println!("Capitals: {:?}", capitals);

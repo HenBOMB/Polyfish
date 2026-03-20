@@ -24,7 +24,7 @@ fn fuzz_test_p2_moves() {
 
     // P1 City at 0
     let mut city1 = CityState::default();
-    city1.tile_index = 0;
+    city1.idx = 0;
     city1.owner = p1;
     city1.population = 1;
     city1.level = 1;
@@ -41,11 +41,11 @@ fn fuzz_test_p2_moves() {
 
     // P2 City at 100
     let mut city2 = CityState::default();
-    city2.tile_index = 100;
+    city2.idx = 100;
     city2.owner = p2;
     city2.production = 2;
     city2.level = 2;
-    city2.rewards.insert(RewardType::Workshop); // Resolve pending reward
+    city2.rewards.insert(0, RewardType::Workshop); // Resolve pending reward
     city2._territory.push(100);
     city2._territory.push(101); // Add tile with resources
     // city2.capital_of -- removed
@@ -76,7 +76,7 @@ fn fuzz_test_p2_moves() {
     t1.owner = p1;
     t1.terrain_type = TerrainType::Field;
     t1.ruling_city_coords = Some(Coords::from_index(0, 11));
-    game.state.map.tiles.insert(0, t1);
+    game.state.tiles.insert(0, t1);
 
     // P2 Tiles (City + Forest for Clear/Harvest)
     let mut t2 = TileState::default();
@@ -85,20 +85,19 @@ fn fuzz_test_p2_moves() {
     t2.terrain_type = TerrainType::Forest;
     t2.ruling_city_coords = Some(Coords::from_index(100, 11));
     t2.capital_of = p2;
-    game.state.map.tiles.insert(100, t2);
+    game.state.tiles.insert(100, t2);
 
     let mut t3 = TileState::default();
     t3.coords.idx = 101;
     t3.owner = p2;
     t3.terrain_type = TerrainType::Forest;
     t3.ruling_city_coords = Some(Coords::from_index(100, 11));
-    game.state.map.tiles.insert(101, t3);
+    game.state.tiles.insert(101, t3);
 
     // Resource for P2 (Fruit)
     game.state.resources.insert(
         101,
         Some(ResourceState {
-            tile_index: 101,
             resource_type: ResourceType::Fruit,
         }),
     );
@@ -108,7 +107,6 @@ fn fuzz_test_p2_moves() {
     game.state.resources.insert(
         0,
         Some(ResourceState {
-            tile_index: 0,
             resource_type: ResourceType::Fruit,
         }),
     );

@@ -208,7 +208,7 @@ pub fn generate_forest_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
                 }
             }
 
-            if let Some(tile) = state.map.tiles.get(&tile_idx) {
+            if let Some(tile) = state.tiles.get(&tile_idx) {
                 // Clear / Burn: Needs Forest
                 if tile.terrain_type == TerrainType::Forest {
                     if has_clear {

@@ -3,7 +3,7 @@ use crate::moves::Move;
 use crate::moves::{DisbandMove, PromoteMove, RecoverMove};
 use crate::settings::technology;
 use crate::states::{GameState, TribeState, UnitState};
-use crate::types::{EffectType, SkillType, StructureType, TechnologyType};
+use crate::types::{SkillType, StructureType, TechnologyType, UnitEffect};
 
 use super::*;
 
@@ -72,7 +72,7 @@ pub fn generate_unit_action_moves_for_unit(
     } else if functions::has_skill(unit, SkillType::Swarm) {
         let unboosted_around = get_adjacent_indices(state, idx, 1).iter().any(|&adj| {
             if let Some(target) = functions::get_unit_at(state, adj) {
-                return target.owner == pov_id && !has_effect(target, EffectType::Boost);
+                return target.owner == pov_id && !has_effect(target, UnitEffect::Boosted);
             }
             false
         });
@@ -82,7 +82,7 @@ pub fn generate_unit_action_moves_for_unit(
     } else if functions::has_skill(unit, SkillType::FreezeArea) {
         let stuff_around = get_adjacent_indices(state, idx, 1).iter().any(|&adj| {
             if let Some(enemy) = functions::get_enemy_at(state, adj, pov_id) {
-                if !has_effect(enemy, EffectType::Frozen) || !functions::is_tile_frozen(state, adj)
+                if !has_effect(enemy, UnitEffect::Frozen) || !functions::is_tile_frozen(state, adj)
                 {
                     return true;
                 }

@@ -26,7 +26,7 @@ impl Move for PromoteMove {
         let mut undos: Vec<UndoCallback> = Vec::new();
 
         let unit_owner = state
-            .map.tiles
+            .tiles
             .get(&self.src_index)
             .and_then(|t| t._unit_owner_id)
             .unwrap_or(0);

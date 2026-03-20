@@ -88,7 +88,7 @@ fn main() {
         // Old Logic Simulation (High Income)
         // Income score = (101 / 25).clamp(0,1) = 1.0
         // Weighted Income = 1.0 * 0.5 = 0.5
-        let income_score = 1.0;
+        // let income_score = 1.0;
         let weighted_income = 0.5;
 
         let stars_score_old = (stars as f32 / 25.0).clamp(0.0, 1.0);

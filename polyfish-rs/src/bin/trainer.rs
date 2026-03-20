@@ -3,9 +3,8 @@ use polyfish::ai::evaluator;
 use polyfish::ai::heuristic_mcts::HeuristicMctsAgent;
 use polyfish::game::Game;
 use polyfish::mapgen::{MapGenSettings, generate};
-use polyfish::moves::Move;
 use polyfish::recorder::GameRecorder;
-use polyfish::types::{MapSize, MapType, MoveType, TribeType};
+use polyfish::types::{MapSize, MapType, TribeType};
 use std::io::{self, Write};
 
 /// Interactive Trainer: Play against AI and correct its moves

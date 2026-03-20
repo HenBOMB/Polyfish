@@ -1,9 +1,7 @@
 use polyfish::game::Game;
 use polyfish::mapgen::{self, MapGenSettings};
-use polyfish::moves::{Move, StepMove};
 use polyfish::states::GameState;
 use polyfish::types::{MapSize, MapType, TribeType};
-use std::sync::Arc;
 
 #[tokio::test]
 async fn test_replay_flow() {
@@ -36,7 +34,7 @@ async fn test_replay_flow() {
         game.play_move(&polyfish::moves::EndTurnMove);
     }
 
-    let history_len = game.state.history.len();
+    let history_len = game.state._history.len();
     assert!(history_len > 0, "History should have recorded a move");
 
     // 3. Save state (simulate saving to JSON)
@@ -45,7 +43,7 @@ async fn test_replay_flow() {
     // 4. Load state into NEW game instance
     let loaded_state: GameState = serde_json::from_str(&json).unwrap();
     assert_eq!(loaded_state.initial_seed, 12345);
-    assert_eq!(loaded_state.history.len(), history_len);
+    assert_eq!(loaded_state._history.len(), history_len);
 
     // 5. Simulate "Analyze" logic: Replay from scratch
     let mut replay_game = Game::new();
@@ -60,7 +58,7 @@ async fn test_replay_flow() {
     replay_game.post_load();
 
     // History from loaded state
-    let history = loaded_state.history;
+    let history = loaded_state._history;
 
     // Replay valid moves
     for (i, move_json) in history.iter().enumerate() {

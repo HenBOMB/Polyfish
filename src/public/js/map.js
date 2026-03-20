@@ -74,7 +74,7 @@ class MapRenderer {
             (tribe.cities || []).forEach(c => citiesByIndex[c.tileIndex] = { ...c, tribe });
         });
 
-        const allTiles = Object.values(state.map.tiles).sort((a, b) => a.coords.idx - b.coords.idx);
+        const allTiles = Object.values(state.tiles).sort((a, b) => a.coords.idx - b.coords.idx);
 
         allTiles.forEach(tile => {
             this.renderTile(tile, state, unitsByIndex, citiesByIndex, currentTribeId, unitsByCityId);
@@ -89,7 +89,7 @@ class MapRenderer {
         // Clear existing
         this.territorySvg.innerHTML = '';
 
-        const tiles = Object.values(state.map.tiles);
+        const tiles = Object.values(state.tiles);
         const tileMap = {};
         tiles.forEach(t => tileMap[`${t.coords.x},${t.coords.y}`] = t);
 

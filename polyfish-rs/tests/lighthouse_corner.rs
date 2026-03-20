@@ -45,7 +45,7 @@ fn test_lighthouse_corner_visibility_hidden() {
     let _ = update_exploration(&mut state, 1);
 
     // Find where Tribe 1's city is
-    let city_idx = state.tribes[&1].cities[0].tile_index;
+    let city_idx = state.tribes[&1].cities[0].idx;
 
     for &idx in &corners {
         if idx == city_idx {
@@ -62,7 +62,7 @@ fn test_lighthouse_corner_visibility_hidden() {
         if dist <= 2 {
             // Check that corners are NOT explored (hidden due to corner rule)
             let is_explored = state
-                .map.tiles
+                .tiles
                 .get(&idx)
                 .map(|t| t.explorers.contains(&1))
                 .unwrap_or(false);

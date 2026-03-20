@@ -23,7 +23,7 @@ impl Move for HealOthersMove {
 
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let actor_owner = state
-            .map.tiles
+            .tiles
             .get(&self.src_index)
             .and_then(|t| t._unit_owner_id)
             .unwrap_or(0);
@@ -43,7 +43,7 @@ impl Move for HealOthersMove {
             let adj = crate::functions::get_adjacent_indices(state, self.src_index, 1);
             for target_idx in adj {
                 let target_owner = state
-                    .map.tiles
+                    .tiles
                     .get(&target_idx)
                     .and_then(|t| t._unit_owner_id)
                     .unwrap_or(0);

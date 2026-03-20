@@ -5,7 +5,6 @@
 /// Check if a tile is in the player's own territory
 pub fn is_in_own_territory(state: &GameState, idx: i32, owner: i32) -> bool {
     state
-        .map
         .tiles
         .get(&idx)
         .map(|t| t.owner == owner)
@@ -132,7 +131,7 @@ pub fn get_adjacent_indices(state: &GameState, idx: i32, range: i32) -> Vec<i32>
 pub fn get_adjacent_tiles<'a>(state: &'a GameState, idx: i32, range: i32) -> Vec<&'a TileState> {
     get_adjacent_indices(state, idx, range)
         .into_iter()
-        .filter_map(|i| state.map.tiles.get(&i))
+        .filter_map(|i| state.tiles.get(&i))
         .collect()
 }
 /// Check if a resource type is visible to a tribe (based on tech requirements)
@@ -260,7 +259,7 @@ pub fn get_unit_at_mut<'a>(state: &'a mut GameState, idx: i32) -> Option<&'a mut
 pub fn get_city_at<'a>(state: &'a GameState, idx: i32) -> Option<&'a CityState> {
     for tribe in state.tribes.values() {
         for city in &tribe.cities {
-            if city.tile_index == idx {
+            if city.idx == idx {
                 return Some(city);
             }
         }
@@ -270,7 +269,7 @@ pub fn get_city_at<'a>(state: &'a GameState, idx: i32) -> Option<&'a CityState> 
 
 /// Get the city that owns a tile
 pub fn get_city_owning_tile<'a>(state: &'a GameState, idx: i32) -> Option<&'a CityState> {
-    let tile = state.map.tiles.get(&idx)?;
+    let tile = state.tiles.get(&idx)?;
     let ruling_coords = tile.ruling_city_coords.as_ref()?;
     get_city_at(state, ruling_coords.idx)
 }
@@ -290,12 +289,12 @@ pub fn get_enemy_at<'a>(
     not_owner: PlayerId,
 ) -> Option<&'a UnitState> {
     get_unit_at(state, idx).filter(|u| {
-        is_enemy(state, not_owner, u.owner) && !u.effects.contains(&EffectType::Invisible)
+        is_enemy(state, not_owner, u.owner) && !u.effects.contains(&UnitEffect::Invisible)
     })
 }
 
 /// Check if a unit has an effect
-pub fn has_effect(unit: &UnitState, effect: EffectType) -> bool {
+pub fn has_effect(unit: &UnitState, effect: UnitEffect) -> bool {
     unit.effects.contains(&effect)
 }
 
@@ -319,13 +318,12 @@ pub fn is_amphibious(unit: &UnitState) -> bool {
 }
 
 /// Get the maximum health of a unit (accounting for veteran status and pass-through)
-/// Max HP logic: base * 10
 pub fn get_unit_max_health(unit: &UnitState) -> i32 {
     let mut health = get_real_unit_setting(unit).health;
     if unit.veteran {
         health += 5;
     }
-    health * crate::states::HEALTH_SCALE
+    health
 }
 
 /// Get the real unit setting (ignoring naval types if carrying a passenger)
@@ -337,7 +335,7 @@ pub fn get_real_unit_setting(unit: &UnitState) -> crate::settings::units::UnitSe
 /// Get unit attack strength (accounting for Boost)
 pub fn get_unit_attack(unit: &UnitState) -> f32 {
     let mut atk = get_real_unit_setting(unit).attack;
-    if has_effect(unit, EffectType::Boost) {
+    if has_effect(unit, UnitEffect::Boosted) {
         atk += 0.5;
     }
     atk
@@ -346,7 +344,7 @@ pub fn get_unit_attack(unit: &UnitState) -> f32 {
 /// Get unit defense strength (accounting for Poison)
 pub fn get_unit_defense(unit: &UnitState) -> f32 {
     let mut def = get_real_unit_setting(unit).defense;
-    if has_effect(unit, EffectType::Poison) {
+    if has_effect(unit, UnitEffect::Poison) {
         def *= 0.5; // 50% defense reduction
     }
     def
@@ -357,21 +355,21 @@ pub fn get_unit_movement(state: &GameState, unit: &UnitState) -> i32 {
     let mut movement = crate::settings::units::get_unit_setting(unit.unit_type).movement;
 
     // Boost bonus
-    if has_effect(unit, EffectType::Boost) {
+    if has_effect(unit, UnitEffect::Boosted) {
         movement += 1;
     }
 
     // Skate bonus: +1 movement on Ice (Resulting in 3 movement for standard skating units)
     if has_skill(unit, SkillType::Skate) {
-        if let Some(tile) = state.map.tiles.get(&unit.coords.idx) {
-            if tile.frozen {
+        if let Some(tile) = state.tiles.get(&unit.coords.idx) {
+            if tile.is_frozen() {
                 movement += 1;
             }
         }
     }
 
     // Poison slows down enemy units.
-    if has_effect(unit, EffectType::Poison) {
+    if has_effect(unit, UnitEffect::Poison) {
         movement /= 2;
     }
     movement
@@ -401,7 +399,7 @@ pub fn get_defense_bonus(state: &GameState, unit: &UnitState) -> f32 {
         None => return 1.0,
     };
 
-    let tile = match state.map.tiles.get(&unit.coords.idx) {
+    let tile = match state.tiles.get(&unit.coords.idx) {
         Some(t) => t,
         None => return 1.0,
     };
@@ -433,13 +431,9 @@ pub fn get_defense_bonus(state: &GameState, unit: &UnitState) -> f32 {
         }
         _ => {
             // City defense
-            if let Some(city) = tribe
-                .cities
-                .iter()
-                .find(|c| c.tile_index == unit.coords.idx)
-            {
+            if let Some(city) = tribe.cities.iter().find(|c| c.idx == unit.coords.idx) {
                 if has_skill(unit, SkillType::Fortify) {
-                    if city._walls {
+                    if city.has_walls() {
                         return 4.0;
                     } else {
                         return 1.5;
@@ -455,13 +449,13 @@ pub fn get_defense_bonus(state: &GameState, unit: &UnitState) -> f32 {
 /// Get city production (stars per turn)
 pub fn get_city_production(state: &GameState, city: &CityState) -> i32 {
     // If city is on riot or the tile is occupied by an enemy then production is nullified
-    if city._riot || crate::functions::get_enemy_at(state, city.tile_index, city.owner).is_some() {
+    if is_under_siege(state, city.idx) {
         return 0;
     }
 
     let mut prod = city.level;
     // Capitals get a +1 star bonus
-    if let Some(tile) = state.map.tiles.get(&city.tile_index) {
+    if let Some(tile) = state.tiles.get(&city.idx) {
         if tile.capital_of == city.owner && tile.capital_of != 0 {
             prod += 1;
         }
@@ -483,8 +477,8 @@ pub fn get_city_production(state: &GameState, city: &CityState) -> i32 {
                     // +X star for each adjacent Algae in friendly territory
                     let adj = crate::functions::get_adjacent_indices(state, idx, 1);
                     for n_idx in adj {
-                        if let Some(n_tile) = state.map.tiles.get(&n_idx) {
-                            if n_tile.terrain_type == TerrainType::Algae
+                        if let Some(n_tile) = state.tiles.get(&n_idx) {
+                            if n_tile.effects.contains(&TileEffect::Algae)
                                 && n_tile.owner == city.owner
                             {
                                 prod += setting.reward_stars;
@@ -533,7 +527,7 @@ pub fn is_at_peace(state: &GameState, tribe_a: PlayerId, tribe_b: PlayerId) -> b
 
 /// Check if a city is under siege (has enemy unit on its center)
 pub fn is_under_siege(state: &GameState, city_idx: i32) -> bool {
-    if let Some(tile) = state.map.tiles.get(&city_idx) {
+    if let Some(tile) = state.tiles.get(&city_idx) {
         return get_enemy_at(state, city_idx, tile.owner).is_some();
     }
     false
@@ -542,7 +536,6 @@ pub fn is_under_siege(state: &GameState, city_idx: i32) -> bool {
 /// Check if a tile is a city center
 pub fn is_city(state: &GameState, idx: i32) -> bool {
     state
-        .map
         .tiles
         .get(&idx)
         .and_then(|t| t.ruling_city_coords.as_ref())
@@ -554,16 +547,12 @@ pub fn is_enemy_city(state: &GameState, idx: i32, pov_id: PlayerId) -> bool {
     if !is_city(state, idx) {
         return false;
     }
-    state
-        .map
-        .tiles
-        .get(&idx)
-        .map_or(false, |t| t.owner != pov_id)
+    state.tiles.get(&idx).map_or(false, |t| t.owner != pov_id)
 }
 
 /// Check if a tile is frozen (has Ice terrain)
 pub fn is_tile_frozen(state: &GameState, idx: i32) -> bool {
-    state.map.tiles.get(&idx).map_or(false, |t| t.frozen)
+    state.tiles.get(&idx).map_or(false, |t| t.is_frozen())
 }
 
 /// Check if coordinate is in bounds
@@ -582,16 +571,10 @@ pub fn is_tile_explored(state: &GameState, idx: i32, player_id: PlayerId) -> boo
         return true;
     }
     state
-        .map
         .tiles
         .get(&idx)
         .map(|t| t.explorers.contains(&player_id))
         .unwrap_or(false)
-}
-
-/// Check if a tile is water terrain
-pub fn is_water_terrain(terrain: TerrainType) -> bool {
-    matches!(terrain, TerrainType::Water | TerrainType::Ocean)
 }
 
 /// Get the capital city of a tribe
@@ -599,9 +582,8 @@ pub fn get_capital_city(state: &GameState, player_id: PlayerId) -> Option<&CityS
     state.tribes.get(&player_id).and_then(|tribe| {
         tribe.cities.iter().find(|c| {
             state
-                .map
                 .tiles
-                .get(&c.tile_index)
+                .get(&c.idx)
                 .map(|t| t.capital_of == player_id)
                 .unwrap_or(false)
         })
@@ -614,7 +596,7 @@ pub fn get_city_unit_count(state: &GameState, city: &crate::states::CityState) -
     for tribe in state.tribes.values() {
         for unit in &tribe.units {
             if let Some(home) = &unit.home_coords {
-                if home.idx == city.tile_index {
+                if home.idx == city.idx {
                     count += 1;
                 }
             }
@@ -779,7 +761,7 @@ fn is_steppable_for_push(state: &GameState, unit: &UnitState, idx: i32) -> bool 
 
     // Terrain validity
     let settings = crate::settings::units::get_unit_setting(unit.unit_type);
-    let tile = match state.map.tiles.get(&idx) {
+    let tile = match state.tiles.get(&idx) {
         Some(t) => t,
         None => return false,
     };
@@ -793,7 +775,7 @@ fn is_steppable_for_push(state: &GameState, unit: &UnitState, idx: i32) -> bool 
             }
         }
         _ => {
-            if settings.skills.contains(&SkillType::Water) && !tile.flooded {
+            if settings.skills.contains(&SkillType::Water) && !tile.is_flooded() {
                 return false;
             }
         }
@@ -864,7 +846,7 @@ pub fn calculate_detailed_tribe_score(state: &GameState, player_id: PlayerId) ->
         }
 
         // Park: 250 points
-        if city.rewards.contains(&RewardType::Park) {
+        if city.has_park() {
             score += 250;
         }
 
@@ -881,7 +863,6 @@ pub fn calculate_detailed_tribe_score(state: &GameState, player_id: PlayerId) ->
 
     // 5 per revealed tile (explored by our explorers)
     let explored_count = state
-        .map
         .tiles
         .values()
         .filter(|t| t.explorers.contains(&player_id))
@@ -1034,7 +1015,7 @@ pub fn analyze_expansion(state: &GameState, player_id: PlayerId) -> ExpansionAna
 
     // 1. Expansion Analysis
     // Identify tiles adjacent to our territory or units that are valuable
-    for tile in state.map.tiles.values() {
+    for tile in state.tiles.values() {
         if tile.owner == player_id {
             continue; // Already owned
         }
@@ -1083,7 +1064,7 @@ pub fn analyze_expansion(state: &GameState, player_id: PlayerId) -> ExpansionAna
         let adj_indices = get_adjacent_indices(state, tile.coords.idx, 1);
         let mut is_adj = false;
         for adj_idx in &adj_indices {
-            if let Some(adj_tile) = state.map.tiles.get(adj_idx) {
+            if let Some(adj_tile) = state.tiles.get(adj_idx) {
                 if adj_tile.owner == player_id {
                     value += 1.0;
                     is_adj = true;
@@ -1111,7 +1092,7 @@ pub fn analyze_expansion(state: &GameState, player_id: PlayerId) -> ExpansionAna
 
             for enemy in &other_tribe.units {
                 // Anti-Cheat: Enemy unit is only a threat if visible
-                if !state.map.tiles[&enemy.coords.idx]
+                if !state.tiles[&enemy.coords.idx]
                     .explorers
                     .contains(&player_id)
                 {

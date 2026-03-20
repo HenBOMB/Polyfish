@@ -17,8 +17,7 @@ fn test_clear_forest_prevention() {
     let city_idx = 10;
     let mut city = CityState::default();
     city.owner = player_id;
-    city.tile_index = city_idx;
-    city.id = city_idx;
+    city.idx = city_idx;
     city._territory = vec![city_idx, 11, 12, 13];
     // Set level/population so it's far from levelling up
     city.level = 3;
@@ -33,7 +32,7 @@ fn test_clear_forest_prevention() {
     // Actually, in our simplistic test setup, get_adjacent_indices(11, 1) will return neighbors.
     // Let's ensure tiles exist so adj logic works.
     for i in 0..121 {
-        game.state.map.tiles.insert(
+        game.state.tiles.insert(
             i,
             TileState {
                 coords: polyfish::coords::Coords::from_index(i, 11),
@@ -42,8 +41,8 @@ fn test_clear_forest_prevention() {
         );
     }
 
-    game.state.map.tiles.get_mut(&11).unwrap().terrain_type = polyfish::types::TerrainType::Forest;
-    game.state.map.tiles.get_mut(&11).unwrap().owner = player_id;
+    game.state.tiles.get_mut(&11).unwrap().terrain_type = polyfish::types::TerrainType::Forest;
+    game.state.tiles.get_mut(&11).unwrap().owner = player_id;
 
     let mv = ClearForestMove::new(11);
 
@@ -79,7 +78,6 @@ fn test_clear_forest_prevention() {
         12,
         Some(polyfish::states::ResourceState {
             resource_type: polyfish::types::ResourceType::Fruit,
-            tile_index: 12,
         }),
     );
 

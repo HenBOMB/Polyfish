@@ -297,8 +297,6 @@ fn main() -> anyhow::Result<()> {
     // Actually, user wants "per iteration it should pick only 2 and play those 20 games with only those tribes"
     // So we pick them once here.
 
-    use std::str::FromStr;
-
     // Helper to parse or pick random
     let all_tribes = vec![
         TribeType::Imperius,

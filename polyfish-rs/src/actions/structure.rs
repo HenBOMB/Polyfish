@@ -29,19 +29,17 @@ pub fn create_structure(
         structure_type,
         level,
         founded: state.settings.turn,
-        tile_index: idx,
-        score: 0,
     };
 
     state.structures.insert(idx, Some(structure));
 
     // Valid references for move closure
     let pov_id = state.settings.current_player_turn_id;
-    let old_has_road = state.map.tiles.get(&idx).map(|t| t.has_road).unwrap_or(false);
+    let old_has_road = state.tiles.get(&idx).map(|t| t.has_road).unwrap_or(false);
 
     // Sync has_road
     if structure_type == StructureType::Road {
-        if let Some(tile) = state.map.tiles.get_mut(&idx) {
+        if let Some(tile) = state.tiles.get_mut(&idx) {
             tile.has_road = true;
         }
     }
@@ -76,7 +74,7 @@ pub fn create_structure(
 
         // Restore has_road
         if structure_type == StructureType::Road {
-            if let Some(tile) = s.map.tiles.get_mut(&idx) {
+            if let Some(tile) = s.tiles.get_mut(&idx) {
                 tile.has_road = old_has_road;
             }
         }
@@ -127,7 +125,7 @@ pub fn destroy_structure(state: &mut GameState, idx: i32) -> UndoCallback {
     // Handle population reduction for city structures
     if structure.structure_type != StructureType::Ruin {
         if let Some(city) = get_city_owning_tile(state, idx) {
-            let city_tile_idx = city.tile_index;
+            let city_tile_idx = city.idx;
             let settings = get_structure_setting(structure.structure_type);
 
             if settings.reward_pop > 0 {
@@ -139,11 +137,11 @@ pub fn destroy_structure(state: &mut GameState, idx: i32) -> UndoCallback {
 
     // Valid stats for undo
     let pov_id = state.settings.current_player_turn_id;
-    let old_has_road = state.map.tiles.get(&idx).map(|t| t.has_road).unwrap_or(false);
+    let old_has_road = state.tiles.get(&idx).map(|t| t.has_road).unwrap_or(false);
 
     // Sync has_road
     if structure.structure_type == StructureType::Road {
-        if let Some(tile) = state.map.tiles.get_mut(&idx) {
+        if let Some(tile) = state.tiles.get_mut(&idx) {
             tile.has_road = false;
         }
     }
@@ -160,7 +158,7 @@ pub fn destroy_structure(state: &mut GameState, idx: i32) -> UndoCallback {
     undos.push(Box::new(move |s: &mut GameState| {
         // Restore has_road
         if structure.structure_type == StructureType::Road {
-            if let Some(tile) = s.map.tiles.get_mut(&idx) {
+            if let Some(tile) = s.tiles.get_mut(&idx) {
                 tile.has_road = old_has_road;
             }
         }
@@ -191,7 +189,7 @@ pub fn build_structure(
 
     // 3. Add population
     if let Some(city) = get_city_owning_tile(state, idx) {
-        let city_tile_idx = city.tile_index;
+        let city_tile_idx = city.idx;
         let mut reward_pop = settings.reward_pop;
 
         // Handle adjacent multipliers (Windmill, Sawmill, Forge)
@@ -247,7 +245,7 @@ pub fn capture_ruin(state: &mut GameState, tile_idx: i32) -> UndoCallback {
 
     // 1. Stars: 10 stars
     possible_rewards.push(Box::new(|s: &mut GameState| {
-        if s.settings.verbose {
+        if s.settings._verbose {
             s._messages.push("Ruin reward: 10 Stars! ⭐".to_string());
         }
         gain_stars(s, 10)
@@ -302,7 +300,7 @@ pub fn capture_ruin(state: &mut GameState, tile_idx: i32) -> UndoCallback {
                 let index = (r as usize) % unlockable_cand.len();
                 let picked = unlockable_cand[index];
 
-                if s.settings.verbose {
+                if s.settings._verbose {
                     s._messages
                         .push(format!("Ruin reward: Discovered {:?}! 💡", picked));
                 }
@@ -313,9 +311,9 @@ pub fn capture_ruin(state: &mut GameState, tile_idx: i32) -> UndoCallback {
 
     // 3. Pop growth: 3 to capital
     if let Some(cap) = get_capital_city(state, pov_id) {
-        let cap_tile_idx = cap.tile_index;
+        let cap_tile_idx = cap.idx;
         possible_rewards.push(Box::new(move |s: &mut GameState| {
-            if s.settings.verbose {
+            if s.settings._verbose {
                 s._messages
                     .push("Ruin reward: Population growth! 👨‍👩‍👧‍👦".to_string());
             }
@@ -328,7 +326,7 @@ pub fn capture_ruin(state: &mut GameState, tile_idx: i32) -> UndoCallback {
     let around = get_adjacent_indices(state, tile_idx, 2);
     for &idx in &around {
         let is_explored = state
-            .map.tiles
+            .tiles
             .get(&idx)
             .map(|t| t.explorers.contains(&pov_id))
             .unwrap_or(false);
@@ -339,7 +337,7 @@ pub fn capture_ruin(state: &mut GameState, tile_idx: i32) -> UndoCallback {
     }
     if fog_nearby {
         possible_rewards.push(Box::new(move |s: &mut GameState| {
-            if s.settings.verbose {
+            if s.settings._verbose {
                 s._messages.push("Ruin reward: Explorer! 🧭".to_string());
             }
             let (_, revealed) = crate::actions::discovery::predict_explorer(s, tile_idx);
@@ -360,7 +358,7 @@ pub fn capture_ruin(state: &mut GameState, tile_idx: i32) -> UndoCallback {
 
     possible_rewards.push(Box::new(move |s: &mut GameState| {
         let mut undos = Vec::new();
-        if s.settings.verbose {
+        if s.settings._verbose {
             s._messages
                 .push(format!("Ruin reward: Veteran {:?}! ⚔️", unit_reward_type));
         }
@@ -369,7 +367,7 @@ pub fn capture_ruin(state: &mut GameState, tile_idx: i32) -> UndoCallback {
         match res {
             Ok(r) => undos.push(r.undo),
             Err(e) => {
-                if s.settings.verbose {
+                if s.settings._verbose {
                     s._messages.push(format!("Failed to spawn veteran: {}", e));
                 }
             }

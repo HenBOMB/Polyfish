@@ -5,10 +5,10 @@
 //!
 //! Channel ranges are dynamically computed from enum variants at compile time.
 
-use crate::functions::{get_city_production, get_unit_max_health};
+use crate::functions::{get_city_production, get_unit_max_health, is_under_siege};
 use crate::states::{GameState, PlayerId};
 use crate::types::{
-    EffectType, ModeType, ResourceType, StructureType, TerrainType, TribeType, UnitType,
+    ModeType, ResourceType, StructureType, TerrainType, TribeType, UnitEffect, UnitType,
 };
 use candle_core::{Device, Result, Tensor};
 use std::sync::LazyLock;
@@ -289,7 +289,6 @@ pub fn state_to_tensor(
 
             // Check visibility (now just use explorers - explored = visible)
             let is_explored = state
-                .map
                 .tiles
                 .get(&idx)
                 .map(|t| t.explorers.contains(&perspective))
@@ -331,16 +330,16 @@ pub fn state_to_tensor(
                 continue;
             }
 
-            if let Some(tile) = state.map.tiles.get(&idx) {
+            if let Some(tile) = state.tiles.get(&idx) {
                 // Terrain (always visible if explored)
                 let terrain_ch = terrain_to_channel(tile.terrain_type);
                 set_feat(&mut data, terrain_ch, x, y, 1.0);
 
                 // Tile flags
-                if tile.frozen {
+                if tile.is_frozen() {
                     set_feat(&mut data, CH_TILE_FROZEN, x, y, 1.0);
                 }
-                if tile.flooded {
+                if tile.is_flooded() {
                     set_feat(&mut data, CH_TILE_FLOODED, x, y, 1.0);
                 }
                 if tile.has_road {
@@ -419,7 +418,6 @@ pub fn state_to_tensor(
             let idx = unit.coords.idx;
 
             let unit_explored = state
-                .map
                 .tiles
                 .get(&idx)
                 .map(|t| t.explorers.contains(&perspective))
@@ -490,16 +488,16 @@ pub fn state_to_tensor(
             );
 
             // Effects
-            if unit.effects.contains(&EffectType::Poison) {
+            if unit.effects.contains(&UnitEffect::Poison) {
                 set_feat(&mut data, CH_UNIT_EFFECT_POISON, x, y, 1.0);
             }
-            if unit.effects.contains(&EffectType::Boost) {
+            if unit.effects.contains(&UnitEffect::Boosted) {
                 set_feat(&mut data, CH_UNIT_EFFECT_BOOST, x, y, 1.0);
             }
-            if unit.effects.contains(&EffectType::Invisible) {
+            if unit.effects.contains(&UnitEffect::Invisible) {
                 set_feat(&mut data, CH_UNIT_EFFECT_INVISIBLE, x, y, 1.0);
             }
-            if unit.effects.contains(&EffectType::Frozen) {
+            if unit.effects.contains(&UnitEffect::Frozen) {
                 set_feat(&mut data, CH_UNIT_EFFECT_FROZEN, x, y, 1.0);
             }
 
@@ -515,7 +513,7 @@ pub fn state_to_tensor(
 
         // Process cities
         for city in &tribe.cities {
-            let idx = city.tile_index;
+            let idx = city.idx;
             let x = (idx % state.settings.size) as usize;
             let y = (idx / state.settings.size) as usize;
             if x >= MAP_SIZE || y >= MAP_SIZE {
@@ -524,7 +522,6 @@ pub fn state_to_tensor(
 
             // Only show cities we can see
             let city_explored = state
-                .map
                 .tiles
                 .get(&idx)
                 .map(|t| t.explorers.contains(&perspective))
@@ -561,7 +558,7 @@ pub fn state_to_tensor(
             );
 
             // Check if capital
-            if let Some(tile) = state.map.tiles.get(&idx) {
+            if let Some(tile) = state.tiles.get(&idx) {
                 if tile.capital_of == *player_id {
                     set_feat(&mut data, CH_CITY_IS_CAPITAL, x, y, 1.0);
                 }
@@ -570,10 +567,10 @@ pub fn state_to_tensor(
             if city.connected_to_capital {
                 set_feat(&mut data, CH_CITY_CONNECTED, x, y, 1.0);
             }
-            if city._walls {
+            if city.has_walls() {
                 set_feat(&mut data, CH_CITY_HAS_WALLS, x, y, 1.0);
             }
-            if city._riot {
+            if is_under_siege(state, city.idx) {
                 set_feat(&mut data, CH_CITY_HAS_RIOT, x, y, 1.0);
             }
 

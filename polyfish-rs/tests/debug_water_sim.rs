@@ -24,7 +24,7 @@ fn main() -> anyhow::Result<()> {
 
     // Post-load initialization
     let size = state.settings.size;
-    for tile in state.map.tiles.values_mut() {
+    for tile in state.tiles.values_mut() {
         tile.coords.compute_idx(size);
         if let Some(ref mut rc) = tile.ruling_city_coords {
             rc.compute_idx(size);

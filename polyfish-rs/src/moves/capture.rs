@@ -62,7 +62,6 @@ impl Move for CaptureMove {
                     if let Some(unit) = tribe.units.get_mut(capturer_idx) {
                         unit.home_coords =
                             Some(crate::coords::Coords::from_index(self.src_index, map_size));
-                        unit.city_id = self.src_index;
                     }
                 }
             }

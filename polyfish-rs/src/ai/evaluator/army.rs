@@ -1,6 +1,6 @@
 use crate::functions::{get_defense_bonus, get_unit_max_health, has_effect};
 use crate::states::{GameState, PlayerId, UnitState};
-use crate::types::{EffectType, UnitType};
+use crate::types::{UnitEffect, UnitType};
 use std::collections::HashMap;
 
 /// Scores for each unit type based on their base strength in the meta
@@ -101,7 +101,7 @@ pub fn assess_unit_power(game: &GameState, unit: &UnitState) -> f32 {
     if unit.veteran {
         status_val += 0.2;
     }
-    if has_effect(unit, EffectType::Boost) {
+    if has_effect(unit, UnitEffect::Boosted) {
         status_val += 0.15;
     }
 
@@ -109,10 +109,10 @@ pub fn assess_unit_power(game: &GameState, unit: &UnitState) -> f32 {
     status_val += unit.kills.min(3) as f32 * 0.05;
 
     // Debuffs
-    if has_effect(unit, EffectType::Poison) {
+    if has_effect(unit, UnitEffect::Poison) {
         status_val -= 0.2;
     }
-    if has_effect(unit, EffectType::Frozen) {
+    if has_effect(unit, UnitEffect::Frozen) {
         status_val -= 0.4;
     } // Big penalty
 

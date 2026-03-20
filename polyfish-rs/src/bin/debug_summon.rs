@@ -16,7 +16,7 @@ fn main() {
         tribe.stars = 10;
         if let Some(city) = tribe.cities.first_mut() {
             city.level = 5;
-            println!("City Found at {}, Level {}", city.tile_index, city.level);
+            println!("City Found at {}, Level {}", city.idx, city.level);
         } else {
             println!("No cities found!");
         }
@@ -28,7 +28,7 @@ fn main() {
     if let Some(tribe) = game.state.tribes.get(&pid) {
         println!("Stars: {}", tribe.stars);
         for city in &tribe.cities {
-            let idx = city.tile_index;
+            let idx = city.idx;
             let count = functions::get_city_unit_count(&game.state, city);
             let occupied = functions::is_tile_occupied(&game.state, idx);
             println!(
