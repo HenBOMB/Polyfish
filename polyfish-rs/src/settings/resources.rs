@@ -66,7 +66,7 @@ pub fn get_resource_setting(resource_type: ResourceType) -> ResourceSetting {
             tech_required: Navigation,
             visible_required: vec![Fishing, Sailing, Navigation],
             requires_capture: true,
-            reward_stars: 5,
+            reward_stars: 8,
             ..Default::default()
         },
         AquaCrop => ResourceSetting {

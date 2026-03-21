@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub struct Coords {
     pub x: i32,
     pub y: i32,
+    #[serde(default)]
     pub idx: i32,
 }
 

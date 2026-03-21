@@ -141,6 +141,21 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                 }
             }
 
+            if settings.limited_per_tribe {
+                let already_built = tribe.cities.iter().any(|c| {
+                    c._territory.iter().any(|&t_idx| {
+                        if let Some(s) = crate::functions::get_structure_at(state, t_idx) {
+                            s.structure_type == struct_type
+                        } else {
+                            false
+                        }
+                    })
+                });
+                if already_built {
+                    continue;
+                }
+            }
+
             if is_structure_unlocked(tribe, struct_type) {
                 unlocked_structures.push((struct_type, settings));
             }
@@ -299,12 +314,27 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
 
 fn is_structure_unlocked(tribe: &crate::states::TribeState, struct_type: StructureType) -> bool {
     use crate::settings::technology::get_technology_setting;
+    use crate::types::TribeType;
+
+    let target = if tribe.tribe_type == TribeType::Polaris && struct_type == StructureType::IceBank {
+        StructureType::Market
+    } else {
+        struct_type
+    };
+
+    if tribe.tribe_type == TribeType::Polaris && struct_type == StructureType::Market {
+        return false;
+    }
+
     for tech in &tribe.tech_vanilla {
+        if !tech.discovered {
+            continue;
+        }
         let settings = get_technology_setting(tech.tech_type);
-        if settings.unlocks_structure == Some(struct_type) {
+        if settings.unlocks_structure == Some(target) {
             return true;
         }
-        if settings.unlocks_special_structures.contains(&struct_type) {
+        if settings.unlocks_special_structures.contains(&target) {
             return true;
         }
     }

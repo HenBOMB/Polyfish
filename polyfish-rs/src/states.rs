@@ -92,6 +92,8 @@ pub struct DiplomacyRelationState {
     pub embassy_build_turn: i32,
     #[serde(default)]
     pub previous_attack_turn: i32,
+    #[serde(default)]
+    pub has_offered_peace: bool,
 }
 
 /// State of a single tile on the map

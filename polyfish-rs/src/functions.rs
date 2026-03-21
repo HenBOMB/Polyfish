@@ -497,6 +497,12 @@ pub fn get_city_production(state: &GameState, city: &CityState) -> i32 {
                         }
                     }
                 }
+                StructureType::IceBank => {
+                    // +2 stars for every 20 frozen tiles globally
+                    let frozen_count = count_frozen_tiles(state);
+                    let income = ((frozen_count / 20) * 2).min(60); // Max level 30 = 60 stars
+                    prod += income;
+                }
                 _ => {}
             }
         }
@@ -547,12 +553,28 @@ pub fn is_enemy_city(state: &GameState, idx: i32, pov_id: PlayerId) -> bool {
     if !is_city(state, idx) {
         return false;
     }
-    state.tiles.get(&idx).map_or(false, |t| t.owner != pov_id)
+    state
+        .tiles
+        .get(&idx)
+        .map_or(false, |t| is_enemy(state, pov_id, t.owner))
 }
 
-/// Check if a tile is frozen (has Ice terrain)
+/// Check if a tile is frozen (has Ice terrain or Polaris climate)
 pub fn is_tile_frozen(state: &GameState, idx: i32) -> bool {
-    state.tiles.get(&idx).map_or(false, |t| t.is_frozen())
+    state.tiles.get(&idx).map_or(false, |t| {
+        t.terrain_type == TerrainType::Ice || t.climate == ClimateType::Polaris
+    })
+}
+
+/// Count total frozen tiles globally
+pub fn count_frozen_tiles(state: &GameState) -> i32 {
+    let mut count = 0;
+    for idx in state.tiles.keys() {
+        if is_tile_frozen(state, *idx) {
+            count += 1;
+        }
+    }
+    count
 }
 
 /// Check if coordinate is in bounds

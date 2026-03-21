@@ -5,7 +5,7 @@ use crate::actions::{chain_undos, end_unit_turn, gain_stars};
 use crate::functions::get_unit_at;
 use crate::moves::{Move, MoveResult};
 use crate::states::GameState;
-use crate::types::{MoveType, StructureType};
+use crate::types::{MoveType, ResourceType, StructureType, TechnologyType};
 
 /// A capture move - taking control of a village, city, or ruins
 #[derive(Debug, Clone)]
@@ -72,8 +72,25 @@ impl Move for CaptureMove {
                 ));
             }
             _ => {
-                undos.push(consume_resource(state, self.src_index, None));
-                undos.push(gain_stars(state, 8));
+                // Check Starfish (collectible resource)
+                if let Some(Some(resource)) = state.resources.get(&self.src_index) {
+                    if resource.resource_type == crate::types::ResourceType::Starfish {
+                        // Anti-cheat: verify Navigation tech
+                        if let Some(tribe) = state.tribes.get(&unit_owner) {
+                            if !crate::settings::technology::has_technology(
+                                &tribe.tech_vanilla,
+                                crate::types::TechnologyType::Navigation,
+                            ) {
+                                return Err("Cannot gather starfish without Navigation technology"
+                                    .to_string());
+                            }
+                        }
+
+                        let settings = crate::settings::resources::get_resource_setting(resource.resource_type);
+                        undos.push(consume_resource(state, self.src_index, None));
+                        undos.push(gain_stars(state, settings.reward_stars));
+                    }
+                }
             }
         }
 

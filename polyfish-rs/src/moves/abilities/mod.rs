@@ -1,3 +1,4 @@
+pub mod break_ice;
 pub mod boost;
 pub mod convert;
 pub mod decompose;
@@ -11,6 +12,7 @@ pub mod heal_others;
 pub mod promote;
 pub mod unit_actions;
 
+pub use break_ice::BreakIceMove;
 pub use boost::BoostMove;
 pub use convert::ConvertMove;
 pub use decompose::DecomposeMove;

@@ -3,8 +3,9 @@ use crate::moves::Move;
 use crate::moves::{DisbandMove, PromoteMove, RecoverMove};
 use crate::settings::technology;
 use crate::states::{GameState, TribeState, UnitState};
-use crate::types::{SkillType, StructureType, TechnologyType, UnitEffect};
+use crate::types::{SkillType, StructureType, TechnologyType, UnitEffect, TerrainType};
 
+use super::break_ice::generate_break_ice_moves_for_unit;
 use super::*;
 
 pub fn generate_unit_action_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
@@ -93,6 +94,9 @@ pub fn generate_unit_action_moves_for_unit(
             moves.push(Box::new(FreezeAreaMove::new(idx)));
         }
     }
+
+    // Break Ice
+    generate_break_ice_moves_for_unit(state, unit, moves);
 }
 
 pub fn generate_economic_ability_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {

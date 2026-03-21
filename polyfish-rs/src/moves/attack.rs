@@ -91,6 +91,13 @@ impl Move for AttackMove {
             }
         };
 
+        // Peace check
+        if crate::functions::is_at_peace(state, attacker_owner, defender_owner) {
+            return Err(
+                "Cannot attack a tribe you are at peace with. Break peace first.".to_string(),
+            );
+        }
+
         // Mark the tribe as having attacked this turn for pacifist task
         if let Some(tribe) = state.tribes.get_mut(&attacker_owner) {
             tribe.attacked_this_turn = true;

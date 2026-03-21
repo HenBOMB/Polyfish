@@ -11,6 +11,7 @@ pub struct StructureSetting {
     pub adjacent_types: HashSet<StructureType>,
     pub resource_type: Option<ResourceType>,
     pub limited_per_city: bool,
+    pub limited_per_tribe: bool,
     pub reward_pop: i32,
     pub reward_stars: i32,
     pub reward_score: i32,
@@ -49,7 +50,7 @@ pub fn get_structure_setting(struct_type: StructureType) -> StructureSetting {
         //     tribe_type: Some(TribeType::Cymanti),
         //     ..Default::default()
         // },
-        StructureType::Swamp => StructureSetting {
+        StructureType::Algae => StructureSetting {
             terrain_types: terrains![TerrainType::Ocean],
             ..Default::default()
         },
@@ -192,6 +193,13 @@ pub fn get_structure_setting(struct_type: StructureType) -> StructureSetting {
             reward_pop: 1,
             tribe_type: Some(TribeType::Polaris), // TODO: Polaris disabled
             terrain_types: terrains![TerrainType::Ice],
+            ..Default::default()
+        },
+        StructureType::IceBank => StructureSetting {
+            cost: Some(20),
+            tribe_type: Some(TribeType::Polaris),
+            terrain_types: terrains![TerrainType::Field, TerrainType::Ice],
+            limited_per_tribe: true,
             ..Default::default()
         },
 

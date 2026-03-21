@@ -418,9 +418,13 @@ pub enum AbilityType {
     Boost = 14,
     Explode = 15,
     Promote = 16,
-
-    BreakPeace = 120,
-    EnchantAnimal = 121,
+    BreakIce = 17,
+    BreakPeace = 18,
+    PeaceRequestResponse = 19,
+    EstablishEmbassy = 20,
+    PeaceTreaty = 21,
+    DestroyEmbassy = 22,
+    EnchantAnimal = 23,
 }
 
 /// Structure types
@@ -442,11 +446,20 @@ pub enum StructureType {
     None = 0,
     Village = 1,
     Ruin = 2,
+    Road = 3,
+    // CustomsHouse = 4, // replaced with market
     Farm = 5,
     Windmill = 6,
+    // Fishing = 7, // no idea what this is
     Port = 8,
+    // Hunting = 9, // maybe these are harvests?
+    // ClearForest = 10, // same
+    // BurnForest = 11, // same
     LumberHut = 12,
     Sawmill = 13,
+    // GrowForest = 14, // okay yeah these are abilities, but all chunked in to the same "improvement" data
+    // HarvestFruit = 15,
+    // WhaleHunting = 16,
     Temple = 17,
     ForestTemple = 18,
     WaterTemple = 19,
@@ -460,21 +473,36 @@ pub enum StructureType {
     GateOfPower = 27,
     ParkOfFortune = 28,
     EyeOfGod = 29,
-    Outpost = 33,
-    // Spores = 37, // not a structure, depends on fungi. is this the real fungi id?
-    Swamp = 38,
+    // EnchantAnimal = 30, // same here, more abilities
+    // EnchantWhale = 31,
+    Sanctuary = 32, // TODO add new building (elyrion)
+    Outpost = 33,   // TODO new
+    IceBank = 34,   // TODO new
+    IceTemple = 35, // TODO new
+    // PolarisClimate = 36, // no idea
+    Fungi = 37, // TODO no idea how its used, not really a structure?
+    Algae = 38,
     Mycelium = 39,
-    // Algae = 40, // Changed to tile effect
+    // BurnSpores = 40, // no idea
+    Clathrus = 41, // New Cymanti building
+    // HiddenSanctuary = 42, // no idea
+    // HarvestSpores = 43, // ability to harvest spores by cymanti
+    // NullBuilding = 44, // no idea
+    // Cultivate = 45, // even less idea
+    // StarFishing = 56, // old ability?
     Lighthouse = 47,
     Bridge = 48,
+    // Aquafarm = 49, // idk what this is
     Market = 50,
-    IceTemple = 69, // TODO: Polaris disabled
+    // Atoll = 51, // idk what this is
+    // Canal = 52, // idk what this is
+    // Fertilize = 53, // idk what this is
+    // LandFill = 54, // idk what this is
+    // AlgaeSpawn = 55, // idk what this is
+    // and that's all matching the original polytopia src code
     Embassy = 70,
-    Road = 71,
 
-    Clathrus = 120, // New Cymanti building
-    Sanctuary = 121,
-    Fungi = 122,
+    // This is wrong and prolly uses some other monument with adaptive skin
     ChurchOfConverts = 123, // Cymanti monument for Converter task
 }
 

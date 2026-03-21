@@ -156,7 +156,7 @@ pub fn generate_legal_moves(state: &GameState) -> Vec<Box<dyn Move>> {
     // 3. Econ Moves (Research, Build, Harvest, Econ Abilities)
     generate_econ_moves(state, &mut moves);
     crate::moves::abilities::unit_actions::generate_economic_ability_moves(state, &mut moves);
-    crate::moves::abilities::diplomacy::generate_break_peace_moves(state, &mut moves);
+    crate::moves::abilities::diplomacy::generate_diplomacy_moves(state, &mut moves);
 
     moves
 }
@@ -260,8 +260,9 @@ fn generate_econ_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                     tech => crate::settings::technology::has_technology(&tribe.tech_vanilla, tech),
                 };
 
-                // Cannot harvest if structure is required
+                // Cannot harvest if structure is required or if it requires capture
                 if settings.struct_required.is_none()
+                    && !settings.requires_capture
                     && tech_ok
                     && tribe.stars >= settings.cost.unwrap_or(0)
                 {
