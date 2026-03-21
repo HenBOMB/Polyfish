@@ -56,8 +56,11 @@ impl Game {
         let map_size = self.state.settings.size;
 
         // 1. Compute coord indexes for all tiles
-        for (_idx, tile) in self.state.tiles.iter_mut() {
+        for (idx, tile) in self.state.tiles.iter_mut() {
             tile.coords.compute_idx(map_size);
+            if *idx == 147 && tile.owner != 0 {
+                println!("    [DEBUG POST_LOAD] Tile 147 is already owned by {}!", tile.owner);
+            }
             if let Some(ref mut rc) = tile.ruling_city_coords {
                 rc.compute_idx(map_size);
             }
@@ -164,6 +167,19 @@ impl Game {
             let end_undo = self.end_turn();
             self.state.settings._recent_moves.clear();
             end_undo
+        } else if game_move.move_type() == MoveType::Resign {
+            let res = game_move.execute(&mut self.state).unwrap();
+            let move_undo = res.undo;
+            let end_undo = self.end_turn();
+            self.state.settings._recent_moves.clear();
+            self.state._history.push(game_move.serialize());
+
+            Box::new(move |s: &mut GameState| {
+                s.settings._recent_moves.clear(); // Or restore? EndTurn clears it.
+                s._history.pop();
+                end_undo(s);
+                move_undo(s);
+            }) as UndoCallback
         } else {
             let result = game_move.execute(&mut self.state);
             if let Err(e) = result {
@@ -254,6 +270,16 @@ impl Game {
                     undo(s);
                 }
             }) as UndoCallback
+        } else if game_move.move_type() == MoveType::Resign {
+            let res = game_move.execute(&mut self.state).unwrap();
+            let move_undo = res.undo;
+            let end_undo = self.end_turn();
+            self.state.settings._recent_moves.clear();
+
+            Box::new(move |s: &mut GameState| {
+                end_undo(s);
+                move_undo(s);
+            }) as UndoCallback
         } else {
             let result = game_move.execute(&mut self.state);
             if let Err(e) = result {
@@ -333,13 +359,15 @@ impl Game {
             state.settings.current_player_turn_id = STARTING_OWNER_ID;
         }
 
-        // Skip dead/resigned tribes
+        // Skip dead/resigned/missing tribes
         loop {
+            // Unwrapping to `true` ensures that if a tribe ID doesn't exist in the map
+            // (e.g. empty slots up to max_tribe_count), we correctly skip them.
             let should_skip = state
                 .tribes
                 .get(&state.settings.current_player_turn_id)
                 .map(|t| t.killed_turn > 0 || t.resigned_turn > 0)
-                .unwrap_or(false);
+                .unwrap_or(true);
 
             if !should_skip {
                 break;

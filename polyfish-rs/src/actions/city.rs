@@ -127,6 +127,9 @@ pub fn claim_territory(
     for &idx in &tiles_to_claim {
         if let Some(tile) = state.tiles.get_mut(&idx) {
             old_owners.push((idx, tile.owner, tile.ruling_city_coords.clone()));
+            if idx == 147 {
+                println!("    [DEBUG TERRITORY] Tile 147 being claimed! City: {}, Old Owner: {}, New Owner: {}", city_tile_idx, tile.owner, pov_id);
+            }
             tile.owner = pov_id;
             tile.ruling_city_coords = Some(city_coords.clone());
         }
@@ -307,7 +310,7 @@ pub fn capture_city(state: &mut GameState, tile_idx: i32) -> Result<UndoCallback
             }));
 
             // Claim territory
-            undos.push(claim_territory(state, &city._territory, tile_idx, false));
+            undos.push(claim_territory(state, &city._territory, tile_idx, true));
         }
     } else {
         // Case 2: Capture Neutral Village (New City)

@@ -49,7 +49,7 @@ fn test_capture_ruin_determinism() {
     // Setup iterations
     for i in 0..100 {
         let seed = 50000 + i as u64;
-        base_game.state.settings.seed = seed;
+        base_game.state.settings.seed = seed as i64;
 
         // Clone two identical games using production clone (JSON cycle)
         let mut game_a = base_game.clone();

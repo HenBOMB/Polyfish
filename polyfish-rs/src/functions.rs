@@ -4,11 +4,16 @@
 
 /// Check if a tile is in the player's own territory
 pub fn is_in_own_territory(state: &GameState, idx: i32, owner: i32) -> bool {
-    state
+    let result = state
         .tiles
         .get(&idx)
         .map(|t| t.owner == owner)
-        .unwrap_or(false)
+        .unwrap_or(false);
+    if idx == 147 {
+        println!("    [DEBUG TERRITORY CHECK] Tile 147, Owner={}, QueryOwner={}, Result={}", 
+            state.tiles.get(&idx).map(|t| t.owner).unwrap_or(-1), owner, result);
+    }
+    result
 }
 
 use crate::coords::Coords;
@@ -215,15 +220,15 @@ pub fn get_unit_at<'a>(state: &'a GameState, idx: i32) -> Option<&'a UnitState> 
     for tribe in state.tribes.values() {
         for unit in &tribe.units {
             if unit.coords.idx == idx {
-                // Skip ships - return the passenger conceptually
-                let setting = get_unit_setting(unit.unit_type);
-                if setting.skills.contains(&SkillType::Carry) {
-                    if let Some(passenger) = unit.passenger_type {
-                        if passenger != UnitType::None {
-                            continue; // The "true" unit is the passenger
-                        }
-                    }
-                }
+                // // Skip ships - return the passenger conceptually
+                // let setting = get_unit_setting(unit.unit_type);
+                // if setting.skills.contains(&SkillType::Carry) {
+                //     if let Some(passenger) = unit.passenger_type {
+                //         if passenger != UnitType::None {
+                //             continue; // The "true" unit is the passenger
+                //         }
+                //     }
+                // }
                 return Some(unit);
             }
         }
@@ -461,7 +466,11 @@ pub fn get_city_production(state: &GameState, city: &CityState) -> i32 {
         }
     }
 
-    let rewards = city.rewards.iter().filter(|r| **r == RewardType::Park);
+    let rewards = city
+        .rewards
+        .iter()
+        // workshops or parks give +1 production
+        .filter(|r| **r == RewardType::Workshop || **r == RewardType::Park);
 
     prod += rewards.count() as i32;
 
@@ -610,6 +619,30 @@ pub fn get_capital_city(state: &GameState, player_id: PlayerId) -> Option<&CityS
                 .unwrap_or(false)
         })
     })
+}
+
+/// Get the "best" capital for a tribe.
+/// Priority: Original capital > Highest level city that is a capital.
+pub fn get_best_capital(state: &GameState, player_id: PlayerId) -> Option<&CityState> {
+    let tribe = state.tribes.get(&player_id)?;
+
+    // 1. Try to find the original capital
+    if let Some(orig) = get_capital_city(state, player_id) {
+        return Some(orig);
+    }
+
+    // 2. Otherwise, find the highest level city that is currently a capital
+    tribe
+        .cities
+        .iter()
+        .filter(|c| {
+            state
+                .tiles
+                .get(&c.idx)
+                .map(|t| t.capital_of != 0)
+                .unwrap_or(false)
+        })
+        .max_by_key(|c| c.level)
 }
 
 /// Get the number of units in a city

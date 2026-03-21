@@ -18,7 +18,7 @@ fn main() {
         game.state = polyfish::mapgen::generate(MapGenSettings {
             size: MapSize::Tiny, // Tiny to make it faster
             tribes: vec![TribeType::Imperius, TribeType::Imperius],
-            seed: i as u64,
+            seed: i as i64,
             ..Default::default()
         });
 

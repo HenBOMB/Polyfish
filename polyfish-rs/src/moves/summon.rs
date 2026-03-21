@@ -128,8 +128,24 @@ pub fn generate_summon_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
 
         // Polytopia/TS Rule: City unit count vs level
         // and cannot spawn on occupied tile.
-        if get_city_unit_count(state, city) > city.level || is_tile_occupied(state, target_idx) {
+        let count = get_city_unit_count(state, city);
+        if count > city.level || is_tile_occupied(state, target_idx) {
+            if tribe.stars >= warrior_settings.cost && target_idx == 163 {
+                println!(
+                    "[DEBUG SUMMON] city 163 blocked: count={}, level={}, occupied={}",
+                    count,
+                    city.level,
+                    is_tile_occupied(state, target_idx)
+                );
+            }
             continue;
+        }
+
+        if target_idx == 163 {
+            println!(
+                "[DEBUG SUMMON] city 163 OK: count={}, level={}, afford={}",
+                count, city.level, tribe.stars
+            );
         }
 
         for &u_type in &spawnables {

@@ -3,7 +3,7 @@ use crate::moves::Move;
 use crate::moves::{DisbandMove, PromoteMove, RecoverMove};
 use crate::settings::technology;
 use crate::states::{GameState, TribeState, UnitState};
-use crate::types::{SkillType, StructureType, TechnologyType, UnitEffect, TerrainType};
+use crate::types::{SkillType, StructureType, TechnologyType, UnitEffect};
 
 use super::break_ice::generate_break_ice_moves_for_unit;
 use super::*;

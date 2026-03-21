@@ -609,7 +609,7 @@ fn test_capture_ruin_stacking() {
     let move_ = polyfish::moves::CaptureMove::new(ruin_idx);
 
     for i in 0..1000 {
-        game.state.settings.seed = i as u64;
+        game.state.settings.seed = i as i64;
 
         // We know from logic that if we get a Unit reward, it spawns a Veteran Swordsman.
         // Let's check if the move executes cleanly.

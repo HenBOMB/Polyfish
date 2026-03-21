@@ -643,6 +643,11 @@ pub fn calculate_combat(
         0.0
     };
 
+    println!("[COMBAT] A:{} H:{}/{} vs D:{} B:{} H:{}/{} -> AF:{}, DF:{}, DMG:{}, RET:{}", 
+        attacker_attack, attacker_health, attacker_max_health, 
+        defender_defense, defense_bonus, defender_health, defender_max_health,
+        attack_force, defense_force, attack_result, defense_damage);
+
     CombatResult {
         attack_damage: attack_result,
         defense_damage,

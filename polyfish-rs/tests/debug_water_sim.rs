@@ -17,7 +17,7 @@ fn main() -> anyhow::Result<()> {
         size: MapSize::Normal, // 16x16
         map_type: MapType::Archipelago,
         tribes: vec![TribeType::Kickoo, TribeType::Kickoo], // Kickoo starts with Fishing
-        seed,
+        seed: seed as i64,
         ..Default::default()
     };
     let mut state = polyfish::mapgen::generate(gen_settings);

@@ -1,8 +1,8 @@
 use crate::actions::{chain_undos, modify_terrain, units::end_unit_turn};
+use crate::functions::{get_adjacent_indices, has_skill};
 use crate::moves::{Move, MoveResult};
 use crate::states::{GameState, UnitState};
 use crate::types::{AbilityType, MoveType, SkillType, TerrainType};
-use crate::functions::{get_adjacent_indices, has_skill};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,8 +32,10 @@ impl Move for BreakIceMove {
         let actor_idx = adj.iter().find_map(|&u_pos| {
             if let Some(tribe) = state.tribes.get(&pov_id) {
                 tribe.units.iter().position(|u| {
-                    if u.coords.idx != u_pos { return false; }
-                    
+                    if u.coords.idx != u_pos {
+                        return false;
+                    }
+
                     // Rules:
                     // - Unused: Yes
                     // - Moved but not attacked: Yes if has Dash
@@ -98,7 +100,7 @@ pub fn generate_break_ice_moves_for_unit(
     unit: &UnitState,
     moves: &mut Vec<Box<dyn Move>>,
 ) {
-    let pov_id = state.settings.current_player_turn_id;
+    // let pov_id = state.settings.current_player_turn_id;
     let idx = unit.coords.idx;
 
     let can_act = if !unit.moved && !unit.attacked {
@@ -110,9 +112,11 @@ pub fn generate_break_ice_moves_for_unit(
     } else {
         false
     };
-    
-    if !can_act { return; }
-    
+
+    if !can_act {
+        return;
+    }
+
     let adj = get_adjacent_indices(state, idx, 1);
     for &adj_idx in &adj {
         if let Some(tile) = state.tiles.get(&adj_idx) {

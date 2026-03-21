@@ -76,7 +76,8 @@ pub fn get_structure_setting(struct_type: StructureType) -> StructureSetting {
         },
 
         StructureType::Road => StructureSetting {
-            cost: Some(3),
+            cost: Some(2), // THIS IS ARGUABLY VERY UH.. IDK BACKWARDS INCOMPATIBLE
+            // LEAVING IT AT 2 FOR NOW, UNTIL DYNAMICALLY SET WITH VERSION COMPATIBILITY
             terrain_types: terrains![TerrainType::Field, TerrainType::Forest],
             ..Default::default()
         },

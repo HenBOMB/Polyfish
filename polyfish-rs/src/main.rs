@@ -6,7 +6,7 @@ use axum::{
 use polyfish::mapgen::{MapGenSettings, generate};
 use polyfish::moves::{
     AttackMove, BuildMove, CaptureMove, DisbandMove, EndTurnMove, HarvestMove, Move, RecoverMove,
-    ResearchMove, RewardMove, StepMove, SummonMove, UpgradeMove,
+    ResearchMove, ResignMove, RewardMove, StepMove, SummonMove, UpgradeMove,
     abilities::{
         boost::BoostMove, convert::ConvertMove, decompose::DecomposeMove, destroy::DestroyMove,
         diplomacy::BreakPeaceMove, enchant_animal::EnchantAnimalMove, explode::ExplodeMove,
@@ -425,6 +425,7 @@ async fn manual_step(
             }))
         }
         10 => Box::new(EndTurnMove),
+        11 => Box::new(ResignMove),
         _ => Box::new(EndTurnMove),
     };
 

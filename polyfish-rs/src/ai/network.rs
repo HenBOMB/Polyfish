@@ -116,7 +116,7 @@ impl PolyZeroNet {
         let player_state_dim = 10; // Global features (stars, spt, tech, etc)
 
         // Action dimensions
-        let num_action_types = 11; // Attack, Build, Move, Research, EndTurn, etc
+        let num_action_types = 12; // Attack, Build, Move, Research, EndTurn, Resign, etc
         let num_options = 192; // Unified options size
 
         // Backbone

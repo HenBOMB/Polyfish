@@ -437,7 +437,7 @@ pub struct GameSettings {
     #[serde(default)]
     pub game_name: String,
     #[serde(default)]
-    pub seed: u64,
+    pub seed: i64,
     #[serde(default)]
     pub win_by_capital: bool,
     #[serde(default)]
@@ -563,7 +563,7 @@ pub struct GameState {
     #[serde(default)]
     pub _history: Vec<serde_json::Value>,
     #[serde(default)]
-    pub initial_seed: u64,
+    pub initial_seed: i64,
 }
 
 impl Default for GameState {

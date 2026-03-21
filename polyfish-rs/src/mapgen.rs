@@ -41,7 +41,7 @@ pub struct MapGenSettings {
     pub size: MapSize,
     pub map_type: MapType,
     pub tribes: Vec<TribeType>,
-    pub seed: u64,
+    pub seed: i64,
 }
 
 impl Default for MapGenSettings {
@@ -204,7 +204,7 @@ pub fn get_resource_prob(key: &str, tribe: TribeType, inner: bool) -> f32 {
 
 /// The main generation function
 pub fn generate(settings: MapGenSettings) -> GameState {
-    let mut rng = StdRng::seed_from_u64(settings.seed);
+    let mut rng = StdRng::seed_from_u64(settings.seed as u64);
     let size = settings.size.get_size();
     let tile_count = size * size;
 
@@ -1651,7 +1651,7 @@ mod tests {
         settings.tribes = vec![TribeType::Imperius];
 
         for i in 0..50 {
-            settings.seed = i as u64;
+            settings.seed = i as i64;
             let gamestate = generate(settings.clone());
 
             let cap_tile = gamestate

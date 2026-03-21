@@ -5,18 +5,30 @@ use crate::actions::{chain_undos, end_unit_turn, gain_stars};
 use crate::functions::get_unit_at;
 use crate::moves::{Move, MoveResult};
 use crate::states::GameState;
-use crate::types::{MoveType, ResourceType, StructureType, TechnologyType};
+use crate::types::{MoveType, StructureType};
 
 /// A capture move - taking control of a village, city, or ruins
 #[derive(Debug, Clone)]
 pub struct CaptureMove {
     /// Tile index to capture
     pub src_index: i32,
+    /// Optional reward hint (for replays)
+    pub reward: Option<crate::types::RuinsRewardType>,
 }
 
 impl CaptureMove {
     pub fn new(src_index: i32) -> Self {
-        Self { src_index }
+        Self {
+            src_index,
+            reward: None,
+        }
+    }
+
+    pub fn with_reward(src_index: i32, reward: crate::types::RuinsRewardType) -> Self {
+        Self {
+            src_index,
+            reward: Some(reward),
+        }
     }
 }
 
@@ -69,6 +81,7 @@ impl Move for CaptureMove {
                 undos.push(crate::actions::structure::capture_ruin(
                     state,
                     self.src_index,
+                    self.reward,
                 ));
             }
             _ => {
@@ -86,7 +99,9 @@ impl Move for CaptureMove {
                             }
                         }
 
-                        let settings = crate::settings::resources::get_resource_setting(resource.resource_type);
+                        let settings = crate::settings::resources::get_resource_setting(
+                            resource.resource_type,
+                        );
                         undos.push(consume_resource(state, self.src_index, None));
                         undos.push(gain_stars(state, settings.reward_stars));
                     }
@@ -105,10 +120,14 @@ impl Move for CaptureMove {
     }
 
     fn serialize(&self) -> serde_json::Value {
-        serde_json::json!({
+        let mut res = serde_json::json!({
             "moveType": self.move_type(),
             "src": self.src_index,
-        })
+        });
+        if let Some(r) = self.reward {
+            res["_reward"] = serde_json::to_value(r).unwrap();
+        }
+        res
     }
 
     #[inline]

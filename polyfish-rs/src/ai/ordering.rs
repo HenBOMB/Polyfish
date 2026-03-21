@@ -512,7 +512,7 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
         }
 
         MoveType::EndTurn => 0.0,
-
+        MoveType::Resign => -100.0,
         _ => 5.0,
     }
 }
@@ -637,12 +637,7 @@ fn score_road(state: &crate::states::GameState, tile_idx: i32) -> f32 {
     let cities: Vec<(Coords, bool)> = tribe
         .cities
         .iter()
-        .map(|c| {
-            (
-                Coords::from_index(c.idx, map_size),
-                c.connected_to_capital,
-            )
-        })
+        .map(|c| (Coords::from_index(c.idx, map_size), c.connected_to_capital))
         .collect();
 
     if cities.len() < 2 {

@@ -24,10 +24,12 @@ impl Move for RecoverMove {
     fn move_type(&self) -> MoveType {
         MoveType::Ability
     }
+
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let mut undos = Vec::new();
 
-        let unit_owner = state.tiles
+        let unit_owner = state
+            .tiles
             .get(&self.src_index)
             .and_then(|t| t._unit_owner_id)
             .unwrap_or(0);
@@ -49,7 +51,7 @@ impl Move for RecoverMove {
             // Calculate heal amount
             let in_territory =
                 crate::functions::is_in_own_territory(state, self.src_index, unit_owner);
-            let amount = if in_territory { 40 } else { 20 };
+            let amount = if in_territory { 4 } else { 2 };
 
             undos.push(heal_unit(state, unit_owner, idx, amount));
             undos.push(end_unit_turn(state, unit_owner, idx));

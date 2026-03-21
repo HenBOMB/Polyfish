@@ -45,7 +45,7 @@ fn play_match(
     net1: &PolyZeroNet,
     net2: &PolyZeroNet,
     mcts: usize,
-    seed: u64,
+    seed: i64,
 ) -> (PlayerId, i32, i32) {
     // (Winner ID, P1 Score, P2 Score)
 
@@ -129,7 +129,7 @@ fn main() -> anyhow::Result<()> {
         .into_par_iter()
         .map(|i| {
             // We use the same networks (thread safe read only)
-            play_match(i, &net1, &net2, args.mcts, base_seed + i as u64)
+            play_match(i, &net1, &net2, args.mcts, (base_seed + i as u64) as i64)
         })
         .collect();
 

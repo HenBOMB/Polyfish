@@ -35,7 +35,7 @@ fn play_single_game(
     network2: &PolyZeroNet, // Added network2
     mcts_iters: usize,
     game_idx: usize,
-    seed: u64,
+    seed: i64,
     tribes: Vec<TribeType>,
 ) -> Option<GameResult> {
     // Init Game using MapGen
@@ -394,7 +394,7 @@ fn main() -> anyhow::Result<()> {
     let results: Vec<GameResult> = (0..args.num_games)
         .into_par_iter()
         .filter_map(|i| {
-            let seed = base_seed + i as u64;
+            let seed = (base_seed + i as u64) as i64;
             // Play with (Net1, Net2)
             play_single_game(
                 &network1,

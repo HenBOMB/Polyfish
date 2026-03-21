@@ -134,11 +134,56 @@ impl Move for EndTurnMove {
     }
 }
 
+/// Resign move
+#[derive(Debug, Clone)]
+pub struct ResignMove;
+
+impl Move for ResignMove {
+    fn move_type(&self) -> MoveType {
+        MoveType::Resign
+    }
+
+    fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+        let pov_id = state.settings.current_player_turn_id;
+        let turn = state.settings.turn;
+
+        let old_resigned = state
+            .tribes
+            .get(&pov_id)
+            .map(|t| t.resigned_turn)
+            .unwrap_or(0);
+
+        if let Some(tribe) = state.tribes.get_mut(&pov_id) {
+            tribe.resigned_turn = turn;
+        }
+
+        Ok(MoveResult {
+            undo: Box::new(move |s| {
+                if let Some(t) = s.tribes.get_mut(&pov_id) {
+                    t.resigned_turn = old_resigned;
+                }
+            }),
+            rewards: None,
+        })
+    }
+
+    fn describe(&self, _state: &GameState) -> String {
+        "Resign".to_string()
+    }
+
+    fn serialize(&self) -> serde_json::Value {
+        serde_json::json!({ "moveType": MoveType::Resign })
+    }
+}
+
 /// Generate all legal moves for the current player
 pub fn generate_legal_moves(state: &GameState) -> Vec<Box<dyn Move>> {
     let mut moves: Vec<Box<dyn Move>> = Vec::new();
 
-    // 1. Check for pending rewards (logical blocking as in TS MoveGenerator.legal)
+    let pov_id = state.settings.current_player_turn_id;
+    if let Some(tribe) = state.tribes.get(&pov_id) {
+        println!("[DEBUG LEGAL] Player {} has {} stars", pov_id, tribe.stars);
+    }
     crate::moves::reward::generate_reward_moves(state, &mut moves);
     if !moves.is_empty() {
         return moves;

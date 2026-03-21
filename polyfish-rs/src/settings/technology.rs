@@ -397,3 +397,36 @@ pub fn resolve_tech_for_tribe(tech: TechnologyType, tribe: TribeType) -> Technol
 
     tech
 }
+
+/// Get a list of technologies that are currently researchable by a tribe
+pub fn get_researchable_techs(
+    tech_list: &[crate::states::TechnologyState],
+    tribe_type: TribeType,
+) -> Vec<TechnologyType> {
+    use strum::IntoEnumIterator;
+    let mut researchable = Vec::new();
+
+    for tech in TechnologyType::iter() {
+        if tech == TechnologyType::Unrequired || tech == TechnologyType::BeyondComprehension {
+            continue;
+        }
+
+        // Standard techs are 1-24 range in current implementation (mostly)
+        // But we should use the settings to check prerequisites.
+        let resolved = resolve_tech_for_tribe(tech, tribe_type);
+
+        if !has_technology(tech_list, resolved) {
+            let settings = get_technology_setting(resolved);
+            if let Some(req) = settings.requires {
+                // To be researchable, prerequisite must be RESEARCHED
+                if has_technology(tech_list, req) {
+                    researchable.push(resolved);
+                }
+            } else if settings.tier == Some(1) {
+                // Tier 1 techs are always researchable
+                researchable.push(resolved);
+            }
+        }
+    }
+    researchable
+}

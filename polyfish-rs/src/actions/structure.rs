@@ -5,14 +5,16 @@ use crate::actions::{UndoCallback, chain_undos};
 use crate::functions::get_city_owning_tile;
 use crate::settings::structures::get_structure_setting;
 use crate::states::{GameState, StructureState};
-use crate::types::StructureType;
+use crate::types::{StructureType, RuinsRewardType};
 
 /// Crate-local RNG helper (Linear Congruential Generator)
 /// Constants from MMIX by Knuth
-fn next_rng(seed: &mut u64) -> u64 {
-    *seed = seed
+fn next_rng(seed: &mut i64) -> i64 {
+    let mut u_seed = *seed as u64;
+    u_seed = u_seed
         .wrapping_mul(6364136223846793005)
         .wrapping_add(1442695040888963407);
+    *seed = u_seed as i64;
     *seed
 }
 
@@ -31,7 +33,9 @@ pub fn create_structure(
         founded: state.settings.turn,
     };
 
-    state.structures.insert(idx, Some(structure));
+    if structure_type != StructureType::Road {
+        state.structures.insert(idx, Some(structure));
+    }
 
     // Valid references for move closure
     let pov_id = state.settings.current_player_turn_id;
@@ -219,21 +223,24 @@ pub fn build_structure(
     chain_undos(undos)
 }
 /// Capture a ruin and gain rewards
-pub fn capture_ruin(state: &mut GameState, tile_idx: i32) -> UndoCallback {
+pub fn capture_ruin(
+    state: &mut GameState,
+    tile_idx: i32,
+    reward_hint: Option<RuinsRewardType>,
+) -> UndoCallback {
     use crate::actions::discovery::discover_tiles;
     use crate::actions::tech::unlock_tech;
-    use crate::actions::{UndoCallback, gain_stars};
-    use crate::functions::{get_adjacent_indices, get_capital_city};
-    use crate::types::TechnologyType;
+    use crate::actions::{gain_stars, UndoCallback};
+    use crate::functions::{get_adjacent_indices, get_best_capital};
+    use crate::types::{RewardType, RuinsRewardType, TerrainType, TribeType, UnitType};
 
     let pov_id = state.settings.current_player_turn_id;
     let mut undos: Vec<UndoCallback> = Vec::new();
 
-    // 0. Capture Seed & Setup RNG
+    // 0. Setup RNG
     let original_seed = state.settings.seed;
     let mut current_seed = original_seed;
 
-    // Helper to restore seed
     undos.push(Box::new(move |s: &mut GameState| {
         s.settings.seed = original_seed;
     }));
@@ -241,155 +248,383 @@ pub fn capture_ruin(state: &mut GameState, tile_idx: i32) -> UndoCallback {
     // Destroy ruins
     undos.push(destroy_structure(state, tile_idx));
 
-    let mut possible_rewards: Vec<Box<dyn FnOnce(&mut GameState) -> UndoCallback>> = Vec::new();
+    // If a specific reward was requested (from replay), execute it immediately
+    if let Some(hint) = reward_hint {
+        let ruin_tile = state.tiles.get(&tile_idx).unwrap();
+        let is_water = ruin_tile.is_water_terrain();
 
-    // 1. Stars: 10 stars
-    possible_rewards.push(Box::new(|s: &mut GameState| {
+        match hint {
+            RuinsRewardType::Resources => {
+                if state.settings._verbose {
+                    state._messages.push("Ruin reward: 10 Stars! ⭐".to_string());
+                }
+                undos.push(gain_stars(state, 10));
+            }
+            RuinsRewardType::FreeTech => {
+                if let Some(tribe) = state.tribes.get(&pov_id) {
+                    let researchable = crate::settings::technology::get_researchable_techs(
+                        &tribe.tech_vanilla,
+                        tribe.tribe_type,
+                    );
+                    if !researchable.is_empty() {
+                        let mut seed = state.settings.seed;
+                        let r = next_rng(&mut seed);
+                        state.settings.seed = seed;
+                        let index = (r as usize) % researchable.len();
+                        let picked = researchable[index];
+                        if state.settings._verbose {
+                            state
+                                ._messages
+                                .push(format!("Ruin reward: Discovered {:?}! 💡", picked));
+                        }
+                        if let Ok(u) = unlock_tech(state, picked, true) {
+                            undos.push(u);
+                        }
+                    } else {
+                        // Fallback to stars if nothing to research
+                        undos.push(gain_stars(state, 10));
+                    }
+                }
+            }
+            RuinsRewardType::PopGrowth => {
+                let cap_idx = get_best_capital(state, pov_id).map(|c| c.idx);
+                if let Some(idx) = cap_idx {
+                    if state.settings._verbose {
+                        state
+                            ._messages
+                            .push("Ruin reward: Population growth! 👨‍👩‍👧‍👦".to_string());
+                    }
+                    undos.push(crate::actions::city::add_population(state, idx, 3));
+                }
+            }
+            RuinsRewardType::Explorer => {
+                if state.settings._verbose {
+                    state._messages.push("Ruin reward: Explorer! 🧭".to_string());
+                }
+                let (_, revealed) = crate::actions::discovery::predict_explorer(state, tile_idx);
+                undos.push(discover_tiles(state, pov_id, None, Some(revealed)));
+            }
+            RuinsRewardType::Swordsman => {
+                if is_water {
+                    // Veteran Rammer
+                    if let Ok(res) =
+                        crate::actions::units::summon_unit(state, UnitType::Rammer, tile_idx, false, false)
+                    {
+                        undos.push(res.undo);
+                        if let Some(u) = crate::functions::get_unit_at_mut(state, tile_idx) {
+                            u.veteran = true;
+                            u.health = crate::functions::get_unit_max_health(u);
+                            u.passenger_type = Some(UnitType::Warrior);
+                        }
+                    }
+                } else {
+                    let unit_type = if let Some(t) = state.tribes.get(&pov_id) {
+                        if t.tribe_type == TribeType::Cymanti {
+                            UnitType::Mantis
+                        } else {
+                            UnitType::Swordsman
+                        }
+                    } else {
+                        UnitType::Swordsman
+                    };
+                    if let Ok(res) =
+                        crate::actions::units::summon_unit(state, unit_type, tile_idx, false, false)
+                    {
+                        undos.push(res.undo);
+                        if let Some(u) = crate::functions::get_unit_at_mut(state, tile_idx) {
+                            u.veteran = true;
+                            u.health = crate::functions::get_unit_max_health(u);
+                        }
+                    }
+                }
+            }
+            RuinsRewardType::City => {
+                // Aquarion Lost City
+                let territory = crate::functions::get_square_indices(tile_idx, 1, state.settings.size);
+                let city = crate::states::CityState {
+                    idx: tile_idx,
+                    name: "Lost City".to_string(),
+                    population: 0,
+                    progress: 0,
+                    border_size: 1,
+                    connected_to_capital: false,
+                    level: 3,
+                    production: 3,
+                    owner: pov_id,
+                    rewards: vec![RewardType::CityWall],
+                    _territory: territory.clone(),
+                };
+                if let Some(tribe) = state.tribes.get_mut(&pov_id) {
+                    tribe.cities.push(city.clone());
+                    undos.push(Box::new(move |st: &mut GameState| {
+                        if let Some(t) = st.tribes.get_mut(&pov_id) {
+                            t.cities.pop();
+                        }
+                    }));
+                }
+                if let Some(tile) = state.tiles.get_mut(&tile_idx) {
+                    let old_owner = tile.owner;
+                    tile.owner = pov_id;
+                    undos.push(Box::new(move |st: &mut GameState| {
+                        if let Some(t) = st.tiles.get_mut(&tile_idx) {
+                            t.owner = old_owner;
+                        }
+                    }));
+                }
+                undos.push(crate::actions::city::claim_territory(state, &territory, tile_idx, true));
+            }
+            _ => {}
+        }
+
+        return chain_undos(undos);
+    }
+
+    // --- Dynamic/RNG logic if no hint provided ---
+    // Type definition to help compiler unify closures
+    type RuinRewardFn = Box<dyn FnOnce(&mut GameState) -> UndoCallback>;
+    let mut possible_rewards: Vec<RuinRewardFn> = Vec::new();
+
+    // 1. Resources (10 Stars) - Always available
+    possible_rewards.push(Box::new(|s: &mut GameState| -> UndoCallback {
         if s.settings._verbose {
             s._messages.push("Ruin reward: 10 Stars! ⭐".to_string());
         }
         gain_stars(s, 10)
-    }));
+    }) as RuinRewardFn);
 
-    // 2. Tech: random unlockable
+    // 2. Scrolls of Wisdom (Free Tech) - Only if researchable
     if let Some(tribe) = state.tribes.get(&pov_id) {
-        let mut unlockable_cand = Vec::new();
-        for t_val in 1..=24 {
-            // Standard tech tree range (excluding 11-Start)
-            if t_val == 11 {
-                continue;
-            }
-            let t_type: TechnologyType = unsafe { std::mem::transmute(t_val as i8) };
-            if !crate::settings::technology::has_technology(&tribe.tech_vanilla, t_type) {
-                unlockable_cand.push(t_type);
-            }
-        }
-        if !unlockable_cand.is_empty() {
-            // Pre-calculate which tech to unlock using current seed state
-            // Note: We need to use 'next_rng' here locally if we want to pick *now*.
-            // But we only want to pick IF this reward is chosen.
-            // Actually, for "Bias Fairness", we should pick the tech *now* (speculatively)
-            // or we use the seed *after* we pick this reward category?
-            // To be purely seed based: We use the seed state AT THE MOMENT of execution.
+        let researchable = crate::settings::technology::get_researchable_techs(
+            &tribe.tech_vanilla,
+            tribe.tribe_type,
+        );
 
-            // Let's defer execution but capture the *seed*? No, state.seed changes.
-            // Correct approach:
-            // The "Ruin Reward Choice" event is one RNG step.
-            // The "Which Tech" event is a sub-step.
-
-            // So it's okay to advance seed "conditionally" deep inside.
-
-            // Let's PRE-SELECT the tech candidate deterministically *outside*, so the closure captures it.
-            // We use 'next_rng' to pick it.
-            // Wait, if we use 'next_rng' here, we advance state.seed even if we DON'T pick Tech reward?
-            // That would mean "Ruin contents" affect global RNG even if not picked?
-            // Actually, we usually want:
-            // 1. RNG pick Reward Category.
-            // 2. If Category == Tech, RNG pick Tech.
-
-            // So:
-            possible_rewards.push(Box::new(move |s: &mut GameState| {
-                // We utilize the state seed (which has been updated by the Reward Category pick)
-                // to pick the tech.
-                // We need to mutate the seed inside here too.
-
+        if !researchable.is_empty() {
+            possible_rewards.push(Box::new(move |s: &mut GameState| -> UndoCallback {
                 let mut seed = s.settings.seed;
                 let r = next_rng(&mut seed);
-                s.settings.seed = seed; // Commit update
+                s.settings.seed = seed;
 
-                let index = (r as usize) % unlockable_cand.len();
-                let picked = unlockable_cand[index];
+                let index = (r as usize) % researchable.len();
+                let picked = researchable[index];
 
                 if s.settings._verbose {
                     s._messages
                         .push(format!("Ruin reward: Discovered {:?}! 💡", picked));
                 }
                 unlock_tech(s, picked, true).unwrap_or_else(|_| Box::new(|_| {}))
-            }));
+            }) as RuinRewardFn);
         }
     }
 
-    // 3. Pop growth: 3 to capital
-    if let Some(cap) = get_capital_city(state, pov_id) {
+    // 3. Population (3 Population to capital) - Only if owns a capital
+    if let Some(cap) = get_best_capital(state, pov_id) {
         let cap_tile_idx = cap.idx;
-        possible_rewards.push(Box::new(move |s: &mut GameState| {
+        possible_rewards.push(Box::new(move |s: &mut GameState| -> UndoCallback {
             if s.settings._verbose {
                 s._messages
                     .push("Ruin reward: Population growth! 👨‍👩‍👧‍👦".to_string());
             }
             crate::actions::city::add_population(s, cap_tile_idx, 3)
-        }));
+        }) as RuinRewardFn);
     }
 
-    // 4. Explorer: if nearby is fog
-    let mut fog_nearby = false;
-    let around = get_adjacent_indices(state, tile_idx, 2);
-    for &idx in &around {
-        let is_explored = state
-            .tiles
-            .get(&idx)
-            .map(|t| t.explorers.contains(&pov_id))
-            .unwrap_or(false);
-        if !is_explored {
-            fog_nearby = true;
-            break;
+    // 4. Explorer (Free Explorer) - If nearby is fog AND not a Mountain
+    let ruin_tile = state.tiles.get(&tile_idx).unwrap();
+    let is_mountain = ruin_tile.terrain_type == TerrainType::Mountain;
+    let is_water = ruin_tile.is_water_terrain();
+
+    let mut can_discovery = !is_mountain;
+
+    // Cymanti cannot get Explorer on Water
+    if let Some(t) = state.tribes.get(&pov_id) {
+        if t.tribe_type == TribeType::Cymanti && is_water {
+            can_discovery = false;
         }
     }
-    if fog_nearby {
-        possible_rewards.push(Box::new(move |s: &mut GameState| {
-            if s.settings._verbose {
-                s._messages.push("Ruin reward: Explorer! 🧭".to_string());
+
+    if can_discovery {
+        let mut fog_nearby = false;
+        let around = get_adjacent_indices(state, tile_idx, 2); // 5x5
+        for &idx in &around {
+            if !crate::functions::is_tile_explored(state, idx, pov_id) {
+                fog_nearby = true;
+                break;
             }
-            let (_, revealed) = crate::actions::discovery::predict_explorer(s, tile_idx);
-            discover_tiles(s, pov_id, None, Some(revealed))
-        }));
-    }
-
-    // 5. Veteran Unit (Swordsman or Mantis for Cymanti)
-    let unit_reward_type = if let Some(t) = state.tribes.get(&pov_id) {
-        if t.tribe_type == crate::types::TribeType::Cymanti {
-            crate::types::UnitType::Mantis
-        } else {
-            crate::types::UnitType::Swordsman
         }
-    } else {
-        crate::types::UnitType::Swordsman
-    };
-
-    possible_rewards.push(Box::new(move |s: &mut GameState| {
-        let mut undos = Vec::new();
-        if s.settings._verbose {
-            s._messages
-                .push(format!("Ruin reward: Veteran {:?}! ⚔️", unit_reward_type));
-        }
-        // Spawn unit
-        let res = crate::actions::units::summon_unit(s, unit_reward_type, tile_idx, false, false);
-        match res {
-            Ok(r) => undos.push(r.undo),
-            Err(e) => {
+        if fog_nearby {
+            possible_rewards.push(Box::new(move |s: &mut GameState| -> UndoCallback {
                 if s.settings._verbose {
-                    s._messages.push(format!("Failed to spawn veteran: {}", e));
+                    s._messages.push("Ruin reward: Explorer! 🧭".to_string());
+                }
+                let (_, revealed) = crate::actions::discovery::predict_explorer(s, tile_idx);
+                discover_tiles(s, pov_id, None, Some(revealed))
+            }) as RuinRewardFn);
+        }
+    }
+
+    // 5. Units (Veteran Swordsman or Rammer)
+    if is_water {
+        // Veteran Rammer (carrying Warrior)
+        possible_rewards.push(Box::new(move |s: &mut GameState| -> UndoCallback {
+            let mut undos = Vec::new();
+            if s.settings._verbose {
+                s._messages
+                    .push("Ruin reward: Veteran Rammer (Warrior)! ⛵".to_string());
+            }
+
+            match crate::actions::units::summon_unit(s, UnitType::Rammer, tile_idx, false, false) {
+                Ok(res) => {
+                    undos.push(res.undo);
+                    // Make veteran and add passenger
+                    if let Some(u) = crate::functions::get_unit_at_mut(s, tile_idx) {
+                        let old_vet = u.veteran;
+                        let old_hp = u.health;
+                        let old_pass = u.passenger_type;
+
+                        u.veteran = true;
+                        u.health = crate::functions::get_unit_max_health(u);
+                        u.passenger_type = Some(UnitType::Warrior);
+
+                        undos.push(Box::new(move |st: &mut GameState| {
+                            if let Some(u) = crate::functions::get_unit_at_mut(st, tile_idx) {
+                                u.veteran = old_vet;
+                                u.health = old_hp;
+                                u.passenger_type = old_pass;
+                            }
+                        }) as UndoCallback);
+                    }
+                }
+                Err(_) => {}
+            }
+            chain_undos(undos)
+        }) as RuinRewardFn);
+    } else {
+        // Veteran Swordsman
+        let unit_type = if let Some(t) = state.tribes.get(&pov_id) {
+            if t.tribe_type == TribeType::Cymanti {
+                UnitType::Mantis
+            } else {
+                UnitType::Swordsman
+            }
+        } else {
+            UnitType::Swordsman
+        };
+
+        possible_rewards.push(Box::new(move |s: &mut GameState| -> UndoCallback {
+            let mut undos = Vec::new();
+            if s.settings._verbose {
+                s._messages
+                    .push(format!("Ruin reward: Veteran {:?}! ⚔️", unit_type));
+            }
+            match crate::actions::units::summon_unit(s, unit_type, tile_idx, false, false) {
+                Ok(res) => {
+                    undos.push(res.undo);
+                    if let Some(u) = crate::functions::get_unit_at_mut(s, tile_idx) {
+                        let old_vet = u.veteran;
+                        let old_hp = u.health;
+
+                        u.veteran = true;
+                        u.health = crate::functions::get_unit_max_health(u);
+
+                        undos.push(Box::new(move |st: &mut GameState| {
+                            if let Some(u) = crate::functions::get_unit_at_mut(st, tile_idx) {
+                                u.veteran = old_vet;
+                                u.health = old_hp;
+                            }
+                        }) as UndoCallback);
+                    }
+                }
+                Err(_) => {}
+            }
+            chain_undos(undos)
+        }) as RuinRewardFn);
+    }
+
+    // 6. Lost City (Aquarion on Ocean)
+    let is_aquarion = state
+        .tribes
+        .get(&pov_id)
+        .map_or(false, |t| t.tribe_type == TribeType::Aquarion);
+    let is_ocean = ruin_tile.terrain_type == TerrainType::Ocean;
+
+    if is_aquarion && is_ocean {
+        possible_rewards.push(Box::new(move |s: &mut GameState| -> UndoCallback {
+            let mut undos = Vec::new();
+            if s.settings._verbose {
+                s._messages.push("Ruin reward: LOST CITY! 🏛️".to_string());
+            }
+
+            // Spawn level 3 city
+            // 1. Create territory
+            let territory = crate::functions::get_square_indices(tile_idx, 1, s.settings.size);
+
+            // 2. Resolve name
+            let city_name = "Lost City".to_string();
+
+            let city = crate::states::CityState {
+                idx: tile_idx,
+                name: city_name,
+                population: 0,
+                progress: 0,
+                border_size: 1,
+                connected_to_capital: false,
+                level: 3,
+                production: 3,
+                owner: pov_id,
+                rewards: vec![RewardType::CityWall], // Grant City Walls
+                _territory: territory.clone(),
+            };
+
+            // 3. Add to tribe
+            if let Some(tribe) = s.tribes.get_mut(&pov_id) {
+                tribe.cities.push(city.clone());
+                undos.push(Box::new(move |st: &mut GameState| {
+                    if let Some(t) = st.tribes.get_mut(&pov_id) {
+                        t.cities.pop();
+                    }
+                }) as UndoCallback);
+            }
+
+            // 4. Update tile
+            if let Some(tile) = s.tiles.get_mut(&tile_idx) {
+                let old_owner = tile.owner;
+                tile.owner = pov_id;
+                undos.push(Box::new(move |st: &mut GameState| {
+                    if let Some(t) = st.tiles.get_mut(&tile_idx) {
+                        t.owner = old_owner;
+                    }
+                }) as UndoCallback);
+            }
+
+            // 5. 4 adjacent shallow water tiles
+            let adj = crate::functions::get_adjacent_indices(s, tile_idx, 1);
+            let mut water_changed = 0;
+            for n_idx in adj {
+                if water_changed >= 4 {
+                    break;
+                }
+                if let Some(tile) = s.tiles.get_mut(&n_idx) {
+                    if tile.terrain_type == TerrainType::Ocean {
+                        tile.terrain_type = TerrainType::Water; // Shallow
+                        undos.push(Box::new(move |st: &mut GameState| {
+                            if let Some(t) = st.tiles.get_mut(&n_idx) {
+                                t.terrain_type = TerrainType::Ocean;
+                            }
+                        }) as UndoCallback);
+                        water_changed += 1;
+                    }
                 }
             }
-        }
 
-        // Make veteran: find the unit we just spawned (it will be at tile_idx)
-        if let Some(u) = crate::functions::get_unit_at_mut(s, tile_idx) {
-            let old_veteran = u.veteran;
-            let old_health = u.health;
+            // 6. Claim territory
+            undos.push(crate::actions::city::claim_territory(
+                s, &territory, tile_idx, true,
+            ));
 
-            u.veteran = true;
-            u.health = crate::functions::get_unit_max_health(u);
-
-            undos.push(Box::new(move |st| {
-                if let Some(u) = crate::functions::get_unit_at_mut(st, tile_idx) {
-                    u.veteran = old_veteran;
-                    u.health = old_health;
-                }
-            }));
-        }
-        crate::actions::chain_undos(undos)
-    }));
+            chain_undos(undos)
+        }) as RuinRewardFn);
+    }
 
     // Pick one reward using Seed RNG
     if !possible_rewards.is_empty() {
@@ -398,13 +633,7 @@ pub fn capture_ruin(state: &mut GameState, tile_idx: i32) -> UndoCallback {
 
         let reward_fn = possible_rewards.remove(index);
 
-        // Execute reward
-        // NOTE: we do NOT update state.settings.seed here yet, because
-        // passing 'current_seed' locally tracked the change.
-        // We must sync the state seed before executing the reward,
-        // in case the reward itself (e.g. Tech) needs the updated seed.
         state.settings.seed = current_seed;
-
         undos.push(reward_fn(state));
     }
 

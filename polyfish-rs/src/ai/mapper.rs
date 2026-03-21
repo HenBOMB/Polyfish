@@ -8,7 +8,7 @@ use strum::IntoEnumIterator;
 /// Each field represents the target value for one policy head
 #[derive(Debug, Clone)]
 pub struct DecomposedTargets {
-    pub action_type: usize, // 0-10: which action type (10 is EndTurn/None)
+    pub action_type: usize, // 0-11: which action type (10 is EndTurn/None, 11 is Resign)
     pub source_spatial: Option<usize>, // 0-899: which source tile (if applicable)
     pub target_spatial: Option<usize>, // 0-899: which target tile (if applicable)
     pub target_type: Option<usize>, // 0-191: unified option head
@@ -88,6 +88,7 @@ impl DecomposedMapper {
             MoveType::Research => 8,
             MoveType::Reward => 9,
             MoveType::EndTurn => 10,
+            MoveType::Resign => 11,
         }
     }
 

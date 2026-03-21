@@ -42,7 +42,7 @@ fn main() -> anyhow::Result<()> {
 
     for game_idx in 0..num_games {
         let game_start = Instant::now();
-        let seed = 12345 + game_idx as u64;
+        let seed = (12345 + game_idx as u64) as i64;
 
         // Create game using mapgen (same as self_play)
         let gen_settings = polyfish::mapgen::MapGenSettings {

@@ -212,6 +212,33 @@ pub enum RewardType {
     PopGrowth = 8,
 }
 
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize_repr,
+    Deserialize_repr,
+    Default,
+    strum_macros::EnumIter,
+)]
+#[repr(i8)]
+pub enum RuinsRewardType {
+    #[default]
+    None = 0,
+    Resources = 1,
+    PopGrowth = 2,
+    Explorer = 4,
+    FreeTech = 5,
+    // SuperUnit = 6, // no longer used
+    // Battleship = 7, // no longer used
+    // Seamonster = 8, // no longer used
+    Swordsman = 9,
+    City = 10,
+}
+
 /// Unit types
 #[derive(
     Debug,
@@ -613,6 +640,7 @@ pub enum MoveType {
     Capture = 8,
     Reward = 9,
     EndTurn = 10,
+    Resign = 11,
 }
 
 /// Task types
