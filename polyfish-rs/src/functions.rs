@@ -9,10 +9,14 @@ pub fn is_in_own_territory(state: &GameState, idx: i32, owner: i32) -> bool {
         .get(&idx)
         .map(|t| t.owner == owner)
         .unwrap_or(false);
-    if idx == 147 {
-        println!("    [DEBUG TERRITORY CHECK] Tile 147, Owner={}, QueryOwner={}, Result={}", 
-            state.tiles.get(&idx).map(|t| t.owner).unwrap_or(-1), owner, result);
-    }
+    // if idx == 147 {
+    //     println!(
+    //         "    [DEBUG TERRITORY CHECK] Tile 147, Owner={}, QueryOwner={}, Result={}",
+    //         state.tiles.get(&idx).map(|t| t.owner).unwrap_or(-1),
+    //         owner,
+    //         result
+    //     );
+    // }
     result
 }
 
@@ -144,6 +148,7 @@ pub fn is_resource_visible_to_tribe(
     state: &GameState,
     resource_type: ResourceType,
     tribe_id: PlayerId,
+    idx: Option<i32>,
 ) -> bool {
     use crate::settings::technology::has_technology;
     use crate::types::TechnologyType;
@@ -152,6 +157,16 @@ pub fn is_resource_visible_to_tribe(
         Some(t) => t,
         None => return false,
     };
+
+    // Check FOW: must be explored by current player to see resources
+    if idx.is_some() && !is_tile_explored(state, idx.unwrap(), tribe_id) {
+        return false;
+    }
+
+    // Cannot see the resource if its blocked by a structure
+    if idx.is_some() && get_structure_at(state, idx.unwrap()).is_some() {
+        return false; // strict? should be only ruins but visually its the same thing
+    }
 
     match resource_type {
         // Fruit, Starfish, and Spores are always visible
@@ -179,18 +194,6 @@ pub fn is_resource_visible_to_tribe(
 pub fn get_resource_at(state: &GameState, idx: i32) -> Option<ResourceType> {
     let pov_id = state.settings.current_player_turn_id;
 
-    // Check FOW: must be explored by current player to see resources
-    if !is_tile_explored(state, idx, pov_id) {
-        return None;
-    }
-
-    // Hide resource if there is a Ruin on the tile
-    if let Some(structure) = get_structure_at(state, idx) {
-        if structure.structure_type == StructureType::Ruin {
-            return None;
-        }
-    }
-
     let resource_type = state
         .resources
         .get(&idx)
@@ -198,7 +201,7 @@ pub fn get_resource_at(state: &GameState, idx: i32) -> Option<ResourceType> {
         .map(|r| r.resource_type)?;
 
     // Check tech visibility for current player
-    if is_resource_visible_to_tribe(state, resource_type, pov_id) {
+    if is_resource_visible_to_tribe(state, resource_type, pov_id, Some(idx)) {
         Some(resource_type)
     } else {
         None
@@ -373,9 +376,9 @@ pub fn get_unit_movement(state: &GameState, unit: &UnitState) -> i32 {
         }
     }
 
-    // Poison slows down enemy units.
-    if has_effect(unit, UnitEffect::Poison) {
-        movement /= 2;
+    // Poison slows down enemy units: reduces movement by 1 (but cannot reduce to 0)
+    if has_effect(unit, UnitEffect::Poison) && movement > 0 {
+        movement = (movement - 1).max(1);
     }
     movement
 }
@@ -395,9 +398,6 @@ pub fn get_tech_unit_type(tech: crate::types::TechnologyType) -> Option<UnitType
 /// Get defense bonus multiplier for a unit on its current tile
 pub fn get_defense_bonus(state: &GameState, unit: &UnitState) -> f32 {
     // Poisoned units can now receive defense bonuses (defense is just reduced)
-    /*if has_effect(unit, EffectType::Poison) {
-        return 1.0;
-    }*/
 
     let tribe = match state.tribes.get(&unit.owner) {
         Some(t) => t,
@@ -411,37 +411,43 @@ pub fn get_defense_bonus(state: &GameState, unit: &UnitState) -> f32 {
 
     match tile.terrain_type {
         TerrainType::Water | TerrainType::Ocean => {
-            if crate::settings::technology::has_technology(
-                &tribe.tech_vanilla,
+            let aquatism = crate::settings::technology::resolve_tech_for_tribe(
                 TechnologyType::Aquatism,
-            ) {
+                tribe.tribe_type,
+            );
+            if crate::settings::technology::has_technology(&tribe.tech_vanilla, aquatism) {
                 return 1.5;
             }
         }
         TerrainType::Forest => {
-            if crate::settings::technology::has_technology(
-                &tribe.tech_vanilla,
+            let archery = crate::settings::technology::resolve_tech_for_tribe(
                 TechnologyType::Archery,
-            ) {
+                tribe.tribe_type,
+            );
+            if crate::settings::technology::has_technology(&tribe.tech_vanilla, archery) {
                 return 1.5;
             }
         }
         TerrainType::Mountain => {
-            if crate::settings::technology::has_technology(
-                &tribe.tech_vanilla,
+            let climbing = crate::settings::technology::resolve_tech_for_tribe(
                 TechnologyType::Climbing,
-            ) {
+                tribe.tribe_type,
+            );
+            if crate::settings::technology::has_technology(&tribe.tech_vanilla, climbing) {
                 return 1.5;
             }
         }
         _ => {
-            // City defense
-            if let Some(city) = tribe.cities.iter().find(|c| c.idx == unit.coords.idx) {
-                if has_skill(unit, SkillType::Fortify) {
-                    if city.has_walls() {
-                        return 4.0;
-                    } else {
-                        return 1.5;
+            // City defense: applies to friendly units (owner or ally) with Fortify skill
+            if let Some(city) = get_city_at(state, unit.coords.idx) {
+                // Must be a captured city (owner != 0) and friendly (not an enemy)
+                if city.owner != 0 && !is_enemy(state, unit.owner, city.owner) {
+                    if has_skill(unit, SkillType::Fortify) {
+                        if city.has_walls() {
+                            return 4.0;
+                        } else {
+                            return 1.5;
+                        }
                     }
                 }
             }
@@ -511,6 +517,24 @@ pub fn get_city_production(state: &GameState, city: &CityState) -> i32 {
                     let frozen_count = count_frozen_tiles(state);
                     let income = ((frozen_count / 20) * 2).min(60); // Max level 30 = 60 stars
                     prod += income;
+                }
+                StructureType::Sanctuary => {
+                    // +1 star for every adjacent wild animal in friendly territory
+                    let adj = crate::functions::get_adjacent_indices(state, idx, 1);
+                    for n_idx in adj {
+                        if let Some(res) = state.resources.get(&n_idx) {
+                            if let Some(r) = res {
+                                if r.resource_type == ResourceType::Game {
+                                    // Must be in player's territory
+                                    if let Some(n_tile) = state.tiles.get(&n_idx) {
+                                        if n_tile.owner == city.owner {
+                                            prod += 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -823,8 +847,11 @@ fn is_steppable_for_push(state: &GameState, unit: &UnitState, idx: i32) -> bool 
 
     match tile.terrain_type {
         TerrainType::Water | TerrainType::Ocean => {
+            let has_bridge = get_structure_type_at(state, idx) == Some(StructureType::Bridge);
             if !settings.skills.contains(&SkillType::Float)
                 && !settings.skills.contains(&SkillType::Fly)
+                && !tile.is_algae()
+                && !has_bridge
             {
                 return false;
             }
@@ -990,22 +1017,24 @@ pub fn calculate_combat_preview(
     let attacker = get_unit_at(state, attacker_idx)?;
     let defender = get_enemy_at(state, defender_idx, attacker.owner)?;
 
-    let atk_attack = get_unit_attack(attacker);
+    let atk_atk = get_unit_attack(attacker);
+    let atk_def = get_unit_defense(attacker);
     let atk_health = attacker.health;
-    let atk_max_health = get_unit_max_health(attacker);
+    let atk_max = get_unit_max_health(attacker);
 
-    let def_defense = get_unit_defense(defender);
+    let def_def = get_unit_defense(defender);
     let def_health = defender.health;
-    let def_max_health = get_unit_max_health(defender);
+    let def_max = get_unit_max_health(defender);
     let defense_bonus = get_defense_bonus(state, defender);
 
     let result = crate::actions::units::calculate_combat(
-        atk_attack,
+        atk_atk,
+        atk_def,
         atk_health,
-        atk_max_health,
-        def_defense,
+        atk_max,
+        def_def,
         def_health,
-        def_max_health,
+        def_max,
         defense_bonus,
     );
 

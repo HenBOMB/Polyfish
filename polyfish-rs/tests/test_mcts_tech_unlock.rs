@@ -39,6 +39,7 @@ fn test_mcts_tech_unlock_logic() {
         &game.state,
         ResourceType::Metal,
         player_id,
+        None,
     );
     assert!(
         !metal_visible,

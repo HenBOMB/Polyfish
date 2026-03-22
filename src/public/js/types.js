@@ -92,11 +92,12 @@ const TerrainType = {
     0: "None",
     1: "Water",
     2: "Ocean",
-    3: "Land",
+    3: "Field",
     4: "Mountain",
     5: "Forest",
     6: "Ice",
-    7: "GroundWater",
+    7: "Wetland",
+    8: "Mangrove",
 }
 
 const RewardTypes = {
@@ -229,17 +230,18 @@ const StructureCosts = {
 };
 
 const StructureTypes = {
-    1: "Village", 2: "Ruin", 5: "Farm", 6: "Windmill", 8: "Port",
+    1: "Village", 2: "Ruin", 3: "Road", 5: "Farm", 6: "Windmill", 8: "Port",
     12: "Lumber Hut", 13: "Sawmill", 17: "Temple", 18: "Forest Temple",
     19: "Water Temple", 20: "Mountain Temple", 21: "Mine", 22: "Forge",
     23: "Altar of Peace", 24: "Tower of Wisdom", 25: "Grand Bazaar",
     26: "Emperor's Tomb", 27: "Gate of Power", 28: "Park of Fortune", 29: "Eye of God",
-    33: "Outpost", 37: "Spores", 38: "Swamp", 39: "Mycelium", 40: "Algae",
-    47: "Lighthouse", 48: "Bridge", 50: "Market", 69: "Ice Temple",
-    70: "Embassy", 71: "Road"
+    32: "Sanctuary", 33: "Outpost", 34: "Ice Bank", 35: "Ice Temple",
+    37: "Fungi", 38: "Algae", 39: "Mycelium", 41: "Clathrus", 47: "Lighthouse",
+    48: "Bridge", 50: "Market", 70: "Embassy"
 };
 
 const StructureEmojis = {
+    3: "🛣️",
     5: "🌾",
     6: "🌬️",
     8: "⚓",
@@ -251,11 +253,25 @@ const StructureEmojis = {
     20: "⛰️",
     21: "⛏️",
     22: "⚒️",
+    23: "☮️",
+    24: "🦉",
     25: "🏪",
+    26: "⚰️",
+    27: "⚡",
+    28: "🏆",
+    29: "👁️",
+    32: "⛩️",
     33: "🏰",
+    34: "💰",
+    35: "🧊",
+    37: "🍄",
+    38: "🌿",
+    39: "🧶",
+    41: "🕸️",
+    47: "🗼",
+    48: "🌉",
     50: "💰",
-    69: "🧊",
-    71: "🛣️",
+    70: "🏛️",
 };
 
 const ResourceTypes = {
@@ -384,8 +400,9 @@ const AbilityType = {
     Boost: 14,
     Explode: 15,
     Promote: 16,
-    BreakPeace: 120,
-    EnchantAnimal: 121,
+    BreakIce: 17,
+    BreakPeace: 18,
+    EnchantAnimal: 23,
 };
 
 const AbilityNames = {
@@ -403,8 +420,9 @@ const AbilityNames = {
     14: "Boost",
     15: "Explode",
     16: "Promote",
-    120: "Break Peace",
-    121: "Enchant Animal",
+    17: "Break Ice",
+    18: "Break Peace",
+    23: "Enchant Animal",
 };
 
 const AbilityEmojis = {
@@ -422,8 +440,9 @@ const AbilityEmojis = {
     14: "⚡",
     15: "💥",
     16: "🎖️",
-    120: "💔",
-    121: "🦄",
+    17: "⛏️",
+    18: "💔",
+    23: "🦄",
 };
 
 const AbilityCosts = {
@@ -441,6 +460,7 @@ const AbilityCosts = {
     14: 0, // Boost
     15: 0, // Explode
     16: 0, // Promote
-    120: 0,
-    121: 3, // Enchant Animal (Matches backend 3)
+    17: 0, // Break Ice
+    18: 0, // Break Peace
+    23: 3, // Enchant Animal
 };

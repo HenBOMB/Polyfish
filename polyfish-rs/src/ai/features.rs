@@ -390,6 +390,7 @@ pub fn state_to_tensor(
                         state,
                         resource.resource_type,
                         perspective,
+                        Some(idx),
                     ) {
                         let res_ch = resource_to_channel(resource.resource_type);
                         set_feat(&mut data, res_ch, x, y, 1.0);

@@ -78,9 +78,8 @@ pub fn discover_tiles(
                 // Check if lighthouse
                 if let Some(Some(struct_state)) = state.structures.get(&idx) {
                     if struct_state.structure_type == StructureType::Lighthouse {
-                        let city_to_reward = get_capital_city(state, pov_id)
-                            .map(|c| c.idx)
-                            .or_else(|| {
+                        let city_to_reward =
+                            get_capital_city(state, pov_id).map(|c| c.idx).or_else(|| {
                                 state
                                     .tribes
                                     .get(&pov_id)

@@ -757,12 +757,12 @@ function focusCamera(smooth = false) {
         // Find capital if possible
         let cityToFocus = tribe.cities[0];
         const capital = tribe.cities.find(c => {
-            const tile = GAME_STATE.tiles[c.tileIndex];
+            const tile = GAME_STATE.tiles[c.idx];
             return tile && tile.capitalOf > 0;
         });
         if (capital) cityToFocus = capital;
 
-        const cityTile = GAME_STATE.tiles[cityToFocus.tileIndex];
+        const cityTile = GAME_STATE.tiles[cityToFocus.idx];
         centerOnCoordinates(cityTile.coords.x, cityTile.coords.y, smooth);
     } else {
         centerOnCoordinates(8, 8, smooth);
@@ -853,7 +853,7 @@ function updateSelectionInfo(clickX = null, clickY = null) {
     // Consistently use Current Player's POV for selection info / Tech visibility
     const povId = GAME_STATE.settings.currentPlayerTurnId;
     const povTribe = GAME_STATE.tribes[povId.toString()] || GAME_STATE.tribes[povId];
-    const terrainName = TerrainType[tile.type] || "Unknown";
+    const terrainName = TerrainType[tile.type] || `ID=${tile.type}`;
     const rawResourceName = resource ? ResourceTypes[resource.type] : "";
     const resourceVisible = resource && isResourceVisible(resource.type, povTribe);
     const resourceName = resourceVisible ? rawResourceName : "";
@@ -862,12 +862,12 @@ function updateSelectionInfo(clickX = null, clickY = null) {
 
     if (unit && isUnitMode) {
         const tribeName = TRIBE_ID_2_NAME[unit.tribe.type];
-        const className = UnitTypes[unit.unitType || unit.type] || "Unknown";
+        const className = UnitTypes[unit.unitType || unit.type] || `ID=${unit.type}`;
         title = `${tribeName} ${className}`;
-        subtitle = `Health: ${Math.floor(unit.health / 10)}/${Math.floor(unit.maxHealth / 10)}`;
+        subtitle = `Health: ${unit.health}/${unit.maxHealth}`;
         thumbFile = `units/${tribeName}/default/${tribeName}_default_${className}`;
     } else {
-        const city = Object.values(GAME_STATE.tribes).flatMap(t => t.cities || []).find(c => c.tileIndex === idx);
+        const city = Object.values(GAME_STATE.tribes).flatMap(t => t.cities || []).find(c => (c.idx) === idx);
         if (city) {
             const tribeName = TRIBE_ID_2_NAME[city.tribe?.type || GAME_STATE.tribes[city.owner]?.type];
             title = city.name || (tile.capitalOf > 0 ? "Capital" : "City");
@@ -916,7 +916,7 @@ function updateSelectionInfo(clickX = null, clickY = null) {
         if (harvestMove) {
             const cost = 2; // Default harvest cost
             const resEmoji = ResourceEmojis[resource.type] || "🥝";
-            const resName = ResourceTypes[resource.type] || "Unknown";
+            const resName = ResourceTypes[resource.type] || `ID=${resource.type}`;
             const isDisabled = currentStars < cost;
 
             actionsHtml += `
@@ -936,7 +936,7 @@ function updateSelectionInfo(clickX = null, clickY = null) {
         buildMoves.forEach(bm => {
             const structType = bm.type;
             const emoji = StructureEmojis[structType] || "🏗️";
-            const name = StructureTypes[structType] || "Unknown";
+            const name = StructureTypes[structType] || `ID=${structType}`;
             const cost = StructureCosts[structType] || 5;
             const isDisabled = currentStars < cost;
 
@@ -988,7 +988,7 @@ function updateSelectionInfo(clickX = null, clickY = null) {
         abilityMoves.forEach(am => {
             const abilityType = (am.type && typeof am.type === 'object') ? am.type.Ok : am.type;
             const emoji = AbilityEmojis[abilityType] || "🪄";
-            const name = AbilityNames[abilityType] || "Unknown";
+            const name = AbilityNames[abilityType] || `ID=${abilityType}`;
             const costValue = AbilityCosts[abilityType] || 0;
             const isDisabled = costValue > 0 && currentStars < costValue;
 
@@ -1208,7 +1208,7 @@ function checkRewardPopup() {
         if (rewardMoves[0].target !== undefined) {
             const city = Object.values(GAME_STATE.tribes)
                 .flatMap(t => t.cities)
-                .find(c => c.tileIndex === rewardMoves[0].target);
+                .find(c => (c.idx) === rewardMoves[0].target);
             if (city) cityTitle = `${city.name} level up!`;
         }
 

@@ -51,7 +51,6 @@ mod tiles_list_deserializer {
     }
 }
 
-/// Helper for deserializing a list of tech IDs into Vec<TechnologyState>
 mod tech_list_deserializer {
     use super::TechnologyState;
     use serde::{Deserialize, Deserializer};
@@ -60,12 +59,22 @@ mod tech_list_deserializer {
     where
         D: Deserializer<'de>,
     {
-        let ids: Vec<i32> = Vec::deserialize(deserializer)?;
-        Ok(ids
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum TechEntry {
+            Id(i32),
+            State(TechnologyState),
+        }
+
+        let entries: Vec<TechEntry> = Vec::deserialize(deserializer)?;
+        Ok(entries
             .into_iter()
-            .map(|id| TechnologyState {
-                tech_type: unsafe { std::mem::transmute(id as i8) },
-                discovered: true,
+            .map(|entry| match entry {
+                TechEntry::Id(id) => TechnologyState {
+                    tech_type: unsafe { std::mem::transmute(id as i8) },
+                    discovered: true,
+                },
+                TechEntry::State(s) => s,
             })
             .collect())
     }

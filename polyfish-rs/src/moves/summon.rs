@@ -130,23 +130,23 @@ pub fn generate_summon_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
         // and cannot spawn on occupied tile.
         let count = get_city_unit_count(state, city);
         if count > city.level || is_tile_occupied(state, target_idx) {
-            if tribe.stars >= warrior_settings.cost && target_idx == 163 {
-                println!(
-                    "[DEBUG SUMMON] city 163 blocked: count={}, level={}, occupied={}",
-                    count,
-                    city.level,
-                    is_tile_occupied(state, target_idx)
-                );
-            }
+            // if tribe.stars >= warrior_settings.cost && target_idx == 163 {
+            //     println!(
+            //         "[DEBUG SUMMON] city 163 blocked: count={}, level={}, occupied={}",
+            //         count,
+            //         city.level,
+            //         is_tile_occupied(state, target_idx)
+            //     );
+            // }
             continue;
         }
 
-        if target_idx == 163 {
-            println!(
-                "[DEBUG SUMMON] city 163 OK: count={}, level={}, afford={}",
-                count, city.level, tribe.stars
-            );
-        }
+        // if target_idx == 163 {
+        //     println!(
+        //         "[DEBUG SUMMON] city 163 OK: count={}, level={}, afford={}",
+        //         count, city.level, tribe.stars
+        //     );
+        // }
 
         for &u_type in &spawnables {
             let settings = get_unit_setting(u_type);

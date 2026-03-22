@@ -31,20 +31,20 @@ fn test_load_game_state_from_json() {
             );
 
             // Count units
-            let pov_id = game.current_player_id();
-            if let Some(tribe) = game.state.tribes.get(&pov_id) {
-                println!(
-                    "  Current player {} has {} units",
-                    pov_id,
-                    tribe.units.len()
-                );
-                for unit in &tribe.units {
-                    println!(
-                        "    - Unit {:?} at {} (moved={}, attacked={})",
-                        unit.unit_type, unit.coords.idx, unit.moved, unit.attacked
-                    );
-                }
-            }
+            // let pov_id = game.current_player_id();
+            // if let Some(tribe) = game.state.tribes.get(&pov_id) {
+            //     println!(
+            //         "  Current player {} has {} units",
+            //         pov_id,
+            //         tribe.units.len()
+            //     );
+            //     for unit in &tribe.units {
+            //         println!(
+            //             "    - Unit {:?} at {} (moved={}, attacked={})",
+            //             unit.unit_type, unit.coords.idx, unit.moved, unit.attacked
+            //         );
+            //     }
+            // }
 
             // Try generating legal moves
             let moves = game.legal_moves();

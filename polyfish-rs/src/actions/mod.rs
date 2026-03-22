@@ -601,6 +601,66 @@ pub fn process_start_turn_effects(state: &mut GameState, player_id: PlayerId) ->
         // TODO: Polaris disabled
     }
 
+    // Sanctuary Animal Spawning Logic
+    let mut spawns = Vec::new();
+    for (&idx, structure_opt) in state.structures.iter() {
+        if let Some(structure) = structure_opt {
+            if structure.structure_type == StructureType::Sanctuary {
+                if let Some(tile) = state.tiles.get(&idx) {
+                    if tile.owner == player_id {
+                        let age = state.settings.turn - structure.founded;
+                        // Spawns every 3 turns (turns 3, 6, 9... after building)
+                        if age > 0 && age % 3 == 0 {
+                            // Find empty adjacent forests
+                            let adj = get_adjacent_indices(state, idx, 1);
+                            let mut forest_candidates = Vec::new();
+                            for a_idx in adj {
+                                if let Some(a_tile) = state.tiles.get(&a_idx) {
+                                    if a_tile.terrain_type == TerrainType::Forest {
+                                        let has_resource = state
+                                            .resources
+                                            .get(&a_idx)
+                                            .and_then(|r| r.as_ref())
+                                            .is_some();
+                                        // Empty forest: No resource and no structure
+                                        if !has_resource
+                                            && crate::functions::get_structure_at(state, a_idx)
+                                                .is_none()
+                                        {
+                                            forest_candidates.push(a_idx);
+                                        }
+                                    }
+                                }
+                            }
+                            if !forest_candidates.is_empty() {
+                                // Select one at random using state seed for determinism
+                                use rand::SeedableRng;
+                                use rand::seq::SliceRandom;
+                                let mut rng = rand::rngs::StdRng::seed_from_u64(
+                                    (state.initial_seed as u64)
+                                        ^ (state.settings.turn as u64)
+                                        ^ (idx as u64),
+                                );
+                                if let Some(&spawn_idx) = forest_candidates.choose(&mut rng) {
+                                    spawns.push(spawn_idx);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Apply spawning
+    for spawn_idx in spawns {
+        undos.push(crate::actions::resource::create_resource(
+            state,
+            spawn_idx,
+            ResourceType::Game,
+        ));
+    }
+
     chain_undos(undos)
 }
 
@@ -639,12 +699,6 @@ pub fn process_end_turn_effects(state: &mut GameState, _player_id: PlayerId) -> 
                             {
                                 undos.push(crate::actions::units::heal_unit(
                                     state, unit_owner, unit_pos, 4,
-                                ));
-                                undos.push(try_remove_effect(
-                                    state,
-                                    unit_owner,
-                                    unit_pos,
-                                    UnitEffect::Poison,
                                 ));
                             }
                         }
@@ -687,11 +741,7 @@ pub fn process_end_turn_effects(state: &mut GameState, _player_id: PlayerId) -> 
             if leveled_up {
                 // Add population to city
                 if let Some(city) = crate::functions::get_city_owning_tile(state, f_idx) {
-                    undos.push(crate::actions::city::add_population(
-                        state,
-                        city.idx,
-                        1,
-                    ));
+                    undos.push(crate::actions::city::add_population(state, city.idx, 1));
                 }
             }
         }

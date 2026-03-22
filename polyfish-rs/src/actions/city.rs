@@ -127,9 +127,9 @@ pub fn claim_territory(
     for &idx in &tiles_to_claim {
         if let Some(tile) = state.tiles.get_mut(&idx) {
             old_owners.push((idx, tile.owner, tile.ruling_city_coords.clone()));
-            if idx == 147 {
-                println!("    [DEBUG TERRITORY] Tile 147 being claimed! City: {}, Old Owner: {}, New Owner: {}", city_tile_idx, tile.owner, pov_id);
-            }
+            // if idx == 147 {
+            //     println!("    [DEBUG TERRITORY] Tile 147 being claimed! City: {}, Old Owner: {}, New Owner: {}", city_tile_idx, tile.owner, pov_id);
+            // }
             tile.owner = pov_id;
             tile.ruling_city_coords = Some(city_coords.clone());
         }

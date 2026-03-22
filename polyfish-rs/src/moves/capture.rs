@@ -14,6 +14,8 @@ pub struct CaptureMove {
     pub src_index: i32,
     /// Optional reward hint (for replays)
     pub reward: Option<crate::types::RuinsRewardType>,
+    /// Optional explorer deterministic path (for replays)
+    pub revealed_tiles: Option<Vec<i32>>,
 }
 
 impl CaptureMove {
@@ -21,6 +23,7 @@ impl CaptureMove {
         Self {
             src_index,
             reward: None,
+            revealed_tiles: None,
         }
     }
 
@@ -28,6 +31,7 @@ impl CaptureMove {
         Self {
             src_index,
             reward: Some(reward),
+            revealed_tiles: None,
         }
     }
 }
@@ -82,6 +86,7 @@ impl Move for CaptureMove {
                     state,
                     self.src_index,
                     self.reward,
+                    self.revealed_tiles.clone(),
                 ));
             }
             _ => {

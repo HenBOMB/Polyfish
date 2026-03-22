@@ -96,7 +96,7 @@ fn penalty_partial_cities(tribe: &crate::states::TribeState, mode: ModeType) -> 
     }
 
     match mode {
-        ModeType::Perfection => {
+        ModeType::Perfection | ModeType::Glory => {
             // In Perfection, reward population progress (negative penalty = bonus)
             let mut total_bonus = 0.0;
             for city in &tribe.cities {
@@ -110,7 +110,7 @@ fn penalty_partial_cities(tribe: &crate::states::TribeState, mode: ModeType) -> 
             // Return negative (acts as bonus when subtracted)
             -(total_bonus.min(0.10))
         }
-        ModeType::Domination => {
+        ModeType::Domination | ModeType::Might => {
             // In Domination, penalize stuck population
             let mut total_penalty = 0.0;
             for city in &tribe.cities {
@@ -122,12 +122,8 @@ fn penalty_partial_cities(tribe: &crate::states::TribeState, mode: ModeType) -> 
             }
             total_penalty.min(0.15)
         }
-        ModeType::Glory
-        | ModeType::Custom
-        | ModeType::Might
-        | ModeType::Sandbox
-        | ModeType::Tutorial
-        | ModeType::None => {
+
+        ModeType::Custom | ModeType::Sandbox | ModeType::Tutorial | ModeType::None => {
             todo!(
                 "penalty_partial_cities not implemented for Glory/Custom/Might/Sandbox/Diplomacy/Tutorial mode"
             );
@@ -220,7 +216,8 @@ fn penalty_unused_tech(state: &GameState, tribe: &crate::states::TribeState) -> 
         // Does the terrain even exist in our territory?
         let has_any_terrain = tribe.cities.iter().any(|city| {
             city._territory.iter().any(|&idx| {
-                state.tiles
+                state
+                    .tiles
                     .get(&idx)
                     .map_or(false, |t| terrains.contains(&t.terrain_type))
             })
@@ -263,7 +260,8 @@ fn penalty_unused_tech(state: &GameState, tribe: &crate::states::TribeState) -> 
 
         let has_terrain = tribe.cities.iter().any(|city| {
             city._territory.iter().any(|&idx| {
-                state.tiles
+                state
+                    .tiles
                     .get(&idx)
                     .map_or(false, |t| terrains.contains(&t.terrain_type))
             })

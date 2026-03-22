@@ -182,12 +182,12 @@ impl DecomposedMapper {
             return None;
         }
         UNIT_MAP.get(&u).map(|&i| {
-            if i >= MAX_UNITS {
-                eprintln!(
-                    "[Mapper Warning] Unit {:?} index {} exceeds MAX_UNITS {}",
-                    u, i, MAX_UNITS
-                );
-            }
+            // if i >= MAX_UNITS {
+            //     eprintln!(
+            //         "[Mapper Warning] Unit {:?} index {} exceeds MAX_UNITS {}",
+            //         u, i, MAX_UNITS
+            //     );
+            // }
             OFFSET_UNITS + i
         })
     }

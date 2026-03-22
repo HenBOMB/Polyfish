@@ -234,6 +234,12 @@ fn has_port(state: &GameState, idx: i32) -> bool {
 
 fn has_road(state: &GameState, idx: i32) -> bool {
     state.tiles.get(&idx).map(|t| t.has_road).unwrap_or(false)
+        || state
+            .structures
+            .get(&idx)
+            .and_then(|s| s.as_ref())
+            .map(|s| s.structure_type == StructureType::Bridge)
+            .unwrap_or(false)
 }
 
 fn has_mycelium(state: &GameState, idx: i32) -> bool {

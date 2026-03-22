@@ -61,14 +61,14 @@ function getCityProduction(state, city) {
     if (!city) return 0;
 
     // If city is on riot or the tile is occupied by an enemy then production is nullified
-    if (city._riot || getEnemyAt(state, city.tileIndex, city.owner)) {
+    if (city._riot || getEnemyAt(state, city.idx, city.owner)) {
         return 0;
     }
 
     let prod = city.level || 0;
 
     // Capitals get a +1 star bonus
-    const centerTile = state.tiles[city.tileIndex];
+    const centerTile = state.tiles[city.idx];
     if (centerTile && centerTile.capitalOf === city.owner && centerTile.capitalOf !== 0) {
         prod += 1;
     }

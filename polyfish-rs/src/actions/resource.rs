@@ -37,7 +37,7 @@ pub fn consume_resource(
         if rt == ResourceType::None {
             state.resources.shift_remove(&tile_idx);
         } else {
-            if let Some(Some(res)) = state.resources.get_mut(&tile_idx) {
+            if let Some(res) = state.resources.get_mut(&tile_idx).and_then(|r| r.as_mut()) {
                 res.resource_type = rt;
             }
         }
@@ -49,6 +49,15 @@ pub fn consume_resource(
         // Restore old resource
         s.resources.insert(tile_idx, old_resource);
     })
+}
+
+/// Create a resource at a tile
+pub fn create_resource(
+    state: &mut GameState,
+    tile_idx: i32,
+    resource_type: ResourceType,
+) -> UndoCallback {
+    consume_resource(state, tile_idx, Some(resource_type))
 }
 
 /// Harvest a resource

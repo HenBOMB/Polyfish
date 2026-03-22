@@ -13,9 +13,10 @@ use crate::types::{MoveType, RewardType};
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RewardMove {
-    /// City tile index
     pub target_index: i32,
     pub reward: RewardType,
+    /// Optional explorer deterministic path (for replays)
+    pub revealed_tiles: Option<Vec<i32>>,
 }
 
 impl RewardMove {
@@ -23,6 +24,7 @@ impl RewardMove {
         Self {
             target_index,
             reward,
+            revealed_tiles: None,
         }
     }
 }
@@ -89,8 +91,13 @@ impl Move for RewardMove {
                             ._messages
                             .push(format!("City reward: Explorer dispatched! 🧭"));
                     }
-                    let (_, predicted) = predict_explorer(state, target);
-                    undos.push(discover_tiles(state, p_id, None, Some(predicted)));
+                    let revealed = if let Some(tiles) = self.revealed_tiles.clone() {
+                        tiles
+                    } else {
+                        let (_, r) = predict_explorer(state, target);
+                        r
+                    };
+                    undos.push(discover_tiles(state, p_id, None, Some(revealed)));
                 }
                 RewardType::CityWall => {
                     if state.settings._verbose {

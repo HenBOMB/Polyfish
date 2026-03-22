@@ -120,6 +120,26 @@ pub fn remove_unit(
     if let Some(tribe) = state.tribes.get_mut(&unit_owner) {
         if unit_idx < tribe.units.len() {
             tribe.units.remove(unit_idx);
+
+            // PATCH: All subsequent units in the vector have shifted!
+            // We MUST update all parent_unit_idx and child_unit_idx links in the entire tribe
+            // otherwise Centipede chains will shatter or point to wrong units.
+            for u in &mut tribe.units {
+                if let Some(p_idx) = u.parent_unit_idx {
+                    if p_idx == unit_idx {
+                        u.parent_unit_idx = None;
+                    } else if p_idx > unit_idx {
+                        u.parent_unit_idx = Some(p_idx - 1);
+                    }
+                }
+                if let Some(c_idx) = u.child_unit_idx {
+                    if c_idx == unit_idx {
+                        u.child_unit_idx = None;
+                    } else if c_idx > unit_idx {
+                        u.child_unit_idx = Some(c_idx - 1);
+                    }
+                }
+            }
         }
         if !removed_unit.converted {
             tribe.score -= score_deduction;
@@ -155,6 +175,27 @@ pub fn remove_unit(
             }
             tribe.casualties -= 1;
             tribe.units.insert(unit_idx, removed_unit.clone());
+
+            // PATCH: Re-patch everyone because the insert shifted them back!
+            // Since we inserted at unit_idx, all p_idx / c_idx that were >= unit_idx
+            // (but not the one we just restored) must be incremented.
+            // Wait! removed_unit.clone() already has its original indices.
+            // But we need to update OTHER units.
+            for (i, u) in tribe.units.iter_mut().enumerate() {
+                if i == unit_idx {
+                    continue; // Skip the one we just restored
+                }
+                if let Some(p_idx) = u.parent_unit_idx {
+                    if p_idx >= unit_idx {
+                        u.parent_unit_idx = Some(p_idx + 1);
+                    }
+                }
+                if let Some(c_idx) = u.child_unit_idx {
+                    if c_idx >= unit_idx {
+                        u.child_unit_idx = Some(c_idx + 1);
+                    }
+                }
+            }
         }
 
         // Restore tile unit owner
@@ -521,6 +562,14 @@ pub fn step_unit(
             }
         }
     }
+    let has_dash = crate::functions::has_skill(
+        {
+            let tribe = state.tribes.get(&unit_owner).unwrap();
+            tribe.units.get(unit_idx).unwrap()
+        },
+        SkillType::Dash,
+    );
+    
     // Dash logic (must be before ending turn/attacked status update if we want to allow move-then-attack)
     // Wait, the logic for dash is usually: if unit has dash, it doesn't lose 'attacked' status when moving?
     // Or it resets it?
@@ -529,14 +578,7 @@ pub fn step_unit(
     if !involuntary
         && !old_moved
         && !old_attacked  // prevent Dash after Escape (which resets moved but not attacked)
-        && crate::functions::has_skill(
-            {
-                let tribe = state.tribes.get(&unit_owner).unwrap();
-                tribe.units.get(unit_idx).unwrap()
-            },
-            SkillType::Dash,
-        )
-        && has_enemies_in_range(state, unit_owner, to_tile_idx, 1)
+        && has_dash
     {
         // Dash allows attacking after moving
         // Prohibited for Skate units on land
@@ -556,6 +598,7 @@ pub fn step_unit(
             if let Some(tribe) = state.tribes.get_mut(&unit_owner) {
                 if let Some(unit) = tribe.units.get_mut(unit_idx) {
                     unit.attacked = false;
+                    // println!("DEBUG STEP: Dash triggered! Unit {} attacked set to false", unit.coords.idx);
                 }
             }
         }
@@ -611,6 +654,7 @@ pub fn step_unit(
 /// Calculate combat damage between attacker and defender
 pub fn calculate_combat(
     attacker_attack: f32,
+    _attacker_defense: f32, // No longer used in standard formula
     attacker_health: i32,
     attacker_max_health: i32,
     defender_defense: f32,
@@ -619,38 +663,38 @@ pub fn calculate_combat(
     defense_bonus: f32,
 ) -> CombatResult {
     // Polytopia official damage formula:
-    // damage = (attack_force / (attack_force + defense_force)) * attacker_attack * 4.5
-    // attack_force = attacker_attack * (attacker_health / attacker_max_health)
-    // defense_force = (defender_defense * defense_bonus) * (defender_health / defender_max_health)
+    // attackForce = attacker.attack * (attacker.health / attacker.maxHealth)
+    // defenseForce = defender.defense * (defender.health / defender.maxHealth) * defenseBonus
+    // totalDamage = attackForce + defenseForce
+    // attackResult = round((attackForce / totalDamage) * attacker.attack * 4.5)
+    // defenseResult = round((defenseForce / totalDamage) * defender.defense * 4.5)
 
-    let attack_force = attacker_attack * (attacker_health as f32 / attacker_max_health as f32);
-    let defense_force =
-        (defender_defense * defense_bonus) * (defender_health as f32 / defender_max_health as f32);
+    let attack_force =
+        (attacker_attack as f64) * (attacker_health as f64 / attacker_max_health as f64);
+    let defense_force = (defender_defense as f64 * defense_bonus as f64)
+        * (defender_health as f64 / defender_max_health as f64);
 
-    let total_force = attack_force + defense_force;
-    let attack_result = (attack_force / total_force * attacker_attack * 4.5).round();
-
-    // Retaliation damage (if defender survives)
-    let new_defender_health = defender_health as f32 - attack_result;
-    let defense_damage = if new_defender_health > 0.0 {
-        let ret_force =
-            (defender_defense * defense_bonus) * (new_defender_health / defender_max_health as f32);
-        // Attacker's force for retaliation calculation also depends on its health
-        let atk_force_ret = attacker_attack * (attacker_health as f32 / attacker_max_health as f32);
-        let ret_total = atk_force_ret + ret_force;
-        (ret_force / ret_total * (defender_defense * defense_bonus) * 4.5).round()
+    let total_damage = attack_force + defense_force;
+    let attack_result = if total_damage > 0.0 {
+        ((attack_force / total_damage) * (attacker_attack as f64) * 4.5).round()
     } else {
         0.0
     };
 
-    println!("[COMBAT] A:{} H:{}/{} vs D:{} B:{} H:{}/{} -> AF:{}, DF:{}, DMG:{}, RET:{}", 
-        attacker_attack, attacker_health, attacker_max_health, 
-        defender_defense, defense_bonus, defender_health, defender_max_health,
-        attack_force, defense_force, attack_result, defense_damage);
+    // Retaliation damage (if defender survives)
+    let defense_damage = if defender_health as f64 - attack_result > 0.0 {
+        if total_damage > 0.0 {
+            ((defense_force / total_damage) * (defender_defense as f64) * 4.5).round()
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
 
     CombatResult {
-        attack_damage: attack_result,
-        defense_damage,
+        attack_damage: attack_result as f32,
+        defense_damage: defense_damage as f32,
         splash_damage: 0.0,
     }
 }
@@ -673,11 +717,12 @@ pub fn attack_unit(
     let mut undos: Vec<UndoCallback> = Vec::new();
 
     // Get attacker stats
-    let (atk_atk, atk_health, atk_max_health, atk_skills, atk_type, atk_coords) = {
+    let (atk_atk, atk_def, atk_health, atk_max_health, atk_skills, atk_type, atk_coords) = {
         let tribe = state.tribes.get(&attacker_owner).unwrap();
         let unit = tribe.units.get(attacker_idx).unwrap();
         (
             get_unit_attack(unit),
+            get_unit_defense(unit),
             unit.health,
             get_unit_max_health(unit),
             get_unit_setting(unit.unit_type).skills.clone(),
@@ -816,7 +861,7 @@ pub fn attack_unit(
 
     let defender_idx = defender_idx.unwrap(); // fast fail if logic error
 
-    let (def_def, def_health, def_max_health, defense_bonus, def_coords) = {
+    let (def_def, def_health, def_max_health, defense_bonus, def_coords, def_type) = {
         let tribe = state.tribes.get(&defender_owner).unwrap();
         let unit = tribe.units.get(defender_idx).unwrap();
         (
@@ -825,12 +870,14 @@ pub fn attack_unit(
             get_unit_max_health(unit),
             get_defense_bonus(state, unit),
             unit.coords.idx,
+            unit.unit_type,
         )
     };
 
     // Calculate combat result
     let result = calculate_combat(
         atk_atk,
+        atk_def,
         atk_health,
         atk_max_health,
         def_def,
@@ -839,8 +886,34 @@ pub fn attack_unit(
         defense_bonus,
     );
 
+    let mut def_damage = result.attack_damage as i32;
+    let ret_damage = result.defense_damage as i32;
+
+    // Fixed stomp damage
+    if atk_skills.contains(&SkillType::Stomp) {
+        def_damage = 5;
+    }
+
+    if state.settings._verbose {
+        println!(
+            "    [DEBUG COMBAT] {:?} ({}) at {} (HP {}) vs {:?} ({}) at {} (HP {}): Dmg={}, Ret={}, Bonus={:.1}",
+            atk_type,
+            attacker_owner,
+            atk_coords,
+            atk_health,
+            def_type,
+            defender_owner,
+            def_coords,
+            def_health,
+            def_damage,
+            ret_damage,
+            defense_bonus
+        );
+    }
+
     // Apply damage to defender
     let def_damage = result.attack_damage as i32;
+
     if let Some(tribe) = state.tribes.get_mut(&defender_owner) {
         if let Some(unit) = tribe.units.get_mut(defender_idx) {
             unit.health -= def_damage;
@@ -869,82 +942,103 @@ pub fn attack_unit(
 
     // Apply splash damage to adjacent enemies if attacker has Splash skill
     if atk_skills.contains(&SkillType::Splash) {
-        let splash_damage = def_damage / 2; // 50% of primary damage, rounded down
         let adjacent_tiles = crate::functions::get_adjacent_indices(state, def_coords, 1);
-        let mut splash_targets = Vec::new();
 
-        // 1. Identification Phase
         for adj_idx in adjacent_tiles {
+            // Find enemy at this tile
             if let Some(adj_enemy) = crate::functions::get_enemy_at(state, adj_idx, attacker_owner)
             {
                 let adj_owner = adj_enemy.owner;
-                if let Some(adj_tribe) = state.tribes.get(&adj_owner) {
-                    if let Some((adj_unit_idx, _)) = adj_tribe
-                        .units
-                        .iter()
-                        .enumerate()
-                        .find(|(_, u)| u.coords.idx == adj_idx)
-                    {
-                        splash_targets.push((adj_owner, adj_unit_idx));
-                    }
-                }
-            }
-        }
+                let mut unit_died = false;
 
-        // 2. Application Phase
-        for (adj_owner, adj_unit_idx) in splash_targets {
-            let mut unit_died = false;
-            // Apply Damage
-            if let Some(tribe) = state.tribes.get_mut(&adj_owner) {
-                if let Some(unit) = tribe.units.get_mut(adj_unit_idx) {
-                    unit.health -= splash_damage;
-                    if unit.health <= 0 {
-                        unit_died = true;
-                    }
+                // Re-find the unit's current array index since indices shift on removal
+                let current_adj_unit_idx = state
+                    .tribes
+                    .get(&adj_owner)
+                    .and_then(|t| t.units.iter().position(|u| u.coords.idx == adj_idx));
 
-                    // Undo for this splash damage
-                    undos.push(Box::new(move |s| {
-                        if let Some(t) = s.tribes.get_mut(&adj_owner) {
-                            if let Some(u) = t.units.get_mut(adj_unit_idx) {
-                                u.health += splash_damage;
+                if let Some(adj_unit_idx) = current_adj_unit_idx {
+                    // Splash damage is exactly 50% of the damage dealt to the PRIMARY target.
+                    // (Official Polytopia allows this to result in x.5 decimals for health, but since health is i32 here, we round)
+                    let splash_damage = (result.attack_damage * 0.5).round() as i32;
+
+                    // Apply Damage
+                    if let Some(tribe) = state.tribes.get_mut(&adj_owner) {
+                        if let Some(unit) = tribe.units.get_mut(adj_unit_idx) {
+                            unit.health -= splash_damage;
+                            if unit.health <= 0 {
+                                unit_died = true;
                             }
+
+                            // Undo for this splash damage
+                            undos.push(Box::new(move |s| {
+                                if let Some(t) = s.tribes.get_mut(&adj_owner) {
+                                    if let Some(u) =
+                                        t.units.iter_mut().find(|u| u.coords.idx == adj_idx)
+                                    {
+                                        u.health += splash_damage;
+                                    }
+                                }
+                            }));
                         }
-                    }));
+                    }
+
+                    // Apply Poison (if attacker has it)
+                    if atk_skills.contains(&SkillType::Poison) {
+                        undos.push(crate::actions::try_add_effect(
+                            state,
+                            adj_owner,
+                            adj_unit_idx,
+                            UnitEffect::Poison,
+                        ));
+                    }
+
+                    // Check if splashed unit died
+                    if unit_died {
+                        // RE-FIND AGAIN because try_add_effect or other logic might have triggered a removal (rare but safe)
+                        let final_adj_unit_idx = state
+                            .tribes
+                            .get(&adj_owner)
+                            .and_then(|t| t.units.iter().position(|u| u.coords.idx == adj_idx));
+
+                        if let Some(u_idx) = final_adj_unit_idx {
+                            undos.push(remove_unit(
+                                state,
+                                adj_owner,
+                                u_idx,
+                                Some(attacker_owner),
+                                Some(attacker_idx),
+                            ));
+                        }
+                    }
                 }
-            }
-
-            // Apply Poison (if attacker has it)
-            if atk_skills.contains(&SkillType::Poison) {
-                undos.push(crate::actions::try_add_effect(
-                    state,
-                    adj_owner,
-                    adj_unit_idx,
-                    UnitEffect::Poison,
-                ));
-            }
-
-            // Check if splashed unit died
-            if unit_died {
-                undos.push(remove_unit(
-                    state,
-                    adj_owner,
-                    adj_unit_idx,
-                    Some(attacker_owner),
-                    Some(attacker_idx),
-                ));
             }
         }
     }
 
-    // Check if defender died
+    // Check if defender died (must re-find because indices shift if splash damage removed OTHER units of the same tribe!)
     let defender_health_after = {
         state
             .tribes
             .get(&defender_owner)
-            .and_then(|t| t.units.get(defender_idx))
+            .and_then(|t| t.units.iter().find(|u| u.coords.idx == def_coords))
             .map(|u| u.health)
             .unwrap_or(0)
     };
+
+    // Refresh BOTH attacker and defender indices for subsequent parts of this function
+    // (Indices might have shifted if splash damage removed ANY unit in their respective tribes)
+    let defender_idx = state
+        .tribes
+        .get(&defender_owner)
+        .and_then(|t| t.units.iter().position(|u| u.coords.idx == def_coords))
+        .unwrap_or(defender_idx);
+
+    let attacker_idx = state
+        .tribes
+        .get(&attacker_owner)
+        .and_then(|t| t.units.iter().position(|u| u.coords.idx == atk_coords))
+        .unwrap_or(attacker_idx);
 
     if defender_health_after <= 0 {
         // Remove defender
@@ -955,6 +1049,13 @@ pub fn attack_unit(
             Some(attacker_owner),
             Some(attacker_idx),
         ));
+
+        // After primary defender removal, refresh attacker_idx again just in case
+        let attacker_idx = state
+            .tribes
+            .get(&attacker_owner)
+            .and_then(|t| t.units.iter().position(|u| u.coords.idx == atk_coords))
+            .unwrap_or(attacker_idx);
 
         // Eat: Spawn segment when Centipede kills via attack (not retaliation)
         if atk_skills.contains(&SkillType::Eat) {
@@ -997,23 +1098,31 @@ pub fn attack_unit(
                             segment.parent_unit_idx = Some(attacker_idx);
                             segment.child_unit_idx = old_child_idx_value;
                         }
-                    }
-
-                    // Update parent-child chain
-                    if let Some(tribe) = state.tribes.get_mut(&attacker_owner) {
-                        let old_child_idx_value =
-                            tribe.units.get(attacker_idx).and_then(|u| u.child_unit_idx);
 
                         // Update old child's parent if exists
                         if let Some(old_child_idx) = old_child_idx_value {
                             if let Some(old_child) = tribe.units.get_mut(old_child_idx) {
                                 old_child.parent_unit_idx = Some(new_segment_idx);
+                                undos.push(Box::new(move |s| {
+                                    if let Some(t) = s.tribes.get_mut(&attacker_owner) {
+                                        if let Some(u) = t.units.get_mut(old_child_idx) {
+                                            u.parent_unit_idx = Some(attacker_idx);
+                                        }
+                                    }
+                                }));
                             }
                         }
 
                         // Set attacker's child to new segment
                         if let Some(attacker) = tribe.units.get_mut(attacker_idx) {
                             attacker.child_unit_idx = Some(new_segment_idx);
+                            undos.push(Box::new(move |s| {
+                                if let Some(t) = s.tribes.get_mut(&attacker_owner) {
+                                    if let Some(u) = t.units.get_mut(attacker_idx) {
+                                        u.child_unit_idx = old_child_idx_value;
+                                    }
+                                }
+                            }));
                         }
                     }
                 }
@@ -1178,19 +1287,24 @@ pub fn heal_unit(
     unit_idx: usize,
     amount: i32,
 ) -> UndoCallback {
-    let old_health = {
+    let (old_health, old_poisoned) = {
         state
             .tribes
             .get(&unit_owner)
             .and_then(|t| t.units.get(unit_idx))
-            .map(|u| u.health)
-            .unwrap_or(0)
+            .map(|u| (u.health, u.effects.contains(&UnitEffect::Poison)))
+            .unwrap_or((0, false))
     };
 
     if let Some(tribe) = state.tribes.get_mut(&unit_owner) {
         if let Some(unit) = tribe.units.get_mut(unit_idx) {
-            let max_hp = get_unit_max_health(unit);
-            unit.health = (unit.health + amount).min(max_hp);
+            if unit.effects.contains(&UnitEffect::Poison) {
+                // If poisoned, healing only removes poison and gives no health back
+                unit.effects.remove(&UnitEffect::Poison);
+            } else {
+                let max_hp = get_unit_max_health(unit);
+                unit.health = (unit.health + amount).min(max_hp);
+            }
         }
     }
 
@@ -1198,6 +1312,11 @@ pub fn heal_unit(
         if let Some(tribe) = s.tribes.get_mut(&unit_owner) {
             if let Some(unit) = tribe.units.get_mut(unit_idx) {
                 unit.health = old_health;
+                if old_poisoned {
+                    unit.effects.insert(UnitEffect::Poison);
+                } else {
+                    unit.effects.remove(&UnitEffect::Poison);
+                }
             }
         }
     })

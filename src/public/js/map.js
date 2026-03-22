@@ -71,7 +71,7 @@ class MapRenderer {
                     unitsByCityId[cityId]++;
                 }
             });
-            (tribe.cities || []).forEach(c => citiesByIndex[c.tileIndex] = { ...c, tribe });
+            (tribe.cities || []).forEach(c => citiesByIndex[c.idx] = { ...c, tribe });
         });
 
         const allTiles = Object.values(state.tiles).sort((a, b) => a.coords.idx - b.coords.idx);
@@ -102,7 +102,7 @@ class MapRenderer {
             if (tile.owner <= 0) return; // Neutral land has no borders
 
             // FOW Check
-            const isExplored = !ENABLE_FOW || (tile.explorers && tile.explorers.includes(this.currentPovId));
+            const isExplored = !ENABLE_FOW || (tile.explorers && tile.explorers.map(Number).includes(Number(this.currentPovId)));
             if (!isExplored) return;
 
             const { x, y } = tile.coords;
@@ -179,7 +179,7 @@ class MapRenderer {
         // FOW Logic
         let isExplored = true;
         if (ENABLE_FOW) {
-            if (tile.explorers && !tile.explorers.includes(currentTribeId)) isExplored = false;
+            if (tile.explorers && !tile.explorers.map(Number).includes(Number(currentTribeId))) isExplored = false;
         }
 
         if (!isExplored) {
@@ -313,7 +313,7 @@ class MapRenderer {
                 if (this.selectedIdx === idx) classes.push('selected-unit-highlight');
 
                 const unitEl = this.updateLayer(idx, 'unit', `units/${tribeName}/default/${tribeName}_default_${className}`, pos, 5000, classes);
-                unitEl.innerHTML = `<div class="health">${Math.floor(unit.health / 10)}</div>`;
+                unitEl.innerHTML = `<div class="health">${Math.floor(unit.health)}</div>`;
             }
         } else {
             this.removeLayer(idx, 'unit');
@@ -373,7 +373,7 @@ class MapRenderer {
     isTileVisible(idx) {
         if (!ENABLE_FOW) return true;
         const currentPov = (this.currentPovId !== undefined && this.currentPovId !== null) ? this.currentPovId : (GAME_STATE.settings?.currentPlayerTurnId ?? 1);
-        return GAME_STATE.tiles[idx].explorers && GAME_STATE.tiles[idx].explorers.includes(currentPov);
+        return GAME_STATE.tiles[idx].explorers && GAME_STATE.tiles[idx].explorers.map(Number).includes(Number(currentPov));
     }
 
     removeLayer(idx, layerName) {
@@ -390,7 +390,7 @@ class MapRenderer {
         if (ENABLE_FOW) {
             const tile = GAME_STATE.tiles[idx];
             const currentTribeId = this.currentPovId;
-            const isExplored = tile && tile.explorers && tile.explorers.includes(currentTribeId);
+            const isExplored = tile && tile.explorers && tile.explorers.map(Number).includes(Number(currentTribeId));
 
             if (!isExplored) {
                 this.selectedIdx = null;
@@ -476,9 +476,11 @@ class MapRenderer {
             const isCity = tile.owner > 0 && struct && StructureTypes[struct.type] === 'Village';
             const tribe = TRIBE_ID_2_NAME[GAME_STATE.tribes[tile.owner]?.type];
 
+            console.log(unit);
+
             let html = `<strong>Tile ${idx} (${tile.coords.x}, ${tile.coords.y})</strong><br>`;
             html += `⛰️ ${CLIMATE_IDS[tile.climate]} ${TerrainType[tile.type] || tile.type}<br>`;
-            if (unit) html += `🪖 ${TRIBE_ID_2_NAME[unit.tribe.type]} ${ClassNameToId[unit.type || unit.unitType]} (${Math.floor(unit.health / 10)}/${Math.floor(unit.maxHealth / 10)})<br>`;
+            if (unit) html += `🪖 ${TRIBE_ID_2_NAME[unit.tribe.type]} ${ClassNameToId[unit.type || unit.unitType]} (${Math.floor(unit.health)}/${Math.floor(unit.maxHealth)})<br>`;
             if (struct) html += `🗼 ${tile.capitalOf > 0 ? `${tribe} Capital` : isCity ? 'City' : StructureTypes[struct.type] || struct.type}<br>`;
             const povTribe = GAME_STATE.tribes[this.currentPovId];
             if (resource && isResourceVisible(resource.type, povTribe)) {
@@ -654,9 +656,8 @@ class MapRenderer {
                 previewEl.classList.add('combat-risky');
             }
 
-            // Show damage numbers (Backend sends them in 10x scale, e.g. 45 for 4.5 hearts)
-            const dmgDef = (preview.damageToDefender / 10).toFixed(1);
-            const dmgAtk = (preview.damageToAttacker / 10).toFixed(1);
+            const dmgDef = (preview.damageToDefender).toFixed(1);
+            const dmgAtk = (preview.damageToAttacker).toFixed(1);
 
             previewEl.innerHTML = `⚔️ ${dmgDef} / -${dmgAtk}`;
             previewEl.style.left = `${pos.x}px`;
@@ -973,7 +974,7 @@ class MapRenderer {
                 overlay.classList.add('tile', 'analysis-overlay', 'expansion-overlay');
 
                 // Opacity based on value (clamped 0.2 to 0.7)
-                const opacity = Math.min(0.7, Math.max(0.2, value / 10.0)).toFixed(2);
+                const opacity = Math.min(0.7, Math.max(0.2, value)).toFixed(2);
                 overlay.style.setProperty('--opacity', opacity);
                 overlay.style.backgroundColor = `rgba(138, 43, 226, ${opacity})`; // Violet
 

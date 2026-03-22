@@ -51,7 +51,10 @@ pub fn create_structure(
     let mut undos: Vec<UndoCallback> = Vec::new();
 
     // Update connections if Road or Port
-    if structure_type == StructureType::Road || structure_type == StructureType::Port {
+    if structure_type == StructureType::Road
+        || structure_type == StructureType::Port
+        || structure_type == StructureType::Bridge
+    {
         undos.push(crate::actions::connection::update_capital_connections(
             state, pov_id,
         ));
@@ -153,6 +156,7 @@ pub fn destroy_structure(state: &mut GameState, idx: i32) -> UndoCallback {
     // Update connections if Road or Port
     if structure.structure_type == StructureType::Road
         || structure.structure_type == StructureType::Port
+        || structure.structure_type == StructureType::Bridge
     {
         undos.push(crate::actions::connection::update_capital_connections(
             state, pov_id,
@@ -227,6 +231,7 @@ pub fn capture_ruin(
     state: &mut GameState,
     tile_idx: i32,
     reward_hint: Option<RuinsRewardType>,
+    revealed_tiles_hint: Option<Vec<i32>>,
 ) -> UndoCallback {
     use crate::actions::discovery::discover_tiles;
     use crate::actions::tech::unlock_tech;
@@ -301,7 +306,12 @@ pub fn capture_ruin(
                 if state.settings._verbose {
                     state._messages.push("Ruin reward: Explorer! 🧭".to_string());
                 }
-                let (_, revealed) = crate::actions::discovery::predict_explorer(state, tile_idx);
+                let revealed = if let Some(tiles) = revealed_tiles_hint.clone() {
+                    tiles
+                } else {
+                    let (_, r) = crate::actions::discovery::predict_explorer(state, tile_idx);
+                    r
+                };
                 undos.push(discover_tiles(state, pov_id, None, Some(revealed)));
             }
             RuinsRewardType::Swordsman => {
@@ -453,11 +463,17 @@ pub fn capture_ruin(
             }
         }
         if fog_nearby {
+            let tiles_hint = revealed_tiles_hint.clone();
             possible_rewards.push(Box::new(move |s: &mut GameState| -> UndoCallback {
                 if s.settings._verbose {
                     s._messages.push("Ruin reward: Explorer! 🧭".to_string());
                 }
-                let (_, revealed) = crate::actions::discovery::predict_explorer(s, tile_idx);
+                let revealed = if let Some(tiles) = tiles_hint {
+                    tiles
+                } else {
+                    let (_, r) = crate::actions::discovery::predict_explorer(s, tile_idx);
+                    r
+                };
                 discover_tiles(s, pov_id, None, Some(revealed))
             }) as RuinRewardFn);
         }

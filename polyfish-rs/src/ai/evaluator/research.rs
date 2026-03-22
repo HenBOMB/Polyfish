@@ -109,7 +109,7 @@ fn count_resources_fair(
     tribe: &crate::states::TribeState,
     res_type: ResourceType,
 ) -> f32 {
-    let has_tech = is_resource_visible_to_tribe(state, res_type, tribe.id);
+    let has_tech = is_resource_visible_to_tribe(state, res_type, tribe.id, None);
     let mut count = 0.0;
 
     for city in &tribe.cities {

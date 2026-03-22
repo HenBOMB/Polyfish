@@ -247,6 +247,15 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                         continue;
                     }
 
+                    if settings.limited_per_city {
+                        let already_has = city._territory.iter().any(|&t_idx| {
+                            crate::functions::get_structure_type_at(state, t_idx) == Some(struct_type)
+                        });
+                        if already_has {
+                            continue;
+                        }
+                    }
+
                     if !settings.adjacent_types.is_empty() {
                         let adj = crate::functions::get_adjacent_indices(state, idx, 1);
                         let has_required_adj = adj.iter().any(|&n_idx| {
@@ -263,6 +272,36 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                         }
                     }
 
+                    if struct_type == StructureType::Bridge {
+                        let size = state.settings.size;
+                        let (x, y) = (idx % size, idx / size);
+
+                        // Vertical check
+                        let v_valid = if y > 0 && y < size - 1 {
+                            let terrain_up = crate::fow::get_terrain_at(state, idx - size, pov_id);
+                            let terrain_down = crate::fow::get_terrain_at(state, idx + size, pov_id);
+                            // Land is everything non-water/non-ocean
+                            !matches!(terrain_up, TerrainType::Water | TerrainType::Ocean)
+                                && !matches!(terrain_down, TerrainType::Water | TerrainType::Ocean)
+                        } else {
+                            false
+                        };
+
+                        // Horizontal check
+                        let h_valid = if x > 0 && x < size - 1 {
+                            let terrain_left = crate::fow::get_terrain_at(state, idx - 1, pov_id);
+                            let terrain_right = crate::fow::get_terrain_at(state, idx + 1, pov_id);
+                            !matches!(terrain_left, TerrainType::Water | TerrainType::Ocean)
+                                && !matches!(terrain_right, TerrainType::Water | TerrainType::Ocean)
+                        } else {
+                            false
+                        };
+
+                        if !v_valid && !h_valid {
+                            continue;
+                        }
+                    }
+
                     if struct_type == StructureType::Clathrus {
                         let adj = crate::functions::get_adjacent_indices(state, idx, 1);
                         let has_adj_algae = adj.iter().any(|&n_idx| {
@@ -275,20 +314,6 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                         }
                     }
 
-                    if struct_type == StructureType::Mycelium {
-                        let already_has_mycelium = city._territory.iter().any(|&t_idx| {
-                            if let Some(s) = crate::functions::get_structure_at(state, t_idx)
-                                && state.tiles.get(&t_idx).unwrap().owner == pov_id
-                            {
-                                s.structure_type == StructureType::Mycelium
-                            } else {
-                                false
-                            }
-                        });
-                        if already_has_mycelium {
-                            continue;
-                        }
-                    }
 
                     moves.push(Box::new(BuildMove::new(idx, struct_type)));
                 }
@@ -313,8 +338,17 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
 }
 
 fn is_structure_unlocked(tribe: &crate::states::TribeState, struct_type: StructureType) -> bool {
+    use crate::settings::structures::get_structure_setting;
     use crate::settings::technology::get_technology_setting;
     use crate::types::TribeType;
+
+    // Check if the structure itself is tribe-restricted
+    let struct_setting = get_structure_setting(struct_type);
+    if let Some(required_tribe) = struct_setting.tribe_type {
+        if required_tribe != tribe.tribe_type {
+            return false;
+        }
+    }
 
     let target = if tribe.tribe_type == TribeType::Polaris && struct_type == StructureType::IceBank {
         StructureType::Market

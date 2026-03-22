@@ -181,9 +181,9 @@ pub fn generate_legal_moves(state: &GameState) -> Vec<Box<dyn Move>> {
     let mut moves: Vec<Box<dyn Move>> = Vec::new();
 
     let pov_id = state.settings.current_player_turn_id;
-    if let Some(tribe) = state.tribes.get(&pov_id) {
-        println!("[DEBUG LEGAL] Player {} has {} stars", pov_id, tribe.stars);
-    }
+    // if let Some(tribe) = state.tribes.get(&pov_id) {
+    //     println!("[DEBUG LEGAL] Player {} has {} stars", pov_id, tribe.stars);
+    // }
     crate::moves::reward::generate_reward_moves(state, &mut moves);
     if !moves.is_empty() {
         return moves;
@@ -701,7 +701,8 @@ fn get_tiles_in_range(state: &GameState, from_idx: i32, range: i32) -> Vec<i32> 
 
 fn is_steppable(state: &GameState, unit: &UnitState, idx: i32) -> bool {
     // Can only step on explored tiles, regardless F
-    let is_explored = state.tiles
+    let is_explored = state
+        .tiles
         .get(&idx)
         .map(|t| t.explorers.contains(&unit.owner))
         .unwrap_or(false);
@@ -719,7 +720,7 @@ fn is_steppable(state: &GameState, unit: &UnitState, idx: i32) -> bool {
     let terrain = crate::fow::get_terrain_at(state, idx, unit.owner);
 
     // tech check using FOW-safe terrain
-    if !is_navigationable_terrain(tribe, unit.unit_type, terrain, tile) {
+    if !is_navigationable_terrain(state, tribe, unit.unit_type, terrain, tile) {
         return false;
     }
 
@@ -732,9 +733,11 @@ fn is_steppable(state: &GameState, unit: &UnitState, idx: i32) -> bool {
         }
     }
 
-    // cannot step if the tile is occupied
-    if get_unit_at(state, idx).is_some() {
-        return false;
+    // cannot step if the tile is occupied by an enemy
+    if let Some(other) = get_unit_at(state, idx) {
+        if other.owner != unit.owner {
+            return false;
+        }
     }
 
     let is_aquatic = settings.skills.contains(&SkillType::Float)
@@ -742,8 +745,9 @@ fn is_steppable(state: &GameState, unit: &UnitState, idx: i32) -> bool {
         || settings.skills.contains(&SkillType::Water);
 
     if !is_aquatic {
-        // Algae acts like a bridge for land units
-        if tile.is_algae() {
+        // Algae and Bridges act like a bridge for land units
+        let has_bridge = get_structure_type_at(state, idx) == Some(StructureType::Bridge);
+        if tile.is_algae() || has_bridge {
             // Pass
         } else if let Some(structure) = get_structure_at(state, idx) {
             if structure.structure_type == StructureType::Port {
@@ -768,8 +772,9 @@ fn is_steppable(state: &GameState, unit: &UnitState, idx: i32) -> bool {
         // Fallback to non-water units, unsteppable
         let is_water = matches!(terrain, TerrainType::Water | TerrainType::Ocean);
         if is_water {
-            // algae is steppable water
-            return tile.is_algae();
+            // algae and bridges are steppable water
+            let has_bridge = get_structure_type_at(state, idx) == Some(StructureType::Bridge);
+            return tile.is_algae() || has_bridge;
         }
     }
 
@@ -778,6 +783,7 @@ fn is_steppable(state: &GameState, unit: &UnitState, idx: i32) -> bool {
 
 /// FOW-safe version that takes terrain as a parameter (may be predicted during MCTS)
 fn is_navigationable_terrain(
+    state: &GameState,
     tribe: &TribeState,
     unit_type: UnitType,
     terrain: TerrainType,
@@ -796,7 +802,8 @@ fn is_navigationable_terrain(
         return is_water_like;
     }
 
-    if tile.is_frozen() || tile.is_algae() {
+    let has_bridge = get_structure_type_at(state, tile.coords.idx) == Some(StructureType::Bridge);
+    if tile.is_frozen() || tile.is_algae() || has_bridge {
         return true;
     }
 

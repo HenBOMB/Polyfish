@@ -36,15 +36,99 @@ const DEFAULT_SIZE: MapSize = MapSize::Tiny;
 #[tokio::main]
 async fn main() {
     // Initialize game
-    let mut settings = MapGenSettings::default();
-    settings.size = DEFAULT_SIZE;
-    settings.tribes = DEFAULT_TRIBES.to_vec();
-    settings.seed = rand::random();
-    settings.map_type = MapType::Drylands;
-
-    let initial_state = generate(settings);
     let mut game = Game::new();
-    game.state = initial_state;
+    let mut loaded = false;
+
+    // 0. Try to rip live state from running Polytopia process via C++ reader
+    println!("🔍 Searching for Polytopia process...");
+    let pids = std::process::Command::new("pgrep")
+        .arg("-x")
+        .arg("Polytopia")
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string());
+
+    if let Some(pid_str) = pids {
+        if let Some(pid) = pid_str.lines().next() {
+            println!("🚀 Ripping live state from PID: {}...", pid);
+            let reader_out = std::process::Command::new("../polyfish-reader/polyfish-reader")
+                .arg(pid)
+                .output();
+
+            if let Ok(out) = reader_out {
+                if out.status.success() {
+                    let json = String::from_utf8_lossy(&out.stdout);
+                    if let Ok(state) = serde_json::from_str::<polyfish::states::GameState>(&json) {
+                        println!("✅ Success! Loaded live game state from memory");
+                        game.state = state;
+                        loaded = true;
+                    }
+                } else {
+                    println!("⚠️ Reader failed: {}", String::from_utf8_lossy(&out.stderr));
+                }
+            }
+        }
+    }
+
+    // 1. Try to load live_game.json or saved_state.json (direct mod save)
+    let candidates = ["live_game.json", "saved_state.json"];
+    for &filename in &candidates {
+        if let Ok(json) = std::fs::read_to_string(filename) {
+            if let Ok(state) = serde_json::from_str::<polyfish::states::GameState>(&json) {
+                println!("✅ Loading live game from {}", filename);
+                game.state = state;
+                loaded = true;
+                break;
+            }
+        }
+    }
+
+    // 2. Try to load the latest mod replay from replays/ directory
+    if !loaded {
+        if let Ok(entries) = std::fs::read_dir("replays") {
+            let mut mod_replays: Vec<_> = entries
+                .flatten()
+                .filter(|e| e.file_name().to_string_lossy().starts_with("mod_replay_"))
+                .collect();
+
+            // Sort by modification time (latest first)
+            mod_replays.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
+            if let Some(latest) = mod_replays.last() {
+                if let Ok(json) = std::fs::read_to_string(latest.path()) {
+                    // Replay might be GameState OR { turns, gameState }
+                    let val: Value = serde_json::from_str(&json).unwrap_or(Value::Null);
+                    let state_res = if val["gameState"].is_object() {
+                        serde_json::from_value::<polyfish::states::GameState>(
+                            val["gameState"].clone(),
+                        )
+                    } else {
+                        serde_json::from_value::<polyfish::states::GameState>(val)
+                    };
+
+                    if let Ok(state) = state_res {
+                        println!(
+                            "✅ Loading live game from latest replay: {:?}",
+                            latest.file_name()
+                        );
+                        game.state = state;
+                        loaded = true;
+                    }
+                }
+            }
+        }
+    }
+
+    if !loaded {
+        println!("🎲 No live game found, generating new map...");
+        let mut settings = MapGenSettings::default();
+        settings.size = DEFAULT_SIZE;
+        settings.tribes = DEFAULT_TRIBES.to_vec();
+        settings.seed = rand::random();
+        settings.map_type = MapType::Drylands;
+
+        game.state = generate(settings);
+    }
+
     game.state.settings._verbose = true;
     game.state.settings.max_turns = 10;
     game.post_load();
@@ -638,10 +722,7 @@ async fn simulate_attack(
     }
 }
 
-async fn save_game(
-    State(state): State<Arc<AppState>>,
-    body: Option<Json<Value>>,
-) -> Json<Value> {
+async fn save_game(State(state): State<Arc<AppState>>, body: Option<Json<Value>>) -> Json<Value> {
     let mut game = state.game.lock().unwrap();
 
     // If we received a state in the body, try to ingest it
@@ -753,8 +834,17 @@ async fn save_replay_endpoint(
         .as_secs();
 
     let (filename, content) = if body["turns"].is_array() {
-        println!("✅ Received full Replay data from mod");
-        (format!("replays/mod_replay_{}.json", timestamp), serde_json::to_string_pretty(&*body).unwrap())
+        // get the name from body.gameState.settings.gameName
+        let game_name = body["gameState"]["settings"]["gameName"].as_str().unwrap();
+        println!("✅ Received {game_name} Replay data from mod");
+        (
+            format!(
+                "replays/{}_{}.json",
+                game_name.to_lowercase().replace(' ', "-"),
+                timestamp
+            ),
+            serde_json::to_string_pretty(&*body).unwrap(),
+        )
     } else if let Some(name) = body["name"].as_str() {
         // Legacy: save current server state under this name
         let game = state.game.lock().unwrap();
@@ -762,9 +852,14 @@ async fn save_replay_endpoint(
             .chars()
             .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
             .collect();
-        (format!("replays/{}_{}.json", safe_name, timestamp), serde_json::to_string_pretty(&game.state).unwrap())
+        (
+            format!("replays/{}_{}.json", safe_name, timestamp),
+            serde_json::to_string_pretty(&game.state).unwrap(),
+        )
     } else {
-        return Json(serde_json::json!({ "status": "error", "message": "Invalid replay data format" }));
+        return Json(
+            serde_json::json!({ "status": "error", "message": "Invalid replay data format" }),
+        );
     };
 
     match std::fs::write(&filename, content) {

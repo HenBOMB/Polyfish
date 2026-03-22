@@ -58,9 +58,9 @@ impl Game {
         // 1. Compute coord indexes for all tiles
         for (idx, tile) in self.state.tiles.iter_mut() {
             tile.coords.compute_idx(map_size);
-            if *idx == 147 && tile.owner != 0 {
-                println!("    [DEBUG POST_LOAD] Tile 147 is already owned by {}!", tile.owner);
-            }
+            // if *idx == 147 && tile.owner != 0 {
+            //     println!("    [DEBUG POST_LOAD] Tile 147 is already owned by {}!", tile.owner);
+            // }
             if let Some(ref mut rc) = tile.ruling_city_coords {
                 rc.compute_idx(map_size);
             }
