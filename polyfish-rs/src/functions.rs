@@ -476,7 +476,7 @@ pub fn get_city_production(state: &GameState, city: &CityState) -> i32 {
         .rewards
         .iter()
         // workshops or parks give +1 production
-        .filter(|r| **r == RewardType::Workshop || **r == RewardType::Park);
+        .filter(|r| **r == CityRewardType::Workshop || **r == CityRewardType::Park);
 
     prod += rewards.count() as i32;
 

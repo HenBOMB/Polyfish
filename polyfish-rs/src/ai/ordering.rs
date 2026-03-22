@@ -3,7 +3,7 @@ use crate::functions::{calculate_combat_preview, get_adjacent_indices, get_struc
 use crate::game::Game;
 use crate::moves::Move;
 use crate::settings::get_structure_setting;
-use crate::types::{AbilityType, ModeType, MoveType, RewardType, StructureType};
+use crate::types::{AbilityType, ModeType, MoveType, CityRewardType, StructureType};
 
 /// Score a move based on heuristics for move ordering
 pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
@@ -532,11 +532,11 @@ fn score_reward(state: &crate::states::GameState, mv: &dyn Move) -> f32 {
 
     match reward {
         // --- Slot 1: Explorer vs Workshop ---
-        RewardType::Workshop => {
+        CityRewardType::Workshop => {
             // Safe best: +1 SPT is always valuable
             base + 10.0
         }
-        RewardType::Explorer => {
+        CityRewardType::Explorer => {
             if state.settings.turn <= 1 {
                 // Not best on first turn — little fog to clear
                 base + 3.0
@@ -548,7 +548,7 @@ fn score_reward(state: &crate::states::GameState, mv: &dyn Move) -> f32 {
         }
 
         // --- Slot 2: Walls vs Resources ---
-        RewardType::CityWall => {
+        CityRewardType::CityWall => {
             // Preferred if enemies are nearby
             let city_idx = mv.target_idx().unwrap_or(0) as i32;
             let adj = get_adjacent_indices(state, city_idx, 1);
@@ -562,7 +562,7 @@ fn score_reward(state: &crate::states::GameState, mv: &dyn Move) -> f32 {
                 base + 4.0 // Low priority if safe
             }
         }
-        RewardType::Resources => {
+        CityRewardType::Resources => {
             // +5 stars is great early game when economy is tight
             if state.settings.turn <= 5 {
                 base + 9.0
@@ -572,11 +572,11 @@ fn score_reward(state: &crate::states::GameState, mv: &dyn Move) -> f32 {
         }
 
         // --- Slot 3: PopGrowth vs BorderGrowth ---
-        RewardType::PopGrowth => {
+        CityRewardType::PopGrowth => {
             // Generally better — +3 pop is solid and consistent
             base + 8.0
         }
-        RewardType::BorderGrowth => {
+        CityRewardType::BorderGrowth => {
             // Only worth it if border expansion covers valuable terrain
             // Heuristic: smaller cities benefit more from border growth
             let city_idx = mv.target_idx().unwrap_or(0) as i32;
@@ -598,7 +598,7 @@ fn score_reward(state: &crate::states::GameState, mv: &dyn Move) -> f32 {
         }
 
         // --- Slot 4+: Park vs SuperUnit ---
-        RewardType::Park => {
+        CityRewardType::Park => {
             if is_perfection {
                 // Always choose Park in Perfection — +250 score is massive
                 base + 20.0
@@ -607,7 +607,7 @@ fn score_reward(state: &crate::states::GameState, mv: &dyn Move) -> f32 {
                 base + 5.0
             }
         }
-        RewardType::SuperUnit => {
+        CityRewardType::SuperUnit => {
             if is_perfection {
                 // In Perfection, super unit matters less than score
                 base + 8.0

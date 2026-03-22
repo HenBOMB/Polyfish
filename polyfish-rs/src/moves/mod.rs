@@ -103,7 +103,7 @@ pub trait Move: std::fmt::Debug + Send + Sync {
 
     /// Get reward type (for Reward moves)
     #[inline]
-    fn reward_type(&self) -> Result<RewardType, String> {
+    fn reward_type(&self) -> Result<CityRewardType, String> {
         Err(format!("Move {:?} requires reward type", self.move_type()))
     }
 }
@@ -180,7 +180,7 @@ impl Move for ResignMove {
 pub fn generate_legal_moves(state: &GameState) -> Vec<Box<dyn Move>> {
     let mut moves: Vec<Box<dyn Move>> = Vec::new();
 
-    let pov_id = state.settings.current_player_turn_id;
+    // let pov_id = state.settings.current_player_turn_id;
     // if let Some(tribe) = state.tribes.get(&pov_id) {
     //     println!("[DEBUG LEGAL] Player {} has {} stars", pov_id, tribe.stars);
     // }

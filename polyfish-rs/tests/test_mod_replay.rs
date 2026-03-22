@@ -26,7 +26,8 @@ pub struct ReplayPlayer {
 
 #[tokio::test]
 async fn test_mod_replay_ingestion() {
-    let json_str = std::fs::read_to_string("replays/mod_replay_1774143642.json").unwrap();
+    let json_str =
+        std::fs::read_to_string("replays/game-3-(yad-lakes-small-1v1)_1774147274.json").unwrap();
     let mut mod_replay: ModReplay = serde_json::from_str(&json_str).unwrap();
 
     let mut game = Game::new();
@@ -72,8 +73,9 @@ async fn test_mod_replay_ingestion() {
                     );
                 }
                 // Skips startmatch / endmatch which are moveType: -1
-                if let Some(move_type) = cmd_json.get("moveType").and_then(|v| v.as_i64()) {
-                    if move_type == -1 {
+                let mut move_type_opt = cmd_json.get("moveType").and_then(|v| v.as_i64());
+                if let Some(move_type) = move_type_opt {
+                    if move_type == -1 || move_type == 11 {
                         continue;
                     }
                 }
@@ -93,34 +95,38 @@ async fn test_mod_replay_ingestion() {
 
                         // Match logic for Reward moves (moveType 9)
                         if move_type == 9 {
-                            let reward_type: polyfish::types::RewardType = serde_json::from_value(cmd_json.get("type").unwrap().clone()).unwrap();
+                            let reward_type: polyfish::types::CityRewardType =
+                                serde_json::from_value(cmd_json.get("type").unwrap().clone())
+                                    .unwrap();
                             let mut m_with_hints = polyfish::moves::RewardMove::new(
                                 cmd_json.get("target").unwrap().as_i64().unwrap() as i32,
-                                reward_type
+                                reward_type,
                             );
                             if let Some(tiles) = cmd_json.get("_revealedTiles") {
-                                m_with_hints.revealed_tiles = Some(serde_json::from_value(tiles.clone()).unwrap());
+                                m_with_hints.revealed_tiles =
+                                    Some(serde_json::from_value(tiles.clone()).unwrap());
                             }
-                            
+
                             println!("    Executing: {:?}", m_with_hints.describe(&game.state));
                             game.play_move(&m_with_hints);
-                        } 
+                        }
                         // Match logic for Capture moves (moveType 8)
                         else if move_type == 8 {
                             let mut m_with_hints = polyfish::moves::CaptureMove::new(
-                                cmd_json.get("src").unwrap().as_i64().unwrap() as i32
+                                cmd_json.get("src").unwrap().as_i64().unwrap() as i32,
                             );
                             if let Some(r) = cmd_json.get("_reward") {
-                                m_with_hints.reward = Some(serde_json::from_value(r.clone()).unwrap());
+                                m_with_hints.reward =
+                                    Some(serde_json::from_value(r.clone()).unwrap());
                             }
                             if let Some(tiles) = cmd_json.get("_revealedTiles") {
-                                m_with_hints.revealed_tiles = Some(serde_json::from_value(tiles.clone()).unwrap());
+                                m_with_hints.revealed_tiles =
+                                    Some(serde_json::from_value(tiles.clone()).unwrap());
                             }
-                            
+
                             println!("    Executing: {:?}", m_with_hints.describe(&game.state));
                             game.play_move(&m_with_hints);
-                        } 
-                        else {
+                        } else {
                             println!("    Executing: {:?}", m.describe(&game.state));
 
                             // Debug Recover
@@ -135,7 +141,8 @@ async fn test_mod_replay_ingestion() {
                                 if let Some(u) = polyfish::functions::get_unit_at(&game.state, src)
                                 {
                                     pre_health = u.health;
-                                    let owner = game.state.tiles.get(&src).map(|t| t.owner).unwrap_or(0);
+                                    let owner =
+                                        game.state.tiles.get(&src).map(|t| t.owner).unwrap_or(0);
                                     println!(
                                         "    [DEBUG ABILITY] Unit at {} has health {}/{} (Tile Owner: {})",
                                         src,

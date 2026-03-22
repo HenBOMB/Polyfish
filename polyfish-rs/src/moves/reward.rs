@@ -8,19 +8,19 @@ use crate::functions::get_adjacent_indices;
 use crate::moves::{Move, MoveResult};
 use crate::settings::units::get_super_unit;
 use crate::states::GameState;
-use crate::types::{MoveType, RewardType};
+use crate::types::{CityRewardType, MoveType};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RewardMove {
     pub target_index: i32,
-    pub reward: RewardType,
+    pub reward: CityRewardType,
     /// Optional explorer deterministic path (for replays)
     pub revealed_tiles: Option<Vec<i32>>,
 }
 
 impl RewardMove {
-    pub fn new(target_index: i32, reward: RewardType) -> Self {
+    pub fn new(target_index: i32, reward: CityRewardType) -> Self {
         Self {
             target_index,
             reward,
@@ -66,7 +66,7 @@ impl Move for RewardMove {
             }) as UndoCallback);
 
             match reward_type {
-                RewardType::Workshop => {
+                CityRewardType::Workshop => {
                     if let Some(tribe) = state.tribes.get_mut(&p_id) {
                         if let Some(city) = tribe.cities.get_mut(c_idx) {
                             if state.settings._verbose {
@@ -85,7 +85,7 @@ impl Move for RewardMove {
                         }
                     }
                 }
-                RewardType::Explorer => {
+                CityRewardType::Explorer => {
                     if state.settings._verbose {
                         state
                             ._messages
@@ -99,20 +99,20 @@ impl Move for RewardMove {
                     };
                     undos.push(discover_tiles(state, p_id, None, Some(revealed)));
                 }
-                RewardType::CityWall => {
+                CityRewardType::CityWall => {
                     if state.settings._verbose {
                         state
                             ._messages
                             .push(format!("City reward: City Walls built! 🧱"));
                     }
                 }
-                RewardType::Resources => {
+                CityRewardType::Resources => {
                     if state.settings._verbose {
                         state._messages.push(format!("City reward: 5 Stars! ⭐"));
                     }
                     undos.push(gain_stars(state, 5));
                 }
-                RewardType::PopGrowth => {
+                CityRewardType::PopGrowth => {
                     if let Some(tribe) = state.tribes.get_mut(&p_id) {
                         if let Some(city) = tribe.cities.get_mut(c_idx) {
                             if state.settings._verbose {
@@ -135,7 +135,7 @@ impl Move for RewardMove {
                         }
                     }
                 }
-                RewardType::BorderGrowth => {
+                CityRewardType::BorderGrowth => {
                     if let Some(tribe) = state.tribes.get_mut(&p_id) {
                         if let Some(city) = tribe.cities.get_mut(c_idx) {
                             if state.settings._verbose {
@@ -156,7 +156,7 @@ impl Move for RewardMove {
                         }
                     }
                 }
-                RewardType::Park => {
+                CityRewardType::Park => {
                     if let Some(tribe) = state.tribes.get_mut(&p_id) {
                         if let Some(city) = tribe.cities.get_mut(c_idx) {
                             if state.settings._verbose {
@@ -177,7 +177,7 @@ impl Move for RewardMove {
                         }
                     }
                 }
-                RewardType::SuperUnit => {
+                CityRewardType::SuperUnit => {
                     let tribe_type = state.tribes.get(&p_id).map(|t| t.tribe_type).unwrap();
                     let unit_type = get_super_unit(tribe_type);
                     if state.settings._verbose {
@@ -220,7 +220,7 @@ impl Move for RewardMove {
     }
 
     #[inline]
-    fn reward_type(&self) -> Result<RewardType, String> {
+    fn reward_type(&self) -> Result<CityRewardType, String> {
         Ok(self.reward)
     }
 }
@@ -244,10 +244,10 @@ pub fn generate_reward_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
             if city.level > 1 && city.rewards.len() < required {
                 let slot = city.rewards.len() + 1 + offset;
                 let (opt1, opt2) = match slot {
-                    1 => (RewardType::Explorer, RewardType::Workshop),
-                    2 => (RewardType::CityWall, RewardType::Resources),
-                    3 => (RewardType::PopGrowth, RewardType::BorderGrowth),
-                    _ => (RewardType::Park, RewardType::SuperUnit),
+                    1 => (CityRewardType::Explorer, CityRewardType::Workshop),
+                    2 => (CityRewardType::CityWall, CityRewardType::Resources),
+                    3 => (CityRewardType::PopGrowth, CityRewardType::BorderGrowth),
+                    _ => (CityRewardType::Park, CityRewardType::SuperUnit),
                 };
                 moves.push(Box::new(RewardMove::new(city.idx, opt1)));
                 moves.push(Box::new(RewardMove::new(city.idx, opt2)));

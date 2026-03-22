@@ -3,7 +3,7 @@ use polyfish::game::Game;
 use polyfish::moves::EndTurnMove;
 use polyfish::moves::harvest::HarvestMove;
 use polyfish::states::{CityState, ResourceState, TechnologyState, TileState, TribeState};
-use polyfish::types::{ResourceType, RewardType, TechnologyType, TerrainType, TribeType};
+use polyfish::types::{ResourceType, CityRewardType, TechnologyType, TerrainType, TribeType};
 
 fn main() {
     fuzz_test_p2_moves();
@@ -45,7 +45,7 @@ fn fuzz_test_p2_moves() {
     city2.owner = p2;
     city2.production = 2;
     city2.level = 2;
-    city2.rewards.insert(0, RewardType::Workshop); // Resolve pending reward
+    city2.rewards.insert(0, CityRewardType::Workshop); // Resolve pending reward
     city2._territory.push(100);
     city2._territory.push(101); // Add tile with resources
     // city2.capital_of -- removed

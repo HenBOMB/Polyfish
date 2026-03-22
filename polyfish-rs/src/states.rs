@@ -292,7 +292,7 @@ pub struct CityState {
     #[serde(default)]
     pub production: i32,
     #[serde(default)]
-    pub rewards: Vec<RewardType>,
+    pub rewards: Vec<CityRewardType>,
     #[serde(default)]
     pub _territory: Vec<i32>,
 }
@@ -316,20 +316,20 @@ impl Default for CityState {
 }
 
 impl CityState {
-    fn has_reward(&self, reward: RewardType) -> bool {
+    fn has_reward(&self, reward: CityRewardType) -> bool {
         self.rewards.contains(&reward)
     }
 
     pub fn has_walls(&self) -> bool {
-        self.has_reward(RewardType::CityWall)
+        self.has_reward(CityRewardType::CityWall)
     }
 
     pub fn has_workshop(&self) -> bool {
-        self.has_reward(RewardType::Workshop)
+        self.has_reward(CityRewardType::Workshop)
     }
 
     pub fn has_park(&self) -> bool {
-        self.has_reward(RewardType::Park)
+        self.has_reward(CityRewardType::Park)
     }
 }
 
@@ -529,7 +529,7 @@ pub struct PredictionState {
     #[serde(default)]
     pub _enemy_capital_suspects: Vec<i32>,
     #[serde(default)]
-    pub _city_rewards: Vec<RewardType>,
+    pub _city_rewards: Vec<CityRewardType>,
 }
 
 /// Combat result

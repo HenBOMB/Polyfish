@@ -237,9 +237,9 @@ fn test_interaction_sequence() {
     // We need to manually construct it as MCTS would.
     // RewardMove is in src/moves/reward.rs
     use polyfish::moves::reward::RewardMove;
-    use polyfish::types::RewardType;
+    use polyfish::types::CityRewardType;
 
-    let move_reward = RewardMove::new(city_idx, RewardType::Resources);
+    let move_reward = RewardMove::new(city_idx, CityRewardType::Resources);
     let undo_reward = game.play_move(&move_reward).expect("Reward failed");
 
     // Resources adds 5 Stars.

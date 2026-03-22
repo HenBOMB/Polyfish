@@ -185,7 +185,6 @@ pub enum ClimateType {
     Cymanti = 16,
 }
 
-/// Reward types
 #[derive(
     Debug,
     Clone,
@@ -199,7 +198,7 @@ pub enum ClimateType {
     strum_macros::EnumIter,
 )]
 #[repr(i8)]
-pub enum RewardType {
+pub enum CityRewardType {
     #[default]
     None = 0,
     CityWall = 1,

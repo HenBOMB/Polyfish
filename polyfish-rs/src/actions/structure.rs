@@ -5,7 +5,7 @@ use crate::actions::{UndoCallback, chain_undos};
 use crate::functions::get_city_owning_tile;
 use crate::settings::structures::get_structure_setting;
 use crate::states::{GameState, StructureState};
-use crate::types::{StructureType, RuinsRewardType};
+use crate::types::{RuinsRewardType, StructureType};
 
 /// Crate-local RNG helper (Linear Congruential Generator)
 /// Constants from MMIX by Knuth
@@ -235,9 +235,9 @@ pub fn capture_ruin(
 ) -> UndoCallback {
     use crate::actions::discovery::discover_tiles;
     use crate::actions::tech::unlock_tech;
-    use crate::actions::{gain_stars, UndoCallback};
+    use crate::actions::{UndoCallback, gain_stars};
     use crate::functions::{get_adjacent_indices, get_best_capital};
-    use crate::types::{RewardType, RuinsRewardType, TerrainType, TribeType, UnitType};
+    use crate::types::{CityRewardType, RuinsRewardType, TerrainType, TribeType, UnitType};
 
     let pov_id = state.settings.current_player_turn_id;
     let mut undos: Vec<UndoCallback> = Vec::new();
@@ -261,7 +261,9 @@ pub fn capture_ruin(
         match hint {
             RuinsRewardType::Resources => {
                 if state.settings._verbose {
-                    state._messages.push("Ruin reward: 10 Stars! ⭐".to_string());
+                    state
+                        ._messages
+                        .push("Ruin reward: 10 Stars! ⭐".to_string());
                 }
                 undos.push(gain_stars(state, 10));
             }
@@ -304,7 +306,9 @@ pub fn capture_ruin(
             }
             RuinsRewardType::Explorer => {
                 if state.settings._verbose {
-                    state._messages.push("Ruin reward: Explorer! 🧭".to_string());
+                    state
+                        ._messages
+                        .push("Ruin reward: Explorer! 🧭".to_string());
                 }
                 let revealed = if let Some(tiles) = revealed_tiles_hint.clone() {
                     tiles
@@ -317,9 +321,13 @@ pub fn capture_ruin(
             RuinsRewardType::Swordsman => {
                 if is_water {
                     // Veteran Rammer
-                    if let Ok(res) =
-                        crate::actions::units::summon_unit(state, UnitType::Rammer, tile_idx, false, false)
-                    {
+                    if let Ok(res) = crate::actions::units::summon_unit(
+                        state,
+                        UnitType::Rammer,
+                        tile_idx,
+                        false,
+                        false,
+                    ) {
                         undos.push(res.undo);
                         if let Some(u) = crate::functions::get_unit_at_mut(state, tile_idx) {
                             u.veteran = true;
@@ -350,7 +358,8 @@ pub fn capture_ruin(
             }
             RuinsRewardType::City => {
                 // Aquarion Lost City
-                let territory = crate::functions::get_square_indices(tile_idx, 1, state.settings.size);
+                let territory =
+                    crate::functions::get_square_indices(tile_idx, 1, state.settings.size);
                 let city = crate::states::CityState {
                     idx: tile_idx,
                     name: "Lost City".to_string(),
@@ -361,7 +370,7 @@ pub fn capture_ruin(
                     level: 3,
                     production: 3,
                     owner: pov_id,
-                    rewards: vec![RewardType::CityWall],
+                    rewards: vec![CityRewardType::CityWall],
                     _territory: territory.clone(),
                 };
                 if let Some(tribe) = state.tribes.get_mut(&pov_id) {
@@ -381,7 +390,9 @@ pub fn capture_ruin(
                         }
                     }));
                 }
-                undos.push(crate::actions::city::claim_territory(state, &territory, tile_idx, true));
+                undos.push(crate::actions::city::claim_territory(
+                    state, &territory, tile_idx, true,
+                ));
             }
             _ => {}
         }
@@ -588,7 +599,7 @@ pub fn capture_ruin(
                 level: 3,
                 production: 3,
                 owner: pov_id,
-                rewards: vec![RewardType::CityWall], // Grant City Walls
+                rewards: vec![CityRewardType::CityWall], // Grant City Walls
                 _territory: territory.clone(),
             };
 

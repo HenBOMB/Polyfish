@@ -569,7 +569,7 @@ pub fn step_unit(
         },
         SkillType::Dash,
     );
-    
+
     // Dash logic (must be before ending turn/attacked status update if we want to allow move-then-attack)
     // Wait, the logic for dash is usually: if unit has dash, it doesn't lose 'attacked' status when moving?
     // Or it resets it?
@@ -1329,16 +1329,16 @@ fn is_water_terrain_type(terrain: TerrainType) -> bool {
     terrain == TerrainType::Water || terrain == TerrainType::Ocean
 }
 
-/// Check if there are enemies in range from a tile
-fn has_enemies_in_range(state: &GameState, owner: PlayerId, from_idx: i32, range: i32) -> bool {
-    let adjacent = get_adjacent_indices(state, from_idx, range);
-    for idx in adjacent {
-        if let Some(_enemy) = get_enemy_at(state, idx, owner) {
-            return true;
-        }
-    }
-    false
-}
+// /// Check if there are enemies in range from a tile
+// fn has_enemies_in_range(state: &GameState, owner: PlayerId, from_idx: i32, range: i32) -> bool {
+//     let adjacent = get_adjacent_indices(state, from_idx, range);
+//     for idx in adjacent {
+//         if let Some(_enemy) = get_enemy_at(state, idx, owner) {
+//             return true;
+//         }
+//     }
+//     false
+// }
 
 /// Push a unit to a valid adjacent tile
 pub fn push_unit(state: &mut GameState, tile_idx: i32) -> Result<crate::moves::MoveResult, String> {
