@@ -303,6 +303,24 @@ async fn test_mod_replay_ingestion() {
                                 .and_then(|v| v.as_i64())
                                 .unwrap_or(0),
                         );
+                    } else if move_type == polyfish::MoveType::Summon {
+                        let unit_type: polyfish::UnitType =
+                            serde_json::from_value(cmd_json["type"].clone()).unwrap();
+
+                        println!(
+                            "    Command: {} {:?} at {}",
+                            if unit_type.is_naval() {
+                                "Upgrade"
+                            } else {
+                                "Summon"
+                            },
+                            unit_type,
+                            cmd_json
+                                .get("target")
+                                .or_else(|| cmd_json.get("src"))
+                                .and_then(|v| v.as_i64())
+                                .unwrap_or(0),
+                        );
                     } else {
                         println!(
                             "    Command: {:?} {}",

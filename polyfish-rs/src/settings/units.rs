@@ -11,7 +11,7 @@ pub struct UnitSetting {
     pub movement: i32,
     pub defense: f32,
     pub range: i32,
-    pub health: i32,
+    pub health: i32, // todo move to Option to enfoce passenger inheritance
     pub upgrade_from: Option<UnitType>,
     pub is_unique: bool,
     pub skills: HashSet<SkillType>,
@@ -229,9 +229,9 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             cost: 5,
             attack: 2.0,
             movement: 3,
-            defense: 2.0,
+            defense: 1.0,
             range: 2,
-            health: 10,
+            health: 10, // inherits
             upgrade_from: Some(U::Transportship),
             skills: skills![S::Carry, S::Dash, S::Float, S::Static, S::Scout],
             ..Default::default()
@@ -244,18 +244,18 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             range: 1,
             health: 10,
             upgrade_from: Some(U::Transportship),
-            skills: skills![S::Dash, S::Float, S::Carry],
+            skills: skills![S::Dash, S::Float, S::Carry, S::Static],
             ..Default::default()
         },
         U::Bomber => UnitSetting {
-            cost: 5,
+            cost: 15,
             attack: 3.0,
             movement: 2,
             defense: 2.0,
             range: 3,
             health: 10,
             upgrade_from: Some(U::Transportship),
-            skills: skills![S::Carry, S::Float, S::Splash, S::Stiff],
+            skills: skills![S::Carry, S::Float, S::Splash, S::Stiff, S::Static],
             ..Default::default()
         },
         U::Juggernaut => UnitSetting {

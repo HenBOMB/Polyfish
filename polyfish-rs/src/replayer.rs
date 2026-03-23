@@ -1,5 +1,5 @@
 use crate::game::Game;
-use crate::moves::{CaptureMove, Move, RewardMove};
+use crate::moves::{CaptureMove, RewardMove};
 use crate::states::GameState;
 use crate::types::CityRewardType;
 use serde::{Deserialize, Serialize};

@@ -256,10 +256,10 @@ pub fn step_unit(
         if let Some(unit) = tribe.units.get_mut(unit_idx) {
             unit.prev_coords.copy_from(&unit.coords);
             unit.coords.set_at(to_tile_idx, map_size);
-            unit.moved = true;
 
-            // End turn unless involuntary and has Skate
+            // End turn unless involuntary or unit does not have skate (Skating units "slide" and dont consume a step)
             if !involuntary || !has_skill(unit.unit_type, SkillType::Skate) {
+                unit.moved = true;
                 unit.attacked = true;
             }
         }
@@ -522,6 +522,7 @@ pub fn step_unit(
             }
         }
     }
+
     let has_dash = crate::functions::has_skill(
         {
             let tribe = state.tribes.get(&unit_owner).unwrap();
@@ -848,6 +849,22 @@ pub fn attack_unit(
 
     let mut def_damage = result.attack_damage as i32;
     let ret_damage = result.defense_damage as i32;
+
+    // Track last attack direction for push logic
+    let old_last_attack = {
+        let tribe = state.tribes.get_mut(&attacker_owner).unwrap();
+        let unit = tribe.units.get_mut(attacker_idx).unwrap();
+        let old = unit.last_attack_coords.clone();
+        unit.last_attack_coords = Some(Coords::from_index(def_coords, state.settings.size));
+        old
+    };
+    undos.push(Box::new(move |s| {
+        if let Some(tribe) = s.tribes.get_mut(&attacker_owner) {
+            if let Some(unit) = tribe.units.get_mut(attacker_idx) {
+                unit.last_attack_coords = old_last_attack;
+            }
+        }
+    }));
 
     // Fixed stomp damage
     if atk_skills.contains(&SkillType::Stomp) {
@@ -1404,6 +1421,7 @@ pub fn spawn_unit(
         attacks_performed: 0,
         parent_unit_idx: None,
         child_unit_idx: None,
+        last_attack_coords: None,
     };
 
     let old_unit_owner: Option<PlayerId> =

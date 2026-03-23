@@ -243,6 +243,8 @@ pub struct UnitState {
     /// Index of child unit in the tribe's unit vector (for centipede head tracking first segment)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child_unit_idx: Option<usize>,
+    #[serde(default)]
+    pub last_attack_coords: Option<Coords>,
     pub coords: Coords,
 }
 
@@ -268,6 +270,7 @@ impl Default for UnitState {
             attacks_performed: 0,
             parent_unit_idx: None,
             child_unit_idx: None,
+            last_attack_coords: None,
         }
     }
 }

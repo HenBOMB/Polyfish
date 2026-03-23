@@ -327,22 +327,26 @@ pub fn is_amphibious(unit: &UnitState) -> bool {
 
 /// Get the maximum health of a unit (accounting for veteran status and pass-through)
 pub fn get_unit_max_health(unit: &UnitState) -> i32 {
-    let mut health = get_real_unit_setting(unit).health;
+    // Health is determined by the passenger (inner unit) if available
+    let u_type = unit.passenger_type.unwrap_or(unit.unit_type);
+    let mut health = crate::settings::units::get_unit_setting(u_type).health;
     if unit.veteran {
         health += 5;
     }
     health
 }
 
-/// Get the real unit setting (ignoring naval types if carrying a passenger)
-pub fn get_real_unit_setting(unit: &UnitState) -> crate::settings::units::UnitSetting {
-    let u_type = unit.passenger_type.unwrap_or(unit.unit_type);
-    crate::settings::units::get_unit_setting(u_type)
-}
-
 /// Get unit attack strength (accounting for Boost)
 pub fn get_unit_attack(unit: &UnitState) -> f32 {
-    let mut atk = get_real_unit_setting(unit).attack;
+    let mut atk = crate::settings::units::get_unit_setting(unit.unit_type).attack;
+    
+    // If the unit type itself has no attack (like Transportship), inherit from passenger
+    if atk < 0.0 {
+        if let Some(passenger) = unit.passenger_type {
+            atk = crate::settings::units::get_unit_setting(passenger).attack;
+        }
+    }
+
     if has_effect(unit, UnitEffect::Boosted) {
         atk += 0.5;
     }
@@ -351,7 +355,16 @@ pub fn get_unit_attack(unit: &UnitState) -> f32 {
 
 /// Get unit defense strength (accounting for Poison)
 pub fn get_unit_defense(unit: &UnitState) -> f32 {
-    let mut def = get_real_unit_setting(unit).defense;
+    let mut def = crate::settings::units::get_unit_setting(unit.unit_type).defense;
+    
+    // If the unit type itself has no defense (like Transportship?), inherit from passenger
+    // (Actually Transportship has 2.0 defense, so it won't inherit)
+    if def < 0.0 {
+        if let Some(passenger) = unit.passenger_type {
+            def = crate::settings::units::get_unit_setting(passenger).defense;
+        }
+    }
+
     if has_effect(unit, UnitEffect::Poison) {
         def *= 0.5; // 50% defense reduction
     }
@@ -693,43 +706,36 @@ pub fn calculate_pushable_position(state: &GameState, unit: &UnitState) -> Optio
     let center_x = size / 2;
     let center_y = size / 2;
 
-    let (dx, dy) = if unit.moved || unit.prev_coords.idx != -1 {
+    let (dx, dy) = if unit.moved && unit.prev_coords.is_valid() && unit.prev_coords.idx != unit.coords.idx {
         // Determine vector of last move
-        let prev = if unit.prev_coords.idx != -1 {
-            unit.prev_coords
-        } else {
-            // Fallback if moved but no prev coords recorded (shouldn't happen usually)
-            unit.coords
-        };
+        let prev = unit.prev_coords;
+        let mut dx = if initial_x > prev.x { 1 } else if initial_x < prev.x { -1 } else { 0 };
+        let mut dy = if initial_y > prev.y { 1 } else if initial_y < prev.y { -1 } else { 0 };
 
-        if prev.idx == unit.coords.idx {
-            // Moved but staying in place? Treat as not moved.
-            get_direction_toward_center(initial_x, initial_y, center_x, center_y)
-        } else {
-            let mut dx = if initial_x > prev.x {
-                1
-            } else if initial_x < prev.x {
-                -1
-            } else {
-                0
-            };
-            let mut dy = if initial_y > prev.y {
-                1
-            } else if initial_y < prev.y {
-                -1
-            } else {
-                0
-            };
-
-            // Enemy units pushed in opposite direction
+        // Enemy units pushed in opposite direction
+        if unit.owner != state.settings.current_player_turn_id {
+            dx = -dx;
+            dy = -dy;
+        }
+        (dx, dy)
+    } else if let Some(target) = unit.last_attack_coords {
+        // For ranged units (or any unit that attacked), use attack direction
+        let settings = get_unit_setting(unit.unit_type);
+        let is_ranged = settings.range > 1;
+        
+        if is_ranged && unit.attacked {
+            let mut dx = if target.x > initial_x { 1 } else if target.x < initial_x { -1 } else { 0 };
+            let mut dy = if target.y > initial_y { 1 } else if target.y < initial_y { -1 } else { 0 };
             if unit.owner != state.settings.current_player_turn_id {
                 dx = -dx;
                 dy = -dy;
             }
             (dx, dy)
+        } else {
+            get_direction_toward_center(initial_x, initial_y, center_x, center_y)
         }
     } else {
-        // Not previously moved: push towards center
+        // Not previously moved or attacked (or not a ranged attack): push towards center
         get_direction_toward_center(initial_x, initial_y, center_x, center_y)
     };
 
@@ -958,7 +964,8 @@ pub fn calculate_detailed_tribe_score(state: &GameState, player_id: PlayerId) ->
             continue;
         }
 
-        let setting = crate::functions::get_real_unit_setting(unit);
+        let u_type = unit.passenger_type.unwrap_or(unit.unit_type);
+        let setting = crate::settings::units::get_unit_setting(u_type);
 
         if setting.is_super {
             score += 50;

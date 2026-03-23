@@ -328,6 +328,19 @@ impl From<i32> for UnitType {
     }
 }
 
+impl UnitType {
+    pub fn is_naval(&self) -> bool {
+        crate::settings::units::has_skill(*self, SkillType::Carry)
+    }
+
+    pub fn is_aquatic(&self) -> bool {
+        crate::settings::units::has_skill(*self, SkillType::Float)
+            || crate::settings::units::has_skill(*self, SkillType::Water)
+            || crate::settings::units::has_skill(*self, SkillType::Amphibious)
+            || self.is_naval()
+    }
+}
+
 /// Skill types
 #[derive(
     Debug,
