@@ -867,7 +867,7 @@ pub fn attack_unit(
     }));
 
     // Fixed stomp damage
-    if atk_skills.contains(&SkillType::Stomp) {
+    if state.settings.version > 104 && atk_skills.contains(&SkillType::Stomp) {
         def_damage = 5;
     }
 
@@ -918,7 +918,11 @@ pub fn attack_unit(
     }));
 
     // Apply splash damage to adjacent enemies if attacker has Splash skill
-    if atk_skills.contains(&SkillType::Splash) {
+    // must not be a bomber if the version is <= 104
+    // bombers did not have splash skill
+    if atk_skills.contains(&SkillType::Splash)
+        && !(state.settings.version <= 104 && atk_type == UnitType::Bomber)
+    {
         let adjacent_tiles = crate::functions::get_adjacent_indices(state, def_coords, 1);
 
         for adj_idx in adjacent_tiles {
@@ -940,7 +944,9 @@ pub fn attack_unit(
                     let splash_damage = (result.attack_damage * 0.5).round() as i32;
 
                     // Apply Damage
-                    if let Some(tribe) = state.tribes.get_mut(&adj_owner) {
+                    if let Some(tribe) = state.tribes.get_mut(&adj_owner)
+                        && splash_damage > 0
+                    {
                         if let Some(unit) = tribe.units.get_mut(adj_unit_idx) {
                             unit.health -= splash_damage;
                             if unit.health <= 0 {

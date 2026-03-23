@@ -6,18 +6,22 @@
     "tileCount": 256,
     "turn": 17,
     "maxTurns": 10,
-    "currentPlayerTurnId": 1,
+    "currentPlayerTurnId": 2,
     "version": 104,
     "gameName": "Kimeusian Monsoon",
     "seed": 2145361666,
     "winByCapital": true,
     "winByExtermination": true,
-    "_lastPlayerTurnId": 2,
+    "_lastPlayerTurnId": 1,
     "_areYouSure": false,
     "_gameOver": false,
     "_recentMoves": [
+      1,
       2,
-      1
+      2,
+      4,
+      2,
+      2
     ],
     "_fow": true,
     "_maxTribeCount": 2,
@@ -176,8 +180,8 @@
       },
       "type": 1,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -196,8 +200,8 @@
       },
       "type": 1,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -652,8 +656,8 @@
       },
       "type": 5,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -662,7 +666,8 @@
       "skinType": 0,
       "climate": 5,
       "owner": 2,
-      "effects": []
+      "effects": [],
+      "unitOwnerId": 2
     },
     "123": {
       "coords": {
@@ -926,8 +931,7 @@
       "skinType": 0,
       "climate": 8,
       "owner": 1,
-      "effects": [],
-      "unitOwnerId": 1
+      "effects": []
     },
     "134": {
       "coords": {
@@ -951,7 +955,8 @@
       "skinType": 0,
       "climate": 8,
       "owner": 1,
-      "effects": []
+      "effects": [],
+      "unitOwnerId": 1
     },
     "135": {
       "coords": {
@@ -966,8 +971,8 @@
       },
       "type": 1,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -991,8 +996,8 @@
       },
       "type": 3,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -1027,7 +1032,8 @@
       "skinType": 0,
       "climate": 5,
       "owner": 1,
-      "effects": []
+      "effects": [],
+      "unitOwnerId": 1
     },
     "138": {
       "coords": {
@@ -1042,8 +1048,8 @@
       },
       "type": 5,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -1052,7 +1058,8 @@
       "skinType": 0,
       "climate": 5,
       "owner": 2,
-      "effects": []
+      "effects": [],
+      "unitOwnerId": 2
     },
     "139": {
       "coords": {
@@ -1276,8 +1283,7 @@
       "skinType": 0,
       "climate": 5,
       "owner": 1,
-      "effects": [],
-      "unitOwnerId": 1
+      "effects": []
     },
     "149": {
       "coords": {
@@ -1357,8 +1363,8 @@
       },
       "type": 2,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -1367,8 +1373,7 @@
       "skinType": 0,
       "climate": 5,
       "owner": 1,
-      "effects": [],
-      "unitOwnerId": 1
+      "effects": []
     },
     "152": {
       "coords": {
@@ -1383,8 +1388,8 @@
       },
       "type": 1,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -1408,8 +1413,8 @@
       },
       "type": 3,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -1418,7 +1423,8 @@
       "skinType": 0,
       "climate": 5,
       "owner": 1,
-      "effects": []
+      "effects": [],
+      "unitOwnerId": 1
     },
     "154": {
       "coords": {
@@ -1428,8 +1434,8 @@
       },
       "type": 5,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -1439,7 +1445,7 @@
       "climate": 5,
       "owner": 0,
       "effects": [],
-      "unitOwnerId": 1
+      "unitOwnerId": 2
     },
     "155": {
       "coords": {
@@ -1449,8 +1455,8 @@
       },
       "type": 5,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -1719,7 +1725,8 @@
       "skinType": 0,
       "climate": 5,
       "owner": 0,
-      "effects": []
+      "effects": [],
+      "unitOwnerId": 1
     },
     "168": {
       "coords": {
@@ -1755,8 +1762,8 @@
       },
       "type": 1,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -1804,8 +1811,8 @@
       },
       "type": 3,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -1830,8 +1837,8 @@
       },
       "type": 5,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -1840,8 +1847,7 @@
       "skinType": 0,
       "climate": 5,
       "owner": 2,
-      "effects": [],
-      "unitOwnerId": 2
+      "effects": []
     },
     "172": {
       "coords": {
@@ -2126,7 +2132,8 @@
       "skinType": 0,
       "climate": 5,
       "owner": 0,
-      "effects": []
+      "effects": [],
+      "unitOwnerId": 1
     },
     "185": {
       "coords": {
@@ -2166,8 +2173,8 @@
       },
       "type": 3,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -2176,8 +2183,7 @@
       "skinType": 0,
       "climate": 5,
       "owner": 2,
-      "effects": [],
-      "unitOwnerId": 2
+      "effects": []
     },
     "187": {
       "coords": {
@@ -2556,8 +2562,8 @@
       },
       "type": 2,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -2581,8 +2587,8 @@
       },
       "type": 1,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -2878,7 +2884,9 @@
         "idx": 215
       },
       "type": 2,
-      "explorers": [],
+      "explorers": [
+        1
+      ],
       "hasRoad": false,
       "hasRoute": false,
       "hadRoute": false,
@@ -2895,7 +2903,9 @@
         "idx": 216
       },
       "type": 1,
-      "explorers": [],
+      "explorers": [
+        1
+      ],
       "hasRoad": false,
       "hasRoute": false,
       "hadRoute": false,
@@ -2912,7 +2922,9 @@
         "idx": 217
       },
       "type": 2,
-      "explorers": [],
+      "explorers": [
+        1
+      ],
       "hasRoad": false,
       "hasRoute": false,
       "hadRoute": false,
@@ -2930,7 +2942,8 @@
       },
       "type": 1,
       "explorers": [
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -3443,8 +3456,8 @@
       },
       "type": 3,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -3650,8 +3663,8 @@
       },
       "type": 5,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -3814,8 +3827,8 @@
       },
       "type": 5,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -3839,8 +3852,8 @@
       },
       "type": 3,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -3865,8 +3878,8 @@
       },
       "type": 3,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -4093,8 +4106,7 @@
       "skinType": 0,
       "climate": 8,
       "owner": 1,
-      "effects": [],
-      "unitOwnerId": 1
+      "effects": []
     },
     "38": {
       "coords": {
@@ -4133,8 +4145,8 @@
       },
       "type": 3,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -4177,8 +4189,8 @@
       },
       "type": 3,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -4203,8 +4215,8 @@
       },
       "type": 3,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -4228,8 +4240,8 @@
       },
       "type": 5,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -4278,8 +4290,8 @@
       },
       "type": 4,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -4298,6 +4310,7 @@
       },
       "type": 1,
       "explorers": [
+        2,
         1
       ],
       "hasRoad": false,
@@ -4462,7 +4475,8 @@
       "skinType": 0,
       "climate": 8,
       "owner": 1,
-      "effects": []
+      "effects": [],
+      "unitOwnerId": 1
     },
     "53": {
       "coords": {
@@ -4550,8 +4564,8 @@
       },
       "type": 5,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -4575,8 +4589,8 @@
       },
       "type": 5,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -4610,7 +4624,8 @@
       "skinType": 0,
       "climate": 8,
       "owner": 2,
-      "effects": []
+      "effects": [],
+      "unitOwnerId": 2
     },
     "59": {
       "coords": {
@@ -4669,8 +4684,8 @@
       },
       "type": 3,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -4679,7 +4694,8 @@
       "skinType": 0,
       "climate": 8,
       "owner": 2,
-      "effects": []
+      "effects": [],
+      "unitOwnerId": 2
     },
     "61": {
       "coords": {
@@ -5249,8 +5265,8 @@
       },
       "type": 1,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -5269,8 +5285,8 @@
       },
       "type": 1,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -5333,8 +5349,8 @@
       },
       "type": 1,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -5585,7 +5601,7 @@
     },
     "136": {
       "type": 1,
-      "level": 3,
+      "level": 5,
       "founded": 0
     },
     "15": {
@@ -5762,6 +5778,16 @@
       "type": 12,
       "level": 1,
       "founded": 16
+    },
+    "153": {
+      "type": 5,
+      "level": 1,
+      "founded": 17
+    },
+    "120": {
+      "type": 28,
+      "level": 1,
+      "founded": 17
     }
   },
   "resources": {
@@ -5783,9 +5809,6 @@
     "12": {
       "type": 2
     },
-    "120": {
-      "type": 6
-    },
     "121": {
       "type": 5
     },
@@ -5800,9 +5823,6 @@
     },
     "132": {
       "type": 2
-    },
-    "137": {
-      "type": 6
     },
     "138": {
       "type": 1
@@ -6021,18 +6041,19 @@
       "id": 1,
       "username": "yarncz",
       "builtUniqueImprovements": [
+        28,
         27
       ],
       "knownPlayers": [
         2
       ],
       "bot": false,
-      "score": 5610,
-      "stars": 32,
+      "score": 6230,
+      "stars": 5,
       "type": 8,
       "killerId": 0,
-      "kills": 14,
-      "casualties": 6,
+      "kills": 12,
+      "casualties": 7,
       "tech_vanilla": [
         {
           "type": 0,
@@ -6200,15 +6221,17 @@
           "owner": 1,
           "name": "Kickoo City",
           "idx": 136,
-          "population": 5,
-          "progress": 0,
+          "population": 15,
+          "progress": 1,
           "borderSize": 1,
           "connectedToCapital": false,
-          "level": 3,
-          "production": 4,
+          "level": 5,
+          "production": 6,
           "rewards": [
             3,
-            1
+            1,
+            8,
+            6
           ],
           "territory": [
             119,
@@ -6255,13 +6278,13 @@
         {
           "owner": 1,
           "type": 42,
-          "health": 10,
+          "health": 8,
           "veteran": false,
           "kills": 2,
           "prevCoords": {
             "x": 7,
-            "y": 6,
-            "idx": 103
+            "y": 9,
+            "idx": 151
           },
           "homeCoords": {
             "x": 2,
@@ -6271,21 +6294,21 @@
           "direction": 0,
           "flipped": false,
           "createdTurn": 3,
-          "moved": false,
-          "attacked": false,
+          "moved": true,
+          "attacked": true,
           "passengerType": 2,
           "effects": [],
           "converted": false,
-          "attacksPerformed": 0,
+          "attacksPerformed": 1,
           "lastAttackCoords": {
-            "x": 9,
-            "y": 8,
-            "idx": 137
+            "x": 10,
+            "y": 11,
+            "idx": 186
           },
           "coords": {
-            "x": 7,
-            "y": 9,
-            "idx": 151
+            "x": 8,
+            "y": 11,
+            "idx": 184
           }
         },
         {
@@ -6307,16 +6330,16 @@
           "direction": 0,
           "flipped": false,
           "createdTurn": 10,
-          "moved": false,
-          "attacked": false,
+          "moved": true,
+          "attacked": true,
           "passengerType": 2,
           "effects": [],
           "converted": false,
-          "attacksPerformed": 0,
+          "attacksPerformed": 1,
           "lastAttackCoords": {
             "x": 10,
-            "y": 8,
-            "idx": 138
+            "y": 11,
+            "idx": 186
           },
           "coords": {
             "x": 8,
@@ -6327,7 +6350,7 @@
         {
           "owner": 1,
           "type": 5,
-          "health": 15,
+          "health": 10,
           "veteran": false,
           "kills": 2,
           "prevCoords": {
@@ -6357,14 +6380,14 @@
         },
         {
           "owner": 1,
-          "type": 5,
+          "type": 41,
           "health": 15,
           "veteran": false,
           "kills": 0,
           "prevCoords": {
-            "x": 5,
+            "x": 6,
             "y": 8,
-            "idx": 133
+            "idx": 134
           },
           "homeCoords": {
             "x": 5,
@@ -6374,16 +6397,17 @@
           "direction": 0,
           "flipped": false,
           "createdTurn": 12,
-          "moved": false,
-          "attacked": false,
+          "moved": true,
+          "attacked": true,
+          "passengerType": 5,
           "effects": [],
           "converted": false,
           "attacksPerformed": 0,
           "lastAttackCoords": null,
           "coords": {
-            "x": 4,
-            "y": 9,
-            "idx": 148
+            "x": 7,
+            "y": 10,
+            "idx": 167
           }
         },
         {
@@ -6391,7 +6415,7 @@
           "type": 41,
           "health": 15,
           "veteran": false,
-          "kills": 2,
+          "kills": 1,
           "prevCoords": {
             "x": 4,
             "y": 3,
@@ -6455,45 +6479,14 @@
         },
         {
           "owner": 1,
-          "type": 5,
-          "health": 8,
-          "veteran": false,
-          "kills": 1,
-          "prevCoords": {
-            "x": 9,
-            "y": 8,
-            "idx": 137
-          },
-          "homeCoords": {
-            "x": 8,
-            "y": 8,
-            "idx": 136
-          },
-          "direction": 0,
-          "flipped": false,
-          "createdTurn": 15,
-          "moved": true,
-          "attacked": true,
-          "effects": [],
-          "converted": false,
-          "attacksPerformed": 0,
-          "lastAttackCoords": null,
-          "coords": {
-            "x": 10,
-            "y": 9,
-            "idx": 154
-          }
-        },
-        {
-          "owner": 1,
-          "type": 12,
+          "type": 45,
           "health": 40,
           "veteran": false,
           "kills": 0,
           "prevCoords": {
-            "x": -1,
-            "y": -1,
-            "idx": -1
+            "x": 5,
+            "y": 2,
+            "idx": 37
           },
           "homeCoords": {
             "x": 5,
@@ -6503,16 +6496,78 @@
           "direction": 0,
           "flipped": false,
           "createdTurn": 16,
-          "moved": false,
-          "attacked": false,
+          "moved": true,
+          "attacked": true,
           "effects": [],
           "converted": false,
           "attacksPerformed": 0,
           "lastAttackCoords": null,
           "coords": {
+            "x": 4,
+            "y": 3,
+            "idx": 52
+          }
+        },
+        {
+          "owner": 1,
+          "type": 5,
+          "health": 11,
+          "veteran": false,
+          "kills": 0,
+          "prevCoords": {
+            "x": 8,
+            "y": 8,
+            "idx": 136
+          },
+          "homeCoords": {
+            "x": 8,
+            "y": 8,
+            "idx": 136
+          },
+          "direction": 0,
+          "flipped": false,
+          "createdTurn": 16,
+          "moved": true,
+          "attacked": true,
+          "effects": [],
+          "converted": false,
+          "attacksPerformed": 0,
+          "lastAttackCoords": null,
+          "coords": {
+            "x": 9,
+            "y": 9,
+            "idx": 153
+          }
+        },
+        {
+          "owner": 1,
+          "type": 45,
+          "health": 40,
+          "veteran": false,
+          "kills": 0,
+          "prevCoords": {
             "x": 5,
-            "y": 2,
-            "idx": 37
+            "y": 8,
+            "idx": 133
+          },
+          "homeCoords": {
+            "x": 5,
+            "y": 8,
+            "idx": 133
+          },
+          "direction": 0,
+          "flipped": false,
+          "createdTurn": 16,
+          "moved": true,
+          "attacked": true,
+          "effects": [],
+          "converted": false,
+          "attacksPerformed": 0,
+          "lastAttackCoords": null,
+          "coords": {
+            "x": 6,
+            "y": 8,
+            "idx": 134
           }
         },
         {
@@ -6522,9 +6577,9 @@
           "veteran": false,
           "kills": 0,
           "prevCoords": {
-            "x": -1,
-            "y": -1,
-            "idx": -1
+            "x": 8,
+            "y": 8,
+            "idx": 136
           },
           "homeCoords": {
             "x": 8,
@@ -6533,17 +6588,17 @@
           },
           "direction": 0,
           "flipped": false,
-          "createdTurn": 16,
-          "moved": false,
-          "attacked": false,
+          "createdTurn": 17,
+          "moved": true,
+          "attacked": true,
           "effects": [],
           "converted": false,
           "attacksPerformed": 0,
           "lastAttackCoords": null,
           "coords": {
-            "x": 8,
+            "x": 9,
             "y": 8,
-            "idx": 136
+            "idx": 137
           }
         },
         {
@@ -6558,23 +6613,23 @@
             "idx": -1
           },
           "homeCoords": {
-            "x": 5,
+            "x": 8,
             "y": 8,
-            "idx": 133
+            "idx": 136
           },
           "direction": 0,
           "flipped": false,
-          "createdTurn": 16,
-          "moved": false,
-          "attacked": false,
+          "createdTurn": 17,
+          "moved": true,
+          "attacked": true,
           "effects": [],
           "converted": false,
           "attacksPerformed": 0,
           "lastAttackCoords": null,
           "coords": {
-            "x": 5,
+            "x": 8,
             "y": 8,
-            "idx": 133
+            "idx": 136
           }
         }
       ],
@@ -6607,7 +6662,7 @@
         "y": 2,
         "idx": 37
       },
-      "attackedThisTurn": true,
+      "attackedThisTurn": false,
       "pacifistTurns": 0,
       "conversions": 0
     },
@@ -6620,12 +6675,12 @@
         1
       ],
       "bot": false,
-      "score": 3930,
-      "stars": 21,
+      "score": 3970,
+      "stars": 45,
       "type": 5,
       "killerId": 0,
-      "kills": 6,
-      "casualties": 14,
+      "kills": 7,
+      "casualties": 12,
       "tech_vanilla": [
         {
           "type": 0,
@@ -6816,6 +6871,41 @@
       "units": [
         {
           "owner": 2,
+          "type": 15,
+          "health": 2,
+          "veteran": false,
+          "kills": 0,
+          "prevCoords": {
+            "x": 11,
+            "y": 7,
+            "idx": 123
+          },
+          "homeCoords": {
+            "x": 14,
+            "y": 6,
+            "idx": 110
+          },
+          "direction": 0,
+          "flipped": false,
+          "createdTurn": 5,
+          "moved": false,
+          "attacked": false,
+          "effects": [],
+          "converted": false,
+          "attacksPerformed": 0,
+          "lastAttackCoords": {
+            "x": 9,
+            "y": 8,
+            "idx": 137
+          },
+          "coords": {
+            "x": 10,
+            "y": 7,
+            "idx": 122
+          }
+        },
+        {
+          "owner": 2,
           "type": 2,
           "health": 10,
           "veteran": false,
@@ -6833,7 +6923,7 @@
           "direction": 0,
           "flipped": false,
           "createdTurn": 6,
-          "moved": true,
+          "moved": false,
           "attacked": false,
           "effects": [],
           "converted": false,
@@ -6843,6 +6933,71 @@
             "x": 10,
             "y": 10,
             "idx": 170
+          }
+        },
+        {
+          "owner": 2,
+          "type": 15,
+          "health": 2,
+          "veteran": false,
+          "kills": 0,
+          "prevCoords": {
+            "x": 11,
+            "y": 9,
+            "idx": 155
+          },
+          "direction": 0,
+          "flipped": false,
+          "createdTurn": 12,
+          "moved": false,
+          "attacked": false,
+          "effects": [],
+          "converted": false,
+          "attacksPerformed": 0,
+          "lastAttackCoords": {
+            "x": 9,
+            "y": 8,
+            "idx": 137
+          },
+          "coords": {
+            "x": 10,
+            "y": 8,
+            "idx": 138
+          }
+        },
+        {
+          "owner": 2,
+          "type": 9,
+          "health": 6,
+          "veteran": false,
+          "kills": 0,
+          "prevCoords": {
+            "x": 11,
+            "y": 4,
+            "idx": 75
+          },
+          "homeCoords": {
+            "x": 11,
+            "y": 4,
+            "idx": 75
+          },
+          "direction": 0,
+          "flipped": false,
+          "createdTurn": 15,
+          "moved": true,
+          "attacked": true,
+          "effects": [],
+          "converted": false,
+          "attacksPerformed": 1,
+          "lastAttackCoords": {
+            "x": 11,
+            "y": 1,
+            "idx": 27
+          },
+          "coords": {
+            "x": 10,
+            "y": 3,
+            "idx": 58
           }
         },
         {
@@ -6871,8 +7026,8 @@
           "attacksPerformed": 1,
           "lastAttackCoords": {
             "x": 9,
-            "y": 8,
-            "idx": 137
+            "y": 9,
+            "idx": 153
           },
           "coords": {
             "x": 11,
@@ -6885,25 +7040,29 @@
           "type": 15,
           "health": 15,
           "veteran": false,
-          "kills": 0,
+          "kills": 1,
           "prevCoords": {
-            "x": -1,
-            "y": -1,
-            "idx": -1
-          },
-          "direction": 0,
-          "flipped": false,
-          "createdTurn": 16,
-          "moved": true,
-          "attacked": true,
-          "effects": [],
-          "converted": false,
-          "attacksPerformed": 0,
-          "lastAttackCoords": null,
-          "coords": {
             "x": 11,
             "y": 10,
             "idx": 171
+          },
+          "direction": 0,
+          "flipped": false,
+          "createdTurn": 16,
+          "moved": true,
+          "attacked": true,
+          "effects": [],
+          "converted": false,
+          "attacksPerformed": 1,
+          "lastAttackCoords": {
+            "x": 10,
+            "y": 9,
+            "idx": 154
+          },
+          "coords": {
+            "x": 10,
+            "y": 9,
+            "idx": 154
           }
         },
         {
@@ -6913,9 +7072,9 @@
           "veteran": false,
           "kills": 0,
           "prevCoords": {
-            "x": -1,
-            "y": -1,
-            "idx": -1
+            "x": 11,
+            "y": 4,
+            "idx": 75
           },
           "homeCoords": {
             "x": 11,
@@ -6929,12 +7088,16 @@
           "attacked": true,
           "effects": [],
           "converted": false,
-          "attacksPerformed": 0,
-          "lastAttackCoords": null,
-          "coords": {
+          "attacksPerformed": 1,
+          "lastAttackCoords": {
             "x": 11,
-            "y": 4,
-            "idx": 75
+            "y": 1,
+            "idx": 27
+          },
+          "coords": {
+            "x": 12,
+            "y": 3,
+            "idx": 60
           }
         },
         {
@@ -6956,8 +7119,8 @@
           "direction": 0,
           "flipped": false,
           "createdTurn": 16,
-          "moved": true,
-          "attacked": true,
+          "moved": false,
+          "attacked": false,
           "effects": [],
           "converted": false,
           "attacksPerformed": 0,
@@ -6966,37 +7129,6 @@
             "x": 11,
             "y": 7,
             "idx": 123
-          }
-        },
-        {
-          "owner": 2,
-          "type": 9,
-          "health": 10,
-          "veteran": false,
-          "kills": 0,
-          "prevCoords": {
-            "x": -1,
-            "y": -1,
-            "idx": -1
-          },
-          "homeCoords": {
-            "x": 10,
-            "y": 11,
-            "idx": 186
-          },
-          "direction": 0,
-          "flipped": false,
-          "createdTurn": 16,
-          "moved": true,
-          "attacked": true,
-          "effects": [],
-          "converted": false,
-          "attacksPerformed": 0,
-          "lastAttackCoords": null,
-          "coords": {
-            "x": 10,
-            "y": 11,
-            "idx": 186
           }
         },
         {
@@ -7018,8 +7150,8 @@
           "direction": 0,
           "flipped": false,
           "createdTurn": 16,
-          "moved": true,
-          "attacked": true,
+          "moved": false,
+          "attacked": false,
           "effects": [],
           "converted": false,
           "attacksPerformed": 0,
@@ -7044,8 +7176,8 @@
           "direction": 0,
           "flipped": false,
           "createdTurn": 16,
-          "moved": true,
-          "attacked": true,
+          "moved": false,
+          "attacked": false,
           "effects": [],
           "converted": false,
           "attacksPerformed": 0,
@@ -7070,8 +7202,8 @@
           "direction": 0,
           "flipped": false,
           "createdTurn": 16,
-          "moved": true,
-          "attacked": true,
+          "moved": false,
+          "attacked": false,
           "effects": [],
           "converted": false,
           "attacksPerformed": 0,
@@ -7080,6 +7212,37 @@
             "x": 13,
             "y": 12,
             "idx": 205
+          }
+        },
+        {
+          "owner": 2,
+          "type": 9,
+          "health": 10,
+          "veteran": false,
+          "kills": 0,
+          "prevCoords": {
+            "x": -1,
+            "y": -1,
+            "idx": -1
+          },
+          "homeCoords": {
+            "x": 11,
+            "y": 4,
+            "idx": 75
+          },
+          "direction": 0,
+          "flipped": false,
+          "createdTurn": 17,
+          "moved": true,
+          "attacked": true,
+          "effects": [],
+          "converted": false,
+          "attacksPerformed": 0,
+          "lastAttackCoords": null,
+          "coords": {
+            "x": 11,
+            "y": 4,
+            "idx": 75
           }
         }
       ],
@@ -7112,7 +7275,7 @@
         "y": 13,
         "idx": 221
       },
-      "attackedThisTurn": false,
+      "attackedThisTurn": true,
       "pacifistTurns": 0,
       "conversions": 0
     }
@@ -8563,6 +8726,109 @@
       "moveType": 1,
       "src": 137,
       "target": 154
+    },
+    {
+      "moveType": 4,
+      "src": 134,
+      "type": 41
+    },
+    {
+      "moveType": 1,
+      "src": 134,
+      "target": 167
+    },
+    {
+      "moveType": 1,
+      "src": 133,
+      "target": 134
+    },
+    {
+      "moveType": 1,
+      "src": 151,
+      "target": 184
+    },
+    {
+      "moveType": 2,
+      "src": 184,
+      "target": 186
+    },
+    {
+      "moveType": 2,
+      "src": 168,
+      "target": 186
+    },
+    {
+      "moveType": 1,
+      "src": 136,
+      "target": 153
+    },
+    {
+      "moveType": 4,
+      "src": 136,
+      "type": 5
+    },
+    {
+      "moveType": 6,
+      "target": 153,
+      "type": 5
+    },
+    {
+      "moveType": 5,
+      "target": 137
+    },
+    {
+      "moveType": 5,
+      "target": 120
+    },
+    {
+      "moveType": 9,
+      "target": 136,
+      "type": 8
+    },
+    {
+      "moveType": 6,
+      "target": 120,
+      "type": 28
+    },
+    {
+      "moveType": 9,
+      "target": 136,
+      "type": 6
+    },
+    {
+      "moveType": 1,
+      "src": 37,
+      "target": 52
+    },
+    {
+      "moveType": 1,
+      "src": 75,
+      "target": 60
+    },
+    {
+      "moveType": 2,
+      "src": 60,
+      "target": 27
+    },
+    {
+      "moveType": 2,
+      "src": 58,
+      "target": 27
+    },
+    {
+      "moveType": 4,
+      "src": 75,
+      "type": 9
+    },
+    {
+      "moveType": 2,
+      "src": 171,
+      "target": 154
+    },
+    {
+      "moveType": 2,
+      "src": 139,
+      "target": 153
     }
   ],
   "initialSeed": 2145361666

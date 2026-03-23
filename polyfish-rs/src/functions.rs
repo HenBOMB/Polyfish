@@ -22,6 +22,7 @@ pub fn is_in_own_territory(state: &GameState, idx: i32, owner: i32) -> bool {
 
 use crate::coords::Coords;
 use crate::settings::get_unit_setting;
+use crate::settings::has_technology;
 use crate::states::*;
 use crate::types::*;
 
@@ -339,7 +340,7 @@ pub fn get_unit_max_health(unit: &UnitState) -> i32 {
 /// Get unit attack strength (accounting for Boost)
 pub fn get_unit_attack(unit: &UnitState) -> f32 {
     let mut atk = crate::settings::units::get_unit_setting(unit.unit_type).attack;
-    
+
     // If the unit type itself has no attack (like Transportship), inherit from passenger
     if atk < 0.0 {
         if let Some(passenger) = unit.passenger_type {
@@ -356,7 +357,7 @@ pub fn get_unit_attack(unit: &UnitState) -> f32 {
 /// Get unit defense strength (accounting for Poison)
 pub fn get_unit_defense(unit: &UnitState) -> f32 {
     let mut def = crate::settings::units::get_unit_setting(unit.unit_type).defense;
-    
+
     // If the unit type itself has no defense (like Transportship?), inherit from passenger
     // (Actually Transportship has 2.0 defense, so it won't inherit)
     if def < 0.0 {
@@ -706,36 +707,51 @@ pub fn calculate_pushable_position(state: &GameState, unit: &UnitState) -> Optio
     let center_x = size / 2;
     let center_y = size / 2;
 
-    let (dx, dy) = if unit.moved && unit.prev_coords.is_valid() && unit.prev_coords.idx != unit.coords.idx {
-        // Determine vector of last move
-        let prev = unit.prev_coords;
-        let mut dx = if initial_x > prev.x { 1 } else if initial_x < prev.x { -1 } else { 0 };
-        let mut dy = if initial_y > prev.y { 1 } else if initial_y < prev.y { -1 } else { 0 };
-
-        // Enemy units pushed in opposite direction
-        if unit.owner != state.settings.current_player_turn_id {
-            dx = -dx;
-            dy = -dy;
-        }
-        (dx, dy)
-    } else if let Some(target) = unit.last_attack_coords {
-        // For ranged units (or any unit that attacked), use attack direction
+    let (dx, dy) = if let Some(target) = unit.last_attack_coords {
+        // Rule 3: Ranged units (or any unit that attacked)
         let settings = get_unit_setting(unit.unit_type);
         let is_ranged = settings.range > 1;
-        
-        if is_ranged && unit.attacked {
-            let mut dx = if target.x > initial_x { 1 } else if target.x < initial_x { -1 } else { 0 };
-            let mut dy = if target.y > initial_y { 1 } else if target.y < initial_y { -1 } else { 0 };
+
+        // "last move or last attack"
+        // If it attacked, the attack direction is typically the "last" action for ranged units
+        // unless they have Escape and moved after.
+        let attacker_moved_after = has_skill(unit, SkillType::Escape) && unit.moved;
+
+        if is_ranged && unit.attacked && !attacker_moved_after {
+            let mut dx = if target.x > initial_x {
+                1
+            } else if target.x < initial_x {
+                -1
+            } else {
+                0
+            };
+            let mut dy = if target.y > initial_y {
+                1
+            } else if target.y < initial_y {
+                -1
+            } else {
+                0
+            };
+
+            // Apply flip for enemies (treating attack direction as movement direction for consistency)
             if unit.owner != state.settings.current_player_turn_id {
                 dx = -dx;
                 dy = -dy;
             }
             (dx, dy)
+        } else if unit.moved
+            && unit.prev_coords.is_valid()
+            && unit.prev_coords.idx != unit.coords.idx
+        {
+            // Revert to move logic if move was last or not a ranged attack
+            calculate_move_push_direction(state, unit)
         } else {
             get_direction_toward_center(initial_x, initial_y, center_x, center_y)
         }
+    } else if unit.moved && unit.prev_coords.is_valid() && unit.prev_coords.idx != unit.coords.idx {
+        calculate_move_push_direction(state, unit)
     } else {
-        // Not previously moved or attacked (or not a ranged attack): push towards center
+        // Rule 4: Not previously moved or attacked: push towards center
         get_direction_toward_center(initial_x, initial_y, center_x, center_y)
     };
 
@@ -782,6 +798,34 @@ fn get_direction_toward_center(x: i32, y: i32, cx: i32, cy: i32) -> (i32, i32) {
     // If exact center, push South
     if dx == 0 && dy == 0 {
         dy = 1;
+    }
+    (dx, dy)
+}
+
+fn calculate_move_push_direction(_state: &GameState, unit: &UnitState) -> (i32, i32) {
+    let initial_x = unit.coords.x;
+    let initial_y = unit.coords.y;
+    let prev = unit.prev_coords;
+
+    let mut dx = if initial_x > prev.x {
+        1
+    } else if initial_x < prev.x {
+        -1
+    } else {
+        0
+    };
+    let mut dy = if initial_y > prev.y {
+        1
+    } else if initial_y < prev.y {
+        -1
+    } else {
+        0
+    };
+
+    // Rule 2: Enemy units pushed in opposite direction
+    if unit.owner != _state.settings.current_player_turn_id {
+        dx = -dx;
+        dy = -dy;
     }
     (dx, dy)
 }
@@ -850,14 +894,24 @@ fn is_steppable_for_push(state: &GameState, unit: &UnitState, idx: i32) -> bool 
         Some(t) => t,
         None => return false,
     };
+    let tech = &state.tribes.get(&unit.owner).unwrap().tech_vanilla;
 
     match tile.terrain_type {
         TerrainType::Water | TerrainType::Ocean => {
             let has_bridge = get_structure_type_at(state, idx) == Some(StructureType::Bridge);
+            let has_port = get_structure_type_at(state, idx) == Some(StructureType::Port);
             if !settings.skills.contains(&SkillType::Float)
                 && !settings.skills.contains(&SkillType::Fly)
                 && !tile.is_algae()
                 && !has_bridge
+                && !has_port
+            {
+                return false;
+            }
+        }
+        TerrainType::Mountain => {
+            if !settings.skills.contains(&SkillType::Fly)
+                && has_technology(&tech, TechnologyType::Climbing)
             {
                 return false;
             }
