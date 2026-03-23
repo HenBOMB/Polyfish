@@ -67,7 +67,7 @@ pub fn spend_stars(state: &mut GameState, amount: i32) -> UndoCallback {
         tribe.stars -= amount;
 
         // println!(
-        //     "[DEBUG] Tribe {} {} {} stars: {} -> {} (Turn {})",
+        //     "🐛 Tribe {} {} {} stars: {} -> {} (Turn {})",
         //     pov_id,
         //     if amount > 0 { "spent" } else { "gained" },
         //     amount.abs(),
@@ -506,7 +506,7 @@ pub fn process_start_turn_effects(state: &mut GameState, player_id: PlayerId) ->
 
                     unit.unit_type = target_type;
                     let new_max_hp = crate::functions::get_unit_max_health(unit);
-                    unit.health = (new_max_hp - damage).max(1); // Minimum 1 HP
+                    unit.health = (new_max_hp - damage).max(1.0); // Minimum 1 HP
 
                     // Add undo
                     undos.push(Box::new(move |s| {
@@ -698,7 +698,7 @@ pub fn process_end_turn_effects(state: &mut GameState, _player_id: PlayerId) -> 
                                 tribe.units.iter().position(|u| u.coords.idx == t_idx)
                             {
                                 undos.push(crate::actions::units::heal_unit(
-                                    state, unit_owner, unit_pos, 4,
+                                    state, unit_owner, unit_pos, 4.0,
                                 ));
                             }
                         }

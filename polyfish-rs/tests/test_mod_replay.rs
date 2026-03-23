@@ -44,7 +44,7 @@ async fn test_mod_replay_ingestion() {
     game.state = mod_replay.game_state;
     {
         let t147 = game.state.tiles.get(&147).unwrap();
-        println!("    [DEBUG INIT] Tile 147 Owner: {}", t147.owner);
+        println!("🐛 Tile 147 Owner: {}", t147.owner);
     }
     if game.state.settings.current_player_turn_id == 0 {
         game.state.settings.current_player_turn_id = 1;
@@ -63,9 +63,9 @@ async fn test_mod_replay_ingestion() {
     game.state.settings._are_you_sure = true;
 
     for turn_data in mod_replay.turns {
-        println!("--- TURN {} ---", turn_data.turn);
+        println!("\n⬦⬦⬦⬦ TURN {} ⬦⬦⬦⬦", turn_data.turn);
         for player_data in turn_data.players {
-            println!("  Player {}", player_data.player_id);
+            println!("👤 Player {}", player_data.player_id);
             // Reset units for this player to make moves legal
             if let Some(tribe) = game.state.tribes.get_mut(&player_data.player_id) {
                 for unit in &mut tribe.units {
@@ -79,7 +79,7 @@ async fn test_mod_replay_ingestion() {
             for cmd_json in player_data.commands {
                 if let Some(tribe) = game.state.tribes.get(&player_data.player_id) {
                     println!(
-                        "[DEBUG LEGAL] Player {} has {} stars",
+                        "🐛 Player {} has {} stars",
                         player_data.player_id, tribe.stars
                     );
                 }
@@ -151,7 +151,7 @@ async fn test_mod_replay_ingestion() {
                                     Some(serde_json::from_value(tiles.clone()).unwrap());
                             }
 
-                            println!("    Executing: {:?}", m_with_hints.describe(&game.state));
+                            println!("🚀 Executing: {}", m_with_hints.describe(&game.state));
                             game.play_move(&m_with_hints);
                         }
                         // Match logic for Capture moves (moveType 8)
@@ -168,10 +168,10 @@ async fn test_mod_replay_ingestion() {
                                     Some(serde_json::from_value(tiles.clone()).unwrap());
                             }
 
-                            println!("    Executing: {:?}", m_with_hints.describe(&game.state));
+                            println!("🚀 Executing: {}", m_with_hints.describe(&game.state));
                             game.play_move(&m_with_hints);
                         } else {
-                            println!("    Executing: {:?}", m.describe(&game.state));
+                            println!("🚀 Executing: {}", m.describe(&game.state));
 
                             // // Debug Recover
                             // let mut pre_health = 0;
@@ -188,7 +188,7 @@ async fn test_mod_replay_ingestion() {
                             //         let owner =
                             //             game.state.tiles.get(&src).map(|t| t.owner).unwrap_or(0);
                             //         println!(
-                            //             "    [DEBUG ABILITY] Unit at {} has health {}/{} (Tile Owner: {})",
+                            //             "🐛 Unit at {} has health {}/{} (Tile Owner: {})",
                             //             src,
                             //             u.health,
                             //             polyfish::functions::get_unit_max_health(u),
@@ -208,7 +208,7 @@ async fn test_mod_replay_ingestion() {
                             //     if let Some(u) = polyfish::functions::get_unit_at(&game.state, src)
                             //     {
                             //         println!(
-                            //             "    [DEBUG ABILITY] Unit at {} now has health {} (Healed {})",
+                            //             "🐛 Unit at {} now has health {} (Healed {})",
                             //             src,
                             //             u.health,
                             //             u.health - pre_health
@@ -230,7 +230,7 @@ async fn test_mod_replay_ingestion() {
                 if !found {
                     let pov_id = player_data.player_id;
                     let tribe = game.state.tribes.get(&pov_id).unwrap();
-                    println!("    FAILED TO FIND MOVE IN LEGAL MOVES!");
+                    println!("\n❌ FAILED TO FIND MOVE IN LEGAL MOVES! ❌");
 
                     // if cmd_json["moveType"] == 9? use polyfish::types::CityRewardType
 
@@ -272,7 +272,7 @@ async fn test_mod_replay_ingestion() {
                         let reward_type: polyfish::CityRewardType =
                             serde_json::from_value(cmd_json["type"].clone()).unwrap();
                         println!(
-                            "    Command: {:?} {:?} {}",
+                            "🔧 {:?} {:?} {}",
                             move_type,
                             reward_type,
                             cmd_json["target"].as_i64().unwrap(),
@@ -281,7 +281,7 @@ async fn test_mod_replay_ingestion() {
                         let ability_type: polyfish::AbilityType =
                             serde_json::from_value(cmd_json["type"].clone()).unwrap();
                         println!(
-                            "    Command: {:?} {:?} {}",
+                            "🔧 {:?} {:?} {}",
                             move_type,
                             ability_type,
                             cmd_json
@@ -294,7 +294,7 @@ async fn test_mod_replay_ingestion() {
                         let build_type: polyfish::StructureType =
                             serde_json::from_value(cmd_json["type"].clone()).unwrap();
                         println!(
-                            "    Command: {:?} {:?} {}",
+                            "🔧 {:?} {:?} {}",
                             move_type,
                             build_type,
                             cmd_json
@@ -308,7 +308,7 @@ async fn test_mod_replay_ingestion() {
                             serde_json::from_value(cmd_json["type"].clone()).unwrap();
 
                         println!(
-                            "    Command: {} {:?} at {}",
+                            "🔧 {} {:?} at {}",
                             if unit_type.is_naval() {
                                 "Upgrade"
                             } else {
@@ -323,7 +323,7 @@ async fn test_mod_replay_ingestion() {
                         );
                     } else {
                         println!(
-                            "    Command: {:?} {}",
+                            "🔧 {:?} {}",
                             polyfish::MoveType::from(
                                 cmd_json["moveType"].as_i64().unwrap_or(0) as i32
                             ),
@@ -332,12 +332,12 @@ async fn test_mod_replay_ingestion() {
                     }
 
                     println!(
-                        "    Tribe {} Stars: {}, Cities: {}",
+                        "🗣️  Tribe {} Stars: {}, Cities: {}",
                         pov_id,
                         tribe.stars,
                         tribe.cities.len()
                     );
-                    println!("    Legal Moves (first 50):");
+                    println!("📚 Legal Moves (first 50):");
                     for (i, m) in legal_moves.iter().take(50).enumerate() {
                         println!(
                             "      {}: {:?} -> {}",
@@ -355,7 +355,7 @@ async fn test_mod_replay_ingestion() {
                         if let Some(s_idx) = src_idx {
                             if let Some(u) = tribe.units.iter().find(|u| u.coords.idx == s_idx) {
                                 println!(
-                                    "    Unit at SRC ({}): Owner={}, Type={:?}, Moved={}, Attacked={}, Health={}/{}",
+                                    "🪖 Unit at SRC ({}): Owner={}, Type={:?}, Moved={}, Attacked={}, Health={}/{}",
                                     s_idx,
                                     u.owner,
                                     u.unit_type,
@@ -365,7 +365,7 @@ async fn test_mod_replay_ingestion() {
                                     polyfish::functions::get_unit_max_health(u)
                                 );
                             } else {
-                                println!("    NO UNIT at SRC ({})!", s_idx);
+                                println!("❌ NO UNIT at SRC ({})!", s_idx);
                             }
                         }
                     }
@@ -376,7 +376,7 @@ async fn test_mod_replay_ingestion() {
                             polyfish::functions::get_unit_at(&game.state, target_idx)
                         {
                             println!(
-                                "    Unit already at TARGET ({}): Owner={}, Type={:?}",
+                                "❌ Unit already at TARGET ({}): Owner={}, Type={:?}",
                                 target_idx, unit.owner, unit.unit_type
                             );
                         }
@@ -385,7 +385,7 @@ async fn test_mod_replay_ingestion() {
                         for (tid, t) in &game.state.tribes {
                             if let Some(c) = t.cities.iter().find(|c| c.idx == target_idx) {
                                 println!(
-                                    "    TARGET CITY ({}): Tribe={}, Level={}, Progress={}, Population={}, Rewards={:?}",
+                                    "🎯 TARGET CITY ({}): Tribe={}, Level={}, Progress={}, Population={}, Rewards={:?}",
                                     target_idx, tid, c.level, c.progress, c.population, c.rewards
                                 );
                             }

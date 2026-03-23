@@ -52,7 +52,7 @@ impl Move for HealOthersMove {
                         if let Some(pos) =
                             tribe.units.iter().position(|u| u.coords.idx == target_idx)
                         {
-                            undos.push(heal_unit(state, target_owner, pos, 4));
+                            undos.push(heal_unit(state, target_owner, pos, 4.0));
                         }
                     }
                 }

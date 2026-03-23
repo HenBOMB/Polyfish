@@ -15,7 +15,6 @@ pub mod step;
 pub mod summon;
 pub mod upgrade;
 
-
 pub use abilities::*;
 pub use attack::AttackMove;
 pub use build::BuildMove;
@@ -160,9 +159,15 @@ impl Move for ResignMove {
         }
 
         // Remove all units - done after dropping the mutable tribe borrow to avoid conflict
-        let unit_count = state.tribes.get(&pov_id).map(|t| t.units.len()).unwrap_or(0);
+        let unit_count = state
+            .tribes
+            .get(&pov_id)
+            .map(|t| t.units.len())
+            .unwrap_or(0);
         for i in (0..unit_count).rev() {
-            undos.push(crate::actions::units::remove_unit(state, pov_id, i, None, None));
+            undos.push(crate::actions::units::remove_unit(
+                state, pov_id, i, None, None,
+            ));
         }
 
         undos.push(Box::new(move |s| {
@@ -192,7 +197,7 @@ pub fn generate_legal_moves(state: &GameState) -> Vec<Box<dyn Move>> {
 
     // let pov_id = state.settings.current_player_turn_id;
     // if let Some(tribe) = state.tribes.get(&pov_id) {
-    //     println!("[DEBUG LEGAL] Player {} has {} stars", pov_id, tribe.stars);
+    //     println!("🐛 Player {} has {} stars", pov_id, tribe.stars);
     // }
     crate::moves::reward::generate_reward_moves(state, &mut moves);
     if !moves.is_empty() {
@@ -239,7 +244,7 @@ fn generate_unit_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
         );
 
         // 3. Attack (Requires positive health)
-        if !unit.attacked && unit.health > 0 {
+        if !unit.attacked && unit.health > 0.0 {
             generate_attack_moves(state, unit, unit.coords.idx, moves);
         }
 

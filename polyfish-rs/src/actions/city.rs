@@ -128,7 +128,7 @@ pub fn claim_territory(
         if let Some(tile) = state.tiles.get_mut(&idx) {
             old_owners.push((idx, tile.owner, tile.ruling_city_coords.clone()));
             // if idx == 147 {
-            //     println!("    [DEBUG TERRITORY] Tile 147 being claimed! City: {}, Old Owner: {}, New Owner: {}", city_tile_idx, tile.owner, pov_id);
+            //     println!("🐛 Tile 147 being claimed! City: {}, Old Owner: {}, New Owner: {}", city_tile_idx, tile.owner, pov_id);
             // }
             tile.owner = pov_id;
             tile.ruling_city_coords = Some(city_coords.clone());
@@ -254,13 +254,13 @@ pub fn capture_city(state: &mut GameState, tile_idx: i32) -> Result<UndoCallback
                 if let Some(nt) = s.tribes.get_mut(&pov_id) {
                     if let Some(p) = nt.cities.iter().position(|c| c.idx == c_clone.idx) {
                         println!(
-                            "[DEBUG] CaptureUndo: Removing city at {} from tribe {}",
+                            "🐛 CaptureUndo: Removing city at {} from tribe {}",
                             c_clone.idx, pov_id
                         );
                         nt.cities.remove(p);
                     } else {
                         eprintln!(
-                            "[DEBUG] CaptureUndo: FAILED to find city at {} in tribe {}",
+                            "🐛 CaptureUndo: FAILED to find city at {} in tribe {}",
                             c_clone.idx, pov_id
                         );
                     }

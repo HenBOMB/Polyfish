@@ -206,7 +206,7 @@ pub struct UnitState {
     #[serde(rename = "type")]
     pub unit_type: UnitType,
     #[serde(alias = "hp")]
-    pub health: i32,
+    pub health: f32,
     #[serde(
         default,
         alias = "promoted",
@@ -253,7 +253,7 @@ impl Default for UnitState {
         Self {
             owner: 0,
             unit_type: UnitType::None,
-            health: 10,
+            health: 10.0,
             veteran: false,
             kills: 0,
             coords: Coords::default(),

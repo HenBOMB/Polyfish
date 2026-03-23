@@ -11,7 +11,7 @@ pub struct UnitSetting {
     pub movement: i32,
     pub defense: f32,
     pub range: i32,
-    pub health: i32, // todo move to Option to enfoce passenger inheritance
+    pub health: f32, // todo move to Option to enfoce passenger inheritance
     pub upgrade_from: Option<UnitType>,
     pub is_unique: bool,
     pub skills: HashSet<SkillType>,
@@ -27,7 +27,7 @@ impl Default for UnitSetting {
             movement: 1,
             defense: 0.0,
             range: 1,
-            health: 10,
+            health: 10.0,
             upgrade_from: None,
             is_unique: false,
             skills: HashSet::new(),
@@ -55,7 +55,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
         U::None => UnitSetting {
             cost: -1,
             attack: -1.0,
-            health: 1,
+            health: 1.0,
             ..Default::default()
         },
 
@@ -65,7 +65,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 1,
             defense: 2.0,
             range: 1,
-            health: 10,
+            health: 10.0,
             skills: skills![S::Dash, S::Fortify],
             ..Default::default()
         },
@@ -75,7 +75,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 2,
             defense: 1.0,
             range: 1,
-            health: 10,
+            health: 10.0,
             skills: skills![S::Dash, S::Escape, S::Fortify],
             ..Default::default()
         },
@@ -85,7 +85,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 3,
             defense: 1.0,
             range: 1,
-            health: 10,
+            health: 10.0,
             skills: skills![S::Dash, S::Persist, S::Fortify],
             ..Default::default()
         },
@@ -95,7 +95,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 1,
             defense: 3.0,
             range: 1,
-            health: 15,
+            health: 15.0,
             skills: skills![S::Fortify],
             ..Default::default()
         },
@@ -105,7 +105,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 1,
             defense: 0.0,
             range: 3,
-            health: 10,
+            health: 10.0,
             skills: skills![S::Stiff],
             ..Default::default()
         },
@@ -115,7 +115,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 1,
             defense: 1.0,
             range: 2,
-            health: 10,
+            health: 10.0,
             skills: skills![S::Dash, S::Fortify],
             ..Default::default()
         },
@@ -125,7 +125,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 1,
             defense: 1.0,
             range: 1,
-            health: 10,
+            health: 10.0,
             skills: skills![S::HealOthers, S::Convert, S::Stiff],
             ..Default::default()
         },
@@ -135,7 +135,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 1,
             defense: 3.0,
             range: 1,
-            health: 15,
+            health: 15.0,
             skills: skills![S::Dash],
             ..Default::default()
         },
@@ -145,7 +145,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 1,
             defense: 4.0,
             range: 1,
-            health: 40,
+            health: 40.0,
             is_super: true,
             ..Default::default()
         },
@@ -157,7 +157,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 2,
             defense: 0.5,
             range: 1,
-            health: 5,
+            health: 5.0,
             skills: skills![
                 S::Hide,
                 S::Infiltrate,
@@ -174,7 +174,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 1,
             defense: 2.0,
             range: 1,
-            health: 10,
+            health: 10.0,
             skills: skills![S::Dash, S::Surprise, S::Independent, S::Static],
             ..Default::default()
         },
@@ -184,7 +184,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 2,
             defense: 2.0,
             range: 1,
-            health: 10,
+            health: 10.0,
             skills: skills![
                 S::Carry,
                 S::Float,
@@ -201,7 +201,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 2,
             defense: 0.5,
             range: 1,
-            health: 5,
+            health: 5.0,
             skills: skills![
                 S::Carry,
                 S::Float,
@@ -221,7 +221,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 2,
             defense: 2.0,
             range: 2,
-            health: 10,
+            health: 10.0,
             skills: skills![S::Carry, S::Float, S::Static],
             ..Default::default()
         },
@@ -231,7 +231,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 3,
             defense: 1.0,
             range: 2,
-            health: 10, // inherits
+            health: 10.0, // inherits
             upgrade_from: Some(U::Transportship),
             skills: skills![S::Carry, S::Dash, S::Float, S::Static, S::Scout],
             ..Default::default()
@@ -242,7 +242,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 3,
             defense: 3.0,
             range: 1,
-            health: 10,
+            health: 10.0,
             upgrade_from: Some(U::Transportship),
             skills: skills![S::Dash, S::Float, S::Carry, S::Static],
             ..Default::default()
@@ -253,7 +253,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 2,
             defense: 2.0,
             range: 3,
-            health: 10,
+            health: 10.0,
             upgrade_from: Some(U::Transportship),
             skills: skills![S::Carry, S::Float, S::Splash, S::Stiff, S::Static],
             ..Default::default()
@@ -264,7 +264,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 2,
             defense: 4.0,
             range: 1,
-            health: 40,
+            health: 40.0,
             is_super: true,
             skills: skills![S::Float, S::Carry, S::Stiff, S::Stomp, S::Static],
             ..Default::default()
@@ -277,7 +277,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 2,
             defense: 5.0,
             range: 1,
-            health: 40,
+            health: 40.0,
             is_super: true,
             skills: skills![S::Escape, S::Static, S::AutoFlood, S::Amphibious],
             ..Default::default()
@@ -288,7 +288,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 2,
             defense: 1.0,
             range: 1,
-            health: 10,
+            health: 10.0,
             skills: skills![S::Dash, S::Escape, S::Fortify, S::Amphibious],
             ..Default::default()
         },
@@ -298,7 +298,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 2,
             defense: 1.0,
             range: 2,
-            health: 10,
+            health: 10.0,
             skills: skills![S::Dash, S::Persist, S::Amphibious],
             ..Default::default()
         },
@@ -310,7 +310,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             UnitSetting {
                 cost: -1,
                 attack: -1.0,
-                health: 1,
+                health: 1.0,
                 ..Default::default()
             }
         }
@@ -323,7 +323,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 1,
             defense: 3.0,
             range: 1,
-            health: 20,
+            health: 20.0,
             skills: skills![S::Dash, S::Creep],
             ..Default::default()
         },
@@ -334,7 +334,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 2,
             defense: 3.0,
             range: 1,
-            health: 20,
+            health: 20.0,
             skills: skills![S::Dash, S::Creep, S::Eat, S::Static],
             ..Default::default()
         },
@@ -344,7 +344,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 1,
             defense: 2.0,
             range: 1,
-            health: 10,
+            health: 10.0,
             skills: skills![
                 S::Independent,
                 S::Creep,
@@ -361,7 +361,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 3,
             defense: 2.0,
             range: 1,
-            health: 20,
+            health: 20.0,
             skills: skills![S::Dash, S::Creep, S::Explode, S::Static],
             ..Default::default()
         },
@@ -371,7 +371,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 1,
             defense: 1.0,
             range: 1,
-            health: 10,
+            health: 10.0,
             skills: skills![S::Convert, S::Swarm, S::Static],
             ..Default::default()
         },
@@ -381,7 +381,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 1,
             defense: 3.0,
             range: 1,
-            health: 15,
+            health: 15.0,
             skills: skills![S::Poison, S::Creep],
             ..Default::default()
         },
@@ -391,7 +391,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 2,
             defense: 1.0,
             range: 1,
-            health: 5,
+            health: 5.0,
             skills: skills![S::Dash, S::Escape, S::Creep, S::Sneak],
             ..Default::default()
         },
@@ -401,7 +401,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 3,
             defense: 2.0,
             range: 1,
-            health: 10,
+            health: 10.0,
             is_unique: true,
             skills: skills![S::Dash, S::Water],
             ..Default::default()
@@ -412,7 +412,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 2,
             defense: 3.0,
             range: 1,
-            health: 10,
+            health: 10.0,
             is_unique: true,
             skills: skills![S::Dash, S::Explode, S::Stiff, S::Amphibious],
             ..Default::default()
@@ -423,7 +423,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 2,
             defense: 2.0,
             range: 2,
-            health: 5,
+            health: 5.0,
             skills: skills![S::Dash, S::Fly, S::Poison, S::Surprise, S::DoubleAttack],
             ..Default::default()
         },
@@ -433,7 +433,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 1,
             defense: 1.0,
             range: 3,
-            health: 10,
+            health: 10.0,
             skills: skills![S::Poison, S::Splash, S::Creep],
             ..Default::default()
         },
@@ -443,7 +443,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 2,
             defense: 4.0,
             range: 1,
-            health: 20,
+            health: 20.0,
             is_super: false,
             skills: skills![S::Water, S::Algae, S::Stomp, S::Poison, S::Static],
             ..Default::default()
@@ -454,7 +454,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 0,
             defense: 3.0,
             range: 1,
-            health: 10,
+            health: 10.0,
             is_super: false,
             becomes: Some(U::Larva),
             skills: skills![S::Grow, S::Explode, S::Static, S::Stiff],
@@ -466,7 +466,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 1,
             defense: 2.0,
             range: 1,
-            health: 10,
+            health: 10.0,
             is_super: false,
             becomes: Some(U::Moth),
             skills: skills![
@@ -486,7 +486,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 2,
             defense: 0.1,
             range: 1,
-            health: 10,
+            health: 10.0,
             is_super: false,
             skills: skills![
                 S::Fly,
@@ -507,7 +507,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 1,
             defense: 2.0,
             range: 1,
-            health: 10,
+            health: 10.0,
             is_super: true,
             becomes: Some(U::BabyDragon),
             skills: skills![S::Grow, S::Fortify, S::Static, S::Stiff],
@@ -519,7 +519,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 2,
             defense: 3.0,
             range: 1,
-            health: 15,
+            health: 15.0,
             is_super: true,
             becomes: Some(U::FireDragon),
             skills: skills![S::Grow, S::Dash, S::Fly, S::Escape, S::Scout, S::Static],
@@ -531,7 +531,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 3,
             defense: 3.0,
             range: 2,
-            health: 20,
+            health: 20.0,
             is_super: true,
             skills: skills![S::Dash, S::Fly, S::Splash, S::Scout, S::Static],
             ..Default::default()
@@ -542,7 +542,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             movement: 1,
             defense: 1.0,
             range: 1,
-            health: 15,
+            health: 15.0,
             skills: skills![S::Dash, S::Fortify, S::Independent, S::Static],
             ..Default::default()
         },

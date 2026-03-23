@@ -39,7 +39,7 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                         45.0
                     } else if preview.attacker_dies {
                         1.0 // Suicide is very low priority
-                    } else if preview.damage_to_defender > 5 {
+                    } else if preview.damage_to_defender > 5.0 {
                         25.0
                     } else {
                         15.0

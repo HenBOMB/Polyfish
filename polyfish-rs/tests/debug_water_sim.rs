@@ -108,7 +108,7 @@ fn main() -> anyhow::Result<()> {
         let (best_move, _) = agent.select_move_with_stats(&mut game);
 
         if let Some(m) = best_move {
-            println!("Executing: {}", m.describe(&game.state));
+            println!("🚀 Executing: {}", m.describe(&game.state));
 
             if game.play_move(m.as_ref()).is_some() {
                 // Success

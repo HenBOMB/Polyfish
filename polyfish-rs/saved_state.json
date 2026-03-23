@@ -160,8 +160,8 @@
       },
       "type": 2,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -200,8 +200,8 @@
       },
       "type": 1,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -606,8 +606,8 @@
       },
       "type": 3,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -1022,8 +1022,8 @@
       },
       "type": 3,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -1434,8 +1434,8 @@
       },
       "type": 5,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -1762,8 +1762,8 @@
       },
       "type": 1,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -1811,8 +1811,8 @@
       },
       "type": 3,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -1837,8 +1837,8 @@
       },
       "type": 5,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -2148,8 +2148,8 @@
       },
       "type": 1,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -2173,8 +2173,8 @@
       },
       "type": 3,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -2562,8 +2562,8 @@
       },
       "type": 2,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -3852,8 +3852,8 @@
       },
       "type": 3,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -4145,8 +4145,8 @@
       },
       "type": 3,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -4189,8 +4189,8 @@
       },
       "type": 3,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -4215,8 +4215,8 @@
       },
       "type": 3,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -4265,8 +4265,8 @@
       },
       "type": 5,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -4310,8 +4310,8 @@
       },
       "type": 1,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -4564,8 +4564,8 @@
       },
       "type": 5,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -4640,8 +4640,8 @@
       },
       "type": 5,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -4684,8 +4684,8 @@
       },
       "type": 3,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -4930,8 +4930,8 @@
       },
       "type": 3,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -4950,8 +4950,8 @@
       },
       "type": 3,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -4975,8 +4975,8 @@
       },
       "type": 5,
       "explorers": [
-        1,
-        2
+        2,
+        1
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -5285,8 +5285,8 @@
       },
       "type": 1,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -5349,8 +5349,8 @@
       },
       "type": 1,
       "explorers": [
-        2,
-        1
+        1,
+        2
       ],
       "hasRoad": false,
       "hasRoute": false,
@@ -6278,7 +6278,7 @@
         {
           "owner": 1,
           "type": 42,
-          "health": 8,
+          "health": 8.0,
           "veteran": false,
           "kills": 2,
           "prevCoords": {
@@ -6314,7 +6314,7 @@
         {
           "owner": 1,
           "type": 42,
-          "health": 10,
+          "health": 10.0,
           "veteran": false,
           "kills": 1,
           "prevCoords": {
@@ -6350,7 +6350,7 @@
         {
           "owner": 1,
           "type": 5,
-          "health": 10,
+          "health": 10.0,
           "veteran": false,
           "kills": 2,
           "prevCoords": {
@@ -6381,7 +6381,7 @@
         {
           "owner": 1,
           "type": 41,
-          "health": 15,
+          "health": 15.0,
           "veteran": false,
           "kills": 0,
           "prevCoords": {
@@ -6413,7 +6413,7 @@
         {
           "owner": 1,
           "type": 41,
-          "health": 15,
+          "health": 15.0,
           "veteran": false,
           "kills": 1,
           "prevCoords": {
@@ -6449,7 +6449,7 @@
         {
           "owner": 1,
           "type": 5,
-          "health": 15,
+          "health": 15.0,
           "veteran": false,
           "kills": 0,
           "prevCoords": {
@@ -6480,7 +6480,7 @@
         {
           "owner": 1,
           "type": 45,
-          "health": 40,
+          "health": 40.0,
           "veteran": false,
           "kills": 0,
           "prevCoords": {
@@ -6511,7 +6511,7 @@
         {
           "owner": 1,
           "type": 5,
-          "health": 11,
+          "health": 11.0,
           "veteran": false,
           "kills": 0,
           "prevCoords": {
@@ -6542,7 +6542,7 @@
         {
           "owner": 1,
           "type": 45,
-          "health": 40,
+          "health": 40.0,
           "veteran": false,
           "kills": 0,
           "prevCoords": {
@@ -6573,7 +6573,7 @@
         {
           "owner": 1,
           "type": 5,
-          "health": 15,
+          "health": 15.0,
           "veteran": false,
           "kills": 0,
           "prevCoords": {
@@ -6604,7 +6604,7 @@
         {
           "owner": 1,
           "type": 12,
-          "health": 40,
+          "health": 40.0,
           "veteran": false,
           "kills": 0,
           "prevCoords": {
@@ -6872,7 +6872,7 @@
         {
           "owner": 2,
           "type": 15,
-          "health": 2,
+          "health": 2.0,
           "veteran": false,
           "kills": 0,
           "prevCoords": {
@@ -6907,7 +6907,7 @@
         {
           "owner": 2,
           "type": 2,
-          "health": 10,
+          "health": 10.0,
           "veteran": false,
           "kills": 0,
           "prevCoords": {
@@ -6938,7 +6938,7 @@
         {
           "owner": 2,
           "type": 15,
-          "health": 2,
+          "health": 2.0,
           "veteran": false,
           "kills": 0,
           "prevCoords": {
@@ -6968,7 +6968,7 @@
         {
           "owner": 2,
           "type": 9,
-          "health": 6,
+          "health": 6.0,
           "veteran": false,
           "kills": 0,
           "prevCoords": {
@@ -7003,7 +7003,7 @@
         {
           "owner": 2,
           "type": 9,
-          "health": 10,
+          "health": 10.0,
           "veteran": false,
           "kills": 0,
           "prevCoords": {
@@ -7038,7 +7038,7 @@
         {
           "owner": 2,
           "type": 15,
-          "health": 15,
+          "health": 15.0,
           "veteran": false,
           "kills": 1,
           "prevCoords": {
@@ -7068,7 +7068,7 @@
         {
           "owner": 2,
           "type": 9,
-          "health": 10,
+          "health": 10.0,
           "veteran": false,
           "kills": 0,
           "prevCoords": {
@@ -7103,7 +7103,7 @@
         {
           "owner": 2,
           "type": 9,
-          "health": 10,
+          "health": 10.0,
           "veteran": false,
           "kills": 0,
           "prevCoords": {
@@ -7134,7 +7134,7 @@
         {
           "owner": 2,
           "type": 9,
-          "health": 10,
+          "health": 10.0,
           "veteran": false,
           "kills": 0,
           "prevCoords": {
@@ -7165,7 +7165,7 @@
         {
           "owner": 2,
           "type": 15,
-          "health": 15,
+          "health": 15.0,
           "veteran": false,
           "kills": 0,
           "prevCoords": {
@@ -7191,7 +7191,7 @@
         {
           "owner": 2,
           "type": 15,
-          "health": 15,
+          "health": 15.0,
           "veteran": false,
           "kills": 0,
           "prevCoords": {
@@ -7217,7 +7217,7 @@
         {
           "owner": 2,
           "type": 9,
-          "health": 10,
+          "health": 10.0,
           "veteran": false,
           "kills": 0,
           "prevCoords": {

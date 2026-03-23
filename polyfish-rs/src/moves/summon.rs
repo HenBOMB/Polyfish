@@ -42,7 +42,7 @@ impl Move for SummonMove {
         if let Some(tribe) = state.tribes.get(&pov_id) {
             if tribe.stars < cost {
                 println!(
-                    "[DEBUG] SummonMove::execute FAILED: {:?} at {}, need {}, have {} (Turn {})",
+                    "🐛 SummonMove::execute FAILED: {:?} at {}, need {}, have {} (Turn {})",
                     self.unit_type, self.src_index, cost, tribe.stars, state.settings.turn
                 );
                 return Err(format!(
@@ -99,7 +99,7 @@ pub fn generate_summon_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
         spawnables.push(UnitType::Warrior);
     } else {
         // Debug: print if Warrior is not affordable but we are generating moves
-        // println!("[DEBUG] Warrior not affordable: have {}, need {}", tribe.stars, warrior_settings.cost);
+        // println!("🐛 Warrior not affordable: have {}, need {}", tribe.stars, warrior_settings.cost);
     }
 
     for tech_state in &tribe.tech_vanilla {
@@ -132,7 +132,7 @@ pub fn generate_summon_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
         if count > city.level || is_tile_occupied(state, target_idx) {
             // if tribe.stars >= warrior_settings.cost && target_idx == 163 {
             //     println!(
-            //         "[DEBUG SUMMON] city 163 blocked: count={}, level={}, occupied={}",
+            //         "🐛 city 163 blocked: count={}, level={}, occupied={}",
             //         count,
             //         city.level,
             //         is_tile_occupied(state, target_idx)
@@ -143,7 +143,7 @@ pub fn generate_summon_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
 
         // if target_idx == 163 {
         //     println!(
-        //         "[DEBUG SUMMON] city 163 OK: count={}, level={}, afford={}",
+        //         "🐛 city 163 OK: count={}, level={}, afford={}",
         //         count, city.level, tribe.stars
         //     );
         // }

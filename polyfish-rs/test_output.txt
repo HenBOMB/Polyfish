@@ -494,7 +494,7 @@ running 1 test
 [DEBUG LEGAL] Player 1 has 21 stars
     Executing: "Attack: 40 -> 41"
     [DEBUG COMBAT] Defender (1) at 40 (HP 3) vs Polytaur (2) at 41 (HP 7): Dmg=1, Ret=3, Bonus=1.0
-    [DEBUG] REMOVE_UNIT: Type Defender, Owner 1, Idx 4, Tile 40, Killer Some(2)/idx Some(9)
+🐛 REMOVE_UNIT: Type Defender, Owner 1, Idx 4, Tile 40, Killer Some(2)/idx Some(9)
 [DEBUG LEGAL] Player 1 has 21 stars
     Executing: "Train Defender at 40"
 [DEBUG LEGAL] Player 1 has 18 stars
@@ -510,7 +510,7 @@ running 1 test
 [DEBUG LEGAL] Player 1 has 4 stars
     Executing: "Attack: 152 -> 137"
     [DEBUG COMBAT] Scoutship (1) at 152 (HP 10) vs Warrior (2) at 137 (HP 5): Dmg=6, Ret=0, Bonus=1.0
-    [DEBUG] REMOVE_UNIT: Type Warrior, Owner 2, Idx 0, Tile 137, Killer Some(1)/idx Some(1)
+🐛 REMOVE_UNIT: Type Warrior, Owner 2, Idx 0, Tile 137, Killer Some(1)/idx Some(1)
 [DEBUG LEGAL] Player 1 has 4 stars
     Executing: "Step: 103 -> 104"
 [DEBUG LEGAL] Player 1 has 4 stars
@@ -558,11 +558,11 @@ running 1 test
 [DEBUG LEGAL] Player 2 has 9 stars
     Executing: "Attack: 42 -> 43"
     [DEBUG COMBAT] Polytaur (2) at 42 (HP 6) vs Warrior (1) at 43 (HP 1): Dmg=12, Ret=0, Bonus=1.0
-    [DEBUG] REMOVE_UNIT: Type Warrior, Owner 1, Idx 0, Tile 43, Killer Some(2)/idx Some(8)
+🐛 REMOVE_UNIT: Type Warrior, Owner 1, Idx 0, Tile 43, Killer Some(2)/idx Some(8)
 [DEBUG LEGAL] Player 2 has 9 stars
     Executing: "Attack: 56 -> 40"
     [DEBUG COMBAT] Polytaur (2) at 56 (HP 8) vs Defender (1) at 40 (HP 10): Dmg=5, Ret=9, Bonus=1.5
-    [DEBUG] REMOVE_UNIT: Type Polytaur, Owner 2, Idx 6, Tile 56, Killer Some(1)/idx Some(6)
+🐛 REMOVE_UNIT: Type Polytaur, Owner 2, Idx 6, Tile 56, Killer Some(1)/idx Some(6)
 [DEBUG LEGAL] Player 2 has 9 stars
     Executing: "Step: 105 -> 73"
 [DEBUG LEGAL] Player 2 has 9 stars
@@ -572,7 +572,7 @@ running 1 test
 [DEBUG LEGAL] Player 1 has 27 stars
     Executing: "Attack: 136 -> 137"
     [DEBUG COMBAT] Warrior (1) at 136 (HP 1) vs Polytaur (2) at 137 (HP 3): Dmg=5, Ret=0, Bonus=1.0
-    [DEBUG] REMOVE_UNIT: Type Polytaur, Owner 2, Idx 1, Tile 137, Killer Some(1)/idx Some(1)
+🐛 REMOVE_UNIT: Type Polytaur, Owner 2, Idx 1, Tile 137, Killer Some(1)/idx Some(1)
 [DEBUG LEGAL] Player 1 has 27 stars
     Executing: "Train Defender at 136"
 [DEBUG LEGAL] Player 1 has 24 stars
@@ -598,13 +598,13 @@ running 1 test
 [DEBUG LEGAL] Player 2 has 30 stars
     Executing: "Attack: 138 -> 137"
     [DEBUG COMBAT] Polytaur (2) at 138 (HP 15) vs Warrior (1) at 137 (HP 1): Dmg=13, Ret=0, Bonus=1.0
-    [DEBUG] REMOVE_UNIT: Type Warrior, Owner 1, Idx 1, Tile 137, Killer Some(2)/idx Some(0)
+🐛 REMOVE_UNIT: Type Warrior, Owner 1, Idx 1, Tile 137, Killer Some(2)/idx Some(0)
 [DEBUG LEGAL] Player 2 has 30 stars
     Executing: "Step: 122 -> 121"
 [DEBUG LEGAL] Player 2 has 30 stars
     Executing: "Attack: 121 -> 136"
     [DEBUG COMBAT] Warrior (2) at 121 (HP 10) vs Defender (1) at 136 (HP 15): Dmg=1, Ret=12, Bonus=4.0
-    [DEBUG] REMOVE_UNIT: Type Warrior, Owner 2, Idx 9, Tile 121, Killer Some(1)/idx Some(6)
+🐛 REMOVE_UNIT: Type Warrior, Owner 2, Idx 9, Tile 121, Killer Some(1)/idx Some(6)
 [DEBUG LEGAL] Player 2 has 30 stars
     Executing: "Step: 124 -> 123"
 [DEBUG LEGAL] Player 2 has 30 stars
@@ -612,7 +612,7 @@ running 1 test
 [DEBUG LEGAL] Player 2 has 30 stars
     Executing: "Attack: 153 -> 136"
     [DEBUG COMBAT] Warrior (2) at 153 (HP 10) vs Defender (1) at 136 (HP 14): Dmg=1, Ret=11, Bonus=4.0
-    [DEBUG] REMOVE_UNIT: Type Warrior, Owner 2, Idx 7, Tile 153, Killer Some(1)/idx Some(6)
+🐛 REMOVE_UNIT: Type Warrior, Owner 2, Idx 7, Tile 153, Killer Some(1)/idx Some(6)
 [DEBUG LEGAL] Player 2 has 30 stars
     Executing: "Step: 172 -> 155"
 [DEBUG LEGAL] Player 2 has 30 stars
@@ -622,17 +622,17 @@ running 1 test
 [DEBUG LEGAL] Player 2 has 28 stars
     Executing: "Attack: 57 -> 56"
     [DEBUG COMBAT] Polytaur (2) at 57 (HP 7) vs Defender (1) at 56 (HP 5): Dmg=8, Ret=0, Bonus=1.0
-    [DEBUG] REMOVE_UNIT: Type Defender, Owner 1, Idx 5, Tile 56, Killer Some(2)/idx Some(1)
+🐛 REMOVE_UNIT: Type Defender, Owner 1, Idx 5, Tile 56, Killer Some(2)/idx Some(1)
 [DEBUG LEGAL] Player 2 has 28 stars
     Executing: "Step: 59 -> 42"
 [DEBUG LEGAL] Player 2 has 28 stars
     Executing: "Attack: 42 -> 27"
     [DEBUG COMBAT] Polytaur (2) at 42 (HP 5) vs Defender (1) at 27 (HP 15): Dmg=2, Ret=11, Bonus=1.5
-    [DEBUG] REMOVE_UNIT: Type Polytaur, Owner 2, Idx 5, Tile 42, Killer Some(1)/idx Some(2)
+🐛 REMOVE_UNIT: Type Polytaur, Owner 2, Idx 5, Tile 42, Killer Some(1)/idx Some(2)
 [DEBUG LEGAL] Player 2 has 28 stars
     Executing: "Attack: 43 -> 27"
     [DEBUG COMBAT] Polytaur (2) at 43 (HP 6) vs Defender (1) at 27 (HP 13): Dmg=3, Ret=10, Bonus=1.5
-    [DEBUG] REMOVE_UNIT: Type Polytaur, Owner 2, Idx 5, Tile 43, Killer Some(1)/idx Some(2)
+🐛 REMOVE_UNIT: Type Polytaur, Owner 2, Idx 5, Tile 43, Killer Some(1)/idx Some(2)
 [DEBUG LEGAL] Player 2 has 28 stars
     Executing: "Research Archery"
 [DEBUG LEGAL] Player 2 has 12 stars
@@ -654,7 +654,7 @@ running 1 test
 [DEBUG LEGAL] Player 1 has 8 stars
     Executing: "Attack: 40 -> 56"
     [DEBUG COMBAT] Warrior (1) at 40 (HP 10) vs Polytaur (2) at 56 (HP 7): Dmg=7, Ret=0, Bonus=1.5
-    [DEBUG] REMOVE_UNIT: Type Polytaur, Owner 2, Idx 1, Tile 56, Killer Some(1)/idx Some(6)
+🐛 REMOVE_UNIT: Type Polytaur, Owner 2, Idx 1, Tile 56, Killer Some(1)/idx Some(6)
 [DEBUG LEGAL] Player 1 has 8 stars
     Executing: "Train Defender at 40"
 [DEBUG LEGAL] Player 1 has 5 stars
@@ -662,7 +662,7 @@ running 1 test
 [DEBUG LEGAL] Player 1 has 5 stars
     Executing: "Attack: 136 -> 137"
     [DEBUG COMBAT] Defender (1) at 136 (HP 13) vs Polytaur (2) at 137 (HP 2): Dmg=4, Ret=0, Bonus=1.0
-    [DEBUG] REMOVE_UNIT: Type Polytaur, Owner 2, Idx 0, Tile 137, Killer Some(1)/idx Some(5)
+🐛 REMOVE_UNIT: Type Polytaur, Owner 2, Idx 0, Tile 137, Killer Some(1)/idx Some(5)
 [DEBUG LEGAL] Player 1 has 5 stars
     Executing: "Train Defender at 136"
 [DEBUG LEGAL] Player 1 has 2 stars
@@ -688,7 +688,7 @@ running 1 test
 [DEBUG LEGAL] Player 2 has 33 stars
     Executing: "Attack: 154 -> 137"
     [DEBUG COMBAT] Polytaur (2) at 154 (HP 15) vs Defender (1) at 137 (HP 5): Dmg=11, Ret=0, Bonus=1.0
-    [DEBUG] REMOVE_UNIT: Type Defender, Owner 1, Idx 5, Tile 137, Killer Some(2)/idx Some(4)
+🐛 REMOVE_UNIT: Type Defender, Owner 1, Idx 5, Tile 137, Killer Some(2)/idx Some(4)
 [DEBUG LEGAL] Player 2 has 33 stars
     Executing: "Step: 203 -> 186"
 [DEBUG LEGAL] Player 2 has 33 stars

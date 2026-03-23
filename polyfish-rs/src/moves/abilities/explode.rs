@@ -87,7 +87,8 @@ impl Move for ExplodeMove {
                             if let Some(e_pos) =
                                 e_tribe.units.iter().position(|u| u.coords.idx == t_idx)
                             {
-                                let damage_val = (atk * 0.5f32 * 10.0).round() as i32; // 2 damage
+                                // TODO: verify this
+                                let damage_val = atk / 2.0;
                                 undos.push(crate::actions::units::deal_damage(
                                     state,
                                     enemy_owner,

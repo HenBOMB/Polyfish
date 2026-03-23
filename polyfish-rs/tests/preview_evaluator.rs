@@ -48,7 +48,7 @@ fn preview_evaluator() {
     if let Some(t) = state.tribes.get_mut(&player_id) {
         let mut unit = UnitState::default();
         unit.unit_type = UnitType::Warrior;
-        unit.health = 100; // max
+        unit.health = 100.0; // max
         t.units.push(unit);
     }
     let score_mil = evaluator::evaluate_state(&state, player_id);

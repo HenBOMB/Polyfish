@@ -11,7 +11,7 @@ pub fn is_in_own_territory(state: &GameState, idx: i32, owner: i32) -> bool {
         .unwrap_or(false);
     // if idx == 147 {
     //     println!(
-    //         "    [DEBUG TERRITORY CHECK] Tile 147, Owner={}, QueryOwner={}, Result={}",
+    //         "🐛 Tile 147, Owner={}, QueryOwner={}, Result={}",
     //         state.tiles.get(&idx).map(|t| t.owner).unwrap_or(-1),
     //         owner,
     //         result
@@ -327,12 +327,12 @@ pub fn is_amphibious(unit: &UnitState) -> bool {
 }
 
 /// Get the maximum health of a unit (accounting for veteran status and pass-through)
-pub fn get_unit_max_health(unit: &UnitState) -> i32 {
+pub fn get_unit_max_health(unit: &UnitState) -> f32 {
     // Health is determined by the passenger (inner unit) if available
     let u_type = unit.passenger_type.unwrap_or(unit.unit_type);
     let mut health = crate::settings::units::get_unit_setting(u_type).health;
     if unit.veteran {
-        health += 5;
+        health += 5.0;
     }
     health
 }
@@ -413,24 +413,19 @@ pub fn get_tech_unit_type(tech: crate::types::TechnologyType) -> Option<UnitType
 pub fn get_defense_bonus(state: &GameState, unit: &UnitState) -> f32 {
     // Poisoned units can now receive defense bonuses (defense is just reduced)
 
-    let tribe = match state.tribes.get(&unit.owner) {
-        Some(t) => t,
-        None => return 1.0,
-    };
+    let tribe = state.tribes.get(&unit.owner).unwrap();
+    let tile = state.tiles.get(&unit.coords.idx).unwrap();
 
-    let tile = match state.tiles.get(&unit.coords.idx) {
-        Some(t) => t,
-        None => return 1.0,
-    };
-
-    match tile.terrain_type {
+    let bonus = match tile.terrain_type {
         TerrainType::Water | TerrainType::Ocean => {
             let aquatism = crate::settings::technology::resolve_tech_for_tribe(
                 TechnologyType::Aquatism,
                 tribe.tribe_type,
             );
             if crate::settings::technology::has_technology(&tribe.tech_vanilla, aquatism) {
-                return 1.5;
+                1.5
+            } else {
+                1.0
             }
         }
         TerrainType::Forest => {
@@ -439,7 +434,9 @@ pub fn get_defense_bonus(state: &GameState, unit: &UnitState) -> f32 {
                 tribe.tribe_type,
             );
             if crate::settings::technology::has_technology(&tribe.tech_vanilla, archery) {
-                return 1.5;
+                1.5
+            } else {
+                1.0
             }
         }
         TerrainType::Mountain => {
@@ -448,27 +445,41 @@ pub fn get_defense_bonus(state: &GameState, unit: &UnitState) -> f32 {
                 tribe.tribe_type,
             );
             if crate::settings::technology::has_technology(&tribe.tech_vanilla, climbing) {
-                return 1.5;
+                1.5
+            } else {
+                1.0
             }
         }
         _ => {
             // City defense: applies to friendly units (owner or ally) with Fortify skill
             if let Some(city) = get_city_at(state, unit.coords.idx) {
-                // Must be a captured city (owner != 0) and friendly (not an enemy)
-                if city.owner != 0 && !is_enemy(state, unit.owner, city.owner) {
-                    if has_skill(unit, SkillType::Fortify) {
-                        if city.has_walls() {
-                            return 4.0;
-                        } else {
-                            return 1.5;
-                        }
+                if has_skill(unit, SkillType::Fortify) {
+                    // Must be a friendly city and have walls
+                    if !is_enemy_city(state, city.idx, unit.owner) && city.has_walls() {
+                        4.0
+                    } else {
+                        1.5
                     }
+                } else {
+                    1.0
                 }
+            } else {
+                1.0
             }
+        }
+    };
+
+    if has_effect(unit, UnitEffect::Poison) {
+        if bonus == 4.0 {
+            return 2.0;
+        } else if bonus == 1.5 {
+            return 0.7;
+        } else {
+            return 0.5;
         }
     }
 
-    1.0
+    bonus
 }
 
 /// Get city production (stars per turn)
@@ -1099,10 +1110,10 @@ pub fn calculate_combat_preview(
         defense_bonus,
     );
 
-    let damage_to_defender = result.attack_damage as i32;
-    let damage_to_attacker = result.defense_damage as i32;
-    let defender_dies = def_health - damage_to_defender <= 0;
-    let attacker_dies = atk_health - damage_to_attacker <= 0;
+    let damage_to_defender = result.attack_damage;
+    let damage_to_attacker = result.defense_damage;
+    let defender_dies = def_health - damage_to_defender <= 0.0;
+    let attacker_dies = atk_health - damage_to_attacker <= 0.0;
 
     Some(CombatPreview {
         attacker_tile: attacker_idx,
@@ -1120,8 +1131,8 @@ pub fn calculate_combat_preview(
 pub struct CombatPreview {
     pub attacker_tile: i32,
     pub defender_tile: i32,
-    pub damage_to_defender: i32,
-    pub damage_to_attacker: i32,
+    pub damage_to_defender: f32,
+    pub damage_to_attacker: f32,
     pub defender_dies: bool,
     pub attacker_dies: bool,
 }

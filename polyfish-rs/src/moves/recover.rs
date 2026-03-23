@@ -51,7 +51,7 @@ impl Move for RecoverMove {
             // Calculate heal amount
             let in_territory =
                 crate::functions::is_in_own_territory(state, self.src_index, unit_owner);
-            let amount = if in_territory { 4 } else { 2 };
+            let amount = if in_territory { 4.0 } else { 2.0 };
 
             undos.push(heal_unit(state, unit_owner, idx, amount));
             undos.push(end_unit_turn(state, unit_owner, idx));

@@ -69,7 +69,7 @@ fn test_load_raw_json_parity() {
     assert_eq!(tribe1.units.len(), 1);
     let unit = &tribe1.units[0];
     assert_eq!(unit.unit_type, UnitType::Rider); // Rider is ID 3
-    assert_eq!(unit.health, 10); // 10 (raw from JSON)
+    assert_eq!(unit.health, 10.0); // 10 (raw from JSON)
     assert!(unit.veteran);
 
     // 4. Verify tile owner correctly set from unit
