@@ -323,7 +323,7 @@ pub fn capture_ruin(
                     // Veteran Rammer
                     if let Ok(res) = crate::actions::units::summon_unit(
                         state,
-                        UnitType::Rammer,
+                        UnitType::Rammership,
                         tile_idx,
                         false,
                         false,
@@ -500,7 +500,13 @@ pub fn capture_ruin(
                     .push("Ruin reward: Veteran Rammer (Warrior)! ⛵".to_string());
             }
 
-            match crate::actions::units::summon_unit(s, UnitType::Rammer, tile_idx, false, false) {
+            match crate::actions::units::summon_unit(
+                s,
+                UnitType::Rammership,
+                tile_idx,
+                false,
+                false,
+            ) {
                 Ok(res) => {
                     undos.push(res.undo);
                     // Make veteran and add passenger

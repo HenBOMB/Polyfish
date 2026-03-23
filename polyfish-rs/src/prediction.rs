@@ -5,52 +5,52 @@
 
 use crate::functions::get_adjacent_indices;
 use crate::states::GameState;
-use crate::types::{ClimateType, TerrainType, TribeType};
+use crate::types::{TerrainType, TribeType};
 use indexmap::IndexMap;
 
-/// Maps ClimateType to corresponding TribeType
-pub fn climate_to_tribe(climate: ClimateType) -> TribeType {
+/// Maps TribeType to corresponding TribeType
+pub fn climate_to_tribe(climate: TribeType) -> TribeType {
     match climate {
-        ClimateType::XinXi => TribeType::XinXi,
-        ClimateType::Imperius => TribeType::Imperius,
-        ClimateType::Bardur => TribeType::Bardur,
-        ClimateType::Oumaji => TribeType::Oumaji,
-        ClimateType::Kickoo => TribeType::Kickoo,
-        ClimateType::Hoodrick => TribeType::Hoodrick,
-        ClimateType::Luxidoor => TribeType::Luxidoor,
-        ClimateType::Vengir => TribeType::Vengir,
-        ClimateType::Zebasi => TribeType::Zebasi,
-        ClimateType::AiMo => TribeType::AiMo,
-        ClimateType::Aquarion => TribeType::Aquarion,
-        ClimateType::Quetzali => TribeType::Quetzali,
-        ClimateType::Elyrion => TribeType::Elyrion,
-        ClimateType::Yadakk => TribeType::Yadakk,
-        ClimateType::Polaris => TribeType::Polaris,
-        ClimateType::Cymanti => TribeType::Cymanti,
-        ClimateType::Nature => TribeType::Nature,
+        TribeType::XinXi => TribeType::XinXi,
+        TribeType::Imperius => TribeType::Imperius,
+        TribeType::Bardur => TribeType::Bardur,
+        TribeType::Oumaji => TribeType::Oumaji,
+        TribeType::Kickoo => TribeType::Kickoo,
+        TribeType::Hoodrick => TribeType::Hoodrick,
+        TribeType::Luxidoor => TribeType::Luxidoor,
+        TribeType::Vengir => TribeType::Vengir,
+        TribeType::Zebasi => TribeType::Zebasi,
+        TribeType::AiMo => TribeType::AiMo,
+        TribeType::Aquarion => TribeType::Aquarion,
+        TribeType::Quetzali => TribeType::Quetzali,
+        TribeType::Elyrion => TribeType::Elyrion,
+        TribeType::Yadakk => TribeType::Yadakk,
+        TribeType::Polaris => TribeType::Polaris,
+        TribeType::Cymanti => TribeType::Cymanti,
+        TribeType::Nature | TribeType::None => TribeType::Nature,
     }
 }
 
-/// Maps TribeType to corresponding ClimateType
-pub fn tribe_to_climate(tribe: TribeType) -> ClimateType {
+/// Maps TribeType to corresponding TribeType
+pub fn tribe_to_climate(tribe: TribeType) -> TribeType {
     match tribe {
-        TribeType::XinXi => ClimateType::XinXi,
-        TribeType::Imperius => ClimateType::Imperius,
-        TribeType::Bardur => ClimateType::Bardur,
-        TribeType::Oumaji => ClimateType::Oumaji,
-        TribeType::Kickoo => ClimateType::Kickoo,
-        TribeType::Hoodrick => ClimateType::Hoodrick,
-        TribeType::Luxidoor => ClimateType::Luxidoor,
-        TribeType::Vengir => ClimateType::Vengir,
-        TribeType::Zebasi => ClimateType::Zebasi,
-        TribeType::AiMo => ClimateType::AiMo,
-        TribeType::Aquarion => ClimateType::Aquarion,
-        TribeType::Quetzali => ClimateType::Quetzali,
-        TribeType::Elyrion => ClimateType::Elyrion,
-        TribeType::Yadakk => ClimateType::Yadakk,
-        TribeType::Polaris => ClimateType::Polaris,
-        TribeType::Cymanti => ClimateType::Cymanti,
-        TribeType::Nature | TribeType::None => ClimateType::Nature,
+        TribeType::XinXi => TribeType::XinXi,
+        TribeType::Imperius => TribeType::Imperius,
+        TribeType::Bardur => TribeType::Bardur,
+        TribeType::Oumaji => TribeType::Oumaji,
+        TribeType::Kickoo => TribeType::Kickoo,
+        TribeType::Hoodrick => TribeType::Hoodrick,
+        TribeType::Luxidoor => TribeType::Luxidoor,
+        TribeType::Vengir => TribeType::Vengir,
+        TribeType::Zebasi => TribeType::Zebasi,
+        TribeType::AiMo => TribeType::AiMo,
+        TribeType::Aquarion => TribeType::Aquarion,
+        TribeType::Quetzali => TribeType::Quetzali,
+        TribeType::Elyrion => TribeType::Elyrion,
+        TribeType::Yadakk => TribeType::Yadakk,
+        TribeType::Polaris => TribeType::Polaris,
+        TribeType::Cymanti => TribeType::Cymanti,
+        TribeType::Nature | TribeType::None => TribeType::Nature,
     }
 }
 
@@ -109,7 +109,7 @@ pub fn predict_villages(state: &GameState) -> IndexMap<i32, (TribeType, bool)> {
         .unwrap_or(TribeType::None);
     let pov_climate = tribe_to_climate(pov_tribe_type);
 
-    let mut candidates: IndexMap<i32, (i32, ClimateType)> = IndexMap::new();
+    let mut candidates: IndexMap<i32, (i32, TribeType)> = IndexMap::new();
 
     // Collect all known cities/villages
     let mut known_cities = std::collections::HashSet::new();
@@ -164,7 +164,7 @@ pub fn predict_villages(state: &GameState) -> IndexMap<i32, (TribeType, bool)> {
                         ) {
                             continue;
                         }
-                        let entry = candidates.entry(n_idx).or_insert((0, ClimateType::Nature));
+                        let entry = candidates.entry(n_idx).or_insert((0, TribeType::Nature));
                         entry.0 += 5;
                     }
                 }
@@ -177,9 +177,7 @@ pub fn predict_villages(state: &GameState) -> IndexMap<i32, (TribeType, bool)> {
         if !tile.explorers.contains(&pov_id) {
             continue;
         }
-        if tile.owner != pov_id
-            && tile.climate != pov_climate
-            && tile.climate != ClimateType::Nature
+        if tile.owner != pov_id && tile.climate != pov_climate && tile.climate != TribeType::Nature
         {
             let around = get_adjacent_indices(state, tile_idx, 2);
             for idx in around {
@@ -295,7 +293,7 @@ fn get_nearest_known_tribe(state: &GameState, idx: i32) -> Option<TribeType> {
 pub fn predict_terrain(
     state: &GameState,
     fog_tiles: &[i32],
-) -> IndexMap<i32, (TerrainType, ClimateType)> {
+) -> IndexMap<i32, (TerrainType, TribeType)> {
     let pov_id = state.settings.current_player_turn_id;
     let map_type = state.settings.map_type;
 
@@ -374,7 +372,7 @@ pub fn predict_terrain(
 
         let final_climate =
             if terrain_type == TerrainType::Water || terrain_type == TerrainType::Ocean {
-                ClimateType::Nature // Fluids are usually Nature or tribe-colored but functionally Nature for most things
+                TribeType::Nature // Fluids are usually Nature or tribe-colored but functionally Nature for most things
             } else {
                 climate
             };
@@ -545,7 +543,7 @@ mod tests {
         assert_ne!(pred_terrain, TerrainType::Ocean);
 
         // 2. Should correspond to Bardur climate
-        assert_eq!(pred_climate, ClimateType::Bardur);
+        assert_eq!(pred_climate, TribeType::Bardur);
 
         // 3. Terrain Type Check (Probabilistic but deterministic seed)
         // With current deterministic RNG:

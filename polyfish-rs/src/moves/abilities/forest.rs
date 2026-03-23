@@ -27,7 +27,10 @@ impl Move for ClearForestMove {
         let mut undos = Vec::new();
         // Clear Forest -> Field + Gain 1 Star + Remove Resource (Game)
         undos.push(modify_terrain(state, self.target_index, TerrainType::Field));
-        undos.push(gain_stars(state, 1));
+        undos.push(gain_stars(
+            state,
+            crate::version_sync::get_clear_forest_stars(state),
+        ));
         undos.push(consume_resource(state, self.target_index, None));
 
         Ok(MoveResult {
@@ -134,9 +137,12 @@ impl Move for BurnForestMove {
 
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let mut undos = Vec::new();
-        // Construction: Forest -> Field + Add Crop (Cost 2)
+        // Construction: Forest -> Field + Add Crop (Cost 3)
         undos.push(modify_terrain(state, self.target_index, TerrainType::Field));
-        undos.push(spend_stars(state, 2));
+        undos.push(spend_stars(
+            state,
+            crate::version_sync::get_burn_forest_cost(state),
+        ));
         undos.push(consume_resource(
             state,
             self.target_index,
@@ -214,7 +220,7 @@ pub fn generate_forest_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
                     if has_clear {
                         moves.push(Box::new(ClearForestMove::new(tile_idx)));
                     }
-                    if has_burn && tribe.stars >= 5 {
+                    if has_burn && tribe.stars >= crate::version_sync::get_burn_forest_cost(state) {
                         moves.push(Box::new(BurnForestMove::new(tile_idx)));
                     }
                 }

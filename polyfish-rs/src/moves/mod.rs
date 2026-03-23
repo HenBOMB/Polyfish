@@ -15,6 +15,7 @@ pub mod step;
 pub mod summon;
 pub mod upgrade;
 
+
 pub use abilities::*;
 pub use attack::AttackMove;
 pub use build::BuildMove;
@@ -146,6 +147,7 @@ impl Move for ResignMove {
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
         let pov_id = state.settings.current_player_turn_id;
         let turn = state.settings.turn;
+        let mut undos = Vec::new();
 
         let old_resigned = state
             .tribes
@@ -157,12 +159,20 @@ impl Move for ResignMove {
             tribe.resigned_turn = turn;
         }
 
+        // Remove all units - done after dropping the mutable tribe borrow to avoid conflict
+        let unit_count = state.tribes.get(&pov_id).map(|t| t.units.len()).unwrap_or(0);
+        for i in (0..unit_count).rev() {
+            undos.push(crate::actions::units::remove_unit(state, pov_id, i, None, None));
+        }
+
+        undos.push(Box::new(move |s| {
+            if let Some(t) = s.tribes.get_mut(&pov_id) {
+                t.resigned_turn = old_resigned;
+            }
+        }));
+
         Ok(MoveResult {
-            undo: Box::new(move |s| {
-                if let Some(t) = s.tribes.get_mut(&pov_id) {
-                    t.resigned_turn = old_resigned;
-                }
-            }),
+            undo: crate::actions::chain_undos(undos),
             rewards: None,
         })
     }
@@ -301,7 +311,7 @@ fn generate_econ_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
 
                 let settings = get_resource_setting(resource.resource_type);
                 let tech_ok = match settings.tech_required {
-                    TechnologyType::Unrequired => true,
+                    TechnologyType::Basic => true,
                     tech => crate::settings::technology::has_technology(&tribe.tech_vanilla, tech),
                 };
 
@@ -767,6 +777,12 @@ fn is_steppable(state: &GameState, unit: &UnitState, idx: i32) -> bool {
             } else {
                 return false;
             }
+        }
+    } else if is_aquatic {
+        // Aquatic units can step on any water/ocean
+        let is_water = matches!(terrain, TerrainType::Water | TerrainType::Ocean);
+        if is_water {
+            return true;
         }
     } else {
         // Fallback to non-water units, unsteppable

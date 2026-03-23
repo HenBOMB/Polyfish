@@ -26,7 +26,7 @@ use polyfish::recorder::GameRecorder;
 struct AppState {
     game: Mutex<Game>,
     training_status: Mutex<Option<u32>>, // Store PID of running training
-    network: Arc<polyfish::ai::network::PolyZeroNet>, // Trained neural network
+    network: Option<Arc<polyfish::ai::network::PolyZeroNet>>, // Trained neural network
     recorder: Arc<GameRecorder>,
 }
 
@@ -35,40 +35,20 @@ const DEFAULT_SIZE: MapSize = MapSize::Tiny;
 
 #[tokio::main]
 async fn main() {
+    let _ = dotenvy::dotenv();
+
     // Initialize game
     let mut game = Game::new();
     let mut loaded = false;
 
     // 0. Try to rip live state from running Polytopia process via C++ reader
-    println!("🔍 Searching for Polytopia process...");
-    let pids = std::process::Command::new("pgrep")
-        .arg("-x")
-        .arg("Polytopia")
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).to_string());
-
-    if let Some(pid_str) = pids {
-        if let Some(pid) = pid_str.lines().next() {
-            println!("🚀 Ripping live state from PID: {}...", pid);
-            let reader_out = std::process::Command::new("../polyfish-reader/polyfish-reader")
-                .arg(pid)
-                .output();
-
-            if let Ok(out) = reader_out {
-                if out.status.success() {
-                    let json = String::from_utf8_lossy(&out.stdout);
-                    if let Ok(state) = serde_json::from_str::<polyfish::states::GameState>(&json) {
-                        println!("✅ Success! Loaded live game state from memory");
-                        game.state = state;
-                        loaded = true;
-                    }
-                } else {
-                    println!("⚠️ Reader failed: {}", String::from_utf8_lossy(&out.stderr));
-                }
-            }
-        }
-    }
+    // println!("🔍 Searching for Polytopia process...");
+    // let pids = std::process::Command::new("pgrep")
+    //     .arg("-x")
+    //     .arg("Polytopia")
+    //     .output()
+    //     .ok()
+    //     .map(|o| String::from_utf8_lossy(&o.stdout).to_string());
 
     // 1. Try to load live_game.json or saved_state.json (direct mod save)
     let candidates = ["live_game.json", "saved_state.json"];
@@ -134,37 +114,37 @@ async fn main() {
     game.post_load();
 
     // Load trained neural network
-    use candle_core::Device;
-    use candle_nn::VarMap;
-    let device = Device::Cpu;
+    // use candle_core::Device;
+    // use candle_nn::VarMap;
+    // let device = Device::Cpu;
 
-    let model_path = "model.safetensors";
-    let mut varmap = VarMap::new();
+    // let model_path = "model.safetensors";
+    // let mut varmap = VarMap::new();
 
-    let network = if std::path::Path::new(model_path).exists() {
-        println!("✅ Loading trained AI model from {}", model_path);
-        varmap
-            .load(model_path)
-            .expect("Failed to load model weights");
-        polyfish::ai::network::PolyZeroNet::new(candle_nn::VarBuilder::from_varmap(
-            &varmap,
-            candle_core::DType::F32,
-            &device,
-        ))
-        .expect("Failed to build neural network")
-    } else {
-        panic!(
-            "Model file {} not found! Please run init_model.py first.",
-            model_path
-        );
-    };
+    // let network = if std::path::Path::new(model_path).exists() {
+    //     println!("✅ Loading trained AI model from {}", model_path);
+    //     varmap
+    //         .load(model_path)
+    //         .expect("Failed to load model weights");
+    //     polyfish::ai::network::PolyZeroNet::new(candle_nn::VarBuilder::from_varmap(
+    //         &varmap,
+    //         candle_core::DType::F32,
+    //         &device,
+    //     ))
+    //     .expect("Failed to build neural network")
+    // } else {
+    //     panic!(
+    //         "Model file {} not found! Please run init_model.py first.",
+    //         model_path
+    //     );
+    // };
 
     let recorder = Arc::new(GameRecorder::new());
 
     let shared_state = Arc::new(AppState {
         game: Mutex::new(game),
         training_status: Mutex::new(None),
-        network: Arc::new(network),
+        network: None, //Arc::new(network),
         recorder,
     });
 
@@ -183,6 +163,7 @@ async fn main() {
         .route("/load", post(load_game))
         .route("/simulate/explorer", post(simulate_explorer))
         .route("/simulate/attack", post(simulate_attack))
+        .route("/replay/check", post(check_replay_exists))
         .route("/replay/save", post(save_replay_endpoint))
         .route("/replay/load", post(load_replay_endpoint))
         .route("/replay/analyze", post(analyze_replay_step))
@@ -274,13 +255,19 @@ async fn auto_step(
     State(state): State<Arc<AppState>>,
     Json(params): Json<StepParams>,
 ) -> Json<Value> {
+    if !state.network.is_some() {
+        return Json(serde_json::json!({
+            "status": "error",
+            "message": "No trained network available"
+        }));
+    }
     let mut game = state.game.lock().unwrap();
     // dont spam the front end lol
     game.state.settings._verbose = false;
 
     // Use trained AI model!
     use polyfish::ai::mcts_zero::ZeroMctsAgent;
-    let agent = ZeroMctsAgent::new(&state.network, params.iterations);
+    let agent = ZeroMctsAgent::new(state.network.as_ref().unwrap(), params.iterations);
 
     game.state._messages.clear();
     let (chosen_move, policy) = agent.select_move_with_stats(&mut game);
@@ -787,11 +774,18 @@ async fn get_trainer_hint(
     State(state): State<Arc<AppState>>,
     Json(params): Json<StepParams>,
 ) -> Json<Value> {
+    if !state.network.is_some() {
+        return Json(serde_json::json!({
+            "status": "error",
+            "message": "No trained network available"
+        }));
+    }
+
     let mut game = state.game.lock().unwrap();
 
     // Use Zero MCTS Agent (Neural Network)
     use polyfish::ai::mcts_zero::ZeroMctsAgent;
-    let agent = ZeroMctsAgent::new(&state.network, params.iterations);
+    let agent = ZeroMctsAgent::new(state.network.as_ref().unwrap(), params.iterations);
     // use polyfish::ai::heuristic_mcts::HeuristicMctsAgent;
     // let agent = HeuristicMctsAgent {
     //     iterations: params.iterations,
@@ -821,6 +815,111 @@ async fn get_trainer_hint(
 
 // === Replay System ===
 
+#[derive(serde::Deserialize)]
+struct CheckReplayParams {
+    seed: Option<u64>,
+    game_name: Option<String>,
+    uuid: Option<String>,
+}
+
+async fn check_replay_exists(Json(params): Json<CheckReplayParams>) -> Json<Value> {
+    let supabase_key = std::env::var("SUPABASE_SERVICE_ROLE_KEY")
+        .or_else(|_| std::env::var("SUPABASE_PUBLIC_ANON_KEY"))
+        .or_else(|_| std::env::var("SUPABASE_PUBLISHABLE_KEY"))
+        .unwrap_or_default();
+    let supabase_url = std::env::var("SUPABASE_URL").unwrap_or_default();
+
+    if supabase_url.is_empty() || supabase_key.is_empty() {
+        return Json(serde_json::json!({
+            "exists": false,
+            "proceed": true,
+            "message": "Supabase not configured, proceeding by default"
+        }));
+    }
+
+    let db_url = if let Some(uuid) = &params.uuid {
+        format!(
+            "{}/rest/v1/games?uuid=eq.{}&select=id",
+            supabase_url.trim_end_matches('/'),
+            uuid
+        )
+    } else if let (Some(seed), Some(name)) = (params.seed, &params.game_name) {
+        let safe_game_name = name.replace(" ", "%20");
+        format!(
+            "{}/rest/v1/games?seed=eq.{}&game_name=eq.{}&select=id",
+            supabase_url.trim_end_matches('/'),
+            seed,
+            safe_game_name
+        )
+    } else {
+        return Json(serde_json::json!({
+            "exists": false,
+            "proceed": true,
+            "message": "Neither uuid nor seed/game_name provided"
+        }));
+    };
+
+    let client = reqwest::Client::new();
+    let req = client
+        .get(&db_url)
+        .header("apikey", &supabase_key)
+        .header("Authorization", format!("Bearer {}", supabase_key));
+
+    match req.send().await {
+        Ok(res) => match res.json::<serde_json::Value>().await {
+            Ok(json_val) => {
+                let exists = json_val
+                    .as_array()
+                    .map(|arr| !arr.is_empty())
+                    .unwrap_or(false);
+                let check_id = if let Some(u) = &params.uuid {
+                    format!("uuid='{}'", u)
+                } else {
+                    format!("seed={:?}, name={:?}", params.seed, params.game_name)
+                };
+                println!("🔍 Replay check {}: exists={}", check_id, exists);
+                Json(serde_json::json!({
+                    "exists": exists,
+                    "proceed": !exists
+                }))
+            }
+            Err(e) => {
+                println!("❌ Supabase check parse error: {}", e);
+                Json(serde_json::json!({
+                    "exists": false,
+                    "proceed": true,
+                    "message": format!("Parse error: {}", e)
+                }))
+            }
+        },
+        Err(e) => {
+            println!("❌ Supabase check network error: {}", e);
+            Json(serde_json::json!({
+                "exists": false,
+                "proceed": true,
+                "message": format!("Network error: {}", e)
+            }))
+        }
+    }
+}
+
+fn sanitize_storage_key(name: &str) -> String {
+    let mut result = String::new();
+    let mut last_was_dash = false;
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+            result.push(c.to_ascii_lowercase());
+            last_was_dash = false;
+        } else {
+            if !last_was_dash && !result.is_empty() {
+                result.push('-');
+                last_was_dash = true;
+            }
+        }
+    }
+    result.trim_matches('-').to_string()
+}
+
 async fn save_replay_endpoint(
     State(state): State<Arc<AppState>>,
     body: Json<Value>,
@@ -835,12 +934,157 @@ async fn save_replay_endpoint(
 
     let (filename, content) = if body["turns"].is_array() {
         // get the name from body.gameState.settings.gameName
-        let game_name = body["gameState"]["settings"]["gameName"].as_str().unwrap();
-        println!("✅ Received {game_name} Replay data from mod");
+        let game_name = body["gameState"]["settings"]["gameName"]
+            .as_str()
+            .unwrap_or("Unknown");
+        let seed = body["gameState"]["initial_seed"]
+            .as_u64()
+            .or_else(|| body["gameState"]["settings"]["seed"].as_u64())
+            .unwrap_or(0);
+
+        let supabase_key = std::env::var("SUPABASE_SERVICE_ROLE_KEY")
+            .or_else(|_| std::env::var("SUPABASE_PUBLIC_ANON_KEY"))
+            .or_else(|_| std::env::var("SUPABASE_PUBLISHABLE_KEY"))
+            .unwrap_or_default();
+        let supabase_url = std::env::var("SUPABASE_URL").unwrap_or_default();
+
+        if !supabase_url.is_empty() && !supabase_key.is_empty() {
+            let client = reqwest::Client::new();
+
+            let db_url = if let Some(uuid) = body["uuid"].as_str() {
+                format!(
+                    "{}/rest/v1/games?uuid=eq.{}&select=id",
+                    supabase_url.trim_end_matches('/'),
+                    uuid
+                )
+            } else {
+                let safe_game_name = game_name.replace(" ", "%20");
+                format!(
+                    "{}/rest/v1/games?seed=eq.{}&game_name=eq.{}&select=id",
+                    supabase_url.trim_end_matches('/'),
+                    seed,
+                    safe_game_name
+                )
+            };
+
+            let req = client
+                .get(&db_url)
+                .header("apikey", &supabase_key)
+                .header("Authorization", format!("Bearer {}", supabase_key));
+
+            if let Ok(res) = req.send().await {
+                if let Ok(json) = res.json::<serde_json::Value>().await {
+                    if let Some(arr) = json.as_array() {
+                        if !arr.is_empty() {
+                            println!(
+                                "⚠️ Rejected duplicate game (UUID or Seed/Name): {}",
+                                game_name
+                            );
+                            return Json(serde_json::json!({
+                                "status": "error",
+                                "message": "Duplicate game found"
+                            }));
+                        }
+                    }
+                }
+            }
+
+            // Record does not exist, upload to Supabase Storage directly!
+            let bucket_name =
+                std::env::var("SUPABASE_STORAGE_BUCKET").unwrap_or_else(|_| "games".to_string());
+            let file_name = format!("{}_{}.json", sanitize_storage_key(game_name), timestamp);
+            let storage_url = format!(
+                "{}/storage/v1/object/{}/{}",
+                supabase_url.trim_end_matches('/'),
+                bucket_name,
+                file_name
+            );
+
+            let upload_req = client
+                .post(&storage_url)
+                .header("apikey", &supabase_key)
+                .header("Authorization", format!("Bearer {}", supabase_key))
+                .header("Content-Type", "application/json")
+                .body(serde_json::to_string(&*body).unwrap_or_default());
+
+            match upload_req.send().await {
+                Ok(res) => {
+                    if !res.status().is_success() {
+                        let err_text = res.text().await.unwrap_or_default();
+                        println!("❌ Supabase Storage Upload Failed: {}", err_text);
+                        return Json(serde_json::json!({
+                            "status": "error",
+                            "message": format!("Supabase Storage upload failed: {}", err_text)
+                        }));
+                    }
+                }
+                Err(e) => {
+                    println!("❌ Supabase Storage Network Error: {}", e);
+                    return Json(serde_json::json!({
+                        "status": "error",
+                        "message": format!("Supabase Storage network error: {}", e)
+                    }));
+                }
+            }
+
+            // Insert record into games table to prevent future duplicates
+            let insert_url = format!("{}/rest/v1/games", supabase_url.trim_end_matches('/'));
+
+            // Extract UUID if present (from the root of the serialized replay)
+            let uuid_val = body["uuid"].as_str().unwrap_or("").to_string();
+            let mut insert_payload = serde_json::json!({
+                "seed": seed,
+                "game_name": game_name,
+                "storage_path": file_name,
+                "verified": false
+            });
+            if !uuid_val.is_empty() {
+                insert_payload
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("uuid".into(), serde_json::json!(uuid_val));
+            }
+
+            let insert_req = client
+                .post(&insert_url)
+                .header("apikey", &supabase_key)
+                .header("Authorization", format!("Bearer {}", supabase_key))
+                .header("Content-Type", "application/json")
+                .header("Prefer", "return=minimal")
+                .json(&insert_payload);
+
+            match insert_req.send().await {
+                Ok(res) => {
+                    if !res.status().is_success() {
+                        let err_text = res.text().await.unwrap_or_default();
+                        println!("❌ Supabase DB Insert Failed: {}", err_text);
+                        return Json(serde_json::json!({
+                            "status": "error",
+                            "message": format!("Supabase DB insert failed: {}", err_text)
+                        }));
+                    }
+                }
+                Err(e) => {
+                    println!("❌ Supabase DB Network Error: {}", e);
+                }
+            }
+
+            println!("✅ Successfully uploaded {} to Supabase Storage", game_name);
+            return Json(serde_json::json!({
+                "status": "success",
+                "message": format!("Replay uploaded to Supabase Storage bucket '{}'", bucket_name),
+                "filename": file_name
+            }));
+        }
+
+        println!(
+            "✅ Received {} Replay data from mod (Saved Locally)",
+            game_name
+        );
         (
             format!(
                 "replays/{}_{}.json",
-                game_name.to_lowercase().replace(' ', "-"),
+                sanitize_storage_key(game_name),
                 timestamp
             ),
             serde_json::to_string_pretty(&*body).unwrap(),
@@ -865,12 +1109,12 @@ async fn save_replay_endpoint(
     match std::fs::write(&filename, content) {
         Ok(_) => Json(serde_json::json!({
             "status": "success",
-            "message": format!("Replay saved to {}", filename),
+            "message": format!("Replay saved locally to {}", filename),
             "filename": filename
         })),
         Err(e) => Json(serde_json::json!({
             "status": "error",
-            "message": format!("Failed to save replay: {}", e)
+            "message": format!("Failed to save replay locally: {}", e)
         })),
     }
 }
@@ -1121,6 +1365,13 @@ async fn analyze_replay_step(
     State(state): State<Arc<AppState>>,
     Json(params): Json<AnalyzeReplayParams>,
 ) -> Json<Value> {
+    if !state.network.is_some() {
+        return Json(serde_json::json!({
+            "status": "error",
+            "message": "No trained network available"
+        }));
+    }
+
     // 1. Load the replay file to get initial seed and history
     let path = if params.filename.starts_with("replays/") {
         params.filename.clone()
@@ -1214,7 +1465,7 @@ async fn analyze_replay_step(
     // 4. Now game is at the state just before the user played history[step_index]
     // Run MCTS analysis
     use polyfish::ai::mcts_zero::ZeroMctsAgent;
-    let agent = ZeroMctsAgent::new(&state.network, params.iterations);
+    let agent = ZeroMctsAgent::new(state.network.as_ref().unwrap(), params.iterations);
     let (best_move, mcts_analysis) = agent.select_move_with_stats(&mut game);
 
     let ai_move_json = best_move.as_ref().map(|m| m.serialize());
@@ -1284,4 +1535,29 @@ async fn list_initial_endpoint() -> Json<Value> {
         "status": "success",
         "files": files
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_storage_key() {
+        assert_eq!(
+            sanitize_storage_key("The Winter of Love"),
+            "the-winter-of-love"
+        );
+        assert_eq!(
+            sanitize_storage_key("game-4-(yădakk-qualifiers-"),
+            "game-4-y-dakk-qualifiers"
+        );
+        assert_eq!(sanitize_storage_key("Hello World!!!"), "hello-world");
+        assert_eq!(
+            sanitize_storage_key("---Multiple---Dashes---"),
+            "multiple-dashes"
+        );
+        assert_eq!(sanitize_storage_key("UPPER_case_123"), "upper_case_123");
+        assert_eq!(sanitize_storage_key(""), "");
+        assert_eq!(sanitize_storage_key("!@#$%^&*()"), "");
+    }
 }

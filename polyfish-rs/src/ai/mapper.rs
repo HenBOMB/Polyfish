@@ -58,7 +58,7 @@ static UNIT_MAP: LazyLock<HashMap<UnitType, usize>> = LazyLock::new(|| {
 
 static TECH_MAP: LazyLock<HashMap<TechnologyType, usize>> = LazyLock::new(|| {
     TechnologyType::iter()
-        .filter(|&t| t != TechnologyType::Unrequired && t != TechnologyType::BeyondComprehension)
+        .filter(|&t| t != TechnologyType::Basic && t != TechnologyType::BeyondComprehension)
         .enumerate()
         .map(|(i, t)| (t, i))
         .collect()
@@ -193,7 +193,7 @@ impl DecomposedMapper {
     }
 
     pub fn map_tech(t: TechnologyType) -> Option<usize> {
-        if t == TechnologyType::Unrequired || t == TechnologyType::BeyondComprehension {
+        if t == TechnologyType::Basic || t == TechnologyType::BeyondComprehension {
             return None;
         }
         TECH_MAP.get(&t).map(|&i| {

@@ -217,7 +217,7 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                             if tribe.stars >= cost {
                                 let tech_req = res_settings.tech_required;
                                 let has_tech = match tech_req {
-                                    crate::types::TechnologyType::Unrequired => true,
+                                    crate::types::TechnologyType::Basic => true,
                                     t => tribe.tech_vanilla.iter().any(|tech| tech.tech_type == t),
                                 };
 

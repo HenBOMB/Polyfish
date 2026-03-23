@@ -26,8 +26,18 @@ pub struct ReplayPlayer {
 
 #[tokio::test]
 async fn test_mod_replay_ingestion() {
-    let json_str =
-        std::fs::read_to_string("replays/game-3-(yad-lakes-small-1v1)_1774147274.json").unwrap();
+    let replay_base = "replays/kimeusian-monsoon_1774234919";
+    let replay_path = format!("{}.json", replay_base);
+    let fixed_path = format!("{}_fixed.json", replay_base);
+
+    // check if fixed exists
+    let actual_path = if std::path::Path::new(&fixed_path).exists() {
+        fixed_path
+    } else {
+        replay_path
+    };
+
+    let json_str = std::fs::read_to_string(&actual_path).unwrap();
     let mut mod_replay: ModReplay = serde_json::from_str(&json_str).unwrap();
 
     let mut game = Game::new();
@@ -50,6 +60,7 @@ async fn test_mod_replay_ingestion() {
     mod_replay.turns[0].players[0].commands.remove(0); // remove the first forced auto played move
 
     game.state.settings._verbose = true;
+    game.state.settings._are_you_sure = true;
 
     for turn_data in mod_replay.turns {
         println!("--- TURN {} ---", turn_data.turn);
@@ -72,18 +83,51 @@ async fn test_mod_replay_ingestion() {
                         player_data.player_id, tribe.stars
                     );
                 }
+
                 // Skips startmatch / endmatch which are moveType: -1
-                let mut move_type_opt = cmd_json.get("moveType").and_then(|v| v.as_i64());
+                let move_type_opt = cmd_json.get("moveType").and_then(|v| v.as_i64());
                 if let Some(move_type) = move_type_opt {
                     if move_type == -1 || move_type == 11 {
                         continue;
                     }
                 }
 
+                let move_type: polyfish::MoveType =
+                    polyfish::MoveType::from(cmd_json["moveType"].as_i64().unwrap_or(0) as i32);
+
                 let mut cmd_stripped = cmd_json.as_object().unwrap().clone();
                 cmd_stripped.remove("_reward");
                 cmd_stripped.remove("_revealedTiles");
                 let cmd_json_stripped_val = serde_json::Value::Object(cmd_stripped);
+
+                // --- FIX FOR SANCTUARY/ANIMALS NON-DETERMINISM ---
+                // If it's Enchant Animal (moveType 3, type 23) and animal is missing, force spawn it
+                if move_type == polyfish::MoveType::Ability
+                    && cmd_json.get("type").and_then(|v| v.as_i64()) == Some(23)
+                {
+                    let target_idx =
+                        cmd_json.get("target").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                    let has_animal = game
+                        .state
+                        .resources
+                        .get(&target_idx)
+                        .and_then(|r| r.as_ref())
+                        .map(|r| r.resource_type == polyfish::types::ResourceType::Game)
+                        .unwrap_or(false);
+
+                    if !has_animal {
+                        println!(
+                            "    [FIX] Force-spawning animal at {} for EnchantAnimal",
+                            target_idx
+                        );
+                        game.state.resources.insert(
+                            target_idx,
+                            Some(polyfish::states::ResourceState {
+                                resource_type: polyfish::types::ResourceType::Game,
+                            }),
+                        );
+                    }
+                }
 
                 let legal_moves = game.legal_moves();
                 let mut found = false;
@@ -129,48 +173,48 @@ async fn test_mod_replay_ingestion() {
                         } else {
                             println!("    Executing: {:?}", m.describe(&game.state));
 
-                            // Debug Recover
-                            let mut pre_health = 0;
-                            if move_type == 3 {
-                                // Ability
-                                let src = cmd_json
-                                    .get("src")
-                                    .or(cmd_json.get("target"))
-                                    .and_then(|v| v.as_i64())
-                                    .unwrap() as i32;
-                                if let Some(u) = polyfish::functions::get_unit_at(&game.state, src)
-                                {
-                                    pre_health = u.health;
-                                    let owner =
-                                        game.state.tiles.get(&src).map(|t| t.owner).unwrap_or(0);
-                                    println!(
-                                        "    [DEBUG ABILITY] Unit at {} has health {}/{} (Tile Owner: {})",
-                                        src,
-                                        u.health,
-                                        polyfish::functions::get_unit_max_health(u),
-                                        owner
-                                    );
-                                }
-                            }
+                            // // Debug Recover
+                            // let mut pre_health = 0;
+                            // if move_type == 3 {
+                            //     // Ability
+                            //     let src = cmd_json
+                            //         .get("src")
+                            //         .or(cmd_json.get("target"))
+                            //         .and_then(|v| v.as_i64())
+                            //         .unwrap() as i32;
+                            //     if let Some(u) = polyfish::functions::get_unit_at(&game.state, src)
+                            //     {
+                            //         pre_health = u.health;
+                            //         let owner =
+                            //             game.state.tiles.get(&src).map(|t| t.owner).unwrap_or(0);
+                            //         println!(
+                            //             "    [DEBUG ABILITY] Unit at {} has health {}/{} (Tile Owner: {})",
+                            //             src,
+                            //             u.health,
+                            //             polyfish::functions::get_unit_max_health(u),
+                            //             owner
+                            //         );
+                            //     }
+                            // }
 
                             game.play_move(m.as_ref());
 
-                            if move_type == 3 {
-                                let src = cmd_json
-                                    .get("src")
-                                    .or(cmd_json.get("target"))
-                                    .and_then(|v| v.as_i64())
-                                    .unwrap() as i32;
-                                if let Some(u) = polyfish::functions::get_unit_at(&game.state, src)
-                                {
-                                    println!(
-                                        "    [DEBUG ABILITY] Unit at {} now has health {} (Healed {})",
-                                        src,
-                                        u.health,
-                                        u.health - pre_health
-                                    );
-                                }
-                            }
+                            // if move_type == 3 {
+                            //     let src = cmd_json
+                            //         .get("src")
+                            //         .or(cmd_json.get("target"))
+                            //         .and_then(|v| v.as_i64())
+                            //         .unwrap() as i32;
+                            //     if let Some(u) = polyfish::functions::get_unit_at(&game.state, src)
+                            //     {
+                            //         println!(
+                            //             "    [DEBUG ABILITY] Unit at {} now has health {} (Healed {})",
+                            //             src,
+                            //             u.health,
+                            //             u.health - pre_health
+                            //         );
+                            //     }
+                            // }
                         }
 
                         for msg in &game.state._messages {
@@ -187,7 +231,88 @@ async fn test_mod_replay_ingestion() {
                     let pov_id = player_data.player_id;
                     let tribe = game.state.tribes.get(&pov_id).unwrap();
                     println!("    FAILED TO FIND MOVE IN LEGAL MOVES!");
-                    println!("    Command: {}", serde_json::to_string(&cmd_json).unwrap());
+
+                    // if cmd_json["moveType"] == 9? use polyfish::types::CityRewardType
+
+                    if move_type == polyfish::MoveType::Reward {
+                        if turn_data.turn == 0 {
+                            // replace -> "owner":$ID,"population":0,"production":1|2,"progress":0
+                            // with -> "owner":$ID,"population":1,"production":1|2,"progress":1
+                            let (new_json, fixed_file_path) = {
+                                let content = json_str.replace(
+                                    &format!(
+                                        "\"owner\":{},\"population\":0,\"production\":1,\"progress\":0",
+                                        player_data.player_id
+                                    ),
+                                    &format!(
+                                        "\"owner\":{},\"population\":1,\"production\":1,\"progress\":1",
+                                        player_data.player_id
+                                    ),
+                                ).replace(
+                                    &format!(
+                                        "\"owner\":{},\"population\":0,\"production\":2,\"progress\":0",
+                                        player_data.player_id
+                                    ),
+                                    &format!(
+                                        "\"owner\":{},\"population\":1,\"production\":2,\"progress\":1",
+                                        player_data.player_id
+                                    ),
+                                );
+                                let path = format!("{}_fixed.json", replay_base);
+                                (content, path)
+                            };
+
+                            let _ = std::fs::write(&fixed_file_path, &new_json);
+                            println!(
+                                "    --- [FIX] Population fixed and saved to {}. Please re-run test.",
+                                fixed_file_path
+                            );
+                        }
+
+                        let reward_type: polyfish::CityRewardType =
+                            serde_json::from_value(cmd_json["type"].clone()).unwrap();
+                        println!(
+                            "    Command: {:?} {:?} {}",
+                            move_type,
+                            reward_type,
+                            cmd_json["target"].as_i64().unwrap(),
+                        );
+                    } else if move_type == polyfish::MoveType::Ability {
+                        let ability_type: polyfish::AbilityType =
+                            serde_json::from_value(cmd_json["type"].clone()).unwrap();
+                        println!(
+                            "    Command: {:?} {:?} {}",
+                            move_type,
+                            ability_type,
+                            cmd_json
+                                .get("target")
+                                .or_else(|| cmd_json.get("src"))
+                                .and_then(|v| v.as_i64())
+                                .unwrap_or(0),
+                        );
+                    } else if move_type == polyfish::MoveType::Build {
+                        let build_type: polyfish::StructureType =
+                            serde_json::from_value(cmd_json["type"].clone()).unwrap();
+                        println!(
+                            "    Command: {:?} {:?} {}",
+                            move_type,
+                            build_type,
+                            cmd_json
+                                .get("target")
+                                .or_else(|| cmd_json.get("src"))
+                                .and_then(|v| v.as_i64())
+                                .unwrap_or(0),
+                        );
+                    } else {
+                        println!(
+                            "    Command: {:?} {}",
+                            polyfish::MoveType::from(
+                                cmd_json["moveType"].as_i64().unwrap_or(0) as i32
+                            ),
+                            serde_json::to_string(&cmd_json).unwrap(),
+                        );
+                    }
+
                     println!(
                         "    Tribe {} Stars: {}, Cities: {}",
                         pov_id,

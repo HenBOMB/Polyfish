@@ -33,7 +33,10 @@ impl Move for EnchantAnimalMove {
         ));
 
         // 2. Spend Stars (Costs three stars)
-        undos.push(crate::actions::spend_stars(state, 3));
+        undos.push(crate::actions::spend_stars(
+            state,
+            crate::version_sync::get_polytaur_cost(state),
+        ));
 
         // 3. Handle Unit on tile (Polypush)
         let push_result = crate::actions::units::push_unit(state, tile_idx);

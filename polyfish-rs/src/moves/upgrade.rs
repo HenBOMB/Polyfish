@@ -111,7 +111,7 @@ pub fn generate_upgrade_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>)
         // Polytopia/TS Rule: Only Raft can be upgraded (usually Boat/Ship/etc. handled via Navy)
         // and tile must not be "occupied" (TS weirdness)
 
-        if unit.unit_type != UnitType::Raft {
+        if unit.unit_type != UnitType::Transportship {
             continue;
         }
 

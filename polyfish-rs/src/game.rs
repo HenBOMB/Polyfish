@@ -444,6 +444,24 @@ impl Game {
                 } else {
                     // Normal units get their turn reset
                     undos.push(start_unit_turn(state, new_pov, unit_idx));
+
+                    // // add debug log
+                    // println!(
+                    //     "Unit {} started turn",
+                    //     state.tribes.get(&new_pov).unwrap().units[unit_idx]
+                    //         .coords
+                    //         .idx
+                    // );
+
+                    // // print attacked and moved
+                    // println!(
+                    //     "Unit {} attacked: {}, moved: {}",
+                    //     state.tribes.get(&new_pov).unwrap().units[unit_idx]
+                    //         .coords
+                    //         .idx,
+                    //     state.tribes.get(&new_pov).unwrap().units[unit_idx].attacked,
+                    //     state.tribes.get(&new_pov).unwrap().units[unit_idx].moved
+                    // );
                 }
             }
         }

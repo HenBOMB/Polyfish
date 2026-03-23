@@ -13,9 +13,11 @@ pub mod mapgen;
 pub mod moves;
 pub mod prediction;
 pub mod recorder;
+pub mod replayer;
 pub mod settings;
 pub mod states;
 pub mod types;
+pub mod version_sync;
 
 pub use coords::Coords;
 pub use game::Game;

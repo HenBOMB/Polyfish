@@ -33,12 +33,12 @@ impl UnitValues {
         values.insert(UnitType::Doomux, 0.58); // 3 movement, Explode, 20HP
         values.insert(UnitType::Amphibian, 0.55); // Rider but amphibious
         values.insert(UnitType::Hexapod, 0.55); // Dash+Escape+Sneak, glass cannon
-        values.insert(UnitType::Rammer, 0.55); // 3 movement naval, Dash+Carry
+        values.insert(UnitType::Rammership, 0.55); // 3 movement naval, Dash+Carry
         values.insert(UnitType::Bomber, 0.55); // Range 3 Splash on water
         values.insert(UnitType::Mantis, 0.55); // Cymanti super, 20HP
         values.insert(UnitType::Catapult, 0.52); // Range 3, fragile but deadly
         values.insert(UnitType::Archer, 0.50); // Range 2, cheap, Dash
-        values.insert(UnitType::Scout, 0.50); // Range 2, 3 movement naval
+        values.insert(UnitType::Scoutship, 0.50); // Range 2, 3 movement naval
         values.insert(UnitType::Exida, 0.50); // Range 3, Splash+Poison
 
         // === Mid Units (B-tier: 0.30-0.49) ===
@@ -55,13 +55,13 @@ impl UnitValues {
         values.insert(UnitType::Warrior, 0.38); // Basic unit
         values.insert(UnitType::Segment, 0.35); // Independent, Explode option
         values.insert(UnitType::Kiton, 0.35); // Cheap Poison defender
-        values.insert(UnitType::Dinghy, 0.33); // Naval agent, Hide+Infiltrate
+        values.insert(UnitType::CloakBoat, 0.33); // Naval agent, Hide+Infiltrate
         values.insert(UnitType::MindBender, 0.30); // Convert niche, no attack
 
         // === Weak / Transitional (C-tier: 0.05-0.29) ===
         values.insert(UnitType::DragonEgg, 0.25); // No attack, grows into BabyDragon
         values.insert(UnitType::Larva, 0.20); // Transition, grows into Moth
-        values.insert(UnitType::Raft, 0.15); // No attack, just a boat
+        values.insert(UnitType::Transportship, 0.15); // No attack, just a boat
         values.insert(UnitType::InsectEgg, 0.10); // Immobile, grows into Larva
 
         // === Disabled (Polaris — cost=-1 in settings) ===

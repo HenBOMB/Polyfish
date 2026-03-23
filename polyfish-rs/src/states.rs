@@ -127,7 +127,7 @@ pub struct TileState {
     #[serde(default)]
     pub skin_type: i32,
     #[serde(default)]
-    pub climate: ClimateType,
+    pub climate: TribeType,
     #[serde(default)]
     pub owner: PlayerId,
     #[serde(default)]
@@ -148,7 +148,7 @@ impl Default for TileState {
             had_route: false,
             capital_of: 0,
             skin_type: 0,
-            climate: ClimateType::Nature,
+            climate: TribeType::Nature,
             owner: 0,
             effects: HashSet::new(),
             _unit_owner_id: None,
@@ -525,7 +525,7 @@ pub struct PredictionState {
     #[serde(default)]
     pub _villages: IndexMap<i32, (TribeType, bool)>,
     #[serde(default)]
-    pub _terrain: IndexMap<i32, (TerrainType, ClimateType)>,
+    pub _terrain: IndexMap<i32, (TerrainType, TribeType)>,
     #[serde(default)]
     pub _enemy_capital_suspects: Vec<i32>,
     #[serde(default)]

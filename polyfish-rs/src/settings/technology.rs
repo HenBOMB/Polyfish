@@ -30,7 +30,7 @@ pub fn get_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
     match tech_type {
         BeyondComprehension => TechnologySetting::default(),
 
-        Unrequired => TechnologySetting {
+        Basic => TechnologySetting {
             tier: Some(0),
             next: vec![Riding, Organization, Climbing, Fishing, Hunting],
             unlocks_unit: Some(UnitType::Warrior),
@@ -163,17 +163,17 @@ pub fn get_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
         Fishing => TechnologySetting {
             tier: Some(1),
             next: vec![Sailing, Ramming],
-            unlocks_unit: Some(UnitType::Raft),
+            unlocks_unit: Some(UnitType::Transportship),
             unlocks_terrain: Some(TerrainType::Water),
+            unlocks_structure: Some(StructureType::Port),
             ..Default::default()
         },
         Sailing => TechnologySetting {
             tier: Some(2),
             requires: Some(Fishing),
             next: vec![Navigation],
-            unlocks_unit: Some(UnitType::Scout),
+            unlocks_unit: Some(UnitType::Scoutship),
             unlocks_terrain: Some(TerrainType::Ocean),
-            unlocks_structure: Some(StructureType::Port),
             ..Default::default()
         },
         Navigation => TechnologySetting {
@@ -186,7 +186,7 @@ pub fn get_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
             tier: Some(2),
             requires: Some(Fishing),
             next: vec![Aquatism],
-            unlocks_unit: Some(UnitType::Rammer),
+            unlocks_unit: Some(UnitType::Rammership),
             ..Default::default()
         },
         Aquatism => TechnologySetting {
@@ -407,7 +407,7 @@ pub fn get_researchable_techs(
     let mut researchable = Vec::new();
 
     for tech in TechnologyType::iter() {
-        if tech == TechnologyType::Unrequired || tech == TechnologyType::BeyondComprehension {
+        if tech == TechnologyType::Basic || tech == TechnologyType::BeyondComprehension {
             continue;
         }
 

@@ -59,12 +59,13 @@ pub enum TerrainType {
     Deserialize_repr,
     Default,
     strum_macros::EnumIter,
+    strum_macros::FromRepr,
 )]
 #[repr(i8)]
 pub enum TechnologyType {
     BeyondComprehension = -1,
     #[default]
-    Unrequired = 0,
+    Basic = 0,
     Riding = 1,
     FreeSpirit = 2,
     Chivalry = 3,
@@ -75,6 +76,7 @@ pub enum TechnologyType {
     Farming = 8,
     Construction = 9,
     Fishing = 10,
+    // Whaling = 11, // removed from the game
     Aquatism = 12,
     Sailing = 13,
     Navigation = 14,
@@ -92,26 +94,40 @@ pub enum TechnologyType {
     // Aquarion
     FreeDiving = 25,
     Spearing = 26,
-    // Amphibian = 27,
-    Waterways = 28,
+    // Amphibian = 27, // Riding2
     // Elyrion
-    ForestMagic = 29,
+    ForestMagic = 28,
+    // WaterMagic = 29,
     // Polaris
     Frostwork = 30,
     PolarWarfare = 31,
     Polarism = 32,
+    // Oceanology = 33,
     ShockTactics = 35,
     // Cymanti
     Recycling = 36,
     // Hydrology = 37,
     Diplomacy = 38,
-    Ramming = 39,
+    // Aquaculture = 39,
+    // FishingSimple = 40,
     Sledding = 41,
     IceFishing = 42,
     Pascetism = 43,
+    Ramming = 44,
+    // AquaBase = 45,
+    // MarineLife = 46,
+    // AquaFishing = 47,
+    Waterways = 48,
     Oceantology = 49,
-    Synergy = 120,
+    // Mysticism = 50
+    Synergy = 120, // idk, new tech by cymanti
     Rituals = 121, // Cymanti-specific (replaces Meditation)
+}
+
+impl From<i32> for TechnologyType {
+    fn from(v: i32) -> Self {
+        Self::from_repr(v as i8).unwrap_or(TechnologyType::Basic)
+    }
 }
 
 /// Tribe types
@@ -126,6 +142,7 @@ pub enum TechnologyType {
     Deserialize_repr,
     Default,
     strum_macros::EnumIter,
+    strum_macros::FromRepr,
 )]
 #[repr(i8)]
 pub enum TribeType {
@@ -150,39 +167,10 @@ pub enum TribeType {
     Cymanti = 17,
 }
 
-/// Climate types
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize_repr,
-    Deserialize_repr,
-    Default,
-    strum_macros::EnumIter,
-)]
-#[repr(i8)]
-pub enum ClimateType {
-    #[default]
-    Nature = 0,
-    XinXi = 1,
-    Imperius = 2,
-    Bardur = 3,
-    Oumaji = 4,
-    Kickoo = 5,
-    Hoodrick = 6,
-    Luxidoor = 7,
-    Vengir = 8,
-    Zebasi = 9,
-    AiMo = 10,
-    Aquarion = 11,
-    Quetzali = 12,
-    Elyrion = 13,
-    Yadakk = 14,
-    Polaris = 15,
-    Cymanti = 16,
+impl From<i32> for TribeType {
+    fn from(v: i32) -> Self {
+        Self::from_repr(v as i8).unwrap_or(TribeType::None)
+    }
 }
 
 #[derive(
@@ -196,6 +184,7 @@ pub enum ClimateType {
     Deserialize_repr,
     Default,
     strum_macros::EnumIter,
+    strum_macros::FromRepr,
 )]
 #[repr(i8)]
 pub enum CityRewardType {
@@ -211,6 +200,12 @@ pub enum CityRewardType {
     PopGrowth = 8,
 }
 
+impl From<i32> for CityRewardType {
+    fn from(v: i32) -> Self {
+        Self::from_repr(v as i8).unwrap_or(CityRewardType::None)
+    }
+}
+
 #[derive(
     Debug,
     Clone,
@@ -222,6 +217,7 @@ pub enum CityRewardType {
     Deserialize_repr,
     Default,
     strum_macros::EnumIter,
+    strum_macros::FromRepr,
 )]
 #[repr(i8)]
 pub enum RuinsRewardType {
@@ -238,6 +234,12 @@ pub enum RuinsRewardType {
     City = 10,
 }
 
+impl From<i32> for RuinsRewardType {
+    fn from(v: i32) -> Self {
+        Self::from_repr(v as i8).unwrap_or(RuinsRewardType::None)
+    }
+}
+
 /// Unit types
 #[derive(
     Debug,
@@ -250,21 +252,28 @@ pub enum RuinsRewardType {
     Deserialize_repr,
     Default,
     strum_macros::EnumIter,
+    strum_macros::FromRepr,
 )]
 #[repr(i8)]
 pub enum UnitType {
     #[default]
     None = 0,
+    // Scout = 1,
     Warrior = 2,
     Rider = 3,
     Knight = 4,
     Defender = 5,
+    // Ship = 6,
+    // Battleship = 7,
     Catapult = 8,
     Archer = 9,
     MindBender = 10,
     Swordsman = 11,
     Giant = 12,
+    // Bunny = 13,
+    // Boat = 14,
     Polytaur = 15,
+    // Navalon,
     DragonEgg = 17,
     BabyDragon = 18,
     FireDragon = 19,
@@ -287,20 +296,36 @@ pub enum UnitType {
     Shaman = 36,
     Dagger = 37,
     Cloak = 38,
-    Dinghy = 39,
+    CloakBoat = 39, // Dinghy
     Pirate = 40,
     Bomber = 41,
-    Scout = 42,
-    Raft = 43,
-    Rammer = 44,
+    Scoutship = 42,
+    Transportship = 43, // Raft
+    Rammership = 44,
     Juggernaut = 45,
+    // MermaidWarrior,
+    // MermaidArcher,
+    // MermaidSwordsman,
+    // MermaidDefender,
+    // MermaidCloak,
+    // MermaidDagger,
+    // Jelly,
+    // Shark,
+    // Siren,
+    // Aquapult,
+    Boomchi = 56,
+    LivingIsland = 57,
+    // Ciru = 58,
+    Mantis = 59,
+    InsectEgg = 60, // BugEgg
+    Moth = 61,
+    Larva = 62,
+}
 
-    LivingIsland = 120,
-    Boomchi = 121,
-    Moth = 122,
-    Larva = 123,
-    InsectEgg = 124,
-    Mantis = 125,
+impl From<i32> for UnitType {
+    fn from(v: i32) -> Self {
+        Self::from_repr(v as i8).unwrap_or(UnitType::None)
+    }
 }
 
 /// Skill types
@@ -326,6 +351,8 @@ pub enum SkillType {
     Escape = 2,
     /// Allows a unit to explore a 5x5 area instead of a 3x3 area.
     Scout = 3,
+    /// Allows a unit to ignore movement barriers (ie. zone of control) imposed by enemy units. The units themselves still block movement (ie. units with sneak still cannot travel through enemy units).
+    Sneak = 4,
     /// Allows a unit to hide itself and become invisible to enemies when it moves.
     Hide = 5,
     // Unknown, not used anywhere
@@ -337,7 +364,7 @@ pub enum SkillType {
     /// Gives a unit the Heal Others unit action, which heals all adjacent friendly units by up to 4 HP.
     HealOthers = 9,
     /// Allows a unit to float on water
-    Float = 10,
+    Float = 10, // Swim
     /// Allows a unit to carry another unit inside. A unit with the carry skill can move to a land tile adjacent to water. Doing so releases the unit it was carrying and ends the unit's turn.
     Carry = 11,
     /// Allows a unit to grow into a different unit after a given number of turns.
@@ -365,8 +392,8 @@ pub enum SkillType {
     Fortify = 22,
     /// Allows a unit to ignore movement barriers imposed by terrain (e.g. Forests), but NOT mountains. Note that zone of control cannot be negated.
     Creep = 23,
-    /// Gives a unit the Swarm unit action, which boosts all adjacent friendly units by increasing their movement by 1 until being attacked.
-    Swarm = 24,
+    // Not sure..
+    // Boost = 24,
     /// Units with this skill do not take up a population slot in or belong to any city.
     Independent = 25,
     /// Allows a unit to poison enemy units it attacks.
@@ -397,20 +424,24 @@ pub enum SkillType {
     // AutoHeal = 41,
     /// Prevents a unit from becoming a veteran
     Static = 42,
+    // Allows a unit to damage any enemy that moves next to it, as well as when it moves next to an enemy or when it is trained.
+    // Tentacles = 44,
     /// Allows a unit to automatically flood any tile it moves onto.
-    AutoFlood = 79,
-    /// Allows a unit to move on both land and water
-
+    AutoFlood = 45,
+    // Allows a unit to flood any tile it attacks. Units with this skill can also attack tiles without an enemy unit present.
+    // Drench = 46,
+    /// Allows a unit to move on both land and water tiles but slows movement on land.
+    Amphibious = 47,
     /// Restricts a unit to only being able to move on water tiles.
-    Water = 120,
+    Water = 48,
+    // Land = 49,
     /// Allows a unit to make algae at any tiles it travels.
-    Algae = 121,
+    Algae = 51,
+    // Consumed = 52,
+    // Gives a unit the Swarm unit action, which boosts all adjacent friendly units by increasing their movement by 1 until being attacked.
+    Swarm = 53,
     /// Allows a unit to attack twice in the same turn. After the first attack is performed, the unit can also still perform certain actions (such as draining or breaking ice, but not capturing cities or excavating ruins)
-    DoubleAttack = 122,
-    /// Allows a unit to flood any tile it attacks. Units with this skill can also attack tiles without an enemy unit present.
-    Amphibious = 123,
-    /// Allows a unit to ignore movement barriers (ie. zone of control) imposed by enemy units. The units themselves still block movement (ie. units with sneak still cannot travel through enemy units).
-    Sneak = 124,
+    DoubleAttack = 54,
 }
 
 /// Ability types
@@ -552,7 +583,7 @@ pub enum ResourceType {
     Game = 1,
     Crop = 2,
     Fish = 3,
-    // Whale = 4,
+    // Whale = 4, // Removed from the game
     Metal = 5,
     Fruit = 6,
     Spores = 7,
@@ -612,7 +643,18 @@ pub enum TileEffect {
 }
 
 /// Capture types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize_repr, Deserialize_repr, Default)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize_repr,
+    Deserialize_repr,
+    Default,
+    strum_macros::FromRepr,
+)]
 #[repr(i8)]
 pub enum CaptureType {
     #[default]
@@ -623,8 +665,25 @@ pub enum CaptureType {
     City = 4,
 }
 
+impl From<i32> for CaptureType {
+    fn from(v: i32) -> Self {
+        Self::from_repr(v as i8).unwrap_or(CaptureType::None)
+    }
+}
+
 /// Move types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize_repr, Deserialize_repr, Default)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize_repr,
+    Deserialize_repr,
+    Default,
+    strum_macros::FromRepr,
+)]
 #[repr(i8)]
 pub enum MoveType {
     #[default]
@@ -640,6 +699,12 @@ pub enum MoveType {
     Reward = 9,
     EndTurn = 10,
     Resign = 11,
+}
+
+impl From<i32> for MoveType {
+    fn from(v: i32) -> Self {
+        Self::from_repr(v as i8).unwrap_or(MoveType::None)
+    }
 }
 
 /// Task types

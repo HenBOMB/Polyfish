@@ -102,7 +102,7 @@ fn test_mcts_tech_unlock_logic() {
     if let Some(tribe) = game.state.tribes.get_mut(&player_id) {
         let mut raft = polyfish::states::UnitState::default();
         raft.owner = player_id;
-        raft.unit_type = UnitType::Raft;
+        raft.unit_type = UnitType::Transportship;
         raft.coords.set_at(raft_tile_idx, game.state.settings.size);
         tribe.units.push(raft);
         game.state
@@ -119,9 +119,9 @@ fn test_mcts_tech_unlock_logic() {
         .expect("Simulation should succeed");
 
     let moves = game.legal_moves();
-    let has_raft_upgrade = moves
-        .iter()
-        .any(|m| m.move_type() == MoveType::Summon && m.unit_type().ok() == Some(UnitType::Scout));
+    let has_raft_upgrade = moves.iter().any(|m| {
+        m.move_type() == MoveType::Summon && m.unit_type().ok() == Some(UnitType::Scoutship)
+    });
 
     assert!(
         has_raft_upgrade,

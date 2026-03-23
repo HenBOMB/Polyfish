@@ -595,7 +595,7 @@ pub fn is_enemy_city(state: &GameState, idx: i32, pov_id: PlayerId) -> bool {
 /// Check if a tile is frozen (has Ice terrain or Polaris climate)
 pub fn is_tile_frozen(state: &GameState, idx: i32) -> bool {
     state.tiles.get(&idx).map_or(false, |t| {
-        t.terrain_type == TerrainType::Ice || t.climate == ClimateType::Polaris
+        t.terrain_type == TerrainType::Ice || t.climate == TribeType::Polaris
     })
 }
 

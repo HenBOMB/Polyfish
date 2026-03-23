@@ -37,6 +37,10 @@ pub fn remove_unit(
     };
 
     let mut undos: Vec<UndoCallback> = Vec::new();
+    println!(
+        "    [DEBUG] REMOVE_UNIT: Type {:?}, Owner {}, Idx {}, Tile {}, Killer {:?}/idx {:?}",
+        unit_type, unit_owner, unit_idx, tile_idx, killer_owner, killer_idx
+    );
 
     // 0. Drop Spores/Algae if Poisoned
     if removed_unit.effects.contains(&UnitEffect::Poison) {
@@ -445,7 +449,6 @@ pub fn step_unit(
     }
 
     // Check embark/disembark
-    let new_terrain = state.tiles.get(&to_tile_idx).map(|t| t.terrain_type);
     let struct_at_dest = get_structure_type_at(state, to_tile_idx);
     let is_port = struct_at_dest == Some(StructureType::Port);
 
@@ -469,75 +472,32 @@ pub fn step_unit(
         if let Some(tribe) = state.tribes.get_mut(&unit_owner) {
             if let Some(unit) = tribe.units.get_mut(unit_idx) {
                 match old_type {
-                    UnitType::Cloak => unit.unit_type = UnitType::Dinghy,
+                    UnitType::Cloak => unit.unit_type = UnitType::CloakBoat,
                     UnitType::Dagger => unit.unit_type = UnitType::Pirate,
                     UnitType::Giant => unit.unit_type = UnitType::Juggernaut,
                     _ => {
-                        unit.unit_type = UnitType::Raft;
+                        unit.unit_type = UnitType::Transportship;
                         unit.passenger_type = Some(old_type);
                     }
                 }
             }
         }
     }
-    // Disembark logic
-    else if crate::functions::has_skill(
-        {
-            let tribe = state.tribes.get(&unit_owner).unwrap();
-            tribe.units.get(unit_idx).unwrap()
-        },
-        SkillType::Carry,
-    ) && !is_water_terrain_type(new_terrain.unwrap_or(TerrainType::Field))
-    {
-        if let Some(tribe) = state.tribes.get_mut(&unit_owner) {
-            if let Some(unit) = tribe.units.get_mut(unit_idx) {
-                let new_type = match old_type {
-                    UnitType::Dinghy => UnitType::Cloak,
-                    UnitType::Pirate => UnitType::Dagger,
-                    UnitType::Juggernaut => UnitType::Giant,
-                    _ => old_passenger.unwrap_or(old_type),
-                };
-                unit.unit_type = new_type;
-                unit.passenger_type = None;
-                unit.attacked = true; // Ends the unit's turn
-            }
-        }
-    }
     // Carry disembark: Naval units with passengers moving to land transform and spawn passenger
     else if has_skill(old_type, SkillType::Carry) && old_passenger.is_some() {
         let tile = state.tiles.get(&to_tile_idx);
-        let is_water = tile.map_or(false, |t| {
-            t.terrain_type == crate::types::TerrainType::Water
-        });
+        let is_water = tile.map_or(false, |t| is_water_terrain_type(t.terrain_type));
 
         if !is_water {
             // Determine land unit type based on carrier type
-            let land_unit_type = match old_type {
-                crate::types::UnitType::Dinghy => crate::types::UnitType::Cloak,
-                crate::types::UnitType::Pirate => crate::types::UnitType::Dagger,
-                crate::types::UnitType::Juggernaut => crate::types::UnitType::Giant,
-                crate::types::UnitType::Raft | crate::types::UnitType::Scout => {
-                    // For Raft/Scout with passenger, transform to the passenger type
-                    old_passenger.unwrap_or(crate::types::UnitType::Warrior)
-                }
-                _ => old_passenger.unwrap_or(crate::types::UnitType::Warrior),
-            };
+            let land_unit_type = old_passenger.unwrap();
 
             // Transform carrier to land unit
             if let Some(tribe) = state.tribes.get_mut(&unit_owner) {
                 if let Some(unit) = tribe.units.get_mut(unit_idx) {
-                    let old_unit_type = unit.unit_type;
                     unit.unit_type = land_unit_type;
                     unit.passenger_type = None;
-
-                    undos.push(Box::new(move |s| {
-                        if let Some(t) = s.tribes.get_mut(&unit_owner) {
-                            if let Some(u) = t.units.get_mut(unit_idx) {
-                                u.unit_type = old_unit_type;
-                                u.passenger_type = old_passenger;
-                            }
-                        }
-                    }));
+                    unit.attacked = true; // Ends the unit's turn
                 }
             }
         }
@@ -1201,6 +1161,7 @@ pub fn attack_unit(
                     Some(defender_owner),
                     Some(defender_idx),
                 ));
+                return crate::actions::chain_undos(undos);
             }
         }
 
@@ -1510,6 +1471,14 @@ pub fn summon_unit(
         spawn_tile_idx,
         force_independent,
     ));
+
+    // Trained units start exhausted
+    if let Some(tribe) = state.tribes.get_mut(&pov_id) {
+        if let Some(unit) = tribe.units.last_mut() {
+            unit.moved = true;
+            unit.attacked = true;
+        }
+    }
 
     // Discover tiles around unit
     let unit_copy = state
@@ -2003,6 +1972,20 @@ pub fn upgrade_unit(
             unit.health = (new_max_hp - damage).max(1);
         }
     }
+
+    // 3. Discover around the newly upgraded unit
+    let new_discovery_undo = {
+        let settings = get_unit_setting(target_type);
+        let range = if settings.skills.contains(&crate::types::SkillType::Scout) {
+            2
+        } else {
+            1
+        };
+        let mut adj = crate::functions::get_adjacent_indices(state, tile_idx, range);
+        adj.push(tile_idx);
+        crate::actions::discovery::discover_tiles(state, unit_owner, None, Some(adj))
+    };
+    undos.push(new_discovery_undo);
 
     // Undo unit change
     undos.push(Box::new(move |s| {

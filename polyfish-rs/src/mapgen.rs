@@ -9,30 +9,30 @@ use crate::functions::{
     get_square_indices as get_square, get_squared_euclidean_distance, idx_to_coords as get_coords,
 };
 use crate::states::{GameState, TileState, TribeState};
-use crate::types::{ClimateType, MapSize, MapType, TerrainType, TribeType};
+use crate::types::{MapSize, MapType, TerrainType, TribeType};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::collections::HashSet;
 
-fn tribe_to_climate(tribe: TribeType) -> ClimateType {
+fn tribe_to_climate(tribe: TribeType) -> TribeType {
     match tribe {
-        TribeType::AiMo => ClimateType::AiMo,
-        TribeType::Aquarion => ClimateType::Aquarion,
-        TribeType::Bardur => ClimateType::Bardur,
-        TribeType::Elyrion => ClimateType::Elyrion,
-        TribeType::Hoodrick => ClimateType::Hoodrick,
-        TribeType::Imperius => ClimateType::Imperius,
-        TribeType::Kickoo => ClimateType::Kickoo,
-        TribeType::Luxidoor => ClimateType::Luxidoor,
-        TribeType::Oumaji => ClimateType::Oumaji,
-        TribeType::Quetzali => ClimateType::Quetzali,
-        TribeType::Vengir => ClimateType::Vengir,
-        TribeType::XinXi => ClimateType::XinXi,
-        TribeType::Yadakk => ClimateType::Yadakk,
-        TribeType::Zebasi => ClimateType::Zebasi,
-        TribeType::Polaris => ClimateType::Polaris,
-        TribeType::Cymanti => ClimateType::Cymanti,
-        _ => ClimateType::Nature,
+        TribeType::AiMo => TribeType::AiMo,
+        TribeType::Aquarion => TribeType::Aquarion,
+        TribeType::Bardur => TribeType::Bardur,
+        TribeType::Elyrion => TribeType::Elyrion,
+        TribeType::Hoodrick => TribeType::Hoodrick,
+        TribeType::Imperius => TribeType::Imperius,
+        TribeType::Kickoo => TribeType::Kickoo,
+        TribeType::Luxidoor => TribeType::Luxidoor,
+        TribeType::Oumaji => TribeType::Oumaji,
+        TribeType::Quetzali => TribeType::Quetzali,
+        TribeType::Vengir => TribeType::Vengir,
+        TribeType::XinXi => TribeType::XinXi,
+        TribeType::Yadakk => TribeType::Yadakk,
+        TribeType::Zebasi => TribeType::Zebasi,
+        TribeType::Polaris => TribeType::Polaris,
+        TribeType::Cymanti => TribeType::Cymanti,
+        _ => TribeType::Nature,
     }
 }
 
@@ -1281,7 +1281,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         use crate::states::TechnologyState;
         use crate::types::TechnologyType;
         let mut starting_tech = vec![TechnologyState {
-            tech_type: TechnologyType::Unrequired,
+            tech_type: TechnologyType::Basic,
             discovered: true,
         }];
         let tech_type = match tribe {
@@ -1324,7 +1324,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         if gen_tile.terrain_type == TerrainType::Water
             || gen_tile.terrain_type == TerrainType::Ocean
         {
-            t_state.climate = ClimateType::Nature;
+            t_state.climate = TribeType::Nature;
         } else if let Some(tribe) = gen_tile.tribe_affinity {
             t_state.climate = tribe_to_climate(tribe);
         }

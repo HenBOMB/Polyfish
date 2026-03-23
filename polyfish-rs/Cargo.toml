@@ -22,6 +22,8 @@ rayon = "1.11.0"
 indexmap = { version = "2.0", features = ["serde"] }
 clap = { version = "4.0", features = ["derive"] }
 lazy_static = "1.5.0"
+reqwest = { version = "0.13.2", features = ["json"] }
+dotenvy = "0.15.7"
 
 [features]
 default = []

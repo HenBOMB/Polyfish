@@ -114,7 +114,6 @@ pub fn generate_economic_ability_moves(state: &GameState, moves: &mut Vec<Box<dy
     if has_destroy || (is_cymanti && has_decompose) {
         for city in &tribe.cities {
             for &tile_idx in &city._territory {
-                // Check enemy
                 if functions::get_enemy_at(state, tile_idx, pov_id).is_some() {
                     continue;
                 }
@@ -145,7 +144,7 @@ pub fn generate_economic_ability_moves(state: &GameState, moves: &mut Vec<Box<dy
                 // Check for Game/Animal resource
                 if let Some(Some(resource)) = state.resources.get(&tile_idx).as_ref() {
                     if resource.resource_type == crate::types::ResourceType::Game {
-                        if tribe.stars >= 3 {
+                        if tribe.stars >= crate::version_sync::get_polytaur_cost(state) {
                             moves.push(Box::new(EnchantAnimalMove::new(tile_idx)));
                         }
                     }
