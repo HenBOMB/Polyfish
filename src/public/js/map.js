@@ -195,7 +195,7 @@ class MapRenderer {
 
         // Ground
         const tilefile = [null, 'terrain/water/water', 'terrain/water/ocean', null, null, null, 'terrain/tiles/ice'][tile.type]
-            || `terrain/tiles/ground_${tile.climate}`;
+            || `terrain/tiles/ground_${tile.climate === 17 ? 16 : tile.climate}`;
 
         const groundEl = this.updateLayer(idx, 'ground', tilefile, pos, 0, ['ground']);
         groundEl.dataset.tileIdx = idx;
@@ -204,9 +204,9 @@ class MapRenderer {
 
         // Ambient (Mountains/Forests)
         if (tile.type === 4) { // Mountain
-            this.updateLayer(idx, 'ambient', `terrain/mountains/mountain_${tile.climate}`, pos, 1200, ['mountain']);
+            this.updateLayer(idx, 'ambient', `terrain/mountains/mountain_${tile.climate === 17 ? 16 : tile.climate}`, pos, 1200, ['mountain']);
         } else if (tile.type === 5) { // Forest
-            this.updateLayer(idx, 'ambient', `terrain/forests/Forest_${tile.climate}`, pos, 2000, ['forest']);
+            this.updateLayer(idx, 'ambient', `terrain/forests/Forest_${tile.climate === 17 ? 16 : tile.climate}`, pos, 2000, ['forest']);
         } else {
             this.removeLayer(idx, 'ambient');
         }
@@ -260,7 +260,7 @@ class MapRenderer {
             const climateIndex = CLIMATE_IDS.indexOf(tribeName);
             const tribeColor = TRIBE_COLORS[city.tribe.type] || 'rgba(0,0,0,0.5)';
 
-            const cityEl = this.updateLayer(idx, 'city', `buildings/${tribeName}/Default/Houses/House_${climateIndex}_5`, pos, 4000, ['city']);
+            const cityEl = this.updateLayer(idx, 'city', `buildings/${tribeName}/Default/Houses/House_${climateIndex === 17 ? 16 : climateIndex}_5`, pos, 4000, ['city']);
             const statsEl = this.updateLayer(idx, 'city-stats', '', pos, 4100, ['city-stats-layer']);
             statsEl.style.backgroundImage = 'none'; // No background for stats container
 
@@ -475,8 +475,6 @@ class MapRenderer {
             const resource = GAME_STATE.resources[idx];
             const isCity = tile.owner > 0 && struct && StructureTypes[struct.type] === 'Village';
             const tribe = TRIBE_ID_2_NAME[GAME_STATE.tribes[tile.owner]?.type];
-
-            console.log(unit);
 
             let html = `<strong>Tile ${idx} (${tile.coords.x}, ${tile.coords.y})</strong><br>`;
             html += `⛰️ ${CLIMATE_IDS[tile.climate]} ${TerrainType[tile.type] || tile.type}<br>`;
@@ -845,7 +843,7 @@ class MapRenderer {
                 // Map terrain type to texture
                 // 1: Water, 2: Ocean, 3: Field, 4: Mountain, 5: Forest, 6: Ice
                 const tilefile = [null, 'terrain/water/water', 'terrain/water/ocean', null, 'terrain/mountains/mountain', 'terrain/forests/Forest', 'terrain/tiles/ice'][terrainType]
-                    || `terrain/tiles/ground_${climate}`;
+                    || `terrain/tiles/ground_${climate === 17 ? 16 : climate}`;
 
                 // Handle specific suffixes for mountain/forest
                 let finalFile = tilefile;

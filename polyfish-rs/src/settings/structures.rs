@@ -51,7 +51,10 @@ pub fn get_structure_setting(struct_type: StructureType) -> StructureSetting {
         //     ..Default::default()
         // },
         StructureType::Algae => StructureSetting {
-            terrain_types: terrains![TerrainType::Ocean],
+            cost: Some(5),
+            terrain_types: terrains![TerrainType::Water, TerrainType::Ocean],
+            reward_pop: 1,
+            tribe_type: Some(TribeType::Cymanti),
             ..Default::default()
         },
         StructureType::Mycelium => StructureSetting {

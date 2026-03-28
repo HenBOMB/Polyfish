@@ -334,6 +334,24 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                 }
             }
         }
+
+        // 4. Roads in neutral territory
+        for (&idx, tile) in &state.tiles {
+            if tile.owner == 0 && tile.explorers.contains(&pov_id) && !tile.has_road {
+                for &(struct_type, ref settings) in &unlocked_structures {
+                    if struct_type == StructureType::Road {
+                        let terrain_valid = settings.terrain_types.contains(&tile.terrain_type)
+                            || (tile.is_algae()
+                                && (settings.terrain_types.contains(&TerrainType::Field)
+                                    || settings.terrain_types.contains(&TerrainType::Water)));
+                        if terrain_valid {
+                            moves.push(Box::new(BuildMove::new(idx, struct_type)));
+                        }
+                        break;
+                    }
+                }
+            }
+        }
     }
 }
 

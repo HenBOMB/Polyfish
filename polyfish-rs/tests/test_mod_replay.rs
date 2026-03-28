@@ -24,9 +24,12 @@ pub struct ReplayPlayer {
     pub commands: Vec<serde_json::Value>,
 }
 
+// Save successfull replays for further debug testing
+static PASSED_REPLAYS: &[&str] = &["anpiian-swamp_1774295054"];
+
 #[tokio::test]
 async fn test_mod_replay_ingestion() {
-    let replay_base = "replays/kimeusian-monsoon_1774234919";
+    let replay_base = "replays/beautiful-navies_1774235253";
     let replay_path = format!("{}.json", replay_base);
     let fixed_path = format!("{}_fixed.json", replay_base);
 
@@ -43,8 +46,8 @@ async fn test_mod_replay_ingestion() {
     let mut game = Game::new();
     game.state = mod_replay.game_state;
     {
-        let t147 = game.state.tiles.get(&147).unwrap();
-        println!("🐛 Tile 147 Owner: {}", t147.owner);
+        // let t147 = game.state.tiles.get(&147).unwrap();
+        // println!("🐛 Tile 147 Owner: {}", t147.owner);
     }
     if game.state.settings.current_player_turn_id == 0 {
         game.state.settings.current_player_turn_id = 1;
@@ -65,7 +68,7 @@ async fn test_mod_replay_ingestion() {
     for turn_data in mod_replay.turns {
         println!("\n⬦⬦⬦⬦ TURN {} ⬦⬦⬦⬦", turn_data.turn);
         for player_data in turn_data.players {
-            println!("👤 Player {}", player_data.player_id);
+            println!("\n👤 Player {}", player_data.player_id);
             // Reset units for this player to make moves legal
             if let Some(tribe) = game.state.tribes.get_mut(&player_data.player_id) {
                 for unit in &mut tribe.units {
@@ -76,31 +79,48 @@ async fn test_mod_replay_ingestion() {
             }
             game.state.settings.current_player_turn_id = player_data.player_id;
 
-            for cmd_json in player_data.commands {
-                if let Some(tribe) = game.state.tribes.get(&player_data.player_id) {
-                    println!(
-                        "🐛 Player {} has {} stars",
-                        player_data.player_id, tribe.stars
-                    );
+            for mut cmd_json in player_data.commands {
+                if cmd_json["error"].is_string() {
+                    // halt immediately and print details
+                    if cmd_json["tid"].as_str().unwrap() != "swarm" {
+                        println!("❌ Unknown Command: {}", cmd_json["tid"]);
+                        panic!("Unknown Command: {}", cmd_json["error"].as_str().unwrap());
+                    }
                 }
 
                 // Skips startmatch / endmatch which are moveType: -1
                 let move_type_opt = cmd_json.get("moveType").and_then(|v| v.as_i64());
                 if let Some(move_type) = move_type_opt {
-                    if move_type == -1 || move_type == 11 {
+                    if (move_type == -1 || move_type == 11) && !cmd_json["error"].is_string() {
+                        if move_type == 11 {
+                            println!("🚀 A player has resigned.");
+                        }
                         continue;
                     }
                 }
 
+                // DEBUGGING FUCKING SHORTEST PATH LOGIC FOR +1 MOVEMENT UNITS
+                // if step, src = 86 and target = 118 and player = 1 and turn = 5: throw
+                // if cmd_json["moveType"].as_i64() == Some(1)
+                //     && cmd_json["src"].as_i64() == Some(86)
+                //     && cmd_json["target"].as_i64() == Some(118)
+                //     && player_data.player_id == 1
+                //     && turn_data.turn == 5
+                // {
+                //     // save game state to file
+                //     let save_path = format!("saved_state.json");
+                //     std::fs::write(
+                //         &save_path,
+                //         serde_json::to_string_pretty(&game.state).unwrap(),
+                //     )
+                //     .unwrap();
+                //     panic!("DEBUGGING FUCKING SHORTEST PATH LOGIC FOR +1 MOVEMENT UNITS");
+                // }
+
                 let move_type: polyfish::MoveType =
                     polyfish::MoveType::from(cmd_json["moveType"].as_i64().unwrap_or(0) as i32);
 
-                let mut cmd_stripped = cmd_json.as_object().unwrap().clone();
-                cmd_stripped.remove("_reward");
-                cmd_stripped.remove("_revealedTiles");
-                let cmd_json_stripped_val = serde_json::Value::Object(cmd_stripped);
-
-                // --- FIX FOR SANCTUARY/ANIMALS NON-DETERMINISM ---
+                // --- FIX FOR SANCTUARY/ANIMALS NON-DETERMINISM --- //
                 // If it's Enchant Animal (moveType 3, type 23) and animal is missing, force spawn it
                 if move_type == polyfish::MoveType::Ability
                     && cmd_json.get("type").and_then(|v| v.as_i64()) == Some(23)
@@ -130,6 +150,32 @@ async fn test_mod_replay_ingestion() {
                 }
 
                 let legal_moves = game.legal_moves();
+
+                // --- FIX FOR SWARM MOVE --- //
+                // find the correct move and replace the command with it
+                if cmd_json["error"].is_string() && cmd_json["tid"].as_str().unwrap() == "swarm" {
+                    // cmd_json = legal_moves.find(x => x.type == 14 && moveType == 3)
+                    for m in &legal_moves {
+                        let s = m.serialize();
+                        if s["type"] == polyfish::AbilityType::Swarm as i8
+                            && s["moveType"] == polyfish::MoveType::Ability as i8
+                        {
+                            cmd_json = s;
+                            break;
+                        }
+                    }
+                    println!(
+                        "    [FIX] Applying swarm move with shaman at {}",
+                        cmd_json["src"]
+                    );
+                }
+
+                let mut cmd_stripped = cmd_json.as_object().unwrap().clone();
+                cmd_stripped.remove("_reward");
+                cmd_stripped.remove("_revealedTiles");
+
+                let cmd_json_stripped_val = serde_json::Value::Object(cmd_stripped);
+
                 let mut found = false;
                 for m in &legal_moves {
                     let serialized = m.serialize();
@@ -151,7 +197,7 @@ async fn test_mod_replay_ingestion() {
                                     Some(serde_json::from_value(tiles.clone()).unwrap());
                             }
 
-                            println!("🚀 Executing: {}", m_with_hints.describe(&game.state));
+                            println!("🚀 {}", m_with_hints.describe(&game.state));
                             game.play_move(&m_with_hints);
                         }
                         // Match logic for Capture moves (moveType 8)
@@ -168,10 +214,10 @@ async fn test_mod_replay_ingestion() {
                                     Some(serde_json::from_value(tiles.clone()).unwrap());
                             }
 
-                            println!("🚀 Executing: {}", m_with_hints.describe(&game.state));
+                            println!("🚀 {}", m_with_hints.describe(&game.state));
                             game.play_move(&m_with_hints);
                         } else {
-                            println!("🚀 Executing: {}", m.describe(&game.state));
+                            println!("🚀 {}", m.describe(&game.state));
 
                             // // Debug Recover
                             // let mut pre_health = 0;
@@ -218,12 +264,105 @@ async fn test_mod_replay_ingestion() {
                         }
 
                         for msg in &game.state._messages {
-                            println!("    {}", msg);
+                            println!("{}", msg);
                         }
                         game.state._messages.clear();
                         found = true;
                         success_commands += 1;
                         break;
+                    }
+                }
+
+                // --- FIX FOR TECH STEAL NON-DETERMINISM ---
+                // When tribes meet (via explorer discovering territory), both get a random
+                // tech from each other if they have prerequisites. Since this is non-deterministic,
+                // the replay can't encode it. We infer the stolen tech by checking what would
+                // make the failed move legal.
+                if !found {
+                    use strum::IntoEnumIterator;
+
+                    let tribe = game.state.tribes.get(&player_data.player_id).unwrap();
+                    let has_met_others = !tribe.known_players.is_empty();
+
+                    if has_met_others {
+                        let needed_tech: Option<polyfish::TechnologyType> = match move_type {
+                            polyfish::MoveType::Build => {
+                                let struct_type: polyfish::StructureType =
+                                    serde_json::from_value(cmd_json["type"].clone()).unwrap();
+                                let mut result = None;
+                                for tech_type in polyfish::TechnologyType::iter() {
+                                    let ts = polyfish::settings::technology::get_technology_setting(
+                                        tech_type,
+                                    );
+                                    if ts.unlocks_structure == Some(struct_type)
+                                        || ts.unlocks_special_structures.contains(&struct_type)
+                                    {
+                                        if !polyfish::settings::technology::has_technology(
+                                            &tribe.tech_vanilla,
+                                            tech_type,
+                                        ) {
+                                            result = Some(tech_type);
+                                        }
+                                        break;
+                                    }
+                                }
+                                result
+                            }
+                            polyfish::MoveType::Summon => {
+                                let unit_type: polyfish::UnitType =
+                                    serde_json::from_value(cmd_json["type"].clone()).unwrap();
+                                if let Some(tech_type) =
+                                    polyfish::settings::technology::get_tech_unlocking_unit(
+                                        unit_type,
+                                    )
+                                {
+                                    if !polyfish::settings::technology::has_technology(
+                                        &tribe.tech_vanilla,
+                                        tech_type,
+                                    ) {
+                                        Some(tech_type)
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            }
+                            _ => None,
+                        };
+
+                        if let Some(tech) = needed_tech {
+                            println!(
+                                "    [FIX] Granting tech {:?} (inferred meet tech-steal from tribe)",
+                                tech
+                            );
+                            if let Some(t) = game.state.tribes.get_mut(&player_data.player_id) {
+                                t.tech_vanilla.push(polyfish::states::TechnologyState {
+                                    tech_type: tech,
+                                    discovered: true,
+                                });
+                            }
+
+                            // Retry with the newly granted tech
+                            let legal_moves = game.legal_moves();
+                            for m in &legal_moves {
+                                let serialized = m.serialize();
+                                if serialized == cmd_json_stripped_val {
+                                    println!(
+                                        "🚀 (after tech-steal fix): {}",
+                                        m.describe(&game.state)
+                                    );
+                                    game.play_move(m.as_ref());
+                                    for msg in &game.state._messages {
+                                        println!("{}", msg);
+                                    }
+                                    game.state._messages.clear();
+                                    found = true;
+                                    success_commands += 1;
+                                    break;
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -355,7 +494,7 @@ async fn test_mod_replay_ingestion() {
                         if let Some(s_idx) = src_idx {
                             if let Some(u) = tribe.units.iter().find(|u| u.coords.idx == s_idx) {
                                 println!(
-                                    "🪖 Unit at SRC ({}): Owner={}, Type={:?}, Moved={}, Attacked={}, Health={}/{}",
+                                    "🪖  Unit at SRC ({}): Owner={}, Type={:?}, Moved={}, Attacked={}, Health={}/{}",
                                     s_idx,
                                     u.owner,
                                     u.unit_type,

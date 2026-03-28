@@ -873,14 +873,14 @@ function updateSelectionInfo(clickX = null, clickY = null) {
             title = city.name || (tile.capitalOf > 0 ? "Capital" : "City");
             subtitle = `${tribeName} Territory`;
             const climateIndex = CLIMATE_IDS.indexOf(tribeName);
-            thumbFile = `buildings/${tribeName}/Default/Houses/House_${climateIndex}_5`;
+            thumbFile = `buildings/${tribeName}/Default/Houses/House_${climateIndex === 17 ? 16 : climateIndex}_5`;
         } else {
             title = resourceName ? `${terrainName}, ${resourceName}` : terrainName;
             subtitle = resourceName ? "Extract this resource to upgrade your city" : "A sturdy foundation for your empire";
-            thumbFile = `terrain/tiles/ground_${tile.climate}`;
+            thumbFile = `terrain/tiles/ground_${tile.climate === 17 ? 16 : tile.climate}`;
             if (tile.type === 1) thumbFile = 'terrain/water/water';
             if (tile.type === 2) thumbFile = 'terrain/water/ocean';
-            if (resourceVisible) thumbFile = getResourceFile(resource.type, tile.climate);
+            if (resourceVisible) thumbFile = getResourceFile(resource.type, tile.climate === 17 ? 16 : tile.climate);
         }
     }
 
@@ -1291,8 +1291,11 @@ function getStructureFile(type, climate) {
         21: `buildings/common/Mine`,
         22: `buildings/common/Forge`,
         29: `buildings/${CLIMATE_IDS[climate]}/Default/Monuments/Monument7_${climate}`,
+        37: `buildings/Cymanti/Default/Unique/spores_4`,
         71: `misc/Road`
     };
+    !map[type] && console.log(`MISSING STRUCTURE: ${type}`);
+
     return map[type] || 'misc/missing';
 }
 
@@ -1302,9 +1305,11 @@ function getResourceFile(type, climate) {
         2: `terrain/misc/ResourceGFX_crop`,
         3: `animals/fish`,
         5: `terrain/misc/ResourceGFX_metal`,
-        6: `fruits/ResourceGFX_fruit_${climate}`,
+        6: `fruits/ResourceGFX_fruit_${climate === 17 ? 16 : climate}`,
+        // 7: `buildings/Cymanti/Default/Unique/spores_4`, // requires different texture
         8: `terrain/misc/ResourceGFX_starfish`
     };
+    !map[type] && console.log(`MISSING RESOURCE: ${type}`);
     return map[type] || 'misc/missing';
 }
 
@@ -1468,7 +1473,6 @@ document.getElementById('btn-step').onclick = async () => {
 
             // Highlight the move
             renderer.highlightMove(data.bestMove);
-            console.log(data);
             showToast(`MCTS picked: ${data.movePlayed || 'Move'}`);
         }
     }

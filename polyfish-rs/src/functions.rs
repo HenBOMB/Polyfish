@@ -473,7 +473,7 @@ pub fn get_defense_bonus(state: &GameState, unit: &UnitState) -> f32 {
         if bonus == 4.0 {
             return 2.0;
         } else if bonus == 1.5 {
-            return 0.7;
+            return 0.75;
         } else {
             return 0.5;
         }
@@ -681,6 +681,7 @@ pub fn get_best_capital(state: &GameState, player_id: PlayerId) -> Option<&CityS
     }
 
     // 2. Otherwise, find the highest level city that is currently a capital
+    // TODO: fix
     tribe
         .cities
         .iter()

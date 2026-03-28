@@ -41,10 +41,14 @@ pub fn create_structure(
     let pov_id = state.settings.current_player_turn_id;
     let old_has_road = state.tiles.get(&idx).map(|t| t.has_road).unwrap_or(false);
 
-    // Sync has_road
+    // Sync has_road and Algae effect
     if structure_type == StructureType::Road {
         if let Some(tile) = state.tiles.get_mut(&idx) {
             tile.has_road = true;
+        }
+    } else if structure_type == StructureType::Algae {
+        if let Some(tile) = state.tiles.get_mut(&idx) {
+            tile.effects.insert(crate::TileEffect::Algae);
         }
     }
 
@@ -79,10 +83,14 @@ pub fn create_structure(
     undos.push(Box::new(move |s| {
         // Undo connection logic handled by its own closure in chain
 
-        // Restore has_road
+        // Restore has_road and Algae effect
         if structure_type == StructureType::Road {
             if let Some(tile) = s.tiles.get_mut(&idx) {
                 tile.has_road = old_has_road;
+            }
+        } else if structure_type == StructureType::Algae {
+            if let Some(tile) = s.tiles.get_mut(&idx) {
+                tile.effects.remove(&crate::TileEffect::Algae);
             }
         }
 
@@ -146,10 +154,14 @@ pub fn destroy_structure(state: &mut GameState, idx: i32) -> UndoCallback {
     let pov_id = state.settings.current_player_turn_id;
     let old_has_road = state.tiles.get(&idx).map(|t| t.has_road).unwrap_or(false);
 
-    // Sync has_road
+    // Sync has_road and Algae effect
     if structure.structure_type == StructureType::Road {
         if let Some(tile) = state.tiles.get_mut(&idx) {
             tile.has_road = false;
+        }
+    } else if structure.structure_type == StructureType::Algae {
+        if let Some(tile) = state.tiles.get_mut(&idx) {
+            tile.effects.remove(&crate::TileEffect::Algae);
         }
     }
 
@@ -164,10 +176,14 @@ pub fn destroy_structure(state: &mut GameState, idx: i32) -> UndoCallback {
     }
 
     undos.push(Box::new(move |s: &mut GameState| {
-        // Restore has_road
+        // Restore has_road and Algae effect
         if structure.structure_type == StructureType::Road {
             if let Some(tile) = s.tiles.get_mut(&idx) {
                 tile.has_road = old_has_road;
+            }
+        } else if structure.structure_type == StructureType::Algae {
+            if let Some(tile) = s.tiles.get_mut(&idx) {
+                tile.effects.insert(crate::TileEffect::Algae);
             }
         }
     }));
@@ -263,7 +279,7 @@ pub fn capture_ruin(
                 if state.settings._verbose {
                     state
                         ._messages
-                        .push("Ruin reward: 10 Stars! ⭐".to_string());
+                        .push("Hint: Ruin reward: 10 Stars! ⭐".to_string());
                 }
                 undos.push(gain_stars(state, 10));
             }
@@ -282,7 +298,7 @@ pub fn capture_ruin(
                         if state.settings._verbose {
                             state
                                 ._messages
-                                .push(format!("Ruin reward: Discovered {:?}! 💡", picked));
+                                .push(format!("Hint: Ruin reward: Discovered {:?}! 💡", picked));
                         }
                         if let Ok(u) = unlock_tech(state, picked, true) {
                             undos.push(u);
@@ -299,7 +315,7 @@ pub fn capture_ruin(
                     if state.settings._verbose {
                         state
                             ._messages
-                            .push("Ruin reward: Population growth! 👨‍👩‍👧‍👦".to_string());
+                            .push("Hint: Ruin reward: Population growth! 👨‍👩‍👧‍👦".to_string());
                     }
                     undos.push(crate::actions::city::add_population(state, idx, 3));
                 }
@@ -308,7 +324,7 @@ pub fn capture_ruin(
                 if state.settings._verbose {
                     state
                         ._messages
-                        .push("Ruin reward: Explorer! 🧭".to_string());
+                        .push("Hint: Ruin reward: Explorer! 🧭".to_string());
                 }
                 let revealed = if let Some(tiles) = revealed_tiles_hint.clone() {
                     tiles

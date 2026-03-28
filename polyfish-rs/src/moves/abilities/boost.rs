@@ -46,6 +46,6 @@ impl Move for BoostMove {
 
     #[inline]
     fn ability_type(&self) -> Result<AbilityType, String> {
-        Ok(AbilityType::Boost)
+        Ok(AbilityType::Swarm)
     }
 }

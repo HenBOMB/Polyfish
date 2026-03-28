@@ -37,10 +37,6 @@ pub fn remove_unit(
     };
 
     let mut undos: Vec<UndoCallback> = Vec::new();
-    println!(
-        "🐛 REMOVE_UNIT: Type {:?}, Owner {}, Idx {}, Tile {}, Killer {:?}/idx {:?}",
-        unit_type, unit_owner, unit_idx, tile_idx, killer_owner, killer_idx
-    );
 
     // 0. Drop Spores/Algae if Poisoned
     if removed_unit.effects.contains(&UnitEffect::Poison) {
@@ -228,7 +224,8 @@ pub fn step_unit(
     let map_size = state.settings.size;
 
     // Get current unit state
-    let (old_tile_idx, old_moved, old_attacked, old_type, old_passenger) = {
+    // Get current unit state and compute path
+    let (old_tile_idx, old_moved, old_attacked, old_type, old_passenger, path) = {
         let tribe = match state.tribes.get(&unit_owner) {
             Some(t) => t,
             None => return Box::new(|_| {}),
@@ -237,12 +234,24 @@ pub fn step_unit(
             Some(u) => u,
             None => return Box::new(|_| {}),
         };
+
+        // Compute path before moving (if it's not involuntary)
+        let path = if !involuntary {
+            crate::moves::compute_shortest_path(state, unit, to_tile_idx)
+                .unwrap_or_else(|| vec![to_tile_idx])
+        } else {
+            vec![to_tile_idx]
+        };
+
+        // println!("Shortest path: {:?}", path);
+
         (
             unit.coords.idx,
             unit.moved,
             unit.attacked,
             unit.unit_type,
             unit.passenger_type,
+            path,
         )
     };
 
@@ -275,17 +284,26 @@ pub fn step_unit(
 
     let tiles_to_reveal = if let Some(tribe) = state.tribes.get(&unit_owner) {
         if let Some(unit) = tribe.units.get(unit_idx) {
-            let range = if has_skill(unit.unit_type, SkillType::Scout)
-                || state.tiles.get(&to_tile_idx).map_or(false, |t| {
-                    t.terrain_type == crate::types::TerrainType::Mountain
-                }) {
-                2
-            } else {
-                1
-            };
-            let mut adj = crate::functions::get_adjacent_indices(state, to_tile_idx, range);
-            adj.push(to_tile_idx);
-            Some(adj)
+            let mut all_revealed = std::collections::HashSet::new();
+
+            // Include starting position and all intermediate/final steps
+            let mut full_path = vec![old_tile_idx];
+            full_path.extend(path.iter().copied());
+
+            for &path_idx in &full_path {
+                let range = if has_skill(unit.unit_type, SkillType::Scout)
+                    || state.tiles.get(&path_idx).map_or(false, |t| {
+                        t.terrain_type == crate::types::TerrainType::Mountain
+                    }) {
+                    2
+                } else {
+                    1
+                };
+                let mut adj = crate::functions::get_adjacent_indices(state, path_idx, range);
+                adj.push(path_idx);
+                all_revealed.extend(adj);
+            }
+            Some(all_revealed.into_iter().collect::<Vec<_>>())
         } else {
             None
         }
@@ -630,13 +648,22 @@ pub fn calculate_combat(
     // attackResult = round((attackForce / totalDamage) * attacker.attack * 4.5)
     // defenseResult = round((defenseForce / totalDamage) * defender.defense * 4.5)
 
-    let attack_force = (attacker_attack) * (attacker_health / attacker_max_health);
-    let defense_force =
-        (defender_defense * defense_bonus) * (defender_health / defender_max_health);
+    let attack_force = attacker_attack * (attacker_health / attacker_max_health);
+    let defense_force = defender_defense * (defender_health / defender_max_health) * defense_bonus;
+
+    // println!(
+    //     "DEBUG CALC: attack_force={}, defense_force={}, total_damage={}. def_defense={}, def_health={}, def_max_health={}",
+    //     attack_force,
+    //     defense_force,
+    //     attack_force + defense_force,
+    //     defender_defense,
+    //     defender_health,
+    //     defender_max_health
+    // );
 
     let total_damage = attack_force + defense_force;
     let attack_result = if total_damage > 0.0 {
-        ((attack_force / total_damage) * (attacker_attack) * 4.5).round()
+        ((attack_force / total_damage) * attacker_attack * 4.5).round()
     } else {
         0.0
     };
@@ -644,7 +671,7 @@ pub fn calculate_combat(
     // Retaliation damage (if defender survives)
     let defense_damage = if defender_health - attack_result > 0.0 {
         if total_damage > 0.0 {
-            ((defense_force / total_damage) * (defender_defense) * 4.5).round()
+            ((defense_force / total_damage) * defender_defense * 4.5).round()
         } else {
             0.0
         }
@@ -823,7 +850,7 @@ pub fn attack_unit(
 
     let defender_idx = defender_idx.unwrap(); // fast fail if logic error
 
-    let (def_def, def_health, def_max_health, defense_bonus, def_coords, def_type) = {
+    let (def_def, def_health, def_max_health, defense_bonus, def_coords) = {
         let tribe = state.tribes.get(&defender_owner).unwrap();
         let unit = tribe.units.get(defender_idx).unwrap();
         (
@@ -832,7 +859,6 @@ pub fn attack_unit(
             get_unit_max_health(unit),
             get_defense_bonus(state, unit),
             unit.coords.idx,
-            unit.unit_type,
         )
     };
 
@@ -847,9 +873,6 @@ pub fn attack_unit(
         def_max_health,
         defense_bonus,
     );
-
-    let mut def_damage = result.attack_damage;
-    let ret_damage = result.defense_damage;
 
     // Track last attack direction for push logic
     let old_last_attack = {
@@ -867,27 +890,20 @@ pub fn attack_unit(
         }
     }));
 
-    // Fixed stomp damage
-    if state.settings.version > 104 && atk_skills.contains(&SkillType::Stomp) {
-        def_damage = 5.0;
-    }
-
-    if state.settings._verbose {
-        println!(
-            "🐛 {:?} ({}) at {} (HP {}) vs {:?} ({}) at {} (HP {}): Dmg={}, Ret={}, Bonus={:.1}",
-            atk_type,
-            attacker_owner,
-            atk_coords,
-            atk_health,
-            def_type,
-            defender_owner,
-            def_coords,
-            def_health,
-            def_damage,
-            ret_damage,
-            defense_bonus
-        );
-    }
+    // if state.settings._verbose {
+    //     println!(
+    //         "🐛 {:?} ({}) at {} (HP {}) vs {:?} ({}) at {} (HP {}): Dmg={}, Ret={}, Bonus={:.1}",
+    //         atk_type,
+    //         attacker_owner,
+    //         atk_coords,
+    //         atk_health,
+    //         def_type,
+    //         defender_owner,
+    //         def_coords,
+    //         def_health,
+    //         defense_bonus
+    //     );
+    // }
 
     // Apply damage to defender
     let def_damage = result.attack_damage;
@@ -1371,12 +1387,12 @@ pub fn push_unit(state: &mut GameState, tile_idx: i32) -> Result<crate::moves::M
     }
 
     // log the move
-    println!(
-        "🐛 Pushed unit {} from {} to {}",
-        unit_owner,
-        tile_idx,
-        moved_to.unwrap_or(-1)
-    );
+    // println!(
+    //     "🐛 Pushed unit {} from {} to {}",
+    //     unit_owner,
+    //     tile_idx,
+    //     moved_to.unwrap_or(-1)
+    // );
 
     // Restore unit state on undo
     let final_undo = Box::new(move |s: &mut GameState| {
@@ -1700,13 +1716,13 @@ pub fn infiltrate_city(
                     }
                     TerrainType::Water | TerrainType::Ocean => {
                         let is_cymanti = pov.tribe_type == TribeType::Cymanti;
-                        // Cymanti Explorer can now move on water like other tribes (requires Pascetism/Sailing equivalent)
-                        let has_pascetism = crate::settings::technology::has_technology(
+                        // Cymanti Explorer can now move on water like other tribes (requires Hydrology/Sailing equivalent)
+                        let has_hydrology = crate::settings::technology::has_technology(
                             &pov.tech_vanilla,
-                            TechnologyType::Pascetism,
+                            TechnologyType::Hydrology,
                         );
 
-                        if has_sailing || (is_cymanti && has_pascetism) {
+                        if has_sailing || (is_cymanti && has_hydrology) {
                             wat.push(idx);
                         }
                     } // End match TerrainType::Water

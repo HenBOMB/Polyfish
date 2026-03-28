@@ -433,7 +433,7 @@ async fn manual_step(
                 }
                 AbilityType::HealOthers => Box::new(HealOthersMove::new(src)),
                 AbilityType::FreezeArea => Box::new(FreezeAreaMove::new(src)),
-                AbilityType::Boost => Box::new(BoostMove::new(src)),
+                AbilityType::Swarm => Box::new(BoostMove::new(src)),
                 AbilityType::Explode => Box::new(ExplodeMove::new(src)),
                 AbilityType::EnchantAnimal => Box::new(EnchantAnimalMove::new(src)),
                 AbilityType::BreakPeace => {

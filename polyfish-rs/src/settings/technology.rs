@@ -277,11 +277,12 @@ pub fn get_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
             tribe_type: Some(TribeType::Cymanti),
             ..Default::default()
         },
-        Pascetism => TechnologySetting {
+        Hydrology => TechnologySetting {
             replaces_tech: Some(Sailing),
             tribe_type: Some(TribeType::Cymanti),
             next: vec![Navigation],
             unlocks_special_units: vec![UnitType::Raychi, UnitType::Boomchi],
+            unlocks_special_structures: vec![StructureType::Algae],
             ..Default::default()
         },
         Rituals => TechnologySetting {

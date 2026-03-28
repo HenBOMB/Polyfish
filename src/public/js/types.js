@@ -1,5 +1,5 @@
 const CLIMATE_IDS = [
-    "Nature", "Xin-xi", "Imperius", "Bardur", "Oumaji",
+    null, "Nature", "Xin-xi", "Imperius", "Bardur", "Oumaji",
     "Kickoo", "Hoodrick", "Luxidoor", "Vengir",
     "Zebasi", "Ai-Mo", "Aquarion", "Quetzali",
     "∑∫ỹriȱŋ", "Yădakk", "Polaris", "Cymanti"

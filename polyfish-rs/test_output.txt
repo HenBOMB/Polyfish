@@ -1,3 +1,34 @@
+warning: unused variable: `def_type`
+   --> src/actions/units.rs:831:74
+    |
+831 |     let (def_def, def_health, def_max_health, defense_bonus, def_coords, def_type) = {
+    |                                                                          ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_def_type`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable `def_damage` is assigned to, but never used
+   --> src/actions/units.rs:856:9
+    |
+856 |     let mut def_damage = result.attack_damage;
+    |         ^^^^^^^^^^^^^^
+    |
+    = note: consider using `_def_damage` instead
+
+warning: unused variable: `ret_damage`
+   --> src/actions/units.rs:857:9
+    |
+857 |     let ret_damage = result.defense_damage;
+    |         ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ret_damage`
+
+warning: value assigned to `def_damage` is never read
+   --> src/actions/units.rs:877:9
+    |
+877 |         def_damage = 5.0;
+    |         ^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
 warning: constant `MAX_UNITS` is never used
   --> src/ai/mapper.rs:33:7
    |
@@ -12,786 +43,91 @@ warning: function `deserialize` is never used
 38 |     pub fn deserialize<'de, D>(deserializer: D) -> Result<IndexMap<i32, TileState>, D::Error>
    |            ^^^^^^^^^^^
 
-warning: `polyfish` (lib) generated 2 warnings
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
-     Running tests/test_mod_replay.rs (target/debug/deps/test_mod_replay-94a3ca3de63ff1ee)
+warning: `polyfish` (lib) generated 6 warnings (run `cargo fix --lib -p polyfish` to apply 2 suggestions)
+warning: static `PASSED_REPLAYS` is never used
+  --> tests/test_mod_replay.rs:28:8
+   |
+28 | static PASSED_REPLAYS: &[&str] = &["anpiian-swamp_1774295054"];
+   |        ^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `PathBuf`
+ --> src/bin/extract_versions.rs:4:23
+  |
+4 | use std::path::{Path, PathBuf};
+  |                       ^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `polyfish` (test "test_mod_replay") generated 1 warning
+warning: `polyfish` (bin "extract_versions") generated 1 warning (run `cargo fix --bin "extract_versions" -p polyfish` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/test_mod_replay.rs (target/debug/deps/test_mod_replay-e0db35fac562774d)
 
 running 1 test
-    [DEBUG INIT] Tile 147 Owner: 0
---- TURN 0 ---
-  Player 1
-[DEBUG LEGAL] Player 1 has 3 stars
-    Executing: "Harvest Fish at 20"
-[DEBUG LEGAL] Player 1 has 1 stars
-    Executing: "Choose reward Workshop for city at 37"
-    City reward: Workshop (+1 Production) 🔨
-[DEBUG LEGAL] Player 1 has 1 stars
-    Executing: "Step: 37 -> 54"
-[DEBUG LEGAL] Player 1 has 1 stars
-    Executing: "End Turn"
-  Player 2
-[DEBUG LEGAL] Player 2 has 5 stars
-    Executing: "Step: 221 -> 204"
-[DEBUG LEGAL] Player 2 has 5 stars
-    Executing: "Enchant Animal at 205"
-[DEBUG LEGAL] Player 2 has 3 stars
-    Executing: "Enchant Animal at 220"
-[DEBUG LEGAL] Player 2 has 1 stars
-    Executing: "End Turn"
---- TURN 1 ---
-  Player 1
-[DEBUG LEGAL] Player 1 has 5 stars
-    Executing: "Step: 54 -> 71"
-[DEBUG LEGAL] Player 1 has 5 stars
-    Executing: "End Turn"
-  Player 2
-[DEBUG LEGAL] Player 2 has 3 stars
-    Executing: "Step: 204 -> 187"
-[DEBUG LEGAL] Player 2 has 3 stars
-    Executing: "Step: 205 -> 189"
-[DEBUG LEGAL] Player 2 has 3 stars
-    Executing: "Step: 220 -> 203"
-[DEBUG LEGAL] Player 2 has 3 stars
-    Executing: "End Turn"
---- TURN 2 ---
-  Player 1
-[DEBUG LEGAL] Player 1 has 9 stars
-    Executing: "Step: 71 -> 72"
-[DEBUG LEGAL] Player 1 has 9 stars
-    Executing: "End Turn"
-  Player 2
-[DEBUG LEGAL] Player 2 has 5 stars
-    Executing: "Step: 187 -> 186"
-[DEBUG LEGAL] Player 2 has 5 stars
-    Executing: "Step: 203 -> 187"
-[DEBUG LEGAL] Player 2 has 5 stars
-    Executing: "Step: 189 -> 173"
-[DEBUG LEGAL] Player 2 has 5 stars
-    Executing: "Research Fishing"
-[DEBUG LEGAL] Player 2 has 0 stars
-    Executing: "End Turn"
---- TURN 3 ---
-  Player 1
-[DEBUG LEGAL] Player 1 has 13 stars
-    Executing: "Step: 72 -> 57"
-[DEBUG LEGAL] Player 1 has 13 stars
-    Executing: "Build Port at 52"
-[DEBUG LEGAL] Player 1 has 6 stars
-    Executing: "Train Warrior at 37"
-[DEBUG LEGAL] Player 1 has 4 stars
-    Executing: "End Turn"
-  Player 2
-[DEBUG LEGAL] Player 2 has 2 stars
-    Executing: "Capture at 186"
-[DEBUG LEGAL] Player 2 has 2 stars
-    Executing: "Capture at 173"
-[DEBUG LEGAL] Player 2 has 2 stars
-    Executing: "Step: 187 -> 170"
-[DEBUG LEGAL] Player 2 has 2 stars
-    Executing: "Enchant Animal at 171"
-[DEBUG LEGAL] Player 2 has 0 stars
-    Executing: "End Turn"
---- TURN 4 ---
-  Player 1
-[DEBUG LEGAL] Player 1 has 8 stars
-    Executing: "Step: 37 -> 52"
-[DEBUG LEGAL] Player 1 has 8 stars
-    Executing: "Step: 57 -> 40"
-[DEBUG LEGAL] Player 1 has 8 stars
-    Executing: "Research Sailing"
-[DEBUG LEGAL] Player 1 has 2 stars
-    Executing: "End Turn"
-  Player 2
-[DEBUG LEGAL] Player 2 has 4 stars
-    Executing: "Step: 170 -> 154"
-[DEBUG LEGAL] Player 2 has 4 stars
-    Executing: "Step: 186 -> 170"
-[DEBUG LEGAL] Player 2 has 4 stars
-    Executing: "Step: 171 -> 155"
-[DEBUG LEGAL] Player 2 has 4 stars
-    Executing: "Step: 173 -> 157"
-[DEBUG LEGAL] Player 2 has 4 stars
-    Executing: "Enchant Animal at 188"
-[DEBUG LEGAL] Player 2 has 2 stars
-    Executing: "Harvest Fish at 236"
-[DEBUG LEGAL] Player 2 has 0 stars
-    Executing: "End Turn"
---- TURN 5 ---
-  Player 1
-[DEBUG LEGAL] Player 1 has 6 stars
-    Executing: "Upgrade unit at 52 to Scoutship"
-[DEBUG LEGAL] Player 1 has 1 stars
-    Executing: "Step: 52 -> 18"
-[DEBUG LEGAL] Player 1 has 1 stars
-    Executing: "Capture at 40"
-[DEBUG LEGAL] Player 1 has 1 stars
-    Executing: "End Turn"
-  Player 2
-[DEBUG LEGAL] Player 2 has 4 stars
-    Executing: "Capture at 154"
-    Ruin reward: Population growth! 👨‍👩‍👧‍👦
-[DEBUG LEGAL] Player 2 has 4 stars
-    Executing: "Choose reward Workshop for city at 221"
-    City reward: Workshop (+1 Production) 🔨
-[DEBUG LEGAL] Player 2 has 4 stars
-    Executing: "Step: 170 -> 153"
-[DEBUG LEGAL] Player 2 has 4 stars
-    Executing: "Step: 155 -> 139"
-[DEBUG LEGAL] Player 2 has 4 stars
-    Executing: "Step: 188 -> 172"
-[DEBUG LEGAL] Player 2 has 4 stars
-    Executing: "Step: 157 -> 174"
-[DEBUG LEGAL] Player 2 has 4 stars
-    Executing: "Enchant Animal at 157"
-[DEBUG LEGAL] Player 2 has 2 stars
-    Executing: "Harvest Fish at 202"
-[DEBUG LEGAL] Player 2 has 0 stars
-    Executing: "End Turn"
---- TURN 6 ---
-  Player 1
-[DEBUG LEGAL] Player 1 has 6 stars
-    Executing: "Step: 40 -> 25"
-[DEBUG LEGAL] Player 1 has 6 stars
-    Executing: "Research Hunting"
-[DEBUG LEGAL] Player 1 has 0 stars
-    Executing: "Capture at 18"
-[DEBUG LEGAL] Player 1 has 0 stars
-    Executing: "End Turn"
-  Player 2
-[DEBUG LEGAL] Player 2 has 6 stars
-    Executing: "Step: 139 -> 123"
-[DEBUG LEGAL] Player 2 has 6 stars
-    Executing: "Step: 153 -> 136"
-[DEBUG LEGAL] Player 2 has 6 stars
-    Executing: "Step: 154 -> 137"
-[DEBUG LEGAL] Player 2 has 6 stars
-    Executing: "Step: 157 -> 142"
-[DEBUG LEGAL] Player 2 has 6 stars
-    Executing: "Step: 174 -> 159"
-[DEBUG LEGAL] Player 2 has 6 stars
-    Executing: "Step: 172 -> 157"
-[DEBUG LEGAL] Player 2 has 6 stars
-    Executing: "Train Warrior at 221"
-[DEBUG LEGAL] Player 2 has 4 stars
-    Executing: "Harvest Fish at 169"
-[DEBUG LEGAL] Player 2 has 2 stars
-    Executing: "Choose reward Workshop for city at 186"
-    City reward: Workshop (+1 Production) 🔨
-[DEBUG LEGAL] Player 2 has 2 stars
-    Executing: "End Turn"
---- TURN 7 ---
-  Player 1
-[DEBUG LEGAL] Player 1 has 6 stars
-    Executing: "Step: 25 -> 42"
-[DEBUG LEGAL] Player 1 has 6 stars
-    Executing: "Harvest Game at 36"
-[DEBUG LEGAL] Player 1 has 4 stars
-    Executing: "Choose reward Resources for city at 37"
-    City reward: 5 Stars! ⭐
-[DEBUG LEGAL] Player 1 has 9 stars
-    Executing: "Harvest Fish at 35"
-[DEBUG LEGAL] Player 1 has 7 stars
-    Executing: "Build Port at 35"
-[DEBUG LEGAL] Player 1 has 0 stars
-    Executing: "Choose reward Workshop for city at 18"
-    City reward: Workshop (+1 Production) 🔨
-[DEBUG LEGAL] Player 1 has 0 stars
-    Executing: "Step: 18 -> 35"
-[DEBUG LEGAL] Player 1 has 0 stars
-    Executing: "End Turn"
-  Player 2
-[DEBUG LEGAL] Player 2 has 10 stars
-    Executing: "Capture at 123"
-[DEBUG LEGAL] Player 2 has 10 stars
-    Executing: "Capture at 136"
-[DEBUG LEGAL] Player 2 has 10 stars
-    Executing: "Step: 137 -> 120"
-[DEBUG LEGAL] Player 2 has 10 stars
-    Executing: "Step: 142 -> 127"
-[DEBUG LEGAL] Player 2 has 10 stars
-    Executing: "Step: 159 -> 143"
-[DEBUG LEGAL] Player 2 has 10 stars
-    Executing: "Step: 157 -> 142"
-[DEBUG LEGAL] Player 2 has 10 stars
-    Executing: "Step: 221 -> 238"
-[DEBUG LEGAL] Player 2 has 10 stars
-    Executing: "Choose reward CityWall for city at 221"
-    City reward: City Walls built! 🧱
-[DEBUG LEGAL] Player 2 has 10 stars
-    Executing: "Harvest Fish at 119"
-[DEBUG LEGAL] Player 2 has 8 stars
-    Executing: "Harvest Fish at 152"
-[DEBUG LEGAL] Player 2 has 6 stars
-    Executing: "Choose reward Workshop for city at 136"
-    City reward: Workshop (+1 Production) 🔨
-[DEBUG LEGAL] Player 2 has 6 stars
-    Executing: "Enchant Animal at 138"
-[DEBUG LEGAL] Player 2 has 4 stars
-    Executing: "Enchant Animal at 122"
-[DEBUG LEGAL] Player 2 has 2 stars
-    Executing: "Harvest Fish at 106"
-[DEBUG LEGAL] Player 2 has 0 stars
-    Executing: "End Turn"
---- TURN 8 ---
-  Player 1
-[DEBUG LEGAL] Player 1 has 9 stars
-    Executing: "Step: 42 -> 27"
-[DEBUG LEGAL] Player 1 has 9 stars
-    Executing: "Upgrade unit at 35 to Scoutship"
-[DEBUG LEGAL] Player 1 has 4 stars
-    Executing: "Step: 35 -> 83"
-[DEBUG LEGAL] Player 1 has 4 stars
-    Executing: "Harvest Fish at 34"
-[DEBUG LEGAL] Player 1 has 2 stars
-    Executing: "Harvest Fish at 33"
-[DEBUG LEGAL] Player 1 has 0 stars
-    Executing: "Choose reward Resources for city at 18"
-    City reward: 5 Stars! ⭐
-[DEBUG LEGAL] Player 1 has 5 stars
-    Executing: "Harvest Game at 56"
-[DEBUG LEGAL] Player 1 has 3 stars
-    Executing: "Harvest Game at 57"
-[DEBUG LEGAL] Player 1 has 1 stars
-    Executing: "Choose reward Workshop for city at 40"
-    City reward: Workshop (+1 Production) 🔨
-[DEBUG LEGAL] Player 1 has 1 stars
-    Executing: "End Turn"
-  Player 2
-[DEBUG LEGAL] Player 2 has 13 stars
-    Executing: "Step: 127 -> 110"
-[DEBUG LEGAL] Player 2 has 13 stars
-    Executing: "Step: 143 -> 127"
-[DEBUG LEGAL] Player 2 has 13 stars
-    Executing: "Step: 142 -> 126"
-[DEBUG LEGAL] Player 2 has 13 stars
-    Executing: "Build Port at 107"
-[DEBUG LEGAL] Player 2 has 6 stars
-    Executing: "Choose reward Workshop for city at 123"
-    City reward: Workshop (+1 Production) 🔨
-[DEBUG LEGAL] Player 2 has 6 stars
-    Executing: "Step: 123 -> 107"
-[DEBUG LEGAL] Player 2 has 6 stars
-    Executing: "Harvest Fish at 151"
-[DEBUG LEGAL] Player 2 has 4 stars
-    Executing: "Harvest Fish at 201"
-[DEBUG LEGAL] Player 2 has 2 stars
-    Executing: "Step: 238 -> 237"
-[DEBUG LEGAL] Player 2 has 2 stars
-    Executing: "Step: 138 -> 123"
-[DEBUG LEGAL] Player 2 has 2 stars
-    Executing: "End Turn"
---- TURN 9 ---
-  Player 1
-[DEBUG LEGAL] Player 1 has 13 stars
-    Executing: "Train Warrior at 37"
-[DEBUG LEGAL] Player 1 has 11 stars
-    Executing: "Step: 83 -> 98"
-[DEBUG LEGAL] Player 1 has 11 stars
-    Executing: "Research Organization"
-[DEBUG LEGAL] Player 1 has 4 stars
-    Executing: "Capture at 27"
-[DEBUG LEGAL] Player 1 has 4 stars
-    Executing: "Harvest Fruit at 10"
-[DEBUG LEGAL] Player 1 has 2 stars
-    Executing: "Harvest Fruit at 11"
-[DEBUG LEGAL] Player 1 has 0 stars
-    Executing: "Choose reward Workshop for city at 27"
-    City reward: Workshop (+1 Production) 🔨
-[DEBUG LEGAL] Player 1 has 0 stars
-    Executing: "End Turn"
-  Player 2
-[DEBUG LEGAL] Player 2 has 17 stars
-    Executing: "Capture at 110"
-[DEBUG LEGAL] Player 2 has 17 stars
-    Executing: "Harvest Fish at 94"
-[DEBUG LEGAL] Player 2 has 15 stars
-    Executing: "Step: 126 -> 109"
-[DEBUG LEGAL] Player 2 has 15 stars
-    Executing: "Step: 127 -> 126"
-[DEBUG LEGAL] Player 2 has 15 stars
-    Executing: "Step: 107 -> 90"
-[DEBUG LEGAL] Player 2 has 15 stars
-    Executing: "Step: 123 -> 107"
-[DEBUG LEGAL] Player 2 has 15 stars
-    Executing: "Research Climbing"
-[DEBUG LEGAL] Player 2 has 5 stars
-    Executing: "Step: 237 -> 220"
-[DEBUG LEGAL] Player 2 has 5 stars
-    Executing: "Step: 122 -> 123"
-[DEBUG LEGAL] Player 2 has 5 stars
-    Executing: "End Turn"
---- TURN 10 ---
-  Player 1
-[DEBUG LEGAL] Player 1 has 15 stars
-    Executing: "Step: 27 -> 28"
-[DEBUG LEGAL] Player 1 has 15 stars
-    Executing: "Step: 37 -> 52"
-[DEBUG LEGAL] Player 1 has 15 stars
-    Executing: "Upgrade unit at 52 to Scoutship"
-[DEBUG LEGAL] Player 1 has 10 stars
-    Executing: "Capture at 98"
-[DEBUG LEGAL] Player 1 has 10 stars
-    Executing: "Build Port at 115"
-[DEBUG LEGAL] Player 1 has 3 stars
-    Executing: "Choose reward Workshop for city at 98"
-    City reward: Workshop (+1 Production) 🔨
-[DEBUG LEGAL] Player 1 has 3 stars
-    Executing: "Train Warrior at 37"
-[DEBUG LEGAL] Player 1 has 1 stars
-    Executing: "End Turn"
-  Player 2
-[DEBUG LEGAL] Player 2 has 21 stars
-    Executing: "Step: 90 -> 75"
-[DEBUG LEGAL] Player 2 has 21 stars
-    Executing: "Step: 107 -> 91"
-[DEBUG LEGAL] Player 2 has 21 stars
-    Executing: "Step: 123 -> 107"
-[DEBUG LEGAL] Player 2 has 21 stars
-    Executing: "Step: 109 -> 124"
-[DEBUG LEGAL] Player 2 has 21 stars
-    Executing: "Step: 126 -> 125"
-[DEBUG LEGAL] Player 2 has 21 stars
-    Executing: "Step: 110 -> 109"
-[DEBUG LEGAL] Player 2 has 21 stars
-    Executing: "Step: 120 -> 121"
-[DEBUG LEGAL] Player 2 has 21 stars
-    Executing: "Step: 136 -> 137"
-[DEBUG LEGAL] Player 2 has 21 stars
-    Executing: "Step: 220 -> 203"
-[DEBUG LEGAL] Player 2 has 21 stars
-    Executing: "Research Forestry"
-[DEBUG LEGAL] Player 2 has 5 stars
-    Executing: "Build Sanctuary at 190"
-[DEBUG LEGAL] Player 2 has 0 stars
-    Executing: "End Turn"
---- TURN 11 ---
-  Player 1
-[DEBUG LEGAL] Player 1 has 19 stars
-    Executing: "Step: 52 -> 86"
-[DEBUG LEGAL] Player 1 has 19 stars
-    Executing: "Step: 98 -> 115"
-[DEBUG LEGAL] Player 1 has 19 stars
-    Executing: "Upgrade unit at 115 to Scoutship"
-[DEBUG LEGAL] Player 1 has 14 stars
-    Executing: "Step: 37 -> 52"
-[DEBUG LEGAL] Player 1 has 14 stars
-    Executing: "Upgrade unit at 52 to Scoutship"
-[DEBUG LEGAL] Player 1 has 9 stars
-    Executing: "Step: 28 -> 29"
-[DEBUG LEGAL] Player 1 has 9 stars
-    Executing: "Build Port at 20"
-[DEBUG LEGAL] Player 1 has 2 stars
-    Executing: "Harvest Fruit at 21"
-[DEBUG LEGAL] Player 1 has 0 stars
-    Executing: "Choose reward PopGrowth for city at 37"
-    City reward: Population growth! 👨‍👩‍👧‍👦
-[DEBUG LEGAL] Player 1 has 0 stars
-    Executing: "End Turn"
-  Player 2
-[DEBUG LEGAL] Player 2 has 17 stars
-    Executing: "Capture at 75"
-[DEBUG LEGAL] Player 2 has 17 stars
-    Executing: "Step: 91 -> 74"
-[DEBUG LEGAL] Player 2 has 17 stars
-    Executing: "Step: 107 -> 76"
-[DEBUG LEGAL] Player 2 has 17 stars
-    Executing: "Step: 124 -> 107"
-[DEBUG LEGAL] Player 2 has 17 stars
-    Executing: "Step: 125 -> 124"
-[DEBUG LEGAL] Player 2 has 17 stars
-    Executing: "Step: 109 -> 125"
-[DEBUG LEGAL] Player 2 has 17 stars
-    Executing: "Step: 121 -> 122"
-[DEBUG LEGAL] Player 2 has 17 stars
-    Executing: "Step: 137 -> 138"
-[DEBUG LEGAL] Player 2 has 17 stars
-    Executing: "Step: 203 -> 219"
-[DEBUG LEGAL] Player 2 has 17 stars
-    Executing: "Harvest Fish at 92"
-[DEBUG LEGAL] Player 2 has 15 stars
-    Executing: "Harvest Fish at 90"
-[DEBUG LEGAL] Player 2 has 13 stars
-    Executing: "Choose reward Workshop for city at 75"
-    City reward: Workshop (+1 Production) 🔨
-[DEBUG LEGAL] Player 2 has 13 stars
-    Executing: "Enchant Animal at 58"
-[DEBUG LEGAL] Player 2 has 11 stars
-    Executing: "Build Sanctuary at 187"
-[DEBUG LEGAL] Player 2 has 6 stars
-    Executing: "End Turn"
-    Met the Elyrion! (9+ Stars) 🤝
---- TURN 12 ---
-  Player 1
-[DEBUG LEGAL] Player 1 has 28 stars
-    Executing: "Research Strategy"
-[DEBUG LEGAL] Player 1 has 14 stars
-    Executing: "Train Defender at 40"
-[DEBUG LEGAL] Player 1 has 11 stars
-    Executing: "Train Defender at 27"
-[DEBUG LEGAL] Player 1 has 8 stars
-    Executing: "Step: 29 -> 28"
-[DEBUG LEGAL] Player 1 has 8 stars
-    Executing: "Step: 52 -> 103"
-[DEBUG LEGAL] Player 1 has 8 stars
-    Executing: "Step: 86 -> 136"
-[DEBUG LEGAL] Player 1 has 8 stars
-    Executing: "Step: 115 -> 134"
-[DEBUG LEGAL] Player 1 has 8 stars
-    Executing: "Train Defender at 98"
-[DEBUG LEGAL] Player 1 has 5 stars
-    Executing: "Train Defender at 37"
-[DEBUG LEGAL] Player 1 has 2 stars
-    Executing: "End Turn"
-    Met the Kickoo! (9+ Stars) 🤝
-  Player 2
-[DEBUG LEGAL] Player 2 has 34 stars
-    Executing: "Step: 138 -> 137"
-[DEBUG LEGAL] Player 2 has 34 stars
-    Executing: "Attack: 137 -> 136"
-    [DEBUG COMBAT] Warrior (2) at 137 (HP 10) vs Warrior (1) at 136 (HP 10): Dmg=5, Ret=5, Bonus=1.0
-[DEBUG LEGAL] Player 2 has 34 stars
-    Executing: "Step: 122 -> 138"
-[DEBUG LEGAL] Player 2 has 34 stars
-    Executing: "Train Warrior at 186"
-[DEBUG LEGAL] Player 2 has 32 stars
-    Executing: "Step: 219 -> 235"
-[DEBUG LEGAL] Player 2 has 32 stars
-    [FIX] Force-spawning animal at 189 for EnchantAnimal
-    Executing: "Enchant Animal at 189"
-[DEBUG LEGAL] Player 2 has 30 stars
-    Executing: "Step: 58 -> 41"
-[DEBUG LEGAL] Player 2 has 30 stars
-    Executing: "Attack: 41 -> 40"
-    [DEBUG COMBAT] Polytaur (2) at 41 (HP 15) vs Defender (1) at 40 (HP 15): Dmg=5, Ret=8, Bonus=1.5
-[DEBUG LEGAL] Player 2 has 30 stars
-    Executing: "Step: 74 -> 57"
-[DEBUG LEGAL] Player 2 has 30 stars
-    Executing: "Attack: 57 -> 40"
-    [DEBUG COMBAT] Polytaur (2) at 57 (HP 15) vs Defender (1) at 40 (HP 10): Dmg=7, Ret=7, Bonus=1.5
-[DEBUG LEGAL] Player 2 has 30 stars
-    Executing: "Step: 75 -> 58"
-[DEBUG LEGAL] Player 2 has 30 stars
-    Executing: "Step: 76 -> 59"
-[DEBUG LEGAL] Player 2 has 30 stars
-    Executing: "Train Warrior at 123"
-[DEBUG LEGAL] Player 2 has 28 stars
-    Executing: "Step: 124 -> 139"
-[DEBUG LEGAL] Player 2 has 28 stars
-    Executing: "Step: 107 -> 105"
-[DEBUG LEGAL] Player 2 has 28 stars
-    Executing: "Step: 125 -> 109"
-[DEBUG LEGAL] Player 2 has 28 stars
-    Executing: "Research Mining"
-[DEBUG LEGAL] Player 2 has 10 stars
-    Executing: "Build Mine at 121"
-[DEBUG LEGAL] Player 2 has 5 stars
-    Executing: "Choose reward CityWall for city at 136"
-    City reward: City Walls built! 🧱
-[DEBUG LEGAL] Player 2 has 5 stars
-    Executing: "End Turn"
---- TURN 13 ---
-  Player 1
-[DEBUG LEGAL] Player 1 has 21 stars
-    Executing: "Attack: 40 -> 41"
-    [DEBUG COMBAT] Defender (1) at 40 (HP 3) vs Polytaur (2) at 41 (HP 7): Dmg=1, Ret=3, Bonus=1.0
-🐛 REMOVE_UNIT: Type Defender, Owner 1, Idx 4, Tile 40, Killer Some(2)/idx Some(9)
-[DEBUG LEGAL] Player 1 has 21 stars
-    Executing: "Train Defender at 40"
-[DEBUG LEGAL] Player 1 has 18 stars
-    Executing: "Research Farming"
-[DEBUG LEGAL] Player 1 has 4 stars
-    Executing: "Step: 37 -> 52"
-[DEBUG LEGAL] Player 1 has 4 stars
-    Executing: "Step: 98 -> 115"
-[DEBUG LEGAL] Player 1 has 4 stars
-    Executing: "Capture at 136"
-[DEBUG LEGAL] Player 1 has 4 stars
-    Executing: "Step: 134 -> 152"
-[DEBUG LEGAL] Player 1 has 4 stars
-    Executing: "Attack: 152 -> 137"
-    [DEBUG COMBAT] Scoutship (1) at 152 (HP 10) vs Warrior (2) at 137 (HP 5): Dmg=6, Ret=0, Bonus=1.0
-🐛 REMOVE_UNIT: Type Warrior, Owner 2, Idx 0, Tile 137, Killer Some(1)/idx Some(1)
-[DEBUG LEGAL] Player 1 has 4 stars
-    Executing: "Step: 103 -> 104"
-[DEBUG LEGAL] Player 1 has 4 stars
-    Executing: "Attack: 104 -> 138"
-    [DEBUG COMBAT] Scoutship (1) at 104 (HP 10) vs Polytaur (2) at 138 (HP 15): Dmg=6, Ret=2, Bonus=1.0
-[DEBUG LEGAL] Player 1 has 4 stars
-    Executing: "Step: 28 -> 43"
-[DEBUG LEGAL] Player 1 has 4 stars
-    Executing: "Attack: 43 -> 59"
-    [DEBUG COMBAT] Warrior (1) at 43 (HP 10) vs Polytaur (2) at 59 (HP 15): Dmg=6, Ret=2, Bonus=1.0
-[DEBUG LEGAL] Player 1 has 4 stars
-    Executing: "End Turn"
-  Player 2
-[DEBUG LEGAL] Player 2 has 25 stars
-    Executing: "Step: 138 -> 137"
-[DEBUG LEGAL] Player 2 has 25 stars
-    Executing: "Attack: 137 -> 136"
-    [DEBUG COMBAT] Polytaur (2) at 137 (HP 9) vs Warrior (1) at 136 (HP 5): Dmg=4, Ret=6, Bonus=4.0
-[DEBUG LEGAL] Player 2 has 25 stars
-    Executing: "Step: 139 -> 138"
-[DEBUG LEGAL] Player 2 has 25 stars
-    Executing: "Research Sailing"
-[DEBUG LEGAL] Player 2 has 9 stars
-    Executing: "Step: 123 -> 122"
-[DEBUG LEGAL] Player 2 has 9 stars
-    Executing: "Step: 186 -> 170"
-[DEBUG LEGAL] Player 2 has 9 stars
-    Executing: "Step: 235 -> 219"
-[DEBUG LEGAL] Player 2 has 9 stars
-    Executing: "Step: 189 -> 172"
-[DEBUG LEGAL] Player 2 has 9 stars
-    Executing: "Step: 109 -> 124"
-[DEBUG LEGAL] Player 2 has 9 stars
-    Executing: "Step: 57 -> 56"
-[DEBUG LEGAL] Player 2 has 9 stars
-    Executing: "Step: 58 -> 57"
-[DEBUG LEGAL] Player 2 has 9 stars
-    Executing: "Attack: 57 -> 40"
-    [DEBUG COMBAT] Polytaur (2) at 57 (HP 15) vs Defender (1) at 40 (HP 15): Dmg=5, Ret=8, Bonus=1.5
-[DEBUG LEGAL] Player 2 has 9 stars
-    Executing: "Attack: 59 -> 43"
-    [DEBUG COMBAT] Polytaur (2) at 59 (HP 9) vs Warrior (1) at 43 (HP 8): Dmg=7, Ret=4, Bonus=1.0
-[DEBUG LEGAL] Player 2 has 9 stars
-    Executing: "Step: 41 -> 42"
-[DEBUG LEGAL] Player 2 has 9 stars
-    Executing: "Attack: 42 -> 43"
-    [DEBUG COMBAT] Polytaur (2) at 42 (HP 6) vs Warrior (1) at 43 (HP 1): Dmg=12, Ret=0, Bonus=1.0
-🐛 REMOVE_UNIT: Type Warrior, Owner 1, Idx 0, Tile 43, Killer Some(2)/idx Some(8)
-[DEBUG LEGAL] Player 2 has 9 stars
-    Executing: "Attack: 56 -> 40"
-    [DEBUG COMBAT] Polytaur (2) at 56 (HP 8) vs Defender (1) at 40 (HP 10): Dmg=5, Ret=9, Bonus=1.5
-🐛 REMOVE_UNIT: Type Polytaur, Owner 2, Idx 6, Tile 56, Killer Some(1)/idx Some(6)
-[DEBUG LEGAL] Player 2 has 9 stars
-    Executing: "Step: 105 -> 73"
-[DEBUG LEGAL] Player 2 has 9 stars
-    Executing: "End Turn"
---- TURN 14 ---
-  Player 1
-[DEBUG LEGAL] Player 1 has 27 stars
-    Executing: "Attack: 136 -> 137"
-    [DEBUG COMBAT] Warrior (1) at 136 (HP 1) vs Polytaur (2) at 137 (HP 3): Dmg=5, Ret=0, Bonus=1.0
-🐛 REMOVE_UNIT: Type Polytaur, Owner 2, Idx 1, Tile 137, Killer Some(1)/idx Some(1)
-[DEBUG LEGAL] Player 1 has 27 stars
-    Executing: "Train Defender at 136"
-[DEBUG LEGAL] Player 1 has 24 stars
-    Executing: "Step: 152 -> 103"
-[DEBUG LEGAL] Player 1 has 24 stars
-    Executing: "Step: 104 -> 119"
-[DEBUG LEGAL] Player 1 has 24 stars
-    Executing: "Research Navigation"
-[DEBUG LEGAL] Player 1 has 2 stars
-    Executing: "Step: 115 -> 133"
-[DEBUG LEGAL] Player 1 has 2 stars
-    Executing: "Step: 40 -> 56"
-[DEBUG LEGAL] Player 1 has 2 stars
-    Executing: "Train Warrior at 40"
-[DEBUG LEGAL] Player 1 has 0 stars
-    Executing: "Attack: 103 -> 73"
-    [DEBUG COMBAT] Scoutship (1) at 103 (HP 10) vs Polytaur (2) at 73 (HP 15): Dmg=6, Ret=2, Bonus=1.0
-[DEBUG LEGAL] Player 1 has 0 stars
-    Executing: "End Turn"
-  Player 2
-[DEBUG LEGAL] Player 2 has 30 stars
-    Executing: "Step: 219 -> 203"
-[DEBUG LEGAL] Player 2 has 30 stars
-    Executing: "Attack: 138 -> 137"
-    [DEBUG COMBAT] Polytaur (2) at 138 (HP 15) vs Warrior (1) at 137 (HP 1): Dmg=13, Ret=0, Bonus=1.0
-🐛 REMOVE_UNIT: Type Warrior, Owner 1, Idx 1, Tile 137, Killer Some(2)/idx Some(0)
-[DEBUG LEGAL] Player 2 has 30 stars
-    Executing: "Step: 122 -> 121"
-[DEBUG LEGAL] Player 2 has 30 stars
-    Executing: "Attack: 121 -> 136"
-    [DEBUG COMBAT] Warrior (2) at 121 (HP 10) vs Defender (1) at 136 (HP 15): Dmg=1, Ret=12, Bonus=4.0
-🐛 REMOVE_UNIT: Type Warrior, Owner 2, Idx 9, Tile 121, Killer Some(1)/idx Some(6)
-[DEBUG LEGAL] Player 2 has 30 stars
-    Executing: "Step: 124 -> 123"
-[DEBUG LEGAL] Player 2 has 30 stars
-    Executing: "Step: 170 -> 153"
-[DEBUG LEGAL] Player 2 has 30 stars
-    Executing: "Attack: 153 -> 136"
-    [DEBUG COMBAT] Warrior (2) at 153 (HP 10) vs Defender (1) at 136 (HP 14): Dmg=1, Ret=11, Bonus=4.0
-🐛 REMOVE_UNIT: Type Warrior, Owner 2, Idx 7, Tile 153, Killer Some(1)/idx Some(6)
-[DEBUG LEGAL] Player 2 has 30 stars
-    Executing: "Step: 172 -> 155"
-[DEBUG LEGAL] Player 2 has 30 stars
-    Executing: "Enchant Animal at 171"
-[DEBUG LEGAL] Player 2 has 28 stars
-    Executing: "Step: 73 -> 89"
-[DEBUG LEGAL] Player 2 has 28 stars
-    Executing: "Attack: 57 -> 56"
-    [DEBUG COMBAT] Polytaur (2) at 57 (HP 7) vs Defender (1) at 56 (HP 5): Dmg=8, Ret=0, Bonus=1.0
-🐛 REMOVE_UNIT: Type Defender, Owner 1, Idx 5, Tile 56, Killer Some(2)/idx Some(1)
-[DEBUG LEGAL] Player 2 has 28 stars
-    Executing: "Step: 59 -> 42"
-[DEBUG LEGAL] Player 2 has 28 stars
-    Executing: "Attack: 42 -> 27"
-    [DEBUG COMBAT] Polytaur (2) at 42 (HP 5) vs Defender (1) at 27 (HP 15): Dmg=2, Ret=11, Bonus=1.5
-🐛 REMOVE_UNIT: Type Polytaur, Owner 2, Idx 5, Tile 42, Killer Some(1)/idx Some(2)
-[DEBUG LEGAL] Player 2 has 28 stars
-    Executing: "Attack: 43 -> 27"
-    [DEBUG COMBAT] Polytaur (2) at 43 (HP 6) vs Defender (1) at 27 (HP 13): Dmg=3, Ret=10, Bonus=1.5
-🐛 REMOVE_UNIT: Type Polytaur, Owner 2, Idx 5, Tile 43, Killer Some(1)/idx Some(2)
-[DEBUG LEGAL] Player 2 has 28 stars
-    Executing: "Research Archery"
-[DEBUG LEGAL] Player 2 has 12 stars
-    Executing: "End Turn"
---- TURN 15 ---
-  Player 1
-[DEBUG LEGAL] Player 1 has 23 stars
-    Executing: "Step: 103 -> 151"
-[DEBUG LEGAL] Player 1 has 23 stars
-    Executing: "Attack: 151 -> 137"
-    [DEBUG COMBAT] Scoutship (1) at 151 (HP 10) vs Polytaur (2) at 137 (HP 15): Dmg=6, Ret=2, Bonus=1.0
-[DEBUG LEGAL] Player 1 has 23 stars
-    Executing: "Attack: 119 -> 137"
-    [DEBUG COMBAT] Scoutship (1) at 119 (HP 10) vs Polytaur (2) at 137 (HP 9): Dmg=7, Ret=1, Bonus=1.0
-[DEBUG LEGAL] Player 1 has 23 stars
-    Executing: "Upgrade unit at 52 to Bomber"
-[DEBUG LEGAL] Player 1 has 8 stars
-    Executing: "Step: 52 -> 86"
-[DEBUG LEGAL] Player 1 has 8 stars
-    Executing: "Attack: 40 -> 56"
-    [DEBUG COMBAT] Warrior (1) at 40 (HP 10) vs Polytaur (2) at 56 (HP 7): Dmg=7, Ret=0, Bonus=1.5
-🐛 REMOVE_UNIT: Type Polytaur, Owner 2, Idx 1, Tile 56, Killer Some(1)/idx Some(6)
-[DEBUG LEGAL] Player 1 has 8 stars
-    Executing: "Train Defender at 40"
-[DEBUG LEGAL] Player 1 has 5 stars
-    Executing: "Recover at 27"
-[DEBUG LEGAL] Player 1 has 5 stars
-    Executing: "Attack: 136 -> 137"
-    [DEBUG COMBAT] Defender (1) at 136 (HP 13) vs Polytaur (2) at 137 (HP 2): Dmg=4, Ret=0, Bonus=1.0
-🐛 REMOVE_UNIT: Type Polytaur, Owner 2, Idx 0, Tile 137, Killer Some(1)/idx Some(5)
-[DEBUG LEGAL] Player 1 has 5 stars
-    Executing: "Train Defender at 136"
-[DEBUG LEGAL] Player 1 has 2 stars
-    Executing: "Promote unit at 137"
-[DEBUG LEGAL] Player 1 has 2 stars
-    Executing: "End Turn"
-  Player 2
-[DEBUG LEGAL] Player 2 has 33 stars
-    Executing: "Capture at 89"
-    Ruin reward: Population growth! 👨‍👩‍👧‍👦
-[DEBUG LEGAL] Player 2 has 33 stars
-    Executing: "Step: 155 -> 138"
-[DEBUG LEGAL] Player 2 has 33 stars
-    Executing: "Attack: 138 -> 137"
-    [DEBUG COMBAT] Polytaur (2) at 138 (HP 15) vs Defender (1) at 137 (HP 20): Dmg=7, Ret=7, Bonus=1.0
-[DEBUG LEGAL] Player 2 has 33 stars
-    Executing: "Step: 123 -> 122"
-[DEBUG LEGAL] Player 2 has 33 stars
-    Executing: "Attack: 122 -> 137"
-    [DEBUG COMBAT] Polytaur (2) at 122 (HP 15) vs Defender (1) at 137 (HP 13): Dmg=8, Ret=5, Bonus=1.0
-[DEBUG LEGAL] Player 2 has 33 stars
-    Executing: "Step: 171 -> 154"
-[DEBUG LEGAL] Player 2 has 33 stars
-    Executing: "Attack: 154 -> 137"
-    [DEBUG COMBAT] Polytaur (2) at 154 (HP 15) vs Defender (1) at 137 (HP 5): Dmg=11, Ret=0, Bonus=1.0
-🐛 REMOVE_UNIT: Type Defender, Owner 1, Idx 5, Tile 137, Killer Some(2)/idx Some(4)
-[DEBUG LEGAL] Player 2 has 33 stars
-    Executing: "Step: 203 -> 186"
-[DEBUG LEGAL] Player 2 has 33 stars
-    Executing: "Build Mine at 158"
-[DEBUG LEGAL] Player 2 has 28 stars
-    Executing: "Choose reward Workshop for city at 173"
-    City reward: Workshop (+1 Production) 🔨
-[DEBUG LEGAL] Player 2 has 28 stars
-    Executing: "Build Mine at 111"
-[DEBUG LEGAL] Player 2 has 23 stars
-    Executing: "Choose reward Workshop for city at 110"
-    City reward: Workshop (+1 Production) 🔨
-[DEBUG LEGAL] Player 2 has 23 stars
-    Executing: "Train Archer at 75"
-[DEBUG LEGAL] Player 2 has 20 stars
-    Executing: "Train Archer at 123"
-[DEBUG LEGAL] Player 2 has 17 stars
-    Executing: "End Turn"
---- TURN 16 ---
-  Player 1
-[DEBUG LEGAL] Player 1 has 25 stars
-    Executing: "Step: 56 -> 73"
-[DEBUG LEGAL] Player 1 has 25 stars
-    Executing: "Attack: 73 -> 89"
-    [DEBUG COMBAT] Warrior (1) at 73 (HP 10) vs Polytaur (2) at 89 (HP 9): Dmg=6, Ret=1, Bonus=1.5
-[DEBUG LEGAL] Player 1 has 25 stars
-    Executing: "Capture at 133"
-[DEBUG LEGAL] Player 1 has 25 stars
-    Executing: "Harvest Fish at 116"
-[DEBUG LEGAL] Player 1 has 23 stars
-    Executing: "Build Port at 134"
-[DEBUG LEGAL] Player 1 has 16 stars
-    Executing: "Choose reward Explorer for city at 133"
-    City reward: Explorer dispatched! 🧭
-[DEBUG LEGAL] Player 1 has 16 stars
-    Executing: "Choose reward SuperUnit for city at 37"
-    City reward: SUPER UNIT (Giant) 🦖
-[DEBUG LEGAL] Player 1 has 16 stars
-    Executing: "Attack: 86 -> 137"
-    [DEBUG COMBAT] Bomber (1) at 86 (HP 15) vs Polytaur (2) at 137 (HP 15): Dmg=2, Ret=2, Bonus=1.0
-[DEBUG LEGAL] Player 1 has 16 stars
-    Executing: "Attack: 151 -> 137"
-    [DEBUG COMBAT] Scoutship (1) at 151 (HP 10) vs Polytaur (2) at 137 (HP 13): Dmg=6, Ret=1, Bonus=1.0
-[DEBUG LEGAL] Player 1 has 16 stars
-    FAILED TO FIND MOVE IN LEGAL MOVES!
-    Command: Step {"moveType":1,"src":136,"target":137}
-    Tribe 1 Stars: 16, Cities: 7
-    Legal Moves (first 50):
+
+⬦⬦⬦⬦ TURN 0 ⬦⬦⬦⬦
+
+👤 Player 1
+🚀 Train Rider at 43
+🚀 End Turn
+
+👤 Player 2
+🚀 Step: 219 -> 202
+🚀 Train Warrior at 219
+🚀 End Turn
+
+⬦⬦⬦⬦ TURN 1 ⬦⬦⬦⬦
+
+👤 Player 1
+🚀 Step: 43 -> 41
+🚀 Step: 74 -> 40
+🚀 End Turn
+
+👤 Player 2
+🚀 Research Organization
+🚀 Step: 202 -> 185
+🚀 Step: 219 -> 203
+🚀 End Turn
+
+⬦⬦⬦⬦ TURN 2 ⬦⬦⬦⬦
+
+👤 Player 1
+
+❌ FAILED TO FIND MOVE IN LEGAL MOVES! ❌
+🔧 Step {"moveType":1,"src":41,"target":72}
+🗣️  Tribe 1 Stars: 7, Cities: 1
+📚 Legal Moves (first 50):
       0: "End Turn" -> {"moveType":10}
-      1: "Attack: 119 -> 89" -> {"moveType":2,"src":119,"target":89}
-      2: "Attack: 119 -> 137" -> {"moveType":2,"src":119,"target":137}
-      3: "Step: 119 -> 84" -> {"moveType":1,"src":119,"target":84}
-      4: "Step: 119 -> 104" -> {"moveType":1,"src":119,"target":104}
-      5: "Step: 119 -> 148" -> {"moveType":1,"src":119,"target":148}
-      6: "Step: 119 -> 101" -> {"moveType":1,"src":119,"target":101}
-      7: "Step: 119 -> 165" -> {"moveType":1,"src":119,"target":165}
-      8: "Step: 119 -> 164" -> {"moveType":1,"src":119,"target":164}
-      9: "Step: 119 -> 120" -> {"moveType":1,"src":119,"target":120}
-      10: "Step: 119 -> 68" -> {"moveType":1,"src":119,"target":68}
-      11: "Step: 119 -> 72" -> {"moveType":1,"src":119,"target":72}
-      12: "Step: 119 -> 117" -> {"moveType":1,"src":119,"target":117}
-      13: "Step: 119 -> 103" -> {"moveType":1,"src":119,"target":103}
-      14: "Step: 119 -> 87" -> {"moveType":1,"src":119,"target":87}
-      15: "Step: 119 -> 149" -> {"moveType":1,"src":119,"target":149}
-      16: "Step: 119 -> 71" -> {"moveType":1,"src":119,"target":71}
-      17: "Step: 119 -> 69" -> {"moveType":1,"src":119,"target":69}
-      18: "Step: 119 -> 70" -> {"moveType":1,"src":119,"target":70}
-      19: "Step: 119 -> 167" -> {"moveType":1,"src":119,"target":167}
-      20: "Step: 119 -> 168" -> {"moveType":1,"src":119,"target":168}
-      21: "Step: 119 -> 132" -> {"moveType":1,"src":119,"target":132}
-      22: "Step: 119 -> 100" -> {"moveType":1,"src":119,"target":100}
-      23: "Step: 119 -> 102" -> {"moveType":1,"src":119,"target":102}
-      24: "Step: 119 -> 150" -> {"moveType":1,"src":119,"target":150}
-      25: "Step: 119 -> 135" -> {"moveType":1,"src":119,"target":135}
-      26: "Step: 119 -> 116" -> {"moveType":1,"src":119,"target":116}
-      27: "Step: 119 -> 85" -> {"moveType":1,"src":119,"target":85}
-      28: "Step: 119 -> 152" -> {"moveType":1,"src":119,"target":152}
-      29: "Step: 119 -> 88" -> {"moveType":1,"src":119,"target":88}
-      30: "Step: 119 -> 134" -> {"moveType":1,"src":119,"target":134}
-      31: "Step: 119 -> 118" -> {"moveType":1,"src":119,"target":118}
-      32: "Step: 119 -> 166" -> {"moveType":1,"src":119,"target":166}
-      33: "Recover at 27" -> {"moveType":3,"src":27,"type":7}
-      34: "Step: 27 -> 12" -> {"moveType":1,"src":27,"target":12}
-      35: "Step: 27 -> 28" -> {"moveType":1,"src":27,"target":28}
-      36: "Step: 27 -> 10" -> {"moveType":1,"src":27,"target":10}
-      37: "Step: 27 -> 11" -> {"moveType":1,"src":27,"target":11}
-      38: "Step: 27 -> 42" -> {"moveType":1,"src":27,"target":42}
-      39: "Step: 27 -> 43" -> {"moveType":1,"src":27,"target":43}
-      40: "Step: 27 -> 26" -> {"moveType":1,"src":27,"target":26}
-      41: "Step: 40 -> 24" -> {"moveType":1,"src":40,"target":24}
-      42: "Step: 40 -> 55" -> {"moveType":1,"src":40,"target":55}
-      43: "Step: 40 -> 39" -> {"moveType":1,"src":40,"target":39}
-      44: "Step: 40 -> 41" -> {"moveType":1,"src":40,"target":41}
-      45: "Step: 40 -> 23" -> {"moveType":1,"src":40,"target":23}
-      46: "Step: 40 -> 56" -> {"moveType":1,"src":40,"target":56}
-      47: "Step: 40 -> 57" -> {"moveType":1,"src":40,"target":57}
-      48: "Step: 40 -> 25" -> {"moveType":1,"src":40,"target":25}
-      49: "Attack: 136 -> 137" -> {"moveType":2,"src":136,"target":137}
-    Unit at SRC (136): Owner=1, Type=Defender, Moved=false, Attacked=false, Health=15/15
-    Unit already at TARGET (137): Owner=2, Type=Polytaur
+      1: "Capture at 40" -> {"moveType":8,"src":40}
+      2: "Step: 40 -> 55" -> {"moveType":1,"src":40,"target":55}
+      3: "Step: 40 -> 39" -> {"moveType":1,"src":40,"target":39}
+      4: "Step: 40 -> 74" -> {"moveType":1,"src":40,"target":74}
+      5: "Step: 40 -> 57" -> {"moveType":1,"src":40,"target":57}
+      6: "Step: 40 -> 24" -> {"moveType":1,"src":40,"target":24}
+      7: "Step: 40 -> 73" -> {"moveType":1,"src":40,"target":73}
+      8: "Step: 40 -> 58" -> {"moveType":1,"src":40,"target":58}
+      9: "Step: 41 -> 43" -> {"moveType":1,"src":41,"target":43}
+      10: "Step: 41 -> 75" -> {"moveType":1,"src":41,"target":75}
+      11: "Step: 41 -> 39" -> {"moveType":1,"src":41,"target":39}
+      12: "Step: 41 -> 59" -> {"moveType":1,"src":41,"target":59}
+      13: "Step: 41 -> 24" -> {"moveType":1,"src":41,"target":24}
+      14: "Step: 41 -> 57" -> {"moveType":1,"src":41,"target":57}
+      15: "Step: 41 -> 73" -> {"moveType":1,"src":41,"target":73}
+      16: "Step: 41 -> 74" -> {"moveType":1,"src":41,"target":74}
+      17: "Step: 41 -> 55" -> {"moveType":1,"src":41,"target":55}
+      18: "Step: 41 -> 58" -> {"moveType":1,"src":41,"target":58}
+      19: "Research Organization" -> {"moveType":7,"type":6}
+      20: "Research Fishing" -> {"moveType":7,"type":10}
+      21: "Research Hunting" -> {"moveType":7,"type":15}
+      22: "Research Climbing" -> {"moveType":7,"type":20}
+      23: "Research FreeSpirit" -> {"moveType":7,"type":2}
+      24: "Research Roads" -> {"moveType":7,"type":4}
+🪖  Unit at SRC (41): Owner=1, Type=Rider, Moved=false, Attacked=false, Health=10/10
 Saved failed state to saved_state.json
 
-thread 'test_mod_replay_ingestion' (164559) panicked at tests/test_mod_replay.rs:398:21:
+thread 'test_mod_replay_ingestion' (85418) panicked at tests/test_mod_replay.rs:519:21:
 Replay parsing failed.
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 test test_mod_replay_ingestion ... FAILED
@@ -801,6 +137,6 @@ failures:
 failures:
     test_mod_replay_ingestion
 
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
 
 error: test failed, to rerun pass `--test test_mod_replay`

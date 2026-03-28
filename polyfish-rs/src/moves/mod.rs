@@ -435,7 +435,7 @@ fn compute_reachable_tiles(
                 continue;
             }
 
-            if !is_steppable(state, unit, n_idx) {
+            if !is_steppable(state, unit, n_idx, false) {
                 continue;
             }
 
@@ -464,6 +464,93 @@ fn compute_reachable_tiles(
     }
 
     reachable
+}
+
+pub fn compute_shortest_path(
+    state: &GameState,
+    unit: &UnitState,
+    target_idx: i32,
+) -> Option<Vec<i32>> {
+    let mut effective_movement = crate::functions::get_unit_movement(state, unit) as f32;
+    // Cap movement at 1 if unit has segments attached
+    if unit.child_unit_idx.is_some() {
+        effective_movement = 1.0;
+    }
+    let mut reachable = std::collections::HashMap::new();
+    let mut parent = std::collections::HashMap::new();
+    let mut open_list = std::collections::BinaryHeap::new();
+
+    open_list.push(ReachableNode {
+        index: unit.coords.idx,
+        cost: 0.0,
+        terminal: false,
+    });
+    reachable.insert(unit.coords.idx, 0.0);
+
+    while let Some(current) = open_list.pop() {
+        if current.index == target_idx {
+            let mut path = Vec::new();
+            let mut curr = target_idx;
+            while curr != unit.coords.idx {
+                path.push(curr);
+                // In case parent is missing due to disconnected components (shouldn't happen here)
+                if let Some(&p) = parent.get(&curr) {
+                    curr = p;
+                } else {
+                    break;
+                }
+            }
+            path.reverse();
+            return Some(path);
+        }
+
+        // If current path already exists and is better, skip
+        if let Some(&best_cost) = reachable.get(&current.index) {
+            if current.cost > best_cost {
+                continue;
+            }
+        }
+
+        if current.terminal {
+            continue;
+        }
+
+        if current.cost >= effective_movement {
+            continue;
+        }
+
+        for n_idx in get_adjacent_indices(state, current.index, 1) {
+            if n_idx == unit.coords.idx {
+                continue;
+            }
+
+            if !is_steppable(state, unit, n_idx, true) {
+                continue;
+            }
+
+            let move_cost = compute_movement_cost(state, unit, current.index, n_idx);
+            if move_cost < 0.0 {
+                continue;
+            }
+
+            let new_cost = current.cost + move_cost;
+
+            let terminal = is_terminal(state, unit, n_idx);
+
+            let existing_cost = reachable.get(&n_idx);
+            if existing_cost.is_none() || new_cost < *existing_cost.unwrap() {
+                reachable.insert(n_idx, new_cost);
+                parent.insert(n_idx, current.index);
+                open_list.push(ReachableNode {
+                    index: n_idx,
+                    cost: new_cost,
+                    terminal,
+                });
+            }
+        }
+    }
+
+    None
 }
 
 fn compute_movement_cost(state: &GameState, unit: &UnitState, from_idx: i32, to_idx: i32) -> f32 {
@@ -575,8 +662,7 @@ fn is_terminal(state: &GameState, unit: &UnitState, tile_idx: i32) -> bool {
     if tile.is_algae()
         && !settings.skills.contains(&SkillType::Creep)
         && !settings.skills.contains(&SkillType::Fly)
-        && !settings.skills.contains(&SkillType::Water)
-    // Respect "no longer cripples naval unit movement"
+    // Respect "stops the movement of units without the creep or fly unit skills"
     {
         return true;
     }
@@ -714,7 +800,7 @@ fn get_tiles_in_range(state: &GameState, from_idx: i32, range: i32) -> Vec<i32> 
     tiles
 }
 
-fn is_steppable(state: &GameState, unit: &UnitState, idx: i32) -> bool {
+fn is_steppable(state: &GameState, unit: &UnitState, idx: i32, strict: bool) -> bool {
     // Can only step on explored tiles, regardless F
     let is_explored = state
         .tiles
@@ -748,9 +834,9 @@ fn is_steppable(state: &GameState, unit: &UnitState, idx: i32) -> bool {
         }
     }
 
-    // cannot step if the tile is occupied by an enemy
+    // cannot step if the tile is occupied by an enemy (or any unit if strict)
     if let Some(other) = get_unit_at(state, idx) {
-        if other.owner != unit.owner {
+        if strict || other.owner != unit.owner {
             return false;
         }
     }

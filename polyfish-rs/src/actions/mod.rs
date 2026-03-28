@@ -727,7 +727,8 @@ pub fn process_end_turn_effects(state: &mut GameState, _player_id: PlayerId) -> 
         if owner_id == current_player {
             let mut leveled_up = false;
             if let Some(structure) = state.structures.get_mut(&f_idx).and_then(|s| s.as_mut()) {
-                if structure.level < 3 {
+                if structure.level < 2 {
+                    println!("Fungi level: {}", structure.level);
                     structure.level += 1;
                     leveled_up = true;
                     // Undo level change
@@ -739,7 +740,7 @@ pub fn process_end_turn_effects(state: &mut GameState, _player_id: PlayerId) -> 
                 }
             }
             if leveled_up {
-                // Add population to city
+                // Add population to city whenever it levels up (until cap)
                 if let Some(city) = crate::functions::get_city_owning_tile(state, f_idx) {
                     undos.push(crate::actions::city::add_population(state, city.idx, 1));
                 }

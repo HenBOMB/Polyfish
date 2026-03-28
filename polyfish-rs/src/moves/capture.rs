@@ -120,8 +120,19 @@ impl Move for CaptureMove {
         })
     }
 
-    fn describe(&self, _state: &GameState) -> String {
-        format!("Capture at {}", self.src_index)
+    fn describe(&self, state: &GameState) -> String {
+        let is_village = state
+            .structures
+            .get(&self.src_index)
+            .and_then(|s| s.as_ref())
+            .map(|s| s.structure_type)
+            == Some(StructureType::Village);
+
+        format!(
+            "Capture {} at {}",
+            if is_village { "Village" } else { "Ruin" },
+            self.src_index
+        )
     }
 
     fn serialize(&self) -> serde_json::Value {

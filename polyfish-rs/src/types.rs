@@ -106,13 +106,13 @@ pub enum TechnologyType {
     ShockTactics = 35,
     // Cymanti
     Recycling = 36,
-    // Hydrology = 37,
+    Hydrology = 37,
     Diplomacy = 38,
     // Aquaculture = 39,
     // FishingSimple = 40,
     Sledding = 41,
     IceFishing = 42,
-    Pascetism = 43,
+    // Pascetism = 43,
     Ramming = 44,
     // AquaBase = 45,
     // MarineLife = 46,
@@ -225,13 +225,13 @@ pub enum RuinsRewardType {
     None = 0,
     Resources = 1,
     PopGrowth = 2,
-    Explorer = 4,
-    FreeTech = 5,
-    // SuperUnit = 6, // no longer used
-    // Battleship = 7, // no longer used
-    // Seamonster = 8, // no longer used
-    Swordsman = 9,
-    City = 10,
+    Explorer = 3,
+    FreeTech = 4,
+    // SuperUnit = 5, // no longer used
+    // Battleship = 6, // no longer used
+    // Seamonster = 7, // no longer used
+    Swordsman = 8,
+    City = 9,
 }
 
 impl From<i32> for RuinsRewardType {
@@ -485,7 +485,7 @@ pub enum AbilityType {
     HealOthers = 9,
     Drain = 11,
     FreezeArea = 13,
-    Boost = 14,
+    Swarm = 14,
     Explode = 15,
     Promote = 16,
     BreakIce = 17,

@@ -70,9 +70,7 @@ impl Move for RewardMove {
                     if let Some(tribe) = state.tribes.get_mut(&p_id) {
                         if let Some(city) = tribe.cities.get_mut(c_idx) {
                             if state.settings._verbose {
-                                state
-                                    ._messages
-                                    .push(format!("🏠 Workshop (+1 Production) 🔨"));
+                                state._messages.push(format!("Workshop (+1 Production) 🔨"));
                             }
                             city.production += 1;
                             undos.push(Box::new(move |s: &mut GameState| {
@@ -87,7 +85,7 @@ impl Move for RewardMove {
                 }
                 CityRewardType::Explorer => {
                     if state.settings._verbose {
-                        state._messages.push(format!("🏠 Explorer dispatched! 🧭"));
+                        state._messages.push(format!("🐛 Explorer dispatched! 🧭"));
                     }
                     let revealed = if let Some(tiles) = self.revealed_tiles.clone() {
                         tiles
@@ -99,12 +97,12 @@ impl Move for RewardMove {
                 }
                 CityRewardType::CityWall => {
                     if state.settings._verbose {
-                        state._messages.push(format!("🏠 City Walls built! 🧱"));
+                        state._messages.push(format!("🐛 City Walls built! 🧱"));
                     }
                 }
                 CityRewardType::Resources => {
                     if state.settings._verbose {
-                        state._messages.push(format!("🏠 5 Stars! ⭐"));
+                        state._messages.push(format!("🐛 5 Stars! ⭐"));
                     }
                     undos.push(gain_stars(state, 5));
                 }
@@ -112,7 +110,7 @@ impl Move for RewardMove {
                     if let Some(tribe) = state.tribes.get_mut(&p_id) {
                         if let Some(city) = tribe.cities.get_mut(c_idx) {
                             if state.settings._verbose {
-                                state._messages.push(format!("🏠 Population growth! 👨‍👩‍👧‍👦"));
+                                state._messages.push(format!("🐛 Population growth! 👨‍👩‍👧‍👦"));
                             }
                             city.population += 3;
                             city.progress += 3;

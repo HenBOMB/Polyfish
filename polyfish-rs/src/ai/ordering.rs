@@ -3,7 +3,7 @@ use crate::functions::{calculate_combat_preview, get_adjacent_indices, get_struc
 use crate::game::Game;
 use crate::moves::Move;
 use crate::settings::get_structure_setting;
-use crate::types::{AbilityType, ModeType, MoveType, CityRewardType, StructureType};
+use crate::types::{AbilityType, CityRewardType, ModeType, MoveType, StructureType};
 
 /// Score a move based on heuristics for move ordering
 pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
@@ -59,7 +59,7 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                     AbilityType::Promote => 35.0,
 
                     AbilityType::Explode
-                    | AbilityType::Boost
+                    | AbilityType::Swarm
                     | AbilityType::FreezeArea
                     | AbilityType::Convert => 20.0,
 

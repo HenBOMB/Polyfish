@@ -1,0 +1,139 @@
+warning: unused variable: `def_type`
+   --> src/actions/units.rs:851:74
+    |
+851 |     let (def_def, def_health, def_max_health, defense_bonus, def_coords, def_type) = {
+    |                                                                          ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_def_type`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable `def_damage` is assigned to, but never used
+   --> src/actions/units.rs:876:9
+    |
+876 |     let mut def_damage = result.attack_damage;
+    |         ^^^^^^^^^^^^^^
+    |
+    = note: consider using `_def_damage` instead
+
+warning: unused variable: `ret_damage`
+   --> src/actions/units.rs:877:9
+    |
+877 |     let ret_damage = result.defense_damage;
+    |         ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ret_damage`
+
+warning: value assigned to `def_damage` is never read
+   --> src/actions/units.rs:897:9
+    |
+897 |         def_damage = 5.0;
+    |         ^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `MAX_UNITS` is never used
+  --> src/ai/mapper.rs:33:7
+   |
+33 | const MAX_UNITS: usize = 64;
+   |       ^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `deserialize` is never used
+  --> src/states.rs:38:12
+   |
+38 |     pub fn deserialize<'de, D>(deserializer: D) -> Result<IndexMap<i32, TileState>, D::Error>
+   |            ^^^^^^^^^^^
+
+warning: `polyfish` (lib) generated 6 warnings (run `cargo fix --lib -p polyfish` to apply 2 suggestions)
+warning: unused import: `PathBuf`
+ --> src/bin/extract_versions.rs:4:23
+  |
+4 | use std::path::{Path, PathBuf};
+  |                       ^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: static `PASSED_REPLAYS` is never used
+  --> tests/test_mod_replay.rs:28:8
+   |
+28 | static PASSED_REPLAYS: &[&str] = &["anpiian-swamp_1774295054"];
+   |        ^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `polyfish` (bin "extract_versions") generated 1 warning (run `cargo fix --bin "extract_versions" -p polyfish` to apply 1 suggestion)
+warning: `polyfish` (test "test_mod_replay") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/test_mod_replay.rs (target/debug/deps/test_mod_replay-e0db35fac562774d)
+
+running 1 test
+
+⬦⬦⬦⬦ TURN 0 ⬦⬦⬦⬦
+
+👤 Player 1
+🚀 Train Rider at 43
+🚀 End Turn
+
+👤 Player 2
+🚀 Step: 219 -> 202
+🚀 Train Warrior at 219
+🚀 End Turn
+
+⬦⬦⬦⬦ TURN 1 ⬦⬦⬦⬦
+
+👤 Player 1
+🚀 Step: 43 -> 41
+🚀 Step: 74 -> 40
+🚀 End Turn
+
+👤 Player 2
+🚀 Research Organization
+🚀 Step: 202 -> 185
+🚀 Step: 219 -> 203
+🚀 End Turn
+
+⬦⬦⬦⬦ TURN 2 ⬦⬦⬦⬦
+
+👤 Player 1
+🚀 Step: 41 -> 72
+🚀 Research Organization
+🚀 Capture at 40
+🚀 End Turn
+
+👤 Player 2
+🚀 Step: 185 -> 168
+🚀 Step: 203 -> 188
+🚀 Harvest Fruit at 204
+🚀 Harvest Fruit at 220
+🚀 Choose reward Workshop for city at 219
+🚀 End Turn
+
+⬦⬦⬦⬦ TURN 3 ⬦⬦⬦⬦
+
+👤 Player 1
+🚀 Step: 40 -> 71
+🚀 Capture at 72
+🚀 Harvest Fruit at 39
+🚀 Harvest Fruit at 41
+🚀 Choose reward Workshop for city at 40
+
+❌ FAILED TO FIND MOVE IN LEGAL MOVES! ❌
+🔧 Summon Rider at 40
+🗣️  Tribe 1 Stars: 1, Cities: 2
+📚 Legal Moves (first 50):
+      0: "End Turn" -> {"moveType":10}
+❌ NO UNIT at SRC (40)!
+Saved failed state to saved_state.json
+
+thread 'test_mod_replay_ingestion' (102078) panicked at tests/test_mod_replay.rs:519:21:
+Replay parsing failed.
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test test_mod_replay_ingestion ... FAILED
+
+failures:
+
+failures:
+    test_mod_replay_ingestion
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `--test test_mod_replay`
