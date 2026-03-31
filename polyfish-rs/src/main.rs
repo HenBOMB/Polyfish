@@ -827,7 +827,6 @@ struct CheckReplayParams {
 async fn check_replay_exists(Json(params): Json<CheckReplayParams>) -> Json<Value> {
     let supabase_key = std::env::var("SUPABASE_SERVICE_ROLE_KEY")
         .or_else(|_| std::env::var("SUPABASE_PUBLIC_ANON_KEY"))
-        .or_else(|_| std::env::var("SUPABASE_PUBLISHABLE_KEY"))
         .unwrap_or_default();
     let supabase_url = std::env::var("SUPABASE_URL").unwrap_or_default();
 
@@ -946,7 +945,6 @@ async fn save_replay_endpoint(
 
         let supabase_key = std::env::var("SUPABASE_SERVICE_ROLE_KEY")
             .or_else(|_| std::env::var("SUPABASE_PUBLIC_ANON_KEY"))
-            .or_else(|_| std::env::var("SUPABASE_PUBLISHABLE_KEY"))
             .unwrap_or_default();
         let supabase_url = std::env::var("SUPABASE_URL").unwrap_or_default();
 

@@ -2,6 +2,9 @@ use polyfish::game::Game;
 use polyfish::moves::Move;
 use polyfish::states::GameState;
 use serde::{Deserialize, Serialize};
+use std::env;
+use std::fs;
+use std::path::Path;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -32,20 +35,67 @@ static PASSED_REPLAYS: &[&str] = &[
     "beautiful-navies_1774719056",
 ];
 
+// limited to policy: select (public.games)
+const SUPABASE_ANON_KEY: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Impndnh0cmh5b25wY3psYXVzc3B0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzEwOTMzOTYsImV4cCI6MjA4NjY2OTM5Nn0.Zl-YJ_RFV3OnF-yw6_L_Pb3jr1GvpxFllHx_-Q943DI";
+
 #[tokio::test]
 async fn test_mod_replay_ingestion() {
-    let replay_base = "replays/asdaian-ships_1774234708";
+    let _ = dotenvy::dotenv();
+
+    let replay_base = "replays/adventure-of-assha_1774823883";
     let replay_path = format!("{}.json", replay_base);
     let fixed_path = format!("{}_fixed.json", replay_base);
 
     // check if fixed exists
-    let actual_path = if std::path::Path::new(&fixed_path).exists() {
+    let actual_path = if Path::new(&fixed_path).exists() {
         fixed_path
     } else {
-        replay_path
+        replay_path.clone()
     };
 
-    let json_str = std::fs::read_to_string(&actual_path).unwrap();
+    // --- Download if missing ---
+    if !Path::new(&actual_path).exists() {
+        let supabase_url = "https://jgvxtrhyonpczlausspt.supabase.co";
+        let supabase_key = SUPABASE_ANON_KEY;
+        let bucket_name = "polyfish-games";
+
+        let file_to_fetch = actual_path.strip_prefix("replays/").unwrap_or(&actual_path);
+        let url = format!(
+            "{}/storage/v1/object/authenticated/{}/{}",
+            supabase_url.trim_end_matches('/'),
+            bucket_name,
+            file_to_fetch
+        );
+
+        println!(
+            "📥 Downloading {} from bucket {}...",
+            file_to_fetch, bucket_name
+        );
+
+        let client = reqwest::Client::new();
+        let res = client
+            .get(&url)
+            .header("apikey", supabase_key)
+            .header("Authorization", format!("Bearer {}", supabase_key))
+            .send()
+            .await
+            .expect("Failed to contact Supabase Storage");
+
+        if res.status().is_success() {
+            let content = res.text().await.expect("Failed to read Supabase body");
+            let _ = fs::create_dir_all("replays");
+            fs::write(&actual_path, content).expect("Failed to write to local storage");
+            println!("✅ Saved to {}", actual_path);
+        } else {
+            panic!(
+                "❌ Resource missing in both local and bucket ({}). Status: {}",
+                actual_path,
+                res.status()
+            );
+        }
+    }
+
+    let json_str = fs::read_to_string(&actual_path).unwrap();
     let mut mod_replay: ModReplay = serde_json::from_str(&json_str).unwrap();
 
     let mut game = Game::new();

@@ -922,8 +922,13 @@ fn is_steppable_for_push(state: &GameState, unit: &UnitState, idx: i32) -> bool 
             }
         }
         TerrainType::Mountain => {
+            let tribe_type = state.tribes.get(&unit.owner).unwrap().tribe_type;
+            let climbing = crate::settings::technology::resolve_tech_for_tribe(
+                TechnologyType::Climbing,
+                tribe_type,
+            );
             if !settings.skills.contains(&SkillType::Fly)
-                && has_technology(&tech, TechnologyType::Climbing)
+                && !has_technology(&tech, climbing)
             {
                 return false;
             }
