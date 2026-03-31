@@ -30,7 +30,7 @@ impl Default for DecomposedTargets {
 // ============================================================================
 
 const MAX_STRUCTURES: usize = 48;
-const MAX_UNITS: usize = 64;
+// const MAX_UNITS: usize = 64;
 const MAX_TECHS: usize = 48;
 const MAX_ABILITIES: usize = 32;
 

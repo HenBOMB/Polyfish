@@ -3,7 +3,7 @@ Initialize model weights for the enhanced PolyZero network.
 
 Creates a model.safetensors file with random weights matching the new architecture:
 - Player state embedding (2 FC layers)
-- 12 ResBlocks
+- 6 ResBlocks
 - 7 decomposed policy heads
 - 3 value heads (win, eco, mil)
 """
@@ -31,7 +31,7 @@ def init_model():
     print("Initializing enhanced PolyZero network...")
     print(f"  Spatial input: {SPATIAL_CHANNELS} channels, {MAP_SIZE}x{MAP_SIZE}")
     print(f"  Player state: {PLAYER_STATE_DIM} features")
-    print(f"  Architecture: 12 ResBlocks + 7 policy heads + 3 value heads")
+    print(f"  Architecture: 6 ResBlocks + 7 policy heads + 3 value heads")
     
     model = PolyZeroNet(SPATIAL_CHANNELS, PLAYER_STATE_DIM, MAP_SIZE, MAP_SIZE)
     

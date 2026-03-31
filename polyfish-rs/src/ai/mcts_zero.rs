@@ -552,8 +552,12 @@ impl<'a> ZeroMctsAgent<'a> {
                     eprintln!("Indices stack: {:?}", indices_stack);
                     eprintln!("=============================\n");
                 }
+                // Print all recent moves
+                for mv in game.state.settings._recent_moves.iter() {
+                    eprintln!("[BUG] Recent Move: {:?}", mv);
+                }
                 let undo =
-                    result.expect("BUG: Legal move failed to execute in MCTS tree traversal");
+                    result.expect("[BUG] Legal move failed to execute in MCTS tree traversal");
                 undos.push(undo);
                 indices_stack.push(child_idx);
             }

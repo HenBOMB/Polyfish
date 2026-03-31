@@ -30,26 +30,26 @@ mod flex_bool {
 }
 
 /// Helper for deserializing a list of tiles into an IndexMap
-mod tiles_list_deserializer {
-    use super::TileState;
-    use indexmap::IndexMap;
-    use serde::{Deserialize, Deserializer};
+// mod tiles_list_deserializer {
+//     use super::TileState;
+//     use indexmap::IndexMap;
+//     use serde::{Deserialize, Deserializer};
 
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<IndexMap<i32, TileState>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let tiles: Vec<TileState> = Vec::deserialize(deserializer)?;
-        let mut map = IndexMap::new();
-        for (i, mut tile) in tiles.into_iter().enumerate() {
-            if tile.coords.idx == 0 && i > 0 {
-                tile.coords.idx = i as i32;
-            }
-            map.insert(tile.coords.idx, tile);
-        }
-        Ok(map)
-    }
-}
+//     pub fn deserialize<'de, D>(deserializer: D) -> Result<IndexMap<i32, TileState>, D::Error>
+//     where
+//         D: Deserializer<'de>,
+//     {
+//         let tiles: Vec<TileState> = Vec::deserialize(deserializer)?;
+//         let mut map = IndexMap::new();
+//         for (i, mut tile) in tiles.into_iter().enumerate() {
+//             if tile.coords.idx == 0 && i > 0 {
+//                 tile.coords.idx = i as i32;
+//             }
+//             map.insert(tile.coords.idx, tile);
+//         }
+//         Ok(map)
+//     }
+// }
 
 mod tech_list_deserializer {
     use super::TechnologyState;

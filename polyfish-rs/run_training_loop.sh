@@ -5,8 +5,8 @@ set -e
 ITERATIONS=100
 GAMES_PER_ITER=20
 export MCTS_ITERS=100
-export RAYON_NUM_THREADS=12
-export OMP_NUM_THREADS=12
+export RAYON_NUM_THREADS=14
+export OMP_NUM_THREADS=14
 export RUST_BACKTRACE=1
 
 # Log all output to session.log while still showing on console
@@ -104,7 +104,7 @@ do
     fi
 
     # Pick 2 random tribes for this iteration
-    TRIBE_LIST=("Imperius" "Bardur" "Oumaji" "Kickoo" "XinXi" "Zebasi" "AiMo" "Vengir" "Luxidoor" "Quetzali" "Hoodrick" "Yadakk")
+    TRIBE_LIST=("Imperius" "Imperius")
     # Shuffle and pick top 2 (using shuf)
     SELECTED_TRIBES=($(printf "%s\n" "${TRIBE_LIST[@]}" | shuf -n 2))
     TRIBE1=${SELECTED_TRIBES[0]}

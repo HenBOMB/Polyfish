@@ -3,21 +3,21 @@ use polyfish::moves::Move;
 use polyfish::states::GameState;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ModReplay {
     pub game_state: GameState,
     pub turns: Vec<ReplayTurn>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplayTurn {
     pub turn: i32,
     pub players: Vec<ReplayPlayer>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplayPlayer {
     pub player_id: i32,
@@ -25,11 +25,16 @@ pub struct ReplayPlayer {
 }
 
 // Save successfull replays for further debug testing
-static PASSED_REPLAYS: &[&str] = &["anpiian-swamp_1774295054"];
+static PASSED_REPLAYS: &[&str] = &[
+    // passes ok
+    "anpiian-swamp_1774295054",
+    // passes ok
+    "beautiful-navies_1774719056",
+];
 
 #[tokio::test]
 async fn test_mod_replay_ingestion() {
-    let replay_base = "replays/beautiful-navies_1774235253";
+    let replay_base = "replays/asdaian-ships_1774234708";
     let replay_path = format!("{}.json", replay_base);
     let fixed_path = format!("{}_fixed.json", replay_base);
 
@@ -65,9 +70,10 @@ async fn test_mod_replay_ingestion() {
     game.state.settings._verbose = true;
     game.state.settings._are_you_sure = true;
 
-    for turn_data in mod_replay.turns {
+    let all_turns = mod_replay.turns.clone();
+    for (turn_idx, turn_data) in mod_replay.turns.into_iter().enumerate() {
         println!("\n⬦⬦⬦⬦ TURN {} ⬦⬦⬦⬦", turn_data.turn);
-        for player_data in turn_data.players {
+        for (player_idx, player_data) in turn_data.players.into_iter().enumerate() {
             println!("\n👤 Player {}", player_data.player_id);
             // Reset units for this player to make moves legal
             if let Some(tribe) = game.state.tribes.get_mut(&player_data.player_id) {
@@ -79,7 +85,7 @@ async fn test_mod_replay_ingestion() {
             }
             game.state.settings.current_player_turn_id = player_data.player_id;
 
-            for mut cmd_json in player_data.commands {
+            for (cmd_idx, mut cmd_json) in player_data.commands.into_iter().enumerate() {
                 if cmd_json["error"].is_string() {
                     // halt immediately and print details
                     if cmd_json["tid"].as_str().unwrap() != "swarm" {
@@ -98,24 +104,6 @@ async fn test_mod_replay_ingestion() {
                         continue;
                     }
                 }
-
-                // DEBUGGING FUCKING SHORTEST PATH LOGIC FOR +1 MOVEMENT UNITS
-                // if step, src = 86 and target = 118 and player = 1 and turn = 5: throw
-                // if cmd_json["moveType"].as_i64() == Some(1)
-                //     && cmd_json["src"].as_i64() == Some(86)
-                //     && cmd_json["target"].as_i64() == Some(118)
-                //     && player_data.player_id == 1
-                //     && turn_data.turn == 5
-                // {
-                //     // save game state to file
-                //     let save_path = format!("saved_state.json");
-                //     std::fs::write(
-                //         &save_path,
-                //         serde_json::to_string_pretty(&game.state).unwrap(),
-                //     )
-                //     .unwrap();
-                //     panic!("DEBUGGING FUCKING SHORTEST PATH LOGIC FOR +1 MOVEMENT UNITS");
-                // }
 
                 let move_type: polyfish::MoveType =
                     polyfish::MoveType::from(cmd_json["moveType"].as_i64().unwrap_or(0) as i32);
@@ -206,8 +194,142 @@ async fn test_mod_replay_ingestion() {
                                 cmd_json.get("src").unwrap().as_i64().unwrap() as i32,
                             );
                             if let Some(r) = cmd_json.get("_reward") {
-                                m_with_hints.reward =
-                                    Some(serde_json::from_value(r.clone()).unwrap());
+                                let reward_type: polyfish::types::RuinsRewardType =
+                                    serde_json::from_value(r.clone()).unwrap();
+                                m_with_hints.reward = Some(reward_type);
+
+                                if reward_type == polyfish::types::RuinsRewardType::FreeTech {
+                                    use strum::IntoEnumIterator;
+                                    let user_tribe =
+                                        game.state.tribes.get(&player_data.player_id).unwrap();
+                                    let mut known_techs: Vec<_> = user_tribe
+                                        .tech_vanilla
+                                        .iter()
+                                        .map(|t| t.tech_type)
+                                        .collect();
+                                    let mut inferred_tech = None;
+
+                                    'lookahead: for t_i in turn_idx..all_turns.len() {
+                                        let t_data = &all_turns[t_i];
+                                        let start_p = if t_i == turn_idx { player_idx } else { 0 };
+                                        for p_i in start_p..t_data.players.len() {
+                                            let p_data = &t_data.players[p_i];
+                                            if p_data.player_id == player_data.player_id {
+                                                let start_c =
+                                                    if t_i == turn_idx && p_i == player_idx {
+                                                        cmd_idx + 1
+                                                    } else {
+                                                        0
+                                                    };
+                                                for c_i in start_c..p_data.commands.len() {
+                                                    let n_cmd = &p_data.commands[c_i];
+                                                    let n_move_type: polyfish::MoveType =
+                                                        polyfish::MoveType::from(
+                                                            n_cmd["moveType"].as_i64().unwrap_or(0)
+                                                                as i32,
+                                                        );
+                                                    match n_move_type {
+                                                        polyfish::MoveType::Research => {
+                                                            if let Ok(tech) = serde_json::from_value::<
+                                                                polyfish::TechnologyType,
+                                                            >(
+                                                                n_cmd["type"].clone(),
+                                                            ) {
+                                                                known_techs.push(tech);
+                                                            }
+                                                        }
+                                                        polyfish::MoveType::Build => {
+                                                            if let Ok(struct_type) =
+                                                                serde_json::from_value::<
+                                                                    polyfish::StructureType,
+                                                                >(
+                                                                    n_cmd["type"].clone()
+                                                                )
+                                                            {
+                                                                for tech_type in
+                                                                    polyfish::TechnologyType::iter()
+                                                                {
+                                                                    let ts = polyfish::settings::technology::get_technology_setting(tech_type);
+                                                                    if ts.unlocks_structure == Some(struct_type) || ts.unlocks_special_structures.contains(&struct_type) {
+                                                                        if !known_techs.contains(&tech_type) {
+                                                                            inferred_tech = Some(tech_type);
+                                                                            break 'lookahead;
+                                                                        }
+                                                                        break;
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        polyfish::MoveType::Summon => {
+                                                            if let Ok(unit_type) =
+                                                                serde_json::from_value::<
+                                                                    polyfish::UnitType,
+                                                                >(
+                                                                    n_cmd["type"].clone()
+                                                                )
+                                                            {
+                                                                if let Some(tech_type) = polyfish::settings::technology::get_tech_unlocking_unit(unit_type) {
+                                                                    if !known_techs.contains(&tech_type) {
+                                                                        inferred_tech = Some(tech_type);
+                                                                        break 'lookahead;
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        polyfish::MoveType::Harvest => {
+                                                            if let Some(target_idx) = n_cmd
+                                                                .get("target")
+                                                                .and_then(|v| v.as_i64())
+                                                            {
+                                                                if let Some(Some(res)) = game
+                                                                    .state
+                                                                    .resources
+                                                                    .get(&(target_idx as i32))
+                                                                {
+                                                                    let res_set = polyfish::settings::resources::get_resource_setting(res.resource_type);
+                                                                    let req_tech =
+                                                                        res_set.tech_required;
+                                                                    if req_tech != polyfish::types::TechnologyType::Basic &&
+                                                                       req_tech != polyfish::types::TechnologyType::BeyondComprehension &&
+                                                                       !known_techs.contains(&req_tech) {
+                                                                        inferred_tech = Some(req_tech);
+                                                                        break 'lookahead;
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        _ => {}
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if let Some(t) = inferred_tech {
+                                        println!(
+                                            "    [FIX] Inferring FreeTech from ahead: {:?}",
+                                            t
+                                        );
+                                        m_with_hints.tech_hint = Some(t);
+                                    } else {
+                                        let researchable =
+                                            polyfish::settings::technology::get_researchable_techs(
+                                                &user_tribe.tech_vanilla,
+                                                user_tribe.tribe_type,
+                                            );
+                                        if let Some(&fallback_tech) = researchable.first() {
+                                            println!(
+                                                "    [FIX] Inference failed for FreeTech! Falling back to: {:?}",
+                                                fallback_tech
+                                            );
+                                            m_with_hints.tech_hint = Some(fallback_tech);
+                                        } else {
+                                            println!(
+                                                "    [FIX] Inference failed and no available techs!"
+                                            );
+                                        }
+                                    }
+                                }
                             }
                             if let Some(tiles) = cmd_json.get("_revealedTiles") {
                                 m_with_hints.revealed_tiles =

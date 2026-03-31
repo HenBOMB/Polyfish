@@ -100,6 +100,10 @@ pub fn remove_unit(
             };
 
             if let Some(child) = tribe.units.get_mut(adj_child_idx) {
+                let old_type = child.unit_type;
+                let old_health = child.health;
+                let old_parent = child.parent_unit_idx;
+
                 // Promote segment to Centipede
                 if child.unit_type == crate::types::UnitType::Segment {
                     let old_max_hp = crate::functions::get_unit_max_health(child);
@@ -112,6 +116,21 @@ pub fn remove_unit(
                 }
                 // Clear parent link since head is gone
                 child.parent_unit_idx = None;
+
+                undos.push(Box::new(move |s| {
+                    if let Some(tribe) = s.tribes.get_mut(&unit_owner) {
+                        let restored_child_idx = if adj_child_idx >= unit_idx {
+                            adj_child_idx + 1
+                        } else {
+                            adj_child_idx
+                        };
+                        if let Some(c) = tribe.units.get_mut(restored_child_idx) {
+                            c.unit_type = old_type;
+                            c.health = old_health;
+                            c.parent_unit_idx = old_parent;
+                        }
+                    }
+                }));
             }
         }
     }
@@ -177,10 +196,6 @@ pub fn remove_unit(
             tribe.units.insert(unit_idx, removed_unit.clone());
 
             // PATCH: Re-patch everyone because the insert shifted them back!
-            // Since we inserted at unit_idx, all p_idx / c_idx that were >= unit_idx
-            // (but not the one we just restored) must be incremented.
-            // Wait! removed_unit.clone() already has its original indices.
-            // But we need to update OTHER units.
             for (i, u) in tribe.units.iter_mut().enumerate() {
                 if i == unit_idx {
                     continue; // Skip the one we just restored
@@ -1864,7 +1879,7 @@ pub fn convert_unit(
 
     // 2. Perform conversion (change owner)
     // Find unit in old tribe
-    let (mut unit, _old_idx) = {
+    let (mut unit, old_idx) = {
         let tribe = state
             .tribes
             .get_mut(&target_owner)
@@ -1875,6 +1890,25 @@ pub fn convert_unit(
             .position(|u| u.coords.idx == target_idx)
             .ok_or("Target unit not found")?;
         let unit = tribe.units.remove(idx); // Take it out
+
+        // PATCH: All subsequent units in the OLD tribe's vector have shifted!
+        for u in &mut tribe.units {
+            if let Some(p_idx) = u.parent_unit_idx {
+                if p_idx == idx {
+                    u.parent_unit_idx = None;
+                } else if p_idx > idx {
+                    u.parent_unit_idx = Some(p_idx - 1);
+                }
+            }
+            if let Some(c_idx) = u.child_unit_idx {
+                if c_idx == idx {
+                    u.child_unit_idx = None;
+                } else if c_idx > idx {
+                    u.child_unit_idx = Some(c_idx - 1);
+                }
+            }
+        }
+
         (unit, idx)
     };
 
@@ -1905,19 +1939,36 @@ pub fn convert_unit(
 
     // Undo
     Ok(Box::new(move |s| {
-        // Restore to old tribe
-        // Remove from new tribe
+        // 1. Remove from new tribe
         if let Some(tribe) = s.tribes.get_mut(&converter_owner) {
             if new_idx < tribe.units.len() {
                 tribe.units.remove(new_idx);
             }
         }
-        // Add back to old tribe
+
+        // 2. Add back to old tribe at the ORIGINAL index
         if let Some(tribe) = s.tribes.get_mut(&target_owner) {
-            // Restore exact original state
-            tribe.units.push(original_unit.clone());
+            tribe.units.insert(old_idx, original_unit.clone());
+
+            // PATCH: Re-patch everyone because the insert shifted them back!
+            for (i, u) in tribe.units.iter_mut().enumerate() {
+                if i == old_idx {
+                    continue; // Skip the one we just restored
+                }
+                if let Some(p_idx) = u.parent_unit_idx {
+                    if p_idx >= old_idx {
+                        u.parent_unit_idx = Some(p_idx + 1);
+                    }
+                }
+                if let Some(c_idx) = u.child_unit_idx {
+                    if c_idx >= old_idx {
+                        u.child_unit_idx = Some(c_idx + 1);
+                    }
+                }
+            }
         }
-        // Restore tile
+
+        // 3. Restore tile
         if let Some(tile) = s.tiles.get_mut(&target_idx) {
             tile._unit_owner_id = Some(target_owner);
         }

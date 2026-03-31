@@ -253,10 +253,10 @@ pub fn capture_city(state: &mut GameState, tile_idx: i32) -> Result<UndoCallback
                 // Remove from new
                 if let Some(nt) = s.tribes.get_mut(&pov_id) {
                     if let Some(p) = nt.cities.iter().position(|c| c.idx == c_clone.idx) {
-                        println!(
-                            "🐛 CaptureUndo: Removing city at {} from tribe {}",
-                            c_clone.idx, pov_id
-                        );
+                        // println!(
+                        //     "🐛 CaptureUndo: Removing city at {} from tribe {}",
+                        //     c_clone.idx, pov_id
+                        // );
                         nt.cities.remove(p);
                     } else {
                         eprintln!(

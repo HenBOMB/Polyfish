@@ -1,11 +1,15 @@
 //! Structure-related actions (create, destroy)
-
 use crate::actions::city::add_population;
-use crate::actions::{UndoCallback, chain_undos};
-use crate::functions::get_city_owning_tile;
+use crate::actions::discovery::discover_tiles;
+use crate::actions::tech::unlock_tech;
+use crate::actions::{UndoCallback, chain_undos, gain_stars};
+use crate::functions::{get_adjacent_indices, get_best_capital, get_city_owning_tile};
 use crate::settings::structures::get_structure_setting;
 use crate::states::{GameState, StructureState};
-use crate::types::{RuinsRewardType, StructureType};
+use crate::types::{
+    CityRewardType, RuinsRewardType, StructureType, TechnologyType, TerrainType, TribeType,
+    UnitType,
+};
 
 /// Crate-local RNG helper (Linear Congruential Generator)
 /// Constants from MMIX by Knuth
@@ -248,13 +252,8 @@ pub fn capture_ruin(
     tile_idx: i32,
     reward_hint: Option<RuinsRewardType>,
     revealed_tiles_hint: Option<Vec<i32>>,
+    tech_hint: Option<TechnologyType>,
 ) -> UndoCallback {
-    use crate::actions::discovery::discover_tiles;
-    use crate::actions::tech::unlock_tech;
-    use crate::actions::{UndoCallback, gain_stars};
-    use crate::functions::{get_adjacent_indices, get_best_capital};
-    use crate::types::{CityRewardType, RuinsRewardType, TerrainType, TribeType, UnitType};
-
     let pov_id = state.settings.current_player_turn_id;
     let mut undos: Vec<UndoCallback> = Vec::new();
 
@@ -290,11 +289,16 @@ pub fn capture_ruin(
                         tribe.tribe_type,
                     );
                     if !researchable.is_empty() {
-                        let mut seed = state.settings.seed;
-                        let r = next_rng(&mut seed);
-                        state.settings.seed = seed;
-                        let index = (r as usize) % researchable.len();
-                        let picked = researchable[index];
+                        let picked = if let Some(tech) = tech_hint {
+                            tech
+                        } else {
+                            let mut seed = state.settings.seed;
+                            let r = next_rng(&mut seed);
+                            state.settings.seed = seed;
+                            let index = (r as usize) % researchable.len();
+                            researchable[index]
+                        };
+
                         if state.settings._verbose {
                             state
                                 ._messages

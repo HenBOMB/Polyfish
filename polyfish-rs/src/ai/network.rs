@@ -110,8 +110,10 @@ pub struct PolyZeroNet {
 
 impl PolyZeroNet {
     pub fn new(vs: VarBuilder) -> Result<Self> {
-        let filters = 128;
-        let blocks = 20; // Increased for better A40 utilization
+        let filters = 64;
+        let blocks = 6; // Reduced for CPU optimization
+        // let filters = 128;
+        // let blocks = 20; // Increased for better A40 utilization
         let input_channels = crate::ai::features::NUM_CHANNELS;
         let player_state_dim = 10; // Global features (stars, spt, tech, etc)
 
@@ -131,7 +133,7 @@ impl PolyZeroNet {
         // Player state embedding
         let player_embed = PlayerEmbedding::new(
             player_state_dim,
-            128,     // hidden (matches filters)
+            64,      // hidden (matches filters)
             filters, // output matches conv channels
             vs.pp("player_embed"),
         )?;
@@ -220,9 +222,9 @@ impl PolyZeroNet {
         let player_broadcast = player_emb
             .unsqueeze(2)? // [B, 64, 1]
             .unsqueeze(3)? // [B, 64, 1, 1]
-            .broadcast_as((batch_size, 128, h, w))?;
+            .broadcast_as((batch_size, 64, h, w))?;
 
-        let fused = Tensor::cat(&[&x, &player_broadcast], 1)?; // [B, 256, H, W]
+        let fused = Tensor::cat(&[&x, &player_broadcast], 1)?; // [B, 128, H, W]
         let mut fused = self.fusion_conv.forward(&fused)?;
         fused = self.fusion_bn.forward_t(&fused, train)?;
         fused = fused.relu()?;

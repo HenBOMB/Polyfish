@@ -104,6 +104,11 @@ pub fn replay_game(game: &mut Game, mod_replay: &mut ModReplay) -> Result<(), St
                                 m_with_hints.revealed_tiles =
                                     Some(serde_json::from_value(tiles.clone()).unwrap());
                             }
+                            if let Some(t) = cmd_json.get("_type").or_else(|| cmd_json.get("type")) {
+                                if let Ok(tech) = serde_json::from_value(t.clone()) {
+                                    m_with_hints.tech_hint = Some(tech);
+                                }
+                            }
                             game.play_move(&m_with_hints);
                         } else {
                             game.play_move(m.as_ref());

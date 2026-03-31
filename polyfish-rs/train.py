@@ -54,50 +54,49 @@ class PolyZeroNet(nn.Module):
         self.map_height = map_height
         self.map_width = map_width
         
-        # Player state embedding: 10 -> 128 -> 128
-        self.player_fc1 = nn.Linear(player_state_dim, 128)
-        self.player_fc2 = nn.Linear(128, 128)
+        # Player state embedding: 10 -> 64 -> 64
+        self.player_fc1 = nn.Linear(player_state_dim, 64)
+        self.player_fc2 = nn.Linear(64, 64)
         self.player_relu = nn.ReLU()
         
         # Initial conv on spatial features (will concatenate with player embedding)
-        # Input: spatial (149 channels) + player embedding (128 channels) = 277 total
-        self.conv1 = nn.Conv2d(spatial_channels + 128, 128, 3, padding=1)
-        self.bn1 = nn.BatchNorm2d(128)
+        self.conv1 = nn.Conv2d(spatial_channels + 64, 64, 3, padding=1)
+        self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU()
         
-        # 20 Residual Blocks (matching Rust)
-        self.res_blocks = nn.ModuleList([ResBlock(128) for _ in range(20)])
+        # 6 Residual Blocks (Optimized for CPU)
+        self.res_blocks = nn.ModuleList([ResBlock(64) for _ in range(6)])
         
         # --- Decomposed Policy Heads ---
         
         # 1. Shared Policy Processing (Pooling -> FC)
-        self.p_pool_conv = nn.Conv2d(128, 1, 1)
+        self.p_pool_conv = nn.Conv2d(64, 1, 1)
         self.p_pool_bn = nn.BatchNorm2d(1)
-        self.p_fc_shared = nn.Linear(map_height * map_width, 128)
+        self.p_fc_shared = nn.Linear(map_height * map_width, 64)
         
         # 2. Categorical Heads (Linear from shared latent)
-        self.pi_action = nn.Linear(128, 10)      # vs.pp("pi_action")
-        self.pi_struct = nn.Linear(128, 35)      # vs.pp("pi_struct")
-        self.pi_unit = nn.Linear(128, 46)        # vs.pp("pi_unit")
-        self.pi_tech = nn.Linear(128, 24)        # vs.pp("pi_tech")
-        self.pi_ability = nn.Linear(128, 20)     # vs.pp("pi_ability")
-        self.pi_reward = nn.Linear(128, 2)       # vs.pp("pi_reward")
+        self.pi_action = nn.Linear(64, 10)      # vs.pp("pi_action")
+        self.pi_struct = nn.Linear(64, 35)      # vs.pp("pi_struct")
+        self.pi_unit = nn.Linear(64, 46)        # vs.pp("pi_unit")
+        self.pi_tech = nn.Linear(64, 24)        # vs.pp("pi_tech")
+        self.pi_ability = nn.Linear(64, 20)     # vs.pp("pi_ability")
+        self.pi_reward = nn.Linear(64, 2)       # vs.pp("pi_reward")
         
         # 3. Spatial Heads (Conv from backbone)
-        self.pi_source = nn.Conv2d(128, 1, 1)    # vs.pp("pi_source")
-        self.pi_target = nn.Conv2d(128, 1, 1)    # vs.pp("pi_target")
+        self.pi_source = nn.Conv2d(64, 1, 1)    # vs.pp("pi_source")
+        self.pi_target = nn.Conv2d(64, 1, 1)    # vs.pp("pi_target")
         
         # --- Value Heads ---
         
         # 1. Shared Value Processing
-        self.v_pool_conv = nn.Conv2d(128, 1, 1)
+        self.v_pool_conv = nn.Conv2d(64, 1, 1)
         self.v_pool_bn = nn.BatchNorm2d(1)
-        self.v_fc_shared = nn.Linear(map_height * map_width, 128)
+        self.v_fc_shared = nn.Linear(map_height * map_width, 64)
         
         # 2. Value Output Heads
-        self.v_win = nn.Linear(128, 1)
-        self.v_eco = nn.Linear(128, 1)
-        self.v_mil = nn.Linear(128, 1)
+        self.v_win = nn.Linear(64, 1)
+        self.v_eco = nn.Linear(64, 1)
+        self.v_mil = nn.Linear(64, 1)
 
     def forward(self, spatial_map, player_state):
         """
@@ -115,8 +114,8 @@ class PolyZeroNet(nn.Module):
         player_emb = self.player_relu(self.player_fc2(player_emb))
         
         # Broadcast player embedding to spatial dimensions
-        player_emb = player_emb.view(batch_size, 128, 1, 1)
-        player_emb = player_emb.expand(batch_size, 128, self.map_height, self.map_width)
+        player_emb = player_emb.view(batch_size, 64, 1, 1)
+        player_emb = player_emb.expand(batch_size, 64, self.map_height, self.map_width)
         
         # Concatenate spatial features with player embedding
         x = torch.cat([spatial_map, player_emb], dim=1)
@@ -200,10 +199,14 @@ def compute_loss(policy_pred, values_pred, policy_targets, value_target):
     loss_eco = nn.MSELoss()(values_pred['eco'], value_target['eco'])
     loss_mil = nn.MSELoss()(values_pred['mil'], value_target['mil'])
     
-    value_loss = loss_win + 0.2 * loss_eco + 0.2 * loss_mil
+    # Strongly prioritize winning/losing.
+    # We strip the auxiliary economy/military weights almost entirely
+    # and boost the win loss so its gradient dominates the network updates.
+    value_loss = (2.0 * loss_win) + (0.01 * loss_eco) + (0.01 * loss_mil)
     
     # Total loss
-    total_loss = total_policy_loss + value_loss
+    # De-emphasize the policy loss (move imitation) to let the value loss dictate learning
+    total_loss = (0.5 * total_policy_loss) + value_loss
     
     return total_loss, total_policy_loss, value_loss
 
@@ -416,9 +419,10 @@ def train():
     final_loss = total_loss / total_batches if total_batches > 0 else 0.0
     print(f"METRICS: {{\"loss\": {final_loss:.4f}}}")
 
-    # 4. Save Model
-    save_file(model.state_dict(), "model.safetensors")
-    print("Saved model.safetensors")
+    # 4. Save Model in f16 for blazing fast CPU inference
+    half_state = {k: v.half() for k, v in model.state_dict().items()}
+    save_file(half_state, "model.safetensors")
+    print("Saved model.safetensors (f16 quantized)")
 
 if __name__ == "__main__":
     train()

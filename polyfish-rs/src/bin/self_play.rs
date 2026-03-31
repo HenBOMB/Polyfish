@@ -181,10 +181,6 @@ fn play_single_game(
                     "[Game {}]: Turn: {} Scores: {:?}",
                     game_idx, game.state.settings.turn, current_scores
                 );
-                // Print last move to see if we are looping
-                if let Some(last_mv) = game.state.settings._recent_moves.last() {
-                    eprintln!("Last Move Type: {:?}", last_mv);
-                }
             }
             let _ = game.play_move(m.as_ref());
         } else {

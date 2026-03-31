@@ -165,6 +165,7 @@ async fn main() {
         .route("/simulate/attack", post(simulate_attack))
         .route("/replay/check", post(check_replay_exists))
         .route("/replay/save", post(save_replay_endpoint))
+        .route("/replay/save-local", post(save_replay_local_endpoint))
         .route("/replay/load", post(load_replay_endpoint))
         .route("/replay/analyze", post(analyze_replay_step))
         .route("/replay/load_initial", post(load_initial_endpoint))
@@ -172,6 +173,7 @@ async fn main() {
         .route("/trainer/hint", post(get_trainer_hint))
         .nest_service("/", ServeDir::new("../src/public"))
         .layer(CorsLayer::permissive())
+        .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 50))
         .with_state(shared_state);
 
     // Run our app
@@ -1105,6 +1107,68 @@ async fn save_replay_endpoint(
             serde_json::json!({ "status": "error", "message": "Invalid replay data format" }),
         );
     };
+
+    match std::fs::write(&filename, content) {
+        Ok(_) => Json(serde_json::json!({
+            "status": "success",
+            "message": format!("Replay saved locally to {}", filename),
+            "filename": filename
+        })),
+        Err(e) => Json(serde_json::json!({
+            "status": "error",
+            "message": format!("Failed to save replay locally: {}", e)
+        })),
+    }
+}
+
+// instead of saving to the db, save to /replays
+async fn save_replay_local_endpoint(
+    State(state): State<Arc<AppState>>,
+    body: Json<Value>,
+) -> Json<Value> {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let game_name = body["gameState"]["settings"]["gameName"]
+        .as_str()
+        .unwrap_or("Unknown");
+
+    let (filename, content) = if body["turns"].is_array() {
+        // get the name from body.gameState.settings.gameName
+
+        let seed = body["gameState"]["initial_seed"]
+            .as_u64()
+            .or_else(|| body["gameState"]["settings"]["seed"].as_u64())
+            .unwrap_or(0);
+
+        (
+            format!(
+                "replays/{}_{}.json",
+                sanitize_storage_key(game_name),
+                timestamp
+            ),
+            serde_json::to_string_pretty(&*body).unwrap(),
+        )
+    } else if let Some(name) = body["name"].as_str() {
+        // Legacy: save current server state under this name
+        let game = state.game.lock().unwrap();
+        let safe_name: String = name
+            .chars()
+            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        (
+            format!("replays/{}_{}.json", safe_name, timestamp),
+            serde_json::to_string_pretty(&game.state).unwrap(),
+        )
+    } else {
+        return Json(
+            serde_json::json!({ "status": "error", "message": "Invalid replay data format" }),
+        );
+    };
+
+    println!("✅ Successfully saved {} to Local Storage", game_name);
 
     match std::fs::write(&filename, content) {
         Ok(_) => Json(serde_json::json!({
