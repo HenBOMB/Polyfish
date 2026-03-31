@@ -367,9 +367,19 @@ pub fn try_discover_other_tribes(state: &mut GameState) -> UndoCallback {
 
                 if let Some(tribe) = state.tribes.get_mut(&pov_id) {
                     tribe.known_players.insert(enemy_owner);
+                    
+                    // Diplomacy Metadata: Record first meeting turn
+                    let current_turn = state.settings.turn;
+                    let relation = tribe.relations.entry(enemy_owner).or_default();
+                    let old_first_meet = relation.first_meet;
+                    relation.first_meet = current_turn;
+
                     undos.push(Box::new(move |s| {
                         if let Some(t) = s.tribes.get_mut(&pov_id) {
                             t.known_players.remove(&enemy_owner);
+                            if let Some(r) = t.relations.get_mut(&enemy_owner) {
+                                r.first_meet = old_first_meet;
+                            }
                         }
                     }));
                 }
