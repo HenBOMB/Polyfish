@@ -648,8 +648,8 @@ async fn test_mod_replay_ingestion() {
                         tribe.stars,
                         tribe.cities.len()
                     );
-                    println!("📚 Legal Moves (first 50):");
-                    for (i, m) in legal_moves.iter().take(50).enumerate() {
+                    println!("📚 Legal Moves (first 100):");
+                    for (i, m) in legal_moves.iter().take(100).enumerate() {
                         println!(
                             "      {}: {:?} -> {}",
                             i,

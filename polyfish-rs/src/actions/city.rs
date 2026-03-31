@@ -127,11 +127,24 @@ pub fn claim_territory(
     for &idx in &tiles_to_claim {
         if let Some(tile) = state.tiles.get_mut(&idx) {
             old_owners.push((idx, tile.owner, tile.ruling_city_coords.clone()));
-            // if idx == 147 {
-            //     println!("🐛 Tile 147 being claimed! City: {}, Old Owner: {}, New Owner: {}", city_tile_idx, tile.owner, pov_id);
-            // }
             tile.owner = pov_id;
             tile.ruling_city_coords = Some(city_coords.clone());
+        }
+    }
+
+    // Update city's own territory list
+    let mut added_indices = Vec::new();
+    let mut city_idx_in_tribe = None;
+    if let Some(tribe) = state.tribes.get_mut(&pov_id) {
+        if let Some(pos) = tribe.cities.iter().position(|c| c.idx == city_tile_idx) {
+            let city = &mut tribe.cities[pos];
+            for &idx in &tiles_to_claim {
+                if !city._territory.contains(&idx) {
+                    city._territory.push(idx);
+                    added_indices.push(idx);
+                }
+            }
+            city_idx_in_tribe = Some(pos);
         }
     }
 
@@ -141,10 +154,22 @@ pub fn claim_territory(
         tribe.score += score_gain;
     }
 
+    let num_newly_added = added_indices.len();
     Box::new(move |s| {
         // Undo score
         if let Some(tribe) = s.tribes.get_mut(&pov_id) {
             tribe.score -= score_gain;
+        }
+
+        // Restore city's own territory list
+        if let Some(tribe_idx) = city_idx_in_tribe {
+            if let Some(tribe) = s.tribes.get_mut(&pov_id) {
+                if let Some(city) = tribe.cities.get_mut(tribe_idx) {
+                    // Remove the last N indices that were added
+                    let new_len = city._territory.len().saturating_sub(num_newly_added);
+                    city._territory.truncate(new_len);
+                }
+            }
         }
 
         // Restore tiles
