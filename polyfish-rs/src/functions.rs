@@ -302,6 +302,14 @@ pub fn get_enemy_at<'a>(
     })
 }
 
+pub fn get_true_enemy_at<'a>(
+    state: &'a GameState,
+    idx: i32,
+    not_owner: PlayerId,
+) -> Option<&'a UnitState> {
+    get_true_unit_at(state, idx).filter(|u| is_enemy(state, not_owner, u.owner))
+}
+
 /// Check if a unit has an effect
 pub fn has_effect(unit: &UnitState, effect: UnitEffect) -> bool {
     unit.effects.contains(&effect)
@@ -331,6 +339,9 @@ pub fn get_unit_max_health(unit: &UnitState) -> f32 {
     // Health is determined by the passenger (inner unit) if available
     let u_type = unit.passenger_type.unwrap_or(unit.unit_type);
     let mut health = crate::settings::units::get_unit_setting(u_type).health;
+    if health < 0.0 {
+        health = 10.0;
+    }
     if unit.veteran {
         health += 5.0;
     }
@@ -357,15 +368,6 @@ pub fn get_unit_attack(unit: &UnitState) -> f32 {
 /// Get unit defense strength (accounting for Poison)
 pub fn get_unit_defense(unit: &UnitState) -> f32 {
     let mut def = crate::settings::units::get_unit_setting(unit.unit_type).defense;
-
-    // If the unit type itself has no defense (like Transportship?), inherit from passenger
-    // (Actually Transportship has 2.0 defense, so it won't inherit)
-    if def < 0.0 {
-        if let Some(passenger) = unit.passenger_type {
-            def = crate::settings::units::get_unit_setting(passenger).defense;
-        }
-    }
-
     if has_effect(unit, UnitEffect::Poison) {
         def *= 0.5; // 50% defense reduction
     }
@@ -489,7 +491,7 @@ pub fn get_city_production(state: &GameState, city: &CityState) -> i32 {
         return 0;
     }
 
-    let mut prod = city.level;
+    let mut prod = city.production;
     // Capitals get a +1 star bonus
     if let Some(tile) = state.tiles.get(&city.idx) {
         if tile.capital_of == city.owner && tile.capital_of != 0 {
@@ -750,19 +752,26 @@ pub fn calculate_pushable_position(state: &GameState, unit: &UnitState) -> Optio
                 dx = -dx;
                 dy = -dy;
             }
+
+            println!("Chosen ranged using attacked and !moved after");
+
             (dx, dy)
         } else if unit.moved
             && unit.prev_coords.is_valid()
             && unit.prev_coords.idx != unit.coords.idx
         {
+            println!("Chosen ranged using moved");
             // Revert to move logic if move was last or not a ranged attack
             calculate_move_push_direction(state, unit)
         } else {
+            println!("Chosen ranged using center");
             get_direction_toward_center(initial_x, initial_y, center_x, center_y)
         }
-    } else if unit.moved && unit.prev_coords.is_valid() && unit.prev_coords.idx != unit.coords.idx {
+    } else if unit.prev_coords.is_valid() && unit.prev_coords.idx != unit.coords.idx {
+        println!("Chosen using moved");
         calculate_move_push_direction(state, unit)
     } else {
+        println!("Chosen using center");
         // Rule 4: Not previously moved or attacked: push towards center
         get_direction_toward_center(initial_x, initial_y, center_x, center_y)
     };
@@ -778,7 +787,7 @@ pub fn calculate_pushable_position(state: &GameState, unit: &UnitState) -> Optio
     // Directions are 8 neighbors.
     // Neighbors in order: (0,-1) N, (1,-1) NE, (1,0) E, (1,1) SE, (0,1) S, (-1,1) SW, (-1,0) W, (-1,-1) NW.
 
-    let candidates = get_push_search_order(initial_x, initial_y, dx, dy);
+    let candidates = get_push_search_order(initial_x, initial_y, dx, dy, center_x, center_y);
     for (nx, ny) in candidates {
         if is_in_bounds(nx, ny, size) {
             let idx = ny * size + nx;
@@ -834,6 +843,9 @@ fn calculate_move_push_direction(_state: &GameState, unit: &UnitState) -> (i32, 
         0
     };
 
+    println!("Using prev_coords: {}", unit.prev_coords.idx);
+    println!("Chosen using moved: dx = {}, dy = {}", dx, dy);
+
     // Rule 2: Enemy units pushed in opposite direction
     if unit.owner != _state.settings.current_player_turn_id {
         dx = -dx;
@@ -842,7 +854,7 @@ fn calculate_move_push_direction(_state: &GameState, unit: &UnitState) -> (i32, 
     (dx, dy)
 }
 
-fn get_push_search_order(x: i32, y: i32, dx: i32, dy: i32) -> Vec<(i32, i32)> {
+fn get_push_search_order(x: i32, y: i32, dx: i32, dy: i32, cx: i32, cy: i32) -> Vec<(i32, i32)> {
     // 8 directions. Finding index of (dx, dy) in standard loop.
     let dirs = [
         (0, -1),
@@ -860,25 +872,48 @@ fn get_push_search_order(x: i32, y: i32, dx: i32, dy: i32) -> Vec<(i32, i32)> {
         .position(|&(d_x, d_y)| d_x == dx && d_y == dy)
         .unwrap_or(0);
 
-    // Alternating expansion: 0, -1, +1, -2, +2 ...
-    // i.e. start, start-1 (CCW), start+1 (CW), start-2 ...
-    // Indices modulo 8.
-
+    // Alternating expansion: 0, 1, -1, 2, -2 ...
+    // prioritizing tiles that are closer to the map center as tie-breakers
     let mut search_dirs = Vec::new();
-    // 0
     search_dirs.push(dirs[start_idx]);
 
     for i in 1..=4 {
-        // CCW (assuming array is CW ordered N->NE->E...)
-        // Array is N, NE, E, SE, S, SW, W, NW. This is CW order.
-        // So CCW is -1.
         let ccw_idx = (start_idx as i32 - i).rem_euclid(8) as usize;
         let cw_idx = (start_idx as i32 + i).rem_euclid(8) as usize;
 
-        search_dirs.push(dirs[ccw_idx]);
-        if cw_idx != ccw_idx {
-            // Don't add opposite twice (at i=4)
-            search_dirs.push(dirs[cw_idx]);
+        if ccw_idx == cw_idx {
+            search_dirs.push(dirs[ccw_idx]);
+        } else {
+            let (ccw_dx, ccw_dy) = dirs[ccw_idx];
+            let (cw_dx, cw_dy) = dirs[cw_idx];
+
+            let ccw_x = x + ccw_dx;
+            let ccw_y = y + ccw_dy;
+            let cw_x = x + cw_dx;
+            let cw_y = y + cw_dy;
+
+            // 1. Distance Tie-break: Which one is Euclidean-closer to the map center?
+            let dist_ccw = (ccw_x - cx).pow(2) + (ccw_y - cy).pow(2);
+            let dist_cw = (cw_x - cx).pow(2) + (cw_y - cy).pow(2);
+
+            if dist_cw < dist_ccw {
+                search_dirs.push(dirs[cw_idx]);
+                search_dirs.push(dirs[ccw_idx]);
+            } else if dist_ccw < dist_cw {
+                search_dirs.push(dirs[ccw_idx]);
+                search_dirs.push(dirs[cw_idx]);
+            } else {
+                // 2. Visual Tie-break: Prioritize visual horizontal center (x-y closer to 0)
+                let visual_ccw = (ccw_x - ccw_y).abs();
+                let visual_cw = (cw_x - cw_y).abs();
+                if visual_cw < visual_ccw {
+                    search_dirs.push(dirs[cw_idx]);
+                    search_dirs.push(dirs[ccw_idx]);
+                } else {
+                    search_dirs.push(dirs[ccw_idx]);
+                    search_dirs.push(dirs[cw_idx]);
+                }
+            }
         }
     }
 
@@ -888,7 +923,7 @@ fn get_push_search_order(x: i32, y: i32, dx: i32, dy: i32) -> Vec<(i32, i32)> {
         .collect()
 }
 
-fn is_steppable_for_push(state: &GameState, unit: &UnitState, idx: i32) -> bool {
+pub fn is_steppable_for_push(state: &GameState, unit: &UnitState, idx: i32) -> bool {
     // Hidden enemies block pushing
     if get_enemy_at(state, idx, unit.owner).is_some() {
         return false;
@@ -908,15 +943,19 @@ fn is_steppable_for_push(state: &GameState, unit: &UnitState, idx: i32) -> bool 
     };
     let tech = &state.tribes.get(&unit.owner).unwrap().tech_vanilla;
 
+    if settings.skills.contains(&SkillType::Fly) {
+        return true;
+    }
+
     match tile.terrain_type {
         TerrainType::Water | TerrainType::Ocean => {
             let has_bridge = get_structure_type_at(state, idx) == Some(StructureType::Bridge);
             let has_port = get_structure_type_at(state, idx) == Some(StructureType::Port);
+            let is_our_port = has_port && tile.owner == unit.owner;
             if !settings.skills.contains(&SkillType::Float)
-                && !settings.skills.contains(&SkillType::Fly)
                 && !tile.is_algae()
                 && !has_bridge
-                && !has_port
+                && !is_our_port
             {
                 return false;
             }
@@ -927,9 +966,7 @@ fn is_steppable_for_push(state: &GameState, unit: &UnitState, idx: i32) -> bool 
                 TechnologyType::Climbing,
                 tribe_type,
             );
-            if !settings.skills.contains(&SkillType::Fly)
-                && !has_technology(&tech, climbing)
-            {
+            if !has_technology(&tech, climbing) {
                 return false;
             }
         }
@@ -1093,7 +1130,6 @@ pub fn calculate_combat_preview(
     let defender = get_enemy_at(state, defender_idx, attacker.owner)?;
 
     let atk_atk = get_unit_attack(attacker);
-    let atk_def = get_unit_defense(attacker);
     let atk_health = attacker.health;
     let atk_max = get_unit_max_health(attacker);
 
@@ -1104,7 +1140,6 @@ pub fn calculate_combat_preview(
 
     let result = crate::actions::units::calculate_combat(
         atk_atk,
-        atk_def,
         atk_health,
         atk_max,
         def_def,

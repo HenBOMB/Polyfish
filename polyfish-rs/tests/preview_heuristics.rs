@@ -114,7 +114,7 @@ fn preview_heuristics() {
     );
     println!(
         "Dinghy: {}",
-        evaluate_unit(&mut state, polyfish::UnitType::CloakBoat)
+        evaluate_unit(&mut state, polyfish::UnitType::Dinghy)
     );
     println!(
         "Doomux: {}",
@@ -206,7 +206,7 @@ fn preview_heuristics() {
     );
     println!(
         "Raft: {}",
-        evaluate_unit(&mut state, polyfish::UnitType::Transportship)
+        evaluate_unit(&mut state, polyfish::UnitType::Raft)
     );
     println!(
         "Rammer: {}",

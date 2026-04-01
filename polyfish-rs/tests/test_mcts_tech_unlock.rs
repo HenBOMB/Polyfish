@@ -102,7 +102,7 @@ fn test_mcts_tech_unlock_logic() {
     if let Some(tribe) = game.state.tribes.get_mut(&player_id) {
         let mut raft = polyfish::states::UnitState::default();
         raft.owner = player_id;
-        raft.unit_type = UnitType::Transportship;
+        raft.unit_type = UnitType::Raft;
         raft.coords.set_at(raft_tile_idx, game.state.settings.size);
         tribe.units.push(raft);
         game.state

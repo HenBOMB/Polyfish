@@ -1,3 +1,4 @@
+use polyfish::functions::get_total_production;
 use polyfish::game::Game;
 use polyfish::moves::Move;
 use polyfish::states::GameState;
@@ -33,6 +34,8 @@ static PASSED_REPLAYS: &[&str] = &[
     "anpiian-swamp_1774295054",
     // passes ok
     "beautiful-navies_1774719056",
+    // passes ok, fixed (added) idx 93 to _revealedTiles on target 126
+    "adventure-of-assha_1774996907",
 ];
 
 // limited to policy: select (public.games)
@@ -42,7 +45,7 @@ const SUPABASE_ANON_KEY: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOi
 async fn test_mod_replay_ingestion() {
     let _ = dotenvy::dotenv();
 
-    let replay_base = "replays/adventure-of-assha_1774823883";
+    let replay_base = "replays/adventure-of-assha_1774996907";
     let replay_path = format!("{}.json", replay_base);
     let fixed_path = format!("{}_fixed.json", replay_base);
 
@@ -155,7 +158,7 @@ async fn test_mod_replay_ingestion() {
                     }
                 }
 
-                let move_type: polyfish::MoveType =
+                let mut move_type: polyfish::MoveType =
                     polyfish::MoveType::from(cmd_json["moveType"].as_i64().unwrap_or(0) as i32);
 
                 // --- FIX FOR SANCTUARY/ANIMALS NON-DETERMINISM --- //
@@ -188,6 +191,27 @@ async fn test_mod_replay_ingestion() {
                 }
 
                 let legal_moves = game.legal_moves();
+
+                // -- FIX FOR STARFISHING MOVE --
+                // translate build structure to capture move
+                if cmd_json["type"].as_i64() == Some(46) && cmd_json["moveType"].as_i64() == Some(6)
+                {
+                    cmd_json["moveType"] = (polyfish::types::MoveType::Capture as i8).into();
+                    move_type = polyfish::MoveType::Capture;
+
+                    // remove target and add src
+                    if let Some(obj) = cmd_json.as_object_mut() {
+                        let src = obj
+                            .get("target")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null);
+                        obj.remove("target");
+                        obj.remove("type");
+                        obj.insert("src".to_string(), src);
+                    }
+
+                    println!("    [FIX] Applying starfish capture at {}", cmd_json["src"]);
+                }
 
                 // --- FIX FOR SWARM MOVE --- //
                 // find the correct move and replace the command with it
@@ -390,49 +414,7 @@ async fn test_mod_replay_ingestion() {
                             game.play_move(&m_with_hints);
                         } else {
                             println!("🚀 {}", m.describe(&game.state));
-
-                            // // Debug Recover
-                            // let mut pre_health = 0;
-                            // if move_type == 3 {
-                            //     // Ability
-                            //     let src = cmd_json
-                            //         .get("src")
-                            //         .or(cmd_json.get("target"))
-                            //         .and_then(|v| v.as_i64())
-                            //         .unwrap() as i32;
-                            //     if let Some(u) = polyfish::functions::get_unit_at(&game.state, src)
-                            //     {
-                            //         pre_health = u.health;
-                            //         let owner =
-                            //             game.state.tiles.get(&src).map(|t| t.owner).unwrap_or(0);
-                            //         println!(
-                            //             "🐛 Unit at {} has health {}/{} (Tile Owner: {})",
-                            //             src,
-                            //             u.health,
-                            //             polyfish::functions::get_unit_max_health(u),
-                            //             owner
-                            //         );
-                            //     }
-                            // }
-
                             game.play_move(m.as_ref());
-
-                            // if move_type == 3 {
-                            //     let src = cmd_json
-                            //         .get("src")
-                            //         .or(cmd_json.get("target"))
-                            //         .and_then(|v| v.as_i64())
-                            //         .unwrap() as i32;
-                            //     if let Some(u) = polyfish::functions::get_unit_at(&game.state, src)
-                            //     {
-                            //         println!(
-                            //             "🐛 Unit at {} now has health {} (Healed {})",
-                            //             src,
-                            //             u.health,
-                            //             u.health - pre_health
-                            //         );
-                            //     }
-                            // }
                         }
 
                         for msg in &game.state._messages {
@@ -648,8 +630,12 @@ async fn test_mod_replay_ingestion() {
                         tribe.stars,
                         tribe.cities.len()
                     );
-                    println!("📚 Legal Moves (first 100):");
-                    for (i, m) in legal_moves.iter().take(100).enumerate() {
+                    println!(
+                        "⭐ SPT: {:?}",
+                        get_total_production(&game.state, &tribe.cities)
+                    );
+                    println!("📚 Legal Moves (first 10):");
+                    for (i, m) in legal_moves.iter().take(10).enumerate() {
                         println!(
                             "      {}: {:?} -> {}",
                             i,

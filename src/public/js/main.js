@@ -872,8 +872,8 @@ function updateSelectionInfo(clickX = null, clickY = null) {
             const tribeName = TRIBE_ID_2_NAME[city.tribe?.type || GAME_STATE.tribes[city.owner]?.type];
             title = city.name || (tile.capitalOf > 0 ? "Capital" : "City");
             subtitle = `${tribeName} Territory`;
-            const climateIndex = CLIMATE_IDS.indexOf(tribeName);
-            thumbFile = `buildings/${tribeName}/Default/Houses/House_${climateIndex === 17 ? 16 : climateIndex}_5`;
+            const climateIndex = CLIMATE_IDS[tribeName];
+            thumbFile = `buildings/${tribeName}/Default/Houses/House_${climateIndex}_5`;
         } else {
             title = resourceName ? `${terrainName}, ${resourceName}` : terrainName;
             subtitle = resourceName ? "Extract this resource to upgrade your city" : "A sturdy foundation for your empire";
@@ -1283,6 +1283,7 @@ function getStructureFile(type, climate) {
     const map = {
         1: `buildings/common/Tribe`,
         2: `terrain/misc/ResourceGFX_ruin`,
+        3: `misc/Road`,
         5: `buildings/common/Farm`,
         6: `buildings/common/Windmill`,
         8: `buildings/common/Port`,
@@ -1290,9 +1291,10 @@ function getStructureFile(type, climate) {
         13: `buildings/common/Sawmill`,
         21: `buildings/common/Mine`,
         22: `buildings/common/Forge`,
-        29: `buildings/${CLIMATE_IDS[climate]}/Default/Monuments/Monument7_${climate}`,
+        27: `buildings/${CLIMATE_IDS[climate]}/Default/Monuments/Monument5_${climate - 1}`,
+        28: `buildings/${CLIMATE_IDS[climate]}/Default/Monuments/Monument6_${climate - 1}`,
+        29: `buildings/${CLIMATE_IDS[climate]}/Default/Monuments/Monument7_${climate - 1}`,
         37: `buildings/Cymanti/Default/Unique/spores_4`,
-        71: `misc/Road`
     };
     !map[type] && console.log(`MISSING STRUCTURE: ${type}`);
 

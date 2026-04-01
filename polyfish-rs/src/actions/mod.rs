@@ -367,7 +367,7 @@ pub fn try_discover_other_tribes(state: &mut GameState) -> UndoCallback {
 
                 if let Some(tribe) = state.tribes.get_mut(&pov_id) {
                     tribe.known_players.insert(enemy_owner);
-                    
+
                     // Diplomacy Metadata: Record first meeting turn
                     let current_turn = state.settings.turn;
                     let relation = tribe.relations.entry(enemy_owner).or_default();
@@ -481,25 +481,25 @@ pub fn process_start_turn_effects(state: &mut GameState, player_id: PlayerId) ->
                 match unit.unit_type {
                     UnitType::DragonEgg => {
                         // Egg -> Baby Dragon after 3 turns
-                        if age >= 3 {
+                        if age > 3 {
                             new_type = Some(UnitType::BabyDragon);
                         }
                     }
                     UnitType::BabyDragon => {
                         // Baby -> Fire Dragon after 3 more turns (total 6 turns from creation)
-                        if age >= 6 {
+                        if age > 6 {
                             new_type = Some(UnitType::FireDragon);
                         }
                     }
                     UnitType::InsectEgg => {
                         // InsectEgg -> Larva after 2 turns
-                        if age >= 2 {
+                        if age > 2 {
                             new_type = Some(UnitType::Larva);
                         }
                     }
                     UnitType::Larva => {
                         // Larva -> Moth after 3 turns (Total 5 turns: 2 as Egg + 3 as Larva)
-                        if age >= 5 {
+                        if age > 5 {
                             new_type = Some(UnitType::Moth);
                         }
                     }
@@ -794,7 +794,34 @@ pub fn process_end_turn_effects(state: &mut GameState, _player_id: PlayerId) -> 
             }
         }
     }
-    // 2. End of turn queue
+
+    // 3. Auto-heal idle units (units that didn't move or attack this turn)
+    // In Polytopia, if a unit does nothing during its turn, it automatically heals
+    // at the end of the turn, same as Recover (4 HP in territory, 2 HP outside).
+    let active_player = state.settings.current_player_turn_id;
+    if let Some(tribe) = state.tribes.get(&active_player) {
+        let idle_units: Vec<(usize, i32)> = tribe
+            .units
+            .iter()
+            .enumerate()
+            .filter(|(_, u)| !u.moved && !u.attacked)
+            .map(|(idx, u)| (idx, u.coords.idx))
+            .collect();
+
+        for (unit_idx, tile_idx) in idle_units {
+            let in_territory =
+                crate::functions::is_in_own_territory(state, tile_idx, active_player);
+            let amount = if in_territory { 4.0 } else { 2.0 };
+            undos.push(crate::actions::units::heal_unit(
+                state,
+                active_player,
+                unit_idx,
+                amount,
+            ));
+        }
+    }
+
+    // 4. End of turn queue
     let queue: Vec<EndOfTurnAction> = state._end_of_turn_queue.drain(..).collect();
     let old_queue = queue.clone();
 

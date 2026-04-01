@@ -107,25 +107,10 @@ impl Move for RewardMove {
                     undos.push(gain_stars(state, 5));
                 }
                 CityRewardType::PopGrowth => {
-                    if let Some(tribe) = state.tribes.get_mut(&p_id) {
-                        if let Some(city) = tribe.cities.get_mut(c_idx) {
-                            if state.settings._verbose {
-                                state._messages.push(format!("🐛 Population growth! 👨‍👩‍👧‍👦"));
-                            }
-                            city.population += 3;
-                            city.progress += 3;
-                            tribe.score += 15;
-                            undos.push(Box::new(move |s: &mut GameState| {
-                                if let Some(t) = s.tribes.get_mut(&p_id) {
-                                    t.score -= 15;
-                                    if let Some(c) = t.cities.get_mut(c_idx) {
-                                        c.population -= 3;
-                                        c.progress -= 3;
-                                    }
-                                }
-                            }) as UndoCallback);
-                        }
+                    if state.settings._verbose {
+                        state._messages.push(format!("🐛 Population growth! 👨‍👩‍👧‍👦"));
                     }
+                    undos.push(crate::actions::city::add_population(state, target, 3));
                 }
                 CityRewardType::BorderGrowth => {
                     if let Some(tribe) = state.tribes.get_mut(&p_id) {
@@ -136,6 +121,7 @@ impl Move for RewardMove {
                             city.border_size += 1;
                             let adj = get_adjacent_indices(state, target, 2);
                             undos.push(claim_territory(state, &adj, target, false));
+                            undos.push(discover_tiles(state, p_id, None, Some(adj)));
                             undos.push(Box::new(move |s: &mut GameState| {
                                 if let Some(t) = s.tribes.get_mut(&p_id) {
                                     if let Some(c) = t.cities.get_mut(c_idx) {

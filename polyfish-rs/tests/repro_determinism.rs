@@ -60,8 +60,8 @@ fn test_capture_ruin_determinism() {
         let _ = unlock_tech(&mut game_b.state, TechnologyType::Organization, false);
 
         // --- Step 2: Capture Ruin ---
-        let _undo_a = capture_ruin(&mut game_a.state, 0, None, None);
-        let _undo_b = capture_ruin(&mut game_b.state, 0, None, None);
+        let _undo_a = capture_ruin(&mut game_a.state, 0, None, None, None);
+        let _undo_b = capture_ruin(&mut game_b.state, 0, None, None, None);
 
         // Compare explicit outcomes
         let stars_a = game_a.state.tribes.get(&1).unwrap().stars;

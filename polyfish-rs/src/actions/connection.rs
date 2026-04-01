@@ -14,6 +14,7 @@ use std::collections::{HashSet, VecDeque};
 ///
 /// Should be called after building roads or ports.
 pub fn update_capital_connections(state: &mut GameState, tribe_id: i32) -> UndoCallback {
+    use crate::functions::is_enemy;
     let _map_size = state.settings.size;
 
     // Find capital
@@ -66,6 +67,12 @@ pub fn update_capital_connections(state: &mut GameState, tribe_id: i32) -> UndoC
                 has_road(state, n_idx) || city_indices.contains(&n_idx) || has_port(state, n_idx);
             let n_has_algae = has_algae(state, n_idx);
             let n_has_mycelium = has_mycelium(state, n_idx);
+
+            // Connections cannot pass through enemy-owned tiles
+            let n_owner = state.tiles.get(&n_idx).map(|t| t.owner).unwrap_or(0);
+            if n_owner != 0 && is_enemy(state, tribe_id, n_owner) {
+                continue;
+            }
 
             let mut connected = false;
 
@@ -131,7 +138,7 @@ pub fn update_capital_connections(state: &mut GameState, tribe_id: i32) -> UndoC
 
                 if has_port(state, target_idx) {
                     // Path check: only through water or ocean
-                    if has_water_path(state, current_idx, target_idx) {
+                    if has_water_path(state, current_idx, target_idx, tribe_id) {
                         visited.insert(target_idx);
                         queue.push_back(target_idx);
                         if city_indices.contains(&target_idx) {
@@ -259,7 +266,8 @@ fn has_algae(state: &GameState, idx: i32) -> bool {
         .unwrap_or(false)
 }
 
-fn has_water_path(state: &GameState, src: i32, dest: i32) -> bool {
+fn has_water_path(state: &GameState, src: i32, dest: i32, tribe_id: i32) -> bool {
+    use crate::functions::is_enemy;
     let size = state.settings.size;
     let sx = src % size;
     let sy = src / size;
@@ -289,6 +297,11 @@ fn has_water_path(state: &GameState, src: i32, dest: i32) -> bool {
                 Some(t) => t,
                 None => continue,
             };
+
+            // Connections cannot pass through enemy-owned tiles
+            if tile.owner != 0 && is_enemy(state, tribe_id, tile.owner) {
+                continue;
+            }
 
             // Path must be water or ocean
             if is_water(tile.terrain_type) || n == dest {

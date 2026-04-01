@@ -100,13 +100,13 @@ async fn main() {
 
     if !loaded {
         println!("🎲 No live game found, generating new map...");
-        let mut settings = MapGenSettings::default();
-        settings.size = DEFAULT_SIZE;
-        settings.tribes = DEFAULT_TRIBES.to_vec();
-        settings.seed = rand::random();
-        settings.map_type = MapType::Drylands;
-
-        game.state = generate(settings);
+        game.state = generate(MapGenSettings {
+            size: MapSize::Tiny,
+            seed: 12345,
+            map_type: MapType::Drylands,
+            tribes: vec![TribeType::Imperius, TribeType::Oumaji],
+            version: 115,
+        });
     }
 
     game.state.settings._verbose = true;
@@ -1136,7 +1136,7 @@ async fn save_replay_local_endpoint(
     let (filename, content) = if body["turns"].is_array() {
         // get the name from body.gameState.settings.gameName
 
-        let seed = body["gameState"]["initial_seed"]
+        let _seed = body["gameState"]["initial_seed"]
             .as_u64()
             .or_else(|| body["gameState"]["settings"]["seed"].as_u64())
             .unwrap_or(0);

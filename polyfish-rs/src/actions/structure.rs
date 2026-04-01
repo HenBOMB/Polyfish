@@ -413,6 +413,9 @@ pub fn capture_ruin(
                 undos.push(crate::actions::city::claim_territory(
                     state, &territory, tile_idx, true,
                 ));
+                undos.push(crate::actions::connection::update_capital_connections(
+                    state, pov_id,
+                ));
             }
             _ => {}
         }
@@ -673,6 +676,11 @@ pub fn capture_ruin(
             // 6. Claim territory
             undos.push(crate::actions::city::claim_territory(
                 s, &territory, tile_idx, true,
+            ));
+
+            // 7. Refresh connections
+            undos.push(crate::actions::connection::update_capital_connections(
+                s, pov_id,
             ));
 
             chain_undos(undos)

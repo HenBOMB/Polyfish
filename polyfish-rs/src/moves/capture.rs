@@ -1,11 +1,9 @@
-//! Capture move implementation
-
 use crate::actions::resource::consume_resource;
 use crate::actions::{chain_undos, end_unit_turn, gain_stars};
 use crate::functions::get_unit_at;
 use crate::moves::{Move, MoveResult};
 use crate::states::GameState;
-use crate::types::{MoveType, StructureType};
+use crate::types::{MoveType, ResourceType, StructureType};
 
 /// A capture move - taking control of a village, city, or ruins
 #[derive(Debug, Clone)]
@@ -98,7 +96,7 @@ impl Move for CaptureMove {
                 // Check Starfish (collectible resource)
                 if let Some(Some(resource)) = state.resources.get(&self.src_index) {
                     if resource.resource_type == crate::types::ResourceType::Starfish {
-                        // Anti-cheat: verify Navigation tech
+                        // Just in case
                         if let Some(tribe) = state.tribes.get(&unit_owner) {
                             if !crate::settings::technology::has_technology(
                                 &tribe.tech_vanilla,
@@ -133,9 +131,22 @@ impl Move for CaptureMove {
             .map(|s| s.structure_type)
             == Some(StructureType::Village);
 
+        let is_starfish = state
+            .resources
+            .get(&self.src_index)
+            .and_then(|s| s.as_ref())
+            .map(|s| s.resource_type)
+            == Some(ResourceType::Starfish);
+
         format!(
             "Capture {} at {}",
-            if is_village { "Village" } else { "Ruin" },
+            if is_village {
+                "Village"
+            } else if is_starfish {
+                "Starfish"
+            } else {
+                "Ruin"
+            },
             self.src_index
         )
     }

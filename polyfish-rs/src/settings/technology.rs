@@ -107,6 +107,7 @@ pub fn get_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
         Strategy => TechnologySetting {
             tier: Some(2),
             requires: Some(Organization),
+            next: vec![Diplomacy],
             unlocks_unit: Some(UnitType::Defender),
             unlocks_special_units: vec![UnitType::Kiton],
             ..Default::default()
@@ -163,7 +164,7 @@ pub fn get_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
         Fishing => TechnologySetting {
             tier: Some(1),
             next: vec![Sailing, Ramming],
-            unlocks_unit: Some(UnitType::Transportship),
+            unlocks_unit: Some(UnitType::Raft),
             unlocks_terrain: Some(TerrainType::Water),
             unlocks_structure: Some(StructureType::Port),
             ..Default::default()

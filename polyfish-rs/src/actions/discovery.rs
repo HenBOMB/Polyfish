@@ -76,18 +76,20 @@ pub fn discover_tiles(
                 tile.explorers.insert(pov_id);
 
                 // Check if lighthouse
-                if let Some(Some(struct_state)) = state.structures.get(&idx) {
-                    if struct_state.structure_type == StructureType::Lighthouse {
-                        let city_to_reward =
-                            get_capital_city(state, pov_id).map(|c| c.idx).or_else(|| {
-                                state
-                                    .tribes
-                                    .get(&pov_id)
-                                    .and_then(|t| t.cities.first().map(|c| c.idx))
-                            });
+                if state.settings.version >= 114 {
+                    if let Some(Some(struct_state)) = state.structures.get(&idx) {
+                        if struct_state.structure_type == StructureType::Lighthouse {
+                            let city_to_reward =
+                                get_capital_city(state, pov_id).map(|c| c.idx).or_else(|| {
+                                    state
+                                        .tribes
+                                        .get(&pov_id)
+                                        .and_then(|t| t.cities.first().map(|c| c.idx))
+                                });
 
-                        if let Some(city_idx) = city_to_reward {
-                            undos.push(add_population(state, city_idx, 1));
+                            if let Some(city_idx) = city_to_reward {
+                                undos.push(add_population(state, city_idx, 1));
+                            }
                         }
                     }
                 }
@@ -241,9 +243,11 @@ fn score_fog_tile(state: &GameState, visible: &HashSet<i32>, idx: i32) -> i32 {
     for r_idx in check_reveal {
         if !visible.contains(&r_idx) {
             reveal_count += 1;
-            if let Some(Some(s)) = state.structures.get(&r_idx) {
-                if s.structure_type == StructureType::Lighthouse {
-                    has_lighthouse = true;
+            if state.settings.version >= 114 {
+                if let Some(Some(s)) = state.structures.get(&r_idx) {
+                    if s.structure_type == StructureType::Lighthouse {
+                        has_lighthouse = true;
+                    }
                 }
             }
         }

@@ -33,6 +33,7 @@ fn test_mcts_matches_ruin_capture_sequence() {
             },
             map_type: initial_game.state.settings.map_type,
             tribes,
+            version: 115,
         }),
     };
     game.post_load();

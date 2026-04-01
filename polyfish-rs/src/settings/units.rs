@@ -15,7 +15,6 @@ pub struct UnitSetting {
     pub upgrade_from: Option<UnitType>,
     pub is_unique: bool,
     pub skills: HashSet<SkillType>,
-    pub becomes: Option<UnitType>,
     pub is_super: bool,
 }
 
@@ -31,7 +30,6 @@ impl Default for UnitSetting {
             upgrade_from: None,
             is_unique: false,
             skills: HashSet::new(),
-            becomes: None,
             is_super: false,
         }
     }
@@ -147,6 +145,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             range: 1,
             health: 40.0,
             is_super: true,
+            skills: skills![S::Static],
             ..Default::default()
         },
 
@@ -195,7 +194,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             ],
             ..Default::default()
         },
-        U::CloakBoat => UnitSetting {
+        U::Dinghy => UnitSetting {
             cost: 2,
             attack: 0.0,
             movement: 2,
@@ -215,14 +214,14 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
         },
 
         // Navy
-        U::Transportship => UnitSetting {
+        U::Raft => UnitSetting {
             cost: 0,
-            attack: -1.0,
+            attack: 0.0,
             movement: 2,
-            defense: 2.0,
+            defense: 1.0,
             range: 2,
             health: 10.0,
-            skills: skills![S::Carry, S::Float, S::Static],
+            skills: skills![S::Carry, S::Float, S::Static, S::Stiff],
             ..Default::default()
         },
         U::Scoutship => UnitSetting {
@@ -232,7 +231,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             defense: 1.0,
             range: 2,
             health: 10.0, // inherits
-            upgrade_from: Some(U::Transportship),
+            upgrade_from: Some(U::Raft),
             skills: skills![S::Carry, S::Dash, S::Float, S::Static, S::Scout],
             ..Default::default()
         },
@@ -243,7 +242,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             defense: 3.0,
             range: 1,
             health: 10.0,
-            upgrade_from: Some(U::Transportship),
+            upgrade_from: Some(U::Raft),
             skills: skills![S::Dash, S::Float, S::Carry, S::Static],
             ..Default::default()
         },
@@ -254,7 +253,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             defense: 2.0,
             range: 3,
             health: 10.0,
-            upgrade_from: Some(U::Transportship),
+            upgrade_from: Some(U::Raft),
             skills: skills![S::Carry, S::Float, S::Splash, S::Stiff, S::Static],
             ..Default::default()
         },
@@ -456,7 +455,6 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             range: 1,
             health: 10.0,
             is_super: false,
-            becomes: Some(U::Larva),
             skills: skills![S::Grow, S::Explode, S::Static, S::Stiff],
             ..Default::default()
         },
@@ -468,7 +466,6 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             range: 1,
             health: 10.0,
             is_super: false,
-            becomes: Some(U::Moth),
             skills: skills![
                 S::Dash,
                 S::Creep,
@@ -509,7 +506,6 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             range: 1,
             health: 10.0,
             is_super: true,
-            becomes: Some(U::BabyDragon),
             skills: skills![S::Grow, S::Fortify, S::Static, S::Stiff],
             ..Default::default()
         },
@@ -521,7 +517,6 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             range: 1,
             health: 15.0,
             is_super: true,
-            becomes: Some(U::FireDragon),
             skills: skills![S::Grow, S::Dash, S::Fly, S::Escape, S::Scout, S::Static],
             ..Default::default()
         },

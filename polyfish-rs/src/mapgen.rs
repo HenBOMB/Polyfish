@@ -42,6 +42,7 @@ pub struct MapGenSettings {
     pub map_type: MapType,
     pub tribes: Vec<TribeType>,
     pub seed: i64,
+    pub version: i32,
 }
 
 impl Default for MapGenSettings {
@@ -51,6 +52,7 @@ impl Default for MapGenSettings {
             map_type: MapType::Continents,
             tribes: vec![TribeType::Imperius, TribeType::Bardur],
             seed: 0,
+            version: 115,
         }
     }
 }
@@ -1249,10 +1251,12 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         }
     }
 
-    // Place Lighthouses on all 4 corners
-    let corners = [0, size - 1, size * (size - 1), size * size - 1];
-    for &idx in &corners {
-        map[idx as usize].above = Some("lighthouse".to_string());
+    // Place Lighthouses on all 4 corners if version >= 114
+    if settings.version >= 114 {
+        let corners = [0, size - 1, size * (size - 1), size * size - 1];
+        for &idx in &corners {
+            map[idx as usize].above = Some("lighthouse".to_string());
+        }
     }
 
     // Conversion to GameState
@@ -1260,6 +1264,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
     game_state.settings.size = size;
     game_state.settings.map_type = settings.map_type;
     game_state.settings.tile_count = tile_count;
+    game_state.settings.version = settings.version;
     // Most important rule. Disabled = God mode
     game_state.settings._fow = default_fow();
     game_state.settings._max_tribe_count = settings.tribes.len() as i32;
@@ -1519,6 +1524,7 @@ mod tests {
                     map_type,
                     tribes: vec![TribeType::Imperius, TribeType::Bardur],
                     seed: 42, // Fixed seed for reproducibility
+                    version: 115,
                 };
                 let state = generate(settings);
                 let side_size = size.get_size();
@@ -1576,6 +1582,7 @@ mod tests {
                         map_type,
                         tribes: vec![TribeType::Imperius, TribeType::Bardur],
                         seed,
+                        version: 115,
                     };
                     let state = generate(settings);
                     let mut capitals = Vec::new();
@@ -1615,6 +1622,7 @@ mod tests {
             map_type: MapType::Drylands,
             tribes: vec![TribeType::Imperius, TribeType::Imperius],
             seed: 123,
+            version: 115,
         };
         let state = generate(settings);
 

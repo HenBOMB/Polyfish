@@ -1,5 +1,6 @@
 //! City-related actions (population, territory)
 
+use crate::actions::discovery::discover_tiles;
 use crate::actions::{UndoCallback, chain_undos};
 use crate::coords::Coords;
 use crate::states::GameState;
@@ -39,22 +40,24 @@ pub fn add_population(state: &mut GameState, city_tile_idx: i32, amount: i32) ->
             city.population += amount;
             city.progress += amount;
 
-            // Check for level up
-            let next = city.level + 1;
-            if city.progress >= next {
+            // Check for level up (loop for consecutive level-ups)
+            // A large pop gain (e.g. connecting 3 cities at once) can cross multiple thresholds
+            let old_struct_level =
+                state.structures.get(&city_tile_idx).and_then(|s| s.as_ref()).map(|s| s.level);
+            let mut total_score = 0;
+            let mut levels_gained = 0;
+
+            while city.progress >= city.level + 1 {
+                let next = city.level + 1;
                 city.level += 1;
                 city.progress -= next;
                 city.production += 1; // Level up bonus
+                levels_gained += 1;
 
                 // Update structure level if it exists
-                let old_struct_level =
-                    if let Some(Some(struct_state)) = state.structures.get_mut(&city_tile_idx) {
-                        let old = struct_state.level;
-                        struct_state.level += 1;
-                        Some(old)
-                    } else {
-                        None
-                    };
+                if let Some(Some(struct_state)) = state.structures.get_mut(&city_tile_idx) {
+                    struct_state.level += 1;
+                }
 
                 // Score is ONLY awarded on level up!
                 // Formula: (level > 1 ? 50 - (level * 5) : 0) + amount * 5
@@ -64,11 +67,15 @@ pub fn add_population(state: &mut GameState, city_tile_idx: i32, amount: i32) ->
                     0
                 }) + amount * 5;
 
-                tribe.score += amount_score;
+                total_score += amount_score;
+            }
+
+            if levels_gained > 0 {
+                tribe.score += total_score;
 
                 undos.push(Box::new(move |s: &mut GameState| {
                     if let Some(t) = s.tribes.get_mut(&pov_id) {
-                        t.score -= amount_score;
+                        t.score -= total_score;
                     }
                     // Restore structure level
                     if let Some(old_lvl) = old_struct_level {
@@ -77,8 +84,6 @@ pub fn add_population(state: &mut GameState, city_tile_idx: i32, amount: i32) ->
                         }
                     }
                 }));
-
-                // TODO: Generate rewards (Workshop, etc.) - this usually happens via Moves
             }
             // No level up = NO score awarded (matching TS behavior)
         }
@@ -312,6 +317,20 @@ pub fn capture_city(state: &mut GameState, tile_idx: i32) -> Result<UndoCallback
 
             // Claim territory
             undos.push(claim_territory(state, &city._territory, tile_idx, true));
+            undos.push(discover_tiles(
+                state,
+                pov_id,
+                None,
+                Some(city._territory.clone()),
+            ));
+
+            // Refresh connections for BOTH tribes
+            undos.push(crate::actions::connection::update_capital_connections(
+                state, pov_id,
+            ));
+            undos.push(crate::actions::connection::update_capital_connections(
+                state, tile_owner,
+            ));
         }
     } else {
         // Case 2: Capture Neutral Village (New City)
@@ -347,6 +366,12 @@ pub fn capture_city(state: &mut GameState, tile_idx: i32) -> Result<UndoCallback
         }));
 
         undos.push(claim_territory(state, &territory, tile_idx, false));
+        undos.push(discover_tiles(state, pov_id, None, Some(territory)));
+
+        // Refresh connection for capturer
+        undos.push(crate::actions::connection::update_capital_connections(
+            state, pov_id,
+        ));
     }
 
     Ok(chain_undos(undos))

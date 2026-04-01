@@ -296,11 +296,11 @@ pub enum UnitType {
     Shaman = 36,
     Dagger = 37,
     Cloak = 38,
-    CloakBoat = 39, // Dinghy
+    Dinghy = 39, // Dinghy
     Pirate = 40,
     Bomber = 41,
     Scoutship = 42,
-    Transportship = 43, // Raft
+    Raft = 43, // Raft
     Rammership = 44,
     Juggernaut = 45,
     // MermaidWarrior,
@@ -559,21 +559,12 @@ pub enum StructureType {
     // HarvestSpores = 43, // ability to harvest spores by cymanti
     // NullBuilding = 44, // no idea
     // Cultivate = 45, // even less idea
-    // StarFishing = 56, // old ability?
+    // StarFishing = 46, // capture move
     Lighthouse = 47,
     Bridge = 48,
-    // Aquafarm = 49, // idk what this is
     Market = 50,
-    // Atoll = 51, // idk what this is
-    // Canal = 52, // idk what this is
-    // Fertilize = 53, // idk what this is
-    // LandFill = 54, // idk what this is
-    // AlgaeSpawn = 55, // idk what this is
-    // and that's all matching the original polytopia src code
     Embassy = 70,
-
-    // This is wrong and prolly uses some other monument with adaptive skin
-    ChurchOfConverts = 123, // Cymanti monument for Converter task
+    ChurchOfConverts = 123,
 }
 
 /// Resource types

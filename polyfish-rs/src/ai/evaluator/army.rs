@@ -55,13 +55,13 @@ impl UnitValues {
         values.insert(UnitType::Warrior, 0.38); // Basic unit
         values.insert(UnitType::Segment, 0.35); // Independent, Explode option
         values.insert(UnitType::Kiton, 0.35); // Cheap Poison defender
-        values.insert(UnitType::CloakBoat, 0.33); // Naval agent, Hide+Infiltrate
+        values.insert(UnitType::Dinghy, 0.33); // Naval agent, Hide+Infiltrate
         values.insert(UnitType::MindBender, 0.30); // Convert niche, no attack
 
         // === Weak / Transitional (C-tier: 0.05-0.29) ===
         values.insert(UnitType::DragonEgg, 0.25); // No attack, grows into BabyDragon
         values.insert(UnitType::Larva, 0.20); // Transition, grows into Moth
-        values.insert(UnitType::Transportship, 0.15); // No attack, just a boat
+        values.insert(UnitType::Raft, 0.15); // No attack, just a boat
         values.insert(UnitType::InsectEgg, 0.10); // Immobile, grows into Larva
 
         // === Disabled (Polaris — cost=-1 in settings) ===

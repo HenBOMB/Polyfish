@@ -698,7 +698,9 @@ fn is_roadpath_and_usable(state: &GameState, unit: &UnitState, idx: i32) -> bool
     let structure = get_structure_at(state, idx);
     let has_road = tile.has_road
         || crate::functions::get_city_at(state, idx).is_some()
-        || (structure.is_some() && structure.unwrap().structure_type == StructureType::Bridge);
+        || (structure.is_some() && structure.unwrap().structure_type == StructureType::Bridge)
+        // Also acts like a city
+        || (structure.is_some() && structure.unwrap().structure_type == StructureType::Village);
     if !has_road {
         return false;
     }

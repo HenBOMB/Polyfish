@@ -50,8 +50,14 @@ class MapRenderer {
     }
 
     getPos(x, y) {
+        const size = GAME_STATE.settings?.size || 11;
+        // Rotate 90 deg CCW to match official Polytopia (0,0 is Left corner, size,0 is Top corner)
+        // Original Top (0,0) -> Left
+        // Original Right (size-1, 0) -> Top
+        // Original Bottom (size-1, size-1) -> Right
+        // Original Left (0, size-1) -> Bottom
         const posX = (x - y) * (tileSize / 2 - TILE_OFFSET);
-        const posY = (x + y) * (tileSize / 4 + TILE_OFFSET);
+        const posY = (2 * (size - 1) - x - y) * (tileSize / 4 + TILE_OFFSET);
         return { x: posX, y: posY };
     }
 
@@ -116,10 +122,10 @@ class MapRenderer {
             // W: (x-1, y) -> NW Edge
 
             const neighbors = [
-                { nx: x, ny: y - 1, edge: 'NE' },
-                { nx: x + 1, ny: y, edge: 'SE' },
-                { nx: x, ny: y + 1, edge: 'SW' },
-                { nx: x - 1, ny: y, edge: 'NW' }
+                { nx: x, ny: y - 1, edge: 'SE' },
+                { nx: x + 1, ny: y, edge: 'NE' },
+                { nx: x, ny: y + 1, edge: 'NW' },
+                { nx: x - 1, ny: y, edge: 'SW' }
             ];
 
             const color = TRIBE_COLORS[state.tribes[owner]?.type] || '#ffffff';
@@ -215,10 +221,14 @@ class MapRenderer {
         const struct = state.structures[idx];
         const res = state.resources[idx];
 
-        if (struct && struct.type === 71) { // Road
+        if (tile.hasRoad) { // Road
             this.updateLayer(idx, 'road', 'misc/Road', pos, 1500, ['structure', 'road']);
-        } else {
+        }
+        else {
             this.removeLayer(idx, 'road');
+        }
+        if (tile.hasRoute || tile.hadRoute) { // Route
+            this.updateLayer(idx, 'route', 'misc/rock', pos, 1500, ['structure', 'road']);
         }
 
         const povTribe = state.tribes[currentTribeId];
@@ -257,10 +267,8 @@ class MapRenderer {
         const city = citiesByIndex[idx];
         if (city) {
             const tribeName = TRIBE_ID_2_NAME[city.tribe.type];
-            const climateIndex = CLIMATE_IDS.indexOf(tribeName);
             const tribeColor = TRIBE_COLORS[city.tribe.type] || 'rgba(0,0,0,0.5)';
 
-            const cityEl = this.updateLayer(idx, 'city', `buildings/${tribeName}/Default/Houses/House_${climateIndex === 17 ? 16 : climateIndex}_5`, pos, 4000, ['city']);
             const statsEl = this.updateLayer(idx, 'city-stats', '', pos, 4100, ['city-stats-layer']);
             statsEl.style.backgroundImage = 'none'; // No background for stats container
 
@@ -475,11 +483,13 @@ class MapRenderer {
             const resource = GAME_STATE.resources[idx];
             const isCity = tile.owner > 0 && struct && StructureTypes[struct.type] === 'Village';
             const tribe = TRIBE_ID_2_NAME[GAME_STATE.tribes[tile.owner]?.type];
+            const road = tile.hasRoad;
 
             let html = `<strong>Tile ${idx} (${tile.coords.x}, ${tile.coords.y})</strong><br>`;
-            html += `⛰️ ${CLIMATE_IDS[tile.climate]} ${TerrainType[tile.type] || tile.type}<br>`;
+            html += `⛰️ ${TRIBE_ID_2_NAME[tile.climate]} ${TerrainType[tile.type] || tile.type}<br>`;
             if (unit) html += `🪖 ${TRIBE_ID_2_NAME[unit.tribe.type]} ${ClassNameToId[unit.type || unit.unitType]} (${Math.floor(unit.health)}/${Math.floor(unit.maxHealth)})<br>`;
             if (struct) html += `🗼 ${tile.capitalOf > 0 ? `${tribe} Capital` : isCity ? 'City' : StructureTypes[struct.type] || struct.type}<br>`;
+            if (road) html += `🛣️ Road<br>`;
             const povTribe = GAME_STATE.tribes[this.currentPovId];
             if (resource && isResourceVisible(resource.type, povTribe)) {
                 html += `${ResourceEmojis[resource.type] || '🥝'} ${ResourceTypes[resource.type] || resource.type}<br>`;
