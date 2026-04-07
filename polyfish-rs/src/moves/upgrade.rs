@@ -2,7 +2,6 @@
 //!
 //! Upgrade a unit (e.g. Boat -> Ship).
 
-use crate::functions::get_tech_unit_type;
 use crate::moves::{Move, MoveResult};
 use crate::settings::get_unit_setting;
 use crate::states::GameState;
@@ -93,8 +92,9 @@ pub fn generate_upgrade_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>)
     let mut upgradables = Vec::new();
     for tech_state in &tribe.tech_vanilla {
         // We use all researched techs for upgrades, even if not "discovered" (simulation)
-
-        if let Some(u_type) = get_tech_unit_type(tech_state.tech_type) {
+        for u_type in
+            crate::settings::technology::get_unlocked_units(tech_state.tech_type, tribe.tribe_type)
+        {
             let settings = get_unit_setting(u_type);
             if settings.cost >= 1 && tribe.stars >= settings.cost && settings.upgrade_from.is_some()
             {

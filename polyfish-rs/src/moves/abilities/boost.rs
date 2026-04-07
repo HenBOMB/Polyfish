@@ -20,9 +20,25 @@ impl Move for BoostMove {
     }
 
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
-        let undo = crate::actions::units::boost_unit(state, self.src_index);
+        let (unit_owner, unit_idx_in_tribe) = {
+            let mut found = None;
+            for (tribe_id, tribe) in &state.tribes {
+                if let Some(pos) = tribe.units.iter().position(|u| u.coords.idx == self.src_index) {
+                    found = Some((*tribe_id, pos));
+                    break;
+                }
+            }
+            match found {
+                Some(f) => f,
+                None => return Err("Unit not found".to_string()),
+            }
+        };
+
+        let undo_boost = crate::actions::units::boost_unit(state, self.src_index);
+        let undo_exhaust = crate::actions::units::end_unit_turn(state, unit_owner, unit_idx_in_tribe);
+
         Ok(MoveResult {
-            undo,
+            undo: crate::actions::chain_undos(vec![undo_boost, undo_exhaust]),
             rewards: None,
         })
     }

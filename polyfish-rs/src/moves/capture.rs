@@ -159,6 +159,12 @@ impl Move for CaptureMove {
         if let Some(r) = self.reward {
             res["_reward"] = serde_json::to_value(r).unwrap();
         }
+        if let Some(t) = self.tech_hint {
+            res["_techHint"] = serde_json::to_value(t).unwrap();
+        }
+        if let Some(ref tiles) = self.revealed_tiles {
+            res["_revealedTiles"] = serde_json::to_value(tiles).unwrap();
+        }
         res
     }
 

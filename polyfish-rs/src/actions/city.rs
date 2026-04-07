@@ -1,5 +1,6 @@
 //! City-related actions (population, territory)
 
+use crate::PlayerId;
 use crate::actions::discovery::discover_tiles;
 use crate::actions::{UndoCallback, chain_undos};
 use crate::coords::Coords;
@@ -40,39 +41,44 @@ pub fn add_population(state: &mut GameState, city_tile_idx: i32, amount: i32) ->
             city.population += amount;
             city.progress += amount;
 
-            // Check for level up (loop for consecutive level-ups)
-            // A large pop gain (e.g. connecting 3 cities at once) can cross multiple thresholds
-            let old_struct_level =
-                state.structures.get(&city_tile_idx).and_then(|s| s.as_ref()).map(|s| s.level);
-            let mut total_score = 0;
-            let mut levels_gained = 0;
+            // println!("City at {} progress {}", city_tile_idx, city.progress);
+
+            // Capture old structure level for undo
+            let old_struct_level = state
+                .structures
+                .get(&city_tile_idx)
+                .and_then(|s| s.as_ref())
+                .map(|s| s.level);
+
+            // Incremental score: 5 per population point
+            let pop_score_gain = amount * crate::score::CITY_POPULATION_SCORE;
+            tribe.score += pop_score_gain;
+
+            let mut total_score = pop_score_gain;
 
             while city.progress >= city.level + 1 {
                 let next = city.level + 1;
                 city.level += 1;
                 city.progress -= next;
                 city.production += 1; // Level up bonus
-                levels_gained += 1;
 
                 // Update structure level if it exists
                 if let Some(Some(struct_state)) = state.structures.get_mut(&city_tile_idx) {
                     struct_state.level += 1;
                 }
 
-                // Score is ONLY awarded on level up!
-                // Formula: (level > 1 ? 50 - (level * 5) : 0) + amount * 5
-                let amount_score = (if city.level > 1 {
-                    50 - (city.level * 5)
-                } else {
-                    0
-                }) + amount * 5;
+                // Level up is worth 50 points
+                let lvl_score_gain = crate::score::CITY_LEVEL_UP_SCORE;
+                tribe.score += lvl_score_gain;
+                total_score += lvl_score_gain;
 
-                total_score += amount_score;
+                // println!(
+                //     "City at {} leveled up to level {}",
+                //     city_tile_idx, city.level
+                // );
             }
 
-            if levels_gained > 0 {
-                tribe.score += total_score;
-
+            if total_score != 0 {
                 undos.push(Box::new(move |s: &mut GameState| {
                     if let Some(t) = s.tribes.get_mut(&pov_id) {
                         t.score -= total_score;
@@ -153,10 +159,21 @@ pub fn claim_territory(
         }
     }
 
-    // Update score
-    let score_gain = 20 * tiles_to_claim.len() as i32;
+    // Update scores
+    let score_gain = crate::score::CITY_TERRITORY_SCORE * tiles_to_claim.len() as i32;
     if let Some(tribe) = state.tribes.get_mut(&pov_id) {
         tribe.score += score_gain;
+    }
+
+    // Deduction from old owners
+    let mut old_owner_deductions: Vec<(PlayerId, i32)> = Vec::new();
+    for (_idx, owner, _coords) in &old_owners {
+        if *owner != 0 && *owner != pov_id {
+            if let Some(old_tribe) = state.tribes.get_mut(owner) {
+                old_tribe.score -= crate::score::CITY_TERRITORY_SCORE;
+                old_owner_deductions.push((*owner, crate::score::CITY_TERRITORY_SCORE));
+            }
+        }
     }
 
     let num_newly_added = added_indices.len();
@@ -164,6 +181,13 @@ pub fn claim_territory(
         // Undo score
         if let Some(tribe) = s.tribes.get_mut(&pov_id) {
             tribe.score -= score_gain;
+        }
+
+        // Restore old owner scores
+        for (owner, amount) in old_owner_deductions {
+            if let Some(tribe) = s.tribes.get_mut(&owner) {
+                tribe.score += amount;
+            }
         }
 
         // Restore city's own territory list
@@ -245,9 +269,18 @@ pub fn capture_city(state: &mut GameState, tile_idx: i32) -> Result<UndoCallback
                 }
             }
 
+            // Calculate score transfer value
+            let city_score = crate::score::get_city_score(&city);
+
             // Add to new owner
             if let Some(new_tribe) = state.tribes.get_mut(&pov_id) {
+                new_tribe.score += city_score;
                 new_tribe.cities.push(city.clone());
+            }
+
+            // Subtract from old owner (Separate borrow to avoid conflict)
+            if let Some(old_tribe) = state.tribes.get_mut(&tile_owner) {
+                old_tribe.score -= city_score;
             }
 
             // Tribe elimination check
@@ -258,15 +291,18 @@ pub fn capture_city(state: &mut GameState, tile_idx: i32) -> Result<UndoCallback
                 .unwrap_or(false);
 
             if is_eliminated {
-                if let Some(old_tribe) = state.tribes.get_mut(&tile_owner) {
+                // Collect unit count first to avoid borrow issues during cleanup
+                let unit_count = if let Some(old_tribe) = state.tribes.get_mut(&tile_owner) {
                     old_tribe.killed_turn = state.settings.turn;
                     old_tribe.killer_id = pov_id;
+                    old_tribe.units.len()
+                } else {
+                    0
+                };
 
-                    // Remove all units
-                    let unit_count = old_tribe.units.len();
-                    for i in (0..unit_count).rev() {
-                        undos.push(remove_unit(state, tile_owner, i, Some(pov_id), None));
-                    }
+                // Remove all units
+                for i in (0..unit_count).rev() {
+                    undos.push(remove_unit(state, tile_owner, i, Some(pov_id), None));
                 }
             }
 
@@ -303,10 +339,20 @@ pub fn capture_city(state: &mut GameState, tile_idx: i32) -> Result<UndoCallback
                     }
                 }
                 // Add back to old
+                let mut restored = c_clone.clone();
+                restored.owner = tile_owner;
+                restored.name = city_name_old;
+
+                let city_score = crate::score::get_city_score(&restored);
+
+                // Undo score transfer - New Owner (sequential borrow)
+                if let Some(nt) = s.tribes.get_mut(&pov_id) {
+                    nt.score -= city_score;
+                }
+
+                // Undo score transfer and restoration - Old Owner (sequential borrow)
                 if let Some(ot) = s.tribes.get_mut(&tile_owner) {
-                    let mut restored = c_clone.clone();
-                    restored.owner = tile_owner;
-                    restored.name = city_name_old;
+                    ot.score += city_score;
                     if let Some(pos) = old_city_idx {
                         ot.cities.insert(pos, restored);
                     } else {
@@ -356,11 +402,14 @@ pub fn capture_city(state: &mut GameState, tile_idx: i32) -> Result<UndoCallback
         };
 
         if let Some(tribe) = state.tribes.get_mut(&pov_id) {
+            // New City Base (100)
+            tribe.score += crate::score::CITY_BASE_SCORE;
             tribe.cities.push(created_city.clone());
         }
 
         undos.push(Box::new(move |s| {
             if let Some(tribe) = s.tribes.get_mut(&pov_id) {
+                tribe.score -= crate::score::CITY_BASE_SCORE;
                 tribe.cities.pop();
             }
         }));

@@ -121,7 +121,15 @@ pub fn generate_economic_ability_moves(state: &GameState, moves: &mut Vec<Box<dy
                 if let Some(st_type) = functions::get_structure_type_at(state, tile_idx) {
                     if st_type != StructureType::Village && st_type != StructureType::Ruin {
                         if is_cymanti && has_decompose {
-                            moves.push(Box::new(DecomposeMove::new(tile_idx)));
+                            // Prevent infinite decomposition queue
+                            let already_queued = state._end_of_turn_queue.iter().any(|q| match q {
+                                crate::states::EndOfTurnAction::Decompose {
+                                    tile_index, ..
+                                } => *tile_index == tile_idx,
+                            });
+                            if !already_queued {
+                                moves.push(Box::new(DecomposeMove::new(tile_idx)));
+                            }
                         } else if has_destroy {
                             moves.push(Box::new(DestroyMove::new(tile_idx)));
                         }

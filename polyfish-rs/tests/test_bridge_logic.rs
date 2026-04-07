@@ -28,8 +28,8 @@ mod tests {
         tribe.stars = 100;
         tribe.tribe_type = TribeType::Nature;
         // Research Roads and Riding (needed for bridge unlock check)
-        tribe.tech_vanilla.push(TechnologyState { tech_type: TechnologyType::Riding, discovered: true });
-        tribe.tech_vanilla.push(TechnologyState { tech_type: TechnologyType::Roads, discovered: true });
+        tribe.tech_vanilla.push(TechnologyState { tech_type: TechnologyType::Riding, discovered: true, discovered_turn: 0 });
+        tribe.tech_vanilla.push(TechnologyState { tech_type: TechnologyType::Roads, discovered: true, discovered_turn: 0 });
         
         state.tribes.insert(1, tribe);
 

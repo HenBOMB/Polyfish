@@ -11,11 +11,12 @@ pub struct UnitSetting {
     pub movement: i32,
     pub defense: f32,
     pub range: i32,
-    pub health: f32, // todo move to Option to enfoce passenger inheritance
+    pub health: f32, // todo move to Option to enfoce passenger inheritance?
     pub upgrade_from: Option<UnitType>,
     pub is_unique: bool,
     pub skills: HashSet<SkillType>,
     pub is_super: bool,
+    pub tribe_type: TribeType,
 }
 
 impl Default for UnitSetting {
@@ -31,6 +32,7 @@ impl Default for UnitSetting {
             is_unique: false,
             skills: HashSet::new(),
             is_super: false,
+            tribe_type: TribeType::None,
         }
     }
 }
@@ -279,6 +281,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             health: 40.0,
             is_super: true,
             skills: skills![S::Escape, S::Static, S::AutoFlood, S::Amphibious],
+            tribe_type: TribeType::Aquarion,
             ..Default::default()
         },
         U::Amphibian => UnitSetting {
@@ -289,6 +292,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             range: 1,
             health: 10.0,
             skills: skills![S::Dash, S::Escape, S::Fortify, S::Amphibious],
+            tribe_type: TribeType::Aquarion,
             ..Default::default()
         },
         U::Tridention => UnitSetting {
@@ -299,31 +303,83 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             range: 2,
             health: 10.0,
             skills: skills![S::Dash, S::Persist, S::Amphibious],
+            tribe_type: TribeType::Aquarion,
             ..Default::default()
         },
 
         // Polaris
-        // Polaris (Disabled)
-        U::Gaami | U::Mooni | U::BattleSled | U::IceArcher | U::IceFortress => {
-            // TODO: Polaris disabled
-            UnitSetting {
-                cost: -1,
-                attack: -1.0,
-                health: 1.0,
-                ..Default::default()
-            }
-        }
+        U::Gaami => UnitSetting {
+            cost: 10,
+            is_super: true,
+            attack: 4.0,
+            movement: 1,
+            defense: 3.0,
+            range: 1,
+            health: 30.0,
+            skills: skills![S::AutoFreeze, S::FreezeArea, S::Static],
+            tribe_type: TribeType::Polaris,
+            ..Default::default()
+        },
+        U::IceArcher => UnitSetting {
+            cost: 3,
+            is_super: false,
+            attack: 1.0,
+            movement: 1,
+            defense: 1.0,
+            range: 2,
+            health: 10.0,
+            skills: skills![S::Dash, S::Freeze, S::Fortify, S::Stiff],
+            tribe_type: TribeType::Polaris,
+            ..Default::default()
+        },
+        U::IceFortress => UnitSetting {
+            cost: 15,
+            is_super: false,
+            attack: 4.0,
+            movement: 1,
+            defense: 3.0,
+            range: 2,
+            health: 20.0,
+            skills: skills![S::Skate, S::Scout, S::Escape, S::Static],
+            tribe_type: TribeType::Polaris,
+            ..Default::default()
+        },
+        U::Mooni => UnitSetting {
+            cost: 5,
+            is_super: false,
+            attack: 0.0,
+            movement: 1,
+            defense: 1.0,
+            range: 1,
+            health: 10.0,
+            skills: skills![S::Skate, S::AutoFreeze, S::Stiff, S::Static],
+            tribe_type: TribeType::Polaris,
+            ..Default::default()
+        },
+        U::BattleSled => UnitSetting {
+            cost: 5,
+            is_super: false,
+            attack: 3.0,
+            movement: 2,
+            defense: 2.0,
+            range: 1,
+            health: 15.0,
+            skills: skills![S::Escape, S::Dash, S::Skate],
+            tribe_type: TribeType::Polaris,
+            ..Default::default()
+        },
 
         // Cymanti
         U::Mantis => UnitSetting {
-            cost: 15,
-            is_super: true,
+            cost: 5,
+            is_super: false,
             attack: 3.0,
             movement: 1,
             defense: 3.0,
             range: 1,
-            health: 20.0,
+            health: 15.0,
             skills: skills![S::Dash, S::Creep],
+            tribe_type: TribeType::Cymanti,
             ..Default::default()
         },
         U::Centipede => UnitSetting {
@@ -335,6 +391,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             range: 1,
             health: 20.0,
             skills: skills![S::Dash, S::Creep, S::Eat, S::Static],
+            tribe_type: TribeType::Cymanti,
             ..Default::default()
         },
         U::Segment => UnitSetting {
@@ -352,6 +409,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
                 S::Stiff,
                 S::Static
             ],
+            tribe_type: TribeType::Cymanti,
             ..Default::default()
         },
         U::Doomux => UnitSetting {
@@ -362,6 +420,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             range: 1,
             health: 20.0,
             skills: skills![S::Dash, S::Creep, S::Explode, S::Static],
+            tribe_type: TribeType::Cymanti,
             ..Default::default()
         },
         U::Shaman => UnitSetting {
@@ -372,6 +431,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             range: 1,
             health: 10.0,
             skills: skills![S::Convert, S::Swarm, S::Static],
+            tribe_type: TribeType::Cymanti,
             ..Default::default()
         },
         U::Kiton => UnitSetting {
@@ -382,6 +442,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             range: 1,
             health: 15.0,
             skills: skills![S::Poison, S::Creep],
+            tribe_type: TribeType::Cymanti,
             ..Default::default()
         },
         U::Hexapod => UnitSetting {
@@ -392,6 +453,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             range: 1,
             health: 5.0,
             skills: skills![S::Dash, S::Escape, S::Creep, S::Sneak],
+            tribe_type: TribeType::Cymanti,
             ..Default::default()
         },
         U::Raychi => UnitSetting {
@@ -403,6 +465,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             health: 10.0,
             is_unique: true,
             skills: skills![S::Dash, S::Water],
+            tribe_type: TribeType::Cymanti,
             ..Default::default()
         },
         U::Boomchi => UnitSetting {
@@ -414,16 +477,18 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             health: 10.0,
             is_unique: true,
             skills: skills![S::Dash, S::Explode, S::Stiff, S::Amphibious],
+            tribe_type: TribeType::Cymanti,
             ..Default::default()
         },
         U::Phychi => UnitSetting {
             cost: 3,
             attack: 0.7,
             movement: 2,
-            defense: 2.0,
+            defense: 1.0,
             range: 2,
             health: 5.0,
             skills: skills![S::Dash, S::Fly, S::Poison, S::Surprise, S::DoubleAttack],
+            tribe_type: TribeType::Cymanti,
             ..Default::default()
         },
         U::Exida => UnitSetting {
@@ -434,6 +499,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             range: 3,
             health: 10.0,
             skills: skills![S::Poison, S::Splash, S::Creep],
+            tribe_type: TribeType::Cymanti,
             ..Default::default()
         },
         U::LivingIsland => UnitSetting {
@@ -445,6 +511,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             health: 20.0,
             is_super: false,
             skills: skills![S::Water, S::Algae, S::Stomp, S::Poison, S::Static],
+            tribe_type: TribeType::Cymanti,
             ..Default::default()
         },
         U::InsectEgg => UnitSetting {
@@ -456,6 +523,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             health: 10.0,
             is_super: false,
             skills: skills![S::Grow, S::Explode, S::Static, S::Stiff],
+            tribe_type: TribeType::Cymanti,
             ..Default::default()
         },
         U::Larva => UnitSetting {
@@ -474,9 +542,9 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
                 S::Static,
                 S::Grow
             ],
+            tribe_type: TribeType::Cymanti,
             ..Default::default()
         },
-
         U::Moth => UnitSetting {
             cost: 5,
             attack: 2.0,
@@ -494,6 +562,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
                 S::Static,
                 S::Stiff
             ],
+            tribe_type: TribeType::Cymanti,
             ..Default::default()
         },
 
@@ -507,6 +576,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             health: 10.0,
             is_super: true,
             skills: skills![S::Grow, S::Fortify, S::Static, S::Stiff],
+            tribe_type: TribeType::Elyrion,
             ..Default::default()
         },
         U::BabyDragon => UnitSetting {
@@ -518,6 +588,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             health: 15.0,
             is_super: true,
             skills: skills![S::Grow, S::Dash, S::Fly, S::Escape, S::Scout, S::Static],
+            tribe_type: TribeType::Elyrion,
             ..Default::default()
         },
         U::FireDragon => UnitSetting {
@@ -529,6 +600,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             health: 20.0,
             is_super: true,
             skills: skills![S::Dash, S::Fly, S::Splash, S::Scout, S::Static],
+            tribe_type: TribeType::Elyrion,
             ..Default::default()
         },
         U::Polytaur => UnitSetting {
@@ -539,6 +611,7 @@ pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
             range: 1,
             health: 15.0,
             skills: skills![S::Dash, S::Fortify, S::Independent, S::Static],
+            tribe_type: TribeType::Elyrion,
             ..Default::default()
         },
     }
@@ -552,10 +625,10 @@ pub fn has_skill(unit_type: UnitType, skill: SkillType) -> bool {
 /// Get super unit type for a tribe
 pub fn get_super_unit(tribe_type: TribeType) -> UnitType {
     match tribe_type {
-        TribeType::Polaris => UnitType::Giant, // TODO: Polaris disabled
+        TribeType::Polaris => UnitType::Gaami,
         TribeType::Aquarion => UnitType::Crab,
         TribeType::Elyrion => UnitType::DragonEgg,
-        TribeType::Cymanti => UnitType::Giant, // TODO: Centipede disabled
+        TribeType::Cymanti => UnitType::Centipede,
         _ => UnitType::Giant,
     }
 }

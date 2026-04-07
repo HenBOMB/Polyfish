@@ -102,6 +102,117 @@ pub fn compute_move_priors(
     priors
 }
 
+/// Compute log-probabilities for legal moves from decomposed policy heads
+///
+/// Log-prob = log(P(action_type)) + log(P(source)) + log(P(target)) + log(P(option))
+/// These are used as "logits" for Gumbel-Top-k sampling in Gumbel AlphaZero.
+pub fn compute_move_log_probs(
+    policy: &PolicyOutput,
+    legal_moves: &[Box<dyn Move>],
+    map_size: usize,
+) -> Vec<f32> {
+    let num_moves = legal_moves.len();
+
+    // Convert tensors to log-probabilities (LogSoftmax)
+    let action_logs = log_softmax_1d(&policy.action_type).unwrap_or_else(|_| vec![-2.4; 11]);
+    let spatial_size = (features::MAP_SIZE * features::MAP_SIZE) as f32;
+    let log_spatial_unif = -(spatial_size.ln());
+
+    let source_logs = log_softmax_1d(&policy.source_spatial)
+        .unwrap_or_else(|_| vec![log_spatial_unif; spatial_size as usize]);
+    let target_logs = log_softmax_1d(&policy.target_spatial)
+        .unwrap_or_else(|_| vec![log_spatial_unif; spatial_size as usize]);
+
+    let option_logs = log_softmax_1d(&policy.move_option).unwrap_or_else(|_| vec![-5.25; 192]);
+
+    let mut move_logs = Vec::with_capacity(num_moves);
+
+    for mv in legal_moves {
+        let move_type = mv.move_type();
+        let mut log_prob = 0.0;
+
+        // 1. Action type log-prob
+        let action_idx = DecomposedMapper::move_type_to_idx(move_type);
+        if action_idx < action_logs.len() {
+            log_prob += action_logs[action_idx];
+        }
+
+        // 2. Source tile log-prob
+        if let Ok(source_idx) = mv.source_idx() {
+            let spatial_idx = coord_to_flat_index(source_idx, map_size);
+            if spatial_idx < source_logs.len() {
+                log_prob += source_logs[spatial_idx];
+            }
+        }
+
+        // 3. Target tile log-prob
+        if let Ok(target_idx) = mv.target_idx() {
+            let spatial_idx = coord_to_flat_index(target_idx, map_size);
+            if spatial_idx < target_logs.len() {
+                log_prob += target_logs[spatial_idx];
+            }
+        }
+
+        // 4. Move option log-prob
+        let option_idx = match move_type {
+            MoveType::Build => mv
+                .structure_type()
+                .ok()
+                .and_then(|s| DecomposedMapper::map_structure(s)),
+            MoveType::Summon => mv
+                .unit_type()
+                .ok()
+                .and_then(|u| DecomposedMapper::map_unit(u)),
+            MoveType::Research => mv
+                .tech_type()
+                .ok()
+                .and_then(|t| DecomposedMapper::map_tech(t)),
+            MoveType::Ability => mv
+                .ability_type()
+                .ok()
+                .and_then(|a| DecomposedMapper::map_ability(a)),
+            MoveType::Reward => Some(191),
+            _ => None,
+        };
+
+        if let Some(idx) = option_idx {
+            if idx < option_logs.len() {
+                log_prob += option_logs[idx];
+            } else {
+                log_prob += -23.0; // Very small probability
+            }
+        }
+
+        move_logs.push(log_prob);
+    }
+
+    move_logs
+}
+
+/// Log-Softmax over 1D tensor
+fn log_softmax_1d(tensor: &Tensor) -> Result<Vec<f32>, candle_core::Error> {
+    let logits = tensor.flatten_all()?.to_vec1::<f32>()?;
+    if logits.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Find max for numerical stability
+    let max_logit = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+
+    // Compute log(sum(exp(xi - max)))
+    let log_sum_exp = logits
+        .iter()
+        .map(|&l| (l - max_logit).exp())
+        .sum::<f32>()
+        .ln();
+
+    // xi - max - log_sum_exp
+    Ok(logits
+        .into_iter()
+        .map(|l| l - max_logit - log_sum_exp)
+        .collect())
+}
+
 use crate::ai::features;
 
 /// Convert 2D coords to flat index

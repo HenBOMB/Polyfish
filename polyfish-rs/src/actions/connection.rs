@@ -107,21 +107,33 @@ pub fn update_capital_connections(state: &mut GameState, tribe_id: i32) -> UndoC
         }
 
         // Cymanti Mycelium long-range connection (4 radius)
-        if tribe_type == TribeType::Cymanti && current_has_mycelium {
-            let radius_indices = crate::functions::get_adjacent_indices(state, current_idx, 4);
-            for target_idx in radius_indices {
-                if visited.contains(&target_idx) {
-                    continue;
-                }
+        if tribe_type == TribeType::Cymanti {
+            let is_city = city_indices.contains(&current_idx);
+            let is_mycelium = has_mycelium(state, current_idx);
 
-                // Can connect to City or Mycelium
-                if city_indices.contains(&target_idx) || has_mycelium(state, target_idx) {
-                    // Path check: through field, forest, or algae
-                    if has_cymanti_path(state, state.settings.size, current_idx, target_idx) {
-                        visited.insert(target_idx);
-                        queue.push_back(target_idx);
-                        if city_indices.contains(&target_idx) {
-                            connected_cities.insert(target_idx);
+            if is_city || is_mycelium {
+                let radius_indices = crate::functions::get_adjacent_indices(state, current_idx, 4);
+                for target_idx in radius_indices {
+                    if visited.contains(&target_idx) {
+                        continue;
+                    }
+
+                    let target_is_city = city_indices.contains(&target_idx);
+                    let target_is_mycelium = has_mycelium(state, target_idx);
+
+                    // Rule: Mycelium-to-City/Mycelium or City-to-Mycelium
+                    // But NOT City-to-City directly at range 4
+                    let can_connect = (is_mycelium && (target_is_city || target_is_mycelium))
+                        || (is_city && target_is_mycelium);
+
+                    if can_connect {
+                        // Path check: through field, forest, or algae
+                        if has_cymanti_path(state, state.settings.size, current_idx, target_idx) {
+                            visited.insert(target_idx);
+                            queue.push_back(target_idx);
+                            if target_is_city {
+                                connected_cities.insert(target_idx);
+                            }
                         }
                     }
                 }

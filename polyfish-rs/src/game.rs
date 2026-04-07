@@ -110,7 +110,7 @@ impl Game {
             }
         }
 
-        // 4. Update scores
+        // 4. Update scores (first time)
         sync_scores(&mut self.state);
     }
 
@@ -201,9 +201,6 @@ impl Game {
                 discover_undo = try_discover_other_tribes(&mut self.state);
             }
 
-            // Sync scores after move
-            sync_scores(&mut self.state);
-
             // Track the move type in recent moves
             self.state
                 .settings
@@ -249,7 +246,6 @@ impl Game {
 
             // End our turn
             undos.push(self.end_turn());
-            sync_scores(&mut self.state);
             self.state.settings._recent_moves.clear();
 
             // Keep ending turns until we're back at original player
@@ -290,9 +286,6 @@ impl Game {
 
             // Try discovering new tribes after the move (won't actually reveal in simulation)
             let discover_undo = try_discover_other_tribes(&mut self.state);
-
-            // Sync scores after move
-            sync_scores(&mut self.state);
 
             // Track the move type in recent moves
             self.state

@@ -4,7 +4,6 @@
 
 use crate::actions::units::summon_unit;
 use crate::functions::get_city_unit_count;
-use crate::functions::get_tech_unit_type;
 use crate::functions::{self, is_tile_occupied};
 use crate::moves::{Move, MoveResult};
 use crate::settings::get_unit_setting;
@@ -104,7 +103,9 @@ pub fn generate_summon_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) 
 
     for tech_state in &tribe.tech_vanilla {
         // We use all researched techs for summoning, even if not "discovered" (simulation)
-        if let Some(u_type) = get_tech_unit_type(tech_state.tech_type) {
+        for u_type in
+            crate::settings::technology::get_unlocked_units(tech_state.tech_type, tribe.tribe_type)
+        {
             // Avoid duplicates (Warrior)
             if u_type == UnitType::Warrior {
                 continue;

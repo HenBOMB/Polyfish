@@ -349,7 +349,7 @@ pub fn get_unit_max_health(unit: &UnitState) -> f32 {
 }
 
 /// Get unit attack strength (accounting for Boost)
-pub fn get_unit_attack(unit: &UnitState) -> f32 {
+pub fn get_unit_attack(state: &GameState, unit: &UnitState) -> f32 {
     let mut atk = crate::settings::units::get_unit_setting(unit.unit_type).attack;
 
     // If the unit type itself has no attack (like Transportship), inherit from passenger
@@ -359,7 +359,7 @@ pub fn get_unit_attack(unit: &UnitState) -> f32 {
         }
     }
 
-    if has_effect(unit, UnitEffect::Boosted) {
+    if has_effect(unit, UnitEffect::Boosted) && state.settings.version < 115 {
         atk += 0.5;
     }
     atk
@@ -369,7 +369,7 @@ pub fn get_unit_attack(unit: &UnitState) -> f32 {
 pub fn get_unit_defense(unit: &UnitState) -> f32 {
     let mut def = crate::settings::units::get_unit_setting(unit.unit_type).defense;
     if has_effect(unit, UnitEffect::Poison) {
-        def *= 0.5; // 50% defense reduction
+        def *= 0.7; // 30% defense reduction
     }
     def
 }
@@ -393,9 +393,10 @@ pub fn get_unit_movement(state: &GameState, unit: &UnitState) -> i32 {
     }
 
     // Poison slows down enemy units: reduces movement by 1 (but cannot reduce to 0)
-    if has_effect(unit, UnitEffect::Poison) && movement > 0 {
-        movement = (movement - 1).max(1);
-    }
+    // not sure about this
+    // if has_effect(unit, UnitEffect::Poison) && movement > 0 {
+    //     movement = (movement - 1).max(1);
+    // }
     movement
 }
 
@@ -404,11 +405,6 @@ pub fn get_tech_tier(tech_type: TechnologyType) -> i32 {
     crate::settings::technology::get_technology_setting(tech_type)
         .tier
         .unwrap_or(1)
-}
-
-/// Get the unit type unlocked by a technology
-pub fn get_tech_unit_type(tech: crate::types::TechnologyType) -> Option<UnitType> {
-    crate::settings::technology::get_technology_setting(tech).unlocks_unit
 }
 
 /// Get defense bonus multiplier for a unit on its current tile
@@ -455,13 +451,11 @@ pub fn get_defense_bonus(state: &GameState, unit: &UnitState) -> f32 {
         _ => {
             // City defense: applies to friendly units (owner or ally) with Fortify skill
             if let Some(city) = get_city_at(state, unit.coords.idx) {
-                if has_skill(unit, SkillType::Fortify) {
-                    // Must be a friendly city and have walls
-                    if !is_enemy_city(state, city.idx, unit.owner) && city.has_walls() {
-                        4.0
-                    } else {
-                        1.5
-                    }
+                // Must be a friendly city and require skill
+                if has_skill(unit, SkillType::Fortify)
+                    && !is_enemy_city(state, city.idx, unit.owner)
+                {
+                    if city.has_walls() { 4.0 } else { 1.5 }
                 } else {
                     1.0
                 }
@@ -753,25 +747,35 @@ pub fn calculate_pushable_position(state: &GameState, unit: &UnitState) -> Optio
                 dy = -dy;
             }
 
-            println!("Chosen ranged using attacked and !moved after");
+            if state.settings._verbose {
+                println!("Chosen ranged using attacked and !moved after");
+            }
 
             (dx, dy)
         } else if unit.moved
             && unit.prev_coords.is_valid()
             && unit.prev_coords.idx != unit.coords.idx
         {
-            println!("Chosen ranged using moved");
+            if state.settings._verbose {
+                println!("Chosen ranged using moved");
+            }
             // Revert to move logic if move was last or not a ranged attack
             calculate_move_push_direction(state, unit)
         } else {
-            println!("Chosen ranged using center");
+            if state.settings._verbose {
+                println!("Chosen ranged using center");
+            }
             get_direction_toward_center(initial_x, initial_y, center_x, center_y)
         }
     } else if unit.prev_coords.is_valid() && unit.prev_coords.idx != unit.coords.idx {
-        println!("Chosen using moved");
+        if state.settings._verbose {
+            println!("Chosen using moved");
+        }
         calculate_move_push_direction(state, unit)
     } else {
-        println!("Chosen using center");
+        if state.settings._verbose {
+            println!("Chosen using center");
+        }
         // Rule 4: Not previously moved or attacked: push towards center
         get_direction_toward_center(initial_x, initial_y, center_x, center_y)
     };
@@ -843,8 +847,10 @@ fn calculate_move_push_direction(_state: &GameState, unit: &UnitState) -> (i32, 
         0
     };
 
-    println!("Using prev_coords: {}", unit.prev_coords.idx);
-    println!("Chosen using moved: dx = {}, dy = {}", dx, dy);
+    if _state.settings._verbose {
+        println!("Using prev_coords: {}", unit.prev_coords.idx);
+        println!("Chosen using moved: dx = {}, dy = {}", dx, dy);
+    }
 
     // Rule 2: Enemy units pushed in opposite direction
     if unit.owner != _state.settings.current_player_turn_id {
@@ -1048,13 +1054,13 @@ pub fn calculate_detailed_tribe_score(state: &GameState, player_id: PlayerId) ->
 
         // Population: 5 points per population
         score += city.population * 5;
+    }
 
-        // Except for Luxidoor, which already starts with a level 3 city
-        // lvl 1: 2 pop
-        // lvl 2: 3 pop
-        if state.tribes.get(&player_id).unwrap().tribe_type == TribeType::Luxidoor {
-            score -= 5 * 5;
-        }
+    // Except for Luxidoor, which already starts with a level 3 city (capital)
+    // lvl 1: 2 pop
+    // lvl 2: 3 pop
+    if state.tribes.get(&player_id).unwrap().tribe_type == TribeType::Luxidoor {
+        score -= 5 * 5;
     }
 
     // 5 per revealed tile (explored by our explorers)
@@ -1072,24 +1078,22 @@ pub fn calculate_detailed_tribe_score(state: &GameState, player_id: PlayerId) ->
             continue;
         }
 
-        let u_type = unit.passenger_type.unwrap_or(unit.unit_type);
-        let setting = crate::settings::units::get_unit_setting(u_type);
+        // Score = 5 * (Stars spent on unit + Stars spent on its passenger/original carrier)
+        let cost = crate::settings::units::get_unit_setting(unit.unit_type).cost
+            + unit
+                .passenger_type
+                .map(|p| crate::settings::units::get_unit_setting(p).cost)
+                .unwrap_or(0);
 
-        if setting.is_super {
-            score += 50;
-        } else {
-            score += setting.cost * 5;
-        }
+        score += cost * 5;
     }
 
     // 100 per tech tier
     for tech in &tribe.tech_vanilla {
-        if tech.discovered {
-            let tier = crate::settings::technology::get_technology_setting(tech.tech_type)
-                .tier
-                .unwrap_or(1);
-            score += 100 * tier;
-        }
+        let tier = crate::settings::technology::get_technology_setting(tech.tech_type)
+            .tier
+            .unwrap_or(1);
+        score += 100 * tier;
     }
 
     score
@@ -1129,7 +1133,7 @@ pub fn calculate_combat_preview(
     let attacker = get_unit_at(state, attacker_idx)?;
     let defender = get_enemy_at(state, defender_idx, attacker.owner)?;
 
-    let atk_atk = get_unit_attack(attacker);
+    let atk_atk = get_unit_attack(state, attacker);
     let atk_health = attacker.health;
     let atk_max = get_unit_max_health(attacker);
 
@@ -1301,7 +1305,7 @@ pub fn analyze_expansion(state: &GameState, player_id: PlayerId) -> ExpansionAna
                 if dist <= threat_range {
                     // Potential attacker
                     // Calculate simplified damage
-                    let atk = get_unit_attack(enemy);
+                    let atk = get_unit_attack(state, enemy);
                     let def = get_unit_defense(unit);
 
                     // Polytopia simplified non-retaliation calculation

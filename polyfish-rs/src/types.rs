@@ -550,7 +550,7 @@ pub enum StructureType {
     IceBank = 34,   // TODO new
     IceTemple = 35, // TODO new
     // PolarisClimate = 36, // no idea
-    Fungi = 37, // TODO no idea how its used, not really a structure?
+    Fungi = 37, // cymanti like temple
     Algae = 38,
     Mycelium = 39,
     // BurnSpores = 40, // no idea

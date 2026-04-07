@@ -1,3 +1,4 @@
+use crate::ai::brain::max_turns_ahead;
 use crate::ai::features::{self, GameFeatures, state_to_tensor};
 use crate::ai::network::{PolicyOutput, PolyZeroNet};
 use crate::game::Game;
@@ -552,10 +553,10 @@ impl<'a> ZeroMctsAgent<'a> {
                     eprintln!("Indices stack: {:?}", indices_stack);
                     eprintln!("=============================\n");
                 }
-                // Print all recent moves
-                for mv in game.state.settings._recent_moves.iter() {
-                    eprintln!("[BUG] Recent Move: {:?}", mv);
-                }
+                // // Print all recent moves
+                // for mv in game.state.settings._recent_moves.iter() {
+                //     eprintln!("[BUG] Recent Move: {:?}", mv);
+                // }
                 let undo =
                     result.expect("[BUG] Legal move failed to execute in MCTS tree traversal");
                 undos.push(undo);
@@ -758,35 +759,5 @@ fn move_or_end_turn(best_move: Option<Box<dyn Move>>) -> Option<Box<dyn Move>> {
         Some(Box::new(EndTurnMove))
     } else {
         best_move
-    }
-}
-
-/// Returns the maximum number of game turns the MCTS tree should look ahead
-/// from the current turn. This prevents the search from going absurdly deep
-/// and getting stuck in long rollouts during mid-game when branching is high.
-fn max_turns_ahead(current_turn: i32, max_turns: i32) -> i32 {
-    let is_last_turn = current_turn >= max_turns;
-    // +1 because we want to include the current turn in the lookahead
-    1 + match current_turn {
-        1 => 1,
-        2 => 2,
-        3 => 2,
-        4 => 2,
-        5 => 2,
-        6 => 2,
-        7 => 2,
-        8 => 2,
-        9 => 2,
-        10 => {
-            if is_last_turn {
-                0
-            } else {
-                2
-            }
-        }
-        11 => 1,
-        12 => 1,
-        13 => 1,
-        _ => 1, // 14+
     }
 }

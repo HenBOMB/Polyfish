@@ -394,9 +394,14 @@ pub fn capture_ruin(
                     _territory: territory.clone(),
                 };
                 if let Some(tribe) = state.tribes.get_mut(&pov_id) {
+                    // Level 3 City: 100 (base) + 2 * 50 (levels) = 200 points
+                    let city_score = 100 + (3 - 1) * 50;
+                    tribe.score += city_score;
                     tribe.cities.push(city.clone());
+
                     undos.push(Box::new(move |st: &mut GameState| {
                         if let Some(t) = st.tribes.get_mut(&pov_id) {
+                            t.score -= city_score;
                             t.cities.pop();
                         }
                     }));

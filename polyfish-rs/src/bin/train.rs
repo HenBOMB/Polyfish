@@ -43,8 +43,6 @@ fn main() -> Result<()> {
 
     // Value Targets
     let mut t_val_win = Vec::new();
-    let mut t_val_eco = Vec::new();
-    let mut t_val_mil = Vec::new();
 
     let entries = fs::read_dir(".")?;
     let mut found_data = false;
@@ -82,8 +80,6 @@ fn main() -> Result<()> {
                 append_tensor!("target_spatial", t_target);
                 append_tensor!("move_option", t_option);
                 append_tensor!("values", t_val_win);
-                append_tensor!("eco_targets", t_val_eco);
-                append_tensor!("mil_targets", t_val_mil);
 
                 found_data = true;
             }
@@ -106,16 +102,6 @@ fn main() -> Result<()> {
     let target_option = Tensor::cat(&t_option, 0)?;
 
     let target_win = Tensor::cat(&t_val_win, 0)?;
-    let target_eco = if !t_val_eco.is_empty() {
-        Some(Tensor::cat(&t_val_eco, 0)?)
-    } else {
-        None
-    };
-    let target_mil = if !t_val_mil.is_empty() {
-        Some(Tensor::cat(&t_val_mil, 0)?)
-    } else {
-        None
-    };
 
     let n_samples = spatial_maps.dim(0)?;
     println!("Loaded {} total samples", n_samples);
@@ -157,33 +143,25 @@ fn main() -> Result<()> {
             let b_t_option = target_option.narrow(0, i, batch_size)?;
 
             let b_t_win = target_win.narrow(0, i, batch_size)?;
-            let b_t_eco = target_eco
-                .as_ref()
-                .map(|t| t.narrow(0, i, batch_size))
-                .transpose()?;
-            let b_t_mil = target_mil
-                .as_ref()
-                .map(|t| t.narrow(0, i, batch_size))
-                .transpose()?;
 
             // Forward Pass
             let (policy_out, value_out) = model.forward_t(&b_spatial, &b_player, true)?;
 
-            // Soft Cross Entropy Loss Helper
-            // Loss = -sum(target * log_softmax(pred)) / batch_size
-            fn soft_ce(pred: &Tensor, target: &Tensor) -> Result<Tensor> {
-                let log_probs = candle_nn::ops::log_softmax(pred, 1)?;
-                let temp = (target * log_probs)?; // Element-wise
-                let sum = temp.sum_all()?;
-                let batch_size = target.dim(0)? as f64;
-                Ok((sum / -batch_size)?)
+            macro_rules! soft_ce {
+                ($pred:expr, $target:expr) => {{
+                    let log_probs = candle_nn::ops::log_softmax(&$pred, 1)?;
+                    let temp = (&$target * log_probs)?; // Element-wise
+                    let sum = temp.sum_all()?;
+                    let b_size = $target.dim(0)? as f64;
+                    (sum / -b_size)?
+                }};
             }
 
             // Policy Losses
-            let l_action = soft_ce(&policy_out.action_type, &b_t_action)?;
-            let l_source = soft_ce(&policy_out.source_spatial, &b_t_source)?;
-            let l_target = soft_ce(&policy_out.target_spatial, &b_t_target)?;
-            let l_option = soft_ce(&policy_out.move_option, &b_t_option)?;
+            let l_action = soft_ce!(policy_out.action_type, b_t_action);
+            let l_source = soft_ce!(policy_out.source_spatial, b_t_source);
+            let l_target = soft_ce!(policy_out.target_spatial, b_t_target);
+            let l_option = soft_ce!(policy_out.move_option, b_t_option);
 
             let p_loss = (l_action * w_action)?;
             let p_loss = (p_loss + (l_source * w_spatial)?)?;
@@ -191,21 +169,7 @@ fn main() -> Result<()> {
             let p_loss = (p_loss + (l_option * w_option)?)?;
 
             // Value Losses (MSE)
-            let l_win = candle_nn::loss::mse(&value_out.win_value, &b_t_win)?;
-
-            let l_eco = if let Some(t) = &b_t_eco {
-                candle_nn::loss::mse(&value_out.eco_value, t)?
-            } else {
-                Tensor::new(0.0f32, &device)?
-            };
-
-            let l_mil = if let Some(t) = &b_t_mil {
-                candle_nn::loss::mse(&value_out.mil_value, t)?
-            } else {
-                Tensor::new(0.0f32, &device)?
-            };
-
-            let v_loss = ((l_win + l_eco)? + l_mil)?;
+            let v_loss = candle_nn::loss::mse(&value_out.win_value, &b_t_win)?;
 
             // Total loss
             let loss = (p_loss.clone() + (v_loss.clone() * w_value)?)?;

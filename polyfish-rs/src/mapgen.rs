@@ -1288,6 +1288,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         let mut starting_tech = vec![TechnologyState {
             tech_type: TechnologyType::Basic,
             discovered: true,
+            discovered_turn: 0,
         }];
         let tech_type = match tribe {
             TribeType::Imperius => Some(TechnologyType::Organization),
@@ -1311,6 +1312,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
             starting_tech.push(TechnologyState {
                 tech_type: t,
                 discovered: true,
+                discovered_turn: 0,
             });
         }
         t_state.tech_vanilla = starting_tech;

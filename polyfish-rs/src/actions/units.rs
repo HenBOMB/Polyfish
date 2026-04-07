@@ -24,7 +24,7 @@ pub fn remove_unit(
     killer_idx: Option<usize>,
 ) -> UndoCallback {
     // Get the unit to remove
-    let (removed_unit, tile_idx, unit_type) = {
+    let (removed_unit, tile_idx) = {
         let tribe = match state.tribes.get(&unit_owner) {
             Some(t) => t,
             None => return Box::new(|_| {}),
@@ -33,15 +33,17 @@ pub fn remove_unit(
             Some(u) => u,
             None => return Box::new(|_| {}),
         };
-        (unit.clone(), unit.coords.idx, unit.unit_type)
+        (unit.clone(), unit.coords.idx)
     };
 
     let mut undos: Vec<UndoCallback> = Vec::new();
 
-    println!(
-        "Removing unit {:?} ({})",
-        removed_unit.unit_type, removed_unit.coords.idx
-    );
+    if state.settings._verbose {
+        println!(
+            "Removing unit {:?} ({})",
+            removed_unit.unit_type, removed_unit.coords.idx
+        );
+    }
 
     // 0. Drop Spores/Algae if Poisoned
     if removed_unit.effects.contains(&UnitEffect::Poison) {
@@ -83,9 +85,12 @@ pub fn remove_unit(
         }
     }
 
-    // Get unit cost for score
-    let settings = get_unit_setting(unit_type);
-    let cost = if settings.is_super { 10 } else { settings.cost };
+    // Get unit and passenger cost for score
+    let cost = get_unit_setting(removed_unit.unit_type).cost
+        + removed_unit
+            .passenger_type
+            .map(|p| get_unit_setting(p).cost)
+            .unwrap_or(0);
     let score_deduction = 5 * cost;
 
     // Clear tile unit owner
@@ -112,7 +117,12 @@ pub fn remove_unit(
                 // Promote segment to Centipede
                 if child.unit_type == crate::types::UnitType::Segment {
                     let old_max_hp = crate::functions::get_unit_max_health(child);
-                    let damage = old_max_hp - child.health;
+                    let mut damage = old_max_hp - child.health;
+
+                    // Versions < 115 had a bug where damage was not inherited
+                    if state.settings.version < 115 {
+                        damage = 0.0;
+                    }
 
                     child.unit_type = crate::types::UnitType::Centipede;
 
@@ -420,7 +430,7 @@ pub fn step_unit(
             let tribe = state.tribes.get(&unit_owner).unwrap();
             let unit = tribe.units.get(unit_idx).unwrap();
             (
-                crate::functions::get_unit_attack(unit),
+                crate::functions::get_unit_attack(state, unit),
                 unit.health,
                 crate::functions::get_unit_max_health(unit),
             )
@@ -456,7 +466,9 @@ pub fn step_unit(
                     let def_max_health = crate::functions::get_unit_max_health(unit);
                     let def_bonus = crate::functions::get_defense_bonus(state, unit);
 
-                    println!("Attacked {:?} ({})", unit.unit_type, unit.coords.idx);
+                    if state.settings._verbose {
+                        println!("Attacked {:?} ({})", unit.unit_type, unit.coords.idx);
+                    }
 
                     let combat = calculate_combat(
                         atk_atk,
@@ -739,38 +751,42 @@ pub fn calculate_combat(
     // attackResult = round((attackForce / totalDamage) * attacker.attack * 4.5)
     // defenseResult = round((defenseForce / totalDamage) * defender.defense * 4.5)
 
-    let attack_force = attacker_attack * (attacker_health / attacker_max_health);
-    let defense_force = defender_defense * (defender_health / defender_max_health) * defense_bonus;
+    let attack_force = (attacker_attack) * (attacker_health / attacker_max_health);
+    let defense_force =
+        (defender_defense) * (defender_health / defender_max_health) * (defense_bonus);
 
-    let total_damage = attack_force + defense_force;
-    let attack_result = if total_damage > 0.0 {
-        ((attack_force / total_damage) * attacker_attack * 4.5).round()
+    let total_force = attack_force + defense_force;
+    let attack_result_raw = if total_force > 0.0 {
+        (attack_force / total_force) * (attacker_attack) * 4.5
     } else {
         0.0
     };
+    let attack_result = (attack_result_raw + 0.000001).round() as f32;
 
     // Retaliation damage (if defender survives)
-    let defense_result = if defender_health - attack_result > 0.0 {
-        if total_damage > 0.0 {
-            ((defense_force / total_damage) * defender_defense * 4.5).round()
+    let defense_result_raw = if (defender_health) - (attack_result) > 0.0 {
+        if total_force > 0.0 {
+            (defense_force / total_force) * (defender_defense) * 4.5
         } else {
             0.0
         }
     } else {
         0.0
     };
+    let defense_result = (defense_result_raw + 0.000001).round() as f32;
 
     println!(
-        "Combat: atk_health={}/{}, atk_result={}[{}], def_result={}[{}], def_health={}/{}, final_health={}[{}]",
+        "Combat: atk_health={}/{}, atk_result={}[{}]({}), def_result={}[{}], def_health={}/{}, final_health={}[{}]",
         attacker_health,
         attacker_max_health,
         attack_result,
         attacker_attack,
+        attack_result_raw,
         defense_result,
         defender_defense,
         defender_health,
         defender_max_health,
-        (defender_health - attack_result),
+        defender_health - attack_result,
         defense_bonus
     );
 
@@ -805,7 +821,7 @@ pub fn attack_unit(
         let tribe = state.tribes.get(&attacker_owner).unwrap();
         let unit = tribe.units.get(attacker_idx).unwrap();
         (
-            get_unit_attack(unit),
+            get_unit_attack(state, unit),
             unit.health,
             get_unit_max_health(unit),
             get_unit_setting(unit.unit_type).skills.clone(),
@@ -1016,6 +1032,16 @@ pub fn attack_unit(
             }
         }
     }
+
+    // Apply Poison to primary target
+    if atk_skills.contains(&SkillType::Poison) {
+        undos.push(crate::actions::try_add_effect(
+            state,
+            defender_owner,
+            defender_idx,
+            UnitEffect::Poison,
+        ));
+    }
     undos.push(Box::new(move |s| {
         if let Some(tribe) = s.tribes.get_mut(&defender_owner) {
             if let Some(unit) = tribe.units.get_mut(defender_idx) {
@@ -1062,10 +1088,12 @@ pub fn attack_unit(
                         && individual_splash_damage > 0.0
                     {
                         if let Some(unit) = tribe.units.get_mut(adj_unit_idx) {
-                            println!(
-                                "Splash: {:?} - {} ({})",
-                                unit.unit_type, individual_splash_damage, unit.coords.idx
-                            );
+                            if state.settings._verbose {
+                                println!(
+                                    "Splash: {:?} - {} ({})",
+                                    unit.unit_type, individual_splash_damage, unit.coords.idx
+                                );
+                            }
 
                             unit.health -= individual_splash_damage;
                             if unit.health <= 0.0 {
@@ -1316,6 +1344,16 @@ pub fn attack_unit(
             }
         }
 
+        // Apply Poison to attacker if defender has Poison skill and it's a contact attack (melee/range 1)
+        if distance <= 1 && def_skills.contains(&SkillType::Poison) {
+            undos.push(crate::actions::try_add_effect(
+                state,
+                attacker_owner,
+                attacker_idx,
+                UnitEffect::Poison,
+            ));
+        }
+
         // Apply freeze effect if attacker has Freeze skill
         if atk_skills.contains(&SkillType::Freeze) {
             if let Some(tribe) = state.tribes.get_mut(&defender_owner) {
@@ -1502,12 +1540,14 @@ pub fn push_unit(state: &mut GameState, tile_idx: i32) -> Result<crate::moves::M
     }
 
     // log the move
-    println!(
-        "🐛 Pushed unit {} from {} to {}",
-        unit_owner,
-        tile_idx,
-        moved_to.unwrap_or(-1)
-    );
+    if state.settings._verbose {
+        println!(
+            "🐛 Pushed unit {} from {} to {}",
+            unit_owner,
+            tile_idx,
+            moved_to.unwrap_or(-1)
+        );
+    }
 
     // Restore unit state on undo
     let final_undo = Box::new(move |s: &mut GameState| {
@@ -1573,7 +1613,7 @@ pub fn spawn_unit(
     // 1. Add to tribe units and update score
     if let Some(tribe) = state.tribes.get_mut(&owner) {
         tribe.units.push(new_unit);
-        let score_gain = 5 * if settings.is_super { 10 } else { settings.cost };
+        let score_gain = 5 * settings.cost;
         tribe.score += score_gain;
 
         undos.push(Box::new(move |s: &mut GameState| {
@@ -2032,6 +2072,19 @@ pub fn convert_unit(
         tribe.units.len() - 1
     };
 
+    // 3. Update scores
+    // Old tribe loses points (5 * cumulative cost of unit + passenger)
+    let cost = get_unit_setting(original_unit.unit_type).cost
+        + original_unit
+            .passenger_type
+            .map(|p| get_unit_setting(p).cost)
+            .unwrap_or(0);
+    let score_loss = 5 * cost;
+
+    if let Some(old_tribe) = state.tribes.get_mut(&target_owner) {
+        old_tribe.score -= score_loss;
+    }
+
     // Update tile owner
     if let Some(tile) = state.tiles.get_mut(&target_idx) {
         tile._unit_owner_id = Some(converter_owner);
@@ -2039,6 +2092,11 @@ pub fn convert_unit(
 
     // Undo
     Ok(Box::new(move |s| {
+        // Restore scores
+        if let Some(old_tribe) = s.tribes.get_mut(&target_owner) {
+            old_tribe.score += score_loss;
+        }
+
         // 1. Remove from new tribe
         if let Some(tribe) = s.tribes.get_mut(&converter_owner) {
             if new_idx < tribe.units.len() {
@@ -2162,10 +2220,31 @@ pub fn upgrade_unit(
             let old_max_hp = crate::functions::get_unit_max_health(unit);
             let damage = old_max_hp - unit.health;
 
+            // Score adjustment
+            let old_settings = get_unit_setting(old_type);
+            let new_settings = get_unit_setting(target_type);
+            let old_cost = old_settings.cost;
+            let new_cost = new_settings.cost;
+            let score_diff = 5 * (new_cost - old_cost);
+            tribe.score += score_diff;
+
             unit.unit_type = target_type;
 
             let new_max_hp = crate::functions::get_unit_max_health(unit);
             unit.health = (new_max_hp - damage).max(1.0);
+
+            // Undo closure data
+            let score_to_restore = score_diff;
+
+            undos.push(Box::new(move |s| {
+                if let Some(t) = s.tribes.get_mut(&unit_owner) {
+                    if let Some(u) = t.units.get_mut(unit_idx) {
+                        u.unit_type = old_type;
+                        u.health = old_health;
+                        t.score -= score_to_restore;
+                    }
+                }
+            }));
         }
     }
 
@@ -2182,16 +2261,6 @@ pub fn upgrade_unit(
         crate::actions::discovery::discover_tiles(state, unit_owner, None, Some(adj))
     };
     undos.push(new_discovery_undo);
-
-    // Undo unit change
-    undos.push(Box::new(move |s| {
-        if let Some(tribe) = s.tribes.get_mut(&unit_owner) {
-            if let Some(unit) = tribe.units.get_mut(unit_idx) {
-                unit.unit_type = old_type;
-                unit.health = old_health;
-            }
-        }
-    }));
 
     Ok(crate::actions::chain_undos(undos))
 }

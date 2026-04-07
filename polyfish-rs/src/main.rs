@@ -268,11 +268,11 @@ async fn auto_step(
     game.state.settings._verbose = false;
 
     // Use trained AI model!
-    use polyfish::ai::mcts_zero::ZeroMctsAgent;
-    let agent = ZeroMctsAgent::new(state.network.as_ref().unwrap(), params.iterations);
+    use polyfish::ai::brain::Brain;
+    let brain = Brain::new(state.network.as_ref().unwrap(), params.iterations);
 
     game.state._messages.clear();
-    let (chosen_move, policy) = agent.select_move_with_stats(&mut game);
+    let (chosen_move, policy) = brain.think_with_stats(&mut game);
     let mut move_name = "none".to_string();
 
     // Create serialized best move before potentially consuming it (though we use as_ref so it's fine)
@@ -785,9 +785,9 @@ async fn get_trainer_hint(
 
     let mut game = state.game.lock().unwrap();
 
-    // Use Zero MCTS Agent (Neural Network)
-    use polyfish::ai::mcts_zero::ZeroMctsAgent;
-    let agent = ZeroMctsAgent::new(state.network.as_ref().unwrap(), params.iterations);
+    // Use Gumbel MCTS Agent (Neural Network)
+    use polyfish::ai::brain::Brain;
+    let agent = Brain::new(state.network.as_ref().unwrap(), params.iterations);
     // use polyfish::ai::heuristic_mcts::HeuristicMctsAgent;
     // let agent = HeuristicMctsAgent {
     //     iterations: params.iterations,
@@ -795,7 +795,7 @@ async fn get_trainer_hint(
     // };
 
     // Run MCTS search
-    let (best_move, mcts_analysis) = agent.select_move_with_stats(&mut game);
+    let (best_move, mcts_analysis) = agent.think_with_stats(&mut game);
 
     let move_json = best_move.as_ref().map(|m| m.serialize());
     let move_name = best_move

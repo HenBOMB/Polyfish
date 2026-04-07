@@ -4,9 +4,8 @@ set -e
 # Configuration
 ITERATIONS=100
 GAMES_PER_ITER=20
-export MCTS_ITERS=100
-export RAYON_NUM_THREADS=14
-export OMP_NUM_THREADS=14
+USE_THREADS=6
+export MCTS_ITERS=120
 export RUST_BACKTRACE=1
 
 # Log all output to session.log while still showing on console
@@ -42,10 +41,14 @@ cargo build --bin polyfish --bin self_play --release
 
 # Parse arguments
 FORCE_TRAIN=false
-while getopts "f" opt; do
+BOOST=false
+while getopts "fb" opt; do
   case $opt in
     f)
       FORCE_TRAIN=true
+      ;;
+    b)
+      BOOST=true
       ;;
     \?)
       echo "Invalid option: -$OPTARG" >&2
@@ -54,15 +57,18 @@ while getopts "f" opt; do
   esac
 done
 
+if [ "$BOOST" = true ]; then
+    USE_THREADS=$((USE_THREADS * 2))
+    echo "Boost mode enabled! Doubling threads to $USE_THREADS"
+fi
+
+export RAYON_NUM_THREADS=$USE_THREADS
+export OMP_NUM_THREADS=$USE_THREADS
+
 if [ "$FORCE_TRAIN" = true ]; then
     echo "Force training flag detected! Running training immediately..."
     echo "[Training] Training model..."
-    TRAIN_OUTPUT=$(.venv/bin/python3 train.py)
-    echo "$TRAIN_OUTPUT"
-    
-    # Extract Loss (optional logging, but good to see)
-    LOSS=$(echo "$TRAIN_OUTPUT" | grep "METRICS:" | grep -o 'loss": [0-9.]*' | awk '{print $2}')
-    echo "Immediate training complete. Loss: $LOSS"
+    .venv/bin/python3 train.py
 fi
 
 # 0. Initialize Model (if needed)
@@ -125,11 +131,7 @@ do
     
     # 2. Training
     echo "[Training] Training model..."
-    TRAIN_OUTPUT=$(.venv/bin/python3 train.py)
-    echo "$TRAIN_OUTPUT"
-    
-    # Extract Loss
-    LOSS=$(echo "$TRAIN_OUTPUT" | grep "METRICS:" | grep -o 'loss": [0-9.]*' | awk '{print $2}')
+    .venv/bin/python3 train.py
     
     # 3. Log
     TIMESTAMP=$(date +%s)
@@ -137,16 +139,17 @@ do
     echo "$i,$TIMESTAMP,$AVG_SCORE,$MAX_SCORE,$P1_AVG,$P2_AVG,$LOSS" >> training_log.csv
     echo "Iteration $i complete. Type: $MATCH_TYPE | Avg: $AVG_SCORE | Max: $MAX_SCORE | P1: $P1_AVG | P2: $P2_AVG | Loss: $LOSS"
     
-    # 4. Checkpoint (Every iteration for safety)
-    TS=$(date +%Y%m%d_%H%M%S)
-    echo "Creating checkpoint for iteration $i (Timestamp: $TS)..."
-    cp model.safetensors "checkpoints/model_checkpoint_iter${i}_${TS}.safetensors"
-    
-    # keep only last 20 checkpoints to save space
-    # Matches files with 'model_checkpoint_iter' in the name
-    ls -t checkpoints/model_checkpoint_iter*.safetensors | tail -n +21 | xargs -r rm
+    # 4. Checkpoint (Every 10 iterations)
+    if [[ $((i % 10)) -eq 0 ]]; then
+        TS=$(date +%Y%m%d_%H%M%S)
+        echo "Creating checkpoint for iteration $i (Timestamp: $TS)..."
+        cp model.safetensors "checkpoints/model_checkpoint_iter${i}_${TS}.safetensors"
+        
+        # keep only last 20 checkpoints to save space
+        # Matches files with 'model_checkpoint_iter' in the name
+        ls -t checkpoints/model_checkpoint_iter*.safetensors | tail -n +21 | xargs -r rm
+    fi
 
-    
     # 4. Cleanup (Fresh Games Only)
     # Move played games to archive so train.py only sees new ones next time
     mkdir -p archive

@@ -5,7 +5,7 @@ Creates a model.safetensors file with random weights matching the new architectu
 - Player state embedding (2 FC layers)
 - 6 ResBlocks
 - 7 decomposed policy heads
-- 3 value heads (win, eco, mil)
+- 1 value head (win)
 """
 
 import torch
@@ -31,7 +31,7 @@ def init_model():
     print("Initializing enhanced PolyZero network...")
     print(f"  Spatial input: {SPATIAL_CHANNELS} channels, {MAP_SIZE}x{MAP_SIZE}")
     print(f"  Player state: {PLAYER_STATE_DIM} features")
-    print(f"  Architecture: 6 ResBlocks + 7 policy heads + 3 value heads")
+    print(f"  Architecture: 6 ResBlocks + 7 policy heads + 1 value head")
     
     model = PolyZeroNet(SPATIAL_CHANNELS, PLAYER_STATE_DIM, MAP_SIZE, MAP_SIZE)
     

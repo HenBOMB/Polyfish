@@ -1,8 +1,8 @@
 use candle_core::{Device, Tensor};
 use polyfish::TribeType;
+use polyfish::ai::brain::Brain;
 use polyfish::ai::features::{self, GameFeatures, state_to_tensor};
 use polyfish::ai::mapper::DecomposedMapper;
-use polyfish::ai::mcts_zero::ZeroMctsAgent;
 use polyfish::ai::network::PolyZeroNet;
 use polyfish::game::Game;
 use polyfish::states::PlayerId;
@@ -22,8 +22,8 @@ struct DecomposedPolicyData {
 
 /// Result from a single game - contains all data needed for training
 struct GameResult {
-    // Added: current_spt and current_units for each step, eco, mil
-    history: Vec<(GameFeatures, DecomposedPolicyData, PlayerId, f32, f32)>,
+    // Added: current_spt and current_units for each step
+    history: Vec<(GameFeatures, DecomposedPolicyData, PlayerId)>,
     scores: HashMap<i32, i32>,
     moves: usize,
     winner_score: i32,
@@ -58,13 +58,11 @@ fn play_single_game(
     game.post_load();
 
     // Create two agents (they might share the same network, or be different)
-    let agent1 = ZeroMctsAgent::new(network1, mcts_iters);
-    let agent2 = ZeroMctsAgent::new(network2, mcts_iters);
+    let agent1 = Brain::new(network1, mcts_iters);
+    let agent2 = Brain::new(network2, mcts_iters);
 
     // Game Loop
-    // Updated: Tuple includes SPT and Unit Count (Eco/Mil heuristic targets)
-    let mut game_history: Vec<(GameFeatures, DecomposedPolicyData, PlayerId, f32, f32)> =
-        Vec::new();
+    let mut game_history: Vec<(GameFeatures, DecomposedPolicyData, PlayerId)> = Vec::new();
 
     let current_scores: Vec<(PlayerId, i32)> = game
         .state
@@ -80,8 +78,12 @@ fn play_single_game(
 
     let mut move_count = 0;
     while !polyfish::functions::is_game_over(&game.state) {
-        if move_count > 1000000 {
-            eprintln!("[Game {}] Move count exceeded 1000000", game_idx);
+        if move_count > 50000 {
+            // Reduced for safety
+            eprintln!(
+                "[Game {}] Move count exceeded 50000 (Safety Break)",
+                game_idx
+            );
             break;
         }
 
@@ -93,15 +95,9 @@ fn play_single_game(
         let state_t = state_to_tensor(&game.state, pov, &device)
             .expect("BUG: Failed to create state tensor - game state is invalid");
 
-        // Use heuristic evaluators for training targets
-        let current_eco =
-            polyfish::ai::evaluator::economy::evaluate_economy(&game.state, pov).clamp(0.0, 1.0);
-        let current_mil =
-            polyfish::ai::evaluator::army::evaluate_army(&game.state, pov).clamp(0.0, 1.0);
-
         // MCTS Search - use the correct agent
         let current_agent = if pov == 1 { &agent1 } else { &agent2 };
-        let (best_move, move_visits) = current_agent.select_move_with_decomposed_visits(&mut game);
+        let (best_move, move_visits) = current_agent.think_decomposed(&mut game);
 
         let map_size = game.state.settings.size as usize;
 
@@ -169,17 +165,21 @@ fn play_single_game(
         };
 
         if let Some(m) = best_move {
-            game_history.push((state_t, policy_data, pov, current_eco, current_mil));
+            game_history.push((state_t, policy_data, pov));
             if move_count > 0 && move_count % 10 == 0 {
-                let current_scores: Vec<(PlayerId, i32)> = game
-                    .state
-                    .tribes
-                    .iter()
-                    .map(|(id, t)| (*id, t.score))
-                    .collect();
+                // let current_scores: Vec<(PlayerId, i32)> = game
+                //     .state
+                //     .tribes
+                //     .iter()
+                //     .map(|(id, t)| (*id, t.score))
+                //     .collect();
                 eprintln!(
-                    "[Game {}]: Turn: {} Scores: {:?}",
-                    game_idx, game.state.settings.turn, current_scores
+                    "[Game {}]: Turn: {} Player: {} Move: {}",
+                    game_idx,
+                    game.state.settings.turn,
+                    pov,
+                    m.describe(&game.state),
+                    // current_scores
                 );
             }
             let _ = game.play_move(m.as_ref());
@@ -414,9 +414,6 @@ fn main() -> anyhow::Result<()> {
     let mut collected_option: Vec<Vec<f32>> = Vec::new();
 
     let mut collected_values: Vec<f32> = Vec::new();
-    // Added: Eco and Mil targets
-    let mut collected_eco: Vec<f32> = Vec::new();
-    let mut collected_mil: Vec<f32> = Vec::new();
 
     let mut total_score = 0;
     let mut max_score = 0;
@@ -445,7 +442,7 @@ fn main() -> anyhow::Result<()> {
         }
 
         // Backpropagate value
-        for (features, policy_data, p_id, eco, mil) in result.history {
+        for (features, policy_data, p_id) in result.history {
             let flat_map = features
                 .spatial_map
                 .flatten_all()
@@ -478,10 +475,6 @@ fn main() -> anyhow::Result<()> {
             let value = (score_diff / polyfish::states::default_max_score() as f32).tanh();
 
             collected_values.push(value);
-
-            collected_eco.push(eco.tanh());
-
-            collected_mil.push(mil.tanh());
         }
     }
 
@@ -551,8 +544,6 @@ fn main() -> anyhow::Result<()> {
 
         // Values
         let values_tensor = Tensor::from_vec(collected_values, (total_steps, 1), &device)?;
-        let eco_tensor = Tensor::from_vec(collected_eco, (total_steps, 1), &device)?;
-        let mil_tensor = Tensor::from_vec(collected_mil, (total_steps, 1), &device)?;
 
         let mut tensors = HashMap::new();
         tensors.insert("spatial_maps".to_string(), spatial_maps_tensor);
@@ -564,8 +555,6 @@ fn main() -> anyhow::Result<()> {
         tensors.insert("move_option".to_string(), option_tensor);
 
         tensors.insert("values".to_string(), values_tensor);
-        tensors.insert("eco_targets".to_string(), eco_tensor);
-        tensors.insert("mil_targets".to_string(), mil_tensor);
 
         let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
         let filename = format!("games_{}.safetensors", timestamp);

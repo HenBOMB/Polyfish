@@ -757,7 +757,7 @@ fn generate_attack_moves(
             }
         }
     } else {
-        if crate::functions::get_unit_attack(unit) < 0.0 {
+        if crate::functions::get_unit_attack(state, unit) < 0.0 {
             return;
         }
 

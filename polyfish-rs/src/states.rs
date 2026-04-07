@@ -73,6 +73,7 @@ mod tech_list_deserializer {
                 TechEntry::Id(id) => TechnologyState {
                     tech_type: unsafe { std::mem::transmute(id as i8) },
                     discovered: true,
+                    discovered_turn: 0,
                 },
                 TechEntry::State(s) => s,
             })
@@ -343,6 +344,8 @@ pub struct TechnologyState {
     #[serde(rename = "type")]
     pub tech_type: TechnologyType,
     pub discovered: bool,
+    #[serde(default)]
+    pub discovered_turn: i32,
 }
 
 /// State of a tribe/player

@@ -290,7 +290,15 @@ pub fn update_exploration(state: &mut GameState, player_id: PlayerId) -> UndoCal
     if modified_tiles.is_empty() {
         noop_undo()
     } else {
+        let score_gain = 5 * modified_tiles.len() as i32;
+        if let Some(tribe) = state.tribes.get_mut(&player_id) {
+            tribe.score += score_gain;
+        }
+
         Box::new(move |s| {
+            if let Some(tribe) = s.tribes.get_mut(&player_id) {
+                tribe.score -= score_gain;
+            }
             for idx in modified_tiles {
                 if let Some(t) = s.tiles.get_mut(&idx) {
                     t.explorers.remove(&player_id);
@@ -492,7 +500,6 @@ pub fn process_start_turn_effects(state: &mut GameState, player_id: PlayerId) ->
                         }
                     }
                     UnitType::InsectEgg => {
-                        // InsectEgg -> Larva after 2 turns
                         if age > 2 {
                             new_type = Some(UnitType::Larva);
                         }
@@ -512,7 +519,12 @@ pub fn process_start_turn_effects(state: &mut GameState, player_id: PlayerId) ->
 
                     // Inherit damage: new_hp = new_max - (old_max - current_hp)
                     let old_max_hp = crate::functions::get_unit_max_health(unit);
-                    let damage = old_max_hp - unit.health;
+                    let mut damage = old_max_hp - unit.health;
+
+                    // Support for bug in versions < 115: Damage not inherited
+                    if state.settings.version < 115 {
+                        damage = 0.0;
+                    }
 
                     unit.unit_type = target_type;
                     let new_max_hp = crate::functions::get_unit_max_health(unit);
@@ -597,13 +609,95 @@ pub fn process_start_turn_effects(state: &mut GameState, player_id: PlayerId) ->
     for (idx, new_level) in growing_temples {
         if let Some(structure) = state.structures.get_mut(&idx).and_then(|s| s.as_mut()) {
             let old_level = structure.level;
+            let levels_gained = new_level - old_level;
             structure.level = new_level;
 
+            // Score gain: 100 per level gained
+            let score_gain = 100 * levels_gained;
+            if let Some(tribe) = state.tribes.get_mut(&player_id) {
+                tribe.score += score_gain;
+            }
+
             undos.push(Box::new(move |s| {
+                if let Some(tribe) = s.tribes.get_mut(&player_id) {
+                    tribe.score -= score_gain;
+                }
                 if let Some(st) = s.structures.get_mut(&idx).and_then(|x| x.as_mut()) {
                     st.level = old_level;
                 }
             }));
+        }
+    }
+
+    // 2. Fungi Logic (Cymanti Growth)
+    let (has_recycling, recycling_discovered_turn) =
+        if let Some(tribe) = state.tribes.get(&player_id) {
+            let tech = tribe
+                .tech_vanilla
+                .iter()
+                .find(|t| t.tech_type == TechnologyType::Recycling);
+            (tech.is_some(), tech.map(|t| t.discovered_turn).unwrap_or(0))
+        } else {
+            (false, 0)
+        };
+
+    let fungi_indices: Vec<i32> = state
+        .structures
+        .iter()
+        .filter(|(_, s)| {
+            s.as_ref()
+                .map(|st| st.structure_type == StructureType::Fungi)
+                .unwrap_or(false)
+        })
+        .map(|(&idx, _)| idx)
+        .collect();
+
+    for f_idx in fungi_indices {
+        // Growth can only happen if you own the tile
+        let owner_id = state.tiles.get(&f_idx).map(|t| t.owner).unwrap_or(0);
+        if owner_id == player_id {
+            let mut leveled_up = false;
+            let mut new_level = 0;
+
+            if let Some(structure) = state.structures.get_mut(&f_idx).and_then(|s| s.as_mut()) {
+                // Growth requirement: turn - founded > 0 (prevents same-turn growth)
+                let age = state.settings.turn - structure.founded;
+                let max_level = if state.settings.version < 115 {
+                    3
+                } else {
+                    if has_recycling { 3 } else { 2 }
+                };
+
+                let can_grow = if structure.level == 1 {
+                    age > 0
+                } else if structure.level == 2 {
+                    // Force wait +1 turn after research: turn must be > discovery turn
+                    has_recycling && state.settings.turn > (recycling_discovered_turn + 1)
+                } else {
+                    false
+                };
+
+                if structure.level < max_level && can_grow {
+                    structure.level += 1;
+                    new_level = structure.level;
+                    leveled_up = true;
+                }
+            }
+
+            if leveled_up {
+                println!("Fungi leveled up to level {}", new_level);
+                // Undo level change
+                undos.push(Box::new(move |s| {
+                    if let Some(st) = s.structures.get_mut(&f_idx).and_then(|x| x.as_mut()) {
+                        st.level -= 1;
+                    }
+                }));
+
+                // Add population to city whenever it levels up
+                if let Some(city) = crate::functions::get_city_owning_tile(state, f_idx) {
+                    undos.push(crate::actions::city::add_population(state, city.idx, 1));
+                }
+            }
         }
     }
 
@@ -717,8 +811,7 @@ pub fn process_end_turn_effects(state: &mut GameState, _player_id: PlayerId) -> 
             }
         }
     }
-    // 2. Fungi Logic (Cymanti)
-    let current_player = state.settings.current_player_turn_id;
+    // 2. Fungi Logic (Cymanti Poisoning only)
     let fungi_indices: Vec<i32> = state
         .structures
         .iter()
@@ -733,31 +826,7 @@ pub fn process_end_turn_effects(state: &mut GameState, _player_id: PlayerId) -> 
     for f_idx in fungi_indices {
         let owner_id = state.tiles.get(&f_idx).map(|t| t.owner).unwrap_or(0);
 
-        // A. Growth (Only on owner's turn)
-        if owner_id == current_player {
-            let mut leveled_up = false;
-            if let Some(structure) = state.structures.get_mut(&f_idx).and_then(|s| s.as_mut()) {
-                if structure.level < 2 {
-                    println!("Fungi level: {}", structure.level);
-                    structure.level += 1;
-                    leveled_up = true;
-                    // Undo level change
-                    undos.push(Box::new(move |s| {
-                        if let Some(st) = s.structures.get_mut(&f_idx).and_then(|x| x.as_mut()) {
-                            st.level -= 1;
-                        }
-                    }));
-                }
-            }
-            if leveled_up {
-                // Add population to city whenever it levels up (until cap)
-                if let Some(city) = crate::functions::get_city_owning_tile(state, f_idx) {
-                    undos.push(crate::actions::city::add_population(state, city.idx, 1));
-                }
-            }
-        }
-
-        // B. Poison (Safety Check)
+        // B. Poison
         // Poisons non-Cymanti units that step on it (except flying)
         if let Some(unit) = crate::functions::get_unit_at(state, f_idx) {
             // Find unit details

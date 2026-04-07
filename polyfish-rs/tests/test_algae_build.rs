@@ -26,7 +26,7 @@ mod tests {
         tribe.stars = 100;
         tribe.tribe_type = TribeType::Cymanti;
         // Basic tech is always there
-        tribe.tech_vanilla.push(TechnologyState { tech_type: TechnologyType::Basic, discovered: true });
+        tribe.tech_vanilla.push(TechnologyState { tech_type: TechnologyType::Basic, discovered: true, discovered_turn: 0 });
         
         state.tribes.insert(1, tribe);
 
@@ -63,7 +63,8 @@ mod tests {
         // 3. Research Hydrology
         state.tribes.get_mut(&1).unwrap().tech_vanilla.push(TechnologyState { 
             tech_type: TechnologyType::Hydrology, 
-            discovered: true 
+            discovered: true,
+            discovered_turn: 0
         });
 
         // 4. Now Algae should be buildable on Water and Ocean

@@ -34,8 +34,12 @@ static PASSED_REPLAYS: &[&str] = &[
     "anpiian-swamp_1774295054",
     // passes ok
     "beautiful-navies_1774719056",
-    // passes ok, fixed (added) idx 93 to _revealedTiles on target 126
+    // v114, passes ok
     "adventure-of-assha_1774996907",
+    // v111, crashes due to ruin reward indeterminism
+    "anjiian-atoll_1774877964",
+    // v115, ongoing
+    "basin-games_1774838316.json",
 ];
 
 // limited to policy: select (public.games)
@@ -45,7 +49,7 @@ const SUPABASE_ANON_KEY: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOi
 async fn test_mod_replay_ingestion() {
     let _ = dotenvy::dotenv();
 
-    let replay_base = "replays/adventure-of-assha_1774996907";
+    let replay_base = "replays/basin-games_1774838316";
     let replay_path = format!("{}.json", replay_base);
     let fixed_path = format!("{}_fixed.json", replay_base);
 
@@ -235,6 +239,8 @@ async fn test_mod_replay_ingestion() {
                 let mut cmd_stripped = cmd_json.as_object().unwrap().clone();
                 cmd_stripped.remove("_reward");
                 cmd_stripped.remove("_revealedTiles");
+                cmd_stripped.remove("_techHint");
+                cmd_stripped.remove("tech_hint");
 
                 let cmd_json_stripped_val = serde_json::Value::Object(cmd_stripped);
 
@@ -272,7 +278,14 @@ async fn test_mod_replay_ingestion() {
                                     serde_json::from_value(r.clone()).unwrap();
                                 m_with_hints.reward = Some(reward_type);
 
-                                if reward_type == polyfish::types::RuinsRewardType::FreeTech {
+                                if let Some(t) =
+                                    cmd_json.get("tech_hint").or(cmd_json.get("_techHint"))
+                                {
+                                    let tech: polyfish::TechnologyType =
+                                        serde_json::from_value(t.clone()).unwrap();
+                                    m_with_hints.tech_hint = Some(tech);
+                                } else if reward_type == polyfish::types::RuinsRewardType::FreeTech
+                                {
                                     use strum::IntoEnumIterator;
                                     let user_tribe =
                                         game.state.tribes.get(&player_data.player_id).unwrap();
@@ -405,7 +418,10 @@ async fn test_mod_replay_ingestion() {
                                     }
                                 }
                             }
-                            if let Some(tiles) = cmd_json.get("_revealedTiles") {
+                            if let Some(tiles) = cmd_json
+                                .get("_revealedTiles")
+                                .or(cmd_json.get("revealed_tiles"))
+                            {
                                 m_with_hints.revealed_tiles =
                                     Some(serde_json::from_value(tiles.clone()).unwrap());
                             }
@@ -494,6 +510,7 @@ async fn test_mod_replay_ingestion() {
                                 t.tech_vanilla.push(polyfish::states::TechnologyState {
                                     tech_type: tech,
                                     discovered: true,
+                                    discovered_turn: game.state.settings.turn,
                                 });
                             }
 
@@ -524,8 +541,6 @@ async fn test_mod_replay_ingestion() {
                     let pov_id = player_data.player_id;
                     let tribe = game.state.tribes.get(&pov_id).unwrap();
                     println!("\n❌ FAILED TO FIND MOVE IN LEGAL MOVES! ❌");
-
-                    // if cmd_json["moveType"] == 9? use polyfish::types::CityRewardType
 
                     if move_type == polyfish::MoveType::Reward {
                         if turn_data.turn == 0 {
@@ -623,6 +638,8 @@ async fn test_mod_replay_ingestion() {
                             serde_json::to_string(&cmd_json).unwrap(),
                         );
                     }
+
+                    println!("🐛 Version: {}", game.state.settings.version);
 
                     println!(
                         "🗣️  Tribe {} Stars: {}, Cities: {}",

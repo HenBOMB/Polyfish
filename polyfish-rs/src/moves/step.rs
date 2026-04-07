@@ -76,8 +76,10 @@ impl Move for StepMove {
                     crate::types::UnitEffect::Invisible,
                 );
 
+                let undo_exhaust = crate::actions::units::end_unit_turn(state, unit_owner, unit_idx);
+
                 return Ok(MoveResult {
-                    undo: undo_reveal,
+                    undo: crate::actions::chain_undos(vec![undo_reveal, undo_exhaust]),
                     rewards: None,
                 });
             }

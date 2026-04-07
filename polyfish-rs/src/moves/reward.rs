@@ -181,11 +181,15 @@ impl Move for RewardMove {
         )
     }
     fn serialize(&self) -> serde_json::Value {
-        serde_json::json!({
+        let mut res = serde_json::json!({
             "moveType": self.move_type(),
             "target": self.target_index,
             "type": self.reward
-        })
+        });
+        if let Some(ref tiles) = self.revealed_tiles {
+            res["_revealedTiles"] = serde_json::to_value(tiles).unwrap();
+        }
+        res
     }
 
     #[inline]

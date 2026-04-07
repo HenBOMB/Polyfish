@@ -1,6 +1,8 @@
 pub mod book;
+pub mod brain;
 pub mod evaluator;
 pub mod features;
+pub mod gumbel_mcts;
 pub mod heuristic_mcts;
 pub mod mapper;
 pub mod mcts;

@@ -1,7 +1,10 @@
 //! Technology settings and tech tree
 
-use crate::types::{
-    AbilityType, StructureType, TaskType, TechnologyType, TerrainType, TribeType, UnitType,
+use crate::{
+    settings::get_unit_setting,
+    types::{
+        AbilityType, StructureType, TaskType, TechnologyType, TerrainType, TribeType, UnitType,
+    },
 };
 
 /// Technology configuration
@@ -431,4 +434,57 @@ pub fn get_researchable_techs(
         }
     }
     researchable
+}
+
+/// Get all units unlocked by a technology for a specific tribe
+pub fn get_unlocked_units(tech_type: TechnologyType, tribe: TribeType) -> Vec<UnitType> {
+    let settings = get_technology_setting(tech_type);
+    let mut units = Vec::new();
+
+    // 1. Filter out techs that belong to other special tribes
+    if let Some(tech_tribe) = settings.tribe_type {
+        if tech_tribe != tribe {
+            return units;
+        }
+    }
+
+    // 2. Add the standard unit if it exists and isn't replaced for this tribe
+    if let Some(u) = settings.unlocks_unit {
+        if !is_unit_replaced_for_tribe(u, tribe) {
+            units.push(u);
+        }
+    }
+
+    // 3. Add any special units that belong to this tribe
+    for &u in &settings.unlocks_special_units {
+        if get_unit_setting(u).tribe_type == tribe {
+            units.push(u);
+        }
+    }
+
+    units
+}
+
+/// Check if a standard unit type is replaced for a specific tribe
+pub fn is_unit_replaced_for_tribe(unit: UnitType, tribe: TribeType) -> bool {
+    use TribeType as T;
+    use UnitType as U;
+
+    match tribe {
+        T::Cymanti => matches!(
+            unit,
+            U::Rider
+                | U::Defender
+                | U::Knight
+                | U::Swordsman
+                | U::Catapult
+                | U::MindBender
+                | U::Giant
+                | U::Archer
+        ),
+        T::Aquarion => matches!(unit, U::Rider | U::Knight | U::Giant),
+        T::Polaris => matches!(unit, U::MindBender | U::Giant | U::Archer | U::Catapult),
+        T::Nature => matches!(unit, U::Giant), // Elyrion
+        _ => false,
+    }
 }

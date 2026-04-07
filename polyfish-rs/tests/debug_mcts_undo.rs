@@ -3,7 +3,7 @@ use polyfish::game::Game;
 use polyfish::moves::EndTurnMove;
 use polyfish::moves::harvest::HarvestMove;
 use polyfish::states::{CityState, ResourceState, TechnologyState, TileState, TribeState};
-use polyfish::types::{ResourceType, CityRewardType, TechnologyType, TerrainType, TribeType};
+use polyfish::types::{CityRewardType, ResourceType, TechnologyType, TerrainType, TribeType};
 
 fn main() {
     fuzz_test_p2_moves();

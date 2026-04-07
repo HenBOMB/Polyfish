@@ -32,6 +32,7 @@ pub fn unlock_tech(
     let tech_state = TechnologyState {
         tech_type,
         discovered: state.settings._are_you_sure,
+        discovered_turn: state.settings.turn,
     };
 
     // Add tech to tribe

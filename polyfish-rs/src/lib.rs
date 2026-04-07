@@ -14,6 +14,7 @@ pub mod moves;
 pub mod prediction;
 pub mod recorder;
 pub mod replayer;
+pub mod score;
 pub mod settings;
 pub mod states;
 pub mod types;
