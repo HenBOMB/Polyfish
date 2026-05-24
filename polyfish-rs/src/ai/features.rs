@@ -253,10 +253,9 @@ pub fn state_to_tensor(
     let tech_norm = (tech_count as f32 / 25.0).clamp(0.0, 1.0);
     // 16 tribes + 1 cause index starts at 1
     let tribe_type_norm = (pov_tribe_type as i8 as f32 / 17.0).clamp(0.0, 1.0);
-    let game_mode = if state.settings.mode == ModeType::Domination {
-        1.0
-    } else {
-        0.0
+    let game_mode = match state.settings.mode {
+        ModeType::Domination | ModeType::Might => 1.0,
+        _ => 0.0,
     };
     let game_over = if state.settings._game_over { 1.0 } else { 0.0 };
     let total_cities =

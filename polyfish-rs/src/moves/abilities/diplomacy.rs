@@ -538,6 +538,7 @@ pub fn generate_diplomacy_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>
 
             // Only offer if NOT already at peace and NOT already offered
             // We need to check if WE have offered peace to THEM
+            /*
             let i_offered = state
                 .tribes
                 .get(&other_id)
@@ -548,6 +549,7 @@ pub fn generate_diplomacy_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>
                         .unwrap_or(false)
                 })
                 .unwrap_or(false);
+            */
 
             /* DISABLED to prevent loops
             if relation.state == 0 && !i_offered {

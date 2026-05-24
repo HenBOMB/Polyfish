@@ -775,20 +775,20 @@ pub fn calculate_combat(
     };
     let defense_result = (defense_result_raw + 0.000001).round() as f32;
 
-    println!(
-        "Combat: atk_health={}/{}, atk_result={}[{}]({}), def_result={}[{}], def_health={}/{}, final_health={}[{}]",
-        attacker_health,
-        attacker_max_health,
-        attack_result,
-        attacker_attack,
-        attack_result_raw,
-        defense_result,
-        defender_defense,
-        defender_health,
-        defender_max_health,
-        defender_health - attack_result,
-        defense_bonus
-    );
+    // println!(
+    //     "Combat: atk_health={}/{}, atk_result={}[{}]({}), def_result={}[{}], def_health={}/{}, final_health={}[{}]",
+    //     attacker_health,
+    //     attacker_max_health,
+    //     attack_result,
+    //     attacker_attack,
+    //     attack_result_raw,
+    //     defense_result,
+    //     defender_defense,
+    //     defender_health,
+    //     defender_max_health,
+    //     defender_health - attack_result,
+    //     defense_bonus
+    // );
 
     CombatResult {
         attack_damage: attack_result,

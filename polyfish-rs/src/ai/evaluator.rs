@@ -14,3 +14,5 @@ use crate::states::{GameState, PlayerId};
 pub fn evaluate_state(state: &GameState, player_id: PlayerId) -> f32 {
     gamestate::evaluate_gamestate(state, player_id)
 }
+
+// pub fn evaluate_sequence

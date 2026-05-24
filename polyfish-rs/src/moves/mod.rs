@@ -705,9 +705,10 @@ fn is_roadpath_and_usable(state: &GameState, unit: &UnitState, idx: i32) -> bool
         return false;
     }
 
-    // Usable if friendly or neutral or Infiltrate
+    // Usable if friendly or neutral or peace treaty or Infiltrate
     tile.owner == unit.owner
         || tile.owner == 0
+        || crate::functions::is_at_peace(state, unit.owner, tile.owner)
         || get_unit_setting(unit.unit_type)
             .skills
             // TODO not sure infiltrate influences movement range..?

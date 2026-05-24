@@ -239,10 +239,7 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                         continue;
                     }
 
-                    let terrain_valid = settings.terrain_types.contains(&tile.terrain_type)
-                        || (tile.is_algae()
-                            && (settings.terrain_types.contains(&TerrainType::Field)
-                                || settings.terrain_types.contains(&TerrainType::Water)));
+                    let terrain_valid = settings.terrain_types.contains(&tile.terrain_type) && !tile.is_algae();
                     if !terrain_valid {
                         continue;
                     }
@@ -337,14 +334,15 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
 
         // 4. Roads in neutral territory
         for (&idx, tile) in &state.tiles {
-            if tile.owner == 0 && tile.explorers.contains(&pov_id) && !tile.has_road {
+            if tile.owner == 0 && crate::functions::is_tile_explored(state, idx, pov_id) && !tile.has_road {
+                // Cannot build if an enemy unit is on the tile
+                if crate::functions::get_enemy_at(state, idx, pov_id).is_some() {
+                    continue;
+                }
+
                 for &(struct_type, ref settings) in &unlocked_structures {
                     if struct_type == StructureType::Road {
-                        let terrain_valid = settings.terrain_types.contains(&tile.terrain_type)
-                            || (tile.is_algae()
-                                && (settings.terrain_types.contains(&TerrainType::Field)
-                                    || settings.terrain_types.contains(&TerrainType::Water)));
-                        if terrain_valid {
+                        if settings.terrain_types.contains(&tile.terrain_type) && !tile.is_algae() {
                             moves.push(Box::new(BuildMove::new(idx, struct_type)));
                         }
                         break;

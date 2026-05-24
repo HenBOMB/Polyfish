@@ -110,7 +110,16 @@ impl Game {
             }
         }
 
-        // 4. Update scores (first time)
+        // 4. Update initial vision for all tribes
+        let old_sure = self.state.settings._are_you_sure;
+        self.state.settings._are_you_sure = true;
+        let ids: Vec<PlayerId> = self.state.tribes.keys().cloned().collect();
+        for id in ids {
+            let _ = update_exploration(&mut self.state, id);
+        }
+        self.state.settings._are_you_sure = old_sure;
+
+        // 5. Update scores (first time)
         sync_scores(&mut self.state);
     }
 
@@ -550,5 +559,41 @@ mod tests {
         let cloned = game.clone_game();
         assert_eq!(game.map_size(), cloned.map_size());
         assert_eq!(game.turn(), cloned.turn());
+    }
+
+    #[test]
+    fn test_initial_vision() {
+        use crate::mapgen::{MapGenSettings, generate};
+        let settings = MapGenSettings {
+            size: MapSize::Tiny,
+            tribes: vec![TribeType::Imperius, TribeType::Bardur],
+            ..Default::default()
+        };
+        let mut game = Game::new();
+        game.state = generate(settings);
+        game.post_load();
+
+        let p1_explored = game
+            .state
+            .tiles
+            .values()
+            .filter(|t| t.explorers.contains(&1))
+            .count();
+        let p2_explored = game
+            .state
+            .tiles
+            .values()
+            .filter(|t| t.explorers.contains(&2))
+            .count();
+
+        // Each player should have ~25 tiles explored (radius 2 around capital)
+        assert!(
+            p1_explored >= 9,
+            "P1 should have at least city radius 1 explored"
+        );
+        assert!(
+            p2_explored >= 9,
+            "P2 should have at least city radius 1 explored"
+        );
     }
 }

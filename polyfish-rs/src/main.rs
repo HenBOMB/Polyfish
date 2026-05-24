@@ -257,48 +257,56 @@ async fn auto_step(
     State(state): State<Arc<AppState>>,
     Json(params): Json<StepParams>,
 ) -> Json<Value> {
-    if !state.network.is_some() {
-        return Json(serde_json::json!({
-            "status": "error",
-            "message": "No trained network available"
-        }));
-    }
     let mut game = state.game.lock().unwrap();
     // dont spam the front end lol
     game.state.settings._verbose = false;
 
-    // Use trained AI model!
-    use polyfish::ai::brain::Brain;
-    let brain = Brain::new(state.network.as_ref().unwrap(), params.iterations);
-
-    game.state._messages.clear();
-    let (chosen_move, policy) = brain.think_with_stats(&mut game);
     let mut move_name = "none".to_string();
+    let mut best_move_json = None;
+    let mut policy = serde_json::json!({});
 
-    // Create serialized best move before potentially consuming it (though we use as_ref so it's fine)
-    let best_move_json = chosen_move.as_ref().map(|m| m.serialize());
+    // 1. Try to get AI move from trained model if available
+    if let Some(net) = &state.network {
+        use polyfish::ai::brain::Brain;
+        let brain = Brain::new(net, params.iterations);
+        game.state._messages.clear();
+        let (chosen_move, brain_policy) = brain.think_with_stats(&mut game);
+        policy = brain_policy.into();
+        best_move_json = chosen_move.as_ref().map(|m| m.serialize());
 
-    if !params.dry_run {
-        if let Some(m) = chosen_move {
-            move_name = format!("{:?}", m.move_type());
-            game.play_move(m.as_ref());
+        if !params.dry_run {
+            if let Some(m) = chosen_move {
+                move_name = format!("{:?}", m.move_type());
+                game.play_move(m.as_ref());
+            }
         }
     }
 
-    // Run heuristic MCTS for analysis panel (move descriptions + PV)
+    // 2. Run heuristic MCTS for analysis panel (move descriptions + PV)
+    // This also acts as a fallback for move selection if no network is available
     use polyfish::ai::heuristic_mcts::HeuristicMctsAgent;
-
     let analysis_agent = HeuristicMctsAgent {
         iterations: params.iterations,
         exploration_constant: 0.1,
     };
-    let (_, mcts_analysis) = analysis_agent.select_move_with_analysis(&mut game);
+    let (h_best_move, mcts_analysis) = analysis_agent.select_move_with_analysis(&mut game);
+
+    // If we don't have a network but we ARE supposed to move, use the heuristic best move
+    if state.network.is_none() && !params.dry_run {
+        if let Some(m) = h_best_move.as_ref() {
+            move_name = format!("{:?}", m.move_type());
+            best_move_json = Some(m.serialize());
+            game.play_move(m.as_ref());
+        }
+    } else if state.network.is_none() {
+        // Just for dry_run analysis when network is missing
+        best_move_json = h_best_move.as_ref().map(|m| m.serialize());
+    }
 
     let mut tiles: Vec<_> = game.state.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);
 
     let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
-
     let evaluation = build_evaluation_json(&game.state);
 
     Json(serde_json::json!({
@@ -776,26 +784,38 @@ async fn get_trainer_hint(
     State(state): State<Arc<AppState>>,
     Json(params): Json<StepParams>,
 ) -> Json<Value> {
-    if !state.network.is_some() {
-        return Json(serde_json::json!({
-            "status": "error",
-            "message": "No trained network available"
-        }));
-    }
-
     let mut game = state.game.lock().unwrap();
 
-    // Use Gumbel MCTS Agent (Neural Network)
-    use polyfish::ai::brain::Brain;
-    let agent = Brain::new(state.network.as_ref().unwrap(), params.iterations);
-    // use polyfish::ai::heuristic_mcts::HeuristicMctsAgent;
-    // let agent = HeuristicMctsAgent {
-    //     iterations: params.iterations,
-    //     exploration_constant: 0.4,
-    // };
+    let (best_move, mcts_analysis) = if let Some(net) = &state.network {
+        // 1. Use Neural Network (Gumbel MCTS) if available
+        use polyfish::ai::brain::Brain;
+        let brain = Brain::new(net, params.iterations);
+        let (bm, _stats) = brain.think_with_stats(&mut game);
+        // Brain currently returns stats as Vec<f32>, convert to simpler MCTS analysis or similar
+        // For visual consistency, we actually prefer the full analysis from heuristic agent
+        // but we'll use the brain's move.
+        (
+            bm,
+            polyfish::ai::mcts::MctsAnalysis {
+                evaluations: vec![],
+                total_iterations: params.iterations,
+                principal_variation: vec![],
+                tree: None,
+            },
+        )
+    } else {
+        // 2. Fallback to Heuristic MCTS
+        use polyfish::ai::heuristic_mcts::HeuristicMctsAgent;
+        let agent = HeuristicMctsAgent {
+            iterations: params.iterations,
+            exploration_constant: 0.4,
+        };
+        agent.select_move_with_analysis(&mut game)
+    };
 
-    // Run MCTS search
-    let (best_move, mcts_analysis) = agent.think_with_stats(&mut game);
+    // If we used the brain, let's still run a tiny heuristic analysis for the PV/Tree if requested?
+    // Actually, let's keep it simple: if Brain is used, we get the move.
+    // If the user wants full analysis panels, they use the passive toggle.
 
     let move_json = best_move.as_ref().map(|m| m.serialize());
     let move_name = best_move

@@ -1,0 +1,5 @@
+/bin/
+/obj/
+/decompiled/
+*.user
+*.suo

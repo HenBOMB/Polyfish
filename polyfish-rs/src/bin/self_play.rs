@@ -5,10 +5,13 @@ use polyfish::ai::features::{self, GameFeatures, state_to_tensor};
 use polyfish::ai::mapper::DecomposedMapper;
 use polyfish::ai::network::PolyZeroNet;
 use polyfish::game::Game;
+use polyfish::replayer::{ModReplay, ReplayPlayer, ReplayTurn};
 use polyfish::states::PlayerId;
 use polyfish::types::MapSize;
 use rayon::prelude::*;
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::Write;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -22,11 +25,12 @@ struct DecomposedPolicyData {
 
 /// Result from a single game - contains all data needed for training
 struct GameResult {
-    // Added: current_spt and current_units for each step
-    history: Vec<(GameFeatures, DecomposedPolicyData, PlayerId)>,
+    // Each step: features, policy, player_id, my_score_at_step, opponent_score_at_step
+    history: Vec<(GameFeatures, DecomposedPolicyData, PlayerId, i32, i32)>,
     scores: HashMap<i32, i32>,
     moves: usize,
     winner_score: i32,
+    recap: ModReplay,
 }
 
 /// Play a single game and return the result
@@ -53,7 +57,7 @@ fn play_single_game(
 
     let mut game = Game::new();
     game.state = polyfish::mapgen::generate(gen_settings);
-    game.state.settings.mode = polyfish::types::ModeType::Perfection;
+    game.state.settings.mode = polyfish::types::ModeType::Domination;
     game.state.settings.max_turns = 20;
     game.post_load();
 
@@ -61,8 +65,12 @@ fn play_single_game(
     let agent1 = Brain::new(network1, mcts_iters);
     let agent2 = Brain::new(network2, mcts_iters);
 
+    let initial_state = game.state.clone();
+    let mut flat_recap: Vec<(i32, i32, serde_json::Value)> = Vec::new();
+
     // Game Loop
-    let mut game_history: Vec<(GameFeatures, DecomposedPolicyData, PlayerId)> = Vec::new();
+    let mut game_history: Vec<(GameFeatures, DecomposedPolicyData, PlayerId, i32, i32)> =
+        Vec::new();
 
     let current_scores: Vec<(PlayerId, i32)> = game
         .state
@@ -165,7 +173,22 @@ fn play_single_game(
         };
 
         if let Some(m) = best_move {
-            game_history.push((state_t, policy_data, pov));
+            flat_recap.push((
+                game.state.settings.turn,
+                game.state.settings.current_player_turn_id,
+                m.serialize(),
+            ));
+            // Snapshot scores at this moment for reward shaping
+            let my_score_now = game.state.tribes.get(&pov).map(|t| t.score).unwrap_or(0);
+            let opp_score_now = game
+                .state
+                .tribes
+                .iter()
+                .filter(|(id, _)| **id != pov)
+                .map(|(_, t)| t.score)
+                .max()
+                .unwrap_or(0);
+            game_history.push((state_t, policy_data, pov, my_score_now, opp_score_now));
             if move_count > 0 && move_count % 10 == 0 {
                 // let current_scores: Vec<(PlayerId, i32)> = game
                 //     .state
@@ -189,21 +212,39 @@ fn play_single_game(
         move_count += 1;
     }
 
-    // Determine scores
+    // Determine scores & winner
+    // In Domination, the winner is the last tribe alive.
+    // If the game timed out (safety cap), use score as tiebreaker.
     let mut scores: HashMap<i32, i32> = HashMap::new();
+    let mut alive: HashMap<i32, bool> = HashMap::new();
     for (id, t) in &game.state.tribes {
         scores.insert(*id, t.score);
+        alive.insert(*id, t.killed_turn <= 0 && t.resigned_turn <= 0);
     }
 
-    let (winner_id, winner_score) = scores
+    // Domination winner: the sole survivor, or highest score if timeout
+    let alive_tribes: Vec<i32> = alive
         .iter()
-        .max_by_key(|&(_, score)| score)
-        .map(|(&id, &score)| (id, score))
-        .unwrap_or((0, 0));
+        .filter(|(_, is_alive)| **is_alive)
+        .map(|(id, _)| *id)
+        .collect();
 
+    let (winner_id, winner_score) = if alive_tribes.len() == 1 {
+        let wid = alive_tribes[0];
+        (wid, *scores.get(&wid).unwrap_or(&0))
+    } else {
+        // Timeout: use score tiebreaker
+        scores
+            .iter()
+            .max_by_key(|&(_, score)| score)
+            .map(|(&id, &score)| (id, score))
+            .unwrap_or((0, 0))
+    };
+
+    let is_decisive = alive_tribes.len() == 1;
     eprintln!(
-        "[Game {}] Finished. Moves: {} | Winner: {} (Score: {})",
-        game_idx, move_count, winner_id, winner_score
+        "[Game {}] Finished. Moves: {} | Winner: {} (Score: {}) | Decisive: {}",
+        game_idx, move_count, winner_id, winner_score, is_decisive
     );
 
     Some(GameResult {
@@ -211,7 +252,32 @@ fn play_single_game(
         scores,
         moves: move_count,
         winner_score,
+        recap: ModReplay {
+            game_state: initial_state,
+            turns: group_recap(flat_recap),
+        },
     })
+}
+
+fn group_recap(flat: Vec<(i32, i32, serde_json::Value)>) -> Vec<ReplayTurn> {
+    let mut turns: Vec<ReplayTurn> = Vec::new();
+    for (turn_num, player_id, cmd) in flat {
+        if turns.is_empty() || turns.last().unwrap().turn != turn_num {
+            turns.push(ReplayTurn {
+                turn: turn_num,
+                players: Vec::new(),
+            });
+        }
+        let turn = turns.last_mut().unwrap();
+        if turn.players.is_empty() || turn.players.last().unwrap().player_id != player_id {
+            turn.players.push(ReplayPlayer {
+                player_id,
+                commands: Vec::new(),
+            });
+        }
+        turn.players.last_mut().unwrap().commands.push(cmd);
+    }
+    turns
 }
 
 fn main() -> anyhow::Result<()> {
@@ -239,6 +305,11 @@ fn main() -> anyhow::Result<()> {
         /// Second tribe (optional, defaults to random)
         #[arg(long)]
         tribe2: Option<String>,
+
+        /// Enable reward shaping (blended per-step score progress + final outcome)
+        /// Without this flag, all actions get the same flat final-outcome value.
+        #[arg(long, default_value_t = false)]
+        reward_shaping: bool,
     }
 
     let args = Args::parse();
@@ -417,6 +488,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut total_score = 0;
     let mut max_score = 0;
+    let mut best_recap: Option<ModReplay> = None;
     let mut total_moves = 0;
 
     let mut p1_total = 0;
@@ -429,6 +501,7 @@ fn main() -> anyhow::Result<()> {
         total_moves += result.moves;
         if result.winner_score > max_score {
             max_score = result.winner_score;
+            best_recap = Some(result.recap.clone());
         }
 
         for (id, score) in &result.scores {
@@ -442,7 +515,33 @@ fn main() -> anyhow::Result<()> {
         }
 
         // Backpropagate value
-        for (features, policy_data, p_id) in result.history {
+        // Domination: Win/Loss is the primary signal.
+        // The winner gets +1.0, loser gets -1.0.
+        // If timeout, use score differential as a softer signal.
+        let max_score = polyfish::states::default_max_score() as f32;
+        let final_scores = &result.scores;
+        let history_len = result.history.len();
+
+        // Determine the winner_id for this game
+        let game_winner_id = {
+            let alive_ids: Vec<i32> = result.scores.keys().copied().collect();
+            // Check who survived (alive = not killed)
+            // We stored scores; for decisive win, one player's score is dominant
+            // Use the result.winner_score to identify winner
+            let mut best_id = 0;
+            let mut best_s = i32::MIN;
+            for (&id, &s) in &result.scores {
+                if s > best_s {
+                    best_s = s;
+                    best_id = id;
+                }
+            }
+            best_id
+        };
+
+        for (step_idx, (features, policy_data, p_id, my_score_now, opp_score_now)) in
+            result.history.into_iter().enumerate()
+        {
             let flat_map = features
                 .spatial_map
                 .flatten_all()
@@ -460,19 +559,41 @@ fn main() -> anyhow::Result<()> {
             collected_target_spatial.push(policy_data.target_spatial);
             collected_option.push(policy_data.move_option);
 
-            // Calculate Value based on FINAL OUTCOME (Win/Loss/Score Diff)
-            // This is crucial: Value Head learns "Who Wins", not "What Heuristic Thinks"
-            let my_score = result.scores.get(&p_id).copied().unwrap_or(0) as f32;
-            let opponent_score = result
-                .scores
+            // Domination final outcome: win = +1.0, loss = -1.0
+            // If timeout (no decisive kill), soften with score differential
+            let my_final = final_scores.get(&p_id).copied().unwrap_or(0) as f32;
+            let opp_final = final_scores
                 .iter()
                 .filter(|(id, _)| **id != p_id)
                 .map(|(_, score)| *score as f32)
                 .next()
                 .unwrap_or(0.0);
 
-            let score_diff = my_score - opponent_score;
-            let value = (score_diff / polyfish::states::default_max_score() as f32).tanh();
+            let final_outcome = if p_id == game_winner_id {
+                // Winner: strong positive, scaled slightly by margin
+                (0.8 + 0.2 * ((my_final - opp_final) / max_score).tanh()).clamp(0.5, 1.0)
+            } else {
+                // Loser: strong negative, scaled slightly by margin
+                (-0.8 + 0.2 * ((my_final - opp_final) / max_score).tanh()).clamp(-1.0, -0.5)
+            };
+
+            let value = if args.reward_shaping {
+                // REWARD SHAPING for Domination:
+                // Blend win/loss outcome with local military/score advantage.
+                let my_advantage_now = (my_score_now - opp_score_now) as f32;
+                let progress = (my_advantage_now / max_score).tanh();
+
+                // Early game: lean on progress (are we gaining territory, killing units?)
+                // Late game: lean on final outcome (did we actually win?)
+                let game_progress = step_idx as f32 / (history_len as f32).max(1.0);
+                let final_weight = 0.4 + 0.4 * game_progress; // 0.4 early → 0.8 late
+                let progress_weight = 1.0 - final_weight; // 0.6 early → 0.2 late
+
+                (final_weight * final_outcome + progress_weight * progress).clamp(-1.0, 1.0)
+            } else {
+                // FLAT: binary win/loss signal (Domination-native)
+                final_outcome
+            };
 
             collected_values.push(value);
         }
@@ -560,6 +681,23 @@ fn main() -> anyhow::Result<()> {
         let filename = format!("games_{}.safetensors", timestamp);
         candle_core::safetensors::save(&tensors, &filename)?;
         println!("Saved to {}", filename);
+
+        // Save BEST game as replay
+        if let Some(recap) = best_recap {
+            let replay_filename = format!(
+                "replays/high_scores/best_game_score_{}_{}.json",
+                max_score, timestamp
+            );
+            if let Ok(json) = serde_json::to_string_pretty(&recap) {
+                if let Ok(mut file) = File::create(&replay_filename) {
+                    let _ = file.write_all(json.as_bytes());
+                    println!(
+                        "🏆 Highest score game ({}) saved to {}",
+                        max_score, replay_filename
+                    );
+                }
+            }
+        }
     }
 
     Ok(())

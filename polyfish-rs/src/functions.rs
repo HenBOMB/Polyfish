@@ -54,9 +54,8 @@ pub fn is_game_over(state: &GameState) -> bool {
         return true;
     }
 
-    // Check turn limit for Perfection mode
-    if state.settings.mode == ModeType::Perfection && state.settings.turn > state.settings.max_turns
-    {
+    // Check turn limit as a safety boundary for all modes (prevents infinite training games)
+    if state.settings.turn > state.settings.max_turns {
         return true;
     }
 

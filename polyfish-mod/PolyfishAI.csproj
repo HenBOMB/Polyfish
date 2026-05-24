@@ -1,0 +1,133 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>PolyfishAI</AssemblyName>
+    <!-- Your game path on Linux -->
+    <GamePath>/mnt/hen480/SteamLibrary/steamapps/common/The Battle of Polytopia</GamePath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Reference your local PolyMod build -->
+    <Reference Include="PolyMod">
+      <HintPath>$(GamePath)/BepInEx/plugins/PolyMod.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- Reference your local Il2Cppmscorlib build -->
+    <Reference Include="Il2Cppmscorlib">
+      <HintPath>$(GamePath)/BepInEx/interop/Il2Cppmscorlib.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- Reference Newtonsoft.Json from the interop folder -->
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>$(GamePath)/BepInEx/interop/Newtonsoft.Json.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- Reference BepInEx from the game folder -->
+    <Reference Include="0Harmony">
+      <HintPath>$(GamePath)/BepInEx/core/0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="BepInEx.Core">
+      <HintPath>$(GamePath)/BepInEx/core/BepInEx.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="BepInEx.Unity.IL2CPP">
+      <HintPath>$(GamePath)/BepInEx/core/BepInEx.Unity.IL2CPP.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Il2CppInterop.Runtime">
+      <HintPath>$(GamePath)/BepInEx/core/Il2CppInterop.Runtime.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Il2CppSystem">
+      <HintPath>$(GamePath)/BepInEx/interop/Il2CppSystem.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- Reference Unity Engine components from the interop folder -->
+    <Reference Include="UnityEngine">
+      <HintPath>$(GamePath)/BepInEx/interop/UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(GamePath)/BepInEx/interop/UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UI">
+      <HintPath>$(GamePath)/BepInEx/interop/UnityEngine.UI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.PhysicsModule">
+      <HintPath>$(GamePath)/BepInEx/interop/UnityEngine.PhysicsModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule">
+      <HintPath>$(GamePath)/BepInEx/interop/UnityEngine.TextRenderingModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UIModule">
+      <HintPath>$(GamePath)/BepInEx/interop/UnityEngine.UIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.IMGUIModule">
+      <HintPath>$(GamePath)/BepInEx/interop/UnityEngine.IMGUIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.InputLegacyModule">
+      <HintPath>$(GamePath)/BepInEx/interop/UnityEngine.InputLegacyModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UnityWebRequestModule">
+      <HintPath>$(GamePath)/BepInEx/interop/UnityEngine.UnityWebRequestModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Unity.TextMeshPro">
+      <HintPath>$(GamePath)/BepInEx/interop/Unity.TextMeshPro.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- Reference game assemblies -->
+    <Reference Include="PolytopiaBackendBase">
+      <HintPath>$(GamePath)/BepInEx/interop/PolytopiaBackendBase.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="PolytopiaAssembly">
+      <HintPath>$(GamePath)/BepInEx/interop/PolytopiaAssembly.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="GameLogicAssembly">
+      <HintPath>$(GamePath)/BepInEx/interop/GameLogicAssembly.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+  </ItemGroup>
+  
+  <ItemGroup>
+    <Compile Remove="decompiled/**" />
+    <Content Remove="decompiled/**" />
+    <None Remove="decompiled/**" />
+    <EmbeddedResource Remove="decompiled/**" />
+    <Compile Remove="saved/**" />
+    <Content Remove="saved/**" />
+    <None Remove="saved/**" />
+    <EmbeddedResource Remove="saved/**" />
+  </ItemGroup>
+
+  <!-- Automatically install the mod after a successful build -->
+  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
+    <PropertyGroup>
+      <ModFolder>$(GamePath)/Mods/$(AssemblyName)-Mod</ModFolder>
+    </PropertyGroup>
+    <Exec Command="mkdir -p &quot;$(ModFolder)&quot;" />
+    <Exec Command="cp &quot;$(TargetDir)&quot;*.dll &quot;$(ModFolder)/&quot;" />
+    <Exec Command="cp &quot;$(ProjectDir)manifest.json&quot; &quot;$(ModFolder)/&quot;" />
+    <Message Importance="High" Text="Mod successfully installed to: $(ModFolder)" />
+  </Target>
+
+</Project>

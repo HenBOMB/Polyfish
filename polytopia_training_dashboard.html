@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PolyZero Training Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0d0f12;
+    --surface: #13161b;
+    --surface2: #1a1e25;
+    --border: rgba(255,255,255,0.07);
+    --border2: rgba(255,255,255,0.12);
+    --text: #e8e6e0;
+    --text-muted: #6b6e78;
+    --text-dim: #3d4049;
+    --accent-blue: #378ADD;
+    --accent-green: #1D9E75;
+    --accent-coral: #D85A30;
+    --accent-purple: #7F77DD;
+    --accent-red: #E24B4A;
+    --accent-amber: #EF9F27;
+    --grid: rgba(255,255,255,0.04);
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'IBM Plex Sans', monospace;
+    font-size: 14px;
+    line-height: 1.6;
+    min-height: 100vh;
+    padding: 2rem;
+  }
+
+  .header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 2rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .header-left h1 {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 20px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    color: var(--text);
+  }
+
+  .header-left .subtitle {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 4px;
+    letter-spacing: 0.05em;
+  }
+
+  .header-right {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+  }
+
+  .status-pill {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    padding: 3px 10px;
+    border-radius: 2px;
+    background: rgba(29,158,117,0.12);
+    color: #1D9E75;
+    border: 1px solid rgba(29,158,117,0.25);
+  }
+
+  .iter-range {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+
+  /* Metrics grid */
+  .metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 1.5rem;
+  }
+
+  .metric-card {
+    background: var(--surface);
+    padding: 1.25rem 1.5rem;
+  }
+
+  .metric-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  .metric-value {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 28px;
+    font-weight: 500;
+    color: var(--text);
+    letter-spacing: -0.03em;
+  }
+
+  .metric-value .unit {
+    font-size: 14px;
+    color: var(--text-muted);
+    font-weight: 400;
+  }
+
+  .metric-sub {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 4px;
+  }
+
+  .metric-delta {
+    display: inline-block;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 2px;
+    margin-top: 6px;
+  }
+
+  .delta-good { background: rgba(29,158,117,0.12); color: #1D9E75; }
+  .delta-bad { background: rgba(226,75,74,0.12); color: #E24B4A; }
+  .delta-warn { background: rgba(239,159,39,0.12); color: #EF9F27; }
+
+  /* Charts */
+  .charts-layout {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+
+  .chart-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1.25rem;
+  }
+
+  .chart-panel.full-width {
+    grid-column: 1 / -1;
+  }
+
+  .panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 1rem;
+  }
+
+  .panel-title {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .panel-legend {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+
+  .legend-swatch {
+    width: 20px;
+    height: 3px;
+    border-radius: 1px;
+  }
+
+  .legend-swatch.dashed {
+    background: repeating-linear-gradient(90deg, var(--c) 0, var(--c) 4px, transparent 4px, transparent 8px);
+  }
+
+  .chart-wrap {
+    position: relative;
+    width: 100%;
+    height: 220px;
+  }
+
+  .chart-wrap.tall {
+    height: 280px;
+  }
+
+  /* Annotations */
+  .annotation-bar {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.75rem 1.25rem;
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .annotation-icon {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: var(--accent-amber);
+    border: 1px solid rgba(239,159,39,0.3);
+    padding: 2px 7px;
+    border-radius: 2px;
+    white-space: nowrap;
+  }
+
+  .annotation-text {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .annotation-text strong {
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  /* Insights grid */
+  .insights-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 1.5rem;
+  }
+
+  .insight-card {
+    background: var(--surface);
+    padding: 1.1rem 1.25rem;
+    border-left: 2px solid transparent;
+  }
+
+  .insight-card.warn { border-left-color: var(--accent-amber); }
+  .insight-card.bad  { border-left-color: var(--accent-red); }
+  .insight-card.good { border-left-color: var(--accent-green); }
+  .insight-card.info { border-left-color: var(--accent-blue); }
+
+  .insight-title {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--text);
+    margin-bottom: 6px;
+    font-weight: 500;
+  }
+
+  .insight-body {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.55;
+  }
+
+  .tag {
+    display: inline-block;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.06em;
+    padding: 2px 6px;
+    border-radius: 2px;
+    margin-left: 6px;
+    vertical-align: middle;
+    text-transform: uppercase;
+  }
+
+  .tag-good { background: rgba(29,158,117,0.12); color: #1D9E75; }
+  .tag-warn { background: rgba(239,159,39,0.12); color: #EF9F27; }
+  .tag-bad  { background: rgba(226,75,74,0.12); color: #E24B4A; }
+  .tag-info { background: rgba(55,138,221,0.12); color: #378ADD; }
+
+  /* P1 vs P2 chart */
+  .side-charts {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+
+  /* Model info */
+  .model-info {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+  }
+
+  .model-info-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 1rem;
+    margin-top: 1rem;
+  }
+
+  .model-stat { }
+  .model-stat-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: var(--text-muted);
+    letter-spacing: 0.06em;
+    margin-bottom: 3px;
+  }
+  .model-stat-val {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 14px;
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  .divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 1.5rem 0;
+  }
+
+  .footer {
+    text-align: center;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.06em;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <h1>PolyZero — Training Analysis</h1>
+    <div class="subtitle">POLYTOPIA · IMPERIUS VS IMPERIUS · MCTS SELF-PLAY + LEAGUE</div>
+  </div>
+  <div class="header-right">
+    <div class="status-pill">SESSION COMPLETE</div>
+    <div class="iter-range">ITER 1 → 232 &nbsp;·&nbsp; 232 ITERATIONS</div>
+  </div>
+</div>
+
+<!-- Model Architecture Info -->
+<div class="model-info">
+  <div class="panel-title">Model architecture</div>
+  <div class="model-info-grid">
+    <div class="model-stat"><div class="model-stat-label">Parameters</div><div class="model-stat-val">584,276</div></div>
+    <div class="model-stat"><div class="model-stat-label">Blocks</div><div class="model-stat-val">6 ResBlocks</div></div>
+    <div class="model-stat"><div class="model-stat-label">Spatial input</div><div class="model-stat-val">154ch · 11×11</div></div>
+    <div class="model-stat"><div class="model-stat-label">Policy heads</div><div class="model-stat-val">7 heads</div></div>
+    <div class="model-stat"><div class="model-stat-label">Value head</div><div class="model-stat-val">Win prob</div></div>
+  </div>
+</div>
+
+<!-- Summary Metrics -->
+<div class="metrics-grid">
+  <div class="metric-card">
+    <div class="metric-label">Total iterations</div>
+    <div class="metric-value">232</div>
+    <div class="metric-sub">Started from scratch</div>
+    <div class="metric-delta delta-good">179 self-play · 53 league</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Loss: start → best</div>
+    <div class="metric-value">41.6 <span class="unit">→ 25.6</span></div>
+    <div class="metric-sub">Best at iter ~178</div>
+    <div class="metric-delta delta-good">−38% improvement</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Loss: final</div>
+    <div class="metric-value">29.3</div>
+    <div class="metric-sub">Final value</div>
+    <div class="metric-delta delta-bad">+14% from best</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Best single game</div>
+    <div id="bestScoreValue" class="metric-value">7,140</div>
+    <div id="bestScoreSub" class="metric-sub">Iter 184 self-play</div>
+    <div class="metric-delta delta-good">
+      <a id="bestGameLink" href="#" style="color: inherit; text-decoration: none;">WATCH REPLAY →</a>
+    </div>
+  </div>
+</div>
+
+<!-- Phase change annotation -->
+<div class="annotation-bar">
+  <div class="annotation-icon">TRAINING HIGHLIGHT · ITER 144</div>
+  <div class="annotation-text">
+    <strong>Minimum loss achieved.</strong>
+    Loss dropped from 41.57 consistently down to 25.64. After iter 144, the loss plateaued and softly rebounded to ~29, indicating the generic capacity of the current architecture or generation diversity might be reaching a stable point.
+  </div>
+</div>
+
+<!-- Main Charts Row -->
+<div class="charts-layout">
+  <!-- Loss chart - full width -->
+  <div class="chart-panel full-width">
+    <div class="panel-header">
+      <div class="panel-title">Training loss over iterations</div>
+      <div class="panel-legend">
+        <div class="legend-item"><div class="legend-swatch" style="background: var(--accent-blue)"></div>Policy + value loss</div>
+      </div>
+    </div>
+    <div class="chart-wrap tall">
+      <canvas id="lossChart"></canvas>
+    </div>
+  </div>
+
+  <!-- Score chart -->
+  <div class="chart-panel full-width">
+    <div class="panel-header">
+      <div class="panel-title">Average & max game score</div>
+      <div class="panel-legend">
+        <div class="legend-item"><div class="legend-swatch" style="background: var(--accent-green)"></div>Avg score</div>
+        <div class="legend-item"><div class="legend-swatch" style="background: var(--accent-coral); opacity: 0.7;"></div>Max score (dashed)</div>
+        <div class="legend-item">
+          <div style="width:10px;height:10px;border-radius:50%;background:var(--accent-purple);"></div>
+          League match iteration
+        </div>
+      </div>
+    </div>
+    <div class="chart-wrap tall">
+      <canvas id="scoreChart"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- Side by side: P1 vs P2 + League breakdown -->
+<div class="side-charts">
+  <div class="chart-panel">
+    <div class="panel-header">
+      <div class="panel-title">P1 vs P2 avg score</div>
+      <div class="panel-legend">
+        <div class="legend-item"><div class="legend-swatch" style="background: var(--accent-blue)"></div>P1</div>
+        <div class="legend-item"><div class="legend-swatch" style="background: var(--accent-coral)"></div>P2</div>
+      </div>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="p1p2Chart"></canvas>
+    </div>
+  </div>
+
+  <div class="chart-panel">
+    <div class="panel-header">
+      <div class="panel-title">League opponent frequency</div>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="leagueChart"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- Avg moves per iteration -->
+<div class="chart-panel" style="margin-bottom: 1rem;">
+  <div class="panel-header">
+    <div class="panel-title">Avg moves per game</div>
+    <div class="panel-legend">
+      <div class="legend-item"><div class="legend-swatch" style="background: var(--accent-amber)"></div>Avg moves</div>
+    </div>
+  </div>
+  <div class="chart-wrap">
+    <canvas id="movesChart"></canvas>
+  </div>
+</div>
+
+<!-- Insights -->
+<div class="insights-grid">
+  <div class="insight-card info">
+    <div class="insight-title">Rapid early learning <span class="tag tag-info">context</span></div>
+    <div class="insight-body">Loss dropped significantly from 41.57 to 25.64 by iteration 144. The initial training trajectory was very healthy and fast before hitting a plateau curve.</div>
+  </div>
+  <div class="insight-card warn">
+    <div class="insight-title">Loss stabilization <span class="tag tag-warn">watch</span></div>
+    <div class="insight-body">After the minimum loss, the model's loss hovered between 26 and 29. It suggests the model is approaching its capacity limit or needs more diverse data from alternative tribes/maps.</div>
+  </div>
+  <div class="insight-card good">
+    <div class="insight-title">Balanced P1 vs P2 <span class="tag tag-good">positive</span></div>
+    <div class="insight-body">Unlike previous runs, P1 and P2 scores are incredibly balanced (P1 avg: 3482, P2 avg: 3474). First-mover disadvantage appears to be completely resolved or adapted to by the newer model.</div>
+  </div>
+  <div class="insight-card warn">
+    <div class="insight-title">Average scores stabilized <span class="tag tag-warn">plateau</span></div>
+    <div class="insight-body">Scores average around 3950-4100 across the entire run without exploding. The max scores occasionally spike up to 7,140, showing capable spikes but consistent median behavior.</div>
+  </div>
+  <div class="insight-card good">
+    <div class="insight-title">League stability <span class="tag tag-good">healthy</span></div>
+    <div class="insight-body">League matches make up ~22% of the session. The model consistently holds its own against past checkpoints, preventing catastrophic forgetting effectively.</div>
+  </div>
+  <div class="insight-card info">
+    <div class="insight-title">Efficient game lengths <span class="tag tag-info">stable</span></div>
+    <div class="insight-body">Average moves per game typically float between 210 and 260. The games finish in a predictable length, indicating no degenerate infinite-loop strategies have emerged.</div>
+  </div>
+</div>
+
+<div class="footer">POLYZERO · RUST + PYTHON · CPU TRAINING · IBM PLEX MONO DASHBOARD</div>
+
+<script>
+/* ── Data ── */
+const iterations = Array.from({length: 232}, (_, i) => 1 + i);
+const bestGames = []; 
+
+const losses = [
+
+const p1Avgs = [3729.25, 3279.0, 3179.5, 2933.25, 3165.5, 3193.75, 3481.5, 3280.0, 3553.0, 3480.75, 3740.75, 3267.0, 3260.75, 3221.75, 3701.25, 3619.75, 3541.75, 2391.0, 3121.0, 4185.25, 3281.75, 3484.0, 3316.5, 2714.75, 3947.25, 3392.5, 3598.75, 3582.75, 3499.25, 3872.25, 3641.25, 3255.25, 3455.25, 2841.5, 3529.75, 3550.0, 3386.5, 3864.0, 2786.25, 2739.0, 3047.25, 3703.25, 3596.25, 3473.75, 3264.0, 3681.75, 3645.25, 3763.75, 3502.5, 3844.5, 3326.25, 2790.0, 3717.75, 3230.75, 3806.0, 3072.5, 3312.0, 3132.75, 3798.75, 3467.25, 3347.0, 3558.0, 4259.75, 3569.25, 3016.75, 3852.0, 3557.0, 3348.5, 4440.5, 3141.0, 3647.5, 3612.5, 3258.75, 3234.0, 2933.25, 3542.25, 3824.25, 3766.25, 3554.5, 3801.0, 3663.75, 3715.75, 3387.5, 3121.25, 4093.0, 4039.75, 2595.0, 3872.5, 3022.0, 3804.5, 3131.5, 3652.0, 3554.5, 3808.0, 3661.5, 3167.75, 4248.25, 3144.75, 3454.5, 3670.25, 4375.5, 3723.75, 3879.0, 3733.0, 3484.0, 3066.5, 3455.0, 3177.75, 2840.5, 3295.0, 3655.75, 3933.0, 3821.75, 3451.25, 3431.5, 4406.0, 3246.75, 3857.5, 2787.75, 3714.5, 3451.0, 3602.75, 3780.5, 3137.0, 3693.5, 3970.75, 3575.75, 3625.5, 3174.25, 3354.0, 3208.25, 4133.0, 3039.0, 3742.25, 3186.5, 3696.5, 3375.75, 2853.75, 3116.75, 3664.75, 3102.25, 3743.25, 3304.75, 3199.25, 3560.5, 3482.0, 3266.25, 3410.0, 3489.75, 3799.25, 4050.75, 3477.75, 3316.5, 3392.25, 3848.0, 3497.5, 3476.0, 3066.75, 3700.25, 3111.25, 3840.5, 3235.0, 2369.5, 3020.0, 3507.75, 2982.25, 4088.5, 2886.0, 2722.5, 3059.75, 3855.5, 3090.5, 3755.75, 4073.75, 4508.5, 3964.75, 4308.25, 3398.5, 3319.5, 3610.25, 3879.5, 3152.25, 3308.5, 3334.0, 2848.25, 3050.0, 3638.5, 3110.0, 3613.25, 4262.25, 3435.5, 3352.25, 3646.75, 2652.75, 4180.5, 3088.5, 3507.25, 3757.5, 3423.25, 3795.0, 2843.75, 4166.0, 2932.5, 3794.25, 3393.5, 3041.0, 3231.75, 3479.25, 4210.0, 3724.5, 3319.5, 3544.5, 2833.5, 3737.25, 3841.0, 3872.75, 3881.75, 3564.5, 3844.5, 3403.0, 3872.0, 3606.25, 4139.75, 3482.25, 3577.75, 3111.75, 2765.75, 3492.5, 4133.75, 3507.75, 2903.0, 3402.25, 3861.5, 3379.75, 3233.75, 3550.75, 3672.5];
+
+const p2Avgs = [3755.5, 2990.75, 2776.25, 3166.5, 3088.75, 2899.0, 3376.75, 3625.75, 3402.75, 3386.0, 3408.25, 3287.25, 3625.75, 3190.0, 3153.75, 3684.25, 3657.75, 2590.25, 3506.0, 4319.0, 3062.5, 3577.25, 3599.5, 2314.0, 3547.25, 3658.0, 3629.75, 3396.75, 3124.75, 3716.75, 3425.0, 3300.0, 3411.5, 2565.0, 3310.75, 3664.0, 3672.5, 3897.5, 2603.25, 4109.0, 3401.0, 4042.75, 2935.75, 3626.0, 3632.5, 4174.0, 2998.0, 4274.5, 3612.0, 3491.25, 3579.25, 2855.0, 3500.25, 3472.5, 3415.75, 3099.5, 2879.5, 3481.75, 4151.75, 3498.75, 3929.5, 3525.5, 4264.25, 3090.0, 3955.5, 3456.25, 3832.0, 2684.75, 4237.25, 3245.75, 3879.25, 3924.75, 3499.75, 2704.75, 3286.5, 3143.0, 3886.5, 3085.75, 3471.75, 3584.5, 3646.25, 3428.75, 3910.25, 3280.5, 4371.75, 3924.75, 2785.5, 3293.0, 2758.0, 3245.75, 3000.75, 3431.0, 3676.5, 3452.0, 3689.5, 3515.5, 4460.5, 3306.75, 3405.75, 3893.5, 4337.25, 3299.25, 3715.75, 3338.0, 3528.5, 3210.0, 3653.75, 3722.25, 2759.0, 3555.25, 3552.25, 3776.0, 3755.5, 3505.25, 3290.75, 3309.75, 3625.5, 3475.25, 3492.75, 3045.25, 3511.75, 4018.0, 3311.5, 3239.0, 3722.0, 3308.25, 3695.0, 3508.75, 3195.25, 2825.25, 3963.0, 3618.5, 3313.5, 3535.75, 3619.25, 3509.0, 3597.25, 2848.5, 3301.0, 3347.5, 3275.25, 3997.25, 3437.5, 3632.0, 3413.25, 3774.5, 3366.0, 2963.5, 3639.75, 3929.25, 3794.25, 3185.0, 3586.5, 3250.75, 3691.75, 3505.75, 3005.25, 4514.75, 3825.75, 3194.75, 3477.25, 3255.5, 2136.75, 3114.75, 3621.75, 3160.0, 3356.75, 2633.0, 2665.25, 3506.5, 4068.25, 3137.0, 3680.0, 3624.5, 5072.5, 3233.5, 3498.5, 3659.75, 3351.75, 3601.75, 3988.0, 2934.0, 3357.75, 3476.5, 2768.75, 2695.25, 3442.0, 3031.75, 3623.5, 4178.75, 3363.0, 3377.75, 3552.5, 2843.25, 3812.0, 3362.0, 3395.0, 3876.25, 3331.25, 3492.0, 3385.0, 4485.5, 3110.0, 3300.75, 3327.25, 3418.25, 3550.25, 3645.5, 3695.25, 3751.75, 3207.0, 3399.25, 4167.25, 3968.0, 3691.0, 3605.0, 3268.75, 3766.75, 3539.75, 3724.0, 3616.0, 3462.25, 4535.25, 3528.5, 3801.75, 3214.0, 2862.5, 3951.5, 3984.0, 3100.5, 2809.0, 3921.75, 3152.5, 3871.75, 2925.25, 3303.0, 3832.25];
+
+const avgMoves = [247.2,237.7,215.65,217.3,213.95,241.75,230.5,209.1,222.45,234.9,235.3,282.3,242.3,260.7,221.2,235.4,215.8,261.05,207.1,254.95,225.4,220.2,234.45,239.9,241.6,241.6,249.5,233.4,212.85,224.4,233.0,237.4,232.75,227.9,233.75,220.45,247.85,259.05,230.25,241.5,230.95,231.3,236.95,242.9,243.9,232.45,246.55,247.0,234.8,231.6,231.6,203.0,205.5,220.9,231.2,227.5,241.85,217.0,244.75,258.85,248.9,235.65,249.8,244.95,239.75,244.6,236.15,233.15,239.45,221.95,246.95,244.9,286.8,223.5,227.05,223.95,243.2,230.1,225.75,238.5,245.35,222.35,228.0,232.7,252.75,242.05,231.0,178.2,233.55,219.95,234.95,231.65,229.0,241.55,222.4,262.35,233.95,235.55,268.65,246.25,266.9,225.1,263.65,236.4,228.9,275.9,247.9,235.5,230.95,230.2,246.3,223.25,276.75,219.35,230.2,270.4,225.9,221.9,233.5,240.45,234.55,243.25,214.55,261.4,214.65,248.1,208.0,227.9,209.45,229.2,225.65,226.6,212.1,236.7,224.8,250.45,224.55,245.5,222.25,231.7,205.6,242.9,224.05,217.05,234.15,229.6,207.4,234.4,221.85,229.25,242.2,241.55,244.45,230.7,246.85,242.8,235.1,259.45,237.35,218.85,240.05,230.9,252.55,208.3,223.2,215.75,234.65,250.75,218.15,239.85,231.55,221.65,245.65,249.9,280.45,239.1,232.6,217.95,240.0,231.15,251.05,212.45,226.05,244.2,233.85,225.3,254.95,169.45,248.9,245.9,232.7,201.05,208.1,260.85,246.85,229.0,235.0,253.35,228.0,207.25,232.35,266.1,185.9,222.75,235.55,224.1,239.2,217.7,233.8,229.95,198.3,242.85,248.0,239.7,233.55,239.45,230.2,237.45,246.3,234.3,240.1,236.25,245.35,212.4,231.55,228.05,215.6,233.85,237.3,226.95,209.3,240.1,240.35,233.55,214.5,213.1,214.6];
+
+const leagueItersSet = new Set([2, 19, 26, 38, 40, 41, 44, 46, 49, 56, 60, 67, 74, 76, 81, 82, 84, 93, 101, 103, 105, 106, 112, 115, 116, 121, 126, 130, 130, 134, 137, 146, 147, 152, 154, 156, 160, 164, 169, 170, 171, 178, 185, 195, 198, 200, 201, 205, 207, 208, 214, 222, 227, 230]);
+
+const gridColor = 'rgba(255,255,255,0.04)';
+const tickColor = '#3d4049';
+const labelColor = '#6b6e78';
+
+const baseScaleOpts = {
+  x: {
+    ticks: { color: tickColor, maxTicksLimit: 12, autoSkip: true, font: { family: 'IBM Plex Mono', size: 10 } },
+    grid: { color: gridColor },
+    border: { color: 'rgba(255,255,255,0.08)' }
+  },
+  y: {
+    ticks: { color: tickColor, font: { family: 'IBM Plex Mono', size: 10 } },
+    grid: { color: gridColor },
+    border: { color: 'rgba(255,255,255,0.08)' }
+  }
+};
+
+/* ── Loss Chart ── */
+new Chart(document.getElementById('lossChart'), {
+  type: 'line',
+  data: {
+    labels: iterations,
+    datasets: [
+      {
+        label: 'Loss',
+        data: losses,
+        borderColor: '#378ADD',
+        backgroundColor: 'rgba(55,138,221,0.06)',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.35,
+        fill: true,
+        spanGaps: false
+      }
+    ]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: '#13161b',
+        borderColor: 'rgba(255,255,255,0.1)',
+        borderWidth: 1,
+        titleColor: '#6b6e78',
+        bodyColor: '#e8e6e0',
+        titleFont: { family: 'IBM Plex Mono', size: 10 },
+        bodyFont: { family: 'IBM Plex Mono', size: 11 },
+        callbacks: { label: ctx => ' loss: ' + ctx.raw.toFixed(4) }
+      }
+    },
+    scales: {
+      ...baseScaleOpts,
+      y: { ...baseScaleOpts.y, title: { display: true, text: 'loss', color: labelColor, font: { family: 'IBM Plex Mono', size: 10 } } }
+    }
+  }
+});
+
+/* ── Score Chart ── */
+new Chart(document.getElementById('scoreChart'), {
+  type: 'line',
+  data: {
+    labels: iterations,
+    datasets: [
+      {
+        label: 'Max score',
+        data: maxScores,
+        borderColor: 'rgba(216,90,48,0.5)',
+        borderWidth: 1,
+        pointRadius: 0,
+        tension: 0.3,
+        borderDash: [4, 3],
+        fill: false
+      },
+      {
+        label: 'Avg score',
+        data: avgScores,
+        borderColor: '#1D9E75',
+        backgroundColor: 'rgba(29,158,117,0.06)',
+        borderWidth: 1.5,
+        pointRadius: iterations.map(it => leagueItersSet.has(it) ? 5 : 0),
+        pointBackgroundColor: iterations.map(it => leagueItersSet.has(it) ? '#7F77DD' : 'transparent'),
+        pointBorderColor: iterations.map(it => leagueItersSet.has(it) ? '#7F77DD' : 'transparent'),
+        tension: 0.3,
+        fill: true
+      }
+    ]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: '#13161b',
+        borderColor: 'rgba(255,255,255,0.1)',
+        borderWidth: 1,
+        titleColor: '#6b6e78',
+        bodyColor: '#e8e6e0',
+        titleFont: { family: 'IBM Plex Mono', size: 10 },
+        bodyFont: { family: 'IBM Plex Mono', size: 11 },
+        callbacks: { label: ctx => ' ' + ctx.dataset.label + ': ' + Math.round(ctx.raw).toLocaleString() }
+      }
+    },
+    scales: {
+      ...baseScaleOpts,
+      y: { ...baseScaleOpts.y, suggestedMin: 2500, ticks: { ...baseScaleOpts.y.ticks, callback: v => v.toLocaleString() } }
+    }
+  }
+});
+
+/* ── P1 vs P2 Chart ── */
+new Chart(document.getElementById('p1p2Chart'), {
+  type: 'line',
+  data: {
+    labels: iterations,
+    datasets: [
+      {
+        label: 'P1 avg',
+        data: p1Avgs,
+        borderColor: '#378ADD',
+        borderWidth: 1.2,
+        pointRadius: 0,
+        tension: 0.35,
+        fill: false
+      },
+      {
+        label: 'P2 avg',
+        data: p2Avgs,
+        borderColor: '#D85A30',
+        borderWidth: 1.2,
+        pointRadius: 0,
+        tension: 0.35,
+        fill: false
+      }
+    ]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: '#13161b',
+        borderColor: 'rgba(255,255,255,0.1)',
+        borderWidth: 1,
+        titleColor: '#6b6e78',
+        bodyColor: '#e8e6e0',
+        titleFont: { family: 'IBM Plex Mono', size: 10 },
+        bodyFont: { family: 'IBM Plex Mono', size: 11 },
+        callbacks: { label: ctx => ' ' + ctx.dataset.label + ': ' + Math.round(ctx.raw).toLocaleString() }
+      }
+    },
+    scales: {
+      ...baseScaleOpts,
+      y: { ...baseScaleOpts.y, suggestedMin: 2000, ticks: { ...baseScaleOpts.y.ticks, callback: v => v.toLocaleString() } }
+    }
+  }
+});
+
+/* ── League Breakdown Chart ── */
+const leagueData = {
+  'iter-100': 10, 'iter-150': 6, 'iter-110': 3,
+  'iter-210': 2, 'iter-120': 2, 'iter-200': 1,
+  'iter-180': 1, 'iter-170': 1, 'iter-160': 1,
+  'iter-140': 1, 'iter-130': 1
+};
+
+new Chart(document.getElementById('leagueChart'), {
+  type: 'bar',
+  data: {
+    labels: Object.keys(leagueData),
+    datasets: [{
+      label: 'Matches',
+      data: Object.values(leagueData),
+      backgroundColor: Object.keys(leagueData).map((_, i) =>
+        i === 0 ? 'rgba(226,75,74,0.6)' :
+        i <= 2 ? 'rgba(239,159,39,0.5)' :
+        'rgba(55,138,221,0.35)'
+      ),
+      borderColor: Object.keys(leagueData).map((_, i) =>
+        i === 0 ? '#E24B4A' : i <= 2 ? '#EF9F27' : '#378ADD'
+      ),
+      borderWidth: 1,
+      borderRadius: 2
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    indexAxis: 'y',
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: '#13161b',
+        borderColor: 'rgba(255,255,255,0.1)',
+        borderWidth: 1,
+        titleColor: '#6b6e78',
+        bodyColor: '#e8e6e0',
+        titleFont: { family: 'IBM Plex Mono', size: 10 },
+        bodyFont: { family: 'IBM Plex Mono', size: 11 }
+      }
+    },
+    scales: {
+      x: {
+        ticks: { color: tickColor, font: { family: 'IBM Plex Mono', size: 10 }, stepSize: 1 },
+        grid: { color: gridColor },
+        border: { color: 'rgba(255,255,255,0.08)' },
+        title: { display: true, text: 'matches played', color: labelColor, font: { family: 'IBM Plex Mono', size: 10 } }
+      },
+      y: {
+        ticks: { color: tickColor, font: { family: 'IBM Plex Mono', size: 10 } },
+        grid: { color: 'transparent' },
+        border: { color: 'rgba(255,255,255,0.08)' }
+      }
+    }
+  }
+});
+
+/* ── Avg Moves Chart ── */
+const movesFiltered = { labels: [], data: [] };
+avgMoves.forEach((v, i) => { if (v !== null) { movesFiltered.labels.push(iterations[i]); movesFiltered.data.push(v); } });
+
+new Chart(document.getElementById('movesChart'), {
+  type: 'line',
+  data: {
+    labels: movesFiltered.labels,
+    datasets: [{
+      label: 'Avg moves',
+      data: movesFiltered.data,
+      borderColor: '#EF9F27',
+      backgroundColor: 'rgba(239,159,39,0.05)',
+      borderWidth: 1.5,
+      pointRadius: 3,
+      pointBackgroundColor: '#EF9F27',
+      tension: 0.35,
+      fill: true
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: '#13161b',
+        borderColor: 'rgba(255,255,255,0.1)',
+        borderWidth: 1,
+        titleColor: '#6b6e78',
+        bodyColor: '#e8e6e0',
+        titleFont: { family: 'IBM Plex Mono', size: 10 },
+        bodyFont: { family: 'IBM Plex Mono', size: 11 },
+        callbacks: { label: ctx => ' avg moves: ' + ctx.raw.toFixed(1) }
+      }
+    },
+    scales: {
+      ...baseScaleOpts,
+      y: { ...baseScaleOpts.y, suggestedMin: 150, title: { display: true, text: 'moves / game', color: labelColor, font: { family: 'IBM Plex Mono', size: 10 } } }
+    }
+  }
+});
+</script>
+</body>
+</html>

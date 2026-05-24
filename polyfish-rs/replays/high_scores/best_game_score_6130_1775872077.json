@@ -1,0 +1,4091 @@
+{
+  "gameState": {
+    "settings": {
+      "mode": 2,
+      "mapType": 1,
+      "size": 11,
+      "tileCount": 121,
+      "turn": 0,
+      "maxTurns": 20,
+      "currentPlayerTurnId": 1,
+      "version": 115,
+      "gameName": "",
+      "seed": 1775871501,
+      "winByCapital": false,
+      "winByExtermination": false,
+      "_lastPlayerTurnId": 0,
+      "_areYouSure": false,
+      "_gameOver": false,
+      "_recentMoves": [],
+      "_fow": true,
+      "_maxTribeCount": 2,
+      "verbose": false
+    },
+    "tiles": {
+      "0": {
+        "coords": {
+          "x": 0,
+          "y": 0,
+          "idx": 0
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "1": {
+        "coords": {
+          "x": 1,
+          "y": 0,
+          "idx": 1
+        },
+        "type": 3,
+        "explorers": [
+          2
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "2": {
+        "coords": {
+          "x": 2,
+          "y": 0,
+          "idx": 2
+        },
+        "type": 3,
+        "explorers": [
+          2
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "3": {
+        "coords": {
+          "x": 3,
+          "y": 0,
+          "idx": 3
+        },
+        "type": 4,
+        "explorers": [
+          2
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "4": {
+        "coords": {
+          "x": 4,
+          "y": 0,
+          "idx": 4
+        },
+        "type": 3,
+        "explorers": [
+          2
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "5": {
+        "coords": {
+          "x": 5,
+          "y": 0,
+          "idx": 5
+        },
+        "type": 3,
+        "explorers": [
+          1
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "6": {
+        "coords": {
+          "x": 6,
+          "y": 0,
+          "idx": 6
+        },
+        "type": 4,
+        "explorers": [
+          1
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "7": {
+        "coords": {
+          "x": 7,
+          "y": 0,
+          "idx": 7
+        },
+        "type": 5,
+        "explorers": [
+          1
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "8": {
+        "coords": {
+          "x": 8,
+          "y": 0,
+          "idx": 8
+        },
+        "type": 3,
+        "explorers": [
+          1
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "9": {
+        "coords": {
+          "x": 9,
+          "y": 0,
+          "idx": 9
+        },
+        "type": 3,
+        "explorers": [
+          1
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "10": {
+        "coords": {
+          "x": 10,
+          "y": 0,
+          "idx": 10
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "11": {
+        "coords": {
+          "x": 0,
+          "y": 1,
+          "idx": 11
+        },
+        "type": 5,
+        "explorers": [
+          2
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "12": {
+        "coords": {
+          "x": 1,
+          "y": 1,
+          "idx": 12
+        },
+        "rulingCityCoords": {
+          "x": 2,
+          "y": 2,
+          "idx": 24
+        },
+        "type": 3,
+        "explorers": [
+          2
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 2,
+        "effects": []
+      },
+      "13": {
+        "coords": {
+          "x": 2,
+          "y": 1,
+          "idx": 13
+        },
+        "rulingCityCoords": {
+          "x": 2,
+          "y": 2,
+          "idx": 24
+        },
+        "type": 4,
+        "explorers": [
+          2
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 2,
+        "effects": []
+      },
+      "14": {
+        "coords": {
+          "x": 3,
+          "y": 1,
+          "idx": 14
+        },
+        "rulingCityCoords": {
+          "x": 2,
+          "y": 2,
+          "idx": 24
+        },
+        "type": 5,
+        "explorers": [
+          2
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 2,
+        "effects": []
+      },
+      "15": {
+        "coords": {
+          "x": 4,
+          "y": 1,
+          "idx": 15
+        },
+        "type": 5,
+        "explorers": [
+          2
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "16": {
+        "coords": {
+          "x": 5,
+          "y": 1,
+          "idx": 16
+        },
+        "type": 5,
+        "explorers": [
+          1
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "17": {
+        "coords": {
+          "x": 6,
+          "y": 1,
+          "idx": 17
+        },
+        "rulingCityCoords": {
+          "x": 7,
+          "y": 2,
+          "idx": 29
+        },
+        "type": 5,
+        "explorers": [
+          1
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 1,
+        "effects": []
+      },
+      "18": {
+        "coords": {
+          "x": 7,
+          "y": 1,
+          "idx": 18
+        },
+        "rulingCityCoords": {
+          "x": 7,
+          "y": 2,
+          "idx": 29
+        },
+        "type": 4,
+        "explorers": [
+          1
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 1,
+        "effects": []
+      },
+      "19": {
+        "coords": {
+          "x": 8,
+          "y": 1,
+          "idx": 19
+        },
+        "rulingCityCoords": {
+          "x": 7,
+          "y": 2,
+          "idx": 29
+        },
+        "type": 3,
+        "explorers": [
+          1
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 1,
+        "effects": []
+      },
+      "20": {
+        "coords": {
+          "x": 9,
+          "y": 1,
+          "idx": 20
+        },
+        "type": 5,
+        "explorers": [
+          1
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "21": {
+        "coords": {
+          "x": 10,
+          "y": 1,
+          "idx": 21
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "22": {
+        "coords": {
+          "x": 0,
+          "y": 2,
+          "idx": 22
+        },
+        "type": 5,
+        "explorers": [
+          2
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "23": {
+        "coords": {
+          "x": 1,
+          "y": 2,
+          "idx": 23
+        },
+        "rulingCityCoords": {
+          "x": 2,
+          "y": 2,
+          "idx": 24
+        },
+        "type": 3,
+        "explorers": [
+          2
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 2,
+        "effects": []
+      },
+      "24": {
+        "coords": {
+          "x": 2,
+          "y": 2,
+          "idx": 24
+        },
+        "rulingCityCoords": {
+          "x": 2,
+          "y": 2,
+          "idx": 24
+        },
+        "type": 3,
+        "explorers": [
+          2
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 2,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 2,
+        "effects": [],
+        "unitOwnerId": 2
+      },
+      "25": {
+        "coords": {
+          "x": 3,
+          "y": 2,
+          "idx": 25
+        },
+        "rulingCityCoords": {
+          "x": 2,
+          "y": 2,
+          "idx": 24
+        },
+        "type": 3,
+        "explorers": [
+          2
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 2,
+        "effects": []
+      },
+      "26": {
+        "coords": {
+          "x": 4,
+          "y": 2,
+          "idx": 26
+        },
+        "type": 4,
+        "explorers": [
+          2
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "27": {
+        "coords": {
+          "x": 5,
+          "y": 2,
+          "idx": 27
+        },
+        "type": 3,
+        "explorers": [
+          1
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "28": {
+        "coords": {
+          "x": 6,
+          "y": 2,
+          "idx": 28
+        },
+        "rulingCityCoords": {
+          "x": 7,
+          "y": 2,
+          "idx": 29
+        },
+        "type": 4,
+        "explorers": [
+          1
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 1,
+        "effects": []
+      },
+      "29": {
+        "coords": {
+          "x": 7,
+          "y": 2,
+          "idx": 29
+        },
+        "rulingCityCoords": {
+          "x": 7,
+          "y": 2,
+          "idx": 29
+        },
+        "type": 3,
+        "explorers": [
+          1
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 1,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 1,
+        "effects": [],
+        "unitOwnerId": 1
+      },
+      "30": {
+        "coords": {
+          "x": 8,
+          "y": 2,
+          "idx": 30
+        },
+        "rulingCityCoords": {
+          "x": 7,
+          "y": 2,
+          "idx": 29
+        },
+        "type": 3,
+        "explorers": [
+          1
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 1,
+        "effects": []
+      },
+      "31": {
+        "coords": {
+          "x": 9,
+          "y": 2,
+          "idx": 31
+        },
+        "type": 5,
+        "explorers": [
+          1
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "32": {
+        "coords": {
+          "x": 10,
+          "y": 2,
+          "idx": 32
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "33": {
+        "coords": {
+          "x": 0,
+          "y": 3,
+          "idx": 33
+        },
+        "type": 3,
+        "explorers": [
+          2
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "34": {
+        "coords": {
+          "x": 1,
+          "y": 3,
+          "idx": 34
+        },
+        "rulingCityCoords": {
+          "x": 2,
+          "y": 2,
+          "idx": 24
+        },
+        "type": 4,
+        "explorers": [
+          2
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 2,
+        "effects": []
+      },
+      "35": {
+        "coords": {
+          "x": 2,
+          "y": 3,
+          "idx": 35
+        },
+        "rulingCityCoords": {
+          "x": 2,
+          "y": 2,
+          "idx": 24
+        },
+        "type": 3,
+        "explorers": [
+          2
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 2,
+        "effects": []
+      },
+      "36": {
+        "coords": {
+          "x": 3,
+          "y": 3,
+          "idx": 36
+        },
+        "rulingCityCoords": {
+          "x": 2,
+          "y": 2,
+          "idx": 24
+        },
+        "type": 3,
+        "explorers": [
+          2
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 2,
+        "effects": []
+      },
+      "37": {
+        "coords": {
+          "x": 4,
+          "y": 3,
+          "idx": 37
+        },
+        "type": 3,
+        "explorers": [
+          2
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "38": {
+        "coords": {
+          "x": 5,
+          "y": 3,
+          "idx": 38
+        },
+        "type": 3,
+        "explorers": [
+          1
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "39": {
+        "coords": {
+          "x": 6,
+          "y": 3,
+          "idx": 39
+        },
+        "rulingCityCoords": {
+          "x": 7,
+          "y": 2,
+          "idx": 29
+        },
+        "type": 5,
+        "explorers": [
+          1
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 1,
+        "effects": []
+      },
+      "40": {
+        "coords": {
+          "x": 7,
+          "y": 3,
+          "idx": 40
+        },
+        "rulingCityCoords": {
+          "x": 7,
+          "y": 2,
+          "idx": 29
+        },
+        "type": 3,
+        "explorers": [
+          1
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 1,
+        "effects": []
+      },
+      "41": {
+        "coords": {
+          "x": 8,
+          "y": 3,
+          "idx": 41
+        },
+        "rulingCityCoords": {
+          "x": 7,
+          "y": 2,
+          "idx": 29
+        },
+        "type": 3,
+        "explorers": [
+          1
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 1,
+        "effects": []
+      },
+      "42": {
+        "coords": {
+          "x": 9,
+          "y": 3,
+          "idx": 42
+        },
+        "type": 3,
+        "explorers": [
+          1
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "43": {
+        "coords": {
+          "x": 10,
+          "y": 3,
+          "idx": 43
+        },
+        "type": 5,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "44": {
+        "coords": {
+          "x": 0,
+          "y": 4,
+          "idx": 44
+        },
+        "type": 1,
+        "explorers": [
+          2
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 1,
+        "owner": 0,
+        "effects": []
+      },
+      "45": {
+        "coords": {
+          "x": 1,
+          "y": 4,
+          "idx": 45
+        },
+        "type": 4,
+        "explorers": [
+          2
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "46": {
+        "coords": {
+          "x": 2,
+          "y": 4,
+          "idx": 46
+        },
+        "type": 3,
+        "explorers": [
+          2
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "47": {
+        "coords": {
+          "x": 3,
+          "y": 4,
+          "idx": 47
+        },
+        "type": 3,
+        "explorers": [
+          2
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "48": {
+        "coords": {
+          "x": 4,
+          "y": 4,
+          "idx": 48
+        },
+        "type": 3,
+        "explorers": [
+          2
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "49": {
+        "coords": {
+          "x": 5,
+          "y": 4,
+          "idx": 49
+        },
+        "type": 4,
+        "explorers": [
+          1
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "50": {
+        "coords": {
+          "x": 6,
+          "y": 4,
+          "idx": 50
+        },
+        "type": 5,
+        "explorers": [
+          1
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "51": {
+        "coords": {
+          "x": 7,
+          "y": 4,
+          "idx": 51
+        },
+        "type": 5,
+        "explorers": [
+          1
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "52": {
+        "coords": {
+          "x": 8,
+          "y": 4,
+          "idx": 52
+        },
+        "type": 4,
+        "explorers": [
+          1
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "53": {
+        "coords": {
+          "x": 9,
+          "y": 4,
+          "idx": 53
+        },
+        "type": 5,
+        "explorers": [
+          1
+        ],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "54": {
+        "coords": {
+          "x": 10,
+          "y": 4,
+          "idx": 54
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "55": {
+        "coords": {
+          "x": 0,
+          "y": 5,
+          "idx": 55
+        },
+        "type": 5,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "56": {
+        "coords": {
+          "x": 1,
+          "y": 5,
+          "idx": 56
+        },
+        "type": 4,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "57": {
+        "coords": {
+          "x": 2,
+          "y": 5,
+          "idx": 57
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "58": {
+        "coords": {
+          "x": 3,
+          "y": 5,
+          "idx": 58
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "59": {
+        "coords": {
+          "x": 4,
+          "y": 5,
+          "idx": 59
+        },
+        "type": 1,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 1,
+        "owner": 0,
+        "effects": []
+      },
+      "60": {
+        "coords": {
+          "x": 5,
+          "y": 5,
+          "idx": 60
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "61": {
+        "coords": {
+          "x": 6,
+          "y": 5,
+          "idx": 61
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "62": {
+        "coords": {
+          "x": 7,
+          "y": 5,
+          "idx": 62
+        },
+        "type": 5,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "63": {
+        "coords": {
+          "x": 8,
+          "y": 5,
+          "idx": 63
+        },
+        "type": 4,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "64": {
+        "coords": {
+          "x": 9,
+          "y": 5,
+          "idx": 64
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "65": {
+        "coords": {
+          "x": 10,
+          "y": 5,
+          "idx": 65
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "66": {
+        "coords": {
+          "x": 0,
+          "y": 6,
+          "idx": 66
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "67": {
+        "coords": {
+          "x": 1,
+          "y": 6,
+          "idx": 67
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "68": {
+        "coords": {
+          "x": 2,
+          "y": 6,
+          "idx": 68
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "69": {
+        "coords": {
+          "x": 3,
+          "y": 6,
+          "idx": 69
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "70": {
+        "coords": {
+          "x": 4,
+          "y": 6,
+          "idx": 70
+        },
+        "type": 1,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 1,
+        "owner": 0,
+        "effects": []
+      },
+      "71": {
+        "coords": {
+          "x": 5,
+          "y": 6,
+          "idx": 71
+        },
+        "type": 5,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "72": {
+        "coords": {
+          "x": 6,
+          "y": 6,
+          "idx": 72
+        },
+        "type": 5,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "73": {
+        "coords": {
+          "x": 7,
+          "y": 6,
+          "idx": 73
+        },
+        "type": 5,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "74": {
+        "coords": {
+          "x": 8,
+          "y": 6,
+          "idx": 74
+        },
+        "type": 5,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "75": {
+        "coords": {
+          "x": 9,
+          "y": 6,
+          "idx": 75
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "76": {
+        "coords": {
+          "x": 10,
+          "y": 6,
+          "idx": 76
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "77": {
+        "coords": {
+          "x": 0,
+          "y": 7,
+          "idx": 77
+        },
+        "type": 1,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 1,
+        "owner": 0,
+        "effects": []
+      },
+      "78": {
+        "coords": {
+          "x": 1,
+          "y": 7,
+          "idx": 78
+        },
+        "type": 4,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "79": {
+        "coords": {
+          "x": 2,
+          "y": 7,
+          "idx": 79
+        },
+        "type": 5,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "80": {
+        "coords": {
+          "x": 3,
+          "y": 7,
+          "idx": 80
+        },
+        "type": 5,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "81": {
+        "coords": {
+          "x": 4,
+          "y": 7,
+          "idx": 81
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "82": {
+        "coords": {
+          "x": 5,
+          "y": 7,
+          "idx": 82
+        },
+        "type": 5,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "83": {
+        "coords": {
+          "x": 6,
+          "y": 7,
+          "idx": 83
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "84": {
+        "coords": {
+          "x": 7,
+          "y": 7,
+          "idx": 84
+        },
+        "type": 4,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "85": {
+        "coords": {
+          "x": 8,
+          "y": 7,
+          "idx": 85
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "86": {
+        "coords": {
+          "x": 9,
+          "y": 7,
+          "idx": 86
+        },
+        "type": 1,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 1,
+        "owner": 0,
+        "effects": []
+      },
+      "87": {
+        "coords": {
+          "x": 10,
+          "y": 7,
+          "idx": 87
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "88": {
+        "coords": {
+          "x": 0,
+          "y": 8,
+          "idx": 88
+        },
+        "type": 5,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "89": {
+        "coords": {
+          "x": 1,
+          "y": 8,
+          "idx": 89
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "90": {
+        "coords": {
+          "x": 2,
+          "y": 8,
+          "idx": 90
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "91": {
+        "coords": {
+          "x": 3,
+          "y": 8,
+          "idx": 91
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "92": {
+        "coords": {
+          "x": 4,
+          "y": 8,
+          "idx": 92
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "93": {
+        "coords": {
+          "x": 5,
+          "y": 8,
+          "idx": 93
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "94": {
+        "coords": {
+          "x": 6,
+          "y": 8,
+          "idx": 94
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "95": {
+        "coords": {
+          "x": 7,
+          "y": 8,
+          "idx": 95
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "96": {
+        "coords": {
+          "x": 8,
+          "y": 8,
+          "idx": 96
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "97": {
+        "coords": {
+          "x": 9,
+          "y": 8,
+          "idx": 97
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "98": {
+        "coords": {
+          "x": 10,
+          "y": 8,
+          "idx": 98
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "99": {
+        "coords": {
+          "x": 0,
+          "y": 9,
+          "idx": 99
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "100": {
+        "coords": {
+          "x": 1,
+          "y": 9,
+          "idx": 100
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "101": {
+        "coords": {
+          "x": 2,
+          "y": 9,
+          "idx": 101
+        },
+        "type": 5,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "102": {
+        "coords": {
+          "x": 3,
+          "y": 9,
+          "idx": 102
+        },
+        "type": 4,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "103": {
+        "coords": {
+          "x": 4,
+          "y": 9,
+          "idx": 103
+        },
+        "type": 4,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "104": {
+        "coords": {
+          "x": 5,
+          "y": 9,
+          "idx": 104
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "105": {
+        "coords": {
+          "x": 6,
+          "y": 9,
+          "idx": 105
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "106": {
+        "coords": {
+          "x": 7,
+          "y": 9,
+          "idx": 106
+        },
+        "type": 5,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "107": {
+        "coords": {
+          "x": 8,
+          "y": 9,
+          "idx": 107
+        },
+        "type": 5,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "108": {
+        "coords": {
+          "x": 9,
+          "y": 9,
+          "idx": 108
+        },
+        "type": 5,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "109": {
+        "coords": {
+          "x": 10,
+          "y": 9,
+          "idx": 109
+        },
+        "type": 5,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "110": {
+        "coords": {
+          "x": 0,
+          "y": 10,
+          "idx": 110
+        },
+        "type": 5,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "111": {
+        "coords": {
+          "x": 1,
+          "y": 10,
+          "idx": 111
+        },
+        "type": 5,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "112": {
+        "coords": {
+          "x": 2,
+          "y": 10,
+          "idx": 112
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "113": {
+        "coords": {
+          "x": 3,
+          "y": 10,
+          "idx": 113
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "114": {
+        "coords": {
+          "x": 4,
+          "y": 10,
+          "idx": 114
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "115": {
+        "coords": {
+          "x": 5,
+          "y": 10,
+          "idx": 115
+        },
+        "type": 4,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "116": {
+        "coords": {
+          "x": 6,
+          "y": 10,
+          "idx": 116
+        },
+        "type": 3,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "117": {
+        "coords": {
+          "x": 7,
+          "y": 10,
+          "idx": 117
+        },
+        "type": 4,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "118": {
+        "coords": {
+          "x": 8,
+          "y": 10,
+          "idx": 118
+        },
+        "type": 1,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 1,
+        "owner": 0,
+        "effects": []
+      },
+      "119": {
+        "coords": {
+          "x": 9,
+          "y": 10,
+          "idx": 119
+        },
+        "type": 4,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 7,
+        "owner": 0,
+        "effects": []
+      },
+      "120": {
+        "coords": {
+          "x": 10,
+          "y": 10,
+          "idx": 120
+        },
+        "type": 1,
+        "explorers": [],
+        "hasRoad": false,
+        "hasRoute": false,
+        "hadRoute": false,
+        "capitalOf": 0,
+        "skinType": 0,
+        "climate": 1,
+        "owner": 0,
+        "effects": []
+      }
+    },
+    "structures": {
+      "0": {
+        "type": 47,
+        "level": 0,
+        "founded": 0
+      },
+      "10": {
+        "type": 47,
+        "level": 0,
+        "founded": 0
+      },
+      "16": {
+        "type": 2,
+        "level": 0,
+        "founded": 0
+      },
+      "24": {
+        "type": 1,
+        "level": 0,
+        "founded": 0
+      },
+      "29": {
+        "type": 1,
+        "level": 0,
+        "founded": 0
+      },
+      "57": {
+        "type": 1,
+        "level": 0,
+        "founded": 0
+      },
+      "60": {
+        "type": 1,
+        "level": 0,
+        "founded": 0
+      },
+      "65": {
+        "type": 2,
+        "level": 0,
+        "founded": 0
+      },
+      "85": {
+        "type": 1,
+        "level": 0,
+        "founded": 0
+      },
+      "90": {
+        "type": 1,
+        "level": 0,
+        "founded": 0
+      },
+      "93": {
+        "type": 1,
+        "level": 0,
+        "founded": 0
+      },
+      "109": {
+        "type": 2,
+        "level": 0,
+        "founded": 0
+      },
+      "110": {
+        "type": 47,
+        "level": 0,
+        "founded": 0
+      },
+      "116": {
+        "type": 2,
+        "level": 0,
+        "founded": 0
+      },
+      "120": {
+        "type": 47,
+        "level": 0,
+        "founded": 0
+      }
+    },
+    "resources": {
+      "5": {
+        "type": 2
+      },
+      "12": {
+        "type": 6
+      },
+      "13": {
+        "type": 5
+      },
+      "23": {
+        "type": 6
+      },
+      "27": {
+        "type": 2
+      },
+      "30": {
+        "type": 6
+      },
+      "33": {
+        "type": 6
+      },
+      "35": {
+        "type": 6
+      },
+      "36": {
+        "type": 6
+      },
+      "37": {
+        "type": 6
+      },
+      "38": {
+        "type": 6
+      },
+      "39": {
+        "type": 1
+      },
+      "41": {
+        "type": 6
+      },
+      "42": {
+        "type": 2
+      },
+      "44": {
+        "type": 8
+      },
+      "46": {
+        "type": 6
+      },
+      "47": {
+        "type": 6
+      },
+      "48": {
+        "type": 6
+      },
+      "59": {
+        "type": 3
+      },
+      "61": {
+        "type": 6
+      },
+      "66": {
+        "type": 6
+      },
+      "68": {
+        "type": 6
+      },
+      "69": {
+        "type": 2
+      },
+      "70": {
+        "type": 3
+      },
+      "72": {
+        "type": 1
+      },
+      "75": {
+        "type": 2
+      },
+      "76": {
+        "type": 6
+      },
+      "77": {
+        "type": 3
+      },
+      "78": {
+        "type": 5
+      },
+      "80": {
+        "type": 1
+      },
+      "81": {
+        "type": 2
+      },
+      "83": {
+        "type": 2
+      },
+      "86": {
+        "type": 3
+      },
+      "91": {
+        "type": 6
+      },
+      "92": {
+        "type": 2
+      },
+      "94": {
+        "type": 2
+      },
+      "95": {
+        "type": 2
+      },
+      "100": {
+        "type": 6
+      },
+      "102": {
+        "type": 5
+      },
+      "103": {
+        "type": 5
+      },
+      "104": {
+        "type": 6
+      },
+      "105": {
+        "type": 6
+      },
+      "118": {
+        "type": 8
+      }
+    },
+    "tribes": {
+      "1": {
+        "hash": 0,
+        "id": 1,
+        "username": "",
+        "builtUniqueImprovements": [],
+        "knownPlayers": [],
+        "bot": false,
+        "score": 495,
+        "stars": 5,
+        "type": 7,
+        "killerId": 0,
+        "kills": 0,
+        "casualties": 0,
+        "tech_vanilla": [
+          {
+            "type": 0,
+            "discovered": true,
+            "discoveredTurn": 0
+          },
+          {
+            "type": 6,
+            "discovered": true,
+            "discoveredTurn": 0
+          }
+        ],
+        "cities": [
+          {
+            "owner": 1,
+            "name": "",
+            "idx": 29,
+            "population": 0,
+            "progress": 0,
+            "borderSize": 1,
+            "connectedToCapital": false,
+            "level": 1,
+            "production": 1,
+            "rewards": [],
+            "territory": [
+              17,
+              18,
+              19,
+              28,
+              30,
+              39,
+              40,
+              41
+            ]
+          }
+        ],
+        "units": [
+          {
+            "owner": 1,
+            "type": 2,
+            "health": 10.0,
+            "veteran": false,
+            "kills": 0,
+            "prevCoords": {
+              "x": 7,
+              "y": 2,
+              "idx": 29
+            },
+            "homeCoords": {
+              "x": 7,
+              "y": 2,
+              "idx": 29
+            },
+            "direction": 0,
+            "flipped": false,
+            "createdTurn": 0,
+            "moved": false,
+            "attacked": false,
+            "effects": [],
+            "converted": false,
+            "attacksPerformed": 0,
+            "lastAttackCoords": null,
+            "coords": {
+              "x": 7,
+              "y": 2,
+              "idx": 29
+            }
+          }
+        ],
+        "relations": {},
+        "killedTurn": 0,
+        "resignedTurn": 0,
+        "startingTileCoords": {
+          "x": 7,
+          "y": 2,
+          "idx": 29
+        },
+        "attackedThisTurn": false,
+        "pacifistTurns": 0,
+        "conversions": 0
+      },
+      "2": {
+        "hash": 0,
+        "id": 2,
+        "username": "",
+        "builtUniqueImprovements": [],
+        "knownPlayers": [],
+        "bot": false,
+        "score": 490,
+        "stars": 5,
+        "type": 7,
+        "killerId": 0,
+        "kills": 0,
+        "casualties": 0,
+        "tech_vanilla": [
+          {
+            "type": 0,
+            "discovered": true,
+            "discoveredTurn": 0
+          },
+          {
+            "type": 6,
+            "discovered": true,
+            "discoveredTurn": 0
+          }
+        ],
+        "cities": [
+          {
+            "owner": 2,
+            "name": "",
+            "idx": 24,
+            "population": 0,
+            "progress": 0,
+            "borderSize": 1,
+            "connectedToCapital": false,
+            "level": 1,
+            "production": 1,
+            "rewards": [],
+            "territory": [
+              12,
+              13,
+              14,
+              23,
+              25,
+              34,
+              35,
+              36
+            ]
+          }
+        ],
+        "units": [
+          {
+            "owner": 2,
+            "type": 2,
+            "health": 10.0,
+            "veteran": false,
+            "kills": 0,
+            "prevCoords": {
+              "x": 2,
+              "y": 2,
+              "idx": 24
+            },
+            "homeCoords": {
+              "x": 2,
+              "y": 2,
+              "idx": 24
+            },
+            "direction": 0,
+            "flipped": false,
+            "createdTurn": 0,
+            "moved": false,
+            "attacked": false,
+            "effects": [],
+            "converted": false,
+            "attacksPerformed": 0,
+            "lastAttackCoords": null,
+            "coords": {
+              "x": 2,
+              "y": 2,
+              "idx": 24
+            }
+          }
+        ],
+        "relations": {},
+        "killedTurn": 0,
+        "resignedTurn": 0,
+        "startingTileCoords": {
+          "x": 2,
+          "y": 2,
+          "idx": 24
+        },
+        "attackedThisTurn": false,
+        "pacifistTurns": 0,
+        "conversions": 0
+      }
+    },
+    "endOfTurnQueue": [],
+    "messages": [],
+    "history": [],
+    "initialSeed": 0
+  },
+  "turns": [
+    {
+      "turn": 0,
+      "players": [
+        {
+          "playerId": 1,
+          "commands": [
+            {
+              "moveType": 1,
+              "src": 29,
+              "target": 40
+            },
+            {
+              "moveType": 5,
+              "target": 41
+            },
+            {
+              "moveType": 5,
+              "target": 30
+            },
+            {
+              "moveType": 9,
+              "target": 29,
+              "type": 3
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        },
+        {
+          "playerId": 2,
+          "commands": [
+            {
+              "moveType": 1,
+              "src": 24,
+              "target": 36
+            },
+            {
+              "moveType": 5,
+              "target": 12
+            },
+            {
+              "moveType": 5,
+              "target": 23
+            },
+            {
+              "moveType": 9,
+              "target": 24,
+              "type": 3
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "turn": 1,
+      "players": [
+        {
+          "playerId": 1,
+          "commands": [
+            {
+              "moveType": 1,
+              "src": 40,
+              "target": 50
+            },
+            {
+              "moveType": 4,
+              "src": 29,
+              "type": 2
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        },
+        {
+          "playerId": 2,
+          "commands": [
+            {
+              "moveType": 1,
+              "src": 36,
+              "target": 37
+            },
+            {
+              "moveType": 4,
+              "src": 24,
+              "type": 2
+            },
+            {
+              "moveType": 5,
+              "target": 36
+            },
+            {
+              "moveType": 5,
+              "target": 35
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "turn": 2,
+      "players": [
+        {
+          "playerId": 1,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 10
+            },
+            {
+              "moveType": 1,
+              "src": 50,
+              "target": 51
+            },
+            {
+              "moveType": 1,
+              "src": 29,
+              "target": 30
+            },
+            {
+              "moveType": 4,
+              "src": 29,
+              "type": 2
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        },
+        {
+          "playerId": 2,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 10
+            },
+            {
+              "moveType": 1,
+              "src": 37,
+              "target": 47
+            },
+            {
+              "moveType": 1,
+              "src": 24,
+              "target": 14
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "turn": 3,
+      "players": [
+        {
+          "playerId": 1,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 20
+            },
+            {
+              "moveType": 1,
+              "src": 30,
+              "target": 20
+            },
+            {
+              "moveType": 1,
+              "src": 51,
+              "target": 40
+            },
+            {
+              "moveType": 1,
+              "src": 29,
+              "target": 18
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        },
+        {
+          "playerId": 2,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 15
+            },
+            {
+              "moveType": 1,
+              "src": 47,
+              "target": 57
+            },
+            {
+              "moveType": 1,
+              "src": 14,
+              "target": 4
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "turn": 4,
+      "players": [
+        {
+          "playerId": 1,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 23
+            },
+            {
+              "moveType": 1,
+              "src": 40,
+              "target": 29
+            },
+            {
+              "moveType": 1,
+              "src": 20,
+              "target": 8
+            },
+            {
+              "moveType": 1,
+              "src": 18,
+              "target": 19
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        },
+        {
+          "playerId": 2,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 1
+            },
+            {
+              "moveType": 8,
+              "src": 57
+            },
+            {
+              "moveType": 1,
+              "src": 4,
+              "target": 15
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "turn": 5,
+      "players": [
+        {
+          "playerId": 1,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 7
+            },
+            {
+              "moveType": 1,
+              "src": 19,
+              "target": 20
+            },
+            {
+              "moveType": 1,
+              "src": 8,
+              "target": 18
+            },
+            {
+              "moveType": 1,
+              "src": 29,
+              "target": 41
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        },
+        {
+          "playerId": 2,
+          "commands": [
+            {
+              "moveType": 5,
+              "target": 47
+            },
+            {
+              "moveType": 5,
+              "target": 46
+            },
+            {
+              "moveType": 9,
+              "target": 57,
+              "type": 3
+            },
+            {
+              "moveType": 5,
+              "target": 68
+            },
+            {
+              "moveType": 1,
+              "src": 15,
+              "target": 14
+            },
+            {
+              "moveType": 1,
+              "src": 57,
+              "target": 69
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "turn": 6,
+      "players": [
+        {
+          "playerId": 1,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 1
+            },
+            {
+              "moveType": 1,
+              "src": 41,
+              "target": 31
+            },
+            {
+              "moveType": 1,
+              "src": 20,
+              "target": 10
+            },
+            {
+              "moveType": 1,
+              "src": 18,
+              "target": 17
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        },
+        {
+          "playerId": 2,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 7
+            },
+            {
+              "moveType": 1,
+              "src": 69,
+              "target": 79
+            },
+            {
+              "moveType": 1,
+              "src": 14,
+              "target": 15
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "turn": 7,
+      "players": [
+        {
+          "playerId": 1,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 15
+            },
+            {
+              "moveType": 1,
+              "src": 10,
+              "target": 20
+            },
+            {
+              "moveType": 1,
+              "src": 31,
+              "target": 30
+            },
+            {
+              "moveType": 1,
+              "src": 17,
+              "target": 16
+            },
+            {
+              "moveType": 5,
+              "target": 39
+            },
+            {
+              "moveType": 2,
+              "src": 16,
+              "target": 15
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        },
+        {
+          "playerId": 2,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 8
+            },
+            {
+              "moveType": 7,
+              "type": 20
+            },
+            {
+              "moveType": 1,
+              "src": 79,
+              "target": 67
+            },
+            {
+              "moveType": 1,
+              "src": 15,
+              "target": 5
+            },
+            {
+              "moveType": 2,
+              "src": 5,
+              "target": 16
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "turn": 8,
+      "players": [
+        {
+          "playerId": 1,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 44
+            },
+            {
+              "moveType": 1,
+              "src": 20,
+              "target": 19
+            },
+            {
+              "moveType": 1,
+              "src": 30,
+              "target": 29
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        },
+        {
+          "playerId": 2,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 44
+            },
+            {
+              "moveType": 8,
+              "src": 16
+            },
+            {
+              "moveType": 9,
+              "target": 24,
+              "type": 7
+            },
+            {
+              "moveType": 6,
+              "target": 69,
+              "type": 5
+            },
+            {
+              "moveType": 9,
+              "target": 57,
+              "type": 1
+            },
+            {
+              "moveType": 4,
+              "src": 24,
+              "type": 2
+            },
+            {
+              "moveType": 1,
+              "src": 67,
+              "target": 56
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "turn": 9,
+      "players": [
+        {
+          "playerId": 1,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 24
+            },
+            {
+              "moveType": 1,
+              "src": 19,
+              "target": 8
+            },
+            {
+              "moveType": 1,
+              "src": 29,
+              "target": 18
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        },
+        {
+          "playerId": 2,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 2
+            },
+            {
+              "moveType": 1,
+              "src": 16,
+              "target": 5
+            },
+            {
+              "moveType": 3,
+              "target": 69,
+              "type": 4
+            },
+            {
+              "moveType": 1,
+              "src": 56,
+              "target": 45
+            },
+            {
+              "moveType": 1,
+              "src": 24,
+              "target": 13
+            },
+            {
+              "moveType": 4,
+              "src": 57,
+              "type": 2
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "turn": 10,
+      "players": [
+        {
+          "playerId": 1,
+          "commands": [
+            {
+              "moveType": 1,
+              "src": 8,
+              "target": 20
+            },
+            {
+              "moveType": 1,
+              "src": 18,
+              "target": 19
+            },
+            {
+              "moveType": 4,
+              "src": 29,
+              "type": 5
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        },
+        {
+          "playerId": 2,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 21
+            },
+            {
+              "moveType": 1,
+              "src": 45,
+              "target": 35
+            },
+            {
+              "moveType": 3,
+              "src": 5,
+              "type": 8
+            },
+            {
+              "moveType": 6,
+              "target": 69,
+              "type": 5
+            },
+            {
+              "moveType": 3,
+              "target": 69,
+              "type": 4
+            },
+            {
+              "moveType": 1,
+              "src": 57,
+              "target": 47
+            },
+            {
+              "moveType": 1,
+              "src": 13,
+              "target": 23
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "turn": 11,
+      "players": [
+        {
+          "playerId": 1,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 2
+            },
+            {
+              "moveType": 1,
+              "src": 20,
+              "target": 30
+            },
+            {
+              "moveType": 1,
+              "src": 19,
+              "target": 20
+            },
+            {
+              "moveType": 1,
+              "src": 29,
+              "target": 19
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        },
+        {
+          "playerId": 2,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 23
+            },
+            {
+              "moveType": 3,
+              "src": 35,
+              "type": 8
+            },
+            {
+              "moveType": 1,
+              "src": 23,
+              "target": 34
+            },
+            {
+              "moveType": 1,
+              "src": 47,
+              "target": 37
+            },
+            {
+              "moveType": 4,
+              "src": 24,
+              "type": 3
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "turn": 12,
+      "players": [
+        {
+          "playerId": 1,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 8
+            },
+            {
+              "moveType": 1,
+              "src": 20,
+              "target": 9
+            },
+            {
+              "moveType": 1,
+              "src": 30,
+              "target": 41
+            },
+            {
+              "moveType": 1,
+              "src": 19,
+              "target": 20
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        },
+        {
+          "playerId": 2,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 3
+            },
+            {
+              "moveType": 3,
+              "src": 34,
+              "type": 8
+            },
+            {
+              "moveType": 3,
+              "src": 37,
+              "type": 8
+            },
+            {
+              "moveType": 4,
+              "src": 57,
+              "type": 2
+            },
+            {
+              "moveType": 1,
+              "src": 24,
+              "target": 47
+            },
+            {
+              "moveType": 4,
+              "src": 24,
+              "type": 2
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "turn": 13,
+      "players": [
+        {
+          "playerId": 1,
+          "commands": [
+            {
+              "moveType": 1,
+              "src": 41,
+              "target": 52
+            },
+            {
+              "moveType": 1,
+              "src": 20,
+              "target": 31
+            },
+            {
+              "moveType": 3,
+              "src": 9,
+              "type": 8
+            },
+            {
+              "moveType": 7,
+              "type": 13
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        },
+        {
+          "playerId": 2,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 18
+            },
+            {
+              "moveType": 1,
+              "src": 47,
+              "target": 69
+            },
+            {
+              "moveType": 1,
+              "src": 57,
+              "target": 58
+            },
+            {
+              "moveType": 4,
+              "src": 57,
+              "type": 3
+            },
+            {
+              "moveType": 1,
+              "src": 24,
+              "target": 13
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "turn": 14,
+      "players": [
+        {
+          "playerId": 1,
+          "commands": [
+            {
+              "moveType": 1,
+              "src": 31,
+              "target": 42
+            },
+            {
+              "moveType": 1,
+              "src": 52,
+              "target": 51
+            },
+            {
+              "moveType": 4,
+              "src": 29,
+              "type": 3
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        },
+        {
+          "playerId": 2,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 38
+            },
+            {
+              "moveType": 1,
+              "src": 69,
+              "target": 81
+            },
+            {
+              "moveType": 1,
+              "src": 58,
+              "target": 48
+            },
+            {
+              "moveType": 3,
+              "src": 13,
+              "type": 8
+            },
+            {
+              "moveType": 1,
+              "src": 57,
+              "target": 36
+            },
+            {
+              "moveType": 4,
+              "src": 57,
+              "type": 2
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "turn": 15,
+      "players": [
+        {
+          "playerId": 1,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 14
+            },
+            {
+              "moveType": 1,
+              "src": 42,
+              "target": 31
+            },
+            {
+              "moveType": 1,
+              "src": 51,
+              "target": 50
+            },
+            {
+              "moveType": 1,
+              "src": 29,
+              "target": 42
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        },
+        {
+          "playerId": 2,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 19
+            },
+            {
+              "moveType": 1,
+              "src": 81,
+              "target": 91
+            },
+            {
+              "moveType": 6,
+              "target": 47,
+              "type": 23
+            },
+            {
+              "moveType": 3,
+              "target": 47,
+              "type": 4
+            },
+            {
+              "moveType": 1,
+              "src": 48,
+              "target": 58
+            },
+            {
+              "moveType": 1,
+              "src": 36,
+              "target": 48
+            },
+            {
+              "moveType": 1,
+              "src": 57,
+              "target": 46
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "turn": 16,
+      "players": [
+        {
+          "playerId": 1,
+          "commands": [
+            {
+              "moveType": 1,
+              "src": 42,
+              "target": 20
+            },
+            {
+              "moveType": 1,
+              "src": 31,
+              "target": 42
+            },
+            {
+              "moveType": 1,
+              "src": 50,
+              "target": 60
+            },
+            {
+              "moveType": 2,
+              "src": 60,
+              "target": 48
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        },
+        {
+          "playerId": 2,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 24
+            },
+            {
+              "moveType": 3,
+              "src": 91,
+              "type": 8
+            },
+            {
+              "moveType": 3,
+              "src": 48,
+              "type": 8
+            },
+            {
+              "moveType": 4,
+              "src": 24,
+              "type": 5
+            },
+            {
+              "moveType": 1,
+              "src": 58,
+              "target": 48
+            },
+            {
+              "moveType": 1,
+              "src": 46,
+              "target": 47
+            },
+            {
+              "moveType": 2,
+              "src": 48,
+              "target": 60
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "turn": 17,
+      "players": [
+        {
+          "playerId": 1,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 3
+            },
+            {
+              "moveType": 8,
+              "src": 60
+            },
+            {
+              "moveType": 5,
+              "target": 72
+            },
+            {
+              "moveType": 1,
+              "src": 20,
+              "target": 8
+            },
+            {
+              "moveType": 1,
+              "src": 42,
+              "target": 30
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        },
+        {
+          "playerId": 2,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 22
+            },
+            {
+              "moveType": 2,
+              "src": 48,
+              "target": 60
+            },
+            {
+              "moveType": 1,
+              "src": 24,
+              "target": 36
+            },
+            {
+              "moveType": 1,
+              "src": 47,
+              "target": 35
+            },
+            {
+              "moveType": 4,
+              "src": 57,
+              "type": 2
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "turn": 18,
+      "players": [
+        {
+          "playerId": 1,
+          "commands": [
+            {
+              "moveType": 5,
+              "target": 61
+            },
+            {
+              "moveType": 9,
+              "target": 60,
+              "type": 3
+            },
+            {
+              "moveType": 5,
+              "target": 59
+            },
+            {
+              "moveType": 5,
+              "target": 70
+            },
+            {
+              "moveType": 1,
+              "src": 30,
+              "target": 20
+            },
+            {
+              "moveType": 1,
+              "src": 8,
+              "target": 18
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        },
+        {
+          "playerId": 2,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 16
+            },
+            {
+              "moveType": 8,
+              "src": 60
+            },
+            {
+              "moveType": 5,
+              "target": 48
+            },
+            {
+              "moveType": 9,
+              "target": 60,
+              "type": 7
+            },
+            {
+              "moveType": 1,
+              "src": 35,
+              "target": 25
+            },
+            {
+              "moveType": 6,
+              "target": 50,
+              "type": 12
+            },
+            {
+              "moveType": 3,
+              "target": 14,
+              "type": 2
+            },
+            {
+              "moveType": 1,
+              "src": 36,
+              "target": 26
+            },
+            {
+              "moveType": 1,
+              "src": 57,
+              "target": 69
+            },
+            {
+              "moveType": 4,
+              "src": 24,
+              "type": 5
+            },
+            {
+              "moveType": 3,
+              "target": 50,
+              "type": 4
+            },
+            {
+              "moveType": 3,
+              "target": 71,
+              "type": 2
+            },
+            {
+              "moveType": 4,
+              "src": 57,
+              "type": 2
+            },
+            {
+              "moveType": 3,
+              "target": 72,
+              "type": 2
+            },
+            {
+              "moveType": 3,
+              "target": 50,
+              "type": 2
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "turn": 19,
+      "players": [
+        {
+          "playerId": 1,
+          "commands": [
+            {
+              "moveType": 1,
+              "src": 20,
+              "target": 31
+            },
+            {
+              "moveType": 1,
+              "src": 18,
+              "target": 29
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        },
+        {
+          "playerId": 2,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 17
+            },
+            {
+              "moveType": 7,
+              "type": 13
+            },
+            {
+              "moveType": 1,
+              "src": 60,
+              "target": 48
+            },
+            {
+              "moveType": 1,
+              "src": 25,
+              "target": 14
+            },
+            {
+              "moveType": 1,
+              "src": 26,
+              "target": 15
+            },
+            {
+              "moveType": 1,
+              "src": 69,
+              "target": 80
+            },
+            {
+              "moveType": 1,
+              "src": 57,
+              "target": 47
+            },
+            {
+              "moveType": 1,
+              "src": 24,
+              "target": 13
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "turn": 20,
+      "players": [
+        {
+          "playerId": 1,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 38
+            },
+            {
+              "moveType": 1,
+              "src": 31,
+              "target": 42
+            },
+            {
+              "moveType": 1,
+              "src": 29,
+              "target": 41
+            },
+            {
+              "moveType": 4,
+              "src": 29,
+              "type": 2
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        },
+        {
+          "playerId": 2,
+          "commands": [
+            {
+              "moveType": 7,
+              "type": 14
+            },
+            {
+              "moveType": 1,
+              "src": 48,
+              "target": 49
+            },
+            {
+              "moveType": 1,
+              "src": 47,
+              "target": 48
+            },
+            {
+              "moveType": 4,
+              "src": 60,
+              "type": 5
+            },
+            {
+              "moveType": 1,
+              "src": 14,
+              "target": 25
+            },
+            {
+              "moveType": 1,
+              "src": 15,
+              "target": 16
+            },
+            {
+              "moveType": 1,
+              "src": 80,
+              "target": 92
+            },
+            {
+              "moveType": 4,
+              "src": 57,
+              "type": 2
+            },
+            {
+              "moveType": 1,
+              "src": 13,
+              "target": 14
+            },
+            {
+              "moveType": 10
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

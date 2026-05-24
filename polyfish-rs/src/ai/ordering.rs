@@ -101,8 +101,10 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
 
                     AbilityType::Destroy => -10.0, // Risky
 
+                    AbilityType::GrowForest => -5.0, // Generally a waste unless for adjacency
+
                     AbilityType::ClearForest => {
-                        let mut score = 3.0; // Very low base score
+                        let mut score = -2.0; // Very low base score (lower than EndTurn)
                         let stars = tribe.stars;
                         let has_forestry = crate::settings::technology::has_technology(
                             &tribe.tech_vanilla,

@@ -124,7 +124,43 @@ pub fn assess_unit_power(game: &GameState, unit: &UnitState) -> f32 {
     let def_bonus = get_defense_bonus(game, unit);
     let def_score = ((def_bonus - 1.0) / 3.0).clamp(0.0, 1.0);
 
-    // 5. Loneliness / Support (Penalty)
+    // 5. Strategic Bonus (Domination/Might)
+    // Reward units for being near enemy cities (especially capitals)
+    let mut strategic_bonus: f32 = 0.0;
+    let is_domination = matches!(
+        game.settings.mode,
+        crate::types::ModeType::Domination | crate::types::ModeType::Might
+    );
+    
+    if is_domination {
+        // Scan 3-tile radius for enemy structures
+        let adj = crate::functions::get_adjacent_indices(game, unit.coords.idx, 3);
+        for idx in adj {
+            if let Some(tile) = game.tiles.get(&idx) {
+                if tile.owner != 0 && tile.owner != unit.owner {
+                    // Enemy tile - is it a city?
+                    if let Some(s) = crate::functions::get_structure_at(game, idx) {
+                        match s.structure_type {
+                            crate::types::StructureType::Village
+                            | crate::types::StructureType::Lighthouse => {
+                                strategic_bonus += 0.04;
+                            }
+                            _ => {
+                                // City or Capital
+                                strategic_bonus += 0.08;
+                                // Double bonus if it's the principal capital
+                                if tile.capital_of == tile.owner {
+                                    strategic_bonus += 0.10;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 6. Loneliness / Support (Penalty)
     // If unit is weak/mid (< 0.5 base) and has no friends nearby, penalize.
     let mut loneliness_penalty = 0.0;
     if base_score < 0.6 {
@@ -154,10 +190,13 @@ pub fn assess_unit_power(game: &GameState, unit: &UnitState) -> f32 {
 
     // Final Weighted Sum
     // Weights: Base=0.4, Health=0.3, Status=0.2, Defense=0.1
-    // Loneliness is a flat penalty
-    let final_score =
-        (base_score * 0.4) + (hp_score * 0.3) + (status_score * 0.2) + (def_score * 0.1)
-            - loneliness_penalty;
+    // Loneliness is a flat penalty, Strategic is a flat bonus (clamped)
+    let final_score = (base_score * 0.4)
+        + (hp_score * 0.3)
+        + (status_score * 0.2)
+        + (def_score * 0.1)
+        + strategic_bonus.min(0.25)
+        - loneliness_penalty;
 
     final_score.clamp(0.0, 1.0)
 }

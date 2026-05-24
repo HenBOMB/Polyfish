@@ -1,4 +1,4 @@
-use crate::ai::gumbel_mcts::GumbelMctsAgent;
+// use crate::ai::gumbel_mcts::GumbelMctsAgent;
 use crate::ai::mcts_types::MoveVisit;
 use crate::ai::mcts_zero::ZeroMctsAgent;
 use crate::ai::network::PolyZeroNet;
@@ -19,7 +19,7 @@ impl<'a> Brain<'a> {
         }
     }
 
-    fn get_iterations(&self, turn: i32, legal_move_count: usize) -> usize {
+    fn _get_iterations(&self, turn: i32, legal_move_count: usize) -> usize {
         let mut iterations = self.max_iterations;
 
         if legal_move_count == 1 {
@@ -39,63 +39,51 @@ impl<'a> Brain<'a> {
         iterations
     }
 
-    pub fn think_decomposed(&self, game: &Game) -> (Option<Box<dyn Move>>, Vec<MoveVisit>) {
-        let mut moves = generate_legal_moves(&game.state);
+    fn think(&'_ self, game: &Game) -> (Option<ZeroMctsAgent<'_>>, Vec<Box<dyn Move>>) {
+        let moves = generate_legal_moves(&game.state);
 
         if moves.len() == 1 {
-            return (moves.pop(), Vec::new());
+            return (None, moves);
         }
 
         let agent = ZeroMctsAgent::new(
             self.network,
-            self.get_iterations(game.state.settings.turn, moves.len()),
+            self.max_iterations, // self.get_iterations(game.state.settings.turn, moves.len()),
         );
 
-        agent.select_move_with_decomposed_visits(&mut game.clone())
+        (Some(agent), moves)
+    }
+
+    pub fn think_decomposed(&self, game: &Game) -> (Option<Box<dyn Move>>, Vec<MoveVisit>) {
+        let (agent, mut moves) = self.think(game);
+
+        if agent.is_none() {
+            return (moves.pop(), Vec::new());
+        }
+
+        agent
+            .unwrap()
+            .select_move_with_decomposed_visits(&mut game.clone())
     }
 
     pub fn think_with_stats(&self, game: &Game) -> (Option<Box<dyn Move>>, Vec<f32>) {
-        let mut moves = generate_legal_moves(&game.state);
+        let (agent, mut moves) = self.think(game);
 
-        if moves.len() == 1 {
+        if agent.is_none() {
             return (moves.pop(), Vec::new());
         }
 
-        let agent = ZeroMctsAgent::new(
-            self.network,
-            self.get_iterations(game.state.settings.turn, moves.len()),
-        );
-
-        agent.select_move_with_stats(&mut game.clone())
+        agent.unwrap().select_move_with_stats(&mut game.clone())
     }
 }
 
 /// Returns the maximum number of game turns the MCTS tree should look ahead
 /// from the current turn. This prevents the search from going absurdly deep
 /// and getting stuck in long rollouts during mid-game when branching is high.
-pub fn max_turns_ahead(current_turn: i32, max_turns: i32) -> i32 {
-    let is_last_turn = current_turn >= max_turns;
-    // +1 because we want to include the current turn in the lookahead
-    1 + match current_turn {
-        1 => 2,
-        2 => 2,
-        3 => 2,
-        4 => 2,
-        5 => 2,
-        6 => 2,
-        7 => 1,
-        8 => 1,
-        9 => 1,
-        10 => {
-            if is_last_turn {
-                0
-            } else {
-                2
-            }
-        }
-        11 => 1,
-        12 => 1,
-        13 => 1,
-        _ => 1, // 14+
+pub fn max_turns_ahead(_current_turn: i32, _max_turns: i32) -> i32 {
+    if _current_turn < 8 {
+        5
+    } else {
+        (20 - _current_turn).max(2).min(20) // idea: do not look ahead more than the last turn (20 turns, default)
     }
 }

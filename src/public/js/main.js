@@ -1178,68 +1178,78 @@ function updateTechModal(tribe, modalBody, overlayEl) {
 }
 
 function checkRewardPopup() {
-    // Collect all unique reward moves (type 9)
-    const rewardMoves = currentLegalMoves.filter(m => m && m.moveType === 9);
+    try {
+        // Log move type distribution for debugging
+        const moveTypes = currentLegalMoves.map(m => m.moveType);
+        const counts = moveTypes.reduce((acc, t) => { acc[t] = (acc[t] || 0) + 1; return acc; }, {});
+        if (counts[9]) console.log("🎁 Reward moves detected in legal moves:", counts[9]);
 
-    // Polytopia usually forces selection if there are multiple rewards (e.g. Workshop vs Explorer)
-    if (rewardMoves.length >= 2) {
-        // Debugging Teacher Mode Popup Prevention
-        if (INTERACTIVE_MODE) {
-            console.log("Teacher Mode Reward Check:", {
-                turn: GAME_STATE.settings.currentPlayerTurnId,
-                isHuman: GAME_STATE.settings.currentPlayerTurnId === 1
+        // Collect all unique reward moves (type 9)
+        const rewardMoves = currentLegalMoves.filter(m => m && m.moveType === 9);
+
+        // Polytopia usually forces selection if there are multiple rewards (e.g. Workshop vs Explorer)
+        if (rewardMoves.length >= 1) {
+            // Debugging Teacher Mode Popup Prevention
+            if (INTERACTIVE_MODE) {
+                console.log("Teacher Mode Reward Check:", {
+                    turn: GAME_STATE.settings.currentPlayerTurnId,
+                    isHuman: GAME_STATE.settings.currentPlayerTurnId === 1
+                });
+            }
+
+            // In Teacher Mode, if it's AI's turn, do NOT show the popup. Let the AI propose.
+            if (INTERACTIVE_MODE && GAME_STATE.settings.currentPlayerTurnId !== 1) {
+                console.log("Skipping Reward Popup for AI Teacher Mode");
+                return;
+            }
+
+            // Prevent multiple popups if one is already open
+            if (document.getElementById('level-up-reward-overlay')) return;
+
+            const overlay = document.createElement('div');
+            overlay.id = 'level-up-reward-overlay';
+            overlay.className = 'reward-overlay';
+
+            let cityTitle = "City level up!";
+            // Try to find city name from the first reward move's target index
+            if (rewardMoves[0].target !== undefined) {
+                const city = Object.values(GAME_STATE.tribes)
+                    .flatMap(t => t.cities)
+                    .find(c => (c.idx) === rewardMoves[0].target);
+                if (city) cityTitle = `${city.name} level up!`;
+            }
+
+            overlay.innerHTML = `
+                <div class="reward-modal">
+                    <h2>${cityTitle}</h2>
+                    <div class="reward-options"></div>
+                </div>
+            `;
+            document.body.appendChild(overlay);
+
+            const optionsContainer = overlay.querySelector('.reward-options');
+            rewardMoves.forEach(move => {
+                const btn = document.createElement('button');
+                btn.className = 'reward-btn';
+                const name = RewardTypes[move.type];
+                const emoji = RewardEmojis[move.type];
+
+                btn.innerHTML = `
+                    <div class="reward-icon-container">
+                        <span class="icon">${emoji || '❓'}</span>
+                    </div>
+                    <div class="label">${name || 'Unknown'}</div>
+                `;
+
+                btn.onclick = () => {
+                    playMove(move);
+                    overlay.remove();
+                };
+                optionsContainer.appendChild(btn);
             });
         }
-
-        // In Teacher Mode, if it's AI's turn, do NOT show the popup. Let the AI propose.
-        if (INTERACTIVE_MODE && GAME_STATE.settings.currentPlayerTurnId !== 1) {
-            console.log("Skipping Reward Popup for AI Teacher Mode");
-            return;
-        }
-
-        // Prevent multiple popups if one is already open
-        if (document.querySelector('.reward-overlay')) return;
-
-        const overlay = document.createElement('div');
-        overlay.className = 'reward-overlay';
-
-        let cityTitle = "City level up!";
-        // Try to find city name from the first reward move's target index
-        if (rewardMoves[0].target !== undefined) {
-            const city = Object.values(GAME_STATE.tribes)
-                .flatMap(t => t.cities)
-                .find(c => (c.idx) === rewardMoves[0].target);
-            if (city) cityTitle = `${city.name} level up!`;
-        }
-
-        overlay.innerHTML = `
-            <div class="reward-modal">
-                <h1>${cityTitle}</h1>
-                <div class="reward-options"></div>
-            </div>
-        `;
-        document.body.appendChild(overlay);
-
-        const optionsContainer = overlay.querySelector('.reward-options');
-        rewardMoves.forEach(move => {
-            const btn = document.createElement('button');
-            btn.className = 'reward-btn';
-            const name = RewardTypes[move.type];
-            const emoji = RewardEmojis[move.type];
-
-            btn.innerHTML = `
-                <div class="reward-icon-container">
-                    <span class="icon">${emoji}</span>
-                </div>
-                <div class="label">${name}</div>
-            `;
-
-            btn.onclick = () => {
-                playMove(move);
-                overlay.remove();
-            };
-            optionsContainer.appendChild(btn);
-        });
+    } catch (e) {
+        console.error("Error in checkRewardPopup:", e);
     }
 }
 

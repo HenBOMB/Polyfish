@@ -1,0 +1,10 @@
+{
+  "id": "polyfish_ai",
+  "name": "PolyfishAI",
+  "description": "Polytopia AI interface mod for The Battle of Polytopia.",
+  "version": "1.0.0",
+  "authors": [
+    "HenBOMB"
+  ],
+  "dependencies": []
+}
