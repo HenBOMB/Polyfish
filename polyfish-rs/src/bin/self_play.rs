@@ -25,12 +25,13 @@ struct DecomposedPolicyData {
 
 /// Result from a single game - contains all data needed for training
 struct GameResult {
-    // Each step: features, policy, player_id, my_score_at_step, opponent_score_at_step
-    history: Vec<(GameFeatures, DecomposedPolicyData, PlayerId, i32, i32)>,
+    // Each step: features, policy, player_id, my_score_at_step, opponent_score_at_step, move_type
+    history: Vec<(GameFeatures, DecomposedPolicyData, PlayerId, i32, i32, polyfish::types::MoveType)>,
     scores: HashMap<i32, i32>,
     moves: usize,
     winner_score: i32,
     recap: ModReplay,
+    action_counts: HashMap<polyfish::types::MoveType, usize>,
 }
 
 /// Play a single game and return the result
@@ -41,24 +42,36 @@ fn play_single_game(
     game_idx: usize,
     seed: i64,
     tribes: Vec<TribeType>,
+    iteration: usize,
 ) -> Option<GameResult> {
+    // Curriculum logic
+    let (map_size, max_turns) = if iteration <= 50 {
+        (MapSize::Tiny, 15)
+    } else if iteration <= 150 {
+        (MapSize::Tiny, 20)
+    } else if iteration <= 300 {
+        (MapSize::Small, 25)
+    } else {
+        (MapSize::Normal, 30)
+    };
+
     // Init Game using MapGen
     let gen_settings = polyfish::mapgen::MapGenSettings {
-        size: MapSize::Tiny,
+        size: map_size,
         map_type: polyfish::types::MapType::Drylands,
         tribes: tribes.clone(),
         seed,
         ..Default::default()
     };
     eprintln!(
-        "[Game {}] Started with seed: {} Tribes: {:?}",
-        game_idx, seed, gen_settings.tribes
+        "[Game {}] Started with seed: {} Tribes: {:?} (Curriculum: {:?}, max_turns: {})",
+        game_idx, seed, gen_settings.tribes, map_size, max_turns
     );
 
     let mut game = Game::new();
     game.state = polyfish::mapgen::generate(gen_settings);
     game.state.settings.mode = polyfish::types::ModeType::Domination;
-    game.state.settings.max_turns = 20;
+    game.state.settings.max_turns = max_turns;
     game.post_load();
 
     // Create two agents (they might share the same network, or be different)
@@ -69,8 +82,9 @@ fn play_single_game(
     let mut flat_recap: Vec<(i32, i32, serde_json::Value)> = Vec::new();
 
     // Game Loop
-    let mut game_history: Vec<(GameFeatures, DecomposedPolicyData, PlayerId, i32, i32)> =
+    let mut game_history: Vec<(GameFeatures, DecomposedPolicyData, PlayerId, i32, i32, polyfish::types::MoveType)> =
         Vec::new();
+    let mut action_counts: HashMap<polyfish::types::MoveType, usize> = HashMap::new();
 
     let current_scores: Vec<(PlayerId, i32)> = game
         .state
@@ -173,6 +187,9 @@ fn play_single_game(
         };
 
         if let Some(m) = best_move {
+            let m_type = m.move_type();
+            *action_counts.entry(m_type).or_insert(0) += 1;
+            
             flat_recap.push((
                 game.state.settings.turn,
                 game.state.settings.current_player_turn_id,
@@ -188,7 +205,7 @@ fn play_single_game(
                 .map(|(_, t)| t.score)
                 .max()
                 .unwrap_or(0);
-            game_history.push((state_t, policy_data, pov, my_score_now, opp_score_now));
+            game_history.push((state_t, policy_data, pov, my_score_now, opp_score_now, m.move_type()));
             if move_count > 0 && move_count % 10 == 0 {
                 // let current_scores: Vec<(PlayerId, i32)> = game
                 //     .state
@@ -256,6 +273,7 @@ fn play_single_game(
             game_state: initial_state,
             turns: group_recap(flat_recap),
         },
+        action_counts,
     })
 }
 
@@ -310,6 +328,10 @@ fn main() -> anyhow::Result<()> {
         /// Without this flag, all actions get the same flat final-outcome value.
         #[arg(long, default_value_t = false)]
         reward_shaping: bool,
+
+        /// Current training iteration (for curriculum learning)
+        #[arg(long, default_value_t = 1)]
+        iteration: usize,
     }
 
     let args = Args::parse();
@@ -470,6 +492,7 @@ fn main() -> anyhow::Result<()> {
                 i,
                 seed,
                 selected_tribes.clone(),
+                args.iteration,
             )
         })
         .collect();
@@ -496,6 +519,12 @@ fn main() -> anyhow::Result<()> {
     let mut p1_count = 0;
     let mut p2_count = 0;
 
+    let mut total_captures = 0;
+    let mut total_harvests = 0;
+    let mut total_builds = 0;
+    let mut total_research = 0;
+    let mut total_attacks = 0;
+
     for result in results {
         total_score += result.winner_score;
         total_moves += result.moves;
@@ -514,6 +543,12 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
+        total_captures += result.action_counts.get(&polyfish::types::MoveType::Capture).copied().unwrap_or(0);
+        total_harvests += result.action_counts.get(&polyfish::types::MoveType::Harvest).copied().unwrap_or(0);
+        total_builds += result.action_counts.get(&polyfish::types::MoveType::Build).copied().unwrap_or(0);
+        total_research += result.action_counts.get(&polyfish::types::MoveType::Research).copied().unwrap_or(0);
+        total_attacks += result.action_counts.get(&polyfish::types::MoveType::Attack).copied().unwrap_or(0);
+
         // Backpropagate value
         // Domination: Win/Loss is the primary signal.
         // The winner gets +1.0, loser gets -1.0.
@@ -524,7 +559,6 @@ fn main() -> anyhow::Result<()> {
 
         // Determine the winner_id for this game
         let game_winner_id = {
-            let alive_ids: Vec<i32> = result.scores.keys().copied().collect();
             // Check who survived (alive = not killed)
             // We stored scores; for decisive win, one player's score is dominant
             // Use the result.winner_score to identify winner
@@ -539,7 +573,7 @@ fn main() -> anyhow::Result<()> {
             best_id
         };
 
-        for (step_idx, (features, policy_data, p_id, my_score_now, opp_score_now)) in
+        for (step_idx, (features, policy_data, p_id, my_score_now, opp_score_now, move_type)) in
             result.history.into_iter().enumerate()
         {
             let flat_map = features
@@ -589,7 +623,29 @@ fn main() -> anyhow::Result<()> {
                 let final_weight = 0.4 + 0.4 * game_progress; // 0.4 early → 0.8 late
                 let progress_weight = 1.0 - final_weight; // 0.6 early → 0.2 late
 
-                (final_weight * final_outcome + progress_weight * progress).clamp(-1.0, 1.0)
+                let shaped_value = final_weight * final_outcome + progress_weight * progress;
+                
+                // EXPLICIT VERIFIABLE REWARDS (Curriculum Focus)
+                // We reward the AI for doing specific early-game economy actions.
+                // This acts as a dense reinforcement learning reward.
+                let action_bonus = match move_type {
+                    polyfish::types::MoveType::Capture => 0.15,
+                    polyfish::types::MoveType::Harvest => 0.10,
+                    polyfish::types::MoveType::Research => 0.05,
+                    polyfish::types::MoveType::Build => 0.05,
+                    _ => 0.0,
+                };
+                
+                // If curriculum is early, we boost these explicit rewards even more
+                let curriculum_multiplier = if args.iteration <= 50 {
+                    2.0
+                } else if args.iteration <= 150 {
+                    1.5
+                } else {
+                    1.0
+                };
+
+                (shaped_value + action_bonus * curriculum_multiplier).clamp(-1.0, 1.0)
             } else {
                 // FLAT: binary win/loss signal (Domination-native)
                 final_outcome
@@ -613,9 +669,15 @@ fn main() -> anyhow::Result<()> {
         0.0
     };
 
+    let avg_captures = total_captures as f32 / args.num_games as f32;
+    let avg_harvests = total_harvests as f32 / args.num_games as f32;
+    let avg_builds = total_builds as f32 / args.num_games as f32;
+    let avg_research = total_research as f32 / args.num_games as f32;
+    let avg_attacks = total_attacks as f32 / args.num_games as f32;
+
     println!(
-        "METRICS: {{\"avg_score\": {:.2}, \"max_score\": {}, \"avg_moves\": {:.2}, \"p1_avg\": {:.2}, \"p2_avg\": {:.2}}}",
-        avg_score, max_score, avr_moves, p1_avg, p2_avg
+        "METRICS: {{\"avg_score\": {:.2}, \"max_score\": {}, \"avg_moves\": {:.2}, \"p1_avg\": {:.2}, \"p2_avg\": {:.2}, \"avg_captures\": {:.2}, \"avg_harvests\": {:.2}, \"avg_builds\": {:.2}, \"avg_research\": {:.2}, \"avg_attacks\": {:.2}}}",
+        avg_score, max_score, avr_moves, p1_avg, p2_avg, avg_captures, avg_harvests, avg_builds, avg_research, avg_attacks
     );
 
     // Stack and save

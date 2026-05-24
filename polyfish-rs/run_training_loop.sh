@@ -135,7 +135,7 @@ do
     
     # Capture output to extract metrics
     # We pass args via CLI now, not env vars alone
-    SP_OUTPUT=$(./target/release/self_play --num-games $GAMES_PER_ITER --mcts-iters $MCTS_ITERS $REWARD_FLAG $OPPONENT_FLAG --tribe1 "$TRIBE1" --tribe2 "$TRIBE2")
+    SP_OUTPUT=$(./target/release/self_play --num-games $GAMES_PER_ITER --mcts-iters $MCTS_ITERS $REWARD_FLAG $OPPONENT_FLAG --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$i")
     echo "$SP_OUTPUT"
     
     # Extract Avg Score and Max Score using grep and sed or awk
@@ -143,6 +143,12 @@ do
     MAX_SCORE=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o '"max_score": [0-9]*' | awk -F': ' '{print $2}')
     P1_AVG=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o '"p1_avg": [0-9.]*' | awk -F': ' '{print $2}')
     P2_AVG=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o '"p2_avg": [0-9.]*' | awk -F': ' '{print $2}')
+    
+    AVG_CAPTURES=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o '"avg_captures": [0-9.]*' | awk -F': ' '{print $2}')
+    AVG_HARVESTS=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o '"avg_harvests": [0-9.]*' | awk -F': ' '{print $2}')
+    AVG_BUILDS=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o '"avg_builds": [0-9.]*' | awk -F': ' '{print $2}')
+    AVG_RESEARCH=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o '"avg_research": [0-9.]*' | awk -F': ' '{print $2}')
+    AVG_ATTACKS=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o '"avg_attacks": [0-9.]*' | awk -F': ' '{print $2}')
     
     # 2. Training
     echo "[Training] Training model..."
@@ -152,8 +158,9 @@ do
     
     # 3. Log
     TIMESTAMP=$(date +%s)
-    echo "$i,$TIMESTAMP,$AVG_SCORE,$MAX_SCORE,$P1_AVG,$P2_AVG,$LOSS" >> training_log.csv
-    echo "Iteration $i complete. Type: $MATCH_TYPE | Avg: $AVG_SCORE | Max: $MAX_SCORE | P1: $P1_AVG | P2: $P2_AVG | Loss: $LOSS"
+    echo "$i,$TIMESTAMP,$AVG_SCORE,$MAX_SCORE,$P1_AVG,$P2_AVG,$LOSS,$AVG_CAPTURES,$AVG_HARVESTS,$AVG_BUILDS,$AVG_RESEARCH,$AVG_ATTACKS" >> training_log.csv
+    echo "Iteration $i complete. Type: $MATCH_TYPE | Avg: $AVG_SCORE | Loss: $LOSS"
+    echo "  -> STATS/GAME: Captures: $AVG_CAPTURES | Harvests: $AVG_HARVESTS | Builds: $AVG_BUILDS | Tech: $AVG_RESEARCH | Attacks: $AVG_ATTACKS"
     
     # 4. Checkpoint (Every 50 iterations)
     if [ $((i % 50)) -eq 0 ]; then
