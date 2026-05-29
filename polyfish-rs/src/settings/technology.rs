@@ -353,8 +353,8 @@ pub fn get_tech_cost(num_cities: i32, tier: i32, has_philosophy: bool) -> i32 {
     // Polytopia official: 4 + (cities * tier)
     let cost = 4 + (num_cities * tier);
     if has_philosophy {
-        // Philosophy gives ~33% discount (0.77 multiplier)
-        ((cost as f32) * 0.77).ceil() as i32
+        // Philosophy gives ~33% discount
+        ((cost as f32) * 0.66).ceil() as i32
     } else {
         cost
     }
