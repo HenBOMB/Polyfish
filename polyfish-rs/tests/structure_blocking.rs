@@ -38,6 +38,7 @@ mod tests {
         tribe.tech_vanilla.push(TechnologyState {
             tech_type: TechnologyType::Forestry,
             discovered: true,
+            discovered_turn: 0,
         });
 
         // Add city with territory
@@ -103,6 +104,7 @@ mod tests {
         tribe.tech_vanilla.push(TechnologyState {
             tech_type: TechnologyType::Organization,
             discovered: true,
+            discovered_turn: 0,
         });
         tribe.stars = 10;
 

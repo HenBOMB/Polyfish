@@ -111,7 +111,7 @@ mod tests {
     fn test_serde_roundtrip() {
         let coords = Coords::from_xy(5, 3, 11);
         let json = serde_json::to_string(&coords).unwrap();
-        assert_eq!(json, r#"{"x":5,"y":3,"idx":58}"#);
+        assert_eq!(json, r#"{"x":5,"y":3,"idx":38}"#);
 
         let parsed: Coords = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.x, 5);

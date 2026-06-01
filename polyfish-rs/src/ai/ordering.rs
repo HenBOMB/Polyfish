@@ -10,7 +10,10 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
     let state = &game.state;
     let move_type = mv.move_type();
     let tribe_id = state.settings.current_player_turn_id;
-    let tribe = state.tribes.get(&tribe_id).unwrap();
+    let tribe = match state.tribes.get(&tribe_id) {
+        Some(t) => t,
+        None => return 0.0,
+    };
 
     match move_type {
         MoveType::Reward => score_reward(state, mv),

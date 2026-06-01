@@ -62,6 +62,7 @@ fn test_harvest_undo() {
         tribe.tech_vanilla.push(TechnologyState {
             tech_type: TechnologyType::Organization,
             discovered: true,
+            discovered_turn: 0,
         });
     }
 
@@ -185,6 +186,7 @@ fn test_interaction_sequence() {
         tribe.tech_vanilla.push(TechnologyState {
             tech_type: TechnologyType::Organization,
             discovered: true,
+            discovered_turn: 0,
         });
     }
 

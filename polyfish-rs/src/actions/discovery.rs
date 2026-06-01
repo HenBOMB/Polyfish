@@ -155,11 +155,8 @@ pub fn predict_explorer(state: &GameState, start_idx: i32) -> (Vec<i32>, Vec<i32
         let next_tile = if candidates.is_empty() {
             current_tile
         } else {
-            // Deterministic selection (replaces thread_rng)
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            std::hash::Hash::hash(&(state.settings.seed as u32), &mut hasher);
-            std::hash::Hash::hash(&[current_tile], &mut hasher);
-            let h = std::hash::Hasher::finish(&hasher);
+            // Deterministic selection using xxhash32 (replaces thread_rng/DefaultHasher)
+            let h = crate::hash::get_hash(state.settings.seed as u32, &[current_tile]);
             
             let pick = (h as usize) % candidates.len();
             candidates[pick]

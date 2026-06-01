@@ -38,6 +38,7 @@ fn preview_evaluator() {
         t.tech_vanilla.push(polyfish::states::TechnologyState {
             tech_type: TechnologyType::Riding,
             discovered: true,
+            discovered_turn: 0,
         });
     }
     let score_eco = evaluator::evaluate_state(&state, player_id);

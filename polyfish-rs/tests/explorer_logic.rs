@@ -56,6 +56,7 @@ fn test_explorer_tech_mountain() {
         .push(polyfish::states::TechnologyState {
             tech_type: TechnologyType::Climbing,
             discovered: true,
+            discovered_turn: 0,
         });
     let (_, revealed_with_tech) = predict_explorer(&state, 0);
     assert!(

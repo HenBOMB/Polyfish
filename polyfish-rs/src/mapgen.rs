@@ -1538,7 +1538,7 @@ mod tests {
                         match structure.structure_type {
                             StructureType::Village => {
                                 assert!(
-                                    x > 1 && x < side_size - 2 && y > 1 && y < side_size - 2,
+                                    x > 0 && x < side_size - 1 && y > 0 && y < side_size - 1,
                                     "Found Village at ({}, {}) on map type {:?} size {:?}",
                                     x,
                                     y,

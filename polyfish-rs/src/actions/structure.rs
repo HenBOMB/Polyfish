@@ -11,15 +11,11 @@ use crate::types::{
     UnitType,
 };
 
-/// Crate-local RNG helper (Linear Congruential Generator)
-/// Constants from MMIX by Knuth
-fn next_rng(seed: &mut i64) -> i64 {
-    let mut u_seed = *seed as u64;
-    u_seed = u_seed
-        .wrapping_mul(6364136223846793005)
-        .wrapping_add(1442695040888963407);
-    *seed = u_seed as i64;
-    *seed
+/// Helper to generate the next seed using xxHash32, matching the game's deterministic RNG
+fn next_rng_xxhash(current_seed: &mut i64, initial_seed: i64) -> i64 {
+    let next = crate::hash::get_hash(initial_seed as u32, &[*current_seed as i32]);
+    *current_seed = next as i64;
+    *current_seed
 }
 
 /// Create a structure at a tile
@@ -293,7 +289,7 @@ pub fn capture_ruin(
                             tech
                         } else {
                             let mut seed = state.settings.seed;
-                            let r = next_rng(&mut seed);
+                            let r = next_rng_xxhash(&mut seed, state.initial_seed);
                             state.settings.seed = seed;
                             let index = (r as usize) % researchable.len();
                             researchable[index]
@@ -451,7 +447,7 @@ pub fn capture_ruin(
         if !researchable.is_empty() {
             possible_rewards.push(Box::new(move |s: &mut GameState| -> UndoCallback {
                 let mut seed = s.settings.seed;
-                let r = next_rng(&mut seed);
+                let r = next_rng_xxhash(&mut seed, s.initial_seed);
                 s.settings.seed = seed;
 
                 let index = (r as usize) % researchable.len();
@@ -694,7 +690,7 @@ pub fn capture_ruin(
 
     // Pick one reward using Seed RNG
     if !possible_rewards.is_empty() {
-        let r = next_rng(&mut current_seed);
+        let r = next_rng_xxhash(&mut current_seed, state.initial_seed);
         let index = (r as usize) % possible_rewards.len();
 
         let reward_fn = possible_rewards.remove(index);

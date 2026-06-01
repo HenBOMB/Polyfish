@@ -505,7 +505,7 @@ impl Default for GameSettings {
             map_type: MapType::Drylands,
             size: 11,
             tile_count: 11 * 11,
-            turn: 0,
+            turn: default_turn(),
             max_turns: default_max_turns(),
             current_player_turn_id: 1,
             version: 0,

@@ -45,10 +45,12 @@ fn main() -> anyhow::Result<()> {
         let fishing = polyfish::states::TechnologyState {
             tech_type: TechnologyType::Fishing,
             discovered: true,
+            discovered_turn: 0,
         };
         let sailing = polyfish::states::TechnologyState {
             tech_type: TechnologyType::Sailing,
             discovered: true,
+            discovered_turn: 0,
         };
 
         if !polyfish::settings::technology::has_technology(

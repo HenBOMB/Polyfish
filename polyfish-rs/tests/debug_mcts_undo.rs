@@ -54,10 +54,12 @@ fn fuzz_test_p2_moves() {
     tribe2.tech_vanilla.push(TechnologyState {
         tech_type: TechnologyType::Organization,
         discovered: true,
+        discovered_turn: 0,
     });
     tribe2.tech_vanilla.push(TechnologyState {
         tech_type: TechnologyType::Forestry,
         discovered: true,
+        discovered_turn: 0,
     });
 
     tribe2.cities.push(city2);

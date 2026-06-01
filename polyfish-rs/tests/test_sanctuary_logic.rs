@@ -29,10 +29,12 @@ fn setup_elyrion_game() -> Game {
     tribe.tech_vanilla.push(TechnologyState {
         tech_type: TechnologyType::Forestry,
         discovered: true,
+        discovered_turn: 0,
     });
     tribe.tech_vanilla.push(TechnologyState {
         tech_type: TechnologyType::Hunting,
         discovered: true,
+        discovered_turn: 0,
     });
     
     game.state.tribes.insert(pov_id, tribe);
@@ -109,6 +111,7 @@ fn test_sanctuary_income() {
             idx: 10,
             owner: pov_id,
             level: 1,
+            production: 1,
             _territory: territory.clone(),
             ..Default::default()
         });
