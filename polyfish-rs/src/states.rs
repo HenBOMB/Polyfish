@@ -477,7 +477,7 @@ pub struct GameSettings {
 }
 
 pub fn default_turn() -> i32 {
-    1
+    0
 }
 pub fn default_max_turns() -> i32 {
     10
