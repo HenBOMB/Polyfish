@@ -542,7 +542,7 @@ mod tests {
     #[test]
     fn test_new_game() {
         let game = Game::new();
-        assert_eq!(game.state.settings.turn, 1);
+        assert_eq!(game.state.settings.turn, 0);
         assert_eq!(game.state.settings.mode, ModeType::Domination);
     }
 
