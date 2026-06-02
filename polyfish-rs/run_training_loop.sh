@@ -206,6 +206,6 @@ do
     mv games_*.safetensors archive/ 2>/dev/null || true
     
     # Keep only the last 10 game files to save space and match train.py replay buffer
-    ls -t archive/games_*.safetensors 2>/dev/null | tail -n +11 | xargs -r rm
+    ls -t archive/games_*.safetensors 2>/dev/null | tail -n +31 | xargs -r rm
     
 done

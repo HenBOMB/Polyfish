@@ -9,7 +9,7 @@ import gc
 
 # --- Configuration ---
 BATCH_SIZE = 64
-EPOCHS = 5
+EPOCHS = 2
 LEARNING_RATE = 0.001
 # Handle RTX 5090 / CUDA Arch compatibility issues
 try:
@@ -193,7 +193,7 @@ def train():
     archive_files = sorted(glob.glob("archive/games_*.safetensors"), key=os.path.getmtime, reverse=True)
     
     # Increased buffer to prevent "Amnesia" / Mode Collapse
-    replay_buffer_size = 10 
+    replay_buffer_size = 30 
     game_files = fresh_files + archive_files[:replay_buffer_size]
 
     if not game_files:
@@ -379,7 +379,9 @@ def train():
         scheduler.step()
             
     final_loss = total_loss / total_batches if total_batches > 0 else 0.0
-    print(f"METRICS: {{\"loss\": {final_loss:.4f}}}")
+    final_p_loss = total_p_loss / total_batches if total_batches > 0 else 0.0
+    final_v_loss = total_v_loss / total_batches if total_batches > 0 else 0.0
+    print(f'METRICS: {{"loss": {final_loss:.4f}, "policy_loss": {final_p_loss:.4f}, "value_loss": {final_v_loss:.4f}}}')
 
     # 4. Save Model in f16 for blazing fast CPU inference
     half_state = {k: v.half() for k, v in model.state_dict().items()}

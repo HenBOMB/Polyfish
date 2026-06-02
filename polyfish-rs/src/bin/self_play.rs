@@ -51,15 +51,15 @@ fn play_single_game(
     tribes: Vec<TribeType>,
     iteration: usize,
 ) -> Option<GameResult> {
-    // Curriculum logic
+    // Curriculum logic — Tiny maps only, gradually increase turn count
     let (map_size, max_turns) = if iteration <= 50 {
+        (MapSize::Tiny, 10)
+    } else if iteration <= 100 {
         (MapSize::Tiny, 15)
     } else if iteration <= 150 {
         (MapSize::Tiny, 20)
-    } else if iteration <= 300 {
-        (MapSize::Small, 25)
     } else {
-        (MapSize::Normal, 30)
+        (MapSize::Tiny, 30)
     };
 
     // Init Game using MapGen
@@ -77,7 +77,7 @@ fn play_single_game(
 
     let mut game = Game::new();
     game.state = polyfish::mapgen::generate(gen_settings);
-    game.state.settings.mode = polyfish::types::ModeType::Domination;
+    game.state.settings.mode = polyfish::types::ModeType::Perfection;
     game.state.settings.max_turns = max_turns;
     game.post_load();
 
@@ -633,8 +633,8 @@ fn main() -> anyhow::Result<()> {
             collected_target_spatial.push(policy_data.target_spatial);
             collected_option.push(policy_data.move_option);
 
-            // Domination final outcome: win = +1.0, loss = -1.0
-            // If timeout (no decisive kill), soften with score differential
+            // Perfection: Score-based value target
+            // Every game produces a meaningful score — use normalized differential
             let my_final = final_scores.get(&p_id).copied().unwrap_or(0) as f32;
             let opp_final = final_scores
                 .iter()
@@ -643,52 +643,22 @@ fn main() -> anyhow::Result<()> {
                 .next()
                 .unwrap_or(0.0);
 
-            let final_outcome = if p_id == game_winner_id {
-                // Winner: strong positive, scaled slightly by margin
-                (0.8 + 0.2 * ((my_final - opp_final) / max_score).tanh()).clamp(0.5, 1.0)
-            } else {
-                // Loser: strong negative, scaled slightly by margin
-                (-0.8 + 0.2 * ((my_final - opp_final) / max_score).tanh()).clamp(-1.0, -0.5)
-            };
+            // Score differential normalized to [-1, 1] via tanh
+            let final_outcome = ((my_final - opp_final) / max_score).tanh();
 
             let value = if args.reward_shaping {
-                // REWARD SHAPING for Domination:
-                // Blend win/loss outcome with local military/score advantage.
+                // Blend final score outcome with per-step progress
                 let my_advantage_now = (my_score_now - opp_score_now) as f32;
                 let progress = (my_advantage_now / max_score).tanh();
 
-                // Early game: lean on progress (are we gaining territory, killing units?)
-                // Late game: lean on final outcome (did we actually win?)
+                // Gradually shift from progress signal to final outcome
                 let game_progress = step_idx as f32 / (history_len as f32).max(1.0);
-                let final_weight = 0.4 + 0.4 * game_progress; // 0.4 early → 0.8 late
-                let progress_weight = 1.0 - final_weight; // 0.6 early → 0.2 late
+                let final_weight = 0.5 + 0.5 * game_progress; // 0.5 early → 1.0 late
+                let progress_weight = 1.0 - final_weight;
 
-                let shaped_value = final_weight * final_outcome + progress_weight * progress;
-
-                // EXPLICIT VERIFIABLE REWARDS (Curriculum Focus)
-                // We reward the AI for doing specific early-game economy actions.
-                // This acts as a dense reinforcement learning reward.
-                let action_bonus = match move_type {
-                    polyfish::types::MoveType::Capture => 0.15,
-                    polyfish::types::MoveType::Harvest => 0.10,
-                    polyfish::types::MoveType::Research => 0.05,
-                    polyfish::types::MoveType::Build => 0.05,
-                    _ => 0.0,
-                };
-
-                // If curriculum is early, we boost these explicit rewards even more
-                let curriculum_multiplier = if args.iteration <= 50 {
-                    2.0
-                } else if args.iteration <= 150 {
-                    1.5
-                } else {
-                    1.0
-                };
-
-                (shaped_value + action_bonus * curriculum_multiplier).clamp(-1.0, 1.0)
+                (final_weight * final_outcome + progress_weight * progress).clamp(-1.0, 1.0)
             } else {
-                // FLAT: binary win/loss signal (Domination-native)
-                final_outcome
+                final_outcome.clamp(-1.0, 1.0)
             };
 
             collected_values.push(value);
