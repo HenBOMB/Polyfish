@@ -150,6 +150,48 @@ for ($i = $StartIter; $i -le ($Iterations + $StartIter); $i++) {
     Write-Host "Iteration $i complete. Type: $MatchType | Avg: $AvgScore | Loss: $Loss" -ForegroundColor Green
     Write-Host "  -> STATS/GAME: Captures: $AvgCaptures | Harvests: $AvgHarvests | Builds: $AvgBuilds | Tech: $AvgResearch | Attacks: $AvgAttacks" -ForegroundColor DarkGray
     
+    # 3.5 Push to Supabase Realtime Table
+    try {
+        if (Test-Path ".env") {
+            $EnvContent = Get-Content ".env" -Raw
+            $SupabaseUrl = ""
+            $SupabaseKey = ""
+            if ($EnvContent -match 'SUPABASE_URL="([^"]+)"') { $SupabaseUrl = $matches[1] }
+            if ($EnvContent -match 'SUPABASE_SERVICE_ROLE_KEY="([^"]+)"') { $SupabaseKey = $matches[1] }
+            
+            if ($SupabaseUrl -and $SupabaseKey) {
+                $Headers = @{
+                    "apikey" = $SupabaseKey
+                    "Authorization" = "Bearer $SupabaseKey"
+                    "Content-Type" = "application/json"
+                    "Prefer" = "return=minimal"
+                }
+                # Handle possible empty or non-numeric values gracefully
+                function ParseNum { param($val) if ([string]::IsNullOrWhiteSpace($val)) { return 0.0 } try { return [double]$val } catch { return 0.0 } }
+                
+                $Body = @{
+                    iteration = $i
+                    timestamp = $Timestamp
+                    avg_score = (ParseNum $AvgScore)
+                    max_score = (ParseNum $MaxScore)
+                    p1_avg = (ParseNum $P1Avg)
+                    p2_avg = (ParseNum $P2Avg)
+                    loss = (ParseNum $Loss)
+                    avg_captures = (ParseNum $AvgCaptures)
+                    avg_harvests = (ParseNum $AvgHarvests)
+                    avg_builds = (ParseNum $AvgBuilds)
+                    avg_research = (ParseNum $AvgResearch)
+                    avg_attacks = (ParseNum $AvgAttacks)
+                } | ConvertTo-Json
+                
+                Invoke-RestMethod -Uri "$SupabaseUrl/rest/v1/training_metrics" -Method Post -Headers $Headers -Body $Body | Out-Null
+                Write-Host "Pushed metrics to Supabase training_metrics table." -ForegroundColor Magenta
+            }
+        }
+    } catch {
+        Write-Host "Failed to push to Supabase: $_" -ForegroundColor Red
+    }
+    
     # 4. Checkpoint (Every 50 iterations)
     if ($i % 50 -eq 0) {
         $Ts = (Get-Date).ToString("yyyyMMdd_HHmmss")
