@@ -79,6 +79,8 @@ while ($true) {
     # Get system idle time in milliseconds and convert to seconds
     $IdleMs = [Win32]::GetIdleTime()
     $IdleSecs = [math]::Floor($IdleMs / 1000)
+    
+    Write-Host "Current Idle: $IdleSecs seconds" -ForegroundColor DarkGray
 
     # Check if there was activity (idle less than 60s)
     if ($IdleSecs -lt 60) {
