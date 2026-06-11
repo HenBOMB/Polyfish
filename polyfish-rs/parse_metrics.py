@@ -11,7 +11,7 @@ bestGames = []
 
 leagueItersSet = []
 
-with open("session.log", "r") as f:
+with open("session.log", "r", encoding="utf-8", errors="replace") as f:
     lines = f.readlines()
 
 iter_count = 0

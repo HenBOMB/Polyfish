@@ -1,6 +1,6 @@
 # Configuration
 # Replace this with the actual path to your training script for Windows
-$TrainCmd = ".\run-server.bat" 
+$TrainCmd = ".\run-training.bat" 
 $CheckInterval = 1 # seconds
 
 # Embed a little bit of C# to call the native Windows API (GetLastInputInfo) 
@@ -80,7 +80,7 @@ while ($true) {
     $IdleMs = [Win32]::GetIdleTime()
     $IdleSecs = [math]::Floor($IdleMs / 1000)
     
-    Write-Host "Current Idle: $IdleSecs seconds" -ForegroundColor DarkGray
+    #Write-Host "Current Idle: $IdleSecs seconds" -ForegroundColor DarkGray
 
     # Check if there was activity (idle less than 60s)
     if ($IdleSecs -lt 60) {

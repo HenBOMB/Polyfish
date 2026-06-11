@@ -65,7 +65,7 @@ league_count = len(league_matches_set_actual)
 self_play_count = total_iters - league_count
 
 # Read html
-with open(html_path, "r") as f:
+with open(html_path, "r", encoding="utf-8") as f:
     html = f.read()
 
 # 1. Update Header status pill and iter range
@@ -237,7 +237,7 @@ html = re.sub(
 )
 
 # Write back
-with open(html_path, "w") as f:
+with open(html_path, "w", encoding="utf-8") as f:
     f.write(html)
 
 print("Dashboard successfully patched with all latest metrics, insights, cards, and data arrays!")
