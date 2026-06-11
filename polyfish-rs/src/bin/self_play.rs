@@ -504,10 +504,17 @@ fn main() -> anyhow::Result<()> {
         .into_par_iter()
         .filter_map(|i| {
             let seed = (base_seed + i as u64) as i64;
-            // Play with (Net1, Net2)
+            let swap_players = i % 2 == 1; // Swap every other game
+            let (p1_net, p2_net) = if swap_players {
+                (&network2, &network1)
+            } else {
+                (&network1, &network2)
+            };
+
+            // Play with (p1_net, p2_net)
             play_single_game(
-                &network1,
-                &network2,
+                p1_net,
+                p2_net,
                 args.mcts_iters,
                 i,
                 seed,
@@ -643,8 +650,21 @@ fn main() -> anyhow::Result<()> {
                 .next()
                 .unwrap_or(0.0);
 
+            // Asymmetric Reward Shaping to fix P1 advantage
+            let (mut my_adjusted, mut opp_adjusted) = (my_final, opp_final);
+            if args.reward_shaping {
+                let penalty = 0.05; // 5% adjustment
+                if p_id == 1 {
+                    my_adjusted = my_final * (1.0 - penalty);
+                    opp_adjusted = opp_final * (1.0 + penalty);
+                } else if p_id == 2 {
+                    my_adjusted = my_final * (1.0 + penalty);
+                    opp_adjusted = opp_final * (1.0 - penalty);
+                }
+            }
+
             // Score differential normalized to [-1, 1] via tanh
-            let final_outcome = ((my_final - opp_final) / max_score).tanh();
+            let final_outcome = ((my_adjusted - opp_adjusted) / max_score).tanh();
 
             let value = if args.reward_shaping {
                 // Blend final score outcome with per-step progress
