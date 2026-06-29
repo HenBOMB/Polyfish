@@ -182,6 +182,23 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
+/// Serialize `state.tribes` for the client, injecting a computed `maxHealth`
+/// into every unit.
+fn tribes_json_with_max_health(state: &polyfish::states::GameState) -> Value {
+    use polyfish::functions::get_unit_max_health;
+    let mut tribes = serde_json::Map::new();
+    for (pid, tribe) in &state.tribes {
+        let mut tribe_val = serde_json::to_value(tribe).unwrap_or(Value::Null);
+        if let Some(units) = tribe_val.get_mut("units").and_then(|v| v.as_array_mut()) {
+            for (u_val, u_state) in units.iter_mut().zip(tribe.units.iter()) {
+                u_val["maxHealth"] = serde_json::json!(get_unit_max_health(u_state));
+            }
+        }
+        tribes.insert(pid.to_string(), tribe_val);
+    }
+    Value::Object(tribes)
+}
+
 fn build_evaluation_json(state: &polyfish::states::GameState) -> Value {
     use polyfish::ai::evaluator::player::evaluate_player;
     let mut players = serde_json::Map::new();
@@ -244,7 +261,7 @@ async fn get_current_state(State(state): State<Arc<AppState>>) -> Json<Value> {
             "tiles": tiles,
             "structures": game.state.structures,
             "resources": game.state.resources,
-            "tribes": game.state.tribes,
+            "tribes": tribes_json_with_max_health(&game.state),
             "_prediction": game.state._prediction,
             "_messages": game.state._messages,
         },
@@ -315,7 +332,7 @@ async fn auto_step(
             "tiles": tiles,
             "structures": game.state.structures,
             "resources": game.state.resources,
-            "tribes": game.state.tribes,
+            "tribes": tribes_json_with_max_health(&game.state),
             "_prediction": game.state._prediction,
             "_messages": game.state._messages,
         },
@@ -384,7 +401,7 @@ async fn rng_step(State(state): State<Arc<AppState>>) -> Json<Value> {
             "tiles": tiles,
             "structures": game.state.structures,
             "resources": game.state.resources,
-            "tribes": game.state.tribes,
+            "tribes": tribes_json_with_max_health(&game.state),
             "_prediction": game.state._prediction,
             "_messages": game.state._messages,
         },
@@ -556,7 +573,7 @@ async fn manual_step(
             "tiles": tiles,
             "structures": game.state.structures,
             "resources": game.state.resources,
-            "tribes": game.state.tribes,
+            "tribes": tribes_json_with_max_health(&game.state),
             "_prediction": game.state._prediction,
             "_messages": game.state._messages,
         },
@@ -600,7 +617,7 @@ async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {
             "tiles": tiles,
             "structures": game.state.structures,
             "resources": game.state.resources,
-            "tribes": game.state.tribes,
+            "tribes": tribes_json_with_max_health(&game.state),
             "_prediction": game.state._prediction,
             "_messages": game.state._messages,
         },
@@ -771,7 +788,7 @@ async fn load_game(State(state): State<Arc<AppState>>) -> Json<Value> {
             "tiles": tiles,
             "structures": game.state.structures,
             "resources": game.state.resources,
-            "tribes": game.state.tribes,
+            "tribes": tribes_json_with_max_health(&game.state),
             "_prediction": game.state._prediction,
             "_messages": game.state._messages,
         },
@@ -1251,7 +1268,7 @@ async fn load_replay_endpoint(
                         "tiles": tiles,
                         "structures": game.state.structures,
                         "resources": game.state.resources,
-                        "tribes": game.state.tribes,
+                        "tribes": tribes_json_with_max_health(&game.state),
                         "_prediction": game.state._prediction,
                         "_messages": game.state._messages,
                         "history": game.state._history,
@@ -1415,7 +1432,7 @@ async fn load_initial_endpoint(
                             "tiles": tiles,
                             "structures": game.state.structures,
                             "resources": game.state.resources,
-                            "tribes": game.state.tribes,
+                            "tribes": tribes_json_with_max_health(&game.state),
                             "_prediction": game.state._prediction,
                             "_messages": game.state._messages,
                         },
@@ -1579,7 +1596,7 @@ async fn analyze_replay_step(
             "tiles": tiles,
             "structures": game.state.structures,
             "resources": game.state.resources,
-            "tribes": game.state.tribes,
+            "tribes": tribes_json_with_max_health(&game.state),
             "_prediction": game.state._prediction,
             "_messages": game.state._messages,
         },
