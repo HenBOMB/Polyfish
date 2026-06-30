@@ -45,7 +45,13 @@ class MapRenderer {
     }
 
     clear() {
-        this.container.innerHTML = '';
+        // Purge stale tile elements when a new map is loaded. Preserve the
+        // territory SVG node (clearing its lines) so border rendering keeps
+        // working — `container.innerHTML = ''` would detach it.
+        Array.from(this.container.children).forEach(child => {
+            if (child !== this.territorySvg) child.remove();
+        });
+        if (this.territorySvg) this.territorySvg.innerHTML = '';
         this.elements.clear();
     }
 
