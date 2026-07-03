@@ -44,7 +44,7 @@ cd polyfish-rs && ./local_setup.sh           # or remote_setup.sh on a GPU box
 
 **Full self-play + train loop** (the main training driver):
 ```bash
-cd polyfish-rs && ./run_training_loop.sh [-f force-train] [-b boost-threads] [-c chill] [-r reward-shaping]
+cd polyfish-rs && ./run_training_loop.sh [-f force-train] [-b boost-threads] [-c chill] [-r reward-shaping] [-i iterations] [-g games-per-iter] [-n mcts-iters]
 ```
 This loops: `init_model.py` → `self_play` (Rust, generates `games_*.safetensors`) → `train.py` (Python/PyTorch, updates `model.safetensors`) → log a CSV row → checkpoint every 50 iters into `checkpoints/` → archive consumed games. It also runs "league" matches against random historical checkpoints ~20% of the time. CUDA is opt-in via the `cuda`/`cudnn` Cargo features.
 

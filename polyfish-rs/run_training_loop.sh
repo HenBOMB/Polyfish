@@ -34,7 +34,7 @@ FORCE_TRAIN=false
 BOOST=false
 CHILL=false
 REWARD_SHAPING=false
-while getopts "fbcr" opt; do
+while getopts "fbcri:g:n:" opt; do
   case $opt in
     f)
       FORCE_TRAIN=true
@@ -47,6 +47,15 @@ while getopts "fbcr" opt; do
       ;;
     r)
       REWARD_SHAPING=true
+      ;;
+    i)
+      ITERATIONS=$OPTARG
+      ;;
+    g)
+      GAMES_PER_ITER=$OPTARG
+      ;;
+    n)
+      MCTS_ITERS=$OPTARG
       ;;
     \?)
       echo "Invalid option: -$OPTARG" >&2
@@ -90,6 +99,25 @@ if [ -f "training_log.csv" ]; then
     fi
 fi
 
+# Portable replacement for GNU `shuf` (not present on stock macOS)
+portable_shuf() {
+    local n=$1
+    local lines=()
+    while IFS= read -r line; do
+        [ -n "$line" ] && lines+=("$line")
+    done
+    local count=${#lines[@]}
+    for ((idx = count - 1; idx > 0; idx--)); do
+        local j=$((RANDOM % (idx + 1)))
+        local tmp="${lines[idx]}"
+        lines[idx]="${lines[j]}"
+        lines[j]="$tmp"
+    done
+    for ((idx = 0; idx < n && idx < count; idx++)); do
+        echo "${lines[idx]}"
+    done
+}
+
 # 0. Initialize & Auto-Restore Model
 echo "Initializing/Checking model..."
 # If resuming but model.safetensors is missing, restore latest checkpoint
@@ -102,7 +130,7 @@ if [ "$START_ITER" -gt 1 ] && [ ! -f "model.safetensors" ]; then
 fi
 .venv/bin/python3 init_model.py
 
-for ((i=START_ITER; i<=ITERATIONS+START_ITER; i++))
+for ((i=START_ITER; i<START_ITER+ITERATIONS; i++))
 do
     echo "=================================================="
     echo "Starting Iteration $i"
@@ -124,9 +152,9 @@ do
         HIST_CPS=$(echo "$ALL_CPS" | tail -n +6)
         
         if [ -n "$HIST_CPS" ] && [ $((RANDOM % 2)) -eq 0 ]; then
-             SELECTED_CP=$(echo "$HIST_CPS" | shuf -n 1)
+             SELECTED_CP=$(echo "$HIST_CPS" | portable_shuf 1)
         else
-             SELECTED_CP=$(echo "$FRESH_CPS" | shuf -n 1)
+             SELECTED_CP=$(echo "$FRESH_CPS" | portable_shuf 1)
         fi
 
         if [ -n "$SELECTED_CP" ]; then
@@ -138,8 +166,8 @@ do
     # Pick 2 random tribes for this iteration
     TRIBE_LIST=("Imperius" "Imperius")
     # TRIBE_LIST=("Imperius" "Bardur" "Oumaji" "Kickoo" "XinXi" "Zebasi" "AiMo" "Vengir" "Quetzali" "Hoodrick" "Yadakk")
-    # Shuffle and pick top 2 (using shuf)
-    SELECTED_TRIBES=($(printf "%s\n" "${TRIBE_LIST[@]}" | shuf -n 2))
+    # Shuffle and pick top 2 (portable, no external shuf dependency)
+    SELECTED_TRIBES=($(printf "%s\n" "${TRIBE_LIST[@]}" | portable_shuf 2))
     TRIBE1=${SELECTED_TRIBES[0]}
     TRIBE2=${SELECTED_TRIBES[1]}
     
