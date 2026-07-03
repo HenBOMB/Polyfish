@@ -41,6 +41,41 @@ struct GameResult {
     action_counts: HashMap<polyfish::types::MoveType, usize>,
 }
 
+/// Load the main network (and opponent network, defaulting to the main one)
+/// onto the given device from `model.safetensors`.
+fn load_networks(
+    device: &Device,
+    opponent: Option<&str>,
+) -> anyhow::Result<(Arc<PolyZeroNet>, Arc<PolyZeroNet>)> {
+    let model_path = "model.safetensors";
+    if !std::path::Path::new(model_path).exists() {
+        anyhow::bail!(
+            "Model file {} not found! Please run init_model.py first.",
+            model_path
+        );
+    }
+    let mut varmap = candle_nn::VarMap::new();
+    varmap.load(model_path)?;
+    let network1 = Arc::new(PolyZeroNet::new(candle_nn::VarBuilder::from_varmap(
+        &varmap,
+        candle_core::DType::F32,
+        device,
+    ))?);
+
+    let network2 = if let Some(opp_path) = opponent {
+        let mut varmap2 = candle_nn::VarMap::new();
+        varmap2.load(opp_path)?;
+        Arc::new(PolyZeroNet::new(candle_nn::VarBuilder::from_varmap(
+            &varmap2,
+            candle_core::DType::F32,
+            device,
+        ))?)
+    } else {
+        network1.clone()
+    };
+    Ok((network1, network2))
+}
+
 /// Play a single game and return the result
 fn play_single_game(
     network1: &PolyZeroNet,
@@ -359,9 +394,7 @@ fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
 
-    // Select device: Metal (macOS) > CUDA (NVIDIA) > CPU, unless overridden
-    // (small model + many tiny per-leaf batches can make GPU dispatch overhead
-    // and single-device contention across parallel games slower than CPU).
+    // Select device: Metal (macOS) > CUDA (NVIDIA) > CPU, unless overridden via POLYFISH_DEVICE
     let device = match std::env::var("POLYFISH_DEVICE").as_deref() {
         Ok("cpu") => Device::Cpu,
         Ok("metal") => Device::metal_if_available(0)?,
@@ -372,42 +405,14 @@ fn main() -> anyhow::Result<()> {
     };
     println!("Using device: {:?}", device);
 
-    // Load Main Model (P1)
+    // Load models (P1, and P2 defaulting to P1 when no opponent is given)
     let load_start = Instant::now();
-    let model_path = "model.safetensors";
-    let mut varmap = candle_nn::VarMap::new();
-
-    let network1 = if std::path::Path::new(model_path).exists() {
-        println!("Loading main model from {}", model_path);
-        varmap.load(model_path)?;
-        PolyZeroNet::new(candle_nn::VarBuilder::from_varmap(
-            &varmap,
-            candle_core::DType::F32,
-            &device,
-        ))?
-    } else {
-        panic!(
-            "Model file {} not found! Please run init_model.py first.",
-            model_path
-        );
-    };
-    let network1 = Arc::new(network1);
-
-    // Load Opponent Model (P2) - Defaults to same as P1
-    let network2 = if let Some(opp_path) = args.opponent {
-        println!("Loading opponent model from {}", opp_path);
-        let mut varmap2 = candle_nn::VarMap::new();
-        varmap2.load(&opp_path)?;
-        let net = PolyZeroNet::new(candle_nn::VarBuilder::from_varmap(
-            &varmap2,
-            candle_core::DType::F32,
-            &device,
-        ))?;
-        Arc::new(net)
-    } else {
-        println!("No opponent specified. Playing against self.");
-        network1.clone()
-    };
+    println!("Loading main model from model.safetensors");
+    match &args.opponent {
+        Some(opp_path) => println!("Loading opponent model from {}", opp_path),
+        None => println!("No opponent specified. Playing against self."),
+    }
+    let (network1, network2) = load_networks(&device, args.opponent.as_deref())?;
 
     let load_duration = load_start.elapsed();
     println!("Model loading took: {:.2}s", load_duration.as_secs_f32());
@@ -519,28 +524,46 @@ fn main() -> anyhow::Result<()> {
     // Parallel game generation using rayon
     let games_start = Instant::now();
     println!("Starting game generation...");
+    // On Metal, sharing one device across rayon workers races inside candle
+    // (see device selection above), so each worker builds its own device and
+    // network replica; per-device command queues/allocators are independent.
+    // On CPU/CUDA the loaded networks are shared as before.
+    let per_thread_metal = device.is_metal();
     let results: Vec<GameResult> = (0..args.num_games)
         .into_par_iter()
-        .filter_map(|i| {
-            let seed = (base_seed + i as u64) as i64;
-            let swap_players = i % 2 == 1; // Swap every other game
-            let (p1_net, p2_net) = if swap_players {
-                (&network2, &network1)
-            } else {
-                (&network1, &network2)
-            };
+        .map_init(
+            || {
+                if per_thread_metal {
+                    let device = Device::new_metal(0)
+                        .expect("failed to create per-thread Metal device");
+                    load_networks(&device, args.opponent.as_deref())
+                        .expect("failed to load per-thread network replicas")
+                } else {
+                    (network1.clone(), network2.clone())
+                }
+            },
+            |(net1, net2), i| {
+                let seed = (base_seed + i as u64) as i64;
+                let swap_players = i % 2 == 1; // Swap every other game
+                let (p1_net, p2_net) = if swap_players {
+                    (&**net2, &**net1)
+                } else {
+                    (&**net1, &**net2)
+                };
 
-            // Play with (p1_net, p2_net)
-            play_single_game(
-                p1_net,
-                p2_net,
-                args.mcts_iters,
-                i,
-                seed,
-                selected_tribes.clone(),
-                args.iteration,
-            )
-        })
+                // Play with (p1_net, p2_net)
+                play_single_game(
+                    p1_net,
+                    p2_net,
+                    args.mcts_iters,
+                    i,
+                    seed,
+                    selected_tribes.clone(),
+                    args.iteration,
+                )
+            },
+        )
+        .filter_map(|r| r)
         .collect();
 
     let games_duration = games_start.elapsed();
