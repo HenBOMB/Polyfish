@@ -662,10 +662,13 @@ fn main() -> anyhow::Result<()> {
                 }
             }
 
-            // Normalize by combined economic activity instead of fixed constant
+            // Normalize by combined economic activity with scaling multiplier
             let combined_score = my_adjusted + opp_adjusted;
+            // to spread distribution into useful training range
+            let scaling_factor = 3;
             let final_outcome = if combined_score > 0.0 {
-                ((my_adjusted - opp_adjusted) / combined_score).clamp(-1.0, 1.0)
+                let ratio = (my_adjusted - opp_adjusted) / combined_score;
+                (ratio * scaling_factor).clamp(-1.0, 1.0)
             } else {
                 0.0  // Both players scored 0 - treat as draw
             };
@@ -675,7 +678,8 @@ fn main() -> anyhow::Result<()> {
                 let my_advantage_now = (my_score_now - opp_score_now) as f32;
                 let combined_now = (my_score_now + opp_score_now) as f32;
                 let progress = if combined_now > 0.0 {
-                    (my_advantage_now / combined_now).clamp(-1.0, 1.0)
+                    let ratio = my_advantage_now / combined_now;
+                    (ratio * scaling_factor).clamp(-1.0, 1.0)
                 } else {
                     0.0
                 };
