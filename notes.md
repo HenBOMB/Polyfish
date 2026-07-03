@@ -84,3 +84,8 @@ Thanks to a deep review from Claude Fable I was able to find and fix a couple of
 I made a couple of improvements for faster training on Apple Metal. A core bottleneck to training is being able to generate lots of data in as little time as possible. Before it took me 60s to generate 5 games with 50 mcts iters. Now I'm down to 15s. The goal is to get sub 1s.
 
 I have a couple of other ideas on this front to make things better. I did a training run, and brought my loss from 42 down to 34 in a very small run but it took 10min. Too slow. Furthermore, the loss is heavily dominated by the policy loss rather than the value. Could be the data sample + size of the run was too small to get a real signal here.
+
+CPU speedup, baseline:
+arch=x86_64 (Rosetta)  backend=zero  mcts=200  games=20
+games_duration: 167.56s   avg_s/game: 8.38s   avg_moves: 95.3
+moves/sec: 11.38   cores: 14 (M3 Max, all logical cores)
