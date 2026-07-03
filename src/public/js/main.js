@@ -327,8 +327,22 @@ async function apiAction(endpoint, body) {
 }
 
 function updateUI(data) {
-    const oldTribeId = (GAME_STATE.settings) ? GAME_STATE.settings.currentPlayerTurnId : null;
-    if (data.state) GAME_STATE = data.state;
+    const prevSettings = GAME_STATE.settings || null;
+    const prevSize = prevSettings ? prevSettings.size : null;
+    const prevTileCount = prevSettings ? prevSettings.tile_count : null;
+    const oldTribeId = prevSettings ? prevSettings.currentPlayerTurnId : null;
+    if (data.state) {
+        // If the map itself changed (new game / load / different size), purge
+        // stale tile DOM first. Otherwise leftover tiles from the previous
+        // map remain in the container and render outside the new square.
+        const newSettings = data.state.settings;
+        const newSize = newSettings ? newSettings.size : null;
+        const newTileCount = newSettings ? newSettings.tile_count : null;
+        if (prevSize !== null && (newSize !== prevSize || newTileCount !== prevTileCount)) {
+            renderer.clear();
+        }
+        GAME_STATE = data.state;
+    }
     if (data.legalMoves) currentLegalMoves = data.legalMoves;
     if (data.movePlayed) lastMoveVal.textContent = data.movePlayed;
 
