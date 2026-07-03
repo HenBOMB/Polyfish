@@ -31,6 +31,8 @@ regex = "1.10"
 default = []
 cuda = ["candle-core/cuda", "candle-nn/cuda"]
 cudnn = ["candle-core/cudnn"]
+metal = ["candle-core/metal", "candle-nn/metal"]
+accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
 
 [dev-dependencies]
 pretty_assertions = "1.4"

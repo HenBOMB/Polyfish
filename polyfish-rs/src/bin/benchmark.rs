@@ -15,7 +15,10 @@ use std::time::{Duration, Instant};
 fn main() -> anyhow::Result<()> {
     println!("=== MCTS Zero Performance Benchmark ===\n");
 
-    let device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
+    // Select best available device: Metal (macOS) > CUDA (NVIDIA) > CPU
+    let device = Device::metal_if_available(0)
+        .or_else(|_| Device::cuda_if_available(0))
+        .unwrap_or(Device::Cpu);
     println!("Using device: {:?}\n", device);
     let network = PolyZeroNet::new(VarBuilder::zeros(DType::F32, &device))?;
 

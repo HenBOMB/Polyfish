@@ -15,7 +15,10 @@ pub struct GameRecorder {
 
 impl GameRecorder {
     pub fn new() -> Self {
-        let device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
+        // Select best available device: Metal (macOS) > CUDA (NVIDIA) > CPU
+        let device = Device::metal_if_available(0)
+            .or_else(|_| Device::cuda_if_available(0))
+            .unwrap_or(Device::Cpu);
         Self {
             buffer: Mutex::new(Vec::new()),
             device,

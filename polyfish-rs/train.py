@@ -11,16 +11,21 @@ import gc
 BATCH_SIZE = 64
 EPOCHS = 2
 LEARNING_RATE = 0.001
-# Handle RTX 5090 / CUDA Arch compatibility issues
+
+# Device selection: MPS (Apple Silicon) > CUDA (NVIDIA) > CPU
 try:
-    if torch.cuda.is_available():
-        # Test a small tensor to see if kernels are actually available
+    if torch.backends.mps.is_available():
+        # Apple Silicon Metal Performance Shaders
+        t = torch.tensor([1.0], device="mps")
+        DEVICE = "mps"
+    elif torch.cuda.is_available():
+        # NVIDIA CUDA
         t = torch.tensor([1.0], device="cuda")
         DEVICE = "cuda"
     else:
         DEVICE = "cpu"
 except Exception as e:
-    print(f"Warning: CUDA available but failed to initialize ({e}). Fallback to CPU.")
+    print(f"Warning: GPU available but failed to initialize ({e}). Fallback to CPU.")
     DEVICE = "cpu"
 
 # Architecture matching Rust `network.rs` (decomposed policy + auxiliary values)
@@ -366,6 +371,8 @@ def train():
             del spatial_maps, player_states, targets_win, target_heads
             if DEVICE == "cuda":
                 torch.cuda.empty_cache()
+            elif DEVICE == "mps":
+                torch.mps.empty_cache()
             gc.collect()
 
         if total_batches > 0:

@@ -11,7 +11,10 @@ const EPOCHS: usize = 10;
 
 fn main() -> Result<()> {
     // 1. Setup Device
-    let device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
+    // Select best available device: Metal (macOS) > CUDA (NVIDIA) > CPU
+    let device = Device::metal_if_available(0)
+        .or_else(|_| Device::cuda_if_available(0))
+        .unwrap_or(Device::Cpu);
     println!("Training on device: {:?}", device);
 
     // 2. Load Model

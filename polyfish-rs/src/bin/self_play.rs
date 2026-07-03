@@ -356,7 +356,10 @@ fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
 
-    let device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
+    // Select best available device: Metal (macOS) > CUDA (NVIDIA) > CPU
+    let device = Device::metal_if_available(0)
+        .or_else(|_| Device::cuda_if_available(0))
+        .unwrap_or(Device::Cpu);
     println!("Using device: {:?}", device);
 
     // Load Main Model (P1)

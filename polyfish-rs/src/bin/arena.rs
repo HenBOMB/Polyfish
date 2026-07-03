@@ -105,13 +105,16 @@ fn play_match(
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let device = Device::cuda_if_available(0).unwrap_or(Device::Cpu);
+    // Select best available device: Metal (macOS) > CUDA (NVIDIA) > CPU
+    let device = Device::metal_if_available(0)
+        .or_else(|_| Device::cuda_if_available(0))
+        .unwrap_or(Device::Cpu);
 
     println!("Loading models...");
-    println!("P1: {} (CUDA: {:?})", args.model1, device.is_cuda());
+    println!("P1: {} (GPU: {:?})", args.model1, !matches!(device, Device::Cpu));
     let net1 = load_model(&args.model1, &device)?;
 
-    println!("P2: {} (CUDA: {:?})", args.model2, device.is_cuda());
+    println!("P2: {} (GPU: {:?})", args.model2, !matches!(device, Device::Cpu));
     let net2 = load_model(&args.model2, &device)?;
 
     // We need strict alternating seeds to ensure fairness?

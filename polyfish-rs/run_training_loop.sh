@@ -14,8 +14,20 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 echo "Logging to $LOG_FILE"
 
 echo "Building binaries..."
-# cargo build --bin polyfish --bin self_play --release --features cuda
-cargo build --bin polyfish --bin self_play --release
+# Detect platform and use appropriate GPU features
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS: use Metal and Accelerate for Apple Silicon
+    echo "Building with Metal + Accelerate support for macOS..."
+    cargo build --bin polyfish --bin self_play --release --features metal,accelerate
+elif command -v nvidia-smi &> /dev/null; then
+    # CUDA available (Linux/Windows with NVIDIA GPU)
+    echo "Building with CUDA support..."
+    cargo build --bin polyfish --bin self_play --release --features cuda
+else
+    # CPU-only fallback
+    echo "Building CPU-only version..."
+    cargo build --bin polyfish --bin self_play --release
+fi
 
 # Parse arguments
 FORCE_TRAIN=false
