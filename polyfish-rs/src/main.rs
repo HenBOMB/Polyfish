@@ -945,7 +945,7 @@ fn sanitize_storage_key(name: &str) -> String {
     let mut result = String::new();
     let mut last_was_dash = false;
     for c in name.chars() {
-        if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+        if c.is_ascii_alphanumeric() || c == '_' {
             result.push(c.to_ascii_lowercase());
             last_was_dash = false;
         } else {
