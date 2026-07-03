@@ -54,7 +54,11 @@ impl<'a> Brain<'a> {
         (Some(agent), moves)
     }
 
-    pub fn think_decomposed(&self, game: &Game) -> (Option<Box<dyn Move>>, Vec<MoveVisit>) {
+    pub fn think_decomposed(
+        &self,
+        game: &Game,
+        move_count: usize,
+    ) -> (Option<Box<dyn Move>>, Vec<MoveVisit>) {
         let (agent, mut moves) = self.think(game);
 
         if agent.is_none() {
@@ -63,7 +67,7 @@ impl<'a> Brain<'a> {
 
         agent
             .unwrap()
-            .select_move_with_decomposed_visits(&mut game.clone())
+            .select_move_with_decomposed_visits(&mut game.clone(), move_count)
     }
 
     pub fn think_with_stats(&self, game: &Game) -> (Option<Box<dyn Move>>, Vec<f32>) {

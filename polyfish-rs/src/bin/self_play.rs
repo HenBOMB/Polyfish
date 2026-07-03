@@ -167,7 +167,7 @@ fn play_single_game(
 
         // MCTS Search - use the correct agent
         let current_agent = if pov == 1 { &agent1 } else { &agent2 };
-        let (best_move, move_visits) = current_agent.think_decomposed(&mut game);
+        let (best_move, move_visits) = current_agent.think_decomposed(&mut game, move_count);
 
         let map_size = game.state.settings.size as usize;
 

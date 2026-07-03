@@ -258,11 +258,15 @@ impl<'a> ZeroMctsAgent<'a> {
         (move_or_end_turn(best_move), policy)
     }
 
-    /// Select a move and return decomposed visit information for policy training
-    /// Returns best move + list of move visit data for decomposed policy targets
+    /// Number of plies at the start of a game to sample proportional to
+    /// visit counts rather than always taking argmax, for training diversity.
+    pub const TEMPERATURE_MOVE_THRESHOLD: usize = 20;
+
+    /// Selects a move for policy training and returns decomposed visit counts; samples by visit for early moves.
     pub fn select_move_with_decomposed_visits(
         &self,
         game: &mut Game,
+        move_count: usize,
     ) -> (Option<Box<dyn Move>>, Vec<crate::ai::mcts_types::MoveVisit>) {
         use crate::ai::mcts_types::MoveVisit;
 
@@ -340,6 +344,15 @@ impl<'a> ZeroMctsAgent<'a> {
                     max_visits = child.visits;
                     best_idx = i;
                 }
+            }
+        }
+
+        // in early game, sample proportional to visit counts instead of argmax
+        if move_count < Self::TEMPERATURE_MOVE_THRESHOLD && root.children.len() > 1 {
+            use rand::distributions::{Distribution, WeightedIndex};
+            let weights: Vec<f32> = root.children.iter().map(|c| c.visits.max(0.0)).collect();
+            if let Ok(dist) = WeightedIndex::new(&weights) {
+                best_idx = dist.sample(&mut rand::thread_rng());
             }
         }
 
