@@ -424,11 +424,9 @@ fn main() -> anyhow::Result<()> {
         args.num_games, args.mcts_iters
     );
 
-    // Parse tribes from args or use random if not specified (placeholder, logic moved inside loop or done here)
-    // Actually, user wants "per iteration it should pick only 2 and play those 20 games with only those tribes"
-    // So we pick them once here.
-
-    // Helper to parse or pick random
+    // Pool of tribes to draw from when tribe1/tribe2 aren't pinned via CLI args.
+    // Each game in this run independently samples its own pair from this pool
+    // (see `pick_tribes` below), rather than the whole run sharing one fixed pair.
     let all_tribes = vec![
         TribeType::Imperius,
         TribeType::Bardur,
@@ -438,23 +436,13 @@ fn main() -> anyhow::Result<()> {
         TribeType::Zebasi,
         TribeType::AiMo,
         TribeType::Vengir,
-        TribeType::Luxidoor, // Luxidoor is valid but maybe check others?
+        TribeType::Luxidoor,
         TribeType::Quetzali,
         TribeType::Hoodrick,
         TribeType::Yadakk,
-        // TribeType::Aquarion, TribeType::Elyrion, TribeType::Polaris, TribeType::Cymanti // Special tribes might be too diff for now? user said "strict selection" but "random". Let's stick to standard human tribes first?
-        // User didn't specify subset, just "random strict selection".
-        // Let's include all standard tribes.
     ];
 
-    let t1 = if let Some(s) = &args.tribe1 {
-        // We need a FromStr or manual matching since TribeType might not derive FromStr
-        // For now, let's implement a quick helper or match.
-        // Actually TribeType usually derives EnumString in other crates, let's assume we can match or defaults.
-        // Let's do a simple match for safety as I don't see EnumString derived in view_file(types.rs) - wait I haven't seen types.rs
-        // But mapgen used them.
-        // Let's rely on standard debug print matching if needed, or better:
-        // Let's just hardcode a parser here since we don't have FromStr confirmed.
+    fn parse_tribe(s: &str, default: TribeType) -> TribeType {
         match s.to_lowercase().as_str() {
             "imperius" => TribeType::Imperius,
             "bardur" => TribeType::Bardur,
@@ -473,53 +461,38 @@ fn main() -> anyhow::Result<()> {
             "polaris" => TribeType::Polaris,
             "cymanti" => TribeType::Cymanti,
             _ => {
-                eprintln!("Unknown tribe {}, using Imperius", s);
-                TribeType::Imperius
+                eprintln!("Unknown tribe {}, using {:?}", s, default);
+                default
             }
         }
-    } else {
-        use rand::seq::SliceRandom;
-        let mut rng = rand::thread_rng();
-        *all_tribes.choose(&mut rng).unwrap()
-    };
+    }
 
-    let t2 = if let Some(s) = &args.tribe2 {
-        match s.to_lowercase().as_str() {
-            "imperius" => TribeType::Imperius,
-            "bardur" => TribeType::Bardur,
-            "oumaji" => TribeType::Oumaji,
-            "kickoo" => TribeType::Kickoo,
-            "xinxi" => TribeType::XinXi,
-            "zebasi" => TribeType::Zebasi,
-            "aimo" => TribeType::AiMo,
-            "vengir" => TribeType::Vengir,
-            "luxidoor" => TribeType::Luxidoor,
-            "quetzali" => TribeType::Quetzali,
-            "hoodrick" => TribeType::Hoodrick,
-            "yadakk" => TribeType::Yadakk,
-            "aquarion" => TribeType::Aquarion,
-            "elyrion" => TribeType::Elyrion,
-            "polaris" => TribeType::Polaris,
-            "cymanti" => TribeType::Cymanti,
-            _ => {
-                eprintln!("Unknown tribe {}, using Oumaji", s);
-                TribeType::Oumaji
-            }
-        }
-    } else {
+    // Picks a (t1, t2) pair for one game. If --tribe1/--tribe2 are given they
+    // pin that slot for every game; otherwise a distinct pair is sampled from
+    // `all_tribes` using `rng`, so each caller with a different rng gets a
+    // different pair.
+    fn pick_tribes(
+        rng: &mut impl rand::Rng,
+        all_tribes: &[TribeType],
+        tribe1_arg: &Option<String>,
+        tribe2_arg: &Option<String>,
+    ) -> (TribeType, TribeType) {
         use rand::seq::SliceRandom;
-        let mut rng = rand::thread_rng();
-        // Pick distinct from t1
-        loop {
-            let t = *all_tribes.choose(&mut rng).unwrap();
-            if t != t1 {
-                break t;
-            }
-        }
-    };
-
-    println!("Selected Tribes for this iteration: {:?} vs {:?}", t1, t2);
-    let selected_tribes = vec![t1, t2];
+        let t1 = match tribe1_arg {
+            Some(s) => parse_tribe(s, TribeType::Imperius),
+            None => *all_tribes.choose(rng).unwrap(),
+        };
+        let t2 = match tribe2_arg {
+            Some(s) => parse_tribe(s, TribeType::Oumaji),
+            None => loop {
+                let t = *all_tribes.choose(rng).unwrap();
+                if t != t1 {
+                    break t;
+                }
+            },
+        };
+        (t1, t2)
+    }
 
     // Parallel game generation using rayon
     let games_start = Instant::now();
@@ -551,6 +524,13 @@ fn main() -> anyhow::Result<()> {
                     (&**net1, &**net2)
                 };
 
+                // Sample this game's own tribe pair, seeded off its game seed
+                // so runs stay reproducible while each game gets a distinct matchup.
+                use rand::SeedableRng;
+                let mut tribe_rng = rand::rngs::StdRng::seed_from_u64(seed as u64);
+                let (t1, t2) = pick_tribes(&mut tribe_rng, &all_tribes, &args.tribe1, &args.tribe2);
+                let game_tribes = vec![t1, t2];
+
                 // Play with (p1_net, p2_net)
                 play_single_game(
                     p1_net,
@@ -558,7 +538,7 @@ fn main() -> anyhow::Result<()> {
                     args.mcts_iters,
                     i,
                     seed,
-                    selected_tribes.clone(),
+                    game_tribes,
                     args.iteration,
                 )
             },
