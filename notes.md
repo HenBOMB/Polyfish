@@ -73,3 +73,14 @@ Turn   | Avg                  | Max
 
 polytopia has a narrower but much deeper search tree per turn compared to Chess
 you must look ~8 steps deep just to complete one game turn
+
+--
+Verdi, Jul 3, 2026
+Thanks to a deep review from Claude Fable I was able to find and fix a couple of bugs that would hurt the quality of the training. Namely:
+- A bug in flipping sign of the NN value head on every move instead of when player turn changes
+- Weak gradient causing the value head to barely learn and thus MCTS relying only on priors
+- Add more diversity in training data generation both by using temperature sampling over MCTS visited in the early moves instead of argsmax() and by randomizing the tribe per game in each call of self-play
+
+I made a couple of improvements for faster training on Apple Metal. A core bottleneck to training is being able to generate lots of data in as little time as possible. Before it took me 60s to generate 5 games with 50 mcts iters. Now I'm down to 15s. The goal is to get sub 1s.
+
+I have a couple of other ideas on this front to make things better. I did a training run, and brought my loss from 42 down to 34 in a very small run but it took 10min. Too slow. Furthermore, the loss is heavily dominated by the policy loss rather than the value. Could be the data sample + size of the run was too small to get a real signal here.
