@@ -42,7 +42,9 @@ fi
 
 # 4. Build Project
 echo "Building PolyFish (Release)..."
-$HOME/.cargo/bin/cargo build --release --bin self_play --bin polyfish --bin benchmark --features cuda
+# --no-default-features: opt out of the macOS `metal` default, which does not
+# compile on Linux.
+$HOME/.cargo/bin/cargo build --release --bin self_play --bin polyfish --bin benchmark --no-default-features --features cuda
 
 echo "Setup Complete! You can now run the training loop."
 

@@ -22,11 +22,13 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
 elif command -v nvidia-smi &> /dev/null; then
     # CUDA available (Linux/Windows with NVIDIA GPU)
     echo "Building with CUDA support..."
-    cargo build --bin polyfish --bin self_play --release --features cuda
+    # --no-default-features: opt out of the macOS `metal` default, which does
+    # not compile on Linux.
+    cargo build --bin polyfish --bin self_play --release --no-default-features --features cuda
 else
     # CPU-only fallback
     echo "Building CPU-only version..."
-    cargo build --bin polyfish --bin self_play --release
+    cargo build --bin polyfish --bin self_play --release --no-default-features
 fi
 
 # Parse arguments

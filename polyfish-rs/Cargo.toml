@@ -28,7 +28,7 @@ walkdir = "2.5"
 regex = "1.10"
 
 [features]
-default = []
+default = ["metal"]
 cuda = ["candle-core/cuda", "candle-nn/cuda"]
 cudnn = ["candle-core/cudnn"]
 metal = ["candle-core/metal", "candle-nn/metal"]
