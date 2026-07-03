@@ -260,7 +260,7 @@ impl<'a> ZeroMctsAgent<'a> {
 
     /// Number of plies at the start of a game to sample proportional to
     /// visit counts rather than always taking argmax, for training diversity.
-    pub const TEMPERATURE_MOVE_THRESHOLD: usize = 20;
+    pub const TEMPERATURE_MOVE_THRESHOLD: usize = 15;
 
     /// Selects a move for policy training and returns decomposed visit counts; samples by visit for early moves.
     pub fn select_move_with_decomposed_visits(
