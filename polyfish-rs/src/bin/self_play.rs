@@ -359,10 +359,17 @@ fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
 
-    // Select best available device: Metal (macOS) > CUDA (NVIDIA) > CPU
-    let device = Device::metal_if_available(0)
-        .or_else(|_| Device::cuda_if_available(0))
-        .unwrap_or(Device::Cpu);
+    // Select device: Metal (macOS) > CUDA (NVIDIA) > CPU, unless overridden
+    // (small model + many tiny per-leaf batches can make GPU dispatch overhead
+    // and single-device contention across parallel games slower than CPU).
+    let device = match std::env::var("POLYFISH_DEVICE").as_deref() {
+        Ok("cpu") => Device::Cpu,
+        Ok("metal") => Device::metal_if_available(0)?,
+        Ok("cuda") => Device::cuda_if_available(0)?,
+        _ => Device::metal_if_available(0)
+            .or_else(|_| Device::cuda_if_available(0))
+            .unwrap_or(Device::Cpu),
+    };
     println!("Using device: {:?}", device);
 
     // Load Main Model (P1)
