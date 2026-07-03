@@ -13,6 +13,25 @@ from scipy import stats
 import sys
 import os
 
+# All generated images go into the journal/ folder.
+JOURNAL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "journal")
+
+
+def _group_prefix(filename_base):
+    """Use the trailing timestamp in the filename as the group prefix so all
+    charts generated from the same file sort together (e.g. 1783069033_*)."""
+    parts = filename_base.split("_")
+    for part in reversed(parts):
+        if part.isdigit():
+            return part
+    return filename_base
+
+
+def _output_path(group_prefix, prefix):
+    os.makedirs(JOURNAL_DIR, exist_ok=True)
+    return os.path.join(JOURNAL_DIR, f"{group_prefix}_{prefix}.png")
+
+
 def create_distribution_plot(values_np, filename_base):
     """Create distribution plot showing the actual value targets."""
     fig, ax = plt.subplots(1, 1, figsize=(10, 6))
@@ -49,7 +68,7 @@ def create_distribution_plot(values_np, filename_base):
 
     plt.tight_layout()
 
-    output_file = f"distribution_{filename_base}.png"
+    output_file = _output_path(_group_prefix(filename_base), "distribution")
     plt.savefig(output_file, dpi=200, bbox_inches='tight')
     print(f"✅ Distribution plot saved: {output_file}")
     plt.close()
@@ -83,7 +102,7 @@ def create_histogram_plot(values_np, filename_base):
 
     plt.tight_layout()
 
-    output_file = f"histogram_{filename_base}.png"
+    output_file = _output_path(_group_prefix(filename_base), "histogram")
     plt.savefig(output_file, dpi=200, bbox_inches='tight')
     print(f"✅ Histogram plot saved: {output_file}")
     plt.close()
@@ -115,7 +134,7 @@ def create_timeseries_plot(values_np, filename_base):
 
     plt.tight_layout()
 
-    output_file = f"timeseries_{filename_base}.png"
+    output_file = _output_path(_group_prefix(filename_base), "timeseries")
     plt.savefig(output_file, dpi=200, bbox_inches='tight')
     print(f"✅ Time series plot saved: {output_file}")
     plt.close()
@@ -158,7 +177,7 @@ def create_absolute_distribution_plot(values_np, filename_base):
 
     plt.tight_layout()
 
-    output_file = f"absolute_distribution_{filename_base}.png"
+    output_file = _output_path(_group_prefix(filename_base), "absolute_distribution")
     plt.savefig(output_file, dpi=200, bbox_inches='tight')
     print(f"✅ Absolute value distribution plot saved: {output_file}")
     plt.close()
@@ -219,7 +238,7 @@ def create_bucketed_bar_chart(values_np, filename_base):
 
     plt.tight_layout()
 
-    output_file = f"bucketed_{filename_base}.png"
+    output_file = _output_path(_group_prefix(filename_base), "bucketed")
     plt.savefig(output_file, dpi=200, bbox_inches='tight')
     print(f"✅ Bucketed bar chart saved: {output_file}")
     plt.close()
