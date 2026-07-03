@@ -600,7 +600,6 @@ fn main() -> anyhow::Result<()> {
         // Domination: Win/Loss is the primary signal.
         // The winner gets +1.0, loser gets -1.0.
         // If timeout, use score differential as a softer signal.
-        let max_score = polyfish::states::default_max_score() as f32;
         let final_scores = &result.scores;
         let history_len = result.history.len();
 
@@ -663,13 +662,23 @@ fn main() -> anyhow::Result<()> {
                 }
             }
 
-            // Score differential normalized to [-1, 1] via tanh
-            let final_outcome = ((my_adjusted - opp_adjusted) / max_score).tanh();
+            // Normalize by combined economic activity instead of fixed constant
+            let combined_score = my_adjusted + opp_adjusted;
+            let final_outcome = if combined_score > 0.0 {
+                ((my_adjusted - opp_adjusted) / combined_score).clamp(-1.0, 1.0)
+            } else {
+                0.0  // Both players scored 0 - treat as draw
+            };
 
             let value = if args.reward_shaping {
                 // Blend final score outcome with per-step progress
                 let my_advantage_now = (my_score_now - opp_score_now) as f32;
-                let progress = (my_advantage_now / max_score).tanh();
+                let combined_now = (my_score_now + opp_score_now) as f32;
+                let progress = if combined_now > 0.0 {
+                    (my_advantage_now / combined_now).clamp(-1.0, 1.0)
+                } else {
+                    0.0
+                };
 
                 // Gradually shift from progress signal to final outcome
                 let game_progress = step_idx as f32 / (history_len as f32).max(1.0);

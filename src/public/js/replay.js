@@ -120,6 +120,14 @@ async function jumpToStep(index) {
 
         // If the backend returns the state (I need to add this), we update the map.
         if (data.state) {
+            // Replays can use a different map size than the live game; purge
+            // stale tiles so they don't render outside the replay's square.
+            const prevSettings = GAME_STATE.settings || null;
+            const newSize = data.state.settings ? data.state.settings.size : null;
+            const newTileCount = data.state.settings ? data.state.settings.tile_count : null;
+            if (prevSettings && (newSize !== prevSettings.size || newTileCount !== prevSettings.tile_count)) {
+                renderer.clear();
+            }
             GAME_STATE = data.state;
             renderer.render(GAME_STATE, [], 1); // Render with no moves valid (it's replay)
             renderer.renderMCTSHeatmap(data.mctsAnalysis);
