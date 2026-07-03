@@ -74,11 +74,31 @@ fn test_gumbel_policy_target_covers_full_legal_set() {
         "test setup: expected to be past the opening book"
     );
 
-    let legal_count = game.legal_moves().len();
+    let legal_moves = game.legal_moves();
+    let legal_count = legal_moves.len();
     assert!(
         legal_count > 1,
         "test setup: expected >1 legal move, got {}",
         legal_count
+    );
+
+    // The Gumbel root suppresses EndTurn when other moves exist (mirroring
+    // Zero), so the policy target covers the non-EndTurn legal set.
+    let has_other = legal_moves
+        .iter()
+        .any(|m| m.move_type() != polyfish::types::MoveType::EndTurn);
+    let expected_count = if has_other {
+        legal_moves
+            .iter()
+            .filter(|m| m.move_type() != polyfish::types::MoveType::EndTurn)
+            .count()
+    } else {
+        legal_count
+    };
+    assert!(
+        expected_count > 1,
+        "test setup: expected >1 non-EndTurn legal move, got {}",
+        expected_count
     );
 
     let agent = GumbelMctsAgent::new(&network, 32, 4);
@@ -86,11 +106,12 @@ fn test_gumbel_policy_target_covers_full_legal_set() {
 
     assert_eq!(
         move_visits.len(),
-        legal_count,
-        "policy target must cover the full legal move set (bug #4 regression)"
+        expected_count,
+        "policy target must cover the full (EndTurn-filtered) root legal set \
+        (bug #4 regression)"
     );
 
-    // π' is a softmax over all legal moves, so it must sum to ~1.
+    // π' is a softmax over all root children, so it must sum to ~1.
     let sum: f32 = move_visits.iter().map(|mv| mv.visits).sum();
     assert!(
         (sum - 1.0).abs() < 1e-4,

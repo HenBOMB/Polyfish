@@ -34,6 +34,7 @@ use crate::ai::network::{PolicyOutput, PolyZeroNet};
 use crate::ai::policy_composer;
 use crate::game::Game;
 use crate::moves::{EndTurnMove, Move};
+use crate::types::MoveType;
 use candle_core::Tensor;
 use rand::distributions::Distribution;
 use rand_distr::Gumbel;
@@ -152,7 +153,7 @@ impl<'a> GumbelMctsAgent<'a> {
             .to_vec1::<f32>()
             .expect("BUG: win_value to vec1")[0];
 
-        let legal_moves = game.legal_moves();
+        let mut legal_moves = game.legal_moves();
         let map_size = game.state.settings.size as usize;
 
         let mut root = GumbelNode::new(0.0, 0.0, None);
@@ -161,6 +162,15 @@ impl<'a> GumbelMctsAgent<'a> {
 
         if legal_moves.is_empty() {
             return root;
+        }
+
+        // Suppress EndTurn at the root when any other move exists to prevent
+        // passive play.
+        let has_other = legal_moves
+            .iter()
+            .any(|m| m.move_type() != MoveType::EndTurn);
+        if has_other {
+            legal_moves.retain(|m| m.move_type() != MoveType::EndTurn);
         }
 
         let logits = policy_composer::compute_move_log_probs(&policy_out, &legal_moves, map_size);
