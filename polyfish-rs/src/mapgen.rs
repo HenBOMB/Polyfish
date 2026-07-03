@@ -1655,6 +1655,91 @@ mod tests {
     }
 
     #[test]
+    fn test_map_is_perfect_square() {
+        let map_types = [
+            MapType::Drylands,
+            MapType::Lakes,
+            MapType::Continents,
+            MapType::Pangea,
+            MapType::Archipelago,
+            MapType::WaterWorld,
+        ];
+        let map_sizes = [
+            MapSize::Tiny,
+            MapSize::Small,
+            MapSize::Normal,
+            MapSize::Large,
+            MapSize::Huge,
+            MapSize::Massive,
+        ];
+
+        for &map_type in &map_types {
+            for &size in &map_sizes {
+                for seed in 0..10 {
+                    let settings = MapGenSettings {
+                        size,
+                        map_type,
+                        tribes: vec![TribeType::Imperius, TribeType::Bardur],
+                        seed,
+                        version: 115,
+                    };
+                    let state = generate(settings);
+                    let side = size.get_size();
+                    let tc = side * side;
+
+                    assert_eq!(
+                        state.tiles.len() as i32,
+                        tc,
+                        "tile count mismatch: map={:?} size={:?} seed={} got={} want={}",
+                        map_type,
+                        size,
+                        seed,
+                        state.tiles.len(),
+                        tc
+                    );
+
+                    let mut seen = std::collections::HashSet::new();
+                    for (idx, tile) in &state.tiles {
+                        let (x, y) = (tile.coords.x, tile.coords.y);
+                        assert!(
+                            x >= 0 && x < side && y >= 0 && y < side,
+                            "out-of-range coord ({},{}) idx={} map={:?} size={:?} seed={}",
+                            x,
+                            y,
+                            idx,
+                            map_type,
+                            size,
+                            seed
+                        );
+                        assert_eq!(
+                            *idx, tile.coords.idx,
+                            "map key idx != coords.idx map={:?} seed={}",
+                            map_type,
+                            seed
+                        );
+                        assert_eq!(
+                            (x, y),
+                            crate::functions::idx_to_coords(*idx, side),
+                            "coords <-> idx mismatch map={:?} seed={}",
+                            map_type,
+                            seed
+                        );
+                        assert!(
+                            seen.insert((x, y)),
+                            "duplicate coord ({},{}) map={:?} size={:?} seed={}",
+                            x,
+                            y,
+                            map_type,
+                            size,
+                            seed
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_resource_density() {
         use crate::types::{ResourceType, TribeType};
         let mut settings = MapGenSettings::default();
