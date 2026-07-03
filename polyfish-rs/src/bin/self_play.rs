@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// Decomposed policy probability distributions for a single step
 struct DecomposedPolicyData {
@@ -321,6 +321,9 @@ fn group_recap(flat: Vec<(i32, i32, serde_json::Value)>) -> Vec<ReplayTurn> {
 fn main() -> anyhow::Result<()> {
     use clap::Parser;
 
+    let start_time = Instant::now();
+    println!("=== Self-Play Started ===");
+
     #[derive(Parser, Debug)]
     #[command(author, version, about, long_about = None)]
     struct Args {
@@ -363,6 +366,7 @@ fn main() -> anyhow::Result<()> {
     println!("Using device: {:?}", device);
 
     // Load Main Model (P1)
+    let load_start = Instant::now();
     let model_path = "model.safetensors";
     let mut varmap = candle_nn::VarMap::new();
 
@@ -397,6 +401,9 @@ fn main() -> anyhow::Result<()> {
         println!("No opponent specified. Playing against self.");
         network1.clone()
     };
+
+    let load_duration = load_start.elapsed();
+    println!("Model loading took: {:.2}s", load_duration.as_secs_f32());
 
     let base_seed = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
@@ -503,6 +510,8 @@ fn main() -> anyhow::Result<()> {
     let selected_tribes = vec![t1, t2];
 
     // Parallel game generation using rayon
+    let games_start = Instant::now();
+    println!("Starting game generation...");
     let results: Vec<GameResult> = (0..args.num_games)
         .into_par_iter()
         .filter_map(|i| {
@@ -526,6 +535,10 @@ fn main() -> anyhow::Result<()> {
             )
         })
         .collect();
+
+    let games_duration = games_start.elapsed();
+    println!("Game generation completed in: {:.2}s ({} games)", games_duration.as_secs_f32(), results.len());
+    println!("  Average: {:.2}s per game", games_duration.as_secs_f32() / results.len().max(1) as f32);
 
     // Aggregate results
     let mut collected_spatial_maps: Vec<Tensor> = Vec::new();
@@ -668,7 +681,7 @@ fn main() -> anyhow::Result<()> {
             // Normalize by combined economic activity with scaling multiplier
             let combined_score = my_adjusted + opp_adjusted;
             // to spread distribution into useful training range
-            let scaling_factor = 3;
+            let scaling_factor = 3.0;
             let final_outcome = if combined_score > 0.0 {
                 let ratio = (my_adjusted - opp_adjusted) / combined_score;
                 (ratio * scaling_factor).clamp(-1.0, 1.0)
@@ -736,6 +749,7 @@ fn main() -> anyhow::Result<()> {
     );
 
     // Stack and save
+    let save_start = Instant::now();
     if !collected_spatial_maps.is_empty() {
         let total_steps = collected_spatial_maps.len();
         println!("Saving {} steps...", total_steps);
@@ -815,6 +829,20 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
+
+        let save_duration = save_start.elapsed();
+        println!("Data saving took: {:.2}s", save_duration.as_secs_f32());
+    }
+
+    let total_duration = start_time.elapsed();
+    println!("\n=== Self-Play Complete ===");
+    println!("Total time: {:.2}s", total_duration.as_secs_f32());
+    println!("Breakdown:");
+    println!("  - Model loading: {:.2}s ({:.1}%)", load_duration.as_secs_f32(), 100.0 * load_duration.as_secs_f32() / total_duration.as_secs_f32());
+    println!("  - Game generation: {:.2}s ({:.1}%)", games_duration.as_secs_f32(), 100.0 * games_duration.as_secs_f32() / total_duration.as_secs_f32());
+    if !collected_spatial_maps.is_empty() {
+        let save_duration = save_start.elapsed();
+        println!("  - Data saving: {:.2}s ({:.1}%)", save_duration.as_secs_f32(), 100.0 * save_duration.as_secs_f32() / total_duration.as_secs_f32());
     }
 
     Ok(())
