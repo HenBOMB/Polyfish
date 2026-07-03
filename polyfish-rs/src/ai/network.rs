@@ -92,21 +92,27 @@ impl CrossAttention {
         let v = self.v_proj.forward(context)?;
 
         // Multi-head split: [B, L, D] -> [B, Head, L, HeadDim]
+        // Note: .contiguous() is required after transpose for Metal backend matmul compatibility
         let q = q
             .reshape((batch_sz, q_len, self.nhead, head_dim))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            .contiguous()?;
         let k = k
             .reshape((batch_sz, c_len, self.nhead, head_dim))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            .contiguous()?;
         let v = v
             .reshape((batch_sz, c_len, self.nhead, head_dim))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            .contiguous()?;
 
         // Scaled dot-product attention
         let scale = 1.0 / (head_dim as f64).sqrt();
-        let scores = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
+        let k_t = k.transpose(2, 3)?.contiguous()?;  // Make contiguous for Metal matmul
+        let scores = (q.contiguous()?.matmul(&k_t)? * scale)?;
         let attn = candle_nn::ops::softmax(&scores, candle_core::D::Minus1)?;
-        let out = attn.matmul(&v)?;
+        // Both operands must be contiguous for Metal matmul
+        let out = attn.contiguous()?.matmul(&v.contiguous()?)?;
 
         // Merge heads: [B, Head, L, HeadDim] -> [B, L, D]
         let out = out

@@ -75,7 +75,14 @@ impl ZeroNode {
                 let b_value = b.effective_value(virtual_loss_value);
                 let b_score = b_value + c_puct * b.prior * sqrt_n / (1.0 + b_visits);
 
-                a_score.partial_cmp(&b_score).unwrap()
+                a_score.partial_cmp(&b_score).unwrap_or_else(|| {
+                    panic!(
+                        "NaN in UCB score comparison: a_score={} (value={}, prior={}, visits={}), \
+                         b_score={} (value={}, prior={}, visits={}) — network is producing NaN, \
+                         this must be fixed at the source, not masked here",
+                        a_score, a_value, a.prior, a_visits, b_score, b_value, b.prior, b_visits
+                    )
+                })
             })
             .map(|(idx, _)| idx)
     }
