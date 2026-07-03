@@ -86,9 +86,13 @@ impl GumbelNode {
 
 struct LeafData {
     path_indices: Vec<usize>,
+    /// Player ID at each node along the path (same length as path_indices)
+    path_players: Vec<i32>,
     features: Option<GameFeatures>,
     legal_moves: RefCell<Vec<Box<dyn Move>>>,
     map_size: usize,
+    /// Terminal value if this is a game-over state (Some = terminal with known outcome)
+    terminal_value: Option<f32>,
 }
 
 impl<'a> GumbelMctsAgent<'a> {
@@ -465,15 +469,20 @@ impl<'a> GumbelMctsAgent<'a> {
         let mut spatial_list = Vec::new();
         let mut player_list = Vec::new();
 
+        // Initialize values: use terminal values where available
+        let mut values = vec![0.0f32; leaves.len()];
         for (i, leaf) in leaves.iter().enumerate() {
-            if let Some(ref feat) = leaf.features {
+            if let Some(terminal_val) = leaf.terminal_value {
+                // Terminal node with known outcome
+                values[i] = terminal_val;
+            } else if let Some(ref feat) = leaf.features {
+                // Non-terminal, needs NN evaluation
                 indices_needing_eval.push(i);
                 spatial_list.push(feat.spatial_map.clone());
                 player_list.push(feat.player_state.clone());
             }
+            // else: no features and no terminal value -> stays 0.0 (shouldn't happen)
         }
-
-        let mut values = vec![0.0f32; leaves.len()];
 
         if !indices_needing_eval.is_empty() {
             if let (Ok(batch_spatial), Ok(batch_player)) =
@@ -556,7 +565,7 @@ impl<'a> GumbelMctsAgent<'a> {
 
         // Backprop
         for (leaf, &value) in leaves.iter().zip(values.iter()) {
-            self.backpropagate_and_remove_virtual_loss(root, &leaf.path_indices, value);
+            self.backpropagate_and_remove_virtual_loss(root, &leaf.path_indices, &leaf.path_players, value);
         }
     }
 
@@ -568,8 +577,13 @@ impl<'a> GumbelMctsAgent<'a> {
         device: &candle_core::Device,
     ) -> Option<LeafData> {
         let mut indices_stack = Vec::new();
+        let mut path_players: Vec<i32> = Vec::new();
         let mut undos = Vec::new();
         let virtual_loss = 1.0;
+
+        // Capture root player
+        let root_player = game.state.settings.current_player_turn_id;
+        path_players.push(root_player);
 
         let mut current = root;
         // root is always expanded and has 1.0 virtual loss added by parent if any,
@@ -578,8 +592,11 @@ impl<'a> GumbelMctsAgent<'a> {
         loop {
             *current.virtual_loss.borrow_mut() += virtual_loss;
 
-            if game.state.settings._game_over || game.state.settings.turn > turn_horizon {
-                break;
+            if game.state.settings._game_over {
+                break; // terminal
+            }
+            if game.state.settings.turn > turn_horizon {
+                break; // horizon
             }
             if !current.is_expanded {
                 break;
@@ -609,6 +626,8 @@ impl<'a> GumbelMctsAgent<'a> {
             if let Some(undo) = game.simulate_move(m.as_ref()) {
                 undos.push(undo);
                 indices_stack.push(child_idx);
+                // Capture player after move
+                path_players.push(game.state.settings.current_player_turn_id);
                 current = &current.children[child_idx];
             } else {
                 break;
@@ -616,7 +635,37 @@ impl<'a> GumbelMctsAgent<'a> {
         }
 
         let needs_expansion = !current.is_expanded && !game.state.settings._game_over;
-        let leaf_data = if needs_expansion {
+        let leaf_data = if game.state.settings._game_over {
+            // Terminal state: calculate actual outcome
+            let current_player = game.state.settings.current_player_turn_id;
+            let my_score = game.state.tribes.get(&current_player)
+                .map(|t| t.score)
+                .unwrap_or(0);
+
+            // Find opponent's best score
+            let opp_best_score = game.state.tribes.iter()
+                .filter(|(id, _)| **id != current_player)
+                .map(|(_, t)| t.score)
+                .max()
+                .unwrap_or(0);
+
+            let outcome = if my_score > opp_best_score {
+                1.0  // Win
+            } else if my_score < opp_best_score {
+                -1.0  // Loss
+            } else {
+                0.0  // Draw
+            };
+
+            LeafData {
+                path_indices: indices_stack,
+                path_players,
+                features: None,
+                legal_moves: RefCell::new(Vec::new()),
+                map_size: game.state.settings.size as usize,
+                terminal_value: Some(outcome),
+            }
+        } else if needs_expansion {
             let feat = state_to_tensor(
                 &game.state,
                 game.state.settings.current_player_turn_id,
@@ -629,16 +678,27 @@ impl<'a> GumbelMctsAgent<'a> {
             }
             LeafData {
                 path_indices: indices_stack,
+                path_players,
                 features: feat,
                 legal_moves: RefCell::new(moves),
                 map_size: game.state.settings.size as usize,
+                terminal_value: None,
             }
         } else {
+            // Horizon: evaluate with NN
+            let feat = state_to_tensor(
+                &game.state,
+                game.state.settings.current_player_turn_id,
+                device,
+            )
+            .ok();
             LeafData {
                 path_indices: indices_stack,
-                features: None,
+                path_players,
+                features: feat,
                 legal_moves: RefCell::new(Vec::new()),
-                map_size: 0,
+                map_size: game.state.settings.size as usize,
+                terminal_value: None,
             }
         };
 
@@ -665,21 +725,52 @@ impl<'a> GumbelMctsAgent<'a> {
         &self,
         root: &mut GumbelNode,
         indices: &[usize],
+        path_players: &[i32],
         mut value: f32,
     ) {
         let v_loss = 1.0;
+
+        // Anchor: the leaf player's perspective
+        let leaf_player = path_players.last().copied().unwrap_or(1);
+
+        // Root player is the first in the path
+        let root_player = path_players.first().copied().unwrap_or(leaf_player);
+
+        // Root's value from its perspective
+        let root_value = if root_player != leaf_player {
+            -value
+        } else {
+            value
+        };
+
         *root.virtual_loss.borrow_mut() -= v_loss;
         root.visits += 1.0;
-        root.value_sum += value;
+        root.value_sum += root_value;
 
+        // Update each child node along the path
         let mut current = root;
-        for &idx in indices {
-            value = -value;
+        let mut prev_player = root_player;
+
+        for (i, &idx) in indices.iter().enumerate() {
             if let Some(child) = current.children.get_mut(idx) {
+                // Determine this child's player
+                let child_player = if i + 1 < path_players.len() {
+                    path_players[i + 1]
+                } else {
+                    leaf_player
+                };
+
+                // If player changed, flip the sign
+                if child_player != prev_player {
+                    value = -value;
+                }
+
                 *child.virtual_loss.borrow_mut() -= v_loss;
                 child.visits += 1.0;
                 child.value_sum += value;
+
                 current = child;
+                prev_player = child_player;
             } else {
                 break;
             }
