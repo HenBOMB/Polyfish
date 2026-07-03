@@ -1,5 +1,9 @@
 use crate::ai::brain::max_turns_ahead;
-use crate::ai::features::{self, GameFeatures, state_to_tensor};
+use crate::ai::features::{self, state_to_tensor};
+use crate::ai::mcts_common::{
+    BackpropNode, LeafData, TreeNode, backpropagate_and_remove_virtual_loss, extract_leaf_data,
+    get_node_by_path, get_node_by_path_mut,
+};
 use crate::ai::network::{PolicyOutput, PolyZeroNet};
 use crate::game::Game;
 use crate::moves::EndTurnMove;
@@ -91,28 +95,27 @@ impl ZeroNode {
     fn add_virtual_loss(&self, amount: f32) {
         *self.virtual_loss.borrow_mut() += amount;
     }
+}
 
-    /// Remove virtual loss from this node
-    fn remove_virtual_loss(&self, amount: f32) {
-        *self.virtual_loss.borrow_mut() -= amount;
+impl TreeNode for ZeroNode {
+    fn children(&self) -> &[Self] {
+        &self.children
+    }
+    fn children_mut(&mut self) -> &mut [Self] {
+        &mut self.children
     }
 }
 
-/// Pre-computed data extracted at a leaf node before undoing moves.
-/// This replaces the old approach of cloning the entire `Game` at each leaf.
-struct LeafData {
-    path_indices: Vec<usize>,
-    /// Player ID at each node along the path (same length as path_indices)
-    path_players: Vec<i32>,
-    /// Feature tensors for NN evaluation (None if leaf is terminal)
-    features: Option<GameFeatures>,
-    /// Legal moves at this leaf (wrapped in RefCell for interior mutability during take())
-    legal_moves: RefCell<Vec<Box<dyn Move>>>,
-
-    /// Map size at leaf state
-    map_size: usize,
-    /// Terminal value if this is a game-over state (Some = terminal with known outcome)
-    terminal_value: Option<f32>,
+impl BackpropNode for ZeroNode {
+    fn visits_mut(&mut self) -> &mut f32 {
+        &mut self.visits
+    }
+    fn value_sum_mut(&mut self) -> &mut f32 {
+        &mut self.value_sum
+    }
+    fn virtual_loss(&self) -> &RefCell<f32> {
+        &self.virtual_loss
+    }
 }
 
 impl<'a> ZeroMctsAgent<'a> {
@@ -472,7 +475,7 @@ impl<'a> ZeroMctsAgent<'a> {
 
                         // Expand node using pre-computed data
                         let leaf = &leaves[global_idx];
-                        let node = self.get_node_by_path_mut(root, &leaf.path_indices).unwrap();
+                        let node = get_node_by_path_mut(root, &leaf.path_indices).unwrap();
                         self.expand_node_from_precomputed(
                             node,
                             leaf.legal_moves.take(),
@@ -489,7 +492,13 @@ impl<'a> ZeroMctsAgent<'a> {
 
         // Phase 3: Backpropagate and remove virtual loss
         for (leaf, &value) in leaves.iter().zip(values.iter()) {
-            self.backpropagate_and_remove_virtual_loss(root, &leaf.path_indices, &leaf.path_players, value);
+            backpropagate_and_remove_virtual_loss(
+                root,
+                &leaf.path_indices,
+                &leaf.path_players,
+                self.virtual_loss,
+                value,
+            );
         }
     }
 
@@ -566,7 +575,7 @@ impl<'a> ZeroMctsAgent<'a> {
         } else {
             // Index-based traversal loop
             loop {
-                let current = self.get_node_by_path(root, &indices_stack)?;
+                let current = get_node_by_path(root, &indices_stack)?;
                 current.add_virtual_loss(self.virtual_loss);
 
                 if game.state.settings._game_over {
@@ -611,85 +620,13 @@ impl<'a> ZeroMctsAgent<'a> {
         };
 
         // --- At the leaf: extract data before undoing ---
-        let leaf_data = if game.state.settings._game_over {
-            // Terminal state: calculate actual outcome
-            let current_player = game.state.settings.current_player_turn_id;
-            let my_score = game.state.tribes.get(&current_player)
-                .map(|t| t.score)
-                .unwrap_or(0);
-
-            // Find opponent's best score
-            let opp_best_score = game.state.tribes.iter()
-                .filter(|(id, _)| **id != current_player)
-                .map(|(_, t)| t.score)
-                .max()
-                .unwrap_or(0);
-
-            let outcome = if my_score > opp_best_score {
-                1.0  // Win
-            } else if my_score < opp_best_score {
-                -1.0  // Loss
-            } else {
-                0.0  // Draw
-            };
-
-            LeafData {
-                path_indices: indices_stack,
-                path_players,
-                features: None,
-                legal_moves: RefCell::new(Vec::new()),
-                map_size: game.state.settings.size as usize,
-                terminal_value: Some(outcome),
-            }
-        } else if needs_expansion {
-            // Non-terminal, needs expansion: evaluate with NN
-            let map_size = game.state.settings.size as usize;
-
-            // Feature tensors for NN evaluation
-            let feat = state_to_tensor(
-                &game.state,
-                game.state.settings.current_player_turn_id,
-                device,
-            )
-            .expect("BUG: Failed to create features at MCTS leaf");
-
-            // Legal moves + heuristic scores
-            let mut legal_moves = game.legal_moves();
-            // In batched expansion we always allow EndTurn (allow_end_turn=true)
-            let has_other = legal_moves
-                .iter()
-                .any(|m| m.move_type() != MoveType::EndTurn);
-            if has_other {
-                legal_moves.retain(|m| m.move_type() != MoveType::EndTurn);
-            }
-            LeafData {
-                path_indices: indices_stack,
-                path_players,
-                features: Some(feat),
-                legal_moves: RefCell::new(legal_moves),
-                map_size,
-                terminal_value: None,
-            }
-        } else {
-            // Horizon reached: evaluate with NN (not terminal!)
-            let map_size = game.state.settings.size as usize;
-
-            let feat = state_to_tensor(
-                &game.state,
-                game.state.settings.current_player_turn_id,
-                device,
-            )
-            .ok();
-
-            LeafData {
-                path_indices: indices_stack,
-                path_players,
-                features: feat,
-                legal_moves: RefCell::new(Vec::new()),
-                map_size,
-                terminal_value: None,
-            }
-        };
+        let leaf_data = extract_leaf_data(
+            game,
+            device,
+            indices_stack,
+            path_players,
+            needs_expansion,
+        );
 
         // --- Undo all moves back to root state ---
         while let Some(undo) = undos.pop() {
@@ -697,84 +634,6 @@ impl<'a> ZeroMctsAgent<'a> {
         }
 
         Some(leaf_data)
-    }
-
-    /// Get a node by following a path of indices
-    fn get_node_by_path<'b>(&self, root: &'b ZeroNode, indices: &[usize]) -> Option<&'b ZeroNode> {
-        let mut current = root;
-        for &idx in indices {
-            current = current.children.get(idx)?;
-        }
-        Some(current)
-    }
-
-    /// Get a mutable node by following a path of indices
-    fn get_node_by_path_mut<'b>(
-        &self,
-        root: &'b mut ZeroNode,
-        indices: &[usize],
-    ) -> Option<&'b mut ZeroNode> {
-        let mut current = root;
-        for &idx in indices {
-            current = current.children.get_mut(idx)?;
-        }
-        Some(current)
-    }
-
-    /// Backpropagate value and remove virtual loss along path
-    fn backpropagate_and_remove_virtual_loss(
-        &self,
-        root: &mut ZeroNode,
-        indices: &[usize],
-        path_players: &[i32],
-        mut value: f32,
-    ) {
-        // Anchor: the leaf player's perspective
-        let leaf_player = path_players.last().copied().unwrap_or(1);
-
-        // Root player is the first in the path
-        let root_player = path_players.first().copied().unwrap_or(leaf_player);
-
-        // Root's value from its perspective
-        let root_value = if root_player != leaf_player {
-            -value
-        } else {
-            value
-        };
-
-        root.remove_virtual_loss(self.virtual_loss);
-        root.visits += 1.0;
-        root.value_sum += root_value;
-
-        // Update each child node along the path
-        let mut current = root;
-        let mut prev_player = root_player;
-
-        for (i, &idx) in indices.iter().enumerate() {
-            if let Some(child) = current.children.get_mut(idx) {
-                // Determine this child's player
-                // path_players[i] is the parent's player, path_players[i+1] is the child's
-                let child_player = if i + 1 < path_players.len() {
-                    path_players[i + 1]
-                } else {
-                    leaf_player
-                };
-
-                // If player changed, flip the sign
-                if child_player != prev_player {
-                    value = -value;
-                }
-
-                child.remove_virtual_loss(self.virtual_loss);
-                child.visits += 1.0;
-                child.value_sum += value;
-
-                current = child;
-                prev_player = child_player;
-            } else {
-                break;
-            }
-        }
     }
 
     fn expand_node_single(&self, node: &mut ZeroNode, game: &Game, allow_end_turn: bool) {
