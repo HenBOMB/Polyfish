@@ -1,14 +1,96 @@
-// use crate::ai::gumbel_mcts::GumbelMctsAgent;
+use crate::ai::gumbel_mcts::GumbelMctsAgent;
 use crate::ai::mcts_types::MoveVisit;
 use crate::ai::mcts_zero::ZeroMctsAgent;
 use crate::ai::network::PolyZeroNet;
 use crate::game::Game;
 use crate::moves::{Move, generate_legal_moves};
 
+/// Which search backend `Brain` should use to select moves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SearchBackend {
+    Zero,
+    Gumbel { k: usize },
+}
+
+impl Default for SearchBackend {
+    fn default() -> Self {
+        SearchBackend::Zero
+    }
+}
+
+/// Backend choice as parsed from CLI args (clap needs a unit-ish enum; the
+/// Gumbel `k` is supplied separately via `--gumbel-k`).
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SearchBackendArg {
+    Zero,
+    Gumbel,
+}
+
+impl From<SearchBackendArg> for SearchBackend {
+    fn from(arg: SearchBackendArg) -> Self {
+        match arg {
+            SearchBackendArg::Zero => SearchBackend::Zero,
+            SearchBackendArg::Gumbel => SearchBackend::Gumbel { k: 16 },
+        }
+    }
+}
+
 // class brain
 pub struct Brain<'a> {
     pub network: &'a PolyZeroNet,
     pub max_iterations: usize,
+    pub backend: SearchBackend,
+}
+
+/// Internal enum wrapping whichever concrete agent the configured backend
+/// produced. Matched once per `think_decomposed` / `think_with_stats` call.
+///
+/// Exposed publicly so `arena.rs` can dispatch over backends without
+/// duplicating the enum.
+pub enum SearchAgent<'a> {
+    Zero(ZeroMctsAgent<'a>),
+    Gumbel(GumbelMctsAgent<'a>),
+}
+
+impl<'a> SearchAgent<'a> {
+    pub fn select_move(&self, game: &mut Game) -> Option<Box<dyn Move>> {
+        match self {
+            SearchAgent::Zero(a) => a.select_move(game),
+            SearchAgent::Gumbel(a) => a.select_move(game),
+        }
+    }
+
+    fn select_move_with_decomposed_visits(
+        &self,
+        game: &mut Game,
+        move_count: usize,
+    ) -> (Option<Box<dyn Move>>, Vec<MoveVisit>) {
+        match self {
+            SearchAgent::Zero(a) => a.select_move_with_decomposed_visits(game, move_count),
+            SearchAgent::Gumbel(a) => a.select_move_with_decomposed_visits(game, move_count),
+        }
+    }
+
+    fn select_move_with_stats(&self, game: &mut Game) -> (Option<Box<dyn Move>>, Vec<f32>) {
+        match self {
+            SearchAgent::Zero(a) => a.select_move_with_stats(game),
+            SearchAgent::Gumbel(a) => a.select_move_with_stats(game),
+        }
+    }
+}
+
+/// Construct the concrete search agent for a backend, borrowing `network`.
+pub fn make_search_agent(
+    backend: SearchBackend,
+    network: &PolyZeroNet,
+    iterations: usize,
+) -> SearchAgent<'_> {
+    match backend {
+        SearchBackend::Zero => SearchAgent::Zero(ZeroMctsAgent::new(network, iterations)),
+        SearchBackend::Gumbel { k } => {
+            SearchAgent::Gumbel(GumbelMctsAgent::new(network, iterations, k))
+        }
+    }
 }
 
 impl<'a> Brain<'a> {
@@ -16,6 +98,19 @@ impl<'a> Brain<'a> {
         Self {
             network,
             max_iterations,
+            backend: SearchBackend::default(),
+        }
+    }
+
+    pub fn with_backend(
+        network: &'a PolyZeroNet,
+        max_iterations: usize,
+        backend: SearchBackend,
+    ) -> Self {
+        Self {
+            network,
+            max_iterations,
+            backend,
         }
     }
 
@@ -39,18 +134,14 @@ impl<'a> Brain<'a> {
         iterations
     }
 
-    fn think(&'_ self, game: &Game) -> (Option<ZeroMctsAgent<'_>>, Vec<Box<dyn Move>>) {
+    fn think(&'_ self, game: &Game) -> (Option<SearchAgent<'_>>, Vec<Box<dyn Move>>) {
         let moves = generate_legal_moves(&game.state);
 
         if moves.len() == 1 {
             return (None, moves);
         }
 
-        let agent = ZeroMctsAgent::new(
-            self.network,
-            self.max_iterations, // self.get_iterations(game.state.settings.turn, moves.len()),
-        );
-
+        let agent = make_search_agent(self.backend, self.network, self.max_iterations);
         (Some(agent), moves)
     }
 

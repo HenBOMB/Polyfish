@@ -1,7 +1,7 @@
 use candle_core::Device;
 use clap::Parser;
 use polyfish::PlayerId;
-use polyfish::ai::mcts_zero::ZeroMctsAgent;
+use polyfish::ai::brain::{SearchBackend, SearchBackendArg, make_search_agent};
 use polyfish::ai::network::PolyZeroNet;
 use polyfish::game::Game;
 use polyfish::mapgen::{MapGenSettings, generate};
@@ -25,9 +25,31 @@ struct Args {
     #[arg(long, default_value_t = 10)]
     games: usize,
 
-    /// MCTS Iterations per move
+    /// MCTS Iterations per move (shared default; override per side with
+    /// --mcts1 / --mcts2).
     #[arg(long, default_value_t = 100)]
     mcts: usize,
+
+    /// Override MCTS iterations for Player 1 only.
+    #[arg(long)]
+    mcts1: Option<usize>,
+
+    /// Override MCTS iterations for Player 2 only.
+    #[arg(long)]
+    mcts2: Option<usize>,
+
+    /// Search backend for Player 1.
+    #[arg(long, value_enum, default_value_t = SearchBackendArg::Zero)]
+    backend1: SearchBackendArg,
+
+    /// Search backend for Player 2.
+    #[arg(long, value_enum, default_value_t = SearchBackendArg::Zero)]
+    backend2: SearchBackendArg,
+
+    /// Gumbel: number of initial top-k candidates at the root (only used
+    /// when --backend1/--backend2 is gumbel).
+    #[arg(long, default_value_t = 16)]
+    gumbel_k: usize,
 }
 
 fn load_model(path: &str, device: &Device) -> anyhow::Result<PolyZeroNet> {
@@ -44,7 +66,10 @@ fn play_match(
     _game_id: usize,
     net1: &PolyZeroNet,
     net2: &PolyZeroNet,
-    mcts: usize,
+    mcts1: usize,
+    mcts2: usize,
+    backend1: SearchBackend,
+    backend2: SearchBackend,
     seed: i64,
 ) -> (PlayerId, i32, i32) {
     // (Winner ID, P1 Score, P2 Score)
@@ -65,18 +90,18 @@ fn play_match(
     game.post_load();
 
     // Agents
-    let agent1 = ZeroMctsAgent::new(net1, mcts);
-    let agent2 = ZeroMctsAgent::new(net2, mcts);
+    let agent1 = make_search_agent(backend1, net1, mcts1);
+    let agent2 = make_search_agent(backend2, net2, mcts2);
 
     let mut moves = 0;
     while !polyfish::functions::is_game_over(&game.state) && moves < 500 {
         let current_pid = game.state.settings.current_player_turn_id;
 
         let best_move = if current_pid == 1 {
-            // Player 1 uses Net 1
+            // Player 1
             agent1.select_move(&mut game)
         } else {
-            // Player 2 uses Net 2
+            // Player 2
             agent2.select_move(&mut game)
         };
 
@@ -103,6 +128,13 @@ fn play_match(
     (winner, p1_score, p2_score)
 }
 
+fn backend_from_arg(arg: SearchBackendArg, k: usize) -> SearchBackend {
+    match arg {
+        SearchBackendArg::Zero => SearchBackend::Zero,
+        SearchBackendArg::Gumbel => SearchBackend::Gumbel { k },
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     // Select best available device: Metal (macOS) > CUDA (NVIDIA) > CPU
@@ -116,6 +148,16 @@ fn main() -> anyhow::Result<()> {
 
     println!("P2: {} (GPU: {:?})", args.model2, !matches!(device, Device::Cpu));
     let net2 = load_model(&args.model2, &device)?;
+
+    let mcts1 = args.mcts1.unwrap_or(args.mcts);
+    let mcts2 = args.mcts2.unwrap_or(args.mcts);
+    let backend1 = backend_from_arg(args.backend1, args.gumbel_k);
+    let backend2 = backend_from_arg(args.backend2, args.gumbel_k);
+
+    println!(
+        "P1 backend: {:?} (mcts={}), P2 backend: {:?} (mcts={})",
+        backend1, mcts1, backend2, mcts2
+    );
 
     // We need strict alternating seeds to ensure fairness?
     // Actually, we should probably swap sides half way through?
@@ -132,7 +174,16 @@ fn main() -> anyhow::Result<()> {
         .into_par_iter()
         .map(|i| {
             // We use the same networks (thread safe read only)
-            play_match(i, &net1, &net2, args.mcts, (base_seed + i as u64) as i64)
+            play_match(
+                i,
+                &net1,
+                &net2,
+                mcts1,
+                mcts2,
+                backend1,
+                backend2,
+                (base_seed + i as u64) as i64,
+            )
         })
         .collect();
 

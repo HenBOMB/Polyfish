@@ -1,6 +1,6 @@
 use candle_core::{Device, Tensor};
 use polyfish::TribeType;
-use polyfish::ai::brain::Brain;
+use polyfish::ai::brain::{Brain, SearchBackend, SearchBackendArg};
 use polyfish::ai::features::{self, GameFeatures, state_to_tensor};
 use polyfish::ai::mapper::DecomposedMapper;
 use polyfish::ai::network::PolyZeroNet;
@@ -85,6 +85,7 @@ fn play_single_game(
     seed: i64,
     tribes: Vec<TribeType>,
     iteration: usize,
+    backend: SearchBackend,
 ) -> Option<GameResult> {
     // Curriculum logic — Tiny maps only, gradually increase turn count
     let (map_size, max_turns) = if iteration <= 50 {
@@ -117,8 +118,8 @@ fn play_single_game(
     game.post_load();
 
     // Create two agents (they might share the same network, or be different)
-    let agent1 = Brain::new(network1, mcts_iters);
-    let agent2 = Brain::new(network2, mcts_iters);
+    let agent1 = Brain::with_backend(network1, mcts_iters, backend);
+    let agent2 = Brain::with_backend(network2, mcts_iters, backend);
 
     let initial_state = game.state.clone();
     let mut flat_recap: Vec<(i32, i32, serde_json::Value)> = Vec::new();
@@ -390,9 +391,23 @@ fn main() -> anyhow::Result<()> {
         /// Current training iteration (for curriculum learning)
         #[arg(long, default_value_t = 1)]
         iteration: usize,
+
+        /// Search backend to use for MCTS.
+        #[arg(long, value_enum, default_value_t = SearchBackendArg::Zero)]
+        search_backend: SearchBackendArg,
+
+        /// Gumbel: number of initial top-k candidates sampled at the root.
+        /// Only used when --search-backend gumbel.
+        #[arg(long, default_value_t = 16)]
+        gumbel_k: usize,
     }
 
     let args = Args::parse();
+
+    let backend = match args.search_backend {
+        SearchBackendArg::Zero => SearchBackend::Zero,
+        SearchBackendArg::Gumbel => SearchBackend::Gumbel { k: args.gumbel_k },
+    };
 
     // Select device: Metal (macOS) > CUDA (NVIDIA) > CPU, unless overridden via POLYFISH_DEVICE
     let device = match std::env::var("POLYFISH_DEVICE").as_deref() {
@@ -540,6 +555,7 @@ fn main() -> anyhow::Result<()> {
                     seed,
                     game_tribes,
                     args.iteration,
+                    backend,
                 )
             },
         )
