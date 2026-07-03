@@ -31,3 +31,5 @@ decompiled/*
 .env
 
 games_*.safetensors
+
+model_backup_*.safetensors
