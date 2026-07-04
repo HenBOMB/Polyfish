@@ -681,6 +681,14 @@ fn main() -> anyhow::Result<()> {
     let games_duration = games_start.elapsed();
     println!("Game generation completed in: {:.2}s ({} games)", games_duration.as_secs_f32(), results.len());
     println!("  Average: {:.2}s per game", games_duration.as_secs_f32() / results.len().max(1) as f32);
+    let total_moves_now: usize = results.iter().map(|r| r.moves).sum();
+    let moves_per_sec = total_moves_now as f64 / games_duration.as_secs_f64().max(1e-9);
+    println!(
+        "  Throughput: {:.2} moves/sec ({} moves over {:.2}s)",
+        moves_per_sec,
+        total_moves_now,
+        games_duration.as_secs_f32()
+    );
 
     let mut server_stats = vec![(1, eval_server1.stats())];
     if let Some(ref server2) = eval_server2 {
@@ -1019,6 +1027,8 @@ fn main() -> anyhow::Result<()> {
     println!("Breakdown:");
     println!("  - Model loading: {:.2}s ({:.1}%)", load_duration.as_secs_f32(), 100.0 * load_duration.as_secs_f32() / total_duration.as_secs_f32());
     println!("  - Game generation: {:.2}s ({:.1}%)", games_duration.as_secs_f32(), 100.0 * games_duration.as_secs_f32() / total_duration.as_secs_f32());
+    let final_moves_per_sec = total_moves as f64 / games_duration.as_secs_f64().max(1e-9);
+    println!("  - Throughput: {:.2} moves/sec ({} moves)", final_moves_per_sec, total_moves);
     if !collected_spatial_maps.is_empty() {
         let save_duration = save_start.elapsed();
         println!("  - Data saving: {:.2}s ({:.1}%)", save_duration.as_secs_f32(), 100.0 * save_duration.as_secs_f32() / total_duration.as_secs_f32());
