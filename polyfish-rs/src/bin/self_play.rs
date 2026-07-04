@@ -380,7 +380,7 @@ fn main() -> anyhow::Result<()> {
         num_games: usize,
 
         /// MCTS iterations per move
-        #[arg(long, default_value_t = 50)]
+        #[arg(long, default_value_t = 64)]
         mcts_iters: usize,
 
         /// Optional opponent model path (if not set, plays against self)
@@ -431,9 +431,8 @@ fn main() -> anyhow::Result<()> {
         /// Per-game virtual-loss mini-batch size (leaves coalesced per NN
         /// call within a single game's search tree). Cross-game batching via
         /// the eval server now supplies GPU efficiency independently, so
-        /// this can shrink toward sequential per-game search. None of the
-        /// agents' own defaults (24) are overridden unless this is set.
-        #[arg(long)]
+        /// this can shrink toward sequential per-game search.
+        #[arg(long, default_value_t = 4)]
         leaf_batch: Option<usize>,
 
         /// Eval-cache LRU capacity (number of cached NN evaluations). 0

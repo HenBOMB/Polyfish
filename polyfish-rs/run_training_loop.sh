@@ -2,10 +2,19 @@
 set -e
 
 # Configuration
+# NUM_GAMES/MCTS_ITERS/ACTORS/EVAL_SERVERS are named to match self_play's own
+# --num-games/--mcts-iters/--actors/--eval-servers flags 1:1 — see
+# `self_play --help` (or src/bin/self_play.rs) for what each actually does.
 ITERATIONS=1000
-GAMES_PER_ITER=10
-USE_THREADS=12
-export MCTS_ITERS=200
+NUM_GAMES=10
+export MCTS_ITERS=64
+# self_play's actor pool is plain std::thread (not rayon), and actors block
+# (park, no CPU) while awaiting eval-server replies — oversubscribing past
+# core count is fine, RAM is the real ceiling. 32 measured ~2.5x the
+# throughput of the --actors 0 (auto = core count) default on an M3 Max.
+ACTORS=32
+# 0 = defer to self_play's own auto (2 shards on tch backend, 1 on candle).
+EVAL_SERVERS=1
 export RUST_BACKTRACE=1
 
 # Log all output to session.log while still showing on console
@@ -16,9 +25,13 @@ echo "Logging to $LOG_FILE"
 echo "Building binaries..."
 # Detect platform and use appropriate GPU features
 if [[ "$OSTYPE" == "darwin"* ]]; then
-    # macOS: use Metal and Accelerate for Apple Silicon
-    echo "Building with Metal + Accelerate support for macOS..."
-    cargo build --bin polyfish --bin self_play --release --features metal,accelerate
+    # macOS: Metal/Accelerate + tch-eval so self_play inference runs on libtorch/MPS
+    echo "Building with Metal + Accelerate + tch-eval (libtorch/MPS) for macOS..."
+    export LIBTORCH_USE_PYTORCH=1
+    export LIBTORCH_BYPASS_VERSION_CHECK=1
+    PATH="$(pwd)/.venv/bin:$PATH" cargo build --bin polyfish --bin self_play --release --features metal,accelerate,tch-eval
+    # The tch-linked binary has no rpath for libtorch; point dyld at the venv's torch dylibs
+    export DYLD_LIBRARY_PATH="$(.venv/bin/python3 -c "import torch, os; print(os.path.join(os.path.dirname(torch.__file__), 'lib'))")${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
 elif command -v nvidia-smi &> /dev/null; then
     # CUDA available (Linux/Windows with NVIDIA GPU)
     echo "Building with CUDA support..."
@@ -36,7 +49,7 @@ FORCE_TRAIN=false
 BOOST=false
 CHILL=false
 REWARD_SHAPING=false
-while getopts "fbcri:g:n:" opt; do
+while getopts "fbcri:g:n:a:e:" opt; do
   case $opt in
     f)
       FORCE_TRAIN=true
@@ -54,10 +67,16 @@ while getopts "fbcri:g:n:" opt; do
       ITERATIONS=$OPTARG
       ;;
     g)
-      GAMES_PER_ITER=$OPTARG
+      NUM_GAMES=$OPTARG
       ;;
     n)
       MCTS_ITERS=$OPTARG
+      ;;
+    a)
+      ACTORS=$OPTARG
+      ;;
+    e)
+      EVAL_SERVERS=$OPTARG
       ;;
     \?)
       echo "Invalid option: -$OPTARG" >&2
@@ -73,17 +92,14 @@ if [ "$REWARD_SHAPING" = true ]; then
 fi
 
 if [ "$BOOST" = true ]; then
-    USE_THREADS=$((USE_THREADS * 2))
-    echo "🚀 Boost mode enabled! Using $USE_THREADS threads"
+    ACTORS=$((ACTORS * 2))
+    echo "🚀 Boost mode enabled! Using $ACTORS actors"
 fi
 
 if [ "$CHILL" = true ]; then
-    USE_THREADS=4
-    echo "❄️ Chill mode! Using 4 threads"
+    ACTORS=8
+    echo "❄️ Chill mode! Using $ACTORS actors"
 fi
-
-export RAYON_NUM_THREADS=$USE_THREADS
-export OMP_NUM_THREADS=$USE_THREADS
 
 if [ "$FORCE_TRAIN" = true ]; then
     echo "Force training flag detected! Running training immediately..."
@@ -177,7 +193,7 @@ do
     
     # Capture output to extract metrics
     # We pass args via CLI now, not env vars alone
-    SP_OUTPUT=$(./target/release/self_play --num-games $GAMES_PER_ITER --mcts-iters $MCTS_ITERS $REWARD_FLAG $OPPONENT_FLAG --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$i")
+    SP_OUTPUT=$(./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$i")
     echo "$SP_OUTPUT"
     
     # Extract Avg Score and Max Score using grep and sed or awk
