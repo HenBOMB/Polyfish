@@ -48132,3 +48132,995 @@ Initializing/Checking model...
 Starting Iteration 11
 ==================================================
 [Self-Play] Generative games... Tribes: Imperius vs Imperius
+Logging to session.log
+Building binaries...
+Building with Metal + Accelerate + tch-eval (libtorch/MPS) for macOS...
+warning: unused variable: `game_winner_id`
+   --> src/bin/self_play.rs:978:13
+    |
+978 |         let game_winner_id = {
+    |             ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_game_winner_id`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `move_type`
+   --> src/bin/self_play.rs:993:83
+    |
+993 |         for (step_idx, (features, policy_data, p_id, my_score_now, opp_score_now, move_type)) in
+    |                                                                                   ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_move_type`
+
+warning: `polyfish` (bin "self_play") generated 2 warnings (run `cargo fix --bin "self_play" -p polyfish` to apply 2 suggestions)
+    Finished `release` profile [optimized] target(s) in 0.14s
+Resuming from iteration 11
+Initializing/Checking model...
+✅ model.safetensors already exists. Skipping initialization.
+==================================================
+Starting Iteration 11
+==================================================
+[Self-Play] Generative games... Tribes: Imperius vs Imperius
+[Game 0] Started with seed: 1783184205 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 1] Started with seed: 1783184206 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 2] Started with seed: 1783184207 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 3] Started with seed: 1783184208 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 5] Started with seed: 1783184210 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 7] Started with seed: 1783184212 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 6] Started with seed: 1783184211 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 4] Started with seed: 1783184209 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 8] Started with seed: 1783184213 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 9] Started with seed: 1783184214 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 0]: Turn: 0 Scores: [(1, 495), (2, 490)]
+[Game 1]: Turn: 0 Scores: [(1, 495), (2, 495)]
+[Game 7]: Turn: 0 Scores: [(1, 495), (2, 490)]
+[Game 4]: Turn: 0 Scores: [(1, 495), (2, 495)]
+[Game 8]: Turn: 0 Scores: [(1, 490), (2, 495)]
+[Game 5]: Turn: 0 Scores: [(1, 495), (2, 495)]
+[Game 2]: Turn: 0 Scores: [(1, 495), (2, 490)]
+[Game 6]: Turn: 0 Scores: [(1, 490), (2, 495)]
+[Game 9]: Turn: 0 Scores: [(1, 495), (2, 490)]
+[Game 3]: Turn: 0 Scores: [(1, 495), (2, 490)]
+[Game 6]: Turn: 1 Player: 1 Move: Step: 34 -> 45
+[Game 4]: Turn: 1 Player: 1 Move: Step: 74 -> 84
+[Game 2]: Turn: 1 Player: 1 Move: Step: 39 -> 29
+[Game 9]: Turn: 1 Player: 1 Move: Step: 90 -> 79
+[Game 3]: Turn: 1 Player: 1 Move: Step: 39 -> 28
+[Game 5]: Turn: 1 Player: 1 Move: Step: 94 -> 84
+[Game 7]: Turn: 0 Player: 2 Move: Choose reward CityWall for city at 24
+[Game 1]: Turn: 1 Player: 1 Move: Step: 69 -> 59
+[Game 8]: Turn: 1 Player: 1 Move: Step: 35 -> 24
+[Game 0]: Turn: 1 Player: 1 Move: Train Warrior at 84
+[Game 7]: Turn: 1 Player: 2 Move: Train Warrior at 24
+[Game 0]: Turn: 2 Player: 1 Move: End Turn
+[Game 1]: Turn: 2 Player: 1 Move: End Turn
+[Game 5]: Turn: 2 Player: 2 Move: Step: 80 -> 69
+[Game 6]: Turn: 2 Player: 1 Move: Train Warrior at 24
+[Game 3]: Turn: 2 Player: 1 Move: Step: 29 -> 30
+[Game 2]: Turn: 2 Player: 2 Move: Step: 24 -> 35
+[Game 8]: Turn: 2 Player: 2 Move: Step: 78 -> 88
+[Game 4]: Turn: 2 Player: 2 Move: Step: 79 -> 91
+[Game 9]: Turn: 2 Player: 2 Move: Research Strategy
+[Game 7]: Turn: 2 Player: 2 Move: End Turn
+[Game 5]: Turn: 3 Player: 2 Move: Step: 78 -> 89
+[Game 3]: Turn: 3 Player: 1 Move: Train Warrior at 29
+[Game 1]: Turn: 3 Player: 2 Move: Step: 40 -> 41
+[Game 0]: Turn: 3 Player: 2 Move: Step: 12 -> 23
+[Game 9]: Turn: 4 Player: 1 Move: Train Warrior at 79
+[Game 6]: Turn: 3 Player: 1 Move: Step: 36 -> 46
+[Game 8]: Turn: 3 Player: 2 Move: Step: 79 -> 78
+[Game 2]: Turn: 3 Player: 2 Move: Step: 45 -> 44
+[Game 4]: Turn: 3 Player: 2 Move: Step: 67 -> 55
+[Game 7]: Turn: 3 Player: 2 Move: Step: 1 -> 0
+[Game 1]: Turn: 4 Player: 1 Move: End Turn
+[Game 5]: Turn: 4 Player: 2 Move: Research Climbing
+[Game 0]: Turn: 4 Player: 2 Move: Step: 24 -> 13
+[Game 9]: Turn: 5 Player: 2 Move: Research Roads
+[Game 3]: Turn: 4 Player: 1 Move: Step: 49 -> 38
+[Game 2]: Turn: 4 Player: 2 Move: End Turn
+[Game 6]: Turn: 4 Player: 1 Move: Step: 44 -> 56
+[Game 8]: Turn: 4 Player: 2 Move: Step: 77 -> 66
+[Game 4]: Turn: 5 Player: 1 Move: Step: 83 -> 72
+[Game 7]: Turn: 4 Player: 2 Move: Train Warrior at 24
+[Game 5]: Turn: 5 Player: 2 Move: Research Riding
+[Game 1]: Turn: 5 Player: 2 Move: Research Climbing
+[Game 9]: Turn: 6 Player: 2 Move: Step: 35 -> 24
+[Game 0]: Turn: 5 Player: 2 Move: End Turn
+[Game 2]: Turn: 5 Player: 2 Move: End Turn
+[Game 3]: Turn: 5 Player: 1 Move: Step: 18 -> 29
+[Game 6]: Turn: 5 Player: 1 Move: Step: 56 -> 68
+[Game 8]: Turn: 5 Player: 2 Move: Step: 66 -> 77
+[Game 4]: Turn: 6 Player: 1 Move: Step: 72 -> 73
+[Game 7]: Turn: 5 Player: 2 Move: Step: 25 -> 36
+[Game 5]: Turn: 7 Player: 1 Move: Research Mining
+[Game 1]: Turn: 6 Player: 2 Move: Research Riding
+[Game 9]: Turn: 7 Player: 1 Move: Clear Forest at 69
+[Game 6]: Turn: 6 Player: 1 Move: Research Climbing
+[Game 0]: Turn: 7 Player: 1 Move: Research Climbing
+[Game 2]: Turn: 6 Player: 2 Move: Train Warrior at 24
+[Game 8]: Turn: 6 Player: 1 Move: End Turn
+[Game 3]: Turn: 6 Player: 1 Move: Step: 29 -> 40
+[Game 4]: Turn: 7 Player: 1 Move: Step: 73 -> 83
+[Game 7]: Turn: 6 Player: 2 Move: Step: 15 -> 16
+[Game 5]: Turn: 8 Player: 1 Move: Step: 75 -> 74
+[Game 1]: Turn: 7 Player: 2 Move: Step: 40 -> 50
+[Game 9]: Turn: 8 Player: 1 Move: Step: 57 -> 69
+[Game 4]: Turn: 8 Player: 1 Move: Step: 84 -> 73
+[Game 2]: Turn: 7 Player: 2 Move: Step: 33 -> 44
+[Game 6]: Turn: 7 Player: 1 Move: Research Hunting
+[Game 0]: Turn: 8 Player: 1 Move: Step: 86 -> 97
+[Game 8]: Turn: 7 Player: 1 Move: Attack: 55 -> 56
+[Game 3]: Turn: 7 Player: 1 Move: Step: 5 -> 17
+[Game 7]: Turn: 7 Player: 2 Move: Step: 47 -> 35
+[Game 5]: Turn: 9 Player: 1 Move: Step: 95 -> 84
+[Game 1]: Turn: 8 Player: 1 Move: Step: 111 -> 112
+[Game 9]: Turn: 9 Player: 1 Move: End Turn
+[Game 4]: Turn: 9 Player: 1 Move: End Turn
+[Game 2]: Turn: 8 Player: 2 Move: Train Warrior at 24
+[Game 6]: Turn: 8 Player: 1 Move: Step: 68 -> 57
+[Game 0]: Turn: 9 Player: 1 Move: Step: 73 -> 83
+[Game 8]: Turn: 8 Player: 1 Move: Train Archer at 24
+[Game 3]: Turn: 8 Player: 1 Move: Step: 30 -> 18
+[Game 7]: Turn: 8 Player: 1 Move: End Turn
+[Game 5]: Turn: 10 Player: 1 Move: Step: 86 -> 74
+[Game 4]: Turn: 10 Player: 2 Move: Research Roads
+[Game 1]: Turn: 9 Player: 1 Move: Step: 110 -> 111
+[Game 9]: Turn: 10 Player: 1 Move: End Turn
+[Game 2]: Turn: 9 Player: 2 Move: Step: 33 -> 44
+[Game 8]: Turn: 9 Player: 1 Move: End Turn
+[Game 6]: Turn: 9 Player: 1 Move: Research Meditation
+[Game 4] Finished. Moves: 95 | Winner: 1 (Score: 1990) | Decisive: false
+[Game 0]: Turn: 10 Player: 1 Move: Step: 86 -> 85
+[Game 9] Finished. Moves: 96 | Winner: 2 (Score: 1710) | Decisive: false
+[Game 7]: Turn: 9 Player: 1 Move: Disband unit at 31
+[Game 3]: Turn: 8 Player: 2 Move: Step: 24 -> 36
+[Game 5]: Turn: 10 Player: 2 Move: Build LumberHut at 67
+[Game 5] Finished. Moves: 103 | Winner: 2 (Score: 1985) | Decisive: false
+[Game 0] Finished. Moves: 100 | Winner: 1 (Score: 1570) | Decisive: false
+[Game 2]: Turn: 10 Player: 2 Move: Step: 13 -> 25
+[Game 2] Finished. Moves: 103 | Winner: 2 (Score: 1755) | Decisive: false
+[Game 1]: Turn: 9 Player: 2 Move: Step: 51 -> 52
+[Game 6]: Turn: 9 Player: 2 Move: End Turn
+[Game 8]: Turn: 10 Player: 1 Move: Step: 33 -> 45
+[Game 7]: Turn: 10 Player: 1 Move: Research Chivalry
+[Game 8] Finished. Moves: 109 | Winner: 2 (Score: 2060) | Decisive: false
+[Game 3]: Turn: 9 Player: 2 Move: Train Warrior at 24
+[Game 6] Finished. Moves: 110 | Winner: 2 (Score: 2055) | Decisive: false
+[Game 1]: Turn: 10 Player: 2 Move: Step: 52 -> 64
+[Game 1] Finished. Moves: 114 | Winner: 2 (Score: 2170) | Decisive: false
+[Game 7] Finished. Moves: 119 | Winner: 1 (Score: 2180) | Decisive: false
+[Game 3]: Turn: 10 Player: 2 Move: Disband unit at 25
+[Game 3] Finished. Moves: 113 | Winner: 2 (Score: 2045) | Decisive: false
+=== Self-Play Started ===
+Using device: Metal(MetalDevice(DeviceId(1))) (CANDLE_METAL_COMPUTE_PER_BUFFER=1000)
+Loading main model from model.safetensors
+No opponent specified. Playing against self.
+Model loading took: 0.00s
+Starting parallel self-play: 10 games with 64 MCTS iterations
+Starting game generation...
+Eval backend: tch (libtorch/MPS)
+Using 2 eval server shard(s), per-shard cache=Some(262144)
+Using 14 actor threads, max_batch=256, coalesce_timeout_us=1000, leaf_batch=None
+Game generation completed in: 11.20s (10 games)
+  Average: 1.12s per game
+  Throughput: 94.84 moves/sec (1062 moves over 11.20s)
+EVAL_SERVER_STATS: {"shard": "p1", "forwards": 624, "rows": 22490, "avg_batch": 36.04, "max_batch": 91, "busy_s": 10.27, "busy_frac": 0.918, "cache_hits": 3393, "cache_misses": 19097, "cache_hit_rate": 0.151}
+EVAL_SERVER_STATS: {"shard": "p1", "forwards": 625, "rows": 22587, "avg_batch": 36.14, "max_batch": 92, "busy_s": 10.26, "busy_frac": 0.916, "cache_hits": 3292, "cache_misses": 19295, "cache_hit_rate": 0.146}
+EVAL_SERVER_STATS_AGG: {"shards": 2, "forwards": 1249, "rows": 45077, "avg_batch": 36.09, "max_batch": 92, "busy_s": 20.53, "busy_frac": 1.834, "cache_hits": 6685, "cache_misses": 38392, "cache_hit_rate": 0.148}
+METRICS: {"avg_score": 1952.00, "max_score": 2180, "avg_moves": 106.20, "p1_avg": 1708.50, "p2_avg": 1900.50, "avg_captures": 0.00, "avg_harvests": 5.90, "avg_builds": 0.80, "avg_research": 13.50, "avg_attacks": 2.20}
+Saving 1062 steps...
+Spatial maps shape: [1062, 18634] (dim: 18634)
+Saved to games_1783184216.safetensors
+🏆 Highest score game (2180) saved to replays/high_scores/best_game_score_2180_1783184216.json
+Data saving took: 0.09s
+
+=== Self-Play Complete ===
+Total time: 11.32s
+Breakdown:
+  - Model loading: 0.00s (0.0%)
+  - Game generation: 11.20s (98.9%)
+  - Throughput: 94.84 moves/sec (1062 moves)
+  - Data saving: 0.09s (0.8%)
+[Training] Training model...
+Training on mps
+Training on 52 files (30 fresh, 22 archived).
+Loading existing model for fine-tuning...
+Epoch 1: Loading chunk 1/6 (10 files)...
+  Loaded 17783 samples.
+Epoch 1: Loading chunk 2/6 (10 files)...
+  Loaded 10815 samples.
+Epoch 1: Loading chunk 3/6 (10 files)...
+  Loaded 10441 samples.
+Epoch 1: Loading chunk 4/6 (10 files)...
+  Loaded 19296 samples.
+Epoch 1: Loading chunk 5/6 (10 files)...
+  Loaded 11826 samples.
+Epoch 1: Loading chunk 6/6 (2 files)...
+  Loaded 3578 samples.
+Epoch 1/2 - Loss: 7.9204 (Policy: 7.7359, Value: 0.1845)
+Epoch 2: Loading chunk 1/6 (10 files)...
+  Loaded 13600 samples.
+Epoch 2: Loading chunk 2/6 (10 files)...
+  Loaded 15233 samples.
+Epoch 2: Loading chunk 3/6 (10 files)...
+  Loaded 11397 samples.
+Epoch 2: Loading chunk 4/6 (10 files)...
+  Loaded 12355 samples.
+Epoch 2: Loading chunk 5/6 (10 files)...
+  Loaded 17608 samples.
+Epoch 2: Loading chunk 6/6 (2 files)...
+  Loaded 3546 samples.
+Epoch 2/2 - Loss: 7.4712 (Policy: 7.3005, Value: 0.1708)
+METRICS: {"loss": 7.4712, "policy_loss": 7.3005, "value_loss": 0.1708}
+Saved model.safetensors (f16 quantized)
+Iteration 11 complete. Type: Self-Play | Avg: 1952.00 | Loss: 7.4712
+  -> STATS/GAME: Captures: 0.00 | Harvests: 5.90 | Builds: 0.80 | Tech: 13.50 | Attacks: 2.20
+==================================================
+Starting Iteration 12
+==================================================
+[Self-Play] Generative games... Tribes: Imperius vs Imperius
+[Game 1] Started with seed: 1783184273 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 6] Started with seed: 1783184278 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 9] Started with seed: 1783184281 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 2] Started with seed: 1783184274 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 3] Started with seed: 1783184275 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 4] Started with seed: 1783184276 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 7] Started with seed: 1783184279 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 0] Started with seed: 1783184272 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 8] Started with seed: 1783184280 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 5] Started with seed: 1783184277 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 7]: Turn: 0 Scores: [(1, 495), (2, 490)]
+[Game 5]: Turn: 0 Scores: [(1, 495), (2, 490)]
+[Game 3]: Turn: 0 Scores: [(1, 490), (2, 495)]
+[Game 1]: Turn: 0 Scores: [(1, 495), (2, 490)]
+[Game 9]: Turn: 0 Scores: [(1, 495), (2, 495)]
+[Game 2]: Turn: 0 Scores: [(1, 495), (2, 495)]
+[Game 8]: Turn: 0 Scores: [(1, 495), (2, 490)]
+[Game 4]: Turn: 0 Scores: [(1, 490), (2, 495)]
+[Game 0]: Turn: 0 Scores: [(1, 495), (2, 495)]
+[Game 6]: Turn: 0 Scores: [(1, 490), (2, 495)]
+[Game 6]: Turn: 1 Player: 1 Move: Step: 35 -> 46
+[Game 9]: Turn: 1 Player: 1 Move: Step: 85 -> 73
+[Game 0]: Turn: 1 Player: 1 Move: Step: 80 -> 90
+[Game 3]: Turn: 1 Player: 1 Move: Step: 14 -> 13
+[Game 1]: Turn: 1 Player: 1 Move: Step: 17 -> 7
+[Game 7]: Turn: 1 Player: 1 Move: Step: 74 -> 64
+[Game 2]: Turn: 1 Player: 1 Move: Step: 91 -> 101
+[Game 5]: Turn: 1 Player: 1 Move: Step: 85 -> 75
+[Game 4]: Turn: 1 Player: 1 Move: Step: 14 -> 26
+[Game 8]: Turn: 1 Player: 1 Move: Step: 67 -> 55
+[Game 1]: Turn: 1 Player: 2 Move: End Turn
+[Game 5]: Turn: 2 Player: 1 Move: Research Strategy
+[Game 3]: Turn: 2 Player: 1 Move: End Turn
+[Game 2]: Turn: 2 Player: 1 Move: End Turn
+[Game 9]: Turn: 2 Player: 1 Move: Step: 84 -> 74
+[Game 8]: Turn: 2 Player: 1 Move: Step: 79 -> 68
+[Game 4]: Turn: 2 Player: 1 Move: Step: 24 -> 36
+[Game 0]: Turn: 2 Player: 1 Move: Step: 90 -> 79
+[Game 7]: Turn: 2 Player: 1 Move: Step: 64 -> 52
+[Game 6]: Turn: 2 Player: 1 Move: Train Warrior at 24
+[Game 9]: Turn: 3 Player: 1 Move: Step: 74 -> 86
+[Game 2]: Turn: 3 Player: 2 Move: Step: 17 -> 16
+[Game 5]: Turn: 3 Player: 1 Move: Step: 64 -> 63
+[Game 1]: Turn: 3 Player: 1 Move: Step: 28 -> 16
+[Game 3]: Turn: 3 Player: 2 Move: Step: 93 -> 83
+[Game 8]: Turn: 3 Player: 1 Move: Step: 67 -> 78
+[Game 0]: Turn: 3 Player: 1 Move: End Turn
+[Game 6]: Turn: 3 Player: 2 Move: Step: 83 -> 71
+[Game 7]: Turn: 3 Player: 2 Move: Step: 25 -> 13
+[Game 4]: Turn: 3 Player: 1 Move: Step: 36 -> 47
+[Game 5]: Turn: 4 Player: 1 Move: End Turn
+[Game 9]: Turn: 4 Player: 1 Move: Step: 72 -> 60
+[Game 2]: Turn: 4 Player: 2 Move: Step: 40 -> 39
+[Game 1]: Turn: 4 Player: 1 Move: Step: 16 -> 6
+[Game 3]: Turn: 4 Player: 2 Move: Step: 61 -> 49
+[Game 7]: Turn: 4 Player: 2 Move: Research Fishing
+[Game 8]: Turn: 4 Player: 1 Move: Step: 79 -> 90
+[Game 6]: Turn: 4 Player: 2 Move: End Turn
+[Game 0]: Turn: 4 Player: 2 Move: Step: 86 -> 76
+[Game 4]: Turn: 4 Player: 1 Move: Step: 47 -> 37
+[Game 9]: Turn: 5 Player: 1 Move: Step: 76 -> 75
+[Game 6]: Turn: 6 Player: 1 Move: Step: 44 -> 55
+[Game 5]: Turn: 5 Player: 1 Move: Research Climbing
+[Game 1]: Turn: 5 Player: 1 Move: Step: 18 -> 29
+[Game 2]: Turn: 5 Player: 2 Move: Step: 29 -> 40
+[Game 7]: Turn: 5 Player: 2 Move: Step: 12 -> 11
+[Game 3]: Turn: 5 Player: 2 Move: Research Hunting
+[Game 4]: Turn: 5 Player: 1 Move: Step: 40 -> 29
+[Game 8]: Turn: 5 Player: 1 Move: Research Fishing
+[Game 0]: Turn: 5 Player: 2 Move: Step: 83 -> 73
+[Game 9]: Turn: 5 Player: 2 Move: Clear Forest at 40
+[Game 6]: Turn: 6 Player: 2 Move: Train Warrior at 84
+[Game 3]: Turn: 6 Player: 2 Move: End Turn
+[Game 2]: Turn: 6 Player: 2 Move: Step: 49 -> 59
+[Game 1]: Turn: 6 Player: 1 Move: Step: 17 -> 27
+[Game 4]: Turn: 6 Player: 1 Move: Train Warrior at 24
+[Game 5]: Turn: 6 Player: 1 Move: Step: 76 -> 64
+[Game 7]: Turn: 6 Player: 2 Move: Step: 13 -> 2
+[Game 8]: Turn: 6 Player: 1 Move: Step: 69 -> 59
+[Game 0]: Turn: 6 Player: 2 Move: Step: 73 -> 63
+[Game 6]: Turn: 7 Player: 1 Move: End Turn
+[Game 9]: Turn: 6 Player: 2 Move: Step: 41 -> 53
+[Game 2]: Turn: 7 Player: 2 Move: Research FreeSpirit
+[Game 5]: Turn: 7 Player: 1 Move: End Turn
+[Game 7]: Turn: 7 Player: 2 Move: Step: 23 -> 35
+[Game 1]: Turn: 7 Player: 1 Move: Step: 27 -> 17
+[Game 4]: Turn: 7 Player: 1 Move: Step: 24 -> 36
+[Game 3]: Turn: 7 Player: 2 Move: Step: 108 -> 97
+[Game 8]: Turn: 7 Player: 1 Move: Step: 66 -> 55
+[Game 0]: Turn: 7 Player: 2 Move: Step: 86 -> 75
+[Game 9]: Turn: 7 Player: 2 Move: Step: 7 -> 18
+[Game 2]: Turn: 8 Player: 2 Move: Step: 29 -> 17
+[Game 6]: Turn: 8 Player: 1 Move: Research FreeSpirit
+[Game 3]: Turn: 8 Player: 2 Move: Step: 29 -> 40
+[Game 4]: Turn: 8 Player: 1 Move: End Turn
+[Game 7]: Turn: 8 Player: 2 Move: Step: 25 -> 13
+[Game 5]: Turn: 8 Player: 1 Move: Build Road at 73
+[Game 1]: Turn: 8 Player: 1 Move: Step: 7 -> 17
+[Game 8]: Turn: 7 Player: 2 Move: End Turn
+[Game 0]: Turn: 8 Player: 2 Move: Step: 74 -> 75
+[Game 9]: Turn: 8 Player: 1 Move: Attack: 54 -> 53
+[Game 2]: Turn: 9 Player: 2 Move: Step: 17 -> 29
+[Game 4]: Turn: 9 Player: 1 Move: Step: 25 -> 24
+[Game 6]: Turn: 8 Player: 2 Move: Step: 73 -> 85
+[Game 7]: Turn: 9 Player: 2 Move: Step: 24 -> 23
+[Game 3]: Turn: 9 Player: 2 Move: Step: 92 -> 80
+[Game 1]: Turn: 9 Player: 1 Move: Research Riding
+[Game 5]: Turn: 9 Player: 1 Move: Step: 96 -> 84
+[Game 0]: Turn: 9 Player: 2 Move: Research FreeSpirit
+[Game 2]: Turn: 10 Player: 2 Move: Step: 3 -> 4
+[Game 8]: Turn: 8 Player: 2 Move: Research Philosophy
+[Game 2] Finished. Moves: 105 | Winner: 2 (Score: 2195) | Decisive: false
+[Game 9]: Turn: 9 Player: 1 Move: Step: 84 -> 85
+[Game 7]: Turn: 10 Player: 2 Move: Step: 3 -> 14
+[Game 6]: Turn: 9 Player: 2 Move: Research Farming
+[Game 3]: Turn: 10 Player: 2 Move: Research Meditation
+[Game 5]: Turn: 10 Player: 1 Move: Step: 84 -> 83
+[Game 7] Finished. Moves: 105 | Winner: 1 (Score: 1770) | Decisive: false
+[Game 4]: Turn: 10 Player: 1 Move: Step: 36 -> 25
+[Game 0]: Turn: 10 Player: 1 Move: Step: 23 -> 33
+[Game 1]: Turn: 10 Player: 1 Move: Step: 27 -> 38
+[Game 3] Finished. Moves: 106 | Winner: 2 (Score: 2275) | Decisive: false
+[Game 9]: Turn: 10 Player: 1 Move: Step: 120 -> 119
+[Game 4] Finished. Moves: 109 | Winner: 1 (Score: 1775) | Decisive: false
+[Game 5] Finished. Moves: 109 | Winner: 1 (Score: 2590) | Decisive: false
+[Game 8]: Turn: 9 Player: 2 Move: Step: 13 -> 12
+[Game 0] Finished. Moves: 108 | Winner: 2 (Score: 2085) | Decisive: false
+[Game 9] Finished. Moves: 117 | Winner: 1 (Score: 2150) | Decisive: false
+[Game 6]: Turn: 10 Player: 1 Move: Step: 16 -> 4
+[Game 1]: Turn: 10 Player: 2 Move: Step: 24 -> 23
+[Game 1] Finished. Moves: 114 | Winner: 2 (Score: 2180) | Decisive: false
+[Game 8]: Turn: 10 Player: 2 Move: Step: 11 -> 1
+[Game 8] Finished. Moves: 114 | Winner: 2 (Score: 2685) | Decisive: false
+[Game 6]: Turn: 10 Player: 2 Move: Step: 116 -> 104
+[Game 6] Finished. Moves: 122 | Winner: 1 (Score: 2390) | Decisive: false
+=== Self-Play Started ===
+Using device: Metal(MetalDevice(DeviceId(1))) (CANDLE_METAL_COMPUTE_PER_BUFFER=1000)
+Loading main model from model.safetensors
+No opponent specified. Playing against self.
+Model loading took: 0.01s
+Starting parallel self-play: 10 games with 64 MCTS iterations
+Starting game generation...
+Eval backend: tch (libtorch/MPS)
+Using 2 eval server shard(s), per-shard cache=Some(262144)
+Using 14 actor threads, max_batch=256, coalesce_timeout_us=1000, leaf_batch=None
+Game generation completed in: 12.75s (10 games)
+  Average: 1.28s per game
+  Throughput: 86.95 moves/sec (1109 moves over 12.75s)
+EVAL_SERVER_STATS: {"shard": "p1", "forwards": 651, "rows": 23822, "avg_batch": 36.59, "max_batch": 95, "busy_s": 11.83, "busy_frac": 0.928, "cache_hits": 3202, "cache_misses": 20620, "cache_hit_rate": 0.134}
+EVAL_SERVER_STATS: {"shard": "p1", "forwards": 655, "rows": 23574, "avg_batch": 35.99, "max_batch": 94, "busy_s": 11.82, "busy_frac": 0.926, "cache_hits": 3225, "cache_misses": 20349, "cache_hit_rate": 0.137}
+EVAL_SERVER_STATS_AGG: {"shards": 2, "forwards": 1306, "rows": 47396, "avg_batch": 36.29, "max_batch": 95, "busy_s": 23.65, "busy_frac": 1.854, "cache_hits": 6427, "cache_misses": 40969, "cache_hit_rate": 0.136}
+METRICS: {"avg_score": 2209.50, "max_score": 2685, "avg_moves": 110.90, "p1_avg": 1909.00, "p2_avg": 2061.00, "avg_captures": 0.30, "avg_harvests": 6.60, "avg_builds": 0.50, "avg_research": 14.60, "avg_attacks": 1.40}
+Saving 1109 steps...
+Spatial maps shape: [1109, 18634] (dim: 18634)
+Saved to games_1783184285.safetensors
+🏆 Highest score game (2685) saved to replays/high_scores/best_game_score_2685_1783184285.json
+Data saving took: 0.07s
+
+=== Self-Play Complete ===
+Total time: 12.86s
+Breakdown:
+  - Model loading: 0.01s (0.1%)
+  - Game generation: 12.75s (99.2%)
+  - Throughput: 86.95 moves/sec (1109 moves)
+  - Data saving: 0.07s (0.5%)
+[Training] Training model...
+Training on mps
+Training on 31 files (1 fresh, 30 archived).
+Loading existing model for fine-tuning...
+Epoch 1: Loading chunk 1/4 (10 files)...
+  Loaded 19352 samples.
+Epoch 1: Loading chunk 2/4 (10 files)...
+  Loaded 18926 samples.
+Epoch 1: Loading chunk 3/4 (10 files)...
+  Loaded 25744 samples.
+Epoch 1: Loading chunk 4/4 (1 files)...
+  Loaded 388 samples.
+Epoch 1/2 - Loss: 2.6322 (Policy: 2.4882, Value: 0.1440)
+Epoch 2: Loading chunk 1/4 (10 files)...
+  Loaded 18423 samples.
+Epoch 2: Loading chunk 2/4 (10 files)...
+  Loaded 22489 samples.
+Epoch 2: Loading chunk 3/4 (10 files)...
+  Loaded 20400 samples.
+Epoch 2: Loading chunk 4/4 (1 files)...
+  Loaded 3098 samples.
+Epoch 2/2 - Loss: 2.4198 (Policy: 2.3223, Value: 0.0974)
+METRICS: {"loss": 2.4198, "policy_loss": 2.3223, "value_loss": 0.0974}
+Saved model.safetensors (f16 quantized)
+Iteration 12 complete. Type: Self-Play | Avg: 2209.50 | Loss: 2.4198
+  -> STATS/GAME: Captures: 0.30 | Harvests: 6.60 | Builds: 0.50 | Tech: 14.60 | Attacks: 1.40
+==================================================
+Starting Iteration 13
+==================================================
+[Self-Play] Generative games... Tribes: Imperius vs Imperius
+[Game 0] Started with seed: 1783184329 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 5] Started with seed: 1783184334 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 2] Started with seed: 1783184331 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 3] Started with seed: 1783184332 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 4] Started with seed: 1783184333 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 7] Started with seed: 1783184336 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 6] Started with seed: 1783184335 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 1] Started with seed: 1783184330 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 8] Started with seed: 1783184337 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 9] Started with seed: 1783184338 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 7]: Turn: 0 Scores: [(1, 495), (2, 495)]
+[Game 1]: Turn: 0 Scores: [(1, 495), (2, 495)]
+[Game 2]: Turn: 0 Scores: [(1, 495), (2, 495)]
+[Game 8]: Turn: 0 Scores: [(1, 490), (2, 495)]
+[Game 4]: Turn: 0 Scores: [(1, 495), (2, 490)]
+[Game 0]: Turn: 0 Scores: [(1, 495), (2, 495)]
+[Game 3]: Turn: 0 Scores: [(1, 495), (2, 495)]
+[Game 9]: Turn: 0 Scores: [(1, 495), (2, 495)]
+[Game 5]: Turn: 0 Scores: [(1, 495), (2, 495)]
+[Game 6]: Turn: 0 Scores: [(1, 495), (2, 490)]
+[Game 6]: Turn: 1 Player: 1 Move: Step: 28 -> 29
+[Game 2]: Turn: 1 Player: 1 Move: Train Warrior at 84
+[Game 5]: Turn: 1 Player: 1 Move: Step: 39 -> 40
+[Game 0]: Turn: 1 Player: 1 Move: Step: 73 -> 84
+[Game 3]: Turn: 1 Player: 1 Move: Step: 78 -> 67
+[Game 8]: Turn: 1 Player: 1 Move: Step: 12 -> 24
+[Game 1]: Turn: 1 Player: 1 Move: Step: 30 -> 40
+[Game 9]: Turn: 1 Player: 1 Move: Step: 91 -> 90
+[Game 4]: Turn: 0 Player: 2 Move: Train Warrior at 24
+[Game 7]: Turn: 0 Player: 2 Move: Choose reward Workshop for city at 84
+[Game 4]: Turn: 2 Player: 1 Move: Step: 83 -> 82
+[Game 5]: Turn: 2 Player: 1 Move: Research Hunting
+[Game 7]: Turn: 2 Player: 1 Move: Step: 68 -> 57
+[Game 2]: Turn: 2 Player: 1 Move: Train Warrior at 84
+[Game 6]: Turn: 2 Player: 1 Move: End Turn
+[Game 1]: Turn: 2 Player: 1 Move: Train Warrior at 29
+[Game 8]: Turn: 2 Player: 2 Move: Step: 29 -> 39
+[Game 9]: Turn: 2 Player: 1 Move: Step: 90 -> 100
+[Game 3]: Turn: 2 Player: 1 Move: End Turn
+[Game 0]: Turn: 2 Player: 2 Move: Step: 57 -> 69
+[Game 4]: Turn: 3 Player: 1 Move: Step: 82 -> 92
+[Game 5]: Turn: 3 Player: 1 Move: Research Climbing
+[Game 1]: Turn: 3 Player: 1 Move: End Turn
+[Game 9]: Turn: 3 Player: 1 Move: Train Warrior at 79
+[Game 7]: Turn: 3 Player: 1 Move: End Turn
+[Game 2]: Turn: 3 Player: 1 Move: End Turn
+[Game 8]: Turn: 3 Player: 2 Move: End Turn
+[Game 6]: Turn: 3 Player: 2 Move: Step: 35 -> 34
+[Game 0]: Turn: 3 Player: 2 Move: Step: 67 -> 78
+[Game 3]: Turn: 3 Player: 2 Move: Train Warrior at 29
+[Game 4]: Turn: 4 Player: 1 Move: Step: 92 -> 102
+[Game 5]: Turn: 4 Player: 1 Move: End Turn
+[Game 9]: Turn: 4 Player: 2 Move: Step: 17 -> 16
+[Game 1]: Turn: 4 Player: 2 Move: Step: 70 -> 59
+[Game 7]: Turn: 4 Player: 2 Move: Research Climbing
+[Game 0]: Turn: 4 Player: 2 Move: End Turn
+[Game 2]: Turn: 4 Player: 2 Move: Research Fishing
+[Game 8]: Turn: 5 Player: 1 Move: Research Meditation
+[Game 3]: Turn: 4 Player: 2 Move: Train Warrior at 29
+[Game 6]: Turn: 5 Player: 1 Move: Train Warrior at 29
+[Game 4]: Turn: 5 Player: 1 Move: End Turn
+[Game 9]: Turn: 5 Player: 1 Move: End Turn
+[Game 1]: Turn: 5 Player: 2 Move: Step: 68 -> 56
+[Game 5]: Turn: 5 Player: 2 Move: Step: 82 -> 71
+[Game 6]: Turn: 6 Player: 1 Move: End Turn
+[Game 7]: Turn: 5 Player: 2 Move: Research Hunting
+[Game 2]: Turn: 5 Player: 2 Move: Step: 57 -> 68
+[Game 8]: Turn: 6 Player: 1 Move: Step: 25 -> 24
+[Game 0]: Turn: 6 Player: 1 Move: Research Fishing
+[Game 3]: Turn: 5 Player: 2 Move: Step: 29 -> 41
+[Game 4]: Turn: 6 Player: 2 Move: Step: 2 -> 12
+[Game 9]: Turn: 6 Player: 1 Move: End Turn
+[Game 5]: Turn: 6 Player: 2 Move: Step: 114 -> 104
+[Game 6]: Turn: 7 Player: 2 Move: Step: 34 -> 44
+[Game 1]: Turn: 6 Player: 1 Move: Step: 73 -> 62
+[Game 2]: Turn: 6 Player: 1 Move: Attack: 72 -> 61
+[Game 7]: Turn: 6 Player: 2 Move: Step: 97 -> 109
+[Game 0]: Turn: 7 Player: 1 Move: Step: 60 -> 48
+[Game 8]: Turn: 7 Player: 1 Move: Step: 47 -> 57
+[Game 3]: Turn: 6 Player: 2 Move: Research Riding
+[Game 4]: Turn: 7 Player: 2 Move: Step: 14 -> 13
+[Game 7]: Turn: 7 Player: 1 Move: End Turn
+[Game 5]: Turn: 7 Player: 2 Move: Step: 81 -> 80
+[Game 9]: Turn: 7 Player: 1 Move: End Turn
+[Game 6]: Turn: 8 Player: 2 Move: Step: 12 -> 23
+[Game 2]: Turn: 7 Player: 1 Move: Harvest Game at 85
+[Game 0]: Turn: 7 Player: 2 Move: End Turn
+[Game 1]: Turn: 7 Player: 1 Move: Step: 54 -> 65
+[Game 3]: Turn: 7 Player: 2 Move: Research Hunting
+[Game 8]: Turn: 7 Player: 2 Move: Research Strategy
+[Game 4]: Turn: 8 Player: 2 Move: Step: 14 -> 26
+[Game 7]: Turn: 8 Player: 1 Move: End Turn
+[Game 6]: Turn: 9 Player: 1 Move: Step: 21 -> 10
+[Game 5]: Turn: 8 Player: 2 Move: Research Archery
+[Game 2]: Turn: 8 Player: 1 Move: Attack: 59 -> 58
+[Game 9]: Turn: 8 Player: 1 Move: Step: 88 -> 77
+[Game 3]: Turn: 8 Player: 2 Move: Harvest Game at 28
+[Game 8]: Turn: 8 Player: 1 Move: End Turn
+[Game 0]: Turn: 8 Player: 2 Move: End Turn
+[Game 1]: Turn: 8 Player: 1 Move: Step: 74 -> 73
+[Game 6]: Turn: 10 Player: 1 Move: Build Road at 21
+[Game 4]: Turn: 9 Player: 2 Move: Step: 24 -> 35
+[Game 7]: Turn: 9 Player: 2 Move: Step: 84 -> 85
+[Game 5]: Turn: 9 Player: 2 Move: Research Chivalry
+[Game 2]: Turn: 9 Player: 1 Move: Step: 98 -> 109
+[Game 3]: Turn: 9 Player: 2 Move: Step: 29 -> 30
+[Game 6] Finished. Moves: 97 | Winner: 2 (Score: 2045) | Decisive: false
+[Game 1]: Turn: 9 Player: 1 Move: Step: 32 -> 42
+[Game 8]: Turn: 9 Player: 1 Move: Attack: 37 -> 38
+[Game 0]: Turn: 9 Player: 2 Move: Harvest Fish at 91
+[Game 9]: Turn: 9 Player: 1 Move: Step: 77 -> 88
+[Game 4]: Turn: 10 Player: 2 Move: End Turn
+[Game 4] Finished. Moves: 101 | Winner: 2 (Score: 1560) | Decisive: false
+[Game 5]: Turn: 10 Player: 1 Move: Choose reward CityWall for city at 29
+[Game 7]: Turn: 10 Player: 2 Move: Step: 85 -> 74
+[Game 0]: Turn: 10 Player: 2 Move: Research Hunting
+[Game 0] Finished. Moves: 102 | Winner: 1 (Score: 2125) | Decisive: false
+[Game 2]: Turn: 10 Player: 1 Move: Step: 109 -> 120
+[Game 7] Finished. Moves: 105 | Winner: 1 (Score: 2010) | Decisive: false
+[Game 8]: Turn: 10 Player: 1 Move: Research Hunting
+[Game 3]: Turn: 10 Player: 1 Move: Step: 56 -> 46
+[Game 1]: Turn: 9 Player: 2 Move: End Turn
+[Game 5] Finished. Moves: 109 | Winner: 2 (Score: 2240) | Decisive: false
+[Game 9]: Turn: 10 Player: 1 Move: Step: 88 -> 89
+[Game 8] Finished. Moves: 107 | Winner: 1 (Score: 2240) | Decisive: false
+[Game 2] Finished. Moves: 109 | Winner: 2 (Score: 1935) | Decisive: false
+[Game 3] Finished. Moves: 108 | Winner: 1 (Score: 1960) | Decisive: false
+[Game 1]: Turn: 10 Player: 2 Move: Step: 24 -> 12
+[Game 1] Finished. Moves: 113 | Winner: 2 (Score: 1895) | Decisive: false
+[Game 9]: Turn: 10 Player: 2 Move: Step: 17 -> 5
+[Game 9] Finished. Moves: 114 | Winner: 2 (Score: 1830) | Decisive: false
+=== Self-Play Started ===
+Using device: Metal(MetalDevice(DeviceId(1))) (CANDLE_METAL_COMPUTE_PER_BUFFER=1000)
+Loading main model from model.safetensors
+No opponent specified. Playing against self.
+Model loading took: 0.01s
+Starting parallel self-play: 10 games with 64 MCTS iterations
+Starting game generation...
+Eval backend: tch (libtorch/MPS)
+Using 2 eval server shard(s), per-shard cache=Some(262144)
+Using 14 actor threads, max_batch=256, coalesce_timeout_us=1000, leaf_batch=None
+Game generation completed in: 11.71s (10 games)
+  Average: 1.17s per game
+  Throughput: 90.93 moves/sec (1065 moves over 11.71s)
+EVAL_SERVER_STATS: {"shard": "p1", "forwards": 612, "rows": 22883, "avg_batch": 37.39, "max_batch": 95, "busy_s": 10.80, "busy_frac": 0.922, "cache_hits": 3237, "cache_misses": 19646, "cache_hit_rate": 0.141}
+EVAL_SERVER_STATS: {"shard": "p1", "forwards": 617, "rows": 22562, "avg_batch": 36.57, "max_batch": 93, "busy_s": 10.79, "busy_frac": 0.921, "cache_hits": 3130, "cache_misses": 19432, "cache_hit_rate": 0.139}
+EVAL_SERVER_STATS_AGG: {"shards": 2, "forwards": 1229, "rows": 45445, "avg_batch": 36.98, "max_batch": 95, "busy_s": 21.58, "busy_frac": 1.843, "cache_hits": 6367, "cache_misses": 39078, "cache_hit_rate": 0.140}
+METRICS: {"avg_score": 1984.00, "max_score": 2240, "avg_moves": 106.50, "p1_avg": 1820.00, "p2_avg": 1841.50, "avg_captures": 0.10, "avg_harvests": 6.50, "avg_builds": 1.00, "avg_research": 14.00, "avg_attacks": 1.30}
+Saving 1065 steps...
+Spatial maps shape: [1065, 18634] (dim: 18634)
+Saved to games_1783184341.safetensors
+🏆 Highest score game (2240) saved to replays/high_scores/best_game_score_2240_1783184341.json
+Data saving took: 0.08s
+
+=== Self-Play Complete ===
+Total time: 11.84s
+Breakdown:
+  - Model loading: 0.01s (0.1%)
+  - Game generation: 11.71s (99.0%)
+  - Throughput: 90.93 moves/sec (1065 moves)
+  - Data saving: 0.08s (0.7%)
+[Training] Training model...
+Training on mps
+Training on 31 files (1 fresh, 30 archived).
+Loading existing model for fine-tuning...
+Epoch 1: Loading chunk 1/4 (10 files)...
+  Loaded 22163 samples.
+Epoch 1: Loading chunk 2/4 (10 files)...
+  Loaded 20823 samples.
+Epoch 1: Loading chunk 3/4 (10 files)...
+  Loaded 17085 samples.
+Epoch 1: Loading chunk 4/4 (1 files)...
+  Loaded 3168 samples.
+Epoch 1/2 - Loss: 2.3400 (Policy: 2.2693, Value: 0.0708)
+Epoch 2: Loading chunk 1/4 (10 files)...
+  Loaded 19133 samples.
+Epoch 2: Loading chunk 2/4 (10 files)...
+  Loaded 20181 samples.
+Epoch 2: Loading chunk 3/4 (10 files)...
+  Loaded 22863 samples.
+Epoch 2: Loading chunk 4/4 (1 files)...
+  Loaded 1062 samples.
+Epoch 2/2 - Loss: 2.2170 (Policy: 2.1633, Value: 0.0537)
+METRICS: {"loss": 2.2170, "policy_loss": 2.1633, "value_loss": 0.0537}
+Saved model.safetensors (f16 quantized)
+Iteration 13 complete. Type: Self-Play | Avg: 1984.00 | Loss: 2.2170
+  -> STATS/GAME: Captures: 0.10 | Harvests: 6.50 | Builds: 1.00 | Tech: 14.00 | Attacks: 1.30
+==================================================
+Starting Iteration 14
+==================================================
+[Self-Play] Generative games... Tribes: Imperius vs Imperius
+[Game 0] Started with seed: 1783184383 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 9] Started with seed: 1783184392 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 6] Started with seed: 1783184389 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 3] Started with seed: 1783184386 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 1] Started with seed: 1783184384 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 4] Started with seed: 1783184387 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 5] Started with seed: 1783184388 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 8] Started with seed: 1783184391 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 7] Started with seed: 1783184390 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 2] Started with seed: 1783184385 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 8]: Turn: 0 Scores: [(1, 490), (2, 495)]
+[Game 4]: Turn: 0 Scores: [(1, 495), (2, 495)]
+[Game 5]: Turn: 0 Scores: [(1, 490), (2, 495)]
+[Game 7]: Turn: 0 Scores: [(1, 495), (2, 495)]
+[Game 9]: Turn: 0 Scores: [(1, 495), (2, 490)]
+[Game 6]: Turn: 0 Scores: [(1, 495), (2, 495)]
+[Game 3]: Turn: 0 Scores: [(1, 495), (2, 495)]
+[Game 1]: Turn: 0 Scores: [(1, 495), (2, 490)]
+[Game 2]: Turn: 0 Scores: [(1, 495), (2, 495)]
+[Game 0]: Turn: 0 Scores: [(1, 490), (2, 495)]
+[Game 8]: Turn: 1 Player: 1 Move: Step: 36 -> 24
+[Game 4]: Turn: 1 Player: 1 Move: Step: 85 -> 97
+[Game 5]: Turn: 1 Player: 1 Move: Step: 12 -> 13
+[Game 9]: Turn: 1 Player: 1 Move: Step: 30 -> 19
+[Game 1]: Turn: 1 Player: 1 Move: Step: 90 -> 102
+[Game 2]: Turn: 1 Player: 1 Move: Step: 28 -> 16
+[Game 3]: Turn: 1 Player: 1 Move: Step: 67 -> 68
+[Game 7]: Turn: 1 Player: 1 Move: Step: 68 -> 78
+[Game 6]: Turn: 1 Player: 1 Move: Step: 74 -> 85
+[Game 0]: Turn: 0 Player: 2 Move: End Turn
+[Game 3]: Turn: 2 Player: 1 Move: End Turn
+[Game 2]: Turn: 2 Player: 1 Move: End Turn
+[Game 4]: Turn: 2 Player: 1 Move: Train Warrior at 84
+[Game 1]: Turn: 2 Player: 1 Move: Train Warrior at 79
+[Game 5]: Turn: 2 Player: 1 Move: Step: 24 -> 35
+[Game 0]: Turn: 2 Player: 1 Move: Step: 12 -> 11
+[Game 7]: Turn: 2 Player: 1 Move: Train Defender at 79
+[Game 9]: Turn: 2 Player: 1 Move: Step: 29 -> 18
+[Game 6]: Turn: 2 Player: 1 Move: Step: 84 -> 85
+[Game 8]: Turn: 2 Player: 1 Move: End Turn
+[Game 3]: Turn: 3 Player: 2 Move: Research Riding
+[Game 1]: Turn: 3 Player: 1 Move: End Turn
+[Game 5]: Turn: 3 Player: 1 Move: Step: 23 -> 12
+[Game 4]: Turn: 3 Player: 1 Move: Step: 87 -> 98
+[Game 2]: Turn: 3 Player: 1 Move: End Turn
+[Game 7]: Turn: 3 Player: 1 Move: End Turn
+[Game 9]: Turn: 3 Player: 1 Move: Step: 18 -> 29
+[Game 0]: Turn: 3 Player: 2 Move: Step: 18 -> 28
+[Game 6]: Turn: 3 Player: 1 Move: Step: 85 -> 95
+[Game 8]: Turn: 3 Player: 2 Move: Research Riding
+[Game 9]: Turn: 4 Player: 1 Move: End Turn
+[Game 6]: Turn: 4 Player: 1 Move: Train Warrior at 84
+[Game 3]: Turn: 4 Player: 2 Move: Research Strategy
+[Game 1]: Turn: 4 Player: 2 Move: Step: 34 -> 33
+[Game 5]: Turn: 4 Player: 1 Move: Step: 34 -> 24
+[Game 0]: Turn: 4 Player: 2 Move: Train Warrior at 29
+[Game 2]: Turn: 4 Player: 2 Move: Step: 90 -> 79
+[Game 4]: Turn: 4 Player: 1 Move: Step: 98 -> 108
+[Game 7]: Turn: 4 Player: 2 Move: Research Strategy
+[Game 8]: Turn: 4 Player: 2 Move: End Turn
+[Game 0]: Turn: 5 Player: 2 Move: End Turn
+[Game 6]: Turn: 5 Player: 1 Move: Step: 106 -> 105
+[Game 3]: Turn: 5 Player: 1 Move: Attack: 59 -> 49
+[Game 4]: Turn: 5 Player: 1 Move: End Turn
+[Game 9]: Turn: 5 Player: 2 Move: Step: 48 -> 38
+[Game 5]: Turn: 5 Player: 1 Move: Step: 0 -> 12
+[Game 1]: Turn: 5 Player: 2 Move: Step: 12 -> 24
+[Game 7]: Turn: 5 Player: 2 Move: Step: 17 -> 29
+[Game 2]: Turn: 5 Player: 2 Move: Research Meditation
+[Game 8]: Turn: 6 Player: 1 Move: Research Riding
+[Game 5]: Turn: 5 Player: 2 Move: End Turn
+[Game 0]: Turn: 6 Player: 2 Move: End Turn
+[Game 9]: Turn: 6 Player: 2 Move: Step: 38 -> 48
+[Game 6]: Turn: 6 Player: 1 Move: Step: 105 -> 117
+[Game 3]: Turn: 6 Player: 1 Move: Recover at 49
+[Game 7]: Turn: 6 Player: 2 Move: Step: 8 -> 9
+[Game 4]: Turn: 6 Player: 1 Move: End Turn
+[Game 1]: Turn: 6 Player: 2 Move: Step: 22 -> 33
+[Game 2]: Turn: 6 Player: 1 Move: Research Archery
+[Game 8]: Turn: 7 Player: 1 Move: Train Rider at 24
+[Game 5]: Turn: 7 Player: 1 Move: Step: 24 -> 23
+[Game 3]: Turn: 7 Player: 1 Move: End Turn
+[Game 9]: Turn: 8 Player: 1 Move: Step: 8 -> 20
+[Game 1]: Turn: 7 Player: 2 Move: Step: 56 -> 45
+[Game 0]: Turn: 8 Player: 1 Move: Step: 15 -> 5
+[Game 6]: Turn: 7 Player: 1 Move: Step: 84 -> 95
+[Game 4]: Turn: 7 Player: 2 Move: Research Strategy
+[Game 7]: Turn: 7 Player: 2 Move: Step: 9 -> 8
+[Game 2]: Turn: 7 Player: 1 Move: Step: 39 -> 29
+[Game 8]: Turn: 8 Player: 1 Move: Step: 44 -> 33
+[Game 5]: Turn: 7 Player: 2 Move: Step: 79 -> 90
+[Game 3]: Turn: 8 Player: 1 Move: Attack: 39 -> 29
+[Game 9]: Turn: 9 Player: 1 Move: Step: 8 -> 18
+[Game 1]: Turn: 8 Player: 1 Move: End Turn
+[Game 6]: Turn: 8 Player: 1 Move: Step: 104 -> 92
+[Game 0]: Turn: 9 Player: 1 Move: Step: 11 -> 1
+[Game 7]: Turn: 8 Player: 2 Move: Step: 17 -> 29
+[Game 4]: Turn: 8 Player: 1 Move: End Turn
+[Game 2]: Turn: 8 Player: 1 Move: Step: 19 -> 31
+[Game 8]: Turn: 8 Player: 2 Move: Research Hunting
+[Game 9]: Turn: 10 Player: 1 Move: Train Warrior at 29
+[Game 5]: Turn: 8 Player: 1 Move: Train Warrior at 24
+[Game 3]: Turn: 9 Player: 1 Move: Step: 80 -> 92
+[Game 1]: Turn: 9 Player: 2 Move: Step: 33 -> 22
+[Game 8]: Turn: 9 Player: 1 Move: End Turn
+[Game 6]: Turn: 9 Player: 1 Move: Research Meditation
+[Game 0]: Turn: 10 Player: 1 Move: Step: 1 -> 11
+[Game 2]: Turn: 9 Player: 1 Move: Research Farming
+[Game 7]: Turn: 9 Player: 2 Move: Step: 29 -> 28
+[Game 4]: Turn: 9 Player: 1 Move: End Turn
+[Game 9] Finished. Moves: 98 | Winner: 1 (Score: 2365) | Decisive: false
+[Game 0] Finished. Moves: 99 | Winner: 2 (Score: 1525) | Decisive: false
+[Game 5]: Turn: 8 Player: 2 Move: Harvest Fish at 80
+[Game 3]: Turn: 10 Player: 1 Move: End Turn
+[Game 1]: Turn: 10 Player: 2 Move: Step: 46 -> 56
+[Game 7]: Turn: 10 Player: 2 Move: Step: 28 -> 29
+[Game 7] Finished. Moves: 102 | Winner: 1 (Score: 1635) | Decisive: false
+[Game 1] Finished. Moves: 104 | Winner: 1 (Score: 1920) | Decisive: false
+[Game 8]: Turn: 10 Player: 2 Move: Research Roads
+[Game 8] Finished. Moves: 105 | Winner: 2 (Score: 2280) | Decisive: false
+[Game 3] Finished. Moves: 106 | Winner: 2 (Score: 1755) | Decisive: false
+[Game 6]: Turn: 9 Player: 2 Move: Choose reward Resources for city at 79
+[Game 4]: Turn: 10 Player: 1 Move: Step: 105 -> 115
+[Game 2]: Turn: 9 Player: 2 Move: End Turn
+[Game 4] Finished. Moves: 108 | Winner: 2 (Score: 1835) | Decisive: false
+[Game 5]: Turn: 9 Player: 2 Move: Research Roads
+[Game 6]: Turn: 10 Player: 2 Move: Step: 44 -> 55
+[Game 6] Finished. Moves: 113 | Winner: 1 (Score: 1710) | Decisive: false
+[Game 2]: Turn: 10 Player: 2 Move: Step: 88 -> 78
+[Game 2] Finished. Moves: 115 | Winner: 2 (Score: 2490) | Decisive: false
+[Game 5]: Turn: 10 Player: 1 Move: End Turn
+[Game 5] Finished. Moves: 127 | Winner: 2 (Score: 2315) | Decisive: false
+=== Self-Play Started ===
+Using device: Metal(MetalDevice(DeviceId(1))) (CANDLE_METAL_COMPUTE_PER_BUFFER=1000)
+Loading main model from model.safetensors
+No opponent specified. Playing against self.
+Model loading took: 0.01s
+Starting parallel self-play: 10 games with 64 MCTS iterations
+Starting game generation...
+Eval backend: tch (libtorch/MPS)
+Using 2 eval server shard(s), per-shard cache=Some(262144)
+Using 14 actor threads, max_batch=256, coalesce_timeout_us=1000, leaf_batch=None
+Game generation completed in: 11.86s (10 games)
+  Average: 1.19s per game
+  Throughput: 90.80 moves/sec (1077 moves over 11.86s)
+EVAL_SERVER_STATS: {"shard": "p1", "forwards": 645, "rows": 23245, "avg_batch": 36.04, "max_batch": 93, "busy_s": 10.87, "busy_frac": 0.916, "cache_hits": 3784, "cache_misses": 19461, "cache_hit_rate": 0.163}
+EVAL_SERVER_STATS: {"shard": "p1", "forwards": 650, "rows": 22734, "avg_batch": 34.98, "max_batch": 88, "busy_s": 10.88, "busy_frac": 0.918, "cache_hits": 3597, "cache_misses": 19137, "cache_hit_rate": 0.158}
+EVAL_SERVER_STATS_AGG: {"shards": 2, "forwards": 1295, "rows": 45979, "avg_batch": 35.51, "max_batch": 93, "busy_s": 21.75, "busy_frac": 1.834, "cache_hits": 7381, "cache_misses": 38598, "cache_hit_rate": 0.161}
+METRICS: {"avg_score": 1983.00, "max_score": 2490, "avg_moves": 107.70, "p1_avg": 1844.50, "p2_avg": 1830.50, "avg_captures": 0.10, "avg_harvests": 6.30, "avg_builds": 0.90, "avg_research": 14.00, "avg_attacks": 1.30}
+Saving 1077 steps...
+Spatial maps shape: [1077, 18634] (dim: 18634)
+Saved to games_1783184395.safetensors
+🏆 Highest score game (2490) saved to replays/high_scores/best_game_score_2490_1783184395.json
+Data saving took: 0.08s
+
+=== Self-Play Complete ===
+Total time: 11.98s
+Breakdown:
+  - Model loading: 0.01s (0.1%)
+  - Game generation: 11.86s (99.0%)
+  - Throughput: 90.80 moves/sec (1077 moves)
+  - Data saving: 0.08s (0.6%)
+[Training] Training model...
+Training on mps
+Training on 31 files (1 fresh, 30 archived).
+Loading existing model for fine-tuning...
+Epoch 1: Loading chunk 1/4 (10 files)...
+  Loaded 22728 samples.
+Epoch 1: Loading chunk 2/4 (10 files)...
+  Loaded 19571 samples.
+Epoch 1: Loading chunk 3/4 (10 files)...
+  Loaded 21189 samples.
+Epoch 1: Loading chunk 4/4 (1 files)...
+  Loaded 396 samples.
+Epoch 1/2 - Loss: 2.1961 (Policy: 2.1479, Value: 0.0481)
+Epoch 2: Loading chunk 1/4 (10 files)...
+  Loaded 24572 samples.
+Epoch 2: Loading chunk 2/4 (10 files)...
+  Loaded 14340 samples.
+Epoch 2: Loading chunk 3/4 (10 files)...
+  Loaded 24618 samples.
+Epoch 2: Loading chunk 4/4 (1 files)...
+  Loaded 354 samples.
+Epoch 2/2 - Loss: 2.0867 (Policy: 2.0471, Value: 0.0396)
+METRICS: {"loss": 2.0867, "policy_loss": 2.0471, "value_loss": 0.0396}
+Saved model.safetensors (f16 quantized)
+Iteration 14 complete. Type: Self-Play | Avg: 1983.00 | Loss: 2.0867
+  -> STATS/GAME: Captures: 0.10 | Harvests: 6.30 | Builds: 0.90 | Tech: 14.00 | Attacks: 1.30
+==================================================
+Starting Iteration 15
+==================================================
+[Self-Play] Generative games... Tribes: Imperius vs Imperius
+[Game 0] Started with seed: 1783184445 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 1] Started with seed: 1783184446 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 2] Started with seed: 1783184447 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 4] Started with seed: 1783184449 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 6] Started with seed: 1783184451 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 5] Started with seed: 1783184450 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 9] Started with seed: 1783184454 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 7] Started with seed: 1783184452 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 4]: Turn: 0 Scores: [(1, 495), (2, 490)]
+[Game 8] Started with seed: 1783184453 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 6]: Turn: 0 Scores: [(1, 490), (2, 495)]
+[Game 5]: Turn: 0 Scores: [(1, 490), (2, 495)]
+[Game 3] Started with seed: 1783184448 Tribes: [Imperius, Imperius] (Curriculum: Tiny, max_turns: 10)
+[Game 0]: Turn: 0 Scores: [(1, 495), (2, 490)]
+[Game 9]: Turn: 0 Scores: [(1, 495), (2, 495)]
+[Game 1]: Turn: 0 Scores: [(1, 495), (2, 490)]
+[Game 2]: Turn: 0 Scores: [(1, 495), (2, 495)]
+[Game 8]: Turn: 0 Scores: [(1, 495), (2, 490)]
+[Game 7]: Turn: 0 Scores: [(1, 495), (2, 490)]
+[Game 3]: Turn: 0 Scores: [(1, 490), (2, 495)]
+[Game 5]: Turn: 1 Player: 1 Move: Step: 36 -> 48
+[Game 8]: Turn: 1 Player: 1 Move: Step: 18 -> 8
+[Game 1]: Turn: 1 Player: 1 Move: Step: 80 -> 81
+[Game 4]: Turn: 1 Player: 1 Move: Step: 19 -> 31
+[Game 6]: Turn: 1 Player: 1 Move: Step: 35 -> 24
+[Game 9]: Turn: 1 Player: 1 Move: Step: 83 -> 71
+[Game 7]: Turn: 1 Player: 1 Move: Train Warrior at 84
+[Game 0]: Turn: 0 Player: 2 Move: Train Warrior at 24
+[Game 3]: Turn: 0 Player: 2 Move: Harvest Fruit at 30
+[Game 2]: Turn: 0 Player: 2 Move: Choose reward Workshop for city at 84
+[Game 3]: Turn: 1 Player: 2 Move: End Turn
+[Game 2]: Turn: 2 Player: 1 Move: Step: 41 -> 30
+[Game 0]: Turn: 2 Player: 1 Move: Step: 84 -> 72
+[Game 7]: Turn: 2 Player: 1 Move: Train Warrior at 84
+[Game 4]: Turn: 2 Player: 1 Move: Train Warrior at 29
+[Game 5]: Turn: 2 Player: 1 Move: Step: 48 -> 47
+[Game 1]: Turn: 2 Player: 1 Move: Step: 81 -> 82
+[Game 6]: Turn: 2 Player: 1 Move: Step: 24 -> 23
+[Game 9]: Turn: 2 Player: 1 Move: Train Warrior at 84
+[Game 8]: Turn: 2 Player: 1 Move: Train Warrior at 29
+[Game 3]: Turn: 2 Player: 2 Move: Train Warrior at 29
+[Game 7]: Turn: 3 Player: 1 Move: End Turn
+[Game 2]: Turn: 3 Player: 1 Move: Step: 17 -> 16
+[Game 0]: Turn: 3 Player: 1 Move: Research Strategy
+[Game 6]: Turn: 3 Player: 1 Move: Research Riding
+[Game 5]: Turn: 3 Player: 1 Move: Step: 24 -> 13
+[Game 4]: Turn: 3 Player: 1 Move: Step: 43 -> 32
+[Game 1]: Turn: 3 Player: 2 Move: Research Hunting
+[Game 9]: Turn: 3 Player: 1 Move: End Turn
+[Game 8]: Turn: 3 Player: 2 Move: Step: 14 -> 4
+[Game 3]: Turn: 3 Player: 2 Move: Step: 17 -> 29
+[Game 0]: Turn: 4 Player: 1 Move: Step: 107 -> 96
+[Game 7]: Turn: 4 Player: 1 Move: End Turn
+[Game 5]: Turn: 4 Player: 1 Move: Step: 13 -> 25
+[Game 2]: Turn: 4 Player: 1 Move: Research Climbing
+[Game 6]: Turn: 4 Player: 1 Move: Train Warrior at 24
+[Game 4]: Turn: 4 Player: 1 Move: Train Warrior at 29
+[Game 8]: Turn: 4 Player: 2 Move: End Turn
+[Game 1]: Turn: 4 Player: 2 Move: Step: 37 -> 47
+[Game 9]: Turn: 4 Player: 2 Move: Research Climbing
+[Game 3]: Turn: 4 Player: 2 Move: Step: 3 -> 14
+[Game 0]: Turn: 5 Player: 1 Move: Research Farming
+[Game 5]: Turn: 4 Player: 2 Move: End Turn
+[Game 2]: Turn: 5 Player: 2 Move: Research Roads
+[Game 1]: Turn: 5 Player: 2 Move: End Turn
+[Game 7]: Turn: 5 Player: 1 Move: End Turn
+[Game 4]: Turn: 5 Player: 1 Move: Step: 40 -> 50
+[Game 8]: Turn: 5 Player: 2 Move: End Turn
+[Game 6]: Turn: 5 Player: 1 Move: Research FreeSpirit
+[Game 9]: Turn: 5 Player: 2 Move: Step: 17 -> 27
+[Game 3]: Turn: 5 Player: 2 Move: Research Climbing
+[Game 0]: Turn: 6 Player: 1 Move: Step: 105 -> 106
+[Game 7]: Turn: 6 Player: 2 Move: Step: 35 -> 24
+[Game 6]: Turn: 6 Player: 1 Move: Step: 14 -> 3
+[Game 2]: Turn: 6 Player: 2 Move: Step: 97 -> 86
+[Game 8]: Turn: 6 Player: 2 Move: End Turn
+[Game 1]: Turn: 7 Player: 1 Move: Step: 89 -> 79
+[Game 5]: Turn: 5 Player: 2 Move: Train Warrior at 84
+[Game 4]: Turn: 6 Player: 1 Move: Research Climbing
+[Game 9]: Turn: 6 Player: 2 Move: Step: 8 -> 19
+[Game 3]: Turn: 6 Player: 2 Move: Step: 39 -> 29
+[Game 0]: Turn: 7 Player: 1 Move: Research Riding
+[Game 6]: Turn: 6 Player: 2 Move: End Turn
+[Game 1]: Turn: 8 Player: 1 Move: Harvest Game at 78
+[Game 2]: Turn: 7 Player: 2 Move: End Turn
+[Game 5]: Turn: 6 Player: 2 Move: Step: 84 -> 72
+[Game 7]: Turn: 7 Player: 2 Move: Step: 2 -> 14
+[Game 8]: Turn: 7 Player: 2 Move: End Turn
+[Game 9]: Turn: 7 Player: 2 Move: Step: 3 -> 13
+[Game 4]: Turn: 6 Player: 2 Move: Step: 45 -> 33
+[Game 0]: Turn: 8 Player: 1 Move: Research Hunting
+[Game 3]: Turn: 7 Player: 2 Move: Step: 29 -> 30
+[Game 1]: Turn: 9 Player: 1 Move: Step: 107 -> 106
+[Game 6]: Turn: 8 Player: 1 Move: Step: 24 -> 13
+[Game 7]: Turn: 8 Player: 1 Move: End Turn
+[Game 8]: Turn: 8 Player: 2 Move: End Turn
+[Game 2]: Turn: 8 Player: 2 Move: End Turn
+[Game 5]: Turn: 7 Player: 2 Move: Step: 97 -> 85
+[Game 4]: Turn: 7 Player: 2 Move: Step: 37 -> 25
+[Game 9]: Turn: 8 Player: 2 Move: Step: 9 -> 8
+[Game 0]: Turn: 9 Player: 2 Move: Step: 12 -> 22
+[Game 3]: Turn: 8 Player: 2 Move: Step: 29 -> 39
+[Game 1]: Turn: 9 Player: 2 Move: End Turn
+[Game 6]: Turn: 8 Player: 2 Move: End Turn
+[Game 5]: Turn: 8 Player: 2 Move: Step: 83 -> 94
+[Game 7]: Turn: 9 Player: 1 Move: End Turn
+[Game 8]: Turn: 10 Player: 1 Move: Step: 19 -> 29
+[Game 2]: Turn: 10 Player: 1 Move: Step: 23 -> 34
+[Game 4]: Turn: 8 Player: 1 Move: End Turn
+[Game 9]: Turn: 9 Player: 1 Move: Train Defender at 84
+[Game 0]: Turn: 10 Player: 2 Move: Step: 70 -> 60
+[Game 8] Finished. Moves: 100 | Winner: 1 (Score: 2095) | Decisive: false
+[Game 0] Finished. Moves: 105 | Winner: 1 (Score: 1875) | Decisive: false
+[Game 2] Finished. Moves: 100 | Winner: 2 (Score: 1740) | Decisive: false
+[Game 1]: Turn: 10 Player: 2 Move: Step: 55 -> 66
+[Game 1] Finished. Moves: 105 | Winner: 1 (Score: 2195) | Decisive: false
+[Game 3]: Turn: 9 Player: 1 Move: Step: 4 -> 14
+[Game 7]: Turn: 10 Player: 2 Move: Step: 34 -> 35
+[Game 5]: Turn: 9 Player: 2 Move: Step: 72 -> 82
+[Game 6]: Turn: 9 Player: 2 Move: Step: 69 -> 79
+[Game 7] Finished. Moves: 105 | Winner: 2 (Score: 2005) | Decisive: false
+[Game 4]: Turn: 9 Player: 1 Move: Step: 83 -> 94
+[Game 9]: Turn: 10 Player: 1 Move: Step: 58 -> 48
+[Game 3]: Turn: 10 Player: 1 Move: Research Farming
+[Game 9] Finished. Moves: 109 | Winner: 1 (Score: 2185) | Decisive: false
+[Game 5]: Turn: 10 Player: 1 Move: Step: 56 -> 45
+[Game 6]: Turn: 10 Player: 2 Move: Step: 57 -> 68
+[Game 6] Finished. Moves: 113 | Winner: 2 (Score: 1875) | Decisive: false
+[Game 3]: Turn: 10 Player: 2 Move: Train Warrior at 29
+[Game 3] Finished. Moves: 122 | Winner: 1 (Score: 1755) | Decisive: false
+[Game 4]: Turn: 10 Player: 1 Move: Step: 40 -> 51
+[Game 5] Finished. Moves: 119 | Winner: 2 (Score: 2355) | Decisive: false
+[Game 4]: Turn: 10 Player: 2 Move: Step: 34 -> 35
+[Game 4] Finished. Moves: 124 | Winner: 2 (Score: 2060) | Decisive: false
+=== Self-Play Started ===
+Using device: Metal(MetalDevice(DeviceId(1))) (CANDLE_METAL_COMPUTE_PER_BUFFER=1000)
+Loading main model from model.safetensors
+No opponent specified. Playing against self.
+Model loading took: 0.00s
+Starting parallel self-play: 10 games with 64 MCTS iterations
+Starting game generation...
+Eval backend: tch (libtorch/MPS)
+Using 2 eval server shard(s), per-shard cache=Some(262144)
+Using 14 actor threads, max_batch=256, coalesce_timeout_us=1000, leaf_batch=None
+Game generation completed in: 11.92s (10 games)
+  Average: 1.19s per game
+  Throughput: 92.47 moves/sec (1102 moves over 11.92s)
+EVAL_SERVER_STATS: {"shard": "p1", "forwards": 659, "rows": 23185, "avg_batch": 35.18, "max_batch": 85, "busy_s": 10.90, "busy_frac": 0.915, "cache_hits": 2707, "cache_misses": 20478, "cache_hit_rate": 0.117}
+EVAL_SERVER_STATS: {"shard": "p1", "forwards": 660, "rows": 22911, "avg_batch": 34.71, "max_batch": 86, "busy_s": 10.92, "busy_frac": 0.916, "cache_hits": 2682, "cache_misses": 20229, "cache_hit_rate": 0.117}
+EVAL_SERVER_STATS_AGG: {"shards": 2, "forwards": 1319, "rows": 46096, "avg_batch": 34.95, "max_batch": 86, "busy_s": 21.82, "busy_frac": 1.830, "cache_hits": 5389, "cache_misses": 40707, "cache_hit_rate": 0.117}
+METRICS: {"avg_score": 2014.00, "max_score": 2355, "avg_moves": 110.20, "p1_avg": 1891.50, "p2_avg": 1871.50, "avg_captures": 0.20, "avg_harvests": 6.50, "avg_builds": 0.70, "avg_research": 14.50, "avg_attacks": 1.90}
+Saving 1102 steps...
+Spatial maps shape: [1102, 18634] (dim: 18634)
+Saved to games_1783184457.safetensors
+🏆 Highest score game (2355) saved to replays/high_scores/best_game_score_2355_1783184457.json
+Data saving took: 0.05s
+
+=== Self-Play Complete ===
+Total time: 12.01s
+Breakdown:
+  - Model loading: 0.00s (0.0%)
+  - Game generation: 11.92s (99.2%)
+  - Throughput: 92.47 moves/sec (1102 moves)
+  - Data saving: 0.05s (0.4%)
+[Training] Training model...
+Training on mps
+Training on 31 files (1 fresh, 30 archived).
+Loading existing model for fine-tuning...
+Epoch 1: Loading chunk 1/4 (10 files)...
+  Loaded 20829 samples.
+Epoch 1: Loading chunk 2/4 (10 files)...
+  Loaded 21458 samples.
+Epoch 1: Loading chunk 3/4 (10 files)...
+  Loaded 21144 samples.
+Epoch 1: Loading chunk 4/4 (1 files)...
+  Loaded 3052 samples.
+Epoch 1/2 - Loss: 2.1252 (Policy: 2.0778, Value: 0.0474)
+Epoch 2: Loading chunk 1/4 (10 files)...
+  Loaded 23511 samples.
+Epoch 2: Loading chunk 2/4 (10 files)...
+  Loaded 17852 samples.
+Epoch 2: Loading chunk 3/4 (10 files)...
+  Loaded 22140 samples.
+Epoch 2: Loading chunk 4/4 (1 files)...
+  Loaded 2980 samples.
+Epoch 2/2 - Loss: 2.0021 (Policy: 1.9651, Value: 0.0370)
+METRICS: {"loss": 2.0021, "policy_loss": 1.9651, "value_loss": 0.0370}
+Saved model.safetensors (f16 quantized)
+Iteration 15 complete. Type: Self-Play | Avg: 2014.00 | Loss: 2.0021
+  -> STATS/GAME: Captures: 0.20 | Harvests: 6.50 | Builds: 0.70 | Tech: 14.50 | Attacks: 1.90
