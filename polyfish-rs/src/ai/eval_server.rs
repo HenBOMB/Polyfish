@@ -39,6 +39,9 @@ pub type EvalResult = (f32, RawPolicyOutput);
 
 struct EvalRequest {
     features: Vec<RawFeatures>,
+    /// Cache keys for `features`, one per row so w're not doing it on the single eval thread.
+    // but across all actors.
+    hashes: Vec<u64>,
     respond_to: std_mpsc::Sender<Vec<EvalResult>>,
 }
 
@@ -56,8 +59,11 @@ impl EvalHandle {
     /// `result[i]` corresponds to `batch[i]`.
     pub fn evaluate(&self, batch: Vec<RawFeatures>) -> Vec<EvalResult> {
         let (tx, rx) = std_mpsc::channel();
+        // Hash on the caller (actor) thread, not the eval thread
+        let hashes: Vec<u64> = batch.iter().map(|f| f.hash()).collect();
         let request = EvalRequest {
             features: batch,
+            hashes,
             respond_to: tx,
         };
         if self.sender.send(request).is_err() {
@@ -373,8 +379,7 @@ fn evaluate_batch(
     let mut served_from_cache: u64 = 0;
 
     for req in &requests {
-        for feat in &req.features {
-            let hash = feat.hash();
+        for (feat, &hash) in req.features.iter().zip(req.hashes.iter()) {
             let hit = cache
                 .as_mut()
                 .and_then(|c| c.get(&hash).cloned());

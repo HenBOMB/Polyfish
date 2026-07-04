@@ -108,6 +108,15 @@ candle (integrated)	71.7ms
 tch (integrated)	15.2ms
 pure PyTorch/MPS	12.0ms
 Now we should have significantly more performance.
+
+Update: It was a massive success. This was the results on:
+./self_play --num-games 32 --mcts-iters 64 --actors 32 ==> 170 moves/sec
+which is a 6.5x speedup. Now we're in territory to do a lot of good work. Striving for +200.
+
+I'm now eval-bound. This is the best place to be but I'm looking to squeeze a bit more from my hardware.
+I tried --max-batch 512 --coalesce-timeout-us 2000 to do more per GPU hit but that didn't move the needle. 
+
+I moved up hash() calls since that's a CPU-bound task anyways out of the eval-server and it didn't make sense to blokck every GPU forward call on that. It can parallelize. This boosted my throughput to 195 moves/sec!
 --
 BUG FOUND (Jul 4, 2026): candle cross-attention runs with UNTRAINED weights.
 
