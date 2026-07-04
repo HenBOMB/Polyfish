@@ -116,6 +116,7 @@ fn test_build_undo() {
 
     // Setup: 10 stars, 1 city
     let city_idx = 0;
+    let tile_idx = 1;
     if let Some(tribe) = game.state.tribes.get_mut(&1) {
         tribe.stars = 10;
         let mut city = CityState::default();
@@ -124,24 +125,23 @@ fn test_build_undo() {
         tribe.cities.push(city);
     }
 
-    // Add tile
+    // Add city tile
+    let mut city_tile = polyfish::states::TileState::default();
+    city_tile.coords.idx = city_idx;
+    city_tile.owner = 1;
+    city_tile.ruling_city_coords = Some(Coords::from_index(city_idx, game.state.settings.size));
+    game.state.tiles.insert(city_idx, city_tile);
+
+    // Add road tile
     let mut tile = polyfish::states::TileState::default();
-    tile.coords.idx = city_idx;
+    tile.coords.idx = tile_idx;
     tile.owner = 1;
-    // Set ruling city
     tile.ruling_city_coords = Some(Coords::from_index(city_idx, game.state.settings.size));
-    game.state.tiles.insert(city_idx, tile);
+    game.state.tiles.insert(tile_idx, tile);
 
     assert_stars(&game, 10, "Initial");
 
-    // Build Road (Cost 2)
-    // Need Roads tech? Usually yes. Assume checked by move generator, but `execute` might check too.
-    // BuildMove checks `settings::structures::get_structure_setting`.
-    // It does not explicitly check checks "owning tech" inside execute, usually.
-    // Wait, create_structure checks? No.
-    // Assuming we can build if we ask.
-
-    let move_ = BuildMove::new(city_idx, StructureType::Road);
+    let move_ = BuildMove::new(tile_idx, StructureType::Road);
     let cost = 3; // Road cost is 3 in this codebase
 
     let undo = game.play_move(&move_).expect("Build Road failed");
@@ -149,8 +149,8 @@ fn test_build_undo() {
     assert_stars(&game, 10 - cost, "After Build");
 
     // Verify structure exists
-    if !game.state.structures.contains_key(&city_idx) {
-        panic!("Structure not built!");
+    if !game.state.tiles.get(&tile_idx).unwrap().has_road {
+        panic!("Road not built!");
     }
 
     undo(&mut game.state);
@@ -158,8 +158,8 @@ fn test_build_undo() {
     assert_stars(&game, 10, "After Undo");
 
     // Verify structure removed
-    if game.state.structures.contains_key(&city_idx) {
-        panic!("Structure not removed!");
+    if game.state.tiles.get(&tile_idx).unwrap().has_road {
+        panic!("Road not removed!");
     }
 }
 
