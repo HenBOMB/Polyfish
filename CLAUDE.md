@@ -44,9 +44,9 @@ cd polyfish-rs && ./local_setup.sh           # or remote_setup.sh on a GPU box
 
 **Full self-play + train loop** (the main training driver):
 ```bash
-cd polyfish-rs && ./run_training_loop.sh [-f force-train] [-b boost-threads] [-c chill] [-r reward-shaping] [-i iterations] [-g games-per-iter] [-n mcts-iters]
+cd polyfish-rs && ./run_training_loop.sh [-f force-train] [-b boost-threads] [-c chill] [-r reward-shaping] [-i iterations] [-g games-per-iter] [-n mcts-iters] [--reset]
 ```
-This loops: `init_model.py` → `self_play` (Rust, generates `games_*.safetensors`) → `train.py` (Python/PyTorch, updates `model.safetensors`) → log a CSV row → checkpoint every 50 iters into `checkpoints/` → archive consumed games. It also runs "league" matches against random historical checkpoints ~20% of the time. CUDA is opt-in via the `cuda`/`cudnn` Cargo features.
+This loops: `init_model.py` → `self_play` (Rust, generates `games_*.safetensors`) → `train.py` (Python/PyTorch, updates `model.safetensors`) → log a CSV row → checkpoint every 50 iters into `checkpoints/` → archive consumed games. It also runs "league" matches against random historical checkpoints ~20% of the time. CUDA is opt-in via the `cuda`/`cudnn` Cargo features. Pass `--reset` to delete `model.safetensors` and all self-play game data (`games_*.safetensors` in root and `archive/`) before starting, seeding a brand-new model from scratch; it forces a new run (overrides `--resume`) and leaves `checkpoints/`, `training_log.csv`, and `moves_by_turn.json` untouched.
 
 ## Architecture
 

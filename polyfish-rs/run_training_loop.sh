@@ -51,6 +51,7 @@ fi
 
 # Parse long options first, then short options via getopts
 RESUME_RUN=""
+RESET=false
 PASSTHROUGH=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -65,6 +66,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --new-run|-N)
       RESUME_RUN=""
+      shift
+      ;;
+    --reset)
+      RESET=true
       shift
       ;;
     *)
@@ -151,6 +156,17 @@ if [ "$FORCE_TRAIN" = true ]; then
     echo "Force training flag detected! Running training immediately..."
     echo "[Training] Training model..."
     .venv/bin/python3 train.py
+fi
+
+if [ "$RESET" = true ]; then
+    echo "🗑️  Reset flag detected! Deleting model.safetensors and self-play game data to seed a fresh model..."
+    rm -f model.safetensors
+    rm -f games_*.safetensors
+    rm -f archive/games_*.safetensors
+    if [ -n "$RESUME_RUN" ]; then
+        echo "   (ignoring --resume since --reset always starts a fresh run)"
+        RESUME_RUN=""
+    fi
 fi
 
 # Migrate legacy CSV and resolve run (new run by default; --resume to continue)

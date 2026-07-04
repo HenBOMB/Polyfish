@@ -33,3 +33,5 @@ decompiled/*
 games_*.safetensors
 
 model_backup_*.safetensors
+
+polyfish-rs/replays/high_scores/*
