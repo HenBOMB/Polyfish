@@ -214,12 +214,54 @@ pub struct GameFeatures {
     pub player_state: Tensor, // [1, P] - global player features
 }
 
+/// Device-free leaf features: owned `Vec<f32>`, safe to send across threads.
+///
+/// This is the pre-tensorization form of [`GameFeatures`]. Actors that
+/// evaluate leaves off the main network thread must produce `RawFeatures`
+/// instead of `GameFeatures` — building a device `Tensor` off the owning
+/// thread is unsound for the Metal backend (see `bug_handoff.md`).
+pub struct RawFeatures {
+    pub spatial: Vec<f32>, // len = NUM_CHANNELS * MAP_SIZE * MAP_SIZE
+    pub player: Vec<f32>,  // len = PLAYER_STATE_DIM (10)
+}
+
+impl RawFeatures {
+    pub const PLAYER_STATE_DIM: usize = 10;
+
+    pub fn spatial_len() -> usize {
+        NUM_CHANNELS * MAP_SIZE * MAP_SIZE
+    }
+
+    pub fn player_len() -> usize {
+        Self::PLAYER_STATE_DIM
+    }
+
+    /// Tensorize onto `device`, reproducing the exact shapes `state_to_tensor`
+    /// used to produce directly.
+    pub fn into_game_features(self, device: &Device) -> Result<GameFeatures> {
+        let spatial_map =
+            Tensor::from_vec(self.spatial, (1, NUM_CHANNELS, MAP_SIZE, MAP_SIZE), device)?;
+        let player_state = Tensor::from_vec(self.player, (1, Self::PLAYER_STATE_DIM), device)?;
+        Ok(GameFeatures {
+            spatial_map,
+            player_state,
+        })
+    }
+}
+
 /// Convert game state to tensor with decomposed player state
 pub fn state_to_tensor(
     state: &GameState,
     perspective: PlayerId,
     device: &Device,
 ) -> Result<GameFeatures> {
+    state_to_cpu_features(state, perspective)?.into_game_features(device)
+}
+
+/// CPU-only feature extraction: identical to `state_to_tensor` except it
+/// stops short of allocating device tensors, returning owned `Vec<f32>`
+/// instead. Safe to call from any thread.
+pub fn state_to_cpu_features(state: &GameState, perspective: PlayerId) -> Result<RawFeatures> {
     let mut data = vec![0.0f32; NUM_CHANNELS * MAP_SIZE * MAP_SIZE];
     let map_size = state.settings.size as usize;
 
@@ -585,9 +627,6 @@ pub fn state_to_tensor(
         }
     }
 
-    // Create spatial map tensor
-    let spatial_map = Tensor::from_vec(data, (1, NUM_CHANNELS, MAP_SIZE, MAP_SIZE), device)?;
-
     // Extract player state vector (10 features)
     let player_vec = vec![
         turn_norm,
@@ -601,11 +640,10 @@ pub fn state_to_tensor(
         tribe_casualties,
         attacked_this_turn,
     ];
-    let player_state = Tensor::from_vec(player_vec, (1, 10), device)?;
 
-    Ok(GameFeatures {
-        spatial_map,
-        player_state,
+    Ok(RawFeatures {
+        spatial: data,
+        player: player_vec,
     })
 }
 
@@ -629,6 +667,28 @@ fn set_feat(data: &mut Vec<f32>, channel: usize, x: usize, y: usize, val: f32) {
 mod tests {
     use super::*;
     use crate::game::Game;
+
+    #[test]
+    fn test_cpu_features_match_state_to_tensor() {
+        // Guards the state_to_tensor / state_to_cpu_features split: the two
+        // paths must produce element-for-element identical tensors.
+        let game = Game::default();
+        let device = Device::Cpu;
+
+        let direct = state_to_tensor(&game.state, 1, &device).unwrap();
+        let via_raw = state_to_cpu_features(&game.state, 1)
+            .unwrap()
+            .into_game_features(&device)
+            .unwrap();
+
+        let direct_spatial = direct.spatial_map.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let via_raw_spatial = via_raw.spatial_map.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert_eq!(direct_spatial, via_raw_spatial);
+
+        let direct_player = direct.player_state.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let via_raw_player = via_raw.player_state.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert_eq!(direct_player, via_raw_player);
+    }
 
     #[test]
     fn test_tensor_shape() {

@@ -383,7 +383,7 @@ impl<'a> ZeroMctsAgent<'a> {
 
         // Phase 1: Select leaves sequentially, using undo to restore game state
         for _ in 0..batch_size {
-            if let Some(leaf) = self.select_and_extract_leaf(root, game, turn_horizon, &device) {
+            if let Some(leaf) = self.select_and_extract_leaf(root, game, turn_horizon) {
                 leaves.push(leaf);
             } else {
                 break;
@@ -406,10 +406,21 @@ impl<'a> ZeroMctsAgent<'a> {
                 // Terminal node with known outcome
                 values[i] = terminal_val;
             } else if let Some(ref feat) = leaf.features {
-                // Non-terminal, needs NN evaluation
+                // Non-terminal, needs NN evaluation. Tensorize here (still on
+                // this single actor's own thread/device at this stage of the
+                // refactor); the eval-server step will move this onto the
+                // dedicated eval thread instead.
+                let spatial = Tensor::from_vec(
+                    feat.spatial.clone(),
+                    (1, features::NUM_CHANNELS, features::MAP_SIZE, features::MAP_SIZE),
+                    &device,
+                )
+                .expect("BUG: Failed to tensorize leaf spatial features");
+                let player = Tensor::from_vec(feat.player.clone(), (1, 10), &device)
+                    .expect("BUG: Failed to tensorize leaf player features");
                 indices_needing_eval.push(i);
-                spatial_list.push(feat.spatial_map.clone());
-                player_list.push(feat.player_state.clone());
+                spatial_list.push(spatial);
+                player_list.push(player);
             }
             // else: no features and no terminal value -> stays 0.0 (shouldn't happen)
         }
@@ -509,7 +520,6 @@ impl<'a> ZeroMctsAgent<'a> {
         root: &ZeroNode,
         game: &mut Game,
         turn_horizon: i32,
-        device: &candle_core::Device,
     ) -> Option<LeafData> {
         let mut indices_stack: Vec<usize> = Vec::new();
         let mut path_players: Vec<i32> = Vec::new();
@@ -620,13 +630,7 @@ impl<'a> ZeroMctsAgent<'a> {
         };
 
         // --- At the leaf: extract data before undoing ---
-        let leaf_data = extract_leaf_data(
-            game,
-            device,
-            indices_stack,
-            path_players,
-            needs_expansion,
-        );
+        let leaf_data = extract_leaf_data(game, indices_stack, path_players, needs_expansion);
 
         // --- Undo all moves back to root state ---
         while let Some(undo) = undos.pop() {

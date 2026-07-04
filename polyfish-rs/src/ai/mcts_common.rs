@@ -8,11 +8,10 @@
 //! diverge. That logic lives here exactly once, behind the `BackpropNode`
 //! trait, so both agents are guaranteed to use the same code path.
 
-use crate::ai::features::{GameFeatures, state_to_tensor};
+use crate::ai::features::{RawFeatures, state_to_cpu_features};
 use crate::game::Game;
 use crate::moves::Move;
 use crate::types::MoveType;
-use candle_core::Device;
 use std::cell::RefCell;
 
 /// Default virtual-loss amount applied during parallel leaf collection.
@@ -35,8 +34,8 @@ pub(crate) struct LeafData {
     /// `path_players[0]` is the root player, `path_players[i+1]` is the player
     /// after descending into `path_indices[i]`).
     pub path_players: Vec<i32>,
-    /// Feature tensors for NN evaluation (`None` if terminal / horizon-only).
-    pub features: Option<GameFeatures>,
+    /// Device-free features for NN evaluation (`None` if terminal / horizon-only).
+    pub features: Option<RawFeatures>,
     /// Legal moves at this leaf, wrapped in `RefCell` for interior mutability
     /// during `take()` in the batched-expansion phase.
     pub legal_moves: RefCell<Vec<Box<dyn Move>>>,
@@ -92,7 +91,6 @@ pub(crate) fn compute_terminal_outcome(game: &Game) -> f32 {
 /// Undoing the simulated moves remains the caller's responsibility.
 pub(crate) fn extract_leaf_data(
     game: &Game,
-    device: &Device,
     indices_stack: Vec<usize>,
     path_players: Vec<i32>,
     needs_expansion: bool,
@@ -112,12 +110,8 @@ pub(crate) fn extract_leaf_data(
     }
 
     if needs_expansion {
-        let feat = state_to_tensor(
-            &game.state,
-            game.state.settings.current_player_turn_id,
-            device,
-        )
-        .expect("BUG: Failed to create features at MCTS leaf");
+        let feat = state_to_cpu_features(&game.state, game.state.settings.current_player_turn_id)
+            .expect("BUG: Failed to create features at MCTS leaf");
 
         let mut legal_moves = game.legal_moves();
         // In batched expansion we always allow EndTurn (allow_end_turn=true),
@@ -140,12 +134,7 @@ pub(crate) fn extract_leaf_data(
     }
 
     // Horizon: evaluate with NN but do not expand.
-    let feat = state_to_tensor(
-        &game.state,
-        game.state.settings.current_player_turn_id,
-        device,
-    )
-    .ok();
+    let feat = state_to_cpu_features(&game.state, game.state.settings.current_player_turn_id).ok();
 
     LeafData {
         path_indices: indices_stack,
