@@ -98,10 +98,20 @@
     .status-led.active { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
     #moveTurnGrid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-      gap: 0.5rem;
+      grid-template-columns: repeat(auto-fit, minmax(480px, 1fr));
+      gap: 1rem;
     }
-    .turn-mini { height: 120px; }
+    .turn-mini { height: 320px; }
+    .turn-legend-caption { font-size: 0.8rem; color: var(--muted); margin: 0.25rem 0 0.5rem; }
+    .turn-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.25rem 0.9rem;
+      margin-bottom: 0.75rem;
+      font-size: 0.8rem;
+    }
+    .turn-legend-item { display: flex; align-items: center; gap: 0.35rem; }
+    .turn-legend-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
     a { color: var(--accent); }
   </style>
 </head>
@@ -136,6 +146,8 @@
         <button id="downloadGrid">Download 2×2 progress PNG</button>
       </div>
       <h2 style="margin-top:1.5rem">Moves by turn</h2>
+      <p class="turn-legend-caption">Each mini-chart is one training iteration. Bars are turns within a sampled game; stacked colors show how many moves of each type happened that turn (bar height = total moves).</p>
+      <div id="moveTurnLegend" class="turn-legend"></div>
       <div id="moveTurnGrid"></div>
     </section>
 
@@ -321,17 +333,39 @@ function renderPanelA() {
   renderMoveTurnGrid();
 }
 
+function moveTypeColor(type, allTypes) {
+  const i = allTypes.indexOf(type);
+  return `hsl(${(i * 47) % 360}, 60%, 55%)`;
+}
+
 function renderMoveTurnGrid() {
   const grid = document.getElementById('moveTurnGrid');
+  const legend = document.getElementById('moveTurnLegend');
   grid.innerHTML = '';
+  legend.innerHTML = '';
   const keys = Object.keys(movesByTurn).map(Number).sort((a, b) => a - b);
   const sample = keys.length <= 10 ? keys : keys.filter((_, i) => i % Math.ceil(keys.length / 10) === 0);
+
+  // Collect move types across all sampled iterations so a type always maps to the same color/legend entry.
+  const allTypes = [];
+  sample.forEach(iter => {
+    const turnData = movesByTurn[String(iter)] || {};
+    Object.keys(turnData).forEach(t => Object.keys(turnData[t] || {}).forEach(k => {
+      if (!allTypes.includes(k)) allTypes.push(k);
+    }));
+  });
+  allTypes.forEach(tp => {
+    const item = document.createElement('span');
+    item.className = 'turn-legend-item';
+    item.innerHTML = `<span class="turn-legend-swatch" style="background:${moveTypeColor(tp, allTypes)}"></span>${tp}`;
+    legend.appendChild(item);
+  });
+
   sample.forEach(iter => {
     const div = document.createElement('div');
     div.className = 'chart-box';
     const title = document.createElement('h3');
     title.textContent = `Iter ${iter}`;
-    title.style.fontSize = '0.8rem';
     div.appendChild(title);
     const wrap = document.createElement('div');
     wrap.className = 'turn-mini';
@@ -344,10 +378,10 @@ function renderMoveTurnGrid() {
     const types = new Set();
     turns.forEach(t => Object.keys(turnData[String(t)] || {}).forEach(k => types.add(k)));
     const typeList = [...types];
-    const datasets = typeList.map((tp, i) => ({
+    const datasets = typeList.map(tp => ({
       label: tp,
       data: turns.map(t => (turnData[String(t)] || {})[tp] || 0),
-      backgroundColor: `hsl(${(i * 47) % 360}, 60%, 55%)`,
+      backgroundColor: moveTypeColor(tp, allTypes),
     }));
     new Chart(canvas, {
       type: 'bar',
@@ -355,8 +389,14 @@ function renderMoveTurnGrid() {
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: { x: { stacked: true, ticks: { color: '#8b9cb3', maxRotation: 0, font: { size: 9 } } }, y: { stacked: true, display: false } },
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { title: items => `Turn ${items[0].label}` } },
+        },
+        scales: {
+          x: { stacked: true, title: { display: true, text: 'Turn #', color: '#8b9cb3', font: { size: 11 } }, ticks: { color: '#8b9cb3', maxRotation: 0, font: { size: 11 } } },
+          y: { stacked: true, display: false },
+        },
       },
     });
   });
