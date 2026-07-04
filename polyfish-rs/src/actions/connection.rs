@@ -169,7 +169,8 @@ pub fn update_capital_connections(state: &mut GameState, tribe_id: i32) -> UndoC
     // We need to borrow tribe mutably again.
     // BUFFER updates to avoid borrow conflict
     let mut city_pop_changes: Vec<(i32, i32)> = Vec::new();
-    let mut updates = Vec::new(); // city_idx (in array or tile_idx?)
+    // (city tile idx, flag value before the flip) — for undo
+    let mut updates: Vec<(i32, bool)> = Vec::new();
 
     if let Some(tribe) = state.tribes.get_mut(&tribe_id) {
         for (_idx, city) in tribe.cities.iter_mut().enumerate() {
@@ -181,13 +182,13 @@ pub fn update_capital_connections(state: &mut GameState, tribe_id: i32) -> UndoC
             if is_connected_now && !city.connected_to_capital {
                 city.connected_to_capital = true;
                 city_pop_changes.push((city.idx, 1));
-                updates.push(city.idx);
+                updates.push((city.idx, false));
                 capital_pop_gain += 1;
             } else if !is_connected_now && city.connected_to_capital {
                 // Connection lost
                 city.connected_to_capital = false;
                 city_pop_changes.push((city.idx, -1));
-                updates.push(city.idx);
+                updates.push((city.idx, true));
                 capital_pop_gain -= 1;
             }
         }
@@ -216,24 +217,13 @@ pub fn update_capital_connections(state: &mut GameState, tribe_id: i32) -> UndoC
         }
     }
 
-    // Note: Undo for `connected_to_capital` flag is needed.
-    // add_population undo handles pop. But flag undo is manual.
-    // We didn't change the flag in `match tribe...` above?
-    // Wait, line 125: `city.connected_to_capital = true;`. Yes we did.
-    // We need to undo that.
-
-    let _changed_cities: Vec<i32> = connected_cities.into_iter().collect();
-    // Actually we only changed those in `updates`.
-
-    // Correct logic: we used `updates` to track those who FLIPPED from false to true.
-    // We need to store that list for undo.
-    let flipped_cities = updates.clone(); // indices (tile_idx)
-
+    // Restore each flipped city's flag to its pre-update value
+    // (add_population undos handle the population side).
     undos.push(Box::new(move |s| {
         if let Some(t) = s.tribes.get_mut(&tribe_id) {
             for c in t.cities.iter_mut() {
-                if flipped_cities.contains(&c.idx) {
-                    c.connected_to_capital = false;
+                if let Some(&(_, old_flag)) = updates.iter().find(|(idx, _)| *idx == c.idx) {
+                    c.connected_to_capital = old_flag;
                 }
             }
         }

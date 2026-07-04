@@ -16,8 +16,11 @@ use crate::states::GameState;
 pub fn add_population(state: &mut GameState, city_tile_idx: i32, amount: i32) -> UndoCallback {
     let pov_id = state.settings.current_player_turn_id;
 
-    // Find the city
-    let (city_idx, old_city) = {
+    // Find the city. Capture only the fields this function mutates — a
+    // whole-struct clone would clobber sibling undos (e.g. the
+    // connected_to_capital restore in update_capital_connections) when
+    // chained in the same move.
+    let (city_idx, old_population, old_progress, old_level, old_production) = {
         let tribe = match state.tribes.get(&pov_id) {
             Some(t) => t,
             None => return Box::new(|_| {}),
@@ -28,7 +31,7 @@ pub fn add_population(state: &mut GameState, city_tile_idx: i32, amount: i32) ->
             .enumerate()
             .find(|(_, c)| c.idx == city_tile_idx)
         {
-            Some((idx, c)) => (idx, c.clone()),
+            Some((idx, c)) => (idx, c.population, c.progress, c.level, c.production),
             None => return Box::new(|_| {}),
         }
     };
@@ -95,11 +98,14 @@ pub fn add_population(state: &mut GameState, city_tile_idx: i32, amount: i32) ->
         }
     }
 
-    // Restore city state on undo
+    // Restore city state on undo (only the fields mutated above)
     undos.push(Box::new(move |s: &mut GameState| {
         if let Some(tribe) = s.tribes.get_mut(&pov_id) {
             if let Some(city) = tribe.cities.get_mut(city_idx) {
-                *city = old_city;
+                city.population = old_population;
+                city.progress = old_progress;
+                city.level = old_level;
+                city.production = old_production;
             }
         }
     }));
