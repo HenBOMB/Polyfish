@@ -393,7 +393,7 @@ fn main() -> anyhow::Result<()> {
         iteration: usize,
 
         /// Search backend to use for MCTS.
-        #[arg(long, value_enum, default_value_t = SearchBackendArg::Zero)]
+        #[arg(long, value_enum, default_value_t = SearchBackendArg::Gumbel)]
         search_backend: SearchBackendArg,
 
         /// Gumbel: number of initial top-k candidates sampled at the root.
