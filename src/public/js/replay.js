@@ -10,6 +10,7 @@ let REPLAY_INITIAL_STATE = null; // Snapshot of turn 0
 
 // Track current simulation state relative to replay
 let REPLAY_CURRENT_GAME_STATE = null;
+let REPLAY_REQUEST_SEQ = 0; // guards against out-of-order /replay/analyze responses
 
 async function openReplayMenu() {
     // For now, just prompt for a filename or list them
@@ -102,7 +103,11 @@ async function jumpToStep(index) {
     REPLAY_STEP_INDEX = index;
     updateReplayControls();
 
-    showToast(`Seeking to step ${index}...`);
+    // Rapid next/prev clicks can fire overlapping requests that resolve out
+    // of order; a stale response landing last would freeze the Turn/stat
+    // display on an old step even though REPLAY_STEP_INDEX has moved on. Only
+    // apply the response if this is still the most recent request in flight.
+    const requestSeq = ++REPLAY_REQUEST_SEQ;
 
     try {
         const res = await fetch('/replay/analyze', {
@@ -115,6 +120,8 @@ async function jumpToStep(index) {
             })
         });
         const data = await res.json();
+
+        if (requestSeq !== REPLAY_REQUEST_SEQ) return; // superseded by a newer step
 
         if (data.error) {
             showToast("Error: " + data.error);
