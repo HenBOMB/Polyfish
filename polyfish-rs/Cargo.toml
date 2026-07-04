@@ -41,6 +41,12 @@ pretty_assertions = "1.4"
 lto = "fat"
 codegen-units = 1
 
+[profile.profiling]
+inherits = "release"
+lto = false
+codegen-units = 16
+debug = true
+
 [[test]]
 name = "stats"
 harness = false
