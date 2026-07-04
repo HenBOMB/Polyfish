@@ -1,10 +1,12 @@
 use candle_core::Device;
 use candle_nn::VarMap;
+use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
 use polyfish::ai::mcts_zero::ZeroMctsAgent;
 use polyfish::ai::network::PolyZeroNet;
 use polyfish::game::Game;
 use polyfish::mapgen::{generate, MapGenSettings};
 use polyfish::types::{MapSize, MapType, TribeType, MoveType};
+use std::sync::Arc;
 
 /// Test that value signs are preserved for same-player moves
 /// and only flipped when crossing EndTurn boundaries
@@ -13,7 +15,8 @@ fn test_value_sign_flipping_on_player_change() {
     let device = Device::Cpu;
     let varmap = VarMap::new();
     let vs = candle_nn::VarBuilder::from_varmap(&varmap, candle_core::DType::F32, &device);
-    let network = PolyZeroNet::new(vs).unwrap();
+    let network = Arc::new(PolyZeroNet::new(vs).unwrap());
+    let evaluator = Evaluator::Inline(InlineEvalHandle::new(network.clone()));
 
     let mut game = Game::new();
     let gen_settings = MapGenSettings {
@@ -29,7 +32,7 @@ fn test_value_sign_flipping_on_player_change() {
     let initial_player = game.state.settings.current_player_turn_id;
 
     // Run MCTS to build a tree
-    let agent = ZeroMctsAgent::new(&network, 50);
+    let agent = ZeroMctsAgent::new(&evaluator, 50);
     let _best_move = agent.select_move(&mut game);
 
     // The game state should be unchanged after search (undo mechanism)
@@ -50,7 +53,8 @@ fn test_terminal_state_values() {
     let device = Device::Cpu;
     let varmap = VarMap::new();
     let vs = candle_nn::VarBuilder::from_varmap(&varmap, candle_core::DType::F32, &device);
-    let network = PolyZeroNet::new(vs).unwrap();
+    let network = Arc::new(PolyZeroNet::new(vs).unwrap());
+    let evaluator = Evaluator::Inline(InlineEvalHandle::new(network.clone()));
 
     let mut game = Game::new();
     let gen_settings = MapGenSettings {
@@ -77,7 +81,7 @@ fn test_terminal_state_values() {
     let current_player = game.state.settings.current_player_turn_id;
 
     // Even with game over, MCTS should handle it gracefully
-    let agent = ZeroMctsAgent::new(&network, 10);
+    let agent = ZeroMctsAgent::new(&evaluator, 10);
     let best_move = agent.select_move(&mut game);
 
     // MCTS should still be able to select some move, even in terminal states
@@ -176,7 +180,8 @@ fn test_mcts_stability_with_player_tracking() {
     let device = Device::Cpu;
     let varmap = VarMap::new();
     let vs = candle_nn::VarBuilder::from_varmap(&varmap, candle_core::DType::F32, &device);
-    let network = PolyZeroNet::new(vs).unwrap();
+    let network = Arc::new(PolyZeroNet::new(vs).unwrap());
+    let evaluator = Evaluator::Inline(InlineEvalHandle::new(network.clone()));
 
     let mut game = Game::new();
     let gen_settings = MapGenSettings {
@@ -191,7 +196,7 @@ fn test_mcts_stability_with_player_tracking() {
 
     // Run MCTS with various iteration counts
     for iterations in [10, 50, 100] {
-        let agent = ZeroMctsAgent::new(&network, iterations);
+        let agent = ZeroMctsAgent::new(&evaluator, iterations);
         let best_move = agent.select_move(&mut game);
 
         assert!(

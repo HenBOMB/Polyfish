@@ -1,10 +1,12 @@
 use candle_core::Device;
 use candle_nn::VarMap;
+use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
 use polyfish::ai::gumbel_mcts::GumbelMctsAgent;
 use polyfish::ai::network::PolyZeroNet;
 use polyfish::game::Game;
 use polyfish::mapgen::{generate, MapGenSettings};
 use polyfish::types::{MapSize, MapType, TribeType};
+use std::sync::Arc;
 
 fn make_game(seed: i64) -> Game {
     let mut game = Game::new();
@@ -20,19 +22,24 @@ fn make_game(seed: i64) -> Game {
     game
 }
 
-fn make_network() -> PolyZeroNet {
+fn make_network() -> Arc<PolyZeroNet> {
     let device = Device::Cpu;
     let varmap = VarMap::new();
     let vs = candle_nn::VarBuilder::from_varmap(&varmap, candle_core::DType::F32, &device);
-    PolyZeroNet::new(vs).unwrap()
+    Arc::new(PolyZeroNet::new(vs).unwrap())
+}
+
+fn make_evaluator(network: &Arc<PolyZeroNet>) -> Evaluator {
+    Evaluator::Inline(InlineEvalHandle::new(network.clone()))
 }
 
 #[test]
 fn test_gumbel_mcts_basic() {
     let network = make_network();
+    let evaluator = make_evaluator(&network);
     let mut game = make_game(42);
 
-    let agent = GumbelMctsAgent::new(&network, 40, 4);
+    let agent = GumbelMctsAgent::new(&evaluator, 40, 4);
 
     let best_move = agent.select_move(&mut game);
     assert!(best_move.is_some(), "Gumbel MCTS failed to select a move");
@@ -42,10 +49,11 @@ fn test_gumbel_mcts_basic() {
 #[test]
 fn test_gumbel_mcts_sequential_halving() {
     let network = make_network();
+    let evaluator = make_evaluator(&network);
     let mut game = make_game(123);
 
     // k=8 -> at least 3 halving rounds (log2(8)=3).
-    let agent = GumbelMctsAgent::new(&network, 64, 8);
+    let agent = GumbelMctsAgent::new(&evaluator, 64, 8);
 
     let best_move = agent.select_move(&mut game);
     assert!(best_move.is_some());
@@ -59,6 +67,7 @@ fn test_gumbel_policy_target_covers_full_legal_set() {
     use polyfish::moves::EndTurnMove;
 
     let network = make_network();
+    let evaluator = make_evaluator(&network);
     let mut game = make_game(7);
 
     // Fast-forward past the opening book (it covers turns 0-1 only), so the
@@ -101,7 +110,7 @@ fn test_gumbel_policy_target_covers_full_legal_set() {
         expected_count
     );
 
-    let agent = GumbelMctsAgent::new(&network, 32, 4);
+    let agent = GumbelMctsAgent::new(&evaluator, 32, 4);
     let (_best_move, move_visits) = agent.select_move_with_decomposed_visits(&mut game, 0);
 
     assert_eq!(
@@ -129,6 +138,7 @@ fn test_gumbel_multi_step_game_loop_no_panic() {
     use polyfish::moves::EndTurnMove;
 
     let network = make_network();
+    let evaluator = make_evaluator(&network);
     let mut game = make_game(2024);
 
     // Advance past the opening book so the search path is exercised.
@@ -139,7 +149,7 @@ fn test_gumbel_multi_step_game_loop_no_panic() {
         let _ = game.play_move(&EndTurnMove);
     }
 
-    let agent = GumbelMctsAgent::new(&network, 16, 4);
+    let agent = GumbelMctsAgent::new(&evaluator, 16, 4);
 
     for step in 0..4 {
         if polyfish::functions::is_game_over(&game.state) {

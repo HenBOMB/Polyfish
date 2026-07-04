@@ -285,7 +285,9 @@ async fn auto_step(
     // 1. Try to get AI move from trained model if available
     if let Some(net) = &state.network {
         use polyfish::ai::brain::Brain;
-        let brain = Brain::new(net, params.iterations);
+        use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
+        let evaluator = Evaluator::Inline(InlineEvalHandle::new(net.clone()));
+        let brain = Brain::new(&evaluator, params.iterations);
         game.state._messages.clear();
         let (chosen_move, brain_policy) = brain.think_with_stats(&mut game);
         policy = brain_policy.into();
@@ -806,7 +808,9 @@ async fn get_trainer_hint(
     let (best_move, mcts_analysis) = if let Some(net) = &state.network {
         // 1. Use Neural Network (Gumbel MCTS) if available
         use polyfish::ai::brain::Brain;
-        let brain = Brain::new(net, params.iterations);
+        use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
+        let evaluator = Evaluator::Inline(InlineEvalHandle::new(net.clone()));
+        let brain = Brain::new(&evaluator, params.iterations);
         let (bm, _stats) = brain.think_with_stats(&mut game);
         // Brain currently returns stats as Vec<f32>, convert to simpler MCTS analysis or similar
         // For visual consistency, we actually prefer the full analysis from heuristic agent
@@ -1563,8 +1567,10 @@ async fn analyze_replay_step(
 
     // 4. Now game is at the state just before the user played history[step_index]
     // Run MCTS analysis
+    use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
     use polyfish::ai::mcts_zero::ZeroMctsAgent;
-    let agent = ZeroMctsAgent::new(state.network.as_ref().unwrap(), params.iterations);
+    let evaluator = Evaluator::Inline(InlineEvalHandle::new(state.network.as_ref().unwrap().clone()));
+    let agent = ZeroMctsAgent::new(&evaluator, params.iterations);
     let (best_move, mcts_analysis) = agent.select_move_with_stats(&mut game);
 
     let ai_move_json = best_move.as_ref().map(|m| m.serialize());

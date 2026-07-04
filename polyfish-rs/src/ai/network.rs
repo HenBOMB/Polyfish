@@ -320,3 +320,42 @@ pub struct PolicyOutput {
 pub struct ValueOutput {
     pub win_value: Tensor, // [B, 1]
 }
+
+/// Device-free policy output for a single leaf: one row of each decomposed
+/// head, as plain `Vec<f32>`. Safe to send across threads (unlike
+/// [`PolicyOutput`], which holds device `Tensor`s).
+///
+/// Produced by reading a whole batched [`PolicyOutput`] to CPU once (see
+/// [`PolicyOutput::to_raw_rows`]) and slicing by row — never by per-leaf
+/// `Tensor::get`, which is a device op and must stay off actor threads.
+#[derive(Debug, Clone)]
+pub struct RawPolicyOutput {
+    pub action_type: Vec<f32>,
+    pub source_spatial: Vec<f32>,
+    pub target_spatial: Vec<f32>,
+    pub move_option: Vec<f32>,
+}
+
+impl PolicyOutput {
+    /// Read this batched policy output to CPU and split it into one
+    /// [`RawPolicyOutput`] per row (leaf). Call once per batch — the
+    /// `to_vec1`/`to_vec2` reads are the only device ops involved.
+    pub fn to_raw_rows(&self) -> Result<Vec<RawPolicyOutput>> {
+        let action_type = self.action_type.to_vec2::<f32>()?;
+        let source_spatial = self.source_spatial.to_vec2::<f32>()?;
+        let target_spatial = self.target_spatial.to_vec2::<f32>()?;
+        let move_option = self.move_option.to_vec2::<f32>()?;
+
+        let batch = action_type.len();
+        let mut rows = Vec::with_capacity(batch);
+        for i in 0..batch {
+            rows.push(RawPolicyOutput {
+                action_type: action_type[i].clone(),
+                source_spatial: source_spatial[i].clone(),
+                target_spatial: target_spatial[i].clone(),
+                move_option: move_option[i].clone(),
+            });
+        }
+        Ok(rows)
+    }
+}

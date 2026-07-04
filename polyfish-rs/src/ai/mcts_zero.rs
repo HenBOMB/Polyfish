@@ -1,20 +1,20 @@
 use crate::ai::brain::max_turns_ahead;
-use crate::ai::features::{self, state_to_tensor};
+use crate::ai::eval_server::Evaluator;
+use crate::ai::features::{self, RawFeatures};
 use crate::ai::mcts_common::{
     BackpropNode, LeafData, TreeNode, backpropagate_and_remove_virtual_loss, extract_leaf_data,
     get_node_by_path, get_node_by_path_mut,
 };
-use crate::ai::network::{PolicyOutput, PolyZeroNet};
+use crate::ai::network::RawPolicyOutput;
 use crate::game::Game;
 use crate::moves::EndTurnMove;
 use crate::moves::Move;
 use crate::types::MoveType;
-use candle_core::Tensor;
 
 use std::cell::RefCell;
 
 pub struct ZeroMctsAgent<'a> {
-    pub network: &'a PolyZeroNet,
+    pub evaluator: &'a Evaluator,
     pub iterations: usize,
     pub c_puct: f32,
     pub batch_size: usize,
@@ -119,9 +119,9 @@ impl BackpropNode for ZeroNode {
 }
 
 impl<'a> ZeroMctsAgent<'a> {
-    pub fn new(network: &'a PolyZeroNet, iterations: usize) -> Self {
+    pub fn new(evaluator: &'a Evaluator, iterations: usize) -> Self {
         Self {
-            network,
+            evaluator,
             iterations,
             c_puct: 1.0,
             batch_size: 24,
@@ -377,7 +377,6 @@ impl<'a> ZeroMctsAgent<'a> {
         batch_size: usize,
         start_turn: i32,
     ) {
-        let device = self.network.device();
         let turn_horizon = start_turn + max_turns_ahead(start_turn, game.state.settings.max_turns);
         let mut leaves: Vec<LeafData> = Vec::with_capacity(batch_size);
 
@@ -396,8 +395,7 @@ impl<'a> ZeroMctsAgent<'a> {
 
         // Phase 2: Batched NN evaluation for leaves that need expansion
         let mut indices_needing_eval: Vec<usize> = Vec::new();
-        let mut spatial_list = Vec::new();
-        let mut player_list = Vec::new();
+        let mut eval_batch: Vec<RawFeatures> = Vec::new();
 
         // Initialize values: use terminal values where available
         let mut values = vec![0.0f32; leaves.len()];
@@ -406,98 +404,33 @@ impl<'a> ZeroMctsAgent<'a> {
                 // Terminal node with known outcome
                 values[i] = terminal_val;
             } else if let Some(ref feat) = leaf.features {
-                // Non-terminal, needs NN evaluation. Tensorize here (still on
-                // this single actor's own thread/device at this stage of the
-                // refactor); the eval-server step will move this onto the
-                // dedicated eval thread instead.
-                let spatial = Tensor::from_vec(
-                    feat.spatial.clone(),
-                    (1, features::NUM_CHANNELS, features::MAP_SIZE, features::MAP_SIZE),
-                    &device,
-                )
-                .expect("BUG: Failed to tensorize leaf spatial features");
-                let player = Tensor::from_vec(feat.player.clone(), (1, 10), &device)
-                    .expect("BUG: Failed to tensorize leaf player features");
+                // Non-terminal, needs NN evaluation.
                 indices_needing_eval.push(i);
-                spatial_list.push(spatial);
-                player_list.push(player);
+                eval_batch.push(RawFeatures {
+                    spatial: feat.spatial.clone(),
+                    player: feat.player.clone(),
+                });
             }
             // else: no features and no terminal value -> stays 0.0 (shouldn't happen)
         }
 
         if !indices_needing_eval.is_empty() {
-            // Stack tensors
-            if let (Ok(batch_spatial), Ok(batch_player)) =
-                (Tensor::cat(&spatial_list, 0), Tensor::cat(&player_list, 0))
-            {
-                let batch_spatial = batch_spatial
-                    .reshape((
-                        indices_needing_eval.len(),
-                        features::NUM_CHANNELS,
-                        features::MAP_SIZE,
-                        features::MAP_SIZE,
-                    ))
-                    .unwrap();
-                let batch_player = batch_player
-                    .reshape((indices_needing_eval.len(), 10))
-                    .unwrap();
+            let results = self.evaluator.evaluate(eval_batch);
 
-                // Run NN inference
-                if let Ok((policy_out, value_out)) =
-                    self.network.forward_t(&batch_spatial, &batch_player, false)
-                {
-                    let win_values = value_out
-                        .win_value
-                        .flatten_all()
-                        .unwrap()
-                        .to_vec1::<f32>()
-                        .unwrap();
+            for (local_idx, &global_idx) in indices_needing_eval.iter().enumerate() {
+                let (value, ref policy_row) = results[local_idx];
+                values[global_idx] = value;
 
-                    for (local_idx, &global_idx) in indices_needing_eval.iter().enumerate() {
-                        values[global_idx] = win_values[local_idx];
-
-                        // Slice policy for this leaf
-                        let slice_policy = PolicyOutput {
-                            action_type: policy_out
-                                .action_type
-                                .get(local_idx)
-                                .unwrap()
-                                .unsqueeze(0)
-                                .unwrap(),
-                            source_spatial: policy_out
-                                .source_spatial
-                                .get(local_idx)
-                                .unwrap()
-                                .unsqueeze(0)
-                                .unwrap(),
-                            target_spatial: policy_out
-                                .target_spatial
-                                .get(local_idx)
-                                .unwrap()
-                                .unsqueeze(0)
-                                .unwrap(),
-                            move_option: policy_out
-                                .move_option
-                                .get(local_idx)
-                                .unwrap()
-                                .unsqueeze(0)
-                                .unwrap(),
-                        };
-
-                        // Expand node using pre-computed data
-                        let leaf = &leaves[global_idx];
-                        let node = get_node_by_path_mut(root, &leaf.path_indices).unwrap();
-                        self.expand_node_from_precomputed(
-                            node,
-                            leaf.legal_moves.take(),
-                            leaf.map_size,
-                            true,
-                            &slice_policy,
-                        );
-                    }
-                }
-            } else {
-                panic!("BUG: Failed to stack tensors for MCTS batch");
+                // Expand node using pre-computed data
+                let leaf = &leaves[global_idx];
+                let node = get_node_by_path_mut(root, &leaf.path_indices).unwrap();
+                self.expand_node_from_precomputed(
+                    node,
+                    leaf.legal_moves.take(),
+                    leaf.map_size,
+                    true,
+                    policy_row,
+                );
             }
         }
 
@@ -641,21 +574,17 @@ impl<'a> ZeroMctsAgent<'a> {
     }
 
     fn expand_node_single(&self, node: &mut ZeroNode, game: &Game, allow_end_turn: bool) {
-        let device = self.network.device();
-        let features = state_to_tensor(
+        let features = features::state_to_cpu_features(
             &game.state,
             game.state.settings.current_player_turn_id,
-            &device,
         )
         .expect("BUG: Failed to create features in MCTS expand_node");
 
-        let (policy_output, _value_output) = self
-            .network
-            .forward_t(&features.spatial_map, &features.player_state, false)
-            .expect("BUG: Network forward pass failed in MCTS");
+        let results = self.evaluator.evaluate(vec![features]);
+        let (_value, ref policy_row) = results[0];
 
         // Expand
-        self.expand_node_from_network_output(node, game, allow_end_turn, &policy_output);
+        self.expand_node_from_network_output(node, game, allow_end_turn, policy_row);
     }
 
     fn expand_node_from_network_output(
@@ -663,7 +592,7 @@ impl<'a> ZeroMctsAgent<'a> {
         node: &mut ZeroNode,
         game: &Game,
         allow_end_turn: bool,
-        policy: &PolicyOutput,
+        policy: &RawPolicyOutput,
     ) {
         if node.is_expanded {
             return;
@@ -698,7 +627,7 @@ impl<'a> ZeroMctsAgent<'a> {
         legal_moves: Vec<Box<dyn Move>>,
         map_size: usize,
         allow_end_turn: bool,
-        policy: &PolicyOutput,
+        policy: &RawPolicyOutput,
     ) {
         if node.is_expanded {
             return;
@@ -709,7 +638,7 @@ impl<'a> ZeroMctsAgent<'a> {
             return;
         }
 
-        let priors = crate::ai::policy_composer::compute_move_priors(
+        let priors = crate::ai::policy_composer::compute_move_priors_raw(
             policy,
             &legal_moves,
             map_size,

@@ -1,9 +1,11 @@
 use candle_core::Device;
 use candle_nn::VarBuilder;
+use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
 use polyfish::ai::mcts_zero::ZeroMctsAgent;
 use polyfish::ai::network::PolyZeroNet;
 use polyfish::game::Game;
 use polyfish::types::{MoveType, TribeType};
+use std::sync::Arc;
 
 #[test]
 fn test_reproduce_summon_panic() {
@@ -54,8 +56,9 @@ fn test_reproduce_summon_panic() {
 
     // Now try MCTS
     let vs = VarBuilder::zeros(candle_core::DType::F32, &Device::Cpu);
-    let network = PolyZeroNet::new(vs).unwrap();
-    let agent = ZeroMctsAgent::new(&network, 10);
+    let network = Arc::new(PolyZeroNet::new(vs).unwrap());
+    let evaluator = Evaluator::Inline(InlineEvalHandle::new(network));
+    let agent = ZeroMctsAgent::new(&evaluator, 10);
 
     // This should not panic
     println!("Running MCTS...");

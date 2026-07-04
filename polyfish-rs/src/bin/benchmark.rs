@@ -5,11 +5,13 @@
 use candle_core::{DType, Device};
 use candle_nn::VarBuilder;
 use polyfish::TribeType;
+use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
 use polyfish::ai::features::state_to_tensor;
 use polyfish::ai::mcts_zero::ZeroMctsAgent;
 use polyfish::ai::network::PolyZeroNet;
 use polyfish::game::Game;
 use polyfish::types::{MapSize, MapType, ModeType};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 fn main() -> anyhow::Result<()> {
@@ -20,7 +22,8 @@ fn main() -> anyhow::Result<()> {
         .or_else(|_| Device::cuda_if_available(0))
         .unwrap_or(Device::Cpu);
     println!("Using device: {:?}\n", device);
-    let network = PolyZeroNet::new(VarBuilder::zeros(DType::F32, &device))?;
+    let network = Arc::new(PolyZeroNet::new(VarBuilder::zeros(DType::F32, &device))?);
+    let evaluator = Evaluator::Inline(InlineEvalHandle::new(network.clone()));
 
     // Configuration
     let num_games = 1;
@@ -62,7 +65,7 @@ fn main() -> anyhow::Result<()> {
         game.state.settings.max_turns = max_turns;
         game.post_load();
 
-        let agent = ZeroMctsAgent::new(&network, mcts_iterations);
+        let agent = ZeroMctsAgent::new(&evaluator, mcts_iterations);
         let mut turn = 0;
 
         while !game.state.settings._game_over && turn < max_turns * 10 {

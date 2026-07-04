@@ -1,5 +1,6 @@
 pub mod book;
 pub mod brain;
+pub mod eval_server;
 pub mod evaluator;
 pub mod features;
 pub mod gumbel_mcts;

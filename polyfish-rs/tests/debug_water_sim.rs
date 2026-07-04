@@ -1,7 +1,9 @@
+use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
 use polyfish::ai::mcts_zero::ZeroMctsAgent;
 use polyfish::ai::network::PolyZeroNet;
 use polyfish::game::Game;
 use polyfish::types::{MapSize, MapType, TechnologyType, TribeType};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn main() -> anyhow::Result<()> {
@@ -85,9 +87,10 @@ fn main() -> anyhow::Result<()> {
     use candle_nn::VarBuilder;
     let device = Device::Cpu;
     let vb = VarBuilder::zeros(DType::F32, &device);
-    let network = PolyZeroNet::new(vb)?; // 30x30 max size assumed in network anyway
+    let network = Arc::new(PolyZeroNet::new(vb)?); // 30x30 max size assumed in network anyway
+    let evaluator = Evaluator::Inline(InlineEvalHandle::new(network));
 
-    let agent = ZeroMctsAgent::new(&network, mcts_iters);
+    let agent = ZeroMctsAgent::new(&evaluator, mcts_iters);
 
     let mut turn = 0;
     while !polyfish::functions::is_game_over(&game.state) && turn < 1000 {

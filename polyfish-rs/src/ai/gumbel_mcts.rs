@@ -24,24 +24,24 @@
 //!     shared with the AlphaZero agent via `mcts_common`.
 
 use crate::ai::brain::max_turns_ahead;
-use crate::ai::features::{self, state_to_tensor};
+use crate::ai::eval_server::Evaluator;
+use crate::ai::features::{self, RawFeatures};
 use crate::ai::gumbel_qtransform::{self, sequence_of_considered_visits, softmax};
 use crate::ai::mcts_common::{
     self, BackpropNode, LeafData, TreeNode, backpropagate_and_remove_virtual_loss,
     extract_leaf_data, get_node_by_path, get_node_by_path_mut,
 };
-use crate::ai::network::{PolicyOutput, PolyZeroNet};
+use crate::ai::network::RawPolicyOutput;
 use crate::ai::policy_composer;
 use crate::game::Game;
 use crate::moves::{EndTurnMove, Move};
 use crate::types::MoveType;
-use candle_core::Tensor;
 use rand::distributions::Distribution;
 use rand_distr::Gumbel;
 use std::cell::RefCell;
 
 pub struct GumbelMctsAgent<'a> {
-    pub network: &'a PolyZeroNet,
+    pub evaluator: &'a Evaluator,
     pub iterations: usize,
     /// Number of root actions to sample into the Sequential-Halving candidate
     /// set (the "top-k" Gumbel cut). The actual candidate count is
@@ -119,9 +119,9 @@ impl BackpropNode for GumbelNode {
 }
 
 impl<'a> GumbelMctsAgent<'a> {
-    pub fn new(network: &'a PolyZeroNet, iterations: usize, k: usize) -> Self {
+    pub fn new(evaluator: &'a Evaluator, iterations: usize, k: usize) -> Self {
         Self {
-            network,
+            evaluator,
             iterations,
             k,
             batch_size: mcts_common::DEFAULT_BATCH_SIZE,
@@ -134,24 +134,14 @@ impl<'a> GumbelMctsAgent<'a> {
     /// Halving. Returns the fully-populated root.
     fn search_and_extract(&self, game: &mut Game) -> GumbelNode {
         let start_turn = game.state.settings.turn;
-        let device = self.network.device();
 
-        let features = state_to_tensor(
+        let features = features::state_to_cpu_features(
             &game.state,
             game.state.settings.current_player_turn_id,
-            &device,
         )
         .expect("BUG: Failed to create features at Gumbel root");
-        let (policy_out, value_out) = self
-            .network
-            .forward_t(&features.spatial_map, &features.player_state, false)
-            .expect("BUG: Network forward pass failed at Gumbel root");
-        let root_value = value_out
-            .win_value
-            .flatten_all()
-            .expect("BUG: flatten win_value")
-            .to_vec1::<f32>()
-            .expect("BUG: win_value to vec1")[0];
+        let results = self.evaluator.evaluate(vec![features]);
+        let (root_value, ref policy_row) = results[0];
 
         let mut legal_moves = game.legal_moves();
         let map_size = game.state.settings.size as usize;
@@ -173,7 +163,7 @@ impl<'a> GumbelMctsAgent<'a> {
             legal_moves.retain(|m| m.move_type() != MoveType::EndTurn);
         }
 
-        let logits = policy_composer::compute_move_log_probs(&policy_out, &legal_moves, map_size);
+        let logits = policy_composer::compute_move_log_probs_raw(policy_row, &legal_moves, map_size);
 
         // Build root.children = the full legal set, each with a fresh Gumbel draw.
         let mut rng = rand::thread_rng();
@@ -475,102 +465,41 @@ impl<'a> GumbelMctsAgent<'a> {
         root: &mut GumbelNode,
         leaves: &[LeafData],
     ) -> Vec<f32> {
-        let device = self.network.device();
         let mut values = vec![0.0f32; leaves.len()];
         let mut indices_needing_eval: Vec<usize> = Vec::new();
-        let mut spatial_list = Vec::new();
-        let mut player_list = Vec::new();
+        let mut eval_batch: Vec<RawFeatures> = Vec::new();
 
         for (i, leaf) in leaves.iter().enumerate() {
             if let Some(tv) = leaf.terminal_value {
                 values[i] = tv;
             } else if let Some(ref feat) = leaf.features {
-                // Tensorize here (still on this single actor's own
-                // thread/device at this stage of the refactor); the
-                // eval-server step will move this onto the dedicated eval
-                // thread instead.
-                let spatial = Tensor::from_vec(
-                    feat.spatial.clone(),
-                    (1, features::NUM_CHANNELS, features::MAP_SIZE, features::MAP_SIZE),
-                    &device,
-                )
-                .expect("BUG: Failed to tensorize leaf spatial features");
-                let player = Tensor::from_vec(feat.player.clone(), (1, 10), &device)
-                    .expect("BUG: Failed to tensorize leaf player features");
                 indices_needing_eval.push(i);
-                spatial_list.push(spatial);
-                player_list.push(player);
+                eval_batch.push(RawFeatures {
+                    spatial: feat.spatial.clone(),
+                    player: feat.player.clone(),
+                });
             }
         }
 
         if !indices_needing_eval.is_empty() {
-            if let (Ok(batch_spatial), Ok(batch_player)) =
-                (Tensor::cat(&spatial_list, 0), Tensor::cat(&player_list, 0))
-            {
-                let n = indices_needing_eval.len();
-                let b_s = batch_spatial
-                    .reshape((
-                        n,
-                        features::NUM_CHANNELS,
-                        features::MAP_SIZE,
-                        features::MAP_SIZE,
-                    ))
-                    .expect("BUG: reshape spatial batch");
-                let b_p = batch_player
-                    .reshape((n, 10))
-                    .expect("BUG: reshape player batch");
+            let results = self.evaluator.evaluate(eval_batch);
 
-                if let Ok((policy_out, value_out)) = self.network.forward_t(&b_s, &b_p, false) {
-                    let win_values = value_out
-                        .win_value
-                        .flatten_all()
-                        .expect("BUG: flatten win_value")
-                        .to_vec1::<f32>()
-                        .expect("BUG: win_value to vec1");
+            for (local_idx, &global_idx) in indices_needing_eval.iter().enumerate() {
+                let (value, ref policy_row) = results[local_idx];
+                values[global_idx] = value;
 
-                    for (local_idx, &global_idx) in indices_needing_eval.iter().enumerate() {
-                        values[global_idx] = win_values[local_idx];
+                let leaf = &leaves[global_idx];
+                let node = get_node_by_path_mut(root, &leaf.path_indices)
+                    .expect("BUG: leaf path not found in tree");
 
-                        let leaf = &leaves[global_idx];
-                        let node = get_node_by_path_mut(root, &leaf.path_indices)
-                            .expect("BUG: leaf path not found in tree");
-                        let slice_policy = PolicyOutput {
-                            action_type: policy_out
-                                .action_type
-                                .get(local_idx)
-                                .expect("BUG: slice action_type")
-                                .unsqueeze(0)
-                                .expect("BUG: unsqueeze action_type"),
-                            source_spatial: policy_out
-                                .source_spatial
-                                .get(local_idx)
-                                .expect("BUG: slice source_spatial")
-                                .unsqueeze(0)
-                                .expect("BUG: unsqueeze source_spatial"),
-                            target_spatial: policy_out
-                                .target_spatial
-                                .get(local_idx)
-                                .expect("BUG: slice target_spatial")
-                                .unsqueeze(0)
-                                .expect("BUG: unsqueeze target_spatial"),
-                            move_option: policy_out
-                                .move_option
-                                .get(local_idx)
-                                .expect("BUG: slice move_option")
-                                .unsqueeze(0)
-                                .expect("BUG: unsqueeze move_option"),
-                        };
-
-                        let legal_moves = leaf.legal_moves.take();
-                        self.expand_gumbel_node_from_precomputed(
-                            node,
-                            legal_moves,
-                            leaf.map_size,
-                            &slice_policy,
-                            win_values[local_idx],
-                        );
-                    }
-                }
+                let legal_moves = leaf.legal_moves.take();
+                self.expand_gumbel_node_from_precomputed(
+                    node,
+                    legal_moves,
+                    leaf.map_size,
+                    policy_row,
+                    value,
+                );
             }
         }
 
@@ -585,7 +514,7 @@ impl<'a> GumbelMctsAgent<'a> {
         node: &mut GumbelNode,
         legal_moves: Vec<Box<dyn Move>>,
         map_size: usize,
-        policy: &PolicyOutput,
+        policy: &RawPolicyOutput,
         own_value: f32,
     ) {
         if node.is_expanded {
@@ -598,7 +527,7 @@ impl<'a> GumbelMctsAgent<'a> {
             return;
         }
 
-        let logits = policy_composer::compute_move_log_probs(policy, &legal_moves, map_size);
+        let logits = policy_composer::compute_move_log_probs_raw(policy, &legal_moves, map_size);
         for (m, l) in legal_moves.into_iter().zip(logits.into_iter()) {
             node.children.push(GumbelNode::new(l, 0.0, Some(m)));
         }

@@ -1,10 +1,12 @@
 use candle_core::Device;
 use candle_nn::VarMap;
+use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
 use polyfish::ai::gumbel_mcts::GumbelMctsAgent;
 use polyfish::ai::network::PolyZeroNet;
 use polyfish::game::Game;
 use polyfish::mapgen::{generate, MapGenSettings};
 use polyfish::types::{MapSize, MapType, TribeType};
+use std::sync::Arc;
 
 fn make_game(seed: i64) -> Game {
     let mut game = Game::new();
@@ -20,11 +22,15 @@ fn make_game(seed: i64) -> Game {
     game
 }
 
-fn make_network() -> PolyZeroNet {
+fn make_network() -> Arc<PolyZeroNet> {
     let device = Device::Cpu;
     let varmap = VarMap::new();
     let vs = candle_nn::VarBuilder::from_varmap(&varmap, candle_core::DType::F32, &device);
-    PolyZeroNet::new(vs).unwrap()
+    Arc::new(PolyZeroNet::new(vs).unwrap())
+}
+
+fn make_evaluator(network: &Arc<PolyZeroNet>) -> Evaluator {
+    Evaluator::Inline(InlineEvalHandle::new(network.clone()))
 }
 
 /// The Gumbel agent must fully undo every simulated move during search, so
@@ -37,6 +43,7 @@ fn test_gumbel_state_restored_after_search() {
     use polyfish::moves::EndTurnMove;
 
     let network = make_network();
+    let evaluator = make_evaluator(&network);
     let mut game = make_game(42);
 
     // Advance past the opening book so the search (which simulates and undoes
@@ -52,7 +59,7 @@ fn test_gumbel_state_restored_after_search() {
     let initial_player = game.state.settings.current_player_turn_id;
     let initial_turn = game.state.settings.turn;
 
-    let agent = GumbelMctsAgent::new(&network, 32, 8);
+    let agent = GumbelMctsAgent::new(&evaluator, 32, 8);
     let (best_move, _visits) = agent.select_move_with_decomposed_visits(&mut game, 0);
     assert!(best_move.is_some());
 
@@ -77,6 +84,7 @@ fn test_gumbel_stability_across_iteration_counts() {
     use polyfish::moves::EndTurnMove;
 
     let network = make_network();
+    let evaluator = make_evaluator(&network);
     let mut base = make_game(999);
     for _ in 0..6 {
         if polyfish::functions::is_game_over(&base.state) {
@@ -92,7 +100,7 @@ fn test_gumbel_stability_across_iteration_counts() {
     for iterations in [1usize, 4, 16] {
         for k in [2usize, 4, 8] {
             let mut game = base.clone();
-            let agent = GumbelMctsAgent::new(&network, iterations, k);
+            let agent = GumbelMctsAgent::new(&evaluator, iterations, k);
             let best_move = agent.select_move(&mut game);
             assert!(
                 best_move.is_some(),
@@ -109,6 +117,7 @@ fn test_gumbel_stability_across_iteration_counts() {
 #[test]
 fn test_gumbel_terminal_state_handled() {
     let network = make_network();
+    let evaluator = make_evaluator(&network);
     let mut game = make_game(123);
 
     game.state.settings._game_over = true;
@@ -119,7 +128,7 @@ fn test_gumbel_terminal_state_handled() {
         tribe2.score = 500;
     }
 
-    let agent = GumbelMctsAgent::new(&network, 16, 4);
+    let agent = GumbelMctsAgent::new(&evaluator, 16, 4);
     // Even with the game flagged over, select_move should not panic and
     // should return an EndTurn fallback (the search root sees no live
     // search to do).

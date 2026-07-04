@@ -1,6 +1,7 @@
 use candle_core::Device;
 use clap::Parser;
 use polyfish::ai::brain::{SearchBackend, SearchBackendArg, make_search_agent};
+use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
 use polyfish::ai::network::PolyZeroNet;
 use polyfish::game::Game;
 use polyfish::mapgen::{MapGenSettings, generate};
@@ -87,8 +88,8 @@ struct MatchResult {
 /// Play one game. `swap` puts config2 in the P1 seat and config1 in P2.
 #[allow(clippy::too_many_arguments)]
 fn play_match(
-    net1: &PolyZeroNet,
-    net2: &PolyZeroNet,
+    eval1: &Evaluator,
+    eval2: &Evaluator,
     mcts1: usize,
     mcts2: usize,
     backend1: SearchBackend,
@@ -114,11 +115,11 @@ fn play_match(
     // p1_config / p2_config map each seat to its configuration so timing and
     // scores attribute to the right config when sides are swapped.
     let (agent_p1, p1_config, agent_p2, p2_config) = if swap {
-        (make_search_agent(backend2, net2, mcts2), 2u8,
-         make_search_agent(backend1, net1, mcts1), 1u8)
+        (make_search_agent(backend2, eval2, mcts2, None), 2u8,
+         make_search_agent(backend1, eval1, mcts1, None), 1u8)
     } else {
-        (make_search_agent(backend1, net1, mcts1), 1u8,
-         make_search_agent(backend2, net2, mcts2), 2u8)
+        (make_search_agent(backend1, eval1, mcts1, None), 1u8,
+         make_search_agent(backend2, eval2, mcts2, None), 2u8)
     };
 
     let mut moves = 0;
@@ -284,6 +285,8 @@ fn main() -> anyhow::Result<()> {
         } else {
             (net1.clone(), net2.clone())
         };
+        let eval1 = Evaluator::Inline(InlineEvalHandle::new(w_net1));
+        let eval2 = Evaluator::Inline(InlineEvalHandle::new(w_net2));
 
         loop {
             let idx = job_counter.fetch_add(1, Ordering::Relaxed);
@@ -300,13 +303,13 @@ fn main() -> anyhow::Result<()> {
             // every already-completed result on the whole run.
             let r1 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 play_match(
-                    &w_net1, &w_net2, mcts1, mcts2, backend1, backend2, seed, false,
+                    &eval1, &eval2, mcts1, mcts2, backend1, backend2, seed, false,
                     args.max_turns,
                 )
             }));
             let r2 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 play_match(
-                    &w_net1, &w_net2, mcts1, mcts2, backend1, backend2, seed, true,
+                    &eval1, &eval2, mcts1, mcts2, backend1, backend2, seed, true,
                     args.max_turns,
                 )
             }));

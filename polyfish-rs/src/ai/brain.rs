@@ -1,7 +1,7 @@
+use crate::ai::eval_server::Evaluator;
 use crate::ai::gumbel_mcts::GumbelMctsAgent;
 use crate::ai::mcts_types::MoveVisit;
 use crate::ai::mcts_zero::ZeroMctsAgent;
-use crate::ai::network::PolyZeroNet;
 use crate::game::Game;
 use crate::moves::{Move, generate_legal_moves};
 
@@ -37,9 +37,15 @@ impl From<SearchBackendArg> for SearchBackend {
 
 // class brain
 pub struct Brain<'a> {
-    pub network: &'a PolyZeroNet,
+    pub evaluator: &'a Evaluator,
     pub max_iterations: usize,
     pub backend: SearchBackend,
+    /// Per-game virtual-loss mini-batch size (leaves coalesced per NN call
+    /// within a single game's search). `None` keeps each agent's own
+    /// default. Cross-game batching (`EvalServer`) supplies GPU efficiency
+    /// independently of this, so self-play can shrink it toward sequential
+    /// per-game search without losing throughput.
+    pub leaf_batch: Option<usize>,
 }
 
 /// Internal enum wrapping whichever concrete agent the configured backend
@@ -79,39 +85,59 @@ impl<'a> SearchAgent<'a> {
     }
 }
 
-/// Construct the concrete search agent for a backend, borrowing `network`.
+/// Construct the concrete search agent for a backend, borrowing `evaluator`.
 pub fn make_search_agent(
     backend: SearchBackend,
-    network: &PolyZeroNet,
+    evaluator: &Evaluator,
     iterations: usize,
+    leaf_batch: Option<usize>,
 ) -> SearchAgent<'_> {
     match backend {
-        SearchBackend::Zero => SearchAgent::Zero(ZeroMctsAgent::new(network, iterations)),
+        SearchBackend::Zero => {
+            let mut agent = ZeroMctsAgent::new(evaluator, iterations);
+            if let Some(b) = leaf_batch {
+                agent.batch_size = b;
+            }
+            SearchAgent::Zero(agent)
+        }
         SearchBackend::Gumbel { k } => {
-            SearchAgent::Gumbel(GumbelMctsAgent::new(network, iterations, k))
+            let mut agent = GumbelMctsAgent::new(evaluator, iterations, k);
+            if let Some(b) = leaf_batch {
+                agent.batch_size = b;
+            }
+            SearchAgent::Gumbel(agent)
         }
     }
 }
 
 impl<'a> Brain<'a> {
-    pub fn new(network: &'a PolyZeroNet, max_iterations: usize) -> Self {
+    pub fn new(evaluator: &'a Evaluator, max_iterations: usize) -> Self {
         Self {
-            network,
+            evaluator,
             max_iterations,
             backend: SearchBackend::default(),
+            leaf_batch: None,
         }
     }
 
     pub fn with_backend(
-        network: &'a PolyZeroNet,
+        evaluator: &'a Evaluator,
         max_iterations: usize,
         backend: SearchBackend,
     ) -> Self {
         Self {
-            network,
+            evaluator,
             max_iterations,
             backend,
+            leaf_batch: None,
         }
+    }
+
+    /// Override the per-game virtual-loss mini-batch size (see `--leaf-batch`
+    /// in self_play). Builder-style: chain after `with_backend`.
+    pub fn with_leaf_batch(mut self, leaf_batch: usize) -> Self {
+        self.leaf_batch = Some(leaf_batch);
+        self
     }
 
     fn _get_iterations(&self, turn: i32, legal_move_count: usize) -> usize {
@@ -141,7 +167,12 @@ impl<'a> Brain<'a> {
             return (None, moves);
         }
 
-        let agent = make_search_agent(self.backend, self.network, self.max_iterations);
+        let agent = make_search_agent(
+            self.backend,
+            self.evaluator,
+            self.max_iterations,
+            self.leaf_batch,
+        );
         (Some(agent), moves)
     }
 

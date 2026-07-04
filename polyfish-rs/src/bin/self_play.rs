@@ -1,6 +1,7 @@
 use candle_core::{Device, Tensor};
 use polyfish::TribeType;
 use polyfish::ai::brain::{Brain, SearchBackend, SearchBackendArg};
+use polyfish::ai::eval_server::{EvalServer, EvalServerConfig, Evaluator};
 use polyfish::ai::features::{self, GameFeatures, state_to_tensor};
 use polyfish::ai::mapper::DecomposedMapper;
 use polyfish::ai::network::PolyZeroNet;
@@ -8,11 +9,11 @@ use polyfish::game::Game;
 use polyfish::replayer::{ModReplay, ReplayPlayer, ReplayTurn};
 use polyfish::states::PlayerId;
 use polyfish::types::MapSize;
-use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// Decomposed policy probability distributions for a single step
@@ -77,15 +78,19 @@ fn load_networks(
 }
 
 /// Play a single game and return the result
+#[allow(clippy::too_many_arguments)]
 fn play_single_game(
     network1: &PolyZeroNet,
     network2: &PolyZeroNet, // Added network2
+    eval1: &Evaluator,
+    eval2: &Evaluator,
     mcts_iters: usize,
     game_idx: usize,
     seed: i64,
     tribes: Vec<TribeType>,
     iteration: usize,
     backend: SearchBackend,
+    leaf_batch: Option<usize>,
 ) -> Option<GameResult> {
     // Curriculum logic — Tiny maps only, gradually increase turn count
     let (map_size, max_turns) = if iteration <= 50 {
@@ -118,8 +123,12 @@ fn play_single_game(
     game.post_load();
 
     // Create two agents (they might share the same network, or be different)
-    let agent1 = Brain::with_backend(network1, mcts_iters, backend);
-    let agent2 = Brain::with_backend(network2, mcts_iters, backend);
+    let mut agent1 = Brain::with_backend(eval1, mcts_iters, backend);
+    let mut agent2 = Brain::with_backend(eval2, mcts_iters, backend);
+    if let Some(b) = leaf_batch {
+        agent1 = agent1.with_leaf_batch(b);
+        agent2 = agent2.with_leaf_batch(b);
+    }
 
     let initial_state = game.state.clone();
     let mut flat_recap: Vec<(i32, i32, serde_json::Value)> = Vec::new();
@@ -400,6 +409,29 @@ fn main() -> anyhow::Result<()> {
         /// Only used when --search-backend gumbel.
         #[arg(long, default_value_t = 16)]
         gumbel_k: usize,
+
+        /// Number of concurrent game actor threads. Each holds a Game clone
+        /// + MCTS tree, so RAM (not CPU) is the real ceiling — actors block
+        /// (parking, no CPU used) while awaiting eval-server replies, so
+        /// oversubscribing past core count is fine. 0 = use core count.
+        #[arg(long, default_value_t = 0)]
+        actors: usize,
+
+        /// Eval-server batch cap: max leaves coalesced into one forward_t.
+        #[arg(long, default_value_t = 256)]
+        max_batch: usize,
+
+        /// Eval-server coalescing flush timeout in microseconds.
+        #[arg(long, default_value_t = 1000)]
+        coalesce_timeout_us: u64,
+
+        /// Per-game virtual-loss mini-batch size (leaves coalesced per NN
+        /// call within a single game's search tree). Cross-game batching via
+        /// the eval server now supplies GPU efficiency independently, so
+        /// this can shrink toward sequential per-game search. None of the
+        /// agents' own defaults (24) are overridden unless this is set.
+        #[arg(long)]
+        leaf_batch: Option<usize>,
     }
 
     let args = Args::parse();
@@ -509,58 +541,111 @@ fn main() -> anyhow::Result<()> {
         (t1, t2)
     }
 
-    // Parallel game generation using rayon
+    // Game generation: a pool of actor threads pulls game indices off a
+    // shared counter. Each actor blocks (parks, no CPU) while awaiting an
+    // eval-server reply, so oversubscribing actors past core count is fine —
+    // RAM (a Game clone + MCTS tree per actor) is the real ceiling, not CPU.
+    // The eval server owns the sole network/device and coalesces requests
+    // from every actor into batched forward_t calls (see ai/eval_server.rs
+    // for the Metal cross-thread-tensor invariant this design preserves).
     let games_start = Instant::now();
     println!("Starting game generation...");
-    // On Metal, sharing one device across rayon workers races inside candle
-    // (see device selection above), so each worker builds its own device and
-    // network replica; per-device command queues/allocators are independent.
-    // On CPU/CUDA the loaded networks are shared as before.
-    let per_thread_metal = device.is_metal();
-    let results: Vec<GameResult> = (0..args.num_games)
-        .into_par_iter()
-        .map_init(
-            || {
-                if per_thread_metal {
-                    let device = Device::new_metal(0)
-                        .expect("failed to create per-thread Metal device");
-                    load_networks(&device, args.opponent.as_deref())
-                        .expect("failed to load per-thread network replicas")
-                } else {
-                    (network1.clone(), network2.clone())
-                }
-            },
-            |(net1, net2), i| {
-                let seed = (base_seed + i as u64) as i64;
-                let swap_players = i % 2 == 1; // Swap every other game
-                let (p1_net, p2_net) = if swap_players {
-                    (&**net2, &**net1)
-                } else {
-                    (&**net1, &**net2)
-                };
 
-                // Sample this game's own tribe pair, seeded off its game seed
-                // so runs stay reproducible while each game gets a distinct matchup.
-                use rand::SeedableRng;
-                let mut tribe_rng = rand::rngs::StdRng::seed_from_u64(seed as u64);
-                let (t1, t2) = pick_tribes(&mut tribe_rng, &all_tribes, &args.tribe1, &args.tribe2);
-                let game_tribes = vec![t1, t2];
-
-                // Play with (p1_net, p2_net)
-                play_single_game(
-                    p1_net,
-                    p2_net,
-                    args.mcts_iters,
-                    i,
-                    seed,
-                    game_tribes,
-                    args.iteration,
-                    backend,
-                )
-            },
+    let eval_config = EvalServerConfig {
+        max_batch: args.max_batch,
+        coalesce_timeout: std::time::Duration::from_micros(args.coalesce_timeout_us),
+    };
+    let (_eval_server1, eval_handle1) = EvalServer::start(network1.clone(), eval_config);
+    let (_eval_server2, eval_handle2) = if args.opponent.is_some() {
+        EvalServer::start(network2.clone(), eval_config)
+    } else {
+        // Self-play against the same weights: reuse one server/handle so we
+        // don't run two inference threads (and two device contexts) for the
+        // same network.
+        (
+            EvalServer::start(network1.clone(), eval_config).0,
+            eval_handle1.clone(),
         )
-        .filter_map(|r| r)
-        .collect();
+    };
+    let eval1 = Evaluator::Server(eval_handle1);
+    let eval2 = Evaluator::Server(eval_handle2);
+
+    let num_actors = if args.actors > 0 {
+        args.actors
+    } else {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+    };
+    println!(
+        "Using {} actor threads, max_batch={}, coalesce_timeout_us={}, leaf_batch={:?}",
+        num_actors, args.max_batch, args.coalesce_timeout_us, args.leaf_batch
+    );
+
+    let job_counter = Arc::new(AtomicUsize::new(0));
+    let results_mutex: Arc<std::sync::Mutex<Vec<GameResult>>> =
+        Arc::new(std::sync::Mutex::new(Vec::with_capacity(args.num_games)));
+
+    std::thread::scope(|scope| {
+        for _ in 0..num_actors {
+            let job_counter = job_counter.clone();
+            let results_mutex = results_mutex.clone();
+            let network1 = &network1;
+            let network2 = &network2;
+            let eval1 = &eval1;
+            let eval2 = &eval2;
+            let args = &args;
+            let all_tribes = &all_tribes;
+            scope.spawn(move || {
+                loop {
+                    let i = job_counter.fetch_add(1, Ordering::Relaxed);
+                    if i >= args.num_games {
+                        break;
+                    }
+
+                    let seed = (base_seed + i as u64) as i64;
+                    let swap_players = i % 2 == 1; // Swap every other game
+                    let (p1_net, p2_net, p1_eval, p2_eval) = if swap_players {
+                        (&**network2, &**network1, eval2, eval1)
+                    } else {
+                        (&**network1, &**network2, eval1, eval2)
+                    };
+
+                    // Sample this game's own tribe pair, seeded off its game
+                    // seed so runs stay reproducible while each game gets a
+                    // distinct matchup.
+                    use rand::SeedableRng;
+                    let mut tribe_rng = rand::rngs::StdRng::seed_from_u64(seed as u64);
+                    let (t1, t2) =
+                        pick_tribes(&mut tribe_rng, all_tribes, &args.tribe1, &args.tribe2);
+                    let game_tribes = vec![t1, t2];
+
+                    let result = play_single_game(
+                        p1_net,
+                        p2_net,
+                        p1_eval,
+                        p2_eval,
+                        args.mcts_iters,
+                        i,
+                        seed,
+                        game_tribes,
+                        args.iteration,
+                        backend,
+                        args.leaf_batch,
+                    );
+
+                    if let Some(result) = result {
+                        results_mutex.lock().unwrap().push(result);
+                    }
+                }
+            });
+        }
+    });
+
+    let results: Vec<GameResult> = match Arc::try_unwrap(results_mutex) {
+        Ok(mutex) => mutex.into_inner().unwrap(),
+        Err(_) => panic!("BUG: actor threads still hold a results_mutex reference after scope exit"),
+    };
 
     let games_duration = games_start.elapsed();
     println!("Game generation completed in: {:.2}s ({} games)", games_duration.as_secs_f32(), results.len());
