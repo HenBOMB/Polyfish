@@ -1,7 +1,10 @@
 use candle_core::{Device, Tensor};
 use polyfish::TribeType;
 use polyfish::ai::brain::{Brain, SearchBackend, SearchBackendArg};
-use polyfish::ai::eval_server::{BackendSpec, EvalServer, EvalServerConfig, Evaluator};
+use polyfish::ai::eval_server::{
+    BackendSpec, EvalHandle, EvalServer, EvalServerConfig, EvalServerStats, Evaluator,
+    ShardedEvalHandle,
+};
 use polyfish::ai::features::{self, GameFeatures, state_to_tensor};
 use polyfish::ai::mapper::DecomposedMapper;
 use polyfish::ai::network::PolyZeroNet;
@@ -448,6 +451,16 @@ fn main() -> anyhow::Result<()> {
         /// "candle".
         #[arg(long, default_value = "")]
         eval_backend: String,
+
+        /// Number of concurrent eval-server threads (shards). Each owns its
+        /// own weights copy + LRU cache; leaves are routed by hash so cache
+        /// locality is preserved. Defaults to 2 on the tch backend
+        /// (latency-bound: 2 servers ≈ 2× capacity while one is parked in
+        /// waitUntilCompleted), 1 on candle (candle Metal corrupts when >1
+        /// thread encodes on the same device — see the bug_handoff invariant
+        /// in eval_server.rs). 0 = auto. Overridable.
+        #[arg(long, default_value_t = 0)]
+        eval_servers: usize,
     }
 
     let args = Args::parse();
@@ -580,15 +593,6 @@ fn main() -> anyhow::Result<()> {
     let games_start = Instant::now();
     println!("Starting game generation...");
 
-    let eval_config = EvalServerConfig {
-        max_batch: args.max_batch,
-        coalesce_timeout: std::time::Duration::from_micros(args.coalesce_timeout_us),
-        cache_capacity: if args.cache_cap == 0 {
-            None
-        } else {
-            Some(args.cache_cap)
-        },
-    };
     // Resolve the eval backend: explicit --eval-backend, else auto (tch when
     // compiled in, else candle).
     let use_tch = match args.eval_backend.as_str() {
@@ -609,8 +613,52 @@ fn main() -> anyhow::Result<()> {
         if use_tch { "tch (libtorch/MPS)" } else { "candle" }
     );
 
-    // Builds the two backend specs (main / opponent) for the chosen backend.
-    let make_specs = |use_tch: bool| -> (BackendSpec, BackendSpec) {
+    // Resolve shard count. Default 2 on tch (latency-bound: while one server
+    // is parked in waitUntilCompleted, another tensorizes + submits), 1 on
+    // candle. >1 on candle is rejected: candle Metal corrupts when >1 thread
+    // encodes on the same device (see the bug_handoff invariant in
+    // eval_server.rs), and candle doesn't cleanly expose per-server Metal
+    // devices.
+    let eval_servers = match args.eval_servers {
+        0 => if use_tch { 2 } else { 1 },
+        n => {
+            if n > 1 && !use_tch {
+                anyhow::bail!(
+                    "--eval-servers > 1 requires --eval-backend tch \
+                     (candle Metal corrupts when >1 thread encodes on the same device)"
+                );
+            }
+            n
+        }
+    };
+    // Each shard sees ~1/N of the working set (hash-routed), so dividing the
+    // per-shard cache by N keeps total resident cache ~constant while
+    // preserving the hit rate (cache / working-set ratio is unchanged).
+    let per_shard_cache = if args.cache_cap == 0 {
+        None
+    } else {
+        Some(args.cache_cap / eval_servers)
+    };
+    let eval_config = EvalServerConfig {
+        max_batch: args.max_batch,
+        coalesce_timeout: std::time::Duration::from_micros(args.coalesce_timeout_us),
+        cache_capacity: per_shard_cache,
+    };
+    println!("Using {eval_servers} eval server shard(s), per-shard cache={per_shard_cache:?}");
+
+    // Builds `n` backend specs for one player. For tch: every shard gets its
+    // own `BackendSpec::Tch` on the shared MPS device; each shard's thread
+    // loads its own `TchPolyZeroNet` (duplicated weights, a few MB). For
+    // candle: `n` clones of the passed `Arc<PolyZeroNet>` (player 1 vs player
+    // 2 networks differ in opponent mode).
+    let make_specs = |use_tch: bool,
+                      n: usize,
+                      model_path: &str,
+                      candle_net: &Arc<PolyZeroNet>|
+     -> Vec<BackendSpec> {
+        // `model_path` is only read by the tch branch below; in non-tch builds
+        // it's unused. Touch it so the closure compiles cleanly either way.
+        let _ = model_path;
         if use_tch {
             #[cfg(feature = "tch-eval")]
             {
@@ -619,44 +667,60 @@ fn main() -> anyhow::Result<()> {
                 } else {
                     tch::Device::Cpu
                 };
-                let model_path_2 = args
-                    .opponent
-                    .clone()
-                    .unwrap_or_else(|| "model.safetensors".to_string());
-                return (
-                    BackendSpec::Tch {
-                        model_path: "model.safetensors".to_string(),
+                return (0..n)
+                    .map(|_| BackendSpec::Tch {
+                        model_path: model_path.to_string(),
                         device: dev,
-                    },
-                    BackendSpec::Tch {
-                        model_path: model_path_2,
-                        device: dev,
-                    },
-                );
+                    })
+                    .collect();
             }
             #[cfg(not(feature = "tch-eval"))]
             unreachable!("use_tch guarded by cfg above");
         }
-        (
-            BackendSpec::Candle(network1.clone()),
-            BackendSpec::Candle(network2.clone()),
-        )
+        (0..n)
+            .map(|_| BackendSpec::Candle(candle_net.clone()))
+            .collect()
     };
-    let (spec1, spec2) = make_specs(use_tch);
-
-    let (eval_server1, eval_handle1) = EvalServer::start(spec1, eval_config);
-    let (eval_server2, eval_handle2) = if args.opponent.is_some() {
-        let (server, handle) = EvalServer::start(spec2, eval_config);
-        (Some(server), handle)
+    let p1_path = "model.safetensors";
+    let p2_path = args
+        .opponent
+        .as_deref()
+        .unwrap_or("model.safetensors");
+    let p1_specs = make_specs(use_tch, eval_servers, p1_path, &network1);
+    let has_opponent = args.opponent.is_some();
+    let p2_specs = if has_opponent {
+        make_specs(use_tch, eval_servers, p2_path, &network2)
     } else {
-        // Self-play against the same weights: reuse one server/handle so we
-        // don't run two inference threads (and two device contexts) for the
-        // same network.
-        drop(spec2);
-        (None, eval_handle1.clone())
+        Vec::new()
     };
-    let eval1 = Evaluator::Server(eval_handle1);
-    let eval2 = Evaluator::Server(eval_handle2);
+
+    // Spawn the shards. Each EvalServer owns its inference thread + device
+    // context; the handles are collected into a ShardedEvalHandle that
+    // routes leaves by hash so each shard owns its own LRU cache.
+    let mut p1_servers: Vec<EvalServer> = Vec::with_capacity(eval_servers);
+    let mut p1_handles: Vec<EvalHandle> = Vec::with_capacity(eval_servers);
+    for spec in p1_specs {
+        let (srv, h) = EvalServer::start(spec, eval_config);
+        p1_servers.push(srv);
+        p1_handles.push(h);
+    }
+    let (p2_servers, p2_handles) = if has_opponent {
+        // Opponent mode: independent shard set for player 2.
+        let mut s = Vec::with_capacity(eval_servers);
+        let mut h = Vec::with_capacity(eval_servers);
+        for spec in p2_specs {
+            let (srv, hh) = EvalServer::start(spec, eval_config);
+            s.push(srv);
+            h.push(hh);
+        }
+        (Some(s), h)
+    } else {
+        // Self-play against the same weights: both players share one shard
+        // set so we don't run 2× inference threads for the same network.
+        (None, p1_handles.clone())
+    };
+    let eval1 = Evaluator::Sharded(ShardedEvalHandle::new(p1_handles));
+    let eval2 = Evaluator::Sharded(ShardedEvalHandle::new(p2_handles));
 
     let num_actors = if args.actors > 0 {
         args.actors
@@ -747,11 +811,21 @@ fn main() -> anyhow::Result<()> {
         games_duration.as_secs_f32()
     );
 
-    let mut server_stats = vec![(1, eval_server1.stats())];
-    if let Some(ref server2) = eval_server2 {
-        server_stats.push((2, server2.stats()));
+    // Eval-server stats: per-shard detail + an aggregate across all shards.
+    // Aggregate is the number to compare against the single-server baseline
+    // (summed forwards/rows/busy, max of max_batch, summed cache hits/misses).
+    let mut all_shard_stats: Vec<(&str, &EvalServerStats)> = Vec::new();
+    for s in p1_servers.iter() {
+        all_shard_stats.push(("p1", s.stats()));
     }
-    for (tag, stats) in server_stats {
+    if let Some(p2) = p2_servers.as_ref() {
+        for s in p2 {
+            all_shard_stats.push(("p2", s.stats()));
+        }
+    }
+
+    let wall_s = games_duration.as_secs_f64().max(1e-9);
+    for (player, stats) in &all_shard_stats {
         let forwards = stats.forwards.load(Ordering::Relaxed);
         let rows = stats.rows.load(Ordering::Relaxed);
         let max_batch = stats.max_batch.load(Ordering::Relaxed);
@@ -770,19 +844,56 @@ fn main() -> anyhow::Result<()> {
             0.0
         };
         println!(
-            "EVAL_SERVER_STATS: {{\"server\": {}, \"forwards\": {}, \"rows\": {}, \"avg_batch\": {:.2}, \"max_batch\": {}, \"busy_s\": {:.2}, \"busy_frac\": {:.3}, \"cache_hits\": {}, \"cache_misses\": {}, \"cache_hit_rate\": {:.3}}}",
-            tag,
+            "EVAL_SERVER_STATS: {{\"shard\": \"{}\", \"forwards\": {}, \"rows\": {}, \"avg_batch\": {:.2}, \"max_batch\": {}, \"busy_s\": {:.2}, \"busy_frac\": {:.3}, \"cache_hits\": {}, \"cache_misses\": {}, \"cache_hit_rate\": {:.3}}}",
+            player,
             forwards,
             rows,
             avg_batch,
             max_batch,
             busy_s,
-            busy_s / games_duration.as_secs_f64().max(1e-9),
+            busy_s / wall_s,
             cache_hits,
             cache_misses,
             cache_hit_rate
         );
     }
+
+    // Aggregate across shards.
+    let (mut agg_forwards, mut agg_rows, mut agg_max_batch, mut agg_busy_us) = (0u64, 0u64, 0u64, 0u64);
+    let (mut agg_hits, mut agg_misses) = (0u64, 0u64);
+    for (_, s) in &all_shard_stats {
+        agg_forwards += s.forwards.load(Ordering::Relaxed);
+        agg_rows += s.rows.load(Ordering::Relaxed);
+        agg_max_batch = agg_max_batch.max(s.max_batch.load(Ordering::Relaxed));
+        agg_busy_us += s.busy_us.load(Ordering::Relaxed);
+        agg_hits += s.cache_hits.load(Ordering::Relaxed);
+        agg_misses += s.cache_misses.load(Ordering::Relaxed);
+    }
+    let agg_busy_s = agg_busy_us as f64 / 1e6;
+    let agg_avg_batch = if agg_forwards > 0 {
+        agg_rows as f64 / agg_forwards as f64
+    } else {
+        0.0
+    };
+    let agg_cache_total = agg_hits + agg_misses;
+    let agg_cache_hit_rate = if agg_cache_total > 0 {
+        agg_hits as f64 / agg_cache_total as f64
+    } else {
+        0.0
+    };
+    println!(
+        "EVAL_SERVER_STATS_AGG: {{\"shards\": {}, \"forwards\": {}, \"rows\": {}, \"avg_batch\": {:.2}, \"max_batch\": {}, \"busy_s\": {:.2}, \"busy_frac\": {:.3}, \"cache_hits\": {}, \"cache_misses\": {}, \"cache_hit_rate\": {:.3}}}",
+        all_shard_stats.len(),
+        agg_forwards,
+        agg_rows,
+        agg_avg_batch,
+        agg_max_batch,
+        agg_busy_s,
+        agg_busy_s / wall_s,
+        agg_hits,
+        agg_misses,
+        agg_cache_hit_rate
+    );
 
     // Aggregate results
     let mut collected_spatial_maps: Vec<Tensor> = Vec::new();
@@ -1100,9 +1211,13 @@ fn main() -> anyhow::Result<()> {
     // process aborts with "recursive_mutex lock failed: Invalid argument".
     drop(eval1);
     drop(eval2);
-    eval_server1.shutdown();
-    if let Some(server) = eval_server2 {
+    for server in p1_servers {
         server.shutdown();
+    }
+    if let Some(p2) = p2_servers {
+        for server in p2 {
+            server.shutdown();
+        }
     }
 
     Ok(())

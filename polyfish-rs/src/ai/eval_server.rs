@@ -53,11 +53,17 @@ pub struct EvalHandle {
 }
 
 impl EvalHandle {
-    /// Evaluate a batch of leaves. Blocks the calling thread until the
-    /// server has coalesced this request with others (if any), run one
-    /// `forward_t`, and sliced out this caller's rows. Order-preserving:
-    /// `result[i]` corresponds to `batch[i]`.
-    pub fn evaluate(&self, batch: Vec<RawFeatures>) -> Vec<EvalResult> {
+    /// Submit a batch and return the reply receiver without blocking. The
+    /// server will reply on the returned channel once it has coalesced this
+    /// request with others (if any), run one `forward_t`, and sliced out this
+    /// caller's rows. Order-preserving: the reply's `result[i]` corresponds to
+    /// `batch[i]`.
+    ///
+    /// Split out from [`evaluate`](Self::evaluate) so a sharded handle can
+    /// submit to N servers and then collect all replies — letting the N
+    /// servers run their forwards concurrently instead of serializing on
+    /// blocking `evaluate` calls.
+    fn submit(&self, batch: Vec<RawFeatures>) -> std_mpsc::Receiver<Vec<EvalResult>> {
         let (tx, rx) = std_mpsc::channel();
         // Hash on the caller (actor) thread, not the eval thread
         let hashes: Vec<u64> = batch.iter().map(|f| f.hash()).collect();
@@ -69,8 +75,22 @@ impl EvalHandle {
         if self.sender.send(request).is_err() {
             panic!("BUG: EvalServer thread has shut down while a handle is still in use");
         }
+        rx
+    }
+
+    /// Block until the server replies for a previously-submitted batch.
+    fn collect(rx: std_mpsc::Receiver<Vec<EvalResult>>) -> Vec<EvalResult> {
         rx.recv()
             .expect("BUG: EvalServer dropped the response channel without replying")
+    }
+
+    /// Evaluate a batch of leaves. Blocks the calling thread until the
+    /// server has coalesced this request with others (if any), run one
+    /// `forward_t`, and sliced out this caller's rows. Order-preserving:
+    /// `result[i]` corresponds to `batch[i]`. Convenience wrapper over
+    /// [`submit`](Self::submit) + [`collect`](Self::collect).
+    pub fn evaluate(&self, batch: Vec<RawFeatures>) -> Vec<EvalResult> {
+        Self::collect(self.submit(batch))
     }
 }
 
@@ -559,15 +579,91 @@ impl Default for DummyEvalHandle {
     }
 }
 
+/// N independent [`EvalServer`]s, each with its own weights copy + LRU cache.
+/// Leaves are routed by `hash % N` so a given position always lands on the
+/// same shard — preserving cache locality at zero extra cost (the hash is
+/// already computed on the actor thread in [`EvalHandle::submit`]).
+///
+/// `evaluate` submits to all non-empty shards (non-blocking channel sends),
+/// then collects all replies. This is the whole point: the N servers run
+/// their forwards **concurrently**. In the latency-bound regime (per-forward
+/// cost dominated by fixed MPS sync wait, not compute), while one server is
+/// parked in `waitUntilCompleted` another can tensorize + submit — so N
+/// shards ≈ N× eval capacity. Calling [`EvalHandle::evaluate`] in a loop
+/// instead would serialize (each call blocks until its server replies before
+/// the next is even submitted), which is why this handle exists.
+///
+/// Order-preserving: `result[i]` corresponds to `batch[i]`.
+#[derive(Clone)]
+pub struct ShardedEvalHandle {
+    handles: Vec<EvalHandle>,
+}
+
+impl ShardedEvalHandle {
+    pub fn new(handles: Vec<EvalHandle>) -> Self {
+        assert!(!handles.is_empty(), "BUG: ShardedEvalHandle requires >= 1 handle");
+        Self { handles }
+    }
+
+    pub fn len(&self) -> usize {
+        self.handles.len()
+    }
+
+    pub fn evaluate(&self, batch: Vec<RawFeatures>) -> Vec<EvalResult> {
+        let n = self.handles.len();
+        if n == 1 {
+            // Zero-overhead fast path: skip the partition + reassembly.
+            return self.handles[0].evaluate(batch);
+        }
+
+        let total = batch.len();
+        // RawFeatures isn't Clone, so build the bucket vecs without vec![..; n]
+        // (which requires Vec<RawFeatures>: Clone).
+        let mut buckets: Vec<Vec<RawFeatures>> = (0..n).map(|_| Vec::new()).collect();
+        let mut orig_idx: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for (i, f) in batch.into_iter().enumerate() {
+            let s = (f.hash() % n as u64) as usize;
+            orig_idx[s].push(i);
+            buckets[s].push(f);
+        }
+
+        // Submit all non-empty shards (non-blocking), then collect all so the
+        // shards run concurrently.
+        let mut pending: Vec<(std_mpsc::Receiver<Vec<EvalResult>>, Vec<usize>)> =
+            Vec::with_capacity(n);
+        for (s, b) in buckets.into_iter().enumerate() {
+            if b.is_empty() {
+                continue;
+            }
+            let idxs = std::mem::take(&mut orig_idx[s]);
+            pending.push((self.handles[s].submit(b), idxs));
+        }
+
+        let mut out: Vec<Option<EvalResult>> = (0..total).map(|_| None).collect();
+        for (rx, idxs) in pending {
+            let rows = EvalHandle::collect(rx);
+            debug_assert_eq!(rows.len(), idxs.len());
+            for (row, &orig) in rows.into_iter().zip(idxs.iter()) {
+                out[orig] = Some(row);
+            }
+        }
+        out.into_iter()
+            .map(|o| o.expect("BUG: sharded evaluate left a row unfilled"))
+            .collect()
+    }
+}
+
 /// Either backend an MCTS agent can evaluate leaves through, unified behind
 /// one call so `ZeroMctsAgent`/`GumbelMctsAgent` don't need to know which
 /// they hold. `Server` is used by self-play (cross-game batching via
-/// [`EvalServer`]); `Inline` is used everywhere else (arena, UI analysis,
-/// tests) where each caller owns its network/device outright; `Dummy` is the
-/// no-inference benchmark path (see [`DummyEvalHandle`]).
+/// [`EvalServer`]); `Sharded` is the multi-server path (see
+/// [`ShardedEvalHandle`]); `Inline` is used everywhere else (arena, UI
+/// analysis, tests) where each caller owns its network/device outright;
+/// `Dummy` is the no-inference benchmark path (see [`DummyEvalHandle`]).
 #[derive(Clone)]
 pub enum Evaluator {
     Server(EvalHandle),
+    Sharded(ShardedEvalHandle),
     Inline(InlineEvalHandle),
     Dummy(DummyEvalHandle),
 }
@@ -576,6 +672,7 @@ impl Evaluator {
     pub fn evaluate(&self, batch: Vec<RawFeatures>) -> Vec<EvalResult> {
         match self {
             Evaluator::Server(h) => h.evaluate(batch),
+            Evaluator::Sharded(h) => h.evaluate(batch),
             Evaluator::Inline(h) => h.evaluate(batch),
             Evaluator::Dummy(h) => h.evaluate(batch),
         }
