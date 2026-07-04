@@ -11,6 +11,10 @@ bestGames = []
 
 leagueItersSet = []
 
+# One (iteration, moves_by_turn dict) pair per self-play METRICS line, used to
+# sample the "move mix by turn" training-progress chart.
+movesByTurnEntries = []
+
 with open("session.log", "r", encoding="utf-8", errors="replace") as f:
     lines = f.readlines()
 
@@ -33,6 +37,8 @@ for i, line in enumerate(lines):
                 avgMoves.append(data.get("avg_moves", "null"))
                 p1Avgs.append(data["p1_avg"])
                 p2Avgs.append(data["p2_avg"])
+            if "moves_by_turn" in data and data["moves_by_turn"]:
+                movesByTurnEntries.append((iter_count, data["moves_by_turn"]))
         except Exception:
             pass
     elif "🏆 Highest score game" in line:
@@ -63,4 +69,20 @@ print("const bestGames = " + bestGamesStr + ";")
 
 print("const leagueItersSet = new Set(" + str(leagueItersSet) + ");")
 print("const totalIters = " + str(iter_count) + ";")
+
+# Sample ~10 iterations evenly across the full training run (first through
+# most recent) so the "move mix by turn" chart shows the progress journey
+# rather than one noisy snapshot.
+NUM_SAMPLES = 10
+n = len(movesByTurnEntries)
+if n == 0:
+    sampled = []
+elif n <= NUM_SAMPLES:
+    sampled = movesByTurnEntries
+else:
+    idxs = sorted({round(i * (n - 1) / (NUM_SAMPLES - 1)) for i in range(NUM_SAMPLES)})
+    sampled = [movesByTurnEntries[i] for i in idxs]
+
+moveTurnSamples = [{"iter": it, "data": mbt} for it, mbt in sampled]
+print("const moveTurnSamples = " + json.dumps(moveTurnSamples) + ";")
 

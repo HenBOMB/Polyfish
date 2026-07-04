@@ -46,7 +46,13 @@ async function loadReplay(filename) {
 function enterReplayMode(data) {
     REPLAY_MODE = true;
     REPLAY_DATA = data;
-    REPLAY_HISTORY = data.state.history || [];
+    // Prefer the engine-recorded history; fall back to flattening the mod's
+    // turns[].players[].commands[] (in turn, then playerId order) so wrapped
+    // replays can be stepped too.
+    const hist = (data.state && data.state.history && data.state.history.length)
+        ? data.state.history
+        : flattenTurns(data.turns);
+    REPLAY_HISTORY = hist;
     // The loaded state is usually the FINAL state. 
     // To replay, we actually need the INITIAL state.
     // However, the backend /load endpoint returns the SAVE state.
@@ -149,13 +155,33 @@ function extractFilename() {
     return window.CURRENT_REPLAY_FILENAME;
 }
 
+// Flatten a mod-format replay's top-level `turns` array into a single
+// play-ordered list of command objects (turn, then playerId order). Mirrors
+// the same flattening done server-side in analyze_replay_step.
+function flattenTurns(turns) {
+    const moves = [];
+    if (!Array.isArray(turns)) return moves;
+    for (const turn of turns) {
+        const players = Array.isArray(turn && turn.players) ? [...turn.players] : [];
+        players.sort((a, b) => (a && (a.playerId ?? 0)) - (b && (b.playerId ?? 0)));
+        for (const player of players) {
+            if (player && Array.isArray(player.commands)) {
+                for (const cmd of player.commands) moves.push(cmd);
+            }
+        }
+    }
+    return moves;
+}
+
 function renderReplayAnalysis(data) {
     const p1 = document.getElementById('replay-user-move');
     const p2 = document.getElementById('replay-ai-move');
     const score = document.getElementById('replay-score-diff');
 
-    if (p1) p1.textContent = data.userMove ? data.userMove.description : "None";
-    if (p2) p2.textContent = data.aiMove ? data.aiMove.description : "Thinking...";
+    if (p1) p1.textContent = data.userMove ? (data.userMove.description || "None") : "None";
+    if (p2) p2.textContent = (data.aiMove && data.aiMove.json)
+        ? (data.aiMove.description || "None")
+        : "AI disabled (no network)";
 
     // Compare
     // scores? data.mctsAnalysis.evaluations has the AI moves.

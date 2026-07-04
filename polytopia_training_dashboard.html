@@ -214,6 +214,16 @@
     height: 280px;
   }
 
+  .move-turn-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 1rem;
+  }
+
+  .move-turn-grid .chart-panel {
+    padding: 1rem;
+  }
+
   /* Annotations */
   .annotation-bar {
     background: var(--surface2);
@@ -490,6 +500,15 @@
   <div class="chart-wrap">
     <canvas id="movesChart"></canvas>
   </div>
+</div>
+
+<!-- Move mix by turn, sampled across training progress -->
+<div class="chart-panel full-width" style="margin-bottom: 1rem;">
+  <div class="panel-header">
+    <div class="panel-title">Move mix by turn — training progress</div>
+    <div class="panel-legend" id="moveTurnLegend"></div>
+  </div>
+  <div class="move-turn-grid" id="moveTurnGrid"></div>
 </div>
 
 <!-- Insights -->
@@ -802,6 +821,84 @@ new Chart(document.getElementById('movesChart'), {
     }
   }
 });
+
+/* ── Move Mix by Turn — small multiples sampled across training progress ── */
+const MOVE_TYPES = ['Step', 'Attack', 'Ability', 'Summon', 'Harvest', 'Build', 'Research', 'Capture'];
+const MOVE_COLORS = {
+  Step: '#3d4049', Attack: '#E24B4A', Ability: '#7F77DD', Summon: '#EF9F27',
+  Harvest: '#1D9E75', Build: '#378ADD', Research: '#9B59B6', Capture: '#D85A30'
+};
+
+const moveTurnLegend = document.getElementById('moveTurnLegend');
+MOVE_TYPES.forEach(mt => {
+  const item = document.createElement('div');
+  item.className = 'legend-item';
+  item.innerHTML = `<div class="legend-swatch" style="background: ${MOVE_COLORS[mt]}"></div>${mt}`;
+  moveTurnLegend.appendChild(item);
+});
+
+const moveTurnGrid = document.getElementById('moveTurnGrid');
+if (moveTurnSamples.length === 0) {
+  moveTurnGrid.innerHTML = '<div style="padding:1rem;color:var(--text-muted);font-family:\'IBM Plex Mono\',monospace;font-size:11px;">No per-turn move data yet — this needs a self_play run with the moves_by_turn instrumentation, then a dashboard regen.</div>';
+} else {
+  moveTurnSamples.forEach((sample, idx) => {
+    const turns = Object.keys(sample.data).map(Number).sort((a, b) => a - b);
+
+    const panel = document.createElement('div');
+    panel.className = 'chart-panel';
+    panel.innerHTML = `
+      <div class="panel-header" style="margin-bottom: 0.5rem;">
+        <div class="panel-title">Iteration ${sample.iter}</div>
+      </div>
+      <div class="chart-wrap" style="height: 160px;">
+        <canvas id="moveTurnChart${idx}"></canvas>
+      </div>`;
+    moveTurnGrid.appendChild(panel);
+
+    const datasets = MOVE_TYPES.map(mt => ({
+      label: mt,
+      data: turns.map(t => (sample.data[t] && sample.data[t][mt]) || 0),
+      backgroundColor: MOVE_COLORS[mt],
+      stack: 'moves'
+    }));
+
+    new Chart(document.getElementById(`moveTurnChart${idx}`), {
+      type: 'bar',
+      data: { labels: turns, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: '#13161b',
+            borderColor: 'rgba(255,255,255,0.1)',
+            borderWidth: 1,
+            titleColor: '#6b6e78',
+            bodyColor: '#e8e6e0',
+            titleFont: { family: 'IBM Plex Mono', size: 10 },
+            bodyFont: { family: 'IBM Plex Mono', size: 10 }
+          }
+        },
+        scales: {
+          x: {
+            stacked: true,
+            ticks: { color: tickColor, font: { family: 'IBM Plex Mono', size: 9 } },
+            grid: { display: false },
+            border: { color: 'rgba(255,255,255,0.08)' },
+            title: { display: true, text: 'turn', color: labelColor, font: { family: 'IBM Plex Mono', size: 9 } }
+          },
+          y: {
+            stacked: true,
+            ticks: { color: tickColor, font: { family: 'IBM Plex Mono', size: 9 } },
+            grid: { color: gridColor },
+            border: { color: 'rgba(255,255,255,0.08)' }
+          }
+        }
+      }
+    });
+  });
+}
 </script>
 </body>
 </html>

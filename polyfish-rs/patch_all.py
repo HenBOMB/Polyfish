@@ -219,6 +219,12 @@ html = re.sub(
     f'const iterations = Array.from({{length: {total_iters}}}, (_, i) => 1 + i);',
     html
 )
+html = re.sub(
+    r'const moveTurnSamples = \[.*?\];',
+    f'const moveTurnSamples = {local_vars.get("moveTurnSamples", [])};',
+    html,
+    flags=re.DOTALL
+)
 
 # 6. Parse actual opponent counts for league breakdown
 opponent_counts = {

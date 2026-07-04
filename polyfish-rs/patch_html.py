@@ -11,7 +11,8 @@ with open(metrics_file) as f:
     output_lines = [line.strip() for line in f.readlines()]
 
 # Expected order from parse_metrics.py:
-# 0: losses, 1: avgScores, 2: maxScores, 3: p1Avgs, 4: p2Avgs, 5: avgMoves, 6: bestGames, 7: leagueItersSet, 8: totalIters
+# 0: losses, 1: avgScores, 2: maxScores, 3: p1Avgs, 4: p2Avgs, 5: avgMoves, 6: bestGames,
+# 7: leagueItersSet, 8: totalIters, 9: moveTurnSamples
 new_data = {
     "losses": output_lines[0],
     "avgScores": output_lines[1],
@@ -20,7 +21,8 @@ new_data = {
     "p2Avgs": output_lines[4],
     "avgMoves": output_lines[5],
     "bestGames": output_lines[6],
-    "leagueItersSet": output_lines[7]
+    "leagueItersSet": output_lines[7],
+    "moveTurnSamples": output_lines[9] if len(output_lines) > 9 else "const moveTurnSamples = [];"
 }
 
 total_match = re.search(r"totalIters = (\d+)", output_lines[8])

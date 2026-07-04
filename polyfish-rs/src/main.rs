@@ -1484,97 +1484,110 @@ async fn analyze_replay_step(
     State(state): State<Arc<AppState>>,
     Json(params): Json<AnalyzeReplayParams>,
 ) -> Json<Value> {
-    if !state.network.is_some() {
-        return Json(serde_json::json!({
-            "status": "error",
-            "message": "No trained network available"
-        }));
-    }
-
-    // 1. Load the replay file to get initial seed and history
+    // 1. Load the replay file. Supports both bare GameState and wrapped
+    //    { gameState, turns } replays (the format the mod writes). For wrapped
+    //    replays, gameState.history is empty and the move list lives in the
+    //    top-level turns array, so we flatten it into a synthetic history.
     let path = if params.filename.starts_with("replays/") {
         params.filename.clone()
     } else {
         format!("replays/{}", params.filename)
     };
 
-    let replay_state: polyfish::states::GameState = match std::fs::read_to_string(&path) {
-        Ok(json) => {
-            // Support both bare GameState and wrapped { gameState, turns } replays.
-            let val: Value = serde_json::from_str(&json).unwrap_or(Value::Null);
-            let state_val = if val["gameState"].is_object() {
-                val["gameState"].clone()
-            } else {
-                val
-            };
-            serde_json::from_value(state_val).unwrap_or_default()
-        }
-        Err(e) => {
-            return Json(serde_json::json!({ "error": format!("Failed to load replay: {}", e) }));
-        }
-    };
+    let (replay_state, turns_val): (polyfish::states::GameState, Value) =
+        match std::fs::read_to_string(&path) {
+            Ok(json) => {
+                let val: Value = serde_json::from_str(&json).unwrap_or(Value::Null);
+                let (state_val, turns) = if val["gameState"].is_object() {
+                    (val["gameState"].clone(), val["turns"].clone())
+                } else {
+                    (val, Value::Null)
+                };
+                let state = serde_json::from_value(state_val).unwrap_or_default();
+                (state, turns)
+            }
+            Err(e) => {
+                return Json(serde_json::json!({ "error": format!("Failed to load replay: {}", e) }));
+            }
+        };
 
-    if replay_state._history.len() <= params.step_index {
+    // Build a flat, play-ordered move history. Prefer the engine's recorded
+    // _history; fall back to flattening turns[].players[].commands[] (ordered
+    // by turn, then playerId) for mod-format replays.
+    let mut history: Vec<Value> = replay_state._history.iter().cloned().collect();
+    let mut from_turns = false;
+    if history.is_empty() {
+        from_turns = true;
+        if let Some(turns) = turns_val.as_array() {
+            for turn in turns {
+                let mut players = turn["players"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                players.sort_by_key(|p| p["playerId"].as_i64().unwrap_or(0));
+                for player in players {
+                    if let Some(cmds) = player["commands"].as_array() {
+                        for cmd in cmds {
+                            history.push(cmd.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if params.step_index > history.len() {
         return Json(serde_json::json!({ "error": "Step index out of bounds" }));
     }
 
-    // 2. Initialize a FRESH game with the SAME seed
-    let mut map_settings = MapGenSettings::default();
-    map_settings.size = match replay_state.settings.size {
-        11 => polyfish::types::MapSize::Tiny,
-        13 => polyfish::types::MapSize::Small,
-        16 => polyfish::types::MapSize::Normal,
-        24 => polyfish::types::MapSize::Large,
-        32 => polyfish::types::MapSize::Huge,
-        90 => polyfish::types::MapSize::Massive,
-        _ => polyfish::types::MapSize::Normal,
-    };
-    map_settings.seed = replay_state.initial_seed;
-    map_settings.map_type = replay_state.settings.map_type;
-
-    // Need to extract tribes from replay settings or state?
-    // GameSettings doesn't store the tribe list directly as TribeType enum vec, but state.tribes does
-    // Extract unique tribe types from replay_state.tribes
-    let mut tribes = Vec::new();
-    // Sort by ID to ensure consistent order if that matters
-    let mut sorted_tribes: Vec<_> = replay_state.tribes.values().collect();
-    sorted_tribes.sort_by_key(|t| t.id);
-    for t in sorted_tribes {
-        tribes.push(t.tribe_type);
-    }
-    map_settings.tribes = tribes;
-
-    let initial_state = generate(map_settings);
+    // 2. Build the turn-0 game state. For engine-format replays (non-empty
+    //    _history) the loaded state is the FINAL state, so we regenerate the
+    //    initial board from initial_seed. For mod-format replays (history
+    //    flattened from `turns`) the loaded gameState IS the turn-0 state
+    //    (initialSeed is typically 0, so regeneration would desync), so we
+    //    use it directly.
     let mut game = Game::new();
-    game.state = initial_state;
-    // Restore initial seed again just in case generate() didn't set it (it should have used it)
-    game.state.initial_seed = replay_state.initial_seed;
-    game.post_load();
+    if from_turns {
+        game.state = replay_state.clone();
+        game.post_load();
+    } else {
+        let mut map_settings = MapGenSettings::default();
+        map_settings.size = match replay_state.settings.size {
+            11 => polyfish::types::MapSize::Tiny,
+            13 => polyfish::types::MapSize::Small,
+            16 => polyfish::types::MapSize::Normal,
+            24 => polyfish::types::MapSize::Large,
+            32 => polyfish::types::MapSize::Huge,
+            90 => polyfish::types::MapSize::Massive,
+            _ => polyfish::types::MapSize::Normal,
+        };
+        map_settings.seed = replay_state.initial_seed;
+        map_settings.map_type = replay_state.settings.map_type;
 
-    // 3. Replay moves up to step_index (exclusive? or inclusive? let's say we want to analyze the state BEFORE turn step_index is played)
-    // Wait, if we want to compare "User Move vs AI Move", we need the state *before* the user made the move at step_index.
-    // So we replay moves 0 to step_index - 1.
-
-    for i in 0..params.step_index {
-        if i >= replay_state._history.len() {
-            break;
+        // Extract unique tribe types from replay_state.tribes
+        let mut tribes = Vec::new();
+        let mut sorted_tribes: Vec<_> = replay_state.tribes.values().collect();
+        sorted_tribes.sort_by_key(|t| t.id);
+        for t in sorted_tribes {
+            tribes.push(t.tribe_type);
         }
+        map_settings.tribes = tribes;
 
-        let move_json = &replay_state._history[i];
+        let initial_state = generate(map_settings);
+        game.state = initial_state;
+        game.state.initial_seed = replay_state.initial_seed;
+        game.post_load();
+    }
 
-        // We need to parse this JSON back into a Box<dyn Move>
-        // Use a matching logic similar to manual_step... logic duplication is confusing.
-        // Better way: Implement Game::deserialize_move?
-        // For now, let's copy the deserialization logic or create a helper.
-        // Actually, since we only need to play it, we can identify it from legal moves if it matches?
-        // But some moves (like Build) have parameters that legal_moves might not fully capture if they are identical?
-        // Actually, `legal_moves` generates all distinct moves. We can find the one that matches the JSON.
+    // 3. Replay moves 0..step_index so the board reflects the state *before*
+    //    the move at step_index is played (or the final state when step_index
+    //    == history.len()).
+    for i in 0..params.step_index.min(history.len()) {
+        let move_json = &history[i];
 
-        // Find matching move in legal moves
+        // Find the legal move whose serialized form matches the recorded JSON.
         let legal = game.legal_moves();
         let mut found = false;
-
-        // serialized form comparison
         for m in legal {
             if m.serialize() == *move_json {
                 game.play_move(m.as_ref());
@@ -1590,38 +1603,50 @@ async fn analyze_replay_step(
         }
     }
 
-    // 4. Now game is at the state just before the user played history[step_index]
-    // Run MCTS analysis
-    use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
-    use polyfish::ai::mcts_zero::ZeroMctsAgent;
-    let evaluator = Evaluator::Inline(InlineEvalHandle::new(state.network.as_ref().unwrap().clone()));
-    let agent = ZeroMctsAgent::new(&evaluator, params.iterations);
-    let (best_move, mcts_analysis) = agent.select_move_with_stats(&mut game);
-
-    let ai_move_json = best_move.as_ref().map(|m| m.serialize());
-    let ai_move_desc = best_move
-        .as_ref()
-        .map(|m| m.describe(&game.state))
-        .unwrap_or("None".to_string());
-
-    // User's actual move
-    let user_move_json = &replay_state._history[params.step_index];
-    // Find desc for user move
-    let legal = game.legal_moves();
+    // 4. User's actual move at this step (None when viewing the final state).
+    let user_move_json = if params.step_index < history.len() {
+        Some(history[params.step_index].clone())
+    } else {
+        None
+    };
     let mut user_move_desc = "Unknown Move".to_string();
-    for m in legal {
-        if m.serialize() == *user_move_json {
-            user_move_desc = m.describe(&game.state);
-            break;
+    if let Some(ref um) = user_move_json {
+        let legal = game.legal_moves();
+        for m in legal {
+            if m.serialize() == *um {
+                user_move_desc = m.describe(&game.state);
+                break;
+            }
         }
     }
 
-    // Build state for frontend
+    // 5. Optional AI analysis. The board-state replay above does NOT require a
+    //    network, so stepping works even before a model is loaded. The AI-move
+    //    suggestion is only produced when a trained network is available.
+    let mut ai_move_json: Option<Value> = None;
+    let mut ai_move_desc = "None".to_string();
+    let mut mcts_analysis: Value = serde_json::json!({});
+    if let Some(net) = &state.network {
+        use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
+        use polyfish::ai::mcts_zero::ZeroMctsAgent;
+        let evaluator = Evaluator::Inline(InlineEvalHandle::new(net.clone()));
+        let agent = ZeroMctsAgent::new(&evaluator, params.iterations);
+        let (best_move, analysis) = agent.select_move_with_stats(&mut game);
+        ai_move_json = best_move.as_ref().map(|m| m.serialize());
+        ai_move_desc = best_move
+            .as_ref()
+            .map(|m| m.describe(&game.state))
+            .unwrap_or_else(|| "None".to_string());
+        mcts_analysis = serde_json::to_value(analysis).unwrap_or(serde_json::json!({}));
+    }
+
+    // 6. Build state for frontend
     let mut tiles: Vec<_> = game.state.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);
 
     Json(serde_json::json!({
         "stepIndex": params.step_index,
+        "totalSteps": history.len(),
         "state": {
             "settings": game.state.settings,
             "tiles": tiles,

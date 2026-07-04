@@ -43,6 +43,9 @@ struct GameResult {
     winner_score: i32,
     recap: ModReplay,
     action_counts: HashMap<polyfish::types::MoveType, usize>,
+    /// Move-type counts keyed by turn number, for the "move mix by turn"
+    /// training-progress chart (see parse_metrics.py / dashboard).
+    moves_by_turn: HashMap<i32, HashMap<polyfish::types::MoveType, usize>>,
 }
 
 /// Load the main network (and opponent network, defaulting to the main one)
@@ -146,6 +149,8 @@ fn play_single_game(
         polyfish::types::MoveType,
     )> = Vec::new();
     let mut action_counts: HashMap<polyfish::types::MoveType, usize> = HashMap::new();
+    let mut moves_by_turn: HashMap<i32, HashMap<polyfish::types::MoveType, usize>> =
+        HashMap::new();
 
     let current_scores: Vec<(PlayerId, i32)> = game
         .state
@@ -250,6 +255,11 @@ fn play_single_game(
         if let Some(m) = best_move {
             let m_type = m.move_type();
             *action_counts.entry(m_type).or_insert(0) += 1;
+            *moves_by_turn
+                .entry(game.state.settings.turn)
+                .or_default()
+                .entry(m_type)
+                .or_insert(0) += 1;
 
             flat_recap.push((
                 game.state.settings.turn,
@@ -342,6 +352,7 @@ fn play_single_game(
             turns: group_recap(flat_recap),
         },
         action_counts,
+        moves_by_turn,
     })
 }
 
@@ -432,7 +443,7 @@ fn main() -> anyhow::Result<()> {
         /// call within a single game's search tree). Cross-game batching via
         /// the eval server now supplies GPU efficiency independently, so
         /// this can shrink toward sequential per-game search.
-        #[arg(long, default_value_t = 4)]
+        #[arg(long, default_value = "4")]
         leaf_batch: Option<usize>,
 
         /// Eval-cache LRU capacity (number of cached NN evaluations). 0
@@ -922,6 +933,9 @@ fn main() -> anyhow::Result<()> {
     let mut total_research = 0;
     let mut total_attacks = 0;
 
+    let mut total_moves_by_turn: HashMap<i32, HashMap<polyfish::types::MoveType, usize>> =
+        HashMap::new();
+
     for result in results {
         total_score += result.winner_score;
         total_moves += result.moves;
@@ -965,6 +979,13 @@ fn main() -> anyhow::Result<()> {
             .get(&polyfish::types::MoveType::Attack)
             .copied()
             .unwrap_or(0);
+
+        for (turn, counts) in &result.moves_by_turn {
+            let entry = total_moves_by_turn.entry(*turn).or_default();
+            for (mt, c) in counts {
+                *entry.entry(*mt).or_insert(0) += c;
+            }
+        }
 
         // Backpropagate value
         // Domination: Win/Loss is the primary signal.
@@ -1088,8 +1109,23 @@ fn main() -> anyhow::Result<()> {
     let avg_research = total_research as f32 / args.num_games as f32;
     let avg_attacks = total_attacks as f32 / args.num_games as f32;
 
+    // "typical move by turn N" chart data: {"<turn>": {"<MoveType>": count, ...}, ...}
+    let moves_by_turn_json = {
+        let mut turns_sorted: Vec<&i32> = total_moves_by_turn.keys().collect();
+        turns_sorted.sort();
+        let mut turn_map = serde_json::Map::new();
+        for turn in turns_sorted {
+            let mut counts_map = serde_json::Map::new();
+            for (mt, c) in &total_moves_by_turn[turn] {
+                counts_map.insert(format!("{mt:?}"), serde_json::Value::from(*c));
+            }
+            turn_map.insert(turn.to_string(), serde_json::Value::Object(counts_map));
+        }
+        serde_json::Value::Object(turn_map).to_string()
+    };
+
     println!(
-        "METRICS: {{\"avg_score\": {:.2}, \"max_score\": {}, \"avg_moves\": {:.2}, \"p1_avg\": {:.2}, \"p2_avg\": {:.2}, \"avg_captures\": {:.2}, \"avg_harvests\": {:.2}, \"avg_builds\": {:.2}, \"avg_research\": {:.2}, \"avg_attacks\": {:.2}}}",
+        "METRICS: {{\"avg_score\": {:.2}, \"max_score\": {}, \"avg_moves\": {:.2}, \"p1_avg\": {:.2}, \"p2_avg\": {:.2}, \"avg_captures\": {:.2}, \"avg_harvests\": {:.2}, \"avg_builds\": {:.2}, \"avg_research\": {:.2}, \"avg_attacks\": {:.2}, \"moves_by_turn\": {}}}",
         avg_score,
         max_score,
         avr_moves,
@@ -1099,7 +1135,8 @@ fn main() -> anyhow::Result<()> {
         avg_harvests,
         avg_builds,
         avg_research,
-        avg_attacks
+        avg_attacks,
+        moves_by_turn_json
     );
 
     // Stack and save
