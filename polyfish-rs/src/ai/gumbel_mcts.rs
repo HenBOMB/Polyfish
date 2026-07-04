@@ -887,7 +887,8 @@ fn clone_child_move(root: &GumbelNode, idx: usize) -> Option<Box<dyn Move>> {
 /// in which case the next call simply builds fresh.
 fn next_root_hash_for(game: &mut Game, m: Option<&dyn Move>) -> Option<u64> {
     let m = m?;
-    game.play_move(m)?;
+    // The undo callback is intentionally dropped because the game is a per-call clone 
+    let _ = game.play_move(m)?;
     let feat = features::state_to_cpu_features(
         &game.state,
         game.state.settings.current_player_turn_id,
