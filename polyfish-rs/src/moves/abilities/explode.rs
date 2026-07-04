@@ -195,9 +195,19 @@ impl Move for ExplodeMove {
                 }
             }
             if any_enemies {
+                let old_attacked_this_turn = state
+                    .tribes
+                    .get(&owner)
+                    .map(|t| t.attacked_this_turn)
+                    .unwrap_or(false);
                 if let Some(tribe) = state.tribes.get_mut(&owner) {
                     tribe.attacked_this_turn = true;
                 }
+                undos.push(Box::new(move |s| {
+                    if let Some(t) = s.tribes.get_mut(&owner) {
+                        t.attacked_this_turn = old_attacked_this_turn;
+                    }
+                }));
             }
 
             Ok(MoveResult {

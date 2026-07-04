@@ -5,8 +5,9 @@ use polyfish::ai::network::PolyZeroNet;
 use polyfish::game::Game;
 use polyfish::mapgen::{MapGenSettings, generate};
 use polyfish::types::{MapSize, MapType, ModeType, TribeType};
-use rayon::prelude::*;
-use std::sync::Arc;
+use rayon::ThreadPoolBuilder;
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime};
 
 /// Arena: battle two configurations head-to-head.
@@ -54,6 +55,12 @@ struct Args {
     /// Max game turns. Higher = more decisive but slower.
     #[arg(long, default_value_t = 30)]
     max_turns: i32,
+
+    /// Cap concurrent rayon workers (= concurrent Metal devices on macOS).
+    /// Lower this if you hit Metal GPU errors (command-buffer faults under
+    /// memory pressure). 0 = use all cores (rayon default).
+    #[arg(long, default_value_t = 0)]
+    workers: usize,
 }
 
 fn load_model(path: &str, device: &Device) -> anyhow::Result<PolyZeroNet> {
@@ -194,8 +201,15 @@ fn main() -> anyhow::Result<()> {
     println!("Config 1: {} (GPU: {:?})", args.model1, !matches!(device, Device::Cpu));
     let net1 = Arc::new(load_model(&args.model1, &device)?);
 
+    // When both configs use the same model file, share one GPU copy instead of
+    // loading a second — doubles GPU memory otherwise (Metal faults under load).
+    let same_model = args.model1 == args.model2;
     println!("Config 2: {} (GPU: {:?})", args.model2, !matches!(device, Device::Cpu));
-    let net2 = Arc::new(load_model(&args.model2, &device)?);
+    let net2 = if same_model {
+        net1.clone()
+    } else {
+        Arc::new(load_model(&args.model2, &device)?)
+    };
 
     let mcts1 = args.mcts1.unwrap_or(args.mcts);
     let mcts2 = args.mcts2.unwrap_or(args.mcts);
@@ -217,44 +231,124 @@ fn main() -> anyhow::Result<()> {
         args.games, total_games
     );
 
-    // Each seed produces two games with swapped sides.
-    // On Metal, sharing one device across rayon workers races inside candle
-    // so each worker builds its own device and network replicas — same pattern as
-    // self_play. On CPU/CUDA the loaded networks are shared.
-    let per_thread_metal = device.is_metal();
-    let results: Vec<MatchResult> = (0..args.games)
-        .into_par_iter()
-        .map_init(
-            || {
-                if per_thread_metal {
-                    let device = Device::new_metal(0)
-                        .expect("failed to create per-thread Metal device");
-                    let n1 = Arc::new(
-                        load_model(&args.model1, &device)
-                            .expect("failed to load per-thread model1"),
-                    );
-                    let n2 = Arc::new(
-                        load_model(&args.model2, &device)
-                            .expect("failed to load per-thread model2"),
-                    );
-                    (n1, n2)
-                } else {
-                    (net1.clone(), net2.clone())
-                }
-            },
-            |(net1, net2), i| {
-                let seed = (base_seed + i as u64) as i64;
-                let r1 = play_match(
-                    net1, net2, mcts1, mcts2, backend1, backend2, seed, false, args.max_turns,
-                );
-                let r2 = play_match(
-                    net1, net2, mcts1, mcts2, backend1, backend2, seed, true, args.max_turns,
-                );
-                [r1, r2]
-            },
+    let arena_start = Instant::now();
+    let completed = AtomicU32::new(0);
+    let progress_step = ((total_games / 10) as u32).max(1);
+
+    // Cap concurrent workers (= concurrent Metal devices on macOS) if requested.
+    let pool = if args.workers > 0 {
+        Some(
+            ThreadPoolBuilder::new()
+                .num_threads(args.workers)
+                .build()
+                .expect("failed to build rayon pool"),
         )
-        .flatten_iter()
-        .collect();
+    } else {
+        None
+    };
+
+    // On Metal, sharing one device across threads races inside candle, so each
+    // real worker thread gets its own device and network replicas — same
+    // pattern as self_play. On CPU/CUDA the loaded networks are shared.
+    //
+    // We use rayon::broadcast (not par_iter/map_init) because map_init's init
+    // closure can be re-invoked whenever work-stealing rebalances a chunk onto
+    // a "new" logical task, which silently created far more than `--workers`
+    // Metal devices over a long run (compounding GPU memory pressure over
+    // time). broadcast runs its closure exactly once per real pool thread.
+    let per_thread_metal = device.is_metal();
+    let job_counter = AtomicUsize::new(0);
+    let skipped = AtomicU32::new(0);
+    let results_mutex: Mutex<Vec<MatchResult>> = Mutex::new(Vec::with_capacity(total_games));
+
+    let worker = |_ctx: rayon::BroadcastContext| {
+        let (w_net1, w_net2) = if per_thread_metal {
+            let device =
+                Device::new_metal(0).expect("failed to create per-thread Metal device");
+            let n1 = Arc::new(
+                load_model(&args.model1, &device).expect("failed to load per-thread model1"),
+            );
+            let n2 = if same_model {
+                n1.clone()
+            } else {
+                Arc::new(
+                    load_model(&args.model2, &device)
+                        .expect("failed to load per-thread model2"),
+                )
+            };
+            println!(
+                "  worker ready (Metal device loaded) at {:.1}s",
+                arena_start.elapsed().as_secs_f32()
+            );
+            (n1, n2)
+        } else {
+            (net1.clone(), net2.clone())
+        };
+
+        loop {
+            let idx = job_counter.fetch_add(1, Ordering::Relaxed);
+            if idx >= args.games {
+                break;
+            }
+            let seed = (base_seed + idx as u64) as i64;
+
+            // A transient macOS Metal GPU driver reset (command buffer
+            // "discarded, victim of GPU error/recovery") can panic mid-match
+            // under sustained multi-device load. Catch it per-job so one
+            // flaky GPU moment doesn't kill this worker thread and cascade
+            // into rayon::broadcast propagating the panic and discarding
+            // every already-completed result on the whole run.
+            let r1 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                play_match(
+                    &w_net1, &w_net2, mcts1, mcts2, backend1, backend2, seed, false,
+                    args.max_turns,
+                )
+            }));
+            let r2 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                play_match(
+                    &w_net1, &w_net2, mcts1, mcts2, backend1, backend2, seed, true,
+                    args.max_turns,
+                )
+            }));
+
+            match (r1, r2) {
+                (Ok(r1), Ok(r2)) => {
+                    results_mutex.lock().unwrap().extend([r1, r2]);
+                }
+                _ => {
+                    skipped.fetch_add(1, Ordering::Relaxed);
+                    eprintln!(
+                        "  ⚠ seed {} skipped after a transient GPU/backend error",
+                        seed
+                    );
+                }
+            }
+
+            let done = completed.fetch_add(2, Ordering::Relaxed) + 2;
+            // Print early completions immediately (heartbeat) plus every ~10%.
+            if done <= 2 || done % progress_step == 0 || done >= total_games as u32 {
+                let elapsed = arena_start.elapsed().as_secs_f32();
+                let done = done.min(total_games as u32);
+                println!(
+                    "  progress: {}/{} games ({:.0}%)  elapsed {:.0}s  ~{:.0}s remaining",
+                    done,
+                    total_games,
+                    100.0 * done as f32 / total_games as f32,
+                    elapsed,
+                    elapsed * (total_games as f32 / done as f32 - 1.0)
+                );
+            }
+        }
+    };
+
+    if let Some(p) = &pool {
+        p.broadcast(worker);
+    } else {
+        rayon::broadcast(worker);
+    }
+    let results = results_mutex.into_inner().unwrap();
+
+    let arena_elapsed = arena_start.elapsed();
 
     let mut config1_wins = 0u32;
     let mut config2_wins = 0u32;
@@ -280,7 +374,8 @@ fn main() -> anyhow::Result<()> {
         moves2_total += r.moves_config2;
     }
 
-    let n = total_games as f32;
+    let n = results.len().max(1) as f32;
+    let skipped_count = skipped.load(Ordering::Relaxed);
     let ms_per_move1 = if moves1_total > 0 {
         (ns1_total as f64) / 1_000_000.0 / (moves1_total as f64)
     } else {
@@ -293,7 +388,17 @@ fn main() -> anyhow::Result<()> {
     };
 
     println!("\n=== ARENA RESULTS ===");
-    println!("Total Games: {} ({} seeds, sides swapped)", total_games, args.games);
+    println!(
+        "Total Games: {} completed / {} attempted ({} seeds, sides swapped){}",
+        results.len(),
+        total_games,
+        args.games,
+        if skipped_count > 0 {
+            format!(", {} seed(s) skipped after transient errors", skipped_count)
+        } else {
+            String::new()
+        }
+    );
     println!(
         "Config 1 Wins: {} ({:.1}%)",
         config1_wins,
@@ -324,6 +429,12 @@ fn main() -> anyhow::Result<()> {
             ratio
         );
     }
+    println!(
+        "Wall-clock: {:.1}s total  ({:.2} games/s, {:.1}s/game avg)",
+        arena_elapsed.as_secs_f32(),
+        total_games as f32 / arena_elapsed.as_secs_f32(),
+        arena_elapsed.as_secs_f32() / total_games as f32,
+    );
 
     Ok(())
 }

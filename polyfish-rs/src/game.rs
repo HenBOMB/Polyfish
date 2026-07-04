@@ -174,20 +174,23 @@ impl Game {
 
         let undo = if game_move.move_type() == MoveType::EndTurn {
             let end_undo = self.end_turn();
-            self.state.settings._recent_moves.clear();
-            end_undo
+            let old_recent_moves = std::mem::take(&mut self.state.settings._recent_moves);
+            Box::new(move |s: &mut GameState| {
+                end_undo(s);
+                s.settings._recent_moves = old_recent_moves;
+            }) as UndoCallback
         } else if game_move.move_type() == MoveType::Resign {
             let res = game_move.execute(&mut self.state).unwrap();
             let move_undo = res.undo;
             let end_undo = self.end_turn();
-            self.state.settings._recent_moves.clear();
+            let old_recent_moves = std::mem::take(&mut self.state.settings._recent_moves);
             self.state._history.push(game_move.serialize());
 
             Box::new(move |s: &mut GameState| {
-                s.settings._recent_moves.clear(); // Or restore? EndTurn clears it.
                 s._history.pop();
                 end_undo(s);
                 move_undo(s);
+                s.settings._recent_moves = old_recent_moves;
             }) as UndoCallback
         } else {
             let result = game_move.execute(&mut self.state);
@@ -255,7 +258,7 @@ impl Game {
 
             // End our turn
             undos.push(self.end_turn());
-            self.state.settings._recent_moves.clear();
+            let old_recent_moves = std::mem::take(&mut self.state.settings._recent_moves);
 
             // Keep ending turns until we're back at original player
             // This effectively "skips" all enemy turns
@@ -274,16 +277,18 @@ impl Game {
                 while let Some(undo) = undos.pop() {
                     undo(s);
                 }
+                s.settings._recent_moves = old_recent_moves;
             }) as UndoCallback
         } else if game_move.move_type() == MoveType::Resign {
             let res = game_move.execute(&mut self.state).unwrap();
             let move_undo = res.undo;
             let end_undo = self.end_turn();
-            self.state.settings._recent_moves.clear();
+            let old_recent_moves = std::mem::take(&mut self.state.settings._recent_moves);
 
             Box::new(move |s: &mut GameState| {
                 end_undo(s);
                 move_undo(s);
+                s.settings._recent_moves = old_recent_moves;
             }) as UndoCallback
         } else {
             let result = game_move.execute(&mut self.state);
@@ -341,6 +346,8 @@ impl Game {
 
         // Update pacifist turns
         if let Some(tribe) = state.tribes.get_mut(&active_pov) {
+            let old_pacifist_turns = tribe.pacifist_turns;
+            let old_attacked_this_turn = tribe.attacked_this_turn;
             if tribe.attacked_this_turn {
                 tribe.pacifist_turns = 0;
             }
@@ -349,6 +356,13 @@ impl Game {
                 tribe.pacifist_turns += 1;
             }
             tribe.attacked_this_turn = false;
+
+            undos.push(Box::new(move |s| {
+                if let Some(t) = s.tribes.get_mut(&active_pov) {
+                    t.pacifist_turns = old_pacifist_turns;
+                    t.attacked_this_turn = old_attacked_this_turn;
+                }
+            }));
         }
 
         undos.push(actions::process_end_turn_effects(state, active_pov));
@@ -390,6 +404,9 @@ impl Game {
         if is_game_over(state) {
             state.settings._game_over = true;
             return Box::new(move |s| {
+                for undo in undos.into_iter().rev() {
+                    undo(s);
+                }
                 s.settings._game_over = old_game_over;
                 s.settings.current_player_turn_id = old_pov;
                 s.settings.turn = old_turn;

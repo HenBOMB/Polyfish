@@ -99,18 +99,30 @@ impl Move for AttackMove {
         }
 
         // Mark the tribe as having attacked this turn for pacifist task
+        let old_attacked_this_turn = state
+            .tribes
+            .get(&attacker_owner)
+            .map(|t| t.attacked_this_turn)
+            .unwrap_or(false);
         if let Some(tribe) = state.tribes.get_mut(&attacker_owner) {
             tribe.attacked_this_turn = true;
         }
 
+        let attack_undo = crate::actions::units::attack_unit(
+            state,
+            attacker_owner,
+            attacker_idx,
+            defender_owner,
+            defender_idx,
+        );
+
         Ok(MoveResult {
-            undo: crate::actions::units::attack_unit(
-                state,
-                attacker_owner,
-                attacker_idx,
-                defender_owner,
-                defender_idx,
-            ),
+            undo: Box::new(move |s| {
+                attack_undo(s);
+                if let Some(t) = s.tribes.get_mut(&attacker_owner) {
+                    t.attacked_this_turn = old_attacked_this_turn;
+                }
+            }),
             rewards: None,
         })
     }

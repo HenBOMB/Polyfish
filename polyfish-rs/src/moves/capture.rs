@@ -78,8 +78,16 @@ impl Move for CaptureMove {
                 let map_size = state.settings.size;
                 if let Some(tribe) = state.tribes.get_mut(&unit_owner) {
                     if let Some(unit) = tribe.units.get_mut(capturer_idx) {
+                        let old_home_coords = unit.home_coords;
                         unit.home_coords =
                             Some(crate::coords::Coords::from_index(self.src_index, map_size));
+                        undos.push(Box::new(move |s: &mut crate::states::GameState| {
+                            if let Some(t) = s.tribes.get_mut(&unit_owner) {
+                                if let Some(u) = t.units.get_mut(capturer_idx) {
+                                    u.home_coords = old_home_coords;
+                                }
+                            }
+                        }));
                     }
                 }
             }

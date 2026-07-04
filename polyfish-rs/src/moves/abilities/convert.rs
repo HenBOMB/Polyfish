@@ -31,12 +31,23 @@ impl Move for ConvertMove {
 
         match crate::actions::units::convert_unit(state, self.src_index, self.target_index) {
             Ok(undo) => {
+                let old_attacked_this_turn = state
+                    .tribes
+                    .get(&owner)
+                    .map(|t| t.attacked_this_turn)
+                    .unwrap_or(false);
                 if let Some(tribe) = state.tribes.get_mut(&owner) {
                     tribe.attacked_this_turn = true;
                     tribe.conversions += 1; // Track for Converter task
                 }
                 Ok(MoveResult {
-                    undo,
+                    undo: Box::new(move |s| {
+                        if let Some(t) = s.tribes.get_mut(&owner) {
+                            t.attacked_this_turn = old_attacked_this_turn;
+                            t.conversions -= 1;
+                        }
+                        undo(s);
+                    }),
                     rewards: None,
                 })
             }

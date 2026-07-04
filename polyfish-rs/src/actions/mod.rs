@@ -174,6 +174,7 @@ pub fn start_unit_turn(state: &mut GameState, owner: PlayerId, unit_idx: usize) 
         if let Some(unit) = tribe.units.get_mut(unit_idx) {
             let old_moved = unit.moved;
             let old_attacked = unit.attacked;
+            let old_attacks_performed = unit.attacks_performed;
 
             unit.moved = false;
             unit.attacked = false;
@@ -184,6 +185,7 @@ pub fn start_unit_turn(state: &mut GameState, owner: PlayerId, unit_idx: usize) 
                     if let Some(unit) = tribe.units.get_mut(unit_idx) {
                         unit.moved = old_moved;
                         unit.attacked = old_attacked;
+                        unit.attacks_performed = old_attacks_performed;
                     }
                 }
             });
@@ -378,6 +380,7 @@ pub fn try_discover_other_tribes(state: &mut GameState) -> UndoCallback {
 
                     // Diplomacy Metadata: Record first meeting turn
                     let current_turn = state.settings.turn;
+                    let relation_existed = tribe.relations.contains_key(&enemy_owner);
                     let relation = tribe.relations.entry(enemy_owner).or_default();
                     let old_first_meet = relation.first_meet;
                     relation.first_meet = current_turn;
@@ -385,8 +388,12 @@ pub fn try_discover_other_tribes(state: &mut GameState) -> UndoCallback {
                     undos.push(Box::new(move |s| {
                         if let Some(t) = s.tribes.get_mut(&pov_id) {
                             t.known_players.remove(&enemy_owner);
-                            if let Some(r) = t.relations.get_mut(&enemy_owner) {
-                                r.first_meet = old_first_meet;
+                            if relation_existed {
+                                if let Some(r) = t.relations.get_mut(&enemy_owner) {
+                                    r.first_meet = old_first_meet;
+                                }
+                            } else {
+                                t.relations.shift_remove(&enemy_owner);
                             }
                         }
                     }));

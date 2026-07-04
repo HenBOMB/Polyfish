@@ -270,7 +270,7 @@ pub fn step_unit(
     let map_size = state.settings.size;
 
     // Get current unit state and compute path
-    let (old_tile_idx, old_moved, old_attacked, old_type, old_passenger, path) = {
+    let (old_tile_idx, old_moved, old_attacked, old_type, old_passenger, old_prev_coords, path) = {
         let tribe = match state.tribes.get(&unit_owner) {
             Some(t) => t,
             None => return Box::new(|_| {}),
@@ -296,6 +296,7 @@ pub fn step_unit(
             unit.attacked,
             unit.unit_type,
             unit.passenger_type,
+            unit.prev_coords,
             path,
         )
     };
@@ -706,6 +707,7 @@ pub fn step_unit(
         if let Some(tribe) = s.tribes.get_mut(&unit_owner) {
             if let Some(unit) = tribe.units.get_mut(unit_idx) {
                 unit.coords.set_at(old_tile_idx, map_size);
+                unit.prev_coords = old_prev_coords;
                 unit.unit_type = old_type;
                 unit.passenger_type = old_passenger;
                 unit.moved = old_moved;
