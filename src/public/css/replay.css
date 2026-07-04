@@ -6,7 +6,7 @@
     /* Above console */
     left: 50%;
     transform: translateX(-50%);
-    width: 600px;
+    width: 700px;
     background: rgba(16, 18, 27, 0.95);
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 12px;
