@@ -874,22 +874,26 @@ fn clone_child_move(root: &GumbelNode, idx: usize) -> Option<Box<dyn Move>> {
         .map(|m| dyn_clone::clone_box(&**m))
 }
 
-/// Simulate `m` on `game` (assumed to be at the root state, with all search
-/// undos applied), hash the resulting state's features, then undo — returning
-/// the hash the *next* search's root must match to re-root into this child.
-/// `None` if the move can't be simulated or features can't be built, in which
-/// case the next call simply builds fresh.
+/// Apply `m` to `game` (assumed to be at the root state, with all search
+/// undos applied) via `play_move` — the same path the real game loop uses —
+/// and hash the resulting state's features. This is the hash the *next*
+/// search's root must match to re-root into this child. Using `play_move`
+/// (not `simulate_move`) is load-bearing: the real game loop advances via
+/// `play_move`, which updates `_history` and runs FOW discovery that
+/// `simulate_move` skips, so a simulate-derived hash would never match the
+/// next call's play-derived features. The `game` here is the per-call clone
+/// the Brain passes in, which is discarded after we return, so no undo is
+/// needed. `None` if the move can't be applied or features can't be built,
+/// in which case the next call simply builds fresh.
 fn next_root_hash_for(game: &mut Game, m: Option<&dyn Move>) -> Option<u64> {
     let m = m?;
-    let undo = game.simulate_move(m)?;
+    game.play_move(m)?;
     let feat = features::state_to_cpu_features(
         &game.state,
         game.state.settings.current_player_turn_id,
     )
     .ok()?;
-    let h = feat.hash();
-    undo(&mut game.state);
-    Some(h)
+    Some(feat.hash())
 }
 
 fn move_or_end_turn(best_move: Option<Box<dyn Move>>) -> Option<Box<dyn Move>> {

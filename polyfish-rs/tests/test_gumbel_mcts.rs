@@ -172,3 +172,104 @@ fn test_gumbel_multi_step_game_loop_no_panic() {
         let _ = game.play_move(m.as_ref());
     }
 }
+
+/// Tree reuse (structure-only root-shift): a second consecutive same-player
+/// search must re-root into the previous tree rather than rebuild from
+/// scratch. We advance past the opening book, run one search, apply the
+/// chosen move, then run a second search from the same player's seat and
+/// assert `tree_reuses` incremented. The returned policy must still be a
+/// valid distribution (sums to ~1) — the structure-only reset preserves the
+/// π' target's semantics.
+#[test]
+fn test_gumbel_tree_reuse_on_consecutive_same_player_search() {
+    use polyfish::moves::EndTurnMove;
+
+    let network = make_network();
+    let evaluator = make_evaluator(&network);
+    let mut game = make_game(7);
+
+    // Advance past the opening book so the search path is exercised.
+    for _ in 0..6 {
+        if polyfish::functions::is_game_over(&game.state) {
+            break;
+        }
+        let _ = game.play_move(&EndTurnMove);
+    }
+
+    let mut agent = GumbelMctsAgent::new(&evaluator, 32, 8);
+
+    // First search from the current player's seat.
+    let pov = game.state.settings.current_player_turn_id;
+    let (m1, mv1) = agent.select_move_with_decomposed_visits(&mut game, 0);
+    assert!(m1.is_some(), "first search must return a move");
+    assert!(!mv1.is_empty());
+    assert_eq!(agent.tree_reuses, 0, "first search builds fresh");
+
+    // Apply the chosen move (still the same player's turn — economy moves
+    // don't end the turn). This is the root-shift case.
+    let m1 = m1.unwrap();
+    let ended_turn = m1.move_type() == polyfish::types::MoveType::EndTurn;
+    let _ = game.play_move(m1.as_ref());
+
+    if ended_turn || game.state.settings.current_player_turn_id != pov {
+        // The chosen move ended the turn (opponent to move next). Tree reuse
+        // is scoped to within one player's own turn, so this scenario can't
+        // exercise reuse — skip the reuse assertion rather than flake.
+        return;
+    }
+
+    // Second search, same player, one move later: must re-root into the
+    // cached subtree.
+    let (_m2, mv2) = agent.select_move_with_decomposed_visits(&mut game, 1);
+    assert!(
+        agent.tree_reuses >= 1,
+        "second consecutive same-player search must reuse the tree (got {})",
+        agent.tree_reuses
+    );
+    let sum: f32 = mv2.iter().map(|mv| mv.visits).sum();
+    assert!(
+        (sum - 1.0).abs() < 1e-4,
+        "reused-root policy target must still sum to 1.0, got {}",
+        sum
+    );
+}
+
+/// Tree reuse must NOT fire when the opponent moved between two calls of the
+/// same agent — the cached tree's chosen child no longer matches the new
+/// root, so the agent must fall back to a fresh build.
+#[test]
+fn test_gumbel_tree_reuse_skipped_after_opponent_move() {
+    use polyfish::moves::EndTurnMove;
+
+    let network = make_network();
+    let evaluator = make_evaluator(&network);
+    let mut game = make_game(99);
+
+    for _ in 0..6 {
+        if polyfish::functions::is_game_over(&game.state) {
+            break;
+        }
+        let _ = game.play_move(&EndTurnMove);
+    }
+
+    let mut agent = GumbelMctsAgent::new(&evaluator, 32, 8);
+
+    // First search for the current player.
+    let (m1, _) = agent.select_move_with_decomposed_visits(&mut game, 0);
+    assert!(m1.is_some());
+
+    // Force a full turn cycle: end the current player's turn, then end the
+    // opponent's turn, so the same player is to move again but the position
+    // has changed by both players' EndTurns.
+    let _ = game.play_move(&EndTurnMove);
+    let _ = game.play_move(&EndTurnMove);
+
+    // The cached tree's next_root_hash was for the state after the chosen
+    // move, not after two EndTurns, so the hash must mismatch → fresh build.
+    let before = agent.tree_reuses;
+    let (_m2, _) = agent.select_move_with_decomposed_visits(&mut game, 1);
+    assert_eq!(
+        agent.tree_reuses, before,
+        "reuse must not fire after an opponent move changed the root"
+    );
+}
