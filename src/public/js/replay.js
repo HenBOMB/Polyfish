@@ -135,6 +135,23 @@ async function jumpToStep(index) {
                 renderer.clear();
             }
             GAME_STATE = data.state;
+
+            // The stat bar (Turn/Score/Stars/Income) is otherwise only kept in
+            // sync by updateUI(), which the replay step path bypasses — update
+            // it here too so it reflects this step instead of staying frozen
+            // at whatever it showed before replay step-through began.
+            const stepTribeId = GAME_STATE.settings.currentPlayerTurnId;
+            const stepTribe = GAME_STATE.tribes[stepTribeId.toString()] || GAME_STATE.tribes[stepTribeId];
+            turnVal.textContent = GAME_STATE.settings.turn;
+            turnTotalVal.textContent = GAME_STATE.settings.maxTurns;
+            if (stepTribe) {
+                tribeNameLabel.textContent = TRIBE_ID_2_NAME[stepTribe.type] || 'Unknown';
+                starsVal.textContent = stepTribe.stars;
+                scoreVal.textContent = stepTribe.score;
+                const income = stepTribe.cities.reduce((acc, cur) => acc + getCityProduction(GAME_STATE, cur), 0);
+                incomeVal.textContent = `+${income}`;
+            }
+
             // Render from the POV of whoever's turn it is at this step, so the
             // view (and FOW) follows the active player as you step through.
             renderer.render(GAME_STATE, []);

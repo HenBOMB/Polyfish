@@ -346,14 +346,17 @@ function renderMoveTurnGrid() {
   const keys = Object.keys(movesByTurn).map(Number).sort((a, b) => a - b);
   const sample = keys.length <= 10 ? keys : keys.filter((_, i) => i % Math.ceil(keys.length / 10) === 0);
 
-  // Collect move types across all sampled iterations so a type always maps to the same color/legend entry.
-  const allTypes = [];
+  // Collect move types across all sampled iterations and rank by total volume (descending),
+  // so the biggest move types are always in the same stacking position/legend order — not alphabetical.
+  const totals = {};
   sample.forEach(iter => {
     const turnData = movesByTurn[String(iter)] || {};
-    Object.keys(turnData).forEach(t => Object.keys(turnData[t] || {}).forEach(k => {
-      if (!allTypes.includes(k)) allTypes.push(k);
-    }));
+    Object.keys(turnData).forEach(t => {
+      const counts = turnData[t] || {};
+      Object.keys(counts).forEach(k => { totals[k] = (totals[k] || 0) + counts[k]; });
+    });
   });
+  const allTypes = Object.keys(totals).sort((a, b) => totals[b] - totals[a]);
   allTypes.forEach(tp => {
     const item = document.createElement('span');
     item.className = 'turn-legend-item';
@@ -377,7 +380,7 @@ function renderMoveTurnGrid() {
     const turns = Object.keys(turnData).map(Number).sort((a, b) => a - b).slice(0, 12);
     const types = new Set();
     turns.forEach(t => Object.keys(turnData[String(t)] || {}).forEach(k => types.add(k)));
-    const typeList = [...types];
+    const typeList = allTypes.filter(tp => types.has(tp));
     const datasets = typeList.map(tp => ({
       label: tp,
       data: turns.map(t => (turnData[String(t)] || {})[tp] || 0),
