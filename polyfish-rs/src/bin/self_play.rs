@@ -555,17 +555,15 @@ fn main() -> anyhow::Result<()> {
         max_batch: args.max_batch,
         coalesce_timeout: std::time::Duration::from_micros(args.coalesce_timeout_us),
     };
-    let (_eval_server1, eval_handle1) = EvalServer::start(network1.clone(), eval_config);
-    let (_eval_server2, eval_handle2) = if args.opponent.is_some() {
-        EvalServer::start(network2.clone(), eval_config)
+    let (eval_server1, eval_handle1) = EvalServer::start(network1.clone(), eval_config);
+    let (eval_server2, eval_handle2) = if args.opponent.is_some() {
+        let (server, handle) = EvalServer::start(network2.clone(), eval_config);
+        (Some(server), handle)
     } else {
         // Self-play against the same weights: reuse one server/handle so we
         // don't run two inference threads (and two device contexts) for the
         // same network.
-        (
-            EvalServer::start(network1.clone(), eval_config).0,
-            eval_handle1.clone(),
-        )
+        (None, eval_handle1.clone())
     };
     let eval1 = Evaluator::Server(eval_handle1);
     let eval2 = Evaluator::Server(eval_handle2);
@@ -650,6 +648,32 @@ fn main() -> anyhow::Result<()> {
     let games_duration = games_start.elapsed();
     println!("Game generation completed in: {:.2}s ({} games)", games_duration.as_secs_f32(), results.len());
     println!("  Average: {:.2}s per game", games_duration.as_secs_f32() / results.len().max(1) as f32);
+
+    let mut server_stats = vec![(1, eval_server1.stats())];
+    if let Some(ref server2) = eval_server2 {
+        server_stats.push((2, server2.stats()));
+    }
+    for (tag, stats) in server_stats {
+        let forwards = stats.forwards.load(Ordering::Relaxed);
+        let rows = stats.rows.load(Ordering::Relaxed);
+        let max_batch = stats.max_batch.load(Ordering::Relaxed);
+        let busy_s = stats.busy_us.load(Ordering::Relaxed) as f64 / 1e6;
+        let avg_batch = if forwards > 0 {
+            rows as f64 / forwards as f64
+        } else {
+            0.0
+        };
+        println!(
+            "EVAL_SERVER_STATS: {{\"server\": {}, \"forwards\": {}, \"rows\": {}, \"avg_batch\": {:.2}, \"max_batch\": {}, \"busy_s\": {:.2}, \"busy_frac\": {:.3}}}",
+            tag,
+            forwards,
+            rows,
+            avg_batch,
+            max_batch,
+            busy_s,
+            busy_s / games_duration.as_secs_f64().max(1e-9)
+        );
+    }
 
     // Aggregate results
     let mut collected_spatial_maps: Vec<Tensor> = Vec::new();

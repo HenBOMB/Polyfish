@@ -27,6 +27,7 @@
 use crate::ai::features::RawFeatures;
 use crate::ai::network::{PolyZeroNet, RawPolicyOutput};
 use candle_core::{Device, Tensor};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::mpsc as std_mpsc;
 use std::time::{Duration, Instant};
@@ -72,6 +73,25 @@ impl EvalHandle {
 /// must keep the server alive for as long as any handle is in use).
 pub struct EvalServer {
     _thread: std::thread::JoinHandle<()>,
+    stats: Arc<EvalServerStats>,
+}
+
+/// Live counters for the server's coalescing behavior, readable from any
+/// thread while the server runs. The key tuning signal is
+/// `rows / forwards` (average coalesced batch size): if it sits near the
+/// per-request leaf batch, actors are not overlapping and the coalesce
+/// timeout / actor count need adjusting.
+#[derive(Default)]
+pub struct EvalServerStats {
+    /// Number of `forward_t` calls issued.
+    pub forwards: AtomicU64,
+    /// Total leaf rows evaluated across all forwards.
+    pub rows: AtomicU64,
+    /// Largest single coalesced batch seen.
+    pub max_batch: AtomicU64,
+    /// Wall time spent inside tensorize + forward + readback, in microseconds.
+    /// Everything else is the server thread sitting idle waiting for work.
+    pub busy_us: AtomicU64,
 }
 
 /// Tuning knobs for request coalescing.
@@ -98,13 +118,25 @@ impl EvalServer {
     /// thread and never touched elsewhere.
     pub fn start(network: Arc<PolyZeroNet>, config: EvalServerConfig) -> (Self, EvalHandle) {
         let (sender, receiver) = std_mpsc::channel::<EvalRequest>();
+        let stats = Arc::new(EvalServerStats::default());
+        let thread_stats = stats.clone();
 
         let thread = std::thread::Builder::new()
             .name("eval-server".to_string())
-            .spawn(move || run_eval_loop(network, receiver, config))
+            .spawn(move || run_eval_loop(network, receiver, config, thread_stats))
             .expect("BUG: failed to spawn eval-server thread");
 
-        (Self { _thread: thread }, EvalHandle { sender })
+        (
+            Self {
+                _thread: thread,
+                stats,
+            },
+            EvalHandle { sender },
+        )
+    }
+
+    pub fn stats(&self) -> &EvalServerStats {
+        &self.stats
     }
 }
 
@@ -112,6 +144,7 @@ fn run_eval_loop(
     network: Arc<PolyZeroNet>,
     receiver: std_mpsc::Receiver<EvalRequest>,
     config: EvalServerConfig,
+    stats: Arc<EvalServerStats>,
 ) {
     let device = network.device();
     loop {
@@ -142,7 +175,16 @@ fn run_eval_loop(
             }
         }
 
+        let busy_start = Instant::now();
         evaluate_batch(&network, &device, requests);
+        stats.forwards.fetch_add(1, Ordering::Relaxed);
+        stats.rows.fetch_add(total_items as u64, Ordering::Relaxed);
+        stats
+            .max_batch
+            .fetch_max(total_items as u64, Ordering::Relaxed);
+        stats
+            .busy_us
+            .fetch_add(busy_start.elapsed().as_micros() as u64, Ordering::Relaxed);
     }
 }
 
