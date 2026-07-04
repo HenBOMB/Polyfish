@@ -630,7 +630,7 @@ fn main() -> anyhow::Result<()> {
     // eval_server.rs), and candle doesn't cleanly expose per-server Metal
     // devices.
     let eval_servers = match args.eval_servers {
-        0 => if use_tch { 2 } else { 1 },
+        0 => if use_tch { 1 } else { 1 }, // Set back to 1 until we can have GPU parallelism to support 2 shards
         n => {
             if n > 1 && !use_tch {
                 anyhow::bail!(

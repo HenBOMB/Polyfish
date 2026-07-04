@@ -6,11 +6,20 @@ import glob
 import os
 import random
 import gc
+import time
 
 # --- Configuration ---
 BATCH_SIZE = 64
 EPOCHS = 2
 LEARNING_RATE = 0.001
+
+# Early stopping: if the smoothed training loss (mean of the last
+# EARLY_STOP_WINDOW batches) hasn't improved by EARLY_STOP_MIN_DELTA within
+# EARLY_STOP_PATIENCE_BATCHES batches, stop this training call rather than
+# grinding through the rest of the replay buffer for no gain. 0 disables.
+EARLY_STOP_PATIENCE_BATCHES = 150
+EARLY_STOP_MIN_DELTA = 0.005
+EARLY_STOP_WINDOW = 20
 
 # Device selection: MPS (Apple Silicon) > CUDA (NVIDIA) > CPU
 try:
@@ -228,20 +237,29 @@ def train():
     scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=EPOCHS, T_mult=1, eta_min=1e-5)
 
     # 3. Training Loop
+    recent_losses = []
+    best_smoothed_loss = None
+    stall_batches = 0
+    early_stopped = False
+
     for epoch in range(EPOCHS):
         total_loss = 0
         total_p_loss = 0
         total_v_loss = 0
         total_batches = 0
-        
+
         random.shuffle(game_files)
-        
+
         # Process in chunks
         CHUNK_SIZE = 10
-        
+        num_chunks = (len(game_files) + CHUNK_SIZE - 1) // CHUNK_SIZE
+
+        print(f"\n=== Epoch {epoch+1}/{EPOCHS} ===")
+
         for i in range(0, len(game_files), CHUNK_SIZE):
             chunk_files = game_files[i : i + CHUNK_SIZE]
-            print(f"Epoch {epoch+1}: Loading chunk {i//CHUNK_SIZE + 1}/{(len(game_files)+CHUNK_SIZE-1)//CHUNK_SIZE} ({len(chunk_files)} files)...")
+            chunk_idx = i // CHUNK_SIZE + 1
+            print(f"Epoch {epoch+1}: Loading chunk {chunk_idx}/{num_chunks} ({len(chunk_files)} files)...")
             
             # Temporary storage for chunk data
             c_spatial = []
@@ -295,10 +313,12 @@ def train():
             
             dataset_size = len(spatial_maps)
             print(f"  Loaded {dataset_size} samples.")
-            
+
             indices = torch.randperm(dataset_size)
-            
-            for j in range(0, dataset_size, BATCH_SIZE):
+            num_batches_in_chunk = (dataset_size + BATCH_SIZE - 1) // BATCH_SIZE
+            chunk_start_time = time.time()
+
+            for batch_num, j in enumerate(range(0, dataset_size, BATCH_SIZE), start=1):
                 batch_idx = indices[j : j + BATCH_SIZE]
                 
                 batch_spatial = spatial_maps[batch_idx].to(DEVICE)
@@ -367,13 +387,53 @@ def train():
                 total_p_loss += p_loss.item()
                 total_v_loss += v_loss.item()
                 total_batches += 1
-            
+
+                # Early stopping: smooth over a window of raw batch losses
+                # (the cumulative epoch average above is too sluggish to
+                # detect a plateau) and bail once it stalls.
+                recent_losses.append(loss.item())
+                if len(recent_losses) > EARLY_STOP_WINDOW:
+                    recent_losses.pop(0)
+                if EARLY_STOP_PATIENCE_BATCHES > 0 and len(recent_losses) == EARLY_STOP_WINDOW:
+                    smoothed_loss = sum(recent_losses) / EARLY_STOP_WINDOW
+                    if best_smoothed_loss is None or smoothed_loss <= best_smoothed_loss - EARLY_STOP_MIN_DELTA:
+                        best_smoothed_loss = smoothed_loss
+                        stall_batches = 0
+                    else:
+                        stall_batches += 1
+                    if stall_batches >= EARLY_STOP_PATIENCE_BATCHES:
+                        early_stopped = True
+
+                elapsed = time.time() - chunk_start_time
+                batches_per_sec = batch_num / elapsed if elapsed > 0 else 0.0
+                print(
+                    f"\r  Chunk {chunk_idx}/{num_chunks} - batch {batch_num}/{num_batches_in_chunk} "
+                    f"- loss: {total_loss/total_batches:.4f} "
+                    f"(policy: {total_p_loss/total_batches:.4f}, value: {total_v_loss/total_batches:.4f}) "
+                    f"- {batches_per_sec:.1f} batch/s",
+                    end="",
+                    flush=True,
+                )
+
+                if early_stopped:
+                    break
+
+            print()  # newline to end the in-place progress line for this chunk
+            if early_stopped:
+                print(
+                    f"Early stopping: smoothed loss hasn't improved by >= {EARLY_STOP_MIN_DELTA} "
+                    f"in {EARLY_STOP_PATIENCE_BATCHES} batches (best smoothed: {best_smoothed_loss:.4f})."
+                )
+
             del spatial_maps, player_states, targets_win, target_heads
             if DEVICE == "cuda":
                 torch.cuda.empty_cache()
             elif DEVICE == "mps":
                 torch.mps.empty_cache()
             gc.collect()
+
+            if early_stopped:
+                break  # skip remaining chunks in this epoch
 
         if total_batches > 0:
             avg_loss = total_loss / total_batches
@@ -382,9 +442,12 @@ def train():
             print(f"Epoch {epoch+1}/{EPOCHS} - Loss: {avg_loss:.4f} (Policy: {avg_p_loss:.4f}, Value: {avg_v_loss:.4f})")
         else:
             print(f"Epoch {epoch+1}/{EPOCHS} - No data processed")
-        
+
         scheduler.step()
-            
+
+        if early_stopped:
+            break  # skip remaining epochs
+
     final_loss = total_loss / total_batches if total_batches > 0 else 0.0
     final_p_loss = total_p_loss / total_batches if total_batches > 0 else 0.0
     final_v_loss = total_v_loss / total_batches if total_batches > 0 else 0.0
