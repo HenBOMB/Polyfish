@@ -89,3 +89,8 @@ CPU speedup, baseline:
 arch=x86_64 (Rosetta)  backend=zero  mcts=200  games=20
 games_duration: 167.56s   avg_s/game: 8.38s   avg_moves: 95.3
 moves/sec: 11.38   cores: 14 (M3 Max, all logical cores)
+
+native arm64:
+arch=arm64   backend=zero   mcts= 200 games= 20  moves/sec=11.88  avg_s/game=8.06
+
+I reckon our current bottleneck isn't CPU yet it's still NN forward passes, so pausing on this optimization work for now until the bottleneck moves back to the CPU and then we can optimize since this will be the long-term bottleneck to our training regimen.
