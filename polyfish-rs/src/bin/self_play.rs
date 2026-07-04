@@ -445,15 +445,9 @@ fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
 
-    // Default Metal op-flush cadence. candle-Metal flushes its command buffer
-    // every `CANDLE_METAL_COMPUTE_PER_BUFFER` queued ops (default 50), which
-    // for an 11x11 net is dominated by dispatch overhead, not math. 1000 lets
-    // the GPU amortize dispatch across many ops before a `waitUntilCompleted`.
-    // Set before `Device::metal_if_available` so candle picks it up at device
-    // init; an explicit env var still wins so benchmarks can A/B test.
+    // Default Metal op-flush cadence to 1000 for better GPU efficiency on Metal
     if std::env::var("CANDLE_METAL_COMPUTE_PER_BUFFER").is_err() {
-        // SAFETY: this runs at the very top of `main` before any other thread
-        // is spawned, so there are no concurrent readers of the environment.
+        // This is safe because it runs at the top of `main`, so no concurrent writes.
         unsafe {
             std::env::set_var("CANDLE_METAL_COMPUTE_PER_BUFFER", "1000");
         }
