@@ -2,7 +2,9 @@ param (
     [switch]$ForceTrain,
     [switch]$Boost,
     [switch]$Chill,
-    [switch]$RewardShaping
+    [switch]$RewardShaping,
+    [switch]$Resume,
+    [string]$ResumeRunId = "latest"
 )
 
 $ErrorActionPreference = "Stop"
@@ -46,15 +48,18 @@ if ($ForceTrain) {
     python train.py
 }
 
-# Determine starting iteration from log
-$StartIter = 1
-if (Test-Path "training_log.csv") {
-    $LastLine = Get-Content "training_log.csv" | Select-Object -Last 1
-    if ($LastLine -match "^(\d+),") {
-        $StartIter = [int]$matches[1] + 1
-        Write-Host "Resuming from iteration $StartIter" -ForegroundColor Green
-    }
+# Migrate CSV and resolve run (new run by default; -Resume to continue)
+python training_log.py migrate
+if ($Resume) {
+    $RunInfoJson = python training_log.py resolve-run --resume $ResumeRunId
+} else {
+    $RunInfoJson = python training_log.py resolve-run
 }
+$RunInfo = $RunInfoJson | ConvertFrom-Json
+$RunId = $RunInfo.run_id
+$RunStartedAt = $RunInfo.run_started_at
+$StartIter = [int]$RunInfo.start_iter
+Write-Host "Training run_id=$RunId started_at=$RunStartedAt starting at iteration $StartIter" -ForegroundColor Green
 
 # 0. Initialize & Auto-Restore Model
 Write-Host "Initializing/Checking model..." -ForegroundColor Cyan
@@ -76,7 +81,7 @@ for ($i = $StartIter; $i -le ($Iterations + $StartIter); $i++) {
     if (-not (Test-Path "checkpoints")) { New-Item -ItemType Directory -Path "checkpoints" | Out-Null }
     
     $OpponentFlag = ""
-    $MatchType = "Self-Play"
+    $MatchType = "selfplay"
     
     $RandVal = Get-Random -Minimum 1 -Maximum 101
     
@@ -96,7 +101,7 @@ for ($i = $StartIter; $i -le ($Iterations + $StartIter); $i++) {
             
             if ($SelectedCp) {
                 $OpponentFlag = "--opponent `"$($SelectedCp.FullName)`""
-                $MatchType = "League Match vs $($SelectedCp.Name)"
+                $MatchType = "league"
             }
         }
     }
@@ -121,32 +126,37 @@ for ($i = $StartIter; $i -le ($Iterations + $StartIter); $i++) {
     
     $SpOutput = & .\target\release\self_play.exe @Args | Out-String
     Write-Host $SpOutput
-    
-    # Extract metrics using RegEx
-    $AvgScore = "0"; $MaxScore = "0"; $P1Avg = "0"; $P2Avg = "0"
-    $AvgCaptures = "0"; $AvgHarvests = "0"; $AvgBuilds = "0"; $AvgResearch = "0"; $AvgAttacks = "0"
-    
-    if ($SpOutput -match '"avg_score":\s*([0-9.]+)') { $AvgScore = $matches[1] }
-    if ($SpOutput -match '"max_score":\s*([0-9.]+)') { $MaxScore = $matches[1] }
-    if ($SpOutput -match '"p1_avg":\s*([0-9.]+)') { $P1Avg = $matches[1] }
-    if ($SpOutput -match '"p2_avg":\s*([0-9.]+)') { $P2Avg = $matches[1] }
-    if ($SpOutput -match '"avg_captures":\s*([0-9.]+)') { $AvgCaptures = $matches[1] }
-    if ($SpOutput -match '"avg_harvests":\s*([0-9.]+)') { $AvgHarvests = $matches[1] }
-    if ($SpOutput -match '"avg_builds":\s*([0-9.]+)') { $AvgBuilds = $matches[1] }
-    if ($SpOutput -match '"avg_research":\s*([0-9.]+)') { $AvgResearch = $matches[1] }
-    if ($SpOutput -match '"avg_attacks":\s*([0-9.]+)') { $AvgAttacks = $matches[1] }
+
+    $SpTemp = New-TemporaryFile
+    Set-Content -Path $SpTemp -Value $SpOutput -Encoding utf8
+    $GameJson = python training_log.py parse-self-play --input $SpTemp | ConvertFrom-Json
+    Remove-Item $SpTemp -Force
+    $GamesFile = $GameJson.games_file
     
     # 2. Training
     Write-Host "[Training] Training model..." -ForegroundColor Cyan
     $TrainOutput = & python train.py | Out-String
     Write-Host $TrainOutput
-    
-    $Loss = "0"
-    if ($TrainOutput -match '"loss":\s*([0-9.]+)') { $Loss = $matches[1] }
+
+    $TrainTemp = New-TemporaryFile
+    Set-Content -Path $TrainTemp -Value $TrainOutput -Encoding utf8
+    $TrainJson = python training_log.py parse-train --input $TrainTemp | ConvertFrom-Json
+    Remove-Item $TrainTemp -Force
+    $Loss = $TrainJson.loss
+    $PolicyLoss = $TrainJson.policy_loss
+    $ValueLoss = $TrainJson.value_loss
     
     # 3. Log
     $Timestamp = [int][double]::Parse((Get-Date -UFormat %s))
-    "$i,$Timestamp,$AvgScore,$MaxScore,$P1Avg,$P2Avg,$Loss,$AvgCaptures,$AvgHarvests,$AvgBuilds,$AvgResearch,$AvgAttacks" | Out-File -FilePath "training_log.csv" -Append -Encoding ascii
+    $GameJsonStr = ($GameJson | ConvertTo-Json -Compress)
+    $TrainJsonStr = ($TrainJson | ConvertTo-Json -Compress)
+    python training_log.py append-row --run-id $RunId --run-started-at $RunStartedAt --iteration $i --timestamp $Timestamp --games-file $GamesFile --game-json $GameJsonStr --train-json $TrainJsonStr --match-type $MatchType
+    $AvgScore = $GameJson.avg_score
+    $AvgCaptures = $GameJson.avg_captures
+    $AvgHarvests = $GameJson.avg_harvests
+    $AvgBuilds = $GameJson.avg_builds
+    $AvgResearch = $GameJson.avg_research
+    $AvgAttacks = $GameJson.avg_attacks
     Write-Host "Iteration $i complete. Type: $MatchType | Avg: $AvgScore | Loss: $Loss" -ForegroundColor Green
     Write-Host "  -> STATS/GAME: Captures: $AvgCaptures | Harvests: $AvgHarvests | Builds: $AvgBuilds | Tech: $AvgResearch | Attacks: $AvgAttacks" -ForegroundColor DarkGray
     
@@ -170,18 +180,25 @@ for ($i = $StartIter; $i -le ($Iterations + $StartIter); $i++) {
                 function ParseNum { param($val) if ([string]::IsNullOrWhiteSpace($val)) { return 0.0 } try { return [double]$val } catch { return 0.0 } }
                 
                 $Body = @{
+                    run_id = [int64]$RunId
+                    run_started_at = $RunStartedAt
                     iteration = $i
                     timestamp = $Timestamp
+                    games_file = if ($GamesFile) { "archive/$GamesFile" } else { "" }
                     avg_score = (ParseNum $AvgScore)
-                    max_score = (ParseNum $MaxScore)
-                    p1_avg = (ParseNum $P1Avg)
-                    p2_avg = (ParseNum $P2Avg)
+                    max_score = (ParseNum $GameJson.max_score)
+                    p1_avg = (ParseNum $GameJson.p1_avg)
+                    p2_avg = (ParseNum $GameJson.p2_avg)
                     loss = (ParseNum $Loss)
+                    policy_loss = (ParseNum $PolicyLoss)
+                    value_loss = (ParseNum $ValueLoss)
                     avg_captures = (ParseNum $AvgCaptures)
                     avg_harvests = (ParseNum $AvgHarvests)
                     avg_builds = (ParseNum $AvgBuilds)
                     avg_research = (ParseNum $AvgResearch)
                     avg_attacks = (ParseNum $AvgAttacks)
+                    avg_moves = (ParseNum $GameJson.avg_moves)
+                    match_type = $MatchType
                 } | ConvertTo-Json
                 
                 Invoke-RestMethod -Uri "$SupabaseUrl/rest/v1/training_metrics" -Method Post -Headers $Headers -Body $Body | Out-Null

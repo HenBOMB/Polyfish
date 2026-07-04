@@ -49,6 +49,32 @@ else
     cargo build --bin polyfish --bin self_play --release --no-default-features
 fi
 
+# Parse long options first, then short options via getopts
+RESUME_RUN=""
+PASSTHROUGH=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --resume)
+      shift
+      if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
+        RESUME_RUN="$1"
+        shift
+      else
+        RESUME_RUN="latest"
+      fi
+      ;;
+    --new-run|-N)
+      RESUME_RUN=""
+      shift
+      ;;
+    *)
+      PASSTHROUGH+=("$1")
+      shift
+      ;;
+  esac
+done
+set -- "${PASSTHROUGH[@]}"
+
 # Parse arguments
 FORCE_TRAIN=false
 BOOST=false
@@ -127,15 +153,19 @@ if [ "$FORCE_TRAIN" = true ]; then
     .venv/bin/python3 train.py
 fi
 
-# Determine starting iteration from log
-START_ITER=1
-if [ -f "training_log.csv" ]; then
-    LAST_ITER=$(tail -n 1 training_log.csv | cut -d',' -f1)
-    if [[ "$LAST_ITER" =~ ^[0-9]+$ ]]; then
-        START_ITER=$((LAST_ITER + 1))
-        echo "Resuming from iteration $START_ITER"
-    fi
+# Migrate legacy CSV and resolve run (new run by default; --resume to continue)
+.venv/bin/python3 training_log.py migrate
+if [ -n "$RESUME_RUN" ]; then
+    RUN_INFO=$(.venv/bin/python3 training_log.py resolve-run --resume "$RESUME_RUN")
+else
+    RUN_INFO=$(.venv/bin/python3 training_log.py resolve-run)
 fi
+RUN_ID=$(echo "$RUN_INFO" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin)['run_id'])")
+RUN_STARTED_AT=$(echo "$RUN_INFO" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin)['run_started_at'])")
+START_ITER=$(echo "$RUN_INFO" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin)['start_iter'])")
+echo "Training run_id=$RUN_ID started_at=$RUN_STARTED_AT starting at iteration $START_ITER"
+
+trap '.venv/bin/python3 training_log.py finish-run 2>/dev/null || true' EXIT
 
 # Portable replacement for GNU `shuf` (not present on stock macOS)
 portable_shuf() {
@@ -178,7 +208,7 @@ do
     # Check if we have checkpoints to play against
     mkdir -p checkpoints
     OPPONENT_FLAG=""
-    MATCH_TYPE="Self-Play"
+    MATCH_TYPE="selfplay"
     
     # Simple random check (1-100 <= 20)
     RAND_VAL=$((1 + RANDOM % 100))
@@ -197,7 +227,7 @@ do
 
         if [ -n "$SELECTED_CP" ]; then
              OPPONENT_FLAG="--opponent $SELECTED_CP"
-             MATCH_TYPE="League Match vs $(basename $SELECTED_CP)"
+             MATCH_TYPE="league"
         fi
     fi
 
@@ -211,22 +241,18 @@ do
     
     echo "[$MATCH_TYPE] Generative games... Tribes: $TRIBE1 vs $TRIBE2"
     
-    # Capture output to extract metrics
-    # We pass args via CLI now, not env vars alone
-    SP_OUTPUT=$(./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$i")
-    echo "$SP_OUTPUT"
+    SP_LOG=$(mktemp)
+    ./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$i" | tee "$SP_LOG"
+    SP_STATUS=${PIPESTATUS[0]}
+    SP_OUTPUT=$(cat "$SP_LOG")
+    rm -f "$SP_LOG"
+    if [ "$SP_STATUS" -ne 0 ]; then
+        echo "Self-play failed with exit code $SP_STATUS" >&2
+        exit "$SP_STATUS"
+    fi
     
-    # Extract Avg Score and Max Score using grep and sed or awk
-    AVG_SCORE=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o '"avg_score": [0-9.]*' | awk -F': ' '{print $2}')
-    MAX_SCORE=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o '"max_score": [0-9]*' | awk -F': ' '{print $2}')
-    P1_AVG=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o '"p1_avg": [0-9.]*' | awk -F': ' '{print $2}')
-    P2_AVG=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o '"p2_avg": [0-9.]*' | awk -F': ' '{print $2}')
-    
-    AVG_CAPTURES=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o '"avg_captures": [0-9.]*' | awk -F': ' '{print $2}')
-    AVG_HARVESTS=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o '"avg_harvests": [0-9.]*' | awk -F': ' '{print $2}')
-    AVG_BUILDS=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o '"avg_builds": [0-9.]*' | awk -F': ' '{print $2}')
-    AVG_RESEARCH=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o '"avg_research": [0-9.]*' | awk -F': ' '{print $2}')
-    AVG_ATTACKS=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o '"avg_attacks": [0-9.]*' | awk -F': ' '{print $2}')
+    GAME_JSON=$(echo "$SP_OUTPUT" | .venv/bin/python3 training_log.py parse-self-play --input -)
+    GAMES_FILE=$(echo "$GAME_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('games_file',''))")
     
     # 2. Training
     echo "[Training] Training model..."
@@ -238,18 +264,32 @@ do
     TRAIN_LOG=$(mktemp)
     .venv/bin/python3 train.py | tee "$TRAIN_LOG"
     TRAIN_STATUS=${PIPESTATUS[0]}
-    TRAIN_OUTPUT=$(cat "$TRAIN_LOG")
+    TRAIN_JSON=$(.venv/bin/python3 training_log.py parse-train --input "$TRAIN_LOG")
     rm -f "$TRAIN_LOG"
     if [ "$TRAIN_STATUS" -ne 0 ]; then
         echo "Training failed with exit code $TRAIN_STATUS" >&2
         exit "$TRAIN_STATUS"
     fi
-    LOSS=$(echo "$TRAIN_OUTPUT" | grep "METRICS:" | grep -o '"loss": [0-9.]*' | awk -F': ' '{print $2}')
-    POLICY_LOSS=$(echo "$TRAIN_OUTPUT" | grep "METRICS:" | grep -o '"policy_loss": [0-9.]*' | awk -F': ' '{print $2}')
+    LOSS=$(echo "$TRAIN_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('loss',''))")
+    POLICY_LOSS=$(echo "$TRAIN_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('policy_loss',''))")
 
     # 3. Log
     TIMESTAMP=$(date +%s)
-    echo "$i,$TIMESTAMP,$AVG_SCORE,$MAX_SCORE,$P1_AVG,$P2_AVG,$LOSS,$AVG_CAPTURES,$AVG_HARVESTS,$AVG_BUILDS,$AVG_RESEARCH,$AVG_ATTACKS,$POLICY_LOSS" >> training_log.csv
+    .venv/bin/python3 training_log.py append-row \
+        --run-id "$RUN_ID" \
+        --run-started-at "$RUN_STARTED_AT" \
+        --iteration "$i" \
+        --timestamp "$TIMESTAMP" \
+        --games-file "$GAMES_FILE" \
+        --game-json "$GAME_JSON" \
+        --train-json "$TRAIN_JSON" \
+        --match-type "$MATCH_TYPE"
+    AVG_SCORE=$(echo "$GAME_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('avg_score',''))")
+    AVG_CAPTURES=$(echo "$GAME_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('avg_captures',''))")
+    AVG_HARVESTS=$(echo "$GAME_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('avg_harvests',''))")
+    AVG_BUILDS=$(echo "$GAME_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('avg_builds',''))")
+    AVG_RESEARCH=$(echo "$GAME_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('avg_research',''))")
+    AVG_ATTACKS=$(echo "$GAME_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('avg_attacks',''))")
     echo "Iteration $i complete. Type: $MATCH_TYPE | Avg: $AVG_SCORE | Loss: $LOSS"
     echo "  -> STATS/GAME: Captures: $AVG_CAPTURES | Harvests: $AVG_HARVESTS | Builds: $AVG_BUILDS | Tech: $AVG_RESEARCH | Attacks: $AVG_ATTACKS"
     

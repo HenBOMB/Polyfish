@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PolyZero Training Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --border: #2d3a4f;
+      --text: #e8eef7;
+      --muted: #8b9cb3;
+      --accent: #4a9eff;
+      --warn: #f39c12;
+      --danger: #e74c3c;
+      --ok: #2ecc71;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    header {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      align-items: center;
+      justify-content: space-between;
+    }
+    h1 { margin: 0; font-size: 1.25rem; }
+    .controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+    button, select {
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.4rem 0.75rem;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    button:hover { border-color: var(--accent); }
+    main { padding: 1rem 1.5rem 2rem; max-width: 1400px; margin: 0 auto; }
+    section { margin-bottom: 2rem; }
+    h2 { font-size: 1.1rem; margin: 0 0 1rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+    }
+    .card .label { font-size: 0.75rem; color: var(--muted); }
+    .card .value { font-size: 1.35rem; font-weight: 600; }
+    .chart-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+      gap: 1rem;
+    }
+    .chart-box {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem;
+    }
+    .chart-box header {
+      border: none;
+      padding: 0 0 0.5rem;
+      justify-content: space-between;
+    }
+    .chart-box h3 { margin: 0; font-size: 0.95rem; font-weight: 500; }
+    .chart-wrap { position: relative; height: 260px; }
+    .flags {
+      background: #2a1f1f;
+      border: 1px solid var(--danger);
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      margin-bottom: 1rem;
+      display: none;
+    }
+    .flags.visible { display: block; }
+    .flags ul { margin: 0.25rem 0 0; padding-left: 1.25rem; }
+    .status-led {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: #555; display: inline-block; margin-right: 0.35rem;
+    }
+    .status-led.active { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+    #moveTurnGrid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 0.5rem;
+    }
+    .turn-mini { height: 120px; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>PolyZero Training Dashboard</h1>
+      <span><span id="statusLed" class="status-led"></span><span id="statusText">Checking training…</span></span>
+    </div>
+    <div class="controls">
+      <button id="prevRun" title="Previous run">◀ Run</button>
+      <select id="runSelect"></select>
+      <button id="nextRun" title="Next run">Run ▶</button>
+      <button id="refreshBtn">Refresh</button>
+      <a href="/">Simulator</a>
+    </div>
+  </header>
+
+  <main>
+    <section id="panelA">
+      <h2>Training progress</h2>
+      <div class="cards" id="summaryCards"></div>
+      <div class="chart-grid">
+        <div class="chart-box"><header><h3>Loss</h3><button class="dl-png" data-canvas="lossChart">PNG</button></header><div class="chart-wrap"><canvas id="lossChart"></canvas></div></div>
+        <div class="chart-box"><header><h3>Score</h3><button class="dl-png" data-canvas="scoreChart">PNG</button></header><div class="chart-wrap"><canvas id="scoreChart"></canvas></div></div>
+        <div class="chart-box"><header><h3>Player balance</h3><button class="dl-png" data-canvas="p1p2Chart">PNG</button></header><div class="chart-wrap"><canvas id="p1p2Chart"></canvas></div></div>
+        <div class="chart-box"><header><h3>Moves by type</h3><button class="dl-png" data-canvas="movesChart">PNG</button></header><div class="chart-wrap"><canvas id="movesChart"></canvas></div></div>
+        <div class="chart-box"><header><h3>Avg moves / game</h3><button class="dl-png" data-canvas="avgMovesChart">PNG</button></header><div class="chart-wrap"><canvas id="avgMovesChart"></canvas></div></div>
+        <div class="chart-box"><header><h3>League vs self-play</h3><button class="dl-png" data-canvas="leagueChart">PNG</button></header><div class="chart-wrap"><canvas id="leagueChart"></canvas></div></div>
+      </div>
+      <div style="margin-top:1rem">
+        <button id="downloadGrid">Download 2×2 progress PNG</button>
+      </div>
+      <h2 style="margin-top:1.5rem">Moves by turn</h2>
+      <div id="moveTurnGrid"></div>
+    </section>
+
+    <section id="panelB">
+      <h2>Generation analysis</h2>
+      <div class="controls" style="margin-bottom:1rem">
+        <label>Iteration:</label>
+        <select id="iterSelect"></select>
+      </div>
+      <div id="flagsBanner" class="flags"><strong>Flags</strong><ul id="flagsList"></ul></div>
+      <div class="chart-grid">
+        <div class="chart-box"><header><h3>Value distribution</h3><button class="dl-png" data-canvas="valDistChart">PNG</button></header><div class="chart-wrap"><canvas id="valDistChart"></canvas></div></div>
+        <div class="chart-box"><header><h3>Value histogram</h3><button class="dl-png" data-canvas="valHistChart">PNG</button></header><div class="chart-wrap"><canvas id="valHistChart"></canvas></div></div>
+        <div class="chart-box"><header><h3>Value time series</h3><button class="dl-png" data-canvas="valTsChart">PNG</button></header><div class="chart-wrap"><canvas id="valTsChart"></canvas></div></div>
+        <div class="chart-box"><header><h3>Absolute value distribution</h3><button class="dl-png" data-canvas="valAbsChart">PNG</button></header><div class="chart-wrap"><canvas id="valAbsChart"></canvas></div></div>
+        <div class="chart-box"><header><h3>Value buckets</h3><button class="dl-png" data-canvas="valBucketChart">PNG</button></header><div class="chart-wrap"><canvas id="valBucketChart"></canvas></div></div>
+        <div class="chart-box"><header><h3>Economy vs baseline</h3><button class="dl-png" data-canvas="econChart">PNG</button></header><div class="chart-wrap"><canvas id="econChart"></canvas></div></div>
+        <div class="chart-box"><header><h3>Combat vs baseline</h3><button class="dl-png" data-canvas="combatChart">PNG</button></header><div class="chart-wrap"><canvas id="combatChart"></canvas></div></div>
+        <div class="chart-box"><header><h3>Z-scores</h3><button class="dl-png" data-canvas="zChart">PNG</button></header><div class="chart-wrap"><canvas id="zChart"></canvas></div></div>
+        <div class="chart-box"><header><h3>P1 vs P2 snapshot</h3><button class="dl-png" data-canvas="snapP1P2Chart">PNG</button></header><div class="chart-wrap"><canvas id="snapP1P2Chart"></canvas></div></div>
+      </div>
+    </section>
+  </main>
+
+<script>
+const charts = {};
+let runs = [];
+let runMetrics = [];
+let allMetrics = [];
+let movesByTurn = {};
+let selectedRunIdx = 0;
+let pollTimer = null;
+
+const chartDefaults = {
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: { legend: { labels: { color: '#8b9cb3' } } },
+  scales: {
+    x: { ticks: { color: '#8b9cb3' }, grid: { color: '#2d3a4f' } },
+    y: { ticks: { color: '#8b9cb3' }, grid: { color: '#2d3a4f' } },
+  },
+};
+
+function fmtRunLabel(r) {
+  const d = r.run_started_at ? new Date(r.run_started_at) : new Date(parseInt(r.run_id, 10) * 1000);
+  const when = isNaN(d) ? r.run_id : d.toLocaleString();
+  return `Run ${when} · ${r.iter_count} iters · best ${Math.round(r.best_score)} · loss ${r.last_loss?.toFixed(3) ?? '?'}`;
+}
+
+function destroyChart(id) {
+  if (charts[id]) { charts[id].destroy(); delete charts[id]; }
+}
+
+function makeChart(id, config) {
+  destroyChart(id);
+  const ctx = document.getElementById(id);
+  charts[id] = new Chart(ctx, config);
+  return charts[id];
+}
+
+async function fetchJson(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+async function loadRuns() {
+  runs = await fetchJson('/api/runs');
+  const sel = document.getElementById('runSelect');
+  sel.innerHTML = '';
+  runs.forEach((r, i) => {
+    const o = document.createElement('option');
+    o.value = i;
+    o.textContent = fmtRunLabel(r);
+    sel.appendChild(o);
+  });
+  if (runs.length === 0) {
+    selectedRunIdx = 0;
+    return;
+  }
+  if (selectedRunIdx >= runs.length) selectedRunIdx = 0;
+  sel.value = String(selectedRunIdx);
+}
+
+async function loadRunData() {
+  if (!runs.length) {
+    runMetrics = [];
+    movesByTurn = {};
+    return;
+  }
+  const run = runs[selectedRunIdx];
+  runMetrics = await fetchJson(`/api/training-metrics?run=${encodeURIComponent(run.run_id)}`);
+  runMetrics.sort((a, b) => a.iteration - b.iteration);
+  allMetrics = await fetchJson('/api/training-metrics');
+  allMetrics.sort((a, b) => (a.run_id === b.run_id ? a.iteration - b.iteration : a.run_id.localeCompare(b.run_id)));
+  movesByTurn = await fetchJson(`/api/moves-by-turn?run=${encodeURIComponent(run.run_id)}`);
+}
+
+function renderSummaryCards() {
+  const el = document.getElementById('summaryCards');
+  if (!runMetrics.length) { el.innerHTML = '<div class="card"><span class="label">No data</span></div>'; return; }
+  const last = runMetrics[runMetrics.length - 1];
+  const best = runMetrics.reduce((m, r) => Math.max(m, r.max_score), 0);
+  const minLoss = runMetrics.reduce((m, r) => r.loss > 0 ? Math.min(m, r.loss) : m, Infinity);
+  const bias = last.p1_avg - last.p2_avg;
+  el.innerHTML = `
+    <div class="card"><div class="label">Latest iter</div><div class="value">${last.iteration}</div></div>
+    <div class="card"><div class="label">Best score</div><div class="value">${Math.round(best)}</div></div>
+    <div class="card"><div class="label">Lowest loss</div><div class="value">${isFinite(minLoss) ? minLoss.toFixed(3) : '—'}</div></div>
+    <div class="card"><div class="label">P1−P2 bias</div><div class="value">${bias >= 0 ? '+' : ''}${bias.toFixed(0)}</div></div>
+  `;
+}
+
+function leaguePointColors(rows) {
+  return rows.map(r => r.match_type === 'league' ? '#f39c12' : '#4a9eff');
+}
+
+function renderPanelA() {
+  const it = runMetrics.map(r => r.iteration);
+  makeChart('lossChart', {
+    type: 'line',
+    data: {
+      labels: it,
+      datasets: [
+        { label: 'loss', data: runMetrics.map(r => r.loss), borderColor: '#4a9eff', tension: 0.2 },
+        { label: 'policy', data: runMetrics.map(r => r.policy_loss), borderColor: '#2ecc71', tension: 0.2 },
+        { label: 'value', data: runMetrics.map(r => r.value_loss), borderColor: '#e67e22', tension: 0.2 },
+      ],
+    },
+    options: chartDefaults,
+  });
+  makeChart('scoreChart', {
+    type: 'line',
+    data: {
+      labels: it,
+      datasets: [
+        { label: 'avg score', data: runMetrics.map(r => r.avg_score), borderColor: '#4a9eff', tension: 0.2 },
+        { label: 'max score', data: runMetrics.map(r => r.max_score), borderColor: '#2ecc71', tension: 0.2, pointBackgroundColor: leaguePointColors(runMetrics) },
+      ],
+    },
+    options: chartDefaults,
+  });
+  makeChart('p1p2Chart', {
+    type: 'line',
+    data: {
+      labels: it,
+      datasets: [
+        { label: 'P1 avg', data: runMetrics.map(r => r.p1_avg), borderColor: '#3498db', tension: 0.2 },
+        { label: 'P2 avg', data: runMetrics.map(r => r.p2_avg), borderColor: '#e67e22', tension: 0.2 },
+      ],
+    },
+    options: chartDefaults,
+  });
+  makeChart('movesChart', {
+    type: 'line',
+    data: {
+      labels: it,
+      datasets: [
+        { label: 'captures', data: runMetrics.map(r => r.avg_captures), tension: 0.2 },
+        { label: 'harvests', data: runMetrics.map(r => r.avg_harvests), tension: 0.2 },
+        { label: 'builds', data: runMetrics.map(r => r.avg_builds), tension: 0.2 },
+        { label: 'research', data: runMetrics.map(r => r.avg_research), tension: 0.2 },
+        { label: 'attacks', data: runMetrics.map(r => r.avg_attacks), tension: 0.2 },
+      ],
+    },
+    options: chartDefaults,
+  });
+  makeChart('avgMovesChart', {
+    type: 'line',
+    data: { labels: it, datasets: [{ label: 'avg moves', data: runMetrics.map(r => r.avg_moves), borderColor: '#9b59b6', tension: 0.2 }] },
+    options: chartDefaults,
+  });
+  const leagueCount = runMetrics.filter(r => r.match_type === 'league').length;
+  const selfCount = runMetrics.length - leagueCount;
+  makeChart('leagueChart', {
+    type: 'bar',
+    data: {
+      labels: ['self-play', 'league'],
+      datasets: [{ label: 'iterations', data: [selfCount, leagueCount], backgroundColor: ['#4a9eff', '#f39c12'] }],
+    },
+    options: { ...chartDefaults, plugins: { legend: { display: false } } },
+  });
+  renderMoveTurnGrid();
+}
+
+function renderMoveTurnGrid() {
+  const grid = document.getElementById('moveTurnGrid');
+  grid.innerHTML = '';
+  const keys = Object.keys(movesByTurn).map(Number).sort((a, b) => a - b);
+  const sample = keys.length <= 10 ? keys : keys.filter((_, i) => i % Math.ceil(keys.length / 10) === 0);
+  sample.forEach(iter => {
+    const div = document.createElement('div');
+    div.className = 'chart-box';
+    const title = document.createElement('h3');
+    title.textContent = `Iter ${iter}`;
+    title.style.fontSize = '0.8rem';
+    div.appendChild(title);
+    const wrap = document.createElement('div');
+    wrap.className = 'turn-mini';
+    const canvas = document.createElement('canvas');
+    wrap.appendChild(canvas);
+    div.appendChild(wrap);
+    grid.appendChild(div);
+    const turnData = movesByTurn[String(iter)] || {};
+    const turns = Object.keys(turnData).map(Number).sort((a, b) => a - b).slice(0, 12);
+    const types = new Set();
+    turns.forEach(t => Object.keys(turnData[String(t)] || {}).forEach(k => types.add(k)));
+    const typeList = [...types];
+    const datasets = typeList.map((tp, i) => ({
+      label: tp,
+      data: turns.map(t => (turnData[String(t)] || {})[tp] || 0),
+      backgroundColor: `hsl(${(i * 47) % 360}, 60%, 55%)`,
+    }));
+    new Chart(canvas, {
+      type: 'bar',
+      data: { labels: turns.map(String), datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { x: { stacked: true, ticks: { color: '#8b9cb3', maxRotation: 0, font: { size: 9 } } }, y: { stacked: true, display: false } },
+      },
+    });
+  });
+}
+
+function populateIterSelect() {
+  const sel = document.getElementById('iterSelect');
+  sel.innerHTML = '';
+  [...runMetrics].reverse().forEach(r => {
+    const o = document.createElement('option');
+    o.value = r.iteration;
+    o.textContent = `Iter ${r.iteration}${r.games_file ? ' · ' + r.games_file.split('/').pop() : ''}`;
+    sel.appendChild(o);
+  });
+}
+
+function baselineForRow(row) {
+  const sameRunPrior = runMetrics.filter(r => r.iteration < row.iteration);
+  let pool = sameRunPrior.length >= 5 ? sameRunPrior : allMetrics.filter(r =>
+    r.run_id < row.run_id || (r.run_id === row.run_id && r.iteration < row.iteration)
+  );
+  if (pool.length < 3) pool = allMetrics.filter(r => r !== row);
+  const fields = ['avg_score','avg_research','avg_harvests','avg_moves','avg_attacks','avg_captures','avg_builds','p1_avg','p2_avg'];
+  const base = {};
+  fields.forEach(f => {
+    const vals = pool.map(r => r[f]).filter(v => v > 0 || f.includes('avg'));
+    base[f] = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+    const std = vals.length > 1 ? Math.sqrt(vals.reduce((s, v) => s + (v - base[f]) ** 2, 0) / vals.length) : 0;
+    base[f + '_std'] = std;
+  });
+  return base;
+}
+
+function buildFlags(row, base, valStats) {
+  const flags = [];
+  const cmp = (metric, ratio, label) => {
+    const b = base[metric];
+    if (b > 0 && row[metric] < ratio * b) flags.push(`${label}: ${row[metric]?.toFixed(2)} vs baseline ${b.toFixed(2)} (<${Math.round(ratio*100)}%)`);
+  };
+  cmp('avg_moves', 0.7, 'Early termination / short games');
+  cmp('avg_attacks', 0.5, 'Combat collapse (attacks)');
+  cmp('avg_captures', 0.5, 'Combat collapse (captures)');
+  cmp('avg_score', 0.7, 'Economy collapse (score)');
+  cmp('avg_research', 0.5, 'Economy collapse (research)');
+  cmp('avg_harvests', 0.5, 'Economy collapse (harvests)');
+  if (Math.max(row.p1_avg, row.p2_avg) > 0 && Math.abs(row.p1_avg - row.p2_avg) / Math.max(row.p1_avg, row.p2_avg) > 0.15) {
+    flags.push(`P1/P2 imbalance: P1=${row.p1_avg.toFixed(0)} P2=${row.p2_avg.toFixed(0)}`);
+  }
+  if (valStats && valStats.weak_pct > 30) flags.push(`High near-zero value targets: ${valStats.weak_pct.toFixed(1)}%`);
+  return flags;
+}
+
+async function renderPanelB() {
+  const sel = document.getElementById('iterSelect');
+  if (!runMetrics.length) return;
+  const iter = parseInt(sel.value || runMetrics[runMetrics.length - 1].iteration, 10);
+  const row = runMetrics.find(r => r.iteration === iter) || runMetrics[runMetrics.length - 1];
+  const base = baselineForRow(row);
+
+  let valDist = null;
+  if (row.games_file) {
+    try {
+      valDist = await fetchJson(`/api/value-distribution?file=${encodeURIComponent(row.games_file)}`);
+    } catch (e) { console.warn('value dist', e); }
+  }
+
+  const flags = buildFlags(row, base, valDist?.stats);
+  const banner = document.getElementById('flagsBanner');
+  const list = document.getElementById('flagsList');
+  if (flags.length) {
+    banner.classList.add('visible');
+    list.innerHTML = flags.map(f => `<li>${f}</li>`).join('');
+  } else {
+    banner.classList.remove('visible');
+    list.innerHTML = '';
+  }
+
+  if (valDist && valDist.hist) {
+    const smooth = (counts) => {
+      const out = counts.map((c, i) => {
+        const w = counts.slice(Math.max(0,i-2), i+3);
+        return w.reduce((a,b)=>a+b,0)/w.length;
+      });
+      return out;
+    };
+    const hSmooth = smooth(valDist.hist.counts);
+    makeChart('valDistChart', {
+      type: 'line',
+      data: {
+        labels: valDist.hist.bins.map(v => v.toFixed(2)),
+        datasets: [{ label: 'density', data: hSmooth, borderColor: '#5dade2', fill: true, backgroundColor: 'rgba(93,173,226,0.25)', pointRadius: 0 }],
+      },
+      options: { ...chartDefaults, plugins: { title: { display: true, text: `mean ${valDist.stats.mean.toFixed(3)} · ${valDist.stats.in_target_range_pct.toFixed(1)}% in [0.1,0.5]`, color: '#8b9cb3' } } },
+    });
+    makeChart('valHistChart', {
+      type: 'bar',
+      data: { labels: valDist.hist.bins.filter((_,i)=>i%4===0), datasets: [{ label: 'count', data: valDist.hist.counts.filter((_,i)=>i%4===0), backgroundColor: '#5dade2' }] },
+      options: chartDefaults,
+    });
+    makeChart('valTsChart', {
+      type: 'line',
+      data: { labels: valDist.samples.map((_, i) => i), datasets: [{ label: 'value', data: valDist.samples, borderColor: '#1a5276', pointRadius: 0, borderWidth: 1 }] },
+      options: { ...chartDefaults, plugins: { title: { display: true, text: `n=${valDist.n}`, color: '#8b9cb3' } } },
+    });
+    const absSmooth = smooth(valDist.abs_hist.counts);
+    makeChart('valAbsChart', {
+      type: 'line',
+      data: { labels: valDist.abs_hist.bins.map(v => v.toFixed(2)), datasets: [{ label: '|v|', data: absSmooth, borderColor: '#c0392b', fill: true, backgroundColor: 'rgba(192,57,43,0.2)', pointRadius: 0 }] },
+      options: chartDefaults,
+    });
+    makeChart('valBucketChart', {
+      type: 'bar',
+      data: {
+        labels: ['<0.1', '0.1-0.3', '0.3-0.5', '≥0.5'],
+        datasets: [{ label: '%', data: [valDist.buckets.weak, valDist.buckets.moderate, valDist.buckets.strong, valDist.buckets.saturation], backgroundColor: ['#e74c3c','#2ecc71','#f39c12','#e74c3c'] }],
+      },
+      options: { ...chartDefaults, plugins: { legend: { display: false } } },
+    });
+  } else {
+    ['valDistChart','valHistChart','valTsChart','valAbsChart','valBucketChart'].forEach(id => destroyChart(id));
+  }
+
+  const econFields = ['avg_score','avg_research','avg_harvests','avg_moves'];
+  makeChart('econChart', {
+    type: 'bar',
+    data: {
+      labels: econFields,
+      datasets: [
+        { label: 'this iter', data: econFields.map(f => row[f]), backgroundColor: '#3498db' },
+        { label: 'baseline', data: econFields.map(f => base[f]), backgroundColor: '#95a5a6' },
+      ],
+    },
+    options: chartDefaults,
+  });
+  const combatFields = ['avg_attacks','avg_captures','avg_builds'];
+  makeChart('combatChart', {
+    type: 'bar',
+    data: {
+      labels: combatFields,
+      datasets: [
+        { label: 'this iter', data: combatFields.map(f => row[f]), backgroundColor: '#e74c3c' },
+        { label: 'baseline', data: combatFields.map(f => base[f]), backgroundColor: '#95a5a6' },
+      ],
+    },
+    options: chartDefaults,
+  });
+  const zFields = ['avg_score','avg_moves','avg_attacks','avg_captures','avg_harvests','avg_research','avg_builds','p1_avg','p2_avg'];
+  const zs = zFields.map(f => {
+    const std = base[f + '_std'];
+    return std > 0 ? (row[f] - base[f]) / std : 0;
+  });
+  makeChart('zChart', {
+    type: 'bar',
+    data: {
+      labels: zFields,
+      datasets: [{ label: 'z-score', data: zs, backgroundColor: zs.map(z => Math.abs(z) >= 2 ? '#e74c3c' : '#3498db') }],
+    },
+    options: {
+      ...chartDefaults,
+      plugins: { annotation: {} },
+    },
+  });
+  makeChart('snapP1P2Chart', {
+    type: 'bar',
+    data: { labels: ['P1','P2'], datasets: [{ label: 'avg score', data: [row.p1_avg, row.p2_avg], backgroundColor: ['#3498db','#e67e22'] }] },
+    options: { ...chartDefaults, plugins: { legend: { display: false } } },
+  });
+}
+
+async function refreshAll() {
+  await loadRuns();
+  await loadRunData();
+  renderSummaryCards();
+  renderPanelA();
+  populateIterSelect();
+  await renderPanelB();
+}
+
+async function checkTrainingStatus() {
+  try {
+    const s = await fetchJson('/train/status');
+    const led = document.getElementById('statusLed');
+    const txt = document.getElementById('statusText');
+    if (s.running) {
+      led.classList.add('active');
+      txt.textContent = 'Training active';
+    } else {
+      led.classList.remove('active');
+      txt.textContent = 'Training idle';
+    }
+  } catch {
+    document.getElementById('statusText').textContent = 'Status unavailable';
+  }
+}
+
+function setupPoll() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    await checkTrainingStatus();
+    const led = document.getElementById('statusLed');
+    if (led.classList.contains('active')) await refreshAll();
+  }, 30000);
+}
+
+function downloadCanvas(id, name) {
+  const c = charts[id]?.canvas || document.getElementById(id);
+  if (!c) return;
+  const a = document.createElement('a');
+  a.href = c.toDataURL('image/png');
+  a.download = `${name || id}.png`;
+  a.click();
+}
+
+document.getElementById('runSelect').addEventListener('change', async (e) => {
+  selectedRunIdx = parseInt(e.target.value, 10);
+  await loadRunData();
+  renderSummaryCards();
+  renderPanelA();
+  populateIterSelect();
+  await renderPanelB();
+});
+
+document.getElementById('prevRun').addEventListener('click', async () => {
+  if (!runs.length) return;
+  selectedRunIdx = Math.min(runs.length - 1, selectedRunIdx + 1);
+  document.getElementById('runSelect').value = String(selectedRunIdx);
+  await loadRunData();
+  renderSummaryCards();
+  renderPanelA();
+  populateIterSelect();
+  await renderPanelB();
+});
+
+document.getElementById('nextRun').addEventListener('click', async () => {
+  if (!runs.length) return;
+  selectedRunIdx = Math.max(0, selectedRunIdx - 1);
+  document.getElementById('runSelect').value = String(selectedRunIdx);
+  await loadRunData();
+  renderSummaryCards();
+  renderPanelA();
+  populateIterSelect();
+  await renderPanelB();
+});
+
+document.getElementById('refreshBtn').addEventListener('click', refreshAll);
+document.getElementById('iterSelect').addEventListener('change', renderPanelB);
+
+document.querySelectorAll('.dl-png').forEach(btn => {
+  btn.addEventListener('click', () => downloadCanvas(btn.dataset.canvas, btn.dataset.canvas));
+});
+
+document.getElementById('downloadGrid').addEventListener('click', () => {
+  const ids = ['lossChart','scoreChart','p1p2Chart','movesChart'];
+  const w = 640, h = 480;
+  const out = document.createElement('canvas');
+  out.width = w * 2; out.height = h * 2;
+  const ctx = out.getContext('2d');
+  ctx.fillStyle = '#1a2332';
+  ctx.fillRect(0, 0, out.width, out.height);
+  ids.forEach((id, i) => {
+    const c = charts[id]?.canvas;
+    if (!c) return;
+    const x = (i % 2) * w;
+    const y = Math.floor(i / 2) * h;
+    ctx.drawImage(c, x, y, w, h);
+  });
+  const a = document.createElement('a');
+  a.href = out.toDataURL('image/png');
+  a.download = 'training_progress.png';
+  a.click();
+});
+
+(async () => {
+  await checkTrainingStatus();
+  await refreshAll();
+  setupPoll();
+})();
+</script>
+</body>
+</html>

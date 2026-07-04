@@ -171,6 +171,19 @@ async fn main() {
         .route("/replay/load_initial", post(load_initial_endpoint))
         .route("/replay/list_initial", get(list_initial_endpoint))
         .route("/trainer/hint", post(get_trainer_hint))
+        .route("/api/runs", get(polyfish::training_api::api_runs))
+        .route(
+            "/api/training-metrics",
+            get(polyfish::training_api::api_training_metrics),
+        )
+        .route(
+            "/api/moves-by-turn",
+            get(polyfish::training_api::api_moves_by_turn),
+        )
+        .route(
+            "/api/value-distribution",
+            get(polyfish::training_api::api_value_distribution),
+        )
         .nest_service("/", ServeDir::new("../src/public"))
         .layer(CorsLayer::permissive())
         .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 50))

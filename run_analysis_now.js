@@ -39,7 +39,7 @@ function runAgyAgent(payloadData) {
   return new Promise((resolve, reject) => {
     console.log("Triggering Antigravity CLI (agy) for immediate analysis...");
 
-    const prompt = `Analyze this new training update from the database: ${JSON.stringify(payloadData)}. Keep it concise. Provide a short summary of how the training is going based on these metrics.`;
+    const prompt = `Analyze this new training update from the database: ${JSON.stringify(payloadData)}. Keep it concise. Provide a short summary of how the training is going based on these metrics. Dashboard: http://localhost:3000/training.html`;
 
     const child = exec(`agy -p "${prompt}"`, async (error, stdout, stderr) => {
       console.log("agy stdout:", stdout);
@@ -51,7 +51,7 @@ function runAgyAgent(payloadData) {
         return reject(error);
       }
 
-      const reportMsg = `🤖 *AGY On-Demand Training Insight*\n\n${stdout}`;
+      const reportMsg = `🤖 *AGY On-Demand Training Insight*\n\n${stdout}\n\nhttp://localhost:3000/training.html`;
       await sendTelegramUpdate(reportMsg);
       resolve();
     });
@@ -59,6 +59,18 @@ function runAgyAgent(payloadData) {
     child.stdout.pipe(process.stdout);
     child.stderr.pipe(process.stderr);
   });
+}
+
+function parseCsvRow(line, headers) {
+  const cols = line.split(',');
+  const row = {};
+  headers.forEach((h, i) => {
+    const v = cols[i] ?? '';
+    if (['iteration', 'run_id'].includes(h)) row[h] = parseInt(v, 10);
+    else if (h === 'run_started_at' || h === 'games_file' || h === 'match_type') row[h] = v;
+    else row[h] = parseFloat(v);
+  });
+  return row;
 }
 
 async function main() {
@@ -72,38 +84,19 @@ async function main() {
   const content = fs.readFileSync(csvPath, 'utf8');
   const lines = content.trim().split('\n').filter(l => l.length > 0);
 
-  if (lines.length === 0) {
-    console.error("The CSV file is empty.");
+  if (lines.length < 2) {
+    console.error("The CSV file has no data rows.");
     process.exit(1);
   }
 
+  const headers = lines[0].split(',');
   const lastLine = lines[lines.length - 1];
-  const columns = lastLine.split(',');
+  const data = parseCsvRow(lastLine, headers);
 
-  // Format: $i,$Timestamp,$AvgScore,$MaxScore,$P1Avg,$P2Avg,$Loss,$AvgCaptures,$AvgHarvests,$AvgBuilds,$AvgResearch,$AvgAttacks
-  if (columns.length >= 12) {
-    const data = {
-      iteration: parseInt(columns[0]),
-      timestamp: parseFloat(columns[1]),
-      avg_score: parseFloat(columns[2]),
-      max_score: parseFloat(columns[3]),
-      p1_avg: parseFloat(columns[4]),
-      p2_avg: parseFloat(columns[5]),
-      loss: parseFloat(columns[6]),
-      avg_captures: parseFloat(columns[7]),
-      avg_harvests: parseFloat(columns[8]),
-      avg_builds: parseFloat(columns[9]),
-      avg_research: parseFloat(columns[10]),
-      avg_attacks: parseFloat(columns[11])
-    };
-
-    console.log("Extracted latest metrics:", data);
-    await sendTelegramUpdate(`🚀 **On-Demand Analysis Triggered: Iteration ${data.iteration}**\nRunning AGY analysis now...`);
-    await runAgyAgent(data);
-  } else {
-    console.error("Last line doesn't have enough columns:", lastLine);
-    process.exit(1);
-  }
+  console.log("Extracted latest metrics:", data);
+  const runLabel = data.run_started_at || data.run_id;
+  await sendTelegramUpdate(`🚀 **On-Demand Analysis — Run ${runLabel}, Iteration ${data.iteration}**\nRunning AGY analysis…\nhttp://localhost:3000/training.html`);
+  await runAgyAgent(data);
 }
 
 main().catch(console.error);

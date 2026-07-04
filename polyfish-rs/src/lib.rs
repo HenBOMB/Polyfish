@@ -19,6 +19,7 @@ pub mod score;
 pub mod settings;
 pub mod states;
 pub mod types;
+pub mod training_api;
 pub mod version_sync;
 
 pub use coords::Coords;
