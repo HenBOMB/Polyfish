@@ -19,6 +19,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+const HEURISTIC_PRIOR_W0: f32 = 0.5; // net & heur blended 50/50 at start
+const HEURISTIC_PRIOR_DECAY: f32 = 0.93; // from 0.5 to 0.03 by ~40 iterations
+
 /// Decomposed policy probability distributions for a single step
 struct DecomposedPolicyData {
     action_type: Vec<f32>,    // [11]
@@ -128,9 +131,14 @@ fn play_single_game(
     game.state.settings.max_turns = max_turns;
     game.post_load();
 
+    let prior_w = HEURISTIC_PRIOR_W0 * HEURISTIC_PRIOR_DECAY.powi(iteration as i32);
+
     // Create two agents (they might share the same network, or be different)
-    let mut agent1 = Brain::with_backend(eval1, mcts_iters, backend);
-    let mut agent2 = Brain::with_backend(eval2, mcts_iters, backend);
+    let mut agent1 = Brain::with_backend(eval1, mcts_iters, backend)
+    .with_prior_heuristic_weight(prior_w);
+    let mut agent2 = Brain::with_backend(eval2, mcts_iters, backend)
+    .with_prior_heuristic_weight(prior_w);
+
     if let Some(b) = leaf_batch {
         agent1 = agent1.with_leaf_batch(b);
         agent2 = agent2.with_leaf_batch(b);

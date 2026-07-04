@@ -54,6 +54,9 @@ pub struct Brain<'a> {
     /// `'a` (a `Copy` shared reference), not of `self`, so storing it here is
     /// not self-referential.
     agent: Option<SearchAgent<'a>>,
+    /// Weight for blending the `ordering::score_move` heuristic prior into the
+    /// Gumbel backend's root priors. `None` = pure network policy. Ignored by the Zero backend.
+    prior_heuristic_weight: Option<f32>,
 }
 
 /// Internal enum wrapping whichever concrete agent the configured backend
@@ -99,6 +102,7 @@ pub fn make_search_agent(
     evaluator: &Evaluator,
     iterations: usize,
     leaf_batch: Option<usize>,
+    prior_heuristic_weight: Option<f32>,
 ) -> SearchAgent<'_> {
     match backend {
         SearchBackend::Zero => {
@@ -113,6 +117,9 @@ pub fn make_search_agent(
             if let Some(b) = leaf_batch {
                 agent.batch_size = b;
             }
+            if let Some(w) = prior_heuristic_weight {
+                agent.prior_heuristic_weight = w;
+            }
             SearchAgent::Gumbel(agent)
         }
     }
@@ -126,6 +133,7 @@ impl<'a> Brain<'a> {
             backend: SearchBackend::default(),
             leaf_batch: None,
             agent: None,
+            prior_heuristic_weight: None,
         }
     }
 
@@ -140,6 +148,7 @@ impl<'a> Brain<'a> {
             backend,
             leaf_batch: None,
             agent: None,
+            prior_heuristic_weight: None,
         }
     }
 
@@ -147,6 +156,12 @@ impl<'a> Brain<'a> {
     /// in self_play). Builder-style: chain after `with_backend`.
     pub fn with_leaf_batch(mut self, leaf_batch: usize) -> Self {
         self.leaf_batch = Some(leaf_batch);
+        self
+    }
+
+    /// Override the prior heuristic weight. Builder style: chain after `with_backend`.
+    pub fn with_prior_heuristic_weight(mut self, prior_heuristic_weight: f32) -> Self {
+        self.prior_heuristic_weight = Some(prior_heuristic_weight);
         self
     }
 
@@ -186,6 +201,7 @@ impl<'a> Brain<'a> {
                 self.evaluator,
                 self.max_iterations,
                 self.leaf_batch,
+                self.prior_heuristic_weight,
             ));
         }
         (self.agent.as_mut(), moves)
