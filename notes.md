@@ -99,3 +99,36 @@ Verdi, July 4, 2026
 I tested, with having set up the Eval Server that batches GPU calls across all my actors I reach a top speed of ~31 moves/sec with 64 iters per move which is a meaningful speed-up from before I can get a game every 3s.
 
 I am now bottlenecked on CPU which I knew I would end up here. Effect plateaus around 32 actors on this 14-core machine. My ultimate goal is to get to 100 moves/sec not sure how feasile this is on my hardware but will try.
+
+Update: I was actually bottlenecked on GPU but it was GPU idle time. Digging more.
+
+After lots of profiling I found that the problem was the poor MPS kernel of candle. It is not as performant as the official one so we're now using `tch-rs` bindings and it's much more performant. This is the benchmark (batch 128, full model, fresh host→MPS upload, full readback to CPU):
+backend	            ms/forward
+candle (integrated)	71.7ms
+tch (integrated)	15.2ms
+pure PyTorch/MPS	12.0ms
+Now we should have significantly more performance.
+--
+BUG FOUND (Jul 4, 2026): candle cross-attention runs with UNTRAINED weights.
+
+While building the tch/libtorch eval path I ran a parity test and found candle's
+forward diverges from PyTorch (train.py) by up to 0.99 in softmax on the same
+model.safetensors. Root cause:
+
+- model.safetensors stores cross-attention the way PyTorch's nn.MultiheadAttention
+  does: PACKED `cross_attention.attn.in_proj_weight [192,64]` + `out_proj`.
+- candle's network.rs CrossAttention reads SEPARATE keys
+  `cross_attention.q_proj/k_proj/v_proj/o_proj.*` — which DO NOT EXIST in the file.
+  No conversion step exists (checked init_model.py + train.py).
+- candle's `VarBuilder::from_varmap` does not error on missing keys; it silently
+  creates fresh (untrained, default-init) tensors for them. So candle's Q/K/V/O
+  projections have never used the trained attention weights. The conv/bn/policy/
+  value blocks load fine — only the attention block is corrupted, which matches
+  the partial (not total) output divergence.
+
+Implication: self-play (candle) and training (PyTorch) have been evaluating
+DIFFERENT networks — a latent train/inference mismatch. The tch/MPS eval swap is
+verified to match PyTorch to ~1e-6, so moving self-play onto it is a correctness
+fix as well as a ~19x speedup. If we ever want the candle path correct too, fix
+network.rs to load `in_proj_weight` and split it into q/k/v (and load out_proj),
+matching nn.MultiheadAttention's packing.

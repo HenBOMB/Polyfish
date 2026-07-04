@@ -258,6 +258,22 @@ impl EvalServer {
     pub fn stats(&self) -> &EvalServerStats {
         &self.stats
     }
+
+    /// Deterministically stop the server thread and wait for it to finish.
+    ///
+    /// Call this *after* every [`EvalHandle`] has been dropped (which closes
+    /// the request channel and makes the loop's `recv` error out). Joining
+    /// here guarantees the inference backend — and any device tensors it owns
+    /// — is fully dropped while the runtime is still healthy, *before* the
+    /// process begins static/atexit teardown.
+    ///
+    /// This matters for the libtorch/MPS backend: libtorch destroys its global
+    /// mutexes during atexit, and if this thread is still freeing MPS tensors
+    /// at that moment it locks an already-destroyed `recursive_mutex` and the
+    /// process aborts (`recursive_mutex lock failed: Invalid argument`).
+    pub fn shutdown(self) {
+        let _ = self._thread.join();
+    }
 }
 
 fn run_eval_loop(

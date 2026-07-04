@@ -1091,5 +1091,19 @@ fn main() -> anyhow::Result<()> {
         println!("  - Data saving: {:.2}s ({:.1}%)", save_duration.as_secs_f32(), 100.0 * save_duration.as_secs_f32() / total_duration.as_secs_f32());
     }
 
+    // Deterministic teardown. Drop the evaluator handles first — these hold the
+    // only remaining request-channel senders, so dropping them makes each eval
+    // thread's `recv` error out and return, which drops its inference backend
+    // (and any MPS/device tensors). Then join the threads so that drop finishes
+    // *before* the process starts static/atexit teardown. Without this the
+    // detached eval thread races libtorch's atexit mutex destruction and the
+    // process aborts with "recursive_mutex lock failed: Invalid argument".
+    drop(eval1);
+    drop(eval2);
+    eval_server1.shutdown();
+    if let Some(server) = eval_server2 {
+        server.shutdown();
+    }
+
     Ok(())
 }
