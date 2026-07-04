@@ -761,11 +761,6 @@ impl<'a> GumbelMctsAgent<'a> {
         use crate::ai::mcts_types::MoveVisit;
         use rand::seq::SliceRandom;
 
-        // Gumbel bypasses Zero's temperature sampling: its root Gumbel noise
-        // is freshly resampled every call, which already gives self-play the
-        // per-game stochasticity Zero gets from visit-count sampling.
-        let _ = move_count;
-
         let mut book_moves = Book::recommend(game);
         if !book_moves.is_empty() {
             let mut rng = rand::thread_rng();
@@ -792,7 +787,23 @@ impl<'a> GumbelMctsAgent<'a> {
             return (Some(Box::new(EndTurnMove)), Vec::new());
         }
         let move_visits = self.extract_policy_targets(&root);
-        let best_idx = self.recommend_final_move(&root);
+
+        // Early on, sample based on distribution instead of max visit
+        let best_idx = if move_count
+            < crate::ai::mcts_zero::ZeroMctsAgent::TEMPERATURE_MOVE_THRESHOLD
+            && root.children.len() > 1
+        {
+            use rand::distributions::WeightedIndex;
+            let weights: Vec<f32> = root.children.iter().map(|c| c.visits.max(0.0)).collect();
+            match WeightedIndex::new(&weights) {
+                Ok(dist) => dist.sample(&mut rand::thread_rng()),
+                // All-zero weights (nothing searched) — fall back to the recommendation.
+                Err(_) => self.recommend_final_move(&root),
+            }
+        } else {
+            self.recommend_final_move(&root)
+        };
+
         let best_move = clone_child_move(&root, best_idx);
         let next_hash = next_root_hash_for(game, best_move.as_deref());
         self.store_tree(root, best_idx, next_hash);
