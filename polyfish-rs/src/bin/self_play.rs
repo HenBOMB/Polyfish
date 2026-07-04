@@ -1,7 +1,7 @@
 use candle_core::{Device, Tensor};
 use polyfish::TribeType;
 use polyfish::ai::brain::{Brain, SearchBackend, SearchBackendArg};
-use polyfish::ai::eval_server::{EvalServer, EvalServerConfig, Evaluator};
+use polyfish::ai::eval_server::{BackendSpec, EvalServer, EvalServerConfig, Evaluator};
 use polyfish::ai::features::{self, GameFeatures, state_to_tensor};
 use polyfish::ai::mapper::DecomposedMapper;
 use polyfish::ai::network::PolyZeroNet;
@@ -441,6 +441,13 @@ fn main() -> anyhow::Result<()> {
         /// reshuffling it. Hit rate is reported in EVAL_SERVER_STATS.
         #[arg(long, default_value_t = 524288)]
         cache_cap: usize,
+
+        /// NN inference backend: "candle" (Metal/CUDA/CPU) or "tch"
+        /// (libtorch/MPS, ~19x faster on Metal, requires --features tch-eval).
+        /// Empty = auto: "tch" if the tch-eval feature is compiled in, else
+        /// "candle".
+        #[arg(long, default_value = "")]
+        eval_backend: String,
     }
 
     let args = Args::parse();
@@ -582,14 +589,70 @@ fn main() -> anyhow::Result<()> {
             Some(args.cache_cap)
         },
     };
-    let (eval_server1, eval_handle1) = EvalServer::start(network1.clone(), eval_config);
+    // Resolve the eval backend: explicit --eval-backend, else auto (tch when
+    // compiled in, else candle).
+    let use_tch = match args.eval_backend.as_str() {
+        "tch" => {
+            if !cfg!(feature = "tch-eval") {
+                anyhow::bail!(
+                    "--eval-backend tch requires building with --features tch-eval"
+                );
+            }
+            true
+        }
+        "candle" => false,
+        "" => cfg!(feature = "tch-eval"),
+        other => anyhow::bail!("unknown --eval-backend {other:?} (want candle|tch)"),
+    };
+    println!(
+        "Eval backend: {}",
+        if use_tch { "tch (libtorch/MPS)" } else { "candle" }
+    );
+
+    // Builds the two backend specs (main / opponent) for the chosen backend.
+    let make_specs = |use_tch: bool| -> (BackendSpec, BackendSpec) {
+        if use_tch {
+            #[cfg(feature = "tch-eval")]
+            {
+                let dev = if tch::utils::has_mps() {
+                    tch::Device::Mps
+                } else {
+                    tch::Device::Cpu
+                };
+                let model_path_2 = args
+                    .opponent
+                    .clone()
+                    .unwrap_or_else(|| "model.safetensors".to_string());
+                return (
+                    BackendSpec::Tch {
+                        model_path: "model.safetensors".to_string(),
+                        device: dev,
+                    },
+                    BackendSpec::Tch {
+                        model_path: model_path_2,
+                        device: dev,
+                    },
+                );
+            }
+            #[cfg(not(feature = "tch-eval"))]
+            unreachable!("use_tch guarded by cfg above");
+        }
+        (
+            BackendSpec::Candle(network1.clone()),
+            BackendSpec::Candle(network2.clone()),
+        )
+    };
+    let (spec1, spec2) = make_specs(use_tch);
+
+    let (eval_server1, eval_handle1) = EvalServer::start(spec1, eval_config);
     let (eval_server2, eval_handle2) = if args.opponent.is_some() {
-        let (server, handle) = EvalServer::start(network2.clone(), eval_config);
+        let (server, handle) = EvalServer::start(spec2, eval_config);
         (Some(server), handle)
     } else {
         // Self-play against the same weights: reuse one server/handle so we
         // don't run two inference threads (and two device contexts) for the
         // same network.
+        drop(spec2);
         (None, eval_handle1.clone())
     };
     let eval1 = Evaluator::Server(eval_handle1);

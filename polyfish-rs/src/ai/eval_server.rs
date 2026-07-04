@@ -130,17 +130,120 @@ impl Default for EvalServerConfig {
     }
 }
 
+/// Inference backend recipe, chosen by the caller and moved onto the
+/// eval-server thread (must be `Send`). The actual device model is built from
+/// this *inside* the thread so no device handle crosses a thread boundary.
+pub enum BackendSpec {
+    /// candle network (Metal/CUDA/CPU), already loaded by the caller.
+    Candle(Arc<PolyZeroNet>),
+    /// libtorch/MPS network, loaded from a state_dict on the eval thread.
+    /// ~19x faster than candle Metal for PolyZeroNet (see `tch_network.rs`).
+    #[cfg(feature = "tch-eval")]
+    Tch {
+        model_path: String,
+        device: tch::Device,
+    },
+}
+
+impl BackendSpec {
+    /// Build the concrete backend. Runs on the eval-server thread.
+    fn build(self) -> InferenceBackend {
+        match self {
+            BackendSpec::Candle(network) => {
+                let device = network.device();
+                InferenceBackend::Candle { network, device }
+            }
+            #[cfg(feature = "tch-eval")]
+            BackendSpec::Tch { model_path, device } => {
+                let net = crate::ai::tch_network::TchPolyZeroNet::load(&model_path, device)
+                    .expect("BUG: failed to load tch model for eval server");
+                InferenceBackend::Tch(net)
+            }
+        }
+    }
+}
+
+/// The built inference backend, owned by (and only ever touched on) the
+/// eval-server thread.
+enum InferenceBackend {
+    Candle {
+        network: Arc<PolyZeroNet>,
+        device: Device,
+    },
+    #[cfg(feature = "tch-eval")]
+    Tch(crate::ai::tch_network::TchPolyZeroNet),
+}
+
+impl InferenceBackend {
+    /// Run one batched forward over `feats`, returning per-row value + policy
+    /// as plain CPU floats. This is the only place a device tensor exists.
+    fn forward(&self, feats: &[RawFeatures]) -> (Vec<f32>, Vec<RawPolicyOutput>) {
+        match self {
+            InferenceBackend::Candle { network, device } => {
+                let batch_size = feats.len();
+                let mut spatial_flat = Vec::with_capacity(batch_size * RawFeatures::spatial_len());
+                let mut player_flat = Vec::with_capacity(batch_size * RawFeatures::player_len());
+                for feat in feats {
+                    spatial_flat.extend_from_slice(&feat.spatial);
+                    player_flat.extend_from_slice(&feat.player);
+                }
+
+                let spatial_tensor = Tensor::from_vec(
+                    spatial_flat,
+                    (
+                        batch_size,
+                        crate::ai::features::NUM_CHANNELS,
+                        crate::ai::features::MAP_SIZE,
+                        crate::ai::features::MAP_SIZE,
+                    ),
+                    device,
+                )
+                .expect("BUG: failed to tensorize eval-server spatial batch");
+                let player_tensor =
+                    Tensor::from_vec(player_flat, (batch_size, RawFeatures::player_len()), device)
+                        .expect("BUG: failed to tensorize eval-server player batch");
+
+                let (policy_out, value_out) = network
+                    .forward_t(&spatial_tensor, &player_tensor, false)
+                    .expect("BUG: eval-server forward_t failed");
+
+                let values = value_out
+                    .win_value
+                    .flatten_all()
+                    .expect("BUG: flatten win_value")
+                    .to_vec1::<f32>()
+                    .expect("BUG: win_value to_vec1");
+                let policy_rows = policy_out
+                    .to_raw_rows()
+                    .expect("BUG: failed to read policy batch to CPU");
+                (values, policy_rows)
+            }
+            #[cfg(feature = "tch-eval")]
+            InferenceBackend::Tch(net) => {
+                let batch_size = feats.len();
+                let mut spatial_flat = Vec::with_capacity(batch_size * RawFeatures::spatial_len());
+                let mut player_flat = Vec::with_capacity(batch_size * RawFeatures::player_len());
+                for feat in feats {
+                    spatial_flat.extend_from_slice(&feat.spatial);
+                    player_flat.extend_from_slice(&feat.player);
+                }
+                net.forward_batch(&spatial_flat, &player_flat, batch_size)
+            }
+        }
+    }
+}
+
 impl EvalServer {
-    /// Spawn the dedicated inference thread. `network` is moved onto that
-    /// thread and never touched elsewhere.
-    pub fn start(network: Arc<PolyZeroNet>, config: EvalServerConfig) -> (Self, EvalHandle) {
+    /// Spawn the dedicated inference thread. The backend is built from `spec`
+    /// on that thread and never touched elsewhere.
+    pub fn start(spec: BackendSpec, config: EvalServerConfig) -> (Self, EvalHandle) {
         let (sender, receiver) = std_mpsc::channel::<EvalRequest>();
         let stats = Arc::new(EvalServerStats::default());
         let thread_stats = stats.clone();
 
         let thread = std::thread::Builder::new()
             .name("eval-server".to_string())
-            .spawn(move || run_eval_loop(network, receiver, config, thread_stats))
+            .spawn(move || run_eval_loop(spec, receiver, config, thread_stats))
             .expect("BUG: failed to spawn eval-server thread");
 
         (
@@ -158,12 +261,12 @@ impl EvalServer {
 }
 
 fn run_eval_loop(
-    network: Arc<PolyZeroNet>,
+    spec: BackendSpec,
     receiver: std_mpsc::Receiver<EvalRequest>,
     config: EvalServerConfig,
     stats: Arc<EvalServerStats>,
 ) {
-    let device = network.device();
+    let backend = spec.build();
     let mut cache = config
         .cache_capacity
         .map(|cap| lru::LruCache::<u64, EvalResult>::new(NonZeroUsize::new(cap).expect("BUG: cache capacity must be > 0")));
@@ -197,7 +300,7 @@ fn run_eval_loop(
         }
 
         let busy_start = Instant::now();
-        let (served, misses) = evaluate_batch(&network, &device, requests, cache.as_mut());
+        let (served, misses) = evaluate_batch(&backend, requests, cache.as_mut());
         stats.forwards.fetch_add(1, Ordering::Relaxed);
         stats.rows.fetch_add(total_items as u64, Ordering::Relaxed);
         stats
@@ -228,8 +331,7 @@ struct CacheTally {
 /// required a GPU row (used for stats), and replies are sent on each
 /// request's `respond_to` channel.
 fn evaluate_batch(
-    network: &PolyZeroNet,
-    device: &Device,
+    backend: &InferenceBackend,
     requests: Vec<EvalRequest>,
     mut cache: Option<&mut lru::LruCache<u64, EvalResult>>,
 ) -> (CacheTally, u64) {
@@ -283,44 +385,7 @@ fn evaluate_batch(
 
     if !miss_slots.is_empty() {
         let batch_size = miss_slots.len();
-        let mut spatial_flat = Vec::with_capacity(batch_size * RawFeatures::spatial_len());
-        let mut player_flat = Vec::with_capacity(batch_size * RawFeatures::player_len());
-        for feat in &miss_features {
-            spatial_flat.extend_from_slice(&feat.spatial);
-            player_flat.extend_from_slice(&feat.player);
-        }
-
-        let spatial_tensor = Tensor::from_vec(
-            spatial_flat,
-            (
-                batch_size,
-                crate::ai::features::NUM_CHANNELS,
-                crate::ai::features::MAP_SIZE,
-                crate::ai::features::MAP_SIZE,
-            ),
-            device,
-        )
-        .expect("BUG: failed to tensorize eval-server spatial batch");
-        let player_tensor = Tensor::from_vec(
-            player_flat,
-            (batch_size, RawFeatures::player_len()),
-            device,
-        )
-        .expect("BUG: failed to tensorize eval-server player batch");
-
-        let (policy_out, value_out) = network
-            .forward_t(&spatial_tensor, &player_tensor, false)
-            .expect("BUG: eval-server forward_t failed");
-
-        let values = value_out
-            .win_value
-            .flatten_all()
-            .expect("BUG: flatten win_value")
-            .to_vec1::<f32>()
-            .expect("BUG: win_value to_vec1");
-        let policy_rows = policy_out
-            .to_raw_rows()
-            .expect("BUG: failed to read policy batch to CPU");
+        let (values, policy_rows) = backend.forward(&miss_features);
 
         debug_assert_eq!(values.len(), batch_size);
         debug_assert_eq!(policy_rows.len(), batch_size);
@@ -471,7 +536,7 @@ mod tests {
             },
         ]);
 
-        let (_server, handle) = EvalServer::start(network, EvalServerConfig::default());
+        let (_server, handle) = EvalServer::start(BackendSpec::Candle(network), EvalServerConfig::default());
         let server_results = handle.evaluate(vec![
             RawFeatures {
                 spatial: feat1.spatial,
@@ -514,7 +579,7 @@ mod tests {
         let feat = state_to_cpu_features(&game.state, 1).unwrap();
 
         let (_server, handle) = EvalServer::start(
-            network,
+            BackendSpec::Candle(network),
             EvalServerConfig {
                 max_batch: 256,
                 coalesce_timeout: Duration::from_millis(20),
@@ -546,7 +611,7 @@ mod tests {
         let game = Game::default();
         let feat = state_to_cpu_features(&game.state, 1).unwrap();
 
-        let (server, handle) = EvalServer::start(network, EvalServerConfig::default());
+        let (server, handle) = EvalServer::start(BackendSpec::Candle(network), EvalServerConfig::default());
 
         let raw = |f: &RawFeatures| RawFeatures {
             spatial: f.spatial.clone(),
