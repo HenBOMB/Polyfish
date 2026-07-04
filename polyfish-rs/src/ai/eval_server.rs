@@ -500,15 +500,76 @@ impl InlineEvalHandle {
     }
 }
 
+/// No-op evaluator for measuring the actor-side ceiling: returns a uniform
+/// policy (all-zero logits → uniform after softmax) and a zero value for every
+/// leaf, with no network, no device, no channel, and no dedicated thread —
+/// `evaluate` returns synchronously on the caller's own thread in O(rows).
+///
+/// Used by the `actor_ceiling` benchmark. The resulting moves/s is the hard
+/// upper bound every GPU/eval optimization is bounded by, because it removes
+/// inference entirely and leaves only game-sim + MCTS + leaf-feature encode.
+#[derive(Clone)]
+pub struct DummyEvalHandle {
+    uniform: Arc<RawPolicyOutput>,
+    stats: Arc<DummyStats>,
+}
+
+/// Counters for the dummy evaluator, readable from any actor thread while a
+/// benchmark runs. Lets `actor_ceiling` report leaves/s and leaves/move
+/// alongside moves/s so the sim cost per move is visible.
+#[derive(Default)]
+pub struct DummyStats {
+    pub evals: AtomicU64,
+    pub leaves: AtomicU64,
+}
+
+impl DummyEvalHandle {
+    pub fn new() -> Self {
+        let spatial = crate::ai::features::MAP_SIZE * crate::ai::features::MAP_SIZE;
+        Self {
+            uniform: Arc::new(RawPolicyOutput {
+                action_type: vec![0.0; 11],
+                source_spatial: vec![0.0; spatial],
+                target_spatial: vec![0.0; spatial],
+                move_option: vec![0.0; 192],
+            }),
+            stats: Arc::new(DummyStats::default()),
+        }
+    }
+
+    pub fn stats(&self) -> &DummyStats {
+        &self.stats
+    }
+
+    pub fn evaluate(&self, batch: Vec<RawFeatures>) -> Vec<EvalResult> {
+        self.stats.evals.fetch_add(1, Ordering::Relaxed);
+        self.stats
+            .leaves
+            .fetch_add(batch.len() as u64, Ordering::Relaxed);
+        batch
+            .iter()
+            .map(|_| (0.0, (*self.uniform).clone()))
+            .collect()
+    }
+}
+
+impl Default for DummyEvalHandle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Either backend an MCTS agent can evaluate leaves through, unified behind
 /// one call so `ZeroMctsAgent`/`GumbelMctsAgent` don't need to know which
 /// they hold. `Server` is used by self-play (cross-game batching via
 /// [`EvalServer`]); `Inline` is used everywhere else (arena, UI analysis,
-/// tests) where each caller owns its network/device outright.
+/// tests) where each caller owns its network/device outright; `Dummy` is the
+/// no-inference benchmark path (see [`DummyEvalHandle`]).
 #[derive(Clone)]
 pub enum Evaluator {
     Server(EvalHandle),
     Inline(InlineEvalHandle),
+    Dummy(DummyEvalHandle),
 }
 
 impl Evaluator {
@@ -516,6 +577,7 @@ impl Evaluator {
         match self {
             Evaluator::Server(h) => h.evaluate(batch),
             Evaluator::Inline(h) => h.evaluate(batch),
+            Evaluator::Dummy(h) => h.evaluate(batch),
         }
     }
 }

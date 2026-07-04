@@ -203,32 +203,49 @@ impl TchPolyZeroNet {
         let v_latent = self.linear(&v_pooled, "v_fc_shared").relu();
         let win = self.linear(&v_latent, "v_win").tanh(); // [B, 1]
 
-        // Read everything back to CPU once.
-        let values: Vec<f32> = win.flatten(0, 1).to_device(Device::Cpu).try_into().unwrap();
-        let at = to_rows(&action_type, batch, 11);
-        let ss = to_rows(&source_spatial, batch, SPATIAL as usize);
-        let ts = to_rows(&target_spatial, batch, SPATIAL as usize);
-        let mo = to_rows(&move_option, batch, 192);
+        // Read value + 4 policy heads back to CPU in a SINGLE device->CPU
+        // copy. Each .to_device(Cpu) on MPS forces a commit +
+        // waitUntilCompleted, so per-head readbacks stall the stream ~5x per
+        // forward. Concat on-device into one [B, 446] row, one readback, then
+        // split by static offset on the CPU. Bit-identical to the per-head
+        // path (cat/slice copy bytes, no op changes).
+        const V: usize = 1;
+        const AT: usize = 11;
+        const SS: usize = SPATIAL as usize; // 121
+        const TS: usize = SPATIAL as usize; // 121
+        const MO: usize = 192;
+        const ROW: usize = V + AT + SS + TS + MO; // 446
 
+        let row = Tensor::cat(
+            &[&win, &action_type, &source_spatial, &target_spatial, &move_option],
+            1,
+        ); // [B, 446], on-device
+        let flat: Vec<f32> = row
+            .flatten(0, 1)
+            .to_device(Device::Cpu)
+            .try_into()
+            .unwrap(); // single sync point
+
+        let mut values = Vec::with_capacity(batch);
         let mut policy = Vec::with_capacity(batch);
         for i in 0..batch {
+            let base = i * ROW;
+            values.push(flat[base]); // win, len 1
+            let at_off = base + V;
+            let action_type = flat[at_off..at_off + AT].to_vec();
+            let ss_off = at_off + AT;
+            let source_spatial = flat[ss_off..ss_off + SS].to_vec();
+            let ts_off = ss_off + SS;
+            let target_spatial = flat[ts_off..ts_off + TS].to_vec();
+            let mo_off = ts_off + TS;
+            let move_option = flat[mo_off..mo_off + MO].to_vec();
             policy.push(RawPolicyOutput {
-                action_type: at[i].clone(),
-                source_spatial: ss[i].clone(),
-                target_spatial: ts[i].clone(),
-                move_option: mo[i].clone(),
+                action_type,
+                source_spatial,
+                target_spatial,
+                move_option,
             });
         }
         (values, policy)
     }
-}
-
-/// Read a `[batch, n]` device tensor to CPU as one `Vec<f32>` per row.
-fn to_rows(t: &Tensor, batch: usize, n: usize) -> Vec<Vec<f32>> {
-    let flat: Vec<f32> = t
-        .reshape([(batch * n) as i64])
-        .to_device(Device::Cpu)
-        .try_into()
-        .unwrap();
-    flat.chunks(n).map(|c| c.to_vec()).collect()
 }
