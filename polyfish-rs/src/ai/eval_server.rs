@@ -27,6 +27,7 @@
 use crate::ai::features::RawFeatures;
 use crate::ai::network::{PolyZeroNet, RawPolicyOutput};
 use candle_core::{Device, Tensor};
+use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::mpsc as std_mpsc;
@@ -92,6 +93,10 @@ pub struct EvalServerStats {
     /// Wall time spent inside tensorize + forward + readback, in microseconds.
     /// Everything else is the server thread sitting idle waiting for work.
     pub busy_us: AtomicU64,
+    /// Leaf rows served from the eval cache without hitting the GPU.
+    pub cache_hits: AtomicU64,
+    /// Leaf rows that missed the cache and required a GPU `forward_t` row.
+    pub cache_misses: AtomicU64,
 }
 
 /// Tuning knobs for request coalescing.
@@ -102,13 +107,25 @@ pub struct EvalServerConfig {
     /// How long to wait for more requests to coalesce with the first one
     /// pending, before flushing whatever has arrived.
     pub coalesce_timeout: Duration,
+    /// Capacity of the eval cache (keyed by a 64-bit hash of the
+    /// `RawFeatures` bytes). `Some(n)` enables an LRU of `n` entries; `None`
+    /// disables caching. Every hit skips the GPU entirely. The cache lives on
+    /// the eval-server thread, so it needs no locks.
+    pub cache_capacity: Option<usize>,
 }
+
+/// Default cache capacity: 512K entries. At ~1.8 KB per entry (8 B key + f32
+/// value + ~1.78 KB `RawPolicyOutput` row) this is roughly 900 MB of resident
+/// state — sized to fit transposition + same-turn re-search locality in
+/// Polytopia without blowing past a typical self-play RAM budget.
+pub const DEFAULT_CACHE_CAPACITY: usize = 512 * 1024;
 
 impl Default for EvalServerConfig {
     fn default() -> Self {
         Self {
             max_batch: 256,
             coalesce_timeout: Duration::from_micros(1000),
+            cache_capacity: Some(DEFAULT_CACHE_CAPACITY),
         }
     }
 }
@@ -147,6 +164,10 @@ fn run_eval_loop(
     stats: Arc<EvalServerStats>,
 ) {
     let device = network.device();
+    let mut cache = config
+        .cache_capacity
+        .map(|cap| lru::LruCache::<u64, EvalResult>::new(NonZeroUsize::new(cap).expect("BUG: cache capacity must be > 0")));
+
     loop {
         // Block for the first request; once we have one, coalesce more
         // arrivals up to max_batch or until coalesce_timeout has elapsed
@@ -176,7 +197,7 @@ fn run_eval_loop(
         }
 
         let busy_start = Instant::now();
-        evaluate_batch(&network, &device, requests);
+        let (served, misses) = evaluate_batch(&network, &device, requests, cache.as_mut());
         stats.forwards.fetch_add(1, Ordering::Relaxed);
         stats.rows.fetch_add(total_items as u64, Ordering::Relaxed);
         stats
@@ -185,77 +206,146 @@ fn run_eval_loop(
         stats
             .busy_us
             .fetch_add(busy_start.elapsed().as_micros() as u64, Ordering::Relaxed);
+        stats.cache_hits.fetch_add(served.served_from_cache, Ordering::Relaxed);
+        stats
+            .cache_misses
+            .fetch_add(misses, Ordering::Relaxed);
     }
 }
 
-/// Tensorize every request's `RawFeatures` into one batch, run a single
-/// `forward_t`, slice the results back to CPU floats, and reply to each
-/// request's own reply channel with its slice in original order.
-fn evaluate_batch(network: &PolyZeroNet, device: &Device, requests: Vec<EvalRequest>) {
-    let per_request_len: Vec<usize> = requests.iter().map(|r| r.features.len()).collect();
-    let batch_size: usize = per_request_len.iter().sum();
+/// Per-call cache counters returned by `evaluate_batch`.
+struct CacheTally {
+    served_from_cache: u64,
+}
 
-    if batch_size == 0 {
+/// Partition the coalesced batch by eval-cache membership: rows whose
+/// `RawFeatures` hash to a cached entry are replied to immediately without
+/// touching the GPU; the remaining misses are tensorized into one
+/// `forward_t`, read back, inserted into the cache, and scattered back to
+/// each request in original order.
+///
+/// Returns `(CacheTally, misses)` where `misses` is the number of rows that
+/// required a GPU row (used for stats), and replies are sent on each
+/// request's `respond_to` channel.
+fn evaluate_batch(
+    network: &PolyZeroNet,
+    device: &Device,
+    requests: Vec<EvalRequest>,
+    mut cache: Option<&mut lru::LruCache<u64, EvalResult>>,
+) -> (CacheTally, u64) {
+    let per_request_len: Vec<usize> = requests.iter().map(|r| r.features.len()).collect();
+    let total_rows: usize = per_request_len.iter().sum();
+
+    if total_rows == 0 {
         for req in requests {
             let _ = req.respond_to.send(Vec::new());
         }
-        return;
+        return (CacheTally { served_from_cache: 0 }, 0);
     }
 
-    let mut spatial_flat = Vec::with_capacity(batch_size * RawFeatures::spatial_len());
-    let mut player_flat = Vec::with_capacity(batch_size * RawFeatures::player_len());
+    // Resolve every row against the cache first. `row_results` holds the
+    // final answer for each row (hit now, miss filled in after the GPU call),
+    // indexed as a flat slab in request order. `miss_slots` records which flat
+    // positions still need a GPU result, in the order they'll appear in the
+    // miss batch.
+    let mut row_results: Vec<Option<EvalResult>> = Vec::with_capacity(total_rows);
+    let mut miss_slots: Vec<usize> = Vec::with_capacity(total_rows);
+    let mut miss_features: Vec<RawFeatures> = Vec::with_capacity(total_rows);
+    let mut miss_hashes: Vec<u64> = Vec::with_capacity(total_rows);
+    let mut served_from_cache: u64 = 0;
+
     for req in &requests {
         for feat in &req.features {
-            spatial_flat.extend_from_slice(&feat.spatial);
-            player_flat.extend_from_slice(&feat.player);
+            let hash = feat.hash();
+            let hit = cache
+                .as_mut()
+                .and_then(|c| c.get(&hash).cloned());
+            match hit {
+                Some(result) => {
+                    served_from_cache += 1;
+                    row_results.push(Some(result));
+                }
+                None => {
+                    let flat_idx = row_results.len();
+                    row_results.push(None);
+                    miss_slots.push(flat_idx);
+                    miss_features.push(RawFeatures {
+                        spatial: feat.spatial.clone(),
+                        player: feat.player.clone(),
+                    });
+                    miss_hashes.push(hash);
+                }
+            }
         }
     }
 
-    let spatial_tensor = Tensor::from_vec(
-        spatial_flat,
-        (
-            batch_size,
-            crate::ai::features::NUM_CHANNELS,
-            crate::ai::features::MAP_SIZE,
-            crate::ai::features::MAP_SIZE,
-        ),
-        device,
-    )
-    .expect("BUG: failed to tensorize eval-server spatial batch");
-    let player_tensor = Tensor::from_vec(
-        player_flat,
-        (batch_size, RawFeatures::player_len()),
-        device,
-    )
-    .expect("BUG: failed to tensorize eval-server player batch");
+    let misses = miss_slots.len() as u64;
 
-    let (policy_out, value_out) = network
-        .forward_t(&spatial_tensor, &player_tensor, false)
-        .expect("BUG: eval-server forward_t failed");
+    if !miss_slots.is_empty() {
+        let batch_size = miss_slots.len();
+        let mut spatial_flat = Vec::with_capacity(batch_size * RawFeatures::spatial_len());
+        let mut player_flat = Vec::with_capacity(batch_size * RawFeatures::player_len());
+        for feat in &miss_features {
+            spatial_flat.extend_from_slice(&feat.spatial);
+            player_flat.extend_from_slice(&feat.player);
+        }
 
-    let values = value_out
-        .win_value
-        .flatten_all()
-        .expect("BUG: flatten win_value")
-        .to_vec1::<f32>()
-        .expect("BUG: win_value to_vec1");
-    let policy_rows = policy_out
-        .to_raw_rows()
-        .expect("BUG: failed to read policy batch to CPU");
+        let spatial_tensor = Tensor::from_vec(
+            spatial_flat,
+            (
+                batch_size,
+                crate::ai::features::NUM_CHANNELS,
+                crate::ai::features::MAP_SIZE,
+                crate::ai::features::MAP_SIZE,
+            ),
+            device,
+        )
+        .expect("BUG: failed to tensorize eval-server spatial batch");
+        let player_tensor = Tensor::from_vec(
+            player_flat,
+            (batch_size, RawFeatures::player_len()),
+            device,
+        )
+        .expect("BUG: failed to tensorize eval-server player batch");
 
-    debug_assert_eq!(values.len(), batch_size);
-    debug_assert_eq!(policy_rows.len(), batch_size);
+        let (policy_out, value_out) = network
+            .forward_t(&spatial_tensor, &player_tensor, false)
+            .expect("BUG: eval-server forward_t failed");
+
+        let values = value_out
+            .win_value
+            .flatten_all()
+            .expect("BUG: flatten win_value")
+            .to_vec1::<f32>()
+            .expect("BUG: win_value to_vec1");
+        let policy_rows = policy_out
+            .to_raw_rows()
+            .expect("BUG: failed to read policy batch to CPU");
+
+        debug_assert_eq!(values.len(), batch_size);
+        debug_assert_eq!(policy_rows.len(), batch_size);
+
+        for (i, &flat_idx) in miss_slots.iter().enumerate() {
+            let result: EvalResult = (values[i], policy_rows[i].clone());
+            if let Some(c) = cache.as_mut() {
+                c.put(miss_hashes[i], result.clone());
+            }
+            row_results[flat_idx] = Some(result);
+        }
+    }
 
     // Scatter contiguous slices back to each request in original order.
     let mut offset = 0;
     for (req, len) in requests.into_iter().zip(per_request_len.into_iter()) {
         let results: Vec<EvalResult> = (offset..offset + len)
-            .map(|i| (values[i], policy_rows[i].clone()))
+            .map(|i| row_results[i].take().expect("BUG: every row must be resolved"))
             .collect();
         offset += len;
         // Ignore send errors: the requesting thread may have given up.
         let _ = req.respond_to.send(results);
     }
+
+    (CacheTally { served_from_cache }, misses)
 }
 
 /// Synchronous, non-batched evaluator with the same interface as
@@ -428,6 +518,7 @@ mod tests {
             EvalServerConfig {
                 max_batch: 256,
                 coalesce_timeout: Duration::from_millis(20),
+                cache_capacity: None,
             },
         );
 
@@ -446,5 +537,40 @@ mod tests {
             let result = t.join().unwrap();
             assert_eq!(result.len(), 1);
         }
+    }
+
+    #[test]
+    fn eval_cache_serves_repeated_rows_without_gpu() {
+        let device = Device::Cpu;
+        let network = Arc::new(test_network(&device));
+        let game = Game::default();
+        let feat = state_to_cpu_features(&game.state, 1).unwrap();
+
+        let (server, handle) = EvalServer::start(network, EvalServerConfig::default());
+
+        let raw = |f: &RawFeatures| RawFeatures {
+            spatial: f.spatial.clone(),
+            player: f.player.clone(),
+        };
+
+        // First call misses the cache and populates it.
+        let first = handle.evaluate(vec![raw(&feat)]);
+        assert_eq!(first.len(), 1);
+
+        // Second identical call must be served from the cache: stats.cache_hits
+        // increments and the returned row is byte-identical to the first.
+        let second = handle.evaluate(vec![raw(&feat)]);
+        assert_eq!(second.len(), 1);
+        assert!((first[0].0 - second[0].0).abs() < 1e-6);
+        assert_eq!(first[0].1.action_type, second[0].1.action_type);
+        assert_eq!(first[0].1.source_spatial, second[0].1.source_spatial);
+        assert_eq!(first[0].1.target_spatial, second[0].1.target_spatial);
+        assert_eq!(first[0].1.move_option, second[0].1.move_option);
+
+        let stats = server.stats();
+        let hits = stats.cache_hits.load(Ordering::Relaxed);
+        let misses = stats.cache_misses.load(Ordering::Relaxed);
+        assert_eq!(misses, 1, "first call must be a cache miss");
+        assert_eq!(hits, 1, "second call must be a cache hit");
     }
 }

@@ -46,7 +46,7 @@ pub struct MoveResult {
 }
 
 /// A game move that can be executed and undone
-pub trait Move: std::fmt::Debug + Send + Sync {
+pub trait Move: std::fmt::Debug + Send + Sync + dyn_clone::DynClone {
     /// Get the move type
     fn move_type(&self) -> MoveType;
 

@@ -114,7 +114,7 @@ fn play_match(
 
     // p1_config / p2_config map each seat to its configuration so timing and
     // scores attribute to the right config when sides are swapped.
-    let (agent_p1, p1_config, agent_p2, p2_config) = if swap {
+    let (mut agent_p1, p1_config, mut agent_p2, p2_config) = if swap {
         (make_search_agent(backend2, eval2, mcts2, None), 2u8,
          make_search_agent(backend1, eval1, mcts1, None), 1u8)
     } else {

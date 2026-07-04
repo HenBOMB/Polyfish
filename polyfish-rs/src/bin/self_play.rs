@@ -176,7 +176,7 @@ fn play_single_game(
             .expect("BUG: Failed to create state tensor - game state is invalid");
 
         // MCTS Search - use the correct agent
-        let current_agent = if pov == 1 { &agent1 } else { &agent2 };
+        let current_agent = if pov == 1 { &mut agent1 } else { &mut agent2 };
         let (best_move, move_visits) = current_agent.think_decomposed(&mut game, move_count);
 
         let map_size = game.state.settings.size as usize;
@@ -432,9 +432,34 @@ fn main() -> anyhow::Result<()> {
         /// agents' own defaults (24) are overridden unless this is set.
         #[arg(long)]
         leaf_batch: Option<usize>,
+
+        /// Eval-cache LRU capacity (number of cached NN evaluations). 0
+        /// disables the cache. Default is 524288 (512K entries, ~900 MB at
+        /// ~1.8 KB per row). The cache lives on the eval-server thread and
+        /// skips the GPU for any leaf whose RawFeatures hash to a cached
+        /// entry — the only lever that reduces GPU work rather than
+        /// reshuffling it. Hit rate is reported in EVAL_SERVER_STATS.
+        #[arg(long, default_value_t = 524288)]
+        cache_cap: usize,
     }
 
     let args = Args::parse();
+
+    // Default Metal op-flush cadence. candle-Metal flushes its command buffer
+    // every `CANDLE_METAL_COMPUTE_PER_BUFFER` queued ops (default 50), which
+    // for an 11x11 net is dominated by dispatch overhead, not math. 1000 lets
+    // the GPU amortize dispatch across many ops before a `waitUntilCompleted`.
+    // Set before `Device::metal_if_available` so candle picks it up at device
+    // init; an explicit env var still wins so benchmarks can A/B test.
+    if std::env::var("CANDLE_METAL_COMPUTE_PER_BUFFER").is_err() {
+        // SAFETY: this runs at the very top of `main` before any other thread
+        // is spawned, so there are no concurrent readers of the environment.
+        unsafe {
+            std::env::set_var("CANDLE_METAL_COMPUTE_PER_BUFFER", "1000");
+        }
+    }
+    let metal_compute_per_buffer =
+        std::env::var("CANDLE_METAL_COMPUTE_PER_BUFFER").unwrap_or_else(|_| "1000".to_string());
 
     let backend = match args.search_backend {
         SearchBackendArg::Zero => SearchBackend::Zero,
@@ -450,7 +475,10 @@ fn main() -> anyhow::Result<()> {
             .or_else(|_| Device::cuda_if_available(0))
             .unwrap_or(Device::Cpu),
     };
-    println!("Using device: {:?}", device);
+    println!(
+        "Using device: {:?} (CANDLE_METAL_COMPUTE_PER_BUFFER={})",
+        device, metal_compute_per_buffer
+    );
 
     // Load models (P1, and P2 defaulting to P1 when no opponent is given)
     let load_start = Instant::now();
@@ -554,6 +582,11 @@ fn main() -> anyhow::Result<()> {
     let eval_config = EvalServerConfig {
         max_batch: args.max_batch,
         coalesce_timeout: std::time::Duration::from_micros(args.coalesce_timeout_us),
+        cache_capacity: if args.cache_cap == 0 {
+            None
+        } else {
+            Some(args.cache_cap)
+        },
     };
     let (eval_server1, eval_handle1) = EvalServer::start(network1.clone(), eval_config);
     let (eval_server2, eval_handle2) = if args.opponent.is_some() {
@@ -663,15 +696,26 @@ fn main() -> anyhow::Result<()> {
         } else {
             0.0
         };
+        let cache_hits = stats.cache_hits.load(Ordering::Relaxed);
+        let cache_misses = stats.cache_misses.load(Ordering::Relaxed);
+        let cache_total = cache_hits + cache_misses;
+        let cache_hit_rate = if cache_total > 0 {
+            cache_hits as f64 / cache_total as f64
+        } else {
+            0.0
+        };
         println!(
-            "EVAL_SERVER_STATS: {{\"server\": {}, \"forwards\": {}, \"rows\": {}, \"avg_batch\": {:.2}, \"max_batch\": {}, \"busy_s\": {:.2}, \"busy_frac\": {:.3}}}",
+            "EVAL_SERVER_STATS: {{\"server\": {}, \"forwards\": {}, \"rows\": {}, \"avg_batch\": {:.2}, \"max_batch\": {}, \"busy_s\": {:.2}, \"busy_frac\": {:.3}, \"cache_hits\": {}, \"cache_misses\": {}, \"cache_hit_rate\": {:.3}}}",
             tag,
             forwards,
             rows,
             avg_batch,
             max_batch,
             busy_s,
-            busy_s / games_duration.as_secs_f64().max(1e-9)
+            busy_s / games_duration.as_secs_f64().max(1e-9),
+            cache_hits,
+            cache_misses,
+            cache_hit_rate
         );
     }
 

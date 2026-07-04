@@ -41,6 +41,9 @@ FIELDS = [
     # average coalesced batch size and fraction of wall time the inference
     # thread spent inside tensorize/forward/readback.
     "avg_eval_batch", "eval_busy_frac",
+    # Eval-cache hit rate (fraction of leaf rows served from the LRU without
+    # hitting the GPU). Blank for pre-cache historical rows.
+    "cache_hit_rate",
 ]
 
 
@@ -105,7 +108,7 @@ def binary_path(target):
 
 def run_self_play(binpath, games, mcts, backend, gumbel_k, iteration,
                   actors=None, max_batch=None, coalesce_timeout_us=None,
-                  leaf_batch=None):
+                  leaf_batch=None, cache_cap=None):
     cmd = [
         binpath, "--num-games", str(games), "--mcts-iters", str(mcts),
         "--search-backend", backend, "--iteration", str(iteration),
@@ -122,6 +125,8 @@ def run_self_play(binpath, games, mcts, backend, gumbel_k, iteration,
         cmd += ["--coalesce-timeout-us", str(coalesce_timeout_us)]
     if leaf_batch is not None:
         cmd += ["--leaf-batch", str(leaf_batch)]
+    if cache_cap is not None:
+        cmd += ["--cache-cap", str(cache_cap)]
     print("Running:", " ".join(cmd))
     t0 = time.time()
     proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, env=clean_env())
@@ -149,6 +154,7 @@ def parse_output(text):
         stats = json.loads(m.group(1))
         data["avg_eval_batch"] = stats.get("avg_batch")
         data["eval_busy_frac"] = stats.get("busy_frac")
+        data["cache_hit_rate"] = stats.get("cache_hit_rate")
     return data
 
 
@@ -174,6 +180,9 @@ def main():
                     help="eval-server flush timeout in microseconds")
     ap.add_argument("--leaf-batch", type=int, default=None,
                     help="per-game virtual-loss mini-batch size")
+    ap.add_argument("--cache-cap", type=int, default=None,
+                    help="eval-cache LRU capacity forwarded to self_play --cache-cap "
+                         "(0 disables; default keeps self_play's compiled 524288)")
     ap.add_argument("--iteration", type=int, default=1,
                     help="training iteration passed to self_play; drives the "
                          "max_turns curriculum (use >150 for 30-turn steady state)")
@@ -199,6 +208,7 @@ def main():
             actors=args.actors, max_batch=args.max_batch,
             coalesce_timeout_us=args.coalesce_timeout_us,
             leaf_batch=args.leaf_batch,
+            cache_cap=args.cache_cap,
         )
         if proc.returncode != 0:
             print(proc.stdout[-4000:])
@@ -235,11 +245,13 @@ def main():
             "iteration": args.iteration,
             "avg_eval_batch": data.get("avg_eval_batch", ""),
             "eval_busy_frac": data.get("eval_busy_frac", ""),
+            "cache_hit_rate": data.get("cache_hit_rate", ""),
         }
         rows.append(row)
         print(f"Run {i + 1}/{args.repeats}: moves/sec={row['moves_per_sec']}  "
               f"avg_s/game={row['avg_s_per_game']}  games_duration_s={row['games_duration_s']}  "
-              f"avg_eval_batch={row['avg_eval_batch']}  eval_busy_frac={row['eval_busy_frac']}")
+              f"avg_eval_batch={row['avg_eval_batch']}  eval_busy_frac={row['eval_busy_frac']}  "
+              f"cache_hit_rate={row['cache_hit_rate']}")
 
     os.makedirs(os.path.dirname(CSV_PATH), exist_ok=True)
     migrate_csv_header()

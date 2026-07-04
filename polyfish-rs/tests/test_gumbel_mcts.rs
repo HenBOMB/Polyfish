@@ -39,7 +39,7 @@ fn test_gumbel_mcts_basic() {
     let evaluator = make_evaluator(&network);
     let mut game = make_game(42);
 
-    let agent = GumbelMctsAgent::new(&evaluator, 40, 4);
+    let mut agent = GumbelMctsAgent::new(&evaluator, 40, 4);
 
     let best_move = agent.select_move(&mut game);
     assert!(best_move.is_some(), "Gumbel MCTS failed to select a move");
@@ -53,7 +53,7 @@ fn test_gumbel_mcts_sequential_halving() {
     let mut game = make_game(123);
 
     // k=8 -> at least 3 halving rounds (log2(8)=3).
-    let agent = GumbelMctsAgent::new(&evaluator, 64, 8);
+    let mut agent = GumbelMctsAgent::new(&evaluator, 64, 8);
 
     let best_move = agent.select_move(&mut game);
     assert!(best_move.is_some());
@@ -110,7 +110,7 @@ fn test_gumbel_policy_target_covers_full_legal_set() {
         expected_count
     );
 
-    let agent = GumbelMctsAgent::new(&evaluator, 32, 4);
+    let mut agent = GumbelMctsAgent::new(&evaluator, 32, 4);
     let (_best_move, move_visits) = agent.select_move_with_decomposed_visits(&mut game, 0);
 
     assert_eq!(
@@ -149,7 +149,7 @@ fn test_gumbel_multi_step_game_loop_no_panic() {
         let _ = game.play_move(&EndTurnMove);
     }
 
-    let agent = GumbelMctsAgent::new(&evaluator, 16, 4);
+    let mut agent = GumbelMctsAgent::new(&evaluator, 16, 4);
 
     for step in 0..4 {
         if polyfish::functions::is_game_over(&game.state) {

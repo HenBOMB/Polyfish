@@ -46,6 +46,14 @@ pub struct Brain<'a> {
     /// independently of this, so self-play can shrink it toward sequential
     /// per-game search without losing throughput.
     pub leaf_batch: Option<usize>,
+    /// Lazily-built concrete search agent, held across calls so the agent can
+    /// keep its MCTS tree between consecutive same-player searches (structure-
+    /// only root-shift reuse; see `gumbel_mcts.rs`). Built once on the first
+    /// `think_*` call from `backend` / `evaluator` / `max_iterations` /
+    /// `leaf_batch`. The borrow is of the underlying `Evaluator` for lifetime
+    /// `'a` (a `Copy` shared reference), not of `self`, so storing it here is
+    /// not self-referential.
+    agent: Option<SearchAgent<'a>>,
 }
 
 /// Internal enum wrapping whichever concrete agent the configured backend
@@ -59,7 +67,7 @@ pub enum SearchAgent<'a> {
 }
 
 impl<'a> SearchAgent<'a> {
-    pub fn select_move(&self, game: &mut Game) -> Option<Box<dyn Move>> {
+    pub fn select_move(&mut self, game: &mut Game) -> Option<Box<dyn Move>> {
         match self {
             SearchAgent::Zero(a) => a.select_move(game),
             SearchAgent::Gumbel(a) => a.select_move(game),
@@ -67,7 +75,7 @@ impl<'a> SearchAgent<'a> {
     }
 
     fn select_move_with_decomposed_visits(
-        &self,
+        &mut self,
         game: &mut Game,
         move_count: usize,
     ) -> (Option<Box<dyn Move>>, Vec<MoveVisit>) {
@@ -77,7 +85,7 @@ impl<'a> SearchAgent<'a> {
         }
     }
 
-    fn select_move_with_stats(&self, game: &mut Game) -> (Option<Box<dyn Move>>, Vec<f32>) {
+    fn select_move_with_stats(&mut self, game: &mut Game) -> (Option<Box<dyn Move>>, Vec<f32>) {
         match self {
             SearchAgent::Zero(a) => a.select_move_with_stats(game),
             SearchAgent::Gumbel(a) => a.select_move_with_stats(game),
@@ -117,6 +125,7 @@ impl<'a> Brain<'a> {
             max_iterations,
             backend: SearchBackend::default(),
             leaf_batch: None,
+            agent: None,
         }
     }
 
@@ -130,6 +139,7 @@ impl<'a> Brain<'a> {
             max_iterations,
             backend,
             leaf_batch: None,
+            agent: None,
         }
     }
 
@@ -160,24 +170,29 @@ impl<'a> Brain<'a> {
         iterations
     }
 
-    fn think(&'_ self, game: &Game) -> (Option<SearchAgent<'_>>, Vec<Box<dyn Move>>) {
+    /// Build the concrete agent once and reuse it across calls so the agent
+    /// can carry its MCTS tree between consecutive same-player searches.
+    /// Returns `None` when there is exactly one legal move (no search needed).
+    fn think(&mut self, game: &Game) -> (Option<&mut SearchAgent<'a>>, Vec<Box<dyn Move>>) {
         let moves = generate_legal_moves(&game.state);
 
         if moves.len() == 1 {
             return (None, moves);
         }
 
-        let agent = make_search_agent(
-            self.backend,
-            self.evaluator,
-            self.max_iterations,
-            self.leaf_batch,
-        );
-        (Some(agent), moves)
+        if self.agent.is_none() {
+            self.agent = Some(make_search_agent(
+                self.backend,
+                self.evaluator,
+                self.max_iterations,
+                self.leaf_batch,
+            ));
+        }
+        (self.agent.as_mut(), moves)
     }
 
     pub fn think_decomposed(
-        &self,
+        &mut self,
         game: &Game,
         move_count: usize,
     ) -> (Option<Box<dyn Move>>, Vec<MoveVisit>) {
@@ -192,7 +207,7 @@ impl<'a> Brain<'a> {
             .select_move_with_decomposed_visits(&mut game.clone(), move_count)
     }
 
-    pub fn think_with_stats(&self, game: &Game) -> (Option<Box<dyn Move>>, Vec<f32>) {
+    pub fn think_with_stats(&mut self, game: &Game) -> (Option<Box<dyn Move>>, Vec<f32>) {
         let (agent, mut moves) = self.think(game);
 
         if agent.is_none() {

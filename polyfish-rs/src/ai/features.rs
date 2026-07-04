@@ -247,6 +247,25 @@ impl RawFeatures {
             player_state,
         })
     }
+
+    /// 64-bit hash over the spatial + player f32 bytes. `f32::to_bits` gives a
+    /// deterministic, platform-independent integer for every finite float, so
+    /// identical feature vectors always hash identically. Used as the eval
+    /// cache key (see `ai/eval_server.rs`) and for tree-reuse root matching
+    /// (see `ai/gumbel_mcts.rs`). Collision probability at these scales is
+    /// invisible inside MCTS noise; we accept it rather than store full keys.
+    pub fn hash(&self) -> u64 {
+        use rustc_hash::FxHasher;
+        use std::hash::Hasher;
+        let mut h = FxHasher::default();
+        for &v in &self.spatial {
+            h.write_u32(v.to_bits());
+        }
+        for &v in &self.player {
+            h.write_u32(v.to_bits());
+        }
+        h.finish()
+    }
 }
 
 /// Convert game state to tensor with decomposed player state

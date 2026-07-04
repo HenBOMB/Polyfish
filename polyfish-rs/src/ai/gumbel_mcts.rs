@@ -48,6 +48,21 @@ pub struct GumbelMctsAgent<'a> {
     /// `min(k, legal_move_count)`.
     pub k: usize,
     pub batch_size: usize,
+    /// Persistent tree across consecutive same-player searches, for
+    /// structure-only root-shift reuse. `None` after a fresh build or when
+    /// invalidated (book move, terminal root, opponent moved in between).
+    tree: Option<GumbelNode>,
+    /// Index into `tree`'s children of the move chosen last call. The next
+    /// call promotes this child to root iff the new root's feature hash
+    /// matches `next_root_hash`.
+    last_chosen_idx: Option<usize>,
+    /// Feature hash of the state that results from applying the last chosen
+    /// move to the previous root. Used as the re-root verification token.
+    next_root_hash: Option<u64>,
+    /// Diagnostics: number of times a search was served by re-rooting into a
+    /// reused subtree rather than building a fresh tree. Exposed for tests
+    /// and (future) stats reporting.
+    pub tree_reuses: u64,
 }
 
 struct GumbelNode {
@@ -125,14 +140,39 @@ impl<'a> GumbelMctsAgent<'a> {
             iterations,
             k,
             batch_size: mcts_common::DEFAULT_BATCH_SIZE,
+            tree: None,
+            last_chosen_idx: None,
+            next_root_hash: None,
+            tree_reuses: 0,
         }
     }
 
-    /// Build the root node: evaluate the root with the NN, create one child
-    /// per legal move (the full legal set, never truncated), sample Gumbel
-    /// noise, and select the top-`k` into `in_cut`. Then run Sequential
-    /// Halving. Returns the fully-populated root.
-    fn search_and_extract(&self, game: &mut Game) -> GumbelNode {
+    /// Drop any cached tree so the next search builds fresh. Called when the
+    /// search is bypassed (opening book) or the root is terminal — neither
+    /// case leaves a child to promote on the next call.
+    fn invalidate_tree(&mut self) {
+        self.tree = None;
+        self.last_chosen_idx = None;
+        self.next_root_hash = None;
+    }
+
+    /// Build the root node, either by re-rooting the previous search's tree
+    /// (structure-only reuse) or by evaluating the root fresh with the NN.
+    ///
+    /// **Re-root path.** Within one player's own ~8-ply turn, consecutive
+    /// searches are separated by exactly one of that player's own moves, so
+    /// the new root is a direct child of the previous root. If the new root's
+    /// feature hash matches the hash we recorded for the chosen child last
+    /// call, we promote that child: keep its expanded subtree and cached NN
+    /// policy/value (skipping the root NN eval and all descendant
+    /// expansions), reset visit/value statistics across the subtree so
+    /// Sequential Halving runs fresh on a clean slate, re-sample Gumbel noise
+    /// on the new root's children, and rebuild `in_cut`. This preserves the
+    /// π' policy target's semantics — root-child visit counts come only from
+    /// this search's Gumbel-driven allocation, never inherited interior
+    /// counts. When the opponent has moved in between (or a book move / forced
+    /// move advanced the state), the hash won't match and we build fresh.
+    fn search_and_extract(&mut self, game: &mut Game) -> GumbelNode {
         let start_turn = game.state.settings.turn;
 
         let features = features::state_to_cpu_features(
@@ -140,6 +180,70 @@ impl<'a> GumbelMctsAgent<'a> {
             game.state.settings.current_player_turn_id,
         )
         .expect("BUG: Failed to create features at Gumbel root");
+        let new_hash = features.hash();
+
+        if let Some(mut prev_root) = self.tree.take() {
+            if let Some(chosen_idx) = self.last_chosen_idx
+                .filter(|&i| i < prev_root.children.len())
+            {
+                if self.next_root_hash == Some(new_hash) {
+                    let new_root = prev_root.children.swap_remove(chosen_idx);
+                    if new_root.is_expanded && !new_root.children.is_empty() {
+                        self.tree_reuses += 1;
+                        return self.finish_reused_root(game, new_root, start_turn);
+                    }
+                    // Expanded-but-childless (terminal) reused root: nothing
+                    // to search, return as-is.
+                    if new_root.is_expanded && new_root.children.is_empty() {
+                        return new_root;
+                    }
+                    // Unexpanded reused root: no cached structure to reuse,
+                    // fall through to a fresh build.
+                }
+            }
+            // Mismatch / invalid index: drop the stale tree and build fresh.
+        }
+
+        self.build_fresh_root(game, features, start_turn)
+    }
+
+    /// Re-root continuation: take the promoted child (already confirmed
+    /// expanded with children), reset stats, re-sample Gumbel, suppress
+    /// EndTurn, rebuild `in_cut`, and run Sequential Halving.
+    fn finish_reused_root(&self, game: &mut Game, mut new_root: GumbelNode, start_turn: i32) -> GumbelNode {
+        reset_stats_recursive(&mut new_root);
+
+        // Suppress EndTurn at the new root to mirror the fresh-build path;
+        // interior expansion keeps EndTurn, so a reused root may carry one.
+        let has_other = new_root.children.iter().any(|c| {
+            c.move_to_here
+                .as_ref()
+                .map_or(false, |m| m.move_type() != MoveType::EndTurn)
+        });
+        if has_other {
+            new_root.children.retain(|c| {
+                c.move_to_here
+                    .as_ref()
+                    .map_or(true, |m| m.move_type() != MoveType::EndTurn)
+            });
+        }
+
+        // Re-sample Gumbel(0,1) on the new root's children: they were created
+        // as non-root nodes with gumbel = 0.0, but root candidates need noise.
+        let mut rng = rand::thread_rng();
+        let gumbel_dist = Gumbel::new(0.0, 1.0).expect("BUG: Gumbel distribution");
+        for c in &mut new_root.children {
+            c.gumbel = gumbel_dist.sample(&mut rng);
+        }
+
+        let mut in_cut = self.build_in_cut(&new_root);
+        self.run_search(game, &mut new_root, &mut in_cut, start_turn);
+        new_root
+    }
+
+    /// Fresh root: evaluate with the NN, create one child per legal move with
+    /// fresh Gumbel draws, build `in_cut`, and run Sequential Halving.
+    fn build_fresh_root(&self, game: &mut Game, features: RawFeatures, start_turn: i32) -> GumbelNode {
         let results = self.evaluator.evaluate(vec![features]);
         let (root_value, ref policy_row) = results[0];
 
@@ -165,7 +269,6 @@ impl<'a> GumbelMctsAgent<'a> {
 
         let logits = policy_composer::compute_move_log_probs_raw(policy_row, &legal_moves, map_size);
 
-        // Build root.children = the full legal set, each with a fresh Gumbel draw.
         let mut rng = rand::thread_rng();
         let gumbel_dist = Gumbel::new(0.0, 1.0).expect("BUG: Gumbel distribution");
         root.children = legal_moves
@@ -177,8 +280,15 @@ impl<'a> GumbelMctsAgent<'a> {
             })
             .collect();
 
-        // in_cut: indices into root.children of the top-k by (logit + gumbel),
-        // sorted descending. These are the candidates actually searched.
+        let mut in_cut = self.build_in_cut(&root);
+        self.run_search(game, &mut root, &mut in_cut, start_turn);
+        root
+    }
+
+    /// `in_cut`: indices into `root.children` of the top-`k` by
+    /// `(logit + gumbel)`, sorted descending. These are the candidates
+    /// actually searched by Sequential Halving.
+    fn build_in_cut(&self, root: &GumbelNode) -> Vec<usize> {
         let mut in_cut: Vec<usize> = (0..root.children.len()).collect();
         in_cut.sort_by(|&a, &b| {
             (root.children[b].logit + root.children[b].gumbel)
@@ -187,10 +297,7 @@ impl<'a> GumbelMctsAgent<'a> {
         });
         let k = self.k.min(root.children.len());
         in_cut.truncate(k);
-
-        self.run_search(game, &mut root, &mut in_cut, start_turn);
-
-        root
+        in_cut
     }
 
     /// Sequential Halving over `in_cut`. Each round considers the top
@@ -619,7 +726,7 @@ impl<'a> GumbelMctsAgent<'a> {
         targets
     }
 
-    pub fn select_move(&self, game: &mut Game) -> Option<Box<dyn Move>> {
+    pub fn select_move(&mut self, game: &mut Game) -> Option<Box<dyn Move>> {
         use crate::ai::book::Book;
         use rand::seq::SliceRandom;
 
@@ -628,21 +735,25 @@ impl<'a> GumbelMctsAgent<'a> {
             let mut rng = rand::thread_rng();
             book_moves.shuffle(&mut rng);
             if let Some(m) = book_moves.pop() {
+                self.invalidate_tree();
                 return Some(m);
             }
         }
 
-        let mut root = self.search_and_extract(game);
+        let root = self.search_and_extract(game);
         if root.children.is_empty() {
+            self.invalidate_tree();
             return Some(Box::new(EndTurnMove));
         }
         let best_idx = self.recommend_final_move(&root);
-        let best_move = root.children.swap_remove(best_idx).move_to_here;
+        let best_move = clone_child_move(&root, best_idx);
+        let next_hash = next_root_hash_for(game, best_move.as_deref());
+        self.store_tree(root, best_idx, next_hash);
         move_or_end_turn(best_move)
     }
 
     pub fn select_move_with_decomposed_visits(
-        &self,
+        &mut self,
         game: &mut Game,
         move_count: usize,
     ) -> (Option<Box<dyn Move>>, Vec<crate::ai::mcts_types::MoveVisit>) {
@@ -660,6 +771,7 @@ impl<'a> GumbelMctsAgent<'a> {
             let mut rng = rand::thread_rng();
             book_moves.shuffle(&mut rng);
             if let Some(selected_move) = book_moves.pop() {
+                self.invalidate_tree();
                 let move_info = MoveVisit {
                     move_type: selected_move.move_type(),
                     visits: self.iterations as f32,
@@ -674,17 +786,20 @@ impl<'a> GumbelMctsAgent<'a> {
             }
         }
 
-        let mut root = self.search_and_extract(game);
+        let root = self.search_and_extract(game);
         if root.children.is_empty() {
+            self.invalidate_tree();
             return (Some(Box::new(EndTurnMove)), Vec::new());
         }
         let move_visits = self.extract_policy_targets(&root);
         let best_idx = self.recommend_final_move(&root);
-        let best_move = root.children.swap_remove(best_idx).move_to_here;
+        let best_move = clone_child_move(&root, best_idx);
+        let next_hash = next_root_hash_for(game, best_move.as_deref());
+        self.store_tree(root, best_idx, next_hash);
         (move_or_end_turn(best_move), move_visits)
     }
 
-    pub fn select_move_with_stats(&self, game: &mut Game) -> (Option<Box<dyn Move>>, Vec<f32>) {
+    pub fn select_move_with_stats(&mut self, game: &mut Game) -> (Option<Box<dyn Move>>, Vec<f32>) {
         use crate::ai::book::Book;
         use rand::seq::SliceRandom;
 
@@ -705,20 +820,76 @@ impl<'a> GumbelMctsAgent<'a> {
                         }
                     }
                 }
+                // The book branch discards the searched root; invalidate so
+                // the next call does not re-root against a stale tree.
+                self.invalidate_tree();
                 return (Some(book_move), policy);
             }
         }
 
-        let mut root = self.search_and_extract(game);
+        let root = self.search_and_extract(game);
         if root.children.is_empty() {
+            self.invalidate_tree();
             return (Some(Box::new(EndTurnMove)), Vec::new());
         }
         let move_visits = self.extract_policy_targets(&root);
         let policy: Vec<f32> = move_visits.iter().map(|mv| mv.visits).collect();
         let best_idx = self.recommend_final_move(&root);
-        let best_move = root.children.swap_remove(best_idx).move_to_here;
+        let best_move = clone_child_move(&root, best_idx);
+        let next_hash = next_root_hash_for(game, best_move.as_deref());
+        self.store_tree(root, best_idx, next_hash);
         (move_or_end_turn(best_move), policy)
     }
+
+    /// Stash the just-searched root for next-call reuse. `best_idx` must point
+    /// at the chosen child, which is kept in the tree (its move was cloned,
+    /// not moved out) so the next call can promote it.
+    fn store_tree(&mut self, root: GumbelNode, best_idx: usize, next_hash: Option<u64>) {
+        self.tree = Some(root);
+        self.last_chosen_idx = Some(best_idx);
+        self.next_root_hash = next_hash;
+    }
+}
+
+/// Recursively zero `visits` / `value_sum` / `virtual_loss` across the
+/// subtree, keeping `is_expanded`, `children`, `logit`, `own_value`, and
+/// `move_to_here` intact. Used by structure-only root-shift reuse so the new
+/// search's Sequential Halving runs on a clean statistical slate while the
+/// expanded structure and cached NN policy/value are retained.
+fn reset_stats_recursive(node: &mut GumbelNode) {
+    node.visits = 0.0;
+    node.value_sum = 0.0;
+    *node.virtual_loss.borrow_mut() = 0.0;
+    for c in &mut node.children {
+        reset_stats_recursive(c);
+    }
+}
+
+/// Clone the chosen child's move out of the tree without removing the child,
+/// so the subtree below it stays available for next-call root-shift reuse.
+fn clone_child_move(root: &GumbelNode, idx: usize) -> Option<Box<dyn Move>> {
+    root.children
+        .get(idx)
+        .and_then(|c| c.move_to_here.as_ref())
+        .map(|m| dyn_clone::clone_box(&**m))
+}
+
+/// Simulate `m` on `game` (assumed to be at the root state, with all search
+/// undos applied), hash the resulting state's features, then undo — returning
+/// the hash the *next* search's root must match to re-root into this child.
+/// `None` if the move can't be simulated or features can't be built, in which
+/// case the next call simply builds fresh.
+fn next_root_hash_for(game: &mut Game, m: Option<&dyn Move>) -> Option<u64> {
+    let m = m?;
+    let undo = game.simulate_move(m)?;
+    let feat = features::state_to_cpu_features(
+        &game.state,
+        game.state.settings.current_player_turn_id,
+    )
+    .ok()?;
+    let h = feat.hash();
+    undo(&mut game.state);
+    Some(h)
 }
 
 fn move_or_end_turn(best_move: Option<Box<dyn Move>>) -> Option<Box<dyn Move>> {

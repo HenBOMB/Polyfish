@@ -59,7 +59,7 @@ fn test_gumbel_state_restored_after_search() {
     let initial_player = game.state.settings.current_player_turn_id;
     let initial_turn = game.state.settings.turn;
 
-    let agent = GumbelMctsAgent::new(&evaluator, 32, 8);
+    let mut agent = GumbelMctsAgent::new(&evaluator, 32, 8);
     let (best_move, _visits) = agent.select_move_with_decomposed_visits(&mut game, 0);
     assert!(best_move.is_some());
 
@@ -100,7 +100,7 @@ fn test_gumbel_stability_across_iteration_counts() {
     for iterations in [1usize, 4, 16] {
         for k in [2usize, 4, 8] {
             let mut game = base.clone();
-            let agent = GumbelMctsAgent::new(&evaluator, iterations, k);
+            let mut agent = GumbelMctsAgent::new(&evaluator, iterations, k);
             let best_move = agent.select_move(&mut game);
             assert!(
                 best_move.is_some(),
@@ -128,7 +128,7 @@ fn test_gumbel_terminal_state_handled() {
         tribe2.score = 500;
     }
 
-    let agent = GumbelMctsAgent::new(&evaluator, 16, 4);
+    let mut agent = GumbelMctsAgent::new(&evaluator, 16, 4);
     // Even with the game flagged over, select_move should not panic and
     // should return an EndTurn fallback (the search root sees no live
     // search to do).

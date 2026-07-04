@@ -287,7 +287,7 @@ async fn auto_step(
         use polyfish::ai::brain::Brain;
         use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
         let evaluator = Evaluator::Inline(InlineEvalHandle::new(net.clone()));
-        let brain = Brain::new(&evaluator, params.iterations);
+        let mut brain = Brain::new(&evaluator, params.iterations);
         game.state._messages.clear();
         let (chosen_move, brain_policy) = brain.think_with_stats(&mut game);
         policy = brain_policy.into();
@@ -810,7 +810,7 @@ async fn get_trainer_hint(
         use polyfish::ai::brain::Brain;
         use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
         let evaluator = Evaluator::Inline(InlineEvalHandle::new(net.clone()));
-        let brain = Brain::new(&evaluator, params.iterations);
+        let mut brain = Brain::new(&evaluator, params.iterations);
         let (bm, _stats) = brain.think_with_stats(&mut game);
         // Brain currently returns stats as Vec<f32>, convert to simpler MCTS analysis or similar
         // For visual consistency, we actually prefer the full analysis from heuristic agent
