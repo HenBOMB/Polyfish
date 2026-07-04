@@ -135,7 +135,9 @@ async function jumpToStep(index) {
                 renderer.clear();
             }
             GAME_STATE = data.state;
-            renderer.render(GAME_STATE, [], 1); // Render with no moves valid (it's replay)
+            // Render from the POV of whoever's turn it is at this step, so the
+            // view (and FOW) follows the active player as you step through.
+            renderer.render(GAME_STATE, []);
             renderer.renderMCTSHeatmap(data.mctsAnalysis);
         } else {
             // Fallback if I haven't updated backend yet (I will next)
