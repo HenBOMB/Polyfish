@@ -1251,40 +1251,56 @@ async fn load_replay_endpoint(
     };
 
     match std::fs::read_to_string(&path) {
-        Ok(json) => match serde_json::from_str::<polyfish::states::GameState>(&json) {
-            Ok(loaded_state) => {
-                game.state = loaded_state;
-                game.post_load();
+        Ok(json) => {
+            // Replays may be either a bare GameState or a wrapped
+            // { "gameState": {...}, "turns": [...] } payload (the format the
+            // mod writes). Unwrap the inner gameState so both shapes load, and
+            // surface the top-level turns array so the frontend can step
+            // through the full recorded game even when gameState.history is
+            // empty (which is the case for mod-format replays).
+            let val: Value = serde_json::from_str(&json).unwrap_or(Value::Null);
+            let (state_val, turns) = if val["gameState"].is_object() {
+                (val["gameState"].clone(), val["turns"].clone())
+            } else {
+                (val, Value::Null)
+            };
 
-                let mut tiles: Vec<_> = game.state.tiles.values().collect();
-                tiles.sort_by_key(|t| t.coords.idx);
+            match serde_json::from_value::<polyfish::states::GameState>(state_val) {
+                Ok(loaded_state) => {
+                    game.state = loaded_state;
+                    game.post_load();
 
-                let legal_moves: Vec<_> =
-                    game.legal_moves().iter().map(|m| m.serialize()).collect();
+                    let mut tiles: Vec<_> = game.state.tiles.values().collect();
+                    tiles.sort_by_key(|t| t.coords.idx);
 
-                let evaluation = build_evaluation_json(&game.state);
+                    let legal_moves: Vec<_> =
+                        game.legal_moves().iter().map(|m| m.serialize()).collect();
 
-                Json(serde_json::json!({
-                    "status": "success",
-                    "filename": path,
-                    "state": {
-                        "settings": game.state.settings,
-                        "tiles": tiles,
-                        "structures": game.state.structures,
-                        "resources": game.state.resources,
-                        "tribes": tribes_json_with_max_health(&game.state),
-                        "_prediction": game.state._prediction,
-                        "_messages": game.state._messages,
-                        "history": game.state._history,
-                    },
-                    "legalMoves": legal_moves,
-                    "evaluation": evaluation
-                }))
+                    let evaluation = build_evaluation_json(&game.state);
+
+                    Json(serde_json::json!({
+                        "status": "success",
+                        "filename": path,
+                        "turns": turns,
+                        "state": {
+                            "settings": game.state.settings,
+                            "tiles": tiles,
+                            "structures": game.state.structures,
+                            "resources": game.state.resources,
+                            "tribes": tribes_json_with_max_health(&game.state),
+                            "_prediction": game.state._prediction,
+                            "_messages": game.state._messages,
+                            "history": game.state._history,
+                        },
+                        "legalMoves": legal_moves,
+                        "evaluation": evaluation
+                    }))
+                }
+                Err(e) => Json(
+                    serde_json::json!({ "status": "error", "message": format!("Failed to parse replay: {}", e) }),
+                ),
             }
-            Err(e) => Json(
-                serde_json::json!({ "status": "error", "message": format!("Failed to parse replay: {}", e) }),
-            ),
-        },
+        }
         Err(e) => Json(
             serde_json::json!({ "status": "error", "message": format!("Failed to read replay file: {}", e) }),
         ),
@@ -1483,7 +1499,16 @@ async fn analyze_replay_step(
     };
 
     let replay_state: polyfish::states::GameState = match std::fs::read_to_string(&path) {
-        Ok(json) => serde_json::from_str(&json).unwrap_or_default(),
+        Ok(json) => {
+            // Support both bare GameState and wrapped { gameState, turns } replays.
+            let val: Value = serde_json::from_str(&json).unwrap_or(Value::Null);
+            let state_val = if val["gameState"].is_object() {
+                val["gameState"].clone()
+            } else {
+                val
+            };
+            serde_json::from_value(state_val).unwrap_or_default()
+        }
         Err(e) => {
             return Json(serde_json::json!({ "error": format!("Failed to load replay: {}", e) }));
         }
