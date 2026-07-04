@@ -20,7 +20,6 @@ HEADER = [
     "run_id",
     "run_started_at",
     "iteration",
-    "timestamp",
     "games_file",
     "avg_score",
     "max_score",
@@ -114,7 +113,6 @@ def migrate_csv(path: str = CSV_PATH) -> None:
                 "run_id": run_id,
                 "run_started_at": run_started_at,
                 "iteration": row.get("iteration", ""),
-                "timestamp": row.get("timestamp", ""),
                 "games_file": "",
                 "avg_score": row.get("avg_score", ""),
                 "max_score": row.get("max_score", ""),
@@ -236,7 +234,6 @@ def append_row(
     run_id: str,
     run_started_at: str,
     iteration: int,
-    timestamp: int,
     games_file: str,
     game_metrics: dict[str, Any],
     train_metrics: dict[str, Any],
@@ -251,7 +248,6 @@ def append_row(
         "run_id": run_id,
         "run_started_at": run_started_at,
         "iteration": str(iteration),
-        "timestamp": str(timestamp),
         "games_file": archived,
         "avg_score": game_metrics.get("avg_score", ""),
         "max_score": game_metrics.get("max_score", ""),
@@ -338,7 +334,6 @@ def main() -> None:
     p_append.add_argument("--run-id", required=True)
     p_append.add_argument("--run-started-at", required=True)
     p_append.add_argument("--iteration", type=int, required=True)
-    p_append.add_argument("--timestamp", type=int, required=True)
     p_append.add_argument("--games-file", default="")
     p_append.add_argument("--game-json", required=True)
     p_append.add_argument("--train-json", required=True)
@@ -348,7 +343,6 @@ def main() -> None:
             a.run_id,
             a.run_started_at,
             a.iteration,
-            a.timestamp,
             a.games_file,
             json.loads(a.game_json),
             json.loads(a.train_json),

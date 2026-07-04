@@ -274,12 +274,10 @@ do
     POLICY_LOSS=$(echo "$TRAIN_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('policy_loss',''))")
 
     # 3. Log
-    TIMESTAMP=$(date +%s)
     .venv/bin/python3 training_log.py append-row \
         --run-id "$RUN_ID" \
         --run-started-at "$RUN_STARTED_AT" \
         --iteration "$i" \
-        --timestamp "$TIMESTAMP" \
         --games-file "$GAMES_FILE" \
         --game-json "$GAME_JSON" \
         --train-json "$TRAIN_JSON" \
