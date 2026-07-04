@@ -12,6 +12,8 @@ pub mod mcts_common;
 pub mod mcts_types;
 pub mod mcts_zero;
 pub mod network;
+#[cfg(feature = "tch-eval")]
+pub mod tch_network;
 pub mod ordering;
 pub mod policy_composer;
 pub use evaluator::evaluate_state;
