@@ -20,7 +20,46 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const HEURISTIC_PRIOR_W0: f32 = 0.5; // net & heur blended 50/50 at start
-const HEURISTIC_PRIOR_DECAY: f32 = 0.865; // from 0.5 to 0.03 by ~20 iterations
+const HEURISTIC_PRIOR_DECAY: f32 = 0.97; // from 0.5 to 0.03 by ~92 iterations
+
+/// Console verbosity for long self-play runs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProgressMode {
+    /// Full play-by-play (move every 10 steps, start/finish per game).
+    Full,
+    /// No move-by-move noise; up to 5 turn-milestone lines per game.
+    Periodic,
+    /// Silent during games; caller reports ~every 20% on game finish.
+    SampledFinish,
+}
+
+impl ProgressMode {
+    fn from_num_games(num_games: usize) -> Self {
+        if num_games >= 64 {
+            Self::SampledFinish
+        } else if num_games > 32 {
+            Self::Periodic
+        } else {
+            Self::Full
+        }
+    }
+}
+
+/// Up to 5 evenly spaced turn thresholds for periodic in-game progress.
+fn turn_milestones(max_turns: i32) -> Vec<i32> {
+    const MAX_REPORTS: usize = 5;
+    if max_turns <= 0 {
+        return Vec::new();
+    }
+    (1..=MAX_REPORTS)
+        .map(|i| (max_turns * i as i32 + MAX_REPORTS as i32 - 1) / MAX_REPORTS as i32)
+        .collect()
+}
+
+/// Game-count milestones at 20%, 40%, …, 100% for large runs.
+fn finish_milestones(num_games: usize) -> Vec<usize> {
+    (1..=5).map(|i| num_games * i / 5).collect()
+}
 
 /// Decomposed policy probability distributions for a single step
 struct DecomposedPolicyData {
@@ -100,6 +139,7 @@ fn play_single_game(
     iteration: usize,
     backend: SearchBackend,
     leaf_batch: Option<usize>,
+    progress: ProgressMode,
 ) -> Option<GameResult> {
     // Curriculum logic — Tiny maps only, gradually increase turn count.
     let (map_size, max_turns) = if iteration <= 25 {
@@ -120,10 +160,12 @@ fn play_single_game(
         seed,
         ..Default::default()
     };
-    eprintln!(
-        "[Game {}] Started with seed: {} Tribes: {:?} (Curriculum: {:?}, max_turns: {})",
-        game_idx, seed, gen_settings.tribes, map_size, max_turns
-    );
+    if progress == ProgressMode::Full {
+        eprintln!(
+            "[Game {}] Started with seed: {} Tribes: {:?} (Curriculum: {:?}, max_turns: {})",
+            game_idx, seed, gen_settings.tribes, map_size, max_turns
+        );
+    }
 
     let mut game = Game::new();
     game.state = polyfish::mapgen::generate(gen_settings);
@@ -167,10 +209,19 @@ fn play_single_game(
         .map(|(id, t)| (*id, t.score))
         .collect();
 
-    eprintln!(
-        "[Game {}]: Turn: {} Scores: {:?}",
-        game_idx, game.state.settings.turn, current_scores
-    );
+    if progress == ProgressMode::Full {
+        eprintln!(
+            "[Game {}]: Turn: {} Scores: {:?}",
+            game_idx, game.state.settings.turn, current_scores
+        );
+    }
+
+    let milestones = if progress == ProgressMode::Periodic {
+        turn_milestones(max_turns)
+    } else {
+        Vec::new()
+    };
+    let mut next_milestone = 0usize;
 
     let mut move_count = 0;
     while !polyfish::functions::is_game_over(&game.state) {
@@ -292,23 +343,30 @@ fn play_single_game(
                 opp_score_now,
                 m.move_type(),
             ));
-            if move_count > 0 && move_count % 10 == 0 {
-                // let current_scores: Vec<(PlayerId, i32)> = game
-                //     .state
-                //     .tribes
-                //     .iter()
-                //     .map(|(id, t)| (*id, t.score))
-                //     .collect();
+            if progress == ProgressMode::Full && move_count > 0 && move_count % 10 == 0 {
                 eprintln!(
                     "[Game {}]: Turn: {} Player: {} Move: {}",
                     game_idx,
                     game.state.settings.turn,
                     pov,
                     m.describe(&game.state),
-                    // current_scores
                 );
             }
             let _ = game.play_move(m.as_ref());
+
+            if progress == ProgressMode::Periodic {
+                while next_milestone < milestones.len()
+                    && game.state.settings.turn >= milestones[next_milestone]
+                {
+                    eprintln!(
+                        "[Game {}] turn {} reached (move {})",
+                        game_idx,
+                        milestones[next_milestone],
+                        move_count + 1,
+                    );
+                    next_milestone += 1;
+                }
+            }
         } else {
             break;
         }
@@ -345,10 +403,12 @@ fn play_single_game(
     };
 
     let is_decisive = alive_tribes.len() == 1;
-    eprintln!(
-        "[Game {}] Finished. Moves: {} | Winner: {} (Score: {}) | Decisive: {}",
-        game_idx, move_count, winner_id, winner_score, is_decisive
-    );
+    if progress == ProgressMode::Full {
+        eprintln!(
+            "[Game {}] Finished. Moves: {} | Winner: {} (Score: {}) | Decisive: {}",
+            game_idx, move_count, winner_id, winner_score, is_decisive
+        );
+    }
 
     Some(GameResult {
         history: game_history,
@@ -819,7 +879,20 @@ fn main() -> anyhow::Result<()> {
         num_actors, args.max_batch, args.coalesce_timeout_us, args.leaf_batch
     );
 
+    let progress_mode = ProgressMode::from_num_games(args.num_games);
+    match progress_mode {
+        ProgressMode::Full => println!("Progress: full play-by-play (<=32 games)"),
+        ProgressMode::Periodic => {
+            println!("Progress: turn milestones only (>32 games, max 5 per game)")
+        }
+        ProgressMode::SampledFinish => {
+            println!("Progress: sampled game completion only (>=64 games, every 20%)")
+        }
+    }
+
     let job_counter = Arc::new(AtomicUsize::new(0));
+    let games_completed = Arc::new(AtomicUsize::new(0));
+    let finish_milestones = finish_milestones(args.num_games);
     let results_mutex: Arc<std::sync::Mutex<Vec<GameResult>>> =
         Arc::new(std::sync::Mutex::new(Vec::with_capacity(args.num_games)));
 
@@ -827,6 +900,8 @@ fn main() -> anyhow::Result<()> {
         for _ in 0..num_actors {
             let job_counter = job_counter.clone();
             let results_mutex = results_mutex.clone();
+            let games_completed = games_completed.clone();
+            let finish_milestones = finish_milestones.clone();
             let network1 = &network1;
             let network2 = &network2;
             let eval1 = &eval1;
@@ -869,9 +944,23 @@ fn main() -> anyhow::Result<()> {
                         args.iteration,
                         backend,
                         args.leaf_batch,
+                        progress_mode,
                     );
 
                     if let Some(result) = result {
+                        if progress_mode == ProgressMode::SampledFinish {
+                            let done = games_completed.fetch_add(1, Ordering::Relaxed) + 1;
+                            if finish_milestones.contains(&done) {
+                                eprintln!(
+                                    "[Progress] {}/{} games complete (game {} — {} moves, winner score {})",
+                                    done,
+                                    args.num_games,
+                                    i,
+                                    result.moves,
+                                    result.winner_score,
+                                );
+                            }
+                        }
                         results_mutex.lock().unwrap().push(result);
                     }
                 }

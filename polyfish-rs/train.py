@@ -199,6 +199,18 @@ def compute_loss(policy_pred, values_pred, policy_targets, value_target):
     
     return total_loss, total_policy_loss, value_loss
 
+def batch_report_indices(total_batches, max_reports=10):
+    """Pick up to `max_reports` evenly spaced batch numbers to log."""
+    if total_batches <= 0:
+        return set()
+    if total_batches <= max_reports:
+        return set(range(1, total_batches + 1))
+    indices = set()
+    for i in range(max_reports):
+        batch_num = 1 + i * (total_batches - 1) // (max_reports - 1)
+        indices.add(batch_num)
+    return indices
+
 def train():
     print(f"Training on {DEVICE}")
     
@@ -257,6 +269,9 @@ def train():
 
         print(f"\n=== Epoch {epoch+1}/{EPOCHS} ===")
 
+        report_batch_indices = None
+        epoch_batch_estimate = None
+
         for i in range(0, len(game_files), CHUNK_SIZE):
             chunk_files = game_files[i : i + CHUNK_SIZE]
             chunk_idx = i // CHUNK_SIZE + 1
@@ -314,6 +329,15 @@ def train():
             
             dataset_size = len(spatial_maps)
             print(f"  Loaded {dataset_size} samples.")
+
+            if epoch_batch_estimate is None and len(chunk_files) > 0:
+                est_samples = int(dataset_size / len(chunk_files) * len(game_files))
+                epoch_batch_estimate = (est_samples + BATCH_SIZE - 1) // BATCH_SIZE
+                report_batch_indices = batch_report_indices(epoch_batch_estimate)
+                if epoch_batch_estimate <= 10:
+                    print(f"  Reporting all {epoch_batch_estimate} batches.")
+                else:
+                    print(f"  Reporting ~10/{epoch_batch_estimate} sampled batches.")
 
             indices = torch.randperm(dataset_size)
             num_batches_in_chunk = (dataset_size + BATCH_SIZE - 1) // BATCH_SIZE
@@ -406,20 +430,21 @@ def train():
                         early_stopped = True
 
                 elapsed = time.time() - chunk_start_time
-                batches_per_sec = batch_num / elapsed if elapsed > 0 else 0.0
-                print(
-                    f"\r  Chunk {chunk_idx}/{num_chunks} - batch {batch_num}/{num_batches_in_chunk} "
-                    f"- loss: {total_loss/total_batches:.4f} "
-                    f"(policy: {total_p_loss/total_batches:.4f}, value: {total_v_loss/total_batches:.4f}) "
-                    f"- {batches_per_sec:.1f} batch/s",
-                    end="",
-                    flush=True,
-                )
+                global_batch_num = total_batches
+                if report_batch_indices and global_batch_num in report_batch_indices:
+                    batches_per_sec = batch_num / elapsed if elapsed > 0 else 0.0
+                    print(
+                        f"  Epoch {epoch+1} batch {global_batch_num}"
+                        f"{f'/{epoch_batch_estimate}' if epoch_batch_estimate else ''} "
+                        f"(chunk {chunk_idx}/{num_chunks} {batch_num}/{num_batches_in_chunk}) "
+                        f"- loss: {total_loss/total_batches:.4f} "
+                        f"(policy: {total_p_loss/total_batches:.4f}, value: {total_v_loss/total_batches:.4f}) "
+                        f"- {batches_per_sec:.1f} batch/s"
+                    )
 
                 if early_stopped:
                     break
 
-            print()  # newline to end the in-place progress line for this chunk
             if early_stopped:
                 print(
                     f"Early stopping: smoothed loss hasn't improved by >= {EARLY_STOP_MIN_DELTA} "
