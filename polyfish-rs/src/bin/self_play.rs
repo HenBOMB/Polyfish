@@ -1007,6 +1007,7 @@ fn main() -> anyhow::Result<()> {
     // Aggregate across shards.
     let (mut agg_forwards, mut agg_rows, mut agg_max_batch, mut agg_busy_us) = (0u64, 0u64, 0u64, 0u64);
     let (mut agg_hits, mut agg_misses) = (0u64, 0u64);
+    let (mut agg_compiles, mut agg_compile_us) = (0u64, 0u64);
     for (_, s) in &all_shard_stats {
         agg_forwards += s.forwards.load(Ordering::Relaxed);
         agg_rows += s.rows.load(Ordering::Relaxed);
@@ -1014,8 +1015,11 @@ fn main() -> anyhow::Result<()> {
         agg_busy_us += s.busy_us.load(Ordering::Relaxed);
         agg_hits += s.cache_hits.load(Ordering::Relaxed);
         agg_misses += s.cache_misses.load(Ordering::Relaxed);
+        agg_compiles += s.compiles.load(Ordering::Relaxed);
+        agg_compile_us += s.compile_us.load(Ordering::Relaxed);
     }
     let agg_busy_s = agg_busy_us as f64 / 1e6;
+    let agg_compile_s = agg_compile_us as f64 / 1e6;
     let agg_avg_batch = if agg_forwards > 0 {
         agg_rows as f64 / agg_forwards as f64
     } else {
@@ -1028,7 +1032,7 @@ fn main() -> anyhow::Result<()> {
         0.0
     };
     println!(
-        "EVAL_SERVER_STATS_AGG: {{\"shards\": {}, \"forwards\": {}, \"rows\": {}, \"avg_batch\": {:.2}, \"max_batch\": {}, \"busy_s\": {:.2}, \"busy_frac\": {:.3}, \"cache_hits\": {}, \"cache_misses\": {}, \"cache_hit_rate\": {:.3}}}",
+        "EVAL_SERVER_STATS_AGG: {{\"shards\": {}, \"forwards\": {}, \"rows\": {}, \"avg_batch\": {:.2}, \"max_batch\": {}, \"busy_s\": {:.2}, \"busy_frac\": {:.3}, \"cache_hits\": {}, \"cache_misses\": {}, \"cache_hit_rate\": {:.3}, \"compiles\": {}, \"compile_s\": {:.3}, \"compile_frac_wall\": {:.4}, \"compile_frac_busy\": {:.4}}}",
         all_shard_stats.len(),
         agg_forwards,
         agg_rows,
@@ -1038,7 +1042,11 @@ fn main() -> anyhow::Result<()> {
         agg_busy_s / wall_s,
         agg_hits,
         agg_misses,
-        agg_cache_hit_rate
+        agg_cache_hit_rate,
+        agg_compiles,
+        agg_compile_s,
+        agg_compile_s / wall_s,
+        if agg_busy_s > 0.0 { agg_compile_s / agg_busy_s } else { 0.0 }
     );
 
     // Aggregate results

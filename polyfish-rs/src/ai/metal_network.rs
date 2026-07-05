@@ -33,8 +33,9 @@ use apple_mpsgraph::{
     UnaryArithmeticOp,
 };
 use safetensors::tensor::{Dtype, SafeTensors};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::time::Instant;
 
 const FILTERS: usize = 64;
 const NHEAD: usize = 4;
@@ -108,6 +109,11 @@ pub struct MetalPolyZeroNet {
     /// Compiled forward graphs, one per batch size seen so far. Built
     /// lazily on first use of a given size, then replayed.
     executables: RefCell<HashMap<usize, Executable>>,
+    /// Diagnostic counters (single-threaded, per-net): how many distinct-size
+    /// graph compiles this net has paid, and their cumulative wall time. Used
+    /// to measure whether executable recompiles are a real per-process cost.
+    compile_count: Cell<u64>,
+    compile_us: Cell<u64>,
 }
 
 impl MetalPolyZeroNet {
@@ -169,6 +175,8 @@ impl MetalPolyZeroNet {
             device,
             queue,
             executables: RefCell::new(HashMap::new()),
+            compile_count: Cell::new(0),
+            compile_us: Cell::new(0),
         })
     }
 
@@ -419,6 +427,10 @@ impl MetalPolyZeroNet {
         let b = batch;
         let h = MAP_SIZE;
         let w = MAP_SIZE;
+        // Time the whole build: graph tracing (op construction) + compile. Both
+        // are paid once per distinct batch size and are what a prewarm/bucketing
+        // change would eliminate — `compile()` alone understates the warmup cost.
+        let started = Instant::now();
         let graph = Graph::new().expect("mpsgraph: Graph::new");
 
         let spatial_ph = graph
@@ -531,9 +543,31 @@ impl MetalPolyZeroNet {
             },
         ];
         let targets: [&Tensor; 5] = [&win, &action_type, &source_spatial, &target_spatial, &move_option];
-        graph
+        let executable = graph
             .compile(&self.device, &feed_descs, &targets)
-            .expect("mpsgraph: graph.compile failed")
+            .expect("mpsgraph: graph.compile failed");
+        let elapsed_us = started.elapsed().as_micros() as u64;
+        self.compile_count.set(self.compile_count.get() + 1);
+        self.compile_us.set(self.compile_us.get() + elapsed_us);
+        eprintln!(
+            "METAL_COMPILE net={:p} size={} ms={:.1} net_total_compiles={} net_total_ms={:.1}",
+            self,
+            b,
+            elapsed_us as f64 / 1000.0,
+            self.compile_count.get(),
+            self.compile_us.get() as f64 / 1000.0,
+        );
+        executable
+    }
+
+    /// Cumulative graph builds paid by this net (one per distinct batch size).
+    pub fn compiles(&self) -> u64 {
+        self.compile_count.get()
+    }
+
+    /// Cumulative wall time (µs) this net spent tracing + compiling graphs.
+    pub fn compile_us(&self) -> u64 {
+        self.compile_us.get()
     }
 
     /// Forward a coalesced batch. `spatial_flat` is

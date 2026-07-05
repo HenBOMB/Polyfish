@@ -123,6 +123,12 @@ pub struct EvalServerStats {
     pub cache_hits: AtomicU64,
     /// Leaf rows that missed the cache and required a GPU `forward_t` row.
     pub cache_misses: AtomicU64,
+    /// Metal only: number of MPSGraph executables built (one per distinct
+    /// batch size, per worker) — a one-time warmup cost, not steady-state.
+    pub compiles: AtomicU64,
+    /// Metal only: total wall time spent tracing + compiling those graphs,
+    /// in microseconds. Compare against `busy_us` to size the warmup tax.
+    pub compile_us: AtomicU64,
 }
 
 /// Tuning knobs for request coalescing.
@@ -562,6 +568,7 @@ fn run_metal_pipelined_loop(
                 .spawn(move || {
                     let net = crate::ai::metal_network::MetalPolyZeroNet::load(&model_path)
                         .expect("BUG: failed to load metal model for eval worker");
+                    let (mut last_compiles, mut last_compile_us) = (0u64, 0u64);
                     loop {
                         // Hold the lock only to receive; forward runs unlocked.
                         let job = match jobs_rx.lock().expect("BUG: jobs mutex poisoned").recv() {
@@ -606,6 +613,17 @@ fn run_metal_pipelined_loop(
                         stats
                             .busy_us
                             .fetch_add(busy_start.elapsed().as_micros() as u64, Ordering::Relaxed);
+
+                        // Fold this net's cumulative compile counters (grown
+                        // inside forward_batch on a cold size) into the shared
+                        // stats as a delta, so the AGG line sums across workers.
+                        let (cc, cu) = (net.compiles(), net.compile_us());
+                        if cc != last_compiles {
+                            stats.compiles.fetch_add(cc - last_compiles, Ordering::Relaxed);
+                            stats.compile_us.fetch_add(cu - last_compile_us, Ordering::Relaxed);
+                            last_compiles = cc;
+                            last_compile_us = cu;
+                        }
                     }
                 })
                 .expect("BUG: failed to spawn metal eval worker")
