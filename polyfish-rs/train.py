@@ -18,8 +18,10 @@ LEARNING_RATE = 0.001
 # EARLY_STOP_WINDOW batches) hasn't improved by EARLY_STOP_MIN_DELTA within
 # EARLY_STOP_PATIENCE_BATCHES batches, stop this training call rather than
 # grinding through the rest of the replay buffer for no gain. 0 disables.
-EARLY_STOP_PATIENCE_BATCHES = 150
-EARLY_STOP_MIN_DELTA = 0.005
+# run_training_loop.sh exports EARLY_STOP_PATIENCE_BATCHES (0 when -p 0) and
+# EARLY_EXIT_MIN_DELTA (from -d).
+EARLY_STOP_PATIENCE_BATCHES = int(os.environ.get("EARLY_STOP_PATIENCE_BATCHES", "150"))
+EARLY_STOP_MIN_DELTA = float(os.environ.get("EARLY_EXIT_MIN_DELTA", "0.005"))
 EARLY_STOP_WINDOW = 20
 
 # Device selection: MPS (Apple Silicon) > CUDA (NVIDIA) > CPU
@@ -213,6 +215,14 @@ def batch_report_indices(total_batches, max_reports=10):
     return indices
 
 def train():
+    if EARLY_STOP_PATIENCE_BATCHES == 0:
+        print("Batch early stopping disabled (patience=0).")
+    else:
+        print(
+            f"Batch early stopping: patience={EARLY_STOP_PATIENCE_BATCHES} batches, "
+            f"min_delta={EARLY_STOP_MIN_DELTA}, window={EARLY_STOP_WINDOW}."
+        )
+
     # 1. Load Data
     fresh_files = glob.glob("games_*.safetensors")
     archive_files = sorted(glob.glob("archive/games_*.safetensors"), key=os.path.getmtime, reverse=True)

@@ -153,6 +153,14 @@ MILESTONE_EVERY=$(scaled 100)
 # train.py reads REPLAY_BUFFER_FILES; archive pruning keeps window + 1 in sync.
 ARCHIVE_KEEP=$(scaled 10)
 export REPLAY_BUFFER_FILES=$ARCHIVE_KEEP
+export EARLY_EXIT_PATIENCE
+export EARLY_EXIT_MIN_DELTA
+# train.py batch-level early stop: disabled when -p 0, otherwise unchanged default.
+if [ "$EARLY_EXIT_PATIENCE" -eq 0 ]; then
+    export EARLY_STOP_PATIENCE_BATCHES=0
+else
+    export EARLY_STOP_PATIENCE_BATCHES=150
+fi
 echo "Schedule (games-based, -g $NUM_GAMES vs baseline $BASELINE_GAMES): $ITERATIONS iterations, checkpoint every $CHECKPOINT_EVERY, milestone every $MILESTONE_EVERY, patience $EARLY_EXIT_PATIENCE, replay window $ARCHIVE_KEEP files"
 
 # Policy-loss stall tracking (across iterations of the loop below). Scoped to

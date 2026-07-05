@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 
 const CSV_PATH: &str = "training_log.csv";
 const MOVES_PATH: &str = "moves_by_turn.json";
+const VALUE_DIST_PATH: &str = "value_distribution.json";
 
 #[derive(Debug, Clone)]
 struct MetricRow {
@@ -198,6 +199,8 @@ pub async fn api_moves_by_turn(Query(q): Query<RunFilter>) -> Json<Value> {
 #[derive(Debug, serde::Deserialize)]
 pub struct ValueDistQuery {
     pub file: Option<String>,
+    pub run: Option<String>,
+    pub iteration: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -390,27 +393,56 @@ fn compute_distribution(values: &[f32]) -> ValueDistribution {
     }
 }
 
+fn load_value_dist_cache(run_id: Option<&str>, iteration: Option<i64>) -> Option<Value> {
+    let content = std::fs::read_to_string(VALUE_DIST_PATH).ok()?;
+    let all: Value = serde_json::from_str(&content).ok()?;
+    let run_id = run_id?;
+    let iteration = iteration?;
+    all.get(run_id)?.get(iteration.to_string()).cloned()
+}
+
 pub async fn api_value_distribution(
     Query(q): Query<ValueDistQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    match &q.file {
-        None => Ok(Json(json!({ "files": list_games_files() }))),
-        Some(file) => {
-            let path = resolve_games_path(file);
-            if !path.exists() {
-                return Err(ApiError(StatusCode::NOT_FOUND, format!("file not found: {file}")));
-            }
-            let values = load_values(&path).map_err(|e| {
-                ApiError(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("failed to read values: {e}"),
-                )
-            })?;
-            let mut dist = compute_distribution(&values);
-            dist.file = file.clone();
-            Ok(Json(serde_json::to_value(dist).unwrap_or(json!({}))))
+    if q.file.is_none() && q.run.is_none() {
+        return Ok(Json(json!({ "files": list_games_files() })));
+    }
+
+    if let (Some(run_id), Some(iteration)) = (&q.run, q.iteration) {
+        if let Some(cached) = load_value_dist_cache(Some(run_id), Some(iteration)) {
+            return Ok(Json(cached));
         }
     }
+
+    let file = q.file.as_deref().unwrap_or("");
+    if file.is_empty() {
+        return Err(ApiError(
+            StatusCode::NOT_FOUND,
+            "value distribution not found (no cache entry)".into(),
+        ));
+    }
+
+    let path = resolve_games_path(file);
+    if path.exists() {
+        let values = load_values(&path).map_err(|e| {
+            ApiError(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to read values: {e}"),
+            )
+        })?;
+        let mut dist = compute_distribution(&values);
+        dist.file = file.to_string();
+        return Ok(Json(serde_json::to_value(dist).unwrap_or(json!({}))));
+    }
+
+    if let Some(cached) = load_value_dist_cache(q.run.as_deref(), q.iteration) {
+        return Ok(Json(cached));
+    }
+
+    Err(ApiError(
+        StatusCode::NOT_FOUND,
+        format!("file not found: {file}"),
+    ))
 }
 
 pub struct ApiError(StatusCode, String);
