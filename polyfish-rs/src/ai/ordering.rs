@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use crate::coords::Coords;
 use crate::functions::{calculate_combat_preview, get_adjacent_indices, get_structure_at};
 use crate::game::Game;
@@ -909,64 +907,13 @@ fn unit_vision_range(
     }
 }
 
-/// Tiles the player could see if `stepping_unit` moved from `.0` to `.1`.
-fn visible_tiles_for_player(
-    state: &crate::states::GameState,
-    player_id: i32,
-    stepping_unit: Option<(i32, i32)>,
-) -> HashSet<i32> {
-    if !state.settings._fow {
-        return state.tiles.keys().copied().collect();
-    }
-
-    let mut visible = HashSet::new();
-    let Some(tribe) = state.tribes.get(&player_id) else {
-        return visible;
-    };
-    let map_size = state.settings.size;
-
-    for city in &tribe.cities {
-        let city_coords = Coords::from_index(city.idx, map_size);
-        let range = if state.tiles[city.idx as usize].capital_of > 0 {
-            2
-        } else {
-            city.border_size
-        };
-
-        for dy in -range..=range {
-            for dx in -range..=range {
-                let nx = city_coords.x + dx;
-                let ny = city_coords.y + dy;
-                if nx >= 0 && nx < map_size && ny >= 0 && ny < map_size {
-                    let idx = ny * map_size + nx;
-                    let is_corner = idx == 0
-                        || idx == map_size - 1
-                        || idx == map_size * (map_size - 1)
-                        || idx == map_size * map_size - 1;
-                    if !(is_corner && idx != city.idx) {
-                        visible.insert(idx);
-                    }
-                }
-            }
-        }
-    }
-
-    for unit in &tribe.units {
-        let at_idx = match stepping_unit {
-            Some((src, dest)) if unit.coords.idx == src => dest,
-            _ => unit.coords.idx,
-        };
-        let vision_range = unit_vision_range(state, unit, at_idx);
-        visible.insert(at_idx);
-        for idx in get_adjacent_indices(state, at_idx, vision_range) {
-            visible.insert(idx);
-        }
-    }
-
-    visible
-}
-
-/// How many tiles would enter vision if the unit stepped from `src_idx` to `dest_idx`.
+/// How many unexplored tiles the unit would reveal by stepping to `dest_idx`:
+/// unexplored tiles within its vision range at the destination. Exploration
+/// (`tile.explorers`) is permanent, so anything currently seen by other units
+/// is already explored — no full-map visibility diff needed. That matters
+/// because heuristic MCTS runs this for every Step candidate at every node
+/// expansion and rollout ply; the old two-full-visibility-set version
+/// dominated the entire search's CPU profile.
 fn count_newly_revealed_by_step(
     state: &crate::states::GameState,
     player_id: i32,
@@ -976,9 +923,23 @@ fn count_newly_revealed_by_step(
     if !state.settings._fow {
         return 0;
     }
-    let before = visible_tiles_for_player(state, player_id, None);
-    let after = visible_tiles_for_player(state, player_id, Some((src_idx, dest_idx)));
-    after.difference(&before).count() as i32
+    let Some(tribe) = state.tribes.get(&player_id) else {
+        return 0;
+    };
+    let Some(unit) = tribe.units.iter().find(|u| u.coords.idx == src_idx) else {
+        return 0;
+    };
+    let range = unit_vision_range(state, unit, dest_idx);
+
+    let mut revealed = 0;
+    for idx in std::iter::once(dest_idx).chain(get_adjacent_indices(state, dest_idx, range)) {
+        if let Some(tile) = state.tiles.get(&idx) {
+            if !tile.explorers.contains(&player_id) {
+                revealed += 1;
+            }
+        }
+    }
+    revealed
 }
 
 /// Manhattan distance from `from` to the map's center tile. Used to give a

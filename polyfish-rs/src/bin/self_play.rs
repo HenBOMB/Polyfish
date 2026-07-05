@@ -593,6 +593,7 @@ fn main() -> anyhow::Result<()> {
         SearchBackendArg::Zero => SearchBackend::Zero,
         SearchBackendArg::Gumbel => SearchBackend::Gumbel { k: args.gumbel_k },
         SearchBackendArg::Heuristic => SearchBackend::Heuristic,
+        SearchBackendArg::Greedy => SearchBackend::Greedy,
     };
 
     // Select device: Metal (macOS) > CUDA (NVIDIA) > CPU, unless overridden via POLYFISH_DEVICE
@@ -881,6 +882,7 @@ fn main() -> anyhow::Result<()> {
         SearchBackend::Zero => "Zero MCTS".to_string(),
         SearchBackend::Gumbel { k } => format!("Gumbel k={k}"),
         SearchBackend::Heuristic => "Heuristic MCTS (no NN)".to_string(),
+        SearchBackend::Greedy => "Greedy heuristic (no NN, no search)".to_string(),
     };
     println!(
         "[selfplay] {match_label}: {} games, {} mcts-iters, {search_label}, tribes {tribe_label} | eval {backend_label} | {eval_servers} shard(s) cache={per_shard_cache:?} workers={} | {num_actors} actors max_batch={} coalesce_us={} leaf_batch={:?} | device {:?} (CANDLE_METAL_COMPUTE_PER_BUFFER={metal_compute_per_buffer})",

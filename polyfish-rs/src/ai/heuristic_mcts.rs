@@ -81,6 +81,96 @@ impl Node {
     }
 }
 
+/// Zero-search heuristic teacher: one movegen + one `score_move` pass per
+/// move, policy = softmax over scores. This is the same distribution
+/// `blend_heuristic_prior` injects into Gumbel roots, produced ~1000x cheaper
+/// than the rollout MCTS — built for bulk imitation-corpus generation.
+pub struct GreedyHeuristicAgent;
+
+/// Softmax temperature over raw `score_move` values. At 1.0 the 40+-point
+/// score bands make the distribution one-hot; 5.0 keeps the best move
+/// dominant while preserving the ordering of runners-up (a ~10-point gap ≈
+/// 7:1 odds), which is real signal for the policy head to learn.
+const GREEDY_SOFTMAX_TEMP: f32 = 5.0;
+
+impl GreedyHeuristicAgent {
+    pub fn select_move(&self, game: &mut Game) -> Option<Box<dyn Move>> {
+        self.select_move_with_decomposed_visits(game, usize::MAX).0
+    }
+
+    /// Same contract as the search agents' training-data API: played move +
+    /// per-move weights (softmax probabilities stand in for visit counts —
+    /// downstream normalizes to a distribution either way). Samples the
+    /// played move from the softmax for early-game diversity, argmax after.
+    pub fn select_move_with_decomposed_visits(
+        &self,
+        game: &mut Game,
+        move_count: usize,
+    ) -> (Option<Box<dyn Move>>, Vec<crate::ai::mcts_types::MoveVisit>) {
+        use crate::ai::mcts_types::MoveVisit;
+
+        let mut moves = game.legal_moves();
+        // Mirror the search backends' root EndTurn suppression.
+        let has_other = moves.iter().any(|m| m.move_type() != MoveType::EndTurn);
+        if has_other {
+            moves.retain(|m| m.move_type() != MoveType::EndTurn);
+        }
+        if moves.is_empty() {
+            return (Some(Box::new(EndTurnMove)), Vec::new());
+        }
+
+        let scores: Vec<f32> = moves
+            .iter()
+            .map(|m| crate::ai::ordering::score_move(game, m.as_ref()))
+            .collect();
+        let max_score = scores.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        let probs: Vec<f32> = {
+            let exps: Vec<f32> = scores
+                .iter()
+                .map(|s| ((s - max_score) / GREEDY_SOFTMAX_TEMP).exp())
+                .collect();
+            let sum: f32 = exps.iter().sum();
+            exps.iter().map(|e| e / sum).collect()
+        };
+
+        let visits: Vec<MoveVisit> = moves
+            .iter()
+            .zip(&probs)
+            .map(|(m, &p)| MoveVisit {
+                move_type: m.move_type(),
+                visits: p,
+                source_idx: m.source_idx().ok(),
+                target_idx: m.target_idx().ok(),
+                structure_type: m.structure_type().ok(),
+                unit_type: m.unit_type().ok(),
+                tech_type: m.tech_type().ok(),
+                ability_type: m.ability_type().ok(),
+            })
+            .collect();
+
+        let chosen = if move_count < crate::ai::mcts_zero::ZeroMctsAgent::TEMPERATURE_MOVE_THRESHOLD
+            && moves.len() > 1
+        {
+            use rand::distributions::{Distribution, WeightedIndex};
+            WeightedIndex::new(&probs)
+                .ok()
+                .map(|d| d.sample(&mut rand::thread_rng()))
+        } else {
+            None
+        };
+        let idx = chosen.unwrap_or_else(|| {
+            probs
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .map(|(i, _)| i)
+                .unwrap_or(0)
+        });
+
+        (Some(moves.swap_remove(idx)), visits)
+    }
+}
+
 impl HeuristicMctsAgent {
     pub fn new(iterations: usize) -> Self {
         Self {

@@ -13,6 +13,9 @@ pub enum SearchBackend {
     /// Network-free heuristic MCTS (`heuristic_mcts.rs`). Used to generate
     /// imitation/bootstrap corpora — the evaluator is never called.
     Heuristic,
+    /// Zero-search softmax over `ordering::score_move` — the fastest teacher
+    /// for bulk imitation corpora. No evaluator, no tree.
+    Greedy,
 }
 
 impl Default for SearchBackend {
@@ -28,6 +31,7 @@ pub enum SearchBackendArg {
     Zero,
     Gumbel,
     Heuristic,
+    Greedy,
 }
 
 impl From<SearchBackendArg> for SearchBackend {
@@ -36,6 +40,7 @@ impl From<SearchBackendArg> for SearchBackend {
             SearchBackendArg::Zero => SearchBackend::Zero,
             SearchBackendArg::Gumbel => SearchBackend::Gumbel { k: 16 },
             SearchBackendArg::Heuristic => SearchBackend::Heuristic,
+            SearchBackendArg::Greedy => SearchBackend::Greedy,
         }
     }
 }
@@ -73,6 +78,7 @@ pub enum SearchAgent<'a> {
     Zero(ZeroMctsAgent<'a>),
     Gumbel(GumbelMctsAgent<'a>),
     Heuristic(crate::ai::heuristic_mcts::HeuristicMctsAgent),
+    Greedy(crate::ai::heuristic_mcts::GreedyHeuristicAgent),
 }
 
 impl<'a> SearchAgent<'a> {
@@ -81,6 +87,7 @@ impl<'a> SearchAgent<'a> {
             SearchAgent::Zero(a) => a.select_move(game),
             SearchAgent::Gumbel(a) => a.select_move(game),
             SearchAgent::Heuristic(a) => a.select_move(game),
+            SearchAgent::Greedy(a) => a.select_move(game),
         }
     }
 
@@ -93,6 +100,7 @@ impl<'a> SearchAgent<'a> {
             SearchAgent::Zero(a) => a.select_move_with_decomposed_visits(game, move_count),
             SearchAgent::Gumbel(a) => a.select_move_with_decomposed_visits(game, move_count),
             SearchAgent::Heuristic(a) => a.select_move_with_decomposed_visits(game, move_count),
+            SearchAgent::Greedy(a) => a.select_move_with_decomposed_visits(game, move_count),
         }
     }
 
@@ -102,6 +110,7 @@ impl<'a> SearchAgent<'a> {
             SearchAgent::Gumbel(a) => a.select_move_with_stats(game),
             // No NN priors to report stats over; the move is all callers need.
             SearchAgent::Heuristic(a) => (a.select_move(game), Vec::new()),
+            SearchAgent::Greedy(a) => (a.select_move(game), Vec::new()),
         }
     }
 }
@@ -135,6 +144,9 @@ pub fn make_search_agent(
         SearchBackend::Heuristic => SearchAgent::Heuristic(
             crate::ai::heuristic_mcts::HeuristicMctsAgent::new(iterations),
         ),
+        SearchBackend::Greedy => {
+            SearchAgent::Greedy(crate::ai::heuristic_mcts::GreedyHeuristicAgent)
+        }
     }
 }
 
