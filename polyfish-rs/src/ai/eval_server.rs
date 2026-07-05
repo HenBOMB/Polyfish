@@ -169,6 +169,11 @@ pub enum BackendSpec {
         model_path: String,
         device: tch::Device,
     },
+    /// MPSGraph network, bypassing libtorch's serial MPS dispatch queue
+    /// entirely (see `metal_network.rs`). Loaded from a state_dict on the
+    /// eval thread, same as `Tch`.
+    #[cfg(feature = "metal-eval")]
+    MetalMps { model_path: String },
 }
 
 impl BackendSpec {
@@ -185,6 +190,12 @@ impl BackendSpec {
                     .expect("BUG: failed to load tch model for eval server");
                 InferenceBackend::Tch(net)
             }
+            #[cfg(feature = "metal-eval")]
+            BackendSpec::MetalMps { model_path } => {
+                let net = crate::ai::metal_network::MetalPolyZeroNet::load(&model_path)
+                    .expect("BUG: failed to load metal model for eval server");
+                InferenceBackend::Metal(net)
+            }
         }
     }
 }
@@ -198,6 +209,8 @@ enum InferenceBackend {
     },
     #[cfg(feature = "tch-eval")]
     Tch(crate::ai::tch_network::TchPolyZeroNet),
+    #[cfg(feature = "metal-eval")]
+    Metal(crate::ai::metal_network::MetalPolyZeroNet),
 }
 
 impl InferenceBackend {
@@ -246,6 +259,17 @@ impl InferenceBackend {
             }
             #[cfg(feature = "tch-eval")]
             InferenceBackend::Tch(net) => {
+                let batch_size = feats.len();
+                let mut spatial_flat = Vec::with_capacity(batch_size * RawFeatures::spatial_len());
+                let mut player_flat = Vec::with_capacity(batch_size * RawFeatures::player_len());
+                for feat in feats {
+                    spatial_flat.extend_from_slice(&feat.spatial);
+                    player_flat.extend_from_slice(&feat.player);
+                }
+                net.forward_batch(&spatial_flat, &player_flat, batch_size)
+            }
+            #[cfg(feature = "metal-eval")]
+            InferenceBackend::Metal(net) => {
                 let batch_size = feats.len();
                 let mut spatial_flat = Vec::with_capacity(batch_size * RawFeatures::spatial_len());
                 let mut player_flat = Vec::with_capacity(batch_size * RawFeatures::player_len());

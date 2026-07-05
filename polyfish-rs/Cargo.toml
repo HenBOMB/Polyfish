@@ -42,6 +42,13 @@ dyn-clone = "1.0"
 #   DYLD_LIBRARY_PATH=.venv/lib/python3.13/site-packages/torch/lib
 tch = { git = "https://github.com/LaurentMazare/tch-rs", rev = "bbf49e6db463845a39cdab6d51f2a8f2b103b59f", optional = true }
 
+# macOS-only bindings to Apple's MPSGraph (via MetalPerformanceShadersGraph),
+# used to bypass libtorch's serial MPS dispatch queue for inference. See
+# metal_network.rs. Optional: only pulled in by the `metal-eval` feature.
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-mpsgraph = { version = "0.2.8", optional = true }
+apple-metal = { version = "0.8.8", optional = true }
+
 [features]
 default = ["metal"]
 cuda = ["candle-core/cuda", "candle-nn/cuda"]
@@ -51,6 +58,9 @@ accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
 # Route self-play NN inference through libtorch/MPS (tch-rs) instead of candle
 # Metal, which is ~19x slower for PolyZeroNet's shapes. See tch_network.rs.
 tch-eval = ["dep:tch"]
+# Route self-play NN inference through a hand-composed MPSGraph, bypassing
+# libtorch's serial MPS dispatch queue entirely. See metal_network.rs.
+metal-eval = ["dep:apple-mpsgraph", "dep:apple-metal"]
 
 [dev-dependencies]
 pretty_assertions = "1.4"

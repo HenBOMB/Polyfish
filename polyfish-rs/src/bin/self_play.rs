@@ -463,20 +463,27 @@ fn main() -> anyhow::Result<()> {
         #[arg(long, default_value_t = 524288)]
         cache_cap: usize,
 
-        /// NN inference backend: "candle" (Metal/CUDA/CPU) or "tch"
-        /// (libtorch/MPS, ~19x faster on Metal, requires --features tch-eval).
-        /// Empty = auto: "tch" if the tch-eval feature is compiled in, else
-        /// "candle".
+        /// NN inference backend: "candle" (Metal/CUDA/CPU), "tch"
+        /// (libtorch/MPS, ~19x faster on Metal, requires --features
+        /// tch-eval), or "metal" (MPSGraph, bypasses libtorch's serial MPS
+        /// dispatch queue, requires --features metal-eval — see
+        /// metal_network.rs). Empty = auto: "metal" if the metal-eval
+        /// feature is compiled in, else "tch" if tch-eval is, else "candle".
         #[arg(long, default_value = "")]
         eval_backend: String,
 
         /// Number of concurrent eval-server threads (shards). Each owns its
         /// own weights copy + LRU cache; leaves are routed by hash so cache
-        /// locality is preserved. Defaults to 2 on the tch backend
-        /// (latency-bound: 2 servers ≈ 2× capacity while one is parked in
-        /// waitUntilCompleted), 1 on candle (candle Metal corrupts when >1
-        /// thread encodes on the same device — see the bug_handoff invariant
-        /// in eval_server.rs). 0 = auto. Overridable.
+        /// locality is preserved. 1 by default on every backend right now:
+        /// measured (2026-07-05) that 2 tch shards HALVE throughput (156.6
+        /// moves/s @ 1 vs 83.3 @ 2) because libtorch's MPS backend
+        /// serializes across threads at the C++ level — sharding doesn't
+        /// parallelize there. candle also rejects >1 (Metal corrupts when
+        /// >1 thread encodes on the same device — see the bug_handoff
+        /// invariant in eval_server.rs). metal (MPSGraph) has no known
+        /// restriction against >1 but multi-shard concurrency there is
+        /// unverified (see the bypass plan's Stage 3) — opt in explicitly.
+        /// 0 = auto (currently always 1). Overridable.
         #[arg(long, default_value_t = 0)]
         eval_servers: usize,
     }
@@ -611,38 +618,60 @@ fn main() -> anyhow::Result<()> {
     let games_start = Instant::now();
     println!("Starting game generation...");
 
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum EvalBackendKind {
+        Candle,
+        Tch,
+        Metal,
+    }
+
     // Resolve the eval backend: explicit --eval-backend, else auto (tch when
     // compiled in, else candle).
-    let use_tch = match args.eval_backend.as_str() {
+    let eval_backend_kind = match args.eval_backend.as_str() {
         "tch" => {
             if !cfg!(feature = "tch-eval") {
                 anyhow::bail!(
                     "--eval-backend tch requires building with --features tch-eval"
                 );
             }
-            true
+            EvalBackendKind::Tch
         }
-        "candle" => false,
-        "" => cfg!(feature = "tch-eval"),
-        other => anyhow::bail!("unknown --eval-backend {other:?} (want candle|tch)"),
+        "metal" => {
+            if !cfg!(feature = "metal-eval") {
+                anyhow::bail!(
+                    "--eval-backend metal requires building with --features metal-eval"
+                );
+            }
+            EvalBackendKind::Metal
+        }
+        "candle" => EvalBackendKind::Candle,
+        "" => {
+            if cfg!(feature = "tch-eval") {
+                EvalBackendKind::Tch
+            } else {
+                EvalBackendKind::Candle
+            }
+        }
+        other => anyhow::bail!("unknown --eval-backend {other:?} (want candle|tch|metal)"),
     };
     println!(
         "Eval backend: {}",
-        if use_tch { "tch (libtorch/MPS)" } else { "candle" }
+        match eval_backend_kind {
+            EvalBackendKind::Tch => "tch (libtorch/MPS)",
+            EvalBackendKind::Metal => "metal (MPSGraph)",
+            EvalBackendKind::Candle => "candle",
+        }
     );
 
-    // Resolve shard count. Default 2 on tch (latency-bound: while one server
-    // is parked in waitUntilCompleted, another tensorizes + submits), 1 on
-    // candle. >1 on candle is rejected: candle Metal corrupts when >1 thread
-    // encodes on the same device (see the bug_handoff invariant in
-    // eval_server.rs), and candle doesn't cleanly expose per-server Metal
-    // devices.
+    // Resolve shard count. 1 by default on every backend (see the
+    // --eval-servers help text for why). candle rejects >1 outright; tch
+    // and metal allow opting in explicitly for experimentation.
     let eval_servers = match args.eval_servers {
-        0 => if use_tch { 1 } else { 1 }, // Set back to 1 until we can have GPU parallelism to support 2 shards
+        0 => 1,
         n => {
-            if n > 1 && !use_tch {
+            if n > 1 && eval_backend_kind == EvalBackendKind::Candle {
                 anyhow::bail!(
-                    "--eval-servers > 1 requires --eval-backend tch \
+                    "--eval-servers > 1 requires --eval-backend tch or metal \
                      (candle Metal corrupts when >1 thread encodes on the same device)"
                 );
             }
@@ -667,47 +696,65 @@ fn main() -> anyhow::Result<()> {
     // Builds `n` backend specs for one player. For tch: every shard gets its
     // own `BackendSpec::Tch` on the shared MPS device; each shard's thread
     // loads its own `TchPolyZeroNet` (duplicated weights, a few MB). For
-    // candle: `n` clones of the passed `Arc<PolyZeroNet>` (player 1 vs player
-    // 2 networks differ in opponent mode).
-    let make_specs = |use_tch: bool,
+    // metal: every shard gets its own `BackendSpec::MetalMps`, each shard's
+    // thread loads its own `MetalPolyZeroNet` and owns its own
+    // `MTLCommandQueue`. For candle: `n` clones of the passed
+    // `Arc<PolyZeroNet>` (player 1 vs player 2 networks differ in opponent
+    // mode).
+    let make_specs = |kind: EvalBackendKind,
                       n: usize,
                       model_path: &str,
                       candle_net: &Arc<PolyZeroNet>|
      -> Vec<BackendSpec> {
-        // `model_path` is only read by the tch branch below; in non-tch builds
-        // it's unused. Touch it so the closure compiles cleanly either way.
+        // `model_path` is only read by the tch/metal branches below; in
+        // builds with neither feature it's unused. Touch it so the closure
+        // compiles cleanly either way.
         let _ = model_path;
-        if use_tch {
-            #[cfg(feature = "tch-eval")]
-            {
-                let dev = if tch::utils::has_mps() {
-                    tch::Device::Mps
-                } else {
-                    tch::Device::Cpu
-                };
-                return (0..n)
-                    .map(|_| BackendSpec::Tch {
-                        model_path: model_path.to_string(),
-                        device: dev,
-                    })
-                    .collect();
+        match kind {
+            EvalBackendKind::Tch => {
+                #[cfg(feature = "tch-eval")]
+                {
+                    let dev = if tch::utils::has_mps() {
+                        tch::Device::Mps
+                    } else {
+                        tch::Device::Cpu
+                    };
+                    return (0..n)
+                        .map(|_| BackendSpec::Tch {
+                            model_path: model_path.to_string(),
+                            device: dev,
+                        })
+                        .collect();
+                }
+                #[cfg(not(feature = "tch-eval"))]
+                unreachable!("EvalBackendKind::Tch guarded by cfg above");
             }
-            #[cfg(not(feature = "tch-eval"))]
-            unreachable!("use_tch guarded by cfg above");
+            EvalBackendKind::Metal => {
+                #[cfg(feature = "metal-eval")]
+                {
+                    return (0..n)
+                        .map(|_| BackendSpec::MetalMps {
+                            model_path: model_path.to_string(),
+                        })
+                        .collect();
+                }
+                #[cfg(not(feature = "metal-eval"))]
+                unreachable!("EvalBackendKind::Metal guarded by cfg above");
+            }
+            EvalBackendKind::Candle => (0..n)
+                .map(|_| BackendSpec::Candle(candle_net.clone()))
+                .collect(),
         }
-        (0..n)
-            .map(|_| BackendSpec::Candle(candle_net.clone()))
-            .collect()
     };
     let p1_path = "model.safetensors";
     let p2_path = args
         .opponent
         .as_deref()
         .unwrap_or("model.safetensors");
-    let p1_specs = make_specs(use_tch, eval_servers, p1_path, &network1);
+    let p1_specs = make_specs(eval_backend_kind, eval_servers, p1_path, &network1);
     let has_opponent = args.opponent.is_some();
     let p2_specs = if has_opponent {
-        make_specs(use_tch, eval_servers, p2_path, &network2)
+        make_specs(eval_backend_kind, eval_servers, p2_path, &network2)
     } else {
         Vec::new()
     };
