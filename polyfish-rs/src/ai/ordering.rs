@@ -36,23 +36,39 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
         }
 
         MoveType::Attack => {
+            // Fighting should serve territory (take/hold ground, or deny the
+            // opponent that), not be picked for its own sake — so a kill/chip
+            // scores meaningfully higher when it's on/near contested or
+            // capturable ground than when it's a lone skirmish in the open.
+            let territory_bonus = if let Ok(target) = mv.target_idx() {
+                if is_territory_relevant(state, target as i32, tribe_id) {
+                    15.0
+                } else {
+                    0.0
+                }
+            } else {
+                0.0
+            };
+
             if let (Ok(src), Ok(target)) = (mv.source_idx(), mv.target_idx()) {
                 if let Some(preview) = calculate_combat_preview(state, src as i32, target as i32) {
                     if preview.defender_dies {
-                        45.0
+                        95.0 + territory_bonus // Rivals a capture: removing the
+                        // opponent's ability to contest ground is nearly as
+                        // valuable as taking ground.
                     } else if preview.attacker_dies {
-                        1.0 // Suicide is very low priority
+                        1.0 // Suicide is very low priority regardless of context
                     } else if preview.damage_to_defender > 5.0 {
-                        25.0
+                        50.0 + territory_bonus
                     } else {
-                        15.0
+                        30.0 + territory_bonus
                     }
                 } else {
                     // Infiltration or other special attack
-                    15.0
+                    30.0 + territory_bonus
                 }
             } else {
-                15.0
+                30.0 + territory_bonus
             }
         }
 
@@ -218,7 +234,10 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                 return -10.0; // Favor development on turn 1
             }
 
-            let mut score = 10.0; // Lowered base score (Builds/Harvest are 22.0)
+            // Bumped from 10: capturing 2-3 villages in a game needs more
+            // than one warrior, and the army-size rule below (unit_count <
+            // city_count + 1) underestimated how army-hungry expansion is.
+            let mut score = 15.0;
 
             // 1. Enemy Proximity: High priority if threatened
             let mut threatened = false;
@@ -441,7 +460,12 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
         }
 
         MoveType::Step => {
-            let mut score = 50.0;
+            // Lowered from 50: a bare step used to outscore even a killing
+            // blow (45) and had no pull toward a visible-but-distant village,
+            // so wandering toward unexplored (often peripheral) fog was the
+            // only differentiated signal. The gradients below give steps a
+            // reason to move purposefully instead.
+            let mut score = 35.0;
             if let Ok(target_idx) = mv.target_idx() {
                 let player_id = state.settings.current_player_turn_id;
 
@@ -451,26 +475,72 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                         match s.structure_type {
                             StructureType::Ruin
                             | StructureType::Village
-                            | StructureType::Lighthouse => score += 40.0,
+                            | StructureType::Lighthouse => score += 43.0,
                             _ => {
                                 // Enemy city potentially
                                 // TODO: Doesnt check for peace treaty
                                 if tile.owner != player_id && tile.owner != 0 {
-                                    score += 45.0;
+                                    score += 50.0;
                                 }
                             }
                         }
                     }
 
-                    // Prioritize exploration (stepping into/near fog)
                     let adj = crate::functions::get_adjacent_indices(state, target_idx as i32, 1);
-                    for n_idx in adj {
+
+                    // `openness` = fraction of a wider (radius-3) window around
+                    // the destination that's still unexplored. Off-map tiles
+                    // don't count, so a map corner or a dead-end pocket scores
+                    // low here even before it's been visited — there's
+                    // fundamentally less left to discover there than in an
+                    // open interior region.
+                    let openness = regional_openness(state, target_idx as i32, player_id, 3);
+
+                    // Exploration still matters (lighthouses, edge ruins), but
+                    // scaled by openness rather than a flat per-tile count —
+                    // previously uncapped (up to +16) and reliably pulled units
+                    // toward unexplored map edges over contested ground.
+                    score += openness * 6.0;
+
+                    // Resources on open, unowned ground are a proxy for a
+                    // nearby village — pulls movement toward likely villages
+                    // even under FOW, where the explicit gradient below can't
+                    // see anything yet. Also scaled by `openness`: a resource
+                    // sitting in an already-fully-explored dead end (e.g. a
+                    // corner near a lighthouse) has nothing left to discover by
+                    // chasing it and shouldn't keep exerting a pull once the
+                    // fog around it is gone — otherwise, since Harvest usually
+                    // isn't legal there (out of any city's territory), the unit
+                    // can perceive the resource forever without ever being able
+                    // to resolve it, and ends up oscillating between the 2-3
+                    // tiles adjacent to it.
+                    let mut resource_bonus = 0.0f32;
+                    for &n_idx in &adj {
                         if let Some(tile) = state.tiles.get(&n_idx) {
-                            if !tile.explorers.contains(&player_id) {
-                                score += 2.0; // Cumulative for each fog tile revealed
+                            if tile.owner == 0
+                                && crate::functions::get_resource_at(state, n_idx).is_some()
+                            {
+                                resource_bonus += 2.0;
                             }
                         }
                     }
+                    score += resource_bonus.min(6.0) * openness;
+
+                    // Pull toward the nearest explored, uncaptured village/ruin
+                    // so units head that way before they're already adjacent.
+                    let map_size = state.map_size();
+                    let target_coords = Coords::from_index(target_idx as i32, map_size);
+                    if let Some(dist) =
+                        nearest_visible_capturable_distance(state, player_id, target_coords)
+                    {
+                        score += (15.0 - 3.0 * dist as f32).max(0.0);
+                    }
+
+                    // Mild center-of-map pull — controlling the center
+                    // controls tempo, and this stops wandering from
+                    // defaulting toward the (often less contested) edges.
+                    let center_dist = map_center_distance(state, target_coords);
+                    score += (6.0 - center_dist as f32).max(0.0);
                 }
             }
             score
@@ -710,6 +780,103 @@ fn score_road(state: &crate::states::GameState, tile_idx: i32) -> f32 {
     }
 
     best_score
+}
+
+/// True when fighting at `target_idx` serves territory — on/adjacent to an
+/// uncaptured village/ruin, or on/adjacent to our own territory — rather than
+/// being a skirmish for its own sake on open, uncontested ground.
+fn is_territory_relevant(state: &crate::states::GameState, target_idx: i32, tribe_id: i32) -> bool {
+    let adj = get_adjacent_indices(state, target_idx, 1);
+    for idx in std::iter::once(target_idx).chain(adj) {
+        if crate::functions::is_in_own_territory(state, idx, tribe_id) {
+            return true;
+        }
+        if let Some(s) = get_structure_at(state, idx) {
+            if matches!(s.structure_type, StructureType::Village | StructureType::Ruin) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Manhattan distance from `from` to the nearest Village/Ruin that is both
+/// unclaimed (`owner == 0`) and explored by `tribe_id`, or `None` if none are
+/// visible yet. Full scan over `state.structures` — cheap here since this is
+/// only called once per Step candidate at the MCTS root, not per search node
+/// (see `analyze_expansion` in functions.rs for the same accepted pattern).
+fn nearest_visible_capturable_distance(
+    state: &crate::states::GameState,
+    tribe_id: i32,
+    from: Coords,
+) -> Option<i32> {
+    let map_size = state.map_size();
+    let mut best: Option<i32> = None;
+    for (&idx, structure) in state.structures.iter() {
+        let Some(s) = structure else { continue };
+        if !matches!(s.structure_type, StructureType::Village | StructureType::Ruin) {
+            continue;
+        }
+        let Some(tile) = state.tiles.get(&idx) else {
+            continue;
+        };
+        if tile.owner != 0 || !tile.explorers.contains(&tribe_id) {
+            continue;
+        }
+        let dist = Coords::from_index(idx, map_size).distance_to(&from);
+        best = Some(best.map_or(dist, |b: i32| b.min(dist)));
+    }
+    best
+}
+
+/// Fraction (0.0-1.0) of a `radius`-tile window around `target_idx` that is
+/// still unexplored by `player_id`. Off-map tiles are excluded from the
+/// unexplored count but NOT from the denominator (a fixed `(2*radius+1)^2 -
+/// 1`), so a map corner or dead-end pocket scores lower than an open interior
+/// region even when 100% of its (smaller) on-map surroundings are unexplored
+/// — there is fundamentally less of the map left to discover there.
+fn regional_openness(
+    state: &crate::states::GameState,
+    target_idx: i32,
+    player_id: i32,
+    radius: i32,
+) -> f32 {
+    let map_size = state.map_size();
+    let coords = Coords::from_index(target_idx, map_size);
+    let window = (2 * radius + 1) * (2 * radius + 1) - 1;
+    if window <= 0 {
+        return 0.0;
+    }
+    let mut unexplored = 0;
+    for dy in -radius..=radius {
+        for dx in -radius..=radius {
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+            let nx = coords.x + dx;
+            let ny = coords.y + dy;
+            if nx < 0 || nx >= map_size || ny < 0 || ny >= map_size {
+                continue; // Off-map: not discoverable, doesn't count toward openness.
+            }
+            let n_idx = ny * map_size + nx;
+            if let Some(tile) = state.tiles.get(&n_idx) {
+                if !tile.explorers.contains(&player_id) {
+                    unexplored += 1;
+                }
+            }
+        }
+    }
+    (unexplored as f32 / window as f32).clamp(0.0, 1.0)
+}
+
+/// Manhattan distance from `from` to the map's center tile. Used to give a
+/// mild pull toward contested/central ground rather than defaulting toward
+/// the map edges (which is where the uncapped fog-reveal bonus used to push
+/// units by itself).
+fn map_center_distance(state: &crate::states::GameState, from: Coords) -> i32 {
+    let map_size = state.map_size();
+    let center = Coords::from_xy(map_size / 2, map_size / 2, map_size);
+    center.distance_to(&from)
 }
 
 #[cfg(test)]
