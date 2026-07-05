@@ -10,9 +10,11 @@ import gc
 import time
 
 # --- Configuration ---
-BATCH_SIZE = 64
+BATCH_SIZE = 256
 EPOCHS = 2
-LEARNING_RATE = 0.001
+# sqrt-scaled with the 64->256 batch bump (Adam responds closer to sqrt than
+# linear scaling; 0.004 linear would risk instability on a small net).
+LEARNING_RATE = 0.002
 
 # Early stopping: if the smoothed training loss (mean of the last
 # EARLY_STOP_WINDOW batches) hasn't improved by EARLY_STOP_MIN_DELTA within
