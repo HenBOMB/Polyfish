@@ -29,8 +29,8 @@ use crate::ai::network::{PolyZeroNet, RawPolicyOutput};
 use candle_core::{Device, Tensor};
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 use std::sync::mpsc as std_mpsc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 /// One evaluated leaf: NN value estimate + decomposed policy logits, all as
@@ -787,18 +787,42 @@ impl InlineEvalHandle {
     }
 }
 
-/// No-op evaluator for measuring the actor-side ceiling: returns a uniform
-/// policy (all-zero logits → uniform after softmax) and a zero value for every
-/// leaf, with no network, no device, no channel, and no dedicated thread —
-/// `evaluate` returns synchronously on the caller's own thread in O(rows).
+/// No-op evaluator used for the `actor_ceiling` benchmark. Returns a uniform
+/// policy (all-zero logits, so softmax is uniform) and zero value per leaf,
+/// with no model or threading—`evaluate` runs synchronously in O(rows).
 ///
-/// Used by the `actor_ceiling` benchmark. The resulting moves/s is the hard
-/// upper bound every GPU/eval optimization is bounded by, because it removes
-/// inference entirely and leaves only game-sim + MCTS + leaf-feature encode.
+/// Optionally simulates latency and limited concurrency by sleeping on each call,
+/// and restricting the number of concurrent batches ("lanes") to emulate GPU contention.
 #[derive(Clone)]
 pub struct DummyEvalHandle {
     uniform: Arc<RawPolicyOutput>,
     stats: Arc<DummyStats>,
+    /// Simulated per-batch processing time. `None` = return immediately
+    /// (the pure actor-side ceiling).
+    latency: Option<Duration>,
+    /// Simulated concurrent-batch capacity. `None` = unlimited.
+    lanes: Option<Arc<SimLanes>>,
+}
+
+/// Counting semaphore (std has none) bounding simulated in-flight batches.
+struct SimLanes {
+    free: Mutex<usize>,
+    cv: Condvar,
+}
+
+impl SimLanes {
+    fn acquire(&self) {
+        let mut free = self.free.lock().unwrap();
+        while *free == 0 {
+            free = self.cv.wait(free).unwrap();
+        }
+        *free -= 1;
+    }
+
+    fn release(&self) {
+        *self.free.lock().unwrap() += 1;
+        self.cv.notify_one();
+    }
 }
 
 /// Counters for the dummy evaluator, readable from any actor thread while a
@@ -821,7 +845,23 @@ impl DummyEvalHandle {
                 move_option: vec![0.0; 192],
             }),
             stats: Arc::new(DummyStats::default()),
+            latency: None,
+            lanes: None,
         }
+    }
+
+    /// Simulate an eval server: every batch takes `latency` to "process",
+    /// and at most `lanes` batches are in flight at once across all actors
+    /// (`0` = unlimited, i.e. latency with no contention).
+    pub fn with_sim(mut self, latency: Duration, lanes: usize) -> Self {
+        self.latency = (!latency.is_zero()).then_some(latency);
+        self.lanes = (lanes > 0).then(|| {
+            Arc::new(SimLanes {
+                free: Mutex::new(lanes),
+                cv: Condvar::new(),
+            })
+        });
+        self
     }
 
     pub fn stats(&self) -> &DummyStats {
@@ -833,6 +873,16 @@ impl DummyEvalHandle {
         self.stats
             .leaves
             .fetch_add(batch.len() as u64, Ordering::Relaxed);
+        if let Some(latency) = self.latency {
+            match &self.lanes {
+                Some(lanes) => {
+                    lanes.acquire();
+                    std::thread::sleep(latency);
+                    lanes.release();
+                }
+                None => std::thread::sleep(latency),
+            }
+        }
         batch
             .iter()
             .map(|_| (0.0, (*self.uniform).clone()))
