@@ -20,6 +20,10 @@ polyfish-rs/checkpoints/
 archive/
 .*/
 
+# Training loop sidecar metrics (written by self_play / train.py)
+polyfish-rs/.last_self_play_metrics.json
+polyfish-rs/.last_train_metrics.json
+
 commit.sh
 
 obj/

@@ -15,6 +15,8 @@ from typing import Any
 CSV_PATH = "training_log.csv"
 MOVES_PATH = "moves_by_turn.json"
 CURRENT_RUN_PATH = ".current_run"
+SELF_PLAY_METRICS_PATH = ".last_self_play_metrics.json"
+TRAIN_METRICS_PATH = ".last_train_metrics.json"
 
 HEADER = [
     "run_id",
@@ -230,17 +232,27 @@ def _parse_metrics_line(text: str, game: bool) -> dict[str, Any]:
     return {}
 
 
-def parse_self_play_output(text: str) -> dict[str, Any]:
-    data = _parse_metrics_line(text, game=True)
+def _load_json_file(path: str) -> dict[str, Any]:
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    return data if isinstance(data, dict) else {}
+
+
+def parse_self_play_output(text: str | None = None) -> dict[str, Any]:
+    if os.path.exists(SELF_PLAY_METRICS_PATH):
+        return _load_json_file(SELF_PLAY_METRICS_PATH)
+    data = _parse_metrics_line(text or "", game=True)
     if not data.get("games_file"):
-        m = re.search(r"Saved to (games_\d+\.safetensors)", text)
+        m = re.search(r"Saved to (games_\d+\.safetensors)", text or "")
         if m:
             data["games_file"] = m.group(1)
     return data
 
 
-def parse_train_output(text: str) -> dict[str, Any]:
-    return _parse_metrics_line(text, game=False)
+def parse_train_output(text: str | None = None) -> dict[str, Any]:
+    if os.path.exists(TRAIN_METRICS_PATH):
+        return _load_json_file(TRAIN_METRICS_PATH)
+    return _parse_metrics_line(text or "", game=False)
 
 
 def normalize_match_type(match_type: str) -> str:
@@ -328,24 +340,40 @@ def main() -> None:
     p_resolve.set_defaults(func=lambda a: resolve_run(a.resume))
 
     p_sp = sub.add_parser("parse-self-play")
-    p_sp.add_argument("--input", required=True, help="file path or '-' for stdin")
+    p_sp.add_argument(
+        "--input",
+        default=None,
+        help="optional legacy stdout capture (file path or '-'); default reads sidecar JSON",
+    )
     p_sp.set_defaults(
         func=lambda a: print(
             json.dumps(
                 parse_self_play_output(
-                    sys.stdin.read() if a.input == "-" else open(a.input, encoding="utf-8").read()
+                    sys.stdin.read()
+                    if a.input == "-"
+                    else open(a.input, encoding="utf-8").read()
+                    if a.input
+                    else None
                 )
             )
         )
     )
 
     p_tr = sub.add_parser("parse-train")
-    p_tr.add_argument("--input", required=True, help="file path or '-' for stdin")
+    p_tr.add_argument(
+        "--input",
+        default=None,
+        help="optional legacy stdout capture (file path or '-'); default reads sidecar JSON",
+    )
     p_tr.set_defaults(
         func=lambda a: print(
             json.dumps(
                 parse_train_output(
-                    sys.stdin.read() if a.input == "-" else open(a.input, encoding="utf-8").read()
+                    sys.stdin.read()
+                    if a.input == "-"
+                    else open(a.input, encoding="utf-8").read()
+                    if a.input
+                    else None
                 )
             )
         )

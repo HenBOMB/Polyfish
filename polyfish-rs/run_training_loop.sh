@@ -256,27 +256,22 @@ do
     SP_LOG=$(mktemp)
     ./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$i" | tee "$SP_LOG"
     SP_STATUS=${PIPESTATUS[0]}
-    SP_OUTPUT=$(cat "$SP_LOG")
     rm -f "$SP_LOG"
     if [ "$SP_STATUS" -ne 0 ]; then
         echo "Self-play failed with exit code $SP_STATUS" >&2
         exit "$SP_STATUS"
     fi
     
-    GAME_JSON=$(echo "$SP_OUTPUT" | .venv/bin/python3 training_log.py parse-self-play --input -)
+    GAME_JSON=$(.venv/bin/python3 training_log.py parse-self-play)
     GAMES_FILE=$(echo "$GAME_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('games_file',''))")
     
     # 2. Training
     # Stream train.py's output live (batch/epoch progress) instead of buffering
-    # it silently until the process exits, while still capturing it to parse
-    # METRICS. A plain `TRAIN_OUTPUT=$(...)` would swallow all output until
-    # train.py finished, so pipe through `tee` and check PIPESTATUS instead
-    # (command substitution here would otherwise hide `set -e` failures too).
-    TRAIN_LOG=$(mktemp)
-    .venv/bin/python3 train.py | tee "$TRAIN_LOG"
-    TRAIN_STATUS=${PIPESTATUS[0]}
-    TRAIN_JSON=$(.venv/bin/python3 training_log.py parse-train --input "$TRAIN_LOG")
-    rm -f "$TRAIN_LOG"
+    # it silently until the process exits. Metrics are read from the sidecar
+    # JSON file after train.py finishes.
+    .venv/bin/python3 train.py
+    TRAIN_STATUS=$?
+    TRAIN_JSON=$(.venv/bin/python3 training_log.py parse-train)
     if [ "$TRAIN_STATUS" -ne 0 ]; then
         echo "Training failed with exit code $TRAIN_STATUS" >&2
         exit "$TRAIN_STATUS"

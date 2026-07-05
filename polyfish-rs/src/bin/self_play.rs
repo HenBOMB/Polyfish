@@ -12,6 +12,7 @@ use polyfish::game::Game;
 use polyfish::replayer::{ModReplay, ReplayPlayer, ReplayTurn};
 use polyfish::states::PlayerId;
 use polyfish::types::MapSize;
+use serde_json::json;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
@@ -989,9 +990,8 @@ fn main() -> anyhow::Result<()> {
         games_duration.as_secs_f32()
     );
 
-    // Eval-server stats: per-shard detail + an aggregate across all shards.
-    // Aggregate is the number to compare against the single-server baseline
-    // (summed forwards/rows/busy, max of max_batch, summed cache hits/misses).
+    // Eval-server stats: aggregate across all shards (the number to compare
+    // against the single-server baseline).
     let mut all_shard_stats: Vec<(&str, &EvalServerStats)> = Vec::new();
     for s in p1_servers.iter() {
         all_shard_stats.push(("p1", s.stats()));
@@ -1003,38 +1003,6 @@ fn main() -> anyhow::Result<()> {
     }
 
     let wall_s = games_duration.as_secs_f64().max(1e-9);
-    for (player, stats) in &all_shard_stats {
-        let forwards = stats.forwards.load(Ordering::Relaxed);
-        let rows = stats.rows.load(Ordering::Relaxed);
-        let max_batch = stats.max_batch.load(Ordering::Relaxed);
-        let busy_s = stats.busy_us.load(Ordering::Relaxed) as f64 / 1e6;
-        let avg_batch = if forwards > 0 {
-            rows as f64 / forwards as f64
-        } else {
-            0.0
-        };
-        let cache_hits = stats.cache_hits.load(Ordering::Relaxed);
-        let cache_misses = stats.cache_misses.load(Ordering::Relaxed);
-        let cache_total = cache_hits + cache_misses;
-        let cache_hit_rate = if cache_total > 0 {
-            cache_hits as f64 / cache_total as f64
-        } else {
-            0.0
-        };
-        println!(
-            "EVAL_SERVER_STATS: {{\"shard\": \"{}\", \"forwards\": {}, \"rows\": {}, \"avg_batch\": {:.2}, \"max_batch\": {}, \"busy_s\": {:.2}, \"busy_frac\": {:.3}, \"cache_hits\": {}, \"cache_misses\": {}, \"cache_hit_rate\": {:.3}}}",
-            player,
-            forwards,
-            rows,
-            avg_batch,
-            max_batch,
-            busy_s,
-            busy_s / wall_s,
-            cache_hits,
-            cache_misses,
-            cache_hit_rate
-        );
-    }
 
     // Aggregate across shards.
     let (mut agg_forwards, mut agg_rows, mut agg_max_batch, mut agg_busy_us) = (0u64, 0u64, 0u64, 0u64);
@@ -1284,7 +1252,7 @@ fn main() -> anyhow::Result<()> {
     let avg_captured_tiles = total_captured_tiles as f32 / args.num_games as f32;
 
     // "typical move by turn N" chart data: {"<turn>": {"<MoveType>": count, ...}, ...}
-    let moves_by_turn_json = {
+    let moves_by_turn = {
         let mut turns_sorted: Vec<&i32> = total_moves_by_turn.keys().collect();
         turns_sorted.sort();
         let mut turn_map = serde_json::Map::new();
@@ -1295,7 +1263,7 @@ fn main() -> anyhow::Result<()> {
             }
             turn_map.insert(turn.to_string(), serde_json::Value::Object(counts_map));
         }
-        serde_json::Value::Object(turn_map).to_string()
+        serde_json::Value::Object(turn_map)
     };
 
     let games_file = if collected_spatial_maps.is_empty() {
@@ -1388,22 +1356,26 @@ fn main() -> anyhow::Result<()> {
 
     }
 
-    println!(
-        "METRICS: {{\"avg_score\": {:.2}, \"max_score\": {}, \"avg_moves\": {:.2}, \"p1_avg\": {:.2}, \"p2_avg\": {:.2}, \"avg_captures\": {:.2}, \"avg_harvests\": {:.2}, \"avg_builds\": {:.2}, \"avg_research\": {:.2}, \"avg_attacks\": {:.2}, \"avg_revealed_tiles\": {:.2}, \"avg_captured_tiles\": {:.2}, \"games_file\": \"{games_file}\", \"moves_by_turn\": {}}}",
-        avg_score,
-        max_score,
-        avr_moves,
-        p1_avg,
-        p2_avg,
-        avg_captures,
-        avg_harvests,
-        avg_builds,
-        avg_research,
-        avg_attacks,
-        avg_revealed_tiles,
-        avg_captured_tiles,
-        moves_by_turn_json
-    );
+    let metrics = json!({
+        "avg_score": avg_score,
+        "max_score": max_score,
+        "avg_moves": avr_moves,
+        "p1_avg": p1_avg,
+        "p2_avg": p2_avg,
+        "avg_captures": avg_captures,
+        "avg_harvests": avg_harvests,
+        "avg_builds": avg_builds,
+        "avg_research": avg_research,
+        "avg_attacks": avg_attacks,
+        "avg_revealed_tiles": avg_revealed_tiles,
+        "avg_captured_tiles": avg_captured_tiles,
+        "games_file": games_file,
+        "moves_by_turn": moves_by_turn,
+    });
+    std::fs::write(
+        ".last_self_play_metrics.json",
+        serde_json::to_string(&metrics)?,
+    )?;
 
     let total_duration = start_time.elapsed();
     println!("\n=== Self-Play Complete ===");

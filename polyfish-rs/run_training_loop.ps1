@@ -125,20 +125,14 @@ for ($i = $StartIter; $i -le ($Iterations + $StartIter); $i++) {
     $SpOutput = & .\target\release\self_play.exe @Args | Out-String
     Write-Host $SpOutput
 
-    $SpTemp = New-TemporaryFile
-    Set-Content -Path $SpTemp -Value $SpOutput -Encoding utf8
-    $GameJson = python training_log.py parse-self-play --input $SpTemp | ConvertFrom-Json
-    Remove-Item $SpTemp -Force
+    $GameJson = python training_log.py parse-self-play | ConvertFrom-Json
     $GamesFile = $GameJson.games_file
     
     # 2. Training
     $TrainOutput = & python train.py | Out-String
     Write-Host $TrainOutput
 
-    $TrainTemp = New-TemporaryFile
-    Set-Content -Path $TrainTemp -Value $TrainOutput -Encoding utf8
-    $TrainJson = python training_log.py parse-train --input $TrainTemp | ConvertFrom-Json
-    Remove-Item $TrainTemp -Force
+    $TrainJson = python training_log.py parse-train | ConvertFrom-Json
     $Loss = $TrainJson.loss
     $PolicyLoss = $TrainJson.policy_loss
     $ValueLoss = $TrainJson.value_loss

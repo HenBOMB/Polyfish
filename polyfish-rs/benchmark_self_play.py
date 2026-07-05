@@ -37,7 +37,7 @@ FIELDS = [
     "total_moves", "moves_per_sec", "cores", "notes",
     # Eval-server config (blank for pre-eval-server historical rows).
     "actors", "max_batch", "coalesce_timeout_us", "leaf_batch", "iteration",
-    # Measured eval-server behavior, parsed from EVAL_SERVER_STATS output:
+    # Measured eval-server behavior, parsed from EVAL_SERVER_STATS_AGG output:
     # average coalesced batch size and fraction of wall time the inference
     # thread spent inside tensorize/forward/readback.
     "avg_eval_batch", "eval_busy_frac",
@@ -143,13 +143,21 @@ def parse_output(text):
     m = re.search(r"Average: ([\d.]+)s per game", text)
     if m:
         data["avg_s_per_game"] = float(m.group(1))
-    m = re.search(r"METRICS: (\{.*?\"avg_moves\".*?\})", text)
-    if m:
-        metrics = json.loads(m.group(1))
+    metrics_path = os.path.join(ROOT, ".last_self_play_metrics.json")
+    if os.path.exists(metrics_path):
+        with open(metrics_path, encoding="utf-8") as f:
+            metrics = json.load(f)
         data["avg_moves"] = metrics.get("avg_moves")
+    else:
+        m = re.search(r"METRICS: (\{.*?\"avg_moves\".*?\})", text)
+        if m:
+            metrics = json.loads(m.group(1))
+            data["avg_moves"] = metrics.get("avg_moves")
     # One line per eval server; benchmark runs are same-weights self-play, so
     # there is exactly one. If an --opponent run ever emits two, take server 1.
-    m = re.search(r"EVAL_SERVER_STATS: (\{.*?\})", text)
+    m = re.search(r"EVAL_SERVER_STATS_AGG: (\{.*?\})", text)
+    if not m:
+        m = re.search(r"EVAL_SERVER_STATS: (\{.*?\})", text)
     if m:
         stats = json.loads(m.group(1))
         data["avg_eval_batch"] = stats.get("avg_batch")

@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 from safetensors.torch import load_file, save_file
 import glob
+import json
 import os
 import random
 import gc
@@ -474,11 +475,20 @@ def train():
     final_loss = total_loss / total_batches if total_batches > 0 else 0.0
     final_p_loss = total_p_loss / total_batches if total_batches > 0 else 0.0
     final_v_loss = total_v_loss / total_batches if total_batches > 0 else 0.0
-    print(f'METRICS: {{"loss": {final_loss:.4f}, "policy_loss": {final_p_loss:.4f}, "value_loss": {final_v_loss:.4f}}}')
 
     # 4. Save Model in f16 for blazing fast CPU inference
     half_state = {k: v.half() for k, v in model.state_dict().items()}
     save_file(half_state, "model.safetensors")
+
+    with open(".last_train_metrics.json", "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "loss": round(final_loss, 4),
+                "policy_loss": round(final_p_loss, 4),
+                "value_loss": round(final_v_loss, 4),
+            },
+            f,
+        )
 
 if __name__ == "__main__":
     train()
