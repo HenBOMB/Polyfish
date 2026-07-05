@@ -241,10 +241,11 @@ for ($i = $StartIter; $i -le ($Iterations + $StartIter); $i++) {
     if (-not (Test-Path "archive")) { New-Item -ItemType Directory -Path "archive" | Out-Null }
     Get-ChildItem -Filter "games_*.safetensors" -ErrorAction SilentlyContinue | Move-Item -Destination "archive/" -Force
     
-    # Keep only the last 30 game files to match Linux script and replay buffer
+    # Keep only the last 10 game files to match train.py's replay_buffer_size
+    # (lowered from 30 on 2026-07-05 — see train.py's replay_buffer_size comment)
     $ArchivedGames = Get-ChildItem -Path "archive" -Filter "games_*.safetensors" | Sort-Object LastWriteTime -Descending
-    if ($ArchivedGames.Count -gt 30) {
-        $ArchivedGames | Select-Object -Skip 30 | Remove-Item -Force
+    if ($ArchivedGames.Count -gt 10) {
+        $ArchivedGames | Select-Object -Skip 10 | Remove-Item -Force
     }
 }
 

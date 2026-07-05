@@ -1,31 +1,22 @@
 #!/bin/bash
 set -e
 
-# Configuration
-# NUM_GAMES/MCTS_ITERS/ACTORS/EVAL_SERVERS are named to match self_play's own
-# --num-games/--mcts-iters/--actors/--eval-servers flags 1:1 — see
-# `self_play --help` (or src/bin/self_play.rs) for what each actually does.
-ITERATIONS=1000
-NUM_GAMES=32
+# NUM_GAMES/MCTS_ITERS/ACTORS/EVAL_SERVERS match self_play CLI flags.
+# Games/iteration doubled, iterations halved: same total games, faster wall time.
+# Schedules and milestone cadence recalibrated for new window.
+# See self_play --help and expert_boost_throughput.md for details.
+ITERATIONS=500
+NUM_GAMES=64
 export MCTS_ITERS=64
-# self_play's actor pool is plain std::thread (not rayon), and actors block
-# (park, no CPU) while awaiting eval-server replies — oversubscribing past
-# core count is fine, RAM is the real ceiling. Effective concurrency is
-# min(NUM_GAMES, ACTORS): actors beyond the game count just park (harmless),
-# but games beyond the actor count queue. 128 actors measured best on an M3
-# Max with the metal backend (~578 moves/s at 128 games+) — throughput
-# scales with CONCURRENT GAMES, so small -g values are the real limiter,
-# not this knob (see expert_boost_throughput.md).
+# 128 actors measured best on an M3 Max with metal (~578 moves/s @ 128 games+).
+# Throughput scales with concurrent games; small NUM_GAMES (-g) is a real limiter, not this knob.
+# See expert_boost_throughput.md for details.
 ACTORS=128
-# 0 = defer to self_play's auto: 2 servers on the metal backend (each runs a
-# coalescer + 2 pipelined GPU workers — measured best), 1 on tch/candle.
-# Do NOT force >1 on tch: libtorch's serial MPS queue makes 2 tch shards
-# HALVE throughput (measured 157 -> 83 moves/s).
+# 0 = auto: 2 on metal, 1 on tch/candle. Don't force >1 on tch —
+# MPS queue halves performance with 2 tch shards.
 EVAL_SERVERS=0
-# The self_play invocation below passes no --eval-backend: the binary's auto
-# rule picks the fastest compiled-in backend (metal > tch > candle), which
-# resolves to metal (MPSGraph) on this Mac build and candle+CUDA on the
-# remote boxes. Override per-run by appending --eval-backend to the command.
+# self_play picks fastest backend: metal, tch, or candle.
+# Override with --eval-backend if needed.
 export RUST_BACKTRACE=1
 
 # Log all output to session.log while still showing on console
@@ -357,8 +348,9 @@ do
     # Use || true to avoid script exit if no games were generated
     mv games_*.safetensors archive/ 2>/dev/null || true
     
-    # Keep only the last 10 game files to save space and match train.py replay buffer
-    ls -t archive/games_*.safetensors 2>/dev/null | tail -n +31 | xargs -r rm
+    # Keep only the last 10 game files (matches train.py's replay_buffer_size;
+    # this comment used to claim 10 while the code kept 30 — now actually true)
+    ls -t archive/games_*.safetensors 2>/dev/null | tail -n +11 | xargs -r rm
 
     # 5. Early-exit if policy loss has stalled across iterations
     if [ "$EARLY_EXIT_PATIENCE" -gt 0 ] && [ -n "$POLICY_LOSS" ]; then

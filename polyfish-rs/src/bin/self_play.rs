@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const HEURISTIC_PRIOR_W0: f32 = 0.5; // net & heur blended 50/50 at start
-const HEURISTIC_PRIOR_DECAY: f32 = 0.93; // from 0.5 to 0.03 by ~40 iterations
+const HEURISTIC_PRIOR_DECAY: f32 = 0.865; // from 0.5 to 0.03 by ~20 iterations
 
 /// Decomposed policy probability distributions for a single step
 struct DecomposedPolicyData {
@@ -101,12 +101,12 @@ fn play_single_game(
     backend: SearchBackend,
     leaf_batch: Option<usize>,
 ) -> Option<GameResult> {
-    // Curriculum logic — Tiny maps only, gradually increase turn count
-    let (map_size, max_turns) = if iteration <= 50 {
+    // Curriculum logic — Tiny maps only, gradually increase turn count.
+    let (map_size, max_turns) = if iteration <= 25 {
         (MapSize::Tiny, 10)
-    } else if iteration <= 100 {
+    } else if iteration <= 50 {
         (MapSize::Tiny, 15)
-    } else if iteration <= 150 {
+    } else if iteration <= 75 {
         (MapSize::Tiny, 20)
     } else {
         (MapSize::Tiny, 30)
