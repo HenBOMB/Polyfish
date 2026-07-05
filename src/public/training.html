@@ -455,16 +455,20 @@ function buildFlags(row, base, valStats) {
 async function renderPanelB() {
   const sel = document.getElementById('iterSelect');
   if (!runMetrics.length) return;
+  let run = runs[selectedRunIdx];
   const iter = parseInt(sel.value || runMetrics[runMetrics.length - 1].iteration, 10);
   const row = runMetrics.find(r => r.iteration === iter) || runMetrics[runMetrics.length - 1];
   const base = baselineForRow(row);
 
   let valDist = null;
-  if (row.games_file) {
-    try {
-      valDist = await fetchJson(`/api/value-distribution?file=${encodeURIComponent(row.games_file)}`);
-    } catch (e) { console.warn('value dist', e); }
-  }
+  try {
+    const params = new URLSearchParams({
+      run: row.run_id || run.run_id,
+      iteration: String(row.iteration),
+    });
+    if (row.games_file) params.set('file', row.games_file);
+    valDist = await fetchJson(`/api/value-distribution?${params}`);
+  } catch (e) { console.warn('value dist', e); }
 
   const flags = buildFlags(row, base, valDist?.stats);
   const banner = document.getElementById('flagsBanner');

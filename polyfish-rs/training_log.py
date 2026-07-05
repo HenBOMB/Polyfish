@@ -14,7 +14,10 @@ from typing import Any
 
 CSV_PATH = "training_log.csv"
 MOVES_PATH = "moves_by_turn.json"
+VALUE_DIST_PATH = "value_distribution.json"
 CURRENT_RUN_PATH = ".current_run"
+HIST_BINS = 80
+MAX_VALUE_SAMPLES = 8000
 SELF_PLAY_METRICS_PATH = ".last_self_play_metrics.json"
 TRAIN_METRICS_PATH = ".last_train_metrics.json"
 
@@ -261,6 +264,181 @@ def normalize_match_type(match_type: str) -> str:
     return "selfplay"
 
 
+def resolve_games_file(games_file: str) -> str | None:
+    if not games_file:
+        return None
+    bare = games_file.removeprefix("archive/").removeprefix("./")
+    for path in (games_file, bare, f"archive/{bare}"):
+        if path and os.path.exists(path):
+            return path
+    return None
+
+
+def compute_value_distribution(values: list[float], games_file: str) -> dict[str, Any]:
+    n = len(values)
+    if n == 0:
+        return {
+            "file": games_file,
+            "n": 0,
+            "stats": {
+                "mean": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "weak_pct": 0.0,
+                "moderate_pct": 0.0,
+                "strong_pct": 0.0,
+                "saturation_pct": 0.0,
+                "in_target_range_pct": 0.0,
+            },
+            "hist": {"bins": [], "counts": []},
+            "abs_hist": {"bins": [], "counts": []},
+            "buckets": {
+                "weak": 0.0,
+                "moderate": 0.0,
+                "strong": 0.0,
+                "saturation": 0.0,
+            },
+            "samples": [],
+        }
+
+    mean = sum(values) / n
+    variance = sum((v - mean) ** 2 for v in values) / n
+    std = variance**0.5
+    vmin = min(values)
+    vmax = max(values)
+
+    weak = moderate = strong = saturation = in_target = 0
+    for v in values:
+        av = abs(v)
+        if av < 0.1:
+            weak += 1
+        elif av < 0.3:
+            moderate += 1
+        elif av < 0.5:
+            strong += 1
+        else:
+            saturation += 1
+        if 0.1 <= av <= 0.5:
+            in_target += 1
+
+    def pct(count: int) -> float:
+        return 100.0 * count / n
+
+    hist_counts = [0] * HIST_BINS
+    abs_hist_counts = [0] * HIST_BINS
+    for v in values:
+        idx = min(int(((v + 1.0) / 2.0) * HIST_BINS), HIST_BINS - 1)
+        if idx < 0:
+            idx = 0
+        hist_counts[idx] += 1
+        av = min(max(abs(v), 0.0), 1.0)
+        aidx = min(int(av * HIST_BINS), HIST_BINS - 1)
+        abs_hist_counts[aidx] += 1
+
+    hist_bins = [-1.0 + (2.0 * (i + 0.5) / HIST_BINS) for i in range(HIST_BINS)]
+    abs_bins = [(i + 0.5) / HIST_BINS for i in range(HIST_BINS)]
+
+    if n <= MAX_VALUE_SAMPLES:
+        samples = values
+    else:
+        step = max(n // MAX_VALUE_SAMPLES, 1)
+        samples = values[::step]
+
+    return {
+        "file": games_file,
+        "n": n,
+        "stats": {
+            "mean": mean,
+            "std": std,
+            "min": vmin,
+            "max": vmax,
+            "weak_pct": pct(weak),
+            "moderate_pct": pct(moderate),
+            "strong_pct": pct(strong),
+            "saturation_pct": pct(saturation),
+            "in_target_range_pct": pct(in_target),
+        },
+        "hist": {"bins": hist_bins, "counts": hist_counts},
+        "abs_hist": {"bins": abs_bins, "counts": abs_hist_counts},
+        "buckets": {
+            "weak": pct(weak),
+            "moderate": pct(moderate),
+            "strong": pct(strong),
+            "saturation": pct(saturation),
+        },
+        "samples": samples,
+    }
+
+
+def load_values_from_games(path: str) -> list[float]:
+    from safetensors.numpy import load_file
+
+    data = load_file(path)
+    if "values" not in data:
+        return []
+    arr = data["values"]
+    return [float(x) for x in arr.reshape(-1)]
+
+
+def update_value_distribution(
+    run_id: str, iteration: int, games_file: str, path: str | None = None
+) -> None:
+    resolved = path or resolve_games_file(games_file)
+    if not resolved:
+        return
+    try:
+        values = load_values_from_games(resolved)
+    except Exception as e:
+        print(f"value_distribution: skip {resolved}: {e}", file=sys.stderr)
+        return
+    if not values:
+        return
+
+    store: dict[str, Any] = {}
+    if os.path.exists(VALUE_DIST_PATH):
+        with open(VALUE_DIST_PATH, encoding="utf-8") as f:
+            try:
+                store = json.load(f)
+            except json.JSONDecodeError:
+                store = {}
+    store.setdefault(str(run_id), {})[str(iteration)] = compute_value_distribution(
+        values, games_file
+    )
+    with open(VALUE_DIST_PATH, "w", encoding="utf-8") as f:
+        json.dump(store, f)
+
+
+def backfill_value_distribution() -> int:
+    """Populate value_distribution.json from CSV rows whose games files still exist."""
+    if not os.path.exists(CSV_PATH):
+        return 0
+    filled = 0
+    with open(CSV_PATH, encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            run_id = row.get("run_id", "")
+            iteration = row.get("iteration", "")
+            games_file = row.get("games_file", "")
+            if not run_id or not iteration or not games_file:
+                continue
+            store: dict[str, Any] = {}
+            if os.path.exists(VALUE_DIST_PATH):
+                with open(VALUE_DIST_PATH, encoding="utf-8") as sf:
+                    try:
+                        store = json.load(sf)
+                    except json.JSONDecodeError:
+                        store = {}
+            if store.get(run_id, {}).get(iteration):
+                continue
+            path = resolve_games_file(games_file)
+            if not path:
+                continue
+            update_value_distribution(run_id, int(iteration), games_file, path)
+            filled += 1
+    return filled
+
+
 def append_row(
     run_id: str,
     iter_started_at: str,
@@ -308,6 +486,9 @@ def append_row(
     moves = game_metrics.get("moves_by_turn")
     if moves is not None:
         update_moves_by_turn(run_id, iteration, moves)
+
+    if archived:
+        update_value_distribution(run_id, iteration, archived)
 
 
 def update_moves_by_turn(run_id: str, iteration: int, moves_by_turn: Any) -> None:
@@ -404,6 +585,11 @@ def main() -> None:
 
     p_finish = sub.add_parser("finish-run")
     p_finish.set_defaults(func=lambda a: finish_run())
+
+    p_backfill = sub.add_parser("backfill-value-distribution")
+    p_backfill.set_defaults(
+        func=lambda a: print(json.dumps({"filled": backfill_value_distribution()}))
+    )
 
     args = ap.parse_args()
     args.func(args)
