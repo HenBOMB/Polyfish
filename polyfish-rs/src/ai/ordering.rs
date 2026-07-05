@@ -1,9 +1,13 @@
+use std::collections::HashSet;
+
 use crate::coords::Coords;
 use crate::functions::{calculate_combat_preview, get_adjacent_indices, get_structure_at};
 use crate::game::Game;
 use crate::moves::Move;
 use crate::settings::get_structure_setting;
-use crate::types::{AbilityType, CityRewardType, ModeType, MoveType, StructureType};
+use crate::types::{
+    AbilityType, CityRewardType, ModeType, MoveType, SkillType, StructureType, TerrainType,
+};
 
 /// Score a move based on heuristics for move ordering
 pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
@@ -526,21 +530,31 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                     }
                     score += resource_bonus.min(6.0) * openness;
 
-                    // Bonus for moving closer to the nearest explored, uncaptured village/ruin.
-                    // Flat bonus if closing distance; additional urgency as target is approached.
-                    // Prevents wandering from outranking progress toward distant objectives.      
                     let map_size = state.map_size();
                     let target_coords = Coords::from_index(target_idx as i32, map_size);
                     if let Ok(src_idx) = mv.source_idx() {
                         let src_coords = Coords::from_index(src_idx as i32, map_size);
+
+                        // Prefer steps that actually reveal fog over sidesteps that
+                        // make equal progress toward a village or resource.
+                        let newly_revealed = count_newly_revealed_by_step(
+                            state,
+                            player_id,
+                            src_idx as i32,
+                            target_idx as i32,
+                        );
+                        score += newly_revealed as f32 * 4.0;
+
+                        // Bonus for moving closer to the nearest explored, uncaptured village/ruin.
+                        // Flat bonus if closing distance; additional urgency as target is approached.
                         if let Some((nearest_coords, src_dist)) =
                             nearest_visible_capturable(state, player_id, src_coords)
                         {
                             let dest_dist = nearest_coords.distance_to(&target_coords);
                             if dest_dist < src_dist {
-                                score += 20.0; // flat: correct progress, any distance
+                                score += 20.0;
                             }
-                            score += (12.0 - 2.0 * dest_dist as f32).max(0.0); // final-approach urgency
+                            score += (12.0 - 2.0 * dest_dist as f32).max(0.0);
                         }
                     }
 
@@ -878,6 +892,95 @@ fn regional_openness(
     (unexplored as f32 / window as f32).clamp(0.0, 1.0)
 }
 
+fn unit_vision_range(
+    state: &crate::states::GameState,
+    unit: &crate::states::UnitState,
+    at_idx: i32,
+) -> i32 {
+    if crate::functions::has_skill(unit, SkillType::Scout)
+        || state
+            .tiles
+            .get(&at_idx)
+            .map_or(false, |t| t.terrain_type == TerrainType::Mountain)
+    {
+        2
+    } else {
+        1
+    }
+}
+
+/// Tiles the player could see if `stepping_unit` moved from `.0` to `.1`.
+fn visible_tiles_for_player(
+    state: &crate::states::GameState,
+    player_id: i32,
+    stepping_unit: Option<(i32, i32)>,
+) -> HashSet<i32> {
+    if !state.settings._fow {
+        return state.tiles.keys().copied().collect();
+    }
+
+    let mut visible = HashSet::new();
+    let Some(tribe) = state.tribes.get(&player_id) else {
+        return visible;
+    };
+    let map_size = state.settings.size;
+
+    for city in &tribe.cities {
+        let city_coords = Coords::from_index(city.idx, map_size);
+        let range = if state.tiles[city.idx as usize].capital_of > 0 {
+            2
+        } else {
+            city.border_size
+        };
+
+        for dy in -range..=range {
+            for dx in -range..=range {
+                let nx = city_coords.x + dx;
+                let ny = city_coords.y + dy;
+                if nx >= 0 && nx < map_size && ny >= 0 && ny < map_size {
+                    let idx = ny * map_size + nx;
+                    let is_corner = idx == 0
+                        || idx == map_size - 1
+                        || idx == map_size * (map_size - 1)
+                        || idx == map_size * map_size - 1;
+                    if !(is_corner && idx != city.idx) {
+                        visible.insert(idx);
+                    }
+                }
+            }
+        }
+    }
+
+    for unit in &tribe.units {
+        let at_idx = match stepping_unit {
+            Some((src, dest)) if unit.coords.idx == src => dest,
+            _ => unit.coords.idx,
+        };
+        let vision_range = unit_vision_range(state, unit, at_idx);
+        visible.insert(at_idx);
+        for idx in get_adjacent_indices(state, at_idx, vision_range) {
+            visible.insert(idx);
+        }
+    }
+
+    visible
+}
+
+/// How many tiles would enter vision if the unit stepped from `src_idx` to `dest_idx`.
+fn count_newly_revealed_by_step(
+    state: &crate::states::GameState,
+    player_id: i32,
+    src_idx: i32,
+    dest_idx: i32,
+) -> i32 {
+    if !state.settings._fow {
+        return 0;
+    }
+    let before = visible_tiles_for_player(state, player_id, None);
+    let after = visible_tiles_for_player(state, player_id, Some((src_idx, dest_idx)));
+    after.difference(&before).count() as i32
+}
+
 /// Manhattan distance from `from` to the map's center tile. Used to give a
 /// mild pull toward contested/central ground rather than defaulting toward
 /// the map edges (which is where the uncapped fog-reveal bonus used to push
@@ -891,8 +994,11 @@ fn map_center_distance(state: &crate::states::GameState, from: Coords) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::actions::units::summon_unit;
     use crate::game::Game;
-    use crate::moves::EndTurnMove;
+    use crate::moves::{EndTurnMove, StepMove};
+    use crate::states::{ResourceState, TileState, TribeState};
+    use crate::types::{ResourceType, TribeType, UnitType};
 
     #[test]
     fn test_basic_ordering() {
@@ -902,5 +1008,68 @@ mod tests {
         // This is just a compilation test of the logic for now
         // Real testing would require a populated game state
         assert!(score_move(&game, &end_turn) == 0.0);
+    }
+
+    #[test]
+    fn step_toward_fog_scores_above_sidestep_with_equal_resource_progress() {
+        let mut state = crate::states::GameState::default();
+        state.settings.size = 11;
+        state.settings._fow = true;
+        let player_id = 1;
+        state.settings.current_player_turn_id = player_id;
+
+        let mut tribe = TribeState::default();
+        tribe.id = player_id;
+        tribe.tribe_type = TribeType::Imperius;
+        state.tribes.insert(player_id, tribe);
+
+        for i in 0..121 {
+            let mut tile = TileState::default();
+            tile.terrain_type = TerrainType::Field;
+            tile.explorers.insert(player_id);
+            state.tiles.insert(i, tile);
+        }
+
+        // Hide a pocket west of (4,5) so stepping there reveals fog; (5,6) does not.
+        for x in 0..3 {
+            for y in 4..7 {
+                let idx = y * 11 + x;
+                state.tiles.get_mut(&idx).unwrap().explorers.remove(&player_id);
+            }
+        }
+
+        let unit_idx = 5 * 11 + 5;
+        let toward_fog = 4 * 11 + 5;
+        let sideways = 5 * 11 + 6;
+        let fruit_idx = 4 * 11 + 6;
+
+        state.resources.insert(
+            fruit_idx,
+            Some(ResourceState {
+                resource_type: ResourceType::Fruit,
+            }),
+        );
+
+        let _ = summon_unit(&mut state, UnitType::Warrior, unit_idx, false, false);
+        let game = Game { state };
+
+        let toward = StepMove::new(unit_idx, toward_fog);
+        let side = StepMove::new(unit_idx, sideways);
+
+        let src_coords = Coords::from_index(unit_idx, 11);
+        let fruit_coords = Coords::from_index(fruit_idx, 11);
+        let src_dist = src_coords.distance_to(&fruit_coords);
+        let toward_dist = Coords::from_index(toward_fog, 11).distance_to(&fruit_coords);
+        let side_dist = Coords::from_index(sideways, 11).distance_to(&fruit_coords);
+        assert_eq!(src_dist - toward_dist, 1);
+        assert_eq!(src_dist - side_dist, 1);
+
+        let toward_score = score_move(&game, &toward);
+        let side_score = score_move(&game, &side);
+
+        assert!(
+            toward_score > side_score,
+            "toward fog ({toward_score}) should beat sidestep ({side_score})"
+        );
     }
 }
