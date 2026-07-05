@@ -22,6 +22,9 @@ EVAL_SERVERS=3
 # self_play picks fastest backend: metal, tch, or candle.
 # Override with --eval-backend if needed.
 export RUST_BACKTRACE=1
+# stdout is a pipe (tee below), so Python would block-buffer and train.py's
+# progress would appear frozen for the whole training phase without this.
+export PYTHONUNBUFFERED=1
 
 # Log all output to session.log while still showing on console
 LOG_FILE="session.log"

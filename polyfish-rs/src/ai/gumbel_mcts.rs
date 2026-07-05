@@ -193,8 +193,11 @@ impl<'a> GumbelMctsAgent<'a> {
                 if self.next_root_hash == Some(new_hash) {
                     let new_root = prev_root.children.swap_remove(chosen_idx);
                     if new_root.is_expanded && !new_root.children.is_empty() {
-                        self.tree_reuses += 1;
-                        return self.finish_reused_root(game, new_root, start_turn);
+                        // Revalidate the children to ensure the moves are still legal
+                        if reused_children_match_legal(game, &new_root.children) {
+                            self.tree_reuses += 1;
+                            return self.finish_reused_root(game, new_root, start_turn);
+                        }
                     }
                     // Expanded-but-childless (terminal) reused root: nothing
                     // to search, return as-is.
@@ -926,6 +929,29 @@ fn blend_heuristic_prior(game: &Game, children: &mut [GumbelNode], weight: f32) 
         // Add a small epsilon to prevent log(0)
         child.logit = (p + 1e-9).ln();
     }
+}
+
+/// Multiset-compare a reused root's cached child moves against the real
+/// state's legal moves. Any mismatch means the sim-built cache is stale.
+fn reused_children_match_legal(game: &Game, children: &[GumbelNode]) -> bool {
+    let legal = game.legal_moves();
+    if legal.len() != children.len() {
+        return false;
+    }
+    let mut remaining: Vec<serde_json::Value> = legal.iter().map(|m| m.serialize()).collect();
+    for child in children {
+        let Some(m) = child.move_to_here.as_ref() else {
+            return false;
+        };
+        let v = m.serialize();
+        match remaining.iter().position(|r| *r == v) {
+            Some(i) => {
+                remaining.swap_remove(i);
+            }
+            None => return false,
+        }
+    }
+    true
 }
 
 /// Apply `m` to `game` (assumed to be at the root state, with all search

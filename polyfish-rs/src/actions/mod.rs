@@ -76,13 +76,12 @@ pub fn spend_stars(state: &mut GameState, amount: i32) -> UndoCallback {
         //     state.settings.turn
         // );
 
-        // Polytopia/TS doesn't usually allow debt, if we are here we already validated
-        if tribe.stars < 0 {
-            eprintln!(
-                "[ERROR] Not enough stars to spend: need {}, have {}",
-                amount, old_stars
+        // Debt is impossible in Polytopia so this means we made an illegal move.
+        if tribe.stars < 0 && amount > 0 && state.settings._are_you_sure {
+            panic!(
+                "BUG: illegal move executed in real game: spent {} stars with only {} available (turn {}, player {})",
+                amount, old_stars, state.settings.turn, pov_id
             );
-            // return noop_undo(); // Don't return, let it proceed to catch where validation failed
         }
 
         Box::new(move |s| {

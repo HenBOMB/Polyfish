@@ -65,13 +65,11 @@ struct Args {
 }
 
 fn load_model(path: &str, device: &Device) -> anyhow::Result<PolyZeroNet> {
-    let mut varmap = candle_nn::VarMap::new();
-    varmap.load(path)?;
-    Ok(PolyZeroNet::new(candle_nn::VarBuilder::from_varmap(
-        &varmap,
-        candle_core::DType::F32,
-        device,
-    ))?)
+    // Load trained weights directly with from_mmaped_safetensors for correctness.
+    let vs = unsafe {
+        candle_nn::VarBuilder::from_mmaped_safetensors(&[path], candle_core::DType::F32, device)?
+    };
+    Ok(PolyZeroNet::new(vs)?)
 }
 
 /// Per-match result, attributed to configurations (1 or 2), not seats.

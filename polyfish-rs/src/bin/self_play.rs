@@ -108,22 +108,18 @@ fn load_networks(
             model_path
         );
     }
-    let mut varmap = candle_nn::VarMap::new();
-    varmap.load(model_path)?;
-    let network1 = Arc::new(PolyZeroNet::new(candle_nn::VarBuilder::from_varmap(
-        &varmap,
-        candle_core::DType::F32,
-        device,
-    ))?);
+    // Inference-only load: `VarBuilder::from_mmaped_safetensors` loads by key from file;
+    // VarMap::load fills only pre-registered vars.
+    let vs1 = unsafe {
+        candle_nn::VarBuilder::from_mmaped_safetensors(&[model_path], candle_core::DType::F32, device)?
+    };
+    let network1 = Arc::new(PolyZeroNet::new(vs1)?);
 
     let network2 = if let Some(opp_path) = opponent {
-        let mut varmap2 = candle_nn::VarMap::new();
-        varmap2.load(opp_path)?;
-        Arc::new(PolyZeroNet::new(candle_nn::VarBuilder::from_varmap(
-            &varmap2,
-            candle_core::DType::F32,
-            device,
-        ))?)
+        let vs2 = unsafe {
+            candle_nn::VarBuilder::from_mmaped_safetensors(&[opp_path], candle_core::DType::F32, device)?
+        };
+        Arc::new(PolyZeroNet::new(vs2)?)
     } else {
         network1.clone()
     };
@@ -937,20 +933,27 @@ fn main() -> anyhow::Result<()> {
                         pick_tribes(&mut tribe_rng, all_tribes, &args.tribe1, &args.tribe2);
                     let game_tribes = vec![t1, t2];
 
-                    let result = play_single_game(
-                        p1_net,
-                        p2_net,
-                        p1_eval,
-                        p2_eval,
-                        args.mcts_iters,
-                        i,
-                        seed,
-                        game_tribes,
-                        args.iteration,
-                        backend,
-                        args.leaf_batch,
-                        progress_mode,
-                    );
+                    // Ensure panicking game doesnt kill the whole run
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        play_single_game(
+                            p1_net,
+                            p2_net,
+                            p1_eval,
+                            p2_eval,
+                            args.mcts_iters,
+                            i,
+                            seed,
+                            game_tribes,
+                            args.iteration,
+                            backend,
+                            args.leaf_batch,
+                            progress_mode,
+                        )
+                    }))
+                    .unwrap_or_else(|_| {
+                        eprintln!("[ERROR] Game {i} (seed {seed}) panicked — discarding its data");
+                        None
+                    });
 
                     if let Some(result) = result {
                         if progress_mode == ProgressMode::SampledFinish {

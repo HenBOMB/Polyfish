@@ -202,17 +202,6 @@ pub fn update_capital_connections(state: &mut GameState, tribe_id: i32) -> UndoC
     // Apply population bonus to Capital
     if capital_pop_gain != 0 {
         if let Some(cap) = crate::functions::get_capital_city(state, tribe_id) {
-            // Debug logic
-            if capital_pop_gain > 2 {
-                println!(
-                    "DEBUG: Massive population gain for capital! +{}",
-                    capital_pop_gain
-                );
-            }
-            if capital_pop_gain < -2 {
-                // println!("DEBUG: Massive population loss for capital: {}", capital_pop_gain);
-            }
-
             undos.push(add_population(state, cap.idx, capital_pop_gain));
         }
     }

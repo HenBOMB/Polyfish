@@ -65,10 +65,25 @@ struct CrossAttention {
 
 impl CrossAttention {
     fn new(d_model: usize, nhead: usize, vs: VarBuilder) -> Result<Self> {
-        let q_proj = candle_nn::linear(d_model, d_model, vs.pp("q_proj"))?;
-        let k_proj = candle_nn::linear(d_model, d_model, vs.pp("k_proj"))?;
-        let v_proj = candle_nn::linear(d_model, d_model, vs.pp("v_proj"))?;
-        let o_proj = candle_nn::linear(d_model, d_model, vs.pp("o_proj"))?;
+        // train.py's CrossAttention wraps nn.MultiheadAttention, which packs
+        // [Wq; Wk; Wv] into `attn.in_proj_weight` [3*D, D] / `in_proj_bias`
+        // [3*D] rather than separate q/k/v_proj weights. Split here to match
+        // the layout actually saved in model.safetensors (see tch_network.rs
+        // for the mirrored PyTorch-side split).
+        let attn_vs = vs.pp("attn");
+        let in_w = attn_vs.get((3 * d_model, d_model), "in_proj_weight")?;
+        let in_b = attn_vs.get(3 * d_model, "in_proj_bias")?;
+        let wq = in_w.narrow(0, 0, d_model)?.contiguous()?;
+        let wk = in_w.narrow(0, d_model, d_model)?.contiguous()?;
+        let wv = in_w.narrow(0, 2 * d_model, d_model)?.contiguous()?;
+        let bq = in_b.narrow(0, 0, d_model)?.contiguous()?;
+        let bk = in_b.narrow(0, d_model, d_model)?.contiguous()?;
+        let bv = in_b.narrow(0, 2 * d_model, d_model)?.contiguous()?;
+
+        let q_proj = Linear::new(wq, Some(bq));
+        let k_proj = Linear::new(wk, Some(bk));
+        let v_proj = Linear::new(wv, Some(bv));
+        let o_proj = candle_nn::linear(d_model, d_model, attn_vs.pp("out_proj"))?;
         let norm = candle_nn::layer_norm(d_model, 1e-5, vs.pp("norm"))?;
         Ok(Self {
             q_proj,
