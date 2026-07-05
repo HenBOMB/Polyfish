@@ -186,6 +186,7 @@ fn backend_from_arg(arg: SearchBackendArg, k: usize) -> SearchBackend {
     match arg {
         SearchBackendArg::Zero => SearchBackend::Zero,
         SearchBackendArg::Gumbel => SearchBackend::Gumbel { k },
+        SearchBackendArg::Heuristic => SearchBackend::Heuristic,
     }
 }
 

@@ -94,15 +94,13 @@ impl HeuristicMctsAgent {
         best_move
     }
 
-    pub fn select_move_with_analysis(
-        &self,
-        game: &mut Game,
-    ) -> (Option<Box<dyn Move>>, MctsAnalysis) {
+    /// Build the root (EndTurn filtered out when other moves exist, to
+    /// encourage acting before passing) and run the configured number of
+    /// search iterations. Returns (root, filtered_end_turn).
+    fn run_root_search(&self, game: &mut Game) -> (Node, bool) {
         let player_id = game.state.settings.current_player_turn_id;
         let mut root = Node::new(None, game);
 
-        // Filter out EndTurn from root moves if there are other options
-        // This encourages the AI to do actions before ending turn
         let mut filtered_end_turn = false;
         if let Some(moves) = &mut root.untried_moves {
             let has_other_moves = moves.iter().any(|m| m.move_type() != MoveType::EndTurn);
@@ -115,6 +113,78 @@ impl HeuristicMctsAgent {
         for _ in 0..self.iterations {
             self.search_iteration(game, &mut root, player_id);
         }
+        (root, filtered_end_turn)
+    }
+
+    /// Network-free analogue of the NN agents' training-data API: returns the
+    /// played move plus root visit counts (the policy target), sampling by
+    /// visits for early-game diversity at the same threshold the Zero agent
+    /// uses. Lets self_play generate imitation corpora from the heuristic.
+    pub fn select_move_with_decomposed_visits(
+        &self,
+        game: &mut Game,
+        move_count: usize,
+    ) -> (Option<Box<dyn Move>>, Vec<crate::ai::mcts_types::MoveVisit>) {
+        use crate::ai::mcts_types::MoveVisit;
+
+        let (root, filtered_end_turn) = self.run_root_search(game);
+
+        let visits: Vec<MoveVisit> = root
+            .children
+            .iter()
+            .filter_map(|child| {
+                let m = child.move_to_here.as_ref()?;
+                Some(MoveVisit {
+                    move_type: m.move_type(),
+                    visits: child.visits,
+                    source_idx: m.source_idx().ok(),
+                    target_idx: m.target_idx().ok(),
+                    structure_type: m.structure_type().ok(),
+                    unit_type: m.unit_type().ok(),
+                    tech_type: m.tech_type().ok(),
+                    ability_type: m.ability_type().ok(),
+                })
+            })
+            .collect();
+
+        let sampled_idx = if move_count
+            < crate::ai::mcts_zero::ZeroMctsAgent::TEMPERATURE_MOVE_THRESHOLD
+            && root.children.len() > 1
+        {
+            use rand::distributions::{Distribution, WeightedIndex};
+            let weights: Vec<f32> = root.children.iter().map(|c| c.visits.max(0.0)).collect();
+            // All-zero weights error out; fall through to argmax below.
+            WeightedIndex::new(&weights)
+                .ok()
+                .map(|dist| dist.sample(&mut rand::thread_rng()))
+        } else {
+            None
+        };
+
+        let best_move = match sampled_idx {
+            Some(i) => root
+                .children
+                .into_iter()
+                .nth(i)
+                .and_then(|n| n.move_to_here),
+            None => root
+                .children
+                .into_iter()
+                .max_by(|a, b| a.visits.partial_cmp(&b.visits).unwrap())
+                .and_then(|n| n.move_to_here),
+        };
+
+        if best_move.is_none() && filtered_end_turn {
+            return (Some(Box::new(EndTurnMove)), visits);
+        }
+        (best_move, visits)
+    }
+
+    pub fn select_move_with_analysis(
+        &self,
+        game: &mut Game,
+    ) -> (Option<Box<dyn Move>>, MctsAnalysis) {
+        let (root, filtered_end_turn) = self.run_root_search(game);
 
         // Analysis extraction
         let mut evaluations: Vec<MoveEvaluation> = root
