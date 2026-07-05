@@ -2,9 +2,12 @@
 set -e
 
 # NUM_GAMES/MCTS_ITERS/ACTORS/EVAL_SERVERS match self_play CLI flags.
-# Games/iteration doubled, iterations halved: same total games, faster wall time.
-# Schedules and milestone cadence recalibrated for new window.
+# All iteration-keyed schedules (total iterations, curriculum pacing,
+# checkpoint cadence, milestone spacing, early-exit patience, replay-buffer
+# retention) are tuned in GAMES at BASELINE_GAMES games/iteration and derived
+# from -g below — changing -g keeps the training regime per game identical.
 # See self_play --help and expert_boost_throughput.md for details.
+BASELINE_GAMES=64
 ITERATIONS=500
 NUM_GAMES=64
 export MCTS_ITERS=64
@@ -12,9 +15,10 @@ export MCTS_ITERS=64
 # Throughput scales with concurrent games; small NUM_GAMES (-g) is a real limiter, not this knob.
 # See expert_boost_throughput.md for details.
 ACTORS=128
-# 0 = auto: 2 on metal, 1 on tch/candle. Don't force >1 on tch —
-# MPS queue halves performance with 2 tch shards.
-EVAL_SERVERS=0
+# 3 servers × 2 workers measured best on metal after buffer pooling
+# (~610-650 moves/s — see expert_boost_throughput.md). 0 = auto (2 on metal,
+# 1 on tch/candle). Don't force >1 on tch — MPS serializes across shards.
+EVAL_SERVERS=3
 # self_play picks fastest backend: metal, tch, or candle.
 # Override with --eval-backend if needed.
 export RUST_BACKTRACE=1
@@ -103,6 +107,7 @@ while getopts "fbcri:g:n:a:e:p:d:" opt; do
       ;;
     i)
       ITERATIONS=$OPTARG
+      ITERATIONS_SET=true
       ;;
     g)
       NUM_GAMES=$OPTARG
@@ -118,6 +123,7 @@ while getopts "fbcri:g:n:a:e:p:d:" opt; do
       ;;
     p)
       EARLY_EXIT_PATIENCE=$OPTARG
+      PATIENCE_SET=true
       ;;
     d)
       EARLY_EXIT_MIN_DELTA=$OPTARG
@@ -128,6 +134,26 @@ while getopts "fbcri:g:n:a:e:p:d:" opt; do
       ;;
   esac
 done
+
+# Derive iteration-keyed schedules from -g so the regime is constant in
+# GAMES: scaled(x) = max(1, round(x * BASELINE_GAMES / NUM_GAMES)).
+scaled() {
+    awk -v x="$1" -v b="$BASELINE_GAMES" -v g="$NUM_GAMES" \
+        'BEGIN { v = int(x * b / g + 0.5); print (v < 1 ? 1 : v) }'
+}
+if [ "${ITERATIONS_SET:-false}" != true ]; then
+    ITERATIONS=$(scaled "$ITERATIONS")
+fi
+if [ "${PATIENCE_SET:-false}" != true ] && [ "$EARLY_EXIT_PATIENCE" -gt 0 ]; then
+    EARLY_EXIT_PATIENCE=$(scaled "$EARLY_EXIT_PATIENCE")
+fi
+CHECKPOINT_EVERY=$(scaled 50)
+MILESTONE_EVERY=$(scaled 100)
+# Replay window: constant ~10*BASELINE_GAMES games regardless of -g.
+# train.py reads REPLAY_BUFFER_FILES; archive pruning keeps window + 1 in sync.
+ARCHIVE_KEEP=$(scaled 10)
+export REPLAY_BUFFER_FILES=$ARCHIVE_KEEP
+echo "Schedule (games-based, -g $NUM_GAMES vs baseline $BASELINE_GAMES): $ITERATIONS iterations, checkpoint every $CHECKPOINT_EVERY, milestone every $MILESTONE_EVERY, patience $EARLY_EXIT_PATIENCE, replay window $ARCHIVE_KEEP files"
 
 # Policy-loss stall tracking (across iterations of the loop below). Scoped to
 # this script invocation only — a fresh run gets a fresh patience budget.
@@ -253,8 +279,13 @@ do
     TRIBE1=${SELECTED_TRIBES[0]}
     TRIBE2=${SELECTED_TRIBES[1]}
     
+    # Curriculum pacing is keyed to GAMES seen, not loop count: self_play's
+    # iteration thresholds (50/100/150) were tuned at BASELINE_GAMES/iter.
+    EFF_ITER=$(awk -v i="$i" -v b="$BASELINE_GAMES" -v g="$NUM_GAMES" \
+        'BEGIN { print int((i - 1) * g / b) + 1 }')
+
     SP_LOG=$(mktemp)
-    ./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$i" | tee "$SP_LOG"
+    ./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" | tee "$SP_LOG"
     SP_STATUS=${PIPESTATUS[0]}
     rm -f "$SP_LOG"
     if [ "$SP_STATUS" -ne 0 ]; then
@@ -299,8 +330,8 @@ do
     echo "Iteration $i complete. Type: $MATCH_TYPE | Avg: $AVG_SCORE | Loss: $LOSS"
     echo "  -> STATS/GAME: Captures: $AVG_CAPTURES | Harvests: $AVG_HARVESTS | Builds: $AVG_BUILDS | Tech: $AVG_RESEARCH | Attacks: $AVG_ATTACKS | Revealed: $AVG_REVEALED_TILES | Owned: $AVG_CAPTURED_TILES"
     
-    # 4. Checkpoint (Every 50 iterations)
-    if [ $((i % 50)) -eq 0 ]; then
+    # 4. Checkpoint (every CHECKPOINT_EVERY iterations ≈ every 50*BASELINE_GAMES games)
+    if [ $((i % CHECKPOINT_EVERY)) -eq 0 ]; then
         TS=$(date +%Y%m%d_%H%M%S)
         echo "Creating checkpoint for iteration $i (Timestamp: $TS)..."
         cp model.safetensors "checkpoints/model_checkpoint_iter${i}_${TS}.safetensors"
@@ -324,8 +355,9 @@ do
                 # Keep the last 50 most recent
                 KEEP=true
             elif [ -n "$ITER_VAL" ]; then
-                # Keep historical milestones
-                if [ $((ITER_VAL % 100)) -eq 0 ] || [ "$ITER_VAL" -eq 1 ]; then
+                # Keep historical milestones (games-based spacing; checkpoints
+                # from runs with a different -g prune on this run's spacing)
+                if [ $((ITER_VAL % MILESTONE_EVERY)) -eq 0 ] || [ "$ITER_VAL" -eq 1 ]; then
                     KEEP=true
                 fi
             fi
@@ -342,9 +374,10 @@ do
     # Use || true to avoid script exit if no games were generated
     mv games_*.safetensors archive/ 2>/dev/null || true
     
-    # Keep only the last 10 game files (matches train.py's replay_buffer_size;
-    # this comment used to claim 10 while the code kept 30 — now actually true)
-    ls -t archive/games_*.safetensors 2>/dev/null | tail -n +11 | xargs -r rm
+    # Keep only ARCHIVE_KEEP game files — a constant ~10*BASELINE_GAMES-game
+    # replay window regardless of -g (train.py reads the same value via
+    # REPLAY_BUFFER_FILES)
+    ls -t archive/games_*.safetensors 2>/dev/null | tail -n +$((ARCHIVE_KEEP + 1)) | xargs -r rm
 
     # 5. Early-exit if policy loss has stalled across iterations
     if [ "$EARLY_EXIT_PATIENCE" -gt 0 ] && [ -n "$POLICY_LOSS" ]; then

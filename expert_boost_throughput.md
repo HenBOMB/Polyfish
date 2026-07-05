@@ -32,7 +32,8 @@ not software waste.
 | metal (MPSGraph) backend, cached executables, 32 actors / 1 server | 242* |
 | metal + actor scaling (96 actors / 3 sharded servers) | 435* |
 | **metal + pipelined workers (128 actors / 2 servers × 2 workers)** | **~578*** |
-| **Arc'd rows + async GPU submit, depth-2 worker pipeline (2×2)** | **~742** |
+| Arc'd rows + async GPU submit, depth-2 worker pipeline (best: 4×2) | ~593 (wash) |
+| **+ per-worker MTLBuffer pooling (best: 3 servers × 2 workers)** | **~610–650** |
 | **Actor ceiling** (dummy evaluator, no GPU — the hard cap) | **~1,650** |
 
 *\* Jul 5 numbers are on a newer `model.safetensors` than the Jul 4 rows — games
@@ -260,9 +261,12 @@ values (5–9 *and* 47–61); the cache converges to hits via 69 one-time compil
 small set of common sizes." The stale `metal_network.rs` module-doc comment claiming
 otherwise has been corrected.
 
-## Arc'd rows + async GPU pipeline (Jul 5, later) — MEASURED, 467 → 742
+## Arc'd rows + async GPU pipeline (Jul 5, later) — MEASURED: a wash (~593), but the instrumentation found the real cost
 
-Levers 1 and "async completion" landed together and closed most of the sim→real gap:
+Levers 1 and "async completion" landed together. Net throughput effect ≈ zero — but the
+`prep/wait/post` split they added pinpoints where the next win actually is (see below).
+An early "742 moves/s" reading was a **phantom**: that run had deadlocked (below) and the
+number never survived re-measurement.
 
 1. **`EvalResult` rows are `Arc<RawPolicyOutput>`** (`eval_server.rs`). The ~3 full-row
    clones per row (cache insert, reply, cache hit) are now refcount bumps. Call sites
@@ -279,24 +283,68 @@ Levers 1 and "async completion" landed together and closed most of the sim→rea
      `TensorData` must be caller-preallocated.
    - Parity: `async_submit_matches_sync_forward` (in-tree test) proves the async path
      is byte-identical to sync `forward_batch` with two forwards in flight.
+   - **Deadlock (found via thread sample, fixed):** a worker holding undelivered
+     replies must **never block on the jobs mutex** — an idle sibling parks inside
+     `recv` *holding that lock*, and only wakes when actors submit work, possibly the
+     very actors the in-flight forward must reply to. Fires at end-of-run drain when
+     jobs go sparse. The poll branch uses `try_lock`; contention = "no job", settle
+     the in-flight forward instead.
 3. **`busy_s` now splits into `prep_s` / `wait_s` / `post_s`** in
    `EVAL_SERVER_STATS_AGG` — this is the instrument that adjudicates CPU-cost vs
    GPU-wait arguments from data instead of estimates.
 
-**Measured** (same-day A/B, 2 servers × 2 workers, 128 games / 128 actors, iter-40
-model): **467 → 742 moves/s (+59%)**; the previous best-of-sweep (5×3, 590) is beaten
-by 26% on a worse config. Rows/s 22.3K → 35.4K — at the top of the 32–40K band measured
-in isolation.
+**Measured** (`bench_eval_sweep.sh`, 128 games / 128 actors / 64 iters, iter-40 model,
+same-day A/B against the pre-change sweep):
 
-**Where the time goes now** (per forward, 33.2K forwards): prep 0.25ms + post 0.14ms +
-**wait 3.2ms** — 89% of eval-thread busy time is parked on the completion barrier.
-Eval-path CPU cost is essentially solved (~0.4ms/forward); the loop is now
-**GPU-queue-bound**. Consequences:
-- The old server×worker optimum (found under CPU-contended workers) is stale —
-  re-sweep. More queues may pay again, and the ~15 threads' worth of CPU handed back
-  should also let actors run closer to the ~1,650 ceiling.
-- The "adding more eval lanes regresses" NOT-DO below predates this change — treat it
-  as superseded pending the re-sweep.
+| config | before | after | prep/wait/post (s) |
+|---|---|---|---|
+| 1×3 | 314 | 308 | 67/87/3 |
+| 2×2 | 467 | 450 | 88/63/6 |
+| 2×3 | — | 459 | 94/84/6 |
+| 3×2 | 522 | 563 | 92/91/8 |
+| 3×3 | — | 584 | 105/147/11 |
+| **4×2** | 575 | **593** | 103/151/10 |
+| 5×3 | 590 | 538 | 210/312/28 |
+
+**Why a wash:** the split shows `post` collapsed (Arc-ing worked: ~0.1ms/forward) but
+`prep` ballooned to ~1–1.3ms/forward — the async entry point's required
+**pre-allocated result buffers add 5 `TensorData` (MTLBuffer) creations per forward**
+on top of the 2 inputs, and Metal buffer creation is expensive. The pipelining win and
+the added prep cost roughly cancel; low-shard configs (which coalesce fatter batches →
+fewer, bigger forwards) net slightly negative, high-shard slightly positive. 5×3's
+regression is 20 workers × heavy prep = pure CPU blowup (550s busy on 14 cores).
+
+### Buffer pooling (same day) — MEASURED: 590 → ~610–650, new best at 3×2
+
+The prep fix: pool `MTLBuffer` sets per worker (`metal_network.rs::BufferSet`,
+pow2-bucketed capacity, min 64 rows; acquired per forward, returned on readback).
+Inputs are written straight into the pooled buffer via `contents()`
+(`submit_features` — no intermediate flatten `Vec`), outputs are wrapped in
+exact-shape `TensorData::from_buffer` views (cheap) and never zero-filled (the
+executable overwrites every element). Parity test extended to recycled-buffer rounds
++ both entry points.
+
+| config | pre-change | +async (wash) | +pooling |
+|---|---|---|---|
+| 1×3 | 314 | 308 | 545 |
+| 2×2 | 467 | 450 | 571 |
+| 2×3 | — | 459 | 507 |
+| **3×2** | 522 | 563 | **649, repeat 612** |
+| 3×3 | — | 584 | 533 |
+| 4×2 | 575 | 593 | 604 |
+| 5×3 | 590 | 538 | 593 |
+
+Reading the splits: `prep` at 3×2 fell ~92s → 50s and `wait` now dominates every
+config — the eval path is finally **GPU-queue-bound**, not CPU-bound. The optimum
+moved from many-thin-queues (4×2/5×3, which papered over CPU-heavy workers) to
+**3 servers × 2 workers**; extra queues past ~6 now just add GPU contention (`wait`
+at 5×3: 416s). Single-server (1×3) went 308 → 545 — fat batches are cheap when prep
+is cheap, which reopens the unified-cache design as a contender.
+
+Remaining `prep` (~0.9ms/forward at 3×2) is row memcpys (~150µs), 7
+`TensorData::from_buffer` wrappers, the barrier CB, and the compile-delta fold —
+diminishing returns. The next real lever is `wait`: per-forward GPU cost
+(`reduced_precision_fast_math`, fp16 inference) or fewer rows (cache, tree reuse).
 
 ## What NOT to do
 

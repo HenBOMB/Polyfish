@@ -26,9 +26,9 @@
 //! workers, then 100% hits. See `expert_boost_throughput.md` (recompile
 //! investigation) for why bucketing/padding those sizes is net-negative.
 
-use crate::ai::features::{MAP_SIZE, NUM_CHANNELS};
+use crate::ai::features::{RawFeatures, MAP_SIZE, NUM_CHANNELS};
 use crate::ai::network::RawPolicyOutput;
-use apple_metal::{CommandBuffer, CommandQueue, MetalDevice};
+use apple_metal::{CommandBuffer, CommandQueue, MetalBuffer, MetalDevice};
 use apple_mpsgraph::{
     data_type, padding_style, tensor_named_data_layout, Convolution2DDescriptor,
     Convolution2DDescriptorInfo, Executable, ExecutableExecutionDescriptor, FeedDescription,
@@ -37,6 +37,7 @@ use apple_mpsgraph::{
 use safetensors::tensor::{Dtype, SafeTensors};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::time::Instant;
 
 const FILTERS: usize = 64;
@@ -47,6 +48,15 @@ const SPATIAL: usize = MAP_SIZE * MAP_SIZE; // 121
 const BN_EPS: f64 = 1e-5;
 const LN_EPS: f64 = 1e-5;
 const NUM_RES_BLOCKS: usize = 6;
+
+// Output head widths (rows are [win 1, action 11, source 121, target 121, option 192]).
+const ACTION_DIM: usize = 11;
+const OPTION_DIM: usize = 192;
+
+/// Smallest pooled-buffer capacity, in rows. Capacities are
+/// `batch.next_power_of_two().max(MIN_POOL_ROWS)`, so a worker ends up with a
+/// handful of size classes instead of one set per distinct batch size.
+const MIN_POOL_ROWS: usize = 64;
 
 /// Decode an IEEE 754 binary16 (half-precision) bit pattern to f32. Standard
 /// bit-manipulation conversion (e.g. Fabian Giesen's `half_to_float`); no
@@ -107,30 +117,47 @@ mod tests {
             (seed >> 40) as f32 / (1u64 << 24) as f32
         };
 
-        for &batch in &[1_usize, 3, 24, 57] {
-            let spatial: Vec<f32> = (0..batch * super::NUM_CHANNELS * super::SPATIAL)
-                .map(|_| next())
-                .collect();
-            let player: Vec<f32> = (0..batch * super::PLAYER_DIM).map(|_| next()).collect();
+        // Three rounds so later rounds run through *recycled* pool buffers —
+        // catches stale-data / aliasing bugs, not just first-use correctness.
+        for round in 0..3 {
+            for &batch in &[1_usize, 3, 24, 57] {
+                let spatial: Vec<f32> = (0..batch * super::NUM_CHANNELS * super::SPATIAL)
+                    .map(|_| next())
+                    .collect();
+                let player: Vec<f32> = (0..batch * super::PLAYER_DIM).map(|_| next()).collect();
+                let feats: Vec<crate::ai::features::RawFeatures> = (0..batch)
+                    .map(|i| crate::ai::features::RawFeatures {
+                        spatial: spatial[i * super::NUM_CHANNELS * super::SPATIAL
+                            ..(i + 1) * super::NUM_CHANNELS * super::SPATIAL]
+                            .to_vec(),
+                        player: player[i * super::PLAYER_DIM..(i + 1) * super::PLAYER_DIM]
+                            .to_vec(),
+                    })
+                    .collect();
 
-            let (sync_v, sync_p) = net.forward_batch(&spatial, &player, batch);
+                let (sync_v, sync_p) = net.forward_batch(&spatial, &player, batch);
 
-            let f1 = net.submit_batch(&spatial, &player, batch);
-            let f2 = net.submit_batch(&spatial, &player, batch);
-            f1.wait();
-            let (v1, p1) = f1.readback();
-            f2.wait();
-            let (v2, p2) = f2.readback();
+                // Two in flight at once (the depth-2 pipeline shape), via the
+                // two entry points the production paths use.
+                let f1 = net.submit_batch(&spatial, &player, batch);
+                let f2 = net.submit_features(&feats);
+                f1.wait();
+                let (v1, p1) = f1.readback();
+                f2.wait();
+                let (v2, p2) = f2.readback();
 
-            assert_eq!(sync_v, v1, "batch {batch}: first async values differ");
-            assert_eq!(sync_v, v2, "batch {batch}: second async values differ");
-            for i in 0..batch {
-                assert_eq!(sync_p[i].action_type, p1[i].action_type, "batch {batch} row {i}");
-                assert_eq!(sync_p[i].source_spatial, p1[i].source_spatial);
-                assert_eq!(sync_p[i].target_spatial, p1[i].target_spatial);
-                assert_eq!(sync_p[i].move_option, p1[i].move_option);
-                assert_eq!(p1[i].action_type, p2[i].action_type);
-                assert_eq!(p1[i].move_option, p2[i].move_option);
+                assert_eq!(sync_v, v1, "round {round} batch {batch}: submit_batch differs");
+                assert_eq!(sync_v, v2, "round {round} batch {batch}: submit_features differs");
+                for i in 0..batch {
+                    assert_eq!(sync_p[i].action_type, p1[i].action_type);
+                    assert_eq!(sync_p[i].source_spatial, p1[i].source_spatial);
+                    assert_eq!(sync_p[i].target_spatial, p1[i].target_spatial);
+                    assert_eq!(sync_p[i].move_option, p1[i].move_option);
+                    assert_eq!(p1[i].action_type, p2[i].action_type);
+                    assert_eq!(p1[i].source_spatial, p2[i].source_spatial);
+                    assert_eq!(p1[i].target_spatial, p2[i].target_spatial);
+                    assert_eq!(p1[i].move_option, p2[i].move_option);
+                }
             }
         }
     }
@@ -167,6 +194,10 @@ pub struct MetalPolyZeroNet {
     /// Compiled forward graphs, one per batch size seen so far. Built
     /// lazily on first use of a given size, then replayed.
     executables: RefCell<HashMap<usize, Executable>>,
+    /// Free device-buffer sets, reused across forwards. Per-forward MTLBuffer
+    /// allocation measured ~1ms/forward — the dominant eval-thread CPU cost
+    /// (`prep_s` in EVAL_SERVER_STATS_AGG) before pooling.
+    pool: Rc<RefCell<Vec<BufferSet>>>,
     /// Diagnostic counters (single-threaded, per-net): how many distinct-size
     /// graph compiles this net has paid, and their cumulative wall time. Used
     /// to measure whether executable recompiles are a real per-process cost.
@@ -239,6 +270,7 @@ impl MetalPolyZeroNet {
             queue,
             async_desc,
             executables: RefCell::new(HashMap::new()),
+            pool: Rc::new(RefCell::new(Vec::new())),
             compile_count: Cell::new(0),
             compile_us: Cell::new(0),
         })
@@ -658,43 +690,60 @@ impl MetalPolyZeroNet {
         slice_outputs(&results, batch)
     }
 
-    /// Submit a forward pass to the GPU without waiting for it. The returned
-    /// [`InFlightForward`] must be completed with [`InFlightForward::wait`] +
-    /// [`InFlightForward::readback`]; until then this thread is free to prep
-    /// and submit the next batch (the GPU executes queue submissions in
-    /// order, so per-forward completion is signaled by an empty barrier
-    /// command buffer committed immediately after the async run — it can
-    /// only complete once this forward has).
-    pub fn submit_batch(
-        &self,
-        spatial_flat: &[f32],
-        player_flat: &[f32],
-        batch: usize,
-    ) -> InFlightForward {
-        let h = MAP_SIZE;
-        let w = MAP_SIZE;
+    /// Allocate a fresh buffer set sized for `capacity_rows` rows.
+    fn new_set(&self, capacity_rows: usize) -> BufferSet {
+        let f32_buf = |elems: usize| -> MetalBuffer {
+            self.device
+                .new_buffer(elems * 4, 0) // 0 = shared storage (unified memory)
+                .expect("pool: MTLBuffer allocation failed")
+        };
+        BufferSet {
+            capacity_rows,
+            spatial: f32_buf(capacity_rows * NUM_CHANNELS * SPATIAL),
+            player: f32_buf(capacity_rows * PLAYER_DIM),
+            win: f32_buf(capacity_rows),
+            action: f32_buf(capacity_rows * ACTION_DIM),
+            source: f32_buf(capacity_rows * SPATIAL),
+            target: f32_buf(capacity_rows * SPATIAL),
+            option: f32_buf(capacity_rows * OPTION_DIM),
+        }
+    }
 
-        let spatial_data =
-            TensorData::from_f32_slice(&self.device, spatial_flat, &[batch, NUM_CHANNELS, h, w])
-                .expect("submit: spatial tensor data");
-        let player_data =
-            TensorData::from_f32_slice(&self.device, player_flat, &[batch, PLAYER_DIM])
-                .expect("submit: player tensor data");
+    /// Take the smallest free set that fits `batch` rows, or allocate one.
+    fn acquire_set(&self, batch: usize) -> BufferSet {
+        let mut pool = self.pool.borrow_mut();
+        let best = pool
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.capacity_rows >= batch)
+            .min_by_key(|(_, s)| s.capacity_rows)
+            .map(|(i, _)| i);
+        match best {
+            Some(i) => pool.swap_remove(i),
+            None => self.new_set(batch.next_power_of_two().max(MIN_POOL_ROWS)),
+        }
+    }
 
+    /// Wrap a filled buffer set in exact-shape `TensorData` views, async-run
+    /// the executable for `batch`, and commit the completion barrier.
+    fn submit_set(&self, set: BufferSet, batch: usize) -> InFlightForward {
+        let td = |buf: &MetalBuffer, shape: &[usize]| -> TensorData {
+            TensorData::from_buffer(buf, shape, data_type::FLOAT32)
+                .expect("pool: TensorData::from_buffer failed")
+        };
+        let spatial_td = td(&set.spatial, &[batch, NUM_CHANNELS, MAP_SIZE, MAP_SIZE]);
+        let player_td = td(&set.player, &[batch, PLAYER_DIM]);
         // The async entry point requires caller-allocated result buffers
         // (passing none reaches MPSGraph as an empty — not nil — results
-        // array, which the framework rejects). Shapes/order must match the
-        // compile targets: win, action, source, target, option.
-        let zeros = |elems: usize, shape: &[usize]| -> TensorData {
-            TensorData::from_f32_slice(&self.device, &vec![0.0_f32; elems], shape)
-                .expect("submit: result tensor data")
-        };
+        // array, which the framework rejects). Order matches the compile
+        // targets: win, action, source, target, option. No zero-fill: the
+        // executable overwrites every element of each output.
         let outputs = vec![
-            zeros(batch, &[batch, 1]),
-            zeros(batch * 11, &[batch, 11]),
-            zeros(batch * SPATIAL, &[batch, SPATIAL]),
-            zeros(batch * SPATIAL, &[batch, SPATIAL]),
-            zeros(batch * 192, &[batch, 192]),
+            td(&set.win, &[batch, 1]),
+            td(&set.action, &[batch, ACTION_DIM]),
+            td(&set.source, &[batch, SPATIAL]),
+            td(&set.target, &[batch, SPATIAL]),
+            td(&set.option, &[batch, OPTION_DIM]),
         ];
         let output_refs: Vec<&TensorData> = outputs.iter().collect();
 
@@ -705,7 +754,7 @@ impl MetalPolyZeroNet {
         executable
             .run_async_with_descriptor(
                 &self.queue,
-                &[&spatial_data, &player_data],
+                &[&spatial_td, &player_td],
                 Some(&output_refs),
                 Some(&self.async_desc),
             )
@@ -719,23 +768,91 @@ impl MetalPolyZeroNet {
 
         InFlightForward {
             batch,
-            _spatial: spatial_data,
-            _player: player_data,
+            set: Some(set),
+            _inputs: (spatial_td, player_td),
             outputs,
             barrier,
+            pool: Rc::clone(&self.pool),
         }
+    }
+
+    /// Submit a forward pass to the GPU without waiting for it. The returned
+    /// [`InFlightForward`] must be completed with [`InFlightForward::wait`] +
+    /// [`InFlightForward::readback`]; until then this thread is free to prep
+    /// and submit the next batch (the GPU executes queue submissions in
+    /// order, so per-forward completion is signaled by an empty barrier
+    /// command buffer committed immediately after the async run — it can
+    /// only complete once this forward has).
+    pub fn submit_batch(
+        &self,
+        spatial_flat: &[f32],
+        player_flat: &[f32],
+        batch: usize,
+    ) -> InFlightForward {
+        let set = self.acquire_set(batch);
+        write_f32(&set.spatial, spatial_flat);
+        write_f32(&set.player, player_flat);
+        self.submit_set(set, batch)
+    }
+
+    /// Like [`submit_batch`](Self::submit_batch), but copies each row's
+    /// features straight into the pooled device buffer — no intermediate
+    /// flattened `Vec` (unified memory makes the buffer CPU-writable).
+    pub fn submit_features(&self, feats: &[RawFeatures]) -> InFlightForward {
+        let batch = feats.len();
+        let set = self.acquire_set(batch);
+        let sp = set.spatial.contents().expect("pool: spatial contents") as *mut f32;
+        let pl = set.player.contents().expect("pool: player contents") as *mut f32;
+        let (mut so, mut po) = (0_usize, 0_usize);
+        for f in feats {
+            // SAFETY: the set was acquired free (no GPU work references it),
+            // capacity_rows >= batch, and rows are packed contiguously.
+            unsafe {
+                std::ptr::copy_nonoverlapping(f.spatial.as_ptr(), sp.add(so), f.spatial.len());
+                std::ptr::copy_nonoverlapping(f.player.as_ptr(), pl.add(po), f.player.len());
+            }
+            so += f.spatial.len();
+            po += f.player.len();
+        }
+        self.submit_set(set, batch)
     }
 }
 
-/// A forward pass submitted via [`MetalPolyZeroNet::submit_batch`] whose GPU
-/// execution may still be running. Keeps the input `TensorData` alive until
-/// completion. Not `Send`: lives and dies on the submitting worker thread.
+/// One pooled set of device buffers, big enough for `capacity_rows` rows:
+/// two inputs plus the five output heads. Acquired per forward, returned to
+/// the pool on readback.
+struct BufferSet {
+    capacity_rows: usize,
+    spatial: MetalBuffer,
+    player: MetalBuffer,
+    win: MetalBuffer,
+    action: MetalBuffer,
+    source: MetalBuffer,
+    target: MetalBuffer,
+    option: MetalBuffer,
+}
+
+/// Copy an f32 slice into a shared-storage Metal buffer.
+fn write_f32(buf: &MetalBuffer, src: &[f32]) {
+    // SAFETY: reinterpreting &[f32] as bytes for a memcpy.
+    let bytes =
+        unsafe { std::slice::from_raw_parts(src.as_ptr().cast::<u8>(), src.len() * 4) };
+    let written = buf.write_bytes(bytes);
+    debug_assert_eq!(written, bytes.len(), "pool: short write into Metal buffer");
+}
+
+/// A forward pass submitted via [`MetalPolyZeroNet::submit_batch`] /
+/// [`MetalPolyZeroNet::submit_features`] whose GPU execution may still be
+/// running. Owns its buffer set until [`readback`](Self::readback) returns
+/// it to the net's pool (a dropped-unread forward simply frees its buffers).
+/// Not `Send`: lives and dies on the submitting worker thread.
 pub struct InFlightForward {
     batch: usize,
-    _spatial: TensorData,
-    _player: TensorData,
+    set: Option<BufferSet>,
+    _inputs: (TensorData, TensorData),
     outputs: Vec<TensorData>,
     barrier: CommandBuffer,
+    pool: Rc<RefCell<Vec<BufferSet>>>,
 }
 
 impl InFlightForward {
@@ -746,9 +863,14 @@ impl InFlightForward {
         self.barrier.wait_until_completed();
     }
 
-    /// Read the outputs back to CPU floats. Only valid after [`wait`](Self::wait).
-    pub fn readback(self) -> (Vec<f32>, Vec<RawPolicyOutput>) {
-        slice_outputs(&self.outputs, self.batch)
+    /// Read the outputs back to CPU floats and return the buffer set to the
+    /// pool. Only valid after [`wait`](Self::wait).
+    pub fn readback(mut self) -> (Vec<f32>, Vec<RawPolicyOutput>) {
+        let out = slice_outputs(&self.outputs, self.batch);
+        if let Some(set) = self.set.take() {
+            self.pool.borrow_mut().push(set);
+        }
+        out
     }
 }
 

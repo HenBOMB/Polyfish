@@ -216,10 +216,11 @@ def train():
     # 1. Load Data
     fresh_files = glob.glob("games_*.safetensors")
     archive_files = sorted(glob.glob("archive/games_*.safetensors"), key=os.path.getmtime, reverse=True)
-    # Replay window: use 10 recent archive files for ~700-game buffer (see run_training_loop.sh).
-    # Each sample is trained ~20 times before pruning; reduces overfitting risk.
-    # Keep pruning in sync: archive window size + 1.
-    replay_buffer_size = 10
+    # Replay window in FILES; run_training_loop.sh exports REPLAY_BUFFER_FILES
+    # scaled by its -g so the buffer stays ~constant in GAMES (default 10
+    # files ≈ 700 games at 64 games/file). Each sample is trained ~20 times
+    # before pruning; reduces overfitting risk. Archive pruning keeps window+1.
+    replay_buffer_size = int(os.environ.get("REPLAY_BUFFER_FILES", "10"))
     game_files = fresh_files + archive_files[:replay_buffer_size]
 
     if not game_files:

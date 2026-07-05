@@ -608,16 +608,7 @@ fn run_metal_pipelined_loop(
                             requests,
                             per_request_len,
                         } = job;
-                        let batch_size = miss_features.len();
-                        let mut spatial_flat =
-                            Vec::with_capacity(batch_size * RawFeatures::spatial_len());
-                        let mut player_flat =
-                            Vec::with_capacity(batch_size * RawFeatures::player_len());
-                        for feat in &miss_features {
-                            spatial_flat.extend_from_slice(&feat.spatial);
-                            player_flat.extend_from_slice(&feat.player);
-                        }
-                        let fwd = net.submit_batch(&spatial_flat, &player_flat, batch_size);
+                        let fwd = net.submit_features(&miss_features);
                         let prep = t0.elapsed().as_micros() as u64;
                         stats.forwards.fetch_add(1, Ordering::Relaxed);
                         stats.prep_us.fetch_add(prep, Ordering::Relaxed);
@@ -685,10 +676,24 @@ fn run_metal_pipelined_loop(
                     let mut inflight: Option<SubmittedJob> = None;
                     loop {
                         let job = if inflight.is_some() {
-                            match jobs_rx.lock().expect("BUG: jobs mutex poisoned").try_recv() {
-                                Ok(job) => Some(job),
-                                Err(std_mpsc::TryRecvError::Empty) => None,
-                                Err(std_mpsc::TryRecvError::Disconnected) => break,
+                            // Never block on the jobs mutex while holding
+                            // undelivered replies: an idle sibling parks
+                            // inside `recv` *holding the lock* and only wakes
+                            // when actors submit more work — possibly the very
+                            // actors our in-flight forward must reply to.
+                            // Blocking here deadlocks (measured, end-of-run
+                            // drain); on contention just settle the in-flight
+                            // forward instead.
+                            match jobs_rx.try_lock() {
+                                Ok(rx) => match rx.try_recv() {
+                                    Ok(job) => Some(job),
+                                    Err(std_mpsc::TryRecvError::Empty) => None,
+                                    Err(std_mpsc::TryRecvError::Disconnected) => break,
+                                },
+                                Err(std::sync::TryLockError::WouldBlock) => None,
+                                Err(std::sync::TryLockError::Poisoned(_)) => {
+                                    panic!("BUG: jobs mutex poisoned")
+                                }
                             }
                         } else {
                             match jobs_rx.lock().expect("BUG: jobs mutex poisoned").recv() {
