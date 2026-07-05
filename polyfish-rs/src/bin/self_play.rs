@@ -93,6 +93,29 @@ struct GameResult {
     /// counts at game end, for diagnosing where score gains come from.
     revealed_tiles: i32,
     captured_tiles: i32,
+    /// Turn by which 50%/80%/100% of the map's initial open villages (and
+    /// ruins) had been captured by either player — how *directly* the AI
+    /// seeks them out. Censored at max_turns when a game never gets there.
+    villages_t2c_p50: f32,
+    villages_t2c_p80: f32,
+    villages_t2c_all: f32,
+    ruins_t2c_p50: f32,
+    ruins_t2c_p80: f32,
+    ruins_t2c_all: f32,
+}
+
+/// Turn by which `frac` of `initial` capturables were taken, given the
+/// chronological list of capture turns. `censor` (game length) when the game
+/// never reached that fraction or the map had none to begin with.
+fn t2c_turn(capture_turns: &[i32], initial: usize, frac: f64, censor: i32) -> f32 {
+    if initial == 0 {
+        return censor as f32;
+    }
+    let needed = ((initial as f64 * frac).ceil() as usize).max(1);
+    capture_turns
+        .get(needed - 1)
+        .map(|&t| t as f32)
+        .unwrap_or(censor as f32)
 }
 
 /// Load the main network (and opponent network, defaulting to the main one)
@@ -173,6 +196,29 @@ fn play_single_game(
     game.state.settings.mode = polyfish::types::ModeType::Perfection;
     game.state.settings.max_turns = max_turns;
     game.post_load();
+
+    // Time-to-capture tracking: snapshot the map's initial open villages and
+    // ruins, then record the turn each one is taken (by either player).
+    let mut open_villages: std::collections::HashSet<i32> = std::collections::HashSet::new();
+    let mut open_ruins: std::collections::HashSet<i32> = std::collections::HashSet::new();
+    for (&idx, s) in game.state.structures.iter() {
+        let Some(s) = s else { continue };
+        match s.structure_type {
+            polyfish::types::StructureType::Village
+                if game.state.tiles.get(&idx).map_or(false, |t| t.owner == 0) =>
+            {
+                open_villages.insert(idx);
+            }
+            polyfish::types::StructureType::Ruin => {
+                open_ruins.insert(idx);
+            }
+            _ => {}
+        }
+    }
+    let initial_villages = open_villages.len();
+    let initial_ruins = open_ruins.len();
+    let mut village_capture_turns: Vec<i32> = Vec::new();
+    let mut ruin_capture_turns: Vec<i32> = Vec::new();
 
     let prior_w = HEURISTIC_PRIOR_W0 * HEURISTIC_PRIOR_DECAY.powi(iteration as i32);
 
@@ -321,6 +367,17 @@ fn play_single_game(
                 .entry(m_type)
                 .or_insert(0) += 1;
 
+            if m_type == polyfish::types::MoveType::Capture {
+                if let Ok(src) = m.source_idx() {
+                    let idx = src as i32;
+                    if open_villages.remove(&idx) {
+                        village_capture_turns.push(game.state.settings.turn);
+                    } else if open_ruins.remove(&idx) {
+                        ruin_capture_turns.push(game.state.settings.turn);
+                    }
+                }
+            }
+
             flat_recap.push((
                 game.state.settings.turn,
                 game.state.settings.current_player_turn_id,
@@ -431,6 +488,12 @@ fn play_single_game(
         moves: move_count,
         revealed_tiles,
         captured_tiles,
+        villages_t2c_p50: t2c_turn(&village_capture_turns, initial_villages, 0.5, max_turns),
+        villages_t2c_p80: t2c_turn(&village_capture_turns, initial_villages, 0.8, max_turns),
+        villages_t2c_all: t2c_turn(&village_capture_turns, initial_villages, 1.0, max_turns),
+        ruins_t2c_p50: t2c_turn(&ruin_capture_turns, initial_ruins, 0.5, max_turns),
+        ruins_t2c_p80: t2c_turn(&ruin_capture_turns, initial_ruins, 0.8, max_turns),
+        ruins_t2c_all: t2c_turn(&ruin_capture_turns, initial_ruins, 1.0, max_turns),
         winner_score,
         recap: ModReplay {
             game_state: initial_state,
@@ -1092,6 +1155,7 @@ fn main() -> anyhow::Result<()> {
     let mut total_attacks = 0;
     let mut total_revealed_tiles: i64 = 0;
     let mut total_captured_tiles: i64 = 0;
+    let mut total_t2c = [0.0f64; 6]; // villages p50/p80/all, ruins p50/p80/all
 
     let mut total_moves_by_turn: HashMap<i32, HashMap<polyfish::types::MoveType, usize>> =
         HashMap::new();
@@ -1101,6 +1165,16 @@ fn main() -> anyhow::Result<()> {
         total_moves += result.moves;
         total_revealed_tiles += result.revealed_tiles as i64;
         total_captured_tiles += result.captured_tiles as i64;
+        for (acc, v) in total_t2c.iter_mut().zip([
+            result.villages_t2c_p50,
+            result.villages_t2c_p80,
+            result.villages_t2c_all,
+            result.ruins_t2c_p50,
+            result.ruins_t2c_p80,
+            result.ruins_t2c_all,
+        ]) {
+            *acc += v as f64;
+        }
         if result.winner_score > max_score {
             max_score = result.winner_score;
             best_recap = Some(result.recap.clone());
@@ -1391,6 +1465,12 @@ fn main() -> anyhow::Result<()> {
         "avg_attacks": avg_attacks,
         "avg_revealed_tiles": avg_revealed_tiles,
         "avg_captured_tiles": avg_captured_tiles,
+        "villages_t2c_p50": (total_t2c[0] / args.num_games as f64) as f32,
+        "villages_t2c_p80": (total_t2c[1] / args.num_games as f64) as f32,
+        "villages_t2c_all": (total_t2c[2] / args.num_games as f64) as f32,
+        "ruins_t2c_p50": (total_t2c[3] / args.num_games as f64) as f32,
+        "ruins_t2c_p80": (total_t2c[4] / args.num_games as f64) as f32,
+        "ruins_t2c_all": (total_t2c[5] / args.num_games as f64) as f32,
         "games_file": games_file,
         "moves_by_turn": moves_by_turn,
     });

@@ -40,6 +40,12 @@ HEADER = [
     "avg_attacks",
     "avg_revealed_tiles",
     "avg_captured_tiles",
+    "villages_t2c_p50",
+    "villages_t2c_p80",
+    "villages_t2c_all",
+    "ruins_t2c_p50",
+    "ruins_t2c_p80",
+    "ruins_t2c_all",
     "avg_moves",
     "match_type",
 ]
@@ -108,7 +114,7 @@ def migrate_csv(path: str = CSV_PATH) -> None:
         first_line = f.readline().strip()
     if first_line.startswith("run_id,"):
         headers = first_line.split(",")
-        if "iter_started_at" in headers:
+        if headers == HEADER:
             return
         if "run_started_at" in headers:
             rows = _read_rows(path)
@@ -116,6 +122,13 @@ def migrate_csv(path: str = CSV_PATH) -> None:
                 row["iter_started_at"] = row.pop("run_started_at", "")
             _write_rows(rows, path)
             print(f"Migrated {len(rows)} rows: run_started_at -> iter_started_at")
+            return
+        if "iter_started_at" in headers:
+            # Current-era file missing newly added columns: rewrite under the
+            # current HEADER; old rows keep blanks for the new columns.
+            rows = _read_rows(path)
+            _write_rows(rows, path)
+            print(f"Migrated {len(rows)} rows to updated header ({len(HEADER)} columns)")
             return
         return
     rows = _read_rows(path)
@@ -472,6 +485,12 @@ def append_row(
         "avg_attacks": game_metrics.get("avg_attacks", ""),
         "avg_revealed_tiles": game_metrics.get("avg_revealed_tiles", ""),
         "avg_captured_tiles": game_metrics.get("avg_captured_tiles", ""),
+        "villages_t2c_p50": game_metrics.get("villages_t2c_p50", ""),
+        "villages_t2c_p80": game_metrics.get("villages_t2c_p80", ""),
+        "villages_t2c_all": game_metrics.get("villages_t2c_all", ""),
+        "ruins_t2c_p50": game_metrics.get("ruins_t2c_p50", ""),
+        "ruins_t2c_p80": game_metrics.get("ruins_t2c_p80", ""),
+        "ruins_t2c_all": game_metrics.get("ruins_t2c_all", ""),
         "avg_moves": game_metrics.get("avg_moves", ""),
         "match_type": normalize_match_type(match_type),
     }
