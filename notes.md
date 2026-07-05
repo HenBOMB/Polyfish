@@ -102,7 +102,7 @@ I am now bottlenecked on CPU which I knew I would end up here. Effect plateaus a
 
 Update: I was actually bottlenecked on GPU but it was GPU idle time. Digging more.
 
-After lots of profiling I found that the problem was the poor MPS kernel of candle. It is not as performant as the official one so we're now using `tch-rs` bindings and it's much more performant.
+After lots of profiling I found that the problem was the poor MPS kernel of candle. I went on a very long journey to make things run better on my hardware and get closer to the actor ceiling.
 
 
 | Milestone | moves/sec |

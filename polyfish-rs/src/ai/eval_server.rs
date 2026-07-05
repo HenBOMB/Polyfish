@@ -34,8 +34,11 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 /// One evaluated leaf: NN value estimate + decomposed policy logits, all as
-/// owned CPU floats.
-pub type EvalResult = (f32, RawPolicyOutput);
+/// owned CPU floats. The policy row is `Arc`d because every row is shared
+/// between the LRU cache and one or more replies — at ~1.8 KB × tens of
+/// thousands of rows/s, cloning full rows for each insert/reply was a
+/// measurable allocator tax on the eval threads.
+pub type EvalResult = (f32, Arc<RawPolicyOutput>);
 
 struct EvalRequest {
     features: Vec<RawFeatures>,
@@ -118,7 +121,18 @@ pub struct EvalServerStats {
     pub max_batch: AtomicU64,
     /// Wall time spent inside tensorize + forward + readback, in microseconds.
     /// Everything else is the server thread sitting idle waiting for work.
+    /// On the metal pipelined path this is `prep + wait + post`.
     pub busy_us: AtomicU64,
+    /// Metal only — `busy_us` component: CPU time flattening features,
+    /// creating input tensors, and async-submitting to the GPU queue.
+    pub prep_us: AtomicU64,
+    /// Metal only — `busy_us` component: time blocked on the per-forward
+    /// completion barrier. High `wait` with low `prep`+`post` means the GPU
+    /// queue is the limit, not eval-thread CPU (and vice versa).
+    pub wait_us: AtomicU64,
+    /// Metal only — `busy_us` component: CPU time reading outputs back,
+    /// building rows, scattering replies, and shipping cache inserts.
+    pub post_us: AtomicU64,
     /// Leaf rows served from the eval cache without hitting the GPU.
     pub cache_hits: AtomicU64,
     /// Leaf rows that missed the cache and required a GPU `forward_t` row.
@@ -472,8 +486,8 @@ fn evaluate_batch(
         debug_assert_eq!(values.len(), batch_size);
         debug_assert_eq!(policy_rows.len(), batch_size);
 
-        for (i, &flat_idx) in miss_slots.iter().enumerate() {
-            let result: EvalResult = (values[i], policy_rows[i].clone());
+        for ((&flat_idx, row), i) in miss_slots.iter().zip(policy_rows).zip(0..) {
+            let result: EvalResult = (values[i], Arc::new(row));
             if let Some(c) = cache.as_mut() {
                 c.put(miss_hashes[i], result.clone());
             }
@@ -519,23 +533,36 @@ struct MetalJob {
     per_request_len: Vec<usize>,
 }
 
+/// A [`MetalJob`] whose forward has been async-submitted to the GPU but not
+/// yet completed: the in-flight handle plus everything needed to finish the
+/// replies once it lands.
+#[cfg(feature = "metal-eval")]
+struct SubmittedJob {
+    fwd: crate::ai::metal_network::InFlightForward,
+    miss_hashes: Vec<u64>,
+    miss_slots: Vec<usize>,
+    row_results: Vec<Option<EvalResult>>,
+    requests: Vec<EvalRequest>,
+    per_request_len: Vec<usize>,
+}
+
 /// Stage 2 of the MPSGraph bypass plan: pipelined eval for the metal
 /// backend.
 ///
-/// MPSGraph dispatch through `MetalPolyZeroNet::forward_batch` is
-/// synchronous per command queue (the binding exposes no execution
-/// completion handler, so per-queue blocking is the only completion
-/// signal). Measured on M3 Max: one blocking queue tops out ~22K rows/s
-/// while 2–4 independent queues reach ~32–40K rows/s aggregate — the GPU
-/// has headroom that a single blocked thread can't reach.
+/// Measured on M3 Max: one blocking queue tops out ~22K rows/s while 2–4
+/// independent queues reach ~32–40K rows/s aggregate — the GPU has headroom
+/// a single blocked thread can't reach.
 ///
 /// So the server splits into:
 /// - the **coalescer** (this thread): coalesces requests, resolves the LRU
 ///   cache, and hands each cache-missing batch to a worker channel;
 /// - `pipeline_workers` **GPU workers**: each owns its own
 ///   `MetalPolyZeroNet` (own weights copy, own `MTLCommandQueue`, own
-///   compiled-executable cache), pulls jobs, runs the forward, and replies
-///   straight to the requesting actors.
+///   compiled-executable cache) and runs a depth-2 software pipeline:
+///   async-submit forward N+1 (`MetalPolyZeroNet::submit_batch`), then
+///   barrier-wait + reply for forward N — so each worker's CPU work
+///   (flatten, encode, readback, scatter) overlaps its own GPU execution
+///   instead of serializing with it.
 ///
 /// Unlike hash-sharding across N servers, the batch stream and cache stay
 /// unified — batches keep their full coalesced size instead of being split
@@ -569,22 +596,18 @@ fn run_metal_pipelined_loop(
                     let net = crate::ai::metal_network::MetalPolyZeroNet::load(&model_path)
                         .expect("BUG: failed to load metal model for eval worker");
                     let (mut last_compiles, mut last_compile_us) = (0u64, 0u64);
-                    loop {
-                        // Hold the lock only to receive; forward runs unlocked.
-                        let job = match jobs_rx.lock().expect("BUG: jobs mutex poisoned").recv() {
-                            Ok(job) => job,
-                            Err(_) => return, // coalescer gone; shut down
-                        };
-                        let busy_start = Instant::now();
+
+                    // Flatten + async-submit one job; CPU cost lands in `prep_us`.
+                    let mut submit = |job: MetalJob| -> SubmittedJob {
+                        let t0 = Instant::now();
                         let MetalJob {
                             miss_features,
                             miss_hashes,
                             miss_slots,
-                            mut row_results,
+                            row_results,
                             requests,
                             per_request_len,
                         } = job;
-
                         let batch_size = miss_features.len();
                         let mut spatial_flat =
                             Vec::with_capacity(batch_size * RawFeatures::spatial_len());
@@ -594,28 +617,14 @@ fn run_metal_pipelined_loop(
                             spatial_flat.extend_from_slice(&feat.spatial);
                             player_flat.extend_from_slice(&feat.player);
                         }
-                        let (values, policy_rows) =
-                            net.forward_batch(&spatial_flat, &player_flat, batch_size);
-                        debug_assert_eq!(values.len(), batch_size);
-
-                        let mut cache_inserts = Vec::with_capacity(batch_size);
-                        for (i, &flat_idx) in miss_slots.iter().enumerate() {
-                            let result: EvalResult = (values[i], policy_rows[i].clone());
-                            cache_inserts.push((miss_hashes[i], result.clone()));
-                            row_results[flat_idx] = Some(result);
-                        }
-                        scatter_replies(requests, per_request_len, row_results);
-                        // Coalescer may have shut down while we ran; then the
-                        // cache no longer matters.
-                        let _ = cache_tx.send(cache_inserts);
-
+                        let fwd = net.submit_batch(&spatial_flat, &player_flat, batch_size);
+                        let prep = t0.elapsed().as_micros() as u64;
                         stats.forwards.fetch_add(1, Ordering::Relaxed);
-                        stats
-                            .busy_us
-                            .fetch_add(busy_start.elapsed().as_micros() as u64, Ordering::Relaxed);
+                        stats.prep_us.fetch_add(prep, Ordering::Relaxed);
+                        stats.busy_us.fetch_add(prep, Ordering::Relaxed);
 
                         // Fold this net's cumulative compile counters (grown
-                        // inside forward_batch on a cold size) into the shared
+                        // inside submit_batch on a cold size) into the shared
                         // stats as a delta, so the AGG line sums across workers.
                         let (cc, cu) = (net.compiles(), net.compile_us());
                         if cc != last_compiles {
@@ -624,6 +633,89 @@ fn run_metal_pipelined_loop(
                             last_compiles = cc;
                             last_compile_us = cu;
                         }
+                        SubmittedJob {
+                            fwd,
+                            miss_hashes,
+                            miss_slots,
+                            row_results,
+                            requests,
+                            per_request_len,
+                        }
+                    };
+
+                    // Barrier-wait + readback + reply; time splits into
+                    // `wait_us` (GPU) and `post_us` (CPU).
+                    let complete = |sub: SubmittedJob| {
+                        let SubmittedJob {
+                            fwd,
+                            miss_hashes,
+                            miss_slots,
+                            mut row_results,
+                            requests,
+                            per_request_len,
+                        } = sub;
+                        let t0 = Instant::now();
+                        fwd.wait();
+                        let wait = t0.elapsed().as_micros() as u64;
+
+                        let t1 = Instant::now();
+                        let (values, policy_rows) = fwd.readback();
+                        debug_assert_eq!(values.len(), miss_slots.len());
+
+                        let mut cache_inserts = Vec::with_capacity(miss_slots.len());
+                        for ((&flat_idx, row), i) in miss_slots.iter().zip(policy_rows).zip(0..) {
+                            let result: EvalResult = (values[i], Arc::new(row));
+                            cache_inserts.push((miss_hashes[i], result.clone()));
+                            row_results[flat_idx] = Some(result);
+                        }
+                        scatter_replies(requests, per_request_len, row_results);
+                        // Coalescer may have shut down while we ran; then the
+                        // cache no longer matters.
+                        let _ = cache_tx.send(cache_inserts);
+                        let post = t1.elapsed().as_micros() as u64;
+                        stats.wait_us.fetch_add(wait, Ordering::Relaxed);
+                        stats.post_us.fetch_add(post, Ordering::Relaxed);
+                        stats.busy_us.fetch_add(wait + post, Ordering::Relaxed);
+                    };
+
+                    // Depth-2 software pipeline: keep one forward in flight on
+                    // the GPU while this thread preps/submits the next and
+                    // replies for the previous. Block on the jobs channel only
+                    // when nothing is in flight, so an idle worker parks.
+                    let mut inflight: Option<SubmittedJob> = None;
+                    loop {
+                        let job = if inflight.is_some() {
+                            match jobs_rx.lock().expect("BUG: jobs mutex poisoned").try_recv() {
+                                Ok(job) => Some(job),
+                                Err(std_mpsc::TryRecvError::Empty) => None,
+                                Err(std_mpsc::TryRecvError::Disconnected) => break,
+                            }
+                        } else {
+                            match jobs_rx.lock().expect("BUG: jobs mutex poisoned").recv() {
+                                Ok(job) => Some(job),
+                                Err(_) => break, // coalescer gone; shut down
+                            }
+                        };
+                        match job {
+                            Some(job) => {
+                                let submitted = submit(job);
+                                if let Some(prev) = inflight.take() {
+                                    complete(prev);
+                                }
+                                inflight = Some(submitted);
+                            }
+                            // Queue momentarily empty: settle the in-flight
+                            // forward so its actors unblock; the next
+                            // iteration parks on recv.
+                            None => {
+                                if let Some(prev) = inflight.take() {
+                                    complete(prev);
+                                }
+                            }
+                        }
+                    }
+                    if let Some(prev) = inflight.take() {
+                        complete(prev);
                     }
                 })
                 .expect("BUG: failed to spawn metal eval worker")
@@ -801,7 +893,10 @@ impl InlineEvalHandle {
             .to_raw_rows()
             .expect("BUG: failed to read policy batch to CPU");
 
-        values.into_iter().zip(policy_rows).collect()
+        values
+            .into_iter()
+            .zip(policy_rows.into_iter().map(Arc::new))
+            .collect()
     }
 }
 
@@ -901,10 +996,7 @@ impl DummyEvalHandle {
                 None => std::thread::sleep(latency),
             }
         }
-        batch
-            .iter()
-            .map(|_| (0.0, (*self.uniform).clone()))
-            .collect()
+        batch.iter().map(|_| (0.0, self.uniform.clone())).collect()
     }
 }
 

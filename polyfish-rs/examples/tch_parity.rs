@@ -8,7 +8,7 @@
 //!   1. candle-CPU vs tch-CPU  — tight (proves the architecture port is exact)
 //!   2. tch-MPS   vs tch-CPU   — looser (proves MPS produces the same result)
 
-use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
+use polyfish::ai::eval_server::{EvalResult, Evaluator, InlineEvalHandle};
 use polyfish::ai::features::{state_to_cpu_features, RawFeatures};
 use polyfish::ai::network::{PolyZeroNet, RawPolicyOutput};
 use polyfish::ai::tch_network::TchPolyZeroNet;
@@ -29,7 +29,7 @@ fn max_abs(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// Compare a candle result against a tch result over value + softmaxed heads.
-fn report(tag: &str, c: &[(f32, RawPolicyOutput)], t: &(Vec<f32>, Vec<RawPolicyOutput>)) {
+fn report(tag: &str, c: &[EvalResult], t: &(Vec<f32>, Vec<RawPolicyOutput>)) {
     let mut vmax = 0f32;
     let (mut a, mut s, mut tt, mut o) = (0f32, 0f32, 0f32, 0f32);
     for (i, (cv, cp)) in c.iter().enumerate() {
@@ -45,7 +45,7 @@ fn report(tag: &str, c: &[(f32, RawPolicyOutput)], t: &(Vec<f32>, Vec<RawPolicyO
     );
 }
 
-fn candle_forward(device: &candle_core::Device, feats: &[RawFeatures]) -> Vec<(f32, RawPolicyOutput)> {
+fn candle_forward(device: &candle_core::Device, feats: &[RawFeatures]) -> Vec<EvalResult> {
     let mut vm = candle_nn::VarMap::new();
     vm.load(MODEL).unwrap();
     let net = Arc::new(
@@ -128,8 +128,12 @@ fn main() {
     if tch::utils::has_mps() {
         let tch_mps = tch_forward(tch::Device::Mps, &feats);
         // reuse report by wrapping tch_cpu as the "candle" side
-        let cpu_as_ref: Vec<(f32, RawPolicyOutput)> =
-            tch_cpu.0.iter().cloned().zip(tch_cpu.1.iter().cloned()).collect();
+        let cpu_as_ref: Vec<EvalResult> = tch_cpu
+            .0
+            .iter()
+            .cloned()
+            .zip(tch_cpu.1.iter().cloned().map(std::sync::Arc::new))
+            .collect();
         report("tch-CPU   vs tch-MPS", &cpu_as_ref, &tch_mps);
     } else {
         println!("(MPS not available — skipped MPS parity)");

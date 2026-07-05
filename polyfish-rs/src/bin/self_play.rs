@@ -1008,6 +1008,7 @@ fn main() -> anyhow::Result<()> {
     let (mut agg_forwards, mut agg_rows, mut agg_max_batch, mut agg_busy_us) = (0u64, 0u64, 0u64, 0u64);
     let (mut agg_hits, mut agg_misses) = (0u64, 0u64);
     let (mut agg_compiles, mut agg_compile_us) = (0u64, 0u64);
+    let (mut agg_prep_us, mut agg_wait_us, mut agg_post_us) = (0u64, 0u64, 0u64);
     for (_, s) in &all_shard_stats {
         agg_forwards += s.forwards.load(Ordering::Relaxed);
         agg_rows += s.rows.load(Ordering::Relaxed);
@@ -1017,6 +1018,9 @@ fn main() -> anyhow::Result<()> {
         agg_misses += s.cache_misses.load(Ordering::Relaxed);
         agg_compiles += s.compiles.load(Ordering::Relaxed);
         agg_compile_us += s.compile_us.load(Ordering::Relaxed);
+        agg_prep_us += s.prep_us.load(Ordering::Relaxed);
+        agg_wait_us += s.wait_us.load(Ordering::Relaxed);
+        agg_post_us += s.post_us.load(Ordering::Relaxed);
     }
     let agg_busy_s = agg_busy_us as f64 / 1e6;
     let agg_compile_s = agg_compile_us as f64 / 1e6;
@@ -1032,7 +1036,7 @@ fn main() -> anyhow::Result<()> {
         0.0
     };
     println!(
-        "EVAL_SERVER_STATS_AGG: {{\"shards\": {}, \"forwards\": {}, \"rows\": {}, \"avg_batch\": {:.2}, \"max_batch\": {}, \"busy_s\": {:.2}, \"busy_frac\": {:.3}, \"cache_hits\": {}, \"cache_misses\": {}, \"cache_hit_rate\": {:.3}, \"compiles\": {}, \"compile_s\": {:.3}, \"compile_frac_wall\": {:.4}, \"compile_frac_busy\": {:.4}}}",
+        "EVAL_SERVER_STATS_AGG: {{\"shards\": {}, \"forwards\": {}, \"rows\": {}, \"avg_batch\": {:.2}, \"max_batch\": {}, \"busy_s\": {:.2}, \"busy_frac\": {:.3}, \"prep_s\": {:.2}, \"wait_s\": {:.2}, \"post_s\": {:.2}, \"cache_hits\": {}, \"cache_misses\": {}, \"cache_hit_rate\": {:.3}, \"compiles\": {}, \"compile_s\": {:.3}, \"compile_frac_wall\": {:.4}, \"compile_frac_busy\": {:.4}}}",
         all_shard_stats.len(),
         agg_forwards,
         agg_rows,
@@ -1040,6 +1044,9 @@ fn main() -> anyhow::Result<()> {
         agg_max_batch,
         agg_busy_s,
         agg_busy_s / wall_s,
+        agg_prep_us as f64 / 1e6,
+        agg_wait_us as f64 / 1e6,
+        agg_post_us as f64 / 1e6,
         agg_hits,
         agg_misses,
         agg_cache_hit_rate,

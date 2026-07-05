@@ -32,6 +32,7 @@ not software waste.
 | metal (MPSGraph) backend, cached executables, 32 actors / 1 server | 242* |
 | metal + actor scaling (96 actors / 3 sharded servers) | 435* |
 | **metal + pipelined workers (128 actors / 2 servers × 2 workers)** | **~578*** |
+| **Arc'd rows + async GPU submit, depth-2 worker pipeline (2×2)** | **~742** |
 | **Actor ceiling** (dummy evaluator, no GPU — the hard cap) | **~1,650** |
 
 *\* Jul 5 numbers are on a newer `model.safetensors` than the Jul 4 rows — games
@@ -226,12 +227,13 @@ with **no eviction** (`entry(batch).or_insert_with(...)`). So compiles are stric
 the cache is 100% hits. The metal path also already does **one** sync dispatch per forward
 (`executable.run`), not the multi-readback stall the tch path had.
 
-**Instrumented to measure it directly** (kept in tree):
+**Instrumented to measure it** (aggregate counters kept in tree; the per-compile stderr
+line + `analyze_compiles.sh` were scaffolding, since removed):
 - `metal_network.rs::build_and_compile` times the **full** build (graph tracing + compile,
-  not just `compile()`) and emits a `METAL_COMPILE ...` stderr line per compile.
+  not just `compile()`) into per-net counters.
 - `EvalServerStats` gained `compiles` / `compile_us`, folded per-worker into the
   `EVAL_SERVER_STATS_AGG` line as `compiles`, `compile_s`, `compile_frac_wall`,
-  `compile_frac_busy`. Analyzer: `./analyze_compiles.sh compile.log`.
+  `compile_frac_busy` — the durable signal for re-checking after model/arch changes.
 
 **Measured** (`--num-games 32 --mcts-iters 64 --actors 128 --eval-backend metal`):
 
@@ -253,9 +255,48 @@ the cache is 100% hits. The metal path also already does **one** sync dispatch p
 ~40% sim→real deficit. Dropped bucketing/prewarm; the lever is `RawPolicyOutput` Arc-ing
 (item 1 above).
 
-*Incidental:* batch sizes are **not** "clustered heavily" as `metal_network.rs`'s module
-doc claims — they smear across 69 distinct values (5–9 *and* 47–61). The cache converges to
-hits via 69 one-time compiles, not "a small set of common sizes." (Comment to be fixed.)
+*Incidental:* batch sizes are **not** "clustered heavily" — they smear across 69 distinct
+values (5–9 *and* 47–61); the cache converges to hits via 69 one-time compiles, not "a
+small set of common sizes." The stale `metal_network.rs` module-doc comment claiming
+otherwise has been corrected.
+
+## Arc'd rows + async GPU pipeline (Jul 5, later) — MEASURED, 467 → 742
+
+Levers 1 and "async completion" landed together and closed most of the sim→real gap:
+
+1. **`EvalResult` rows are `Arc<RawPolicyOutput>`** (`eval_server.rs`). The ~3 full-row
+   clones per row (cache insert, reply, cache hit) are now refcount bumps. Call sites
+   were untouched (deref coercion); only `examples/tch_parity.rs` needed a type fix.
+2. **Async GPU submit + depth-2 worker pipeline** (`metal_network.rs::submit_batch`,
+   `eval_server.rs` metal worker loop). Forwards go down via
+   `runAsyncWithMTLCommandQueue`; completion is a per-forward **queue-order barrier**
+   (empty command buffer committed immediately after the forward — it completes exactly
+   when that forward does, later submissions notwithstanding). Each worker keeps one
+   forward in flight while prepping/submitting the next and replying for the previous,
+   so worker CPU (flatten, encode, readback, scatter) overlaps its own GPU execution.
+   - Binding gotcha: `run_async_with_descriptor` with `results: None` reaches MPSGraph
+     as an *empty* (not nil) results array and crashes in the Swift shim — result
+     `TensorData` must be caller-preallocated.
+   - Parity: `async_submit_matches_sync_forward` (in-tree test) proves the async path
+     is byte-identical to sync `forward_batch` with two forwards in flight.
+3. **`busy_s` now splits into `prep_s` / `wait_s` / `post_s`** in
+   `EVAL_SERVER_STATS_AGG` — this is the instrument that adjudicates CPU-cost vs
+   GPU-wait arguments from data instead of estimates.
+
+**Measured** (same-day A/B, 2 servers × 2 workers, 128 games / 128 actors, iter-40
+model): **467 → 742 moves/s (+59%)**; the previous best-of-sweep (5×3, 590) is beaten
+by 26% on a worse config. Rows/s 22.3K → 35.4K — at the top of the 32–40K band measured
+in isolation.
+
+**Where the time goes now** (per forward, 33.2K forwards): prep 0.25ms + post 0.14ms +
+**wait 3.2ms** — 89% of eval-thread busy time is parked on the completion barrier.
+Eval-path CPU cost is essentially solved (~0.4ms/forward); the loop is now
+**GPU-queue-bound**. Consequences:
+- The old server×worker optimum (found under CPU-contended workers) is stale —
+  re-sweep. More queues may pay again, and the ~15 threads' worth of CPU handed back
+  should also let actors run closer to the ~1,650 ceiling.
+- The "adding more eval lanes regresses" NOT-DO below predates this change — treat it
+  as superseded pending the re-sweep.
 
 ## What NOT to do
 
@@ -291,9 +332,9 @@ hits via 69 one-time compiles, not "a small set of common sizes." (Comment to be
 
 - Actor-ceiling sweep: `./bench_actor_ceiling.sh` (~2 min, 32 games); full grid (slow):
   `./bench_actor_ceiling.sh --full`.
-- Self-play with compile instrumentation: `./target/release/self_play --num-games 32
-  --mcts-iters 64 --actors 128 --eval-backend metal 2> compile.log`, then
-  `./analyze_compiles.sh compile.log`.
+- Self-play: `./target/release/self_play --num-games 32 --mcts-iters 64 --actors 128
+  --eval-backend metal`; read `compiles` / `compile_frac_busy` off the
+  `EVAL_SERVER_STATS_AGG` line for the warmup tax.
 
 ## Beyond 1.5K (different project)
 

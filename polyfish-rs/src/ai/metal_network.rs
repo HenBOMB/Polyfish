@@ -20,17 +20,19 @@
 //! takes a literal `&[usize]` target shape with no `-1`/inferred-dim
 //! sentinel, and the batch size is baked into several reshapes (token
 //! flattening, attention head splitting, etc.), so each batch size needs
-//! its own compiled `Executable`. Coalesced batch sizes cluster heavily in
-//! practice (steady-state load produces a small set of common sizes), so
-//! the cache converges to mostly-hits after a brief warmup.
+//! its own compiled `Executable`. Because the cache never evicts, a compile
+//! is a one-time cost per distinct size per worker: measured 69 distinct
+//! sizes (smeared 5–61, not clustered) at ~1.5s total warmup across 4
+//! workers, then 100% hits. See `expert_boost_throughput.md` (recompile
+//! investigation) for why bucketing/padding those sizes is net-negative.
 
 use crate::ai::features::{MAP_SIZE, NUM_CHANNELS};
 use crate::ai::network::RawPolicyOutput;
-use apple_metal::{CommandQueue, MetalDevice};
+use apple_metal::{CommandBuffer, CommandQueue, MetalDevice};
 use apple_mpsgraph::{
     data_type, padding_style, tensor_named_data_layout, Convolution2DDescriptor,
-    Convolution2DDescriptorInfo, Executable, FeedDescription, Graph, Tensor, TensorData,
-    UnaryArithmeticOp,
+    Convolution2DDescriptorInfo, Executable, ExecutableExecutionDescriptor, FeedDescription,
+    Graph, Tensor, TensorData, UnaryArithmeticOp,
 };
 use safetensors::tensor::{Dtype, SafeTensors};
 use std::cell::{Cell, RefCell};
@@ -81,6 +83,58 @@ fn f16_to_f32(bits: u16) -> f32 {
 mod tests {
     use super::f16_to_f32;
 
+    /// The async submit/wait/readback path must produce byte-identical
+    /// outputs to the synchronous `forward_batch` — including with two
+    /// forwards in flight on the same queue, which is exactly the depth-2
+    /// pipeline shape the eval workers run. Uses the same compiled
+    /// executable for both paths, so any divergence is an execution-path
+    /// bug (e.g. the completion barrier not actually covering the forward).
+    #[test]
+    fn async_submit_matches_sync_forward() {
+        let path = "model.safetensors";
+        if !std::path::Path::new(path).exists() {
+            eprintln!("skipping async parity test: {path} not present");
+            return;
+        }
+        let net = super::MetalPolyZeroNet::load(path).expect("load model");
+
+        // xorshift-based deterministic pseudo-random features in [0, 1).
+        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 40) as f32 / (1u64 << 24) as f32
+        };
+
+        for &batch in &[1_usize, 3, 24, 57] {
+            let spatial: Vec<f32> = (0..batch * super::NUM_CHANNELS * super::SPATIAL)
+                .map(|_| next())
+                .collect();
+            let player: Vec<f32> = (0..batch * super::PLAYER_DIM).map(|_| next()).collect();
+
+            let (sync_v, sync_p) = net.forward_batch(&spatial, &player, batch);
+
+            let f1 = net.submit_batch(&spatial, &player, batch);
+            let f2 = net.submit_batch(&spatial, &player, batch);
+            f1.wait();
+            let (v1, p1) = f1.readback();
+            f2.wait();
+            let (v2, p2) = f2.readback();
+
+            assert_eq!(sync_v, v1, "batch {batch}: first async values differ");
+            assert_eq!(sync_v, v2, "batch {batch}: second async values differ");
+            for i in 0..batch {
+                assert_eq!(sync_p[i].action_type, p1[i].action_type, "batch {batch} row {i}");
+                assert_eq!(sync_p[i].source_spatial, p1[i].source_spatial);
+                assert_eq!(sync_p[i].target_spatial, p1[i].target_spatial);
+                assert_eq!(sync_p[i].move_option, p1[i].move_option);
+                assert_eq!(p1[i].action_type, p2[i].action_type);
+                assert_eq!(p1[i].move_option, p2[i].move_option);
+            }
+        }
+    }
+
     #[test]
     fn f16_to_f32_known_values() {
         assert_eq!(f16_to_f32(0x0000), 0.0);
@@ -106,6 +160,10 @@ pub struct MetalPolyZeroNet {
     weights: HashMap<String, (Vec<usize>, Vec<f32>)>,
     device: MetalDevice,
     queue: CommandQueue,
+    /// Shared descriptor for async submission (`waitUntilCompleted = false`);
+    /// completion is signaled per-forward by a queue-order barrier instead
+    /// (see [`InFlightForward`]).
+    async_desc: ExecutableExecutionDescriptor,
     /// Compiled forward graphs, one per batch size seen so far. Built
     /// lazily on first use of a given size, then replayed.
     executables: RefCell<HashMap<usize, Executable>>,
@@ -170,10 +228,16 @@ impl MetalPolyZeroNet {
         let queue = device
             .new_command_queue()
             .ok_or_else(|| anyhow::anyhow!("failed to create Metal command queue"))?;
+        let async_desc = ExecutableExecutionDescriptor::new()
+            .ok_or_else(|| anyhow::anyhow!("failed to create execution descriptor"))?;
+        async_desc
+            .set_wait_until_completed(false)
+            .map_err(|e| anyhow::anyhow!("failed to configure async descriptor: {e:?}"))?;
         Ok(Self {
             weights,
             device,
             queue,
+            async_desc,
             executables: RefCell::new(HashMap::new()),
             compile_count: Cell::new(0),
             compile_us: Cell::new(0),
@@ -549,14 +613,6 @@ impl MetalPolyZeroNet {
         let elapsed_us = started.elapsed().as_micros() as u64;
         self.compile_count.set(self.compile_count.get() + 1);
         self.compile_us.set(self.compile_us.get() + elapsed_us);
-        eprintln!(
-            "METAL_COMPILE net={:p} size={} ms={:.1} net_total_compiles={} net_total_ms={:.1}",
-            self,
-            b,
-            elapsed_us as f64 / 1000.0,
-            self.compile_count.get(),
-            self.compile_us.get() as f64 / 1000.0,
-        );
         executable
     }
 
@@ -599,28 +655,128 @@ impl MetalPolyZeroNet {
             .run(&self.queue, &[&spatial_data, &player_data])
             .expect("mpsgraph: executable.run failed");
 
-        let win_v = results[0].read_f32().expect("forward: read win");
-        let action_v = results[1].read_f32().expect("forward: read action");
-        let source_v = results[2].read_f32().expect("forward: read source");
-        let target_v = results[3].read_f32().expect("forward: read target");
-        let option_v = results[4].read_f32().expect("forward: read option");
-
-        const AT: usize = 11;
-        const SS: usize = SPATIAL; // 121
-        const TS: usize = SPATIAL; // 121
-        const MO: usize = 192;
-
-        let mut values = Vec::with_capacity(batch);
-        let mut policy = Vec::with_capacity(batch);
-        for i in 0..batch {
-            values.push(win_v[i]);
-            policy.push(RawPolicyOutput {
-                action_type: action_v[i * AT..(i + 1) * AT].to_vec(),
-                source_spatial: source_v[i * SS..(i + 1) * SS].to_vec(),
-                target_spatial: target_v[i * TS..(i + 1) * TS].to_vec(),
-                move_option: option_v[i * MO..(i + 1) * MO].to_vec(),
-            });
-        }
-        (values, policy)
+        slice_outputs(&results, batch)
     }
+
+    /// Submit a forward pass to the GPU without waiting for it. The returned
+    /// [`InFlightForward`] must be completed with [`InFlightForward::wait`] +
+    /// [`InFlightForward::readback`]; until then this thread is free to prep
+    /// and submit the next batch (the GPU executes queue submissions in
+    /// order, so per-forward completion is signaled by an empty barrier
+    /// command buffer committed immediately after the async run — it can
+    /// only complete once this forward has).
+    pub fn submit_batch(
+        &self,
+        spatial_flat: &[f32],
+        player_flat: &[f32],
+        batch: usize,
+    ) -> InFlightForward {
+        let h = MAP_SIZE;
+        let w = MAP_SIZE;
+
+        let spatial_data =
+            TensorData::from_f32_slice(&self.device, spatial_flat, &[batch, NUM_CHANNELS, h, w])
+                .expect("submit: spatial tensor data");
+        let player_data =
+            TensorData::from_f32_slice(&self.device, player_flat, &[batch, PLAYER_DIM])
+                .expect("submit: player tensor data");
+
+        // The async entry point requires caller-allocated result buffers
+        // (passing none reaches MPSGraph as an empty — not nil — results
+        // array, which the framework rejects). Shapes/order must match the
+        // compile targets: win, action, source, target, option.
+        let zeros = |elems: usize, shape: &[usize]| -> TensorData {
+            TensorData::from_f32_slice(&self.device, &vec![0.0_f32; elems], shape)
+                .expect("submit: result tensor data")
+        };
+        let outputs = vec![
+            zeros(batch, &[batch, 1]),
+            zeros(batch * 11, &[batch, 11]),
+            zeros(batch * SPATIAL, &[batch, SPATIAL]),
+            zeros(batch * SPATIAL, &[batch, SPATIAL]),
+            zeros(batch * 192, &[batch, 192]),
+        ];
+        let output_refs: Vec<&TensorData> = outputs.iter().collect();
+
+        let mut executables = self.executables.borrow_mut();
+        let executable = executables
+            .entry(batch)
+            .or_insert_with(|| self.build_and_compile(batch));
+        executable
+            .run_async_with_descriptor(
+                &self.queue,
+                &[&spatial_data, &player_data],
+                Some(&output_refs),
+                Some(&self.async_desc),
+            )
+            .expect("mpsgraph: executable.run_async failed");
+
+        let barrier = self
+            .queue
+            .new_command_buffer()
+            .expect("submit: barrier command buffer");
+        barrier.commit();
+
+        InFlightForward {
+            batch,
+            _spatial: spatial_data,
+            _player: player_data,
+            outputs,
+            barrier,
+        }
+    }
+}
+
+/// A forward pass submitted via [`MetalPolyZeroNet::submit_batch`] whose GPU
+/// execution may still be running. Keeps the input `TensorData` alive until
+/// completion. Not `Send`: lives and dies on the submitting worker thread.
+pub struct InFlightForward {
+    batch: usize,
+    _spatial: TensorData,
+    _player: TensorData,
+    outputs: Vec<TensorData>,
+    barrier: CommandBuffer,
+}
+
+impl InFlightForward {
+    /// Block until the GPU has finished this forward (barrier command buffer
+    /// completes only after all earlier work on the queue, including this
+    /// forward's dispatches).
+    pub fn wait(&self) {
+        self.barrier.wait_until_completed();
+    }
+
+    /// Read the outputs back to CPU floats. Only valid after [`wait`](Self::wait).
+    pub fn readback(self) -> (Vec<f32>, Vec<RawPolicyOutput>) {
+        slice_outputs(&self.outputs, self.batch)
+    }
+}
+
+/// Slice the five output tensors (win, action, source, target, option) into
+/// per-row `(value, RawPolicyOutput)` CPU data. Shared by the sync and async
+/// paths so both produce byte-identical results.
+fn slice_outputs(results: &[TensorData], batch: usize) -> (Vec<f32>, Vec<RawPolicyOutput>) {
+    let win_v = results[0].read_f32().expect("forward: read win");
+    let action_v = results[1].read_f32().expect("forward: read action");
+    let source_v = results[2].read_f32().expect("forward: read source");
+    let target_v = results[3].read_f32().expect("forward: read target");
+    let option_v = results[4].read_f32().expect("forward: read option");
+
+    const AT: usize = 11;
+    const SS: usize = SPATIAL; // 121
+    const TS: usize = SPATIAL; // 121
+    const MO: usize = 192;
+
+    let mut values = Vec::with_capacity(batch);
+    let mut policy = Vec::with_capacity(batch);
+    for i in 0..batch {
+        values.push(win_v[i]);
+        policy.push(RawPolicyOutput {
+            action_type: action_v[i * AT..(i + 1) * AT].to_vec(),
+            source_spatial: source_v[i * SS..(i + 1) * SS].to_vec(),
+            target_spatial: target_v[i * TS..(i + 1) * TS].to_vec(),
+            move_option: option_v[i * MO..(i + 1) * MO].to_vec(),
+        });
+    }
+    (values, policy)
 }
