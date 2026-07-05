@@ -526,14 +526,22 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                     }
                     score += resource_bonus.min(6.0) * openness;
 
-                    // Pull toward the nearest explored, uncaptured village/ruin
-                    // so units head that way before they're already adjacent.
+                    // Bonus for moving closer to the nearest explored, uncaptured village/ruin.
+                    // Flat bonus if closing distance; additional urgency as target is approached.
+                    // Prevents wandering from outranking progress toward distant objectives.      
                     let map_size = state.map_size();
                     let target_coords = Coords::from_index(target_idx as i32, map_size);
-                    if let Some(dist) =
-                        nearest_visible_capturable_distance(state, player_id, target_coords)
-                    {
-                        score += (15.0 - 3.0 * dist as f32).max(0.0);
+                    if let Ok(src_idx) = mv.source_idx() {
+                        let src_coords = Coords::from_index(src_idx as i32, map_size);
+                        if let Some((nearest_coords, src_dist)) =
+                            nearest_visible_capturable(state, player_id, src_coords)
+                        {
+                            let dest_dist = nearest_coords.distance_to(&target_coords);
+                            if dest_dist < src_dist {
+                                score += 20.0; // flat: correct progress, any distance
+                            }
+                            score += (12.0 - 2.0 * dest_dist as f32).max(0.0); // final-approach urgency
+                        }
                     }
 
                     // Mild center-of-map pull — controlling the center
@@ -800,18 +808,16 @@ fn is_territory_relevant(state: &crate::states::GameState, target_idx: i32, trib
     false
 }
 
-/// Manhattan distance from `from` to the nearest Village/Ruin that is both
-/// unclaimed (`owner == 0`) and explored by `tribe_id`, or `None` if none are
-/// visible yet. Full scan over `state.structures` — cheap here since this is
-/// only called once per Step candidate at the MCTS root, not per search node
-/// (see `analyze_expansion` in functions.rs for the same accepted pattern).
-fn nearest_visible_capturable_distance(
+/// Returns (Coords, dist) to the nearest visible unclaimed Village/Ruin for `tribe_id`,
+/// or None if none. Returns coordinates for progress comparison across positions.
+/// Full scan; called once per Step at MCTS root.
+fn nearest_visible_capturable(
     state: &crate::states::GameState,
     tribe_id: i32,
     from: Coords,
-) -> Option<i32> {
+) -> Option<(Coords, i32)> {
     let map_size = state.map_size();
-    let mut best: Option<i32> = None;
+    let mut best: Option<(Coords, i32)> = None;
     for (&idx, structure) in state.structures.iter() {
         let Some(s) = structure else { continue };
         if !matches!(s.structure_type, StructureType::Village | StructureType::Ruin) {
@@ -823,8 +829,11 @@ fn nearest_visible_capturable_distance(
         if tile.owner != 0 || !tile.explorers.contains(&tribe_id) {
             continue;
         }
-        let dist = Coords::from_index(idx, map_size).distance_to(&from);
-        best = Some(best.map_or(dist, |b: i32| b.min(dist)));
+        let coords = Coords::from_index(idx, map_size);
+        let dist = coords.distance_to(&from);
+        if best.map_or(true, |(_, b)| dist < b) {
+            best = Some((coords, dist));
+        }
     }
     best
 }
