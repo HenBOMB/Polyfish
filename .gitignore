@@ -39,3 +39,6 @@ games_*.safetensors
 model_backup_*.safetensors
 
 polyfish-rs/replays/high_scores/*
+session.log
+value_distribution.json
+moves_by_turn.json
