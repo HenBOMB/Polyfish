@@ -88,6 +88,10 @@ struct GameResult {
     /// Move-type counts keyed by turn number, for the "move mix by turn"
     /// training-progress chart (see parse_metrics.py / dashboard).
     moves_by_turn: HashMap<i32, HashMap<polyfish::types::MoveType, usize>>,
+    /// Combined (both players) tile-exploration and territory-ownership
+    /// counts at game end, for diagnosing where score gains come from.
+    revealed_tiles: i32,
+    captured_tiles: i32,
 }
 
 /// Load the main network (and opponent network, defaulting to the main one)
@@ -410,10 +414,26 @@ fn play_single_game(
         );
     }
 
+    let captured_tiles = game.state.tiles.values().filter(|t| t.owner != 0).count() as i32;
+    let revealed_tiles: i32 = game
+        .state
+        .tribes
+        .keys()
+        .map(|&pid| {
+            game.state
+                .tiles
+                .values()
+                .filter(|t| t.explorers.contains(&pid))
+                .count() as i32
+        })
+        .sum();
+
     Some(GameResult {
         history: game_history,
         scores,
         moves: move_count,
+        revealed_tiles,
+        captured_tiles,
         winner_score,
         recap: ModReplay {
             game_state: initial_state,
@@ -449,7 +469,6 @@ fn main() -> anyhow::Result<()> {
     use clap::Parser;
 
     let start_time = Instant::now();
-    println!("=== Self-Play Started ===");
 
     #[derive(Parser, Debug)]
     #[command(author, version, about, long_about = None)]
@@ -587,29 +606,10 @@ fn main() -> anyhow::Result<()> {
             .or_else(|_| Device::cuda_if_available(0))
             .unwrap_or(Device::Cpu),
     };
-    println!(
-        "Using device: {:?} (CANDLE_METAL_COMPUTE_PER_BUFFER={})",
-        device, metal_compute_per_buffer
-    );
-
     // Load models (P1, and P2 defaulting to P1 when no opponent is given)
-    let load_start = Instant::now();
-    println!("Loading main model from model.safetensors");
-    match &args.opponent {
-        Some(opp_path) => println!("Loading opponent model from {}", opp_path),
-        None => println!("No opponent specified. Playing against self."),
-    }
     let (network1, network2) = load_networks(&device, args.opponent.as_deref())?;
 
-    let load_duration = load_start.elapsed();
-    println!("Model loading took: {:.2}s", load_duration.as_secs_f32());
-
     let base_seed = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-
-    println!(
-        "Starting parallel self-play: {} games with {} MCTS iterations",
-        args.num_games, args.mcts_iters
-    );
 
     // Pool of tribes to draw from when tribe1/tribe2 aren't pinned via CLI args.
     // Each game in this run independently samples its own pair from this pool
@@ -689,7 +689,6 @@ fn main() -> anyhow::Result<()> {
     // from every actor into batched forward_t calls (see ai/eval_server.rs
     // for the Metal cross-thread-tensor invariant this design preserves).
     let games_start = Instant::now();
-    println!("Starting game generation...");
 
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum EvalBackendKind {
@@ -729,15 +728,6 @@ fn main() -> anyhow::Result<()> {
         }
         other => anyhow::bail!("unknown --eval-backend {other:?} (want candle|tch|metal)"),
     };
-    println!(
-        "Eval backend: {}",
-        match eval_backend_kind {
-            EvalBackendKind::Tch => "tch (libtorch/MPS)",
-            EvalBackendKind::Metal => "metal (MPSGraph)",
-            EvalBackendKind::Candle => "candle",
-        }
-    );
-
     // Resolve shard count. We default to the best measured throughput
     let eval_servers = match args.eval_servers {
         0 => {
@@ -771,8 +761,6 @@ fn main() -> anyhow::Result<()> {
         cache_capacity: per_shard_cache,
         pipeline_workers: args.eval_workers,
     };
-    println!("Using {eval_servers} eval server shard(s), per-shard cache={per_shard_cache:?}");
-
     // Builds `n` backend specs for one player. For tch: every shard gets its
     // own `BackendSpec::Tch` on the shared MPS device; each shard's thread
     // loads its own `TchPolyZeroNet` (duplicated weights, a few MB). For
@@ -874,21 +862,37 @@ fn main() -> anyhow::Result<()> {
             .map(|n| n.get())
             .unwrap_or(4)
     };
-    println!(
-        "Using {} actor threads, max_batch={}, coalesce_timeout_us={}, leaf_batch={:?}",
-        num_actors, args.max_batch, args.coalesce_timeout_us, args.leaf_batch
-    );
-
     let progress_mode = ProgressMode::from_num_games(args.num_games);
-    match progress_mode {
-        ProgressMode::Full => println!("Progress: full play-by-play (<=32 games)"),
-        ProgressMode::Periodic => {
-            println!("Progress: turn milestones only (>32 games, max 5 per game)")
-        }
-        ProgressMode::SampledFinish => {
-            println!("Progress: sampled game completion only (>=64 games, every 20%)")
-        }
-    }
+
+    let tribe_label = match (&args.tribe1, &args.tribe2) {
+        (Some(t1), Some(t2)) => format!("{t1} vs {t2}"),
+        (Some(t1), None) => format!("{t1} vs random"),
+        (None, Some(t2)) => format!("random vs {t2}"),
+        (None, None) => "random".to_string(),
+    };
+    let match_label = match &args.opponent {
+        Some(opp) => format!("league vs {opp}"),
+        None => "self-play".to_string(),
+    };
+    let backend_label = match eval_backend_kind {
+        EvalBackendKind::Tch => "tch (libtorch/MPS)",
+        EvalBackendKind::Metal => "metal (MPSGraph)",
+        EvalBackendKind::Candle => "candle",
+    };
+    let search_label = match backend {
+        SearchBackend::Zero => "Zero MCTS".to_string(),
+        SearchBackend::Gumbel { k } => format!("Gumbel k={k}"),
+    };
+    println!(
+        "[selfplay] {match_label}: {} games, {} mcts-iters, {search_label}, tribes {tribe_label} | eval {backend_label} | {eval_servers} shard(s) cache={per_shard_cache:?} workers={} | {num_actors} actors max_batch={} coalesce_us={} leaf_batch={:?} | device {:?} (CANDLE_METAL_COMPUTE_PER_BUFFER={metal_compute_per_buffer})",
+        args.num_games,
+        args.mcts_iters,
+        args.eval_workers,
+        args.max_batch,
+        args.coalesce_timeout_us,
+        args.leaf_batch,
+        device,
+    );
 
     let job_counter = Arc::new(AtomicUsize::new(0));
     let games_completed = Arc::new(AtomicUsize::new(0));
@@ -1096,6 +1100,8 @@ fn main() -> anyhow::Result<()> {
     let mut total_builds = 0;
     let mut total_research = 0;
     let mut total_attacks = 0;
+    let mut total_revealed_tiles: i64 = 0;
+    let mut total_captured_tiles: i64 = 0;
 
     let mut total_moves_by_turn: HashMap<i32, HashMap<polyfish::types::MoveType, usize>> =
         HashMap::new();
@@ -1103,6 +1109,8 @@ fn main() -> anyhow::Result<()> {
     for result in results {
         total_score += result.winner_score;
         total_moves += result.moves;
+        total_revealed_tiles += result.revealed_tiles as i64;
+        total_captured_tiles += result.captured_tiles as i64;
         if result.winner_score > max_score {
             max_score = result.winner_score;
             best_recap = Some(result.recap.clone());
@@ -1272,6 +1280,8 @@ fn main() -> anyhow::Result<()> {
     let avg_builds = total_builds as f32 / args.num_games as f32;
     let avg_research = total_research as f32 / args.num_games as f32;
     let avg_attacks = total_attacks as f32 / args.num_games as f32;
+    let avg_revealed_tiles = total_revealed_tiles as f32 / args.num_games as f32;
+    let avg_captured_tiles = total_captured_tiles as f32 / args.num_games as f32;
 
     // "typical move by turn N" chart data: {"<turn>": {"<MoveType>": count, ...}, ...}
     let moves_by_turn_json = {
@@ -1288,26 +1298,20 @@ fn main() -> anyhow::Result<()> {
         serde_json::Value::Object(turn_map).to_string()
     };
 
-    println!(
-        "METRICS: {{\"avg_score\": {:.2}, \"max_score\": {}, \"avg_moves\": {:.2}, \"p1_avg\": {:.2}, \"p2_avg\": {:.2}, \"avg_captures\": {:.2}, \"avg_harvests\": {:.2}, \"avg_builds\": {:.2}, \"avg_research\": {:.2}, \"avg_attacks\": {:.2}, \"moves_by_turn\": {}}}",
-        avg_score,
-        max_score,
-        avr_moves,
-        p1_avg,
-        p2_avg,
-        avg_captures,
-        avg_harvests,
-        avg_builds,
-        avg_research,
-        avg_attacks,
-        moves_by_turn_json
-    );
+    let games_file = if collected_spatial_maps.is_empty() {
+        String::new()
+    } else {
+        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+        format!("games_{timestamp}.safetensors")
+    };
 
     // Stack and save
-    let save_start = Instant::now();
     if !collected_spatial_maps.is_empty() {
         let total_steps = collected_spatial_maps.len();
-        println!("Saving {} steps...", total_steps);
+        let timestamp = games_file
+            .strip_prefix("games_")
+            .and_then(|s| s.strip_suffix(".safetensors"))
+            .unwrap_or("0");
 
         let spatial_dim = features::NUM_CHANNELS * features::MAP_SIZE * features::MAP_SIZE;
         let player_dim = 10;
@@ -1363,10 +1367,7 @@ fn main() -> anyhow::Result<()> {
 
         tensors.insert("values".to_string(), values_tensor);
 
-        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-        let filename = format!("games_{}.safetensors", timestamp);
-        candle_core::safetensors::save(&tensors, &filename)?;
-        println!("Saved to {}", filename);
+        candle_core::safetensors::save(&tensors, &games_file)?;
 
         // Save BEST game as replay
         if let Some(recap) = best_recap {
@@ -1385,22 +1386,32 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        let save_duration = save_start.elapsed();
-        println!("Data saving took: {:.2}s", save_duration.as_secs_f32());
     }
+
+    println!(
+        "METRICS: {{\"avg_score\": {:.2}, \"max_score\": {}, \"avg_moves\": {:.2}, \"p1_avg\": {:.2}, \"p2_avg\": {:.2}, \"avg_captures\": {:.2}, \"avg_harvests\": {:.2}, \"avg_builds\": {:.2}, \"avg_research\": {:.2}, \"avg_attacks\": {:.2}, \"avg_revealed_tiles\": {:.2}, \"avg_captured_tiles\": {:.2}, \"games_file\": \"{games_file}\", \"moves_by_turn\": {}}}",
+        avg_score,
+        max_score,
+        avr_moves,
+        p1_avg,
+        p2_avg,
+        avg_captures,
+        avg_harvests,
+        avg_builds,
+        avg_research,
+        avg_attacks,
+        avg_revealed_tiles,
+        avg_captured_tiles,
+        moves_by_turn_json
+    );
 
     let total_duration = start_time.elapsed();
     println!("\n=== Self-Play Complete ===");
     println!("Total time: {:.2}s", total_duration.as_secs_f32());
     println!("Breakdown:");
-    println!("  - Model loading: {:.2}s ({:.1}%)", load_duration.as_secs_f32(), 100.0 * load_duration.as_secs_f32() / total_duration.as_secs_f32());
     println!("  - Game generation: {:.2}s ({:.1}%)", games_duration.as_secs_f32(), 100.0 * games_duration.as_secs_f32() / total_duration.as_secs_f32());
     let final_moves_per_sec = total_moves as f64 / games_duration.as_secs_f64().max(1e-9);
     println!("  - Throughput: {:.2} moves/sec ({} moves)", final_moves_per_sec, total_moves);
-    if !collected_spatial_maps.is_empty() {
-        let save_duration = save_start.elapsed();
-        println!("  - Data saving: {:.2}s ({:.1}%)", save_duration.as_secs_f32(), 100.0 * save_duration.as_secs_f32() / total_duration.as_secs_f32());
-    }
 
     // Deterministic teardown. Drop the evaluator handles first — these hold the
     // only remaining request-channel senders, so dropping them makes each eval

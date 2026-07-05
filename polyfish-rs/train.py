@@ -212,8 +212,6 @@ def batch_report_indices(total_batches, max_reports=10):
     return indices
 
 def train():
-    print(f"Training on {DEVICE}")
-    
     # 1. Load Data
     fresh_files = glob.glob("games_*.safetensors")
     archive_files = sorted(glob.glob("archive/games_*.safetensors"), key=os.path.getmtime, reverse=True)
@@ -236,7 +234,6 @@ def train():
 
     model = PolyZeroNet(SPATIAL_CHANNELS, PLAYER_STATE_DIM, MAP_SIZE, MAP_SIZE).to(DEVICE)
     if os.path.exists("model.safetensors"):
-        print("Loading existing model for fine-tuning...")
         try:
             model.load_state_dict(load_file("model.safetensors"))
         except Exception as e:
@@ -482,7 +479,6 @@ def train():
     # 4. Save Model in f16 for blazing fast CPU inference
     half_state = {k: v.half() for k, v in model.state_dict().items()}
     save_file(half_state, "model.safetensors")
-    print("Saved model.safetensors (f16 quantized)")
 
 if __name__ == "__main__":
     train()

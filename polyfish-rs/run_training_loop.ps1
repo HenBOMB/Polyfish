@@ -43,7 +43,6 @@ $env:OMP_NUM_THREADS = $UseThreads
 
 if ($ForceTrain) {
     Write-Host "Force training flag detected! Running training immediately..." -ForegroundColor Yellow
-    Write-Host "[Training] Training model..." -ForegroundColor Cyan
     # Assuming python is in PATH or using standard 'python' instead of .venv/bin/python3 for Windows
     python train.py
 }
@@ -112,8 +111,6 @@ for ($i = $StartIter; $i -le ($Iterations + $StartIter); $i++) {
     $Tribe1 = $SelectedTribes[0]
     $Tribe2 = $SelectedTribes[1]
     
-    Write-Host "[$MatchType] Generative games... Tribes: $Tribe1 vs $Tribe2" -ForegroundColor Green
-    
     # Run self_play and capture output
     $Args = @("--num-games", $GamesPerIter, "--mcts-iters", $env:MCTS_ITERS)
     if ($RewardFlag) { $Args += $RewardFlag }
@@ -134,7 +131,6 @@ for ($i = $StartIter; $i -le ($Iterations + $StartIter); $i++) {
     $GamesFile = $GameJson.games_file
     
     # 2. Training
-    Write-Host "[Training] Training model..." -ForegroundColor Cyan
     $TrainOutput = & python train.py | Out-String
     Write-Host $TrainOutput
 

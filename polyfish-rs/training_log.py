@@ -33,6 +33,8 @@ HEADER = [
     "avg_builds",
     "avg_research",
     "avg_attacks",
+    "avg_revealed_tiles",
+    "avg_captured_tiles",
     "avg_moves",
     "match_type",
 ]
@@ -212,11 +214,10 @@ def _parse_metrics_line(text: str, game: bool) -> dict[str, Any]:
 
 def parse_self_play_output(text: str) -> dict[str, Any]:
     data = _parse_metrics_line(text, game=True)
-    games_file = ""
-    m = re.search(r"Saved to (games_\d+\.safetensors)", text)
-    if m:
-        games_file = m.group(1)
-    data["games_file"] = games_file
+    if not data.get("games_file"):
+        m = re.search(r"Saved to (games_\d+\.safetensors)", text)
+        if m:
+            data["games_file"] = m.group(1)
     return data
 
 
@@ -261,6 +262,8 @@ def append_row(
         "avg_builds": game_metrics.get("avg_builds", ""),
         "avg_research": game_metrics.get("avg_research", ""),
         "avg_attacks": game_metrics.get("avg_attacks", ""),
+        "avg_revealed_tiles": game_metrics.get("avg_revealed_tiles", ""),
+        "avg_captured_tiles": game_metrics.get("avg_captured_tiles", ""),
         "avg_moves": game_metrics.get("avg_moves", ""),
         "match_type": normalize_match_type(match_type),
     }
