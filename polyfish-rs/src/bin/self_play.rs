@@ -450,7 +450,12 @@ fn main() -> anyhow::Result<()> {
         /// Per-game virtual-loss mini-batch size (leaves coalesced per NN
         /// call within a single game's search tree). Cross-game batching via
         /// the eval server now supplies GPU efficiency independently, so
-        /// this can shrink toward sequential per-game search.
+        /// this can shrink toward sequential per-game search. Measured
+        /// (2026-07-05, 96 actors / 3 metal shards): raising this to 6 DID
+        /// fatten coalesced batches (avg 47→60) but was a net ~10%
+        /// throughput LOSS — more leaf evals per move, worse cache hit rate
+        /// (0.19→0.17), and slower per-forward. Fatter batches via this
+        /// knob are added work, not amortization. Keep at 4.
         #[arg(long, default_value = "4")]
         leaf_batch: Option<usize>,
 
@@ -625,8 +630,8 @@ fn main() -> anyhow::Result<()> {
         Metal,
     }
 
-    // Resolve the eval backend: explicit --eval-backend, else auto (tch when
-    // compiled in, else candle).
+    // Resolve the eval backend: explicit --eval-backend, else auto (metal
+    // when compiled in, else tch when compiled in, else candle).
     let eval_backend_kind = match args.eval_backend.as_str() {
         "tch" => {
             if !cfg!(feature = "tch-eval") {
@@ -646,7 +651,9 @@ fn main() -> anyhow::Result<()> {
         }
         "candle" => EvalBackendKind::Candle,
         "" => {
-            if cfg!(feature = "tch-eval") {
+            if cfg!(feature = "metal-eval") {
+                EvalBackendKind::Metal
+            } else if cfg!(feature = "tch-eval") {
                 EvalBackendKind::Tch
             } else {
                 EvalBackendKind::Candle

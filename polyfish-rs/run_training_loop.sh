@@ -30,11 +30,12 @@ echo "Logging to $LOG_FILE"
 echo "Building binaries..."
 # Detect platform and use appropriate GPU features
 if [[ "$OSTYPE" == "darwin"* ]]; then
-    # macOS: Metal/Accelerate + tch-eval so self_play inference runs on libtorch/MPS
-    echo "Building with Metal + Accelerate + tch-eval (libtorch/MPS) for macOS..."
+    # macOS: Metal/Accelerate + metal-eval (MPSGraph, auto-preferred) with
+    # tch-eval kept as an explicit --eval-backend tch fallback
+    echo "Building with Metal + Accelerate + metal-eval (MPSGraph) + tch-eval for macOS..."
     export LIBTORCH_USE_PYTORCH=1
     export LIBTORCH_BYPASS_VERSION_CHECK=1
-    PATH="$(pwd)/.venv/bin:$PATH" cargo build --bin polyfish --bin self_play --release --features metal,accelerate,tch-eval
+    PATH="$(pwd)/.venv/bin:$PATH" cargo build --bin polyfish --bin self_play --release --features metal,accelerate,tch-eval,metal-eval
     # The tch-linked binary has no rpath for libtorch; point dyld at the venv's torch dylibs
     export DYLD_LIBRARY_PATH="$(.venv/bin/python3 -c "import torch, os; print(os.path.join(os.path.dirname(torch.__file__), 'lib'))")${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
 elif command -v nvidia-smi &> /dev/null; then

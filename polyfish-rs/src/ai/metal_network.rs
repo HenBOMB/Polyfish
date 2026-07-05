@@ -149,7 +149,13 @@ impl MetalPolyZeroNet {
                         .map(|c| f16_to_f32(u16::from_le_bytes([c[0], c[1]])))
                         .collect()
                 }
-                other => anyhow::bail!("unexpected dtype for {name}: {other:?} (expected F32 or F16)"),
+                // Non-float tensors (e.g. BatchNorm's I64 `num_batches_tracked`,
+                // which train.py sometimes writes as I64 instead of F16) are
+                // training bookkeeping, never used in the forward pass — skip
+                // them. If a *needed* weight were somehow non-float, `get()`
+                // panics loudly at graph-build time, so this can't mask a
+                // real mismatch.
+                _ => continue,
             };
             weights.insert(name, (shape, floats));
         }
