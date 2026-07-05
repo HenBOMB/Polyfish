@@ -84,6 +84,22 @@ If you change layer shapes, channel counts, or head sizes in one, you must mirro
 ### Data flow
 Steam game → `polyfish-mod` (C#) / `polyfish-reader` (C++) → JSON game states (`live_game.json`, `replays/`) → loaded by `polyfish` server or replayer. Separately, `self_play` → `games_*.safetensors` → `train.py` → `model.safetensors` → `checkpoints/`. Training metrics go to `training_log.csv` (canonical store, keyed by `run_id` per training campaign) plus `moves_by_turn.json` sidecar; `run_training_loop.sh` uses `training_log.py` to parse METRICS and append rows. Live dashboard: `http://localhost:3000/training.html` (Chart.js, reads `/api/runs`, `/api/training-metrics`, `/api/moves-by-turn`, `/api/value-distribution` from the Rust server). Default loop behavior: each `./run_training_loop.sh` starts a **new run**; pass `--resume` to continue the latest (or `--resume <run_id>`). `training_metrics_schema.sql` + root `telegram_agent.js`/`run_analysis_now.js` push progress to Supabase/Telegram. `session.log` is a raw debug transcript only.
 
+## Comments
+
+Keep comments strictly minimal. Prefer clear code over commentary — do not narrate what the code obviously does.
+
+Add comments only when they add real value:
+- A brief note above a dense or non-obvious block (game-rule edge cases, tricky invariants, performance trade-offs).
+- Function docs (what/why, not step-by-step rehash of the body).
+- Parameter docs when the name alone is not enough.
+
+Length limits:
+- **Inline comments:** one line; two lines is rare and needs a strong reason.
+- **Parameter docs:** at most 2 lines each.
+- **Function docs:** at most 4 lines total.
+
+Do not add comments for every variable, branch, or trivial operation. Do not restate the code in prose.
+
 ## Notes
 - `notes.md` and `notes-heuristics.md` document design rationale and the branching-factor analysis (Polytopia has a narrow but very deep per-turn search tree — ~8 plies to complete one game turn — which drives the MCTS depth/iteration choices). Read them before changing search or evaluation behavior.
 - The active development branch is `verdi`; PRs target `main`.
