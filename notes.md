@@ -102,25 +102,19 @@ I am now bottlenecked on CPU which I knew I would end up here. Effect plateaus a
 
 Update: I was actually bottlenecked on GPU but it was GPU idle time. Digging more.
 
-After lots of profiling I found that the problem was the poor MPS kernel of candle. It is not as performant as the official one so we're now using `tch-rs` bindings and it's much more performant. This is the benchmark (batch 128, full model, fresh host→MPS upload, full readback to CPU):
-backend	            ms/forward
-candle (integrated)	71.7ms
-tch (integrated)	15.2ms
-pure PyTorch/MPS	12.0ms
-Now we should have significantly more performance.
+After lots of profiling I found that the problem was the poor MPS kernel of candle. It is not as performant as the official one so we're now using `tch-rs` bindings and it's much more performant.
 
-Update: It was a massive success. This was the results on:
-./self_play --num-games 32 --mcts-iters 64 --actors 32 ==> 170 moves/sec
-which is a 6.5x speedup. Now we're in territory to do a lot of good work. Striving for +200.
 
-I'm now eval-bound. This is the best place to be but I'm looking to squeeze a bit more from my hardware.
-I tried --max-batch 512 --coalesce-timeout-us 2000 to do more per GPU hit but that didn't move the needle. 
-
-I moved up hash() calls since that's a CPU-bound task anyways out of the eval-server and it didn't make sense to blokck every GPU forward call on that. It can parallelize. This boosted my throughput to 195 moves/sec!
-
-I did a clean test of actor ceiling benchmark assuming no eval server and I saw speeds up to 1,500 moves/sec. This tells me there's a lot of headroom to scale.
-
-One issue found in `tch_network` is the fact we were wasting multiple roundtrips to the GPU to readback tensors. Now we just concat all the values, do 1 call, and split back up on the other end. This brought me up to 211 moves/sec.
+| Milestone | moves/sec |
+|---|---|
+| candle Metal eval server (baseline) | ~31 |
+| tch/libtorch MPS backend swap | 161 |
+| + cache-hash offload to actor threads | 195 |
+| tch, tuned (single readback, 32 actors) | 245 → later re-measured 157–242* |
+| metal (MPSGraph) backend, cached executables, 32 actors / 1 server | 242* |
+| metal + actor scaling (96 actors / 3 sharded servers) | 435* |
+| **metal + pipelined workers (128 actors / 2 servers × 2 workers)** | **~578*** |
+| **Actor ceiling** (dummy evaluator, no GPU — the hard cap) | **~1,500** |
 --
 BUG FOUND (Jul 4, 2026): candle cross-attention runs with UNTRAINED weights.
 

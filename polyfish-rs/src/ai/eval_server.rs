@@ -138,6 +138,9 @@ pub struct EvalServerConfig {
     /// disables caching. Every hit skips the GPU entirely. The cache lives on
     /// the eval-server thread, so it needs no locks.
     pub cache_capacity: Option<usize>,
+    /// Metal (MPSGraph) backend only; ignored by candle/tch. Number of
+    /// pipelined GPU worker threads behind the coalescer. 
+    pub pipeline_workers: usize,
 }
 
 /// Default cache capacity: 512K entries. At ~1.8 KB per entry (8 B key + f32
@@ -152,6 +155,7 @@ impl Default for EvalServerConfig {
             max_batch: 256,
             coalesce_timeout: Duration::from_micros(1000),
             cache_capacity: Some(DEFAULT_CACHE_CAPACITY),
+            pipeline_workers: 2,
         }
     }
 }
@@ -332,6 +336,13 @@ fn run_eval_loop(
     config: EvalServerConfig,
     stats: Arc<EvalServerStats>,
 ) {
+    // The metal backend gets the pipelined coalescer/worker split
+    #[cfg(feature = "metal-eval")]
+    if let BackendSpec::MetalMps { model_path } = &spec {
+        if config.pipeline_workers >= 1 {
+            return run_metal_pipelined_loop(model_path.clone(), receiver, config, stats);
+        }
+    }
     let backend = spec.build();
     let mut cache = config
         .cache_capacity
@@ -464,7 +475,18 @@ fn evaluate_batch(
         }
     }
 
-    // Scatter contiguous slices back to each request in original order.
+    scatter_replies(requests, per_request_len, row_results);
+
+    (CacheTally { served_from_cache }, misses)
+}
+
+/// Scatter contiguous slices of `row_results` back to each request in
+/// original order and reply on its channel.
+fn scatter_replies(
+    requests: Vec<EvalRequest>,
+    per_request_len: Vec<usize>,
+    mut row_results: Vec<Option<EvalResult>>,
+) {
     let mut offset = 0;
     for (req, len) in requests.into_iter().zip(per_request_len.into_iter()) {
         let results: Vec<EvalResult> = (offset..offset + len)
@@ -474,8 +496,229 @@ fn evaluate_batch(
         // Ignore send errors: the requesting thread may have given up.
         let _ = req.respond_to.send(results);
     }
+}
 
-    (CacheTally { served_from_cache }, misses)
+/// One coalesced batch, cache-resolved, ready for a GPU worker: the rows
+/// that missed the cache plus everything needed to complete + scatter the
+/// replies on the worker thread.
+#[cfg(feature = "metal-eval")]
+struct MetalJob {
+    miss_features: Vec<RawFeatures>,
+    miss_hashes: Vec<u64>,
+    /// Flat row index (request order) for each miss row.
+    miss_slots: Vec<usize>,
+    /// Per-row final results; cache hits pre-filled, misses `None`.
+    row_results: Vec<Option<EvalResult>>,
+    requests: Vec<EvalRequest>,
+    per_request_len: Vec<usize>,
+}
+
+/// Stage 2 of the MPSGraph bypass plan: pipelined eval for the metal
+/// backend.
+///
+/// MPSGraph dispatch through `MetalPolyZeroNet::forward_batch` is
+/// synchronous per command queue (the binding exposes no execution
+/// completion handler, so per-queue blocking is the only completion
+/// signal). Measured on M3 Max: one blocking queue tops out ~22K rows/s
+/// while 2–4 independent queues reach ~32–40K rows/s aggregate — the GPU
+/// has headroom that a single blocked thread can't reach.
+///
+/// So the server splits into:
+/// - the **coalescer** (this thread): coalesces requests, resolves the LRU
+///   cache, and hands each cache-missing batch to a worker channel;
+/// - `pipeline_workers` **GPU workers**: each owns its own
+///   `MetalPolyZeroNet` (own weights copy, own `MTLCommandQueue`, own
+///   compiled-executable cache), pulls jobs, runs the forward, and replies
+///   straight to the requesting actors.
+///
+/// Unlike hash-sharding across N servers, the batch stream and cache stay
+/// unified — batches keep their full coalesced size instead of being split
+/// N ways (sharding starved per-shard batches down to ~30 rows where fixed
+/// per-forward overhead dominates).
+///
+/// Cache writes flow back to the coalescer over a channel and are drained
+/// non-blockingly each cycle; two in-flight jobs can therefore evaluate the
+/// same position twice (both miss before either insert lands) — harmless,
+/// and already true across shards today.
+#[cfg(feature = "metal-eval")]
+fn run_metal_pipelined_loop(
+    model_path: String,
+    receiver: std_mpsc::Receiver<EvalRequest>,
+    config: EvalServerConfig,
+    stats: Arc<EvalServerStats>,
+) {
+    let (jobs_tx, jobs_rx) = std_mpsc::channel::<MetalJob>();
+    let jobs_rx = Arc::new(std::sync::Mutex::new(jobs_rx));
+    let (cache_tx, cache_rx) = std_mpsc::channel::<Vec<(u64, EvalResult)>>();
+
+    let workers: Vec<std::thread::JoinHandle<()>> = (0..config.pipeline_workers)
+        .map(|i| {
+            let jobs_rx = jobs_rx.clone();
+            let cache_tx = cache_tx.clone();
+            let stats = stats.clone();
+            let model_path = model_path.clone();
+            std::thread::Builder::new()
+                .name(format!("metal-eval-worker-{i}"))
+                .spawn(move || {
+                    let net = crate::ai::metal_network::MetalPolyZeroNet::load(&model_path)
+                        .expect("BUG: failed to load metal model for eval worker");
+                    loop {
+                        // Hold the lock only to receive; forward runs unlocked.
+                        let job = match jobs_rx.lock().expect("BUG: jobs mutex poisoned").recv() {
+                            Ok(job) => job,
+                            Err(_) => return, // coalescer gone; shut down
+                        };
+                        let busy_start = Instant::now();
+                        let MetalJob {
+                            miss_features,
+                            miss_hashes,
+                            miss_slots,
+                            mut row_results,
+                            requests,
+                            per_request_len,
+                        } = job;
+
+                        let batch_size = miss_features.len();
+                        let mut spatial_flat =
+                            Vec::with_capacity(batch_size * RawFeatures::spatial_len());
+                        let mut player_flat =
+                            Vec::with_capacity(batch_size * RawFeatures::player_len());
+                        for feat in &miss_features {
+                            spatial_flat.extend_from_slice(&feat.spatial);
+                            player_flat.extend_from_slice(&feat.player);
+                        }
+                        let (values, policy_rows) =
+                            net.forward_batch(&spatial_flat, &player_flat, batch_size);
+                        debug_assert_eq!(values.len(), batch_size);
+
+                        let mut cache_inserts = Vec::with_capacity(batch_size);
+                        for (i, &flat_idx) in miss_slots.iter().enumerate() {
+                            let result: EvalResult = (values[i], policy_rows[i].clone());
+                            cache_inserts.push((miss_hashes[i], result.clone()));
+                            row_results[flat_idx] = Some(result);
+                        }
+                        scatter_replies(requests, per_request_len, row_results);
+                        // Coalescer may have shut down while we ran; then the
+                        // cache no longer matters.
+                        let _ = cache_tx.send(cache_inserts);
+
+                        stats.forwards.fetch_add(1, Ordering::Relaxed);
+                        stats
+                            .busy_us
+                            .fetch_add(busy_start.elapsed().as_micros() as u64, Ordering::Relaxed);
+                    }
+                })
+                .expect("BUG: failed to spawn metal eval worker")
+        })
+        .collect();
+    drop(cache_tx); // coalescer keeps only the receiving side
+
+    let mut cache = config.cache_capacity.map(|cap| {
+        lru::LruCache::<u64, EvalResult>::new(
+            NonZeroUsize::new(cap).expect("BUG: cache capacity must be > 0"),
+        )
+    });
+
+    loop {
+        let first = match receiver.recv() {
+            Ok(req) => req,
+            Err(_) => break, // all EvalHandles dropped; shut down
+        };
+
+        // Land completed cache inserts from the workers before resolving
+        // this cycle's lookups.
+        if let Some(c) = cache.as_mut() {
+            while let Ok(inserts) = cache_rx.try_recv() {
+                for (hash, result) in inserts {
+                    c.put(hash, result);
+                }
+            }
+        }
+
+        let mut requests = vec![first];
+        let mut total_items: usize = requests[0].features.len();
+        let deadline = Instant::now() + config.coalesce_timeout;
+
+        while total_items < config.max_batch {
+            let now = Instant::now();
+            if now >= deadline {
+                break;
+            }
+            match receiver.recv_timeout(deadline - now) {
+                Ok(req) => {
+                    total_items += req.features.len();
+                    requests.push(req);
+                }
+                Err(std_mpsc::RecvTimeoutError::Timeout) => break,
+                Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
+        // Resolve the cache on the coalescer (single-threaded owner), then
+        // ship misses to a worker. All-hit batches reply right here.
+        let per_request_len: Vec<usize> = requests.iter().map(|r| r.features.len()).collect();
+        let mut row_results: Vec<Option<EvalResult>> = Vec::with_capacity(total_items);
+        let mut miss_slots: Vec<usize> = Vec::new();
+        let mut miss_features: Vec<RawFeatures> = Vec::new();
+        let mut miss_hashes: Vec<u64> = Vec::new();
+        let mut served_from_cache: u64 = 0;
+
+        for req in &requests {
+            for (feat, &hash) in req.features.iter().zip(req.hashes.iter()) {
+                let hit = cache.as_mut().and_then(|c| c.get(&hash).cloned());
+                match hit {
+                    Some(result) => {
+                        served_from_cache += 1;
+                        row_results.push(Some(result));
+                    }
+                    None => {
+                        let flat_idx = row_results.len();
+                        row_results.push(None);
+                        miss_slots.push(flat_idx);
+                        miss_features.push(RawFeatures {
+                            spatial: feat.spatial.clone(),
+                            player: feat.player.clone(),
+                        });
+                        miss_hashes.push(hash);
+                    }
+                }
+            }
+        }
+
+        stats.rows.fetch_add(total_items as u64, Ordering::Relaxed);
+        stats
+            .max_batch
+            .fetch_max(total_items as u64, Ordering::Relaxed);
+        stats
+            .cache_hits
+            .fetch_add(served_from_cache, Ordering::Relaxed);
+        stats
+            .cache_misses
+            .fetch_add(miss_slots.len() as u64, Ordering::Relaxed);
+
+        if miss_slots.is_empty() {
+            scatter_replies(requests, per_request_len, row_results);
+            continue;
+        }
+
+        jobs_tx
+            .send(MetalJob {
+                miss_features,
+                miss_hashes,
+                miss_slots,
+                row_results,
+                requests,
+                per_request_len,
+            })
+            .expect("BUG: all metal eval workers have died");
+    }
+
+    // Close the jobs channel so workers drain and exit, then join them so
+    // the server's GPU state is fully dropped before process teardown.
+    drop(jobs_tx);
+    for worker in workers {
+        let _ = worker.join();
+    }
 }
 
 /// Synchronous, non-batched evaluator with the same interface as
@@ -788,6 +1031,7 @@ mod tests {
                 max_batch: 256,
                 coalesce_timeout: Duration::from_millis(20),
                 cache_capacity: None,
+                pipeline_workers: 0,
             },
         );
 

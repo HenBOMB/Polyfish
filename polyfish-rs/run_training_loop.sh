@@ -10,16 +10,22 @@ NUM_GAMES=32
 export MCTS_ITERS=64
 # self_play's actor pool is plain std::thread (not rayon), and actors block
 # (park, no CPU) while awaiting eval-server replies — oversubscribing past
-# core count is fine, RAM is the real ceiling. 32 measured ~2.5x the
-# throughput of the --actors 0 (auto = core count) default on an M3 Max.
-# Keep NUM_GAMES >= ACTORS so every actor actually gets a game; otherwise
-# the extra actors sit idle (e.g. 10 games + 32 actors = only 10 actors run).
-ACTORS=32
-# 0 = defer to self_play's auto: 2 shards on the tch backend, 1 on candle.
-# On a tch-eval build (macOS MPS / libtorch), 2 shards ≈ 2x capacity because
-# one shard can encode while another is parked in waitUntilCompleted — do NOT
-# pin this to 1 on a tch build, you'll halve self-play throughput.
+# core count is fine, RAM is the real ceiling. Effective concurrency is
+# min(NUM_GAMES, ACTORS): actors beyond the game count just park (harmless),
+# but games beyond the actor count queue. 128 actors measured best on an M3
+# Max with the metal backend (~578 moves/s at 128 games+) — throughput
+# scales with CONCURRENT GAMES, so small -g values are the real limiter,
+# not this knob (see expert_boost_throughput.md).
+ACTORS=128
+# 0 = defer to self_play's auto: 2 servers on the metal backend (each runs a
+# coalescer + 2 pipelined GPU workers — measured best), 1 on tch/candle.
+# Do NOT force >1 on tch: libtorch's serial MPS queue makes 2 tch shards
+# HALVE throughput (measured 157 -> 83 moves/s).
 EVAL_SERVERS=0
+# The self_play invocation below passes no --eval-backend: the binary's auto
+# rule picks the fastest compiled-in backend (metal > tch > candle), which
+# resolves to metal (MPSGraph) on this Mac build and candle+CUDA on the
+# remote boxes. Override per-run by appending --eval-backend to the command.
 export RUST_BACKTRACE=1
 
 # Log all output to session.log while still showing on console

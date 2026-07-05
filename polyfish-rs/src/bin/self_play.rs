@@ -491,6 +491,14 @@ fn main() -> anyhow::Result<()> {
         /// 0 = auto (currently always 1). Overridable.
         #[arg(long, default_value_t = 0)]
         eval_servers: usize,
+
+        /// Metal backend only: pipelined GPU worker threads per eval server.
+        /// Each owns its own MTLCommandQueue, so N coalesced batches can be
+        /// in flight on the GPU while the coalescer collects the next one —
+        /// unlike --eval-servers sharding, the batch stream and cache stay
+        /// unified. Ignored by candle/tch.
+        #[arg(long, default_value_t = 2)]
+        eval_workers: usize,
     }
 
     let args = Args::parse();
@@ -670,11 +678,15 @@ fn main() -> anyhow::Result<()> {
         }
     );
 
-    // Resolve shard count. 1 by default on every backend (see the
-    // --eval-servers help text for why). candle rejects >1 outright; tch
-    // and metal allow opting in explicitly for experimentation.
+    // Resolve shard count. We default to the best measured throughput
     let eval_servers = match args.eval_servers {
-        0 => 1,
+        0 => {
+            if eval_backend_kind == EvalBackendKind::Metal {
+                2
+            } else {
+                1
+            }
+        }
         n => {
             if n > 1 && eval_backend_kind == EvalBackendKind::Candle {
                 anyhow::bail!(
@@ -697,6 +709,7 @@ fn main() -> anyhow::Result<()> {
         max_batch: args.max_batch,
         coalesce_timeout: std::time::Duration::from_micros(args.coalesce_timeout_us),
         cache_capacity: per_shard_cache,
+        pipeline_workers: args.eval_workers,
     };
     println!("Using {eval_servers} eval server shard(s), per-shard cache={per_shard_cache:?}");
 
