@@ -1,6 +1,0 @@
-actor_ceiling sweep: num_games=128 mcts=64 actors=128
-timestamp,latency_us,lanes,actors,moves_per_s,leaves_per_s,leaves_per_move,wall_s,moves
----
-== pure ceiling (0 latency) ==
-11:03:55,0,0,128,1693.67,86655.79,51.16,25.56,43293
-== latency × lanes (actors=128) ==

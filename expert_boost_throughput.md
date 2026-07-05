@@ -1,14 +1,19 @@
 # Self-Play Throughput: Findings & Staircase to the Ceiling
 
 *Jul 4, 2026 — written after the tch/MPS eval swap, Metal trace analysis (v5), and the
-actor-ceiling measurement. Companion docs: `profiling_report.md` (the original candle
+actor-ceiling measurement. Companion doc: `profiling_report.md` (the original candle
 investigation), `notes.md` (candle attention bug + backend benchmark table).*
 
-*Jul 5, 2026 update — the MPSGraph bypass (metal backend) landed and rewrote the
-bottom half of this doc. Stairs 3–4 as originally written are superseded; see
-"The metal stair (Jul 5)" below for what was measured vs. estimated. Headline:
-**~578 moves/s** at defaults (`--eval-backend metal`, 128 actors, 2 servers × 2
-pipelined GPU workers), vs 195 when this doc was written.*
+*Jul 5, 2026 — the MPSGraph bypass (metal backend) landed and rewrote the bottom half of
+this doc. Headline: **~578 moves/s** at defaults (`--eval-backend metal`, 128 actors, 2
+servers × 2 pipelined GPU workers), vs 195 when this doc was written.*
+
+*Jul 5, 2026 — merged in the actor-ceiling sweep and the MPSGraph-recompile investigation.
+**This is now the single source of truth for self-play throughput work** (the old
+`actor_ceiling_sweep.md` was folded in here and deleted). It also corrects the earlier
+"Stair 6 is now the binding constraint" claim: the actor-ceiling sweep + dummy-eval
+evidence show the **eval path**, not actor engine cost, is what binds at 578 — see
+"Where the 578→925 gap actually is".*
 
 ## Goal
 
@@ -27,12 +32,12 @@ not software waste.
 | metal (MPSGraph) backend, cached executables, 32 actors / 1 server | 242* |
 | metal + actor scaling (96 actors / 3 sharded servers) | 435* |
 | **metal + pipelined workers (128 actors / 2 servers × 2 workers)** | **~578*** |
-| **Actor ceiling** (dummy evaluator, no GPU — the hard cap) | **~1,500** |
+| **Actor ceiling** (dummy evaluator, no GPU — the hard cap) | **~1,650** |
 
 *\* Jul 5 numbers are on a newer `model.safetensors` than the Jul 4 rows — games
 differ, so cross-day comparisons are approximate; same-day A/Bs are exact.*
 
-Target: **1,000+**, with ~2.6x of actor headroom above the current 578.
+Target: **1,000+**, with ~2.85x of actor headroom above the current 578.
 
 ## Root cause (Metal System Trace, v5, pid 22923, 13.3s run) — MEASURED
 
@@ -48,7 +53,7 @@ compute**:
   A stall = a synchronous device→CPU readback: each `.to_device(Cpu)` on MPS forces
   commit + waitUntilCompleted.
 - Culprit in code: `tch_network.rs::forward_batch` did **5 separate readbacks** per
-  forward (value + 4 policy heads).
+  forward (value + 4 policy heads). (Fixed in stair 1; the metal path does one dispatch.)
 
 This retro-explains earlier anomalies: raising `--max-batch` 256→512 did nothing
 (stall is per-forward, not per-row), and the hash offload helped (removed serial CPU
@@ -57,8 +62,7 @@ work between stalls).
 Historical note: the "one thread only may touch the device" invariant came from a
 **candle** Metal bug (tensor corruption under multi-threaded encoding — see
 `eval_server.rs` header / `bug_handoff.md`). It does **not** apply to the tch/libtorch
-backend, which has its own internal MPS stream locking. Multi-threaded tch use should
-still get a quick stress test before being trusted at scale.
+backend, which has its own internal MPS stream locking.
 
 ## The staircase
 
@@ -69,11 +73,11 @@ Estimates marked (est.); everything else measured. Budget math: 43.6 leaf evals/
 | # | Stair | Status | Expected landing (est.) |
 |---|---|---|---|
 | 1 | **Single readback** — concat value + 4 heads on-device into one `[B, 446]` row, one `.to_device(Cpu)`, split by offset on CPU | **DONE** (`tch_network.rs`) | ~450–550 |
-| 2 | **Actor-ceiling benchmark** — dummy evaluator, measures the hard cap | **DONE: ~1,500** | (calibrates everything below) |
+| 2 | **Actor-ceiling benchmark** — dummy evaluator, measures the hard cap | **DONE: ~1,650** | (calibrates everything below) |
 | 3 | **Sharded eval servers** — N servers, requests routed `hash % N` | **DONE — FALSIFIED on tch** (see below) | ~~with #1: ~800–1,100~~ measured: 2 tch shards *halve* throughput (157→83) |
-| 4 | **f16 upload** — cast features f32→f16 on CPU, upload half the bytes, cast back on-device; net stays f32 | dropped | upload measured ≈2µs/forward on metal — nothing to save |
-| 5 | **Batch/actor tuning** — refill `avg_batch` per shard, sweep actors 32→64 | **DONE** (folded into the metal stair) | actors 32→128 was worth ~2.4x *with* metal |
-| 6 | **Actor-side engine cost** — movegen/apply/tree allocations | next | raises the 1.5K ceiling itself |
+| 4 | **f16 upload** — cast features f32→f16 on CPU, upload half the bytes, cast back on-device | dropped | upload measured ≈2µs/forward on metal — nothing to save |
+| 5 | **Batch/actor tuning** — refill `avg_batch` per shard, sweep actors 32→128 | **DONE** (folded into the metal stair) | actors 32→128 was worth ~2.4x *with* metal |
+| 6 | **Actor-side engine cost** — movegen/apply/tree allocations | later | raises the ~1,650 ceiling itself — *not* the binding constraint at 578 (see below) |
 
 ### ~~Why sharded servers ≈ the double-buffer/pipeline win~~ (falsified Jul 5)
 
@@ -90,7 +94,7 @@ The libtorch serial queue can't be patched around, so inference moved off libtor
 entirely: `metal_network.rs` composes PolyZeroNet's forward as an **MPSGraph** driven
 from Rust (`--eval-backend metal`, `metal-eval` feature) — same tuned Apple kernels
 libtorch lowers onto, but on command queues *we* own. Parity vs tch-CPU: ~1e-6 on
-softmaxed heads (same class as libtorch's own CPU↔MPS agreement).
+softmaxed heads.
 
 What the microbenchmarks established (`examples/metal_bench.rs`, M3 Max 30-core):
 
@@ -125,20 +129,133 @@ Knobs probed and settled:
   than batch efficiency gains.
 - `--leaf-batch` 4→6: fatter batches (avg 47→60) but a consistent ~10% *loss*
   (more evals/move, cache hit rate 0.19→0.17). Kept at 4.
-- f16 upload (old stair 4): pointless on metal — upload is ~2µs of a ~4–6ms forward.
+- f16 upload: pointless on metal — upload is ~2µs of a ~4–6ms forward.
 
-### Toward 1K from 578
+## Actor-ceiling sweep (Jul 5, 2:24pm) — where the ceiling actually is
 
-Eval workers run ~90%+ busy at ~23K rows/s in-loop (vs 32–40K in isolation); the
-gap is CPU oversubscription (128 actors + 2 coalescers + 4 GPU workers on 14
-cores) and per-request latency, not GPU capacity. The remaining levers, in
-expected order:
-1. **Stair 6 — actor-side engine cost** (movegen/apply/undo/tree allocations):
-   cuts CPU contention *and* raises the 1.5K ceiling. Now the binding constraint.
-2. **Per-row CPU cost in the eval path** — `RawPolicyOutput` full-row clones for
-   cache insert + reply (~1.8KB × 3 per row); `Arc`-ing rows would cut most of it.
-3. **`reduced_precision_fast_math` on the MPSGraph compile** — untried; needs a
-   parity re-check before trusting.
+Benchmark: `actor_ceiling` **dummy evaluator**, 64 mcts-iters, 64 games (partial grid),
+M3 Max / 14 cores. The sim models eval as a fixed latency (µs/batch) across N concurrent
+lanes — it does *not* model cold compiles, batch starvation, or eval-worker core
+contention, so it is an idealized upper bound for a given eval latency.
+
+**Pure actor ceiling (no eval sim):** 128 actors → **1,652 moves/s.** Hard CPU cap; real
+self-play with GPU eval sits below this.
+
+**Latency × lanes @ 128 actors** (partial — killed at 3000/2):
+
+| latency | 1 lane | 2 | 4 | 6 | 8 |
+|---------|--------|---|---|---|---|
+| 1000µs | 240 | 465 | **925** | 1194 | 1469 |
+| 1500µs | 160 | 323 | 624 | 897 | 1053 |
+| 2000µs | 120 | 243 | 461 | 695 | 894 |
+| 2500µs | 97 | 193 | 380 | 538 | 732 |
+| 3000µs | 81 | 164 | **317** | — | **592** |
+
+*317 and 592 measured @ 32 games in focused follow-up. Scaling is smooth —
+1500/2500 and lane=6 are interpolatable.* Rule of thumb from the grid:
+`moves/s ≈ lanes × (1_000_000 / latency_us) × 0.24`.
+
+**Actors @ 1000µs / 4 lanes (32 games, metal-shaped):**
+
+| actors | 64 | 96 | 128 | 160 |
+|--------|----|----|-----|-----|
+| moves/s | 868 | 847 | **882** | 822 |
+
+128 actors is the sweet spot; 160 oversubscribes past 14 cores and regresses (~7%).
+
+**Deployment mapping:**
+
+| Real config | Sim equivalent | Grid (idealized) | Actual self-play |
+|-------------|----------------|------------------|------------------|
+| metal, 4 workers, ~1.3ms/batch | 1000µs / 4 lanes | **925** | ~578 |
+| 3ms, 4 lanes | 3000µs / 4 lanes | **317** | — |
+| 3ms, 8 lanes (upper bound) | 3000µs / 8 lanes | **592** | — |
+
+Takeaways:
+1. **More lanes always wins** in the *sim* until the ~1,650 actor ceiling — but real
+   extra lanes regressed (core contention + batch starvation, see the metal landscape).
+   The sim overstates lane benefit because it charges lanes nothing for CPU/cores.
+2. **At 1ms + 4 lanes** (metal-shaped) the idealized ceiling is ~925 — headroom exists.
+3. **128 actors is optimal** for 1000µs/4-lanes.
+
+## Where the 578→925 gap actually is (corrects "Stair 6 is binding")
+
+Three numbers frame it:
+
+| | moves/s | what it is |
+|---|---|---|
+| Pure actor ceiling @128 | **1,652** | hard CPU cap, actors only, no eval |
+| Metal-shaped sim (1ms/4-lane) | **925** | eval modeled as a *warm, constant* 1ms/batch blackbox |
+| Real self-play | **578** | actual |
+
+Because a **dummy evaluator reaches 1.5–3K moves/s** (same actor engine work, no GPU
+eval), actor-side engine cost is **not** the binding constraint at 578 — the whole fight
+is the **578→925 eval-path gap** (~40%). This corrects the earlier "Stair 6 — actor-side
+engine cost is now the binding constraint" claim: Stair 6 raises the ~1,650 ceiling and
+only matters once the eval path is fixed.
+
+The 925→578 gap has three tenants: **coalesce overhead**, **eval-worker CPU contending
+with 128 actors on 14 cores**, and **per-forward sync-dispatch latency** (the sim assumes
+a flat 1ms; reality is jittery). Eval workers run ~90%+ busy at ~23K rows/s in-loop vs
+32–40K in isolation — the deficit is CPU oversubscription + per-request latency, *not* GPU
+capacity.
+
+### Toward 1K — remaining levers, in order
+
+1. **Per-row CPU cost in the eval path** — `RawPolicyOutput` full-row clones for cache
+   insert + reply (~1.8 KB × 3 per row); `Arc`-ing rows would cut most of it. **This is
+   the binding lever at 578** — squarely in the 578→925 gap, and the dummy-eval evidence
+   confirms the eval path (not actors) is what caps us.
+2. **`reduced_precision_fast_math` on the MPSGraph compile** — untried; needs a parity
+   re-check before trusting. GPU isn't the limit, so expected small.
+3. **Stair 6 — actor-side engine cost** (movegen/apply/undo/tree allocations): raises the
+   ~1,650 ceiling itself. Relevant *after* the eval path is unblocked toward ~925, not
+   before.
+
+### MPSGraph executable-recompile hypothesis — investigated & FALSIFIED (Jul 5)
+
+An outside reviewer attributed the 925→578 gap to **MPSGraph executable recompiles**:
+`metal_network.rs` compiles one `Executable` per distinct batch size, and because
+production coalesced sizes vary (1–259) rather than being fixed like the microbenchmark
+(256), the claim was that a large fraction of forwards pay a graph compile. Proposed fix:
+pad every forward to a bucketed size (multiple of 32) so only ~9 executables ever exist.
+
+**Code review already weakened it.** The executable cache is a `HashMap<usize, Executable>`
+with **no eviction** (`entry(batch).or_insert_with(...)`). So compiles are strictly a
+**one-time warmup cost per distinct size per worker**, bounded at ≤~260; in steady state
+the cache is 100% hits. The metal path also already does **one** sync dispatch per forward
+(`executable.run`), not the multi-readback stall the tch path had.
+
+**Instrumented to measure it directly** (kept in tree):
+- `metal_network.rs::build_and_compile` times the **full** build (graph tracing + compile,
+  not just `compile()`) and emits a `METAL_COMPILE ...` stderr line per compile.
+- `EvalServerStats` gained `compiles` / `compile_us`, folded per-worker into the
+  `EVAL_SERVER_STATS_AGG` line as `compiles`, `compile_s`, `compile_frac_wall`,
+  `compile_frac_busy`. Analyzer: `./analyze_compiles.sh compile.log`.
+
+**Measured** (`--num-games 32 --mcts-iters 64 --actors 128 --eval-backend metal`):
+
+| timer scope | compiles | total compile time | distinct sizes |
+|---|---|---|---|
+| `compile()` only | 256 (64/worker × 4) | 0.45 s | 68 |
+| full build (trace+compile) | 258 | **1.47 s** | 69 |
+
+- Every size compiled **exactly once per worker** (histogram: each size = 4 compiles).
+  Graph tracing is ~2× the compile step, hence 0.45 s → 1.47 s.
+- The 1.47 s is **summed across 4 workers warming concurrently** (~365 ms each). Wall-clock
+  warmup window ≈ heaviest worker ≈ **0.38 s** — a low-single-digit % of a tens-of-seconds
+  run, during which only actors routed to a still-compiling worker stall.
+- Bucketing 69→~9 sizes would cut warmup ~1.47 s→~0.2 s (save ~0.3 s wall) **while adding a
+  padding tax to every steady-state forward** (avg batch 47 → 64 ≈ 36% more GPU rows +
+  readback). Net-negative on a CPU-contended loop.
+
+**Conclusion: recompiles are not the gap.** They are a ~0.4 s wall one-time warmup, not the
+~40% sim→real deficit. Dropped bucketing/prewarm; the lever is `RawPolicyOutput` Arc-ing
+(item 1 above).
+
+*Incidental:* batch sizes are **not** "clustered heavily" as `metal_network.rs`'s module
+doc claims — they smear across 69 distinct values (5–9 *and* 47–61). The cache converges to
+hits via 69 one-time compiles, not "a small set of common sizes." (Comment to be fixed.)
 
 ## What NOT to do
 
@@ -146,31 +263,40 @@ expected order:
   **Falsified Jul 5** — the "actor ceiling binds first" reasoning was wrong because
   eval capacity *did* bind (libtorch's serial queue capped it far below the actor
   ceiling). The MPSGraph forward is now the main path and worth 2.4x+.
-- **Any candle inference tuning.** Still true: retired for self-play; kernels are
-  2–8% of hardware capability at these shapes (see `profiling_report.md`), and its
-  cross-attention loaded untrained weights (see `notes.md` bug entry).
-- **Raising `--max-batch` further.** Still a no-op, now measured twice (coalesced
-  batches never approach 256 anyway — actor latency-sensitivity caps them first).
-- **Raising `--coalesce-timeout-us` or `--leaf-batch` for fatter batches.** Both
-  measured net-negative (Jul 5); the loop is actor-latency-bound.
-- ~~**Micro-optimizing `RawPolicyOutput` allocations.**~~ Re-opened: at 578 moves/s
-  the per-row clones are no longer ~1% — see "Toward 1K", item 2.
+- **Any candle inference tuning.** Retired for self-play; kernels are 2–8% of hardware
+  capability at these shapes (see `profiling_report.md`), and its cross-attention loaded
+  untrained weights (see `notes.md` bug entry).
+- **Raising `--max-batch` further.** A no-op, measured twice (coalesced batches never
+  approach 256 anyway — actor latency-sensitivity caps them first).
+- **Raising `--coalesce-timeout-us` or `--leaf-batch` for fatter batches.** Both measured
+  net-negative (Jul 5); the loop is actor-latency-bound.
+- **Bucketing/padding batch sizes to cut MPSGraph recompiles.** Falsified — recompiles are
+  a ~0.4 s one-time warmup, and padding taxes every steady-state forward (see above).
+- **Adding more eval lanes/queues in reality.** The sim says lanes always win, but real
+  extra queues starve batches and oversubscribe cores (3 servers × 2 workers → 564, avg
+  batch 13).
 
-## Measurement checklist after each stair
+## Measurement checklist after each change
 
-1. Same benchmark every time: `--num-games 32 --mcts-iters 64 --actors 32` (vary
-   actors only in stair-5 sweeps).
-2. Read `EVAL_SERVER_STATS`: `busy_frac` per shard (saturated vs starved),
+1. Same benchmark every time: `--num-games 32 --mcts-iters 64 --actors 128
+   --eval-backend metal` (vary actors only in scaling sweeps).
+2. Read `EVAL_SERVER_STATS_AGG`: `busy_frac` per shard (saturated vs starved),
    `avg_batch` (fill health), `cache_hit_rate` (should hold ~15%; drops mean routing
-   or capacity regressed).
+   or capacity regressed), and `compile_frac_busy` (warmup tax — expect low single digits).
 3. The load-bearing number is **eval-thread ms/forward** (`busy_s / forwards`).
-   After #1 expect ~7–9ms; if it's >12ms, one sync costs more than estimated and
-   stair-4/5 priorities flip.
-4. Past ~1K, watch for the mixed bottleneck: more actors + hotter eval threads compete
-   for the same 14 cores. That's the handoff point to stair 6.
+4. Past ~1K, watch the mixed bottleneck: more actors + hotter eval threads compete for the
+   same 14 cores — the handoff point to stair 6 (raising the ~1,650 ceiling).
+
+## Re-run commands
+
+- Actor-ceiling sweep: `./bench_actor_ceiling.sh` (~2 min, 32 games); full grid (slow):
+  `./bench_actor_ceiling.sh --full`.
+- Self-play with compile instrumentation: `./target/release/self_play --num-games 32
+  --mcts-iters 64 --actors 128 --eval-backend metal 2> compile.log`, then
+  `./analyze_compiles.sh compile.log`.
 
 ## Beyond 1.5K (different project)
 
-Cheaper per-move engine work, fewer leaf evals per move (better tree reuse — note
-cache hits already prove transposition locality), or more machines. The 64-iter search
-budget is a quality decision, not a throughput lever.
+Cheaper per-move engine work, fewer leaf evals per move (better tree reuse — cache hits
+already prove transposition locality), or more machines. The 64-iter search budget is a
+quality decision, not a throughput lever.
