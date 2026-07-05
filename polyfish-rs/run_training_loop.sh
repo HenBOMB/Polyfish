@@ -213,6 +213,7 @@ fi
 
 for ((i=START_ITER; i<START_ITER+ITERATIONS; i++))
 do
+    ITER_STARTED_AT=$(.venv/bin/python3 training_log.py now-iso)
     echo "=================================================="
     echo "Starting Iteration $i"
     echo "=================================================="
@@ -286,7 +287,7 @@ do
     # 3. Log
     .venv/bin/python3 training_log.py append-row \
         --run-id "$RUN_ID" \
-        --run-started-at "$RUN_STARTED_AT" \
+        --iter-started-at "$ITER_STARTED_AT" \
         --iteration "$i" \
         --games-file "$GAMES_FILE" \
         --game-json "$GAME_JSON" \

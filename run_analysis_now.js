@@ -67,7 +67,7 @@ function parseCsvRow(line, headers) {
   headers.forEach((h, i) => {
     const v = cols[i] ?? '';
     if (['iteration', 'run_id'].includes(h)) row[h] = parseInt(v, 10);
-    else if (h === 'run_started_at' || h === 'games_file' || h === 'match_type') row[h] = v;
+    else if (h === 'iter_started_at' || h === 'run_started_at' || h === 'games_file' || h === 'match_type') row[h] = v;
     else row[h] = parseFloat(v);
   });
   return row;
@@ -94,7 +94,7 @@ async function main() {
   const data = parseCsvRow(lastLine, headers);
 
   console.log("Extracted latest metrics:", data);
-  const runLabel = data.run_started_at || data.run_id;
+  const runLabel = data.iter_started_at || data.run_started_at || data.run_id;
   await sendTelegramUpdate(`🚀 **On-Demand Analysis — Run ${runLabel}, Iteration ${data.iteration}**\nRunning AGY analysis…\nhttp://localhost:3000/training.html`);
   await runAgyAgent(data);
 }

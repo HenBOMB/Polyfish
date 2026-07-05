@@ -72,6 +72,7 @@ if ($StartIter -gt 1 -and -not (Test-Path "model.safetensors")) {
 python init_model.py
 
 for ($i = $StartIter; $i -le ($Iterations + $StartIter); $i++) {
+    $IterStartedAt = (Get-Date).ToString("o")
     Write-Host "=================================================="
     Write-Host "Starting Iteration $i" -ForegroundColor Cyan
     Write-Host "=================================================="
@@ -143,10 +144,9 @@ for ($i = $StartIter; $i -le ($Iterations + $StartIter); $i++) {
     $ValueLoss = $TrainJson.value_loss
     
     # 3. Log
-    $Timestamp = [int][double]::Parse((Get-Date -UFormat %s))
     $GameJsonStr = ($GameJson | ConvertTo-Json -Compress)
     $TrainJsonStr = ($TrainJson | ConvertTo-Json -Compress)
-    python training_log.py append-row --run-id $RunId --run-started-at $RunStartedAt --iteration $i --timestamp $Timestamp --games-file $GamesFile --game-json $GameJsonStr --train-json $TrainJsonStr --match-type $MatchType
+    python training_log.py append-row --run-id $RunId --iter-started-at $IterStartedAt --iteration $i --games-file $GamesFile --game-json $GameJsonStr --train-json $TrainJsonStr --match-type $MatchType
     $AvgScore = $GameJson.avg_score
     $AvgCaptures = $GameJson.avg_captures
     $AvgHarvests = $GameJson.avg_harvests
@@ -177,9 +177,8 @@ for ($i = $StartIter; $i -le ($Iterations + $StartIter); $i++) {
                 
                 $Body = @{
                     run_id = [int64]$RunId
-                    run_started_at = $RunStartedAt
+                    iter_started_at = $IterStartedAt
                     iteration = $i
-                    timestamp = $Timestamp
                     games_file = if ($GamesFile) { "archive/$GamesFile" } else { "" }
                     avg_score = (ParseNum $AvgScore)
                     max_score = (ParseNum $GameJson.max_score)

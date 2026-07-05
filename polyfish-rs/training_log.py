@@ -18,7 +18,7 @@ CURRENT_RUN_PATH = ".current_run"
 
 HEADER = [
     "run_id",
-    "run_started_at",
+    "iter_started_at",
     "iteration",
     "games_file",
     "avg_score",
@@ -60,6 +60,10 @@ def _iso_from_unix(ts: int | float) -> str:
     return datetime.fromtimestamp(int(ts), tz=timezone.utc).astimezone().isoformat()
 
 
+def now_iso() -> str:
+    return datetime.now().astimezone().isoformat()
+
+
 def _read_rows(path: str = CSV_PATH) -> list[dict[str, str]]:
     if not os.path.exists(path):
         return []
@@ -98,6 +102,16 @@ def migrate_csv(path: str = CSV_PATH) -> None:
     with open(path, encoding="utf-8") as f:
         first_line = f.readline().strip()
     if first_line.startswith("run_id,"):
+        headers = first_line.split(",")
+        if "iter_started_at" in headers:
+            return
+        if "run_started_at" in headers:
+            rows = _read_rows(path)
+            for row in rows:
+                row["iter_started_at"] = row.pop("run_started_at", "")
+            _write_rows(rows, path)
+            print(f"Migrated {len(rows)} rows: run_started_at -> iter_started_at")
+            return
         return
     rows = _read_rows(path)
     if not rows:
@@ -113,7 +127,7 @@ def migrate_csv(path: str = CSV_PATH) -> None:
         migrated.append(
             {
                 "run_id": run_id,
-                "run_started_at": run_started_at,
+                "iter_started_at": run_started_at,
                 "iteration": row.get("iteration", ""),
                 "games_file": "",
                 "avg_score": row.get("avg_score", ""),
@@ -158,7 +172,7 @@ def resolve_run(resume: str | None) -> dict[str, Any]:
     migrate_csv()
     rows = _read_rows()
     now = int(datetime.now().timestamp())
-    now_iso = datetime.now().astimezone().isoformat()
+    now_iso_val = now_iso()
 
     if resume is not None:
         target = resume if resume != "latest" else _latest_run_id(rows)
@@ -171,7 +185,11 @@ def resolve_run(resume: str | None) -> dict[str, Any]:
                 print(f"Run {target} not found; starting new run.", file=sys.stderr)
                 target = None
             else:
-                started = run_rows[0].get("run_started_at") or _iso_from_unix(target)
+                started = (
+                    run_rows[0].get("iter_started_at")
+                    or run_rows[0].get("run_started_at")
+                    or _iso_from_unix(target)
+                )
                 start_iter = _max_iteration_for_run(rows, target) + 1
                 info = {
                     "run_id": target,
@@ -186,7 +204,7 @@ def resolve_run(resume: str | None) -> dict[str, Any]:
 
     info = {
         "run_id": str(now),
-        "run_started_at": now_iso,
+        "run_started_at": now_iso_val,
         "start_iter": 1,
         "mode": "new",
     }
@@ -233,7 +251,7 @@ def normalize_match_type(match_type: str) -> str:
 
 def append_row(
     run_id: str,
-    run_started_at: str,
+    iter_started_at: str,
     iteration: int,
     games_file: str,
     game_metrics: dict[str, Any],
@@ -247,7 +265,7 @@ def append_row(
 
     row = {
         "run_id": run_id,
-        "run_started_at": run_started_at,
+        "iter_started_at": iter_started_at,
         "iteration": str(iteration),
         "games_file": archived,
         "avg_score": game_metrics.get("avg_score", ""),
@@ -335,7 +353,7 @@ def main() -> None:
 
     p_append = sub.add_parser("append-row")
     p_append.add_argument("--run-id", required=True)
-    p_append.add_argument("--run-started-at", required=True)
+    p_append.add_argument("--iter-started-at", required=True)
     p_append.add_argument("--iteration", type=int, required=True)
     p_append.add_argument("--games-file", default="")
     p_append.add_argument("--game-json", required=True)
@@ -344,7 +362,7 @@ def main() -> None:
     p_append.set_defaults(
         func=lambda a: append_row(
             a.run_id,
-            a.run_started_at,
+            a.iter_started_at,
             a.iteration,
             a.games_file,
             json.loads(a.game_json),
@@ -352,6 +370,9 @@ def main() -> None:
             a.match_type,
         )
     )
+
+    p_now = sub.add_parser("now-iso")
+    p_now.set_defaults(func=lambda a: print(now_iso()))
 
     p_finish = sub.add_parser("finish-run")
     p_finish.set_defaults(func=lambda a: finish_run())

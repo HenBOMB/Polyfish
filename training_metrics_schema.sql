@@ -2,7 +2,7 @@ CREATE TABLE training_metrics (
   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
   created_at timestamptz DEFAULT now(),
   run_id bigint,
-  run_started_at timestamptz,
+  iter_started_at timestamptz,
   iteration int,
   timestamp float,
   games_file text,

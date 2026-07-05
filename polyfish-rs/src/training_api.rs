@@ -18,7 +18,7 @@ const MOVES_PATH: &str = "moves_by_turn.json";
 #[derive(Debug, Clone)]
 struct MetricRow {
     run_id: String,
-    run_started_at: String,
+    iter_started_at: String,
     iteration: i64,
     games_file: String,
     avg_score: f64,
@@ -72,7 +72,14 @@ fn read_csv_rows() -> Vec<MetricRow> {
         }
         rows.push(MetricRow {
             run_id: col(&cols, "run_id"),
-            run_started_at: col(&cols, "run_started_at"),
+            iter_started_at: {
+                let v = col(&cols, "iter_started_at");
+                if v.is_empty() {
+                    col(&cols, "run_started_at")
+                } else {
+                    v
+                }
+            },
             iteration: parse_i64(&col(&cols, "iteration")),
             games_file: col(&cols, "games_file"),
             avg_score: parse_f64(&col(&cols, "avg_score")),
@@ -97,7 +104,7 @@ fn read_csv_rows() -> Vec<MetricRow> {
 fn row_to_json(r: &MetricRow) -> Value {
     json!({
         "run_id": r.run_id,
-        "run_started_at": r.run_started_at,
+        "iter_started_at": r.iter_started_at,
         "iteration": r.iteration,
         "games_file": r.games_file,
         "avg_score": r.avg_score,
@@ -147,7 +154,7 @@ pub async fn api_runs() -> Json<Value> {
                 .fold(0.0_f64, f64::max);
             RunSummary {
                 run_id: run_id.clone(),
-                run_started_at: first.run_started_at.clone(),
+                run_started_at: first.iter_started_at.clone(),
                 iter_count: run_rows.len(),
                 iter_min: first.iteration,
                 iter_max: last.iteration,
