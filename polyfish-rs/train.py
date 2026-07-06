@@ -11,10 +11,12 @@ import time
 
 # --- Configuration ---
 BATCH_SIZE = 256
-EPOCHS = 2
+EPOCHS = int(os.environ.get("TRAIN_EPOCHS", "2"))
 # sqrt-scaled with the 64->256 batch bump (Adam responds closer to sqrt than
 # linear scaling; 0.004 linear would risk instability on a small net).
-LEARNING_RATE = 0.002
+# TRAIN_LR override: use a lower value (e.g. 0.0005) when re-running on the
+# same data — the cosine scheduler restarts at this LR every invocation.
+LEARNING_RATE = float(os.environ.get("TRAIN_LR", "0.002"))
 
 # Early stopping: if the smoothed training loss (mean of the last
 # EARLY_STOP_WINDOW batches) hasn't improved by EARLY_STOP_MIN_DELTA within
@@ -274,8 +276,9 @@ def train():
 
         random.shuffle(game_files)
 
-        # Process in chunks
-        CHUNK_SIZE = 10
+        # Process in chunks. All files in a chunk are held in RAM at once, so
+        # lower TRAIN_CHUNK_FILES when individual game files are large.
+        CHUNK_SIZE = int(os.environ.get("TRAIN_CHUNK_FILES", "10"))
         num_chunks = (len(game_files) + CHUNK_SIZE - 1) // CHUNK_SIZE
 
         print(f"\n=== Epoch {epoch+1}/{EPOCHS} ===")
