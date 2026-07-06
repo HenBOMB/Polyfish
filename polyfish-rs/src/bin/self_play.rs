@@ -8,7 +8,7 @@ use polyfish::ai::eval_server::{
 use polyfish::ai::features::{self, GameFeatures, state_to_tensor};
 use polyfish::ai::mapper::DecomposedMapper;
 use polyfish::ai::network::PolyZeroNet;
-use polyfish::game::Game;
+use polyfish::game::{Game, STARTING_OWNER_ID};
 use polyfish::replayer::{ModReplay, ReplayPlayer, ReplayTurn};
 use polyfish::states::PlayerId;
 use polyfish::types::MapSize;
@@ -103,7 +103,8 @@ struct GameResult {
     ruins_t2c_p50: f32,
     ruins_t2c_p80: f32,
     ruins_t2c_all: f32,
-    /// Mean tribe SPT sampled at game turns 0, 5, 10, … (only turns reached).
+    /// Mean tribe SPT sampled at the start of game turns 0, 5, 10, … (player 1
+    /// to act, before any moves on that turn).
     spt_at_turn: HashMap<i32, f32>,
 }
 
@@ -119,14 +120,22 @@ fn mean_tribe_spt(state: &polyfish::states::GameState) -> f32 {
         / n
 }
 
-fn record_spt_milestones(
+fn record_spt_at_turn_start(
     state: &polyfish::states::GameState,
     spt_at_turn: &mut HashMap<i32, f32>,
     next_idx: &mut usize,
 ) {
-    while *next_idx < SPT_MILESTONES.len() && state.settings.turn >= SPT_MILESTONES[*next_idx] {
-        let t = SPT_MILESTONES[*next_idx];
-        spt_at_turn.insert(t, mean_tribe_spt(state));
+    if state.settings.current_player_turn_id != STARTING_OWNER_ID {
+        return;
+    }
+    while *next_idx < SPT_MILESTONES.len() {
+        let milestone = SPT_MILESTONES[*next_idx];
+        if state.settings.turn < milestone {
+            break;
+        }
+        if state.settings.turn == milestone {
+            spt_at_turn.insert(milestone, mean_tribe_spt(state));
+        }
         *next_idx += 1;
     }
 }
@@ -300,14 +309,15 @@ fn play_single_game(
 
     let mut spt_at_turn: HashMap<i32, f32> = HashMap::new();
     let mut next_spt_milestone = 0usize;
-    record_spt_milestones(
-        &game.state,
-        &mut spt_at_turn,
-        &mut next_spt_milestone,
-    );
 
     let mut move_count = 0;
     while !polyfish::functions::is_game_over(&game.state) {
+        record_spt_at_turn_start(
+            &game.state,
+            &mut spt_at_turn,
+            &mut next_spt_milestone,
+        );
+
         if move_count > 50000 {
             // Reduced for safety
             eprintln!(
@@ -447,11 +457,6 @@ fn play_single_game(
                 );
             }
             let _ = game.play_move(m.as_ref());
-            record_spt_milestones(
-                &game.state,
-                &mut spt_at_turn,
-                &mut next_spt_milestone,
-            );
 
             if progress == ProgressMode::Periodic {
                 while next_milestone < milestones.len()
