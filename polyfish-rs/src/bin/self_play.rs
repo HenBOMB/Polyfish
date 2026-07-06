@@ -23,6 +23,11 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 const HEURISTIC_PRIOR_W0: f32 = 0.5; // net & heur blended 50/50 at start
 const HEURISTIC_PRIOR_DECAY: f32 = 0.97; // from 0.5 to 0.03 by ~92 iterations
 
+// Absolute yardstick for the value target; 8K points is a good place to end a 30T game
+const GOOD_BOT_FINAL_SCORE: f32 = 8000.0;
+// How much to weight relative (vs opponent) vs absolute (vs yardstick) final outcome.
+const FINAL_OUTCOME_REL_W: f32 = 0.6;
+
 /// Console verbosity for long self-play runs.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ProgressMode {
@@ -1348,12 +1353,18 @@ fn main() -> anyhow::Result<()> {
             let combined_score = my_adjusted + opp_adjusted;
             // to spread distribution into useful training range
             let scaling_factor = 3.0;
-            let final_outcome = if combined_score > 0.0 {
+            let relative_outcome = if combined_score > 0.0 {
                 let ratio = (my_adjusted - opp_adjusted) / combined_score;
                 (ratio * scaling_factor).clamp(-1.0, 1.0)
             } else {
                 0.0  // Both players scored 0 - treat as draw
             };
+
+            // Absolute value: final score vs fixed yardstick, not current scoreboard.    
+            let abs_outcome = (my_final / GOOD_BOT_FINAL_SCORE).clamp(0.0, 1.0) * 2.0 - 1.0;
+            let final_outcome = (FINAL_OUTCOME_REL_W * relative_outcome
+                + (1.0 - FINAL_OUTCOME_REL_W) * abs_outcome)
+                .clamp(-1.0, 1.0);
 
             let value = if args.reward_shaping {
                 // Blend final score outcome with per-step progress
