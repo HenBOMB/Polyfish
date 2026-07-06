@@ -27,7 +27,16 @@ const HEURISTIC_PRIOR_W_FLOOR: f32 = 0.1; // permanent behavioral floor, root + 
 // Absolute yardstick for the value target; 8K points is a good place to end a 30T game
 const GOOD_BOT_FINAL_SCORE: f32 = 8000.0;
 // How much to weight relative (vs opponent) vs absolute (vs yardstick) final outcome.
-const FINAL_OUTCOME_REL_W: f32 = 0.6;
+// Absolute-dominant: the relative term is mostly seat/RNG noise in mirror play.
+const FINAL_OUTCOME_REL_W: f32 = 0.4;
+
+// Forward credit window for the near-term value component, in game turns.
+const NEAR_DELTA_TURNS: i32 = 4;
+// Score-advantage change over the window that saturates the near term (±1).
+// ~600 ≈ a strong 4-turn relative swing (village capture + growth).
+const NEAR_DELTA_NORM: f32 = 600.0;
+// Weight of the near-term delta vs the final-outcome tail.
+const NEAR_DELTA_W: f32 = 0.7;
 
 /// Console verbosity for long self-play runs.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -78,11 +87,13 @@ struct DecomposedPolicyData {
 
 /// Result from a single game - contains all data needed for training
 struct GameResult {
-    // Each step: features, policy, player_id, my_score_at_step, opponent_score_at_step, move_type
+    // Each step: features, policy, player_id, my_score_at_step,
+    // opponent_score_at_step, turn, move_type
     history: Vec<(
         GameFeatures,
         DecomposedPolicyData,
         PlayerId,
+        i32,
         i32,
         i32,
         polyfish::types::MoveType,
@@ -287,6 +298,7 @@ fn play_single_game(
         PlayerId,
         i32,
         i32,
+        i32,
         polyfish::types::MoveType,
     )> = Vec::new();
     let mut action_counts: HashMap<polyfish::types::MoveType, usize> = HashMap::new();
@@ -452,6 +464,7 @@ fn play_single_game(
                 pov,
                 my_score_now,
                 opp_score_now,
+                game.state.settings.turn,
                 m.move_type(),
             ));
             if progress == ProgressMode::Full && move_count > 0 && move_count % 10 == 0 {
@@ -1292,6 +1305,29 @@ fn main() -> anyhow::Result<()> {
         let final_scores = &result.scores;
         let history_len = result.history.len();
 
+        // Relative score-advantage change over the next N turns for the same player
+        let near_deltas: Vec<f32> = (0..history_len)
+            .map(|i| {
+                let (_, _, p_id, my_now, opp_now, turn, _) = result.history[i];
+                let adv_now = (my_now - opp_now) as f32;
+                let adv_later = result.history[i + 1..]
+                    .iter()
+                    .find(|(_, _, p2, _, _, t2, _)| *p2 == p_id && *t2 >= turn + NEAR_DELTA_TURNS)
+                    .map(|(_, _, _, my2, opp2, _, _)| (my2 - opp2) as f32)
+                    .unwrap_or_else(|| {
+                        let my_final = final_scores.get(&p_id).copied().unwrap_or(0) as f32;
+                        let opp_final = final_scores
+                            .iter()
+                            .filter(|(id, _)| **id != p_id)
+                            .map(|(_, s)| *s as f32)
+                            .next()
+                            .unwrap_or(0.0);
+                        my_final - opp_final
+                    });
+                ((adv_later - adv_now) / NEAR_DELTA_NORM).clamp(-1.0, 1.0)
+            })
+            .collect();
+
         // Determine the winner_id for this game
         let game_winner_id = {
             // Check who survived (alive = not killed)
@@ -1308,7 +1344,7 @@ fn main() -> anyhow::Result<()> {
             best_id
         };
 
-        for (step_idx, (features, policy_data, p_id, my_score_now, opp_score_now, move_type)) in
+        for (step_idx, (features, policy_data, p_id, _my_score_now, _opp_score_now, _turn, _move_type)) in
             result.history.into_iter().enumerate()
         {
             let flat_map = features
@@ -1369,22 +1405,12 @@ fn main() -> anyhow::Result<()> {
                 .clamp(-1.0, 1.0);
 
             let value = if args.reward_shaping {
-                // Blend final score outcome with per-step progress
-                let my_advantage_now = (my_score_now - opp_score_now) as f32;
-                let combined_now = (my_score_now + opp_score_now) as f32;
-                let progress = if combined_now > 0.0 {
-                    let ratio = my_advantage_now / combined_now;
-                    (ratio * scaling_factor).clamp(-1.0, 1.0)
-                } else {
-                    0.0
-                };
-
-                // Gradually shift from progress signal to final outcome
-                let game_progress = step_idx as f32 / (history_len as f32).max(1.0);
-                let final_weight = 0.5 + 0.5 * game_progress; // 0.5 early → 1.0 late
-                let progress_weight = 1.0 - final_weight;
-
-                (final_weight * final_outcome + progress_weight * progress).clamp(-1.0, 1.0)
+                // Near-term observed outcome (4-turn forward delta) carries
+                // per-action credit; the final-outcome tail carries the
+                // long-horizon signal.
+                (NEAR_DELTA_W * near_deltas[step_idx]
+                    + (1.0 - NEAR_DELTA_W) * final_outcome)
+                    .clamp(-1.0, 1.0)
             } else {
                 final_outcome.clamp(-1.0, 1.0)
             };
@@ -1572,6 +1598,15 @@ fn main() -> anyhow::Result<()> {
     println!("  - Game generation: {:.2}s ({:.1}%)", games_duration.as_secs_f32(), 100.0 * games_duration.as_secs_f32() / total_duration.as_secs_f32());
     let final_moves_per_sec = total_moves as f64 / games_duration.as_secs_f64().max(1e-9);
     println!("  - Throughput: {:.2} moves/sec ({} moves)", final_moves_per_sec, total_moves);
+    // How often search crossed a turn boundary in-tree (simulated EndTurn
+    // edges only; real played moves don't count). ~0/move decision means the
+    // tree essentially never sees beyond the current turn.
+    let sim_end_turns = polyfish::game::SIM_END_TURN_EDGES.load(std::sync::atomic::Ordering::Relaxed);
+    println!(
+        "  - Sim EndTurn edges: {} total ({:.2} per move decision)",
+        sim_end_turns,
+        sim_end_turns as f64 / (total_moves as f64).max(1.0)
+    );
 
     // Deterministic teardown. Drop the evaluator handles first — these hold the
     // only remaining request-channel senders, so dropping them makes each eval

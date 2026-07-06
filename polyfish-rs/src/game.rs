@@ -20,6 +20,11 @@ use std::path::Path;
 /// Starting owner ID (first player)
 pub const STARTING_OWNER_ID: PlayerId = 1;
 
+/// Diagnostic: how many EndTurn edges MCTS actually simulates (i.e. how often
+/// search crosses a turn boundary in-tree). Read/reset by self_play's summary.
+pub static SIM_END_TURN_EDGES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 /// The main game controller
 ///
 /// Provides the interface for loading game states, playing moves, and managing turns.
@@ -252,6 +257,7 @@ impl Game {
         // This prevents exploration during MCTS simulations
 
         let undo = if game_move.move_type() == MoveType::EndTurn {
+            SIM_END_TURN_EDGES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             // Single-player MCTS: skip enemy turns and return to original player
             let original_player = self.state.settings.current_player_turn_id;
             let mut undos = Vec::new();
