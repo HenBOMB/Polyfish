@@ -21,11 +21,15 @@ MAX_VALUE_SAMPLES = 8000
 SELF_PLAY_METRICS_PATH = ".last_self_play_metrics.json"
 TRAIN_METRICS_PATH = ".last_train_metrics.json"
 
+SPT_MILESTONES = [0, 5, 10, 15, 20, 25, 30]
+SPT_COLUMNS = [f"avg_spt_t{t}" for t in SPT_MILESTONES]
+
 HEADER = [
     "run_id",
     "iter_started_at",
     "iteration",
     "games_file",
+    "num_games",
     "avg_score",
     "max_score",
     "p1_avg",
@@ -40,6 +44,8 @@ HEADER = [
     "avg_attacks",
     "avg_revealed_tiles",
     "avg_captured_tiles",
+    *SPT_COLUMNS,
+    "villages_t2c_first",
     "villages_t2c_p50",
     "villages_t2c_p80",
     "villages_t2c_all",
@@ -287,12 +293,15 @@ def resolve_games_file(games_file: str) -> str | None:
     return None
 
 
-def compute_value_distribution(values: list[float], games_file: str) -> dict[str, Any]:
+def compute_value_distribution(
+    values: list[float], games_file: str, num_games: int | None = None
+) -> dict[str, Any]:
     n = len(values)
     if n == 0:
         return {
             "file": games_file,
             "n": 0,
+            "num_games": num_games or 0,
             "stats": {
                 "mean": 0.0,
                 "std": 0.0,
@@ -361,6 +370,7 @@ def compute_value_distribution(values: list[float], games_file: str) -> dict[str
     return {
         "file": games_file,
         "n": n,
+        "num_games": num_games or 0,
         "stats": {
             "mean": mean,
             "std": std,
@@ -395,7 +405,11 @@ def load_values_from_games(path: str) -> list[float]:
 
 
 def update_value_distribution(
-    run_id: str, iteration: int, games_file: str, path: str | None = None
+    run_id: str,
+    iteration: int,
+    games_file: str,
+    path: str | None = None,
+    num_games: int | None = None,
 ) -> None:
     resolved = path or resolve_games_file(games_file)
     if not resolved:
@@ -416,7 +430,7 @@ def update_value_distribution(
             except json.JSONDecodeError:
                 store = {}
     store.setdefault(str(run_id), {})[str(iteration)] = compute_value_distribution(
-        values, games_file
+        values, games_file, num_games
     )
     with open(VALUE_DIST_PATH, "w", encoding="utf-8") as f:
         json.dump(store, f)
@@ -447,7 +461,9 @@ def backfill_value_distribution() -> int:
             path = resolve_games_file(games_file)
             if not path:
                 continue
-            update_value_distribution(run_id, int(iteration), games_file, path)
+            ng = row.get("num_games", "")
+            num_games = int(ng) if str(ng).isdigit() else None
+            update_value_distribution(run_id, int(iteration), games_file, path, num_games)
             filled += 1
     return filled
 
@@ -471,6 +487,7 @@ def append_row(
         "iter_started_at": iter_started_at,
         "iteration": str(iteration),
         "games_file": archived,
+        "num_games": game_metrics.get("num_games", ""),
         "avg_score": game_metrics.get("avg_score", ""),
         "max_score": game_metrics.get("max_score", ""),
         "p1_avg": game_metrics.get("p1_avg", ""),
@@ -485,6 +502,8 @@ def append_row(
         "avg_attacks": game_metrics.get("avg_attacks", ""),
         "avg_revealed_tiles": game_metrics.get("avg_revealed_tiles", ""),
         "avg_captured_tiles": game_metrics.get("avg_captured_tiles", ""),
+        **{col: game_metrics.get(col, "") for col in SPT_COLUMNS},
+        "villages_t2c_first": game_metrics.get("villages_t2c_first", ""),
         "villages_t2c_p50": game_metrics.get("villages_t2c_p50", ""),
         "villages_t2c_p80": game_metrics.get("villages_t2c_p80", ""),
         "villages_t2c_all": game_metrics.get("villages_t2c_all", ""),
@@ -507,7 +526,9 @@ def append_row(
         update_moves_by_turn(run_id, iteration, moves)
 
     if archived:
-        update_value_distribution(run_id, iteration, archived)
+        ng = game_metrics.get("num_games")
+        num_games = int(ng) if ng not in (None, "") else None
+        update_value_distribution(run_id, iteration, archived, num_games=num_games)
 
 
 def update_moves_by_turn(run_id: str, iteration: int, moves_by_turn: Any) -> None:

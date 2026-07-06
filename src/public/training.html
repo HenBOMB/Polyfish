@@ -102,7 +102,33 @@
       gap: 1rem;
     }
     .turn-mini { height: 320px; }
+    .turn-scroll {
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding-bottom: 0.25rem;
+    }
+    .turn-scroll-inner {
+      height: 320px;
+      position: relative;
+    }
     .turn-legend-caption { font-size: 0.8rem; color: var(--muted); margin: 0.25rem 0 0.5rem; }
+    .section-desc {
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin: -0.5rem 0 1rem;
+      max-width: 960px;
+      line-height: 1.55;
+    }
+    .batch-meta {
+      font-size: 0.85rem;
+      color: var(--text);
+      margin: 0 0 1rem;
+      padding: 0.5rem 0.75rem;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      max-width: 960px;
+    }
     .turn-legend {
       display: flex;
       flex-wrap: wrap;
@@ -140,34 +166,58 @@
         <div class="chart-box"><header><h3>Player balance</h3><button class="dl-png" data-canvas="p1p2Chart">PNG</button></header><div class="chart-wrap"><canvas id="p1p2Chart"></canvas></div></div>
         <div class="chart-box"><header><h3>Moves by type</h3><button class="dl-png" data-canvas="movesChart">PNG</button></header><div class="chart-wrap"><canvas id="movesChart"></canvas></div></div>
         <div class="chart-box"><header><h3>Avg moves / game</h3><button class="dl-png" data-canvas="avgMovesChart">PNG</button></header><div class="chart-wrap"><canvas id="avgMovesChart"></canvas></div></div>
+        <div class="chart-box"><header><h3>Stars / turn by game turn</h3><button class="dl-png" data-canvas="sptChart">PNG</button></header><div class="chart-wrap"><canvas id="sptChart"></canvas></div></div>
+        <div class="chart-box"><header><h3>Village capture speed</h3><button class="dl-png" data-canvas="villageT2cChart">PNG</button></header><div class="chart-wrap"><canvas id="villageT2cChart"></canvas></div></div>
+        <div class="chart-box"><header><h3>Ruin capture speed</h3><button class="dl-png" data-canvas="ruinT2cChart">PNG</button></header><div class="chart-wrap"><canvas id="ruinT2cChart"></canvas></div></div>
         <div class="chart-box"><header><h3>League vs self-play</h3><button class="dl-png" data-canvas="leagueChart">PNG</button></header><div class="chart-wrap"><canvas id="leagueChart"></canvas></div></div>
       </div>
       <div style="margin-top:1rem">
         <button id="downloadGrid">Download 2×2 progress PNG</button>
       </div>
       <h2 style="margin-top:1.5rem">Moves by turn</h2>
-      <p class="turn-legend-caption">Each mini-chart is one training iteration. Bars are turns within a sampled game; stacked colors show how many moves of each type happened that turn (bar height = total moves).</p>
+      <p class="turn-legend-caption">One mini-chart per training iteration. Each bar is a game turn; stacked colors show the <strong>percentage</strong> of moves of each type that turn (excluding Step and EndTurn). Scroll horizontally when games run past the visible width.</p>
       <div id="moveTurnLegend" class="turn-legend"></div>
       <div id="moveTurnGrid"></div>
     </section>
 
-    <section id="panelB">
-      <h2>Generation analysis</h2>
-      <div class="controls" style="margin-bottom:1rem">
+    <section id="panelIterControls">
+      <div class="controls" style="margin-bottom:0.5rem">
         <label>Iteration:</label>
         <select id="iterSelect"></select>
       </div>
-      <div id="flagsBanner" class="flags"><strong>Flags</strong><ul id="flagsList"></ul></div>
+    </section>
+
+    <section id="panelB">
+      <h2>Generation analysis</h2>
+      <p class="section-desc">
+        Deep-dive for the selected training iteration. Self-play writes a batch of games to <code>games_*.safetensors</code>; these charts summarize that batch directly.
+        <strong>Value distribution</strong> plots the value-head training targets assigned to every position (roughly −1 to +1 win/loss signal). A healthy run spreads mass across moderate magnitudes rather than collapsing to 0 or saturating at ±1.
+      </p>
+      <p id="genBatchMeta" class="batch-meta"></p>
       <div class="chart-grid">
         <div class="chart-box"><header><h3>Value distribution</h3><button class="dl-png" data-canvas="valDistChart">PNG</button></header><div class="chart-wrap"><canvas id="valDistChart"></canvas></div></div>
         <div class="chart-box"><header><h3>Value histogram</h3><button class="dl-png" data-canvas="valHistChart">PNG</button></header><div class="chart-wrap"><canvas id="valHistChart"></canvas></div></div>
         <div class="chart-box"><header><h3>Value time series</h3><button class="dl-png" data-canvas="valTsChart">PNG</button></header><div class="chart-wrap"><canvas id="valTsChart"></canvas></div></div>
         <div class="chart-box"><header><h3>Absolute value distribution</h3><button class="dl-png" data-canvas="valAbsChart">PNG</button></header><div class="chart-wrap"><canvas id="valAbsChart"></canvas></div></div>
         <div class="chart-box"><header><h3>Value buckets</h3><button class="dl-png" data-canvas="valBucketChart">PNG</button></header><div class="chart-wrap"><canvas id="valBucketChart"></canvas></div></div>
+        <div class="chart-box"><header><h3>Stars / turn snapshot</h3><button class="dl-png" data-canvas="sptSnapChart">PNG</button></header><div class="chart-wrap"><canvas id="sptSnapChart"></canvas></div></div>
+        <div class="chart-box"><header><h3>P1 vs P2 snapshot</h3><button class="dl-png" data-canvas="snapP1P2Chart">PNG</button></header><div class="chart-wrap"><canvas id="snapP1P2Chart"></canvas></div></div>
+      </div>
+    </section>
+
+    <section id="panelC">
+      <h2>Baseline delta</h2>
+      <p class="section-desc">
+        Compares the selected iteration against a rolling baseline: the mean of prior iterations in the same run (when ≥5 exist), otherwise prior rows across runs.
+        Side-by-side bars show the <strong>actual metric values</strong> for this iteration vs that baseline. <strong>Z-scores</strong> highlight metrics ≥2 standard deviations away.
+      </p>
+      <div id="flagsBanner" class="flags"><strong>Flags</strong><ul id="flagsList"></ul></div>
+      <div class="chart-grid">
+        <div class="chart-box"><header><h3>Score vs baseline</h3><button class="dl-png" data-canvas="scoreBaselineChart">PNG</button></header><div class="chart-wrap"><canvas id="scoreBaselineChart"></canvas></div></div>
+        <div class="chart-box"><header><h3>Stars / turn vs baseline</h3><button class="dl-png" data-canvas="sptBaselineChart">PNG</button></header><div class="chart-wrap"><canvas id="sptBaselineChart"></canvas></div></div>
         <div class="chart-box"><header><h3>Economy vs baseline</h3><button class="dl-png" data-canvas="econChart">PNG</button></header><div class="chart-wrap"><canvas id="econChart"></canvas></div></div>
         <div class="chart-box"><header><h3>Combat vs baseline</h3><button class="dl-png" data-canvas="combatChart">PNG</button></header><div class="chart-wrap"><canvas id="combatChart"></canvas></div></div>
         <div class="chart-box"><header><h3>Z-scores</h3><button class="dl-png" data-canvas="zChart">PNG</button></header><div class="chart-wrap"><canvas id="zChart"></canvas></div></div>
-        <div class="chart-box"><header><h3>P1 vs P2 snapshot</h3><button class="dl-png" data-canvas="snapP1P2Chart">PNG</button></header><div class="chart-wrap"><canvas id="snapP1P2Chart"></canvas></div></div>
       </div>
     </section>
   </main>
@@ -180,6 +230,10 @@ let allMetrics = [];
 let movesByTurn = {};
 let selectedRunIdx = 0;
 let pollTimer = null;
+
+const MOVE_NOISE = new Set(['EndTurn', 'Step']);
+const SPT_TURNS = [0, 5, 10, 15, 20, 25, 30];
+const sptField = t => `avg_spt_t${t}`;
 
 const chartDefaults = {
   responsive: true,
@@ -265,6 +319,47 @@ function leaguePointColors(rows) {
   return rows.map(r => r.match_type === 'league' ? '#f39c12' : '#4a9eff');
 }
 
+function makeBaselineComparisonChart(id, labels, fields, row, base, { skipZero = false } = {}) {
+  const pick = (obj, f) => {
+    const v = obj[f];
+    if (skipZero && (v == null || v <= 0)) return null;
+    return v ?? 0;
+  };
+  makeChart(id, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'this iter',
+          data: fields.map(f => pick(row, f)),
+          backgroundColor: '#3498db',
+        },
+        {
+          label: 'baseline',
+          data: fields.map(f => pick(base, f)),
+          backgroundColor: '#95a5a6',
+        },
+      ],
+    },
+    options: {
+      ...chartDefaults,
+      scales: {
+        x: chartDefaults.scales.x,
+        y: { ...chartDefaults.scales.y, beginAtZero: true },
+      },
+      plugins: {
+        ...chartDefaults.plugins,
+        tooltip: {
+          callbacks: {
+            label: ctx => `${ctx.dataset.label}: ${Number(ctx.parsed.y).toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+          },
+        },
+      },
+    },
+  });
+}
+
 function renderPanelA() {
   const it = runMetrics.map(r => r.iteration);
   makeChart('lossChart', {
@@ -320,6 +415,71 @@ function renderPanelA() {
     data: { labels: it, datasets: [{ label: 'avg moves', data: runMetrics.map(r => r.avg_moves), borderColor: '#9b59b6', tension: 0.2 }] },
     options: chartDefaults,
   });
+  makeChart('sptChart', {
+    type: 'line',
+    data: {
+      labels: it,
+      datasets: SPT_TURNS.map((t, i) => ({
+        label: `turn ${t}`,
+        data: runMetrics.map(r => {
+          const v = r[sptField(t)];
+          return v > 0 ? v : null;
+        }),
+        borderColor: `hsl(${(i * 37) % 360}, 65%, 55%)`,
+        tension: 0.2,
+        spanGaps: false,
+      })),
+    },
+    options: {
+      ...chartDefaults,
+      plugins: {
+        ...chartDefaults.plugins,
+        title: {
+          display: true,
+          text: 'Mean tribe SPT when the game reaches each turn (games that end early omit later turns)',
+          color: '#8b9cb3',
+          font: { size: 11 },
+        },
+      },
+    },
+  });
+  makeChart('villageT2cChart', {
+    type: 'line',
+    data: {
+      labels: it,
+      datasets: [
+        { label: '1st village', data: runMetrics.map(r => r.villages_t2c_first || null), borderColor: '#2ecc71', tension: 0.2, spanGaps: true },
+        { label: '50% villages', data: runMetrics.map(r => r.villages_t2c_p50 || null), borderColor: '#3498db', tension: 0.2, spanGaps: true },
+        { label: '80% villages', data: runMetrics.map(r => r.villages_t2c_p80 || null), borderColor: '#9b59b6', tension: 0.2, spanGaps: true },
+        { label: 'all villages', data: runMetrics.map(r => r.villages_t2c_all || null), borderColor: '#e67e22', tension: 0.2, spanGaps: true },
+      ],
+    },
+    options: {
+      ...chartDefaults,
+      plugins: {
+        ...chartDefaults.plugins,
+        title: { display: true, text: 'Turn to capture (lower is better)', color: '#8b9cb3', font: { size: 11 } },
+      },
+    },
+  });
+  makeChart('ruinT2cChart', {
+    type: 'line',
+    data: {
+      labels: it,
+      datasets: [
+        { label: '50% ruins', data: runMetrics.map(r => r.ruins_t2c_p50 || null), borderColor: '#3498db', tension: 0.2, spanGaps: true },
+        { label: '80% ruins', data: runMetrics.map(r => r.ruins_t2c_p80 || null), borderColor: '#9b59b6', tension: 0.2, spanGaps: true },
+        { label: 'all ruins', data: runMetrics.map(r => r.ruins_t2c_all || null), borderColor: '#e67e22', tension: 0.2, spanGaps: true },
+      ],
+    },
+    options: {
+      ...chartDefaults,
+      plugins: {
+        ...chartDefaults.plugins,
+        title: { display: true, text: 'Turn to capture (lower is better)', color: '#8b9cb3', font: { size: 11 } },
+      },
+    },
+  });
   const leagueCount = runMetrics.filter(r => r.match_type === 'league').length;
   const selfCount = runMetrics.length - leagueCount;
   makeChart('leagueChart', {
@@ -344,16 +504,16 @@ function renderMoveTurnGrid() {
   grid.innerHTML = '';
   legend.innerHTML = '';
   const keys = Object.keys(movesByTurn).map(Number).sort((a, b) => a - b);
-  const sample = keys.length <= 10 ? keys : keys.filter((_, i) => i % Math.ceil(keys.length / 10) === 0);
 
-  // Collect move types across all sampled iterations and rank by total volume (descending),
-  // so the biggest move types are always in the same stacking position/legend order — not alphabetical.
   const totals = {};
-  sample.forEach(iter => {
+  keys.forEach(iter => {
     const turnData = movesByTurn[String(iter)] || {};
     Object.keys(turnData).forEach(t => {
       const counts = turnData[t] || {};
-      Object.keys(counts).forEach(k => { totals[k] = (totals[k] || 0) + counts[k]; });
+      Object.keys(counts).forEach(k => {
+        if (MOVE_NOISE.has(k)) return;
+        totals[k] = (totals[k] || 0) + counts[k];
+      });
     });
   });
   const allTypes = Object.keys(totals).sort((a, b) => totals[b] - totals[a]);
@@ -364,28 +524,51 @@ function renderMoveTurnGrid() {
     legend.appendChild(item);
   });
 
-  sample.forEach(iter => {
+  keys.forEach(iter => {
     const div = document.createElement('div');
     div.className = 'chart-box';
     const title = document.createElement('h3');
     title.textContent = `Iter ${iter}`;
     div.appendChild(title);
+    const scroll = document.createElement('div');
+    scroll.className = 'turn-scroll';
     const wrap = document.createElement('div');
-    wrap.className = 'turn-mini';
+    wrap.className = 'turn-scroll-inner';
     const canvas = document.createElement('canvas');
     wrap.appendChild(canvas);
-    div.appendChild(wrap);
+    scroll.appendChild(wrap);
+    div.appendChild(scroll);
     grid.appendChild(div);
+
     const turnData = movesByTurn[String(iter)] || {};
-    const turns = Object.keys(turnData).map(Number).sort((a, b) => a - b).slice(0, 12);
+    const turns = Object.keys(turnData).map(Number).sort((a, b) => a - b);
+    wrap.style.minWidth = `${Math.max(480, turns.length * 36)}px`;
+
     const types = new Set();
-    turns.forEach(t => Object.keys(turnData[String(t)] || {}).forEach(k => types.add(k)));
+    turns.forEach(t => {
+      Object.keys(turnData[String(t)] || {}).forEach(k => {
+        if (!MOVE_NOISE.has(k)) types.add(k);
+      });
+    });
     const typeList = allTypes.filter(tp => types.has(tp));
+
+    const turnTotals = turns.map(t => {
+      const counts = turnData[String(t)] || {};
+      return typeList.reduce((sum, tp) => sum + (counts[tp] || 0), 0);
+    });
+
     const datasets = typeList.map(tp => ({
       label: tp,
-      data: turns.map(t => (turnData[String(t)] || {})[tp] || 0),
+      data: turns.map((t, i) => {
+        const count = (turnData[String(t)] || {})[tp] || 0;
+        const total = turnTotals[i];
+        return total > 0 ? (count / total) * 100 : 0;
+      }),
       backgroundColor: moveTypeColor(tp, allTypes),
     }));
+
+    const existing = Chart.getChart(canvas);
+    if (existing) existing.destroy();
     new Chart(canvas, {
       type: 'bar',
       data: { labels: turns.map(String), datasets },
@@ -394,11 +577,25 @@ function renderMoveTurnGrid() {
         maintainAspectRatio: false,
         plugins: {
           legend: { display: false },
-          tooltip: { callbacks: { title: items => `Turn ${items[0].label}` } },
+          tooltip: {
+            callbacks: {
+              title: items => `Turn ${items[0].label}`,
+              label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}%`,
+            },
+          },
         },
         scales: {
-          x: { stacked: true, title: { display: true, text: 'Turn #', color: '#8b9cb3', font: { size: 11 } }, ticks: { color: '#8b9cb3', maxRotation: 0, font: { size: 11 } } },
-          y: { stacked: true, display: false },
+          x: {
+            stacked: true,
+            title: { display: true, text: 'Turn #', color: '#8b9cb3', font: { size: 11 } },
+            ticks: { color: '#8b9cb3', maxRotation: 0, font: { size: 11 } },
+          },
+          y: {
+            stacked: true,
+            max: 100,
+            ticks: { color: '#8b9cb3', callback: v => `${v}%`, font: { size: 11 } },
+            grid: { color: '#2d3a4f' },
+          },
         },
       },
     });
@@ -422,7 +619,11 @@ function baselineForRow(row) {
     r.run_id < row.run_id || (r.run_id === row.run_id && r.iteration < row.iteration)
   );
   if (pool.length < 3) pool = allMetrics.filter(r => r !== row);
-  const fields = ['avg_score','avg_research','avg_harvests','avg_moves','avg_attacks','avg_captures','avg_builds','p1_avg','p2_avg'];
+  const fields = [
+    'avg_score', ...SPT_TURNS.map(sptField), 'avg_research', 'avg_harvests', 'avg_moves',
+    'avg_attacks', 'avg_captures', 'avg_builds', 'p1_avg', 'p2_avg',
+    'villages_t2c_p50', 'villages_t2c_all', 'ruins_t2c_p50', 'ruins_t2c_all',
+  ];
   const base = {};
   fields.forEach(f => {
     const vals = pool.map(r => r[f]).filter(v => v > 0 || f.includes('avg'));
@@ -442,7 +643,8 @@ function buildFlags(row, base, valStats) {
   cmp('avg_moves', 0.7, 'Early termination / short games');
   cmp('avg_attacks', 0.5, 'Combat collapse (attacks)');
   cmp('avg_captures', 0.5, 'Combat collapse (captures)');
-  cmp('avg_score', 0.7, 'Economy collapse (score)');
+  cmp('avg_score', 0.7, 'Score collapse');
+  cmp('avg_spt_t10', 0.7, 'Economy collapse (SPT @ turn 10)');
   cmp('avg_research', 0.5, 'Economy collapse (research)');
   cmp('avg_harvests', 0.5, 'Economy collapse (harvests)');
   if (Math.max(row.p1_avg, row.p2_avg) > 0 && Math.abs(row.p1_avg - row.p2_avg) / Math.max(row.p1_avg, row.p2_avg) > 0.15) {
@@ -452,40 +654,46 @@ function buildFlags(row, base, valStats) {
   return flags;
 }
 
-async function renderPanelB() {
+async function fetchValueDist(row, run) {
+  const params = new URLSearchParams({
+    run: row.run_id || run.run_id,
+    iteration: String(row.iteration),
+  });
+  if (row.games_file) params.set('file', row.games_file);
+  return fetchJson(`/api/value-distribution?${params}`);
+}
+
+function getSelectedIterContext() {
   const sel = document.getElementById('iterSelect');
-  if (!runMetrics.length) return;
-  let run = runs[selectedRunIdx];
+  if (!runMetrics.length) return null;
+  const run = runs[selectedRunIdx];
   const iter = parseInt(sel.value || runMetrics[runMetrics.length - 1].iteration, 10);
   const row = runMetrics.find(r => r.iteration === iter) || runMetrics[runMetrics.length - 1];
   const base = baselineForRow(row);
+  return { run, row, base, iter };
+}
 
-  let valDist = null;
-  try {
-    const params = new URLSearchParams({
-      run: row.run_id || run.run_id,
-      iteration: String(row.iteration),
-    });
-    if (row.games_file) params.set('file', row.games_file);
-    valDist = await fetchJson(`/api/value-distribution?${params}`);
-  } catch (e) { console.warn('value dist', e); }
-
-  const flags = buildFlags(row, base, valDist?.stats);
-  const banner = document.getElementById('flagsBanner');
-  const list = document.getElementById('flagsList');
-  if (flags.length) {
-    banner.classList.add('visible');
-    list.innerHTML = flags.map(f => `<li>${f}</li>`).join('');
-  } else {
-    banner.classList.remove('visible');
-    list.innerHTML = '';
+function renderGenBatchMeta(row, valDist) {
+  const el = document.getElementById('genBatchMeta');
+  if (!el) return;
+  let games = row.num_games || valDist?.num_games || 0;
+  if (!games && valDist?.n && row.avg_moves > 0) {
+    games = Math.round(valDist.n / row.avg_moves);
   }
+  const positions = valDist?.n;
+  const parts = [];
+  if (games) parts.push(`<strong>${games}</strong> games`);
+  if (positions != null) parts.push(`${Number(positions).toLocaleString()} training positions`);
+  el.innerHTML = parts.join(' · ');
+}
 
+function renderPanelB(row, valDist) {
+  renderGenBatchMeta(row, valDist);
   if (valDist && valDist.hist) {
     const smooth = (counts) => {
       const out = counts.map((c, i) => {
-        const w = counts.slice(Math.max(0,i-2), i+3);
-        return w.reduce((a,b)=>a+b,0)/w.length;
+        const w = counts.slice(Math.max(0, i - 2), i + 3);
+        return w.reduce((a, b) => a + b, 0) / w.length;
       });
       return out;
     };
@@ -500,7 +708,10 @@ async function renderPanelB() {
     });
     makeChart('valHistChart', {
       type: 'bar',
-      data: { labels: valDist.hist.bins.filter((_,i)=>i%4===0), datasets: [{ label: 'count', data: valDist.hist.counts.filter((_,i)=>i%4===0), backgroundColor: '#5dade2' }] },
+      data: {
+        labels: valDist.hist.bins.filter((_, i) => i % 4 === 0).map(v => v.toFixed(3)),
+        datasets: [{ label: 'count', data: valDist.hist.counts.filter((_, i) => i % 4 === 0), backgroundColor: '#5dade2' }],
+      },
       options: chartDefaults,
     });
     makeChart('valTsChart', {
@@ -518,39 +729,97 @@ async function renderPanelB() {
       type: 'bar',
       data: {
         labels: ['<0.1', '0.1-0.3', '0.3-0.5', '≥0.5'],
-        datasets: [{ label: '%', data: [valDist.buckets.weak, valDist.buckets.moderate, valDist.buckets.strong, valDist.buckets.saturation], backgroundColor: ['#e74c3c','#2ecc71','#f39c12','#e74c3c'] }],
+        datasets: [{ label: '%', data: [valDist.buckets.weak, valDist.buckets.moderate, valDist.buckets.strong, valDist.buckets.saturation], backgroundColor: ['#e74c3c', '#2ecc71', '#f39c12', '#e74c3c'] }],
       },
       options: { ...chartDefaults, plugins: { legend: { display: false } } },
     });
   } else {
-    ['valDistChart','valHistChart','valTsChart','valAbsChart','valBucketChart'].forEach(id => destroyChart(id));
+    ['valDistChart', 'valHistChart', 'valTsChart', 'valAbsChart', 'valBucketChart'].forEach(id => destroyChart(id));
   }
 
-  const econFields = ['avg_score','avg_research','avg_harvests','avg_moves'];
-  makeChart('econChart', {
-    type: 'bar',
+  makeChart('sptSnapChart', {
+    type: 'line',
     data: {
-      labels: econFields,
-      datasets: [
-        { label: 'this iter', data: econFields.map(f => row[f]), backgroundColor: '#3498db' },
-        { label: 'baseline', data: econFields.map(f => base[f]), backgroundColor: '#95a5a6' },
-      ],
+      labels: SPT_TURNS.map(String),
+      datasets: [{
+        label: 'mean tribe SPT',
+        data: SPT_TURNS.map(t => {
+          const v = row[sptField(t)];
+          return v > 0 ? v : null;
+        }),
+        borderColor: '#f1c40f',
+        backgroundColor: 'rgba(241,196,15,0.15)',
+        fill: true,
+        tension: 0.2,
+        spanGaps: false,
+      }],
     },
-    options: chartDefaults,
+    options: {
+      ...chartDefaults,
+      plugins: {
+        ...chartDefaults.plugins,
+        title: {
+          display: true,
+          text: `Iter ${row.iteration} · SPT sampled at game turn milestones`,
+          color: '#8b9cb3',
+          font: { size: 11 },
+        },
+      },
+      scales: {
+        x: { ...chartDefaults.scales.x, title: { display: true, text: 'Game turn', color: '#8b9cb3', font: { size: 11 } } },
+        y: chartDefaults.scales.y,
+      },
+    },
   });
-  const combatFields = ['avg_attacks','avg_captures','avg_builds'];
-  makeChart('combatChart', {
+  makeChart('snapP1P2Chart', {
     type: 'bar',
-    data: {
-      labels: combatFields,
-      datasets: [
-        { label: 'this iter', data: combatFields.map(f => row[f]), backgroundColor: '#e74c3c' },
-        { label: 'baseline', data: combatFields.map(f => base[f]), backgroundColor: '#95a5a6' },
-      ],
-    },
-    options: chartDefaults,
+    data: { labels: ['P1', 'P2'], datasets: [{ label: 'avg score', data: [row.p1_avg, row.p2_avg], backgroundColor: ['#3498db', '#e67e22'] }] },
+    options: { ...chartDefaults, plugins: { legend: { display: false } } },
   });
-  const zFields = ['avg_score','avg_moves','avg_attacks','avg_captures','avg_harvests','avg_research','avg_builds','p1_avg','p2_avg'];
+}
+
+function renderPanelC(row, base, valStats) {
+  const flags = buildFlags(row, base, valStats);
+  const banner = document.getElementById('flagsBanner');
+  const list = document.getElementById('flagsList');
+  if (flags.length) {
+    banner.classList.add('visible');
+    list.innerHTML = flags.map(f => `<li>${f}</li>`).join('');
+  } else {
+    banner.classList.remove('visible');
+    list.innerHTML = '';
+  }
+
+  makeBaselineComparisonChart(
+    'scoreBaselineChart',
+    ['avg score', 'P1 avg', 'P2 avg'],
+    ['avg_score', 'p1_avg', 'p2_avg'],
+    row,
+    base,
+  );
+  makeBaselineComparisonChart(
+    'sptBaselineChart',
+    SPT_TURNS.map(t => `turn ${t}`),
+    SPT_TURNS.map(sptField),
+    row,
+    base,
+    { skipZero: true },
+  );
+  makeBaselineComparisonChart(
+    'econChart',
+    ['research', 'harvests'],
+    ['avg_research', 'avg_harvests'],
+    row,
+    base,
+  );
+  makeBaselineComparisonChart(
+    'combatChart',
+    ['attacks', 'captures', 'builds'],
+    ['avg_attacks', 'avg_captures', 'avg_builds'],
+    row,
+    base,
+  );
+  const zFields = ['avg_score', ...SPT_TURNS.map(sptField), 'avg_moves', 'avg_attacks', 'avg_captures', 'avg_harvests', 'avg_research', 'avg_builds', 'p1_avg', 'p2_avg'];
   const zs = zFields.map(f => {
     const std = base[f + '_std'];
     return std > 0 ? (row[f] - base[f]) / std : 0;
@@ -566,11 +835,19 @@ async function renderPanelB() {
       plugins: { annotation: {} },
     },
   });
-  makeChart('snapP1P2Chart', {
-    type: 'bar',
-    data: { labels: ['P1','P2'], datasets: [{ label: 'avg score', data: [row.p1_avg, row.p2_avg], backgroundColor: ['#3498db','#e67e22'] }] },
-    options: { ...chartDefaults, plugins: { legend: { display: false } } },
-  });
+}
+
+async function renderIterPanels() {
+  const ctx = getSelectedIterContext();
+  if (!ctx) return;
+  let valDist = null;
+  try {
+    valDist = await fetchValueDist(ctx.row, ctx.run);
+  } catch (e) {
+    console.warn('value dist', e);
+  }
+  renderPanelB(ctx.row, valDist);
+  renderPanelC(ctx.row, ctx.base, valDist?.stats);
 }
 
 async function refreshAll() {
@@ -579,7 +856,7 @@ async function refreshAll() {
   renderSummaryCards();
   renderPanelA();
   populateIterSelect();
-  await renderPanelB();
+  await renderIterPanels();
 }
 
 async function checkTrainingStatus() {
@@ -623,7 +900,7 @@ document.getElementById('runSelect').addEventListener('change', async (e) => {
   renderSummaryCards();
   renderPanelA();
   populateIterSelect();
-  await renderPanelB();
+  await renderIterPanels();
 });
 
 document.getElementById('prevRun').addEventListener('click', async () => {
@@ -634,7 +911,7 @@ document.getElementById('prevRun').addEventListener('click', async () => {
   renderSummaryCards();
   renderPanelA();
   populateIterSelect();
-  await renderPanelB();
+  await renderIterPanels();
 });
 
 document.getElementById('nextRun').addEventListener('click', async () => {
@@ -645,11 +922,11 @@ document.getElementById('nextRun').addEventListener('click', async () => {
   renderSummaryCards();
   renderPanelA();
   populateIterSelect();
-  await renderPanelB();
+  await renderIterPanels();
 });
 
 document.getElementById('refreshBtn').addEventListener('click', refreshAll);
-document.getElementById('iterSelect').addEventListener('change', renderPanelB);
+document.getElementById('iterSelect').addEventListener('change', () => { renderIterPanels(); });
 
 document.querySelectorAll('.dl-png').forEach(btn => {
   btn.addEventListener('click', () => downloadCanvas(btn.dataset.canvas, btn.dataset.canvas));

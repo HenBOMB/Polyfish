@@ -96,17 +96,45 @@ struct GameResult {
     /// Turn by which 50%/80%/100% of the map's initial open villages (and
     /// ruins) had been captured by either player — how *directly* the AI
     /// seeks them out. Censored at max_turns when a game never gets there.
+    villages_t2c_first: f32,
     villages_t2c_p50: f32,
     villages_t2c_p80: f32,
     villages_t2c_all: f32,
     ruins_t2c_p50: f32,
     ruins_t2c_p80: f32,
     ruins_t2c_all: f32,
+    /// Mean tribe SPT sampled at game turns 0, 5, 10, … (only turns reached).
+    spt_at_turn: HashMap<i32, f32>,
+}
+
+const SPT_MILESTONES: [i32; 7] = [0, 5, 10, 15, 20, 25, 30];
+
+fn mean_tribe_spt(state: &polyfish::states::GameState) -> f32 {
+    let n = state.tribes.len().max(1) as f32;
+    state
+        .tribes
+        .values()
+        .map(|t| polyfish::functions::get_tribe_spt(state, t) as f32)
+        .sum::<f32>()
+        / n
+}
+
+fn record_spt_milestones(
+    state: &polyfish::states::GameState,
+    spt_at_turn: &mut HashMap<i32, f32>,
+    next_idx: &mut usize,
+) {
+    while *next_idx < SPT_MILESTONES.len() && state.settings.turn >= SPT_MILESTONES[*next_idx] {
+        let t = SPT_MILESTONES[*next_idx];
+        spt_at_turn.insert(t, mean_tribe_spt(state));
+        *next_idx += 1;
+    }
 }
 
 /// Turn by which `frac` of `initial` capturables were taken, given the
-/// chronological list of capture turns. `censor` (game length) when the game
-/// never reached that fraction or the map had none to begin with.
+/// chronological list of capture turns (`frac` 0.0 = the first capture).
+/// `censor` (game length) when the game never reached that fraction or the
+/// map had none to begin with.
 fn t2c_turn(capture_turns: &[i32], initial: usize, frac: f64, censor: i32) -> f32 {
     if initial == 0 {
         return censor as f32;
@@ -270,6 +298,14 @@ fn play_single_game(
     };
     let mut next_milestone = 0usize;
 
+    let mut spt_at_turn: HashMap<i32, f32> = HashMap::new();
+    let mut next_spt_milestone = 0usize;
+    record_spt_milestones(
+        &game.state,
+        &mut spt_at_turn,
+        &mut next_spt_milestone,
+    );
+
     let mut move_count = 0;
     while !polyfish::functions::is_game_over(&game.state) {
         if move_count > 50000 {
@@ -411,6 +447,11 @@ fn play_single_game(
                 );
             }
             let _ = game.play_move(m.as_ref());
+            record_spt_milestones(
+                &game.state,
+                &mut spt_at_turn,
+                &mut next_spt_milestone,
+            );
 
             if progress == ProgressMode::Periodic {
                 while next_milestone < milestones.len()
@@ -488,12 +529,14 @@ fn play_single_game(
         moves: move_count,
         revealed_tiles,
         captured_tiles,
+        villages_t2c_first: t2c_turn(&village_capture_turns, initial_villages, 0.0, max_turns),
         villages_t2c_p50: t2c_turn(&village_capture_turns, initial_villages, 0.5, max_turns),
         villages_t2c_p80: t2c_turn(&village_capture_turns, initial_villages, 0.8, max_turns),
         villages_t2c_all: t2c_turn(&village_capture_turns, initial_villages, 1.0, max_turns),
         ruins_t2c_p50: t2c_turn(&ruin_capture_turns, initial_ruins, 0.5, max_turns),
         ruins_t2c_p80: t2c_turn(&ruin_capture_turns, initial_ruins, 0.8, max_turns),
         ruins_t2c_all: t2c_turn(&ruin_capture_turns, initial_ruins, 1.0, max_turns),
+        spt_at_turn,
         winner_score,
         recap: ModReplay {
             game_state: initial_state,
@@ -1155,7 +1198,9 @@ fn main() -> anyhow::Result<()> {
     let mut total_attacks = 0;
     let mut total_revealed_tiles: i64 = 0;
     let mut total_captured_tiles: i64 = 0;
-    let mut total_t2c = [0.0f64; 6]; // villages p50/p80/all, ruins p50/p80/all
+    let mut total_t2c = [0.0f64; 7]; // villages first/p50/p80/all, ruins p50/p80/all
+    let mut spt_sums: HashMap<i32, f64> = HashMap::new();
+    let mut spt_counts: HashMap<i32, u32> = HashMap::new();
 
     let mut total_moves_by_turn: HashMap<i32, HashMap<polyfish::types::MoveType, usize>> =
         HashMap::new();
@@ -1165,7 +1210,12 @@ fn main() -> anyhow::Result<()> {
         total_moves += result.moves;
         total_revealed_tiles += result.revealed_tiles as i64;
         total_captured_tiles += result.captured_tiles as i64;
+        for (&turn, &spt) in &result.spt_at_turn {
+            *spt_sums.entry(turn).or_default() += spt as f64;
+            *spt_counts.entry(turn).or_default() += 1;
+        }
         for (acc, v) in total_t2c.iter_mut().zip([
+            result.villages_t2c_first,
             result.villages_t2c_p50,
             result.villages_t2c_p80,
             result.villages_t2c_all,
@@ -1347,6 +1397,15 @@ fn main() -> anyhow::Result<()> {
     let avg_revealed_tiles = total_revealed_tiles as f32 / args.num_games as f32;
     let avg_captured_tiles = total_captured_tiles as f32 / args.num_games as f32;
 
+    let avg_spt_at = |turn: i32| -> f32 {
+        let c = spt_counts.get(&turn).copied().unwrap_or(0);
+        if c == 0 {
+            0.0
+        } else {
+            (spt_sums.get(&turn).copied().unwrap_or(0.0) / c as f64) as f32
+        }
+    };
+
     // "typical move by turn N" chart data: {"<turn>": {"<MoveType>": count, ...}, ...}
     let moves_by_turn = {
         let mut turns_sorted: Vec<&i32> = total_moves_by_turn.keys().collect();
@@ -1453,6 +1512,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     let metrics = json!({
+        "num_games": args.num_games,
         "avg_score": avg_score,
         "max_score": max_score,
         "avg_moves": avr_moves,
@@ -1465,12 +1525,20 @@ fn main() -> anyhow::Result<()> {
         "avg_attacks": avg_attacks,
         "avg_revealed_tiles": avg_revealed_tiles,
         "avg_captured_tiles": avg_captured_tiles,
-        "villages_t2c_p50": (total_t2c[0] / args.num_games as f64) as f32,
-        "villages_t2c_p80": (total_t2c[1] / args.num_games as f64) as f32,
-        "villages_t2c_all": (total_t2c[2] / args.num_games as f64) as f32,
-        "ruins_t2c_p50": (total_t2c[3] / args.num_games as f64) as f32,
-        "ruins_t2c_p80": (total_t2c[4] / args.num_games as f64) as f32,
-        "ruins_t2c_all": (total_t2c[5] / args.num_games as f64) as f32,
+        "avg_spt_t0": avg_spt_at(0),
+        "avg_spt_t5": avg_spt_at(5),
+        "avg_spt_t10": avg_spt_at(10),
+        "avg_spt_t15": avg_spt_at(15),
+        "avg_spt_t20": avg_spt_at(20),
+        "avg_spt_t25": avg_spt_at(25),
+        "avg_spt_t30": avg_spt_at(30),
+        "villages_t2c_first": (total_t2c[0] / args.num_games as f64) as f32,
+        "villages_t2c_p50": (total_t2c[1] / args.num_games as f64) as f32,
+        "villages_t2c_p80": (total_t2c[2] / args.num_games as f64) as f32,
+        "villages_t2c_all": (total_t2c[3] / args.num_games as f64) as f32,
+        "ruins_t2c_p50": (total_t2c[4] / args.num_games as f64) as f32,
+        "ruins_t2c_p80": (total_t2c[5] / args.num_games as f64) as f32,
+        "ruins_t2c_all": (total_t2c[6] / args.num_games as f64) as f32,
         "games_file": games_file,
         "moves_by_turn": moves_by_turn,
     });
