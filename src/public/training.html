@@ -138,6 +138,36 @@
     }
     .turn-legend-item { display: flex; align-items: center; gap: 0.35rem; }
     .turn-legend-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+    details.accordion {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      margin-bottom: 1.25rem;
+      background: var(--panel);
+      overflow: hidden;
+    }
+    details.accordion > summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 0.9rem 1.1rem;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+      user-select: none;
+    }
+    details.accordion > summary::-webkit-details-marker { display: none; }
+    details.accordion > summary:hover { background: rgba(74, 158, 255, 0.06); }
+    .acc-title h2 {
+      margin: 0;
+      font-size: 1.05rem;
+      color: var(--text);
+      text-transform: none;
+      letter-spacing: 0;
+    }
+    .acc-title p { margin: 0.25rem 0 0; font-size: 0.82rem; color: var(--muted); max-width: 900px; }
+    .acc-chevron { color: var(--muted); font-size: 0.8rem; transition: transform 0.2s ease; margin-top: 0.3rem; }
+    details.accordion[open] > summary .acc-chevron { transform: rotate(180deg); }
+    .acc-body { padding: 0.25rem 1.1rem 1.1rem; }
     a { color: var(--accent); }
   </style>
 </head>
@@ -157,28 +187,67 @@
   </header>
 
   <main>
-    <section id="panelA">
-      <h2>Training progress</h2>
-      <div class="cards" id="summaryCards"></div>
-      <div class="chart-grid">
-        <div class="chart-box"><header><h3>Loss</h3><button class="dl-png" data-canvas="lossChart">PNG</button></header><div class="chart-wrap"><canvas id="lossChart"></canvas></div></div>
-        <div class="chart-box"><header><h3>Score</h3><button class="dl-png" data-canvas="scoreChart">PNG</button></header><div class="chart-wrap"><canvas id="scoreChart"></canvas></div></div>
-        <div class="chart-box"><header><h3>Player balance</h3><button class="dl-png" data-canvas="p1p2Chart">PNG</button></header><div class="chart-wrap"><canvas id="p1p2Chart"></canvas></div></div>
-        <div class="chart-box"><header><h3>Moves by type</h3><button class="dl-png" data-canvas="movesChart">PNG</button></header><div class="chart-wrap"><canvas id="movesChart"></canvas></div></div>
-        <div class="chart-box"><header><h3>Avg moves / game</h3><button class="dl-png" data-canvas="avgMovesChart">PNG</button></header><div class="chart-wrap"><canvas id="avgMovesChart"></canvas></div></div>
-        <div class="chart-box"><header><h3>Stars / turn by game turn</h3><button class="dl-png" data-canvas="sptChart">PNG</button></header><div class="chart-wrap"><canvas id="sptChart"></canvas></div></div>
-        <div class="chart-box"><header><h3>Village capture speed</h3><button class="dl-png" data-canvas="villageT2cChart">PNG</button></header><div class="chart-wrap"><canvas id="villageT2cChart"></canvas></div></div>
-        <div class="chart-box"><header><h3>Ruin capture speed</h3><button class="dl-png" data-canvas="ruinT2cChart">PNG</button></header><div class="chart-wrap"><canvas id="ruinT2cChart"></canvas></div></div>
-        <div class="chart-box"><header><h3>League vs self-play</h3><button class="dl-png" data-canvas="leagueChart">PNG</button></header><div class="chart-wrap"><canvas id="leagueChart"></canvas></div></div>
+    <div class="cards" id="summaryCards"></div>
+
+    <details class="accordion" open>
+      <summary>
+        <div class="acc-title">
+          <h2>NeuralNet Training</h2>
+          <p>How the network is learning: training loss, self-play scores, first/second-player balance, and the split between self-play and league games.</p>
+        </div>
+        <span class="acc-chevron">▾</span>
+      </summary>
+      <div class="acc-body">
+        <div class="chart-grid">
+          <div class="chart-box"><header><h3>Loss</h3><button class="dl-png" data-canvas="lossChart">PNG</button></header><div class="chart-wrap"><canvas id="lossChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Score</h3><button class="dl-png" data-canvas="scoreChart">PNG</button></header><div class="chart-wrap"><canvas id="scoreChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Player balance</h3><button class="dl-png" data-canvas="p1p2Chart">PNG</button></header><div class="chart-wrap"><canvas id="p1p2Chart"></canvas></div></div>
+          <div class="chart-box"><header><h3>League vs self-play</h3><button class="dl-png" data-canvas="leagueChart">PNG</button></header><div class="chart-wrap"><canvas id="leagueChart"></canvas></div></div>
+        </div>
+        <div style="margin-top:1rem">
+          <button id="downloadGrid">Download 2×2 progress PNG</button>
+        </div>
       </div>
-      <div style="margin-top:1rem">
-        <button id="downloadGrid">Download 2×2 progress PNG</button>
+    </details>
+
+    <details class="accordion" open>
+      <summary>
+        <div class="acc-title">
+          <h2>Game Stats</h2>
+          <p>What the agents actually do in-game: move mix, game length, economy tempo, and how quickly they capture villages and ruins.</p>
+        </div>
+        <span class="acc-chevron">▾</span>
+      </summary>
+      <div class="acc-body">
+        <div class="chart-grid">
+          <div class="chart-box"><header><h3>Moves by type</h3><button class="dl-png" data-canvas="movesChart">PNG</button></header><div class="chart-wrap"><canvas id="movesChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Avg moves / game</h3><button class="dl-png" data-canvas="avgMovesChart">PNG</button></header><div class="chart-wrap"><canvas id="avgMovesChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Avg captures / game</h3><button class="dl-png" data-canvas="avgCapturesChart">PNG</button></header><div class="chart-wrap"><canvas id="avgCapturesChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Avg harvests / game</h3><button class="dl-png" data-canvas="avgHarvestsChart">PNG</button></header><div class="chart-wrap"><canvas id="avgHarvestsChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Avg research / game</h3><button class="dl-png" data-canvas="avgResearchChart">PNG</button></header><div class="chart-wrap"><canvas id="avgResearchChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Avg attacks / game</h3><button class="dl-png" data-canvas="avgAttacksChart">PNG</button></header><div class="chart-wrap"><canvas id="avgAttacksChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Avg revealed tiles / game</h3><button class="dl-png" data-canvas="avgRevealedChart">PNG</button></header><div class="chart-wrap"><canvas id="avgRevealedChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Avg captured tiles / game</h3><button class="dl-png" data-canvas="avgCapturedTilesChart">PNG</button></header><div class="chart-wrap"><canvas id="avgCapturedTilesChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Stars / turn by game turn</h3><button class="dl-png" data-canvas="sptChart">PNG</button></header><div class="chart-wrap"><canvas id="sptChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Village capture speed</h3><button class="dl-png" data-canvas="villageT2cChart">PNG</button></header><div class="chart-wrap"><canvas id="villageT2cChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Ruin capture speed</h3><button class="dl-png" data-canvas="ruinT2cChart">PNG</button></header><div class="chart-wrap"><canvas id="ruinT2cChart"></canvas></div></div>
+        </div>
       </div>
-      <h2 style="margin-top:1.5rem">Moves by turn</h2>
-      <p class="turn-legend-caption">One mini-chart per training iteration. Each bar is a game turn; stacked colors show the <strong>percentage</strong> of moves of each type that turn (excluding Step and EndTurn). Scroll horizontally when games run past the visible width.</p>
-      <div id="moveTurnLegend" class="turn-legend"></div>
-      <div id="moveTurnGrid"></div>
-    </section>
+    </details>
+
+    <details class="accordion" open>
+      <summary>
+        <div class="acc-title">
+          <h2>Moves by turn</h2>
+          <p>One mini-chart per training iteration. Each bar is a game turn; stacked colors show the <strong>percentage</strong> of moves of each type that turn (excluding Step and EndTurn). Scroll horizontally when games run past the visible width.</p>
+        </div>
+        <span class="acc-chevron">▾</span>
+      </summary>
+      <div class="acc-body">
+        <div id="moveTurnLegend" class="turn-legend"></div>
+        <div id="moveTurnGrid"></div>
+      </div>
+    </details>
 
     <section id="panelIterControls">
       <div class="controls" style="margin-bottom:0.5rem">
@@ -187,39 +256,55 @@
       </div>
     </section>
 
-    <section id="panelB">
-      <h2>Generation analysis</h2>
-      <p class="section-desc">
-        Deep-dive for the selected training iteration. Self-play writes a batch of games to <code>games_*.safetensors</code>; these charts summarize that batch directly.
-        <strong>Value distribution</strong> plots the value-head training targets assigned to every position (roughly −1 to +1 win/loss signal). A healthy run spreads mass across moderate magnitudes rather than collapsing to 0 or saturating at ±1.
-      </p>
-      <p id="genBatchMeta" class="batch-meta"></p>
-      <div class="chart-grid">
-        <div class="chart-box"><header><h3>Value distribution</h3><button class="dl-png" data-canvas="valDistChart">PNG</button></header><div class="chart-wrap"><canvas id="valDistChart"></canvas></div></div>
-        <div class="chart-box"><header><h3>Value histogram</h3><button class="dl-png" data-canvas="valHistChart">PNG</button></header><div class="chart-wrap"><canvas id="valHistChart"></canvas></div></div>
-        <div class="chart-box"><header><h3>Value time series</h3><button class="dl-png" data-canvas="valTsChart">PNG</button></header><div class="chart-wrap"><canvas id="valTsChart"></canvas></div></div>
-        <div class="chart-box"><header><h3>Absolute value distribution</h3><button class="dl-png" data-canvas="valAbsChart">PNG</button></header><div class="chart-wrap"><canvas id="valAbsChart"></canvas></div></div>
-        <div class="chart-box"><header><h3>Value buckets</h3><button class="dl-png" data-canvas="valBucketChart">PNG</button></header><div class="chart-wrap"><canvas id="valBucketChart"></canvas></div></div>
-        <div class="chart-box"><header><h3>Stars / turn snapshot</h3><button class="dl-png" data-canvas="sptSnapChart">PNG</button></header><div class="chart-wrap"><canvas id="sptSnapChart"></canvas></div></div>
-        <div class="chart-box"><header><h3>P1 vs P2 snapshot</h3><button class="dl-png" data-canvas="snapP1P2Chart">PNG</button></header><div class="chart-wrap"><canvas id="snapP1P2Chart"></canvas></div></div>
+    <details class="accordion" open>
+      <summary>
+        <div class="acc-title">
+          <h2>Generation analysis</h2>
+          <p>Deep-dive for the selected training iteration — value-head targets and per-batch snapshots for the games it was trained on.</p>
+        </div>
+        <span class="acc-chevron">▾</span>
+      </summary>
+      <div class="acc-body">
+        <p class="section-desc">
+          Self-play writes a batch of games to <code>games_*.safetensors</code>; these charts summarize that batch directly.
+          <strong>Value distribution</strong> plots the value-head training targets assigned to every position (roughly −1 to +1 win/loss signal). A healthy run spreads mass across moderate magnitudes rather than collapsing to 0 or saturating at ±1.
+        </p>
+        <p id="genBatchMeta" class="batch-meta"></p>
+        <div class="chart-grid">
+          <div class="chart-box"><header><h3>Value distribution</h3><button class="dl-png" data-canvas="valDistChart">PNG</button></header><div class="chart-wrap"><canvas id="valDistChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Value histogram</h3><button class="dl-png" data-canvas="valHistChart">PNG</button></header><div class="chart-wrap"><canvas id="valHistChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Value time series</h3><button class="dl-png" data-canvas="valTsChart">PNG</button></header><div class="chart-wrap"><canvas id="valTsChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Absolute value distribution</h3><button class="dl-png" data-canvas="valAbsChart">PNG</button></header><div class="chart-wrap"><canvas id="valAbsChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Value buckets</h3><button class="dl-png" data-canvas="valBucketChart">PNG</button></header><div class="chart-wrap"><canvas id="valBucketChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Stars / turn snapshot</h3><button class="dl-png" data-canvas="sptSnapChart">PNG</button></header><div class="chart-wrap"><canvas id="sptSnapChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>P1 vs P2 snapshot</h3><button class="dl-png" data-canvas="snapP1P2Chart">PNG</button></header><div class="chart-wrap"><canvas id="snapP1P2Chart"></canvas></div></div>
+        </div>
       </div>
-    </section>
+    </details>
 
-    <section id="panelC">
-      <h2>Baseline delta</h2>
-      <p class="section-desc">
-        Compares the selected iteration against a rolling baseline: the mean of prior iterations in the same run (when ≥5 exist), otherwise prior rows across runs.
-        Side-by-side bars show the <strong>actual metric values</strong> for this iteration vs that baseline. <strong>Z-scores</strong> highlight metrics ≥2 standard deviations away.
-      </p>
-      <div id="flagsBanner" class="flags"><strong>Flags</strong><ul id="flagsList"></ul></div>
-      <div class="chart-grid">
-        <div class="chart-box"><header><h3>Score vs baseline</h3><button class="dl-png" data-canvas="scoreBaselineChart">PNG</button></header><div class="chart-wrap"><canvas id="scoreBaselineChart"></canvas></div></div>
-        <div class="chart-box"><header><h3>Stars / turn vs baseline</h3><button class="dl-png" data-canvas="sptBaselineChart">PNG</button></header><div class="chart-wrap"><canvas id="sptBaselineChart"></canvas></div></div>
-        <div class="chart-box"><header><h3>Economy vs baseline</h3><button class="dl-png" data-canvas="econChart">PNG</button></header><div class="chart-wrap"><canvas id="econChart"></canvas></div></div>
-        <div class="chart-box"><header><h3>Combat vs baseline</h3><button class="dl-png" data-canvas="combatChart">PNG</button></header><div class="chart-wrap"><canvas id="combatChart"></canvas></div></div>
-        <div class="chart-box"><header><h3>Z-scores</h3><button class="dl-png" data-canvas="zChart">PNG</button></header><div class="chart-wrap"><canvas id="zChart"></canvas></div></div>
+    <details class="accordion" open>
+      <summary>
+        <div class="acc-title">
+          <h2>Baseline delta</h2>
+          <p>The selected iteration versus a rolling baseline of prior iterations, with z-scores flagging metrics that moved sharply.</p>
+        </div>
+        <span class="acc-chevron">▾</span>
+      </summary>
+      <div class="acc-body">
+        <p class="section-desc">
+          Baseline is the mean of prior iterations in the same run (when ≥5 exist), otherwise prior rows across runs.
+          Side-by-side bars show the <strong>actual metric values</strong> for this iteration vs that baseline. <strong>Z-scores</strong> highlight metrics ≥2 standard deviations away.
+        </p>
+        <div id="flagsBanner" class="flags"><strong>Flags</strong><ul id="flagsList"></ul></div>
+        <div class="chart-grid">
+          <div class="chart-box"><header><h3>Score vs baseline</h3><button class="dl-png" data-canvas="scoreBaselineChart">PNG</button></header><div class="chart-wrap"><canvas id="scoreBaselineChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Stars / turn vs baseline</h3><button class="dl-png" data-canvas="sptBaselineChart">PNG</button></header><div class="chart-wrap"><canvas id="sptBaselineChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Economy vs baseline</h3><button class="dl-png" data-canvas="econChart">PNG</button></header><div class="chart-wrap"><canvas id="econChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Combat vs baseline</h3><button class="dl-png" data-canvas="combatChart">PNG</button></header><div class="chart-wrap"><canvas id="combatChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Z-scores</h3><button class="dl-png" data-canvas="zChart">PNG</button></header><div class="chart-wrap"><canvas id="zChart"></canvas></div></div>
+        </div>
       </div>
-    </section>
+    </details>
   </main>
 
 <script>
@@ -413,6 +498,36 @@ function renderPanelA() {
   makeChart('avgMovesChart', {
     type: 'line',
     data: { labels: it, datasets: [{ label: 'avg moves', data: runMetrics.map(r => r.avg_moves), borderColor: '#9b59b6', tension: 0.2 }] },
+    options: chartDefaults,
+  });
+  makeChart('avgCapturesChart', {
+    type: 'line',
+    data: { labels: it, datasets: [{ label: 'avg captures', data: runMetrics.map(r => r.avg_captures), borderColor: '#e74c3c', tension: 0.2 }] },
+    options: chartDefaults,
+  });
+  makeChart('avgHarvestsChart', {
+    type: 'line',
+    data: { labels: it, datasets: [{ label: 'avg harvests', data: runMetrics.map(r => r.avg_harvests), borderColor: '#2ecc71', tension: 0.2 }] },
+    options: chartDefaults,
+  });
+  makeChart('avgResearchChart', {
+    type: 'line',
+    data: { labels: it, datasets: [{ label: 'avg research', data: runMetrics.map(r => r.avg_research), borderColor: '#4a9eff', tension: 0.2 }] },
+    options: chartDefaults,
+  });
+  makeChart('avgAttacksChart', {
+    type: 'line',
+    data: { labels: it, datasets: [{ label: 'avg attacks', data: runMetrics.map(r => r.avg_attacks), borderColor: '#e67e22', tension: 0.2 }] },
+    options: chartDefaults,
+  });
+  makeChart('avgRevealedChart', {
+    type: 'line',
+    data: { labels: it, datasets: [{ label: 'avg revealed tiles', data: runMetrics.map(r => r.avg_revealed_tiles), borderColor: '#f1c40f', tension: 0.2 }] },
+    options: chartDefaults,
+  });
+  makeChart('avgCapturedTilesChart', {
+    type: 'line',
+    data: { labels: it, datasets: [{ label: 'avg captured tiles', data: runMetrics.map(r => r.avg_captured_tiles), borderColor: '#9b59b6', tension: 0.2 }] },
     options: chartDefaults,
   });
   makeChart('sptChart', {
@@ -930,6 +1045,13 @@ document.getElementById('iterSelect').addEventListener('change', () => { renderI
 
 document.querySelectorAll('.dl-png').forEach(btn => {
   btn.addEventListener('click', () => downloadCanvas(btn.dataset.canvas, btn.dataset.canvas));
+});
+
+document.querySelectorAll('details.accordion').forEach(d => {
+  d.addEventListener('toggle', () => {
+    if (!d.open) return;
+    d.querySelectorAll('canvas').forEach(c => Chart.getChart(c)?.resize());
+  });
 });
 
 document.getElementById('downloadGrid').addEventListener('click', () => {
