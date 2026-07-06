@@ -81,6 +81,10 @@ struct GumbelNode {
     move_to_here: Option<Box<dyn Move>>,
     is_expanded: bool,
     virtual_loss: RefCell<f32>,
+    /// Set when this node's priors were already heuristic-blended at
+    /// expansion time, so `finish_reused_root` doesn't blend it again if it
+    /// is later promoted to root.
+    heuristic_blended: bool,
 }
 
 impl GumbelNode {
@@ -95,6 +99,7 @@ impl GumbelNode {
             move_to_here,
             is_expanded: false,
             virtual_loss: RefCell::new(0.0),
+            heuristic_blended: false,
         }
     }
 
@@ -243,8 +248,10 @@ impl<'a> GumbelMctsAgent<'a> {
             c.gumbel = gumbel_dist.sample(&mut rng);
         }
         
-        // Bootstrap with the priors from the heuristic mcts agent
-        if self.prior_heuristic_weight > 0.0 {
+        // Bootstrap with the priors from the heuristic mcts agent. Skip if
+        // this node's children were already blended at in-tree expansion
+        // time (avoids double-applying the heuristic on promotion to root).
+        if self.prior_heuristic_weight > 0.0 && !new_root.heuristic_blended {
             blend_heuristic_prior(game, &mut new_root.children, self.prior_heuristic_weight);
         }
 
@@ -279,7 +286,7 @@ impl<'a> GumbelMctsAgent<'a> {
             legal_moves.retain(|m| m.move_type() != MoveType::EndTurn);
         }
 
-        let mut logits =
+        let logits =
             policy_composer::compute_move_log_probs_raw(policy_row, &legal_moves, map_size);
 
         let mut rng = rand::thread_rng();
@@ -293,12 +300,13 @@ impl<'a> GumbelMctsAgent<'a> {
             })
             .collect();
 
-        let mut in_cut = self.build_in_cut(&root);
-
-        // Bootstrap with the priors from the heuristic mcts agent
+        // Bootstrap with the priors from the heuristic mcts agent, before the
+        // Gumbel top-k cut is built so the cut ranks on blended priors.
         if self.prior_heuristic_weight > 0.0 {
             blend_heuristic_prior(game, &mut root.children, self.prior_heuristic_weight);
         }
+
+        let mut in_cut = self.build_in_cut(&root);
 
         self.run_search(game, &mut root, &mut in_cut, start_turn);
         root
@@ -539,7 +547,22 @@ impl<'a> GumbelMctsAgent<'a> {
             None => false,
         };
 
-        let leaf_data = extract_leaf_data(game, indices_stack, path_players, needs_expansion);
+        let mut leaf_data = extract_leaf_data(game, indices_stack, path_players, needs_expansion);
+
+        // Compute in-tree heuristic scores while `game` is still at the leaf
+        // state (Phase B, where priors are actually blended in, has no Game
+        // in scope). Aligned 1:1 with `leaf_data.legal_moves`.
+        if self.prior_heuristic_weight > 0.0 && leaf_data.terminal_value.is_none() {
+            let moves = leaf_data.legal_moves.borrow();
+            if !moves.is_empty() {
+                leaf_data.heuristic_scores = Some(
+                    moves
+                        .iter()
+                        .map(|m| crate::ai::ordering::score_move(game, m.as_ref()))
+                        .collect(),
+                );
+            }
+        }
 
         // Always undo, regardless of how the descent ended.
         while let Some(undo) = undos.pop() {
@@ -625,6 +648,7 @@ impl<'a> GumbelMctsAgent<'a> {
                     leaf.map_size,
                     policy_row,
                     value,
+                    leaf.heuristic_scores.as_deref(),
                 );
             }
         }
@@ -635,6 +659,9 @@ impl<'a> GumbelMctsAgent<'a> {
     /// Expand a Gumbel node from a pre-computed policy slice. Children are
     /// created with raw logits (no normalization) and `gumbel = 0.0` (non-root).
     /// `own_value` is recorded from the NN value predicted for this node.
+    /// `heuristic_scores`, if present (in-tree blending enabled), is blended
+    /// into the logits before the children are created, and the node is
+    /// flagged so a later root-promotion doesn't blend it again.
     fn expand_gumbel_node_from_precomputed(
         &self,
         node: &mut GumbelNode,
@@ -642,6 +669,7 @@ impl<'a> GumbelMctsAgent<'a> {
         map_size: usize,
         policy: &RawPolicyOutput,
         own_value: f32,
+        heuristic_scores: Option<&[f32]>,
     ) {
         if node.is_expanded {
             return;
@@ -653,7 +681,13 @@ impl<'a> GumbelMctsAgent<'a> {
             return;
         }
 
-        let logits = policy_composer::compute_move_log_probs_raw(policy, &legal_moves, map_size);
+        let mut logits = policy_composer::compute_move_log_probs_raw(policy, &legal_moves, map_size);
+        if self.prior_heuristic_weight > 0.0 {
+            if let Some(hs) = heuristic_scores {
+                blend_heuristic_into_logits(&mut logits, hs, self.prior_heuristic_weight);
+                node.heuristic_blended = true;
+            }
+        }
         for (m, l) in legal_moves.into_iter().zip(logits.into_iter()) {
             node.children.push(GumbelNode::new(l, 0.0, Some(m)));
         }
@@ -904,30 +938,39 @@ fn clone_child_move(root: &GumbelNode, idx: usize) -> Option<Box<dyn Move>> {
         .map(|m| dyn_clone::clone_box(&**m))
 }
 
-// Blend the heuristic prior into the network's root priors in place
-// Formula `p' = (1-w)*p_net + w*p_heur`
-fn blend_heuristic_prior(game: &Game, children: &mut [GumbelNode], weight: f32) {
+/// Blend a heuristic prior into a raw logit slice in place.
+/// Formula `p' = (1-w)*p_net + w*p_heur`, `p_heur = softmax(heur_scores / TEMP)`.
+/// Shared by the root blend (`blend_heuristic_prior`) and in-tree expansion.
+fn blend_heuristic_into_logits(logits: &mut [f32], heur_scores: &[f32], weight: f32) {
     const HEURISTIC_TEMP: f32 = 20.0;
-    if children.is_empty() {
+    if logits.is_empty() || logits.len() != heur_scores.len() {
         return;
     }
 
-    // p_net = softmax(logits)
-    let logits: Vec<f32> = children.iter().map(|c| c.logit).collect();
-    let p_net = softmax(&logits);
-    
-    // p_heur = softmax(heuristic move scores / TEMP)
-    let scores: Vec<f32> = children.iter()
-        .map(|c| c.move_to_here.as_ref()
-            .map_or(0.0, |m| crate::ai::ordering::score_move(game, m.as_ref())) / HEURISTIC_TEMP)
-        .collect();
-    let p_heur = softmax(&scores);
+    let p_net = softmax(logits);
+    let scaled: Vec<f32> = heur_scores.iter().map(|s| s / HEURISTIC_TEMP).collect();
+    let p_heur = softmax(&scaled);
 
-    // Blend the two policies
-    for (i, child) in children.iter_mut().enumerate() {
+    for (i, l) in logits.iter_mut().enumerate() {
         let p = (1.0 - weight) * p_net[i] + weight * p_heur[i];
         // Add a small epsilon to prevent log(0)
-        child.logit = (p + 1e-9).ln();
+        *l = (p + 1e-9).ln();
+    }
+}
+
+// Blend the heuristic prior into the network's root priors in place.
+fn blend_heuristic_prior(game: &Game, children: &mut [GumbelNode], weight: f32) {
+    if children.is_empty() {
+        return;
+    }
+    let mut logits: Vec<f32> = children.iter().map(|c| c.logit).collect();
+    let scores: Vec<f32> = children.iter()
+        .map(|c| c.move_to_here.as_ref()
+            .map_or(0.0, |m| crate::ai::ordering::score_move(game, m.as_ref())))
+        .collect();
+    blend_heuristic_into_logits(&mut logits, &scores, weight);
+    for (child, l) in children.iter_mut().zip(logits.into_iter()) {
+        child.logit = l;
     }
 }
 

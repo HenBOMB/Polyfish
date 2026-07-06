@@ -39,6 +39,9 @@ pub(crate) struct LeafData {
     /// Legal moves at this leaf, wrapped in `RefCell` for interior mutability
     /// during `take()` in the batched-expansion phase.
     pub legal_moves: RefCell<Vec<Box<dyn Move>>>,
+    /// Heuristic scores parallel to `legal_moves`, computed at the leaf state
+    /// when in-tree prior blending is enabled. `None` otherwise.
+    pub heuristic_scores: Option<Vec<f32>>,
     /// Map size at the leaf state.
     pub map_size: usize,
     /// Terminal outcome in `[-1, 1]` from the leaf player's perspective, if
@@ -104,6 +107,7 @@ pub(crate) fn extract_leaf_data(
             path_players,
             features: None,
             legal_moves: RefCell::new(Vec::new()),
+            heuristic_scores: None,
             map_size,
             terminal_value: Some(outcome),
         };
@@ -128,6 +132,7 @@ pub(crate) fn extract_leaf_data(
             path_players,
             features: Some(feat),
             legal_moves: RefCell::new(legal_moves),
+            heuristic_scores: None,
             map_size,
             terminal_value: None,
         };
@@ -141,6 +146,7 @@ pub(crate) fn extract_leaf_data(
         path_players,
         features: feat,
         legal_moves: RefCell::new(Vec::new()),
+        heuristic_scores: None,
         map_size,
         terminal_value: None,
     }
