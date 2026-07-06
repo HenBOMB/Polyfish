@@ -618,4 +618,62 @@ impl GameState {
     pub fn current_tribe_mut(&mut self) -> Option<&mut TribeState> {
         self.tribes.get_mut(&self.settings.current_player_turn_id)
     }
+
+    /// Obscure all information hidden by the Fog of War for a specific player.
+    /// Used to create a determinized/restricted state for MCTS.
+    pub fn obscure_fog(&mut self, pov_id: PlayerId) {
+        if !self.settings._fow {
+            return; // Fog of war is disabled
+        }
+
+        let mut visible_tiles = std::collections::HashSet::new();
+        for (idx, tile) in self.tiles.iter() {
+            if tile.explorers.contains(&pov_id) {
+                visible_tiles.insert(*idx);
+            }
+        }
+
+        // 1. Obscure Tiles
+        for (idx, tile) in self.tiles.iter_mut() {
+            if !visible_tiles.contains(idx) {
+                let predicted_terrain = if let Some(pred) = &self._prediction {
+                    pred._terrain.get(idx).map(|(t, _)| *t).unwrap_or(TerrainType::Field)
+                } else {
+                    TerrainType::Field
+                };
+                
+                tile.terrain_type = predicted_terrain;
+                tile.owner = 0;
+                tile.has_road = false;
+                tile.has_route = false;
+                tile.effects.clear();
+                tile._unit_owner_id = None;
+            }
+        }
+
+        // 2. Obscure Resources
+        for (idx, resource_opt) in self.resources.iter_mut() {
+            if !visible_tiles.contains(idx) {
+                *resource_opt = None;
+            }
+        }
+
+        // 3. Obscure Structures
+        for (idx, structure_opt) in self.structures.iter_mut() {
+            if !visible_tiles.contains(idx) {
+                *structure_opt = None;
+            }
+        }
+
+        // 4. Obscure Enemy Units and Cities
+        for (id, tribe) in self.tribes.iter_mut() {
+            if *id != pov_id {
+                tribe.units.retain(|u| visible_tiles.contains(&u.coords.idx));
+                // We do NOT remove cities because that breaks production, 
+                // but their exact coordinates could be an issue if the AI tries to attack a fog tile.
+                // For now, removing them is the safest way to prevent data leaks.
+                tribe.cities.retain(|c| visible_tiles.contains(&c.idx));
+            }
+        }
+    }
 }

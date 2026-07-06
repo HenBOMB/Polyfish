@@ -63,7 +63,7 @@ impl<'a> Brain<'a> {
 
         agent
             .unwrap()
-            .select_move_with_decomposed_visits(&mut game.clone())
+            .select_move_with_decomposed_visits(&mut game.clone_for_mcts(game.state.settings.current_player_turn_id))
     }
 
     pub fn think_with_stats(&self, game: &Game) -> (Option<Box<dyn Move>>, Vec<f32>) {
@@ -73,7 +73,7 @@ impl<'a> Brain<'a> {
             return (moves.pop(), Vec::new());
         }
 
-        agent.unwrap().select_move_with_stats(&mut game.clone())
+        agent.unwrap().select_move_with_stats(&mut game.clone_for_mcts(game.state.settings.current_player_turn_id))
     }
 }
 

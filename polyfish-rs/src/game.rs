@@ -135,6 +135,13 @@ impl Game {
         Self::from_json(&json).unwrap_or_else(|_| Self::new())
     }
 
+    /// Clone the entire game and obscure hidden information for MCTS simulations
+    pub fn clone_for_mcts(&self, pov_id: PlayerId) -> Self {
+        let mut cloned = self.clone(); // Fast direct clone
+        cloned.state.obscure_fog(pov_id);
+        cloned
+    }
+
     /// Clone just the game state
     pub fn clone_state(&self) -> GameState {
         // Deep clone via serialization
