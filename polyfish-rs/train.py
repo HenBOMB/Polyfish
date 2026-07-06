@@ -235,13 +235,18 @@ def train():
     # files ≈ 700 games at 64 games/file). Each sample is trained ~20 times
     # before pruning; reduces overfitting risk. Archive pruning keeps window+1.
     replay_buffer_size = int(os.environ.get("REPLAY_BUFFER_FILES", "10"))
-    game_files = fresh_files + archive_files[:replay_buffer_size]
+    # Teacher anchor: always mix these into every iteration so gradients keep
+    # pulling toward known-good play regardless of self-play drift (RLHF-style
+    # reference anchor). Never archived or pruned.
+    teacher_files = sorted(glob.glob("teachers/games_*.safetensors"))
+    game_files = fresh_files + archive_files[:replay_buffer_size] + teacher_files
 
     if not game_files:
-        print("No training data found (checked ./ and ./archive/)!")
+        print("No training data found (checked ./, ./archive/, and ./teachers/)!")
         return
-        
-    print(f"Training on {len(game_files)} files ({len(fresh_files)} fresh, {len(game_files)-len(fresh_files)} archived).")
+
+    print(f"Training on {len(game_files)} files ({len(fresh_files)} fresh, "
+          f"{len(archive_files[:replay_buffer_size])} archived, {len(teacher_files)} teacher).")
     
     # 2. Init Model
     MAP_SIZE = 11
