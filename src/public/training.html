@@ -219,6 +219,14 @@
         <span class="acc-chevron">▾</span>
       </summary>
       <div class="acc-body">
+        <div class="controls" style="margin-bottom:1rem">
+          <label for="gameStatsFilter">Games:</label>
+          <select id="gameStatsFilter">
+            <option value="selfplay" selected>Self-play only</option>
+            <option value="league">League only</option>
+            <option value="all">All games</option>
+          </select>
+        </div>
         <div class="chart-grid">
           <div class="chart-box"><header><h3>Moves by type</h3><button class="dl-png" data-canvas="movesChart">PNG</button></header><div class="chart-wrap"><canvas id="movesChart"></canvas></div></div>
           <div class="chart-box"><header><h3>Avg moves / game</h3><button class="dl-png" data-canvas="avgMovesChart">PNG</button></header><div class="chart-wrap"><canvas id="avgMovesChart"></canvas></div></div>
@@ -315,10 +323,50 @@ let allMetrics = [];
 let movesByTurn = {};
 let selectedRunIdx = 0;
 let pollTimer = null;
+let gameStatsFilter = 'selfplay';
+
+function filterGameStatsMetrics(rows) {
+  if (gameStatsFilter === 'all') return rows;
+  return rows.filter(r => (r.match_type || 'selfplay') === gameStatsFilter);
+}
 
 const MOVE_NOISE = new Set(['EndTurn', 'Step']);
 const SPT_TURNS = [0, 5, 10, 15, 20, 25, 30];
 const sptField = t => `avg_spt_t${t}`;
+
+const MIN_TICK_STEP = 0.5;
+const MIN_TICK_COUNT = 7;
+const NICE_TICK_STEPS = [0.5, 1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000];
+
+// Floors gridline spacing at MIN_TICK_STEP (a multiple of 0.5) and pads the
+// axis bounds (in whole steps) until there are at least MIN_TICK_COUNT
+// gridlines, so a tiny wobble (e.g. 11.02 -> 11.3) doesn't fill the whole
+// chart height just because it only spans one or two ticks.
+function minStepYScale(values, floor = MIN_TICK_STEP, minTicks = MIN_TICK_COUNT) {
+  const nums = values.filter(v => v != null && isFinite(v));
+  const dataMin = nums.length ? Math.min(...nums) : 0;
+  const dataMax = nums.length ? Math.max(...nums) : floor;
+  const range = Math.max(dataMax - dataMin, floor);
+  const rawStep = range / (minTicks - 1);
+  const step = NICE_TICK_STEPS.find(s => s >= Math.max(rawStep, floor))
+    ?? Math.ceil(rawStep / 1000) * 1000;
+
+  let axisMin = Math.floor(dataMin / step) * step;
+  let axisMax = Math.ceil(dataMax / step) * step;
+  if (axisMin === axisMax) axisMax = axisMin + step;
+  const tickCount = () => Math.round((axisMax - axisMin) / step) + 1;
+  while (tickCount() < minTicks) {
+    axisMin -= step;
+    if (tickCount() < minTicks) axisMax += step;
+  }
+
+  return {
+    min: axisMin,
+    max: axisMax,
+    ticks: { color: '#8b9cb3', stepSize: step },
+    grid: { color: '#2d3a4f' },
+  };
+}
 
 const chartDefaults = {
   responsive: true,
@@ -481,54 +529,75 @@ function renderPanelA() {
     },
     options: chartDefaults,
   });
+  const leagueCount = runMetrics.filter(r => r.match_type === 'league').length;
+  const selfCount = runMetrics.length - leagueCount;
+  makeChart('leagueChart', {
+    type: 'bar',
+    data: {
+      labels: ['self-play', 'league'],
+      datasets: [{ label: 'iterations', data: [selfCount, leagueCount], backgroundColor: ['#4a9eff', '#f39c12'] }],
+    },
+    options: { ...chartDefaults, plugins: { legend: { display: false } } },
+  });
+  renderGameStatsCharts();
+  renderMoveTurnGrid();
+}
+
+function renderGameStatsCharts() {
+  const rows = filterGameStatsMetrics(runMetrics);
+  const it = rows.map(r => r.iteration);
   makeChart('movesChart', {
     type: 'line',
     data: {
       labels: it,
       datasets: [
-        { label: 'captures', data: runMetrics.map(r => r.avg_captures), tension: 0.2 },
-        { label: 'harvests', data: runMetrics.map(r => r.avg_harvests), tension: 0.2 },
-        { label: 'builds', data: runMetrics.map(r => r.avg_builds), tension: 0.2 },
-        { label: 'research', data: runMetrics.map(r => r.avg_research), tension: 0.2 },
-        { label: 'attacks', data: runMetrics.map(r => r.avg_attacks), tension: 0.2 },
+        { label: 'captures', data: rows.map(r => r.avg_captures), tension: 0.2 },
+        { label: 'harvests', data: rows.map(r => r.avg_harvests), tension: 0.2 },
+        { label: 'builds', data: rows.map(r => r.avg_builds), tension: 0.2 },
+        { label: 'research', data: rows.map(r => r.avg_research), tension: 0.2 },
+        { label: 'attacks', data: rows.map(r => r.avg_attacks), tension: 0.2 },
       ],
     },
     options: chartDefaults,
   });
+  const avgChartOptions = values => ({
+    ...chartDefaults,
+    scales: { x: chartDefaults.scales.x, y: minStepYScale(values) },
+  });
   makeChart('avgMovesChart', {
     type: 'line',
-    data: { labels: it, datasets: [{ label: 'avg moves', data: runMetrics.map(r => r.avg_moves), borderColor: '#9b59b6', tension: 0.2 }] },
-    options: chartDefaults,
+    data: { labels: it, datasets: [{ label: 'avg moves', data: rows.map(r => r.avg_moves), borderColor: '#9b59b6', tension: 0.2 }] },
+    options: avgChartOptions(rows.map(r => r.avg_moves)),
   });
   makeChart('avgCapturesChart', {
     type: 'line',
-    data: { labels: it, datasets: [{ label: 'avg captures', data: runMetrics.map(r => r.avg_captures), borderColor: '#e74c3c', tension: 0.2 }] },
-    options: chartDefaults,
+    data: { labels: it, datasets: [{ label: 'avg captures', data: rows.map(r => r.avg_captures), borderColor: '#e74c3c', tension: 0.2 }] },
+    options: avgChartOptions(rows.map(r => r.avg_captures)),
   });
   makeChart('avgHarvestsChart', {
     type: 'line',
-    data: { labels: it, datasets: [{ label: 'avg harvests', data: runMetrics.map(r => r.avg_harvests), borderColor: '#2ecc71', tension: 0.2 }] },
-    options: chartDefaults,
+    data: { labels: it, datasets: [{ label: 'avg harvests', data: rows.map(r => r.avg_harvests), borderColor: '#2ecc71', tension: 0.2 }] },
+    options: avgChartOptions(rows.map(r => r.avg_harvests)),
   });
   makeChart('avgResearchChart', {
     type: 'line',
-    data: { labels: it, datasets: [{ label: 'avg research', data: runMetrics.map(r => r.avg_research), borderColor: '#4a9eff', tension: 0.2 }] },
-    options: chartDefaults,
+    data: { labels: it, datasets: [{ label: 'avg research', data: rows.map(r => r.avg_research), borderColor: '#4a9eff', tension: 0.2 }] },
+    options: avgChartOptions(rows.map(r => r.avg_research)),
   });
   makeChart('avgAttacksChart', {
     type: 'line',
-    data: { labels: it, datasets: [{ label: 'avg attacks', data: runMetrics.map(r => r.avg_attacks), borderColor: '#e67e22', tension: 0.2 }] },
-    options: chartDefaults,
+    data: { labels: it, datasets: [{ label: 'avg attacks', data: rows.map(r => r.avg_attacks), borderColor: '#e67e22', tension: 0.2 }] },
+    options: avgChartOptions(rows.map(r => r.avg_attacks)),
   });
   makeChart('avgRevealedChart', {
     type: 'line',
-    data: { labels: it, datasets: [{ label: 'avg revealed tiles', data: runMetrics.map(r => r.avg_revealed_tiles), borderColor: '#f1c40f', tension: 0.2 }] },
-    options: chartDefaults,
+    data: { labels: it, datasets: [{ label: 'avg revealed tiles', data: rows.map(r => r.avg_revealed_tiles), borderColor: '#f1c40f', tension: 0.2 }] },
+    options: avgChartOptions(rows.map(r => r.avg_revealed_tiles)),
   });
   makeChart('avgCapturedTilesChart', {
     type: 'line',
-    data: { labels: it, datasets: [{ label: 'avg captured tiles', data: runMetrics.map(r => r.avg_captured_tiles), borderColor: '#9b59b6', tension: 0.2 }] },
-    options: chartDefaults,
+    data: { labels: it, datasets: [{ label: 'avg captured tiles', data: rows.map(r => r.avg_captured_tiles), borderColor: '#9b59b6', tension: 0.2 }] },
+    options: avgChartOptions(rows.map(r => r.avg_captured_tiles)),
   });
   makeChart('sptChart', {
     type: 'line',
@@ -536,7 +605,7 @@ function renderPanelA() {
       labels: it,
       datasets: SPT_TURNS.map((t, i) => ({
         label: `turn ${t}`,
-        data: runMetrics.map(r => {
+        data: rows.map(r => {
           const v = r[sptField(t)];
           return v > 0 ? v : null;
         }),
@@ -563,10 +632,10 @@ function renderPanelA() {
     data: {
       labels: it,
       datasets: [
-        { label: '1st village', data: runMetrics.map(r => r.villages_t2c_first || null), borderColor: '#2ecc71', tension: 0.2, spanGaps: true },
-        { label: '50% villages', data: runMetrics.map(r => r.villages_t2c_p50 || null), borderColor: '#3498db', tension: 0.2, spanGaps: true },
-        { label: '80% villages', data: runMetrics.map(r => r.villages_t2c_p80 || null), borderColor: '#9b59b6', tension: 0.2, spanGaps: true },
-        { label: 'all villages', data: runMetrics.map(r => r.villages_t2c_all || null), borderColor: '#e67e22', tension: 0.2, spanGaps: true },
+        { label: '1st village', data: rows.map(r => r.villages_t2c_first || null), borderColor: '#2ecc71', tension: 0.2, spanGaps: true },
+        { label: '50% villages', data: rows.map(r => r.villages_t2c_p50 || null), borderColor: '#3498db', tension: 0.2, spanGaps: true },
+        { label: '80% villages', data: rows.map(r => r.villages_t2c_p80 || null), borderColor: '#9b59b6', tension: 0.2, spanGaps: true },
+        { label: 'all villages', data: rows.map(r => r.villages_t2c_all || null), borderColor: '#e67e22', tension: 0.2, spanGaps: true },
       ],
     },
     options: {
@@ -582,9 +651,9 @@ function renderPanelA() {
     data: {
       labels: it,
       datasets: [
-        { label: '50% ruins', data: runMetrics.map(r => r.ruins_t2c_p50 || null), borderColor: '#3498db', tension: 0.2, spanGaps: true },
-        { label: '80% ruins', data: runMetrics.map(r => r.ruins_t2c_p80 || null), borderColor: '#9b59b6', tension: 0.2, spanGaps: true },
-        { label: 'all ruins', data: runMetrics.map(r => r.ruins_t2c_all || null), borderColor: '#e67e22', tension: 0.2, spanGaps: true },
+        { label: '50% ruins', data: rows.map(r => r.ruins_t2c_p50 || null), borderColor: '#3498db', tension: 0.2, spanGaps: true },
+        { label: '80% ruins', data: rows.map(r => r.ruins_t2c_p80 || null), borderColor: '#9b59b6', tension: 0.2, spanGaps: true },
+        { label: 'all ruins', data: rows.map(r => r.ruins_t2c_all || null), borderColor: '#e67e22', tension: 0.2, spanGaps: true },
       ],
     },
     options: {
@@ -595,17 +664,6 @@ function renderPanelA() {
       },
     },
   });
-  const leagueCount = runMetrics.filter(r => r.match_type === 'league').length;
-  const selfCount = runMetrics.length - leagueCount;
-  makeChart('leagueChart', {
-    type: 'bar',
-    data: {
-      labels: ['self-play', 'league'],
-      datasets: [{ label: 'iterations', data: [selfCount, leagueCount], backgroundColor: ['#4a9eff', '#f39c12'] }],
-    },
-    options: { ...chartDefaults, plugins: { legend: { display: false } } },
-  });
-  renderMoveTurnGrid();
 }
 
 function moveTypeColor(type, allTypes) {
@@ -1038,6 +1096,11 @@ document.getElementById('nextRun').addEventListener('click', async () => {
   renderPanelA();
   populateIterSelect();
   await renderIterPanels();
+});
+
+document.getElementById('gameStatsFilter').addEventListener('change', (e) => {
+  gameStatsFilter = e.target.value;
+  renderGameStatsCharts();
 });
 
 document.getElementById('refreshBtn').addEventListener('click', refreshAll);
