@@ -67,6 +67,9 @@ pub struct Brain<'a> {
     /// Weight for blending the `ordering::score_move` heuristic prior into the
     /// Gumbel backend's root priors. `None` = pure network policy. Ignored by the Zero backend.
     prior_heuristic_weight: Option<f32>,
+    /// β on σ(completed-Q) in the Gumbel backend's exported policy targets.
+    /// `None` = 1.0 (full paper behavior). Ignored by other backends.
+    policy_target_q_weight: Option<f32>,
 }
 
 /// Internal enum wrapping whichever concrete agent the configured backend
@@ -122,6 +125,7 @@ pub fn make_search_agent(
     iterations: usize,
     leaf_batch: Option<usize>,
     prior_heuristic_weight: Option<f32>,
+    policy_target_q_weight: Option<f32>,
 ) -> SearchAgent<'_> {
     match backend {
         SearchBackend::Zero => {
@@ -138,6 +142,9 @@ pub fn make_search_agent(
             }
             if let Some(w) = prior_heuristic_weight {
                 agent.prior_heuristic_weight = w;
+            }
+            if let Some(b) = policy_target_q_weight {
+                agent.policy_target_q_weight = b;
             }
             SearchAgent::Gumbel(agent)
         }
@@ -159,6 +166,7 @@ impl<'a> Brain<'a> {
             leaf_batch: None,
             agent: None,
             prior_heuristic_weight: None,
+            policy_target_q_weight: None,
         }
     }
 
@@ -174,6 +182,7 @@ impl<'a> Brain<'a> {
             leaf_batch: None,
             agent: None,
             prior_heuristic_weight: None,
+            policy_target_q_weight: None,
         }
     }
 
@@ -187,6 +196,13 @@ impl<'a> Brain<'a> {
     /// Override the prior heuristic weight. Builder style: chain after `with_backend`.
     pub fn with_prior_heuristic_weight(mut self, prior_heuristic_weight: f32) -> Self {
         self.prior_heuristic_weight = Some(prior_heuristic_weight);
+        self
+    }
+
+    /// Override β on σ(Q) in exported policy targets. Builder style: chain
+    /// after `with_backend`.
+    pub fn with_policy_target_q_weight(mut self, policy_target_q_weight: f32) -> Self {
+        self.policy_target_q_weight = Some(policy_target_q_weight);
         self
     }
 
@@ -227,6 +243,7 @@ impl<'a> Brain<'a> {
                 self.max_iterations,
                 self.leaf_batch,
                 self.prior_heuristic_weight,
+                self.policy_target_q_weight,
             ));
         }
         (self.agent.as_mut(), moves)

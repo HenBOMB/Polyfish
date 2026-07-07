@@ -66,6 +66,12 @@ pub struct GumbelMctsAgent<'a> {
     // How much to blend the heuristic prior into the network's root priors.
     // High in the beginning to bootstrap the network but decays over time.
     pub prior_heuristic_weight: f32,
+    /// Weight β on σ(completed-Q) in the exported policy TARGET π' =
+    /// softmax(logit + β·σ(Q)). In-search selection always uses full σ(Q);
+    /// this only gates how much search re-ranking flows into training
+    /// targets — ramp it up as the value head earns trust. 1.0 = paper
+    /// behavior; 0.0 = distill the (blended) prior unchanged.
+    pub policy_target_q_weight: f32,
 }
 
 struct GumbelNode {
@@ -153,6 +159,7 @@ impl<'a> GumbelMctsAgent<'a> {
             next_root_hash: None,
             tree_reuses: 0,
             prior_heuristic_weight: 0.0,
+            policy_target_q_weight: 1.0,
         }
     }
 
@@ -757,7 +764,7 @@ impl<'a> GumbelMctsAgent<'a> {
         let raw_scores: Vec<f32> = child_priors
             .iter()
             .zip(&sigma_q)
-            .map(|(l, s)| l + s)
+            .map(|(l, s)| l + self.policy_target_q_weight * s)
             .collect();
         let probs = softmax(&raw_scores); // π'(a)
 

@@ -32,11 +32,19 @@ const FINAL_OUTCOME_REL_W: f32 = 0.4;
 
 // Forward credit window for the near-term value component, in game turns.
 const NEAR_DELTA_TURNS: i32 = 4;
-// Score-advantage change over the window that saturates the near term (±1).
-// ~600 ≈ a strong 4-turn relative swing (village capture + growth).
-const NEAR_DELTA_NORM: f32 = 600.0;
+// The near-term norm scales with the game's economy: a saturating swing is
+// ~15% of combined score over 4 turns, floored for the small opening turns.
+// Percentages transfer across map sizes and skill brackets; point totals don't.
+const NEAR_DELTA_NORM_FRAC: f32 = 0.15;
+const NEAR_DELTA_NORM_FLOOR: f32 = 600.0;
 // Weight of the near-term delta vs the final-outcome tail.
 const NEAR_DELTA_W: f32 = 0.7;
+
+// Ramp (in iterations) for β on σ(Q) in the exported policy targets:
+// β = min(1, iteration/20). Early on the value head's Q ordering is noise
+// that min-max rescaling amplifies to full strength, so π' corrodes the
+// prior; let search re-ranking into the targets only as the head matures.
+const POLICY_TARGET_Q_RAMP_ITERS: f32 = 20.0;
 
 /// Console verbosity for long self-play runs.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -276,12 +284,15 @@ fn play_single_game(
 
     let prior_w = (HEURISTIC_PRIOR_W0 * HEURISTIC_PRIOR_DECAY.powi(iteration as i32))
         .max(HEURISTIC_PRIOR_W_FLOOR);
+    let q_target_w = (iteration as f32 / POLICY_TARGET_Q_RAMP_ITERS).min(1.0);
 
     // Create two agents (they might share the same network, or be different)
     let mut agent1 = Brain::with_backend(eval1, mcts_iters, backend)
-    .with_prior_heuristic_weight(prior_w);
+    .with_prior_heuristic_weight(prior_w)
+    .with_policy_target_q_weight(q_target_w);
     let mut agent2 = Brain::with_backend(eval2, mcts_iters, backend)
-    .with_prior_heuristic_weight(prior_w);
+    .with_prior_heuristic_weight(prior_w)
+    .with_policy_target_q_weight(q_target_w);
 
     if let Some(b) = leaf_batch {
         agent1 = agent1.with_leaf_batch(b);
@@ -1310,6 +1321,8 @@ fn main() -> anyhow::Result<()> {
             .map(|i| {
                 let (_, _, p_id, my_now, opp_now, turn, _) = result.history[i];
                 let adv_now = (my_now - opp_now) as f32;
+                let norm = (NEAR_DELTA_NORM_FRAC * (my_now + opp_now) as f32)
+                    .max(NEAR_DELTA_NORM_FLOOR);
                 let adv_later = result.history[i + 1..]
                     .iter()
                     .find(|(_, _, p2, _, _, t2, _)| *p2 == p_id && *t2 >= turn + NEAR_DELTA_TURNS)
@@ -1324,7 +1337,7 @@ fn main() -> anyhow::Result<()> {
                             .unwrap_or(0.0);
                         my_final - opp_final
                     });
-                ((adv_later - adv_now) / NEAR_DELTA_NORM).clamp(-1.0, 1.0)
+                ((adv_later - adv_now) / norm).clamp(-1.0, 1.0)
             })
             .collect();
 
