@@ -211,113 +211,24 @@ PHASE 2 BASELINE (self-play starts from the BC checkpoint):
   data distribution. p1 vs p2 score gap (~4256 vs 3291) is seat advantage,
   both sides were the same model.
 
-PHASE 2 PROBE RESULT + VALUE-TARGET FIX (Jul 6):
-- 1783339121 (~15 iters from BC checkpoint, 64 then 124 sims): slow monotonic
-  passivity drift again — selfplay-only captures 7.8 -> 6.5, attacks 37 -> 25,
-  villages p50 9.9 -> 13.1 — while policy loss FELL and value loss sat at
-  ~0.026. Doubling sims did not change the decay slope => search budget was
-  never the constraint. (League rows, match_type=league, must be excluded
-  from trends: combined-players metrics crater vs weak checkpoints.)
-- Diagnosis: value target = mirror-match score ratio decomposes into seat
-  (~+0.38 for p1, only ~0.15 corrected) + current scoreboard + noise. It is
-  passivity-SYMMETRIC: if both copies drift lazy together the ratio doesn't
-  move, so nothing pushes back. Plus simulate_move freezes the opponent in
-  the tree (single-player MCTS), so threats/urgency are invisible to search.
-  Falling policy loss + flat tiny value loss = self-distillation echo chamber.
-- Fix (self_play.rs): blend an ABSOLUTE component into the final outcome:
-  abs = (my_final_score / 8000).clamp(0,1)*2-1 (GOOD_BOT_FINAL_SCORE=8000,
-  fixed external yardstick — never self-normalize), final_outcome =
-  0.6*relative + 0.4*abs. Final score only, written back to every position;
-  progress term stays relative so immediate score grabs (tech spam) aren't
-  paid out. Success gate: avg_score (combined) > 15K, watch avg_research for
-  score-hacking. Deferred: opponent plays one greedy heuristic turn on
-  EndTurn in simulation, only if passivity survives the fixed value signal.
+### SELF-PLAY FIX ATTEMPTS (Jul 6-7, condensed)
 
-### VALUE LABEL REWORK: 4-TURN FORWARD DELTA (Jul 7)
+ABS-YARDSTICK VALUE
+since mirror-match score ratio is passivity-symmetric, I tried adding a absolute
+target to the score (final_outcome = 0.6*rel + 0.4*abs-vs-8K). Hoped: external yardstick
+punishes joint laziness. Got: no effect (1783350651/  1783359971); teacher mix + heuristic 
+floor 0.1 slowed decay ~2x only but did not stop it.
 
-- The abs-yardstick fix alone failed (runs 1783350651, 1783359971): value
-  loss never jumped (label still trivially predictable — 0.4 weight, no
-  scaling vs the x3 relative term), ploss kept falling monotonically,
-  captures/attacks kept decaying. Teacher-file mixing (train.py, teachers/)
-  and the in-tree heuristic prior floor (0.1) slowed the decay ~2x but did
-  not reverse it. Conclusion: all fixes so far were downstream of the real
-  defect — the label carries ~no per-action credit at 128 games/iter, so the
-  value head becomes a scoreboard reader, Q gets a myopic immediate-score
-  tilt, and pi' corrodes the policy every iteration.
-- Fix (self_play.rs): label(t) = 0.7 * near + 0.3 * final_outcome, where
-  near = clamp((adv(t+4turns) - adv(t)) / 600, -1, 1), adv = my - opp score
-  (raw, seat bias cancels in deltas), window falls back to final scores at
-  game end. History tuples now carry the turn number. The old current-
-  scoreboard "progress" term is REMOVED (it was the scoreboard-reading
-  teacher). final_outcome now 0.4*rel + 0.6*abs. MuZero-Atari-style n-step
-  logic: within-game deltas cancel spawn RNG, sliding windows blanket the
-  trajectory, compounding mistakes get penalized repeatedly. Deferred
-  upgrade: bootstrap tail V(t+4) once the head is trustworthy.
-- Smoke check (5 games): values mean -0.09, std 0.49, range -0.98..0.71,
-  50%/10%/40% neg/zero/pos — dense both-signed per-position labels vs the
-  old near-constant-per-game broadcast.
-- Measured (new SIM_END_TURN_EDGES counter in game.rs): ~17 simulated
-  EndTurn edges per move decision at 64 sims on tiny-curriculum games —
-  the tree DOES cross turn boundaries often (sole-option EndTurn nodes are
-  common); the "search never sees tomorrow" hypothesis was wrong in its
-  strong form. Re-measure on 30-turn games; revives frozen-opponent
-  relevance at those crossings.
-- Rollout: REGENERATE teachers/ files (old-label values would pull the head
-  back toward scoreboard reading), reset model to BC checkpoint, clean
-  archive/, then 10 iters. Pre-registered: vloss must JUMP >> 0.02 and stay
-  up; vp50/captures move first; ploss stops falling monotonically;
-  avg_research is the score-hack canary.
+4-TURN FORWARD-DELTA LABEL
+The idea is that learning over the score of the entire game propagates too small of a signal
+to learn quickly that we should eagerly capture villages. This adds a component to the value target
+so model wants to make moves that are learning to better score outcomes 4 turns away.
+value = 0.7*near + 0.3*final, near = clamp((adv(t+4turns)-adv(t))/norm, ±1), norm = max(600, 0.15*combined)
+Hoped: dense per-action credit (vloss >> 0.02, captures recover). 
+Got (1783379532): vloss 0.026 -> 0.092, later floors ~0.052 — label works, head fine — but behavior
+decayed FASTER (cap 8.39 -> 6.79 in 3 iters). Also measured ~17 EndTurn edges/move in-tree: "search never sees tomorrow" was wrong.
 
-### POLICY-TARGET Q-GATE (β) + ECONOMY-SCALED NORM (Jul 7)
-
-- Run 1783379532 (BC-fresh, new 4-turn label): vloss jumped 0.026 -> 0.092 as
-  pre-registered (label live), but behavior decayed FASTER than any prior run
-  (cap 8.39 -> 6.79, vp50 9.7 -> 14.0 in 3 iters). Mechanism found in
-  gumbel_qtransform.rs: pi' = softmax(logit + sigma(Q)) where
-  sigma = (C_VISIT=50 + max_visits) * 0.1 * rescale_min_max(completed_Q).
-  Min-max rescale stretches ANY Q spread (signal or noise) to full [0,1], and
-  at 128 sims the tilt is ~10 logit units vs ~2-4 of prior spread — so pi' is
-  dominated by Q ORDERING, which early in training is noise from an immature
-  value head. The better label RAISED Q variance before it earned reliability
-  => faster corrosion. Race condition: head-learning vs policy-corrosion.
-- Fix: policy_target_q_weight (β) on GumbelMctsAgent — pi'_target =
-  softmax(logit + β*sigma(Q)) in extract_policy_targets ONLY (in-search
-  selection keeps full sigma(Q); exploration unchanged). β = min(1,
-  iteration/20) from self_play (POLICY_TARGET_Q_RAMP_ITERS; shortened from 40). β=0 => distill
-  the (teacher-anchored, heuristic-floored) prior; search re-ranking flows
-  into training targets as the head matures. Plumbed like
-  prior_heuristic_weight (Brain builder + make_search_agent param; arena
-  passes None => 1.0 legacy).
-- NEAR_DELTA_NORM 600 fixed -> max(600, 0.15 * combined_score(t)): the norm
-  is now scale-free (a saturating 4-turn swing = ~15% of the economy), so
-  late-game/big-map discrimination survives the +-1 clamp. Floor keeps the
-  smoke-validated early-game behavior.
-- NOTE: teachers/ files were generated with the fixed-600 norm — regenerate
-  them once more (late-game labels differ modestly under the scaled norm).
-
-### β-GATE RESULT: SLOPE-INVARIANT DECAY — SUSPECT MOVES TO train.py (Jul 7)
-
-- Run 1783386024 (14 iters, β ramp /20, scaled norm, regenerated teachers,
-  BC-fresh, clean archive): iter1 cap 8.14 / atk 41.2 / vp50 10.2 — best
-  iter-1 yet — then cap 6.80 -> 6.23 by iter 3 and ~4.5 by iter 14
-  (atk 21.0, vp50 19.5). The iter-1-3 crash happened at β = 0.05-0.15:
-  with the σ(Q) channel ~90% closed, the slope matched the previous run
-  at β = 1.0. σ(Q)-in-targets is NOT the dominant corrosion channel.
-- Positive: vloss floored at ~0.052 for 8 straight iters (not sliding to
-  0.02) — the 4-turn label is hard and stable; the value head is fine.
-- Meta-evidence: FOUR interventions (sims 64->128, label rework, teacher +
-  heuristic anchors, β-gate) and the behavior-decay slope barely moved.
-  The corrosion is invariant to target construction. The untouched common
-  factor: every train.py invocation itself. Two suspects:
-  1. LR shock — each iteration restarts Adam at LR=0.002 with a fresh
-     cosine cycle x 2 epochs (train.py's own comment says 0.0005 for
-     re-runs; the loop never sets TRAIN_LR).
-  2. Value-gradient trunk interference — shared trunk, hardcoded
-     total = policy + 1.0*value, and the new label ~tripled value-gradient
-     scale (fits the new-label runs decaying FASTER early).
-- Next: null-update bisect. E0 = eval BC checkpoint (32 games, fixed
-  config). T1 = one train.py pass on teachers/ ONLY (self-consistent data
-  the net already fits), re-eval E1. E1 degraded => trainer alone corrodes
-  (then retry at TRAIN_LR=0.0003; consider value-loss weight knob).
-  E1 flat => corrosion needs fresh self-play data; train on 1 fresh file,
-  eval E2, to pin data vs optimizer.
+β-GATE on σ(Q) in policy targets only (β = min(1, iter/20))
+Since that Q rescales, it could cause bad moves to be closer in score than good ones. Therfore
+negatiely impacting the policy target's ability to learn. Tried fazing NN's Q prediction slowly
+over iter. Hoped: noisy Q out of pi' stops early corrosion. Got (1783386024): best iter-1 ever (cap 8.14/atk 41.2), but crash slope at β=0.05-0.15 MATCHED β=1.0 — σ(Q) not the dominant channel.
