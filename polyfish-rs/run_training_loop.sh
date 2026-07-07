@@ -3,9 +3,9 @@ set -e
 
 # NUM_GAMES/MCTS_ITERS/ACTORS/EVAL_SERVERS match self_play CLI flags.
 # All iteration-keyed schedules (total iterations, curriculum pacing,
-# checkpoint cadence, milestone spacing, early-exit patience, replay-buffer
-# retention) are tuned in GAMES at BASELINE_GAMES games/iteration and derived
-# from -g below — changing -g keeps the training regime per game identical.
+# checkpoint cadence, milestone spacing, replay-buffer retention) are tuned
+# in GAMES at BASELINE_GAMES games/iteration and derived from -g below —
+# changing -g keeps the training regime per game identical.
 # See self_play --help and expert_boost_throughput.md for details.
 BASELINE_GAMES=64
 ITERATIONS=500
@@ -90,11 +90,7 @@ FORCE_TRAIN=false
 BOOST=false
 CHILL=false
 REWARD_SHAPING=false
-# Early-exit if policy loss stalls across iterations (see -p/-d below). 0
-# patience disables the check entirely.
-EARLY_EXIT_PATIENCE=50
-EARLY_EXIT_MIN_DELTA=0.01
-while getopts "fbcri:g:n:a:e:p:d:" opt; do
+while getopts "fbcri:g:n:a:e:" opt; do
   case $opt in
     f)
       FORCE_TRAIN=true
@@ -124,13 +120,6 @@ while getopts "fbcri:g:n:a:e:p:d:" opt; do
     e)
       EVAL_SERVERS=$OPTARG
       ;;
-    p)
-      EARLY_EXIT_PATIENCE=$OPTARG
-      PATIENCE_SET=true
-      ;;
-    d)
-      EARLY_EXIT_MIN_DELTA=$OPTARG
-      ;;
     \?)
       echo "Invalid option: -$OPTARG" >&2
       exit 1
@@ -147,29 +136,13 @@ scaled() {
 if [ "${ITERATIONS_SET:-false}" != true ]; then
     ITERATIONS=$(scaled "$ITERATIONS")
 fi
-if [ "${PATIENCE_SET:-false}" != true ] && [ "$EARLY_EXIT_PATIENCE" -gt 0 ]; then
-    EARLY_EXIT_PATIENCE=$(scaled "$EARLY_EXIT_PATIENCE")
-fi
 CHECKPOINT_EVERY=$(scaled 50)
 MILESTONE_EVERY=$(scaled 100)
 # Replay window: constant ~10*BASELINE_GAMES games regardless of -g.
 # train.py reads REPLAY_BUFFER_FILES; archive pruning keeps window + 1 in sync.
 ARCHIVE_KEEP=$(scaled 10)
 export REPLAY_BUFFER_FILES=$ARCHIVE_KEEP
-export EARLY_EXIT_PATIENCE
-export EARLY_EXIT_MIN_DELTA
-# train.py batch-level early stop: disabled when -p 0, otherwise unchanged default.
-if [ "$EARLY_EXIT_PATIENCE" -eq 0 ]; then
-    export EARLY_STOP_PATIENCE_BATCHES=0
-else
-    export EARLY_STOP_PATIENCE_BATCHES=150
-fi
-echo "Schedule (games-based, -g $NUM_GAMES vs baseline $BASELINE_GAMES): $ITERATIONS iterations, checkpoint every $CHECKPOINT_EVERY, milestone every $MILESTONE_EVERY, patience $EARLY_EXIT_PATIENCE, replay window $ARCHIVE_KEEP files"
-
-# Policy-loss stall tracking (across iterations of the loop below). Scoped to
-# this script invocation only — a fresh run gets a fresh patience budget.
-BEST_POLICY_LOSS=""
-STALL_ITERS=0
+echo "Schedule (games-based, -g $NUM_GAMES vs baseline $BASELINE_GAMES): $ITERATIONS iterations, checkpoint every $CHECKPOINT_EVERY, milestone every $MILESTONE_EVERY, replay window $ARCHIVE_KEEP files"
 
 REWARD_FLAG=""
 if [ "$REWARD_SHAPING" = true ]; then
@@ -323,7 +296,6 @@ do
         exit "$TRAIN_STATUS"
     fi
     LOSS=$(echo "$TRAIN_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('loss',''))")
-    POLICY_LOSS=$(echo "$TRAIN_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('policy_loss',''))")
 
     # 3. Log
     .venv/bin/python3 training_log.py append-row \
@@ -393,26 +365,5 @@ do
     # replay window regardless of -g (train.py reads the same value via
     # REPLAY_BUFFER_FILES)
     ls -t archive/games_*.safetensors 2>/dev/null | tail -n +$((ARCHIVE_KEEP + 1)) | xargs -r rm
-
-    # 5. Early-exit if policy loss has stalled across iterations
-    if [ "$EARLY_EXIT_PATIENCE" -gt 0 ] && [ -n "$POLICY_LOSS" ]; then
-        if [ -z "$BEST_POLICY_LOSS" ]; then
-            BEST_POLICY_LOSS=$POLICY_LOSS
-            STALL_ITERS=0
-        else
-            IMPROVED=$(awk -v cur="$POLICY_LOSS" -v best="$BEST_POLICY_LOSS" -v delta="$EARLY_EXIT_MIN_DELTA" 'BEGIN { print (cur <= best - delta) ? 1 : 0 }')
-            if [ "$IMPROVED" -eq 1 ]; then
-                BEST_POLICY_LOSS=$POLICY_LOSS
-                STALL_ITERS=0
-            else
-                STALL_ITERS=$((STALL_ITERS + 1))
-            fi
-        fi
-        echo "  -> Policy loss: $POLICY_LOSS (best: $BEST_POLICY_LOSS, stalled $STALL_ITERS/$EARLY_EXIT_PATIENCE iterations)"
-        if [ "$STALL_ITERS" -ge "$EARLY_EXIT_PATIENCE" ]; then
-            echo "Policy loss hasn't improved by >= $EARLY_EXIT_MIN_DELTA in $EARLY_EXIT_PATIENCE iterations (best: $BEST_POLICY_LOSS). Stopping training loop early."
-            break
-        fi
-    fi
 
 done

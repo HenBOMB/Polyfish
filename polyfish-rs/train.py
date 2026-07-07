@@ -17,16 +17,16 @@ EPOCHS = int(os.environ.get("TRAIN_EPOCHS", "2"))
 # TRAIN_LR override: use a lower value (e.g. 0.0005) when re-running on the
 # same data — the cosine scheduler restarts at this LR every invocation.
 LEARNING_RATE = float(os.environ.get("TRAIN_LR", "0.002"))
-
-# Early stopping: if the smoothed training loss (mean of the last
-# EARLY_STOP_WINDOW batches) hasn't improved by EARLY_STOP_MIN_DELTA within
-# EARLY_STOP_PATIENCE_BATCHES batches, stop this training call rather than
-# grinding through the rest of the replay buffer for no gain. 0 disables.
-# run_training_loop.sh exports EARLY_STOP_PATIENCE_BATCHES (0 when -p 0) and
-# EARLY_EXIT_MIN_DELTA (from -d).
-EARLY_STOP_PATIENCE_BATCHES = int(os.environ.get("EARLY_STOP_PATIENCE_BATCHES", "150"))
-EARLY_STOP_MIN_DELTA = float(os.environ.get("EARLY_EXIT_MIN_DELTA", "0.005"))
-EARLY_STOP_WINDOW = 20
+# Weight on the value loss's contribution to the shared trunk's gradient.
+# Set to 0 to isolate whether value-gradient trunk interference corrodes the
+# policy (bisect Arm C) — total_loss/policy_loss are unaffected either way.
+VALUE_LOSS_WEIGHT = float(os.environ.get("VALUE_LOSS_WEIGHT", "1.0"))
+# Detach the value head's input from the shared trunk (bisect Arm D). Unlike
+# VALUE_LOSS_WEIGHT=0, the value head's own layers (v_pool_conv/v_fc_shared/
+# v_win) still get full-strength gradient — only the trunk is shielded.
+# Forward-pass values are identical either way, so this is training-only and
+# needs no change on the Rust/candle inference side.
+DETACH_VALUE_TRUNK = os.environ.get("DETACH_VALUE_TRUNK", "0") == "1"
 
 # Device selection: MPS (Apple Silicon) > CUDA (NVIDIA) > CPU
 try:
@@ -156,7 +156,8 @@ class PolyZeroNet(nn.Module):
         policy['target_spatial'] = self.pi_target(x).flatten(1)
         
         # --- Value Heads ---
-        v_pooled = self.relu(self.v_pool_bn(self.v_pool_conv(x)))
+        v_input = x.detach() if DETACH_VALUE_TRUNK else x
+        v_pooled = self.relu(self.v_pool_bn(self.v_pool_conv(v_input)))
         v_pooled = v_pooled.flatten(1)
         v_latent = self.relu(self.v_fc_shared(v_pooled))
         
@@ -197,9 +198,9 @@ def compute_loss(policy_pred, values_pred, policy_targets, value_target):
             total_policy_loss += head_loss * weights.get(head_name, 1.0)
             
     loss_win = nn.MSELoss()(values_pred['win'], value_target['win'])
-    
+
     # Prioritize winning/losing.
-    value_loss = 1.0 * loss_win
+    value_loss = VALUE_LOSS_WEIGHT * loss_win
     
     # Total loss
     total_loss = total_policy_loss + value_loss
@@ -219,14 +220,6 @@ def batch_report_indices(total_batches, max_reports=10):
     return indices
 
 def train():
-    if EARLY_STOP_PATIENCE_BATCHES == 0:
-        print("Batch early stopping disabled (patience=0).")
-    else:
-        print(
-            f"Batch early stopping: patience={EARLY_STOP_PATIENCE_BATCHES} batches, "
-            f"min_delta={EARLY_STOP_MIN_DELTA}, window={EARLY_STOP_WINDOW}."
-        )
-
     # 1. Load Data
     fresh_files = glob.glob("games_*.safetensors")
     archive_files = sorted(glob.glob("archive/games_*.safetensors"), key=os.path.getmtime, reverse=True)
@@ -268,11 +261,6 @@ def train():
     scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=EPOCHS, T_mult=1, eta_min=1e-5)
 
     # 3. Training Loop
-    recent_losses = []
-    best_smoothed_loss = None
-    stall_batches = 0
-    early_stopped = False
-
     for epoch in range(EPOCHS):
         total_loss = 0
         total_p_loss = 0
@@ -432,22 +420,6 @@ def train():
                 total_v_loss += v_loss.item()
                 total_batches += 1
 
-                # Early stopping: smooth over a window of raw batch losses
-                # (the cumulative epoch average above is too sluggish to
-                # detect a plateau) and bail once it stalls.
-                recent_losses.append(loss.item())
-                if len(recent_losses) > EARLY_STOP_WINDOW:
-                    recent_losses.pop(0)
-                if EARLY_STOP_PATIENCE_BATCHES > 0 and len(recent_losses) == EARLY_STOP_WINDOW:
-                    smoothed_loss = sum(recent_losses) / EARLY_STOP_WINDOW
-                    if best_smoothed_loss is None or smoothed_loss <= best_smoothed_loss - EARLY_STOP_MIN_DELTA:
-                        best_smoothed_loss = smoothed_loss
-                        stall_batches = 0
-                    else:
-                        stall_batches += 1
-                    if stall_batches >= EARLY_STOP_PATIENCE_BATCHES:
-                        early_stopped = True
-
                 elapsed = time.time() - chunk_start_time
                 global_batch_num = total_batches
                 if report_batch_indices and global_batch_num in report_batch_indices:
@@ -461,24 +433,12 @@ def train():
                         f"- {batches_per_sec:.1f} batch/s"
                     )
 
-                if early_stopped:
-                    break
-
-            if early_stopped:
-                print(
-                    f"Early stopping: smoothed loss hasn't improved by >= {EARLY_STOP_MIN_DELTA} "
-                    f"in {EARLY_STOP_PATIENCE_BATCHES} batches (best smoothed: {best_smoothed_loss:.4f})."
-                )
-
             del spatial_maps, player_states, targets_win, target_heads
             if DEVICE == "cuda":
                 torch.cuda.empty_cache()
             elif DEVICE == "mps":
                 torch.mps.empty_cache()
             gc.collect()
-
-            if early_stopped:
-                break  # skip remaining chunks in this epoch
 
         if total_batches > 0:
             avg_loss = total_loss / total_batches
@@ -489,9 +449,6 @@ def train():
             print(f"Epoch {epoch+1}/{EPOCHS} - No data processed")
 
         scheduler.step()
-
-        if early_stopped:
-            break  # skip remaining epochs
 
     final_loss = total_loss / total_batches if total_batches > 0 else 0.0
     final_p_loss = total_p_loss / total_batches if total_batches > 0 else 0.0
