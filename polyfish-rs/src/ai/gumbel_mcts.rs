@@ -24,6 +24,9 @@
 //!     shared with the AlphaZero agent via `mcts_common`.
 
 use crate::ai::brain::max_turns_ahead;
+use crate::ai::decision_trace::{
+    CandidateTrace, DecisionTrace, RoundCandidate, RoundSnapshot, SelectionMode, TraceBuilder,
+};
 use crate::ai::eval_server::Evaluator;
 use crate::ai::features::{self, RawFeatures};
 use crate::ai::gumbel_qtransform::{self, sequence_of_considered_visits, softmax};
@@ -72,6 +75,10 @@ pub struct GumbelMctsAgent<'a> {
     /// targets — ramp it up as the value head earns trust. 1.0 = paper
     /// behavior; 0.0 = distill the (blended) prior unchanged.
     pub policy_target_q_weight: f32,
+    /// Diagnostic capture for the next search, armed via `arm_trace`. `None`
+    /// (the default) costs one `RefCell` borrow-check per call site and
+    /// nothing else — see decision_trace.rs.
+    trace: RefCell<Option<TraceBuilder>>,
 }
 
 struct GumbelNode {
@@ -160,6 +167,7 @@ impl<'a> GumbelMctsAgent<'a> {
             tree_reuses: 0,
             prior_heuristic_weight: 0.0,
             policy_target_q_weight: 1.0,
+            trace: RefCell::new(None),
         }
     }
 
@@ -170,6 +178,145 @@ impl<'a> GumbelMctsAgent<'a> {
         self.tree = None;
         self.last_chosen_idx = None;
         self.next_root_hash = None;
+    }
+
+    /// Arm decision-trace capture for the next search. Forces a fresh root
+    /// build (see `invalidate_tree`) so raw network logits and heuristic
+    /// scores get recomputed instead of reused from `finish_reused_root`'s
+    /// already-blended cached subtree, which would otherwise leave most
+    /// within-turn traces empty.
+    pub fn arm_trace(&mut self) {
+        self.invalidate_tree();
+        *self.trace.borrow_mut() = Some(TraceBuilder::default());
+    }
+
+    /// Drain and finalize the trace captured by the last search. `None` if
+    /// never armed, or armed but short-circuited before a selection was made
+    /// (book move / empty legal-move root).
+    pub fn take_trace(&mut self) -> Option<DecisionTrace> {
+        self.trace
+            .borrow_mut()
+            .take()
+            .and_then(|b| b.finish(self.prior_heuristic_weight))
+    }
+
+    /// Record the full legal root move set, called once per fresh root build
+    /// (never on the re-root path — `arm_trace` guarantees that path isn't
+    /// taken while armed). `raw_logits` must be captured by the caller before
+    /// heuristic blending overwrites `child.logit` in place.
+    fn record_root_candidates(
+        &self,
+        game: &Game,
+        root: &GumbelNode,
+        in_cut: &[usize],
+        raw_logits: &[f32],
+    ) {
+        let mut trace_ref = self.trace.borrow_mut();
+        let Some(trace) = trace_ref.as_mut() else {
+            return;
+        };
+        trace.root_own_value = root.own_value;
+        let raw_probs = softmax(raw_logits);
+        let blended_logits: Vec<f32> = root.children.iter().map(|c| c.logit).collect();
+        let blended_probs = softmax(&blended_logits);
+        for (i, child) in root.children.iter().enumerate() {
+            let Some(mv) = child.move_to_here.as_ref() else {
+                continue;
+            };
+            trace.candidates.push(CandidateTrace {
+                description: mv.describe(&game.state),
+                move_type: format!("{:?}", mv.move_type()),
+                source_idx: mv.source_idx().ok(),
+                target_idx: mv.target_idx().ok(),
+                own_value: None,
+                q_value: 0.0,
+                visits: 0.0,
+                raw_net_prob: raw_probs[i],
+                heuristic_score: crate::ai::ordering::score_move(game, mv.as_ref()),
+                search_prior_prob: blended_probs[i],
+                gumbel_noise: child.gumbel,
+                in_top_k: in_cut.contains(&i),
+            });
+        }
+    }
+
+    /// Record the Sequential-Halving survivor ranking for one round, after
+    /// that round's visits have landed.
+    fn record_round_snapshot(
+        &self,
+        root: &GumbelNode,
+        in_cut: &[usize],
+        round_idx: usize,
+        round_considered: usize,
+        visits_per_candidate: usize,
+    ) {
+        if self.trace.borrow().is_none() {
+            return;
+        }
+        let survivors_idx = &in_cut[..round_considered.min(in_cut.len())];
+        let sigma_q = self.sigma_q_for(root, survivors_idx);
+
+        let mut trace_ref = self.trace.borrow_mut();
+        let Some(trace) = trace_ref.as_mut() else {
+            return;
+        };
+        let survivors = survivors_idx
+            .iter()
+            .zip(sigma_q.iter())
+            .map(|(&i, &sq)| RoundCandidate {
+                candidate_idx: i,
+                score: root.children[i].gumbel + root.children[i].logit + sq,
+                visits: root.children[i].visits,
+                q_value: root.children[i].q_value(),
+            })
+            .collect();
+        trace.rounds.push(RoundSnapshot {
+            round_idx,
+            round_considered,
+            visits_per_candidate,
+            survivors,
+        });
+    }
+
+    /// Record final per-candidate visits/Q/value and the selected move, once
+    /// the search is done and a move has been chosen.
+    fn record_final(&self, root: &GumbelNode, best_idx: usize, move_count: usize) {
+        let mut trace_ref = self.trace.borrow_mut();
+        let Some(trace) = trace_ref.as_mut() else {
+            return;
+        };
+
+        let child_qvalues: Vec<f32> = root.children.iter().map(|c| c.q_value()).collect();
+        let child_visits: Vec<f32> = root.children.iter().map(|c| c.visits).collect();
+        let child_priors: Vec<f32> = root.children.iter().map(|c| c.logit).collect();
+        let sigma_q = gumbel_qtransform::sigma_completed_q(
+            root.own_value,
+            &child_priors,
+            &child_qvalues,
+            &child_visits,
+            true,
+        );
+
+        for (i, child) in root.children.iter().enumerate() {
+            if let Some(c) = trace.candidates.get_mut(i) {
+                c.visits = child.visits;
+                c.q_value = child.q_value();
+                c.own_value = child.is_expanded.then_some(child.own_value);
+            }
+        }
+        let mode = if move_count < crate::ai::mcts_zero::ZeroMctsAgent::TEMPERATURE_MOVE_THRESHOLD
+            && root.children.len() > 1
+        {
+            SelectionMode::Sampled
+        } else {
+            SelectionMode::Argmax
+        };
+        let tiebreak = root
+            .children
+            .get(best_idx)
+            .map(|c| c.gumbel + child_priors[best_idx] + sigma_q[best_idx])
+            .unwrap_or(0.0);
+        trace.chosen = Some((mode, best_idx, tiebreak));
     }
 
     /// Build the root node, either by re-rooting the previous search's tree
@@ -307,6 +454,11 @@ impl<'a> GumbelMctsAgent<'a> {
             })
             .collect();
 
+        // Snapshot pre-blend logits for trace capture below; blend below
+        // overwrites child.logit in place, so this is the only chance to see
+        // the network's raw (unblended) opinion.
+        let raw_logits: Vec<f32> = root.children.iter().map(|c| c.logit).collect();
+
         // Bootstrap with the priors from the heuristic mcts agent, before the
         // Gumbel top-k cut is built so the cut ranks on blended priors.
         if self.prior_heuristic_weight > 0.0 {
@@ -314,6 +466,7 @@ impl<'a> GumbelMctsAgent<'a> {
         }
 
         let mut in_cut = self.build_in_cut(&root);
+        self.record_root_candidates(game, &root, &in_cut, &raw_logits);
 
         self.run_search(game, &mut root, &mut in_cut, start_turn);
         root
@@ -368,6 +521,7 @@ impl<'a> GumbelMctsAgent<'a> {
                 visits_per_candidate,
                 start_turn,
             );
+            self.record_round_snapshot(root, in_cut, round_idx, round_considered, visits_per_candidate);
         }
     }
 
@@ -863,6 +1017,8 @@ impl<'a> GumbelMctsAgent<'a> {
         } else {
             self.recommend_final_move(&root)
         };
+
+        self.record_final(&root, best_idx, move_count);
 
         let best_move = clone_child_move(&root, best_idx);
         let next_hash = next_root_hash_for(game, best_move.as_deref());

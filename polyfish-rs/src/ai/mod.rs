@@ -1,5 +1,6 @@
 pub mod book;
 pub mod brain;
+pub mod decision_trace;
 pub mod eval_server;
 pub mod evaluator;
 pub mod features;

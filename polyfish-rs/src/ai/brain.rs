@@ -70,6 +70,9 @@ pub struct Brain<'a> {
     /// β on σ(completed-Q) in the Gumbel backend's exported policy targets.
     /// `None` = 1.0 (full paper behavior). Ignored by other backends.
     policy_target_q_weight: Option<f32>,
+    /// Set by `request_trace`; consumed (and cleared) by the next
+    /// `think_decomposed` call, which arms the underlying agent's tracer.
+    pending_trace: bool,
 }
 
 /// Internal enum wrapping whichever concrete agent the configured backend
@@ -114,6 +117,21 @@ impl<'a> SearchAgent<'a> {
             // No NN priors to report stats over; the move is all callers need.
             SearchAgent::Heuristic(a) => (a.select_move(game), Vec::new()),
             SearchAgent::Greedy(a) => (a.select_move(game), Vec::new()),
+        }
+    }
+
+    /// Arm decision-trace capture for the next search. No-op for backends
+    /// other than Gumbel (the only one self-play's diagnostics target).
+    fn arm_trace(&mut self) {
+        if let SearchAgent::Gumbel(a) = self {
+            a.arm_trace();
+        }
+    }
+
+    fn take_trace(&mut self) -> Option<crate::ai::decision_trace::DecisionTrace> {
+        match self {
+            SearchAgent::Gumbel(a) => a.take_trace(),
+            _ => None,
         }
     }
 }
@@ -167,6 +185,7 @@ impl<'a> Brain<'a> {
             agent: None,
             prior_heuristic_weight: None,
             policy_target_q_weight: None,
+            pending_trace: false,
         }
     }
 
@@ -183,6 +202,7 @@ impl<'a> Brain<'a> {
             agent: None,
             prior_heuristic_weight: None,
             policy_target_q_weight: None,
+            pending_trace: false,
         }
     }
 
@@ -254,15 +274,37 @@ impl<'a> Brain<'a> {
         game: &Game,
         move_count: usize,
     ) -> (Option<Box<dyn Move>>, Vec<MoveVisit>) {
+        // Read-and-clear before `self.think` below, which mutably borrows
+        // `self.agent` for the rest of this call — `self` can't be touched
+        // again (e.g. to clear this flag) while that borrow is live.
+        let want_trace = self.pending_trace;
+        self.pending_trace = false;
+
         let (agent, mut moves) = self.think(game);
 
         if agent.is_none() {
             return (moves.pop(), Vec::new());
         }
 
-        agent
-            .unwrap()
-            .select_move_with_decomposed_visits(&mut game.clone(), move_count)
+        let agent = agent.unwrap();
+        if want_trace {
+            agent.arm_trace();
+        }
+        agent.select_move_with_decomposed_visits(&mut game.clone(), move_count)
+    }
+
+    /// Request that the next `think_decomposed` call capture a decision
+    /// trace (see decision_trace.rs). Consumed by that call whether or not
+    /// it actually finds a trace worth taking.
+    pub fn request_trace(&mut self) {
+        self.pending_trace = true;
+    }
+
+    /// Retrieve the trace captured by the most recent `think_decomposed`
+    /// call, if `request_trace` was called beforehand and search actually
+    /// reached a final selection.
+    pub fn take_trace(&mut self) -> Option<crate::ai::decision_trace::DecisionTrace> {
+        self.agent.as_mut().and_then(SearchAgent::take_trace)
     }
 
     pub fn think_with_stats(&mut self, game: &Game) -> (Option<Box<dyn Move>>, Vec<f32>) {

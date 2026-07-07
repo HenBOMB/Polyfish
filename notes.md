@@ -232,3 +232,76 @@ decayed FASTER (cap 8.39 -> 6.79 in 3 iters). Also measured ~17 EndTurn edges/mo
 Since that Q rescales, it could cause bad moves to be closer in score than good ones. Therfore
 negatiely impacting the policy target's ability to learn. Tried fazing NN's Q prediction slowly
 over iter. Hoped: noisy Q out of pi' stops early corrosion. Got (1783386024): best iter-1 ever (cap 8.14/atk 41.2), but crash slope at β=0.05-0.15 MATCHED β=1.0 — σ(Q) not the dominant channel.
+
+Long decision traces in a JSON
+To troubleshoot I decided to instrument the whole decision process. What heuristic are hinted at root, what policy head suggests, what the value head evaluates each leaf node at, the ultimate Q computed, and then the move chosen.
+I sampled across multiple games and iterations and I can in the data what confirms without a shadow of a doubt what I knew from earlier attempts: our value head sucks. It is not properly learning what is good for the game and it is THE thing that drags down the bot's performance.
+
+THE NUMBERS (Jul 7-8, 2026):
+Tooling: self_play --trace-villages --trace-trigger adjacent|on-village
+--trace-max N; one JSON per game (first trigger only) into decision_traces/,
+carrying per root candidate: raw_net_prob (pre-blend policy), heuristic_score,
+blended prior, gumbel noise, own_value (NN value of resulting state),
+post-search Q, visits, per-round Sequential-Halving survivor lists, chosen move.
+ADJACENT = unit 1 tile (chebyshev) from an open village, deciding to Step onto
+it. ON-VILLAGE = standing on it, deciding to Capture (a separate, later-turn
+move from the step — two different decisions). Raw JSONs were scratch-only;
+regenerate with the flags above.
+
+Model: run 1783446473 (DETACH_VALUE_TRUNK=1, ITER_OFFSET=76, -r).
+"before" = after iter 25 (checkpoints/model_pre_iter26_backup.safetensors),
+"after" = after iter 27 (checkpoints/model_iter27_snapshot.safetensors).
+53 argmax-mode traces (1 sampled-mode excluded). "value ranks it best" =
+fraction of traces where the village candidate's own_value ties the max
+own_value over all root candidates.
+
+| decision | when   | n  | chose village move | raw_net mean | value ranks it best |
+|----------|--------|----|--------------------|--------------|---------------------|
+| Capture  | before | 14 | 43%                | 0.48         | 36%                 |
+| Capture  | after  | 10 | 70%                | 0.80         | 60%                 |
+| Approach | before | 18 | 78%                | 0.75         | 22%                 |
+| Approach | after  | 11 | 36%                | 0.62         | 18%                 |
+
+- Real vs noise: capture raw_net 0.48->0.80 solid (t~3.5); approach choose-rate
+  78->36% is the one behavioral shift under p<0.05 (~0.03); capture choose-rate
+  43->70% direction-only (p~0.19). Approach confidence grew a low tail: 3/11
+  traces under 0.25 raw_net vs 1/18 before (going bimodal).
+- Macro corroboration: captures/game at iters 26/27 = 4.16/4.03, continuing the
+  slide from ~6.4 at run start.
+- The invariant across all 53: own_value squashed to ~±0.3 around 0; approach
+  move rated best-available only ~20% of the time before AND after; mean gap to
+  the best alternative -0.03..-0.09. Policy raw_net is often 0.9+ on the same
+  moves. Two iterations swung policy behavior hard in both directions and did
+  not move the value ordering. Heuristic hints are NOT the gap: Capture 99.8
+  (uniquely dominant), village Step ~121-140 vs ~35-90 for other steps.
+- Vivid single case (before, on-village): raw_net 0.87 for Capture, own_value
+  0.13, Q crashed to -0.30 after search, move not chosen — search destroying a
+  correct prior read.
+- WHY (the refinement that matters): the head is NOT failing to learn —
+  value_loss converges (~0.16). The LABEL is empty. value = 0.7*near_delta +
+  0.3*final_outcome; near_delta is a 100% RELATIVE 4-turn swing, final_outcome
+  a per-game constant. In mirror play both copies capture on the same clock, so
+  the relative swing for capture states nets ~0 -> label ~0 -> head correctly
+  predicts ~0. Total abs share of the signal = 0.3*0.6 = 18% (abs only ever
+  went into the 30% tail; the 70% term stayed pure relative). The
+  passivity-symmetric trap, now measured at the decision level.
+- Transmission into the policy: sigma(completed-Q) steers IN-SEARCH selection at
+  full strength always (β only gates exported targets, never the tree). Flat Q
+  -> approach moves survive Sequential Halving by gumbel luck -> fewer captures
+  get played -> policy trains on those games. Fits every null so far: detach
+  (not gradients), β-gate (not targets alone), low-LR arm (not optimizer).
+- Caveats: trace runs used --iteration 1 => ~48% heuristic root blend vs the
+  0.1 live floor, so choose-rates are flattered (raw_net / own_value /
+  heuristic_score are pre-blend, unaffected); live approach behavior is likely
+  worse than 36%. n=10-18 per cell. Contamination: 4 stray trace-run games
+  files (~2% of samples, 10-turn iteration-1 games) got swept into iter-26
+  training as fresh and sit in the archive window; trace runs must end with
+  rm -f games_*.safetensors.
+
+NEXT FIX (agreed Jul 8): flip abs/rel to 60/40 INSIDE near_delta — the term
+carrying 70% of the signal:
+near = clamp(0.6*(my_later-my_now)/norm + 0.4*(adv_later-adv_now)/norm, ±1)
+A capture then labels positive every game regardless of the mirror opponent.
+Run with DETACH_VALUE_TRUNK off. Validate with traces at --iteration 102:
+"value ranks village move best" should move off ~20% within 2-3 iters, else
+falsified.

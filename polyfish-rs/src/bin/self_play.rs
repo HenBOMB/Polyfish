@@ -10,7 +10,7 @@ use polyfish::ai::mapper::DecomposedMapper;
 use polyfish::ai::network::PolyZeroNet;
 use polyfish::game::{Game, STARTING_OWNER_ID};
 use polyfish::replayer::{ModReplay, ReplayPlayer, ReplayTurn};
-use polyfish::states::PlayerId;
+use polyfish::states::{GameState, PlayerId};
 use polyfish::types::MapSize;
 use serde_json::json;
 use std::collections::HashMap;
@@ -39,6 +39,13 @@ const NEAR_DELTA_NORM_FRAC: f32 = 0.15;
 const NEAR_DELTA_NORM_FLOOR: f32 = 600.0;
 // Weight of the near-term delta vs the final-outcome tail.
 const NEAR_DELTA_W: f32 = 0.7;
+// Weight of the relative (vs opponent) component within the near-term delta.
+// Abs-dominant (0.6/0.4): in mirror self-play both copies capture villages on
+// roughly the same clock, so a capture's relative swing nets to ~0 and the
+// label teaches the value head nothing. An absolute anchor on my own score
+// progress gives captures a positive label regardless of the opponent. See
+// notes.md, decision-trace section.
+const NEAR_DELTA_REL_W: f32 = 0.4;
 
 // Ramp (in iterations) for β on σ(Q) in the exported policy targets:
 // β = min(1, iteration/20). Early on the value head's Q ordering is noise
@@ -66,6 +73,91 @@ impl ProgressMode {
         } else {
             Self::Full
         }
+    }
+}
+
+/// Which village-approach moment to capture a decision trace for (see
+/// decision_trace.rs / find_village_trigger).
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+enum TraceTrigger {
+    /// Unit 1 tile (Chebyshev) from an open village, deciding whether to Step toward it.
+    Adjacent,
+    /// Unit already standing on an open village, deciding whether to Capture.
+    OnVillage,
+}
+
+/// First (unit, village) pair at exactly the distance `trigger` calls for,
+/// among units for which the corresponding move (Step/Capture) could
+/// actually be legal this ply. `open_villages` is the same incrementally
+/// maintained set `play_single_game` already tracks for time-to-capture.
+fn find_village_trigger(
+    state: &GameState,
+    pov: PlayerId,
+    open_villages: &std::collections::HashSet<i32>,
+    trigger: TraceTrigger,
+) -> Option<(i32, i32)> {
+    let tribe = state.tribes.get(&pov)?;
+    let target_distance = match trigger {
+        TraceTrigger::Adjacent => 1,
+        TraceTrigger::OnVillage => 0,
+    };
+    for unit in &tribe.units {
+        let eligible = match trigger {
+            TraceTrigger::Adjacent => !unit.moved,
+            TraceTrigger::OnVillage => !unit.moved && !unit.attacked,
+        };
+        if !eligible {
+            continue;
+        }
+        for &village_idx in open_villages {
+            let Some(village_tile) = state.tiles.get(&village_idx) else {
+                continue;
+            };
+            if unit.coords.chebyshev_distance_to(&village_tile.coords) == target_distance {
+                return Some((unit.coords.idx, village_idx));
+            }
+        }
+    }
+    None
+}
+
+/// Write one captured decision trace to `decision_traces/`, tagged with
+/// enough metadata (iteration/game/turn/player/trigger tiles) to sample and
+/// compare across games and training iterations. One file per decision —
+/// safe under concurrent self-play actors without any shared-file locking.
+fn write_decision_trace(
+    trace: &polyfish::ai::decision_trace::DecisionTrace,
+    iteration: usize,
+    game_idx: usize,
+    turn: i32,
+    move_count: usize,
+    player_id: PlayerId,
+    trigger_unit_idx: i32,
+    trigger_village_idx: i32,
+) {
+    let wrapped = json!({
+        "iteration": iteration,
+        "game_idx": game_idx,
+        "turn": turn,
+        "move_count": move_count,
+        "player_id": player_id,
+        "trigger_unit_idx": trigger_unit_idx,
+        "trigger_village_idx": trigger_village_idx,
+        "trace": trace,
+    });
+    let dir = std::path::Path::new("decision_traces");
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        eprintln!("[trace] failed to create decision_traces/: {e}");
+        return;
+    }
+    let path = dir.join(format!("iter{iteration}_game{game_idx}_turn{turn}_p{player_id}.json"));
+    match serde_json::to_vec_pretty(&wrapped) {
+        Ok(bytes) => {
+            if let Err(e) = std::fs::write(&path, bytes) {
+                eprintln!("[trace] failed to write {}: {e}", path.display());
+            }
+        }
+        Err(e) => eprintln!("[trace] failed to serialize trace: {e}"),
     }
 }
 
@@ -226,6 +318,10 @@ fn play_single_game(
     backend: SearchBackend,
     leaf_batch: Option<usize>,
     progress: ProgressMode,
+    trace_villages: bool,
+    trace_trigger: TraceTrigger,
+    trace_max: usize,
+    trace_counter: &AtomicUsize,
 ) -> Option<GameResult> {
     // Curriculum logic — Tiny maps only, gradually increase turn count.
     let (map_size, max_turns) = if iteration <= 25 {
@@ -341,6 +437,7 @@ fn play_single_game(
     let mut next_spt_milestone = 0usize;
 
     let mut move_count = 0;
+    let mut traced_in_this_game = false;
     while !polyfish::functions::is_game_over(&game.state) {
         record_spt_at_turn_start(
             &game.state,
@@ -367,7 +464,38 @@ fn play_single_game(
 
         // MCTS Search - use the correct agent
         let current_agent = if pov == 1 { &mut agent1 } else { &mut agent2 };
+
+        let trigger_info = if trace_villages
+            && !traced_in_this_game
+            && trace_counter.load(Ordering::Relaxed) < trace_max
+        {
+            find_village_trigger(&game.state, pov, &open_villages, trace_trigger)
+        } else {
+            None
+        };
+        if trigger_info.is_some() {
+            current_agent.request_trace();
+        }
+
         let (best_move, move_visits) = current_agent.think_decomposed(&mut game, move_count);
+
+        if let Some((trigger_unit_idx, trigger_village_idx)) = trigger_info {
+            if let Some(trace) = current_agent.take_trace() {
+                if trace_counter.fetch_add(1, Ordering::Relaxed) < trace_max {
+                    write_decision_trace(
+                        &trace,
+                        iteration,
+                        game_idx,
+                        game.state.settings.turn,
+                        move_count,
+                        pov,
+                        trigger_unit_idx,
+                        trigger_village_idx,
+                    );
+                }
+                traced_in_this_game = true;
+            }
+        }
 
         let map_size = game.state.settings.size as usize;
 
@@ -717,6 +845,23 @@ fn main() -> anyhow::Result<()> {
         /// unified. Ignored by candle/tch.
         #[arg(long, default_value_t = 2)]
         eval_workers: usize,
+
+        /// Capture MCTS decision traces at village-approach moments (see
+        /// decision_trace.rs) to decision_traces/*.json. Forces a fresh
+        /// (non-reused) tree build only for the traced decision, and only
+        /// once per game (first trigger), so normal runs are unaffected.
+        #[arg(long, default_value_t = false)]
+        trace_villages: bool,
+
+        /// Which village-approach moment to trace. Ignored unless
+        /// --trace-villages.
+        #[arg(long, value_enum, default_value_t = TraceTrigger::Adjacent)]
+        trace_trigger: TraceTrigger,
+
+        /// Max decision-trace JSON files written across the whole run.
+        /// Ignored unless --trace-villages.
+        #[arg(long, default_value_t = 20)]
+        trace_max: usize,
     }
 
     let args = Args::parse();
@@ -1039,6 +1184,7 @@ fn main() -> anyhow::Result<()> {
 
     let job_counter = Arc::new(AtomicUsize::new(0));
     let games_completed = Arc::new(AtomicUsize::new(0));
+    let trace_counter = Arc::new(AtomicUsize::new(0));
     let finish_milestones = finish_milestones(args.num_games);
     let results_mutex: Arc<std::sync::Mutex<Vec<GameResult>>> =
         Arc::new(std::sync::Mutex::new(Vec::with_capacity(args.num_games)));
@@ -1048,6 +1194,7 @@ fn main() -> anyhow::Result<()> {
             let job_counter = job_counter.clone();
             let results_mutex = results_mutex.clone();
             let games_completed = games_completed.clone();
+            let trace_counter = trace_counter.clone();
             let finish_milestones = finish_milestones.clone();
             let network1 = &network1;
             let network2 = &network2;
@@ -1094,6 +1241,10 @@ fn main() -> anyhow::Result<()> {
                             backend,
                             args.leaf_batch,
                             progress_mode,
+                            args.trace_villages,
+                            args.trace_trigger,
+                            args.trace_max,
+                            &trace_counter,
                         )
                     }))
                     .unwrap_or_else(|_| {
@@ -1323,10 +1474,10 @@ fn main() -> anyhow::Result<()> {
                 let adv_now = (my_now - opp_now) as f32;
                 let norm = (NEAR_DELTA_NORM_FRAC * (my_now + opp_now) as f32)
                     .max(NEAR_DELTA_NORM_FLOOR);
-                let adv_later = result.history[i + 1..]
+                let (my_later, adv_later) = result.history[i + 1..]
                     .iter()
                     .find(|(_, _, p2, _, _, t2, _)| *p2 == p_id && *t2 >= turn + NEAR_DELTA_TURNS)
-                    .map(|(_, _, _, my2, opp2, _, _)| (my2 - opp2) as f32)
+                    .map(|(_, _, _, my2, opp2, _, _)| (*my2 as f32, (my2 - opp2) as f32))
                     .unwrap_or_else(|| {
                         let my_final = final_scores.get(&p_id).copied().unwrap_or(0) as f32;
                         let opp_final = final_scores
@@ -1335,9 +1486,12 @@ fn main() -> anyhow::Result<()> {
                             .map(|(_, s)| *s as f32)
                             .next()
                             .unwrap_or(0.0);
-                        my_final - opp_final
+                        (my_final, my_final - opp_final)
                     });
-                ((adv_later - adv_now) / norm).clamp(-1.0, 1.0)
+                let delta_abs = (my_later - my_now as f32) / norm;
+                let delta_rel = (adv_later - adv_now) / norm;
+                (NEAR_DELTA_REL_W * delta_rel + (1.0 - NEAR_DELTA_REL_W) * delta_abs)
+                    .clamp(-1.0, 1.0)
             })
             .collect();
 
