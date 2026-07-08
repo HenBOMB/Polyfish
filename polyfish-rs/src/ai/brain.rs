@@ -147,6 +147,15 @@ impl<'a> SearchAgent<'a> {
             _ => None,
         }
     }
+
+    /// Clear the cached root value from the previous search. Useful when
+    /// an early return (e.g. forced move) bypasses the search engine but
+    /// keeps the agent alive for tree reuse.
+    fn clear_last_root_value(&mut self) {
+        if let SearchAgent::Gumbel(a) = self {
+            a.clear_last_root_value();
+        }
+    }
 }
 
 /// Construct the concrete search agent for a backend, borrowing `evaluator`.
@@ -310,6 +319,9 @@ impl<'a> Brain<'a> {
         let (agent, mut moves) = self.think(game);
 
         if agent.is_none() {
+            if let Some(a) = &mut self.agent {
+                a.clear_last_root_value();
+            }
             return (moves.pop(), Vec::new());
         }
 

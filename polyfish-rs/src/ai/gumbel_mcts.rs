@@ -220,6 +220,10 @@ impl<'a> GumbelMctsAgent<'a> {
         self.last_root_value
     }
 
+    pub fn clear_last_root_value(&mut self) {
+        self.last_root_value = None;
+    }
+
     /// Drop any cached tree so the next search builds fresh. Called when the
     /// root is terminal / has no legal moves — no child to promote next call.
     fn invalidate_tree(&mut self) {
