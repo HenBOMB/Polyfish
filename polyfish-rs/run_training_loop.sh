@@ -90,7 +90,10 @@ FORCE_TRAIN=false
 BOOST=false
 CHILL=false
 REWARD_SHAPING=false
-while getopts "fbcri:g:n:a:e:" opt; do
+# Play a league match every LEAGUE_INTERVAL iterations (iteration 10, 20, 30,
+# ... by default). 0 disables league play entirely. Override with -l.
+LEAGUE_INTERVAL=10
+while getopts "fbcri:g:n:a:e:l:" opt; do
   case $opt in
     f)
       FORCE_TRAIN=true
@@ -120,6 +123,9 @@ while getopts "fbcri:g:n:a:e:" opt; do
     e)
       EVAL_SERVERS=$OPTARG
       ;;
+    l)
+      LEAGUE_INTERVAL=$OPTARG
+      ;;
     \?)
       echo "Invalid option: -$OPTARG" >&2
       exit 1
@@ -142,7 +148,7 @@ MILESTONE_EVERY=$(scaled 100)
 # train.py reads REPLAY_BUFFER_FILES; archive pruning keeps window + 1 in sync.
 ARCHIVE_KEEP=$(scaled 10)
 export REPLAY_BUFFER_FILES=$ARCHIVE_KEEP
-echo "Schedule (games-based, -g $NUM_GAMES vs baseline $BASELINE_GAMES): $ITERATIONS iterations, checkpoint every $CHECKPOINT_EVERY, milestone every $MILESTONE_EVERY, replay window $ARCHIVE_KEEP files"
+echo "Schedule (games-based, -g $NUM_GAMES vs baseline $BASELINE_GAMES): $ITERATIONS iterations, checkpoint every $CHECKPOINT_EVERY, milestone every $MILESTONE_EVERY, league every $LEAGUE_INTERVAL iterations, replay window $ARCHIVE_KEEP files"
 
 REWARD_FLAG=""
 if [ "$REWARD_SHAPING" = true ]; then
@@ -228,16 +234,13 @@ do
     echo "Starting Iteration $i"
     echo "=================================================="
     
-    # 1. League Training Logic (20% chance)
+    # 1. League Training Logic (every LEAGUE_INTERVAL iterations, deterministic)
     # Check if we have checkpoints to play against
     mkdir -p checkpoints
     OPPONENT_FLAG=""
     MATCH_TYPE="selfplay"
-    
-    # Simple random check (1-100 <= 20)
-    RAND_VAL=$((1 + RANDOM % 100))
-    
-    if [ "$RAND_VAL" -le 20 ] && [ -d "checkpoints" ] && [ "$(ls -A checkpoints)" ]; then
+
+    if [ "$LEAGUE_INTERVAL" -gt 0 ] && [ $((i % LEAGUE_INTERVAL)) -eq 0 ] && [ -d "checkpoints" ] && [ "$(ls -A checkpoints)" ]; then
         # SMART LEAGUE SELECTION: 50% chance 'Fresh' (latest), 50% chance 'Historical' (diverse)
         ALL_CPS=$(ls -t checkpoints/model_checkpoint_iter*.safetensors 2>/dev/null || true)
         FRESH_CPS=$(echo "$ALL_CPS" | head -n 5)
