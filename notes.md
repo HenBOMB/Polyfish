@@ -75,7 +75,7 @@ polytopia has a narrower but much deeper search tree per turn compared to Chess
 you must look ~8 steps deep just to complete one game turn
 
 --
-Verdi, Jul 3, 2026
+# Verdi, Jul 3, 2026
 Thanks to a deep review from Claude Fable I was able to find and fix a couple of bugs that would hurt the quality of the training. Namely:
 - A bug in flipping sign of the NN value head on every move instead of when player turn changes
 - Weak gradient causing the value head to barely learn and thus MCTS relying only on priors
@@ -95,7 +95,7 @@ arch=arm64   backend=zero   mcts= 200 games= 20  moves/sec=11.88  avg_s/game=8.0
 
 I reckon our current bottleneck isn't CPU yet it's still NN forward passes, so pausing on this optimization work for now until the bottleneck moves back to the CPU and then we can optimize since this will be the long-term bottleneck to our training regimen.
 --
-Verdi, July 4, 2026
+# Verdi, July 4, 2026
 I tested, with having set up the Eval Server that batches GPU calls across all my actors I reach a top speed of ~31 moves/sec with 64 iters per move which is a meaningful speed-up from before I can get a game every 3s.
 
 I am now bottlenecked on CPU which I knew I would end up here. Effect plateaus around 32 actors on this 14-core machine. My ultimate goal is to get to 100 moves/sec not sure how feasile this is on my hardware but will try.
@@ -116,31 +116,7 @@ After lots of profiling I found that the problem was the poor MPS kernel of cand
 | **metal + pipelined workers (128 actors / 2 servers × 2 workers)** | **~578*** |
 | **Actor ceiling** (dummy evaluator, no GPU — the hard cap) | **~1,500** |
 --
-BUG FOUND (Jul 4, 2026): candle cross-attention runs with UNTRAINED weights.
-
-While building the tch/libtorch eval path I ran a parity test and found candle's
-forward diverges from PyTorch (train.py) by up to 0.99 in softmax on the same
-model.safetensors. Root cause:
-
-- model.safetensors stores cross-attention the way PyTorch's nn.MultiheadAttention
-  does: PACKED `cross_attention.attn.in_proj_weight [192,64]` + `out_proj`.
-- candle's network.rs CrossAttention reads SEPARATE keys
-  `cross_attention.q_proj/k_proj/v_proj/o_proj.*` — which DO NOT EXIST in the file.
-  No conversion step exists (checked init_model.py + train.py).
-- candle's `VarBuilder::from_varmap` does not error on missing keys; it silently
-  creates fresh (untrained, default-init) tensors for them. So candle's Q/K/V/O
-  projections have never used the trained attention weights. The conv/bn/policy/
-  value blocks load fine — only the attention block is corrupted, which matches
-  the partial (not total) output divergence.
-
-Implication: self-play (candle) and training (PyTorch) have been evaluating
-DIFFERENT networks — a latent train/inference mismatch. The tch/MPS eval swap is
-verified to match PyTorch to ~1e-6, so moving self-play onto it is a correctness
-fix as well as a ~19x speedup. If we ever want the candle path correct too, fix
-network.rs to load `in_proj_weight` and split it into q/k/v (and load out_proj),
-matching nn.MultiheadAttention's packing.
---
-TRAINING CAMPAIGN LOG (Jul 5-6, 2026) — from heuristic-blend self-play to
+# TRAINING CAMPAIGN LOG (Jul 5-6, 2026) — from heuristic-blend self-play to
 behavior-cloning bootstrap. Written so the arc survives even if CSVs/models
 get deleted.
 
@@ -185,7 +161,7 @@ steps that lead to captures are rare, weakly-targeted, and value-diluted
 all at once. Pure outcome-driven AlphaZero from scratch here costs
 DeepMind-scale compute. Shortcut required.
 
-PHASE CHANGE (Jul 6): behavior-cloning bootstrap.
+### PHASE CHANGE (Jul 6): behavior-cloning bootstrap.
 - Generated ~1,024 30-turn games (8 files x 128) with the network-free
   Heuristic search backend (already wired via --search-backend heuristic).
 - Pre-trained fresh weights on them directly: batch 256, LR 2e-3 (sqrt-scaled
@@ -202,7 +178,7 @@ PHASE CHANGE (Jul 6): behavior-cloning bootstrap.
   the weights at full cross-entropy strength instead of whispering it
   through a noisy search operator — this was the unlock.
 
-PHASE 2 BASELINE (self-play starts from the BC checkpoint):
+### PHASE 2 BASELINE (self-play starts from the BC checkpoint):
   captures 7.7 / villages p50 9.1 at iteration 0. Self-play must hold these
   from iter 1, then beat them. Slide toward the 1783285900 numbers = drift;
   strengthen the anchor (floor prior_w at ~0.1) or re-clone. Launch rules:
@@ -211,15 +187,15 @@ PHASE 2 BASELINE (self-play starts from the BC checkpoint):
   data distribution. p1 vs p2 score gap (~4256 vs 3291) is seat advantage,
   both sides were the same model.
 
-### SELF-PLAY FIX ATTEMPTS (Jul 6-7, condensed)
+# SELF-PLAY FIX ATTEMPTS (Jul 6-7, condensed)
 
-ABS-YARDSTICK VALUE
+### ABS-YARDSTICK VALUE
 since mirror-match score ratio is passivity-symmetric, I tried adding a absolute
 target to the score (final_outcome = 0.6*rel + 0.4*abs-vs-8K). Hoped: external yardstick
 punishes joint laziness. Got: no effect (1783350651/  1783359971); teacher mix + heuristic 
 floor 0.1 slowed decay ~2x only but did not stop it.
 
-4-TURN FORWARD-DELTA LABEL
+### 4-TURN FORWARD-DELTA LABEL
 The idea is that learning over the score of the entire game propagates too small of a signal
 to learn quickly that we should eagerly capture villages. This adds a component to the value target
 so model wants to make moves that are learning to better score outcomes 4 turns away.
@@ -228,12 +204,12 @@ Hoped: dense per-action credit (vloss >> 0.02, captures recover).
 Got (1783379532): vloss 0.026 -> 0.092, later floors ~0.052 — label works, head fine — but behavior
 decayed FASTER (cap 8.39 -> 6.79 in 3 iters). Also measured ~17 EndTurn edges/move in-tree: "search never sees tomorrow" was wrong.
 
-β-GATE on σ(Q) in policy targets only (β = min(1, iter/20))
+### β-GATE on σ(Q) in policy targets only (β = min(1, iter/20))
 Since that Q rescales, it could cause bad moves to be closer in score than good ones. Therfore
 negatiely impacting the policy target's ability to learn. Tried fazing NN's Q prediction slowly
 over iter. Hoped: noisy Q out of pi' stops early corrosion. Got (1783386024): best iter-1 ever (cap 8.14/atk 41.2), but crash slope at β=0.05-0.15 MATCHED β=1.0 — σ(Q) not the dominant channel.
 
-Long decision traces in a JSON
+### Log decision traces in a JSON
 To troubleshoot I decided to instrument the whole decision process. What heuristic are hinted at root, what policy head suggests, what the value head evaluates each leaf node at, the ultimate Q computed, and then the move chosen.
 I sampled across multiple games and iterations and I can in the data what confirms without a shadow of a doubt what I knew from earlier attempts: our value head sucks. It is not properly learning what is good for the game and it is THE thing that drags down the bot's performance.
 
