@@ -43,7 +43,10 @@ fn test_gumbel_mcts_basic() {
 
     let best_move = agent.select_move(&mut game);
     assert!(best_move.is_some(), "Gumbel MCTS failed to select a move");
-    println!("Selected move: {}", best_move.unwrap().describe(&game.state));
+    println!(
+        "Selected move: {}",
+        best_move.unwrap().describe(&game.state)
+    );
 }
 
 #[test]
