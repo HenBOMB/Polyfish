@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+# Write PID file for server detection, clean up on exit
+echo $$ > .training.pid
+
 # NUM_GAMES/MCTS_ITERS/ACTORS/EVAL_SERVERS match self_play CLI flags.
 # All iteration-keyed schedules (total iterations, curriculum pacing,
 # checkpoint cadence, milestone spacing, replay-buffer retention) are tuned
@@ -194,7 +197,16 @@ RUN_STARTED_AT=$(echo "$RUN_INFO" | .venv/bin/python3 -c "import sys,json; print
 START_ITER=$(echo "$RUN_INFO" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin)['start_iter'])")
 echo "Training run_id=$RUN_ID started_at=$RUN_STARTED_AT starting at iteration $START_ITER"
 
-trap '.venv/bin/python3 training_log.py finish-run 2>/dev/null || true' EXIT
+# Set up config.json sync if not present
+if [ ! -f "config.json" ]; then
+    echo "{\"gamemode\": 2, \"iterations\": $MCTS_ITERS, \"cores\": 2, \"tribes\": [\"Imperius\", \"Bardur\", \"Oumaji\", \"Kickoo\", \"XinXi\"]}" > config.json
+fi
+
+echo "Starting backend server in background..."
+./target/release/polyfish &
+SERVER_PID=$!
+
+trap '.venv/bin/python3 training_log.py finish-run 2>/dev/null || true; kill $SERVER_PID 2>/dev/null; rm -f .training.pid' EXIT
 
 # Portable replacement for GNU `shuf` (not present on stock macOS)
 portable_shuf() {
@@ -279,10 +291,27 @@ do
     VALUE_TRUST=$(awk -v i="$i" -v r="${VALUE_TRUST_RAMP_ITERS:-30}" -v cap="${VALUE_TRUST_CAP:-1.0}" \
         'BEGIN { t = i / r; if (t > 1) t = 1; t = t * cap; printf "%.3f", t }')
 
-    # Pick 2 random tribes for this iteration
-    TRIBE_LIST=("Imperius" "Imperius")
-    # TRIBE_LIST=("Imperius" "Bardur" "Oumaji" "Kickoo" "XinXi" "Zebasi" "AiMo" "Vengir" "Quetzali" "Hoodrick" "Yadakk")
-    # Shuffle and pick top 2 (portable, no external shuf dependency)
+    # Dynamically fetch parameters from config.json (set by dashboard UI)
+    if [ -f "config.json" ]; then
+        GAMEMODE=$(jq -r '.gamemode // 2' config.json)
+        MCTS_ITERS=$(jq -r '.iterations // 64' config.json)
+        # Parse tribes array into bash array safely
+        TRIBE_LIST=()
+        while IFS= read -r line; do
+            if [ -n "$line" ]; then
+                TRIBE_LIST+=("$line")
+            fi
+        done < <(jq -r '.tribes[]? // empty' config.json)
+    else
+        GAMEMODE=2
+    fi
+
+    # Fallback to defaults if parsing failed or file missing
+    if [ ${#TRIBE_LIST[@]} -eq 0 ]; then
+        TRIBE_LIST=("Imperius" "Imperius")
+    fi
+
+    # Shuffle and pick top 2
     SELECTED_TRIBES=($(printf "%s\n" "${TRIBE_LIST[@]}" | portable_shuf 2))
     TRIBE1=${SELECTED_TRIBES[0]}
     TRIBE2=${SELECTED_TRIBES[1]}
@@ -297,7 +326,7 @@ do
     EFF_ITER=$((EFF_ITER + ${ITER_OFFSET:-0}))
 
     SP_LOG=$(mktemp)
-    ./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG $ANCHOR_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" | tee "$SP_LOG"
+    ./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG $ANCHOR_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
     SP_STATUS=${PIPESTATUS[0]}
     rm -f "$SP_LOG"
     if [ "$SP_STATUS" -ne 0 ]; then

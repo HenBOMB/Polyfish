@@ -331,7 +331,8 @@ impl<'a> Brain<'a> {
             return (moves.pop(), Vec::new());
         }
 
-        agent.unwrap().select_move_with_stats(&mut game.clone())
+        let mut mcts_game = game.clone_for_mcts(game.current_player_id());
+        agent.unwrap().select_move_with_stats(&mut mcts_game)
     }
 }
 
