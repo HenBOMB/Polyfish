@@ -977,16 +977,14 @@ fn main() -> anyhow::Result<()> {
 
         /// Number of concurrent eval-server threads (shards). Each owns its
         /// own weights copy + LRU cache; leaves are routed by hash so cache
-        /// locality is preserved. 1 by default on every backend right now:
-        /// measured (2026-07-05) that 2 tch shards HALVE throughput (156.6
-        /// moves/s @ 1 vs 83.3 @ 2) because libtorch's MPS backend
-        /// serializes across threads at the C++ level — sharding doesn't
-        /// parallelize there. candle also rejects >1 (Metal corrupts when
-        /// >1 thread encodes on the same device — see the bug_handoff
-        /// invariant in eval_server.rs). metal (MPSGraph) has no known
-        /// restriction against >1 but multi-shard concurrency there is
-        /// unverified (see the bypass plan's Stage 3) — opt in explicitly.
-        /// 0 = auto (currently always 1). Overridable.
+        /// locality is preserved. Never use >1 on tch: measured (2026-07-05)
+        /// that 2 tch shards HALVE throughput (156.6 moves/s @ 1 vs 83.3 @ 2)
+        /// because libtorch's MPS backend serializes across threads at the
+        /// C++ level. candle rejects >1 (Metal corrupts when >1 thread
+        /// encodes on the same device — see the bug_handoff invariant in
+        /// eval_server.rs). On metal, 3 shards × 2 workers is the measured
+        /// best (~610–650 moves/s, see expert_boost_throughput.md).
+        /// 0 = auto (3 on metal, 1 on tch/candle). Overridable.
         #[arg(long, default_value_t = 0)]
         eval_servers: usize,
 
@@ -1182,7 +1180,7 @@ fn main() -> anyhow::Result<()> {
     let eval_servers = match args.eval_servers {
         0 => {
             if eval_backend_kind == EvalBackendKind::Metal {
-                2
+                3
             } else {
                 1
             }
