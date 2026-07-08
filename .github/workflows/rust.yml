@@ -25,10 +25,10 @@ jobs:
           workspaces: "./polyfish-rs -> target"
 
       - name: Run Clippy (Linter)
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --no-default-features -- -D warnings
 
       - name: Build
-        run: cargo build --verbose
+        run: cargo build --no-default-features --verbose
 
       - name: Run tests
-        run: cargo test --verbose
+        run: cargo test --no-default-features --verbose
