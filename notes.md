@@ -188,7 +188,7 @@ floor 0.1 slowed decay ~2x only but did not stop it.
 The idea is that learning over the score of the entire game propagates too small of a signal
 to learn quickly that we should eagerly capture villages. This adds a component to the value target
 so model wants to make moves that are learning to better score outcomes 4 turns away.
-````
+```
 value = 0.7*near + 0.3*final
 near = clamp((adv(t+4turns)-adv(t))/norm, ±1)
 norm = max(600, 0.15*combined)
