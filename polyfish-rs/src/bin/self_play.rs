@@ -8,6 +8,7 @@ use polyfish::ai::eval_server::{
 use polyfish::ai::features::{self, GameFeatures, state_to_tensor};
 use polyfish::ai::mapper::DecomposedMapper;
 use polyfish::ai::network::PolyZeroNet;
+use polyfish::ai::reward;
 use polyfish::game::{Game, STARTING_OWNER_ID};
 use polyfish::replayer::{ModReplay, ReplayPlayer, ReplayTurn};
 use polyfish::states::{GameState, PlayerId};
@@ -30,22 +31,33 @@ const GOOD_BOT_FINAL_SCORE: f32 = 8000.0;
 // Absolute-dominant: the relative term is mostly seat/RNG noise in mirror play.
 const FINAL_OUTCOME_REL_W: f32 = 0.4;
 
-// Forward credit window for the near-term value component, in game turns.
-const NEAR_DELTA_TURNS: i32 = 4;
-// The near-term norm scales with the game's economy: a saturating swing is
-// ~15% of combined score over 4 turns, floored for the small opening turns.
-// Percentages transfer across map sizes and skill brackets; point totals don't.
-const NEAR_DELTA_NORM_FRAC: f32 = 0.15;
-const NEAR_DELTA_NORM_FLOOR: f32 = 600.0;
-// Weight of the near-term delta vs the final-outcome tail.
-const NEAR_DELTA_W: f32 = 0.7;
-// Weight of the relative (vs opponent) component within the near-term delta.
-// Abs-dominant (0.6/0.4): in mirror self-play both copies capture villages on
-// roughly the same clock, so a capture's relative swing nets to ~0 and the
-// label teaches the value head nothing. An absolute anchor on my own score
-// progress gives captures a positive label regardless of the opponent. See
-// notes.md, decision-trace section.
-const NEAR_DELTA_REL_W: f32 = 0.4;
+// TD(lambda) value target: label(s_i) is a forward-view blend of every
+// future n-turn return G^(n) = reward(i -> j_n) + GAMMA_TURN^(turn_jn -
+// turn_i) * root_value(j_n), where j_n is this player's first searched
+// decision at turn_i + n (root_value is that state's own post-search
+// value, a stale-target-network-style bootstrap). Weight on G^(n) is
+// (1-LAMBDA_RETURN)*LAMBDA_RETURN^(n-1); the leftover LAMBDA_RETURN^M mass
+// (M = turns remaining) lands on the true Monte-Carlo return to the game's
+// final scores. LAMBDA_RETURN=0 collapses this to exactly the original
+// 1-step TD bootstrap (see td_lambda_zero_matches_one_step_td test) —
+// raising it only stretches the horizon smoothly, so a goal several turns
+// away (e.g. a village 4-5 turns off) is never behind a hard window like
+// the old fixed-4-turn Monte-Carlo label left it: that label paid for
+// gains still AHEAD and never for gains just banked, so a just-captured
+// state scored LOWER than a state that delayed capturing. Reward is
+// undiscounted and the bootstrap fully discounted — not an approximation:
+// turn only increments on the round's LAST EndTurn, which itself carries no
+// reward, so every real reward necessarily lands on a zero-discount edge
+// and only the zero-reward wrap edge(s) contribute to the exponent. See
+// notes.md, decision-trace section, and reward.rs for the shared reward
+// definition also used by the reward-aware Gumbel search backup.
+// Weight of the TD(lambda) delta vs the final-outcome tail.
+const TD_W: f32 = 0.7;
+// Bootstrap/Monte-Carlo blend: center of mass of the geometric weights is
+// 1/(1-LAMBDA_RETURN) turns (~5 at 0.8). Chosen to reach the turns-away
+// horizon a village approach needs credit across, without drifting back
+// toward the high-variance near-pure-MC regime the TD project escaped.
+const LAMBDA_RETURN: f32 = 0.8;
 
 // Ramp (in iterations) for β on σ(Q) in the exported policy targets:
 // β = min(1, iteration/20). Early on the value head's Q ordering is noise
@@ -185,19 +197,127 @@ struct DecomposedPolicyData {
     move_option: Vec<f32>,    // [192]
 }
 
+/// One recorded decision point. `my_score`/`opp_score`/`turn` are snapshotted
+/// BEFORE this step's move executes. `root_value` is that same pre-move
+/// state's post-search root value (see `GumbelMctsAgent::last_root_value`) —
+/// the TD bootstrap target used by whichever *earlier* step's label lands on
+/// this step as its "next decision" horizon.
+struct HistoryStep {
+    features: GameFeatures,
+    policy: DecomposedPolicyData,
+    player_id: PlayerId,
+    my_score: i32,
+    opp_score: i32,
+    turn: i32,
+    root_value: Option<f32>,
+}
+
+/// The subset of `HistoryStep` the TD(lambda) label computation needs —
+/// split out so `td_lambda_labels` is a pure, directly testable function
+/// (no `GameFeatures`/policy tensors to fabricate in a unit test).
+#[derive(Clone, Copy)]
+struct LabelStep {
+    player_id: PlayerId,
+    turn: i32,
+    my_score: i32,
+    opp_score: i32,
+    root_value: Option<f32>,
+}
+
+impl From<&HistoryStep> for LabelStep {
+    fn from(s: &HistoryStep) -> Self {
+        LabelStep {
+            player_id: s.player_id,
+            turn: s.turn,
+            my_score: s.my_score,
+            opp_score: s.opp_score,
+            root_value: s.root_value,
+        }
+    }
+}
+
+/// One player's turn-boundary checkpoint: the first decision of that turn
+/// with a recorded root value, else that turn's first decision (root_value
+/// stays `None`, so a bootstrap through it contributes 0.0 — matches the
+/// original 1-step fallback exactly, just per-horizon instead of once).
+struct Checkpoint {
+    turn: i32,
+    my: i32,
+    opp: i32,
+    root_value: Option<f32>,
+}
+
+fn checkpoints_by_player(history: &[LabelStep]) -> HashMap<PlayerId, Vec<Checkpoint>> {
+    let mut out: HashMap<PlayerId, Vec<Checkpoint>> = HashMap::new();
+    for step in history {
+        let list = out.entry(step.player_id).or_default();
+        match list.last_mut() {
+            Some(c) if c.turn == step.turn => {
+                if c.root_value.is_none() && step.root_value.is_some() {
+                    c.my = step.my_score;
+                    c.opp = step.opp_score;
+                    c.root_value = step.root_value;
+                }
+            }
+            _ => list.push(Checkpoint {
+                turn: step.turn,
+                my: step.my_score,
+                opp: step.opp_score,
+                root_value: step.root_value,
+            }),
+        }
+    }
+    out
+}
+
+/// TD(lambda) forward-view value target for every step in `history` (see
+/// the doc comment on `LAMBDA_RETURN`). `final_scores` is keyed by
+/// `PlayerId`. Output is aligned 1:1 with `history`.
+fn td_lambda_labels(
+    history: &[LabelStep],
+    final_scores: &HashMap<i32, i32>,
+    lambda: f32,
+) -> Vec<f32> {
+    let checkpoints = checkpoints_by_player(history);
+
+    history
+        .iter()
+        .map(|step| {
+            let my_final = final_scores.get(&step.player_id).copied().unwrap_or(0);
+            let opp_final = final_scores
+                .iter()
+                .filter(|(id, _)| **id != step.player_id)
+                .map(|(_, s)| *s)
+                .next()
+                .unwrap_or(0);
+            let terminal_return =
+                reward::normalized_reward(step.my_score, step.opp_score, my_final, opp_final);
+
+            let empty = Vec::new();
+            let ahead = checkpoints.get(&step.player_id).unwrap_or(&empty);
+            let start = ahead.partition_point(|c| c.turn <= step.turn);
+
+            let mut acc = 0.0f32;
+            let mut remaining_weight = 1.0f32;
+            for cp in &ahead[start..] {
+                let r = reward::normalized_reward(step.my_score, step.opp_score, cp.my, cp.opp);
+                let dt = (cp.turn - step.turn).max(0);
+                let n_step_return = r + reward::GAMMA_TURN.powi(dt) * cp.root_value.unwrap_or(0.0);
+
+                let w = remaining_weight * (1.0 - lambda);
+                acc += w * n_step_return;
+                remaining_weight *= lambda;
+            }
+            acc += remaining_weight * terminal_return;
+
+            acc.clamp(-1.0, 1.0)
+        })
+        .collect()
+}
+
 /// Result from a single game - contains all data needed for training
 struct GameResult {
-    // Each step: features, policy, player_id, my_score_at_step,
-    // opponent_score_at_step, turn, move_type
-    history: Vec<(
-        GameFeatures,
-        DecomposedPolicyData,
-        PlayerId,
-        i32,
-        i32,
-        i32,
-        polyfish::types::MoveType,
-    )>,
+    history: Vec<HistoryStep>,
     scores: HashMap<i32, i32>,
     moves: usize,
     winner_score: i32,
@@ -399,15 +519,7 @@ fn play_single_game(
     let mut flat_recap: Vec<(i32, i32, serde_json::Value)> = Vec::new();
 
     // Game Loop
-    let mut game_history: Vec<(
-        GameFeatures,
-        DecomposedPolicyData,
-        PlayerId,
-        i32,
-        i32,
-        i32,
-        polyfish::types::MoveType,
-    )> = Vec::new();
+    let mut game_history: Vec<HistoryStep> = Vec::new();
     let mut action_counts: HashMap<polyfish::types::MoveType, usize> = HashMap::new();
     let mut moves_by_turn: HashMap<i32, HashMap<polyfish::types::MoveType, usize>> =
         HashMap::new();
@@ -478,6 +590,10 @@ fn play_single_game(
         }
 
         let (best_move, move_visits) = current_agent.think_decomposed(&mut game, move_count);
+        // The search that just ran was for the CURRENT (pre-move) state, so
+        // this is that state's own root value — the TD bootstrap target for
+        // whichever earlier step's label lands here as its "next decision".
+        let root_value = current_agent.last_root_value();
 
         if let Some((trigger_unit_idx, trigger_village_idx)) = trigger_info {
             if let Some(trace) = current_agent.take_trace() {
@@ -587,25 +703,17 @@ fn play_single_game(
                 game.state.settings.current_player_turn_id,
                 m.serialize(),
             ));
-            // Snapshot scores at this moment for reward shaping
-            let my_score_now = game.state.tribes.get(&pov).map(|t| t.score).unwrap_or(0);
-            let opp_score_now = game
-                .state
-                .tribes
-                .iter()
-                .filter(|(id, _)| **id != pov)
-                .map(|(_, t)| t.score)
-                .max()
-                .unwrap_or(0);
-            game_history.push((
-                state_t,
-                policy_data,
-                pov,
-                my_score_now,
-                opp_score_now,
-                game.state.settings.turn,
-                m.move_type(),
-            ));
+            // Snapshot scores at this moment (pre-move) for the TD label.
+            let (my_score_now, opp_score_now) = reward::score_snapshot(&game.state, pov);
+            game_history.push(HistoryStep {
+                features: state_t,
+                policy: policy_data,
+                player_id: pov,
+                my_score: my_score_now,
+                opp_score: opp_score_now,
+                turn: game.state.settings.turn,
+                root_value,
+            });
             if progress == ProgressMode::Full && move_count > 0 && move_count % 10 == 0 {
                 eprintln!(
                     "[Game {}]: Turn: {} Player: {} Move: {}",
@@ -1465,35 +1573,9 @@ fn main() -> anyhow::Result<()> {
         // The winner gets +1.0, loser gets -1.0.
         // If timeout, use score differential as a softer signal.
         let final_scores = &result.scores;
-        let history_len = result.history.len();
 
-        // Relative score-advantage change over the next N turns for the same player
-        let near_deltas: Vec<f32> = (0..history_len)
-            .map(|i| {
-                let (_, _, p_id, my_now, opp_now, turn, _) = result.history[i];
-                let adv_now = (my_now - opp_now) as f32;
-                let norm = (NEAR_DELTA_NORM_FRAC * (my_now + opp_now) as f32)
-                    .max(NEAR_DELTA_NORM_FLOOR);
-                let (my_later, adv_later) = result.history[i + 1..]
-                    .iter()
-                    .find(|(_, _, p2, _, _, t2, _)| *p2 == p_id && *t2 >= turn + NEAR_DELTA_TURNS)
-                    .map(|(_, _, _, my2, opp2, _, _)| (*my2 as f32, (my2 - opp2) as f32))
-                    .unwrap_or_else(|| {
-                        let my_final = final_scores.get(&p_id).copied().unwrap_or(0) as f32;
-                        let opp_final = final_scores
-                            .iter()
-                            .filter(|(id, _)| **id != p_id)
-                            .map(|(_, s)| *s as f32)
-                            .next()
-                            .unwrap_or(0.0);
-                        (my_final, my_final - opp_final)
-                    });
-                let delta_abs = (my_later - my_now as f32) / norm;
-                let delta_rel = (adv_later - adv_now) / norm;
-                (NEAR_DELTA_REL_W * delta_rel + (1.0 - NEAR_DELTA_REL_W) * delta_abs)
-                    .clamp(-1.0, 1.0)
-            })
-            .collect();
+        let label_steps: Vec<LabelStep> = result.history.iter().map(LabelStep::from).collect();
+        let td_deltas = td_lambda_labels(&label_steps, final_scores, LAMBDA_RETURN);
 
         // Determine the winner_id for this game
         let game_winner_id = {
@@ -1511,9 +1593,13 @@ fn main() -> anyhow::Result<()> {
             best_id
         };
 
-        for (step_idx, (features, policy_data, p_id, _my_score_now, _opp_score_now, _turn, _move_type)) in
-            result.history.into_iter().enumerate()
-        {
+        for (step_idx, step) in result.history.into_iter().enumerate() {
+            let HistoryStep {
+                features,
+                policy: policy_data,
+                player_id: p_id,
+                ..
+            } = step;
             let flat_map = features
                 .spatial_map
                 .flatten_all()
@@ -1572,12 +1658,9 @@ fn main() -> anyhow::Result<()> {
                 .clamp(-1.0, 1.0);
 
             let value = if args.reward_shaping {
-                // Near-term observed outcome (4-turn forward delta) carries
-                // per-action credit; the final-outcome tail carries the
-                // long-horizon signal.
-                (NEAR_DELTA_W * near_deltas[step_idx]
-                    + (1.0 - NEAR_DELTA_W) * final_outcome)
-                    .clamp(-1.0, 1.0)
+                // TD delta carries per-action credit; the final-outcome tail
+                // carries the long-horizon signal.
+                (TD_W * td_deltas[step_idx] + (1.0 - TD_W) * final_outcome).clamp(-1.0, 1.0)
             } else {
                 final_outcome.clamp(-1.0, 1.0)
             };
@@ -1794,4 +1877,119 @@ fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod td_lambda_tests {
+    use super::*;
+
+    fn step(player_id: PlayerId, turn: i32, my: i32, opp: i32, rv: Option<f32>) -> LabelStep {
+        LabelStep {
+            player_id,
+            turn,
+            my_score: my,
+            opp_score: opp,
+            root_value: rv,
+        }
+    }
+
+    fn finals(pairs: &[(i32, i32)]) -> HashMap<i32, i32> {
+        pairs.iter().copied().collect()
+    }
+
+    #[test]
+    fn last_decision_of_game_is_pure_terminal_return_at_any_lambda() {
+        // Only decision on record for player 1: no checkpoints ahead, so the
+        // label must equal the plain (unbootstrapped) reward to final scores
+        // regardless of lambda (remaining_weight stays 1.0, loop body never runs).
+        let history = vec![step(1, 5, 1000, 800, Some(0.2))];
+        let final_scores = finals(&[(1, 1300), (2, 900)]);
+        let expected = reward::normalized_reward(1000, 800, 1300, 900).clamp(-1.0, 1.0);
+
+        for lambda in [0.0, 0.5, 0.8, 0.95] {
+            let out = td_lambda_labels(&history, &final_scores, lambda);
+            assert!(
+                (out[0] - expected).abs() < 1e-6,
+                "lambda={lambda}: got {}, expected {expected}",
+                out[0]
+            );
+        }
+    }
+
+    #[test]
+    fn lambda_zero_uses_only_the_first_checkpoint() {
+        // Two future checkpoints for player 1 at turn 6 and turn 7. At
+        // lambda=0 the label must depend ONLY on the turn-6 checkpoint —
+        // this is exactly the original 1-step TD bootstrap, reproduced
+        // bit-for-bit as the lambda=0 special case of the new formula.
+        let history = vec![
+            step(1, 5, 1000, 800, Some(0.2)),  // i
+            step(1, 6, 1100, 800, Some(0.9)),  // checkpoint n=1 (this player's next turn)
+            step(2, 6, 1000, 850, Some(-0.1)), // other player, ignored
+            step(1, 7, 1400, 800, Some(-0.9)), // checkpoint n=2: a wildly different root_value
+        ];
+        let final_scores = finals(&[(1, 5000), (2, 800)]);
+
+        let out = td_lambda_labels(&history, &final_scores, 0.0);
+
+        let r = reward::normalized_reward(1000, 800, 1100, 800);
+        let expected = (r + reward::GAMMA_TURN.powi(1) * 0.9).clamp(-1.0, 1.0);
+        assert!(
+            (out[0] - expected).abs() < 1e-6,
+            "got {}, expected {expected}",
+            out[0]
+        );
+
+        // Sanity: changing turn 7's root_value must NOT move the lambda=0 label.
+        let mut history2 = history.clone();
+        history2[3].root_value = Some(12345.0);
+        let out2 = td_lambda_labels(&history2, &final_scores, 0.0);
+        assert!((out2[0] - out[0]).abs() < 1e-6);
+    }
+
+    #[test]
+    fn weights_blend_geometrically_and_sum_to_one() {
+        // One checkpoint ahead + terminal. At lambda=0.5 the checkpoint gets
+        // weight 0.5 and the terminal return gets the residual 0.5 — hand
+        // computed, not just asserted-to-sum-to-1, so a weighting bug can't
+        // hide behind a normalization step.
+        let history = vec![
+            step(1, 0, 100, 100, Some(0.4)),
+            step(1, 1, 300, 100, Some(0.6)),
+        ];
+        let final_scores = finals(&[(1, 300), (2, 100)]);
+
+        let out = td_lambda_labels(&history, &final_scores, 0.5);
+
+        let n1 = reward::normalized_reward(100, 100, 300, 100)
+            + reward::GAMMA_TURN.powi(1) * 0.6;
+        let terminal = reward::normalized_reward(100, 100, 300, 100);
+        let expected = (0.5 * n1 + 0.5 * terminal).clamp(-1.0, 1.0);
+
+        assert!(
+            (out[0] - expected).abs() < 1e-6,
+            "got {}, expected {expected}",
+            out[0]
+        );
+    }
+
+    #[test]
+    fn missing_root_value_at_a_checkpoint_contributes_zero_bootstrap() {
+        // Turn 6's only entry has no root value (forced/book/single-legal
+        // move) — its n-step return must fall back to pure banked reward
+        // (0.0 bootstrap), not skip the checkpoint entirely.
+        let history = vec![
+            step(1, 5, 1000, 800, Some(0.2)),
+            step(1, 6, 1200, 800, None),
+        ];
+        let final_scores = finals(&[(1, 1200), (2, 800)]);
+
+        let out = td_lambda_labels(&history, &final_scores, 0.0);
+        let expected = reward::normalized_reward(1000, 800, 1200, 800).clamp(-1.0, 1.0);
+        assert!(
+            (out[0] - expected).abs() < 1e-6,
+            "got {}, expected {expected}",
+            out[0]
+        );
+    }
 }

@@ -28,9 +28,15 @@ pub struct CandidateTrace {
     /// NN value at this candidate's resulting state, root player's frame.
     /// `None` if the candidate was never expanded (not visited in search).
     pub own_value: Option<f32>,
-    /// value_sum / visits after search; 0.0 if unvisited.
+    /// value_sum / visits after search; 0.0 if unvisited. Under the
+    /// reward-aware backup this is an action-value already including
+    /// `edge_reward` (see below), not a plain state-value.
     pub q_value: f32,
     pub visits: f32,
+    /// Normalized score-delta reward this candidate's own move banked
+    /// (mover's perspective), cached the first time search traversed this
+    /// edge. `None` if never visited.
+    pub edge_reward: Option<f32>,
 
     /// softmax(raw network logit), pre heuristic-blend.
     pub raw_net_prob: f32,
@@ -68,6 +74,11 @@ pub struct RoundSnapshot {
 #[derive(Serialize, Clone)]
 pub struct DecisionTrace {
     pub root_own_value: f32,
+    /// Root's post-search backed-up value (a discounted return under the
+    /// reward-aware backup), if search accumulated any root visits. `None`
+    /// for a single-legal-move root (`run_search` short-circuits before any
+    /// visits land) — see `GumbelMctsAgent::last_root_value`.
+    pub root_search_value: Option<f32>,
     pub prior_heuristic_weight: f32,
     /// Full legal root move set, not just the top-k in-cut.
     pub candidates: Vec<CandidateTrace>,
@@ -86,6 +97,7 @@ pub struct DecisionTrace {
 #[derive(Default)]
 pub struct TraceBuilder {
     pub root_own_value: f32,
+    pub root_search_value: Option<f32>,
     pub candidates: Vec<CandidateTrace>,
     pub rounds: Vec<RoundSnapshot>,
     pub chosen: Option<(SelectionMode, usize, f32)>,
@@ -98,6 +110,7 @@ impl TraceBuilder {
         let (selection_mode, chosen_candidate_idx, chosen_tiebreak_score) = self.chosen?;
         Some(DecisionTrace {
             root_own_value: self.root_own_value,
+            root_search_value: self.root_search_value,
             prior_heuristic_weight,
             candidates: self.candidates,
             rounds: self.rounds,

@@ -19,5 +19,6 @@ pub mod tch_network;
 pub mod metal_network;
 pub mod ordering;
 pub mod policy_composer;
+pub mod reward;
 pub use evaluator::evaluate_state;
 pub use mcts::{MctsAgent, MctsAnalysis, MoveEvaluation};

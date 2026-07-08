@@ -134,6 +134,16 @@ impl<'a> SearchAgent<'a> {
             _ => None,
         }
     }
+
+    /// The most recently completed search's root value (see
+    /// `GumbelMctsAgent::last_root_value`). `None` for backends other than
+    /// Gumbel — they don't produce a TD-compatible bootstrap value.
+    fn last_root_value(&self) -> Option<f32> {
+        match self {
+            SearchAgent::Gumbel(a) => a.last_root_value(),
+            _ => None,
+        }
+    }
 }
 
 /// Construct the concrete search agent for a backend, borrowing `evaluator`.
@@ -305,6 +315,14 @@ impl<'a> Brain<'a> {
     /// reached a final selection.
     pub fn take_trace(&mut self) -> Option<crate::ai::decision_trace::DecisionTrace> {
         self.agent.as_mut().and_then(SearchAgent::take_trace)
+    }
+
+    /// The most recent `think_decomposed` call's search-backed root value
+    /// (a TD bootstrap target under the reward-aware Gumbel backup), if that
+    /// call actually ran a search. `None` for non-Gumbel backends or when no
+    /// agent has searched yet.
+    pub fn last_root_value(&self) -> Option<f32> {
+        self.agent.as_ref().and_then(SearchAgent::last_root_value)
     }
 
     pub fn think_with_stats(&mut self, game: &Game) -> (Option<Box<dyn Move>>, Vec<f32>) {

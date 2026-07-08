@@ -200,10 +200,10 @@ pub fn has_effect(unit: &UnitState, effect: UnitEffect) -> bool {
 
 /// Update exploration for a player based on their units and cities.
 /// This marks tiles as explored (permanent, no undo).
-/// Only runs during real moves (_are_you_sure = true) to prevent MCTS cheating.
-/// Update exploration for a player based on their units and cities.
-/// This marks tiles as explored.
-/// Only runs during real moves (_are_you_sure = true) to prevent MCTS cheating.
+/// Only runs during real moves (_are_you_sure = true) to prevent MCTS cheating;
+/// per-move reveals in simulations are score-credited (without revealing) by
+/// `discovery::discover_tiles`, and this turn-boundary recompute adds ~nothing
+/// on top of those, so it stays disabled in simulations.
 pub fn update_exploration(state: &mut GameState, player_id: PlayerId) -> UndoCallback {
     // CRITICAL: Only modify explorers during real moves, not MCTS simulations
     if !state.settings._are_you_sure {

@@ -474,6 +474,11 @@ pub struct GameSettings {
     pub _max_tribe_count: i32,
     #[serde(default)]
     pub _verbose: bool,
+    /// Per-player tiles already credited with exploration score during the
+    /// current MCTS simulation line (see `discover_tiles`). Never serialized;
+    /// empty outside a simulation (every sim path unwinds its inserts).
+    #[serde(skip)]
+    pub _sim_explored: std::collections::HashMap<PlayerId, std::collections::HashSet<i32>>,
 }
 
 pub fn default_turn() -> i32 {
@@ -520,6 +525,7 @@ impl Default for GameSettings {
             _fow: true,
             _max_tribe_count: 0,
             _verbose: false,
+            _sim_explored: std::collections::HashMap::new(),
         }
     }
 }

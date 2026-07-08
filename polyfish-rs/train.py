@@ -18,9 +18,12 @@ EPOCHS = int(os.environ.get("TRAIN_EPOCHS", "2"))
 # same data — the cosine scheduler restarts at this LR every invocation.
 LEARNING_RATE = float(os.environ.get("TRAIN_LR", "0.002"))
 # Weight on the value loss's contribution to the shared trunk's gradient.
-# Set to 0 to isolate whether value-gradient trunk interference corrodes the
-# policy (bisect Arm C) — total_loss/policy_loss are unaffected either way.
-VALUE_LOSS_WEIGHT = float(os.environ.get("VALUE_LOSS_WEIGHT", "1.0"))
+# Default 3.0: with TD labels (Jul 2026) the value target carries real per-move
+# signal, and at 1.0 its gradient (~0.02) is invisible next to policy (~2.0) —
+# the trunk barely learns value-relevant features. Set to 0 to isolate whether
+# value-gradient trunk interference corrodes the policy (bisect Arm C) —
+# total_loss/policy_loss are unaffected either way.
+VALUE_LOSS_WEIGHT = float(os.environ.get("VALUE_LOSS_WEIGHT", "3.0"))
 # Detach the value head's input from the shared trunk (bisect Arm D). Unlike
 # VALUE_LOSS_WEIGHT=0, the value head's own layers (v_pool_conv/v_fc_shared/
 # v_win) still get full-strength gradient — only the trunk is shielded.
@@ -266,6 +269,13 @@ def train():
         total_p_loss = 0
         total_v_loss = 0
         total_batches = 0
+        # Streaming mean/variance of the value targets seen this epoch, so
+        # value_r2 (below) compares MSE against the actual training-mix
+        # variance instead of a guess — small MSE alone doesn't mean the head
+        # fits anything if the targets barely vary.
+        target_sum = 0.0
+        target_sumsq = 0.0
+        target_n = 0
 
         random.shuffle(game_files)
 
@@ -359,7 +369,10 @@ def train():
                 batch_values = {
                     'win': targets_win[batch_idx].to(DEVICE),
                 }
-                
+                target_sum += batch_values['win'].sum().item()
+                target_sumsq += (batch_values['win'] * batch_values['win']).sum().item()
+                target_n += batch_values['win'].numel()
+
                 batch_targets = {}
                 for head, tensor in target_heads.items():
                     batch_targets[head] = tensor[batch_idx].to(DEVICE)
@@ -454,6 +467,20 @@ def train():
     final_p_loss = total_p_loss / total_batches if total_batches > 0 else 0.0
     final_v_loss = total_v_loss / total_batches if total_batches > 0 else 0.0
 
+    # R^2 of the value head against the LAST epoch's own target distribution:
+    # 1 - MSE/Var. Small MSE alone is meaningless if the targets barely vary
+    # (a constant-mean predictor would also score low MSE) — this is the
+    # number that actually says whether the head explains anything. final_v_loss
+    # has VALUE_LOSS_WEIGHT baked in (see compute_loss); unweight it first so
+    # it's comparable to the raw target variance.
+    if target_n > 0 and VALUE_LOSS_WEIGHT > 0:
+        target_mean = target_sum / target_n
+        target_var = target_sumsq / target_n - target_mean * target_mean
+        raw_v_mse = final_v_loss / VALUE_LOSS_WEIGHT
+        value_r2 = 1.0 - raw_v_mse / target_var if target_var > 1e-8 else 0.0
+    else:
+        value_r2 = 0.0
+
     # 4. Save Model in f16 for blazing fast CPU inference
     half_state = {k: v.half() for k, v in model.state_dict().items()}
     save_file(half_state, "model.safetensors")
@@ -464,6 +491,7 @@ def train():
                 "loss": round(final_loss, 4),
                 "policy_loss": round(final_p_loss, 4),
                 "value_loss": round(final_v_loss, 4),
+                "value_r2": round(value_r2, 4),
             },
             f,
         )
