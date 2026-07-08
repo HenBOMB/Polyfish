@@ -204,6 +204,8 @@ struct GameResult {
         polyfish::types::MoveType,
     )>,
     scores: HashMap<i32, i32>,
+    final_cities: HashMap<i32, i32>,
+    total_cities: i32,
     moves: usize,
     winner_score: i32,
     recap: ModReplay,
@@ -700,9 +702,18 @@ fn play_single_game(
         })
         .sum();
 
+    let mut final_cities = HashMap::new();
+    let mut total_cities = 0;
+    for (id, t) in &game.state.tribes {
+        final_cities.insert(*id, t.cities.len() as i32);
+        total_cities += t.cities.len() as i32;
+    }
+
     Some(GameResult {
         history: game_history,
         scores,
+        final_cities,
+        total_cities,
         moves: move_count,
         revealed_tiles,
         captured_tiles,
@@ -1434,6 +1445,7 @@ fn main() -> anyhow::Result<()> {
     let mut collected_option: Vec<Vec<f32>> = Vec::new();
 
     let mut collected_values: Vec<f32> = Vec::new();
+    let mut collected_progress: Vec<f32> = Vec::new();
 
     let mut total_score = 0;
     let mut max_score = 0;
@@ -1650,6 +1662,15 @@ fn main() -> anyhow::Result<()> {
             };
 
             collected_values.push(value);
+
+            let my_final_cities = result.final_cities.get(&p_id).copied().unwrap_or(0) as f32;
+            let total_cities = result.total_cities as f32;
+            let progress_target = if total_cities > 0.0 {
+                (my_final_cities / total_cities).clamp(0.0, 1.0) * 2.0 - 1.0
+            } else {
+                -1.0
+            };
+            collected_progress.push(progress_target);
         }
     }
 
@@ -1765,6 +1786,7 @@ fn main() -> anyhow::Result<()> {
 
         // Values
         let values_tensor = Tensor::from_vec(collected_values, (total_steps, 1), &device)?;
+        let progress_tensor = Tensor::from_vec(collected_progress, (total_steps, 1), &device)?;
 
         let mut tensors = HashMap::new();
         tensors.insert("spatial_maps".to_string(), spatial_maps_tensor);
@@ -1776,6 +1798,7 @@ fn main() -> anyhow::Result<()> {
         tensors.insert("move_option".to_string(), option_tensor);
 
         tensors.insert("values".to_string(), values_tensor);
+        tensors.insert("progress".to_string(), progress_tensor);
 
         candle_core::safetensors::save(&tensors, &games_file)?;
 

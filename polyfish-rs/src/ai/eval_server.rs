@@ -38,7 +38,7 @@ use std::time::{Duration, Instant};
 /// between the LRU cache and one or more replies — at ~1.8 KB × tens of
 /// thousands of rows/s, cloning full rows for each insert/reply was a
 /// measurable allocator tax on the eval threads.
-pub type EvalResult = (f32, Arc<RawPolicyOutput>);
+pub type EvalResult = (f32, f32, Arc<RawPolicyOutput>);
 
 struct EvalRequest {
     features: Vec<RawFeatures>,
@@ -240,7 +240,7 @@ enum InferenceBackend {
 impl InferenceBackend {
     /// Run one batched forward over `feats`, returning per-row value + policy
     /// as plain CPU floats. This is the only place a device tensor exists.
-    fn forward(&self, feats: &[RawFeatures]) -> (Vec<f32>, Vec<RawPolicyOutput>) {
+    fn forward(&self, feats: &[RawFeatures]) -> (Vec<f32>, Vec<f32>, Vec<RawPolicyOutput>) {
         match self {
             InferenceBackend::Candle { network, device } => {
                 let batch_size = feats.len();
@@ -276,10 +276,16 @@ impl InferenceBackend {
                     .expect("BUG: flatten win_value")
                     .to_vec1::<f32>()
                     .expect("BUG: win_value to_vec1");
+                let progress = value_out
+                    .progress_value
+                    .flatten_all()
+                    .expect("BUG: flatten progress_value")
+                    .to_vec1::<f32>()
+                    .expect("BUG: progress_value to_vec1");
                 let policy_rows = policy_out
                     .to_raw_rows()
                     .expect("BUG: failed to read policy batch to CPU");
-                (values, policy_rows)
+                (values, progress, policy_rows)
             }
             #[cfg(feature = "tch-eval")]
             InferenceBackend::Tch(net) => {
@@ -290,7 +296,8 @@ impl InferenceBackend {
                     spatial_flat.extend_from_slice(&feat.spatial);
                     player_flat.extend_from_slice(&feat.player);
                 }
-                net.forward_batch(&spatial_flat, &player_flat, batch_size)
+                let (vals, pols) = net.forward_batch(&spatial_flat, &player_flat, batch_size);
+                (vals, vec![0.0; batch_size], pols)
             }
             #[cfg(feature = "metal-eval")]
             InferenceBackend::Metal(net) => {
@@ -301,7 +308,8 @@ impl InferenceBackend {
                     spatial_flat.extend_from_slice(&feat.spatial);
                     player_flat.extend_from_slice(&feat.player);
                 }
-                net.forward_batch(&spatial_flat, &player_flat, batch_size)
+                let (vals, pols) = net.forward_batch(&spatial_flat, &player_flat, batch_size);
+                (vals, vec![0.0; batch_size], pols)
             }
         }
     }
@@ -481,13 +489,14 @@ fn evaluate_batch(
 
     if !miss_slots.is_empty() {
         let batch_size = miss_slots.len();
-        let (values, policy_rows) = backend.forward(&miss_features);
+        let (values, progress, policy_rows) = backend.forward(&miss_features);
 
         debug_assert_eq!(values.len(), batch_size);
+        debug_assert_eq!(progress.len(), batch_size);
         debug_assert_eq!(policy_rows.len(), batch_size);
 
         for ((&flat_idx, row), i) in miss_slots.iter().zip(policy_rows).zip(0..) {
-            let result: EvalResult = (values[i], Arc::new(row));
+            let result: EvalResult = (values[i], progress[i], Arc::new(row));
             if let Some(c) = cache.as_mut() {
                 c.put(miss_hashes[i], result.clone());
             }
@@ -650,12 +659,12 @@ fn run_metal_pipelined_loop(
                         let wait = t0.elapsed().as_micros() as u64;
 
                         let t1 = Instant::now();
-                        let (values, policy_rows) = fwd.readback();
+                        let (values, progress, policy_rows) = fwd.readback();
                         debug_assert_eq!(values.len(), miss_slots.len());
 
                         let mut cache_inserts = Vec::with_capacity(miss_slots.len());
                         for ((&flat_idx, row), i) in miss_slots.iter().zip(policy_rows).zip(0..) {
-                            let result: EvalResult = (values[i], Arc::new(row));
+                            let result: EvalResult = (values[i], progress[i], Arc::new(row));
                             cache_inserts.push((miss_hashes[i], result.clone()));
                             row_results[flat_idx] = Some(result);
                         }
@@ -894,13 +903,21 @@ impl InlineEvalHandle {
             .expect("BUG: flatten win_value")
             .to_vec1::<f32>()
             .expect("BUG: win_value to_vec1");
+        let progress = value_out
+            .progress_value
+            .flatten_all()
+            .expect("BUG: flatten progress_value")
+            .to_vec1::<f32>()
+            .expect("BUG: progress_value to_vec1");
         let policy_rows = policy_out
             .to_raw_rows()
             .expect("BUG: failed to read policy batch to CPU");
 
         values
             .into_iter()
+            .zip(progress.into_iter())
             .zip(policy_rows.into_iter().map(Arc::new))
+            .map(|((v, p), pol)| (v, p, pol))
             .collect()
     }
 }
@@ -938,7 +955,8 @@ impl SimLanes {
     }
 
     fn release(&self) {
-        *self.free.lock().unwrap() += 1;
+        let mut free = self.free.lock().unwrap();
+        *free += 1;
         self.cv.notify_one();
     }
 }
@@ -1001,7 +1019,7 @@ impl DummyEvalHandle {
                 None => std::thread::sleep(latency),
             }
         }
-        batch.iter().map(|_| (0.0, self.uniform.clone())).collect()
+        batch.iter().map(|_| (0.0, 0.0, self.uniform.clone())).collect()
     }
 }
 

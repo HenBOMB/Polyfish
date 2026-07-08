@@ -165,6 +165,7 @@ pub struct PolyZeroNet {
     v_pool_bn: BatchNorm,
     v_fc_shared: Linear,
     v_win: Linear,
+    v_progress: Linear,
 }
 
 impl PolyZeroNet {
@@ -219,6 +220,7 @@ impl PolyZeroNet {
             vs.pp("v_fc_shared"),
         )?;
         let v_win = candle_nn::linear(filters, 1, vs.pp("v_win"))?;
+        let v_progress = candle_nn::linear(filters, 1, vs.pp("v_progress"))?;
 
         Ok(Self {
             conv1,
@@ -238,6 +240,7 @@ impl PolyZeroNet {
             v_pool_bn,
             v_fc_shared,
             v_win,
+            v_progress,
         })
     }
 
@@ -304,8 +307,9 @@ impl PolyZeroNet {
         let v_pooled = v_pooled.flatten_from(1)?;
         let v_latent = self.v_fc_shared.forward(&v_pooled)?.relu()?;
         let v_win = self.v_win.forward(&v_latent)?.tanh()?;
+        let v_progress = self.v_progress.forward(&v_latent)?;
 
-        Ok((policy_output, ValueOutput { win_value: v_win }))
+        Ok((policy_output, ValueOutput { win_value: v_win, progress_value: v_progress }))
     }
 
     pub fn forward(
@@ -334,6 +338,7 @@ pub struct PolicyOutput {
 #[derive(Debug)]
 pub struct ValueOutput {
     pub win_value: Tensor, // [B, 1]
+    pub progress_value: Tensor, // [B, 1]
 }
 
 /// Device-free policy output for a single leaf: one row of each decomposed

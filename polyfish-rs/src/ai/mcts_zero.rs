@@ -418,7 +418,7 @@ impl<'a> ZeroMctsAgent<'a> {
             let results = self.evaluator.evaluate(eval_batch);
 
             for (local_idx, &global_idx) in indices_needing_eval.iter().enumerate() {
-                let (value, ref policy_row) = results[local_idx];
+                let (value, _progress, ref policy_row) = results[local_idx];
                 values[global_idx] = value;
 
                 // Expand node using pre-computed data
@@ -581,7 +581,7 @@ impl<'a> ZeroMctsAgent<'a> {
         .expect("BUG: Failed to create features in MCTS expand_node");
 
         let results = self.evaluator.evaluate(vec![features]);
-        let (_value, ref policy_row) = results[0];
+        let (_value, _progress, ref policy_row) = results[0];
 
         // Expand
         self.expand_node_from_network_output(node, game, allow_end_turn, policy_row);

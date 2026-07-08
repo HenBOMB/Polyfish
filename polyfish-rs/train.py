@@ -124,8 +124,9 @@ class PolyZeroNet(nn.Module):
         # --- Value Heads ---
         self.v_pool_conv = nn.Conv2d(self.filters, 1, 1)
         self.v_pool_bn = nn.BatchNorm2d(1)
-        self.v_fc_shared = nn.Linear(map_height * map_width, self.filters)
+        self.v_fc_shared = nn.Linear(1 * map_height * map_width, self.filters)
         self.v_win = nn.Linear(self.filters, 1)
+        self.v_progress = nn.Linear(self.filters, 1)
 
     def forward(self, spatial_map, player_state):
         batch_size = spatial_map.size(0)
@@ -163,6 +164,7 @@ class PolyZeroNet(nn.Module):
         
         values = {}
         values['win'] = torch.tanh(self.v_win(v_latent))
+        values['progress'] = self.v_progress(v_latent)
         
         return policy, values
 
@@ -198,9 +200,13 @@ def compute_loss(policy_pred, values_pred, policy_targets, value_target):
             total_policy_loss += head_loss * weights.get(head_name, 1.0)
             
     loss_win = nn.MSELoss()(values_pred['win'], value_target['win'])
-
+    
+    loss_progress = 0.0
+    if 'progress' in value_target and 'progress' in values_pred:
+        loss_progress = nn.MSELoss()(values_pred['progress'], value_target['progress'])
+        
     # Prioritize winning/losing.
-    value_loss = VALUE_LOSS_WEIGHT * loss_win
+    value_loss = VALUE_LOSS_WEIGHT * loss_win + loss_progress
     
     # Total loss
     total_loss = total_policy_loss + value_loss
@@ -288,6 +294,7 @@ def train():
             c_spatial = []
             c_player = []
             c_win = []
+            c_progress = []
             
             c_heads = {
                 'action_type': [], 'source_spatial': [], 'target_spatial': [], 'move_option': []
@@ -299,6 +306,8 @@ def train():
                     c_spatial.append(data["spatial_maps"])
                     c_player.append(data["player_states"])
                     c_win.append(data["values"])
+                    if "progress" in data:
+                        c_progress.append(data["progress"])
                     
                     # Load all policy heads
                     for head in c_heads.keys():
@@ -320,6 +329,7 @@ def train():
                 player_states = torch.cat(c_player)
                 
                 targets_win = torch.cat(c_win)
+                targets_progress = torch.cat(c_progress) if c_progress else None
                 
                 target_heads = {}
                 for head, tensors in c_heads.items():
@@ -331,7 +341,7 @@ def train():
                 continue
             
             # Cleanup lists
-            del c_spatial, c_player, c_win
+            del c_spatial, c_player, c_win, c_progress
             gc.collect()
             
             dataset_size = len(spatial_maps)
@@ -359,6 +369,8 @@ def train():
                 batch_values = {
                     'win': targets_win[batch_idx].to(DEVICE),
                 }
+                if targets_progress is not None:
+                    batch_values['progress'] = targets_progress[batch_idx].to(DEVICE)
                 
                 batch_targets = {}
                 for head, tensor in target_heads.items():
@@ -368,42 +380,6 @@ def train():
                 batch_spatial = batch_spatial.view(-1, SPATIAL_CHANNELS, MAP_SIZE, MAP_SIZE)
                 
                 # # --- DATA AUGMENTATION (Dihedral Group D4) ---
-                # # Randomly rotate and flip the batch to multiply effective data by 8x
-                # # This is standard for grid-based games like Go/Chess/Polytopia
-                
-                # # 1. Random k for rot90 (0, 1, 2, 3)
-                # k = random.randint(0, 3)
-                # # 2. Random flip (True/False)
-                # do_flip = random.random() > 0.5
-                
-                # if k > 0:
-                #     batch_spatial = torch.rot90(batch_spatial, k, [2, 3])
-                #     # Rotate spatial targets (source/target)
-                #     # Requires reshaping targets to (B, 1, H, W) then flattening back
-                #     if 'source_spatial' in batch_targets:
-                #         t = batch_targets['source_spatial'].view(-1, 1, MAP_SIZE, MAP_SIZE)
-                #         t = torch.rot90(t, k, [2, 3])
-                #         batch_targets['source_spatial'] = t.flatten(1)
-                        
-                #     if 'target_spatial' in batch_targets:
-                #         t = batch_targets['target_spatial'].view(-1, 1, MAP_SIZE, MAP_SIZE)
-                #         t = torch.rot90(t, k, [2, 3])
-                #         batch_targets['target_spatial'] = t.flatten(1)
-                        
-                # if do_flip:
-                #     batch_spatial = torch.flip(batch_spatial, [3]) # Flip horizontal
-                    
-                #     if 'source_spatial' in batch_targets:
-                #         t = batch_targets['source_spatial'].view(-1, 1, MAP_SIZE, MAP_SIZE)
-                #         t = torch.flip(t, [3])
-                #         batch_targets['source_spatial'] = t.flatten(1)
-                        
-                #     if 'target_spatial' in batch_targets:
-                #         t = batch_targets['target_spatial'].view(-1, 1, MAP_SIZE, MAP_SIZE)
-                #         t = torch.flip(t, [3])
-                #         batch_targets['target_spatial'] = t.flatten(1)
-                
-                # # --- END AUGMENTATION ---
                 
                 optimizer.zero_grad()
                 
