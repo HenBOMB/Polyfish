@@ -1,9 +1,14 @@
 #!/bin/bash
 set -e
 
+# Write PID file for server detection, clean up on exit
+echo $$ > .training.pid
+trap 'rm -f .training.pid' EXIT
+
 # Configuration
 ITERATIONS=1000
 GAMES_PER_ITER=10
+GAMEMODE=2
 USE_THREADS=12
 export MCTS_ITERS=200
 export RUST_BACKTRACE=1
@@ -16,17 +21,15 @@ echo "Logging to $LOG_FILE"
 echo "Building binaries..."
 cargo build --bin polyfish --bin self_play --release
 
-echo "Starting backend server in background..."
-./target/release/polyfish &
-SERVER_PID=$!
-trap "echo 'Shutting down server...'; kill $SERVER_PID 2>/dev/null" EXIT
+# Note: The server start logic has been moved after argument parsing so we know if -n was passed.
 
 # Parse arguments
 FORCE_TRAIN=false
 BOOST=false
 CHILL=false
 REWARD_SHAPING=false
-while getopts "fbcr" opt; do
+START_SERVER=true
+while getopts "fbcrn" opt; do
   case $opt in
     f)
       FORCE_TRAIN=true
@@ -40,6 +43,9 @@ while getopts "fbcr" opt; do
     r)
       REWARD_SHAPING=true
       ;;
+    n)
+      START_SERVER=false
+      ;;
     \?)
       echo "Invalid option: -$OPTARG" >&2
       exit 1
@@ -51,6 +57,15 @@ REWARD_FLAG=""
 if [ "$REWARD_SHAPING" = true ]; then
     REWARD_FLAG="--reward-shaping"
     echo "🎯 Reward shaping enabled!"
+fi
+
+if [ "$START_SERVER" = true ]; then
+    echo "Starting backend server in background..."
+    ./target/release/polyfish &
+    SERVER_PID=$!
+    trap "echo 'Shutting down server...'; kill $SERVER_PID 2>/dev/null; rm -f .training.pid" EXIT
+else
+    echo "Skipping backend server startup (-n flag provided)..."
 fi
 
 if [ "$BOOST" = true ]; then
@@ -96,8 +111,31 @@ fi
 
 for ((i=START_ITER; i<=ITERATIONS+START_ITER; i++))
 do
+    if [ -f "config.json" ]; then
+        DYNAMIC_CORES=$(jq -r '.cores // empty' config.json)
+        if [[ -n "$DYNAMIC_CORES" && "$DYNAMIC_CORES" =~ ^[0-9]+$ ]]; then
+            export RAYON_NUM_THREADS=$DYNAMIC_CORES
+            export OMP_NUM_THREADS=$DYNAMIC_CORES
+        fi
+        
+        DYNAMIC_ITERS=$(jq -r '.iterations // empty' config.json)
+        if [[ -n "$DYNAMIC_ITERS" && "$DYNAMIC_ITERS" =~ ^[0-9]+$ ]]; then
+            ITERATIONS=$DYNAMIC_ITERS
+        fi
+        
+        DYNAMIC_MCTS=$(jq -r '.mctsIters // empty' config.json)
+        if [[ -n "$DYNAMIC_MCTS" && "$DYNAMIC_MCTS" =~ ^[0-9]+$ ]]; then
+            export MCTS_ITERS=$DYNAMIC_MCTS
+        fi
+        
+        DYNAMIC_GAMEMODE=$(jq -r '.gamemode // empty' config.json)
+        if [[ -n "$DYNAMIC_GAMEMODE" && "$DYNAMIC_GAMEMODE" =~ ^[0-9]+$ ]]; then
+            GAMEMODE=$DYNAMIC_GAMEMODE
+        fi
+    fi
+
     echo "=================================================="
-    echo "Starting Iteration $i"
+    echo "Starting Iteration $i (Threads: $RAYON_NUM_THREADS)"
     echo "=================================================="
     
     # 1. League Training Logic (20% chance)
@@ -127,9 +165,14 @@ do
         fi
     fi
 
-    # Pick 2 random tribes for this iteration
-    TRIBE_LIST=("Imperius" "Imperius")
-    # TRIBE_LIST=("Imperius" "Bardur" "Oumaji" "Kickoo" "XinXi" "Zebasi" "AiMo" "Vengir" "Quetzali" "Hoodrick" "Yadakk")
+    # Read active tribes from config if it exists, otherwise use default
+    if [ -f "config.json" ] && [ "$(jq -r '.tribes' config.json)" != "null" ]; then
+        mapfile -t TRIBE_LIST < <(jq -r '.tribes[]' config.json)
+    fi
+    if [ ${#TRIBE_LIST[@]} -eq 0 ]; then
+        TRIBE_LIST=("Imperius" "Imperius")
+    fi
+    
     # Shuffle and pick top 2 (using shuf)
     SELECTED_TRIBES=($(printf "%s\n" "${TRIBE_LIST[@]}" | shuf -n 2))
     TRIBE1=${SELECTED_TRIBES[0]}
@@ -139,7 +182,7 @@ do
     
     # Capture output to extract metrics
     # We pass args via CLI now, not env vars alone
-    SP_OUTPUT=$(./target/release/self_play --num-games $GAMES_PER_ITER --mcts-iters $MCTS_ITERS $REWARD_FLAG $OPPONENT_FLAG --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$i")
+    SP_OUTPUT=$(./target/release/self_play --num-games $GAMES_PER_ITER --mcts-iters $MCTS_ITERS $REWARD_FLAG $OPPONENT_FLAG --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$i" --gamemode "$GAMEMODE")
     echo "$SP_OUTPUT"
     
     # Extract Avg Score and Max Score using grep and sed or awk
@@ -153,6 +196,8 @@ do
     AVG_BUILDS=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o '"avg_builds": [0-9.]*' | awk -F': ' '{print $2}')
     AVG_RESEARCH=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o '"avg_research": [0-9.]*' | awk -F': ' '{print $2}')
     AVG_ATTACKS=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o '"avg_attacks": [0-9.]*' | awk -F': ' '{print $2}')
+    AVG_ABILITY=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o '"avg_ability": [0-9.]*' | awk -F': ' '{print $2}')
+    AVG_STEPS=$(echo "$SP_OUTPUT" | grep "METRICS:" | grep -o '"avg_steps": [0-9.]*' | awk -F': ' '{print $2}')
     
     # 2. Training
     echo "[Training] Training model..."
@@ -162,9 +207,9 @@ do
     
     # 3. Log
     TIMESTAMP=$(date +%s)
-    echo "$i,$TIMESTAMP,$AVG_SCORE,$MAX_SCORE,$P1_AVG,$P2_AVG,$LOSS,$AVG_CAPTURES,$AVG_HARVESTS,$AVG_BUILDS,$AVG_RESEARCH,$AVG_ATTACKS" >> training_log.csv
+    echo "$i,$TIMESTAMP,$AVG_SCORE,$MAX_SCORE,$P1_AVG,$P2_AVG,$LOSS,$AVG_CAPTURES,$AVG_HARVESTS,$AVG_BUILDS,$AVG_RESEARCH,$AVG_ATTACKS,$AVG_ABILITY,$AVG_STEPS" >> training_log.csv
     echo "Iteration $i complete. Type: $MATCH_TYPE | Avg: $AVG_SCORE | Loss: $LOSS"
-    echo "  -> STATS/GAME: Captures: $AVG_CAPTURES | Harvests: $AVG_HARVESTS | Builds: $AVG_BUILDS | Tech: $AVG_RESEARCH | Attacks: $AVG_ATTACKS"
+    echo "  -> STATS/GAME: Captures: $AVG_CAPTURES | Harvests: $AVG_HARVESTS | Builds: $AVG_BUILDS | Tech: $AVG_RESEARCH | Attacks: $AVG_ATTACKS | Ability: $AVG_ABILITY | Steps: $AVG_STEPS"
     
     # 4. Checkpoint (Every 50 iterations)
     if [ $((i % 50)) -eq 0 ]; then
@@ -211,5 +256,10 @@ do
     
     # Keep only the last 10 game files to save space and match train.py replay buffer
     ls -t archive/games_*.safetensors 2>/dev/null | tail -n +31 | xargs -r rm
+    
+    # 5. Cleanup High Scores
+    # Sort high score replays by score (ascending) and keep only the top 10
+    mkdir -p replays/high_scores
+    ls -v replays/high_scores/best_game_score_*.json 2>/dev/null | head -n -10 | xargs -r rm
     
 done

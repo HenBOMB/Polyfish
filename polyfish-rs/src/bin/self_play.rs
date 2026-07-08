@@ -50,6 +50,7 @@ fn play_single_game(
     seed: i64,
     tribes: Vec<TribeType>,
     iteration: usize,
+    gamemode: u8,
 ) -> Option<GameResult> {
     // Curriculum logic — Tiny maps only, gradually increase turn count
     let (map_size, max_turns) = if iteration <= 50 {
@@ -77,7 +78,7 @@ fn play_single_game(
 
     let mut game = Game::new();
     game.state = polyfish::mapgen::generate(gen_settings);
-    game.state.settings.mode = polyfish::types::ModeType::Perfection;
+    game.state.settings.mode = polyfish::types::ModeType::from_repr(gamemode).unwrap_or(polyfish::types::ModeType::Perfection);
     game.state.settings.max_turns = max_turns;
     game.post_load();
 
@@ -352,6 +353,10 @@ fn main() -> anyhow::Result<()> {
         /// Current training iteration (for curriculum learning)
         #[arg(long, default_value_t = 1)]
         iteration: usize,
+
+        /// Game Mode (1 = Perfection, 2 = Domination)
+        #[arg(long, default_value_t = 2)]
+        gamemode: u8,
     }
 
     let args = Args::parse();
@@ -372,10 +377,12 @@ fn main() -> anyhow::Result<()> {
             &device,
         ))?
     } else {
-        panic!(
-            "Model file {} not found! Please run init_model.py first.",
+        eprintln!(
+            "ERROR: Model file '{}' not found.\n\
+             Run `python3 init_model.py` first, or start training via `./run_training_loop.sh`.",
             model_path
         );
+        std::process::exit(1);
     };
     let network1 = Arc::new(network1);
 
@@ -520,6 +527,7 @@ fn main() -> anyhow::Result<()> {
                 seed,
                 selected_tribes.clone(),
                 args.iteration,
+                args.gamemode,
             )
         })
         .collect();
@@ -551,6 +559,8 @@ fn main() -> anyhow::Result<()> {
     let mut total_builds = 0;
     let mut total_research = 0;
     let mut total_attacks = 0;
+    let mut total_ability = 0;
+    let mut total_steps = 0;
 
     for result in results {
         total_score += result.winner_score;
@@ -593,6 +603,16 @@ fn main() -> anyhow::Result<()> {
         total_attacks += result
             .action_counts
             .get(&polyfish::types::MoveType::Attack)
+            .copied()
+            .unwrap_or(0);
+        total_ability += result
+            .action_counts
+            .get(&polyfish::types::MoveType::Ability)
+            .copied()
+            .unwrap_or(0);
+        total_steps += result
+            .action_counts
+            .get(&polyfish::types::MoveType::Step)
             .copied()
             .unwrap_or(0);
 
@@ -704,9 +724,11 @@ fn main() -> anyhow::Result<()> {
     let avg_builds = total_builds as f32 / args.num_games as f32;
     let avg_research = total_research as f32 / args.num_games as f32;
     let avg_attacks = total_attacks as f32 / args.num_games as f32;
+    let avg_ability = total_ability as f32 / args.num_games as f32;
+    let avg_steps = total_steps as f32 / args.num_games as f32;
 
     println!(
-        "METRICS: {{\"avg_score\": {:.2}, \"max_score\": {}, \"avg_moves\": {:.2}, \"p1_avg\": {:.2}, \"p2_avg\": {:.2}, \"avg_captures\": {:.2}, \"avg_harvests\": {:.2}, \"avg_builds\": {:.2}, \"avg_research\": {:.2}, \"avg_attacks\": {:.2}}}",
+        "METRICS: {{\"avg_score\": {:.2}, \"max_score\": {}, \"avg_moves\": {:.2}, \"p1_avg\": {:.2}, \"p2_avg\": {:.2}, \"avg_captures\": {:.2}, \"avg_harvests\": {:.2}, \"avg_builds\": {:.2}, \"avg_research\": {:.2}, \"avg_attacks\": {:.2}, \"avg_ability\": {:.2}, \"avg_steps\": {:.2}}}",
         avg_score,
         max_score,
         avr_moves,
@@ -716,7 +738,9 @@ fn main() -> anyhow::Result<()> {
         avg_harvests,
         avg_builds,
         avg_research,
-        avg_attacks
+        avg_attacks,
+        avg_ability,
+        avg_steps
     );
 
     // Stack and save

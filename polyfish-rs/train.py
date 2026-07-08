@@ -11,6 +11,15 @@ import gc
 BATCH_SIZE = 64
 EPOCHS = 2
 LEARNING_RATE = 0.001
+
+import json
+try:
+    with open('config.json', 'r') as f:
+        config = json.load(f)
+        if 'learningRate' in config:
+            LEARNING_RATE = float(config['learningRate'])
+except Exception as e:
+    print(f"Warning: Could not read config.json, using defaults. ({e})")
 # Handle RTX 5090 / CUDA Arch compatibility issues
 try:
     if torch.cuda.is_available():
