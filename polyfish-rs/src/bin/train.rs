@@ -115,11 +115,11 @@ fn main() -> Result<()> {
     let w = polyfish::ai::features::MAP_SIZE;
     let spatial_maps = spatial_maps.reshape((n_samples, c, h, w))?;
 
-    // Loss weights
+    // Loss weights (w_value mirrors train.py's VALUE_LOSS_WEIGHT default)
     let w_action = 1.0;
     let w_spatial = 0.5;
     let w_option = 0.2;
-    let w_value = 1.0;
+    let w_value = 3.0;
 
     // 5. Training Loop
     for epoch in 1..=EPOCHS {

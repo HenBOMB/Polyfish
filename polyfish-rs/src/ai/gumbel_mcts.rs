@@ -31,17 +31,18 @@ use crate::ai::eval_server::Evaluator;
 use crate::ai::features::{self, RawFeatures};
 use crate::ai::gumbel_qtransform::{self, sequence_of_considered_visits, softmax};
 use crate::ai::mcts_common::{
-    self, BackpropNode, LeafData, TreeNode, backpropagate_and_remove_virtual_loss,
-    extract_leaf_data, get_node_by_path, get_node_by_path_mut,
+    self, BackpropNode, LeafData, TreeNode, backpropagate_return_with_rewards, extract_leaf_data,
+    get_node_by_path, get_node_by_path_mut,
 };
 use crate::ai::network::RawPolicyOutput;
 use crate::ai::policy_composer;
+use crate::ai::reward;
 use crate::game::Game;
 use crate::moves::{EndTurnMove, Move};
 use crate::types::MoveType;
 use rand::distributions::Distribution;
 use rand_distr::Gumbel;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 pub struct GumbelMctsAgent<'a> {
     pub evaluator: &'a Evaluator,
@@ -53,7 +54,7 @@ pub struct GumbelMctsAgent<'a> {
     pub batch_size: usize,
     /// Persistent tree across consecutive same-player searches, for
     /// structure-only root-shift reuse. `None` after a fresh build or when
-    /// invalidated (book move, terminal root, opponent moved in between).
+    /// invalidated (terminal root, opponent moved in between).
     tree: Option<GumbelNode>,
     /// Index into `tree`'s children of the move chosen last call. The next
     /// call promotes this child to root iff the new root's feature hash
@@ -87,6 +88,14 @@ pub struct GumbelMctsAgent<'a> {
     /// (the default) costs one `RefCell` borrow-check per call site and
     /// nothing else — see decision_trace.rs.
     trace: RefCell<Option<TraceBuilder>>,
+    /// The most recently completed search's root value (`root.q_value()`
+    /// after backup — a discounted-return state-value estimate under the
+    /// reward-aware backup, `None` if the root never accumulated a visit:
+    /// an empty legal set, or a single-legal-move root, which
+    /// `run_search` short-circuits before any visits land). Set at the end
+    /// of every `select_move*` call, consumed by `self_play`'s TD label
+    /// bootstrap via `Brain::last_root_value`.
+    last_root_value: Option<f32>,
 }
 
 struct GumbelNode {
@@ -99,6 +108,12 @@ struct GumbelNode {
     /// This node's own NN value prediction, captured at expansion time.
     /// `0.0` until the node is expanded.
     own_value: f32,
+    /// Normalized score-delta reward of the edge that produced this node
+    /// (parent -> this), cached the first time search traverses the edge.
+    /// `None` for the tree root (no incoming edge) or any node never
+    /// visited by this or a prior search. Survives re-root (kept out of
+    /// `reset_stats_recursive`) like `own_value`/`logit`.
+    edge_reward: Cell<Option<f32>>,
     own_progress: f32,
     children: Vec<GumbelNode>,
     move_to_here: Option<Box<dyn Move>>,
@@ -119,6 +134,7 @@ impl GumbelNode {
             logit,
             gumbel,
             own_value: 0.0,
+            edge_reward: Cell::new(None),
             own_progress: 0.0,
             children: Vec::new(),
             move_to_here,
@@ -167,6 +183,18 @@ impl BackpropNode for GumbelNode {
     }
 }
 
+/// A single collected leaf, wrapping the shared `LeafData` (features, legal
+/// moves, terminal value — everything `mcts_zero` also produces) with the
+/// per-edge rewards/turn-deltas collected along its path, which only the
+/// reward-aware Gumbel backup needs. `rewards[i]`/`turn_deltas[i]` describe
+/// the same edge as `data.path_indices[i]` (edge `i`: node `i` -> node
+/// `i+1`); `rewards.len() == turn_deltas.len() == data.path_indices.len()`.
+struct GumbelLeaf {
+    data: LeafData,
+    rewards: Vec<f32>,
+    turn_deltas: Vec<i32>,
+}
+
 impl<'a> GumbelMctsAgent<'a> {
     pub fn new(evaluator: &'a Evaluator, iterations: usize, k: usize) -> Self {
         Self {
@@ -182,12 +210,22 @@ impl<'a> GumbelMctsAgent<'a> {
             policy_target_q_weight: 1.0,
             tree_q_weight: 1.0,
             trace: RefCell::new(None),
+            last_root_value: None,
         }
     }
 
+    /// The completed search's root value (see `last_root_value` field docs),
+    /// if the most recent `select_move*` call actually ran a search.
+    pub fn last_root_value(&self) -> Option<f32> {
+        self.last_root_value
+    }
+
+    pub fn clear_last_root_value(&mut self) {
+        self.last_root_value = None;
+    }
+
     /// Drop any cached tree so the next search builds fresh. Called when the
-    /// search is bypassed (opening book) or the root is terminal — neither
-    /// case leaves a child to promote on the next call.
+    /// root is terminal / has no legal moves — no child to promote next call.
     fn invalidate_tree(&mut self) {
         self.tree = None;
         self.last_chosen_idx = None;
@@ -206,7 +244,7 @@ impl<'a> GumbelMctsAgent<'a> {
 
     /// Drain and finalize the trace captured by the last search. `None` if
     /// never armed, or armed but short-circuited before a selection was made
-    /// (book move / empty legal-move root).
+    /// (empty legal-move root).
     pub fn take_trace(&mut self) -> Option<DecisionTrace> {
         self.trace
             .borrow_mut()
@@ -245,6 +283,7 @@ impl<'a> GumbelMctsAgent<'a> {
                 own_value: None,
                 q_value: 0.0,
                 visits: 0.0,
+                edge_reward: None,
                 raw_net_prob: raw_probs[i],
                 heuristic_score: crate::ai::ordering::score_move(game, mv.as_ref()),
                 search_prior_prob: blended_probs[i],
@@ -316,8 +355,10 @@ impl<'a> GumbelMctsAgent<'a> {
                 c.visits = child.visits;
                 c.q_value = child.q_value();
                 c.own_value = child.is_expanded.then_some(child.own_value);
+                c.edge_reward = child.edge_reward.get();
             }
         }
+        trace.root_search_value = (root.visits > 0.0).then(|| root.q_value());
         let mode = if move_count < crate::ai::mcts_zero::ZeroMctsAgent::TEMPERATURE_MOVE_THRESHOLD
             && root.children.len() > 1
         {
@@ -347,8 +388,8 @@ impl<'a> GumbelMctsAgent<'a> {
     /// on the new root's children, and rebuild `in_cut`. This preserves the
     /// π' policy target's semantics — root-child visit counts come only from
     /// this search's Gumbel-driven allocation, never inherited interior
-    /// counts. When the opponent has moved in between (or a book move / forced
-    /// move advanced the state), the hash won't match and we build fresh.
+    /// counts. When the opponent has moved in between (or a forced move
+    /// advanced the state), the hash won't match and we build fresh.
     fn search_and_extract(&mut self, game: &mut Game) -> GumbelNode {
         let start_turn = game.state.settings.turn;
 
@@ -600,7 +641,7 @@ impl<'a> GumbelMctsAgent<'a> {
         let mut total_collected = 0;
 
         while total_collected < total_needed {
-            let mut leaves: Vec<LeafData> = Vec::with_capacity(self.batch_size);
+            let mut leaves: Vec<GumbelLeaf> = Vec::with_capacity(self.batch_size);
 
             // One wave: cycle through the in-play candidates in order, taking
             // one leaf from each (that hasn't hit its quota) until the batch
@@ -644,12 +685,15 @@ impl<'a> GumbelMctsAgent<'a> {
 
             let values = self.batched_evaluate_and_expand(root, &leaves);
             for (leaf, &(value, _progress)) in leaves.iter().zip(values.iter()) {
-                backpropagate_and_remove_virtual_loss(
+                backpropagate_return_with_rewards(
                     root,
-                    &leaf.path_indices,
-                    &leaf.path_players,
+                    &leaf.data.path_indices,
+                    &leaf.data.path_players,
+                    &leaf.rewards,
+                    &leaf.turn_deltas,
                     mcts_common::VIRTUAL_LOSS,
                     value,
+                    reward::GAMMA_TURN,
                 );
             }
         }
@@ -668,9 +712,11 @@ impl<'a> GumbelMctsAgent<'a> {
         cand_child_idx: usize,
         game: &mut Game,
         turn_horizon: i32,
-    ) -> Option<LeafData> {
+    ) -> Option<GumbelLeaf> {
         let mut indices_stack: Vec<usize> = Vec::new();
         let mut path_players: Vec<i32> = Vec::new();
+        let mut path_rewards: Vec<f32> = Vec::new();
+        let mut path_turn_deltas: Vec<i32> = Vec::new();
         let mut undos: Vec<crate::actions::UndoCallback> = Vec::new();
 
         let root_player = game.state.settings.current_player_turn_id;
@@ -679,12 +725,22 @@ impl<'a> GumbelMctsAgent<'a> {
         // Virtual loss on the root.
         root.add_virtual_loss(mcts_common::VIRTUAL_LOSS);
 
-        // Apply the candidate's move (root -> candidate).
-        let m = root.children.get(cand_child_idx)?.move_to_here.as_ref()?;
+        // Apply the candidate's move (root -> candidate), recording the
+        // exact score-delta reward this move banked (in the mover's own
+        // perspective) and how many turns it crossed.
+        let candidate_node = root.children.get(cand_child_idx)?;
+        let m = candidate_node.move_to_here.as_ref()?;
+        let (my_pre, opp_pre) = reward::score_snapshot(&game.state, root_player);
+        let turn_pre = game.state.settings.turn;
         let undo = game.simulate_move(m.as_ref())?;
         undos.push(undo);
         indices_stack.push(cand_child_idx);
         path_players.push(game.state.settings.current_player_turn_id);
+        let (my_post, opp_post) = reward::score_snapshot(&game.state, root_player);
+        let r = reward::normalized_reward(my_pre, opp_pre, my_post, opp_post);
+        candidate_node.edge_reward.set(Some(r));
+        path_rewards.push(r);
+        path_turn_deltas.push(game.state.settings.turn - turn_pre);
 
         // Descend below the candidate using the interior selection rule.
         loop {
@@ -711,10 +767,14 @@ impl<'a> GumbelMctsAgent<'a> {
                 Some(i) => i,
                 None => break,
             };
-            let m = match current.children[child_idx].move_to_here.as_ref() {
+            let child_node = &current.children[child_idx];
+            let m = match child_node.move_to_here.as_ref() {
                 Some(m) => m,
                 None => break,
             };
+            let mover = game.state.settings.current_player_turn_id;
+            let (my_pre, opp_pre) = reward::score_snapshot(&game.state, mover);
+            let turn_pre = game.state.settings.turn;
             let undo = match game.simulate_move(m.as_ref()) {
                 Some(u) => u,
                 None => break,
@@ -722,6 +782,11 @@ impl<'a> GumbelMctsAgent<'a> {
             undos.push(undo);
             indices_stack.push(child_idx);
             path_players.push(game.state.settings.current_player_turn_id);
+            let (my_post, opp_post) = reward::score_snapshot(&game.state, mover);
+            let r = reward::normalized_reward(my_pre, opp_pre, my_post, opp_post);
+            child_node.edge_reward.set(Some(r));
+            path_rewards.push(r);
+            path_turn_deltas.push(game.state.settings.turn - turn_pre);
         }
 
         let needs_expansion = match get_node_by_path(root, &indices_stack) {
@@ -751,7 +816,11 @@ impl<'a> GumbelMctsAgent<'a> {
             undo(&mut game.state);
         }
 
-        Some(leaf_data)
+        Some(GumbelLeaf {
+            data: leaf_data,
+            rewards: path_rewards,
+            turn_deltas: path_turn_deltas,
+        })
     }
 
     /// Interior (non-root) child selection: `softmax(logit + sigma(Q))` for
@@ -794,16 +863,16 @@ impl<'a> GumbelMctsAgent<'a> {
     fn batched_evaluate_and_expand(
         &self,
         root: &mut GumbelNode,
-        leaves: &[LeafData],
+        leaves: &[GumbelLeaf],
     ) -> Vec<(f32, f32)> {
         let mut values = vec![(0.0f32, 0.0f32); leaves.len()];
         let mut indices_needing_eval: Vec<usize> = Vec::new();
         let mut eval_batch: Vec<RawFeatures> = Vec::new();
 
         for (i, leaf) in leaves.iter().enumerate() {
-            if let Some(tv) = leaf.terminal_value {
+            if let Some(tv) = leaf.data.terminal_value {
                 values[i] = (tv, 0.0); // Progress is 0.0 at terminal state
-            } else if let Some(ref feat) = leaf.features {
+            } else if let Some(ref feat) = leaf.data.features {
                 indices_needing_eval.push(i);
                 eval_batch.push(RawFeatures {
                     spatial: feat.spatial.clone(),
@@ -820,18 +889,18 @@ impl<'a> GumbelMctsAgent<'a> {
                 values[global_idx] = (value, progress);
 
                 let leaf = &leaves[global_idx];
-                let node = get_node_by_path_mut(root, &leaf.path_indices)
+                let node = get_node_by_path_mut(root, &leaf.data.path_indices)
                     .expect("BUG: leaf path not found in tree");
 
-                let legal_moves = leaf.legal_moves.take();
+                let legal_moves = leaf.data.legal_moves.take();
                 self.expand_gumbel_node_from_precomputed(
                     node,
                     legal_moves,
-                    leaf.map_size,
+                    leaf.data.map_size,
                     policy_row,
                     value,
                     progress,
-                    leaf.heuristic_scores.as_deref(),
+                    leaf.data.heuristic_scores.as_deref(),
                 );
             }
         }
@@ -965,18 +1034,9 @@ impl<'a> GumbelMctsAgent<'a> {
     }
 
     pub fn select_move(&mut self, game: &mut Game) -> Option<Box<dyn Move>> {
-        use crate::ai::book::Book;
-        use rand::seq::SliceRandom;
-
-        let mut book_moves = Book::recommend(game);
-        if !book_moves.is_empty() {
-            let mut rng = rand::thread_rng();
-            book_moves.shuffle(&mut rng);
-            if let Some(m) = book_moves.pop() {
-                self.invalidate_tree();
-                return Some(m);
-            }
-        }
+        // Cleared up front; `store_tree` sets it again once a real search
+        // (not an empty root) actually accumulates root visits.
+        self.last_root_value = None;
 
         let root = self.search_and_extract(game);
         if root.children.is_empty() {
@@ -995,29 +1055,7 @@ impl<'a> GumbelMctsAgent<'a> {
         game: &mut Game,
         move_count: usize,
     ) -> (Option<Box<dyn Move>>, Vec<crate::ai::mcts_types::MoveVisit>) {
-        use crate::ai::book::Book;
-        use crate::ai::mcts_types::MoveVisit;
-        use rand::seq::SliceRandom;
-
-        let mut book_moves = Book::recommend(game);
-        if !book_moves.is_empty() {
-            let mut rng = rand::thread_rng();
-            book_moves.shuffle(&mut rng);
-            if let Some(selected_move) = book_moves.pop() {
-                self.invalidate_tree();
-                let move_info = MoveVisit {
-                    move_type: selected_move.move_type(),
-                    visits: self.iterations as f32,
-                    source_idx: selected_move.source_idx().ok(),
-                    target_idx: selected_move.target_idx().ok(),
-                    structure_type: selected_move.structure_type().ok(),
-                    unit_type: selected_move.unit_type().ok(),
-                    tech_type: selected_move.tech_type().ok(),
-                    ability_type: selected_move.ability_type().ok(),
-                };
-                return (Some(selected_move), vec![move_info]);
-            }
-        }
+        self.last_root_value = None;
 
         let root = self.search_and_extract(game);
         if root.children.is_empty() {
@@ -1051,32 +1089,7 @@ impl<'a> GumbelMctsAgent<'a> {
     }
 
     pub fn select_move_with_stats(&mut self, game: &mut Game) -> (Option<Box<dyn Move>>, Vec<f32>) {
-        use crate::ai::book::Book;
-        use rand::seq::SliceRandom;
-
-        let mut book_moves = Book::recommend(game);
-        if !book_moves.is_empty() {
-            let mut rng = rand::thread_rng();
-            book_moves.shuffle(&mut rng);
-            if let Some(book_move) = book_moves.pop() {
-                // One-hot policy over the legal set; defer to the search for
-                // the actual alignment when no book move is found.
-                let root = self.search_and_extract(game);
-                let mut policy = vec![0.0f32; root.children.len().max(1)];
-                for (i, c) in root.children.iter().enumerate() {
-                    if let Some(m) = &c.move_to_here {
-                        if m.describe(&game.state) == book_move.describe(&game.state) {
-                            policy[i] = 1.0;
-                            break;
-                        }
-                    }
-                }
-                // The book branch discards the searched root; invalidate so
-                // the next call does not re-root against a stale tree.
-                self.invalidate_tree();
-                return (Some(book_move), policy);
-            }
-        }
+        self.last_root_value = None;
 
         let root = self.search_and_extract(game);
         if root.children.is_empty() {
@@ -1095,7 +1108,15 @@ impl<'a> GumbelMctsAgent<'a> {
     /// Stash the just-searched root for next-call reuse. `best_idx` must point
     /// at the chosen child, which is kept in the tree (its move was cloned,
     /// not moved out) so the next call can promote it.
+    ///
+    /// Also records `last_root_value` from this same root: `None` if it
+    /// never accumulated a visit (single-legal-move root — `run_search`
+    /// short-circuits before any visits land), `Some(root.q_value())`
+    /// otherwise. This is the one place all three `select_move*` callers'
+    /// non-early-return paths converge, so it's the single spot that needs
+    /// to know about `last_root_value` bookkeeping.
     fn store_tree(&mut self, root: GumbelNode, best_idx: usize, next_hash: Option<u64>) {
+        self.last_root_value = (root.visits > 0.0).then(|| root.q_value());
         self.tree = Some(root);
         self.last_chosen_idx = Some(best_idx);
         self.next_root_hash = next_hash;
