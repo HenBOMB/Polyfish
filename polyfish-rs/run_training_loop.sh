@@ -16,7 +16,7 @@ export MCTS_ITERS=64
 # See expert_boost_throughput.md for details.
 ACTORS=128
 # 3 servers × 2 workers measured best on metal after buffer pooling
-# (~610-650 moves/s — see expert_boost_throughput.md). 0 = auto (2 on metal,
+# (~610-650 moves/s — see expert_boost_throughput.md). 0 = auto (3 on metal,
 # 1 on tch/candle). Don't force >1 on tch — MPS serializes across shards.
 EVAL_SERVERS=3
 # self_play picks fastest backend: metal, tch, or candle.
