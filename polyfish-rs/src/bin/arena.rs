@@ -113,11 +113,19 @@ fn play_match(
     // p1_config / p2_config map each seat to its configuration so timing and
     // scores attribute to the right config when sides are swapped.
     let (mut agent_p1, p1_config, mut agent_p2, p2_config) = if swap {
-        (make_search_agent(backend2, eval2, mcts2, None, None, None), 2u8,
-         make_search_agent(backend1, eval1, mcts1, None, None, None), 1u8)
+        (
+            make_search_agent(backend2, eval2, mcts2, None, None, None, None),
+            2u8,
+            make_search_agent(backend1, eval1, mcts1, None, None, None, None),
+            1u8,
+        )
     } else {
-        (make_search_agent(backend1, eval1, mcts1, None, None, None), 1u8,
-         make_search_agent(backend2, eval2, mcts2, None, None, None), 2u8)
+        (
+            make_search_agent(backend1, eval1, mcts1, None, None, None, None),
+            1u8,
+            make_search_agent(backend2, eval2, mcts2, None, None, None, None),
+            2u8,
+        )
     };
 
     let mut moves = 0;
@@ -264,8 +272,7 @@ fn main() -> anyhow::Result<()> {
 
     let worker = |_ctx: rayon::BroadcastContext| {
         let (w_net1, w_net2) = if per_thread_metal {
-            let device =
-                Device::new_metal(0).expect("failed to create per-thread Metal device");
+            let device = Device::new_metal(0).expect("failed to create per-thread Metal device");
             let n1 = Arc::new(
                 load_model(&args.model1, &device).expect("failed to load per-thread model1"),
             );
@@ -273,8 +280,7 @@ fn main() -> anyhow::Result<()> {
                 n1.clone()
             } else {
                 Arc::new(
-                    load_model(&args.model2, &device)
-                        .expect("failed to load per-thread model2"),
+                    load_model(&args.model2, &device).expect("failed to load per-thread model2"),
                 )
             };
             println!(

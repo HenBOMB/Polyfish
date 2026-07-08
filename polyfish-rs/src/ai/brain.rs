@@ -70,6 +70,9 @@ pub struct Brain<'a> {
     /// β on σ(completed-Q) in the Gumbel backend's exported policy targets.
     /// `None` = 1.0 (full paper behavior). Ignored by other backends.
     policy_target_q_weight: Option<f32>,
+    /// β_tree on σ(completed-Q) inside the Gumbel search (selection, halving
+    /// re-rank, final recommendation). `None` = 1.0. Ignored by other backends.
+    tree_q_weight: Option<f32>,
     /// Set by `request_trace`; consumed (and cleared) by the next
     /// `think_decomposed` call, which arms the underlying agent's tracer.
     pending_trace: bool,
@@ -154,6 +157,7 @@ pub fn make_search_agent(
     leaf_batch: Option<usize>,
     prior_heuristic_weight: Option<f32>,
     policy_target_q_weight: Option<f32>,
+    tree_q_weight: Option<f32>,
 ) -> SearchAgent<'_> {
     match backend {
         SearchBackend::Zero => {
@@ -173,6 +177,9 @@ pub fn make_search_agent(
             }
             if let Some(b) = policy_target_q_weight {
                 agent.policy_target_q_weight = b;
+            }
+            if let Some(b) = tree_q_weight {
+                agent.tree_q_weight = b;
             }
             SearchAgent::Gumbel(agent)
         }
@@ -195,6 +202,7 @@ impl<'a> Brain<'a> {
             agent: None,
             prior_heuristic_weight: None,
             policy_target_q_weight: None,
+            tree_q_weight: None,
             pending_trace: false,
         }
     }
@@ -212,6 +220,7 @@ impl<'a> Brain<'a> {
             agent: None,
             prior_heuristic_weight: None,
             policy_target_q_weight: None,
+            tree_q_weight: None,
             pending_trace: false,
         }
     }
@@ -233,6 +242,13 @@ impl<'a> Brain<'a> {
     /// after `with_backend`.
     pub fn with_policy_target_q_weight(mut self, policy_target_q_weight: f32) -> Self {
         self.policy_target_q_weight = Some(policy_target_q_weight);
+        self
+    }
+
+    /// Override β_tree on σ(Q) inside the search. Builder style: chain after
+    /// `with_backend`.
+    pub fn with_tree_q_weight(mut self, tree_q_weight: f32) -> Self {
+        self.tree_q_weight = Some(tree_q_weight);
         self
     }
 
@@ -274,6 +290,7 @@ impl<'a> Brain<'a> {
                 self.leaf_batch,
                 self.prior_heuristic_weight,
                 self.policy_target_q_weight,
+                self.tree_q_weight,
             ));
         }
         (self.agent.as_mut(), moves)
@@ -332,7 +349,8 @@ impl<'a> Brain<'a> {
             return (moves.pop(), Vec::new());
         }
 
-        agent.unwrap().select_move_with_stats(&mut game.clone())
+        let mut mcts_game = game.clone_for_mcts(game.current_player_id());
+        agent.unwrap().select_move_with_stats(&mut mcts_game)
     }
 }
 

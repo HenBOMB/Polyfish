@@ -114,37 +114,37 @@ async fn main() {
     game.post_load();
 
     // Load trained neural network
-    // use candle_core::Device;
-    // use candle_nn::VarMap;
-    // let device = Device::Cpu;
+    use candle_core::Device;
+    use candle_nn::VarMap;
+    let device = Device::Cpu;
 
-    // let model_path = "model.safetensors";
-    // let mut varmap = VarMap::new();
+    let model_path = "model.safetensors";
+    let mut varmap = VarMap::new();
 
-    // let network = if std::path::Path::new(model_path).exists() {
-    //     println!("✅ Loading trained AI model from {}", model_path);
-    //     varmap
-    //         .load(model_path)
-    //         .expect("Failed to load model weights");
-    //     polyfish::ai::network::PolyZeroNet::new(candle_nn::VarBuilder::from_varmap(
-    //         &varmap,
-    //         candle_core::DType::F32,
-    //         &device,
-    //     ))
-    //     .expect("Failed to build neural network")
-    // } else {
-    //     panic!(
-    //         "Model file {} not found! Please run init_model.py first.",
-    //         model_path
-    //     );
-    // };
+    let network = if std::path::Path::new(model_path).exists() {
+        println!("✅ Loading trained AI model from {}", model_path);
+        varmap
+            .load(model_path)
+            .expect("Failed to load model weights");
+        polyfish::ai::network::PolyZeroNet::new(candle_nn::VarBuilder::from_varmap(
+            &varmap,
+            candle_core::DType::F32,
+            &device,
+        ))
+        .expect("Failed to build neural network")
+    } else {
+        panic!(
+            "Model file {} not found! Please run init_model.py first.",
+            model_path
+        );
+    };
 
     let recorder = Arc::new(GameRecorder::new());
 
     let shared_state = Arc::new(AppState {
         game: Mutex::new(game),
         training_status: Mutex::new(None),
-        network: None, //Arc::new(network),
+        network: Some(Arc::new(network)),
         recorder,
     });
 
@@ -157,6 +157,9 @@ async fn main() {
         .route("/reset", post(reset_game))
         .route("/train", post(trigger_training))
         .route("/train/status", get(get_training_status))
+        .route("/train/halt", post(halt_training))
+        .route("/metrics", get(get_metrics))
+        .route("/config", post(set_config).get(get_config))
         .route("/save_training_data", post(save_training_data))
         .route("/analyze", get(analyze_game))
         .route("/save", post(save_game))
@@ -171,20 +174,10 @@ async fn main() {
         .route("/replay/load_initial", post(load_initial_endpoint))
         .route("/replay/list_initial", get(list_initial_endpoint))
         .route("/trainer/hint", post(get_trainer_hint))
-        .route("/api/runs", get(polyfish::training_api::api_runs))
-        .route(
-            "/api/training-metrics",
-            get(polyfish::training_api::api_training_metrics),
-        )
-        .route(
-            "/api/moves-by-turn",
-            get(polyfish::training_api::api_moves_by_turn),
-        )
-        .route(
-            "/api/value-distribution",
-            get(polyfish::training_api::api_value_distribution),
-        )
-        .nest_service("/", ServeDir::new("../src/public"))
+        .route("/system/cpu", get(get_cpu_usage))
+        .fallback(spa_fallback)
+        .nest_service("/assets", ServeDir::new("../src/public/assets"))
+        .nest_service("/static", ServeDir::new("../src/public"))
         .layer(CorsLayer::permissive())
         .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 50))
         .with_state(shared_state);
@@ -651,8 +644,8 @@ async fn trigger_training(State(state): State<Arc<AppState>>) -> Json<Value> {
         Err(e) => return Json(serde_json::json!({ "status": "error", "message": e.to_string() })),
     };
 
-    let child = Command::new("cargo")
-        .args(["run", "--bin", "self_play", "--release"])
+    let child = Command::new("bash")
+        .args(["run_training_loop.sh", "-n"])
         .current_dir(".")
         .stdout(Stdio::from(log_file.try_clone().unwrap()))
         .stderr(Stdio::from(log_file))
@@ -680,7 +673,7 @@ async fn get_training_status(State(state): State<Arc<AppState>>) -> Json<Value> 
     use std::fs;
     use std::process::Command;
 
-    let pid_opt = *state.training_status.lock().unwrap();
+    let mut pid_opt = *state.training_status.lock().unwrap();
     let mut is_running = false;
 
     if let Some(pid) = pid_opt {
@@ -689,6 +682,25 @@ async fn get_training_status(State(state): State<Arc<AppState>>) -> Json<Value> 
 
         if let Ok(out) = output {
             is_running = out.status.success();
+        }
+    }
+
+    // If not running via internal state, check PID file written by run_training_loop.sh
+    if !is_running {
+        if let Ok(pid_str) = fs::read_to_string(".training.pid") {
+            if let Ok(parsed_pid) = pid_str.trim().parse::<u32>() {
+                // Verify the PID is actually alive
+                let alive = Command::new("ps").arg("-p").arg(parsed_pid.to_string()).output()
+                    .map(|out| out.status.success()).unwrap_or(false);
+                if alive {
+                    is_running = true;
+                    pid_opt = Some(parsed_pid);
+                    *state.training_status.lock().unwrap() = Some(parsed_pid);
+                } else {
+                    // Stale PID file — process died, clean up
+                    let _ = fs::remove_file(".training.pid");
+                }
+            }
         }
     }
 
@@ -706,6 +718,91 @@ async fn get_training_status(State(state): State<Arc<AppState>>) -> Json<Value> 
         "pid": pid_opt,
         "log": last_lines
     }))
+}
+
+async fn halt_training(State(state): State<Arc<AppState>>) -> Json<Value> {
+    use std::process::Command;
+
+    let pid_opt = *state.training_status.lock().unwrap();
+    if let Some(pid) = pid_opt {
+        // Kill child processes first to avoid orphans (like python train.py)
+        let _ = Command::new("pkill").arg("-P").arg(pid.to_string()).output();
+        // Kill the parent bash script
+        let _ = Command::new("kill").arg("-9").arg(pid.to_string()).output();
+        
+        let mut status = state.training_status.lock().unwrap();
+        *status = None;
+
+        return Json(serde_json::json!({ "status": "success", "message": format!("Halted PID {}", pid) }));
+    }
+    Json(serde_json::json!({ "status": "error", "message": "No training process active" }))
+}
+
+async fn set_config(Json(payload): Json<Value>) -> Json<Value> {
+    if std::fs::write("config.json", serde_json::to_string_pretty(&payload).unwrap_or_default()).is_ok() {
+        return Json(serde_json::json!({ "status": "success", "config": payload }));
+    }
+    Json(serde_json::json!({ "status": "error", "message": "Failed to set config" }))
+}
+
+async fn get_config() -> Json<Value> {
+    if let Ok(content) = std::fs::read_to_string("config.json") {
+        if let Ok(json) = serde_json::from_str::<Value>(&content) {
+            return Json(json);
+        }
+    }
+    Json(serde_json::json!({ "cores": 12, "tribes": ["Imperius", "Imperius"] }))
+}
+
+async fn get_metrics() -> Json<Value> {
+    use std::fs::File;
+    use std::io::{BufRead, BufReader};
+    
+    let mut metrics = Vec::new();
+    if let Ok(file) = File::open("training_log.csv") {
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines().flatten();
+        
+        let header_line = lines.next().unwrap_or_default();
+        let headers: Vec<&str> = header_line.split(',').collect();
+        
+        for line in lines {
+            let parts: Vec<&str> = line.split(',').collect();
+            
+            let get_idx = |name: &str| -> Option<usize> {
+                headers.iter().position(|&h| h == name)
+            };
+            
+            let parse_f32 = |name: &str| -> f32 {
+                get_idx(name).and_then(|i| parts.get(i)).and_then(|s| s.parse().ok()).unwrap_or(0.0)
+            };
+
+            let obj = serde_json::json!({
+                "iteration": get_idx("iteration").and_then(|i| parts.get(i)).and_then(|s| s.parse::<u32>().ok()).unwrap_or(0),
+                "timestamp": get_idx("iter_started_at").and_then(|i| parts.get(i)).unwrap_or(&""),
+                "avg_score": parse_f32("avg_score"),
+                "max_score": parse_f32("max_score"),
+                "p1_avg": parse_f32("p1_avg"),
+                "p2_avg": parse_f32("p2_avg"),
+                "loss": parse_f32("loss"),
+                "avg_captures": parse_f32("avg_captures"),
+                "avg_harvests": parse_f32("avg_harvests"),
+                "avg_builds": parse_f32("avg_builds"),
+                "avg_research": parse_f32("avg_research"),
+                "avg_attacks": parse_f32("avg_attacks"),
+                "avg_ability": parse_f32("avg_ability"),
+                "avg_steps": parse_f32("avg_moves"),
+            });
+            metrics.push(obj);
+        }
+    }
+    
+    let len = metrics.len();
+    if len > 100 {
+        metrics = metrics.into_iter().skip(len - 100).collect();
+    }
+    
+    Json(serde_json::json!({ "metrics": metrics }))
 }
 
 async fn simulate_explorer(
@@ -962,7 +1059,7 @@ fn sanitize_storage_key(name: &str) -> String {
     let mut result = String::new();
     let mut last_was_dash = false;
     for c in name.chars() {
-        if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+        if c.is_ascii_alphanumeric() || c == '_' {
             result.push(c.to_ascii_lowercase());
             last_was_dash = false;
         } else {
@@ -1264,56 +1361,40 @@ async fn load_replay_endpoint(
     };
 
     match std::fs::read_to_string(&path) {
-        Ok(json) => {
-            // Replays may be either a bare GameState or a wrapped
-            // { "gameState": {...}, "turns": [...] } payload (the format the
-            // mod writes). Unwrap the inner gameState so both shapes load, and
-            // surface the top-level turns array so the frontend can step
-            // through the full recorded game even when gameState.history is
-            // empty (which is the case for mod-format replays).
-            let val: Value = serde_json::from_str(&json).unwrap_or(Value::Null);
-            let (state_val, turns) = if val["gameState"].is_object() {
-                (val["gameState"].clone(), val["turns"].clone())
-            } else {
-                (val, Value::Null)
-            };
+        Ok(json) => match serde_json::from_str::<polyfish::states::GameState>(&json) {
+            Ok(loaded_state) => {
+                game.state = loaded_state;
+                game.post_load();
 
-            match serde_json::from_value::<polyfish::states::GameState>(state_val) {
-                Ok(loaded_state) => {
-                    game.state = loaded_state;
-                    game.post_load();
+                let mut tiles: Vec<_> = game.state.tiles.values().collect();
+                tiles.sort_by_key(|t| t.coords.idx);
 
-                    let mut tiles: Vec<_> = game.state.tiles.values().collect();
-                    tiles.sort_by_key(|t| t.coords.idx);
+                let legal_moves: Vec<_> =
+                    game.legal_moves().iter().map(|m| m.serialize()).collect();
 
-                    let legal_moves: Vec<_> =
-                        game.legal_moves().iter().map(|m| m.serialize()).collect();
+                let evaluation = build_evaluation_json(&game.state);
 
-                    let evaluation = build_evaluation_json(&game.state);
-
-                    Json(serde_json::json!({
-                        "status": "success",
-                        "filename": path,
-                        "turns": turns,
-                        "state": {
-                            "settings": game.state.settings,
-                            "tiles": tiles,
-                            "structures": game.state.structures,
-                            "resources": game.state.resources,
-                            "tribes": tribes_json_with_max_health(&game.state),
-                            "_prediction": game.state._prediction,
-                            "_messages": game.state._messages,
-                            "history": game.state._history,
-                        },
-                        "legalMoves": legal_moves,
-                        "evaluation": evaluation
-                    }))
-                }
-                Err(e) => Json(
-                    serde_json::json!({ "status": "error", "message": format!("Failed to parse replay: {}", e) }),
-                ),
+                Json(serde_json::json!({
+                    "status": "success",
+                    "filename": path,
+                    "state": {
+                        "settings": game.state.settings,
+                        "tiles": tiles,
+                        "structures": game.state.structures,
+                        "resources": game.state.resources,
+                        "tribes": tribes_json_with_max_health(&game.state),
+                        "_prediction": game.state._prediction,
+                        "_messages": game.state._messages,
+                        "history": game.state._history,
+                    },
+                    "legalMoves": legal_moves,
+                    "evaluation": evaluation
+                }))
             }
-        }
+            Err(e) => Json(
+                serde_json::json!({ "status": "error", "message": format!("Failed to parse replay: {}", e) }),
+            ),
+        },
         Err(e) => Json(
             serde_json::json!({ "status": "error", "message": format!("Failed to read replay file: {}", e) }),
         ),
@@ -1497,110 +1578,88 @@ async fn analyze_replay_step(
     State(state): State<Arc<AppState>>,
     Json(params): Json<AnalyzeReplayParams>,
 ) -> Json<Value> {
-    // 1. Load the replay file. Supports both bare GameState and wrapped
-    //    { gameState, turns } replays (the format the mod writes). For wrapped
-    //    replays, gameState.history is empty and the move list lives in the
-    //    top-level turns array, so we flatten it into a synthetic history.
+    if !state.network.is_some() {
+        return Json(serde_json::json!({
+            "status": "error",
+            "message": "No trained network available"
+        }));
+    }
+
+    // 1. Load the replay file to get initial seed and history
     let path = if params.filename.starts_with("replays/") {
         params.filename.clone()
     } else {
         format!("replays/{}", params.filename)
     };
 
-    let (replay_state, turns_val): (polyfish::states::GameState, Value) =
-        match std::fs::read_to_string(&path) {
-            Ok(json) => {
-                let val: Value = serde_json::from_str(&json).unwrap_or(Value::Null);
-                let (state_val, turns) = if val["gameState"].is_object() {
-                    (val["gameState"].clone(), val["turns"].clone())
-                } else {
-                    (val, Value::Null)
-                };
-                let state = serde_json::from_value(state_val).unwrap_or_default();
-                (state, turns)
-            }
-            Err(e) => {
-                return Json(serde_json::json!({ "error": format!("Failed to load replay: {}", e) }));
-            }
-        };
-
-    // Build a flat, play-ordered move history. Prefer the engine's recorded
-    // _history; fall back to flattening turns[].players[].commands[] (ordered
-    // by turn, then playerId) for mod-format replays.
-    let mut history: Vec<Value> = replay_state._history.iter().cloned().collect();
-    let mut from_turns = false;
-    if history.is_empty() {
-        from_turns = true;
-        if let Some(turns) = turns_val.as_array() {
-            for turn in turns {
-                let mut players = turn["players"]
-                    .as_array()
-                    .cloned()
-                    .unwrap_or_default();
-                players.sort_by_key(|p| p["playerId"].as_i64().unwrap_or(0));
-                for player in players {
-                    if let Some(cmds) = player["commands"].as_array() {
-                        for cmd in cmds {
-                            history.push(cmd.clone());
-                        }
-                    }
-                }
-            }
+    let replay_state: polyfish::states::GameState = match std::fs::read_to_string(&path) {
+        Ok(json) => serde_json::from_str(&json).unwrap_or_default(),
+        Err(e) => {
+            return Json(serde_json::json!({ "error": format!("Failed to load replay: {}", e) }));
         }
-    }
+    };
 
-    if params.step_index > history.len() {
+    if replay_state._history.len() <= params.step_index {
         return Json(serde_json::json!({ "error": "Step index out of bounds" }));
     }
 
-    // 2. Build the turn-0 game state. For engine-format replays (non-empty
-    //    _history) the loaded state is the FINAL state, so we regenerate the
-    //    initial board from initial_seed. For mod-format replays (history
-    //    flattened from `turns`) the loaded gameState IS the turn-0 state
-    //    (initialSeed is typically 0, so regeneration would desync), so we
-    //    use it directly.
-    let mut game = Game::new();
-    if from_turns {
-        game.state = replay_state.clone();
-        game.post_load();
-    } else {
-        let mut map_settings = MapGenSettings::default();
-        map_settings.size = match replay_state.settings.size {
-            11 => polyfish::types::MapSize::Tiny,
-            13 => polyfish::types::MapSize::Small,
-            16 => polyfish::types::MapSize::Normal,
-            24 => polyfish::types::MapSize::Large,
-            32 => polyfish::types::MapSize::Huge,
-            90 => polyfish::types::MapSize::Massive,
-            _ => polyfish::types::MapSize::Normal,
-        };
-        map_settings.seed = replay_state.initial_seed;
-        map_settings.map_type = replay_state.settings.map_type;
+    // 2. Initialize a FRESH game with the SAME seed
+    let mut map_settings = MapGenSettings::default();
+    map_settings.size = match replay_state.settings.size {
+        11 => polyfish::types::MapSize::Tiny,
+        13 => polyfish::types::MapSize::Small,
+        16 => polyfish::types::MapSize::Normal,
+        24 => polyfish::types::MapSize::Large,
+        32 => polyfish::types::MapSize::Huge,
+        90 => polyfish::types::MapSize::Massive,
+        _ => polyfish::types::MapSize::Normal,
+    };
+    map_settings.seed = replay_state.initial_seed;
+    map_settings.map_type = replay_state.settings.map_type;
 
-        // Extract unique tribe types from replay_state.tribes
-        let mut tribes = Vec::new();
-        let mut sorted_tribes: Vec<_> = replay_state.tribes.values().collect();
-        sorted_tribes.sort_by_key(|t| t.id);
-        for t in sorted_tribes {
-            tribes.push(t.tribe_type);
-        }
-        map_settings.tribes = tribes;
-
-        let initial_state = generate(map_settings);
-        game.state = initial_state;
-        game.state.initial_seed = replay_state.initial_seed;
-        game.post_load();
+    // Need to extract tribes from replay settings or state?
+    // GameSettings doesn't store the tribe list directly as TribeType enum vec, but state.tribes does
+    // Extract unique tribe types from replay_state.tribes
+    let mut tribes = Vec::new();
+    // Sort by ID to ensure consistent order if that matters
+    let mut sorted_tribes: Vec<_> = replay_state.tribes.values().collect();
+    sorted_tribes.sort_by_key(|t| t.id);
+    for t in sorted_tribes {
+        tribes.push(t.tribe_type);
     }
+    map_settings.tribes = tribes;
 
-    // 3. Replay moves 0..step_index so the board reflects the state *before*
-    //    the move at step_index is played (or the final state when step_index
-    //    == history.len()).
-    for i in 0..params.step_index.min(history.len()) {
-        let move_json = &history[i];
+    let initial_state = generate(map_settings);
+    let mut game = Game::new();
+    game.state = initial_state;
+    // Restore initial seed again just in case generate() didn't set it (it should have used it)
+    game.state.initial_seed = replay_state.initial_seed;
+    game.post_load();
 
-        // Find the legal move whose serialized form matches the recorded JSON.
+    // 3. Replay moves up to step_index (exclusive? or inclusive? let's say we want to analyze the state BEFORE turn step_index is played)
+    // Wait, if we want to compare "User Move vs AI Move", we need the state *before* the user made the move at step_index.
+    // So we replay moves 0 to step_index - 1.
+
+    for i in 0..params.step_index {
+        if i >= replay_state._history.len() {
+            break;
+        }
+
+        let move_json = &replay_state._history[i];
+
+        // We need to parse this JSON back into a Box<dyn Move>
+        // Use a matching logic similar to manual_step... logic duplication is confusing.
+        // Better way: Implement Game::deserialize_move?
+        // For now, let's copy the deserialization logic or create a helper.
+        // Actually, since we only need to play it, we can identify it from legal moves if it matches?
+        // But some moves (like Build) have parameters that legal_moves might not fully capture if they are identical?
+        // Actually, `legal_moves` generates all distinct moves. We can find the one that matches the JSON.
+
+        // Find matching move in legal moves
         let legal = game.legal_moves();
         let mut found = false;
+
+        // serialized form comparison
         for m in legal {
             if m.serialize() == *move_json {
                 game.play_move(m.as_ref());
@@ -1616,50 +1675,38 @@ async fn analyze_replay_step(
         }
     }
 
-    // 4. User's actual move at this step (None when viewing the final state).
-    let user_move_json = if params.step_index < history.len() {
-        Some(history[params.step_index].clone())
-    } else {
-        None
-    };
+    // 4. Now game is at the state just before the user played history[step_index]
+    // Run MCTS analysis
+    use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
+    use polyfish::ai::mcts_zero::ZeroMctsAgent;
+    let evaluator = Evaluator::Inline(InlineEvalHandle::new(state.network.as_ref().unwrap().clone()));
+    let agent = ZeroMctsAgent::new(&evaluator, params.iterations);
+    let (best_move, mcts_analysis) = agent.select_move_with_stats(&mut game);
+
+    let ai_move_json = best_move.as_ref().map(|m: &Box<dyn polyfish::moves::Move>| m.serialize());
+    let ai_move_desc = best_move
+        .as_ref()
+        .map(|m: &Box<dyn polyfish::moves::Move>| m.describe(&game.state))
+        .unwrap_or("None".to_string());
+
+    // User's actual move
+    let user_move_json = &replay_state._history[params.step_index];
+    // Find desc for user move
+    let legal = game.legal_moves();
     let mut user_move_desc = "Unknown Move".to_string();
-    if let Some(ref um) = user_move_json {
-        let legal = game.legal_moves();
-        for m in legal {
-            if m.serialize() == *um {
-                user_move_desc = m.describe(&game.state);
-                break;
-            }
+    for m in legal {
+        if m.serialize() == *user_move_json {
+            user_move_desc = m.describe(&game.state);
+            break;
         }
     }
 
-    // 5. Optional AI analysis. The board-state replay above does NOT require a
-    //    network, so stepping works even before a model is loaded. The AI-move
-    //    suggestion is only produced when a trained network is available.
-    let mut ai_move_json: Option<Value> = None;
-    let mut ai_move_desc = "None".to_string();
-    let mut mcts_analysis: Value = serde_json::json!({});
-    if let Some(net) = &state.network {
-        use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
-        use polyfish::ai::mcts_zero::ZeroMctsAgent;
-        let evaluator = Evaluator::Inline(InlineEvalHandle::new(net.clone()));
-        let agent = ZeroMctsAgent::new(&evaluator, params.iterations);
-        let (best_move, analysis) = agent.select_move_with_stats(&mut game);
-        ai_move_json = best_move.as_ref().map(|m| m.serialize());
-        ai_move_desc = best_move
-            .as_ref()
-            .map(|m| m.describe(&game.state))
-            .unwrap_or_else(|| "None".to_string());
-        mcts_analysis = serde_json::to_value(analysis).unwrap_or(serde_json::json!({}));
-    }
-
-    // 6. Build state for frontend
+    // Build state for frontend
     let mut tiles: Vec<_> = game.state.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);
 
     Json(serde_json::json!({
         "stepIndex": params.step_index,
-        "totalSteps": history.len(),
         "state": {
             "settings": game.state.settings,
             "tiles": tiles,
@@ -1727,5 +1774,55 @@ mod tests {
         assert_eq!(sanitize_storage_key("UPPER_case_123"), "upper_case_123");
         assert_eq!(sanitize_storage_key(""), "");
         assert_eq!(sanitize_storage_key("!@#$%^&*()"), "");
+    }
+}
+
+async fn get_cpu_usage() -> Json<Value> {
+    fn read_cpu() -> Vec<(f64, f64)> {
+        let mut cores = Vec::new();
+        if let Ok(stat) = std::fs::read_to_string("/proc/stat") {
+            for line in stat.lines().filter(|l| l.starts_with("cpu")) {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() > 7 {
+                    let user: f64 = parts[1].parse().unwrap_or(0.0);
+                    let nice: f64 = parts[2].parse().unwrap_or(0.0);
+                    let system: f64 = parts[3].parse().unwrap_or(0.0);
+                    let idle: f64 = parts[4].parse().unwrap_or(0.0);
+                    let iowait: f64 = parts[5].parse().unwrap_or(0.0);
+                    let irq: f64 = parts[6].parse().unwrap_or(0.0);
+                    let softirq: f64 = parts[7].parse().unwrap_or(0.0);
+                    let total = user + nice + system + idle + iowait + irq + softirq;
+                    let active = total - idle - iowait;
+                    cores.push((active, total));
+                }
+            }
+        }
+        cores
+    }
+
+    let mut usages = Vec::new();
+    let stats1 = read_cpu();
+    if !stats1.is_empty() {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let stats2 = read_cpu();
+        if stats1.len() == stats2.len() {
+            for i in 0..stats1.len() {
+                let d_active = stats2[i].0 - stats1[i].0;
+                let d_total = stats2[i].1 - stats1[i].1;
+                let usage = if d_total > 0.0 { (d_active / d_total) * 100.0 } else { 0.0 };
+                usages.push(usage);
+            }
+        }
+    }
+    
+    Json(serde_json::json!({ "cores": usages }))
+}
+
+async fn spa_fallback() -> impl axum::response::IntoResponse {
+    use axum::response::IntoResponse;
+    let index_path = std::path::Path::new("../src/public/index.html");
+    match std::fs::read_to_string(index_path) {
+        Ok(html) => axum::response::Html(html).into_response(),
+        Err(_) => (axum::http::StatusCode::NOT_FOUND, "index.html not found").into_response(),
     }
 }

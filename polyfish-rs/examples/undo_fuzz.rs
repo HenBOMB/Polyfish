@@ -168,7 +168,11 @@ fn main() {
             }
             let m = &legal[rng.gen_range(0..legal.len())];
             if game.play_move(m.as_ref()).is_none() {
-                println!("REAL MOVE FAILED: seed {} move {}", seed, m.describe(&game.state));
+                println!(
+                    "REAL MOVE FAILED: seed {} move {}",
+                    seed,
+                    m.describe(&game.state)
+                );
                 break 'game;
             }
             real_moves += 1;

@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+# Write PID file for server detection, clean up on exit
+echo $$ > .training.pid
+
 # NUM_GAMES/MCTS_ITERS/ACTORS/EVAL_SERVERS match self_play CLI flags.
 # All iteration-keyed schedules (total iterations, curriculum pacing,
 # checkpoint cadence, milestone spacing, replay-buffer retention) are tuned
@@ -11,6 +14,7 @@ BASELINE_GAMES=64
 ITERATIONS=500
 NUM_GAMES=64
 export MCTS_ITERS=64
+export DETACH_VALUE_TRUNK=1
 # 128 actors measured best on an M3 Max with metal (~578 moves/s @ 128 games+).
 # Throughput scales with concurrent games; small NUM_GAMES (-g) is a real limiter, not this knob.
 # See expert_boost_throughput.md for details.
@@ -42,7 +46,7 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     PATH="$(pwd)/.venv/bin:$PATH" cargo build --bin polyfish --bin self_play --release --features metal,accelerate,tch-eval,metal-eval
     # The tch-linked binary has no rpath for libtorch; point dyld at the venv's torch dylibs
     export DYLD_LIBRARY_PATH="$(.venv/bin/python3 -c "import torch, os; print(os.path.join(os.path.dirname(torch.__file__), 'lib'))")${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
-elif command -v nvidia-smi &> /dev/null; then
+elif false; then
     # CUDA available (Linux/Windows with NVIDIA GPU)
     echo "Building with CUDA support..."
     # --no-default-features: opt out of the macOS `metal` default, which does
@@ -194,7 +198,16 @@ RUN_STARTED_AT=$(echo "$RUN_INFO" | .venv/bin/python3 -c "import sys,json; print
 START_ITER=$(echo "$RUN_INFO" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin)['start_iter'])")
 echo "Training run_id=$RUN_ID started_at=$RUN_STARTED_AT starting at iteration $START_ITER"
 
-trap '.venv/bin/python3 training_log.py finish-run 2>/dev/null || true' EXIT
+# Set up config.json sync if not present
+if [ ! -f "config.json" ]; then
+    echo "{\"gamemode\": 2, \"iterations\": $MCTS_ITERS, \"cores\": 2, \"tribes\": [\"Imperius\", \"Bardur\", \"Oumaji\", \"Kickoo\", \"XinXi\"]}" > config.json
+fi
+
+echo "Starting backend server in background..."
+./target/release/polyfish &
+SERVER_PID=$!
+
+trap '.venv/bin/python3 training_log.py finish-run 2>/dev/null || true; kill $SERVER_PID 2>/dev/null; rm -f .training.pid' EXIT
 
 # Portable replacement for GNU `shuf` (not present on stock macOS)
 portable_shuf() {
@@ -241,15 +254,20 @@ do
     MATCH_TYPE="selfplay"
 
     if [ "$LEAGUE_INTERVAL" -gt 0 ] && [ $((i % LEAGUE_INTERVAL)) -eq 0 ] && [ -d "checkpoints" ] && [ "$(ls -A checkpoints)" ]; then
-        # SMART LEAGUE SELECTION: 50% chance 'Fresh' (latest), 50% chance 'Historical' (diverse)
+        # HISTORICAL-ONLY league selection: the latest checkpoint is ~the
+        # current net, so playing it is mirror play with extra steps and
+        # breaks no symmetry. Prefer genuinely old checkpoints; fall back to
+        # anything that isn't the newest one.
         ALL_CPS=$(ls -t checkpoints/model_checkpoint_iter*.safetensors 2>/dev/null || true)
-        FRESH_CPS=$(echo "$ALL_CPS" | head -n 5)
         HIST_CPS=$(echo "$ALL_CPS" | tail -n +6)
-        
-        if [ -n "$HIST_CPS" ] && [ $((RANDOM % 2)) -eq 0 ]; then
+        NON_LATEST_CPS=$(echo "$ALL_CPS" | tail -n +2)
+
+        if [ -n "$HIST_CPS" ]; then
              SELECTED_CP=$(echo "$HIST_CPS" | portable_shuf 1)
+        elif [ -n "$NON_LATEST_CPS" ]; then
+             SELECTED_CP=$(echo "$NON_LATEST_CPS" | portable_shuf 1)
         else
-             SELECTED_CP=$(echo "$FRESH_CPS" | portable_shuf 1)
+             SELECTED_CP=""
         fi
 
         if [ -n "$SELECTED_CP" ]; then
@@ -258,10 +276,43 @@ do
         fi
     fi
 
-    # Pick 2 random tribes for this iteration
-    TRIBE_LIST=("Imperius" "Imperius")
-    # TRIBE_LIST=("Imperius" "Bardur" "Oumaji" "Kickoo" "XinXi" "Zebasi" "AiMo" "Vengir" "Quetzali" "Hoodrick" "Yadakk")
-    # Shuffle and pick top 2 (portable, no external shuf dependency)
+    # Heuristic-anchor games (selfplay iterations only; league already has an
+    # asymmetric opponent). ANCHOR_FRAC of each iteration's games are played
+    # vs the network-free heuristic backend so passivity actually loses and
+    # the relative value label carries signal. ANCHOR_FRAC=0 disables.
+    ANCHOR_FLAG=""
+    if [ "$MATCH_TYPE" = "selfplay" ]; then
+        ANCHOR_FLAG="--anchor-frac ${ANCHOR_FRAC:-0.25}"
+    fi
+
+    # Value-head trust ramp, RUN-relative (loop iteration i, not EFF_ITER —
+    # ITER_OFFSET-shifted runs would saturate the in-binary iteration ramp
+    # immediately). Gates sigma(Q) in-tree and in exported policy targets.
+    # VALUE_TRUST_CAP env caps the ramp's destination (e.g. from calibration).
+    VALUE_TRUST=$(awk -v i="$i" -v r="${VALUE_TRUST_RAMP_ITERS:-30}" -v cap="${VALUE_TRUST_CAP:-1.0}" \
+        'BEGIN { t = i / r; if (t > 1) t = 1; t = t * cap; printf "%.3f", t }')
+
+    # Dynamically fetch parameters from config.json (set by dashboard UI)
+    if [ -f "config.json" ]; then
+        GAMEMODE=$(jq -r '.gamemode // 2' config.json)
+        MCTS_ITERS=$(jq -r '.mctsIters // 64' config.json)
+        # Parse tribes array into bash array safely
+        TRIBE_LIST=()
+        while IFS= read -r line; do
+            if [ -n "$line" ]; then
+                TRIBE_LIST+=("$line")
+            fi
+        done < <(jq -r '.tribes[]? // empty' config.json)
+    else
+        GAMEMODE=2
+    fi
+
+    # Fallback to defaults if parsing failed or file missing
+    if [ ${#TRIBE_LIST[@]} -eq 0 ]; then
+        TRIBE_LIST=("Imperius" "Imperius")
+    fi
+
+    # Shuffle and pick top 2
     SELECTED_TRIBES=($(printf "%s\n" "${TRIBE_LIST[@]}" | portable_shuf 2))
     TRIBE1=${SELECTED_TRIBES[0]}
     TRIBE2=${SELECTED_TRIBES[1]}
@@ -276,7 +327,7 @@ do
     EFF_ITER=$((EFF_ITER + ${ITER_OFFSET:-0}))
 
     SP_LOG=$(mktemp)
-    ./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" | tee "$SP_LOG"
+    ./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG $ANCHOR_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
     SP_STATUS=${PIPESTATUS[0]}
     rm -f "$SP_LOG"
     if [ "$SP_STATUS" -ne 0 ]; then

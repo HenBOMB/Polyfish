@@ -19,26 +19,34 @@ polyfish-rs/checkpoints/
 
 archive/
 .*/
-
-# Training loop sidecar metrics (written by self_play / train.py)
-polyfish-rs/.last_self_play_metrics.json
-polyfish-rs/.last_train_metrics.json
+!.github/
 
 commit.sh
 
-obj/
+/obj/
 
-bin/
+/bin/
 
 decompiled/*
 
 .env
 
 games_*.safetensors
+polyfish-rs/config.json
 
-model_backup_*.safetensors
+# Runtime logs & artifacts
+polyfish-rs/session.log
+polyfish-rs/session.old.log
+polyfish-rs/old_sessions/
+polyfish-rs/test_output.txt
+polyfish-rs/training.poly.log
+polyfish-rs/server_restart.log
+polyfish-rs/replays/high_scores/
 
-polyfish-rs/replays/high_scores/*
-session.log
-value_distribution.json
-moves_by_turn.json
+# Binary model weights (use releases/LFS for these)
+polyfish-rs/model.safetensors
+polyfish-rs/.training.pid
+
+# Telemetry JSON
+polyfish-rs/.*.json
+polyfish-rs/*.json

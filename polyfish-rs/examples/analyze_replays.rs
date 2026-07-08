@@ -89,7 +89,16 @@ fn main() {
     for file in &files {
         let short = file.rsplit('/').next().unwrap_or(file).to_string();
         let raw = std::fs::read_to_string(file).expect("read replay");
-        let replay: ModReplay = serde_json::from_str(&raw).expect("parse replay");
+        let mut replay: ModReplay = serde_json::from_str(&raw).expect("parse replay");
+
+        if !replay.turns.is_empty()
+            && !replay.turns[0].players.is_empty()
+            && replay.turns[0].players[0].commands.len() >= 2
+        {
+            replay.turns[0].players[0].commands.remove(0); // -1 start match command
+            replay.turns[0].players[0].commands.remove(0); // first forced auto played move
+        }
+
 
         let mut game = Game::new();
         game.state = replay.game_state.clone();

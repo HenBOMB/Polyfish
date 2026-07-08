@@ -71,11 +71,19 @@ pub struct GumbelMctsAgent<'a> {
     // High in the beginning to bootstrap the network but decays over time.
     pub prior_heuristic_weight: f32,
     /// Weight β on σ(completed-Q) in the exported policy TARGET π' =
-    /// softmax(logit + β·σ(Q)). In-search selection always uses full σ(Q);
-    /// this only gates how much search re-ranking flows into training
-    /// targets — ramp it up as the value head earns trust. 1.0 = paper
-    /// behavior; 0.0 = distill the (blended) prior unchanged.
+    /// softmax(logit + β·σ(Q)). This gates how much search re-ranking flows
+    /// into training targets — ramp it up as the value head earns trust.
+    /// 1.0 = paper behavior; 0.0 = distill the (blended) prior unchanged.
     pub policy_target_q_weight: f32,
+    /// Weight β_tree on σ(completed-Q) inside the search itself: interior
+    /// selection, the Sequential-Halving re-rank, and the final root
+    /// recommendation. min-max rescale normalizes whatever Q spread exists —
+    /// signal or noise — to full amplitude (~(C_VISIT+maxvisit)·C_SCALE ≈ 5-6
+    /// logits at 64 sims), so an untrusted value head injects ~6 logits of
+    /// noise into every selection step and can destroy a correct prior read
+    /// (see notes.md, decision-trace section). At 0.0 search degenerates to
+    /// prior+gumbel sampling (BC-anchored behavior); 1.0 = paper behavior.
+    pub tree_q_weight: f32,
     /// Diagnostic capture for the next search, armed via `arm_trace`. `None`
     /// (the default) costs one `RefCell` borrow-check per call site and
     /// nothing else — see decision_trace.rs.
@@ -93,6 +101,7 @@ pub struct GumbelMctsAgent<'a> {
 struct GumbelNode {
     visits: f32,
     value_sum: f32,
+    progress_sum: f32,
     logit: f32,
     /// Gumbel(0,1) noise sampled at the root. `0.0` for non-root nodes.
     gumbel: f32,
@@ -105,6 +114,7 @@ struct GumbelNode {
     /// visited by this or a prior search. Survives re-root (kept out of
     /// `reset_stats_recursive`) like `own_value`/`logit`.
     edge_reward: Cell<Option<f32>>,
+    own_progress: f32,
     children: Vec<GumbelNode>,
     move_to_here: Option<Box<dyn Move>>,
     is_expanded: bool,
@@ -120,10 +130,12 @@ impl GumbelNode {
         Self {
             visits: 0.0,
             value_sum: 0.0,
+            progress_sum: 0.0,
             logit,
             gumbel,
             own_value: 0.0,
             edge_reward: Cell::new(None),
+            own_progress: 0.0,
             children: Vec::new(),
             move_to_here,
             is_expanded: false,
@@ -133,11 +145,12 @@ impl GumbelNode {
     }
 
     fn q_value(&self) -> f32 {
-        if self.visits == 0.0 {
+        let q = if self.visits == 0.0 {
             0.0
         } else {
             self.value_sum / self.visits
-        }
+        };
+        q + self.own_progress
     }
 
     fn effective_visits(&self) -> f32 {
@@ -195,6 +208,7 @@ impl<'a> GumbelMctsAgent<'a> {
             tree_reuses: 0,
             prior_heuristic_weight: 0.0,
             policy_target_q_weight: 1.0,
+            tree_q_weight: 1.0,
             trace: RefCell::new(None),
             last_root_value: None,
         }
@@ -351,7 +365,7 @@ impl<'a> GumbelMctsAgent<'a> {
         let tiebreak = root
             .children
             .get(best_idx)
-            .map(|c| c.gumbel + child_priors[best_idx] + sigma_q[best_idx])
+            .map(|c| c.gumbel + child_priors[best_idx] + self.tree_q_weight * sigma_q[best_idx])
             .unwrap_or(0.0);
         trace.chosen = Some((mode, best_idx, tiebreak));
     }
@@ -455,13 +469,14 @@ impl<'a> GumbelMctsAgent<'a> {
     /// fresh Gumbel draws, build `in_cut`, and run Sequential Halving.
     fn build_fresh_root(&self, game: &mut Game, features: RawFeatures, start_turn: i32) -> GumbelNode {
         let results = self.evaluator.evaluate(vec![features]);
-        let (root_value, ref policy_row) = results[0];
+        let (root_value, root_progress, ref policy_row) = results[0];
 
         let mut legal_moves = game.legal_moves();
         let map_size = game.state.settings.size as usize;
 
         let mut root = GumbelNode::new(0.0, 0.0, None);
         root.own_value = root_value;
+        root.own_progress = root_progress;
         root.is_expanded = true;
 
         if legal_moves.is_empty() {
@@ -582,7 +597,8 @@ impl<'a> GumbelMctsAgent<'a> {
 
     /// sigma(completed-Q) over the candidates referenced by `child_indices`,
     /// returned as a `Vec<f32>` aligned with `child_indices` (i.e. entry `pos`
-    /// corresponds to `root.children[child_indices[pos]]`).
+    /// corresponds to `root.children[child_indices[pos]]`), scaled by
+    /// `tree_q_weight` so trust-gating applies to every selection consumer.
     fn sigma_q_for(&self, root: &GumbelNode, child_indices: &[usize]) -> Vec<f32> {
         let q: Vec<f32> = child_indices.iter().map(|&i| root.children[i].q_value()).collect();
         let visits: Vec<f32> = child_indices
@@ -593,7 +609,12 @@ impl<'a> GumbelMctsAgent<'a> {
             .iter()
             .map(|&i| root.children[i].logit)
             .collect();
-        gumbel_qtransform::sigma_completed_q(root.own_value, &priors, &q, &visits, true)
+        let mut sq =
+            gumbel_qtransform::sigma_completed_q(root.own_value, &priors, &q, &visits, true);
+        for s in &mut sq {
+            *s *= self.tree_q_weight;
+        }
+        sq
     }
 
     /// Run one Sequential-Halving round: give each of the first
@@ -659,7 +680,7 @@ impl<'a> GumbelMctsAgent<'a> {
             total_collected += leaves.len();
 
             let values = self.batched_evaluate_and_expand(root, &leaves);
-            for (leaf, &value) in leaves.iter().zip(values.iter()) {
+            for (leaf, &(value, _progress)) in leaves.iter().zip(values.iter()) {
                 backpropagate_return_with_rewards(
                     root,
                     &leaf.data.path_indices,
@@ -821,7 +842,7 @@ impl<'a> GumbelMctsAgent<'a> {
         let combined: Vec<f32> = child_priors
             .iter()
             .zip(&sigma_q)
-            .map(|(l, s)| l + s)
+            .map(|(l, s)| l + self.tree_q_weight * s)
             .collect();
         let probs = softmax(&combined);
         let sum_visits: f32 = child_visits.iter().sum();
@@ -839,14 +860,14 @@ impl<'a> GumbelMctsAgent<'a> {
         &self,
         root: &mut GumbelNode,
         leaves: &[GumbelLeaf],
-    ) -> Vec<f32> {
-        let mut values = vec![0.0f32; leaves.len()];
+    ) -> Vec<(f32, f32)> {
+        let mut values = vec![(0.0f32, 0.0f32); leaves.len()];
         let mut indices_needing_eval: Vec<usize> = Vec::new();
         let mut eval_batch: Vec<RawFeatures> = Vec::new();
 
         for (i, leaf) in leaves.iter().enumerate() {
             if let Some(tv) = leaf.data.terminal_value {
-                values[i] = tv;
+                values[i] = (tv, 0.0); // Progress is 0.0 at terminal state
             } else if let Some(ref feat) = leaf.data.features {
                 indices_needing_eval.push(i);
                 eval_batch.push(RawFeatures {
@@ -860,8 +881,8 @@ impl<'a> GumbelMctsAgent<'a> {
             let results = self.evaluator.evaluate(eval_batch);
 
             for (local_idx, &global_idx) in indices_needing_eval.iter().enumerate() {
-                let (value, ref policy_row) = results[local_idx];
-                values[global_idx] = value;
+                let (value, progress, ref policy_row) = results[local_idx];
+                values[global_idx] = (value, progress);
 
                 let leaf = &leaves[global_idx];
                 let node = get_node_by_path_mut(root, &leaf.data.path_indices)
@@ -874,6 +895,7 @@ impl<'a> GumbelMctsAgent<'a> {
                     leaf.data.map_size,
                     policy_row,
                     value,
+                    progress,
                     leaf.data.heuristic_scores.as_deref(),
                 );
             }
@@ -895,12 +917,14 @@ impl<'a> GumbelMctsAgent<'a> {
         map_size: usize,
         policy: &RawPolicyOutput,
         own_value: f32,
+        own_progress: f32,
         heuristic_scores: Option<&[f32]>,
     ) {
         if node.is_expanded {
             return;
         }
         node.own_value = own_value;
+        node.own_progress = own_progress;
 
         if legal_moves.is_empty() {
             node.is_expanded = true;
@@ -947,8 +971,8 @@ impl<'a> GumbelMctsAgent<'a> {
             .enumerate()
             .filter(|(_, c)| (c.visits - max_visit).abs() < 0.5)
             .max_by(|(a, ca), (b, cb)| {
-                let sa = ca.gumbel + child_priors[*a] + sigma_q[*a];
-                let sb = cb.gumbel + child_priors[*b] + sigma_q[*b];
+                let sa = ca.gumbel + child_priors[*a] + self.tree_q_weight * sigma_q[*a];
+                let sb = cb.gumbel + child_priors[*b] + self.tree_q_weight * sigma_q[*b];
                 sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
             })
             .map(|(i, _)| i)
