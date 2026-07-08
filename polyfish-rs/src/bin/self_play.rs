@@ -322,6 +322,7 @@ fn play_single_game(
     seed: i64,
     tribes: Vec<TribeType>,
     iteration: usize,
+    gamemode: u8,
     backend1: SearchBackend,
     backend2: SearchBackend,
     value_trust: Option<f32>,
@@ -360,7 +361,7 @@ fn play_single_game(
 
     let mut game = Game::new();
     game.state = polyfish::mapgen::generate(gen_settings);
-    game.state.settings.mode = polyfish::types::ModeType::Perfection;
+    game.state.settings.mode = polyfish::types::ModeType::from_repr(gamemode).unwrap_or(polyfish::types::ModeType::Perfection);
     game.state.settings.max_turns = max_turns;
     game.post_load();
 
@@ -764,6 +765,9 @@ fn main() -> anyhow::Result<()> {
     #[derive(Parser, Debug)]
     #[command(author, version, about, long_about = None)]
     struct Args {
+        #[arg(long, default_value_t = 2)]
+        gamemode: u8,
+
         /// Number of games to play
         #[arg(long, default_value_t = 10)]
         num_games: usize,
@@ -1314,6 +1318,7 @@ fn main() -> anyhow::Result<()> {
                             seed,
                             game_tribes,
                             args.iteration,
+                            args.gamemode,
                             backend_seat1,
                             backend_seat2,
                             args.value_trust,

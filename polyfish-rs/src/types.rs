@@ -7,7 +7,7 @@
 use serde_repr::{Deserialize_repr, Serialize_repr};
 
 /// Game mode types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize_repr, Deserialize_repr)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize_repr, Deserialize_repr, strum_macros::FromRepr)]
 #[repr(u8)]
 pub enum ModeType {
     None = 0,
