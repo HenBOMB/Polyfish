@@ -294,7 +294,7 @@ do
     # Dynamically fetch parameters from config.json (set by dashboard UI)
     if [ -f "config.json" ]; then
         GAMEMODE=$(jq -r '.gamemode // 2' config.json)
-        MCTS_ITERS=$(jq -r '.iterations // 64' config.json)
+        MCTS_ITERS=$(jq -r '.mctsIters // 64' config.json)
         # Parse tribes array into bash array safely
         TRIBE_LIST=()
         while IFS= read -r line; do

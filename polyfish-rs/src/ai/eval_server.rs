@@ -1183,20 +1183,20 @@ mod tests {
         for i in 0..2 {
             assert!((inline_results[i].0 - server_results[i].0).abs() < 1e-6);
             assert_eq!(
-                inline_results[i].1.action_type,
-                server_results[i].1.action_type
+                inline_results[i].2.action_type,
+                server_results[i].2.action_type
             );
             assert_eq!(
-                inline_results[i].1.source_spatial,
-                server_results[i].1.source_spatial
+                inline_results[i].2.source_spatial,
+                server_results[i].2.source_spatial
             );
             assert_eq!(
-                inline_results[i].1.target_spatial,
-                server_results[i].1.target_spatial
+                inline_results[i].2.target_spatial,
+                server_results[i].2.target_spatial
             );
             assert_eq!(
-                inline_results[i].1.move_option,
-                server_results[i].1.move_option
+                inline_results[i].2.move_option,
+                server_results[i].2.move_option
             );
         }
     }
@@ -1258,10 +1258,10 @@ mod tests {
         let second = handle.evaluate(vec![raw(&feat)]);
         assert_eq!(second.len(), 1);
         assert!((first[0].0 - second[0].0).abs() < 1e-6);
-        assert_eq!(first[0].1.action_type, second[0].1.action_type);
-        assert_eq!(first[0].1.source_spatial, second[0].1.source_spatial);
-        assert_eq!(first[0].1.target_spatial, second[0].1.target_spatial);
-        assert_eq!(first[0].1.move_option, second[0].1.move_option);
+        assert_eq!(first[0].2.action_type, second[0].2.action_type);
+        assert_eq!(first[0].2.source_spatial, second[0].2.source_spatial);
+        assert_eq!(first[0].2.target_spatial, second[0].2.target_spatial);
+        assert_eq!(first[0].2.move_option, second[0].2.move_option);
 
         let stats = server.stats();
         let hits = stats.cache_hits.load(Ordering::Relaxed);
