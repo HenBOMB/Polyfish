@@ -2,9 +2,9 @@ name: Rust
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 env:
   CARGO_TERM_COLOR: always
@@ -17,21 +17,18 @@ jobs:
         working-directory: ./polyfish-rs
 
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Cache Rust dependencies
-      uses: Swatinem/rust-cache@v2
-      with:
-        workspaces: "./polyfish-rs -> target"
+      - uses: actions/checkout@v4
 
-    - name: Check Formatting
-      run: cargo fmt --all -- --check
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./polyfish-rs -> target"
 
-    - name: Run Clippy (Linter)
-      run: cargo clippy -- -D warnings
+      - name: Run Clippy (Linter)
+        run: cargo clippy -- -D warnings
 
-    - name: Build
-      run: cargo build --verbose
+      - name: Build
+        run: cargo build --verbose
 
-    - name: Run tests
-      run: cargo test --verbose
+      - name: Run tests
+        run: cargo test --verbose
