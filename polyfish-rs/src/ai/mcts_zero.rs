@@ -17,7 +17,7 @@ pub struct ZeroMctsAgent<'a> {
     pub virtual_loss: f32,
 }
 
-struct ZeroNode {
+pub struct ZeroNode {
     pub visits: f32,
     pub value_sum: f32,
     pub prior: f32,
@@ -29,7 +29,7 @@ struct ZeroNode {
 }
 
 impl ZeroNode {
-    fn new(prior: f32, move_to_here: Option<Box<dyn Move>>) -> Self {
+    pub fn new(prior: f32, move_to_here: Option<Box<dyn Move>>) -> Self {
         Self {
             visits: 0.0,
             value_sum: 0.0,
@@ -156,7 +156,7 @@ impl<'a> ZeroMctsAgent<'a> {
         move_or_end_turn(best_move)
     }
 
-    pub fn select_move_with_stats(&self, game: &mut Game) -> (Option<Box<dyn Move>>, Vec<f32>) {
+    pub fn select_move_with_stats(&self, game: &mut Game, mut root: ZeroNode) -> (Option<Box<dyn Move>>, Vec<f32>, ZeroNode) {
         // 1. Check Opening Book
         use crate::ai::book::Book;
         use rand::seq::SliceRandom;
@@ -169,8 +169,9 @@ impl<'a> ZeroMctsAgent<'a> {
             if let Some(book_move) = book_moves.pop() {
                 // To return correct policy vector, we must know the legal moves order.
                 // So we expand the root node once.
-                let mut root = ZeroNode::new(1.0, None);
-                self.expand_node_single(&mut root, game, false);
+                if !root.is_expanded {
+                    self.expand_node_single(&mut root, game, false);
+                }
 
                 // Find the index of the book move in the children
                 let num_children = root.children.len();
@@ -194,15 +195,16 @@ impl<'a> ZeroMctsAgent<'a> {
 
                 if let Some(idx) = found_idx {
                     policy[idx] = 1.0;
-                    return (Some(book_move), policy);
+                    return (Some(book_move), policy, ZeroNode::new(1.0, None));
                 }
                 // If not found (weird), fall through to normal MCTS
             }
         }
 
         let start_turn = game.state.settings.turn;
-        let mut root = ZeroNode::new(1.0, None);
-        self.expand_node_single(&mut root, game, false);
+        if !root.is_expanded {
+            self.expand_node_single(&mut root, game, false);
+        }
 
         let mut iteration = 0;
         while iteration < self.iterations {
@@ -238,17 +240,19 @@ impl<'a> ZeroMctsAgent<'a> {
         }
 
         // Extract best move owned
-        let best_move = if !root.children.is_empty() {
+        let (best_move, new_root) = if !root.children.is_empty() {
             if best_idx < root.children.len() {
-                root.children.swap_remove(best_idx).move_to_here
+                let mut child = root.children.swap_remove(best_idx);
+                let m = child.move_to_here.take();
+                (m, child)
             } else {
-                None
+                (None, ZeroNode::new(1.0, None))
             }
         } else {
-            None
+            (None, ZeroNode::new(1.0, None))
         };
 
-        (move_or_end_turn(best_move), policy)
+        (move_or_end_turn(best_move), policy, new_root)
     }
 
     /// Select a move and return decomposed visit information for policy training
@@ -256,36 +260,53 @@ impl<'a> ZeroMctsAgent<'a> {
     pub fn select_move_with_decomposed_visits(
         &self,
         game: &mut Game,
-    ) -> (Option<Box<dyn Move>>, Vec<crate::ai::mcts_types::MoveVisit>) {
+        mut root: ZeroNode,
+    ) -> (Option<Box<dyn Move>>, Vec<crate::ai::mcts_types::MoveVisit>, ZeroNode) {
         use crate::ai::mcts_types::MoveVisit;
 
         // 1. Check Opening Book
         use crate::ai::book::Book;
         use rand::seq::SliceRandom;
-
         let mut book_moves = Book::recommend(game);
         if !book_moves.is_empty() {
             let mut rng = rand::thread_rng();
             book_moves.shuffle(&mut rng);
-            if let Some(selected_move) = book_moves.pop() {
-                // Create MoveVisit for this move with 100% probability (iterations count)
-                let move_info = MoveVisit {
-                    move_type: selected_move.move_type(),
-                    visits: self.iterations as f32,
-                    source_idx: selected_move.source_idx().ok(),
-                    target_idx: selected_move.target_idx().ok(),
-                    structure_type: selected_move.structure_type().ok(),
-                    unit_type: selected_move.unit_type().ok(),
-                    tech_type: selected_move.tech_type().ok(),
-                    ability_type: selected_move.ability_type().ok(),
-                };
-                return (Some(selected_move), vec![move_info]);
+            if let Some(book_move) = book_moves.pop() {
+                // To return correct visits vector, we expand root
+                if !root.is_expanded {
+                    self.expand_node_single(&mut root, game, false);
+                }
+                
+                let mut visits = Vec::new();
+                let mut found_idx = None;
+                for (i, child) in root.children.iter().enumerate() {
+                    if let Some(m) = &child.move_to_here {
+                        if m.describe(&game.state) == book_move.describe(&game.state) {
+                            found_idx = Some(i);
+                        }
+                    }
+                }
+                
+                if let Some(_idx) = found_idx {
+                    visits.push(MoveVisit {
+                        move_type: book_move.move_type(),
+                        visits: self.iterations as f32,
+                        source_idx: book_move.source_idx().ok(),
+                        target_idx: book_move.target_idx().ok(),
+                        structure_type: book_move.structure_type().ok(),
+                        unit_type: book_move.unit_type().ok(),
+                        tech_type: book_move.tech_type().ok(),
+                        ability_type: book_move.ability_type().ok(),
+                    });
+                    return (Some(book_move), visits, ZeroNode::new(1.0, None));
+                }
             }
         }
 
         let start_turn = game.state.settings.turn;
-        let mut root = ZeroNode::new(1.0, None);
-        self.expand_node_single(&mut root, game, false);
+        if !root.is_expanded {
+            self.expand_node_single(&mut root, game, false);
+        }
 
         // Add Dirichlet noise to root priors for diverse exploration during training
         if root.children.len() > 1 {
@@ -336,14 +357,20 @@ impl<'a> ZeroMctsAgent<'a> {
             }
         }
 
-        // Extract best move
-        let best_move = if !root.children.is_empty() && best_idx < root.children.len() {
-            root.children.swap_remove(best_idx).move_to_here
+        // Extract best move and the child node to become the new root
+        let (best_move, new_root) = if !root.children.is_empty() {
+            if best_idx < root.children.len() {
+                let mut child = root.children.swap_remove(best_idx);
+                let m = child.move_to_here.take();
+                (m, child)
+            } else {
+                (None, ZeroNode::new(1.0, None))
+            }
         } else {
-            None
+            (None, ZeroNode::new(1.0, None))
         };
 
-        (move_or_end_turn(best_move), move_visits)
+        (move_or_end_turn(best_move), move_visits, new_root)
     }
 
     /// Perform a batch of parallel searches using virtual loss

@@ -82,8 +82,8 @@ fn play_single_game(
     game.post_load();
 
     // Create two agents (they might share the same network, or be different)
-    let agent1 = Brain::new(network1, mcts_iters);
-    let agent2 = Brain::new(network2, mcts_iters);
+    let mut agent1 = Brain::new(network1, mcts_iters);
+    let mut agent2 = Brain::new(network2, mcts_iters);
 
     let initial_state = game.state.clone();
     let mut flat_recap: Vec<(i32, i32, serde_json::Value)> = Vec::new();
@@ -131,7 +131,7 @@ fn play_single_game(
             .expect("BUG: Failed to create state tensor - game state is invalid");
 
         // MCTS Search - use the correct agent
-        let current_agent = if pov == 1 { &agent1 } else { &agent2 };
+        let current_agent = if pov == 1 { &mut agent1 } else { &mut agent2 };
         let (best_move, move_visits) = current_agent.think_decomposed(&mut game);
 
         let map_size = game.state.settings.size as usize;

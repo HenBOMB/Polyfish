@@ -285,7 +285,7 @@ async fn auto_step(
     // 1. Try to get AI move from trained model if available
     if let Some(net) = &state.network {
         use polyfish::ai::brain::Brain;
-        let brain = Brain::new(net, params.iterations);
+        let mut brain = Brain::new(net, params.iterations);
         game.state._messages.clear();
         let (chosen_move, brain_policy) = brain.think_with_stats(&mut game);
         policy = brain_policy.into();
@@ -806,7 +806,7 @@ async fn get_trainer_hint(
     let (best_move, mcts_analysis) = if let Some(net) = &state.network {
         // 1. Use Neural Network (Gumbel MCTS) if available
         use polyfish::ai::brain::Brain;
-        let brain = Brain::new(net, params.iterations);
+        let mut brain = Brain::new(net, params.iterations);
         let (bm, _stats) = brain.think_with_stats(&mut game);
         // Brain currently returns stats as Vec<f32>, convert to simpler MCTS analysis or similar
         // For visual consistency, we actually prefer the full analysis from heuristic agent
@@ -1563,14 +1563,14 @@ async fn analyze_replay_step(
 
     // 4. Now game is at the state just before the user played history[step_index]
     // Run MCTS analysis
-    use polyfish::ai::mcts_zero::ZeroMctsAgent;
+    use polyfish::ai::mcts_zero::{ZeroMctsAgent, ZeroNode};
     let agent = ZeroMctsAgent::new(state.network.as_ref().unwrap(), params.iterations);
-    let (best_move, mcts_analysis) = agent.select_move_with_stats(&mut game);
+    let (best_move, mcts_analysis, _new_root) = agent.select_move_with_stats(&mut game, ZeroNode::new(1.0, None));
 
-    let ai_move_json = best_move.as_ref().map(|m| m.serialize());
+    let ai_move_json = best_move.as_ref().map(|m: &Box<dyn polyfish::moves::Move>| m.serialize());
     let ai_move_desc = best_move
         .as_ref()
-        .map(|m| m.describe(&game.state))
+        .map(|m: &Box<dyn polyfish::moves::Move>| m.describe(&game.state))
         .unwrap_or("None".to_string());
 
     // User's actual move
