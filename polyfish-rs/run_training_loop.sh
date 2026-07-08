@@ -14,6 +14,7 @@ BASELINE_GAMES=64
 ITERATIONS=500
 NUM_GAMES=64
 export MCTS_ITERS=64
+export DETACH_VALUE_TRUNK=1
 # 128 actors measured best on an M3 Max with metal (~578 moves/s @ 128 games+).
 # Throughput scales with concurrent games; small NUM_GAMES (-g) is a real limiter, not this knob.
 # See expert_boost_throughput.md for details.
