@@ -157,6 +157,9 @@ async fn main() {
         .route("/reset", post(reset_game))
         .route("/train", post(trigger_training))
         .route("/train/status", get(get_training_status))
+        .route("/train/halt", post(halt_training))
+        .route("/metrics", get(get_metrics))
+        .route("/config", post(set_config).get(get_config))
         .route("/save_training_data", post(save_training_data))
         .route("/analyze", get(analyze_game))
         .route("/save", post(save_game))
@@ -171,7 +174,10 @@ async fn main() {
         .route("/replay/load_initial", post(load_initial_endpoint))
         .route("/replay/list_initial", get(list_initial_endpoint))
         .route("/trainer/hint", post(get_trainer_hint))
-        .nest_service("/", ServeDir::new("../src/public"))
+        .route("/system/cpu", get(get_cpu_usage))
+        .fallback(spa_fallback)
+        .nest_service("/assets", ServeDir::new("../src/public/assets"))
+        .nest_service("/static", ServeDir::new("../src/public"))
         .layer(CorsLayer::permissive())
         .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 50))
         .with_state(shared_state);
@@ -636,8 +642,8 @@ async fn trigger_training(State(state): State<Arc<AppState>>) -> Json<Value> {
         Err(e) => return Json(serde_json::json!({ "status": "error", "message": e.to_string() })),
     };
 
-    let child = Command::new("cargo")
-        .args(["run", "--bin", "self_play", "--release"])
+    let child = Command::new("bash")
+        .args(["run_training_loop.sh", "-n"])
         .current_dir(".")
         .stdout(Stdio::from(log_file.try_clone().unwrap()))
         .stderr(Stdio::from(log_file))
@@ -665,7 +671,7 @@ async fn get_training_status(State(state): State<Arc<AppState>>) -> Json<Value> 
     use std::fs;
     use std::process::Command;
 
-    let pid_opt = *state.training_status.lock().unwrap();
+    let mut pid_opt = *state.training_status.lock().unwrap();
     let mut is_running = false;
 
     if let Some(pid) = pid_opt {
@@ -674,6 +680,25 @@ async fn get_training_status(State(state): State<Arc<AppState>>) -> Json<Value> 
 
         if let Ok(out) = output {
             is_running = out.status.success();
+        }
+    }
+
+    // If not running via internal state, check PID file written by run_training_loop.sh
+    if !is_running {
+        if let Ok(pid_str) = fs::read_to_string(".training.pid") {
+            if let Ok(parsed_pid) = pid_str.trim().parse::<u32>() {
+                // Verify the PID is actually alive
+                let alive = Command::new("ps").arg("-p").arg(parsed_pid.to_string()).output()
+                    .map(|out| out.status.success()).unwrap_or(false);
+                if alive {
+                    is_running = true;
+                    pid_opt = Some(parsed_pid);
+                    *state.training_status.lock().unwrap() = Some(parsed_pid);
+                } else {
+                    // Stale PID file — process died, clean up
+                    let _ = fs::remove_file(".training.pid");
+                }
+            }
         }
     }
 
@@ -691,6 +716,79 @@ async fn get_training_status(State(state): State<Arc<AppState>>) -> Json<Value> 
         "pid": pid_opt,
         "log": last_lines
     }))
+}
+
+async fn halt_training(State(state): State<Arc<AppState>>) -> Json<Value> {
+    use std::process::Command;
+
+    let pid_opt = *state.training_status.lock().unwrap();
+    if let Some(pid) = pid_opt {
+        // Kill child processes first to avoid orphans (like python train.py)
+        let _ = Command::new("pkill").arg("-P").arg(pid.to_string()).output();
+        // Kill the parent bash script
+        let _ = Command::new("kill").arg("-9").arg(pid.to_string()).output();
+        
+        let mut status = state.training_status.lock().unwrap();
+        *status = None;
+
+        return Json(serde_json::json!({ "status": "success", "message": format!("Halted PID {}", pid) }));
+    }
+    Json(serde_json::json!({ "status": "error", "message": "No training process active" }))
+}
+
+async fn set_config(Json(payload): Json<Value>) -> Json<Value> {
+    if std::fs::write("config.json", serde_json::to_string_pretty(&payload).unwrap_or_default()).is_ok() {
+        return Json(serde_json::json!({ "status": "success", "config": payload }));
+    }
+    Json(serde_json::json!({ "status": "error", "message": "Failed to set config" }))
+}
+
+async fn get_config() -> Json<Value> {
+    if let Ok(content) = std::fs::read_to_string("config.json") {
+        if let Ok(json) = serde_json::from_str::<Value>(&content) {
+            return Json(json);
+        }
+    }
+    Json(serde_json::json!({ "cores": 12, "tribes": ["Imperius", "Imperius"] }))
+}
+
+async fn get_metrics() -> Json<Value> {
+    use std::fs::File;
+    use std::io::{BufRead, BufReader};
+    
+    let mut metrics = Vec::new();
+    if let Ok(file) = File::open("training_log.csv") {
+        let reader = BufReader::new(file);
+        for line in reader.lines().flatten() {
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() >= 12 {
+                let obj = serde_json::json!({
+                    "iteration": parts[0].parse::<u32>().unwrap_or(0),
+                    "timestamp": parts[1].parse::<u64>().unwrap_or(0),
+                    "avg_score": parts[2].parse::<f32>().unwrap_or(0.0),
+                    "max_score": parts[3].parse::<f32>().unwrap_or(0.0),
+                    "p1_avg": parts[4].parse::<f32>().unwrap_or(0.0),
+                    "p2_avg": parts[5].parse::<f32>().unwrap_or(0.0),
+                    "loss": parts[6].parse::<f32>().unwrap_or(0.0),
+                    "avg_captures": parts[7].parse::<f32>().unwrap_or(0.0),
+                    "avg_harvests": parts[8].parse::<f32>().unwrap_or(0.0),
+                    "avg_builds": parts[9].parse::<f32>().unwrap_or(0.0),
+                    "avg_research": parts[10].parse::<f32>().unwrap_or(0.0),
+                    "avg_attacks": parts[11].parse::<f32>().unwrap_or(0.0),
+                    "avg_ability": parts.get(12).unwrap_or(&"0").parse::<f32>().unwrap_or(0.0),
+                    "avg_steps": parts.get(13).unwrap_or(&"0").parse::<f32>().unwrap_or(0.0),
+                });
+                metrics.push(obj);
+            }
+        }
+    }
+    
+    let len = metrics.len();
+    if len > 100 {
+        metrics = metrics.into_iter().skip(len - 100).collect();
+    }
+    
+    Json(serde_json::json!({ "metrics": metrics }))
 }
 
 async fn simulate_explorer(
@@ -1658,5 +1756,55 @@ mod tests {
         assert_eq!(sanitize_storage_key("UPPER_case_123"), "upper_case_123");
         assert_eq!(sanitize_storage_key(""), "");
         assert_eq!(sanitize_storage_key("!@#$%^&*()"), "");
+    }
+}
+
+async fn get_cpu_usage() -> Json<Value> {
+    fn read_cpu() -> Vec<(f64, f64)> {
+        let mut cores = Vec::new();
+        if let Ok(stat) = std::fs::read_to_string("/proc/stat") {
+            for line in stat.lines().filter(|l| l.starts_with("cpu")) {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() > 7 {
+                    let user: f64 = parts[1].parse().unwrap_or(0.0);
+                    let nice: f64 = parts[2].parse().unwrap_or(0.0);
+                    let system: f64 = parts[3].parse().unwrap_or(0.0);
+                    let idle: f64 = parts[4].parse().unwrap_or(0.0);
+                    let iowait: f64 = parts[5].parse().unwrap_or(0.0);
+                    let irq: f64 = parts[6].parse().unwrap_or(0.0);
+                    let softirq: f64 = parts[7].parse().unwrap_or(0.0);
+                    let total = user + nice + system + idle + iowait + irq + softirq;
+                    let active = total - idle - iowait;
+                    cores.push((active, total));
+                }
+            }
+        }
+        cores
+    }
+
+    let mut usages = Vec::new();
+    let stats1 = read_cpu();
+    if !stats1.is_empty() {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let stats2 = read_cpu();
+        if stats1.len() == stats2.len() {
+            for i in 0..stats1.len() {
+                let d_active = stats2[i].0 - stats1[i].0;
+                let d_total = stats2[i].1 - stats1[i].1;
+                let usage = if d_total > 0.0 { (d_active / d_total) * 100.0 } else { 0.0 };
+                usages.push(usage);
+            }
+        }
+    }
+    
+    Json(serde_json::json!({ "cores": usages }))
+}
+
+async fn spa_fallback() -> impl axum::response::IntoResponse {
+    use axum::response::IntoResponse;
+    let index_path = std::path::Path::new("../src/public/index.html");
+    match std::fs::read_to_string(index_path) {
+        Ok(html) => axum::response::Html(html).into_response(),
+        Err(_) => (axum::http::StatusCode::NOT_FOUND, "index.html not found").into_response(),
     }
 }
