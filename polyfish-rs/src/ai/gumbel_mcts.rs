@@ -70,11 +70,19 @@ pub struct GumbelMctsAgent<'a> {
     // High in the beginning to bootstrap the network but decays over time.
     pub prior_heuristic_weight: f32,
     /// Weight β on σ(completed-Q) in the exported policy TARGET π' =
-    /// softmax(logit + β·σ(Q)). In-search selection always uses full σ(Q);
-    /// this only gates how much search re-ranking flows into training
-    /// targets — ramp it up as the value head earns trust. 1.0 = paper
-    /// behavior; 0.0 = distill the (blended) prior unchanged.
+    /// softmax(logit + β·σ(Q)). This gates how much search re-ranking flows
+    /// into training targets — ramp it up as the value head earns trust.
+    /// 1.0 = paper behavior; 0.0 = distill the (blended) prior unchanged.
     pub policy_target_q_weight: f32,
+    /// Weight β_tree on σ(completed-Q) inside the search itself: interior
+    /// selection, the Sequential-Halving re-rank, and the final root
+    /// recommendation. min-max rescale normalizes whatever Q spread exists —
+    /// signal or noise — to full amplitude (~(C_VISIT+maxvisit)·C_SCALE ≈ 5-6
+    /// logits at 64 sims), so an untrusted value head injects ~6 logits of
+    /// noise into every selection step and can destroy a correct prior read
+    /// (see notes.md, decision-trace section). At 0.0 search degenerates to
+    /// prior+gumbel sampling (BC-anchored behavior); 1.0 = paper behavior.
+    pub tree_q_weight: f32,
     /// Diagnostic capture for the next search, armed via `arm_trace`. `None`
     /// (the default) costs one `RefCell` borrow-check per call site and
     /// nothing else — see decision_trace.rs.
@@ -167,6 +175,7 @@ impl<'a> GumbelMctsAgent<'a> {
             tree_reuses: 0,
             prior_heuristic_weight: 0.0,
             policy_target_q_weight: 1.0,
+            tree_q_weight: 1.0,
             trace: RefCell::new(None),
         }
     }
@@ -314,7 +323,7 @@ impl<'a> GumbelMctsAgent<'a> {
         let tiebreak = root
             .children
             .get(best_idx)
-            .map(|c| c.gumbel + child_priors[best_idx] + sigma_q[best_idx])
+            .map(|c| c.gumbel + child_priors[best_idx] + self.tree_q_weight * sigma_q[best_idx])
             .unwrap_or(0.0);
         trace.chosen = Some((mode, best_idx, tiebreak));
     }
@@ -545,7 +554,8 @@ impl<'a> GumbelMctsAgent<'a> {
 
     /// sigma(completed-Q) over the candidates referenced by `child_indices`,
     /// returned as a `Vec<f32>` aligned with `child_indices` (i.e. entry `pos`
-    /// corresponds to `root.children[child_indices[pos]]`).
+    /// corresponds to `root.children[child_indices[pos]]`), scaled by
+    /// `tree_q_weight` so trust-gating applies to every selection consumer.
     fn sigma_q_for(&self, root: &GumbelNode, child_indices: &[usize]) -> Vec<f32> {
         let q: Vec<f32> = child_indices.iter().map(|&i| root.children[i].q_value()).collect();
         let visits: Vec<f32> = child_indices
@@ -556,7 +566,12 @@ impl<'a> GumbelMctsAgent<'a> {
             .iter()
             .map(|&i| root.children[i].logit)
             .collect();
-        gumbel_qtransform::sigma_completed_q(root.own_value, &priors, &q, &visits, true)
+        let mut sq =
+            gumbel_qtransform::sigma_completed_q(root.own_value, &priors, &q, &visits, true);
+        for s in &mut sq {
+            *s *= self.tree_q_weight;
+        }
+        sq
     }
 
     /// Run one Sequential-Halving round: give each of the first
@@ -756,7 +771,7 @@ impl<'a> GumbelMctsAgent<'a> {
         let combined: Vec<f32> = child_priors
             .iter()
             .zip(&sigma_q)
-            .map(|(l, s)| l + s)
+            .map(|(l, s)| l + self.tree_q_weight * s)
             .collect();
         let probs = softmax(&combined);
         let sum_visits: f32 = child_visits.iter().sum();
@@ -882,8 +897,8 @@ impl<'a> GumbelMctsAgent<'a> {
             .enumerate()
             .filter(|(_, c)| (c.visits - max_visit).abs() < 0.5)
             .max_by(|(a, ca), (b, cb)| {
-                let sa = ca.gumbel + child_priors[*a] + sigma_q[*a];
-                let sb = cb.gumbel + child_priors[*b] + sigma_q[*b];
+                let sa = ca.gumbel + child_priors[*a] + self.tree_q_weight * sigma_q[*a];
+                let sb = cb.gumbel + child_priors[*b] + self.tree_q_weight * sigma_q[*b];
                 sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
             })
             .map(|(i, _)| i)

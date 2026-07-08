@@ -241,15 +241,20 @@ do
     MATCH_TYPE="selfplay"
 
     if [ "$LEAGUE_INTERVAL" -gt 0 ] && [ $((i % LEAGUE_INTERVAL)) -eq 0 ] && [ -d "checkpoints" ] && [ "$(ls -A checkpoints)" ]; then
-        # SMART LEAGUE SELECTION: 50% chance 'Fresh' (latest), 50% chance 'Historical' (diverse)
+        # HISTORICAL-ONLY league selection: the latest checkpoint is ~the
+        # current net, so playing it is mirror play with extra steps and
+        # breaks no symmetry. Prefer genuinely old checkpoints; fall back to
+        # anything that isn't the newest one.
         ALL_CPS=$(ls -t checkpoints/model_checkpoint_iter*.safetensors 2>/dev/null || true)
-        FRESH_CPS=$(echo "$ALL_CPS" | head -n 5)
         HIST_CPS=$(echo "$ALL_CPS" | tail -n +6)
-        
-        if [ -n "$HIST_CPS" ] && [ $((RANDOM % 2)) -eq 0 ]; then
+        NON_LATEST_CPS=$(echo "$ALL_CPS" | tail -n +2)
+
+        if [ -n "$HIST_CPS" ]; then
              SELECTED_CP=$(echo "$HIST_CPS" | portable_shuf 1)
+        elif [ -n "$NON_LATEST_CPS" ]; then
+             SELECTED_CP=$(echo "$NON_LATEST_CPS" | portable_shuf 1)
         else
-             SELECTED_CP=$(echo "$FRESH_CPS" | portable_shuf 1)
+             SELECTED_CP=""
         fi
 
         if [ -n "$SELECTED_CP" ]; then
@@ -257,6 +262,22 @@ do
              MATCH_TYPE="league"
         fi
     fi
+
+    # Heuristic-anchor games (selfplay iterations only; league already has an
+    # asymmetric opponent). ANCHOR_FRAC of each iteration's games are played
+    # vs the network-free heuristic backend so passivity actually loses and
+    # the relative value label carries signal. ANCHOR_FRAC=0 disables.
+    ANCHOR_FLAG=""
+    if [ "$MATCH_TYPE" = "selfplay" ]; then
+        ANCHOR_FLAG="--anchor-frac ${ANCHOR_FRAC:-0.25}"
+    fi
+
+    # Value-head trust ramp, RUN-relative (loop iteration i, not EFF_ITER —
+    # ITER_OFFSET-shifted runs would saturate the in-binary iteration ramp
+    # immediately). Gates sigma(Q) in-tree and in exported policy targets.
+    # VALUE_TRUST_CAP env caps the ramp's destination (e.g. from calibration).
+    VALUE_TRUST=$(awk -v i="$i" -v r="${VALUE_TRUST_RAMP_ITERS:-30}" -v cap="${VALUE_TRUST_CAP:-1.0}" \
+        'BEGIN { t = i / r; if (t > 1) t = 1; t = t * cap; printf "%.3f", t }')
 
     # Pick 2 random tribes for this iteration
     TRIBE_LIST=("Imperius" "Imperius")
@@ -276,7 +297,7 @@ do
     EFF_ITER=$((EFF_ITER + ${ITER_OFFSET:-0}))
 
     SP_LOG=$(mktemp)
-    ./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" | tee "$SP_LOG"
+    ./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG $ANCHOR_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" | tee "$SP_LOG"
     SP_STATUS=${PIPESTATUS[0]}
     rm -f "$SP_LOG"
     if [ "$SP_STATUS" -ne 0 ]; then

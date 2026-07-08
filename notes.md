@@ -267,3 +267,51 @@ own_value over all root candidates.
   files (~2% of samples, 10-turn iteration-1 games) got swept into iter-26
   training as fresh and sit in the archive window; trace runs must end with
   rm -f games_*.safetensors.
+
+# Fable 5, Jul 8, 2026 — Phase-1 training-signal fixes (post-diagnosis)
+Code review of the Jul 7-8 decision-trace diagnosis confirmed it, and added
+one mechanism the traces couldn't see: sigma_completed_q MIN-MAX RESCALES
+completed-Q into [0,1] before scaling by (C_VISIT+maxvisit)*C_SCALE (~5-6
+logits at 64 sims). Whatever Q spread exists — signal or noise — gets
+amplified to full amplitude in every selection step. An empty-label value
+head therefore injects ~6 logits of noise into selection/halving, which is
+exactly the "Q crashed a 0.87-prior capture to -0.30" trace. It also explains
+the β-gate null: β only gated exported targets; the tree always ran full σ(Q).
+
+Also flagged: the abs-dominant label (rel_w 0.4, from "definitive proof"
+commit) conflicts with the negamax backup. mcts_common.rs negates value at
+every player-turn boundary, which is only valid for antisymmetric v; absolute
+own-progress is not antisymmetric (opponent progress != my loss), so abs
+share gets corrupted through every EndTurn-crossing line — mildly today
+(2-3 ply trees), worse the deeper search gets. Reverted, and the
+mirror-symmetry problem is attacked in the DATA instead:
+
+1. ANCHOR GAMES (--anchor-frac, loop default 0.25 via ANCHOR_FRAC env):
+   that fraction of every selfplay iteration is played vs the network-free
+   Heuristic backend, seat alternating. Passivity now actually LOSES games,
+   so the relative label carries an anti-passivity gradient in the zero-sum
+   frame the backup understands. Anchor-side data is recorded (fresh teacher
+   data, same family as the BC corpus). Mutually exclusive with --opponent.
+2. IN-TREE TRUST GATE (tree_q_weight): β_tree scales σ(completed-Q) in
+   interior selection, the halving re-rank, and final recommendation.
+   β_tree=0 degenerates to prior+gumbel — the BC-anchored behavior that
+   produced the best exam ever. Driven with --value-trust (both β_tree and
+   target β), which the loop ramps RUN-relative: min(1, i/30) * VALUE_TRUST_CAP
+   (VALUE_TRUST_RAMP_ITERS env; EFF_ITER ramps saturate instantly under
+   ITER_OFFSET=76 and were useless).
+3. LABEL BACK TO ZERO-SUM: NEAR_DELTA_REL_W and FINAL_OUTCOME_REL_W both
+   1.0. The label is antisymmetric again; signal comes from opponent
+   diversity, not from breaking the value algebra.
+4. LEAGUE = HISTORICAL-ONLY: latest-checkpoint league games were mirror play
+   with extra steps; selection now prefers old checkpoints (falls back to
+   any non-latest).
+5. TRACE QUARANTINE: --trace-villages runs now write trace_games_*.safetensors,
+   which the training glob/archive never matches — the 2% contamination
+   path is closed.
+
+Launch guidance for the next run: keep the BC checkpoint (never --reset),
+ITER_OFFSET=76, -r; ANCHOR_FRAC=0.25; watch captures/game and villages-p50 —
+phase-2 gate is still hold-then-beat 7.7 / 9.1. If captures still slide with
+anchors on, next lever is a potential-based shaping bonus from an auxiliary
+own-progress head (dense credit without touching the zero-sum backup), NOT
+more abs share in the label.

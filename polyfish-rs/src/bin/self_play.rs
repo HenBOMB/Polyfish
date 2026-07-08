@@ -27,8 +27,15 @@ const HEURISTIC_PRIOR_W_FLOOR: f32 = 0.1; // permanent behavioral floor, root + 
 // Absolute yardstick for the value target; 8K points is a good place to end a 30T game
 const GOOD_BOT_FINAL_SCORE: f32 = 8000.0;
 // How much to weight relative (vs opponent) vs absolute (vs yardstick) final outcome.
-// Absolute-dominant: the relative term is mostly seat/RNG noise in mirror play.
-const FINAL_OUTCOME_REL_W: f32 = 0.4;
+// 1.0 = pure relative (zero-sum). The value backup negates across every
+// player-turn boundary (mcts_common.rs), which is only valid when
+// v(mine) = -v(theirs); an absolute own-progress component is NOT
+// antisymmetric — the opponent's progress isn't my loss — so any abs share
+// gets systematically corrupted through EndTurn-crossing lines, worse as
+// search deepens. The mirror-play "empty relative label" problem is fixed in
+// the DATA instead: anchor games vs the heuristic backend (--anchor-frac)
+// make passivity actually lose, giving the relative label real signal.
+const FINAL_OUTCOME_REL_W: f32 = 1.0;
 
 // Forward credit window for the near-term value component, in game turns.
 const NEAR_DELTA_TURNS: i32 = 4;
@@ -40,12 +47,10 @@ const NEAR_DELTA_NORM_FLOOR: f32 = 600.0;
 // Weight of the near-term delta vs the final-outcome tail.
 const NEAR_DELTA_W: f32 = 0.7;
 // Weight of the relative (vs opponent) component within the near-term delta.
-// Abs-dominant (0.6/0.4): in mirror self-play both copies capture villages on
-// roughly the same clock, so a capture's relative swing nets to ~0 and the
-// label teaches the value head nothing. An absolute anchor on my own score
-// progress gives captures a positive label regardless of the opponent. See
-// notes.md, decision-trace section.
-const NEAR_DELTA_REL_W: f32 = 0.4;
+// 1.0 = pure relative, for the same negamax-antisymmetry reason as
+// FINAL_OUTCOME_REL_W above. The signal against passivity comes from anchor
+// games, not from a non-zero-sum label.
+const NEAR_DELTA_REL_W: f32 = 1.0;
 
 // Ramp (in iterations) for β on σ(Q) in the exported policy targets:
 // β = min(1, iteration/20). Early on the value head's Q ordering is noise
@@ -315,7 +320,9 @@ fn play_single_game(
     seed: i64,
     tribes: Vec<TribeType>,
     iteration: usize,
-    backend: SearchBackend,
+    backend1: SearchBackend,
+    backend2: SearchBackend,
+    value_trust: Option<f32>,
     leaf_batch: Option<usize>,
     progress: ProgressMode,
     trace_villages: bool,
@@ -380,15 +387,21 @@ fn play_single_game(
 
     let prior_w = (HEURISTIC_PRIOR_W0 * HEURISTIC_PRIOR_DECAY.powi(iteration as i32))
         .max(HEURISTIC_PRIOR_W_FLOOR);
-    let q_target_w = (iteration as f32 / POLICY_TARGET_Q_RAMP_ITERS).min(1.0);
+    // One trust scalar drives β on σ(Q) in both the exported targets and the
+    // search tree itself. --value-trust overrides the iteration ramp, which
+    // saturates immediately on ITER_OFFSET-shifted runs.
+    let q_target_w = value_trust
+        .unwrap_or_else(|| (iteration as f32 / POLICY_TARGET_Q_RAMP_ITERS).min(1.0));
 
     // Create two agents (they might share the same network, or be different)
-    let mut agent1 = Brain::with_backend(eval1, mcts_iters, backend)
+    let mut agent1 = Brain::with_backend(eval1, mcts_iters, backend1)
     .with_prior_heuristic_weight(prior_w)
-    .with_policy_target_q_weight(q_target_w);
-    let mut agent2 = Brain::with_backend(eval2, mcts_iters, backend)
+    .with_policy_target_q_weight(q_target_w)
+    .with_tree_q_weight(q_target_w);
+    let mut agent2 = Brain::with_backend(eval2, mcts_iters, backend2)
     .with_prior_heuristic_weight(prior_w)
-    .with_policy_target_q_weight(q_target_w);
+    .with_policy_target_q_weight(q_target_w)
+    .with_tree_q_weight(q_target_w);
 
     if let Some(b) = leaf_batch {
         agent1 = agent1.with_leaf_batch(b);
@@ -752,6 +765,25 @@ fn main() -> anyhow::Result<()> {
         #[arg(long)]
         opponent: Option<String>,
 
+        /// Fraction of games (0..1) played against the network-free Heuristic
+        /// search backend as an anchor opponent (seat alternates between
+        /// anchor games). Anchor games break mirror-play symmetry: a passive
+        /// net LOSES them, so the relative value label finally carries an
+        /// anti-passivity gradient. The anchor side's data is recorded too
+        /// (fresh teacher data, same as the BC corpus). Mutually exclusive
+        /// with --opponent.
+        #[arg(long, default_value_t = 0.0)]
+        anchor_frac: f32,
+
+        /// Value-head trust in [0,1]: β on σ(completed-Q) both inside the
+        /// search tree and in exported policy targets. Overrides the
+        /// iteration-based ramp (min(1, iteration/20)), which saturates
+        /// uselessly when ITER_OFFSET-shifted runs start at high effective
+        /// iterations. Drive this from the loop script (run-relative ramp or
+        /// measured value-head calibration).
+        #[arg(long)]
+        value_trust: Option<f32>,
+
         /// First tribe (optional, defaults to random)
         #[arg(long)]
         tribe1: Option<String>,
@@ -865,6 +897,18 @@ fn main() -> anyhow::Result<()> {
     }
 
     let args = Args::parse();
+
+    if args.anchor_frac > 0.0 && args.opponent.is_some() {
+        anyhow::bail!("--anchor-frac and --opponent are mutually exclusive");
+    }
+    if !(0.0..=1.0).contains(&args.anchor_frac) {
+        anyhow::bail!("--anchor-frac must be in [0, 1]");
+    }
+    if let Some(t) = args.value_trust {
+        if !(0.0..=1.0).contains(&t) {
+            anyhow::bail!("--value-trust must be in [0, 1]");
+        }
+    }
 
     // Default Metal op-flush cadence to 1000 for better GPU efficiency on Metal
     if std::env::var("CANDLE_METAL_COMPUTE_PER_BUFFER").is_err() {
@@ -1158,6 +1202,9 @@ fn main() -> anyhow::Result<()> {
     };
     let match_label = match &args.opponent {
         Some(opp) => format!("league vs {opp}"),
+        None if args.anchor_frac > 0.0 => {
+            format!("self-play + {:.0}% heuristic-anchor games", args.anchor_frac * 100.0)
+        }
         None => "self-play".to_string(),
     };
     let backend_label = match eval_backend_kind {
@@ -1217,6 +1264,24 @@ fn main() -> anyhow::Result<()> {
                         (&**network1, &**network2, eval1, eval2)
                     };
 
+                    // Anchor games: evenly spread across the run at rate
+                    // anchor_frac; the anchor's seat alternates by anchor
+                    // ordinal (game parity alone would pin it to one seat at
+                    // e.g. frac 0.25, where anchor games are all odd-i).
+                    let anchor_ordinal =
+                        (((i + 1) as f32) * args.anchor_frac).floor() as usize;
+                    let is_anchor = args.anchor_frac > 0.0
+                        && anchor_ordinal > ((i as f32) * args.anchor_frac).floor() as usize;
+                    let (backend_seat1, backend_seat2) = if is_anchor {
+                        if anchor_ordinal % 2 == 0 {
+                            (SearchBackend::Heuristic, backend)
+                        } else {
+                            (backend, SearchBackend::Heuristic)
+                        }
+                    } else {
+                        (backend, backend)
+                    };
+
                     // Sample this game's own tribe pair, seeded off its game
                     // seed so runs stay reproducible while each game gets a
                     // distinct matchup.
@@ -1238,7 +1303,9 @@ fn main() -> anyhow::Result<()> {
                             seed,
                             game_tribes,
                             args.iteration,
-                            backend,
+                            backend_seat1,
+                            backend_seat2,
+                            args.value_trust,
                             args.leaf_batch,
                             progress_mode,
                             args.trace_villages,
@@ -1636,13 +1703,22 @@ fn main() -> anyhow::Result<()> {
         String::new()
     } else {
         let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-        format!("games_{timestamp}.safetensors")
+        // Trace runs are diagnostics, not training data: quarantine their
+        // games under a prefix the training loop's games_* glob won't match
+        // (stray trace games previously leaked into training — see notes.md).
+        if args.trace_villages {
+            format!("trace_games_{timestamp}.safetensors")
+        } else {
+            format!("games_{timestamp}.safetensors")
+        }
     };
 
     // Stack and save
     if !collected_spatial_maps.is_empty() {
         let total_steps = collected_spatial_maps.len();
         let timestamp = games_file
+            .strip_prefix("trace_")
+            .unwrap_or(&games_file)
             .strip_prefix("games_")
             .and_then(|s| s.strip_suffix(".safetensors"))
             .unwrap_or("0");
