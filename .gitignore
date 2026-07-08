@@ -45,3 +45,7 @@ polyfish-rs/replays/high_scores/
 # Binary model weights (use releases/LFS for these)
 polyfish-rs/model.safetensors
 polyfish-rs/.training.pid
+
+# Telemetry JSON
+polyfish-rs/.*.json
+polyfish-rs/*.json
