@@ -38,15 +38,24 @@ pub fn discover_tiles(
         Vec::new()
     };
 
-    // Filter to tiles not yet explored by this player
+    // Filter to tiles not yet explored by this player — nor already credited
+    // earlier in the current simulation line (see `_sim_explored` below).
+    let simulating = !state.settings._are_you_sure;
     let newly_discovered: Vec<i32> = tiles_to_check
         .into_iter()
         .filter(|&idx| {
-            state
+            let unexplored = state
                 .tiles
                 .get(&idx)
                 .map(|t| !t.explorers.contains(&pov_id))
-                .unwrap_or(false)
+                .unwrap_or(false);
+            unexplored
+                && !(simulating
+                    && state
+                        .settings
+                        ._sim_explored
+                        .get(&pov_id)
+                        .map_or(false, |s| s.contains(&idx)))
         })
         .collect();
 
@@ -67,10 +76,27 @@ pub fn discover_tiles(
         }
     }));
 
-    // Process each tile - only mark as explored during real moves (not MCTS)
-    let is_real_move = state.settings._are_you_sure;
-    for idx in newly_discovered {
-        if is_real_move {
+    if simulating {
+        // Exploration score without revelation: the search may know THAT a
+        // direction reveals K tiles (fog placement is player-visible), never
+        // WHAT is under them — `explorers` stays untouched, so features and
+        // legal-move gen keep seeing fog. The shadow set makes the credit
+        // once-per-tile per simulation line (unwound by the undo), instead of
+        // re-crediting the same frontier every time a sim path re-contacts it.
+        let credited = newly_discovered;
+        let set = state.settings._sim_explored.entry(pov_id).or_default();
+        for &idx in &credited {
+            set.insert(idx);
+        }
+        undos.push(Box::new(move |s: &mut GameState| {
+            if let Some(set) = s.settings._sim_explored.get_mut(&pov_id) {
+                for idx in &credited {
+                    set.remove(idx);
+                }
+            }
+        }));
+    } else {
+        for idx in newly_discovered {
             // Mark explored (permanent, no undo)
             if let Some(tile) = state.tiles.get_mut(&idx) {
                 tile.explorers.insert(pov_id);

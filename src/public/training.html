@@ -200,6 +200,7 @@
       <div class="acc-body">
         <div class="chart-grid">
           <div class="chart-box"><header><h3>Loss</h3><button class="dl-png" data-canvas="lossChart">PNG</button></header><div class="chart-wrap"><canvas id="lossChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Value fit (R²)</h3><button class="dl-png" data-canvas="valueR2Chart">PNG</button></header><div class="chart-wrap"><canvas id="valueR2Chart"></canvas></div></div>
           <div class="chart-box"><header><h3>Score</h3><button class="dl-png" data-canvas="scoreChart">PNG</button></header><div class="chart-wrap"><canvas id="scoreChart"></canvas></div></div>
           <div class="chart-box"><header><h3>Player balance</h3><button class="dl-png" data-canvas="p1p2Chart">PNG</button></header><div class="chart-wrap"><canvas id="p1p2Chart"></canvas></div></div>
           <div class="chart-box"><header><h3>League vs self-play</h3><button class="dl-png" data-canvas="leagueChart">PNG</button></header><div class="chart-wrap"><canvas id="leagueChart"></canvas></div></div>
@@ -506,6 +507,24 @@ function renderPanelA() {
       ],
     },
     options: chartDefaults,
+  });
+  makeChart('valueR2Chart', {
+    type: 'line',
+    data: {
+      labels: it,
+      datasets: [
+        { label: 'value R²', data: runMetrics.map(r => r.value_r2), borderColor: '#9b59b6', tension: 0.2 },
+      ],
+    },
+    options: {
+      ...chartDefaults,
+      scales: {
+        x: chartDefaults.scales.x,
+        // 1 = perfect fit, 0 = no better than predicting the mean, and it can
+        // go arbitrarily negative — unlike loss there's no natural zero floor.
+        y: { ...chartDefaults.scales.y, suggestedMin: -0.2, suggestedMax: 1, beginAtZero: false },
+      },
+    },
   });
   makeChart('scoreChart', {
     type: 'line',
