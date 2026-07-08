@@ -94,7 +94,6 @@ native arm64:
 arch=arm64   backend=zero   mcts= 200 games= 20  moves/sec=11.88  avg_s/game=8.06
 
 I reckon our current bottleneck isn't CPU yet it's still NN forward passes, so pausing on this optimization work for now until the bottleneck moves back to the CPU and then we can optimize since this will be the long-term bottleneck to our training regimen.
---
 # Verdi, July 4, 2026
 I tested, with having set up the Eval Server that batches GPU calls across all my actors I reach a top speed of ~31 moves/sec with 64 iters per move which is a meaningful speed-up from before I can get a game every 3s.
 
@@ -115,42 +114,32 @@ After lots of profiling I found that the problem was the poor MPS kernel of cand
 | metal + actor scaling (96 actors / 3 sharded servers) | 435* |
 | **metal + pipelined workers (128 actors / 2 servers × 2 workers)** | **~578*** |
 | **Actor ceiling** (dummy evaluator, no GPU — the hard cap) | **~1,500** |
---
-# TRAINING CAMPAIGN LOG (Jul 5-6, 2026) — from heuristic-blend self-play to
-behavior-cloning bootstrap. Written so the arc survives even if CSVs/models
+
+# TRAINING CAMPAIGN LOG (Jul 5-6, 2026) — from heuristic-blend self-play to behavior-cloning bootstrap. 
+Written so the arc survives even if CSVs/models
 get deleted.
 
 Setup at the start of this arc: Gumbel MCTS (64 sims, k=16), heuristic
 score_move (ordering.rs) blended into ROOT priors only, weight
-w = 0.5 * decay^EFF_ITER. Reward shaping always on. Value target =
+`w = 0.5 * decay^EFF_ITER`. Reward shaping always on. Value target =
 score-ratio outcome (+ per-step progress blend). Tiny map, FOW, 2p.
 
 Run-by-run (run_id, what happened, lesson):
-- 1783242299 (36 iters, decay=0.865): captures collapsed 1.98 -> ~0.06 in
-  lockstep with the heuristic weight decaying. Lesson: the net was not
-  internalizing captures before the crutch faded; slowed decay to 0.97.
-- 1783245126 (20 iters, decay=0.97): decline softened to 1.61 -> 1.48.
-- 1783261893 (25 iters, -g 128): behavior improved WITHIN each curriculum
-  regime while the weight halved underneath (captures 1.34 -> 1.93 in the
-  10-turn regime; attacks 3.9 -> 6.5 in the 15-turn regime) = real learning,
-  just slow. Also: totals step-function at CSV iter 14 was the 10->15 turn
-  ratchet (EFF_ITER = (i-1)*g/64+1 doubles per row at -g 128), not learning.
-  Very low value loss ~= the value head reads the scoreboard; it rose when
-  games got longer (healthy).
-- BUG FOUND (Jul 5): illegal moves were reaching real games. Reused Gumbel
-  root children are built under simulate_move semantics (no FOW reveals, no
-  discovery) but the game advances via play_move; play_move executes without
-  re-validating legality and spend_stars only warned on overdraft. Result:
-  negative stars, corrupt recorded games, replay desyncs, tainted training
-  data. Fixed: reused children multiset-checked vs generate_legal_moves
-  (mismatch -> fresh root), panic on real-move overdraft, catch_unwind per
-  game so one bad game doesn't kill the run. All prior data + model trashed.
+- 1783242299 (36 iters, decay=0.865)
+captures collapsed 1.98 -> ~0.06 in lockstep with the heuristic weight decaying. Lesson: the net was not internalizing captures before the crutch faded; slowed decay to 0.97.
+- 1783245126 (20 iters, decay=0.97)
+decline softened to 1.61 -> 1.48.
+- 1783261893 (25 iters, -g 128)
+behavior improved WITHIN each curriculum regime while the weight halved underneath (captures 1.34 -> 1.93 in the 10-turn regime; attacks 3.9 -> 6.5 in the 15-turn regime) = real learning, just slow. 
+Also: totals step-function at CSV iter 14 was the 10->15 turn ratchet (`EFF_ITER = (i-1)*g/64+1` doubles per row at -g 128), not learning. Very low value loss ~= the value head reads the scoreboard; it rose when games got longer (healthy).
+
+- BUG FOUND (Jul 5)
+illegal moves were reaching real games. Reused Gumbel root children are built under simulate_move semantics (no FOW reveals, no discovery) but the game advances via play_move; play_move executes without re-validating legality and spend_stars only warned on overdraft. Result: negative stars, corrupt recorded games, replay desyncs, tainted training data. 
+Fixed: reused children multiset-checked vs generate_legal_moves (mismatch -> fresh root), panic on real-move overdraft, catch_unwind per game so one bad game doesn't kill the run. All prior data + model trashed.
 - 1783285900 (11 iters, ITER_OFFSET=76 -> 30-turn games with w~0.05 from the
-  start): monotonic REGRESSION. captures 6.5 -> 3.2, attacks 31 -> 15,
-  moves/game 592 -> 460 (earlier EndTurns = passivity), villages t2c p50
-  11.8 -> 18.6 — while policy loss FELL 3.12 -> 2.70. Classic unanchored
-  self-play collapse: the net confidently learned its own increasingly
-  passive play. Paused.
+  start)
+monotonic REGRESSION. captures 6.5 -> 3.2, attacks 31 -> 15, moves/game 592 -> 460 (earlier EndTurns = passivity), villages t2c p50 11.8 -> 18.6 — while policy loss FELL 3.12 -> 2.70. 
+Classic unanchored self-play collapse: the net confidently learned its own increasingly passive play. Paused.
 
 Diagnosis (why self-play alone couldn't learn the basics at this compute):
 the heuristic only nudged root priors; the training target re-ranks that
@@ -191,7 +180,7 @@ DeepMind-scale compute. Shortcut required.
 
 ### ABS-YARDSTICK VALUE
 since mirror-match score ratio is passivity-symmetric, I tried adding a absolute
-target to the score (final_outcome = 0.6*rel + 0.4*abs-vs-8K). Hoped: external yardstick
+target to the score (`final_outcome = 0.6*rel + 0.4*abs-vs-8K`). Hoped: external yardstick
 punishes joint laziness. Got: no effect (1783350651/  1783359971); teacher mix + heuristic 
 floor 0.1 slowed decay ~2x only but did not stop it.
 
@@ -199,7 +188,12 @@ floor 0.1 slowed decay ~2x only but did not stop it.
 The idea is that learning over the score of the entire game propagates too small of a signal
 to learn quickly that we should eagerly capture villages. This adds a component to the value target
 so model wants to make moves that are learning to better score outcomes 4 turns away.
-value = 0.7*near + 0.3*final, near = clamp((adv(t+4turns)-adv(t))/norm, ±1), norm = max(600, 0.15*combined)
+````
+value = 0.7*near + 0.3*final
+near = clamp((adv(t+4turns)-adv(t))/norm, ±1)
+norm = max(600, 0.15*combined)
+```
+
 Hoped: dense per-action credit (vloss >> 0.02, captures recover). 
 Got (1783379532): vloss 0.026 -> 0.092, later floors ~0.052 — label works, head fine — but behavior
 decayed FASTER (cap 8.39 -> 6.79 in 3 iters). Also measured ~17 EndTurn edges/move in-tree: "search never sees tomorrow" was wrong.
