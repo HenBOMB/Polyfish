@@ -14,8 +14,12 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 echo "Logging to $LOG_FILE"
 
 echo "Building binaries..."
-# cargo build --bin polyfish --bin self_play --release --features cuda
 cargo build --bin polyfish --bin self_play --release
+
+echo "Starting backend server in background..."
+./target/release/polyfish &
+SERVER_PID=$!
+trap "echo 'Shutting down server...'; kill $SERVER_PID 2>/dev/null" EXIT
 
 # Parse arguments
 FORCE_TRAIN=false

@@ -114,37 +114,37 @@ async fn main() {
     game.post_load();
 
     // Load trained neural network
-    // use candle_core::Device;
-    // use candle_nn::VarMap;
-    // let device = Device::Cpu;
+    use candle_core::Device;
+    use candle_nn::VarMap;
+    let device = Device::Cpu;
 
-    // let model_path = "model.safetensors";
-    // let mut varmap = VarMap::new();
+    let model_path = "model.safetensors";
+    let mut varmap = VarMap::new();
 
-    // let network = if std::path::Path::new(model_path).exists() {
-    //     println!("✅ Loading trained AI model from {}", model_path);
-    //     varmap
-    //         .load(model_path)
-    //         .expect("Failed to load model weights");
-    //     polyfish::ai::network::PolyZeroNet::new(candle_nn::VarBuilder::from_varmap(
-    //         &varmap,
-    //         candle_core::DType::F32,
-    //         &device,
-    //     ))
-    //     .expect("Failed to build neural network")
-    // } else {
-    //     panic!(
-    //         "Model file {} not found! Please run init_model.py first.",
-    //         model_path
-    //     );
-    // };
+    let network = if std::path::Path::new(model_path).exists() {
+        println!("✅ Loading trained AI model from {}", model_path);
+        varmap
+            .load(model_path)
+            .expect("Failed to load model weights");
+        polyfish::ai::network::PolyZeroNet::new(candle_nn::VarBuilder::from_varmap(
+            &varmap,
+            candle_core::DType::F32,
+            &device,
+        ))
+        .expect("Failed to build neural network")
+    } else {
+        panic!(
+            "Model file {} not found! Please run init_model.py first.",
+            model_path
+        );
+    };
 
     let recorder = Arc::new(GameRecorder::new());
 
     let shared_state = Arc::new(AppState {
         game: Mutex::new(game),
         training_status: Mutex::new(None),
-        network: None, //Arc::new(network),
+        network: Some(Arc::new(network)),
         recorder,
     });
 
