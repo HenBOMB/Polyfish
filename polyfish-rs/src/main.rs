@@ -761,27 +761,39 @@ async fn get_metrics() -> Json<Value> {
     let mut metrics = Vec::new();
     if let Ok(file) = File::open("training_log.csv") {
         let reader = BufReader::new(file);
-        for line in reader.lines().flatten() {
+        let mut lines = reader.lines().flatten();
+        
+        let header_line = lines.next().unwrap_or_default();
+        let headers: Vec<&str> = header_line.split(',').collect();
+        
+        for line in lines {
             let parts: Vec<&str> = line.split(',').collect();
-            if parts.len() >= 12 {
-                let obj = serde_json::json!({
-                    "iteration": parts[0].parse::<u32>().unwrap_or(0),
-                    "timestamp": parts[1].parse::<u64>().unwrap_or(0),
-                    "avg_score": parts[2].parse::<f32>().unwrap_or(0.0),
-                    "max_score": parts[3].parse::<f32>().unwrap_or(0.0),
-                    "p1_avg": parts[4].parse::<f32>().unwrap_or(0.0),
-                    "p2_avg": parts[5].parse::<f32>().unwrap_or(0.0),
-                    "loss": parts[6].parse::<f32>().unwrap_or(0.0),
-                    "avg_captures": parts[7].parse::<f32>().unwrap_or(0.0),
-                    "avg_harvests": parts[8].parse::<f32>().unwrap_or(0.0),
-                    "avg_builds": parts[9].parse::<f32>().unwrap_or(0.0),
-                    "avg_research": parts[10].parse::<f32>().unwrap_or(0.0),
-                    "avg_attacks": parts[11].parse::<f32>().unwrap_or(0.0),
-                    "avg_ability": parts.get(12).unwrap_or(&"0").parse::<f32>().unwrap_or(0.0),
-                    "avg_steps": parts.get(13).unwrap_or(&"0").parse::<f32>().unwrap_or(0.0),
-                });
-                metrics.push(obj);
-            }
+            
+            let get_idx = |name: &str| -> Option<usize> {
+                headers.iter().position(|&h| h == name)
+            };
+            
+            let parse_f32 = |name: &str| -> f32 {
+                get_idx(name).and_then(|i| parts.get(i)).and_then(|s| s.parse().ok()).unwrap_or(0.0)
+            };
+
+            let obj = serde_json::json!({
+                "iteration": get_idx("iteration").and_then(|i| parts.get(i)).and_then(|s| s.parse::<u32>().ok()).unwrap_or(0),
+                "timestamp": get_idx("iter_started_at").and_then(|i| parts.get(i)).unwrap_or(&""),
+                "avg_score": parse_f32("avg_score"),
+                "max_score": parse_f32("max_score"),
+                "p1_avg": parse_f32("p1_avg"),
+                "p2_avg": parse_f32("p2_avg"),
+                "loss": parse_f32("loss"),
+                "avg_captures": parse_f32("avg_captures"),
+                "avg_harvests": parse_f32("avg_harvests"),
+                "avg_builds": parse_f32("avg_builds"),
+                "avg_research": parse_f32("avg_research"),
+                "avg_attacks": parse_f32("avg_attacks"),
+                "avg_ability": parse_f32("avg_ability"),
+                "avg_steps": parse_f32("avg_moves"),
+            });
+            metrics.push(obj);
         }
     }
     

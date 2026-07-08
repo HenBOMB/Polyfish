@@ -239,7 +239,9 @@ function App() {
     const recentMetrics = metrics.slice(-10);
     const startMetric = recentMetrics[0];
     const endMetric = recentMetrics[recentMetrics.length - 1];
-    const timeDiffSeconds = endMetric.timestamp - startMetric.timestamp;
+    const tStart = typeof startMetric.timestamp === 'string' ? Date.parse(startMetric.timestamp) / 1000 : startMetric.timestamp;
+    const tEnd = typeof endMetric.timestamp === 'string' ? Date.parse(endMetric.timestamp) / 1000 : endMetric.timestamp;
+    const timeDiffSeconds = tEnd - tStart;
     if (timeDiffSeconds > 0) {
       const iterDiff = endMetric.iteration - startMetric.iteration;
       itersPerHour = (iterDiff / timeDiffSeconds) * 3600;
