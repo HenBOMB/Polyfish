@@ -267,11 +267,3 @@ own_value over all root candidates.
   files (~2% of samples, 10-turn iteration-1 games) got swept into iter-26
   training as fresh and sit in the archive window; trace runs must end with
   rm -f games_*.safetensors.
-
-NEXT FIX (agreed Jul 8): flip abs/rel to 60/40 INSIDE near_delta — the term
-carrying 70% of the signal:
-near = clamp(0.6*(my_later-my_now)/norm + 0.4*(adv_later-adv_now)/norm, ±1)
-A capture then labels positive every game regardless of the mirror opponent.
-Run with DETACH_VALUE_TRUNK off. Validate with traces at --iteration 102:
-"value ranks village move best" should move off ~20% within 2-3 iters, else
-falsified.
