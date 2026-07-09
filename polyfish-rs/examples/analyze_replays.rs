@@ -91,10 +91,17 @@ fn main() {
         let raw = std::fs::read_to_string(file).expect("read replay");
         let mut replay: ModReplay = serde_json::from_str(&raw).expect("parse replay");
 
-        if !replay.turns.is_empty()
-            && !replay.turns[0].players.is_empty()
-            && replay.turns[0].players[0].commands.len() >= 2
-        {
+        // Mod-captured replays open with a moveType:-1 start-match command
+        // plus one forced auto-played move; self-play recaps don't.
+        let has_mod_preamble = replay
+            .turns
+            .first()
+            .and_then(|t| t.players.first())
+            .and_then(|p| p.commands.first())
+            .and_then(|c| c.get("moveType"))
+            .and_then(|v| v.as_i64())
+            == Some(-1);
+        if has_mod_preamble && replay.turns[0].players[0].commands.len() >= 2 {
             replay.turns[0].players[0].commands.remove(0); // -1 start match command
             replay.turns[0].players[0].commands.remove(0); // first forced auto played move
         }

@@ -659,7 +659,10 @@ fn run_metal_pipelined_loop(
                         let wait = t0.elapsed().as_micros() as u64;
 
                         let t1 = Instant::now();
-                        let (values, progress, policy_rows) = fwd.readback();
+                        let (values, policy_rows) = fwd.readback();
+                        // MPSGraph doesn't compute the progress head; stub
+                        // zeros exactly like the sync Metal and Tch paths.
+                        let progress = vec![0.0f32; values.len()];
                         debug_assert_eq!(values.len(), miss_slots.len());
 
                         let mut cache_inserts = Vec::with_capacity(miss_slots.len());

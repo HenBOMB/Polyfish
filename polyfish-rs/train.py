@@ -30,6 +30,14 @@ VALUE_LOSS_WEIGHT = float(os.environ.get("VALUE_LOSS_WEIGHT", "3.0"))
 # Forward-pass values are identical either way, so this is training-only and
 # needs no change on the Rust/candle inference side.
 DETACH_VALUE_TRUNK = os.environ.get("DETACH_VALUE_TRUNK", "0") == "1"
+# Random rot90/flip per batch (D4 dihedral): 8x effective spatial data.
+# Geometrically valid (no feature plane, player scalar, or rule is
+# orientation-dependent) but OFF by default: enabling it MID-RUN on the
+# 586K-param net collapsed play for ~8 iterations (run 1783556259 — policy
+# lost its orientation-specific fit, degraded games then fed back through
+# self-play). Opt in only for from-scratch runs, where the net never learns
+# orientation shortcuts to begin with.
+AUGMENT_D4 = os.environ.get("AUGMENT_D4", "0") == "1"
 
 # Device selection: MPS (Apple Silicon) > CUDA (NVIDIA) > CPU
 try:
@@ -203,18 +211,20 @@ def compute_loss(policy_pred, values_pred, policy_targets, value_target):
             total_policy_loss += head_loss * weights.get(head_name, 1.0)
             
     loss_win = nn.MSELoss()(values_pred['win'], value_target['win'])
-    
+
     loss_progress = 0.0
     if 'progress' in value_target and 'progress' in values_pred:
         loss_progress = nn.MSELoss()(values_pred['progress'], value_target['progress'])
-        
+
     # Prioritize winning/losing.
     value_loss = VALUE_LOSS_WEIGHT * loss_win + loss_progress
-    
+
     # Total loss
     total_loss = total_policy_loss + value_loss
-    
-    return total_loss, total_policy_loss, value_loss
+
+    # loss_win returned raw (unweighted, no aux terms) — value_r2 needs it;
+    # value_loss alone can't be unweighted once loss_progress is mixed in.
+    return total_loss, total_policy_loss, value_loss, loss_win
 
 def batch_report_indices(total_batches, max_reports=10):
     """Pick up to `max_reports` evenly spaced batch numbers to log."""
@@ -258,7 +268,15 @@ def train():
     model = PolyZeroNet(SPATIAL_CHANNELS, PLAYER_STATE_DIM, MAP_SIZE, MAP_SIZE).to(DEVICE)
     if os.path.exists("model.safetensors"):
         try:
-            model.load_state_dict(load_file("model.safetensors"))
+            # strict=False: newly added heads (e.g. v_progress) are absent
+            # from older checkpoints and must start fresh WITHOUT discarding
+            # the trained trunk — a strict load would throw and silently
+            # reinitialize everything via the except branch below.
+            missing, unexpected = model.load_state_dict(
+                load_file("model.safetensors"), strict=False
+            )
+            if missing or unexpected:
+                print(f"Partial checkpoint load — missing: {missing}, unexpected: {unexpected}")
         except Exception as e:
             print(f"Could not load model: {e}")
             print("Starting from scratch.")
@@ -274,6 +292,7 @@ def train():
         total_loss = 0
         total_p_loss = 0
         total_v_loss = 0
+        total_v_win = 0
         total_batches = 0
         # Streaming mean/variance of the value targets seen this epoch, so
         # value_r2 (below) compares MSE against the actual training-mix
@@ -393,22 +412,41 @@ def train():
                 
                 # Reshape spatial to (B, C, H, W)
                 batch_spatial = batch_spatial.view(-1, SPATIAL_CHANNELS, MAP_SIZE, MAP_SIZE)
-                
-                # # --- DATA AUGMENTATION (Dihedral Group D4) ---
-                
+
+                # D4 dihedral augmentation: one random board symmetry per batch.
+                # Only the two spatial policy heads live in tile space and must
+                # co-transform; action/option/value/progress are orientation-free.
+                if AUGMENT_D4:
+                    k = random.randint(0, 3)
+                    do_flip = random.random() < 0.5
+                    if k > 0 or do_flip:
+                        if k > 0:
+                            batch_spatial = torch.rot90(batch_spatial, k, [2, 3])
+                        if do_flip:
+                            batch_spatial = torch.flip(batch_spatial, [3])
+                        for head in ('source_spatial', 'target_spatial'):
+                            if head in batch_targets:
+                                t = batch_targets[head].view(-1, 1, MAP_SIZE, MAP_SIZE)
+                                if k > 0:
+                                    t = torch.rot90(t, k, [2, 3])
+                                if do_flip:
+                                    t = torch.flip(t, [3])
+                                batch_targets[head] = t.flatten(1)
+
                 optimizer.zero_grad()
                 
                 policy_pred, values_pred = model(batch_spatial, batch_player)
                 
-                loss, p_loss, v_loss = compute_loss(policy_pred, values_pred, batch_targets, batch_values)
-                
+                loss, p_loss, v_loss, v_win_loss = compute_loss(policy_pred, values_pred, batch_targets, batch_values)
+
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
-                
+
                 total_loss += loss.item()
                 total_p_loss += p_loss.item()
                 total_v_loss += v_loss.item()
+                total_v_win += v_win_loss.item()
                 total_batches += 1
 
                 elapsed = time.time() - chunk_start_time
@@ -444,18 +482,19 @@ def train():
     final_loss = total_loss / total_batches if total_batches > 0 else 0.0
     final_p_loss = total_p_loss / total_batches if total_batches > 0 else 0.0
     final_v_loss = total_v_loss / total_batches if total_batches > 0 else 0.0
+    final_v_win = total_v_win / total_batches if total_batches > 0 else 0.0
 
-    # R^2 of the value head against the LAST epoch's own target distribution:
+    # R^2 of the win head against the LAST epoch's own target distribution:
     # 1 - MSE/Var. Small MSE alone is meaningless if the targets barely vary
     # (a constant-mean predictor would also score low MSE) — this is the
-    # number that actually says whether the head explains anything. final_v_loss
-    # has VALUE_LOSS_WEIGHT baked in (see compute_loss); unweight it first so
-    # it's comparable to the raw target variance.
-    if target_n > 0 and VALUE_LOSS_WEIGHT > 0:
+    # number that actually says whether the head explains anything. Uses the
+    # raw win MSE tracked separately in compute_loss, so neither
+    # VALUE_LOSS_WEIGHT nor the aux progress loss bundled into value_loss
+    # can skew it.
+    if target_n > 0:
         target_mean = target_sum / target_n
         target_var = target_sumsq / target_n - target_mean * target_mean
-        raw_v_mse = final_v_loss / VALUE_LOSS_WEIGHT
-        value_r2 = 1.0 - raw_v_mse / target_var if target_var > 1e-8 else 0.0
+        value_r2 = 1.0 - final_v_win / target_var if target_var > 1e-8 else 0.0
     else:
         value_r2 = 0.0
 
