@@ -290,8 +290,8 @@ impl PolyZeroNet {
             .reshape((batch_size, filters, h, w))?;
 
         // 4. Policy Heads
+        // Pool convs are linear: no norm/activation (unnormed ReLU here goes dead).
         let p_pooled = self.p_pool_conv.forward(&shared)?;
-        let p_pooled = p_pooled.relu()?;
         let p_pooled = p_pooled.flatten_from(1)?;
         let p_latent = self.p_fc_shared.forward(&p_pooled)?.relu()?;
 
@@ -309,7 +309,6 @@ impl PolyZeroNet {
 
         // 5. Value Heads
         let v_pooled = self.v_pool_conv.forward(&shared)?;
-        let v_pooled = v_pooled.relu()?;
         let v_pooled = v_pooled.flatten_from(1)?;
         let v_latent = self.v_fc_shared.forward(&v_pooled)?.relu()?;
         let v_win = self.v_win.forward(&v_latent)?.tanh()?;

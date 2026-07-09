@@ -137,8 +137,9 @@ class PolyZeroNet(nn.Module):
         
         # --- Decomposed Policy Heads ---
         # 1. Action Type (11 categories: Attack, Step, Build, etc.)
-        # No norm on the 1-channel pools: a per-sample norm here would erase
-        # the map's overall level — the exact signal the heads need.
+        # No norm and no activation on the 1-channel pools: a per-sample norm
+        # would erase the map's overall level, and an unnormed ReLU here goes
+        # irreversibly dead (killed the value/action heads, Jul 2026).
         self.p_pool_conv = nn.Conv2d(self.filters, 1, 1)
         self.p_fc_shared = nn.Linear(map_height * map_width, self.filters)
         self.pi_action = nn.Linear(self.filters, 11)
@@ -183,8 +184,7 @@ class PolyZeroNet(nn.Module):
         x = x_attended.transpose(1, 2).view(batch_size, self.filters, self.map_height, self.map_width)
         
         # --- Policy Heads ---
-        p_pooled = self.relu(self.p_pool_conv(x))
-        p_pooled = p_pooled.flatten(1)
+        p_pooled = self.p_pool_conv(x).flatten(1)
         p_latent = self.relu(self.p_fc_shared(p_pooled))
         
         policy = {}
@@ -203,8 +203,7 @@ class PolyZeroNet(nn.Module):
 
         # --- Value Heads ---
         v_input = x.detach() if DETACH_VALUE_TRUNK else x
-        v_pooled = self.relu(self.v_pool_conv(v_input))
-        v_pooled = v_pooled.flatten(1)
+        v_pooled = self.v_pool_conv(v_input).flatten(1)
         v_latent = self.relu(self.v_fc_shared(v_pooled))
 
         values = {}

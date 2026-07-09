@@ -191,8 +191,9 @@ impl TchPolyZeroNet {
             .view([b, FILTERS, MAP_SIZE as i64, MAP_SIZE as i64]);
 
         // Policy heads
+        // Pool convs are linear: no norm/activation (unnormed ReLU here goes dead).
         let p_pooled = self.conv2d(&x, "p_pool_conv", 0);
-        let p_pooled = p_pooled.relu().flatten(1, 3);
+        let p_pooled = p_pooled.flatten(1, 3);
         let p_latent = self.linear(&p_pooled, "p_fc_shared").relu();
         let action_type = self.linear(&p_latent, "pi_action"); // [B, 11]
         let move_option = self.linear(&p_latent, "pi_option"); // [B, 192]
@@ -201,7 +202,7 @@ impl TchPolyZeroNet {
 
         // Value head
         let v_pooled = self.conv2d(&x, "v_pool_conv", 0);
-        let v_pooled = v_pooled.relu().flatten(1, 3);
+        let v_pooled = v_pooled.flatten(1, 3);
         let v_latent = self.linear(&v_pooled, "v_fc_shared").relu();
         let win = self.linear(&v_latent, "v_win").tanh(); // [B, 1]
 

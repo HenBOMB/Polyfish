@@ -505,3 +505,37 @@ Live-run rules: aux losses should trend down within ~10 iters with
 policy CE still at its floor; if win-MSE degrades >10% for 5+ iters,
 halve the AUX_*_W weights. Aux losses stuck high while policy/value
 keep fitting = trunk saturation (the capacity trigger).
+
+## GN migration killed the pool convs — value_r2 pinned at 0 (Jul 9, 2026)
+
+The first two GN-era runs (12 iterations total) logged value_r2 ≈ -0.000x
+every iteration. That signature means "predicting the target mean exactly":
+the value pool conv's pre-activations sat at mean -58 with **zero** positive
+entries, so its ReLU output exact zeros for every sample — v_latent was a
+constant, and win/progress could only fit their means (value_loss landed
+precisely on the predict-the-mean floor, 3·var(win)+var(prog) ≈ 0.85).
+p_pool_conv was equally dead, making action_type/move_option constant per
+state; only the direct spatial convs and the aux heads (which bypass the
+pools) were actually learning. Cause: the BN-era p_pool_bn/v_pool_bn had
+absorbed the convs' output offset in running_mean; the GN swap removed the
+pool norms without folding those stats into the conv weights, and a fully
+dead ReLU gets zero gradient — no amount of training recovers it.
+
+Fix: the 1-channel pool convs are now fully linear — no norm (see the GN
+section) and no activation — mirrored in train.py, network.rs,
+tch_network.rs, metal_network.rs. The fc+ReLU right after keeps the
+nonlinearity; a linear pool has no death mode and passes the map-level
+signal in both signs.
+
+Verified via the canonical parity harness (examples/tch_parity,
+examples/metal_parity, scripts_tch_parity_check.py): train.py ≡ tch-CPU ≡
+tch-MPS ≡ MPSGraph, softmax Δ ≤ 5e-6 (candle matches on logits to 1e-4;
+its lone 2.5e-1 target-head softmax delta is a near-tie flip at logit
+scale -155 on the broken model, not a port bug). Fresh model at prod
+hyperparams on the exact data that flatlined: train win R² 0.47 after 1
+epoch, 0.91 after 4. 1-game self_play smoke clean.
+
+Every pre-fix weight file assumes the pool ReLU — the current
+model.safetensors and checkpoints/model_gn_v1.safetensors misbehave under
+new binaries (league glob matches neither; --reset replaces the live
+model). Relaunch from scratch.

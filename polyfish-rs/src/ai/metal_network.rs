@@ -592,15 +592,12 @@ impl MetalPolyZeroNet {
             .reshape(&attended_dhw, &[b, FILTERS, h, w], None)
             .expect("forward: reshape attended to spatial");
 
-        // Policy heads (no norm on the 1-channel pool — see train.py)
+        // Policy heads (linear 1-channel pool: no norm, no activation — see train.py)
         let p_pooled_conv = self.conv2d(&graph, &x2, "p_pool_conv", 0);
-        let p_pooled_relu = graph
-            .relu(&p_pooled_conv, None)
-            .expect("forward: relu p_pool");
         let (p_pool_w_shape, _) = self.get("p_pool_conv.weight");
         let cp = p_pool_w_shape[0];
         let p_pooled = graph
-            .reshape(&p_pooled_relu, &[b, cp * h * w], None)
+            .reshape(&p_pooled_conv, &[b, cp * h * w], None)
             .expect("forward: flatten p_pooled");
         let p_latent_lin = self.linear(&graph, &p_pooled, "p_fc_shared");
         let p_latent = graph.relu(&p_latent_lin, None).expect("forward: relu p_fc_shared");
@@ -621,15 +618,12 @@ impl MetalPolyZeroNet {
             .reshape(&target_conv, &[b, target_c * h * w], None)
             .expect("forward: flatten pi_target"); // [B, 121]
 
-        // Value head (no norm on the 1-channel pool — see train.py)
+        // Value head (linear 1-channel pool: no norm, no activation — see train.py)
         let v_pooled_conv = self.conv2d(&graph, &x2, "v_pool_conv", 0);
-        let v_pooled_relu = graph
-            .relu(&v_pooled_conv, None)
-            .expect("forward: relu v_pool");
         let (v_pool_w_shape, _) = self.get("v_pool_conv.weight");
         let vp = v_pool_w_shape[0];
         let v_pooled = graph
-            .reshape(&v_pooled_relu, &[b, vp * h * w], None)
+            .reshape(&v_pooled_conv, &[b, vp * h * w], None)
             .expect("forward: flatten v_pooled");
         let v_latent_lin = self.linear(&graph, &v_pooled, "v_fc_shared");
         let v_latent = graph.relu(&v_latent_lin, None).expect("forward: relu v_fc_shared");
