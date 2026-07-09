@@ -174,7 +174,7 @@ impl PolyZeroNet {
         let filters = 64;
         let blocks = 6;
         let input_channels = crate::ai::features::NUM_CHANNELS;
-        let player_state_dim = 10;
+        let player_state_dim = crate::ai::features::RawFeatures::PLAYER_STATE_DIM;
         let num_action_types = 11;
         let num_options = 192;
 

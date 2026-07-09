@@ -1874,7 +1874,7 @@ fn main() -> anyhow::Result<()> {
             .unwrap_or("0");
 
         let spatial_dim = features::NUM_CHANNELS * features::MAP_SIZE * features::MAP_SIZE;
-        let player_dim = 10;
+        let player_dim = features::RawFeatures::PLAYER_STATE_DIM;
 
         let spatial_maps_tensor = Tensor::cat(&collected_spatial_maps, 0)?;
         let spatial_maps_tensor = spatial_maps_tensor.reshape((total_steps, spatial_dim))?;
