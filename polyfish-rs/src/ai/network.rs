@@ -148,6 +148,7 @@ pub struct PolyZeroNet {
 
     // Cross-Attention integration
     player_feature_embeddings: Tensor, // [10, 64]
+    player_pos_embeddings: Tensor,     // [10, 64]
     player_fc: Linear,
     cross_attention: CrossAttention,
 
@@ -191,6 +192,10 @@ impl PolyZeroNet {
             (player_state_dim as usize, filters),
             "player_feature_embeddings",
         )?;
+        let player_pos_embeddings = vs.get(
+            (player_state_dim as usize, filters),
+            "player_pos_embeddings",
+        )?;
         let player_fc = candle_nn::linear(filters, filters, vs.pp("player_fc"))?;
 
         // Cross-Attention layer
@@ -227,6 +232,7 @@ impl PolyZeroNet {
             bn1,
             res_blocks,
             player_feature_embeddings,
+            player_pos_embeddings,
             player_fc,
             cross_attention,
             p_pool_conv,
@@ -271,6 +277,7 @@ impl PolyZeroNet {
         let p_tokens = player_input
             .unsqueeze(2)?
             .broadcast_mul(&self.player_feature_embeddings.unsqueeze(0)?)?;
+        let p_tokens = p_tokens.broadcast_add(&self.player_pos_embeddings.unsqueeze(0)?)?;
         let p_tokens = self.player_fc.forward(&p_tokens)?.relu()?;
 
         // 3. Apply Cross-Attention

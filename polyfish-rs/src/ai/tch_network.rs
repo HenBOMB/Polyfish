@@ -178,7 +178,8 @@ impl TchPolyZeroNet {
         let spatial_tokens = x.flatten(2, 3).transpose(1, 2);
         // player tokens: player[B,10,1] * embeddings[1,10,D] -> [B,10,D]
         let emb = self.get("player_feature_embeddings").unsqueeze(0);
-        let player_tokens = player.unsqueeze(-1) * emb;
+        let pos_emb = self.get("player_pos_embeddings").unsqueeze(0);
+        let player_tokens = player.unsqueeze(-1) * emb + pos_emb;
         let player_tokens = self.linear(&player_tokens, "player_fc").relu();
 
         // 3. Cross-attention, back to [B, D, H, W]
