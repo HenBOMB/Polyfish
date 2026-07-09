@@ -15,6 +15,7 @@ use polyfish::states::{GameState, PlayerId};
 use polyfish::types::MapSize;
 use serde_json::json;
 use std::collections::HashMap;
+use strum::IntoEnumIterator;
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
@@ -212,6 +213,11 @@ struct HistoryStep {
     opp_score: i32,
     turn: i32,
     root_value: Option<f32>,
+    /// Ground-truth (unfogged) non-invisible enemy-unit occupancy at decision
+    /// time, POV-relative — the aux_fog_units target.
+    enemy_units: Vec<f32>,
+    my_spt: i32,
+    opp_spt: i32,
 }
 
 /// The subset of `HistoryStep` the TD(lambda) label computation needs —
@@ -317,6 +323,91 @@ fn td_lambda_labels(
         .collect()
 }
 
+/// Per-decision SPT snapshot for the aux_spt target. Parallel to `LabelStep`
+/// rather than riding `Checkpoint`, whose within-turn replace rule is
+/// root-value-driven and unrelated to SPT semantics.
+#[derive(Clone, Copy)]
+struct SptStep {
+    player_id: PlayerId,
+    turn: i32,
+    my_spt: i32,
+    opp_spt: i32,
+}
+
+/// First decision per (player, turn) — SPT at the start of that player's turn.
+fn spt_checkpoints_by_player(steps: &[SptStep]) -> HashMap<PlayerId, Vec<SptStep>> {
+    let mut out: HashMap<PlayerId, Vec<SptStep>> = HashMap::new();
+    for s in steps {
+        let list = out.entry(s.player_id).or_default();
+        if list.last().map_or(true, |c| c.turn != s.turn) {
+            list.push(*s);
+        }
+    }
+    out
+}
+
+/// `[my, opp]` SPT at the first same-player turn >= turn+5, else the final
+/// values (game ended inside the horizon).
+fn spt_target(cps: Option<&Vec<SptStep>>, turn: i32, final_my: i32, final_opp: i32) -> (i32, i32) {
+    cps.and_then(|c| {
+        let i = c.partition_point(|s| s.turn < turn + 5);
+        c.get(i).map(|s| (s.my_spt, s.opp_spt))
+    })
+    .unwrap_or((final_my, final_opp))
+}
+
+/// Multi-hot over `TechnologyType::iter()` POSITION — discriminants are
+/// sparse (-1..121), so raw ids would need a 123-slot vector.
+fn tech_multihot(techs: &[polyfish::states::TechnologyState]) -> Vec<f32> {
+    let order: Vec<polyfish::types::TechnologyType> =
+        polyfish::types::TechnologyType::iter().collect();
+    let mut v = vec![0.0f32; order.len()];
+    for t in techs.iter().filter(|t| t.discovered) {
+        if let Some(p) = order.iter().position(|x| *x == t.tech_type) {
+            v[p] = 1.0;
+        }
+    }
+    v
+}
+
+/// Ground-truth enemy-unit occupancy from the unfogged master state. Skips
+/// `Invisible` units — the engine's single visibility rule.
+fn enemy_unit_grid(state: &GameState, pov: PlayerId, len: usize) -> Vec<f32> {
+    let mut g = vec![0.0f32; len];
+    for (id, t) in &state.tribes {
+        if *id == pov {
+            continue;
+        }
+        for u in &t.units {
+            if u.effects.contains(&polyfish::types::UnitEffect::Invisible) {
+                continue;
+            }
+            let i = u.coords.idx as usize;
+            if i < len {
+                g[i] = 1.0;
+            }
+        }
+    }
+    g
+}
+
+/// End-of-episode tile ownership mapped to the sample's POV: +1 mine,
+/// -1 any opponent, 0 unowned.
+fn ownership_from_pov(final_owner: &[i32], pov: PlayerId) -> Vec<f32> {
+    final_owner
+        .iter()
+        .map(|&o| {
+            if o == pov {
+                1.0
+            } else if o != 0 {
+                -1.0
+            } else {
+                0.0
+            }
+        })
+        .collect()
+}
+
 /// Result from a single game - contains all data needed for training
 struct GameResult {
     history: Vec<HistoryStep>,
@@ -347,6 +438,11 @@ struct GameResult {
     /// Mean tribe SPT sampled at the start of game turns 0, 5, 10, … (player 1
     /// to act, before any moves on that turn).
     spt_at_turn: HashMap<i32, f32>,
+    /// End-of-game ground truth for the aux heads: raw per-tile owner ids,
+    /// per-player SPT, and per-player researched-tech multi-hot.
+    final_owner: Vec<i32>,
+    final_spt: HashMap<PlayerId, i32>,
+    final_tech: HashMap<PlayerId, Vec<f32>>,
 }
 
 const SPT_MILESTONES: [i32; 7] = [0, 5, 10, 15, 20, 25, 30];
@@ -720,6 +816,20 @@ fn play_single_game(
             ));
             // Snapshot scores at this moment (pre-move) for the TD label.
             let (my_score_now, opp_score_now) = reward::score_snapshot(&game.state, pov);
+            let opp_id = game
+                .state
+                .tribes
+                .keys()
+                .copied()
+                .find(|id| *id != pov)
+                .unwrap_or(pov);
+            let spt_of = |id: PlayerId| {
+                game.state
+                    .tribes
+                    .get(&id)
+                    .map(|t| polyfish::functions::get_tribe_spt(&game.state, t))
+                    .unwrap_or(0)
+            };
             game_history.push(HistoryStep {
                 features: state_t,
                 policy: policy_data,
@@ -728,6 +838,9 @@ fn play_single_game(
                 opp_score: opp_score_now,
                 turn: game.state.settings.turn,
                 root_value,
+                enemy_units: enemy_unit_grid(&game.state, pov, fixed_spatial_size),
+                my_spt: spt_of(pov),
+                opp_spt: spt_of(opp_id),
             });
             if progress == ProgressMode::Full && move_count > 0 && move_count % 10 == 0 {
                 eprintln!(
@@ -817,6 +930,22 @@ fn play_single_game(
         total_cities += t.cities.len() as i32;
     }
 
+    // Aux-head ground truth; the final state is dropped when this returns.
+    let n_tiles = features::MAP_SIZE * features::MAP_SIZE;
+    let mut final_owner = vec![0i32; n_tiles];
+    for (&idx, tile) in &game.state.tiles {
+        let i = idx as usize;
+        if i < n_tiles {
+            final_owner[i] = tile.owner;
+        }
+    }
+    let mut final_spt = HashMap::new();
+    let mut final_tech = HashMap::new();
+    for (id, t) in &game.state.tribes {
+        final_spt.insert(*id, polyfish::functions::get_tribe_spt(&game.state, t));
+        final_tech.insert(*id, tech_multihot(&t.tech_vanilla));
+    }
+
     Some(GameResult {
         history: game_history,
         scores,
@@ -833,6 +962,9 @@ fn play_single_game(
         ruins_t2c_p80: t2c_turn(&ruin_capture_turns, initial_ruins, 0.8, max_turns),
         ruins_t2c_all: t2c_turn(&ruin_capture_turns, initial_ruins, 1.0, max_turns),
         spt_at_turn,
+        final_owner,
+        final_spt,
+        final_tech,
         winner_score,
         recap: ModReplay {
             game_state: initial_state,
@@ -1557,6 +1689,13 @@ fn main() -> anyhow::Result<()> {
     let mut collected_values: Vec<f32> = Vec::new();
     let mut collected_progress: Vec<f32> = Vec::new();
 
+    // Aux-head targets (see the aux_* helpers above GameResult).
+    let num_techs = polyfish::types::TechnologyType::iter().count();
+    let mut collected_aux_own: Vec<Vec<f32>> = Vec::new();
+    let mut collected_aux_fog: Vec<Vec<f32>> = Vec::new();
+    let mut collected_aux_spt: Vec<f32> = Vec::new(); // flat, 2 per step
+    let mut collected_aux_tech: Vec<Vec<f32>> = Vec::new();
+
     let mut total_score = 0;
     let mut max_score = 0;
     let mut best_recap: Option<ModReplay> = None;
@@ -1658,6 +1797,18 @@ fn main() -> anyhow::Result<()> {
         let label_steps: Vec<LabelStep> = result.history.iter().map(LabelStep::from).collect();
         let td_deltas = td_lambda_labels(&label_steps, final_scores, LAMBDA_RETURN);
 
+        let spt_steps: Vec<SptStep> = result
+            .history
+            .iter()
+            .map(|s| SptStep {
+                player_id: s.player_id,
+                turn: s.turn,
+                my_spt: s.my_spt,
+                opp_spt: s.opp_spt,
+            })
+            .collect();
+        let spt_cp = spt_checkpoints_by_player(&spt_steps);
+
         // Determine the winner_id for this game
         let game_winner_id = {
             // Check who survived (alive = not killed)
@@ -1679,6 +1830,8 @@ fn main() -> anyhow::Result<()> {
                 features,
                 policy: policy_data,
                 player_id: p_id,
+                turn,
+                enemy_units,
                 ..
             } = step;
             let flat_map = features
@@ -1756,6 +1909,29 @@ fn main() -> anyhow::Result<()> {
                 -1.0
             };
             collected_progress.push(progress_target);
+
+            let opp_id = final_scores
+                .keys()
+                .copied()
+                .find(|id| *id != p_id)
+                .unwrap_or(p_id);
+            collected_aux_own.push(ownership_from_pov(&result.final_owner, p_id));
+            collected_aux_fog.push(enemy_units);
+            let (spt_my, spt_opp) = spt_target(
+                spt_cp.get(&p_id),
+                turn,
+                result.final_spt.get(&p_id).copied().unwrap_or(0),
+                result.final_spt.get(&opp_id).copied().unwrap_or(0),
+            );
+            collected_aux_spt.push(spt_my as f32 / 20.0);
+            collected_aux_spt.push(spt_opp as f32 / 20.0);
+            collected_aux_tech.push(
+                result
+                    .final_tech
+                    .get(&opp_id)
+                    .cloned()
+                    .unwrap_or_else(|| vec![0.0; num_techs]),
+            );
         }
     }
 
@@ -1873,6 +2049,25 @@ fn main() -> anyhow::Result<()> {
         let values_tensor = Tensor::from_vec(collected_values, (total_steps, 1), &device)?;
         let progress_tensor = Tensor::from_vec(collected_progress, (total_steps, 1), &device)?;
 
+        // Aux-head targets — always emitted together (train.py's per-file
+        // presence mask treats them as all-or-nothing).
+        let aux_own_tensor = Tensor::from_vec(
+            flatten_vec(collected_aux_own),
+            (total_steps, spatial_logit_dim),
+            &device,
+        )?;
+        let aux_fog_tensor = Tensor::from_vec(
+            flatten_vec(collected_aux_fog),
+            (total_steps, spatial_logit_dim),
+            &device,
+        )?;
+        let aux_spt_tensor = Tensor::from_vec(collected_aux_spt, (total_steps, 2), &device)?;
+        let aux_tech_tensor = Tensor::from_vec(
+            flatten_vec(collected_aux_tech),
+            (total_steps, num_techs),
+            &device,
+        )?;
+
         let mut tensors = HashMap::new();
         tensors.insert("spatial_maps".to_string(), spatial_maps_tensor);
         tensors.insert("player_states".to_string(), player_states_tensor);
@@ -1884,6 +2079,11 @@ fn main() -> anyhow::Result<()> {
 
         tensors.insert("values".to_string(), values_tensor);
         tensors.insert("progress".to_string(), progress_tensor);
+
+        tensors.insert("aux_ownership".to_string(), aux_own_tensor);
+        tensors.insert("aux_fog_units".to_string(), aux_fog_tensor);
+        tensors.insert("aux_spt".to_string(), aux_spt_tensor);
+        tensors.insert("aux_opp_tech".to_string(), aux_tech_tensor);
 
         candle_core::safetensors::save(&tensors, &games_file)?;
 
@@ -2092,5 +2292,118 @@ mod td_lambda_tests {
             "got {}, expected {expected}",
             out[0]
         );
+    }
+}
+
+#[cfg(test)]
+mod aux_target_tests {
+    use super::*;
+    use polyfish::coords::Coords;
+    use polyfish::states::{TechnologyState, TribeState, UnitState};
+    use polyfish::types::{TechnologyType, UnitEffect};
+
+    #[test]
+    fn tech_multihot_uses_iter_position_not_discriminant() {
+        let mk = |tech_type, discovered| TechnologyState {
+            tech_type,
+            discovered,
+            discovered_turn: 0,
+        };
+        let techs = vec![
+            mk(TechnologyType::Riding, true),
+            mk(TechnologyType::ShockTactics, true),
+            mk(TechnologyType::Rituals, true),
+            mk(TechnologyType::Fishing, false),
+        ];
+        let v = tech_multihot(&techs);
+        let n = TechnologyType::iter().count();
+        assert_eq!(v.len(), n);
+        assert_eq!(v.iter().filter(|&&x| x == 1.0).count(), 3);
+        let rituals_pos = TechnologyType::iter()
+            .position(|t| t == TechnologyType::Rituals)
+            .unwrap();
+        assert_eq!(v[rituals_pos], 1.0);
+        // Discriminant-indexed encoding would need a slot at 121 >= n.
+        assert!(TechnologyType::Rituals as usize >= n);
+    }
+
+    #[test]
+    fn ownership_from_pov_maps_signs() {
+        let owner = vec![0, 1, 2];
+        assert_eq!(ownership_from_pov(&owner, 1), vec![0.0, 1.0, -1.0]);
+        assert_eq!(ownership_from_pov(&owner, 2), vec![0.0, -1.0, 1.0]);
+    }
+
+    #[test]
+    fn enemy_unit_grid_excludes_pov_invisible_and_bounds() {
+        let unit = |owner: PlayerId, idx: i32, invisible: bool| {
+            let mut u = UnitState {
+                owner,
+                coords: Coords::from_index(idx, 11),
+                ..Default::default()
+            };
+            if invisible {
+                u.effects.insert(UnitEffect::Invisible);
+            }
+            u
+        };
+        let mut state = GameState::default();
+        let mut t1 = TribeState::default();
+        t1.units.push(unit(1, 5, false));
+        let mut t2 = TribeState::default();
+        t2.units.push(unit(2, 17, false));
+        t2.units.push(unit(2, 30, true)); // invisible: excluded
+        t2.units.push(unit(2, 500, false)); // out of range: excluded
+        state.tribes.insert(1, t1);
+        state.tribes.insert(2, t2);
+
+        let g = enemy_unit_grid(&state, 1, 121);
+        let set: Vec<usize> = g
+            .iter()
+            .enumerate()
+            .filter(|&(_, &v)| v == 1.0)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(set, vec![17]);
+    }
+
+    fn sstep(player_id: PlayerId, turn: i32, my: i32, opp: i32) -> SptStep {
+        SptStep {
+            player_id,
+            turn,
+            my_spt: my,
+            opp_spt: opp,
+        }
+    }
+
+    #[test]
+    fn spt_checkpoints_keep_first_decision_per_turn() {
+        let steps = vec![sstep(1, 3, 5, 4), sstep(1, 3, 9, 9), sstep(1, 4, 6, 5)];
+        let cp = spt_checkpoints_by_player(&steps);
+        let c1 = &cp[&1];
+        assert_eq!(c1.len(), 2);
+        assert_eq!((c1[0].turn, c1[0].my_spt), (3, 5));
+        assert_eq!((c1[1].turn, c1[1].my_spt), (4, 6));
+    }
+
+    #[test]
+    fn spt_target_five_turn_lookup_and_final_fallback() {
+        let steps = vec![
+            sstep(1, 0, 2, 2),
+            sstep(1, 3, 4, 3),
+            sstep(1, 9, 8, 6),
+            sstep(1, 12, 10, 9),
+        ];
+        let cp = spt_checkpoints_by_player(&steps);
+        // T=3: first turn >= 8 is 9.
+        assert_eq!(spt_target(cp.get(&1), 3, 99, 99), (8, 6));
+        // T=4: exact boundary, turn 9 == 4+5.
+        assert_eq!(spt_target(cp.get(&1), 4, 99, 99), (8, 6));
+        // T=7: first turn >= 12 is 12 (present exactly).
+        assert_eq!(spt_target(cp.get(&1), 7, 0, 0), (10, 9));
+        // T=9: nothing at >= 14 -> final fallback.
+        assert_eq!(spt_target(cp.get(&1), 9, 99, 98), (99, 98));
+        // Unknown player -> final fallback.
+        assert_eq!(spt_target(cp.get(&7), 0, 1, 2), (1, 2));
     }
 }

@@ -9,10 +9,10 @@ spatial = torch.tensor(d["spatial"], dtype=torch.float32).reshape(b, 161, 11, 11
 player = torch.tensor(d["player"], dtype=torch.float32).reshape(b, 10)
 
 net = PolyZeroNet(161, 10, 11, 11)
-net.load_state_dict(load_file("model.safetensors"))
+net.load_state_dict(load_file("model.safetensors"), strict=False)
 net.eval()
 with torch.no_grad():
-    policy, values = net(spatial, player)
+    policy, values, _aux = net(spatial, player)
 
 def cmp(name, py, rust):
     py = py.numpy()

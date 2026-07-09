@@ -77,7 +77,7 @@ def init_model():
     
     model2.eval()
     with torch.no_grad():
-        policy, values = model2(spatial_input, player_input)
+        policy, values, aux = model2(spatial_input, player_input)
     
     print(f"  Policy outputs:")
     for name, tensor in policy.items():
@@ -85,6 +85,10 @@ def init_model():
     
     print(f"  Value outputs:")
     for name, tensor in values.items():
+        print(f"    {name}: {tensor.shape}")
+
+    print(f"  Aux outputs (training-only):")
+    for name, tensor in aux.items():
         print(f"    {name}: {tensor.shape}")
     
     print("\n✅ Model initialization complete!")

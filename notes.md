@@ -467,3 +467,41 @@ Part of the probe's ~0.56 holdout ceiling is information-theoretic:
 candidate fix is player_state 10→~13 (opp score, opp visible cities,
 opp last-seen units), dual-net sync + key migration required. Falsify/
 confirm by re-running the convergence probe after the feature lands.
+
+## Four auxiliary training-only heads (Jul 9, 2026)
+
+Four extra heads give the trunk dense, exact supervision on the game's
+hidden variables — territory, opponent presence, economy, opponent
+tech — instead of hoping one noisy value scalar per state teaches them.
+The memory channels feed evidence in; these force calibrated beliefs out.
+
+| tensor | shape | loss (weight env) | target |
+|---|---|---|---|
+| aux_ownership | (N,121) | MSE (AUX_OWN_W=0.3) | end-of-game tile owner, +1/-1/0 from POV |
+| aux_fog_units | (N,121) | BCE (AUX_FOG_W=0.2) | true enemy-unit occupancy now, incl. fogged |
+| aux_spt | (N,2) | MSE (AUX_SPT_W=0.1) | [my, opp] SPT five turns ahead, /20 |
+| aux_opp_tech | (N,42) | BCE (AUX_TECH_W=0.1) | opponent's end-of-game tech set |
+
+self_play computes the targets while the real (unfogged) state is live
+and ships them in the games file; train.py owns the heads, reading the
+trunk and a new global pool (not v_latent). Rust inference is untouched —
+every backend loads weights by name and ignores the aux keys. Samples
+from files without aux targets are masked out, never zero-filled. The
+four losses chart on the dashboard ("Aux losses").
+
+Traps for future edits: never save the model from src/bin/train.rs (it
+strips the aux weights; it warns at runtime); keep aux targets out of
+the policy renorm guard and out of value_loss (value_r2 stays clean);
+the tech multi-hot indexes by enum position, not discriminant; and
+forward() now returns (policy, values, aux).
+
+Verified: unit tests green; a smoke game emitted all four tensors
+correctly (POV sign-mirrored ownership, binary fog); a sandboxed real
+train() epoch handled mixed new+legacy files and saved all 8 aux
+params; arena loaded an aux-era model; a 30-epoch probe showed all four
+aux losses falling on train and holdout.
+
+Live-run rules: aux losses should trend down within ~10 iters with
+policy CE still at its floor; if win-MSE degrades >10% for 5+ iters,
+halve the AUX_*_W weights. Aux losses stuck high while policy/value
+keep fitting = trunk saturation (the capacity trigger).

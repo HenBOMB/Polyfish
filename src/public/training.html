@@ -201,6 +201,7 @@
         <div class="chart-grid">
           <div class="chart-box"><header><h3>Loss</h3><button class="dl-png" data-canvas="lossChart">PNG</button></header><div class="chart-wrap"><canvas id="lossChart"></canvas></div></div>
           <div class="chart-box"><header><h3>Value fit (R²)</h3><button class="dl-png" data-canvas="valueR2Chart">PNG</button></header><div class="chart-wrap"><canvas id="valueR2Chart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Aux losses</h3><button class="dl-png" data-canvas="auxLossChart">PNG</button></header><div class="chart-wrap"><canvas id="auxLossChart"></canvas></div></div>
           <div class="chart-box"><header><h3>Score</h3><button class="dl-png" data-canvas="scoreChart">PNG</button></header><div class="chart-wrap"><canvas id="scoreChart"></canvas></div></div>
           <div class="chart-box"><header><h3>Player balance</h3><button class="dl-png" data-canvas="p1p2Chart">PNG</button></header><div class="chart-wrap"><canvas id="p1p2Chart"></canvas></div></div>
           <div class="chart-box"><header><h3>League vs self-play</h3><button class="dl-png" data-canvas="leagueChart">PNG</button></header><div class="chart-wrap"><canvas id="leagueChart"></canvas></div></div>
@@ -525,6 +526,19 @@ function renderPanelA() {
         y: { ...chartDefaults.scales.y, suggestedMin: -0.2, suggestedMax: 1, beginAtZero: false },
       },
     },
+  });
+  makeChart('auxLossChart', {
+    type: 'line',
+    data: {
+      labels: it,
+      datasets: [
+        { label: 'ownership', data: runMetrics.map(r => r.aux_own_loss), borderColor: '#1abc9c', tension: 0.2 },
+        { label: 'fog units', data: runMetrics.map(r => r.aux_fog_loss), borderColor: '#3498db', tension: 0.2 },
+        { label: 'SPT +5', data: runMetrics.map(r => r.aux_spt_loss), borderColor: '#f1c40f', tension: 0.2 },
+        { label: 'opp tech', data: runMetrics.map(r => r.aux_tech_loss), borderColor: '#e74c3c', tension: 0.2 },
+      ],
+    },
+    options: chartDefaults,
   });
   makeChart('scoreChart', {
     type: 'line',
