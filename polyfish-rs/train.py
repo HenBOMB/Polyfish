@@ -254,8 +254,8 @@ def train():
     
     # 2. Init Model
     MAP_SIZE = 11
-    SPATIAL_CHANNELS = 154
-    PLAYER_STATE_DIM = 10
+    SPATIAL_CHANNELS = 138
+    PLAYER_STATE_DIM = 16
 
     model = PolyZeroNet(SPATIAL_CHANNELS, PLAYER_STATE_DIM, MAP_SIZE, MAP_SIZE).to(DEVICE)
     if os.path.exists("model.safetensors"):

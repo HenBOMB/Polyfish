@@ -42,6 +42,7 @@ polyfish-rs/test_output.txt
 polyfish-rs/training.poly.log
 polyfish-rs/server_restart.log
 polyfish-rs/replays/high_scores/
+polyfish-rs/models/*
 
 # Binary model weights (use releases/LFS for these)
 polyfish-rs/model.safetensors
