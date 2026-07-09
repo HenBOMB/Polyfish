@@ -10,20 +10,20 @@ def migrate_model(file_path):
         print(f"Failed to load {file_path}: {e}")
         return
 
-    if "v_progress.weight" in state_dict:
-        print("Model already contains v_progress. Migration not needed.")
-        return
-
-    print("Adding v_progress head to state_dict...")
-    
+    print("Checking and migrating state_dict heads...")
     # We need to match the filter size, which is 64.
     # v_win.weight is [1, 64], v_win.bias is [1]
     filters = state_dict['v_win.weight'].shape[1]
     
     # Initialize v_progress weights (using Xavier/Kaiming init or similar, 
     # here just a small random normal scaled to avoid huge initial gradients)
-    state_dict["v_progress.weight"] = torch.randn(1, filters) * 0.01
-    state_dict["v_progress.bias"] = torch.zeros(1)
+    if "v_progress.weight" not in state_dict:
+        state_dict["v_progress.weight"] = torch.randn(1, filters) * 0.01
+        state_dict["v_progress.bias"] = torch.zeros(1)
+        
+    if "player_pos_embeddings" not in state_dict:
+        print("Adding player_pos_embeddings to state_dict...")
+        state_dict["player_pos_embeddings"] = torch.randn(10, filters) * 0.01
 
     backup_path = file_path + ".bak"
     os.rename(file_path, backup_path)

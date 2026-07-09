@@ -120,6 +120,7 @@ class PolyZeroNet(nn.Module):
         # Player state tokens: Project each of the 10 features into 64-dim embeddings
         # We learn a base embedding for each feature index and scale it by the value
         self.player_feature_embeddings = nn.Parameter(torch.randn(player_state_dim, self.filters))
+        self.player_pos_embeddings = nn.Parameter(torch.randn(player_state_dim, self.filters))
         self.player_fc = nn.Linear(self.filters, self.filters)
         self.player_relu = nn.ReLU()
         
@@ -177,6 +178,7 @@ class PolyZeroNet(nn.Module):
         # 2. Prepare Cross-Attention Inputs
         spatial_tokens = x.flatten(2).transpose(1, 2)
         player_tokens = player_state.unsqueeze(-1) * self.player_feature_embeddings.unsqueeze(0)
+        player_tokens = player_tokens + self.player_pos_embeddings.unsqueeze(0)
         player_tokens = self.player_relu(self.player_fc(player_tokens))
         
         # 3. Apply Cross-Attention

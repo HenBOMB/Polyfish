@@ -572,12 +572,20 @@ impl MetalPolyZeroNet {
             "player_feature_embeddings",
             &[1, PLAYER_DIM, FILTERS],
         );
+        let pos_emb = self.const_shape(
+            &graph,
+            "player_pos_embeddings",
+            &[1, PLAYER_DIM, FILTERS],
+        );
         let player_r = graph
             .reshape(&player_ph, &[b, PLAYER_DIM, 1], None)
             .expect("forward: reshape player");
-        let player_tokens_raw = graph
+        let player_tokens_mul = graph
             .multiplication(&player_r, &emb, None)
             .expect("forward: player * embeddings");
+        let player_tokens_raw = graph
+            .addition(&player_tokens_mul, &pos_emb, None)
+            .expect("forward: add pos embeddings");
         let player_tokens_lin = self.linear(&graph, &player_tokens_raw, "player_fc");
         let player_tokens = graph
             .relu(&player_tokens_lin, None)
