@@ -315,3 +315,89 @@ phase-2 gate is still hold-then-beat 7.7 / 9.1. If captures still slide with
 anchors on, next lever is a potential-based shaping bonus from an auxiliary
 own-progress head (dense credit without touching the zero-sum backup), NOT
 more abs share in the label.
+
+## Loss floors decomposed + move_option target bug (Jul 9, 2026)
+
+Question posed: policy_loss floored ~3.0, value_loss ~0.5, R² hovering
+~0.4-0.5 for 30 iters — proof the 586K net is capacity-limited? Measured
+instead of argued; numbers from archive/games_1783587735.safetensors
+(run 1783582724 iter 11, zero-sum + anchor + trust-gate regime).
+
+1. Policy loss is pinned to TARGET ENTROPY, not capacity. Intrinsic CE
+   floor (scale-adjusted E[rowsum·H]) = 2.92 nats on that file
+   (action .27 + source .43 + target 1.72 + option .50); live
+   policy_loss = 2.98. CE cannot go below H(targets) at any parameter
+   count. λ-era floor was ~1.9 because targets were peakier — the floor
+   moved because the regime changed (trust gate + anchors spread search
+   visits), not because the net hit a wall. Best-ever policy_loss: 1.74.
+2. Value targets got 3x harder at the regime change: var 0.31 (std .56,
+   13% saturated at ±1) vs 0.11 in the λ run. R² is variance-normalized,
+   so cross-regime R²/loss comparisons are meaningless. value_loss
+   column now = 3·win_mse + progress_mse (progress targets live) — not
+   comparable to pre-progress rows either.
+3. Convergence probe (scratchpad convergence_probe.py): current net on
+   that file, 16K train / 6K holdout (block split), Adam 3e-4..1e-3,
+   30 epochs. Train R² reaches 0.83-0.90 repeatedly → the net FITS the
+   current labels; capacity not binding. Holdout ceiling ~0.52-0.58 vs
+   live 0.43-0.48 → ~0.1 left on the table (2 hot epochs, fresh Adam,
+   cosine restarts per iteration). Pre-registered widen-the-value-pool
+   trigger (R² plateau ≤0.4 on clean labels) still NOT tripped.
+4. BUG (since Feb 5, commit 1269e22): self_play.rs normalized p_action/
+   p_source/p_target by total_visits but NEVER p_option — move_option
+   rows carried raw visit counts (sums 2..64, mean 30, ~1.9% of rows).
+   Each corrupted row ≈ a 30-64x-weighted sample; ~10 per 512-batch →
+   roughly a third of policy-gradient mass. Fixed in self_play.rs
+   (normalize p_option) + defensive renorm of rows with sum>1 at chunk
+   load in train.py (archives still hold corrupted files). Verified:
+   fresh game max rowsum = 1.0000.
+5. Training is UNSTABLE even with clip_grad_norm 1.0: probe R²
+   oscillates (0.90 → -0.65 within 3 epochs at lr 1e-3; live trains at
+   2e-3 with cosine restarts). Renormalizing option rows calms it
+   noticeably (longest stable stretch, CE -0.5 nats) but one excursion
+   remains → a second destabilizer exists, value-side suspected (tanh
+   saturation on ±1 labels, VALUE_LOSS_WEIGHT=3, or BN churn). Live
+   per-iteration R² is a snapshot of this thrash, not a plateau.
+
+Conclusion: neither loss floor evidences a capacity limit — one is an
+entropy floor (policy fits ~perfectly), the other is label noise plus
+optimization thrash. The capacity question is now empirically testable
+at any time via the probe; re-run it after stabilization before any
+trunk-growth decision.
+
+## Train/serve skew: BatchNorm running stats break the acting value head (Jul 9, 2026)
+
+Measured on model.safetensors vs archive/games_1783587735.safetensors,
+same weights, same samples:
+- train-mode forward (batch BN stats): win R² = 0.497 — matches dashboard.
+- eval-mode forward (running BN stats): win R² = **-0.75 to -2.0** —
+  worse than predicting the mean. Policy heads barely affected (CE 3.37
+  vs 3.40; softmax cancels shared normalization shift) but the value
+  head reads absolute activations and is destroyed.
+- 32 no-grad forward passes in train mode (refreshing running stats
+  only, zero weight updates) recover eval-mode R² to **+0.42**.
+
+Self-play/candle/MPSGraph inference all run eval-mode with these stored
+running stats → every value the search consumes (own_value, TD(λ) root
+bootstraps, trust-gated σ(Q)) comes from the broken calibration, while
+train-mode dashboard R² reports the healthy fit. Root cause: BN EMA
+(momentum 0.1) gets only ~2 epochs of updates per iteration while trunk
+activations drift (running_var grows to 3.1e3 by block 5; v_pool_bn
+running_mean = -794), so the EMA is always calibrated for an old net;
+training thrash makes the lag worse. f16 storage adds minor precision
+loss (~0.5 absolute at magnitude 794) but no inf/nan.
+
+Fix (NOT yet applied — loop was live): after the epoch loop in
+train.py, before saving, run ~32-64 no-grad train-mode batches over
+fresh data to recalibrate running stats. Durable option: BN→GroupNorm
+(no train/eval duality; requires candle mirror + likely retune).
+Interaction warning: the VALUE_TRUST ramp injects the EVAL-mode value
+head into search/targets — until recalibration lands, high trust is
+amplifying a value function that plays at negative R².
+
+Also confirmed same day: player_state input is 10 self-only scalars
+(features.rs player_vec) while labels are zero-sum my-minus-opp — the
+input contains no opponent aggregates (opp score is public in-game).
+Part of the probe's ~0.56 holdout ceiling is information-theoretic:
+candidate fix is player_state 10→~13 (opp score, opp visible cities,
+opp last-seen units), dual-net sync + key migration required. Falsify/
+confirm by re-running the convergence probe after the feature lands.
