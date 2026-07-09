@@ -1,6 +1,7 @@
 use axum::{
     Json, Router,
     extract::State,
+    handler::HandlerWithoutStateExt,
     routing::{get, post},
 };
 use polyfish::mapgen::{MapGenSettings, generate};
@@ -175,9 +176,26 @@ async fn main() {
         .route("/replay/list_initial", get(list_initial_endpoint))
         .route("/trainer/hint", post(get_trainer_hint))
         .route("/system/cpu", get(get_cpu_usage))
-        .fallback(spa_fallback)
+        .route("/api/runs", get(polyfish::training_api::api_runs))
+        .route(
+            "/api/training-metrics",
+            get(polyfish::training_api::api_training_metrics),
+        )
+        .route(
+            "/api/moves-by-turn",
+            get(polyfish::training_api::api_moves_by_turn),
+        )
+        .route(
+            "/api/value-distribution",
+            get(polyfish::training_api::api_value_distribution),
+        )
         .nest_service("/assets", ServeDir::new("../src/public/assets"))
         .nest_service("/static", ServeDir::new("../src/public"))
+        // Serve real files (training.html, js/, css/) from public; unmatched
+        // paths still fall back to index.html for SPA routing.
+        .fallback_service(
+            ServeDir::new("../src/public").not_found_service(spa_fallback.into_service()),
+        )
         .layer(CorsLayer::permissive())
         .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 50))
         .with_state(shared_state);
