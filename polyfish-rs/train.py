@@ -56,13 +56,19 @@ except Exception as e:
     DEVICE = "cpu"
 
 # Architecture matching Rust `network.rs` (decomposed policy + auxiliary values)
+# GroupNorm everywhere (no BatchNorm): per-sample statistics mean the exact
+# same function runs in train and eval mode — no running stats, no train/serve
+# gap (the BN calibration gap measured Jul 2026 was eval R² -0.75..-2.0 vs
+# train +0.50). Must stay mirrored with the Rust backends (GN_GROUPS there).
+GN_GROUPS = 8
+
 class ResBlock(nn.Module):
     def __init__(self, channels):
         super().__init__()
         self.c1 = nn.Conv2d(channels, channels, 3, padding=1)
-        self.bn1 = nn.BatchNorm2d(channels)
+        self.bn1 = nn.GroupNorm(GN_GROUPS, channels)
         self.c2 = nn.Conv2d(channels, channels, 3, padding=1)
-        self.bn2 = nn.BatchNorm2d(channels)
+        self.bn2 = nn.GroupNorm(GN_GROUPS, channels)
         self.relu = nn.ReLU()
 
     def forward(self, x):
@@ -108,7 +114,7 @@ class PolyZeroNet(nn.Module):
         
         # Initial conv on spatial features
         self.conv1 = nn.Conv2d(spatial_channels, self.filters, 3, padding=1)
-        self.bn1 = nn.BatchNorm2d(self.filters)
+        self.bn1 = nn.GroupNorm(GN_GROUPS, self.filters)
         self.relu = nn.ReLU()
         
         # ResBlocks (Match Rust config)
@@ -120,8 +126,9 @@ class PolyZeroNet(nn.Module):
         
         # --- Decomposed Policy Heads ---
         # 1. Action Type (11 categories: Attack, Step, Build, etc.)
+        # No norm on the 1-channel pools: a per-sample norm here would erase
+        # the map's overall level — the exact signal the heads need.
         self.p_pool_conv = nn.Conv2d(self.filters, 1, 1)
-        self.p_pool_bn = nn.BatchNorm2d(1)
         self.p_fc_shared = nn.Linear(map_height * map_width, self.filters)
         self.pi_action = nn.Linear(self.filters, 11)
         
@@ -134,7 +141,6 @@ class PolyZeroNet(nn.Module):
         
         # --- Value Heads ---
         self.v_pool_conv = nn.Conv2d(self.filters, 1, 1)
-        self.v_pool_bn = nn.BatchNorm2d(1)
         self.v_fc_shared = nn.Linear(1 * map_height * map_width, self.filters)
         self.v_win = nn.Linear(self.filters, 1)
         self.v_progress = nn.Linear(self.filters, 1)
@@ -157,7 +163,7 @@ class PolyZeroNet(nn.Module):
         x = x_attended.transpose(1, 2).view(batch_size, self.filters, self.map_height, self.map_width)
         
         # --- Policy Heads ---
-        p_pooled = self.relu(self.p_pool_bn(self.p_pool_conv(x)))
+        p_pooled = self.relu(self.p_pool_conv(x))
         p_pooled = p_pooled.flatten(1)
         p_latent = self.relu(self.p_fc_shared(p_pooled))
         
@@ -169,7 +175,7 @@ class PolyZeroNet(nn.Module):
         
         # --- Value Heads ---
         v_input = x.detach() if DETACH_VALUE_TRUNK else x
-        v_pooled = self.relu(self.v_pool_bn(self.v_pool_conv(v_input)))
+        v_pooled = self.relu(self.v_pool_conv(v_input))
         v_pooled = v_pooled.flatten(1)
         v_latent = self.relu(self.v_fc_shared(v_pooled))
         
@@ -521,41 +527,8 @@ def train():
     else:
         value_r2 = 0.0
 
-    # 3.5 Recalibrate BatchNorm running statistics before saving. The net
-    # TRAINS with per-batch stats but PLAYS (candle/tch/MPSGraph eval mode)
-    # with the stored running stats, which lag the drifting activation
-    # distribution badly — measured Jul 2026: eval-mode value R² was -0.75
-    # to -2.0 vs +0.50 in train mode on identical weights. A fresh
-    # cumulative-average pass over current data closes that gap.
-    recal_files = sorted(glob.glob("games_*.safetensors"), key=os.path.getmtime, reverse=True) \
-        or sorted(glob.glob("archive/games_*.safetensors"), key=os.path.getmtime, reverse=True)
-    if recal_files:
-        try:
-            data = load_file(recal_files[0])
-            sp = data["spatial_maps"]
-            recal_expected = SPATIAL_CHANNELS * MAP_SIZE * MAP_SIZE
-            recal_legacy = 154 * MAP_SIZE * MAP_SIZE
-            if sp.shape[1] == recal_legacy:
-                sp = torch.nn.functional.pad(sp, (0, recal_expected - recal_legacy))
-            n = min(sp.shape[0], 16384)
-            idx = torch.randperm(sp.shape[0])[:n]
-            sp = sp[idx].view(-1, SPATIAL_CHANNELS, MAP_SIZE, MAP_SIZE)
-            pl = data["player_states"][idx]
-            bn_modules = [m for m in model.modules()
-                          if isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d))]
-            for m in bn_modules:
-                m.reset_running_stats()
-                m.momentum = None  # cumulative average over the calibration pass
-            model.train()
-            with torch.no_grad():
-                for i in range(0, n, 256):
-                    model(sp[i:i+256].to(DEVICE), pl[i:i+256].to(DEVICE))
-            for m in bn_modules:
-                m.momentum = 0.1
-            model.eval()
-            print(f"BN running stats recalibrated on {n} positions from {recal_files[0]}")
-        except Exception as e:
-            print(f"BN recalibration skipped ({e})")
+    # (BatchNorm recalibration used to live here; GroupNorm has no running
+    # stats and no train/eval duality, so there is nothing to calibrate.)
 
     # 4. Save Model in f16 for blazing fast CPU inference
     half_state = {k: v.half() for k, v in model.state_dict().items()}

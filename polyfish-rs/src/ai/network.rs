@@ -2,7 +2,7 @@
 // Based on the successful Python architecture
 
 use candle_core::{Module, ModuleT, Result, Tensor};
-use candle_nn::{BatchNorm, Conv2d, LayerNorm, Linear, VarBuilder};
+use candle_nn::{Conv2d, GroupNorm, LayerNorm, Linear, VarBuilder};
 
 fn conv(
     in_c: usize,
@@ -20,34 +20,38 @@ fn conv(
     candle_nn::conv2d(in_c, out_c, k, config, vs)
 }
 
-fn batch_norm(c: usize, vs: VarBuilder) -> Result<BatchNorm> {
-    candle_nn::batch_norm(c, 1e-5, vs)
+/// Mirror of train.py's GN_GROUPS. GroupNorm has no train/eval duality —
+/// identical function in both modes, no running stats.
+const GN_GROUPS: usize = 8;
+
+fn group_norm(c: usize, vs: VarBuilder) -> Result<GroupNorm> {
+    candle_nn::group_norm(GN_GROUPS, c, 1e-5, vs)
 }
 
 struct ResBlock {
     c1: Conv2d,
-    bn1: BatchNorm,
+    bn1: GroupNorm,
     c2: Conv2d,
-    bn2: BatchNorm,
+    bn2: GroupNorm,
 }
 
 impl ResBlock {
     fn new(c: usize, vs: VarBuilder) -> Result<Self> {
         let c1 = conv(c, c, 3, 1, 1, vs.pp("c1"))?;
-        let bn1 = batch_norm(c, vs.pp("bn1"))?;
+        let bn1 = group_norm(c, vs.pp("bn1"))?;
         let c2 = conv(c, c, 3, 1, 1, vs.pp("c2"))?;
-        let bn2 = batch_norm(c, vs.pp("bn2"))?;
+        let bn2 = group_norm(c, vs.pp("bn2"))?;
         Ok(Self { c1, bn1, c2, bn2 })
     }
 }
 
 impl ModuleT for ResBlock {
-    fn forward_t(&self, xs: &Tensor, train: bool) -> Result<Tensor> {
+    fn forward_t(&self, xs: &Tensor, _train: bool) -> Result<Tensor> {
         let ys = self.c1.forward(xs)?;
-        let ys = self.bn1.forward_t(&ys, train)?;
+        let ys = self.bn1.forward(&ys)?;
         let ys = ys.relu()?;
         let ys = self.c2.forward(&ys)?;
-        let ys = self.bn2.forward_t(&ys, train)?;
+        let ys = self.bn2.forward(&ys)?;
         (xs.add(&ys))?.relu()
     }
 }
@@ -143,7 +147,7 @@ impl CrossAttention {
 pub struct PolyZeroNet {
     // Backbone
     conv1: Conv2d,
-    bn1: BatchNorm,
+    bn1: GroupNorm,
     res_blocks: Vec<ResBlock>,
 
     // Cross-Attention integration
@@ -153,7 +157,6 @@ pub struct PolyZeroNet {
 
     // Decomposed Policy Heads
     p_pool_conv: Conv2d,
-    p_pool_bn: BatchNorm,
     p_fc_shared: Linear,
 
     pi_action: Linear, // Action type (12)
@@ -162,7 +165,6 @@ pub struct PolyZeroNet {
     pi_option: Linear, // Unified 192 options head
 
     v_pool_conv: Conv2d,
-    v_pool_bn: BatchNorm,
     v_fc_shared: Linear,
     v_win: Linear,
     v_progress: Linear,
@@ -177,8 +179,17 @@ impl PolyZeroNet {
         let num_action_types = 11;
         let num_options = 192;
 
+        // BN-era checkpoints carry bn1.weight/bias too, so they'd load into
+        // GroupNorm code silently and play garbage — refuse them loudly.
+        if vs.contains_tensor("bn1.running_mean") {
+            candle_core::bail!(
+                "model file is a BatchNorm-era checkpoint (has bn1.running_mean); \
+                 this build uses GroupNorm — regenerate the model (init_model.py + retrain)"
+            );
+        }
+
         let conv1 = conv(input_channels, filters, 3, 1, 1, vs.pp("conv1"))?;
-        let bn1 = batch_norm(filters, vs.pp("bn1"))?;
+        let bn1 = group_norm(filters, vs.pp("bn1"))?;
 
         let mut res_blocks = Vec::new();
         for i in 0..blocks {
@@ -196,9 +207,9 @@ impl PolyZeroNet {
         // Cross-Attention layer
         let cross_attention = CrossAttention::new(filters, 4, vs.pp("cross_attention"))?;
 
-        // Shared policy processing
+        // Shared policy processing (no norm on the 1-channel pool: a
+        // per-sample norm would erase the map's overall level)
         let p_pool_conv = conv(filters, 1, 1, 1, 0, vs.pp("p_pool_conv"))?;
-        let p_pool_bn = batch_norm(1, vs.pp("p_pool_bn"))?;
         let p_fc_shared = candle_nn::linear(
             1 * crate::ai::features::MAP_SIZE * crate::ai::features::MAP_SIZE,
             filters,
@@ -213,7 +224,6 @@ impl PolyZeroNet {
 
         // Value processing
         let v_pool_conv = conv(filters, 1, 1, 1, 0, vs.pp("v_pool_conv"))?;
-        let v_pool_bn = batch_norm(1, vs.pp("v_pool_bn"))?;
         let v_fc_shared = candle_nn::linear(
             1 * crate::ai::features::MAP_SIZE * crate::ai::features::MAP_SIZE,
             filters,
@@ -230,14 +240,12 @@ impl PolyZeroNet {
             player_fc,
             cross_attention,
             p_pool_conv,
-            p_pool_bn,
             p_fc_shared,
             pi_action,
             pi_source,
             pi_target,
             pi_option,
             v_pool_conv,
-            v_pool_bn,
             v_fc_shared,
             v_win,
             v_progress,
@@ -255,7 +263,7 @@ impl PolyZeroNet {
 
         // 1. Process map through backbone
         let mut x = self.conv1.forward(map_input)?;
-        x = self.bn1.forward_t(&x, train)?;
+        x = self.bn1.forward(&x)?;
         x = x.relu()?;
 
         for block in &self.res_blocks {
@@ -283,7 +291,6 @@ impl PolyZeroNet {
 
         // 4. Policy Heads
         let p_pooled = self.p_pool_conv.forward(&shared)?;
-        let p_pooled = self.p_pool_bn.forward_t(&p_pooled, train)?;
         let p_pooled = p_pooled.relu()?;
         let p_pooled = p_pooled.flatten_from(1)?;
         let p_latent = self.p_fc_shared.forward(&p_pooled)?.relu()?;
@@ -302,7 +309,6 @@ impl PolyZeroNet {
 
         // 5. Value Heads
         let v_pooled = self.v_pool_conv.forward(&shared)?;
-        let v_pooled = self.v_pool_bn.forward_t(&v_pooled, train)?;
         let v_pooled = v_pooled.relu()?;
         let v_pooled = v_pooled.flatten_from(1)?;
         let v_latent = self.v_fc_shared.forward(&v_pooled)?.relu()?;

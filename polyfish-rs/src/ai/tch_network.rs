@@ -23,6 +23,7 @@ use tch::{Device, Kind, Tensor};
 
 const FILTERS: i64 = 64;
 const NHEAD: i64 = 4;
+const GN_GROUPS: i64 = 8;
 const HEAD_DIM: i64 = FILTERS / NHEAD; // 16
 const PLAYER_DIM: i64 = 10;
 const SPATIAL: i64 = (MAP_SIZE * MAP_SIZE) as i64; // 121
@@ -49,6 +50,12 @@ impl TchPolyZeroNet {
         for (name, tensor) in named {
             // Move each parameter onto the inference device once, up front.
             w.insert(name, tensor.to_device(device).to_kind(Kind::Float));
+        }
+        if w.contains_key("bn1.running_mean") {
+            anyhow::bail!(
+                "{path} is a BatchNorm-era checkpoint (has bn1.running_mean); \
+                 this build uses GroupNorm — regenerate the model (init_model.py + retrain)"
+            );
         }
         Ok(Self { w, device })
     }
@@ -77,26 +84,21 @@ impl TchPolyZeroNet {
         x.conv2d(w, Some(b), [1, 1], [padding, padding], [1, 1], 1)
     }
 
-    /// BatchNorm2d in eval mode: uses stored running stats (no batch stats).
-    fn batch_norm(&self, x: &Tensor, prefix: &str) -> Tensor {
+    /// GroupNorm (mirror of train.py's `nn.GroupNorm(GN_GROUPS, C)`): identical
+    /// function in train and eval — no running stats, no train/serve gap.
+    fn group_norm(&self, x: &Tensor, prefix: &str) -> Tensor {
         let weight = self.get(&format!("{prefix}.weight"));
         let bias = self.get(&format!("{prefix}.bias"));
-        let rm = self.get(&format!("{prefix}.running_mean"));
-        let rv = self.get(&format!("{prefix}.running_var"));
-        let c = weight.size()[0];
-        let shape = [1, c, 1, 1];
-        let scale = (weight / (rv + BN_EPS).sqrt()).view(shape);
-        let shift = (bias - rm * &scale.view([c])).view(shape);
-        x * scale + shift
+        x.group_norm(GN_GROUPS, Some(weight), Some(bias), BN_EPS, false)
     }
 
     fn res_block(&self, x: &Tensor, i: usize) -> Tensor {
         let p = format!("res_blocks.{i}");
         let residual = x.shallow_clone();
         let out = self.conv2d(x, &format!("{p}.c1"), 1);
-        let out = self.batch_norm(&out, &format!("{p}.bn1")).relu();
+        let out = self.group_norm(&out, &format!("{p}.bn1")).relu();
         let out = self.conv2d(&out, &format!("{p}.c2"), 1);
-        let out = self.batch_norm(&out, &format!("{p}.bn2"));
+        let out = self.group_norm(&out, &format!("{p}.bn2"));
         (out + residual).relu()
     }
 
@@ -168,7 +170,7 @@ impl TchPolyZeroNet {
 
         // 1. Spatial backbone
         let mut x = self.conv2d(&spatial, "conv1", 1);
-        x = self.batch_norm(&x, "bn1").relu();
+        x = self.group_norm(&x, "bn1").relu();
         for i in 0..NUM_RES_BLOCKS {
             x = self.res_block(&x, i);
         }
@@ -190,7 +192,7 @@ impl TchPolyZeroNet {
 
         // Policy heads
         let p_pooled = self.conv2d(&x, "p_pool_conv", 0);
-        let p_pooled = self.batch_norm(&p_pooled, "p_pool_bn").relu().flatten(1, 3);
+        let p_pooled = p_pooled.relu().flatten(1, 3);
         let p_latent = self.linear(&p_pooled, "p_fc_shared").relu();
         let action_type = self.linear(&p_latent, "pi_action"); // [B, 11]
         let move_option = self.linear(&p_latent, "pi_option"); // [B, 192]
@@ -199,7 +201,7 @@ impl TchPolyZeroNet {
 
         // Value head
         let v_pooled = self.conv2d(&x, "v_pool_conv", 0);
-        let v_pooled = self.batch_norm(&v_pooled, "v_pool_bn").relu().flatten(1, 3);
+        let v_pooled = v_pooled.relu().flatten(1, 3);
         let v_latent = self.linear(&v_pooled, "v_fc_shared").relu();
         let win = self.linear(&v_latent, "v_win").tanh(); // [B, 1]
 

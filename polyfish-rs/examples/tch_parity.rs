@@ -46,16 +46,13 @@ fn report(tag: &str, c: &[EvalResult], t: &(Vec<f32>, Vec<RawPolicyOutput>)) {
 }
 
 fn candle_forward(device: &candle_core::Device, feats: &[RawFeatures]) -> Vec<EvalResult> {
-    let mut vm = candle_nn::VarMap::new();
-    vm.load(MODEL).unwrap();
-    let net = Arc::new(
-        PolyZeroNet::new(candle_nn::VarBuilder::from_varmap(
-            &vm,
-            candle_core::DType::F32,
-            device,
-        ))
-        .unwrap(),
-    );
+    // File-backed builder: `VarMap::load` on an empty map is a silent no-op
+    // and would leave the net on random init weights.
+    let vs = unsafe {
+        candle_nn::VarBuilder::from_mmaped_safetensors(&[MODEL], candle_core::DType::F32, device)
+    }
+    .unwrap();
+    let net = Arc::new(PolyZeroNet::new(vs).unwrap());
     let handle = InlineEvalHandle::new(net);
     let batch: Vec<RawFeatures> = feats
         .iter()

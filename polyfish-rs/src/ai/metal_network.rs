@@ -48,6 +48,7 @@ const SPATIAL: usize = MAP_SIZE * MAP_SIZE; // 121
 const BN_EPS: f64 = 1e-5;
 const LN_EPS: f64 = 1e-5;
 const NUM_RES_BLOCKS: usize = 6;
+const GN_GROUPS: usize = 8;
 
 // Output head widths (rows are [win 1, action 11, source 121, target 121, option 192]).
 const ACTION_DIM: usize = 11;
@@ -106,7 +107,15 @@ mod tests {
             eprintln!("skipping async parity test: {path} not present");
             return;
         }
-        let net = super::MetalPolyZeroNet::load(path).expect("load model");
+        // Also skips BN-era checkpoints rejected by the GroupNorm guard —
+        // this test is about async-vs-sync execution parity, not model compat.
+        let net = match super::MetalPolyZeroNet::load(path) {
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!("skipping async parity test: {e}");
+                return;
+            }
+        };
 
         // xorshift-based deterministic pseudo-random features in [0, 1).
         let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
@@ -254,6 +263,12 @@ impl MetalPolyZeroNet {
             };
             weights.insert(name, (shape, floats));
         }
+        if weights.contains_key("bn1.running_mean") {
+            anyhow::bail!(
+                "model file is a BatchNorm-era checkpoint (has bn1.running_mean); \
+                 this build uses GroupNorm — regenerate the model (init_model.py + retrain)"
+            );
+        }
         let device = MetalDevice::system_default()
             .ok_or_else(|| anyhow::anyhow!("no Metal device available"))?;
         let queue = device
@@ -341,52 +356,50 @@ impl MetalPolyZeroNet {
         graph.addition(&conv, &b, None).expect("conv2d: bias add")
     }
 
-    /// BatchNorm2d in eval mode: `scale = weight / sqrt(running_var + eps)`,
-    /// `shift = bias - running_mean * scale`,
-    /// `y = x * scale.reshape(1,C,1,1) + shift.reshape(1,C,1,1)` — composed
-    /// from elementary broadcast ops (mirrors `tch_network.rs::batch_norm`).
-    fn batch_norm(&self, graph: &Graph, x: &Tensor, prefix: &str) -> Tensor {
+    /// GroupNorm on a [B, C, H, W] tensor (mirror of train.py's
+    /// `nn.GroupNorm(GN_GROUPS, C)`): reshape to [B, G, (C/G)*H*W], normalize
+    /// each group by its own mean/variance (runtime reductions, same pattern
+    /// as the cross-attention LayerNorm), reshape back, per-channel affine.
+    /// Identical function in train and eval — no running stats.
+    fn group_norm(&self, graph: &Graph, x: &Tensor, prefix: &str, batch: usize) -> Tensor {
         let (wshape, _) = self.get(&format!("{prefix}.weight"));
         let c = wshape[0];
-        let weight = self.const_natural(graph, &format!("{prefix}.weight"));
-        let bias = self.const_natural(graph, &format!("{prefix}.bias"));
-        let rm = self.const_natural(graph, &format!("{prefix}.running_mean"));
-        let rv = self.const_natural(graph, &format!("{prefix}.running_var"));
+        let group_elems = (c / GN_GROUPS) * SPATIAL;
 
+        let xg = graph
+            .reshape(x, &[batch, GN_GROUPS, group_elems], None)
+            .expect("gn: reshape to groups");
+        let mean = graph.mean(&xg, &[2], None).expect("gn: mean");
+        let diff = graph.subtraction(&xg, &mean, None).expect("gn: diff");
+        let sq = graph.multiplication(&diff, &diff, None).expect("gn: sq");
+        let var = graph.mean(&sq, &[2], None).expect("gn: var");
         let eps = graph
             .constant_scalar(BN_EPS, data_type::FLOAT32)
-            .expect("bn: eps constant");
-        let var_eps = graph.addition(&rv, &eps, None).expect("bn: var+eps");
+            .expect("gn: eps constant");
+        let var_eps = graph.addition(&var, &eps, None).expect("gn: var+eps");
         let std = graph
             .unary_arithmetic(UnaryArithmeticOp::SquareRoot, &var_eps, None)
-            .expect("bn: sqrt");
-        let scale = graph.division(&weight, &std, None).expect("bn: scale");
-        let rm_scale = graph
-            .multiplication(&rm, &scale, None)
-            .expect("bn: mean*scale");
-        let shift = graph
-            .subtraction(&bias, &rm_scale, None)
-            .expect("bn: shift");
+            .expect("gn: sqrt");
+        let normed = graph.division(&diff, &std, None).expect("gn: normed");
+        let back = graph
+            .reshape(&normed, &[batch, c, MAP_SIZE, MAP_SIZE], None)
+            .expect("gn: reshape back");
 
-        let scale_r = graph
-            .reshape(&scale, &[1, c, 1, 1], None)
-            .expect("bn: reshape scale");
-        let shift_r = graph
-            .reshape(&shift, &[1, c, 1, 1], None)
-            .expect("bn: reshape shift");
-        let scaled = graph.multiplication(x, &scale_r, None).expect("bn: x*scale");
-        graph
-            .addition(&scaled, &shift_r, None)
-            .expect("bn: +shift")
+        let gamma = self.const_shape(graph, &format!("{prefix}.weight"), &[1, c, 1, 1]);
+        let beta = self.const_shape(graph, &format!("{prefix}.bias"), &[1, c, 1, 1]);
+        let scaled = graph
+            .multiplication(&back, &gamma, None)
+            .expect("gn: *gamma");
+        graph.addition(&scaled, &beta, None).expect("gn: +beta")
     }
 
-    fn res_block(&self, graph: &Graph, x: &Tensor, i: usize) -> Tensor {
+    fn res_block(&self, graph: &Graph, x: &Tensor, i: usize, batch: usize) -> Tensor {
         let p = format!("res_blocks.{i}");
         let out = self.conv2d(graph, x, &format!("{p}.c1"), 1);
-        let out_bn = self.batch_norm(graph, &out, &format!("{p}.bn1"));
-        let out = graph.relu(&out_bn, None).expect("res_block: relu1");
+        let out_gn = self.group_norm(graph, &out, &format!("{p}.bn1"), batch);
+        let out = graph.relu(&out_gn, None).expect("res_block: relu1");
         let out = self.conv2d(graph, &out, &format!("{p}.c2"), 1);
-        let out = self.batch_norm(graph, &out, &format!("{p}.bn2"));
+        let out = self.group_norm(graph, &out, &format!("{p}.bn2"), batch);
         let summed = graph.addition(&out, x, None).expect("res_block: residual add");
         graph.relu(&summed, None).expect("res_block: relu2")
     }
@@ -538,10 +551,10 @@ impl MetalPolyZeroNet {
 
         // 1. Spatial backbone
         let mut x = self.conv2d(&graph, &spatial_ph, "conv1", 1);
-        let x_bn = self.batch_norm(&graph, &x, "bn1");
-        x = graph.relu(&x_bn, None).expect("forward: relu bn1");
+        let x_gn = self.group_norm(&graph, &x, "bn1", b);
+        x = graph.relu(&x_gn, None).expect("forward: relu bn1");
         for i in 0..NUM_RES_BLOCKS {
-            x = self.res_block(&graph, &x, i);
+            x = self.res_block(&graph, &x, i, b);
         }
 
         // 2. Cross-attention inputs
@@ -579,10 +592,11 @@ impl MetalPolyZeroNet {
             .reshape(&attended_dhw, &[b, FILTERS, h, w], None)
             .expect("forward: reshape attended to spatial");
 
-        // Policy heads
+        // Policy heads (no norm on the 1-channel pool — see train.py)
         let p_pooled_conv = self.conv2d(&graph, &x2, "p_pool_conv", 0);
-        let p_pooled_bn = self.batch_norm(&graph, &p_pooled_conv, "p_pool_bn");
-        let p_pooled_relu = graph.relu(&p_pooled_bn, None).expect("forward: relu p_pool_bn");
+        let p_pooled_relu = graph
+            .relu(&p_pooled_conv, None)
+            .expect("forward: relu p_pool");
         let (p_pool_w_shape, _) = self.get("p_pool_conv.weight");
         let cp = p_pool_w_shape[0];
         let p_pooled = graph
@@ -607,10 +621,11 @@ impl MetalPolyZeroNet {
             .reshape(&target_conv, &[b, target_c * h * w], None)
             .expect("forward: flatten pi_target"); // [B, 121]
 
-        // Value head
+        // Value head (no norm on the 1-channel pool — see train.py)
         let v_pooled_conv = self.conv2d(&graph, &x2, "v_pool_conv", 0);
-        let v_pooled_bn = self.batch_norm(&graph, &v_pooled_conv, "v_pool_bn");
-        let v_pooled_relu = graph.relu(&v_pooled_bn, None).expect("forward: relu v_pool_bn");
+        let v_pooled_relu = graph
+            .relu(&v_pooled_conv, None)
+            .expect("forward: relu v_pool");
         let (v_pool_w_shape, _) = self.get("v_pool_conv.weight");
         let vp = v_pool_w_shape[0];
         let v_pooled = graph

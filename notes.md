@@ -403,6 +403,33 @@ Watch after relaunch: value R² against the probe ceiling (opp-score input
 should raise the ceiling itself), behavioral profile, and whether the
 value head finally drives behavior now that play-side V isn't garbage.
 
+## BatchNorm → GroupNorm swap (Jul 9, 2026)
+
+Bundled into the from-scratch reseed. GroupNorm normalizes per-sample, so
+train and eval run the identical function — train/serve gap structurally 0.0
+(verified: max|train−eval| = 0.00e0); train.py's recalibration block deleted.
+
+Design: trunk norms → GroupNorm(GN_GROUPS=8, 64), same bn1.weight/bias keys,
+eps 1e-5, mirrored 4 ways (train.py, candle, tch, hand-built MPSGraph
+subgraph). The 1-channel pool norms (p_pool_bn, v_pool_bn) were REMOVED, not
+converted: a per-sample norm on one channel deletes the map's overall level —
+the exact signal the value head reads. Parity square on a fresh GN model:
+PyTorch ≡ candle ≡ tch-CPU ≡ tch-MPS ≡ MPSGraph (value Δ 0.0, softmax
+Δ ≤ 8e-6); sandbox train epoch clean.
+
+Fallout handled:
+- All backends reject BN-era checkpoints loudly (bn1.running_mean check) —
+  they'd otherwise load silently and play garbage. BN-era weights moved to
+  checkpoints/bn_era/ (outside the league glob; usable only with pre-GN
+  binaries, e.g. f847bc6).
+- Parity exposed a pre-existing bug: src/main.rs loaded weights via
+  VarMap::load on an EMPTY VarMap (silent no-op) — the :3000 server's NN
+  agent had been running on RANDOM weights. Fixed with a file-backed
+  from_mmaped_safetensors builder (same fix in examples/tch_parity.rs).
+
+Reseed order: rm model + games/archive → init_model.py (GN weights) →
+generate teachers → BC train → launch loop.
+
 ## Train/serve skew: BatchNorm running stats break the acting value head (Jul 9, 2026)
 
 Measured on model.safetensors vs archive/games_1783587735.safetensors,
