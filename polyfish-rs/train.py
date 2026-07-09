@@ -366,6 +366,16 @@ def train():
                 for head, tensors in c_heads.items():
                     if tensors:
                         target_heads[head] = torch.cat(tensors)
+
+                # Guard against unnormalized policy rows: games generated before
+                # Jul 2026 carry raw visit counts (sums up to 64) in move_option —
+                # each acts as a ~30-64x weighted sample and destabilizes training.
+                # Rows legitimately sum to <=1 (partial mass by design); only
+                # renormalize rows whose mass exceeds 1.
+                for head, t in target_heads.items():
+                    rs = t.sum(dim=1, keepdim=True)
+                    if (rs > 1.001).any():
+                        target_heads[head] = torch.where(rs > 1.001, t / rs, t)
                     
             except RuntimeError as e:
                 print(f"OOM loading chunk: {e}")

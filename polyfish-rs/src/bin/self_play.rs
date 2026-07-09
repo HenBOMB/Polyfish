@@ -681,7 +681,9 @@ fn play_single_game(
             for x in &mut p_target {
                 *x /= total_visits;
             }
-            // ... (others)
+            for x in &mut p_option {
+                *x /= total_visits;
+            }
         }
 
         let policy_data = DecomposedPolicyData {
