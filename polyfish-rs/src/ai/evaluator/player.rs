@@ -27,7 +27,10 @@ pub fn evaluate_player(state: &GameState, player_id: PlayerId) -> f32 {
     // Mid Game
     else if progress < 0.7 {
         // Perfection/Glory: Balanced Economy and Expansion
-        if matches!(state.settings.mode, crate::ModeType::Perfection | crate::ModeType::Glory) {
+        if matches!(
+            state.settings.mode,
+            crate::ModeType::Perfection | crate::ModeType::Glory
+        ) {
             (0.4, 0.1, 0.3, 0.2)
         }
         // Domination/Might: Military and Exploration
@@ -38,7 +41,10 @@ pub fn evaluate_player(state: &GameState, player_id: PlayerId) -> f32 {
     // End Game
     else {
         // Perfection/Glory: Economy
-        if matches!(state.settings.mode, crate::ModeType::Perfection | crate::ModeType::Glory) {
+        if matches!(
+            state.settings.mode,
+            crate::ModeType::Perfection | crate::ModeType::Glory
+        ) {
             (0.4, 0.1, 0.25, 0.25)
         }
         // Domination/Might: Military and Balance

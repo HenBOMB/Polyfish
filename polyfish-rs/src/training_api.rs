@@ -15,7 +15,6 @@ use std::path::{Path, PathBuf};
 const CSV_PATH: &str = "training_log.csv";
 const MOVES_PATH: &str = "moves_by_turn.json";
 const VALUE_DIST_PATH: &str = "value_distribution.json";
-const LADDER_PATH: &str = "ladder.json";
 
 #[derive(Debug, Clone)]
 struct MetricRow {
@@ -24,7 +23,6 @@ struct MetricRow {
     iteration: i64,
     games_file: String,
     num_games: i64,
-    tribes: String,
     avg_score: f64,
     max_score: f64,
     p1_avg: f64,
@@ -33,10 +31,6 @@ struct MetricRow {
     policy_loss: f64,
     value_loss: f64,
     value_r2: f64,
-    aux_own_loss: f64,
-    aux_fog_loss: f64,
-    aux_spt_loss: f64,
-    aux_tech_loss: f64,
     avg_captures: f64,
     avg_cap_ruins: f64,
     avg_cap_villages: f64,
@@ -56,8 +50,6 @@ struct MetricRow {
     avg_spt_t25: f64,
     avg_spt_t30: f64,
     villages_t2c_first: f64,
-    villages_first_rate: f64,
-    villages_t2c_first_cond: f64,
     villages_t2c_p50: f64,
     villages_t2c_p80: f64,
     villages_t2c_all: f64,
@@ -114,7 +106,6 @@ fn read_csv_rows() -> Vec<MetricRow> {
             iteration: parse_i64(&col(&cols, "iteration")),
             games_file: col(&cols, "games_file"),
             num_games: parse_i64(&col(&cols, "num_games")),
-            tribes: col(&cols, "tribes"),
             avg_score: parse_f64(&col(&cols, "avg_score")),
             max_score: parse_f64(&col(&cols, "max_score")),
             p1_avg: parse_f64(&col(&cols, "p1_avg")),
@@ -123,10 +114,6 @@ fn read_csv_rows() -> Vec<MetricRow> {
             policy_loss: parse_f64(&col(&cols, "policy_loss")),
             value_loss: parse_f64(&col(&cols, "value_loss")),
             value_r2: parse_f64(&col(&cols, "value_r2")),
-            aux_own_loss: parse_f64(&col(&cols, "aux_own_loss")),
-            aux_fog_loss: parse_f64(&col(&cols, "aux_fog_loss")),
-            aux_spt_loss: parse_f64(&col(&cols, "aux_spt_loss")),
-            aux_tech_loss: parse_f64(&col(&cols, "aux_tech_loss")),
             avg_captures: parse_f64(&col(&cols, "avg_captures")),
             avg_cap_ruins: parse_f64(&col(&cols, "avg_cap_ruins")),
             avg_cap_villages: parse_f64(&col(&cols, "avg_cap_villages")),
@@ -146,8 +133,6 @@ fn read_csv_rows() -> Vec<MetricRow> {
             avg_spt_t25: parse_f64(&col(&cols, "avg_spt_t25")),
             avg_spt_t30: parse_f64(&col(&cols, "avg_spt_t30")),
             villages_t2c_first: parse_f64(&col(&cols, "villages_t2c_first")),
-            villages_first_rate: parse_f64(&col(&cols, "villages_first_rate")),
-            villages_t2c_first_cond: parse_f64(&col(&cols, "villages_t2c_first_cond")),
             villages_t2c_p50: parse_f64(&col(&cols, "villages_t2c_p50")),
             villages_t2c_p80: parse_f64(&col(&cols, "villages_t2c_p80")),
             villages_t2c_all: parse_f64(&col(&cols, "villages_t2c_all")),
@@ -168,7 +153,6 @@ fn row_to_json(r: &MetricRow) -> Value {
         "iteration": r.iteration,
         "games_file": r.games_file,
         "num_games": r.num_games,
-        "tribes": r.tribes,
         "avg_score": r.avg_score,
         "max_score": r.max_score,
         "p1_avg": r.p1_avg,
@@ -177,10 +161,6 @@ fn row_to_json(r: &MetricRow) -> Value {
         "policy_loss": r.policy_loss,
         "value_loss": r.value_loss,
         "value_r2": r.value_r2,
-        "aux_own_loss": r.aux_own_loss,
-        "aux_fog_loss": r.aux_fog_loss,
-        "aux_spt_loss": r.aux_spt_loss,
-        "aux_tech_loss": r.aux_tech_loss,
         "avg_captures": r.avg_captures,
         "avg_cap_ruins": r.avg_cap_ruins,
         "avg_cap_villages": r.avg_cap_villages,
@@ -200,8 +180,6 @@ fn row_to_json(r: &MetricRow) -> Value {
         "avg_spt_t25": r.avg_spt_t25,
         "avg_spt_t30": r.avg_spt_t30,
         "villages_t2c_first": r.villages_t2c_first,
-        "villages_first_rate": r.villages_first_rate,
-        "villages_t2c_first_cond": r.villages_t2c_first_cond,
         "villages_t2c_p50": r.villages_t2c_p50,
         "villages_t2c_p80": r.villages_t2c_p80,
         "villages_t2c_all": r.villages_t2c_all,
@@ -237,10 +215,7 @@ pub async fn api_runs() -> Json<Value> {
             run_rows.sort_by_key(|r| r.iteration);
             let first = run_rows.first().unwrap();
             let last = run_rows.last().unwrap();
-            let best_score = run_rows
-                .iter()
-                .map(|r| r.max_score)
-                .fold(0.0_f64, f64::max);
+            let best_score = run_rows.iter().map(|r| r.max_score).fold(0.0_f64, f64::max);
             RunSummary {
                 run_id: run_id.clone(),
                 run_started_at: first.iter_started_at.clone(),
@@ -270,13 +245,6 @@ pub async fn api_training_metrics(Query(q): Query<RunFilter>) -> Json<Value> {
         .map(row_to_json)
         .collect();
     Json(json!(filtered))
-}
-
-pub async fn api_elo_ladder() -> Json<Value> {
-    let content = std::fs::read_to_string(LADDER_PATH).unwrap_or_default();
-    let ladder: Value =
-        serde_json::from_str(&content).unwrap_or_else(|_| json!({ "anchors": [], "readings": [] }));
-    Json(ladder)
 }
 
 pub async fn api_moves_by_turn(Query(q): Query<RunFilter>) -> Json<Value> {
@@ -428,7 +396,13 @@ fn compute_distribution(values: &[f32]) -> ValueDistribution {
         }
     }
 
-    let pct = |c: usize| if n > 0 { 100.0 * c as f64 / n as f64 } else { 0.0 };
+    let pct = |c: usize| {
+        if n > 0 {
+            100.0 * c as f64 / n as f64
+        } else {
+            0.0
+        }
+    };
 
     const HIST_BINS: usize = 80;
     let mut hist_counts = vec![0usize; HIST_BINS];
@@ -544,10 +518,6 @@ pub struct ApiError(StatusCode, String);
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (
-            self.0,
-            Json(json!({ "error": self.1 })),
-        )
-            .into_response()
+        (self.0, Json(json!({ "error": self.1 }))).into_response()
     }
 }

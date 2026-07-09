@@ -2,7 +2,7 @@
 // Based on the successful Python architecture
 
 use candle_core::{Module, ModuleT, Result, Tensor};
-use candle_nn::{Conv2d, GroupNorm, LayerNorm, Linear, VarBuilder};
+use candle_nn::{BatchNorm, Conv2d, LayerNorm, Linear, VarBuilder};
 
 fn conv(
     in_c: usize,
@@ -20,38 +20,34 @@ fn conv(
     candle_nn::conv2d(in_c, out_c, k, config, vs)
 }
 
-/// Mirror of train.py's GN_GROUPS. GroupNorm has no train/eval duality —
-/// identical function in both modes, no running stats.
-const GN_GROUPS: usize = 8;
-
-fn group_norm(c: usize, vs: VarBuilder) -> Result<GroupNorm> {
-    candle_nn::group_norm(GN_GROUPS, c, 1e-5, vs)
+fn batch_norm(c: usize, vs: VarBuilder) -> Result<BatchNorm> {
+    candle_nn::batch_norm(c, 1e-5, vs)
 }
 
 struct ResBlock {
     c1: Conv2d,
-    bn1: GroupNorm,
+    bn1: BatchNorm,
     c2: Conv2d,
-    bn2: GroupNorm,
+    bn2: BatchNorm,
 }
 
 impl ResBlock {
     fn new(c: usize, vs: VarBuilder) -> Result<Self> {
         let c1 = conv(c, c, 3, 1, 1, vs.pp("c1"))?;
-        let bn1 = group_norm(c, vs.pp("bn1"))?;
+        let bn1 = batch_norm(c, vs.pp("bn1"))?;
         let c2 = conv(c, c, 3, 1, 1, vs.pp("c2"))?;
-        let bn2 = group_norm(c, vs.pp("bn2"))?;
+        let bn2 = batch_norm(c, vs.pp("bn2"))?;
         Ok(Self { c1, bn1, c2, bn2 })
     }
 }
 
 impl ModuleT for ResBlock {
-    fn forward_t(&self, xs: &Tensor, _train: bool) -> Result<Tensor> {
+    fn forward_t(&self, xs: &Tensor, train: bool) -> Result<Tensor> {
         let ys = self.c1.forward(xs)?;
-        let ys = self.bn1.forward(&ys)?;
+        let ys = self.bn1.forward_t(&ys, train)?;
         let ys = ys.relu()?;
         let ys = self.c2.forward(&ys)?;
-        let ys = self.bn2.forward(&ys)?;
+        let ys = self.bn2.forward_t(&ys, train)?;
         (xs.add(&ys))?.relu()
     }
 }
@@ -127,7 +123,7 @@ impl CrossAttention {
 
         // Scaled dot-product attention
         let scale = 1.0 / (head_dim as f64).sqrt();
-        let k_t = k.transpose(2, 3)?.contiguous()?;  // Make contiguous for Metal matmul
+        let k_t = k.transpose(2, 3)?.contiguous()?; // Make contiguous for Metal matmul
         let scores = (q.contiguous()?.matmul(&k_t)? * scale)?;
         let attn = candle_nn::ops::softmax(&scores, candle_core::D::Minus1)?;
         // Both operands must be contiguous for Metal matmul
@@ -147,7 +143,7 @@ impl CrossAttention {
 pub struct PolyZeroNet {
     // Backbone
     conv1: Conv2d,
-    bn1: GroupNorm,
+    bn1: BatchNorm,
     res_blocks: Vec<ResBlock>,
 
     // Cross-Attention integration
@@ -158,6 +154,7 @@ pub struct PolyZeroNet {
 
     // Decomposed Policy Heads
     p_pool_conv: Conv2d,
+    p_pool_bn: BatchNorm,
     p_fc_shared: Linear,
 
     pi_action: Linear, // Action type (12)
@@ -165,10 +162,14 @@ pub struct PolyZeroNet {
     pi_target: Conv2d, // Spatial target
     pi_option: Linear, // Unified 192 options head
 
-    v_pool_conv: Conv2d,
-    v_fc_shared: Linear,
+    v_fc1: Linear,
+    v_fc2: Linear,
     v_win: Linear,
     v_progress: Linear,
+    // Aux ownership head (train.py's v_ownership): per-tile end-of-game
+    // ownership. Training-only signal — search never reads it. Optional so
+    // checkpoints that predate the head (league/arena opponents) still load.
+    v_ownership: Option<Conv2d>,
 }
 
 impl PolyZeroNet {
@@ -176,24 +177,12 @@ impl PolyZeroNet {
         let filters = 64;
         let blocks = 6;
         let input_channels = crate::ai::features::NUM_CHANNELS;
-        let player_state_dim = 10;
+        let player_state_dim = crate::ai::features::RawFeatures::PLAYER_STATE_DIM;
         let num_action_types = 11;
         let num_options = 192;
 
-        // BN-era checkpoints carry bn1.weight/bias too, so they'd load into
-        // GroupNorm code silently and play garbage — refuse them loudly.
-        // Synthetic backends (e.g. VarBuilder::zeros) claim to contain every
-        // name, including this probe — they aren't checkpoints, skip them.
-        let synthetic_backend = vs.contains_tensor("__polyfish_bn_era_probe__");
-        if !synthetic_backend && vs.contains_tensor("bn1.running_mean") {
-            candle_core::bail!(
-                "model file is a BatchNorm-era checkpoint (has bn1.running_mean); \
-                 this build uses GroupNorm — regenerate the model (init_model.py + retrain)"
-            );
-        }
-
         let conv1 = conv(input_channels, filters, 3, 1, 1, vs.pp("conv1"))?;
-        let bn1 = group_norm(filters, vs.pp("bn1"))?;
+        let bn1 = batch_norm(filters, vs.pp("bn1"))?;
 
         let mut res_blocks = Vec::new();
         for i in 0..blocks {
@@ -215,9 +204,9 @@ impl PolyZeroNet {
         // Cross-Attention layer
         let cross_attention = CrossAttention::new(filters, 4, vs.pp("cross_attention"))?;
 
-        // Shared policy processing (no norm on the 1-channel pool: a
-        // per-sample norm would erase the map's overall level)
+        // Shared policy processing
         let p_pool_conv = conv(filters, 1, 1, 1, 0, vs.pp("p_pool_conv"))?;
+        let p_pool_bn = batch_norm(1, vs.pp("p_pool_bn"))?;
         let p_fc_shared = candle_nn::linear(
             1 * crate::ai::features::MAP_SIZE * crate::ai::features::MAP_SIZE,
             filters,
@@ -230,15 +219,20 @@ impl PolyZeroNet {
         let pi_target = conv(filters, 1, 1, 1, 0, vs.pp("pi_target"))?;
         let pi_option = candle_nn::linear(filters, num_options, vs.pp("pi_option"))?;
 
-        // Value processing
-        let v_pool_conv = conv(filters, 1, 1, 1, 0, vs.pp("v_pool_conv"))?;
-        let v_fc_shared = candle_nn::linear(
-            1 * crate::ai::features::MAP_SIZE * crate::ai::features::MAP_SIZE,
-            filters,
-            vs.pp("v_fc_shared"),
-        )?;
+        // Value processing (EXP_ARCH_001): global mean+max pool over the full
+        // trunk -> MLP, instead of collapsing to a single channel.
+        let v_fc1 = candle_nn::linear(2 * filters, filters, vs.pp("v_fc1"))?;
+        let v_fc2 = candle_nn::linear(filters, filters, vs.pp("v_fc2"))?;
         let v_win = candle_nn::linear(filters, 1, vs.pp("v_win"))?;
         let v_progress = candle_nn::linear(filters, 1, vs.pp("v_progress"))?;
+        // NB: a VarMap-backed builder (bin/train.rs) reports false here, so
+        // the candle trainer neither trains nor re-saves these weights —
+        // train.py re-inits the head after a candle-trainer save.
+        let v_ownership = if vs.contains_tensor("v_ownership.weight") {
+            Some(conv(filters, 1, 1, 1, 0, vs.pp("v_ownership"))?)
+        } else {
+            None
+        };
 
         Ok(Self {
             conv1,
@@ -249,15 +243,17 @@ impl PolyZeroNet {
             player_fc,
             cross_attention,
             p_pool_conv,
+            p_pool_bn,
             p_fc_shared,
             pi_action,
             pi_source,
             pi_target,
             pi_option,
-            v_pool_conv,
-            v_fc_shared,
+            v_fc1,
+            v_fc2,
             v_win,
             v_progress,
+            v_ownership,
         })
     }
 
@@ -272,7 +268,7 @@ impl PolyZeroNet {
 
         // 1. Process map through backbone
         let mut x = self.conv1.forward(map_input)?;
-        x = self.bn1.forward(&x)?;
+        x = self.bn1.forward_t(&x, train)?;
         x = x.relu()?;
 
         for block in &self.res_blocks {
@@ -300,8 +296,9 @@ impl PolyZeroNet {
             .reshape((batch_size, filters, h, w))?;
 
         // 4. Policy Heads
-        // Pool convs are linear: no norm/activation (unnormed ReLU here goes dead).
         let p_pooled = self.p_pool_conv.forward(&shared)?;
+        let p_pooled = self.p_pool_bn.forward_t(&p_pooled, train)?;
+        let p_pooled = p_pooled.relu()?;
         let p_pooled = p_pooled.flatten_from(1)?;
         let p_latent = self.p_fc_shared.forward(&p_pooled)?.relu()?;
 
@@ -317,14 +314,29 @@ impl PolyZeroNet {
             move_option: pi_option,
         };
 
-        // 5. Value Heads
-        let v_pooled = self.v_pool_conv.forward(&shared)?;
-        let v_pooled = v_pooled.flatten_from(1)?;
-        let v_latent = self.v_fc_shared.forward(&v_pooled)?.relu()?;
-        let v_win = self.v_win.forward(&v_latent)?.tanh()?;
+        // 5. Value Heads (EXP_ARCH_001): pool the full trunk (mean+max over
+        // H*W) -> MLP, giving the value estimate a real feature basis.
+        let v_spatial = shared.flatten_from(2)?; // [B, filters, H*W]
+        let v_mean = v_spatial.mean(2)?; // [B, filters]
+        let v_max = v_spatial.max(2)?; // [B, filters]
+        let v_feat = Tensor::cat(&[&v_mean, &v_max], 1)?; // [B, 2*filters]
+        let v_latent = self.v_fc1.forward(&v_feat)?.relu()?;
+        let v_latent = self.v_fc2.forward(&v_latent)?.relu()?;
+        let v_win = self.v_win.forward(&v_latent)?;
         let v_progress = self.v_progress.forward(&v_latent)?;
+        let v_ownership = match &self.v_ownership {
+            Some(head) => Some(head.forward(&shared)?.flatten_from(1)?),
+            None => None,
+        };
 
-        Ok((policy_output, ValueOutput { win_value: v_win, progress_value: v_progress }))
+        Ok((
+            policy_output,
+            ValueOutput {
+                win_value: v_win,
+                progress_value: v_progress,
+                ownership_value: v_ownership,
+            },
+        ))
     }
 
     pub fn forward(
@@ -352,8 +364,11 @@ pub struct PolicyOutput {
 
 #[derive(Debug)]
 pub struct ValueOutput {
-    pub win_value: Tensor, // [B, 1]
+    pub win_value: Tensor,      // [B, 1]
     pub progress_value: Tensor, // [B, 1]
+    /// Aux ownership head output, [B, H*W]. None on checkpoints that predate
+    /// the head. Diagnostics only — search must never read this.
+    pub ownership_value: Option<Tensor>,
 }
 
 /// Device-free policy output for a single leaf: one row of each decomposed
@@ -369,6 +384,99 @@ pub struct RawPolicyOutput {
     pub source_spatial: Vec<f32>,
     pub target_spatial: Vec<f32>,
     pub move_option: Vec<f32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_core::Device;
+    use candle_nn::VarMap;
+
+    fn forward_dummy(net: &PolyZeroNet, device: &Device) -> (PolicyOutput, ValueOutput) {
+        let map = Tensor::zeros(
+            (
+                2,
+                crate::ai::features::NUM_CHANNELS,
+                crate::ai::features::MAP_SIZE,
+                crate::ai::features::MAP_SIZE,
+            ),
+            candle_core::DType::F32,
+            device,
+        )
+        .unwrap();
+        let player = Tensor::zeros(
+            (2, crate::ai::features::RawFeatures::PLAYER_STATE_DIM),
+            candle_core::DType::F32,
+            device,
+        )
+        .unwrap();
+        net.forward(&map, &player).unwrap()
+    }
+
+    /// Both checkpoint generations must load: files predating the aux
+    /// ownership head leave it None; files carrying v_ownership.* populate it.
+    #[test]
+    fn test_optional_ownership_head_load() {
+        let device = Device::Cpu;
+        let dir = std::env::temp_dir();
+        let old_path = dir.join("polyfish_test_net_pre_ownership.safetensors");
+        let new_path = dir.join("polyfish_test_net_with_ownership.safetensors");
+
+        // A fresh VarMap-backed net registers no ownership head, so its save
+        // is byte-equivalent to a pre-ownership checkpoint.
+        let varmap = VarMap::new();
+        let vs = candle_nn::VarBuilder::from_varmap(&varmap, candle_core::DType::F32, &device);
+        let _ = PolyZeroNet::new(vs).unwrap();
+        varmap.save(&old_path).unwrap();
+
+        let vs_old = unsafe {
+            candle_nn::VarBuilder::from_mmaped_safetensors(
+                &[old_path.clone()],
+                candle_core::DType::F32,
+                &device,
+            )
+            .unwrap()
+        };
+        let net_old = PolyZeroNet::new(vs_old).unwrap();
+        assert!(net_old.v_ownership.is_none());
+        let (_, values) = forward_dummy(&net_old, &device);
+        assert!(values.ownership_value.is_none());
+
+        // Same checkpoint plus v_ownership.* (train.py layout) -> head loads.
+        let mut tensors = candle_core::safetensors::load(&old_path, &device).unwrap();
+        tensors.insert(
+            "v_ownership.weight".to_string(),
+            Tensor::zeros((1, 64, 1, 1), candle_core::DType::F32, &device).unwrap(),
+        );
+        tensors.insert(
+            "v_ownership.bias".to_string(),
+            Tensor::zeros(1, candle_core::DType::F32, &device).unwrap(),
+        );
+        candle_core::safetensors::save(&tensors, &new_path).unwrap();
+
+        let vs_new = unsafe {
+            candle_nn::VarBuilder::from_mmaped_safetensors(
+                &[new_path.clone()],
+                candle_core::DType::F32,
+                &device,
+            )
+            .unwrap()
+        };
+        let net_new = PolyZeroNet::new(vs_new).unwrap();
+        assert!(net_new.v_ownership.is_some());
+        let (_, values) = forward_dummy(&net_new, &device);
+        let ownership = values.ownership_value.unwrap();
+        assert_eq!(
+            ownership.dims(),
+            &[
+                2,
+                crate::ai::features::MAP_SIZE * crate::ai::features::MAP_SIZE
+            ]
+        );
+
+        let _ = std::fs::remove_file(old_path);
+        let _ = std::fs::remove_file(new_path);
+    }
 }
 
 impl PolicyOutput {

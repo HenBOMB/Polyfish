@@ -1,11 +1,12 @@
+use candle_core::Device;
 use clap::Parser;
 use polyfish::ai::brain::{SearchBackend, SearchBackendArg, make_search_agent};
-use polyfish::ai::eval_backend::{self, EvalBackendKind, PlayerBackend};
-use polyfish::ai::eval_server::{EvalServerConfig, Evaluator};
+use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
 use polyfish::ai::network::PolyZeroNet;
 use polyfish::game::Game;
 use polyfish::mapgen::{MapGenSettings, generate};
 use polyfish::types::{MapSize, MapType, ModeType, TribeType};
+use rayon::ThreadPoolBuilder;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime};
@@ -56,80 +57,55 @@ struct Args {
     #[arg(long, default_value_t = 30)]
     max_turns: i32,
 
-    /// Game mode (2 = Domination, the training mode). The mode is a net
-    /// input feature and steers the heuristic evaluator — match training.
+    /// Game mode (ModeType repr; 2 = Domination to match training). In
+    /// Domination a game is decisive when one side is eliminated; at the
+    /// turn cap the higher score wins (same adjudication as self_play).
     #[arg(long, default_value_t = 2)]
     gamemode: u8,
 
-    /// Number of concurrent match-worker threads (games in flight).
-    /// Independent of CPU core count — workers park while awaiting
-    /// eval-server replies (same eval-serving design as self_play), so
-    /// oversubscribing past core count is fine and is what produces the fat
-    /// coalesced batches that make the fast eval backends fast. 0 = auto:
-    /// 4x core count, clamped to the total game count (2 * --games) — sized
-    /// for a single EXP-10-style 32-64 seed reading; raise it by hand for
-    /// much larger batches.
+    /// Cap concurrent rayon workers (= concurrent Metal devices on macOS).
+    /// Lower this if you hit Metal GPU errors (command-buffer faults under
+    /// memory pressure). 0 = use all cores (rayon default).
     #[arg(long, default_value_t = 0)]
-    concurrency: usize,
+    workers: usize,
 
-    /// Deprecated alias for --concurrency (previously capped rayon Metal
-    /// devices; eval no longer runs on match-worker threads, so that
-    /// rationale no longer applies). Kept for old shell history only.
+    /// Append one JSON line per game to this file (the Elo match ledger
+    /// consumed by elo.py). Omit to keep the human-readable summary only.
     #[arg(long)]
-    workers: Option<usize>,
+    json_out: Option<String>,
 
-    /// NN inference backend: "candle" (Metal/CUDA/CPU), "tch" (libtorch/MPS,
-    /// ~19x faster on Metal, requires --features tch-eval), or "metal"
-    /// (MPSGraph, bypasses libtorch's serial MPS dispatch queue, requires
-    /// --features metal-eval — see metal_network.rs). Empty = auto: "metal"
-    /// if the metal-eval feature is compiled in, else "tch" if tch-eval is,
-    /// else "candle".
-    #[arg(long, default_value = "")]
-    eval_backend: String,
-
-    /// Number of concurrent eval-server threads (shards) per config. Each
-    /// owns its own weights copy + LRU cache. 0 = auto (3 on metal, 1 on
-    /// tch/candle). See self_play's --eval-servers doc for the measured
-    /// rationale (tch serializes across shards; candle rejects >1).
-    #[arg(long, default_value_t = 0)]
-    eval_servers: usize,
-
-    /// Metal backend only: pipelined GPU worker threads per eval server.
-    /// Ignored by candle/tch.
-    #[arg(long, default_value_t = 2)]
-    eval_workers: usize,
-
-    /// Eval-server batch cap: max leaves coalesced into one forward_t.
-    #[arg(long, default_value_t = 256)]
-    max_batch: usize,
-
-    /// Eval-server coalescing flush timeout in microseconds.
-    #[arg(long, default_value_t = 1000)]
-    coalesce_timeout_us: u64,
-
-    /// Eval-cache LRU capacity (number of cached NN evaluations), split
-    /// across shards. 0 disables the cache.
-    #[arg(long, default_value_t = 524288)]
-    cache_cap: usize,
-
-    /// Per-game virtual-loss mini-batch size (leaves coalesced per NN call
-    /// within a single game's search tree). None keeps each MCTS agent's own
-    /// default (24). Once cross-match coalescing exists (this eval-server
-    /// setup), self_play measured a larger value as a net throughput loss —
-    /// see self_play's --leaf-batch doc. Changing this from the default
-    /// alters Gumbel move selection, same as --eval-backend; sweep before
-    /// trusting a strength-gauge run against it.
+    /// Ledger player name for configuration 1 (default: derived from
+    /// backend + model file stem + mcts iters).
     #[arg(long)]
-    leaf_batch: Option<usize>,
+    name1: Option<String>,
 
-    /// Write per-turn stat samples (score/SPT/stars/cities/units/unit-cost/
-    /// techs per config) as one JSON per game into this directory — the
-    /// EXP_ELO_001 loss-autopsy instrument.
+    /// Ledger player name for configuration 2.
     #[arg(long)]
-    dump_stats_dir: Option<String>,
+    name2: Option<String>,
+
+    /// Generate mirrored / symmetric 1v1 maps for Elo evaluation.
+    #[arg(long, default_value_t = false)]
+    symmetric: bool,
 }
 
-fn load_model(path: &str, device: &candle_core::Device) -> anyhow::Result<PolyZeroNet> {
+/// Stable ledger identity: network-free backends need no model, so their name
+/// is backend(+iters) only; network backends are model@backend@iters.
+fn player_name(backend: SearchBackend, model: &str, mcts: usize) -> String {
+    let stem = std::path::Path::new(model)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| model.to_string());
+    match backend {
+        SearchBackend::Random => "random".to_string(),
+        SearchBackend::Greedy => "greedy".to_string(),
+        SearchBackend::StateDiffGreedy => "statediffgreedy".to_string(),
+        SearchBackend::Heuristic => format!("heuristic{mcts}"),
+        SearchBackend::Zero => format!("{stem}@zero{mcts}"),
+        SearchBackend::Gumbel { .. } => format!("{stem}@gumbel{mcts}"),
+    }
+}
+
+fn load_model(path: &str, device: &Device) -> anyhow::Result<PolyZeroNet> {
     // Load trained weights directly with from_mmaped_safetensors for correctness.
     let vs = unsafe {
         candle_nn::VarBuilder::from_mmaped_safetensors(&[path], candle_core::DType::F32, device)?
@@ -137,61 +113,27 @@ fn load_model(path: &str, device: &candle_core::Device) -> anyhow::Result<PolyZe
     Ok(PolyZeroNet::new(vs)?)
 }
 
-/// One per-turn sample for --dump-stats-dir; arrays index [config1, config2].
-#[derive(serde::Serialize)]
-struct TurnSample {
-    turn: i32,
-    score: [i32; 2],
-    spt: [i32; 2],
-    stars: [i32; 2],
-    cities: [usize; 2],
-    units: [usize; 2],
-    unit_cost: [i32; 2],
-    techs: [usize; 2],
-}
-
-fn sample_turn(state: &polyfish::states::GameState, swap: bool) -> TurnSample {
-    let mut s = TurnSample {
-        turn: state.settings.turn,
-        score: [0; 2],
-        spt: [0; 2],
-        stars: [0; 2],
-        cities: [0; 2],
-        units: [0; 2],
-        unit_cost: [0; 2],
-        techs: [0; 2],
-    };
-    for c in 0..2 {
-        // Config 1 sits in the P1 seat unless swapped.
-        let pid: polyfish::states::PlayerId = if (c == 0) != swap { 1 } else { 2 };
-        if let Some(t) = state.tribes.get(&pid) {
-            s.score[c] = t.score;
-            s.spt[c] = polyfish::functions::get_tribe_spt(state, t);
-            s.stars[c] = t.stars;
-            s.cities[c] = t.cities.len();
-            s.units[c] = t.units.len();
-            s.unit_cost[c] = t
-                .units
-                .iter()
-                .map(|u| polyfish::settings::units::get_unit_setting(u.unit_type).cost)
-                .sum();
-            s.techs[c] = t.tech_vanilla.len();
-        }
-    }
-    s
+/// Extract a printable message from a caught panic payload.
+fn panic_msg(e: &(dyn std::any::Any + Send)) -> &str {
+    e.downcast_ref::<&str>()
+        .copied()
+        .or_else(|| e.downcast_ref::<String>().map(|s| s.as_str()))
+        .unwrap_or("unknown panic")
 }
 
 /// Per-match result, attributed to configurations (1 or 2), not seats.
 struct MatchResult {
     winner_config: u8,
-    /// true = config 2 sat in the P1 seat this game.
-    swap: bool,
     score_config1: i32,
     score_config2: i32,
     ns_config1: u64,
     moves_config1: u64,
     ns_config2: u64,
     moves_config2: u64,
+    seed: i64,
+    swap: bool,
+    /// True when the game ended by elimination rather than score at the cap.
+    decisive: bool,
 }
 
 /// Play one game. `swap` puts config2 in the P1 seat and config1 in P2.
@@ -203,25 +145,24 @@ fn play_match(
     mcts2: usize,
     backend1: SearchBackend,
     backend2: SearchBackend,
-    leaf_batch: Option<usize>,
     seed: i64,
     swap: bool,
     max_turns: i32,
     gamemode: u8,
-    dump_stats_dir: Option<&str>,
+    symmetric: bool,
 ) -> MatchResult {
     let gen_settings = MapGenSettings {
         size: MapSize::Tiny,
         map_type: MapType::Drylands,
         tribes: vec![TribeType::Imperius, TribeType::Imperius],
         seed,
+        symmetric,
         ..Default::default()
     };
 
     let mut game = Game::new();
     game.state = generate(gen_settings);
-    game.state.settings.mode =
-        ModeType::from_repr(gamemode).unwrap_or(ModeType::Perfection);
+    game.state.settings.mode = ModeType::from_repr(gamemode).unwrap_or(ModeType::Perfection);
     game.state.settings.max_turns = max_turns;
     game.post_load();
 
@@ -229,16 +170,16 @@ fn play_match(
     // scores attribute to the right config when sides are swapped.
     let (mut agent_p1, p1_config, mut agent_p2, p2_config) = if swap {
         (
-            make_search_agent(backend2, eval2, mcts2, leaf_batch, None, None, None),
+            make_search_agent(backend2, eval2, mcts2, None, None, None, None),
             2u8,
-            make_search_agent(backend1, eval1, mcts1, leaf_batch, None, None, None),
+            make_search_agent(backend1, eval1, mcts1, None, None, None, None),
             1u8,
         )
     } else {
         (
-            make_search_agent(backend1, eval1, mcts1, leaf_batch, None, None, None),
+            make_search_agent(backend1, eval1, mcts1, None, None, None, None),
             1u8,
-            make_search_agent(backend2, eval2, mcts2, leaf_batch, None, None, None),
+            make_search_agent(backend2, eval2, mcts2, None, None, None, None),
             2u8,
         )
     };
@@ -248,27 +189,23 @@ fn play_match(
     let mut moves_config1: u64 = 0;
     let mut ns_config2: u64 = 0;
     let mut moves_config2: u64 = 0;
-    let mut samples: Vec<TurnSample> = Vec::new();
-    let mut last_sampled_turn = i32::MIN;
 
     while !polyfish::functions::is_game_over(&game.state) && moves < 500 {
-        if dump_stats_dir.is_some() && game.state.settings.turn != last_sampled_turn {
-            samples.push(sample_turn(&game.state, swap));
-            last_sampled_turn = game.state.settings.turn;
-        }
         let current_pid = game.state.settings.current_player_turn_id;
 
         let t0 = Instant::now();
-        // Search on a clone: MCTS execute/undo must never touch the scored
-        // state (Brain::think_decomposed clones for the same reason).
         let best_move = if current_pid == 1 {
-            agent_p1.select_move(&mut game.clone())
+            agent_p1.select_move(&mut game)
         } else {
-            agent_p2.select_move(&mut game.clone())
+            agent_p2.select_move(&mut game)
         };
         let dt = t0.elapsed().as_nanos() as u64;
 
-        let cfg = if current_pid == 1 { p1_config } else { p2_config };
+        let cfg = if current_pid == 1 {
+            p1_config
+        } else {
+            p2_config
+        };
         if cfg == 1 {
             ns_config1 += dt;
             moves_config1 += 1;
@@ -277,6 +214,26 @@ fn play_match(
             moves_config2 += 1;
         }
 
+        if std::env::var("ARENA_TRACE").is_ok() {
+            let vitals = |pid: i32| {
+                game.state
+                    .tribes
+                    .get(&pid)
+                    .map(|t| format!("k{}r{}c{}", t.killed_turn, t.resigned_turn, t.cities.len()))
+                    .unwrap_or_else(|| "gone".to_string())
+            };
+            eprintln!(
+                "TRACE turn={} pid={} p1[{}] p2[{}] move={}",
+                game.state.settings.turn,
+                current_pid,
+                vitals(1),
+                vitals(2),
+                best_move
+                    .as_ref()
+                    .map(|m| m.describe(&game.state))
+                    .unwrap_or_else(|| "<none>".to_string())
+            );
+        }
         if let Some(m) = best_move {
             game.play_move(m.as_ref());
         } else {
@@ -287,6 +244,14 @@ fn play_match(
 
     let p1_score = game.state.tribes.get(&1).map(|t| t.score).unwrap_or(0);
     let p2_score = game.state.tribes.get(&2).map(|t| t.score).unwrap_or(0);
+    let is_alive = |pid: i32| {
+        game.state
+            .tribes
+            .get(&pid)
+            .map(|t| t.killed_turn <= 0 && t.resigned_turn <= 0)
+            .unwrap_or(false)
+    };
+    let (p1_alive, p2_alive) = (is_alive(1), is_alive(2));
 
     let (score_config1, score_config2) = if swap {
         (p2_score, p1_score)
@@ -294,7 +259,13 @@ fn play_match(
         (p1_score, p2_score)
     };
 
-    let winner_config = if score_config1 > score_config2 {
+    // Elimination beats score adjudication (mirrors self_play's Domination
+    // winner logic); a sole survivor wins decisively regardless of score.
+    let decisive = p1_alive != p2_alive;
+    let winner_config = if decisive {
+        let winner_seat = if p1_alive { 1u8 } else { 2u8 };
+        if swap { 3 - winner_seat } else { winner_seat }
+    } else if score_config1 > score_config2 {
         1
     } else if score_config2 > score_config1 {
         2
@@ -302,37 +273,24 @@ fn play_match(
         0
     };
 
-    if let Some(dir) = dump_stats_dir {
-        samples.push(sample_turn(&game.state, swap)); // final post-game state
-        let dump = serde_json::json!({
-            "seed": seed,
-            "swap": swap,
-            "winner_config": winner_config,
-            "score_config1": score_config1,
-            "score_config2": score_config2,
-            "samples": samples,
-        });
-        let name = format!("game_{}_{}.json", seed, if swap { "b" } else { "a" });
-        let path = std::path::Path::new(dir).join(name);
-        match serde_json::to_vec_pretty(&dump) {
-            Ok(bytes) => {
-                if let Err(e) = std::fs::write(&path, bytes) {
-                    eprintln!("[dump-stats] failed to write {}: {e}", path.display());
-                }
-            }
-            Err(e) => eprintln!("[dump-stats] failed to serialize seed {seed}: {e}"),
-        }
+    if decisive {
+        println!(
+            "Game seed {} (swap {}) was decisive at turn {}",
+            seed, swap, game.state.settings.turn
+        );
     }
 
     MatchResult {
         winner_config,
-        swap,
         score_config1,
         score_config2,
         ns_config1,
         moves_config1,
         ns_config2,
         moves_config2,
+        seed,
+        swap,
+        decisive,
     }
 }
 
@@ -342,50 +300,39 @@ fn backend_from_arg(arg: SearchBackendArg, k: usize) -> SearchBackend {
         SearchBackendArg::Gumbel => SearchBackend::Gumbel { k },
         SearchBackendArg::Heuristic => SearchBackend::Heuristic,
         SearchBackendArg::Greedy => SearchBackend::Greedy,
+        SearchBackendArg::StateDiffGreedy => SearchBackend::StateDiffGreedy,
+        SearchBackendArg::Random => SearchBackend::Random,
     }
 }
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-
-    // Default Metal op-flush cadence to 1000 for better GPU efficiency on
-    // Metal (only exercised by the candle backend; harmless no-op for
-    // tch/metal). Mirrors self_play's default.
-    if std::env::var("CANDLE_METAL_COMPUTE_PER_BUFFER").is_err() {
-        unsafe {
-            std::env::set_var("CANDLE_METAL_COMPUTE_PER_BUFFER", "1000");
-        }
-    }
-
-    let eval_backend_kind = eval_backend::resolve_eval_backend_kind(&args.eval_backend)?;
-    let eval_servers = eval_backend::resolve_eval_servers(eval_backend_kind, args.eval_servers)?;
+    // Select best available device: CUDA (NVIDIA) > Metal (macOS) > CPU
+    let device = match Device::cuda_if_available(0) {
+        Ok(Device::Cpu) | Err(_) => Device::metal_if_available(0).unwrap_or(Device::Cpu),
+        Ok(d) => d,
+    };
 
     println!("Loading models...");
-    let device1 = eval_backend::select_device()?;
-    println!("Config 1: {} (GPU: {:?})", args.model1, !matches!(device1, candle_core::Device::Cpu));
-    let net1 = Arc::new(load_model(&args.model1, &device1)?);
+    println!(
+        "Config 1: {} (GPU: {:?})",
+        args.model1,
+        !matches!(device, Device::Cpu)
+    );
+    let net1 = Arc::new(load_model(&args.model1, &device)?);
 
-    // When both configs use the same model file, share one GPU copy/shard
-    // set instead of loading a second — doubles GPU memory otherwise, and
-    // under candle, doubles the risk surface for the two-device invariant
-    // below.
+    // When both configs use the same model file, share one GPU copy instead of
+    // loading a second — doubles GPU memory otherwise (Metal faults under load).
     let same_model = args.model1 == args.model2;
-    println!("Config 2: {} (GPU: {:?})", args.model2, !matches!(device1, candle_core::Device::Cpu));
+    println!(
+        "Config 2: {} (GPU: {:?})",
+        args.model2,
+        !matches!(device, Device::Cpu)
+    );
     let net2 = if same_model {
         net1.clone()
-    } else if eval_backend_kind == EvalBackendKind::Candle {
-        // Two independent candle EvalServer threads (one per config) will
-        // run concurrently — give config 2 its own device so they don't
-        // share a command queue (see eval_backend.rs's device-isolation
-        // contract; candle's Metal backend corrupts if >1 thread encodes
-        // ops against the same Device).
-        let device2 = eval_backend::select_device()?;
-        Arc::new(load_model(&args.model2, &device2)?)
     } else {
-        // tch/metal: each shard loads its own weights from model_path on
-        // the eval-server thread; this candle net is unused for inference,
-        // only kept to satisfy PlayerBackend's shape.
-        Arc::new(load_model(&args.model2, &device1)?)
+        Arc::new(load_model(&args.model2, &device)?)
     };
 
     let mcts1 = args.mcts1.unwrap_or(args.mcts);
@@ -398,149 +345,258 @@ fn main() -> anyhow::Result<()> {
         backend1, mcts1, backend2, mcts2, args.max_turns
     );
 
-    // Each shard sees ~1/N of the working set (hash-routed), so dividing the
-    // per-shard cache by N keeps total resident cache ~constant.
-    let per_shard_cache = eval_backend::split_cache_capacity(args.cache_cap, eval_servers);
-    let eval_config = EvalServerConfig {
-        max_batch: args.max_batch,
-        coalesce_timeout: std::time::Duration::from_micros(args.coalesce_timeout_us),
-        cache_capacity: per_shard_cache,
-        pipeline_workers: args.eval_workers,
-    };
-
-    // One shared evaluator set per config, backed by dedicated EvalServer
-    // threads — the same design self_play uses for cross-match batching.
-    // Match-worker threads below never touch a device directly.
-    let (p1_servers, p2_servers, eval1, eval2) = eval_backend::build_two_player_evaluators(
-        eval_backend_kind,
-        eval_servers,
-        eval_config,
-        PlayerBackend { model_path: &args.model1, candle_net: &net1 },
-        (!same_model).then(|| PlayerBackend { model_path: &args.model2, candle_net: &net2 }),
-    );
-
-    let backend_label = match eval_backend_kind {
-        EvalBackendKind::Tch => "tch (libtorch/MPS)",
-        EvalBackendKind::Metal => "metal (MPSGraph)",
-        EvalBackendKind::Candle => "candle",
-    };
-
     let base_seed = SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs();
 
     let total_games = args.games * 2;
-
-    let concurrency = match args.workers.filter(|&w| w > 0) {
-        Some(w) => {
-            eprintln!("--workers is deprecated, use --concurrency");
-            w
-        }
-        None if args.concurrency > 0 => args.concurrency,
-        // Oversubscribe past core count (workers mostly park awaiting
-        // eval-server replies — see the field doc), but never past
-        // total_games: a worker with no job left just exits immediately, so
-        // more than that is pure overhead, not extra throughput.
-        None => {
-            let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
-            (cores * 4).clamp(1, total_games.max(1))
-        }
-    };
     println!(
-        "Starting Arena: {} seeds x 2 sides = {} games (swapped) | eval {backend_label} | \
-         {eval_servers} shard(s) cache={per_shard_cache:?} | concurrency={concurrency} \
-         max_batch={} coalesce_us={} leaf_batch={:?}",
-        args.games, total_games, args.max_batch, args.coalesce_timeout_us, args.leaf_batch
+        "Starting Arena: {} seeds x 2 sides = {} games (swapped)...",
+        args.games, total_games
     );
-
-    if let Some(dir) = &args.dump_stats_dir {
-        std::fs::create_dir_all(dir)?;
-    }
-    let dump_stats_dir = args.dump_stats_dir.as_deref();
 
     let arena_start = Instant::now();
     let completed = AtomicU32::new(0);
     let progress_step = ((total_games / 10) as u32).max(1);
+
+    // Cap concurrent workers (= concurrent Metal devices on macOS) if requested.
+    let pool = if args.workers > 0 {
+        Some(
+            ThreadPoolBuilder::new()
+                .num_threads(args.workers)
+                .build()
+                .expect("failed to build rayon pool"),
+        )
+    } else {
+        None
+    };
+
+    // On Metal, sharing one device across threads races inside candle, so each
+    // real worker thread gets its own device and network replicas — same
+    // pattern as self_play. On CPU/CUDA the loaded networks are shared.
+    //
+    // We use rayon::broadcast (not par_iter/map_init) because map_init's init
+    // closure can be re-invoked whenever work-stealing rebalances a chunk onto
+    // a "new" logical task, which silently created far more than `--workers`
+    // Metal devices over a long run (compounding GPU memory pressure over
+    // time). broadcast runs its closure exactly once per real pool thread.
+    let per_thread_metal = device.is_metal();
     let job_counter = AtomicUsize::new(0);
     let skipped = AtomicU32::new(0);
     let results_mutex: Mutex<Vec<MatchResult>> = Mutex::new(Vec::with_capacity(total_games));
 
-    // Oversubscribed actor pool: `concurrency` match-worker threads pull
-    // independent (seed, swap) jobs off a shared counter and submit into the
-    // same eval1/eval2 evaluators, so many concurrent games' leaves coalesce
-    // into fat eval-server batches — this cross-match batching (not just the
-    // backend swap) is what closes most of the gap to self_play's
-    // throughput. Threads borrow eval1/eval2 (not clone+move) so dropping
-    // them after this scope closes is enough to unblock EvalServer shutdown
-    // below — no clone can outlive the scope and keep a request-channel
-    // sender alive.
-    std::thread::scope(|scope| {
-        for _ in 0..concurrency {
-            let eval1 = &eval1;
-            let eval2 = &eval2;
-            let job_counter = &job_counter;
-            let results_mutex = &results_mutex;
-            let completed = &completed;
-            let skipped = &skipped;
-            scope.spawn(move || {
-                loop {
-                    let idx = job_counter.fetch_add(1, Ordering::Relaxed);
-                    if idx >= total_games {
-                        break;
-                    }
-                    let seed = (base_seed + (idx / 2) as u64) as i64;
-                    let swap = idx % 2 == 1;
+    let use_eval_server = !device.is_metal();
+    let (server1, handle1) = if use_eval_server {
+        let config = polyfish::ai::eval_server::EvalServerConfig {
+            max_batch: 256,
+            ..Default::default()
+        };
+        let spec = polyfish::ai::eval_server::BackendSpec::Candle(net1.clone());
+        let (s, h) = polyfish::ai::eval_server::EvalServer::start(spec, config);
+        (Some(s), Some(h))
+    } else {
+        (None, None)
+    };
 
-                    // Catches ordinary game-logic panics on this thread. A
-                    // GPU-driver fault now happens inside the dedicated
-                    // EvalServer thread (evaluation no longer runs on this
-                    // worker), outside this catch_unwind — see the
-                    // eval_server.rs panic-propagation note this mirrors in
-                    // self_play. If the eval-server thread itself dies, every
-                    // subsequent submit() on it panics (caught here as a
-                    // skip), which can cascade into most/all remaining jobs
-                    // rather than just the one seed that hit the fault.
-                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        play_match(
-                            eval1, eval2, mcts1, mcts2, backend1, backend2, args.leaf_batch,
-                            seed, swap, args.max_turns, args.gamemode, dump_stats_dir,
-                        )
-                    }));
+    let (server2, handle2) = if use_eval_server && !same_model {
+        let config = polyfish::ai::eval_server::EvalServerConfig {
+            max_batch: 256,
+            ..Default::default()
+        };
+        let spec = polyfish::ai::eval_server::BackendSpec::Candle(net2.clone());
+        let (s, h) = polyfish::ai::eval_server::EvalServer::start(spec, config);
+        (Some(s), Some(h))
+    } else {
+        (None, None)
+    };
 
-                    match result {
-                        Ok(r) => {
-                            results_mutex.lock().unwrap().push(r);
-                        }
-                        Err(_) => {
-                            skipped.fetch_add(1, Ordering::Relaxed);
-                            eprintln!("  ⚠ seed {} (idx {}) skipped after a panic", seed, idx);
-                        }
-                    }
+    let worker = |_ctx: rayon::BroadcastContext| {
+        let (eval1, eval2) = if use_eval_server {
+            let h1 = handle1.as_ref().unwrap().clone();
+            let h2 = if same_model {
+                h1.clone()
+            } else {
+                handle2.as_ref().unwrap().clone()
+            };
+            (Evaluator::Server(h1), Evaluator::Server(h2))
+        } else {
+            let (w_net1, w_net2) = if per_thread_metal {
+                let device =
+                    Device::new_metal(0).expect("failed to create per-thread Metal device");
+                let n1 = Arc::new(
+                    load_model(&args.model1, &device).expect("failed to load per-thread model1"),
+                );
+                let n2 = if same_model {
+                    n1.clone()
+                } else {
+                    Arc::new(
+                        load_model(&args.model2, &device)
+                            .expect("failed to load per-thread model2"),
+                    )
+                };
+                println!(
+                    "  worker ready (Metal device loaded) at {:.1}s",
+                    arena_start.elapsed().as_secs_f32()
+                );
+                (n1, n2)
+            } else {
+                (net1.clone(), net2.clone())
+            };
+            (
+                Evaluator::Inline(InlineEvalHandle::new(w_net1)),
+                Evaluator::Inline(InlineEvalHandle::new(w_net2)),
+            )
+        };
 
-                    let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
-                    if done <= 2 || done % progress_step == 0 || done >= total_games as u32 {
-                        let elapsed = arena_start.elapsed().as_secs_f32();
-                        let done = done.min(total_games as u32);
-                        println!(
-                            "  progress: {}/{} games ({:.0}%)  elapsed {:.0}s  ~{:.0}s remaining",
-                            done,
-                            total_games,
-                            100.0 * done as f32 / total_games as f32,
-                            elapsed,
-                            elapsed * (total_games as f32 / done as f32 - 1.0)
-                        );
-                    }
+        loop {
+            let idx = job_counter.fetch_add(1, Ordering::Relaxed);
+            if idx >= args.games * 2 {
+                break;
+            }
+            let seed_idx = idx / 2;
+            let swap = (idx % 2) != 0;
+            let seed = (base_seed + seed_idx as u64) as i64;
+
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                play_match(
+                    &eval1,
+                    &eval2,
+                    mcts1,
+                    mcts2,
+                    backend1,
+                    backend2,
+                    seed,
+                    swap,
+                    args.max_turns,
+                    args.gamemode,
+                    args.symmetric,
+                )
+            }));
+
+            match r {
+                Ok(r) => {
+                    let winner = match r.winner_config {
+                        1 => "config1",
+                        2 => "config2",
+                        _ => "draw",
+                    };
+                    println!(
+                        "  game seed={} swap={}: {} ({}) scores {}-{}",
+                        r.seed,
+                        r.swap,
+                        winner,
+                        if r.decisive {
+                            "elimination"
+                        } else {
+                            "score at cap"
+                        },
+                        r.score_config1,
+                        r.score_config2
+                    );
+                    results_mutex.lock().unwrap().push(r);
                 }
-            });
+                Err(e) => {
+                    skipped.fetch_add(1, Ordering::Relaxed);
+                    eprintln!(
+                        "  ⚠ seed {} swap {} dropped — game panicked: {}",
+                        seed,
+                        swap,
+                        panic_msg(e.as_ref())
+                    );
+                }
+            }
+
+            let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+            // Print early completions immediately (heartbeat) plus every ~10%.
+            if done <= 2 || done % progress_step == 0 || done >= total_games as u32 {
+                let elapsed = arena_start.elapsed().as_secs_f32();
+                let done = done.min(total_games as u32);
+                println!(
+                    "  progress: {}/{} games ({:.0}%)  elapsed {:.0}s  ~{:.0}s remaining",
+                    done,
+                    total_games,
+                    100.0 * done as f32 / total_games as f32,
+                    elapsed,
+                    elapsed * (total_games as f32 / done as f32 - 1.0)
+                );
+            }
         }
-    });
+    };
+
+    if let Some(p) = &pool {
+        p.broadcast(worker);
+    } else {
+        rayon::broadcast(worker);
+    }
+
+    if let Some(s) = server1 {
+        s.shutdown();
+    }
+    if let Some(s) = server2 {
+        s.shutdown();
+    }
+
     let results = results_mutex.into_inner().unwrap();
 
     let arena_elapsed = arena_start.elapsed();
 
+    if let Some(path) = &args.json_out {
+        let name1 = args
+            .name1
+            .clone()
+            .unwrap_or_else(|| player_name(backend1, &args.model1, mcts1));
+        let name2 = args
+            .name2
+            .clone()
+            .unwrap_or_else(|| player_name(backend2, &args.model2, mcts2));
+        let played_at = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
+        let mut out = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        use std::io::Write;
+        for r in &results {
+            let result = match r.winner_config {
+                1 => "1",
+                2 => "2",
+                _ => "draw",
+            };
+            let line = serde_json::json!({
+                "player1": name1,
+                "player2": name2,
+                "result": result,
+                "score1": r.score_config1,
+                "score2": r.score_config2,
+                "model1": args.model1,
+                "model2": args.model2,
+                "backend1": format!("{:?}", backend1),
+                "backend2": format!("{:?}", backend2),
+                "mcts1": mcts1,
+                "mcts2": mcts2,
+                "max_turns": args.max_turns,
+                "mode": args.gamemode,
+                "decisive": r.decisive,
+                "seed": r.seed,
+                "swap": r.swap,
+                "played_at": played_at,
+            });
+            writeln!(out, "{line}")?;
+        }
+        println!(
+            "Appended {} games to {} ({} vs {})",
+            results.len(),
+            path,
+            name1,
+            name2
+        );
+    }
+
     let mut config1_wins = 0u32;
     let mut config2_wins = 0u32;
     let mut draws = 0u32;
+    let mut decisive_games = 0u32;
     let mut score1_total = 0i64;
     let mut score2_total = 0i64;
     let mut ns1_total = 0u128;
@@ -548,24 +604,14 @@ fn main() -> anyhow::Result<()> {
     let mut ns2_total = 0u128;
     let mut moves2_total = 0u64;
 
-    // Config 1's record split by seat (P1 = first player when !swap).
-    let mut c1_wins_p1 = 0u32;
-    let mut c1_games_p1 = 0u32;
-    let mut c1_wins_p2 = 0u32;
-    let mut c1_games_p2 = 0u32;
-
     for r in &results {
         match r.winner_config {
             1 => config1_wins += 1,
             2 => config2_wins += 1,
             _ => draws += 1,
         }
-        if r.swap {
-            c1_games_p2 += 1;
-            c1_wins_p2 += (r.winner_config == 1) as u32;
-        } else {
-            c1_games_p1 += 1;
-            c1_wins_p1 += (r.winner_config == 1) as u32;
+        if r.decisive {
+            decisive_games += 1;
         }
         score1_total += r.score_config1 as i64;
         score2_total += r.score_config2 as i64;
@@ -595,7 +641,7 @@ fn main() -> anyhow::Result<()> {
         total_games,
         args.games,
         if skipped_count > 0 {
-            format!(", {} seed(s) skipped after transient errors", skipped_count)
+            format!(", {} seed(s) dropped after in-game panics", skipped_count)
         } else {
             String::new()
         }
@@ -611,8 +657,11 @@ fn main() -> anyhow::Result<()> {
         (config2_wins as f32 / n) * 100.0
     );
     println!("Draws:         {}", draws);
-    println!("Config 1 Wins as P1: {} (of {})", c1_wins_p1, c1_games_p1);
-    println!("Config 1 Wins as P2: {} (of {})", c1_wins_p2, c1_games_p2);
+    println!(
+        "Decisive (by elimination): {} ({:.1}%)",
+        decisive_games,
+        (decisive_games as f32 / n) * 100.0
+    );
     println!("---------------------");
     println!("Avg Score Config 1: {:.1}", score1_total as f32 / n);
     println!("Avg Score Config 2: {:.1}", score2_total as f32 / n);
@@ -638,22 +687,6 @@ fn main() -> anyhow::Result<()> {
         total_games as f32 / arena_elapsed.as_secs_f32(),
         arena_elapsed.as_secs_f32() / total_games as f32,
     );
-
-    // Deterministic teardown, matching self_play: drop the evaluator handles
-    // first (the only remaining request-channel senders) so each eval
-    // thread's `recv` errors out and returns, then join the threads before
-    // the process starts static/atexit teardown. Without this the tch/
-    // libtorch backend can race atexit mutex destruction and abort.
-    drop(eval1);
-    drop(eval2);
-    for server in p1_servers {
-        server.shutdown();
-    }
-    if let Some(p2) = p2_servers {
-        for server in p2 {
-            server.shutdown();
-        }
-    }
 
     Ok(())
 }

@@ -96,6 +96,11 @@ pub struct GumbelMctsAgent<'a> {
     /// of every `select_move*` call, consumed by `self_play`'s TD label
     /// bootstrap via `Brain::last_root_value`.
     last_root_value: Option<f32>,
+    /// KL(root visit distribution ‖ root prior softmax) of the most recent
+    /// search — how much information the sims added beyond the (blended)
+    /// prior. ~0 means search is just echoing the policy and the AlphaZero
+    /// improvement operator is idle. `None` when no real search ran.
+    last_search_kl: Option<f32>,
 }
 
 struct GumbelNode {
@@ -193,13 +198,6 @@ struct GumbelLeaf {
     data: LeafData,
     rewards: Vec<f32>,
     turn_deltas: Vec<i32>,
-    /// Path of a node whose cached child move failed to execute on replay.
-    /// Reused subtrees are built under simulated dynamics; a real move in
-    /// between (which explores tiles, unlike `simulate_move`) can change what
-    /// a replayed ruin capture rolls or what is legal, stranding stale
-    /// children. The wave loop clears such a node so it re-expands from the
-    /// true replayed state.
-    stale_path: Option<Vec<usize>>,
 }
 
 impl<'a> GumbelMctsAgent<'a> {
@@ -218,6 +216,7 @@ impl<'a> GumbelMctsAgent<'a> {
             tree_q_weight: 1.0,
             trace: RefCell::new(None),
             last_root_value: None,
+            last_search_kl: None,
         }
     }
 
@@ -229,6 +228,12 @@ impl<'a> GumbelMctsAgent<'a> {
 
     pub fn clear_last_root_value(&mut self) {
         self.last_root_value = None;
+        self.last_search_kl = None;
+    }
+
+    /// See the `last_search_kl` field docs.
+    pub fn last_search_kl(&self) -> Option<f32> {
+        self.last_search_kl
     }
 
     /// Drop any cached tree so the next search builds fresh. Called when the
@@ -408,7 +413,8 @@ impl<'a> GumbelMctsAgent<'a> {
         let new_hash = features.hash();
 
         if let Some(mut prev_root) = self.tree.take() {
-            if let Some(chosen_idx) = self.last_chosen_idx
+            if let Some(chosen_idx) = self
+                .last_chosen_idx
                 .filter(|&i| i < prev_root.children.len())
             {
                 if self.next_root_hash == Some(new_hash) {
@@ -438,14 +444,16 @@ impl<'a> GumbelMctsAgent<'a> {
     /// Re-root continuation: take the promoted child (already confirmed
     /// expanded with children), reset stats, re-sample Gumbel, suppress
     /// EndTurn, rebuild `in_cut`, and run Sequential Halving.
-    fn finish_reused_root(&self, game: &mut Game, mut new_root: GumbelNode, start_turn: i32) -> GumbelNode {
+    fn finish_reused_root(
+        &self,
+        game: &mut Game,
+        mut new_root: GumbelNode,
+        start_turn: i32,
+    ) -> GumbelNode {
         reset_stats_recursive(&mut new_root);
 
-        // Belt-and-suspenders: `extract_leaf_data` already drops EndTurn from
-        // any expansion (root or interior) whenever another move exists, so
-        // this is normally a no-op — kept in case a reused root's EndTurn
-        // was its sole child at expansion time (then legitimately present)
-        // but other moves are available now.
+        // Suppress EndTurn at the new root to mirror the fresh-build path;
+        // interior expansion keeps EndTurn, so a reused root may carry one.
         let has_other = new_root.children.iter().any(|c| {
             c.move_to_here
                 .as_ref()
@@ -466,7 +474,7 @@ impl<'a> GumbelMctsAgent<'a> {
         for c in &mut new_root.children {
             c.gumbel = gumbel_dist.sample(&mut rng);
         }
-        
+
         // Bootstrap with the priors from the heuristic mcts agent. Skip if
         // this node's children were already blended at in-tree expansion
         // time (avoids double-applying the heuristic on promotion to root).
@@ -481,7 +489,12 @@ impl<'a> GumbelMctsAgent<'a> {
 
     /// Fresh root: evaluate with the NN, create one child per legal move with
     /// fresh Gumbel draws, build `in_cut`, and run Sequential Halving.
-    fn build_fresh_root(&self, game: &mut Game, features: RawFeatures, start_turn: i32) -> GumbelNode {
+    fn build_fresh_root(
+        &self,
+        game: &mut Game,
+        features: RawFeatures,
+        start_turn: i32,
+    ) -> GumbelNode {
         let results = self.evaluator.evaluate(vec![features]);
         let (root_value, root_progress, ref policy_row) = results[0];
 
@@ -587,7 +600,13 @@ impl<'a> GumbelMctsAgent<'a> {
                 visits_per_candidate,
                 start_turn,
             );
-            self.record_round_snapshot(root, in_cut, round_idx, round_considered, visits_per_candidate);
+            self.record_round_snapshot(
+                root,
+                in_cut,
+                round_idx,
+                round_considered,
+                visits_per_candidate,
+            );
         }
     }
 
@@ -614,7 +633,10 @@ impl<'a> GumbelMctsAgent<'a> {
     /// corresponds to `root.children[child_indices[pos]]`), scaled by
     /// `tree_q_weight` so trust-gating applies to every selection consumer.
     fn sigma_q_for(&self, root: &GumbelNode, child_indices: &[usize]) -> Vec<f32> {
-        let q: Vec<f32> = child_indices.iter().map(|&i| root.children[i].q_value()).collect();
+        let q: Vec<f32> = child_indices
+            .iter()
+            .map(|&i| root.children[i].q_value())
+            .collect();
         let visits: Vec<f32> = child_indices
             .iter()
             .map(|&i| root.children[i].visits)
@@ -643,8 +665,7 @@ impl<'a> GumbelMctsAgent<'a> {
         visits_per_candidate: usize,
         start_turn: i32,
     ) {
-        let turn_horizon =
-            start_turn + max_turns_ahead(start_turn, game.state.settings.max_turns);
+        let turn_horizon = start_turn + max_turns_ahead(start_turn, game.state.settings.max_turns);
 
         let total_needed = round_considered * visits_per_candidate;
         let mut collected_per_candidate = vec![0usize; round_considered];
@@ -706,20 +727,6 @@ impl<'a> GumbelMctsAgent<'a> {
                     reward::GAMMA_TURN,
                 );
             }
-
-            // Heal nodes whose cached children proved stale on replay (see
-            // GumbelLeaf::stale_path): drop the children and mark unexpanded
-            // so the next visit re-expands from the true replayed state.
-            // Deferred to after backprop because other leaves in this wave may
-            // hold path indices through a node being cleared.
-            for leaf in &leaves {
-                if let Some(path) = &leaf.stale_path {
-                    if let Some(node) = get_node_by_path_mut(root, path) {
-                        node.children.clear();
-                        node.is_expanded = false;
-                    }
-                }
-            }
         }
     }
 
@@ -742,7 +749,6 @@ impl<'a> GumbelMctsAgent<'a> {
         let mut path_rewards: Vec<f32> = Vec::new();
         let mut path_turn_deltas: Vec<i32> = Vec::new();
         let mut undos: Vec<crate::actions::UndoCallback> = Vec::new();
-        let mut stale_path: Option<Vec<usize>> = None;
 
         let root_player = game.state.settings.current_player_turn_id;
         path_players.push(root_player);
@@ -802,13 +808,7 @@ impl<'a> GumbelMctsAgent<'a> {
             let turn_pre = game.state.settings.turn;
             let undo = match game.simulate_move(m.as_ref()) {
                 Some(u) => u,
-                None => {
-                    // Cached move is illegal in the replayed state (stale
-                    // reused subtree). Flag this node for healing and treat
-                    // it as the leaf.
-                    stale_path = Some(indices_stack.clone());
-                    break;
-                }
+                None => break,
             };
             undos.push(undo);
             indices_stack.push(child_idx);
@@ -820,13 +820,8 @@ impl<'a> GumbelMctsAgent<'a> {
             path_turn_deltas.push(game.state.settings.turn - turn_pre);
         }
 
-        // A stale node counts as needing expansion so its features and the
-        // true state's legal moves are extracted now; the actual re-expansion
-        // happens on a later wave, after the wave loop has healed the node.
         let needs_expansion = match get_node_by_path(root, &indices_stack) {
-            Some(c) => {
-                (!c.is_expanded || stale_path.is_some()) && !game.state.settings._game_over
-            }
+            Some(c) => !c.is_expanded && !game.state.settings._game_over,
             None => false,
         };
 
@@ -856,7 +851,6 @@ impl<'a> GumbelMctsAgent<'a> {
             data: leaf_data,
             rewards: path_rewards,
             turn_deltas: path_turn_deltas,
-            stale_path,
         })
     }
 
@@ -870,8 +864,7 @@ impl<'a> GumbelMctsAgent<'a> {
             return None;
         }
         let child_qvalues: Vec<f32> = node.children.iter().map(|c| c.q_value()).collect();
-        let child_visits: Vec<f32> =
-            node.children.iter().map(|c| c.effective_visits()).collect();
+        let child_visits: Vec<f32> = node.children.iter().map(|c| c.effective_visits()).collect();
         let child_priors: Vec<f32> = node.children.iter().map(|c| c.logit).collect();
         let sigma_q = gumbel_qtransform::sigma_completed_q(
             node.own_value,
@@ -891,7 +884,9 @@ impl<'a> GumbelMctsAgent<'a> {
         (0..n).max_by(|&a, &b| {
             let score_a = probs[a] - child_visits[a] / (1.0 + sum_visits);
             let score_b = probs[b] - child_visits[b] / (1.0 + sum_visits);
-            score_a.partial_cmp(&score_b).unwrap_or(std::cmp::Ordering::Equal)
+            score_a
+                .partial_cmp(&score_b)
+                .unwrap_or(std::cmp::Ordering::Equal)
         })
     }
 
@@ -972,7 +967,8 @@ impl<'a> GumbelMctsAgent<'a> {
             return;
         }
 
-        let mut logits = policy_composer::compute_move_log_probs_raw(policy, &legal_moves, map_size);
+        let mut logits =
+            policy_composer::compute_move_log_probs_raw(policy, &legal_moves, map_size);
         if self.prior_heuristic_weight > 0.0 {
             if let Some(hs) = heuristic_scores {
                 blend_heuristic_into_logits(&mut logits, hs, self.prior_heuristic_weight);
@@ -1064,6 +1060,7 @@ impl<'a> GumbelMctsAgent<'a> {
                     unit_type: m.unit_type().ok(),
                     tech_type: m.tech_type().ok(),
                     ability_type: m.ability_type().ok(),
+                    reward_type: m.reward_type().ok(),
                 });
             }
         }
@@ -1074,6 +1071,7 @@ impl<'a> GumbelMctsAgent<'a> {
         // Cleared up front; `store_tree` sets it again once a real search
         // (not an empty root) actually accumulates root visits.
         self.last_root_value = None;
+        self.last_search_kl = None;
 
         let root = self.search_and_extract(game);
         if root.children.is_empty() {
@@ -1093,6 +1091,7 @@ impl<'a> GumbelMctsAgent<'a> {
         move_count: usize,
     ) -> (Option<Box<dyn Move>>, Vec<crate::ai::mcts_types::MoveVisit>) {
         self.last_root_value = None;
+        self.last_search_kl = None;
 
         let root = self.search_and_extract(game);
         if root.children.is_empty() {
@@ -1127,6 +1126,7 @@ impl<'a> GumbelMctsAgent<'a> {
 
     pub fn select_move_with_stats(&mut self, game: &mut Game) -> (Option<Box<dyn Move>>, Vec<f32>) {
         self.last_root_value = None;
+        self.last_search_kl = None;
 
         let root = self.search_and_extract(game);
         if root.children.is_empty() {
@@ -1136,6 +1136,7 @@ impl<'a> GumbelMctsAgent<'a> {
         let move_visits = self.extract_policy_targets(&root);
         let policy: Vec<f32> = move_visits.iter().map(|mv| mv.visits).collect();
         let best_idx = self.recommend_final_move(&root);
+        self.record_final(&root, best_idx, 0);
         let best_move = clone_child_move(&root, best_idx);
         let next_hash = next_root_hash_for(game, best_move.as_deref());
         self.store_tree(root, best_idx, next_hash);
@@ -1154,6 +1155,7 @@ impl<'a> GumbelMctsAgent<'a> {
     /// to know about `last_root_value` bookkeeping.
     fn store_tree(&mut self, root: GumbelNode, best_idx: usize, next_hash: Option<u64>) {
         self.last_root_value = (root.visits > 0.0).then(|| root.q_value());
+        self.last_search_kl = root_policy_kl(&root);
         self.tree = Some(root);
         self.last_chosen_idx = Some(best_idx);
         self.next_root_hash = next_hash;
@@ -1209,9 +1211,13 @@ fn blend_heuristic_prior(game: &Game, children: &mut [GumbelNode], weight: f32) 
         return;
     }
     let mut logits: Vec<f32> = children.iter().map(|c| c.logit).collect();
-    let scores: Vec<f32> = children.iter()
-        .map(|c| c.move_to_here.as_ref()
-            .map_or(0.0, |m| crate::ai::scoring::score_move(game, m.as_ref())))
+    let scores: Vec<f32> = children
+        .iter()
+        .map(|c| {
+            c.move_to_here
+                .as_ref()
+                .map_or(0.0, |m| crate::ai::scoring::score_move(game, m.as_ref()))
+        })
         .collect();
     blend_heuristic_into_logits(&mut logits, &scores, weight);
     for (child, l) in children.iter_mut().zip(logits.into_iter()) {
@@ -1221,20 +1227,8 @@ fn blend_heuristic_prior(game: &Game, children: &mut [GumbelNode], weight: f32) 
 
 /// Multiset-compare a reused root's cached child moves against the real
 /// state's legal moves. Any mismatch means the sim-built cache is stale.
-///
-/// Every expansion path (`build_fresh_root`, and `extract_leaf_data` in
-/// `mcts_common.rs` for interior nodes) drops `EndTurn` from a node's
-/// children whenever another move is legal, keeping it only when it's the
-/// sole option. The cached `children` were built through one of those paths,
-/// so the comparison must apply the same normalization to `game.legal_moves()`
-/// — otherwise EndTurn's presence in the raw legal set spuriously fails the
-/// match on every reuse attempt where any other move exists.
 fn reused_children_match_legal(game: &Game, children: &[GumbelNode]) -> bool {
-    let mut legal = game.legal_moves();
-    let has_other = legal.iter().any(|m| m.move_type() != MoveType::EndTurn);
-    if has_other {
-        legal.retain(|m| m.move_type() != MoveType::EndTurn);
-    }
+    let legal = game.legal_moves();
     if legal.len() != children.len() {
         return false;
     }
@@ -1254,27 +1248,64 @@ fn reused_children_match_legal(game: &Game, children: &[GumbelNode]) -> bool {
     true
 }
 
-/// Apply `m` to `game` (assumed to be at the root state, with all search
-/// undos applied) via `play_move` — the same path the real game loop uses —
-/// and hash the resulting state's features. This is the hash the *next*
-/// search's root must match to re-root into this child. Using `play_move`
-/// (not `simulate_move`) is load-bearing: the real game loop advances via
-/// `play_move`, which updates `_history` and runs FOW discovery that
-/// `simulate_move` skips, so a simulate-derived hash would never match the
-/// next call's play-derived features. The `game` here is the per-call clone
-/// the Brain passes in, which is discarded after we return, so no undo is
-/// needed. `None` if the move can't be applied or features can't be built,
-/// in which case the next call simply builds fresh.
-fn next_root_hash_for(game: &mut Game, m: Option<&dyn Move>) -> Option<u64> {
+/// Apply `m` to a CLONE of `game` (assumed to be at the root state, with all
+/// search undos applied) via `play_move` — the same path the real game loop
+/// uses — and hash the resulting state's features. This is the hash the
+/// *next* search's root must match to re-root into this child. Using
+/// `play_move` (not `simulate_move`) is load-bearing: the real game loop
+/// advances via `play_move`, which updates `_history` and runs FOW discovery
+/// that `simulate_move` skips, so a simulate-derived hash would never match
+/// the next call's play-derived features.
+///
+/// The clone is load-bearing too: some callers (arena, trainer) pass the REAL
+/// game, and mutating it here double-applied the chosen move once the caller
+/// played it — an EndTurn double-apply silently consumed the opponent's whole
+/// turn (arena bots never moved), and double-applied econ moves caused the
+/// execute-error spam and star-debt panics.
+fn next_root_hash_for(game: &Game, m: Option<&dyn Move>) -> Option<u64> {
     let m = m?;
-    // The undo callback is intentionally dropped because the game is a per-call clone 
-    let _ = game.play_move(m)?;
+    let mut preview = game.clone();
+    let _ = preview.play_move(m)?;
     let feat = features::state_to_cpu_features(
-        &game.state,
-        game.state.settings.current_player_turn_id,
+        &preview.state,
+        preview.state.settings.current_player_turn_id,
     )
     .ok()?;
     Some(feat.hash())
+}
+
+/// KL(visit distribution ‖ prior softmax) over a searched root's children.
+/// `None` when fewer than two children or no visits landed (no real search).
+fn root_policy_kl(root: &GumbelNode) -> Option<f32> {
+    if root.children.len() < 2 || root.visits <= 0.0 {
+        return None;
+    }
+    let total: f32 = root.children.iter().map(|c| c.visits.max(0.0)).sum();
+    if total <= 0.0 {
+        return None;
+    }
+    let max_logit = root
+        .children
+        .iter()
+        .map(|c| c.logit)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let exps: Vec<f32> = root
+        .children
+        .iter()
+        .map(|c| (c.logit - max_logit).exp())
+        .collect();
+    let z: f32 = exps.iter().sum();
+    if !z.is_finite() || z <= 0.0 {
+        return None;
+    }
+    let mut kl = 0.0;
+    for (c, e) in root.children.iter().zip(&exps) {
+        let p = c.visits.max(0.0) / total;
+        if p > 0.0 {
+            kl += p * (p / (e / z).max(1e-8)).ln();
+        }
+    }
+    Some(kl)
 }
 
 fn move_or_end_turn(best_move: Option<Box<dyn Move>>) -> Option<Box<dyn Move>> {
@@ -1282,105 +1313,5 @@ fn move_or_end_turn(best_move: Option<Box<dyn Move>>) -> Option<Box<dyn Move>> {
         Some(Box::new(EndTurnMove))
     } else {
         best_move
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ai::eval_server::InlineEvalHandle;
-    use crate::ai::network::PolyZeroNet;
-    use crate::game::{Game, SIM_MOVE_FAILURES};
-    use crate::moves::research::ResearchMove;
-    use crate::types::{MapSize, MapType, TechnologyType, TribeType};
-    use std::sync::Arc;
-
-    /// A reused subtree can hold moves that are illegal in the replayed state
-    /// (real moves explore tiles that `simulate_move` deliberately does not,
-    /// which e.g. changes what a replayed ruin capture rolls). The descent
-    /// must heal such a node — drop its stale children and re-expand from the
-    /// true state — rather than leave it failing forever.
-    #[test]
-    fn test_search_heals_stale_cached_children() {
-        let device = candle_core::Device::Cpu;
-        let varmap = candle_nn::VarMap::new();
-        let vs =
-            candle_nn::VarBuilder::from_varmap(&varmap, candle_core::DType::F32, &device);
-        let network = Arc::new(PolyZeroNet::new(vs).unwrap());
-        let evaluator = Evaluator::Inline(InlineEvalHandle::new(network));
-
-        let mut game = Game::new();
-        game.state = crate::mapgen::generate(crate::mapgen::MapGenSettings {
-            size: MapSize::Tiny,
-            map_type: MapType::Drylands,
-            tribes: vec![TribeType::Imperius, TribeType::Bardur],
-            seed: 7,
-            ..Default::default()
-        });
-        game.post_load();
-
-        // Broke: no research is affordable (min cost 4), so the poisoned
-        // cached Research below is illegal no matter what the path does.
-        let pov = game.state.settings.current_player_turn_id;
-        game.state.tribes.get_mut(&pov).unwrap().stars = 0;
-
-        let legal = game.legal_moves();
-        assert!(legal.len() >= 2, "need at least two legal moves");
-        // A free move for the poisoned branch so the descent reaches it.
-        let step_idx = legal
-            .iter()
-            .position(|m| m.move_type() == MoveType::Step)
-            .expect("expected a Step at game start");
-
-        let mut root = GumbelNode::new(0.0, 0.0, None);
-        root.is_expanded = true;
-        for (i, m) in legal.into_iter().enumerate() {
-            let mut child = GumbelNode::new(0.0, 0.0, Some(m));
-            if i == step_idx {
-                // Simulate a stale reused subtree: cached child that is
-                // illegal in the replayed state.
-                child.is_expanded = true;
-                child.children.push(GumbelNode::new(
-                    0.0,
-                    0.0,
-                    Some(Box::new(ResearchMove::new(TechnologyType::Trade))),
-                ));
-            }
-            root.children.push(child);
-        }
-
-        let other_idx = if step_idx == 0 { 1 } else { 0 };
-        let mut in_cut = vec![step_idx, other_idx];
-
-        let agent = GumbelMctsAgent::new(&evaluator, 16, 2);
-        let failures_before = SIM_MOVE_FAILURES.load(std::sync::atomic::Ordering::Relaxed);
-        let start_turn = game.state.settings.turn;
-        agent.run_search(&mut game, &mut root, &mut in_cut, start_turn);
-        let failures_after = SIM_MOVE_FAILURES.load(std::sync::atomic::Ordering::Relaxed);
-
-        assert!(
-            failures_after > failures_before,
-            "test setup failed to exercise the stale cached move"
-        );
-
-        // The poisoned node must have been healed: its stale Research child
-        // gone, replaced by nothing (pending re-expansion) or by the true
-        // legal set of the replayed state.
-        let node = &root.children[step_idx];
-        let still_poisoned = node.children.iter().any(|c| {
-            c.move_to_here
-                .as_ref()
-                .map_or(false, |m| m.move_type() == MoveType::Research)
-        });
-        assert!(
-            !still_poisoned,
-            "stale illegal Research child survived the search"
-        );
-        if node.is_expanded {
-            assert!(
-                !node.children.is_empty(),
-                "healed node re-expanded with no children"
-            );
-        }
     }
 }

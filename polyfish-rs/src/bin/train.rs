@@ -11,10 +11,11 @@ const EPOCHS: usize = 10;
 
 fn main() -> Result<()> {
     // 1. Setup Device
-    // Select best available device: Metal (macOS) > CUDA (NVIDIA) > CPU
-    let device = Device::metal_if_available(0)
-        .or_else(|_| Device::cuda_if_available(0))
-        .unwrap_or(Device::Cpu);
+    // Select best available device: CUDA (NVIDIA) > Metal (macOS) > CPU
+    let device = match Device::cuda_if_available(0) {
+        Ok(Device::Cpu) | Err(_) => Device::metal_if_available(0).unwrap_or(Device::Cpu),
+        Ok(d) => d,
+    };
     println!("Training on device: {:?}", device);
 
     // 2. Load Model
@@ -198,12 +199,8 @@ fn main() -> Result<()> {
     }
 
     // 6. Save Model
-    // VarMap::save writes only the candle net's registered vars — train.py's
-    // training-only aux_* head weights don't exist here. Save to a separate
-    // file so the canonical model.safetensors (with aux heads) is never
-    // clobbered; copy it over model.safetensors manually if intended.
-    println!("Saving updated model to model_candle.safetensors");
-    varmap.save("model_candle.safetensors")?;
+    println!("Saving updated model to model.safetensors");
+    varmap.save("model.safetensors")?;
 
     Ok(())
 }

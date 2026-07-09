@@ -20,16 +20,7 @@ struct Node {
 
 impl Node {
     fn new(move_to_here: Option<Box<dyn Move>>, game: &mut Game) -> Self {
-        // A node reached via EndTurn is a turn-boundary leaf: `game.legal_moves()`
-        // here would be the *opponent's* moves (current_player_turn_id has
-        // already flipped), and expanding into them would let search_iteration's
-        // Selection/Expansion continue past the turn boundary on later visits —
-        // every other backend (Gumbel/Zero) stops at EndTurn the same way.
-        let is_end_turn = move_to_here
-            .as_ref()
-            .map_or(false, |m| m.move_type() == MoveType::EndTurn);
-
-        let untried = if game.state.settings._game_over || is_end_turn {
+        let untried = if game.state.settings._game_over {
             None
         } else {
             let book_moves = crate::ai::book::Book::recommend(game);
@@ -154,6 +145,7 @@ impl GreedyHeuristicAgent {
                 unit_type: m.unit_type().ok(),
                 tech_type: m.tech_type().ok(),
                 ability_type: m.ability_type().ok(),
+                reward_type: m.reward_type().ok(),
             })
             .collect();
 
@@ -176,6 +168,56 @@ impl GreedyHeuristicAgent {
                 .unwrap_or(0)
         });
 
+        (Some(moves.swap_remove(idx)), visits)
+    }
+}
+
+/// Uniform-random legal-move agent. Exists as the fixed 0-Elo anchor for the
+/// rating ladder (`elo.py`): it never changes, so every rating ever computed
+/// against it stays comparable across runs and architectures.
+pub struct RandomAgent;
+
+impl RandomAgent {
+    pub fn select_move(&self, game: &mut Game) -> Option<Box<dyn Move>> {
+        self.select_move_with_decomposed_visits(game, usize::MAX).0
+    }
+
+    /// Mirrors the other backends' root EndTurn suppression so "random" means
+    /// random play, not random early turn-ending.
+    pub fn select_move_with_decomposed_visits(
+        &self,
+        game: &mut Game,
+        _move_count: usize,
+    ) -> (Option<Box<dyn Move>>, Vec<crate::ai::mcts_types::MoveVisit>) {
+        use crate::ai::mcts_types::MoveVisit;
+        use rand::Rng;
+
+        let mut moves = game.legal_moves();
+        let has_other = moves.iter().any(|m| m.move_type() != MoveType::EndTurn);
+        if has_other {
+            moves.retain(|m| m.move_type() != MoveType::EndTurn);
+        }
+        if moves.is_empty() {
+            return (Some(Box::new(EndTurnMove)), Vec::new());
+        }
+
+        let p = 1.0 / moves.len() as f32;
+        let visits: Vec<MoveVisit> = moves
+            .iter()
+            .map(|m| MoveVisit {
+                move_type: m.move_type(),
+                visits: p,
+                source_idx: m.source_idx().ok(),
+                target_idx: m.target_idx().ok(),
+                structure_type: m.structure_type().ok(),
+                unit_type: m.unit_type().ok(),
+                tech_type: m.tech_type().ok(),
+                ability_type: m.ability_type().ok(),
+                reward_type: m.reward_type().ok(),
+            })
+            .collect();
+
+        let idx = rand::thread_rng().gen_range(0..moves.len());
         (Some(moves.swap_remove(idx)), visits)
     }
 }
@@ -242,6 +284,7 @@ impl HeuristicMctsAgent {
                     unit_type: m.unit_type().ok(),
                     tech_type: m.tech_type().ok(),
                     ability_type: m.ability_type().ok(),
+                    reward_type: m.reward_type().ok(),
                 })
             })
             .collect();
@@ -523,5 +566,52 @@ impl HeuristicMctsAgent {
             move_description: description,
             children,
         }
+    }
+}
+
+pub struct StateDiffGreedyAgent;
+
+impl StateDiffGreedyAgent {
+    pub fn select_move(&self, game: &mut Game) -> Option<Box<dyn Move>> {
+        let mut moves = game.legal_moves();
+        if moves.is_empty() {
+            return Some(Box::new(crate::moves::EndTurnMove));
+        }
+
+        let has_other = moves
+            .iter()
+            .any(|m| m.move_type() != crate::types::MoveType::EndTurn);
+        if has_other {
+            moves.retain(|m| m.move_type() != crate::types::MoveType::EndTurn);
+        }
+
+        let pid = game.state.settings.current_player_turn_id;
+        let mut best_move = None;
+        let mut best_score = f32::NEG_INFINITY;
+
+        for m in moves.into_iter() {
+            // Execute directly on state — no enemy turns, no history, no FOW.
+            // This is O(1) overhead vs simulate_move/play_move which both run
+            // through the full game loop (including enemy turn cycling).
+            if let Ok(result) = m.execute(&mut game.state) {
+                let score = crate::ai::evaluator::player::evaluate_player(&game.state, pid);
+                (result.undo)(&mut game.state);
+
+                if score > best_score {
+                    best_score = score;
+                    best_move = Some(m);
+                }
+            }
+        }
+
+        best_move
+    }
+
+    pub fn select_move_with_decomposed_visits(
+        &self,
+        game: &mut Game,
+        _move_count: usize,
+    ) -> (Option<Box<dyn Move>>, Vec<crate::ai::mcts_types::MoveVisit>) {
+        (self.select_move(game), Vec::new())
     }
 }

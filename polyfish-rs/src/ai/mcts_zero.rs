@@ -295,6 +295,7 @@ impl<'a> ZeroMctsAgent<'a> {
                     unit_type: selected_move.unit_type().ok(),
                     tech_type: selected_move.tech_type().ok(),
                     ability_type: selected_move.ability_type().ok(),
+                    reward_type: selected_move.reward_type().ok(),
                 };
                 return (Some(selected_move), vec![move_info]);
             }
@@ -343,6 +344,7 @@ impl<'a> ZeroMctsAgent<'a> {
                     unit_type: m.unit_type().ok(),
                     tech_type: m.tech_type().ok(),
                     ability_type: m.ability_type().ok(),
+                    reward_type: m.reward_type().ok(),
                 };
                 move_visits.push(move_info);
 

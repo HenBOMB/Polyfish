@@ -348,15 +348,15 @@ pub struct TechnologyState {
     pub discovered_turn: i32,
 }
 
-/// Last visible sighting of an enemy unit that left this tribe's vision.
-/// Keyed per tile in `TribeState::enemy_ghosts`; last-writer-wins when two
-/// units depart across the same fog tile.
+/// Last-seen snapshot of a foreign unit, kept in a tribe's fog memory
+/// (see `memory.rs` / notes-memory.md).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GhostRecord {
+pub struct MemUnit {
+    #[serde(rename = "type")]
     pub unit_type: UnitType,
-    pub owner: PlayerId,
-    pub turn: i32,
+    pub hp_norm: f32,
+    pub last_seen_turn: i32,
 }
 
 /// State of a tribe/player
@@ -411,13 +411,12 @@ pub struct TribeState {
     pub pacifist_turns: i32,
     #[serde(default)]
     pub conversions: i32,
-    /// Enemy unit types this tribe has ever legitimately observed (permanent,
-    /// real-moves only — the `explorers` archetype; never mutated in MCTS sims).
+    /// Fog memory: tile idx -> last foreign unit this tribe saw there.
     #[serde(default)]
-    pub enemy_types_seen: HashSet<UnitType>,
-    /// Ghost sightings: tile idx -> last enemy unit seen departing into fog there.
+    pub memory_units: IndexMap<i32, MemUnit>,
+    /// Fog memory: tile idx -> last turn one of this tribe's units was hit there.
     #[serde(default)]
-    pub enemy_ghosts: std::collections::HashMap<i32, GhostRecord>,
+    pub memory_attacks: IndexMap<i32, i32>,
 }
 
 impl Default for TribeState {
@@ -445,8 +444,8 @@ impl Default for TribeState {
             attacked_this_turn: false,
             pacifist_turns: 0,
             conversions: 0,
-            enemy_types_seen: HashSet::new(),
-            enemy_ghosts: std::collections::HashMap::new(),
+            memory_units: IndexMap::new(),
+            memory_attacks: IndexMap::new(),
         }
     }
 }
@@ -505,19 +504,19 @@ pub fn default_turn() -> i32 {
     0
 }
 pub fn default_max_turns() -> i32 {
-    10
+    45
 }
 pub fn default_max_score() -> i32 {
-    5000
+    20000
 }
 pub fn default_max_stars() -> i32 {
     30
 }
 pub fn default_max_spt() -> i32 {
-    25
+    40
 }
 pub fn default_max_units() -> i32 {
-    20
+    30
 }
 pub fn default_fow() -> bool {
     true
@@ -663,11 +662,14 @@ impl GameState {
         for (idx, tile) in self.tiles.iter_mut() {
             if !visible_tiles.contains(idx) {
                 let predicted_terrain = if let Some(pred) = &self._prediction {
-                    pred._terrain.get(idx).map(|(t, _)| *t).unwrap_or(TerrainType::Field)
+                    pred._terrain
+                        .get(idx)
+                        .map(|(t, _)| *t)
+                        .unwrap_or(TerrainType::Field)
                 } else {
                     TerrainType::Field
                 };
-                
+
                 tile.terrain_type = predicted_terrain;
                 tile.owner = 0;
                 tile.has_road = false;
@@ -694,14 +696,13 @@ impl GameState {
         // 4. Obscure Enemy Units and Cities
         for (id, tribe) in self.tribes.iter_mut() {
             if *id != pov_id {
-                tribe.units.retain(|u| visible_tiles.contains(&u.coords.idx));
-                // Drop fogged enemy cities too: keeping them leaks exact
-                // coordinates through fog, and hidden tribes' production
-                // doesn't matter in an obscured POV snapshot.
+                tribe
+                    .units
+                    .retain(|u| visible_tiles.contains(&u.coords.idx));
+                // We do NOT remove cities because that breaks production,
+                // but their exact coordinates could be an issue if the AI tries to attack a fog tile.
+                // For now, removing them is the safest way to prevent data leaks.
                 tribe.cities.retain(|c| visible_tiles.contains(&c.idx));
-                // Other tribes' observation memory is their dossier on us — strip it.
-                tribe.enemy_types_seen.clear();
-                tribe.enemy_ghosts.clear();
             }
         }
     }
