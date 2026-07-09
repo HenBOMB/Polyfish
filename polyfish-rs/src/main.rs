@@ -607,6 +607,44 @@ async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {
     settings.seed = rand::random();
     settings.map_type = MapType::Drylands;
 
+    if let Ok(content) = std::fs::read_to_string("config.json") {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(gm) = json.get("gamemode").and_then(|v| v.as_i64()) {
+                let map_type_val = (gm + 1) as i8;
+                if (1..=6).contains(&map_type_val) {
+                    settings.map_type = unsafe { std::mem::transmute(map_type_val) };
+                }
+            }
+            if let Some(tribes) = json.get("tribes").and_then(|v| v.as_array()) {
+                let parsed_tribes: Vec<polyfish::types::TribeType> = tribes.iter()
+                    .filter_map(|t| t.as_str())
+                    .map(|s| match s {
+                        "Xin-Xi" | "XinXi" => polyfish::types::TribeType::XinXi,
+                        "Imperius" => polyfish::types::TribeType::Imperius,
+                        "Bardur" => polyfish::types::TribeType::Bardur,
+                        "Oumaji" => polyfish::types::TribeType::Oumaji,
+                        "Kickoo" => polyfish::types::TribeType::Kickoo,
+                        "Hoodrick" => polyfish::types::TribeType::Hoodrick,
+                        "Luxidoor" => polyfish::types::TribeType::Luxidoor,
+                        "Vengir" => polyfish::types::TribeType::Vengir,
+                        "Zebasi" => polyfish::types::TribeType::Zebasi,
+                        "Ai-Mo" | "AiMo" => polyfish::types::TribeType::AiMo,
+                        "Quetzali" => polyfish::types::TribeType::Quetzali,
+                        "Yadakk" => polyfish::types::TribeType::Yadakk,
+                        "Aquarion" => polyfish::types::TribeType::Aquarion,
+                        "Elyrion" => polyfish::types::TribeType::Elyrion,
+                        "Polaris" => polyfish::types::TribeType::Polaris,
+                        "Cymanti" => polyfish::types::TribeType::Cymanti,
+                        _ => polyfish::types::TribeType::Nature,
+                    })
+                    .collect();
+                if !parsed_tribes.is_empty() {
+                    settings.tribes = parsed_tribes;
+                }
+            }
+        }
+    }
+
     let initial_state = generate(settings);
     game.state = initial_state;
     game.state.settings._verbose = true;
@@ -638,14 +676,55 @@ async fn trigger_training(State(state): State<Arc<AppState>>) -> Json<Value> {
     use std::fs::File;
     use std::process::{Command, Stdio};
 
-    // Redirect to training.poly.log
-    let log_file = match File::create("training.poly.log") {
+    // Redirect to session.log
+    let log_file = match File::create("session.log") {
         Ok(f) => f,
         Err(e) => return Json(serde_json::json!({ "status": "error", "message": e.to_string() })),
     };
 
-    let child = Command::new("bash")
-        .args(["run_training_loop.sh", "-n"])
+    let mut cmd = Command::new("bash");
+    cmd.arg("run_training_loop.sh");
+
+    if let Ok(config_str) = std::fs::read_to_string("config.json") {
+        if let Ok(config) = serde_json::from_str::<serde_json::Value>(&config_str) {
+            if let Some(val) = config.get("trainChunkFiles").and_then(|v| v.as_i64()) {
+                cmd.env("TRAIN_CHUNK_FILES", val.to_string());
+            }
+            if let Some(val) = config.get("valueTrustRampIters").and_then(|v| v.as_i64()) {
+                cmd.env("VALUE_TRUST_RAMP_ITERS", val.to_string());
+            }
+            if let Some(val) = config.get("detachValueTrunk").and_then(|v| v.as_i64()) {
+                cmd.env("DETACH_VALUE_TRUNK", val.to_string());
+            }
+
+            if config.get("rewardShaping").and_then(|v| v.as_bool()).unwrap_or(false) {
+                cmd.arg("-r");
+            }
+            if let Some(g) = config.get("gamesPerIter").and_then(|v| v.as_i64()) {
+                cmd.arg("-g").arg(g.to_string());
+            }
+            if let Some(n) = config.get("mctsIters").and_then(|v| v.as_i64()) {
+                cmd.arg("-n").arg(n.to_string());
+            } else {
+                cmd.arg("-n");
+            }
+            if let Some(i) = config.get("iterations").and_then(|v| v.as_i64()) {
+                cmd.arg("-i").arg(i.to_string());
+            }
+            if let Some(e) = config.get("epochs").and_then(|v| v.as_i64()) {
+                cmd.arg("-e").arg(e.to_string());
+            }
+            if config.get("resume").and_then(|v| v.as_bool()).unwrap_or(false) {
+                cmd.arg("--resume");
+            }
+        } else {
+            cmd.arg("-n");
+        }
+    } else {
+        cmd.arg("-n");
+    }
+
+    let child = cmd
         .current_dir(".")
         .stdout(Stdio::from(log_file.try_clone().unwrap()))
         .stderr(Stdio::from(log_file))
@@ -705,7 +784,7 @@ async fn get_training_status(State(state): State<Arc<AppState>>) -> Json<Value> 
     }
 
     // Read last 15 lines of log for more detail
-    let log_content = fs::read_to_string("training.poly.log").unwrap_or_default();
+    let log_content = fs::read_to_string("session.log").unwrap_or_default();
     let lines: Vec<&str> = log_content.lines().collect();
     let last_lines = if lines.len() > 15 {
         lines[lines.len() - 15..].join("\n")
@@ -792,6 +871,13 @@ async fn get_metrics() -> Json<Value> {
                 "avg_attacks": parse_f32("avg_attacks"),
                 "avg_ability": parse_f32("avg_ability"),
                 "avg_steps": parse_f32("avg_moves"),
+                "policy_loss": parse_f32("policy_loss"),
+                "value_loss": parse_f32("value_loss"),
+                "value_r2": parse_f32("value_r2"),
+                "villages_t2c_first": parse_f32("villages_t2c_first"),
+                "ruins_t2c_p50": parse_f32("ruins_t2c_p50"),
+                "avg_spt_t10": parse_f32("avg_spt_t10"),
+                "avg_spt_t20": parse_f32("avg_spt_t20"),
             });
             metrics.push(obj);
         }

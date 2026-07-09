@@ -326,6 +326,10 @@ struct GameResult {
     moves: usize,
     winner_score: i32,
     recap: ModReplay,
+    cap_ruins: usize,
+    cap_villages: usize,
+    cap_cities: usize,
+    cap_capitals: usize,
     action_counts: HashMap<polyfish::types::MoveType, usize>,
     /// Move-type counts keyed by turn number, for the "move mix by turn"
     /// training-progress chart (see parse_metrics.py / dashboard).
@@ -531,6 +535,11 @@ fn play_single_game(
     let initial_state = game.state.clone();
     let mut flat_recap: Vec<(i32, i32, serde_json::Value)> = Vec::new();
 
+    let mut cap_ruins = 0;
+    let mut cap_villages = 0;
+    let mut cap_cities = 0;
+    let mut cap_capitals = 0;
+
     // Game Loop
     let mut game_history: Vec<HistoryStep> = Vec::new();
     let mut action_counts: HashMap<polyfish::types::MoveType, usize> = HashMap::new();
@@ -703,6 +712,27 @@ fn play_single_game(
             if m_type == polyfish::types::MoveType::Capture {
                 if let Ok(src) = m.source_idx() {
                     let idx = src as i32;
+                    
+                    let struct_opt = game.state.structures.get(&idx).and_then(|s| s.as_ref());
+                    let is_ruin = struct_opt.map(|s| s.structure_type) == Some(polyfish::types::StructureType::Ruin);
+                    let is_village = struct_opt.map(|s| s.structure_type) == Some(polyfish::types::StructureType::Village);
+                    let owner = game.state.tiles.get(&idx).map(|t| t.owner).unwrap_or(0);
+                    let is_capital = game.state.tiles.get(&idx).map(|t| t.capital_of > 0).unwrap_or(false);
+
+                    if is_ruin {
+                        cap_ruins += 1;
+                    } else if is_village {
+                        if owner == 0 {
+                            cap_villages += 1;
+                        } else if owner != pov {
+                            if is_capital {
+                                cap_capitals += 1;
+                            } else {
+                                cap_cities += 1;
+                            }
+                        }
+                    }
+
                     if open_villages.remove(&idx) {
                         village_capture_turns.push(game.state.settings.turn);
                     } else if open_ruins.remove(&idx) {
@@ -836,6 +866,10 @@ fn play_single_game(
             game_state: initial_state,
             turns: group_recap(flat_recap),
         },
+        cap_ruins,
+        cap_villages,
+        cap_cities,
+        cap_capitals,
         action_counts,
         moves_by_turn,
     })
@@ -1566,6 +1600,10 @@ fn main() -> anyhow::Result<()> {
     let mut p2_count = 0;
 
     let mut total_captures = 0;
+    let mut total_cap_ruins = 0;
+    let mut total_cap_villages = 0;
+    let mut total_cap_cities = 0;
+    let mut total_cap_capitals = 0;
     let mut total_harvests = 0;
     let mut total_builds = 0;
     let mut total_research = 0;
@@ -1619,6 +1657,10 @@ fn main() -> anyhow::Result<()> {
             .get(&polyfish::types::MoveType::Capture)
             .copied()
             .unwrap_or(0);
+        total_cap_ruins += result.cap_ruins;
+        total_cap_villages += result.cap_villages;
+        total_cap_cities += result.cap_cities;
+        total_cap_capitals += result.cap_capitals;
         total_harvests += result
             .action_counts
             .get(&polyfish::types::MoveType::Harvest)
@@ -1772,6 +1814,10 @@ fn main() -> anyhow::Result<()> {
     };
 
     let avg_captures = total_captures as f32 / args.num_games as f32;
+    let avg_cap_ruins = total_cap_ruins as f32 / args.num_games as f32;
+    let avg_cap_villages = total_cap_villages as f32 / args.num_games as f32;
+    let avg_cap_cities = total_cap_cities as f32 / args.num_games as f32;
+    let avg_cap_capitals = total_cap_capitals as f32 / args.num_games as f32;
     let avg_harvests = total_harvests as f32 / args.num_games as f32;
     let avg_builds = total_builds as f32 / args.num_games as f32;
     let avg_research = total_research as f32 / args.num_games as f32;
@@ -1912,6 +1958,10 @@ fn main() -> anyhow::Result<()> {
         "p1_avg": p1_avg,
         "p2_avg": p2_avg,
         "avg_captures": avg_captures,
+        "avg_cap_ruins": avg_cap_ruins,
+        "avg_cap_villages": avg_cap_villages,
+        "avg_cap_cities": avg_cap_cities,
+        "avg_cap_capitals": avg_cap_capitals,
         "avg_harvests": avg_harvests,
         "avg_builds": avg_builds,
         "avg_research": avg_research,
