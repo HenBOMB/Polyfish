@@ -52,3 +52,4 @@ polyfish-rs/.training.pid
 # Telemetry JSON
 polyfish-rs/.*.json
 polyfish-rs/*.json
+polyfish-rs/.current_run
