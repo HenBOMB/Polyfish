@@ -7,7 +7,7 @@ use crate::types::{
     AbilityType, CityRewardType, ModeType, MoveType, SkillType, StructureType, TerrainType,
 };
 
-/// Score a move based on heuristics for move ordering
+/// Score a move based on heuristics
 pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
     let state = &game.state;
     let move_type = mv.move_type();
