@@ -111,9 +111,9 @@ pub const CH_CITY_BORDER_SIZE: usize = CH_CITY_STATS_START + 9;
 pub const CH_CITY_PROGRESS: usize = CH_CITY_STATS_START + 10;
 // +11 reserved
 
-// Global/Meta (fixed count: 20)
+// Global/Meta (fixed count: 24)
 pub const CH_GLOBAL_START: usize = CH_CITY_STATS_END;
-pub const CH_GLOBAL_COUNT: usize = 20;
+pub const CH_GLOBAL_COUNT: usize = 24;
 pub const CH_GLOBAL_END: usize = CH_GLOBAL_START + CH_GLOBAL_COUNT;
 
 // Global offsets
@@ -135,10 +135,26 @@ pub const CH_TRIBE_KILLS: usize = CH_GLOBAL_START + 14;
 pub const CH_TRIBE_CASUALTIES: usize = CH_GLOBAL_START + 15;
 pub const CH_TRIBE_CONVERSIONS: usize = CH_GLOBAL_START + 16;
 pub const CH_ATTACKED_THIS_TURN: usize = CH_GLOBAL_START + 17;
-// +18, +19 reserved
+// Opponent aggregates: public/derivable info the net shouldn't have to mine
+// out of the spatial planes (the value label is my-score minus opp-score).
+pub const CH_OPP_SCORE: usize = CH_GLOBAL_START + 18;
+pub const CH_FRAC_EXPLORED: usize = CH_GLOBAL_START + 19;
+pub const CH_VISIBLE_ENEMY_PRODUCTION: usize = CH_GLOBAL_START + 20;
+pub const CH_VISIBLE_ENEMY_UNITS: usize = CH_GLOBAL_START + 21;
+pub const CH_ENEMY_TYPES_SEEN: usize = CH_GLOBAL_START + 22;
+pub const CH_ENEMY_MAX_TIER: usize = CH_GLOBAL_START + 23;
+
+// Ghost sightings (observation memory): last-seen enemy units that departed
+// into our fog. See TribeState::enemy_ghosts.
+pub const CH_GHOST_START: usize = CH_GLOBAL_END;
+pub const CH_GHOST_COUNT: usize = 3;
+pub const CH_GHOST_END: usize = CH_GHOST_START + CH_GHOST_COUNT;
+pub const CH_GHOST_PRESENT: usize = CH_GHOST_START + 0;
+pub const CH_GHOST_TYPE: usize = CH_GHOST_START + 1;
+pub const CH_GHOST_AGE: usize = CH_GHOST_START + 2;
 
 /// Total number of feature channels (dynamically computed)
-pub const NUM_CHANNELS: usize = CH_GLOBAL_END;
+pub const NUM_CHANNELS: usize = CH_GHOST_END;
 
 // ============================================================================
 // Runtime Lookup Tables (enum discriminant -> sequential index)
@@ -339,6 +355,66 @@ pub fn state_to_cpu_features(state: &GameState, perspective: PlayerId) -> Result
         .map(|t| if t.attacked_this_turn { 1.0 } else { 0.0 })
         .unwrap_or(0.0);
 
+    // Opponent aggregates (all FOW-legal: scoreboard is public; the rest is
+    // computed strictly from POV-explored tiles / POV observation memory).
+    let opp_score_norm = state
+        .tribes
+        .iter()
+        .filter(|(id, _)| **id != perspective)
+        .map(|(_, t)| t.score)
+        .max()
+        .map(|s| (s as f32 / crate::states::default_max_score() as f32).clamp(0.0, 1.0))
+        .unwrap_or(0.0);
+    let frac_explored = if state.tiles.is_empty() {
+        0.0
+    } else {
+        state
+            .tiles
+            .values()
+            .filter(|t| t.explorers.contains(&perspective))
+            .count() as f32
+            / state.tiles.len() as f32
+    };
+    let tile_explored = |idx: i32| {
+        state
+            .tiles
+            .get(&idx)
+            .map(|t| t.explorers.contains(&perspective))
+            .unwrap_or(false)
+    };
+    let mut visible_enemy_production = 0.0f32;
+    let mut visible_enemy_units = 0.0f32;
+    for (id, tribe) in &state.tribes {
+        if *id == perspective {
+            continue;
+        }
+        for city in &tribe.cities {
+            if tile_explored(city.idx) {
+                visible_enemy_production += get_city_production(state, city) as f32;
+            }
+        }
+        for unit in &tribe.units {
+            if tile_explored(unit.coords.idx) && !unit.effects.contains(&UnitEffect::Invisible) {
+                visible_enemy_units += 1.0;
+            }
+        }
+    }
+    let visible_enemy_production = (visible_enemy_production / 30.0).clamp(0.0, 1.0);
+    let visible_enemy_units = (visible_enemy_units / 20.0).clamp(0.0, 1.0);
+    let enemy_types_seen_norm = pov_tribe
+        .map(|t| (t.enemy_types_seen.len() as f32 / 10.0).clamp(0.0, 1.0))
+        .unwrap_or(0.0);
+    // Star cost as a tier proxy for the strongest enemy unit type evidenced.
+    let enemy_max_tier = pov_tribe
+        .and_then(|t| {
+            t.enemy_types_seen
+                .iter()
+                .map(|ty| crate::settings::units::get_unit_setting(*ty).cost)
+                .max()
+        })
+        .map(|c| (c as f32 / 10.0).clamp(0.0, 1.0))
+        .unwrap_or(0.0);
+
     // Process each tile
     for y in 0..map_size {
         for x in 0..map_size {
@@ -374,6 +450,12 @@ pub fn state_to_cpu_features(state: &GameState, perspective: PlayerId) -> Result
             set_feat(&mut data, CH_TRIBE_CASUALTIES, x, y, tribe_casualties);
             set_feat(&mut data, CH_TRIBE_CONVERSIONS, x, y, tribe_conversions);
             set_feat(&mut data, CH_ATTACKED_THIS_TURN, x, y, attacked_this_turn);
+            set_feat(&mut data, CH_OPP_SCORE, x, y, opp_score_norm);
+            set_feat(&mut data, CH_FRAC_EXPLORED, x, y, frac_explored);
+            set_feat(&mut data, CH_VISIBLE_ENEMY_PRODUCTION, x, y, visible_enemy_production);
+            set_feat(&mut data, CH_VISIBLE_ENEMY_UNITS, x, y, visible_enemy_units);
+            set_feat(&mut data, CH_ENEMY_TYPES_SEEN, x, y, enemy_types_seen_norm);
+            set_feat(&mut data, CH_ENEMY_MAX_TIER, x, y, enemy_max_tier);
 
             // Skip tile-specific data if not explored
             if !is_explored {
@@ -484,6 +566,12 @@ pub fn state_to_cpu_features(state: &GameState, perspective: PlayerId) -> Result
                 .map(|t| t.explorers.contains(&perspective))
                 .unwrap_or(false);
             if !unit_explored {
+                continue;
+            }
+
+            // FOW rule parity with legal-move gen: invisible (Cloak) enemies
+            // are hidden even on explored tiles.
+            if *player_id != perspective && unit.effects.contains(&UnitEffect::Invisible) {
                 continue;
             }
 
@@ -646,6 +734,48 @@ pub fn state_to_cpu_features(state: &GameState, perspective: PlayerId) -> Result
         }
     }
 
+    // Ghost sightings from observation memory. Suppressed where a live enemy
+    // unit is rendered (a ghost tile explored mid-turn, before the sweep drops it).
+    if let Some(pov) = pov_tribe {
+        let turn_now = state.settings.turn;
+        for (&g_idx, ghost) in &pov.enemy_ghosts {
+            if g_idx < 0 {
+                continue;
+            }
+            let x = g_idx as usize % map_size;
+            let y = g_idx as usize / map_size;
+            if x >= MAP_SIZE || y >= MAP_SIZE {
+                continue;
+            }
+            let live_enemy_here = state
+                .tiles
+                .get(&g_idx)
+                .map(|t| {
+                    t.explorers.contains(&perspective)
+                        && t._unit_owner_id.map_or(false, |o| o != perspective)
+                })
+                .unwrap_or(false);
+            if live_enemy_here {
+                continue;
+            }
+            set_feat(&mut data, CH_GHOST_PRESENT, x, y, 1.0);
+            set_feat(
+                &mut data,
+                CH_GHOST_TYPE,
+                x,
+                y,
+                ghost.unit_type as i8 as f32 / UNIT_COUNT as f32,
+            );
+            set_feat(
+                &mut data,
+                CH_GHOST_AGE,
+                x,
+                y,
+                ((turn_now - ghost.turn) as f32 / 10.0).clamp(0.0, 1.0),
+            );
+        }
+    }
+
     // Extract player state vector (10 features)
     let player_vec = vec![
         turn_norm,
@@ -730,6 +860,7 @@ mod tests {
         assert!(CH_UNIT_END <= CH_UNIT_STATS_START);
         assert!(CH_UNIT_STATS_END <= CH_CITY_STATS_START);
         assert!(CH_CITY_STATS_END <= CH_GLOBAL_START);
+        assert!(CH_GLOBAL_END <= CH_GHOST_START);
     }
 
     #[test]
@@ -763,9 +894,6 @@ mod tests {
 
     #[test]
     fn test_num_channels() {
-        // Should be around 149 based on current counts:
-        // 8 terrain + 8 tile flags + 9 resources + 35 structures + 46 units
-        // + 15 unit stats + 12 city stats + 16 global = 149
         println!("NUM_CHANNELS: {}", NUM_CHANNELS);
         assert_eq!(
             NUM_CHANNELS,
@@ -777,6 +905,10 @@ mod tests {
                 + CH_UNIT_STATS_COUNT
                 + CH_CITY_STATS_COUNT
                 + CH_GLOBAL_COUNT
+                + CH_GHOST_COUNT
         );
+        // Pinned: the trained model's conv1 input width. Bump deliberately
+        // (with a weight migration) when adding channels.
+        assert_eq!(NUM_CHANNELS, 161);
     }
 }

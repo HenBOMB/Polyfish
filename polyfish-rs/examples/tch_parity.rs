@@ -32,7 +32,7 @@ fn max_abs(a: &[f32], b: &[f32]) -> f32 {
 fn report(tag: &str, c: &[EvalResult], t: &(Vec<f32>, Vec<RawPolicyOutput>)) {
     let mut vmax = 0f32;
     let (mut a, mut s, mut tt, mut o) = (0f32, 0f32, 0f32, 0f32);
-    for (i, (cv, cp)) in c.iter().enumerate() {
+    for (i, (cv, _progress, cp)) in c.iter().enumerate() {
         vmax = vmax.max((cv - t.0[i]).abs());
         let tp = &t.1[i];
         a = a.max(max_abs(&softmax(&cp.action_type), &softmax(&tp.action_type)));
@@ -133,6 +133,7 @@ fn main() {
             .iter()
             .cloned()
             .zip(tch_cpu.1.iter().cloned().map(std::sync::Arc::new))
+            .map(|(v, p)| (v, 0.0, p))
             .collect();
         report("tch-CPU   vs tch-MPS", &cpu_as_ref, &tch_mps);
     } else {

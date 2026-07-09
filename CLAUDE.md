@@ -72,7 +72,7 @@ The network architecture is implemented **twice** and the two must stay byte-com
 - Rust: `polyfish-rs/src/ai/network.rs` (candle) — used by `self_play`, `arena`, the server, and the Rust `train` binary.
 - Python: `polyfish-rs/train.py` (PyTorch) — the primary trainer used by `run_training_loop.sh`; `init_model.py` creates the initial weights from this definition.
 
-If you change layer shapes, channel counts, or head sizes in one, you must mirror it in the other (and in `features.rs` / `mapper.rs` constants). Current values: spatial channels 154, player-state dim 10, map 11×11, policy heads = action(11) + source + target + option(192). Mismatches surface as safetensors load errors or silent garbage.
+If you change layer shapes, channel counts, or head sizes in one, you must mirror it in the other (and in `features.rs` / `mapper.rs` constants). Current values: spatial channels 161 (incl. observation-memory/ghost channels, Jul 2026), player-state dim 10, map 11×11, policy heads = action(11) + source + target + option(192). Mismatches surface as safetensors load errors or silent garbage. Old 154-channel training data is zero-padded at load by train.py (channels were appended at the end of the layout).
 
 ### Binaries (`polyfish-rs/src/bin/`)
 - `self_play.rs` — generates training games (`--num-games`, `--mcts-iters`, `--tribe1/2`, `--opponent <checkpoint>`, `--reward-shaping`, `--iteration`); emits `METRICS:` JSON lines parsed by the loop script and writes `games_*.safetensors`.

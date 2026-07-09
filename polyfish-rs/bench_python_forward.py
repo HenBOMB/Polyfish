@@ -12,13 +12,13 @@ BATCH = 128
 ITERS = 60
 dev = torch.device("mps")
 
-net = PolyZeroNet(154, 10, 11, 11)
+net = PolyZeroNet(161, 10, 11, 11)
 net.load_state_dict(load_file("model.safetensors"))
 net.to(dev).eval()
 
 def one_forward():
     # fresh host data every call (matches eval_server building a Vec<f32> batch)
-    sp_host = np.random.rand(BATCH, 154, 11, 11).astype(np.float32)
+    sp_host = np.random.rand(BATCH, 161, 11, 11).astype(np.float32)
     pl_host = np.random.rand(BATCH, 10).astype(np.float32)
     # host -> MPS upload (matches Tensor::from_slice(...).to_device(Mps))
     sp = torch.from_numpy(sp_host).to(dev)

@@ -5,10 +5,10 @@ from train import PolyZeroNet
 
 d = json.load(open("/tmp/parity_rust.json"))
 b = d["batch"]
-spatial = torch.tensor(d["spatial"], dtype=torch.float32).reshape(b, 154, 11, 11)
+spatial = torch.tensor(d["spatial"], dtype=torch.float32).reshape(b, 161, 11, 11)
 player = torch.tensor(d["player"], dtype=torch.float32).reshape(b, 10)
 
-net = PolyZeroNet(154, 10, 11, 11)
+net = PolyZeroNet(161, 10, 11, 11)
 net.load_state_dict(load_file("model.safetensors"))
 net.eval()
 with torch.no_grad():

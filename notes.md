@@ -364,6 +364,45 @@ optimization thrash. The capacity question is now empirically testable
 at any time via the probe; re-run it after stabilization before any
 trunk-growth decision.
 
+## Observation memory + opponent aggregates + BN recalibration (Jul 9, 2026)
+
+Shipped in one change (plan: kind-jumping-catmull), NUM_CHANNELS 154→161:
+
+1. BN TRAIN/SERVE FIX (train.py): after the epoch loop, BatchNorm running
+   stats are recalibrated (reset + momentum=None cumulative pass over up to
+   16K fresh positions) before the f16 save. Verified in a sandboxed run:
+   eval-mode R² 0.653 vs train-mode 0.709 — gap 0.056, down from 1.2-2.5
+   pre-fix. Every value the search consumes now matches what the trainer
+   reports.
+2. ENGINE MEMORY (states.rs, actions/memory.rs): per-tribe
+   `enemy_types_seen: HashSet<UnitType>` + `enemy_ghosts: HashMap<tile,
+   GhostRecord{type,owner,turn}>`. Explorers archetype: real moves only
+   (_are_you_sure), permanent, no undo — valid because the sim EndTurn
+   fast-forward never executes opponent actions. Hooks: end of step_unit
+   (post-embark/Hide, walks full_path, ghost at first fog-side tile),
+   attack_unit (symmetric evidence; ghost for ranged-from-fog),
+   discover_tiles real branch (reveal-then-kill coverage), end_turn sweep
+   after process_start_turn_effects (spawn/upgrade/growth catch-all, drops
+   ghosts on explored tiles, prunes age>10). obscure_fog strips non-POV
+   tribes' memory. 8 tests in tests/observation_memory.rs.
+3. NEW INPUT CHANNELS (features.rs): global block 20→24 — CH_OPP_SCORE
+   (public scoreboard; the zero-sum label's other half), CH_FRAC_EXPLORED,
+   CH_VISIBLE_ENEMY_PRODUCTION, CH_VISIBLE_ENEMY_UNITS,
+   CH_ENEMY_TYPES_SEEN, CH_ENEMY_MAX_TIER (star-cost tier of strongest
+   type evidenced) — plus a 3-channel ghost block (present/type/age).
+   Also fixed a FOW leak: invisible (Cloak) enemy units were encoded on
+   explored tiles while legal-move gen hid them; features now skip them.
+4. COMPAT: conv1.weight padded 154→161 with zeros (play-identical until
+   trained) across model.safetensors + all checkpoints (+ .pre_memory.bak
+   backups); train.py zero-pads legacy-width archive files at load
+   (channels appended at layout end → index-stable). Smoke game verified
+   all new channels live (opp_score from sample 1, frac_explored
+   0.21→0.95, ghosts in 84% of samples).
+
+Watch after relaunch: value R² against the probe ceiling (opp-score input
+should raise the ceiling itself), behavioral profile, and whether the
+value head finally drives behavior now that play-side V isn't garbage.
+
 ## Train/serve skew: BatchNorm running stats break the acting value head (Jul 9, 2026)
 
 Measured on model.safetensors vs archive/games_1783587735.safetensors,

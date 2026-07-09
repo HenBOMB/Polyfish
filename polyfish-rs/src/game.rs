@@ -442,6 +442,11 @@ impl Game {
             undos.push(try_discover_other_tribes(state));
         }
 
+        // Observation-memory sweep: catches spawns/upgrades/growth that bypass
+        // the step/attack hooks; prunes stale ghosts. Real moves only,
+        // permanent (explorers archetype) — no undo.
+        actions::memory::end_of_turn_sweep(state);
+
         // Reward production if not the first turn
         if state.settings.turn > 0 {
             if let Some(tribe) = state.tribes.get(&new_pov) {

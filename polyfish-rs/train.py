@@ -262,7 +262,7 @@ def train():
     
     # 2. Init Model
     MAP_SIZE = 11
-    SPATIAL_CHANNELS = 154
+    SPATIAL_CHANNELS = 161  # mirror of features.rs NUM_CHANNELS (incl. observation memory)
     PLAYER_STATE_DIM = 10
 
     model = PolyZeroNet(SPATIAL_CHANNELS, PLAYER_STATE_DIM, MAP_SIZE, MAP_SIZE).to(DEVICE)
@@ -329,10 +329,23 @@ def train():
                 'action_type': [], 'source_spatial': [], 'target_spatial': [], 'move_option': []
             }
             
+            expected_flat = SPATIAL_CHANNELS * MAP_SIZE * MAP_SIZE
+            legacy_flat = 154 * MAP_SIZE * MAP_SIZE  # pre-observation-memory layout
             for f in chunk_files:
                 try:
                     data = load_file(f)
-                    c_spatial.append(data["spatial_maps"])
+                    sp = data["spatial_maps"]
+                    if sp.shape[1] != expected_flat:
+                        # Channels were appended at the end of the layout, so old
+                        # files are index-stable: zero-pad the missing planes.
+                        if sp.shape[1] == legacy_flat:
+                            sp = torch.nn.functional.pad(sp, (0, expected_flat - legacy_flat))
+                        else:
+                            raise ValueError(
+                                f"{f}: spatial width {sp.shape[1]} matches neither "
+                                f"current ({expected_flat}) nor legacy ({legacy_flat}) layout"
+                            )
+                    c_spatial.append(sp)
                     c_player.append(data["player_states"])
                     c_win.append(data["values"])
                     if "progress" in data:
@@ -507,6 +520,42 @@ def train():
         value_r2 = 1.0 - final_v_win / target_var if target_var > 1e-8 else 0.0
     else:
         value_r2 = 0.0
+
+    # 3.5 Recalibrate BatchNorm running statistics before saving. The net
+    # TRAINS with per-batch stats but PLAYS (candle/tch/MPSGraph eval mode)
+    # with the stored running stats, which lag the drifting activation
+    # distribution badly — measured Jul 2026: eval-mode value R² was -0.75
+    # to -2.0 vs +0.50 in train mode on identical weights. A fresh
+    # cumulative-average pass over current data closes that gap.
+    recal_files = sorted(glob.glob("games_*.safetensors"), key=os.path.getmtime, reverse=True) \
+        or sorted(glob.glob("archive/games_*.safetensors"), key=os.path.getmtime, reverse=True)
+    if recal_files:
+        try:
+            data = load_file(recal_files[0])
+            sp = data["spatial_maps"]
+            recal_expected = SPATIAL_CHANNELS * MAP_SIZE * MAP_SIZE
+            recal_legacy = 154 * MAP_SIZE * MAP_SIZE
+            if sp.shape[1] == recal_legacy:
+                sp = torch.nn.functional.pad(sp, (0, recal_expected - recal_legacy))
+            n = min(sp.shape[0], 16384)
+            idx = torch.randperm(sp.shape[0])[:n]
+            sp = sp[idx].view(-1, SPATIAL_CHANNELS, MAP_SIZE, MAP_SIZE)
+            pl = data["player_states"][idx]
+            bn_modules = [m for m in model.modules()
+                          if isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d))]
+            for m in bn_modules:
+                m.reset_running_stats()
+                m.momentum = None  # cumulative average over the calibration pass
+            model.train()
+            with torch.no_grad():
+                for i in range(0, n, 256):
+                    model(sp[i:i+256].to(DEVICE), pl[i:i+256].to(DEVICE))
+            for m in bn_modules:
+                m.momentum = 0.1
+            model.eval()
+            print(f"BN running stats recalibrated on {n} positions from {recal_files[0]}")
+        except Exception as e:
+            print(f"BN recalibration skipped ({e})")
 
     # 4. Save Model in f16 for blazing fast CPU inference
     half_state = {k: v.half() for k, v in model.state_dict().items()}

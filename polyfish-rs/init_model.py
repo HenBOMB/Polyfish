@@ -19,7 +19,7 @@ from train import PolyZeroNet
 
 def init_model():
     MAP_SIZE = 11
-    SPATIAL_CHANNELS = 154  # Fixed: Match Rust (154) not 155
+    SPATIAL_CHANNELS = 161  # Mirror of features.rs NUM_CHANNELS
     PLAYER_STATE_DIM = 10
     
     # Check if model already exists to avoid overwriting trained weights!
