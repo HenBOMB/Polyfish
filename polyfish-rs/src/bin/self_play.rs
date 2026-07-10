@@ -432,6 +432,9 @@ struct GameResult {
     villages_t2c_p50: f32,
     villages_t2c_p80: f32,
     villages_t2c_all: f32,
+    /// Uncensored turn of the first village capture, -1.0 if none happened —
+    /// lets the aggregator split capture-rate from turn-given-captured.
+    villages_first_raw: f32,
     ruins_t2c_p50: f32,
     ruins_t2c_p80: f32,
     ruins_t2c_all: f32,
@@ -958,6 +961,7 @@ fn play_single_game(
         villages_t2c_p50: t2c_turn(&village_capture_turns, initial_villages, 0.5, max_turns),
         villages_t2c_p80: t2c_turn(&village_capture_turns, initial_villages, 0.8, max_turns),
         villages_t2c_all: t2c_turn(&village_capture_turns, initial_villages, 1.0, max_turns),
+        villages_first_raw: village_capture_turns.first().map_or(-1.0, |&t| t as f32),
         ruins_t2c_p50: t2c_turn(&ruin_capture_turns, initial_ruins, 0.5, max_turns),
         ruins_t2c_p80: t2c_turn(&ruin_capture_turns, initial_ruins, 0.8, max_turns),
         ruins_t2c_all: t2c_turn(&ruin_capture_turns, initial_ruins, 1.0, max_turns),
@@ -1524,11 +1528,16 @@ fn main() -> anyhow::Result<()> {
                         (((i + 1) as f32) * args.anchor_frac).floor() as usize;
                     let is_anchor = args.anchor_frac > 0.0
                         && anchor_ordinal > ((i as f32) * args.anchor_frac).floor() as usize;
+                    // Greedy (score_move argmax), not the rollout Heuristic MCTS:
+                    // measured first-village capture 1.00/t6.5 vs 0.94/t8.9 — the
+                    // rollout noise drowned the ordering gradient. Greedy is also
+                    // the exact distribution blend_heuristic_prior injects into the
+                    // net's root, so anchor data and search priors agree.
                     let (backend_seat1, backend_seat2) = if is_anchor {
                         if anchor_ordinal % 2 == 0 {
-                            (SearchBackend::Heuristic, backend)
+                            (SearchBackend::Greedy, backend)
                         } else {
-                            (backend, SearchBackend::Heuristic)
+                            (backend, SearchBackend::Greedy)
                         }
                     } else {
                         (backend, backend)
@@ -1714,6 +1723,8 @@ fn main() -> anyhow::Result<()> {
     let mut total_revealed_tiles: i64 = 0;
     let mut total_captured_tiles: i64 = 0;
     let mut total_t2c = [0.0f64; 7]; // villages first/p50/p80/all, ruins p50/p80/all
+    let mut first_cap_games = 0usize;
+    let mut first_cap_turn_sum = 0.0f64;
     let mut spt_sums: HashMap<i32, f64> = HashMap::new();
     let mut spt_counts: HashMap<i32, u32> = HashMap::new();
 
@@ -1739,6 +1750,10 @@ fn main() -> anyhow::Result<()> {
             result.ruins_t2c_all,
         ]) {
             *acc += v as f64;
+        }
+        if result.villages_first_raw >= 0.0 {
+            first_cap_games += 1;
+            first_cap_turn_sum += result.villages_first_raw as f64;
         }
         if result.winner_score > max_score {
             max_score = result.winner_score;
@@ -2128,6 +2143,17 @@ fn main() -> anyhow::Result<()> {
         "avg_spt_t25": avg_spt_at(25),
         "avg_spt_t30": avg_spt_at(30),
         "villages_t2c_first": (total_t2c[0] / args.num_games as f64) as f32,
+        "villages_first_rate": (first_cap_games as f64 / args.num_games as f64) as f32,
+        "villages_t2c_first_cond": if first_cap_games > 0 {
+            (first_cap_turn_sum / first_cap_games as f64) as f32
+        } else {
+            -1.0
+        },
+        "tribes": format!(
+            "{}+{}",
+            args.tribe1.as_deref().unwrap_or("random"),
+            args.tribe2.as_deref().unwrap_or("random")
+        ),
         "villages_t2c_p50": (total_t2c[1] / args.num_games as f64) as f32,
         "villages_t2c_p80": (total_t2c[2] / args.num_games as f64) as f32,
         "villages_t2c_all": (total_t2c[3] / args.num_games as f64) as f32,

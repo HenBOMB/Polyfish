@@ -539,3 +539,109 @@ Every pre-fix weight file assumes the pool ReLU — the current
 model.safetensors and checkpoints/model_gn_v1.safetensors misbehave under
 new binaries (league glob matches neither; --reset replaces the live
 model). Relaunch from scratch.
+
+## Slow first-village capture: broken map geometry + broken approach gradient (Jul 10, 2026)
+
+The bar: first village captured by turn ~4-5 in nearly every game (mean
+≤4.5). Measured (run 1783633575, iters 37-46): censored mean 6.4, ~1 in 10
+games capturing nothing by turn 15.
+
+Two causes, measured with `cargo run --example map_geometry` (400
+training-identical maps):
+
+1. **Training maps lack suburbs.** Real Polytopia guarantees 1-2 villages
+   within radius 3 of every capital. Our mapgen implements that suburb
+   phase only for Lakes/Archipelago; training uses Drylands, which gets a
+   uniform ≥3-spacing fill instead. Result: 31% of capitals have NO
+   village within 3 tiles (turn-4 capture physically impossible), 13%
+   none within 4, mean nearest 3.44 → perfect play ≈ mean 4.4 on these
+   maps. Lakes for contrast: 100% within 3, mean 2.55. Decision: map
+   stays as-is for now (user call); judge t2c against ~4.4 as the
+   environment optimum, not 4.0.
+
+2. **The approach gradient used Manhattan distance on a Chebyshev-movement
+   game.** `nearest_visible_capturable` + the Step closing bonus in
+   ordering.rs scored diagonal-closing steps as non-closing (no +20) and
+   understated urgency for diagonal offsets. Fixed to Chebyshev. This
+   gradient is the teacher's entire steering (anchor games = zero-search
+   score_move softmax) and reaches net games through the root prior blend
+   (0.5 → 0.1 floor by ~iter 47), so the fix hits both data sources.
+   Also added a matching approach term to the expansion evaluator
+   (`(0.35 - 0.05·d).max(0)` city-points per unit, always below the 0.5
+   standing bonus) so evaluator-based play sees the same pull.
+
+Deeper Gumbel is NOT the fix: capture-on-turn-4 sits ~14+ plies from a
+turn-1 root (~2 plies/turn × 4 own turns + interleaved opponent turns);
+64→256 sims buys ~1-2 plies of principled depth at 4× the wall-clock. The
+value net + dense priors are the horizon mechanism, not search depth.
+
+Metrics: `villages_t2c_first` stays censored (max_turns when nothing
+captured — never compare across curriculum steps at iters 26/51/76).
+Added `villages_first_rate` (share of games with ≥1 village capture),
+`villages_t2c_first_cond` (mean turn among those, -1 when none), and
+`tribes` (per-iteration pair — the harvest/build sawtooth in behavioral
+charts is tribe-matchup noise, not learning). CSV auto-migrates on the
+next append-row; dashboard plots rate (yellow, right axis) + conditional
+t2c on the village chart. The bar is now directly readable: rate → 1.0
+and cond ≤ ~4.5-5 (vs the 4.4 environment optimum).
+
+## The anchor was never the teacher — Greedy anchor swap (Jul 10, 2026)
+
+Follow-up to the above, all measured at n=32, Bardur+Imperius (worst-case
+1-move pair), iteration 80, 64 mcts-iters:
+
+- Deeper search: 64→256 sims fixed the never-capture tail (rate 0.81 →
+  1.00, net-only games) but not speed (cond 7.9 → 7.3) at 2.3× wall-clock.
+  Depth can't buy a multi-turn walk; it only rescues in-horizon captures.
+- Opening-exploration work in `score_move`: replaced the +2-adjacent
+  resource sniffer with an unexplained-resource beacon (explored resource
+  with no explored village within 2 certifies a hidden village — mapgen
+  spawns resources only in village/capital rings; Starfish excluded).
+  First version regressed (teacher 8.07 → 9.53): a unit whose sight can't
+  reach the village parks on the resource. Scaling the beacon by the
+  resource area's `regional_openness` fixed the parking (8.68). Replay
+  analysis (examples/analyze_replays) then showed the real approach bug:
+  at d=2 from a *visible* village the mover fled toward fog 52% of the
+  time — `newly_revealed×4` + openness outbid the closing bonus once the
+  village tile itself was explored. Damped curiosity to (openness×2,
+  reveal×1) when a visible capturable is ≤2 away and steepened urgency to
+  (18−4d). None of this moved the *anchor* aggregate…
+- …because anchor games ran `SearchBackend::Heuristic` — the network-free
+  ROLLOUT MCTS (64 evaluator-free rollouts, noise swamps the ordering
+  gradient) — not the Greedy score_move argmax everything above tunes.
+  Greedy teacher measured 1.00 / cond 6.47 vs the rollout anchor's 0.94 /
+  8.9. Swapped the anchor seat to `SearchBackend::Greedy`
+  (self_play.rs:1531) — which is also the exact distribution
+  `blend_heuristic_prior` injects into Gumbel roots, so anchor data and
+  root priors now agree. Production mix (25% anchor) after the swap:
+  rate 1.00, cond 7.34.
+
+Ceiling revision (user replay evidence + recompute): competent fog play on
+these maps supports mean ~5.0-5.5, not 6.5 — the demonstrator still owed
+turns. Post-swap replay analysis found the biggest leak: **attack-vs-capture
+inversion** — a kill on territory-relevant ground scored 95+15=110 > Village
+capture 99.8, so a unit standing on a village with an adjacent enemy
+attacked every turn instead of banking the city. Raised the whole Capture
+band to 115+ (ordering.rs). Post-fix analyzer: d=0 capture 100% (was 91%),
+d=2 close 60% (was 33%), approach steps t3-4 all-toward. Greedy teacher
+6.47 → 6.22 (rate 1.00); production mix 7.34 → 6.42.
+
+Tried and reverted (measured no-gain): doubling the center pull when no
+capturable/beacon evidence is visible (6.22 → 6.39, rate dip).
+
+Remaining gap to ~5.5 is blind-phase direction luck, the 13% of spawns
+with nearest village at 5+, and village races. The greedy anchor is a
+bootstrap, not a gold standard: the net can exceed it by learning
+map-prior direction cues (biome/terrain in its features) that a stateless
+scorer cannot see. Suburbs remain the unlock for ≤5.
+
+Beacon rule revision (user screenshot: spawn vision = territory + 1 ring,
+and border fruits ARE the human's direction hint): the explained-veto
+version discarded all spawn evidence because the capital's own Village
+structure "explained" every resource in vision. Replaced with the
+frontier rule — beacon iff the resource still has unexplored tiles within
+Chebyshev 2 (a hidden generator could sit there), regardless of nearby
+known cities. Measured (greedy, n=32×2): cond 6.20/5.97 vs veto 6.22,
+rate 0.94-0.97 vs 1.00 — statistically a wash, kept for concept fidelity;
+nearest-single-fruit can't read the clustering/side signal a human uses
+(that's the net's job). Production mix: rate 0.97, cond ~6.5.
