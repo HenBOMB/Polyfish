@@ -3,6 +3,10 @@
 //! This library provides a complete simulation of the Polytopia game engine,
 //! translated from the original TypeScript implementation.
 
+// serde_json's json! recurses once per key; training_api's metric row
+// outgrew the default limit of 128.
+#![recursion_limit = "256"]
+
 pub mod actions;
 pub mod ai;
 pub mod coords;

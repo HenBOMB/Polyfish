@@ -666,16 +666,22 @@ function renderGameStatsCharts() {
       labels: it,
       datasets: [
         { label: '1st village', data: rows.map(r => r.villages_t2c_first || null), borderColor: '#2ecc71', tension: 0.2, spanGaps: true },
+        { label: '1st (captured games only)', data: rows.map(r => r.villages_t2c_first_cond > 0 ? r.villages_t2c_first_cond : null), borderColor: '#1abc9c', borderDash: [6, 3], tension: 0.2, spanGaps: true },
         { label: '50% villages', data: rows.map(r => r.villages_t2c_p50 || null), borderColor: '#3498db', tension: 0.2, spanGaps: true },
         { label: '80% villages', data: rows.map(r => r.villages_t2c_p80 || null), borderColor: '#9b59b6', tension: 0.2, spanGaps: true },
         { label: 'all villages', data: rows.map(r => r.villages_t2c_all || null), borderColor: '#e67e22', tension: 0.2, spanGaps: true },
+        { label: 'capture rate %', data: rows.map(r => r.villages_first_rate > 0 ? r.villages_first_rate * 100 : null), borderColor: '#f1c40f', tension: 0.2, spanGaps: true, yAxisID: 'y1' },
       ],
     },
     options: {
       ...chartDefaults,
+      scales: {
+        ...chartDefaults.scales,
+        y1: { position: 'right', min: 0, max: 100, ticks: { color: '#f1c40f' }, grid: { drawOnChartArea: false } },
+      },
       plugins: {
         ...chartDefaults.plugins,
-        title: { display: true, text: 'Turn to capture (lower is better)', color: '#8b9cb3', font: { size: 11 } },
+        title: { display: true, text: 'Turn to capture (lower is better) · yellow = % of games capturing ≥1 village (right axis)', color: '#8b9cb3', font: { size: 11 } },
       },
     },
   });
