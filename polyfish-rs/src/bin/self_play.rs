@@ -176,6 +176,72 @@ fn write_decision_trace(
     }
 }
 
+/// One traced decision from a --dump-failed-dir game: what the search weighed
+/// (see decision_trace.rs) and what it picked. `trace` is None for zero-search
+/// seats (Greedy/Heuristic anchors have no Gumbel tree).
+#[derive(serde::Serialize)]
+struct TracedDecision {
+    turn: i32,
+    move_count: usize,
+    player_id: PlayerId,
+    chosen: String,
+    root_value: Option<f32>,
+    trace: Option<polyfish::ai::decision_trace::DecisionTrace>,
+}
+
+/// Dump one zero-capture game (no village taken by either player): a
+/// watcher-loadable replay plus the full per-decision trace log, tagged with
+/// the matchup and seat backends. One file pair per game — actor-safe.
+#[allow(clippy::too_many_arguments)]
+fn dump_failed_game(
+    dir: &str,
+    iteration: usize,
+    game_idx: usize,
+    seed: i64,
+    tribes: &[TribeType],
+    backend1: SearchBackend,
+    backend2: SearchBackend,
+    max_turns: i32,
+    scores: &HashMap<i32, i32>,
+    recap: &ModReplay,
+    decisions: &[TracedDecision],
+) {
+    let dir = std::path::Path::new(dir);
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        eprintln!("[dump-failed] failed to create {}: {e}", dir.display());
+        return;
+    }
+    let base = format!("failed_iter{iteration}_game{game_idx}_seed{seed}");
+    match serde_json::to_vec_pretty(recap) {
+        Ok(bytes) => {
+            let path = dir.join(format!("{base}.replay.json"));
+            if let Err(e) = std::fs::write(&path, bytes) {
+                eprintln!("[dump-failed] failed to write {}: {e}", path.display());
+            }
+        }
+        Err(e) => eprintln!("[dump-failed] failed to serialize replay: {e}"),
+    }
+    let wrapped = json!({
+        "iteration": iteration,
+        "game_idx": game_idx,
+        "seed": seed,
+        "tribes": tribes.iter().map(|t| format!("{t:?}")).collect::<Vec<_>>(),
+        "backends": [format!("{backend1:?}"), format!("{backend2:?}")],
+        "max_turns": max_turns,
+        "final_scores": scores,
+        "decisions": decisions,
+    });
+    match serde_json::to_vec(&wrapped) {
+        Ok(bytes) => {
+            let path = dir.join(format!("{base}.decisions.json"));
+            if let Err(e) = std::fs::write(&path, bytes) {
+                eprintln!("[dump-failed] failed to write {}: {e}", path.display());
+            }
+        }
+        Err(e) => eprintln!("[dump-failed] failed to serialize decisions: {e}"),
+    }
+}
+
 /// Up to 5 evenly spaced turn thresholds for periodic in-game progress.
 fn turn_milestones(max_turns: i32) -> Vec<i32> {
     const MAX_REPORTS: usize = 5;
@@ -548,6 +614,7 @@ fn play_single_game(
     trace_trigger: TraceTrigger,
     trace_max: usize,
     trace_counter: &AtomicUsize,
+    dump_failed_dir: Option<&str>,
 ) -> Option<GameResult> {
     // Curriculum logic — Tiny maps only, gradually increase turn count.
     let (map_size, max_turns) = if iteration <= 25 {
@@ -603,6 +670,11 @@ fn play_single_game(
     let initial_ruins = open_ruins.len();
     let mut village_capture_turns: Vec<i32> = Vec::new();
     let mut ruin_capture_turns: Vec<i32> = Vec::new();
+
+    // --dump-failed-dir: trace every decision; the log is written out only
+    // if the game ends with zero village captures.
+    let trace_all = dump_failed_dir.is_some();
+    let mut decision_log: Vec<TracedDecision> = Vec::new();
 
     let prior_w = (HEURISTIC_PRIOR_W0 * HEURISTIC_PRIOR_DECAY.powi(iteration as i32))
         .max(HEURISTIC_PRIOR_W_FLOOR);
@@ -690,6 +762,7 @@ fn play_single_game(
         let current_agent = if pov == 1 { &mut agent1 } else { &mut agent2 };
 
         let trigger_info = if trace_villages
+            && !trace_all
             && !traced_in_this_game
             && trace_counter.load(Ordering::Relaxed) < trace_max
         {
@@ -697,7 +770,7 @@ fn play_single_game(
         } else {
             None
         };
-        if trigger_info.is_some() {
+        if trace_all || trigger_info.is_some() {
             current_agent.request_trace();
         }
 
@@ -706,6 +779,7 @@ fn play_single_game(
         // this is that state's own root value — the TD bootstrap target for
         // whichever earlier step's label lands here as its "next decision".
         let root_value = current_agent.last_root_value();
+        let step_trace = if trace_all { current_agent.take_trace() } else { None };
 
         if let Some((trigger_unit_idx, trigger_village_idx)) = trigger_info {
             if let Some(trace) = current_agent.take_trace() {
@@ -793,6 +867,16 @@ fn play_single_game(
         };
 
         if let Some(m) = best_move {
+            if trace_all {
+                decision_log.push(TracedDecision {
+                    turn: game.state.settings.turn,
+                    move_count,
+                    player_id: pov,
+                    chosen: m.describe(&game.state),
+                    root_value,
+                    trace: step_trace,
+                });
+            }
             let m_type = m.move_type();
             *action_counts.entry(m_type).or_insert(0) += 1;
             *moves_by_turn
@@ -949,6 +1033,28 @@ fn play_single_game(
         final_tech.insert(*id, tech_multihot(&t.tech_vanilla));
     }
 
+    let recap = ModReplay {
+        game_state: initial_state,
+        turns: group_recap(flat_recap),
+    };
+    if let Some(dir) = dump_failed_dir {
+        if village_capture_turns.is_empty() {
+            dump_failed_game(
+                dir,
+                iteration,
+                game_idx,
+                seed,
+                &tribes,
+                backend1,
+                backend2,
+                max_turns,
+                &scores,
+                &recap,
+                &decision_log,
+            );
+        }
+    }
+
     Some(GameResult {
         history: game_history,
         scores,
@@ -970,10 +1076,7 @@ fn play_single_game(
         final_spt,
         final_tech,
         winner_score,
-        recap: ModReplay {
-            game_state: initial_state,
-            turns: group_recap(flat_recap),
-        },
+        recap,
         action_counts,
         moves_by_turn,
     })
@@ -1150,6 +1253,13 @@ fn main() -> anyhow::Result<()> {
         /// Ignored unless --trace-villages.
         #[arg(long, default_value_t = 20)]
         trace_max: usize,
+
+        /// Diagnostics: dump games where NO village was captured by either
+        /// player into this dir — <base>.replay.json (watcher-loadable) plus
+        /// <base>.decisions.json (search trace for every decision; forces
+        /// fresh root builds, so within-turn tree reuse is off).
+        #[arg(long)]
+        dump_failed_dir: Option<String>,
     }
 
     let args = Args::parse();
@@ -1574,6 +1684,7 @@ fn main() -> anyhow::Result<()> {
                             args.trace_trigger,
                             args.trace_max,
                             &trace_counter,
+                            args.dump_failed_dir.as_deref(),
                         )
                     }))
                     .unwrap_or_else(|_| {
