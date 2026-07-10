@@ -101,6 +101,8 @@ namespace PolyfishAI.src
                 // TimelineHotkeys.SkipToNextExplorer();
             }
 
+            PolyfishBot.Update();
+
             while (_mainThreadQueue.TryDequeue(out var action))
             {
                 try
