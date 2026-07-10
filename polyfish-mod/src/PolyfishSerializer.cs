@@ -125,7 +125,7 @@ namespace PolyfishAI.src
                     ["version"] = gs.Version,
                     ["seed"] = gs.Seed,
                     ["turn"] = gs.CurrentTurn,
-                    ["currentPlayerTurnId"] = gs.CurrentPlayerIndex,
+                    ["currentPlayerTurnId"] = gs.PlayerStates[gs.CurrentPlayerIndex].Id,
                     ["size"] = settings.MapSize,
                     ["tileCount"] = settings.MapSize * settings.MapSize,
                     ["mapType"] = (int)settings.mapPreset,

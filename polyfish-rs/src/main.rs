@@ -244,6 +244,8 @@ struct StepParams {
     iterations: usize,
     #[serde(default)]
     dry_run: bool,
+    #[serde(default)]
+    random: bool,
 }
 
 fn default_iterations() -> usize {
@@ -287,45 +289,61 @@ async fn auto_step(
     let mut move_name = "none".to_string();
     let mut best_move_json = None;
     let mut policy = serde_json::json!({});
+    let mut mcts_analysis = serde_json::Value::Null;
 
-    // 1. Try to get AI move from trained model if available
-    if let Some(net) = &state.network {
-        use polyfish::ai::brain::Brain;
-        use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
-        let evaluator = Evaluator::Inline(InlineEvalHandle::new(net.clone()));
-        let mut brain = Brain::new(&evaluator, params.iterations);
-        game.state._messages.clear();
-        let (chosen_move, brain_policy) = brain.think_with_stats(&mut game);
-        policy = brain_policy.into();
-        best_move_json = chosen_move.as_ref().map(|m| m.serialize());
-
-        if !params.dry_run {
-            if let Some(m) = chosen_move {
-                move_name = format!("{:?}", m.move_type());
-                game.play_move(m.as_ref());
+    if params.random {
+        let moves = game.legal_moves();
+        if !moves.is_empty() {
+            use rand::seq::SliceRandom;
+            let mut rng = rand::thread_rng();
+            let chosen = moves.choose(&mut rng).unwrap();
+            best_move_json = Some(chosen.serialize());
+            if !params.dry_run {
+                move_name = format!("{:?}", chosen.move_type());
+                game.play_move(chosen.as_ref());
             }
         }
-    }
+    } else {
+        // 1. Try to get AI move from trained model if available
+        if let Some(net) = &state.network {
+            use polyfish::ai::brain::Brain;
+            use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
+            let evaluator = Evaluator::Inline(InlineEvalHandle::new(net.clone()));
+            let mut brain = Brain::new(&evaluator, params.iterations);
+            game.state._messages.clear();
+            let (chosen_move, brain_policy) = brain.think_with_stats(&mut game);
+            policy = brain_policy.into();
+            best_move_json = chosen_move.as_ref().map(|m| m.serialize());
 
-    // 2. Run heuristic MCTS for analysis panel (move descriptions + PV)
-    // This also acts as a fallback for move selection if no network is available
-    use polyfish::ai::heuristic_mcts::HeuristicMctsAgent;
-    let analysis_agent = HeuristicMctsAgent {
-        iterations: params.iterations,
-        exploration_constant: 0.1,
-    };
-    let (h_best_move, mcts_analysis) = analysis_agent.select_move_with_analysis(&mut game);
-
-    // If we don't have a network but we ARE supposed to move, use the heuristic best move
-    if state.network.is_none() && !params.dry_run {
-        if let Some(m) = h_best_move.as_ref() {
-            move_name = format!("{:?}", m.move_type());
-            best_move_json = Some(m.serialize());
-            game.play_move(m.as_ref());
+            if !params.dry_run {
+                if let Some(m) = chosen_move {
+                    move_name = format!("{:?}", m.move_type());
+                    game.play_move(m.as_ref());
+                }
+            }
         }
-    } else if state.network.is_none() {
-        // Just for dry_run analysis when network is missing
-        best_move_json = h_best_move.as_ref().map(|m| m.serialize());
+
+        // 2. Run heuristic MCTS for analysis panel (move descriptions + PV)
+        // This also acts as a fallback for move selection if no network is available
+        use polyfish::ai::heuristic_mcts::HeuristicMctsAgent;
+        let analysis_agent = HeuristicMctsAgent {
+            iterations: params.iterations,
+            exploration_constant: 0.1,
+        };
+        let (h_best_move, mcts_res) = analysis_agent.select_move_with_analysis(&mut game);
+        mcts_analysis = serde_json::to_value(mcts_res).unwrap_or(serde_json::Value::Null);
+
+        // If we don't have a network but we ARE supposed to move, use the heuristic best move
+        if state.network.is_none() && !params.dry_run {
+            if let Some(m) = h_best_move.as_ref() {
+                move_name = format!("{:?}", m.move_type());
+                best_move_json = Some(m.serialize());
+                game.play_move(m.as_ref());
+            }
+        } else if state.network.is_none() {
+            // Just for dry_run analysis when network is missing
+            best_move_json = h_best_move.as_ref().map(|m| m.serialize());
+        }
     }
 
     let mut tiles: Vec<_> = game.state.tiles.values().collect();
@@ -954,8 +972,8 @@ async fn save_game(State(state): State<Arc<AppState>>, body: Option<Json<Value>>
         }
     }
 
-    let json = serde_json::to_string_pretty(&game.state).unwrap();
-    std::fs::write("saved_state.json", json).expect("Failed to write saved_state.json");
+    // let json = serde_json::to_string_pretty(&game.state).unwrap();
+    // std::fs::write("saved_state.json", json).expect("Failed to write saved_state.json");
 
     Json(serde_json::json!({
         "status": "success",
