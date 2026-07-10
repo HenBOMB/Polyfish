@@ -1,3 +1,7 @@
 cd polyfish-rs
 
-kill $(lsof -t -i:3000) || true && cargo run --bin polyfish
+pids=$(lsof -t -i:3000)
+if [ -n "$pids" ]; then
+    kill $pids
+fi
+cargo run --bin polyfish

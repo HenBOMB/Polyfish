@@ -69,7 +69,7 @@ namespace PolyfishAI.src
             {
                 try
                 {
-                    Dumper.Dump(); ExecuteMoveFromJson(responseJson, gameState);
+                    ExecuteMoveFromJson(responseJson, gameState);
                 }
                 catch (Exception ex)
                 {
@@ -191,22 +191,15 @@ namespace PolyfishAI.src
                 PolyfishPlugin.Logger.LogInfo($"[Bot] Injecting command: {cmd.GetType().Name}");
                 
                 // Try executing it via InteractionBar's Method_Internal_Void_CommandBase_0 or similar
-                var interactionBar = UnityEngine.Object.FindObjectOfType<InteractionBar>();
-                if (interactionBar != null)
+                var gm = UnityEngine.Object.FindObjectOfType<GameManager>();
+                if (gm != null && gm.client != null)
                 {
-                    try 
-                    {
-                        // Some commands are handled by OnPopupAccepted
-                        interactionBar.OnPopupAccepted(cmd);
-                    }
-                    catch (Exception)
-                    {
-                        PolyfishPlugin.Logger.LogWarning("[Bot] Failed to use OnPopupAccepted, attempting alternative...");
-                    }
+                    PolyfishPlugin.Logger.LogInfo($"[Bot] Injecting command via Client: {cmd.GetType().Name}");
+                    gm.client.SendCommand(cmd);
                 }
                 else
                 {
-                    PolyfishPlugin.Logger.LogWarning("[Bot] InteractionBar not found!");
+                    PolyfishPlugin.Logger.LogWarning("[Bot] GameManager or client not found! Cannot inject command.");
                 }
             }
         }
