@@ -39,6 +39,7 @@ polyfish-rs/*.log
 polyfish-rs/old_sessions/
 polyfish-rs/test_output.txt
 polyfish-rs/replays/high_scores/
+polyfish-rs/replays/failed_games/
 polyfish-rs/decision_traces/
 
 # Binary model weights (use releases/LFS for these)
