@@ -26,6 +26,12 @@ pub const STARTING_OWNER_ID: PlayerId = 1;
 pub static SIM_END_TURN_EDGES: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
+/// Diagnostic: how many simulated moves failed to execute during MCTS descent.
+/// Nonzero means the tree held a move that is illegal in the replayed state — a
+/// state-divergence bug (see tests/gumbel_reuse_integrity.rs).
+pub static SIM_MOVE_FAILURES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 /// The main game controller
 ///
 /// Provides the interface for loading game states, playing moves, and managing turns.
@@ -309,6 +315,7 @@ impl Game {
         } else {
             let result = game_move.execute(&mut self.state);
             if let Err(e) = result {
+                SIM_MOVE_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 eprintln!("Error executing simulated move: {}", e);
                 return None;
             }

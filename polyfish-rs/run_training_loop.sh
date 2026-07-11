@@ -120,6 +120,7 @@ while getopts "fbcri:g:n:a:e:l:" opt; do
       ;;
     n)
       MCTS_ITERS=$OPTARG
+      MCTS_ITERS_SET=true
       ;;
     a)
       ACTORS=$OPTARG
@@ -202,7 +203,7 @@ echo "Training run_id=$RUN_ID started_at=$RUN_STARTED_AT starting at iteration $
 
 # Set up config.json sync if not present
 if [ ! -f "config.json" ]; then
-    echo "{\"gamemode\": 2, \"iterations\": $MCTS_ITERS, \"cores\": 2, \"tribes\": [\"Imperius\", \"Bardur\", \"Oumaji\", \"Kickoo\", \"XinXi\"]}" > config.json
+    echo "{\"gamemode\": 2, \"mctsIters\": $MCTS_ITERS, \"cores\": 2, \"tribes\": [\"Imperius\", \"Bardur\", \"Oumaji\", \"Kickoo\", \"XinXi\"]}" > config.json
 fi
 
 echo "Starting backend server in background..."
@@ -307,10 +308,14 @@ do
     VALUE_TRUST=$(awk -v i="$i" -v r="${VALUE_TRUST_RAMP_ITERS:-30}" -v cap="${VALUE_TRUST_CAP:-1.0}" \
         'BEGIN { t = i / r; if (t > 1) t = 1; t = t * cap; printf "%.3f", t }')
 
-    # Dynamically fetch parameters from config.json (set by dashboard UI)
+    # Dynamically fetch parameters from config.json (set by dashboard UI).
+    # -n on the command line is an explicit override and must survive the
+    # whole run — it must not be re-clobbered by config.json each iteration.
     if [ -f "config.json" ]; then
         GAMEMODE=$(jq -r '.gamemode // 2' config.json)
-        MCTS_ITERS=$(jq -r '.mctsIters // 64' config.json)
+        if [ "${MCTS_ITERS_SET:-false}" != true ]; then
+            MCTS_ITERS=$(jq -r '.mctsIters // 64' config.json)
+        fi
         # Parse tribes array into bash array safely
         TRIBE_LIST=()
         while IFS= read -r line; do
