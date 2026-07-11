@@ -189,6 +189,7 @@ async fn main() {
             "/api/value-distribution",
             get(polyfish::training_api::api_value_distribution),
         )
+        .route("/api/elo-ladder", get(polyfish::training_api::api_elo_ladder))
         .nest_service("/assets", ServeDir::new("../src/public/assets"))
         .nest_service("/simulator", ServeDir::new("../polyfish-ui/dist/simulator"))
         .nest_service("/static", ServeDir::new("../src/public"))

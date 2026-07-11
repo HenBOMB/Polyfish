@@ -178,12 +178,4 @@ Wire the EXP 10 reading into `run_training_loop.sh`: every `LEAGUE_INTERVAL` ite
 Next stint: readings every 10 iters climb from ~25–34% vs Greedy toward the >50% crossing; no false plateau stop on the way; first anchor freeze at ≥80%.
 
 ### Actual Results
-*(pending — next training stint)*
-
-## Next candidates (write the EXP entry before running)
-
-- **Anchor-frac retirement gate**: `decay_crutch` currently phases out the greedy teacher by iteration count (`DECAY_LAST_ITER`); gate it on the ladder instead — anneal `ANCHOR_FRAC` once the gauge reads >50% vs Greedy sustained, cut at >80%.
-- **De-censor the rate metric (instrumentation)**: exclude games that end by domination before any village capture from the `villages_first_rate` denominator, and log a `domination_wins` rate column. With the ~3–5% rush games counted honestly, rate should read ~1.0 and the 1.0 pre-registration becomes meetable.
-- **Value-head probe**: fixed-holdout convergence probe to attribute the r2 slide (harder data vs worse head vs aux competition). Cheap, decides whether anything needs fixing.
-- **Movement ground truth**: dump ordinary games (replay + full decision traces) from the latest model; Verdi labels wasted vs purposeful moments; the labels seed both a blended movement metric and a fixed eval suite scored per checkpoint.
-- **Map geometry floor** (user-gated, explicitly not approved yet): 31% of Drylands spawns have no village within Chebyshev 3 (400-map measurement; mean nearest 3.44) → omniscient floor ≈4.4, competent-FOW play ≈5.0–5.5. If cond plateaus ~5.0–5.3 at rate ~1.0, the remaining gap to 4.5 is the map, not the policy — reopen the suburb-guarantee conversation with that data.
+It worked but we see it actually plateauing and the trained NN unable to beat the teacher enough to be made an anchor. It wins ~75% of the time.

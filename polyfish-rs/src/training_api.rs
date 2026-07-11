@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 const CSV_PATH: &str = "training_log.csv";
 const MOVES_PATH: &str = "moves_by_turn.json";
 const VALUE_DIST_PATH: &str = "value_distribution.json";
+const LADDER_PATH: &str = "ladder.json";
 
 #[derive(Debug, Clone)]
 struct MetricRow {
@@ -269,6 +270,13 @@ pub async fn api_training_metrics(Query(q): Query<RunFilter>) -> Json<Value> {
         .map(row_to_json)
         .collect();
     Json(json!(filtered))
+}
+
+pub async fn api_elo_ladder() -> Json<Value> {
+    let content = std::fs::read_to_string(LADDER_PATH).unwrap_or_default();
+    let ladder: Value =
+        serde_json::from_str(&content).unwrap_or_else(|_| json!({ "anchors": [], "readings": [] }));
+    Json(ladder)
 }
 
 pub async fn api_moves_by_turn(Query(q): Query<RunFilter>) -> Json<Value> {

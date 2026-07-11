@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Routes, Route, NavLink, Navigate } from 'react-router-dom';
 import MetricChart from './components/ui/MetricChart';
+import EloLadderPage from './components/ui/EloLadderPage';
 import './index.css';
 
 interface GameState {
@@ -314,6 +315,7 @@ function App() {
           <NavLink to="/" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} end>Overview</NavLink>
           <NavLink to="/metrics" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Self-Play Metrics</NavLink>
           <NavLink to="/mcts" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Gumbel Stats</NavLink>
+          <NavLink to="/elo-ladder" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Elo Ladder</NavLink>
           <NavLink to="/settings" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Settings</NavLink>
           <NavLink to="/simulator" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Simulator</NavLink>
           <NavLink to="/legacy-training" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Legacy Dashboard</NavLink>
@@ -1248,6 +1250,7 @@ function App() {
             </div>
           </section>
           } />
+          <Route path="/elo-ladder" element={<EloLadderPage />} />
           <Route path="/simulator" element={
             <div style={{ width: '100%', height: 'calc(100vh - 120px)', border: '1px solid var(--border-subtle)', borderRadius: '8px', overflow: 'hidden', marginTop: '20px', background: '#000' }}>
               <iframe src="/simulator/index.html" style={{ width: '100%', height: '100%', border: 'none' }} title="Polyfish Simulator" />
