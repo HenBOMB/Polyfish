@@ -1,0 +1,111 @@
+/* Replay UI Styles */
+
+#replay-controls {
+    position: absolute;
+    bottom: 140px;
+    /* Above console */
+    left: 50%;
+    transform: translateX(-50%);
+    width: 700px;
+    background: rgba(16, 18, 27, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    padding: 0;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(10px);
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    animation: slideUp 0.3s ease-out;
+}
+
+@keyframes slideUp {
+    from {
+        transform: translate(-50%, 20px);
+        opacity: 0;
+    }
+
+    to {
+        transform: translate(-50%, 0);
+        opacity: 1;
+    }
+}
+
+.replay-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    background: rgba(255, 255, 255, 0.05);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.replay-close {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 1.2em;
+    padding: 4px;
+}
+
+.replay-close:hover {
+    color: var(--text-primary);
+}
+
+.replay-body {
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.replay-turn-info {
+    text-align: center;
+    font-size: 0.9em;
+    color: var(--text-secondary);
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.replay-nav {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+}
+
+.replay-analysis {
+    display: flex;
+    gap: 16px;
+}
+
+.analysis-box {
+    flex: 1;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 8px;
+    padding: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.analysis-box .label {
+    font-size: 0.8em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+    opacity: 0.7;
+    letter-spacing: 1px;
+}
+
+.analysis-box.user .label {
+    color: var(--blue);
+}
+
+.analysis-box.ai .label {
+    color: var(--gold);
+}
+
+.analysis-box .value {
+    font-size: 0.95em;
+    line-height: 1.4;
+}

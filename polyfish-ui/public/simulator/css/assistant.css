@@ -1,0 +1,122 @@
+/* AI TEACHER / ASSISTANT HUD */
+#teacher-hud {
+    position: fixed;
+    top: 60px;
+    right: 20px;
+    width: 280px;
+    background: rgba(15, 15, 25, 0.95);
+    border: 1px solid var(--rts-accent);
+    box-shadow: 0 0 20px rgba(59, 130, 246, 0.3);
+    border-radius: 12px;
+    z-index: 5000;
+    overflow: hidden;
+    animation: teacher-slide-in 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    backdrop-filter: blur(8px);
+}
+
+@keyframes teacher-slide-in {
+    0% {
+        transform: translateX(120%);
+        opacity: 0;
+    }
+
+    100% {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+.teacher-header {
+    background: var(--rts-accent);
+    color: white;
+    padding: 8px 15px;
+    font-weight: 800;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.teacher-body {
+    padding: 15px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.teacher-visual {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    padding: 10px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.move-icon {
+    width: 48px;
+    height: 48px;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    flex-shrink: 0;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.teacher-body .move-name {
+    font-size: 15px;
+    font-weight: 700;
+    color: white;
+    text-align: left;
+    flex: 1;
+}
+
+.teacher-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+
+.teacher-actions button.green {
+    background: #059669;
+    border-color: #10b981;
+}
+
+.teacher-actions button.red {
+    background: #991b1b;
+    border-color: #dc2626;
+}
+
+/* Button Active State for Modes */
+.rts-btn.active {
+    background: var(--rts-green) !important;
+    border-color: white !important;
+    box-shadow: 0 0 10px var(--rts-green);
+    color: white !important;
+}
+
+.your-turn {
+    background: var(--rts-green) !important;
+    border-color: white !important;
+    animation: your-turn-pulse 2s infinite;
+}
+
+@keyframes your-turn-pulse {
+    0% {
+        box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+    }
+
+    70% {
+        box-shadow: 0 0 0 10px rgba(16, 185, 129, 0);
+    }
+
+    100% {
+        box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+    }
+}

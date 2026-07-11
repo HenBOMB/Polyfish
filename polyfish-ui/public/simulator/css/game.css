@@ -1,0 +1,40 @@
+:root {
+    --rts-bg: #0a0a0f;
+    --rts-panel: rgba(15, 15, 25, 0.98);
+    --rts-accent: #3b82f6;
+    --rts-accent-glow: rgba(59, 130, 246, 0.4);
+    --rts-gold: #fbbf24;
+    --rts-green: #10b981;
+    --rts-border: rgba(255, 255, 255, 0.1);
+    --rts-text: #e2e8f0;
+    --rts-text-dim: #94a3b8;
+}
+
+body,
+html {
+    margin: 0;
+    padding: 0;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    background: var(--rts-bg);
+    color: var(--rts-text);
+    font-family: 'Inter', 'Outfit', sans-serif;
+}
+
+#app-container {
+    display: flex;
+    flex-direction: column;
+    width: 100vw;
+    height: 100vh;
+}
+
+/* MAIN VIEWPORT: Guaranteed Full Screen between bars */
+#main-view {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    background: #000;
+    display: flex;
+    flex-direction: column;
+}
