@@ -1,10 +1,8 @@
 use candle_core::{Device, Tensor};
 use polyfish::TribeType;
 use polyfish::ai::brain::{Brain, SearchBackend, SearchBackendArg};
-use polyfish::ai::eval_server::{
-    BackendSpec, EvalHandle, EvalServer, EvalServerConfig, EvalServerStats, Evaluator,
-    ShardedEvalHandle,
-};
+use polyfish::ai::eval_backend::{self, EvalBackendKind, PlayerBackend};
+use polyfish::ai::eval_server::{EvalServerConfig, EvalServerStats, Evaluator};
 use polyfish::ai::features::{self, GameFeatures, state_to_tensor};
 use polyfish::ai::mapper::DecomposedMapper;
 use polyfish::ai::network::PolyZeroNet;
@@ -586,9 +584,19 @@ fn t2c_turn(capture_turns: &[i32], initial: usize, frac: f64, censor: i32) -> f3
 
 /// Load the main network (and opponent network, defaulting to the main one)
 /// onto the given device from `model.safetensors`.
+///
+/// When `eval_backend_kind` is `Candle` and a distinct opponent is given, the
+/// opponent network is loaded on its own freshly-obtained device rather than
+/// `device`: under Candle, player 1 and player 2 each get an independent
+/// `EvalServer` thread, and candle's Metal backend corrupts if two threads
+/// encode ops (e.g. `forward_t`) against the same `Device` (see
+/// `eval_backend.rs`'s device-isolation contract). tch/metal shards load
+/// their own weights on the eval-server thread and never touch this candle
+/// device for inference, so sharing is harmless for them.
 fn load_networks(
     device: &Device,
     opponent: Option<&str>,
+    eval_backend_kind: EvalBackendKind,
 ) -> anyhow::Result<(Arc<PolyZeroNet>, Arc<PolyZeroNet>)> {
     let model_path = "model.safetensors";
     if !std::path::Path::new(model_path).exists() {
@@ -605,8 +613,13 @@ fn load_networks(
     let network1 = Arc::new(PolyZeroNet::new(vs1)?);
 
     let network2 = if let Some(opp_path) = opponent {
+        let device2 = if eval_backend_kind == EvalBackendKind::Candle {
+            eval_backend::select_device()?
+        } else {
+            device.clone()
+        };
         let vs2 = unsafe {
-            candle_nn::VarBuilder::from_mmaped_safetensors(&[opp_path], candle_core::DType::F32, device)?
+            candle_nn::VarBuilder::from_mmaped_safetensors(&[opp_path], candle_core::DType::F32, &device2)?
         };
         Arc::new(PolyZeroNet::new(vs2)?)
     } else {
@@ -1371,17 +1384,17 @@ fn main() -> anyhow::Result<()> {
         SearchBackendArg::Greedy => SearchBackend::Greedy,
     };
 
-    // Select device: Metal (macOS) > CUDA (NVIDIA) > CPU, unless overridden via POLYFISH_DEVICE
-    let device = match std::env::var("POLYFISH_DEVICE").as_deref() {
-        Ok("cpu") => Device::Cpu,
-        Ok("metal") => Device::metal_if_available(0)?,
-        Ok("cuda") => Device::cuda_if_available(0)?,
-        _ => Device::metal_if_available(0)
-            .or_else(|_| Device::cuda_if_available(0))
-            .unwrap_or(Device::Cpu),
-    };
+    let device = eval_backend::select_device()?;
+
+    // Resolve the eval backend up front (explicit --eval-backend, else auto:
+    // metal when compiled in, else tch when compiled in, else candle) — the
+    // network load below needs it to decide whether player 2 gets an
+    // isolated device (see `load_networks`'s doc comment).
+    let eval_backend_kind = eval_backend::resolve_eval_backend_kind(&args.eval_backend)?;
+    let eval_servers = eval_backend::resolve_eval_servers(eval_backend_kind, args.eval_servers)?;
+
     // Load models (P1, and P2 defaulting to P1 when no opponent is given)
-    let (network1, network2) = load_networks(&device, args.opponent.as_deref())?;
+    let (network1, network2) = load_networks(&device, args.opponent.as_deref(), eval_backend_kind)?;
 
     let base_seed = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
@@ -1464,170 +1477,32 @@ fn main() -> anyhow::Result<()> {
     // for the Metal cross-thread-tensor invariant this design preserves).
     let games_start = Instant::now();
 
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum EvalBackendKind {
-        Candle,
-        Tch,
-        Metal,
-    }
-
-    // Resolve the eval backend: explicit --eval-backend, else auto (metal
-    // when compiled in, else tch when compiled in, else candle).
-    let eval_backend_kind = match args.eval_backend.as_str() {
-        "tch" => {
-            if !cfg!(feature = "tch-eval") {
-                anyhow::bail!(
-                    "--eval-backend tch requires building with --features tch-eval"
-                );
-            }
-            EvalBackendKind::Tch
-        }
-        "metal" => {
-            if !cfg!(feature = "metal-eval") {
-                anyhow::bail!(
-                    "--eval-backend metal requires building with --features metal-eval"
-                );
-            }
-            EvalBackendKind::Metal
-        }
-        "candle" => EvalBackendKind::Candle,
-        "" => {
-            if cfg!(feature = "metal-eval") {
-                EvalBackendKind::Metal
-            } else if cfg!(feature = "tch-eval") {
-                EvalBackendKind::Tch
-            } else {
-                EvalBackendKind::Candle
-            }
-        }
-        other => anyhow::bail!("unknown --eval-backend {other:?} (want candle|tch|metal)"),
-    };
-    // Resolve shard count. We default to the best measured throughput
-    let eval_servers = match args.eval_servers {
-        0 => {
-            if eval_backend_kind == EvalBackendKind::Metal {
-                3
-            } else {
-                1
-            }
-        }
-        n => {
-            if n > 1 && eval_backend_kind == EvalBackendKind::Candle {
-                anyhow::bail!(
-                    "--eval-servers > 1 requires --eval-backend tch or metal \
-                     (candle Metal corrupts when >1 thread encodes on the same device)"
-                );
-            }
-            n
-        }
-    };
     // Each shard sees ~1/N of the working set (hash-routed), so dividing the
     // per-shard cache by N keeps total resident cache ~constant while
     // preserving the hit rate (cache / working-set ratio is unchanged).
-    let per_shard_cache = if args.cache_cap == 0 {
-        None
-    } else {
-        Some(args.cache_cap / eval_servers)
-    };
+    let per_shard_cache = eval_backend::split_cache_capacity(args.cache_cap, eval_servers);
     let eval_config = EvalServerConfig {
         max_batch: args.max_batch,
         coalesce_timeout: std::time::Duration::from_micros(args.coalesce_timeout_us),
         cache_capacity: per_shard_cache,
         pipeline_workers: args.eval_workers,
     };
-    // Builds `n` backend specs for one player. For tch: every shard gets its
-    // own `BackendSpec::Tch` on the shared MPS device; each shard's thread
-    // loads its own `TchPolyZeroNet` (duplicated weights, a few MB). For
-    // metal: every shard gets its own `BackendSpec::MetalMps`, each shard's
-    // thread loads its own `MetalPolyZeroNet` and owns its own
-    // `MTLCommandQueue`. For candle: `n` clones of the passed
-    // `Arc<PolyZeroNet>` (player 1 vs player 2 networks differ in opponent
-    // mode).
-    let make_specs = |kind: EvalBackendKind,
-                      n: usize,
-                      model_path: &str,
-                      candle_net: &Arc<PolyZeroNet>|
-     -> Vec<BackendSpec> {
-        // `model_path` is only read by the tch/metal branches below; in
-        // builds with neither feature it's unused. Touch it so the closure
-        // compiles cleanly either way.
-        let _ = model_path;
-        match kind {
-            EvalBackendKind::Tch => {
-                #[cfg(feature = "tch-eval")]
-                {
-                    let dev = if tch::utils::has_mps() {
-                        tch::Device::Mps
-                    } else {
-                        tch::Device::Cpu
-                    };
-                    return (0..n)
-                        .map(|_| BackendSpec::Tch {
-                            model_path: model_path.to_string(),
-                            device: dev,
-                        })
-                        .collect();
-                }
-                #[cfg(not(feature = "tch-eval"))]
-                unreachable!("EvalBackendKind::Tch guarded by cfg above");
-            }
-            EvalBackendKind::Metal => {
-                #[cfg(feature = "metal-eval")]
-                {
-                    return (0..n)
-                        .map(|_| BackendSpec::MetalMps {
-                            model_path: model_path.to_string(),
-                        })
-                        .collect();
-                }
-                #[cfg(not(feature = "metal-eval"))]
-                unreachable!("EvalBackendKind::Metal guarded by cfg above");
-            }
-            EvalBackendKind::Candle => (0..n)
-                .map(|_| BackendSpec::Candle(candle_net.clone()))
-                .collect(),
-        }
-    };
     let p1_path = "model.safetensors";
-    let p2_path = args
-        .opponent
-        .as_deref()
-        .unwrap_or("model.safetensors");
-    let p1_specs = make_specs(eval_backend_kind, eval_servers, p1_path, &network1);
+    let p2_path = args.opponent.as_deref().unwrap_or("model.safetensors");
     let has_opponent = args.opponent.is_some();
-    let p2_specs = if has_opponent {
-        make_specs(eval_backend_kind, eval_servers, p2_path, &network2)
-    } else {
-        Vec::new()
-    };
 
     // Spawn the shards. Each EvalServer owns its inference thread + device
     // context; the handles are collected into a ShardedEvalHandle that
-    // routes leaves by hash so each shard owns its own LRU cache.
-    let mut p1_servers: Vec<EvalServer> = Vec::with_capacity(eval_servers);
-    let mut p1_handles: Vec<EvalHandle> = Vec::with_capacity(eval_servers);
-    for spec in p1_specs {
-        let (srv, h) = EvalServer::start(spec, eval_config);
-        p1_servers.push(srv);
-        p1_handles.push(h);
-    }
-    let (p2_servers, p2_handles) = if has_opponent {
-        // Opponent mode: independent shard set for player 2.
-        let mut s = Vec::with_capacity(eval_servers);
-        let mut h = Vec::with_capacity(eval_servers);
-        for spec in p2_specs {
-            let (srv, hh) = EvalServer::start(spec, eval_config);
-            s.push(srv);
-            h.push(hh);
-        }
-        (Some(s), h)
-    } else {
-        // Self-play against the same weights: both players share one shard
-        // set so we don't run 2× inference threads for the same network.
-        (None, p1_handles.clone())
-    };
-    let eval1 = Evaluator::Sharded(ShardedEvalHandle::new(p1_handles));
-    let eval2 = Evaluator::Sharded(ShardedEvalHandle::new(p2_handles));
+    // routes leaves by hash so each shard owns its own LRU cache. No
+    // opponent => player 2 shares player 1's shard set (one set of
+    // inference threads for the same weights).
+    let (p1_servers, p2_servers, eval1, eval2) = eval_backend::build_two_player_evaluators(
+        eval_backend_kind,
+        eval_servers,
+        eval_config,
+        PlayerBackend { model_path: p1_path, candle_net: &network1 },
+        has_opponent.then(|| PlayerBackend { model_path: p2_path, candle_net: &network2 }),
+    );
 
     let num_actors = if args.actors > 0 {
         args.actors
