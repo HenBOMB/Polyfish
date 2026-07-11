@@ -277,13 +277,26 @@ do
     fi
 
     # Heuristic-anchor games (selfplay iterations only; league already has an
-    # asymmetric opponent). ANCHOR_FRAC of each iteration's games are played
-    # vs the network-free heuristic backend so passivity actually loses and
-    # the relative value label carries signal. ANCHOR_FRAC=0 disables.
+    # asymmetric opponent). ANCHOR_FRAC is the STARTING rate of each
+    # iteration's games played vs the network-free heuristic backend so
+    # passivity actually loses and the relative value label carries signal;
+    # it decays in-binary (see decay_crutch in self_play.rs) alongside
+    # prior_heuristic_weight. ANCHOR_FRAC=0 disables.
     ANCHOR_FLAG=""
     if [ "$MATCH_TYPE" = "selfplay" ]; then
         ANCHOR_FLAG="--anchor-frac ${ANCHOR_FRAC:-0.25}"
     fi
+
+    # Final phase-out of both heuristic crutches (search-prior blend +
+    # anchor games): both decay to a 10% floor and hold there until this
+    # EFF_ITER-relative cutoff, then hard-cut to 0. 150 is a starting point
+    # (past curriculum maturity at iter 75 and the floor point at ~53, well
+    # inside a default 500-iteration run) — validate/adjust via the
+    # hypothesis-driven loop, not a measured value. Ideally this would
+    # instead be gated on the model consistently beating the heuristic-only
+    # backend (see EXP 10's arena ladder); until that gate is wired up,
+    # DECAY_LAST_ITER is the fallback trigger.
+    DECAY_LAST_ITER_FLAG="--decay-last-iter ${DECAY_LAST_ITER:-150}"
 
     # Value-head trust ramp, RUN-relative (loop iteration i, not EFF_ITER —
     # ITER_OFFSET-shifted runs would saturate the in-binary iteration ramp
@@ -327,7 +340,7 @@ do
     EFF_ITER=$((EFF_ITER + ${ITER_OFFSET:-0}))
 
     SP_LOG=$(mktemp)
-    ./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG $ANCHOR_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
+    ./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $DECAY_LAST_ITER_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
     SP_STATUS=${PIPESTATUS[0]}
     rm -f "$SP_LOG"
     if [ "$SP_STATUS" -ne 0 ]; then

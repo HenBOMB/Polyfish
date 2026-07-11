@@ -23,8 +23,27 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const HEURISTIC_PRIOR_W0: f32 = 0.5; // net & heur blended 50/50 at start
-const HEURISTIC_PRIOR_DECAY: f32 = 0.97; // decays 0.5 -> 0.1 floor by ~iteration 47
-const HEURISTIC_PRIOR_W_FLOOR: f32 = 0.1; // permanent behavioral floor, root + in-tree
+const HEURISTIC_PRIOR_DECAY: f32 = 0.97; // decays 0.5 -> 0.1 floor by ~iteration 53
+const ANCHOR_FRAC_DECAY: f32 = 0.97; // same rate as HEURISTIC_PRIOR_DECAY, own start value
+const CRUTCH_FLOOR: f32 = 0.1; // intermediate plateau shared by both crutches below
+
+/// Exponential decay from `w0` toward `CRUTCH_FLOOR`, then a hard cutover to
+/// 0 once `iteration >= decay_last_iter` (or immediately if `force_zero`).
+/// Shared by `prior_heuristic_weight` (self-play search prior blend) and
+/// `anchor_frac` (heuristic-anchor game rate) — both are training-time
+/// crutches meant to fully phase out, not asymptote at a permanent floor.
+fn decay_crutch(
+    w0: f32,
+    decay_rate: f32,
+    iteration: usize,
+    decay_last_iter: usize,
+    force_zero: bool,
+) -> f32 {
+    if force_zero || iteration >= decay_last_iter {
+        return 0.0;
+    }
+    (w0 * decay_rate.powi(iteration as i32)).max(CRUTCH_FLOOR)
+}
 
 // Absolute yardstick for the value target; 8K points is a good place to end a 30T game
 const GOOD_BOT_FINAL_SCORE: f32 = 8000.0;
@@ -608,6 +627,8 @@ fn play_single_game(
     seed: i64,
     tribes: Vec<TribeType>,
     iteration: usize,
+    decay_last_iter: usize,
+    force_zero_crutches: bool,
     gamemode: u8,
     backend1: SearchBackend,
     backend2: SearchBackend,
@@ -680,8 +701,13 @@ fn play_single_game(
     let trace_all = dump_failed_dir.is_some();
     let mut decision_log: Vec<TracedDecision> = Vec::new();
 
-    let prior_w = (HEURISTIC_PRIOR_W0 * HEURISTIC_PRIOR_DECAY.powi(iteration as i32))
-        .max(HEURISTIC_PRIOR_W_FLOOR);
+    let prior_w = decay_crutch(
+        HEURISTIC_PRIOR_W0,
+        HEURISTIC_PRIOR_DECAY,
+        iteration,
+        decay_last_iter,
+        force_zero_crutches,
+    );
     // One trust scalar drives β on σ(Q) in both the exported targets and the
     // search tree itself. --value-trust overrides the iteration ramp, which
     // saturates immediately on ITER_OFFSET-shifted runs.
@@ -1160,15 +1186,33 @@ fn main() -> anyhow::Result<()> {
         #[arg(long)]
         opponent: Option<String>,
 
-        /// Fraction of games (0..1) played against the network-free Heuristic
-        /// search backend as an anchor opponent (seat alternates between
-        /// anchor games). Anchor games break mirror-play symmetry: a passive
-        /// net LOSES them, so the relative value label finally carries an
-        /// anti-passivity gradient. The anchor side's data is recorded too
-        /// (fresh teacher data, same as the BC corpus). Mutually exclusive
-        /// with --opponent.
+        /// STARTING fraction of games (0..1) played against the network-free
+        /// Heuristic search backend as an anchor opponent (seat alternates
+        /// between anchor games). Anchor games break mirror-play symmetry: a
+        /// passive net LOSES them, so the relative value label finally
+        /// carries an anti-passivity gradient. The anchor side's data is
+        /// recorded too (fresh teacher data, same as the BC corpus). Decays
+        /// with `iteration` the same way `prior_heuristic_weight` does (see
+        /// `decay_crutch`), then fully to 0 at --decay-last-iter. Mutually
+        /// exclusive with --opponent.
         #[arg(long, default_value_t = 0.0)]
         anchor_frac: f32,
+
+        /// Iteration at which both heuristic crutches (the search-prior
+        /// blend and anchor-game rate) hard-cut to 0, having spent the
+        /// iterations before that decaying down to a 10% floor. Default is
+        /// effectively "never" so standalone/benchmark runs aren't
+        /// surprised; the training loop passes an explicit value (see
+        /// DECAY_LAST_ITER in run_training_loop.sh).
+        #[arg(long, default_value_t = usize::MAX)]
+        decay_last_iter: usize,
+
+        /// Force both heuristic crutches to 0 immediately, regardless of
+        /// iteration or --decay-last-iter. Integration point for a future
+        /// strength-gated phase-out (model consistently beats the
+        /// heuristic-only backend) — not wired to any automatic check yet.
+        #[arg(long, default_value_t = false)]
+        force_zero_crutches: bool,
 
         /// Value-head trust in [0,1]: β on σ(completed-Q) both inside the
         /// search tree and in exported policy targets. Overrides the
@@ -1603,7 +1647,7 @@ fn main() -> anyhow::Result<()> {
     let match_label = match &args.opponent {
         Some(opp) => format!("league vs {opp}"),
         None if args.anchor_frac > 0.0 => {
-            format!("self-play + {:.0}% heuristic-anchor games", args.anchor_frac * 100.0)
+            format!("self-play + up to {:.0}% heuristic-anchor games (decaying)", args.anchor_frac * 100.0)
         }
         None => "self-play".to_string(),
     };
@@ -1665,13 +1709,21 @@ fn main() -> anyhow::Result<()> {
                     };
 
                     // Anchor games: evenly spread across the run at rate
-                    // anchor_frac; the anchor's seat alternates by anchor
-                    // ordinal (game parity alone would pin it to one seat at
-                    // e.g. frac 0.25, where anchor games are all odd-i).
-                    let anchor_ordinal =
-                        (((i + 1) as f32) * args.anchor_frac).floor() as usize;
-                    let is_anchor = args.anchor_frac > 0.0
-                        && anchor_ordinal > ((i as f32) * args.anchor_frac).floor() as usize;
+                    // anchor_frac (decayed from its starting value the same
+                    // way prior_heuristic_weight is — see decay_crutch);
+                    // the anchor's seat alternates by anchor ordinal (game
+                    // parity alone would pin it to one seat at e.g. frac
+                    // 0.25, where anchor games are all odd-i).
+                    let anchor_frac = decay_crutch(
+                        args.anchor_frac,
+                        ANCHOR_FRAC_DECAY,
+                        args.iteration,
+                        args.decay_last_iter,
+                        args.force_zero_crutches,
+                    );
+                    let anchor_ordinal = (((i + 1) as f32) * anchor_frac).floor() as usize;
+                    let is_anchor = anchor_frac > 0.0
+                        && anchor_ordinal > ((i as f32) * anchor_frac).floor() as usize;
                     // Greedy (score_move argmax), not the rollout Heuristic MCTS:
                     // measured first-village capture 1.00/t6.5 vs 0.94/t8.9 — the
                     // rollout noise drowned the ordering gradient. Greedy is also
@@ -1708,6 +1760,8 @@ fn main() -> anyhow::Result<()> {
                             seed,
                             game_tribes,
                             args.iteration,
+                            args.decay_last_iter,
+                            args.force_zero_crutches,
                             args.gamemode,
                             backend_seat1,
                             backend_seat2,
