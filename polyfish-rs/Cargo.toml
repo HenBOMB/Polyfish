@@ -75,18 +75,6 @@ lto = false
 codegen-units = 16
 debug = true
 
-[[test]]
-name = "debug_stars"
-harness = false
-
-[[test]]
-name = "debug_mcts_undo"
-harness = false
-
-[[test]]
-name = "verify_policy"
-harness = false
-
 [[example]]
 name = "metal_bench"
 required-features = ["metal-eval", "tch-eval"]

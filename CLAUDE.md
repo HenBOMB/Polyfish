@@ -30,12 +30,12 @@ On startup `main.rs` tries to load game state from `live_game.json`, `saved_stat
 cd polyfish-rs && cargo build --release --bin polyfish --bin self_play
 ```
 
-**Tests** (note: `debug_stars`, `debug_mcts_undo`, and `verify_policy` in `Cargo.toml` use `harness = false`, i.e. they have their own `main`; other one-off diagnostic/repro scripts with no real assertions — e.g. `stats`, `test_branching`, `debug_water_sim` — live in `src/bin/` instead and are never run by `cargo test`, since some run full self-play/MCTS loops that would hang CI):
+**Tests** (note: one-off diagnostic/repro scripts with no real assertions — e.g. `stats`, `test_branching`, `debug_water_sim`, `debug_stars`, `verify_policy` — live in `src/bin/` instead and are never run by `cargo test`, since some run full self-play/MCTS loops or thousands of mapgens that would hang CI; `#[ignore]` marks the few remaining heavy integration probes):
 ```bash
 cd polyfish-rs && cargo test                        # all tests
-cd polyfish-rs && cargo test --test debug_stars      # a single custom-harness test binary
 cd polyfish-rs && cargo test --test integration my_test_name   # a single libtest case
 cd polyfish-rs && cargo run --bin stats -- --games 50   # run a manual diagnostic tool on demand
+cd polyfish-rs && cargo test -- --ignored test_min_capital_distance_1v1   # heavy mapgen probe
 ```
 
 **Python training setup** (creates `polyfish-rs/.venv` from `requirements.txt`):
