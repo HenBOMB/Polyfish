@@ -172,7 +172,7 @@ fi
 
 if [ "$FORCE_TRAIN" = true ]; then
     echo "Force training flag detected! Running training immediately..."
-    .venv/bin/python3 train.py
+    .venv/bin/python3 kaggle_manager.py all
 fi
 
 if [ "$RESET" = true ]; then
@@ -342,7 +342,7 @@ do
     # Stream train.py's output live (batch/epoch progress) instead of buffering
     # it silently until the process exits. Metrics are read from the sidecar
     # JSON file after train.py finishes.
-    .venv/bin/python3 train.py
+    .venv/bin/python3 kaggle_manager.py all
     TRAIN_STATUS=$?
     TRAIN_JSON=$(.venv/bin/python3 training_log.py parse-train)
     if [ "$TRAIN_STATUS" -ne 0 ]; then

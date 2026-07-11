@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 fn main() -> anyhow::Result<()> {
     // Config
-    let mcts_iters = 50;
+    let mcts_iters = 2;
     let seed = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
     println!("Starting debug water simulation...");
