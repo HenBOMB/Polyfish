@@ -181,7 +181,10 @@ impl PolyZeroNet {
 
         // BN-era checkpoints carry bn1.weight/bias too, so they'd load into
         // GroupNorm code silently and play garbage — refuse them loudly.
-        if vs.contains_tensor("bn1.running_mean") {
+        // Synthetic backends (e.g. VarBuilder::zeros) claim to contain every
+        // name, including this probe — they aren't checkpoints, skip them.
+        let synthetic_backend = vs.contains_tensor("__polyfish_bn_era_probe__");
+        if !synthetic_backend && vs.contains_tensor("bn1.running_mean") {
             candle_core::bail!(
                 "model file is a BatchNorm-era checkpoint (has bn1.running_mean); \
                  this build uses GroupNorm — regenerate the model (init_model.py + retrain)"
