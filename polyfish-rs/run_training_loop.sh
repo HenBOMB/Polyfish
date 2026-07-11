@@ -43,7 +43,7 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     echo "Building with Metal + Accelerate + metal-eval (MPSGraph) + tch-eval for macOS..."
     export LIBTORCH_USE_PYTORCH=1
     export LIBTORCH_BYPASS_VERSION_CHECK=1
-    PATH="$(pwd)/.venv/bin:$PATH" cargo build --bin polyfish --bin self_play --release --features apple
+    PATH="$(pwd)/.venv/bin:$PATH" cargo build --bin polyfish --bin self_play --bin arena --release --features apple
     # The tch-linked binary has no rpath for libtorch; point dyld at the venv's torch dylibs
     export DYLD_LIBRARY_PATH="$(.venv/bin/python3 -c "import torch, os; print(os.path.join(os.path.dirname(torch.__file__), 'lib'))")${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
 elif false; then
@@ -51,11 +51,11 @@ elif false; then
     echo "Building with CUDA support..."
     # --no-default-features: opt out of the macOS `metal` default, which does
     # not compile on Linux.
-    cargo build --bin polyfish --bin self_play --release --no-default-features --features cuda
+    cargo build --bin polyfish --bin self_play --bin arena --release --no-default-features --features cuda
 else
     # CPU-only fallback
     echo "Building CPU-only version..."
-    cargo build --bin polyfish --bin self_play --release --no-default-features
+    cargo build --bin polyfish --bin self_play --bin arena --release --no-default-features
 fi
 
 # Parse long options first, then short options via getopts
@@ -180,6 +180,8 @@ if [ "$RESET" = true ]; then
     rm -f model.safetensors
     rm -f games_*.safetensors
     rm -f archive/games_*.safetensors
+    # EXP_ELO_002: the anchor decay clock belongs to the model it graduated.
+    rm -f .anchor_decay_start
     if [ -n "$RESUME_RUN" ]; then
         echo "   (ignoring --resume since --reset always starts a fresh run)"
         RESUME_RUN=""
@@ -339,6 +341,19 @@ do
         'BEGIN { print int((i - 1) * g / b) + 1 }')
     EFF_ITER=$((EFF_ITER + ${ITER_OFFSET:-0}))
 
+    # EXP_ELO_002: hold anchor_frac at its starting rate until the model has
+    # crossed 50% vs the greedy anchor. The gauge block persists the crossing
+    # EFF_ITER into .anchor_decay_start; until then, passing the current
+    # EFF_ITER keeps the anchor decay exponent at 0 (no decay, no cutover).
+    if [ -n "$ANCHOR_FLAG" ]; then
+        if [ -f .anchor_decay_start ]; then
+            ANCHOR_DECAY_START=$(cat .anchor_decay_start)
+        else
+            ANCHOR_DECAY_START=$EFF_ITER
+        fi
+        ANCHOR_FLAG="$ANCHOR_FLAG --anchor-decay-start $ANCHOR_DECAY_START"
+    fi
+
     SP_LOG=$(mktemp)
     ./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $DECAY_LAST_ITER_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
     SP_STATUS=${PIPESTATUS[0]}
@@ -429,6 +444,7 @@ do
     if [ "$LEAGUE_INTERVAL" -gt 0 ] && [ $((i % LEAGUE_INTERVAL)) -eq 0 ]; then
         ACTIVE_JSON=$(.venv/bin/python3 ladder.py active)
         ANCHOR_PATH=$(echo "$ACTIVE_JSON" | jq -r '.path')
+        ANCHOR_NAME=$(echo "$ACTIVE_JSON" | jq -r '.name')
         GAUGE_LOG=$(mktemp)
 
         # $1 = opponent model path ("" = greedy backend), $2 = seeds (games x2)
@@ -457,6 +473,18 @@ do
                 --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}")
             echo "GAUGE: $VERDICT"
             GAUGE_ACTION=$(echo "$VERDICT" | jq -r '.action')
+
+            # EXP_ELO_002: first >=50% reading vs the greedy anchor starts
+            # the anchor-frac decay clock (EFF_ITER units, matching
+            # --anchor-decay-start above).
+            if [ ! -f .anchor_decay_start ] && [ "$ANCHOR_NAME" = "greedy" ]; then
+                CROSSED=$(awk -v w="$GAUGE_W" -v l="$GAUGE_L" -v d="${GAUGE_D:-0}" \
+                    'BEGIN { n = w + l + d; if (n > 0 && (w + d / 2) / n >= 0.5) print 1; else print 0 }')
+                if [ "$CROSSED" = "1" ]; then
+                    echo "$EFF_ITER" > .anchor_decay_start
+                    echo "GAUGE: crossed 50% vs greedy at EFF_ITER $EFF_ITER — anchor-frac decay clock started (EXP_ELO_002)"
+                fi
+            fi
 
             if [ "$GAUGE_ACTION" = "freeze" ]; then
                 TS=$(date +%Y%m%d_%H%M%S)

@@ -121,6 +121,12 @@ struct Args {
     /// trusting a strength-gauge run against it.
     #[arg(long)]
     leaf_batch: Option<usize>,
+
+    /// Write per-turn stat samples (score/SPT/stars/cities/units/unit-cost/
+    /// techs per config) as one JSON per game into this directory — the
+    /// EXP_ELO_001 loss-autopsy instrument.
+    #[arg(long)]
+    dump_stats_dir: Option<String>,
 }
 
 fn load_model(path: &str, device: &candle_core::Device) -> anyhow::Result<PolyZeroNet> {
@@ -129,6 +135,50 @@ fn load_model(path: &str, device: &candle_core::Device) -> anyhow::Result<PolyZe
         candle_nn::VarBuilder::from_mmaped_safetensors(&[path], candle_core::DType::F32, device)?
     };
     Ok(PolyZeroNet::new(vs)?)
+}
+
+/// One per-turn sample for --dump-stats-dir; arrays index [config1, config2].
+#[derive(serde::Serialize)]
+struct TurnSample {
+    turn: i32,
+    score: [i32; 2],
+    spt: [i32; 2],
+    stars: [i32; 2],
+    cities: [usize; 2],
+    units: [usize; 2],
+    unit_cost: [i32; 2],
+    techs: [usize; 2],
+}
+
+fn sample_turn(state: &polyfish::states::GameState, swap: bool) -> TurnSample {
+    let mut s = TurnSample {
+        turn: state.settings.turn,
+        score: [0; 2],
+        spt: [0; 2],
+        stars: [0; 2],
+        cities: [0; 2],
+        units: [0; 2],
+        unit_cost: [0; 2],
+        techs: [0; 2],
+    };
+    for c in 0..2 {
+        // Config 1 sits in the P1 seat unless swapped.
+        let pid: polyfish::states::PlayerId = if (c == 0) != swap { 1 } else { 2 };
+        if let Some(t) = state.tribes.get(&pid) {
+            s.score[c] = t.score;
+            s.spt[c] = polyfish::functions::get_tribe_spt(state, t);
+            s.stars[c] = t.stars;
+            s.cities[c] = t.cities.len();
+            s.units[c] = t.units.len();
+            s.unit_cost[c] = t
+                .units
+                .iter()
+                .map(|u| polyfish::settings::units::get_unit_setting(u.unit_type).cost)
+                .sum();
+            s.techs[c] = t.tech_vanilla.len();
+        }
+    }
+    s
 }
 
 /// Per-match result, attributed to configurations (1 or 2), not seats.
@@ -156,6 +206,7 @@ fn play_match(
     swap: bool,
     max_turns: i32,
     gamemode: u8,
+    dump_stats_dir: Option<&str>,
 ) -> MatchResult {
     let gen_settings = MapGenSettings {
         size: MapSize::Tiny,
@@ -195,8 +246,14 @@ fn play_match(
     let mut moves_config1: u64 = 0;
     let mut ns_config2: u64 = 0;
     let mut moves_config2: u64 = 0;
+    let mut samples: Vec<TurnSample> = Vec::new();
+    let mut last_sampled_turn = i32::MIN;
 
     while !polyfish::functions::is_game_over(&game.state) && moves < 500 {
+        if dump_stats_dir.is_some() && game.state.settings.turn != last_sampled_turn {
+            samples.push(sample_turn(&game.state, swap));
+            last_sampled_turn = game.state.settings.turn;
+        }
         let current_pid = game.state.settings.current_player_turn_id;
 
         let t0 = Instant::now();
@@ -242,6 +299,28 @@ fn play_match(
     } else {
         0
     };
+
+    if let Some(dir) = dump_stats_dir {
+        samples.push(sample_turn(&game.state, swap)); // final post-game state
+        let dump = serde_json::json!({
+            "seed": seed,
+            "swap": swap,
+            "winner_config": winner_config,
+            "score_config1": score_config1,
+            "score_config2": score_config2,
+            "samples": samples,
+        });
+        let name = format!("game_{}_{}.json", seed, if swap { "b" } else { "a" });
+        let path = std::path::Path::new(dir).join(name);
+        match serde_json::to_vec_pretty(&dump) {
+            Ok(bytes) => {
+                if let Err(e) = std::fs::write(&path, bytes) {
+                    eprintln!("[dump-stats] failed to write {}: {e}", path.display());
+                }
+            }
+            Err(e) => eprintln!("[dump-stats] failed to serialize seed {seed}: {e}"),
+        }
+    }
 
     MatchResult {
         winner_config,
@@ -371,6 +450,11 @@ fn main() -> anyhow::Result<()> {
         args.games, total_games, args.max_batch, args.coalesce_timeout_us, args.leaf_batch
     );
 
+    if let Some(dir) = &args.dump_stats_dir {
+        std::fs::create_dir_all(dir)?;
+    }
+    let dump_stats_dir = args.dump_stats_dir.as_deref();
+
     let arena_start = Instant::now();
     let completed = AtomicU32::new(0);
     let progress_step = ((total_games / 10) as u32).max(1);
@@ -416,7 +500,7 @@ fn main() -> anyhow::Result<()> {
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         play_match(
                             eval1, eval2, mcts1, mcts2, backend1, backend2, args.leaf_batch,
-                            seed, swap, args.max_turns, args.gamemode,
+                            seed, swap, args.max_turns, args.gamemode, dump_stats_dir,
                         )
                     }));
 

@@ -1220,6 +1220,15 @@ fn main() -> anyhow::Result<()> {
         #[arg(long, default_value_t = usize::MAX)]
         decay_last_iter: usize,
 
+        /// EXP_ELO_002: iteration where the anchor-frac decay clock starts —
+        /// the anchor's effective decay iteration is `iteration - this`
+        /// (clamped at 0). The loop passes the current iteration to HOLD
+        /// anchor_frac at its starting rate until the model crosses 50% vs
+        /// Greedy, then pins the crossing iteration so decay runs from
+        /// there. The prior-blend decay is unaffected.
+        #[arg(long, default_value_t = 0)]
+        anchor_decay_start: usize,
+
         /// Force both heuristic crutches to 0 immediately, regardless of
         /// iteration or --decay-last-iter. Integration point for a future
         /// strength-gated phase-out (model consistently beats the
@@ -1592,7 +1601,7 @@ fn main() -> anyhow::Result<()> {
                     let anchor_frac = decay_crutch(
                         args.anchor_frac,
                         ANCHOR_FRAC_DECAY,
-                        args.iteration,
+                        args.iteration.saturating_sub(args.anchor_decay_start),
                         args.decay_last_iter,
                         args.force_zero_crutches,
                     );
