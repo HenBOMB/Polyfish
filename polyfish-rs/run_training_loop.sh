@@ -97,7 +97,8 @@ REWARD_SHAPING=false
 # Play a league match every LEAGUE_INTERVAL iterations (iteration 10, 20, 30,
 # ... by default). 0 disables league play entirely. Override with -l.
 LEAGUE_INTERVAL=10
-while getopts "fbcri:g:n:a:e:l:" opt; do
+GUMBEL_K=16
+while getopts "fbcri:g:n:a:e:l:k:" opt; do
   case $opt in
     f)
       FORCE_TRAIN=true
@@ -130,6 +131,9 @@ while getopts "fbcri:g:n:a:e:l:" opt; do
       ;;
     l)
       LEAGUE_INTERVAL=$OPTARG
+      ;;
+    k)
+      GUMBEL_K=$OPTARG
       ;;
     \?)
       echo "Invalid option: -$OPTARG" >&2
@@ -360,7 +364,7 @@ do
     fi
 
     SP_LOG=$(mktemp)
-    ./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $DECAY_LAST_ITER_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
+    ./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $DECAY_LAST_ITER_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
     SP_STATUS=${PIPESTATUS[0]}
     rm -f "$SP_LOG"
     if [ "$SP_STATUS" -ne 0 ]; then
