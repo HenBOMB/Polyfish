@@ -1284,3 +1284,103 @@ fn move_or_end_turn(best_move: Option<Box<dyn Move>>) -> Option<Box<dyn Move>> {
         best_move
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ai::eval_server::InlineEvalHandle;
+    use crate::ai::network::PolyZeroNet;
+    use crate::game::{Game, SIM_MOVE_FAILURES};
+    use crate::moves::research::ResearchMove;
+    use crate::types::{MapSize, MapType, TechnologyType, TribeType};
+    use std::sync::Arc;
+
+    /// A reused subtree can hold moves that are illegal in the replayed state
+    /// (real moves explore tiles that `simulate_move` deliberately does not,
+    /// which e.g. changes what a replayed ruin capture rolls). The descent
+    /// must heal such a node — drop its stale children and re-expand from the
+    /// true state — rather than leave it failing forever.
+    #[test]
+    fn test_search_heals_stale_cached_children() {
+        let device = candle_core::Device::Cpu;
+        let varmap = candle_nn::VarMap::new();
+        let vs =
+            candle_nn::VarBuilder::from_varmap(&varmap, candle_core::DType::F32, &device);
+        let network = Arc::new(PolyZeroNet::new(vs).unwrap());
+        let evaluator = Evaluator::Inline(InlineEvalHandle::new(network));
+
+        let mut game = Game::new();
+        game.state = crate::mapgen::generate(crate::mapgen::MapGenSettings {
+            size: MapSize::Tiny,
+            map_type: MapType::Drylands,
+            tribes: vec![TribeType::Imperius, TribeType::Bardur],
+            seed: 7,
+            ..Default::default()
+        });
+        game.post_load();
+
+        // Broke: no research is affordable (min cost 4), so the poisoned
+        // cached Research below is illegal no matter what the path does.
+        let pov = game.state.settings.current_player_turn_id;
+        game.state.tribes.get_mut(&pov).unwrap().stars = 0;
+
+        let legal = game.legal_moves();
+        assert!(legal.len() >= 2, "need at least two legal moves");
+        // A free move for the poisoned branch so the descent reaches it.
+        let step_idx = legal
+            .iter()
+            .position(|m| m.move_type() == MoveType::Step)
+            .expect("expected a Step at game start");
+
+        let mut root = GumbelNode::new(0.0, 0.0, None);
+        root.is_expanded = true;
+        for (i, m) in legal.into_iter().enumerate() {
+            let mut child = GumbelNode::new(0.0, 0.0, Some(m));
+            if i == step_idx {
+                // Simulate a stale reused subtree: cached child that is
+                // illegal in the replayed state.
+                child.is_expanded = true;
+                child.children.push(GumbelNode::new(
+                    0.0,
+                    0.0,
+                    Some(Box::new(ResearchMove::new(TechnologyType::Trade))),
+                ));
+            }
+            root.children.push(child);
+        }
+
+        let other_idx = if step_idx == 0 { 1 } else { 0 };
+        let mut in_cut = vec![step_idx, other_idx];
+
+        let agent = GumbelMctsAgent::new(&evaluator, 16, 2);
+        let failures_before = SIM_MOVE_FAILURES.load(std::sync::atomic::Ordering::Relaxed);
+        let start_turn = game.state.settings.turn;
+        agent.run_search(&mut game, &mut root, &mut in_cut, start_turn);
+        let failures_after = SIM_MOVE_FAILURES.load(std::sync::atomic::Ordering::Relaxed);
+
+        assert!(
+            failures_after > failures_before,
+            "test setup failed to exercise the stale cached move"
+        );
+
+        // The poisoned node must have been healed: its stale Research child
+        // gone, replaced by nothing (pending re-expansion) or by the true
+        // legal set of the replayed state.
+        let node = &root.children[step_idx];
+        let still_poisoned = node.children.iter().any(|c| {
+            c.move_to_here
+                .as_ref()
+                .map_or(false, |m| m.move_type() == MoveType::Research)
+        });
+        assert!(
+            !still_poisoned,
+            "stale illegal Research child survived the search"
+        );
+        if node.is_expanded {
+            assert!(
+                !node.children.is_empty(),
+                "healed node re-expanded with no children"
+            );
+        }
+    }
+}

@@ -104,7 +104,10 @@ fn descent_check(game: &mut Game, rng: &mut StdRng, depth: u32) {
     );
 }
 
+// Heavy fuzz probe (~6s release, minutes in debug) — run on demand:
+//   cargo test --release --test undo_integrity -- --ignored
 #[test]
+#[ignore]
 fn test_simulate_undo_integrity() {
     for game_seed in 0..30i64 {
         let gen_settings = polyfish::mapgen::MapGenSettings {

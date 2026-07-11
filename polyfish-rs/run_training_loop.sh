@@ -58,6 +58,17 @@ else
     cargo build --bin polyfish --bin self_play --bin arena --release --no-default-features
 fi
 
+# Snapshot the binaries this run will use. Any concurrent `cargo build`/`cargo
+# test` (e.g. a dev session) silently replaces target/release/* — possibly
+# with different features — mid-run; executing from a private copy makes the
+# run immune to that.
+RUN_BIN_DIR=".run_bin"
+mkdir -p "$RUN_BIN_DIR"
+cp -f target/release/self_play target/release/arena target/release/polyfish "$RUN_BIN_DIR/"
+SELF_PLAY_BIN="$RUN_BIN_DIR/self_play"
+ARENA_BIN="$RUN_BIN_DIR/arena"
+SERVER_BIN="$RUN_BIN_DIR/polyfish"
+
 # Parse long options first, then short options via getopts
 RESUME_RUN=""
 RESET=false
@@ -211,7 +222,7 @@ if [ ! -f "config.json" ]; then
 fi
 
 echo "Starting backend server in background..."
-./target/release/polyfish &
+"$SERVER_BIN" &
 SERVER_PID=$!
 
 trap '.venv/bin/python3 training_log.py finish-run 2>/dev/null || true; kill $SERVER_PID 2>/dev/null; rm -f .training.pid' EXIT
@@ -364,7 +375,7 @@ do
     fi
 
     SP_LOG=$(mktemp)
-    ./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $DECAY_LAST_ITER_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
+    "$SELF_PLAY_BIN" --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $DECAY_LAST_ITER_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
     SP_STATUS=${PIPESTATUS[0]}
     rm -f "$SP_LOG"
     if [ "$SP_STATUS" -ne 0 ]; then
@@ -459,11 +470,11 @@ do
         # $1 = opponent model path ("" = greedy backend), $2 = seeds (games x2)
         run_gauge_match () {
             if [ -z "$1" ]; then
-                ./target/release/arena --model1 model.safetensors --model2 model.safetensors \
+                "$ARENA_BIN" --model1 model.safetensors --model2 model.safetensors \
                     --backend1 gumbel --backend2 greedy \
                     --mcts "$MCTS_ITERS" --games "$2" --gamemode "$GAMEMODE" | tee "$GAUGE_LOG"
             else
-                ./target/release/arena --model1 model.safetensors --model2 "$1" \
+                "$ARENA_BIN" --model1 model.safetensors --model2 "$1" \
                     --backend1 gumbel --backend2 gumbel \
                     --mcts "$MCTS_ITERS" --games "$2" --gamemode "$GAMEMODE" | tee "$GAUGE_LOG"
             fi

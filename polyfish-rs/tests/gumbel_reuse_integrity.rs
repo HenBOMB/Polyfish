@@ -33,7 +33,11 @@ fn make_game(seed: i64) -> Game {
     game
 }
 
+// Heavy end-to-end probe (~2.5 min release; loads model.safetensors when
+// present) — run on demand:
+//   cargo test --release --test gumbel_reuse_integrity -- --ignored --nocapture
 #[test]
+#[ignore]
 fn test_gumbel_search_never_attempts_illegal_moves() {
     let device = Device::Cpu;
     // Use the real trained weights when present (sharper policy reuses deeper
