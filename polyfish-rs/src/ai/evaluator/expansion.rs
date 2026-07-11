@@ -42,7 +42,7 @@ pub fn evaluate_expansion(state: &GameState, player_id: PlayerId) -> f32 {
         // standing bonus), so a multi-turn walk is visible to 1-ply search.
         if !standing {
             if let Some((_, d)) =
-                crate::ai::ordering::nearest_visible_capturable(state, player_id, unit.coords)
+                crate::ai::scoring::nearest_visible_capturable(state, player_id, unit.coords)
             {
                 total_city_points += (0.35 - 0.05 * d as f32).max(0.0);
             }

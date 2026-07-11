@@ -604,7 +604,16 @@ function renderGameStatsCharts() {
   });
   makeChart('avgCapturesChart', {
     type: 'line',
-    data: { labels: it, datasets: [{ label: 'avg captures', data: rows.map(r => r.avg_captures), borderColor: '#e74c3c', tension: 0.2 }] },
+    data: { 
+      labels: it, 
+      datasets: [
+        { label: 'total', data: rows.map(r => r.avg_captures), borderColor: '#e74c3c', tension: 0.2, borderDash: [5, 5] },
+        { label: 'capitals', data: rows.map(r => r.avg_cap_capitals), borderColor: '#8e44ad', tension: 0.2 },
+        { label: 'cities', data: rows.map(r => r.avg_cap_cities), borderColor: '#f39c12', tension: 0.2 },
+        { label: 'villages', data: rows.map(r => r.avg_cap_villages), borderColor: '#27ae60', tension: 0.2 },
+        { label: 'ruins', data: rows.map(r => r.avg_cap_ruins), borderColor: '#7f8c8d', tension: 0.2 }
+      ] 
+    },
     options: avgChartOptions(rows.map(r => r.avg_captures)),
   });
   makeChart('avgHarvestsChart', {

@@ -17,7 +17,7 @@ pub mod network;
 pub mod tch_network;
 #[cfg(feature = "metal-eval")]
 pub mod metal_network;
-pub mod ordering;
+pub mod scoring;
 pub mod policy_composer;
 pub mod reward;
 pub use evaluator::evaluate_state;

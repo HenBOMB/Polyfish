@@ -1,0 +1,1176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PolyZero Training Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --border: #2d3a4f;
+      --text: #e8eef7;
+      --muted: #8b9cb3;
+      --accent: #4a9eff;
+      --warn: #f39c12;
+      --danger: #e74c3c;
+      --ok: #2ecc71;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    header {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      align-items: center;
+      justify-content: space-between;
+    }
+    h1 { margin: 0; font-size: 1.25rem; }
+    .controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+    button, select {
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.4rem 0.75rem;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    button:hover { border-color: var(--accent); }
+    main { padding: 1rem 1.5rem 2rem; max-width: 1400px; margin: 0 auto; }
+    section { margin-bottom: 2rem; }
+    h2 { font-size: 1.1rem; margin: 0 0 1rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+    }
+    .card .label { font-size: 0.75rem; color: var(--muted); }
+    .card .value { font-size: 1.35rem; font-weight: 600; }
+    .chart-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+      gap: 1rem;
+    }
+    .chart-box {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem;
+    }
+    .chart-box header {
+      border: none;
+      padding: 0 0 0.5rem;
+      justify-content: space-between;
+    }
+    .chart-box h3 { margin: 0; font-size: 0.95rem; font-weight: 500; }
+    .chart-wrap { position: relative; height: 260px; }
+    .flags {
+      background: #2a1f1f;
+      border: 1px solid var(--danger);
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      margin-bottom: 1rem;
+      display: none;
+    }
+    .flags.visible { display: block; }
+    .flags ul { margin: 0.25rem 0 0; padding-left: 1.25rem; }
+    .status-led {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: #555; display: inline-block; margin-right: 0.35rem;
+    }
+    .status-led.active { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+    #moveTurnGrid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(480px, 1fr));
+      gap: 1rem;
+    }
+    .turn-mini { height: 320px; }
+    .turn-scroll {
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding-bottom: 0.25rem;
+    }
+    .turn-scroll-inner {
+      height: 320px;
+      position: relative;
+    }
+    .turn-legend-caption { font-size: 0.8rem; color: var(--muted); margin: 0.25rem 0 0.5rem; }
+    .section-desc {
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin: -0.5rem 0 1rem;
+      max-width: 960px;
+      line-height: 1.55;
+    }
+    .batch-meta {
+      font-size: 0.85rem;
+      color: var(--text);
+      margin: 0 0 1rem;
+      padding: 0.5rem 0.75rem;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      max-width: 960px;
+    }
+    .turn-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.25rem 0.9rem;
+      margin-bottom: 0.75rem;
+      font-size: 0.8rem;
+    }
+    .turn-legend-item { display: flex; align-items: center; gap: 0.35rem; }
+    .turn-legend-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+    details.accordion {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      margin-bottom: 1.25rem;
+      background: var(--panel);
+      overflow: hidden;
+    }
+    details.accordion > summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 0.9rem 1.1rem;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+      user-select: none;
+    }
+    details.accordion > summary::-webkit-details-marker { display: none; }
+    details.accordion > summary:hover { background: rgba(74, 158, 255, 0.06); }
+    .acc-title h2 {
+      margin: 0;
+      font-size: 1.05rem;
+      color: var(--text);
+      text-transform: none;
+      letter-spacing: 0;
+    }
+    .acc-title p { margin: 0.25rem 0 0; font-size: 0.82rem; color: var(--muted); max-width: 900px; }
+    .acc-chevron { color: var(--muted); font-size: 0.8rem; transition: transform 0.2s ease; margin-top: 0.3rem; }
+    details.accordion[open] > summary .acc-chevron { transform: rotate(180deg); }
+    .acc-body { padding: 0.25rem 1.1rem 1.1rem; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>PolyZero Training Dashboard</h1>
+      <span><span id="statusLed" class="status-led"></span><span id="statusText">Checking training…</span></span>
+    </div>
+    <div class="controls">
+      <button id="prevRun" title="Previous run">◀ Run</button>
+      <select id="runSelect"></select>
+      <button id="nextRun" title="Next run">Run ▶</button>
+      <button id="refreshBtn">Refresh</button>
+      <a href="/">Simulator</a>
+    </div>
+  </header>
+
+  <main>
+    <div class="cards" id="summaryCards"></div>
+
+    <details class="accordion" open>
+      <summary>
+        <div class="acc-title">
+          <h2>NeuralNet Training</h2>
+          <p>How the network is learning: training loss, self-play scores, first/second-player balance, and the split between self-play and league games.</p>
+        </div>
+        <span class="acc-chevron">▾</span>
+      </summary>
+      <div class="acc-body">
+        <div class="chart-grid">
+          <div class="chart-box"><header><h3>Loss</h3><button class="dl-png" data-canvas="lossChart">PNG</button></header><div class="chart-wrap"><canvas id="lossChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Value fit (R²)</h3><button class="dl-png" data-canvas="valueR2Chart">PNG</button></header><div class="chart-wrap"><canvas id="valueR2Chart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Score</h3><button class="dl-png" data-canvas="scoreChart">PNG</button></header><div class="chart-wrap"><canvas id="scoreChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Player balance</h3><button class="dl-png" data-canvas="p1p2Chart">PNG</button></header><div class="chart-wrap"><canvas id="p1p2Chart"></canvas></div></div>
+          <div class="chart-box"><header><h3>League vs self-play</h3><button class="dl-png" data-canvas="leagueChart">PNG</button></header><div class="chart-wrap"><canvas id="leagueChart"></canvas></div></div>
+        </div>
+        <div style="margin-top:1rem">
+          <button id="downloadGrid">Download 2×2 progress PNG</button>
+        </div>
+      </div>
+    </details>
+
+    <details class="accordion" open>
+      <summary>
+        <div class="acc-title">
+          <h2>Game Stats</h2>
+          <p>What the agents actually do in-game: move mix, game length, economy tempo, and how quickly they capture villages and ruins.</p>
+        </div>
+        <span class="acc-chevron">▾</span>
+      </summary>
+      <div class="acc-body">
+        <div class="controls" style="margin-bottom:1rem">
+          <label for="gameStatsFilter">Games:</label>
+          <select id="gameStatsFilter">
+            <option value="selfplay" selected>Self-play only</option>
+            <option value="league">League only</option>
+            <option value="all">All games</option>
+          </select>
+        </div>
+        <div class="chart-grid">
+          <div class="chart-box"><header><h3>Moves by type</h3><button class="dl-png" data-canvas="movesChart">PNG</button></header><div class="chart-wrap"><canvas id="movesChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Avg moves / game</h3><button class="dl-png" data-canvas="avgMovesChart">PNG</button></header><div class="chart-wrap"><canvas id="avgMovesChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Avg captures / game</h3><button class="dl-png" data-canvas="avgCapturesChart">PNG</button></header><div class="chart-wrap"><canvas id="avgCapturesChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Avg harvests / game</h3><button class="dl-png" data-canvas="avgHarvestsChart">PNG</button></header><div class="chart-wrap"><canvas id="avgHarvestsChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Avg research / game</h3><button class="dl-png" data-canvas="avgResearchChart">PNG</button></header><div class="chart-wrap"><canvas id="avgResearchChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Avg attacks / game</h3><button class="dl-png" data-canvas="avgAttacksChart">PNG</button></header><div class="chart-wrap"><canvas id="avgAttacksChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Avg revealed tiles / game</h3><button class="dl-png" data-canvas="avgRevealedChart">PNG</button></header><div class="chart-wrap"><canvas id="avgRevealedChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Avg captured tiles / game</h3><button class="dl-png" data-canvas="avgCapturedTilesChart">PNG</button></header><div class="chart-wrap"><canvas id="avgCapturedTilesChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Stars / turn by game turn</h3><button class="dl-png" data-canvas="sptChart">PNG</button></header><div class="chart-wrap"><canvas id="sptChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Village capture speed</h3><button class="dl-png" data-canvas="villageT2cChart">PNG</button></header><div class="chart-wrap"><canvas id="villageT2cChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Ruin capture speed</h3><button class="dl-png" data-canvas="ruinT2cChart">PNG</button></header><div class="chart-wrap"><canvas id="ruinT2cChart"></canvas></div></div>
+        </div>
+      </div>
+    </details>
+
+    <details class="accordion" open>
+      <summary>
+        <div class="acc-title">
+          <h2>Moves by turn</h2>
+          <p>One mini-chart per training iteration. Each bar is a game turn; stacked colors show the <strong>percentage</strong> of moves of each type that turn (excluding Step and EndTurn). Scroll horizontally when games run past the visible width.</p>
+        </div>
+        <span class="acc-chevron">▾</span>
+      </summary>
+      <div class="acc-body">
+        <div id="moveTurnLegend" class="turn-legend"></div>
+        <div id="moveTurnGrid"></div>
+      </div>
+    </details>
+
+    <section id="panelIterControls">
+      <div class="controls" style="margin-bottom:0.5rem">
+        <label>Iteration:</label>
+        <select id="iterSelect"></select>
+      </div>
+    </section>
+
+    <details class="accordion" open>
+      <summary>
+        <div class="acc-title">
+          <h2>Generation analysis</h2>
+          <p>Deep-dive for the selected training iteration — value-head targets and per-batch snapshots for the games it was trained on.</p>
+        </div>
+        <span class="acc-chevron">▾</span>
+      </summary>
+      <div class="acc-body">
+        <p class="section-desc">
+          Self-play writes a batch of games to <code>games_*.safetensors</code>; these charts summarize that batch directly.
+          <strong>Value distribution</strong> plots the value-head training targets assigned to every position (roughly −1 to +1 win/loss signal). A healthy run spreads mass across moderate magnitudes rather than collapsing to 0 or saturating at ±1.
+        </p>
+        <p id="genBatchMeta" class="batch-meta"></p>
+        <div class="chart-grid">
+          <div class="chart-box"><header><h3>Value distribution</h3><button class="dl-png" data-canvas="valDistChart">PNG</button></header><div class="chart-wrap"><canvas id="valDistChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Value histogram</h3><button class="dl-png" data-canvas="valHistChart">PNG</button></header><div class="chart-wrap"><canvas id="valHistChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Value time series</h3><button class="dl-png" data-canvas="valTsChart">PNG</button></header><div class="chart-wrap"><canvas id="valTsChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Absolute value distribution</h3><button class="dl-png" data-canvas="valAbsChart">PNG</button></header><div class="chart-wrap"><canvas id="valAbsChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Value buckets</h3><button class="dl-png" data-canvas="valBucketChart">PNG</button></header><div class="chart-wrap"><canvas id="valBucketChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Stars / turn snapshot</h3><button class="dl-png" data-canvas="sptSnapChart">PNG</button></header><div class="chart-wrap"><canvas id="sptSnapChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>P1 vs P2 snapshot</h3><button class="dl-png" data-canvas="snapP1P2Chart">PNG</button></header><div class="chart-wrap"><canvas id="snapP1P2Chart"></canvas></div></div>
+        </div>
+      </div>
+    </details>
+
+    <details class="accordion" open>
+      <summary>
+        <div class="acc-title">
+          <h2>Baseline delta</h2>
+          <p>The selected iteration versus a rolling baseline of prior iterations, with z-scores flagging metrics that moved sharply.</p>
+        </div>
+        <span class="acc-chevron">▾</span>
+      </summary>
+      <div class="acc-body">
+        <p class="section-desc">
+          Baseline is the mean of prior iterations in the same run (when ≥5 exist), otherwise prior rows across runs.
+          Side-by-side bars show the <strong>actual metric values</strong> for this iteration vs that baseline. <strong>Z-scores</strong> highlight metrics ≥2 standard deviations away.
+        </p>
+        <div id="flagsBanner" class="flags"><strong>Flags</strong><ul id="flagsList"></ul></div>
+        <div class="chart-grid">
+          <div class="chart-box"><header><h3>Score vs baseline</h3><button class="dl-png" data-canvas="scoreBaselineChart">PNG</button></header><div class="chart-wrap"><canvas id="scoreBaselineChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Stars / turn vs baseline</h3><button class="dl-png" data-canvas="sptBaselineChart">PNG</button></header><div class="chart-wrap"><canvas id="sptBaselineChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Economy vs baseline</h3><button class="dl-png" data-canvas="econChart">PNG</button></header><div class="chart-wrap"><canvas id="econChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Combat vs baseline</h3><button class="dl-png" data-canvas="combatChart">PNG</button></header><div class="chart-wrap"><canvas id="combatChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Z-scores</h3><button class="dl-png" data-canvas="zChart">PNG</button></header><div class="chart-wrap"><canvas id="zChart"></canvas></div></div>
+        </div>
+      </div>
+    </details>
+  </main>
+
+<script>
+const charts = {};
+let runs = [];
+let runMetrics = [];
+let allMetrics = [];
+let movesByTurn = {};
+let selectedRunIdx = 0;
+let pollTimer = null;
+let gameStatsFilter = 'selfplay';
+
+function filterGameStatsMetrics(rows) {
+  if (gameStatsFilter === 'all') return rows;
+  return rows.filter(r => (r.match_type || 'selfplay') === gameStatsFilter);
+}
+
+const MOVE_NOISE = new Set(['EndTurn', 'Step']);
+const SPT_TURNS = [0, 5, 10, 15, 20, 25, 30];
+const sptField = t => `avg_spt_t${t}`;
+
+const MIN_TICK_STEP = 0.5;
+const MIN_TICK_COUNT = 7;
+const NICE_TICK_STEPS = [0.5, 1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000];
+
+// Floors gridline spacing at MIN_TICK_STEP (a multiple of 0.5) and pads the
+// axis bounds (in whole steps) until there are at least MIN_TICK_COUNT
+// gridlines, so a tiny wobble (e.g. 11.02 -> 11.3) doesn't fill the whole
+// chart height just because it only spans one or two ticks.
+function minStepYScale(values, floor = MIN_TICK_STEP, minTicks = MIN_TICK_COUNT) {
+  const nums = values.filter(v => v != null && isFinite(v));
+  const dataMin = nums.length ? Math.min(...nums) : 0;
+  const dataMax = nums.length ? Math.max(...nums) : floor;
+  const range = Math.max(dataMax - dataMin, floor);
+  const rawStep = range / (minTicks - 1);
+  const step = NICE_TICK_STEPS.find(s => s >= Math.max(rawStep, floor))
+    ?? Math.ceil(rawStep / 1000) * 1000;
+
+  let axisMin = Math.floor(dataMin / step) * step;
+  let axisMax = Math.ceil(dataMax / step) * step;
+  if (axisMin === axisMax) axisMax = axisMin + step;
+  const tickCount = () => Math.round((axisMax - axisMin) / step) + 1;
+  while (tickCount() < minTicks) {
+    axisMin -= step;
+    if (tickCount() < minTicks) axisMax += step;
+  }
+
+  return {
+    min: axisMin,
+    max: axisMax,
+    ticks: { color: '#8b9cb3', stepSize: step },
+    grid: { color: '#2d3a4f' },
+  };
+}
+
+const chartDefaults = {
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: { legend: { labels: { color: '#8b9cb3' } } },
+  scales: {
+    x: { ticks: { color: '#8b9cb3' }, grid: { color: '#2d3a4f' } },
+    y: { ticks: { color: '#8b9cb3' }, grid: { color: '#2d3a4f' } },
+  },
+};
+
+function fmtRunLabel(r) {
+  const d = r.run_started_at ? new Date(r.run_started_at) : new Date(parseInt(r.run_id, 10) * 1000);
+  const when = isNaN(d) ? r.run_id : d.toLocaleString();
+  return `Run ${when} · ${r.iter_count} iters · best ${Math.round(r.best_score)} · loss ${r.last_loss?.toFixed(3) ?? '?'}`;
+}
+
+function destroyChart(id) {
+  if (charts[id]) { charts[id].destroy(); delete charts[id]; }
+}
+
+function makeChart(id, config) {
+  destroyChart(id);
+  const ctx = document.getElementById(id);
+  charts[id] = new Chart(ctx, config);
+  return charts[id];
+}
+
+async function fetchJson(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+async function loadRuns() {
+  runs = await fetchJson('/api/runs');
+  const sel = document.getElementById('runSelect');
+  sel.innerHTML = '';
+  runs.forEach((r, i) => {
+    const o = document.createElement('option');
+    o.value = i;
+    o.textContent = fmtRunLabel(r);
+    sel.appendChild(o);
+  });
+  if (runs.length === 0) {
+    selectedRunIdx = 0;
+    return;
+  }
+  if (selectedRunIdx >= runs.length) selectedRunIdx = 0;
+  sel.value = String(selectedRunIdx);
+}
+
+async function loadRunData() {
+  if (!runs.length) {
+    runMetrics = [];
+    movesByTurn = {};
+    return;
+  }
+  const run = runs[selectedRunIdx];
+  runMetrics = await fetchJson(`/api/training-metrics?run=${encodeURIComponent(run.run_id)}`);
+  runMetrics.sort((a, b) => a.iteration - b.iteration);
+  allMetrics = await fetchJson('/api/training-metrics');
+  allMetrics.sort((a, b) => (a.run_id === b.run_id ? a.iteration - b.iteration : a.run_id.localeCompare(b.run_id)));
+  movesByTurn = await fetchJson(`/api/moves-by-turn?run=${encodeURIComponent(run.run_id)}`);
+}
+
+function renderSummaryCards() {
+  const el = document.getElementById('summaryCards');
+  if (!runMetrics.length) { el.innerHTML = '<div class="card"><span class="label">No data</span></div>'; return; }
+  const last = runMetrics[runMetrics.length - 1];
+  const best = runMetrics.reduce((m, r) => Math.max(m, r.max_score), 0);
+  const minLoss = runMetrics.reduce((m, r) => r.loss > 0 ? Math.min(m, r.loss) : m, Infinity);
+  const bias = last.p1_avg - last.p2_avg;
+  el.innerHTML = `
+    <div class="card"><div class="label">Latest iter</div><div class="value">${last.iteration}</div></div>
+    <div class="card"><div class="label">Best score</div><div class="value">${Math.round(best)}</div></div>
+    <div class="card"><div class="label">Lowest loss</div><div class="value">${isFinite(minLoss) ? minLoss.toFixed(3) : '—'}</div></div>
+    <div class="card"><div class="label">P1−P2 bias</div><div class="value">${bias >= 0 ? '+' : ''}${bias.toFixed(0)}</div></div>
+  `;
+}
+
+function leaguePointColors(rows) {
+  return rows.map(r => r.match_type === 'league' ? '#f39c12' : '#4a9eff');
+}
+
+function makeBaselineComparisonChart(id, labels, fields, row, base, { skipZero = false } = {}) {
+  const pick = (obj, f) => {
+    const v = obj[f];
+    if (skipZero && (v == null || v <= 0)) return null;
+    return v ?? 0;
+  };
+  makeChart(id, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'this iter',
+          data: fields.map(f => pick(row, f)),
+          backgroundColor: '#3498db',
+        },
+        {
+          label: 'baseline',
+          data: fields.map(f => pick(base, f)),
+          backgroundColor: '#95a5a6',
+        },
+      ],
+    },
+    options: {
+      ...chartDefaults,
+      scales: {
+        x: chartDefaults.scales.x,
+        y: { ...chartDefaults.scales.y, beginAtZero: true },
+      },
+      plugins: {
+        ...chartDefaults.plugins,
+        tooltip: {
+          callbacks: {
+            label: ctx => `${ctx.dataset.label}: ${Number(ctx.parsed.y).toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+          },
+        },
+      },
+    },
+  });
+}
+
+function renderPanelA() {
+  const it = runMetrics.map(r => r.iteration);
+  makeChart('lossChart', {
+    type: 'line',
+    data: {
+      labels: it,
+      datasets: [
+        { label: 'loss', data: runMetrics.map(r => r.loss), borderColor: '#4a9eff', tension: 0.2 },
+        { label: 'policy', data: runMetrics.map(r => r.policy_loss), borderColor: '#2ecc71', tension: 0.2 },
+        { label: 'value', data: runMetrics.map(r => r.value_loss), borderColor: '#e67e22', tension: 0.2 },
+      ],
+    },
+    options: chartDefaults,
+  });
+  makeChart('valueR2Chart', {
+    type: 'line',
+    data: {
+      labels: it,
+      datasets: [
+        { label: 'value R²', data: runMetrics.map(r => r.value_r2), borderColor: '#9b59b6', tension: 0.2 },
+      ],
+    },
+    options: {
+      ...chartDefaults,
+      scales: {
+        x: chartDefaults.scales.x,
+        // 1 = perfect fit, 0 = no better than predicting the mean, and it can
+        // go arbitrarily negative — unlike loss there's no natural zero floor.
+        y: { ...chartDefaults.scales.y, suggestedMin: -0.2, suggestedMax: 1, beginAtZero: false },
+      },
+    },
+  });
+  makeChart('scoreChart', {
+    type: 'line',
+    data: {
+      labels: it,
+      datasets: [
+        { label: 'avg score', data: runMetrics.map(r => r.avg_score), borderColor: '#4a9eff', tension: 0.2 },
+        { label: 'max score', data: runMetrics.map(r => r.max_score), borderColor: '#2ecc71', tension: 0.2, pointBackgroundColor: leaguePointColors(runMetrics) },
+      ],
+    },
+    options: chartDefaults,
+  });
+  makeChart('p1p2Chart', {
+    type: 'line',
+    data: {
+      labels: it,
+      datasets: [
+        { label: 'P1 avg', data: runMetrics.map(r => r.p1_avg), borderColor: '#3498db', tension: 0.2 },
+        { label: 'P2 avg', data: runMetrics.map(r => r.p2_avg), borderColor: '#e67e22', tension: 0.2 },
+      ],
+    },
+    options: chartDefaults,
+  });
+  const leagueCount = runMetrics.filter(r => r.match_type === 'league').length;
+  const selfCount = runMetrics.length - leagueCount;
+  makeChart('leagueChart', {
+    type: 'bar',
+    data: {
+      labels: ['self-play', 'league'],
+      datasets: [{ label: 'iterations', data: [selfCount, leagueCount], backgroundColor: ['#4a9eff', '#f39c12'] }],
+    },
+    options: { ...chartDefaults, plugins: { legend: { display: false } } },
+  });
+  renderGameStatsCharts();
+  renderMoveTurnGrid();
+}
+
+function renderGameStatsCharts() {
+  const rows = filterGameStatsMetrics(runMetrics);
+  const it = rows.map(r => r.iteration);
+  makeChart('movesChart', {
+    type: 'line',
+    data: {
+      labels: it,
+      datasets: [
+        { label: 'captures', data: rows.map(r => r.avg_captures), tension: 0.2 },
+        { label: 'harvests', data: rows.map(r => r.avg_harvests), tension: 0.2 },
+        { label: 'builds', data: rows.map(r => r.avg_builds), tension: 0.2 },
+        { label: 'research', data: rows.map(r => r.avg_research), tension: 0.2 },
+        { label: 'attacks', data: rows.map(r => r.avg_attacks), tension: 0.2 },
+      ],
+    },
+    options: chartDefaults,
+  });
+  const avgChartOptions = values => ({
+    ...chartDefaults,
+    scales: { x: chartDefaults.scales.x, y: minStepYScale(values) },
+  });
+  makeChart('avgMovesChart', {
+    type: 'line',
+    data: { labels: it, datasets: [{ label: 'avg moves', data: rows.map(r => r.avg_moves), borderColor: '#9b59b6', tension: 0.2 }] },
+    options: avgChartOptions(rows.map(r => r.avg_moves)),
+  });
+  makeChart('avgCapturesChart', {
+    type: 'line',
+    data: { 
+      labels: it, 
+      datasets: [
+        { label: 'total', data: rows.map(r => r.avg_captures), borderColor: '#e74c3c', tension: 0.2, borderDash: [5, 5] },
+        { label: 'capitals', data: rows.map(r => r.avg_cap_capitals), borderColor: '#8e44ad', tension: 0.2 },
+        { label: 'cities', data: rows.map(r => r.avg_cap_cities), borderColor: '#f39c12', tension: 0.2 },
+        { label: 'villages', data: rows.map(r => r.avg_cap_villages), borderColor: '#27ae60', tension: 0.2 },
+        { label: 'ruins', data: rows.map(r => r.avg_cap_ruins), borderColor: '#7f8c8d', tension: 0.2 }
+      ] 
+    },
+    options: avgChartOptions(rows.map(r => r.avg_captures)),
+  });
+  makeChart('avgHarvestsChart', {
+    type: 'line',
+    data: { labels: it, datasets: [{ label: 'avg harvests', data: rows.map(r => r.avg_harvests), borderColor: '#2ecc71', tension: 0.2 }] },
+    options: avgChartOptions(rows.map(r => r.avg_harvests)),
+  });
+  makeChart('avgResearchChart', {
+    type: 'line',
+    data: { labels: it, datasets: [{ label: 'avg research', data: rows.map(r => r.avg_research), borderColor: '#4a9eff', tension: 0.2 }] },
+    options: avgChartOptions(rows.map(r => r.avg_research)),
+  });
+  makeChart('avgAttacksChart', {
+    type: 'line',
+    data: { labels: it, datasets: [{ label: 'avg attacks', data: rows.map(r => r.avg_attacks), borderColor: '#e67e22', tension: 0.2 }] },
+    options: avgChartOptions(rows.map(r => r.avg_attacks)),
+  });
+  makeChart('avgRevealedChart', {
+    type: 'line',
+    data: { labels: it, datasets: [{ label: 'avg revealed tiles', data: rows.map(r => r.avg_revealed_tiles), borderColor: '#f1c40f', tension: 0.2 }] },
+    options: avgChartOptions(rows.map(r => r.avg_revealed_tiles)),
+  });
+  makeChart('avgCapturedTilesChart', {
+    type: 'line',
+    data: { labels: it, datasets: [{ label: 'avg captured tiles', data: rows.map(r => r.avg_captured_tiles), borderColor: '#9b59b6', tension: 0.2 }] },
+    options: avgChartOptions(rows.map(r => r.avg_captured_tiles)),
+  });
+  makeChart('sptChart', {
+    type: 'line',
+    data: {
+      labels: it,
+      datasets: SPT_TURNS.map((t, i) => ({
+        label: `turn ${t}`,
+        data: rows.map(r => {
+          const v = r[sptField(t)];
+          return v > 0 ? v : null;
+        }),
+        borderColor: `hsl(${(i * 37) % 360}, 65%, 55%)`,
+        tension: 0.2,
+        spanGaps: false,
+      })),
+    },
+    options: {
+      ...chartDefaults,
+      plugins: {
+        ...chartDefaults.plugins,
+        title: {
+          display: true,
+          text: 'Mean tribe SPT when the game reaches each turn (games that end early omit later turns)',
+          color: '#8b9cb3',
+          font: { size: 11 },
+        },
+      },
+    },
+  });
+  makeChart('villageT2cChart', {
+    type: 'line',
+    data: {
+      labels: it,
+      datasets: [
+        { label: '1st village', data: rows.map(r => r.villages_t2c_first || null), borderColor: '#2ecc71', tension: 0.2, spanGaps: true },
+        { label: '50% villages', data: rows.map(r => r.villages_t2c_p50 || null), borderColor: '#3498db', tension: 0.2, spanGaps: true },
+        { label: '80% villages', data: rows.map(r => r.villages_t2c_p80 || null), borderColor: '#9b59b6', tension: 0.2, spanGaps: true },
+        { label: 'all villages', data: rows.map(r => r.villages_t2c_all || null), borderColor: '#e67e22', tension: 0.2, spanGaps: true },
+      ],
+    },
+    options: {
+      ...chartDefaults,
+      plugins: {
+        ...chartDefaults.plugins,
+        title: { display: true, text: 'Turn to capture (lower is better)', color: '#8b9cb3', font: { size: 11 } },
+      },
+    },
+  });
+  makeChart('ruinT2cChart', {
+    type: 'line',
+    data: {
+      labels: it,
+      datasets: [
+        { label: '50% ruins', data: rows.map(r => r.ruins_t2c_p50 || null), borderColor: '#3498db', tension: 0.2, spanGaps: true },
+        { label: '80% ruins', data: rows.map(r => r.ruins_t2c_p80 || null), borderColor: '#9b59b6', tension: 0.2, spanGaps: true },
+        { label: 'all ruins', data: rows.map(r => r.ruins_t2c_all || null), borderColor: '#e67e22', tension: 0.2, spanGaps: true },
+      ],
+    },
+    options: {
+      ...chartDefaults,
+      plugins: {
+        ...chartDefaults.plugins,
+        title: { display: true, text: 'Turn to capture (lower is better)', color: '#8b9cb3', font: { size: 11 } },
+      },
+    },
+  });
+}
+
+function moveTypeColor(type, allTypes) {
+  const i = allTypes.indexOf(type);
+  return `hsl(${(i * 47) % 360}, 60%, 55%)`;
+}
+
+function renderMoveTurnGrid() {
+  const grid = document.getElementById('moveTurnGrid');
+  const legend = document.getElementById('moveTurnLegend');
+  grid.innerHTML = '';
+  legend.innerHTML = '';
+  const keys = Object.keys(movesByTurn).map(Number).sort((a, b) => a - b);
+
+  const totals = {};
+  keys.forEach(iter => {
+    const turnData = movesByTurn[String(iter)] || {};
+    Object.keys(turnData).forEach(t => {
+      const counts = turnData[t] || {};
+      Object.keys(counts).forEach(k => {
+        if (MOVE_NOISE.has(k)) return;
+        totals[k] = (totals[k] || 0) + counts[k];
+      });
+    });
+  });
+  const allTypes = Object.keys(totals).sort((a, b) => totals[b] - totals[a]);
+  allTypes.forEach(tp => {
+    const item = document.createElement('span');
+    item.className = 'turn-legend-item';
+    item.innerHTML = `<span class="turn-legend-swatch" style="background:${moveTypeColor(tp, allTypes)}"></span>${tp}`;
+    legend.appendChild(item);
+  });
+
+  keys.forEach(iter => {
+    const div = document.createElement('div');
+    div.className = 'chart-box';
+    const title = document.createElement('h3');
+    title.textContent = `Iter ${iter}`;
+    div.appendChild(title);
+    const scroll = document.createElement('div');
+    scroll.className = 'turn-scroll';
+    const wrap = document.createElement('div');
+    wrap.className = 'turn-scroll-inner';
+    const canvas = document.createElement('canvas');
+    wrap.appendChild(canvas);
+    scroll.appendChild(wrap);
+    div.appendChild(scroll);
+    grid.appendChild(div);
+
+    const turnData = movesByTurn[String(iter)] || {};
+    const turns = Object.keys(turnData).map(Number).sort((a, b) => a - b);
+    wrap.style.minWidth = `${Math.max(480, turns.length * 36)}px`;
+
+    const types = new Set();
+    turns.forEach(t => {
+      Object.keys(turnData[String(t)] || {}).forEach(k => {
+        if (!MOVE_NOISE.has(k)) types.add(k);
+      });
+    });
+    const typeList = allTypes.filter(tp => types.has(tp));
+
+    const turnTotals = turns.map(t => {
+      const counts = turnData[String(t)] || {};
+      return typeList.reduce((sum, tp) => sum + (counts[tp] || 0), 0);
+    });
+
+    const datasets = typeList.map(tp => ({
+      label: tp,
+      data: turns.map((t, i) => {
+        const count = (turnData[String(t)] || {})[tp] || 0;
+        const total = turnTotals[i];
+        return total > 0 ? (count / total) * 100 : 0;
+      }),
+      backgroundColor: moveTypeColor(tp, allTypes),
+    }));
+
+    const existing = Chart.getChart(canvas);
+    if (existing) existing.destroy();
+    new Chart(canvas, {
+      type: 'bar',
+      data: { labels: turns.map(String), datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title: items => `Turn ${items[0].label}`,
+              label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}%`,
+            },
+          },
+        },
+        scales: {
+          x: {
+            stacked: true,
+            title: { display: true, text: 'Turn #', color: '#8b9cb3', font: { size: 11 } },
+            ticks: { color: '#8b9cb3', maxRotation: 0, font: { size: 11 } },
+          },
+          y: {
+            stacked: true,
+            max: 100,
+            ticks: { color: '#8b9cb3', callback: v => `${v}%`, font: { size: 11 } },
+            grid: { color: '#2d3a4f' },
+          },
+        },
+      },
+    });
+  });
+}
+
+function populateIterSelect() {
+  const sel = document.getElementById('iterSelect');
+  sel.innerHTML = '';
+  [...runMetrics].reverse().forEach(r => {
+    const o = document.createElement('option');
+    o.value = r.iteration;
+    o.textContent = `Iter ${r.iteration}${r.games_file ? ' · ' + r.games_file.split('/').pop() : ''}`;
+    sel.appendChild(o);
+  });
+}
+
+function baselineForRow(row) {
+  const sameRunPrior = runMetrics.filter(r => r.iteration < row.iteration);
+  let pool = sameRunPrior.length >= 5 ? sameRunPrior : allMetrics.filter(r =>
+    r.run_id < row.run_id || (r.run_id === row.run_id && r.iteration < row.iteration)
+  );
+  if (pool.length < 3) pool = allMetrics.filter(r => r !== row);
+  const fields = [
+    'avg_score', ...SPT_TURNS.map(sptField), 'avg_research', 'avg_harvests', 'avg_moves',
+    'avg_attacks', 'avg_captures', 'avg_builds', 'p1_avg', 'p2_avg',
+    'villages_t2c_p50', 'villages_t2c_all', 'ruins_t2c_p50', 'ruins_t2c_all',
+  ];
+  const base = {};
+  fields.forEach(f => {
+    const vals = pool.map(r => r[f]).filter(v => v > 0 || f.includes('avg'));
+    base[f] = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+    const std = vals.length > 1 ? Math.sqrt(vals.reduce((s, v) => s + (v - base[f]) ** 2, 0) / vals.length) : 0;
+    base[f + '_std'] = std;
+  });
+  return base;
+}
+
+function buildFlags(row, base, valStats) {
+  const flags = [];
+  const cmp = (metric, ratio, label) => {
+    const b = base[metric];
+    if (b > 0 && row[metric] < ratio * b) flags.push(`${label}: ${row[metric]?.toFixed(2)} vs baseline ${b.toFixed(2)} (<${Math.round(ratio*100)}%)`);
+  };
+  cmp('avg_moves', 0.7, 'Early termination / short games');
+  cmp('avg_attacks', 0.5, 'Combat collapse (attacks)');
+  cmp('avg_captures', 0.5, 'Combat collapse (captures)');
+  cmp('avg_score', 0.7, 'Score collapse');
+  cmp('avg_spt_t10', 0.7, 'Economy collapse (SPT @ turn 10)');
+  cmp('avg_research', 0.5, 'Economy collapse (research)');
+  cmp('avg_harvests', 0.5, 'Economy collapse (harvests)');
+  if (Math.max(row.p1_avg, row.p2_avg) > 0 && Math.abs(row.p1_avg - row.p2_avg) / Math.max(row.p1_avg, row.p2_avg) > 0.15) {
+    flags.push(`P1/P2 imbalance: P1=${row.p1_avg.toFixed(0)} P2=${row.p2_avg.toFixed(0)}`);
+  }
+  if (valStats && valStats.weak_pct > 30) flags.push(`High near-zero value targets: ${valStats.weak_pct.toFixed(1)}%`);
+  return flags;
+}
+
+async function fetchValueDist(row, run) {
+  const params = new URLSearchParams({
+    run: row.run_id || run.run_id,
+    iteration: String(row.iteration),
+  });
+  if (row.games_file) params.set('file', row.games_file);
+  return fetchJson(`/api/value-distribution?${params}`);
+}
+
+function getSelectedIterContext() {
+  const sel = document.getElementById('iterSelect');
+  if (!runMetrics.length) return null;
+  const run = runs[selectedRunIdx];
+  const iter = parseInt(sel.value || runMetrics[runMetrics.length - 1].iteration, 10);
+  const row = runMetrics.find(r => r.iteration === iter) || runMetrics[runMetrics.length - 1];
+  const base = baselineForRow(row);
+  return { run, row, base, iter };
+}
+
+function renderGenBatchMeta(row, valDist) {
+  const el = document.getElementById('genBatchMeta');
+  if (!el) return;
+  let games = row.num_games || valDist?.num_games || 0;
+  if (!games && valDist?.n && row.avg_moves > 0) {
+    games = Math.round(valDist.n / row.avg_moves);
+  }
+  const positions = valDist?.n;
+  const parts = [];
+  if (games) parts.push(`<strong>${games}</strong> games`);
+  if (positions != null) parts.push(`${Number(positions).toLocaleString()} training positions`);
+  el.innerHTML = parts.join(' · ');
+}
+
+function renderPanelB(row, valDist) {
+  renderGenBatchMeta(row, valDist);
+  if (valDist && valDist.hist) {
+    const smooth = (counts) => {
+      const out = counts.map((c, i) => {
+        const w = counts.slice(Math.max(0, i - 2), i + 3);
+        return w.reduce((a, b) => a + b, 0) / w.length;
+      });
+      return out;
+    };
+    const hSmooth = smooth(valDist.hist.counts);
+    makeChart('valDistChart', {
+      type: 'line',
+      data: {
+        labels: valDist.hist.bins.map(v => v.toFixed(2)),
+        datasets: [{ label: 'density', data: hSmooth, borderColor: '#5dade2', fill: true, backgroundColor: 'rgba(93,173,226,0.25)', pointRadius: 0 }],
+      },
+      options: { ...chartDefaults, plugins: { title: { display: true, text: `mean ${valDist.stats.mean.toFixed(3)} · ${valDist.stats.in_target_range_pct.toFixed(1)}% in [0.1,0.5]`, color: '#8b9cb3' } } },
+    });
+    makeChart('valHistChart', {
+      type: 'bar',
+      data: {
+        labels: valDist.hist.bins.filter((_, i) => i % 4 === 0).map(v => v.toFixed(3)),
+        datasets: [{ label: 'count', data: valDist.hist.counts.filter((_, i) => i % 4 === 0), backgroundColor: '#5dade2' }],
+      },
+      options: chartDefaults,
+    });
+    makeChart('valTsChart', {
+      type: 'line',
+      data: { labels: valDist.samples.map((_, i) => i), datasets: [{ label: 'value', data: valDist.samples, borderColor: '#1a5276', pointRadius: 0, borderWidth: 1 }] },
+      options: { ...chartDefaults, plugins: { title: { display: true, text: `n=${valDist.n}`, color: '#8b9cb3' } } },
+    });
+    const absSmooth = smooth(valDist.abs_hist.counts);
+    makeChart('valAbsChart', {
+      type: 'line',
+      data: { labels: valDist.abs_hist.bins.map(v => v.toFixed(2)), datasets: [{ label: '|v|', data: absSmooth, borderColor: '#c0392b', fill: true, backgroundColor: 'rgba(192,57,43,0.2)', pointRadius: 0 }] },
+      options: chartDefaults,
+    });
+    makeChart('valBucketChart', {
+      type: 'bar',
+      data: {
+        labels: ['<0.1', '0.1-0.3', '0.3-0.5', '≥0.5'],
+        datasets: [{ label: '%', data: [valDist.buckets.weak, valDist.buckets.moderate, valDist.buckets.strong, valDist.buckets.saturation], backgroundColor: ['#e74c3c', '#2ecc71', '#f39c12', '#e74c3c'] }],
+      },
+      options: { ...chartDefaults, plugins: { legend: { display: false } } },
+    });
+  } else {
+    ['valDistChart', 'valHistChart', 'valTsChart', 'valAbsChart', 'valBucketChart'].forEach(id => destroyChart(id));
+  }
+
+  makeChart('sptSnapChart', {
+    type: 'line',
+    data: {
+      labels: SPT_TURNS.map(String),
+      datasets: [{
+        label: 'mean tribe SPT',
+        data: SPT_TURNS.map(t => {
+          const v = row[sptField(t)];
+          return v > 0 ? v : null;
+        }),
+        borderColor: '#f1c40f',
+        backgroundColor: 'rgba(241,196,15,0.15)',
+        fill: true,
+        tension: 0.2,
+        spanGaps: false,
+      }],
+    },
+    options: {
+      ...chartDefaults,
+      plugins: {
+        ...chartDefaults.plugins,
+        title: {
+          display: true,
+          text: `Iter ${row.iteration} · SPT sampled at game turn milestones`,
+          color: '#8b9cb3',
+          font: { size: 11 },
+        },
+      },
+      scales: {
+        x: { ...chartDefaults.scales.x, title: { display: true, text: 'Game turn', color: '#8b9cb3', font: { size: 11 } } },
+        y: chartDefaults.scales.y,
+      },
+    },
+  });
+  makeChart('snapP1P2Chart', {
+    type: 'bar',
+    data: { labels: ['P1', 'P2'], datasets: [{ label: 'avg score', data: [row.p1_avg, row.p2_avg], backgroundColor: ['#3498db', '#e67e22'] }] },
+    options: { ...chartDefaults, plugins: { legend: { display: false } } },
+  });
+}
+
+function renderPanelC(row, base, valStats) {
+  const flags = buildFlags(row, base, valStats);
+  const banner = document.getElementById('flagsBanner');
+  const list = document.getElementById('flagsList');
+  if (flags.length) {
+    banner.classList.add('visible');
+    list.innerHTML = flags.map(f => `<li>${f}</li>`).join('');
+  } else {
+    banner.classList.remove('visible');
+    list.innerHTML = '';
+  }
+
+  makeBaselineComparisonChart(
+    'scoreBaselineChart',
+    ['avg score', 'P1 avg', 'P2 avg'],
+    ['avg_score', 'p1_avg', 'p2_avg'],
+    row,
+    base,
+  );
+  makeBaselineComparisonChart(
+    'sptBaselineChart',
+    SPT_TURNS.map(t => `turn ${t}`),
+    SPT_TURNS.map(sptField),
+    row,
+    base,
+    { skipZero: true },
+  );
+  makeBaselineComparisonChart(
+    'econChart',
+    ['research', 'harvests'],
+    ['avg_research', 'avg_harvests'],
+    row,
+    base,
+  );
+  makeBaselineComparisonChart(
+    'combatChart',
+    ['attacks', 'captures', 'builds'],
+    ['avg_attacks', 'avg_captures', 'avg_builds'],
+    row,
+    base,
+  );
+  const zFields = ['avg_score', ...SPT_TURNS.map(sptField), 'avg_moves', 'avg_attacks', 'avg_captures', 'avg_harvests', 'avg_research', 'avg_builds', 'p1_avg', 'p2_avg'];
+  const zs = zFields.map(f => {
+    const std = base[f + '_std'];
+    return std > 0 ? (row[f] - base[f]) / std : 0;
+  });
+  makeChart('zChart', {
+    type: 'bar',
+    data: {
+      labels: zFields,
+      datasets: [{ label: 'z-score', data: zs, backgroundColor: zs.map(z => Math.abs(z) >= 2 ? '#e74c3c' : '#3498db') }],
+    },
+    options: {
+      ...chartDefaults,
+      plugins: { annotation: {} },
+    },
+  });
+}
+
+async function renderIterPanels() {
+  const ctx = getSelectedIterContext();
+  if (!ctx) return;
+  let valDist = null;
+  try {
+    valDist = await fetchValueDist(ctx.row, ctx.run);
+  } catch (e) {
+    console.warn('value dist', e);
+  }
+  renderPanelB(ctx.row, valDist);
+  renderPanelC(ctx.row, ctx.base, valDist?.stats);
+}
+
+async function refreshAll() {
+  await loadRuns();
+  await loadRunData();
+  renderSummaryCards();
+  renderPanelA();
+  populateIterSelect();
+  await renderIterPanels();
+}
+
+async function checkTrainingStatus() {
+  try {
+    const s = await fetchJson('/train/status');
+    const led = document.getElementById('statusLed');
+    const txt = document.getElementById('statusText');
+    if (s.running) {
+      led.classList.add('active');
+      txt.textContent = 'Training active';
+    } else {
+      led.classList.remove('active');
+      txt.textContent = 'Training idle';
+    }
+  } catch {
+    document.getElementById('statusText').textContent = 'Status unavailable';
+  }
+}
+
+function setupPoll() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    await checkTrainingStatus();
+    const led = document.getElementById('statusLed');
+    if (led.classList.contains('active')) await refreshAll();
+  }, 30000);
+}
+
+function downloadCanvas(id, name) {
+  const c = charts[id]?.canvas || document.getElementById(id);
+  if (!c) return;
+  const a = document.createElement('a');
+  a.href = c.toDataURL('image/png');
+  a.download = `${name || id}.png`;
+  a.click();
+}
+
+document.getElementById('runSelect').addEventListener('change', async (e) => {
+  selectedRunIdx = parseInt(e.target.value, 10);
+  await loadRunData();
+  renderSummaryCards();
+  renderPanelA();
+  populateIterSelect();
+  await renderIterPanels();
+});
+
+document.getElementById('prevRun').addEventListener('click', async () => {
+  if (!runs.length) return;
+  selectedRunIdx = Math.min(runs.length - 1, selectedRunIdx + 1);
+  document.getElementById('runSelect').value = String(selectedRunIdx);
+  await loadRunData();
+  renderSummaryCards();
+  renderPanelA();
+  populateIterSelect();
+  await renderIterPanels();
+});
+
+document.getElementById('nextRun').addEventListener('click', async () => {
+  if (!runs.length) return;
+  selectedRunIdx = Math.max(0, selectedRunIdx - 1);
+  document.getElementById('runSelect').value = String(selectedRunIdx);
+  await loadRunData();
+  renderSummaryCards();
+  renderPanelA();
+  populateIterSelect();
+  await renderIterPanels();
+});
+
+document.getElementById('gameStatsFilter').addEventListener('change', (e) => {
+  gameStatsFilter = e.target.value;
+  renderGameStatsCharts();
+});
+
+document.getElementById('refreshBtn').addEventListener('click', refreshAll);
+document.getElementById('iterSelect').addEventListener('change', () => { renderIterPanels(); });
+
+document.querySelectorAll('.dl-png').forEach(btn => {
+  btn.addEventListener('click', () => downloadCanvas(btn.dataset.canvas, btn.dataset.canvas));
+});
+
+document.querySelectorAll('details.accordion').forEach(d => {
+  d.addEventListener('toggle', () => {
+    if (!d.open) return;
+    d.querySelectorAll('canvas').forEach(c => Chart.getChart(c)?.resize());
+  });
+});
+
+document.getElementById('downloadGrid').addEventListener('click', () => {
+  const ids = ['lossChart','scoreChart','p1p2Chart','movesChart'];
+  const w = 640, h = 480;
+  const out = document.createElement('canvas');
+  out.width = w * 2; out.height = h * 2;
+  const ctx = out.getContext('2d');
+  ctx.fillStyle = '#1a2332';
+  ctx.fillRect(0, 0, out.width, out.height);
+  ids.forEach((id, i) => {
+    const c = charts[id]?.canvas;
+    if (!c) return;
+    const x = (i % 2) * w;
+    const y = Math.floor(i / 2) * h;
+    ctx.drawImage(c, x, y, w, h);
+  });
+  const a = document.createElement('a');
+  a.href = out.toDataURL('image/png');
+  a.download = 'training_progress.png';
+  a.click();
+});
+
+(async () => {
+  await checkTrainingStatus();
+  await refreshAll();
+  setupPoll();
+})();
+</script>
+</body>
+</html>

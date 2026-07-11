@@ -285,7 +285,7 @@ impl<'a> GumbelMctsAgent<'a> {
                 visits: 0.0,
                 edge_reward: None,
                 raw_net_prob: raw_probs[i],
-                heuristic_score: crate::ai::ordering::score_move(game, mv.as_ref()),
+                heuristic_score: crate::ai::scoring::score_move(game, mv.as_ref()),
                 search_prior_prob: blended_probs[i],
                 gumbel_noise: child.gumbel,
                 in_top_k: in_cut.contains(&i),
@@ -805,7 +805,7 @@ impl<'a> GumbelMctsAgent<'a> {
                 leaf_data.heuristic_scores = Some(
                     moves
                         .iter()
-                        .map(|m| crate::ai::ordering::score_move(game, m.as_ref()))
+                        .map(|m| crate::ai::scoring::score_move(game, m.as_ref()))
                         .collect(),
                 );
             }
@@ -1174,7 +1174,7 @@ fn blend_heuristic_prior(game: &Game, children: &mut [GumbelNode], weight: f32) 
     let mut logits: Vec<f32> = children.iter().map(|c| c.logit).collect();
     let scores: Vec<f32> = children.iter()
         .map(|c| c.move_to_here.as_ref()
-            .map_or(0.0, |m| crate::ai::ordering::score_move(game, m.as_ref())))
+            .map_or(0.0, |m| crate::ai::scoring::score_move(game, m.as_ref())))
         .collect();
     blend_heuristic_into_logits(&mut logits, &scores, weight);
     for (child, l) in children.iter_mut().zip(logits.into_iter()) {

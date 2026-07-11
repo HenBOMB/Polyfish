@@ -1,0 +1,90 @@
+/* ===== EVALUATION BAR (Stockfish-style) ===== */
+#eval-bar {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 150px;
+    /* Above the command console */
+    width: 32px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: rgba(10, 10, 18, 0.9);
+    border-right: 1px solid var(--rts-border);
+    z-index: 500;
+    padding: 4px 0;
+    gap: 2px;
+    backdrop-filter: blur(4px);
+}
+
+.eval-label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--rts-text-dim);
+    line-height: 1;
+}
+
+.eval-track {
+    flex: 1;
+    width: 22px;
+    border-radius: 4px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    background: #1a1a2e;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.eval-fill {
+    transition: flex 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+    width: 100%;
+}
+
+.eval-fill.p1 {
+    background: linear-gradient(180deg, #f0f0f0 0%, #d4d4d8 100%);
+    flex: 1;
+}
+
+.eval-fill.p2 {
+    background: linear-gradient(180deg, #27272a 0%, #18181b 100%);
+    flex: 1;
+}
+
+.eval-indicator {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 9px;
+    font-weight: 800;
+    font-family: Outfit, monospace;
+    color: white;
+    background: rgba(0, 0, 0, 0.85);
+    padding: 2px 5px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    white-space: nowrap;
+    z-index: 2;
+    pointer-events: none;
+    transition: top 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+/* Color shifts for who's winning */
+.eval-indicator.p1-winning {
+    border-color: rgba(255, 255, 255, 0.5);
+    color: #fff;
+}
+
+.eval-indicator.p2-winning {
+    border-color: rgba(100, 100, 120, 0.5);
+    color: #a1a1aa;
+}
+
+.eval-indicator.even {
+    border-color: rgba(255, 255, 255, 0.2);
+    color: #94a3b8;
+}

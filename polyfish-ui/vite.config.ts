@@ -75,4 +75,12 @@ const processManagerPlugin = () => ({
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), processManagerPlugin()],
+  server: {
+    proxy: {
+      '^/(current|step|simulate|replay|autostep|eval|sequence|bestmoves|trainer|save|load|save_training_data|train|api|reset|config|metrics|system|rngstep|analyze).*': {
+        target: 'http://localhost:3000',
+        changeOrigin: true
+      }
+    }
+  }
 })
