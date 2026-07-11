@@ -199,7 +199,13 @@ fn test_gumbel_tree_reuse_on_consecutive_same_player_search() {
         let _ = game.play_move(&EndTurnMove);
     }
 
-    let mut agent = GumbelMctsAgent::new(&evaluator, 32, 8);
+    // 128 iterations (not 32): the agent's Gumbel noise draws from an
+    // unseeded thread_rng, so the argmax-recommended child is randomized
+    // each run; a low budget occasionally recommends a candidate that
+    // Sequential Halving never got around to expanding, which is a
+    // legitimate (if rare) outcome, not a reuse bug — a bigger budget makes
+    // the eventual winner reliably expanded so this test isn't flaky.
+    let mut agent = GumbelMctsAgent::new(&evaluator, 128, 8);
 
     // First search from the current player's seat. Search on a clone: the
     // agent's `next_root_hash_for` speculatively applies the chosen move to

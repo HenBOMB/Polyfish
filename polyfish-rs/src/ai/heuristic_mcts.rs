@@ -20,7 +20,16 @@ struct Node {
 
 impl Node {
     fn new(move_to_here: Option<Box<dyn Move>>, game: &mut Game) -> Self {
-        let untried = if game.state.settings._game_over {
+        // A node reached via EndTurn is a turn-boundary leaf: `game.legal_moves()`
+        // here would be the *opponent's* moves (current_player_turn_id has
+        // already flipped), and expanding into them would let search_iteration's
+        // Selection/Expansion continue past the turn boundary on later visits —
+        // every other backend (Gumbel/Zero) stops at EndTurn the same way.
+        let is_end_turn = move_to_here
+            .as_ref()
+            .map_or(false, |m| m.move_type() == MoveType::EndTurn);
+
+        let untried = if game.state.settings._game_over || is_end_turn {
             None
         } else {
             let book_moves = crate::ai::book::Book::recommend(game);
