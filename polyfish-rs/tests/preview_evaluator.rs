@@ -1,12 +1,20 @@
 use polyfish::ai::evaluator;
-use polyfish::states::{CityState, GameState, TribeState, UnitState};
-use polyfish::types::{TechnologyType, TribeType, UnitType};
+use polyfish::coords::Coords;
+use polyfish::states::{CityState, GameState, TileState, TribeState, UnitState};
+use polyfish::types::{TechnologyType, TerrainType, TribeType, UnitType};
 
 fn setup_state() -> (GameState, i32) {
     let mut state = GameState::default();
     state.settings.size = 11;
     state.settings.max_turns = 30;
     state.settings.turn = 5; // Early game
+
+    for i in 0..121 {
+        let mut tile = TileState::default();
+        tile.coords = Coords::from_index(i, 11);
+        tile.terrain_type = TerrainType::Field;
+        state.tiles.insert(i, tile);
+    }
 
     let tribe_id = 1;
     let mut tribe = TribeState::default();
@@ -48,8 +56,10 @@ fn preview_evaluator() {
     // 2. Add Military
     if let Some(t) = state.tribes.get_mut(&player_id) {
         let mut unit = UnitState::default();
+        unit.owner = player_id;
         unit.unit_type = UnitType::Warrior;
         unit.health = 100.0; // max
+        unit.coords = Coords::from_index(0, 11);
         t.units.push(unit);
     }
     let score_mil = evaluator::evaluate_state(&state, player_id);
@@ -89,9 +99,11 @@ fn preview_evaluator() {
     if let Some(op) = state.tribes.get_mut(&opponent_id) {
         op.stars = 100; // Rich opponent
         // Add huge army
-        for _ in 0..20 {
+        for i in 0..20 {
             let mut unit = UnitState::default();
+            unit.owner = opponent_id;
             unit.unit_type = UnitType::Giant; // Strong unit
+            unit.coords = Coords::from_index(20 + i, 11);
             op.units.push(unit);
         }
     }
