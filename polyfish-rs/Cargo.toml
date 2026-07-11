@@ -106,3 +106,16 @@ harness = false
 [[test]]
 name = "verify_policy"
 harness = false
+
+[[example]]
+name = "metal_bench"
+required-features = ["metal-eval", "tch-eval"]
+
+[[example]]
+name = "metal_parity"
+required-features = ["metal-eval", "tch-eval"]
+
+[[example]]
+name = "tch_parity"
+required-features = ["tch-eval"]
+
