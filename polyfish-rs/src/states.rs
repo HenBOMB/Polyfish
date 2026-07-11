@@ -695,9 +695,9 @@ impl GameState {
         for (id, tribe) in self.tribes.iter_mut() {
             if *id != pov_id {
                 tribe.units.retain(|u| visible_tiles.contains(&u.coords.idx));
-                // We do NOT remove cities because that breaks production,
-                // but their exact coordinates could be an issue if the AI tries to attack a fog tile.
-                // For now, removing them is the safest way to prevent data leaks.
+                // Drop fogged enemy cities too: keeping them leaks exact
+                // coordinates through fog, and hidden tribes' production
+                // doesn't matter in an obscured POV snapshot.
                 tribe.cities.retain(|c| visible_tiles.contains(&c.idx));
                 // Other tribes' observation memory is their dossier on us — strip it.
                 tribe.enemy_types_seen.clear();

@@ -79,15 +79,15 @@ def init_model():
     with torch.no_grad():
         policy, values, aux = model2(spatial_input, player_input)
     
-    print(f"  Policy outputs:")
+    print("  Policy outputs:")
     for name, tensor in policy.items():
         print(f"    {name}: {tensor.shape}")
     
-    print(f"  Value outputs:")
+    print("  Value outputs:")
     for name, tensor in values.items():
         print(f"    {name}: {tensor.shape}")
 
-    print(f"  Aux outputs (training-only):")
+    print("  Aux outputs (training-only):")
     for name, tensor in aux.items():
         print(f"    {name}: {tensor.shape}")
     

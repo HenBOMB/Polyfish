@@ -337,13 +337,13 @@ pub fn step_unit(
     let mut undos = Vec::new();
     let _rewards: Option<()> = None; // Stars, task progress
 
+    // Starting position plus every intermediate/final step tile.
+    let mut full_path = vec![old_tile_idx];
+    full_path.extend(path.iter().copied());
+
     let tiles_to_reveal = if let Some(tribe) = state.tribes.get(&unit_owner) {
         if let Some(unit) = tribe.units.get(unit_idx) {
             let mut all_revealed = std::collections::HashSet::new();
-
-            // Include starting position and all intermediate/final steps
-            let mut full_path = vec![old_tile_idx];
-            full_path.extend(path.iter().copied());
 
             for &path_idx in &full_path {
                 let range = if has_skill(unit.unit_type, SkillType::Scout)
@@ -735,11 +735,7 @@ pub fn step_unit(
 
     // Observation memory: after transforms/Hide so observers record the
     // post-move truth (real moves only; permanent, like `explorers`).
-    {
-        let mut full_path = vec![old_tile_idx];
-        full_path.extend(path.iter().copied());
-        crate::actions::memory::observe_unit_step(state, unit_owner, unit_idx, &full_path);
-    }
+    crate::actions::memory::observe_unit_step(state, unit_owner, unit_idx, &full_path);
 
     crate::actions::chain_undos(undos)
 }

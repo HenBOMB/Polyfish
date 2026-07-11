@@ -199,14 +199,11 @@ fn main() -> Result<()> {
 
     // 6. Save Model
     // VarMap::save writes only the candle net's registered vars — train.py's
-    // training-only aux_* head weights are silently STRIPPED from the file.
-    // train.py re-initializes them on its next strict=False load, losing
-    // whatever they had learned. Prefer train.py unless that's acceptable.
-    eprintln!(
-        "WARNING: saving via candle VarMap drops torch-only aux_* head weights (see train.py AUX_DIMS)"
-    );
-    println!("Saving updated model to model.safetensors");
-    varmap.save("model.safetensors")?;
+    // training-only aux_* head weights don't exist here. Save to a separate
+    // file so the canonical model.safetensors (with aux heads) is never
+    // clobbered; copy it over model.safetensors manually if intended.
+    println!("Saving updated model to model_candle.safetensors");
+    varmap.save("model_candle.safetensors")?;
 
     Ok(())
 }
