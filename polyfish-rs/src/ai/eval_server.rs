@@ -405,7 +405,7 @@ fn run_eval_loop(
         }
 
         let busy_start = Instant::now();
-        let (served, misses) = evaluate_batch(&backend, requests, cache.as_mut());
+        evaluate_batch(&backend, requests, cache.as_mut(), &stats);
         stats.forwards.fetch_add(1, Ordering::Relaxed);
         stats.rows.fetch_add(total_items as u64, Ordering::Relaxed);
         stats
@@ -414,16 +414,7 @@ fn run_eval_loop(
         stats
             .busy_us
             .fetch_add(busy_start.elapsed().as_micros() as u64, Ordering::Relaxed);
-        stats.cache_hits.fetch_add(served.served_from_cache, Ordering::Relaxed);
-        stats
-            .cache_misses
-            .fetch_add(misses, Ordering::Relaxed);
     }
-}
-
-/// Per-call cache counters returned by `evaluate_batch`.
-struct CacheTally {
-    served_from_cache: u64,
 }
 
 /// Partition the coalesced batch by eval-cache membership: rows whose
@@ -432,14 +423,14 @@ struct CacheTally {
 /// `forward_t`, read back, inserted into the cache, and scattered back to
 /// each request in original order.
 ///
-/// Returns `(CacheTally, misses)` where `misses` is the number of rows that
-/// required a GPU row (used for stats), and replies are sent on each
-/// request's `respond_to` channel.
+/// Cache hit/miss counters are bumped on `stats` BEFORE replies are sent, so
+/// a caller that reads stats right after its reply sees them up to date.
 fn evaluate_batch(
     backend: &InferenceBackend,
     requests: Vec<EvalRequest>,
     mut cache: Option<&mut lru::LruCache<u64, EvalResult>>,
-) -> (CacheTally, u64) {
+    stats: &EvalServerStats,
+) {
     let per_request_len: Vec<usize> = requests.iter().map(|r| r.features.len()).collect();
     let total_rows: usize = per_request_len.iter().sum();
 
@@ -447,7 +438,7 @@ fn evaluate_batch(
         for req in requests {
             let _ = req.respond_to.send(Vec::new());
         }
-        return (CacheTally { served_from_cache: 0 }, 0);
+        return;
     }
 
     // Resolve every row against the cache first. `row_results` holds the
@@ -504,9 +495,12 @@ fn evaluate_batch(
         }
     }
 
-    scatter_replies(requests, per_request_len, row_results);
+    // Count before replying: a caller may read stats as soon as its reply
+    // arrives, and the counters must already reflect this batch.
+    stats.cache_hits.fetch_add(served_from_cache, Ordering::Relaxed);
+    stats.cache_misses.fetch_add(misses, Ordering::Relaxed);
 
-    (CacheTally { served_from_cache }, misses)
+    scatter_replies(requests, per_request_len, row_results);
 }
 
 /// Scatter contiguous slices of `row_results` back to each request in
