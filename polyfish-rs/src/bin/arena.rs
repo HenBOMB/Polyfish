@@ -57,6 +57,11 @@ struct Args {
     #[arg(long, default_value_t = 30)]
     max_turns: i32,
 
+    /// Game mode (2 = Domination, the training mode). The mode is a net
+    /// input feature and steers the heuristic evaluator — match training.
+    #[arg(long, default_value_t = 2)]
+    gamemode: u8,
+
     /// Cap concurrent rayon workers (= concurrent Metal devices on macOS).
     /// Lower this if you hit Metal GPU errors (command-buffer faults under
     /// memory pressure). 0 = use all cores (rayon default).
@@ -95,6 +100,7 @@ fn play_match(
     seed: i64,
     swap: bool,
     max_turns: i32,
+    gamemode: u8,
 ) -> MatchResult {
     let gen_settings = MapGenSettings {
         size: MapSize::Tiny,
@@ -106,7 +112,8 @@ fn play_match(
 
     let mut game = Game::new();
     game.state = generate(gen_settings);
-    game.state.settings.mode = ModeType::Perfection;
+    game.state.settings.mode =
+        ModeType::from_repr(gamemode).unwrap_or(ModeType::Perfection);
     game.state.settings.max_turns = max_turns;
     game.post_load();
 
@@ -138,10 +145,12 @@ fn play_match(
         let current_pid = game.state.settings.current_player_turn_id;
 
         let t0 = Instant::now();
+        // Search on a clone: MCTS execute/undo must never touch the scored
+        // state (Brain::think_decomposed clones for the same reason).
         let best_move = if current_pid == 1 {
-            agent_p1.select_move(&mut game)
+            agent_p1.select_move(&mut game.clone())
         } else {
-            agent_p2.select_move(&mut game)
+            agent_p2.select_move(&mut game.clone())
         };
         let dt = t0.elapsed().as_nanos() as u64;
 
@@ -310,13 +319,13 @@ fn main() -> anyhow::Result<()> {
             let r1 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 play_match(
                     &eval1, &eval2, mcts1, mcts2, backend1, backend2, seed, false,
-                    args.max_turns,
+                    args.max_turns, args.gamemode,
                 )
             }));
             let r2 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 play_match(
                     &eval1, &eval2, mcts1, mcts2, backend1, backend2, seed, true,
-                    args.max_turns,
+                    args.max_turns, args.gamemode,
                 )
             }));
 
