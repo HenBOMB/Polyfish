@@ -193,6 +193,13 @@ struct GumbelLeaf {
     data: LeafData,
     rewards: Vec<f32>,
     turn_deltas: Vec<i32>,
+    /// Path of a node whose cached child move failed to execute on replay.
+    /// Reused subtrees are built under simulated dynamics; a real move in
+    /// between (which explores tiles, unlike `simulate_move`) can change what
+    /// a replayed ruin capture rolls or what is legal, stranding stale
+    /// children. The wave loop clears such a node so it re-expands from the
+    /// true replayed state.
+    stale_path: Option<Vec<usize>>,
 }
 
 impl<'a> GumbelMctsAgent<'a> {
@@ -699,6 +706,20 @@ impl<'a> GumbelMctsAgent<'a> {
                     reward::GAMMA_TURN,
                 );
             }
+
+            // Heal nodes whose cached children proved stale on replay (see
+            // GumbelLeaf::stale_path): drop the children and mark unexpanded
+            // so the next visit re-expands from the true replayed state.
+            // Deferred to after backprop because other leaves in this wave may
+            // hold path indices through a node being cleared.
+            for leaf in &leaves {
+                if let Some(path) = &leaf.stale_path {
+                    if let Some(node) = get_node_by_path_mut(root, path) {
+                        node.children.clear();
+                        node.is_expanded = false;
+                    }
+                }
+            }
         }
     }
 
@@ -721,6 +742,7 @@ impl<'a> GumbelMctsAgent<'a> {
         let mut path_rewards: Vec<f32> = Vec::new();
         let mut path_turn_deltas: Vec<i32> = Vec::new();
         let mut undos: Vec<crate::actions::UndoCallback> = Vec::new();
+        let mut stale_path: Option<Vec<usize>> = None;
 
         let root_player = game.state.settings.current_player_turn_id;
         path_players.push(root_player);
@@ -780,7 +802,13 @@ impl<'a> GumbelMctsAgent<'a> {
             let turn_pre = game.state.settings.turn;
             let undo = match game.simulate_move(m.as_ref()) {
                 Some(u) => u,
-                None => break,
+                None => {
+                    // Cached move is illegal in the replayed state (stale
+                    // reused subtree). Flag this node for healing and treat
+                    // it as the leaf.
+                    stale_path = Some(indices_stack.clone());
+                    break;
+                }
             };
             undos.push(undo);
             indices_stack.push(child_idx);
@@ -792,8 +820,13 @@ impl<'a> GumbelMctsAgent<'a> {
             path_turn_deltas.push(game.state.settings.turn - turn_pre);
         }
 
+        // A stale node counts as needing expansion so its features and the
+        // true state's legal moves are extracted now; the actual re-expansion
+        // happens on a later wave, after the wave loop has healed the node.
         let needs_expansion = match get_node_by_path(root, &indices_stack) {
-            Some(c) => !c.is_expanded && !game.state.settings._game_over,
+            Some(c) => {
+                (!c.is_expanded || stale_path.is_some()) && !game.state.settings._game_over
+            }
             None => false,
         };
 
@@ -823,6 +856,7 @@ impl<'a> GumbelMctsAgent<'a> {
             data: leaf_data,
             rewards: path_rewards,
             turn_deltas: path_turn_deltas,
+            stale_path,
         })
     }
 
