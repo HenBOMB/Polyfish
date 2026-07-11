@@ -65,8 +65,10 @@ struct Args {
     /// Independent of CPU core count — workers park while awaiting
     /// eval-server replies (same eval-serving design as self_play), so
     /// oversubscribing past core count is fine and is what produces the fat
-    /// coalesced batches that make the fast eval backends fast. 0 = core
-    /// count via `available_parallelism()`.
+    /// coalesced batches that make the fast eval backends fast. 0 = auto:
+    /// 4x core count, clamped to the total game count (2 * --games) — sized
+    /// for a single EXP-10-style 32-64 seed reading; raise it by hand for
+    /// much larger batches.
     #[arg(long, default_value_t = 0)]
     concurrency: usize,
 
@@ -341,20 +343,27 @@ fn main() -> anyhow::Result<()> {
         EvalBackendKind::Candle => "candle",
     };
 
+    let base_seed = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+
+    let total_games = args.games * 2;
+
     let concurrency = match args.workers.filter(|&w| w > 0) {
         Some(w) => {
             eprintln!("--workers is deprecated, use --concurrency");
             w
         }
         None if args.concurrency > 0 => args.concurrency,
-        None => std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4),
+        // Oversubscribe past core count (workers mostly park awaiting
+        // eval-server replies — see the field doc), but never past
+        // total_games: a worker with no job left just exits immediately, so
+        // more than that is pure overhead, not extra throughput.
+        None => {
+            let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+            (cores * 4).clamp(1, total_games.max(1))
+        }
     };
-
-    let base_seed = SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_secs();
-
-    let total_games = args.games * 2;
     println!(
         "Starting Arena: {} seeds x 2 sides = {} games (swapped) | eval {backend_label} | \
          {eval_servers} shard(s) cache={per_shard_cache:?} | concurrency={concurrency} \

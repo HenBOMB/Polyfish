@@ -43,7 +43,7 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     echo "Building with Metal + Accelerate + metal-eval (MPSGraph) + tch-eval for macOS..."
     export LIBTORCH_USE_PYTORCH=1
     export LIBTORCH_BYPASS_VERSION_CHECK=1
-    PATH="$(pwd)/.venv/bin:$PATH" cargo build --bin polyfish --bin self_play --release --features metal,accelerate,tch-eval,metal-eval
+    PATH="$(pwd)/.venv/bin:$PATH" cargo build --bin polyfish --bin self_play --release --features apple
     # The tch-linked binary has no rpath for libtorch; point dyld at the venv's torch dylibs
     export DYLD_LIBRARY_PATH="$(.venv/bin/python3 -c "import torch, os; print(os.path.join(os.path.dirname(torch.__file__), 'lib'))")${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
 elif false; then
