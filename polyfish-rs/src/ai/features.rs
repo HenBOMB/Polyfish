@@ -198,7 +198,7 @@ pub struct GameFeatures {
 /// thread is unsound for the Metal backend (see `bug_handoff.md`).
 pub struct RawFeatures {
     pub spatial: Vec<f32>, // len = NUM_CHANNELS * MAP_SIZE * MAP_SIZE
-    pub player: Vec<f32>,  // len = PLAYER_STATE_DIM (10)
+    pub player: Vec<f32>,  // len = PLAYER_STATE_DIM (16)
 }
 
 impl RawFeatures {
@@ -681,7 +681,7 @@ mod tests {
         assert_eq!(dims, &[1, NUM_CHANNELS, MAP_SIZE, MAP_SIZE]);
         // Check player state dims
         let player_dims = features.player_state.dims();
-        assert_eq!(player_dims, &[1, 10]);
+        assert_eq!(player_dims, &[1, 16]);
     }
 
     #[test]

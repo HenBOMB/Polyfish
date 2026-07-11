@@ -49,7 +49,7 @@ fn real_features() -> Vec<RawFeatures> {
 /// Tile the base features up to `batch` rows, flattened.
 fn flat_batch(base: &[RawFeatures], batch: usize) -> (Vec<f32>, Vec<f32>) {
     let mut spatial = Vec::with_capacity(batch * NUM_CHANNELS * MAP_SIZE * MAP_SIZE);
-    let mut player = Vec::with_capacity(batch * 10);
+    let mut player = Vec::with_capacity(batch * 16);
     for i in 0..batch {
         let f = &base[i % base.len()];
         spatial.extend_from_slice(&f.spatial);
@@ -80,7 +80,7 @@ fn main() {
         let up_start = Instant::now();
         for _ in 0..ITERS {
             let _sd = net.make_tensor_data(&spatial, &[b, NUM_CHANNELS, MAP_SIZE, MAP_SIZE]);
-            let _pd = net.make_tensor_data(&player, &[b, 10]);
+            let _pd = net.make_tensor_data(&player, &[b, 16]);
         }
         let upload_ms = up_start.elapsed().as_secs_f64() * 1000.0 / ITERS as f64;
 

@@ -43,7 +43,7 @@ use std::time::Instant;
 const FILTERS: usize = 64;
 const NHEAD: usize = 4;
 const HEAD_DIM: usize = FILTERS / NHEAD; // 16
-const PLAYER_DIM: usize = 10;
+const PLAYER_DIM: usize = 16;
 const SPATIAL: usize = MAP_SIZE * MAP_SIZE; // 121
 const BN_EPS: f64 = 1e-5;
 const LN_EPS: f64 = 1e-5;
