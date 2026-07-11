@@ -4,6 +4,8 @@ The idea is that we should get more systematic about coming up with a hypothesis
 
 This will be the loop we will run continuously to ensure the Polybot continues to improve and get better, to eventually reach human-level capabilities.
 
+Our #1 objective is to figure out how to get into a smooth learning curve regiment. Once we figure that out and can see more training time leads systematically to better playing from the AI, then we can deploy training regiment on the Cloud and let it run over 5M self-play games to reach human-level performance. We only have one shot at a $1M training run and we cannot waste it.
+
 ## Protocol
 
 1. Name the bottleneck metric (currently: `villages_t2c_first_cond` at `villages_first_rate` ~1.0).
@@ -131,9 +133,34 @@ WATCH items from this run:
 - **Rate residual — RESOLVED (Jul 11)**: dumped every zero-capture game from a 128-game Kickoo+Bardur probe (new `self_play --dump-failed-dir`: watcher replay + full per-decision search traces). All 7 were **Domination wins** — one side captured the enemy capital on turn 6–10 and the game ended before anyone banked a neutral village. Not lost units: the winner rushed (the greedy anchor does it too, in 2 of 7), the loser pulled units home to defend and died. The metric counts these wins as capture failures — third censoring artifact of this campaign. Artifacts: `polyfish-rs/replays/failed_games/`.
 - **League cadence**: the six-run drought is explained — the GN migration quarantined every old checkpoint into `checkpoints/bn_era/`, and the selector needs ≥2 eligible `model_checkpoint_iter*` files before it fires. It self-healed at iter 60, but checkpoint-every-50 means one league reading per ~7h of training. Candidate fix: denser checkpoints or a standing arena benchmark vs the frozen `model_checkpoint_iter50_20260710_015335` (pre-fix reference).
 
+## EXP 10: Strength gauge — the frozen-anchor Elo ladder
+*Jul 11, 2026 · pre-registered, running*
+
+All our metrics so far measure behavior — capture speed, SPT, policy loss — not strength. This adds the missing y-axis: paired arena matches against frozen reference models, chained into one Elo curve. It's the line that must keep rising before we commit real money to the long cloud run.
+
+### Design (instrumentation, no behavior change)
+
+- **Reading**: n=32 seeds, each played twice with sides swapped (64 games), via the existing `arena` binary — gumbel k=16 at 64 sims (the self-play search config). Win rate = wins + draws/2 over completed games.
+- **Ladder rules**: a reading every 10th training iteration against the *active anchor* (a frozen checkpoint file that never changes). Measured ≥80% → freeze the current model as the next anchor, measure the link vs the outgoing anchor at n=64, and switch. Audit block every 50 iters: n=32 vs Greedy plus n=32 vs one retired anchor (rotating) — observed vs chain-predicted win rate flags Elo inflation/cycles.
+- **Permanent floor anchor**: the Greedy backend (`--backend2 greedy`), the exact production anchor seat (self_play.rs:1682) — a non-net agent that can't participate in net-vs-net strategy cycles. Elo 0 by definition.
+- **Backfill today (no training needed)**: `model_gn_v2` (era start) → `model_checkpoint_iter50_20260710_015335` (pre-fix reference) → current `model.safetensors` (iter 60 of run 1783687051), each vs Greedy plus the informative pairs vs each other.
+- Known caveats, accepted for a *relative* gauge: arena plays Perfection scoring at 30 turns on mirror Imperius (Tiny Drylands), while training runs Domination with a tribe mix. If the gauge ever disagrees with dashboard trends, this is the first suspect.
+
+### Expected Results (pre-registered before any match ran)
+
+1. Current model beats Greedy at **≥60%** (it out-benchmarks its teacher on t2c and won the league read +8% on score). If ≥80%, Greedy retires to audit duty on day one.
+2. Monotonic ordering vs Greedy: `gn_v2` < `iter50_015335` < current.
+3. Current vs `iter50_015335` ≥55% (that checkpoint predates the full EXP 4–8 stack absorption).
+4. Transitivity spot-check: current vs `gn_v2` lands within ~±10pp of the chain-predicted win rate (no cycle).
+
+### Actual Results
+*(pending)*
+
+**Found while setting up (Jul 11):** arena searched MCTS directly on the real game state instead of a clone — search-time execute/undo leaked into the scored game, corrupting it over a match (ghost harvests, impossible star counts, duplicate monuments; 161 execute errors in the first aborted run). Production self-play was never affected because `Brain::think_decomposed` searches `game.clone()`. Fixed arena to clone the same way. WATCH (engine): the corruption proves some move undo callbacks don't restore state exactly — invisible under clone-based search, but worth an undo-roundtrip fuzz test if MCTS ever goes clone-free for speed.
+
 ## Next candidates (write the EXP entry before running)
 
 - **De-censor the rate metric (instrumentation)**: exclude games that end by domination before any village capture from the `villages_first_rate` denominator, and log a `domination_wins` rate column. With the ~3–5% rush games counted honestly, rate should read ~1.0 and the 1.0 pre-registration becomes meetable.
 - **Value-head probe**: fixed-holdout convergence probe to attribute the r2 slide (harder data vs worse head vs aux competition). Cheap, decides whether anything needs fixing.
-- **Strength gauge**: standing n=32 arena vs the frozen pre-fix checkpoint after each stint, so every committed EXP also answers "did we get *stronger*, not just faster at villages".
+- **Movement ground truth**: dump ordinary games (replay + full decision traces) from the latest model; Verdi labels wasted vs purposeful moments; the labels seed both a blended movement metric and a fixed eval suite scored per checkpoint.
 - **Map geometry floor** (user-gated, explicitly not approved yet): 31% of Drylands spawns have no village within Chebyshev 3 (400-map measurement; mean nearest 3.44) → omniscient floor ≈4.4, competent-FOW play ≈5.0–5.5. If cond plateaus ~5.0–5.3 at rate ~1.0, the remaining gap to 4.5 is the map, not the policy — reopen the suburb-guarantee conversation with that data.
