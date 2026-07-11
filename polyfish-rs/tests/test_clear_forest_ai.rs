@@ -1,4 +1,4 @@
-use polyfish::ai::ordering::score_move;
+use polyfish::ai::scoring::score_move;
 use polyfish::game::Game;
 use polyfish::moves::ClearForestMove;
 use polyfish::states::{CityState, TileState, TribeState};
