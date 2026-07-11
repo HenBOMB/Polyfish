@@ -313,7 +313,7 @@ impl PolyZeroNet {
         let v_pooled = v_pooled.relu()?;
         let v_pooled = v_pooled.flatten_from(1)?;
         let v_latent = self.v_fc_shared.forward(&v_pooled)?.relu()?;
-        let v_win = self.v_win.forward(&v_latent)?.tanh()?;
+        let v_win = self.v_win.forward(&v_latent)?;
         let v_progress = self.v_progress.forward(&v_latent)?;
 
         Ok((policy_output, ValueOutput { win_value: v_win, progress_value: v_progress }))

@@ -168,7 +168,7 @@ class PolyZeroNet(nn.Module):
         v_latent = self.relu(self.v_fc_shared(v_pooled))
         
         values = {}
-        values['win'] = torch.tanh(self.v_win(v_latent))
+        values['win'] = self.v_win(v_latent)
         values['progress'] = self.v_progress(v_latent)
         
         return policy, values

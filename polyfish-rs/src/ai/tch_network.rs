@@ -202,7 +202,7 @@ impl TchPolyZeroNet {
         let v_pooled = self.conv2d(&x, "v_pool_conv", 0);
         let v_pooled = self.batch_norm(&v_pooled, "v_pool_bn").relu().flatten(1, 3);
         let v_latent = self.linear(&v_pooled, "v_fc_shared").relu();
-        let win = self.linear(&v_latent, "v_win").tanh(); // [B, 1]
+        let win = self.linear(&v_latent, "v_win"); // [B, 1]
 
         // Read value + 4 policy heads back to CPU in a SINGLE device->CPU
         // copy. Each .to_device(Cpu) on MPS forces a commit +
