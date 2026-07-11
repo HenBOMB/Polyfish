@@ -341,7 +341,6 @@ def train():
             c_progress = []
             c_ownership = []
             c_ownership_mask = []
-            c_n_samples = []
 
             c_heads = {
                 'action_type': [], 'source_spatial': [], 'target_spatial': [], 'move_option': []
@@ -366,14 +365,12 @@ def train():
                         c_ownership.append(torch.zeros(n_samples, MAP_SIZE * MAP_SIZE))
                         c_ownership_mask.append(torch.zeros(n_samples, 1))
                     
-                    c_n_samples.append(n_samples)
-                    
                     # Load all policy heads
                     for head in c_heads.keys():
                         if head in data:
                             c_heads[head].append(data[head])
                         else:
-                            c_heads[head].append(None)
+                            pass
                             
                 except Exception as e:
                     print(f"Error loading {f}: {e}")
@@ -394,17 +391,8 @@ def train():
 
                 target_heads = {}
                 for head, tensors in c_heads.items():
-                    valid_tensors = [t for t in tensors if t is not None]
-                    if valid_tensors:
-                        head_shape = valid_tensors[0].shape[1:]
-                        head_dtype = valid_tensors[0].dtype
-                        filled = []
-                        for i, t in enumerate(tensors):
-                            if t is not None:
-                                filled.append(t)
-                            else:
-                                filled.append(torch.zeros((c_n_samples[i], *head_shape), dtype=head_dtype))
-                        target_heads[head] = torch.cat(filled)
+                    if tensors:
+                        target_heads[head] = torch.cat(tensors)
                     
             except RuntimeError as e:
                 print(f"OOM loading chunk: {e}")

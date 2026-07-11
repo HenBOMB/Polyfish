@@ -5,6 +5,9 @@ import time
 import subprocess
 from pathlib import Path
 
+# Ensure .venv/bin is in PATH so the kaggle CLI is found
+os.environ["PATH"] = f"{os.path.abspath('.venv/bin')}:{os.environ['PATH']}"
+
 # ==========================================
 # Kaggle Integration Manager for Polyfish
 # ==========================================
@@ -58,15 +61,18 @@ def sync_dataset(username):
     print("Preparing data for upload...")
     os.makedirs(data_dir, exist_ok=True)
     
+    # Clear old games to prevent accumulation
+    run_cmd(f"rm -f {data_dir}/games_*.safetensors")
+    
     # Copy necessary training files
     run_cmd(f"cp train.py {data_dir}/")
     if os.path.exists("model.safetensors"):
         run_cmd(f"cp model.safetensors {data_dir}/")
     
     if os.path.exists("archive"):
-        run_cmd(f"cp -r archive {data_dir}/")
+        run_cmd(f"cp archive/games_*.safetensors {data_dir}/ 2>/dev/null || true")
     if os.path.exists("teachers"):
-        run_cmd(f"cp -r teachers {data_dir}/")
+        run_cmd(f"cp teachers/games_*.safetensors {data_dir}/ 2>/dev/null || true")
         
     # Copy fresh games if they exist
     run_cmd(f"cp games_*.safetensors {data_dir}/ 2>/dev/null || true")
@@ -75,10 +81,21 @@ def sync_dataset(username):
     if not os.path.exists(metadata_path):
         setup_dataset(username, data_dir)
         print("Creating new dataset on Kaggle...")
-        run_cmd(f"kaggle datasets create -p {data_dir} -r zip")
+        run_cmd(f"kaggle datasets create -p {data_dir}")
     else:
         print("Uploading new version to Kaggle dataset...")
-        run_cmd(f"kaggle datasets version -p {data_dir} -m 'Update training data' -r zip")
+        run_cmd(f"kaggle datasets version -p {data_dir} -m 'Update training data' -d")
+
+    print("Waiting for dataset to be processed by Kaggle...")
+    import time
+    while True:
+        status = run_cmd(f"kaggle datasets status {dataset_slug}")
+        if "ready" in status.lower():
+            print("Dataset reports ready, adding buffer time for version to propagate...")
+            time.sleep(30) # Wait for the new version to actually be available
+            break
+        print("Dataset still processing, waiting 10s...")
+        time.sleep(10)
 
 def setup_kernel(username, dataset_slug):
     kernel_slug = f"{username}/{KERNEL_NAME}"
@@ -114,7 +131,14 @@ def setup_kernel(username, dataset_slug):
                     "!pip install safetensors torch\n",
                     f"import os\n",
                     f"import shutil\n",
-                    f"dataset_path = '/kaggle/input/{DATASET_NAME}'\n",
+                    f"dataset_path = None\n",
+                    f"for root, dirs, files in os.walk('/kaggle/input'):\n",
+                    f"    if 'train.py' in files:\n",
+                    f"        dataset_path = root\n",
+                    f"        break\n",
+                    f"if not dataset_path:\n",
+                    f"    raise FileNotFoundError('Could not find train.py in /kaggle/input')\n",
+                    f"print('Found dataset path:', dataset_path)\n",
                     f"working_dir = '/kaggle/working'\n",
                     f"# Copy dataset to working dir so train.py can write/read properly\n",
                     f"for item in os.listdir(dataset_path):\n",
@@ -133,9 +157,11 @@ def setup_kernel(username, dataset_slug):
                 "outputs": [],
                 "source": [
                     "import os\n",
+                    "import subprocess\n",
                     "os.environ['TRAIN_EPOCHS'] = '5'\n", # Override env vars here if needed
                     "os.environ['TRAIN_LR'] = '0.001'\n",
-                    "!python train.py"
+                    "subprocess.check_call(['python', 'train.py'])\n",
+                    "subprocess.call('rm -rf games_*.safetensors archive', shell=True)\n"
                 ]
             }
         ],
@@ -181,7 +207,8 @@ def run_training(username):
 def pull_results(username):
     kernel_slug = f"{username}/{KERNEL_NAME}"
     print("Downloading trained model and metrics...")
-    run_cmd(f"kaggle kernels output {kernel_slug} -p ./kaggle_output")
+    run_cmd("rm -rf ./kaggle_output")
+    run_cmd(f"kaggle kernels output {kernel_slug} -p ./kaggle_output --file-pattern model.safetensors")
     
     # Move the new model to the polyfish-rs root
     if os.path.exists("./kaggle_output/model.safetensors"):

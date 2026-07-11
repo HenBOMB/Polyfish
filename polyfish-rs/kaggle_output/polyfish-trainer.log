@@ -1,0 +1,31 @@
+[{"stream_name":"stderr","time":9.500571798,"data":"0.00s - Debugger warning: It seems that frozen modules are being used, which may\n"}
+,{"stream_name":"stderr","time":9.501625686,"data":"0.00s - make the debugger miss breakpoints. Please pass -Xfrozen_modules=off\n"}
+,{"stream_name":"stderr","time":9.501632342,"data":"0.00s - to python to disable frozen modules.\n"}
+,{"stream_name":"stderr","time":9.501635257,"data":"0.00s - Note: Debugging will proceed. Set PYDEVD_DISABLE_FILE_VALIDATION=1 to disable this validation.\n"}
+,{"stream_name":"stderr","time":10.344231289,"data":"0.00s - Debugger warning: It seems that frozen modules are being used, which may\n"}
+,{"stream_name":"stderr","time":10.344281047,"data":"0.00s - make the debugger miss breakpoints. Please pass -Xfrozen_modules=off\n"}
+,{"stream_name":"stderr","time":10.344287271,"data":"0.00s - to python to disable frozen modules.\n"}
+,{"stream_name":"stderr","time":10.344291818,"data":"0.00s - Note: Debugging will proceed. Set PYDEVD_DISABLE_FILE_VALIDATION=1 to disable this validation.\n"}
+,{"stream_name":"stdout","time":14.606032588,"data":"Requirement already satisfied: safetensors in /usr/local/lib/python3.12/dist-packages (0.7.0)\r\n"}
+,{"stream_name":"stdout","time":14.606144506,"data":"Requirement already satisfied: torch in /usr/local/lib/python3.12/dist-packages (2.10.0+cpu)\r\n"}
+,{"stream_name":"stdout","time":14.657089244,"data":"Requirement already satisfied: filelock in /usr/local/lib/python3.12/dist-packages (from torch) (3.29.0)\r\n"}
+,{"stream_name":"stdout","time":14.657147716,"data":"Requirement already satisfied: typing-extensions\u003e=4.10.0 in /usr/local/lib/python3.12/dist-packages (from torch) (4.15.0)\r\n"}
+,{"stream_name":"stdout","time":14.657155799,"data":"Requirement already satisfied: setuptools in /usr/local/lib/python3.12/dist-packages (from torch) (81.0.0)\r\n"}
+,{"stream_name":"stdout","time":14.657161967,"data":"Requirement already satisfied: sympy\u003e=1.13.3 in /usr/local/lib/python3.12/dist-packages (from torch) (1.14.0)\r\n"}
+,{"stream_name":"stdout","time":14.657166791,"data":"Requirement already satisfied: networkx\u003e=2.5.1 in /usr/local/lib/python3.12/dist-packages (from torch) (3.6.1)\r\n"}
+,{"stream_name":"stdout","time":14.657170555,"data":"Requirement already satisfied: jinja2 in /usr/local/lib/python3.12/dist-packages (from torch) (3.1.6)\r\n"}
+,{"stream_name":"stdout","time":14.657174031,"data":"Requirement already satisfied: fsspec\u003e=0.8.5 in /usr/local/lib/python3.12/dist-packages (from torch) (2025.3.0)\r\n"}
+,{"stream_name":"stdout","time":14.657177454,"data":"Requirement already satisfied: mpmath\u003c1.4,\u003e=1.1.0 in /usr/local/lib/python3.12/dist-packages (from sympy\u003e=1.13.3-\u003etorch) (1.3.0)\r\n"}
+,{"stream_name":"stdout","time":14.657181139,"data":"Requirement already satisfied: MarkupSafe\u003e=2.0 in /usr/local/lib/python3.12/dist-packages (from jinja2-\u003etorch) (3.0.3)\r\n"}
+,{"stream_name":"stdout","time":17.250853985,"data":"Available inputs: ['datasets']\n"}
+,{"stream_name":"stdout","time":17.250883958,"data":"Using dataset path: /kaggle/input/datasets\n"}
+,{"stream_name":"stdout","time":39.447279435,"data":"python3: can't open file '/kaggle/working/train.py': [Errno 2] No such file or directory\r\n"}
+,{"stream_name":"stderr","time":42.950736901,"data":"/usr/local/lib/python3.12/dist-packages/mistune.py:435: SyntaxWarning: invalid escape sequence '\\|'\n"}
+,{"stream_name":"stderr","time":42.950779372,"data":"  cells[i][c] = re.sub('\\\\\\\\\\|', '|', cell)\n"}
+,{"stream_name":"stderr","time":43.233770537,"data":"/usr/local/lib/python3.12/dist-packages/nbconvert/filters/filter_links.py:36: SyntaxWarning: invalid escape sequence '\\_'\n"}
+,{"stream_name":"stderr","time":43.233811102,"data":"  text = re.sub(r'_', '\\_', text) # Escape underscores in display text\n"}
+,{"stream_name":"stderr","time":44.05347838,"data":"[NbConvertApp] Converting notebook __notebook__.ipynb to notebook\n"}
+,{"stream_name":"stderr","time":44.435974622,"data":"[NbConvertApp] Writing 4652 bytes to __notebook__.ipynb\n"}
+,{"stream_name":"stderr","time":47.603572197,"data":"[NbConvertApp] Converting notebook __notebook__.ipynb to html\n"}
+,{"stream_name":"stderr","time":48.638915707,"data":"[NbConvertApp] Writing 278606 bytes to __results__.html\n"}
+]

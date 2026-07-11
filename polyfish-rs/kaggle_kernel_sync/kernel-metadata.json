@@ -1,0 +1,15 @@
+{
+    "id": "hennyboi/polyfish-trainer",
+    "title": "Polyfish Trainer",
+    "code_file": "train_notebook.ipynb",
+    "language": "python",
+    "kernel_type": "notebook",
+    "is_private": "true",
+    "enable_gpu": "true",
+    "enable_internet": "true",
+    "dataset_sources": [
+        "hennyboi/polyfish-training-data"
+    ],
+    "competition_sources": [],
+    "kernel_sources": []
+}
