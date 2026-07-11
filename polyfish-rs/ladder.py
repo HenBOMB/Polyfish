@@ -101,6 +101,55 @@ def cmd_audit_opponents(_args):
     print(json.dumps(opponents))
 
 
+def _sample_at(samples, turn):
+    """Last per-turn sample with sample.turn <= turn (None if none)."""
+    best = None
+    for s in samples:
+        if s["turn"] <= turn:
+            best = s
+        else:
+            break
+    return best
+
+
+# Turn milestones for behavior curves (matches the CSV's SPT milestones).
+BEHAVIOR_TURNS = [5, 10, 15, 20, 25]
+BEHAVIOR_METRICS = ["score", "spt", "cities", "units", "unit_cost", "techs"]
+
+
+def _summarize_stats(stats_dir):
+    """Mean per-metric curves at BEHAVIOR_TURNS from an arena --dump-stats-dir
+    directory (config 1 = the model). Deliberately threshold-free so it stays
+    meaningful across map sizes; threshold questions (Nth city by turn T) are
+    analysis-time queries over the raw dumps, which are retained. Returns None
+    when the dir is missing/empty so dump-less calls stay unchanged."""
+    import glob
+
+    files = sorted(glob.glob(os.path.join(stats_dir, "game_*.json")))
+    if not files:
+        return None
+    acc = {
+        m: {side: [[] for _ in BEHAVIOR_TURNS] for side in ("model", "opp")}
+        for m in BEHAVIOR_METRICS
+    }
+    for path in files:
+        with open(path) as f:
+            samples = json.load(f)["samples"]
+        for ti, turn in enumerate(BEHAVIOR_TURNS):
+            s = _sample_at(samples, turn)
+            if s is None:
+                continue
+            for m in BEHAVIOR_METRICS:
+                acc[m]["model"][ti].append(s[m][0])
+                acc[m]["opp"][ti].append(s[m][1])
+
+    mean = lambda xs: round(sum(xs) / len(xs), 2) if xs else None
+    out = {"games": len(files), "turns": BEHAVIOR_TURNS}
+    for m in BEHAVIOR_METRICS:
+        out[m] = {side: [mean(v) for v in acc[m][side]] for side in ("model", "opp")}
+    return out
+
+
 def _append_reading(data, args, kind, opponent):
     win_rate = round(_win_rate(args.wins, args.losses, args.draws), 4)
     reading = {
@@ -119,6 +168,19 @@ def _append_reading(data, args, kind, opponent):
         "avg_score_model": args.avg_score_model,
         "avg_score_opponent": args.avg_score_opponent,
     }
+    if getattr(args, "mcts", None) is not None:
+        reading["budget"] = {
+            "mcts": args.mcts,
+            "gumbel_k": args.gumbel_k,
+            "eval_backend": args.eval_backend,
+        }
+    if getattr(args, "wins_p1", None) is not None:
+        reading["wins_as_p1"] = args.wins_p1
+        reading["wins_as_p2"] = args.wins_p2
+    if getattr(args, "stats_dir", None):
+        behavior = _summarize_stats(args.stats_dir)
+        if behavior is not None:
+            reading["behavior"] = behavior
     data["readings"].append(reading)
     return reading
 
@@ -143,17 +205,19 @@ def cmd_record(args):
         else:
             data["plateau_strikes"] = 0
     _save(data)
-    print(
-        json.dumps(
-            {
-                "action": action,
-                "opponent": opponent["name"],
-                "win_rate": reading["win_rate"],
-                "elo_est": reading["elo_est"],
-                "plateau_strikes": data["plateau_strikes"],
-            }
-        )
-    )
+    verdict = {
+        "action": action,
+        "opponent": opponent["name"],
+        "win_rate": reading["win_rate"],
+        "elo_est": reading["elo_est"],
+        "plateau_strikes": data["plateau_strikes"],
+    }
+    if "behavior" in reading:
+        b = reading["behavior"]
+        verdict["cities_curve"] = {
+            "turns": b["turns"], "model": b["cities"]["model"], "opp": b["cities"]["opp"]
+        }
+    print(json.dumps(verdict))
 
 
 def cmd_freeze(args):
@@ -190,6 +254,13 @@ def main():
         p.add_argument("--draws", type=int, default=0)
         p.add_argument("--avg-score-model", type=float, default=0.0)
         p.add_argument("--avg-score-opponent", type=float, default=0.0)
+        # Reading conditions + granularity (all optional, EXP_ELO observability)
+        p.add_argument("--mcts", type=int, help="search sims used for this reading")
+        p.add_argument("--gumbel-k", type=int, default=16)
+        p.add_argument("--eval-backend", default="")
+        p.add_argument("--wins-p1", type=int, help="model wins seated as P1")
+        p.add_argument("--wins-p2", type=int, help="model wins seated as P2")
+        p.add_argument("--stats-dir", help="arena --dump-stats-dir to summarize into the reading")
 
     rec = sub.add_parser("record")
     match_args(rec)

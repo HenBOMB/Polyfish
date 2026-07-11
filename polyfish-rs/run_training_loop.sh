@@ -467,30 +467,44 @@ do
         ANCHOR_NAME=$(echo "$ACTIVE_JSON" | jq -r '.name')
         GAUGE_LOG=$(mktemp)
 
-        # $1 = opponent model path ("" = greedy backend), $2 = seeds (games x2)
+        # $1 = opponent model path ("" = greedy backend), $2 = seeds (games x2),
+        # $3 = per-turn stats dump dir (optional; summarized into the reading)
         run_gauge_match () {
+            GAUGE_STATS_DIR="$3"
+            DUMP_FLAG=""
+            if [ -n "$GAUGE_STATS_DIR" ]; then
+                DUMP_FLAG="--dump-stats-dir $GAUGE_STATS_DIR"
+            fi
             if [ -z "$1" ]; then
                 "$ARENA_BIN" --model1 model.safetensors --model2 model.safetensors \
                     --backend1 gumbel --backend2 greedy \
-                    --mcts "$MCTS_ITERS" --games "$2" --gamemode "$GAMEMODE" | tee "$GAUGE_LOG"
+                    --mcts "$MCTS_ITERS" --gumbel-k "$GUMBEL_K" $DUMP_FLAG \
+                    --games "$2" --gamemode "$GAMEMODE" | tee "$GAUGE_LOG"
             else
                 "$ARENA_BIN" --model1 model.safetensors --model2 "$1" \
                     --backend1 gumbel --backend2 gumbel \
-                    --mcts "$MCTS_ITERS" --games "$2" --gamemode "$GAMEMODE" | tee "$GAUGE_LOG"
+                    --mcts "$MCTS_ITERS" --gumbel-k "$GUMBEL_K" $DUMP_FLAG \
+                    --games "$2" --gamemode "$GAMEMODE" | tee "$GAUGE_LOG"
             fi
             GAUGE_W=$(sed -n 's/^Config 1 Wins: \([0-9][0-9]*\).*/\1/p' "$GAUGE_LOG")
             GAUGE_L=$(sed -n 's/^Config 2 Wins: \([0-9][0-9]*\).*/\1/p' "$GAUGE_LOG")
             GAUGE_D=$(sed -n 's/^Draws: *\([0-9][0-9]*\).*/\1/p' "$GAUGE_LOG")
             GAUGE_S1=$(sed -n 's/^Avg Score Config 1: \([0-9.][0-9.]*\).*/\1/p' "$GAUGE_LOG")
             GAUGE_S2=$(sed -n 's/^Avg Score Config 2: \([0-9.][0-9.]*\).*/\1/p' "$GAUGE_LOG")
+            GAUGE_WP1=$(sed -n 's/^Config 1 Wins as P1: \([0-9][0-9]*\).*/\1/p' "$GAUGE_LOG")
+            GAUGE_WP2=$(sed -n 's/^Config 1 Wins as P2: \([0-9][0-9]*\).*/\1/p' "$GAUGE_LOG")
+            GAUGE_BACKEND=$(sed -n 's/.*| eval \([a-z]*\).*/\1/p' "$GAUGE_LOG" | head -1)
         }
 
-        run_gauge_match "$ANCHOR_PATH" "${GAUGE_GAMES:-32}"
+        run_gauge_match "$ANCHOR_PATH" "${GAUGE_GAMES:-32}" "replays/gauge_stats/${RUN_ID}_iter${i}"
         if [ -n "$GAUGE_W" ] && [ -n "$GAUGE_L" ]; then
             VERDICT=$(.venv/bin/python3 ladder.py record --kind gauge \
                 --run-id "$RUN_ID" --iteration "$i" \
                 --wins "$GAUGE_W" --losses "$GAUGE_L" --draws "${GAUGE_D:-0}" \
-                --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}")
+                --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}" \
+                --mcts "$MCTS_ITERS" --gumbel-k "$GUMBEL_K" --eval-backend "${GAUGE_BACKEND:-}" \
+                --wins-p1 "${GAUGE_WP1:-0}" --wins-p2 "${GAUGE_WP2:-0}" \
+                --stats-dir "$GAUGE_STATS_DIR")
             echo "GAUGE: $VERDICT"
             GAUGE_ACTION=$(echo "$VERDICT" | jq -r '.action')
 
@@ -511,7 +525,7 @@ do
                 NEW_ANCHOR="checkpoints/anchor_iter${i}_${TS}.safetensors"
                 cp model.safetensors "$NEW_ANCHOR"
                 echo "GAUGE: >=80% vs active anchor — freezing $NEW_ANCHOR, link match (n=64)..."
-                run_gauge_match "$ANCHOR_PATH" 64
+                run_gauge_match "$ANCHOR_PATH" 64 "replays/gauge_stats/${RUN_ID}_iter${i}_link"
                 .venv/bin/python3 ladder.py freeze --run-id "$RUN_ID" --iteration "$i" \
                     --path "$NEW_ANCHOR" \
                     --wins "${GAUGE_W:-0}" --losses "${GAUGE_L:-0}" --draws "${GAUGE_D:-0}" \
@@ -531,12 +545,15 @@ do
                 .venv/bin/python3 ladder.py audit-opponents | jq -c '.[]' | while read -r AUD; do
                     AUD_NAME=$(echo "$AUD" | jq -r '.name')
                     AUD_PATH=$(echo "$AUD" | jq -r '.path')
-                    run_gauge_match "$AUD_PATH" "${GAUGE_GAMES:-32}"
+                    run_gauge_match "$AUD_PATH" "${GAUGE_GAMES:-32}" "replays/gauge_stats/${RUN_ID}_iter${i}_audit_${AUD_NAME}"
                     if [ -n "$GAUGE_W" ] && [ -n "$GAUGE_L" ]; then
                         .venv/bin/python3 ladder.py record --kind audit --opponent "$AUD_NAME" \
                             --run-id "$RUN_ID" --iteration "$i" \
                             --wins "$GAUGE_W" --losses "$GAUGE_L" --draws "${GAUGE_D:-0}" \
-                            --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}"
+                            --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}" \
+                            --mcts "$MCTS_ITERS" --gumbel-k "$GUMBEL_K" --eval-backend "${GAUGE_BACKEND:-}" \
+                            --wins-p1 "${GAUGE_WP1:-0}" --wins-p2 "${GAUGE_WP2:-0}" \
+                            --stats-dir "$GAUGE_STATS_DIR"
                     fi
                 done
             fi

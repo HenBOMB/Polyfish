@@ -184,6 +184,8 @@ fn sample_turn(state: &polyfish::states::GameState, swap: bool) -> TurnSample {
 /// Per-match result, attributed to configurations (1 or 2), not seats.
 struct MatchResult {
     winner_config: u8,
+    /// true = config 2 sat in the P1 seat this game.
+    swap: bool,
     score_config1: i32,
     score_config2: i32,
     ns_config1: u64,
@@ -324,6 +326,7 @@ fn play_match(
 
     MatchResult {
         winner_config,
+        swap,
         score_config1,
         score_config2,
         ns_config1,
@@ -545,11 +548,24 @@ fn main() -> anyhow::Result<()> {
     let mut ns2_total = 0u128;
     let mut moves2_total = 0u64;
 
+    // Config 1's record split by seat (P1 = first player when !swap).
+    let mut c1_wins_p1 = 0u32;
+    let mut c1_games_p1 = 0u32;
+    let mut c1_wins_p2 = 0u32;
+    let mut c1_games_p2 = 0u32;
+
     for r in &results {
         match r.winner_config {
             1 => config1_wins += 1,
             2 => config2_wins += 1,
             _ => draws += 1,
+        }
+        if r.swap {
+            c1_games_p2 += 1;
+            c1_wins_p2 += (r.winner_config == 1) as u32;
+        } else {
+            c1_games_p1 += 1;
+            c1_wins_p1 += (r.winner_config == 1) as u32;
         }
         score1_total += r.score_config1 as i64;
         score2_total += r.score_config2 as i64;
@@ -595,6 +611,8 @@ fn main() -> anyhow::Result<()> {
         (config2_wins as f32 / n) * 100.0
     );
     println!("Draws:         {}", draws);
+    println!("Config 1 Wins as P1: {} (of {})", c1_wins_p1, c1_games_p1);
+    println!("Config 1 Wins as P2: {} (of {})", c1_wins_p2, c1_games_p2);
     println!("---------------------");
     println!("Avg Score Config 1: {:.1}", score1_total as f32 / n);
     println!("Avg Score Config 2: {:.1}", score2_total as f32 / n);
