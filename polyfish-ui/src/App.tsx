@@ -281,8 +281,7 @@ function App() {
     if (timeDiffSeconds > 0) {
       const iterDiff = endMetric.iteration - startMetric.iteration;
       itersPerHour = (iterDiff / timeDiffSeconds) * 3600;
-      // Assuming 10 games per iteration based on bash script defaults
-      gamesPerMinute = (itersPerHour * 10) / 60;
+      gamesPerMinute = (itersPerHour * gamesPerIter) / 60;
     }
   }
 
@@ -507,7 +506,7 @@ function App() {
           <div className="card" style={{ gridColumn: 'span 1', background: 'linear-gradient(135deg, rgba(0, 240, 255, 0.1) 0%, rgba(0,0,0,0.5) 100%)', borderColor: 'var(--neon-cyan)' }}>
             <h2 className="card-title">Total Games Played</h2>
             <div className="card-value" style={{ fontSize: '2.5rem', color: 'var(--neon-cyan)' }}>
-              {currentIter * 10}
+              {currentIter * gamesPerIter}
             </div>
             <div className="card-trend-up" style={{ color: 'var(--neon-cyan)' }}>LIFETIME 1V1 SELF-PLAY // LOCAL</div>
           </div>

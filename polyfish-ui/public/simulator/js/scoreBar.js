@@ -2,12 +2,12 @@ function updateScores(scores = [0, 0]) {
     const [myScore, enemyScore] = scores;
     const totalScore = myScore + enemyScore;
 
-    // let myScorePercentage = 50;
-    // let enemyScorePercentage = 50;
-    // if (totalScore > 0) {
-    // }
-    myScorePercentage = (myScore / totalScore) * 100;
-    enemyScorePercentage = (enemyScore / totalScore) * 100;
+    let myScorePercentage = 50;
+    let enemyScorePercentage = 50;
+    if (totalScore > 0) {
+        myScorePercentage = (myScore / totalScore) * 100;
+        enemyScorePercentage = (enemyScore / totalScore) * 100;
+    }
 
     const scoreMeterElement = document.getElementById('score-meter');
     if (scoreMeterElement) {
@@ -84,7 +84,7 @@ window.addEventListener('load', async () => {
 });
 
 window.addEventListener('unload', () => {
-    clearInterval(updateCo);
+    clearInterval(update);
     const scoreMeterElement = document.getElementById('score-meter');
     if (scoreMeterElement) {
         scoreMeterElement.remove();

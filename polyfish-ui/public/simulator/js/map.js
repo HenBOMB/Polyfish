@@ -689,10 +689,9 @@ class MapRenderer {
 
         // Unified move type detection
         const moveType = move.moveType !== undefined ? move.moveType :
-            (move.type !== undefined ? 7 :
-                (move.type !== undefined ? 6 :
-                    (move.type !== undefined ? 3 :
-                        (move.type !== undefined ? 9 : 0))));
+            (move.techType !== undefined ? 7 :
+                (move.structure !== undefined ? 6 :
+                    (move.reward !== undefined ? 9 : 0)));
 
         const srcIdx = move.src;
         const targetIdx = move.target !== undefined ? move.target : move.src;

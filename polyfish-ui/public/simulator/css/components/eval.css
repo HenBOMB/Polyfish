@@ -60,7 +60,7 @@
     transform: translate(-50%, -50%);
     font-size: 9px;
     font-weight: 800;
-    font-family: 'Outfit', monospace;
+    font-family: Outfit, monospace;
     color: white;
     background: rgba(0, 0, 0, 0.85);
     padding: 2px 5px;

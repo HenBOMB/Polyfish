@@ -19,7 +19,7 @@ html {
     overflow: hidden;
     background: var(--rts-bg);
     color: var(--rts-text);
-    font-family: 'Inter', 'Outfit', sans-serif;
+    font-family: Inter, Outfit, sans-serif;
 }
 
 #app-container {

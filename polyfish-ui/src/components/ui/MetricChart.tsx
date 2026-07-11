@@ -357,7 +357,7 @@ function MetricChart({ title, data, series, height = 220, iterationKey = 'iterat
         )}
 
         {/* Combined Tooltip */}
-        {hoveredCol && (
+        {hoveredCol && hoveredCol.index >= 0 && hoveredCol.index < aggregatedData.length && (
           <div
             className="mc-tooltip"
             style={{

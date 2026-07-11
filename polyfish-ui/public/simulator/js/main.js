@@ -676,7 +676,7 @@ function renderMovesList(moves) {
         li.style.cursor = 'pointer';
         li.classList.add('move-item');
 
-        const moveType = move.moveType !== undefined ? move.moveType : (move.type !== undefined ? 7 : (move.type !== undefined ? 6 : (move.type !== undefined ? 3 : (move.type !== undefined ? 9 : 0))));
+        const moveType = move.moveType !== undefined ? move.moveType : (move.techType !== undefined ? 7 : (move.structure !== undefined ? 6 : (move.reward !== undefined ? 9 : 0)));
 
         let text = '';
         const typeName = MoveTypeNames[moveType] || moveType;
