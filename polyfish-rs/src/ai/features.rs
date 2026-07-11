@@ -44,7 +44,7 @@ pub const CH_TERRAIN_END: usize = CH_TERRAIN_START + TERRAIN_COUNT;
 
 // Tile flags (fixed count: 8)
 pub const CH_TILE_FLAGS_START: usize = CH_TERRAIN_END;
-pub const CH_TILE_FLAGS_COUNT: usize = 10;
+pub const CH_TILE_FLAGS_COUNT: usize = 8;
 pub const CH_TILE_FLAGS_END: usize = CH_TILE_FLAGS_START + CH_TILE_FLAGS_COUNT;
 
 // Tile flag offsets within the range
@@ -55,9 +55,7 @@ pub const CH_TILE_HAS_ROUTE: usize = CH_TILE_FLAGS_START + 3;
 pub const CH_TILE_OWNER: usize = CH_TILE_FLAGS_START + 4;
 pub const CH_TILE_CLIMATE: usize = CH_TILE_FLAGS_START + 5;
 pub const CH_TILE_IS_EXPLORED: usize = CH_TILE_FLAGS_START + 6;
-pub const CH_TILE_VISIBILITY: usize = CH_TILE_FLAGS_START + 7;
-pub const CH_TILE_AT_PEACE: usize = CH_TILE_FLAGS_START + 8;
-pub const CH_TILE_EMBASSY_LEVEL: usize = CH_TILE_FLAGS_START + 9;
+// +7 reserved
 
 // Resource channels
 pub const CH_RESOURCE_START: usize = CH_TILE_FLAGS_END;
@@ -113,8 +111,50 @@ pub const CH_CITY_BORDER_SIZE: usize = CH_CITY_STATS_START + 9;
 pub const CH_CITY_PROGRESS: usize = CH_CITY_STATS_START + 10;
 // +11 reserved
 
+// Global/Meta (fixed count: 24)
+pub const CH_GLOBAL_START: usize = CH_CITY_STATS_END;
+pub const CH_GLOBAL_COUNT: usize = 24;
+pub const CH_GLOBAL_END: usize = CH_GLOBAL_START + CH_GLOBAL_COUNT;
+
+// Global offsets
+pub const CH_VISIBILITY: usize = CH_GLOBAL_START + 0;
+pub const CH_TURN: usize = CH_GLOBAL_START + 1;
+pub const CH_MAX_TURNS: usize = CH_GLOBAL_START + 2;
+pub const CH_STARS: usize = CH_GLOBAL_START + 3;
+pub const CH_SCORE: usize = CH_GLOBAL_START + 4;
+pub const CH_TECH_COUNT: usize = CH_GLOBAL_START + 5;
+pub const CH_MY_TRIBE_TYPE: usize = CH_GLOBAL_START + 6;
+pub const CH_GAME_MODE: usize = CH_GLOBAL_START + 7;
+pub const CH_GAME_OVER: usize = CH_GLOBAL_START + 8;
+pub const CH_AT_PEACE: usize = CH_GLOBAL_START + 9;
+pub const CH_EMBASSY_LEVEL: usize = CH_GLOBAL_START + 10;
+pub const CH_PACIFIST_TURNS: usize = CH_GLOBAL_START + 11;
+pub const CH_TOTAL_CITIES: usize = CH_GLOBAL_START + 12;
+pub const CH_TOTAL_UNITS: usize = CH_GLOBAL_START + 13;
+pub const CH_TRIBE_KILLS: usize = CH_GLOBAL_START + 14;
+pub const CH_TRIBE_CASUALTIES: usize = CH_GLOBAL_START + 15;
+pub const CH_TRIBE_CONVERSIONS: usize = CH_GLOBAL_START + 16;
+pub const CH_ATTACKED_THIS_TURN: usize = CH_GLOBAL_START + 17;
+// Opponent aggregates: public/derivable info the net shouldn't have to mine
+// out of the spatial planes (the value label is my-score minus opp-score).
+pub const CH_OPP_SCORE: usize = CH_GLOBAL_START + 18;
+pub const CH_FRAC_EXPLORED: usize = CH_GLOBAL_START + 19;
+pub const CH_VISIBLE_ENEMY_PRODUCTION: usize = CH_GLOBAL_START + 20;
+pub const CH_VISIBLE_ENEMY_UNITS: usize = CH_GLOBAL_START + 21;
+pub const CH_ENEMY_TYPES_SEEN: usize = CH_GLOBAL_START + 22;
+pub const CH_ENEMY_MAX_TIER: usize = CH_GLOBAL_START + 23;
+
+// Ghost sightings (observation memory): last-seen enemy units that departed
+// into our fog. See TribeState::enemy_ghosts.
+pub const CH_GHOST_START: usize = CH_GLOBAL_END;
+pub const CH_GHOST_COUNT: usize = 3;
+pub const CH_GHOST_END: usize = CH_GHOST_START + CH_GHOST_COUNT;
+pub const CH_GHOST_PRESENT: usize = CH_GHOST_START + 0;
+pub const CH_GHOST_TYPE: usize = CH_GHOST_START + 1;
+pub const CH_GHOST_AGE: usize = CH_GHOST_START + 2;
+
 /// Total number of feature channels (dynamically computed)
-pub const NUM_CHANNELS: usize = CH_CITY_STATS_END;
+pub const NUM_CHANNELS: usize = CH_GHOST_END;
 
 // ============================================================================
 // Runtime Lookup Tables (enum discriminant -> sequential index)
@@ -198,11 +238,11 @@ pub struct GameFeatures {
 /// thread is unsound for the Metal backend (see `bug_handoff.md`).
 pub struct RawFeatures {
     pub spatial: Vec<f32>, // len = NUM_CHANNELS * MAP_SIZE * MAP_SIZE
-    pub player: Vec<f32>,  // len = PLAYER_STATE_DIM (16)
+    pub player: Vec<f32>,  // len = PLAYER_STATE_DIM (10)
 }
 
 impl RawFeatures {
-    pub const PLAYER_STATE_DIM: usize = 16;
+    pub const PLAYER_STATE_DIM: usize = 10;
 
     pub fn spatial_len() -> usize {
         NUM_CHANNELS * MAP_SIZE * MAP_SIZE
@@ -315,6 +355,66 @@ pub fn state_to_cpu_features(state: &GameState, perspective: PlayerId) -> Result
         .map(|t| if t.attacked_this_turn { 1.0 } else { 0.0 })
         .unwrap_or(0.0);
 
+    // Opponent aggregates (all FOW-legal: scoreboard is public; the rest is
+    // computed strictly from POV-explored tiles / POV observation memory).
+    let opp_score_norm = state
+        .tribes
+        .iter()
+        .filter(|(id, _)| **id != perspective)
+        .map(|(_, t)| t.score)
+        .max()
+        .map(|s| (s as f32 / crate::states::default_max_score() as f32).clamp(0.0, 1.0))
+        .unwrap_or(0.0);
+    let frac_explored = if state.tiles.is_empty() {
+        0.0
+    } else {
+        state
+            .tiles
+            .values()
+            .filter(|t| t.explorers.contains(&perspective))
+            .count() as f32
+            / state.tiles.len() as f32
+    };
+    let tile_explored = |idx: i32| {
+        state
+            .tiles
+            .get(&idx)
+            .map(|t| t.explorers.contains(&perspective))
+            .unwrap_or(false)
+    };
+    let mut visible_enemy_production = 0.0f32;
+    let mut visible_enemy_units = 0.0f32;
+    for (id, tribe) in &state.tribes {
+        if *id == perspective {
+            continue;
+        }
+        for city in &tribe.cities {
+            if tile_explored(city.idx) {
+                visible_enemy_production += get_city_production(state, city) as f32;
+            }
+        }
+        for unit in &tribe.units {
+            if tile_explored(unit.coords.idx) && !unit.effects.contains(&UnitEffect::Invisible) {
+                visible_enemy_units += 1.0;
+            }
+        }
+    }
+    let visible_enemy_production = (visible_enemy_production / 30.0).clamp(0.0, 1.0);
+    let visible_enemy_units = (visible_enemy_units / 20.0).clamp(0.0, 1.0);
+    let enemy_types_seen_norm = pov_tribe
+        .map(|t| (t.enemy_types_seen.len() as f32 / 10.0).clamp(0.0, 1.0))
+        .unwrap_or(0.0);
+    // Star cost as a tier proxy for the strongest enemy unit type evidenced.
+    let enemy_max_tier = pov_tribe
+        .and_then(|t| {
+            t.enemy_types_seen
+                .iter()
+                .map(|ty| crate::settings::units::get_unit_setting(*ty).cost)
+                .max()
+        })
+        .map(|c| (c as f32 / 10.0).clamp(0.0, 1.0))
+        .unwrap_or(0.0);
+
     // Process each tile
     for y in 0..map_size {
         for x in 0..map_size {
@@ -332,7 +432,30 @@ pub fn state_to_cpu_features(state: &GameState, perspective: PlayerId) -> Result
 
             // Set visibility channel (explored tiles are visible)
             let vis_val = if is_explored { 1.0 } else { 0.0 };
-            set_feat(&mut data, CH_TILE_VISIBILITY, x, y, vis_val);
+            set_feat(&mut data, CH_VISIBILITY, x, y, vis_val);
+
+            // Set global channels (same for all tiles)
+            set_feat(&mut data, CH_TURN, x, y, turn_norm);
+            set_feat(&mut data, CH_MAX_TURNS, x, y, max_turns_norm);
+            set_feat(&mut data, CH_STARS, x, y, stars_norm);
+            set_feat(&mut data, CH_SCORE, x, y, score_norm);
+            set_feat(&mut data, CH_TECH_COUNT, x, y, tech_norm);
+            set_feat(&mut data, CH_MY_TRIBE_TYPE, x, y, tribe_type_norm);
+            set_feat(&mut data, CH_GAME_MODE, x, y, game_mode);
+            set_feat(&mut data, CH_GAME_OVER, x, y, game_over);
+            set_feat(&mut data, CH_TOTAL_CITIES, x, y, total_cities);
+            set_feat(&mut data, CH_TOTAL_UNITS, x, y, total_units);
+            set_feat(&mut data, CH_PACIFIST_TURNS, x, y, pacifist_turns);
+            set_feat(&mut data, CH_TRIBE_KILLS, x, y, tribe_kills);
+            set_feat(&mut data, CH_TRIBE_CASUALTIES, x, y, tribe_casualties);
+            set_feat(&mut data, CH_TRIBE_CONVERSIONS, x, y, tribe_conversions);
+            set_feat(&mut data, CH_ATTACKED_THIS_TURN, x, y, attacked_this_turn);
+            set_feat(&mut data, CH_OPP_SCORE, x, y, opp_score_norm);
+            set_feat(&mut data, CH_FRAC_EXPLORED, x, y, frac_explored);
+            set_feat(&mut data, CH_VISIBLE_ENEMY_PRODUCTION, x, y, visible_enemy_production);
+            set_feat(&mut data, CH_VISIBLE_ENEMY_UNITS, x, y, visible_enemy_units);
+            set_feat(&mut data, CH_ENEMY_TYPES_SEEN, x, y, enemy_types_seen_norm);
+            set_feat(&mut data, CH_ENEMY_MAX_TIER, x, y, enemy_max_tier);
 
             // Skip tile-specific data if not explored
             if !is_explored {
@@ -385,15 +508,16 @@ pub fn state_to_cpu_features(state: &GameState, perspective: PlayerId) -> Result
                 // Explored flag
                 set_feat(&mut data, CH_TILE_IS_EXPLORED, x, y, 1.0);
 
+                // Peace status with tile owner
                 if tile.owner != 0 && tile.owner != perspective {
                     if let Some(pov_t) = pov_tribe {
                         if let Some(rel) = pov_t.relations.get(&tile.owner) {
                             if rel.state == 1 {
-                                set_feat(&mut data, CH_TILE_AT_PEACE, x, y, 1.0);
+                                set_feat(&mut data, CH_AT_PEACE, x, y, 1.0);
                             }
                             set_feat(
                                 &mut data,
-                                CH_TILE_EMBASSY_LEVEL,
+                                CH_EMBASSY_LEVEL,
                                 x,
                                 y,
                                 rel.embassy_level as f32 / 3.0,
@@ -442,6 +566,12 @@ pub fn state_to_cpu_features(state: &GameState, perspective: PlayerId) -> Result
                 .map(|t| t.explorers.contains(&perspective))
                 .unwrap_or(false);
             if !unit_explored {
+                continue;
+            }
+
+            // FOW rule parity with legal-move gen: invisible (Cloak) enemies
+            // are hidden even on explored tiles.
+            if *player_id != perspective && unit.effects.contains(&UnitEffect::Invisible) {
                 continue;
             }
 
@@ -604,23 +734,59 @@ pub fn state_to_cpu_features(state: &GameState, perspective: PlayerId) -> Result
         }
     }
 
-    // Extract player state vector (16 features)
+    // Ghost sightings from observation memory. Suppressed where a live enemy
+    // unit is rendered (a ghost tile explored mid-turn, before the sweep drops it).
+    if let Some(pov) = pov_tribe {
+        let turn_now = state.settings.turn;
+        for (&g_idx, ghost) in &pov.enemy_ghosts {
+            if g_idx < 0 {
+                continue;
+            }
+            let x = g_idx as usize % map_size;
+            let y = g_idx as usize / map_size;
+            if x >= MAP_SIZE || y >= MAP_SIZE {
+                continue;
+            }
+            let live_enemy_here = state
+                .tiles
+                .get(&g_idx)
+                .map(|t| {
+                    t.explorers.contains(&perspective)
+                        && t._unit_owner_id.map_or(false, |o| o != perspective)
+                })
+                .unwrap_or(false);
+            if live_enemy_here {
+                continue;
+            }
+            set_feat(&mut data, CH_GHOST_PRESENT, x, y, 1.0);
+            set_feat(
+                &mut data,
+                CH_GHOST_TYPE,
+                x,
+                y,
+                ghost.unit_type as i8 as f32 / UNIT_COUNT as f32,
+            );
+            set_feat(
+                &mut data,
+                CH_GHOST_AGE,
+                x,
+                y,
+                ((turn_now - ghost.turn) as f32 / 10.0).clamp(0.0, 1.0),
+            );
+        }
+    }
+
+    // Extract player state vector (10 features)
     let player_vec = vec![
         turn_norm,
-        max_turns_norm,
         stars_norm,
         spt_norm,
-        score_norm,
         tech_norm,
-        tribe_type_norm,
-        game_mode,
-        game_over,
         total_cities,
         total_units,
-        pacifist_turns,
+        score_norm,
         tribe_kills,
         tribe_casualties,
-        tribe_conversions,
         attacked_this_turn,
     ];
 
@@ -681,7 +847,7 @@ mod tests {
         assert_eq!(dims, &[1, NUM_CHANNELS, MAP_SIZE, MAP_SIZE]);
         // Check player state dims
         let player_dims = features.player_state.dims();
-        assert_eq!(player_dims, &[1, 16]);
+        assert_eq!(player_dims, &[1, 10]);
     }
 
     #[test]
@@ -693,6 +859,8 @@ mod tests {
         assert!(CH_STRUCTURE_END <= CH_UNIT_START);
         assert!(CH_UNIT_END <= CH_UNIT_STATS_START);
         assert!(CH_UNIT_STATS_END <= CH_CITY_STATS_START);
+        assert!(CH_CITY_STATS_END <= CH_GLOBAL_START);
+        assert!(CH_GLOBAL_END <= CH_GHOST_START);
     }
 
     #[test]
@@ -736,6 +904,11 @@ mod tests {
                 + UNIT_COUNT
                 + CH_UNIT_STATS_COUNT
                 + CH_CITY_STATS_COUNT
+                + CH_GLOBAL_COUNT
+                + CH_GHOST_COUNT
         );
+        // Pinned: the trained model's conv1 input width. Bump deliberately
+        // (with a weight migration) when adding channels.
+        assert_eq!(NUM_CHANNELS, 161);
     }
 }

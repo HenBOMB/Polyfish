@@ -29,7 +29,7 @@ fn main() -> anyhow::Result<()> {
     let network = PolyZeroNet::new(VarBuilder::zeros(DType::F32, &device))?;
 
     let spatial_len = NUM_CHANNELS * MAP_SIZE * MAP_SIZE;
-    let player_len = 16;
+    let player_len = 10;
 
     let mut times_ms: Vec<f64> = Vec::with_capacity(iters);
     for i in 0..iters {

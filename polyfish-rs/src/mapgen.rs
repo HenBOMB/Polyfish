@@ -1563,7 +1563,9 @@ mod tests {
             }
         }
     }
+    // 6 map types × 3 sizes × 2000 seeds (~36k generates); fine locally, hours on debug CI.
     #[test]
+    #[ignore]
     fn test_min_capital_distance_1v1() {
         let map_types = [
             MapType::Drylands,

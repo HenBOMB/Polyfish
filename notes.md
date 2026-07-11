@@ -315,3 +315,333 @@ phase-2 gate is still hold-then-beat 7.7 / 9.1. If captures still slide with
 anchors on, next lever is a potential-based shaping bonus from an auxiliary
 own-progress head (dense credit without touching the zero-sum backup), NOT
 more abs share in the label.
+
+## Loss floors decomposed + move_option target bug (Jul 9, 2026)
+
+Question posed: policy_loss floored ~3.0, value_loss ~0.5, R² hovering
+~0.4-0.5 for 30 iters — proof the 586K net is capacity-limited? Measured
+instead of argued; numbers from archive/games_1783587735.safetensors
+(run 1783582724 iter 11, zero-sum + anchor + trust-gate regime).
+
+1. Policy loss is pinned to TARGET ENTROPY, not capacity. Intrinsic CE
+   floor (scale-adjusted E[rowsum·H]) = 2.92 nats on that file
+   (action .27 + source .43 + target 1.72 + option .50); live
+   policy_loss = 2.98. CE cannot go below H(targets) at any parameter
+   count. λ-era floor was ~1.9 because targets were peakier — the floor
+   moved because the regime changed (trust gate + anchors spread search
+   visits), not because the net hit a wall. Best-ever policy_loss: 1.74.
+2. Value targets got 3x harder at the regime change: var 0.31 (std .56,
+   13% saturated at ±1) vs 0.11 in the λ run. R² is variance-normalized,
+   so cross-regime R²/loss comparisons are meaningless. value_loss
+   column now = 3·win_mse + progress_mse (progress targets live) — not
+   comparable to pre-progress rows either.
+3. Convergence probe (scratchpad convergence_probe.py): current net on
+   that file, 16K train / 6K holdout (block split), Adam 3e-4..1e-3,
+   30 epochs. Train R² reaches 0.83-0.90 repeatedly → the net FITS the
+   current labels; capacity not binding. Holdout ceiling ~0.52-0.58 vs
+   live 0.43-0.48 → ~0.1 left on the table (2 hot epochs, fresh Adam,
+   cosine restarts per iteration). Pre-registered widen-the-value-pool
+   trigger (R² plateau ≤0.4 on clean labels) still NOT tripped.
+4. BUG (since Feb 5, commit 1269e22): self_play.rs normalized p_action/
+   p_source/p_target by total_visits but NEVER p_option — move_option
+   rows carried raw visit counts (sums 2..64, mean 30, ~1.9% of rows).
+   Each corrupted row ≈ a 30-64x-weighted sample; ~10 per 512-batch →
+   roughly a third of policy-gradient mass. Fixed in self_play.rs
+   (normalize p_option) + defensive renorm of rows with sum>1 at chunk
+   load in train.py (archives still hold corrupted files). Verified:
+   fresh game max rowsum = 1.0000.
+5. Training is UNSTABLE even with clip_grad_norm 1.0: probe R²
+   oscillates (0.90 → -0.65 within 3 epochs at lr 1e-3; live trains at
+   2e-3 with cosine restarts). Renormalizing option rows calms it
+   noticeably (longest stable stretch, CE -0.5 nats) but one excursion
+   remains → a second destabilizer exists, value-side suspected (tanh
+   saturation on ±1 labels, VALUE_LOSS_WEIGHT=3, or BN churn). Live
+   per-iteration R² is a snapshot of this thrash, not a plateau.
+
+Conclusion: neither loss floor evidences a capacity limit — one is an
+entropy floor (policy fits ~perfectly), the other is label noise plus
+optimization thrash. The capacity question is now empirically testable
+at any time via the probe; re-run it after stabilization before any
+trunk-growth decision.
+
+## Observation memory + opponent aggregates + BN recalibration (Jul 9, 2026)
+
+Shipped in one change (plan: kind-jumping-catmull), NUM_CHANNELS 154→161:
+
+1. BN TRAIN/SERVE FIX (train.py): after the epoch loop, BatchNorm running
+   stats are recalibrated (reset + momentum=None cumulative pass over up to
+   16K fresh positions) before the f16 save. Verified in a sandboxed run:
+   eval-mode R² 0.653 vs train-mode 0.709 — gap 0.056, down from 1.2-2.5
+   pre-fix. Every value the search consumes now matches what the trainer
+   reports.
+2. ENGINE MEMORY (states.rs, actions/memory.rs): per-tribe
+   `enemy_types_seen: HashSet<UnitType>` + `enemy_ghosts: HashMap<tile,
+   GhostRecord{type,owner,turn}>`. Explorers archetype: real moves only
+   (_are_you_sure), permanent, no undo — valid because the sim EndTurn
+   fast-forward never executes opponent actions. Hooks: end of step_unit
+   (post-embark/Hide, walks full_path, ghost at first fog-side tile),
+   attack_unit (symmetric evidence; ghost for ranged-from-fog),
+   discover_tiles real branch (reveal-then-kill coverage), end_turn sweep
+   after process_start_turn_effects (spawn/upgrade/growth catch-all, drops
+   ghosts on explored tiles, prunes age>10). obscure_fog strips non-POV
+   tribes' memory. 8 tests in tests/observation_memory.rs.
+3. NEW INPUT CHANNELS (features.rs): global block 20→24 — CH_OPP_SCORE
+   (public scoreboard; the zero-sum label's other half), CH_FRAC_EXPLORED,
+   CH_VISIBLE_ENEMY_PRODUCTION, CH_VISIBLE_ENEMY_UNITS,
+   CH_ENEMY_TYPES_SEEN, CH_ENEMY_MAX_TIER (star-cost tier of strongest
+   type evidenced) — plus a 3-channel ghost block (present/type/age).
+   Also fixed a FOW leak: invisible (Cloak) enemy units were encoded on
+   explored tiles while legal-move gen hid them; features now skip them.
+4. COMPAT: conv1.weight padded 154→161 with zeros (play-identical until
+   trained) across model.safetensors + all checkpoints (+ .pre_memory.bak
+   backups); train.py zero-pads legacy-width archive files at load
+   (channels appended at layout end → index-stable). Smoke game verified
+   all new channels live (opp_score from sample 1, frac_explored
+   0.21→0.95, ghosts in 84% of samples).
+
+Watch after relaunch: value R² against the probe ceiling (opp-score input
+should raise the ceiling itself), behavioral profile, and whether the
+value head finally drives behavior now that play-side V isn't garbage.
+
+## BatchNorm → GroupNorm swap (Jul 9, 2026)
+
+Bundled into the from-scratch reseed. GroupNorm normalizes per-sample, so
+train and eval run the identical function — train/serve gap structurally 0.0
+(verified: max|train−eval| = 0.00e0); train.py's recalibration block deleted.
+
+Design: trunk norms → GroupNorm(GN_GROUPS=8, 64), same bn1.weight/bias keys,
+eps 1e-5, mirrored 4 ways (train.py, candle, tch, hand-built MPSGraph
+subgraph). The 1-channel pool norms (p_pool_bn, v_pool_bn) were REMOVED, not
+converted: a per-sample norm on one channel deletes the map's overall level —
+the exact signal the value head reads. Parity square on a fresh GN model:
+PyTorch ≡ candle ≡ tch-CPU ≡ tch-MPS ≡ MPSGraph (value Δ 0.0, softmax
+Δ ≤ 8e-6); sandbox train epoch clean.
+
+Fallout handled:
+- All backends reject BN-era checkpoints loudly (bn1.running_mean check) —
+  they'd otherwise load silently and play garbage. BN-era weights moved to
+  checkpoints/bn_era/ (outside the league glob; usable only with pre-GN
+  binaries, e.g. f847bc6).
+- Parity exposed a pre-existing bug: src/main.rs loaded weights via
+  VarMap::load on an EMPTY VarMap (silent no-op) — the :3000 server's NN
+  agent had been running on RANDOM weights. Fixed with a file-backed
+  from_mmaped_safetensors builder (same fix in examples/tch_parity.rs).
+
+Reseed order: rm model + games/archive → init_model.py (GN weights) →
+generate teachers → BC train → launch loop.
+
+## Train/serve skew: BatchNorm running stats break the acting value head (Jul 9, 2026)
+
+Measured on model.safetensors vs archive/games_1783587735.safetensors,
+same weights, same samples:
+- train-mode forward (batch BN stats): win R² = 0.497 — matches dashboard.
+- eval-mode forward (running BN stats): win R² = **-0.75 to -2.0** —
+  worse than predicting the mean. Policy heads barely affected (CE 3.37
+  vs 3.40; softmax cancels shared normalization shift) but the value
+  head reads absolute activations and is destroyed.
+- 32 no-grad forward passes in train mode (refreshing running stats
+  only, zero weight updates) recover eval-mode R² to **+0.42**.
+
+Self-play/candle/MPSGraph inference all run eval-mode with these stored
+running stats → every value the search consumes (own_value, TD(λ) root
+bootstraps, trust-gated σ(Q)) comes from the broken calibration, while
+train-mode dashboard R² reports the healthy fit. Root cause: BN EMA
+(momentum 0.1) gets only ~2 epochs of updates per iteration while trunk
+activations drift (running_var grows to 3.1e3 by block 5; v_pool_bn
+running_mean = -794), so the EMA is always calibrated for an old net;
+training thrash makes the lag worse. f16 storage adds minor precision
+loss (~0.5 absolute at magnitude 794) but no inf/nan.
+
+Fix (NOT yet applied — loop was live): after the epoch loop in
+train.py, before saving, run ~32-64 no-grad train-mode batches over
+fresh data to recalibrate running stats. Durable option: BN→GroupNorm
+(no train/eval duality; requires candle mirror + likely retune).
+Interaction warning: the VALUE_TRUST ramp injects the EVAL-mode value
+head into search/targets — until recalibration lands, high trust is
+amplifying a value function that plays at negative R².
+
+Also confirmed same day: player_state input is 10 self-only scalars
+(features.rs player_vec) while labels are zero-sum my-minus-opp — the
+input contains no opponent aggregates (opp score is public in-game).
+Part of the probe's ~0.56 holdout ceiling is information-theoretic:
+candidate fix is player_state 10→~13 (opp score, opp visible cities,
+opp last-seen units), dual-net sync + key migration required. Falsify/
+confirm by re-running the convergence probe after the feature lands.
+
+## Four auxiliary training-only heads (Jul 9, 2026)
+
+Four extra heads give the trunk dense, exact supervision on the game's
+hidden variables — territory, opponent presence, economy, opponent
+tech — instead of hoping one noisy value scalar per state teaches them.
+The memory channels feed evidence in; these force calibrated beliefs out.
+
+| tensor | shape | loss (weight env) | target |
+|---|---|---|---|
+| aux_ownership | (N,121) | MSE (AUX_OWN_W=0.3) | end-of-game tile owner, +1/-1/0 from POV |
+| aux_fog_units | (N,121) | BCE (AUX_FOG_W=0.2) | true enemy-unit occupancy now, incl. fogged |
+| aux_spt | (N,2) | MSE (AUX_SPT_W=0.1) | [my, opp] SPT five turns ahead, /20 |
+| aux_opp_tech | (N,42) | BCE (AUX_TECH_W=0.1) | opponent's end-of-game tech set |
+
+self_play computes the targets while the real (unfogged) state is live
+and ships them in the games file; train.py owns the heads, reading the
+trunk and a new global pool (not v_latent). Rust inference is untouched —
+every backend loads weights by name and ignores the aux keys. Samples
+from files without aux targets are masked out, never zero-filled. The
+four losses chart on the dashboard ("Aux losses").
+
+Traps for future edits: never save the model from src/bin/train.rs (it
+strips the aux weights; it warns at runtime); keep aux targets out of
+the policy renorm guard and out of value_loss (value_r2 stays clean);
+the tech multi-hot indexes by enum position, not discriminant; and
+forward() now returns (policy, values, aux).
+
+Verified: unit tests green; a smoke game emitted all four tensors
+correctly (POV sign-mirrored ownership, binary fog); a sandboxed real
+train() epoch handled mixed new+legacy files and saved all 8 aux
+params; arena loaded an aux-era model; a 30-epoch probe showed all four
+aux losses falling on train and holdout.
+
+Live-run rules: aux losses should trend down within ~10 iters with
+policy CE still at its floor; if win-MSE degrades >10% for 5+ iters,
+halve the AUX_*_W weights. Aux losses stuck high while policy/value
+keep fitting = trunk saturation (the capacity trigger).
+
+## GN migration killed the pool convs — value_r2 pinned at 0 (Jul 9, 2026)
+
+The first two GN-era runs (12 iterations total) logged value_r2 ≈ -0.000x
+every iteration. That signature means "predicting the target mean exactly":
+the value pool conv's pre-activations sat at mean -58 with **zero** positive
+entries, so its ReLU output exact zeros for every sample — v_latent was a
+constant, and win/progress could only fit their means (value_loss landed
+precisely on the predict-the-mean floor, 3·var(win)+var(prog) ≈ 0.85).
+p_pool_conv was equally dead, making action_type/move_option constant per
+state; only the direct spatial convs and the aux heads (which bypass the
+pools) were actually learning. Cause: the BN-era p_pool_bn/v_pool_bn had
+absorbed the convs' output offset in running_mean; the GN swap removed the
+pool norms without folding those stats into the conv weights, and a fully
+dead ReLU gets zero gradient — no amount of training recovers it.
+
+Fix: the 1-channel pool convs are now fully linear — no norm (see the GN
+section) and no activation — mirrored in train.py, network.rs,
+tch_network.rs, metal_network.rs. The fc+ReLU right after keeps the
+nonlinearity; a linear pool has no death mode and passes the map-level
+signal in both signs.
+
+Verified via the canonical parity harness (examples/tch_parity,
+examples/metal_parity, scripts_tch_parity_check.py): train.py ≡ tch-CPU ≡
+tch-MPS ≡ MPSGraph, softmax Δ ≤ 5e-6 (candle matches on logits to 1e-4;
+its lone 2.5e-1 target-head softmax delta is a near-tie flip at logit
+scale -155 on the broken model, not a port bug). Fresh model at prod
+hyperparams on the exact data that flatlined: train win R² 0.47 after 1
+epoch, 0.91 after 4. 1-game self_play smoke clean.
+
+Every pre-fix weight file assumes the pool ReLU — the current
+model.safetensors and checkpoints/model_gn_v1.safetensors misbehave under
+new binaries (league glob matches neither; --reset replaces the live
+model). Relaunch from scratch.
+
+## Slow first-village capture: broken map geometry + broken approach gradient (Jul 10, 2026)
+
+The bar: first village captured by turn ~4-5 in nearly every game (mean
+≤4.5). Measured (run 1783633575, iters 37-46): censored mean 6.4, ~1 in 10
+games capturing nothing by turn 15.
+
+Two causes, measured with `cargo run --example map_geometry` (400
+training-identical maps):
+
+1. **Training maps lack suburbs.** Real Polytopia guarantees 1-2 villages
+   within radius 3 of every capital. Our mapgen implements that suburb
+   phase only for Lakes/Archipelago; training uses Drylands, which gets a
+   uniform ≥3-spacing fill instead. Result: 31% of capitals have NO
+   village within 3 tiles (turn-4 capture physically impossible), 13%
+   none within 4, mean nearest 3.44 → perfect play ≈ mean 4.4 on these
+   maps. Lakes for contrast: 100% within 3, mean 2.55. Decision: map
+   stays as-is for now (user call); judge t2c against ~4.4 as the
+   environment optimum, not 4.0.
+
+2. **The approach gradient used Manhattan distance on a Chebyshev-movement
+   game.** `nearest_visible_capturable` + the Step closing bonus in
+   ordering.rs scored diagonal-closing steps as non-closing (no +20) and
+   understated urgency for diagonal offsets. Fixed to Chebyshev. This
+   gradient is the teacher's entire steering (anchor games = zero-search
+   score_move softmax) and reaches net games through the root prior blend
+   (0.5 → 0.1 floor by ~iter 47), so the fix hits both data sources.
+   Also added a matching approach term to the expansion evaluator
+   (`(0.35 - 0.05·d).max(0)` city-points per unit, always below the 0.5
+   standing bonus) so evaluator-based play sees the same pull.
+
+Deeper Gumbel is NOT the fix: capture-on-turn-4 sits ~14+ plies from a
+turn-1 root (~2 plies/turn × 4 own turns + interleaved opponent turns);
+64→256 sims buys ~1-2 plies of principled depth at 4× the wall-clock. The
+value net + dense priors are the horizon mechanism, not search depth.
+
+Metrics: `villages_t2c_first` stays censored (max_turns when nothing
+captured — never compare across curriculum steps at iters 26/51/76).
+Added `villages_first_rate` (share of games with ≥1 village capture),
+`villages_t2c_first_cond` (mean turn among those, -1 when none), and
+`tribes` (per-iteration pair — the harvest/build sawtooth in behavioral
+charts is tribe-matchup noise, not learning). CSV auto-migrates on the
+next append-row; dashboard plots rate (yellow, right axis) + conditional
+t2c on the village chart. The bar is now directly readable: rate → 1.0
+and cond ≤ ~4.5-5 (vs the 4.4 environment optimum).
+
+## The anchor was never the teacher — Greedy anchor swap (Jul 10, 2026)
+
+Follow-up to the above, all measured at n=32, Bardur+Imperius (worst-case
+1-move pair), iteration 80, 64 mcts-iters:
+
+- Deeper search: 64→256 sims fixed the never-capture tail (rate 0.81 →
+  1.00, net-only games) but not speed (cond 7.9 → 7.3) at 2.3× wall-clock.
+  Depth can't buy a multi-turn walk; it only rescues in-horizon captures.
+- Opening-exploration work in `score_move`: replaced the +2-adjacent
+  resource sniffer with an unexplained-resource beacon (explored resource
+  with no explored village within 2 certifies a hidden village — mapgen
+  spawns resources only in village/capital rings; Starfish excluded).
+  First version regressed (teacher 8.07 → 9.53): a unit whose sight can't
+  reach the village parks on the resource. Scaling the beacon by the
+  resource area's `regional_openness` fixed the parking (8.68). Replay
+  analysis (examples/analyze_replays) then showed the real approach bug:
+  at d=2 from a *visible* village the mover fled toward fog 52% of the
+  time — `newly_revealed×4` + openness outbid the closing bonus once the
+  village tile itself was explored. Damped curiosity to (openness×2,
+  reveal×1) when a visible capturable is ≤2 away and steepened urgency to
+  (18−4d). None of this moved the *anchor* aggregate…
+- …because anchor games ran `SearchBackend::Heuristic` — the network-free
+  ROLLOUT MCTS (64 evaluator-free rollouts, noise swamps the ordering
+  gradient) — not the Greedy score_move argmax everything above tunes.
+  Greedy teacher measured 1.00 / cond 6.47 vs the rollout anchor's 0.94 /
+  8.9. Swapped the anchor seat to `SearchBackend::Greedy`
+  (self_play.rs:1531) — which is also the exact distribution
+  `blend_heuristic_prior` injects into Gumbel roots, so anchor data and
+  root priors now agree. Production mix (25% anchor) after the swap:
+  rate 1.00, cond 7.34.
+
+Ceiling revision (user replay evidence + recompute): competent fog play on
+these maps supports mean ~5.0-5.5, not 6.5 — the demonstrator still owed
+turns. Post-swap replay analysis found the biggest leak: **attack-vs-capture
+inversion** — a kill on territory-relevant ground scored 95+15=110 > Village
+capture 99.8, so a unit standing on a village with an adjacent enemy
+attacked every turn instead of banking the city. Raised the whole Capture
+band to 115+ (ordering.rs). Post-fix analyzer: d=0 capture 100% (was 91%),
+d=2 close 60% (was 33%), approach steps t3-4 all-toward. Greedy teacher
+6.47 → 6.22 (rate 1.00); production mix 7.34 → 6.42.
+
+Tried and reverted (measured no-gain): doubling the center pull when no
+capturable/beacon evidence is visible (6.22 → 6.39, rate dip).
+
+Remaining gap to ~5.5 is blind-phase direction luck, the 13% of spawns
+with nearest village at 5+, and village races. The greedy anchor is a
+bootstrap, not a gold standard: the net can exceed it by learning
+map-prior direction cues (biome/terrain in its features) that a stateless
+scorer cannot see. Suburbs remain the unlock for ≤5.
+
+Beacon rule revision (user screenshot: spawn vision = territory + 1 ring,
+and border fruits ARE the human's direction hint): the explained-veto
+version discarded all spawn evidence because the capital's own Village
+structure "explained" every resource in vision. Replaced with the
+frontier rule — beacon iff the resource still has unexplored tiles within
+Chebyshev 2 (a hidden generator could sit there), regardless of nearby
+known cities. Measured (greedy, n=32×2): cond 6.20/5.97 vs veto 6.22,
+rate 0.94-0.97 vs 1.00 — statistically a wash, kept for concept fidelity;
+nearest-single-fruit can't read the clustering/side signal a human uses
+(that's the net's job). Production mix: rate 0.97, cond ~6.5.

@@ -39,10 +39,13 @@ polyfish-rs/*.log
 polyfish-rs/old_sessions/
 polyfish-rs/test_output.txt
 polyfish-rs/replays/high_scores/
-polyfish-rs/models/*
+polyfish-rs/replays/failed_games/
+polyfish-rs/decision_traces/
 
 # Binary model weights (use releases/LFS for these)
+polyfish-rs/models/*
 polyfish-rs/model.safetensors
+polyfish-rs/model_*.safetensors
 polyfish-rs/model.safetensors.bak
 polyfish-rs/.training.pid
 polyfish-rs/.current_run
@@ -52,3 +55,4 @@ polyfish-rs/checkpoints_old/
 # Telemetry JSON
 polyfish-rs/.*.json
 polyfish-rs/*.json
+polyfish-rs/.current_run

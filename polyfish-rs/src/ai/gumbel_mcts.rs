@@ -434,8 +434,11 @@ impl<'a> GumbelMctsAgent<'a> {
     fn finish_reused_root(&self, game: &mut Game, mut new_root: GumbelNode, start_turn: i32) -> GumbelNode {
         reset_stats_recursive(&mut new_root);
 
-        // Suppress EndTurn at the new root to mirror the fresh-build path;
-        // interior expansion keeps EndTurn, so a reused root may carry one.
+        // Belt-and-suspenders: `extract_leaf_data` already drops EndTurn from
+        // any expansion (root or interior) whenever another move exists, so
+        // this is normally a no-op — kept in case a reused root's EndTurn
+        // was its sole child at expansion time (then legitimately present)
+        // but other moves are available now.
         let has_other = new_root.children.iter().any(|c| {
             c.move_to_here
                 .as_ref()
@@ -1184,8 +1187,20 @@ fn blend_heuristic_prior(game: &Game, children: &mut [GumbelNode], weight: f32) 
 
 /// Multiset-compare a reused root's cached child moves against the real
 /// state's legal moves. Any mismatch means the sim-built cache is stale.
+///
+/// Every expansion path (`build_fresh_root`, and `extract_leaf_data` in
+/// `mcts_common.rs` for interior nodes) drops `EndTurn` from a node's
+/// children whenever another move is legal, keeping it only when it's the
+/// sole option. The cached `children` were built through one of those paths,
+/// so the comparison must apply the same normalization to `game.legal_moves()`
+/// — otherwise EndTurn's presence in the raw legal set spuriously fails the
+/// match on every reuse attempt where any other move exists.
 fn reused_children_match_legal(game: &Game, children: &[GumbelNode]) -> bool {
-    let legal = game.legal_moves();
+    let mut legal = game.legal_moves();
+    let has_other = legal.iter().any(|m| m.move_type() != MoveType::EndTurn);
+    if has_other {
+        legal.retain(|m| m.move_type() != MoveType::EndTurn);
+    }
     if legal.len() != children.len() {
         return false;
     }

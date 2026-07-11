@@ -30,11 +30,12 @@ On startup `main.rs` tries to load game state from `live_game.json`, `saved_stat
 cd polyfish-rs && cargo build --release --bin polyfish --bin self_play
 ```
 
-**Tests** (note: several integration tests in `Cargo.toml` use `harness = false`, i.e. they have their own `main`):
+**Tests** (tool binaries in `src/bin/` set `test = false` in `Cargo.toml`; `#[ignore]` marks heavy integration probes — neither runs in CI):
 ```bash
-cd polyfish-rs && cargo test                 # all tests
-cd polyfish-rs && cargo test --test stats    # a single custom-harness test binary
+cd polyfish-rs && cargo test --lib --tests --bin self_play   # CI-equivalent
 cd polyfish-rs && cargo test --test integration my_test_name   # a single libtest case
+cd polyfish-rs && cargo run --bin stats -- --games 50   # run a manual diagnostic tool on demand
+cd polyfish-rs && cargo test -- --ignored test_min_capital_distance_1v1   # heavy mapgen probe
 ```
 
 **Python training setup** (creates `polyfish-rs/.venv` from `requirements.txt`):
@@ -72,7 +73,9 @@ The network architecture is implemented **twice** and the two must stay byte-com
 - Rust: `polyfish-rs/src/ai/network.rs` (candle) — used by `self_play`, `arena`, the server, and the Rust `train` binary.
 - Python: `polyfish-rs/train.py` (PyTorch) — the primary trainer used by `run_training_loop.sh`; `init_model.py` creates the initial weights from this definition.
 
-If you change layer shapes, channel counts, or head sizes in one, you must mirror it in the other (and in `features.rs` / `mapper.rs` constants). Current values: spatial channels 154, player-state dim 10, map 11×11, policy heads = action(11) + source + target + option(192). Mismatches surface as safetensors load errors or silent garbage.
+If you change layer shapes, channel counts, or head sizes in one, you must mirror it in the other (and in `features.rs` / `mapper.rs` constants). Current values: spatial channels 161 (incl. observation-memory/ghost channels, Jul 2026), player-state dim 10, map 11×11, policy heads = action(11) + source + target + option(192), normalization = GroupNorm(GN_GROUPS=8) on the 64-filter trunk (no BatchNorm anywhere; the 1-channel pool convs are fully linear — no norm and no activation, since an unnormed ReLU there dies irreversibly, Jul 2026). Mismatches surface as safetensors load errors or silent garbage. Old 154-channel training data is zero-padded at load by train.py (channels were appended at the end of the layout); BatchNorm-era checkpoints are rejected at load by all backends (quarantined in `checkpoints/bn_era/`, usable only with pre-GN binaries).
+
+**Exception:** the `aux_*` heads (train.py `AUX_DIMS`: ownership/fog/SPT+5/opp-tech) are training-only and deliberately NOT mirrored in Rust — every Rust backend loads weights by name and ignores the extra keys. Do not add them to `network.rs`, and never save `model.safetensors` from `src/bin/train.rs` (candle `VarMap::save` strips them; it saves to `model_candle.safetensors` instead).
 
 ### Binaries (`polyfish-rs/src/bin/`)
 - `self_play.rs` — generates training games (`--num-games`, `--mcts-iters`, `--tribe1/2`, `--opponent <checkpoint>`, `--reward-shaping`, `--iteration`); emits `METRICS:` JSON lines parsed by the loop script and writes `games_*.safetensors`.

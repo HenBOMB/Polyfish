@@ -96,10 +96,16 @@ pub fn discover_tiles(
             }
         }));
     } else {
+        let mut sightings: Vec<(PlayerId, i32)> = Vec::new();
         for idx in newly_discovered {
             // Mark explored (permanent, no undo)
             if let Some(tile) = state.tiles.get_mut(&idx) {
                 tile.explorers.insert(pov_id);
+                if let Some(owner) = tile._unit_owner_id {
+                    if owner != pov_id {
+                        sightings.push((owner, idx));
+                    }
+                }
 
                 // Check if lighthouse
                 if state.settings.version >= 114 {
@@ -121,6 +127,9 @@ pub fn discover_tiles(
                 }
             }
         }
+        // Evidence for enemy units standing on the tiles we just revealed
+        // (covers reveal-then-kill within the same turn, which the sweep misses).
+        crate::actions::memory::observe_discovered_units(state, pov_id, &sightings);
     }
 
     // Check for other tribes (integrated here or called separately)

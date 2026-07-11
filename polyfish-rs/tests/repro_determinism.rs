@@ -2,8 +2,8 @@ use polyfish::actions::structure::capture_ruin;
 use polyfish::actions::tech::unlock_tech;
 use polyfish::coords::Coords;
 use polyfish::game::Game;
-use polyfish::states::{GameState, StructureState, TribeState, UnitState};
-use polyfish::types::{StructureType, TechnologyType, TribeType, UnitType};
+use polyfish::states::{GameState, StructureState, TileState, TribeState, UnitState};
+use polyfish::types::{StructureType, TechnologyType, TerrainType, TribeType, UnitType};
 
 #[test]
 fn test_capture_ruin_determinism() {
@@ -21,6 +21,18 @@ fn test_capture_ruin_determinism() {
     tribe.stars = 20;
     base_state.tribes.insert(2, tribe);
     base_state.settings.current_player_turn_id = 2;
+
+    // Add the ruin's tile at (0,0) -> index 0 (capture_ruin reads terrain off
+    // this tile to decide reward eligibility, e.g. no Explorer reward on
+    // Mountain tiles).
+    base_state.tiles.insert(
+        0,
+        TileState {
+            coords: Coords::from_index(0, 11),
+            terrain_type: TerrainType::Field,
+            ..Default::default()
+        },
+    );
 
     // Add a ruin at (0,0) -> index 0
     let ruin = StructureState {
@@ -42,7 +54,7 @@ fn test_capture_ruin_determinism() {
     base_game.post_load();
 
     // Add unit to tribe (after post_load to avoid index issues if any?)
-    if let Some(t) = base_game.state.tribes.get_mut(&1) {
+    if let Some(t) = base_game.state.tribes.get_mut(&2) {
         t.units.push(unit);
     }
 
@@ -64,8 +76,8 @@ fn test_capture_ruin_determinism() {
         let _undo_b = capture_ruin(&mut game_b.state, 0, None, None, None);
 
         // Compare explicit outcomes
-        let stars_a = game_a.state.tribes.get(&1).unwrap().stars;
-        let stars_b = game_b.state.tribes.get(&1).unwrap().stars;
+        let stars_a = game_a.state.tribes.get(&2).unwrap().stars;
+        let stars_b = game_b.state.tribes.get(&2).unwrap().stars;
 
         // Check exact match of stars
         assert_eq!(

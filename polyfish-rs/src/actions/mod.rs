@@ -5,6 +5,7 @@
 pub mod city;
 pub mod connection;
 pub mod discovery;
+pub mod memory;
 pub mod resource;
 pub mod structure;
 pub mod tech;

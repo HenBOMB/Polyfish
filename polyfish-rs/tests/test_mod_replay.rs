@@ -45,7 +45,9 @@ static PASSED_REPLAYS: &[&str] = &[
 // limited to policy: select (public.games)
 const SUPABASE_ANON_KEY: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Impndnh0cmh5b25wY3psYXVzc3B0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzEwOTMzOTYsImV4cCI6MjA4NjY2OTM5Nn0.Zl-YJ_RFV3OnF-yw6_L_Pb3jr1GvpxFllHx_-Q943DI";
 
+// Downloads replay from Supabase when missing; network stalls can block CI for hours.
 #[tokio::test]
+#[ignore]
 async fn test_mod_replay_ingestion() {
     let _ = dotenvy::dotenv();
 

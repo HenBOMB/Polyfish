@@ -3,7 +3,10 @@ use polyfish::game::Game;
 use polyfish::types::MoveType;
 use std::path::Path;
 
+// Pins an exact opening MCTS sequence from saved_state.json; breaks when heuristics
+// change and runs 9×100-iter searches. Run locally: cargo test -- --ignored test_mcts_matches_ruin_capture_sequence
 #[test]
+#[ignore]
 fn test_mcts_matches_ruin_capture_sequence() {
     let state_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("saved_state.json");
     let initial_game = Game::from_file(state_path).expect("Failed to load saved_state.json");

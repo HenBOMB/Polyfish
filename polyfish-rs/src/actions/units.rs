@@ -337,13 +337,13 @@ pub fn step_unit(
     let mut undos = Vec::new();
     let _rewards: Option<()> = None; // Stars, task progress
 
+    // Starting position plus every intermediate/final step tile.
+    let mut full_path = vec![old_tile_idx];
+    full_path.extend(path.iter().copied());
+
     let tiles_to_reveal = if let Some(tribe) = state.tribes.get(&unit_owner) {
         if let Some(unit) = tribe.units.get(unit_idx) {
             let mut all_revealed = std::collections::HashSet::new();
-
-            // Include starting position and all intermediate/final steps
-            let mut full_path = vec![old_tile_idx];
-            full_path.extend(path.iter().copied());
 
             for &path_idx in &full_path {
                 let range = if has_skill(unit.unit_type, SkillType::Scout)
@@ -733,6 +733,10 @@ pub fn step_unit(
         undos.push(step_unit(state, unit_owner, child_idx, old_tile_idx, true));
     }
 
+    // Observation memory: after transforms/Hide so observers record the
+    // post-move truth (real moves only; permanent, like `explorers`).
+    crate::actions::memory::observe_unit_step(state, unit_owner, unit_idx, &full_path);
+
     crate::actions::chain_undos(undos)
 }
 
@@ -831,6 +835,15 @@ pub fn attack_unit(
             unit.coords.idx,
         )
     };
+
+    // Combat is always shown to the victim, even from fog (ranged).
+    crate::actions::memory::observe_attacker(
+        state,
+        attacker_owner,
+        atk_type,
+        atk_coords,
+        defender_owner,
+    );
 
     // If defender_idx is None, this is an Infiltration attack on a city
     if defender_idx.is_none() {
@@ -962,7 +975,7 @@ pub fn attack_unit(
 
     let defender_idx = defender_idx.unwrap(); // fast fail if logic error
 
-    let (def_def, def_health, def_max_health, defense_bonus, def_coords) = {
+    let (def_def, def_health, def_max_health, defense_bonus, def_coords, def_type) = {
         let tribe = state.tribes.get(&defender_owner).unwrap();
         let unit = tribe.units.get(defender_idx).unwrap();
         (
@@ -971,8 +984,11 @@ pub fn attack_unit(
             get_unit_max_health(unit),
             get_defense_bonus(state, unit),
             unit.coords.idx,
+            unit.unit_type,
         )
     };
+
+    crate::actions::memory::observe_defender(state, attacker_owner, defender_owner, def_type);
 
     // Calculate combat result
     let result = calculate_combat(

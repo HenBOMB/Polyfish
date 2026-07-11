@@ -17,21 +17,34 @@ pub fn evaluate_expansion(state: &GameState, player_id: PlayerId) -> f32 {
     // Potential city bonus (units on neutral/enemy villages or ruins)
     for unit in &tribe.units {
         let idx = unit.coords.idx;
+        let mut standing = false;
         if let Some(tile) = state.tiles.get(&idx) {
             if tile.owner != player_id {
                 if let Some(s) = crate::functions::get_structure_at(state, idx) {
                     match s.structure_type {
                         StructureType::Village | StructureType::Ruin => {
                             total_city_points += 0.5; // Half a city's value for being on it
+                            standing = true;
                         }
                         _ => {
                             // Enemy city
                             if tile.owner != 0 {
                                 total_city_points += 0.4; // Slightly less for enemy city (riskier)
+                                standing = true;
                             }
                         }
                     }
                 }
+            }
+        }
+        // Approach gradient: closing on a visible neutral village/ruin raises the
+        // eval every step (0.30 at d=1, fading out at d>=7; always below the 0.5
+        // standing bonus), so a multi-turn walk is visible to 1-ply search.
+        if !standing {
+            if let Some((_, d)) =
+                crate::ai::scoring::nearest_visible_capturable(state, player_id, unit.coords)
+            {
+                total_city_points += (0.35 - 0.05 * d as f32).max(0.0);
             }
         }
     }

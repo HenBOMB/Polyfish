@@ -114,25 +114,25 @@ async fn main() {
     game.state.settings.max_turns = 10;
     game.post_load();
 
-    // Load trained neural network
+    // Load trained neural network. NOTE: must be a file-backed VarBuilder —
+    // `VarMap::load` on an empty map is a silent no-op (it only fills
+    // pre-registered vars), which used to leave the server on random weights.
     use candle_core::Device;
-    use candle_nn::VarMap;
     let device = Device::Cpu;
 
     let model_path = "model.safetensors";
-    let mut varmap = VarMap::new();
 
     let network = if std::path::Path::new(model_path).exists() {
         println!("✅ Loading trained AI model from {}", model_path);
-        varmap
-            .load(model_path)
-            .expect("Failed to load model weights");
-        polyfish::ai::network::PolyZeroNet::new(candle_nn::VarBuilder::from_varmap(
-            &varmap,
-            candle_core::DType::F32,
-            &device,
-        ))
-        .expect("Failed to build neural network")
+        let vs = unsafe {
+            candle_nn::VarBuilder::from_mmaped_safetensors(
+                &[model_path],
+                candle_core::DType::F32,
+                &device,
+            )
+        }
+        .expect("Failed to load model weights");
+        polyfish::ai::network::PolyZeroNet::new(vs).expect("Failed to build neural network")
     } else {
         panic!(
             "Model file {} not found! Please run init_model.py first.",
@@ -189,13 +189,13 @@ async fn main() {
             "/api/value-distribution",
             get(polyfish::training_api::api_value_distribution),
         )
-        .nest_service("/assets", ServeDir::new("../polyfish-ui/dist/assets"))
+        .nest_service("/assets", ServeDir::new("../src/public/assets"))
         .nest_service("/simulator", ServeDir::new("../polyfish-ui/dist/simulator"))
-        .nest_service("/static", ServeDir::new("../polyfish-ui/dist"))
+        .nest_service("/static", ServeDir::new("../src/public"))
         // Serve real files (training.html, js/, css/) from public; unmatched
         // paths still fall back to index.html for SPA routing.
         .fallback_service(
-            ServeDir::new("../polyfish-ui/dist").not_found_service(spa_fallback.into_service()),
+            ServeDir::new("../src/public").not_found_service(spa_fallback.into_service()),
         )
         .layer(CorsLayer::permissive())
         .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 50))

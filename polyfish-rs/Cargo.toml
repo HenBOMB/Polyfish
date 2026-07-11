@@ -75,37 +75,82 @@ lto = false
 codegen-units = 16
 debug = true
 
-[[test]]
-name = "stats"
-harness = false
-
-[[test]]
-name = "debug_stars"
-harness = false
-
-[[test]]
+# Tool binaries: never pull them into `cargo test` (some run full-game MCTS loops).
+[[bin]]
+name = "actor_ceiling"
+test = false
+[[bin]]
+name = "arena"
+test = false
+[[bin]]
+name = "benchmark"
+test = false
+[[bin]]
+name = "compare_evaluators"
+test = false
+[[bin]]
+name = "dashboard"
+test = false
+[[bin]]
 name = "debug_mcts_undo"
-harness = false
-
-[[test]]
+test = false
+[[bin]]
+name = "debug_stars"
+test = false
+[[bin]]
+name = "debug_summon"
+test = false
+[[bin]]
 name = "debug_water_sim"
-harness = false
-
-[[test]]
+test = false
+[[bin]]
+name = "delete_all_replays"
+test = false
+[[bin]]
+name = "download_replay"
+test = false
+[[bin]]
+name = "extract_versions"
+test = false
+[[bin]]
 name = "inspect_seed"
-harness = false
-
-[[test]]
+test = false
+[[bin]]
+name = "load_json"
+test = false
+[[bin]]
+name = "repro_loop"
+test = false
+[[bin]]
+name = "stats"
+test = false
+[[bin]]
 name = "test_branching"
-harness = false
-
-[[test]]
+test = false
+[[bin]]
+name = "train"
+test = false
+[[bin]]
+name = "trainer"
+test = false
+[[bin]]
+name = "unverify_all"
+test = false
+[[bin]]
+name = "upload_replays"
+test = false
+[[bin]]
+name = "validate_csv"
+test = false
+[[bin]]
+name = "verify_files"
+test = false
+[[bin]]
 name = "verify_luxidor"
-harness = false
-
-[[test]]
+test = false
+[[bin]]
 name = "verify_policy"
-harness = false
+test = false
 
 [[example]]
 name = "metal_bench"

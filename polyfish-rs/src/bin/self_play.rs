@@ -15,6 +15,7 @@ use polyfish::states::{GameState, PlayerId};
 use polyfish::types::MapSize;
 use serde_json::json;
 use std::collections::HashMap;
+use strum::IntoEnumIterator;
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
@@ -175,6 +176,72 @@ fn write_decision_trace(
     }
 }
 
+/// One traced decision from a --dump-failed-dir game: what the search weighed
+/// (see decision_trace.rs) and what it picked. `trace` is None for zero-search
+/// seats (Greedy/Heuristic anchors have no Gumbel tree).
+#[derive(serde::Serialize)]
+struct TracedDecision {
+    turn: i32,
+    move_count: usize,
+    player_id: PlayerId,
+    chosen: String,
+    root_value: Option<f32>,
+    trace: Option<polyfish::ai::decision_trace::DecisionTrace>,
+}
+
+/// Dump one zero-capture game (no village taken by either player): a
+/// watcher-loadable replay plus the full per-decision trace log, tagged with
+/// the matchup and seat backends. One file pair per game — actor-safe.
+#[allow(clippy::too_many_arguments)]
+fn dump_failed_game(
+    dir: &str,
+    iteration: usize,
+    game_idx: usize,
+    seed: i64,
+    tribes: &[TribeType],
+    backend1: SearchBackend,
+    backend2: SearchBackend,
+    max_turns: i32,
+    scores: &HashMap<i32, i32>,
+    recap: &ModReplay,
+    decisions: &[TracedDecision],
+) {
+    let dir = std::path::Path::new(dir);
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        eprintln!("[dump-failed] failed to create {}: {e}", dir.display());
+        return;
+    }
+    let base = format!("failed_iter{iteration}_game{game_idx}_seed{seed}");
+    match serde_json::to_vec_pretty(recap) {
+        Ok(bytes) => {
+            let path = dir.join(format!("{base}.replay.json"));
+            if let Err(e) = std::fs::write(&path, bytes) {
+                eprintln!("[dump-failed] failed to write {}: {e}", path.display());
+            }
+        }
+        Err(e) => eprintln!("[dump-failed] failed to serialize replay: {e}"),
+    }
+    let wrapped = json!({
+        "iteration": iteration,
+        "game_idx": game_idx,
+        "seed": seed,
+        "tribes": tribes.iter().map(|t| format!("{t:?}")).collect::<Vec<_>>(),
+        "backends": [format!("{backend1:?}"), format!("{backend2:?}")],
+        "max_turns": max_turns,
+        "final_scores": scores,
+        "decisions": decisions,
+    });
+    match serde_json::to_vec(&wrapped) {
+        Ok(bytes) => {
+            let path = dir.join(format!("{base}.decisions.json"));
+            if let Err(e) = std::fs::write(&path, bytes) {
+                eprintln!("[dump-failed] failed to write {}: {e}", path.display());
+            }
+        }
+        Err(e) => eprintln!("[dump-failed] failed to serialize decisions: {e}"),
+    }
+}
+
 /// Up to 5 evenly spaced turn thresholds for periodic in-game progress.
 fn turn_milestones(max_turns: i32) -> Vec<i32> {
     const MAX_REPORTS: usize = 5;
@@ -212,6 +279,11 @@ struct HistoryStep {
     opp_score: i32,
     turn: i32,
     root_value: Option<f32>,
+    /// Ground-truth (unfogged) non-invisible enemy-unit occupancy at decision
+    /// time, POV-relative — the aux_fog_units target.
+    enemy_units: Vec<f32>,
+    my_spt: i32,
+    opp_spt: i32,
 }
 
 /// The subset of `HistoryStep` the TD(lambda) label computation needs —
@@ -317,6 +389,91 @@ fn td_lambda_labels(
         .collect()
 }
 
+/// Per-decision SPT snapshot for the aux_spt target. Parallel to `LabelStep`
+/// rather than riding `Checkpoint`, whose within-turn replace rule is
+/// root-value-driven and unrelated to SPT semantics.
+#[derive(Clone, Copy)]
+struct SptStep {
+    player_id: PlayerId,
+    turn: i32,
+    my_spt: i32,
+    opp_spt: i32,
+}
+
+/// First decision per (player, turn) — SPT at the start of that player's turn.
+fn spt_checkpoints_by_player(steps: &[SptStep]) -> HashMap<PlayerId, Vec<SptStep>> {
+    let mut out: HashMap<PlayerId, Vec<SptStep>> = HashMap::new();
+    for s in steps {
+        let list = out.entry(s.player_id).or_default();
+        if list.last().map_or(true, |c| c.turn != s.turn) {
+            list.push(*s);
+        }
+    }
+    out
+}
+
+/// `[my, opp]` SPT at the first same-player turn >= turn+5, else the final
+/// values (game ended inside the horizon).
+fn spt_target(cps: Option<&Vec<SptStep>>, turn: i32, final_my: i32, final_opp: i32) -> (i32, i32) {
+    cps.and_then(|c| {
+        let i = c.partition_point(|s| s.turn < turn + 5);
+        c.get(i).map(|s| (s.my_spt, s.opp_spt))
+    })
+    .unwrap_or((final_my, final_opp))
+}
+
+/// Multi-hot over `TechnologyType::iter()` POSITION — discriminants are
+/// sparse (-1..121), so raw ids would need a 123-slot vector.
+fn tech_multihot(techs: &[polyfish::states::TechnologyState]) -> Vec<f32> {
+    let order: Vec<polyfish::types::TechnologyType> =
+        polyfish::types::TechnologyType::iter().collect();
+    let mut v = vec![0.0f32; order.len()];
+    for t in techs.iter().filter(|t| t.discovered) {
+        if let Some(p) = order.iter().position(|x| *x == t.tech_type) {
+            v[p] = 1.0;
+        }
+    }
+    v
+}
+
+/// Ground-truth enemy-unit occupancy from the unfogged master state. Skips
+/// `Invisible` units — the engine's single visibility rule.
+fn enemy_unit_grid(state: &GameState, pov: PlayerId, len: usize) -> Vec<f32> {
+    let mut g = vec![0.0f32; len];
+    for (id, t) in &state.tribes {
+        if *id == pov {
+            continue;
+        }
+        for u in &t.units {
+            if u.effects.contains(&polyfish::types::UnitEffect::Invisible) {
+                continue;
+            }
+            let i = u.coords.idx as usize;
+            if i < len {
+                g[i] = 1.0;
+            }
+        }
+    }
+    g
+}
+
+/// End-of-episode tile ownership mapped to the sample's POV: +1 mine,
+/// -1 any opponent, 0 unowned.
+fn ownership_from_pov(final_owner: &[i32], pov: PlayerId) -> Vec<f32> {
+    final_owner
+        .iter()
+        .map(|&o| {
+            if o == pov {
+                1.0
+            } else if o != 0 {
+                -1.0
+            } else {
+                0.0
+            }
+        })
+        .collect()
+}
+
 /// Result from a single game - contains all data needed for training
 struct GameResult {
     history: Vec<HistoryStep>,
@@ -345,12 +502,20 @@ struct GameResult {
     villages_t2c_p50: f32,
     villages_t2c_p80: f32,
     villages_t2c_all: f32,
+    /// Uncensored turn of the first village capture, -1.0 if none happened —
+    /// lets the aggregator split capture-rate from turn-given-captured.
+    villages_first_raw: f32,
     ruins_t2c_p50: f32,
     ruins_t2c_p80: f32,
     ruins_t2c_all: f32,
     /// Mean tribe SPT sampled at the start of game turns 0, 5, 10, … (player 1
     /// to act, before any moves on that turn).
     spt_at_turn: HashMap<i32, f32>,
+    /// End-of-game ground truth for the aux heads: raw per-tile owner ids,
+    /// per-player SPT, and per-player researched-tech multi-hot.
+    final_owner: Vec<i32>,
+    final_spt: HashMap<PlayerId, i32>,
+    final_tech: HashMap<PlayerId, Vec<f32>>,
 }
 
 const SPT_MILESTONES: [i32; 7] = [0, 5, 10, 15, 20, 25, 30];
@@ -453,6 +618,7 @@ fn play_single_game(
     trace_trigger: TraceTrigger,
     trace_max: usize,
     trace_counter: &AtomicUsize,
+    dump_failed_dir: Option<&str>,
 ) -> Option<GameResult> {
     // Curriculum logic — Tiny maps only, gradually increase turn count.
     let (map_size, max_turns) = if iteration <= 25 {
@@ -508,6 +674,11 @@ fn play_single_game(
     let initial_ruins = open_ruins.len();
     let mut village_capture_turns: Vec<i32> = Vec::new();
     let mut ruin_capture_turns: Vec<i32> = Vec::new();
+
+    // --dump-failed-dir: trace every decision; the log is written out only
+    // if the game ends with zero village captures.
+    let trace_all = dump_failed_dir.is_some();
+    let mut decision_log: Vec<TracedDecision> = Vec::new();
 
     let prior_w = (HEURISTIC_PRIOR_W0 * HEURISTIC_PRIOR_DECAY.powi(iteration as i32))
         .max(HEURISTIC_PRIOR_W_FLOOR);
@@ -600,6 +771,7 @@ fn play_single_game(
         let current_agent = if pov == 1 { &mut agent1 } else { &mut agent2 };
 
         let trigger_info = if trace_villages
+            && !trace_all
             && !traced_in_this_game
             && trace_counter.load(Ordering::Relaxed) < trace_max
         {
@@ -607,7 +779,7 @@ fn play_single_game(
         } else {
             None
         };
-        if trigger_info.is_some() {
+        if trace_all || trigger_info.is_some() {
             current_agent.request_trace();
         }
 
@@ -616,6 +788,7 @@ fn play_single_game(
         // this is that state's own root value — the TD bootstrap target for
         // whichever earlier step's label lands here as its "next decision".
         let root_value = current_agent.last_root_value();
+        let step_trace = if trace_all { current_agent.take_trace() } else { None };
 
         if let Some((trigger_unit_idx, trigger_village_idx)) = trigger_info {
             if let Some(trace) = current_agent.take_trace() {
@@ -690,7 +863,9 @@ fn play_single_game(
             for x in &mut p_target {
                 *x /= total_visits;
             }
-            // ... (others)
+            for x in &mut p_option {
+                *x /= total_visits;
+            }
         }
 
         let policy_data = DecomposedPolicyData {
@@ -701,6 +876,16 @@ fn play_single_game(
         };
 
         if let Some(m) = best_move {
+            if trace_all {
+                decision_log.push(TracedDecision {
+                    turn: game.state.settings.turn,
+                    move_count,
+                    player_id: pov,
+                    chosen: m.describe(&game.state),
+                    root_value,
+                    trace: step_trace,
+                });
+            }
             let m_type = m.move_type();
             *action_counts.entry(m_type).or_insert(0) += 1;
             *moves_by_turn
@@ -748,6 +933,20 @@ fn play_single_game(
             ));
             // Snapshot scores at this moment (pre-move) for the TD label.
             let (my_score_now, opp_score_now) = reward::score_snapshot(&game.state, pov);
+            let opp_id = game
+                .state
+                .tribes
+                .keys()
+                .copied()
+                .find(|id| *id != pov)
+                .unwrap_or(pov);
+            let spt_of = |id: PlayerId| {
+                game.state
+                    .tribes
+                    .get(&id)
+                    .map(|t| polyfish::functions::get_tribe_spt(&game.state, t))
+                    .unwrap_or(0)
+            };
             game_history.push(HistoryStep {
                 features: state_t,
                 policy: policy_data,
@@ -756,6 +955,9 @@ fn play_single_game(
                 opp_score: opp_score_now,
                 turn: game.state.settings.turn,
                 root_value,
+                enemy_units: enemy_unit_grid(&game.state, pov, fixed_spatial_size),
+                my_spt: spt_of(pov),
+                opp_spt: spt_of(opp_id),
             });
             if progress == ProgressMode::Full && move_count > 0 && move_count % 10 == 0 {
                 eprintln!(
@@ -845,6 +1047,44 @@ fn play_single_game(
         total_cities += t.cities.len() as i32;
     }
 
+    // Aux-head ground truth; the final state is dropped when this returns.
+    let n_tiles = features::MAP_SIZE * features::MAP_SIZE;
+    let mut final_owner = vec![0i32; n_tiles];
+    for (&idx, tile) in &game.state.tiles {
+        let i = idx as usize;
+        if i < n_tiles {
+            final_owner[i] = tile.owner;
+        }
+    }
+    let mut final_spt = HashMap::new();
+    let mut final_tech = HashMap::new();
+    for (id, t) in &game.state.tribes {
+        final_spt.insert(*id, polyfish::functions::get_tribe_spt(&game.state, t));
+        final_tech.insert(*id, tech_multihot(&t.tech_vanilla));
+    }
+
+    let recap = ModReplay {
+        game_state: initial_state,
+        turns: group_recap(flat_recap),
+    };
+    if let Some(dir) = dump_failed_dir {
+        if village_capture_turns.is_empty() {
+            dump_failed_game(
+                dir,
+                iteration,
+                game_idx,
+                seed,
+                &tribes,
+                backend1,
+                backend2,
+                max_turns,
+                &scores,
+                &recap,
+                &decision_log,
+            );
+        }
+    }
+
     Some(GameResult {
         history: game_history,
         scores,
@@ -857,15 +1097,16 @@ fn play_single_game(
         villages_t2c_p50: t2c_turn(&village_capture_turns, initial_villages, 0.5, max_turns),
         villages_t2c_p80: t2c_turn(&village_capture_turns, initial_villages, 0.8, max_turns),
         villages_t2c_all: t2c_turn(&village_capture_turns, initial_villages, 1.0, max_turns),
+        villages_first_raw: village_capture_turns.first().map_or(-1.0, |&t| t as f32),
         ruins_t2c_p50: t2c_turn(&ruin_capture_turns, initial_ruins, 0.5, max_turns),
         ruins_t2c_p80: t2c_turn(&ruin_capture_turns, initial_ruins, 0.8, max_turns),
         ruins_t2c_all: t2c_turn(&ruin_capture_turns, initial_ruins, 1.0, max_turns),
         spt_at_turn,
+        final_owner,
+        final_spt,
+        final_tech,
         winner_score,
-        recap: ModReplay {
-            game_state: initial_state,
-            turns: group_recap(flat_recap),
-        },
+        recap,
         cap_ruins,
         cap_villages,
         cap_cities,
@@ -1046,6 +1287,13 @@ fn main() -> anyhow::Result<()> {
         /// Ignored unless --trace-villages.
         #[arg(long, default_value_t = 20)]
         trace_max: usize,
+
+        /// Diagnostics: dump games where NO village was captured by either
+        /// player into this dir — <base>.replay.json (watcher-loadable) plus
+        /// <base>.decisions.json (search trace for every decision; forces
+        /// fresh root builds, so within-turn tree reuse is off).
+        #[arg(long)]
+        dump_failed_dir: Option<String>,
     }
 
     let args = Args::parse();
@@ -1424,11 +1672,16 @@ fn main() -> anyhow::Result<()> {
                         (((i + 1) as f32) * args.anchor_frac).floor() as usize;
                     let is_anchor = args.anchor_frac > 0.0
                         && anchor_ordinal > ((i as f32) * args.anchor_frac).floor() as usize;
+                    // Greedy (score_move argmax), not the rollout Heuristic MCTS:
+                    // measured first-village capture 1.00/t6.5 vs 0.94/t8.9 — the
+                    // rollout noise drowned the ordering gradient. Greedy is also
+                    // the exact distribution blend_heuristic_prior injects into the
+                    // net's root, so anchor data and search priors agree.
                     let (backend_seat1, backend_seat2) = if is_anchor {
                         if anchor_ordinal % 2 == 0 {
-                            (SearchBackend::Heuristic, backend)
+                            (SearchBackend::Greedy, backend)
                         } else {
-                            (backend, SearchBackend::Heuristic)
+                            (backend, SearchBackend::Greedy)
                         }
                     } else {
                         (backend, backend)
@@ -1465,6 +1718,7 @@ fn main() -> anyhow::Result<()> {
                             args.trace_trigger,
                             args.trace_max,
                             &trace_counter,
+                            args.dump_failed_dir.as_deref(),
                         )
                     }))
                     .unwrap_or_else(|_| {
@@ -1589,6 +1843,13 @@ fn main() -> anyhow::Result<()> {
     let mut collected_values: Vec<f32> = Vec::new();
     let mut collected_progress: Vec<f32> = Vec::new();
 
+    // Aux-head targets (see the aux_* helpers above GameResult).
+    let num_techs = polyfish::types::TechnologyType::iter().count();
+    let mut collected_aux_own: Vec<Vec<f32>> = Vec::new();
+    let mut collected_aux_fog: Vec<Vec<f32>> = Vec::new();
+    let mut collected_aux_spt: Vec<f32> = Vec::new(); // flat, 2 per step
+    let mut collected_aux_tech: Vec<Vec<f32>> = Vec::new();
+
     let mut total_score = 0;
     let mut max_score = 0;
     let mut best_recap: Option<ModReplay> = None;
@@ -1611,6 +1872,8 @@ fn main() -> anyhow::Result<()> {
     let mut total_revealed_tiles: i64 = 0;
     let mut total_captured_tiles: i64 = 0;
     let mut total_t2c = [0.0f64; 7]; // villages first/p50/p80/all, ruins p50/p80/all
+    let mut first_cap_games = 0usize;
+    let mut first_cap_turn_sum = 0.0f64;
     let mut spt_sums: HashMap<i32, f64> = HashMap::new();
     let mut spt_counts: HashMap<i32, u32> = HashMap::new();
 
@@ -1636,6 +1899,10 @@ fn main() -> anyhow::Result<()> {
             result.ruins_t2c_all,
         ]) {
             *acc += v as f64;
+        }
+        if result.villages_first_raw >= 0.0 {
+            first_cap_games += 1;
+            first_cap_turn_sum += result.villages_first_raw as f64;
         }
         if result.winner_score > max_score {
             max_score = result.winner_score;
@@ -1698,6 +1965,18 @@ fn main() -> anyhow::Result<()> {
         let label_steps: Vec<LabelStep> = result.history.iter().map(LabelStep::from).collect();
         let td_deltas = td_lambda_labels(&label_steps, final_scores, LAMBDA_RETURN);
 
+        let spt_steps: Vec<SptStep> = result
+            .history
+            .iter()
+            .map(|s| SptStep {
+                player_id: s.player_id,
+                turn: s.turn,
+                my_spt: s.my_spt,
+                opp_spt: s.opp_spt,
+            })
+            .collect();
+        let spt_cp = spt_checkpoints_by_player(&spt_steps);
+
         // Determine the winner_id for this game
         let game_winner_id = {
             // Check who survived (alive = not killed)
@@ -1719,6 +1998,8 @@ fn main() -> anyhow::Result<()> {
                 features,
                 policy: policy_data,
                 player_id: p_id,
+                turn,
+                enemy_units,
                 ..
             } = step;
             let flat_map = features
@@ -1796,6 +2077,29 @@ fn main() -> anyhow::Result<()> {
                 -1.0
             };
             collected_progress.push(progress_target);
+
+            let opp_id = final_scores
+                .keys()
+                .copied()
+                .find(|id| *id != p_id)
+                .unwrap_or(p_id);
+            collected_aux_own.push(ownership_from_pov(&result.final_owner, p_id));
+            collected_aux_fog.push(enemy_units);
+            let (spt_my, spt_opp) = spt_target(
+                spt_cp.get(&p_id),
+                turn,
+                result.final_spt.get(&p_id).copied().unwrap_or(0),
+                result.final_spt.get(&opp_id).copied().unwrap_or(0),
+            );
+            collected_aux_spt.push(spt_my as f32 / 20.0);
+            collected_aux_spt.push(spt_opp as f32 / 20.0);
+            collected_aux_tech.push(
+                result
+                    .final_tech
+                    .get(&opp_id)
+                    .cloned()
+                    .unwrap_or_else(|| vec![0.0; num_techs]),
+            );
         }
     }
 
@@ -1917,6 +2221,25 @@ fn main() -> anyhow::Result<()> {
         let values_tensor = Tensor::from_vec(collected_values, (total_steps, 1), &device)?;
         let progress_tensor = Tensor::from_vec(collected_progress, (total_steps, 1), &device)?;
 
+        // Aux-head targets — always emitted together (train.py's per-file
+        // presence mask treats them as all-or-nothing).
+        let aux_own_tensor = Tensor::from_vec(
+            flatten_vec(collected_aux_own),
+            (total_steps, spatial_logit_dim),
+            &device,
+        )?;
+        let aux_fog_tensor = Tensor::from_vec(
+            flatten_vec(collected_aux_fog),
+            (total_steps, spatial_logit_dim),
+            &device,
+        )?;
+        let aux_spt_tensor = Tensor::from_vec(collected_aux_spt, (total_steps, 2), &device)?;
+        let aux_tech_tensor = Tensor::from_vec(
+            flatten_vec(collected_aux_tech),
+            (total_steps, num_techs),
+            &device,
+        )?;
+
         let mut tensors = HashMap::new();
         tensors.insert("spatial_maps".to_string(), spatial_maps_tensor);
         tensors.insert("player_states".to_string(), player_states_tensor);
@@ -1928,6 +2251,11 @@ fn main() -> anyhow::Result<()> {
 
         tensors.insert("values".to_string(), values_tensor);
         tensors.insert("progress".to_string(), progress_tensor);
+
+        tensors.insert("aux_ownership".to_string(), aux_own_tensor);
+        tensors.insert("aux_fog_units".to_string(), aux_fog_tensor);
+        tensors.insert("aux_spt".to_string(), aux_spt_tensor);
+        tensors.insert("aux_opp_tech".to_string(), aux_tech_tensor);
 
         candle_core::safetensors::save(&tensors, &games_file)?;
 
@@ -1976,6 +2304,17 @@ fn main() -> anyhow::Result<()> {
         "avg_spt_t25": avg_spt_at(25),
         "avg_spt_t30": avg_spt_at(30),
         "villages_t2c_first": (total_t2c[0] / args.num_games as f64) as f32,
+        "villages_first_rate": (first_cap_games as f64 / args.num_games as f64) as f32,
+        "villages_t2c_first_cond": if first_cap_games > 0 {
+            (first_cap_turn_sum / first_cap_games as f64) as f32
+        } else {
+            -1.0
+        },
+        "tribes": format!(
+            "{}+{}",
+            args.tribe1.as_deref().unwrap_or("random"),
+            args.tribe2.as_deref().unwrap_or("random")
+        ),
         "villages_t2c_p50": (total_t2c[1] / args.num_games as f64) as f32,
         "villages_t2c_p80": (total_t2c[2] / args.num_games as f64) as f32,
         "villages_t2c_all": (total_t2c[3] / args.num_games as f64) as f32,
@@ -2140,5 +2479,118 @@ mod td_lambda_tests {
             "got {}, expected {expected}",
             out[0]
         );
+    }
+}
+
+#[cfg(test)]
+mod aux_target_tests {
+    use super::*;
+    use polyfish::coords::Coords;
+    use polyfish::states::{TechnologyState, TribeState, UnitState};
+    use polyfish::types::{TechnologyType, UnitEffect};
+
+    #[test]
+    fn tech_multihot_uses_iter_position_not_discriminant() {
+        let mk = |tech_type, discovered| TechnologyState {
+            tech_type,
+            discovered,
+            discovered_turn: 0,
+        };
+        let techs = vec![
+            mk(TechnologyType::Riding, true),
+            mk(TechnologyType::ShockTactics, true),
+            mk(TechnologyType::Rituals, true),
+            mk(TechnologyType::Fishing, false),
+        ];
+        let v = tech_multihot(&techs);
+        let n = TechnologyType::iter().count();
+        assert_eq!(v.len(), n);
+        assert_eq!(v.iter().filter(|&&x| x == 1.0).count(), 3);
+        let rituals_pos = TechnologyType::iter()
+            .position(|t| t == TechnologyType::Rituals)
+            .unwrap();
+        assert_eq!(v[rituals_pos], 1.0);
+        // Discriminant-indexed encoding would need a slot at 121 >= n.
+        assert!(TechnologyType::Rituals as usize >= n);
+    }
+
+    #[test]
+    fn ownership_from_pov_maps_signs() {
+        let owner = vec![0, 1, 2];
+        assert_eq!(ownership_from_pov(&owner, 1), vec![0.0, 1.0, -1.0]);
+        assert_eq!(ownership_from_pov(&owner, 2), vec![0.0, -1.0, 1.0]);
+    }
+
+    #[test]
+    fn enemy_unit_grid_excludes_pov_invisible_and_bounds() {
+        let unit = |owner: PlayerId, idx: i32, invisible: bool| {
+            let mut u = UnitState {
+                owner,
+                coords: Coords::from_index(idx, 11),
+                ..Default::default()
+            };
+            if invisible {
+                u.effects.insert(UnitEffect::Invisible);
+            }
+            u
+        };
+        let mut state = GameState::default();
+        let mut t1 = TribeState::default();
+        t1.units.push(unit(1, 5, false));
+        let mut t2 = TribeState::default();
+        t2.units.push(unit(2, 17, false));
+        t2.units.push(unit(2, 30, true)); // invisible: excluded
+        t2.units.push(unit(2, 500, false)); // out of range: excluded
+        state.tribes.insert(1, t1);
+        state.tribes.insert(2, t2);
+
+        let g = enemy_unit_grid(&state, 1, 121);
+        let set: Vec<usize> = g
+            .iter()
+            .enumerate()
+            .filter(|&(_, &v)| v == 1.0)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(set, vec![17]);
+    }
+
+    fn sstep(player_id: PlayerId, turn: i32, my: i32, opp: i32) -> SptStep {
+        SptStep {
+            player_id,
+            turn,
+            my_spt: my,
+            opp_spt: opp,
+        }
+    }
+
+    #[test]
+    fn spt_checkpoints_keep_first_decision_per_turn() {
+        let steps = vec![sstep(1, 3, 5, 4), sstep(1, 3, 9, 9), sstep(1, 4, 6, 5)];
+        let cp = spt_checkpoints_by_player(&steps);
+        let c1 = &cp[&1];
+        assert_eq!(c1.len(), 2);
+        assert_eq!((c1[0].turn, c1[0].my_spt), (3, 5));
+        assert_eq!((c1[1].turn, c1[1].my_spt), (4, 6));
+    }
+
+    #[test]
+    fn spt_target_five_turn_lookup_and_final_fallback() {
+        let steps = vec![
+            sstep(1, 0, 2, 2),
+            sstep(1, 3, 4, 3),
+            sstep(1, 9, 8, 6),
+            sstep(1, 12, 10, 9),
+        ];
+        let cp = spt_checkpoints_by_player(&steps);
+        // T=3: first turn >= 8 is 9.
+        assert_eq!(spt_target(cp.get(&1), 3, 99, 99), (8, 6));
+        // T=4: exact boundary, turn 9 == 4+5.
+        assert_eq!(spt_target(cp.get(&1), 4, 99, 99), (8, 6));
+        // T=7: first turn >= 12 is 12 (present exactly).
+        assert_eq!(spt_target(cp.get(&1), 7, 0, 0), (10, 9));
+        // T=9: nothing at >= 14 -> final fallback.
+        assert_eq!(spt_target(cp.get(&1), 9, 99, 98), (99, 98));
+        // Unknown player -> final fallback.
+        assert_eq!(spt_target(cp.get(&7), 0, 1, 2), (1, 2));
     }
 }

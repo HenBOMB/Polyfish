@@ -348,6 +348,17 @@ pub struct TechnologyState {
     pub discovered_turn: i32,
 }
 
+/// Last visible sighting of an enemy unit that left this tribe's vision.
+/// Keyed per tile in `TribeState::enemy_ghosts`; last-writer-wins when two
+/// units depart across the same fog tile.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GhostRecord {
+    pub unit_type: UnitType,
+    pub owner: PlayerId,
+    pub turn: i32,
+}
+
 /// State of a tribe/player
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -400,6 +411,13 @@ pub struct TribeState {
     pub pacifist_turns: i32,
     #[serde(default)]
     pub conversions: i32,
+    /// Enemy unit types this tribe has ever legitimately observed (permanent,
+    /// real-moves only — the `explorers` archetype; never mutated in MCTS sims).
+    #[serde(default)]
+    pub enemy_types_seen: HashSet<UnitType>,
+    /// Ghost sightings: tile idx -> last enemy unit seen departing into fog there.
+    #[serde(default)]
+    pub enemy_ghosts: std::collections::HashMap<i32, GhostRecord>,
 }
 
 impl Default for TribeState {
@@ -427,6 +445,8 @@ impl Default for TribeState {
             attacked_this_turn: false,
             pacifist_turns: 0,
             conversions: 0,
+            enemy_types_seen: HashSet::new(),
+            enemy_ghosts: std::collections::HashMap::new(),
         }
     }
 }
@@ -675,10 +695,13 @@ impl GameState {
         for (id, tribe) in self.tribes.iter_mut() {
             if *id != pov_id {
                 tribe.units.retain(|u| visible_tiles.contains(&u.coords.idx));
-                // We do NOT remove cities because that breaks production, 
-                // but their exact coordinates could be an issue if the AI tries to attack a fog tile.
-                // For now, removing them is the safest way to prevent data leaks.
+                // Drop fogged enemy cities too: keeping them leaks exact
+                // coordinates through fog, and hidden tribes' production
+                // doesn't matter in an obscured POV snapshot.
                 tribe.cities.retain(|c| visible_tiles.contains(&c.idx));
+                // Other tribes' observation memory is their dossier on us — strip it.
+                tribe.enemy_types_seen.clear();
+                tribe.enemy_ghosts.clear();
             }
         }
     }

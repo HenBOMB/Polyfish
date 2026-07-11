@@ -3,7 +3,10 @@ use polyfish::mapgen::{generate, MapGenSettings};
 use polyfish::types::{MapSize, TribeType};
 use std::time::Instant;
 
+// Perf timing printout, not a correctness check; ~4min on debug builds.
+// Run explicitly with `cargo test -- --ignored`.
 #[test]
+#[ignore]
 fn benchmark_simulator() {
     // Setup
     let mut settings = MapGenSettings::default();

@@ -19,8 +19,8 @@ from train import PolyZeroNet
 
 def init_model():
     MAP_SIZE = 11
-    SPATIAL_CHANNELS = 136
-    PLAYER_STATE_DIM = 16
+    SPATIAL_CHANNELS = 161  # Mirror of features.rs NUM_CHANNELS
+    PLAYER_STATE_DIM = 10
     
     # Check if model already exists to avoid overwriting trained weights!
     import os
@@ -41,7 +41,7 @@ def init_model():
             nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.BatchNorm2d):
+        elif isinstance(m, (nn.GroupNorm, nn.LayerNorm)):
             nn.init.constant_(m.weight, 1)
             nn.init.constant_(m.bias, 0)
         elif isinstance(m, nn.Linear):
@@ -77,14 +77,18 @@ def init_model():
     
     model2.eval()
     with torch.no_grad():
-        policy, values = model2(spatial_input, player_input)
+        policy, values, aux = model2(spatial_input, player_input)
     
-    print(f"  Policy outputs:")
+    print("  Policy outputs:")
     for name, tensor in policy.items():
         print(f"    {name}: {tensor.shape}")
     
-    print(f"  Value outputs:")
+    print("  Value outputs:")
     for name, tensor in values.items():
+        print(f"    {name}: {tensor.shape}")
+
+    print("  Aux outputs (training-only):")
+    for name, tensor in aux.items():
         print(f"    {name}: {tensor.shape}")
     
     print("\n✅ Model initialization complete!")
