@@ -1,6 +1,7 @@
 use axum::{
     Json, Router,
     extract::State,
+    handler::HandlerWithoutStateExt,
     routing::{get, post},
 };
 use polyfish::mapgen::{MapGenSettings, generate};
@@ -175,9 +176,27 @@ async fn main() {
         .route("/replay/list_initial", get(list_initial_endpoint))
         .route("/trainer/hint", post(get_trainer_hint))
         .route("/system/cpu", get(get_cpu_usage))
-        .fallback(spa_fallback)
-        .nest_service("/assets", ServeDir::new("../src/public/assets"))
-        .nest_service("/static", ServeDir::new("../src/public"))
+        .route("/api/runs", get(polyfish::training_api::api_runs))
+        .route(
+            "/api/training-metrics",
+            get(polyfish::training_api::api_training_metrics),
+        )
+        .route(
+            "/api/moves-by-turn",
+            get(polyfish::training_api::api_moves_by_turn),
+        )
+        .route(
+            "/api/value-distribution",
+            get(polyfish::training_api::api_value_distribution),
+        )
+        .nest_service("/assets", ServeDir::new("../polyfish-ui/dist/assets"))
+        .nest_service("/simulator", ServeDir::new("../polyfish-ui/dist/simulator"))
+        .nest_service("/static", ServeDir::new("../polyfish-ui/dist"))
+        // Serve real files (training.html, js/, css/) from public; unmatched
+        // paths still fall back to index.html for SPA routing.
+        .fallback_service(
+            ServeDir::new("../polyfish-ui/dist").not_found_service(spa_fallback.into_service()),
+        )
         .layer(CorsLayer::permissive())
         .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 50))
         .with_state(shared_state);
@@ -293,7 +312,10 @@ async fn auto_step(
         use polyfish::ai::brain::Brain;
         use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
         let evaluator = Evaluator::Inline(InlineEvalHandle::new(net.clone()));
-        let mut brain = Brain::new(&evaluator, params.iterations);
+        let mut brain = Brain::with_backend(&evaluator, params.iterations, polyfish::ai::brain::SearchBackend::Gumbel { k: 16 })
+            .with_prior_heuristic_weight(0.1)
+            .with_policy_target_q_weight(1.0)
+            .with_tree_q_weight(1.0);
         game.state._messages.clear();
         let (chosen_move, brain_policy) = brain.think_with_stats(&mut game);
         policy = brain_policy.into();
@@ -920,7 +942,10 @@ async fn get_trainer_hint(
         use polyfish::ai::brain::Brain;
         use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
         let evaluator = Evaluator::Inline(InlineEvalHandle::new(net.clone()));
-        let mut brain = Brain::new(&evaluator, params.iterations);
+        let mut brain = Brain::with_backend(&evaluator, params.iterations, polyfish::ai::brain::SearchBackend::Gumbel { k: 16 })
+            .with_prior_heuristic_weight(0.1)
+            .with_policy_target_q_weight(1.0)
+            .with_tree_q_weight(1.0);
         let (bm, _stats) = brain.think_with_stats(&mut game);
         // Brain currently returns stats as Vec<f32>, convert to simpler MCTS analysis or similar
         // For visual consistency, we actually prefer the full analysis from heuristic agent
@@ -1820,7 +1845,7 @@ async fn get_cpu_usage() -> Json<Value> {
 
 async fn spa_fallback() -> impl axum::response::IntoResponse {
     use axum::response::IntoResponse;
-    let index_path = std::path::Path::new("../src/public/index.html");
+    let index_path = std::path::Path::new("../polyfish-ui/dist/index.html");
     match std::fs::read_to_string(index_path) {
         Ok(html) => axum::response::Html(html).into_response(),
         Err(_) => (axum::http::StatusCode::NOT_FOUND, "index.html not found").into_response(),

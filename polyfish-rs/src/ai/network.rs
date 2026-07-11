@@ -148,6 +148,7 @@ pub struct PolyZeroNet {
 
     // Cross-Attention integration
     player_feature_embeddings: Tensor, // [10, 64]
+    player_pos_embeddings: Tensor,     // [10, 64]
     player_fc: Linear,
     cross_attention: CrossAttention,
 
@@ -173,7 +174,7 @@ impl PolyZeroNet {
         let filters = 64;
         let blocks = 6;
         let input_channels = crate::ai::features::NUM_CHANNELS;
-        let player_state_dim = 10;
+        let player_state_dim = crate::ai::features::RawFeatures::PLAYER_STATE_DIM;
         let num_action_types = 11;
         let num_options = 192;
 
@@ -190,6 +191,10 @@ impl PolyZeroNet {
         let player_feature_embeddings = vs.get(
             (player_state_dim as usize, filters),
             "player_feature_embeddings",
+        )?;
+        let player_pos_embeddings = vs.get(
+            (player_state_dim as usize, filters),
+            "player_pos_embeddings",
         )?;
         let player_fc = candle_nn::linear(filters, filters, vs.pp("player_fc"))?;
 
@@ -227,6 +232,7 @@ impl PolyZeroNet {
             bn1,
             res_blocks,
             player_feature_embeddings,
+            player_pos_embeddings,
             player_fc,
             cross_attention,
             p_pool_conv,
@@ -271,6 +277,7 @@ impl PolyZeroNet {
         let p_tokens = player_input
             .unsqueeze(2)?
             .broadcast_mul(&self.player_feature_embeddings.unsqueeze(0)?)?;
+        let p_tokens = p_tokens.broadcast_add(&self.player_pos_embeddings.unsqueeze(0)?)?;
         let p_tokens = self.player_fc.forward(&p_tokens)?.relu()?;
 
         // 3. Apply Cross-Attention
@@ -306,7 +313,7 @@ impl PolyZeroNet {
         let v_pooled = v_pooled.relu()?;
         let v_pooled = v_pooled.flatten_from(1)?;
         let v_latent = self.v_fc_shared.forward(&v_pooled)?.relu()?;
-        let v_win = self.v_win.forward(&v_latent)?.tanh()?;
+        let v_win = self.v_win.forward(&v_latent)?;
         let v_progress = self.v_progress.forward(&v_latent)?;
 
         Ok((policy_output, ValueOutput { win_value: v_win, progress_value: v_progress }))

@@ -178,7 +178,8 @@ impl TchPolyZeroNet {
         let spatial_tokens = x.flatten(2, 3).transpose(1, 2);
         // player tokens: player[B,10,1] * embeddings[1,10,D] -> [B,10,D]
         let emb = self.get("player_feature_embeddings").unsqueeze(0);
-        let player_tokens = player.unsqueeze(-1) * emb;
+        let pos_emb = self.get("player_pos_embeddings").unsqueeze(0);
+        let player_tokens = player.unsqueeze(-1) * emb + pos_emb;
         let player_tokens = self.linear(&player_tokens, "player_fc").relu();
 
         // 3. Cross-attention, back to [B, D, H, W]
@@ -201,7 +202,7 @@ impl TchPolyZeroNet {
         let v_pooled = self.conv2d(&x, "v_pool_conv", 0);
         let v_pooled = self.batch_norm(&v_pooled, "v_pool_bn").relu().flatten(1, 3);
         let v_latent = self.linear(&v_pooled, "v_fc_shared").relu();
-        let win = self.linear(&v_latent, "v_win").tanh(); // [B, 1]
+        let win = self.linear(&v_latent, "v_win"); // [B, 1]
 
         // Read value + 4 policy heads back to CPU in a SINGLE device->CPU
         // copy. Each .to_device(Cpu) on MPS forces a commit +

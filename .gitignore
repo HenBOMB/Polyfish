@@ -35,17 +35,19 @@ games_*.safetensors
 polyfish-rs/config.json
 
 # Runtime logs & artifacts
-polyfish-rs/session.log
-polyfish-rs/session.old.log
+polyfish-rs/*.log
 polyfish-rs/old_sessions/
 polyfish-rs/test_output.txt
-polyfish-rs/training.poly.log
-polyfish-rs/server_restart.log
 polyfish-rs/replays/high_scores/
+polyfish-rs/models/*
 
 # Binary model weights (use releases/LFS for these)
 polyfish-rs/model.safetensors
+polyfish-rs/model.safetensors.bak
 polyfish-rs/.training.pid
+polyfish-rs/.current_run
+polyfish-rs/server.log
+polyfish-rs/checkpoints_old/
 
 # Telemetry JSON
 polyfish-rs/.*.json

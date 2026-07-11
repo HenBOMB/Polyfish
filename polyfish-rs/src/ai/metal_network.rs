@@ -43,7 +43,7 @@ use std::time::Instant;
 const FILTERS: usize = 64;
 const NHEAD: usize = 4;
 const HEAD_DIM: usize = FILTERS / NHEAD; // 16
-const PLAYER_DIM: usize = 10;
+const PLAYER_DIM: usize = 16;
 const SPATIAL: usize = MAP_SIZE * MAP_SIZE; // 121
 const BN_EPS: f64 = 1e-5;
 const LN_EPS: f64 = 1e-5;
@@ -559,12 +559,20 @@ impl MetalPolyZeroNet {
             "player_feature_embeddings",
             &[1, PLAYER_DIM, FILTERS],
         );
+        let pos_emb = self.const_shape(
+            &graph,
+            "player_pos_embeddings",
+            &[1, PLAYER_DIM, FILTERS],
+        );
         let player_r = graph
             .reshape(&player_ph, &[b, PLAYER_DIM, 1], None)
             .expect("forward: reshape player");
-        let player_tokens_raw = graph
+        let player_tokens_mul = graph
             .multiplication(&player_r, &emb, None)
             .expect("forward: player * embeddings");
+        let player_tokens_raw = graph
+            .addition(&player_tokens_mul, &pos_emb, None)
+            .expect("forward: add pos embeddings");
         let player_tokens_lin = self.linear(&graph, &player_tokens_raw, "player_fc");
         let player_tokens = graph
             .relu(&player_tokens_lin, None)
@@ -619,9 +627,7 @@ impl MetalPolyZeroNet {
         let v_latent_lin = self.linear(&graph, &v_pooled, "v_fc_shared");
         let v_latent = graph.relu(&v_latent_lin, None).expect("forward: relu v_fc_shared");
         let win_raw = self.linear(&graph, &v_latent, "v_win");
-        let win = graph
-            .unary_arithmetic(UnaryArithmeticOp::Tanh, &win_raw, None)
-            .expect("forward: tanh win"); // [B, 1]
+        let win = win_raw; // [B, 1]
 
         // Compile for this fixed batch size. The `Executable` is
         // self-contained; `graph` and its intermediate `Tensor`s (including

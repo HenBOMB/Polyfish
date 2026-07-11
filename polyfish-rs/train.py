@@ -95,6 +95,7 @@ class PolyZeroNet(nn.Module):
         # Player state tokens: Project each of the 10 features into 64-dim embeddings
         # We learn a base embedding for each feature index and scale it by the value
         self.player_feature_embeddings = nn.Parameter(torch.randn(player_state_dim, self.filters))
+        self.player_pos_embeddings = nn.Parameter(torch.randn(player_state_dim, self.filters))
         self.player_fc = nn.Linear(self.filters, self.filters)
         self.player_relu = nn.ReLU()
         
@@ -142,6 +143,7 @@ class PolyZeroNet(nn.Module):
         # 2. Prepare Cross-Attention Inputs
         spatial_tokens = x.flatten(2).transpose(1, 2)
         player_tokens = player_state.unsqueeze(-1) * self.player_feature_embeddings.unsqueeze(0)
+        player_tokens = player_tokens + self.player_pos_embeddings.unsqueeze(0)
         player_tokens = self.player_relu(self.player_fc(player_tokens))
         
         # 3. Apply Cross-Attention
@@ -166,7 +168,7 @@ class PolyZeroNet(nn.Module):
         v_latent = self.relu(self.v_fc_shared(v_pooled))
         
         values = {}
-        values['win'] = torch.tanh(self.v_win(v_latent))
+        values['win'] = self.v_win(v_latent)
         values['progress'] = self.v_progress(v_latent)
         
         return policy, values
@@ -252,8 +254,8 @@ def train():
     
     # 2. Init Model
     MAP_SIZE = 11
-    SPATIAL_CHANNELS = 154
-    PLAYER_STATE_DIM = 10
+    SPATIAL_CHANNELS = 136
+    PLAYER_STATE_DIM = 16
 
     model = PolyZeroNet(SPATIAL_CHANNELS, PLAYER_STATE_DIM, MAP_SIZE, MAP_SIZE).to(DEVICE)
     if os.path.exists("model.safetensors"):
