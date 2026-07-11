@@ -167,6 +167,10 @@ pub struct PolyZeroNet {
     v_fc_shared: Linear,
     v_win: Linear,
     v_progress: Linear,
+    // Aux ownership head (train.py's v_ownership): per-tile end-of-game
+    // ownership. Training-only signal — search never reads it. Optional so
+    // checkpoints that predate the head (league/arena opponents) still load.
+    v_ownership: Option<Conv2d>,
 }
 
 impl PolyZeroNet {
@@ -226,6 +230,14 @@ impl PolyZeroNet {
         )?;
         let v_win = candle_nn::linear(filters, 1, vs.pp("v_win"))?;
         let v_progress = candle_nn::linear(filters, 1, vs.pp("v_progress"))?;
+        // NB: a VarMap-backed builder (bin/train.rs) reports false here, so
+        // the candle trainer neither trains nor re-saves these weights —
+        // train.py re-inits the head after a candle-trainer save.
+        let v_ownership = if vs.contains_tensor("v_ownership.weight") {
+            Some(conv(filters, 1, 1, 1, 0, vs.pp("v_ownership"))?)
+        } else {
+            None
+        };
 
         Ok(Self {
             conv1,
@@ -247,6 +259,7 @@ impl PolyZeroNet {
             v_fc_shared,
             v_win,
             v_progress,
+            v_ownership,
         })
     }
 
@@ -315,8 +328,16 @@ impl PolyZeroNet {
         let v_latent = self.v_fc_shared.forward(&v_pooled)?.relu()?;
         let v_win = self.v_win.forward(&v_latent)?;
         let v_progress = self.v_progress.forward(&v_latent)?;
+        let v_ownership = match &self.v_ownership {
+            Some(head) => Some(head.forward(&shared)?.flatten_from(1)?),
+            None => None,
+        };
 
-        Ok((policy_output, ValueOutput { win_value: v_win, progress_value: v_progress }))
+        Ok((policy_output, ValueOutput {
+            win_value: v_win,
+            progress_value: v_progress,
+            ownership_value: v_ownership,
+        }))
     }
 
     pub fn forward(
@@ -346,6 +367,9 @@ pub struct PolicyOutput {
 pub struct ValueOutput {
     pub win_value: Tensor, // [B, 1]
     pub progress_value: Tensor, // [B, 1]
+    /// Aux ownership head output, [B, H*W]. None on checkpoints that predate
+    /// the head. Diagnostics only — search must never read this.
+    pub ownership_value: Option<Tensor>,
 }
 
 /// Device-free policy output for a single leaf: one row of each decomposed
@@ -361,6 +385,91 @@ pub struct RawPolicyOutput {
     pub source_spatial: Vec<f32>,
     pub target_spatial: Vec<f32>,
     pub move_option: Vec<f32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_core::Device;
+    use candle_nn::VarMap;
+
+    fn forward_dummy(net: &PolyZeroNet, device: &Device) -> (PolicyOutput, ValueOutput) {
+        let map = Tensor::zeros(
+            (2, crate::ai::features::NUM_CHANNELS, crate::ai::features::MAP_SIZE, crate::ai::features::MAP_SIZE),
+            candle_core::DType::F32,
+            device,
+        )
+        .unwrap();
+        let player = Tensor::zeros(
+            (2, crate::ai::features::RawFeatures::PLAYER_STATE_DIM),
+            candle_core::DType::F32,
+            device,
+        )
+        .unwrap();
+        net.forward(&map, &player).unwrap()
+    }
+
+    /// Both checkpoint generations must load: files predating the aux
+    /// ownership head leave it None; files carrying v_ownership.* populate it.
+    #[test]
+    fn test_optional_ownership_head_load() {
+        let device = Device::Cpu;
+        let dir = std::env::temp_dir();
+        let old_path = dir.join("polyfish_test_net_pre_ownership.safetensors");
+        let new_path = dir.join("polyfish_test_net_with_ownership.safetensors");
+
+        // A fresh VarMap-backed net registers no ownership head, so its save
+        // is byte-equivalent to a pre-ownership checkpoint.
+        let varmap = VarMap::new();
+        let vs = candle_nn::VarBuilder::from_varmap(&varmap, candle_core::DType::F32, &device);
+        let _ = PolyZeroNet::new(vs).unwrap();
+        varmap.save(&old_path).unwrap();
+
+        let vs_old = unsafe {
+            candle_nn::VarBuilder::from_mmaped_safetensors(
+                &[old_path.clone()],
+                candle_core::DType::F32,
+                &device,
+            )
+            .unwrap()
+        };
+        let net_old = PolyZeroNet::new(vs_old).unwrap();
+        assert!(net_old.v_ownership.is_none());
+        let (_, values) = forward_dummy(&net_old, &device);
+        assert!(values.ownership_value.is_none());
+
+        // Same checkpoint plus v_ownership.* (train.py layout) -> head loads.
+        let mut tensors = candle_core::safetensors::load(&old_path, &device).unwrap();
+        tensors.insert(
+            "v_ownership.weight".to_string(),
+            Tensor::zeros((1, 64, 1, 1), candle_core::DType::F32, &device).unwrap(),
+        );
+        tensors.insert(
+            "v_ownership.bias".to_string(),
+            Tensor::zeros(1, candle_core::DType::F32, &device).unwrap(),
+        );
+        candle_core::safetensors::save(&tensors, &new_path).unwrap();
+
+        let vs_new = unsafe {
+            candle_nn::VarBuilder::from_mmaped_safetensors(
+                &[new_path.clone()],
+                candle_core::DType::F32,
+                &device,
+            )
+            .unwrap()
+        };
+        let net_new = PolyZeroNet::new(vs_new).unwrap();
+        assert!(net_new.v_ownership.is_some());
+        let (_, values) = forward_dummy(&net_new, &device);
+        let ownership = values.ownership_value.unwrap();
+        assert_eq!(
+            ownership.dims(),
+            &[2, crate::ai::features::MAP_SIZE * crate::ai::features::MAP_SIZE]
+        );
+
+        let _ = std::fs::remove_file(old_path);
+        let _ = std::fs::remove_file(new_path);
+    }
 }
 
 impl PolicyOutput {

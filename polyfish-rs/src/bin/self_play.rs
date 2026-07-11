@@ -323,6 +323,9 @@ struct GameResult {
     scores: HashMap<i32, i32>,
     final_cities: HashMap<i32, i32>,
     total_cities: i32,
+    /// End-of-game tile owner per grid cell (row-major y*MAP_SIZE+x, 0 =
+    /// neutral) — the aux ownership-head target, re-signed per sample POV.
+    final_tile_owners: Vec<i32>,
     moves: usize,
     winner_score: i32,
     recap: ModReplay,
@@ -825,6 +828,16 @@ fn play_single_game(
     }
 
     let captured_tiles = game.state.tiles.values().filter(|t| t.owner != 0).count() as i32;
+
+    let mut final_tile_owners = vec![0i32; features::MAP_SIZE * features::MAP_SIZE];
+    let size = game.state.settings.size;
+    for (idx, tile) in &game.state.tiles {
+        let x = (idx % size) as usize;
+        let y = (idx / size) as usize;
+        if x < features::MAP_SIZE && y < features::MAP_SIZE {
+            final_tile_owners[y * features::MAP_SIZE + x] = tile.owner;
+        }
+    }
     let revealed_tiles: i32 = game
         .state
         .tribes
@@ -850,6 +863,7 @@ fn play_single_game(
         scores,
         final_cities,
         total_cities,
+        final_tile_owners,
         moves: move_count,
         revealed_tiles,
         captured_tiles,
@@ -1588,6 +1602,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut collected_values: Vec<f32> = Vec::new();
     let mut collected_progress: Vec<f32> = Vec::new();
+    let mut collected_ownership: Vec<Vec<f32>> = Vec::new();
 
     let mut total_score = 0;
     let mut max_score = 0;
@@ -1796,6 +1811,24 @@ fn main() -> anyhow::Result<()> {
                 -1.0
             };
             collected_progress.push(progress_target);
+
+            // Final ownership re-signed to this sample's POV, matching the
+            // CH_TILE_OWNER input convention (+1 mine / -1 enemy / 0 neutral).
+            collected_ownership.push(
+                result
+                    .final_tile_owners
+                    .iter()
+                    .map(|&o| {
+                        if o == p_id {
+                            1.0
+                        } else if o != 0 {
+                            -1.0
+                        } else {
+                            0.0
+                        }
+                    })
+                    .collect(),
+            );
         }
     }
 
@@ -1916,6 +1949,11 @@ fn main() -> anyhow::Result<()> {
         // Values
         let values_tensor = Tensor::from_vec(collected_values, (total_steps, 1), &device)?;
         let progress_tensor = Tensor::from_vec(collected_progress, (total_steps, 1), &device)?;
+        let ownership_tensor = Tensor::from_vec(
+            flatten_vec(collected_ownership),
+            (total_steps, spatial_logit_dim),
+            &device,
+        )?;
 
         let mut tensors = HashMap::new();
         tensors.insert("spatial_maps".to_string(), spatial_maps_tensor);
@@ -1928,6 +1966,7 @@ fn main() -> anyhow::Result<()> {
 
         tensors.insert("values".to_string(), values_tensor);
         tensors.insert("progress".to_string(), progress_tensor);
+        tensors.insert("ownership".to_string(), ownership_tensor);
 
         candle_core::safetensors::save(&tensors, &games_file)?;
 

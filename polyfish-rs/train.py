@@ -30,6 +30,12 @@ VALUE_LOSS_WEIGHT = float(os.environ.get("VALUE_LOSS_WEIGHT", "3.0"))
 # Forward-pass values are identical either way, so this is training-only and
 # needs no change on the Rust/candle inference side.
 DETACH_VALUE_TRUNK = os.environ.get("DETACH_VALUE_TRUNK", "0") == "1"
+# Weight on the auxiliary per-tile final-ownership loss (KataGo-style). Kept
+# small so the dense spatial gradient shapes the trunk without competing with
+# policy/value. Set to 0 to disable. Training-only: search never reads the
+# ownership head, and the head reads the trunk directly (NOT gated by
+# DETACH_VALUE_TRUNK — trunk gradient is its entire purpose).
+OWNERSHIP_LOSS_WEIGHT = float(os.environ.get("OWNERSHIP_LOSS_WEIGHT", "0.15"))
 
 # Device selection: MPS (Apple Silicon) > CUDA (NVIDIA) > CPU
 try:
@@ -131,6 +137,10 @@ class PolyZeroNet(nn.Module):
         self.v_fc_shared = nn.Linear(1 * map_height * map_width, self.filters)
         self.v_win = nn.Linear(self.filters, 1)
         self.v_progress = nn.Linear(self.filters, 1)
+        # Aux spatial head: predicted end-of-game per-tile ownership
+        # (+1 mine / -1 enemy / 0 neutral), trained with a small-weight MSE
+        # purely to densify trunk gradient. Never used by search.
+        self.v_ownership = nn.Conv2d(self.filters, 1, 1)
 
     def forward(self, spatial_map, player_state):
         batch_size = spatial_map.size(0)
@@ -170,7 +180,8 @@ class PolyZeroNet(nn.Module):
         values = {}
         values['win'] = self.v_win(v_latent)
         values['progress'] = self.v_progress(v_latent)
-        
+        values['ownership'] = self.v_ownership(x).flatten(1)
+
         return policy, values
 
 def compute_loss(policy_pred, values_pred, policy_targets, value_target):
@@ -205,18 +216,29 @@ def compute_loss(policy_pred, values_pred, policy_targets, value_target):
             total_policy_loss += head_loss * weights.get(head_name, 1.0)
             
     loss_win = nn.MSELoss()(values_pred['win'], value_target['win'])
-    
+
     loss_progress = 0.0
     if 'progress' in value_target and 'progress' in values_pred:
         loss_progress = nn.MSELoss()(values_pred['progress'], value_target['progress'])
-        
+
     # Prioritize winning/losing.
     value_loss = VALUE_LOSS_WEIGHT * loss_win + loss_progress
-    
+
+    # Aux ownership loss, masked per sample so pre-ownership game files
+    # (mask=0) contribute nothing. Reported separately from value_loss to
+    # keep the value_loss series and value_r2 comparable across runs.
+    ownership_loss = torch.tensor(0.0, device=values_pred['win'].device)
+    if OWNERSHIP_LOSS_WEIGHT > 0 and 'ownership' in value_target and 'ownership' in values_pred:
+        mask = value_target['ownership_mask']  # [B, 1]
+        n_valid = mask.sum()
+        if n_valid > 0:
+            per_sample = ((values_pred['ownership'] - value_target['ownership']) ** 2).mean(dim=1, keepdim=True)
+            ownership_loss = OWNERSHIP_LOSS_WEIGHT * (per_sample * mask).sum() / n_valid
+
     # Total loss
-    total_loss = total_policy_loss + value_loss
-    
-    return total_loss, total_policy_loss, value_loss
+    total_loss = total_policy_loss + value_loss + ownership_loss
+
+    return total_loss, total_policy_loss, value_loss, ownership_loss
 
 def batch_report_indices(total_batches, max_reports=10):
     """Pick up to `max_reports` evenly spaced batch numbers to log."""
@@ -260,7 +282,16 @@ def train():
     model = PolyZeroNet(SPATIAL_CHANNELS, PLAYER_STATE_DIM, MAP_SIZE, MAP_SIZE).to(DEVICE)
     if os.path.exists("model.safetensors"):
         try:
-            model.load_state_dict(load_file("model.safetensors"))
+            # strict=False lets checkpoints that predate the aux ownership
+            # head load in place (the head keeps its fresh init). Any OTHER
+            # mismatch is still fatal so a wrong-architecture checkpoint
+            # can't silently half-load.
+            missing, unexpected = model.load_state_dict(load_file("model.safetensors"), strict=False)
+            hard_missing = [k for k in missing if not k.startswith("v_ownership.")]
+            if hard_missing or unexpected:
+                raise RuntimeError(f"state_dict mismatch: missing={hard_missing} unexpected={list(unexpected)}")
+            if missing:
+                print(f"Checkpoint predates ownership head; initializing {missing} fresh.")
         except Exception as e:
             print(f"Could not load model: {e}")
             print("Starting from scratch.")
@@ -276,6 +307,7 @@ def train():
         total_loss = 0
         total_p_loss = 0
         total_v_loss = 0
+        total_o_loss = 0
         total_batches = 0
         # Streaming mean/variance of the value targets seen this epoch, so
         # value_r2 (below) compares MSE against the actual training-mix
@@ -307,11 +339,13 @@ def train():
             c_player = []
             c_win = []
             c_progress = []
-            
+            c_ownership = []
+            c_ownership_mask = []
+
             c_heads = {
                 'action_type': [], 'source_spatial': [], 'target_spatial': [], 'move_option': []
             }
-            
+
             for f in chunk_files:
                 try:
                     data = load_file(f)
@@ -322,6 +356,14 @@ def train():
                         c_progress.append(data["progress"])
                     else:
                         c_progress.append(torch.zeros_like(data["values"]))
+                    n_samples = data["values"].shape[0]
+                    if "ownership" in data:
+                        c_ownership.append(data["ownership"])
+                        c_ownership_mask.append(torch.ones(n_samples, 1))
+                    else:
+                        # Pre-ownership file: zero-fill and mask out.
+                        c_ownership.append(torch.zeros(n_samples, MAP_SIZE * MAP_SIZE))
+                        c_ownership_mask.append(torch.zeros(n_samples, 1))
                     
                     # Load all policy heads
                     for head in c_heads.keys():
@@ -344,7 +386,9 @@ def train():
                 
                 targets_win = torch.cat(c_win)
                 targets_progress = torch.cat(c_progress) if c_progress else None
-                
+                targets_ownership = torch.cat(c_ownership) if c_ownership else None
+                targets_ownership_mask = torch.cat(c_ownership_mask) if c_ownership_mask else None
+
                 target_heads = {}
                 for head, tensors in c_heads.items():
                     if tensors:
@@ -355,7 +399,7 @@ def train():
                 continue
             
             # Cleanup lists
-            del c_spatial, c_player, c_win, c_progress
+            del c_spatial, c_player, c_win, c_progress, c_ownership, c_ownership_mask
             gc.collect()
             
             dataset_size = len(spatial_maps)
@@ -389,6 +433,9 @@ def train():
 
                 if targets_progress is not None:
                     batch_values['progress'] = targets_progress[batch_idx].to(DEVICE)
+                if targets_ownership is not None:
+                    batch_values['ownership'] = targets_ownership[batch_idx].to(DEVICE)
+                    batch_values['ownership_mask'] = targets_ownership_mask[batch_idx].to(DEVICE)
                 batch_targets = {}
                 for head, tensor in target_heads.items():
                     batch_targets[head] = tensor[batch_idx].to(DEVICE)
@@ -402,15 +449,16 @@ def train():
                 
                 policy_pred, values_pred = model(batch_spatial, batch_player)
                 
-                loss, p_loss, v_loss = compute_loss(policy_pred, values_pred, batch_targets, batch_values)
-                
+                loss, p_loss, v_loss, o_loss = compute_loss(policy_pred, values_pred, batch_targets, batch_values)
+
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
-                
+
                 total_loss += loss.item()
                 total_p_loss += p_loss.item()
                 total_v_loss += v_loss.item()
+                total_o_loss += o_loss.item()
                 total_batches += 1
 
                 elapsed = time.time() - chunk_start_time
@@ -422,11 +470,12 @@ def train():
                         f"{f'/{epoch_batch_estimate}' if epoch_batch_estimate else ''} "
                         f"(chunk {chunk_idx}/{num_chunks} {batch_num}/{num_batches_in_chunk}) "
                         f"- loss: {total_loss/total_batches:.4f} "
-                        f"(policy: {total_p_loss/total_batches:.4f}, value: {total_v_loss/total_batches:.4f}) "
+                        f"(policy: {total_p_loss/total_batches:.4f}, value: {total_v_loss/total_batches:.4f}, "
+                        f"ownership: {total_o_loss/total_batches:.4f}) "
                         f"- {batches_per_sec:.1f} batch/s"
                     )
 
-            del spatial_maps, player_states, targets_win, target_heads
+            del spatial_maps, player_states, targets_win, targets_ownership, targets_ownership_mask, target_heads
             if DEVICE == "cuda":
                 torch.cuda.empty_cache()
             elif DEVICE == "mps":
@@ -437,7 +486,8 @@ def train():
             avg_loss = total_loss / total_batches
             avg_p_loss = total_p_loss / total_batches
             avg_v_loss = total_v_loss / total_batches
-            print(f"Epoch {epoch+1}/{EPOCHS} - Loss: {avg_loss:.4f} (Policy: {avg_p_loss:.4f}, Value: {avg_v_loss:.4f})")
+            avg_o_loss = total_o_loss / total_batches
+            print(f"Epoch {epoch+1}/{EPOCHS} - Loss: {avg_loss:.4f} (Policy: {avg_p_loss:.4f}, Value: {avg_v_loss:.4f}, Ownership: {avg_o_loss:.4f})")
         else:
             print(f"Epoch {epoch+1}/{EPOCHS} - No data processed")
 
@@ -446,6 +496,7 @@ def train():
     final_loss = total_loss / total_batches if total_batches > 0 else 0.0
     final_p_loss = total_p_loss / total_batches if total_batches > 0 else 0.0
     final_v_loss = total_v_loss / total_batches if total_batches > 0 else 0.0
+    final_o_loss = total_o_loss / total_batches if total_batches > 0 else 0.0
 
     # R^2 of the value head against the LAST epoch's own target distribution:
     # 1 - MSE/Var. Small MSE alone is meaningless if the targets barely vary
@@ -471,6 +522,7 @@ def train():
                 "loss": round(final_loss, 4),
                 "policy_loss": round(final_p_loss, 4),
                 "value_loss": round(final_v_loss, 4),
+                "ownership_loss": round(final_o_loss, 4),
                 "value_r2": round(value_r2, 4),
             },
             f,
