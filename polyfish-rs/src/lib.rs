@@ -11,6 +11,7 @@ pub mod functions;
 pub mod game;
 pub mod hash;
 pub mod mapgen;
+pub mod memory;
 pub mod moves;
 pub mod prediction;
 pub mod recorder;

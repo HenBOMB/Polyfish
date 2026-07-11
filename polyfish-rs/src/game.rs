@@ -245,9 +245,15 @@ impl Game {
             }) as UndoCallback
         };
 
+        // Fog memory: record post-move observations (real moves only).
+        let mem_undo = crate::memory::observe_all(&mut self.state);
+
         self.state.settings._are_you_sure = false;
 
-        Some(undo)
+        Some(Box::new(move |s: &mut GameState| {
+            mem_undo(s);
+            undo(s);
+        }))
     }
 
     /// Simulate a move for MCTS (does NOT set _are_you_sure, preventing exploration)

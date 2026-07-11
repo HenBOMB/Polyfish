@@ -348,6 +348,17 @@ pub struct TechnologyState {
     pub discovered_turn: i32,
 }
 
+/// Last-seen snapshot of a foreign unit, kept in a tribe's fog memory
+/// (see `memory.rs` / notes-memory.md).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemUnit {
+    #[serde(rename = "type")]
+    pub unit_type: UnitType,
+    pub hp_norm: f32,
+    pub last_seen_turn: i32,
+}
+
 /// State of a tribe/player
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -400,6 +411,12 @@ pub struct TribeState {
     pub pacifist_turns: i32,
     #[serde(default)]
     pub conversions: i32,
+    /// Fog memory: tile idx -> last foreign unit this tribe saw there.
+    #[serde(default)]
+    pub memory_units: IndexMap<i32, MemUnit>,
+    /// Fog memory: tile idx -> last turn one of this tribe's units was hit there.
+    #[serde(default)]
+    pub memory_attacks: IndexMap<i32, i32>,
 }
 
 impl Default for TribeState {
@@ -427,6 +444,8 @@ impl Default for TribeState {
             attacked_this_turn: false,
             pacifist_turns: 0,
             conversions: 0,
+            memory_units: IndexMap::new(),
+            memory_attacks: IndexMap::new(),
         }
     }
 }

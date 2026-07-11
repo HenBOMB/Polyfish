@@ -254,7 +254,7 @@ def train():
     
     # 2. Init Model
     MAP_SIZE = 11
-    SPATIAL_CHANNELS = 136
+    SPATIAL_CHANNELS = 142  # 136 + 6 fog-memory channels (see notes-memory.md)
     PLAYER_STATE_DIM = 16
 
     model = PolyZeroNet(SPATIAL_CHANNELS, PLAYER_STATE_DIM, MAP_SIZE, MAP_SIZE).to(DEVICE)

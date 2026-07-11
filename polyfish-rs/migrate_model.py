@@ -25,6 +25,14 @@ def migrate_model(file_path):
         print("Adding player_pos_embeddings to state_dict...")
         state_dict["player_pos_embeddings"] = torch.randn(10, filters) * 0.01
 
+    # Fog memory (Jul 2026): zero-pad conv1 input 136 -> 142 so the six new
+    # memory channels start invisible to a pre-memory checkpoint (notes-memory.md).
+    conv1 = state_dict.get("conv1.weight")
+    if conv1 is not None and conv1.shape[1] == 136:
+        print(f"Padding conv1.weight input channels {conv1.shape[1]} -> 142...")
+        pad = torch.zeros(conv1.shape[0], 142 - conv1.shape[1], conv1.shape[2], conv1.shape[3])
+        state_dict["conv1.weight"] = torch.cat([conv1, pad], dim=1)
+
     backup_path = file_path + ".bak"
     os.rename(file_path, backup_path)
     print(f"Backed up original model to {backup_path}")

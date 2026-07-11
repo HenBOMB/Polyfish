@@ -113,8 +113,21 @@ pub const CH_CITY_BORDER_SIZE: usize = CH_CITY_STATS_START + 9;
 pub const CH_CITY_PROGRESS: usize = CH_CITY_STATS_START + 10;
 // +11 reserved
 
+// Fog memory (fixed count: 6) — decayed last-seen enemy info (see notes-memory.md)
+pub const CH_MEM_START: usize = CH_CITY_STATS_END;
+pub const CH_MEM_COUNT: usize = 6;
+pub const CH_MEM_END: usize = CH_MEM_START + CH_MEM_COUNT;
+
+// Fog memory offsets
+pub const CH_MEM_ENEMY_SEEN: usize = CH_MEM_START + 0;
+pub const CH_MEM_ENEMY_HP: usize = CH_MEM_START + 1;
+pub const CH_MEM_ENEMY_ATTACK: usize = CH_MEM_START + 2;
+pub const CH_MEM_ENEMY_RANGED: usize = CH_MEM_START + 3;
+pub const CH_MEM_ENEMY_NAVAL: usize = CH_MEM_START + 4;
+pub const CH_MEM_ATTACKED_HERE: usize = CH_MEM_START + 5;
+
 /// Total number of feature channels (dynamically computed)
-pub const NUM_CHANNELS: usize = CH_CITY_STATS_END;
+pub const NUM_CHANNELS: usize = CH_MEM_END;
 
 // ============================================================================
 // Runtime Lookup Tables (enum discriminant -> sequential index)
@@ -426,6 +439,7 @@ pub fn state_to_cpu_features(state: &GameState, perspective: PlayerId) -> Result
     }
 
     // Process units (only visible ones)
+    let mut enemy_occupied: std::collections::HashSet<i32> = std::collections::HashSet::new();
     for (player_id, tribe) in &state.tribes {
         for unit in &tribe.units {
             let x = unit.coords.x as usize;
@@ -443,6 +457,10 @@ pub fn state_to_cpu_features(state: &GameState, perspective: PlayerId) -> Result
                 .unwrap_or(false);
             if !unit_explored {
                 continue;
+            }
+
+            if *player_id != perspective {
+                enemy_occupied.insert(idx);
             }
 
             // Unit type channel
@@ -604,6 +622,62 @@ pub fn state_to_cpu_features(state: &GameState, perspective: PlayerId) -> Result
         }
     }
 
+    // Fog memory channels: decayed ghosts of last-seen enemies (notes-memory.md).
+    // Tiles holding a currently-visible enemy are skipped — live unit channels
+    // already cover them.
+    if let Some(pov_t) = pov_tribe {
+        let turn = state.settings.turn;
+        for (idx, mem) in &pov_t.memory_units {
+            if enemy_occupied.contains(idx) {
+                continue;
+            }
+            let dt = turn - mem.last_seen_turn;
+            if dt < 0 || dt > crate::memory::MEM_HORIZON {
+                continue;
+            }
+            let x = (idx % state.settings.size) as usize;
+            let y = (idx / state.settings.size) as usize;
+            if x >= MAP_SIZE || y >= MAP_SIZE {
+                continue;
+            }
+            let decay = crate::memory::MEM_DECAY.powi(dt);
+            set_feat(&mut data, CH_MEM_ENEMY_SEEN, x, y, decay);
+            set_feat(&mut data, CH_MEM_ENEMY_HP, x, y, mem.hp_norm);
+            let setting = crate::settings::units::get_unit_setting(mem.unit_type);
+            set_feat(
+                &mut data,
+                CH_MEM_ENEMY_ATTACK,
+                x,
+                y,
+                (setting.attack / 5.0).clamp(0.0, 1.0),
+            );
+            if setting.range > 1 {
+                set_feat(&mut data, CH_MEM_ENEMY_RANGED, x, y, 1.0);
+            }
+            if setting.skills.contains(&crate::types::SkillType::Carry) {
+                set_feat(&mut data, CH_MEM_ENEMY_NAVAL, x, y, 1.0);
+            }
+        }
+        for (idx, hit_turn) in &pov_t.memory_attacks {
+            let dt = turn - hit_turn;
+            if dt < 0 || dt > crate::memory::MEM_HORIZON {
+                continue;
+            }
+            let x = (idx % state.settings.size) as usize;
+            let y = (idx / state.settings.size) as usize;
+            if x >= MAP_SIZE || y >= MAP_SIZE {
+                continue;
+            }
+            set_feat(
+                &mut data,
+                CH_MEM_ATTACKED_HERE,
+                x,
+                y,
+                crate::memory::MEM_DECAY.powi(dt),
+            );
+        }
+    }
+
     // Extract player state vector (16 features)
     let player_vec = vec![
         turn_norm,
@@ -693,6 +767,7 @@ mod tests {
         assert!(CH_STRUCTURE_END <= CH_UNIT_START);
         assert!(CH_UNIT_END <= CH_UNIT_STATS_START);
         assert!(CH_UNIT_STATS_END <= CH_CITY_STATS_START);
+        assert!(CH_CITY_STATS_END <= CH_MEM_START);
     }
 
     #[test]
@@ -736,6 +811,7 @@ mod tests {
                 + UNIT_COUNT
                 + CH_UNIT_STATS_COUNT
                 + CH_CITY_STATS_COUNT
+                + CH_MEM_COUNT
         );
     }
 }

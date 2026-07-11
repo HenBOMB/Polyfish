@@ -38,6 +38,11 @@ pub fn remove_unit(
 
     let mut undos: Vec<UndoCallback> = Vec::new();
 
+    // Fog memory: witnesses saw the unit die — clear their ghost here (real moves only).
+    if state.settings._are_you_sure {
+        undos.push(crate::memory::note_unit_removed(state, tile_idx));
+    }
+
     if state.settings._verbose {
         println!(
             "Removing unit {:?} ({})",
@@ -1016,6 +1021,11 @@ pub fn attack_unit(
     // Apply damage to defender
     let def_damage = result.attack_damage;
 
+    // Fog memory: defender remembers being hit here (real moves only).
+    if state.settings._are_you_sure && def_damage > 0.0 {
+        undos.push(crate::memory::note_attacked(state, defender_owner, def_coords));
+    }
+
     if let Some(tribe) = state.tribes.get_mut(&defender_owner) {
         if let Some(unit) = tribe.units.get_mut(defender_idx) {
             unit.health -= def_damage;
@@ -1311,6 +1321,10 @@ pub fn attack_unit(
 
         let atk_damage = result.defense_damage;
         if atk_damage > 0.0 && can_retaliate {
+            // Fog memory: attacker remembers taking retaliation here (real moves only).
+            if state.settings._are_you_sure {
+                undos.push(crate::memory::note_attacked(state, attacker_owner, atk_coords));
+            }
             if let Some(tribe) = state.tribes.get_mut(&attacker_owner) {
                 if let Some(unit) = tribe.units.get_mut(attacker_idx) {
                     unit.health -= atk_damage;

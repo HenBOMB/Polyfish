@@ -19,7 +19,7 @@ from train import PolyZeroNet
 
 def init_model():
     MAP_SIZE = 11
-    SPATIAL_CHANNELS = 136
+    SPATIAL_CHANNELS = 142  # 136 + 6 fog-memory channels (see notes-memory.md)
     PLAYER_STATE_DIM = 16
     
     # Check if model already exists to avoid overwriting trained weights!
