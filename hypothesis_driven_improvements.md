@@ -134,32 +134,55 @@ WATCH items from this run:
 - **League cadence**: the six-run drought is explained — the GN migration quarantined every old checkpoint into `checkpoints/bn_era/`, and the selector needs ≥2 eligible `model_checkpoint_iter*` files before it fires. It self-healed at iter 60, but checkpoint-every-50 means one league reading per ~7h of training. Candidate fix: denser checkpoints or a standing arena benchmark vs the frozen `model_checkpoint_iter50_20260710_015335` (pre-fix reference).
 
 ## EXP 10: Strength gauge — the frozen-anchor Elo ladder
-*Jul 11, 2026 · pre-registered, running*
+*Jul 11, 2026 · COMMITTED — and it immediately caught our biggest blind spot*
 
 All our metrics so far measure behavior — capture speed, SPT, policy loss — not strength. This adds the missing y-axis: paired arena matches against frozen reference models, chained into one Elo curve. It's the line that must keep rising before we commit real money to the long cloud run.
 
 ### Design (instrumentation, no behavior change)
 
-- **Reading**: n=32 seeds, each played twice with sides swapped (64 games), via the existing `arena` binary — gumbel k=16 at 64 sims (the self-play search config). Win rate = wins + draws/2 over completed games.
-- **Ladder rules**: a reading every 10th training iteration against the *active anchor* (a frozen checkpoint file that never changes). Measured ≥80% → freeze the current model as the next anchor, measure the link vs the outgoing anchor at n=64, and switch. Audit block every 50 iters: n=32 vs Greedy plus n=32 vs one retired anchor (rotating) — observed vs chain-predicted win rate flags Elo inflation/cycles.
-- **Permanent floor anchor**: the Greedy backend (`--backend2 greedy`), the exact production anchor seat (self_play.rs:1682) — a non-net agent that can't participate in net-vs-net strategy cycles. Elo 0 by definition.
-- **Backfill today (no training needed)**: `model_gn_v2` (era start) → `model_checkpoint_iter50_20260710_015335` (pre-fix reference) → current `model.safetensors` (iter 60 of run 1783687051), each vs Greedy plus the informative pairs vs each other.
-- Known caveats, accepted for a *relative* gauge: arena plays Perfection scoring at 30 turns on mirror Imperius (Tiny Drylands), while training runs Domination with a tribe mix. If the gauge ever disagrees with dashboard trends, this is the first suspect.
+- **Reading**: n=32 seeds, sides swapped (64 games), `arena` at gumbel 64/k=16, `--gamemode 2`. Win rate = wins + draws/2.
+- **Ladder rules**: a reading every 10th iteration vs the *active anchor* (a frozen checkpoint that never changes). ≥80% → freeze the current model as the next anchor and measure the link vs the outgoing one at n=64. Audit every 50 iters vs Greedy + one retired anchor — observed vs chain-predicted win rate flags Elo inflation/cycles.
+- **Permanent floor anchor**: the Greedy backend (the production teacher seat), Elo 0 by definition — a non-net agent that can't join net-vs-net strategy cycles.
+- **Backfill today**: `gn_v2` → `iter50_015335` → `iter50_220138` → current, each vs Greedy plus the informative net-vs-net pairs.
 
 ### Expected Results (pre-registered before any match ran)
 
-1. Current model beats Greedy at **≥60%** (it out-benchmarks its teacher on t2c and won the league read +8% on score). If ≥80%, Greedy retires to audit duty on day one.
+1. Current beats Greedy at **≥60%**; if ≥80%, Greedy retires to audit duty on day one.
 2. Monotonic ordering vs Greedy: `gn_v2` < `iter50_015335` < current.
-3. Current vs `iter50_015335` ≥55% (that checkpoint predates the full EXP 4–8 stack absorption).
-4. Transitivity spot-check: current vs `gn_v2` lands within ~±10pp of the chain-predicted win rate (no cycle).
+3. Current vs `iter50_015335` ≥55%.
+4. Transitivity: current vs the chain prediction within ~±10pp (no cycle).
 
 ### Actual Results
-*(pending)*
 
-**Found while setting up (Jul 11):** arena searched MCTS directly on the real game state instead of a clone — search-time execute/undo leaked into the scored game, corrupting it over a match (ghost harvests, impossible star counts, duplicate monuments; 161 execute errors in the first aborted run). Production self-play was never affected because `Brain::think_decomposed` searches `game.clone()`. Fixed arena to clone the same way. WATCH (engine): the corruption proves some move undo callbacks don't restore state exactly — invisible under clone-based search, but worth an undo-roundtrip fuzz test if MCTS ever goes clone-free for speed.
+Backfill (n=32 paired, Domination, gumbel 64/k=16; Elo vs Greedy = 0; reading CI ≈ ±9pp):
+
+| model | vs Greedy | ≈ Elo |
+|---|---|---|
+| `gn_v2` (era start) | 3.1% | −600 |
+| `iter50_015335` (pre-fix run) | 23.4% | −206 |
+| `iter50_220138` (latest run, iter 50) | 43.8% | −43 |
+| current `model.safetensors` (iter ~60) | 25–34% | −110 to −190 |
+
+Net-vs-net links: current beats `iter50_220138` at 53.1% (final-10-iters regression scare was sampling noise) and `iter50_015335` at 73.4%, inside the 63–74% chain prediction — **transitivity holds, the ladder chains**.
+
+Pre-registrations #2–#4 met. **#1 failed: the net still loses to its greedy teacher ~2:1** while every behavioral metric said "improving" — village speed measured an opening skill, not strength. The good news is the trend: **~+500 Elo across the era, monotonic at every rung**. Graduation target for the next stint: >50% vs Greedy.
+
+Method notes: vs-Greedy readings scatter more than net-vs-net, so the curve rides on net anchors (Greedy is for audits); the gauge is pinned to `--gamemode 2` (mode is a net input feature *and* a greedy-evaluator branch — Perfection under-read the net); arena now runs on the self_play eval-server stack (net-vs-net reading: 20 min → 83 s). Also found and fixed: arena let MCTS search mutate the real game (production was safe — `Brain` searches a clone); the corruption it caused proves some undo callbacks don't roundtrip exactly — WATCH if search ever goes clone-free.
+
+## EXP 11: Gauge in the loop — auto-ladder + plateau early-stop
+*Jul 11, 2026 · pre-registered, shipping*
+
+Wire the EXP 10 reading into `run_training_loop.sh`: every `LEAGUE_INTERVAL` iters, arena vs the active anchor, appended to `ladder.json` (anchors + readings, human-readable, via `ladder.py`). ≥80% freezes the model as the next anchor (n=64 link match). Audit every 50 iters vs Greedy + a rotating retired anchor. Early stop: over the last 8 readings vs the same anchor, window means flat-or-down AND slope ≤ 0 counts one strike; two consecutive strikes ends the run — ~80+ iterations of evidence of non-improvement, robust to single-reading noise (±9pp).
+
+### Expected Results
+Next stint: readings every 10 iters climb from ~25–34% vs Greedy toward the >50% crossing; no false plateau stop on the way; first anchor freeze at ≥80%.
+
+### Actual Results
+*(pending — next training stint)*
 
 ## Next candidates (write the EXP entry before running)
 
+- **Anchor-frac retirement gate**: `decay_crutch` currently phases out the greedy teacher by iteration count (`DECAY_LAST_ITER`); gate it on the ladder instead — anneal `ANCHOR_FRAC` once the gauge reads >50% vs Greedy sustained, cut at >80%.
 - **De-censor the rate metric (instrumentation)**: exclude games that end by domination before any village capture from the `villages_first_rate` denominator, and log a `domination_wins` rate column. With the ~3–5% rush games counted honestly, rate should read ~1.0 and the 1.0 pre-registration becomes meetable.
 - **Value-head probe**: fixed-holdout convergence probe to attribute the r2 slide (harder data vs worse head vs aux competition). Cheap, decides whether anything needs fixing.
 - **Movement ground truth**: dump ordinary games (replay + full decision traces) from the latest model; Verdi labels wasted vs purposeful moments; the labels seed both a blended movement metric and a fixed eval suite scored per checkpoint.

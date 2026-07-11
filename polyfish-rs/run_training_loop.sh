@@ -422,7 +422,83 @@ do
         done
     fi
 
-    # 4. Cleanup (Fresh Games Only)
+    # 5. Strength gauge (EXP 10/11): paired arena reading vs the ladder's
+    # active anchor. ladder.py owns ladder.json (anchors, readings, verdicts):
+    # >=80% freezes the model as the next anchor (n=64 link match); two
+    # consecutive 8-reading windows with no gain stop the run (plateau).
+    if [ "$LEAGUE_INTERVAL" -gt 0 ] && [ $((i % LEAGUE_INTERVAL)) -eq 0 ]; then
+        ACTIVE_JSON=$(.venv/bin/python3 ladder.py active)
+        ANCHOR_PATH=$(echo "$ACTIVE_JSON" | jq -r '.path')
+        GAUGE_LOG=$(mktemp)
+
+        # $1 = opponent model path ("" = greedy backend), $2 = seeds (games x2)
+        run_gauge_match () {
+            if [ -z "$1" ]; then
+                ./target/release/arena --model1 model.safetensors --model2 model.safetensors \
+                    --backend1 gumbel --backend2 greedy \
+                    --mcts "$MCTS_ITERS" --games "$2" --gamemode "$GAMEMODE" | tee "$GAUGE_LOG"
+            else
+                ./target/release/arena --model1 model.safetensors --model2 "$1" \
+                    --backend1 gumbel --backend2 gumbel \
+                    --mcts "$MCTS_ITERS" --games "$2" --gamemode "$GAMEMODE" | tee "$GAUGE_LOG"
+            fi
+            GAUGE_W=$(sed -n 's/^Config 1 Wins: \([0-9][0-9]*\).*/\1/p' "$GAUGE_LOG")
+            GAUGE_L=$(sed -n 's/^Config 2 Wins: \([0-9][0-9]*\).*/\1/p' "$GAUGE_LOG")
+            GAUGE_D=$(sed -n 's/^Draws: *\([0-9][0-9]*\).*/\1/p' "$GAUGE_LOG")
+            GAUGE_S1=$(sed -n 's/^Avg Score Config 1: \([0-9.][0-9.]*\).*/\1/p' "$GAUGE_LOG")
+            GAUGE_S2=$(sed -n 's/^Avg Score Config 2: \([0-9.][0-9.]*\).*/\1/p' "$GAUGE_LOG")
+        }
+
+        run_gauge_match "$ANCHOR_PATH" "${GAUGE_GAMES:-32}"
+        if [ -n "$GAUGE_W" ] && [ -n "$GAUGE_L" ]; then
+            VERDICT=$(.venv/bin/python3 ladder.py record --kind gauge \
+                --run-id "$RUN_ID" --iteration "$i" \
+                --wins "$GAUGE_W" --losses "$GAUGE_L" --draws "${GAUGE_D:-0}" \
+                --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}")
+            echo "GAUGE: $VERDICT"
+            GAUGE_ACTION=$(echo "$VERDICT" | jq -r '.action')
+
+            if [ "$GAUGE_ACTION" = "freeze" ]; then
+                TS=$(date +%Y%m%d_%H%M%S)
+                NEW_ANCHOR="checkpoints/anchor_iter${i}_${TS}.safetensors"
+                cp model.safetensors "$NEW_ANCHOR"
+                echo "GAUGE: >=80% vs active anchor — freezing $NEW_ANCHOR, link match (n=64)..."
+                run_gauge_match "$ANCHOR_PATH" 64
+                .venv/bin/python3 ladder.py freeze --run-id "$RUN_ID" --iteration "$i" \
+                    --path "$NEW_ANCHOR" \
+                    --wins "${GAUGE_W:-0}" --losses "${GAUGE_L:-0}" --draws "${GAUGE_D:-0}" \
+                    --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}"
+            elif [ "$GAUGE_ACTION" = "stop" ]; then
+                rm -f "$GAUGE_LOG"
+                echo "=================================================="
+                echo "PLATEAU STOP at iteration $i: two consecutive 8-reading"
+                echo "windows with no gain vs the active anchor (see ladder.json)."
+                echo "=================================================="
+                break
+            fi
+
+            # Audit block every 5th gauge: greedy + one retired anchor,
+            # rotating — observed vs chain-predicted win rate flags cycles.
+            if [ $((i % (LEAGUE_INTERVAL * 5))) -eq 0 ]; then
+                .venv/bin/python3 ladder.py audit-opponents | jq -c '.[]' | while read -r AUD; do
+                    AUD_NAME=$(echo "$AUD" | jq -r '.name')
+                    AUD_PATH=$(echo "$AUD" | jq -r '.path')
+                    run_gauge_match "$AUD_PATH" "${GAUGE_GAMES:-32}"
+                    if [ -n "$GAUGE_W" ] && [ -n "$GAUGE_L" ]; then
+                        .venv/bin/python3 ladder.py record --kind audit --opponent "$AUD_NAME" \
+                            --run-id "$RUN_ID" --iteration "$i" \
+                            --wins "$GAUGE_W" --losses "$GAUGE_L" --draws "${GAUGE_D:-0}" \
+                            --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}"
+                    fi
+                done
+            fi
+        else
+            echo "GAUGE: arena reading failed to parse — skipping this reading" >&2
+        fi
+        rm -f "$GAUGE_LOG"
+    fi
+
+    # 6. Cleanup (Fresh Games Only)
     # Move played games to archive so train.py only sees new ones next time
     mkdir -p archive
     # Use || true to avoid script exit if no games were generated
