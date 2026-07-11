@@ -13,7 +13,6 @@ fn setup_basic_state() -> GameState {
     tribe.tribe_type = TribeType::Imperius;
     state.tribes.insert(tribe_id, tribe);
 
-    // Fill map with fields
     for i in 0..121 {
         let mut tile = TileState::default();
         tile.terrain_type = TerrainType::Field;
@@ -23,31 +22,35 @@ fn setup_basic_state() -> GameState {
     state
 }
 
+/// Mark a tile explored and impassible without the given tech.
+fn explored_barrier(state: &mut GameState, idx: i32, tribe_id: i32, terrain: TerrainType) {
+    let tile = state.tiles.get_mut(&idx).unwrap();
+    tile.terrain_type = terrain;
+    tile.explorers.insert(tribe_id);
+}
+
+/// Force the explorer east from (0,0): south is explored water, east is explored mountain.
+fn force_east_corridor(state: &mut GameState, tribe_id: i32) {
+    explored_barrier(state, 1, tribe_id, TerrainType::Mountain);
+    explored_barrier(state, 11, tribe_id, TerrainType::Water);
+}
+
 #[test]
 fn test_explorer_tech_mountain() {
     let mut state = setup_basic_state();
     let tribe_id = 1;
 
-    // Put a mountain at (1,0), (1,1), (0,1) to block all paths from (0,0)
-    state.tiles.get_mut(&1).unwrap().terrain_type = TerrainType::Mountain;
-    state.tiles.get_mut(&11).unwrap().terrain_type = TerrainType::Mountain;
-    state.tiles.get_mut(&12).unwrap().terrain_type = TerrainType::Mountain;
+    force_east_corridor(&mut state, tribe_id);
+    explored_barrier(&mut state, 12, tribe_id, TerrainType::Mountain);
 
-    // Explorer at (0,0) - index 0
-    // Visible: only (0,0)
     state.tiles.get_mut(&0).unwrap().explorers.insert(tribe_id);
 
-    // Fog at (3,0) - index 3
-    // Explorer should want to go to index 3, but all paths are mountains.
-
     let (_, revealed) = predict_explorer(&state, 0);
-    // Without climbing, it should NOT have revealed anything from index 1 (mountain)
     assert!(
         !revealed.contains(&2) && !revealed.contains(&3),
         "Explorer should not reveal blocked fog without Climbing"
     );
 
-    // Now give climbing
     state
         .tribes
         .get_mut(&tribe_id)
@@ -68,16 +71,25 @@ fn test_explorer_tech_mountain() {
 #[test]
 fn test_explorer_lighthouse_priority() {
     let mut state = setup_basic_state();
+    state.settings.version = 115;
 
-    // at (0,0) index 0
+    force_east_corridor(&mut state, 1);
     state.tiles.get_mut(&0).unwrap().explorers.insert(1);
-
-    // Fog tiles: (1,0) and (0,1)
-    // Put lighthouse at (2,0) - index 2 (revealed by moving to 1,0)
 
     let mut s = StructureState::default();
     s.structure_type = StructureType::Lighthouse;
     state.structures.insert(2, Some(s));
+
+    state
+        .tribes
+        .get_mut(&1)
+        .unwrap()
+        .tech_vanilla
+        .push(polyfish::states::TechnologyState {
+            tech_type: TechnologyType::Climbing,
+            discovered: true,
+            discovered_turn: 0,
+        });
 
     let (_, revealed) = predict_explorer(&state, 0);
 
@@ -91,12 +103,9 @@ fn test_explorer_lighthouse_priority() {
 fn test_explorer_no_backtracking() {
     let mut state = setup_basic_state();
 
-    // at (1,0). (0,0) is visible. (2,0) is fog.
     state.tiles.get_mut(&0).unwrap().explorers.insert(1);
     state.tiles.get_mut(&1).unwrap().explorers.insert(1);
 
-    // explorer at 1. neighbors are 0, 2, 11, 12, 13.
-    // Block 11, 12, 13 to make it deterministic
     state.tiles.get_mut(&11).unwrap().terrain_type = TerrainType::Mountain;
     state.tiles.get_mut(&12).unwrap().terrain_type = TerrainType::Mountain;
     state.tiles.get_mut(&13).unwrap().terrain_type = TerrainType::Mountain;
