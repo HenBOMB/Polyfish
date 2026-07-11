@@ -316,7 +316,7 @@ function MetricChart({ title, data, series, height = 220, iterationKey = 'iterat
             })}
 
             {/* Hover Column Catchers */}
-            {aggregatedData.map((d, i) => {
+            {aggregatedData.map((_d, i) => {
               const x = scaleX(i);
               const halfStep = i > 0 ? (x - scaleX(i - 1)) / 2 : (aggregatedData.length > 1 ? (scaleX(1) - x) / 2 : 20);
               return (

@@ -52,25 +52,20 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [cpuUsage, setCpuUsage] = useState<number[]>([]);
   const [cores, setCores] = useState<number>(12);
-  const [activeTab, setActiveTab] = useState<string>('overview');
   const [windowSize, setWindowSize] = useState<number>(20);
-  const [hiddenSeries, setHiddenSeries] = useState<Record<string, boolean>>({});
 
-  const toggleSeries = (key: string) => {
-    setHiddenSeries(prev => ({ ...prev, [key]: !prev[key] }));
-  };
   const [tribes, setTribes] = useState<string[]>(['Imperius', 'Imperius']);
-  const [iterations, setIterations] = useState<number>(150); // Defaulting to the 150 from the user's command
+  const [iterations, setIterations] = useState<number>(500); // Mirrored from run_training_loop.sh
   const [learningRate, setLearningRate] = useState<number>(0.001);
-  const [mctsIters, setMctsIters] = useState<number>(32); // Default to 32 from the user's command
+  const [mctsIters, setMctsIters] = useState<number>(64); // Mirrored from run_training_loop.sh
   const [gamemode, setGamemode] = useState<number>(2);
   const [milestones, setMilestones] = useState<Milestone[]>([]);
   
   // New Advanced Setting states
-  const [trainChunkFiles, setTrainChunkFiles] = useState<number>(2);
-  const [valueTrustRampIters, setValueTrustRampIters] = useState<number>(60);
+  const [trainChunkFiles, setTrainChunkFiles] = useState<number>(10); // Mirrored from ARCHIVE_KEEP
+  const [valueTrustRampIters, setValueTrustRampIters] = useState<number>(30); // Mirrored from VALUE_TRUST_RAMP_ITERS
   const [detachValueTrunk, setDetachValueTrunk] = useState<number>(1);
-  const [rewardShaping, setRewardShaping] = useState<boolean>(true);
+  const [rewardShaping, setRewardShaping] = useState<boolean>(false);
   const [gamesPerIter, setGamesPerIter] = useState<number>(64);
   const [epochs, setEpochs] = useState<number>(1);
   const [resume, setResume] = useState<boolean>(true);
@@ -321,6 +316,8 @@ function App() {
           <NavLink to="/metrics" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Self-Play Metrics</NavLink>
           <NavLink to="/mcts" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Gumbel Stats</NavLink>
           <NavLink to="/settings" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Settings</NavLink>
+          <NavLink to="/simulator" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Simulator</NavLink>
+          <NavLink to="/legacy-training" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Legacy Dashboard</NavLink>
         </nav>
         
         <div style={{ marginTop: 'auto', padding: '20px', borderTop: '1px solid var(--border-subtle)' }}>
@@ -808,8 +805,8 @@ function App() {
                     <div style={{ background: 'rgba(0,0,0,0.3)', padding: '16px', borderRadius: '4px', border: '1px solid var(--border-subtle)' }}>
                       <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '8px', textTransform: 'uppercase' }}>Principal Variation (PV)</div>
                       <div style={{ fontSize: '0.9rem', color: 'var(--text-main)', fontFamily: 'var(--font-mono)', lineHeight: '1.5' }}>
-                        {gameState.mctsAnalysis.principal_variation?.length > 0 
-                          ? gameState.mctsAnalysis.principal_variation.join(' → ')
+                        {(gameState.mctsAnalysis.principal_variation?.length ?? 0) > 0
+                          ? gameState.mctsAnalysis.principal_variation!.join(' → ')
                           : 'No PV available'
                         }
                       </div>
@@ -1251,6 +1248,16 @@ function App() {
               </div>
             </div>
           </section>
+          } />
+          <Route path="/simulator" element={
+            <div style={{ width: '100%', height: 'calc(100vh - 120px)', border: '1px solid var(--border-subtle)', borderRadius: '8px', overflow: 'hidden', marginTop: '20px', background: '#000' }}>
+              <iframe src="/simulator/index.html" style={{ width: '100%', height: '100%', border: 'none' }} title="Polyfish Simulator" />
+            </div>
+          } />
+          <Route path="/legacy-training" element={
+            <div style={{ width: '100%', height: 'calc(100vh - 120px)', border: '1px solid var(--border-subtle)', borderRadius: '8px', overflow: 'hidden', marginTop: '20px', background: '#0f1419' }}>
+              <iframe src="/simulator/training.html" style={{ width: '100%', height: '100%', border: 'none' }} title="Legacy Training Dashboard" />
+            </div>
           } />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
