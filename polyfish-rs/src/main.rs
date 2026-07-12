@@ -808,6 +808,9 @@ async fn get_metrics() -> Json<Value> {
                 "p1_avg": parse_f32("p1_avg"),
                 "p2_avg": parse_f32("p2_avg"),
                 "loss": parse_f32("loss"),
+                "policy_loss": parse_f32("policy_loss"),
+                "value_loss": parse_f32("value_loss"),
+                "value_r2": parse_f32("value_r2"),
                 "avg_captures": parse_f32("avg_captures"),
                 "avg_harvests": parse_f32("avg_harvests"),
                 "avg_builds": parse_f32("avg_builds"),
@@ -815,6 +818,11 @@ async fn get_metrics() -> Json<Value> {
                 "avg_attacks": parse_f32("avg_attacks"),
                 "avg_ability": parse_f32("avg_ability"),
                 "avg_steps": parse_f32("avg_moves"),
+                "avg_spt_t10": parse_f32("avg_spt_t10"),
+                "avg_spt_t20": parse_f32("avg_spt_t20"),
+                "avg_spt_t30": parse_f32("avg_spt_t30"),
+                "villages_t2c_first": parse_f32("villages_t2c_first"),
+                "ruins_t2c_p50": parse_f32("ruins_t2c_p50"),
             });
             metrics.push(obj);
         }

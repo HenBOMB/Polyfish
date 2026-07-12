@@ -631,8 +631,9 @@ function App() {
             </div>
           </div>
 
+          <h3 className="metrics-section-title">Training</h3>
           <div className="metrics-grid">
-            {/* 1. Moves by type — combined overlay */}
+            {/* Moves by type — combined overlay */}
             <MetricChart
               title="Moves by type"
               data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
@@ -645,48 +646,7 @@ function App() {
               ]}
             />
 
-            {/* 2. Avg moves (steps) / game */}
-            <MetricChart
-              title="Avg moves / game"
-              data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
-              series={[{ key: 'avg_steps', label: 'avg moves', color: '#c084fc' }]}
-            />
-
-            {/* 3. Avg captures / game */}
-            <MetricChart
-              title="Avg captures / game"
-              data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
-              series={[
-                { key: 'avg_captures', label: 'total', color: '#f87171' },
-                { key: 'avg_cap_capitals', label: 'capitals', color: '#a855f7' },
-                { key: 'avg_cap_cities', label: 'cities', color: '#f59e0b' },
-                { key: 'avg_cap_villages', label: 'villages', color: '#22c55e' },
-                { key: 'avg_cap_ruins', label: 'ruins', color: '#64748b' }
-              ]}
-            />
-
-            {/* 4. Avg harvests / game */}
-            <MetricChart
-              title="Avg harvests / game"
-              data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
-              series={[{ key: 'avg_harvests', label: 'avg harvests', color: '#4ade80' }]}
-            />
-
-            {/* 5. Avg research / game */}
-            <MetricChart
-              title="Avg research / game"
-              data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
-              series={[{ key: 'avg_research', label: 'avg research', color: '#60a5fa' }]}
-            />
-
-            {/* 6. Avg attacks / game */}
-            <MetricChart
-              title="Avg attacks / game"
-              data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
-              series={[{ key: 'avg_attacks', label: 'avg attacks', color: '#fb923c' }]}
-            />
-
-            {/* Bonus: Score metrics — Polyfish-specific */}
+            {/* Score metrics — Polyfish-specific */}
             <MetricChart
               title="Score (max vs avg)"
               data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
@@ -723,7 +683,10 @@ function App() {
               data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
               series={[{ key: 'value_r2', label: 'R2', color: '#10b981' }]}
             />
+          </div>
 
+          <h3 className="metrics-section-title">Territory/Expansion</h3>
+          <div className="metrics-grid">
             {/* Early Game Efficiency */}
             <MetricChart
               title="Early Game Efficiency (T2C)"
@@ -734,17 +697,65 @@ function App() {
               ]}
             />
 
-            {/* Score Trajectory */}
+            {/* Avg moves (steps) / game */}
             <MetricChart
-              title="Score Trajectory (SPT)"
+              title="Avg moves / game"
+              data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
+              series={[{ key: 'avg_steps', label: 'avg moves', color: '#c084fc' }]}
+            />
+
+            {/* Avg captures / game */}
+            <MetricChart
+              title="Avg captures / game"
+              data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
+              series={[
+                { key: 'avg_captures', label: 'total', color: '#f87171' },
+                { key: 'avg_cap_capitals', label: 'capitals', color: '#a855f7' },
+                { key: 'avg_cap_cities', label: 'cities', color: '#f59e0b' },
+                { key: 'avg_cap_villages', label: 'villages', color: '#22c55e' },
+                { key: 'avg_cap_ruins', label: 'ruins', color: '#64748b' }
+              ]}
+            />
+          </div>
+
+          <h3 className="metrics-section-title">Economy</h3>
+          <div className="metrics-grid">
+            {/* Economy Trajectory */}
+            <MetricChart
+              title="Economy Trajectory (SPT)"
               data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
               series={[
                 { key: 'avg_spt_t10', label: 'Turn 10', color: '#f59e0b' },
                 { key: 'avg_spt_t20', label: 'Turn 20', color: '#ec4899' },
+                { key: 'avg_spt_t30', label: 'Turn 30', color: '#8b5cf6' },
               ]}
             />
 
-            {/* Bonus: Abilities */}
+            {/* Avg harvests / game */}
+            <MetricChart
+              title="Avg harvests / game"
+              data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
+              series={[{ key: 'avg_harvests', label: 'avg harvests', color: '#4ade80' }]}
+            />
+
+            {/* Avg research / game */}
+            <MetricChart
+              title="Avg research / game"
+              data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
+              series={[{ key: 'avg_research', label: 'avg research', color: '#60a5fa' }]}
+            />
+          </div>
+
+          <h3 className="metrics-section-title">Military</h3>
+          <div className="metrics-grid">
+            {/* Avg attacks / game */}
+            <MetricChart
+              title="Avg attacks / game"
+              data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
+              series={[{ key: 'avg_attacks', label: 'avg attacks', color: '#fb923c' }]}
+            />
+
+            {/* Abilities */}
             <MetricChart
               title="Avg abilities / game"
               data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
