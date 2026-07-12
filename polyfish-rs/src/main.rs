@@ -816,7 +816,7 @@ async fn get_metrics() -> Json<Value> {
                 "avg_builds": parse_f32("avg_builds"),
                 "avg_research": parse_f32("avg_research"),
                 "avg_attacks": parse_f32("avg_attacks"),
-                "avg_ability": parse_f32("avg_ability"),
+                "avg_ability": parse_f32("avg_abilities"),
                 "avg_steps": parse_f32("avg_moves"),
                 "avg_spt_t10": parse_f32("avg_spt_t10"),
                 "avg_spt_t20": parse_f32("avg_spt_t20"),

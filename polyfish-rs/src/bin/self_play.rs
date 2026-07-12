@@ -1807,6 +1807,7 @@ fn main() -> anyhow::Result<()> {
     let mut total_builds = 0;
     let mut total_research = 0;
     let mut total_attacks = 0;
+    let mut total_abilities = 0;
     let mut total_revealed_tiles: i64 = 0;
     let mut total_captured_tiles: i64 = 0;
     let mut total_t2c = [0.0f64; 7]; // villages first/p50/p80/all, ruins p50/p80/all
@@ -1884,6 +1885,11 @@ fn main() -> anyhow::Result<()> {
         total_attacks += result
             .action_counts
             .get(&polyfish::types::MoveType::Attack)
+            .copied()
+            .unwrap_or(0);
+        total_abilities += result
+            .action_counts
+            .get(&polyfish::types::MoveType::Ability)
             .copied()
             .unwrap_or(0);
 
@@ -2064,6 +2070,7 @@ fn main() -> anyhow::Result<()> {
     let avg_builds = total_builds as f32 / args.num_games as f32;
     let avg_research = total_research as f32 / args.num_games as f32;
     let avg_attacks = total_attacks as f32 / args.num_games as f32;
+    let avg_abilities = total_abilities as f32 / args.num_games as f32;
     let avg_revealed_tiles = total_revealed_tiles as f32 / args.num_games as f32;
     let avg_captured_tiles = total_captured_tiles as f32 / args.num_games as f32;
 
@@ -2232,6 +2239,7 @@ fn main() -> anyhow::Result<()> {
         "avg_builds": avg_builds,
         "avg_research": avg_research,
         "avg_attacks": avg_attacks,
+        "avg_abilities": avg_abilities,
         "avg_revealed_tiles": avg_revealed_tiles,
         "avg_captured_tiles": avg_captured_tiles,
         "avg_spt_t0": avg_spt_at(0),
