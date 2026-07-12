@@ -16,6 +16,8 @@ pub enum SearchBackend {
     /// Zero-search softmax over `ordering::score_move` — the fastest teacher
     /// for bulk imitation corpora. No evaluator, no tree.
     Greedy,
+    /// Uniform-random legal moves. The fixed 0-Elo anchor for `elo.py`.
+    Random,
 }
 
 impl Default for SearchBackend {
@@ -32,6 +34,7 @@ pub enum SearchBackendArg {
     Gumbel,
     Heuristic,
     Greedy,
+    Random,
 }
 
 impl From<SearchBackendArg> for SearchBackend {
@@ -41,6 +44,7 @@ impl From<SearchBackendArg> for SearchBackend {
             SearchBackendArg::Gumbel => SearchBackend::Gumbel { k: 16 },
             SearchBackendArg::Heuristic => SearchBackend::Heuristic,
             SearchBackendArg::Greedy => SearchBackend::Greedy,
+            SearchBackendArg::Random => SearchBackend::Random,
         }
     }
 }
@@ -88,6 +92,7 @@ pub enum SearchAgent<'a> {
     Gumbel(GumbelMctsAgent<'a>),
     Heuristic(crate::ai::heuristic_mcts::HeuristicMctsAgent),
     Greedy(crate::ai::heuristic_mcts::GreedyHeuristicAgent),
+    Random(crate::ai::heuristic_mcts::RandomAgent),
 }
 
 impl<'a> SearchAgent<'a> {
@@ -97,6 +102,7 @@ impl<'a> SearchAgent<'a> {
             SearchAgent::Gumbel(a) => a.select_move(game),
             SearchAgent::Heuristic(a) => a.select_move(game),
             SearchAgent::Greedy(a) => a.select_move(game),
+            SearchAgent::Random(a) => a.select_move(game),
         }
     }
 
@@ -110,6 +116,7 @@ impl<'a> SearchAgent<'a> {
             SearchAgent::Gumbel(a) => a.select_move_with_decomposed_visits(game, move_count),
             SearchAgent::Heuristic(a) => a.select_move_with_decomposed_visits(game, move_count),
             SearchAgent::Greedy(a) => a.select_move_with_decomposed_visits(game, move_count),
+            SearchAgent::Random(a) => a.select_move_with_decomposed_visits(game, move_count),
         }
     }
 
@@ -120,6 +127,7 @@ impl<'a> SearchAgent<'a> {
             // No NN priors to report stats over; the move is all callers need.
             SearchAgent::Heuristic(a) => (a.select_move(game), Vec::new()),
             SearchAgent::Greedy(a) => (a.select_move(game), Vec::new()),
+            SearchAgent::Random(a) => (a.select_move(game), Vec::new()),
         }
     }
 
@@ -198,6 +206,7 @@ pub fn make_search_agent(
         SearchBackend::Greedy => {
             SearchAgent::Greedy(crate::ai::heuristic_mcts::GreedyHeuristicAgent)
         }
+        SearchBackend::Random => SearchAgent::Random(crate::ai::heuristic_mcts::RandomAgent),
     }
 }
 

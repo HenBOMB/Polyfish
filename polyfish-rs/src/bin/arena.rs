@@ -57,11 +57,47 @@ struct Args {
     #[arg(long, default_value_t = 30)]
     max_turns: i32,
 
+    /// Game mode (ModeType repr; 2 = Domination to match training). In
+    /// Domination a game is decisive when one side is eliminated; at the
+    /// turn cap the higher score wins (same adjudication as self_play).
+    #[arg(long, default_value_t = 2)]
+    gamemode: u8,
+
     /// Cap concurrent rayon workers (= concurrent Metal devices on macOS).
     /// Lower this if you hit Metal GPU errors (command-buffer faults under
     /// memory pressure). 0 = use all cores (rayon default).
     #[arg(long, default_value_t = 0)]
     workers: usize,
+
+    /// Append one JSON line per game to this file (the Elo match ledger
+    /// consumed by elo.py). Omit to keep the human-readable summary only.
+    #[arg(long)]
+    json_out: Option<String>,
+
+    /// Ledger player name for configuration 1 (default: derived from
+    /// backend + model file stem + mcts iters).
+    #[arg(long)]
+    name1: Option<String>,
+
+    /// Ledger player name for configuration 2.
+    #[arg(long)]
+    name2: Option<String>,
+}
+
+/// Stable ledger identity: network-free backends need no model, so their name
+/// is backend(+iters) only; network backends are model@backend@iters.
+fn player_name(backend: SearchBackend, model: &str, mcts: usize) -> String {
+    let stem = std::path::Path::new(model)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| model.to_string());
+    match backend {
+        SearchBackend::Random => "random".to_string(),
+        SearchBackend::Greedy => "greedy".to_string(),
+        SearchBackend::Heuristic => format!("heuristic{mcts}"),
+        SearchBackend::Zero => format!("{stem}@zero{mcts}"),
+        SearchBackend::Gumbel { .. } => format!("{stem}@gumbel{mcts}"),
+    }
 }
 
 fn load_model(path: &str, device: &Device) -> anyhow::Result<PolyZeroNet> {
@@ -81,6 +117,10 @@ struct MatchResult {
     moves_config1: u64,
     ns_config2: u64,
     moves_config2: u64,
+    seed: i64,
+    swap: bool,
+    /// True when the game ended by elimination rather than score at the cap.
+    decisive: bool,
 }
 
 /// Play one game. `swap` puts config2 in the P1 seat and config1 in P2.
@@ -95,6 +135,7 @@ fn play_match(
     seed: i64,
     swap: bool,
     max_turns: i32,
+    gamemode: u8,
 ) -> MatchResult {
     let gen_settings = MapGenSettings {
         size: MapSize::Tiny,
@@ -106,7 +147,8 @@ fn play_match(
 
     let mut game = Game::new();
     game.state = generate(gen_settings);
-    game.state.settings.mode = ModeType::Perfection;
+    game.state.settings.mode =
+        ModeType::from_repr(gamemode).unwrap_or(ModeType::Perfection);
     game.state.settings.max_turns = max_turns;
     game.post_load();
 
@@ -164,6 +206,14 @@ fn play_match(
 
     let p1_score = game.state.tribes.get(&1).map(|t| t.score).unwrap_or(0);
     let p2_score = game.state.tribes.get(&2).map(|t| t.score).unwrap_or(0);
+    let is_alive = |pid: i32| {
+        game.state
+            .tribes
+            .get(&pid)
+            .map(|t| t.killed_turn <= 0 && t.resigned_turn <= 0)
+            .unwrap_or(false)
+    };
+    let (p1_alive, p2_alive) = (is_alive(1), is_alive(2));
 
     let (score_config1, score_config2) = if swap {
         (p2_score, p1_score)
@@ -171,7 +221,13 @@ fn play_match(
         (p1_score, p2_score)
     };
 
-    let winner_config = if score_config1 > score_config2 {
+    // Elimination beats score adjudication (mirrors self_play's Domination
+    // winner logic); a sole survivor wins decisively regardless of score.
+    let decisive = p1_alive != p2_alive;
+    let winner_config = if decisive {
+        let winner_seat = if p1_alive { 1u8 } else { 2u8 };
+        if swap { 3 - winner_seat } else { winner_seat }
+    } else if score_config1 > score_config2 {
         1
     } else if score_config2 > score_config1 {
         2
@@ -187,6 +243,9 @@ fn play_match(
         moves_config1,
         ns_config2,
         moves_config2,
+        seed,
+        swap,
+        decisive,
     }
 }
 
@@ -196,6 +255,7 @@ fn backend_from_arg(arg: SearchBackendArg, k: usize) -> SearchBackend {
         SearchBackendArg::Gumbel => SearchBackend::Gumbel { k },
         SearchBackendArg::Heuristic => SearchBackend::Heuristic,
         SearchBackendArg::Greedy => SearchBackend::Greedy,
+        SearchBackendArg::Random => SearchBackend::Random,
     }
 }
 
@@ -310,13 +370,13 @@ fn main() -> anyhow::Result<()> {
             let r1 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 play_match(
                     &eval1, &eval2, mcts1, mcts2, backend1, backend2, seed, false,
-                    args.max_turns,
+                    args.max_turns, args.gamemode,
                 )
             }));
             let r2 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 play_match(
                     &eval1, &eval2, mcts1, mcts2, backend1, backend2, seed, true,
-                    args.max_turns,
+                    args.max_turns, args.gamemode,
                 )
             }));
 
@@ -359,9 +419,63 @@ fn main() -> anyhow::Result<()> {
 
     let arena_elapsed = arena_start.elapsed();
 
+    if let Some(path) = &args.json_out {
+        let name1 = args
+            .name1
+            .clone()
+            .unwrap_or_else(|| player_name(backend1, &args.model1, mcts1));
+        let name2 = args
+            .name2
+            .clone()
+            .unwrap_or_else(|| player_name(backend2, &args.model2, mcts2));
+        let played_at = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
+        let mut out = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        use std::io::Write;
+        for r in &results {
+            let result = match r.winner_config {
+                1 => "1",
+                2 => "2",
+                _ => "draw",
+            };
+            let line = serde_json::json!({
+                "player1": name1,
+                "player2": name2,
+                "result": result,
+                "score1": r.score_config1,
+                "score2": r.score_config2,
+                "model1": args.model1,
+                "model2": args.model2,
+                "backend1": format!("{:?}", backend1),
+                "backend2": format!("{:?}", backend2),
+                "mcts1": mcts1,
+                "mcts2": mcts2,
+                "max_turns": args.max_turns,
+                "mode": args.gamemode,
+                "decisive": r.decisive,
+                "seed": r.seed,
+                "swap": r.swap,
+                "played_at": played_at,
+            });
+            writeln!(out, "{line}")?;
+        }
+        println!(
+            "Appended {} games to {} ({} vs {})",
+            results.len(),
+            path,
+            name1,
+            name2
+        );
+    }
+
     let mut config1_wins = 0u32;
     let mut config2_wins = 0u32;
     let mut draws = 0u32;
+    let mut decisive_games = 0u32;
     let mut score1_total = 0i64;
     let mut score2_total = 0i64;
     let mut ns1_total = 0u128;
@@ -374,6 +488,9 @@ fn main() -> anyhow::Result<()> {
             1 => config1_wins += 1,
             2 => config2_wins += 1,
             _ => draws += 1,
+        }
+        if r.decisive {
+            decisive_games += 1;
         }
         score1_total += r.score_config1 as i64;
         score2_total += r.score_config2 as i64;
@@ -419,6 +536,11 @@ fn main() -> anyhow::Result<()> {
         (config2_wins as f32 / n) * 100.0
     );
     println!("Draws:         {}", draws);
+    println!(
+        "Decisive (by elimination): {} ({:.1}%)",
+        decisive_games,
+        (decisive_games as f32 / n) * 100.0
+    );
     println!("---------------------");
     println!("Avg Score Config 1: {:.1}", score1_total as f32 / n);
     println!("Avg Score Config 2: {:.1}", score2_total as f32 / n);

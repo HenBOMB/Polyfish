@@ -451,7 +451,17 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                             if current + pop_gain < needed {
                                 score -= 4.0; // Doesn't finish level
                             } else {
-                                score += 5.0; // Finishes level!
+                                // Instant level-up: decisive so completing growth
+                                // beats summons/idle steps, scaled by what the new
+                                // level unlocks (2: Workshop/Explorer, 3: Walls/
+                                // Resources, 4: Pop/Border, 5+: Park/SuperUnit).
+                                let milestone = match city.level + 1 {
+                                    2 => 4.0,
+                                    3 => 3.0,
+                                    4 => 3.0,
+                                    _ => 6.0,
+                                };
+                                score += 15.0 + milestone;
                             }
                         }
                     }

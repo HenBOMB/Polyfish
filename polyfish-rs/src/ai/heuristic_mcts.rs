@@ -145,6 +145,7 @@ impl GreedyHeuristicAgent {
                 unit_type: m.unit_type().ok(),
                 tech_type: m.tech_type().ok(),
                 ability_type: m.ability_type().ok(),
+                reward_type: m.reward_type().ok(),
             })
             .collect();
 
@@ -167,6 +168,56 @@ impl GreedyHeuristicAgent {
                 .unwrap_or(0)
         });
 
+        (Some(moves.swap_remove(idx)), visits)
+    }
+}
+
+/// Uniform-random legal-move agent. Exists as the fixed 0-Elo anchor for the
+/// rating ladder (`elo.py`): it never changes, so every rating ever computed
+/// against it stays comparable across runs and architectures.
+pub struct RandomAgent;
+
+impl RandomAgent {
+    pub fn select_move(&self, game: &mut Game) -> Option<Box<dyn Move>> {
+        self.select_move_with_decomposed_visits(game, usize::MAX).0
+    }
+
+    /// Mirrors the other backends' root EndTurn suppression so "random" means
+    /// random play, not random early turn-ending.
+    pub fn select_move_with_decomposed_visits(
+        &self,
+        game: &mut Game,
+        _move_count: usize,
+    ) -> (Option<Box<dyn Move>>, Vec<crate::ai::mcts_types::MoveVisit>) {
+        use crate::ai::mcts_types::MoveVisit;
+        use rand::Rng;
+
+        let mut moves = game.legal_moves();
+        let has_other = moves.iter().any(|m| m.move_type() != MoveType::EndTurn);
+        if has_other {
+            moves.retain(|m| m.move_type() != MoveType::EndTurn);
+        }
+        if moves.is_empty() {
+            return (Some(Box::new(EndTurnMove)), Vec::new());
+        }
+
+        let p = 1.0 / moves.len() as f32;
+        let visits: Vec<MoveVisit> = moves
+            .iter()
+            .map(|m| MoveVisit {
+                move_type: m.move_type(),
+                visits: p,
+                source_idx: m.source_idx().ok(),
+                target_idx: m.target_idx().ok(),
+                structure_type: m.structure_type().ok(),
+                unit_type: m.unit_type().ok(),
+                tech_type: m.tech_type().ok(),
+                ability_type: m.ability_type().ok(),
+                reward_type: m.reward_type().ok(),
+            })
+            .collect();
+
+        let idx = rand::thread_rng().gen_range(0..moves.len());
         (Some(moves.swap_remove(idx)), visits)
     }
 }
@@ -233,6 +284,7 @@ impl HeuristicMctsAgent {
                     unit_type: m.unit_type().ok(),
                     tech_type: m.tech_type().ok(),
                     ability_type: m.ability_type().ok(),
+                    reward_type: m.reward_type().ok(),
                 })
             })
             .collect();

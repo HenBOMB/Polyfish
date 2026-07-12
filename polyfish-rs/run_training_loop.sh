@@ -97,7 +97,11 @@ REWARD_SHAPING=false
 # Play a league match every LEAGUE_INTERVAL iterations (iteration 10, 20, 30,
 # ... by default). 0 disables league play entirely. Override with -l.
 LEAGUE_INTERVAL=10
-while getopts "fbcri:g:n:a:e:l:" opt; do
+# Run a Kaggle training round every TRAIN_EVERY iterations (-K). Between
+# rounds, fresh games accumulate in kaggle_pending/ — batching amortizes the
+# fixed per-round Kaggle overhead (dataset processing + kernel queue + polls).
+TRAIN_EVERY=1
+while getopts "fbcri:g:n:a:e:l:K:" opt; do
   case $opt in
     f)
       FORCE_TRAIN=true
@@ -130,6 +134,9 @@ while getopts "fbcri:g:n:a:e:l:" opt; do
     l)
       LEAGUE_INTERVAL=$OPTARG
       ;;
+    K)
+      TRAIN_EVERY=$OPTARG
+      ;;
     \?)
       echo "Invalid option: -$OPTARG" >&2
       exit 1
@@ -152,7 +159,7 @@ MILESTONE_EVERY=$(scaled 100)
 # train.py reads REPLAY_BUFFER_FILES; archive pruning keeps window + 1 in sync.
 ARCHIVE_KEEP=$(scaled 10)
 export REPLAY_BUFFER_FILES=$ARCHIVE_KEEP
-echo "Schedule (games-based, -g $NUM_GAMES vs baseline $BASELINE_GAMES): $ITERATIONS iterations, checkpoint every $CHECKPOINT_EVERY, milestone every $MILESTONE_EVERY, league every $LEAGUE_INTERVAL iterations, replay window $ARCHIVE_KEEP files"
+echo "Schedule (games-based, -g $NUM_GAMES vs baseline $BASELINE_GAMES): $ITERATIONS iterations, checkpoint every $CHECKPOINT_EVERY, milestone every $MILESTONE_EVERY, league every $LEAGUE_INTERVAL iterations, replay window $ARCHIVE_KEEP files, Kaggle training every $TRAIN_EVERY iteration(s)"
 
 REWARD_FLAG=""
 if [ "$REWARD_SHAPING" = true ]; then
@@ -240,6 +247,7 @@ if [ "$START_ITER" -gt 1 ] && [ ! -f "model.safetensors" ]; then
 fi
 .venv/bin/python3 init_model.py
 
+TRAIN_FAILS=0
 for ((i=START_ITER; i<START_ITER+ITERATIONS; i++))
 do
     ITER_STARTED_AT=$(.venv/bin/python3 training_log.py now-iso)
@@ -337,19 +345,32 @@ do
     
     GAME_JSON=$(.venv/bin/python3 training_log.py parse-self-play)
     GAMES_FILE=$(echo "$GAME_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('games_file',''))")
-    
-    # 2. Training
-    # Stream train.py's output live (batch/epoch progress) instead of buffering
-    # it silently until the process exits. Metrics are read from the sidecar
-    # JSON file after train.py finishes.
-    .venv/bin/python3 kaggle_manager.py all
-    TRAIN_STATUS=$?
-    TRAIN_JSON=$(.venv/bin/python3 training_log.py parse-train)
-    if [ "$TRAIN_STATUS" -ne 0 ]; then
-        echo "Training failed with exit code $TRAIN_STATUS" >&2
-        exit "$TRAIN_STATUS"
+
+    # Stage fresh games for the next Kaggle round: kaggle_manager uploads
+    # ONLY what's in kaggle_pending/ (cleared by it after a successful round).
+    mkdir -p kaggle_pending
+    cp games_*.safetensors kaggle_pending/ 2>/dev/null || true
+
+    # 2. Training (Kaggle round every TRAIN_EVERY iterations). A failed round
+    # is tolerated up to 3 consecutive times: pending games stay staged, the
+    # model stays at its last pulled version, and the next round retries with
+    # more accumulated data.
+    TRAIN_JSON="{}"
+    LOSS=""
+    if [ $((i % TRAIN_EVERY)) -eq 0 ]; then
+        if .venv/bin/python3 kaggle_manager.py all; then
+            TRAIN_FAILS=0
+            TRAIN_JSON=$(.venv/bin/python3 training_log.py parse-train)
+            LOSS=$(echo "$TRAIN_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('loss',''))")
+        else
+            TRAIN_FAILS=$((TRAIN_FAILS + 1))
+            echo "⚠️  Kaggle training round failed ($TRAIN_FAILS consecutive); games remain staged in kaggle_pending/" >&2
+            if [ "$TRAIN_FAILS" -ge 3 ]; then
+                echo "3 consecutive Kaggle training failures — aborting" >&2
+                exit 1
+            fi
+        fi
     fi
-    LOSS=$(echo "$TRAIN_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('loss',''))")
 
     # 3. Log
     .venv/bin/python3 training_log.py append-row \

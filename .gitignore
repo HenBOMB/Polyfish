@@ -52,3 +52,14 @@ polyfish-rs/checkpoints_old/
 # Telemetry JSON
 polyfish-rs/.*.json
 polyfish-rs/*.json
+
+# Kaggle pipeline runtime state
+polyfish-rs/kaggle_output/
+polyfish-rs/kaggle_pending/
+polyfish-rs/kaggle_kernel_sync/
+polyfish-rs/kaggle_data_sync/
+polyfish-rs/.kaggle_chain_ok
+polyfish-rs/tmp_kernel_out/
+polyfish-rs/kaggle_data_sync/
+!polyfish-rs/kaggle_data_sync/dataset-metadata.json
+polyfish-rs/kaggle_kernel_sync/

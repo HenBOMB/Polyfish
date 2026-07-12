@@ -34,7 +34,7 @@ const GOOD_BOT_FINAL_SCORE: f32 = 8000.0;
 // antisymmetric — the opponent's progress isn't my loss — so any abs share
 // gets systematically corrupted through EndTurn-crossing lines, worse as
 // search deepens. The mirror-play "empty relative label" problem is fixed in
-// the DATA instead: anchor games vs the heuristic backend (--anchor-frac)
+// the DATA instead: anchor games vs the greedy backend (--anchor-frac)
 // make passivity actually lose, giving the relative label real signal.
 const FINAL_OUTCOME_REL_W: f32 = 1.0;
 
@@ -60,6 +60,16 @@ const NEAR_DELTA_W: f32 = 0.7;
 // FINAL_OUTCOME_REL_W above. The signal against passivity comes from anchor
 // games, not from a non-zero-sum label.
 const NEAR_DELTA_REL_W: f32 = 1.0;
+
+// Potential-based SPT shaping (economy credit). Φ = (my_spt - opp_spt) /
+// default_max_spt, clamped ±1; each step's label gets SPT_SHAPE_W *
+// (Φ at next own decision - Φ now). Within a turn the opponent's SPT is
+// frozen, so a level-up harvest is credited the instant SPT rises instead
+// of waiting for the score tail — dense credit the mirror-play relative
+// score label nets to ~0. Antisymmetric (zero-sum backup stays valid) and
+// potential-based (Ng et al. 1999), so it telescopes out of full returns
+// and cannot change the optimal policy, only the credit assignment.
+const SPT_SHAPE_W: f32 = 0.15;
 
 // Ramp (in iterations) for β on σ(Q) in the exported policy targets:
 // β = min(1, iteration/20). Early on the value head's Q ordering is noise
@@ -210,6 +220,8 @@ struct HistoryStep {
     player_id: PlayerId,
     my_score: i32,
     opp_score: i32,
+    my_spt: i32,
+    opp_spt: i32,
     turn: i32,
     root_value: Option<f32>,
 }
@@ -223,6 +235,8 @@ struct LabelStep {
     turn: i32,
     my_score: i32,
     opp_score: i32,
+    my_spt: i32,
+    opp_spt: i32,
     root_value: Option<f32>,
 }
 
@@ -233,6 +247,8 @@ impl From<&HistoryStep> for LabelStep {
             turn: s.turn,
             my_score: s.my_score,
             opp_score: s.opp_score,
+            my_spt: s.my_spt,
+            opp_spt: s.opp_spt,
             root_value: s.root_value,
         }
     }
@@ -317,6 +333,26 @@ fn td_lambda_labels(
         .collect()
 }
 
+/// Per-step potential-based SPT shaping deltas, aligned 1:1 with `history`
+/// (see the doc comment on `SPT_SHAPE_W`). For step i of player p the delta
+/// is Φ(p's next recorded decision) - Φ(step i); a player's last recorded
+/// step gets 0.0 (terminal potential treated as its own — no phantom credit).
+fn spt_shaping_deltas(history: &[LabelStep]) -> Vec<f32> {
+    let norm = polyfish::states::default_max_spt() as f32;
+    let phi = |s: &LabelStep| ((s.my_spt - s.opp_spt) as f32 / norm).clamp(-1.0, 1.0);
+
+    let mut out = vec![0.0f32; history.len()];
+    let mut next_phi: HashMap<PlayerId, f32> = HashMap::new();
+    for (i, step) in history.iter().enumerate().rev() {
+        let phi_now = phi(step);
+        if let Some(&phi_next) = next_phi.get(&step.player_id) {
+            out[i] = phi_next - phi_now;
+        }
+        next_phi.insert(step.player_id, phi_now);
+    }
+    out
+}
+
 /// Result from a single game - contains all data needed for training
 struct GameResult {
     history: Vec<HistoryStep>,
@@ -328,6 +364,12 @@ struct GameResult {
     final_tile_owners: Vec<i32>,
     moves: usize,
     winner_score: i32,
+    /// Winning player id (sole survivor, else score adjudication at the cap).
+    winner_id: i32,
+    /// Ended by elimination rather than score adjudication.
+    decisive: bool,
+    /// Seat (player id) the greedy anchor occupied; None for non-anchor games.
+    anchor_seat: Option<i32>,
     recap: ModReplay,
     cap_ruins: usize,
     cap_villages: usize,
@@ -749,14 +791,17 @@ fn play_single_game(
                 game.state.settings.current_player_turn_id,
                 m.serialize(),
             ));
-            // Snapshot scores at this moment (pre-move) for the TD label.
+            // Snapshot scores/SPT at this moment (pre-move) for the TD label.
             let (my_score_now, opp_score_now) = reward::score_snapshot(&game.state, pov);
+            let (my_spt_now, opp_spt_now) = reward::spt_snapshot(&game.state, pov);
             game_history.push(HistoryStep {
                 features: state_t,
                 policy: policy_data,
                 player_id: pov,
                 my_score: my_score_now,
                 opp_score: opp_score_now,
+                my_spt: my_spt_now,
+                opp_spt: opp_spt_now,
                 turn: game.state.settings.turn,
                 root_value,
             });
@@ -876,6 +921,16 @@ fn play_single_game(
         ruins_t2c_all: t2c_turn(&ruin_capture_turns, initial_ruins, 1.0, max_turns),
         spt_at_turn,
         winner_score,
+        winner_id,
+        decisive: is_decisive,
+        anchor_seat: match (
+            backend1 == SearchBackend::Greedy,
+            backend2 == SearchBackend::Greedy,
+        ) {
+            (true, false) => Some(1),
+            (false, true) => Some(2),
+            _ => None,
+        },
         recap: ModReplay {
             game_state: initial_state,
             turns: group_recap(flat_recap),
@@ -887,6 +942,62 @@ fn play_single_game(
         action_counts,
         moves_by_turn,
     })
+}
+
+const ANCHOR_STATE_PATH: &str = ".anchor_state.json";
+const ANCHOR_WINRATE_WINDOW: usize = 3;
+const ANCHOR_STATE_KEEP: usize = 50;
+
+/// Model-vs-anchor outcome of one self_play run, persisted across
+/// invocations so the anchor gate can act on measured strength.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct AnchorRecord {
+    iteration: usize,
+    games: usize,
+    model_wins: f32,
+}
+
+/// Records at or beyond the current iteration are dropped on load, so reruns
+/// and fresh --reset campaigns self-heal without manual state cleanup.
+fn load_anchor_history(current_iteration: usize) -> Vec<AnchorRecord> {
+    std::fs::read_to_string(ANCHOR_STATE_PATH)
+        .ok()
+        .and_then(|s| serde_json::from_str::<Vec<AnchorRecord>>(&s).ok())
+        .map(|v: Vec<AnchorRecord>| {
+            v.into_iter()
+                .filter(|r| r.iteration < current_iteration)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn append_anchor_record(current_iteration: usize, games: usize, model_wins: f32) {
+    let mut hist = load_anchor_history(current_iteration + 1);
+    hist.retain(|r| r.iteration != current_iteration);
+    hist.push(AnchorRecord {
+        iteration: current_iteration,
+        games,
+        model_wins,
+    });
+    let skip = hist.len().saturating_sub(ANCHOR_STATE_KEEP);
+    if let Ok(s) = serde_json::to_string(&hist[skip..]) {
+        let _ = std::fs::write(ANCHOR_STATE_PATH, s);
+    }
+}
+
+/// Rolling model win rate over the last ANCHOR_WINRATE_WINDOW runs that
+/// actually played anchor games. None until any measurement exists.
+fn rolling_anchor_winrate(current_iteration: usize) -> Option<f32> {
+    let hist = load_anchor_history(current_iteration);
+    let recent: Vec<&AnchorRecord> = hist
+        .iter()
+        .rev()
+        .filter(|r| r.games > 0)
+        .take(ANCHOR_WINRATE_WINDOW)
+        .collect();
+    let games: usize = recent.iter().map(|r| r.games).sum();
+    let wins: f32 = recent.iter().map(|r| r.model_wins).sum();
+    (games > 0).then(|| wins / games as f32)
 }
 
 fn group_recap(flat: Vec<(i32, i32, serde_json::Value)>) -> Vec<ReplayTurn> {
@@ -933,15 +1044,36 @@ fn main() -> anyhow::Result<()> {
         #[arg(long)]
         opponent: Option<String>,
 
-        /// Fraction of games (0..1) played against the network-free Heuristic
-        /// search backend as an anchor opponent (seat alternates between
-        /// anchor games). Anchor games break mirror-play symmetry: a passive
-        /// net LOSES them, so the relative value label finally carries an
-        /// anti-passivity gradient. The anchor side's data is recorded too
-        /// (fresh teacher data, same as the BC corpus). Mutually exclusive
-        /// with --opponent.
+        /// Fraction of games (0..1) played against the network-free Greedy
+        /// backend as an anchor opponent (seat alternates between anchor
+        /// games). Anchor games break mirror-play symmetry: greedy attacks
+        /// and ELIMINATES a passive net, so the relative value label carries
+        /// an anti-passivity gradient and the corpus contains real decisive
+        /// wins/losses. The anchor side's data is recorded too (fresh teacher
+        /// data, same as the BC corpus). This is a bootstrap: after
+        /// --anchor-hold-iters the effective fraction is gated on the
+        /// measured win rate vs greedy (see .anchor_state.json), annealing
+        /// smoothly to --anchor-probe-frac once the model reliably beats it.
+        /// Mutually exclusive with --opponent.
         #[arg(long, default_value_t = 0.0)]
         anchor_frac: f32,
+
+        /// Iterations to hold the anchor at full --anchor-frac before the
+        /// win-rate gate takes over.
+        #[arg(long, default_value_t = 10)]
+        anchor_hold_iters: usize,
+
+        /// Rolling win rate vs greedy at which the anchor counts as
+        /// graduated: effective frac anneals linearly from full at 50% down
+        /// to --anchor-probe-frac at this value. Must be in (0.5, 1].
+        #[arg(long, default_value_t = 0.55)]
+        anchor_graduate_winrate: f32,
+
+        /// Residual anchor fraction kept after graduation so the win rate
+        /// stays measured and the anchor returns on regression (floored to
+        /// >= 1 game per run whenever the gate output is nonzero).
+        #[arg(long, default_value_t = 0.05)]
+        anchor_probe_frac: f32,
 
         /// Value-head trust in [0,1]: β on σ(completed-Q) both inside the
         /// search tree and in exported policy targets. Overrides the
@@ -1070,6 +1202,14 @@ fn main() -> anyhow::Result<()> {
     if !(0.0..=1.0).contains(&args.anchor_frac) {
         anyhow::bail!("--anchor-frac must be in [0, 1]");
     }
+    if args.anchor_frac > 0.0 {
+        if !(args.anchor_graduate_winrate > 0.5 && args.anchor_graduate_winrate <= 1.0) {
+            anyhow::bail!("--anchor-graduate-winrate must be in (0.5, 1]");
+        }
+        if !(0.0..=1.0).contains(&args.anchor_probe_frac) {
+            anyhow::bail!("--anchor-probe-frac must be in [0, 1]");
+        }
+    }
     if let Some(t) = args.value_trust {
         if !(0.0..=1.0).contains(&t) {
             anyhow::bail!("--value-trust must be in [0, 1]");
@@ -1091,6 +1231,7 @@ fn main() -> anyhow::Result<()> {
         SearchBackendArg::Gumbel => SearchBackend::Gumbel { k: args.gumbel_k },
         SearchBackendArg::Heuristic => SearchBackend::Heuristic,
         SearchBackendArg::Greedy => SearchBackend::Greedy,
+        SearchBackendArg::Random => SearchBackend::Random,
     };
 
     // Select device: Metal (macOS) > CUDA (NVIDIA) > CPU, unless overridden via POLYFISH_DEVICE
@@ -1366,10 +1507,57 @@ fn main() -> anyhow::Result<()> {
         (None, Some(t2)) => format!("random vs {t2}"),
         (None, None) => "random".to_string(),
     };
+    // Greedy-anchor gate: hold the full --anchor-frac for the first
+    // --anchor-hold-iters, then scale by the measured rolling win rate vs
+    // greedy (.anchor_state.json, written by previous runs). Full frac while
+    // the model still loses (<= 50%), annealing linearly down to
+    // --anchor-probe-frac at --anchor-graduate-winrate; probe games keep the
+    // win rate measured so the anchor comes back on regression. Iteration is
+    // EFF_ITER, the same clock as the other curriculum gates.
+    let anchor_winrate = rolling_anchor_winrate(args.iteration);
+    let anchor_frac = if args.anchor_frac <= 0.0
+        || args.opponent.is_some()
+        || args.iteration <= args.anchor_hold_iters
+    {
+        args.anchor_frac
+    } else {
+        match anchor_winrate {
+            None => args.anchor_frac,
+            Some(wr) => {
+                let t = ((wr - 0.5) / (args.anchor_graduate_winrate - 0.5)).clamp(0.0, 1.0);
+                let probe = args.anchor_probe_frac.min(args.anchor_frac);
+                args.anchor_frac + t * (probe - args.anchor_frac)
+            }
+        }
+    };
+    // Floor a nonzero gate output to >= 1 game this run, else small probe
+    // fractions round to zero games and the win rate silently goes stale.
+    let anchor_frac = if anchor_frac > 0.0 {
+        anchor_frac.max(1.0 / args.num_games.max(1) as f32)
+    } else {
+        anchor_frac
+    };
+    if args.anchor_frac > 0.0 && args.opponent.is_none() {
+        match anchor_winrate {
+            Some(wr) => println!(
+                "[selfplay] anchor gate: rolling winrate vs greedy {:.0}% -> effective anchor_frac {:.3} (hold <= iter {}, graduate at {:.0}%, probe {:.3})",
+                wr * 100.0,
+                anchor_frac,
+                args.anchor_hold_iters,
+                args.anchor_graduate_winrate * 100.0,
+                args.anchor_probe_frac,
+            ),
+            None => println!(
+                "[selfplay] anchor gate: no measurements yet -> full anchor_frac {:.3}",
+                anchor_frac
+            ),
+        }
+    }
+
     let match_label = match &args.opponent {
         Some(opp) => format!("league vs {opp}"),
-        None if args.anchor_frac > 0.0 => {
-            format!("self-play + {:.0}% heuristic-anchor games", args.anchor_frac * 100.0)
+        None if anchor_frac > 0.0 => {
+            format!("self-play + {:.0}% greedy-anchor games", anchor_frac * 100.0)
         }
         None => "self-play".to_string(),
     };
@@ -1383,6 +1571,7 @@ fn main() -> anyhow::Result<()> {
         SearchBackend::Gumbel { k } => format!("Gumbel k={k}"),
         SearchBackend::Heuristic => "Heuristic MCTS (no NN)".to_string(),
         SearchBackend::Greedy => "Greedy heuristic (no NN, no search)".to_string(),
+        SearchBackend::Random => "Uniform random (no NN, no search)".to_string(),
     };
     println!(
         "[selfplay] {match_label}: {} games, {} mcts-iters, {search_label}, tribes {tribe_label} | eval {backend_label} | {eval_servers} shard(s) cache={per_shard_cache:?} workers={} | {num_actors} actors max_batch={} coalesce_us={} leaf_batch={:?} | device {:?} (CANDLE_METAL_COMPUTE_PER_BUFFER={metal_compute_per_buffer})",
@@ -1435,14 +1624,14 @@ fn main() -> anyhow::Result<()> {
                     // ordinal (game parity alone would pin it to one seat at
                     // e.g. frac 0.25, where anchor games are all odd-i).
                     let anchor_ordinal =
-                        (((i + 1) as f32) * args.anchor_frac).floor() as usize;
-                    let is_anchor = args.anchor_frac > 0.0
-                        && anchor_ordinal > ((i as f32) * args.anchor_frac).floor() as usize;
+                        (((i + 1) as f32) * anchor_frac).floor() as usize;
+                    let is_anchor = anchor_frac > 0.0
+                        && anchor_ordinal > ((i as f32) * anchor_frac).floor() as usize;
                     let (backend_seat1, backend_seat2) = if is_anchor {
                         if anchor_ordinal % 2 == 0 {
-                            (SearchBackend::Heuristic, backend)
+                            (SearchBackend::Greedy, backend)
                         } else {
-                            (backend, SearchBackend::Heuristic)
+                            (backend, SearchBackend::Greedy)
                         }
                     } else {
                         (backend, backend)
@@ -1632,7 +1821,20 @@ fn main() -> anyhow::Result<()> {
     let mut total_moves_by_turn: HashMap<i32, HashMap<polyfish::types::MoveType, usize>> =
         HashMap::new();
 
+    let mut decisive_games = 0usize;
+    let mut anchor_games_n = 0usize;
+    let mut anchor_model_wins = 0.0f32;
+
     for result in results {
+        if result.decisive {
+            decisive_games += 1;
+        }
+        if let Some(anchor_pid) = result.anchor_seat {
+            anchor_games_n += 1;
+            if result.winner_id != 0 && result.winner_id != anchor_pid {
+                anchor_model_wins += 1.0;
+            }
+        }
         total_score += result.winner_score;
         total_moves += result.moves;
         total_revealed_tiles += result.revealed_tiles as i64;
@@ -1712,6 +1914,7 @@ fn main() -> anyhow::Result<()> {
 
         let label_steps: Vec<LabelStep> = result.history.iter().map(LabelStep::from).collect();
         let td_deltas = td_lambda_labels(&label_steps, final_scores, LAMBDA_RETURN);
+        let spt_shaping = spt_shaping_deltas(&label_steps);
 
         // Determine the winner_id for this game
         let game_winner_id = {
@@ -1795,8 +1998,12 @@ fn main() -> anyhow::Result<()> {
 
             let value = if args.reward_shaping {
                 // TD delta carries per-action credit; the final-outcome tail
-                // carries the long-horizon signal.
-                (TD_W * td_deltas[step_idx] + (1.0 - TD_W) * final_outcome).clamp(-1.0, 1.0)
+                // carries the long-horizon signal; the SPT potential delta
+                // adds dense economy credit (see SPT_SHAPE_W).
+                (TD_W * td_deltas[step_idx]
+                    + (1.0 - TD_W) * final_outcome
+                    + SPT_SHAPE_W * spt_shaping[step_idx])
+                    .clamp(-1.0, 1.0)
             } else {
                 final_outcome.clamp(-1.0, 1.0)
             };
@@ -2021,6 +2228,9 @@ fn main() -> anyhow::Result<()> {
         "ruins_t2c_p50": (total_t2c[4] / args.num_games as f64) as f32,
         "ruins_t2c_p80": (total_t2c[5] / args.num_games as f64) as f32,
         "ruins_t2c_all": (total_t2c[6] / args.num_games as f64) as f32,
+        "decisive_frac": decisive_games as f32 / args.num_games.max(1) as f32,
+        "anchor_games": anchor_games_n,
+        "anchor_model_wins": anchor_model_wins,
         "games_file": games_file,
         "moves_by_turn": moves_by_turn,
     });
@@ -2028,6 +2238,19 @@ fn main() -> anyhow::Result<()> {
         ".last_self_play_metrics.json",
         serde_json::to_string(&metrics)?,
     )?;
+
+    if args.anchor_frac > 0.0 && args.opponent.is_none() {
+        append_anchor_record(args.iteration, anchor_games_n, anchor_model_wins);
+        if anchor_games_n > 0 {
+            println!(
+                "[selfplay] anchor games: {} | model wins {:.0} ({:.0}%) | decisive games this run: {}",
+                anchor_games_n,
+                anchor_model_wins,
+                100.0 * anchor_model_wins / anchor_games_n as f32,
+                decisive_games,
+            );
+        }
+    }
 
     let total_duration = start_time.elapsed();
     println!("\n=== Self-Play Complete ===");
@@ -2077,6 +2300,8 @@ mod td_lambda_tests {
             turn,
             my_score: my,
             opp_score: opp,
+            my_spt: 0,
+            opp_spt: 0,
             root_value: rv,
         }
     }
@@ -2179,5 +2404,73 @@ mod td_lambda_tests {
             "got {}, expected {expected}",
             out[0]
         );
+    }
+}
+
+#[cfg(test)]
+mod spt_shaping_tests {
+    use super::*;
+
+    fn step_spt(player_id: PlayerId, turn: i32, my_spt: i32, opp_spt: i32) -> LabelStep {
+        LabelStep {
+            player_id,
+            turn,
+            my_score: 0,
+            opp_score: 0,
+            my_spt,
+            opp_spt,
+            root_value: None,
+        }
+    }
+
+    fn norm() -> f32 {
+        polyfish::states::default_max_spt() as f32
+    }
+
+    #[test]
+    fn level_up_move_gets_instant_positive_credit() {
+        // SPT 2 before the level-up harvest, 3 at the next own decision:
+        // the harvesting step itself carries the +1/norm credit.
+        let history = vec![step_spt(1, 3, 2, 2), step_spt(1, 3, 3, 2)];
+        let out = spt_shaping_deltas(&history);
+        assert!((out[0] - 1.0 / norm()).abs() < 1e-6, "got {}", out[0]);
+        // A player's last recorded step gets no phantom credit.
+        assert_eq!(out[1], 0.0);
+    }
+
+    #[test]
+    fn opponent_gain_is_charged_at_the_boundary_and_antisymmetric() {
+        // P1 ends turn 3 at parity; P2 levels up on their turn; P1's next
+        // decision sees the deficit. The drop lands on P1's boundary step,
+        // and P2's harvesting step carries the mirror-image positive credit.
+        let history = vec![
+            step_spt(1, 3, 2, 2), // P1's last move of turn 3
+            step_spt(2, 3, 2, 2), // P2's harvest decision (their POV)
+            step_spt(2, 3, 3, 2), // P2's next decision: their SPT is up
+            step_spt(1, 4, 2, 3), // P1's next turn: opponent SPT up
+        ];
+        let out = spt_shaping_deltas(&history);
+        assert!((out[0] + 1.0 / norm()).abs() < 1e-6, "got {}", out[0]);
+        assert!((out[1] - 1.0 / norm()).abs() < 1e-6, "got {}", out[1]);
+    }
+
+    #[test]
+    fn deltas_telescope_to_last_minus_first_potential_per_player() {
+        // Potential-based invariant: a player's summed deltas equal
+        // Φ(their last step) - Φ(their first step), so the shaping adds no
+        // net free reward over a game — it only relocates credit.
+        let history = vec![
+            step_spt(1, 0, 0, 0),
+            step_spt(2, 0, 0, 0),
+            step_spt(1, 1, 2, 1),
+            step_spt(2, 1, 1, 2),
+            step_spt(1, 2, 5, 3),
+            step_spt(2, 2, 3, 5),
+        ];
+        let out = spt_shaping_deltas(&history);
+        let p1_sum: f32 = out[0] + out[2] + out[4];
+        let p2_sum: f32 = out[1] + out[3] + out[5];
+        assert!((p1_sum - 2.0 / norm()).abs() < 1e-6, "got {p1_sum}");
+        assert!((p2_sum + 2.0 / norm()).abs() < 1e-6, "got {p2_sum}");
     }
 }

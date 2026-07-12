@@ -108,7 +108,12 @@ fn compute_move_priors_from_probs(
                 .ability_type()
                 .ok()
                 .and_then(|a| DecomposedMapper::map_ability(a)),
-            MoveType::Reward => Some(191),
+            MoveType::Reward => Some(
+                mv.reward_type()
+                    .ok()
+                    .and_then(DecomposedMapper::map_reward)
+                    .unwrap_or(crate::ai::mapper::REWARD_FALLBACK_SLOT),
+            ),
             _ => None,
         };
 
@@ -225,7 +230,12 @@ fn compute_move_log_probs_from_logs(
                 .ability_type()
                 .ok()
                 .and_then(|a| DecomposedMapper::map_ability(a)),
-            MoveType::Reward => Some(191),
+            MoveType::Reward => Some(
+                mv.reward_type()
+                    .ok()
+                    .and_then(DecomposedMapper::map_reward)
+                    .unwrap_or(crate::ai::mapper::REWARD_FALLBACK_SLOT),
+            ),
             _ => None,
         };
 
