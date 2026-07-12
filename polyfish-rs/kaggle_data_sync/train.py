@@ -9,6 +9,12 @@ import random
 import gc
 import time
 
+# Disable advanced SDP backends that may lack kernel images on older Kaggle GPUs (e.g. P100/T4)
+if hasattr(torch.backends.cuda, 'enable_flash_sdp'):
+    torch.backends.cuda.enable_flash_sdp(False)
+if hasattr(torch.backends.cuda, 'enable_mem_efficient_sdp'):
+    torch.backends.cuda.enable_mem_efficient_sdp(False)
+
 # --- Configuration ---
 BATCH_SIZE = 256
 EPOCHS = int(os.environ.get("TRAIN_EPOCHS", "2"))
@@ -37,22 +43,31 @@ DETACH_VALUE_TRUNK = os.environ.get("DETACH_VALUE_TRUNK", "0") == "1"
 # DETACH_VALUE_TRUNK — trunk gradient is its entire purpose).
 OWNERSHIP_LOSS_WEIGHT = float(os.environ.get("OWNERSHIP_LOSS_WEIGHT", "0.15"))
 
-# Device selection: MPS (Apple Silicon) > CUDA (NVIDIA) > CPU
+# Device selection: CUDA (NVIDIA) > MPS (Apple Silicon) > CPU
+# Each backend gets its own try/except so a probe failure in one
+# doesn't skip the other (e.g. MPS raising on Linux kills the CUDA path).
+DEVICE = "cpu"
 try:
-    if torch.backends.mps.is_available():
-        # Apple Silicon Metal Performance Shaders
-        t = torch.tensor([1.0], device="mps")
-        DEVICE = "mps"
-    elif torch.cuda.is_available():
-        # NVIDIA CUDA
+    if torch.cuda.is_available():
         t = torch.tensor([1.0], device="cuda")
         DEVICE = "cuda"
-    else:
-        DEVICE = "cpu"
 except Exception as e:
-    print(f"Warning: GPU available but failed to initialize ({e}). Fallback to CPU.")
-    DEVICE = "cpu"
+    print(f"Warning: CUDA available but failed to initialize ({e}).")
 
+if DEVICE == "cpu":
+    try:
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            t = torch.tensor([1.0], device="mps")
+            DEVICE = "mps"
+    except Exception as e:
+        print(f"Warning: MPS available but failed to initialize ({e}).")
+
+print(f"Device: {DEVICE}  |  torch {torch.__version__}  |  CUDA build: {torch.version.cuda}  |  cuda.is_available(): {torch.cuda.is_available()}")
+if DEVICE == "cuda":
+    print(f"GPU: {torch.cuda.get_device_name(0)}")
+elif DEVICE == "cpu":
+    print("WARNING: Running on CPU! Training will be extremely slow.")
+    
 # Architecture matching Rust `network.rs` (decomposed policy + auxiliary values)
 class ResBlock(nn.Module):
     def __init__(self, channels):

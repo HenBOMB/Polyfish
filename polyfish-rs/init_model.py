@@ -25,7 +25,7 @@ def init_model():
     # Check if model already exists to avoid overwriting trained weights!
     import os
     if os.path.exists("model.safetensors"):
-        print("✅ model.safetensors already exists. Skipping initialization.")
+        print("✅ loaded model.safetensors")
         return
 
     print("Initializing enhanced PolyZero network...")

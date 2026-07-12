@@ -1,31 +1,348 @@
-[{"stream_name":"stderr","time":9.500571798,"data":"0.00s - Debugger warning: It seems that frozen modules are being used, which may\n"}
-,{"stream_name":"stderr","time":9.501625686,"data":"0.00s - make the debugger miss breakpoints. Please pass -Xfrozen_modules=off\n"}
-,{"stream_name":"stderr","time":9.501632342,"data":"0.00s - to python to disable frozen modules.\n"}
-,{"stream_name":"stderr","time":9.501635257,"data":"0.00s - Note: Debugging will proceed. Set PYDEVD_DISABLE_FILE_VALIDATION=1 to disable this validation.\n"}
-,{"stream_name":"stderr","time":10.344231289,"data":"0.00s - Debugger warning: It seems that frozen modules are being used, which may\n"}
-,{"stream_name":"stderr","time":10.344281047,"data":"0.00s - make the debugger miss breakpoints. Please pass -Xfrozen_modules=off\n"}
-,{"stream_name":"stderr","time":10.344287271,"data":"0.00s - to python to disable frozen modules.\n"}
-,{"stream_name":"stderr","time":10.344291818,"data":"0.00s - Note: Debugging will proceed. Set PYDEVD_DISABLE_FILE_VALIDATION=1 to disable this validation.\n"}
-,{"stream_name":"stdout","time":14.606032588,"data":"Requirement already satisfied: safetensors in /usr/local/lib/python3.12/dist-packages (0.7.0)\r\n"}
-,{"stream_name":"stdout","time":14.606144506,"data":"Requirement already satisfied: torch in /usr/local/lib/python3.12/dist-packages (2.10.0+cpu)\r\n"}
-,{"stream_name":"stdout","time":14.657089244,"data":"Requirement already satisfied: filelock in /usr/local/lib/python3.12/dist-packages (from torch) (3.29.0)\r\n"}
-,{"stream_name":"stdout","time":14.657147716,"data":"Requirement already satisfied: typing-extensions\u003e=4.10.0 in /usr/local/lib/python3.12/dist-packages (from torch) (4.15.0)\r\n"}
-,{"stream_name":"stdout","time":14.657155799,"data":"Requirement already satisfied: setuptools in /usr/local/lib/python3.12/dist-packages (from torch) (81.0.0)\r\n"}
-,{"stream_name":"stdout","time":14.657161967,"data":"Requirement already satisfied: sympy\u003e=1.13.3 in /usr/local/lib/python3.12/dist-packages (from torch) (1.14.0)\r\n"}
-,{"stream_name":"stdout","time":14.657166791,"data":"Requirement already satisfied: networkx\u003e=2.5.1 in /usr/local/lib/python3.12/dist-packages (from torch) (3.6.1)\r\n"}
-,{"stream_name":"stdout","time":14.657170555,"data":"Requirement already satisfied: jinja2 in /usr/local/lib/python3.12/dist-packages (from torch) (3.1.6)\r\n"}
-,{"stream_name":"stdout","time":14.657174031,"data":"Requirement already satisfied: fsspec\u003e=0.8.5 in /usr/local/lib/python3.12/dist-packages (from torch) (2025.3.0)\r\n"}
-,{"stream_name":"stdout","time":14.657177454,"data":"Requirement already satisfied: mpmath\u003c1.4,\u003e=1.1.0 in /usr/local/lib/python3.12/dist-packages (from sympy\u003e=1.13.3-\u003etorch) (1.3.0)\r\n"}
-,{"stream_name":"stdout","time":14.657181139,"data":"Requirement already satisfied: MarkupSafe\u003e=2.0 in /usr/local/lib/python3.12/dist-packages (from jinja2-\u003etorch) (3.0.3)\r\n"}
-,{"stream_name":"stdout","time":17.250853985,"data":"Available inputs: ['datasets']\n"}
-,{"stream_name":"stdout","time":17.250883958,"data":"Using dataset path: /kaggle/input/datasets\n"}
-,{"stream_name":"stdout","time":39.447279435,"data":"python3: can't open file '/kaggle/working/train.py': [Errno 2] No such file or directory\r\n"}
-,{"stream_name":"stderr","time":42.950736901,"data":"/usr/local/lib/python3.12/dist-packages/mistune.py:435: SyntaxWarning: invalid escape sequence '\\|'\n"}
-,{"stream_name":"stderr","time":42.950779372,"data":"  cells[i][c] = re.sub('\\\\\\\\\\|', '|', cell)\n"}
-,{"stream_name":"stderr","time":43.233770537,"data":"/usr/local/lib/python3.12/dist-packages/nbconvert/filters/filter_links.py:36: SyntaxWarning: invalid escape sequence '\\_'\n"}
-,{"stream_name":"stderr","time":43.233811102,"data":"  text = re.sub(r'_', '\\_', text) # Escape underscores in display text\n"}
-,{"stream_name":"stderr","time":44.05347838,"data":"[NbConvertApp] Converting notebook __notebook__.ipynb to notebook\n"}
-,{"stream_name":"stderr","time":44.435974622,"data":"[NbConvertApp] Writing 4652 bytes to __notebook__.ipynb\n"}
-,{"stream_name":"stderr","time":47.603572197,"data":"[NbConvertApp] Converting notebook __notebook__.ipynb to html\n"}
-,{"stream_name":"stderr","time":48.638915707,"data":"[NbConvertApp] Writing 278606 bytes to __results__.html\n"}
+[{"stream_name":"stderr","time":10.45795839,"data":"0.00s - Debugger warning: It seems that frozen modules are being used, which may\n"}
+,{"stream_name":"stderr","time":10.458006952,"data":"0.00s - make the debugger miss breakpoints. Please pass -Xfrozen_modules=off\n"}
+,{"stream_name":"stderr","time":10.458013307,"data":"0.00s - to python to disable frozen modules.\n"}
+,{"stream_name":"stderr","time":10.458017304,"data":"0.00s - Note: Debugging will proceed. Set PYDEVD_DISABLE_FILE_VALIDATION=1 to disable this validation.\n"}
+,{"stream_name":"stderr","time":11.156698895,"data":"0.00s - Debugger warning: It seems that frozen modules are being used, which may\n"}
+,{"stream_name":"stderr","time":11.156727318,"data":"0.00s - make the debugger miss breakpoints. Please pass -Xfrozen_modules=off\n"}
+,{"stream_name":"stderr","time":11.156730567,"data":"0.00s - to python to disable frozen modules.\n"}
+,{"stream_name":"stderr","time":11.156733049,"data":"0.00s - Note: Debugging will proceed. Set PYDEVD_DISABLE_FILE_VALIDATION=1 to disable this validation.\n"}
+,{"stream_name":"stdout","time":20.915903821,"data":"torch 2.10.0+cu128 cuda available: True\n"}
+,{"stream_name":"stdout","time":20.915957743,"data":"dataset: /kaggle/input/deleted-dataset\n"}
+,{"stream_name":"stdout","time":20.915965106,"data":"previous output: /kaggle/input/polyfish-trainer\n"}
+,{"stream_name":"stdout","time":44.50220597,"data":"fresh games: 1 | replay window: 6 | model present: True\n"}
+,{"stream_name":"stdout","time":125.897996793,"data":"Device: cuda  |  torch 2.10.0+cu128  |  CUDA build: 12.8  |  cuda.is_available(): True\n"}
+,{"stream_name":"stdout","time":125.898063267,"data":"GPU: Tesla T4\n"}
+,{"stream_name":"stdout","time":125.898069631,"data":"Training on 7 files (1 fresh, 6 archived, 0 teacher).\n"}
+,{"stream_name":"stdout","time":125.898074688,"data":"\n"}
+,{"stream_name":"stdout","time":125.898078985,"data":"=== Epoch 1/10 ===\n"}
+,{"stream_name":"stdout","time":125.89808334599999,"data":"Epoch 1: Loading chunk 1/1 (7 files)...\n"}
+,{"stream_name":"stdout","time":125.898087881,"data":"  Loaded 57410 samples.\n"}
+,{"stream_name":"stdout","time":125.898092471,"data":"  Reporting ~10/225 sampled batches.\n"}
+,{"stream_name":"stdout","time":125.898096975,"data":"  Epoch 1 batch 1/225 (chunk 1/1 1/225) - loss: 2.4158 (policy: 1.7729, value: 0.6176, ownership: 0.0253) - 0.3 batch/s\n"}
+,{"stream_name":"stdout","time":125.898101681,"data":"  Epoch 1 batch 25/225 (chunk 1/1 25/225) - loss: 2.6092 (policy: 2.0293, value: 0.5544, ownership: 0.0255) - 5.9 batch/s\n"}
+,{"stream_name":"stdout","time":125.89810666,"data":"  Epoch 1 batch 50/225 (chunk 1/1 50/225) - loss: 2.6104 (policy: 2.0222, value: 0.5627, ownership: 0.0256) - 9.2 batch/s\n"}
+,{"stream_name":"stdout","time":125.898111323,"data":"  Epoch 1 batch 75/225 (chunk 1/1 75/225) - loss: 2.6094 (policy: 2.0170, value: 0.5667, ownership: 0.0257) - 11.5 batch/s\n"}
+,{"stream_name":"stdout","time":125.898116363,"data":"  Epoch 1 batch 100/225 (chunk 1/1 100/225) - loss: 2.6218 (policy: 2.0326, value: 0.5635, ownership: 0.0257) - 13.0 batch/s\n"}
+,{"stream_name":"stdout","time":125.898233173,"data":"  Epoch 1 batch 125/225 (chunk 1/1 125/225) - loss: 2.6235 (policy: 2.0357, value: 0.5620, ownership: 0.0257) - 14.1 batch/s\n"}
+,{"stream_name":"stdout","time":125.898244695,"data":"  Epoch 1 batch 150/225 (chunk 1/1 150/225) - loss: 2.6310 (policy: 2.0424, value: 0.5629, ownership: 0.0257) - 15.0 batch/s\n"}
+,{"stream_name":"stdout","time":125.898249625,"data":"  Epoch 1 batch 175/225 (chunk 1/1 175/225) - loss: 2.6335 (policy: 2.0446, value: 0.5632, ownership: 0.0257) - 15.8 batch/s\n"}
+,{"stream_name":"stdout","time":125.898254345,"data":"  Epoch 1 batch 200/225 (chunk 1/1 200/225) - loss: 2.6338 (policy: 2.0460, value: 0.5621, ownership: 0.0257) - 16.3 batch/s\n"}
+,{"stream_name":"stdout","time":125.898273961,"data":"  Epoch 1 batch 225/225 (chunk 1/1 225/225) - loss: 2.6337 (policy: 2.0463, value: 0.5617, ownership: 0.0257) - 16.8 batch/s\n"}
+,{"stream_name":"stdout","time":125.898278151,"data":"Epoch 1/10 - Loss: 2.6337 (Policy: 2.0463, Value: 0.5617, Ownership: 0.0257)\n"}
+,{"stream_name":"stdout","time":125.898281735,"data":"\n"}
+,{"stream_name":"stdout","time":125.898285043,"data":"=== Epoch 2/10 ===\n"}
+,{"stream_name":"stdout","time":125.898288419,"data":"Epoch 2: Loading chunk 1/1 (7 files)...\n"}
+,{"stream_name":"stdout","time":125.89829182,"data":"  Loaded 57410 samples.\n"}
+,{"stream_name":"stdout","time":125.898295226,"data":"  Reporting ~10/225 sampled batches.\n"}
+,{"stream_name":"stdout","time":125.898298768,"data":"  Epoch 2 batch 1/225 (chunk 1/1 1/225) - loss: 2.3563 (policy: 1.7843, value: 0.5459, ownership: 0.0262) - 15.2 batch/s\n"}
+,{"stream_name":"stdout","time":125.898302065,"data":"  Epoch 2 batch 25/225 (chunk 1/1 25/225) - loss: 2.4496 (policy: 1.8704, value: 0.5533, ownership: 0.0258) - 20.7 batch/s\n"}
+,{"stream_name":"stdout","time":125.898305768,"data":"  Epoch 2 batch 50/225 (chunk 1/1 50/225) - loss: 2.4517 (policy: 1.8708, value: 0.5550, ownership: 0.0259) - 21.3 batch/s\n"}
+,{"stream_name":"stdout","time":125.898309447,"data":"  Epoch 2 batch 75/225 (chunk 1/1 75/225) - loss: 2.4424 (policy: 1.8695, value: 0.5470, ownership: 0.0259) - 21.5 batch/s\n"}
+,{"stream_name":"stdout","time":125.898313134,"data":"  Epoch 2 batch 100/225 (chunk 1/1 100/225) - loss: 2.4564 (policy: 1.8836, value: 0.5471, ownership: 0.0258) - 21.6 batch/s\n"}
+,{"stream_name":"stdout","time":125.898316912,"data":"  Epoch 2 batch 125/225 (chunk 1/1 125/225) - loss: 2.4592 (policy: 1.8900, value: 0.5435, ownership: 0.0258) - 21.7 batch/s\n"}
+,{"stream_name":"stdout","time":125.898320661,"data":"  Epoch 2 batch 150/225 (chunk 1/1 150/225) - loss: 2.4626 (policy: 1.8923, value: 0.5446, ownership: 0.0257) - 21.7 batch/s\n"}
+,{"stream_name":"stdout","time":125.898324306,"data":"  Epoch 2 batch 175/225 (chunk 1/1 175/225) - loss: 2.4668 (policy: 1.8956, value: 0.5455, ownership: 0.0257) - 21.8 batch/s\n"}
+,{"stream_name":"stdout","time":125.898328228,"data":"  Epoch 2 batch 200/225 (chunk 1/1 200/225) - loss: 2.4747 (policy: 1.9055, value: 0.5436, ownership: 0.0257) - 21.8 batch/s\n"}
+,{"stream_name":"stdout","time":125.898331901,"data":"  Epoch 2 batch 225/225 (chunk 1/1 225/225) - loss: 2.4771 (policy: 1.9056, value: 0.5458, ownership: 0.0257) - 21.9 batch/s\n"}
+,{"stream_name":"stdout","time":125.8983359,"data":"Epoch 2/10 - Loss: 2.4771 (Policy: 1.9056, Value: 0.5458, Ownership: 0.0257)\n"}
+,{"stream_name":"stdout","time":125.898339652,"data":"\n"}
+,{"stream_name":"stdout","time":125.898342975,"data":"=== Epoch 3/10 ===\n"}
+,{"stream_name":"stdout","time":125.898347062,"data":"Epoch 3: Loading chunk 1/1 (7 files)...\n"}
+,{"stream_name":"stdout","time":125.898350831,"data":"  Loaded 57410 samples.\n"}
+,{"stream_name":"stdout","time":125.898354196,"data":"  Reporting ~10/225 sampled batches.\n"}
+,{"stream_name":"stdout","time":125.898358008,"data":"  Epoch 3 batch 1/225 (chunk 1/1 1/225) - loss: 2.2901 (policy: 1.8049, value: 0.4591, ownership: 0.0260) - 16.5 batch/s\n"}
+,{"stream_name":"stdout","time":125.898361649,"data":"  Epoch 3 batch 25/225 (chunk 1/1 25/225) - loss: 2.3692 (policy: 1.8022, value: 0.5411, ownership: 0.0259) - 20.9 batch/s\n"}
+,{"stream_name":"stdout","time":125.898372982,"data":"  Epoch 3 batch 50/225 (chunk 1/1 50/225) - loss: 2.3514 (policy: 1.7988, value: 0.5269, ownership: 0.0257) - 21.3 batch/s\n"}
+,{"stream_name":"stdout","time":125.898376878,"data":"  Epoch 3 batch 75/225 (chunk 1/1 75/225) - loss: 2.3430 (policy: 1.7927, value: 0.5246, ownership: 0.0256) - 21.5 batch/s\n"}
+,{"stream_name":"stdout","time":125.898385051,"data":"  Epoch 3 batch 100/225 (chunk 1/1 100/225) - loss: 2.3470 (policy: 1.7932, value: 0.5282, ownership: 0.0257) - 21.6 batch/s\n"}
+,{"stream_name":"stdout","time":125.898473037,"data":"  Epoch 3 batch 125/225 (chunk 1/1 125/225) - loss: 2.3543 (policy: 1.7993, value: 0.5294, ownership: 0.0256) - 21.7 batch/s\n"}
+,{"stream_name":"stdout","time":125.898494543,"data":"  Epoch 3 batch 150/225 (chunk 1/1 150/225) - loss: 2.3590 (policy: 1.8055, value: 0.5279, ownership: 0.0256) - 21.7 batch/s\n"}
+,{"stream_name":"stdout","time":125.898498525,"data":"  Epoch 3 batch 175/225 (chunk 1/1 175/225) - loss: 2.3669 (policy: 1.8126, value: 0.5287, ownership: 0.0255) - 21.7 batch/s\n"}
+,{"stream_name":"stdout","time":125.898502296,"data":"  Epoch 3 batch 200/225 (chunk 1/1 200/225) - loss: 2.3692 (policy: 1.8148, value: 0.5288, ownership: 0.0256) - 21.7 batch/s\n"}
+,{"stream_name":"stdout","time":125.898506551,"data":"  Epoch 3 batch 225/225 (chunk 1/1 225/225) - loss: 2.3762 (policy: 1.8212, value: 0.5295, ownership: 0.0256) - 21.8 batch/s\n"}
+,{"stream_name":"stdout","time":125.898510286,"data":"Epoch 3/10 - Loss: 2.3762 (Policy: 1.8212, Value: 0.5295, Ownership: 0.0256)\n"}
+,{"stream_name":"stdout","time":125.898513929,"data":"\n"}
+,{"stream_name":"stdout","time":125.898517287,"data":"=== Epoch 4/10 ===\n"}
+,{"stream_name":"stdout","time":125.898520709,"data":"Epoch 4: Loading chunk 1/1 (7 files)...\n"}
+,{"stream_name":"stdout","time":125.898524103,"data":"  Loaded 57410 samples.\n"}
+,{"stream_name":"stdout","time":125.89852749799999,"data":"  Reporting ~10/225 sampled batches.\n"}
+,{"stream_name":"stdout","time":125.898530883,"data":"  Epoch 4 batch 1/225 (chunk 1/1 1/225) - loss: 2.0632 (policy: 1.5937, value: 0.4436, ownership: 0.0260) - 15.1 batch/s\n"}
+,{"stream_name":"stdout","time":125.898534613,"data":"  Epoch 4 batch 25/225 (chunk 1/1 25/225) - loss: 2.2911 (policy: 1.7510, value: 0.5147, ownership: 0.0254) - 20.6 batch/s\n"}
+,{"stream_name":"stdout","time":125.898538381,"data":"  Epoch 4 batch 50/225 (chunk 1/1 50/225) - loss: 2.2765 (policy: 1.7438, value: 0.5073, ownership: 0.0254) - 21.2 batch/s\n"}
+,{"stream_name":"stdout","time":125.898542071,"data":"  Epoch 4 batch 75/225 (chunk 1/1 75/225) - loss: 2.2830 (policy: 1.7498, value: 0.5079, ownership: 0.0253) - 21.3 batch/s\n"}
+,{"stream_name":"stdout","time":125.89854648,"data":"  Epoch 4 batch 100/225 (chunk 1/1 100/225) - loss: 2.2823 (policy: 1.7476, value: 0.5093, ownership: 0.0254) - 21.3 batch/s\n"}
+,{"stream_name":"stdout","time":125.898550223,"data":"  Epoch 4 batch 125/225 (chunk 1/1 125/225) - loss: 2.2918 (policy: 1.7543, value: 0.5120, ownership: 0.0254) - 21.4 batch/s\n"}
+,{"stream_name":"stdout","time":125.898553748,"data":"  Epoch 4 batch 150/225 (chunk 1/1 150/225) - loss: 2.2926 (policy: 1.7559, value: 0.5113, ownership: 0.0254) - 21.3 batch/s\n"}
+,{"stream_name":"stdout","time":125.898557496,"data":"  Epoch 4 batch 175/225 (chunk 1/1 175/225) - loss: 2.2970 (policy: 1.7570, value: 0.5145, ownership: 0.0255) - 21.4 batch/s\n"}
+,{"stream_name":"stdout","time":125.898561183,"data":"  Epoch 4 batch 200/225 (chunk 1/1 200/225) - loss: 2.2986 (policy: 1.7601, value: 0.5131, ownership: 0.0255) - 21.4 batch/s\n"}
+,{"stream_name":"stdout","time":125.898564848,"data":"  Epoch 4 batch 225/225 (chunk 1/1 225/225) - loss: 2.2975 (policy: 1.7585, value: 0.5135, ownership: 0.0255) - 21.5 batch/s\n"}
+,{"stream_name":"stdout","time":125.898568581,"data":"Epoch 4/10 - Loss: 2.2975 (Policy: 1.7585, Value: 0.5135, Ownership: 0.0255)\n"}
+,{"stream_name":"stdout","time":125.898572153,"data":"\n"}
+,{"stream_name":"stdout","time":125.89858111,"data":"=== Epoch 5/10 ===\n"}
+,{"stream_name":"stdout","time":125.898585093,"data":"Epoch 5: Loading chunk 1/1 (7 files)...\n"}
+,{"stream_name":"stdout","time":125.898588531,"data":"  Loaded 57410 samples.\n"}
+,{"stream_name":"stdout","time":125.898591918,"data":"  Reporting ~10/225 sampled batches.\n"}
+,{"stream_name":"stdout","time":125.898595335,"data":"  Epoch 5 batch 1/225 (chunk 1/1 1/225) - loss: 2.2347 (policy: 1.7328, value: 0.4767, ownership: 0.0251) - 16.4 batch/s\n"}
+,{"stream_name":"stdout","time":125.898599035,"data":"  Epoch 5 batch 25/225 (chunk 1/1 25/225) - loss: 2.2010 (policy: 1.6806, value: 0.4952, ownership: 0.0252) - 20.8 batch/s\n"}
+,{"stream_name":"stdout","time":125.898602715,"data":"  Epoch 5 batch 50/225 (chunk 1/1 50/225) - loss: 2.2056 (policy: 1.6744, value: 0.5058, ownership: 0.0253) - 21.2 batch/s\n"}
+,{"stream_name":"stdout","time":125.898606478,"data":"  Epoch 5 batch 75/225 (chunk 1/1 75/225) - loss: 2.2050 (policy: 1.6738, value: 0.5059, ownership: 0.0253) - 21.4 batch/s\n"}
+,{"stream_name":"stdout","time":125.898610178,"data":"  Epoch 5 batch 100/225 (chunk 1/1 100/225) - loss: 2.2048 (policy: 1.6767, value: 0.5026, ownership: 0.0254) - 21.4 batch/s\n"}
+,{"stream_name":"stdout","time":125.898613882,"data":"  Epoch 5 batch 125/225 (chunk 1/1 125/225) - loss: 2.2061 (policy: 1.6784, value: 0.5023, ownership: 0.0255) - 21.5 batch/s\n"}
+,{"stream_name":"stdout","time":125.898617585,"data":"  Epoch 5 batch 150/225 (chunk 1/1 150/225) - loss: 2.2112 (policy: 1.6860, value: 0.4998, ownership: 0.0254) - 21.5 batch/s\n"}
+,{"stream_name":"stdout","time":125.898621289,"data":"  Epoch 5 batch 175/225 (chunk 1/1 175/225) - loss: 2.2170 (policy: 1.6911, value: 0.5005, ownership: 0.0254) - 21.5 batch/s\n"}
+,{"stream_name":"stdout","time":125.898624982,"data":"  Epoch 5 batch 200/225 (chunk 1/1 200/225) - loss: 2.2192 (policy: 1.6899, value: 0.5039, ownership: 0.0254) - 21.5 batch/s\n"}
+,{"stream_name":"stdout","time":125.89862955,"data":"  Epoch 5 batch 225/225 (chunk 1/1 225/225) - loss: 2.2170 (policy: 1.6888, value: 0.5028, ownership: 0.0254) - 21.6 batch/s\n"}
+,{"stream_name":"stdout","time":125.898633492,"data":"Epoch 5/10 - Loss: 2.2170 (Policy: 1.6888, Value: 0.5028, Ownership: 0.0254)\n"}
+,{"stream_name":"stdout","time":125.898637424,"data":"\n"}
+,{"stream_name":"stdout","time":125.898640728,"data":"=== Epoch 6/10 ===\n"}
+,{"stream_name":"stdout","time":125.898644073,"data":"Epoch 6: Loading chunk 1/1 (7 files)...\n"}
+,{"stream_name":"stdout","time":125.898647543,"data":"  Loaded 57410 samples.\n"}
+,{"stream_name":"stdout","time":125.898650868,"data":"  Reporting ~10/225 sampled batches.\n"}
+,{"stream_name":"stdout","time":125.89865411,"data":"  Epoch 6 batch 1/225 (chunk 1/1 1/225) - loss: 2.1583 (policy: 1.5945, value: 0.5361, ownership: 0.0277) - 16.5 batch/s\n"}
+,{"stream_name":"stdout","time":125.898657714,"data":"  Epoch 6 batch 25/225 (chunk 1/1 25/225) - loss: 2.1495 (policy: 1.6231, value: 0.5013, ownership: 0.0251) - 20.9 batch/s\n"}
+,{"stream_name":"stdout","time":125.898661703,"data":"  Epoch 6 batch 50/225 (chunk 1/1 50/225) - loss: 2.1477 (policy: 1.6290, value: 0.4936, ownership: 0.0252) - 21.1 batch/s\n"}
+,{"stream_name":"stdout","time":125.898665304,"data":"  Epoch 6 batch 75/225 (chunk 1/1 75/225) - loss: 2.1370 (policy: 1.6237, value: 0.4882, ownership: 0.0251) - 21.3 batch/s\n"}
+,{"stream_name":"stdout","time":125.89866903,"data":"  Epoch 6 batch 100/225 (chunk 1/1 100/225) - loss: 2.1333 (policy: 1.6231, value: 0.4850, ownership: 0.0252) - 21.4 batch/s\n"}
+,{"stream_name":"stdout","time":126.10246025,"data":"  Epoch 6 batch 125/225 (chunk 1/1 125/225) - loss: 2.1430 (policy: 1.6293, value: 0.4885, ownership: 0.0252) - 21.4 batch/sDevice: cuda  |  torch 2.10.0+cu128  |  CUDA build: 12.8  |  cuda.is_available(): True\n"}
+,{"stream_name":"stdout","time":126.102524494,"data":"GPU: Tesla T4\n"}
+,{"stream_name":"stdout","time":126.102529812,"data":"Training on 7 files (1 fresh, 6 archived, 0 teacher).\n"}
+,{"stream_name":"stdout","time":126.102534033,"data":"\n"}
+,{"stream_name":"stdout","time":126.102537806,"data":"=== Epoch 1/10 ===\n"}
+,{"stream_name":"stdout","time":126.102541537,"data":"Epoch 1: Loading chunk 1/1 (7 files)...\n"}
+,{"stream_name":"stdout","time":126.102545254,"data":"  Loaded 57410 samples.\n"}
+,{"stream_name":"stdout","time":126.102549003,"data":"  Reporting ~10/225 sampled batches.\n"}
+,{"stream_name":"stdout","time":126.102552691,"data":"  Epoch 1 batch 1/225 (chunk 1/1 1/225) - loss: 2.4158 (policy: 1.7729, value: 0.6176, ownership: 0.0253) - 0.3 batch/s\n"}
+,{"stream_name":"stdout","time":126.102556373,"data":"  Epoch 1 batch 25/225 (chunk 1/1 25/225) - loss: 2.6092 (policy: 2.0293, value: 0.5544, ownership: 0.0255) - 5.9 batch/s\n"}
+,{"stream_name":"stdout","time":126.102560132,"data":"  Epoch 1 batch 50/225 (chunk 1/1 50/225) - loss: 2.6104 (policy: 2.0222, value: 0.5627, ownership: 0.0256) - 9.2 batch/s\n"}
+,{"stream_name":"stdout","time":126.10256392,"data":"  Epoch 1 batch 75/225 (chunk 1/1 75/225) - loss: 2.6094 (policy: 2.0170, value: 0.5667, ownership: 0.0257) - 11.5 batch/s\n"}
+,{"stream_name":"stdout","time":126.102567722,"data":"  Epoch 1 batch 100/225 (chunk 1/1 100/225) - loss: 2.6218 (policy: 2.0326, value: 0.5635, ownership: 0.0257) - 13.0 batch/s\n"}
+,{"stream_name":"stdout","time":126.102571908,"data":"  Epoch 1 batch 125/225 (chunk 1/1 125/225) - loss: 2.6235 (policy: 2.0357, value: 0.5620, ownership: 0.0257) - 14.1 batch/s\n"}
+,{"stream_name":"stdout","time":126.102575551,"data":"  Epoch 1 batch 150/225 (chunk 1/1 150/225) - loss: 2.6310 (policy: 2.0424, value: 0.5629, ownership: 0.0257) - 15.0 batch/s\n"}
+,{"stream_name":"stdout","time":126.102599845,"data":"  Epoch 1 batch 175/225 (chunk 1/1 175/225) - loss: 2.6335 (policy: 2.0446, value: 0.5632, ownership: 0.0257) - 15.8 batch/s\n"}
+,{"stream_name":"stdout","time":126.10260313,"data":"  Epoch 1 batch 200/225 (chunk 1/1 200/225) - loss: 2.6338 (policy: 2.0460, value: 0.5621, ownership: 0.0257) - 16.3 batch/s\n"}
+,{"stream_name":"stdout","time":126.102606262,"data":"  Epoch 1 batch 225/225 (chunk 1/1 225/225) - loss: 2.6337 (policy: 2.0463, value: 0.5617, ownership: 0.0257) - 16.8 batch/s\n"}
+,{"stream_name":"stdout","time":126.102609442,"data":"Epoch 1/10 - Loss: 2.6337 (Policy: 2.0463, Value: 0.5617, Ownership: 0.0257)\n"}
+,{"stream_name":"stdout","time":126.102612593,"data":"\n"}
+,{"stream_name":"stdout","time":126.102615671,"data":"=== Epoch 2/10 ===\n"}
+,{"stream_name":"stdout","time":126.102619021,"data":"Epoch 2: Loading chunk 1/1 (7 files)...\n"}
+,{"stream_name":"stdout","time":126.102622089,"data":"  Loaded 57410 samples.\n"}
+,{"stream_name":"stdout","time":126.10262508,"data":"  Reporting ~10/225 sampled batches.\n"}
+,{"stream_name":"stdout","time":126.102628076,"data":"  Epoch 2 batch 1/225 (chunk 1/1 1/225) - loss: 2.3563 (policy: 1.7843, value: 0.5459, ownership: 0.0262) - 15.2 batch/s\n"}
+,{"stream_name":"stdout","time":126.102631571,"data":"  Epoch 2 batch 25/225 (chunk 1/1 25/225) - loss: 2.4496 (policy: 1.8704, value: 0.5533, ownership: 0.0258) - 20.7 batch/s\n"}
+,{"stream_name":"stdout","time":126.10263651,"data":"  Epoch 2 batch 50/225 (chunk 1/1 50/225) - loss: 2.4517 (policy: 1.8708, value: 0.5550, ownership: 0.0259) - 21.3 batch/s\n"}
+,{"stream_name":"stdout","time":126.102639836,"data":"  Epoch 2 batch 75/225 (chunk 1/1 75/225) - loss: 2.4424 (policy: 1.8695, value: 0.5470, ownership: 0.0259) - 21.5 batch/s\n"}
+,{"stream_name":"stdout","time":126.102647768,"data":"  Epoch 2 batch 100/225 (chunk 1/1 100/225) - loss: 2.4564 (policy: 1.8836, value: 0.5471, ownership: 0.0258) - 21.6 batch/s\n"}
+,{"stream_name":"stdout","time":126.102651045,"data":"  Epoch 2 batch 125/225 (chunk 1/1 125/225) - loss: 2.4592 (policy: 1.8900, value: 0.5435, ownership: 0.0258) - 21.7 batch/s\n"}
+,{"stream_name":"stdout","time":126.102654349,"data":"  Epoch 2 batch 150/225 (chunk 1/1 150/225) - loss: 2.4626 (policy: 1.8923, value: 0.5446, ownership: 0.0257) - 21.7 batch/s\n"}
+,{"stream_name":"stdout","time":126.102657696,"data":"  Epoch 2 batch 175/225 (chunk 1/1 175/225) - loss: 2.4668 (policy: 1.8956, value: 0.5455, ownership: 0.0257) - 21.8 batch/s\n"}
+,{"stream_name":"stdout","time":126.102661221,"data":"  Epoch 2 batch 200/225 (chunk 1/1 200/225) - loss: 2.4747 (policy: 1.9055, value: 0.5436, ownership: 0.0257) - 21.8 batch/s\n"}
+,{"stream_name":"stdout","time":126.102664476,"data":"  Epoch 2 batch 225/225 (chunk 1/1 225/225) - loss: 2.4771 (policy: 1.9056, value: 0.5458, ownership: 0.0257) - 21.9 batch/s\n"}
+,{"stream_name":"stdout","time":126.102667886,"data":"Epoch 2/10 - Loss: 2.4771 (Policy: 1.9056, Value: 0.5458, Ownership: 0.0257)\n"}
+,{"stream_name":"stdout","time":126.102670918,"data":"\n"}
+,{"stream_name":"stdout","time":126.102674205,"data":"=== Epoch 3/10 ===\n"}
+,{"stream_name":"stdout","time":126.102677272,"data":"Epoch 3: Loading chunk 1/1 (7 files)...\n"}
+,{"stream_name":"stdout","time":126.10268039,"data":"  Loaded 57410 samples.\n"}
+,{"stream_name":"stdout","time":126.102683566,"data":"  Reporting ~10/225 sampled batches.\n"}
+,{"stream_name":"stdout","time":126.102686928,"data":"  Epoch 3 batch 1/225 (chunk 1/1 1/225) - loss: 2.2901 (policy: 1.8049, value: 0.4591, ownership: 0.0260) - 16.5 batch/s\n"}
+,{"stream_name":"stdout","time":126.102690428,"data":"  Epoch 3 batch 25/225 (chunk 1/1 25/225) - loss: 2.3692 (policy: 1.8022, value: 0.5411, ownership: 0.0259) - 20.9 batch/s\n"}
+,{"stream_name":"stdout","time":126.102693753,"data":"  Epoch 3 batch 50/225 (chunk 1/1 50/225) - loss: 2.3514 (policy: 1.7988, value: 0.5269, ownership: 0.0257) - 21.3 batch/s\n"}
+,{"stream_name":"stdout","time":126.102697314,"data":"  Epoch 3 batch 75/225 (chunk 1/1 75/225) - loss: 2.3430 (policy: 1.7927, value: 0.5246, ownership: 0.0256) - 21.5 batch/s\n"}
+,{"stream_name":"stdout","time":126.102701052,"data":"  Epoch 3 batch 100/225 (chunk 1/1 100/225) - loss: 2.3470 (policy: 1.7932, value: 0.5282, ownership: 0.0257) - 21.6 batch/s\n"}
+,{"stream_name":"stdout","time":126.102704389,"data":"  Epoch 3 batch 125/225 (chunk 1/1 125/225) - loss: 2.3543 (policy: 1.7993, value: 0.5294, ownership: 0.0256) - 21.7 batch/s\n"}
+,{"stream_name":"stdout","time":126.102707587,"data":"  Epoch 3 batch 150/225 (chunk 1/1 150/225) - loss: 2.3590 (policy: 1.8055, value: 0.5279, ownership: 0.0256) - 21.7 batch/s\n"}
+,{"stream_name":"stdout","time":126.102711269,"data":"  Epoch 3 batch 175/225 (chunk 1/1 175/225) - loss: 2.3669 (policy: 1.8126, value: 0.5287, ownership: 0.0255) - 21.7 batch/s\n"}
+,{"stream_name":"stdout","time":126.102714602,"data":"  Epoch 3 batch 200/225 (chunk 1/1 200/225) - loss: 2.3692 (policy: 1.8148, value: 0.5288, ownership: 0.0256) - 21.7 batch/s\n"}
+,{"stream_name":"stdout","time":126.102718059,"data":"  Epoch 3 batch 225/225 (chunk 1/1 225/225) - loss: 2.3762 (policy: 1.8212, value: 0.5295, ownership: 0.0256) - 21.8 batch/s\n"}
+,{"stream_name":"stdout","time":126.102721568,"data":"Epoch 3/10 - Loss: 2.3762 (Policy: 1.8212, Value: 0.5295, Ownership: 0.0256)\n"}
+,{"stream_name":"stdout","time":126.102724946,"data":"\n"}
+,{"stream_name":"stdout","time":126.102728155,"data":"=== Epoch 4/10 ===\n"}
+,{"stream_name":"stdout","time":126.102731287,"data":"Epoch 4: Loading chunk 1/1 (7 files)...\n"}
+,{"stream_name":"stdout","time":126.102738408,"data":"  Loaded 57410 samples.\n"}
+,{"stream_name":"stdout","time":126.102741576,"data":"  Reporting ~10/225 sampled batches.\n"}
+,{"stream_name":"stdout","time":126.102744629,"data":"  Epoch 4 batch 1/225 (chunk 1/1 1/225) - loss: 2.0632 (policy: 1.5937, value: 0.4436, ownership: 0.0260) - 15.1 batch/s\n"}
+,{"stream_name":"stdout","time":126.102748025,"data":"  Epoch 4 batch 25/225 (chunk 1/1 25/225) - loss: 2.2911 (policy: 1.7510, value: 0.5147, ownership: 0.0254) - 20.6 batch/s\n"}
+,{"stream_name":"stdout","time":126.102751499,"data":"  Epoch 4 batch 50/225 (chunk 1/1 50/225) - loss: 2.2765 (policy: 1.7438, value: 0.5073, ownership: 0.0254) - 21.2 batch/s\n"}
+,{"stream_name":"stdout","time":126.102755302,"data":"  Epoch 4 batch 75/225 (chunk 1/1 75/225) - loss: 2.2830 (policy: 1.7498, value: 0.5079, ownership: 0.0253) - 21.3 batch/s\n"}
+,{"stream_name":"stdout","time":126.102758599,"data":"  Epoch 4 batch 100/225 (chunk 1/1 100/225) - loss: 2.2823 (policy: 1.7476, value: 0.5093, ownership: 0.0254) - 21.3 batch/s\n"}
+,{"stream_name":"stdout","time":126.102761969,"data":"  Epoch 4 batch 125/225 (chunk 1/1 125/225) - loss: 2.2918 (policy: 1.7543, value: 0.5120, ownership: 0.0254) - 21.4 batch/s\n"}
+,{"stream_name":"stdout","time":126.102765267,"data":"  Epoch 4 batch 150/225 (chunk 1/1 150/225) - loss: 2.2926 (policy: 1.7559, value: 0.5113, ownership: 0.0254) - 21.3 batch/s\n"}
+,{"stream_name":"stdout","time":126.102768617,"data":"  Epoch 4 batch 175/225 (chunk 1/1 175/225) - loss: 2.2970 (policy: 1.7570, value: 0.5145, ownership: 0.0255) - 21.4 batch/s\n"}
+,{"stream_name":"stdout","time":126.102771782,"data":"  Epoch 4 batch 200/225 (chunk 1/1 200/225) - loss: 2.2986 (policy: 1.7601, value: 0.5131, ownership: 0.0255) - 21.4 batch/s\n"}
+,{"stream_name":"stdout","time":126.102775237,"data":"  Epoch 4 batch 225/225 (chunk 1/1 225/225) - loss: 2.2975 (policy: 1.7585, value: 0.5135, ownership: 0.0255) - 21.5 batch/s\n"}
+,{"stream_name":"stdout","time":126.102778412,"data":"Epoch 4/10 - Loss: 2.2975 (Policy: 1.7585, Value: 0.5135, Ownership: 0.0255)\n"}
+,{"stream_name":"stdout","time":126.102781619,"data":"\n"}
+,{"stream_name":"stdout","time":126.102787902,"data":"=== Epoch 5/10 ===\n"}
+,{"stream_name":"stdout","time":126.102791293,"data":"Epoch 5: Loading chunk 1/1 (7 files)...\n"}
+,{"stream_name":"stdout","time":126.102794569,"data":"  Loaded 57410 samples.\n"}
+,{"stream_name":"stdout","time":126.102797664,"data":"  Reporting ~10/225 sampled batches.\n"}
+,{"stream_name":"stdout","time":126.102802141,"data":"  Epoch 5 batch 1/225 (chunk 1/1 1/225) - loss: 2.2347 (policy: 1.7328, value: 0.4767, ownership: 0.0251) - 16.4 batch/s\n"}
+,{"stream_name":"stdout","time":126.102805818,"data":"  Epoch 5 batch 25/225 (chunk 1/1 25/225) - loss: 2.2010 (policy: 1.6806, value: 0.4952, ownership: 0.0252) - 20.8 batch/s\n"}
+,{"stream_name":"stdout","time":126.102809321,"data":"  Epoch 5 batch 50/225 (chunk 1/1 50/225) - loss: 2.2056 (policy: 1.6744, value: 0.5058, ownership: 0.0253) - 21.2 batch/s\n"}
+,{"stream_name":"stdout","time":126.102812657,"data":"  Epoch 5 batch 75/225 (chunk 1/1 75/225) - loss: 2.2050 (policy: 1.6738, value: 0.5059, ownership: 0.0253) - 21.4 batch/s\n"}
+,{"stream_name":"stdout","time":126.102816076,"data":"  Epoch 5 batch 100/225 (chunk 1/1 100/225) - loss: 2.2048 (policy: 1.6767, value: 0.5026, ownership: 0.0254) - 21.4 batch/s\n"}
+,{"stream_name":"stdout","time":126.102819949,"data":"  Epoch 5 batch 125/225 (chunk 1/1 125/225) - loss: 2.2061 (policy: 1.6784, value: 0.5023, ownership: 0.0255) - 21.5 batch/s\n"}
+,{"stream_name":"stdout","time":126.102823581,"data":"  Epoch 5 batch 150/225 (chunk 1/1 150/225) - loss: 2.2112 (policy: 1.6860, value: 0.4998, ownership: 0.0254) - 21.5 batch/s\n"}
+,{"stream_name":"stdout","time":126.102831104,"data":"  Epoch 5 batch 175/225 (chunk 1/1 175/225) - loss: 2.2170 (policy: 1.6911, value: 0.5005, ownership: 0.0254) - 21.5 batch/s\n"}
+,{"stream_name":"stdout","time":126.102834698,"data":"  Epoch 5 batch 200/225 (chunk 1/1 200/225) - loss: 2.2192 (policy: 1.6899, value: 0.5039, ownership: 0.0254) - 21.5 batch/s\n"}
+,{"stream_name":"stdout","time":126.102838332,"data":"  Epoch 5 batch 225/225 (chunk 1/1 225/225) - loss: 2.2170 (policy: 1.6888, value: 0.5028, ownership: 0.0254) - 21.6 batch/s\n"}
+,{"stream_name":"stdout","time":126.10284193,"data":"Epoch 5/10 - Loss: 2.2170 (Policy: 1.6888, Value: 0.5028, Ownership: 0.0254)\n"}
+,{"stream_name":"stdout","time":126.10284513,"data":"\n"}
+,{"stream_name":"stdout","time":126.102848231,"data":"=== Epoch 6/10 ===\n"}
+,{"stream_name":"stdout","time":126.102851367,"data":"Epoch 6: Loading chunk 1/1 (7 files)...\n"}
+,{"stream_name":"stdout","time":126.102854542,"data":"  Loaded 57410 samples.\n"}
+,{"stream_name":"stdout","time":126.102858107,"data":"  Reporting ~10/225 sampled batches.\n"}
+,{"stream_name":"stdout","time":126.102861324,"data":"  Epoch 6 batch 1/225 (chunk 1/1 1/225) - loss: 2.1583 (policy: 1.5945, value: 0.5361, ownership: 0.0277) - 16.5 batch/s\n"}
+,{"stream_name":"stdout","time":126.102864743,"data":"  Epoch 6 batch 25/225 (chunk 1/1 25/225) - loss: 2.1495 (policy: 1.6231, value: 0.5013, ownership: 0.0251) - 20.9 batch/s\n"}
+,{"stream_name":"stdout","time":126.102868057,"data":"  Epoch 6 batch 50/225 (chunk 1/1 50/225) - loss: 2.1477 (policy: 1.6290, value: 0.4936, ownership: 0.0252) - 21.1 batch/s\n"}
+,{"stream_name":"stdout","time":126.102871439,"data":"  Epoch 6 batch 75/225 (chunk 1/1 75/225) - loss: 2.1370 (policy: 1.6237, value: 0.4882, ownership: 0.0251) - 21.3 batch/s\n"}
+,{"stream_name":"stdout","time":126.102874773,"data":"  Epoch 6 batch 100/225 (chunk 1/1 100/225) - loss: 2.1333 (policy: 1.6231, value: 0.4850, ownership: 0.0252) - 21.4 batch/s\n"}
+,{"stream_name":"stdout","time":181.149447767,"data":"  Epoch 6 batch 125/225 (chunk 1/1 125/225) - loss: 2.1430 (policy: 1.6293, value: 0.4885, ownership: 0.0252) - 21.4 batch/s\n"}
+,{"stream_name":"stdout","time":181.149502236,"data":"  Epoch 6 batch 150/225 (chunk 1/1 150/225) - loss: 2.1417 (policy: 1.6304, value: 0.4861, ownership: 0.0252) - 21.4 batch/s\n"}
+,{"stream_name":"stdout","time":181.149510119,"data":"  Epoch 6 batch 175/225 (chunk 1/1 175/225) - loss: 2.1444 (policy: 1.6310, value: 0.4881, ownership: 0.0252) - 21.5 batch/s\n"}
+,{"stream_name":"stdout","time":181.149515498,"data":"  Epoch 6 batch 200/225 (chunk 1/1 200/225) - loss: 2.1474 (policy: 1.6321, value: 0.4900, ownership: 0.0253) - 21.5 batch/s\n"}
+,{"stream_name":"stdout","time":181.149520928,"data":"  Epoch 6 batch 225/225 (chunk 1/1 225/225) - loss: 2.1485 (policy: 1.6325, value: 0.4907, ownership: 0.0253) - 21.6 batch/s\n"}
+,{"stream_name":"stdout","time":181.149525795,"data":"Epoch 6/10 - Loss: 2.1485 (Policy: 1.6325, Value: 0.4907, Ownership: 0.0253)\n"}
+,{"stream_name":"stdout","time":181.149530791,"data":"\n"}
+,{"stream_name":"stdout","time":181.149535505,"data":"=== Epoch 7/10 ===\n"}
+,{"stream_name":"stdout","time":181.149540368,"data":"Epoch 7: Loading chunk 1/1 (7 files)...\n"}
+,{"stream_name":"stdout","time":181.149545202,"data":"  Loaded 57410 samples.\n"}
+,{"stream_name":"stdout","time":181.149549952,"data":"  Reporting ~10/225 sampled batches.\n"}
+,{"stream_name":"stdout","time":181.149554847,"data":"  Epoch 7 batch 1/225 (chunk 1/1 1/225) - loss: 1.9684 (policy: 1.4707, value: 0.4728, ownership: 0.0249) - 15.6 batch/s\n"}
+,{"stream_name":"stdout","time":181.149559973,"data":"  Epoch 7 batch 25/225 (chunk 1/1 25/225) - loss: 2.0965 (policy: 1.5914, value: 0.4803, ownership: 0.0249) - 20.4 batch/s\n"}
+,{"stream_name":"stdout","time":181.14967036,"data":"  Epoch 7 batch 50/225 (chunk 1/1 50/225) - loss: 2.0825 (policy: 1.5789, value: 0.4785, ownership: 0.0251) - 20.9 batch/s\n"}
+,{"stream_name":"stdout","time":181.149691005,"data":"  Epoch 7 batch 75/225 (chunk 1/1 75/225) - loss: 2.0901 (policy: 1.5829, value: 0.4821, ownership: 0.0252) - 21.1 batch/s\n"}
+,{"stream_name":"stdout","time":181.149695437,"data":"  Epoch 7 batch 100/225 (chunk 1/1 100/225) - loss: 2.0845 (policy: 1.5828, value: 0.4765, ownership: 0.0252) - 21.2 batch/s\n"}
+,{"stream_name":"stdout","time":181.149704178,"data":"  Epoch 7 batch 125/225 (chunk 1/1 125/225) - loss: 2.0768 (policy: 1.5744, value: 0.4773, ownership: 0.0252) - 21.2 batch/s\n"}
+,{"stream_name":"stdout","time":181.149707988,"data":"  Epoch 7 batch 150/225 (chunk 1/1 150/225) - loss: 2.0823 (policy: 1.5790, value: 0.4781, ownership: 0.0252) - 21.3 batch/s\n"}
+,{"stream_name":"stdout","time":181.1497105,"data":"  Epoch 7 batch 175/225 (chunk 1/1 175/225) - loss: 2.0809 (policy: 1.5768, value: 0.4790, ownership: 0.0252) - 21.3 batch/s\n"}
+,{"stream_name":"stdout","time":181.149712836,"data":"  Epoch 7 batch 200/225 (chunk 1/1 200/225) - loss: 2.0830 (policy: 1.5782, value: 0.4796, ownership: 0.0252) - 21.3 batch/s\n"}
+,{"stream_name":"stdout","time":181.149715381,"data":"  Epoch 7 batch 225/225 (chunk 1/1 225/225) - loss: 2.0827 (policy: 1.5775, value: 0.4800, ownership: 0.0252) - 21.4 batch/s\n"}
+,{"stream_name":"stdout","time":181.149718011,"data":"Epoch 7/10 - Loss: 2.0827 (Policy: 1.5775, Value: 0.4800, Ownership: 0.0252)\n"}
+,{"stream_name":"stdout","time":181.149720304,"data":"\n"}
+,{"stream_name":"stdout","time":181.149722421,"data":"=== Epoch 8/10 ===\n"}
+,{"stream_name":"stdout","time":181.149724616,"data":"Epoch 8: Loading chunk 1/1 (7 files)...\n"}
+,{"stream_name":"stdout","time":181.149726937,"data":"  Loaded 57410 samples.\n"}
+,{"stream_name":"stdout","time":181.149729114,"data":"  Reporting ~10/225 sampled batches.\n"}
+,{"stream_name":"stdout","time":181.149731318,"data":"  Epoch 8 batch 1/225 (chunk 1/1 1/225) - loss: 2.1098 (policy: 1.5800, value: 0.5044, ownership: 0.0254) - 16.5 batch/s\n"}
+,{"stream_name":"stdout","time":181.149733716,"data":"  Epoch 8 batch 25/225 (chunk 1/1 25/225) - loss: 2.0310 (policy: 1.5405, value: 0.4653, ownership: 0.0251) - 20.7 batch/s\n"}
+,{"stream_name":"stdout","time":181.149736077,"data":"  Epoch 8 batch 50/225 (chunk 1/1 50/225) - loss: 2.0188 (policy: 1.5313, value: 0.4624, ownership: 0.0250) - 21.0 batch/s\n"}
+,{"stream_name":"stdout","time":181.149738405,"data":"  Epoch 8 batch 75/225 (chunk 1/1 75/225) - loss: 2.0380 (policy: 1.5426, value: 0.4702, ownership: 0.0252) - 21.1 batch/s\n"}
+,{"stream_name":"stdout","time":181.149740811,"data":"  Epoch 8 batch 100/225 (chunk 1/1 100/225) - loss: 2.0385 (policy: 1.5433, value: 0.4700, ownership: 0.0252) - 21.2 batch/s\n"}
+,{"stream_name":"stdout","time":181.149743581,"data":"  Epoch 8 batch 125/225 (chunk 1/1 125/225) - loss: 2.0374 (policy: 1.5415, value: 0.4707, ownership: 0.0252) - 21.2 batch/s\n"}
+,{"stream_name":"stdout","time":181.149763232,"data":"  Epoch 8 batch 150/225 (chunk 1/1 150/225) - loss: 2.0370 (policy: 1.5400, value: 0.4717, ownership: 0.0252) - 21.2 batch/s\n"}
+,{"stream_name":"stdout","time":181.149768172,"data":"  Epoch 8 batch 175/225 (chunk 1/1 175/225) - loss: 2.0367 (policy: 1.5409, value: 0.4706, ownership: 0.0252) - 21.2 batch/s\n"}
+,{"stream_name":"stdout","time":181.149772427,"data":"  Epoch 8 batch 200/225 (chunk 1/1 200/225) - loss: 2.0349 (policy: 1.5388, value: 0.4709, ownership: 0.0252) - 21.2 batch/s\n"}
+,{"stream_name":"stdout","time":181.149776305,"data":"  Epoch 8 batch 225/225 (chunk 1/1 225/225) - loss: 2.0369 (policy: 1.5420, value: 0.4698, ownership: 0.0252) - 21.3 batch/s\n"}
+,{"stream_name":"stdout","time":181.149786543,"data":"Epoch 8/10 - Loss: 2.0369 (Policy: 1.5420, Value: 0.4698, Ownership: 0.0252)\n"}
+,{"stream_name":"stdout","time":181.149790176,"data":"\n"}
+,{"stream_name":"stdout","time":181.149793791,"data":"=== Epoch 9/10 ===\n"}
+,{"stream_name":"stdout","time":181.149797099,"data":"Epoch 9: Loading chunk 1/1 (7 files)...\n"}
+,{"stream_name":"stdout","time":181.149800405,"data":"  Loaded 57410 samples.\n"}
+,{"stream_name":"stdout","time":181.149803644,"data":"  Reporting ~10/225 sampled batches.\n"}
+,{"stream_name":"stdout","time":181.149806944,"data":"  Epoch 9 batch 1/225 (chunk 1/1 1/225) - loss: 2.0032 (policy: 1.4927, value: 0.4859, ownership: 0.0247) - 15.2 batch/s\n"}
+,{"stream_name":"stdout","time":181.149815394,"data":"  Epoch 9 batch 25/225 (chunk 1/1 25/225) - loss: 2.0244 (policy: 1.5324, value: 0.4670, ownership: 0.0251) - 20.4 batch/s\n"}
+,{"stream_name":"stdout","time":181.149817996,"data":"  Epoch 9 batch 50/225 (chunk 1/1 50/225) - loss: 2.0081 (policy: 1.5171, value: 0.4660, ownership: 0.0251) - 20.8 batch/s\n"}
+,{"stream_name":"stdout","time":181.149820447,"data":"  Epoch 9 batch 75/225 (chunk 1/1 75/225) - loss: 2.0118 (policy: 1.5208, value: 0.4659, ownership: 0.0252) - 21.0 batch/s\n"}
+,{"stream_name":"stdout","time":181.149822773,"data":"  Epoch 9 batch 100/225 (chunk 1/1 100/225) - loss: 2.0079 (policy: 1.5153, value: 0.4674, ownership: 0.0252) - 21.0 batch/s\n"}
+,{"stream_name":"stdout","time":181.149825106,"data":"  Epoch 9 batch 125/225 (chunk 1/1 125/225) - loss: 2.0076 (policy: 1.5155, value: 0.4670, ownership: 0.0251) - 21.1 batch/s\n"}
+,{"stream_name":"stdout","time":181.149827475,"data":"  Epoch 9 batch 150/225 (chunk 1/1 150/225) - loss: 2.0081 (policy: 1.5156, value: 0.4673, ownership: 0.0252) - 21.1 batch/s\n"}
+,{"stream_name":"stdout","time":181.149829883,"data":"  Epoch 9 batch 175/225 (chunk 1/1 175/225) - loss: 2.0082 (policy: 1.5160, value: 0.4670, ownership: 0.0252) - 21.1 batch/s\n"}
+,{"stream_name":"stdout","time":181.149832204,"data":"  Epoch 9 batch 200/225 (chunk 1/1 200/225) - loss: 2.0052 (policy: 1.5143, value: 0.4657, ownership: 0.0252) - 21.1 batch/s\n"}
+,{"stream_name":"stdout","time":181.149834537,"data":"  Epoch 9 batch 225/225 (chunk 1/1 225/225) - loss: 2.0043 (policy: 1.5146, value: 0.4646, ownership: 0.0251) - 21.2 batch/s\n"}
+,{"stream_name":"stdout","time":181.149836916,"data":"Epoch 9/10 - Loss: 2.0043 (Policy: 1.5146, Value: 0.4646, Ownership: 0.0251)\n"}
+,{"stream_name":"stdout","time":181.149839286,"data":"\n"}
+,{"stream_name":"stdout","time":181.149841403,"data":"=== Epoch 10/10 ===\n"}
+,{"stream_name":"stdout","time":181.149843587,"data":"Epoch 10: Loading chunk 1/1 (7 files)...\n"}
+,{"stream_name":"stdout","time":181.149845831,"data":"  Loaded 57410 samples.\n"}
+,{"stream_name":"stdout","time":181.149848863,"data":"  Reporting ~10/225 sampled batches.\n"}
+,{"stream_name":"stdout","time":181.149865009,"data":"  Epoch 10 batch 1/225 (chunk 1/1 1/225) - loss: 1.9781 (policy: 1.4601, value: 0.4934, ownership: 0.0246) - 16.5 batch/s\n"}
+,{"stream_name":"stdout","time":181.149869243,"data":"  Epoch 10 batch 25/225 (chunk 1/1 25/225) - loss: 1.9746 (policy: 1.4798, value: 0.4695, ownership: 0.0254) - 20.4 batch/s\n"}
+,{"stream_name":"stdout","time":181.149873433,"data":"  Epoch 10 batch 50/225 (chunk 1/1 50/225) - loss: 1.9799 (policy: 1.4900, value: 0.4646, ownership: 0.0253) - 20.7 batch/s\n"}
+,{"stream_name":"stdout","time":181.149877622,"data":"  Epoch 10 batch 75/225 (chunk 1/1 75/225) - loss: 1.9813 (policy: 1.4983, value: 0.4578, ownership: 0.0252) - 20.9 batch/s\n"}
+,{"stream_name":"stdout","time":181.149881759,"data":"  Epoch 10 batch 100/225 (chunk 1/1 100/225) - loss: 1.9810 (policy: 1.4978, value: 0.4581, ownership: 0.0252) - 21.0 batch/s\n"}
+,{"stream_name":"stdout","time":181.149888872,"data":"  Epoch 10 batch 125/225 (chunk 1/1 125/225) - loss: 1.9868 (policy: 1.5048, value: 0.4569, ownership: 0.0251) - 21.0 batch/s\n"}
+,{"stream_name":"stdout","time":181.149892444,"data":"  Epoch 10 batch 150/225 (chunk 1/1 150/225) - loss: 1.9870 (policy: 1.5026, value: 0.4593, ownership: 0.0251) - 21.0 batch/s\n"}
+,{"stream_name":"stdout","time":181.149895968,"data":"  Epoch 10 batch 175/225 (chunk 1/1 175/225) - loss: 1.9834 (policy: 1.4997, value: 0.4586, ownership: 0.0251) - 21.0 batch/s\n"}
+,{"stream_name":"stdout","time":181.149899487,"data":"  Epoch 10 batch 200/225 (chunk 1/1 200/225) - loss: 1.9845 (policy: 1.4989, value: 0.4605, ownership: 0.0251) - 21.1 batch/s\n"}
+,{"stream_name":"stdout","time":181.149903048,"data":"  Epoch 10 batch 225/225 (chunk 1/1 225/225) - loss: 1.9870 (policy: 1.5012, value: 0.4608, ownership: 0.0251) - 21.1 batch/s\n"}
+,{"stream_name":"stdout","time":181.149906658,"data":"Epoch 10/10 - Loss: 1.9870 (Policy: 1.5012, Value: 0.4608, Ownership: 0.0251)\n"}
+,{"stream_name":"stdout","time":181.354560607,"data":"\n"}
+,{"stream_name":"stdout","time":181.354590104,"data":"  Epoch 6 batch 150/225 (chunk 1/1 150/225) - loss: 2.1417 (policy: 1.6304, value: 0.4861, ownership: 0.0252) - 21.4 batch/s\n"}
+,{"stream_name":"stdout","time":181.354595219,"data":"  Epoch 6 batch 175/225 (chunk 1/1 175/225) - loss: 2.1444 (policy: 1.6310, value: 0.4881, ownership: 0.0252) - 21.5 batch/s\n"}
+,{"stream_name":"stdout","time":181.35459908,"data":"  Epoch 6 batch 200/225 (chunk 1/1 200/225) - loss: 2.1474 (policy: 1.6321, value: 0.4900, ownership: 0.0253) - 21.5 batch/s\n"}
+,{"stream_name":"stdout","time":181.354602729,"data":"  Epoch 6 batch 225/225 (chunk 1/1 225/225) - loss: 2.1485 (policy: 1.6325, value: 0.4907, ownership: 0.0253) - 21.6 batch/s\n"}
+,{"stream_name":"stdout","time":181.35460639,"data":"Epoch 6/10 - Loss: 2.1485 (Policy: 1.6325, Value: 0.4907, Ownership: 0.0253)\n"}
+,{"stream_name":"stdout","time":181.354610103,"data":"\n"}
+,{"stream_name":"stdout","time":181.354613366,"data":"=== Epoch 7/10 ===\n"}
+,{"stream_name":"stdout","time":181.3546188,"data":"Epoch 7: Loading chunk 1/1 (7 files)...\n"}
+,{"stream_name":"stdout","time":181.354625372,"data":"  Loaded 57410 samples.\n"}
+,{"stream_name":"stdout","time":181.354627704,"data":"  Reporting ~10/225 sampled batches.\n"}
+,{"stream_name":"stdout","time":181.354630019,"data":"  Epoch 7 batch 1/225 (chunk 1/1 1/225) - loss: 1.9684 (policy: 1.4707, value: 0.4728, ownership: 0.0249) - 15.6 batch/s\n"}
+,{"stream_name":"stdout","time":181.354632402,"data":"  Epoch 7 batch 25/225 (chunk 1/1 25/225) - loss: 2.0965 (policy: 1.5914, value: 0.4803, ownership: 0.0249) - 20.4 batch/s\n"}
+,{"stream_name":"stdout","time":181.354634752,"data":"  Epoch 7 batch 50/225 (chunk 1/1 50/225) - loss: 2.0825 (policy: 1.5789, value: 0.4785, ownership: 0.0251) - 20.9 batch/s\n"}
+,{"stream_name":"stdout","time":181.354637182,"data":"  Epoch 7 batch 75/225 (chunk 1/1 75/225) - loss: 2.0901 (policy: 1.5829, value: 0.4821, ownership: 0.0252) - 21.1 batch/s\n"}
+,{"stream_name":"stdout","time":181.354639669,"data":"  Epoch 7 batch 100/225 (chunk 1/1 100/225) - loss: 2.0845 (policy: 1.5828, value: 0.4765, ownership: 0.0252) - 21.2 batch/s\n"}
+,{"stream_name":"stdout","time":181.354642214,"data":"  Epoch 7 batch 125/225 (chunk 1/1 125/225) - loss: 2.0768 (policy: 1.5744, value: 0.4773, ownership: 0.0252) - 21.2 batch/s\n"}
+,{"stream_name":"stdout","time":181.3546447,"data":"  Epoch 7 batch 150/225 (chunk 1/1 150/225) - loss: 2.0823 (policy: 1.5790, value: 0.4781, ownership: 0.0252) - 21.3 batch/s\n"}
+,{"stream_name":"stdout","time":181.354654129,"data":"  Epoch 7 batch 175/225 (chunk 1/1 175/225) - loss: 2.0809 (policy: 1.5768, value: 0.4790, ownership: 0.0252) - 21.3 batch/s\n"}
+,{"stream_name":"stdout","time":181.35465713,"data":"  Epoch 7 batch 200/225 (chunk 1/1 200/225) - loss: 2.0830 (policy: 1.5782, value: 0.4796, ownership: 0.0252) - 21.3 batch/s\n"}
+,{"stream_name":"stdout","time":181.354672991,"data":"  Epoch 7 batch 225/225 (chunk 1/1 225/225) - loss: 2.0827 (policy: 1.5775, value: 0.4800, ownership: 0.0252) - 21.4 batch/s\n"}
+,{"stream_name":"stdout","time":181.35467701,"data":"Epoch 7/10 - Loss: 2.0827 (Policy: 1.5775, Value: 0.4800, Ownership: 0.0252)\n"}
+,{"stream_name":"stdout","time":181.354681232,"data":"\n"}
+,{"stream_name":"stdout","time":181.354684542,"data":"=== Epoch 8/10 ===\n"}
+,{"stream_name":"stdout","time":181.354689919,"data":"Epoch 8: Loading chunk 1/1 (7 files)...\n"}
+,{"stream_name":"stdout","time":181.354693314,"data":"  Loaded 57410 samples.\n"}
+,{"stream_name":"stdout","time":181.354696644,"data":"  Reporting ~10/225 sampled batches.\n"}
+,{"stream_name":"stdout","time":181.354699943,"data":"  Epoch 8 batch 1/225 (chunk 1/1 1/225) - loss: 2.1098 (policy: 1.5800, value: 0.5044, ownership: 0.0254) - 16.5 batch/s\n"}
+,{"stream_name":"stdout","time":181.354703471,"data":"  Epoch 8 batch 25/225 (chunk 1/1 25/225) - loss: 2.0310 (policy: 1.5405, value: 0.4653, ownership: 0.0251) - 20.7 batch/s\n"}
+,{"stream_name":"stdout","time":181.354707027,"data":"  Epoch 8 batch 50/225 (chunk 1/1 50/225) - loss: 2.0188 (policy: 1.5313, value: 0.4624, ownership: 0.0250) - 21.0 batch/s\n"}
+,{"stream_name":"stdout","time":181.354710577,"data":"  Epoch 8 batch 75/225 (chunk 1/1 75/225) - loss: 2.0380 (policy: 1.5426, value: 0.4702, ownership: 0.0252) - 21.1 batch/s\n"}
+,{"stream_name":"stdout","time":181.354714234,"data":"  Epoch 8 batch 100/225 (chunk 1/1 100/225) - loss: 2.0385 (policy: 1.5433, value: 0.4700, ownership: 0.0252) - 21.2 batch/s\n"}
+,{"stream_name":"stdout","time":181.354721555,"data":"  Epoch 8 batch 125/225 (chunk 1/1 125/225) - loss: 2.0374 (policy: 1.5415, value: 0.4707, ownership: 0.0252) - 21.2 batch/s\n"}
+,{"stream_name":"stdout","time":181.354725149,"data":"  Epoch 8 batch 150/225 (chunk 1/1 150/225) - loss: 2.0370 (policy: 1.5400, value: 0.4717, ownership: 0.0252) - 21.2 batch/s\n"}
+,{"stream_name":"stdout","time":181.354728647,"data":"  Epoch 8 batch 175/225 (chunk 1/1 175/225) - loss: 2.0367 (policy: 1.5409, value: 0.4706, ownership: 0.0252) - 21.2 batch/s\n"}
+,{"stream_name":"stdout","time":181.354732608,"data":"  Epoch 8 batch 200/225 (chunk 1/1 200/225) - loss: 2.0349 (policy: 1.5388, value: 0.4709, ownership: 0.0252) - 21.2 batch/s\n"}
+,{"stream_name":"stdout","time":181.354741611,"data":"  Epoch 8 batch 225/225 (chunk 1/1 225/225) - loss: 2.0369 (policy: 1.5420, value: 0.4698, ownership: 0.0252) - 21.3 batch/s\n"}
+,{"stream_name":"stdout","time":181.354744394,"data":"Epoch 8/10 - Loss: 2.0369 (Policy: 1.5420, Value: 0.4698, Ownership: 0.0252)\n"}
+,{"stream_name":"stdout","time":181.354746825,"data":"\n"}
+,{"stream_name":"stdout","time":181.354748956,"data":"=== Epoch 9/10 ===\n"}
+,{"stream_name":"stdout","time":181.354751157,"data":"Epoch 9: Loading chunk 1/1 (7 files)...\n"}
+,{"stream_name":"stdout","time":181.354753441,"data":"  Loaded 57410 samples.\n"}
+,{"stream_name":"stdout","time":181.35475632,"data":"  Reporting ~10/225 sampled batches.\n"}
+,{"stream_name":"stdout","time":181.354770429,"data":"  Epoch 9 batch 1/225 (chunk 1/1 1/225) - loss: 2.0032 (policy: 1.4927, value: 0.4859, ownership: 0.0247) - 15.2 batch/s\n"}
+,{"stream_name":"stdout","time":181.354774595,"data":"  Epoch 9 batch 25/225 (chunk 1/1 25/225) - loss: 2.0244 (policy: 1.5324, value: 0.4670, ownership: 0.0251) - 20.4 batch/s\n"}
+,{"stream_name":"stdout","time":181.35478279,"data":"  Epoch 9 batch 50/225 (chunk 1/1 50/225) - loss: 2.0081 (policy: 1.5171, value: 0.4660, ownership: 0.0251) - 20.8 batch/s\n"}
+,{"stream_name":"stdout","time":181.354786828,"data":"  Epoch 9 batch 75/225 (chunk 1/1 75/225) - loss: 2.0118 (policy: 1.5208, value: 0.4659, ownership: 0.0252) - 21.0 batch/s\n"}
+,{"stream_name":"stdout","time":181.354790796,"data":"  Epoch 9 batch 100/225 (chunk 1/1 100/225) - loss: 2.0079 (policy: 1.5153, value: 0.4674, ownership: 0.0252) - 21.0 batch/s\n"}
+,{"stream_name":"stdout","time":181.35479434,"data":"  Epoch 9 batch 125/225 (chunk 1/1 125/225) - loss: 2.0076 (policy: 1.5155, value: 0.4670, ownership: 0.0251) - 21.1 batch/s\n"}
+,{"stream_name":"stdout","time":181.354798054,"data":"  Epoch 9 batch 150/225 (chunk 1/1 150/225) - loss: 2.0081 (policy: 1.5156, value: 0.4673, ownership: 0.0252) - 21.1 batch/s\n"}
+,{"stream_name":"stdout","time":181.354801674,"data":"  Epoch 9 batch 175/225 (chunk 1/1 175/225) - loss: 2.0082 (policy: 1.5160, value: 0.4670, ownership: 0.0252) - 21.1 batch/s\n"}
+,{"stream_name":"stdout","time":181.354805181,"data":"  Epoch 9 batch 200/225 (chunk 1/1 200/225) - loss: 2.0052 (policy: 1.5143, value: 0.4657, ownership: 0.0252) - 21.1 batch/s\n"}
+,{"stream_name":"stdout","time":181.354808688,"data":"  Epoch 9 batch 225/225 (chunk 1/1 225/225) - loss: 2.0043 (policy: 1.5146, value: 0.4646, ownership: 0.0251) - 21.2 batch/s\n"}
+,{"stream_name":"stdout","time":181.354812306,"data":"Epoch 9/10 - Loss: 2.0043 (Policy: 1.5146, Value: 0.4646, Ownership: 0.0251)\n"}
+,{"stream_name":"stdout","time":181.354815759,"data":"\n"}
+,{"stream_name":"stdout","time":181.354818909,"data":"=== Epoch 10/10 ===\n"}
+,{"stream_name":"stdout","time":181.354822167,"data":"Epoch 10: Loading chunk 1/1 (7 files)...\n"}
+,{"stream_name":"stdout","time":181.35482543,"data":"  Loaded 57410 samples.\n"}
+,{"stream_name":"stdout","time":181.354828674,"data":"  Reporting ~10/225 sampled batches.\n"}
+,{"stream_name":"stdout","time":181.354831942,"data":"  Epoch 10 batch 1/225 (chunk 1/1 1/225) - loss: 1.9781 (policy: 1.4601, value: 0.4934, ownership: 0.0246) - 16.5 batch/s\n"}
+,{"stream_name":"stdout","time":181.354835402,"data":"  Epoch 10 batch 25/225 (chunk 1/1 25/225) - loss: 1.9746 (policy: 1.4798, value: 0.4695, ownership: 0.0254) - 20.4 batch/s\n"}
+,{"stream_name":"stdout","time":181.354840752,"data":"  Epoch 10 batch 50/225 (chunk 1/1 50/225) - loss: 1.9799 (policy: 1.4900, value: 0.4646, ownership: 0.0253) - 20.7 batch/s\n"}
+,{"stream_name":"stdout","time":181.35484692,"data":"  Epoch 10 batch 75/225 (chunk 1/1 75/225) - loss: 1.9813 (policy: 1.4983, value: 0.4578, ownership: 0.0252) - 20.9 batch/s\n"}
+,{"stream_name":"stdout","time":181.354849693,"data":"  Epoch 10 batch 100/225 (chunk 1/1 100/225) - loss: 1.9810 (policy: 1.4978, value: 0.4581, ownership: 0.0252) - 21.0 batch/s\n"}
+,{"stream_name":"stdout","time":181.354864509,"data":"  Epoch 10 batch 125/225 (chunk 1/1 125/225) - loss: 1.9868 (policy: 1.5048, value: 0.4569, ownership: 0.0251) - 21.0 batch/s\n"}
+,{"stream_name":"stdout","time":181.354868964,"data":"  Epoch 10 batch 150/225 (chunk 1/1 150/225) - loss: 1.9870 (policy: 1.5026, value: 0.4593, ownership: 0.0251) - 21.0 batch/s\n"}
+,{"stream_name":"stdout","time":181.35487298,"data":"  Epoch 10 batch 175/225 (chunk 1/1 175/225) - loss: 1.9834 (policy: 1.4997, value: 0.4586, ownership: 0.0251) - 21.0 batch/s\n"}
+,{"stream_name":"stdout","time":181.354877195,"data":"  Epoch 10 batch 200/225 (chunk 1/1 200/225) - loss: 1.9845 (policy: 1.4989, value: 0.4605, ownership: 0.0251) - 21.1 batch/s\n"}
+,{"stream_name":"stdout","time":181.354881655,"data":"  Epoch 10 batch 225/225 (chunk 1/1 225/225) - loss: 1.9870 (policy: 1.5012, value: 0.4608, ownership: 0.0251) - 21.1 batch/s\n"}
+,{"stream_name":"stdout","time":181.354888499,"data":"Epoch 10/10 - Loss: 1.9870 (Policy: 1.5012, Value: 0.4608, Ownership: 0.0251)\n"}
+,{"stream_name":"stdout","time":186.699520355,"data":"chain output ready: 6 replay file(s)\n"}
+,{"stream_name":"stderr","time":189.585840476,"data":"/usr/local/lib/python3.12/dist-packages/mistune.py:435: SyntaxWarning: invalid escape sequence '\\|'\n"}
+,{"stream_name":"stderr","time":189.585875157,"data":"  cells[i][c] = re.sub('\\\\\\\\\\|', '|', cell)\n"}
+,{"stream_name":"stderr","time":189.767715987,"data":"/usr/local/lib/python3.12/dist-packages/nbconvert/filters/filter_links.py:36: SyntaxWarning: invalid escape sequence '\\_'\n"}
+,{"stream_name":"stderr","time":189.767747597,"data":"  text = re.sub(r'_', '\\_', text) # Escape underscores in display text\n"}
+,{"stream_name":"stderr","time":190.406311517,"data":"[NbConvertApp] Converting notebook __notebook__.ipynb to notebook\n"}
+,{"stream_name":"stderr","time":190.695541054,"data":"[NbConvertApp] Writing 22461 bytes to __notebook__.ipynb\n"}
+,{"stream_name":"stderr","time":192.983235582,"data":"[NbConvertApp] Converting notebook __notebook__.ipynb to html\n"}
+,{"stream_name":"stderr","time":193.769952591,"data":"[NbConvertApp] Writing 305209 bytes to __results__.html\n"}
 ]
