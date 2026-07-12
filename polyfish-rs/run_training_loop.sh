@@ -216,6 +216,16 @@ RUN_STARTED_AT=$(echo "$RUN_INFO" | .venv/bin/python3 -c "import sys,json; print
 START_ITER=$(echo "$RUN_INFO" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin)['start_iter'])")
 echo "Training run_id=$RUN_ID started_at=$RUN_STARTED_AT starting at iteration $START_ITER"
 
+# Restore point: snapshot the model at every launch (new run or resume), so
+# no experiment can ever start without a recoverable "before" state.
+if [ -f model.safetensors ]; then
+    LAUNCH_CP="checkpoints/run_${RUN_ID}_iter${START_ITER}_start.safetensors"
+    if [ ! -f "$LAUNCH_CP" ]; then
+        cp model.safetensors "$LAUNCH_CP"
+        echo "Launch checkpoint: $LAUNCH_CP"
+    fi
+fi
+
 # Set up config.json sync if not present
 if [ ! -f "config.json" ]; then
     echo "{\"gamemode\": 2, \"mctsIters\": $MCTS_ITERS, \"cores\": 2, \"tribes\": [\"Imperius\", \"Bardur\", \"Oumaji\", \"Kickoo\", \"XinXi\"]}" > config.json
