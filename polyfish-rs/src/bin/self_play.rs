@@ -1220,6 +1220,12 @@ fn main() -> anyhow::Result<()> {
         #[arg(long, default_value_t = usize::MAX)]
         decay_last_iter: usize,
 
+        /// EXP_ELO_004: weight of the TD(lambda) delta vs the final-outcome
+        /// tail in the value target (only applies with --reward-shaping; see
+        /// the TD_W const rationale). Default preserves production behavior.
+        #[arg(long, default_value_t = TD_W)]
+        td_w: f32,
+
         /// EXP_ELO_002: iteration where the anchor-frac decay clock starts —
         /// the anchor's effective decay iteration is `iteration - this`
         /// (clamped at 0). The loop passes the current iteration to HOLD
@@ -2006,7 +2012,8 @@ fn main() -> anyhow::Result<()> {
             let value = if args.reward_shaping {
                 // TD delta carries per-action credit; the final-outcome tail
                 // carries the long-horizon signal.
-                (TD_W * td_deltas[step_idx] + (1.0 - TD_W) * final_outcome).clamp(-1.0, 1.0)
+                (args.td_w * td_deltas[step_idx] + (1.0 - args.td_w) * final_outcome)
+                    .clamp(-1.0, 1.0)
             } else {
                 final_outcome.clamp(-1.0, 1.0)
             };

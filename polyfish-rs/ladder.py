@@ -60,9 +60,16 @@ def _anchor_by_name(data, name):
     raise SystemExit(f"unknown anchor: {name}")
 
 
-def _gauge_series(data):
+def _gauge_series(data, run_id):
+    """Gauge readings vs the active anchor from THIS run only. Scoping to the
+    run keeps the plateau window from mixing budgets/configs across experiment
+    arms (a cross-run window false-stopped a run at its iteration 5, Jul 12)."""
     active = data["anchors"][-1]["name"]
-    return [r for r in data["readings"] if r["kind"] == "gauge" and r["opponent"] == active]
+    return [
+        r
+        for r in data["readings"]
+        if r["kind"] == "gauge" and r["opponent"] == active and r["run_id"] == run_id
+    ]
 
 
 def _plateau(series):
@@ -198,7 +205,7 @@ def cmd_record(args):
         if reading["win_rate"] >= FREEZE_WR:
             action = "freeze"
             data["plateau_strikes"] = 0
-        elif _plateau(_gauge_series(data)):
+        elif _plateau(_gauge_series(data, args.run_id)):
             data["plateau_strikes"] += 1
             if data["plateau_strikes"] >= PLATEAU_STRIKES:
                 action = "stop"

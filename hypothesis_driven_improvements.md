@@ -225,3 +225,52 @@ The behavior curves carry the real signal. Across readings 30→80: the post-t15
 
 ### Queued follow-up — EXP_ELO_003: anchor dose-response (0.25 → 0.4–0.5)
 Promoted to a live EXP only after 002 reads out. Trigger: 002 shows a real but slow climb (readings rising but <8pp over 3) → test whether more anchor games speed value-head relabeling. Run with `ANCHOR_FRAC=0.4`–`0.5`, watch vs-Greedy win rate + third-city rate, and watch policy CE for imitation-regression (anchor games record the greedy seat as teacher targets — too high a dose re-anchors the policy to the teacher, whose ceiling we're trying to pass; it also risks overfitting an exploit lane against a deterministic opponent instead of general strength). If 002 outright fails its falsifier, skip 003 — dose was never the variable.
+
+### EXP_ELO_003 result (Jul 12) — REJECTED at the cheap tier
+Two sequential 16/k=4 arms (0.4 then 0.8, each a fresh 20-iter run; NOT parallel — the 0.8 arm started from the 0.4 arm's final weights, and the pre-smoke model was not backed up, so level comparisons carry an upward bias for later arms). 0.4 arm readings: 25%, 22% vs the 0.25 baseline's 30/33/23/27; 0.8 arm stopped early by hand. Despite the training-progress tailwind, higher doses read flat-to-lower, and behavior curves showed the same city-stall shape. **Verdict: REJECTED — anchor dose is saturated at 0.25; the bottleneck is elsewhere.** Caveat: both arms ran with the run-relative value-trust ramp throttling σ(Q) to ≤0.67 (see the hygiene fix below), so the null is weaker than a clean test — but the same throttle applied to the 0.25 baseline, and its direction matched EXP_ELO_002's slow-climb at full trust. Fallout fixed: run-start model checkpoints are now automatic (`checkpoints/run_<id>_iter<start>_start.safetensors`).
+
+## EXP_ELO_004: The TD term subsidizes the tech tower
+*Jul 12, 2026 · pre-registered — probe (004a) first, stint (004b) on a positive probe*
+
+The value target is 70% TD(λ) whose per-step reward is the score delta between turn checkpoints (`td_lambda_labels`, self_play.rs), plus 30% final outcome. Research pays 100×tier score points the same turn it's bought (actions/tech.rs); army and expansion are multi-turn investments whose score arrives late or via compounding — mostly outside λ=0.8's ~5-turn credit window. Hypothesis: the TD term systematically over-credits tech relative to compounding assets, and is the dense gradient holding the model in the tech-tower local optimum diagnosed in EXP_ELO_001. The final-outcome tail (which correctly ranks Greedy's expansion strategy above tech-towering — Greedy outscores us at turn 30) is drowned at 0.3 weight. This also explains why 30-turn training alone never fixed it (Verdi's observation): the mis-pricing is per-step and horizon-independent. History note: TD's ancestor (4-turn forward delta) was introduced for credit *speed*, not anti-passivity — the anti-passivity guard is the anchor games (notes.md Jul 8), which stay held at 0.25 throughout this EXP.
+
+**Change:** `--td-w` flag (new; default 0.7 = production). Probe arm: `TD_W=0.2`. Unmutings required for a short probe to be readable: `VALUE_TRUST_RAMP_ITERS=1` (full σ(Q) trust from iter 1 — justified at value R² ~0.70) and `REPLAY_BUFFER_FILES=0` (archived games carry old-blend labels that would dilute the new signal).
+
+### Probe design (004a)
+10 iters, 16/k=4, `-l 5`, `ITER_OFFSET=80` (30-turn stage), from a launch checkpoint. Judged on leading indicators ONLY (win rate excluded — ±9pp on 2 readings): (1) `value_loss` spike-then-refit at iters 1–2 proving the label changed; (2) `avg_research`/game declining vs control; (3) gauge `techs` curve bending toward Greedy's with `cities` flat-or-up. **Passivity tripwires** (the 1783285900 collapse signature): sustained decline across moves/game, captures/game, attacks/game → abort and roll back to the launch checkpoint; if tripped, TD had quietly become a second anti-passivity crutch — record and rethink.
+
+### Execution notes (Jul 12)
+1. **First probe attempt was an accidental control**: it ran before `--td-w` existed, so `TD_W=0.2` (env) silently did nothing — the run (1783855452) executed at TD 0.7 with the two unmutings active. Confirmed by the absence of any value_loss shift (flat ~0.62 — a correct negative control for the label-change instrument). It is now the matched control arm: identical conditions except TD_W.
+2. Control results were unexpectedly strong: iter-5 reading **37.5% — the best 16-sim reading ever** (prior 16-sim: 30/33/23/27, 25/22), shallowest post-t15 city bleed yet (2.23→1.89), opponent cities suppressed to 3.05, model army value 12–13.7. Suggests full value-trust from iter 1 and/or fresh-only training helps by itself; single reading, unconfirmed.
+3. The run was killed at iter 5 by a **plateau-stop artifact**: the 8-reading window mixed readings across runs/budgets/experiment arms. Fixed: `ladder.py` now scopes the plateau series to the current `run_id`.
+
+### Expected Results (probe)
+TD_W=0.2 arm vs the accidental control: value_loss spikes at iter 1–2 then refits; avg_research trends below the control's ~16–18; gauge techs curve at t20–25 drops toward the opponent's while cities hold ≥ control. Falsifier: with full trust and fresh-only training, research/tech metrics indistinguishable from control after 10 iters → the TD-subsidy theory takes major damage; next suspects are search depth and capacity.
+
+### Execution history (Jul 12–13) — three attempts before a valid test
+1. **Attempt 1** (run 1783861463, "probe"): `-r` omitted — `--td-w` is only read inside the `reward_shaping` branch (self_play.rs:2013), which defaults false. Void; TD_W had zero effect. Retroactively repurposed as a second replicate of the pure-final-outcome regime.
+2. **Attempt 2** (runs 1783865321 TD_W=0.2, 1783869341 TD_W=0.7): `-r` omitted again (confirmed with Verdi) — same bug, both runs void for this question.
+3. **Attempt 3** (runs 1783877772 TD_W=0.2, 1783885395 TD_W=0.7): `-r` present this time, but the two runs were sequential, not parallel — 1783885395 continued from 1783877772's ending weights, so any difference was confounded with 10 extra iterations of training (same defect as EXP_ELO_003). Inconclusive; deltas were within noise.
+4. **Clean rerun** (Jul 13): used the auto-saved launch checkpoint (`checkpoints/run_1783877772_iter1_start.safetensors`) to reset `model.safetensors` to the exact pre-arm-3 weights, then ran a fresh TD_W=0.7 arm (run **1783894201**) from that identical baseline as arm 3's TD_W=0.2 run (**1783877772**). Verified bit-identical starting weights via sha256. This is the valid test.
+
+### Actual Results
+Clean, bit-identical-baseline comparison (both `-r`, 10 iters, 16/k=4, `ITER_OFFSET=80`, `VALUE_TRUST_RAMP_ITERS=1`, `REPLAY_BUFFER_FILES=0`):
+
+| metric (iter 5 reading) | TD_W=0.2 (1783877772) | TD_W=0.7 (1783894201) |
+|---|---|---|
+| win rate vs Greedy | 35.9% | **48.4%** (best 16-sim reading to date) |
+| Elo est | −100.4 | **−10.8** |
+| cities @t15 / @t25 | 2.05 / 1.70 | **2.58 / 2.19** |
+| SPT @t25 | 7.75 | **9.36** |
+| score @t25 | 3548 | **3761** |
+
+Iter-10 reading: both arms cooled (0.2→25.0%, 0.7→35.9%) but TD_W=0.7 stayed ahead on every metric at both readings — win rate, Elo, the full cities curve, SPT, and score all move together in the same direction, both readings. This is a large, internally consistent effect, not a noise-band result like everything upstream of it.
+
+**Verdict: REJECTED — in the opposite direction than hypothesized.** More TD weight (dense per-step credit), not less, produced the best expansion/strength numbers recorded at this budget tier. Revised model: TD's per-step reward isn't selectively crediting tech — it rewards *any* score-generating event each turn, cities included (founding = +100, plus every population/harvest tick after). At TD_W=0.2, training signal is dominated by one sparse, high-variance final-outcome label per game; at 0.7, the value head gets dense low-variance feedback every turn, and at a 10-iteration horizon that sample-efficiency advantage dominates any steady-state tech-crediting bias. The tech-tower symptom from EXP_ELO_001 more likely traces to the *absolute pricing* of research (100×tier, paid instantly, actions/tech.rs) than to the TD/final-outcome blend weight.
+
+**Action taken:** `model.safetensors` now holds the TD_W=0.7 (1783894201) ending weights — the better-performing line — left in place as the production tip. The `tip_1783885395` backup (the older, no-reward-shaping-history line) was NOT restored.
+
+**Follow-up implications:**
+- Reopens the idea we set aside earlier in this thread: if the tech bias is a pricing problem, the direct lever is `actions/tech.rs`'s `100 * tier` score grant (or an equivalent discount applied where value targets are computed) — not scoring.rs (policy-side, already correctly under-prices research) and not the TD blend weight (now tested, wrong lever).
+- Open question for a future EXP: is today's whole session's win-rate climb (EXP_ELO_002 mechanism engaging, etc.) partly attributable to reward-shaping having been OFF for ~90 iterations (pure final-outcome, high-variance, slow) rather than to the anchor-frac hold alone? The `-r` omission was present across all of EXP_ELO_002/003's runs. Worth a dedicated reward-shaping-on/off ablation from a shared baseline if the anchor story needs re-litigating.
+- Lesson banked for the loop script: `run_training_loop.sh` should log which flags (`-r`, `--td-w`, etc.) were actually passed into a per-run manifest file, so this three-attempts-to-get-one-valid-test problem can't recur silently.
