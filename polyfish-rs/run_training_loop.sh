@@ -101,7 +101,12 @@ LEAGUE_INTERVAL=10
 # rounds, fresh games accumulate in kaggle_pending/ — batching amortizes the
 # fixed per-round Kaggle overhead (dataset processing + kernel queue + polls).
 TRAIN_EVERY=1
-while getopts "fbcri:g:n:a:e:l:K:" opt; do
+# Greedy-anchor gate knobs (-A/-H/-W/-P), passed through to self_play.
+# Empty = use the binary's defaults (hold 10, graduate 0.55, probe 0.05).
+ANCHOR_HOLD_ITERS="${ANCHOR_HOLD_ITERS:-}"
+ANCHOR_GRADUATE_WINRATE="${ANCHOR_GRADUATE_WINRATE:-}"
+ANCHOR_PROBE_FRAC="${ANCHOR_PROBE_FRAC:-}"
+while getopts "fbcri:g:n:a:e:l:K:A:H:W:P:" opt; do
   case $opt in
     f)
       FORCE_TRAIN=true
@@ -136,6 +141,18 @@ while getopts "fbcri:g:n:a:e:l:K:" opt; do
       ;;
     K)
       TRAIN_EVERY=$OPTARG
+      ;;
+    A)
+      ANCHOR_FRAC=$OPTARG
+      ;;
+    H)
+      ANCHOR_HOLD_ITERS=$OPTARG
+      ;;
+    W)
+      ANCHOR_GRADUATE_WINRATE=$OPTARG
+      ;;
+    P)
+      ANCHOR_PROBE_FRAC=$OPTARG
       ;;
     \?)
       echo "Invalid option: -$OPTARG" >&2
@@ -284,13 +301,18 @@ do
         fi
     fi
 
-    # Heuristic-anchor games (selfplay iterations only; league already has an
-    # asymmetric opponent). ANCHOR_FRAC of each iteration's games are played
-    # vs the network-free heuristic backend so passivity actually loses and
-    # the relative value label carries signal. ANCHOR_FRAC=0 disables.
+    # Greedy-anchor games (selfplay iterations only; league already has an
+    # asymmetric opponent). Up to ANCHOR_FRAC (-A) of each iteration's games
+    # are played vs the network-free greedy backend, which actually ELIMINATES
+    # passive play; after -H hold iterations self_play gates the fraction on
+    # the measured win rate vs greedy (graduate at -W, residual probe -P).
+    # ANCHOR_FRAC=0 / -A 0 disables.
     ANCHOR_FLAG=""
     if [ "$MATCH_TYPE" = "selfplay" ]; then
         ANCHOR_FLAG="--anchor-frac ${ANCHOR_FRAC:-0.25}"
+        [ -n "$ANCHOR_HOLD_ITERS" ] && ANCHOR_FLAG="$ANCHOR_FLAG --anchor-hold-iters $ANCHOR_HOLD_ITERS"
+        [ -n "$ANCHOR_GRADUATE_WINRATE" ] && ANCHOR_FLAG="$ANCHOR_FLAG --anchor-graduate-winrate $ANCHOR_GRADUATE_WINRATE"
+        [ -n "$ANCHOR_PROBE_FRAC" ] && ANCHOR_FLAG="$ANCHOR_FLAG --anchor-probe-frac $ANCHOR_PROBE_FRAC"
     fi
 
     # Value-head trust ramp, RUN-relative (loop iteration i, not EFF_ITER —
