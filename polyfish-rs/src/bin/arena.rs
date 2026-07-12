@@ -235,6 +235,10 @@ fn play_match(
         0
     };
 
+    if decisive {
+        println!("Game seed {} (swap {}) was decisive at turn {}", seed, swap, game.state.settings.turn);
+    }
+
     MatchResult {
         winner_config,
         score_config1,

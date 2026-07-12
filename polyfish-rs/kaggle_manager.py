@@ -42,11 +42,11 @@ RETRY_WAIT = 30
 def run_cmd(cmd, retries=RETRIES, fatal=True):
     for attempt in range(1, retries + 1):
         suffix = f" (attempt {attempt}/{retries})" if attempt > 1 else ""
-        print(f"Running: {cmd}{suffix}")
+        #print(f"Running: {cmd}{suffix}")
         result = subprocess.run(cmd, shell=True, text=True, capture_output=True)
         if result.returncode == 0:
             return result.stdout.strip()
-        print(f"Error executing {cmd}:")
+        print(f"[Kaggle] Error executing {cmd}:")
         print(result.stderr.strip() or result.stdout.strip())
         if attempt < retries:
             time.sleep(RETRY_WAIT)
@@ -62,7 +62,7 @@ def get_kaggle_username():
             if "username" in line.lower():
                 return line.split(':')[1].strip()
     except Exception:
-        print("Make sure you have installed the kaggle CLI ('pip install kaggle') and placed your kaggle.json in ~/.kaggle/kaggle.json")
+        print("[Kaggle] Make sure you have installed the kaggle CLI ('pip install kaggle') and placed your kaggle.json in ~/.kaggle/kaggle.json")
         sys.exit(1)
     return None
 
@@ -83,7 +83,7 @@ def setup_dataset(username, data_dir):
     with open(os.path.join(data_dir, "dataset-metadata.json"), "w") as f:
         json.dump(metadata, f, indent=4)
 
-    print(f"Dataset metadata created for {dataset_slug}")
+    print(f"[Kaggle] Dataset metadata created for {dataset_slug}")
     return dataset_slug
 
 
@@ -111,10 +111,10 @@ def sync_dataset(username, bootstrap):
     pending = sorted(glob.glob(os.path.join(PENDING_DIR, "games_*.safetensors")))
     for f in pending:
         stage_as_zip(f, os.path.basename(f))
-    print(f"Staged and compressed {len(pending)} pending game file(s) for upload")
+    print(f"[Kaggle] Staged and compressed {len(pending)} pending game file(s) for upload")
 
     if bootstrap:
-        print("Bootstrap round: including local model and teacher games in the dataset")
+        print("[Kaggle] Bootstrap round: including local model and teacher games in the dataset")
         if os.path.exists("model.safetensors"):
             shutil.copy2("model.safetensors", DATA_DIR)
         for f in glob.glob("teachers/games_*.safetensors"):
@@ -125,26 +125,26 @@ def sync_dataset(username, bootstrap):
     metadata_path = os.path.join(DATA_DIR, "dataset-metadata.json")
     if not os.path.exists(metadata_path):
         setup_dataset(username, DATA_DIR)
-        print("Creating new dataset on Kaggle...")
+        print("[Kaggle] Creating new dataset on Kaggle...")
         run_cmd(f"kaggle datasets create -p {DATA_DIR}")
     else:
-        print("Uploading new version to Kaggle dataset...")
+        print("[Kaggle] Uploading new version to Kaggle dataset...")
         # Ignore failure here if it's because the dataset is unchanged (Kaggle throws 400 Bad Request)
         out = run_cmd(f"kaggle datasets version -p {DATA_DIR} -m 'Update training data' -d", fatal=False)
         if out is None:
-            print("Dataset version upload failed (likely unchanged/already uploaded). Proceeding...")
+            print("[Kaggle] Dataset version upload failed (likely unchanged/already uploaded). Proceeding...")
 
-    print("Waiting for dataset to be processed by Kaggle...")
+    print("[Kaggle] Waiting for dataset to be processed by Kaggle...")
     deadline = time.time() + DATASET_READY_TIMEOUT
     while time.time() < deadline:
         status = run_cmd(f"kaggle datasets status {dataset_slug}", fatal=False) or ""
         if "ready" in status.lower():
-            print("Dataset ready; buffer time for the new version to propagate...")
+            print("[Kaggle] Dataset ready; buffer time for the new version to propagate...")
             time.sleep(30)
             return
-        print("Dataset still processing, waiting 10s...")
+        print("[Kaggle] Dataset still processing, waiting 10s...")
         time.sleep(10)
-    print(f"Dataset not ready after {DATASET_READY_TIMEOUT}s")
+    print(f"[Kaggle] Dataset not ready after {DATASET_READY_TIMEOUT}s")
     sys.exit(1)
 
 
@@ -296,7 +296,7 @@ def setup_kernel(username, dataset_slug, bootstrap):
     with open(os.path.join(KERNEL_DIR, "train_notebook.ipynb"), "w") as f:
         json.dump(notebook, f, indent=4)
 
-    print(f"Kernel metadata created for {kernel_slug} (bootstrap={bootstrap})")
+    print(f"[Kaggle] Kernel metadata created (bootstrap={bootstrap})")
     return KERNEL_DIR, kernel_slug
 
 
@@ -304,29 +304,29 @@ def run_training(username, bootstrap):
     dataset_slug = f"{username}/{DATASET_NAME}"
     kernel_dir, kernel_slug = setup_kernel(username, dataset_slug, bootstrap)
 
-    print(f"Pushing and running kernel {kernel_slug}...")
+    print(f"[Kaggle] Pushing and running kernel...")
     run_cmd(f"kaggle kernels push -p {kernel_dir} --accelerator NvidiaTeslaT4")
 
-    print("Waiting for training to complete... (checking every 60s)")
+    print("[Kaggle] Waiting for training to complete...")
     deadline = time.time() + KERNEL_TIMEOUT
     while time.time() < deadline:
-        time.sleep(60)
+        time.sleep(30)
         status = run_cmd(f"kaggle kernels status {kernel_slug}", retries=1, fatal=False) or ""
-        print(f"Status: {status.strip()}")
+        #print(f"Status: {status.strip()}")
         s = status.lower()
         if "complete" in s:
-            print("Training completed!")
+            print("[Kaggle] Training completed!")
             return
         if "error" in s or "cancel" in s:
-            print("Training failed!")
+            print("[Kaggle] Training failed!")
             sys.exit(1)
-    print(f"Kernel not complete after {KERNEL_TIMEOUT}s")
+    print(f"[Kaggle] Kernel not complete after {KERNEL_TIMEOUT}s")
     sys.exit(1)
 
 
 def pull_results(username):
     kernel_slug = f"{username}/{KERNEL_NAME}"
-    print("Downloading trained model and metrics...")
+    print("[Kaggle] Downloading trained model and metrics...")
     shutil.rmtree("./kaggle_output", ignore_errors=True)
 
     # Patterned download avoids pulling the whole replay window back; fall
@@ -338,22 +338,22 @@ def pull_results(username):
             fatal=False,
         )
     if not os.path.exists("./kaggle_output/model.safetensors"):
-        print("Patterned download failed; downloading full kernel output...")
+        print("[Kaggle] Patterned download failed; downloading full kernel output...")
         shutil.rmtree("./kaggle_output", ignore_errors=True)
         run_cmd(f"kaggle kernels output {kernel_slug} -p ./kaggle_output")
 
     if os.path.exists("./kaggle_output/model.safetensors"):
         shutil.copy2("./kaggle_output/model.safetensors", "./model.safetensors")
-        print("Updated local model.safetensors successfully!")
+        print("[Kaggle] Updated local model.safetensors successfully!")
     else:
-        print("Error: model.safetensors not found in Kaggle output.")
+        print("[Kaggle] Error: model.safetensors not found in Kaggle output.")
         sys.exit(1)
 
     if os.path.exists("./kaggle_output/last_train_metrics.json"):
         shutil.copy2("./kaggle_output/last_train_metrics.json", ".last_train_metrics.json")
-        print("Pulled training metrics for training_log.")
+        print("[Kaggle] Pulled training metrics for training_log.")
     else:
-        print("Warning: last_train_metrics.json not found in Kaggle output; local metrics may be stale.")
+        print("[Kaggle] Warning: last_train_metrics.json not found in Kaggle output; local metrics may be stale.")
 
 
 def finalize_round():
@@ -363,22 +363,22 @@ def finalize_round():
     for f in glob.glob(os.path.join(PENDING_DIR, "games_*.safetensors")):
         os.remove(f)
         removed += 1
-    print(f"Round complete: chain established, {removed} pending file(s) cleared")
+    print("[Kaggle] Round complete: chain established, {} pending file(s) cleared".format(removed))
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python kaggle_manager.py [sync|train|pull|all]")
+        print("[Kaggle] Usage: python kaggle_manager.py [sync|train|pull|all]")
         sys.exit(1)
 
     action = sys.argv[1].lower()
     username = get_kaggle_username()
 
     if not username:
-        print("Could not retrieve Kaggle username. Ensure kaggle config is set up.")
+        print("[Kaggle] Could not retrieve username. Ensure kaggle config is set up.")
         sys.exit(1)
 
-    print(f"Using Kaggle username: {username}")
+    print(f"[Kaggle] Using Kaggle username: {username}")
     bootstrap = is_bootstrap()
 
     if action == "sync":
@@ -394,30 +394,30 @@ if __name__ == "__main__":
             if h > 0: return f"{int(h)}h {int(m)}m {int(s)}s"
             return f"{int(m)}m {int(s)}s"
 
-        print("--- Starting Full Kaggle Pipeline ---")
+        print("[Kaggle] --- Starting Full Kaggle Pipeline ---")
         t_start = time.time()
         
-        print(f"[{time.strftime('%H:%M:%S')}] Step 1/3: Syncing Dataset...")
+        print("[Kaggle] Syncing Dataset...")
         t_sync_start = time.time()
         sync_dataset(username, bootstrap)
         t_sync_end = time.time()
-        print(f"✅ Sync Dataset finished in {fmt_time(t_sync_end - t_sync_start)}.")
+        print(f"[Kaggle] ✅ Sync Dataset finished in {fmt_time(t_sync_end - t_sync_start)}.")
         
-        print(f"[{time.strftime('%H:%M:%S')}] Step 2/3: Training on Kaggle...")
+        print("[Kaggle] Training...")
         t_train_start = time.time()
         run_training(username, bootstrap)
         t_train_end = time.time()
-        print(f"✅ Kaggle Training finished in {fmt_time(t_train_end - t_train_start)}.")
+        print(f"[Kaggle] ✅ Training finished in {fmt_time(t_train_end - t_train_start)}.")
         
-        print(f"[{time.strftime('%H:%M:%S')}] Step 3/3: Pulling Results...")
+        print("[Kaggle] Pulling Results...")
         t_pull_start = time.time()
         pull_results(username)
         t_pull_end = time.time()
-        print(f"✅ Pull Results finished in {fmt_time(t_pull_end - t_pull_start)}.")
+        print(f"[Kaggle] ✅ Pull Results finished in {fmt_time(t_pull_end - t_pull_start)}.")
         
         finalize_round()
         t_end = time.time()
-        print(f"🎉 Pipeline Complete! Total time: {fmt_time(t_end - t_start)}")
+        print(f"[Kaggle] 🎉 Pipeline Complete! Took: {fmt_time(t_end - t_start)}")
     else:
-        print(f"Unknown action: {action}")
+        print(f"[Kaggle] Unknown action: {action}")
         sys.exit(1)

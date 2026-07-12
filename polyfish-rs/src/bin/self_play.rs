@@ -1547,7 +1547,7 @@ fn main() -> anyhow::Result<()> {
     if args.anchor_frac > 0.0 && args.opponent.is_none() {
         match anchor_winrate {
             Some(wr) => println!(
-                "[selfplay] anchor gate: rolling winrate vs greedy {:.0}% -> effective anchor_frac {:.3} (hold <= iter {}, graduate at {:.0}%, probe {:.3})",
+                "[Self-Play] anchor gate: rolling winrate vs greedy {:.0}% -> effective anchor_frac {:.3} (hold <= iter {}, graduate at {:.0}%, probe {:.3})",
                 wr * 100.0,
                 anchor_frac,
                 args.anchor_hold_iters,
@@ -1555,7 +1555,7 @@ fn main() -> anyhow::Result<()> {
                 args.anchor_probe_frac,
             ),
             None => println!(
-                "[selfplay] anchor gate: no measurements yet -> full anchor_frac {:.3}",
+                "[Self-Play] anchor gate: no measurements yet -> full anchor_frac {:.3}",
                 anchor_frac
             ),
         }
@@ -1584,7 +1584,7 @@ fn main() -> anyhow::Result<()> {
         SearchBackend::Random => "Uniform random (no NN, no search)".to_string(),
     };
     println!(
-        "[selfplay] {match_label}: {} games, {} mcts-iters, {search_label}, tribes {tribe_label} | eval {backend_label} | {eval_servers} shard(s) cache={per_shard_cache:?} workers={} | {num_actors} actors max_batch={} coalesce_us={} leaf_batch={:?} | device {:?} (CANDLE_METAL_COMPUTE_PER_BUFFER={metal_compute_per_buffer})",
+        "[Self-Play] {match_label}: {} games, {} mcts-iters, {search_label}, tribes {tribe_label} | eval {backend_label} | {eval_servers} shard(s) cache={per_shard_cache:?} workers={} | {num_actors} actors max_batch={} coalesce_us={} leaf_batch={:?} | device {:?} (CANDLE_METAL_COMPUTE_PER_BUFFER={metal_compute_per_buffer})",
         args.num_games,
         args.mcts_iters,
         args.eval_workers,
@@ -1690,12 +1690,24 @@ fn main() -> anyhow::Result<()> {
                             let done = games_completed.fetch_add(1, Ordering::Relaxed) + 1;
                             if finish_milestones.contains(&done) {
                                 eprintln!(
-                                    "[Progress] {}/{} games complete (game {} — {} moves, winner score {})",
+                                    "[Progress] {}/{} games complete (game {} — {} moves, winner score {}, decisive: {}, captures: {}, final spt: {})",
                                     done,
                                     args.num_games,
                                     i,
                                     result.moves,
                                     result.winner_score,
+                                    if result.decisive {
+                                        "yes"
+                                    } else {
+                                        "no"
+                                    },
+                                    result.cap_villages,
+                                    result
+                                        .spt_at_turn
+                                        .iter()
+                                        .max_by_key(|(turn, _)| *turn)
+                                        .map(|(_, spt)| *spt)
+                                        .unwrap_or(0.0),
                                 );
                             }
                         }
@@ -1715,7 +1727,7 @@ fn main() -> anyhow::Result<()> {
 
     let games_duration = games_start.elapsed();
     println!(
-        "Game generation completed in: {:.2}s ({} games)",
+        "🚀 Game generation completed in: {:.2}s ({} games)",
         games_duration.as_secs_f32(),
         results.len()
     );
@@ -2266,7 +2278,7 @@ fn main() -> anyhow::Result<()> {
         append_anchor_record(args.iteration, anchor_games_n, anchor_model_wins);
         if anchor_games_n > 0 {
             println!(
-                "[selfplay] anchor games: {} | model wins {:.0} ({:.0}%) | decisive games this run: {}",
+                "[Self-Play] anchor games: {} | model wins {:.0} ({:.0}%) | decisive games this run: {}",
                 anchor_games_n,
                 anchor_model_wins,
                 100.0 * anchor_model_wins / anchor_games_n as f32,

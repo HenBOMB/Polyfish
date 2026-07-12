@@ -24,9 +24,9 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
             if let Ok(idx) = mv.source_idx() {
                 if let Some(s) = get_structure_at(state, idx as i32) {
                     match s.structure_type {
-                        StructureType::Ruin => 100.0,
-                        StructureType::Village => 99.8,
-                        _ => 100.1, // Capital or City
+                        StructureType::Ruin => 120.0,
+                        StructureType::Village => 115.0,
+                        _ => 250.0, // Capital or City (must beat any attack/reward)
                     }
                 } else {
                     // Likely starfish
@@ -487,12 +487,12 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                         match s.structure_type {
                             StructureType::Ruin
                             | StructureType::Village
-                            | StructureType::Lighthouse => score += 43.0,
+                            | StructureType::Lighthouse => score += 75.0, // increased to beat random attacks
                             _ => {
                                 // Enemy city potentially
                                 // TODO: Doesnt check for peace treaty
                                 if tile.owner != player_id && tile.owner != 0 {
-                                    score += 50.0;
+                                    score += 120.0; // increased to strictly beat any attack (110.0 max)
                                 }
                             }
                         }

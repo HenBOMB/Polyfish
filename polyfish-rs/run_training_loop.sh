@@ -97,6 +97,10 @@ REWARD_SHAPING=false
 # Play a league match every LEAGUE_INTERVAL iterations (iteration 10, 20, 30,
 # ... by default). 0 disables league play entirely. Override with -l.
 LEAGUE_INTERVAL=10
+# Rate new checkpoints on the anchored Elo ladder (rate_checkpoints.sh) in a
+# niced background job that mostly runs during the idle Kaggle window.
+# -E 0 disables. ELO_SEEDS / ELO_WORKERS env override the arena defaults.
+ELO_TRACK=1
 # Run a Kaggle training round every TRAIN_EVERY iterations (-K). Between
 # rounds, fresh games accumulate in kaggle_pending/ — batching amortizes the
 # fixed per-round Kaggle overhead (dataset processing + kernel queue + polls).
@@ -106,7 +110,7 @@ TRAIN_EVERY=1
 ANCHOR_HOLD_ITERS="${ANCHOR_HOLD_ITERS:-}"
 ANCHOR_GRADUATE_WINRATE="${ANCHOR_GRADUATE_WINRATE:-}"
 ANCHOR_PROBE_FRAC="${ANCHOR_PROBE_FRAC:-}"
-while getopts "fbcri:g:n:a:e:l:K:A:H:W:P:" opt; do
+while getopts "fbcri:g:n:a:e:l:K:A:H:W:P:E:" opt; do
   case $opt in
     f)
       FORCE_TRAIN=true
@@ -154,6 +158,9 @@ while getopts "fbcri:g:n:a:e:l:K:A:H:W:P:" opt; do
     P)
       ANCHOR_PROBE_FRAC=$OPTARG
       ;;
+    E)
+      ELO_TRACK=$OPTARG
+      ;;
     \?)
       echo "Invalid option: -$OPTARG" >&2
       exit 1
@@ -170,13 +177,13 @@ scaled() {
 if [ "${ITERATIONS_SET:-false}" != true ]; then
     ITERATIONS=$(scaled "$ITERATIONS")
 fi
-CHECKPOINT_EVERY=$(scaled 50)
+CHECKPOINT_EVERY=$(scaled 10)
 MILESTONE_EVERY=$(scaled 100)
 # Replay window: constant ~10*BASELINE_GAMES games regardless of -g.
 # train.py reads REPLAY_BUFFER_FILES; archive pruning keeps window + 1 in sync.
 ARCHIVE_KEEP=$(scaled 10)
 export REPLAY_BUFFER_FILES=$ARCHIVE_KEEP
-echo "Schedule (games-based, -g $NUM_GAMES vs baseline $BASELINE_GAMES): $ITERATIONS iterations, checkpoint every $CHECKPOINT_EVERY, milestone every $MILESTONE_EVERY, league every $LEAGUE_INTERVAL iterations, replay window $ARCHIVE_KEEP files, Kaggle training every $TRAIN_EVERY iteration(s)"
+echo "Schedule (games-based, -g $NUM_GAMES vs baseline $BASELINE_GAMES): $ITERATIONS iterations, checkpoint every $CHECKPOINT_EVERY, milestone every $MILESTONE_EVERY, league every $LEAGUE_INTERVAL iterations, replay window $ARCHIVE_KEEP files, Kaggle training every $TRAIN_EVERY iteration(s), Elo tracking $([ "$ELO_TRACK" != "0" ] && echo on || echo off)"
 
 REWARD_FLAG=""
 if [ "$REWARD_SHAPING" = true ]; then
@@ -227,11 +234,8 @@ if [ ! -f "config.json" ]; then
     echo "{\"gamemode\": 2, \"iterations\": $MCTS_ITERS, \"cores\": 2, \"tribes\": [\"Imperius\", \"Bardur\", \"Oumaji\", \"Kickoo\", \"XinXi\"]}" > config.json
 fi
 
-echo "Starting backend server in background..."
-./target/release/polyfish &
-SERVER_PID=$!
-
-trap '.venv/bin/python3 training_log.py finish-run 2>/dev/null || true; kill $SERVER_PID 2>/dev/null; rm -f .training.pid' EXIT
+SERVER_PID=""
+trap '.venv/bin/python3 training_log.py finish-run 2>/dev/null || true; [ -n "$SERVER_PID" ] && kill $SERVER_PID 2>/dev/null; rm -f .training.pid' EXIT
 
 # Portable replacement for GNU `shuf` (not present on stock macOS)
 portable_shuf() {
@@ -264,10 +268,17 @@ if [ "$START_ITER" -gt 1 ] && [ ! -f "model.safetensors" ]; then
 fi
 .venv/bin/python3 init_model.py
 
+# Start the server only after the model exists — it panics on a missing
+# model.safetensors (e.g. right after --reset), killing the live dashboard.
+echo "Starting backend server in background..."
+./target/release/polyfish &
+SERVER_PID=$!
+
 TRAIN_FAILS=0
 for ((i=START_ITER; i<START_ITER+ITERATIONS; i++))
 do
     ITER_STARTED_AT=$(.venv/bin/python3 training_log.py now-iso)
+    echo ""
     echo "=================================================="
     echo "Starting Iteration $i"
     echo "=================================================="
@@ -373,6 +384,26 @@ do
     mkdir -p kaggle_pending
     cp games_*.safetensors kaggle_pending/ 2>/dev/null || true
 
+    # Elo: rate any not-yet-rated checkpoint in the background. Niced + capped
+    # workers so the arena games mostly fill the idle Kaggle window below.
+    # rate_checkpoints.sh skips players already in the ledger, so relaunching
+    # is cheap; one rater at a time (stale pid files fail kill -0 and pass).
+    if [ "$ELO_TRACK" != "0" ]; then
+        NEWEST_CP=$(ls -t checkpoints/model_checkpoint_iter*.safetensors 2>/dev/null | head -n 1 || true)
+        RATER_RUNNING=false
+        if [ -f .elo_rating.pid ] && kill -0 "$(cat .elo_rating.pid 2>/dev/null)" 2>/dev/null; then
+            RATER_RUNNING=true
+        fi
+        if [ -n "$NEWEST_CP" ] && [ "$RATER_RUNNING" = false ] \
+           && { [ ! -f .elo_rating.stamp ] || [ "$NEWEST_CP" -nt .elo_rating.stamp ]; }; then
+            touch .elo_rating.stamp
+            SEEDS="${ELO_SEEDS:-8}" WORKERS="${ELO_WORKERS:-2}" \
+                nice -n 10 ./rate_checkpoints.sh >> elo.log 2>&1 &
+            echo $! > .elo_rating.pid
+            echo "📈 Elo: rating $(basename "$NEWEST_CP") in background (log: elo.log)"
+        fi
+    fi
+
     # 2. Training (Kaggle round every TRAIN_EVERY iterations). A failed round
     # is tolerated up to 3 consecutive times: pending games stay staged, the
     # model stays at its last pulled version, and the next round retries with
@@ -413,7 +444,17 @@ do
     AVG_CAPTURED_TILES=$(echo "$GAME_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('avg_captured_tiles',''))")
     AVG_CAP_CAPITALS=$(echo "$GAME_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('avg_cap_capitals',''))")
     echo "Iteration $i complete. Type: $MATCH_TYPE | Avg: $AVG_SCORE | Loss: $LOSS"
-    echo "  -> STATS/GAME: Captures: $AVG_CAPTURES (Capitals: $AVG_CAP_CAPITALS) | Harvests: $AVG_HARVESTS | Builds: $AVG_BUILDS | Tech: $AVG_RESEARCH | Attacks: $AVG_ATTACKS | Revealed: $AVG_REVEALED_TILES | Owned: $AVG_CAPTURED_TILES"    # 4. Checkpoint (every CHECKPOINT_EVERY iterations ≈ every 50*BASELINE_GAMES games)
+    echo "  -> STATS/GAME: Captures: $AVG_CAPTURES (Capitals: $AVG_CAP_CAPITALS) | Harvests: $AVG_HARVESTS | Builds: $AVG_BUILDS | Tech: $AVG_RESEARCH | Attacks: $AVG_ATTACKS | Revealed: $AVG_REVEALED_TILES | Owned: $AVG_CAPTURED_TILES"
+
+    # Print the ladder whenever the background rater has produced a new fit.
+    if [ "$ELO_TRACK" != "0" ] && [ -f elo_ratings.json ] \
+       && { [ ! -f .elo_reported.stamp ] || [ elo_ratings.json -nt .elo_reported.stamp ]; }; then
+        touch .elo_reported.stamp
+        echo "📊 Elo ladder (anchored: random = 0):"
+        .venv/bin/python3 elo.py report 2>/dev/null || true
+    fi
+
+    # 4. Checkpoint (every CHECKPOINT_EVERY iterations ≈ every 50*BASELINE_GAMES games)
     if [ $((i % CHECKPOINT_EVERY)) -eq 0 ]; then
         TS=$(date +%Y%m%d_%H%M%S)
         echo "Creating checkpoint for iteration $i (Timestamp: $TS)..."
