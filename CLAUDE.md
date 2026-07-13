@@ -45,7 +45,7 @@ cd polyfish-rs && ./local_setup.sh           # or remote_setup.sh on a GPU box
 
 **Full self-play + train loop** (the main training driver):
 ```bash
-cd polyfish-rs && ./run_training_loop.sh [-f force-train] [-b boost-threads] [-c chill] [-r reward-shaping] [-i iterations] [-g games-per-iter] [-n mcts-iters] [--reset]
+cd polyfish-rs && ./run_training_loop.sh [-f force-train] [-b boost-threads] [-c chill] [-r disable-reward-shaping] [-i iterations] [-g games-per-iter] [-n mcts-iters] [--reset]
 ```
 This loops: `init_model.py` → `self_play` (Rust, generates `games_*.safetensors`) → `train.py` (Python/PyTorch, updates `model.safetensors`) → log a CSV row → checkpoint every 50 iters into `checkpoints/` → archive consumed games. It also runs "league" matches against random historical checkpoints ~20% of the time. CUDA is opt-in via the `cuda`/`cudnn` Cargo features. Pass `--reset` to delete `model.safetensors` and all self-play game data (`games_*.safetensors` in root and `archive/`) before starting, seeding a brand-new model from scratch; it forces a new run (overrides `--resume`) and leaves `checkpoints/`, `training_log.csv`, and `moves_by_turn.json` untouched.
 
@@ -78,7 +78,7 @@ If you change layer shapes, channel counts, or head sizes in one, you must mirro
 **Exception:** the `aux_*` heads (train.py `AUX_DIMS`: ownership/fog/SPT+5/opp-tech) are training-only and deliberately NOT mirrored in Rust — every Rust backend loads weights by name and ignores the extra keys. Do not add them to `network.rs`, and never save `model.safetensors` from `src/bin/train.rs` (candle `VarMap::save` strips them; it saves to `model_candle.safetensors` instead).
 
 ### Binaries (`polyfish-rs/src/bin/`)
-- `self_play.rs` — generates training games (`--num-games`, `--mcts-iters`, `--tribe1/2`, `--opponent <checkpoint>`, `--reward-shaping`, `--iteration`); emits `METRICS:` JSON lines parsed by the loop script and writes `games_*.safetensors`.
+- `self_play.rs` — generates training games (`--num-games`, `--mcts-iters`, `--tribe1/2`, `--opponent <checkpoint>`, `--no-reward-shaping`, `--td-w`, `--iteration`); emits `METRICS:` JSON lines parsed by the loop script and writes `games_*.safetensors`. Reward shaping (TD(λ) + final-outcome blended value target, `--td-w` weights the blend) is on by default — EXP_ELO_004 (Jul 13, 2026) showed it clearly beats the flat final-outcome-only fallback at matched budget; `--no-reward-shaping` opts out.
 - `train.rs` — Rust/candle trainer (alternative to `train.py`).
 - `arena.rs` — battle two model checkpoints head-to-head (`--model1 --model2 --games --mcts`).
 - `trainer.rs` — interactive CLI to play against the AI and correct its moves.

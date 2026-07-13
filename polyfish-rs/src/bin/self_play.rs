@@ -1221,7 +1221,7 @@ fn main() -> anyhow::Result<()> {
         decay_last_iter: usize,
 
         /// EXP_ELO_004: weight of the TD(lambda) delta vs the final-outcome
-        /// tail in the value target (only applies with --reward-shaping; see
+        /// tail in the value target (no-op if --no-reward-shaping is set; see
         /// the TD_W const rationale). Default preserves production behavior.
         #[arg(long, default_value_t = TD_W)]
         td_w: f32,
@@ -1259,10 +1259,14 @@ fn main() -> anyhow::Result<()> {
         #[arg(long)]
         tribe2: Option<String>,
 
-        /// Enable reward shaping (blended per-step score progress + final outcome)
-        /// Without this flag, all actions get the same flat final-outcome value.
+        /// Opt out of reward shaping (the blended per-step TD(lambda) +
+        /// final-outcome value target). On by default — EXP_ELO_004 (Jul 13)
+        /// found the flat final-outcome-only fallback trains markedly
+        /// slower/weaker at matched budget. Pass this to fall back to a flat
+        /// final-outcome value for every action (e.g. to reproduce pre-Jul-13
+        /// runs or isolate a regression).
         #[arg(long, default_value_t = false)]
-        reward_shaping: bool,
+        no_reward_shaping: bool,
 
         /// Current training iteration (for curriculum learning)
         #[arg(long, default_value_t = 1)]
@@ -1981,7 +1985,7 @@ fn main() -> anyhow::Result<()> {
 
             // Asymmetric Reward Shaping to fix P1 advantage
             let (mut my_adjusted, mut opp_adjusted) = (my_final, opp_final);
-            if args.reward_shaping {
+            if !args.no_reward_shaping {
                 let penalty = 0.05; // 5% adjustment
                 if p_id == 1 {
                     my_adjusted = my_final * (1.0 - penalty);
@@ -2009,7 +2013,7 @@ fn main() -> anyhow::Result<()> {
                 + (1.0 - FINAL_OUTCOME_REL_W) * abs_outcome)
                 .clamp(-1.0, 1.0);
 
-            let value = if args.reward_shaping {
+            let value = if !args.no_reward_shaping {
                 // TD delta carries per-action credit; the final-outcome tail
                 // carries the long-horizon signal.
                 (args.td_w * td_deltas[step_idx] + (1.0 - args.td_w) * final_outcome)

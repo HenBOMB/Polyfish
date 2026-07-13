@@ -104,7 +104,13 @@ set -- "${PASSTHROUGH[@]}"
 FORCE_TRAIN=false
 BOOST=false
 CHILL=false
-REWARD_SHAPING=false
+# On by default since EXP_ELO_004 (Jul 13, 2026): a clean matched-baseline
+# comparison showed reward-shaping ON (TD(lambda) + final-outcome blend)
+# clearly beats the flat final-outcome-only fallback at matched budget (best
+# 16-sim vs-Greedy reading to date, 48.4%, vs 35.9% with shaping off). -r now
+# OPTS OUT (flips from its pre-Jul-13 meaning of opting in) — pass it to
+# reproduce old runs or isolate a regression.
+REWARD_SHAPING=true
 # Play a league match every LEAGUE_INTERVAL iterations (iteration 10, 20, 30,
 # ... by default). 0 disables league play entirely. Override with -l.
 LEAGUE_INTERVAL=10
@@ -121,7 +127,7 @@ while getopts "fbcri:g:n:a:e:l:k:" opt; do
       CHILL=true
       ;;
     r)
-      REWARD_SHAPING=true
+      REWARD_SHAPING=false
       ;;
     i)
       ITERATIONS=$OPTARG
@@ -172,8 +178,10 @@ echo "Schedule (games-based, -g $NUM_GAMES vs baseline $BASELINE_GAMES): $ITERAT
 
 REWARD_FLAG=""
 if [ "$REWARD_SHAPING" = true ]; then
-    REWARD_FLAG="--reward-shaping"
-    echo "🎯 Reward shaping enabled!"
+    echo "🎯 Reward shaping enabled (default)."
+else
+    REWARD_FLAG="--no-reward-shaping"
+    echo "⚠️  Reward shaping disabled (-r): flat final-outcome value target only."
 fi
 
 if [ "$BOOST" = true ]; then
