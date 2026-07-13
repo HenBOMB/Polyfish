@@ -16,6 +16,9 @@ pub const GAMMA_TURN: f32 = 0.9;
 /// dominant: in mirror self-play both copies gain roughly in lockstep, so a
 /// capture's relative swing nets to ~0 and teaches nothing; an absolute
 /// anchor on my own score progress rewards it regardless of the opponent.
+/// EXP_ELO_005: raising this to 0.7 broke SEARCH before it could test the
+/// label hypothesis (instant hoarding/passivity in self-play) — a label-only
+/// rel weight must be threaded separately, not changed here.
 pub const REL_W: f32 = 0.4;
 
 /// Reward normalization scales with the game's economy: a saturating swing
@@ -34,10 +37,22 @@ pub fn score_norm(my: i32, opp: i32) -> f32 {
 /// vs the opponent's) progress. Not clamped — callers accumulate/discount
 /// multiple rewards before clamping the final label.
 pub fn normalized_reward(my_pre: i32, opp_pre: i32, my_post: i32, opp_post: i32) -> f32 {
+    normalized_reward_w(my_pre, opp_pre, my_post, opp_post, REL_W)
+}
+
+/// `normalized_reward` with an explicit relative weight — lets TD labels
+/// price windows independently of the in-tree backup (EXP_ELO_006).
+pub fn normalized_reward_w(
+    my_pre: i32,
+    opp_pre: i32,
+    my_post: i32,
+    opp_post: i32,
+    rel_w: f32,
+) -> f32 {
     let norm = score_norm(my_pre, opp_pre);
     let delta_abs = (my_post - my_pre) as f32 / norm;
     let delta_rel = ((my_post - opp_post) - (my_pre - opp_pre)) as f32 / norm;
-    REL_W * delta_rel + (1.0 - REL_W) * delta_abs
+    rel_w * delta_rel + (1.0 - rel_w) * delta_abs
 }
 
 /// `(my_score, best_opponent_score)` for `player` in `state`. Shared snapshot

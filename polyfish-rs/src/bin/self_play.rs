@@ -350,11 +350,13 @@ fn checkpoints_by_player(history: &[LabelStep]) -> HashMap<PlayerId, Vec<Checkpo
 
 /// TD(lambda) forward-view value target for every step in `history` (see
 /// the doc comment on `LAMBDA_RETURN`). `final_scores` is keyed by
-/// `PlayerId`. Output is aligned 1:1 with `history`.
+/// `PlayerId`. Output is aligned 1:1 with `history`. `label_rel_w` prices
+/// the windows/terminal — may diverge from in-tree REL_W (EXP_ELO_006).
 fn td_lambda_labels(
     history: &[LabelStep],
     final_scores: &HashMap<i32, i32>,
     lambda: f32,
+    label_rel_w: f32,
 ) -> Vec<f32> {
     let checkpoints = checkpoints_by_player(history);
 
@@ -368,8 +370,13 @@ fn td_lambda_labels(
                 .map(|(_, s)| *s)
                 .next()
                 .unwrap_or(0);
-            let terminal_return =
-                reward::normalized_reward(step.my_score, step.opp_score, my_final, opp_final);
+            let terminal_return = reward::normalized_reward_w(
+                step.my_score,
+                step.opp_score,
+                my_final,
+                opp_final,
+                label_rel_w,
+            );
 
             let empty = Vec::new();
             let ahead = checkpoints.get(&step.player_id).unwrap_or(&empty);
@@ -378,7 +385,13 @@ fn td_lambda_labels(
             let mut acc = 0.0f32;
             let mut remaining_weight = 1.0f32;
             for cp in &ahead[start..] {
-                let r = reward::normalized_reward(step.my_score, step.opp_score, cp.my, cp.opp);
+                let r = reward::normalized_reward_w(
+                    step.my_score,
+                    step.opp_score,
+                    cp.my,
+                    cp.opp,
+                    label_rel_w,
+                );
                 let dt = (cp.turn - step.turn).max(0);
                 let n_step_return = r + reward::GAMMA_TURN.powi(dt) * cp.root_value.unwrap_or(0.0);
 
@@ -1228,6 +1241,12 @@ fn main() -> anyhow::Result<()> {
         #[arg(long, default_value_t = TD_W)]
         td_w: f32,
 
+        /// EXP_ELO_006: relative weight used ONLY for TD(lambda) label
+        /// windows; the in-tree backup keeps reward::REL_W. Default
+        /// preserves production behavior (labels match the backup).
+        #[arg(long, default_value_t = reward::REL_W)]
+        label_rel_w: f32,
+
         /// EXP_ELO_002: iteration where the anchor-frac decay clock starts —
         /// the anchor's effective decay iteration is `iteration - this`
         /// (clamped at 0). The loop passes the current iteration to HOLD
@@ -1942,7 +1961,8 @@ fn main() -> anyhow::Result<()> {
         let final_scores = &result.scores;
 
         let label_steps: Vec<LabelStep> = result.history.iter().map(LabelStep::from).collect();
-        let td_deltas = td_lambda_labels(&label_steps, final_scores, LAMBDA_RETURN);
+        let td_deltas =
+            td_lambda_labels(&label_steps, final_scores, LAMBDA_RETURN, args.label_rel_w);
 
         let spt_steps: Vec<SptStep> = result
             .history
@@ -2384,7 +2404,7 @@ mod td_lambda_tests {
         let expected = reward::normalized_reward(1000, 800, 1300, 900).clamp(-1.0, 1.0);
 
         for lambda in [0.0, 0.5, 0.8, 0.95] {
-            let out = td_lambda_labels(&history, &final_scores, lambda);
+            let out = td_lambda_labels(&history, &final_scores, lambda, reward::REL_W);
             assert!(
                 (out[0] - expected).abs() < 1e-6,
                 "lambda={lambda}: got {}, expected {expected}",
@@ -2407,7 +2427,7 @@ mod td_lambda_tests {
         ];
         let final_scores = finals(&[(1, 5000), (2, 800)]);
 
-        let out = td_lambda_labels(&history, &final_scores, 0.0);
+        let out = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W);
 
         let r = reward::normalized_reward(1000, 800, 1100, 800);
         let expected = (r + reward::GAMMA_TURN.powi(1) * 0.9).clamp(-1.0, 1.0);
@@ -2420,7 +2440,7 @@ mod td_lambda_tests {
         // Sanity: changing turn 7's root_value must NOT move the lambda=0 label.
         let mut history2 = history.clone();
         history2[3].root_value = Some(12345.0);
-        let out2 = td_lambda_labels(&history2, &final_scores, 0.0);
+        let out2 = td_lambda_labels(&history2, &final_scores, 0.0, reward::REL_W);
         assert!((out2[0] - out[0]).abs() < 1e-6);
     }
 
@@ -2436,7 +2456,7 @@ mod td_lambda_tests {
         ];
         let final_scores = finals(&[(1, 300), (2, 100)]);
 
-        let out = td_lambda_labels(&history, &final_scores, 0.5);
+        let out = td_lambda_labels(&history, &final_scores, 0.5, reward::REL_W);
 
         let n1 = reward::normalized_reward(100, 100, 300, 100) + reward::GAMMA_TURN.powi(1) * 0.6;
         let terminal = reward::normalized_reward(100, 100, 300, 100);
@@ -2460,13 +2480,30 @@ mod td_lambda_tests {
         ];
         let final_scores = finals(&[(1, 1200), (2, 800)]);
 
-        let out = td_lambda_labels(&history, &final_scores, 0.0);
+        let out = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W);
         let expected = reward::normalized_reward(1000, 800, 1200, 800).clamp(-1.0, 1.0);
         assert!(
             (out[0] - expected).abs() < 1e-6,
             "got {}, expected {expected}",
             out[0]
         );
+    }
+
+    #[test]
+    fn label_rel_w_reprices_windows() {
+        // I gain 100 while the opponent gains 400 over one window: an
+        // abs-only weighting must label it positive, a rel-only one negative
+        // — proves the flag actually reaches the window pricing.
+        let history = vec![
+            step(1, 5, 1000, 800, Some(0.0)),
+            step(1, 6, 1100, 1200, Some(0.0)),
+        ];
+        let final_scores = finals(&[(1, 1100), (2, 1200)]);
+
+        let abs_only = td_lambda_labels(&history, &final_scores, 0.0, 0.0);
+        let rel_only = td_lambda_labels(&history, &final_scores, 0.0, 1.0);
+        assert!(abs_only[0] > 0.0, "abs-only label should be positive, got {}", abs_only[0]);
+        assert!(rel_only[0] < 0.0, "rel-only label should be negative, got {}", rel_only[0]);
     }
 }
 

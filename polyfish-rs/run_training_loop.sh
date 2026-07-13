@@ -323,6 +323,13 @@ do
         ANCHOR_FLAG="--anchor-frac ${ANCHOR_FRAC:-0.25}"
     fi
 
+    # EXP_ELO_006: label-only relative weight for TD labels; unset = binary
+    # default (reward::REL_W), in-tree backup unaffected either way.
+    LABEL_REL_W_FLAG=""
+    if [ -n "${LABEL_REL_W:-}" ]; then
+        LABEL_REL_W_FLAG="--label-rel-w $LABEL_REL_W"
+    fi
+
     # Final phase-out of both heuristic crutches (search-prior blend +
     # anchor games): both decay to a 10% floor and hold there until this
     # EFF_ITER-relative cutoff, then hard-cut to 0. 150 is a starting point
@@ -393,7 +400,7 @@ do
     fi
 
     SP_LOG=$(mktemp)
-    "$SELF_PLAY_BIN" --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $DECAY_LAST_ITER_FLAG --td-w "${TD_W:-0.7}" --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
+    "$SELF_PLAY_BIN" --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $DECAY_LAST_ITER_FLAG --td-w "${TD_W:-0.7}" $LABEL_REL_W_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
     SP_STATUS=${PIPESTATUS[0]}
     rm -f "$SP_LOG"
     if [ "$SP_STATUS" -ne 0 ]; then
