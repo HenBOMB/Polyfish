@@ -13,12 +13,12 @@ use polyfish::states::{GameState, PlayerId};
 use polyfish::types::MapSize;
 use serde_json::json;
 use std::collections::HashMap;
-use strum::IntoEnumIterator;
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use strum::IntoEnumIterator;
 
 const HEURISTIC_PRIOR_W0: f32 = 0.5; // net & heur blended 50/50 at start
 const HEURISTIC_PRIOR_DECAY: f32 = 0.97; // decays 0.5 -> 0.1 floor by ~iteration 53
@@ -167,7 +167,9 @@ fn write_decision_trace(
         eprintln!("[trace] failed to create decision_traces/: {e}");
         return;
     }
-    let path = dir.join(format!("iter{iteration}_game{game_idx}_turn{turn}_p{player_id}.json"));
+    let path = dir.join(format!(
+        "iter{iteration}_game{game_idx}_turn{turn}_p{player_id}.json"
+    ));
     match serde_json::to_vec_pretty(&wrapped) {
         Ok(bytes) => {
             if let Err(e) = std::fs::write(&path, bytes) {
@@ -593,7 +595,11 @@ fn load_networks(
     // Inference-only load: `VarBuilder::from_mmaped_safetensors` loads by key from file;
     // VarMap::load fills only pre-registered vars.
     let vs1 = unsafe {
-        candle_nn::VarBuilder::from_mmaped_safetensors(&[model_path], candle_core::DType::F32, device)?
+        candle_nn::VarBuilder::from_mmaped_safetensors(
+            &[model_path],
+            candle_core::DType::F32,
+            device,
+        )?
     };
     let network1 = Arc::new(PolyZeroNet::new(vs1)?);
 
@@ -604,7 +610,11 @@ fn load_networks(
             device.clone()
         };
         let vs2 = unsafe {
-            candle_nn::VarBuilder::from_mmaped_safetensors(&[opp_path], candle_core::DType::F32, &device2)?
+            candle_nn::VarBuilder::from_mmaped_safetensors(
+                &[opp_path],
+                candle_core::DType::F32,
+                &device2,
+            )?
         };
         Arc::new(PolyZeroNet::new(vs2)?)
     } else {
@@ -667,7 +677,8 @@ fn play_single_game(
 
     let mut game = Game::new();
     game.state = polyfish::mapgen::generate(gen_settings);
-    game.state.settings.mode = polyfish::types::ModeType::from_repr(gamemode).unwrap_or(polyfish::types::ModeType::Perfection);
+    game.state.settings.mode = polyfish::types::ModeType::from_repr(gamemode)
+        .unwrap_or(polyfish::types::ModeType::Perfection);
     game.state.settings.max_turns = max_turns;
     game.post_load();
 
@@ -709,18 +720,18 @@ fn play_single_game(
     // One trust scalar drives β on σ(Q) in both the exported targets and the
     // search tree itself. --value-trust overrides the iteration ramp, which
     // saturates immediately on ITER_OFFSET-shifted runs.
-    let q_target_w = value_trust
-        .unwrap_or_else(|| (iteration as f32 / POLICY_TARGET_Q_RAMP_ITERS).min(1.0));
+    let q_target_w =
+        value_trust.unwrap_or_else(|| (iteration as f32 / POLICY_TARGET_Q_RAMP_ITERS).min(1.0));
 
     // Create two agents (they might share the same network, or be different)
     let mut agent1 = Brain::with_backend(eval1, mcts_iters, backend1)
-    .with_prior_heuristic_weight(prior_w)
-    .with_policy_target_q_weight(q_target_w)
-    .with_tree_q_weight(q_target_w);
+        .with_prior_heuristic_weight(prior_w)
+        .with_policy_target_q_weight(q_target_w)
+        .with_tree_q_weight(q_target_w);
     let mut agent2 = Brain::with_backend(eval2, mcts_iters, backend2)
-    .with_prior_heuristic_weight(prior_w)
-    .with_policy_target_q_weight(q_target_w)
-    .with_tree_q_weight(q_target_w);
+        .with_prior_heuristic_weight(prior_w)
+        .with_policy_target_q_weight(q_target_w)
+        .with_tree_q_weight(q_target_w);
 
     if let Some(b) = leaf_batch {
         agent1 = agent1.with_leaf_batch(b);
@@ -738,8 +749,7 @@ fn play_single_game(
     // Game Loop
     let mut game_history: Vec<HistoryStep> = Vec::new();
     let mut action_counts: HashMap<polyfish::types::MoveType, usize> = HashMap::new();
-    let mut moves_by_turn: HashMap<i32, HashMap<polyfish::types::MoveType, usize>> =
-        HashMap::new();
+    let mut moves_by_turn: HashMap<i32, HashMap<polyfish::types::MoveType, usize>> = HashMap::new();
 
     let current_scores: Vec<(PlayerId, i32)> = game
         .state
@@ -768,11 +778,7 @@ fn play_single_game(
     let mut move_count = 0;
     let mut traced_in_this_game = false;
     while !polyfish::functions::is_game_over(&game.state) {
-        record_spt_at_turn_start(
-            &game.state,
-            &mut spt_at_turn,
-            &mut next_spt_milestone,
-        );
+        record_spt_at_turn_start(&game.state, &mut spt_at_turn, &mut next_spt_milestone);
 
         if move_count > 50000 {
             // Reduced for safety
@@ -812,7 +818,11 @@ fn play_single_game(
         // this is that state's own root value — the TD bootstrap target for
         // whichever earlier step's label lands here as its "next decision".
         let root_value = current_agent.last_root_value();
-        let step_trace = if trace_all { current_agent.take_trace() } else { None };
+        let step_trace = if trace_all {
+            current_agent.take_trace()
+        } else {
+            None
+        };
 
         if let Some((trigger_unit_idx, trigger_village_idx)) = trigger_info {
             if let Some(trace) = current_agent.take_trace() {
@@ -921,12 +931,19 @@ fn play_single_game(
             if m_type == polyfish::types::MoveType::Capture {
                 if let Ok(src) = m.source_idx() {
                     let idx = src as i32;
-                    
+
                     let struct_opt = game.state.structures.get(&idx).and_then(|s| s.as_ref());
-                    let is_ruin = struct_opt.map(|s| s.structure_type) == Some(polyfish::types::StructureType::Ruin);
-                    let is_village = struct_opt.map(|s| s.structure_type) == Some(polyfish::types::StructureType::Village);
+                    let is_ruin = struct_opt.map(|s| s.structure_type)
+                        == Some(polyfish::types::StructureType::Ruin);
+                    let is_village = struct_opt.map(|s| s.structure_type)
+                        == Some(polyfish::types::StructureType::Village);
                     let owner = game.state.tiles.get(&idx).map(|t| t.owner).unwrap_or(0);
-                    let is_capital = game.state.tiles.get(&idx).map(|t| t.capital_of > 0).unwrap_or(false);
+                    let is_capital = game
+                        .state
+                        .tiles
+                        .get(&idx)
+                        .map(|t| t.capital_of > 0)
+                        .unwrap_or(false);
 
                     if is_ruin {
                         cap_ruins += 1;
@@ -1504,8 +1521,14 @@ fn main() -> anyhow::Result<()> {
         eval_backend_kind,
         eval_servers,
         eval_config,
-        PlayerBackend { model_path: p1_path, candle_net: &network1 },
-        has_opponent.then(|| PlayerBackend { model_path: p2_path, candle_net: &network2 }),
+        PlayerBackend {
+            model_path: p1_path,
+            candle_net: &network1,
+        },
+        has_opponent.then(|| PlayerBackend {
+            model_path: p2_path,
+            candle_net: &network2,
+        }),
     );
 
     let num_actors = if args.actors > 0 {
@@ -1526,7 +1549,10 @@ fn main() -> anyhow::Result<()> {
     let match_label = match &args.opponent {
         Some(opp) => format!("league vs {opp}"),
         None if args.anchor_frac > 0.0 => {
-            format!("self-play + up to {:.0}% heuristic-anchor games (decaying)", args.anchor_frac * 100.0)
+            format!(
+                "self-play + up to {:.0}% heuristic-anchor games (decaying)",
+                args.anchor_frac * 100.0
+            )
         }
         None => "self-play".to_string(),
     };
@@ -1682,12 +1708,21 @@ fn main() -> anyhow::Result<()> {
 
     let results: Vec<GameResult> = match Arc::try_unwrap(results_mutex) {
         Ok(mutex) => mutex.into_inner().unwrap(),
-        Err(_) => panic!("BUG: actor threads still hold a results_mutex reference after scope exit"),
+        Err(_) => {
+            panic!("BUG: actor threads still hold a results_mutex reference after scope exit")
+        }
     };
 
     let games_duration = games_start.elapsed();
-    println!("Game generation completed in: {:.2}s ({} games)", games_duration.as_secs_f32(), results.len());
-    println!("  Average: {:.2}s per game", games_duration.as_secs_f32() / results.len().max(1) as f32);
+    println!(
+        "Game generation completed in: {:.2}s ({} games)",
+        games_duration.as_secs_f32(),
+        results.len()
+    );
+    println!(
+        "  Average: {:.2}s per game",
+        games_duration.as_secs_f32() / results.len().max(1) as f32
+    );
     let total_moves_now: usize = results.iter().map(|r| r.moves).sum();
     let moves_per_sec = total_moves_now as f64 / games_duration.as_secs_f64().max(1e-9);
     println!(
@@ -1712,7 +1747,8 @@ fn main() -> anyhow::Result<()> {
     let wall_s = games_duration.as_secs_f64().max(1e-9);
 
     // Aggregate across shards.
-    let (mut agg_forwards, mut agg_rows, mut agg_max_batch, mut agg_busy_us) = (0u64, 0u64, 0u64, 0u64);
+    let (mut agg_forwards, mut agg_rows, mut agg_max_batch, mut agg_busy_us) =
+        (0u64, 0u64, 0u64, 0u64);
     let (mut agg_hits, mut agg_misses) = (0u64, 0u64);
     let (mut agg_compiles, mut agg_compile_us) = (0u64, 0u64);
     let (mut agg_prep_us, mut agg_wait_us, mut agg_post_us) = (0u64, 0u64, 0u64);
@@ -1760,7 +1796,11 @@ fn main() -> anyhow::Result<()> {
         agg_compiles,
         agg_compile_s,
         agg_compile_s / wall_s,
-        if agg_busy_s > 0.0 { agg_compile_s / agg_busy_s } else { 0.0 }
+        if agg_busy_s > 0.0 {
+            agg_compile_s / agg_busy_s
+        } else {
+            0.0
+        }
     );
 
     // Aggregate results
@@ -1989,10 +2029,10 @@ fn main() -> anyhow::Result<()> {
                 let ratio = (my_adjusted - opp_adjusted) / combined_score;
                 (ratio * scaling_factor).clamp(-1.0, 1.0)
             } else {
-                0.0  // Both players scored 0 - treat as draw
+                0.0 // Both players scored 0 - treat as draw
             };
 
-            // Absolute value: final score vs fixed yardstick, not current scoreboard.    
+            // Absolute value: final score vs fixed yardstick, not current scoreboard.
             let abs_outcome = (my_final / GOOD_BOT_FINAL_SCORE).clamp(0.0, 1.0) * 2.0 - 1.0;
             let final_outcome = (FINAL_OUTCOME_REL_W * relative_outcome
                 + (1.0 - FINAL_OUTCOME_REL_W) * abs_outcome)
@@ -2216,7 +2256,6 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
-
     }
 
     let metrics = json!({
@@ -2275,13 +2314,21 @@ fn main() -> anyhow::Result<()> {
     println!("\n=== Self-Play Complete ===");
     println!("Total time: {:.2}s", total_duration.as_secs_f32());
     println!("Breakdown:");
-    println!("  - Game generation: {:.2}s ({:.1}%)", games_duration.as_secs_f32(), 100.0 * games_duration.as_secs_f32() / total_duration.as_secs_f32());
+    println!(
+        "  - Game generation: {:.2}s ({:.1}%)",
+        games_duration.as_secs_f32(),
+        100.0 * games_duration.as_secs_f32() / total_duration.as_secs_f32()
+    );
     let final_moves_per_sec = total_moves as f64 / games_duration.as_secs_f64().max(1e-9);
-    println!("  - Throughput: {:.2} moves/sec ({} moves)", final_moves_per_sec, total_moves);
+    println!(
+        "  - Throughput: {:.2} moves/sec ({} moves)",
+        final_moves_per_sec, total_moves
+    );
     // How often search crossed a turn boundary in-tree (simulated EndTurn
     // edges only; real played moves don't count). ~0/move decision means the
     // tree essentially never sees beyond the current turn.
-    let sim_end_turns = polyfish::game::SIM_END_TURN_EDGES.load(std::sync::atomic::Ordering::Relaxed);
+    let sim_end_turns =
+        polyfish::game::SIM_END_TURN_EDGES.load(std::sync::atomic::Ordering::Relaxed);
     println!(
         "  - Sim EndTurn edges: {} total ({:.2} per move decision)",
         sim_end_turns,
@@ -2391,8 +2438,7 @@ mod td_lambda_tests {
 
         let out = td_lambda_labels(&history, &final_scores, 0.5);
 
-        let n1 = reward::normalized_reward(100, 100, 300, 100)
-            + reward::GAMMA_TURN.powi(1) * 0.6;
+        let n1 = reward::normalized_reward(100, 100, 300, 100) + reward::GAMMA_TURN.powi(1) * 0.6;
         let terminal = reward::normalized_reward(100, 100, 300, 100);
         let expected = (0.5 * n1 + 0.5 * terminal).clamp(-1.0, 1.0);
 
@@ -2431,13 +2477,22 @@ mod decay_crutch_tests {
     #[test]
     fn decays_toward_floor_before_taper() {
         let w0 = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 0, 150, false);
-        assert!((w0 - HEURISTIC_PRIOR_W0).abs() < 1e-6, "iteration 0 should equal w0, got {w0}");
+        assert!(
+            (w0 - HEURISTIC_PRIOR_W0).abs() < 1e-6,
+            "iteration 0 should equal w0, got {w0}"
+        );
 
         let mid = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 23, 150, false);
-        assert!((mid - 0.25).abs() < 0.01, "iteration 23 should be ~0.25, got {mid}");
+        assert!(
+            (mid - 0.25).abs() < 0.01,
+            "iteration 23 should be ~0.25, got {mid}"
+        );
 
         let floored = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 100, 150, false);
-        assert!((floored - CRUTCH_FLOOR).abs() < 1e-6, "past-decay iteration should sit at the floor, got {floored}");
+        assert!(
+            (floored - CRUTCH_FLOOR).abs() < 1e-6,
+            "past-decay iteration should sit at the floor, got {floored}"
+        );
     }
 
     #[test]
@@ -2454,7 +2509,13 @@ mod decay_crutch_tests {
 
     #[test]
     fn force_zero_overrides_regardless_of_iteration() {
-        let forced = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 0, usize::MAX, true);
+        let forced = decay_crutch(
+            HEURISTIC_PRIOR_W0,
+            HEURISTIC_PRIOR_DECAY,
+            0,
+            usize::MAX,
+            true,
+        );
         assert_eq!(forced, 0.0);
     }
 }
