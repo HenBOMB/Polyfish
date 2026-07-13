@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Strength-ladder store (ladder.json) and gauge verdicts — EXP 10/11.
 
-Anchors are frozen model files (greedy = Elo 0 floor); the last anchor is
+Anchors are frozen model files (greedy = Elo 300; the implicit ~0 floor is a
+random player — matching greedy is already well above it); the last anchor is
 "active". `record --kind gauge` appends an arena reading and answers:
 continue / freeze (>=80% vs active) / stop (plateau, see _plateau).
 Win/loss counts are always from the current model's side.
@@ -28,7 +29,7 @@ def _load():
             return json.load(f)
     return {
         "anchors": [
-            {"name": "greedy", "path": "", "elo": 0.0, "frozen_iteration": None, "frozen_at": None}
+            {"name": "greedy", "path": "", "elo": 300.0, "frozen_iteration": None, "frozen_at": None}
         ],
         "readings": [],
         "plateau_strikes": 0,
