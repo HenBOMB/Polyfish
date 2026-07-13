@@ -15,10 +15,15 @@ ITERATIONS=500
 NUM_GAMES=64
 export MCTS_ITERS=128
 export DETACH_VALUE_TRUNK=1
-# 128 actors measured best on an M3 Max with metal (~578 moves/s @ 128 games+).
-# Throughput scales with concurrent games; small NUM_GAMES (-g) is a real limiter, not this knob.
+# Actor count is platform-resolved in the build block below: metal parks
+# actors on the GPU (128 best on M3 Max, ~578 moves/s), but on CPU the actors
+# share cores with inference, so ~2x physical cores beats an oversubscribed
+# 128. Empty = take the platform default; -a overrides, -b doubles, -c pins 8.
 # See expert_boost_throughput.md for details.
-ACTORS=128
+ACTORS=""
+# Extra self_play flags chosen per platform in the build block (e.g. the CPU
+# path forces --eval-backend tch so a forward fans across all cores via OpenMP).
+EVAL_BACKEND_FLAG=""
 # 3 servers × 2 workers measured best on metal after buffer pooling
 # (~610-650 moves/s — see expert_boost_throughput.md). 0 = auto (3 on metal,
 # 1 on tch/candle). Don't force >1 on tch — MPS serializes across shards.
@@ -46,16 +51,34 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     PATH="$(pwd)/.venv/bin:$PATH" cargo build --bin polyfish --bin self_play --release --features metal,accelerate,tch-eval,metal-eval
     # The tch-linked binary has no rpath for libtorch; point dyld at the venv's torch dylibs
     export DYLD_LIBRARY_PATH="$(.venv/bin/python3 -c "import torch, os; print(os.path.join(os.path.dirname(torch.__file__), 'lib'))")${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+    PLATFORM_DEFAULT_ACTORS=128   # actors park on the GPU; oversubscription is free
 elif false; then
     # CUDA available (Linux/Windows with NVIDIA GPU)
     echo "Building with CUDA support..."
     # --no-default-features: opt out of the macOS `metal` default, which does
     # not compile on Linux.
     cargo build --bin polyfish --bin self_play --release --no-default-features --features cuda
+    PLATFORM_DEFAULT_ACTORS=128
 else
-    # CPU-only fallback
+    # CPU-only: route inference through libtorch/tch (MKL + OpenMP), which fans
+    # a single forward across all cores — candle's BLAS-less gemm can't, and one
+    # candle eval-server thread starves the actors (~60% CPU, the low-throughput
+    # symptom). tch auto-selects Device::Cpu when no MPS is present. Reuses the
+    # venv's torch libs, same as the macOS branch.
     echo "Building CPU-only version (optimized for native CPU)..."
+    #echo "Building CPU-only version (tch/libtorch inference, native CPU)..."
+    #export LIBTORCH_USE_PYTORCH=1
+    #export LIBTORCH_BYPASS_VERSION_CHECK=1
     RUSTFLAGS="-C target-cpu=native" cargo build --bin polyfish --bin self_play --release --no-default-features
+    # No rpath for libtorch; point the loader at the venv's torch .so files.
+    #export LD_LIBRARY_PATH="$(.venv/bin/python3 -c "import torch, os; print(os.path.join(os.path.dirname(torch.__file__), 'lib'))")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    #EVAL_BACKEND_FLAG="--eval-backend tch"
+    # ~2x physical cores: enough parked actors to hide inference latency without
+    # thrashing the cores the OpenMP forward needs. Tune with -a.
+    PLATFORM_DEFAULT_ACTORS=32
+    # libtorch intra-op threads default to all cores, which is what we want for a
+    # fast forward (actors are blocked waiting on it anyway). Cap here if actor
+    # tree-search and the forward start fighting: export OMP_NUM_THREADS=<n>.
 fi
 
 # Parse long options first, then short options via getopts
@@ -178,6 +201,12 @@ while getopts "fbcri:g:n:a:e:l:K:A:H:W:P:E:" opt; do
       ;;
   esac
 done
+
+# Resolve actor count: -a wins (set in getopts); otherwise take the per-platform
+# default chosen in the build block. -b/-c below still apply on top.
+if [ -z "$ACTORS" ]; then
+    ACTORS="${PLATFORM_DEFAULT_ACTORS:-128}"
+fi
 
 # Derive iteration-keyed schedules from -g so the regime is constant in
 # GAMES: scaled(x) = max(1, round(x * BASELINE_GAMES / NUM_GAMES)).
@@ -419,7 +448,8 @@ do
     EFF_ITER=$((EFF_ITER + ${ITER_OFFSET:-0}))
 
     SP_LOG=$(mktemp)
-    ./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k 16 --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG $ANCHOR_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
+    #./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k 16 --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG $ANCHOR_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
+    ./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k 16 --actors $ACTORS --eval-servers $EVAL_SERVERS $EVAL_BACKEND_FLAG $REWARD_FLAG $OPPONENT_FLAG $ANCHOR_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
     SP_STATUS=${PIPESTATUS[0]}
     rm -f "$SP_LOG"
     if [ "$SP_STATUS" -ne 0 ]; then
