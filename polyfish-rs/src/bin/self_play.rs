@@ -64,21 +64,6 @@ const TD_W: f32 = 0.7;
 // toward the high-variance near-pure-MC regime the TD project escaped.
 const LAMBDA_RETURN: f32 = 0.8;
 
-// Forward credit window for the near-term value component, in game turns.
-const NEAR_DELTA_TURNS: i32 = 4;
-// The near-term norm scales with the game's economy: a saturating swing is
-// ~15% of combined score over 4 turns, floored for the small opening turns.
-// Percentages transfer across map sizes and skill brackets; point totals don't.
-const NEAR_DELTA_NORM_FRAC: f32 = 0.15;
-const NEAR_DELTA_NORM_FLOOR: f32 = 600.0;
-// Weight of the near-term delta vs the final-outcome tail.
-const NEAR_DELTA_W: f32 = 0.7;
-// Weight of the relative (vs opponent) component within the near-term delta.
-// 1.0 = pure relative, for the same negamax-antisymmetry reason as
-// FINAL_OUTCOME_REL_W above. The signal against passivity comes from anchor
-// games, not from a non-zero-sum label.
-const NEAR_DELTA_REL_W: f32 = 1.0;
-
 // Ramp (in iterations) for β on σ(Q) in the exported policy targets:
 // β = min(1, iteration/20). Early on the value head's Q ordering is noise
 // that min-max rescaling amplifies to full strength, so π' corrodes the
