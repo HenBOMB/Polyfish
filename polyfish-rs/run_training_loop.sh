@@ -61,6 +61,8 @@ fi
 # Parse long options first, then short options via getopts
 RESUME_RUN=""
 RESET=false
+SNAPSHOT_ONLY=false
+SNAPSHOT_RESET=false
 PASSTHROUGH=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -78,6 +80,15 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --reset)
+      RESET=true
+      shift
+      ;;
+    --snapshot)
+      SNAPSHOT_ONLY=true
+      shift
+      ;;
+    --snapshot-reset)
+      SNAPSHOT_RESET=true
       RESET=true
       shift
       ;;
@@ -204,6 +215,46 @@ fi
 if [ "$FORCE_TRAIN" = true ]; then
     echo "Force training flag detected! Running training immediately..."
     .venv/bin/python3 kaggle_manager.py all
+fi
+
+# --- Snapshot: save current model + run state into models/ ---
+# Used by --snapshot (save only) and --snapshot-reset (save then reset).
+make_snapshot() {
+    local ts
+    ts=$(date +%Y%m%d_%H%M%S)
+    local iter=0
+    if [ -f training_log.csv ]; then
+        iter=$(awk -F, 'NR>1 && $1 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ {v=$3} END{print v+0}' training_log.csv)
+    fi
+    local snap="models/snapshot_iter${iter}_${ts}"
+    mkdir -p "$snap"
+    echo "📸 Making snapshot at $snap"
+    if [ -f model.safetensors ]; then
+        cp -v model.safetensors "$snap/model.safetensors"
+    fi
+    # Run continuity + analytics state
+    for f in training_log.csv config.json .last_train_metrics.json \
+             .last_self_play_metrics.json .anchor_state.json \
+             value_distribution.json moves_by_turn.json elo.log elo_ratings.json; do
+        if [ -f "$f" ]; then
+            cp -v "$f" "$snap/$f"
+        fi
+    done
+    # Latest checkpoint (loop restores model.safetensors from this on resume)
+    local latest_cp
+    latest_cp=$(ls -t checkpoints/model_checkpoint_iter*.safetensors 2>/dev/null | head -n 1)
+    if [ -n "$latest_cp" ]; then
+        cp -v "$latest_cp" "$snap/$(basename "$latest_cp")"
+    fi
+    echo "✅ Snapshot complete: $snap"
+}
+
+if [ "$SNAPSHOT_ONLY" = true ] || [ "$SNAPSHOT_RESET" = true ]; then
+    make_snapshot
+fi
+if [ "$SNAPSHOT_ONLY" = true ]; then
+    echo "📸 Snapshot-only requested; exiting without training."
+    exit 0
 fi
 
 if [ "$RESET" = true ]; then
@@ -398,7 +449,7 @@ do
            && { [ ! -f .elo_rating.stamp ] || [ "$NEWEST_CP" -nt .elo_rating.stamp ]; }; then
             touch .elo_rating.stamp
             SEEDS="${ELO_SEEDS:-8}" WORKERS="${ELO_WORKERS:-2}" \
-                nice -n 10 ./rate_checkpoints.sh >> elo.log 2>&1 &
+                nice -n 10 bash ./rate_checkpoints.sh >> elo.log 2>&1 &
             echo $! > .elo_rating.pid
             echo "📈 Elo: rating $(basename "$NEWEST_CP") in background (log: elo.log)"
         fi

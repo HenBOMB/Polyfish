@@ -24,9 +24,9 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
             if let Ok(idx) = mv.source_idx() {
                 if let Some(s) = get_structure_at(state, idx as i32) {
                     match s.structure_type {
-                        StructureType::Ruin => 120.0,
-                        StructureType::Village => 115.0,
-                        _ => 250.0, // Capital or City (must beat any attack/reward)
+                        StructureType::Ruin => 100.0,
+                        StructureType::Village => 99.8,
+                        _ => 100.1, // Capital or City
                     }
                 } else {
                     // Likely starfish
@@ -55,9 +55,11 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
             if let (Ok(src), Ok(target)) = (mv.source_idx(), mv.target_idx()) {
                 if let Some(preview) = calculate_combat_preview(state, src as i32, target as i32) {
                     if preview.defender_dies {
-                        95.0 + territory_bonus // Rivals a capture: removing the
-                        // opponent's ability to contest ground is nearly as
-                        // valuable as taking ground.
+                        // Must stay below both an actual Capture (100.1) and
+                        // stepping onto an enemy city (96.0): killing a defender
+                        // helps take/hold ground but must never outrank seizing
+                        // the objective itself. Max here is 75 + 15 = 90.
+                        75.0 + territory_bonus
                     } else if preview.attacker_dies {
                         1.0 // Suicide is very low priority regardless of context
                     } else if preview.damage_to_defender > 5.0 {
@@ -487,12 +489,18 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                         match s.structure_type {
                             StructureType::Ruin
                             | StructureType::Village
-                            | StructureType::Lighthouse => score += 75.0, // increased to beat random attacks
+                            | StructureType::Lighthouse => score += 43.0,
                             _ => {
-                                // Enemy city potentially
+                                // Enemy city/capital: stepping here is the
+                                // capture setup for the win-condition tile.
+                                // Fixed priority just under an actual Capture
+                                // (100.1) and above any attack (<=90), so the
+                                // agent seizes the objective instead of
+                                // skirmishing. Exploration gradients below are
+                                // irrelevant on a capital, so return directly.
                                 // TODO: Doesnt check for peace treaty
                                 if tile.owner != player_id && tile.owner != 0 {
-                                    score += 120.0; // increased to strictly beat any attack (110.0 max)
+                                    return 96.0;
                                 }
                             }
                         }

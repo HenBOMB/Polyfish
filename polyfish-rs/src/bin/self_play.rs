@@ -511,11 +511,11 @@ fn play_single_game(
     trace_counter: &AtomicUsize,
 ) -> Option<GameResult> {
     // Curriculum logic — Tiny maps only, gradually increase turn count.
-    let (map_size, max_turns) = if iteration <= 25 {
+    let (map_size, max_turns) = if iteration <= 10 {
         (MapSize::Tiny, 10)
-    } else if iteration <= 50 {
+    } else if iteration <= 20 {
         (MapSize::Tiny, 15)
-    } else if iteration <= 75 {
+    } else if iteration <= 30 {
         (MapSize::Tiny, 20)
     } else {
         (MapSize::Tiny, 30)
