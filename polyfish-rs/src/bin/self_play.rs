@@ -37,10 +37,10 @@ fn decay_crutch(
     decay_last_iter: usize,
     force_zero: bool,
 ) -> f32 {
-    if force_zero || iteration >= decay_last_iter {
+    if force_zero || iteration >= decay_last_iter || w0 <= 0.0 {
         return 0.0;
     }
-    (w0 * decay_rate.powi(iteration as i32)).max(CRUTCH_FLOOR)
+    (w0 * decay_rate.powi(iteration as i32)).max(CRUTCH_FLOOR.min(w0))
 }
 
 // Absolute yardstick for the value target; 8K points is a good place to end a 30T game
