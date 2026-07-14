@@ -4,6 +4,8 @@ The idea is that we should get more systematic about coming up with a hypothesis
 
 This will be the loop we will run continuously to ensure the Polybot continues to improve and get better, to eventually reach human-level capabilities.
 
+Our #1 objective is to figure out how to get into a smooth learning curve regiment. Once we figure that out and can see more training time leads systematically to better playing from the AI, then we can deploy training regimen on the Cloud and let it run over 5M self-play games to reach human-level performance. We only have one shot at a $1M training run and we cannot waste it.
+
 ## Protocol
 
 1. Name the bottleneck metric (currently: `villages_t2c_first_cond` at `villages_first_rate` ~1.0).
@@ -131,9 +133,95 @@ WATCH items from this run:
 - **Rate residual — RESOLVED (Jul 11)**: dumped every zero-capture game from a 128-game Kickoo+Bardur probe (new `self_play --dump-failed-dir`: watcher replay + full per-decision search traces). All 7 were **Domination wins** — one side captured the enemy capital on turn 6–10 and the game ended before anyone banked a neutral village. Not lost units: the winner rushed (the greedy anchor does it too, in 2 of 7), the loser pulled units home to defend and died. The metric counts these wins as capture failures — third censoring artifact of this campaign. Artifacts: `polyfish-rs/replays/failed_games/`.
 - **League cadence**: the six-run drought is explained — the GN migration quarantined every old checkpoint into `checkpoints/bn_era/`, and the selector needs ≥2 eligible `model_checkpoint_iter*` files before it fires. It self-healed at iter 60, but checkpoint-every-50 means one league reading per ~7h of training. Candidate fix: denser checkpoints or a standing arena benchmark vs the frozen `model_checkpoint_iter50_20260710_015335` (pre-fix reference).
 
-## Next candidates (write the EXP entry before running)
+## EXP 10: Strength gauge — the frozen-anchor Elo ladder
+*Jul 11, 2026 · COMMITTED — and it immediately caught our biggest blind spot*
 
-- **De-censor the rate metric (instrumentation)**: exclude games that end by domination before any village capture from the `villages_first_rate` denominator, and log a `domination_wins` rate column. With the ~3–5% rush games counted honestly, rate should read ~1.0 and the 1.0 pre-registration becomes meetable.
-- **Value-head probe**: fixed-holdout convergence probe to attribute the r2 slide (harder data vs worse head vs aux competition). Cheap, decides whether anything needs fixing.
-- **Strength gauge**: standing n=32 arena vs the frozen pre-fix checkpoint after each stint, so every committed EXP also answers "did we get *stronger*, not just faster at villages".
-- **Map geometry floor** (user-gated, explicitly not approved yet): 31% of Drylands spawns have no village within Chebyshev 3 (400-map measurement; mean nearest 3.44) → omniscient floor ≈4.4, competent-FOW play ≈5.0–5.5. If cond plateaus ~5.0–5.3 at rate ~1.0, the remaining gap to 4.5 is the map, not the policy — reopen the suburb-guarantee conversation with that data.
+All our metrics so far measure behavior — capture speed, SPT, policy loss — not strength. This adds the missing y-axis: paired arena matches against frozen reference models, chained into one Elo curve. It's the line that must keep rising before we commit real money to the long cloud run.
+
+### Design (instrumentation, no behavior change)
+
+- **Reading**: n=32 seeds, sides swapped (64 games), `arena` at gumbel 64/k=16, `--gamemode 2`. Win rate = wins + draws/2.
+- **Ladder rules**: a reading every 10th iteration vs the *active anchor* (a frozen checkpoint that never changes). ≥80% → freeze the current model as the next anchor and measure the link vs the outgoing one at n=64. Audit every 50 iters vs Greedy + one retired anchor — observed vs chain-predicted win rate flags Elo inflation/cycles.
+- **Permanent floor anchor**: the Greedy backend (the production teacher seat), Elo 0 by definition — a non-net agent that can't join net-vs-net strategy cycles.
+- **Backfill today**: `gn_v2` → `iter50_015335` → `iter50_220138` → current, each vs Greedy plus the informative net-vs-net pairs.
+
+### Expected Results (pre-registered before any match ran)
+
+1. Current beats Greedy at **≥60%**; if ≥80%, Greedy retires to audit duty on day one.
+2. Monotonic ordering vs Greedy: `gn_v2` < `iter50_015335` < current.
+3. Current vs `iter50_015335` ≥55%.
+4. Transitivity: current vs the chain prediction within ~±10pp (no cycle).
+
+### Actual Results
+
+Backfill (n=32 paired, Domination, gumbel 64/k=16; Elo vs Greedy = 0; reading CI ≈ ±9pp):
+
+| model | vs Greedy | ≈ Elo |
+|---|---|---|
+| `gn_v2` (era start) | 3.1% | −600 |
+| `iter50_015335` (pre-fix run) | 23.4% | −206 |
+| `iter50_220138` (latest run, iter 50) | 43.8% | −43 |
+| current `model.safetensors` (iter ~60) | 25–34% | −110 to −190 |
+
+Net-vs-net links: current beats `iter50_220138` at 53.1% (final-10-iters regression scare was sampling noise) and `iter50_015335` at 73.4%, inside the 63–74% chain prediction — **transitivity holds, the ladder chains**.
+
+Pre-registrations #2–#4 met. **#1 failed: the net still loses to its greedy teacher ~2:1** while every behavioral metric said "improving" — village speed measured an opening skill, not strength. The good news is the trend: **~+500 Elo across the era, monotonic at every rung**. Graduation target for the next stint: >50% vs Greedy.
+
+Method notes: vs-Greedy readings scatter more than net-vs-net, so the curve rides on net anchors (Greedy is for audits); the gauge is pinned to `--gamemode 2` (mode is a net input feature *and* a greedy-evaluator branch — Perfection under-read the net); arena now runs on the self_play eval-server stack (net-vs-net reading: 20 min → 83 s). Also found and fixed: arena let MCTS search mutate the real game (production was safe — `Brain` searches a clone); the corruption it caused proves some undo callbacks don't roundtrip exactly — WATCH if search ever goes clone-free.
+
+## EXP 11: Gauge in the loop — auto-ladder + plateau early-stop
+*Jul 11, 2026 · pre-registered, shipping*
+
+Wire the EXP 10 reading into `run_training_loop.sh`: every `LEAGUE_INTERVAL` iters, arena vs the active anchor, appended to `ladder.json` (anchors + readings, human-readable, via `ladder.py`). ≥80% freezes the model as the next anchor (n=64 link match). Audit every 50 iters vs Greedy + a rotating retired anchor. Early stop: over the last 8 readings vs the same anchor, window means flat-or-down AND slope ≤ 0 counts one strike; two consecutive strikes ends the run — ~80+ iterations of evidence of non-improvement, robust to single-reading noise (±9pp).
+
+### Expected Results
+Next stint: readings every 10 iters climb from ~25–34% vs Greedy toward the >50% crossing; no false plateau stop on the way; first anchor freeze at ≥80%.
+
+### Actual Results
+It worked but we see it actually plateauing and the trained NN unable to beat the teacher enough to be made an anchor. It wins ~25% of the time against greedy-only.
+
+---
+
+*From here on, experiments are named by track: `EXP_ELO_*` targets the strength gauge (win rate vs the Greedy anchor / Elo curve). Other tracks get their own prefixes as they open.*
+
+## EXP_ELO_001: Loss autopsy vs Greedy — name the mid-game bottleneck
+*Jul 11, 2026 · pre-registered*
+
+The net now opens faster than its teacher (t2c 5.24 vs 6.2) yet loses to it 2:1, and the ladder's vs-Greedy readings show a ~1,600-point average score gap (net ~3,800, Greedy ~5,400). Every metric we've optimized so far is an opening metric; the losses are being decided somewhere we don't measure. Hypothesis: Greedy pulls away in a specific mid-game window, and the first diverging sub-metric (SPT cadence, city count, army value, or units lost) is nameable and becomes the successor to `villages_t2c_first_cond` at the top of the protocol.
+
+**Change (instrumentation only):** arena learns `--dump-stats-dir`: per-turn samples (score, SPT, city count, unit count, total unit cost, tech count — both sides) written as one JSON per game. Reading: the standard gauge setup — n=32 seeds sides-swapped (64 games), gumbel 64/k=16, `--gamemode 2`, metal eval — vs the Greedy backend, then plot the per-turn curves split by win/loss.
+
+### EXP_ELO_001 Expected Results
+A divergence window: Greedy's score curve breaks away from the net's between roughly turn 8 and turn 20, led by one identifiable sub-metric. Falsifiers: if the gap is uniform from turn 0, the opening work never mattered for strength; if it only appears at endgame, the bottleneck is closing, not economy. Either way the output is the new #1 bottleneck metric.
+
+### EXP_ELO_001 Actual Results
+n=32 seeds (64 games), model 37.5% — reading consistent with the ladder band. The score crossover lands in the predicted window (turn 8–9, gap peaking ~turn 16), but the causal chain starts earlier and has a clear shape:
+
+1. **Units first (turn 3–4):** Greedy trains units immediately (3.0 vs 1.8 by turn 4) and never stops — by turn 16 its army value is 30 vs 13 (in its wins: 41 vs 10, then it kills us by ~turn 20).
+2. **Expansion stalls after the first village:** first-capture speed is fine (the EXP 2–9 skill is real), but the model reaches a 3rd city in only **39% of games vs Greedy's 81%** — in Greedy's wins it's **20% vs 100%**. The model grabs one village and stops; Greedy runs an expand-forever engine.
+3. **SPT follows cities (turn 6–8 on):** 8.4 vs 15.9 by turn 16 — a direct consequence of the city gap, amplified by harvests.
+4. **Tech is anti-correlated:** the model out-researches Greedy in every split, including its losses (t24: 17.3 vs 12.1 techs). It converts stars into research (early score!) while Greedy converts them into units and cities. The model's early score *lead* (turns 1–7) is exactly this — buying scoreboard points that don't compound.
+
+**Verdict: COMMITTED (instrument + diagnosis).** The opening-village campaign taught a skill the model has; the game is decided by expansion *continuation* and army production, where it under-invests — plausibly a research-shaped local optimum (tech = immediate score = shaped reward). New #1 bottleneck metric: **third-city rate** (target: ≥0.8 by turn 13, Greedy's level), with army value @ turn 12 as the co-metric. Caveat: per-turn means past ~turn 18 are survivorship-biased (Greedy's wins end ~turn 20, the model's ~turn 24).
+*Jul 11, 2026 · pre-registered*
+
+The plateau's timing matches the crutch schedule, not a capacity wall: `anchor_frac` starts at 0.25 and decays 0.97^iter to its 0.1 floor by ~iter 30, and the heuristic prior weight decays 0.5→0.1 on the same clock — so from mid-run onward ~90% of games are weak-net-vs-weak-net. Value targets from those games teach "who beats a weak net", not "who beats Greedy". EXP 7 showed the teacher seat was the largest single gain of the campaign; we then removed it on a schedule instead of on a condition, while the model was still below the teacher.
+
+**Change:** the loop holds `anchor_frac` at its starting 0.25 (no decay) while the latest ladder reading vs Greedy is <50%; once a reading crosses 50%, the decay clock starts from that iteration. Heuristic prior weight keeps its existing schedule — one variable at a time.
+
+### Expected Results
+Vs-Greedy gauge readings (n=32 every `LEAGUE_INTERVAL` iters) resume climbing: mean of the first 3 post-change readings ≥ the last pre-change window mean + 8pp, and no plateau strikes fire in the first 30 iters. Secondary (from EXP_ELO_001): third-city rate climbs toward Greedy's 0.81. Falsifier: 3 consecutive readings flat within ±5pp of the old mean → REJECT (teacher starvation isn't the plateau; escalate to the capacity trigger from EXP 1/10 or the shaping candidate from EXP_ELO_001's findings).
+
+**Method amendment (Jul 11, pre-readout):** the first stint runs at a REDUCED budget (`-n 16 -k 4`, 20 iters, gauge every 5) — the new fast-experiment tier. Greedy uses no search, so a smaller budget weakens only the net's side: these readings sit at a lower level than the 64/k=16 ladder history and MUST NOT be compared to the 25–34% pre-change band or chained into the canonical Elo curve. Judge this stint within-budget only: the slope across its own readings plus the third-city-rate trend in the training log. A climb at 16 sims = mechanism confirmed (extend/rerun at full budget for the registered +8pp criterion); flat at 16 sims is *weak* evidence against — the search-improvement operator is also degraded at 16 sims — so a null here gets one re-test at 64 before REJECT.
+
+### Actual Results
+Run `1783809008`, 80 iters total: 20 at 16/k=4 (readings 30/33/23/27% — flat, as covered by the method amendment), then 60 overnight at the registered 64/k=16. The six 64-sim readings vs Greedy: **31.2, 37.5, 23.4, 35.9, 40.6, 33.6%** (Elo −137 → best −66, ending −118).
+
+Against the registered criteria: first-3 mean 30.7% vs the ~29.5% pre-change window = **+1pp — the +8pp success bar was NOT met**. The falsifier also did not fire (37.5% and 40.6% both broke the ±5pp flat band; plateau strikes 0). Within the run, first-3 → last-3 means rose 30.7% → 36.7% (+6pp, ~1.2σ — suggestive, not conclusive alone).
+
+The behavior curves carry the real signal. Across readings 30→80: the post-t15 city collapse shrank (t15→t25 bleed −0.67 → −0.32/−0.41), SPT@t25 rose 6.3 → ~7.2–8.1, army value@t25 8.0 → ~9.7–10.7, and the t25 score gap roughly halved (−1471 → −547/−878) — with Greedy's own curves *pulled down* at the good readings (the model interfering with a fixed opponent). Value R² dipped 0.72→0.67 while the first-ever 30-turn training data arrived (iters 22–50), then recovered to 0.74 — the late-game distribution was absorbed. Confound to note: the curriculum crossed into the 30-turn stage at iter 16, so "restored anchor signal" and "first late-game training data" are entangled in this window. Also: the 16-sim P2-seat skew did not replicate at 64 sims (P1 77 wins vs P2 52) — artifact/noise.
+
+**Verdict: WATCH — mechanism engaged (value head learning, late-game behavior healing, no plateau), but the strength conversion is a slow climb, below the registered bar.** The anchor hold stays in place (it's condition-gated and the data shows no harm). This outcome is precisely the promotion trigger for EXP_ELO_003 below.
+
+### Queued follow-up — EXP_ELO_003: anchor dose-response (0.25 → 0.4–0.5)
+Promoted to a live EXP only after 002 reads out. Trigger: 002 shows a real but slow climb (readings rising but <8pp over 3) → test whether more anchor games speed value-head relabeling. Run with `ANCHOR_FRAC=0.4`–`0.5`, watch vs-Greedy win rate + third-city rate, and watch policy CE for imitation-regression (anchor games record the greedy seat as teacher targets — too high a dose re-anchors the policy to the teacher, whose ceiling we're trying to pass; it also risks overfitting an exploit lane against a deterministic opponent instead of general strength). If 002 outright fails its falsifier, skip 003 — dose was never the variable.

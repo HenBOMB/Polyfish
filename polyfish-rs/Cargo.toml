@@ -61,6 +61,9 @@ tch-eval = ["dep:tch"]
 # Route self-play NN inference through a hand-composed MPSGraph, bypassing
 # libtorch's serial MPS dispatch queue entirely. See metal_network.rs.
 metal-eval = ["dep:apple-mpsgraph", "dep:apple-metal"]
+# Catch-all for the full macOS build: everything Metal/Apple-related at once.
+# Keep the individual features above for isolating one backend during debugging.
+apple = ["metal", "accelerate", "tch-eval", "metal-eval"]
 
 [dev-dependencies]
 pretty_assertions = "1.4"

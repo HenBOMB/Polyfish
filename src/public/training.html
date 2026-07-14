@@ -205,6 +205,7 @@
           <div class="chart-box"><header><h3>Score</h3><button class="dl-png" data-canvas="scoreChart">PNG</button></header><div class="chart-wrap"><canvas id="scoreChart"></canvas></div></div>
           <div class="chart-box"><header><h3>Player balance</h3><button class="dl-png" data-canvas="p1p2Chart">PNG</button></header><div class="chart-wrap"><canvas id="p1p2Chart"></canvas></div></div>
           <div class="chart-box"><header><h3>League vs self-play</h3><button class="dl-png" data-canvas="leagueChart">PNG</button></header><div class="chart-wrap"><canvas id="leagueChart"></canvas></div></div>
+          <div class="chart-box"><header><h3>Elo ladder</h3><button class="dl-png" data-canvas="eloChart">PNG</button></header><div class="chart-wrap"><canvas id="eloChart"></canvas></div></div>
         </div>
         <div style="margin-top:1rem">
           <button id="downloadGrid">Download 2×2 progress PNG</button>
@@ -574,6 +575,48 @@ function renderPanelA() {
   });
   renderGameStatsCharts();
   renderMoveTurnGrid();
+}
+
+const ELO_KIND_COLORS = { gauge: '#4a9eff', audit: '#f39c12', backfill: '#95a5a6', link: '#2ecc71' };
+
+async function renderEloChart() {
+  let ladder;
+  try {
+    ladder = await fetchJson('/api/elo-ladder');
+  } catch {
+    ladder = { anchors: [], readings: [] };
+  }
+  const readings = [...(ladder.readings || [])].sort((a, b) => (a.at || '').localeCompare(b.at || ''));
+  makeChart('eloChart', {
+    type: 'line',
+    data: {
+      labels: readings.map(r => r.iteration ?? (r.at ? r.at.slice(0, 10) : '')),
+      datasets: [
+        {
+          label: 'Elo estimate',
+          data: readings.map(r => r.elo_est),
+          borderColor: '#4a9eff',
+          pointBackgroundColor: readings.map(r => ELO_KIND_COLORS[r.kind] || '#4a9eff'),
+          pointRadius: 4,
+          tension: 0.2,
+        },
+      ],
+    },
+    options: {
+      ...chartDefaults,
+      plugins: {
+        ...chartDefaults.plugins,
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const r = readings[ctx.dataIndex];
+              return `${r.model} vs ${r.opponent}: ${Math.round(r.elo_est)} elo (${r.wins}-${r.losses}-${r.draws}, ${r.kind})`;
+            },
+          },
+        },
+      },
+    },
+  });
 }
 
 function renderGameStatsCharts() {
@@ -1076,6 +1119,7 @@ async function refreshAll() {
   await loadRunData();
   renderSummaryCards();
   renderPanelA();
+  await renderEloChart();
   populateIterSelect();
   await renderIterPanels();
 }

@@ -1,10 +1,8 @@
 use candle_core::{Device, Tensor};
 use polyfish::TribeType;
 use polyfish::ai::brain::{Brain, SearchBackend, SearchBackendArg};
-use polyfish::ai::eval_server::{
-    BackendSpec, EvalHandle, EvalServer, EvalServerConfig, EvalServerStats, Evaluator,
-    ShardedEvalHandle,
-};
+use polyfish::ai::eval_backend::{self, EvalBackendKind, PlayerBackend};
+use polyfish::ai::eval_server::{EvalServerConfig, EvalServerStats, Evaluator};
 use polyfish::ai::features::{self, GameFeatures, state_to_tensor};
 use polyfish::ai::mapper::DecomposedMapper;
 use polyfish::ai::network::PolyZeroNet;
@@ -23,8 +21,27 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const HEURISTIC_PRIOR_W0: f32 = 0.5; // net & heur blended 50/50 at start
-const HEURISTIC_PRIOR_DECAY: f32 = 0.97; // decays 0.5 -> 0.1 floor by ~iteration 47
-const HEURISTIC_PRIOR_W_FLOOR: f32 = 0.1; // permanent behavioral floor, root + in-tree
+const HEURISTIC_PRIOR_DECAY: f32 = 0.97; // decays 0.5 -> 0.1 floor by ~iteration 53
+const ANCHOR_FRAC_DECAY: f32 = 0.97; // same rate as HEURISTIC_PRIOR_DECAY, own start value
+const CRUTCH_FLOOR: f32 = 0.1; // intermediate plateau shared by both crutches below
+
+/// Exponential decay from `w0` toward `CRUTCH_FLOOR`, then a hard cutover to
+/// 0 once `iteration >= decay_last_iter` (or immediately if `force_zero`).
+/// Shared by `prior_heuristic_weight` (self-play search prior blend) and
+/// `anchor_frac` (heuristic-anchor game rate) — both are training-time
+/// crutches meant to fully phase out, not asymptote at a permanent floor.
+fn decay_crutch(
+    w0: f32,
+    decay_rate: f32,
+    iteration: usize,
+    decay_last_iter: usize,
+    force_zero: bool,
+) -> f32 {
+    if force_zero || iteration >= decay_last_iter || w0 <= 0.0 {
+        return 0.0;
+    }
+    (w0 * decay_rate.powi(iteration as i32)).max(CRUTCH_FLOOR.min(w0))
+}
 
 // Absolute yardstick for the value target; 8K points is a good place to end a 30T game
 const GOOD_BOT_FINAL_SCORE: f32 = 8000.0;
@@ -567,9 +584,19 @@ fn t2c_turn(capture_turns: &[i32], initial: usize, frac: f64, censor: i32) -> f3
 
 /// Load the main network (and opponent network, defaulting to the main one)
 /// onto the given device from `model.safetensors`.
+///
+/// When `eval_backend_kind` is `Candle` and a distinct opponent is given, the
+/// opponent network is loaded on its own freshly-obtained device rather than
+/// `device`: under Candle, player 1 and player 2 each get an independent
+/// `EvalServer` thread, and candle's Metal backend corrupts if two threads
+/// encode ops (e.g. `forward_t`) against the same `Device` (see
+/// `eval_backend.rs`'s device-isolation contract). tch/metal shards load
+/// their own weights on the eval-server thread and never touch this candle
+/// device for inference, so sharing is harmless for them.
 fn load_networks(
     device: &Device,
     opponent: Option<&str>,
+    eval_backend_kind: EvalBackendKind,
 ) -> anyhow::Result<(Arc<PolyZeroNet>, Arc<PolyZeroNet>)> {
     let model_path = "model.safetensors";
     if !std::path::Path::new(model_path).exists() {
@@ -586,8 +613,13 @@ fn load_networks(
     let network1 = Arc::new(PolyZeroNet::new(vs1)?);
 
     let network2 = if let Some(opp_path) = opponent {
+        let device2 = if eval_backend_kind == EvalBackendKind::Candle {
+            eval_backend::select_device()?
+        } else {
+            device.clone()
+        };
         let vs2 = unsafe {
-            candle_nn::VarBuilder::from_mmaped_safetensors(&[opp_path], candle_core::DType::F32, device)?
+            candle_nn::VarBuilder::from_mmaped_safetensors(&[opp_path], candle_core::DType::F32, &device2)?
         };
         Arc::new(PolyZeroNet::new(vs2)?)
     } else {
@@ -608,6 +640,8 @@ fn play_single_game(
     seed: i64,
     tribes: Vec<TribeType>,
     iteration: usize,
+    decay_last_iter: usize,
+    force_zero_crutches: bool,
     gamemode: u8,
     backend1: SearchBackend,
     backend2: SearchBackend,
@@ -680,8 +714,13 @@ fn play_single_game(
     let trace_all = dump_failed_dir.is_some();
     let mut decision_log: Vec<TracedDecision> = Vec::new();
 
-    let prior_w = (HEURISTIC_PRIOR_W0 * HEURISTIC_PRIOR_DECAY.powi(iteration as i32))
-        .max(HEURISTIC_PRIOR_W_FLOOR);
+    let prior_w = decay_crutch(
+        HEURISTIC_PRIOR_W0,
+        HEURISTIC_PRIOR_DECAY,
+        iteration,
+        decay_last_iter,
+        force_zero_crutches,
+    );
     // One trust scalar drives β on σ(Q) in both the exported targets and the
     // search tree itself. --value-trust overrides the iteration ramp, which
     // saturates immediately on ITER_OFFSET-shifted runs.
@@ -1160,15 +1199,42 @@ fn main() -> anyhow::Result<()> {
         #[arg(long)]
         opponent: Option<String>,
 
-        /// Fraction of games (0..1) played against the network-free Heuristic
-        /// search backend as an anchor opponent (seat alternates between
-        /// anchor games). Anchor games break mirror-play symmetry: a passive
-        /// net LOSES them, so the relative value label finally carries an
-        /// anti-passivity gradient. The anchor side's data is recorded too
-        /// (fresh teacher data, same as the BC corpus). Mutually exclusive
-        /// with --opponent.
+        /// STARTING fraction of games (0..1) played against the network-free
+        /// Heuristic search backend as an anchor opponent (seat alternates
+        /// between anchor games). Anchor games break mirror-play symmetry: a
+        /// passive net LOSES them, so the relative value label finally
+        /// carries an anti-passivity gradient. The anchor side's data is
+        /// recorded too (fresh teacher data, same as the BC corpus). Decays
+        /// with `iteration` the same way `prior_heuristic_weight` does (see
+        /// `decay_crutch`), then fully to 0 at --decay-last-iter. Mutually
+        /// exclusive with --opponent.
         #[arg(long, default_value_t = 0.0)]
         anchor_frac: f32,
+
+        /// Iteration at which both heuristic crutches (the search-prior
+        /// blend and anchor-game rate) hard-cut to 0, having spent the
+        /// iterations before that decaying down to a 10% floor. Default is
+        /// effectively "never" so standalone/benchmark runs aren't
+        /// surprised; the training loop passes an explicit value (see
+        /// DECAY_LAST_ITER in run_training_loop.sh).
+        #[arg(long, default_value_t = usize::MAX)]
+        decay_last_iter: usize,
+
+        /// EXP_ELO_002: iteration where the anchor-frac decay clock starts —
+        /// the anchor's effective decay iteration is `iteration - this`
+        /// (clamped at 0). The loop passes the current iteration to HOLD
+        /// anchor_frac at its starting rate until the model crosses 50% vs
+        /// Greedy, then pins the crossing iteration so decay runs from
+        /// there. The prior-blend decay is unaffected.
+        #[arg(long, default_value_t = 0)]
+        anchor_decay_start: usize,
+
+        /// Force both heuristic crutches to 0 immediately, regardless of
+        /// iteration or --decay-last-iter. Integration point for a future
+        /// strength-gated phase-out (model consistently beats the
+        /// heuristic-only backend) — not wired to any automatic check yet.
+        #[arg(long, default_value_t = false)]
+        force_zero_crutches: bool,
 
         /// Value-head trust in [0,1]: β on σ(completed-Q) both inside the
         /// search tree and in exported policy targets. Overrides the
@@ -1327,17 +1393,17 @@ fn main() -> anyhow::Result<()> {
         SearchBackendArg::Greedy => SearchBackend::Greedy,
     };
 
-    // Select device: Metal (macOS) > CUDA (NVIDIA) > CPU, unless overridden via POLYFISH_DEVICE
-    let device = match std::env::var("POLYFISH_DEVICE").as_deref() {
-        Ok("cpu") => Device::Cpu,
-        Ok("metal") => Device::metal_if_available(0)?,
-        Ok("cuda") => Device::cuda_if_available(0)?,
-        _ => Device::metal_if_available(0)
-            .or_else(|_| Device::cuda_if_available(0))
-            .unwrap_or(Device::Cpu),
-    };
+    let device = eval_backend::select_device()?;
+
+    // Resolve the eval backend up front (explicit --eval-backend, else auto:
+    // metal when compiled in, else tch when compiled in, else candle) — the
+    // network load below needs it to decide whether player 2 gets an
+    // isolated device (see `load_networks`'s doc comment).
+    let eval_backend_kind = eval_backend::resolve_eval_backend_kind(&args.eval_backend)?;
+    let eval_servers = eval_backend::resolve_eval_servers(eval_backend_kind, args.eval_servers)?;
+
     // Load models (P1, and P2 defaulting to P1 when no opponent is given)
-    let (network1, network2) = load_networks(&device, args.opponent.as_deref())?;
+    let (network1, network2) = load_networks(&device, args.opponent.as_deref(), eval_backend_kind)?;
 
     let base_seed = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
@@ -1420,170 +1486,32 @@ fn main() -> anyhow::Result<()> {
     // for the Metal cross-thread-tensor invariant this design preserves).
     let games_start = Instant::now();
 
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum EvalBackendKind {
-        Candle,
-        Tch,
-        Metal,
-    }
-
-    // Resolve the eval backend: explicit --eval-backend, else auto (metal
-    // when compiled in, else tch when compiled in, else candle).
-    let eval_backend_kind = match args.eval_backend.as_str() {
-        "tch" => {
-            if !cfg!(feature = "tch-eval") {
-                anyhow::bail!(
-                    "--eval-backend tch requires building with --features tch-eval"
-                );
-            }
-            EvalBackendKind::Tch
-        }
-        "metal" => {
-            if !cfg!(feature = "metal-eval") {
-                anyhow::bail!(
-                    "--eval-backend metal requires building with --features metal-eval"
-                );
-            }
-            EvalBackendKind::Metal
-        }
-        "candle" => EvalBackendKind::Candle,
-        "" => {
-            if cfg!(feature = "metal-eval") {
-                EvalBackendKind::Metal
-            } else if cfg!(feature = "tch-eval") {
-                EvalBackendKind::Tch
-            } else {
-                EvalBackendKind::Candle
-            }
-        }
-        other => anyhow::bail!("unknown --eval-backend {other:?} (want candle|tch|metal)"),
-    };
-    // Resolve shard count. We default to the best measured throughput
-    let eval_servers = match args.eval_servers {
-        0 => {
-            if eval_backend_kind == EvalBackendKind::Metal {
-                3
-            } else {
-                1
-            }
-        }
-        n => {
-            if n > 1 && eval_backend_kind == EvalBackendKind::Candle {
-                anyhow::bail!(
-                    "--eval-servers > 1 requires --eval-backend tch or metal \
-                     (candle Metal corrupts when >1 thread encodes on the same device)"
-                );
-            }
-            n
-        }
-    };
     // Each shard sees ~1/N of the working set (hash-routed), so dividing the
     // per-shard cache by N keeps total resident cache ~constant while
     // preserving the hit rate (cache / working-set ratio is unchanged).
-    let per_shard_cache = if args.cache_cap == 0 {
-        None
-    } else {
-        Some(args.cache_cap / eval_servers)
-    };
+    let per_shard_cache = eval_backend::split_cache_capacity(args.cache_cap, eval_servers);
     let eval_config = EvalServerConfig {
         max_batch: args.max_batch,
         coalesce_timeout: std::time::Duration::from_micros(args.coalesce_timeout_us),
         cache_capacity: per_shard_cache,
         pipeline_workers: args.eval_workers,
     };
-    // Builds `n` backend specs for one player. For tch: every shard gets its
-    // own `BackendSpec::Tch` on the shared MPS device; each shard's thread
-    // loads its own `TchPolyZeroNet` (duplicated weights, a few MB). For
-    // metal: every shard gets its own `BackendSpec::MetalMps`, each shard's
-    // thread loads its own `MetalPolyZeroNet` and owns its own
-    // `MTLCommandQueue`. For candle: `n` clones of the passed
-    // `Arc<PolyZeroNet>` (player 1 vs player 2 networks differ in opponent
-    // mode).
-    let make_specs = |kind: EvalBackendKind,
-                      n: usize,
-                      model_path: &str,
-                      candle_net: &Arc<PolyZeroNet>|
-     -> Vec<BackendSpec> {
-        // `model_path` is only read by the tch/metal branches below; in
-        // builds with neither feature it's unused. Touch it so the closure
-        // compiles cleanly either way.
-        let _ = model_path;
-        match kind {
-            EvalBackendKind::Tch => {
-                #[cfg(feature = "tch-eval")]
-                {
-                    let dev = if tch::utils::has_mps() {
-                        tch::Device::Mps
-                    } else {
-                        tch::Device::Cpu
-                    };
-                    return (0..n)
-                        .map(|_| BackendSpec::Tch {
-                            model_path: model_path.to_string(),
-                            device: dev,
-                        })
-                        .collect();
-                }
-                #[cfg(not(feature = "tch-eval"))]
-                unreachable!("EvalBackendKind::Tch guarded by cfg above");
-            }
-            EvalBackendKind::Metal => {
-                #[cfg(feature = "metal-eval")]
-                {
-                    return (0..n)
-                        .map(|_| BackendSpec::MetalMps {
-                            model_path: model_path.to_string(),
-                        })
-                        .collect();
-                }
-                #[cfg(not(feature = "metal-eval"))]
-                unreachable!("EvalBackendKind::Metal guarded by cfg above");
-            }
-            EvalBackendKind::Candle => (0..n)
-                .map(|_| BackendSpec::Candle(candle_net.clone()))
-                .collect(),
-        }
-    };
     let p1_path = "model.safetensors";
-    let p2_path = args
-        .opponent
-        .as_deref()
-        .unwrap_or("model.safetensors");
-    let p1_specs = make_specs(eval_backend_kind, eval_servers, p1_path, &network1);
+    let p2_path = args.opponent.as_deref().unwrap_or("model.safetensors");
     let has_opponent = args.opponent.is_some();
-    let p2_specs = if has_opponent {
-        make_specs(eval_backend_kind, eval_servers, p2_path, &network2)
-    } else {
-        Vec::new()
-    };
 
     // Spawn the shards. Each EvalServer owns its inference thread + device
     // context; the handles are collected into a ShardedEvalHandle that
-    // routes leaves by hash so each shard owns its own LRU cache.
-    let mut p1_servers: Vec<EvalServer> = Vec::with_capacity(eval_servers);
-    let mut p1_handles: Vec<EvalHandle> = Vec::with_capacity(eval_servers);
-    for spec in p1_specs {
-        let (srv, h) = EvalServer::start(spec, eval_config);
-        p1_servers.push(srv);
-        p1_handles.push(h);
-    }
-    let (p2_servers, p2_handles) = if has_opponent {
-        // Opponent mode: independent shard set for player 2.
-        let mut s = Vec::with_capacity(eval_servers);
-        let mut h = Vec::with_capacity(eval_servers);
-        for spec in p2_specs {
-            let (srv, hh) = EvalServer::start(spec, eval_config);
-            s.push(srv);
-            h.push(hh);
-        }
-        (Some(s), h)
-    } else {
-        // Self-play against the same weights: both players share one shard
-        // set so we don't run 2× inference threads for the same network.
-        (None, p1_handles.clone())
-    };
-    let eval1 = Evaluator::Sharded(ShardedEvalHandle::new(p1_handles));
-    let eval2 = Evaluator::Sharded(ShardedEvalHandle::new(p2_handles));
+    // routes leaves by hash so each shard owns its own LRU cache. No
+    // opponent => player 2 shares player 1's shard set (one set of
+    // inference threads for the same weights).
+    let (p1_servers, p2_servers, eval1, eval2) = eval_backend::build_two_player_evaluators(
+        eval_backend_kind,
+        eval_servers,
+        eval_config,
+        PlayerBackend { model_path: p1_path, candle_net: &network1 },
+        has_opponent.then(|| PlayerBackend { model_path: p2_path, candle_net: &network2 }),
+    );
 
     let num_actors = if args.actors > 0 {
         args.actors
@@ -1603,7 +1531,7 @@ fn main() -> anyhow::Result<()> {
     let match_label = match &args.opponent {
         Some(opp) => format!("league vs {opp}"),
         None if args.anchor_frac > 0.0 => {
-            format!("self-play + {:.0}% heuristic-anchor games", args.anchor_frac * 100.0)
+            format!("self-play + up to {:.0}% heuristic-anchor games (decaying)", args.anchor_frac * 100.0)
         }
         None => "self-play".to_string(),
     };
@@ -1665,13 +1593,21 @@ fn main() -> anyhow::Result<()> {
                     };
 
                     // Anchor games: evenly spread across the run at rate
-                    // anchor_frac; the anchor's seat alternates by anchor
-                    // ordinal (game parity alone would pin it to one seat at
-                    // e.g. frac 0.25, where anchor games are all odd-i).
-                    let anchor_ordinal =
-                        (((i + 1) as f32) * args.anchor_frac).floor() as usize;
-                    let is_anchor = args.anchor_frac > 0.0
-                        && anchor_ordinal > ((i as f32) * args.anchor_frac).floor() as usize;
+                    // anchor_frac (decayed from its starting value the same
+                    // way prior_heuristic_weight is — see decay_crutch);
+                    // the anchor's seat alternates by anchor ordinal (game
+                    // parity alone would pin it to one seat at e.g. frac
+                    // 0.25, where anchor games are all odd-i).
+                    let anchor_frac = decay_crutch(
+                        args.anchor_frac,
+                        ANCHOR_FRAC_DECAY,
+                        args.iteration.saturating_sub(args.anchor_decay_start),
+                        args.decay_last_iter,
+                        args.force_zero_crutches,
+                    );
+                    let anchor_ordinal = (((i + 1) as f32) * anchor_frac).floor() as usize;
+                    let is_anchor = anchor_frac > 0.0
+                        && anchor_ordinal > ((i as f32) * anchor_frac).floor() as usize;
                     // Greedy (score_move argmax), not the rollout Heuristic MCTS:
                     // measured first-village capture 1.00/t6.5 vs 0.94/t8.9 — the
                     // rollout noise drowned the ordering gradient. Greedy is also
@@ -1708,6 +1644,8 @@ fn main() -> anyhow::Result<()> {
                             seed,
                             game_tribes,
                             args.iteration,
+                            args.decay_last_iter,
+                            args.force_zero_crutches,
                             args.gamemode,
                             backend_seat1,
                             backend_seat2,
@@ -1869,6 +1807,7 @@ fn main() -> anyhow::Result<()> {
     let mut total_builds = 0;
     let mut total_research = 0;
     let mut total_attacks = 0;
+    let mut total_abilities = 0;
     let mut total_revealed_tiles: i64 = 0;
     let mut total_captured_tiles: i64 = 0;
     let mut total_t2c = [0.0f64; 7]; // villages first/p50/p80/all, ruins p50/p80/all
@@ -1946,6 +1885,11 @@ fn main() -> anyhow::Result<()> {
         total_attacks += result
             .action_counts
             .get(&polyfish::types::MoveType::Attack)
+            .copied()
+            .unwrap_or(0);
+        total_abilities += result
+            .action_counts
+            .get(&polyfish::types::MoveType::Ability)
             .copied()
             .unwrap_or(0);
 
@@ -2126,6 +2070,7 @@ fn main() -> anyhow::Result<()> {
     let avg_builds = total_builds as f32 / args.num_games as f32;
     let avg_research = total_research as f32 / args.num_games as f32;
     let avg_attacks = total_attacks as f32 / args.num_games as f32;
+    let avg_abilities = total_abilities as f32 / args.num_games as f32;
     let avg_revealed_tiles = total_revealed_tiles as f32 / args.num_games as f32;
     let avg_captured_tiles = total_captured_tiles as f32 / args.num_games as f32;
 
@@ -2294,6 +2239,7 @@ fn main() -> anyhow::Result<()> {
         "avg_builds": avg_builds,
         "avg_research": avg_research,
         "avg_attacks": avg_attacks,
+        "avg_abilities": avg_abilities,
         "avg_revealed_tiles": avg_revealed_tiles,
         "avg_captured_tiles": avg_captured_tiles,
         "avg_spt_t0": avg_spt_at(0),
@@ -2479,6 +2425,41 @@ mod td_lambda_tests {
             "got {}, expected {expected}",
             out[0]
         );
+    }
+}
+
+#[cfg(test)]
+mod decay_crutch_tests {
+    use super::*;
+
+    #[test]
+    fn decays_toward_floor_before_taper() {
+        let w0 = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 0, 150, false);
+        assert!((w0 - HEURISTIC_PRIOR_W0).abs() < 1e-6, "iteration 0 should equal w0, got {w0}");
+
+        let mid = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 23, 150, false);
+        assert!((mid - 0.25).abs() < 0.01, "iteration 23 should be ~0.25, got {mid}");
+
+        let floored = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 100, 150, false);
+        assert!((floored - CRUTCH_FLOOR).abs() < 1e-6, "past-decay iteration should sit at the floor, got {floored}");
+    }
+
+    #[test]
+    fn hard_cuts_to_zero_at_decay_last_iter() {
+        let at_cutoff = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 150, 150, false);
+        assert_eq!(at_cutoff, 0.0);
+
+        let past_cutoff = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 500, 150, false);
+        assert_eq!(past_cutoff, 0.0);
+
+        let just_before = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 149, 150, false);
+        assert!((just_before - CRUTCH_FLOOR).abs() < 1e-6);
+    }
+
+    #[test]
+    fn force_zero_overrides_regardless_of_iteration() {
+        let forced = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 0, usize::MAX, true);
+        assert_eq!(forced, 0.0);
     }
 }
 

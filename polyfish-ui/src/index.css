@@ -519,6 +519,20 @@ input:disabled, select:disabled, .cyber-slider:disabled {
   box-shadow: 0 0 8px rgba(0, 240, 255, 0.2);
 }
 
+.metrics-section-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin: 28px 0 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.metrics-section-title:first-of-type {
+  margin-top: 4px;
+}
+
 .metrics-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

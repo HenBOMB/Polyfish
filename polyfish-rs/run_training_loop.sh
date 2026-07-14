@@ -43,7 +43,7 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     echo "Building with Metal + Accelerate + metal-eval (MPSGraph) + tch-eval for macOS..."
     export LIBTORCH_USE_PYTORCH=1
     export LIBTORCH_BYPASS_VERSION_CHECK=1
-    PATH="$(pwd)/.venv/bin:$PATH" cargo build --bin polyfish --bin self_play --release --features metal,accelerate,tch-eval,metal-eval
+    PATH="$(pwd)/.venv/bin:$PATH" cargo build --bin polyfish --bin self_play --bin arena --release --features apple
     # The tch-linked binary has no rpath for libtorch; point dyld at the venv's torch dylibs
     export DYLD_LIBRARY_PATH="$(.venv/bin/python3 -c "import torch, os; print(os.path.join(os.path.dirname(torch.__file__), 'lib'))")${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
 elif false; then
@@ -51,12 +51,23 @@ elif false; then
     echo "Building with CUDA support..."
     # --no-default-features: opt out of the macOS `metal` default, which does
     # not compile on Linux.
-    cargo build --bin polyfish --bin self_play --release --no-default-features --features cuda
+    cargo build --bin polyfish --bin self_play --bin arena --release --no-default-features --features cuda
 else
     # CPU-only fallback
     echo "Building CPU-only version..."
-    cargo build --bin polyfish --bin self_play --release --no-default-features
+    cargo build --bin polyfish --bin self_play --bin arena --release --no-default-features
 fi
+
+# Snapshot the binaries this run will use. Any concurrent `cargo build`/`cargo
+# test` (e.g. a dev session) silently replaces target/release/* — possibly
+# with different features — mid-run; executing from a private copy makes the
+# run immune to that.
+RUN_BIN_DIR=".run_bin"
+mkdir -p "$RUN_BIN_DIR"
+cp -f target/release/self_play target/release/arena target/release/polyfish "$RUN_BIN_DIR/"
+SELF_PLAY_BIN="$RUN_BIN_DIR/self_play"
+ARENA_BIN="$RUN_BIN_DIR/arena"
+SERVER_BIN="$RUN_BIN_DIR/polyfish"
 
 # Parse long options first, then short options via getopts
 RESUME_RUN=""
@@ -97,7 +108,8 @@ REWARD_SHAPING=false
 # Play a league match every LEAGUE_INTERVAL iterations (iteration 10, 20, 30,
 # ... by default). 0 disables league play entirely. Override with -l.
 LEAGUE_INTERVAL=10
-while getopts "fbcri:g:n:a:e:l:" opt; do
+GUMBEL_K=16
+while getopts "fbcri:g:n:a:e:l:k:" opt; do
   case $opt in
     f)
       FORCE_TRAIN=true
@@ -120,6 +132,7 @@ while getopts "fbcri:g:n:a:e:l:" opt; do
       ;;
     n)
       MCTS_ITERS=$OPTARG
+      MCTS_ITERS_SET=true
       ;;
     a)
       ACTORS=$OPTARG
@@ -129,6 +142,9 @@ while getopts "fbcri:g:n:a:e:l:" opt; do
       ;;
     l)
       LEAGUE_INTERVAL=$OPTARG
+      ;;
+    k)
+      GUMBEL_K=$OPTARG
       ;;
     \?)
       echo "Invalid option: -$OPTARG" >&2
@@ -180,6 +196,8 @@ if [ "$RESET" = true ]; then
     rm -f model.safetensors
     rm -f games_*.safetensors
     rm -f archive/games_*.safetensors
+    # EXP_ELO_002: the anchor decay clock belongs to the model it graduated.
+    rm -f .anchor_decay_start
     if [ -n "$RESUME_RUN" ]; then
         echo "   (ignoring --resume since --reset always starts a fresh run)"
         RESUME_RUN=""
@@ -198,13 +216,23 @@ RUN_STARTED_AT=$(echo "$RUN_INFO" | .venv/bin/python3 -c "import sys,json; print
 START_ITER=$(echo "$RUN_INFO" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin)['start_iter'])")
 echo "Training run_id=$RUN_ID started_at=$RUN_STARTED_AT starting at iteration $START_ITER"
 
+# Restore point: snapshot the model at every launch (new run or resume), so
+# no experiment can ever start without a recoverable "before" state.
+if [ -f model.safetensors ]; then
+    LAUNCH_CP="checkpoints/run_${RUN_ID}_iter${START_ITER}_start.safetensors"
+    if [ ! -f "$LAUNCH_CP" ]; then
+        cp model.safetensors "$LAUNCH_CP"
+        echo "Launch checkpoint: $LAUNCH_CP"
+    fi
+fi
+
 # Set up config.json sync if not present
 if [ ! -f "config.json" ]; then
-    echo "{\"gamemode\": 2, \"iterations\": $MCTS_ITERS, \"cores\": 2, \"tribes\": [\"Imperius\", \"Bardur\", \"Oumaji\", \"Kickoo\", \"XinXi\"]}" > config.json
+    echo "{\"gamemode\": 2, \"mctsIters\": $MCTS_ITERS, \"cores\": 2, \"tribes\": [\"Imperius\", \"Bardur\", \"Oumaji\", \"Kickoo\", \"XinXi\"]}" > config.json
 fi
 
 echo "Starting backend server in background..."
-./target/release/polyfish &
+"$SERVER_BIN" &
 SERVER_PID=$!
 
 trap '.venv/bin/python3 training_log.py finish-run 2>/dev/null || true; kill $SERVER_PID 2>/dev/null; rm -f .training.pid' EXIT
@@ -277,13 +305,26 @@ do
     fi
 
     # Heuristic-anchor games (selfplay iterations only; league already has an
-    # asymmetric opponent). ANCHOR_FRAC of each iteration's games are played
-    # vs the network-free heuristic backend so passivity actually loses and
-    # the relative value label carries signal. ANCHOR_FRAC=0 disables.
+    # asymmetric opponent). ANCHOR_FRAC is the STARTING rate of each
+    # iteration's games played vs the network-free heuristic backend so
+    # passivity actually loses and the relative value label carries signal;
+    # it decays in-binary (see decay_crutch in self_play.rs) alongside
+    # prior_heuristic_weight. ANCHOR_FRAC=0 disables.
     ANCHOR_FLAG=""
     if [ "$MATCH_TYPE" = "selfplay" ]; then
         ANCHOR_FLAG="--anchor-frac ${ANCHOR_FRAC:-0.25}"
     fi
+
+    # Final phase-out of both heuristic crutches (search-prior blend +
+    # anchor games): both decay to a 10% floor and hold there until this
+    # EFF_ITER-relative cutoff, then hard-cut to 0. 150 is a starting point
+    # (past curriculum maturity at iter 75 and the floor point at ~53, well
+    # inside a default 500-iteration run) — validate/adjust via the
+    # hypothesis-driven loop, not a measured value. Ideally this would
+    # instead be gated on the model consistently beating the heuristic-only
+    # backend (see EXP 10's arena ladder); until that gate is wired up,
+    # DECAY_LAST_ITER is the fallback trigger.
+    DECAY_LAST_ITER_FLAG="--decay-last-iter ${DECAY_LAST_ITER:-150}"
 
     # Value-head trust ramp, RUN-relative (loop iteration i, not EFF_ITER —
     # ITER_OFFSET-shifted runs would saturate the in-binary iteration ramp
@@ -292,10 +333,14 @@ do
     VALUE_TRUST=$(awk -v i="$i" -v r="${VALUE_TRUST_RAMP_ITERS:-30}" -v cap="${VALUE_TRUST_CAP:-1.0}" \
         'BEGIN { t = i / r; if (t > 1) t = 1; t = t * cap; printf "%.3f", t }')
 
-    # Dynamically fetch parameters from config.json (set by dashboard UI)
+    # Dynamically fetch parameters from config.json (set by dashboard UI).
+    # -n on the command line is an explicit override and must survive the
+    # whole run — it must not be re-clobbered by config.json each iteration.
     if [ -f "config.json" ]; then
         GAMEMODE=$(jq -r '.gamemode // 2' config.json)
-        MCTS_ITERS=$(jq -r '.mctsIters // 64' config.json)
+        if [ "${MCTS_ITERS_SET:-false}" != true ]; then
+            MCTS_ITERS=$(jq -r '.mctsIters // 64' config.json)
+        fi
         # Parse tribes array into bash array safely
         TRIBE_LIST=()
         while IFS= read -r line; do
@@ -326,8 +371,21 @@ do
         'BEGIN { print int((i - 1) * g / b) + 1 }')
     EFF_ITER=$((EFF_ITER + ${ITER_OFFSET:-0}))
 
+    # EXP_ELO_002: hold anchor_frac at its starting rate until the model has
+    # crossed 50% vs the greedy anchor. The gauge block persists the crossing
+    # EFF_ITER into .anchor_decay_start; until then, passing the current
+    # EFF_ITER keeps the anchor decay exponent at 0 (no decay, no cutover).
+    if [ -n "$ANCHOR_FLAG" ]; then
+        if [ -f .anchor_decay_start ]; then
+            ANCHOR_DECAY_START=$(cat .anchor_decay_start)
+        else
+            ANCHOR_DECAY_START=$EFF_ITER
+        fi
+        ANCHOR_FLAG="$ANCHOR_FLAG --anchor-decay-start $ANCHOR_DECAY_START"
+    fi
+
     SP_LOG=$(mktemp)
-    ./target/release/self_play --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG $ANCHOR_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
+    "$SELF_PLAY_BIN" --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $DECAY_LAST_ITER_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
     SP_STATUS=${PIPESTATUS[0]}
     rm -f "$SP_LOG"
     if [ "$SP_STATUS" -ne 0 ]; then
@@ -409,7 +467,120 @@ do
         done
     fi
 
-    # 4. Cleanup (Fresh Games Only)
+    # 5. Strength gauge (EXP 10/11): paired arena reading vs the ladder's
+    # active anchor. ladder.py owns ladder.json (anchors, readings, verdicts):
+    # >=80% freezes the model as the next anchor (n=64 link match); two
+    # consecutive 8-reading windows with no gain stop the run (plateau).
+    if [ "$LEAGUE_INTERVAL" -gt 0 ] && [ $((i % LEAGUE_INTERVAL)) -eq 0 ]; then
+        ACTIVE_JSON=$(.venv/bin/python3 ladder.py active)
+        ANCHOR_PATH=$(echo "$ACTIVE_JSON" | jq -r '.path')
+        ANCHOR_NAME=$(echo "$ACTIVE_JSON" | jq -r '.name')
+        GAUGE_LOG=$(mktemp)
+
+        # $1 = opponent model path ("" = greedy backend), $2 = seeds (games x2),
+        # $3 = per-turn stats dump dir (optional; summarized into the reading)
+        run_gauge_match () {
+            GAUGE_STATS_DIR="$3"
+            DUMP_FLAG=""
+            if [ -n "$GAUGE_STATS_DIR" ]; then
+                DUMP_FLAG="--dump-stats-dir $GAUGE_STATS_DIR"
+            fi
+            if [ -z "$1" ]; then
+                "$ARENA_BIN" --model1 model.safetensors --model2 model.safetensors \
+                    --backend1 gumbel --backend2 greedy \
+                    --mcts "$MCTS_ITERS" --gumbel-k "$GUMBEL_K" $DUMP_FLAG \
+                    --games "$2" --gamemode "$GAMEMODE" | tee "$GAUGE_LOG"
+            else
+                "$ARENA_BIN" --model1 model.safetensors --model2 "$1" \
+                    --backend1 gumbel --backend2 gumbel \
+                    --mcts "$MCTS_ITERS" --gumbel-k "$GUMBEL_K" $DUMP_FLAG \
+                    --games "$2" --gamemode "$GAMEMODE" | tee "$GAUGE_LOG"
+            fi
+            GAUGE_W=$(sed -n 's/^Config 1 Wins: \([0-9][0-9]*\).*/\1/p' "$GAUGE_LOG")
+            GAUGE_L=$(sed -n 's/^Config 2 Wins: \([0-9][0-9]*\).*/\1/p' "$GAUGE_LOG")
+            GAUGE_D=$(sed -n 's/^Draws: *\([0-9][0-9]*\).*/\1/p' "$GAUGE_LOG")
+            GAUGE_S1=$(sed -n 's/^Avg Score Config 1: \([0-9.][0-9.]*\).*/\1/p' "$GAUGE_LOG")
+            GAUGE_S2=$(sed -n 's/^Avg Score Config 2: \([0-9.][0-9.]*\).*/\1/p' "$GAUGE_LOG")
+            GAUGE_WP1=$(sed -n 's/^Config 1 Wins as P1: \([0-9][0-9]*\).*/\1/p' "$GAUGE_LOG")
+            GAUGE_WP2=$(sed -n 's/^Config 1 Wins as P2: \([0-9][0-9]*\).*/\1/p' "$GAUGE_LOG")
+            GAUGE_BACKEND=$(sed -n 's/.*| eval \([a-z]*\).*/\1/p' "$GAUGE_LOG" | head -1)
+        }
+
+        run_gauge_match "$ANCHOR_PATH" "${GAUGE_GAMES:-32}" "replays/gauge_stats/${RUN_ID}_iter${i}"
+        if [ -n "$GAUGE_W" ] && [ -n "$GAUGE_L" ]; then
+            VERDICT=$(.venv/bin/python3 ladder.py record --kind gauge \
+                --run-id "$RUN_ID" --iteration "$i" \
+                --wins "$GAUGE_W" --losses "$GAUGE_L" --draws "${GAUGE_D:-0}" \
+                --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}" \
+                --mcts "$MCTS_ITERS" --gumbel-k "$GUMBEL_K" --eval-backend "${GAUGE_BACKEND:-}" \
+                --wins-p1 "${GAUGE_WP1:-0}" --wins-p2 "${GAUGE_WP2:-0}" \
+                --stats-dir "$GAUGE_STATS_DIR")
+            echo "GAUGE: $VERDICT"
+            GAUGE_ACTION=$(echo "$VERDICT" | jq -r '.action')
+
+            # EXP_ELO_002: first >=50% reading vs the greedy anchor starts
+            # the anchor-frac decay clock (EFF_ITER units, matching
+            # --anchor-decay-start above).
+            if [ ! -f .anchor_decay_start ] && [ "$ANCHOR_NAME" = "greedy" ]; then
+                CROSSED=$(awk -v w="$GAUGE_W" -v l="$GAUGE_L" -v d="${GAUGE_D:-0}" \
+                    'BEGIN { n = w + l + d; if (n > 0 && (w + d / 2) / n >= 0.5) print 1; else print 0 }')
+                if [ "$CROSSED" = "1" ]; then
+                    echo "$EFF_ITER" > .anchor_decay_start
+                    echo "GAUGE: crossed 50% vs greedy at EFF_ITER $EFF_ITER — anchor-frac decay clock started (EXP_ELO_002)"
+                fi
+            fi
+
+            if [ "$GAUGE_ACTION" = "freeze" ]; then
+                TS=$(date +%Y%m%d_%H%M%S)
+                NEW_ANCHOR="checkpoints/anchor_iter${i}_${TS}.safetensors"
+                if cp model.safetensors "$NEW_ANCHOR"; then
+                    echo "GAUGE: >=80% vs active anchor — freezing $NEW_ANCHOR, link match (n=64)..."
+                    run_gauge_match "$ANCHOR_PATH" 64 "replays/gauge_stats/${RUN_ID}_iter${i}_link"
+                    if [ -n "$GAUGE_W" ] && [ -n "$GAUGE_L" ]; then
+                        .venv/bin/python3 ladder.py freeze --run-id "$RUN_ID" --iteration "$i" \
+                            --path "$NEW_ANCHOR" \
+                            --wins "${GAUGE_W:-0}" --losses "${GAUGE_L:-0}" --draws "${GAUGE_D:-0}" \
+                            --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}"
+                    else
+                        echo "GAUGE: link match failed to parse — skipping anchor freeze" >&2
+                    fi
+                else
+                    echo "GAUGE: failed to snapshot $NEW_ANCHOR — skipping anchor freeze" >&2
+                fi
+            elif [ "$GAUGE_ACTION" = "stop" ]; then
+                rm -f "$GAUGE_LOG"
+                echo "=================================================="
+                echo "PLATEAU STOP at iteration $i: two consecutive 8-reading"
+                echo "windows with no gain vs the active anchor (see ladder.json)."
+                echo "=================================================="
+                break
+            fi
+
+            # Audit block every 5th gauge: greedy + one retired anchor,
+            # rotating — observed vs chain-predicted win rate flags cycles.
+            if [ $((i % (LEAGUE_INTERVAL * 5))) -eq 0 ]; then
+                .venv/bin/python3 ladder.py audit-opponents | jq -c '.[]' | while read -r AUD; do
+                    AUD_NAME=$(echo "$AUD" | jq -r '.name')
+                    AUD_PATH=$(echo "$AUD" | jq -r '.path')
+                    run_gauge_match "$AUD_PATH" "${GAUGE_GAMES:-32}" "replays/gauge_stats/${RUN_ID}_iter${i}_audit_${AUD_NAME}"
+                    if [ -n "$GAUGE_W" ] && [ -n "$GAUGE_L" ]; then
+                        .venv/bin/python3 ladder.py record --kind audit --opponent "$AUD_NAME" \
+                            --run-id "$RUN_ID" --iteration "$i" \
+                            --wins "$GAUGE_W" --losses "$GAUGE_L" --draws "${GAUGE_D:-0}" \
+                            --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}" \
+                            --mcts "$MCTS_ITERS" --gumbel-k "$GUMBEL_K" --eval-backend "${GAUGE_BACKEND:-}" \
+                            --wins-p1 "${GAUGE_WP1:-0}" --wins-p2 "${GAUGE_WP2:-0}" \
+                            --stats-dir "$GAUGE_STATS_DIR"
+                    fi
+                done
+            fi
+        else
+            echo "GAUGE: arena reading failed to parse — skipping this reading" >&2
+        fi
+        rm -f "$GAUGE_LOG"
+    fi
+
+    # 6. Cleanup (Fresh Games Only)
     # Move played games to archive so train.py only sees new ones next time
     mkdir -p archive
     # Use || true to avoid script exit if no games were generated
