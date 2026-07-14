@@ -96,7 +96,11 @@ def cmd_audit_opponents(_args):
         opponents.append(_anchor_by_name(data, "greedy"))
     retired_nets = [a for a in data["anchors"][:-1] if a["name"] != "greedy"]
     if retired_nets:
-        n_audits = sum(1 for r in data["readings"] if r["kind"] == "audit")
+        retired_names = {a["name"] for a in retired_nets}
+        n_audits = sum(
+            1 for r in data["readings"]
+            if r["kind"] == "audit" and r["opponent"] in retired_names
+        )
         opponents.append(retired_nets[n_audits % len(retired_nets)])
     print(json.dumps(opponents))
 
