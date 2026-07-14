@@ -533,13 +533,20 @@ do
             if [ "$GAUGE_ACTION" = "freeze" ]; then
                 TS=$(date +%Y%m%d_%H%M%S)
                 NEW_ANCHOR="checkpoints/anchor_iter${i}_${TS}.safetensors"
-                cp model.safetensors "$NEW_ANCHOR"
-                echo "GAUGE: >=80% vs active anchor — freezing $NEW_ANCHOR, link match (n=64)..."
-                run_gauge_match "$ANCHOR_PATH" 64 "replays/gauge_stats/${RUN_ID}_iter${i}_link"
-                .venv/bin/python3 ladder.py freeze --run-id "$RUN_ID" --iteration "$i" \
-                    --path "$NEW_ANCHOR" \
-                    --wins "${GAUGE_W:-0}" --losses "${GAUGE_L:-0}" --draws "${GAUGE_D:-0}" \
-                    --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}"
+                if cp model.safetensors "$NEW_ANCHOR"; then
+                    echo "GAUGE: >=80% vs active anchor — freezing $NEW_ANCHOR, link match (n=64)..."
+                    run_gauge_match "$ANCHOR_PATH" 64 "replays/gauge_stats/${RUN_ID}_iter${i}_link"
+                    if [ -n "$GAUGE_W" ] && [ -n "$GAUGE_L" ]; then
+                        .venv/bin/python3 ladder.py freeze --run-id "$RUN_ID" --iteration "$i" \
+                            --path "$NEW_ANCHOR" \
+                            --wins "${GAUGE_W:-0}" --losses "${GAUGE_L:-0}" --draws "${GAUGE_D:-0}" \
+                            --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}"
+                    else
+                        echo "GAUGE: link match failed to parse — skipping anchor freeze" >&2
+                    fi
+                else
+                    echo "GAUGE: failed to snapshot $NEW_ANCHOR — skipping anchor freeze" >&2
+                fi
             elif [ "$GAUGE_ACTION" = "stop" ]; then
                 rm -f "$GAUGE_LOG"
                 echo "=================================================="
