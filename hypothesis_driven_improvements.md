@@ -4,7 +4,7 @@ The idea is that we should get more systematic about coming up with a hypothesis
 
 This will be the loop we will run continuously to ensure the Polybot continues to improve and get better, to eventually reach human-level capabilities.
 
-Our #1 objective is to figure out how to get into a smooth learning curve regiment. Once we figure that out and can see more training time leads systematically to better playing from the AI, then we can deploy training regiment on the Cloud and let it run over 5M self-play games to reach human-level performance. We only have one shot at a $1M training run and we cannot waste it.
+Our #1 objective is to figure out how to get into a smooth learning curve regiment. Once we figure that out and can see more training time leads systematically to better playing from the AI, then we can deploy training regimen on the Cloud and let it run over 5M self-play games to reach human-level performance. We only have one shot at a $1M training run and we cannot waste it.
 
 ## Protocol
 
@@ -191,10 +191,10 @@ The net now opens faster than its teacher (t2c 5.24 vs 6.2) yet loses to it 2:1,
 
 **Change (instrumentation only):** arena learns `--dump-stats-dir`: per-turn samples (score, SPT, city count, unit count, total unit cost, tech count — both sides) written as one JSON per game. Reading: the standard gauge setup — n=32 seeds sides-swapped (64 games), gumbel 64/k=16, `--gamemode 2`, metal eval — vs the Greedy backend, then plot the per-turn curves split by win/loss.
 
-### Expected Results
+### EXP_ELO_001 Expected Results
 A divergence window: Greedy's score curve breaks away from the net's between roughly turn 8 and turn 20, led by one identifiable sub-metric. Falsifiers: if the gap is uniform from turn 0, the opening work never mattered for strength; if it only appears at endgame, the bottleneck is closing, not economy. Either way the output is the new #1 bottleneck metric.
 
-### Actual Results
+### EXP_ELO_001 Actual Results
 n=32 seeds (64 games), model 37.5% — reading consistent with the ladder band. The score crossover lands in the predicted window (turn 8–9, gap peaking ~turn 16), but the causal chain starts earlier and has a clear shape:
 
 1. **Units first (turn 3–4):** Greedy trains units immediately (3.0 vs 1.8 by turn 4) and never stops — by turn 16 its army value is 30 vs 13 (in its wins: 41 vs 10, then it kills us by ~turn 20).
@@ -215,7 +215,7 @@ Vs-Greedy gauge readings (n=32 every `LEAGUE_INTERVAL` iters) resume climbing: m
 **Method amendment (Jul 11, pre-readout):** the first stint runs at a REDUCED budget (`-n 16 -k 4`, 20 iters, gauge every 5) — the new fast-experiment tier. Greedy uses no search, so a smaller budget weakens only the net's side: these readings sit at a lower level than the 64/k=16 ladder history and MUST NOT be compared to the 25–34% pre-change band or chained into the canonical Elo curve. Judge this stint within-budget only: the slope across its own readings plus the third-city-rate trend in the training log. A climb at 16 sims = mechanism confirmed (extend/rerun at full budget for the registered +8pp criterion); flat at 16 sims is *weak* evidence against — the search-improvement operator is also degraded at 16 sims — so a null here gets one re-test at 64 before REJECT.
 
 ### Actual Results
-Run `1783809008`, 82 iters total: 20 at 16/k=4 (readings 30/33/23/27% — flat, as covered by the method amendment), then 60 overnight at the registered 64/k=16. The six 64-sim readings vs Greedy: **31.2, 37.5, 23.4, 35.9, 40.6, 33.6%** (Elo −137 → best −66, ending −118).
+Run `1783809008`, 80 iters total: 20 at 16/k=4 (readings 30/33/23/27% — flat, as covered by the method amendment), then 60 overnight at the registered 64/k=16. The six 64-sim readings vs Greedy: **31.2, 37.5, 23.4, 35.9, 40.6, 33.6%** (Elo −137 → best −66, ending −118).
 
 Against the registered criteria: first-3 mean 30.7% vs the ~29.5% pre-change window = **+1pp — the +8pp success bar was NOT met**. The falsifier also did not fire (37.5% and 40.6% both broke the ±5pp flat band; plateau strikes 0). Within the run, first-3 → last-3 means rose 30.7% → 36.7% (+6pp, ~1.2σ — suggestive, not conclusive alone).
 
