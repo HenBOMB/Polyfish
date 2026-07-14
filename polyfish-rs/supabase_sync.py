@@ -39,9 +39,10 @@ def upload(file_path: str, bucket: str = "models"):
         # --- NEW: Also upload the latest checkpoint so we keep history ---
         if filename == "model.safetensors":
             import glob
-            checkpoints = sorted(glob.glob("checkpoints/model_checkpoint_iter*.safetensors"))
+            import os
+            checkpoints = glob.glob("checkpoints/model_checkpoint_iter*.safetensors")
             if checkpoints:
-                latest_cp = checkpoints[-1]
+                latest_cp = max(checkpoints, key=os.path.getmtime)
                 cp_name = os.path.basename(latest_cp)
                 print(f"⬆️ Backing up latest checkpoint: {cp_name} to Supabase...")
                 with open(latest_cp, 'rb') as f_cp:

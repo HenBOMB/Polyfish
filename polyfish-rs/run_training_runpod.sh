@@ -331,8 +331,10 @@ do
         cp model.safetensors "checkpoints/model_checkpoint_iter${i}_${TS}.safetensors"
     fi
 
-    # Supabase: Backup the new model weights
+    # Supabase: Backup the new model weights, training logs, and elo ratings
     .venv/bin/python3 supabase_sync.py upload model.safetensors
+    if [ -f training_log.csv ]; then .venv/bin/python3 supabase_sync.py upload training_log.csv; fi
+    if [ -f elo_ratings.json ]; then .venv/bin/python3 supabase_sync.py upload elo_ratings.json; fi
 
     # Smart pruning: last 50 + every MILESTONE_EVERY-th + iter 1
     ALL_FILES=$(ls -t checkpoints/model_checkpoint_iter*.safetensors 2>/dev/null || true)

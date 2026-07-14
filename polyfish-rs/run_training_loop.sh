@@ -545,6 +545,8 @@ do
     
     # Supabase: Backup the new model weights
     .venv/bin/python3 supabase_sync.py upload model.safetensors
+    if [ -f training_log.csv ]; then .venv/bin/python3 supabase_sync.py upload training_log.csv; fi
+    if [ -f elo_ratings.json ]; then .venv/bin/python3 supabase_sync.py upload elo_ratings.json; fi
     
     # Smart Pruning: Keep recent density and historical milestones
     # This keeps:

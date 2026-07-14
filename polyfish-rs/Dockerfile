@@ -10,7 +10,8 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 
 WORKDIR /app
 # We only need the rust source code to build the binaries for prod
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.docker.toml Cargo.toml
+COPY Cargo.lock ./
 COPY src ./src
 
 # Bypass nvidia-smi check during Docker build by hardcoding the Ampere compute capability (8.6)
