@@ -50,6 +50,7 @@ EVAL_SERVERS=0
 export RUST_BACKTRACE=1
 export PYTHONUNBUFFERED=1
 export POLYFISH_DEVICE=cuda
+export PATH="$HOME/.cargo/bin:/usr/local/cuda/bin:$PATH"
 
 LOG_FILE="session.log"
 exec > >(tee -a "$LOG_FILE") 2>&1
