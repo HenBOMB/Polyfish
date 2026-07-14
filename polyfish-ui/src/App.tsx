@@ -25,6 +25,7 @@ interface TrainStatus {
   isRunning: boolean;
   pid: number | null;
   log: string;
+  totalIterations?: number | null;
 }
 
 interface Milestone {
@@ -210,11 +211,25 @@ function App() {
   };
 
 
+  // Rows for the newest run only — /metrics spans multiple runs, so charts
+  // would otherwise mix the tail of the previous run into "Latest N".
+  const runMetrics = useMemo(() => {
+    if (metrics.length === 0) return metrics;
+    const lastRun = metrics[metrics.length - 1].run_id;
+    if (lastRun !== undefined) return metrics.filter(m => m.run_id === lastRun);
+    // Older backends omit run_id: treat the last iteration-number reset as the run start.
+    let start = 0;
+    for (let i = 1; i < metrics.length; i++) {
+      if (metrics[i].iteration <= metrics[i - 1].iteration) start = i;
+    }
+    return metrics.slice(start);
+  }, [metrics]);
+
   const currentIter = useMemo(() => {
     let iter = 0;
     if (trainStatus?.isRunning) {
-      if (metrics.length > 0) {
-        iter = metrics[metrics.length - 1].iteration;
+      if (runMetrics.length > 0) {
+        iter = runMetrics[runMetrics.length - 1].iteration;
       }
       const iterMatches = trainStatus.log.match(/Starting Iteration (\d+)/g);
       if (iterMatches && iterMatches.length > 0) {
@@ -226,7 +241,7 @@ function App() {
       }
     }
     return iter;
-  }, [metrics, trainStatus]);
+  }, [runMetrics, trainStatus]);
 
   useEffect(() => {
     const script = document.createElement('script');
@@ -267,13 +282,18 @@ function App() {
       }, 250);
     }
   };
-  const progressPercent = iterations > 0 ? Math.min(100, Math.max(0, (currentIter / iterations) * 100)) : 0;
+  // Planned run length from the live process's -i flag (via /train/status);
+  // config.json's `iterations` is only a fallback for older backends.
+  const plannedIters = trainStatus?.totalIterations ?? iterations;
+  const runStartIter = runMetrics.length > 0 ? runMetrics[0].iteration : 1;
+  const finalIter = runStartIter + plannedIters - 1;
+  const progressPercent = plannedIters > 0 ? Math.min(100, Math.max(0, ((currentIter - runStartIter + 1) / plannedIters) * 100)) : 0;
 
   // Calculate Speed
   let itersPerHour = 0;
   let gamesPerMinute = 0;
-  if (metrics.length > 1) {
-    const recentMetrics = metrics.slice(-10);
+  if (runMetrics.length > 1) {
+    const recentMetrics = runMetrics.slice(-10);
     const startMetric = recentMetrics[0];
     const endMetric = recentMetrics[recentMetrics.length - 1];
     const tStart = typeof startMetric.timestamp === 'string' ? Date.parse(startMetric.timestamp) / 1000 : startMetric.timestamp;
@@ -406,7 +426,7 @@ function App() {
         {trainStatus?.isRunning && (
           <div style={{ marginTop: '20px', marginBottom: '20px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '0.85rem', fontFamily: 'var(--font-mono)', color: 'var(--neon-cyan)' }}>
-              <span>TRAINING PROGRESS // ITERATION {currentIter} OF {iterations}</span>
+              <span>TRAINING PROGRESS // ITERATION {currentIter} OF {finalIter}</span>
               <div style={{ display: 'flex', gap: '16px' }}>
                 <span style={{ color: 'var(--text-muted)' }}>SPEED: {itersPerHour.toFixed(1)} ITERS/HR // {gamesPerMinute.toFixed(1)} GAMES/MIN</span>
                 <span>{progressPercent.toFixed(1)}%</span>
@@ -636,7 +656,7 @@ function App() {
             {/* Moves by type — combined overlay */}
             <MetricChart
               title="Moves by type"
-              data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
+              data={windowSize > 0 ? runMetrics.slice(-windowSize) : runMetrics}
               series={[
                 { key: 'avg_captures', label: 'captures', color: '#60a5fa' },
                 { key: 'avg_harvests', label: 'harvests', color: '#f87171' },
@@ -649,7 +669,7 @@ function App() {
             {/* Score metrics — Polyfish-specific */}
             <MetricChart
               title="Score (max vs avg)"
-              data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
+              data={windowSize > 0 ? runMetrics.slice(-windowSize) : runMetrics}
               series={[
                 { key: 'max_score', label: 'max score', color: '#c084fc' },
                 { key: 'avg_score', label: 'avg score', color: '#22d3ee' },
@@ -659,7 +679,7 @@ function App() {
             {/* Score by Player */}
             <MetricChart
               title="P1 vs P2 Avg Score"
-              data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
+              data={windowSize > 0 ? runMetrics.slice(-windowSize) : runMetrics}
               series={[
                 { key: 'p1_avg', label: 'P1 Score', color: '#3b82f6' },
                 { key: 'p2_avg', label: 'P2 Score', color: '#ef4444' },
@@ -669,7 +689,7 @@ function App() {
             {/* Network Loss Split */}
             <MetricChart
               title="Policy vs Value Loss"
-              data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
+              data={windowSize > 0 ? runMetrics.slice(-windowSize) : runMetrics}
               series={[
                 { key: 'loss', label: 'total', color: '#64748b' },
                 { key: 'policy_loss', label: 'policy', color: '#f97316' },
@@ -680,7 +700,7 @@ function App() {
             {/* Value R2 */}
             <MetricChart
               title="Value R-Squared"
-              data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
+              data={windowSize > 0 ? runMetrics.slice(-windowSize) : runMetrics}
               series={[{ key: 'value_r2', label: 'R2', color: '#10b981' }]}
             />
           </div>
@@ -690,7 +710,7 @@ function App() {
             {/* Early Game Efficiency */}
             <MetricChart
               title="Early Game Efficiency (T2C)"
-              data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
+              data={windowSize > 0 ? runMetrics.slice(-windowSize) : runMetrics}
               series={[
                 { key: 'villages_t2c_first', label: '1st Village', color: '#14b8a6' },
                 { key: 'ruins_t2c_p50', label: '50% Ruins', color: '#6366f1' },
@@ -700,14 +720,14 @@ function App() {
             {/* Avg moves (steps) / game */}
             <MetricChart
               title="Avg moves / game"
-              data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
+              data={windowSize > 0 ? runMetrics.slice(-windowSize) : runMetrics}
               series={[{ key: 'avg_steps', label: 'avg moves', color: '#c084fc' }]}
             />
 
             {/* Avg captures / game */}
             <MetricChart
               title="Avg captures / game"
-              data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
+              data={windowSize > 0 ? runMetrics.slice(-windowSize) : runMetrics}
               series={[
                 { key: 'avg_captures', label: 'total', color: '#f87171' },
                 { key: 'avg_cap_capitals', label: 'capitals', color: '#a855f7' },
@@ -723,7 +743,7 @@ function App() {
             {/* Economy Trajectory */}
             <MetricChart
               title="Economy Trajectory (SPT)"
-              data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
+              data={windowSize > 0 ? runMetrics.slice(-windowSize) : runMetrics}
               series={[
                 { key: 'avg_spt_t10', label: 'Turn 10', color: '#f59e0b' },
                 { key: 'avg_spt_t20', label: 'Turn 20', color: '#ec4899' },
@@ -734,14 +754,14 @@ function App() {
             {/* Avg harvests / game */}
             <MetricChart
               title="Avg harvests / game"
-              data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
+              data={windowSize > 0 ? runMetrics.slice(-windowSize) : runMetrics}
               series={[{ key: 'avg_harvests', label: 'avg harvests', color: '#4ade80' }]}
             />
 
             {/* Avg research / game */}
             <MetricChart
               title="Avg research / game"
-              data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
+              data={windowSize > 0 ? runMetrics.slice(-windowSize) : runMetrics}
               series={[{ key: 'avg_research', label: 'avg research', color: '#60a5fa' }]}
             />
           </div>
@@ -751,14 +771,14 @@ function App() {
             {/* Avg attacks / game */}
             <MetricChart
               title="Avg attacks / game"
-              data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
+              data={windowSize > 0 ? runMetrics.slice(-windowSize) : runMetrics}
               series={[{ key: 'avg_attacks', label: 'avg attacks', color: '#fb923c' }]}
             />
 
             {/* Abilities */}
             <MetricChart
               title="Avg abilities / game"
-              data={windowSize > 0 ? metrics.slice(-windowSize) : metrics}
+              data={windowSize > 0 ? runMetrics.slice(-windowSize) : runMetrics}
               series={[{ key: 'avg_ability', label: 'avg abilities', color: '#a78bfa' }]}
             />
           </div>

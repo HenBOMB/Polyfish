@@ -289,7 +289,9 @@ do
     OPPONENT_FLAG=""
     MATCH_TYPE="selfplay"
 
-    if [ "$LEAGUE_INTERVAL" -gt 0 ] && [ $((i % LEAGUE_INTERVAL)) -eq 0 ] && [ -d "checkpoints" ] && [ "$(ls -A checkpoints)" ]; then
+    # EXP_ELO_007: BOOTSTRAP=1 skips league matches — every training iteration
+    # is pure Greedy demonstration data; the net is only measured by the gauge.
+    if [ -z "${BOOTSTRAP:-}" ] && [ "$LEAGUE_INTERVAL" -gt 0 ] && [ $((i % LEAGUE_INTERVAL)) -eq 0 ] && [ -d "checkpoints" ] && [ "$(ls -A checkpoints)" ]; then
         # HISTORICAL-ONLY league selection: the latest checkpoint is ~the
         # current net, so playing it is mirror play with extra steps and
         # breaks no symmetry. Prefer genuinely old checkpoints; fall back to
@@ -319,8 +321,16 @@ do
     # it decays in-binary (see decay_crutch in self_play.rs) alongside
     # prior_heuristic_weight. ANCHOR_FRAC=0 disables.
     ANCHOR_FLAG=""
-    if [ "$MATCH_TYPE" = "selfplay" ]; then
+    if [ "$MATCH_TYPE" = "selfplay" ] && [ -z "${BOOTSTRAP:-}" ]; then
         ANCHOR_FLAG="--anchor-frac ${ANCHOR_FRAC:-0.25}"
+    fi
+
+    # EXP_ELO_007: bootstrap mode — every game is Greedy-vs-Greedy demonstration
+    # data (soft policy targets + TD labels recorded for BOTH seats); anchor
+    # games are redundant while cloning, so ANCHOR_FLAG stays empty above.
+    BACKEND_FLAG=""
+    if [ -n "${BOOTSTRAP:-}" ]; then
+        BACKEND_FLAG="--search-backend greedy"
     fi
 
     # EXP_ELO_006: label-only relative weight for TD labels; unset = binary
@@ -399,8 +409,13 @@ do
         ANCHOR_FLAG="$ANCHOR_FLAG --anchor-decay-start $ANCHOR_DECAY_START"
     fi
 
+    # One-line config echo so silent env misconfigurations (ITER_OFFSET,
+    # LABEL_REL_W, BOOTSTRAP) are visible in the log — EXP_ELO_006 post-mortem:
+    # two runs voided by a missing ITER_OFFSET that nothing surfaced.
+    echo "CONFIG iter=$i eff_iter=$EFF_ITER iter_offset=${ITER_OFFSET:-0} match=$MATCH_TYPE backend=${BACKEND_FLAG:---search-backend gumbel} anchor='${ANCHOR_FLAG}' td_w=${TD_W:-0.7} label_rel_w=${LABEL_REL_W:-default} value_trust=$VALUE_TRUST games=$NUM_GAMES mcts=$MCTS_ITERS k=$GUMBEL_K"
+
     SP_LOG=$(mktemp)
-    "$SELF_PLAY_BIN" --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $DECAY_LAST_ITER_FLAG --td-w "${TD_W:-0.7}" $LABEL_REL_W_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
+    "$SELF_PLAY_BIN" --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $BACKEND_FLAG $DECAY_LAST_ITER_FLAG --td-w "${TD_W:-0.7}" $LABEL_REL_W_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
     SP_STATUS=${PIPESTATUS[0]}
     rm -f "$SP_LOG"
     if [ "$SP_STATUS" -ne 0 ]; then
@@ -521,6 +536,11 @@ do
             GAUGE_BACKEND=$(sed -n 's/.*| eval \([a-z]*\).*/\1/p' "$GAUGE_LOG" | head -1)
         }
 
+        # Snapshot the exact model each reading measures — without this, peaks
+        # between run-start snapshots are unrecoverable (EXP_ELO_007 lost its
+        # 45.3% iter-25 clone to a 28% iter-30 overwrite).
+        cp model.safetensors "checkpoints/gauge_${RUN_ID}_iter${i}.safetensors"
+
         run_gauge_match "$ANCHOR_PATH" "${GAUGE_GAMES:-32}" "replays/gauge_stats/${RUN_ID}_iter${i}"
         if [ -n "$GAUGE_W" ] && [ -n "$GAUGE_L" ]; then
             VERDICT=$(.venv/bin/python3 ladder.py record --kind gauge \
@@ -535,8 +555,10 @@ do
 
             # EXP_ELO_002: first >=50% reading vs the greedy anchor starts
             # the anchor-frac decay clock (EFF_ITER units, matching
-            # --anchor-decay-start above).
-            if [ ! -f .anchor_decay_start ] && [ "$ANCHOR_NAME" = "greedy" ]; then
+            # --anchor-decay-start above). Not during BOOTSTRAP (EXP_ELO_007):
+            # crossing 50% while cloning doesn't graduate the RL model — the
+            # decay clock belongs to the released phase-2 run.
+            if [ -z "${BOOTSTRAP:-}" ] && [ ! -f .anchor_decay_start ] && [ "$ANCHOR_NAME" = "greedy" ]; then
                 CROSSED=$(awk -v w="$GAUGE_W" -v l="$GAUGE_L" -v d="${GAUGE_D:-0}" \
                     'BEGIN { n = w + l + d; if (n > 0 && (w + d / 2) / n >= 0.5) print 1; else print 0 }')
                 if [ "$CROSSED" = "1" ]; then

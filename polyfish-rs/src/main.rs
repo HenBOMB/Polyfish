@@ -692,6 +692,37 @@ async fn trigger_training(State(state): State<Arc<AppState>>) -> Json<Value> {
     }
 }
 
+/// Last `max_lines` lines of a log, reading at most 64 KiB from the end.
+fn tail_log(path: &str, max_lines: usize) -> Option<(String, std::time::SystemTime)> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let meta = f.metadata().ok()?;
+    let start = meta.len().saturating_sub(64 * 1024);
+    f.seek(SeekFrom::Start(start)).ok()?;
+    let mut bytes = Vec::new();
+    f.read_to_end(&mut bytes).ok()?;
+    let text = String::from_utf8_lossy(&bytes);
+    let lines: Vec<&str> = text.lines().collect();
+    let skip = lines.len().saturating_sub(max_lines);
+    Some((lines[skip..].join("\n"), meta.modified().ok()?))
+}
+
+/// Extract N from a `-i N` (or `-iN`) flag in a command line.
+fn parse_iterations_flag(cmd: &str) -> Option<u32> {
+    let mut toks = cmd.split_whitespace();
+    while let Some(tok) = toks.next() {
+        if tok == "-i" {
+            return toks.next()?.parse().ok();
+        }
+        if let Some(rest) = tok.strip_prefix("-i") {
+            if let Ok(n) = rest.parse() {
+                return Some(n);
+            }
+        }
+    }
+    None
+}
+
 async fn get_training_status(State(state): State<Arc<AppState>>) -> Json<Value> {
     use std::fs;
     use std::process::Command;
@@ -727,19 +758,37 @@ async fn get_training_status(State(state): State<Arc<AppState>>) -> Json<Value> 
         }
     }
 
-    // Read last 15 lines of log for more detail
-    let log_content = fs::read_to_string("training.poly.log").unwrap_or_default();
-    let lines: Vec<&str> = log_content.lines().collect();
-    let last_lines = if lines.len() > 15 {
-        lines[lines.len() - 15..].join("\n")
-    } else {
-        lines.join("\n")
-    };
+    // The loop always tees to session.log; training.poly.log only exists for
+    // UI-launched runs. Show whichever was written to most recently.
+    let last_lines = ["session.log", "training.poly.log"]
+        .iter()
+        .filter_map(|p| tail_log(p, 100))
+        .max_by_key(|(_, mtime)| *mtime)
+        .map(|(text, _)| text)
+        .unwrap_or_default();
+
+    // Planned iteration count comes from the live loop's own `-i` flag
+    // (run_training_loop.sh defaults to 500 when the flag is absent).
+    let mut total_iterations: Option<u32> = None;
+    if is_running {
+        if let Some(pid) = pid_opt {
+            if let Ok(out) = Command::new("ps")
+                .args(["-p", &pid.to_string(), "-o", "command="])
+                .output()
+            {
+                if out.status.success() {
+                    let cmd = String::from_utf8_lossy(&out.stdout);
+                    total_iterations = Some(parse_iterations_flag(&cmd).unwrap_or(500));
+                }
+            }
+        }
+    }
 
     Json(serde_json::json!({
         "isRunning": is_running,
         "pid": pid_opt,
-        "log": last_lines
+        "log": last_lines,
+        "totalIterations": total_iterations
     }))
 }
 
@@ -801,6 +850,7 @@ async fn get_metrics() -> Json<Value> {
             };
 
             let obj = serde_json::json!({
+                "run_id": get_idx("run_id").and_then(|i| parts.get(i)).copied().unwrap_or(""),
                 "iteration": get_idx("iteration").and_then(|i| parts.get(i)).and_then(|s| s.parse::<u32>().ok()).unwrap_or(0),
                 "timestamp": get_idx("iter_started_at").and_then(|i| parts.get(i)).unwrap_or(&""),
                 "avg_score": parse_f32("avg_score"),
@@ -812,6 +862,10 @@ async fn get_metrics() -> Json<Value> {
                 "value_loss": parse_f32("value_loss"),
                 "value_r2": parse_f32("value_r2"),
                 "avg_captures": parse_f32("avg_captures"),
+                "avg_cap_ruins": parse_f32("avg_cap_ruins"),
+                "avg_cap_villages": parse_f32("avg_cap_villages"),
+                "avg_cap_cities": parse_f32("avg_cap_cities"),
+                "avg_cap_capitals": parse_f32("avg_cap_capitals"),
                 "avg_harvests": parse_f32("avg_harvests"),
                 "avg_builds": parse_f32("avg_builds"),
                 "avg_research": parse_f32("avg_research"),
