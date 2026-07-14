@@ -162,9 +162,8 @@ pub struct PolyZeroNet {
     pi_target: Conv2d, // Spatial target
     pi_option: Linear, // Unified 192 options head
 
-    v_pool_conv: Conv2d,
-    v_pool_bn: BatchNorm,
-    v_fc_shared: Linear,
+    v_fc1: Linear,
+    v_fc2: Linear,
     v_win: Linear,
     v_progress: Linear,
     // Aux ownership head (train.py's v_ownership): per-tile end-of-game
@@ -220,14 +219,10 @@ impl PolyZeroNet {
         let pi_target = conv(filters, 1, 1, 1, 0, vs.pp("pi_target"))?;
         let pi_option = candle_nn::linear(filters, num_options, vs.pp("pi_option"))?;
 
-        // Value processing
-        let v_pool_conv = conv(filters, 1, 1, 1, 0, vs.pp("v_pool_conv"))?;
-        let v_pool_bn = batch_norm(1, vs.pp("v_pool_bn"))?;
-        let v_fc_shared = candle_nn::linear(
-            1 * crate::ai::features::MAP_SIZE * crate::ai::features::MAP_SIZE,
-            filters,
-            vs.pp("v_fc_shared"),
-        )?;
+        // Value processing (EXP_ARCH_001): global mean+max pool over the full
+        // trunk -> MLP, instead of collapsing to a single channel.
+        let v_fc1 = candle_nn::linear(2 * filters, filters, vs.pp("v_fc1"))?;
+        let v_fc2 = candle_nn::linear(filters, filters, vs.pp("v_fc2"))?;
         let v_win = candle_nn::linear(filters, 1, vs.pp("v_win"))?;
         let v_progress = candle_nn::linear(filters, 1, vs.pp("v_progress"))?;
         // NB: a VarMap-backed builder (bin/train.rs) reports false here, so
@@ -254,9 +249,8 @@ impl PolyZeroNet {
             pi_source,
             pi_target,
             pi_option,
-            v_pool_conv,
-            v_pool_bn,
-            v_fc_shared,
+            v_fc1,
+            v_fc2,
             v_win,
             v_progress,
             v_ownership,
@@ -320,12 +314,14 @@ impl PolyZeroNet {
             move_option: pi_option,
         };
 
-        // 5. Value Heads
-        let v_pooled = self.v_pool_conv.forward(&shared)?;
-        let v_pooled = self.v_pool_bn.forward_t(&v_pooled, train)?;
-        let v_pooled = v_pooled.relu()?;
-        let v_pooled = v_pooled.flatten_from(1)?;
-        let v_latent = self.v_fc_shared.forward(&v_pooled)?.relu()?;
+        // 5. Value Heads (EXP_ARCH_001): pool the full trunk (mean+max over
+        // H*W) -> MLP, giving the value estimate a real feature basis.
+        let v_spatial = shared.flatten_from(2)?; // [B, filters, H*W]
+        let v_mean = v_spatial.mean(2)?; // [B, filters]
+        let v_max = v_spatial.max(2)?; // [B, filters]
+        let v_feat = Tensor::cat(&[&v_mean, &v_max], 1)?; // [B, 2*filters]
+        let v_latent = self.v_fc1.forward(&v_feat)?.relu()?;
+        let v_latent = self.v_fc2.forward(&v_latent)?.relu()?;
         let v_win = self.v_win.forward(&v_latent)?;
         let v_progress = self.v_progress.forward(&v_latent)?;
         let v_ownership = match &self.v_ownership {

@@ -80,6 +80,8 @@ impl Move for GrowForestMove {
     }
 
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+        crate::actions::require_stars(state, 5, "grow forest")?;
+
         let mut undos = Vec::new();
         // Spiritualism: Field -> Forest (Cost 5)
         undos.push(modify_terrain(
@@ -136,13 +138,13 @@ impl Move for BurnForestMove {
     }
 
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+        let cost = crate::version_sync::get_burn_forest_cost(state);
+        crate::actions::require_stars(state, cost, "burn forest")?;
+
         let mut undos = Vec::new();
         // Construction: Forest -> Field + Add Crop (Cost 3)
         undos.push(modify_terrain(state, self.target_index, TerrainType::Field));
-        undos.push(spend_stars(
-            state,
-            crate::version_sync::get_burn_forest_cost(state),
-        ));
+        undos.push(spend_stars(state, cost));
         undos.push(consume_resource(
             state,
             self.target_index,

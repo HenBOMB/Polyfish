@@ -147,9 +147,12 @@ class PolyZeroNet(nn.Module):
         self.pi_target = nn.Conv2d(self.filters, 1, 1)
         
         # --- Value Heads ---
-        self.v_pool_conv = nn.Conv2d(self.filters, 1, 1)
-        self.v_pool_bn = nn.BatchNorm2d(1)
-        self.v_fc_shared = nn.Linear(1 * map_height * map_width, self.filters)
+        # Heavy value head (EXP_ARCH_001): global mean+max pool over the FULL
+        # 64-channel trunk -> 2-layer MLP. The old head collapsed the trunk to
+        # ONE channel and ran a single linear layer — a near-linear probe that
+        # cannot represent "am I winning" for a strategic game. This can.
+        self.v_fc1 = nn.Linear(2 * self.filters, self.filters)
+        self.v_fc2 = nn.Linear(self.filters, self.filters)
         self.v_win = nn.Linear(self.filters, 1)
         self.v_progress = nn.Linear(self.filters, 1)
         # Aux spatial head: predicted end-of-game per-tile ownership
@@ -188,9 +191,10 @@ class PolyZeroNet(nn.Module):
         
         # --- Value Heads ---
         v_input = x.detach() if DETACH_VALUE_TRUNK else x
-        v_pooled = self.relu(self.v_pool_bn(self.v_pool_conv(v_input)))
-        v_pooled = v_pooled.flatten(1)
-        v_latent = self.relu(self.v_fc_shared(v_pooled))
+        v_mean = v_input.mean(dim=(2, 3))          # [B, filters]
+        v_max = v_input.amax(dim=(2, 3))           # [B, filters]
+        v_feat = torch.cat([v_mean, v_max], dim=1)  # [B, 2*filters]
+        v_latent = self.relu(self.v_fc2(self.relu(self.v_fc1(v_feat))))
         
         values = {}
         values['win'] = self.v_win(v_latent)

@@ -49,6 +49,7 @@ EVAL_BACKEND_FLAG=""
 EVAL_SERVERS=0
 export RUST_BACKTRACE=1
 export PYTHONUNBUFFERED=1
+export POLYFISH_DEVICE=cuda
 
 LOG_FILE="session.log"
 exec > >(tee -a "$LOG_FILE") 2>&1
@@ -184,6 +185,7 @@ portable_shuf() {
 
 # 0. Initialize & Auto-Restore Model
 echo "Initializing/Checking model..."
+.venv/bin/python3 supabase_sync.py download model.safetensors
 if [ "$START_ITER" -gt 1 ] && [ ! -f "model.safetensors" ]; then
     LATEST_CP=$(ls checkpoints/model_checkpoint_iter*.safetensors 2>/dev/null | sort -V | tail -n 1 || true)
     if [ -n "$LATEST_CP" ]; then
@@ -327,6 +329,9 @@ do
         echo "Creating checkpoint for iteration $i (Timestamp: $TS)..."
         cp model.safetensors "checkpoints/model_checkpoint_iter${i}_${TS}.safetensors"
     fi
+
+    # Supabase: Backup the new model weights
+    .venv/bin/python3 supabase_sync.py upload model.safetensors
 
     # Smart pruning: last 50 + every MILESTONE_EVERY-th + iter 1
     ALL_FILES=$(ls -t checkpoints/model_checkpoint_iter*.safetensors 2>/dev/null || true)

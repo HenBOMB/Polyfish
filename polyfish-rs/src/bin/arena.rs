@@ -108,6 +108,14 @@ fn load_model(path: &str, device: &Device) -> anyhow::Result<PolyZeroNet> {
     Ok(PolyZeroNet::new(vs)?)
 }
 
+/// Extract a printable message from a caught panic payload.
+fn panic_msg(e: &(dyn std::any::Any + Send)) -> &str {
+    e.downcast_ref::<&str>()
+        .copied()
+        .or_else(|| e.downcast_ref::<String>().map(|s| s.as_str()))
+        .unwrap_or("unknown panic")
+}
+
 /// Per-match result, attributed to configurations (1 or 2), not seats.
 struct MatchResult {
     winner_config: u8,
@@ -196,6 +204,26 @@ fn play_match(
             moves_config2 += 1;
         }
 
+        if std::env::var("ARENA_TRACE").is_ok() {
+            let vitals = |pid: i32| {
+                game.state
+                    .tribes
+                    .get(&pid)
+                    .map(|t| format!("k{}r{}c{}", t.killed_turn, t.resigned_turn, t.cities.len()))
+                    .unwrap_or_else(|| "gone".to_string())
+            };
+            eprintln!(
+                "TRACE turn={} pid={} p1[{}] p2[{}] move={}",
+                game.state.settings.turn,
+                current_pid,
+                vitals(1),
+                vitals(2),
+                best_move
+                    .as_ref()
+                    .map(|m| m.describe(&game.state))
+                    .unwrap_or_else(|| "<none>".to_string())
+            );
+        }
         if let Some(m) = best_move {
             game.play_move(m.as_ref());
         } else {
@@ -265,10 +293,11 @@ fn backend_from_arg(arg: SearchBackendArg, k: usize) -> SearchBackend {
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    // Select best available device: Metal (macOS) > CUDA (NVIDIA) > CPU
-    let device = Device::metal_if_available(0)
-        .or_else(|_| Device::cuda_if_available(0))
-        .unwrap_or(Device::Cpu);
+    // Select best available device: CUDA (NVIDIA) > Metal (macOS) > CPU
+    let device = match Device::cuda_if_available(0) {
+        Ok(Device::Cpu) | Err(_) => Device::metal_if_available(0).unwrap_or(Device::Cpu),
+        Ok(d) => d,
+    };
 
     println!("Loading models...");
     println!("Config 1: {} (GPU: {:?})", args.model1, !matches!(device, Device::Cpu));
@@ -365,12 +394,11 @@ fn main() -> anyhow::Result<()> {
             }
             let seed = (base_seed + idx as u64) as i64;
 
-            // A transient macOS Metal GPU driver reset (command buffer
-            // "discarded, victim of GPU error/recovery") can panic mid-match
-            // under sustained multi-device load. Catch it per-job so one
-            // flaky GPU moment doesn't kill this worker thread and cascade
-            // into rayon::broadcast propagating the panic and discarding
-            // every already-completed result on the whole run.
+            // Catch per-job panics (transient Metal GPU resets, engine bugs)
+            // so one crash doesn't kill the worker thread and cascade into
+            // rayon discarding every completed result. The real panic message
+            // is printed below — engine bugs must stay visible, not be
+            // mislabeled as GPU flakiness.
             let r1 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 play_match(
                     &eval1, &eval2, mcts1, mcts2, backend1, backend2, seed, false,
@@ -386,14 +414,35 @@ fn main() -> anyhow::Result<()> {
 
             match (r1, r2) {
                 (Ok(r1), Ok(r2)) => {
+                    for r in [&r1, &r2] {
+                        let winner = match r.winner_config {
+                            1 => "config1",
+                            2 => "config2",
+                            _ => "draw",
+                        };
+                        println!(
+                            "  game seed={} swap={}: {} ({}) scores {}-{}",
+                            r.seed,
+                            r.swap,
+                            winner,
+                            if r.decisive { "elimination" } else { "score at cap" },
+                            r.score_config1,
+                            r.score_config2
+                        );
+                    }
                     results_mutex.lock().unwrap().extend([r1, r2]);
                 }
-                _ => {
+                (r1, r2) => {
                     skipped.fetch_add(1, Ordering::Relaxed);
-                    eprintln!(
-                        "  ⚠ seed {} skipped after a transient GPU/backend error",
-                        seed
-                    );
+                    for r in [&r1, &r2] {
+                        if let Err(e) = r {
+                            eprintln!(
+                                "  ⚠ seed {} pair dropped — game panicked: {}",
+                                seed,
+                                panic_msg(e.as_ref())
+                            );
+                        }
+                    }
                 }
             }
 
@@ -524,7 +573,7 @@ fn main() -> anyhow::Result<()> {
         total_games,
         args.games,
         if skipped_count > 0 {
-            format!(", {} seed(s) skipped after transient errors", skipped_count)
+            format!(", {} seed(s) dropped after in-game panics", skipped_count)
         } else {
             String::new()
         }

@@ -270,6 +270,8 @@ impl Move for EstablishEmbassyMove {
     }
 
     fn execute(&self, state: &mut GameState) -> Result<MoveResult, String> {
+        crate::actions::require_stars(state, 5, "embassy")?;
+
         let pov_id = state.settings.current_player_turn_id;
         let opp_id = self.opponent_id;
         let mut undos = Vec::new();

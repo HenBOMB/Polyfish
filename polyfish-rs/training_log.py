@@ -58,6 +58,13 @@ HEADER = [
     "ruins_t2c_p80",
     "ruins_t2c_all",
     "avg_moves",
+    "max_turns",
+    "policy_kl",
+    "decisive_frac",
+    "vlab_wl_share",
+    "vlab_td_absmean",
+    "vlab_wl_absmean",
+    "vlab_spt_absmean",
     "match_type",
 ]
 
@@ -525,6 +532,13 @@ def append_row(
         "ruins_t2c_p80": game_metrics.get("ruins_t2c_p80", ""),
         "ruins_t2c_all": game_metrics.get("ruins_t2c_all", ""),
         "avg_moves": game_metrics.get("avg_moves", ""),
+        "max_turns": game_metrics.get("max_turns", ""),
+        "policy_kl": game_metrics.get("policy_kl", ""),
+        "decisive_frac": game_metrics.get("decisive_frac", ""),
+        "vlab_wl_share": game_metrics.get("vlab_wl_share", ""),
+        "vlab_td_absmean": game_metrics.get("vlab_td_absmean", ""),
+        "vlab_wl_absmean": game_metrics.get("vlab_wl_absmean", ""),
+        "vlab_spt_absmean": game_metrics.get("vlab_spt_absmean", ""),
         "match_type": normalize_match_type(match_type),
     }
 

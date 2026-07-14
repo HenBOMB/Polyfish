@@ -38,10 +38,13 @@ else PY=python3
 fi
 
 # Anchors: name / backend / mcts. Names must match arena's player_name().
-ANCHORS=("random:random:1" "greedy:greedy:1" "heuristic64:heuristic:64" "heuristic256:heuristic:256")
+# heuristic1024 exists because the ladder previously topped out near greedy:
+# every checkpoint swept the bots and the fit compressed them all to ~970
+# regardless of true strength. A stronger top rung keeps ratings discriminative.
+ANCHORS=("random:random:1" "greedy:greedy:1" "heuristic64:heuristic:64" "heuristic256:heuristic:256" "heuristic1024:heuristic:1024")
 # Rough ladder positions used only for nearest-anchor selection before a fit
 # exists for the anchor itself; real ratings take over once fitted.
-ANCHOR_GUESS=("random:0" "greedy:250" "heuristic64:500" "heuristic256:650")
+ANCHOR_GUESS=("random:0" "greedy:250" "heuristic64:500" "heuristic256:650" "heuristic1024:900")
 
 cargo build --release --bin arena
 
@@ -103,6 +106,11 @@ if ! is_rated "greedy"; then
     play "$DUMMY_MODEL" "greedy" "greedy" 1 "$DUMMY_MODEL" "random" "random" 1
     play "$DUMMY_MODEL" "heuristic64" "heuristic" 64 "$DUMMY_MODEL" "greedy" "greedy" 1
     play "$DUMMY_MODEL" "heuristic64" "heuristic" 64 "$DUMMY_MODEL" "random" "random" 1
+fi
+# Link the top rung into the graph (idempotent across old ledgers).
+if ! is_rated "heuristic1024"; then
+    play "$DUMMY_MODEL" "heuristic1024" "heuristic" 1024 "$DUMMY_MODEL" "heuristic256" "heuristic" 256
+    play "$DUMMY_MODEL" "heuristic1024" "heuristic" 1024 "$DUMMY_MODEL" "heuristic64" "heuristic" 64
 fi
 
 PREV_MODEL=""

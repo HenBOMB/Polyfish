@@ -164,6 +164,15 @@ impl<'a> SearchAgent<'a> {
             a.clear_last_root_value();
         }
     }
+
+    /// KL(visits ‖ prior) of the most recent search (Gumbel only) — see
+    /// `GumbelMctsAgent::last_search_kl`.
+    fn last_search_kl(&self) -> Option<f32> {
+        match self {
+            SearchAgent::Gumbel(a) => a.last_search_kl(),
+            _ => None,
+        }
+    }
 }
 
 /// Construct the concrete search agent for a backend, borrowing `evaluator`.
@@ -361,6 +370,13 @@ impl<'a> Brain<'a> {
     /// agent has searched yet.
     pub fn last_root_value(&self) -> Option<f32> {
         self.agent.as_ref().and_then(SearchAgent::last_root_value)
+    }
+
+    /// The most recent search's KL(visit dist ‖ prior) — the "is search
+    /// adding information beyond the policy" health metric. `None` for
+    /// non-Gumbel backends or when no real search ran.
+    pub fn last_search_kl(&self) -> Option<f32> {
+        self.agent.as_ref().and_then(SearchAgent::last_search_kl)
     }
 
     pub fn think_with_stats(&mut self, game: &Game) -> (Option<Box<dyn Move>>, Vec<f32>) {

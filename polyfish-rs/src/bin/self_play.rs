@@ -1,3 +1,7 @@
+// Raised from the default 128: the large METRICS `json!` object expands
+// recursively per field and EXP_ARCH_001 added value-composition fields.
+#![recursion_limit = "256"]
+
 use candle_core::{Device, Tensor};
 use polyfish::TribeType;
 use polyfish::ai::brain::{Brain, SearchBackend, SearchBackendArg};
@@ -188,6 +192,19 @@ fn write_decision_trace(
     }
 }
 
+/// Curriculum — Tiny maps only, turn cap grows with (effective) iteration.
+fn curriculum(iteration: usize) -> (MapSize, i32) {
+    if iteration <= 10 {
+        (MapSize::Tiny, 10)
+    } else if iteration <= 20 {
+        (MapSize::Tiny, 15)
+    } else if iteration <= 30 {
+        (MapSize::Tiny, 20)
+    } else {
+        (MapSize::Tiny, 30)
+    }
+}
+
 /// Up to 5 evenly spaced turn thresholds for periodic in-game progress.
 fn turn_milestones(max_turns: i32) -> Vec<i32> {
     const MAX_REPORTS: usize = 5;
@@ -366,6 +383,10 @@ struct GameResult {
     /// neutral) — the aux ownership-head target, re-signed per sample POV.
     final_tile_owners: Vec<i32>,
     moves: usize,
+    /// Mean KL(search visits ‖ policy prior) across this game's searched
+    /// decisions — the per-game "search adds information" health metric.
+    /// `None` when no decision ran a real search.
+    policy_kl: Option<f32>,
     winner_score: i32,
     /// Winning player id (sole survivor, else score adjudication at the cap).
     winner_id: i32,
@@ -510,16 +531,7 @@ fn play_single_game(
     trace_max: usize,
     trace_counter: &AtomicUsize,
 ) -> Option<GameResult> {
-    // Curriculum logic — Tiny maps only, gradually increase turn count.
-    let (map_size, max_turns) = if iteration <= 10 {
-        (MapSize::Tiny, 10)
-    } else if iteration <= 20 {
-        (MapSize::Tiny, 15)
-    } else if iteration <= 30 {
-        (MapSize::Tiny, 20)
-    } else {
-        (MapSize::Tiny, 30)
-    };
+    let (map_size, max_turns) = curriculum(iteration);
 
     // Init Game using MapGen
     let gen_settings = polyfish::mapgen::MapGenSettings {
@@ -628,6 +640,8 @@ fn play_single_game(
 
     let mut move_count = 0;
     let mut traced_in_this_game = false;
+    let mut kl_sum = 0.0f32;
+    let mut kl_n = 0u32;
     while !polyfish::functions::is_game_over(&game.state) {
         record_spt_at_turn_start(&game.state, &mut spt_at_turn, &mut next_spt_milestone);
 
@@ -668,6 +682,10 @@ fn play_single_game(
         // this is that state's own root value — the TD bootstrap target for
         // whichever earlier step's label lands here as its "next decision".
         let root_value = current_agent.last_root_value();
+        if let Some(kl) = current_agent.last_search_kl() {
+            kl_sum += kl;
+            kl_n += 1;
+        }
 
         if let Some((trigger_unit_idx, trigger_village_idx)) = trigger_info {
             if let Some(trace) = current_agent.take_trace() {
@@ -937,6 +955,7 @@ fn play_single_game(
         winner_score,
         winner_id,
         decisive: is_decisive,
+        policy_kl: (kl_n > 0).then(|| kl_sum / kl_n as f32),
         anchor_seat: match (
             backend1 == SearchBackend::Greedy,
             backend2 == SearchBackend::Greedy,
@@ -1248,14 +1267,15 @@ fn main() -> anyhow::Result<()> {
         SearchBackendArg::Random => SearchBackend::Random,
     };
 
-    // Select device: Metal (macOS) > CUDA (NVIDIA) > CPU, unless overridden via POLYFISH_DEVICE
+    // Select device: CUDA (NVIDIA) > Metal (macOS) > CPU, unless overridden via POLYFISH_DEVICE
     let device = match std::env::var("POLYFISH_DEVICE").as_deref() {
         Ok("cpu") => Device::Cpu,
         Ok("metal") => Device::metal_if_available(0)?,
         Ok("cuda") => Device::cuda_if_available(0)?,
-        _ => Device::metal_if_available(0)
-            .or_else(|_| Device::cuda_if_available(0))
-            .unwrap_or(Device::Cpu),
+        _ => match Device::cuda_if_available(0) {
+            Ok(Device::Cpu) | Err(_) => Device::metal_if_available(0).unwrap_or(Device::Cpu),
+            Ok(d) => d,
+        },
     };
     // Load models (P1, and P2 defaulting to P1 when no opponent is given)
     let (network1, network2) = load_networks(&device, args.opponent.as_deref())?;
@@ -1830,6 +1850,8 @@ fn main() -> anyhow::Result<()> {
     let mut collected_ownership: Vec<Vec<f32>> = Vec::new();
 
     let mut total_score = 0;
+    let mut kl_game_sum = 0.0f64;
+    let mut kl_game_n = 0u32;
     let mut max_score = 0;
     let mut best_recap: Option<ModReplay> = None;
     let mut total_moves = 0;
@@ -1861,6 +1883,15 @@ fn main() -> anyhow::Result<()> {
     let mut anchor_games_n = 0usize;
     let mut anchor_model_wins = 0.0f32;
 
+    // EXP_ARCH_001 drowning meter: absolute contribution of each value-label
+    // term, summed over every step, so the logs show how much of the signal is
+    // genuine win/loss vs dense score-shaping.
+    let mut vlab_td_abs = 0.0f64;
+    let mut vlab_wl_abs = 0.0f64; // tail on decisive games = true win/loss
+    let mut vlab_scoretail_abs = 0.0f64; // tail on timeouts = score tiebreak
+    let mut vlab_spt_abs = 0.0f64;
+    let mut vlab_steps = 0u64;
+
     for result in results {
         if result.decisive {
             decisive_games += 1;
@@ -1873,6 +1904,10 @@ fn main() -> anyhow::Result<()> {
         }
         total_score += result.winner_score;
         total_moves += result.moves;
+        if let Some(kl) = result.policy_kl {
+            kl_game_sum += kl as f64;
+            kl_game_n += 1;
+        }
         total_revealed_tiles += result.revealed_tiles as i64;
         total_captured_tiles += result.captured_tiles as i64;
         for (&turn, &spt) in &result.spt_at_turn {
@@ -1952,21 +1987,18 @@ fn main() -> anyhow::Result<()> {
         let td_deltas = td_lambda_labels(&label_steps, final_scores, LAMBDA_RETURN);
         let spt_shaping = spt_shaping_deltas(&label_steps);
 
-        // Determine the winner_id for this game
-        let game_winner_id = {
-            // Check who survived (alive = not killed)
-            // We stored scores; for decisive win, one player's score is dominant
-            // Use the result.winner_score to identify winner
-            let mut best_id = 0;
-            let mut best_s = i32::MIN;
-            for (&id, &s) in &result.scores {
-                if s > best_s {
-                    best_s = s;
-                    best_id = id;
-                }
-            }
-            best_id
-        };
+        // EXP_ARCH_001: reward WINNING, not score-hoarding. Winner = sole
+        // survivor (elimination) or, on timeout, the score leader — already
+        // adjudicated at game end. `decisive` marks a real elimination; on a
+        // timeout we fall back to the score tail below.
+        let game_winner_id = result.winner_id;
+        let game_decisive = result.decisive;
+        // Env-tunable so the win/loss tail vs dense score-shaping mix can be
+        // swept without a recompile (default = const TD_W).
+        let td_w: f32 = std::env::var("TD_W")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(TD_W);
 
         for (step_idx, step) in result.history.into_iter().enumerate() {
             let HistoryStep {
@@ -2028,21 +2060,44 @@ fn main() -> anyhow::Result<()> {
 
             // Absolute value: final score vs fixed yardstick, not current scoreboard.
             let abs_outcome = (my_final / GOOD_BOT_FINAL_SCORE).clamp(0.0, 1.0) * 2.0 - 1.0;
-            let final_outcome = (FINAL_OUTCOME_REL_W * relative_outcome
+            let score_outcome = (FINAL_OUTCOME_REL_W * relative_outcome
                 + (1.0 - FINAL_OUTCOME_REL_W) * abs_outcome)
                 .clamp(-1.0, 1.0);
 
+            // The long-horizon tail (EXP_ARCH_001): on a decisive game it is
+            // pure win(+1)/loss(-1), so conquest — not score-hoarding — is what
+            // gets rewarded. On a timeout there is no winner to point at, so it
+            // degrades gracefully to the score differential.
+            let final_outcome = if game_decisive {
+                if p_id == game_winner_id { 1.0 } else { -1.0 }
+            } else {
+                score_outcome
+            };
+
             let value = if args.reward_shaping {
-                // TD delta carries per-action credit; the final-outcome tail
-                // carries the long-horizon signal; the SPT potential delta
-                // adds dense economy credit (see SPT_SHAPE_W).
-                (TD_W * td_deltas[step_idx]
-                    + (1.0 - TD_W) * final_outcome
+                // TD delta carries dense per-action credit; the final-outcome
+                // tail now carries the WIN/LOSS signal; the SPT potential delta
+                // adds dense economy credit (see SPT_SHAPE_W). Lower TD_W (env)
+                // to let the win/loss tail dominate the dense score shaping.
+                (td_w * td_deltas[step_idx]
+                    + (1.0 - td_w) * final_outcome
                     + SPT_SHAPE_W * spt_shaping[step_idx])
                     .clamp(-1.0, 1.0)
             } else {
                 final_outcome.clamp(-1.0, 1.0)
             };
+
+            if args.reward_shaping {
+                vlab_td_abs += (td_w * td_deltas[step_idx]).abs() as f64;
+                let tail = ((1.0 - td_w) * final_outcome).abs() as f64;
+                if game_decisive {
+                    vlab_wl_abs += tail;
+                } else {
+                    vlab_scoretail_abs += tail;
+                }
+                vlab_spt_abs += (SPT_SHAPE_W * spt_shaping[step_idx]).abs() as f64;
+                vlab_steps += 1;
+            }
 
             collected_values.push(value);
 
@@ -2231,11 +2286,22 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    // EXP_ARCH_001 drowning meter (computed here, not inline, to keep the big
+    // json! macro under its recursion limit). vlab_wl_share is the headline:
+    // fraction of the value-label magnitude that is genuine win/loss.
+    let vlab_total = vlab_td_abs + vlab_wl_abs + vlab_scoretail_abs + vlab_spt_abs;
+    let vlab_wl_share = if vlab_total > 0.0 { (vlab_wl_abs / vlab_total) as f32 } else { 0.0 };
+    let vlab_td_absmean = if vlab_steps > 0 { (vlab_td_abs / vlab_steps as f64) as f32 } else { 0.0 };
+    let vlab_wl_absmean = if vlab_steps > 0 { (vlab_wl_abs / vlab_steps as f64) as f32 } else { 0.0 };
+    let vlab_spt_absmean = if vlab_steps > 0 { (vlab_spt_abs / vlab_steps as f64) as f32 } else { 0.0 };
+
     let metrics = json!({
         "num_games": args.num_games,
         "avg_score": avg_score,
         "max_score": max_score,
         "avg_moves": avr_moves,
+        "max_turns": curriculum(args.iteration).1,
+        "policy_kl": if kl_game_n > 0 { kl_game_sum / kl_game_n as f64 } else { -1.0 },
         "p1_avg": p1_avg,
         "p2_avg": p2_avg,
         "avg_captures": avg_captures,
@@ -2264,6 +2330,10 @@ fn main() -> anyhow::Result<()> {
         "ruins_t2c_p80": (total_t2c[5] / args.num_games as f64) as f32,
         "ruins_t2c_all": (total_t2c[6] / args.num_games as f64) as f32,
         "decisive_frac": decisive_games as f32 / args.num_games.max(1) as f32,
+        "vlab_wl_share": vlab_wl_share,
+        "vlab_td_absmean": vlab_td_absmean,
+        "vlab_wl_absmean": vlab_wl_absmean,
+        "vlab_spt_absmean": vlab_spt_absmean,
         "anchor_games": anchor_games_n,
         "anchor_model_wins": anchor_model_wins,
         "games_file": games_file,

@@ -217,7 +217,7 @@ scaled() {
 if [ "${ITERATIONS_SET:-false}" != true ]; then
     ITERATIONS=$(scaled "$ITERATIONS")
 fi
-CHECKPOINT_EVERY=$(scaled 10)
+CHECKPOINT_EVERY=$(scaled 5)
 MILESTONE_EVERY=$(scaled 100)
 # Replay window: constant ~10*BASELINE_GAMES games regardless of -g.
 # train.py reads REPLAY_BUFFER_FILES; archive pruning keeps window + 1 in sync.
@@ -338,6 +338,7 @@ portable_shuf() {
 
 # 0. Initialize & Auto-Restore Model
 echo "Initializing/Checking model..."
+.venv/bin/python3 supabase_sync.py download model.safetensors
 # If resuming but model.safetensors is missing, restore latest checkpoint
 if [ "$START_ITER" -gt 1 ] && [ ! -f "model.safetensors" ]; then
     LATEST_CP=$(ls checkpoints/model_checkpoint_iter*.safetensors 2>/dev/null | sort -V | tail -n 1 || true)
@@ -541,6 +542,9 @@ do
         echo "Creating checkpoint for iteration $i (Timestamp: $TS)..."
         cp model.safetensors "checkpoints/model_checkpoint_iter${i}_${TS}.safetensors"
     fi
+    
+    # Supabase: Backup the new model weights
+    .venv/bin/python3 supabase_sync.py upload model.safetensors
     
     # Smart Pruning: Keep recent density and historical milestones
     # This keeps:

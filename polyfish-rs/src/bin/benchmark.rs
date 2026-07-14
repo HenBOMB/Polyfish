@@ -17,10 +17,11 @@ use std::time::{Duration, Instant};
 fn main() -> anyhow::Result<()> {
     println!("=== MCTS Zero Performance Benchmark ===\n");
 
-    // Select best available device: Metal (macOS) > CUDA (NVIDIA) > CPU
-    let device = Device::metal_if_available(0)
-        .or_else(|_| Device::cuda_if_available(0))
-        .unwrap_or(Device::Cpu);
+    // Select best available device: CUDA (NVIDIA) > Metal (macOS) > CPU
+    let device = match Device::cuda_if_available(0) {
+        Ok(Device::Cpu) | Err(_) => Device::metal_if_available(0).unwrap_or(Device::Cpu),
+        Ok(d) => d,
+    };
     println!("Using device: {:?}\n", device);
     let network = Arc::new(PolyZeroNet::new(VarBuilder::zeros(DType::F32, &device))?);
     let evaluator = Evaluator::Inline(InlineEvalHandle::new(network.clone()));

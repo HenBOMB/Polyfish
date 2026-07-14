@@ -8,6 +8,7 @@ import os
 import random
 import gc
 import time
+import argparse
 
 # Disable advanced SDP backends that may lack kernel images on older Kaggle GPUs (e.g. P100/T4)
 if hasattr(torch.backends.cuda, 'enable_flash_sdp'):
@@ -147,9 +148,12 @@ class PolyZeroNet(nn.Module):
         self.pi_target = nn.Conv2d(self.filters, 1, 1)
         
         # --- Value Heads ---
-        self.v_pool_conv = nn.Conv2d(self.filters, 1, 1)
-        self.v_pool_bn = nn.BatchNorm2d(1)
-        self.v_fc_shared = nn.Linear(1 * map_height * map_width, self.filters)
+        # Heavy value head (EXP_ARCH_001): global mean+max pool over the FULL
+        # 64-channel trunk -> 2-layer MLP. The old head collapsed the trunk to
+        # ONE channel and ran a single linear layer — a near-linear probe that
+        # cannot represent "am I winning" for a strategic game. This can.
+        self.v_fc1 = nn.Linear(2 * self.filters, self.filters)
+        self.v_fc2 = nn.Linear(self.filters, self.filters)
         self.v_win = nn.Linear(self.filters, 1)
         self.v_progress = nn.Linear(self.filters, 1)
         # Aux spatial head: predicted end-of-game per-tile ownership
@@ -188,9 +192,10 @@ class PolyZeroNet(nn.Module):
         
         # --- Value Heads ---
         v_input = x.detach() if DETACH_VALUE_TRUNK else x
-        v_pooled = self.relu(self.v_pool_bn(self.v_pool_conv(v_input)))
-        v_pooled = v_pooled.flatten(1)
-        v_latent = self.relu(self.v_fc_shared(v_pooled))
+        v_mean = v_input.mean(dim=(2, 3))          # [B, filters]
+        v_max = v_input.amax(dim=(2, 3))           # [B, filters]
+        v_feat = torch.cat([v_mean, v_max], dim=1)  # [B, 2*filters]
+        v_latent = self.relu(self.v_fc2(self.relu(self.v_fc1(v_feat))))
         
         values = {}
         values['win'] = self.v_win(v_latent)
@@ -267,7 +272,10 @@ def batch_report_indices(total_batches, max_reports=10):
         indices.add(batch_num)
     return indices
 
-def train():
+def train(batch_size=BATCH_SIZE, epochs=EPOCHS, lr=LEARNING_RATE, chunk_size=None, benchmark_mode=False):
+    if chunk_size is None:
+        chunk_size = int(os.environ.get("TRAIN_CHUNK_FILES", "10"))
+
     # 1. Load Data
     fresh_files = glob.glob("games_*.safetensors")
     archive_files = sorted(glob.glob("archive/games_*.safetensors"), key=os.path.getmtime, reverse=True)
@@ -284,6 +292,8 @@ def train():
 
     if not game_files:
         print("No training data found (checked ./, ./archive/, and ./teachers/)!")
+        if benchmark_mode:
+            return 0, 0
         return
 
     print(f"Training on {len(game_files)} files ({len(fresh_files)} fresh, "
@@ -312,13 +322,19 @@ def train():
             print("Starting from scratch.")
     model.train()
 
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    optimizer = optim.Adam(model.parameters(), lr=lr)
     # Use CosineAnnealing with Warm Restarts for better convergence on short cycles
     # T_0=5 means it resets every 5 epochs (which is exactly our run length)
-    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=EPOCHS, T_mult=1, eta_min=1e-5)
+    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=epochs, T_mult=1, eta_min=1e-5)
+
+    # In benchmark mode, limit to 1 epoch and max 2 chunks to save time
+    if benchmark_mode:
+        epochs = 1
+        num_benchmark_samples = 0
+        benchmark_start_time = 0
 
     # 3. Training Loop
-    for epoch in range(EPOCHS):
+    for epoch in range(epochs):
         total_loss = 0
         total_p_loss = 0
         total_v_loss = 0
@@ -336,17 +352,23 @@ def train():
 
         # Process in chunks. All files in a chunk are held in RAM at once, so
         # lower TRAIN_CHUNK_FILES when individual game files are large.
-        CHUNK_SIZE = int(os.environ.get("TRAIN_CHUNK_FILES", "10"))
-        num_chunks = (len(game_files) + CHUNK_SIZE - 1) // CHUNK_SIZE
+        num_chunks = (len(game_files) + chunk_size - 1) // chunk_size
 
-        print(f"\n=== Epoch {epoch+1}/{EPOCHS} ===")
+        # In benchmark mode, only process the first chunk to get throughput
+        if benchmark_mode:
+            num_chunks = 1
+
+        print(f"\n=== Epoch {epoch+1}/{epochs} ===")
 
         report_batch_indices = None
         epoch_batch_estimate = None
 
-        for i in range(0, len(game_files), CHUNK_SIZE):
-            chunk_files = game_files[i : i + CHUNK_SIZE]
-            chunk_idx = i // CHUNK_SIZE + 1
+        for i in range(0, len(game_files), chunk_size):
+            if benchmark_mode and (i // chunk_size) >= 1:
+                break
+            
+            chunk_files = game_files[i : i + chunk_size]
+            chunk_idx = i // chunk_size + 1
             print(f"Epoch {epoch+1}: Loading chunk {chunk_idx}/{num_chunks} ({len(chunk_files)} files)...")
             
             # Temporary storage for chunk data
@@ -421,7 +443,9 @@ def train():
                                 filled.append(torch.zeros((c_n_samples[i], *head_shape), dtype=head_dtype))
                         target_heads[head] = torch.cat(filled)
                     
-            except RuntimeError as e:
+            except Exception as e:
+                if "out of memory" not in str(e).lower() and "OutOfMemoryError" not in e.__class__.__name__:
+                    raise e
                 print(f"OOM loading chunk: {e}")
                 continue
             
@@ -434,7 +458,7 @@ def train():
 
             if epoch_batch_estimate is None and len(chunk_files) > 0:
                 est_samples = int(dataset_size / len(chunk_files) * len(game_files))
-                epoch_batch_estimate = (est_samples + BATCH_SIZE - 1) // BATCH_SIZE
+                epoch_batch_estimate = (est_samples + batch_size - 1) // batch_size
                 report_batch_indices = batch_report_indices(epoch_batch_estimate)
                 if epoch_batch_estimate <= 10:
                     print(f"  Reporting all {epoch_batch_estimate} batches.")
@@ -442,11 +466,14 @@ def train():
                     print(f"  Reporting ~10/{epoch_batch_estimate} sampled batches.")
 
             indices = torch.randperm(dataset_size)
-            num_batches_in_chunk = (dataset_size + BATCH_SIZE - 1) // BATCH_SIZE
+            num_batches_in_chunk = (dataset_size + batch_size - 1) // batch_size
             chunk_start_time = time.time()
+            if benchmark_mode and benchmark_start_time == 0:
+                benchmark_start_time = chunk_start_time
+                num_benchmark_samples = dataset_size
 
-            for batch_num, j in enumerate(range(0, dataset_size, BATCH_SIZE), start=1):
-                batch_idx = indices[j : j + BATCH_SIZE]
+            for batch_num, j in enumerate(range(0, dataset_size, batch_size), start=1):
+                batch_idx = indices[j : j + batch_size]
                 
                 batch_spatial = spatial_maps[batch_idx].to(DEVICE)
                 batch_player = player_states[batch_idx].to(DEVICE)
@@ -514,9 +541,9 @@ def train():
             avg_p_loss = total_p_loss / total_batches
             avg_v_loss = total_v_loss / total_batches
             avg_o_loss = total_o_loss / total_batches
-            print(f"Epoch {epoch+1}/{EPOCHS} - Loss: {avg_loss:.4f} (Policy: {avg_p_loss:.4f}, Value: {avg_v_loss:.4f}, Ownership: {avg_o_loss:.4f})")
+            print(f"Epoch {epoch+1}/{epochs} - Loss: {avg_loss:.4f} (Policy: {avg_p_loss:.4f}, Value: {avg_v_loss:.4f}, Ownership: {avg_o_loss:.4f})")
         else:
-            print(f"Epoch {epoch+1}/{EPOCHS} - No data processed")
+            print(f"Epoch {epoch+1}/{epochs} - No data processed")
 
         scheduler.step()
 
@@ -539,6 +566,16 @@ def train():
     else:
         value_r2 = 0.0
 
+    if benchmark_mode:
+        if num_benchmark_samples > 0 and benchmark_start_time > 0:
+            total_time = time.time() - benchmark_start_time
+            samples_per_sec = num_benchmark_samples / total_time
+            max_memory_mb = 0
+            if DEVICE == "cuda":
+                max_memory_mb = torch.cuda.max_memory_allocated() / (1024 * 1024)
+            return samples_per_sec, max_memory_mb
+        return 0, 0
+
     # 4. Save Model in f16 for blazing fast CPU inference
     half_state = {k: v.half() for k, v in model.state_dict().items()}
     save_file(half_state, "model.safetensors")
@@ -555,6 +592,60 @@ def train():
             f,
         )
 
+def run_benchmark():
+    print("=========================================================")
+    print("🚀 RUNNING TRAINING BENCHMARK")
+    print("Sweeping hyperparameters to maximize GPU throughput")
+    print("=========================================================")
+    
+    batch_sizes = [64, 128, 256, 512, 1024, 2048]
+    if DEVICE == "cuda":
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+        
+    results = []
+    
+    for bs in batch_sizes:
+        print(f"\n--- Testing Batch Size: {bs} ---")
+        try:
+            samples_per_sec, max_mem = train(batch_size=bs, epochs=1, benchmark_mode=True)
+            results.append((bs, samples_per_sec, max_mem))
+        except Exception as e:
+            if "out of memory" in str(e).lower() or "OutOfMemoryError" in e.__class__.__name__:
+                print(f"Batch size {bs} caused OUT OF MEMORY. Stopping sweep.")
+                if DEVICE == "cuda":
+                    torch.cuda.empty_cache()
+                break
+            else:
+                raise e
+    
+    print("\n=========================================================")
+    print("📊 BENCHMARK RESULTS")
+    print("=========================================================")
+    print(f"{'Batch Size':>12} | {'Samples/Sec':>15} | {'Peak VRAM (MB)':>15}")
+    print("-" * 50)
+    
+    best_bs = None
+    best_throughput = 0
+    for bs, sps, mem in results:
+        print(f"{bs:>12} | {sps:>15.2f} | {mem:>15.2f}")
+        if sps > best_throughput:
+            best_throughput = sps
+            best_bs = bs
+            
+    print("-" * 50)
+    if best_bs:
+        print(f"🏆 OPTIMAL BATCH SIZE: {best_bs} (Throughput: {best_throughput:.2f} samples/s)")
+        print(f"Update your train.py or environment variables to use BATCH_SIZE={best_bs}.")
+    print("=========================================================")
+
 if __name__ == "__main__":
-    train()
+    parser = argparse.ArgumentParser(description="Train PolyZero Net")
+    parser.add_argument("-b", "--benchmark", action="store_true", help="Run a benchmark to find optimal training parameters")
+    args = parser.parse_args()
+
+    if args.benchmark:
+        run_benchmark()
+    else:
+        train()
 

@@ -96,6 +96,11 @@ pub struct GumbelMctsAgent<'a> {
     /// of every `select_move*` call, consumed by `self_play`'s TD label
     /// bootstrap via `Brain::last_root_value`.
     last_root_value: Option<f32>,
+    /// KL(root visit distribution ‖ root prior softmax) of the most recent
+    /// search — how much information the sims added beyond the (blended)
+    /// prior. ~0 means search is just echoing the policy and the AlphaZero
+    /// improvement operator is idle. `None` when no real search ran.
+    last_search_kl: Option<f32>,
 }
 
 struct GumbelNode {
@@ -211,6 +216,7 @@ impl<'a> GumbelMctsAgent<'a> {
             tree_q_weight: 1.0,
             trace: RefCell::new(None),
             last_root_value: None,
+            last_search_kl: None,
         }
     }
 
@@ -222,6 +228,12 @@ impl<'a> GumbelMctsAgent<'a> {
 
     pub fn clear_last_root_value(&mut self) {
         self.last_root_value = None;
+        self.last_search_kl = None;
+    }
+
+    /// See the `last_search_kl` field docs.
+    pub fn last_search_kl(&self) -> Option<f32> {
+        self.last_search_kl
     }
 
     /// Drop any cached tree so the next search builds fresh. Called when the
@@ -1038,6 +1050,7 @@ impl<'a> GumbelMctsAgent<'a> {
         // Cleared up front; `store_tree` sets it again once a real search
         // (not an empty root) actually accumulates root visits.
         self.last_root_value = None;
+        self.last_search_kl = None;
 
         let root = self.search_and_extract(game);
         if root.children.is_empty() {
@@ -1057,6 +1070,7 @@ impl<'a> GumbelMctsAgent<'a> {
         move_count: usize,
     ) -> (Option<Box<dyn Move>>, Vec<crate::ai::mcts_types::MoveVisit>) {
         self.last_root_value = None;
+        self.last_search_kl = None;
 
         let root = self.search_and_extract(game);
         if root.children.is_empty() {
@@ -1091,6 +1105,7 @@ impl<'a> GumbelMctsAgent<'a> {
 
     pub fn select_move_with_stats(&mut self, game: &mut Game) -> (Option<Box<dyn Move>>, Vec<f32>) {
         self.last_root_value = None;
+        self.last_search_kl = None;
 
         let root = self.search_and_extract(game);
         if root.children.is_empty() {
@@ -1118,6 +1133,7 @@ impl<'a> GumbelMctsAgent<'a> {
     /// to know about `last_root_value` bookkeeping.
     fn store_tree(&mut self, root: GumbelNode, best_idx: usize, next_hash: Option<u64>) {
         self.last_root_value = (root.visits > 0.0).then(|| root.q_value());
+        self.last_search_kl = root_policy_kl(&root);
         self.tree = Some(root);
         self.last_chosen_idx = Some(best_idx);
         self.next_root_hash = next_hash;
@@ -1206,27 +1222,64 @@ fn reused_children_match_legal(game: &Game, children: &[GumbelNode]) -> bool {
     true
 }
 
-/// Apply `m` to `game` (assumed to be at the root state, with all search
-/// undos applied) via `play_move` — the same path the real game loop uses —
-/// and hash the resulting state's features. This is the hash the *next*
-/// search's root must match to re-root into this child. Using `play_move`
-/// (not `simulate_move`) is load-bearing: the real game loop advances via
-/// `play_move`, which updates `_history` and runs FOW discovery that
-/// `simulate_move` skips, so a simulate-derived hash would never match the
-/// next call's play-derived features. The `game` here is the per-call clone
-/// the Brain passes in, which is discarded after we return, so no undo is
-/// needed. `None` if the move can't be applied or features can't be built,
-/// in which case the next call simply builds fresh.
-fn next_root_hash_for(game: &mut Game, m: Option<&dyn Move>) -> Option<u64> {
+/// Apply `m` to a CLONE of `game` (assumed to be at the root state, with all
+/// search undos applied) via `play_move` — the same path the real game loop
+/// uses — and hash the resulting state's features. This is the hash the
+/// *next* search's root must match to re-root into this child. Using
+/// `play_move` (not `simulate_move`) is load-bearing: the real game loop
+/// advances via `play_move`, which updates `_history` and runs FOW discovery
+/// that `simulate_move` skips, so a simulate-derived hash would never match
+/// the next call's play-derived features.
+///
+/// The clone is load-bearing too: some callers (arena, trainer) pass the REAL
+/// game, and mutating it here double-applied the chosen move once the caller
+/// played it — an EndTurn double-apply silently consumed the opponent's whole
+/// turn (arena bots never moved), and double-applied econ moves caused the
+/// execute-error spam and star-debt panics.
+fn next_root_hash_for(game: &Game, m: Option<&dyn Move>) -> Option<u64> {
     let m = m?;
-    // The undo callback is intentionally dropped because the game is a per-call clone 
-    let _ = game.play_move(m)?;
+    let mut preview = game.clone();
+    let _ = preview.play_move(m)?;
     let feat = features::state_to_cpu_features(
-        &game.state,
-        game.state.settings.current_player_turn_id,
+        &preview.state,
+        preview.state.settings.current_player_turn_id,
     )
     .ok()?;
     Some(feat.hash())
+}
+
+/// KL(visit distribution ‖ prior softmax) over a searched root's children.
+/// `None` when fewer than two children or no visits landed (no real search).
+fn root_policy_kl(root: &GumbelNode) -> Option<f32> {
+    if root.children.len() < 2 || root.visits <= 0.0 {
+        return None;
+    }
+    let total: f32 = root.children.iter().map(|c| c.visits.max(0.0)).sum();
+    if total <= 0.0 {
+        return None;
+    }
+    let max_logit = root
+        .children
+        .iter()
+        .map(|c| c.logit)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let exps: Vec<f32> = root
+        .children
+        .iter()
+        .map(|c| (c.logit - max_logit).exp())
+        .collect();
+    let z: f32 = exps.iter().sum();
+    if !z.is_finite() || z <= 0.0 {
+        return None;
+    }
+    let mut kl = 0.0;
+    for (c, e) in root.children.iter().zip(&exps) {
+        let p = c.visits.max(0.0) / total;
+        if p > 0.0 {
+            kl += p * (p / (e / z).max(1e-8)).ln();
+        }
+    }
+    Some(kl)
 }
 
 fn move_or_end_turn(best_move: Option<Box<dyn Move>>) -> Option<Box<dyn Move>> {
