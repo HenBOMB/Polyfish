@@ -504,7 +504,7 @@ pub fn default_turn() -> i32 {
     0
 }
 pub fn default_max_turns() -> i32 {
-    10
+    30
 }
 pub fn default_max_score() -> i32 {
     5000
@@ -662,11 +662,14 @@ impl GameState {
         for (idx, tile) in self.tiles.iter_mut() {
             if !visible_tiles.contains(idx) {
                 let predicted_terrain = if let Some(pred) = &self._prediction {
-                    pred._terrain.get(idx).map(|(t, _)| *t).unwrap_or(TerrainType::Field)
+                    pred._terrain
+                        .get(idx)
+                        .map(|(t, _)| *t)
+                        .unwrap_or(TerrainType::Field)
                 } else {
                     TerrainType::Field
                 };
-                
+
                 tile.terrain_type = predicted_terrain;
                 tile.owner = 0;
                 tile.has_road = false;
@@ -693,8 +696,10 @@ impl GameState {
         // 4. Obscure Enemy Units and Cities
         for (id, tribe) in self.tribes.iter_mut() {
             if *id != pov_id {
-                tribe.units.retain(|u| visible_tiles.contains(&u.coords.idx));
-                // We do NOT remove cities because that breaks production, 
+                tribe
+                    .units
+                    .retain(|u| visible_tiles.contains(&u.coords.idx));
+                // We do NOT remove cities because that breaks production,
                 // but their exact coordinates could be an issue if the AI tries to attack a fog tile.
                 // For now, removing them is the safest way to prevent data leaks.
                 tribe.cities.retain(|c| visible_tiles.contains(&c.idx));
