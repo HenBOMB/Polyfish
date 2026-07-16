@@ -57,12 +57,11 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 echo "Logging to $LOG_FILE"
 
 # --- Build (CUDA-only) ------------------------------------------------------
-if [ ! -x ./target/release/self_play ] || [ ! -x ./target/release/polyfish ]; then
-    NEED_BUILD=1
-fi
-if [ "${SKIP_BUILD:-0}" = "1" ] && [ -x ./target/release/self_play ] && [ -x ./target/release/polyfish ]; then
-    echo "SKIP_BUILD=1 and binaries present — skipping cargo build."
-else
+# In the Docker image, binaries are precompiled and cargo is not installed.
+# Only attempt a build if cargo is available AND binaries are missing or stale.
+if [ -x ./target/release/self_play ] && [ -x ./target/release/polyfish ] && [ -x ./target/release/arena ]; then
+    echo "Precompiled binaries found — skipping build."
+elif command -v cargo >/dev/null 2>&1; then
     echo "Building CUDA binaries (release)..."
     # --no-default-features: opt out of the macOS `metal` default, which does
     # not compile on Linux. --features cuda routes candle inference onto the GPU.
@@ -71,8 +70,11 @@ else
         echo "⚡ FAST_BUILD: thin LTO + 16 codegen-units (faster compile, slightly slower binary)"
         BUILD_ENV=(CARGO_PROFILE_RELEASE_LTO=thin CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16)
     fi
-    env "${BUILD_ENV[@]}" cargo build --bin polyfish --bin self_play --bin benchmark --release \
+    env "${BUILD_ENV[@]}" cargo build --bin polyfish --bin self_play --bin benchmark --bin arena --release \
         --no-default-features --features cuda
+else
+    echo "Error: binaries not found and cargo not available to build them." >&2
+    exit 1
 fi
 PLATFORM_DEFAULT_ACTORS=128
 

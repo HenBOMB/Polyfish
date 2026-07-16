@@ -44,7 +44,13 @@ ANCHORS=("random:random:1" "greedy:greedy:1")
 ANCHOR_GUESS=("random:0" "greedy:250")
 
 if command -v cargo >/dev/null 2>&1; then
-    cargo build --release --bin arena
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        cargo build --release --bin arena --no-default-features --features cuda
+    elif [[ "$OSTYPE" == "darwin"* ]]; then
+        cargo build --release --bin arena --features metal,accelerate,tch-eval,metal-eval
+    else
+        cargo build --release --bin arena --no-default-features
+    fi
 elif [ ! -x "$ARENA" ]; then
     echo "Error: $ARENA not found and cargo not available to build it." >&2
     exit 1
@@ -129,7 +135,7 @@ fi
 if [ ${#MODELS[@]} -eq 0 ]; then
     # Auto-sync missing checkpoints from supabase before rating if requested
     if [ "$SYNC_SUPABASE" = true ] && [ -f "supabase_sync.py" ]; then
-        "$PY" supabase_sync.py download-all-checkpoints "$MIN_ITER" || true
+        "$PY" supabase_sync.py download-all-checkpoints "$MIN_ITER" "$MATCHES" || true
     fi
 
     while IFS= read -r f; do
@@ -146,6 +152,7 @@ if [ ${#MODELS[@]} -eq 0 ]; then
     done \
         < <(ls checkpoints/model_checkpoint_iter*.safetensors 2>/dev/null | sort -V)
 fi
+
 if [ ${#MODELS[@]} -eq 0 ]; then
     echo "No models to rate (no args, nothing in checkpoints/)." >&2
     exit 1

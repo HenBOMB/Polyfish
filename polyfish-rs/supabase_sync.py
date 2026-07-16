@@ -72,9 +72,15 @@ def download(file_path: str, bucket: str = "models"):
     except Exception as e:
         print(f"⚠️ Could not download {filename} from Supabase (may not exist yet).")
 
-def download_all_checkpoints(bucket: str = "models", min_iter: int = 0):
+def download_all_checkpoints(bucket: str = "models", min_iter: int = 0, matches_file: str = None):
     supabase = get_client()
     print(f"⬇️ Listing files in Supabase bucket '{bucket}'...")
+    
+    evaluated_content = ""
+    if matches_file and os.path.exists(matches_file):
+        with open(matches_file, "r") as mf:
+            evaluated_content = mf.read()
+            
     try:
         files = supabase.storage.from_(bucket).list()
         os.makedirs("checkpoints", exist_ok=True)
@@ -86,6 +92,13 @@ def download_all_checkpoints(bucket: str = "models", min_iter: int = 0):
                     m = re.search(r"iter(\d+)(?:_.*)?\.safetensors", name)
                     if m and int(m.group(1)) < min_iter:
                         continue
+                        
+                if evaluated_content:
+                    base_name = name.replace(".safetensors", "")
+                    if f'"{base_name}@' in evaluated_content:
+                        print(f"⏭️ Skipping already evaluated checkpoint: {name}")
+                        continue
+
                 local_path = os.path.join("checkpoints", name)
                 if not os.path.exists(local_path):
                     print(f"⬇️ Downloading missing checkpoint: {name}...")
@@ -144,12 +157,15 @@ if __name__ == "__main__":
         download(file_path)
     elif action == "download-all-checkpoints":
         min_iter = 0
+        matches_file = None
         if len(sys.argv) > 2:
             try:
                 min_iter = int(sys.argv[2])
             except ValueError:
                 pass
-        download_all_checkpoints(min_iter=min_iter)
+        if len(sys.argv) > 3:
+            matches_file = sys.argv[3]
+        download_all_checkpoints(min_iter=min_iter, matches_file=matches_file)
     elif action == "backup-pod":
         backup_pod()
     elif action == "restore-pod":

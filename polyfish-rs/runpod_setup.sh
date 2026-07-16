@@ -76,7 +76,7 @@ else:
 PY
 
 # 4. Build CUDA binaries (release). This is the slow, compile-once step.
-if [ -x ./target/release/self_play ] && [ -x ./target/release/polyfish ]; then
+if [ -x ./target/release/self_play ] && [ -x ./target/release/polyfish ] && [ -x ./target/release/arena ]; then
     echo "Binaries already built — skipping cargo build (delete target/release to force)."
 else
     echo "Building CUDA binaries (release)... this is the one-time slow part."
@@ -85,7 +85,7 @@ else
         echo "⚡ FAST_BUILD: thin LTO + 16 codegen-units"
         BUILD_ENV=(CARGO_PROFILE_RELEASE_LTO=thin CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16)
     fi
-    env "${BUILD_ENV[@]}" cargo build --bin polyfish --bin self_play --release \
+    env "${BUILD_ENV[@]}" cargo build --bin polyfish --bin self_play --bin arena --release \
         --no-default-features --features cuda
 fi
 

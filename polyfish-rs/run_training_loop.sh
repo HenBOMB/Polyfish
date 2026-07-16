@@ -52,7 +52,7 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     # The tch-linked binary has no rpath for libtorch; point dyld at the venv's torch dylibs
     export DYLD_LIBRARY_PATH="$(.venv/bin/python3 -c "import torch, os; print(os.path.join(os.path.dirname(torch.__file__), 'lib'))")${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
     PLATFORM_DEFAULT_ACTORS=128   # actors park on the GPU; oversubscription is free
-elif false; then
+elif command -v nvidia-smi >/dev/null 2>&1; then
     # CUDA available (Linux/Windows with NVIDIA GPU)
     echo "Building with CUDA support..."
     # --no-default-features: opt out of the macOS `metal` default, which does
