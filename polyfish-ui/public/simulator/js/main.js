@@ -1415,7 +1415,7 @@ document.getElementById('btn-interactive').onclick = () => {
     }
 };
 
-document.getElementById('btn-reset').onclick = () => apiAction('/reset', {});
+document.getElementById('btn-reset').onclick = () => apiAction('/reset', { max_turns: 30 });
 document.getElementById('btn-fow').onclick = () => {
     ENABLE_FOW = !ENABLE_FOW;
     renderer.render(GAME_STATE, currentLegalMoves, 1);
@@ -1577,7 +1577,7 @@ window.addEventListener('keydown', (e) => {
     }
 });
 
-document.getElementById('btn-reset').onclick = () => apiAction('/reset', {});
+document.getElementById('btn-reset').onclick = () => apiAction('/reset', { max_turns: 30 });
 document.getElementById('btn-save-state').onclick = async () => {
     try {
         const res = await fetch('/save', { method: 'POST' });

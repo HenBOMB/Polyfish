@@ -620,7 +620,12 @@ async fn save_training_data(State(state): State<Arc<AppState>>) -> Json<Value> {
     }
 }
 
-async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {
+#[derive(serde::Deserialize)]
+struct ResetRequest {
+    max_turns: Option<i32>,
+}
+
+async fn reset_game(State(state): State<Arc<AppState>>, payload: Option<Json<ResetRequest>>) -> Json<Value> {
     let mut game = state.game.lock().unwrap();
 
     let mut settings = MapGenSettings::default();
@@ -632,6 +637,13 @@ async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {
     let initial_state = generate(settings);
     game.state = initial_state;
     game.state.settings._verbose = true;
+
+    if let Some(Json(req)) = payload {
+        if let Some(mt) = req.max_turns {
+            game.state.settings.max_turns = mt;
+        }
+    }
+
     game.post_load();
 
     let mut tiles: Vec<_> = game.state.tiles.values().collect();

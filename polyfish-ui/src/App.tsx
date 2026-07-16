@@ -761,7 +761,11 @@ function App() {
                   <button 
                     onClick={async () => {
                       try {
-                        const res = await fetch('http://localhost:3000/reset', { method: 'POST' });
+                        const res = await fetch('http://localhost:3000/reset', { 
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ max_turns: 30 })
+                        });
                         if (res.ok) {
                           const data = await res.json();
                           setGameState(data);
