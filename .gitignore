@@ -63,3 +63,15 @@ polyfish-rs/tmp_kernel_out/
 polyfish-rs/kaggle_data_sync/
 !polyfish-rs/kaggle_data_sync/dataset-metadata.json
 polyfish-rs/kaggle_kernel_sync/
+
+# Debugging & Temp
+polyfish-rs/training_results/
+polyfish-rs/pod_backup/
+polyfish-rs/tmp_bak/
+*.patch
+*.jsonl
+*.tar.gz
+*.pid
+*.stamp
+*.zip
+base64.*

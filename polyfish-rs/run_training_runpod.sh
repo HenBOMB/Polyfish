@@ -71,7 +71,7 @@ else
         echo "⚡ FAST_BUILD: thin LTO + 16 codegen-units (faster compile, slightly slower binary)"
         BUILD_ENV=(CARGO_PROFILE_RELEASE_LTO=thin CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16)
     fi
-    env "${BUILD_ENV[@]}" cargo build --bin polyfish --bin self_play --release \
+    env "${BUILD_ENV[@]}" cargo build --bin polyfish --bin self_play --bin benchmark --release \
         --no-default-features --features cuda
 fi
 PLATFORM_DEFAULT_ACTORS=128
@@ -79,6 +79,8 @@ PLATFORM_DEFAULT_ACTORS=128
 # --- Long-option parsing (mirror of run_training_loop.sh) -------------------
 RESUME_RUN=""
 RESET=false
+IDLE=false
+BENCHMARK=false
 PASSTHROUGH=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -88,10 +90,24 @@ while [[ $# -gt 0 ]]; do
       ;;
     --new-run|-N) RESUME_RUN=""; shift ;;
     --reset) RESET=true; shift ;;
+    --idle) IDLE=true; shift ;;
+    --benchmark) BENCHMARK=true; shift ;;
+    --supabase) SYNC_SUPABASE=true; shift ;;
     *) PASSTHROUGH+=("$1"); shift ;;
   esac
 done
 set -- "${PASSTHROUGH[@]}"
+
+if [ "$IDLE" = true ]; then
+    echo "Idle mode requested (--idle). Sleeping indefinitely to keep the pod alive without training."
+    sleep infinity
+fi
+
+if [ "$BENCHMARK" = true ]; then
+    echo "Benchmark mode requested (--benchmark). Running benchmark bin then sleeping indefinitely."
+    ./target/release/benchmark
+    sleep infinity
+fi
 
 FORCE_TRAIN=false
 BOOST=false
@@ -111,7 +127,7 @@ while getopts "fbcri:g:n:a:e:l:K:A:H:W:P:E:" opt; do
     r) REWARD_SHAPING=true ;;
     i) ITERATIONS=$OPTARG; ITERATIONS_SET=true ;;
     g) NUM_GAMES=$OPTARG ;;
-    n) MCTS_ITERS=$OPTARG ;;
+    n) MCTS_ITERS=$OPTARG; MCTS_ITERS_SET=true ;;
     a) ACTORS=$OPTARG ;;
     e) EVAL_SERVERS=$OPTARG ;;
     l) LEAGUE_INTERVAL=$OPTARG ;;
@@ -136,7 +152,7 @@ CHECKPOINT_EVERY=$(scaled 10)
 MILESTONE_EVERY=$(scaled 100)
 ARCHIVE_KEEP=$(scaled 10)
 export REPLAY_BUFFER_FILES=$ARCHIVE_KEEP
-echo "Schedule (games-based, -g $NUM_GAMES vs baseline $BASELINE_GAMES): $ITERATIONS iterations, checkpoint every $CHECKPOINT_EVERY, milestone every $MILESTONE_EVERY, league every $LEAGUE_INTERVAL iterations, replay window $ARCHIVE_KEEP files, local train every $TRAIN_EVERY iteration(s), Elo tracking $([ "$ELO_TRACK" != "0" ] && echo on || echo off)"
+echo "Schedule (games-based, -g $NUM_GAMES vs baseline $BASELINE_GAMES): $ITERATIONS iterations, checkpoint every $CHECKPOINT_EVERY, milestone every $MILESTONE_EVERY, league every $LEAGUE_INTERVAL iterations, replay window $ARCHIVE_KEEP files, local train every $TRAIN_EVERY iteration(s), Elo tracking $([ \"$ELO_TRACK\" != \"0\" ] && echo on || echo off)"
 
 REWARD_FLAG=""
 if [ "$REWARD_SHAPING" = true ]; then REWARD_FLAG="--reward-shaping"; echo "🎯 Reward shaping enabled!"; fi
@@ -154,6 +170,11 @@ if [ "$RESET" = true ]; then
     if [ -n "$RESUME_RUN" ]; then echo "   (ignoring --resume since --reset starts fresh)"; RESUME_RUN=""; fi
 fi
 
+if [ "$SYNC_SUPABASE" = true ] && [ -n "$RESUME_RUN" ]; then
+    echo "☁️ Restoring full pod state from Supabase..."
+    .venv/bin/python3 supabase_sync.py restore-pod
+fi
+
 .venv/bin/python3 training_log.py migrate
 if [ -n "$RESUME_RUN" ]; then
     RUN_INFO=$(.venv/bin/python3 training_log.py resolve-run --resume "$RESUME_RUN")
@@ -166,7 +187,7 @@ START_ITER=$(echo "$RUN_INFO" | .venv/bin/python3 -c "import sys,json; print(jso
 echo "Training run_id=$RUN_ID started_at=$RUN_STARTED_AT starting at iteration $START_ITER"
 
 if [ ! -f "config.json" ]; then
-    echo "{\"gamemode\": 2, \"iterations\": $MCTS_ITERS, \"cores\": 2, \"tribes\": [\"Imperius\", \"Bardur\", \"Oumaji\", \"Kickoo\", \"XinXi\"]}" > config.json
+    echo "{\"gamemode\": 2, \"mctsIters\": $MCTS_ITERS, \"cores\": 2, \"tribes\": [\"Imperius\", \"Bardur\", \"Oumaji\", \"Kickoo\", \"XinXi\"]}" > config.json
 fi
 
 SERVER_PID=""
@@ -236,7 +257,9 @@ do
 
     if [ -f "config.json" ]; then
         GAMEMODE=$(jq -r '.gamemode // 2' config.json)
-        MCTS_ITERS=$(jq -r '.mctsIters // 64' config.json)
+        if [ "${MCTS_ITERS_SET:-false}" != true ]; then
+            MCTS_ITERS=$(jq -r '.mctsIters // 64' config.json)
+        fi
         TRIBE_LIST=()
         while IFS= read -r line; do [ -n "$line" ] && TRIBE_LIST+=("$line"); done < <(jq -r '.tribes[]? // empty' config.json)
     else
@@ -260,22 +283,7 @@ do
     GAME_JSON=$(.venv/bin/python3 training_log.py parse-self-play)
     GAMES_FILE=$(echo "$GAME_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('games_file',''))")
 
-    # Elo: rate any not-yet-rated checkpoint in the background (niced). Uses the
-    # anchored ladder; rate_checkpoints.sh builds its own arena binary on first
-    # use. -E 0 disables (skips a first-run arena compile if you want).
-    if [ "$ELO_TRACK" != "0" ]; then
-        NEWEST_CP=$(ls -t checkpoints/model_checkpoint_iter*.safetensors 2>/dev/null | head -n 1 || true)
-        RATER_RUNNING=false
-        if [ -f .elo_rating.pid ] && kill -0 "$(cat .elo_rating.pid 2>/dev/null)" 2>/dev/null; then RATER_RUNNING=true; fi
-        if [ -n "$NEWEST_CP" ] && [ "$RATER_RUNNING" = false ] \
-           && { [ ! -f .elo_rating.stamp ] || [ "$NEWEST_CP" -nt .elo_rating.stamp ]; }; then
-            touch .elo_rating.stamp
-            SEEDS="${ELO_SEEDS:-8}" WORKERS="${ELO_WORKERS:-2}" \
-                nice -n 10 ./rate_checkpoints.sh >> elo.log 2>&1 &
-            echo $! > .elo_rating.pid
-            echo "📈 Elo: rating $(basename "$NEWEST_CP") in background (log: elo.log)"
-        fi
-    fi
+    # Elo tracking moved to run synchronously after checkpoint creation.
 
     # 2. Training — LOCAL train.py on the GPU (replaces kaggle_manager.py all).
     # train.py reads fresh games_*.safetensors (still in cwd — cleanup below runs
@@ -314,29 +322,30 @@ do
     AVG_REVEALED_TILES=$(echo "$GAME_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('avg_revealed_tiles',''))")
     AVG_CAPTURED_TILES=$(echo "$GAME_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('avg_captured_tiles',''))")
     AVG_CAP_CAPITALS=$(echo "$GAME_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('avg_cap_capitals',''))")
+    DECISIVE_FRAC=$(echo "$GAME_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('decisive_frac',''))")
+    VLAB_WL=$(echo "$GAME_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('vlab_wl_share',''))")
     echo "Iteration $i complete. Type: $MATCH_TYPE | Avg: $AVG_SCORE | Loss: $LOSS"
     echo "  -> STATS/GAME: Captures: $AVG_CAPTURES (Capitals: $AVG_CAP_CAPITALS) | Harvests: $AVG_HARVESTS | Builds: $AVG_BUILDS | Tech: $AVG_RESEARCH | Attacks: $AVG_ATTACKS | Revealed: $AVG_REVEALED_TILES | Owned: $AVG_CAPTURED_TILES"
-
-    if [ "$ELO_TRACK" != "0" ] && [ -f elo_ratings.json ] \
-       && { [ ! -f .elo_reported.stamp ] || [ elo_ratings.json -nt .elo_reported.stamp ]; }; then
-        touch .elo_reported.stamp
-        echo "📊 Elo ladder (anchored: random = 0):"
-        .venv/bin/python3 elo.py report 2>/dev/null || true
-    fi
+    echo "  -> META: Decisive Frac: $DECISIVE_FRAC | VLab WL Share: $VLAB_WL"
 
     # 4. Checkpoint
     if [ $((i % CHECKPOINT_EVERY)) -eq 0 ]; then
         TS=$(date +%Y%m%d_%H%M%S)
+        CP_NAME="checkpoints/model_checkpoint_iter${i}_${TS}.safetensors"
         echo "Creating checkpoint for iteration $i (Timestamp: $TS)..."
-        cp model.safetensors "checkpoints/model_checkpoint_iter${i}_${TS}.safetensors"
+        cp model.safetensors "$CP_NAME"
     fi
 
     # Supabase: Backup the new model weights, training logs, and elo ratings
-    .venv/bin/python3 supabase_sync.py upload model.safetensors
-    if [ -f training_log.csv ]; then .venv/bin/python3 supabase_sync.py upload training_log.csv; fi
-    if [ -f elo_ratings.json ]; then .venv/bin/python3 supabase_sync.py upload elo_ratings.json; fi
+    if [ "$SYNC_SUPABASE" = true ]; then
+        .venv/bin/python3 supabase_sync.py backup-pod
+    else
+        .venv/bin/python3 supabase_sync.py upload model.safetensors
+        if [ -f training_log.csv ]; then .venv/bin/python3 supabase_sync.py upload training_log.csv; fi
+        if [ -f elo_ratings.json ]; then .venv/bin/python3 supabase_sync.py upload elo_ratings.json; fi
+    fi
 
-    # Smart pruning: last 50 + every MILESTONE_EVERY-th + iter 1
+    # Smart pruning: last 10 + every MILESTONE_EVERY-th + iter 1
     ALL_FILES=$(ls -t checkpoints/model_checkpoint_iter*.safetensors 2>/dev/null || true)
     if [ -n "$ALL_FILES" ]; then
         idx=0
@@ -344,7 +353,7 @@ do
             idx=$((idx + 1))
             ITER_VAL=$(echo "$FILE" | sed -n 's/.*iter\([0-9]\+\)_.*/\1/p')
             KEEP=false
-            if [ $idx -le 50 ]; then KEEP=true
+            if [ $idx -le 10 ]; then KEEP=true
             elif [ -n "$ITER_VAL" ]; then
                 if [ $((ITER_VAL % MILESTONE_EVERY)) -eq 0 ] || [ "$ITER_VAL" -eq 1 ]; then KEEP=true; fi
             fi
@@ -357,5 +366,15 @@ do
     mkdir -p archive
     mv games_*.safetensors archive/ 2>/dev/null || true
     ls -t archive/games_*.safetensors 2>/dev/null | tail -n +$((ARCHIVE_KEEP + 1)) | xargs -r rm
-
 done
+
+# ============================================================================
+# Final Elo Rating
+# ============================================================================
+if [ "$ELO_TRACK" != "0" ]; then
+    echo "📈 Final Elo: rating checkpoints (log: elo.log)..."
+    SEEDS="${ELO_SEEDS:-8}" WORKERS="${ELO_WORKERS:-2}" ./rate_checkpoints.sh >> elo.log 2>&1
+    echo "📊 Final Elo ladder (anchored: random = 0):"
+    .venv/bin/python3 elo.py report 2>/dev/null || true
+    if [ -f elo_ratings.json ]; then .venv/bin/python3 supabase_sync.py upload elo_ratings.json; fi
+fi

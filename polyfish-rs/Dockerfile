@@ -18,7 +18,7 @@ COPY src ./src
 ENV CUDA_COMPUTE_CAP=86
 
 RUN CARGO_PROFILE_RELEASE_LTO=thin CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
-    cargo build --bin polyfish --bin self_play --release --no-default-features --features cuda
+    cargo build --bin polyfish --bin self_play --bin arena --bin benchmark --release --no-default-features --features cuda
 
 # ==========================================
 # STAGE 2: The Slim Runtime (the final image)
@@ -47,10 +47,12 @@ RUN python3 -m venv .venv && \
 # Copy ONLY the compiled binaries from the builder stage! (Saves ~2GB of Rust cache)
 COPY --from=builder /app/target/release/polyfish ./target/release/polyfish
 COPY --from=builder /app/target/release/self_play ./target/release/self_play
+COPY --from=builder /app/target/release/arena ./target/release/arena
+COPY --from=builder /app/target/release/benchmark ./target/release/benchmark
 
 # Copy your bash scripts and python files
-COPY run_training_runpod.sh run_training_loop.sh supabase_sync.py init_model.py train.py training_log.py elo.py ./
+COPY *.sh *.py ./
 
-RUN chmod +x run_training_runpod.sh run_training_loop.sh
+RUN chmod +x run_training_runpod.sh run_training_loop.sh rate_checkpoints.sh
 
 ENTRYPOINT ["./run_training_runpod.sh"]

@@ -81,9 +81,10 @@ else
     # tree-search and the forward start fighting: export OMP_NUM_THREADS=<n>.
 fi
 
-# Parse long options first, then short options via getopts
+# --- Long-option parsing ------------------------------------------------------
 RESUME_RUN=""
 RESET=false
+IDLE=false
 SNAPSHOT_ONLY=false
 SNAPSHOT_RESET=false
 PASSTHROUGH=()
@@ -91,21 +92,12 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --resume)
       shift
-      if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
-        RESUME_RUN="$1"
-        shift
-      else
-        RESUME_RUN="latest"
-      fi
+      if [[ "${1:-}" =~ ^[0-9]+$ ]]; then RESUME_RUN="$1"; shift; else RESUME_RUN="latest"; fi
       ;;
-    --new-run|-N)
-      RESUME_RUN=""
-      shift
-      ;;
-    --reset)
-      RESET=true
-      shift
-      ;;
+    --new-run|-N) RESUME_RUN=""; shift ;;
+    --reset) RESET=true; shift ;;
+    --idle) IDLE=true; shift ;;
+    --supabase) SYNC_SUPABASE=true; shift ;;
     --snapshot)
       SNAPSHOT_ONLY=true
       shift
@@ -123,6 +115,10 @@ while [[ $# -gt 0 ]]; do
 done
 set -- "${PASSTHROUGH[@]}"
 
+if [ "$IDLE" = true ]; then
+    echo "Idle mode requested (--idle). Sleeping indefinitely to keep the pod alive without training."
+    sleep infinity
+fi
 # Parse arguments
 FORCE_TRAIN=false
 BOOST=false
@@ -166,7 +162,7 @@ while getopts "fbcri:g:n:a:e:l:K:A:H:W:P:E:" opt; do
       NUM_GAMES=$OPTARG
       ;;
     n)
-      MCTS_ITERS=$OPTARG
+      MCTS_ITERS=$OPTARG; MCTS_ITERS_SET=true
       ;;
     a)
       ACTORS=$OPTARG
@@ -223,7 +219,7 @@ MILESTONE_EVERY=$(scaled 100)
 # train.py reads REPLAY_BUFFER_FILES; archive pruning keeps window + 1 in sync.
 ARCHIVE_KEEP=$(scaled 10)
 export REPLAY_BUFFER_FILES=$ARCHIVE_KEEP
-echo "Schedule (games-based, -g $NUM_GAMES vs baseline $BASELINE_GAMES): $ITERATIONS iterations, checkpoint every $CHECKPOINT_EVERY, milestone every $MILESTONE_EVERY, league every $LEAGUE_INTERVAL iterations, replay window $ARCHIVE_KEEP files, Kaggle training every $TRAIN_EVERY iteration(s), Elo tracking $([ "$ELO_TRACK" != "0" ] && echo on || echo off)"
+echo "Schedule (games-based, -g $NUM_GAMES vs baseline $BASELINE_GAMES): $ITERATIONS iterations, checkpoint every $CHECKPOINT_EVERY, milestone every $MILESTONE_EVERY, league every $LEAGUE_INTERVAL iterations, replay window $ARCHIVE_KEEP files, Kaggle training every $TRAIN_EVERY iteration(s), Elo tracking $([ \"$ELO_TRACK\" != \"0\" ] && echo on || echo off)"
 
 REWARD_FLAG=""
 if [ "$REWARD_SHAPING" = true ]; then
@@ -297,6 +293,11 @@ if [ "$RESET" = true ]; then
     fi
 fi
 
+if [ "$SYNC_SUPABASE" = true ] && [ -n "$RESUME_RUN" ]; then
+    echo "☁️ Restoring full pod state from Supabase..."
+    .venv/bin/python3 supabase_sync.py restore-pod
+fi
+
 # Migrate legacy CSV and resolve run (new run by default; --resume to continue)
 .venv/bin/python3 training_log.py migrate
 if [ -n "$RESUME_RUN" ]; then
@@ -311,7 +312,7 @@ echo "Training run_id=$RUN_ID started_at=$RUN_STARTED_AT starting at iteration $
 
 # Set up config.json sync if not present
 if [ ! -f "config.json" ]; then
-    echo "{\"gamemode\": 2, \"iterations\": $MCTS_ITERS, \"cores\": 2, \"tribes\": [\"Imperius\", \"Bardur\", \"Oumaji\", \"Kickoo\", \"XinXi\"]}" > config.json
+    echo "{\"gamemode\": 2, \"mctsIters\": $MCTS_ITERS, \"cores\": 2, \"tribes\": [\"Imperius\", \"Bardur\", \"Oumaji\", \"Kickoo\", \"XinXi\"]}" > config.json
 fi
 
 SERVER_PID=""
@@ -417,7 +418,9 @@ do
     # Dynamically fetch parameters from config.json (set by dashboard UI)
     if [ -f "config.json" ]; then
         GAMEMODE=$(jq -r '.gamemode // 2' config.json)
-        MCTS_ITERS=$(jq -r '.mctsIters // 64' config.json)
+        if [ "${MCTS_ITERS_SET:-false}" != true ]; then
+            MCTS_ITERS=$(jq -r '.mctsIters // 64' config.json)
+        fi
         # Parse tribes array into bash array safely
         TRIBE_LIST=()
         while IFS= read -r line; do
@@ -466,25 +469,7 @@ do
     mkdir -p kaggle_pending
     cp games_*.safetensors kaggle_pending/ 2>/dev/null || true
 
-    # Elo: rate any not-yet-rated checkpoint in the background. Niced + capped
-    # workers so the arena games mostly fill the idle Kaggle window below.
-    # rate_checkpoints.sh skips players already in the ledger, so relaunching
-    # is cheap; one rater at a time (stale pid files fail kill -0 and pass).
-    if [ "$ELO_TRACK" != "0" ]; then
-        NEWEST_CP=$(ls -t checkpoints/model_checkpoint_iter*.safetensors 2>/dev/null | head -n 1 || true)
-        RATER_RUNNING=false
-        if [ -f .elo_rating.pid ] && kill -0 "$(cat .elo_rating.pid 2>/dev/null)" 2>/dev/null; then
-            RATER_RUNNING=true
-        fi
-        if [ -n "$NEWEST_CP" ] && [ "$RATER_RUNNING" = false ] \
-           && { [ ! -f .elo_rating.stamp ] || [ "$NEWEST_CP" -nt .elo_rating.stamp ]; }; then
-            touch .elo_rating.stamp
-            SEEDS="${ELO_SEEDS:-8}" WORKERS="${ELO_WORKERS:-2}" \
-                nice -n 10 bash ./rate_checkpoints.sh >> elo.log 2>&1 &
-            echo $! > .elo_rating.pid
-            echo "📈 Elo: rating $(basename "$NEWEST_CP") in background (log: elo.log)"
-        fi
-    fi
+
 
     # 2. Training (Kaggle round every TRAIN_EVERY iterations). A failed round
     # is tolerated up to 3 consecutive times: pending games stay staged, the
@@ -528,13 +513,7 @@ do
     echo "Iteration $i complete. Type: $MATCH_TYPE | Avg: $AVG_SCORE | Loss: $LOSS"
     echo "  -> STATS/GAME: Captures: $AVG_CAPTURES (Capitals: $AVG_CAP_CAPITALS) | Harvests: $AVG_HARVESTS | Builds: $AVG_BUILDS | Tech: $AVG_RESEARCH | Attacks: $AVG_ATTACKS | Revealed: $AVG_REVEALED_TILES | Owned: $AVG_CAPTURED_TILES"
 
-    # Print the ladder whenever the background rater has produced a new fit.
-    if [ "$ELO_TRACK" != "0" ] && [ -f elo_ratings.json ] \
-       && { [ ! -f .elo_reported.stamp ] || [ elo_ratings.json -nt .elo_reported.stamp ]; }; then
-        touch .elo_reported.stamp
-        echo "📊 Elo ladder (anchored: random = 0):"
-        .venv/bin/python3 elo.py report 2>/dev/null || true
-    fi
+
 
     # 4. Checkpoint (every CHECKPOINT_EVERY iterations ≈ every 50*BASELINE_GAMES games)
     if [ $((i % CHECKPOINT_EVERY)) -eq 0 ]; then
@@ -544,9 +523,13 @@ do
     fi
     
     # Supabase: Backup the new model weights
-    .venv/bin/python3 supabase_sync.py upload model.safetensors
-    if [ -f training_log.csv ]; then .venv/bin/python3 supabase_sync.py upload training_log.csv; fi
-    if [ -f elo_ratings.json ]; then .venv/bin/python3 supabase_sync.py upload elo_ratings.json; fi
+    if [ "$SYNC_SUPABASE" = true ]; then
+        .venv/bin/python3 supabase_sync.py backup-pod
+    else
+        .venv/bin/python3 supabase_sync.py upload model.safetensors
+        if [ -f training_log.csv ]; then .venv/bin/python3 supabase_sync.py upload training_log.csv; fi
+        if [ -f elo_ratings.json ]; then .venv/bin/python3 supabase_sync.py upload elo_ratings.json; fi
+    fi
     
     # Smart Pruning: Keep recent density and historical milestones
     # This keeps:
@@ -562,8 +545,8 @@ do
             ITER_VAL=$(echo "$FILE" | sed -n 's/.*iter\([0-9]\+\)_.*/\1/p')
             
             KEEP=false
-            if [ $idx -le 50 ]; then
-                # Keep the last 50 most recent
+            if [ $idx -le 10 ]; then
+                # Keep the last 10 most recent
                 KEEP=true
             elif [ -n "$ITER_VAL" ]; then
                 # Keep historical milestones (games-based spacing; checkpoints
@@ -589,5 +572,15 @@ do
     # replay window regardless of -g (train.py reads the same value via
     # REPLAY_BUFFER_FILES)
     ls -t archive/games_*.safetensors 2>/dev/null | tail -n +$((ARCHIVE_KEEP + 1)) | xargs -r rm
-
 done
+
+# ============================================================================
+# Final Elo Rating
+# ============================================================================
+if [ "$ELO_TRACK" != "0" ]; then
+    echo "📈 Final Elo: rating checkpoints (log: elo.log)..."
+    SEEDS="${ELO_SEEDS:-8}" WORKERS="${ELO_WORKERS:-2}" ./rate_checkpoints.sh >> elo.log 2>&1
+    echo "📊 Final Elo ladder (anchored: random = 0):"
+    .venv/bin/python3 elo.py report 2>/dev/null || true
+    if [ -f elo_ratings.json ]; then .venv/bin/python3 supabase_sync.py upload elo_ratings.json; fi
+fi

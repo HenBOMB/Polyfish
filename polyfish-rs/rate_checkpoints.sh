@@ -38,15 +38,17 @@ else PY=python3
 fi
 
 # Anchors: name / backend / mcts. Names must match arena's player_name().
-# heuristic1024 exists because the ladder previously topped out near greedy:
-# every checkpoint swept the bots and the fit compressed them all to ~970
-# regardless of true strength. A stronger top rung keeps ratings discriminative.
-ANCHORS=("random:random:1" "greedy:greedy:1" "heuristic64:heuristic:64" "heuristic256:heuristic:256" "heuristic1024:heuristic:1024")
+ANCHORS=("random:random:1" "greedy:greedy:1")
 # Rough ladder positions used only for nearest-anchor selection before a fit
 # exists for the anchor itself; real ratings take over once fitted.
-ANCHOR_GUESS=("random:0" "greedy:250" "heuristic64:500" "heuristic256:650" "heuristic1024:900")
+ANCHOR_GUESS=("random:0" "greedy:250")
 
-cargo build --release --bin arena
+if command -v cargo >/dev/null 2>&1; then
+    cargo build --release --bin arena
+elif [ ! -x "$ARENA" ]; then
+    echo "Error: $ARENA not found and cargo not available to build it." >&2
+    exit 1
+fi
 
 is_rated() { # player name has any ledger games
     [ "${FORCE:-0}" = "1" ] && return 1
@@ -88,11 +90,60 @@ nearest_anchors() {
 }
 
 # Collect models to rate: explicit args, else checkpoints/ sorted by iteration.
+SYNC_SUPABASE=false
+LOAD_PROGRESS=false
+MIN_ITER=${MIN_ITER:-0}
 MODELS=()
-if [ "$#" -gt 0 ]; then
-    MODELS=("$@")
-else
-    while IFS= read -r f; do MODELS+=("$f"); done \
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --supabase|--save)
+            SYNC_SUPABASE=true
+            shift
+            ;;
+        --load)
+            LOAD_PROGRESS=true
+            shift
+            ;;
+        --min-iter)
+            MIN_ITER="$2"
+            shift 2
+            ;;
+        --min-iter=*)
+            MIN_ITER="${1#*=}"
+            shift
+            ;;
+        *)
+            MODELS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+if [ "$LOAD_PROGRESS" = true ] && [ -f "supabase_sync.py" ]; then
+    echo "Downloading previous Elo progress from Supabase..."
+    "$PY" supabase_sync.py download "$MATCHES" || true
+    "$PY" supabase_sync.py download "$RATINGS" || true
+fi
+
+if [ ${#MODELS[@]} -eq 0 ]; then
+    # Auto-sync missing checkpoints from supabase before rating if requested
+    if [ "$SYNC_SUPABASE" = true ] && [ -f "supabase_sync.py" ]; then
+        "$PY" supabase_sync.py download-all-checkpoints "$MIN_ITER" || true
+    fi
+
+    while IFS= read -r f; do
+        if [ "$MIN_ITER" -gt 0 ]; then
+            base=$(basename "$f")
+            if [[ "$base" =~ model_checkpoint_iter([0-9]+)(_.*)?\.safetensors ]]; then
+                iter="${BASH_REMATCH[1]}"
+                if [ "$iter" -lt "$MIN_ITER" ]; then
+                    continue
+                fi
+            fi
+        fi
+        MODELS+=("$f")
+    done \
         < <(ls checkpoints/model_checkpoint_iter*.safetensors 2>/dev/null | sort -V)
 fi
 if [ ${#MODELS[@]} -eq 0 ]; then
@@ -104,13 +155,6 @@ DUMMY_MODEL=${MODELS[0]} # network-free backends still need a loadable model pat
 # First run: cross-link the anchors so the fit is connected to random=0.
 if ! is_rated "greedy"; then
     play "$DUMMY_MODEL" "greedy" "greedy" 1 "$DUMMY_MODEL" "random" "random" 1
-    play "$DUMMY_MODEL" "heuristic64" "heuristic" 64 "$DUMMY_MODEL" "greedy" "greedy" 1
-    play "$DUMMY_MODEL" "heuristic64" "heuristic" 64 "$DUMMY_MODEL" "random" "random" 1
-fi
-# Link the top rung into the graph (idempotent across old ledgers).
-if ! is_rated "heuristic1024"; then
-    play "$DUMMY_MODEL" "heuristic1024" "heuristic" 1024 "$DUMMY_MODEL" "heuristic256" "heuristic" 256
-    play "$DUMMY_MODEL" "heuristic1024" "heuristic" 1024 "$DUMMY_MODEL" "heuristic64" "heuristic" 64
 fi
 
 PREV_MODEL=""
@@ -136,19 +180,20 @@ for MODEL in "${MODELS[@]}"; do
 
     while IFS= read -r spec; do
         A_NAME=${spec%%:*}; rest=${spec#*:}; A_BACKEND=${rest%%:*}; A_MCTS=${rest##*:}
-        play "$MODEL" "$NAME" "$BACKEND" "$MCTS" "$MODEL" "$A_NAME" "$A_BACKEND" "$A_MCTS"
+        play "$MODEL" "$NAME" "$BACKEND" "$MCTS" "$MODEL" "$A_NAME" "$A_BACKEND" "$A_MCTS" &
     done < <(nearest_anchors "$EXPECTED")
 
     if [ -n "$PREV_MODEL" ]; then
-        play "$MODEL" "$NAME" "$BACKEND" "$MCTS" "$PREV_MODEL" "$PREV_NAME" "$BACKEND" "$MCTS"
+        play "$MODEL" "$NAME" "$BACKEND" "$MCTS" "$PREV_MODEL" "$PREV_NAME" "$BACKEND" "$MCTS" &
     fi
 
     # One random earlier checkpoint (not prev) for long-range graph links.
     if [ ${#RATED_HIST[@]} -gt 1 ]; then
         HIST=${RATED_HIST[$((RANDOM % (${#RATED_HIST[@]} - 1)))]}
         H_MODEL=${HIST%%|*}; H_NAME=${HIST##*|}
-        play "$MODEL" "$NAME" "$BACKEND" "$MCTS" "$H_MODEL" "$H_NAME" "$BACKEND" "$MCTS"
+        play "$MODEL" "$NAME" "$BACKEND" "$MCTS" "$H_MODEL" "$H_NAME" "$BACKEND" "$MCTS" &
     fi
+    wait
 
     RATED_HIST+=("$MODEL|$NAME")
     PREV_MODEL=$MODEL; PREV_NAME=$NAME
@@ -156,6 +201,12 @@ for MODEL in "${MODELS[@]}"; do
 
     # Refit after each checkpoint so nearest_anchors sees fresh ratings.
     "$PY" elo.py fit --matches "$MATCHES" --out "$RATINGS" --bootstrap 0 >/dev/null
+    
+    if [ "$SYNC_SUPABASE" = true ] && [ -f "supabase_sync.py" ]; then
+        echo "Uploading mid-run progress to Supabase..."
+        "$PY" supabase_sync.py upload "$MATCHES" >/dev/null 2>&1 || true
+        "$PY" supabase_sync.py upload "$RATINGS" >/dev/null 2>&1 || true
+    fi
 done
 
 echo ""
@@ -164,3 +215,9 @@ if [ "$NEW_RATED" -eq 0 ] && ! [ -f "$MATCHES" ]; then
     exit 0
 fi
 "$PY" elo.py fit --matches "$MATCHES" --out "$RATINGS"
+
+if [ "$SYNC_SUPABASE" = true ] && [ -f "supabase_sync.py" ]; then
+    echo "Uploading results to Supabase..."
+    "$PY" supabase_sync.py upload "$MATCHES" || true
+    "$PY" supabase_sync.py upload "$RATINGS" || true
+fi
