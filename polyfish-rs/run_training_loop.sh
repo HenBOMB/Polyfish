@@ -87,12 +87,18 @@ RESET=false
 IDLE=false
 SNAPSHOT_ONLY=false
 SNAPSHOT_RESET=false
+RESUME_FROM_ITER=""
 PASSTHROUGH=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --resume)
       shift
       if [[ "${1:-}" =~ ^[0-9]+$ ]]; then RESUME_RUN="$1"; shift; else RESUME_RUN="latest"; fi
+      ;;
+    --resume-from)
+      shift
+      if [[ "${1:-}" =~ ^[0-9]+$ ]]; then RESUME_FROM_ITER="$1"; shift
+      else echo "Error: --resume-from requires an iteration number (e.g. --resume-from 84)" >&2; exit 1; fi
       ;;
     --new-run|-N) RESUME_RUN=""; shift ;;
     --reset) RESET=true; shift ;;
@@ -282,6 +288,23 @@ if [ "$SNAPSHOT_ONLY" = true ]; then
     exit 0
 fi
 
+# --resume-from N: download checkpoint iter N from Supabase, start a fresh run
+# with that checkpoint as the initial model (like --reset but seeded from a
+# specific historical checkpoint instead of random init).
+if [ -n "$RESUME_FROM_ITER" ]; then
+    echo "🔄 --resume-from $RESUME_FROM_ITER: downloading checkpoint iter $RESUME_FROM_ITER from Supabase..."
+    rm -f model.safetensors
+    if ! .venv/bin/python3 supabase_sync.py download-checkpoint-iter "$RESUME_FROM_ITER"; then
+        echo "❌ Failed to download checkpoint for iteration $RESUME_FROM_ITER from Supabase. Aborting." >&2
+        exit 1
+    fi
+    # Clean stale game data — fresh run, old games are meaningless
+    rm -f games_*.safetensors archive/games_*.safetensors
+    # Force new run (ignore any --resume that was also passed)
+    RESUME_RUN=""
+    echo "✅ Loaded checkpoint iter $RESUME_FROM_ITER as initial model. Starting fresh run."
+fi
+
 if [ "$RESET" = true ]; then
     echo "🗑️  Reset flag detected! Deleting model.safetensors and self-play game data to seed a fresh model..."
     rm -f model.safetensors
@@ -308,7 +331,14 @@ fi
 RUN_ID=$(echo "$RUN_INFO" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin)['run_id'])")
 RUN_STARTED_AT=$(echo "$RUN_INFO" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin)['run_started_at'])")
 START_ITER=$(echo "$RUN_INFO" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin)['start_iter'])")
-echo "Training run_id=$RUN_ID started_at=$RUN_STARTED_AT starting at iteration $START_ITER"
+if [ -n "$RESUME_FROM_ITER" ]; then
+    START_ITER="$RESUME_FROM_ITER"
+fi
+if [ -n "$RESUME_FROM_ITER" ]; then
+    echo "Training run_id=$RUN_ID started_at=$RUN_STARTED_AT starting at iteration $START_ITER (seeded from checkpoint iter $RESUME_FROM_ITER)"
+else
+    echo "Training run_id=$RUN_ID started_at=$RUN_STARTED_AT starting at iteration $START_ITER"
+fi
 
 # Set up config.json sync if not present
 if [ ! -f "config.json" ]; then
@@ -338,14 +368,20 @@ portable_shuf() {
 }
 
 # 0. Initialize & Auto-Restore Model
-echo "Initializing/Checking model..."
-.venv/bin/python3 supabase_sync.py download model.safetensors
-# If resuming but model.safetensors is missing, restore latest checkpoint
-if [ "$START_ITER" -gt 1 ] && [ ! -f "model.safetensors" ]; then
-    LATEST_CP=$(ls checkpoints/model_checkpoint_iter*.safetensors 2>/dev/null | sort -V | tail -n 1 || true)
-    if [ -n "$LATEST_CP" ]; then
-        echo "🔄 Resuming: Restoring latest checkpoint $(basename $LATEST_CP) to model.safetensors"
-        cp "$LATEST_CP" model.safetensors
+# --resume-from already placed model.safetensors; skip the normal download path
+# so we don't overwrite it with the generic latest model from Supabase.
+if [ -n "$RESUME_FROM_ITER" ]; then
+    echo "Initializing model from checkpoint iter $RESUME_FROM_ITER (already downloaded)..."
+else
+    echo "Initializing/Checking model..."
+    .venv/bin/python3 supabase_sync.py download model.safetensors
+    # If resuming but model.safetensors is missing, restore latest checkpoint
+    if [ "$START_ITER" -gt 1 ] && [ ! -f "model.safetensors" ]; then
+        LATEST_CP=$(ls checkpoints/model_checkpoint_iter*.safetensors 2>/dev/null | sort -V | tail -n 1 || true)
+        if [ -n "$LATEST_CP" ]; then
+            echo "🔄 Resuming: Restoring latest checkpoint $(basename $LATEST_CP) to model.safetensors"
+            cp "$LATEST_CP" model.safetensors
+        fi
     fi
 fi
 .venv/bin/python3 init_model.py
@@ -519,12 +555,15 @@ do
     if [ $((i % CHECKPOINT_EVERY)) -eq 0 ]; then
         TS=$(date +%Y%m%d_%H%M%S)
         echo "Creating checkpoint for iteration $i (Timestamp: $TS)..."
-        cp model.safetensors "checkpoints/model_checkpoint_iter${i}_${TS}.safetensors"
+        CP_NAME="checkpoints/model_checkpoint_iter${i}_${TS}.safetensors"
+        cp model.safetensors "$CP_NAME"
+        .venv/bin/python3 supabase_sync.py upload "$CP_NAME"
     fi
     
     # Supabase: Backup the new model weights
     if [ "$SYNC_SUPABASE" = true ]; then
         .venv/bin/python3 supabase_sync.py backup-pod
+        .venv/bin/python3 supabase_sync.py upload model.safetensors
     else
         .venv/bin/python3 supabase_sync.py upload model.safetensors
         if [ -f training_log.csv ]; then .venv/bin/python3 supabase_sync.py upload training_log.csv; fi

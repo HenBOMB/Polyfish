@@ -83,12 +83,18 @@ RESUME_RUN=""
 RESET=false
 IDLE=false
 BENCHMARK=false
+RESUME_FROM_ITER=""
 PASSTHROUGH=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --resume)
       shift
       if [[ "${1:-}" =~ ^[0-9]+$ ]]; then RESUME_RUN="$1"; shift; else RESUME_RUN="latest"; fi
+      ;;
+    --resume-from)
+      shift
+      if [[ "${1:-}" =~ ^[0-9]+$ ]]; then RESUME_FROM_ITER="$1"; shift
+      else echo "Error: --resume-from requires an iteration number (e.g. --resume-from 84)" >&2; exit 1; fi
       ;;
     --new-run|-N) RESUME_RUN=""; shift ;;
     --reset) RESET=true; shift ;;
@@ -106,9 +112,103 @@ if [ "$IDLE" = true ]; then
 fi
 
 if [ "$BENCHMARK" = true ]; then
-    echo "Benchmark mode requested (--benchmark). Running benchmark bin then sleeping indefinitely."
-    ./target/release/benchmark
-    sleep infinity
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║            📊 GPU THROUGHPUT BENCHMARK SWEEP                ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo ""
+
+    # Ensure model exists for benchmark runs
+    if [ ! -f "model.safetensors" ]; then
+        .venv/bin/python3 supabase_sync.py download model.safetensors
+        .venv/bin/python3 init_model.py
+    fi
+
+    BENCH_GAMES=${BENCH_GAMES:-8}
+    BENCH_MCTS=${MCTS_ITERS:-128}
+    BENCH_RESULTS=""
+    BENCH_BEST_MPS=0
+    BENCH_BEST_ACTORS=128
+    BENCH_BEST_ESERVERS=0
+
+    # Configurations to sweep: (actors, eval-servers)
+    # eval-servers=0 means auto (the binary picks its default)
+    BENCH_CONFIGS=(
+        "64,0"
+        "96,0"
+        "128,0"
+        "160,0"
+        "192,0"
+        "256,0"
+        "128,1"
+        "128,2"
+        "128,3"
+        "192,2"
+        "192,3"
+        "256,2"
+        "256,3"
+    )
+
+    echo "Testing ${#BENCH_CONFIGS[@]} configurations (${BENCH_GAMES} games × ${BENCH_MCTS} MCTS iters each)..."
+    echo ""
+
+    for cfg in "${BENCH_CONFIGS[@]}"; do
+        IFS=',' read -r b_actors b_eservers <<< "$cfg"
+        printf "  ⏱  actors=%-4s eval-servers=%-2s ... " "$b_actors" "$b_eservers"
+
+        BENCH_OUT=$(./target/release/self_play \
+            --num-games "$BENCH_GAMES" \
+            --mcts-iters "$BENCH_MCTS" \
+            --gumbel-k 16 \
+            --actors "$b_actors" \
+            --eval-servers "$b_eservers" \
+            --iteration 1 \
+            --gamemode 2 \
+            --tribe1 Imperius --tribe2 Bardur \
+            $EVAL_BACKEND_FLAG 2>&1 || true)
+
+        # Parse the throughput line: "  Throughput: 123.45 moves/sec (N moves over Xs)"
+        MPS=$(echo "$BENCH_OUT" | grep -oP 'Throughput:\s+\K[0-9]+(\.[0-9]+)?' | tail -1)
+        if [ -z "$MPS" ]; then MPS="0"; fi
+
+        printf "%8s moves/sec\n" "$MPS"
+
+        BENCH_RESULTS="${BENCH_RESULTS}${MPS},${b_actors},${b_eservers}\n"
+
+        # Track best
+        IS_BETTER=$(awk -v new="$MPS" -v best="$BENCH_BEST_MPS" 'BEGIN { print (new+0 > best+0) ? 1 : 0 }')
+        if [ "$IS_BETTER" -eq 1 ]; then
+            BENCH_BEST_MPS="$MPS"
+            BENCH_BEST_ACTORS="$b_actors"
+            BENCH_BEST_ESERVERS="$b_eservers"
+        fi
+    done
+
+    echo ""
+    echo "┌─────────────────────────────────────────────────┐"
+    echo "│              RESULTS (ranked)                   │"
+    echo "├──────────┬──────────────┬────────────────────── ┤"
+    printf "│ %-8s │ %-12s │ %-22s│\n" "actors" "eval-servers" "moves/sec"
+    echo "├──────────┼──────────────┼────────────────────── ┤"
+    echo -e "$BENCH_RESULTS" | sort -t',' -k1 -rn | while IFS=',' read -r mps actors eservers; do
+        [ -z "$mps" ] && continue
+        if [ "$actors" = "$BENCH_BEST_ACTORS" ] && [ "$eservers" = "$BENCH_BEST_ESERVERS" ]; then
+            printf "│ %-8s │ %-12s │ %-18s 🏆 │\n" "$actors" "$eservers" "$mps"
+        else
+            printf "│ %-8s │ %-12s │ %-22s│\n" "$actors" "$eservers" "$mps"
+        fi
+    done
+    echo "└──────────┴──────────────┴────────────────────── ┘"
+
+    echo ""
+    echo "🏆 Best config: actors=$BENCH_BEST_ACTORS eval-servers=$BENCH_BEST_ESERVERS → $BENCH_BEST_MPS moves/sec"
+    echo "   Applying to training loop."
+    echo ""
+
+    ACTORS="$BENCH_BEST_ACTORS"
+    EVAL_SERVERS="$BENCH_BEST_ESERVERS"
+    ACTORS_SET=true
+    ESERVERS_SET=true
 fi
 
 FORCE_TRAIN=false
@@ -130,8 +230,8 @@ while getopts "fbcri:g:n:a:e:l:K:A:H:W:P:E:" opt; do
     i) ITERATIONS=$OPTARG; ITERATIONS_SET=true ;;
     g) NUM_GAMES=$OPTARG ;;
     n) MCTS_ITERS=$OPTARG; MCTS_ITERS_SET=true ;;
-    a) ACTORS=$OPTARG ;;
-    e) EVAL_SERVERS=$OPTARG ;;
+    a) ACTORS=$OPTARG; ACTORS_SET=true ;;
+    e) EVAL_SERVERS=$OPTARG; ESERVERS_SET=true ;;
     l) LEAGUE_INTERVAL=$OPTARG ;;
     K) TRAIN_EVERY=$OPTARG ;;
     A) ANCHOR_FRAC=$OPTARG ;;
@@ -166,6 +266,23 @@ if [ "$FORCE_TRAIN" = true ]; then
     TRAIN_EPOCHS=${TRAIN_EPOCHS:-2} .venv/bin/python3 train.py
 fi
 
+# --resume-from N: download checkpoint iter N from Supabase, start a fresh run
+# with that checkpoint as the initial model (like --reset but seeded from a
+# specific historical checkpoint instead of random init).
+if [ -n "$RESUME_FROM_ITER" ]; then
+    echo "🔄 --resume-from $RESUME_FROM_ITER: downloading checkpoint iter $RESUME_FROM_ITER from Supabase..."
+    rm -f model.safetensors
+    if ! .venv/bin/python3 supabase_sync.py download-checkpoint-iter "$RESUME_FROM_ITER"; then
+        echo "❌ Failed to download checkpoint for iteration $RESUME_FROM_ITER from Supabase. Aborting." >&2
+        exit 1
+    fi
+    # Clean stale game data — fresh run, old games are meaningless
+    rm -f games_*.safetensors archive/games_*.safetensors
+    # Force new run (ignore any --resume that was also passed)
+    RESUME_RUN=""
+    echo "✅ Loaded checkpoint iter $RESUME_FROM_ITER as initial model. Starting fresh run."
+fi
+
 if [ "$RESET" = true ]; then
     echo "🗑️  Reset: deleting model.safetensors and self-play game data..."
     rm -f model.safetensors games_*.safetensors archive/games_*.safetensors
@@ -186,7 +303,14 @@ fi
 RUN_ID=$(echo "$RUN_INFO" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin)['run_id'])")
 RUN_STARTED_AT=$(echo "$RUN_INFO" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin)['run_started_at'])")
 START_ITER=$(echo "$RUN_INFO" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin)['start_iter'])")
-echo "Training run_id=$RUN_ID started_at=$RUN_STARTED_AT starting at iteration $START_ITER"
+if [ -n "$RESUME_FROM_ITER" ]; then
+    START_ITER="$RESUME_FROM_ITER"
+fi
+if [ -n "$RESUME_FROM_ITER" ]; then
+    echo "Training run_id=$RUN_ID started_at=$RUN_STARTED_AT starting at iteration $START_ITER (seeded from checkpoint iter $RESUME_FROM_ITER)"
+else
+    echo "Training run_id=$RUN_ID started_at=$RUN_STARTED_AT starting at iteration $START_ITER"
+fi
 
 if [ ! -f "config.json" ]; then
     echo "{\"gamemode\": 2, \"mctsIters\": $MCTS_ITERS, \"cores\": 2, \"tribes\": [\"Imperius\", \"Bardur\", \"Oumaji\", \"Kickoo\", \"XinXi\"]}" > config.json
@@ -208,13 +332,19 @@ portable_shuf() {
 }
 
 # 0. Initialize & Auto-Restore Model
-echo "Initializing/Checking model..."
-.venv/bin/python3 supabase_sync.py download model.safetensors
-if [ "$START_ITER" -gt 1 ] && [ ! -f "model.safetensors" ]; then
-    LATEST_CP=$(ls checkpoints/model_checkpoint_iter*.safetensors 2>/dev/null | sort -V | tail -n 1 || true)
-    if [ -n "$LATEST_CP" ]; then
-        echo "🔄 Resuming: Restoring $(basename $LATEST_CP) to model.safetensors"
-        cp "$LATEST_CP" model.safetensors
+# --resume-from already placed model.safetensors; skip the normal download path
+# so we don't overwrite it with the generic latest model from Supabase.
+if [ -n "$RESUME_FROM_ITER" ]; then
+    echo "Initializing model from checkpoint iter $RESUME_FROM_ITER (already downloaded)..."
+else
+    echo "Initializing/Checking model..."
+    .venv/bin/python3 supabase_sync.py download model.safetensors
+    if [ "$START_ITER" -gt 1 ] && [ ! -f "model.safetensors" ]; then
+        LATEST_CP=$(ls checkpoints/model_checkpoint_iter*.safetensors 2>/dev/null | sort -V | tail -n 1 || true)
+        if [ -n "$LATEST_CP" ]; then
+            echo "🔄 Resuming: Restoring $(basename $LATEST_CP) to model.safetensors"
+            cp "$LATEST_CP" model.safetensors
+        fi
     fi
 fi
 .venv/bin/python3 init_model.py
@@ -336,11 +466,13 @@ do
         CP_NAME="checkpoints/model_checkpoint_iter${i}_${TS}.safetensors"
         echo "Creating checkpoint for iteration $i (Timestamp: $TS)..."
         cp model.safetensors "$CP_NAME"
+        .venv/bin/python3 supabase_sync.py upload "$CP_NAME"
     fi
 
     # Supabase: Backup the new model weights, training logs, and elo ratings
     if [ "$SYNC_SUPABASE" = true ]; then
         .venv/bin/python3 supabase_sync.py backup-pod
+        .venv/bin/python3 supabase_sync.py upload model.safetensors
     else
         .venv/bin/python3 supabase_sync.py upload model.safetensors
         if [ -f training_log.csv ]; then .venv/bin/python3 supabase_sync.py upload training_log.csv; fi

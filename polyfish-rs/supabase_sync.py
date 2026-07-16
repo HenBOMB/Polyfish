@@ -72,6 +72,43 @@ def download(file_path: str, bucket: str = "models"):
     except Exception as e:
         print(f"⚠️ Could not download {filename} from Supabase (may not exist yet).")
 
+def download_checkpoint_iter(target_iter: int, bucket: str = "models") -> str | None:
+    """Download the checkpoint for a specific iteration from Supabase and save as model.safetensors.
+    
+    Returns the matched checkpoint filename, or None if not found.
+    """
+    import re
+    supabase = get_client()
+    print(f"⬇️ Looking for checkpoint iter {target_iter} in Supabase bucket '{bucket}'...")
+    
+    try:
+        files = supabase.storage.from_(bucket).list()
+        # Find checkpoint(s) matching the exact iteration number
+        pattern = re.compile(r"^model_checkpoint_iter(\d+)_.*\.safetensors$")
+        matches = []
+        for f in files:
+            name = f.get("name", "")
+            m = pattern.match(name)
+            if m and int(m.group(1)) == target_iter:
+                matches.append(name)
+        
+        if not matches:
+            print(f"❌ No checkpoint found for iteration {target_iter} in Supabase.")
+            return None
+        
+        # If multiple timestamps exist for the same iter, pick the latest (lexicographic sort on timestamp suffix)
+        chosen = sorted(matches)[-1]
+        print(f"⬇️ Downloading checkpoint: {chosen}...")
+        data = supabase.storage.from_(bucket).download(chosen)
+        with open("model.safetensors", 'wb') as out_f:
+            out_f.write(data)
+        print(f"✅ Checkpoint {chosen} downloaded and saved as model.safetensors")
+        return chosen
+    except Exception as e:
+        print(f"⚠️ Failed to download checkpoint for iter {target_iter}: {e}")
+        return None
+
+
 def download_all_checkpoints(bucket: str = "models", min_iter: int = 0, matches_file: str = None):
     supabase = get_client()
     print(f"⬇️ Listing files in Supabase bucket '{bucket}'...")
@@ -113,7 +150,6 @@ def backup_pod(bucket: str = "models"):
     import subprocess
     print("📦 Creating pod_state.tar.gz...")
     files_to_backup = [
-        "model.safetensors",
         "training_log.csv",
         "config.json",
         ".last_train_metrics.json",
@@ -145,7 +181,7 @@ def restore_pod(bucket: str = "models"):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python supabase_sync.py [upload|download|download-all-checkpoints] [file_path]")
+        print("Usage: python supabase_sync.py [upload|download|download-checkpoint-iter|download-all-checkpoints] [file_path]")
         sys.exit(1)
     
     action = sys.argv[1]
@@ -155,6 +191,14 @@ if __name__ == "__main__":
         upload(file_path)
     elif action == "download":
         download(file_path)
+    elif action == "download-checkpoint-iter":
+        if len(sys.argv) < 3:
+            print("Usage: python supabase_sync.py download-checkpoint-iter <iteration_number>")
+            sys.exit(1)
+        target_iter = int(sys.argv[2])
+        result = download_checkpoint_iter(target_iter)
+        if result is None:
+            sys.exit(1)
     elif action == "download-all-checkpoints":
         min_iter = 0
         matches_file = None
