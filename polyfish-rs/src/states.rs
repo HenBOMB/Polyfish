@@ -504,7 +504,7 @@ pub fn default_turn() -> i32 {
     0
 }
 pub fn default_max_turns() -> i32 {
-    30
+    45
 }
 pub fn default_max_score() -> i32 {
     5000

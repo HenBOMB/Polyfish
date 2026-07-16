@@ -201,7 +201,7 @@ fn curriculum(iteration: usize) -> (MapSize, i32) {
     } else if iteration <= 30 {
         (MapSize::Tiny, 20)
     } else {
-        (MapSize::Tiny, 30)
+        (MapSize::Tiny, 45)
     }
 }
 
@@ -2290,10 +2290,26 @@ fn main() -> anyhow::Result<()> {
     // json! macro under its recursion limit). vlab_wl_share is the headline:
     // fraction of the value-label magnitude that is genuine win/loss.
     let vlab_total = vlab_td_abs + vlab_wl_abs + vlab_scoretail_abs + vlab_spt_abs;
-    let vlab_wl_share = if vlab_total > 0.0 { (vlab_wl_abs / vlab_total) as f32 } else { 0.0 };
-    let vlab_td_absmean = if vlab_steps > 0 { (vlab_td_abs / vlab_steps as f64) as f32 } else { 0.0 };
-    let vlab_wl_absmean = if vlab_steps > 0 { (vlab_wl_abs / vlab_steps as f64) as f32 } else { 0.0 };
-    let vlab_spt_absmean = if vlab_steps > 0 { (vlab_spt_abs / vlab_steps as f64) as f32 } else { 0.0 };
+    let vlab_wl_share = if vlab_total > 0.0 {
+        (vlab_wl_abs / vlab_total) as f32
+    } else {
+        0.0
+    };
+    let vlab_td_absmean = if vlab_steps > 0 {
+        (vlab_td_abs / vlab_steps as f64) as f32
+    } else {
+        0.0
+    };
+    let vlab_wl_absmean = if vlab_steps > 0 {
+        (vlab_wl_abs / vlab_steps as f64) as f32
+    } else {
+        0.0
+    };
+    let vlab_spt_absmean = if vlab_steps > 0 {
+        (vlab_spt_abs / vlab_steps as f64) as f32
+    } else {
+        0.0
+    };
 
     let metrics = json!({
         "num_games": args.num_games,
