@@ -72,6 +72,7 @@ SERVER_BIN="$RUN_BIN_DIR/polyfish"
 # Parse long options first, then short options via getopts
 RESUME_RUN=""
 RESET=false
+START_SERVER=true
 PASSTHROUGH=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -90,6 +91,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --reset)
       RESET=true
+      shift
+      ;;
+    --no-server)
+      START_SERVER=false
       shift
       ;;
     *)
@@ -231,11 +236,23 @@ if [ ! -f "config.json" ]; then
     echo "{\"gamemode\": 2, \"mctsIters\": $MCTS_ITERS, \"cores\": 2, \"tribes\": [\"Imperius\", \"Bardur\", \"Oumaji\", \"Kickoo\", \"XinXi\"]}" > config.json
 fi
 
-echo "Starting backend server in background..."
-"$SERVER_BIN" &
-SERVER_PID=$!
+SERVER_PID=""
+if [ "$START_SERVER" = true ]; then
+    echo "Starting backend server in background..."
+    "$SERVER_BIN" &
+    SERVER_PID=$!
+else
+    echo "Using existing backend server."
+fi
 
-trap '.venv/bin/python3 training_log.py finish-run 2>/dev/null || true; kill $SERVER_PID 2>/dev/null; rm -f .training.pid' EXIT
+cleanup() {
+    .venv/bin/python3 training_log.py finish-run 2>/dev/null || true
+    if [ -n "${SERVER_PID:-}" ]; then
+        kill "$SERVER_PID" 2>/dev/null || true
+    fi
+    rm -f .training.pid
+}
+trap cleanup EXIT
 
 # Portable replacement for GNU `shuf` (not present on stock macOS)
 portable_shuf() {

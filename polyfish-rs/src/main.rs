@@ -668,7 +668,7 @@ async fn trigger_training(State(state): State<Arc<AppState>>) -> Json<Value> {
     };
 
     let child = Command::new("bash")
-        .args(["run_training_loop.sh", "-n"])
+        .args(["run_training_loop.sh", "--no-server"])
         .current_dir(".")
         .stdout(Stdio::from(log_file.try_clone().unwrap()))
         .stderr(Stdio::from(log_file))
