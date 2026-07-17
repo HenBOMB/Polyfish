@@ -159,6 +159,24 @@ scaled() {
     awk -v x="$1" -v b="$BASELINE_GAMES" -v g="$NUM_GAMES" \
         'BEGIN { v = int(x * b / g + 0.5); print (v < 1 ? 1 : v) }'
 }
+
+# Minimal JSON helpers. Python is already required by the training pipeline,
+# so the loop does not need the optional jq system package.
+json_get() {
+    local key="$1"
+    local default_value="${2:-}"
+    .venv/bin/python3 -c 'import json,sys; value=json.load(sys.stdin).get(sys.argv[1], sys.argv[2]); print(value if value is not None else sys.argv[2])' "$key" "$default_value"
+}
+
+json_array_values() {
+    local key="$1"
+    .venv/bin/python3 -c 'import json,sys; [print(value) for value in json.load(sys.stdin).get(sys.argv[1], []) if value is not None]' "$key"
+}
+
+json_array_items() {
+    .venv/bin/python3 -c 'import json,sys; [print(json.dumps(value)) for value in json.load(sys.stdin)]'
+}
+
 if [ "${ITERATIONS_SET:-false}" != true ]; then
     ITERATIONS=$(scaled "$ITERATIONS")
 fi
@@ -337,9 +355,9 @@ do
     # -n on the command line is an explicit override and must survive the
     # whole run — it must not be re-clobbered by config.json each iteration.
     if [ -f "config.json" ]; then
-        GAMEMODE=$(jq -r '.gamemode // 2' config.json)
+        GAMEMODE=$(json_get gamemode 2 < config.json)
         if [ "${MCTS_ITERS_SET:-false}" != true ]; then
-            MCTS_ITERS=$(jq -r '.mctsIters // 64' config.json)
+            MCTS_ITERS=$(json_get mctsIters 64 < config.json)
         fi
         # Parse tribes array into bash array safely
         TRIBE_LIST=()
@@ -347,7 +365,7 @@ do
             if [ -n "$line" ]; then
                 TRIBE_LIST+=("$line")
             fi
-        done < <(jq -r '.tribes[]? // empty' config.json)
+        done < <(json_array_values tribes < config.json)
     else
         GAMEMODE=2
     fi
@@ -473,8 +491,8 @@ do
     # consecutive 8-reading windows with no gain stop the run (plateau).
     if [ "$LEAGUE_INTERVAL" -gt 0 ] && [ $((i % LEAGUE_INTERVAL)) -eq 0 ]; then
         ACTIVE_JSON=$(.venv/bin/python3 ladder.py active)
-        ANCHOR_PATH=$(echo "$ACTIVE_JSON" | jq -r '.path')
-        ANCHOR_NAME=$(echo "$ACTIVE_JSON" | jq -r '.name')
+        ANCHOR_PATH=$(json_get path "" <<< "$ACTIVE_JSON")
+        ANCHOR_NAME=$(json_get name "" <<< "$ACTIVE_JSON")
         GAUGE_LOG=$(mktemp)
 
         # $1 = opponent model path ("" = greedy backend), $2 = seeds (games x2),
@@ -516,7 +534,7 @@ do
                 --wins-p1 "${GAUGE_WP1:-0}" --wins-p2 "${GAUGE_WP2:-0}" \
                 --stats-dir "$GAUGE_STATS_DIR")
             echo "GAUGE: $VERDICT"
-            GAUGE_ACTION=$(echo "$VERDICT" | jq -r '.action')
+            GAUGE_ACTION=$(json_get action "" <<< "$VERDICT")
 
             # EXP_ELO_002: first >=50% reading vs the greedy anchor starts
             # the anchor-frac decay clock (EFF_ITER units, matching
@@ -559,9 +577,9 @@ do
             # Audit block every 5th gauge: greedy + one retired anchor,
             # rotating — observed vs chain-predicted win rate flags cycles.
             if [ $((i % (LEAGUE_INTERVAL * 5))) -eq 0 ]; then
-                .venv/bin/python3 ladder.py audit-opponents | jq -c '.[]' | while read -r AUD; do
-                    AUD_NAME=$(echo "$AUD" | jq -r '.name')
-                    AUD_PATH=$(echo "$AUD" | jq -r '.path')
+                .venv/bin/python3 ladder.py audit-opponents | json_array_items | while read -r AUD; do
+                    AUD_NAME=$(json_get name "" <<< "$AUD")
+                    AUD_PATH=$(json_get path "" <<< "$AUD")
                     run_gauge_match "$AUD_PATH" "${GAUGE_GAMES:-32}" "replays/gauge_stats/${RUN_ID}_iter${i}_audit_${AUD_NAME}"
                     if [ -n "$GAUGE_W" ] && [ -n "$GAUGE_L" ]; then
                         .venv/bin/python3 ladder.py record --kind audit --opponent "$AUD_NAME" \
