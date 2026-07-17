@@ -19,10 +19,10 @@ export DETACH_VALUE_TRUNK=1
 # Throughput scales with concurrent games; small NUM_GAMES (-g) is a real limiter, not this knob.
 # See expert_boost_throughput.md for details.
 ACTORS=128
-# 3 servers × 2 workers measured best on metal after buffer pooling
-# (~610-650 moves/s — see expert_boost_throughput.md). 0 = auto (3 on metal,
-# 1 on tch/candle). Don't force >1 on tch — MPS serializes across shards.
-EVAL_SERVERS=3
+# Auto-select 3 servers on the dedicated Metal backend and 1 on tch/candle.
+# This preserves the measured Metal optimum without making CPU/Candle runs
+# fail at startup. An explicit -e still overrides the automatic selection.
+EVAL_SERVERS=0
 # self_play picks fastest backend: metal, tch, or candle.
 # Override with --eval-backend if needed.
 export RUST_BACKTRACE=1
