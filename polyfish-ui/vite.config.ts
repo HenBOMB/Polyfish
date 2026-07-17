@@ -57,8 +57,8 @@ const processManagerPlugin = () => ({
           res.end(JSON.stringify({ error: 'Training already running' }));
           return;
         }
-        // Start training without starting the server (-n flag)
-        trainingProcess = spawn('./run_training_loop.sh', ['-n'], {
+        // Reuse the backend managed by the UI; training parameters come from config.json.
+        trainingProcess = spawn('./run_training_loop.sh', ['--no-server'], {
           cwd: '../polyfish-rs',
           stdio: 'ignore',
           detached: false
