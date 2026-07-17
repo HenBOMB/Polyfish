@@ -218,6 +218,7 @@ echo "Training run_id=$RUN_ID started_at=$RUN_STARTED_AT starting at iteration $
 
 # Restore point: snapshot the model at every launch (new run or resume), so
 # no experiment can ever start without a recoverable "before" state.
+mkdir -p checkpoints
 if [ -f model.safetensors ]; then
     LAUNCH_CP="checkpoints/run_${RUN_ID}_iter${START_ITER}_start.safetensors"
     if [ ! -f "$LAUNCH_CP" ]; then
@@ -277,7 +278,6 @@ do
     
     # 1. League Training Logic (every LEAGUE_INTERVAL iterations, deterministic)
     # Check if we have checkpoints to play against
-    mkdir -p checkpoints
     OPPONENT_FLAG=""
     MATCH_TYPE="selfplay"
 
