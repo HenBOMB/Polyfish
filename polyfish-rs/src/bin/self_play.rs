@@ -73,7 +73,7 @@ const NEAR_DELTA_REL_W: f32 = 1.0;
 // score label nets to ~0. Antisymmetric (zero-sum backup stays valid) and
 // potential-based (Ng et al. 1999), so it telescopes out of full returns
 // and cannot change the optimal policy, only the credit assignment.
-const SPT_SHAPE_W: f32 = 0.15;
+const SPT_SHAPE_W: f32 = 0.24;
 
 // Ramp (in iterations) for β on σ(Q) in the exported policy targets:
 // β = min(1, iteration/20). Early on the value head's Q ordering is noise

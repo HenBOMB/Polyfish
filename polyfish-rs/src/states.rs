@@ -513,10 +513,10 @@ pub fn default_max_stars() -> i32 {
     30
 }
 pub fn default_max_spt() -> i32 {
-    25
+    40
 }
 pub fn default_max_units() -> i32 {
-    20
+    30
 }
 pub fn default_fow() -> bool {
     true
