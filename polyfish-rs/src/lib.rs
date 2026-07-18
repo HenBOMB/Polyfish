@@ -14,6 +14,7 @@ pub mod fow;
 pub mod functions;
 pub mod game;
 pub mod hash;
+pub mod illegal_move_log;
 pub mod mapgen;
 pub mod moves;
 pub mod prediction;

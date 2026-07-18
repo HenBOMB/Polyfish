@@ -216,6 +216,7 @@ impl Game {
         } else {
             let result = game_move.execute(&mut self.state);
             if let Err(e) = result {
+                crate::illegal_move_log::log_illegal_move("play_move", &self.state, game_move, &e);
                 eprintln!(
                     "Error executing move [{}]: {}",
                     game_move.describe(&self.state),
@@ -316,6 +317,12 @@ impl Game {
             let result = game_move.execute(&mut self.state);
             if let Err(e) = result {
                 SIM_MOVE_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                crate::illegal_move_log::log_illegal_move(
+                    "simulate_move",
+                    &self.state,
+                    game_move,
+                    &e,
+                );
                 eprintln!("Error executing simulated move: {}", e);
                 return None;
             }

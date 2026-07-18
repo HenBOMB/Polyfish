@@ -41,6 +41,7 @@ polyfish-rs/test_output.txt
 polyfish-rs/replays/high_scores/
 polyfish-rs/replays/failed_games/
 polyfish-rs/decision_traces/
+polyfish-rs/illegal_moves/
 polyfish-fs/replays/autospy_*/*
 /polyfish-rs/replays/gauge_stats
 
