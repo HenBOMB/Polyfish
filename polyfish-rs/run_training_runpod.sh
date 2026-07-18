@@ -101,10 +101,26 @@ while [[ $# -gt 0 ]]; do
     --idle) IDLE=true; shift ;;
     --benchmark) BENCHMARK=true; shift ;;
     --supabase) SYNC_SUPABASE=true; shift ;;
+    --shutdown) SHUTDOWN=true; shift ;;
+    --pod-shutdown-test) POD_SHUTDOWN_TEST=true; shift ;;
     *) PASSTHROUGH+=("$1"); shift ;;
   esac
 done
 set -- "${PASSTHROUGH[@]}"
+
+if [ "$POD_SHUTDOWN_TEST" = true ]; then
+    echo "Testing pod shutdown API..."
+    if [ -z "$RUNPOD_API_KEY" ] || [ -z "$POD_ID" ]; then
+        echo "Error: RUNPOD_API_KEY and POD_ID must be set in the environment for pod shutdown." >&2
+        exit 1
+    fi
+    .venv/bin/python3 -c "import urllib.request, json, os
+req = urllib.request.Request('https://api.runpod.io/graphql', data=json.dumps({'query': f'mutation {{ podStop(input: {{ podId: \"{os.environ.get(\"POD_ID\",\"\")}\" }}) {{ id desiredStatus }} }}'}).encode(), headers={'Authorization': f'Bearer {os.environ.get(\"RUNPOD_API_KEY\",\"\")}', 'Content-Type': 'application/json', 'User-Agent': 'curl/7.68.0'})
+try: print(urllib.request.urlopen(req).read().decode())
+except Exception as e: print(e)"
+    echo -e "\nShutdown API called. Exiting."
+    exit 0
+fi
 
 if [ "$IDLE" = true ]; then
     echo "Idle mode requested (--idle). Sleeping indefinitely to keep the pod alive without training."
@@ -140,7 +156,11 @@ if [ "$BENCHMARK" = true ]; then
         "160,0"
         "192,0"
         "256,0"
+        "96,1"
         "128,1"
+        "160,1"
+        "192,1"
+        "256,1"
         "128,2"
         "128,3"
         "192,2"
@@ -162,7 +182,7 @@ if [ "$BENCHMARK" = true ]; then
             --gumbel-k 16 \
             --actors "$b_actors" \
             --eval-servers "$b_eservers" \
-            --iteration 1 \
+            --iteration 30 \
             --gamemode 2 \
             --tribe1 Imperius --tribe2 Bardur \
             $EVAL_BACKEND_FLAG 2>&1 || true)
@@ -477,6 +497,7 @@ do
         .venv/bin/python3 supabase_sync.py upload model.safetensors
         if [ -f training_log.csv ]; then .venv/bin/python3 supabase_sync.py upload training_log.csv; fi
         if [ -f elo_ratings.json ]; then .venv/bin/python3 supabase_sync.py upload elo_ratings.json; fi
+        if [ -f matches.jsonl ]; then .venv/bin/python3 supabase_sync.py upload matches.jsonl; fi
     fi
 
     # Smart pruning: last 10 + every MILESTONE_EVERY-th + iter 1
@@ -507,8 +528,22 @@ done
 # ============================================================================
 if [ "$ELO_TRACK" != "0" ]; then
     echo "📈 Final Elo: rating checkpoints (log: elo.log)..."
-    SEEDS="${ELO_SEEDS:-8}" WORKERS="${ELO_WORKERS:-2}" ./rate_checkpoints.sh >> elo.log 2>&1
+    SEEDS="${ELO_SEEDS:-8}" WORKERS="${ELO_WORKERS:-2}" ./rate_checkpoints.sh --max-turns 45 >> elo.log 2>&1
     echo "📊 Final Elo ladder (anchored: random = 0):"
     .venv/bin/python3 elo.py report 2>/dev/null || true
     if [ -f elo_ratings.json ]; then .venv/bin/python3 supabase_sync.py upload elo_ratings.json; fi
+    if [ -f matches.jsonl ]; then .venv/bin/python3 supabase_sync.py upload matches.jsonl; fi
+fi
+
+if [ "$SHUTDOWN" = true ]; then
+    echo "🛑 Training complete. Shutting down pod $POD_ID..."
+    if [ -z "$RUNPOD_API_KEY" ] || [ -z "$POD_ID" ]; then
+        echo "Warning: RUNPOD_API_KEY and POD_ID must be set to shutdown the pod." >&2
+    else
+        .venv/bin/python3 -c "import urllib.request, json, os
+req = urllib.request.Request('https://api.runpod.io/graphql', data=json.dumps({'query': f'mutation {{ podStop(input: {{ podId: \"{os.environ.get(\"POD_ID\",\"\")}\" }}) {{ id desiredStatus }} }}'}).encode(), headers={'Authorization': f'Bearer {os.environ.get(\"RUNPOD_API_KEY\",\"\")}', 'Content-Type': 'application/json', 'User-Agent': 'curl/7.68.0'})
+try: print(urllib.request.urlopen(req).read().decode())
+except Exception as e: print(e)"
+        echo -e "\nShutdown request sent."
+    fi
 fi

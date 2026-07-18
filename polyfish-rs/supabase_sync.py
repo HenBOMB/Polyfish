@@ -158,7 +158,8 @@ def backup_pod(bucket: str = "models"):
         "value_distribution.json",
         "moves_by_turn.json",
         "elo.log",
-        "elo_ratings.json"
+        "elo_ratings.json",
+        "matches.jsonl"
     ]
     # Only include files/dirs that exist
     existing_files = [f for f in files_to_backup if os.path.exists(f)]

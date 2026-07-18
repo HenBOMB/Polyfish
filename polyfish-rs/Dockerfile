@@ -14,8 +14,10 @@ COPY Cargo.docker.toml Cargo.toml
 COPY Cargo.lock ./
 COPY src ./src
 
-# Bypass nvidia-smi check during Docker build by hardcoding the Ampere compute capability (8.6)
-ENV CUDA_COMPUTE_CAP=86
+# Bypass nvidia-smi check during Docker build by hardcoding the compute capability
+# Default is 86 (Ampere, RTX 3090/A100). For RTX 4090, pass --build-arg CUDA_COMPUTE_CAP=89
+ARG CUDA_COMPUTE_CAP=86
+ENV CUDA_COMPUTE_CAP=$CUDA_COMPUTE_CAP
 
 RUN CARGO_PROFILE_RELEASE_LTO=thin CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
     cargo build --bin polyfish --bin self_play --bin arena --bin benchmark --release --no-default-features --features cuda

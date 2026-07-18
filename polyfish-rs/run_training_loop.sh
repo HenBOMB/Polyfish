@@ -568,6 +568,7 @@ do
         .venv/bin/python3 supabase_sync.py upload model.safetensors
         if [ -f training_log.csv ]; then .venv/bin/python3 supabase_sync.py upload training_log.csv; fi
         if [ -f elo_ratings.json ]; then .venv/bin/python3 supabase_sync.py upload elo_ratings.json; fi
+        if [ -f matches.jsonl ]; then .venv/bin/python3 supabase_sync.py upload matches.jsonl; fi
     fi
     
     # Smart Pruning: Keep recent density and historical milestones
@@ -618,8 +619,9 @@ done
 # ============================================================================
 if [ "$ELO_TRACK" != "0" ]; then
     echo "📈 Final Elo: rating checkpoints (log: elo.log)..."
-    SEEDS="${ELO_SEEDS:-8}" WORKERS="${ELO_WORKERS:-2}" ./rate_checkpoints.sh >> elo.log 2>&1
+    SEEDS="${ELO_SEEDS:-8}" WORKERS="${ELO_WORKERS:-2}" ./rate_checkpoints.sh --max-turns 45 >> elo.log 2>&1
     echo "📊 Final Elo ladder (anchored: random = 0):"
     .venv/bin/python3 elo.py report 2>/dev/null || true
     if [ -f elo_ratings.json ]; then .venv/bin/python3 supabase_sync.py upload elo_ratings.json; fi
+    if [ -f matches.jsonl ]; then .venv/bin/python3 supabase_sync.py upload matches.jsonl; fi
 fi

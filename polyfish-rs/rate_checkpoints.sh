@@ -119,6 +119,14 @@ while [[ $# -gt 0 ]]; do
             MIN_ITER="${1#*=}"
             shift
             ;;
+        --max-turns)
+            MAX_TURNS="$2"
+            shift 2
+            ;;
+        --max-turns=*)
+            MAX_TURNS="${1#*=}"
+            shift
+            ;;
         *)
             MODELS+=("$1")
             shift
