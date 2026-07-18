@@ -10,7 +10,13 @@ import gc
 import time
 
 # --- Configuration ---
-BATCH_SIZE = 256
+# Larger batches amortize MPS/CUDA per-op dispatch overhead (fixed cost per
+# kernel launch regardless of tensor size) over more samples — measured Jul
+# 2026: this net is small enough (64 filters) that dispatch overhead, not
+# compute, dominates batch time on Apple Silicon. Default kept at 256 for
+# reproducibility; try TRAIN_BATCH_SIZE=1024+ and retune TRAIN_LR (Adam
+# responds closer to sqrt-scaling than linear) as a deliberate experiment.
+BATCH_SIZE = int(os.environ.get("TRAIN_BATCH_SIZE", "256"))
 EPOCHS = int(os.environ.get("TRAIN_EPOCHS", "2"))
 # sqrt-scaled with the 64->256 batch bump (Adam responds closer to sqrt than
 # linear scaling; 0.004 linear would risk instability on a small net).
@@ -342,150 +348,187 @@ def train():
     # T_0=5 means it resets every 5 epochs (which is exactly our run length)
     scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=EPOCHS, T_mult=1, eta_min=1e-5)
 
-    # 3. Training Loop
+    # 3. Load + concatenate every chunk ONCE, up front, and keep all of it
+    # resident across every epoch. The old code re-ran load_file + torch.cat
+    # over the whole replay buffer inside the epoch loop — torch.cat on the
+    # full buffer measured ~20-25s of pure CPU time (zero GPU use) per pass,
+    # paid EPOCHS times for byte-identical data. Trade-off: peak RAM is now
+    # the whole cat'd replay buffer for the entire run (every chunk's tensors
+    # stay in `cached_chunks` at once) — TRAIN_CHUNK_FILES no longer bounds
+    # resident RAM the way it used to (it only limits the in-flight list of
+    # un-concatenated per-file tensors during loading); the only real RAM
+    # knob now is REPLAY_BUFFER_FILES. Lower that if the buffer doesn't fit.
+    random.shuffle(game_files)
+    CHUNK_SIZE = int(os.environ.get("TRAIN_CHUNK_FILES", "10"))
+    num_chunks = (len(game_files) + CHUNK_SIZE - 1) // CHUNK_SIZE
+    expected_flat = SPATIAL_CHANNELS * MAP_SIZE * MAP_SIZE
+    legacy_flat = 154 * MAP_SIZE * MAP_SIZE  # pre-observation-memory layout
+
+    cached_chunks = []
+
+    for i in range(0, len(game_files), CHUNK_SIZE):
+        chunk_files = game_files[i : i + CHUNK_SIZE]
+        chunk_idx = i // CHUNK_SIZE + 1
+        print(f"Loading chunk {chunk_idx}/{num_chunks} ({len(chunk_files)} files)...")
+
+        # Temporary storage for chunk data
+        c_spatial = []
+        c_player = []
+        c_win = []
+        c_progress = []
+
+        c_heads = {
+            'action_type': [], 'source_spatial': [], 'target_spatial': [], 'move_option': []
+        }
+        c_aux = {k: [] for k in AUX_DIMS}
+        c_aux_mask = []
+
+        for f in chunk_files:
+            try:
+                data = load_file(f)
+                sp = data["spatial_maps"]
+                if sp.shape[1] != expected_flat:
+                    # Channels were appended at the end of the layout, so old
+                    # files are index-stable: zero-pad the missing planes.
+                    if sp.shape[1] == legacy_flat:
+                        sp = torch.nn.functional.pad(sp, (0, expected_flat - legacy_flat))
+                    else:
+                        raise ValueError(
+                            f"{f}: spatial width {sp.shape[1]} matches neither "
+                            f"current ({expected_flat}) nor legacy ({legacy_flat}) layout"
+                        )
+                c_spatial.append(sp)
+                c_player.append(data["player_states"])
+                c_win.append(data["values"])
+                if "progress" in data:
+                    c_progress.append(data["progress"])
+                else:
+                    c_progress.append(torch.zeros_like(data["values"]))
+
+                # Load all policy heads
+                for head in c_heads.keys():
+                    if head in data:
+                        c_heads[head].append(data[head])
+                    else:
+                        pass
+
+                # Aux targets: per-file all-or-nothing presence mask.
+                # Masked, never zero-filled — a zero-filled target would
+                # silently train the head toward 0 on legacy samples.
+                n = data["values"].shape[0]
+                if all(k in data for k in AUX_DIMS):
+                    for k in AUX_DIMS:
+                        c_aux[k].append(data[k])
+                    c_aux_mask.append(torch.ones(n))
+                else:
+                    for k, d in AUX_DIMS.items():
+                        c_aux[k].append(torch.zeros(n, d))
+                    c_aux_mask.append(torch.zeros(n))
+
+            except Exception as e:
+                print(f"Error loading {f}: {e}")
+                continue
+
+        if not c_spatial:
+            continue
+
+        # Stack into tensors
+        try:
+            spatial_maps = torch.cat(c_spatial)
+            player_states = torch.cat(c_player)
+
+            targets_win = torch.cat(c_win)
+            targets_progress = torch.cat(c_progress) if c_progress else None
+
+            target_heads = {}
+            for head, tensors in c_heads.items():
+                if tensors:
+                    target_heads[head] = torch.cat(tensors)
+
+            # Guard against unnormalized policy rows: games generated before
+            # Jul 2026 carry raw visit counts (sums up to 64) in move_option —
+            # each acts as a ~30-64x weighted sample and destabilizes training.
+            # Rows legitimately sum to <=1 (partial mass by design); only
+            # renormalize rows whose mass exceeds 1.
+            for head, t in target_heads.items():
+                rs = t.sum(dim=1, keepdim=True)
+                if (rs > 1.001).any():
+                    target_heads[head] = torch.where(rs > 1.001, t / rs, t)
+
+            # Kept out of target_heads: the renorm guard above would
+            # corrupt fog/ownership rows (their sums are counts, not mass).
+            target_aux = {k: torch.cat(v) for k, v in c_aux.items()}
+            aux_mask = torch.cat(c_aux_mask)
+
+        except RuntimeError as e:
+            print(f"OOM loading chunk: {e}")
+            continue
+
+        # Cleanup lists
+        del c_spatial, c_player, c_win, c_progress, c_aux, c_aux_mask
+        gc.collect()
+
+        dataset_size = len(spatial_maps)
+        print(f"  Loaded {dataset_size} samples.")
+
+        cached_chunks.append({
+            "spatial_maps": spatial_maps,
+            "player_states": player_states,
+            "targets_win": targets_win,
+            "targets_progress": targets_progress,
+            "target_heads": target_heads,
+            "target_aux": target_aux,
+            "aux_mask": aux_mask,
+            "dataset_size": dataset_size,
+            "chunk_idx": chunk_idx,
+        })
+
+    if not cached_chunks:
+        print("No usable training data after loading!")
+        return
+
+    epoch_batch_estimate = sum(
+        (c["dataset_size"] + BATCH_SIZE - 1) // BATCH_SIZE for c in cached_chunks
+    )
+    report_batch_indices = batch_report_indices(epoch_batch_estimate)
+    if epoch_batch_estimate <= 10:
+        print(f"Reporting all {epoch_batch_estimate} batches/epoch.")
+    else:
+        print(f"Reporting ~10/{epoch_batch_estimate} sampled batches/epoch.")
+
+    # 4. Training Loop
     for epoch in range(EPOCHS):
-        total_loss = 0
-        total_p_loss = 0
-        total_v_loss = 0
-        total_v_win = 0
+        # Loss accumulators live on-device and are only pulled to Python at
+        # report points / epoch end (below). A per-batch .item() forces an
+        # MPS/CUDA sync that serializes the queue and stalls the pipeline —
+        # this was previously happening on every single batch.
+        total_loss_t = torch.zeros((), device=DEVICE)
+        total_p_loss_t = torch.zeros((), device=DEVICE)
+        total_v_loss_t = torch.zeros((), device=DEVICE)
+        total_v_win_t = torch.zeros((), device=DEVICE)
         total_batches = 0
         # Streaming mean/variance of the value targets seen this epoch, so
         # value_r2 (below) compares MSE against the actual training-mix
         # variance instead of a guess — small MSE alone doesn't mean the head
         # fits anything if the targets barely vary.
-        target_sum = 0.0
-        target_sumsq = 0.0
+        target_sum_t = torch.zeros((), device=DEVICE)
+        target_sumsq_t = torch.zeros((), device=DEVICE)
         target_n = 0
-        total_aux = {k: 0.0 for k in AUX_DIMS}
-        total_aux_n = 0.0
-
-        random.shuffle(game_files)
-
-        # Process in chunks. All files in a chunk are held in RAM at once, so
-        # lower TRAIN_CHUNK_FILES when individual game files are large.
-        CHUNK_SIZE = int(os.environ.get("TRAIN_CHUNK_FILES", "10"))
-        num_chunks = (len(game_files) + CHUNK_SIZE - 1) // CHUNK_SIZE
+        total_aux_t = {k: torch.zeros((), device=DEVICE) for k in AUX_DIMS}
+        total_aux_n_t = torch.zeros((), device=DEVICE)
 
         print(f"\n=== Epoch {epoch+1}/{EPOCHS} ===")
 
-        report_batch_indices = None
-        epoch_batch_estimate = None
-
-        for i in range(0, len(game_files), CHUNK_SIZE):
-            chunk_files = game_files[i : i + CHUNK_SIZE]
-            chunk_idx = i // CHUNK_SIZE + 1
-            print(f"Epoch {epoch+1}: Loading chunk {chunk_idx}/{num_chunks} ({len(chunk_files)} files)...")
-            
-            # Temporary storage for chunk data
-            c_spatial = []
-            c_player = []
-            c_win = []
-            c_progress = []
-            
-            c_heads = {
-                'action_type': [], 'source_spatial': [], 'target_spatial': [], 'move_option': []
-            }
-            c_aux = {k: [] for k in AUX_DIMS}
-            c_aux_mask = []
-
-            expected_flat = SPATIAL_CHANNELS * MAP_SIZE * MAP_SIZE
-            legacy_flat = 154 * MAP_SIZE * MAP_SIZE  # pre-observation-memory layout
-            for f in chunk_files:
-                try:
-                    data = load_file(f)
-                    sp = data["spatial_maps"]
-                    if sp.shape[1] != expected_flat:
-                        # Channels were appended at the end of the layout, so old
-                        # files are index-stable: zero-pad the missing planes.
-                        if sp.shape[1] == legacy_flat:
-                            sp = torch.nn.functional.pad(sp, (0, expected_flat - legacy_flat))
-                        else:
-                            raise ValueError(
-                                f"{f}: spatial width {sp.shape[1]} matches neither "
-                                f"current ({expected_flat}) nor legacy ({legacy_flat}) layout"
-                            )
-                    c_spatial.append(sp)
-                    c_player.append(data["player_states"])
-                    c_win.append(data["values"])
-                    if "progress" in data:
-                        c_progress.append(data["progress"])
-                    else:
-                        c_progress.append(torch.zeros_like(data["values"]))
-                    
-                    # Load all policy heads
-                    for head in c_heads.keys():
-                        if head in data:
-                            c_heads[head].append(data[head])
-                        else:
-                            pass
-
-                    # Aux targets: per-file all-or-nothing presence mask.
-                    # Masked, never zero-filled — a zero-filled target would
-                    # silently train the head toward 0 on legacy samples.
-                    n = data["values"].shape[0]
-                    if all(k in data for k in AUX_DIMS):
-                        for k in AUX_DIMS:
-                            c_aux[k].append(data[k])
-                        c_aux_mask.append(torch.ones(n))
-                    else:
-                        for k, d in AUX_DIMS.items():
-                            c_aux[k].append(torch.zeros(n, d))
-                        c_aux_mask.append(torch.zeros(n))
-
-                except Exception as e:
-                    print(f"Error loading {f}: {e}")
-                    continue
-            
-            if not c_spatial:
-                continue
-                
-            # Stack into tensors
-            try:
-                spatial_maps = torch.cat(c_spatial)
-                player_states = torch.cat(c_player)
-                
-                targets_win = torch.cat(c_win)
-                targets_progress = torch.cat(c_progress) if c_progress else None
-                
-                target_heads = {}
-                for head, tensors in c_heads.items():
-                    if tensors:
-                        target_heads[head] = torch.cat(tensors)
-
-                # Guard against unnormalized policy rows: games generated before
-                # Jul 2026 carry raw visit counts (sums up to 64) in move_option —
-                # each acts as a ~30-64x weighted sample and destabilizes training.
-                # Rows legitimately sum to <=1 (partial mass by design); only
-                # renormalize rows whose mass exceeds 1.
-                for head, t in target_heads.items():
-                    rs = t.sum(dim=1, keepdim=True)
-                    if (rs > 1.001).any():
-                        target_heads[head] = torch.where(rs > 1.001, t / rs, t)
-
-                # Kept out of target_heads: the renorm guard above would
-                # corrupt fog/ownership rows (their sums are counts, not mass).
-                target_aux = {k: torch.cat(v) for k, v in c_aux.items()}
-                aux_mask = torch.cat(c_aux_mask)
-
-            except RuntimeError as e:
-                print(f"OOM loading chunk: {e}")
-                continue
-            
-            # Cleanup lists
-            del c_spatial, c_player, c_win, c_progress, c_aux, c_aux_mask
-            gc.collect()
-            
-            dataset_size = len(spatial_maps)
-            print(f"  Loaded {dataset_size} samples.")
-
-            if epoch_batch_estimate is None and len(chunk_files) > 0:
-                est_samples = int(dataset_size / len(chunk_files) * len(game_files))
-                epoch_batch_estimate = (est_samples + BATCH_SIZE - 1) // BATCH_SIZE
-                report_batch_indices = batch_report_indices(epoch_batch_estimate)
-                if epoch_batch_estimate <= 10:
-                    print(f"  Reporting all {epoch_batch_estimate} batches.")
-                else:
-                    print(f"  Reporting ~10/{epoch_batch_estimate} sampled batches.")
+        for chunk in cached_chunks:
+            spatial_maps = chunk["spatial_maps"]
+            player_states = chunk["player_states"]
+            targets_win = chunk["targets_win"]
+            targets_progress = chunk["targets_progress"]
+            target_heads = chunk["target_heads"]
+            target_aux = chunk["target_aux"]
+            aux_mask = chunk["aux_mask"]
+            dataset_size = chunk["dataset_size"]
+            chunk_idx = chunk["chunk_idx"]
 
             indices = torch.randperm(dataset_size)
             num_batches_in_chunk = (dataset_size + BATCH_SIZE - 1) // BATCH_SIZE
@@ -493,15 +536,15 @@ def train():
 
             for batch_num, j in enumerate(range(0, dataset_size, BATCH_SIZE), start=1):
                 batch_idx = indices[j : j + BATCH_SIZE]
-                
+
                 batch_spatial = spatial_maps[batch_idx].to(DEVICE)
                 batch_player = player_states[batch_idx].to(DEVICE)
-                
+
                 batch_values = {
                     'win': targets_win[batch_idx].to(DEVICE),
                 }
-                target_sum += batch_values['win'].sum().item()
-                target_sumsq += (batch_values['win'] * batch_values['win']).sum().item()
+                target_sum_t += batch_values['win'].sum().detach()
+                target_sumsq_t += (batch_values['win'] * batch_values['win']).sum().detach()
                 target_n += batch_values['win'].numel()
 
                 if targets_progress is not None:
@@ -544,7 +587,7 @@ def train():
                             batch_aux[head] = t.flatten(1)
 
                 optimizer.zero_grad()
-                
+
                 policy_pred, values_pred, aux_pred = model(batch_spatial, batch_player)
 
                 loss, p_loss, v_loss, v_win_loss, aux_losses = compute_loss(
@@ -555,55 +598,60 @@ def train():
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
 
-                total_loss += loss.item()
-                total_p_loss += p_loss.item()
-                total_v_loss += v_loss.item()
-                total_v_win += v_win_loss.item()
+                total_loss_t += loss.detach()
+                total_p_loss_t += p_loss.detach()
+                total_v_loss_t += v_loss.detach()
+                total_v_win_t += v_win_loss.detach()
                 total_batches += 1
                 # Mask-count-weighted: batches of teacher/legacy samples add
                 # zero weight, so the epoch average can't drift toward 0.
-                aux_n = batch_aux_mask.sum().item()
-                if aux_n > 0:
-                    total_aux_n += aux_n
-                    for k, l in aux_losses.items():
-                        total_aux[k] += l.item() * aux_n
+                # Unconditional (no "if aux_n > 0" guard): a zero mask
+                # contributes exactly zero either way, and skipping it would
+                # require a .item() sync to evaluate the branch.
+                aux_n_t = batch_aux_mask.sum().detach()
+                total_aux_n_t += aux_n_t
+                for k, l in aux_losses.items():
+                    total_aux_t[k] += l.detach() * aux_n_t
 
-                elapsed = time.time() - chunk_start_time
                 global_batch_num = total_batches
-                if report_batch_indices and global_batch_num in report_batch_indices:
+                if global_batch_num in report_batch_indices:
+                    elapsed = time.time() - chunk_start_time
                     batches_per_sec = batch_num / elapsed if elapsed > 0 else 0.0
+                    cur_loss = (total_loss_t / total_batches).item()
+                    cur_p_loss = (total_p_loss_t / total_batches).item()
+                    cur_v_loss = (total_v_loss_t / total_batches).item()
                     print(
-                        f"  Epoch {epoch+1} batch {global_batch_num}"
-                        f"{f'/{epoch_batch_estimate}' if epoch_batch_estimate else ''} "
+                        f"  Epoch {epoch+1} batch {global_batch_num}/{epoch_batch_estimate} "
                         f"(chunk {chunk_idx}/{num_chunks} {batch_num}/{num_batches_in_chunk}) "
-                        f"- loss: {total_loss/total_batches:.4f} "
-                        f"(policy: {total_p_loss/total_batches:.4f}, value: {total_v_loss/total_batches:.4f}) "
+                        f"- loss: {cur_loss:.4f} "
+                        f"(policy: {cur_p_loss:.4f}, value: {cur_v_loss:.4f}) "
                         f"- {batches_per_sec:.1f} batch/s"
                     )
 
-            del spatial_maps, player_states, targets_win, target_heads, target_aux, aux_mask
-            if DEVICE == "cuda":
-                torch.cuda.empty_cache()
-            elif DEVICE == "mps":
-                torch.mps.empty_cache()
-            gc.collect()
-
         if total_batches > 0:
-            avg_loss = total_loss / total_batches
-            avg_p_loss = total_p_loss / total_batches
-            avg_v_loss = total_v_loss / total_batches
+            avg_loss = (total_loss_t / total_batches).item()
+            avg_p_loss = (total_p_loss_t / total_batches).item()
+            avg_v_loss = (total_v_loss_t / total_batches).item()
             print(f"Epoch {epoch+1}/{EPOCHS} - Loss: {avg_loss:.4f} (Policy: {avg_p_loss:.4f}, Value: {avg_v_loss:.4f})")
         else:
             print(f"Epoch {epoch+1}/{EPOCHS} - No data processed")
 
         scheduler.step()
 
-    final_loss = total_loss / total_batches if total_batches > 0 else 0.0
-    final_p_loss = total_p_loss / total_batches if total_batches > 0 else 0.0
-    final_v_loss = total_v_loss / total_batches if total_batches > 0 else 0.0
-    final_v_win = total_v_win / total_batches if total_batches > 0 else 0.0
+    del cached_chunks
+    if DEVICE == "cuda":
+        torch.cuda.empty_cache()
+    elif DEVICE == "mps":
+        torch.mps.empty_cache()
+    gc.collect()
+
+    final_loss = (total_loss_t / total_batches).item() if total_batches > 0 else 0.0
+    final_p_loss = (total_p_loss_t / total_batches).item() if total_batches > 0 else 0.0
+    final_v_loss = (total_v_loss_t / total_batches).item() if total_batches > 0 else 0.0
+    final_v_win = (total_v_win_t / total_batches).item() if total_batches > 0 else 0.0
+    total_aux_n = total_aux_n_t.item()
     final_aux = {
-        k: (total_aux[k] / total_aux_n if total_aux_n > 0 else 0.0)
+        k: (total_aux_t[k].item() / total_aux_n if total_aux_n > 0 else 0.0)
         for k in AUX_DIMS
     }
 
@@ -615,6 +663,8 @@ def train():
     # VALUE_LOSS_WEIGHT nor the aux progress loss bundled into value_loss
     # can skew it.
     if target_n > 0:
+        target_sum = target_sum_t.item()
+        target_sumsq = target_sumsq_t.item()
         target_mean = target_sum / target_n
         target_var = target_sumsq / target_n - target_mean * target_mean
         value_r2 = 1.0 - final_v_win / target_var if target_var > 1e-8 else 0.0
