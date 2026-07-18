@@ -397,7 +397,14 @@ def train():
                             f"{f}: spatial width {sp.shape[1]} matches neither "
                             f"current ({expected_flat}) nor legacy ({legacy_flat}) layout"
                         )
-                c_spatial.append(sp)
+                # Halved to fp16 in RAM — this is the dominant tensor (e.g.
+                # ~29GB at fp32 for a 13-file/380K-sample buffer) and now
+                # stays resident across all epochs (see cached_chunks below),
+                # which pushed a real run into memory pressure (34/36GB used,
+                # batch/s dropped ~4x). Model input, not a weight or label,
+                # so upcasting to fp32 per-batch (below) costs nothing and
+                # loses nothing training-relevant.
+                c_spatial.append(sp.half())
                 c_player.append(data["player_states"])
                 c_win.append(data["values"])
                 if "progress" in data:
@@ -537,7 +544,7 @@ def train():
             for batch_num, j in enumerate(range(0, dataset_size, BATCH_SIZE), start=1):
                 batch_idx = indices[j : j + BATCH_SIZE]
 
-                batch_spatial = spatial_maps[batch_idx].to(DEVICE)
+                batch_spatial = spatial_maps[batch_idx].to(DEVICE, dtype=torch.float32)
                 batch_player = player_states[batch_idx].to(DEVICE)
 
                 batch_values = {
@@ -627,6 +634,18 @@ def train():
                         f"(policy: {cur_p_loss:.4f}, value: {cur_v_loss:.4f}) "
                         f"- {batches_per_sec:.1f} batch/s"
                     )
+
+            # Drain the device caching allocator's pool of per-batch
+            # activation/gradient buffers between chunks. The old code did
+            # this every chunk too; caching all chunks in RAM across epochs
+            # (above) doesn't change that need — without it, RSS climbed
+            # from ~11GB to ~29GB over the course of one epoch on a live run
+            # (Jul 2026), because nothing ever returned MPS-wired buffers to
+            # the OS until the very end. cached_chunks itself is untouched.
+            if DEVICE == "cuda":
+                torch.cuda.empty_cache()
+            elif DEVICE == "mps":
+                torch.mps.empty_cache()
 
         if total_batches > 0:
             avg_loss = (total_loss_t / total_batches).item()
