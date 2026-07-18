@@ -184,6 +184,12 @@ else
     echo "⚠️  Reward shaping disabled (-r): flat final-outcome value target only."
 fi
 
+WL_FLAG=""
+if [ "${WL_LABELS:-0}" = "1" ]; then
+    WL_FLAG="--wl-labels"
+    echo "⚖️  Win/loss value labels (WL_LABELS=1): ±1 from adjudicated winner, score ratio off."
+fi
+
 if [ "$BOOST" = true ]; then
     ACTORS=$((ACTORS * 2))
     echo "🚀 Boost mode enabled! Using $ACTORS actors"
@@ -412,10 +418,10 @@ do
     # One-line config echo so silent env misconfigurations (ITER_OFFSET,
     # LABEL_REL_W, BOOTSTRAP) are visible in the log — EXP_ELO_006 post-mortem:
     # two runs voided by a missing ITER_OFFSET that nothing surfaced.
-    echo "CONFIG iter=$i eff_iter=$EFF_ITER iter_offset=${ITER_OFFSET:-0} match=$MATCH_TYPE backend=${BACKEND_FLAG:---search-backend gumbel} anchor='${ANCHOR_FLAG}' td_w=${TD_W:-0.7} label_rel_w=${LABEL_REL_W:-default} value_trust=$VALUE_TRUST games=$NUM_GAMES mcts=$MCTS_ITERS k=$GUMBEL_K"
+    echo "CONFIG iter=$i eff_iter=$EFF_ITER iter_offset=${ITER_OFFSET:-0} match=$MATCH_TYPE backend=${BACKEND_FLAG:---search-backend gumbel} anchor='${ANCHOR_FLAG}' td_w=${TD_W:-0.7} label_rel_w=${LABEL_REL_W:-default} wl_labels=${WL_LABELS:-0} value_trust=$VALUE_TRUST games=$NUM_GAMES mcts=$MCTS_ITERS k=$GUMBEL_K"
 
     SP_LOG=$(mktemp)
-    "$SELF_PLAY_BIN" --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $BACKEND_FLAG $DECAY_LAST_ITER_FLAG --td-w "${TD_W:-0.7}" $LABEL_REL_W_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
+    "$SELF_PLAY_BIN" --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $WL_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $BACKEND_FLAG $DECAY_LAST_ITER_FLAG --td-w "${TD_W:-0.7}" $LABEL_REL_W_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
     SP_STATUS=${PIPESTATUS[0]}
     rm -f "$SP_LOG"
     if [ "$SP_STATUS" -ne 0 ]; then
@@ -558,7 +564,9 @@ do
             # --anchor-decay-start above). Not during BOOTSTRAP (EXP_ELO_007):
             # crossing 50% while cloning doesn't graduate the RL model — the
             # decay clock belongs to the released phase-2 run.
-            if [ -z "${BOOTSTRAP:-}" ] && [ ! -f .anchor_decay_start ] && [ "$ANCHOR_NAME" = "greedy" ]; then
+            # NO_ANCHOR_DECAY=1 gates the write entirely (EXP_ELO_009): runs
+            # that must hold anchor at 1.0 even while scoring >=50%.
+            if [ -z "${BOOTSTRAP:-}" ] && [ -z "${NO_ANCHOR_DECAY:-}" ] && [ ! -f .anchor_decay_start ] && [ "$ANCHOR_NAME" = "greedy" ]; then
                 CROSSED=$(awk -v w="$GAUGE_W" -v l="$GAUGE_L" -v d="${GAUGE_D:-0}" \
                     'BEGIN { n = w + l + d; if (n > 0 && (w + d / 2) / n >= 0.5) print 1; else print 0 }')
                 if [ "$CROSSED" = "1" ]; then

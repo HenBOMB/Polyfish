@@ -499,6 +499,8 @@ struct GameResult {
     total_cities: i32,
     moves: usize,
     winner_score: i32,
+    /// Adjudicated winner: sole survivor, else higher final score at timeout.
+    winner_id: i32,
     recap: ModReplay,
     cap_ruins: usize,
     cap_villages: usize,
@@ -1160,6 +1162,7 @@ fn play_single_game(
         final_spt,
         final_tech,
         winner_score,
+        winner_id,
         recap,
         cap_ruins,
         cap_villages,
@@ -1288,6 +1291,12 @@ fn main() -> anyhow::Result<()> {
         /// runs or isolate a regression).
         #[arg(long, default_value_t = false)]
         no_reward_shaping: bool,
+
+        /// EXP_ELO_011: ±1 win/loss value labels from the adjudicated winner,
+        /// replacing the score-ratio final outcome — a close loss reads -1,
+        /// not ~-0.14. Composes with --td-w blending unless shaping is off.
+        #[arg(long, default_value_t = false)]
+        wl_labels: bool,
 
         /// Current training iteration (for curriculum learning)
         #[arg(long, default_value_t = 1)]
@@ -1976,21 +1985,7 @@ fn main() -> anyhow::Result<()> {
             .collect();
         let spt_cp = spt_checkpoints_by_player(&spt_steps);
 
-        // Determine the winner_id for this game
-        let game_winner_id = {
-            // Check who survived (alive = not killed)
-            // We stored scores; for decisive win, one player's score is dominant
-            // Use the result.winner_score to identify winner
-            let mut best_id = 0;
-            let mut best_s = i32::MIN;
-            for (&id, &s) in &result.scores {
-                if s > best_s {
-                    best_s = s;
-                    best_id = id;
-                }
-            }
-            best_id
-        };
+        let game_winner_id = result.winner_id;
 
         for (step_idx, step) in result.history.into_iter().enumerate() {
             let HistoryStep {
@@ -2054,9 +2049,19 @@ fn main() -> anyhow::Result<()> {
 
             // Absolute value: final score vs fixed yardstick, not current scoreboard.
             let abs_outcome = (my_final / GOOD_BOT_FINAL_SCORE).clamp(0.0, 1.0) * 2.0 - 1.0;
-            let final_outcome = (FINAL_OUTCOME_REL_W * relative_outcome
-                + (1.0 - FINAL_OUTCOME_REL_W) * abs_outcome)
-                .clamp(-1.0, 1.0);
+            let final_outcome = if args.wl_labels {
+                // EXP_ELO_011: the score ratio under-punishes close losses
+                // (4257 vs 4676 reads -0.14); win/loss makes them -1.
+                if p_id == game_winner_id {
+                    1.0
+                } else {
+                    -1.0
+                }
+            } else {
+                (FINAL_OUTCOME_REL_W * relative_outcome
+                    + (1.0 - FINAL_OUTCOME_REL_W) * abs_outcome)
+                    .clamp(-1.0, 1.0)
+            };
 
             let value = if !args.no_reward_shaping {
                 // TD delta carries per-action credit; the final-outcome tail
@@ -2353,6 +2358,16 @@ fn main() -> anyhow::Result<()> {
         "  - Sim EndTurn edges: {} total ({:.2} per move decision)",
         sim_end_turns,
         sim_end_turns as f64 / (total_moves as f64).max(1.0)
+    );
+    // How often a simulated move failed to execute against the replayed state
+    // (tree-reuse staleness in Gumbel MCTS — see SIM_MOVE_FAILURES doc comment
+    // in game.rs). Nonzero means illegal_moves/*.json has diagnostic dumps.
+    let sim_move_failures =
+        polyfish::game::SIM_MOVE_FAILURES.load(std::sync::atomic::Ordering::Relaxed);
+    println!(
+        "  - Sim move failures: {} total ({:.2} per move decision)",
+        sim_move_failures,
+        sim_move_failures as f64 / (total_moves as f64).max(1.0)
     );
 
     // Deterministic teardown. Drop the evaluator handles first — these hold the
