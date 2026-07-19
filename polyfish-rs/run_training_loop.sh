@@ -208,6 +208,7 @@ fi
 if [ "$RESET" = true ]; then
     echo "🗑️  Reset flag detected! Deleting model.safetensors and self-play game data to seed a fresh model..."
     rm -f model.safetensors
+    rm -f optimizer_state.pt
     rm -f games_*.safetensors
     rm -f archive/games_*.safetensors
     # EXP_ELO_002: the anchor decay clock belongs to the model it graduated.

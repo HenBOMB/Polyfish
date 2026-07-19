@@ -3,11 +3,14 @@ import torch.nn as nn
 import torch.optim as optim
 from safetensors.torch import load_file, save_file
 import glob
+import hashlib
 import json
 import os
 import random
 import gc
 import time
+
+OPTIMIZER_STATE_PATH = "optimizer_state.pt"
 
 # --- Configuration ---
 # Larger batches amortize MPS/CUDA per-op dispatch overhead (fixed cost per
@@ -287,6 +290,19 @@ def compute_loss(policy_pred, values_pred, policy_targets, value_target,
     # value_loss alone can't be unweighted once loss_progress is mixed in.
     return total_loss, total_policy_loss, value_loss, loss_win, aux_losses
 
+def hash_state_dict(state_dict):
+    """Fingerprint of a model's weights, used to verify optimizer_state.pt was
+    saved against the exact model.safetensors currently on disk — this
+    campaign restores model.safetensors from checkpoints constantly, and
+    replaying Adam's momentum against a different set of weights than the
+    ones it was tracking would corrupt the step, not just waste it.
+    """
+    h = hashlib.sha256()
+    for k in sorted(state_dict.keys()):
+        h.update(k.encode())
+        h.update(state_dict[k].detach().cpu().numpy().tobytes())
+    return h.hexdigest()
+
 def batch_report_indices(total_batches, max_reports=10):
     """Pick up to `max_reports` evenly spaced batch numbers to log."""
     if total_batches <= 0:
@@ -327,26 +343,50 @@ def train():
     PLAYER_STATE_DIM = 10
 
     model = PolyZeroNet(SPATIAL_CHANNELS, PLAYER_STATE_DIM, MAP_SIZE, MAP_SIZE).to(DEVICE)
+    loaded_state = None
     if os.path.exists("model.safetensors"):
         try:
+            loaded_state = load_file("model.safetensors")
             # strict=False: newly added heads (e.g. v_progress) are absent
             # from older checkpoints and must start fresh WITHOUT discarding
             # the trained trunk — a strict load would throw and silently
             # reinitialize everything via the except branch below.
-            missing, unexpected = model.load_state_dict(
-                load_file("model.safetensors"), strict=False
-            )
+            missing, unexpected = model.load_state_dict(loaded_state, strict=False)
             if missing or unexpected:
                 print(f"Partial checkpoint load — missing: {missing}, unexpected: {unexpected}")
         except Exception as e:
             print(f"Could not load model: {e}")
             print("Starting from scratch.")
+            loaded_state = None
     model.train()
 
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
     # Use CosineAnnealing with Warm Restarts for better convergence on short cycles
     # T_0=5 means it resets every 5 epochs (which is exactly our run length)
     scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=EPOCHS, T_mult=1, eta_min=1e-5)
+
+    # Resume Adam/scheduler state from the last call, but only if it was saved
+    # against the exact weights we just loaded — a fresh Adam is safer than a
+    # stale one if model.safetensors was swapped (checkpoint restore, --reset,
+    # manual revert) since last training. Fresh runs and mismatches both fall
+    # through to the plain optimizer/scheduler created above.
+    if loaded_state is not None and os.path.exists(OPTIMIZER_STATE_PATH):
+        try:
+            current_hash = hash_state_dict(loaded_state)
+            saved = torch.load(OPTIMIZER_STATE_PATH, map_location=DEVICE)
+            if saved.get("model_hash") == current_hash:
+                optimizer.load_state_dict(saved["optimizer"])
+                scheduler.load_state_dict(saved["scheduler"])
+                print("Resumed Adam/scheduler state (model hash matched).")
+            else:
+                print(
+                    f"{OPTIMIZER_STATE_PATH} model hash mismatch (weights changed "
+                    "since last save) — starting fresh Adam."
+                )
+        except Exception as e:
+            print(f"Could not load {OPTIMIZER_STATE_PATH} ({e}) — starting fresh Adam.")
+    elif loaded_state is not None:
+        print(f"No {OPTIMIZER_STATE_PATH} found — starting fresh Adam.")
 
     # 3. Load + concatenate every chunk ONCE, up front, and keep all of it
     # resident across every epoch. The old code re-ran load_file + torch.cat
@@ -696,6 +736,18 @@ def train():
     # 4. Save Model in f16 for blazing fast CPU inference
     half_state = {k: v.half() for k, v in model.state_dict().items()}
     save_file(half_state, "model.safetensors")
+
+    # Persist Adam/scheduler state alongside the weights it was computed
+    # against (fingerprinted via hash_state_dict) so the next train() call can
+    # resume momentum instead of starting from zero every iteration.
+    torch.save(
+        {
+            "optimizer": optimizer.state_dict(),
+            "scheduler": scheduler.state_dict(),
+            "model_hash": hash_state_dict(half_state),
+        },
+        OPTIMIZER_STATE_PATH,
+    )
 
     with open(".last_train_metrics.json", "w", encoding="utf-8") as f:
         json.dump(
