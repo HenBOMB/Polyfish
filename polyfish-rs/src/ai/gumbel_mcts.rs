@@ -84,6 +84,10 @@ pub struct GumbelMctsAgent<'a> {
     /// (see notes.md, decision-trace section). At 0.0 search degenerates to
     /// prior+gumbel sampling (BC-anchored behavior); 1.0 = paper behavior.
     pub tree_q_weight: f32,
+    /// Weight on the development potential Φ in in-tree edge rewards
+    /// (EXP_ELO_016): snapshots become `score + w·Φ`. 0.0 = raw score
+    /// deltas (bit-exact legacy path).
+    pub reward_shape_w: f32,
     /// Diagnostic capture for the next search, armed via `arm_trace`. `None`
     /// (the default) costs one `RefCell` borrow-check per call site and
     /// nothing else — see decision_trace.rs.
@@ -216,6 +220,7 @@ impl<'a> GumbelMctsAgent<'a> {
             prior_heuristic_weight: 0.0,
             policy_target_q_weight: 1.0,
             tree_q_weight: 1.0,
+            reward_shape_w: 0.0,
             trace: RefCell::new(None),
             last_root_value: None,
         }
@@ -755,14 +760,16 @@ impl<'a> GumbelMctsAgent<'a> {
         // perspective) and how many turns it crossed.
         let candidate_node = root.children.get(cand_child_idx)?;
         let m = candidate_node.move_to_here.as_ref()?;
-        let (my_pre, opp_pre) = reward::score_snapshot(&game.state, root_player);
+        let (my_pre, opp_pre) =
+            reward::shaped_snapshot(&game.state, root_player, self.reward_shape_w);
         let turn_pre = game.state.settings.turn;
         let undo = game.simulate_move(m.as_ref())?;
         undos.push(undo);
         indices_stack.push(cand_child_idx);
         path_players.push(game.state.settings.current_player_turn_id);
-        let (my_post, opp_post) = reward::score_snapshot(&game.state, root_player);
-        let r = reward::normalized_reward(my_pre, opp_pre, my_post, opp_post);
+        let (my_post, opp_post) =
+            reward::shaped_snapshot(&game.state, root_player, self.reward_shape_w);
+        let r = reward::normalized_reward_wf(my_pre, opp_pre, my_post, opp_post, reward::REL_W);
         candidate_node.edge_reward.set(Some(r));
         path_rewards.push(r);
         path_turn_deltas.push(game.state.settings.turn - turn_pre);
@@ -798,7 +805,8 @@ impl<'a> GumbelMctsAgent<'a> {
                 None => break,
             };
             let mover = game.state.settings.current_player_turn_id;
-            let (my_pre, opp_pre) = reward::score_snapshot(&game.state, mover);
+            let (my_pre, opp_pre) =
+                reward::shaped_snapshot(&game.state, mover, self.reward_shape_w);
             let turn_pre = game.state.settings.turn;
             let undo = match game.simulate_move(m.as_ref()) {
                 Some(u) => u,
@@ -813,8 +821,9 @@ impl<'a> GumbelMctsAgent<'a> {
             undos.push(undo);
             indices_stack.push(child_idx);
             path_players.push(game.state.settings.current_player_turn_id);
-            let (my_post, opp_post) = reward::score_snapshot(&game.state, mover);
-            let r = reward::normalized_reward(my_pre, opp_pre, my_post, opp_post);
+            let (my_post, opp_post) =
+                reward::shaped_snapshot(&game.state, mover, self.reward_shape_w);
+            let r = reward::normalized_reward_wf(my_pre, opp_pre, my_post, opp_post, reward::REL_W);
             child_node.edge_reward.set(Some(r));
             path_rewards.push(r);
             path_turn_deltas.push(game.state.settings.turn - turn_pre);

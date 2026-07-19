@@ -73,6 +73,9 @@ pub struct Brain<'a> {
     /// β_tree on σ(completed-Q) inside the Gumbel search (selection, halving
     /// re-rank, final recommendation). `None` = 1.0. Ignored by other backends.
     tree_q_weight: Option<f32>,
+    /// Weight on the development potential Φ in the Gumbel backend's in-tree
+    /// edge rewards (EXP_ELO_016). `None` = 0.0 (raw score deltas).
+    reward_shape_w: Option<f32>,
     /// Set by `request_trace`; consumed (and cleared) by the next
     /// `think_decomposed` call, which arms the underlying agent's tracer.
     pending_trace: bool,
@@ -167,6 +170,7 @@ pub fn make_search_agent(
     prior_heuristic_weight: Option<f32>,
     policy_target_q_weight: Option<f32>,
     tree_q_weight: Option<f32>,
+    reward_shape_w: Option<f32>,
 ) -> SearchAgent<'_> {
     match backend {
         SearchBackend::Zero => {
@@ -190,6 +194,9 @@ pub fn make_search_agent(
             if let Some(b) = tree_q_weight {
                 agent.tree_q_weight = b;
             }
+            if let Some(w) = reward_shape_w {
+                agent.reward_shape_w = w;
+            }
             SearchAgent::Gumbel(agent)
         }
         SearchBackend::Heuristic => SearchAgent::Heuristic(
@@ -212,6 +219,7 @@ impl<'a> Brain<'a> {
             prior_heuristic_weight: None,
             policy_target_q_weight: None,
             tree_q_weight: None,
+            reward_shape_w: None,
             pending_trace: false,
         }
     }
@@ -230,6 +238,7 @@ impl<'a> Brain<'a> {
             prior_heuristic_weight: None,
             policy_target_q_weight: None,
             tree_q_weight: None,
+            reward_shape_w: None,
             pending_trace: false,
         }
     }
@@ -258,6 +267,13 @@ impl<'a> Brain<'a> {
     /// `with_backend`.
     pub fn with_tree_q_weight(mut self, tree_q_weight: f32) -> Self {
         self.tree_q_weight = Some(tree_q_weight);
+        self
+    }
+
+    /// Override the in-tree development-potential shaping weight
+    /// (EXP_ELO_016). Builder style: chain after `with_backend`.
+    pub fn with_reward_shape_w(mut self, reward_shape_w: f32) -> Self {
+        self.reward_shape_w = Some(reward_shape_w);
         self
     }
 
@@ -300,6 +316,7 @@ impl<'a> Brain<'a> {
                 self.prior_heuristic_weight,
                 self.policy_target_q_weight,
                 self.tree_q_weight,
+                self.reward_shape_w,
             ));
         }
         (self.agent.as_mut(), moves)

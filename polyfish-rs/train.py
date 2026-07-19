@@ -58,6 +58,15 @@ AUX_WEIGHTS = {
     'aux_spt': float(os.environ.get("AUX_SPT_W", "0.1")),
     'aux_opp_tech': float(os.environ.get("AUX_TECH_W", "0.1")),
 }
+# EXP_ELO_013: persistent KL-anchor to a frozen reference policy (AlphaStar-
+# style — pulls the live policy toward a known-good checkpoint throughout RL,
+# rather than only at init). KL_REF_MODEL is a path to the frozen checkpoint;
+# unset/empty disables the feature entirely (zero cost — no ref model is
+# loaded). KL(ref || policy) w.r.t. the trainable policy reduces to plain
+# cross-entropy against the ref's (fixed) distribution, so this reuses the
+# same soft_cross_entropy already used for the main policy loss.
+KL_REF_MODEL = os.environ.get("KL_REF_MODEL", "")
+KL_REF_WEIGHT = float(os.environ.get("KL_REF_WEIGHT", "0.0"))
 
 # Device selection: MPS (Apple Silicon) > CUDA (NVIDIA) > CPU
 try:
@@ -222,10 +231,14 @@ class PolyZeroNet(nn.Module):
         return policy, values, aux
 
 def compute_loss(policy_pred, values_pred, policy_targets, value_target,
-                 aux_pred=None, aux_targets=None, aux_mask=None):
+                 aux_pred=None, aux_targets=None, aux_mask=None,
+                 ref_policy_pred=None, kl_ref_weight=0.0):
     """
     Compute multi-head loss using decomposed targets.
     policy_targets is a dict containing the 7 target tensors.
+    ref_policy_pred/kl_ref_weight (EXP_ELO_013): if given, adds
+    kl_ref_weight * KL(ref || policy) per head, anchoring the live policy to
+    a frozen reference so RL fine-tuning can't drift arbitrarily far from it.
     """
     total_policy_loss = 0.0
     
@@ -252,7 +265,18 @@ def compute_loss(policy_pred, values_pred, policy_targets, value_target,
             pred = policy_pred[head_name]
             head_loss = soft_cross_entropy(pred, target)
             total_policy_loss += head_loss * weights.get(head_name, 1.0)
-            
+
+    # KL-anchor (EXP_ELO_013): KL(ref || policy) w.r.t. the trainable policy
+    # is, up to an additive constant independent of policy params, the same
+    # as cross-entropy against the ref's (fixed, no-grad) distribution — so
+    # this reuses soft_cross_entropy rather than a separate KL formula.
+    kl_losses = {}
+    if ref_policy_pred is not None and kl_ref_weight > 0.0:
+        for head_name in policy_targets:
+            if head_name in policy_pred and head_name in ref_policy_pred:
+                ref_probs = torch.nn.functional.softmax(ref_policy_pred[head_name], dim=1)
+                kl_losses[head_name] = soft_cross_entropy(policy_pred[head_name], ref_probs)
+
     loss_win = nn.MSELoss()(values_pred['win'], value_target['win'])
 
     loss_progress = 0.0
@@ -264,6 +288,9 @@ def compute_loss(policy_pred, values_pred, policy_targets, value_target,
 
     # Total loss
     total_loss = total_policy_loss + value_loss
+
+    for head_name, l in kl_losses.items():
+        total_loss = total_loss + kl_ref_weight * l * weights.get(head_name, 1.0)
 
     # Aux heads: per-sample loss, masked to samples whose file carried aux
     # targets (old archives/teachers never do). Raw values are returned for
@@ -288,7 +315,7 @@ def compute_loss(policy_pred, values_pred, policy_targets, value_target,
 
     # loss_win returned raw (unweighted, no aux terms) — value_r2 needs it;
     # value_loss alone can't be unweighted once loss_progress is mixed in.
-    return total_loss, total_policy_loss, value_loss, loss_win, aux_losses
+    return total_loss, total_policy_loss, value_loss, loss_win, aux_losses, kl_losses
 
 def hash_state_dict(state_dict):
     """Fingerprint of a model's weights, used to verify optimizer_state.pt was
@@ -387,6 +414,24 @@ def train():
             print(f"Could not load {OPTIMIZER_STATE_PATH} ({e}) — starting fresh Adam.")
     elif loaded_state is not None:
         print(f"No {OPTIMIZER_STATE_PATH} found — starting fresh Adam.")
+
+    # EXP_ELO_013: frozen reference model for the KL-anchor. Loaded once,
+    # never trained (no_grad forward only) — a separate instance from `model`
+    # so the optimizer only ever sees `model.parameters()`.
+    ref_model = None
+    if KL_REF_MODEL and KL_REF_WEIGHT > 0.0:
+        ref_model = PolyZeroNet(SPATIAL_CHANNELS, PLAYER_STATE_DIM, MAP_SIZE, MAP_SIZE).to(DEVICE)
+        ref_missing, ref_unexpected = ref_model.load_state_dict(
+            load_file(KL_REF_MODEL), strict=False
+        )
+        if ref_missing or ref_unexpected:
+            print(f"KL-anchor ref partial load — missing: {ref_missing}, unexpected: {ref_unexpected}")
+        ref_model.eval()
+        for p in ref_model.parameters():
+            p.requires_grad = False
+        print(f"⚓ KL-anchor active: ref={KL_REF_MODEL} weight={KL_REF_WEIGHT}")
+    elif KL_REF_MODEL and KL_REF_WEIGHT <= 0.0:
+        print(f"KL_REF_MODEL set but KL_REF_WEIGHT<=0 — KL-anchor disabled.")
 
     # 3. Load + concatenate every chunk ONCE, up front, and keep all of it
     # resident across every epoch. The old code re-ran load_file + torch.cat
@@ -563,6 +608,7 @@ def train():
         target_n = 0
         total_aux_t = {k: torch.zeros((), device=DEVICE) for k in AUX_DIMS}
         total_aux_n_t = torch.zeros((), device=DEVICE)
+        total_kl_t = torch.zeros((), device=DEVICE)
 
         print(f"\n=== Epoch {epoch+1}/{EPOCHS} ===")
 
@@ -637,9 +683,18 @@ def train():
 
                 policy_pred, values_pred, aux_pred = model(batch_spatial, batch_player)
 
-                loss, p_loss, v_loss, v_win_loss, aux_losses = compute_loss(
+                # EXP_ELO_013: ref forward pass on the identical (possibly
+                # D4-augmented) batch, so its spatial heads align tile-for-
+                # tile with the live model's without any extra transform.
+                ref_policy_pred = None
+                if ref_model is not None:
+                    with torch.no_grad():
+                        ref_policy_pred, _, _ = ref_model(batch_spatial, batch_player)
+
+                loss, p_loss, v_loss, v_win_loss, aux_losses, kl_losses = compute_loss(
                     policy_pred, values_pred, batch_targets, batch_values,
-                    aux_pred, batch_aux, batch_aux_mask)
+                    aux_pred, batch_aux, batch_aux_mask,
+                    ref_policy_pred, KL_REF_WEIGHT)
 
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -659,6 +714,8 @@ def train():
                 total_aux_n_t += aux_n_t
                 for k, l in aux_losses.items():
                     total_aux_t[k] += l.detach() * aux_n_t
+                if kl_losses:
+                    total_kl_t += sum(kl_losses.values()).detach()
 
                 global_batch_num = total_batches
                 if global_batch_num in report_batch_indices:
@@ -713,6 +770,7 @@ def train():
         k: (total_aux_t[k].item() / total_aux_n if total_aux_n > 0 else 0.0)
         for k in AUX_DIMS
     }
+    final_kl = (total_kl_t / total_batches).item() if total_batches > 0 else 0.0
 
     # R^2 of the win head against the LAST epoch's own target distribution:
     # 1 - MSE/Var. Small MSE alone is meaningless if the targets barely vary
@@ -760,6 +818,7 @@ def train():
                 "aux_fog_loss": round(final_aux['aux_fog_units'], 4),
                 "aux_spt_loss": round(final_aux['aux_spt'], 4),
                 "aux_tech_loss": round(final_aux['aux_opp_tech'], 4),
+                "kl_ref_loss": round(final_kl, 4),
             },
             f,
         )

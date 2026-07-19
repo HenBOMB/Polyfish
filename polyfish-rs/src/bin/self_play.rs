@@ -1,3 +1,6 @@
+// The METRICS json! literal outgrew serde_json's default macro recursion.
+#![recursion_limit = "256"]
+
 use candle_core::{Device, Tensor};
 use polyfish::TribeType;
 use polyfish::ai::brain::{Brain, SearchBackend, SearchBackendArg};
@@ -101,6 +104,10 @@ enum TraceTrigger {
     Adjacent,
     /// Unit already standing on an open village, deciding whether to Capture.
     OnVillage,
+    /// Tower window: pov stalled at EXACTLY 2 cities, mid-game (turn >= 15),
+    /// with >= 1 unmoved unit. No discovered-village requirement — the fork
+    /// where a stalled tribe chooses units/economy/expansion vs. flat tech.
+    ThirdCity,
 }
 
 /// First (unit, village) pair at exactly the distance `trigger` calls for,
@@ -114,14 +121,44 @@ fn find_village_trigger(
     trigger: TraceTrigger,
 ) -> Option<(i32, i32)> {
     let tribe = state.tribes.get(&pov)?;
+
+    if trigger == TraceTrigger::ThirdCity {
+        // Tower window: pov stalled at EXACTLY 2 cities, mid-game (turn >= 15),
+        // with at least one unit still to move this ply. The 3rd village need
+        // NOT be discovered — failing to explore toward it is part of the
+        // failure we're hunting. village_idx = -1 if none currently visible.
+        if tribe.cities.len() != 2 || state.settings.turn < 15 {
+            return None;
+        }
+        let unit_idx = tribe.units.iter().find(|u| !u.moved).map(|u| u.coords.idx)?;
+        let mut village_idx = -1;
+        let mut best_d = i32::MAX;
+        for &v in open_villages {
+            let Some(vt) = state.tiles.get(&v) else { continue };
+            if !vt.explorers.contains(&pov) {
+                continue; // only villages already discovered by pov
+            }
+            for unit in &tribe.units {
+                let d = unit.coords.chebyshev_distance_to(&vt.coords);
+                if d < best_d {
+                    best_d = d;
+                    village_idx = v;
+                }
+            }
+        }
+        return Some((unit_idx, village_idx));
+    }
+
     let target_distance = match trigger {
         TraceTrigger::Adjacent => 1,
         TraceTrigger::OnVillage => 0,
+        TraceTrigger::ThirdCity => unreachable!(),
     };
     for unit in &tribe.units {
         let eligible = match trigger {
             TraceTrigger::Adjacent => !unit.moved,
             TraceTrigger::OnVillage => !unit.moved && !unit.attacked,
+            TraceTrigger::ThirdCity => unreachable!(),
         };
         if !eligible {
             continue;
@@ -151,6 +188,7 @@ fn write_decision_trace(
     player_id: PlayerId,
     trigger_unit_idx: i32,
     trigger_village_idx: i32,
+    visible_villages: &[i32],
 ) {
     let wrapped = json!({
         "iteration": iteration,
@@ -160,6 +198,7 @@ fn write_decision_trace(
         "player_id": player_id,
         "trigger_unit_idx": trigger_unit_idx,
         "trigger_village_idx": trigger_village_idx,
+        "visible_villages": visible_villages,
         "trace": trace,
     });
     let dir = std::path::Path::new("decision_traces");
@@ -246,6 +285,115 @@ fn dump_failed_game(
     }
 }
 
+/// Append one start-of-player-turn snapshot to <dir>/game<idx>.jsonl for the
+/// multi-turn 3rd-city pursuit analysis: the acting player's owned cities,
+/// FOW-visible uncaptured villages (open_villages seen by pov — same set the
+/// ThirdCity trace uses), and unit tiles. Row-major 11x11 tile indices.
+fn dump_turn_state(
+    file: &mut File,
+    game_idx: usize,
+    state: &GameState,
+    pov: PlayerId,
+    open_villages: &std::collections::HashSet<i32>,
+) {
+    let Some(tribe) = state.tribes.get(&pov) else {
+        return;
+    };
+    let cities: Vec<i32> = tribe.cities.iter().map(|c| c.idx).collect();
+    let visible_villages: Vec<i32> = open_villages
+        .iter()
+        .copied()
+        .filter(|idx| {
+            state
+                .tiles
+                .get(idx)
+                .map_or(false, |t| t.explorers.contains(&pov))
+        })
+        .collect();
+    let units: Vec<i32> = tribe.units.iter().map(|u| u.coords.idx).collect();
+    let rec = json!({
+        "game": game_idx,
+        "turn": state.settings.turn,
+        "player": pov,
+        "cities": cities,
+        "city_count": cities.len(),
+        "visible_villages": visible_villages,
+        "units": units,
+    });
+    if let Ok(s) = serde_json::to_string(&rec) {
+        let _ = writeln!(file, "{s}");
+    }
+}
+
+/// One per-player development-tempo sample, taken at the start of that
+/// player's turn (before any of their moves).
+#[derive(Clone)]
+struct TempoSample {
+    turn: i32,
+    cities: i32,
+    city_levels: i32,
+    spt: i32,
+    units: i32,
+    /// Σ star-cost of living units — army size weighted by quality.
+    army_stars: i32,
+    revealed: i32,
+    techs: i32,
+}
+
+/// One player's tempo curve plus event-accounted unit counters for the game.
+/// Counters come from per-move unit-count diffs, so ruin grants, level-up
+/// giants, conversions, and retaliation deaths are all captured without
+/// hooking the actions layer (a conversion counts as lost+granted).
+#[derive(Default, Clone)]
+struct TempoTrack {
+    samples: Vec<TempoSample>,
+    /// Units gained by a Summon move — star-spent production only.
+    units_trained: i32,
+    /// Units gained any other way (ruins, conversion, level-up rewards).
+    units_granted: i32,
+    units_lost: i32,
+    giants_made: i32,
+}
+
+fn tempo_sample(state: &GameState, pov: PlayerId) -> Option<TempoSample> {
+    let tribe = state.tribes.get(&pov)?;
+    let army_stars: i32 = tribe
+        .units
+        .iter()
+        .map(|u| polyfish::settings::units::get_unit_setting(u.unit_type).cost)
+        .sum();
+    Some(TempoSample {
+        turn: state.settings.turn,
+        cities: tribe.cities.len() as i32,
+        city_levels: tribe.cities.iter().map(|c| c.level).sum(),
+        spt: polyfish::functions::get_tribe_spt(state, tribe),
+        units: tribe.units.len() as i32,
+        army_stars,
+        revealed: state
+            .tiles
+            .values()
+            .filter(|t| t.explorers.contains(&pov))
+            .count() as i32,
+        techs: tribe.tech_vanilla.len() as i32,
+    })
+}
+
+/// `(unit_count, giant_count)` per player, for post-move diff accounting.
+fn unit_tally(state: &GameState) -> HashMap<PlayerId, (i32, i32)> {
+    state
+        .tribes
+        .iter()
+        .map(|(id, t)| {
+            let giants = t
+                .units
+                .iter()
+                .filter(|u| u.unit_type == polyfish::types::UnitType::Giant)
+                .count() as i32;
+            (*id, (t.units.len() as i32, giants))
+        })
+        .collect()
+}
+
 /// Up to 5 evenly spaced turn thresholds for periodic in-game progress.
 fn turn_milestones(max_turns: i32) -> Vec<i32> {
     const MAX_REPORTS: usize = 5;
@@ -279,8 +427,8 @@ struct HistoryStep {
     features: GameFeatures,
     policy: DecomposedPolicyData,
     player_id: PlayerId,
-    my_score: i32,
-    opp_score: i32,
+    my_score: f32,
+    opp_score: f32,
     turn: i32,
     root_value: Option<f32>,
     /// Ground-truth (unfogged) non-invisible enemy-unit occupancy at decision
@@ -297,8 +445,8 @@ struct HistoryStep {
 struct LabelStep {
     player_id: PlayerId,
     turn: i32,
-    my_score: i32,
-    opp_score: i32,
+    my_score: f32,
+    opp_score: f32,
     root_value: Option<f32>,
 }
 
@@ -320,8 +468,8 @@ impl From<&HistoryStep> for LabelStep {
 /// original 1-step fallback exactly, just per-horizon instead of once).
 struct Checkpoint {
     turn: i32,
-    my: i32,
-    opp: i32,
+    my: f32,
+    opp: f32,
     root_value: Option<f32>,
 }
 
@@ -354,7 +502,7 @@ fn checkpoints_by_player(history: &[LabelStep]) -> HashMap<PlayerId, Vec<Checkpo
 /// the windows/terminal — may diverge from in-tree REL_W (EXP_ELO_006).
 fn td_lambda_labels(
     history: &[LabelStep],
-    final_scores: &HashMap<i32, i32>,
+    final_scores: &HashMap<i32, f32>,
     lambda: f32,
     label_rel_w: f32,
 ) -> Vec<f32> {
@@ -363,14 +511,14 @@ fn td_lambda_labels(
     history
         .iter()
         .map(|step| {
-            let my_final = final_scores.get(&step.player_id).copied().unwrap_or(0);
+            let my_final = final_scores.get(&step.player_id).copied().unwrap_or(0.0);
             let opp_final = final_scores
                 .iter()
                 .filter(|(id, _)| **id != step.player_id)
                 .map(|(_, s)| *s)
                 .next()
-                .unwrap_or(0);
-            let terminal_return = reward::normalized_reward_w(
+                .unwrap_or(0.0);
+            let terminal_return = reward::normalized_reward_wf(
                 step.my_score,
                 step.opp_score,
                 my_final,
@@ -385,7 +533,7 @@ fn td_lambda_labels(
             let mut acc = 0.0f32;
             let mut remaining_weight = 1.0f32;
             for cp in &ahead[start..] {
-                let r = reward::normalized_reward_w(
+                let r = reward::normalized_reward_wf(
                     step.my_score,
                     step.opp_score,
                     cp.my,
@@ -495,6 +643,10 @@ fn ownership_from_pov(final_owner: &[i32], pov: PlayerId) -> Vec<f32> {
 struct GameResult {
     history: Vec<HistoryStep>,
     scores: HashMap<i32, i32>,
+    /// Per-player `score + shape_w_label·Φ` at game end — the terminal
+    /// snapshot for TD labels, consistent with the shaped step snapshots.
+    /// Equals raw score when shaping is off.
+    final_potentials: HashMap<i32, f32>,
     final_cities: HashMap<i32, i32>,
     total_cities: i32,
     moves: usize,
@@ -535,6 +687,12 @@ struct GameResult {
     final_owner: Vec<i32>,
     final_spt: HashMap<PlayerId, i32>,
     final_tech: HashMap<PlayerId, Vec<f32>>,
+    /// Per-player tempo curves + unit-accounting counters.
+    tempo: HashMap<PlayerId, TempoTrack>,
+    /// Seat roles (index = player_id - 1): "model", "model_vs_anchor",
+    /// "anchor", or "opponent" — lets the aggregator split tempo curves into
+    /// intrinsic (mirror), contested (vs anchor), and reference populations.
+    roles: [&'static str; 2],
 }
 
 const SPT_MILESTONES: [i32; 7] = [0, 5, 10, 15, 20, 25, 30];
@@ -663,6 +821,10 @@ fn play_single_game(
     trace_max: usize,
     trace_counter: &AtomicUsize,
     dump_failed_dir: Option<&str>,
+    dump_turn_states: Option<&str>,
+    seat_roles: [&'static str; 2],
+    shape_w_label: f32,
+    shape_w_tree: f32,
 ) -> Option<GameResult> {
     // Curriculum logic — Tiny maps only, gradually increase turn count.
     let (map_size, max_turns) = if iteration <= 25 {
@@ -725,6 +887,23 @@ fn play_single_game(
     let trace_all = dump_failed_dir.is_some();
     let mut decision_log: Vec<TracedDecision> = Vec::new();
 
+    // --dump-turn-states: one JSONL file per game, one record per player-turn
+    // (written at turn start in the loop below). Distinct game_idx => no
+    // cross-actor contention; created/truncated once here.
+    let mut turn_dump_file: Option<File> = None;
+    if let Some(dir) = dump_turn_states {
+        let path = std::path::Path::new(dir);
+        if let Err(e) = std::fs::create_dir_all(path) {
+            eprintln!("[dump-turn-states] failed to create {}: {e}", path.display());
+        } else {
+            match File::create(path.join(format!("game{game_idx}.jsonl"))) {
+                Ok(f) => turn_dump_file = Some(f),
+                Err(e) => eprintln!("[dump-turn-states] failed to open game file: {e}"),
+            }
+        }
+    }
+    let mut last_dump_key: Option<(i32, PlayerId)> = None;
+
     let prior_w = decay_crutch(
         HEURISTIC_PRIOR_W0,
         HEURISTIC_PRIOR_DECAY,
@@ -742,11 +921,13 @@ fn play_single_game(
     let mut agent1 = Brain::with_backend(eval1, mcts_iters, backend1)
         .with_prior_heuristic_weight(prior_w)
         .with_policy_target_q_weight(q_target_w)
-        .with_tree_q_weight(q_target_w);
+        .with_tree_q_weight(q_target_w)
+        .with_reward_shape_w(shape_w_tree);
     let mut agent2 = Brain::with_backend(eval2, mcts_iters, backend2)
         .with_prior_heuristic_weight(prior_w)
         .with_policy_target_q_weight(q_target_w)
-        .with_tree_q_weight(q_target_w);
+        .with_tree_q_weight(q_target_w)
+        .with_reward_shape_w(shape_w_tree);
 
     if let Some(b) = leaf_batch {
         agent1 = agent1.with_leaf_batch(b);
@@ -790,8 +971,16 @@ fn play_single_game(
     let mut spt_at_turn: HashMap<i32, f32> = HashMap::new();
     let mut next_spt_milestone = 0usize;
 
+    // Per-player tempo tracking: turn-start samples + move-diff unit counters.
+    let mut tempo: HashMap<PlayerId, TempoTrack> = HashMap::new();
+    let mut last_tempo_key: Option<(i32, PlayerId)> = None;
+    let mut prev_tally = unit_tally(&game.state);
+
     let mut move_count = 0;
-    let mut traced_in_this_game = false;
+    // Up to 3 traces per game, spaced >= 3 game-turns apart, to sample several
+    // mid-game stalled decisions rather than only the turn-15 entry ply.
+    let mut traces_this_game = 0usize;
+    let mut last_trace_turn = -100i32;
     while !polyfish::functions::is_game_over(&game.state) {
         record_spt_at_turn_start(&game.state, &mut spt_at_turn, &mut next_spt_milestone);
 
@@ -806,6 +995,25 @@ fn play_single_game(
 
         let pov = game.state.settings.current_player_turn_id;
 
+        // Dump the start-of-player-turn snapshot once per (turn, pov), before
+        // any move that turn mutates the state.
+        if let Some(f) = turn_dump_file.as_mut() {
+            let key = (game.state.settings.turn, pov);
+            if last_dump_key != Some(key) {
+                dump_turn_state(f, game_idx, &game.state, pov, &open_villages);
+                last_dump_key = Some(key);
+            }
+        }
+
+        // Tempo curve: sample the acting player once per (turn, pov), pre-move.
+        let tempo_key = (game.state.settings.turn, pov);
+        if last_tempo_key != Some(tempo_key) {
+            if let Some(s) = tempo_sample(&game.state, pov) {
+                tempo.entry(pov).or_default().samples.push(s);
+            }
+            last_tempo_key = Some(tempo_key);
+        }
+
         // Get state tensor
         let current_network = if pov == 1 { network1 } else { network2 };
         let device = current_network.device();
@@ -817,7 +1025,8 @@ fn play_single_game(
 
         let trigger_info = if trace_villages
             && !trace_all
-            && !traced_in_this_game
+            && traces_this_game < 3
+            && game.state.settings.turn >= last_trace_turn + 3
             && trace_counter.load(Ordering::Relaxed) < trace_max
         {
             find_village_trigger(&game.state, pov, &open_villages, trace_trigger)
@@ -842,6 +1051,16 @@ fn play_single_game(
         if let Some((trigger_unit_idx, trigger_village_idx)) = trigger_info {
             if let Some(trace) = current_agent.take_trace() {
                 if trace_counter.fetch_add(1, Ordering::Relaxed) < trace_max {
+                    let visible_villages: Vec<i32> = open_villages
+                        .iter()
+                        .copied()
+                        .filter(|idx| {
+                            game.state
+                                .tiles
+                                .get(idx)
+                                .map_or(false, |t| t.explorers.contains(&pov))
+                        })
+                        .collect();
                     write_decision_trace(
                         &trace,
                         iteration,
@@ -851,9 +1070,11 @@ fn play_single_game(
                         pov,
                         trigger_unit_idx,
                         trigger_village_idx,
+                        &visible_villages,
                     );
                 }
-                traced_in_this_game = true;
+                traces_this_game += 1;
+                last_trace_turn = game.state.settings.turn;
             }
         }
 
@@ -987,8 +1208,10 @@ fn play_single_game(
                 game.state.settings.current_player_turn_id,
                 m.serialize(),
             ));
-            // Snapshot scores at this moment (pre-move) for the TD label.
-            let (my_score_now, opp_score_now) = reward::score_snapshot(&game.state, pov);
+            // Snapshot (possibly Φ-shaped) scores at this moment (pre-move)
+            // for the TD label.
+            let (my_score_now, opp_score_now) =
+                reward::shaped_snapshot(&game.state, pov, shape_w_label);
             let opp_id = game
                 .state
                 .tribes
@@ -1026,6 +1249,27 @@ fn play_single_game(
             }
             let _ = game.play_move(m.as_ref());
 
+            // Unit-accounting diff: attribute gains to Summon (trained) vs
+            // anything else (granted), and any decrease as a loss.
+            let new_tally = unit_tally(&game.state);
+            for (&pid, &(n_units, n_giants)) in &new_tally {
+                let (p_units, p_giants) = prev_tally.get(&pid).copied().unwrap_or((0, 0));
+                let track = tempo.entry(pid).or_default();
+                if n_units > p_units {
+                    if m_type == polyfish::types::MoveType::Summon && pid == pov {
+                        track.units_trained += n_units - p_units;
+                    } else {
+                        track.units_granted += n_units - p_units;
+                    }
+                } else if n_units < p_units {
+                    track.units_lost += p_units - n_units;
+                }
+                if n_giants > p_giants {
+                    track.giants_made += n_giants - p_giants;
+                }
+            }
+            prev_tally = new_tally;
+
             if progress == ProgressMode::Periodic {
                 while next_milestone < milestones.len()
                     && game.state.settings.turn >= milestones[next_milestone]
@@ -1045,14 +1289,36 @@ fn play_single_game(
         move_count += 1;
     }
 
+    // Final tempo sample per player from the end state (a capture on the last
+    // turn would otherwise be invisible); replaces a same-turn start sample.
+    let tempo_pids: Vec<PlayerId> = game.state.tribes.keys().copied().collect();
+    for pid in tempo_pids {
+        if let Some(s) = tempo_sample(&game.state, pid) {
+            let track = tempo.entry(pid).or_default();
+            match track.samples.last_mut() {
+                Some(last) if last.turn == s.turn => *last = s,
+                _ => track.samples.push(s),
+            }
+        }
+    }
+
     // Determine scores & winner
     // In Domination, the winner is the last tribe alive.
     // If the game timed out (safety cap), use score as tiebreaker.
     let mut scores: HashMap<i32, i32> = HashMap::new();
+    let mut final_potentials: HashMap<i32, f32> = HashMap::new();
     let mut alive: HashMap<i32, bool> = HashMap::new();
     for (id, t) in &game.state.tribes {
         scores.insert(*id, t.score);
         alive.insert(*id, t.killed_turn <= 0 && t.resigned_turn <= 0);
+    }
+    for id in scores.keys() {
+        let phi = if shape_w_label != 0.0 {
+            shape_w_label * reward::dev_potential(&game.state, *id)
+        } else {
+            0.0
+        };
+        final_potentials.insert(*id, scores[id] as f32 + phi);
     }
 
     // Domination winner: the sole survivor, or highest score if timeout
@@ -1144,6 +1410,7 @@ fn play_single_game(
     Some(GameResult {
         history: game_history,
         scores,
+        final_potentials,
         final_cities,
         total_cities,
         moves: move_count,
@@ -1161,6 +1428,8 @@ fn play_single_game(
         final_owner,
         final_spt,
         final_tech,
+        tempo,
+        roles: seat_roles,
         winner_score,
         winner_id,
         recap,
@@ -1298,6 +1567,17 @@ fn main() -> anyhow::Result<()> {
         #[arg(long, default_value_t = false)]
         wl_labels: bool,
 
+        /// EXP_ELO_016: weight on the development potential Φ in TD-label
+        /// snapshots (`score + w·Φ`). 0 = raw score deltas (legacy).
+        #[arg(long, default_value_t = 0.0)]
+        shape_w_label: f32,
+
+        /// EXP_ELO_016: weight on Φ in the Gumbel in-tree edge rewards.
+        /// Threaded separately from the label weight (EXP_ELO_005 lesson:
+        /// search reacts violently to reward changes). 0 = legacy.
+        #[arg(long, default_value_t = 0.0)]
+        shape_w_tree: f32,
+
         /// Current training iteration (for curriculum learning)
         #[arg(long, default_value_t = 1)]
         iteration: usize,
@@ -1400,6 +1680,13 @@ fn main() -> anyhow::Result<()> {
         /// fresh root builds, so within-turn tree reuse is off).
         #[arg(long)]
         dump_failed_dir: Option<String>,
+
+        /// Trajectory diagnostics: append one JSON record per player-turn
+        /// (at turn start, before any moves) to <dir>/game<idx>.jsonl — the
+        /// acting player's owned cities, FOW-visible uncaptured villages, and
+        /// unit tiles. Ungated; the Python analysis does all filtering.
+        #[arg(long)]
+        dump_turn_states: Option<String>,
     }
 
     let args = Args::parse();
@@ -1672,6 +1959,26 @@ fn main() -> anyhow::Result<()> {
                         (backend, backend)
                     };
 
+                    // Seat roles for tempo aggregation: "model" (mirror seat),
+                    // "model_vs_anchor" (net seat racing the anchor — the
+                    // contested population), "anchor" (Greedy reference
+                    // curve), "opponent" (league checkpoint seat).
+                    let seat_roles: [&'static str; 2] = if is_anchor {
+                        if anchor_ordinal % 2 == 0 {
+                            ["anchor", "model_vs_anchor"]
+                        } else {
+                            ["model_vs_anchor", "anchor"]
+                        }
+                    } else if has_opponent {
+                        if swap_players {
+                            ["opponent", "model"]
+                        } else {
+                            ["model", "opponent"]
+                        }
+                    } else {
+                        ["model", "model"]
+                    };
+
                     // Sample this game's own tribe pair, seeded off its game
                     // seed so runs stay reproducible while each game gets a
                     // distinct matchup.
@@ -1706,6 +2013,10 @@ fn main() -> anyhow::Result<()> {
                             args.trace_max,
                             &trace_counter,
                             args.dump_failed_dir.as_deref(),
+                            args.dump_turn_states.as_deref(),
+                            seat_roles,
+                            args.shape_w_label,
+                            args.shape_w_tree,
                         )
                     }))
                     .unwrap_or_else(|_| {
@@ -1882,6 +2193,22 @@ fn main() -> anyhow::Result<()> {
     let mut total_moves_by_turn: HashMap<i32, HashMap<polyfish::types::MoveType, usize>> =
         HashMap::new();
 
+    /// Per-role tempo accumulator across all player-games.
+    #[derive(Default)]
+    struct TempoAgg {
+        /// turn -> ([cities, city_levels, spt, units, army_stars, revealed,
+        /// techs] sums, sample count)
+        by_turn: HashMap<i32, ([f64; 7], u32)>,
+        trained: i64,
+        granted: i64,
+        lost: i64,
+        giants: i64,
+        player_games: u32,
+        /// cities >= 2/3/4: (reached count, turn sum over reached)
+        reach: [(u32, f64); 3],
+    }
+    let mut tempo_aggs: HashMap<&'static str, TempoAgg> = HashMap::new();
+
     for result in results {
         total_score += result.winner_score;
         total_moves += result.moves;
@@ -1963,6 +2290,40 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
+        for (&pid, track) in &result.tempo {
+            let seat = (pid - 1) as usize;
+            if seat >= 2 {
+                continue;
+            }
+            let agg = tempo_aggs.entry(result.roles[seat]).or_default();
+            agg.player_games += 1;
+            agg.trained += track.units_trained as i64;
+            agg.granted += track.units_granted as i64;
+            agg.lost += track.units_lost as i64;
+            agg.giants += track.giants_made as i64;
+            for s in &track.samples {
+                let (sums, n) = agg.by_turn.entry(s.turn).or_default();
+                for (acc, v) in sums.iter_mut().zip([
+                    s.cities,
+                    s.city_levels,
+                    s.spt,
+                    s.units,
+                    s.army_stars,
+                    s.revealed,
+                    s.techs,
+                ]) {
+                    *acc += v as f64;
+                }
+                *n += 1;
+            }
+            for (slot, target) in agg.reach.iter_mut().zip([2, 3, 4]) {
+                if let Some(s) = track.samples.iter().find(|s| s.cities >= target) {
+                    slot.0 += 1;
+                    slot.1 += s.turn as f64;
+                }
+            }
+        }
+
         // Backpropagate value
         // Domination: Win/Loss is the primary signal.
         // The winner gets +1.0, loser gets -1.0.
@@ -1970,8 +2331,12 @@ fn main() -> anyhow::Result<()> {
         let final_scores = &result.scores;
 
         let label_steps: Vec<LabelStep> = result.history.iter().map(LabelStep::from).collect();
-        let td_deltas =
-            td_lambda_labels(&label_steps, final_scores, LAMBDA_RETURN, args.label_rel_w);
+        let td_deltas = td_lambda_labels(
+            &label_steps,
+            &result.final_potentials,
+            LAMBDA_RETURN,
+            args.label_rel_w,
+        );
 
         let spt_steps: Vec<SptStep> = result
             .history
@@ -2283,6 +2648,78 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Tempo curves per role + net-seat scalar aggregates ("model" mirror
+    // seats + "model_vs_anchor" contested seats combined; "anchor" is the
+    // Greedy reference curve and stays out of the scalars).
+    let tempo_by_turn = {
+        let mut roles_map = serde_json::Map::new();
+        for (role, agg) in &tempo_aggs {
+            let mut turn_map = serde_json::Map::new();
+            let mut turns: Vec<i32> = agg.by_turn.keys().copied().collect();
+            turns.sort_unstable();
+            for t in turns {
+                let (sums, n) = &agg.by_turn[&t];
+                let nf = f64::from(*n).max(1.0);
+                let mut o = serde_json::Map::new();
+                for (name, v) in [
+                    "cities",
+                    "city_levels",
+                    "spt",
+                    "units",
+                    "army_stars",
+                    "revealed",
+                    "techs",
+                ]
+                .iter()
+                .zip(sums.iter())
+                {
+                    o.insert((*name).to_string(), serde_json::Value::from(v / nf));
+                }
+                o.insert("n".to_string(), serde_json::Value::from(*n));
+                turn_map.insert(t.to_string(), serde_json::Value::Object(o));
+            }
+            roles_map.insert((*role).to_string(), serde_json::Value::Object(turn_map));
+        }
+        serde_json::Value::Object(roles_map)
+    };
+    let mut net_games = 0u32;
+    let (mut net_trained, mut net_granted, mut net_lost, mut net_giants) = (0i64, 0i64, 0i64, 0i64);
+    let mut net_reach = [(0u32, 0.0f64); 3];
+    for role in ["model", "model_vs_anchor"] {
+        if let Some(a) = tempo_aggs.get(role) {
+            net_games += a.player_games;
+            net_trained += a.trained;
+            net_granted += a.granted;
+            net_lost += a.lost;
+            net_giants += a.giants;
+            for (dst, src) in net_reach.iter_mut().zip(a.reach.iter()) {
+                dst.0 += src.0;
+                dst.1 += src.1;
+            }
+        }
+    }
+    let per_net_game = |x: i64| {
+        if net_games > 0 {
+            x as f64 / f64::from(net_games)
+        } else {
+            0.0
+        }
+    };
+    let reach_rate = |i: usize| {
+        if net_games > 0 {
+            f64::from(net_reach[i].0) / f64::from(net_games)
+        } else {
+            0.0
+        }
+    };
+    let reach_turn = |i: usize| {
+        if net_reach[i].0 > 0 {
+            net_reach[i].1 / f64::from(net_reach[i].0)
+        } else {
+            -1.0
+        }
+    };
+
     let metrics = json!({
         "num_games": args.num_games,
         "avg_score": avg_score,
@@ -2329,6 +2766,17 @@ fn main() -> anyhow::Result<()> {
         "ruins_t2c_all": (total_t2c[6] / args.num_games as f64) as f32,
         "games_file": games_file,
         "moves_by_turn": moves_by_turn,
+        "avg_units_spawned": per_net_game(net_trained),
+        "avg_units_granted": per_net_game(net_granted),
+        "avg_units_lost": per_net_game(net_lost),
+        "avg_giants_made": per_net_game(net_giants),
+        "t2c_2nd_rate": reach_rate(0),
+        "t2c_2nd_turn": reach_turn(0),
+        "t2c_3rd_rate": reach_rate(1),
+        "t2c_3rd_turn": reach_turn(1),
+        "t2c_4th_rate": reach_rate(2),
+        "t2c_4th_turn": reach_turn(2),
+        "tempo_by_turn": tempo_by_turn,
     });
     std::fs::write(
         ".last_self_play_metrics.json",
@@ -2399,14 +2847,14 @@ mod td_lambda_tests {
         LabelStep {
             player_id,
             turn,
-            my_score: my,
-            opp_score: opp,
+            my_score: my as f32,
+            opp_score: opp as f32,
             root_value: rv,
         }
     }
 
-    fn finals(pairs: &[(i32, i32)]) -> HashMap<i32, i32> {
-        pairs.iter().copied().collect()
+    fn finals(pairs: &[(i32, i32)]) -> HashMap<i32, f32> {
+        pairs.iter().map(|&(id, s)| (id, s as f32)).collect()
     }
 
     #[test]

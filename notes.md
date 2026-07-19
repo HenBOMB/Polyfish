@@ -645,3 +645,6 @@ known cities. Measured (greedy, n=32×2): cond 6.20/5.97 vs veto 6.22,
 rate 0.94-0.97 vs 1.00 — statistically a wash, kept for concept fidelity;
 nearest-single-fruit can't read the clustering/side signal a human uses
 (that's the net's job). Production mix: rate 0.97, cond ~6.5.
+
+## July 20, 2026
+I played a Dryland 1x1 domination so I can have some context to anchor performance. By turn 10 I had +22 spts (the ideal for most tribes is to be ~20 spts by turn 10 means you're doing well). By turn 20 I had 90 spts however. This is mainly because I was playing against CPU easy so I took control of the whole map quickly and then just maxed out on greed with sawmills, markets, forges, parks, etc. I lost 0 units. I had 3 warriors, 5 riders, and 4 giants. 

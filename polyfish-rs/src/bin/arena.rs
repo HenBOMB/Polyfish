@@ -127,6 +127,13 @@ struct Args {
     /// EXP_ELO_001 loss-autopsy instrument.
     #[arg(long)]
     dump_stats_dir: Option<String>,
+
+    /// Write one start-of-turn ground-truth snapshot per turn (both players'
+    /// cities/units + the model player's FOW-visible neutral villages) as one
+    /// JSONL file per game into this directory — the vs-Greedy 3rd-city
+    /// pursuit instrument (config1 = the model/gumbel seat).
+    #[arg(long)]
+    dump_turn_states: Option<String>,
 }
 
 fn load_model(path: &str, device: &candle_core::Device) -> anyhow::Result<PolyZeroNet> {
@@ -135,6 +142,74 @@ fn load_model(path: &str, device: &candle_core::Device) -> anyhow::Result<PolyZe
         candle_nn::VarBuilder::from_mmaped_safetensors(&[path], candle_core::DType::F32, device)?
     };
     Ok(PolyZeroNet::new(vs)?)
+}
+
+/// Append one start-of-turn ground-truth snapshot to <dir>/game<idx>.jsonl for
+/// the vs-Greedy 3rd-city pursuit analysis. Both players' cities/units come
+/// from ground truth every turn; villages are ground-truth neutral villages
+/// (`neutral_villages`) plus the model player's FOW view
+/// (`model_visible_villages`). Row-major 11x11 tile indices. One file per game,
+/// so concurrent match workers never share a handle.
+fn dump_turn_state(
+    file: &mut std::fs::File,
+    game_idx: usize,
+    state: &polyfish::states::GameState,
+    model_player: polyfish::states::PlayerId,
+    greedy_player: polyfish::states::PlayerId,
+) {
+    use std::io::Write;
+    // Currently-uncaptured (neutral) villages: owner only ever transitions
+    // 0 -> nonzero via capture, so `owner == 0` is exactly self_play's
+    // incremental open_villages set without intercepting the move loop.
+    let neutral_villages: Vec<i32> = state
+        .structures
+        .iter()
+        .filter_map(|(&idx, s)| {
+            let s = s.as_ref()?;
+            let neutral = s.structure_type == polyfish::types::StructureType::Village
+                && state.tiles.get(&idx).map_or(false, |t| t.owner == 0);
+            neutral.then_some(idx)
+        })
+        .collect();
+    let model_visible_villages: Vec<i32> = neutral_villages
+        .iter()
+        .copied()
+        .filter(|idx| {
+            state
+                .tiles
+                .get(idx)
+                .map_or(false, |t| t.explorers.contains(&model_player))
+        })
+        .collect();
+    let cities_of = |pid: polyfish::states::PlayerId| -> Vec<i32> {
+        state
+            .tribes
+            .get(&pid)
+            .map(|t| t.cities.iter().map(|c| c.idx).collect())
+            .unwrap_or_default()
+    };
+    let units_of = |pid: polyfish::states::PlayerId| -> Vec<i32> {
+        state
+            .tribes
+            .get(&pid)
+            .map(|t| t.units.iter().map(|u| u.coords.idx).collect())
+            .unwrap_or_default()
+    };
+    let rec = serde_json::json!({
+        "game": game_idx,
+        "turn": state.settings.turn,
+        "acting_player": state.settings.current_player_turn_id,
+        "model_player": model_player,
+        "model_cities": cities_of(model_player),
+        "model_units": units_of(model_player),
+        "model_visible_villages": model_visible_villages,
+        "greedy_cities": cities_of(greedy_player),
+        "greedy_units": units_of(greedy_player),
+        "neutral_villages": neutral_villages,
+    });
+    if let Ok(s) = serde_json::to_string(&rec) {
+        let _ = writeln!(file, "{s}");
+    }
 }
 
 /// One per-turn sample for --dump-stats-dir; arrays index [config1, config2].
@@ -209,6 +284,8 @@ fn play_match(
     max_turns: i32,
     gamemode: u8,
     dump_stats_dir: Option<&str>,
+    game_idx: usize,
+    dump_turn_states: Option<&str>,
 ) -> MatchResult {
     let gen_settings = MapGenSettings {
         size: MapSize::Tiny,
@@ -229,19 +306,34 @@ fn play_match(
     // scores attribute to the right config when sides are swapped.
     let (mut agent_p1, p1_config, mut agent_p2, p2_config) = if swap {
         (
-            make_search_agent(backend2, eval2, mcts2, leaf_batch, None, None, None),
+            make_search_agent(backend2, eval2, mcts2, leaf_batch, None, None, None, None),
             2u8,
-            make_search_agent(backend1, eval1, mcts1, leaf_batch, None, None, None),
+            make_search_agent(backend1, eval1, mcts1, leaf_batch, None, None, None, None),
             1u8,
         )
     } else {
         (
-            make_search_agent(backend1, eval1, mcts1, leaf_batch, None, None, None),
+            make_search_agent(backend1, eval1, mcts1, leaf_batch, None, None, None, None),
             1u8,
-            make_search_agent(backend2, eval2, mcts2, leaf_batch, None, None, None),
+            make_search_agent(backend2, eval2, mcts2, leaf_batch, None, None, None, None),
             2u8,
         )
     };
+
+    // Config1 (gumbel/model) sits in the P1 seat unless swapped; the model_*
+    // dump fields always describe this player, greedy_* the other, regardless
+    // of who is acting.
+    let model_player: polyfish::states::PlayerId = if swap { 2 } else { 1 };
+    let greedy_player: polyfish::states::PlayerId = if swap { 1 } else { 2 };
+    let mut turn_dump_file: Option<std::fs::File> = None;
+    if let Some(dir) = dump_turn_states {
+        match std::fs::File::create(std::path::Path::new(dir).join(format!("game{game_idx}.jsonl")))
+        {
+            Ok(f) => turn_dump_file = Some(f),
+            Err(e) => eprintln!("[dump-turn-states] failed to open game{game_idx} file: {e}"),
+        }
+    }
+    let mut last_dump_key: Option<(i32, polyfish::states::PlayerId)> = None;
 
     let mut moves = 0;
     let mut ns_config1: u64 = 0;
@@ -257,6 +349,16 @@ fn play_match(
             last_sampled_turn = game.state.settings.turn;
         }
         let current_pid = game.state.settings.current_player_turn_id;
+
+        // Dump the start-of-turn ground-truth snapshot once per (turn, acting
+        // player), before any move that turn mutates the state.
+        if let Some(f) = turn_dump_file.as_mut() {
+            let key = (game.state.settings.turn, current_pid);
+            if last_dump_key != Some(key) {
+                dump_turn_state(f, game_idx, &game.state, model_player, greedy_player);
+                last_dump_key = Some(key);
+            }
+        }
 
         let t0 = Instant::now();
         // Search on a clone: MCTS execute/undo must never touch the scored
@@ -458,6 +560,11 @@ fn main() -> anyhow::Result<()> {
     }
     let dump_stats_dir = args.dump_stats_dir.as_deref();
 
+    if let Some(dir) = &args.dump_turn_states {
+        std::fs::create_dir_all(dir)?;
+    }
+    let dump_turn_states = args.dump_turn_states.as_deref();
+
     let arena_start = Instant::now();
     let completed = AtomicU32::new(0);
     let progress_step = ((total_games / 10) as u32).max(1);
@@ -504,6 +611,7 @@ fn main() -> anyhow::Result<()> {
                         play_match(
                             eval1, eval2, mcts1, mcts2, backend1, backend2, args.leaf_batch,
                             seed, swap, args.max_turns, args.gamemode, dump_stats_dir,
+                            idx, dump_turn_states,
                         )
                     }));
 

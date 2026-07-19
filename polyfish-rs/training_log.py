@@ -14,6 +14,7 @@ from typing import Any
 
 CSV_PATH = "training_log.csv"
 MOVES_PATH = "moves_by_turn.json"
+TEMPO_PATH = "tempo_by_turn.json"
 VALUE_DIST_PATH = "value_distribution.json"
 CURRENT_RUN_PATH = ".current_run"
 HIST_BINS = 80
@@ -43,6 +44,7 @@ HEADER = [
     "aux_fog_loss",
     "aux_spt_loss",
     "aux_tech_loss",
+    "kl_ref_loss",
     "avg_captures",
     "avg_cap_ruins",
     "avg_cap_villages",
@@ -65,8 +67,31 @@ HEADER = [
     "ruins_t2c_p50",
     "ruins_t2c_p80",
     "ruins_t2c_all",
+    "avg_units_spawned",
+    "avg_units_granted",
+    "avg_units_lost",
+    "avg_giants_made",
+    "t2c_2nd_rate",
+    "t2c_2nd_turn",
+    "t2c_3rd_rate",
+    "t2c_3rd_turn",
+    "t2c_4th_rate",
+    "t2c_4th_turn",
     "avg_moves",
     "match_type",
+]
+
+TEMPO_COLUMNS = [
+    "avg_units_spawned",
+    "avg_units_granted",
+    "avg_units_lost",
+    "avg_giants_made",
+    "t2c_2nd_rate",
+    "t2c_2nd_turn",
+    "t2c_3rd_rate",
+    "t2c_3rd_turn",
+    "t2c_4th_rate",
+    "t2c_4th_turn",
 ]
 
 OLD_13 = [
@@ -518,6 +543,7 @@ def append_row(
         "aux_fog_loss": train_metrics.get("aux_fog_loss", ""),
         "aux_spt_loss": train_metrics.get("aux_spt_loss", ""),
         "aux_tech_loss": train_metrics.get("aux_tech_loss", ""),
+        "kl_ref_loss": train_metrics.get("kl_ref_loss", ""),
         "avg_captures": game_metrics.get("avg_captures", ""),
         "avg_cap_ruins": game_metrics.get("avg_cap_ruins", ""),
         "avg_cap_villages": game_metrics.get("avg_cap_villages", ""),
@@ -540,6 +566,7 @@ def append_row(
         "ruins_t2c_p50": game_metrics.get("ruins_t2c_p50", ""),
         "ruins_t2c_p80": game_metrics.get("ruins_t2c_p80", ""),
         "ruins_t2c_all": game_metrics.get("ruins_t2c_all", ""),
+        **{col: game_metrics.get(col, "") for col in TEMPO_COLUMNS},
         "avg_moves": game_metrics.get("avg_moves", ""),
         "match_type": normalize_match_type(match_type),
     }
@@ -555,10 +582,28 @@ def append_row(
     if moves is not None:
         update_moves_by_turn(run_id, iteration, moves)
 
+    tempo = game_metrics.get("tempo_by_turn")
+    if tempo is not None:
+        update_tempo_by_turn(run_id, iteration, tempo)
+
     if archived:
         ng = game_metrics.get("num_games")
         num_games = int(ng) if ng not in (None, "") else None
         update_value_distribution(run_id, iteration, archived, num_games=num_games)
+
+
+def update_tempo_by_turn(run_id: str, iteration: int, tempo_by_turn: Any) -> None:
+    """Sidecar for the per-role development-tempo curves (moves_by_turn pattern)."""
+    store: dict[str, Any] = {}
+    if os.path.exists(TEMPO_PATH):
+        with open(TEMPO_PATH, encoding="utf-8") as f:
+            try:
+                store = json.load(f)
+            except json.JSONDecodeError:
+                store = {}
+    store.setdefault(str(run_id), {})[str(iteration)] = tempo_by_turn
+    with open(TEMPO_PATH, "w", encoding="utf-8") as f:
+        json.dump(store, f)
 
 
 def update_moves_by_turn(run_id: str, iteration: int, moves_by_turn: Any) -> None:
