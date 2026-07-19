@@ -375,6 +375,8 @@ fn spt_shaping_deltas(history: &[LabelStep]) -> Vec<f32> {
 
 /// Result from a single game - contains all data needed for training
 struct GameResult {
+    /// Index within this run's game batch; games 2k/2k+1 form a mirror pair.
+    game_idx: usize,
     history: Vec<HistoryStep>,
     scores: HashMap<i32, i32>,
     final_cities: HashMap<i32, i32>,
@@ -510,6 +512,51 @@ fn load_networks(
 
 /// Play a single game and return the result
 #[allow(clippy::too_many_arguments)]
+/// Final-outcome tail from `p_id`'s POV: ±1 on elimination, else the
+/// relative/absolute score blend. Must stay in sync with the value-label
+/// semantics (this IS the single source of truth for that computation).
+fn outcome_for(result: &GameResult, p_id: i32, reward_shaping: bool) -> f32 {
+    if result.decisive {
+        return if p_id == result.winner_id { 1.0 } else { -1.0 };
+    }
+    let my_final = result.scores.get(&p_id).copied().unwrap_or(0) as f32;
+    let opp_final = result
+        .scores
+        .iter()
+        .filter(|(id, _)| **id != p_id)
+        .map(|(_, score)| *score as f32)
+        .next()
+        .unwrap_or(0.0);
+
+    // Asymmetric reward shaping to fix P1 advantage
+    let (mut my_adjusted, mut opp_adjusted) = (my_final, opp_final);
+    if reward_shaping {
+        let penalty = 0.05;
+        if p_id == 1 {
+            my_adjusted = my_final * (1.0 - penalty);
+            opp_adjusted = opp_final * (1.0 + penalty);
+        } else if p_id == 2 {
+            my_adjusted = my_final * (1.0 + penalty);
+            opp_adjusted = opp_final * (1.0 - penalty);
+        }
+    }
+
+    // Normalized score differential, scaled into a useful training range.
+    let combined_score = my_adjusted + opp_adjusted;
+    let scaling_factor = 3.0;
+    let relative_outcome = if combined_score > 0.0 {
+        let ratio = (my_adjusted - opp_adjusted) / combined_score;
+        (ratio * scaling_factor).clamp(-1.0, 1.0)
+    } else {
+        0.0
+    };
+
+    // Absolute value: final score vs fixed yardstick, not current scoreboard.
+    let abs_outcome = (my_final / GOOD_BOT_FINAL_SCORE).clamp(0.0, 1.0) * 2.0 - 1.0;
+    (FINAL_OUTCOME_REL_W * relative_outcome + (1.0 - FINAL_OUTCOME_REL_W) * abs_outcome)
+        .clamp(-1.0, 1.0)
+}
+
 fn play_single_game(
     network1: &PolyZeroNet,
     network2: &PolyZeroNet, // Added network2
@@ -936,6 +983,7 @@ fn play_single_game(
     }
 
     Some(GameResult {
+        game_idx,
         history: game_history,
         scores,
         final_cities,
@@ -1129,6 +1177,13 @@ fn main() -> anyhow::Result<()> {
         /// Without this flag, all actions get the same flat final-outcome value.
         #[arg(long, default_value_t = false)]
         reward_shaping: bool,
+
+        /// Mirror-relative value labels: games 2k/2k+1 replay the same seed
+        /// with seats swapped; each game's outcome tail is blended toward the
+        /// pair mean (fully at game start, not at all by game end), canceling
+        /// map/spawn/seat luck from the label. Disable: --mirror-labels=false.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        mirror_labels: bool,
 
         /// Current training iteration (for curriculum learning)
         #[arg(long, default_value_t = 1)]
@@ -1641,7 +1696,10 @@ fn main() -> anyhow::Result<()> {
                         break;
                     }
 
-                    let seed = (base_seed + i as u64) as i64;
+                    // Mirror pairs: games 2k and 2k+1 share a seed (same map
+                    // and tribes) with controllers on swapped seats, so the
+                    // value labels can cancel per-map/spawn/seat luck.
+                    let seed = (base_seed + (i / 2) as u64) as i64;
                     let swap_players = i % 2 == 1; // Swap every other game
                     let (p1_net, p2_net, p1_eval, p2_eval) = if swap_players {
                         (&**network2, &**network1, eval2, eval1)
@@ -1649,16 +1707,15 @@ fn main() -> anyhow::Result<()> {
                         (&**network1, &**network2, eval1, eval2)
                     };
 
-                    // Anchor games: evenly spread across the run at rate
-                    // anchor_frac; the anchor's seat alternates by anchor
-                    // ordinal (game parity alone would pin it to one seat at
-                    // e.g. frac 0.25, where anchor games are all odd-i).
-                    let anchor_ordinal =
-                        (((i + 1) as f32) * anchor_frac).floor() as usize;
+                    // Anchor games are scheduled per PAIR (evenly spread at
+                    // rate anchor_frac) so both halves of a mirror pair are
+                    // anchor games, greedy taking opposite seats in each half.
+                    let pair_idx = i / 2;
                     let is_anchor = anchor_frac > 0.0
-                        && anchor_ordinal > ((i as f32) * anchor_frac).floor() as usize;
+                        && (((pair_idx + 1) as f32) * anchor_frac).floor() as usize
+                            > ((pair_idx as f32) * anchor_frac).floor() as usize;
                     let (backend_seat1, backend_seat2) = if is_anchor {
-                        if anchor_ordinal % 2 == 0 {
+                        if i % 2 == 0 {
                             (SearchBackend::Greedy, backend)
                         } else {
                             (backend, SearchBackend::Greedy)
@@ -1892,6 +1949,28 @@ fn main() -> anyhow::Result<()> {
     let mut vlab_spt_abs = 0.0f64;
     let mut vlab_steps = 0u64;
 
+    // P1-POV outcome per game, keyed by game_idx, for the mirror-pair label
+    // adjustment (a game's partner is game_idx ^ 1; absent if it panicked).
+    let pair_outcomes: HashMap<usize, f32> = if args.mirror_labels {
+        results
+            .iter()
+            .map(|r| (r.game_idx, outcome_for(r, 1, args.reward_shaping)))
+            .collect()
+    } else {
+        HashMap::new()
+    };
+    if args.mirror_labels {
+        let paired = results
+            .iter()
+            .filter(|r| pair_outcomes.contains_key(&(r.game_idx ^ 1)))
+            .count();
+        eprintln!(
+            "[MirrorLabels] {}/{} games have a live mirror partner",
+            paired,
+            results.len()
+        );
+    }
+
     for result in results {
         if result.decisive {
             decisive_games += 1;
@@ -1991,8 +2070,11 @@ fn main() -> anyhow::Result<()> {
         // survivor (elimination) or, on timeout, the score leader — already
         // adjudicated at game end. `decisive` marks a real elimination; on a
         // timeout we fall back to the score tail below.
-        let game_winner_id = result.winner_id;
         let game_decisive = result.decisive;
+        let z_p1 = outcome_for(&result, 1, args.reward_shaping);
+        let z_p2 = outcome_for(&result, 2, args.reward_shaping);
+        let partner_z1 = pair_outcomes.get(&(result.game_idx ^ 1)).copied();
+        let hist_len = result.history.len();
         // Env-tunable so the win/loss tail vs dense score-shaping mix can be
         // swept without a recompile (default = const TD_W).
         let td_w: f32 = std::env::var("TD_W")
@@ -2024,54 +2106,28 @@ fn main() -> anyhow::Result<()> {
             collected_target_spatial.push(policy_data.target_spatial);
             collected_option.push(policy_data.move_option);
 
-            // Perfection: Score-based value target
-            // Every game produces a meaningful score — use normalized differential
-            let my_final = final_scores.get(&p_id).copied().unwrap_or(0) as f32;
-            let opp_final = final_scores
-                .iter()
-                .filter(|(id, _)| **id != p_id)
-                .map(|(_, score)| *score as f32)
-                .next()
-                .unwrap_or(0.0);
+            // The long-horizon tail (EXP_ARCH_001): win(+1)/loss(-1) on a
+            // decisive game, score differential on a timeout (outcome_for).
+            let own_outcome = if p_id == 1 { z_p1 } else { z_p2 };
 
-            // Asymmetric Reward Shaping to fix P1 advantage
-            let (mut my_adjusted, mut opp_adjusted) = (my_final, opp_final);
-            if args.reward_shaping {
-                let penalty = 0.05; // 5% adjustment
-                if p_id == 1 {
-                    my_adjusted = my_final * (1.0 - penalty);
-                    opp_adjusted = opp_final * (1.0 + penalty);
-                } else if p_id == 2 {
-                    my_adjusted = my_final * (1.0 + penalty);
-                    opp_adjusted = opp_final * (1.0 - penalty);
+            // Mirror-relative adjustment: the partner game replays the same
+            // map with seats swapped, so the pair mean of this controller's
+            // outcomes estimates map/spawn/seat luck-free skill. Early states
+            // (where the pair hasn't diverged) take the pair mean; late states
+            // keep the true own outcome. Spawn-luck wins thus stop training
+            // the early game as if they were earned.
+            let final_outcome = match partner_z1 {
+                Some(pz1) => {
+                    let z_counterpart = if p_id == 1 { -pz1 } else { pz1 };
+                    let pair_mean = 0.5 * (own_outcome + z_counterpart);
+                    let u = if hist_len > 1 {
+                        step_idx as f32 / (hist_len - 1) as f32
+                    } else {
+                        1.0
+                    };
+                    (1.0 - u) * pair_mean + u * own_outcome
                 }
-            }
-
-            // Normalize by combined economic activity with scaling multiplier
-            let combined_score = my_adjusted + opp_adjusted;
-            // to spread distribution into useful training range
-            let scaling_factor = 3.0;
-            let relative_outcome = if combined_score > 0.0 {
-                let ratio = (my_adjusted - opp_adjusted) / combined_score;
-                (ratio * scaling_factor).clamp(-1.0, 1.0)
-            } else {
-                0.0 // Both players scored 0 - treat as draw
-            };
-
-            // Absolute value: final score vs fixed yardstick, not current scoreboard.
-            let abs_outcome = (my_final / GOOD_BOT_FINAL_SCORE).clamp(0.0, 1.0) * 2.0 - 1.0;
-            let score_outcome = (FINAL_OUTCOME_REL_W * relative_outcome
-                + (1.0 - FINAL_OUTCOME_REL_W) * abs_outcome)
-                .clamp(-1.0, 1.0);
-
-            // The long-horizon tail (EXP_ARCH_001): on a decisive game it is
-            // pure win(+1)/loss(-1), so conquest — not score-hoarding — is what
-            // gets rewarded. On a timeout there is no winner to point at, so it
-            // degrades gracefully to the score differential.
-            let final_outcome = if game_decisive {
-                if p_id == game_winner_id { 1.0 } else { -1.0 }
-            } else {
-                score_outcome
+                None => own_outcome,
             };
 
             let value = if args.reward_shaping {

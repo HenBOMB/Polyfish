@@ -1,0 +1,14 @@
+.venv
+target
+models
+checkpoints
+milestones
+archive
+replays
+pod_state.tar.gz
+*.safetensors
+*.jsonl
+*.json
+*.log
+*.csv
+__pycache__

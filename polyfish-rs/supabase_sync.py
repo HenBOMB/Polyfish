@@ -130,11 +130,11 @@ def download_all_checkpoints(bucket: str = "models", min_iter: int = 0, matches_
                     if m and int(m.group(1)) < min_iter:
                         continue
                         
-                if evaluated_content:
-                    base_name = name.replace(".safetensors", "")
-                    if f'"{base_name}@' in evaluated_content:
-                        print(f"⏭️ Skipping already evaluated checkpoint: {name}")
-                        continue
+                # if evaluated_content:
+                #     base_name = name.replace(".safetensors", "")
+                #     if f'"{base_name}@' in evaluated_content:
+                #         print(f"⏭️ Skipping already evaluated checkpoint: {name}")
+                #         continue
 
                 local_path = os.path.join("checkpoints", name)
                 if not os.path.exists(local_path):

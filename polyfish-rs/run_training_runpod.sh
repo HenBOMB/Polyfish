@@ -150,23 +150,9 @@ if [ "$BENCHMARK" = true ]; then
     # Configurations to sweep: (actors, eval-servers)
     # eval-servers=0 means auto (the binary picks its default)
     BENCH_CONFIGS=(
-        "64,0"
-        "96,0"
-        "128,0"
-        "160,0"
-        "192,0"
-        "256,0"
-        "96,1"
         "128,1"
-        "160,1"
         "192,1"
         "256,1"
-        "128,2"
-        "128,3"
-        "192,2"
-        "192,3"
-        "256,2"
-        "256,3"
     )
 
     echo "Testing ${#BENCH_CONFIGS[@]} configurations (${BENCH_GAMES} games × ${BENCH_MCTS} MCTS iters each)..."
@@ -528,7 +514,7 @@ done
 # ============================================================================
 if [ "$ELO_TRACK" != "0" ]; then
     echo "📈 Final Elo: rating checkpoints (log: elo.log)..."
-    SEEDS="${ELO_SEEDS:-8}" WORKERS="${ELO_WORKERS:-2}" ./rate_checkpoints.sh --max-turns 45 >> elo.log 2>&1
+    SEEDS="${ELO_SEEDS:-8}" WORKERS="${ELO_WORKERS:-2}" ./rate_checkpoints.sh --supabase --save --load --max-turns 45 >> elo.log 2>&1
     echo "📊 Final Elo ladder (anchored: random = 0):"
     .venv/bin/python3 elo.py report 2>/dev/null || true
     if [ -f elo_ratings.json ]; then .venv/bin/python3 supabase_sync.py upload elo_ratings.json; fi

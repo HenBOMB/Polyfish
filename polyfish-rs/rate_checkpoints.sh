@@ -7,6 +7,9 @@
 # checkpoint, and one random earlier checkpoint. Then refits all ratings
 # (elo.py) and prints the ladder.
 #
+# You can also use --versus <model1> <model2> to explicitly battle two models
+# against each other and update their Elo ratings, bypassing the ladder logic.
+#
 # Near-strength opponents matter: a >400-Elo mismatch carries almost no rating
 # information and score-adjudication noise biases it, so anchors are chosen by
 # the previous checkpoint's fitted rating when one exists.
@@ -44,7 +47,7 @@ ANCHORS=("random:random:1" "greedy:greedy:1")
 ANCHOR_GUESS=("random:0" "greedy:250")
 
 if command -v cargo >/dev/null 2>&1; then
-    if command -v nvidia-smi >/dev/null 2>&1; then
+    if nvidia-smi >/dev/null 2>&1; then
         cargo build --release --bin arena --no-default-features --features cuda
     elif [[ "$OSTYPE" == "darwin"* ]]; then
         cargo build --release --bin arena --features metal,accelerate,tch-eval,metal-eval
@@ -56,9 +59,14 @@ elif [ ! -x "$ARENA" ]; then
     exit 1
 fi
 
-is_rated() { # player name has any ledger games
+is_rated() { # player name has enough ledger games to be considered fully rated
     [ "${FORCE:-0}" = "1" ] && return 1
-    [ -f "$MATCHES" ] && grep -qF "\"$1\"" "$MATCHES"
+    [ -f "$MATCHES" ] || return 1
+    local count
+    count=$(grep -c -F "\"$1\"" "$MATCHES" 2>/dev/null || echo 0)
+    # A full suite is typically 4 pairings (2 anchors + prev + random).
+    # Require at least 3 pairings (e.g. 48 games at 8 seeds) to skip.
+    [ "$count" -ge $(( SEEDS * 2 * 3 )) ]
 }
 
 rating_of() { # fitted elo of player $1, else empty
@@ -67,6 +75,13 @@ rating_of() { # fitted elo of player $1, else empty
 }
 
 play() { # play $SEEDS side-swapped seeds: model1 name1 backend1 mcts1 model2 name2 backend2 mcts2
+    if [ "${FORCE:-0}" != "1" ] && [ -f "$MATCHES" ]; then
+        if grep -F "\"$2\"" "$MATCHES" | grep -qF "\"$6\""; then
+            echo "--- Skipping $2 vs $6 (already in ledger) ---"
+            return 0
+        fi
+    fi
+
     echo ""
     echo "--- $2 vs $6 ($SEEDS seeds x 2 sides) ---"
     "$ARENA" --model1 "$1" --model2 "$5" \
@@ -100,15 +115,24 @@ SYNC_SUPABASE=false
 LOAD_PROGRESS=false
 MIN_ITER=${MIN_ITER:-0}
 MODELS=()
+VERSUS_MODELS=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --versus)
+            VERSUS_MODELS=("$2" "$3")
+            shift 3
+            ;;
         --supabase|--save)
             SYNC_SUPABASE=true
             shift
             ;;
         --load)
             LOAD_PROGRESS=true
+            shift
+            ;;
+        --force)
+            export FORCE=1
             shift
             ;;
         --min-iter)
@@ -140,29 +164,99 @@ if [ "$LOAD_PROGRESS" = true ] && [ -f "supabase_sync.py" ]; then
     "$PY" supabase_sync.py download "$RATINGS" || true
 fi
 
-if [ ${#MODELS[@]} -eq 0 ]; then
-    # Auto-sync missing checkpoints from supabase before rating if requested
-    if [ "$SYNC_SUPABASE" = true ] && [ -f "supabase_sync.py" ]; then
+# Auto-sync missing checkpoints from supabase before rating if requested
+if [ "$SYNC_SUPABASE" = true ] || [ "$LOAD_PROGRESS" = true ]; then
+    if [ -f "supabase_sync.py" ]; then
         "$PY" supabase_sync.py download-all-checkpoints "$MIN_ITER" "$MATCHES" || true
     fi
+fi
 
-    while IFS= read -r f; do
-        if [ "$MIN_ITER" -gt 0 ]; then
-            base=$(basename "$f")
-            if [[ "$base" =~ model_checkpoint_iter([0-9]+)(_.*)?\.safetensors ]]; then
-                iter="${BASH_REMATCH[1]}"
-                if [ "$iter" -lt "$MIN_ITER" ]; then
-                    continue
-                fi
+if [ ${#VERSUS_MODELS[@]} -eq 2 ]; then
+    resolve_model() {
+        local arg="$1"
+        # If bash already expanded it or it's an exact match
+        if [ -f "$arg" ]; then
+            echo "$arg"
+            return
+        fi
+        
+        # Try bash expansion explicitly (in case of unexpanded glob)
+        local expanded=( $arg )
+        if [ -f "${expanded[0]}" ]; then
+            echo "${expanded[0]}"
+            return
+        fi
+
+        # Fallback to searching checkpoints directory for iter number or substring
+        local found
+        found=$(ls checkpoints/*"$arg"* 2>/dev/null | head -n 1)
+        if [ -n "$found" ]; then
+            echo "$found"
+        else
+            echo "$arg" # Let it fail gracefully in arena
+        fi
+    }
+
+    MODEL1=$(resolve_model "${VERSUS_MODELS[0]}")
+    MODEL2=$(resolve_model "${VERSUS_MODELS[1]}")
+    
+    NAME1="$(basename "$MODEL1" .safetensors)@${BACKEND}${MCTS}"
+    NAME2="$(basename "$MODEL2" .safetensors)@${BACKEND}${MCTS}"
+    
+    echo "Running explicit versus match: $NAME1 vs $NAME2"
+    play "$MODEL1" "$NAME1" "$BACKEND" "$MCTS" "$MODEL2" "$NAME2" "$BACKEND" "$MCTS"
+    wait
+    
+    echo "Fitting ELO..."
+    "$PY" elo.py fit --matches "$MATCHES" --out "$RATINGS"
+    
+    if [ "$SYNC_SUPABASE" = true ] && [ -f "supabase_sync.py" ]; then
+        echo "Uploading results to Supabase..."
+        "$PY" supabase_sync.py upload "$MATCHES" || true
+        "$PY" supabase_sync.py upload "$RATINGS" || true
+    fi
+    exit 0
+elif [ ${#VERSUS_MODELS[@]} -gt 0 ]; then
+    echo "Error: --versus requires exactly two model arguments." >&2
+    exit 1
+fi
+
+EXPLICIT_MODELS=("${MODELS[@]}")
+MODELS=()
+
+while IFS= read -r f; do
+    if [ -z "$f" ]; then continue; fi
+    if [ "$MIN_ITER" -gt 0 ]; then
+        base=$(basename "$f")
+        if [[ "$base" =~ model_checkpoint_iter([0-9]+)(_.*)?\.safetensors ]]; then
+            iter="${BASH_REMATCH[1]}"
+            if [ "$iter" -lt "$MIN_ITER" ]; then
+                continue
             fi
         fi
-        MODELS+=("$f")
-    done \
-        < <(ls checkpoints/model_checkpoint_iter*.safetensors 2>/dev/null | sort -V)
+    fi
+    MODELS+=("$f")
+done < <(find checkpoints milestones -maxdepth 1 -name "model_checkpoint_iter*.safetensors" 2>/dev/null | while read -r x; do echo "$(basename "$x")|$x"; done | sort -V | cut -d'|' -f2)
+
+if [ ${#EXPLICIT_MODELS[@]} -gt 0 ]; then
+    HISTORY_MODELS=()
+    for m in "${MODELS[@]}"; do
+        NAME="$(basename "$m" .safetensors)@${BACKEND}${MCTS}"
+        if is_rated "$NAME"; then
+            skip=false
+            for e in "${EXPLICIT_MODELS[@]}"; do
+                if [ "$m" = "$e" ] || [ "$(realpath "$m" 2>/dev/null)" = "$(realpath "$e" 2>/dev/null)" ]; then skip=true; break; fi
+            done
+            if [ "$skip" = false ]; then
+                HISTORY_MODELS+=("$m")
+            fi
+        fi
+    done
+    MODELS=("${HISTORY_MODELS[@]}" "${EXPLICIT_MODELS[@]}")
 fi
 
 if [ ${#MODELS[@]} -eq 0 ]; then
-    echo "No models to rate (no args, nothing in checkpoints/)." >&2
+    echo "No models to rate (no args, nothing in checkpoints/ or milestones/)." >&2
     exit 1
 fi
 DUMMY_MODEL=${MODELS[0]} # network-free backends still need a loadable model path
@@ -175,12 +269,20 @@ fi
 PREV_MODEL=""
 PREV_NAME=""
 RATED_HIST=() # "model|name" of checkpoints already in the ledger this session
+
+# Pre-populate RATED_HIST so that older checkpoints placed out-of-order have history to play against
+for m in "${MODELS[@]}"; do
+    n="$(basename "$m" .safetensors)@${BACKEND}${MCTS}"
+    if is_rated "$n"; then
+        RATED_HIST+=("$m|$n")
+    fi
+done
+
 NEW_RATED=0
 
 for MODEL in "${MODELS[@]}"; do
     NAME="$(basename "$MODEL" .safetensors)@${BACKEND}${MCTS}"
     if is_rated "$NAME"; then
-        RATED_HIST+=("$MODEL|$NAME")
         PREV_MODEL=$MODEL; PREV_NAME=$NAME
         continue
     fi

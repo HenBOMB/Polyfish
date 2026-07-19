@@ -363,90 +363,106 @@ fn main() -> anyhow::Result<()> {
     let skipped = AtomicU32::new(0);
     let results_mutex: Mutex<Vec<MatchResult>> = Mutex::new(Vec::with_capacity(total_games));
 
-    let worker = |_ctx: rayon::BroadcastContext| {
-        let (w_net1, w_net2) = if per_thread_metal {
-            let device = Device::new_metal(0).expect("failed to create per-thread Metal device");
-            let n1 = Arc::new(
-                load_model(&args.model1, &device).expect("failed to load per-thread model1"),
-            );
-            let n2 = if same_model {
-                n1.clone()
-            } else {
-                Arc::new(
-                    load_model(&args.model2, &device).expect("failed to load per-thread model2"),
-                )
-            };
-            println!(
-                "  worker ready (Metal device loaded) at {:.1}s",
-                arena_start.elapsed().as_secs_f32()
-            );
-            (n1, n2)
-        } else {
-            (net1.clone(), net2.clone())
+    let use_eval_server = !device.is_metal();
+    let (server1, handle1) = if use_eval_server {
+        let config = polyfish::ai::eval_server::EvalServerConfig {
+            max_batch: 256,
+            ..Default::default()
         };
-        let eval1 = Evaluator::Inline(InlineEvalHandle::new(w_net1));
-        let eval2 = Evaluator::Inline(InlineEvalHandle::new(w_net2));
+        let spec = polyfish::ai::eval_server::BackendSpec::Candle(net1.clone());
+        let (s, h) = polyfish::ai::eval_server::EvalServer::start(spec, config);
+        (Some(s), Some(h))
+    } else {
+        (None, None)
+    };
+
+    let (server2, handle2) = if use_eval_server && !same_model {
+        let config = polyfish::ai::eval_server::EvalServerConfig {
+            max_batch: 256,
+            ..Default::default()
+        };
+        let spec = polyfish::ai::eval_server::BackendSpec::Candle(net2.clone());
+        let (s, h) = polyfish::ai::eval_server::EvalServer::start(spec, config);
+        (Some(s), Some(h))
+    } else {
+        (None, None)
+    };
+
+    let worker = |_ctx: rayon::BroadcastContext| {
+        let (eval1, eval2) = if use_eval_server {
+            let h1 = handle1.as_ref().unwrap().clone();
+            let h2 = if same_model { h1.clone() } else { handle2.as_ref().unwrap().clone() };
+            (Evaluator::Batched(h1), Evaluator::Batched(h2))
+        } else {
+            let (w_net1, w_net2) = if per_thread_metal {
+                let device = Device::new_metal(0).expect("failed to create per-thread Metal device");
+                let n1 = Arc::new(
+                    load_model(&args.model1, &device).expect("failed to load per-thread model1"),
+                );
+                let n2 = if same_model {
+                    n1.clone()
+                } else {
+                    Arc::new(
+                        load_model(&args.model2, &device).expect("failed to load per-thread model2"),
+                    )
+                };
+                println!(
+                    "  worker ready (Metal device loaded) at {:.1}s",
+                    arena_start.elapsed().as_secs_f32()
+                );
+                (n1, n2)
+            } else {
+                (net1.clone(), net2.clone())
+            };
+            (Evaluator::Inline(InlineEvalHandle::new(w_net1)), Evaluator::Inline(InlineEvalHandle::new(w_net2)))
+        };
 
         loop {
             let idx = job_counter.fetch_add(1, Ordering::Relaxed);
-            if idx >= args.games {
+            if idx >= args.games * 2 {
                 break;
             }
-            let seed = (base_seed + idx as u64) as i64;
+            let seed_idx = idx / 2;
+            let swap = (idx % 2) != 0;
+            let seed = (base_seed + seed_idx as u64) as i64;
 
-            // Catch per-job panics (transient Metal GPU resets, engine bugs)
-            // so one crash doesn't kill the worker thread and cascade into
-            // rayon discarding every completed result. The real panic message
-            // is printed below — engine bugs must stay visible, not be
-            // mislabeled as GPU flakiness.
-            let r1 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 play_match(
-                    &eval1, &eval2, mcts1, mcts2, backend1, backend2, seed, false,
-                    args.max_turns, args.gamemode,
-                )
-            }));
-            let r2 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                play_match(
-                    &eval1, &eval2, mcts1, mcts2, backend1, backend2, seed, true,
+                    &eval1, &eval2, mcts1, mcts2, backend1, backend2, seed, swap,
                     args.max_turns, args.gamemode,
                 )
             }));
 
-            match (r1, r2) {
-                (Ok(r1), Ok(r2)) => {
-                    for r in [&r1, &r2] {
-                        let winner = match r.winner_config {
-                            1 => "config1",
-                            2 => "config2",
-                            _ => "draw",
-                        };
-                        println!(
-                            "  game seed={} swap={}: {} ({}) scores {}-{}",
-                            r.seed,
-                            r.swap,
-                            winner,
-                            if r.decisive { "elimination" } else { "score at cap" },
-                            r.score_config1,
-                            r.score_config2
-                        );
-                    }
-                    results_mutex.lock().unwrap().extend([r1, r2]);
+            match r {
+                Ok(r) => {
+                    let winner = match r.winner_config {
+                        1 => "config1",
+                        2 => "config2",
+                        _ => "draw",
+                    };
+                    println!(
+                        "  game seed={} swap={}: {} ({}) scores {}-{}",
+                        r.seed,
+                        r.swap,
+                        winner,
+                        if r.decisive { "elimination" } else { "score at cap" },
+                        r.score_config1,
+                        r.score_config2
+                    );
+                    results_mutex.lock().unwrap().push(r);
                 }
-                (r1, r2) => {
+                Err(e) => {
                     skipped.fetch_add(1, Ordering::Relaxed);
-                    for r in [&r1, &r2] {
-                        if let Err(e) = r {
-                            eprintln!(
-                                "  ⚠ seed {} pair dropped — game panicked: {}",
-                                seed,
-                                panic_msg(e.as_ref())
-                            );
-                        }
-                    }
+                    eprintln!(
+                        "  ⚠ seed {} swap {} dropped — game panicked: {}",
+                        seed,
+                        swap,
+                        panic_msg(e.as_ref())
+                    );
                 }
             }
 
-            let done = completed.fetch_add(2, Ordering::Relaxed) + 2;
+            let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
             // Print early completions immediately (heartbeat) plus every ~10%.
             if done <= 2 || done % progress_step == 0 || done >= total_games as u32 {
                 let elapsed = arena_start.elapsed().as_secs_f32();
@@ -468,6 +484,10 @@ fn main() -> anyhow::Result<()> {
     } else {
         rayon::broadcast(worker);
     }
+    
+    if let Some(s) = server1 { s.shutdown(); }
+    if let Some(s) = server2 { s.shutdown(); }
+    
     let results = results_mutex.into_inner().unwrap();
 
     let arena_elapsed = arena_start.elapsed();
