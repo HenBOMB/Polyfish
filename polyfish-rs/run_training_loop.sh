@@ -358,6 +358,31 @@ do
         SHAPE_FLAGS="$SHAPE_FLAGS --shape-w-tree $SHAPE_W_TREE"
     fi
 
+    # EXP_ELO_018: isolated pursuit-progress shaping weights — label
+    # (PURSUIT_W_LABEL) and in-tree backup (PURSUIT_W_TREE), independent of
+    # the SHAPE_W_* development weights. Unset = 0 = off.
+    if [ -n "${PURSUIT_W_LABEL:-}" ]; then
+        SHAPE_FLAGS="$SHAPE_FLAGS --pursuit-w-label $PURSUIT_W_LABEL"
+    fi
+    if [ -n "${PURSUIT_W_TREE:-}" ]; then
+        SHAPE_FLAGS="$SHAPE_FLAGS --pursuit-w-tree $PURSUIT_W_TREE"
+    fi
+
+    # EXP_ELO_020: DAgger expert dose — blend Greedy's ranking at the model's
+    # own states into the policy target. Unset = 0 = off.
+    if [ -n "${DAGGER_ALPHA:-}" ]; then
+        SHAPE_FLAGS="$SHAPE_FLAGS --dagger-alpha $DAGGER_ALPHA"
+    fi
+
+    # EXP_ELO_017: unfreeze the opponent during in-tree EndTurn crossings —
+    # training-data generation only. Gauges/arena always search frozen (see
+    # arena.rs's hardcoded Some(false)), so no prior strength reading is
+    # ever confounded by this flag. UNFREEZE_OPPONENT=1 to enable.
+    UNFREEZE_FLAG=""
+    if [ "${UNFREEZE_OPPONENT:-0}" = "1" ]; then
+        UNFREEZE_FLAG="--unfreeze-opponent"
+    fi
+
     # Final phase-out of both heuristic crutches (search-prior blend +
     # anchor games): both decay to a 10% floor and hold there until this
     # EFF_ITER-relative cutoff, then hard-cut to 0. 150 is a starting point
@@ -430,10 +455,10 @@ do
     # One-line config echo so silent env misconfigurations (ITER_OFFSET,
     # LABEL_REL_W, BOOTSTRAP) are visible in the log — EXP_ELO_006 post-mortem:
     # two runs voided by a missing ITER_OFFSET that nothing surfaced.
-    echo "CONFIG iter=$i eff_iter=$EFF_ITER iter_offset=${ITER_OFFSET:-0} match=$MATCH_TYPE backend=${BACKEND_FLAG:---search-backend gumbel} anchor='${ANCHOR_FLAG}' td_w=${TD_W:-0.7} label_rel_w=${LABEL_REL_W:-default} wl_labels=${WL_LABELS:-0} shape_w_label=${SHAPE_W_LABEL:-0} shape_w_tree=${SHAPE_W_TREE:-0} value_trust=$VALUE_TRUST games=$NUM_GAMES mcts=$MCTS_ITERS k=$GUMBEL_K kl_ref_model=${KL_REF_MODEL:-none} kl_ref_weight=${KL_REF_WEIGHT:-0}"
+    echo "CONFIG iter=$i eff_iter=$EFF_ITER iter_offset=${ITER_OFFSET:-0} match=$MATCH_TYPE backend=${BACKEND_FLAG:---search-backend gumbel} anchor='${ANCHOR_FLAG}' td_w=${TD_W:-0.7} label_rel_w=${LABEL_REL_W:-default} wl_labels=${WL_LABELS:-0} shape_w_label=${SHAPE_W_LABEL:-0} shape_w_tree=${SHAPE_W_TREE:-0} pursuit_w_label=${PURSUIT_W_LABEL:-0} pursuit_w_tree=${PURSUIT_W_TREE:-0} unfreeze_opponent=${UNFREEZE_OPPONENT:-0} dagger_alpha=${DAGGER_ALPHA:-0} value_trust=$VALUE_TRUST games=$NUM_GAMES mcts=$MCTS_ITERS k=$GUMBEL_K kl_ref_model=${KL_REF_MODEL:-none} kl_ref_weight=${KL_REF_WEIGHT:-0}"
 
     SP_LOG=$(mktemp)
-    "$SELF_PLAY_BIN" --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $WL_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $BACKEND_FLAG $DECAY_LAST_ITER_FLAG --td-w "${TD_W:-0.7}" $LABEL_REL_W_FLAG $SHAPE_FLAGS --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
+    "$SELF_PLAY_BIN" --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $WL_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $BACKEND_FLAG $DECAY_LAST_ITER_FLAG --td-w "${TD_W:-0.7}" $LABEL_REL_W_FLAG $SHAPE_FLAGS $UNFREEZE_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
     SP_STATUS=${PIPESTATUS[0]}
     rm -f "$SP_LOG"
     if [ "$SP_STATUS" -ne 0 ]; then

@@ -138,19 +138,18 @@ pub fn discover_tiles(
     chain_undos(undos)
 }
 
-use std::collections::HashSet;
 
 /// Predict where an explorer will go and return (path, revealed_tiles)
 pub fn predict_explorer(state: &GameState, start_idx: i32) -> (Vec<i32>, Vec<i32>) {
     let pov_id = state.settings.current_player_turn_id;
     // Build current visibility from explorers
-    let mut current_visible: HashSet<i32> = state
+    let mut current_visible: rustc_hash::FxHashSet<i32> = state
         .tiles
         .iter()
         .filter(|(_, t)| t.explorers.contains(&pov_id))
         .map(|(&idx, _)| idx)
         .collect();
-    let mut explored_tiles: HashSet<i32> = HashSet::new();
+    let mut explored_tiles: rustc_hash::FxHashSet<i32> = rustc_hash::FxHashSet::default();
     let mut path_indices: Vec<i32> = Vec::new();
     let mut current_tile = start_idx;
     let mut prev_tile = -1;
@@ -228,10 +227,10 @@ pub fn predict_explorer(state: &GameState, start_idx: i32) -> (Vec<i32>, Vec<i32
 
 fn calculate_explorer_scores(
     state: &GameState,
-    visible: &HashSet<i32>,
+    visible: &rustc_hash::FxHashSet<i32>,
     _pov_id: PlayerId,
-) -> std::collections::HashMap<i32, i32> {
-    let mut scores = std::collections::HashMap::new();
+) -> rustc_hash::FxHashMap<i32, i32> {
+    let mut scores = rustc_hash::FxHashMap::default();
 
     // 1. Initial scoring for all fog tiles
     // We scan ALL tiles for fog
@@ -260,7 +259,7 @@ fn calculate_explorer_scores(
     scores
 }
 
-fn score_fog_tile(state: &GameState, visible: &HashSet<i32>, idx: i32) -> i32 {
+fn score_fog_tile(state: &GameState, visible: &rustc_hash::FxHashSet<i32>, idx: i32) -> i32 {
     let mut reveal_count = 0;
     let mut has_lighthouse = false;
 
@@ -309,7 +308,7 @@ fn get_allowed_neighbors(
     state: &GameState,
     idx: i32,
     include_unexplored: bool,
-    simulated_visible: Option<&HashSet<i32>>,
+    simulated_visible: Option<&rustc_hash::FxHashSet<i32>>,
 ) -> Vec<i32> {
     let pov_id = state.settings.current_player_turn_id;
     let tribe = match state.tribes.get(&pov_id) {

@@ -1615,7 +1615,7 @@ pub fn spawn_unit(
         coords: Coords::from_index(tile_idx, map_size),
         moved: true,
         attacked: true,
-        effects: std::collections::HashSet::new(),
+        effects: rustc_hash::FxHashSet::default(),
         passenger_type: None,
         converted: false,
         attacks_performed: 0,

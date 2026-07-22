@@ -647,4 +647,531 @@ nearest-single-fruit can't read the clustering/side signal a human uses
 (that's the net's job). Production mix: rate 0.97, cond ~6.5.
 
 ## July 20, 2026
-I played a Dryland 1x1 domination so I can have some context to anchor performance. By turn 10 I had +22 spts (the ideal for most tribes is to be ~20 spts by turn 10 means you're doing well). By turn 20 I had 90 spts however. This is mainly because I was playing against CPU easy so I took control of the whole map quickly and then just maxed out on greed with sawmills, markets, forges, parks, etc. I lost 0 units. I had 3 warriors, 5 riders, and 4 giants. 
+I played a Dryland 1x1 domination so I can have some context to anchor performance. By turn 10 I had +22 spts (the ideal for most tribes is to be ~20 spts by turn 10 means you're doing well). By turn 20 I had 90 spts however. This is mainly because I was playing against CPU easy so I took control of the whole map quickly and then just maxed out on greed with sawmills, markets, forges, parks, etc. I lost 0 units. I had 3 warriors, 5 riders, and 4 giants.
+
+### Third-city stall decision-trace diagnosis: proposal-side, confirmed
+
+EXP_ELO_016 (reward-shaped label + tree) came back statistically indistinguishable
+from baseline (hypothesis_driven_improvements.md) despite directly paying SPT/army
+in the label and the in-tree backup. Before escalating to opponent-unfreezing
+(the fallback EXP_ELO_016 named), checked which of the two proposal-vs-valuation
+mechanisms is actually broken, using the same decision-trace instrument as the
+Jul 7-8 diagnosis above, extended with a new trigger.
+
+Tooling: `TraceTrigger::ThirdCity` (self_play.rs, landed with EXP_ELO_016) — fires
+whenever pov is stalled at exactly 2 cities, turn>=15, with an unmoved unit; no
+discovered-village requirement, since failing to develop is the failure being
+hunted. Captures the full root candidate set (raw policy prior pre-blend,
+blended prior, gumbel noise, in_top_k, post-search Q, visits) regardless of what
+gets chosen. Two pre-existing capture sets, both --iteration 200, turns 15-24:
+`decision_traces_towered/` (99 traces, known-towered reference checkpoint) and
+`decision_traces/` (128 traces, later checkpoint).
+
+Per-candidate raw_net_prob (pre-blend policy; sums to 1.0/trace, verified) by
+move_type, towered -> current:
+
+| move_type | towered mean (n) | current mean (n) | in_top_k rate (towered -> current) |
+|---|---|---|---|
+| Capture  | 0.79 (15)   | 0.93 (19)   | 93% -> 100% |
+| Attack   | 0.047 (129) | 0.18 (188)  | 36% -> 66%  |
+| Step     | 0.018 (3836)| 0.015 (5171)| 30% -> 32%  |
+| Build    | 0.0029 (3163), median 0.00003 | 0.0001 (3040), median 0.00000 | 6.5% -> 8.1% |
+| Harvest  | 0.0001 (20) | 0.00000 (18)| 5% -> 11%   |
+| Research | 0.0003 (526)| 0.00000 (711)| 3.6% -> 4.2%|
+
+Build/Harvest's in_top_k hits are explained by numerosity alone (30+ near-zero-logit
+candidates per trace; Gumbel noise occasionally lifts one through by chance) not by
+the policy proposing them — median raw prior on an individual Build candidate is at
+or below float display precision in both sets.
+
+Yet when a Build/Harvest candidate DOES survive to get evaluated, the value estimate
+does not agree it's bad: best-dev-candidate q_value beats the chosen move's q_value
+on average in BOTH sets (towered 0.205 vs 0.021; current 0.136 vs 0.089 — gap
+narrowed, never flipped). So the rare times search looks, it does not confirm the
+prior's aversion.
+
+**Conclusion: proposal-side, not valuation-side.** The policy head suppresses
+Build/Harvest to 2-4 orders of magnitude below Capture/Attack/Step at the exact
+fork where the tower forms, in both checkpoints, and the suppression got MORE
+severe from towered -> current (Build mean raw prob 0.0029 -> 0.0001) even as the
+chosen move's own confidence sharpened (mean chosen raw_prob 0.24 -> 0.48) —
+consistent with a bootstrap trap: starved-of-visits moves never win Sequential
+Halving, so self-play visit-count targets never correct the prior toward them.
+
+Implications: (a) opponent-unfreezing (the EXP_ELO_017 fallback) attacks a
+valuation-side mechanism — it changes what the leaf value should be, not what
+gets sampled at the root — so it will not touch this fork, since the moves it
+would need to reconsider are never sampled in the first place; (b) EXP_ELO_016's
+null result is now explained rather than merely observed: it paid the label/tree
+more for development but never touched the policy prior that drives Gumbel top-k
+candidate selection. The lever this points to is exploration-side: forced
+minimum visits / progressive widening on economy action types at the root, or
+BC-style prior injection (book.rs), not deeper or adversarial search.
+
+Caveat: chosen-move-type mix differs between the two sets (towered chose
+Attack+Capture 19% of traces vs current 33%) — may be confounded by different
+game/opponent context at capture time, not purely the checkpoint. The
+per-candidate raw_net_prob/in_top_k signature, independent of what actually got
+chosen, is the reliable half of this result.
+
+### Location check: does the suppression hold in an unambiguous position? (Jul 21, 2026)
+
+The ThirdCity data alone can't rule out "the stall genuinely has nothing worth
+building" (§ above) — score_move itself rates Build low there too, and the
+best-visited-Build-beats-chosen-Q evidence was survivorship-biased. Built a
+second, purpose-built control: `TraceTrigger::HarvestReady` (self_play.rs) —
+fires once per game when pov has exactly 2 cities AND a currently *legal*
+(engine-affordable) Harvest move exists for a population-granting resource,
+then captures one trace per turn for the trigger turn + the next 3 turns
+(not single-shot — real play may delay the upgrade) into
+`decision_traces_harvest/`. 40 mirror-self-play games on the current
+checkpoint (model.safetensors = the EXP_ELO_016 extension's iter-40 gauge
+checkpoint), 64 mcts-iters, 138 traces (33-35 per turns-since-trigger bucket
+0-3), 0 sim failures.
+
+**Headline: the suppression is not stall-specific.** Build/Harvest's raw
+policy prior stays crushed at every point in the 4-turn window — median
+per-candidate raw_net_prob 0.000002-0.00006, same order of magnitude as the
+ThirdCity read — in an early-game (~turn 4-14), actively-expanding position,
+not just the late stall. Chosen move is Step 66-70% of the time across all
+four turns; Harvest itself gets chosen at the captured ply only 2/138 times.
+
+**But this location wasn't as unambiguous as hoped, and both independent
+judges say so.** score_move rates Step ~45-49 vs Build ~22-24 / Harvest
+~20-27 at every turn in the window (a real, consistent heuristic preference
+for Step here) — and unlike ThirdCity, best-visited-dev-candidate Q now LOSES
+to chosen-move Q most of the time (68-75% of traces), not the reverse. Reason:
+median trace has ~24-27 competing Step candidates (one per unmoved unit) —
+early game, most turns genuinely are "keep exploring/expanding," and both the
+heuristic and the network's own value estimates mostly agree Harvesting one
+population point is lower priority than that.
+
+**What survives: the suppression is real but disproportionate to even that
+legitimate preference.** score_move's own ~25-point Step-vs-Build gap,
+softmaxed at its own GREEDY_SOFTMAX_TEMP=5, would still leave Build
+~0.5-1%+ relative probability. The trained network gives it ~0.0001-0.0006%
+— 2-3 orders of magnitude more extreme than even a heuristic that agrees with
+the direction. And in the n=3 traces with <=2 competing Step candidates
+(too small to trust alone, but directionally sharp), Harvest's raw prior
+jumps to 10-70% instead of ~0 — consistent with the extreme case being
+mostly a numerosity/softmax-competition effect (many similar Step options
+collectively outvoting a few Build/Harvest ones) layered on top of a real
+but much milder underlying preference, rather than a categorical "the
+network has zero belief in building" story.
+
+**Instrumentation caveat:** one trace captured per turn (first ply only) —
+the triggering tile's legal-Harvest status drops from 32/33 at the trigger
+ply to 7/35 next turn to single digits after, while "chosen=Harvest at the
+captured ply" is ~0 throughout. Can't distinguish "harvested later that same
+turn, after other units moved" from "tile lost to territory/structure
+changes" — the instrument samples one decision per turn, not the full
+within-turn sequence, so this doesn't resolve whether the opportunity
+actually gets taken within the window.
+
+**Net read:** confirms the raw-magnitude finding (policy prior suppression
+of Build/Harvest is real, extreme, and present everywhere checked, not a
+ThirdCity artifact) but complicates the "wrongful suppression" framing from
+the ThirdCity data alone — here value mostly agrees with skipping Harvest,
+just not by nearly as much as the prior implies. Points at the Gate-1
+numerosity/competition mechanism specifically (many Step candidates
+collectively starving a few Build candidates via softmax normalization,
+amplified further through v_mix training rounds) rather than a blanket
+anti-economy policy. A forced-sampling experiment should show whether
+guaranteeing Build/Harvest a fair shot at this fork recovers proportionate
+(not necessarily dominant) selection.
+
+### Correction: the comparison itself was wrong (Jul 21, 2026)
+
+User pushback, correctly: Step and Harvest/Build aren't exclusive within a
+turn. You move all units first (many Step plies), THEN spend remaining stars
+on Harvest/Build once movement is exhausted — a single ply is one action, but
+the turn isn't a one-shot choice between "move" and "develop." Comparing
+Build's per-candidate prior against ~25 live Step candidates in the same ply
+(as both analyses above did) measures the wrong thing. Also flagged:
+score_move agreeing with the network isn't independent validation — it's
+coded by the same project as a performance floor, not an oracle, so shared
+bias is as plausible as shared correctness.
+
+Fixed the instrument: HarvestReady now captures **every** ply belonging to
+the triggering player across the 4-turn window (previously first-ply-only,
+which structurally favored Step), and fixed a real bug the redesign exposed
+— the window wasn't gated to the triggering player, so the opponent's
+interleaved plies (same shared `turn` counter) were leaking into the sample.
+30 games, mcts=64, 681 traces, 0 sim failures, bucketed post-hoc by how many
+Step candidates were still live at capture time:
+
+| Step candidates live | n traces | Build/Harvest present | chosen when present | Harvest per-cand prior (mean/median) |
+|---|---|---|---|---|
+| 0 (exhausted)  | 278 | 168 | **49%** (82/168) | **0.264 / 0.087** |
+| 1-3            |   9 |   4 |   0%  (n too small) | ~0 |
+| 4-10           | 111 |  92 |   7%  (6/92) | 0.032 / 0.000 |
+| 11+            | 283 | 238 |   6%  (14/238) | 0.011 / 0.000 |
+
+**Reversed, cleanly.** Once Step candidates hit zero, Harvest's per-candidate
+prior jumps from float-zero to a median 8.7% — competitive, not suppressed —
+and Build/Harvest gets chosen essentially a coin flip of the time against the
+other live options (Summon, Ability, Reward, Research, Attack — all
+legitimate uses of a turn's remaining budget, not noise). The earlier
+"extreme suppression" reading was real as a *measurement* but wrong as a
+*diagnosis*: it was measuring Build losing a popularity contest it was never
+supposed to win ply-by-ply against every unit's movement options, not the
+network refusing to develop its economy. `avg_builds ≈ 29.8/game` (CSV) was
+sitting right there the whole time as the same signal at the macro level and
+should have been weighted more against the per-ply framing sooner.
+
+**What's real and what isn't, updated:** the Gate-1/v_mix sampling mechanism
+(gumbel_mcts.rs, verified in source) still stands as a general property of
+the search — it's not specific to this finding. But the ThirdCity and
+first-HarvestReady analyses' headline claim ("Build/Harvest is suppressed by
+2-4 orders of magnitude at this fork") measured a same-ply popularity contest
+against Step, not a fair test of whether development gets its turn. Build
+does show weaker recovery than Harvest even at Step=0 (median per-candidate
+still ~0.0000, though aggregate mass/trace across all Build tiles jumps to
+mean 0.265) — plausibly the per-tile dilution effect (many candidate
+build-sites splitting one action-type's mass) still applies within this
+subgroup even without Step in the mix; unconfirmed.
+
+**Where this leaves the original tower question:** if the mechanism for
+picking up development once movement is exhausted basically works, the
+city-level deficit (§ ThirdCity diagnosis: 8.36 vs Greedy's 10.5 @t25) more
+likely comes from pace/volume (fewer harvest-eligible turns reached, slower
+expansion delaying when "movement exhausted" happens, structure/target
+choice quality) than from a policy that avoids development outright. Revisits
+whether forced-sampling-at-the-root (the standing next experiment) is even
+the right lever — it targets the Step-competition mechanism this correction
+just showed matters less than assumed.
+
+**Correction (user, Jul 21):** don't use Greedy's own city-leveling as the
+comparison bar — score_move (§ above) is understood by the user to favor
+training lots of units over leveling cities, so it isn't a reliable reference
+for "how well should this be done," only for "does the net at least keep up
+with a cheap baseline" on other axes. Drop the "compare pace against Greedy"
+suggestion; analyze the net's own turns directly instead (below).
+
+### Whole-turn reconstruction: where do the stars go when leveling loses? (Jul 21, 2026)
+
+Standing rule going forward, now in CLAUDE.md and memory: **analyze decision
+traces across a whole turn, never a single ply** — a same-ply prior against
+~25 Step candidates measures the wrong thing (see correction above). Applied
+that here: grouped the 681 HarvestReady plies by (game_idx, turn), sorted by
+move_count, reconstructed each turn's full chosen-move sequence for the
+triggering player.
+
+98 distinct (game, turn) groups; 90 had a Harvest/Build (population) opportunity
+present at some ply that turn.
+
+- **69/90 (77%) took it somewhere in the turn.** Matches the Step=0 bucket's
+  49%-when-competing reading — at the whole-turn level it's actually a clear
+  majority, not a coin flip.
+- **21/90 (23%) never took it all turn.** Of those, 19/21 did reach a genuine
+  head-to-head moment (Step exhausted, dev still available, not just "the
+  window ended first"). What got chosen there instead of Harvest/Build:
+  **Research 11, Summon 7, Attack 1.** Pooled across every ply of all 21
+  missed turns, the actions that actually compete for the same star budget
+  (excluding Step/Attack/Capture, which don't cost stars): **Research 50%,
+  Summon 47%, Ability 3%.**
+
+**Answer to "where is it going instead": almost entirely Research and
+Summon, roughly evenly split, not idle movement and not nothing.** When a
+city-leveling opportunity is skipped, the net is choosing to research a tech
+or train a unit with those stars instead — a real opportunity-cost tradeoff,
+not a policy blind spot. Whether that tradeoff is *correct* more often than
+not is the open question this doesn't resolve — Research is instant/riskless
+score (§7, hypothesis_driven_improvements.md — tech ≈15-25 pts/star vs a
+population point's more indirect, delayed payoff), so a model that's already
+over-indexed on tech for exactly that pricing reason skipping a harvest for
+one more piece of research is the SAME mechanism restated at the star-budget
+level, not a new one.
+
+**Tech-purpose check (Jul 21):** pulled which specific techs got researched
+at these 19 head-to-head moments from the existing trace descriptions (no
+rerun needed) — Riding×3, Hunting×2, Strategy×2, Mining×2, Construction,
+Ramming, Roads, Farming, Philosophy (1 each; tiers 1-3, no repeat/filler
+pattern). Notably 3 of these unlock economy structures directly (Farming→Farm,
+Construction→Windmill, Roads→trade connectivity) — so some of these are
+themselves economy investments, just a different lever than the specific
+harvest skipped. The rest (Riding→Rider, Strategy→Defender, Ramming→
+Rammership, Hunting, Philosophy) look more opportunistic. Sample too thin
+(14 instances, most techs appearing once or twice) to call this resolved
+either way — not "purely wasted," not obviously purposeful.
+
+### City-level reward-choice audit — the 77% figure didn't mean what it looked like (Jul 21, 2026)
+
+User pushback: 77% "opportunity taken" is suspiciously high and doesn't
+reconcile with known median/max city-level data. Right call — that figure
+measured "did the model spend stars on SOME Harvest/Build in a turn," a much
+lower bar than "did the city actually level up" (leveling needs population
+accumulated past a threshold across possibly many such actions, and a single
+resource tile can only be harvested once). Built a direct, cheap diagnostic
+instead of inferring: `--dump-city-rewards <dir>` (self_play.rs) logs one
+JSONL record per city level-up reward choice — turn, player, city level/
+population/stars pre-choice, reward type picked. No MCTS trace overhead
+(Reward moves are forced — `generate_reward_moves` preempts all other legal
+moves when a choice is pending, moves/mod.rs — so this is a clean, zero-
+competition read of what the policy wants at each level). 50 games, mcts=64,
+456 reward choices logged across 224 distinct cities, 0 sim failures.
+
+**Level distribution reached (224 cities, this batch):** level 2: 71 (32%),
+level 3: 97 (43%), level 4: 28 (13%), level 5: 23 (10%), level 6: 5 (2%).
+**Most cities cap out at level 2-3 (75% of them).** This is the real
+reconciliation — 77% per-opportunity take-rate and a median level of 2-3
+are NOT contradictory: hitting "take some harvest sometimes" often is
+compatible with slow leveling once you account for how many accumulated
+harvests a level threshold actually needs, plus each resource tile being a
+one-time trigger. Roughly matches the campaign's existing aggregate
+city_levels reads (~7.5-8.4 summed across ~2-3 cities @t20-25 ⇒ ~2.5-3.5
+avg/city) — consistent, not a new discrepancy.
+
+**Reward chosen, by level (the game only offers 2 options per level-tier,
+confirmed clean/deterministic in this data):**
+
+| level | options offered | chosen |
+|---|---|---|
+| 2 (n=218) | Workshop / Explorer | Workshop 69%, Explorer 31% |
+| 3 (n=149) | Resources / CityWall | Resources 78%, CityWall 21% |
+| 4 (n=56)  | BorderGrowth / PopGrowth | BorderGrowth 86%, **PopGrowth 14%** |
+| 5-6 (n=33)| SuperUnit / Park | SuperUnit 67%, Park 33% |
+
+**PopGrowth — the one reward that's a DIRECT population/leveling boost — is
+the least-picked option at the one level where it's offered**, 14% vs
+BorderGrowth's 86%. BorderGrowth (territory expansion) isn't a bad pick —
+more territory means more future harvest/build tiles — but it's an indirect,
+delayed lever compared to PopGrowth's immediate push toward the next level.
+Consistent with the same tech-over-economy-adjacent pricing pattern already
+diagnosed elsewhere in this campaign (§7, hypothesis_driven_improvements.md):
+given the choice between something with a fast, legible payoff and something
+that specifically accelerates further city growth, the model leans away from
+the growth-accelerant even when it's free (reward choices cost no stars).
+
+### Correction #2 + close-out: policy/value "misalignment" was confirmation bias, star-spend refutes the over-research claim (Jul 21, 2026)
+
+Checked Research-vs-Dev head-to-head across all three trace sets (raw prior
+AND Q, among visited candidates) to answer "are policy and value voting in
+sync." First pass led with the one dataset (harvest-window) that fit the
+user's prior (value favors Dev, policy favors Research) — but the other two
+sets flip the direction, and the value comparisons there are n=13 and n=9,
+unusable. **Correct read: no robust misalignment, direction unstable across
+datasets, i.e. noise around zero.** More important: in all three sets, **Dev
+wins the head-to-head plurality more often than Research** (33v25, 5v2, 8v0)
+— directly against the "2/3 of the time it chooses research" impression
+(which the user themselves flagged as unmeasured).
+
+Built `--dump-star-spend <dir>` to check the actual claim (stars, not action
+counts — research costs scale with cities×tier so a few expensive research
+actions could still dominate the budget even if outnumbered). Reads the real
+`tribe.stars` delta around `game.play_move`, so exact under discounts (e.g.
+Philosophy). 40 games, 4035 star-costing actions:
+
+| type | stars | share | n actions | avg cost |
+|---|---|---|---|---|
+| Build | 6389 | 42.6% | 1922 | 3.32 |
+| Research | 5747 | 38.3% | 811 | 7.09 |
+| Summon | 2170 | 14.5% | 949 | 2.29 |
+| Harvest | 706 | 4.7% | 353 | 2.00 |
+
+**Economy (Harvest+Build) = 47.3% of the star budget vs Research's 38.3% —
+economy gets MORE stars, not less.** Research costs ~2-3x more per action
+than economy moves, which is why its star-share (38%) outruns its action-
+count share (20%), but even accounting for that, it doesn't dominate the
+budget. This refutes the over-research hypothesis as stated. Combined with
+the head-to-head result above: every "the per-decision policy is broken"
+reading generated this session deflated under better measurement (ThirdCity
+suppression → per-ply artifact; "value disagrees" → survivorship bias; now
+"over-researching" → not supported by stars OR action counts). The
+per-decision policy keeps not being the smoking gun.
+
+**What IS real, decisively — SPT decomposition:** SPT = cities × income/city.
+Pulled both from tempo_by_turn (net role): income/city climbs steadily and
+healthily (2.13 → 4.76, turns 0→30) — **not** the problem. City count is:
+**1.81 cities at turn 10, 2.60 by turn 30**, against a map that supports 3-4
+before contesting the opponent (7-8 villages/11x11, 1 owned each, 5-6 open).
+This is an expansion-pace deficit, not an income-efficiency deficit, and it
+matches the user's own Jul 20 note (their 22-SPT game was expansion-driven,
+"took control of the whole map quickly") and the OLDEST diagnosis in this
+campaign (§6, hypothesis_driven_improvements.md — out-raced, not out-fought)
+better than anything this session's Research-vs-Build angle turned up. Best-
+fitting still-open explanation: the Jul 7-8 decision-trace finding above —
+approach-toward-a-village undervalued because the label is empty in mirror
+self-play (both sides capture on the same clock, so the relative-reward
+signal nets to ~0 for expansion specifically). Not re-tested with this
+session's tooling; the natural next step, not another economy-policy check.
+
+**Metrics-tracking decision:** user asked whether training-evolution metrics
+are tracked well enough to debug efficiently. Applied one filter: outcome/
+behavior metrics (city count, SPT, t2c rates, techs, win rate) are robust and
+are what actually located the real problem this session — trend those.
+Internal-signal metrics (per-ply policy priors, Q-values, Research-vs-Dev
+head-to-heads) misled this session on every use (see above) — dashboarding
+them would enshrine the traps, not avoid them; keep them on-demand only.
+Checked first rather than assuming a gap: t2c_2nd/3rd/4th, avg_builds/
+harvests/research, value_r2, avg_spt_t{0..30} are already per-iteration CSV
+columns; cities/spt/city_levels per turn per role already live in
+tempo_by_turn.json. The gap was surfacing, not tracking — added `SPT per
+city — net vs Greedy` to the dashboard (App.tsx `combinedRows`, free
+division of two already-tracked fields) since that's the specific
+decomposition that resolved the question. Did NOT wire `--dump-star-spend`
+or `--dump-city-rewards` into the training loop — the star-spend read came
+back null (no skew to chase) and both are exactly the kind of expensive,
+point-in-time, easy-to-misread internal-signal captures this note just
+argued against enshrining; promote only if a future read shows a genuine,
+robust skew worth trending.
+
+## "Purposefulness" hypotheses and the Layer-2 test (Jul 21, 2026)
+
+Follow-up to the tempo/race findings above (`hypothesis_driven_improvements.md`
+§4-§7): framed the city-count deficit as one instance of a general
+"purposefulness" problem (does the model sustain a chosen course of action
+across plies?) that should also show up in eco-dev and military behavior if
+the mechanism is real. See `failure_mode.md` (new file) for the tracked
+numbers — FM-1 (uncontested capture rate 73-78%, should be ~99%+), FM-2
+(3rd-city pursuit rate 91-98%, should be ~100%), FM-3 (new: turns/tile ≈
+1.8-1.9x geometric distance, identical across self-play/vs-Greedy/contested/
+uncontested — an opponent-independent movement-pacing deficit, from a
+per-turn distance-trajectory reanalysis of the existing `turnstates_*`
+dumps: ~41-43% of turns during an active pursuit close zero distance).
+
+Proposed 3-layer frame for where "purposefulness" leaks (proposal / reward /
+representation) and picked Layer 2 (reward) to test first — see chat log for
+the full hypothesis writeup. Cheapest test: does EXP_ELO_016's already-shipped
+`dev_potential` proximity term (a real potential-based shaping term, verified
+by reading `reward.rs`) already fix FM-3 once actually trained in?
+
+**Result: no.** Re-measured FM-3 against `gauge_1784500013_iter20.safetensors`
+(the EXP_ELO_016 run's own cities high-water-mark checkpoint) — 40 games vs
+Greedy, 128/16, same instrumentation. Uncontested capture 72.2% (baseline
+73.0/78.0%), turns/tile 1.79 (baseline 1.85-1.94), no-progress-per-turn 41.2%
+(baseline 39.6-43.1%) — statistically indistinguishable from a model that
+never saw the shaping. Caveat this narrows: `dev_potential`'s terms aren't
+balanced — tech de-weight ≈-150/tech and SPT/army terms dominate; proximity
+is the smallest term (+12/tile, capped at 7 tiles). EXP_ELO_016 was an
+anti-tech/pro-economy repricing with a proximity garnish, not an isolated
+urgency treatment — this falsifies that specific weak+diluted implementation,
+not "a strong isolated per-turn-progress reward."
+
+Sanity-checked the obvious confound (a stationary garrison could pin the
+all-units min-distance and read as a false "stall"): tracked whether the same
+exact unit-tile holds the distance minimum turn to turn. Only ~30% of stall
+steps show a truly unmoving unit; the other ~65-74% show a *different*
+unit/tile at the same distance — i.e. units are actively moving near the
+target without net progress (milling, not pure inaction). Garrison-pinning
+explains at most a third of FM-3; most of it is real.
+
+**Discriminating trace (the Layer-1-vs-Layer-2 fork):** built
+`TraceTrigger::VillagePursuit` (self_play.rs) — same "opportunity" definition
+as the FM-1/FM-3 measurement (pov at exactly 2 cities, a discovered village
+>1 tile away), captures every ply of the triggering player for the trigger
+turn + 3 more turns, into `decision_traces_pursuit/`. Ran 40 games (128/16)
+against the EXP_ELO_016 iter20 checkpoint (temporarily swapped into
+`model.safetensors`, byte-identical restore verified via sha256 after), 400
+traces (cap).
+
+For each trace, identified the "Step toward the pursued village" candidate
+(target tile strictly closer than source tile) and compared it against
+sibling candidates:
+
+- Raw policy prior is **healthy, usually dominant** — median 0.193 vs 0.00087
+  for other Step candidates in the same trace (~220x), mean percentile rank
+  0.94 among same-trace Step candidates, in_top_k 94.9%. This is the opposite
+  signature from Build/Harvest's crushed prior — **not a proposal-side
+  suppression** at this fork.
+- The toward-village Step gets fewer search visits than whatever beats it
+  (13.76 vs 32.54 mean) and its post-search **Q-value loses to the winner's**
+  most of the time — proposal is fine, valuation isn't.
+
+**Correction (same day) — the "chosen X% of the time" figures below are
+ply-level artifacts; use the identity-tracked pursuer metric instead.** The
+first pass reported "toward-Step chosen 41.8% of plies," then a whole-turn
+re-bucket bumped it to "81.4% of turns." BOTH are misleading: they count
+"*some* unit took *a* toward-village step at *some* ply," not "the unit that
+should be taking the village actually advanced this turn." The correct metric
+designates the pursuer = unit nearest the village at opportunity start and
+follows THAT unit's exact tile forward via the chain of chosen Step moves
+(immune to the garrison/milling confounds). Re-ran 120 self-play games (iter20,
+byte-identical model restore verified) with both the pursuit trace and
+`--dump-turn-states` on identical games; 43 pursuit windows / 150
+pursuer-turns:
+
+| pursuer-turn outcome | rate |
+|---|---|
+| PROGRESS (advance 37.3% + capture 10.7%) | **48.0%** |
+| WASTED (stall 15.3% + sidestep 14.0% + retreat 22.7%) | **52.0%** |
+
+FM-3's min-distance metric on the SAME games: 39.0% no-progress + ~12%
+net-backward = ~51% wasted — matches to within 1pt. **Confirmed truth: ~50%
+of pursuit-turns make progress, ~50% wasted, robust across two metrics on
+identical data.** So FM-3 was right; the 81% was the artifact. Two facts that
+reshape the fix: (1) the single largest waste bucket is **RETREAT (22.7%)** —
+the pursuer actively moves *away* from its target, not just idles; (2) only
+27.9% of pursuit windows are a clean every-turn march — bimodal (some get
+`5→4→3→2→1`, others `STALL×4` / `RETREAT→RETREAT→RETREAT` walking off).
+
+**Read:** valuation-side, confirmed. The toward-village Step is proposed fine
+(healthy, usually-dominant prior) but the model *values continuing the
+pursuit below its alternatives* — decisively enough to walk the unit backward
+~23% of turns. The lever: make the reward for continuing a committed pursuit
+large enough (and less diluted than EXP_ELO_016's 12-pt/tile garnish, which
+sits next to a +100 raw capture payoff and a min-not-sum multi-unit proximity
+term) that a well-evaluated "keep going" actually scores above "go do
+something else." Whether a stronger reward alone also fixes the visit
+under-allocation is a secondary thing to watch, not a separate prerequisite.
+
+Not yet implemented: an isolated, stronger per-turn-progress reward
+(decoupled from EXP_ELO_016's tech/eco repricing) is the next concrete step,
+pending design + pre-registration as a new EXP_ELO entry.
+
+## Inner mechanics of the away-from-village pursuer decision (Jul 22, 2026)
+
+After EXP_ELO_018 was falsified, decomposed WHY the pursuer steps away and
+WHAT it does instead, joining pursuit traces (per-candidate prior/visits/q/
+own_value + chosen move) with self-play turn-states (visible villages, own
+cities) by (game,turn,pov). Ran on clone (unshaped baseline) and 018
+(pursuit-shaped); `pursuer_mechanics.py` in the session scratchpad.
+
+**Intent of away-steps (never combat — 0% Attack/Capture in both models):**
+| intent | clone | 018 |
+|---|---|---|
+| toward OWN city/territory | 48% | 38% |
+| lateral / no clear target | 23% | 31% |
+| into open / exploring | 17% | 21% |
+| toward a DIFFERENT village | 12% | 10% |
+The dominant away-move is the pursuer stepping BACK toward its own city, not
+diverting to combat or another target.
+
+**Mechanism (toward-village candidate vs chosen away-move, on wrong-move turns):**
+| | clone | 018 |
+|---|---|---|
+| toward prior (raw_net_prob) | 0.16 | 0.21 |
+| away prior | 0.44 | 0.29 |
+| toward visits | 10.8 | 14.2 |
+| away visits | 33.0 | 36.5 |
+| toward LEAF own_value | 0.378 | 0.198 |
+| away LEAF own_value | 0.399 | 0.214 |
+| toward leaf < away leaf | 53% | 56% |
+
+**Key finding — the value head is INDIFFERENT, not opposed.** The leaf
+own_value gap between step-toward and step-away is ~zero (coin-flip on which
+is higher) in BOTH models. So the post-search Q gap (toward loses ~83%),
+which the earlier EXP_ELO_018 diagnosis called "valuation-side," is mostly a
+CONSEQUENCE of the visit gap (toward gets ~1/3 the visits → shallow/imputed
+Q), NOT the value head pushing toward down. Corrects the earlier
+"valuation-side confirmed" framing: the true levers are the **policy prior**
+(mildly favors going home) and the **visit allocation** (Gumbel starves the
+lower-prior toward move), with the value head a neutral bystander that
+provides no corrective pull toward completion.
+
+**Why EXP_ELO_018 failed, precisely:** the reward aimed to raise toward-village
+Q/value, but (a) the value head was never the blocker (indifferent, not
+negative), and (b) the reward did NOT move the leaf-value gap — 018's is still
+~0 (0.198 vs 0.214). It DID slightly narrow the prior gap (toward 0.16→0.21),
+so the policy head learned to propose it a touch more, but not enough to beat
+the visit dynamics + value indifference.
+
+**Deeper root — connects to the Jul 7-8 "empty label" diagnosis:** in mirror
+self-play, stepping toward a village vs staying home genuinely leads to
+~equal-outcome states (both sides expand on the same clock), so the value head
+CORRECTLY learned indifference — the label is flat for expansion timing. This
+is why reward shaping in the absolute channel didn't move the leaf-value
+ordering, and points the fix at either (a) the prior / visit allocation
+(search-side: force the toward move a fair visit count so its Q is a real
+estimate, not imputed), or (b) breaking the mirror-play label symmetry so the
+value head has a non-flat signal to learn expansion urgency from.

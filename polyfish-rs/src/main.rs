@@ -186,6 +186,10 @@ async fn main() {
             get(polyfish::training_api::api_moves_by_turn),
         )
         .route(
+            "/api/tempo-by-turn",
+            get(polyfish::training_api::api_tempo_by_turn),
+        )
+        .route(
             "/api/value-distribution",
             get(polyfish::training_api::api_value_distribution),
         )
@@ -877,6 +881,16 @@ async fn get_metrics() -> Json<Value> {
                 "avg_spt_t30": parse_f32("avg_spt_t30"),
                 "villages_t2c_first": parse_f32("villages_t2c_first"),
                 "ruins_t2c_p50": parse_f32("ruins_t2c_p50"),
+                "avg_units_spawned": parse_f32("avg_units_spawned"),
+                "avg_units_granted": parse_f32("avg_units_granted"),
+                "avg_units_lost": parse_f32("avg_units_lost"),
+                "avg_giants_made": parse_f32("avg_giants_made"),
+                "t2c_2nd_rate": parse_f32("t2c_2nd_rate"),
+                "t2c_2nd_turn": parse_f32("t2c_2nd_turn"),
+                "t2c_3rd_rate": parse_f32("t2c_3rd_rate"),
+                "t2c_3rd_turn": parse_f32("t2c_3rd_turn"),
+                "t2c_4th_rate": parse_f32("t2c_4th_rate"),
+                "t2c_4th_turn": parse_f32("t2c_4th_turn"),
             });
             metrics.push(obj);
         }

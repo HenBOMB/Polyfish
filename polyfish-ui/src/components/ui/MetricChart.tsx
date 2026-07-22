@@ -6,15 +6,23 @@ interface SeriesConfig {
   color: string;
 }
 
+interface RefLineConfig {
+  value: number;
+  label?: string;
+  color?: string;
+}
+
 interface MetricChartProps {
   title: string;
   data: any[];
   series: SeriesConfig[];
   height?: number;
   iterationKey?: string;
+  /** Horizontal dashed reference lines (e.g. a theoretical max). */
+  refLines?: RefLineConfig[];
 }
 
-function MetricChart({ title, data, series, height = 220, iterationKey = 'iteration' }: MetricChartProps) {
+function MetricChart({ title, data, series, height = 220, iterationKey = 'iteration', refLines }: MetricChartProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [hoveredCol, setHoveredCol] = useState<{
@@ -86,6 +94,12 @@ function MetricChart({ title, data, series, height = 220, iterationKey = 'iterat
     }
     if (!isFinite(rawMin)) { rawMin = 0; rawMax = 10; }
 
+    // Reference lines must stay in view
+    for (const r of refLines ?? []) {
+      if (r.value < rawMin) rawMin = r.value;
+      if (r.value > rawMax) rawMax = r.value;
+    }
+
     // Pad range
     const range = rawMax - rawMin || 1;
     const pad = range * 0.12;
@@ -118,7 +132,7 @@ function MetricChart({ title, data, series, height = 220, iterationKey = 'iterat
     }
 
     return { yMin: niceLo, yMax: niceHi, yTicks: ticks };
-  }, [aggregatedData, visibleSeries]);
+  }, [aggregatedData, visibleSeries, refLines]);
 
   // X-axis ticks: show iteration labels at reasonable density, no duplicates
   const xTicks = useMemo(() => {
@@ -277,6 +291,35 @@ function MetricChart({ title, data, series, height = 220, iterationKey = 'iterat
               >
                 {tick.label}
               </text>
+            ))}
+
+            {/* Reference lines */}
+            {(refLines ?? []).map((r, i) => (
+              <g key={`ref-${i}`} pointerEvents="none">
+                <line
+                  x1={margin.left}
+                  y1={scaleY(r.value)}
+                  x2={svgWidth - margin.right}
+                  y2={scaleY(r.value)}
+                  stroke={r.color ?? '#94a3b8'}
+                  strokeWidth="1.5"
+                  strokeDasharray="8 6"
+                  opacity="0.7"
+                />
+                {r.label && (
+                  <text
+                    x={svgWidth - margin.right - 6}
+                    y={scaleY(r.value) - 8}
+                    textAnchor="end"
+                    fill={r.color ?? '#94a3b8'}
+                    fontSize="24"
+                    fontFamily="'Fira Code', monospace"
+                    opacity="0.85"
+                  >
+                    {r.label}
+                  </text>
+                )}
+              </g>
             ))}
 
             {/* Data lines + points */}

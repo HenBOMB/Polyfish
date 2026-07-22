@@ -26,8 +26,19 @@ pub struct TechnologySetting {
     pub unlocks_terrain: Option<TerrainType>,
 }
 
-/// Get technology settings by type
-pub fn get_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
+/// Get technology settings by type — cached, returns a shared `'static`
+/// reference built once per tech type (no per-call struct/Vec allocation).
+pub fn get_technology_setting(tech_type: TechnologyType) -> &'static TechnologySetting {
+    static TABLE: std::sync::LazyLock<rustc_hash::FxHashMap<TechnologyType, TechnologySetting>> =
+        std::sync::LazyLock::new(|| {
+            use strum::IntoEnumIterator;
+            TechnologyType::iter().map(|t| (t, build_technology_setting(t))).collect()
+        });
+    &TABLE[&tech_type]
+}
+
+/// Build the settings for one tech type (called once per type at table init).
+fn build_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
     use TechnologyType::*;
 
     match tech_type {

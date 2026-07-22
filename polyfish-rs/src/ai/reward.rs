@@ -106,6 +106,15 @@ pub const SHAPE_PROX_PER_TILE: f32 = 12.0;
 /// Proximity credit saturates beyond this distance.
 pub const SHAPE_PROX_CAP: i32 = 7;
 
+/// EXP_ELO_018: score-equivalents per tile of closed distance toward the
+/// nearest visible uncaptured village, for the *isolated* pursuit-progress
+/// reward (independent weight, see `pursuit_potential`). Sized from the
+/// measured chosen−toward Q gap on wrong-move pursuer-turns (median 0.19 /
+/// p75 0.42 normalized, ≈150–350 score-equiv through `score_norm≈700`) —
+/// ~15× EXP_ELO_016's `SHAPE_PROX_PER_TILE`, which was too weak to flip the
+/// decision (see failure_mode.md FM-3 / notes.md pursuit diagnosis).
+pub const SHAPE_PURSUIT_PER_TILE: f32 = 200.0;
+
 /// Chebyshev distance between two row-major tile indices.
 fn cheb(a: i32, b: i32, width: i32) -> i32 {
     let (ra, ca) = (a / width, a % width);
@@ -113,10 +122,13 @@ fn cheb(a: i32, b: i32, width: i32) -> i32 {
     (ra - rb).abs().max((ca - cb).abs())
 }
 
-/// `max(0, CAP − min dist(own units → nearest visible uncaptured village))`,
-/// 0 with no units or no visible village. A step toward the village banks
-/// potential now; hovering banks nothing further (potential-based).
-fn village_proximity(state: &GameState, player: i32) -> f32 {
+/// `max(0, CAP − min dist(own units → nearest visible uncaptured village))`
+/// in TILES, 0 with no units or no visible village — the raw proximity
+/// gradient shared by both the EXP_ELO_016 `village_proximity` term and the
+/// EXP_ELO_018 `pursuit_potential` term (each applies its own per-tile
+/// weight). A step toward the village banks potential now; hovering banks
+/// nothing further (potential-based).
+fn village_proximity_tiles(state: &GameState, player: i32) -> f32 {
     let Some(tribe) = state.tribes.get(&player) else {
         return 0.0;
     };
@@ -147,9 +159,24 @@ fn village_proximity(state: &GameState, player: i32) -> f32 {
         }
     }
     match best {
-        Some(d) => (SHAPE_PROX_CAP - d).max(0) as f32 * SHAPE_PROX_PER_TILE,
+        Some(d) => (SHAPE_PROX_CAP - d).max(0) as f32,
         None => 0.0,
     }
+}
+
+/// EXP_ELO_016 proximity term (score-equivalent units).
+fn village_proximity(state: &GameState, player: i32) -> f32 {
+    SHAPE_PROX_PER_TILE * village_proximity_tiles(state, player)
+}
+
+/// EXP_ELO_018 isolated pursuit-progress potential Φ (score-equivalent
+/// units): the same tile gradient as `village_proximity`, weighted at the
+/// data-sized `SHAPE_PURSUIT_PER_TILE` so a step that closes distance to the
+/// nearest visible uncaptured village banks enough reward to flip the
+/// measured chosen−toward Q gap. Threaded on its own weight, so this arm can
+/// run with the tech/SPT/army repricing off (`dev_w = 0`).
+pub fn pursuit_potential(state: &GameState, player: i32) -> f32 {
+    SHAPE_PURSUIT_PER_TILE * village_proximity_tiles(state, player)
 }
 
 /// The development potential Φ for `player`, in score-equivalent units.
@@ -178,23 +205,26 @@ pub fn dev_potential(state: &GameState, player: i32) -> f32 {
         - SHAPE_TECH_DEWEIGHT * tech_score
 }
 
-/// `score_snapshot` augmented with `w`·Φ per side. `w = 0` short-circuits to
-/// the raw snapshot (bit-exact legacy behavior, no Φ cost on the hot path).
-pub fn shaped_snapshot(state: &GameState, player: i32, w: f32) -> (f32, f32) {
-    if w == 0.0 {
+/// `score_snapshot` augmented with `dev_w`·Φ_dev + `pursuit_w`·Φ_pursuit per
+/// side (EXP_ELO_016 development shaping + EXP_ELO_018 isolated pursuit-
+/// progress shaping, independently weighted). Both weights zero short-circuits
+/// to the raw snapshot (bit-exact legacy behavior, no Φ cost on the hot path).
+pub fn shaped_snapshot(state: &GameState, player: i32, dev_w: f32, pursuit_w: f32) -> (f32, f32) {
+    if dev_w == 0.0 && pursuit_w == 0.0 {
         let (my, opp) = score_snapshot(state, player);
         return (my as f32, opp as f32);
     }
+    let phi = |id: i32| dev_w * dev_potential(state, id) + pursuit_w * pursuit_potential(state, id);
     let my = state
         .tribes
         .get(&player)
-        .map(|t| t.score as f32 + w * dev_potential(state, player))
+        .map(|t| t.score as f32 + phi(player))
         .unwrap_or(0.0);
     let opp = state
         .tribes
         .iter()
         .filter(|(id, _)| **id != player)
-        .map(|(id, t)| t.score as f32 + w * dev_potential(state, *id))
+        .map(|(id, t)| t.score as f32 + phi(*id))
         .max_by(|a, b| a.total_cmp(b))
         .unwrap_or(0.0);
     (my, opp)
@@ -250,8 +280,8 @@ mod shaping_tests {
         t2.score = 456;
         state.tribes.insert(1, t1);
         state.tribes.insert(2, t2);
-        assert_eq!(shaped_snapshot(&state, 1, 0.0), (123.0, 456.0));
-        let (my, opp) = shaped_snapshot(&state, 1, 1.0);
+        assert_eq!(shaped_snapshot(&state, 1, 0.0, 0.0), (123.0, 456.0));
+        let (my, opp) = shaped_snapshot(&state, 1, 1.0, 1.0);
         assert_eq!((my, opp), (123.0, 456.0)); // empty tribes: phi = 0
     }
 
@@ -297,6 +327,40 @@ mod shaping_tests {
         assert!((mk(3) - mk(36)).abs() < 1e-4);
         // Beyond the cap there is no gradient.
         assert!((mk(9) - mk(10)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn pursuit_potential_is_the_data_sized_progress_gradient() {
+        let mk = |unit_idx: i32| {
+            let mut state = GameState::default();
+            add_visible_village(&mut state, 0);
+            let mut t1 = TribeState::default();
+            t1.units.push(unit_at(unit_idx, UnitType::Warrior));
+            state.tribes.insert(1, t1);
+            pursuit_potential(&state, 1)
+        };
+        // Row 0: idx = column = Chebyshev distance to the village at idx 0.
+        // A one-tile close banks exactly SHAPE_PURSUIT_PER_TILE.
+        assert!((mk(2) - mk(3) - SHAPE_PURSUIT_PER_TILE).abs() < 1e-3);
+        // Weighted ~15x above the EXP_ELO_016 proximity garnish.
+        assert!(SHAPE_PURSUIT_PER_TILE > 10.0 * SHAPE_PROX_PER_TILE);
+    }
+
+    #[test]
+    fn shaped_snapshot_pursuit_weight_is_independent_of_dev_weight() {
+        let mut state = GameState::default();
+        add_visible_village(&mut state, 0);
+        let mut t1 = TribeState::default();
+        t1.score = 100;
+        t1.units.push(unit_at(2, UnitType::Warrior)); // 2 tiles from village
+        state.tribes.insert(1, t1);
+        // pursuit_w only: augments my score by pursuit_potential, dev off.
+        let (my_dev_off, _) = shaped_snapshot(&state, 1, 0.0, 1.0);
+        let expected = 100.0 + pursuit_potential(&state, 1);
+        assert!((my_dev_off - expected).abs() < 1e-3);
+        // dev_w does not leak into the pursuit-only run.
+        let (my_both, _) = shaped_snapshot(&state, 1, 1.0, 1.0);
+        assert!((my_both - my_dev_off - dev_potential(&state, 1)).abs() < 1e-3);
     }
 
     #[test]

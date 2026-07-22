@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 
 const CSV_PATH: &str = "training_log.csv";
 const MOVES_PATH: &str = "moves_by_turn.json";
+const TEMPO_PATH: &str = "tempo_by_turn.json";
 const VALUE_DIST_PATH: &str = "value_distribution.json";
 const LADDER_PATH: &str = "ladder.json";
 
@@ -281,6 +282,20 @@ pub async fn api_elo_ladder() -> Json<Value> {
 
 pub async fn api_moves_by_turn(Query(q): Query<RunFilter>) -> Json<Value> {
     let content = std::fs::read_to_string(MOVES_PATH).unwrap_or_else(|_| "{}".to_string());
+    let all: Value = serde_json::from_str(&content).unwrap_or(json!({}));
+    if let Some(run_id) = &q.run {
+        if let Some(run_data) = all.get(run_id) {
+            return Json(run_data.clone());
+        }
+        return Json(json!({}));
+    }
+    Json(all)
+}
+
+/// Per-role development-tempo curves (`tempo_by_turn.json` sidecar):
+/// run_id -> iteration -> role -> turn -> {cities, spt, units, ...}.
+pub async fn api_tempo_by_turn(Query(q): Query<RunFilter>) -> Json<Value> {
+    let content = std::fs::read_to_string(TEMPO_PATH).unwrap_or_else(|_| "{}".to_string());
     let all: Value = serde_json::from_str(&content).unwrap_or(json!({}));
     if let Some(run_id) = &q.run {
         if let Some(run_data) = all.get(run_id) {

@@ -96,12 +96,23 @@ pub fn sigma_completed_q(
     rescale: bool,
 ) -> Vec<f32> {
     let v_mix = compute_v_mix(raw_value, child_priors, child_qvalues, child_visit_counts);
-    let mut completed = compute_completed_qvalues(child_qvalues, child_visit_counts, v_mix);
+    // Single buffer, transformed in place (completed-Q -> rescale -> sigma) to
+    // avoid the two extra per-node Vec allocations. Arithmetic is bit-identical
+    // to the rescale_min_max/sigma helpers below (kept for external callers/tests).
+    let mut buf = compute_completed_qvalues(child_qvalues, child_visit_counts, v_mix);
     if rescale {
-        completed = rescale_min_max(&completed);
+        let min = buf.iter().copied().fold(f32::INFINITY, f32::min);
+        let max = buf.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        if (max - min).abs() < EPSILON {
+            buf.iter_mut().for_each(|v| *v = 0.0);
+        } else {
+            buf.iter_mut().for_each(|v| *v = (*v - min) / (max - min));
+        }
     }
     let max_visits = child_visit_counts.iter().copied().fold(0.0f32, f32::max);
-    sigma(&completed, max_visits)
+    let scale = (C_VISIT + max_visits) * C_SCALE;
+    buf.iter_mut().for_each(|v| *v *= scale);
+    buf
 }
 
 /// Sequential-Halving visit schedule: the per-round `(num_considered,
@@ -144,12 +155,16 @@ pub fn softmax(values: &[f32]) -> Vec<f32> {
         return Vec::new();
     }
     let max = values.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-    let exps: Vec<f32> = values.iter().map(|&v| (v - max).exp()).collect();
-    let sum: f32 = exps.iter().sum();
+    // Reuse one buffer: exp in place, then normalize in place (was two Vecs).
+    let mut out: Vec<f32> = values.iter().map(|&v| (v - max).exp()).collect();
+    let sum: f32 = out.iter().sum();
     if sum <= 0.0 {
-        return vec![1.0 / values.len() as f32; values.len()];
+        let u = 1.0 / values.len() as f32;
+        out.iter_mut().for_each(|e| *e = u);
+        return out;
     }
-    exps.into_iter().map(|e| e / sum).collect()
+    out.iter_mut().for_each(|e| *e /= sum);
+    out
 }
 
 #[cfg(test)]

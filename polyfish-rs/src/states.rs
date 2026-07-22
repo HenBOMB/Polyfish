@@ -5,6 +5,13 @@ use crate::types::*;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use rustc_hash::FxHashSet;
+
+/// FxHash builder for the hot, index-keyed grid maps and per-tile/unit sets —
+/// replaces std's SipHash (dense i32 / enum keys need no DoS resistance).
+/// IndexMap/HashSet serialize identically regardless of hasher, so the JSON
+/// wire format the mod/reader/replays use is unchanged.
+type FxBuild = std::hash::BuildHasherDefault<rustc_hash::FxHasher>;
 
 /// Helper module for deserializing booleans that may come as integers (0/1)
 mod flex_bool {
@@ -116,7 +123,7 @@ pub struct TileState {
     #[serde(rename = "type")]
     pub terrain_type: TerrainType,
     #[serde(default)]
-    pub explorers: HashSet<i32>,
+    pub explorers: FxHashSet<i32>,
     #[serde(alias = "hasRoad", default)]
     pub has_road: bool,
     #[serde(default)]
@@ -132,7 +139,7 @@ pub struct TileState {
     #[serde(default)]
     pub owner: PlayerId,
     #[serde(default)]
-    pub effects: HashSet<TileEffect>,
+    pub effects: FxHashSet<TileEffect>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub _unit_owner_id: Option<PlayerId>,
 }
@@ -143,7 +150,7 @@ impl Default for TileState {
             coords: Coords::default(),
             ruling_city_coords: None,
             terrain_type: TerrainType::None,
-            explorers: HashSet::new(),
+            explorers: FxHashSet::default(),
             has_road: false,
             has_route: false,
             had_route: false,
@@ -151,7 +158,7 @@ impl Default for TileState {
             skin_type: 0,
             climate: TribeType::Nature,
             owner: 0,
-            effects: HashSet::new(),
+            effects: FxHashSet::default(),
             _unit_owner_id: None,
         }
     }
@@ -233,7 +240,7 @@ pub struct UnitState {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub passenger_type: Option<UnitType>,
     #[serde(default)]
-    pub effects: HashSet<UnitEffect>,
+    pub effects: FxHashSet<UnitEffect>,
     #[serde(default, deserialize_with = "flex_bool::deserialize")]
     pub converted: bool,
     #[serde(default)]
@@ -266,7 +273,7 @@ impl Default for UnitState {
             moved: false,
             attacked: false,
             passenger_type: None,
-            effects: HashSet::new(),
+            effects: FxHashSet::default(),
             converted: false,
             attacks_performed: 0,
             parent_unit_idx: None,
@@ -589,12 +596,12 @@ pub enum EndOfTurnAction {
 pub struct GameState {
     pub settings: GameSettings,
     #[serde(default)]
-    pub tiles: IndexMap<i32, TileState>,
+    pub tiles: IndexMap<i32, TileState, FxBuild>,
     #[serde(default)]
-    pub structures: IndexMap<i32, Option<StructureState>>,
+    pub structures: IndexMap<i32, Option<StructureState>, FxBuild>,
     #[serde(default)]
-    pub resources: IndexMap<i32, Option<ResourceState>>,
-    pub tribes: IndexMap<PlayerId, TribeState>,
+    pub resources: IndexMap<i32, Option<ResourceState>, FxBuild>,
+    pub tribes: IndexMap<PlayerId, TribeState, FxBuild>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub _prediction: Option<PredictionState>,
     #[serde(default)]
@@ -611,10 +618,10 @@ impl Default for GameState {
     fn default() -> Self {
         Self {
             settings: GameSettings::default(),
-            tiles: IndexMap::new(),
-            structures: IndexMap::new(),
-            resources: IndexMap::new(),
-            tribes: IndexMap::new(),
+            tiles: IndexMap::default(),
+            structures: IndexMap::default(),
+            resources: IndexMap::default(),
+            tribes: IndexMap::default(),
             _prediction: None,
             _end_of_turn_queue: Vec::new(),
             _messages: Vec::new(),

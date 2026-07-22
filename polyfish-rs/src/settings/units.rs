@@ -1,7 +1,6 @@
 //! Unit settings and stats
 
 use crate::types::{SkillType, TribeType, UnitType};
-use std::collections::HashSet;
 
 /// Unit stat configuration
 #[derive(Debug, Clone)]
@@ -14,7 +13,7 @@ pub struct UnitSetting {
     pub health: f32, // todo move to Option to enfoce passenger inheritance?
     pub upgrade_from: Option<UnitType>,
     pub is_unique: bool,
-    pub skills: HashSet<SkillType>,
+    pub skills: rustc_hash::FxHashSet<SkillType>,
     pub is_super: bool,
     pub tribe_type: TribeType,
 }
@@ -30,7 +29,7 @@ impl Default for UnitSetting {
             health: 10.0,
             upgrade_from: None,
             is_unique: false,
-            skills: HashSet::new(),
+            skills: rustc_hash::FxHashSet::default(),
             is_super: false,
             tribe_type: TribeType::None,
         }
@@ -40,14 +39,25 @@ impl Default for UnitSetting {
 /// Helper macro to create skill sets
 macro_rules! skills {
     ($($skill:expr),* $(,)?) => {{
-        let mut set = HashSet::new();
+        let mut set = rustc_hash::FxHashSet::default();
         $(set.insert($skill);)*
         set
     }};
 }
 
-/// Get unit settings by type
-pub fn get_unit_setting(unit_type: UnitType) -> UnitSetting {
+/// Get unit settings by type — cached, returns a shared `'static` reference
+/// built once per unit type (no per-call struct/HashSet allocation).
+pub fn get_unit_setting(unit_type: UnitType) -> &'static UnitSetting {
+    static TABLE: std::sync::LazyLock<rustc_hash::FxHashMap<UnitType, UnitSetting>> =
+        std::sync::LazyLock::new(|| {
+            use strum::IntoEnumIterator;
+            UnitType::iter().map(|u| (u, build_unit_setting(u))).collect()
+        });
+    &TABLE[&unit_type]
+}
+
+/// Build the settings for one unit type (called once per type at table init).
+fn build_unit_setting(unit_type: UnitType) -> UnitSetting {
     use SkillType as S;
     use UnitType as U;
 

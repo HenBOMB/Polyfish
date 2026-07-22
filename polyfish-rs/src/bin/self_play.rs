@@ -108,6 +108,24 @@ enum TraceTrigger {
     /// with >= 1 unmoved unit. No discovered-village requirement — the fork
     /// where a stalled tribe chooses units/economy/expansion vs. flat tech.
     ThirdCity,
+    /// Unambiguous-case control: pov has exactly 2 cities AND a currently
+    /// legal (affordable) Harvest move exists for a population-granting
+    /// resource. Captures one trace at the trigger turn, then one per turn
+    /// for the next 3 turns (window, not single-shot) — see
+    /// find_harvest_trigger / decision_traces_harvest/.
+    HarvestReady,
+    /// Layer-2/Layer-1 discriminator (Jul 21, 2026): pov has exactly 2
+    /// cities AND a FOW-discovered, uncaptured village exists more than 1
+    /// tile (Chebyshev) from every unit — the same "opportunity" definition
+    /// as the FM-1/FM-3 vs-Greedy turn-state measurement, so the trace and
+    /// the arena-level stall metric are directly comparable. Captures every
+    /// ply of the triggering player for the trigger turn + the next 3 turns.
+    /// Purpose: find the "Step toward the village" candidate at these plies
+    /// and check whether its raw policy prior is healthy (a reward/value
+    /// problem) or crushed like Build/Harvest was (a proposal problem, but
+    /// via within-Step-type competition, not cross-type) — see
+    /// find_village_pursuit_trigger / decision_traces_pursuit/.
+    VillagePursuit,
 }
 
 /// First (unit, village) pair at exactly the distance `trigger` calls for,
@@ -152,13 +170,17 @@ fn find_village_trigger(
     let target_distance = match trigger {
         TraceTrigger::Adjacent => 1,
         TraceTrigger::OnVillage => 0,
-        TraceTrigger::ThirdCity => unreachable!(),
+        TraceTrigger::ThirdCity | TraceTrigger::HarvestReady | TraceTrigger::VillagePursuit => {
+            unreachable!()
+        }
     };
     for unit in &tribe.units {
         let eligible = match trigger {
             TraceTrigger::Adjacent => !unit.moved,
             TraceTrigger::OnVillage => !unit.moved && !unit.attacked,
-            TraceTrigger::ThirdCity => unreachable!(),
+            TraceTrigger::ThirdCity | TraceTrigger::HarvestReady | TraceTrigger::VillagePursuit => {
+            unreachable!()
+        }
         };
         if !eligible {
             continue;
@@ -175,11 +197,83 @@ fn find_village_trigger(
     None
 }
 
+/// Unambiguous-case control for TraceTrigger::HarvestReady: pov has exactly
+/// 2 cities AND `generate_legal_moves` currently offers a Harvest move for a
+/// tile whose resource grants population (`generate_econ_moves` already
+/// gates affordability — a legal Harvest here means the tribe CAN pay for it
+/// right now). Returns the target tile index of the best (highest reward_pop)
+/// such opportunity, or None if the condition doesn't hold this ply.
+fn find_harvest_trigger(state: &GameState, pov: PlayerId) -> Option<i32> {
+    let tribe = state.tribes.get(&pov)?;
+    if tribe.cities.len() != 2 {
+        return None;
+    }
+    let legal = polyfish::moves::generate_legal_moves(state);
+    let mut best: Option<(i32, i32)> = None;
+    for m in &legal {
+        if m.move_type() != polyfish::types::MoveType::Harvest {
+            continue;
+        }
+        let Ok(idx) = m.target_idx() else { continue };
+        let idx = idx as i32;
+        if let Some(Some(resource)) = state.resources.get(&idx).as_ref() {
+            let pop =
+                polyfish::settings::resources::get_resource_setting(resource.resource_type)
+                    .reward_pop as i32;
+            if pop > 0 && best.map_or(true, |(_, bp)| pop > bp) {
+                best = Some((idx, pop));
+            }
+        }
+    }
+    best.map(|(idx, _)| idx)
+}
+
+/// Trigger for TraceTrigger::VillagePursuit: pov has exactly 2 cities AND a
+/// FOW-discovered, uncaptured village more than 1 tile (Chebyshev) from
+/// every one of pov's units. Mirrors the "opportunity" definition used by
+/// `--dump-turn-states`'s vs-Greedy 3rd-city analysis exactly, so a trace
+/// captured here lines up with that measurement's turn/opportunity. Returns
+/// the nearest such village's tile index.
+fn find_village_pursuit_trigger(
+    state: &GameState,
+    pov: PlayerId,
+    open_villages: &std::collections::HashSet<i32>,
+) -> Option<i32> {
+    let tribe = state.tribes.get(&pov)?;
+    if tribe.cities.len() != 2 {
+        return None;
+    }
+    let mut best: Option<(i32, i32)> = None;
+    for &v in open_villages {
+        let Some(vt) = state.tiles.get(&v) else {
+            continue;
+        };
+        if !vt.explorers.contains(&pov) {
+            continue;
+        }
+        let d = tribe
+            .units
+            .iter()
+            .map(|u| u.coords.chebyshev_distance_to(&vt.coords))
+            .min();
+        let Some(d) = d else { continue };
+        if d <= 1 {
+            continue;
+        }
+        if best.map_or(true, |(_, bd)| d < bd) {
+            best = Some((v, d));
+        }
+    }
+    best.map(|(v, _)| v)
+}
+
 /// Write one captured decision trace to `decision_traces/`, tagged with
 /// enough metadata (iteration/game/turn/player/trigger tiles) to sample and
 /// compare across games and training iterations. One file per decision —
 /// safe under concurrent self-play actors without any shared-file locking.
+#[allow(clippy::too_many_arguments)]
 fn write_decision_trace(
+    dir_name: &str,
     trace: &polyfish::ai::decision_trace::DecisionTrace,
     iteration: usize,
     game_idx: usize,
@@ -189,6 +283,7 @@ fn write_decision_trace(
     trigger_unit_idx: i32,
     trigger_village_idx: i32,
     visible_villages: &[i32],
+    turns_since_trigger: Option<i32>,
 ) {
     let wrapped = json!({
         "iteration": iteration,
@@ -199,15 +294,16 @@ fn write_decision_trace(
         "trigger_unit_idx": trigger_unit_idx,
         "trigger_village_idx": trigger_village_idx,
         "visible_villages": visible_villages,
+        "turns_since_trigger": turns_since_trigger,
         "trace": trace,
     });
-    let dir = std::path::Path::new("decision_traces");
+    let dir = std::path::Path::new(dir_name);
     if let Err(e) = std::fs::create_dir_all(dir) {
-        eprintln!("[trace] failed to create decision_traces/: {e}");
+        eprintln!("[trace] failed to create {dir_name}/: {e}");
         return;
     }
     let path = dir.join(format!(
-        "iter{iteration}_game{game_idx}_turn{turn}_p{player_id}.json"
+        "iter{iteration}_game{game_idx}_turn{turn}_p{player_id}_m{move_count}.json"
     ));
     match serde_json::to_vec_pretty(&wrapped) {
         Ok(bytes) => {
@@ -338,6 +434,12 @@ struct TempoSample {
     army_stars: i32,
     revealed: i32,
     techs: i32,
+    /// Cumulative counters through this sample (mirrors of the TempoTrack
+    /// counters, snapshotted so both curve and totals are per-turn/per-role).
+    trained_cum: i32,
+    lost_cum: i32,
+    /// Σ star-cost of units lost so far — a dead giant costs 10, not 1.
+    stars_lost_cum: i32,
 }
 
 /// One player's tempo curve plus event-accounted unit counters for the game.
@@ -353,6 +455,8 @@ struct TempoTrack {
     units_granted: i32,
     units_lost: i32,
     giants_made: i32,
+    /// Σ star-cost of lost units (army VALUE destroyed, not just count).
+    army_stars_lost: i32,
 }
 
 fn tempo_sample(state: &GameState, pov: PlayerId) -> Option<TempoSample> {
@@ -375,11 +479,16 @@ fn tempo_sample(state: &GameState, pov: PlayerId) -> Option<TempoSample> {
             .filter(|t| t.explorers.contains(&pov))
             .count() as i32,
         techs: tribe.tech_vanilla.len() as i32,
+        // Attached from the TempoTrack counters at the push site.
+        trained_cum: 0,
+        lost_cum: 0,
+        stars_lost_cum: 0,
     })
 }
 
-/// `(unit_count, giant_count)` per player, for post-move diff accounting.
-fn unit_tally(state: &GameState) -> HashMap<PlayerId, (i32, i32)> {
+/// `(unit_count, giant_count, army_star_cost)` per player, for post-move
+/// diff accounting.
+fn unit_tally(state: &GameState) -> HashMap<PlayerId, (i32, i32, i32)> {
     state
         .tribes
         .iter()
@@ -389,7 +498,12 @@ fn unit_tally(state: &GameState) -> HashMap<PlayerId, (i32, i32)> {
                 .iter()
                 .filter(|u| u.unit_type == polyfish::types::UnitType::Giant)
                 .count() as i32;
-            (*id, (t.units.len() as i32, giants))
+            let stars: i32 = t
+                .units
+                .iter()
+                .map(|u| polyfish::settings::units::get_unit_setting(u.unit_type).cost)
+                .sum();
+            (*id, (t.units.len() as i32, giants, stars))
         })
         .collect()
 }
@@ -662,13 +776,16 @@ struct GameResult {
     /// Move-type counts keyed by turn number, for the "move mix by turn"
     /// training-progress chart (see parse_metrics.py / dashboard).
     moves_by_turn: HashMap<i32, HashMap<polyfish::types::MoveType, usize>>,
-    /// Combined (both players) tile-exploration and territory-ownership
-    /// counts at game end, for diagnosing where score gains come from.
+    /// NET-seat tile-exploration and territory-ownership counts at game end
+    /// (anchor/opponent seats excluded since Jul 2026; in mirror self-play
+    /// this still sums both seats).
     revealed_tiles: i32,
     captured_tiles: i32,
     /// Turn by which 50%/80%/100% of the map's initial open villages (and
-    /// ruins) had been captured by either player — how *directly* the AI
-    /// seeks them out. Censored at max_turns when a game never gets there.
+    /// ruins) had been captured by a NET-controlled seat — how *directly*
+    /// the net seeks them out. Censored at max_turns when a game never gets
+    /// there (incl. when the anchor takes them first — losing the race
+    /// reads as censored, not captured).
     villages_t2c_first: f32,
     villages_t2c_p50: f32,
     villages_t2c_p80: f32,
@@ -697,20 +814,93 @@ struct GameResult {
 
 const SPT_MILESTONES: [i32; 7] = [0, 5, 10, 15, 20, 25, 30];
 
-fn mean_tribe_spt(state: &polyfish::states::GameState) -> f32 {
-    let n = state.tribes.len().max(1) as f32;
-    state
+/// True when `pid`'s seat is controlled by the training net ("model" /
+/// "model_vs_anchor") — anchor (Greedy) and league-opponent seats are
+/// excluded from the aggregate metrics so mixed games report the net only.
+fn is_net_seat(seat_roles: [&'static str; 2], pid: PlayerId) -> bool {
+    let i = (pid - 1) as usize;
+    i < 2 && matches!(seat_roles[i], "model" | "model_vs_anchor")
+}
+
+/// Aggregate a move-visit distribution into the four decomposed policy-target
+/// arrays (action / source-spatial / target-spatial / option), each normalized
+/// to sum 1. Shared by the MCTS visit target and the EXP_ELO_020 DAgger
+/// Greedy-teacher target so both are built identically before blending.
+fn decompose_visits(
+    move_visits: &[polyfish::ai::mcts_types::MoveVisit],
+    map_size: usize,
+) -> (Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>) {
+    let spatial = features::MAP_SIZE * features::MAP_SIZE;
+    let mut p_action = vec![0.0; 11];
+    let mut p_source = vec![0.0; spatial];
+    let mut p_target = vec![0.0; spatial];
+    let mut p_option = vec![0.0; 192];
+    let mut total = 0.0;
+    for mv in move_visits {
+        total += mv.visits;
+        let t = DecomposedMapper::move_visit_to_targets(mv, map_size);
+        if t.action_type < p_action.len() {
+            p_action[t.action_type] += mv.visits;
+        }
+        if let Some(i) = t.source_spatial {
+            if i < p_source.len() {
+                p_source[i] += mv.visits;
+            }
+        }
+        if let Some(i) = t.target_spatial {
+            if i < p_target.len() {
+                p_target[i] += mv.visits;
+            }
+        }
+        if let Some(i) = t.target_type {
+            if i < p_option.len() {
+                p_option[i] += mv.visits;
+            }
+        }
+    }
+    if total > 0.0 {
+        for x in &mut p_action {
+            *x /= total;
+        }
+        for x in &mut p_source {
+            *x /= total;
+        }
+        for x in &mut p_target {
+            *x /= total;
+        }
+        for x in &mut p_option {
+            *x /= total;
+        }
+    }
+    (p_action, p_source, p_target, p_option)
+}
+
+/// Mean SPT over net-controlled tribes only (all tribes as a fallback if
+/// none qualify — shouldn't happen with valid seat_roles).
+fn mean_net_spt(state: &polyfish::states::GameState, seat_roles: [&'static str; 2]) -> f32 {
+    let vals: Vec<f32> = state
         .tribes
-        .values()
-        .map(|t| polyfish::functions::get_tribe_spt(state, t) as f32)
-        .sum::<f32>()
-        / n
+        .iter()
+        .filter(|(id, _)| is_net_seat(seat_roles, **id))
+        .map(|(_, t)| polyfish::functions::get_tribe_spt(state, t) as f32)
+        .collect();
+    if vals.is_empty() {
+        let n = state.tribes.len().max(1) as f32;
+        return state
+            .tribes
+            .values()
+            .map(|t| polyfish::functions::get_tribe_spt(state, t) as f32)
+            .sum::<f32>()
+            / n;
+    }
+    vals.iter().sum::<f32>() / vals.len() as f32
 }
 
 fn record_spt_at_turn_start(
     state: &polyfish::states::GameState,
     spt_at_turn: &mut HashMap<i32, f32>,
     next_idx: &mut usize,
+    seat_roles: [&'static str; 2],
 ) {
     if state.settings.current_player_turn_id != STARTING_OWNER_ID {
         return;
@@ -721,7 +911,7 @@ fn record_spt_at_turn_start(
             break;
         }
         if state.settings.turn == milestone {
-            spt_at_turn.insert(milestone, mean_tribe_spt(state));
+            spt_at_turn.insert(milestone, mean_net_spt(state, seat_roles));
         }
         *next_idx += 1;
     }
@@ -822,9 +1012,15 @@ fn play_single_game(
     trace_counter: &AtomicUsize,
     dump_failed_dir: Option<&str>,
     dump_turn_states: Option<&str>,
+    dump_city_rewards: Option<&str>,
+    dump_star_spend: Option<&str>,
     seat_roles: [&'static str; 2],
     shape_w_label: f32,
     shape_w_tree: f32,
+    pursuit_w_label: f32,
+    pursuit_w_tree: f32,
+    unfreeze_opponent: bool,
+    dagger_alpha: f32,
 ) -> Option<GameResult> {
     // Curriculum logic — Tiny maps only, gradually increase turn count.
     let (map_size, max_turns) = if iteration <= 25 {
@@ -904,6 +1100,49 @@ fn play_single_game(
     }
     let mut last_dump_key: Option<(i32, PlayerId)> = None;
 
+    // --dump-city-rewards: one JSONL file per game, one record per city
+    // level-up reward choice — (turn, player, city level pre-choice, tribe
+    // stars at time of choice, reward type chosen). Reward moves are always
+    // forced (generate_reward_moves preempts everything else when a choice
+    // is pending — moves/mod.rs), so this is a clean, uncontested read of
+    // what the policy actually wants at each level, no Step competition.
+    let mut city_reward_file: Option<File> = None;
+    if let Some(dir) = dump_city_rewards {
+        let path = std::path::Path::new(dir);
+        if let Err(e) = std::fs::create_dir_all(path) {
+            eprintln!("[dump-city-rewards] failed to create {}: {e}", path.display());
+        } else {
+            match File::create(path.join(format!("game{game_idx}.jsonl"))) {
+                Ok(f) => city_reward_file = Some(f),
+                Err(e) => eprintln!("[dump-city-rewards] failed to open game file: {e}"),
+            }
+        }
+    }
+
+    // --dump-star-spend: one JSONL record per Research/Harvest/Build/Summon
+    // move actually executed — (turn, player, move type, stars spent =
+    // tribe.stars before minus after). Reads the real star delta off game
+    // state rather than re-deriving cost formulas, so it's exact even with
+    // discounts (e.g. Philosophy's tech discount).
+    let mut star_spend_file: Option<File> = None;
+    if let Some(dir) = dump_star_spend {
+        let path = std::path::Path::new(dir);
+        if let Err(e) = std::fs::create_dir_all(path) {
+            eprintln!("[dump-star-spend] failed to create {}: {e}", path.display());
+        } else {
+            match File::create(path.join(format!("game{game_idx}.jsonl"))) {
+                Ok(f) => star_spend_file = Some(f),
+                Err(e) => eprintln!("[dump-star-spend] failed to open game file: {e}"),
+            }
+        }
+    }
+    const STAR_SPEND_TYPES: [polyfish::types::MoveType; 4] = [
+        polyfish::types::MoveType::Research,
+        polyfish::types::MoveType::Harvest,
+        polyfish::types::MoveType::Build,
+        polyfish::types::MoveType::Summon,
+    ];
+
     let prior_w = decay_crutch(
         HEURISTIC_PRIOR_W0,
         HEURISTIC_PRIOR_DECAY,
@@ -922,12 +1161,16 @@ fn play_single_game(
         .with_prior_heuristic_weight(prior_w)
         .with_policy_target_q_weight(q_target_w)
         .with_tree_q_weight(q_target_w)
-        .with_reward_shape_w(shape_w_tree);
+        .with_reward_shape_w(shape_w_tree)
+        .with_pursuit_shape_w(pursuit_w_tree)
+        .with_unfreeze_opponent(unfreeze_opponent);
     let mut agent2 = Brain::with_backend(eval2, mcts_iters, backend2)
         .with_prior_heuristic_weight(prior_w)
         .with_policy_target_q_weight(q_target_w)
         .with_tree_q_weight(q_target_w)
-        .with_reward_shape_w(shape_w_tree);
+        .with_reward_shape_w(shape_w_tree)
+        .with_pursuit_shape_w(pursuit_w_tree)
+        .with_unfreeze_opponent(unfreeze_opponent);
 
     if let Some(b) = leaf_batch {
         agent1 = agent1.with_leaf_batch(b);
@@ -981,8 +1224,27 @@ fn play_single_game(
     // mid-game stalled decisions rather than only the turn-15 entry ply.
     let mut traces_this_game = 0usize;
     let mut last_trace_turn = -100i32;
+    // HarvestReady window state: fires once per game, then captures every
+    // ply belonging to the triggering player for the trigger turn + the
+    // next 3 turns (not just the first ply of each turn — Step and
+    // Harvest/Build aren't exclusive within a turn; the real question is
+    // whether Harvest/Build gets picked up once Step options run dry).
+    let mut harvest_trigger_turn: Option<i32> = None;
+    let mut harvest_trigger_tile: i32 = -1;
+    let mut harvest_trigger_pov: Option<PlayerId> = None;
+    // VillagePursuit window state: same shape as HarvestReady's — fires once
+    // per game, then captures every ply belonging to the triggering player
+    // for the trigger turn + the next 3 turns.
+    let mut pursuit_trigger_turn: Option<i32> = None;
+    let mut pursuit_trigger_village: i32 = -1;
+    let mut pursuit_trigger_pov: Option<PlayerId> = None;
     while !polyfish::functions::is_game_over(&game.state) {
-        record_spt_at_turn_start(&game.state, &mut spt_at_turn, &mut next_spt_milestone);
+        record_spt_at_turn_start(
+            &game.state,
+            &mut spt_at_turn,
+            &mut next_spt_milestone,
+            seat_roles,
+        );
 
         if move_count > 50000 {
             // Reduced for safety
@@ -1008,8 +1270,12 @@ fn play_single_game(
         // Tempo curve: sample the acting player once per (turn, pov), pre-move.
         let tempo_key = (game.state.settings.turn, pov);
         if last_tempo_key != Some(tempo_key) {
-            if let Some(s) = tempo_sample(&game.state, pov) {
-                tempo.entry(pov).or_default().samples.push(s);
+            if let Some(mut s) = tempo_sample(&game.state, pov) {
+                let track = tempo.entry(pov).or_default();
+                s.trained_cum = track.units_trained;
+                s.lost_cum = track.units_lost;
+                s.stars_lost_cum = track.army_stars_lost;
+                track.samples.push(s);
             }
             last_tempo_key = Some(tempo_key);
         }
@@ -1025,6 +1291,10 @@ fn play_single_game(
 
         let trigger_info = if trace_villages
             && !trace_all
+            && !matches!(
+                trace_trigger,
+                TraceTrigger::HarvestReady | TraceTrigger::VillagePursuit
+            )
             && traces_this_game < 3
             && game.state.settings.turn >= last_trace_turn + 3
             && trace_counter.load(Ordering::Relaxed) < trace_max
@@ -1033,7 +1303,60 @@ fn play_single_game(
         } else {
             None
         };
-        if trace_all || trigger_info.is_some() {
+
+        // HarvestReady: (trigger_tile, turns_since_trigger) for THIS ply, if
+        // it belongs to the triggering player and falls inside the
+        // [trigger_turn, trigger_turn+3] window. Captures EVERY such ply
+        // (not just the first per turn) so post-hoc analysis can bucket by
+        // how many Step candidates were still live at capture time.
+        let harvest_capture = if trace_villages
+            && !trace_all
+            && trace_trigger == TraceTrigger::HarvestReady
+            && trace_counter.load(Ordering::Relaxed) < trace_max
+        {
+            if harvest_trigger_turn.is_none() {
+                if let Some(tile) = find_harvest_trigger(&game.state, pov) {
+                    harvest_trigger_turn = Some(game.state.settings.turn);
+                    harvest_trigger_tile = tile;
+                    harvest_trigger_pov = Some(pov);
+                }
+            }
+            harvest_trigger_turn.and_then(|start| {
+                let turn = game.state.settings.turn;
+                (harvest_trigger_pov == Some(pov) && turn <= start + 3)
+                    .then_some((harvest_trigger_tile, turn - start))
+            })
+        } else {
+            None
+        };
+
+        // VillagePursuit: (trigger_village, turns_since_trigger) for THIS
+        // ply, same window/every-ply shape as HarvestReady above.
+        let pursuit_capture = if trace_villages
+            && !trace_all
+            && trace_trigger == TraceTrigger::VillagePursuit
+            && trace_counter.load(Ordering::Relaxed) < trace_max
+        {
+            if pursuit_trigger_turn.is_none() {
+                if let Some(village) =
+                    find_village_pursuit_trigger(&game.state, pov, &open_villages)
+                {
+                    pursuit_trigger_turn = Some(game.state.settings.turn);
+                    pursuit_trigger_village = village;
+                    pursuit_trigger_pov = Some(pov);
+                }
+            }
+            pursuit_trigger_turn.and_then(|start| {
+                let turn = game.state.settings.turn;
+                (pursuit_trigger_pov == Some(pov) && turn <= start + 3)
+                    .then_some((pursuit_trigger_village, turn - start))
+            })
+        } else {
+            None
+        };
+
+        if trace_all || trigger_info.is_some() || harvest_capture.is_some() || pursuit_capture.is_some()
+        {
             current_agent.request_trace();
         }
 
@@ -1062,6 +1385,7 @@ fn play_single_game(
                         })
                         .collect();
                     write_decision_trace(
+                        "decision_traces",
                         &trace,
                         iteration,
                         game_idx,
@@ -1071,6 +1395,7 @@ fn play_single_game(
                         trigger_unit_idx,
                         trigger_village_idx,
                         &visible_villages,
+                        None,
                     );
                 }
                 traces_this_game += 1;
@@ -1078,64 +1403,85 @@ fn play_single_game(
             }
         }
 
-        let map_size = game.state.settings.size as usize;
-
-        // Initialize probability distributions
-        let fixed_map_width = features::MAP_SIZE;
-        let fixed_spatial_size = features::MAP_SIZE * fixed_map_width;
-
-        let mut p_action = vec![0.0; 11];
-        let mut p_source = vec![0.0; fixed_spatial_size];
-        let mut p_target = vec![0.0; fixed_spatial_size];
-        let mut p_option = vec![0.0; 192]; // Unified option head (Expanded)
-
-        let mut total_visits = 0.0;
-
-        // Aggregate visits into distributions
-        for mv in move_visits {
-            total_visits += mv.visits;
-
-            // Spatial and Option targets using DecomposedMapper
-            let targets = DecomposedMapper::move_visit_to_targets(&mv, map_size);
-
-            let action_idx = targets.action_type;
-            if action_idx < p_action.len() {
-                p_action[action_idx] += mv.visits;
-            }
-
-            if let Some(i) = targets.source_spatial {
-                if i < p_source.len() {
-                    p_source[i] += mv.visits;
-                }
-            }
-
-            if let Some(i) = targets.target_spatial {
-                if i < p_target.len() {
-                    p_target[i] += mv.visits;
-                }
-            }
-
-            if let Some(i) = targets.target_type {
-                if i < p_option.len() {
-                    p_option[i] += mv.visits;
+        if let Some((trigger_tile, turns_since)) = harvest_capture {
+            if let Some(trace) = current_agent.take_trace() {
+                if trace_counter.fetch_add(1, Ordering::Relaxed) < trace_max {
+                    write_decision_trace(
+                        "decision_traces_harvest",
+                        &trace,
+                        iteration,
+                        game_idx,
+                        game.state.settings.turn,
+                        move_count,
+                        pov,
+                        trigger_tile,
+                        -1,
+                        &[],
+                        Some(turns_since),
+                    );
                 }
             }
         }
 
-        // Normalize
-        if total_visits > 0.0 {
-            for x in &mut p_action {
-                *x /= total_visits;
+        if let Some((trigger_village, turns_since)) = pursuit_capture {
+            if let Some(trace) = current_agent.take_trace() {
+                if trace_counter.fetch_add(1, Ordering::Relaxed) < trace_max {
+                    write_decision_trace(
+                        "decision_traces_pursuit",
+                        &trace,
+                        iteration,
+                        game_idx,
+                        game.state.settings.turn,
+                        move_count,
+                        pov,
+                        -1,
+                        trigger_village,
+                        &[],
+                        Some(turns_since),
+                    );
+                }
             }
-            for x in &mut p_source {
-                *x /= total_visits;
-            }
-            for x in &mut p_target {
-                *x /= total_visits;
-            }
-            for x in &mut p_option {
-                *x /= total_visits;
-            }
+        }
+
+        let map_size = game.state.settings.size as usize;
+
+        let (mut p_action, mut p_source, mut p_target, mut p_option) =
+            decompose_visits(&move_visits, map_size);
+
+        // EXP_ELO_020: DAgger — blend Greedy's move-ranking AT THE MODEL'S OWN
+        // state into the policy target, so the expert corrects the policy
+        // exactly where the net actually plays (on-distribution). Net seats
+        // only — the Greedy anchor seat already emits Greedy's ranking as its
+        // target. This attacks the collapsed capture prior at the model's forks
+        // without needing the value head; unlike BC (EXP_ELO_007) it labels the
+        // learner's states, not the expert's, which is the erosion fix.
+        if dagger_alpha > 0.0 && is_net_seat(seat_roles, pov) {
+            let greedy_visits = polyfish::ai::heuristic_mcts::GreedyHeuristicAgent
+                .select_move_with_decomposed_visits(&mut game, move_count)
+                .1;
+            let (ga, gs, gt, go) = decompose_visits(&greedy_visits, map_size);
+            // Normalization-preserving blend: mix the target's DIRECTION toward
+            // Greedy but keep each head's original total mass, so forced/partial
+            // states (empty or sub-normal MCTS heads) aren't distorted — a head
+            // with zero MCTS mass stays zero (nothing to correct), a full head
+            // stays full.
+            let blend = |p: &mut [f32], g: &[f32]| {
+                let orig: f32 = p.iter().sum();
+                for (x, &gv) in p.iter_mut().zip(g.iter()) {
+                    *x = (1.0 - dagger_alpha) * *x + dagger_alpha * gv;
+                }
+                let mixed: f32 = p.iter().sum();
+                if mixed > 0.0 {
+                    let k = orig / mixed;
+                    for x in p.iter_mut() {
+                        *x *= k;
+                    }
+                }
+            };
+            blend(&mut p_action, &ga);
+            blend(&mut p_source, &gs);
+            blend(&mut p_target, &gt);
+            blend(&mut p_option, &go);
         }
 
         let policy_data = DecomposedPolicyData {
@@ -1157,12 +1503,48 @@ fn play_single_game(
                 });
             }
             let m_type = m.move_type();
-            *action_counts.entry(m_type).or_insert(0) += 1;
-            *moves_by_turn
-                .entry(game.state.settings.turn)
-                .or_default()
-                .entry(m_type)
-                .or_insert(0) += 1;
+            // Move-mix and capture metrics count NET-controlled seats only —
+            // in anchor/league games the Greedy/opponent seat's moves would
+            // otherwise blend into "the model's" behavior charts.
+            let net_move = is_net_seat(seat_roles, pov);
+            if net_move {
+                *action_counts.entry(m_type).or_insert(0) += 1;
+                *moves_by_turn
+                    .entry(game.state.settings.turn)
+                    .or_default()
+                    .entry(m_type)
+                    .or_insert(0) += 1;
+            }
+
+            if m_type == polyfish::types::MoveType::Reward {
+                if let Some(f) = city_reward_file.as_mut() {
+                    if let (Ok(target), Ok(reward_type)) = (m.target_idx(), m.reward_type()) {
+                        let target = target as i32;
+                        let city = game
+                            .state
+                            .tribes
+                            .get(&pov)
+                            .and_then(|t| t.cities.iter().find(|c| c.idx == target));
+                        if let Some(city) = city {
+                            let stars = game.state.tribes.get(&pov).map(|t| t.stars).unwrap_or(0);
+                            let line = json!({
+                                "game_idx": game_idx,
+                                "turn": game.state.settings.turn,
+                                "player_id": pov,
+                                "city_idx": target,
+                                "city_level": city.level,
+                                "city_population": city.population,
+                                "stars": stars,
+                                "reward": format!("{:?}", reward_type),
+                            });
+                            if let Ok(s) = serde_json::to_string(&line) {
+                                use std::io::Write;
+                                let _ = writeln!(f, "{s}");
+                            }
+                        }
+                    }
+                }
+            }
 
             if m_type == polyfish::types::MoveType::Capture {
                 if let Ok(src) = m.source_idx() {
@@ -1181,23 +1563,31 @@ fn play_single_game(
                         .map(|t| t.capital_of > 0)
                         .unwrap_or(false);
 
-                    if is_ruin {
-                        cap_ruins += 1;
-                    } else if is_village {
-                        if owner == 0 {
-                            cap_villages += 1;
-                        } else if owner != pov {
-                            if is_capital {
-                                cap_capitals += 1;
-                            } else {
-                                cap_cities += 1;
+                    if net_move {
+                        if is_ruin {
+                            cap_ruins += 1;
+                        } else if is_village {
+                            if owner == 0 {
+                                cap_villages += 1;
+                            } else if owner != pov {
+                                if is_capital {
+                                    cap_capitals += 1;
+                                } else {
+                                    cap_cities += 1;
+                                }
                             }
                         }
                     }
 
+                    // The open-set must shrink regardless of who captured
+                    // (it also feeds FOW-visible tracking), but t2c turns
+                    // record net captures only — a Greedy grab is the net
+                    // LOSING the race, not capturing.
                     if open_villages.remove(&idx) {
-                        village_capture_turns.push(game.state.settings.turn);
-                    } else if open_ruins.remove(&idx) {
+                        if net_move {
+                            village_capture_turns.push(game.state.settings.turn);
+                        }
+                    } else if open_ruins.remove(&idx) && net_move {
                         ruin_capture_turns.push(game.state.settings.turn);
                     }
                 }
@@ -1211,7 +1601,7 @@ fn play_single_game(
             // Snapshot (possibly Φ-shaped) scores at this moment (pre-move)
             // for the TD label.
             let (my_score_now, opp_score_now) =
-                reward::shaped_snapshot(&game.state, pov, shape_w_label);
+                reward::shaped_snapshot(&game.state, pov, shape_w_label, pursuit_w_label);
             let opp_id = game
                 .state
                 .tribes
@@ -1234,7 +1624,7 @@ fn play_single_game(
                 opp_score: opp_score_now,
                 turn: game.state.settings.turn,
                 root_value,
-                enemy_units: enemy_unit_grid(&game.state, pov, fixed_spatial_size),
+                enemy_units: enemy_unit_grid(&game.state, pov, features::MAP_SIZE * features::MAP_SIZE),
                 my_spt: spt_of(pov),
                 opp_spt: spt_of(opp_id),
             });
@@ -1247,13 +1637,37 @@ fn play_single_game(
                     m.describe(&game.state),
                 );
             }
+            let star_spend_pre = star_spend_file.as_ref().and_then(|_| {
+                STAR_SPEND_TYPES
+                    .contains(&m_type)
+                    .then(|| game.state.tribes.get(&pov).map(|t| t.stars).unwrap_or(0))
+                    .map(|stars_before| (game.state.settings.turn, stars_before))
+            });
             let _ = game.play_move(m.as_ref());
+            if let (Some((turn, stars_before)), Some(f)) =
+                (star_spend_pre, star_spend_file.as_mut())
+            {
+                let stars_after = game.state.tribes.get(&pov).map(|t| t.stars).unwrap_or(0);
+                let line = json!({
+                    "game_idx": game_idx,
+                    "turn": turn,
+                    "player_id": pov,
+                    "move_type": format!("{:?}", m_type),
+                    "stars_spent": (stars_before - stars_after).max(0),
+                });
+                if let Ok(s) = serde_json::to_string(&line) {
+                    use std::io::Write;
+                    let _ = writeln!(f, "{s}");
+                }
+            }
 
             // Unit-accounting diff: attribute gains to Summon (trained) vs
-            // anything else (granted), and any decrease as a loss.
+            // anything else (granted), and any decrease as a loss — both in
+            // count and in star value (a dead giant is 10, not 1).
             let new_tally = unit_tally(&game.state);
-            for (&pid, &(n_units, n_giants)) in &new_tally {
-                let (p_units, p_giants) = prev_tally.get(&pid).copied().unwrap_or((0, 0));
+            for (&pid, &(n_units, n_giants, n_stars)) in &new_tally {
+                let (p_units, p_giants, p_stars) =
+                    prev_tally.get(&pid).copied().unwrap_or((0, 0, 0));
                 let track = tempo.entry(pid).or_default();
                 if n_units > p_units {
                     if m_type == polyfish::types::MoveType::Summon && pid == pov {
@@ -1263,6 +1677,9 @@ fn play_single_game(
                     }
                 } else if n_units < p_units {
                     track.units_lost += p_units - n_units;
+                }
+                if n_stars < p_stars {
+                    track.army_stars_lost += p_stars - n_stars;
                 }
                 if n_giants > p_giants {
                     track.giants_made += n_giants - p_giants;
@@ -1293,8 +1710,11 @@ fn play_single_game(
     // turn would otherwise be invisible); replaces a same-turn start sample.
     let tempo_pids: Vec<PlayerId> = game.state.tribes.keys().copied().collect();
     for pid in tempo_pids {
-        if let Some(s) = tempo_sample(&game.state, pid) {
+        if let Some(mut s) = tempo_sample(&game.state, pid) {
             let track = tempo.entry(pid).or_default();
+            s.trained_cum = track.units_trained;
+            s.lost_cum = track.units_lost;
+            s.stars_lost_cum = track.army_stars_lost;
             match track.samples.last_mut() {
                 Some(last) if last.turn == s.turn => *last = s,
                 _ => track.samples.push(s),
@@ -1313,11 +1733,13 @@ fn play_single_game(
         alive.insert(*id, t.killed_turn <= 0 && t.resigned_turn <= 0);
     }
     for id in scores.keys() {
-        let phi = if shape_w_label != 0.0 {
-            shape_w_label * reward::dev_potential(&game.state, *id)
-        } else {
-            0.0
-        };
+        let mut phi = 0.0;
+        if shape_w_label != 0.0 {
+            phi += shape_w_label * reward::dev_potential(&game.state, *id);
+        }
+        if pursuit_w_label != 0.0 {
+            phi += pursuit_w_label * reward::pursuit_potential(&game.state, *id);
+        }
         final_potentials.insert(*id, scores[id] as f32 + phi);
     }
 
@@ -1348,11 +1770,18 @@ fn play_single_game(
         );
     }
 
-    let captured_tiles = game.state.tiles.values().filter(|t| t.owner != 0).count() as i32;
+    // Net-seat-only territory/exploration (anchor/opponent seats excluded).
+    let captured_tiles = game
+        .state
+        .tiles
+        .values()
+        .filter(|t| t.owner != 0 && is_net_seat(seat_roles, t.owner))
+        .count() as i32;
     let revealed_tiles: i32 = game
         .state
         .tribes
         .keys()
+        .filter(|&&pid| is_net_seat(seat_roles, pid))
         .map(|&pid| {
             game.state
                 .tiles
@@ -1578,6 +2007,35 @@ fn main() -> anyhow::Result<()> {
         #[arg(long, default_value_t = 0.0)]
         shape_w_tree: f32,
 
+        /// EXP_ELO_018: weight on the isolated pursuit-progress potential Φ
+        /// in TD-label snapshots (`score + w·Φ_pursuit`), independent of
+        /// --shape-w-label. 0 = off.
+        #[arg(long, default_value_t = 0.0)]
+        pursuit_w_label: f32,
+
+        /// EXP_ELO_018: weight on the pursuit-progress Φ in the Gumbel
+        /// in-tree edge rewards, independent of --shape-w-tree. Half-dose
+        /// vs the label weight (EXP_ELO_005 lesson). 0 = off.
+        #[arg(long, default_value_t = 0.0)]
+        pursuit_w_tree: f32,
+
+        /// EXP_ELO_017: unfreeze the opponent during in-tree EndTurn
+        /// crossings (Gumbel backend only) — each intervening opponent
+        /// plays a real deterministic-Greedy turn instead of the engine's
+        /// blind auto-skip. Training-data generation only; arena/gauge
+        /// binaries always search frozen so every prior strength reading
+        /// stays a valid yardstick.
+        #[arg(long, default_value_t = false)]
+        unfreeze_opponent: bool,
+
+        /// EXP_ELO_020: DAgger expert dose. At each net-seat decision, blend
+        /// Greedy's move-ranking at the MODEL'S OWN state into the policy
+        /// target: `(1-a)*mcts + a*greedy`. 0 = off. Corrects the collapsed
+        /// capture prior on-distribution (unlike BC, which labels Greedy's
+        /// states). Net seats only; frozen search recommended to isolate.
+        #[arg(long, default_value_t = 0.0)]
+        dagger_alpha: f32,
+
         /// Current training iteration (for curriculum learning)
         #[arg(long, default_value_t = 1)]
         iteration: usize,
@@ -1687,6 +2145,19 @@ fn main() -> anyhow::Result<()> {
         /// unit tiles. Ungated; the Python analysis does all filtering.
         #[arg(long)]
         dump_turn_states: Option<String>,
+
+        /// Diagnostics: append one JSON record per city level-up reward
+        /// choice (turn, player, city level/population/stars pre-choice,
+        /// reward type chosen) to <dir>/game<idx>.jsonl. Ungated, ply-cheap
+        /// (no MCTS trace overhead) — ordinary self-play run.
+        #[arg(long)]
+        dump_city_rewards: Option<String>,
+
+        /// Diagnostics: append one JSON record per Research/Harvest/Build/
+        /// Summon move executed — (turn, player, move type, stars spent,
+        /// read as the real tribe.stars delta) to <dir>/game<idx>.jsonl.
+        #[arg(long)]
+        dump_star_spend: Option<String>,
     }
 
     let args = Args::parse();
@@ -2014,9 +2485,15 @@ fn main() -> anyhow::Result<()> {
                             &trace_counter,
                             args.dump_failed_dir.as_deref(),
                             args.dump_turn_states.as_deref(),
+                            args.dump_city_rewards.as_deref(),
+                            args.dump_star_spend.as_deref(),
                             seat_roles,
                             args.shape_w_label,
                             args.shape_w_tree,
+                            args.pursuit_w_label,
+                            args.pursuit_w_tree,
+                            args.unfreeze_opponent,
+                            args.dagger_alpha,
                         )
                     }))
                     .unwrap_or_else(|_| {
@@ -2197,12 +2674,13 @@ fn main() -> anyhow::Result<()> {
     #[derive(Default)]
     struct TempoAgg {
         /// turn -> ([cities, city_levels, spt, units, army_stars, revealed,
-        /// techs] sums, sample count)
-        by_turn: HashMap<i32, ([f64; 7], u32)>,
+        /// techs, trained_cum, lost_cum, stars_lost_cum] sums, sample count)
+        by_turn: HashMap<i32, ([f64; 10], u32)>,
         trained: i64,
         granted: i64,
         lost: i64,
         giants: i64,
+        stars_lost: i64,
         player_games: u32,
         /// cities >= 2/3/4: (reached count, turn sum over reached)
         reach: [(u32, f64); 3],
@@ -2301,6 +2779,7 @@ fn main() -> anyhow::Result<()> {
             agg.granted += track.units_granted as i64;
             agg.lost += track.units_lost as i64;
             agg.giants += track.giants_made as i64;
+            agg.stars_lost += track.army_stars_lost as i64;
             for s in &track.samples {
                 let (sums, n) = agg.by_turn.entry(s.turn).or_default();
                 for (acc, v) in sums.iter_mut().zip([
@@ -2311,6 +2790,9 @@ fn main() -> anyhow::Result<()> {
                     s.army_stars,
                     s.revealed,
                     s.techs,
+                    s.trained_cum,
+                    s.lost_cum,
+                    s.stars_lost_cum,
                 ]) {
                     *acc += v as f64;
                 }
@@ -2669,6 +3151,9 @@ fn main() -> anyhow::Result<()> {
                     "army_stars",
                     "revealed",
                     "techs",
+                    "trained_cum",
+                    "lost_cum",
+                    "stars_lost_cum",
                 ]
                 .iter()
                 .zip(sums.iter())
@@ -2678,6 +3163,25 @@ fn main() -> anyhow::Result<()> {
                 o.insert("n".to_string(), serde_json::Value::from(*n));
                 turn_map.insert(t.to_string(), serde_json::Value::Object(o));
             }
+            // Unbiased per-player-game totals (the last-turn-key cums under-
+            // count games that ended early). "_totals" is non-numeric, so
+            // turn-key consumers must filter it.
+            let pg = f64::from(agg.player_games).max(1.0);
+            let mut totals = serde_json::Map::new();
+            for (name, v) in [
+                ("trained", agg.trained),
+                ("granted", agg.granted),
+                ("lost", agg.lost),
+                ("giants", agg.giants),
+                ("stars_lost", agg.stars_lost),
+            ] {
+                totals.insert(name.to_string(), serde_json::Value::from(v as f64 / pg));
+            }
+            totals.insert(
+                "n_games".to_string(),
+                serde_json::Value::from(agg.player_games),
+            );
+            turn_map.insert("_totals".to_string(), serde_json::Value::Object(totals));
             roles_map.insert((*role).to_string(), serde_json::Value::Object(turn_map));
         }
         serde_json::Value::Object(roles_map)

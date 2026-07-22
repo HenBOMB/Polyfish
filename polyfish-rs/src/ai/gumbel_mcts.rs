@@ -88,6 +88,16 @@ pub struct GumbelMctsAgent<'a> {
     /// (EXP_ELO_016): snapshots become `score + w·Φ`. 0.0 = raw score
     /// deltas (bit-exact legacy path).
     pub reward_shape_w: f32,
+    /// Weight on the isolated pursuit-progress potential Φ in in-tree edge
+    /// rewards (EXP_ELO_018), independent of `reward_shape_w`. 0.0 = off.
+    pub pursuit_shape_w: f32,
+    /// EXP_ELO_017: when crossing an EndTurn edge, give each intervening
+    /// opponent a real (deterministic-argmax Greedy) turn instead of the
+    /// engine's blind auto-skip — so the tree can see contested villages/
+    /// races instead of a frozen opponent. `false` = legacy behavior,
+    /// bit-exact. Value backup stays single-player (root-perspective
+    /// `win_value`); the opponent's ghost moves are scripted, not searched.
+    pub unfreeze_opponent: bool,
     /// Diagnostic capture for the next search, armed via `arm_trace`. `None`
     /// (the default) costs one `RefCell` borrow-check per call site and
     /// nothing else — see decision_trace.rs.
@@ -221,6 +231,8 @@ impl<'a> GumbelMctsAgent<'a> {
             policy_target_q_weight: 1.0,
             tree_q_weight: 1.0,
             reward_shape_w: 0.0,
+            pursuit_shape_w: 0.0,
+            unfreeze_opponent: false,
             trace: RefCell::new(None),
             last_root_value: None,
         }
@@ -728,6 +740,61 @@ impl<'a> GumbelMctsAgent<'a> {
         }
     }
 
+    /// Cross an `EndTurn` edge. With `unfreeze_opponent` off (default), this
+    /// is exactly `game.simulate_move(&EndTurnMove)` — the engine's built-in
+    /// auto-skip past every opponent back to the searching player, bit-exact
+    /// with all prior behavior. With it on (EXP_ELO_017), the searcher's own
+    /// turn ends once, then each intervening opponent plays a REAL turn via
+    /// the deterministic (argmax) Greedy heuristic — cheap, NN-free — until
+    /// control returns to the searcher. Two-player only: asserts that
+    /// happens within `MAX_GHOST_MOVES`, loud rather than silently wrong on
+    /// a future 3+-player run.
+    fn cross_end_turn(game: &mut Game, unfreeze_opponent: bool) -> Option<crate::actions::UndoCallback> {
+        if !unfreeze_opponent {
+            return game.simulate_move(&EndTurnMove);
+        }
+        // Snapshot the whole state and restore it wholesale on undo, rather
+        // than composing per-move undo callbacks across the ghost turn. A ghost
+        // turn can include combat, and the kill-undo's index-patching
+        // (units.rs) does NOT compose when several moves are bundled and
+        // unwound in reverse — it panicked on `Vec::insert` out-of-bounds.
+        // Restoring a clone is correct under the wave loop's LIFO unwind: by
+        // the time this undo runs, every later edge is already undone, so the
+        // live state equals the end-of-ghost-turn state and overwriting it with
+        // the pre-ghost-turn snapshot restores exactly this edge. Costs one
+        // GameState clone per turn crossing — unfreeze is the expensive-but-
+        // robust training path; gauges/arena never cross unfrozen.
+        const MAX_GHOST_MOVES: usize = 64;
+        let searcher = game.state.settings.current_player_turn_id;
+        let snapshot = game.state.clone();
+        game.simulate_single_end_turn();
+        let mut n = 0usize;
+        while game.state.settings.current_player_turn_id != searcher
+            && !game.state.settings._game_over
+        {
+            // Any ghost-turn anomaly (Greedy can't move, an illegal move, or a
+            // runaway loop) degrades gracefully to a stale-node signal instead
+            // of panicking mid-search and discarding the whole game's data.
+            let bail = n >= MAX_GHOST_MOVES
+                || match crate::ai::heuristic_mcts::GreedyHeuristicAgent.select_move(game) {
+                    None => true,
+                    Some(mv) if mv.move_type() == MoveType::EndTurn => {
+                        game.simulate_single_end_turn();
+                        false
+                    }
+                    Some(mv) => game.simulate_move(mv.as_ref()).is_none(),
+                };
+            if bail {
+                game.state = snapshot.clone();
+                return None;
+            }
+            n += 1;
+        }
+        Some(Box::new(move |s: &mut crate::states::GameState| {
+            *s = snapshot;
+        }))
+    }
+
     /// Descend from the root into candidate `cand_child_idx`'s subtree, then
     /// keep descending via the interior selection rule until a leaf is
     /// reached. Extract leaf data, undo all simulated moves, and return.
@@ -761,14 +828,18 @@ impl<'a> GumbelMctsAgent<'a> {
         let candidate_node = root.children.get(cand_child_idx)?;
         let m = candidate_node.move_to_here.as_ref()?;
         let (my_pre, opp_pre) =
-            reward::shaped_snapshot(&game.state, root_player, self.reward_shape_w);
+            reward::shaped_snapshot(&game.state, root_player, self.reward_shape_w, self.pursuit_shape_w);
         let turn_pre = game.state.settings.turn;
-        let undo = game.simulate_move(m.as_ref())?;
+        let undo = if m.move_type() == MoveType::EndTurn {
+            Self::cross_end_turn(game, self.unfreeze_opponent)?
+        } else {
+            game.simulate_move(m.as_ref())?
+        };
         undos.push(undo);
         indices_stack.push(cand_child_idx);
         path_players.push(game.state.settings.current_player_turn_id);
         let (my_post, opp_post) =
-            reward::shaped_snapshot(&game.state, root_player, self.reward_shape_w);
+            reward::shaped_snapshot(&game.state, root_player, self.reward_shape_w, self.pursuit_shape_w);
         let r = reward::normalized_reward_wf(my_pre, opp_pre, my_post, opp_post, reward::REL_W);
         candidate_node.edge_reward.set(Some(r));
         path_rewards.push(r);
@@ -806,9 +877,14 @@ impl<'a> GumbelMctsAgent<'a> {
             };
             let mover = game.state.settings.current_player_turn_id;
             let (my_pre, opp_pre) =
-                reward::shaped_snapshot(&game.state, mover, self.reward_shape_w);
+                reward::shaped_snapshot(&game.state, mover, self.reward_shape_w, self.pursuit_shape_w);
             let turn_pre = game.state.settings.turn;
-            let undo = match game.simulate_move(m.as_ref()) {
+            let sim_result = if m.move_type() == MoveType::EndTurn {
+                Self::cross_end_turn(game, self.unfreeze_opponent)
+            } else {
+                game.simulate_move(m.as_ref())
+            };
+            let undo = match sim_result {
                 Some(u) => u,
                 None => {
                     // Cached move is illegal in the replayed state (stale
@@ -822,7 +898,7 @@ impl<'a> GumbelMctsAgent<'a> {
             indices_stack.push(child_idx);
             path_players.push(game.state.settings.current_player_turn_id);
             let (my_post, opp_post) =
-                reward::shaped_snapshot(&game.state, mover, self.reward_shape_w);
+                reward::shaped_snapshot(&game.state, mover, self.reward_shape_w, self.pursuit_shape_w);
             let r = reward::normalized_reward_wf(my_pre, opp_pre, my_post, opp_post, reward::REL_W);
             child_node.edge_reward.set(Some(r));
             path_rewards.push(r);
@@ -1391,5 +1467,102 @@ mod tests {
                 "healed node re-expanded with no children"
             );
         }
+    }
+
+    fn fresh_two_tribe_game(seed: i64) -> Game {
+        let mut game = Game::new();
+        game.state = crate::mapgen::generate(crate::mapgen::MapGenSettings {
+            size: MapSize::Tiny,
+            map_type: MapType::Drylands,
+            tribes: vec![TribeType::Imperius, TribeType::Bardur],
+            seed,
+            ..Default::default()
+        });
+        game.post_load();
+        game
+    }
+
+    /// `unfreeze_opponent = false` must be bit-exact with the engine's
+    /// built-in auto-skip (`simulate_move(&EndTurnMove)`) — no behavior
+    /// change for every existing arm/gauge that never sets the flag.
+    #[test]
+    fn cross_end_turn_off_matches_legacy_auto_skip() {
+        let mut via_helper = fresh_two_tribe_game(11);
+        let mut via_direct = fresh_two_tribe_game(11);
+
+        let undo_helper = GumbelMctsAgent::cross_end_turn(&mut via_helper, false)
+            .expect("legacy path should always succeed from a fresh game");
+        let undo_direct = via_direct
+            .simulate_move(&EndTurnMove)
+            .expect("direct auto-skip should succeed");
+
+        assert_eq!(
+            serde_json::to_string(&via_helper.state).unwrap(),
+            serde_json::to_string(&via_direct.state).unwrap(),
+            "cross_end_turn(false) must match simulate_move(&EndTurnMove) exactly"
+        );
+
+        // And undo must cleanly restore both to their (identical) starting states.
+        let before = serde_json::to_string(&fresh_two_tribe_game(11).state).unwrap();
+        undo_helper(&mut via_helper.state);
+        undo_direct(&mut via_direct.state);
+        assert_eq!(serde_json::to_string(&via_helper.state).unwrap(), before);
+        assert_eq!(serde_json::to_string(&via_direct.state).unwrap(), before);
+    }
+
+    /// `unfreeze_opponent = true` must give the opponent a REAL turn (state
+    /// actually changes beyond just the turn/player counters) and must still
+    /// return control to the original searching player — the 2-player
+    /// round-trip the implementation asserts internally.
+    #[test]
+    fn cross_end_turn_on_gives_opponent_a_real_turn_and_returns_to_searcher() {
+        let mut frozen = fresh_two_tribe_game(11);
+        let mut unfrozen = fresh_two_tribe_game(11);
+        let searcher = frozen.state.settings.current_player_turn_id;
+
+        GumbelMctsAgent::cross_end_turn(&mut frozen, false).unwrap();
+        GumbelMctsAgent::cross_end_turn(&mut unfrozen, true).unwrap();
+
+        assert_eq!(
+            unfrozen.state.settings.current_player_turn_id, searcher,
+            "control must return to the searching player after one crossing"
+        );
+        assert_ne!(
+            serde_json::to_string(&frozen.state).unwrap(),
+            serde_json::to_string(&unfrozen.state).unwrap(),
+            "unfreeze_opponent=true must leave a different state than a blind skip \
+             (the ghost should actually have acted)"
+        );
+
+        // Undo must cleanly restore to the true starting state, unwinding
+        // every ghost move (not just the searcher's own turn-end).
+        let before = serde_json::to_string(&fresh_two_tribe_game(11).state).unwrap();
+        let mut replay = fresh_two_tribe_game(11);
+        let undo = GumbelMctsAgent::cross_end_turn(&mut replay, true).unwrap();
+        undo(&mut replay.state);
+        let after = serde_json::to_string(&replay.state).unwrap();
+        if after != before {
+            std::fs::write("/tmp/before.json", &before).unwrap();
+            std::fs::write("/tmp/after.json", &after).unwrap();
+        }
+        assert_eq!(after, before);
+    }
+
+    /// The Greedy ghost must be deterministic (argmax, not the temperature-
+    /// sampled early-game path) — otherwise the same tree edge would resolve
+    /// to different opponent states on different visits, silently breaking
+    /// MCTS (a re-visited node's cached children would no longer match the
+    /// state they were expanded from).
+    #[test]
+    fn cross_end_turn_on_is_deterministic_across_repeated_crossings() {
+        let mut a = fresh_two_tribe_game(42);
+        let mut b = fresh_two_tribe_game(42);
+        GumbelMctsAgent::cross_end_turn(&mut a, true).unwrap();
+        GumbelMctsAgent::cross_end_turn(&mut b, true).unwrap();
+        assert_eq!(
+            serde_json::to_string(&a.state).unwrap(),
+            serde_json::to_string(&b.state).unwrap(),
+            "identical starting states must resolve to identical ghost turns"
+        );
     }
 }

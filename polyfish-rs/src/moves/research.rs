@@ -79,7 +79,7 @@ pub fn generate_research_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>
             // Get settings for this tech
             let settings =
                 crate::settings::technology::get_technology_setting(tech_state.tech_type);
-            for next_tech in settings.next {
+            for &next_tech in &settings.next {
                 let resolved = crate::settings::technology::resolve_tech_for_tribe(
                     next_tech,
                     tribe.tribe_type,

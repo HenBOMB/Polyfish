@@ -306,16 +306,16 @@ fn play_match(
     // scores attribute to the right config when sides are swapped.
     let (mut agent_p1, p1_config, mut agent_p2, p2_config) = if swap {
         (
-            make_search_agent(backend2, eval2, mcts2, leaf_batch, None, None, None, None),
+            make_search_agent(backend2, eval2, mcts2, leaf_batch, None, None, None, None, None, Some(false)),
             2u8,
-            make_search_agent(backend1, eval1, mcts1, leaf_batch, None, None, None, None),
+            make_search_agent(backend1, eval1, mcts1, leaf_batch, None, None, None, None, None, Some(false)),
             1u8,
         )
     } else {
         (
-            make_search_agent(backend1, eval1, mcts1, leaf_batch, None, None, None, None),
+            make_search_agent(backend1, eval1, mcts1, leaf_batch, None, None, None, None, None, Some(false)),
             1u8,
-            make_search_agent(backend2, eval2, mcts2, leaf_batch, None, None, None, None),
+            make_search_agent(backend2, eval2, mcts2, leaf_batch, None, None, None, None, None, Some(false)),
             2u8,
         )
     };

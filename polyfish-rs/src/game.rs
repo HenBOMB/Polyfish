@@ -371,6 +371,25 @@ impl Game {
         Some(undo)
     }
 
+    /// End exactly the CURRENT player's turn, once — unlike
+    /// `simulate_move(EndTurnMove)`, this does NOT auto-skip past
+    /// subsequent players. That auto-skip assumes "I am ending MY OWN turn
+    /// and want to fast-forward past every opponent back to me" (the
+    /// single-player MCTS default). This primitive instead lets a caller
+    /// end one specific player's turn and decide for itself what happens
+    /// next — used by the unfreeze-opponent ghost rollout (EXP_ELO_017),
+    /// which ends each player's turn individually as it plays a real ghost
+    /// turn for them rather than skipping them outright.
+    pub fn simulate_single_end_turn(&mut self) -> UndoCallback {
+        SIM_END_TURN_EDGES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let old_recent_moves = std::mem::take(&mut self.state.settings._recent_moves);
+        let end_undo = self.end_turn();
+        Box::new(move |s: &mut GameState| {
+            end_undo(s);
+            s.settings._recent_moves = old_recent_moves;
+        }) as UndoCallback
+    }
+
     /// End the current tribe's turn
     ///
     /// This handles:

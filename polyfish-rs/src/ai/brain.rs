@@ -76,6 +76,12 @@ pub struct Brain<'a> {
     /// Weight on the development potential Φ in the Gumbel backend's in-tree
     /// edge rewards (EXP_ELO_016). `None` = 0.0 (raw score deltas).
     reward_shape_w: Option<f32>,
+    /// Weight on the isolated pursuit-progress potential Φ in the Gumbel
+    /// backend's in-tree edge rewards (EXP_ELO_018). `None` = 0.0.
+    pursuit_shape_w: Option<f32>,
+    /// EXP_ELO_017: unfreeze the opponent during in-tree EndTurn crossings
+    /// (Gumbel backend only). `None` = false (legacy blind auto-skip).
+    unfreeze_opponent: Option<bool>,
     /// Set by `request_trace`; consumed (and cleared) by the next
     /// `think_decomposed` call, which arms the underlying agent's tracer.
     pending_trace: bool,
@@ -171,6 +177,8 @@ pub fn make_search_agent(
     policy_target_q_weight: Option<f32>,
     tree_q_weight: Option<f32>,
     reward_shape_w: Option<f32>,
+    pursuit_shape_w: Option<f32>,
+    unfreeze_opponent: Option<bool>,
 ) -> SearchAgent<'_> {
     match backend {
         SearchBackend::Zero => {
@@ -197,6 +205,12 @@ pub fn make_search_agent(
             if let Some(w) = reward_shape_w {
                 agent.reward_shape_w = w;
             }
+            if let Some(w) = pursuit_shape_w {
+                agent.pursuit_shape_w = w;
+            }
+            if let Some(u) = unfreeze_opponent {
+                agent.unfreeze_opponent = u;
+            }
             SearchAgent::Gumbel(agent)
         }
         SearchBackend::Heuristic => SearchAgent::Heuristic(
@@ -220,6 +234,8 @@ impl<'a> Brain<'a> {
             policy_target_q_weight: None,
             tree_q_weight: None,
             reward_shape_w: None,
+            pursuit_shape_w: None,
+            unfreeze_opponent: None,
             pending_trace: false,
         }
     }
@@ -239,6 +255,8 @@ impl<'a> Brain<'a> {
             policy_target_q_weight: None,
             tree_q_weight: None,
             reward_shape_w: None,
+            pursuit_shape_w: None,
+            unfreeze_opponent: None,
             pending_trace: false,
         }
     }
@@ -274,6 +292,20 @@ impl<'a> Brain<'a> {
     /// (EXP_ELO_016). Builder style: chain after `with_backend`.
     pub fn with_reward_shape_w(mut self, reward_shape_w: f32) -> Self {
         self.reward_shape_w = Some(reward_shape_w);
+        self
+    }
+
+    /// Override the in-tree pursuit-progress shaping weight (EXP_ELO_018).
+    /// Builder style: chain after `with_backend`.
+    pub fn with_pursuit_shape_w(mut self, pursuit_shape_w: f32) -> Self {
+        self.pursuit_shape_w = Some(pursuit_shape_w);
+        self
+    }
+
+    /// Override the in-tree opponent-unfreeze flag (EXP_ELO_017). Builder
+    /// style: chain after `with_backend`.
+    pub fn with_unfreeze_opponent(mut self, unfreeze_opponent: bool) -> Self {
+        self.unfreeze_opponent = Some(unfreeze_opponent);
         self
     }
 
@@ -317,6 +349,8 @@ impl<'a> Brain<'a> {
                 self.policy_target_q_weight,
                 self.tree_q_weight,
                 self.reward_shape_w,
+                self.pursuit_shape_w,
+                self.unfreeze_opponent,
             ));
         }
         (self.agent.as_mut(), moves)
