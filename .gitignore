@@ -49,6 +49,7 @@ polyfish-fs/replays/autospy_*/*
 polyfish-rs/models/*
 polyfish-rs/model.safetensors
 polyfish-rs/model_*.safetensors
+polyfish-rs/trace_games_*.safetensors
 polyfish-rs/model.safetensors.bak
 polyfish-rs/optimizer_state.pt
 polyfish-rs/.training.pid
