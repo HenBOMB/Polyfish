@@ -153,8 +153,16 @@ pub const CH_GHOST_PRESENT: usize = CH_GHOST_START + 0;
 pub const CH_GHOST_TYPE: usize = CH_GHOST_START + 1;
 pub const CH_GHOST_AGE: usize = CH_GHOST_START + 2;
 
+// Pursuit: per-tile proximity to the nearest capturable (unowned, explored)
+// village — (CAP - Chebyshev dist).max(0)/CAP, CAP = reward::SHAPE_PROX_CAP.
+// Appended at the END of the layout for index-stability with older training
+// data (which is zero-padded at load). See notes on pursuit-representation.
+pub const CH_PURSUIT_START: usize = CH_GHOST_END;
+pub const CH_PURSUIT_COUNT: usize = 1;
+pub const CH_PURSUIT_END: usize = CH_PURSUIT_START + CH_PURSUIT_COUNT;
+
 /// Total number of feature channels (dynamically computed)
-pub const NUM_CHANNELS: usize = CH_GHOST_END;
+pub const NUM_CHANNELS: usize = CH_PURSUIT_END;
 
 // ============================================================================
 // Runtime Lookup Tables (enum discriminant -> sequential index)
@@ -776,6 +784,44 @@ pub fn state_to_cpu_features(state: &GameState, perspective: PlayerId) -> Result
         }
     }
 
+    // Pursuit channel: per-tile proximity to the nearest capturable village.
+    // Capturable = Village structure on an unowned tile explored by the POV
+    // (mirrors reward::village_proximity_tiles' predicate, but tile-centric so
+    // the policy target head and value head can read a directional gradient).
+    {
+        let cap = crate::ai::reward::SHAPE_PROX_CAP as f32;
+        let villages: Vec<(i32, i32)> = state
+            .structures
+            .iter()
+            .filter_map(|(&idx, s)| {
+                let s = s.as_ref()?;
+                if s.structure_type != StructureType::Village {
+                    return None;
+                }
+                let tile = state.tiles.get(&idx)?;
+                if tile.owner != 0 || !tile.explorers.contains(&perspective) {
+                    return None;
+                }
+                Some((idx / map_size as i32, idx % map_size as i32)) // (row, col)
+            })
+            .collect();
+        if !villages.is_empty() {
+            for y in 0..MAP_SIZE {
+                for x in 0..MAP_SIZE {
+                    let d = villages
+                        .iter()
+                        .map(|&(vr, vc)| (y as i32 - vr).abs().max((x as i32 - vc).abs()))
+                        .min()
+                        .unwrap();
+                    let prox = (cap - d as f32).max(0.0) / cap;
+                    if prox > 0.0 {
+                        set_feat(&mut data, CH_PURSUIT_START, x, y, prox);
+                    }
+                }
+            }
+        }
+    }
+
     // Extract player state vector (10 features)
     let player_vec = vec![
         turn_norm,
@@ -861,6 +907,7 @@ mod tests {
         assert!(CH_UNIT_STATS_END <= CH_CITY_STATS_START);
         assert!(CH_CITY_STATS_END <= CH_GLOBAL_START);
         assert!(CH_GLOBAL_END <= CH_GHOST_START);
+        assert!(CH_GHOST_END <= CH_PURSUIT_START);
     }
 
     #[test]
@@ -906,9 +953,10 @@ mod tests {
                 + CH_CITY_STATS_COUNT
                 + CH_GLOBAL_COUNT
                 + CH_GHOST_COUNT
+                + CH_PURSUIT_COUNT
         );
         // Pinned: the trained model's conv1 input width. Bump deliberately
         // (with a weight migration) when adding channels.
-        assert_eq!(NUM_CHANNELS, 161);
+        assert_eq!(NUM_CHANNELS, 162);
     }
 }

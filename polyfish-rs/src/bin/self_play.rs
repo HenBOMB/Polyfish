@@ -550,6 +550,9 @@ struct HistoryStep {
     enemy_units: Vec<f32>,
     my_spt: i32,
     opp_spt: i32,
+    /// Pursuit proximity to the nearest capturable village at decision time,
+    /// POV-relative, normalized to [0,1] — the aux_pursuit target.
+    pursuit: f32,
 }
 
 /// The subset of `HistoryStep` the TD(lambda) label computation needs —
@@ -1627,6 +1630,9 @@ fn play_single_game(
                 enemy_units: enemy_unit_grid(&game.state, pov, features::MAP_SIZE * features::MAP_SIZE),
                 my_spt: spt_of(pov),
                 opp_spt: spt_of(opp_id),
+                pursuit: reward::pursuit_potential(&game.state, pov)
+                    / reward::SHAPE_PURSUIT_PER_TILE
+                    / reward::SHAPE_PROX_CAP as f32,
             });
             if progress == ProgressMode::Full && move_count > 0 && move_count % 10 == 0 {
                 eprintln!(
@@ -2638,6 +2644,7 @@ fn main() -> anyhow::Result<()> {
     let mut collected_aux_fog: Vec<Vec<f32>> = Vec::new();
     let mut collected_aux_spt: Vec<f32> = Vec::new(); // flat, 2 per step
     let mut collected_aux_tech: Vec<Vec<f32>> = Vec::new();
+    let mut collected_aux_pursuit: Vec<f32> = Vec::new(); // scalar per step
 
     let mut total_score = 0;
     let mut max_score = 0;
@@ -2841,6 +2848,7 @@ fn main() -> anyhow::Result<()> {
                 player_id: p_id,
                 turn,
                 enemy_units,
+                pursuit,
                 ..
             } = step;
             let flat_map = features
@@ -2945,6 +2953,7 @@ fn main() -> anyhow::Result<()> {
             );
             collected_aux_spt.push(spt_my as f32 / 20.0);
             collected_aux_spt.push(spt_opp as f32 / 20.0);
+            collected_aux_pursuit.push(pursuit);
             collected_aux_tech.push(
                 result
                     .final_tech
@@ -3087,6 +3096,8 @@ fn main() -> anyhow::Result<()> {
             &device,
         )?;
         let aux_spt_tensor = Tensor::from_vec(collected_aux_spt, (total_steps, 2), &device)?;
+        let aux_pursuit_tensor =
+            Tensor::from_vec(collected_aux_pursuit, (total_steps, 1), &device)?;
         let aux_tech_tensor = Tensor::from_vec(
             flatten_vec(collected_aux_tech),
             (total_steps, num_techs),
@@ -3109,6 +3120,7 @@ fn main() -> anyhow::Result<()> {
         tensors.insert("aux_fog_units".to_string(), aux_fog_tensor);
         tensors.insert("aux_spt".to_string(), aux_spt_tensor);
         tensors.insert("aux_opp_tech".to_string(), aux_tech_tensor);
+        tensors.insert("aux_pursuit".to_string(), aux_pursuit_tensor);
 
         candle_core::safetensors::save(&tensors, &games_file)?;
 

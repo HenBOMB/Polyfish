@@ -51,12 +51,13 @@ AUGMENT_D4 = os.environ.get("AUGMENT_D4", "0") == "1"
 # opponent tech). Rust inference loads model.safetensors by name and never
 # reads these. Targets ship in games files from Jul 2026; files without them
 # (old archives, teachers) are masked out per sample, never zero-filled.
-AUX_DIMS = {'aux_ownership': 121, 'aux_fog_units': 121, 'aux_spt': 2, 'aux_opp_tech': 42}
+AUX_DIMS = {'aux_ownership': 121, 'aux_fog_units': 121, 'aux_spt': 2, 'aux_opp_tech': 42, 'aux_pursuit': 1}
 AUX_WEIGHTS = {
     'aux_ownership': float(os.environ.get("AUX_OWN_W", "0.3")),
     'aux_fog_units': float(os.environ.get("AUX_FOG_W", "0.2")),
     'aux_spt': float(os.environ.get("AUX_SPT_W", "0.1")),
     'aux_opp_tech': float(os.environ.get("AUX_TECH_W", "0.1")),
+    'aux_pursuit': float(os.environ.get("AUX_PURSUIT_W", "0.1")),
 }
 # EXP_ELO_013: persistent KL-anchor to a frozen reference policy (AlphaStar-
 # style — pulls the live policy toward a known-good checkpoint throughout RL,
@@ -170,8 +171,10 @@ class PolyZeroNet(nn.Module):
         self.pi_target = nn.Conv2d(self.filters, 1, 1)
         
         # --- Value Heads ---
-        self.v_pool_conv = nn.Conv2d(self.filters, 1, 1)
-        self.v_fc_shared = nn.Linear(1 * map_height * map_width, self.filters)
+        # v_pool_conv widened 1->8 channels (Jul 2026): removes the 1-channel
+        # value bottleneck. v_fc_shared in_features track it (8 * H * W).
+        self.v_pool_conv = nn.Conv2d(self.filters, 8, 1)
+        self.v_fc_shared = nn.Linear(8 * map_height * map_width, self.filters)
         self.v_win = nn.Linear(self.filters, 1)
         self.v_progress = nn.Linear(self.filters, 1)
 
@@ -183,6 +186,7 @@ class PolyZeroNet(nn.Module):
         self.aux_fog = nn.Conv2d(self.filters, 1, 1)
         self.aux_spt = nn.Linear(self.filters, 2)
         self.aux_opp_tech = nn.Linear(self.filters, 42)
+        self.aux_pursuit = nn.Linear(self.filters, 1)
 
     def forward(self, spatial_map, player_state):
         batch_size = spatial_map.size(0)
@@ -218,6 +222,7 @@ class PolyZeroNet(nn.Module):
         gap = x.mean(dim=[2, 3])
         aux['aux_spt'] = self.aux_spt(gap)
         aux['aux_opp_tech'] = self.aux_opp_tech(gap)
+        aux['aux_pursuit'] = self.aux_pursuit(gap)
 
         # --- Value Heads ---
         v_input = x.detach() if DETACH_VALUE_TRUNK else x
@@ -304,6 +309,7 @@ def compute_loss(policy_pred, values_pred, policy_targets, value_target,
             'aux_fog_units': lambda p, t: bce(p, t, reduction='none').mean(dim=1),
             'aux_spt': lambda p, t: ((p - t) ** 2).mean(dim=1),
             'aux_opp_tech': lambda p, t: bce(p, t, reduction='none').mean(dim=1),
+            'aux_pursuit': lambda p, t: ((p - t) ** 2).mean(dim=1),
         }
         denom = aux_mask.sum().clamp(min=1.0)
         for k, fn in per_sample.items():
@@ -366,7 +372,7 @@ def train():
     
     # 2. Init Model
     MAP_SIZE = 11
-    SPATIAL_CHANNELS = 161  # mirror of features.rs NUM_CHANNELS (incl. observation memory)
+    SPATIAL_CHANNELS = 162  # mirror of features.rs NUM_CHANNELS (incl. observation memory + pursuit)
     PLAYER_STATE_DIM = 10
 
     model = PolyZeroNet(SPATIAL_CHANNELS, PLAYER_STATE_DIM, MAP_SIZE, MAP_SIZE).to(DEVICE)
@@ -447,7 +453,6 @@ def train():
     CHUNK_SIZE = int(os.environ.get("TRAIN_CHUNK_FILES", "10"))
     num_chunks = (len(game_files) + CHUNK_SIZE - 1) // CHUNK_SIZE
     expected_flat = SPATIAL_CHANNELS * MAP_SIZE * MAP_SIZE
-    legacy_flat = 154 * MAP_SIZE * MAP_SIZE  # pre-observation-memory layout
 
     cached_chunks = []
 
@@ -473,14 +478,16 @@ def train():
                 data = load_file(f)
                 sp = data["spatial_maps"]
                 if sp.shape[1] != expected_flat:
-                    # Channels were appended at the end of the layout, so old
-                    # files are index-stable: zero-pad the missing planes.
-                    if sp.shape[1] == legacy_flat:
-                        sp = torch.nn.functional.pad(sp, (0, expected_flat - legacy_flat))
+                    # Channels are only ever appended at the end of the layout,
+                    # so any narrower file is index-stable: zero-pad the missing
+                    # trailing planes (covers 154 pre-obs-memory, 161 pre-pursuit,
+                    # and any future append). Wider-than-expected is a real bug.
+                    if sp.shape[1] < expected_flat and sp.shape[1] % (MAP_SIZE * MAP_SIZE) == 0:
+                        sp = torch.nn.functional.pad(sp, (0, expected_flat - sp.shape[1]))
                     else:
                         raise ValueError(
-                            f"{f}: spatial width {sp.shape[1]} matches neither "
-                            f"current ({expected_flat}) nor legacy ({legacy_flat}) layout"
+                            f"{f}: spatial width {sp.shape[1]} is not a zero-pad of "
+                            f"the current layout ({expected_flat}) — channels only append"
                         )
                 # Halved to fp16 in RAM — this is the dominant tensor (e.g.
                 # ~29GB at fp32 for a 13-file/380K-sample buffer) and now
@@ -818,6 +825,7 @@ def train():
                 "aux_fog_loss": round(final_aux['aux_fog_units'], 4),
                 "aux_spt_loss": round(final_aux['aux_spt'], 4),
                 "aux_tech_loss": round(final_aux['aux_opp_tech'], 4),
+                "aux_pursuit_loss": round(final_aux['aux_pursuit'], 4),
                 "kl_ref_loss": round(final_kl, 4),
             },
             f,

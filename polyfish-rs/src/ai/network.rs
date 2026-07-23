@@ -225,10 +225,11 @@ impl PolyZeroNet {
         let pi_target = conv(filters, 1, 1, 1, 0, vs.pp("pi_target"))?;
         let pi_option = candle_nn::linear(filters, num_options, vs.pp("pi_option"))?;
 
-        // Value processing
-        let v_pool_conv = conv(filters, 1, 1, 1, 0, vs.pp("v_pool_conv"))?;
+        // Value processing. v_pool_conv widened 1->8 channels (Jul 2026) to
+        // remove the 1-channel value bottleneck; v_fc_shared in-features track it.
+        let v_pool_conv = conv(filters, 8, 1, 1, 0, vs.pp("v_pool_conv"))?;
         let v_fc_shared = candle_nn::linear(
-            1 * crate::ai::features::MAP_SIZE * crate::ai::features::MAP_SIZE,
+            8 * crate::ai::features::MAP_SIZE * crate::ai::features::MAP_SIZE,
             filters,
             vs.pp("v_fc_shared"),
         )?;
