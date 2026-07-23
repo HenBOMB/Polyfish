@@ -116,7 +116,7 @@ async function jumpToStep(index) {
             body: JSON.stringify({
                 filename: REPLAY_DATA.filename || extractFilename(), // We need to ensure we have the filename
                 step_index: index,
-                iterations: 100 // Default quick analysis
+                iterations: 8 // Light MCTS overlay so stepping stays responsive (100 = ~6s/step on candle-CPU)
             })
         });
         const data = await res.json();

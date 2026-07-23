@@ -207,8 +207,10 @@ async fn main() {
         .with_state(shared_state);
 
     // Run our app
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    println!("Listening on http://localhost:3000");
+    let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
+    let addr = format!("0.0.0.0:{}", port);
+    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+    println!("Listening on http://localhost:{}", port);
     axum::serve(listener, app).await.unwrap();
 }
 
@@ -1434,6 +1436,49 @@ async fn save_replay_local_endpoint(
     }
 }
 
+/// Flatten a `{turns: [{turn, players:[{playerId, commands:[...]}]}]}` recording
+/// into a single play-ordered move list (turn order, then playerId order) —
+/// mirrors flattenTurns() in the frontend and the historical play order.
+fn flatten_turns(turns: &serde_json::Value) -> Vec<serde_json::Value> {
+    let mut moves = Vec::new();
+    if let Some(arr) = turns.as_array() {
+        for turn in arr {
+            let mut players: Vec<&serde_json::Value> = turn
+                .get("players")
+                .and_then(|p| p.as_array())
+                .map(|a| a.iter().collect())
+                .unwrap_or_default();
+            players.sort_by_key(|p| p.get("playerId").and_then(|v| v.as_i64()).unwrap_or(0));
+            for pl in players {
+                if let Some(cmds) = pl.get("commands").and_then(|c| c.as_array()) {
+                    moves.extend(cmds.iter().cloned());
+                }
+            }
+        }
+    }
+    moves
+}
+
+/// Parse a replay file into (state, play-ordered move history). Accepts
+/// `{gameState, turns}` self-play/mod recordings (gameState = the exact initial
+/// map, moves live in `turns`) and bare GameState saves (moves in `history`).
+fn parse_replay_playback(
+    json: &str,
+) -> Result<(polyfish::states::GameState, Vec<serde_json::Value>), String> {
+    let val: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    if val.get("gameState").map(|g| g.is_object()).unwrap_or(false) {
+        let state: polyfish::states::GameState =
+            serde_json::from_value(val["gameState"].clone()).map_err(|e| e.to_string())?;
+        let history = flatten_turns(&val["turns"]);
+        Ok((state, history))
+    } else {
+        let state: polyfish::states::GameState =
+            serde_json::from_value(val).map_err(|e| e.to_string())?;
+        let history = state._history.clone();
+        Ok((state, history))
+    }
+}
+
 #[derive(serde::Deserialize)]
 struct LoadReplayParams {
     filename: String,
@@ -1463,8 +1508,9 @@ async fn load_replay_endpoint(
     };
 
     match std::fs::read_to_string(&path) {
-        Ok(json) => match serde_json::from_str::<polyfish::states::GameState>(&json) {
-            Ok(loaded_state) => {
+        Ok(json) => match parse_replay_playback(&json) {
+            Ok((mut loaded_state, history)) => {
+                loaded_state._history = history;
                 game.state = loaded_state;
                 game.post_load();
 
@@ -1694,60 +1740,65 @@ async fn analyze_replay_step(
         format!("replays/{}", params.filename)
     };
 
-    let replay_state: polyfish::states::GameState = match std::fs::read_to_string(&path) {
-        Ok(json) => serde_json::from_str(&json).unwrap_or_default(),
-        Err(e) => {
-            return Json(serde_json::json!({ "error": format!("Failed to load replay: {}", e) }));
-        }
-    };
+    let (replay_state, history): (polyfish::states::GameState, Vec<serde_json::Value>) =
+        match std::fs::read_to_string(&path) {
+            Ok(json) => match parse_replay_playback(&json) {
+                Ok(x) => x,
+                Err(e) => {
+                    return Json(
+                        serde_json::json!({ "error": format!("Failed to parse replay: {}", e) }),
+                    );
+                }
+            },
+            Err(e) => {
+                return Json(serde_json::json!({ "error": format!("Failed to load replay: {}", e) }));
+            }
+        };
 
-    if replay_state._history.len() <= params.step_index {
+    if history.len() <= params.step_index {
         return Json(serde_json::json!({ "error": "Step index out of bounds" }));
     }
 
-    // 2. Initialize a FRESH game with the SAME seed
-    let mut map_settings = MapGenSettings::default();
-    map_settings.size = match replay_state.settings.size {
-        11 => polyfish::types::MapSize::Tiny,
-        13 => polyfish::types::MapSize::Small,
-        16 => polyfish::types::MapSize::Normal,
-        24 => polyfish::types::MapSize::Large,
-        32 => polyfish::types::MapSize::Huge,
-        90 => polyfish::types::MapSize::Massive,
-        _ => polyfish::types::MapSize::Normal,
-    };
-    map_settings.seed = replay_state.initial_seed;
-    map_settings.map_type = replay_state.settings.map_type;
-
-    // Need to extract tribes from replay settings or state?
-    // GameSettings doesn't store the tribe list directly as TribeType enum vec, but state.tribes does
-    // Extract unique tribe types from replay_state.tribes
-    let mut tribes = Vec::new();
-    // Sort by ID to ensure consistent order if that matters
-    let mut sorted_tribes: Vec<_> = replay_state.tribes.values().collect();
-    sorted_tribes.sort_by_key(|t| t.id);
-    for t in sorted_tribes {
-        tribes.push(t.tribe_type);
-    }
-    map_settings.tribes = tribes;
-
-    let initial_state = generate(map_settings);
+    // 2. Start from the recording's OWN initial map when it carries one (turn 0):
+    //    self-play/mod recordings store the exact starting board, so replaying the
+    //    moves onto it is byte-exact — no seed-regeneration resource mismatch. Only
+    //    fall back to regenerating from the seed for legacy mid-game saves (turn > 0).
     let mut game = Game::new();
-    game.state = initial_state;
-    // Restore initial seed again just in case generate() didn't set it (it should have used it)
-    game.state.initial_seed = replay_state.initial_seed;
-    game.post_load();
+    if replay_state.settings.turn == 0 {
+        game.state = replay_state.clone();
+        game.post_load();
+    } else {
+        let mut map_settings = MapGenSettings::default();
+        map_settings.size = match replay_state.settings.size {
+            11 => polyfish::types::MapSize::Tiny,
+            13 => polyfish::types::MapSize::Small,
+            16 => polyfish::types::MapSize::Normal,
+            24 => polyfish::types::MapSize::Large,
+            32 => polyfish::types::MapSize::Huge,
+            90 => polyfish::types::MapSize::Massive,
+            _ => polyfish::types::MapSize::Normal,
+        };
+        map_settings.seed = replay_state.initial_seed;
+        map_settings.map_type = replay_state.settings.map_type;
+        let mut sorted_tribes: Vec<_> = replay_state.tribes.values().collect();
+        sorted_tribes.sort_by_key(|t| t.id);
+        map_settings.tribes = sorted_tribes.iter().map(|t| t.tribe_type).collect();
+        let initial_state = generate(map_settings);
+        game.state = initial_state;
+        game.state.initial_seed = replay_state.initial_seed;
+        game.post_load();
+    }
 
     // 3. Replay moves up to step_index (exclusive? or inclusive? let's say we want to analyze the state BEFORE turn step_index is played)
     // Wait, if we want to compare "User Move vs AI Move", we need the state *before* the user made the move at step_index.
     // So we replay moves 0 to step_index - 1.
 
     for i in 0..params.step_index {
-        if i >= replay_state._history.len() {
+        if i >= history.len() {
             break;
         }
 
-        let move_json = &replay_state._history[i];
+        let move_json = &history[i];
 
         // We need to parse this JSON back into a Box<dyn Move>
         // Use a matching logic similar to manual_step... logic duplication is confusing.
@@ -1792,7 +1843,7 @@ async fn analyze_replay_step(
         .unwrap_or("None".to_string());
 
     // User's actual move
-    let user_move_json = &replay_state._history[params.step_index];
+    let user_move_json = &history[params.step_index];
     // Find desc for user move
     let legal = game.legal_moves();
     let mut user_move_desc = "Unknown Move".to_string();

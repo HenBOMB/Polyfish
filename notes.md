@@ -1175,3 +1175,117 @@ ordering, and points the fix at either (a) the prior / visit allocation
 (search-side: force the toward move a fair visit count so its Q is a real
 estimate, not imputed), or (b) breaking the mirror-play label symmetry so the
 value head has a non-flat signal to learn expansion urgency from.
+
+---
+
+## 2026-07-22 — CPU vs GPU NN eval speed (per-call latency), for horizontal-scale planning
+
+Measured to settle the "is a single CPU NN eval ~100ms?" question. **It is not.**
+The ~94-100ms figure in our old docs was candle **Metal** at batch-128 (the broken
+backend), NOT CPU, and NOT per-call. Real numbers below.
+
+Bench: `examples/bench_forward.rs` (BENCH_DEVICE=cpu|metal, zero-init weights so
+timing is weight-independent), M3 Max, `--features metal,accelerate`, profiling
+build. PolyZeroNet at its real shape (161ch, 11x11, 64 filters). Full forward +
+CPU readback per call, steady-state after warmup.
+
+| backend | batch | per-call | rows/s |
+|---|---|---|---|
+| candle CPU (Accelerate BLAS) | 1   | **2.65 ms** | 377 |
+| candle CPU (Accelerate BLAS) | 8   | 6.94 ms | 1,152 |
+| candle CPU (Accelerate BLAS) | 32  | 18.3 ms | 1,747 |
+| candle CPU (Accelerate BLAS) | 128 | 58.4 ms | 2,192 |
+| candle Metal (broken backend, ref) | 1   | 3.78 ms | 265 |
+| candle Metal (broken backend, ref) | 128 | 76.6 ms | 1,671 |
+
+Reproduce: `BENCH_DEVICE=cpu ./bench_forward <batch> <iters>` (build with
+`--features metal,accelerate`).
+
+Takeaways:
+- **A single NN eval on CPU is ~2.65 ms, not ~100 ms.** CPU eval is perfectly
+  viable for self-play; the "100ms" mental model was wrong by ~40x.
+- **candle CPU (Accelerate) BEATS candle Metal** at every batch (58 vs 77ms @128).
+  Confirms candle-Metal is broken (see [[candle-metal-19x-slower]]); on candle
+  specifically, CPU > Metal.
+- The real hierarchy: **MPSGraph/PyTorch-MPS (~5ms/128 = ~26-40K rows/s) >> candle
+  CPU (~58ms/128 = ~2.2K rows/s) > candle Metal (~77ms/128 = ~1.7K rows/s).** A
+  *good* GPU path is ~12-18x candle-CPU throughput; a good GPU is the eval win,
+  but a CPU is only ~12-18x slower in THROUGHPUT, not 40x in latency.
+- CPU rows/s barely scales with batch (377 -> 2192 for 1 -> 128): no GPU-style
+  massive parallelism, and Accelerate is already multi-threaded so concurrent
+  eval processes contend for cores.
+
+Architecture implication (horizontal scale): eval must stay LOCAL to each rented
+box (round-trip = us), NOT streamed to the laptop GPU over the internet
+(round-trip = 10-100ms on the latency-critical MCTS blocking path -> fatal; also
+one laptop GPU caps the whole fleet, and features are 78KB/leaf). Choice per box:
+cheap CPU-only box (local candle-CPU eval, ~2.2K rows/s/process, run several) vs
+GPU box (local candle-cuda — VERIFY it's cuDNN/cuBLAS-fast, not candle-Metal-broken).
+Decide on $/move by reading self_play METRICS moves/s on each box type.
+
+Caveats: profiling build (release-lto slightly faster); M3 Max CPU + Accelerate is
+a Mac proxy — a Linux rental (EPYC + MKL or default gemm) will differ; measure on
+the actual box before committing.
+
+### Budget-independent throughput metric (moves/s is NOT it)
+
+moves/s depends on the MCTS budget, so it's the wrong unit for capacity planning
+when the budget may change. The budget-INDEPENDENT unit is **NN evals/s** (rows/s;
+self_play/actor_ceiling report it as `Leaves/s`). Demonstrated (actor_ceiling,
+dummy eval, 8 actors, post-batch-1, profiling build):
+
+| mcts_iters | moves/s | Leaves/s (engine) | leaves/move |
+|---|---|---|---|
+| 32  | 4782 | 128,910 | 26.96 |
+| 64  | 2287 | 124,315 | 54.36 |
+| 128 | 948  | 104,848 | 110.56 |
+| 256 | 330  | 73,031  | 221.03 |
+
+- **moves/s ~ 1/budget** (8x budget -> ~14x fewer moves). Bad planning unit.
+- **leaves/move ≈ 0.85 × mcts_iters** (clean; the 0.85 is the ~15% eval-cache hit).
+- Identity: `moves/s = Leaves/s ÷ leaves/move`.
+- `Leaves/s` (ENGINE descent rate, dummy eval) is budget-ROBUST but not invariant:
+  it drifts 129K->73K (32->256 iters) because deeper trees cost more per descent.
+- **The truly budget-invariant number is the EVAL rows/s** from bench_forward
+  (fixed per-forward cost): candle-CPU ~2,200, good-GPU ~30K. And EVAL is the
+  binding constraint, not the engine: engine can do ~124K leaves/s but a single
+  candle-CPU eval process only ~2,200 rows/s. Real GPU self_play at 64 iters =
+  ~578 moves/s = 31K rows/s ÷ 54 leaves/move ✓ (eval-bound, matches MPSGraph).
+
+**Capacity-planning formula (use this for the fleet):**
+`fleet moves/s = (total eval rows/s across all boxes) ÷ (0.85 × mcts_iters)`.
+So boosting the MCTS budget 4× needs 4× the eval capacity (rows/s) to hold the
+same game-generation rate. Plan the fleet in **rows/s**, convert to moves/s only
+after fixing a budget.
+
+### CORRECTION/refinement: eval/s IS budget-invariant (backpressure); the drift was a dummy-eval artifact
+
+The `Leaves/s` drift table above was measured with a FREE dummy eval, so it
+measured the **engine descent rate** (which drops as trees deepen), NOT eval
+throughput. With a REAL (finite) NN, backpressure pins eval/s at the NN's
+capacity: the tree can only yield evals as fast as the NN accepts them, so
+**eval/s = NN rows/s = constant regardless of MCTS budget.** Empirical (rate-
+limited sim eval, 3ms/batch × 2 lanes): moves/s 146→47 from iters 64→256 (falls
+~3×) while eval/s stayed ~8-10K (~flat). So:
+
+- **eval/s (= NN rows/s, from bench_forward: 2,192 CPU / 30K GPU) is the stable,
+  budget-invariant capacity.** Plan with it. bench_forward has no budget knob —
+  that's the tell.
+- **node-visits/s (descents/s) is the ENGINE's invariant** (factors out depth,
+  which is why Leaves/s drifted). It only BINDS at extreme budgets where trees
+  get so deep the engine can't feed the NN (engine descent rate < NN rows/s);
+  there the NN idles and eval/s falls below capacity.
+- Crossover: at 64 iters engine ~124K leaves/s vs GPU ~30K rows/s → eval binds,
+  4× headroom; by 256 iters headroom ~2.4×; ~thousands of iters → engine-bound.
+
+**Full model:** `moves/s = min( eval_rows_s / (0.85·iters),  node_visits_s / visits_per_move )`.
+Normal budgets → NN-bound (plan in eval/s = rows/s). Extreme budgets → engine-
+bound (plan in node-visits/s).
+
+### moves-per-game (for games/hr and $/game conversion)
+From `training_log.csv` col 58 `avg_moves` (897 logged iters): **range 91-632,
+mean ~457**. Curriculum-driven via `max_turns`: **~118** at the current short
+(~15-20 turn) curriculum, **~450-630** for full 30-turn games. Use ~450 for
+full-length-game cost planning, ~118 for the current curriculum. It's a ~4x lever
+on games/hr and $/game, so pick the one matching the phase you're scaling.
+Reproduce: `awk -F, 'NR>1&&$58>0{...}' training_log.csv`, or read METRICS avg_moves.

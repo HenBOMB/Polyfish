@@ -17,7 +17,13 @@ fn main() -> anyhow::Result<()> {
     let batch: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(128);
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(60);
 
-    let device = Device::metal_if_available(0).unwrap_or(Device::Cpu);
+    // BENCH_DEVICE=cpu forces the CPU backend (Accelerate BLAS when built with
+    // --features accelerate); =metal forces Metal; unset auto-selects Metal.
+    let device = match std::env::var("BENCH_DEVICE").as_deref() {
+        Ok("cpu") => Device::Cpu,
+        Ok("metal") => Device::new_metal(0)?,
+        _ => Device::metal_if_available(0).unwrap_or(Device::Cpu),
+    };
     println!(
         "device={:?} batch={} iters={} compute_per_buffer={:?}",
         device,
