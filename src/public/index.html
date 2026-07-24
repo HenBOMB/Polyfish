@@ -250,10 +250,19 @@
                 Step: <span id="replay-step-val">0 / 0</span>
             </div>
             <div class="replay-nav">
-                <button class="rts-btn mini" onclick="jumpToStep(0)">⏮</button>
+                <button class="rts-btn mini" onclick="replayFirst()">⏮</button>
                 <button class="rts-btn mini" onclick="prevReplayStep()">◀ Prev</button>
+                <button id="replay-play-btn" class="rts-btn mini" onclick="toggleReplayPlay()">▶ Play</button>
                 <button class="rts-btn mini" onclick="nextReplayStep()">Next ▶</button>
-                <button class="rts-btn mini" onclick="jumpToStep(REPLAY_HISTORY.length)">⏭</button>
+                <button class="rts-btn mini" onclick="replayLast()">⏭</button>
+            </div>
+            <div class="replay-speed-row">
+                <label for="replay-speed">Autoplay speed</label>
+                <select id="replay-speed" onchange="setReplaySpeed(this.value)">
+                    <option value="800">Fast · 0.8s</option>
+                    <option value="1500" selected>Normal · 1.5s</option>
+                    <option value="2500">Slow · 2.5s</option>
+                </select>
             </div>
             <div class="replay-analysis">
                 <div class="analysis-box user">
@@ -265,6 +274,7 @@
                     <div id="replay-ai-move" class="value">...</div>
                 </div>
             </div>
+            <div id="replay-error" class="replay-error hidden"></div>
         </div>
     </div>
     <!-- Initial State Selection Modal -->

@@ -17,6 +17,17 @@ pub const C_SCALE: f32 = 0.1;
 /// Small epsilon for numerical guards.
 pub const EPSILON: f32 = 1e-8;
 
+/// Floor on the completed-Q spread used as the σ rescale denominator
+/// (`max(max−min, Q_SPREAD_FLOOR)`). Below this spread the value head's Q
+/// differences across siblings are noise (wander probe: sibling gaps ~0.03–0.06,
+/// median spread ~0.17), and plain min-max would stretch that noise across the
+/// full [0,1] range and let σ override a healthy policy prior. Flooring the
+/// denominator compresses sub-floor spreads toward 0 so the prior arbitrates;
+/// at spreads ≥ the floor it reduces to exact mctx min-max. Sized from the
+/// wander diagnostic — retune via the wander (should recover) / pursuit (must
+/// not regress) probes.
+pub const Q_SPREAD_FLOOR: f32 = 0.4;
+
 /// `v_mix` at a node: the imputed value used as the Q of unvisited children.
 ///
 /// `raw_value` is this node's own NN value prediction (from this node's
@@ -97,17 +108,21 @@ pub fn sigma_completed_q(
 ) -> Vec<f32> {
     let v_mix = compute_v_mix(raw_value, child_priors, child_qvalues, child_visit_counts);
     // Single buffer, transformed in place (completed-Q -> rescale -> sigma) to
-    // avoid the two extra per-node Vec allocations. Arithmetic is bit-identical
-    // to the rescale_min_max/sigma helpers below (kept for external callers/tests).
+    // avoid the two extra per-node Vec allocations. NB: the rescale here floors
+    // the denominator at Q_SPREAD_FLOOR, so it deliberately DIVERGES from the
+    // plain `rescale_min_max` helper below (kept unfloored for external
+    // callers/tests); `sigma` still matches.
     let mut buf = compute_completed_qvalues(child_qvalues, child_visit_counts, v_mix);
     if rescale {
         let min = buf.iter().copied().fold(f32::INFINITY, f32::min);
         let max = buf.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-        if (max - min).abs() < EPSILON {
-            buf.iter_mut().for_each(|v| *v = 0.0);
-        } else {
-            buf.iter_mut().for_each(|v| *v = (*v - min) / (max - min));
-        }
+        // Floor the denominator so a sub-noise Q spread (< Q_SPREAD_FLOOR) is
+        // compressed toward 0 instead of stretched across [0,1] — stops σ from
+        // amplifying value-head noise into a confident override of the prior.
+        // At spreads ≥ the floor this is exact min-max (mctx). max==min gives a
+        // 0 numerator -> all-zero, so no separate degenerate branch is needed.
+        let range = (max - min).max(Q_SPREAD_FLOOR);
+        buf.iter_mut().for_each(|v| *v = (*v - min) / range);
     }
     let max_visits = child_visit_counts.iter().copied().fold(0.0f32, f32::max);
     let scale = (C_VISIT + max_visits) * C_SCALE;
@@ -252,6 +267,27 @@ mod tests {
         assert_eq!(s.len(), 1);
         // After rescale, single value -> 0.0 -> sigma = scale*0 = 0.
         assert!(approx(s[0], 0.0), "got {}", s[0]);
+    }
+
+    #[test]
+    fn sigma_floor_damps_sub_noise_spread() {
+        // Two visited children, Q gap 0.03 << Q_SPREAD_FLOOR (0.4): the floored
+        // denominator compresses it, so σ stays small and the prior arbitrates.
+        // rescaled = (v-min)/max(0.03, 0.4) = [0, 0.075]; scale = (50+1)*0.1 = 5.1.
+        let s = sigma_completed_q(0.0, &[0.5, 0.5], &[0.50, 0.53], &[1.0, 1.0], true);
+        let swing = s[1] - s[0];
+        assert!(swing < 0.5, "sub-noise spread should give a small σ swing, got {swing}");
+        // Sanity: with plain (unfloored) min-max the same gap would swing the full 5.1.
+        assert!((swing - 0.3825).abs() < 1e-3, "got {swing}");
+    }
+
+    #[test]
+    fn sigma_floor_inactive_on_real_spread() {
+        // Q spread 1.0 > floor: reduces to exact mctx min-max, full σ swing.
+        // rescaled = [0, 1]; scale = (50+1)*0.1 = 5.1.
+        let s = sigma_completed_q(0.0, &[0.5, 0.5], &[0.0, 1.0], &[1.0, 1.0], true);
+        let swing = s[1] - s[0];
+        assert!((swing - 5.1).abs() < 1e-3, "real spread should behave like mctx, got {swing}");
     }
 
     #[test]

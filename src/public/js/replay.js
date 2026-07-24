@@ -12,6 +12,13 @@ let REPLAY_INITIAL_STATE = null; // Snapshot of turn 0
 let REPLAY_CURRENT_GAME_STATE = null;
 let REPLAY_REQUEST_SEQ = 0; // guards against out-of-order /replay/analyze responses
 
+// Autoplay: a self-pacing loop that advances one step, waits, repeats. Manual
+// navigation pauses it. REPLAY_PLAY_TOKEN invalidates an in-flight loop so a
+// pause/seek can't be overtaken by a stale iteration still awaiting its fetch.
+let REPLAY_PLAYING = false;
+let REPLAY_PLAY_TOKEN = 0;
+let REPLAY_INTERVAL_MS = 1500;
+
 async function openReplayMenu() {
     // For now, just prompt for a filename or list them
     // Ideally we'd have a modal. Let's use a simple prompt for MVP.
@@ -82,13 +89,29 @@ function enterReplayMode(data) {
     // Initialize UI
     document.getElementById('app-container').classList.add('replay-mode');
     document.getElementById('replay-controls').classList.remove('hidden');
+    updatePlayButton();
 
-    // Start at the end? Or beginning?
-    // Let's start at the beginning (Step 0)
+    // Show the starting board IMMEDIATELY from the /replay/load payload (which
+    // already carries the full initial state) instead of blocking on the step-0
+    // /replay/analyze round-trip. That analyze call runs the network for the AI
+    // overlay, and the first eval after startup can be slow (Metal kernel
+    // warmup); decoupling the board render makes load feel instant.
+    if (data.state) {
+        REPLAY_STEP_INDEX = 0;
+        updateReplayControls();
+        try {
+            applyReplayState(data.state, null);
+        } catch (e) {
+            reportReplayError('initial-render', e.message || String(e), e);
+        }
+    }
+
+    // Then fetch step 0 to populate the AI-suggestion overlay.
     jumpToStep(0);
 }
 
 function exitReplayMode() {
+    stopReplayPlayback();
     REPLAY_MODE = false;
     document.getElementById('app-container').classList.remove('replay-mode');
     document.getElementById('replay-controls').classList.add('hidden');
@@ -96,9 +119,38 @@ function exitReplayMode() {
     location.reload();
 }
 
+// Surface replay failures durably: browser console (with a [replay] prefix so
+// they are greppable) AND a persistent panel in the replay controls, so a
+// failed step is diagnosable without leaving the step counter silently
+// climbing over a frozen map.
+function reportReplayError(context, message, extra) {
+    const filename = (REPLAY_DATA && REPLAY_DATA.filename) || extractFilename() || '?';
+    console.error(`[replay] step ${REPLAY_STEP_INDEX} (${filename}) — ${context}: ${message}`, extra || '');
+    const el = document.getElementById('replay-error');
+    if (el) {
+        el.textContent = `⚠️ Step ${REPLAY_STEP_INDEX} ${context}:\n${message}`;
+        el.classList.remove('hidden');
+    }
+    showToast(`Replay ${context} error (see panel/console)`);
+}
+
+function clearReplayError() {
+    const el = document.getElementById('replay-error');
+    if (el) {
+        el.textContent = '';
+        el.classList.add('hidden');
+    }
+}
+
+// Returns true if the step rendered, false on any error (so autoplay can pause
+// on failure) or if the request was superseded by a newer one.
 async function jumpToStep(index) {
     if (index < 0) index = 0;
-    if (index > REPLAY_HISTORY.length) index = REPLAY_HISTORY.length;
+    // The analyze endpoint replays moves 0..index and reports the state BEFORE
+    // history[index], so the last reachable step is length-1 (index == length
+    // is rejected as out-of-bounds server-side).
+    const maxIndex = Math.max(0, REPLAY_HISTORY.length - 1);
+    if (index > maxIndex) index = maxIndex;
 
     REPLAY_STEP_INDEX = index;
     updateReplayControls();
@@ -109,8 +161,9 @@ async function jumpToStep(index) {
     // apply the response if this is still the most recent request in flight.
     const requestSeq = ++REPLAY_REQUEST_SEQ;
 
+    let res, data;
     try {
-        const res = await fetch('/replay/analyze', {
+        res = await fetch('/replay/analyze', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -119,58 +172,148 @@ async function jumpToStep(index) {
                 iterations: 8 // Light MCTS overlay so stepping stays responsive (100 = ~6s/step on candle-CPU)
             })
         });
-        const data = await res.json();
+    } catch (e) {
+        if (requestSeq !== REPLAY_REQUEST_SEQ) return false;
+        reportReplayError('network', e.message || String(e), e);
+        return false;
+    }
 
-        if (requestSeq !== REPLAY_REQUEST_SEQ) return; // superseded by a newer step
+    // A non-2xx (e.g. a server panic → 500) would otherwise make res.json()
+    // throw with no clue why; capture the raw body so the reason is visible.
+    if (!res.ok) {
+        if (requestSeq !== REPLAY_REQUEST_SEQ) return false;
+        const body = await res.text().catch(() => '(unreadable body)');
+        reportReplayError('server', `HTTP ${res.status} ${res.statusText}\n${body.slice(0, 800)}`);
+        return false;
+    }
 
-        if (data.error) {
-            showToast("Error: " + data.error);
+    try {
+        data = await res.json();
+    } catch (e) {
+        if (requestSeq !== REPLAY_REQUEST_SEQ) return false;
+        reportReplayError('bad-response', 'Response was not valid JSON: ' + (e.message || e), e);
+        return false;
+    }
+
+    if (requestSeq !== REPLAY_REQUEST_SEQ) return false; // superseded by a newer step
+
+    // Backend logical errors (move desync, out-of-bounds, parse failure) come
+    // back as {error} / {status:'error'}. This is the primary diagnostic — the
+    // message names the exact step and move that failed to replay.
+    if (data.error || data.status === 'error') {
+        reportReplayError('replay', data.error || data.message || 'Unknown backend error', data);
+        return false;
+    }
+
+    if (!data.state) {
+        reportReplayError('missing-state', 'Backend returned no game state for this step', data);
+        return false;
+    }
+
+    clearReplayError();
+
+    // Render Analysis
+    renderReplayAnalysis(data);
+
+    // Render throws must not masquerade as fetch failures: give them their own
+    // guard so the panel/console says "render" and names the step, instead of
+    // the counter climbing over a frozen map with nothing logged.
+    try {
+        applyReplayState(data.state, data.mctsAnalysis);
+    } catch (e) {
+        reportReplayError('render', e.message || String(e), e);
+        return false;
+    }
+    return true;
+}
+
+// Apply a replay game state to the board + stat bar. Shared by step-through
+// (jumpToStep) and the instant initial render in enterReplayMode.
+function applyReplayState(state, mctsAnalysis) {
+    // Replays can use a different map size than the live game; purge stale
+    // tiles so they don't render outside the replay's square.
+    const prevSettings = GAME_STATE.settings || null;
+    const newSize = state.settings ? state.settings.size : null;
+    const newTileCount = state.settings ? state.settings.tile_count : null;
+    if (prevSettings && (newSize !== prevSettings.size || newTileCount !== prevSettings.tile_count)) {
+        renderer.clear();
+    }
+    GAME_STATE = state;
+
+    // The stat bar (Turn/Score/Stars/Income) is otherwise only kept in sync by
+    // updateUI(), which the replay step path bypasses — update it here too so it
+    // reflects this step instead of staying frozen at its pre-replay value.
+    const stepTribeId = GAME_STATE.settings.currentPlayerTurnId;
+    const stepTribe = GAME_STATE.tribes[stepTribeId.toString()] || GAME_STATE.tribes[stepTribeId];
+    turnVal.textContent = GAME_STATE.settings.turn;
+    turnTotalVal.textContent = GAME_STATE.settings.maxTurns;
+    if (stepTribe) {
+        tribeNameLabel.textContent = TRIBE_ID_2_NAME[stepTribe.type] || 'Unknown';
+        starsVal.textContent = stepTribe.stars;
+        scoreVal.textContent = stepTribe.score;
+        const income = stepTribe.cities.reduce((acc, cur) => acc + getCityProduction(GAME_STATE, cur), 0);
+        incomeVal.textContent = `+${income}`;
+    }
+
+    // Render from the POV of whoever's turn it is at this step, so the view
+    // (and FOW) follows the active player as you step through.
+    renderer.render(GAME_STATE, []);
+    renderer.renderMCTSHeatmap(mctsAnalysis);
+}
+
+// ---- Autoplay ----------------------------------------------------------
+
+function replaySleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function updatePlayButton() {
+    const btn = document.getElementById('replay-play-btn');
+    if (btn) btn.textContent = REPLAY_PLAYING ? '⏸ Pause' : '▶ Play';
+}
+
+function stopReplayPlayback() {
+    REPLAY_PLAYING = false;
+    REPLAY_PLAY_TOKEN++; // invalidate any loop currently awaiting a fetch
+    updatePlayButton();
+}
+
+async function toggleReplayPlay() {
+    if (REPLAY_PLAYING) {
+        stopReplayPlayback();
+        return;
+    }
+    if (REPLAY_HISTORY.length === 0) return;
+    // Restart from the top if we're parked at the end.
+    if (REPLAY_STEP_INDEX >= REPLAY_HISTORY.length - 1) {
+        await jumpToStep(0);
+    }
+    REPLAY_PLAYING = true;
+    updatePlayButton();
+    const token = ++REPLAY_PLAY_TOKEN;
+    playReplayLoop(token);
+}
+
+// Self-pacing loop: advance one step, then wait out the remainder of the
+// interval (so slow steps never overlap and the pace stays ~REPLAY_INTERVAL_MS
+// regardless of how long each analyze call takes). Pauses on error or at end.
+async function playReplayLoop(token) {
+    while (REPLAY_PLAYING && token === REPLAY_PLAY_TOKEN) {
+        if (REPLAY_STEP_INDEX >= REPLAY_HISTORY.length - 1) {
+            stopReplayPlayback();
             return;
         }
-
-        // Render Analysis
-        renderReplayAnalysis(data);
-
-        // If the backend returns the state (I need to add this), we update the map.
-        if (data.state) {
-            // Replays can use a different map size than the live game; purge
-            // stale tiles so they don't render outside the replay's square.
-            const prevSettings = GAME_STATE.settings || null;
-            const newSize = data.state.settings ? data.state.settings.size : null;
-            const newTileCount = data.state.settings ? data.state.settings.tile_count : null;
-            if (prevSettings && (newSize !== prevSettings.size || newTileCount !== prevSettings.tile_count)) {
-                renderer.clear();
-            }
-            GAME_STATE = data.state;
-
-            // The stat bar (Turn/Score/Stars/Income) is otherwise only kept in
-            // sync by updateUI(), which the replay step path bypasses — update
-            // it here too so it reflects this step instead of staying frozen
-            // at whatever it showed before replay step-through began.
-            const stepTribeId = GAME_STATE.settings.currentPlayerTurnId;
-            const stepTribe = GAME_STATE.tribes[stepTribeId.toString()] || GAME_STATE.tribes[stepTribeId];
-            turnVal.textContent = GAME_STATE.settings.turn;
-            turnTotalVal.textContent = GAME_STATE.settings.maxTurns;
-            if (stepTribe) {
-                tribeNameLabel.textContent = TRIBE_ID_2_NAME[stepTribe.type] || 'Unknown';
-                starsVal.textContent = stepTribe.stars;
-                scoreVal.textContent = stepTribe.score;
-                const income = stepTribe.cities.reduce((acc, cur) => acc + getCityProduction(GAME_STATE, cur), 0);
-                incomeVal.textContent = `+${income}`;
-            }
-
-            // Render from the POV of whoever's turn it is at this step, so the
-            // view (and FOW) follows the active player as you step through.
-            renderer.render(GAME_STATE, []);
-            renderer.renderMCTSHeatmap(data.mctsAnalysis);
-        } else {
-            // Fallback if I haven't updated backend yet (I will next)
-            showToast("State update missing - Backend update required");
-        }
-
-    } catch (e) {
-        console.error(e);
+        const t0 = (typeof performance !== 'undefined') ? performance.now() : Date.now();
+        const ok = await jumpToStep(REPLAY_STEP_INDEX + 1);
+        if (!REPLAY_PLAYING || token !== REPLAY_PLAY_TOKEN) return; // paused/seeked mid-fetch
+        if (!ok) { stopReplayPlayback(); return; }                  // pause so the error is visible
+        const elapsed = ((typeof performance !== 'undefined') ? performance.now() : Date.now()) - t0;
+        await replaySleep(Math.max(250, REPLAY_INTERVAL_MS - elapsed));
     }
+}
+
+function setReplaySpeed(ms) {
+    REPLAY_INTERVAL_MS = Number(ms) || 1500;
 }
 
 function extractFilename() {
@@ -218,8 +361,13 @@ function updateReplayControls() {
     document.getElementById('replay-step-val').textContent = `${REPLAY_STEP_INDEX} / ${REPLAY_HISTORY.length}`;
 }
 
-// Global exposure
+// Global exposure. Manual navigation pauses autoplay so it can't fight the
+// user's clicks; Play/Pause is the only thing that (re)starts the loop.
 window.openReplayMenu = openReplayMenu;
 window.exitReplayMode = exitReplayMode;
-window.nextReplayStep = () => jumpToStep(REPLAY_STEP_INDEX + 1);
-window.prevReplayStep = () => jumpToStep(REPLAY_STEP_INDEX - 1);
+window.toggleReplayPlay = toggleReplayPlay;
+window.setReplaySpeed = setReplaySpeed;
+window.nextReplayStep = () => { stopReplayPlayback(); return jumpToStep(REPLAY_STEP_INDEX + 1); };
+window.prevReplayStep = () => { stopReplayPlayback(); return jumpToStep(REPLAY_STEP_INDEX - 1); };
+window.replayFirst = () => { stopReplayPlayback(); return jumpToStep(0); };
+window.replayLast = () => { stopReplayPlayback(); return jumpToStep(REPLAY_HISTORY.length - 1); };

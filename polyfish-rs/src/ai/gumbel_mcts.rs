@@ -67,6 +67,11 @@ pub struct GumbelMctsAgent<'a> {
     /// reused subtree rather than building a fresh tree. Exposed for tests
     /// and (future) stats reporting.
     pub tree_reuses: u64,
+    /// Multiplier on the root Gumbel(0,1) exploration noise. 1.0 = normal
+    /// self-play exploration; 0.0 = deterministic (argmax) root selection, for
+    /// eval-conditions probes. Read once from the GUMBEL_SCALE env var at
+    /// construction — diagnostic knob, not a CLI flag.
+    pub gumbel_scale: f32,
     // How much to blend the heuristic prior into the network's root priors.
     // High in the beginning to bootstrap the network but decays over time.
     pub prior_heuristic_weight: f32,
@@ -110,6 +115,11 @@ pub struct GumbelMctsAgent<'a> {
     /// of every `select_move*` call, consumed by `self_play`'s TD label
     /// bootstrap via `Brain::last_root_value`.
     last_root_value: Option<f32>,
+    /// The root's RAW NN value prediction (tanh-bounded, pre-search/pre-edge-
+    /// reward), captured at the same convergence point as `last_root_value`.
+    /// Diagnostic only (value-head calibration) — isolates the head from the
+    /// reward-shaping backup that inflates `last_root_value`.
+    last_root_own_value: Option<f32>,
 }
 
 struct GumbelNode {
@@ -227,6 +237,10 @@ impl<'a> GumbelMctsAgent<'a> {
             last_chosen_idx: None,
             next_root_hash: None,
             tree_reuses: 0,
+            gumbel_scale: std::env::var("GUMBEL_SCALE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1.0),
             prior_heuristic_weight: 0.0,
             policy_target_q_weight: 1.0,
             tree_q_weight: 1.0,
@@ -235,6 +249,7 @@ impl<'a> GumbelMctsAgent<'a> {
             unfreeze_opponent: false,
             trace: RefCell::new(None),
             last_root_value: None,
+            last_root_own_value: None,
         }
     }
 
@@ -242,6 +257,11 @@ impl<'a> GumbelMctsAgent<'a> {
     /// if the most recent `select_move*` call actually ran a search.
     pub fn last_root_value(&self) -> Option<f32> {
         self.last_root_value
+    }
+
+    /// Raw NN root value of the most recent search (see field docs).
+    pub fn last_root_own_value(&self) -> Option<f32> {
+        self.last_root_own_value
     }
 
     pub fn clear_last_root_value(&mut self) {
@@ -481,7 +501,7 @@ impl<'a> GumbelMctsAgent<'a> {
         let mut rng = rand::thread_rng();
         let gumbel_dist = Gumbel::new(0.0, 1.0).expect("BUG: Gumbel distribution");
         for c in &mut new_root.children {
-            c.gumbel = gumbel_dist.sample(&mut rng);
+            c.gumbel = self.gumbel_scale * gumbel_dist.sample(&mut rng);
         }
         
         // Bootstrap with the priors from the heuristic mcts agent. Skip if
@@ -532,7 +552,7 @@ impl<'a> GumbelMctsAgent<'a> {
             .into_iter()
             .zip(logits.into_iter())
             .map(|(m, l)| {
-                let g = gumbel_dist.sample(&mut rng);
+                let g = self.gumbel_scale * gumbel_dist.sample(&mut rng);
                 GumbelNode::new(l, g, Some(m))
             })
             .collect();
@@ -1239,6 +1259,7 @@ impl<'a> GumbelMctsAgent<'a> {
     /// to know about `last_root_value` bookkeeping.
     fn store_tree(&mut self, root: GumbelNode, best_idx: usize, next_hash: Option<u64>) {
         self.last_root_value = (root.visits > 0.0).then(|| root.q_value());
+        self.last_root_own_value = (root.visits > 0.0).then(|| root.own_value);
         self.tree = Some(root);
         self.last_chosen_idx = Some(best_idx);
         self.next_root_hash = next_hash;

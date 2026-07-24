@@ -271,6 +271,30 @@ portable_shuf() {
     done
 }
 
+# Keep only checkpoints whose conv1 input-channel count matches the current
+# model.safetensors. The Rust opponent loader (self_play) is strict — it does
+# NOT zero-pad like train.py — so a stale-arch checkpoint would hard-crash a
+# league iteration. Reads candidate paths on stdin (one per line), prints the
+# arch-compatible subset. Migrate stale checkpoints with migrate_pursuit.py.
+compatible_checkpoints() {
+    .venv/bin/python3 -c '
+import sys, json, struct
+def conv1_in(path):
+    try:
+        with open(path, "rb") as f:
+            n = struct.unpack("<Q", f.read(8))[0]
+            hdr = json.loads(f.read(n))
+        return hdr["conv1.weight"]["shape"][1]
+    except Exception:
+        return None
+ref = conv1_in("model.safetensors")
+for line in sys.stdin:
+    p = line.strip()
+    if p and (ref is None or conv1_in(p) == ref):
+        print(p)
+'
+}
+
 # 0. Initialize & Auto-Restore Model
 echo "Initializing/Checking model..."
 # If resuming but model.safetensors is missing, restore latest checkpoint
@@ -303,7 +327,15 @@ do
         # current net, so playing it is mirror play with extra steps and
         # breaks no symmetry. Prefer genuinely old checkpoints; fall back to
         # anything that isn't the newest one.
-        ALL_CPS=$(ls -t checkpoints/model_checkpoint_iter*.safetensors 2>/dev/null || true)
+        ALL_CPS_RAW=$(ls -t checkpoints/model_checkpoint_iter*.safetensors 2>/dev/null || true)
+        # Drop arch-incompatible checkpoints so a league iteration degrades to
+        # plain self-play instead of hard-crashing self_play's strict loader.
+        ALL_CPS=$(echo "$ALL_CPS_RAW" | compatible_checkpoints)
+        RAW_N=$(echo "$ALL_CPS_RAW" | grep -c . || true)
+        CMP_N=$(echo "$ALL_CPS" | grep -c . || true)
+        if [ "$RAW_N" -gt "$CMP_N" ]; then
+            echo "⚠️  League: skipped $((RAW_N - CMP_N)) arch-incompatible checkpoint(s) (conv1 channels != current model.safetensors); migrate them with migrate_pursuit.py"
+        fi
         HIST_CPS=$(echo "$ALL_CPS" | tail -n +6)
         NON_LATEST_CPS=$(echo "$ALL_CPS" | tail -n +2)
 
@@ -458,7 +490,7 @@ do
     echo "CONFIG iter=$i eff_iter=$EFF_ITER iter_offset=${ITER_OFFSET:-0} match=$MATCH_TYPE backend=${BACKEND_FLAG:---search-backend gumbel} anchor='${ANCHOR_FLAG}' td_w=${TD_W:-0.7} label_rel_w=${LABEL_REL_W:-default} wl_labels=${WL_LABELS:-0} shape_w_label=${SHAPE_W_LABEL:-0} shape_w_tree=${SHAPE_W_TREE:-0} pursuit_w_label=${PURSUIT_W_LABEL:-0} pursuit_w_tree=${PURSUIT_W_TREE:-0} unfreeze_opponent=${UNFREEZE_OPPONENT:-0} dagger_alpha=${DAGGER_ALPHA:-0} value_trust=$VALUE_TRUST games=$NUM_GAMES mcts=$MCTS_ITERS k=$GUMBEL_K kl_ref_model=${KL_REF_MODEL:-none} kl_ref_weight=${KL_REF_WEIGHT:-0}"
 
     SP_LOG=$(mktemp)
-    "$SELF_PLAY_BIN" --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $WL_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $BACKEND_FLAG $DECAY_LAST_ITER_FLAG --td-w "${TD_W:-0.7}" $LABEL_REL_W_FLAG $SHAPE_FLAGS $UNFREEZE_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
+    "$SELF_PLAY_BIN" --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $WL_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $BACKEND_FLAG $DECAY_LAST_ITER_FLAG --td-w "${TD_W:-0.7}" --outcome-scale "${OUTCOME_SCALE:-3.0}" $LABEL_REL_W_FLAG $SHAPE_FLAGS $UNFREEZE_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
     SP_STATUS=${PIPESTATUS[0]}
     rm -f "$SP_LOG"
     if [ "$SP_STATUS" -ne 0 ]; then

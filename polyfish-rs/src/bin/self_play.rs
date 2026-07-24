@@ -126,6 +126,17 @@ enum TraceTrigger {
     /// via within-Step-type competition, not cross-type) — see
     /// find_village_pursuit_trigger / decision_traces_pursuit/.
     VillagePursuit,
+    /// "Wandering" fork (Jul 24, 2026): pov has NO FOW-discovered open
+    /// village in view (nothing to capture) but still has an unmoved unit
+    /// deciding where to move — the case where the hand-coded search-prior
+    /// nudge (openness/reveal-fog/center pull in scoring.rs) is the only
+    /// thing steering movement. Captures every ply of the triggering player
+    /// for the trigger turn + the next 3 turns. Purpose: per Step candidate,
+    /// compare raw_net_prob (the net's own learned prior) against
+    /// heuristic_score to see whether the net internalized the frontier/center
+    /// nudge or diverged from it — see find_wander_trigger /
+    /// decision_traces_wander/.
+    Wander,
 }
 
 /// First (unit, village) pair at exactly the distance `trigger` calls for,
@@ -170,7 +181,10 @@ fn find_village_trigger(
     let target_distance = match trigger {
         TraceTrigger::Adjacent => 1,
         TraceTrigger::OnVillage => 0,
-        TraceTrigger::ThirdCity | TraceTrigger::HarvestReady | TraceTrigger::VillagePursuit => {
+        TraceTrigger::ThirdCity
+        | TraceTrigger::HarvestReady
+        | TraceTrigger::VillagePursuit
+        | TraceTrigger::Wander => {
             unreachable!()
         }
     };
@@ -178,7 +192,10 @@ fn find_village_trigger(
         let eligible = match trigger {
             TraceTrigger::Adjacent => !unit.moved,
             TraceTrigger::OnVillage => !unit.moved && !unit.attacked,
-            TraceTrigger::ThirdCity | TraceTrigger::HarvestReady | TraceTrigger::VillagePursuit => {
+            TraceTrigger::ThirdCity
+            | TraceTrigger::HarvestReady
+            | TraceTrigger::VillagePursuit
+            | TraceTrigger::Wander => {
             unreachable!()
         }
         };
@@ -265,6 +282,30 @@ fn find_village_pursuit_trigger(
         }
     }
     best.map(|(v, _)| v)
+}
+
+/// Trigger for TraceTrigger::Wander: pov has NO FOW-discovered, uncaptured
+/// village in view (nothing to pursue) but still has an unmoved unit that
+/// must decide where to move. Returns that unit's tile index. The window
+/// captures every ply for trigger_turn + 3; each written trace carries the
+/// `visible_villages` set so analysis can drop plies where a village later
+/// came into view (no longer truly "wandering").
+fn find_wander_trigger(
+    state: &GameState,
+    pov: PlayerId,
+    open_villages: &std::collections::HashSet<i32>,
+) -> Option<i32> {
+    let tribe = state.tribes.get(&pov)?;
+    let has_visible_village = open_villages.iter().any(|v| {
+        state
+            .tiles
+            .get(v)
+            .map_or(false, |t| t.explorers.contains(&pov))
+    });
+    if has_visible_village {
+        return None;
+    }
+    tribe.units.iter().find(|u| !u.moved).map(|u| u.coords.idx)
 }
 
 /// Write one captured decision trace to `decision_traces/`, tagged with
@@ -545,6 +586,8 @@ struct HistoryStep {
     opp_score: f32,
     turn: i32,
     root_value: Option<f32>,
+    /// Raw NN root value (tanh-bounded, pre-search) — value-head calibration only.
+    root_own_value: Option<f32>,
     /// Ground-truth (unfogged) non-invisible enemy-unit occupancy at decision
     /// time, POV-relative — the aux_fog_units target.
     enemy_units: Vec<f32>,
@@ -767,6 +810,9 @@ struct GameResult {
     final_cities: HashMap<i32, i32>,
     total_cities: i32,
     moves: usize,
+    /// Net-seat plies only (excludes Greedy/opponent seats) — the seat-clean
+    /// counterpart of `moves` for the avg_moves behavior chart.
+    net_moves: usize,
     winner_score: i32,
     /// Adjudicated winner: sole survivor, else higher final score at timeout.
     winner_id: i32,
@@ -1223,6 +1269,7 @@ fn play_single_game(
     let mut prev_tally = unit_tally(&game.state);
 
     let mut move_count = 0;
+    let mut net_moves = 0; // net-seat plies only (excludes Greedy/opponent seats)
     // Up to 3 traces per game, spaced >= 3 game-turns apart, to sample several
     // mid-game stalled decisions rather than only the turn-15 entry ply.
     let mut traces_this_game = 0usize;
@@ -1241,6 +1288,10 @@ fn play_single_game(
     let mut pursuit_trigger_turn: Option<i32> = None;
     let mut pursuit_trigger_village: i32 = -1;
     let mut pursuit_trigger_pov: Option<PlayerId> = None;
+    // Wander window state: same shape as VillagePursuit's.
+    let mut wander_trigger_turn: Option<i32> = None;
+    let mut wander_trigger_unit: i32 = -1;
+    let mut wander_trigger_pov: Option<PlayerId> = None;
     while !polyfish::functions::is_game_over(&game.state) {
         record_spt_at_turn_start(
             &game.state,
@@ -1296,7 +1347,7 @@ fn play_single_game(
             && !trace_all
             && !matches!(
                 trace_trigger,
-                TraceTrigger::HarvestReady | TraceTrigger::VillagePursuit
+                TraceTrigger::HarvestReady | TraceTrigger::VillagePursuit | TraceTrigger::Wander
             )
             && traces_this_game < 3
             && game.state.settings.turn >= last_trace_turn + 3
@@ -1358,7 +1409,34 @@ fn play_single_game(
             None
         };
 
-        if trace_all || trigger_info.is_some() || harvest_capture.is_some() || pursuit_capture.is_some()
+        // Wander: (trigger_unit, turns_since_trigger) for THIS ply, same
+        // window/every-ply shape as VillagePursuit above.
+        let wander_capture = if trace_villages
+            && !trace_all
+            && trace_trigger == TraceTrigger::Wander
+            && trace_counter.load(Ordering::Relaxed) < trace_max
+        {
+            if wander_trigger_turn.is_none() {
+                if let Some(unit) = find_wander_trigger(&game.state, pov, &open_villages) {
+                    wander_trigger_turn = Some(game.state.settings.turn);
+                    wander_trigger_unit = unit;
+                    wander_trigger_pov = Some(pov);
+                }
+            }
+            wander_trigger_turn.and_then(|start| {
+                let turn = game.state.settings.turn;
+                (wander_trigger_pov == Some(pov) && turn <= start + 3)
+                    .then_some((wander_trigger_unit, turn - start))
+            })
+        } else {
+            None
+        };
+
+        if trace_all
+            || trigger_info.is_some()
+            || harvest_capture.is_some()
+            || pursuit_capture.is_some()
+            || wander_capture.is_some()
         {
             current_agent.request_trace();
         }
@@ -1368,6 +1446,7 @@ fn play_single_game(
         // this is that state's own root value — the TD bootstrap target for
         // whichever earlier step's label lands here as its "next decision".
         let root_value = current_agent.last_root_value();
+        let root_own_value = current_agent.last_root_own_value();
         let step_trace = if trace_all {
             current_agent.take_trace()
         } else {
@@ -1446,6 +1525,36 @@ fn play_single_game(
             }
         }
 
+        if let Some((trigger_unit, turns_since)) = wander_capture {
+            if let Some(trace) = current_agent.take_trace() {
+                if trace_counter.fetch_add(1, Ordering::Relaxed) < trace_max {
+                    let visible_villages: Vec<i32> = open_villages
+                        .iter()
+                        .copied()
+                        .filter(|idx| {
+                            game.state
+                                .tiles
+                                .get(idx)
+                                .map_or(false, |t| t.explorers.contains(&pov))
+                        })
+                        .collect();
+                    write_decision_trace(
+                        "decision_traces_wander",
+                        &trace,
+                        iteration,
+                        game_idx,
+                        game.state.settings.turn,
+                        move_count,
+                        pov,
+                        trigger_unit,
+                        -1,
+                        &visible_villages,
+                        Some(turns_since),
+                    );
+                }
+            }
+        }
+
         let map_size = game.state.settings.size as usize;
 
         let (mut p_action, mut p_source, mut p_target, mut p_option) =
@@ -1511,6 +1620,7 @@ fn play_single_game(
             // otherwise blend into "the model's" behavior charts.
             let net_move = is_net_seat(seat_roles, pov);
             if net_move {
+                net_moves += 1;
                 *action_counts.entry(m_type).or_insert(0) += 1;
                 *moves_by_turn
                     .entry(game.state.settings.turn)
@@ -1627,6 +1737,7 @@ fn play_single_game(
                 opp_score: opp_score_now,
                 turn: game.state.settings.turn,
                 root_value,
+                root_own_value,
                 enemy_units: enemy_unit_grid(&game.state, pov, features::MAP_SIZE * features::MAP_SIZE),
                 my_spt: spt_of(pov),
                 opp_spt: spt_of(opp_id),
@@ -1849,6 +1960,7 @@ fn play_single_game(
         final_cities,
         total_cities,
         moves: move_count,
+        net_moves,
         revealed_tiles,
         captured_tiles,
         villages_t2c_first: t2c_turn(&village_capture_turns, initial_villages, 0.0, max_turns),
@@ -1947,6 +2059,14 @@ fn main() -> anyhow::Result<()> {
         /// the TD_W const rationale). Default preserves production behavior.
         #[arg(long, default_value_t = TD_W)]
         td_w: f32,
+
+        /// EXP_ELO_021: scale on the relative final-outcome ratio before the
+        /// [-1,1] clamp in the value LABEL (label-only — not the in-tree
+        /// backup, so no EXP_ELO_005 search-disruption risk). Default 3.0
+        /// saturates ~32% of outcomes at ±1; lowering it de-saturates so the
+        /// value head can learn to distinguish "ahead" from "crushing".
+        #[arg(long, default_value_t = 3.0)]
+        outcome_scale: f32,
 
         /// EXP_ELO_006: relative weight used ONLY for TD(lambda) label
         /// windows; the in-tree backup keeps reward::REL_W. Default
@@ -2158,6 +2278,14 @@ fn main() -> anyhow::Result<()> {
         /// (no MCTS trace overhead) — ordinary self-play run.
         #[arg(long)]
         dump_city_rewards: Option<String>,
+
+        /// Value-head calibration: append one JSON record per net-seat step to
+        /// <file> — {turn, my_score, opp_score, root_value, final_outcome,
+        /// value_target}. For measuring whether the value head's prediction
+        /// beats a plain current-score-ratio baseline at predicting the game
+        /// outcome (does it have foresight, or just read the scoreboard?).
+        #[arg(long)]
+        dump_value_calib: Option<String>,
 
         /// Diagnostics: append one JSON record per Research/Harvest/Build/
         /// Summon move executed — (turn, player, move type, stars spent,
@@ -2646,10 +2774,10 @@ fn main() -> anyhow::Result<()> {
     let mut collected_aux_tech: Vec<Vec<f32>> = Vec::new();
     let mut collected_aux_pursuit: Vec<f32> = Vec::new(); // scalar per step
 
-    let mut total_score = 0;
     let mut max_score = 0;
     let mut best_recap: Option<ModReplay> = None;
-    let mut total_moves = 0;
+    let mut total_moves = 0; // both seats — throughput + sim-ratio denominators
+    let mut total_net_moves = 0; // net-seat plies — the avg_moves behavior chart
 
     let mut p1_total = 0;
     let mut p2_total = 0;
@@ -2694,9 +2822,15 @@ fn main() -> anyhow::Result<()> {
     }
     let mut tempo_aggs: HashMap<&'static str, TempoAgg> = HashMap::new();
 
+    // Value-head calibration dump (one JSON line per net-seat step).
+    let mut value_calib_file = args
+        .dump_value_calib
+        .as_ref()
+        .and_then(|p| File::create(p).ok());
+
     for result in results {
-        total_score += result.winner_score;
         total_moves += result.moves;
+        total_net_moves += result.net_moves;
         total_revealed_tiles += result.revealed_tiles as i64;
         total_captured_tiles += result.captured_tiles as i64;
         for (&turn, &spt) in &result.spt_at_turn {
@@ -2723,7 +2857,13 @@ fn main() -> anyhow::Result<()> {
             best_recap = Some(result.recap.clone());
         }
 
+        // Net-only: mirror games count both seats (both are net); anchor/league
+        // games exclude the non-net (Greedy/opponent) seat, so avg_score and
+        // p1/p2_avg reflect the net's play, not the opponent's.
         for (id, score) in &result.scores {
+            if !is_net_seat(result.roles, *id) {
+                continue;
+            }
             if *id == 1 {
                 p1_total += score;
                 p1_count += 1;
@@ -2849,6 +2989,10 @@ fn main() -> anyhow::Result<()> {
                 turn,
                 enemy_units,
                 pursuit,
+                my_score: step_my_score,
+                opp_score: step_opp_score,
+                root_value: step_root_value,
+                root_own_value: step_root_own_value,
                 ..
             } = step;
             let flat_map = features
@@ -2894,7 +3038,7 @@ fn main() -> anyhow::Result<()> {
             // Normalize by combined economic activity with scaling multiplier
             let combined_score = my_adjusted + opp_adjusted;
             // to spread distribution into useful training range
-            let scaling_factor = 3.0;
+            let scaling_factor = args.outcome_scale;
             let relative_outcome = if combined_score > 0.0 {
                 let ratio = (my_adjusted - opp_adjusted) / combined_score;
                 (ratio * scaling_factor).clamp(-1.0, 1.0)
@@ -2928,6 +3072,18 @@ fn main() -> anyhow::Result<()> {
             };
 
             collected_values.push(value);
+
+            // Value-head calibration: NN prediction vs current-score-ratio vs
+            // the actual final outcome, for net seats that ran a real search.
+            if let (Some(f), Some(rv)) = (value_calib_file.as_mut(), step_root_value) {
+                if is_net_seat(result.roles, p_id) {
+                    let raw = step_root_own_value.unwrap_or(rv);
+                    let _ = writeln!(
+                        f,
+                        "{{\"turn\":{turn},\"my\":{step_my_score},\"opp\":{step_opp_score},\"root_value\":{rv},\"raw_value\":{raw},\"final_outcome\":{final_outcome},\"value_target\":{value}}}"
+                    );
+                }
+            }
 
             let my_final_cities = result.final_cities.get(&p_id).copied().unwrap_or(0) as f32;
             let total_cities = result.total_cities as f32;
@@ -2964,9 +3120,16 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Print Average Metrics
-    let avg_score = total_score as f32 / args.num_games as f32;
-    let avr_moves = total_moves as f32 / args.num_games as f32;
+    // Print Average Metrics. avg_score is net-only (see the score loop): the
+    // mean score over net seats across games, so anchor/league games don't
+    // blend the opponent's score into the net's performance chart.
+    let net_score_count = p1_count + p2_count;
+    let avg_score = if net_score_count > 0 {
+        (p1_total + p2_total) as f32 / net_score_count as f32
+    } else {
+        0.0
+    };
+    let avr_moves = total_net_moves as f32 / args.num_games as f32;
     let p1_avg = if p1_count > 0 {
         p1_total as f32 / p1_count as f32
     } else {

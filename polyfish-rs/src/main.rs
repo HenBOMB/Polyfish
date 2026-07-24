@@ -1745,17 +1745,25 @@ async fn analyze_replay_step(
             Ok(json) => match parse_replay_playback(&json) {
                 Ok(x) => x,
                 Err(e) => {
+                    eprintln!("❌ [replay] {}: failed to parse replay: {}", path, e);
                     return Json(
                         serde_json::json!({ "error": format!("Failed to parse replay: {}", e) }),
                     );
                 }
             },
             Err(e) => {
+                eprintln!("❌ [replay] {}: failed to load replay: {}", path, e);
                 return Json(serde_json::json!({ "error": format!("Failed to load replay: {}", e) }));
             }
         };
 
     if history.len() <= params.step_index {
+        eprintln!(
+            "❌ [replay] {}: step index {} out of bounds (history len {})",
+            path,
+            params.step_index,
+            history.len()
+        );
         return Json(serde_json::json!({ "error": "Step index out of bounds" }));
     }
 
@@ -1822,8 +1830,30 @@ async fn analyze_replay_step(
         }
 
         if !found {
+            let legal_serialized: Vec<String> = game
+                .legal_moves()
+                .iter()
+                .map(|m| m.serialize().to_string())
+                .collect();
+            eprintln!(
+                "❌ [replay] {}: move desync at step {} (turn {}, current player {}). \
+                 Recorded move not in legal set.\n   recorded: {}\n   {} legal moves: {}",
+                path,
+                i,
+                game.state.settings.turn,
+                game.state.settings.current_player_turn_id,
+                move_json,
+                legal_serialized.len(),
+                legal_serialized.join(", ")
+            );
             return Json(serde_json::json!({
-                "error": format!("Failed to replay move at step {}: Move desync or invalid. JSON: {:?}", i, move_json)
+                "error": format!(
+                    "Failed to replay move at step {} (turn {}, player {}): recorded move not in legal set. Recorded: {}",
+                    i, game.state.settings.turn, game.state.settings.current_player_turn_id, move_json
+                ),
+                "stepIndex": i,
+                "recordedMove": move_json,
+                "legalMoves": legal_serialized,
             }));
         }
     }

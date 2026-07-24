@@ -157,6 +157,13 @@ impl<'a> SearchAgent<'a> {
         }
     }
 
+    fn last_root_own_value(&self) -> Option<f32> {
+        match self {
+            SearchAgent::Gumbel(a) => a.last_root_own_value(),
+            _ => None,
+        }
+    }
+
     /// Clear the cached root value from the previous search. Useful when
     /// an early return (e.g. forced move) bypasses the search engine but
     /// keeps the agent alive for tree reuse.
@@ -403,6 +410,11 @@ impl<'a> Brain<'a> {
     /// agent has searched yet.
     pub fn last_root_value(&self) -> Option<f32> {
         self.agent.as_ref().and_then(SearchAgent::last_root_value)
+    }
+
+    /// Raw NN root value of the most recent search (value-head calibration).
+    pub fn last_root_own_value(&self) -> Option<f32> {
+        self.agent.as_ref().and_then(SearchAgent::last_root_own_value)
     }
 
     pub fn think_with_stats(&mut self, game: &Game) -> (Option<Box<dyn Move>>, Vec<f32>) {
