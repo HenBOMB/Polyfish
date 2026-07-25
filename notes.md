@@ -1189,7 +1189,7 @@ is why reward shaping in the absolute channel didn't move the leaf-value
 ordering, and points the fix at either (a) the prior / visit allocation
 (search-side: force the toward move a fair visit count so its Q is a real
 estimate, not imputed), or (b) breaking the mirror-play label symmetry so the
-value head has a non-flat signal to learn expansion urgency from. **(SUPERSEDED → option (b) rejected: mirror-label cancellation is NOT the cause of the tempo deficit — training uses ANCHOR_FRAC=1.0 so Greedy-anchor games are the majority and still fail. See memory `no-mirror-excuse-for-tempo` and `current_understanding.md`.)**
+value head has a non-flat signal to learn expansion urgency from. **(SUPERSEDED → option (b) rejected: mirror-label cancellation is NOT the cause of the tempo deficit — the EXP_ELO_007–012 campaign ran at ANCHOR_FRAC=1.0, i.e. every game vs the Greedy anchor, and the deficit persisted anyway. NOTE (corrected Jul 25 2026): 1.0 was an env override for that campaign only; the DEFAULT is ANCHOR_FRAC=0.25, so ordinary training is 75% mirror self-play. See memory `no-mirror-excuse-for-tempo` and `current_understanding.md` §"The data diet".)**
 
 ---
 
@@ -1304,3 +1304,61 @@ mean ~457**. Curriculum-driven via `max_turns`: **~118** at the current short
 full-length-game cost planning, ~118 for the current curriculum. It's a ~4x lever
 on games/hr and $/game, so pick the one matching the phase you're scaling.
 Reproduce: `awk -F, 'NR>1&&$58>0{...}' training_log.csv`, or read METRICS avg_moves.
+
+### 2026-07-25 — CPU eval scaling vs CORE COUNT (settles: many small boxes vs few big)
+
+Follow-up to the Jul 22 section above, measured for the horizontal-scale build-out.
+`bench_forward` honors `VECLIB_MAXIMUM_THREADS`/`OMP_NUM_THREADS`/`RAYON_NUM_THREADS`,
+so the intra-box scaling curve is directly measurable. M3 Max, candle CPU +
+Accelerate, batch 128, profiling build.
+
+| threads | rows/s | rows/s per core | parallel efficiency |
+|---|---|---|---|
+| 1  | 455   | **455** | 100% |
+| 2  | 800   | 400 | 88% |
+| 4  | 1,253 | 313 | 69% |
+| 8  | 1,819 | 227 | 50% |
+| 14 | 2,067 | **148** | **32%** |
+
+**Verdict: MANY SMALL BOXES win.** Same total cores, split differently:
+14 × 1-core = **6,370 rows/s** vs 1 × 14-core = **2,067 rows/s** → **3.1× more
+throughput for identical core count.** The efficiency knee is at 2-4 cores; past
+8 cores you are buying cores that deliver ≤50% rate.
+
+**Small boxes do NOT lose batching efficiency** (the obvious objection — refuted):
+| threads | batch 8 | batch 32 | batch 128 |
+|---|---|---|---|
+| 1 | 441 | 453 | 453 |
+| 2 | 749 | 793 | 794 |
+| 4 | 1,083 | 1,209 | 1,252 |
+At 1-2 cores rows/s is **flat from batch 8 up** — a tiny box reaches full throughput
+on 8-leaf batches. It is the BIG box that depends on large batches (14 threads:
+377 rows/s @ batch 1 → 2,067 @ batch 128), because only then is there enough work
+to fill its cores.
+
+**Why:** the model is tiny (11×11×161 in, 64 filters, <2MB). One forward has too
+little parallel work to occupy many cores → Amdahl + per-layer sync + memory
+bandwidth. Small models scale OUT, not UP. Compounding this, self-play is
+embarrassingly parallel at the game level with **zero coordination cost** (games
+independent, eval local, only finished games ship back) — so splitting across
+boxes costs nothing while consolidating inside a box costs 68%.
+
+**Decision rule:** compare instance quotes on **$ per 1,000 rows/s**, not $/core.
+Expect 1-2 physical-core boxes to beat 8-16 core boxes by ~2-3× at flat $/core.
+
+Caveats: (1) **vCPU ≠ core** — cloud vCPUs are usually hyperthreads sharing
+execution units, so "2 vCPU" ≈ 1 physical core for BLAS; read this curve in
+PHYSICAL cores. (2) M3 Max + Accelerate is a Mac proxy — a Linux EPYC box with
+MKL/OpenBLAS will have a different knee; the sublinear SHAPE should hold (it's a
+property of the tiny model) but **re-run `bench_forward` per instance type**
+(2 minutes). (3) **RAM is the practical floor on small boxes** — a 1-core box needs
+~8-16 actors in flight to keep batch-8 (each blocks ~18ms on eval), and every actor
+holds a `Game` clone + MCTS tree; at budget 512 those trees are not small.
+
+**Related caution for `throughput_calc.py`:** it models `cpu_ceiling = cores ×
+nv_per_core`, i.e. LINEAR core scaling. Measured traversal scaling is also
+sublinear — 1 actor 35,026 nv/s → 14 actors 117,012 nv/s = **3.34×, 24%
+efficiency**. Its `nv_per_core = 20,000` default is conservative (measured single-
+actor: **35,026** @ budget 128, **26,998** @ budget 512), and its `cache = 0.15` is
+validated (measured eval-skip 0.13-0.18). The two errors partially cancel on the
+laptop anchor, but the LINEAR assumption will overstate large-box fleet projections.

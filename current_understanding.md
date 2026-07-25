@@ -1,7 +1,7 @@
 # Current Understanding
 
 **The single source of *current* truth for how the Polyfish AI plays, where it's weak, and why.**
-Last synthesized: **Jul 25, 2026** (through EXP_ELO_023).
+Last synthesized: **Jul 25, 2026** (through EXP_ELO_023 + its Jul 25 addenda: n=2048 rung, pooled ladder, prior-override metric).
 
 > **The one rule that keeps this doc useful:** current truth lives *here*. The research logs
 > (`notes.md`, `hypothesis_driven_improvements.md`) are append-only audit trails — they contain
@@ -61,7 +61,14 @@ Last synthesized: **Jul 25, 2026** (through EXP_ELO_023).
   2. **V(state), not Q(state,action)** — step-toward vs step-home → near-identical boards → value can't distinguish them (own_value gap ~0).
   3. **Frozen-opponent search** — the in-tree MCTS auto-skips opponents, so it cannot represent the race.
   4. **Instant-unconditional (tech) vs contingent-multi-ply (capture)** reward realization.
-  - **Explicitly NOT** "mirror self-play makes the relative reward net to ~0" — this was rejected forcefully; training uses `ANCHOR_FRAC=1.0` (Greedy-anchor games are the majority) and still fails, so mirror symmetry cannot be the cause. (memory `no-mirror-excuse-for-tempo`)
+  - **Explicitly NOT** "mirror self-play makes the relative reward net to ~0" — rejected forcefully by Verdi (Jul 22, 2026); do not resurrect it. **Supporting evidence, correctly scoped:** the EXP_ELO_007–012 fine-tuning campaign ran at `ANCHOR_FRAC=1.0` (every game NN-vs-Greedy) and the tempo deficit persisted anyway — so mirror symmetry is not the driver. ⚠️ **Earlier revisions of this line claimed "training uses `ANCHOR_FRAC=1.0`" as a general fact. That was wrong** — 1.0 was an env override specific to that campaign. See the data diet below for what training actually does. (memory `no-mirror-excuse-for-tempo`)
+
+### The data diet (what training actually runs)
+
+- **Default `ANCHOR_FRAC = 0.25`** (`run_training_loop.sh:364`) → per 64-game iteration: **16 anchor games (net vs Greedy) + 48 mirror self-play (net vs net)**. So normal training is **75% mirror**, not majority-anchor.
+- Anchor games are **evenly spread** (every 4th game, `self_play.rs:2542`), and the **anchor seat alternates** by anchor ordinal so the net plays both seats vs Greedy.
+- The anchor opponent is **`Greedy`** (zero-search `score_move` argmax), *not* the rollout Heuristic MCTS — measured: first-village capture 1.00/t6.5 vs 0.94/t8.9 (rollout noise drowned the ordering gradient). It is also the same distribution `blend_heuristic_prior` injects into the net's root, so anchor data and search priors agree.
+- **`anchor_frac` does not decay until the model graduates.** `decay_crutch` uses exponent `iteration − anchor_decay_start`, and `.anchor_decay_start` is only written once the model clears ≥80% vs its active anchor (EXP_ELO_002: "the decay clock belongs to the model it graduated"). Absent that file the loop sets `decay_start = eff_iter` each iteration → exponent 0 → the anchor rate stays at its starting value for the whole run. Constants: `ANCHOR_FRAC_DECAY = 0.97`, `CRUTCH_FLOOR = 0.1`.
 
 ### Aux heads
 
