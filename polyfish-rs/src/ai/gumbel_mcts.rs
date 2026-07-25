@@ -67,6 +67,20 @@ pub struct GumbelMctsAgent<'a> {
     /// reused subtree rather than building a fresh tree. Exposed for tests
     /// and (future) stats reporting.
     pub tree_reuses: u64,
+    /// Tree-depth telemetry, accumulated per simulation (leaf descent).
+    /// `depth` = plies below the root on the path to the extracted leaf.
+    /// `horizon_hits` counts descents cut short by `max_turns_ahead`, which
+    /// tells us whether the turn horizon (not the budget) bounds depth.
+    pub depth_sum: std::cell::Cell<u64>,
+    pub depth_max: std::cell::Cell<u32>,
+    pub depth_count: std::cell::Cell<u64>,
+    pub horizon_hits: std::cell::Cell<u64>,
+    /// Distillation headroom: root decisions where search's final pick equals
+    /// `argmax(prior)` (`agree_count`) out of all root decisions
+    /// (`decision_count`). A rising override rate with budget means deeper
+    /// search finds moves the prior does not know — i.e. signal to distill.
+    pub agree_count: std::cell::Cell<u64>,
+    pub decision_count: std::cell::Cell<u64>,
     /// Multiplier on the root Gumbel(0,1) exploration noise. 1.0 = normal
     /// self-play exploration; 0.0 = deterministic (argmax) root selection, for
     /// eval-conditions probes. Read once from the GUMBEL_SCALE env var at
@@ -237,13 +251,22 @@ impl<'a> GumbelMctsAgent<'a> {
             last_chosen_idx: None,
             next_root_hash: None,
             tree_reuses: 0,
+            depth_sum: std::cell::Cell::new(0),
+            depth_max: std::cell::Cell::new(0),
+            depth_count: std::cell::Cell::new(0),
+            horizon_hits: std::cell::Cell::new(0),
+            agree_count: std::cell::Cell::new(0),
+            decision_count: std::cell::Cell::new(0),
             gumbel_scale: std::env::var("GUMBEL_SCALE")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(1.0),
             prior_heuristic_weight: 0.0,
             policy_target_q_weight: 1.0,
-            tree_q_weight: 1.0,
+            tree_q_weight: std::env::var("TREE_Q_WEIGHT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1.0),
             reward_shape_w: 0.0,
             pursuit_shape_w: 0.0,
             unfreeze_opponent: false,
@@ -262,6 +285,22 @@ impl<'a> GumbelMctsAgent<'a> {
     /// Raw NN root value of the most recent search (see field docs).
     pub fn last_root_own_value(&self) -> Option<f32> {
         self.last_root_own_value
+    }
+
+    /// Cumulative search telemetry:
+    /// (depth_sum, depth_count, depth_max, horizon_hits, agree, decisions).
+    /// Mean depth = depth_sum / depth_count; prior-override rate =
+    /// 1 - agree/decisions. Accumulates across every search this agent has
+    /// run; read once at the end of a match.
+    pub fn depth_stats(&self) -> (u64, u64, u32, u64, u64, u64) {
+        (
+            self.depth_sum.get(),
+            self.depth_count.get(),
+            self.depth_max.get(),
+            self.horizon_hits.get(),
+            self.agree_count.get(),
+            self.decision_count.get(),
+        )
     }
 
     pub fn clear_last_root_value(&mut self) {
@@ -877,6 +916,7 @@ impl<'a> GumbelMctsAgent<'a> {
                 break;
             }
             if game.state.settings.turn > turn_horizon {
+                self.horizon_hits.set(self.horizon_hits.get() + 1);
                 break;
             }
             if !current.is_expanded {
@@ -923,6 +963,13 @@ impl<'a> GumbelMctsAgent<'a> {
             child_node.edge_reward.set(Some(r));
             path_rewards.push(r);
             path_turn_deltas.push(game.state.settings.turn - turn_pre);
+        }
+
+        let leaf_depth = indices_stack.len() as u64;
+        self.depth_sum.set(self.depth_sum.get() + leaf_depth);
+        self.depth_count.set(self.depth_count.get() + 1);
+        if leaf_depth as u32 > self.depth_max.get() {
+            self.depth_max.set(leaf_depth as u32);
         }
 
         // A stale node counts as needing expansion so its features and the
@@ -1112,7 +1159,8 @@ impl<'a> GumbelMctsAgent<'a> {
             true,
         );
 
-        root.children
+        let chosen = root
+            .children
             .iter()
             .enumerate()
             .filter(|(_, c)| (c.visits - max_visit).abs() < 0.5)
@@ -1122,7 +1170,24 @@ impl<'a> GumbelMctsAgent<'a> {
                 sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
             })
             .map(|(i, _)| i)
-            .unwrap_or(0)
+            .unwrap_or(0);
+
+        // Distillation headroom: how often search overrides argmax(prior) over
+        // the full legal set. Under GUMBEL_SCALE=0 the prior's top move is
+        // always inside the top-k cut, so a disagreement is a genuine override
+        // rather than a candidate that search never considered.
+        let prior_argmax = child_priors
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        self.decision_count.set(self.decision_count.get() + 1);
+        if prior_argmax == chosen {
+            self.agree_count.set(self.agree_count.get() + 1);
+        }
+
+        chosen
     }
 
     /// Policy target π'(a) ∝ exp(logit(a) + sigma(completed-Q(a))), evaluated

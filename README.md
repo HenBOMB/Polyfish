@@ -30,7 +30,8 @@ An `AI NN` + MCTS `Rust` capable of playing the award winning `Polytopia` strate
 - **`src/public/`**: The modern Web UI frontend (JS/HTML/CSS).
 - **`polyfish-scraper/`**: Utilities for gathering game data and assets.
 - **`polyfish-reader/`**: The C++ game state extraction suite.
-- **`notes.md` / `notes-heuristics.md`**: Architectural research and evaluation logic documentation.
+- **`current_understanding.md`**: Single source of current truth on how the AI plays and where it's weak — **read this first.**
+- **`notes.md` / `notes-heuristics.md`**: Historical research journal and evaluator-design spec (defer to `current_understanding.md` for what's still current).
 
 ## AI Architecture
 
@@ -45,4 +46,4 @@ An `AI NN` + MCTS `Rust` capable of playing the award winning `Polytopia` strate
 
 - **`polyfish-reader/polyfish-reader.cpp`**: C++ memory reader that extracts live game state for the simulator.
 - **`polyfish-reader/inputerv2`**: Interactive tool for manipulating live game memory.
-- **`polyfish-reader/polyfish-scanner.cpp`**: Utility for finding memory offsets in new game versions. TO
+- **`polyfish-reader/polyfish-scanner.cpp`**: Utility for finding memory offsets in new game versions.

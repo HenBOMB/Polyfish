@@ -267,6 +267,9 @@ struct MatchResult {
     moves_config1: u64,
     ns_config2: u64,
     moves_config2: u64,
+    /// Search telemetry for config1:
+    /// (depth_sum, depth_count, depth_max, horizon_hits, agree, decisions).
+    depth_config1: Option<(u64, u64, u32, u64, u64, u64)>,
 }
 
 /// Play one game. `swap` puts config2 in the P1 seat and config1 in P2.
@@ -426,6 +429,13 @@ fn play_match(
         }
     }
 
+    // config1 sits in the P2 seat when sides are swapped.
+    let depth_config1 = if swap {
+        agent_p2.depth_stats()
+    } else {
+        agent_p1.depth_stats()
+    };
+
     MatchResult {
         winner_config,
         swap,
@@ -435,6 +445,7 @@ fn play_match(
         moves_config1,
         ns_config2,
         moves_config2,
+        depth_config1,
     }
 }
 
@@ -661,6 +672,12 @@ fn main() -> anyhow::Result<()> {
     let mut c1_games_p1 = 0u32;
     let mut c1_wins_p2 = 0u32;
     let mut c1_games_p2 = 0u32;
+    let mut depth_sum1: u128 = 0;
+    let mut depth_count1: u128 = 0;
+    let mut depth_max1: u32 = 0;
+    let mut horizon_hits1: u128 = 0;
+    let mut agree1: u128 = 0;
+    let mut decisions1: u128 = 0;
 
     for r in &results {
         match r.winner_config {
@@ -681,6 +698,14 @@ fn main() -> anyhow::Result<()> {
         moves1_total += r.moves_config1;
         ns2_total += r.ns_config2 as u128;
         moves2_total += r.moves_config2;
+        if let Some((s, c, m, h, ag, dc)) = r.depth_config1 {
+            depth_sum1 += s as u128;
+            depth_count1 += c as u128;
+            depth_max1 = depth_max1.max(m);
+            horizon_hits1 += h as u128;
+            agree1 += ag as u128;
+            decisions1 += dc as u128;
+        }
     }
 
     let n = results.len().max(1) as f32;
@@ -738,6 +763,25 @@ fn main() -> anyhow::Result<()> {
         println!(
             "Speed ratio (Config1 / Config2): {:.2}x  (>1 = Config1 is slower)",
             ratio
+        );
+    }
+    if depth_count1 > 0 {
+        println!(
+            "TREE DEPTH Config 1: mean {:.2} plies, max {}, over {} sims  |  horizon-capped descents: {} ({:.1}%)",
+            depth_sum1 as f64 / depth_count1 as f64,
+            depth_max1,
+            depth_count1,
+            horizon_hits1,
+            100.0 * horizon_hits1 as f64 / depth_count1 as f64,
+        );
+    }
+    if decisions1 > 0 {
+        let overrides = decisions1 - agree1;
+        println!(
+            "PRIOR OVERRIDE Config 1: search picked != argmax(prior) on {} / {} root decisions ({:.1}%)",
+            overrides,
+            decisions1,
+            100.0 * overrides as f64 / decisions1 as f64,
         );
     }
     println!(

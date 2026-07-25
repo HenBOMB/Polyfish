@@ -2,7 +2,7 @@
 
 *Jul 4, 2026 — written after the tch/MPS eval swap, Metal trace analysis (v5), and the
 actor-ceiling measurement. Companion doc: `profiling_report.md` (the original candle
-investigation), `notes.md` (candle attention bug + backend benchmark table).*
+investigation — no longer in-repo), `notes.md` (candle attention bug + backend benchmark table).*
 
 *Jul 5, 2026 — the MPSGraph bypass (metal backend) landed and rewrote the bottom half of
 this doc. Headline: **~578 moves/s** at defaults (`--eval-backend metal`, 128 actors, 2
@@ -63,7 +63,7 @@ work between stalls).
 
 Historical note: the "one thread only may touch the device" invariant came from a
 **candle** Metal bug (tensor corruption under multi-threaded encoding — see
-`eval_server.rs` header / `bug_handoff.md`). It does **not** apply to the tch/libtorch
+`eval_server.rs` header; `bug_handoff.md` no longer in-repo). It does **not** apply to the tch/libtorch
 backend, which has its own internal MPS stream locking.
 
 ## The staircase
@@ -353,7 +353,7 @@ diminishing returns. The next real lever is `wait`: per-forward GPU cost
   eval capacity *did* bind (libtorch's serial queue capped it far below the actor
   ceiling). The MPSGraph forward is now the main path and worth 2.4x+.
 - **Any candle inference tuning.** Retired for self-play; kernels are 2–8% of hardware
-  capability at these shapes (see `profiling_report.md`), and its cross-attention loaded
+  capability at these shapes (see `profiling_report.md`, no longer in-repo), and its cross-attention loaded
   untrained weights (see `notes.md` bug entry).
 - **Raising `--max-batch` further.** A no-op, measured twice (coalesced batches never
   approach 256 anyway — actor latency-sensitivity caps them first).

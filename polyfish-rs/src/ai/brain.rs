@@ -164,6 +164,13 @@ impl<'a> SearchAgent<'a> {
         }
     }
 
+    pub fn depth_stats(&self) -> Option<(u64, u64, u32, u64, u64, u64)> {
+        match self {
+            SearchAgent::Gumbel(a) => Some(a.depth_stats()),
+            _ => None,
+        }
+    }
+
     /// Clear the cached root value from the previous search. Useful when
     /// an early return (e.g. forced move) bypasses the search engine but
     /// keeps the agent alive for tree reuse.
@@ -417,6 +424,12 @@ impl<'a> Brain<'a> {
         self.agent.as_ref().and_then(SearchAgent::last_root_own_value)
     }
 
+    /// Cumulative search telemetry:
+    /// (depth_sum, depth_count, depth_max, horizon_hits, agree, decisions).
+    pub fn depth_stats(&self) -> Option<(u64, u64, u32, u64, u64, u64)> {
+        self.agent.as_ref().and_then(SearchAgent::depth_stats)
+    }
+
     pub fn think_with_stats(&mut self, game: &Game) -> (Option<Box<dyn Move>>, Vec<f32>) {
         let (agent, mut moves) = self.think(game);
 
@@ -432,10 +445,13 @@ impl<'a> Brain<'a> {
 /// Returns the maximum number of game turns the MCTS tree should look ahead
 /// from the current turn. This prevents the search from going absurdly deep
 /// and getting stuck in long rollouts during mid-game when branching is high.
-pub fn max_turns_ahead(_current_turn: i32, _max_turns: i32) -> i32 {
-    if _current_turn < 8 {
+pub fn max_turns_ahead(current_turn: i32, max_turns: i32) -> i32 {
+    if current_turn < 8 {
         5
     } else {
-        (20 - _current_turn).max(2).min(20) // idea: do not look ahead more than the last turn (20 turns, default)
+        // Turns actually remaining, not a hardcoded 20 — games run to
+        // max_turns=30, so the old literal pinned the horizon to its 2-turn
+        // floor from turn 18 on. Still capped at 20 to bound rollout length.
+        (max_turns - current_turn).max(2).min(20)
     }
 }

@@ -1,3 +1,19 @@
+# notes.md — historical research journal
+
+> **⚠️ HISTORICAL LOG — not the current source of truth.**
+> An append-only chronological journal (Jul 3–22, 2026). Many interpretations here were **corrected
+> later in the same file**, often only a few sections down, but the original claim still reads in the
+> present tense. **Do not cite a claim from this file as current.** Current truth:
+> [`current_understanding.md`](current_understanding.md); per-experiment verdicts:
+> [`hypothesis_driven_improvements.md`](hypothesis_driven_improvements.md). Lines tagged
+> **(SUPERSEDED → …)** are kept for provenance only.
+>
+> Reversals to watch for (all resolved in `current_understanding.md`): the value head is
+> *mis-calibrated, not blind*; "over-researching" was refuted (economy gets more stars, not fewer);
+> the "toward-village prior is suppressed" reading was a same-ply artifact; search is ~4 plies at
+> n=64 (not 2–3, and not "within-turn only"); a single CPU NN eval is ~2.65 ms (not ~100 ms);
+> the tempo failure is NOT mirror-label cancellation.
+
 training a simple 1v1 small drylands map. max 10 turns
 
 going with 25 mcts for ok depth and search. usually the best moves are always the first few available.
@@ -78,7 +94,7 @@ you must look ~8 steps deep just to complete one game turn
 # Verdi, Jul 3, 2026
 Thanks to a deep review from Claude Fable I was able to find and fix a couple of bugs that would hurt the quality of the training. Namely:
 - A bug in flipping sign of the NN value head on every move instead of when player turn changes
-- Weak gradient causing the value head to barely learn and thus MCTS relying only on priors
+- Weak gradient causing the value head to barely learn and thus MCTS relying only on priors **(SUPERSEDED → the head is not failing to learn; value_loss converges. It is mis-calibrated/over-confident, not blind — EXP_ELO_021/022)**
 - Add more diversity in training data generation both by using temperature sampling over MCTS visited in the early moves instead of argsmax() and by randomizing the tribe per game in each call of self-play
 
 I made a couple of improvements for faster training on Apple Metal. A core bottleneck to training is being able to generate lots of data in as little time as possible. Before it took me 60s to generate 5 games with 50 mcts iters. Now I'm down to 15s. The goal is to get sub 1s.
@@ -145,7 +161,7 @@ Diagnosis (why self-play alone couldn't learn the basics at this compute):
 the heuristic only nudged root priors; the training target re-ranks that
 nudge by Q-values that are noise early on; 64 sims -> winning root child
 gets ~15 visits, so the tree is 2-3 plies deep vs ~8 plies per Polytopia
-turn — search can never SEE that a step toward a village pays off; and the
+turn — search can never SEE that a step toward a village pays off **(SUPERSEDED → mean tree depth is ~4 plies at n=64 and grows ~sims^0.5; search DOES cross its own EndTurns ~5 own-turns deep, just with a frozen opponent — ledger §1, EXP_ELO_023)**; and the
 steps that lead to captures are rare, weakly-targeted, and value-diluted
 all at once. Pure outcome-driven AlphaZero from scratch here costs
 DeepMind-scale compute. Shortcut required.
@@ -205,7 +221,7 @@ over iter. Hoped: noisy Q out of pi' stops early corrosion. Got (1783386024): be
 
 ### Log decision traces in a JSON
 To troubleshoot I decided to instrument the whole decision process. What heuristic are hinted at root, what policy head suggests, what the value head evaluates each leaf node at, the ultimate Q computed, and then the move chosen.
-I sampled across multiple games and iterations and I can in the data what confirms without a shadow of a doubt what I knew from earlier attempts: our value head sucks. It is not properly learning what is good for the game and it is THE thing that drags down the bot's performance.
+I sampled across multiple games and iterations and I can in the data what confirms without a shadow of a doubt what I knew from earlier attempts: our value head sucks. It is not properly learning what is good for the game and it is THE thing that drags down the bot's performance. **(SUPERSEDED → the value head is mis-calibrated, not blind, and is NOT the binding lever: it contributes +8.6pp to search despite corr(raw,outcome)≈0.40. The lever is search depth/throughput — EXP_ELO_023.)**
 
 THE NUMBERS (Jul 7-8, 2026):
 Tooling: self_play --trace-villages --trace-trigger adjacent|on-village
@@ -1022,13 +1038,12 @@ Follow-up to the tempo/race findings above (`hypothesis_driven_improvements.md`
 §4-§7): framed the city-count deficit as one instance of a general
 "purposefulness" problem (does the model sustain a chosen course of action
 across plies?) that should also show up in eco-dev and military behavior if
-the mechanism is real. See `failure_mode.md` (new file) for the tracked
-numbers — FM-1 (uncontested capture rate 73-78%, should be ~99%+), FM-2
+the mechanism is real. The tracked failure-mode numbers — FM-1 (uncontested capture rate 73-78%, should be ~99%+), FM-2
 (3rd-city pursuit rate 91-98%, should be ~100%), FM-3 (new: turns/tile ≈
 1.8-1.9x geometric distance, identical across self-play/vs-Greedy/contested/
 uncontested — an opponent-independent movement-pacing deficit, from a
 per-turn distance-trajectory reanalysis of the existing `turnstates_*`
-dumps: ~41-43% of turns during an active pursuit close zero distance).
+dumps: ~41-43% of turns during an active pursuit close zero distance). **(SUPERSEDED → the "41.8% of plies" and "81.4% of turns" figures are both artifacts; the identity-tracked rate is ~50–60%, and whether it is a defect at all is unresolved since mirror play has no contest — see `current_understanding.md`.)**
 
 Proposed 3-layer frame for where "purposefulness" leaks (proposal / reward /
 representation) and picked Layer 2 (reward) to test first — see chat log for
@@ -1174,7 +1189,7 @@ is why reward shaping in the absolute channel didn't move the leaf-value
 ordering, and points the fix at either (a) the prior / visit allocation
 (search-side: force the toward move a fair visit count so its Q is a real
 estimate, not imputed), or (b) breaking the mirror-play label symmetry so the
-value head has a non-flat signal to learn expansion urgency from.
+value head has a non-flat signal to learn expansion urgency from. **(SUPERSEDED → option (b) rejected: mirror-label cancellation is NOT the cause of the tempo deficit — training uses ANCHOR_FRAC=1.0 so Greedy-anchor games are the majority and still fail. See memory `no-mirror-excuse-for-tempo` and `current_understanding.md`.)**
 
 ---
 

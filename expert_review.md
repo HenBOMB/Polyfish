@@ -1,5 +1,12 @@
 # Review of Verdi's Attack Plan
 
+> **⚠️ HISTORICAL / SUPERSEDED (Jul 4, 2026).** A one-off external code review from early in the project.
+> Its concrete recommendations (value-backprop sign fix, terminal/horizon→0, value-target rescale, Elo
+> ladder, Gumbel, batched inference) were acted on and are chronicled in
+> [`hypothesis_driven_improvements.md`](hypothesis_driven_improvements.md) and
+> [`expert_boost_throughput.md`](expert_boost_throughput.md). Kept for provenance — **not current guidance.**
+> For the current understanding see [`current_understanding.md`](current_understanding.md).
+
 I've read the plan, the full MCTS/self-play/training code, the Gumbel draft, the book/heuristics, the recorder, and your session logs. Here's the report.
 
 # TL;DR

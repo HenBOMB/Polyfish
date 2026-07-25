@@ -63,3 +63,7 @@ polyfish-rs/*.json
 polyfish-rs/.current_run
 turnstates_*/
 decision_traces_*/
+
+# Scratch analysis dumps & value-head calibration data (untracked one-offs)
+scratchpad_*.txt
+value_calib*.jsonl

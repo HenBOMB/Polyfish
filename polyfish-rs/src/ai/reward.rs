@@ -112,7 +112,8 @@ pub const SHAPE_PROX_CAP: i32 = 7;
 /// measured chosen−toward Q gap on wrong-move pursuer-turns (median 0.19 /
 /// p75 0.42 normalized, ≈150–350 score-equiv through `score_norm≈700`) —
 /// ~15× EXP_ELO_016's `SHAPE_PROX_PER_TILE`, which was too weak to flip the
-/// decision (see failure_mode.md FM-3 / notes.md pursuit diagnosis).
+/// decision (FM-3 pursuit metric — see the notes.md pursuit diagnosis;
+/// current status in current_understanding.md).
 pub const SHAPE_PURSUIT_PER_TILE: f32 = 200.0;
 
 /// Chebyshev distance between two row-major tile indices.
