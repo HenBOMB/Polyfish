@@ -40,13 +40,9 @@ impl Move for SummonMove {
 
         if let Some(tribe) = state.tribes.get(&pov_id) {
             if tribe.stars < cost {
-                println!(
-                    "SummonMove::execute FAILED: {:?} at {}, need {}, have {} (Turn {})",
-                    self.unit_type, self.src_index, cost, tribe.stars, state.settings.turn
-                );
                 return Err(format!(
-                    "Insufficient stars for summon: need {}, have {}",
-                    cost, tribe.stars
+                    "Insufficient stars to summon {:?} at {}: need {}, have {}",
+                    self.unit_type, self.src_index, cost, tribe.stars
                 ));
             }
         }

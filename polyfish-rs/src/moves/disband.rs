@@ -53,11 +53,10 @@ impl Move for DisbandMove {
                 rewards: None,
             })
         } else {
-            eprintln!(
-                "Error: Unit not found for DisbandMove at target {}",
+            Err(format!(
+                "Unit not found for Disband at {}",
                 self.src_index
-            );
-            Err("Unit not found".to_string())
+            ))
         }
     }
 

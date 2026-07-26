@@ -8,6 +8,9 @@ use crate::types::{SkillType, StructureType, TechnologyType, UnitEffect};
 use super::break_ice::generate_break_ice_moves_for_unit;
 use super::*;
 
+/// First turn on which Disband is offered as a legal move (turns are 0-indexed).
+const DISBAND_MIN_TURN: i32 = 10;
+
 pub fn generate_unit_action_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
     let pov_id = state.settings.current_player_turn_id;
     let tribe = match state.tribes.get(&pov_id) {
@@ -49,8 +52,12 @@ pub fn generate_unit_action_moves_for_unit(
         return;
     }
 
-    // Disband
-    if technology::has_technology(&tribe.tech_vanilla, TechnologyType::FreeSpirit) {
+    // Disband: suppressed in the opening. Burning a unit for stars before the
+    // map is contested is never right, and offering it only costs search and
+    // training budget. Real games replay via `play_move`, which bypasses this.
+    if state.settings.turn >= DISBAND_MIN_TURN
+        && technology::has_technology(&tribe.tech_vanilla, TechnologyType::FreeSpirit)
+    {
         moves.push(Box::new(DisbandMove::new(idx)));
     }
 

@@ -10,6 +10,7 @@ use crate::actions::{
 use crate::functions::{
     get_adjacent_indices, get_pov_tribe, get_total_production, is_game_over, sync_scores,
 };
+use crate::illegal_move_log::verbose_sim_failures;
 use crate::moves::{Move, generate_legal_moves};
 use crate::settings::has_technology;
 use crate::states::*;
@@ -35,17 +36,6 @@ pub static SIM_END_TURN_EDGES: std::sync::atomic::AtomicU64 =
 /// event, not a crash or corrupted game.
 pub static SIM_MOVE_FAILURES: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
-
-/// Set `POLYFISH_VERBOSE_SIM_FAILURES=1` to print each stale-tree-reuse
-/// recovery event (see `SIM_MOVE_FAILURES`) as it happens. Off by default —
-/// these are expected and self-healed, and printing them unconditionally
-/// reads as a bug even when the search is behaving correctly. The JSON trace
-/// in `illegal_moves/` is still written regardless (see `illegal_move_log`).
-fn verbose_sim_failures() -> bool {
-    use std::sync::OnceLock;
-    static FLAG: OnceLock<bool> = OnceLock::new();
-    *FLAG.get_or_init(|| std::env::var("POLYFISH_VERBOSE_SIM_FAILURES").is_ok())
-}
 
 /// The main game controller
 ///
@@ -332,13 +322,13 @@ impl Game {
             let result = game_move.execute(&mut self.state);
             if let Err(e) = result {
                 SIM_MOVE_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                crate::illegal_move_log::log_illegal_move(
-                    "simulate_move",
-                    &self.state,
-                    game_move,
-                    &e,
-                );
                 if verbose_sim_failures() {
+                    crate::illegal_move_log::log_illegal_move(
+                        "simulate_move",
+                        &self.state,
+                        game_move,
+                        &e,
+                    );
                     eprintln!(
                         "[MCTS stale-tree reuse, expected & self-healed — see SIM_MOVE_FAILURES] \
                          cached move no longer legal in replayed state: {}",

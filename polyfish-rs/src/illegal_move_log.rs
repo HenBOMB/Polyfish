@@ -11,6 +11,17 @@ const MAX_LOGGED_FAILURES: u64 = 500;
 
 static LOGGED_COUNT: AtomicU64 = AtomicU64::new(0);
 
+/// Opt-in gate for simulated-move failure diagnostics (`POLYFISH_VERBOSE_SIM_FAILURES=1`),
+/// covering both the `illegal_moves/*.json` dumps and game.rs's per-event stderr line.
+/// These failures are expected, self-healed stale-tree-reuse events; dumping a full
+/// `GameState` per event mid-search taxes self-play throughput and accumulates ~100MB
+/// of debris for a non-bug. Real `play_move` rejections log unconditionally.
+pub fn verbose_sim_failures() -> bool {
+    use std::sync::OnceLock;
+    static FLAG: OnceLock<bool> = OnceLock::new();
+    *FLAG.get_or_init(|| std::env::var("POLYFISH_VERBOSE_SIM_FAILURES").is_ok())
+}
+
 /// Dump one illegal-move-attempt event to `illegal_moves/<context>_<ts>_<id>.json`.
 /// `state` is captured after the failed `execute()` call — safe today because
 /// every known failing `Move::execute()` validates before mutating, but that's

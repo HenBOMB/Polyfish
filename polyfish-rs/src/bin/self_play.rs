@@ -835,13 +835,18 @@ struct GameResult {
     /// the net seeks them out. Censored at max_turns when a game never gets
     /// there (incl. when the anchor takes them first — losing the race
     /// reads as censored, not captured).
-    villages_t2c_first: f32,
     villages_t2c_p50: f32,
     villages_t2c_p80: f32,
     villages_t2c_all: f32,
-    /// Uncensored turn of the first village capture, -1.0 if none happened —
-    /// lets the aggregator split capture-rate from turn-given-captured.
-    villages_first_raw: f32,
+    /// First-village stats, per NET SEAT (2 in a mirror game, 1 in an
+    /// anchor/league game) so the aggregator can divide by seats rather than
+    /// games — matching the t2c_Nth_rate family. `censored_sum` charges
+    /// max_turns to a seat that never captured; `turn_sum` covers only the
+    /// seats that did.
+    villages_first_seats: u32,
+    villages_first_captured: u32,
+    villages_first_turn_sum: f64,
+    villages_first_censored_sum: f64,
     ruins_t2c_p50: f32,
     ruins_t2c_p80: f32,
     ruins_t2c_all: f32,
@@ -1126,6 +1131,11 @@ fn play_single_game(
     let initial_ruins = open_ruins.len();
     let mut village_capture_turns: Vec<i32> = Vec::new();
     let mut ruin_capture_turns: Vec<i32> = Vec::new();
+    // Turn of each net seat's OWN first village capture. The pooled
+    // `village_capture_turns` above cannot answer this: a mirror game puts two
+    // net seats in one list, an anchor game one, so any rate built from it is a
+    // blend of two different per-seat probabilities.
+    let mut first_village_turn: HashMap<PlayerId, i32> = HashMap::new();
 
     // --dump-failed-dir: trace every decision; the log is written out only
     // if the game ends with zero village captures.
@@ -1699,6 +1709,9 @@ fn play_single_game(
                     if open_villages.remove(&idx) {
                         if net_move {
                             village_capture_turns.push(game.state.settings.turn);
+                            first_village_turn
+                                .entry(pov)
+                                .or_insert(game.state.settings.turn);
                         }
                     } else if open_ruins.remove(&idx) && net_move {
                         ruin_capture_turns.push(game.state.settings.turn);
@@ -1953,6 +1966,25 @@ fn play_single_game(
         }
     }
 
+    let net_seats: Vec<PlayerId> = game
+        .state
+        .tribes
+        .keys()
+        .copied()
+        .filter(|pid| is_net_seat(seat_roles, *pid))
+        .collect();
+    let (mut vf_captured, mut vf_turn_sum, mut vf_censored_sum) = (0u32, 0.0f64, 0.0f64);
+    for pid in &net_seats {
+        match first_village_turn.get(pid) {
+            Some(&t) => {
+                vf_captured += 1;
+                vf_turn_sum += f64::from(t);
+                vf_censored_sum += f64::from(t);
+            }
+            None => vf_censored_sum += f64::from(max_turns),
+        }
+    }
+
     Some(GameResult {
         history: game_history,
         scores,
@@ -1963,11 +1995,13 @@ fn play_single_game(
         net_moves,
         revealed_tiles,
         captured_tiles,
-        villages_t2c_first: t2c_turn(&village_capture_turns, initial_villages, 0.0, max_turns),
         villages_t2c_p50: t2c_turn(&village_capture_turns, initial_villages, 0.5, max_turns),
         villages_t2c_p80: t2c_turn(&village_capture_turns, initial_villages, 0.8, max_turns),
         villages_t2c_all: t2c_turn(&village_capture_turns, initial_villages, 1.0, max_turns),
-        villages_first_raw: village_capture_turns.first().map_or(-1.0, |&t| t as f32),
+        villages_first_seats: net_seats.len() as u32,
+        villages_first_captured: vf_captured,
+        villages_first_turn_sum: vf_turn_sum,
+        villages_first_censored_sum: vf_censored_sum,
         ruins_t2c_p50: t2c_turn(&ruin_capture_turns, initial_ruins, 0.5, max_turns),
         ruins_t2c_p80: t2c_turn(&ruin_capture_turns, initial_ruins, 0.8, max_turns),
         ruins_t2c_all: t2c_turn(&ruin_capture_turns, initial_ruins, 1.0, max_turns),
@@ -2807,9 +2841,10 @@ fn main() -> anyhow::Result<()> {
     let mut total_abilities = 0;
     let mut total_revealed_tiles: i64 = 0;
     let mut total_captured_tiles: i64 = 0;
-    let mut total_t2c = [0.0f64; 7]; // villages first/p50/p80/all, ruins p50/p80/all
-    let mut first_cap_games = 0usize;
+    let mut total_t2c = [0.0f64; 6]; // villages p50/p80/all, ruins p50/p80/all
+    let (mut first_cap_seats, mut first_cap_captured) = (0u32, 0u32);
     let mut first_cap_turn_sum = 0.0f64;
+    let mut first_cap_censored_sum = 0.0f64;
     let mut spt_sums: HashMap<i32, f64> = HashMap::new();
     let mut spt_counts: HashMap<i32, u32> = HashMap::new();
 
@@ -2849,7 +2884,6 @@ fn main() -> anyhow::Result<()> {
             *spt_counts.entry(turn).or_default() += 1;
         }
         for (acc, v) in total_t2c.iter_mut().zip([
-            result.villages_t2c_first,
             result.villages_t2c_p50,
             result.villages_t2c_p80,
             result.villages_t2c_all,
@@ -2859,10 +2893,10 @@ fn main() -> anyhow::Result<()> {
         ]) {
             *acc += v as f64;
         }
-        if result.villages_first_raw >= 0.0 {
-            first_cap_games += 1;
-            first_cap_turn_sum += result.villages_first_raw as f64;
-        }
+        first_cap_seats += result.villages_first_seats;
+        first_cap_captured += result.villages_first_captured;
+        first_cap_turn_sum += result.villages_first_turn_sum;
+        first_cap_censored_sum += result.villages_first_censored_sum;
         if result.winner_score > max_score {
             max_score = result.winner_score;
             best_recap = Some(result.recap.clone());
@@ -3436,10 +3470,21 @@ fn main() -> anyhow::Result<()> {
         "avg_spt_t20": avg_spt_at(20),
         "avg_spt_t25": avg_spt_at(25),
         "avg_spt_t30": avg_spt_at(30),
-        "villages_t2c_first": (total_t2c[0] / args.num_games as f64) as f32,
-        "villages_first_rate": (first_cap_games as f64 / args.num_games as f64) as f32,
-        "villages_t2c_first_cond": if first_cap_games > 0 {
-            (first_cap_turn_sum / first_cap_games as f64) as f32
+        // Per NET SEAT, not per game — a mirror game contributes two seats and
+        // an anchor game one, so a games denominator blended two different
+        // per-seat probabilities and drifted with anchor_frac.
+        "villages_t2c_first": if first_cap_seats > 0 {
+            (first_cap_censored_sum / f64::from(first_cap_seats)) as f32
+        } else {
+            -1.0
+        },
+        "villages_first_rate": if first_cap_seats > 0 {
+            (f64::from(first_cap_captured) / f64::from(first_cap_seats)) as f32
+        } else {
+            0.0
+        },
+        "villages_t2c_first_cond": if first_cap_captured > 0 {
+            (first_cap_turn_sum / f64::from(first_cap_captured)) as f32
         } else {
             -1.0
         },
@@ -3448,12 +3493,12 @@ fn main() -> anyhow::Result<()> {
             args.tribe1.as_deref().unwrap_or("random"),
             args.tribe2.as_deref().unwrap_or("random")
         ),
-        "villages_t2c_p50": (total_t2c[1] / args.num_games as f64) as f32,
-        "villages_t2c_p80": (total_t2c[2] / args.num_games as f64) as f32,
-        "villages_t2c_all": (total_t2c[3] / args.num_games as f64) as f32,
-        "ruins_t2c_p50": (total_t2c[4] / args.num_games as f64) as f32,
-        "ruins_t2c_p80": (total_t2c[5] / args.num_games as f64) as f32,
-        "ruins_t2c_all": (total_t2c[6] / args.num_games as f64) as f32,
+        "villages_t2c_p50": (total_t2c[0] / args.num_games as f64) as f32,
+        "villages_t2c_p80": (total_t2c[1] / args.num_games as f64) as f32,
+        "villages_t2c_all": (total_t2c[2] / args.num_games as f64) as f32,
+        "ruins_t2c_p50": (total_t2c[3] / args.num_games as f64) as f32,
+        "ruins_t2c_p80": (total_t2c[4] / args.num_games as f64) as f32,
+        "ruins_t2c_all": (total_t2c[5] / args.num_games as f64) as f32,
         "games_file": games_file,
         "moves_by_turn": moves_by_turn,
         "avg_units_spawned": per_net_game(net_trained),
@@ -3499,7 +3544,7 @@ fn main() -> anyhow::Result<()> {
     );
     // How often a simulated move failed to execute against the replayed state
     // (tree-reuse staleness in Gumbel MCTS — see SIM_MOVE_FAILURES doc comment
-    // in game.rs). Nonzero means illegal_moves/*.json has diagnostic dumps.
+    // in game.rs). Set POLYFISH_VERBOSE_SIM_FAILURES=1 for illegal_moves/*.json dumps.
     let sim_move_failures =
         polyfish::game::SIM_MOVE_FAILURES.load(std::sync::atomic::Ordering::Relaxed);
     println!(
