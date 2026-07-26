@@ -872,3 +872,176 @@ New metric shipped alongside the depth telemetry: `PRIOR OVERRIDE` = root decisi
 **Established:** 64→256 is a real +8.9pp. **Unproven:** 256→2048 is only 0.9σ — past 256 the override rate keeps climbing but the extra overrides cannot be shown to help (plausibly increasing near-ties). This supersedes both the earlier "flat past 256" retraction AND the "+5pp per 4× all the way out" reading: the confident statement is one big step at 64→256, then unresolved.
 
 **Implication for expert-iteration / distillation (generate high-budget, deploy low-budget):** headroom is large and the signal is stable — prior-only **36.7%** → search@64 44.3% → search@256 **53.1%**, i.e. **~16pp** between the bare prior and n=256 search, with ~24% of root decisions being ones the prior currently gets overruled on. **Recommended generation budget n=256**: proven gain, only **2.7× per game** (1.4s vs 0.4s), first rung past the one-turn threshold; deploy at n=64 (166 ms/move ≈ 3.3s per 20-action turn). **Metric caveat:** override *rate* counts decisions, not importance — it shows signal exists, not what it is worth.
+
+---
+
+## EXP_ELO_024: Widen the TD credit window — λ 0.8 → 0.875 (~5 → ~8 turns)
+*Jul 26–27, 2026. ⚠️ **Retro-logged, not pre-registered** — the run was launched first, this entry written from its data at iteration 15/20.*
+
+**Motivation (Verdi, Jul 26).** "The TD is a proxy for winning the game. If your score maximally improves over the next 5 or 10 turns in a 30-turn game then you're on the trajectory to victory. Maybe we expand the window to try to target ~8 turns instead of 5." `LAMBDA_RETURN = 0.8` puts the credit window's center of mass at `1/(1−λ) = 5` turns; λ=0.875 moves it to 8. The hoped-for mechanism: a longer window lets the label see the *consequence* of expansion (a village taken at t12 pays rent through t20), which the 5-turn window truncates.
+
+**Instrumentation shipped:** `--td-lambda` on `self_play` (default `LAMBDA_RETURN`), plumbed through `run_training_loop.sh` as `TD_LAMBDA` and echoed in the `CONFIG` line. Note the parameter is **double-duty and cannot be dialed apart**: λ sets both the trace decay *and* the `λ^n` terminal tail inside the TD arm. The flat 30% outcome share (`1 − td_w`) is independent of it.
+
+**Arms** — a clean single-variable A/B, verified from the `CONFIG` echoes:
+| | run | λ | everything else |
+|---|---|---|---|
+| A | `1785069748` | 0.800 | `mcts=256 gauge_mcts=256 k=16 td_w=0.7 unfreeze=1 value_trust=1.0 anchor_frac=0.25 games=64`, 13 self-play iters |
+| B | `1785087189` | **0.875** | identical |
+
+**Confound:** B **continued from A's iter-14 weights** (checkpoint hashes differ: `run_1785087189_iter1_start` ≠ `run_1785069748_iter1_start`), so this is a trajectory extension, not a paired fork from a shared base. Read it as "24 iterations of which the last 13 were λ=0.875", not as two independent samples.
+
+### Expected Results
+A longer window should show up as (a) better expansion retention past the t15 city peak, (b) a wider score margin vs the Greedy anchor, and (c) a gauge reading above A's 51.56%.
+
+### Falsifier
+Model-side behavior curves statistically identical to A → λ is not a lever at this game length and the whole "widen the window" family is dead.
+
+### Actual Results
+
+**1. Gauge @iter10, both at n=256/k=16: A 51.56% (33/64) → B 40.62% (26/64).** Two-proportion **z = 1.24, p ≈ 0.21 — not distinguishable.** Score margin +476 (4768.7 vs 4293.0) → −164 (4360.4 vs 4524.3). Suggestive of harm, not evidence of it.
+
+**2. Nothing in the model's own behavior moved.** Welch *t* over 13 self-play iterations each:
+| metric | λ=0.800 | λ=0.875 | t |
+|---|---|---|---|
+| avg_score | 5186.1 | 5392.8 | +0.94 |
+| avg_spt_t25 | 12.428 | 12.424 | −0.01 |
+| avg_cap_villages | 2.651 | 2.649 | −0.05 |
+| avg_units_spawned | 16.64 | 17.30 | +0.87 |
+| avg_units_lost | 12.02 | 12.85 | +1.13 |
+| avg_moves | 420.9 | 423.2 | +0.16 |
+| **value_loss** | **0.2651** | **0.3064** | **+6.31** |
+| value_r2 | 0.8417 | 0.8306 | −1.27 |
+
+**The only metric that clears significance is `value_loss`, and it went the wrong way (+15.6%).** Part of that is definitional — λ changes the label, and a longer multi-step return has higher intrinsic variance, so *some* loss increase is free. But `value_r2` normalizes by target variance and it also slipped. Reading: **λ=0.875 bought label variance without buying horizon.** In a 30-turn game λ=0.8's `λ^n` tail has already reached terminal, so pushing to 0.875 mostly adds noise.
+
+**3. The army-composition failure is untouched.** Model $/unit at t25 is **2.26 → 2.27** (greedy 4.40 → 4.59). `trained_cum` stays at parity with the anchor at every checkpoint while `army_stars` is 2.3–2.6× behind — the model builds the same *count* of units at half the *value*, exactly as in every prior run.
+
+**4. The apparently-widened gaps are the ANCHOR arm moving, not the model.** This is the finding that reframes the whole run. Model-vs-anchor at t25, split by side, Welch *t* on the run means:
+| t25 | model A→B | t | anchor A→B | t |
+|---|---|---|---|---|
+| cities | 2.62 → 2.58 | −1.00 | 2.43 → 2.66 | +1.07 |
+| units | 6.54 → 6.46 | −0.58 | 7.74 → 8.35 | +0.78 |
+| army_stars | 14.75 → 14.66 | −0.25 | 34.04 → 38.13 | +0.98 |
+| spt | 12.22 → 12.37 | +0.47 | 13.77 → 15.48 | +1.16 |
+| city_levels | 7.15 → 7.26 | +0.57 | 8.93 → 10.15 | +1.34 |
+
+Neither side is significant, but the model side is *flat and precise* while the anchor side drifts by ~1σ in one direction. Since Greedy is a **fixed, stateless policy**, the anchor curve cannot legitimately improve between runs — its motion is measurement noise (see EXP_ELO_M1). So "army gap widened −19.3 → −24.2" and "cities crossover moved from t30 to t25" are **anchor-side artifacts**, not λ effects.
+
+### Verdict — REJECTED. Revert `LAMBDA_RETURN` to 0.8.
+The pre-registered falsifier fired: model behavior is statistically identical to λ=0.8 (every *t* in |t| < 1.2), the value fit is measurably worse, and the gauge is 11pp lower at z=1.24. λ is not a lever at this game length. **`--td-lambda` stays shipped as a knob** (harmless, default 0.8) but should not be swept further — with EXP_ELO_021 (de-saturate the outcome label) and EXP_ELO_022 (down-weight the TD arm) also rejected, **the value-target parameterization is now closed as a family: three independent re-weightings, three nulls.**
+
+**The run's real yield is diagnostic, not behavioral** — see EXP_ELO_M1, discovered while reading it.
+
+---
+
+## EXP_ELO_M1: Measurement audit — why the behavior charts can't be correlated with anything
+*Jul 27, 2026. No training. Prompted by Verdi (Jul 26): "how come I cannot see the improvements in a consistent correlatable way?"*
+
+**Question.** Across Jul 22–26 the model-vs-Greedy behavior charts (`tempo_by_turn.json` → dashboard) swung by ±1 city and ±30 army stars between adjacent iterations, with no config change explaining it. Is that the model oscillating, or the measurement?
+
+### Finding 1 — the difference charts are ~93–99% opponent-side sampling noise
+Sample sizes per iteration, from `tempo_by_turn.json` `n` fields (64 games, `anchor_frac 0.25`):
+| turn | model seats alive | anchor seats alive |
+|---|---|---|
+| t10 | 92.8 | 14.6 |
+| t15 | 89.7 | 13.7 |
+| t20 | 79.1 | 10.7 |
+| **t25** | **65.0** | **7.6** |
+| t30 | 47.1 | 5.2 |
+
+The model gets **2 seats per mirror game + 1 per anchor game** (48×2 + 16 = 112 seats) while Greedy gets **1 seat in anchor games only** (16). By t25 attrition leaves the opponent baseline estimated from **7.6 games**. Resulting cross-iteration standard deviations (13 iterations, run `1785087189`):
+| t25 metric | model sd | anchor sd | **anchor share of diff variance** |
+|---|---|---|---|
+| cities | 0.081 | 0.614 | **97.8%** |
+| army_stars | 0.962 | 11.07 | **99.1%** |
+| spt | 0.732 | 4.55 | **97.3%** |
+
+Same picture in run `1785069748` (93.3% / 99.4% / 92.7%) and at t15/t20 (77–99%). **The model curve is extremely stable — cities sd 0.081 across 13 iterations — and essentially all visible motion in the `model − anchor` chart comes from the 7.6-game opponent estimate.**
+
+### Finding 2 — the anchor wobble is *entirely* sampling, leaving no room for signal
+If the anchor curve's iteration-to-iteration variation were pure sampling, the implied per-game sd would be `sd_obs · √n`. For t25 cities:
+| run | anchor mean | sd_obs | n | implied per-game sd | Poisson(mean) |
+|---|---|---|---|---|---|
+| `1785069748` | 2.43 | 0.501 | 7.5 | 1.372 | 1.560 |
+| `1785087189` | 2.66 | 0.614 | 7.4 | 1.670 | 1.630 |
+
+The implied per-game sd lands **on the Poisson prediction for a count of that mean**. There is no residual left to attribute to real drift. Concretely: iterations 11/12/13 of run B read **+0.29 / +0.67 / +1.05** cities-vs-anchor at t20 and iteration 14 reads **−0.12** — with a model-side sd of 0.081, *the model did not move; the baseline estimate did.* Every "the model finally passed Greedy for several iterations in a row" read from these charts since Jul 22 is unsupported.
+
+**Fix (no error bands — Verdi, Jul 26).** Greedy is a fixed reference policy, so **stop re-estimating it every iteration.** Pool it once across iterations/runs into a static reference line and plot the model curve on its own, where sd 0.08 makes a genuine 0.15-city change plainly visible. Caveat: Greedy's curve in anchor games *does* depend slightly on how the model plays it, so it is not perfectly stationary — but at n=7.6 that second-order effect is invisible beneath the sampling noise. Raising `ANCHOR_FRAC` is the alternative and costs mirror data.
+
+### Finding 3 — the 64-game gauge cannot resolve anything smaller than ~12pp
+The last 8 gauge readings vs Greedy: 43.75, 37.50, 39.06, 39.06, 46.88, 46.88, 51.56, 40.62. Mean **43.16%**, observed sd **4.94pp** — *below* the **6.19pp** expected from binomial sampling alone at n=64. Since the readings span some budget differences (which would only *add* variance), this is strong evidence that **not one of the last 8 runs separated from the pack.** Unfreeze-opponent (EXP_ELO_019), `value_trust`, and λ (EXP_ELO_024) are all nulls at this resolution. Resolving a 6pp effect at 2σ needs ~555 games/side.
+
+### Finding 4 — the `villages_first_rate` fix validates against production data
+The Jul 25 denominator fix (`self_play.rs`) re-based first-village stats from *per game* to *per net seat*; run `1785069748` is the last pre-fix run and `1785087189` the first post-fix. Observed: **0.9243 → 0.7932**. The old per-game statistic was `[48·(1−(1−p)²) + 16·p] / 64`; solving for the per-seat rate gives **p = 0.8079**, against the new metric's directly-measured **0.7932** — a gap of 0.015, well inside noise. **The two definitions agree; the drop is the 2-seat OR being removed, not a regression.** The old value sat near its ceiling, which is why the metric read as saturated and uncorrelatable. Its slope within run B is **+0.0037/iter (rising)**, so the earlier "first-village rate is trending down below 0.9" concern was the artifact.
+
+### Verdict — instrumentation defect confirmed; all Jul 22–26 chart-based behavior reads are unsupported (see next entry for the analysis that *does* work)
+No model change. Three consequences: (a) **do not read `model − anchor` difference curves** until the baseline is pooled; (b) **treat the 64-game gauge as a ±12pp instrument** — it has been used all week to adjudicate changes far smaller than that; (c) the model's own behavior has been *remarkably* stable across every recent config change, which is itself the evidence that the knobs tried so far do not touch the binding constraint.
+
+---
+
+## EXP_ELO_M2: Win/loss autopsy — why does the model beat Greedy when it does?
+*Jul 27, 2026. No training. Prompted by Verdi: "we know the model at budget 256 beats greedy at least half the time — why do we win? Make more units? Capture villages faster? Or something else?"*
+
+**Method.** Condition on the *outcome* instead of comparing model-vs-Greedy means — this sidesteps EXP_ELO_M1's noise problem entirely, because tribe, map and opponent are all held fixed within the comparison. Arena's `--dump-stats-dir` writes one JSON per game with `winner_config` plus per-turn `score/spt/stars/cities/units/unit_cost/techs` for both sides (`sample_turn` already undoes the seat swap, so index 0 is always the model). **`replays/gauge_stats/` already held 94 historical dumps** — no new run was needed to get started.
+
+**⚠️ Exploration-noise caveat (raised by Verdi, Jul 27 — a real limitation of this entry).** All games below are *arena* games, but they ran at the **default `GUMBEL_SCALE=1.0`, which `gumbel_mcts.rs:260` documents as "normal self-play exploration"** — `run_training_loop.sh` never sets it and neither did the manual runs. So this autopsy measures the **exploratory** policy, not maximum-strength play. Some share of the "stalled at ≤2 cities" population may therefore be self-inflicted root noise at a critical early decision rather than a policy defect. Note this also means **every gauge reading in `ladder.json` is a noisy-policy reading**, whereas EXP_ELO_023's ladder was taken at `GUMBEL_SCALE=0`. Deterministic replication is registered below.
+
+**Data.** 352 games vs Greedy at n=256/k=16, gamemode 2, max_turns 30, **Imperius v Imperius (arena hardcodes both tribes → no tribe confound)**:
+- 192 pooled from three existing gauge dumps (`1785069748_iter10`, `1785087189_iter10`, `manual_1785002034_iter10_n256`) → 46.9%
+- **160 fresh held-out games** on `gauge_1785069748_iter10` → **49.4%** (79/81), which independently replicated every finding below
+- Pooled: **169W / 183L = 48.0% [42.8–53.3]** — the best-resolved reading on record. Note the "51.56%" single gauge reading was the top of its own noise band; the honest strength is a coin flip.
+
+### Result 1 — the third city explains almost the whole outcome
+| condition | n | model win% |
+|---|---|---|
+| model reached 3+ cities | 193 | **74.1%** |
+| model stalled at ≤2 cities | 159 | **16.4%** |
+| reached city #3 before Greedy | 143 | 73.4% |
+| Greedy reached city #3 first | 194 | 27.3% |
+
+A **~58pp swing on one binary.** The model reaches 3 cities in 55% of games; Greedy does so in **97.8%** of games it wins.
+
+### Result 2 — it is not SLOWER, it is BINARY (supersedes the "tempo/race" framing)
+| | reach% WON | reach% LOST | turn WON | turn LOST |
+|---|---|---|---|---|
+| city #2 | 95.3% | 70.5% | t7.84 | t8.11 |
+| city #3 | **84.6%** | **27.3%** | t12.33 | t11.20 |
+| city #4 | 61.5% | 7.1% | t15.11 | t13.38 |
+
+**The turn at which each city arrives is the same in wins and losses** (if anything *earlier* in losses, among the games that get there at all). Only the reach *rate* differs. So the deficit is not a pace gap — in the games it loses, the 3rd city is simply never obtained. Peak city count in losses: **29.5% never reach 2, 43.2% peak at exactly 2** (72.7% ≤2); in wins the mode is 4–5. Peak-city *turn*: **t15.17 (won) vs t7.16 (lost)** — the "universal t15 collapse" of earlier aggregate reads was **two populations averaged**.
+
+### Result 3 — losses are annihilations, and "attrition ≈ 0" is dead
+| in games the model LOSES | peak | final | change |
+|---|---|---|---|
+| model cities | 2.06 | **0.50** | −75.6% |
+| model units | 5.77 | **0.85** | −85.2% |
+| greedy cities | 4.57 | 4.56 | −0.1% |
+| greedy units | 13.49 | 13.25 | −1.8% |
+
+The model **loses its capital in most losses**. Asymmetric: when Greedy loses it still ends with 1.34 cities. **This retracts the ledger §6 claim "attrition ≈ 0; the model's units survive"** — it is out-raced *and* then out-fought.
+
+### Result 4 — decided in turns 8–12
+AUC of the model-minus-Greedy score gap for predicting the win: **0.489 @t5 → 0.635 @t8 → 0.718 @t10 → 0.829 @t12 → 0.900 @t15 → 0.966 @t20 → 0.993 @t25.** At t5 the model leads on score in most games it wins *and* most it loses, so an early score lead carries no information; the fork is the 2nd/3rd-city window.
+
+### Result 5 — research is INELASTIC (the tower's real signature)
+| turn | techs W/L | cities W/L | techs-per-city W/L | t |
+|---|---|---|---|---|
+| t8 | 7.21 / 7.42 | 1.66 / 1.43 | 5.18 / 6.03 | −3.20 |
+| t10 | 8.59 / 8.77 | 2.09 / 1.62 | 4.98 / 6.40 | **−4.74** |
+| t12 | 10.17 / 10.19 | 2.54 / 1.80 | 4.87 / 6.97 | **−6.35** |
+| t15 | 12.56 / 12.29 | 3.02 / 1.85 | 5.10 / 8.21 | **−7.94** |
+
+**Absolute tech is flat** (AUC 0.463 at t10) while cities differ by 29%. The model buys the same research with 1 city as with 3 — it does not redirect stars when expansion stalls. That is a sharper and more actionable statement than "it over-researches." *Caveat: the ratio's denominator is itself the strongest discriminator, so the load-bearing fact is the flatness of absolute tech, not the ratio.*
+
+### Result 6 — army composition does NOT decide games ⚠️ demotes a claim made earlier the same day
+`$/unit`, model side: **2.16 (won) vs 2.08 (lost) at t10, AUC 0.536**; 2.20 vs 2.10 at t15, AUC 0.553. **Essentially zero discrimination.** The model makes *more* units when winning (8.15 vs 4.25 at t15), not more expensive ones, and those are funded by the cities. The aggregate 2× gap vs Greedy is genuine and may be a *uniform* handicap (a constant cannot discriminate, so it is not refuted), but **much of the apparent gap is Greedy's own $/unit sagging when it loses (3.19 vs 4.42)**. An earlier Jul 27 revision of `current_understanding.md` called this "the one behavioral gap that survives" and the place to aim structural change — **that over-claimed and has been corrected.**
+
+### Result 7 — the map is not destiny, and there is no seat effect
+Each seed is played in both orientations. Both give the same winner **39.2%** of the time (69/176) vs **50.1%** expected from an independent coin — at or *below* chance, so terrain explains ~nothing. Seat: P1 51.1% vs P2 44.9% (z ≈ 1.2, not significant); the 160-game held-out run split 40/80 vs 39/80, killing the P1-advantage hint from the first 192.
+
+### Verdict — the binding behavioral constraint is third-city REACH, as a binary
+Reaching 3 cities is worth 74.1% vs 16.4%; the model manages it 55% of the time; and *when* it manages it is identical in wins and losses. **Aim structural work here, not at the value target (021/022/024 closed) and not at army composition (non-discriminating).**
+
+**The next question is directly testable with instrumentation that already exists.** Since timing is identical, something makes the 3rd city *unreachable* in the failing 45%. Separate: **(a)** no FOW-visible neutral village in reach — `--dump-turn-states` already records "the model player's FOW-visible neutral villages" per turn, which answers this directly; **(b)** stars diverted to tech at the decision point (research is inelastic); **(c)** the units that would take it are dead or mis-positioned. Note (a) is *not* simply terrain quality, since seed concordance is at chance.
+
