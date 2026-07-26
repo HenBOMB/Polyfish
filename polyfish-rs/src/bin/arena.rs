@@ -29,7 +29,9 @@ struct Args {
     games: usize,
 
     /// MCTS iterations per move (override per side with --mcts1 / --mcts2).
-    #[arg(long, default_value_t = 100)]
+    /// Inherits MCTS_ITERS so a reading defaults to the budget the model is
+    /// trained at; win rates are only comparable at a fixed (mcts, gumbel_k).
+    #[arg(long, env = "MCTS_ITERS", default_value_t = 64)]
     mcts: usize,
 
     /// Override MCTS iterations for configuration 1.
@@ -49,7 +51,7 @@ struct Args {
     backend2: SearchBackendArg,
 
     /// Gumbel top-k at the root (only when a backend is gumbel).
-    #[arg(long, default_value_t = 16)]
+    #[arg(long, env = "GUMBEL_K", default_value_t = 16)]
     gumbel_k: usize,
 
     /// Max game turns. Higher = more decisive but slower.
@@ -533,7 +535,7 @@ fn main() -> anyhow::Result<()> {
     );
 
     let backend_label = match eval_backend_kind {
-        EvalBackendKind::Tch => "tch (libtorch/MPS)",
+        EvalBackendKind::Tch => "tch (libtorch: MPS/CUDA/CPU)",
         EvalBackendKind::Metal => "metal (MPSGraph)",
         EvalBackendKind::Candle => "candle",
     };

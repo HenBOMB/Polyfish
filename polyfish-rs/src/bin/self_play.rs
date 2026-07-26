@@ -2060,6 +2060,14 @@ fn main() -> anyhow::Result<()> {
         #[arg(long, default_value_t = TD_W)]
         td_w: f32,
 
+        /// TD(lambda) trace decay in the value label. Sets the credit window's
+        /// center of mass to 1/(1-lambda) turns (0.8 -> 5, 0.875 -> 8) and, as
+        /// the same parameter, the lambda^n terminal tail INSIDE the TD arm —
+        /// the two cannot be dialed apart. The flat 30% outcome share is
+        /// `1 - td_w`, independent of this.
+        #[arg(long, default_value_t = LAMBDA_RETURN)]
+        td_lambda: f32,
+
         /// EXP_ELO_021: scale on the relative final-outcome ratio before the
         /// [-1,1] clamp in the value LABEL (label-only — not the in-tree
         /// backup, so no EXP_ELO_005 search-disruption risk). Default 3.0
@@ -2306,6 +2314,9 @@ fn main() -> anyhow::Result<()> {
         if !(0.0..=1.0).contains(&t) {
             anyhow::bail!("--value-trust must be in [0, 1]");
         }
+    }
+    if !(0.0..=1.0).contains(&args.td_lambda) {
+        anyhow::bail!("--td-lambda must be in [0, 1]");
     }
 
     // Default Metal op-flush cadence to 1000 for better GPU efficiency on Metal
@@ -2963,7 +2974,7 @@ fn main() -> anyhow::Result<()> {
         let td_deltas = td_lambda_labels(
             &label_steps,
             &result.final_potentials,
-            LAMBDA_RETURN,
+            args.td_lambda,
             args.label_rel_w,
         );
 

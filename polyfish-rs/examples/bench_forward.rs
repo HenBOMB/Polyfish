@@ -18,11 +18,16 @@ fn main() -> anyhow::Result<()> {
     let iters: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(60);
 
     // BENCH_DEVICE=cpu forces the CPU backend (Accelerate BLAS when built with
-    // --features accelerate); =metal forces Metal; unset auto-selects Metal.
+    // --features accelerate); =metal forces Metal; =cuda forces CUDA; unset
+    // auto-selects Metal, then CUDA, then CPU. The explicit arms ERROR rather
+    // than fall back, so a misconfigured GPU box can't silently benchmark CPU.
     let device = match std::env::var("BENCH_DEVICE").as_deref() {
         Ok("cpu") => Device::Cpu,
         Ok("metal") => Device::new_metal(0)?,
-        _ => Device::metal_if_available(0).unwrap_or(Device::Cpu),
+        Ok("cuda") => Device::new_cuda(0)?,
+        _ => Device::metal_if_available(0)
+            .or_else(|_| Device::cuda_if_available(0))
+            .unwrap_or(Device::Cpu),
     };
     println!(
         "device={:?} batch={} iters={} compute_per_buffer={:?}",

@@ -47,6 +47,10 @@ DETACH_VALUE_TRUNK = os.environ.get("DETACH_VALUE_TRUNK", "0") == "1"
 # self-play). Opt in only for from-scratch runs, where the net never learns
 # orientation shortcuts to begin with.
 AUGMENT_D4 = os.environ.get("AUGMENT_D4", "0") == "1"
+# Mix teachers/ into every iteration (see the teacher-anchor note in train()).
+# Set 0 to train on self-play data only — matters most right after an archive
+# clear, where the teachers would otherwise dominate the first few iterations.
+USE_TEACHERS_DS = os.environ.get("USE_TEACHERS_DS", "1") == "1"
 # Auxiliary training-only heads (end-game ownership / fog occupancy / SPT+5 /
 # opponent tech). Rust inference loads model.safetensors by name and never
 # reads these. Targets ship in games files from Jul 2026; files without them
@@ -357,10 +361,10 @@ def train():
     # files ≈ 700 games at 64 games/file). Each sample is trained ~20 times
     # before pruning; reduces overfitting risk. Archive pruning keeps window+1.
     replay_buffer_size = int(os.environ.get("REPLAY_BUFFER_FILES", "10"))
-    # Teacher anchor: always mix these into every iteration so gradients keep
-    # pulling toward known-good play regardless of self-play drift (RLHF-style
-    # reference anchor). Never archived or pruned.
-    teacher_files = sorted(glob.glob("teachers/games_*.safetensors"))
+    # Teacher anchor: mix these into every iteration so gradients keep pulling
+    # toward known-good play regardless of self-play drift (RLHF-style reference
+    # anchor). Never archived or pruned. USE_TEACHERS_DS=0 opts out entirely.
+    teacher_files = sorted(glob.glob("teachers/games_*.safetensors")) if USE_TEACHERS_DS else []
     game_files = fresh_files + archive_files[:replay_buffer_size] + teacher_files
 
     if not game_files:
@@ -368,7 +372,8 @@ def train():
         return
 
     print(f"Training on {len(game_files)} files ({len(fresh_files)} fresh, "
-          f"{len(archive_files[:replay_buffer_size])} archived, {len(teacher_files)} teacher).")
+          f"{len(archive_files[:replay_buffer_size])} archived, {len(teacher_files)} teacher"
+          f"{'' if USE_TEACHERS_DS else ', USE_TEACHERS_DS=0'}).")
     
     # 2. Init Model
     MAP_SIZE = 11

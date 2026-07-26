@@ -46,12 +46,18 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     PATH="$(pwd)/.venv/bin:$PATH" cargo build --bin polyfish --bin self_play --bin arena --release --features apple
     # The tch-linked binary has no rpath for libtorch; point dyld at the venv's torch dylibs
     export DYLD_LIBRARY_PATH="$(.venv/bin/python3 -c "import torch, os; print(os.path.join(os.path.dirname(torch.__file__), 'lib'))")${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
-elif false; then
+elif command -v nvidia-smi >/dev/null 2>&1; then
     # CUDA available (Linux/Windows with NVIDIA GPU)
-    echo "Building with CUDA support..."
+    # `cudnn` matters as much as `cuda`: without it candle uses its own conv
+    # kernels, which is exactly what made the Metal backend ~19x slower than
+    # PyTorch for PolyZeroNet's conv shapes. Set POLYFISH_NO_CUDNN=1 to drop it
+    # if the box's cuDNN is missing/mismatched and the build fails.
+    CUDA_FEATURES="cuda,cudnn"
+    if [ -n "${POLYFISH_NO_CUDNN:-}" ]; then CUDA_FEATURES="cuda"; fi
+    echo "Building with CUDA support (features: $CUDA_FEATURES)..."
     # --no-default-features: opt out of the macOS `metal` default, which does
     # not compile on Linux.
-    cargo build --bin polyfish --bin self_play --bin arena --release --no-default-features --features cuda
+    cargo build --bin polyfish --bin self_play --bin arena --release --no-default-features --features "$CUDA_FEATURES"
 else
     # CPU-only fallback
     echo "Building CPU-only version..."
@@ -114,7 +120,10 @@ REWARD_SHAPING=true
 # Play a league match every LEAGUE_INTERVAL iterations (iteration 10, 20, 30,
 # ... by default). 0 disables league play entirely. Override with -l.
 LEAGUE_INTERVAL=10
-GUMBEL_K=16
+# Exported (like MCTS_ITERS) so arena inherits the run's search budget rather
+# than carrying its own default — a reading at a different (mcts, k) is not
+# comparable to the ladder.
+export GUMBEL_K=16
 while getopts "fbcri:g:n:a:e:l:k:" opt; do
   case $opt in
     f)
@@ -426,11 +435,14 @@ do
     # DECAY_LAST_ITER is the fallback trigger.
     DECAY_LAST_ITER_FLAG="--decay-last-iter ${DECAY_LAST_ITER:-150}"
 
-    # Value-head trust ramp, RUN-relative (loop iteration i, not EFF_ITER —
-    # ITER_OFFSET-shifted runs would saturate the in-binary iteration ramp
-    # immediately). Gates sigma(Q) in-tree and in exported policy targets.
+    # beta on sigma(Q), in-tree and in the exported policy targets. sigma's own
+    # scale grows with visits, so this is the dial that makes a bigger --mcts-iters
+    # pay off; damping it cancels the budget (EXP_ELO_023 ladder was measured at
+    # 1.0). Ramp is RUN-relative (loop iteration i, not EFF_ITER), so on a resumed
+    # or ITER_OFFSET-shifted run it re-imposes a warmup the model already earned —
+    # hence default off. Set VALUE_TRUST_RAMP_ITERS=30 for a from-scratch model.
     # VALUE_TRUST_CAP env caps the ramp's destination (e.g. from calibration).
-    VALUE_TRUST=$(awk -v i="$i" -v r="${VALUE_TRUST_RAMP_ITERS:-30}" -v cap="${VALUE_TRUST_CAP:-1.0}" \
+    VALUE_TRUST=$(awk -v i="$i" -v r="${VALUE_TRUST_RAMP_ITERS:-1}" -v cap="${VALUE_TRUST_CAP:-1.0}" \
         'BEGIN { t = i / r; if (t > 1) t = 1; t = t * cap; printf "%.3f", t }')
 
     # Dynamically fetch parameters from config.json (set by dashboard UI).
@@ -487,10 +499,10 @@ do
     # One-line config echo so silent env misconfigurations (ITER_OFFSET,
     # LABEL_REL_W, BOOTSTRAP) are visible in the log — EXP_ELO_006 post-mortem:
     # two runs voided by a missing ITER_OFFSET that nothing surfaced.
-    echo "CONFIG iter=$i eff_iter=$EFF_ITER iter_offset=${ITER_OFFSET:-0} match=$MATCH_TYPE backend=${BACKEND_FLAG:---search-backend gumbel} anchor='${ANCHOR_FLAG}' td_w=${TD_W:-0.7} label_rel_w=${LABEL_REL_W:-default} wl_labels=${WL_LABELS:-0} shape_w_label=${SHAPE_W_LABEL:-0} shape_w_tree=${SHAPE_W_TREE:-0} pursuit_w_label=${PURSUIT_W_LABEL:-0} pursuit_w_tree=${PURSUIT_W_TREE:-0} unfreeze_opponent=${UNFREEZE_OPPONENT:-0} dagger_alpha=${DAGGER_ALPHA:-0} value_trust=$VALUE_TRUST games=$NUM_GAMES mcts=$MCTS_ITERS k=$GUMBEL_K kl_ref_model=${KL_REF_MODEL:-none} kl_ref_weight=${KL_REF_WEIGHT:-0}"
+    echo "CONFIG iter=$i eff_iter=$EFF_ITER iter_offset=${ITER_OFFSET:-0} match=$MATCH_TYPE backend=${BACKEND_FLAG:---search-backend gumbel} anchor='${ANCHOR_FLAG}' td_w=${TD_W:-0.7} td_lambda=${TD_LAMBDA:-0.8} label_rel_w=${LABEL_REL_W:-default} wl_labels=${WL_LABELS:-0} shape_w_label=${SHAPE_W_LABEL:-0} shape_w_tree=${SHAPE_W_TREE:-0} pursuit_w_label=${PURSUIT_W_LABEL:-0} pursuit_w_tree=${PURSUIT_W_TREE:-0} unfreeze_opponent=${UNFREEZE_OPPONENT:-0} dagger_alpha=${DAGGER_ALPHA:-0} value_trust=$VALUE_TRUST games=$NUM_GAMES mcts=$MCTS_ITERS gauge_mcts=${GAUGE_MCTS:-$MCTS_ITERS} k=$GUMBEL_K kl_ref_model=${KL_REF_MODEL:-none} kl_ref_weight=${KL_REF_WEIGHT:-0}"
 
     SP_LOG=$(mktemp)
-    "$SELF_PLAY_BIN" --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $WL_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $BACKEND_FLAG $DECAY_LAST_ITER_FLAG --td-w "${TD_W:-0.7}" --outcome-scale "${OUTCOME_SCALE:-3.0}" $LABEL_REL_W_FLAG $SHAPE_FLAGS $UNFREEZE_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
+    "$SELF_PLAY_BIN" --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $WL_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $BACKEND_FLAG $DECAY_LAST_ITER_FLAG --td-w "${TD_W:-0.7}" --td-lambda "${TD_LAMBDA:-0.8}" --outcome-scale "${OUTCOME_SCALE:-3.0}" $LABEL_REL_W_FLAG $SHAPE_FLAGS $UNFREEZE_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
     SP_STATUS=${PIPESTATUS[0]}
     rm -f "$SP_LOG"
     if [ "$SP_STATUS" -ne 0 ]; then
@@ -582,6 +594,12 @@ do
         ANCHOR_NAME=$(echo "$ACTIVE_JSON" | jq -r '.name')
         GAUGE_LOG=$(mktemp)
 
+        # Readings are only comparable at a FIXED budget — sigma(Q)'s scale grows
+        # with visits, so a reading at a new --mcts-iters moves for free (the
+        # EXP_ELO_023 ladder spans 44.3% at n=64 to 58.0% at n=2048). Pin
+        # GAUGE_MCTS to keep the ladder on one rung while training budget varies.
+        GAUGE_MCTS_EFF="${GAUGE_MCTS:-$MCTS_ITERS}"
+
         # $1 = opponent model path ("" = greedy backend), $2 = seeds (games x2),
         # $3 = per-turn stats dump dir (optional; summarized into the reading)
         run_gauge_match () {
@@ -593,12 +611,12 @@ do
             if [ -z "$1" ]; then
                 "$ARENA_BIN" --model1 model.safetensors --model2 model.safetensors \
                     --backend1 gumbel --backend2 greedy \
-                    --mcts "$MCTS_ITERS" --gumbel-k "$GUMBEL_K" $DUMP_FLAG \
+                    --mcts "$GAUGE_MCTS_EFF" --gumbel-k "$GUMBEL_K" $DUMP_FLAG \
                     --games "$2" --gamemode "$GAMEMODE" | tee "$GAUGE_LOG"
             else
                 "$ARENA_BIN" --model1 model.safetensors --model2 "$1" \
                     --backend1 gumbel --backend2 gumbel \
-                    --mcts "$MCTS_ITERS" --gumbel-k "$GUMBEL_K" $DUMP_FLAG \
+                    --mcts "$GAUGE_MCTS_EFF" --gumbel-k "$GUMBEL_K" $DUMP_FLAG \
                     --games "$2" --gamemode "$GAMEMODE" | tee "$GAUGE_LOG"
             fi
             GAUGE_W=$(sed -n 's/^Config 1 Wins: \([0-9][0-9]*\).*/\1/p' "$GAUGE_LOG")
@@ -614,7 +632,8 @@ do
         # Snapshot the exact model each reading measures — without this, peaks
         # between run-start snapshots are unrecoverable (EXP_ELO_007 lost its
         # 45.3% iter-25 clone to a 28% iter-30 overwrite).
-        cp model.safetensors "checkpoints/gauge_${RUN_ID}_iter${i}.safetensors"
+        GAUGE_SNAPSHOT="checkpoints/gauge_${RUN_ID}_iter${i}.safetensors"
+        cp model.safetensors "$GAUGE_SNAPSHOT"
 
         run_gauge_match "$ANCHOR_PATH" "${GAUGE_GAMES:-32}" "replays/gauge_stats/${RUN_ID}_iter${i}"
         if [ -n "$GAUGE_W" ] && [ -n "$GAUGE_L" ]; then
@@ -622,8 +641,9 @@ do
                 --run-id "$RUN_ID" --iteration "$i" \
                 --wins "$GAUGE_W" --losses "$GAUGE_L" --draws "${GAUGE_D:-0}" \
                 --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}" \
-                --mcts "$MCTS_ITERS" --gumbel-k "$GUMBEL_K" --eval-backend "${GAUGE_BACKEND:-}" \
+                --mcts "$GAUGE_MCTS_EFF" --gumbel-k "$GUMBEL_K" --eval-backend "${GAUGE_BACKEND:-}" \
                 --wins-p1 "${GAUGE_WP1:-0}" --wins-p2 "${GAUGE_WP2:-0}" \
+                --model-path "$GAUGE_SNAPSHOT" \
                 --stats-dir "$GAUGE_STATS_DIR")
             echo "GAUGE: $VERDICT"
             GAUGE_ACTION=$(echo "$VERDICT" | jq -r '.action')
@@ -651,7 +671,7 @@ do
                 echo "GAUGE: >=80% vs active anchor — freezing $NEW_ANCHOR, link match (n=64)..."
                 run_gauge_match "$ANCHOR_PATH" 64 "replays/gauge_stats/${RUN_ID}_iter${i}_link"
                 .venv/bin/python3 ladder.py freeze --run-id "$RUN_ID" --iteration "$i" \
-                    --path "$NEW_ANCHOR" \
+                    --path "$NEW_ANCHOR" --model-path "$NEW_ANCHOR" \
                     --wins "${GAUGE_W:-0}" --losses "${GAUGE_L:-0}" --draws "${GAUGE_D:-0}" \
                     --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}"
             elif [ "$GAUGE_ACTION" = "stop" ]; then
@@ -675,8 +695,9 @@ do
                             --run-id "$RUN_ID" --iteration "$i" \
                             --wins "$GAUGE_W" --losses "$GAUGE_L" --draws "${GAUGE_D:-0}" \
                             --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}" \
-                            --mcts "$MCTS_ITERS" --gumbel-k "$GUMBEL_K" --eval-backend "${GAUGE_BACKEND:-}" \
+                            --mcts "$GAUGE_MCTS_EFF" --gumbel-k "$GUMBEL_K" --eval-backend "${GAUGE_BACKEND:-}" \
                             --wins-p1 "${GAUGE_WP1:-0}" --wins-p2 "${GAUGE_WP2:-0}" \
+                            --model-path "$GAUGE_SNAPSHOT" \
                             --stats-dir "$GAUGE_STATS_DIR"
                     fi
                 done

@@ -130,11 +130,23 @@ pub fn build_backend_specs(
         EvalBackendKind::Tch => {
             #[cfg(feature = "tch-eval")]
             {
+                // MPS on Mac, CUDA on Linux/NVIDIA, else CPU. Without the CUDA
+                // arm a GPU box silently falls back to CPU eval.
                 let dev = if tch::utils::has_mps() {
                     tch::Device::Mps
+                } else if tch::Cuda::is_available() {
+                    tch::Device::Cuda(0)
                 } else {
                     tch::Device::Cpu
                 };
+                // Loud, because a silent CPU fallback on a rented GPU box is
+                // indistinguishable from "the GPU is slow" until you profile.
+                eprintln!(
+                    "[eval] tch device = {dev:?}  (cuda_available={}, cuda_count={}, mps={})",
+                    tch::Cuda::is_available(),
+                    tch::Cuda::device_count(),
+                    tch::utils::has_mps(),
+                );
                 return (0..n)
                     .map(|_| BackendSpec::Tch {
                         model_path: model_path.to_string(),

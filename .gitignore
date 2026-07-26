@@ -57,6 +57,13 @@ polyfish-rs/.current_run
 polyfish-rs/server.log
 polyfish-rs/checkpoints_old/
 
+# Self-play worker runtime state (scripts are tracked, transfers are not)
+polyfish-rs/worker/staging/
+polyfish-rs/worker/inbox/
+polyfish-rs/worker/outbox/
+polyfish-rs/worker/rejected/
+polyfish-rs/worker/manifest.env
+
 # Telemetry JSON
 polyfish-rs/.*.json
 polyfish-rs/*.json

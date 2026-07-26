@@ -38,7 +38,7 @@ const KIND_COLORS: Record<string, string> = {
 };
 
 function shortModelLabel(model: string) {
-  const base = model.split('/').pop() || model;
+  const base = (model.split('/').pop() || model).replace(/\.safetensors$/, '');
   return base.length > 28 ? base.slice(0, 25) + '…' : base;
 }
 

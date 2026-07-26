@@ -158,6 +158,17 @@ def _summarize_stats(stats_dir):
     return out
 
 
+def _model_label(args):
+    """The weights a reading measured, as a copy-pasteable path. Falls back to
+    run_training_loop.sh's gauge-snapshot naming, then to a bare label for
+    callers that pass neither (a run_id-less reading has nothing to point at)."""
+    if getattr(args, "model_path", ""):
+        return args.model_path
+    if getattr(args, "run_id", "") and args.iteration is not None:
+        return f"checkpoints/gauge_{args.run_id}_iter{args.iteration}.safetensors"
+    return f"model@iter{args.iteration}"
+
+
 def _append_reading(data, args, kind, opponent):
     win_rate = round(_win_rate(args.wins, args.losses, args.draws), 4)
     reading = {
@@ -165,7 +176,7 @@ def _append_reading(data, args, kind, opponent):
         "run_id": args.run_id,
         "iteration": args.iteration,
         "kind": kind,
-        "model": f"model@iter{args.iteration}",
+        "model": _model_label(args),
         "opponent": opponent["name"],
         "games": args.wins + args.losses + args.draws,
         "wins": args.wins,
@@ -269,6 +280,8 @@ def main():
         p.add_argument("--wins-p1", type=int, help="model wins seated as P1")
         p.add_argument("--wins-p2", type=int, help="model wins seated as P2")
         p.add_argument("--stats-dir", help="arena --dump-stats-dir to summarize into the reading")
+        p.add_argument("--model-path", default="",
+                       help="snapshot holding the measured weights, recorded verbatim")
 
     rec = sub.add_parser("record")
     match_args(rec)
