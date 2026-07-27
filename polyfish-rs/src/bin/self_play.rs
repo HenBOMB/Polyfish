@@ -475,6 +475,9 @@ struct TempoSample {
     army_stars: i32,
     revealed: i32,
     techs: i32,
+    /// Enemy units destroyed so far, read straight off `TribeState::kills`
+    /// (engine-maintained, undo-safe). Conversions are not kills.
+    kills: i32,
     /// Cumulative counters through this sample (mirrors of the TempoTrack
     /// counters, snapshotted so both curve and totals are per-turn/per-role).
     trained_cum: i32,
@@ -520,6 +523,7 @@ fn tempo_sample(state: &GameState, pov: PlayerId) -> Option<TempoSample> {
             .filter(|t| t.explorers.contains(&pov))
             .count() as i32,
         techs: tribe.tech_vanilla.len() as i32,
+        kills: tribe.kills,
         // Attached from the TempoTrack counters at the push site.
         trained_cum: 0,
         lost_cum: 0,
@@ -853,6 +857,11 @@ struct GameResult {
     /// Mean tribe SPT sampled at the start of game turns 0, 5, 10, … (player 1
     /// to act, before any moves on that turn).
     spt_at_turn: HashMap<i32, f32>,
+    /// (mean unit worth, mean army stars per city) over net seats, at the same
+    /// milestones as `spt_at_turn`. Absolute ratios with no opponent term, so
+    /// unlike contested counts they can move in mirror self-play; measured
+    /// cv ~1.5%/iteration against a Greedy reference of ~3.7 / ~10.0 at t15.
+    army_ratios_at_turn: HashMap<i32, (f32, f32)>,
     /// End-of-game ground truth for the aux heads: raw per-tile owner ids,
     /// per-player SPT, and per-player researched-tech multi-hot.
     final_owner: Vec<i32>,
@@ -950,9 +959,42 @@ fn mean_net_spt(state: &polyfish::states::GameState, seat_roles: [&'static str; 
     vals.iter().sum::<f32>() / vals.len() as f32
 }
 
+/// Mean over net seats of (Σ unit star cost ÷ unit count, Σ unit star cost ÷
+/// city count). A seat with no units (or no cities) contributes 0 to that
+/// component rather than being skipped, so the denominator stays the seat count.
+fn mean_net_army_ratios(
+    state: &polyfish::states::GameState,
+    seat_roles: [&'static str; 2],
+) -> (f32, f32) {
+    let (mut worth, mut per_city, mut seats) = (0.0f32, 0.0f32, 0u32);
+    for (_, t) in state
+        .tribes
+        .iter()
+        .filter(|(id, _)| is_net_seat(seat_roles, **id))
+    {
+        let stars: i32 = t
+            .units
+            .iter()
+            .map(|u| polyfish::settings::units::get_unit_setting(u.unit_type).cost)
+            .sum();
+        if !t.units.is_empty() {
+            worth += stars as f32 / t.units.len() as f32;
+        }
+        if !t.cities.is_empty() {
+            per_city += stars as f32 / t.cities.len() as f32;
+        }
+        seats += 1;
+    }
+    if seats == 0 {
+        return (0.0, 0.0);
+    }
+    (worth / seats as f32, per_city / seats as f32)
+}
+
 fn record_spt_at_turn_start(
     state: &polyfish::states::GameState,
     spt_at_turn: &mut HashMap<i32, f32>,
+    army_ratios_at_turn: &mut HashMap<i32, (f32, f32)>,
     next_idx: &mut usize,
     seat_roles: [&'static str; 2],
 ) {
@@ -966,6 +1008,7 @@ fn record_spt_at_turn_start(
         }
         if state.settings.turn == milestone {
             spt_at_turn.insert(milestone, mean_net_spt(state, seat_roles));
+            army_ratios_at_turn.insert(milestone, mean_net_army_ratios(state, seat_roles));
         }
         *next_idx += 1;
     }
@@ -1271,6 +1314,7 @@ fn play_single_game(
     let mut next_milestone = 0usize;
 
     let mut spt_at_turn: HashMap<i32, f32> = HashMap::new();
+    let mut army_ratios_at_turn: HashMap<i32, (f32, f32)> = HashMap::new();
     let mut next_spt_milestone = 0usize;
 
     // Per-player tempo tracking: turn-start samples + move-diff unit counters.
@@ -1306,6 +1350,7 @@ fn play_single_game(
         record_spt_at_turn_start(
             &game.state,
             &mut spt_at_turn,
+            &mut army_ratios_at_turn,
             &mut next_spt_milestone,
             seat_roles,
         );
@@ -2006,6 +2051,7 @@ fn play_single_game(
         ruins_t2c_p80: t2c_turn(&ruin_capture_turns, initial_ruins, 0.8, max_turns),
         ruins_t2c_all: t2c_turn(&ruin_capture_turns, initial_ruins, 1.0, max_turns),
         spt_at_turn,
+        army_ratios_at_turn,
         final_owner,
         final_spt,
         final_tech,
@@ -2847,6 +2893,8 @@ fn main() -> anyhow::Result<()> {
     let mut first_cap_censored_sum = 0.0f64;
     let mut spt_sums: HashMap<i32, f64> = HashMap::new();
     let mut spt_counts: HashMap<i32, u32> = HashMap::new();
+    let mut worth_sums: HashMap<i32, f64> = HashMap::new();
+    let mut army_per_city_sums: HashMap<i32, f64> = HashMap::new();
 
     let mut total_moves_by_turn: HashMap<i32, HashMap<polyfish::types::MoveType, usize>> =
         HashMap::new();
@@ -2855,13 +2903,17 @@ fn main() -> anyhow::Result<()> {
     #[derive(Default)]
     struct TempoAgg {
         /// turn -> ([cities, city_levels, spt, units, army_stars, revealed,
-        /// techs, trained_cum, lost_cum, stars_lost_cum] sums, sample count)
-        by_turn: HashMap<i32, ([f64; 10], u32)>,
+        /// techs, kills, trained_cum, lost_cum, stars_lost_cum] sums, sample count)
+        by_turn: HashMap<i32, ([f64; 11], u32)>,
         trained: i64,
         granted: i64,
         lost: i64,
         giants: i64,
         stars_lost: i64,
+        kills: i64,
+        /// Σ star-cost of units still alive at game end — the "held" counterpart
+        /// to `stars_lost`, on the same end-of-game time base.
+        army_stars_end: i64,
         player_games: u32,
         /// cities >= 2/3/4: (reached count, turn sum over reached)
         reach: [(u32, f64); 3],
@@ -2883,6 +2935,12 @@ fn main() -> anyhow::Result<()> {
             *spt_sums.entry(turn).or_default() += spt as f64;
             *spt_counts.entry(turn).or_default() += 1;
         }
+        // Shares spt_counts as its denominator — both are written by the same
+        // milestone recorder, so a turn present in one is present in the other.
+        for (&turn, &(worth, per_city)) in &result.army_ratios_at_turn {
+            *worth_sums.entry(turn).or_default() += worth as f64;
+            *army_per_city_sums.entry(turn).or_default() += per_city as f64;
+        }
         for (acc, v) in total_t2c.iter_mut().zip([
             result.villages_t2c_p50,
             result.villages_t2c_p80,
@@ -2897,18 +2955,15 @@ fn main() -> anyhow::Result<()> {
         first_cap_captured += result.villages_first_captured;
         first_cap_turn_sum += result.villages_first_turn_sum;
         first_cap_censored_sum += result.villages_first_censored_sum;
-        if result.winner_score > max_score {
-            max_score = result.winner_score;
-            best_recap = Some(result.recap.clone());
-        }
-
         // Net-only: mirror games count both seats (both are net); anchor/league
-        // games exclude the non-net (Greedy/opponent) seat, so avg_score and
-        // p1/p2_avg reflect the net's play, not the opponent's.
+        // games exclude the non-net (Greedy/opponent) seat, so the score metrics
+        // reflect the net's play, not the opponent's.
+        let mut game_net_max = 0;
         for (id, score) in &result.scores {
             if !is_net_seat(result.roles, *id) {
                 continue;
             }
+            game_net_max = game_net_max.max(*score);
             if *id == 1 {
                 p1_total += score;
                 p1_count += 1;
@@ -2916,6 +2971,12 @@ fn main() -> anyhow::Result<()> {
                 p2_total += score;
                 p2_count += 1;
             }
+        }
+        // Best net seat rather than `winner_score`: an anchor/league opponent
+        // win would otherwise set the reported max and get its replay saved.
+        if game_net_max > max_score {
+            max_score = game_net_max;
+            best_recap = Some(result.recap.clone());
         }
 
         total_captures += result
@@ -2972,6 +3033,12 @@ fn main() -> anyhow::Result<()> {
             agg.lost += track.units_lost as i64;
             agg.giants += track.giants_made as i64;
             agg.stars_lost += track.army_stars_lost as i64;
+            // End-of-game state comes from the final forced sample, so games
+            // that ended early are still counted at their true final turn.
+            if let Some(last) = track.samples.last() {
+                agg.kills += last.kills as i64;
+                agg.army_stars_end += last.army_stars as i64;
+            }
             for s in &track.samples {
                 let (sums, n) = agg.by_turn.entry(s.turn).or_default();
                 for (acc, v) in sums.iter_mut().zip([
@@ -2982,6 +3049,7 @@ fn main() -> anyhow::Result<()> {
                     s.army_stars,
                     s.revealed,
                     s.techs,
+                    s.kills,
                     s.trained_cum,
                     s.lost_cum,
                     s.stars_lost_cum,
@@ -3165,6 +3233,32 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    let mut net_games = 0u32;
+    let (mut net_trained, mut net_granted, mut net_lost, mut net_giants) = (0i64, 0i64, 0i64, 0i64);
+    let mut net_kills = 0i64;
+    let mut net_reach = [(0u32, 0.0f64); 3];
+    for role in ["model", "model_vs_anchor"] {
+        if let Some(a) = tempo_aggs.get(role) {
+            net_games += a.player_games;
+            net_trained += a.trained;
+            net_granted += a.granted;
+            net_lost += a.lost;
+            net_giants += a.giants;
+            net_kills += a.kills;
+            for (dst, src) in net_reach.iter_mut().zip(a.reach.iter()) {
+                dst.0 += src.0;
+                dst.1 += src.1;
+            }
+        }
+    }
+    let per_net_game = |x: i64| {
+        if net_games > 0 {
+            x as f64 / f64::from(net_games)
+        } else {
+            0.0
+        }
+    };
+
     // Print Average Metrics. avg_score is net-only (see the score loop): the
     // mean score over net seats across games, so anchor/league games don't
     // blend the opponent's score into the net's performance chart.
@@ -3174,7 +3268,7 @@ fn main() -> anyhow::Result<()> {
     } else {
         0.0
     };
-    let avr_moves = total_net_moves as f32 / args.num_games as f32;
+    let avr_moves = per_net_game(total_net_moves as i64) as f32;
     let p1_avg = if p1_count > 0 {
         p1_total as f32 / p1_count as f32
     } else {
@@ -3186,18 +3280,22 @@ fn main() -> anyhow::Result<()> {
         0.0
     };
 
-    let avg_captures = total_captures as f32 / args.num_games as f32;
-    let avg_cap_ruins = total_cap_ruins as f32 / args.num_games as f32;
-    let avg_cap_villages = total_cap_villages as f32 / args.num_games as f32;
-    let avg_cap_cities = total_cap_cities as f32 / args.num_games as f32;
-    let avg_cap_capitals = total_cap_capitals as f32 / args.num_games as f32;
-    let avg_harvests = total_harvests as f32 / args.num_games as f32;
-    let avg_builds = total_builds as f32 / args.num_games as f32;
-    let avg_research = total_research as f32 / args.num_games as f32;
-    let avg_attacks = total_attacks as f32 / args.num_games as f32;
-    let avg_abilities = total_abilities as f32 / args.num_games as f32;
-    let avg_revealed_tiles = total_revealed_tiles as f32 / args.num_games as f32;
-    let avg_captured_tiles = total_captured_tiles as f32 / args.num_games as f32;
+    // Per net PLAYER-GAME, not per game: these counters only accrue on net
+    // seats, and a mirror game supplies two of them to an anchor game's one.
+    // Dividing by games made the whole family drift as anchor_frac decayed.
+    let avg_captures = per_net_game(total_captures as i64) as f32;
+    let avg_cap_ruins = per_net_game(total_cap_ruins as i64) as f32;
+    let avg_cap_villages = per_net_game(total_cap_villages as i64) as f32;
+    let avg_cap_cities = per_net_game(total_cap_cities as i64) as f32;
+    let avg_cap_capitals = per_net_game(total_cap_capitals as i64) as f32;
+    let avg_harvests = per_net_game(total_harvests as i64) as f32;
+    let avg_builds = per_net_game(total_builds as i64) as f32;
+    let avg_research = per_net_game(total_research as i64) as f32;
+    let avg_attacks = per_net_game(total_attacks as i64) as f32;
+    let avg_abilities = per_net_game(total_abilities as i64) as f32;
+    let avg_revealed_tiles = per_net_game(total_revealed_tiles) as f32;
+    let avg_captured_tiles = per_net_game(total_captured_tiles) as f32;
+    let avg_kills = per_net_game(net_kills) as f32;
 
     let avg_spt_at = |turn: i32| -> f32 {
         let c = spt_counts.get(&turn).copied().unwrap_or(0);
@@ -3205,6 +3303,17 @@ fn main() -> anyhow::Result<()> {
             0.0
         } else {
             (spt_sums.get(&turn).copied().unwrap_or(0.0) / c as f64) as f32
+        }
+    };
+    // -1.0 (not 0.0) when a turn was never reached: 0 is a legal value for both
+    // ratios, so a sentinel is the only way to distinguish "no army" from "no
+    // data" downstream.
+    let avg_ratio_at = |sums: &HashMap<i32, f64>, turn: i32| -> f32 {
+        let c = spt_counts.get(&turn).copied().unwrap_or(0);
+        if c == 0 {
+            -1.0
+        } else {
+            (sums.get(&turn).copied().unwrap_or(0.0) / c as f64) as f32
         }
     };
 
@@ -3371,6 +3480,7 @@ fn main() -> anyhow::Result<()> {
                     "army_stars",
                     "revealed",
                     "techs",
+                    "kills",
                     "trained_cum",
                     "lost_cum",
                     "stars_lost_cum",
@@ -3394,6 +3504,8 @@ fn main() -> anyhow::Result<()> {
                 ("lost", agg.lost),
                 ("giants", agg.giants),
                 ("stars_lost", agg.stars_lost),
+                ("kills", agg.kills),
+                ("army_stars_end", agg.army_stars_end),
             ] {
                 totals.insert(name.to_string(), serde_json::Value::from(v as f64 / pg));
             }
@@ -3405,29 +3517,6 @@ fn main() -> anyhow::Result<()> {
             roles_map.insert((*role).to_string(), serde_json::Value::Object(turn_map));
         }
         serde_json::Value::Object(roles_map)
-    };
-    let mut net_games = 0u32;
-    let (mut net_trained, mut net_granted, mut net_lost, mut net_giants) = (0i64, 0i64, 0i64, 0i64);
-    let mut net_reach = [(0u32, 0.0f64); 3];
-    for role in ["model", "model_vs_anchor"] {
-        if let Some(a) = tempo_aggs.get(role) {
-            net_games += a.player_games;
-            net_trained += a.trained;
-            net_granted += a.granted;
-            net_lost += a.lost;
-            net_giants += a.giants;
-            for (dst, src) in net_reach.iter_mut().zip(a.reach.iter()) {
-                dst.0 += src.0;
-                dst.1 += src.1;
-            }
-        }
-    }
-    let per_net_game = |x: i64| {
-        if net_games > 0 {
-            x as f64 / f64::from(net_games)
-        } else {
-            0.0
-        }
     };
     let reach_rate = |i: usize| {
         if net_games > 0 {
@@ -3461,6 +3550,7 @@ fn main() -> anyhow::Result<()> {
         "avg_research": avg_research,
         "avg_attacks": avg_attacks,
         "avg_abilities": avg_abilities,
+        "avg_kills": avg_kills,
         "avg_revealed_tiles": avg_revealed_tiles,
         "avg_captured_tiles": avg_captured_tiles,
         "avg_spt_t0": avg_spt_at(0),
@@ -3470,6 +3560,10 @@ fn main() -> anyhow::Result<()> {
         "avg_spt_t20": avg_spt_at(20),
         "avg_spt_t25": avg_spt_at(25),
         "avg_spt_t30": avg_spt_at(30),
+        "unit_worth_t15": avg_ratio_at(&worth_sums, 15),
+        "unit_worth_t25": avg_ratio_at(&worth_sums, 25),
+        "army_stars_per_city_t15": avg_ratio_at(&army_per_city_sums, 15),
+        "army_stars_per_city_t25": avg_ratio_at(&army_per_city_sums, 25),
         // Per NET SEAT, not per game — a mirror game contributes two seats and
         // an anchor game one, so a games denominator blended two different
         // per-seat probabilities and drifted with anchor_frac.

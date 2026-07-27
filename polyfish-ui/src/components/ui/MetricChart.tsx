@@ -56,12 +56,14 @@ function MetricChart({ title, data, series, height = 220, iterationKey = 'iterat
         let sum = 0;
         let count = 0;
         for (const item of items) {
-          if (typeof item[s.key] === 'number') {
+          if (typeof item[s.key] === 'number' && Number.isFinite(item[s.key])) {
             sum += item[s.key];
             count++;
           }
         }
-        merged[s.key] = count > 0 ? sum / count : 0;
+        // undefined, not 0 — "no data" must render as a gap in the line,
+        // otherwise a missing column looks like a real drop to zero.
+        merged[s.key] = count > 0 ? sum / count : undefined;
       }
       result.push(merged);
     }
@@ -86,7 +88,7 @@ function MetricChart({ title, data, series, height = 220, iterationKey = 'iterat
     for (const d of aggregatedData) {
       for (const s of visibleSeries) {
         const val = d[s.key];
-        if (val !== undefined && val !== null) {
+        if (typeof val === 'number' && Number.isFinite(val)) {
           if (val < rawMin) rawMin = val;
           if (val > rawMax) rawMax = val;
         }
@@ -324,26 +326,45 @@ function MetricChart({ title, data, series, height = 220, iterationKey = 'iterat
 
             {/* Data lines + points */}
             {visibleSeries.map(s => {
-              const points = aggregatedData.map((d, i) => ({
-                x: scaleX(i),
-                y: scaleY(d[s.key] ?? 0),
-                val: d[s.key] ?? 0,
-                iter: d[iterationKey] ?? i + 1,
-              }));
+              const points = aggregatedData.map((d, i) => {
+                const raw = d[s.key];
+                const val = typeof raw === 'number' && Number.isFinite(raw) ? raw : undefined;
+                return {
+                  x: scaleX(i),
+                  y: val === undefined ? 0 : scaleY(val),
+                  val,
+                };
+              });
+
+              // Split on missing values so the line breaks across gaps.
+              const segments: { x: number; y: number }[][] = [];
+              let run: { x: number; y: number }[] = [];
+              for (const p of points) {
+                if (p.val === undefined) {
+                  if (run.length > 0) segments.push(run);
+                  run = [];
+                } else {
+                  run.push({ x: p.x, y: p.y });
+                }
+              }
+              if (run.length > 0) segments.push(run);
 
               return (
                 <g key={s.key} pointerEvents="none">
                   {/* Line */}
-                  <polyline
-                    fill="none"
-                    stroke={s.color}
-                    strokeWidth="2.5"
-                    strokeLinejoin="round"
-                    strokeLinecap="round"
-                    points={points.map(p => `${p.x},${p.y}`).join(' ')}
-                  />
+                  {segments.map((seg, si) => (
+                    <polyline
+                      key={si}
+                      fill="none"
+                      stroke={s.color}
+                      strokeWidth="2.5"
+                      strokeLinejoin="round"
+                      strokeLinecap="round"
+                      points={seg.map(p => `${p.x},${p.y}`).join(' ')}
+                    />
+                  ))}
                   {/* Points */}
-                  {points.map((p, i) => (
+                  {points.map((p, i) => p.val === undefined ? null : (
                     <circle
                       key={i}
                       cx={p.x}
@@ -417,11 +438,12 @@ function MetricChart({ title, data, series, height = 220, iterationKey = 'iterat
               Iter {aggregatedData[hoveredCol.index][iterationKey] ?? hoveredCol.index + 1}
             </div>
             {visibleSeries.map(s => {
-              const val = aggregatedData[hoveredCol.index][s.key] ?? 0;
+              const raw = aggregatedData[hoveredCol.index][s.key];
+              const val = typeof raw === 'number' && Number.isFinite(raw) ? raw : undefined;
               return (
                 <div key={s.key} className="mc-tooltip-val" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span style={{ color: s.color }}>{s.label}</span>
-                  <span style={{ color: '#fff', marginLeft: '12px', fontFamily: "'Fira Code', monospace" }}>{val.toFixed(2)}</span>
+                  <span style={{ color: '#fff', marginLeft: '12px', fontFamily: "'Fira Code', monospace" }}>{val === undefined ? '—' : val.toFixed(2)}</span>
                 </div>
               );
             })}

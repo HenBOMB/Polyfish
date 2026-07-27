@@ -120,6 +120,13 @@ REWARD_SHAPING=true
 # Play a league match every LEAGUE_INTERVAL iterations (iteration 10, 20, 30,
 # ... by default). 0 disables league play entirely. Override with -l.
 LEAGUE_INTERVAL=10
+# Strength gauge cadence, DECOUPLED from the league cadence (it used to share
+# -l, so reading more often also changed the data diet). Deterministic gauging
+# is ~2.5x cheaper per move, so every 5 iterations costs about what the old
+# every-10 noisy gauge did. 0 falls back to LEAGUE_INTERVAL.
+# NB: ladder.py's plateau rule counts READINGS, not iterations, so halving this
+# also halves the iteration span of its 8-reading windows.
+GAUGE_INTERVAL="${GAUGE_INTERVAL:-5}"
 # Exported (like MCTS_ITERS) so arena inherits the run's search budget rather
 # than carrying its own default — a reading at a different (mcts, k) is not
 # comparable to the ladder.
@@ -183,7 +190,7 @@ MILESTONE_EVERY=$(scaled 100)
 # train.py reads REPLAY_BUFFER_FILES; archive pruning keeps window + 1 in sync.
 ARCHIVE_KEEP=$(scaled 10)
 export REPLAY_BUFFER_FILES=$ARCHIVE_KEEP
-echo "Schedule (games-based, -g $NUM_GAMES vs baseline $BASELINE_GAMES): $ITERATIONS iterations, checkpoint every $CHECKPOINT_EVERY, milestone every $MILESTONE_EVERY, league every $LEAGUE_INTERVAL iterations, replay window $ARCHIVE_KEEP files"
+echo "Schedule (games-based, -g $NUM_GAMES vs baseline $BASELINE_GAMES): $ITERATIONS iterations, checkpoint every $CHECKPOINT_EVERY, milestone every $MILESTONE_EVERY, league every $LEAGUE_INTERVAL iterations, gauge every ${GAUGE_INTERVAL:-$LEAGUE_INTERVAL} (scale ${GAUGE_GUMBEL_SCALE:-0}, ${GAUGE_GAMES:-32}x2 games), replay window $ARCHIVE_KEEP files"
 
 REWARD_FLAG=""
 if [ "$REWARD_SHAPING" = true ]; then
@@ -499,7 +506,7 @@ do
     # One-line config echo so silent env misconfigurations (ITER_OFFSET,
     # LABEL_REL_W, BOOTSTRAP) are visible in the log — EXP_ELO_006 post-mortem:
     # two runs voided by a missing ITER_OFFSET that nothing surfaced.
-    echo "CONFIG iter=$i eff_iter=$EFF_ITER iter_offset=${ITER_OFFSET:-0} match=$MATCH_TYPE backend=${BACKEND_FLAG:---search-backend gumbel} anchor='${ANCHOR_FLAG}' td_w=${TD_W:-0.7} td_lambda=${TD_LAMBDA:-0.8} label_rel_w=${LABEL_REL_W:-default} wl_labels=${WL_LABELS:-0} shape_w_label=${SHAPE_W_LABEL:-0} shape_w_tree=${SHAPE_W_TREE:-0} pursuit_w_label=${PURSUIT_W_LABEL:-0} pursuit_w_tree=${PURSUIT_W_TREE:-0} unfreeze_opponent=${UNFREEZE_OPPONENT:-0} dagger_alpha=${DAGGER_ALPHA:-0} value_trust=$VALUE_TRUST games=$NUM_GAMES mcts=$MCTS_ITERS gauge_mcts=${GAUGE_MCTS:-$MCTS_ITERS} k=$GUMBEL_K kl_ref_model=${KL_REF_MODEL:-none} kl_ref_weight=${KL_REF_WEIGHT:-0}"
+    echo "CONFIG iter=$i eff_iter=$EFF_ITER iter_offset=${ITER_OFFSET:-0} match=$MATCH_TYPE backend=${BACKEND_FLAG:---search-backend gumbel} anchor='${ANCHOR_FLAG}' td_w=${TD_W:-0.7} td_lambda=${TD_LAMBDA:-0.8} label_rel_w=${LABEL_REL_W:-default} wl_labels=${WL_LABELS:-0} shape_w_label=${SHAPE_W_LABEL:-0} shape_w_tree=${SHAPE_W_TREE:-0} pursuit_w_label=${PURSUIT_W_LABEL:-0} pursuit_w_tree=${PURSUIT_W_TREE:-0} unfreeze_opponent=${UNFREEZE_OPPONENT:-0} dagger_alpha=${DAGGER_ALPHA:-0} value_trust=$VALUE_TRUST games=$NUM_GAMES mcts=$MCTS_ITERS gauge_mcts=${GAUGE_MCTS:-$MCTS_ITERS} gauge_gumbel_scale=${GAUGE_GUMBEL_SCALE:-0} k=$GUMBEL_K kl_ref_model=${KL_REF_MODEL:-none} kl_ref_weight=${KL_REF_WEIGHT:-0}"
 
     SP_LOG=$(mktemp)
     "$SELF_PLAY_BIN" --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $WL_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $BACKEND_FLAG $DECAY_LAST_ITER_FLAG --td-w "${TD_W:-0.7}" --td-lambda "${TD_LAMBDA:-0.8}" --outcome-scale "${OUTCOME_SCALE:-3.0}" $LABEL_REL_W_FLAG $SHAPE_FLAGS $UNFREEZE_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
@@ -588,7 +595,8 @@ do
     # active anchor. ladder.py owns ladder.json (anchors, readings, verdicts):
     # >=80% freezes the model as the next anchor (n=64 link match); two
     # consecutive 8-reading windows with no gain stop the run (plateau).
-    if [ "$LEAGUE_INTERVAL" -gt 0 ] && [ $((i % LEAGUE_INTERVAL)) -eq 0 ]; then
+    GAUGE_EVERY=$([ "$GAUGE_INTERVAL" -gt 0 ] && echo "$GAUGE_INTERVAL" || echo "$LEAGUE_INTERVAL")
+    if [ "$GAUGE_EVERY" -gt 0 ] && [ $((i % GAUGE_EVERY)) -eq 0 ]; then
         ACTIVE_JSON=$(.venv/bin/python3 ladder.py active)
         ANCHOR_PATH=$(echo "$ACTIVE_JSON" | jq -r '.path')
         ANCHOR_NAME=$(echo "$ACTIVE_JSON" | jq -r '.name')
@@ -602,6 +610,15 @@ do
 
         # $1 = opponent model path ("" = greedy backend), $2 = seeds (games x2),
         # $3 = per-turn stats dump dir (optional; summarized into the reading)
+        # Gauge the policy we would DEPLOY, not the one that generates training
+        # data. GUMBEL_SCALE defaults to 1.0 = self-play exploration, and
+        # `argmax(logit + Gumbel)` is exactly a SAMPLE from softmax(prior) — so
+        # a noisy gauge measures a sampled policy, worth a measured -9..-13pp
+        # (60.6% vs 51.6% at n=256, same weights, Jul 27). It also halves
+        # ms/move and cuts reading variance, since only map sampling remains.
+        # ⚠️ Readings before Jul 27 2026 are noisy-policy and NOT comparable.
+        GAUGE_SCALE="${GAUGE_GUMBEL_SCALE:-0}"
+
         run_gauge_match () {
             GAUGE_STATS_DIR="$3"
             DUMP_FLAG=""
@@ -609,12 +626,12 @@ do
                 DUMP_FLAG="--dump-stats-dir $GAUGE_STATS_DIR"
             fi
             if [ -z "$1" ]; then
-                "$ARENA_BIN" --model1 model.safetensors --model2 model.safetensors \
+                GUMBEL_SCALE="$GAUGE_SCALE" "$ARENA_BIN" --model1 model.safetensors --model2 model.safetensors \
                     --backend1 gumbel --backend2 greedy \
                     --mcts "$GAUGE_MCTS_EFF" --gumbel-k "$GUMBEL_K" $DUMP_FLAG \
                     --games "$2" --gamemode "$GAMEMODE" | tee "$GAUGE_LOG"
             else
-                "$ARENA_BIN" --model1 model.safetensors --model2 "$1" \
+                GUMBEL_SCALE="$GAUGE_SCALE" "$ARENA_BIN" --model1 model.safetensors --model2 "$1" \
                     --backend1 gumbel --backend2 gumbel \
                     --mcts "$GAUGE_MCTS_EFF" --gumbel-k "$GUMBEL_K" $DUMP_FLAG \
                     --games "$2" --gamemode "$GAMEMODE" | tee "$GAUGE_LOG"

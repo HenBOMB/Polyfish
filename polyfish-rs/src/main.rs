@@ -851,11 +851,16 @@ async fn get_metrics() -> Json<Value> {
                 headers.iter().position(|&h| h == name)
             };
             
-            let parse_f32 = |name: &str| -> f32 {
-                get_idx(name).and_then(|i| parts.get(i)).and_then(|s| s.parse().ok()).unwrap_or(0.0)
+            // null, not 0.0, for a blank or absent cell: rows predating a
+            // column must render as a gap rather than a real zero reading.
+            let parse_f32 = |name: &str| -> Option<f32> {
+                get_idx(name).and_then(|i| parts.get(i)).and_then(|s| s.parse().ok())
             };
+            // Same, but maps self_play's -1.0 "no data" sentinel to a gap. Only
+            // for columns where 0.0 is itself a legal reading.
+            let parse_ratio = |name: &str| -> Option<f32> { parse_f32(name).filter(|v| *v >= 0.0) };
 
-            let obj = serde_json::json!({
+            let mut obj = serde_json::json!({
                 "run_id": get_idx("run_id").and_then(|i| parts.get(i)).copied().unwrap_or(""),
                 "iteration": get_idx("iteration").and_then(|i| parts.get(i)).and_then(|s| s.parse::<u32>().ok()).unwrap_or(0),
                 "timestamp": get_idx("iter_started_at").and_then(|i| parts.get(i)).unwrap_or(&""),
@@ -877,11 +882,14 @@ async fn get_metrics() -> Json<Value> {
                 "avg_research": parse_f32("avg_research"),
                 "avg_attacks": parse_f32("avg_attacks"),
                 "avg_ability": parse_f32("avg_abilities"),
+                "avg_kills": parse_f32("avg_kills"),
                 "avg_steps": parse_f32("avg_moves"),
                 "avg_spt_t10": parse_f32("avg_spt_t10"),
                 "avg_spt_t20": parse_f32("avg_spt_t20"),
                 "avg_spt_t30": parse_f32("avg_spt_t30"),
                 "villages_t2c_first": parse_f32("villages_t2c_first"),
+                "villages_t2c_first_cond": parse_f32("villages_t2c_first_cond"),
+                "villages_first_rate": parse_f32("villages_first_rate"),
                 "ruins_t2c_p50": parse_f32("ruins_t2c_p50"),
                 "avg_units_spawned": parse_f32("avg_units_spawned"),
                 "avg_units_granted": parse_f32("avg_units_granted"),
@@ -894,6 +902,20 @@ async fn get_metrics() -> Json<Value> {
                 "t2c_4th_rate": parse_f32("t2c_4th_rate"),
                 "t2c_4th_turn": parse_f32("t2c_4th_turn"),
             });
+            // Added outside the macro: `json!` above is at serde's recursion
+            // limit, so further keys must go here. Absolute army-composition
+            // ratios — no opponent term, so unlike contested counts they can
+            // move in mirror self-play.
+            if let Some(map) = obj.as_object_mut() {
+                for name in [
+                    "unit_worth_t15",
+                    "unit_worth_t25",
+                    "army_stars_per_city_t15",
+                    "army_stars_per_city_t25",
+                ] {
+                    map.insert(name.to_string(), serde_json::json!(parse_ratio(name)));
+                }
+            }
             metrics.push(obj);
         }
     }

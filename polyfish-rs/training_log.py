@@ -25,6 +25,18 @@ TRAIN_METRICS_PATH = ".last_train_metrics.json"
 SPT_MILESTONES = [0, 5, 10, 15, 20, 25, 30]
 SPT_COLUMNS = [f"avg_spt_t{t}" for t in SPT_MILESTONES]
 
+# Absolute army-composition ratios (net seats only, no opponent term), so they
+# can move in mirror self-play where contested counts cannot. Greedy reference
+# at t15: unit_worth ~3.7, army_stars_per_city ~10.0 — the model sits at ~2.2
+# and ~5.4, i.e. ~2x headroom on a metric with ~1.5%/iteration noise.
+# -1.0 means the milestone turn was never reached (0.0 is a legal value).
+ARMY_RATIO_COLUMNS = [
+    "unit_worth_t15",
+    "unit_worth_t25",
+    "army_stars_per_city_t15",
+    "army_stars_per_city_t25",
+]
+
 HEADER = [
     "run_id",
     "iter_started_at",
@@ -55,9 +67,11 @@ HEADER = [
     "avg_research",
     "avg_attacks",
     "avg_abilities",
+    "avg_kills",
     "avg_revealed_tiles",
     "avg_captured_tiles",
     *SPT_COLUMNS,
+    *ARMY_RATIO_COLUMNS,
     "villages_t2c_first",
     "villages_first_rate",
     "villages_t2c_first_cond",
@@ -554,9 +568,11 @@ def append_row(
         "avg_research": game_metrics.get("avg_research", ""),
         "avg_attacks": game_metrics.get("avg_attacks", ""),
         "avg_abilities": game_metrics.get("avg_abilities", ""),
+        "avg_kills": game_metrics.get("avg_kills", ""),
         "avg_revealed_tiles": game_metrics.get("avg_revealed_tiles", ""),
         "avg_captured_tiles": game_metrics.get("avg_captured_tiles", ""),
         **{col: game_metrics.get(col, "") for col in SPT_COLUMNS},
+        **{col: game_metrics.get(col, "") for col in ARMY_RATIO_COLUMNS},
         "villages_t2c_first": game_metrics.get("villages_t2c_first", ""),
         "villages_first_rate": game_metrics.get("villages_first_rate", ""),
         "villages_t2c_first_cond": game_metrics.get("villages_t2c_first_cond", ""),

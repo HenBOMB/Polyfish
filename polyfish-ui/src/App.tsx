@@ -294,14 +294,17 @@ function App() {
         const row: any = { iteration: it };
         for (const [prefix, roleNames] of [['net', NET], ['gre', GRE]] as const) {
           const names = roleNames as unknown as string[];
-          for (const t of [10, 20]) {
+          for (const t of [10, 15, 20, 25]) {
             for (const f of ['cities', 'spt', 'units', 'army_stars', 'revealed', 'techs']) {
               row[`${prefix}_${f}_t${t}`] = probe(roles, names, t, f);
             }
           }
           row[`${prefix}_trained_end`] = probeTotals(roles, names, 'trained');
+          row[`${prefix}_granted_end`] = probeTotals(roles, names, 'granted');
           row[`${prefix}_lost_end`] = probeTotals(roles, names, 'lost');
           row[`${prefix}_stars_lost_end`] = probeTotals(roles, names, 'stars_lost');
+          row[`${prefix}_army_stars_end`] = probeTotals(roles, names, 'army_stars_end');
+          row[`${prefix}_kills_end`] = probeTotals(roles, names, 'kills');
         }
         return row;
       });
@@ -320,9 +323,25 @@ function App() {
         .filter((r: any) => lastRun === undefined || String(r.run_id) === String(lastRun))
         .map((r: any) => [r.iteration, r])
     );
+    // `Number(null)` is 0, so null/blank must be rejected before coercing —
+    // the server sends null for a column a row predates.
+    const num = (v: any) => {
+      if (v === null || v === undefined || v === '') return undefined;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : undefined;
+    };
     const divide = (spt: any, cities: any) => {
-      const s = Number(spt), c = Number(cities);
-      return Number.isFinite(s) && Number.isFinite(c) && c > 0 ? s / c : undefined;
+      const s = num(spt), c = num(cities);
+      return s !== undefined && c !== undefined && c > 0 ? s / c : undefined;
+    };
+    // self_play emits -1 for "no seat reached this" — a gap, not a data point.
+    const noData = (v: any) => {
+      const n = num(v);
+      return n !== undefined && n >= 0 ? n : undefined;
+    };
+    const pct = (v: any) => {
+      const n = num(v);
+      return n === undefined ? undefined : n * 100;
     };
     return runMetrics.map(m => {
       const row: any = {
@@ -330,6 +349,15 @@ function App() {
         ...m,
         ...(byIter.get(m.iteration) ?? {}),
       };
+      for (const k of ['villages_t2c_first', 'villages_t2c_first_cond',
+                       't2c_2nd_turn', 't2c_3rd_turn', 't2c_4th_turn']) {
+        row[k] = noData(row[k]);
+      }
+      // Rates are 0-1 on the wire; charts read as percentages.
+      row.t2c_2nd_pct = pct(row.t2c_2nd_rate);
+      row.t2c_3rd_pct = pct(row.t2c_3rd_rate);
+      row.t2c_4th_pct = pct(row.t2c_4th_rate);
+      row.villages_first_pct = pct(row.villages_first_rate);
       // Derived, not tracked separately: SPT decomposed into cities x
       // income-per-city. Free division of two already-tracked fields — the
       // metric that actually located the Jul 2026 expansion-pace deficit
@@ -339,6 +367,22 @@ function App() {
       row.net_spt_per_city_t20 = divide(row.net_spt_t20, row.net_cities_t20);
       row.gre_spt_per_city_t10 = divide(row.gre_spt_t10, row.gre_cities_t10);
       row.gre_spt_per_city_t20 = divide(row.gre_spt_t20, row.gre_cities_t20);
+      // Army composition. Absolute ratios with no opponent term, so unlike
+      // contested counts they can move in mirror self-play — measured
+      // ~1.5%/iteration noise against ~2x headroom vs greedy (Jul 2026).
+      // Both sides derived from tempo so the reference line is apples-to-apples.
+      for (const t of [15, 25]) {
+        row[`net_unit_worth_t${t}`] = divide(row[`net_army_stars_t${t}`], row[`net_units_t${t}`]);
+        row[`gre_unit_worth_t${t}`] = divide(row[`gre_army_stars_t${t}`], row[`gre_units_t${t}`]);
+        row[`net_army_per_city_t${t}`] = divide(row[`net_army_stars_t${t}`], row[`net_cities_t${t}`]);
+        row[`gre_army_per_city_t${t}`] = divide(row[`gre_army_stars_t${t}`], row[`gre_cities_t${t}`]);
+      }
+      // Unit preservation: units produced per unit lost, so >1 means the army
+      // is growing and higher is better. Numerator is `trained` (Summon) only,
+      // matching the trained series — granted units (~3% of production) are
+      // excluded, so this slightly understates units put at risk.
+      row.net_trained_per_lost = divide(row.net_trained_end, row.net_lost_end);
+      row.gre_trained_per_lost = divide(row.gre_trained_end, row.gre_lost_end);
       return row;
     });
   }, [runMetrics, tempoRows, metricsExtra]);
@@ -773,26 +817,13 @@ function App() {
 
               <h3 className="metrics-section-title">Training</h3>
               <div className="metrics-grid">
-                {/* Moves by type — combined overlay */}
-                <MetricChart
-                  title="Moves by type"
-                  data={windowSize > 0 ? runMetrics.slice(-windowSize) : runMetrics}
-                  series={[
-                    { key: 'avg_captures', label: 'captures', color: '#60a5fa' },
-                    { key: 'avg_harvests', label: 'harvests', color: '#f87171' },
-                    { key: 'avg_builds', label: 'builds', color: '#fb923c' },
-                    { key: 'avg_research', label: 'research', color: '#facc15' },
-                    { key: 'avg_attacks', label: 'attacks', color: '#2dd4bf' },
-                  ]}
-                />
-
-                {/* Score metrics — Polyfish-specific */}
+                {/* Score metrics — both series are net-seat-only */}
                 <MetricChart
                   title="Score (max vs avg)"
                   data={windowSize > 0 ? runMetrics.slice(-windowSize) : runMetrics}
                   series={[
-                    { key: 'max_score', label: 'max score', color: '#c084fc' },
-                    { key: 'avg_score', label: 'avg score', color: '#22d3ee' },
+                    { key: 'max_score', label: 'best net seat', color: '#c084fc' },
+                    { key: 'avg_score', label: 'avg net seat', color: '#22d3ee' },
                   ]}
                 />
 
@@ -839,14 +870,15 @@ function App() {
                   ]}
                 />
 
-                {/* Tempo: Nth-city milestones (net seats, from CSV scalars) */}
+                {/* Tempo: Nth-city milestones. Cities INCLUDE the starting
+                    capital, so "2nd city" means one village captured. */}
                 <MetricChart
-                  title="Nth-city rate (net)"
-                  data={windowSize > 0 ? runMetrics.slice(-windowSize) : runMetrics}
+                  title="% of net games reaching Nth city"
+                  data={windowSize > 0 ? combinedRows.slice(-windowSize) : combinedRows}
                   series={[
-                    { key: 't2c_2nd_rate', label: '2nd city', color: '#22d3ee' },
-                    { key: 't2c_3rd_rate', label: '3rd city', color: '#818cf8' },
-                    { key: 't2c_4th_rate', label: '4th city', color: '#c084fc' },
+                    { key: 't2c_2nd_pct', label: '2nd city', color: '#22d3ee' },
+                    { key: 't2c_3rd_pct', label: '3rd city', color: '#818cf8' },
+                    { key: 't2c_4th_pct', label: '4th city', color: '#c084fc' },
                   ]}
                 />
 
@@ -861,13 +893,22 @@ function App() {
                   refLines={[{ value: 121, label: 'full map (121)' }]}
                 />
 
-                {/* Early Game Efficiency */}
+                {/* First village, split into speed and reliability. The old
+                    combined metric charged max_turns to seats that never
+                    captured, so "slow" and "never" were one number. */}
                 <MetricChart
-                  title="Early Game Efficiency (T2C)"
-                  data={windowSize > 0 ? runMetrics.slice(-windowSize) : runMetrics}
+                  title="1st village — turn (seats that captured)"
+                  data={windowSize > 0 ? combinedRows.slice(-windowSize) : combinedRows}
                   series={[
-                    { key: 'villages_t2c_first', label: '1st Village', color: '#14b8a6' },
-                    { key: 'ruins_t2c_p50', label: '50% Ruins', color: '#6366f1' },
+                    { key: 'villages_t2c_first_cond', label: 'avg turn', color: '#14b8a6' },
+                  ]}
+                />
+
+                <MetricChart
+                  title="1st village — % of net seats that captured one"
+                  data={windowSize > 0 ? combinedRows.slice(-windowSize) : combinedRows}
+                  series={[
+                    { key: 'villages_first_pct', label: '% of seats', color: '#6366f1' },
                   ]}
                 />
 
@@ -883,7 +924,7 @@ function App() {
                   title="Avg captures / game"
                   data={windowSize > 0 ? runMetrics.slice(-windowSize) : runMetrics}
                   series={[
-                    { key: 'avg_captures', label: 'total', color: '#f87171' },
+                    { key: 'avg_captures', label: 'total (incl. re-captures)', color: '#f87171' },
                     { key: 'avg_cap_capitals', label: 'capitals', color: '#a855f7' },
                     { key: 'avg_cap_cities', label: 'cities', color: '#f59e0b' },
                     { key: 'avg_cap_villages', label: 'villages', color: '#22c55e' },
@@ -950,30 +991,83 @@ function App() {
 
               <h3 className="metrics-section-title">Military</h3>
               <div className="metrics-grid">
-                {/* Unit COUNTS per game: bought (trained) then lost, both seats.
-                Net series come from the CSV; greedy's from the tempo sidecar
-                (populated from the first run on the new binary). */}
+                {/* Unit COUNTS per player-game. All four series come from the
+                tempo sidecar so net and greedy share one denominator.
+                "trained" is Summon only — ruins/conversions/level-up units are
+                the separate "granted" series. */}
                 <MetricChart
-                  title="Unit count — trained vs lost"
+                  title="Unit count — trained vs granted vs lost"
                   data={windowSize > 0 ? combinedRows.slice(-windowSize) : combinedRows}
                   series={[
-                    { key: 'avg_units_spawned', label: 'net trained', color: '#22c55e' },
-                    { key: 'avg_units_lost', label: 'net lost', color: '#15803d' },
+                    { key: 'net_trained_end', label: 'net trained', color: '#22c55e' },
+                    { key: 'net_granted_end', label: 'net granted', color: '#86efac' },
+                    { key: 'net_lost_end', label: 'net lost', color: '#15803d' },
                     { key: 'gre_trained_end', label: 'greedy trained', color: '#f87171' },
+                    { key: 'gre_granted_end', label: 'greedy granted', color: '#fca5a5' },
                     { key: 'gre_lost_end', label: 'greedy lost', color: '#b91c1c' },
                   ]}
                 />
 
-                {/* Unit WORTH in stars: held @t20 and cumulative value destroyed
-                (a lost giant costs 10, a lost warrior 2). */}
+                {/* Unit WORTH in stars, both series at END of game: value still
+                alive vs cumulative value destroyed (a lost giant costs 10, a
+                lost warrior 2). */}
                 <MetricChart
-                  title="Unit worth — held vs lost"
+                  title="Unit worth — held at end vs lost"
                   data={windowSize > 0 ? combinedRows.slice(-windowSize) : combinedRows}
                   series={[
-                    { key: 'net_army_stars_t20', label: 'net held', color: '#22c55e' },
+                    { key: 'net_army_stars_end', label: 'net held', color: '#22c55e' },
                     { key: 'net_stars_lost_end', label: 'net lost', color: '#15803d' },
-                    { key: 'gre_army_stars_t20', label: 'greedy held', color: '#f87171' },
+                    { key: 'gre_army_stars_end', label: 'greedy held', color: '#f87171' },
                     { key: 'gre_stars_lost_end', label: 'greedy lost', color: '#b91c1c' },
+                  ]}
+                />
+
+                {/* Unit preservation. >1 = army growing; higher is better. The
+                measured gap is survival, not production: unit COUNT per city
+                already matches greedy (1.00x at t15), so both sides build at
+                the same rate and only one of them keeps what it builds. */}
+                <MetricChart
+                  title="Unit preservation (trained / lost)"
+                  data={windowSize > 0 ? combinedRows.slice(-windowSize) : combinedRows}
+                  series={[
+                    { key: 'net_trained_per_lost', label: 'net', color: '#22c55e' },
+                    { key: 'gre_trained_per_lost', label: 'greedy', color: '#f87171' },
+                  ]}
+                />
+
+                {/* Army composition. The greedy line is a target, not a rival —
+                with unit count per city already matched, this is purely a
+                which-units-do-we-buy gap (~2x at t25, Jul 2026). */}
+                <MetricChart
+                  title="Unit worth (stars / unit)"
+                  data={windowSize > 0 ? combinedRows.slice(-windowSize) : combinedRows}
+                  series={[
+                    { key: 'net_unit_worth_t15', label: 'net @t15', color: '#22c55e' },
+                    { key: 'net_unit_worth_t25', label: 'net @t25', color: '#15803d' },
+                    { key: 'gre_unit_worth_t15', label: 'greedy @t15', color: '#f87171' },
+                    { key: 'gre_unit_worth_t25', label: 'greedy @t25', color: '#b91c1c' },
+                  ]}
+                />
+
+                <MetricChart
+                  title="Army stars / city"
+                  data={windowSize > 0 ? combinedRows.slice(-windowSize) : combinedRows}
+                  series={[
+                    { key: 'net_army_per_city_t15', label: 'net @t15', color: '#22c55e' },
+                    { key: 'net_army_per_city_t25', label: 'net @t25', color: '#15803d' },
+                    { key: 'gre_army_per_city_t15', label: 'greedy @t15', color: '#f87171' },
+                    { key: 'gre_army_per_city_t25', label: 'greedy @t25', color: '#b91c1c' },
+                  ]}
+                />
+
+                {/* Enemy units destroyed per player-game, from TribeState::kills
+                (conversions are not kills). */}
+                <MetricChart
+                  title="Avg kills / game"
+                  data={windowSize > 0 ? combinedRows.slice(-windowSize) : combinedRows}
+                  series={[
+                    { key: 'net_kills_end', label: 'net', color: '#22c55e' },
+                    { key: 'gre_kills_end', label: 'greedy', color: '#f87171' },
                   ]}
                 />
 
