@@ -1,5 +1,5 @@
 use clap::Parser;
-use polyfish::ai::brain::{SearchBackend, SearchBackendArg, make_search_agent};
+use polyfish::ai::brain::{SearchAgent, SearchBackend, SearchBackendArg, make_search_agent};
 use polyfish::ai::eval_backend::{self, EvalBackendKind, PlayerBackend};
 use polyfish::ai::eval_server::{EvalServerConfig, Evaluator};
 use polyfish::ai::network::PolyZeroNet;
@@ -136,6 +136,31 @@ struct Args {
     /// pursuit instrument (config1 = the model/gumbel seat).
     #[arg(long)]
     dump_turn_states: Option<String>,
+
+    /// EXP_ELO_026 oracle-macro steer for config 1 (gumbel backend only):
+    /// while it holds <3 cities, focus the pursuit channel on one sticky
+    /// FOW-visible neutral village (nearest to its units).
+    #[arg(long, default_value_t = false)]
+    macro_commit: bool,
+
+    /// EXP_ELO_026 oracle-macro steer for config 1 (gumbel backend only):
+    /// while a commitment is active, drop root Research moves that would
+    /// leave fewer than STAR_GATE_RESERVE stars after purchase.
+    #[arg(long, default_value_t = false)]
+    macro_star_gate: bool,
+
+    /// Base map seed (seed i = base + i). 0 = derive from the wall clock.
+    /// Fix it to play identical maps across separate arena runs (paired
+    /// A/B arms).
+    #[arg(long, default_value_t = 0)]
+    base_seed: u64,
+
+    /// EXP_ELO_028: drive config 1's goal channels with the Stage-1 scripted
+    /// goal-setter (orders + stance + star gate) each ply. Gumbel backend1
+    /// only. For probing goal-conditioned nets; a net trained without goal
+    /// channels ignores the (zero-initialized) planes.
+    #[arg(long, default_value_t = false)]
+    goal_script: bool,
 }
 
 fn load_model(path: &str, device: &candle_core::Device) -> anyhow::Result<PolyZeroNet> {
@@ -291,6 +316,9 @@ fn play_match(
     dump_stats_dir: Option<&str>,
     game_idx: usize,
     dump_turn_states: Option<&str>,
+    macro_commit: bool,
+    macro_star_gate: bool,
+    goal_script: bool,
 ) -> MatchResult {
     let gen_settings = MapGenSettings {
         size: MapSize::Tiny,
@@ -347,6 +375,10 @@ fn play_match(
     let mut moves_config2: u64 = 0;
     let mut samples: Vec<TurnSample> = Vec::new();
     let mut last_sampled_turn = i32::MIN;
+    // EXP_ELO_026: config1's sticky expansion commitment (None = retired or
+    // no capturable village visible). Tracked even in a gate-only arm, since
+    // the gate is defined as active "while committed".
+    let mut commitment: Option<i32> = None;
 
     while !polyfish::functions::is_game_over(&game.state) && moves < 500 {
         if dump_stats_dir.is_some() && game.state.settings.turn != last_sampled_turn {
@@ -354,6 +386,30 @@ fn play_match(
             last_sampled_turn = game.state.settings.turn;
         }
         let current_pid = game.state.settings.current_player_turn_id;
+
+        // EXP_ELO_026: refresh the commitment before each of config1's
+        // decisions — stars and cities change within a turn, and the target
+        // may have been captured since the last ply.
+        if (macro_commit || macro_star_gate) && current_pid == model_player {
+            commitment =
+                polyfish::ai::oracle_macro::update_commitment(&game.state, model_player, commitment);
+            let model_agent = if swap { &mut agent_p2 } else { &mut agent_p1 };
+            if let SearchAgent::Gumbel(a) = model_agent {
+                a.pursuit_focus = if macro_commit { commitment } else { None };
+                a.star_gate = macro_star_gate && commitment.is_some();
+            }
+        }
+
+        // EXP_ELO_028: scripted goal channels for config1.
+        if goal_script && current_pid == model_player {
+            let goal = polyfish::ai::oracle_macro::scripted_goal(&game.state, model_player);
+            let gate = polyfish::ai::oracle_macro::goal_star_gate(&goal);
+            let model_agent = if swap { &mut agent_p2 } else { &mut agent_p1 };
+            if let SearchAgent::Gumbel(a) = model_agent {
+                a.star_gate = gate;
+                a.macro_goal = Some(goal);
+            }
+        }
 
         // Dump the start-of-turn ground-truth snapshot once per (turn, acting
         // player), before any move that turn mutates the state.
@@ -417,6 +473,8 @@ fn play_match(
             "winner_config": winner_config,
             "score_config1": score_config1,
             "score_config2": score_config2,
+            "macro_commit": macro_commit,
+            "macro_star_gate": macro_star_gate,
             "samples": samples,
         });
         let name = format!("game_{}_{}.json", seed, if swap { "b" } else { "a" });
@@ -462,6 +520,26 @@ fn backend_from_arg(arg: SearchBackendArg, k: usize) -> SearchBackend {
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+
+    if (args.macro_commit || args.macro_star_gate || args.goal_script)
+        && !matches!(args.backend1, SearchBackendArg::Gumbel)
+    {
+        anyhow::bail!(
+            "--macro-commit / --macro-star-gate / --goal-script steer config 1's \
+             Gumbel agent; pass --backend1 gumbel (EXP_ELO_026/028)"
+        );
+    }
+    if args.goal_script {
+        println!("GOAL SCRIPT (EXP_ELO_028): scripted orders+stance drive config 1's goal channels");
+    }
+    if args.macro_commit || args.macro_star_gate {
+        println!(
+            "ORACLE MACRO (EXP_ELO_026): commit={} star_gate={} (reserve={})",
+            args.macro_commit,
+            args.macro_star_gate,
+            polyfish::ai::oracle_macro::STAR_GATE_RESERVE,
+        );
+    }
 
     // Default Metal op-flush cadence to 1000 for better GPU efficiency on
     // Metal (only exercised by the candle backend; harmless no-op for
@@ -540,9 +618,13 @@ fn main() -> anyhow::Result<()> {
         EvalBackendKind::Candle => "candle",
     };
 
-    let base_seed = SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_secs();
+    let base_seed = if args.base_seed > 0 {
+        args.base_seed
+    } else {
+        SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs()
+    };
 
     let total_games = args.games * 2;
 
@@ -624,7 +706,8 @@ fn main() -> anyhow::Result<()> {
                         play_match(
                             eval1, eval2, mcts1, mcts2, backend1, backend2, args.leaf_batch,
                             seed, swap, args.max_turns, args.gamemode, dump_stats_dir,
-                            idx, dump_turn_states,
+                            idx, dump_turn_states, args.macro_commit, args.macro_star_gate,
+                            args.goal_script,
                         )
                     }));
 

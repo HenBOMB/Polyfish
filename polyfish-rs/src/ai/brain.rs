@@ -85,6 +85,11 @@ pub struct Brain<'a> {
     /// Set by `request_trace`; consumed (and cleared) by the next
     /// `think_decomposed` call, which arms the underlying agent's tracer.
     pending_trace: bool,
+    /// EXP_ELO_028 Stage-1 macro goal for the next search(es). Re-applied to
+    /// the Gumbel agent on every `think`; ignored by other backends.
+    macro_goal: Option<crate::ai::oracle_macro::MacroGoal>,
+    /// EXP_ELO_026/028 star gate flag applied alongside `macro_goal`.
+    macro_star_gate: bool,
 }
 
 /// Internal enum wrapping whichever concrete agent the configured backend
@@ -251,6 +256,8 @@ impl<'a> Brain<'a> {
             pursuit_shape_w: None,
             unfreeze_opponent: None,
             pending_trace: false,
+            macro_goal: None,
+            macro_star_gate: false,
         }
     }
 
@@ -272,7 +279,21 @@ impl<'a> Brain<'a> {
             pursuit_shape_w: None,
             unfreeze_opponent: None,
             pending_trace: false,
+            macro_goal: None,
+            macro_star_gate: false,
         }
+    }
+
+    /// EXP_ELO_028: set the macro goal (and star gate) the next searches run
+    /// under. Call per ply; cleared by passing `None`/`false`. Applied to the
+    /// Gumbel agent on every `think`; ignored by other backends.
+    pub fn set_macro_goal(
+        &mut self,
+        goal: Option<crate::ai::oracle_macro::MacroGoal>,
+        star_gate: bool,
+    ) {
+        self.macro_goal = goal;
+        self.macro_star_gate = star_gate;
     }
 
     /// Override the per-game virtual-loss mini-batch size (see `--leaf-batch`
@@ -366,6 +387,10 @@ impl<'a> Brain<'a> {
                 self.pursuit_shape_w,
                 self.unfreeze_opponent,
             ));
+        }
+        if let Some(SearchAgent::Gumbel(a)) = self.agent.as_mut() {
+            a.macro_goal = self.macro_goal.clone();
+            a.star_gate = self.macro_star_gate;
         }
         (self.agent.as_mut(), moves)
     }

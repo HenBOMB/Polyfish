@@ -67,11 +67,12 @@ fn main() -> Result<()> {
                 println!("Loading data from {:?}", path);
                 let tensors = candle_core::safetensors::load(&path, &device)?;
 
-                // Helper to get and push
+                // Helper to get and push. Games files are f16 on disk since
+                // Jul 28; train in f32 (cast is a no-op for legacy files).
                 macro_rules! append_tensor {
                     ($key:expr, $dest:expr) => {
                         if let Some(t) = tensors.get($key) {
-                            $dest.push(t.clone());
+                            $dest.push(t.to_dtype(candle_core::DType::F32)?);
                         }
                     };
                 }

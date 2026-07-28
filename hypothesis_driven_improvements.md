@@ -1045,3 +1045,154 @@ Reaching 3 cities is worth 74.1% vs 16.4%; the model manages it 55% of the time;
 
 **The next question is directly testable with instrumentation that already exists.** Since timing is identical, something makes the 3rd city *unreachable* in the failing 45%. Separate: **(a)** no FOW-visible neutral village in reach — `--dump-turn-states` already records "the model player's FOW-visible neutral villages" per turn, which answers this directly; **(b)** stars diverted to tech at the decision point (research is inelastic); **(c)** the units that would take it are dead or mis-positioned. Note (a) is *not* simply terrain quality, since seed concordance is at chance.
 
+
+---
+
+## EXP_ELO_025: Outcome-space value labels — win/loss z + root-value q-target TD arm
+*Jul 28, 2026 — pre-registered before running. Implemented; no training run yet.*
+
+**Motivation (research sweep, Jul 28).** A 4-thread literature review concluded: (1) no precedent exists for tabula-rasa AZ self-play working on a 4X-class game at any budget; (2) our label stack is the one component with a *direct experimental refutation* — score-primary value targets tested head-to-head lost by ~1,500 Elo to a winrate-primary twin at matched budget (Pasqualini et al. 2022, arXiv 2201.13176), with a mechanism (no variance preference: a behind agent should gamble, a score target won't teach it) that matches our measured 2× value-head over-confidence (EXP_ELO_021 probe); (3) KataGo's design keeps score OUT of the value label entirely (win/loss primary; score = bounded arctan in-tree utility + aux heads). Our current label was KataGo inverted: ~100% score-derived (70% TD-on-score-growth + 30% clamped score ratio, 32% of terminal labels saturated at ±1).
+
+**Change (shipped).** `--wl-labels` now flips BOTH arms (previously flat arm only — EXP_ELO_011):
+- Flat arm: z = ±1 from the adjudicated winner (unchanged from 011).
+- TD arm (`td_lambda_labels` gains `wl_z: Option<&HashMap<i32,f32>>`): outcome space — zero per-window reward, **γ=1** (a discount would deflate early labels by depth), bootstrap through **post-search root values**, terminal = z. Label = `td_w·[(1−λ)Σλ^(k−1)·V_root(cp_k) + λ^N·z] + (1−td_w)·z` — the "q-target blend": mostly a λ-weighted average of future search values, anchored by the real outcome.
+- In-tree shaping stays score-based (the KataGo pattern: score guides search, outcome trains value). train.py untouched (tanh+MSE is space-agnostic). Loop default `WL_LABELS=1`; `WL_LABELS=0` restores legacy labels.
+- Tests: 3 new wl-mode cases (pure-z tail, hand-computed blend, γ=1 verification); 5 legacy tests unchanged and passing (score path bit-exact).
+
+**Smoke test** (2 games, n=16, iter 126, calib dump): final_outcome ∈ {−1,+1}; value_target full-range, mean +0.27 (score-era bootstrap inflation, expected to wash out); **saturation 3.0% vs 32%** under the old labels.
+
+### Expected Results
+- Value head calibration improves: the 2× over-confidence-when-ahead defect (EXP_ELO_021) shrinks, because "ahead" and "crushing" now produce different labels via the bootstrap blend rather than both clamping to +1.
+- value_r2 will DROP initially (new target semantics, score-era bootstraps) then recover — do not read the first ~5 iterations' r2 as regression.
+- Behavioral: if the score-target variance-pathology was binding, losing-side play should get more enterprising (gamble-when-behind) and the win rate vs Greedy should move at the ≥5-iteration gauge horizon.
+
+### Falsifier
+At matched budget (≥15 iterations, deterministic gauge, n=256 readings pooled ≥384 games), win rate and calibration are statistically indistinguishable from the score-label baseline → the label was not the binding constraint at this data scale; the bottleneck ranking moves to data scale per the research verdict (games/iter, q-target augmentation of siblings).
+
+### Confound control
+Transition effect: early iterations bootstrap through a value head trained on score labels — the label mean will drift as semantics converge. Any A/B must either fork from the same checkpoint with ≥15 iterations both arms, or compare full fresh runs. Do NOT mix wl and score-label games in one replay buffer window when reading value_loss/value_r2 (the trainer will average two incompatible target semantics; behavioral metrics remain comparable).
+
+---
+
+## EXP_ELO_026: "Oracle macro" — scripted commitment + star gate over the unchanged net
+*Jul 28, 2026 — pre-registered, then implemented and run the same day.*
+
+**Hypothesis.** The third-city reach failure (reach rate 55%; worth **74.1% vs 16.4%**, EXP_ELO_M2) is a **macro-decision** failure — expansion commitment and star allocation — not a micro-execution failure. A trivial hand-scripted macro layer steering the *unchanged* net should therefore raise reach rate substantially. This is simultaneously (1) the cheapest viability test for the macro/micro decomposition program (learned goal-setter over goal-conditioned micro) and (2) the **causal** test of the third-city finding, which so far is correlational only.
+
+**Setup.** Two arms, identical weights, same seeds played in both orientations (M2's paired design), vs Greedy, n=64, `GUMBEL_SCALE` pinned identically in both arms (0 = deterministic, since this measures best-play capability).
+- **Arm A:** production model as-is.
+- **Arm B:** same model + two scripted rules, shipped as *separate flags* so a follow-up can attribute:
+  1. **Expansion commitment:** while <3 cities and any FOW-visible neutral village exists, commit to the nearest reachable one (sticky until captured or lost) and write it into `CH_PURSUIT` — overriding the current commitment logic.
+  2. **Star gate:** while committed and <3 cities, filter tech-purchase moves out of the root legal set unless stars exceed the reserve needed to complete the capture. Targets the research-is-inelastic signature (absolute tech flat 8.59 vs 8.77 at t10 while cities halve).
+- Inference-only: root-level move filter + commitment override in self_play/arena. No training, no dual-network change.
+
+### Expected Results
+- **Primary: third-city reach rate B − A ≥ +15pp.** ~250 games/arm resolves a difference to ~±5pp — deliberately avoids the ±12pp gauge (EXP_ELO_M1).
+- Secondary (directional only): loss profile shifts out of the ≤2-city annihilation mode (peak cities 2.06→0.50, units 5.77→0.85 in current losses); techs-per-city at t10 moves toward the win profile (4.98 vs 6.40); win% drifts up.
+
+### Falsifier
+B − A reach < +8pp with CI excluding +15pp → macro-steering is not the unlock. Then discriminate the residual: (i) commitment not *executed* (distance-closed-per-turn toward the committed target ≈ 0 → micro execution failure); (ii) no village available to commit to (`--dump-turn-states` availability rate → open-question candidate (a) is binding, a map/position constraint).
+
+### Interpretation matrix
+- Reach ↑ big, win% ↑ → macro is the binding layer, micro execution adequate; the delta is the **headroom ceiling for a learned macro**, which becomes the follow-up experiment.
+- Reach ↑ big, win% flat/↓ → the third-city correlation is **not causal** (forced expansion sacrifices something else) — a top-tier finding on its own; redirects the ⭐ open question.
+- Reach flat → the macro program dies cheaply, before any learning machinery is built.
+
+### Confound control
+Both arms share seeds, budget, and `GUMBEL_SCALE`. If the combined arm moves, run commitment-only and gate-only arms before attributing mechanism.
+
+### Actual Results (Jul 28, 2026)
+Implementation: new `ai/oracle_macro.rs` (commitment picker, star-gate predicate, reserve=5) + `--macro-commit` / `--macro-star-gate` / `--base-seed` on arena; `pursuit_focus` threaded through every agent encode (cache-safe — the eval LRU and tree-reuse both key on feature bytes). Verified by unit tests and same-seed engagement divergence. Run: `checkpoints/exp026_model.safetensors`, 125 seeds × 2 orientations per arm, n=64/k=16, `GUMBEL_SCALE=0`, `base_seed=20260728`, vs Greedy. Dumps in `replays/exp026/` (incl. `analyze.py` / `causal_read.py`).
+
+| arm | reach 3+ | Δreach paired (McNemar) | win% | techs@t10 | tpc@t10 | Greedy reach |
+|---|---|---|---|---|---|---|
+| A baseline | 64.8% | — | 58.0% | 8.44 | 5.14 | 66.8% |
+| B commit+gate | 74.8% | **+10.0pp, z=+3.20** | 60.0% | 7.12 | 4.23 | 59.6% |
+| commit-only | 66.0% | +1.2pp, z=+0.51 | 53.6% | 8.39 | 5.13 | 65.6% |
+| gate-only | 72.4% | **+7.6pp, z=+2.32** | 60.4% | 7.11 | 4.17 | 57.2% |
+
+⚠️ Baseline reach is 64.8% here (deterministic n=64), not M2's 55% (noisy n=256) — condition difference; the A/B is internally controlled.
+
+- **Primary lands between the falsifier and the expectation:** +10.0pp (95% CI ≈ [+2, +18]) — real (paired z 3.20, p≈0.001) but under the registered +15pp; the <+8pp falsifier did not trigger.
+- **Attribution: the star gate is the entire effect.** Commit-only is inert-to-negative (reach +1.2pp; win −4.4pp, McNemar −1.39 — plausibly because focusing `CH_PURSUIT` *hides* the non-target villages the all-villages field normally shows). Gate-only reproduces the full combined profile, including Greedy's reach dropping −9.6pp (the model now wins races) and the research curve bending (techs@t10 −1.33, tpc 5.14 → 4.17, i.e. the inelasticity signature un-bends when stars are gated).
+- **⭐ The causal read (decisive):** in the 43 paired games where the combined macro flipped reach on, wins went **27.9% → 81.4%** (gate-only: 23.3% → 65.1%); in the 18 games the always-on script *broke* reach, **14/18 → 2/18**. Conditional win rates are unchanged across arms (win|reach ≈ 75–76% everywhere) — forced expansion converts at the same rate as organic expansion. Third-city reach is **causal at nearly the full conditional margin, in both directions**; the selection-effect alternative is dead.
+- **Why win% stayed ~flat (+2.0pp, z=+0.53):** net reach flips (+43 / −18) are worth ≈ +11 wins, but the crude always-on rules cost ≈ 6 wins in games baseline handled fine — net +5 games on a 250-game reading. The *gross* effect, not the net, is the learned-macro headroom: ≈ +9pp win at this budget if a selective policy fired only where it helps.
+
+### Verdict — CONFIRMED (attenuated magnitude): the macro layer is binding, the mechanism is STAR ALLOCATION, and third-city causality is established
+Interpretation-matrix branch 1, with a mechanism refinement: micro execution is adequate (forced reach converts at full rate), and the active ingredient is the **star gate** (resource allocation), not the commitment (attention/representation — consistent with the CH_PURSUIT no-strength-gain history). Open-question candidate **(b) "stars diverted to tech at the decision point" is now causally demonstrated** as the dominant reach-failure mechanism. Follow-ups, in value order: (i) make the gate *selective* (fire only when a capturable village is genuinely fundable/reachable — recover the ~6-game collateral); (ii) generate training data with the gate on and distill, so the allocation policy moves into the net; (iii) test the budget interaction at n=256.
+
+---
+
+## EXP_ELO_027: LLM hindsight-credit annotation — Phase 0 validity gate, then loss reweighting
+*Jul 28, 2026 — pre-registered. Phase 1 runs ONLY if Phase 0 passes bar 5.*
+
+**Hypothesis.** An LLM given engine-derived per-turn summaries of finished games (both players: cities, SPT, army value, techs, FOW-visible neutral villages, kills; outcome revealed) can tag the decisive decisions/mistakes with enough fidelity to carry credit signal the current labels lack (Motif-style LLM-as-retrospective-credit-assigner, Klissarov et al. 2023).
+
+**Phase 0 — annotation validity. No training, no MCTS CPU.** Annotate 50–100 games assembled from existing data (`replays/gauge_stats/` holds 94 dumps; plus `--dump-turn-states` games). Include a blinded who-wins probe as a calibration check. Pre-registered bars:
+1. **Outcome alignment:** when the LLM tags player X's decisive mistake, X actually lost — precision ≥80%.
+2. **Temporal concentration:** tags cluster in the t8–12 decision window (score-gap AUC 0.718@t10, M2), not uniformly.
+3. **Known-factor recovery:** on ≤2-city losses, the top tagged mistake references the expansion failure and agrees with the programmatic hindsight rule "village FOW-visible, never approached" (computable from dump-turn-states).
+4. **Reliability:** re-annotating the same games with shuffled presentation agrees on ≥70% of tags.
+5. **Incremental information (the prize):** on games where the programmatic rule finds *nothing*, tags still align with outcome. Failing only this bar → drop the LLM, ship the programmatic annotator instead.
+
+### Phase 0 Falsifier
+Miss bars 1–2 → annotation is noise; stop entirely.
+
+**Phase 1 — credit reweighting (conditional on Phase 0 bar 5).** Annotation sidecar (game, seat, turn) → **per-sample loss weights** in train.py: plies in tagged turns get value-loss (optionally policy-loss) weight ×2–3, renormalized. Deliberately **not** a target change — the value-target parameterization family is closed (021/022/024); same targets, different emphasis. Prerequisite: step→(game, turn) index columns in `games_*.safetensors` (the same schema addition value-reanalyze needs — one change serves both). Scale: 300–500 annotated archived games (API cost only); A/B fine-tune of 10–20 iterations from the same checkpoint, same seeds.
+
+### Expected Results (Phase 1)
+Model-side behavior curves move: third-city reach in anchor games up, techs-per-city toward the win profile. Judge on behavior curves (t25 cities sd 0.081), **not** the ±12pp gauge.
+
+### Falsifier (Phase 1)
+No behavior-curve movement beyond the noise floor after the run → null. Honest prior is modest — label-side interventions are 0-for-4 here — which is exactly why the phase gate exists: the expensive half never runs unless Phase 0 proves the annotations contain information the current labels don't.
+
+### Confound control
+Reweighting interacts with EXP_ELO_025's label semantics — run Phase 1 under one label regime only (whichever is production at the time), never mixed within a replay-buffer window.
+
+---
+
+## EXP_ELO_028: Learned macro layer — orders field + stance head on the shared trunk
+*Jul 28, 2026 — design registered after EXP_ELO_026's causal result. Phase 0 is analysis-only and runs immediately; Phase 1 is pre-registered and runs only if Phase 0 passes.*
+
+**Design (program frame, agreed with Verdi Jul 28).** Macro strategy and micro execution are deliberately isolated: macro trains on its OWN hindsight labels (never distilled through the policy head), micro (policy/value) trains as a goal-conditioned executor, and the only interface between them is the observation plus a small allocation mask.
+
+- **Orders head** (spatial, concurrent): k=3 planes (EXPAND / ATTACK / DEFEND) × 11×11 on the shared trunk, multiple hot regions allowed — concurrent objectives are first-class (two warriors on different missions follow different local paint; conv locality does per-unit assignment for free; no slot-permutation machinery).
+- **Stance head** (global purse, categorical): {**GROW** (default: harvest/upgrade/eco-tech free, military tech gated behind a reserve — the EXP_ELO_026 star gate generalized), **ARM** (units first, tech gated hard), **UNLOCK(tech-line)** (fight-for-life commitment: plow stars toward one unlock, gate the rest)}. The stance→root-mask table stays hand-written and inspectable: learned judgment, scripted enforcement. Doctrine to validate, not assume: winners ≈ GROW with rare event-driven excursions.
+- **Invocation**: two-pass root. Pass 1 encodes with the *standing* goal in appended channels → macro heads → chosen goal (continuity is learned: the head sees its own commitment; hysteresis margin dial in reserve). Pass 2 re-encodes with the chosen goal → policy/value for search; every in-tree encode carries the goal. ~1.5% eval overhead; tree reuse keys on feature bytes so goal flips invalidate reuse correctly. Goal-flip and stance-flip rates are first-class metrics.
+- ⚠️ These heads are INVOKED by search — the opposite of the causally-disconnected `aux_*` heads (ledger §2). Dual-network mirroring (network.rs + train.py), appended-channel zero-pad migration, and checkpoints/ migration all apply.
+- **Bootstrap staging**: Stage 1 — a script sets goals in self-play (EXP_ELO_026 rules re-expressed: paint EXPAND on capturable villages while <3 cities; stance GROW-with-reserve), micro learns to follow, labels accumulate. Stage 2 — macro heads take over goal-setting with a decaying script share (ANCHOR_FRAC-style crutch decay). Stage 3 — script retired to an anchor. Staging + script anchor is the damping for HRL two-timescale instability.
+
+### Phase 0 — label machinery + vocabulary validation (analysis-only, no training, no code in the engine)
+Build both hindsight labelers and validate the strategy vocabulary on existing data (`replays/exp026/` stats + turn dumps; 250 natural-play games in arm A, Greedy side as a reference policy).
+- **Stance labeler**: per-turn spending mix from TurnSample deltas + star-flow accounting (spent ≈ stars + income − next stars; decomposed into tech / units / eco-residual). Known v0 limit: dumps carry tech *counts*, not identities, so UNLOCK vs eco-tech is not yet separable — flagged for a future dump field.
+- **Orders labeler**: achieved objectives from turn-state dumps (village captured → EXPAND window painted over the approach turns; units converged on enemy city + enemy losses → ATTACK; enemy units near our city → DEFEND).
+
+Pre-registered checks:
+1. **Doctrine check**: model-side winners' stance mix is GROW-modal with ARM/UNLOCK excursions concentrated near combat/threat events; Greedy (a known-good expander) reads similarly.
+2. **Vocabulary check (the falsifier that matters)**: macro-sequence features (stance shares ≤t12, achieved-EXPAND counts, order-window timing) must separate wins from losses (AUC meaningfully > 0.5 on features the M2 autopsy did NOT already establish). If winners and losers are indistinguishable in macro-language space, the vocabulary does not describe why games are won → revise vocabulary; no implementation proceeds.
+3. **Concurrency measurement**: fraction of turns with ≥2 overlapping order windows — quantifies whether the multi-goal orders field is load-bearing or a single goal would have sufficed.
+4. Label coverage and class balance reported; DEFEND merges into ATTACK if it labels <5% of windows.
+
+### Phase 0 — Actual Results (Jul 28, 2026; `replays/exp028/phase0_labels.py` over arm A's 250 natural-play games)
+1. **Doctrine check — PASS, via the cross-policy contrast, with a sharpening.** Greedy (the stronger expander) is exactly the doctrine: ECO-modal (47–50% of turns; 19% UNITS in its wins). The model is **TECH-modal instead (46–49% overall, 56–58% in turns ≤12)** — and critically, its stance mix is **nearly identical in wins and losses** (56.3% vs 58.4% early tech). The doctrine violation is *systemic, not episodic*: the model plays the same allocation policy everywhere and wins only when enough stars leak into units/expansion anyway. This is why per-turn stance shares barely discriminate outcomes (tech_share_early AUC 0.445) while flow-into-army does — a constant can't discriminate. Strengthens the stance head's rationale: the behavioral delta to learn is large and well-defined (TECH-modal → ECO-modal).
+2. **Vocabulary check — PASS.** Macro-language features separate outcomes on axes M2 never measured: **`n_attack_turns` (offensive-convergence events on Greedy cities with enemy losses) AUC 0.806** — the strongest macro discriminator measured to date (wins 2.16 such turns, losses 0.56); `unit_share_early` AUC 0.684; `n_expand_achieved` AUC 0.658. ⚠️ Directionality caution on the 0.806: late-game attack events are partly a *consequence* of already winning — treat as vocabulary validation, not yet as a causal lever; an EXP_ELO_026-style steer test would be needed before believing ATTACK-steering wins games.
+3. **Concurrency — the multi-goal orders field is load-bearing: 21.4% of turns carry ≥2 overlapping order windows.** Achieved-EXPAND windows: 341 across 250 games, mean length **7.6 turns** — long, persistent label windows, good news for learned continuity.
+4. **Coverage/balance:** stance labels cover ~93% of turns (SAVE 6–8%). **DEFEND labeler is too loose** (any Greedy unit within 2 of any city fires on 47% of turns on a Tiny map) — needs a real threat predicate (≥2 units or actual combat) before Phase 1 labels; its inverse correlation (AUC 0.374 — defending = losing) is real signal, so DEFEND stays in the vocabulary. Known limit stands: tech *identities* aren't in the dumps, so UNLOCK vs eco-tech isn't separable yet — add a tech-id dump field alongside Phase 1.
+
+**Phase 0 verdict: PASS on all four checks — Phase 1 is green-lit per the registration.**
+
+### Phase 1 — goal-conditioned micro under the scripted goal-setter (first training experiment; pre-registered, gated on Phase 0)
+Add the goal channels (orders planes + stance one-hot; appended → zero-pad compatible), have the script drive them in self-play, train micro conditioned.
+- **Hypothesis**: micro can learn to FOLLOW orders — the conditioning interface is a working actuator.
+- **Expected**: on paired seeds with varied scripted targets, order-following (directional compliance / goal-achievement rate) separates the conditioned net from a zero-channel control; reach ≥ the EXP_ELO_026 script-arm level.
+- **Falsifier**: no goal-following difference vs the zero-channel control after the run → the conditioning interface is dead and the macro head has no actuator; the program halts before any macro head is built.
+- **Confound control**: same seeds both arms; checkpoint migration required (strict Rust league loader — see memory); do not mix pre/post-channel games when reading value/policy loss.
+
+### Phase 1 infrastructure — SHIPPED (Jul 28, 2026; no training run yet)
+- **Channels**: `CH_ORDER_START..END` (162–165: EXPAND/ATTACK/DEFEND proximity blobs, max-merged) + `CH_STANCE_START..END` (165–168: one-hot planes); `NUM_CHANNELS` 162 → **168**. All-zero = "no goal set" (what old data zero-pads to and non-net seats record).
+- **Types + script**: `oracle_macro.rs` gains `MacroGoal`/`OrderKind`/`Stance`, `scripted_goal` (Stage-1 rules incl. the tightened ≥2-unit DEFEND predicate), `goal_star_gate`. Orders kept sorted so identical goals hash identically (eval cache + tree reuse).
+- **Threading**: `state_to_cpu_features_goal` → root / leaf (`extract_leaf_data`) / re-root hash; `GumbelMctsAgent.macro_goal`; `Brain::set_macro_goal` (re-applied every `think`). Recorded features and search encodes share the SAME goal object in self_play — training data cannot disagree with what the agent saw.
+- **Flags**: `self_play --goal-channels` (net seats only), `arena --goal-script` (config 1, gumbel-only, validated).
+- **Migration**: `migrate_goal_channels.py` padded conv1 162→168 on model.safetensors (+.bak), all 132 checkpoints (incl. some 161-era stragglers), exp026 snapshot; optimizer_state.pt cleared. train.py/init_model.py `SPATIAL_CHANNELS = 168`; generic append-pad covers 154/161/162 data.
+- **Verified**: full CI suite green (80 lib + integration + self_play tests, incl. new painting/goal-setter tests); smoke self_play `--goal-channels` wrote 168-wide `games_*.safetensors` with planes populated exactly per the script (EXPAND 36.7% of rows, ATTACK 34.2%, DEFEND 7.8% ≡ ARM 7.8%, GROW 92.2%, UNLOCK 0 — v1 script never emits it); train.py trained one epoch on a **mixed** 168+162 buffer with the migrated model.
+- No macro heads exist yet (Stage 2) — Phase 1's dual-network surface is only the input width, handled above. Next: the registered Phase 1 A/B (conditioned vs zero-channel control), sequenced after EXP_ELO_025's pending run.

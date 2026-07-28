@@ -8,7 +8,7 @@
 //! diverge. That logic lives here exactly once, behind the `BackpropNode`
 //! trait, so both agents are guaranteed to use the same code path.
 
-use crate::ai::features::{RawFeatures, state_to_cpu_features};
+use crate::ai::features::{RawFeatures, state_to_cpu_features_goal};
 use crate::game::Game;
 use crate::moves::Move;
 use crate::types::MoveType;
@@ -97,6 +97,8 @@ pub(crate) fn extract_leaf_data(
     indices_stack: Vec<usize>,
     path_players: Vec<i32>,
     needs_expansion: bool,
+    pursuit_focus: Option<i32>,
+    macro_goal: Option<&crate::ai::oracle_macro::MacroGoal>,
 ) -> LeafData {
     let map_size = game.state.settings.size as usize;
 
@@ -114,8 +116,13 @@ pub(crate) fn extract_leaf_data(
     }
 
     if needs_expansion {
-        let feat = state_to_cpu_features(&game.state, game.state.settings.current_player_turn_id)
-            .expect("BUG: Failed to create features at MCTS leaf");
+        let feat = state_to_cpu_features_goal(
+            &game.state,
+            game.state.settings.current_player_turn_id,
+            pursuit_focus,
+            macro_goal,
+        )
+        .expect("BUG: Failed to create features at MCTS leaf");
 
         let mut legal_moves = game.legal_moves();
         // In batched expansion we always allow EndTurn (allow_end_turn=true),
@@ -139,7 +146,13 @@ pub(crate) fn extract_leaf_data(
     }
 
     // Horizon: evaluate with NN but do not expand.
-    let feat = state_to_cpu_features(&game.state, game.state.settings.current_player_turn_id).ok();
+    let feat = state_to_cpu_features_goal(
+        &game.state,
+        game.state.settings.current_player_turn_id,
+        pursuit_focus,
+        macro_goal,
+    )
+    .ok();
 
     LeafData {
         path_indices: indices_stack,

@@ -6,7 +6,7 @@ use polyfish::TribeType;
 use polyfish::ai::brain::{Brain, SearchBackend, SearchBackendArg};
 use polyfish::ai::eval_backend::{self, EvalBackendKind, PlayerBackend};
 use polyfish::ai::eval_server::{EvalServerConfig, EvalServerStats, Evaluator};
-use polyfish::ai::features::{self, GameFeatures, state_to_tensor};
+use polyfish::ai::features::{self, GameFeatures};
 use polyfish::ai::mapper::DecomposedMapper;
 use polyfish::ai::network::PolyZeroNet;
 use polyfish::ai::reward;
@@ -660,35 +660,41 @@ fn checkpoints_by_player(history: &[LabelStep]) -> HashMap<PlayerId, Vec<Checkpo
     out
 }
 
-/// TD(lambda) forward-view value target for every step in `history` (see
-/// the doc comment on `LAMBDA_RETURN`). `final_scores` is keyed by
-/// `PlayerId`. Output is aligned 1:1 with `history`. `label_rel_w` prices
-/// the windows/terminal — may diverge from in-tree REL_W (EXP_ELO_006).
+/// TD(lambda) forward-view value target for every step in `history`,
+/// aligned 1:1. `label_rel_w` prices windows/terminal (EXP_ELO_006).
+/// With `wl_z` (EXP_ELO_025): ±1 win/loss terminal, zero window reward,
+/// undiscounted bootstrap through root values — a λ-blend of q-targets.
 fn td_lambda_labels(
     history: &[LabelStep],
     final_scores: &HashMap<i32, f32>,
     lambda: f32,
     label_rel_w: f32,
+    wl_z: Option<&HashMap<i32, f32>>,
 ) -> Vec<f32> {
     let checkpoints = checkpoints_by_player(history);
 
     history
         .iter()
         .map(|step| {
-            let my_final = final_scores.get(&step.player_id).copied().unwrap_or(0.0);
-            let opp_final = final_scores
-                .iter()
-                .filter(|(id, _)| **id != step.player_id)
-                .map(|(_, s)| *s)
-                .next()
-                .unwrap_or(0.0);
-            let terminal_return = reward::normalized_reward_wf(
-                step.my_score,
-                step.opp_score,
-                my_final,
-                opp_final,
-                label_rel_w,
-            );
+            let terminal_return = match wl_z {
+                Some(z) => z.get(&step.player_id).copied().unwrap_or(0.0),
+                None => {
+                    let my_final = final_scores.get(&step.player_id).copied().unwrap_or(0.0);
+                    let opp_final = final_scores
+                        .iter()
+                        .filter(|(id, _)| **id != step.player_id)
+                        .map(|(_, s)| *s)
+                        .next()
+                        .unwrap_or(0.0);
+                    reward::normalized_reward_wf(
+                        step.my_score,
+                        step.opp_score,
+                        my_final,
+                        opp_final,
+                        label_rel_w,
+                    )
+                }
+            };
 
             let empty = Vec::new();
             let ahead = checkpoints.get(&step.player_id).unwrap_or(&empty);
@@ -697,15 +703,21 @@ fn td_lambda_labels(
             let mut acc = 0.0f32;
             let mut remaining_weight = 1.0f32;
             for cp in &ahead[start..] {
-                let r = reward::normalized_reward_wf(
-                    step.my_score,
-                    step.opp_score,
-                    cp.my,
-                    cp.opp,
-                    label_rel_w,
-                );
-                let dt = (cp.turn - step.turn).max(0);
-                let n_step_return = r + reward::GAMMA_TURN.powi(dt) * cp.root_value.unwrap_or(0.0);
+                // Outcome space carries no per-window reward and no discount —
+                // a γ<1 here would deflate early-game labels toward 0 by depth.
+                let n_step_return = if wl_z.is_some() {
+                    cp.root_value.unwrap_or(0.0)
+                } else {
+                    let r = reward::normalized_reward_wf(
+                        step.my_score,
+                        step.opp_score,
+                        cp.my,
+                        cp.opp,
+                        label_rel_w,
+                    );
+                    let dt = (cp.turn - step.turn).max(0);
+                    r + reward::GAMMA_TURN.powi(dt) * cp.root_value.unwrap_or(0.0)
+                };
 
                 let w = remaining_weight * (1.0 - lambda);
                 acc += w * n_step_return;
@@ -1118,6 +1130,7 @@ fn play_single_game(
     pursuit_w_tree: f32,
     unfreeze_opponent: bool,
     dagger_alpha: f32,
+    goal_channels: bool,
 ) -> Option<GameResult> {
     // Curriculum logic — Tiny maps only, gradually increase turn count.
     let (map_size, max_turns) = if iteration <= 25 {
@@ -1389,14 +1402,33 @@ fn play_single_game(
             last_tempo_key = Some(tempo_key);
         }
 
+        // EXP_ELO_028 Stage 1: scripted macro goal for net seats. The SAME
+        // goal must appear in the recorded features and in every encode the
+        // agent performs, or training data and search would disagree.
+        let macro_goal = if goal_channels && is_net_seat(seat_roles, pov) {
+            Some(polyfish::ai::oracle_macro::scripted_goal(&game.state, pov))
+        } else {
+            None
+        };
+
         // Get state tensor
         let current_network = if pov == 1 { network1 } else { network2 };
         let device = current_network.device();
-        let state_t = state_to_tensor(&game.state, pov, &device)
-            .expect("BUG: Failed to create state tensor - game state is invalid");
+        let state_t = features::state_to_cpu_features_goal(
+            &game.state,
+            pov,
+            None,
+            macro_goal.as_ref(),
+        )
+        .and_then(|r| r.into_game_features(&device))
+        .expect("BUG: Failed to create state tensor - game state is invalid");
 
         // MCTS Search - use the correct agent
         let current_agent = if pov == 1 { &mut agent1 } else { &mut agent2 };
+        let star_gate = macro_goal
+            .as_ref()
+            .map_or(false, polyfish::ai::oracle_macro::goal_star_gate);
+        current_agent.set_macro_goal(macro_goal, star_gate);
 
         let trigger_info = if trace_villages
             && !trace_all
@@ -2204,9 +2236,10 @@ fn main() -> anyhow::Result<()> {
         #[arg(long, default_value_t = false)]
         no_reward_shaping: bool,
 
-        /// EXP_ELO_011: ±1 win/loss value labels from the adjudicated winner,
-        /// replacing the score-ratio final outcome — a close loss reads -1,
-        /// not ~-0.14. Composes with --td-w blending unless shaping is off.
+        /// EXP_ELO_011/025: ±1 win/loss value labels from the adjudicated
+        /// winner. Since Jul 28 (025) this flips BOTH arms — flat outcome AND
+        /// the TD arm (outcome space, γ=1, root-value q-target bootstrap);
+        /// EXP_ELO_011 tested the flat arm alone. Composes with --td-w.
         #[arg(long, default_value_t = false)]
         wl_labels: bool,
 
@@ -2249,6 +2282,13 @@ fn main() -> anyhow::Result<()> {
         /// states). Net seats only; frozen search recommended to isolate.
         #[arg(long, default_value_t = 0.0)]
         dagger_alpha: f32,
+
+        /// EXP_ELO_028 Stage 1: drive the appended goal channels with the
+        /// scripted goal-setter (orders painted + stance + star gate) on net
+        /// seats, in both the recorded features and the search. Off = all
+        /// goal planes stay zero ("no goal set").
+        #[arg(long, default_value_t = false)]
+        goal_channels: bool,
 
         /// Current training iteration (for curriculum learning)
         #[arg(long, default_value_t = 1)]
@@ -2719,6 +2759,7 @@ fn main() -> anyhow::Result<()> {
                             args.pursuit_w_tree,
                             args.unfreeze_opponent,
                             args.dagger_alpha,
+                            args.goal_channels,
                         )
                     }))
                     .unwrap_or_else(|_| {
@@ -2926,6 +2967,122 @@ fn main() -> anyhow::Result<()> {
         .as_ref()
         .and_then(|p| File::create(p).ok());
 
+    // Sharded output (Jul 28): flush every SHARD_GAMES games. A single cat of
+    // a -g 512 run needs one ~19GB Metal buffer — over the device allocation
+    // limit — while shards stay at the ~2.4GB scale 64-game runs proved.
+    // Constant games-per-FILE also keeps the loop's file-counted replay
+    // window exact in games at any -g.
+    const SHARD_GAMES: usize = 64;
+    #[allow(clippy::too_many_arguments)]
+    fn flush_shard(
+        collected_spatial_maps: Vec<Tensor>,
+        collected_player_states: Vec<Tensor>,
+        collected_action_type: Vec<Vec<f32>>,
+        collected_source_spatial: Vec<Vec<f32>>,
+        collected_target_spatial: Vec<Vec<f32>>,
+        collected_option: Vec<Vec<f32>>,
+        collected_values: Vec<f32>,
+        collected_progress: Vec<f32>,
+        collected_aux_own: Vec<Vec<f32>>,
+        collected_aux_fog: Vec<Vec<f32>>,
+        collected_aux_spt: Vec<f32>,
+        collected_aux_pursuit: Vec<f32>,
+        collected_aux_tech: Vec<Vec<f32>>,
+        num_techs: usize,
+        device: &candle_core::Device,
+        path: &str,
+    ) -> anyhow::Result<()> {
+        let total_steps = collected_spatial_maps.len();
+        let spatial_dim = features::NUM_CHANNELS * features::MAP_SIZE * features::MAP_SIZE;
+        let player_dim = features::RawFeatures::PLAYER_STATE_DIM;
+
+        let spatial_maps_tensor = Tensor::cat(&collected_spatial_maps, 0)?;
+        let spatial_maps_tensor = spatial_maps_tensor.reshape((total_steps, spatial_dim))?;
+        let player_states_tensor = Tensor::cat(&collected_player_states, 0)?;
+        let player_states_tensor = player_states_tensor.reshape((total_steps, player_dim))?;
+
+        fn flatten_vec(v: Vec<Vec<f32>>) -> Vec<f32> {
+            v.into_iter().flatten().collect()
+        }
+
+        let action_tensor = Tensor::from_vec(
+            flatten_vec(collected_action_type),
+            (total_steps, 11),
+            device,
+        )?;
+        let spatial_logit_dim = features::MAP_SIZE * features::MAP_SIZE;
+        let source_tensor = Tensor::from_vec(
+            flatten_vec(collected_source_spatial),
+            (total_steps, spatial_logit_dim),
+            device,
+        )?;
+        let target_tensor = Tensor::from_vec(
+            flatten_vec(collected_target_spatial),
+            (total_steps, spatial_logit_dim),
+            device,
+        )?;
+        let option_tensor =
+            Tensor::from_vec(flatten_vec(collected_option), (total_steps, 192), device)?;
+        let values_tensor = Tensor::from_vec(collected_values, (total_steps, 1), device)?;
+        let progress_tensor = Tensor::from_vec(collected_progress, (total_steps, 1), device)?;
+
+        // Aux-head targets — always emitted together (train.py's per-file
+        // presence mask treats them as all-or-nothing).
+        let aux_own_tensor = Tensor::from_vec(
+            flatten_vec(collected_aux_own),
+            (total_steps, spatial_logit_dim),
+            device,
+        )?;
+        let aux_fog_tensor = Tensor::from_vec(
+            flatten_vec(collected_aux_fog),
+            (total_steps, spatial_logit_dim),
+            device,
+        )?;
+        let aux_spt_tensor = Tensor::from_vec(collected_aux_spt, (total_steps, 2), device)?;
+        let aux_pursuit_tensor =
+            Tensor::from_vec(collected_aux_pursuit, (total_steps, 1), device)?;
+        let aux_tech_tensor = Tensor::from_vec(
+            flatten_vec(collected_aux_tech),
+            (total_steps, num_techs),
+            device,
+        )?;
+
+        let mut tensors = HashMap::new();
+        tensors.insert("spatial_maps".to_string(), spatial_maps_tensor);
+        tensors.insert("player_states".to_string(), player_states_tensor);
+        tensors.insert("action_type".to_string(), action_tensor);
+        tensors.insert("source_spatial".to_string(), source_tensor);
+        tensors.insert("target_spatial".to_string(), target_tensor);
+        tensors.insert("move_option".to_string(), option_tensor);
+        tensors.insert("values".to_string(), values_tensor);
+        tensors.insert("progress".to_string(), progress_tensor);
+        tensors.insert("aux_ownership".to_string(), aux_own_tensor);
+        tensors.insert("aux_fog_units".to_string(), aux_fog_tensor);
+        tensors.insert("aux_spt".to_string(), aux_spt_tensor);
+        tensors.insert("aux_opp_tech".to_string(), aux_tech_tensor);
+        tensors.insert("aux_pursuit".to_string(), aux_pursuit_tensor);
+        // f16 on disk (Jul 28): halves file size. Every stored tensor is
+        // bounded ([-1,1] targets, probabilities, normalized features), so
+        // f16's ~3 significant digits lose nothing that matters.
+        for t in tensors.values_mut() {
+            *t = t.to_dtype(candle_core::DType::F16)?;
+        }
+        candle_core::safetensors::save(&tensors, path)?;
+        println!("💾 Shard saved: {path} ({total_steps} steps, f16)");
+        Ok(())
+    }
+
+    let run_ts = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    // Trace runs are diagnostics, not training data: quarantine their games
+    // under a prefix the training loop's games_* glob won't match.
+    let shard_prefix = if args.trace_villages {
+        "trace_games"
+    } else {
+        "games"
+    };
+    let mut shard_files: Vec<String> = Vec::new();
+    let mut games_in_shard = 0usize;
+
     for result in results {
         total_moves += result.moves;
         total_net_moves += result.net_moves;
@@ -3073,11 +3230,24 @@ fn main() -> anyhow::Result<()> {
         let final_scores = &result.scores;
 
         let label_steps: Vec<LabelStep> = result.history.iter().map(LabelStep::from).collect();
+        // EXP_ELO_025: outcome-space labels — z anchors the TD tail too.
+        let wl_z: Option<HashMap<i32, f32>> = if args.wl_labels {
+            Some(
+                result
+                    .scores
+                    .keys()
+                    .map(|&id| (id, if id == result.winner_id { 1.0 } else { -1.0 }))
+                    .collect(),
+            )
+        } else {
+            None
+        };
         let td_deltas = td_lambda_labels(
             &label_steps,
             &result.final_potentials,
             args.td_lambda,
             args.label_rel_w,
+            wl_z.as_ref(),
         );
 
         let spt_steps: Vec<SptStep> = result
@@ -3231,6 +3401,34 @@ fn main() -> anyhow::Result<()> {
                     .unwrap_or_else(|| vec![0.0; num_techs]),
             );
         }
+
+        games_in_shard += 1;
+        if games_in_shard >= SHARD_GAMES && !collected_spatial_maps.is_empty() {
+            let path = format!(
+                "{shard_prefix}_{run_ts}_p{}.safetensors",
+                shard_files.len()
+            );
+            flush_shard(
+                std::mem::take(&mut collected_spatial_maps),
+                std::mem::take(&mut collected_player_states),
+                std::mem::take(&mut collected_action_type),
+                std::mem::take(&mut collected_source_spatial),
+                std::mem::take(&mut collected_target_spatial),
+                std::mem::take(&mut collected_option),
+                std::mem::take(&mut collected_values),
+                std::mem::take(&mut collected_progress),
+                std::mem::take(&mut collected_aux_own),
+                std::mem::take(&mut collected_aux_fog),
+                std::mem::take(&mut collected_aux_spt),
+                std::mem::take(&mut collected_aux_pursuit),
+                std::mem::take(&mut collected_aux_tech),
+                num_techs,
+                &device,
+                &path,
+            )?;
+            shard_files.push(path);
+            games_in_shard = 0;
+        }
     }
 
     let mut net_games = 0u32;
@@ -3332,129 +3530,49 @@ fn main() -> anyhow::Result<()> {
         serde_json::Value::Object(turn_map)
     };
 
-    let games_file = if collected_spatial_maps.is_empty() {
-        String::new()
-    } else {
-        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-        // Trace runs are diagnostics, not training data: quarantine their
-        // games under a prefix the training loop's games_* glob won't match
-        // (stray trace games previously leaked into training — see notes.md).
-        if args.trace_villages {
-            format!("trace_games_{timestamp}.safetensors")
-        } else {
-            format!("games_{timestamp}.safetensors")
-        }
-    };
-
-    // Stack and save
+    // Final partial shard.
     if !collected_spatial_maps.is_empty() {
-        let total_steps = collected_spatial_maps.len();
-        let timestamp = games_file
-            .strip_prefix("trace_")
-            .unwrap_or(&games_file)
-            .strip_prefix("games_")
-            .and_then(|s| s.strip_suffix(".safetensors"))
-            .unwrap_or("0");
-
-        let spatial_dim = features::NUM_CHANNELS * features::MAP_SIZE * features::MAP_SIZE;
-        let player_dim = features::RawFeatures::PLAYER_STATE_DIM;
-
-        let spatial_maps_tensor = Tensor::cat(&collected_spatial_maps, 0)?;
-        let spatial_maps_tensor = spatial_maps_tensor.reshape((total_steps, spatial_dim))?;
-        println!(
-            "Spatial maps shape: {:?} (dim: {})",
-            spatial_maps_tensor.shape(),
-            spatial_dim
+        let path = format!(
+            "{shard_prefix}_{run_ts}_p{}.safetensors",
+            shard_files.len()
         );
-
-        let player_states_tensor = Tensor::cat(&collected_player_states, 0)?;
-        let player_states_tensor = player_states_tensor.reshape((total_steps, player_dim))?;
-
-        // Helper to simple-flatten data
-        fn flatten_vec(v: Vec<Vec<f32>>) -> Vec<f32> {
-            v.into_iter().flatten().collect()
-        }
-
-        let action_tensor = Tensor::from_vec(
-            flatten_vec(collected_action_type),
-            (total_steps, 11),
+        flush_shard(
+            std::mem::take(&mut collected_spatial_maps),
+            std::mem::take(&mut collected_player_states),
+            std::mem::take(&mut collected_action_type),
+            std::mem::take(&mut collected_source_spatial),
+            std::mem::take(&mut collected_target_spatial),
+            std::mem::take(&mut collected_option),
+            std::mem::take(&mut collected_values),
+            std::mem::take(&mut collected_progress),
+            std::mem::take(&mut collected_aux_own),
+            std::mem::take(&mut collected_aux_fog),
+            std::mem::take(&mut collected_aux_spt),
+            std::mem::take(&mut collected_aux_pursuit),
+            std::mem::take(&mut collected_aux_tech),
+            num_techs,
             &device,
+            &path,
         )?;
+        shard_files.push(path);
+    }
+    // METRICS carries the first shard (the value-distribution reader wants a
+    // ~64-game sample, not every file); everything else globs the _p* stem.
+    let games_file = shard_files.first().cloned().unwrap_or_default();
 
-        let spatial_logit_dim = features::MAP_SIZE * features::MAP_SIZE;
-
-        let source_tensor = Tensor::from_vec(
-            flatten_vec(collected_source_spatial),
-            (total_steps, spatial_logit_dim),
-            &device,
-        )?;
-        let target_tensor = Tensor::from_vec(
-            flatten_vec(collected_target_spatial),
-            (total_steps, spatial_logit_dim),
-            &device,
-        )?;
-        let option_tensor =
-            Tensor::from_vec(flatten_vec(collected_option), (total_steps, 192), &device)?;
-
-        // Values
-        let values_tensor = Tensor::from_vec(collected_values, (total_steps, 1), &device)?;
-        let progress_tensor = Tensor::from_vec(collected_progress, (total_steps, 1), &device)?;
-
-        // Aux-head targets — always emitted together (train.py's per-file
-        // presence mask treats them as all-or-nothing).
-        let aux_own_tensor = Tensor::from_vec(
-            flatten_vec(collected_aux_own),
-            (total_steps, spatial_logit_dim),
-            &device,
-        )?;
-        let aux_fog_tensor = Tensor::from_vec(
-            flatten_vec(collected_aux_fog),
-            (total_steps, spatial_logit_dim),
-            &device,
-        )?;
-        let aux_spt_tensor = Tensor::from_vec(collected_aux_spt, (total_steps, 2), &device)?;
-        let aux_pursuit_tensor =
-            Tensor::from_vec(collected_aux_pursuit, (total_steps, 1), &device)?;
-        let aux_tech_tensor = Tensor::from_vec(
-            flatten_vec(collected_aux_tech),
-            (total_steps, num_techs),
-            &device,
-        )?;
-
-        let mut tensors = HashMap::new();
-        tensors.insert("spatial_maps".to_string(), spatial_maps_tensor);
-        tensors.insert("player_states".to_string(), player_states_tensor);
-
-        tensors.insert("action_type".to_string(), action_tensor);
-        tensors.insert("source_spatial".to_string(), source_tensor);
-        tensors.insert("target_spatial".to_string(), target_tensor);
-        tensors.insert("move_option".to_string(), option_tensor);
-
-        tensors.insert("values".to_string(), values_tensor);
-        tensors.insert("progress".to_string(), progress_tensor);
-
-        tensors.insert("aux_ownership".to_string(), aux_own_tensor);
-        tensors.insert("aux_fog_units".to_string(), aux_fog_tensor);
-        tensors.insert("aux_spt".to_string(), aux_spt_tensor);
-        tensors.insert("aux_opp_tech".to_string(), aux_tech_tensor);
-        tensors.insert("aux_pursuit".to_string(), aux_pursuit_tensor);
-
-        candle_core::safetensors::save(&tensors, &games_file)?;
-
-        // Save BEST game as replay
-        if let Some(recap) = best_recap {
-            let replay_filename = format!(
-                "replays/high_scores/best_game_score_{}_{}.json",
-                max_score, timestamp
-            );
-            if let Ok(json) = serde_json::to_string_pretty(&recap) {
-                if let Ok(mut file) = File::create(&replay_filename) {
-                    let _ = file.write_all(json.as_bytes());
-                    println!(
-                        "🏆 Highest score game ({}) saved to {}",
-                        max_score, replay_filename
-                    );
-                }
+    // Save BEST game as replay
+    if let Some(recap) = best_recap {
+        let replay_filename = format!(
+            "replays/high_scores/best_game_score_{}_{}.json",
+            max_score, run_ts
+        );
+        if let Ok(json) = serde_json::to_string_pretty(&recap) {
+            if let Ok(mut file) = File::create(&replay_filename) {
+                let _ = file.write_all(json.as_bytes());
+                println!(
+                    "🏆 Highest score game ({}) saved to {}",
+                    max_score, replay_filename
+                );
             }
         }
     }
@@ -3696,7 +3814,7 @@ mod td_lambda_tests {
         let expected = reward::normalized_reward(1000, 800, 1300, 900).clamp(-1.0, 1.0);
 
         for lambda in [0.0, 0.5, 0.8, 0.95] {
-            let out = td_lambda_labels(&history, &final_scores, lambda, reward::REL_W);
+            let out = td_lambda_labels(&history, &final_scores, lambda, reward::REL_W, None);
             assert!(
                 (out[0] - expected).abs() < 1e-6,
                 "lambda={lambda}: got {}, expected {expected}",
@@ -3719,7 +3837,7 @@ mod td_lambda_tests {
         ];
         let final_scores = finals(&[(1, 5000), (2, 800)]);
 
-        let out = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W);
+        let out = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None);
 
         let r = reward::normalized_reward(1000, 800, 1100, 800);
         let expected = (r + reward::GAMMA_TURN.powi(1) * 0.9).clamp(-1.0, 1.0);
@@ -3732,7 +3850,7 @@ mod td_lambda_tests {
         // Sanity: changing turn 7's root_value must NOT move the lambda=0 label.
         let mut history2 = history.clone();
         history2[3].root_value = Some(12345.0);
-        let out2 = td_lambda_labels(&history2, &final_scores, 0.0, reward::REL_W);
+        let out2 = td_lambda_labels(&history2, &final_scores, 0.0, reward::REL_W, None);
         assert!((out2[0] - out[0]).abs() < 1e-6);
     }
 
@@ -3748,7 +3866,7 @@ mod td_lambda_tests {
         ];
         let final_scores = finals(&[(1, 300), (2, 100)]);
 
-        let out = td_lambda_labels(&history, &final_scores, 0.5, reward::REL_W);
+        let out = td_lambda_labels(&history, &final_scores, 0.5, reward::REL_W, None);
 
         let n1 = reward::normalized_reward(100, 100, 300, 100) + reward::GAMMA_TURN.powi(1) * 0.6;
         let terminal = reward::normalized_reward(100, 100, 300, 100);
@@ -3772,7 +3890,7 @@ mod td_lambda_tests {
         ];
         let final_scores = finals(&[(1, 1200), (2, 800)]);
 
-        let out = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W);
+        let out = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None);
         let expected = reward::normalized_reward(1000, 800, 1200, 800).clamp(-1.0, 1.0);
         assert!(
             (out[0] - expected).abs() < 1e-6,
@@ -3792,10 +3910,75 @@ mod td_lambda_tests {
         ];
         let final_scores = finals(&[(1, 1100), (2, 1200)]);
 
-        let abs_only = td_lambda_labels(&history, &final_scores, 0.0, 0.0);
-        let rel_only = td_lambda_labels(&history, &final_scores, 0.0, 1.0);
+        let abs_only = td_lambda_labels(&history, &final_scores, 0.0, 0.0, None);
+        let rel_only = td_lambda_labels(&history, &final_scores, 0.0, 1.0, None);
         assert!(abs_only[0] > 0.0, "abs-only label should be positive, got {}", abs_only[0]);
         assert!(rel_only[0] < 0.0, "rel-only label should be negative, got {}", rel_only[0]);
+    }
+
+    #[test]
+    fn wl_mode_last_decision_is_pure_z() {
+        // No checkpoints ahead: the label must be exactly the ±1 outcome,
+        // independent of lambda and of every score in the game.
+        let history = vec![step(1, 5, 1000, 800, Some(0.2))];
+        let final_scores = finals(&[(1, 1300), (2, 900)]);
+        let z = finals(&[(1, 1), (2, -1)]);
+
+        for lambda in [0.0, 0.5, 0.8, 0.95] {
+            let out = td_lambda_labels(&history, &final_scores, lambda, reward::REL_W, Some(&z));
+            assert!(
+                (out[0] - 1.0).abs() < 1e-6,
+                "lambda={lambda}: got {}, expected 1.0",
+                out[0]
+            );
+        }
+    }
+
+    #[test]
+    fn wl_mode_blends_root_value_with_z_and_ignores_scores() {
+        // One checkpoint ahead (V=0.6) + z=-1 tail: at lambda=0.5 the label
+        // is 0.5·0.6 + 0.5·(−1) — the q-target blend, hand computed.
+        let history = vec![
+            step(1, 0, 100, 100, Some(0.4)),
+            step(1, 1, 300, 100, Some(0.6)),
+        ];
+        let final_scores = finals(&[(1, 300), (2, 100)]);
+        let z = finals(&[(1, -1), (2, 1)]);
+
+        let out = td_lambda_labels(&history, &final_scores, 0.5, reward::REL_W, Some(&z));
+        let expected = 0.5f32 * 0.6 + 0.5 * -1.0;
+        assert!(
+            (out[0] - expected).abs() < 1e-6,
+            "got {}, expected {expected}",
+            out[0]
+        );
+
+        // Outcome space must be blind to score magnitudes entirely.
+        let history2 = vec![
+            step(1, 0, 5000, 1, Some(0.4)),
+            step(1, 1, 9000, 1, Some(0.6)),
+        ];
+        let out2 = td_lambda_labels(&history2, &final_scores, 0.5, reward::REL_W, Some(&z));
+        assert!((out2[0] - out[0]).abs() < 1e-6);
+    }
+
+    #[test]
+    fn wl_mode_lambda_zero_is_pure_undiscounted_first_root_value() {
+        // lambda=0: first checkpoint takes weight 1, z weight 0 — and no
+        // GAMMA_TURN discount may be applied (γ=1 in outcome space).
+        let history = vec![
+            step(1, 5, 1000, 800, Some(0.2)),
+            step(1, 6, 1100, 800, Some(0.9)),
+        ];
+        let final_scores = finals(&[(1, 5000), (2, 800)]);
+        let z = finals(&[(1, 1), (2, -1)]);
+
+        let out = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, Some(&z));
+        assert!(
+            (out[0] - 0.9).abs() < 1e-6,
+            "got {}, expected undiscounted 0.9",
+            out[0]
+        );
     }
 }
 

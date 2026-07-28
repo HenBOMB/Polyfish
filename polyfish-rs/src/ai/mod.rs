@@ -14,6 +14,7 @@ pub mod mcts_common;
 pub mod mcts_types;
 pub mod mcts_zero;
 pub mod network;
+pub mod oracle_macro;
 #[cfg(feature = "tch-eval")]
 pub mod tch_network;
 #[cfg(feature = "metal-eval")]

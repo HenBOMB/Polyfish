@@ -117,6 +117,19 @@ pub struct GumbelMctsAgent<'a> {
     /// bit-exact. Value backup stays single-player (root-perspective
     /// `win_value`); the opponent's ghost moves are scripted, not searched.
     pub unfreeze_opponent: bool,
+    /// EXP_ELO_026 oracle-macro commitment: when set, every feature encode
+    /// this agent performs (root, tree leaves, re-root hash) focuses the
+    /// pursuit channel on this village alone. Cache-safe: the eval LRU and
+    /// tree-reuse checks both key on the encoded feature bytes.
+    pub pursuit_focus: Option<i32>,
+    /// EXP_ELO_026 star gate: when true, root-level Research moves failing
+    /// `oracle_macro::passes_star_gate` are dropped (root only — the tree
+    /// below stays unrestricted).
+    pub star_gate: bool,
+    /// EXP_ELO_028 Stage-1 macro goal: painted into the appended goal
+    /// channels of every encode this agent performs (root, leaves, re-root
+    /// hash). Cache/tree-reuse safe: both key on feature bytes.
+    pub macro_goal: Option<crate::ai::oracle_macro::MacroGoal>,
     /// Diagnostic capture for the next search, armed via `arm_trace`. `None`
     /// (the default) costs one `RefCell` borrow-check per call site and
     /// nothing else — see decision_trace.rs.
@@ -270,6 +283,9 @@ impl<'a> GumbelMctsAgent<'a> {
             reward_shape_w: 0.0,
             pursuit_shape_w: 0.0,
             unfreeze_opponent: false,
+            pursuit_focus: None,
+            star_gate: false,
+            macro_goal: None,
             trace: RefCell::new(None),
             last_root_value: None,
             last_root_own_value: None,
@@ -476,9 +492,11 @@ impl<'a> GumbelMctsAgent<'a> {
     fn search_and_extract(&mut self, game: &mut Game) -> GumbelNode {
         let start_turn = game.state.settings.turn;
 
-        let features = features::state_to_cpu_features(
+        let features = features::state_to_cpu_features_goal(
             &game.state,
             game.state.settings.current_player_turn_id,
+            self.pursuit_focus,
+            self.macro_goal.as_ref(),
         )
         .expect("BUG: Failed to create features at Gumbel root");
         let new_hash = features.hash();
@@ -491,7 +509,7 @@ impl<'a> GumbelMctsAgent<'a> {
                     let new_root = prev_root.children.swap_remove(chosen_idx);
                     if new_root.is_expanded && !new_root.children.is_empty() {
                         // Revalidate the children to ensure the moves are still legal
-                        if reused_children_match_legal(game, &new_root.children) {
+                        if reused_children_match_legal(game, &new_root.children, self.star_gate) {
                             self.tree_reuses += 1;
                             return self.finish_reused_root(game, new_root, start_turn);
                         }
@@ -562,6 +580,10 @@ impl<'a> GumbelMctsAgent<'a> {
         let (root_value, root_progress, ref policy_row) = results[0];
 
         let mut legal_moves = game.legal_moves();
+        if self.star_gate {
+            legal_moves
+                .retain(|m| crate::ai::oracle_macro::passes_star_gate(&game.state, m.as_ref()));
+        }
         let map_size = game.state.settings.size as usize;
 
         let mut root = GumbelNode::new(0.0, 0.0, None);
@@ -982,7 +1004,14 @@ impl<'a> GumbelMctsAgent<'a> {
             None => false,
         };
 
-        let mut leaf_data = extract_leaf_data(game, indices_stack, path_players, needs_expansion);
+        let mut leaf_data = extract_leaf_data(
+            game,
+            indices_stack,
+            path_players,
+            needs_expansion,
+            self.pursuit_focus,
+            self.macro_goal.as_ref(),
+        );
 
         // Compute in-tree heuristic scores while `game` is still at the leaf
         // state (Phase B, where priors are actually blended in, has no Game
@@ -1252,7 +1281,7 @@ impl<'a> GumbelMctsAgent<'a> {
         }
         let best_idx = self.recommend_final_move(&root);
         let best_move = clone_child_move(&root, best_idx);
-        let next_hash = next_root_hash_for(game, best_move.as_deref());
+        let next_hash = next_root_hash_for(game, best_move.as_deref(), self.pursuit_focus, self.macro_goal.as_ref());
         self.store_tree(root, best_idx, next_hash);
         move_or_end_turn(best_move)
     }
@@ -1290,7 +1319,7 @@ impl<'a> GumbelMctsAgent<'a> {
         self.record_final(&root, best_idx, move_count);
 
         let best_move = clone_child_move(&root, best_idx);
-        let next_hash = next_root_hash_for(game, best_move.as_deref());
+        let next_hash = next_root_hash_for(game, best_move.as_deref(), self.pursuit_focus, self.macro_goal.as_ref());
         self.store_tree(root, best_idx, next_hash);
         (move_or_end_turn(best_move), move_visits)
     }
@@ -1307,7 +1336,7 @@ impl<'a> GumbelMctsAgent<'a> {
         let policy: Vec<f32> = move_visits.iter().map(|mv| mv.visits).collect();
         let best_idx = self.recommend_final_move(&root);
         let best_move = clone_child_move(&root, best_idx);
-        let next_hash = next_root_hash_for(game, best_move.as_deref());
+        let next_hash = next_root_hash_for(game, best_move.as_deref(), self.pursuit_focus, self.macro_goal.as_ref());
         self.store_tree(root, best_idx, next_hash);
         (move_or_end_turn(best_move), policy)
     }
@@ -1400,8 +1429,11 @@ fn blend_heuristic_prior(game: &Game, children: &mut [GumbelNode], weight: f32) 
 /// so the comparison must apply the same normalization to `game.legal_moves()`
 /// — otherwise EndTurn's presence in the raw legal set spuriously fails the
 /// match on every reuse attempt where any other move exists.
-fn reused_children_match_legal(game: &Game, children: &[GumbelNode]) -> bool {
+fn reused_children_match_legal(game: &Game, children: &[GumbelNode], star_gate: bool) -> bool {
     let mut legal = game.legal_moves();
+    if star_gate {
+        legal.retain(|m| crate::ai::oracle_macro::passes_star_gate(&game.state, m.as_ref()));
+    }
     let has_other = legal.iter().any(|m| m.move_type() != MoveType::EndTurn);
     if has_other {
         legal.retain(|m| m.move_type() != MoveType::EndTurn);
@@ -1436,13 +1468,20 @@ fn reused_children_match_legal(game: &Game, children: &[GumbelNode]) -> bool {
 /// the Brain passes in, which is discarded after we return, so no undo is
 /// needed. `None` if the move can't be applied or features can't be built,
 /// in which case the next call simply builds fresh.
-fn next_root_hash_for(game: &mut Game, m: Option<&dyn Move>) -> Option<u64> {
+fn next_root_hash_for(
+    game: &mut Game,
+    m: Option<&dyn Move>,
+    pursuit_focus: Option<i32>,
+    macro_goal: Option<&crate::ai::oracle_macro::MacroGoal>,
+) -> Option<u64> {
     let m = m?;
-    // The undo callback is intentionally dropped because the game is a per-call clone 
+    // The undo callback is intentionally dropped because the game is a per-call clone
     let _ = game.play_move(m)?;
-    let feat = features::state_to_cpu_features(
+    let feat = features::state_to_cpu_features_goal(
         &game.state,
         game.state.settings.current_player_turn_id,
+        pursuit_focus,
+        macro_goal,
     )
     .ok()?;
     Some(feat.hash())

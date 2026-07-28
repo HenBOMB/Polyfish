@@ -377,7 +377,7 @@ def train():
     
     # 2. Init Model
     MAP_SIZE = 11
-    SPATIAL_CHANNELS = 162  # mirror of features.rs NUM_CHANNELS (incl. observation memory + pursuit)
+    SPATIAL_CHANNELS = 168  # mirror of features.rs NUM_CHANNELS (incl. obs memory, pursuit + EXP_ELO_028 goal channels)
     PLAYER_STATE_DIM = 10
 
     model = PolyZeroNet(SPATIAL_CHANNELS, PLAYER_STATE_DIM, MAP_SIZE, MAP_SIZE).to(DEVICE)
@@ -444,26 +444,17 @@ def train():
     elif KL_REF_MODEL and KL_REF_WEIGHT <= 0.0:
         print(f"KL_REF_MODEL set but KL_REF_WEIGHT<=0 — KL-anchor disabled.")
 
-    # 3. Load + concatenate every chunk ONCE, up front, and keep all of it
-    # resident across every epoch. The old code re-ran load_file + torch.cat
-    # over the whole replay buffer inside the epoch loop — torch.cat on the
-    # full buffer measured ~20-25s of pure CPU time (zero GPU use) per pass,
-    # paid EPOCHS times for byte-identical data. Trade-off: peak RAM is now
-    # the whole cat'd replay buffer for the entire run (every chunk's tensors
-    # stay in `cached_chunks` at once) — TRAIN_CHUNK_FILES no longer bounds
-    # resident RAM the way it used to (it only limits the in-flight list of
-    # un-concatenated per-file tensors during loading); the only real RAM
-    # knob now is REPLAY_BUFFER_FILES. Lower that if the buffer doesn't fit.
+    # 3. Two load modes, decided by TRAIN_RAM_GB (below): buffers projected to
+    # fit are loaded + concatenated ONCE and cached across every epoch (the
+    # reload was ~20-25s of pure CPU per pass); larger buffers STREAM — each
+    # chunk reloaded per epoch and freed after use — so resident RAM stays
+    # bounded by one chunk regardless of buffer size.
     random.shuffle(game_files)
     CHUNK_SIZE = int(os.environ.get("TRAIN_CHUNK_FILES", "10"))
     num_chunks = (len(game_files) + CHUNK_SIZE - 1) // CHUNK_SIZE
     expected_flat = SPATIAL_CHANNELS * MAP_SIZE * MAP_SIZE
 
-    cached_chunks = []
-
-    for i in range(0, len(game_files), CHUNK_SIZE):
-        chunk_files = game_files[i : i + CHUNK_SIZE]
-        chunk_idx = i // CHUNK_SIZE + 1
+    def load_chunk(chunk_files, chunk_idx):
         print(f"Loading chunk {chunk_idx}/{num_chunks} ({len(chunk_files)} files)...")
 
         # Temporary storage for chunk data
@@ -502,17 +493,20 @@ def train():
                 # so upcasting to fp32 per-batch (below) costs nothing and
                 # loses nothing training-relevant.
                 c_spatial.append(sp.half())
-                c_player.append(data["player_states"])
-                c_win.append(data["values"])
+                # Since Jul 28 self_play writes f16 files; legacy files are
+                # f32. .float() normalizes both so torch.cat never sees a
+                # dtype mix (spatial stays half by design, upcast per-batch).
+                c_player.append(data["player_states"].float())
+                c_win.append(data["values"].float())
                 if "progress" in data:
-                    c_progress.append(data["progress"])
+                    c_progress.append(data["progress"].float())
                 else:
-                    c_progress.append(torch.zeros_like(data["values"]))
+                    c_progress.append(torch.zeros_like(data["values"], dtype=torch.float32))
 
                 # Load all policy heads
                 for head in c_heads.keys():
                     if head in data:
-                        c_heads[head].append(data[head])
+                        c_heads[head].append(data[head].float())
                     else:
                         pass
 
@@ -522,7 +516,7 @@ def train():
                 n = data["values"].shape[0]
                 if all(k in data for k in AUX_DIMS):
                     for k in AUX_DIMS:
-                        c_aux[k].append(data[k])
+                        c_aux[k].append(data[k].float())
                     c_aux_mask.append(torch.ones(n))
                 else:
                     for k, d in AUX_DIMS.items():
@@ -534,7 +528,7 @@ def train():
                 continue
 
         if not c_spatial:
-            continue
+            return None
 
         # Stack into tensors
         try:
@@ -566,7 +560,7 @@ def train():
 
         except RuntimeError as e:
             print(f"OOM loading chunk: {e}")
-            continue
+            return None
 
         # Cleanup lists
         del c_spatial, c_player, c_win, c_progress, c_aux, c_aux_mask
@@ -575,7 +569,7 @@ def train():
         dataset_size = len(spatial_maps)
         print(f"  Loaded {dataset_size} samples.")
 
-        cached_chunks.append({
+        return {
             "spatial_maps": spatial_maps,
             "player_states": player_states,
             "targets_win": targets_win,
@@ -585,15 +579,60 @@ def train():
             "aux_mask": aux_mask,
             "dataset_size": dataset_size,
             "chunk_idx": chunk_idx,
-        })
+        }
 
-    if not cached_chunks:
-        print("No usable training data after loading!")
-        return
+    chunk_groups = [
+        (game_files[i : i + CHUNK_SIZE], i // CHUNK_SIZE + 1)
+        for i in range(0, len(game_files), CHUNK_SIZE)
+    ]
+    # RAM budget: resident ≈ file bytes (f16 spatial dominates and stays f16;
+    # the small non-spatial tensors upcast to f32) — ~1.1x disk. Over budget,
+    # chunks STREAM per epoch (reloaded each pass, freed after use) instead of
+    # caching for the whole run — re-buying the ~20-25s/pass torch.cat cost
+    # the cache removed, in exchange for bounded RSS at any buffer size.
+    TRAIN_RAM_GB = float(os.environ.get("TRAIN_RAM_GB", "16"))
+    on_disk = sum(os.path.getsize(f) for f in game_files if os.path.exists(f))
+    projected_gb = on_disk * 1.1 / 1e9
+    cached_chunks = None
+    if projected_gb > TRAIN_RAM_GB:
+        print(
+            f"📦 Streaming chunks: projected ~{projected_gb:.1f}GB resident "
+            f"> TRAIN_RAM_GB={TRAIN_RAM_GB:.0f} — reloading per epoch."
+        )
+    else:
+        cached_chunks = [
+            c for files, idx in chunk_groups if (c := load_chunk(files, idx))
+        ]
+        if not cached_chunks:
+            print("No usable training data after loading!")
+            return
 
-    epoch_batch_estimate = sum(
-        (c["dataset_size"] + BATCH_SIZE - 1) // BATCH_SIZE for c in cached_chunks
-    )
+    def iter_epoch_chunks():
+        if cached_chunks is not None:
+            yield from cached_chunks
+            return
+        groups = list(chunk_groups)
+        random.shuffle(groups)
+        for files, idx in groups:
+            c = load_chunk(files, idx)
+            if c is not None:
+                yield c
+
+    if cached_chunks is not None:
+        epoch_batch_estimate = sum(
+            (c["dataset_size"] + BATCH_SIZE - 1) // BATCH_SIZE for c in cached_chunks
+        )
+    else:
+        # Sample counts straight from safetensors headers — no data read.
+        from safetensors import safe_open
+        n_samples = 0
+        for f in game_files:
+            try:
+                with safe_open(f, framework="pt") as sf:
+                    n_samples += sf.get_slice("values").get_shape()[0]
+            except Exception:
+                pass
+        epoch_batch_estimate = (n_samples + BATCH_SIZE - 1) // BATCH_SIZE
     report_batch_indices = batch_report_indices(epoch_batch_estimate)
     if epoch_batch_estimate <= 10:
         print(f"Reporting all {epoch_batch_estimate} batches/epoch.")
@@ -624,7 +663,7 @@ def train():
 
         print(f"\n=== Epoch {epoch+1}/{EPOCHS} ===")
 
-        for chunk in cached_chunks:
+        for chunk in iter_epoch_chunks():
             spatial_maps = chunk["spatial_maps"]
             player_states = chunk["player_states"]
             targets_win = chunk["targets_win"]

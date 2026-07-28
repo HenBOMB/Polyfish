@@ -131,7 +131,7 @@ GAUGE_INTERVAL="${GAUGE_INTERVAL:-5}"
 # than carrying its own default — a reading at a different (mcts, k) is not
 # comparable to the ladder.
 export GUMBEL_K=16
-while getopts "fbcri:g:n:a:e:l:k:" opt; do
+while getopts "fbcri:g:n:a:e:l:k:p:" opt; do
   case $opt in
     f)
       FORCE_TRAIN=true
@@ -168,6 +168,9 @@ while getopts "fbcri:g:n:a:e:l:k:" opt; do
     k)
       GUMBEL_K=$OPTARG
       ;;
+    p)
+      SELF_PLAY_LOOPS=$OPTARG
+      ;;
     \?)
       echo "Invalid option: -$OPTARG" >&2
       exit 1
@@ -177,8 +180,13 @@ done
 
 # Derive iteration-keyed schedules from -g so the regime is constant in
 # GAMES: scaled(x) = max(1, round(x * BASELINE_GAMES / NUM_GAMES)).
+# -p runs self_play SELF_PLAY_LOOPS times per iteration (memory stays bounded
+# at -g scale per pass); schedules key on the EFFECTIVE games an iteration
+# produces.
+SELF_PLAY_LOOPS="${SELF_PLAY_LOOPS:-1}"
+EFFECTIVE_GAMES=$((NUM_GAMES * SELF_PLAY_LOOPS))
 scaled() {
-    awk -v x="$1" -v b="$BASELINE_GAMES" -v g="$NUM_GAMES" \
+    awk -v x="$1" -v b="$BASELINE_GAMES" -v g="$EFFECTIVE_GAMES" \
         'BEGIN { v = int(x * b / g + 0.5); print (v < 1 ? 1 : v) }'
 }
 if [ "${ITERATIONS_SET:-false}" != true ]; then
@@ -188,7 +196,9 @@ CHECKPOINT_EVERY=$(scaled 50)
 MILESTONE_EVERY=$(scaled 100)
 # Replay window: constant ~10*BASELINE_GAMES games regardless of -g.
 # train.py reads REPLAY_BUFFER_FILES; archive pruning keeps window + 1 in sync.
-ARCHIVE_KEEP=$(scaled 10)
+# self_play shards at 64 games/file (Jul 28), so every file is baseline-sized
+# and a fixed file count IS a fixed game window (10 files = 640 games).
+ARCHIVE_KEEP="${ARCHIVE_KEEP:-10}"
 export REPLAY_BUFFER_FILES=$ARCHIVE_KEEP
 echo "Schedule (games-based, -g $NUM_GAMES vs baseline $BASELINE_GAMES): $ITERATIONS iterations, checkpoint every $CHECKPOINT_EVERY, milestone every $MILESTONE_EVERY, league every $LEAGUE_INTERVAL iterations, gauge every ${GAUGE_INTERVAL:-$LEAGUE_INTERVAL} (scale ${GAUGE_GUMBEL_SCALE:-0}, ${GAUGE_GAMES:-32}x2 games), replay window $ARCHIVE_KEEP files"
 
@@ -200,10 +210,17 @@ else
     echo "⚠️  Reward shaping disabled (-r): flat final-outcome value target only."
 fi
 
+# Default ON since Jul 28 (EXP_ELO_025): outcome-space labels — ±1 z in the
+# flat arm AND the TD arm (γ=1, root-value q-target bootstrap). Score-primary
+# labels are a documented anti-pattern (Pasqualini 2022: −1500 Elo vs winrate
+# twin; KataGo keeps score out of the value label). WL_LABELS=0 restores the
+# legacy score-ratio labels for comparison runs.
 WL_FLAG=""
-if [ "${WL_LABELS:-0}" = "1" ]; then
+if [ "${WL_LABELS:-1}" = "1" ]; then
     WL_FLAG="--wl-labels"
-    echo "⚖️  Win/loss value labels (WL_LABELS=1): ±1 from adjudicated winner, score ratio off."
+    echo "⚖️  Win/loss value labels (default): z=±1 in flat arm + outcome-space TD/q-target arm."
+else
+    echo "⚠️  WL_LABELS=0: legacy score-primary value labels."
 fi
 
 if [ "$BOOST" = true ]; then
@@ -506,16 +523,22 @@ do
     # One-line config echo so silent env misconfigurations (ITER_OFFSET,
     # LABEL_REL_W, BOOTSTRAP) are visible in the log — EXP_ELO_006 post-mortem:
     # two runs voided by a missing ITER_OFFSET that nothing surfaced.
-    echo "CONFIG iter=$i eff_iter=$EFF_ITER iter_offset=${ITER_OFFSET:-0} match=$MATCH_TYPE backend=${BACKEND_FLAG:---search-backend gumbel} anchor='${ANCHOR_FLAG}' td_w=${TD_W:-0.7} td_lambda=${TD_LAMBDA:-0.8} label_rel_w=${LABEL_REL_W:-default} wl_labels=${WL_LABELS:-0} shape_w_label=${SHAPE_W_LABEL:-0} shape_w_tree=${SHAPE_W_TREE:-0} pursuit_w_label=${PURSUIT_W_LABEL:-0} pursuit_w_tree=${PURSUIT_W_TREE:-0} unfreeze_opponent=${UNFREEZE_OPPONENT:-0} dagger_alpha=${DAGGER_ALPHA:-0} value_trust=$VALUE_TRUST games=$NUM_GAMES mcts=$MCTS_ITERS gauge_mcts=${GAUGE_MCTS:-$MCTS_ITERS} gauge_gumbel_scale=${GAUGE_GUMBEL_SCALE:-0} k=$GUMBEL_K kl_ref_model=${KL_REF_MODEL:-none} kl_ref_weight=${KL_REF_WEIGHT:-0}"
+    echo "CONFIG iter=$i eff_iter=$EFF_ITER iter_offset=${ITER_OFFSET:-0} match=$MATCH_TYPE backend=${BACKEND_FLAG:---search-backend gumbel} anchor='${ANCHOR_FLAG}' td_w=${TD_W:-0.7} td_lambda=${TD_LAMBDA:-0.8} label_rel_w=${LABEL_REL_W:-default} wl_labels=${WL_LABELS:-1} shape_w_label=${SHAPE_W_LABEL:-0} shape_w_tree=${SHAPE_W_TREE:-0} pursuit_w_label=${PURSUIT_W_LABEL:-0} pursuit_w_tree=${PURSUIT_W_TREE:-0} unfreeze_opponent=${UNFREEZE_OPPONENT:-0} dagger_alpha=${DAGGER_ALPHA:-0} value_trust=$VALUE_TRUST games=${NUM_GAMES}x${SELF_PLAY_LOOPS} mcts=$MCTS_ITERS gauge_mcts=${GAUGE_MCTS:-$MCTS_ITERS} gauge_gumbel_scale=${GAUGE_GUMBEL_SCALE:-0} k=$GUMBEL_K kl_ref_model=${KL_REF_MODEL:-none} kl_ref_weight=${KL_REF_WEIGHT:-0}"
 
     SP_LOG=$(mktemp)
-    "$SELF_PLAY_BIN" --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $WL_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $BACKEND_FLAG $DECAY_LAST_ITER_FLAG --td-w "${TD_W:-0.7}" --td-lambda "${TD_LAMBDA:-0.8}" --outcome-scale "${OUTCOME_SCALE:-3.0}" $LABEL_REL_W_FLAG $SHAPE_FLAGS $UNFREEZE_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
-    SP_STATUS=${PIPESTATUS[0]}
+    for ((sp=1; sp<=SELF_PLAY_LOOPS; sp++)); do
+        if [ "$SELF_PLAY_LOOPS" -gt 1 ]; then
+            echo "🎲 Self-play pass $sp/$SELF_PLAY_LOOPS (-g $NUM_GAMES each)"
+        fi
+        "$SELF_PLAY_BIN" --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $WL_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $BACKEND_FLAG $DECAY_LAST_ITER_FLAG --td-w "${TD_W:-0.7}" --td-lambda "${TD_LAMBDA:-0.8}" --outcome-scale "${OUTCOME_SCALE:-3.0}" $LABEL_REL_W_FLAG $SHAPE_FLAGS $UNFREEZE_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
+        SP_STATUS=${PIPESTATUS[0]}
+        if [ "$SP_STATUS" -ne 0 ]; then
+            echo "Self-play failed with exit code $SP_STATUS" >&2
+            rm -f "$SP_LOG"
+            exit "$SP_STATUS"
+        fi
+    done
     rm -f "$SP_LOG"
-    if [ "$SP_STATUS" -ne 0 ]; then
-        echo "Self-play failed with exit code $SP_STATUS" >&2
-        exit "$SP_STATUS"
-    fi
     
     GAME_JSON=$(.venv/bin/python3 training_log.py parse-self-play)
     GAMES_FILE=$(echo "$GAME_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('games_file',''))")

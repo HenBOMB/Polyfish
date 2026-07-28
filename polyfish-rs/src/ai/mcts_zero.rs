@@ -566,7 +566,8 @@ impl<'a> ZeroMctsAgent<'a> {
         };
 
         // --- At the leaf: extract data before undoing ---
-        let leaf_data = extract_leaf_data(game, indices_stack, path_players, needs_expansion);
+        let leaf_data =
+            extract_leaf_data(game, indices_stack, path_players, needs_expansion, None, None);
 
         // --- Undo all moves back to root state ---
         while let Some(undo) = undos.pop() {

@@ -19,7 +19,7 @@ from train import PolyZeroNet
 
 def init_model():
     MAP_SIZE = 11
-    SPATIAL_CHANNELS = 162  # Mirror of features.rs NUM_CHANNELS
+    SPATIAL_CHANNELS = 168  # Mirror of features.rs NUM_CHANNELS (incl. EXP_ELO_028 goal channels)
     PLAYER_STATE_DIM = 10
     
     # Check if model already exists to avoid overwriting trained weights!

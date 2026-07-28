@@ -161,8 +161,20 @@ pub const CH_PURSUIT_START: usize = CH_GHOST_END;
 pub const CH_PURSUIT_COUNT: usize = 1;
 pub const CH_PURSUIT_END: usize = CH_PURSUIT_START + CH_PURSUIT_COUNT;
 
+// EXP_ELO_028 goal channels (appended; all-zero = "no goal set"). Orders are
+// painted as capped proximity blobs (same formula as the pursuit channel),
+// max-merged so concurrent same-kind orders coexist; the stance is a one-hot
+// constant plane. Offsets within each block follow the `OrderKind` / `Stance`
+// enum discriminants in oracle_macro.rs.
+pub const CH_ORDER_START: usize = CH_PURSUIT_END;
+pub const CH_ORDER_COUNT: usize = 3;
+pub const CH_ORDER_END: usize = CH_ORDER_START + CH_ORDER_COUNT;
+pub const CH_STANCE_START: usize = CH_ORDER_END;
+pub const CH_STANCE_COUNT: usize = 3;
+pub const CH_STANCE_END: usize = CH_STANCE_START + CH_STANCE_COUNT;
+
 /// Total number of feature channels (dynamically computed)
-pub const NUM_CHANNELS: usize = CH_PURSUIT_END;
+pub const NUM_CHANNELS: usize = CH_STANCE_END;
 
 // ============================================================================
 // Runtime Lookup Tables (enum discriminant -> sequential index)
@@ -305,6 +317,31 @@ pub fn state_to_tensor(
 /// stops short of allocating device tensors, returning owned `Vec<f32>`
 /// instead. Safe to call from any thread.
 pub fn state_to_cpu_features(state: &GameState, perspective: PlayerId) -> Result<RawFeatures> {
+    state_to_cpu_features_focused(state, perspective, None)
+}
+
+/// `state_to_cpu_features` with an EXP_ELO_026 oracle-macro commitment: when
+/// `pursuit_focus` is a tile that still holds a capturable village for
+/// `perspective`, the pursuit channel's proximity field is computed from that
+/// village alone; any other value falls back to the all-villages field.
+pub fn state_to_cpu_features_focused(
+    state: &GameState,
+    perspective: PlayerId,
+    pursuit_focus: Option<i32>,
+) -> Result<RawFeatures> {
+    state_to_cpu_features_goal(state, perspective, pursuit_focus, None)
+}
+
+/// `state_to_cpu_features_focused` plus the EXP_ELO_028 goal channels: each
+/// order paints a capped proximity blob (max-merged) into its kind's plane
+/// and the stance fills its one-hot plane. `None` leaves all six planes zero
+/// ("no goal set" — the pre-Stage-1 semantics old data zero-pads to).
+pub fn state_to_cpu_features_goal(
+    state: &GameState,
+    perspective: PlayerId,
+    pursuit_focus: Option<i32>,
+    macro_goal: Option<&crate::ai::oracle_macro::MacroGoal>,
+) -> Result<RawFeatures> {
     let mut data = vec![0.0f32; NUM_CHANNELS * MAP_SIZE * MAP_SIZE];
     let map_size = state.settings.size as usize;
 
@@ -805,6 +842,12 @@ pub fn state_to_cpu_features(state: &GameState, perspective: PlayerId) -> Result
                 Some((idx / map_size as i32, idx % map_size as i32)) // (row, col)
             })
             .collect();
+        let villages = match pursuit_focus {
+            Some(f) if villages.contains(&(f / map_size as i32, f % map_size as i32)) => {
+                vec![(f / map_size as i32, f % map_size as i32)]
+            }
+            _ => villages,
+        };
         if !villages.is_empty() {
             for y in 0..MAP_SIZE {
                 for x in 0..MAP_SIZE {
@@ -819,6 +862,29 @@ pub fn state_to_cpu_features(state: &GameState, perspective: PlayerId) -> Result
                     }
                 }
             }
+        }
+    }
+
+    // EXP_ELO_028 goal channels: painted orders + stance one-hot.
+    if let Some(goal) = macro_goal {
+        let cap = crate::ai::reward::SHAPE_PROX_CAP as f32;
+        for &(kind, target) in &goal.orders {
+            let ch = CH_ORDER_START + kind as usize;
+            let (tr, tc) = (target / map_size as i32, target % map_size as i32);
+            for y in 0..MAP_SIZE {
+                for x in 0..MAP_SIZE {
+                    let d = (y as i32 - tr).abs().max((x as i32 - tc).abs());
+                    let prox = (cap - d as f32).max(0.0) / cap;
+                    let idx = ch * (MAP_SIZE * MAP_SIZE) + y * MAP_SIZE + x;
+                    if prox > data[idx] {
+                        data[idx] = prox;
+                    }
+                }
+            }
+        }
+        let stance_ch = CH_STANCE_START + goal.stance as usize;
+        for i in 0..MAP_SIZE * MAP_SIZE {
+            data[stance_ch * (MAP_SIZE * MAP_SIZE) + i] = 1.0;
         }
     }
 
@@ -862,6 +928,97 @@ fn set_feat(data: &mut Vec<f32>, channel: usize, x: usize, y: usize, val: f32) {
 mod tests {
     use super::*;
     use crate::game::Game;
+
+    /// EXP_ELO_026: a valid pursuit focus narrows the pursuit channel to the
+    /// committed village's own proximity field; an invalid focus (tile not
+    /// capturable) falls back to the normal all-villages field.
+    #[test]
+    fn test_pursuit_focus_narrows_channel_and_falls_back_when_invalid() {
+        use crate::states::{StructureState, TileState};
+        use crate::types::StructureType;
+
+        let mut game = Game::default();
+        for idx in [0i32, 60] {
+            game.state.structures.insert(
+                idx,
+                Some(StructureState {
+                    structure_type: StructureType::Village,
+                    level: 0,
+                    founded: 0,
+                }),
+            );
+            let mut tile = TileState::default();
+            tile.explorers.insert(1);
+            game.state.tiles.insert(idx, tile);
+        }
+
+        let pursuit = |state: &crate::states::GameState, focus: Option<i32>| -> Vec<f32> {
+            let raw = state_to_cpu_features_focused(state, 1, focus).unwrap();
+            raw.spatial[CH_PURSUIT_START * MAP_SIZE * MAP_SIZE..CH_PURSUIT_END * MAP_SIZE * MAP_SIZE]
+                .to_vec()
+        };
+
+        let both = pursuit(&game.state, None);
+        let focused = pursuit(&game.state, Some(60));
+        assert_ne!(both, focused, "focus on one of two villages must change the field");
+
+        // The focused field is exactly the single-village formula around 60.
+        let cap = crate::ai::reward::SHAPE_PROX_CAP as f32;
+        for y in 0..MAP_SIZE {
+            for x in 0..MAP_SIZE {
+                let d = (y as i32 - 60 / 11).abs().max((x as i32 - 60 % 11).abs());
+                let expected = (cap - d as f32).max(0.0) / cap;
+                assert!((focused[y * MAP_SIZE + x] - expected).abs() < 1e-6);
+            }
+        }
+
+        // A focus that fails the capturable predicate is ignored.
+        game.state.tiles.get_mut(&60).unwrap().owner = 2;
+        let after_capture = pursuit(&game.state, Some(60));
+        let unfocused_after = pursuit(&game.state, None);
+        assert_eq!(after_capture, unfocused_after);
+    }
+
+    /// EXP_ELO_028: orders paint max-merged proximity blobs into their kind's
+    /// plane, the stance fills its one-hot plane, and no goal leaves all six
+    /// appended planes zero.
+    #[test]
+    fn test_goal_channels_paint_orders_and_stance() {
+        use crate::ai::oracle_macro::{MacroGoal, OrderKind, Stance};
+        let game = Game::default();
+        let goal = MacroGoal {
+            orders: vec![
+                (OrderKind::Expand, 0),
+                (OrderKind::Expand, 60),
+                (OrderKind::Attack, 5),
+            ],
+            stance: Stance::Arm,
+        };
+        let raw = state_to_cpu_features_goal(&game.state, 1, None, Some(&goal)).unwrap();
+        let plane =
+            |r: &RawFeatures, ch: usize| r.spatial[ch * MAP_SIZE * MAP_SIZE..(ch + 1) * MAP_SIZE * MAP_SIZE].to_vec();
+        let cap = crate::ai::reward::SHAPE_PROX_CAP as f32;
+
+        let expand = plane(&raw, CH_ORDER_START);
+        for y in 0..MAP_SIZE {
+            for x in 0..MAP_SIZE {
+                let d0 = (y as i32).max(x as i32);
+                let d60 = (y as i32 - 60 / 11).abs().max((x as i32 - 60 % 11).abs());
+                let expected = (cap - d0.min(d60) as f32).max(0.0) / cap;
+                assert!((expand[y * MAP_SIZE + x] - expected).abs() < 1e-6);
+            }
+        }
+        assert!(plane(&raw, CH_ORDER_START + 1)[5] > 0.99);
+        assert!(plane(&raw, CH_ORDER_START + 2).iter().all(|&v| v == 0.0));
+        assert!(plane(&raw, CH_STANCE_START + 1).iter().all(|&v| v == 1.0));
+        assert!(plane(&raw, CH_STANCE_START).iter().all(|&v| v == 0.0));
+        assert!(plane(&raw, CH_STANCE_START + 2).iter().all(|&v| v == 0.0));
+
+        let raw0 = state_to_cpu_features_goal(&game.state, 1, None, None).unwrap();
+        for ch in CH_ORDER_START..CH_STANCE_END {
+            assert!(plane(&raw0, ch).iter().all(|&v| v == 0.0));
+        }
+    }
 
     #[test]
     fn test_cpu_features_match_state_to_tensor() {
@@ -908,6 +1065,9 @@ mod tests {
         assert!(CH_CITY_STATS_END <= CH_GLOBAL_START);
         assert!(CH_GLOBAL_END <= CH_GHOST_START);
         assert!(CH_GHOST_END <= CH_PURSUIT_START);
+        assert!(CH_PURSUIT_END <= CH_ORDER_START);
+        assert!(CH_ORDER_END <= CH_STANCE_START);
+        assert_eq!(CH_STANCE_END, NUM_CHANNELS);
     }
 
     #[test]
@@ -954,9 +1114,11 @@ mod tests {
                 + CH_GLOBAL_COUNT
                 + CH_GHOST_COUNT
                 + CH_PURSUIT_COUNT
+                + CH_ORDER_COUNT
+                + CH_STANCE_COUNT
         );
         // Pinned: the trained model's conv1 input width. Bump deliberately
         // (with a weight migration) when adding channels.
-        assert_eq!(NUM_CHANNELS, 162);
+        assert_eq!(NUM_CHANNELS, 168);
     }
 }
