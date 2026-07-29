@@ -561,6 +561,11 @@ pub fn get_city_production(state: &GameState, city: &CityState) -> i32 {
         }
     }
 
+    // Apply income penalty for negative population (-1 star per turn per red bar, minimum 0)
+    if city.progress < 0 {
+        prod = (prod + city.progress).max(0);
+    }
+
     prod
 }
 
