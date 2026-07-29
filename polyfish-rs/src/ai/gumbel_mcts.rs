@@ -110,6 +110,10 @@ pub struct GumbelMctsAgent<'a> {
     /// Weight on the isolated pursuit-progress potential Φ in in-tree edge
     /// rewards (EXP_ELO_018), independent of `reward_shape_w`. 0.0 = off.
     pub pursuit_shape_w: f32,
+    /// EXP_ELO_028 Phase 1c: weight on `reward::goal_potential` (stance/order
+    /// priced shaping) in in-tree edge rewards, applied on the root player's
+    /// edges only (the opponent's goal is unknown). 0.0 = off.
+    pub goal_shape_w: f32,
     /// EXP_ELO_017: when crossing an EndTurn edge, give each intervening
     /// opponent a real (deterministic-argmax Greedy) turn instead of the
     /// engine's blind auto-skip — so the tree can see contested villages/
@@ -130,6 +134,9 @@ pub struct GumbelMctsAgent<'a> {
     /// channels of every encode this agent performs (root, leaves, re-root
     /// hash). Cache/tree-reuse safe: both key on feature bytes.
     pub macro_goal: Option<crate::ai::oracle_macro::MacroGoal>,
+    /// EXP_ELO_028 v2.3 aux context (NOT painted): environment-fit tech bias
+    /// for the goal potential + whole-game tech-purchase caps at the root.
+    pub goal_aux: Option<crate::ai::oracle_macro::GoalAux>,
     /// Diagnostic capture for the next search, armed via `arm_trace`. `None`
     /// (the default) costs one `RefCell` borrow-check per call site and
     /// nothing else — see decision_trace.rs.
@@ -282,10 +289,12 @@ impl<'a> GumbelMctsAgent<'a> {
                 .unwrap_or(1.0),
             reward_shape_w: 0.0,
             pursuit_shape_w: 0.0,
+            goal_shape_w: 0.0,
             unfreeze_opponent: false,
             pursuit_focus: None,
             star_gate: false,
             macro_goal: None,
+            goal_aux: None,
             trace: RefCell::new(None),
             last_root_value: None,
             last_root_own_value: None,
@@ -509,7 +518,13 @@ impl<'a> GumbelMctsAgent<'a> {
                     let new_root = prev_root.children.swap_remove(chosen_idx);
                     if new_root.is_expanded && !new_root.children.is_empty() {
                         // Revalidate the children to ensure the moves are still legal
-                        if reused_children_match_legal(game, &new_root.children, self.star_gate) {
+                        if reused_children_match_legal(
+                            game,
+                            &new_root.children,
+                            self.star_gate,
+                            self.macro_goal.as_ref().map(|g| g.stance),
+                            self.goal_aux.as_ref(),
+                        ) {
                             self.tree_reuses += 1;
                             return self.finish_reused_root(game, new_root, start_turn);
                         }
@@ -580,9 +595,16 @@ impl<'a> GumbelMctsAgent<'a> {
         let (root_value, root_progress, ref policy_row) = results[0];
 
         let mut legal_moves = game.legal_moves();
-        if self.star_gate {
-            legal_moves
-                .retain(|m| crate::ai::oracle_macro::passes_star_gate(&game.state, m.as_ref()));
+        if self.star_gate || self.goal_aux.is_some() {
+            let stance = self.macro_goal.as_ref().map(|g| g.stance);
+            legal_moves.retain(|m| {
+                (!self.star_gate
+                    || crate::ai::oracle_macro::passes_star_gate(&game.state, m.as_ref(), stance))
+                    && self
+                        .goal_aux
+                        .as_ref()
+                        .map_or(true, |a| crate::ai::oracle_macro::passes_tech_caps(m.as_ref(), a))
+            });
         }
         let map_size = game.state.settings.size as usize;
 
@@ -830,6 +852,27 @@ impl<'a> GumbelMctsAgent<'a> {
     /// control returns to the searcher. Two-player only: asserts that
     /// happens within `MAX_GHOST_MOVES`, loud rather than silently wrong on
     /// a future 3+-player run.
+    /// Edge-reward snapshot: the shared shaped snapshot plus the goal
+    /// potential on the root player's own edges (their goal is the only one
+    /// this search knows). Pre/post of an edge always use the same (mover,
+    /// root) pair, so the added term stays a consistent potential.
+    fn edge_snapshot(
+        &self,
+        state: &crate::states::GameState,
+        mover: i32,
+        root_player: i32,
+    ) -> (f32, f32) {
+        let (mut my, opp) =
+            reward::shaped_snapshot(state, mover, self.reward_shape_w, self.pursuit_shape_w);
+        if self.goal_shape_w != 0.0 && mover == root_player {
+            if let Some(goal) = &self.macro_goal {
+                my += self.goal_shape_w
+                    * reward::goal_potential(state, mover, goal, self.goal_aux.as_ref());
+            }
+        }
+        (my, opp)
+    }
+
     fn cross_end_turn(game: &mut Game, unfreeze_opponent: bool) -> Option<crate::actions::UndoCallback> {
         if !unfreeze_opponent {
             return game.simulate_move(&EndTurnMove);
@@ -908,8 +951,7 @@ impl<'a> GumbelMctsAgent<'a> {
         // perspective) and how many turns it crossed.
         let candidate_node = root.children.get(cand_child_idx)?;
         let m = candidate_node.move_to_here.as_ref()?;
-        let (my_pre, opp_pre) =
-            reward::shaped_snapshot(&game.state, root_player, self.reward_shape_w, self.pursuit_shape_w);
+        let (my_pre, opp_pre) = self.edge_snapshot(&game.state, root_player, root_player);
         let turn_pre = game.state.settings.turn;
         let undo = if m.move_type() == MoveType::EndTurn {
             Self::cross_end_turn(game, self.unfreeze_opponent)?
@@ -919,8 +961,7 @@ impl<'a> GumbelMctsAgent<'a> {
         undos.push(undo);
         indices_stack.push(cand_child_idx);
         path_players.push(game.state.settings.current_player_turn_id);
-        let (my_post, opp_post) =
-            reward::shaped_snapshot(&game.state, root_player, self.reward_shape_w, self.pursuit_shape_w);
+        let (my_post, opp_post) = self.edge_snapshot(&game.state, root_player, root_player);
         let r = reward::normalized_reward_wf(my_pre, opp_pre, my_post, opp_post, reward::REL_W);
         candidate_node.edge_reward.set(Some(r));
         path_rewards.push(r);
@@ -958,8 +999,7 @@ impl<'a> GumbelMctsAgent<'a> {
                 None => break,
             };
             let mover = game.state.settings.current_player_turn_id;
-            let (my_pre, opp_pre) =
-                reward::shaped_snapshot(&game.state, mover, self.reward_shape_w, self.pursuit_shape_w);
+            let (my_pre, opp_pre) = self.edge_snapshot(&game.state, mover, root_player);
             let turn_pre = game.state.settings.turn;
             let sim_result = if m.move_type() == MoveType::EndTurn {
                 Self::cross_end_turn(game, self.unfreeze_opponent)
@@ -979,8 +1019,7 @@ impl<'a> GumbelMctsAgent<'a> {
             undos.push(undo);
             indices_stack.push(child_idx);
             path_players.push(game.state.settings.current_player_turn_id);
-            let (my_post, opp_post) =
-                reward::shaped_snapshot(&game.state, mover, self.reward_shape_w, self.pursuit_shape_w);
+            let (my_post, opp_post) = self.edge_snapshot(&game.state, mover, root_player);
             let r = reward::normalized_reward_wf(my_pre, opp_pre, my_post, opp_post, reward::REL_W);
             child_node.edge_reward.set(Some(r));
             path_rewards.push(r);
@@ -1429,10 +1468,21 @@ fn blend_heuristic_prior(game: &Game, children: &mut [GumbelNode], weight: f32) 
 /// so the comparison must apply the same normalization to `game.legal_moves()`
 /// — otherwise EndTurn's presence in the raw legal set spuriously fails the
 /// match on every reuse attempt where any other move exists.
-fn reused_children_match_legal(game: &Game, children: &[GumbelNode], star_gate: bool) -> bool {
+fn reused_children_match_legal(
+    game: &Game,
+    children: &[GumbelNode],
+    star_gate: bool,
+    stance: Option<crate::ai::oracle_macro::Stance>,
+    goal_aux: Option<&crate::ai::oracle_macro::GoalAux>,
+) -> bool {
     let mut legal = game.legal_moves();
-    if star_gate {
-        legal.retain(|m| crate::ai::oracle_macro::passes_star_gate(&game.state, m.as_ref()));
+    if star_gate || goal_aux.is_some() {
+        legal.retain(|m| {
+            (!star_gate
+                || crate::ai::oracle_macro::passes_star_gate(&game.state, m.as_ref(), stance))
+                && goal_aux
+                    .map_or(true, |a| crate::ai::oracle_macro::passes_tech_caps(m.as_ref(), a))
+        });
     }
     let has_other = legal.iter().any(|m| m.move_type() != MoveType::EndTurn);
     if has_other {

@@ -91,6 +91,8 @@ HEADER = [
     "t2c_3rd_turn",
     "t2c_4th_rate",
     "t2c_4th_turn",
+    "anchor_games",
+    "anchor_net_wr",
     "avg_moves",
     "match_type",
 ]
@@ -583,6 +585,8 @@ def append_row(
         "ruins_t2c_p80": game_metrics.get("ruins_t2c_p80", ""),
         "ruins_t2c_all": game_metrics.get("ruins_t2c_all", ""),
         **{col: game_metrics.get(col, "") for col in TEMPO_COLUMNS},
+        "anchor_games": game_metrics.get("anchor_games", ""),
+        "anchor_net_wr": game_metrics.get("anchor_net_wr", ""),
         "avg_moves": game_metrics.get("avg_moves", ""),
         "match_type": normalize_match_type(match_type),
     }

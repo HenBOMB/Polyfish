@@ -1131,6 +1131,7 @@ fn play_single_game(
     unfreeze_opponent: bool,
     dagger_alpha: f32,
     goal_channels: bool,
+    goal_w_tree: f32,
 ) -> Option<GameResult> {
     // Curriculum logic — Tiny maps only, gradually increase turn count.
     let (map_size, max_turns) = if iteration <= 25 {
@@ -1278,6 +1279,7 @@ fn play_single_game(
         .with_tree_q_weight(q_target_w)
         .with_reward_shape_w(shape_w_tree)
         .with_pursuit_shape_w(pursuit_w_tree)
+        .with_goal_shape_w(goal_w_tree)
         .with_unfreeze_opponent(unfreeze_opponent);
     let mut agent2 = Brain::with_backend(eval2, mcts_iters, backend2)
         .with_prior_heuristic_weight(prior_w)
@@ -1285,6 +1287,7 @@ fn play_single_game(
         .with_tree_q_weight(q_target_w)
         .with_reward_shape_w(shape_w_tree)
         .with_pursuit_shape_w(pursuit_w_tree)
+        .with_goal_shape_w(goal_w_tree)
         .with_unfreeze_opponent(unfreeze_opponent);
 
     if let Some(b) = leaf_batch {
@@ -1359,6 +1362,10 @@ fn play_single_game(
     let mut wander_trigger_turn: Option<i32> = None;
     let mut wander_trigger_unit: i32 = -1;
     let mut wander_trigger_pov: Option<PlayerId> = None;
+    // v2.3 tech-cap counters: Research moves executed per seat (ruin-granted
+    // techs never pass through a Research move, so they don't count).
+    let mut techs_bought = [0u32; 2];
+    let mut tier3_bought = [0u32; 2];
     while !polyfish::functions::is_game_over(&game.state) {
         record_spt_at_turn_start(
             &game.state,
@@ -1425,10 +1432,21 @@ fn play_single_game(
 
         // MCTS Search - use the correct agent
         let current_agent = if pov == 1 { &mut agent1 } else { &mut agent2 };
-        let star_gate = macro_goal
-            .as_ref()
-            .map_or(false, polyfish::ai::oracle_macro::goal_star_gate);
+        let star_gate = macro_goal.as_ref().map_or(false, |g| {
+            polyfish::ai::oracle_macro::goal_star_gate(&game.state, pov, g)
+        });
+        let seat = ((pov - 1) as usize).min(1);
+        let goal_aux = macro_goal.as_ref().map(|g| {
+            polyfish::ai::oracle_macro::scripted_goal_aux(
+                &game.state,
+                pov,
+                g,
+                techs_bought[seat],
+                tier3_bought[seat],
+            )
+        });
         current_agent.set_macro_goal(macro_goal, star_gate);
+        current_agent.set_goal_aux(goal_aux);
 
         let trigger_info = if trace_villages
             && !trace_all
@@ -1851,6 +1869,17 @@ fn play_single_game(
                     .map(|stars_before| (game.state.settings.turn, stars_before))
             });
             let _ = game.play_move(m.as_ref());
+            if m_type == polyfish::types::MoveType::Research {
+                let seat = ((pov - 1) as usize).min(1);
+                techs_bought[seat] += 1;
+                if let Ok(tech) = m.tech_type() {
+                    if polyfish::settings::technology::get_technology_setting(tech).tier
+                        == Some(3)
+                    {
+                        tier3_bought[seat] += 1;
+                    }
+                }
+            }
             if let (Some((turn, stars_before)), Some(f)) =
                 (star_spend_pre, star_spend_file.as_mut())
             {
@@ -2290,6 +2319,12 @@ fn main() -> anyhow::Result<()> {
         #[arg(long, default_value_t = false)]
         goal_channels: bool,
 
+        /// EXP_ELO_028 Phase 1c: weight on the goal potential (stance/order
+        /// priced in-tree shaping) in net seats' edge rewards. Requires
+        /// --goal-channels. 0.0 = off.
+        #[arg(long, default_value_t = 0.0)]
+        goal_w_tree: f32,
+
         /// Current training iteration (for curriculum learning)
         #[arg(long, default_value_t = 1)]
         iteration: usize,
@@ -2437,6 +2472,9 @@ fn main() -> anyhow::Result<()> {
     }
     if !(0.0..=1.0).contains(&args.td_lambda) {
         anyhow::bail!("--td-lambda must be in [0, 1]");
+    }
+    if args.goal_w_tree != 0.0 && !args.goal_channels {
+        anyhow::bail!("--goal-w-tree requires --goal-channels (no goal is set without them)");
     }
 
     // Default Metal op-flush cadence to 1000 for better GPU efficiency on Metal
@@ -2760,6 +2798,7 @@ fn main() -> anyhow::Result<()> {
                             args.unfreeze_opponent,
                             args.dagger_alpha,
                             args.goal_channels,
+                            args.goal_w_tree,
                         )
                     }))
                     .unwrap_or_else(|_| {
@@ -2932,6 +2971,9 @@ fn main() -> anyhow::Result<()> {
     let (mut first_cap_seats, mut first_cap_captured) = (0u32, 0u32);
     let mut first_cap_turn_sum = 0.0f64;
     let mut first_cap_censored_sum = 0.0f64;
+    // Contested anchor games: an embedded per-iteration strength peek vs the
+    // Greedy anchor (n is small — ~anchor_frac * num_games — so ±1/sqrt(n)).
+    let (mut anchor_games, mut anchor_net_wins) = (0u32, 0u32);
     let mut spt_sums: HashMap<i32, f64> = HashMap::new();
     let mut spt_counts: HashMap<i32, u32> = HashMap::new();
     let mut worth_sums: HashMap<i32, f64> = HashMap::new();
@@ -3112,6 +3154,13 @@ fn main() -> anyhow::Result<()> {
         first_cap_captured += result.villages_first_captured;
         first_cap_turn_sum += result.villages_first_turn_sum;
         first_cap_censored_sum += result.villages_first_censored_sum;
+        if result.roles.contains(&"anchor") {
+            anchor_games += 1;
+            let winner_seat = (result.winner_id - 1) as usize;
+            if winner_seat < 2 && result.roles[winner_seat] == "model_vs_anchor" {
+                anchor_net_wins += 1;
+            }
+        }
         // Net-only: mirror games count both seats (both are net); anchor/league
         // games exclude the non-net (Greedy/opponent) seat, so the score metrics
         // reflect the net's play, not the opponent's.
@@ -3723,6 +3772,12 @@ fn main() -> anyhow::Result<()> {
         "t2c_3rd_turn": reach_turn(1),
         "t2c_4th_rate": reach_rate(2),
         "t2c_4th_turn": reach_turn(2),
+        "anchor_games": anchor_games,
+        "anchor_net_wr": if anchor_games > 0 {
+            f64::from(anchor_net_wins) / f64::from(anchor_games)
+        } else {
+            -1.0
+        },
         "tempo_by_turn": tempo_by_turn,
     });
     std::fs::write(

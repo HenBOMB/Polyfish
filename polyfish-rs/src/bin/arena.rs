@@ -161,6 +161,12 @@ struct Args {
     /// channels ignores the (zero-initialized) planes.
     #[arg(long, default_value_t = false)]
     goal_script: bool,
+
+    /// EXP_ELO_028 Phase 1c: weight on the goal potential in config 1's
+    /// in-tree edge rewards (stance/order priced shaping). Requires
+    /// --goal-script. 0.0 = off.
+    #[arg(long, default_value_t = 0.0)]
+    goal_w_tree: f32,
 }
 
 fn load_model(path: &str, device: &candle_core::Device) -> anyhow::Result<PolyZeroNet> {
@@ -319,6 +325,7 @@ fn play_match(
     macro_commit: bool,
     macro_star_gate: bool,
     goal_script: bool,
+    goal_w_tree: f32,
 ) -> MatchResult {
     let gen_settings = MapGenSettings {
         size: MapSize::Tiny,
@@ -339,16 +346,16 @@ fn play_match(
     // scores attribute to the right config when sides are swapped.
     let (mut agent_p1, p1_config, mut agent_p2, p2_config) = if swap {
         (
-            make_search_agent(backend2, eval2, mcts2, leaf_batch, None, None, None, None, None, Some(false)),
+            make_search_agent(backend2, eval2, mcts2, leaf_batch, None, None, None, None, None, None, Some(false)),
             2u8,
-            make_search_agent(backend1, eval1, mcts1, leaf_batch, None, None, None, None, None, Some(false)),
+            make_search_agent(backend1, eval1, mcts1, leaf_batch, None, None, None, None, None, None, Some(false)),
             1u8,
         )
     } else {
         (
-            make_search_agent(backend1, eval1, mcts1, leaf_batch, None, None, None, None, None, Some(false)),
+            make_search_agent(backend1, eval1, mcts1, leaf_batch, None, None, None, None, None, None, Some(false)),
             1u8,
-            make_search_agent(backend2, eval2, mcts2, leaf_batch, None, None, None, None, None, Some(false)),
+            make_search_agent(backend2, eval2, mcts2, leaf_batch, None, None, None, None, None, None, Some(false)),
             2u8,
         )
     };
@@ -379,6 +386,9 @@ fn play_match(
     // no capturable village visible). Tracked even in a gate-only arm, since
     // the gate is defined as active "while committed".
     let mut commitment: Option<i32> = None;
+    // v2.3 tech-cap counters for the model seat (goal_script only).
+    let mut techs_bought = 0u32;
+    let mut tier3_bought = 0u32;
 
     while !polyfish::functions::is_game_over(&game.state) && moves < 500 {
         if dump_stats_dir.is_some() && game.state.settings.turn != last_sampled_turn {
@@ -403,11 +413,21 @@ fn play_match(
         // EXP_ELO_028: scripted goal channels for config1.
         if goal_script && current_pid == model_player {
             let goal = polyfish::ai::oracle_macro::scripted_goal(&game.state, model_player);
-            let gate = polyfish::ai::oracle_macro::goal_star_gate(&goal);
+            let gate =
+                polyfish::ai::oracle_macro::goal_star_gate(&game.state, model_player, &goal);
+            let aux = polyfish::ai::oracle_macro::scripted_goal_aux(
+                &game.state,
+                model_player,
+                &goal,
+                techs_bought,
+                tier3_bought,
+            );
             let model_agent = if swap { &mut agent_p2 } else { &mut agent_p1 };
             if let SearchAgent::Gumbel(a) = model_agent {
                 a.star_gate = gate;
                 a.macro_goal = Some(goal);
+                a.goal_shape_w = goal_w_tree;
+                a.goal_aux = Some(aux);
             }
         }
 
@@ -441,6 +461,19 @@ fn play_match(
         }
 
         if let Some(m) = best_move {
+            if goal_script
+                && current_pid == model_player
+                && m.move_type() == polyfish::types::MoveType::Research
+            {
+                techs_bought += 1;
+                if let Ok(tech) = m.tech_type() {
+                    if polyfish::settings::technology::get_technology_setting(tech).tier
+                        == Some(3)
+                    {
+                        tier3_bought += 1;
+                    }
+                }
+            }
             game.play_move(m.as_ref());
         } else {
             break;
@@ -529,8 +562,19 @@ fn main() -> anyhow::Result<()> {
              Gumbel agent; pass --backend1 gumbel (EXP_ELO_026/028)"
         );
     }
+    if args.goal_w_tree != 0.0 && !args.goal_script {
+        anyhow::bail!("--goal-w-tree requires --goal-script (there is no goal to price without it)");
+    }
     if args.goal_script {
-        println!("GOAL SCRIPT (EXP_ELO_028): scripted orders+stance drive config 1's goal channels");
+        println!(
+            "GOAL SCRIPT (EXP_ELO_028): scripted orders+stance drive config 1's goal channels\
+             {}",
+            if args.goal_w_tree != 0.0 {
+                format!(" | goal_w_tree={}", args.goal_w_tree)
+            } else {
+                String::new()
+            }
+        );
     }
     if args.macro_commit || args.macro_star_gate {
         println!(
@@ -707,7 +751,7 @@ fn main() -> anyhow::Result<()> {
                             eval1, eval2, mcts1, mcts2, backend1, backend2, args.leaf_batch,
                             seed, swap, args.max_turns, args.gamemode, dump_stats_dir,
                             idx, dump_turn_states, args.macro_commit, args.macro_star_gate,
-                            args.goal_script,
+                            args.goal_script, args.goal_w_tree,
                         )
                     }));
 

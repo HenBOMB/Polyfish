@@ -1,7 +1,7 @@
 # Current Understanding
 
 **The single source of *current* truth for how the Polyfish AI plays, where it's weak, and why.**
-Last synthesized: **Jul 27, 2026** (through EXP_ELO_024 λ-null and EXP_ELO_M1, the measurement audit that invalidates the Jul 22–26 chart reads).
+Last synthesized: **Jul 30, 2026** (through the EXP_ELO_028 Phase 1c run — the goal-conditioned macro stack — plus EXP_ELO_026's causal result and the EXP_ELO_M1 measurement audit).
 
 > **The one rule that keeps this doc useful:** current truth lives *here*. The research logs
 > (`notes.md`, `hypothesis_driven_improvements.md`) are append-only audit trails — they contain
@@ -40,6 +40,15 @@ Last synthesized: **Jul 27, 2026** (through EXP_ELO_024 λ-null and EXP_ELO_M1, 
   - **T2C split into speed and reliability.** `villages_t2c_first` charged `max_turns` to seats that never captured, so "slow" and "never" were one number. The dashboard now plots `villages_t2c_first_cond` (mean turn among seats that *did* capture) and `villages_first_rate` separately. The censored column is still emitted, just not charted.
   - **New: `avg_kills`** (+ per-role `_totals.kills` and a per-turn kills curve in `tempo_by_turn`), read from the engine's `TribeState::kills`. Verified exact: over 24 games, total kills == total unit losses, and per-role attribution balances (anchor kills == `model_vs_anchor` losses, and vice versa). Conversions are not kills. Historical rows emit `null` and render as a gap.
   - `/metrics` now returns **`null` rather than `0.0`** for a blank/absent CSV cell, so rows predating a column show a gap instead of a fake zero reading.
+
+### 🆕 The goal-conditioned macro stack (EXP_ELO_028 Phase 1c, live since Jul 29 — current production default)
+
+The model now trains and gauges under a scripted macro layer: **goal channels** (EXPAND/ATTACK/DEFEND order planes + GROW/ARM/UNLOCK stance, painted into the input), **goal-priced in-tree shaping** (GROW pays 150/SPT, ARM 50/army-star, EXPAND 200/tile of approach progress with achieved-holds-cap semantics, + environment-fit tech bonus and a path-aware Rider bonus), a **granular stance-aware research gate** (GROW gates combat-unit tech, ARM gates pure-eco tech, 5-star reserve), and **tech discipline caps** (≤8 own-star techs/game, ≤1 tier-3). `GOAL_CHANNELS=1` enables all of it; `tech_tree.json` + `settings/technology.rs::get_tech_effects` is the tech-annotation lookup it runs on.
+
+- **The core finding (10 iterations, run 1785279937/15–24): pricing the goal in the search objective steers behavior durably, where hard masks alone were re-optimized around within 3 iterations** (the 026 corollary, now demonstrated both ways). Same-pairing consecutive A/B (iter 14→15, XinXi+Oumaji): research 10.7→7.1, SPT_t15 9.1→**12.6**, units 13→**18.6** — and the shift held through iter 24 with no decay.
+- **Doctrine flipped TECH-modal → ECO-modal** (the Phase-0 target delta): research allocation is now stance-conditional (GROW:ARM research-mass ratio went 1.5× → 6–15×), tech mix is eco-dominant (Farming presence 62%→92%), and **the net leads Greedy on SPT in contested games** (15–18.7 vs 6.6–10.6 at t15) — it had never led on SPT before.
+- **Strength: embedded-anchor win rate pooled ~71% (74/104) vs 61% pre-stack; the deterministic gauge reads 56→59% (elo 566), still below its 62.5%/589 peak — ladder confirmation pending.** `avg_score` is no longer comparable to pre-stack rows (8 fewer techs ≈ −900 score mechanically; the model plays better while scoring less).
+- ⚠️ **The behavior is currently RENTED from search-time shaping, not owned by the net**: policy_loss rose 1.39→1.53 across the run (value_loss at record-low 0.22) — the prior is still chasing the crutch-shifted targets. Stage-2 (macro heads + crutch decay) must wait until it closes. Known gaps: prepare-ARM never became summon-conditional (units rose globally instead; the ARM response expresses in Step/Build mass), ATTACK orders still lit on 30% of plies (target <25%), and the 3rd city runs ~1 turn later on Kickoo pairings (eco-first opening trade — first suspect if the gauge stalls, since third-city reach is causal).
 
 ### The bottleneck and the current lever
 

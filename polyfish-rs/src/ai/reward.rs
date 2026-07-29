@@ -180,6 +180,135 @@ pub fn pursuit_potential(state: &GameState, player: i32) -> f32 {
     SHAPE_PURSUIT_PER_TILE * village_proximity_tiles(state, player)
 }
 
+// ---- EXP_ELO_028 Phase 1c: goal-priced in-tree shaping ------------------
+// The painted macro goal gets an actuator: each stance/order prices the
+// resource conversion it names, as a potential on the goal-holder's side
+// only (the opponent's goal is unknown at search time). Sized like
+// SHAPE_PURSUIT_PER_TILE — large enough to flip a decisive Q gap (~0.15-0.2
+// normalized through score_norm≈600-700).
+
+/// Score-equivalents per star-per-turn of income while stance is GROW.
+pub const SHAPE_GOAL_SPT: f32 = 150.0;
+/// Extra score-equivalents per star of living army while stance is ARM
+/// (on top of the game score's 5·cost).
+pub const SHAPE_GOAL_ARM_PER_COST: f32 = 50.0;
+/// Score-equivalents per tile of closed distance toward a painted EXPAND
+/// target. Summed over targets; an achieved (self-owned) target holds the
+/// full cap so the final capture banks its step instead of cliffing -CAP.
+pub const SHAPE_GOAL_EXPAND_PER_TILE: f32 = 200.0;
+/// Score-equivalents per OWNED environment-recommended tech (GoalAux) —
+/// buying the map-fit tech banks this in-tree; off-fit tech banks nothing.
+pub const SHAPE_GOAL_TECH_FIT: f32 = 150.0;
+/// v2.4 scout term: score-equivalents per explored tile while GROW holds,
+/// no EXPAND target is known, and expansion is unfinished — pays the
+/// "find your village" step the audit showed nothing was paying for.
+pub const SHAPE_GOAL_SCOUT: f32 = 25.0;
+/// v2.4: extra proximity-tiles banked when an EXPAND target is achieved
+/// (on top of the held cap) — makes the final Capture-vs-Step choice a
+/// ~0.4-normalized landslide instead of one more step of gradient.
+pub const SHAPE_GOAL_EXPAND_DONE: f32 = 2.0;
+/// Score-equivalents per living Rider while the rider push is on (open
+/// terrain + active EXPAND).
+pub const SHAPE_GOAL_RIDER: f32 = 100.0;
+
+/// Goal potential Φ_goal for `player` under `goal` (score-equivalent units).
+pub fn goal_potential(
+    state: &GameState,
+    player: i32,
+    goal: &crate::ai::oracle_macro::MacroGoal,
+    aux: Option<&crate::ai::oracle_macro::GoalAux>,
+) -> f32 {
+    use crate::ai::oracle_macro::{OrderKind, Stance};
+    let Some(tribe) = state.tribes.get(&player) else {
+        return 0.0;
+    };
+    let mut phi = match goal.stance {
+        Stance::Grow => {
+            SHAPE_GOAL_SPT * crate::functions::get_tribe_spt(state, tribe) as f32
+        }
+        Stance::Arm => {
+            SHAPE_GOAL_ARM_PER_COST
+                * tribe
+                    .units
+                    .iter()
+                    .map(|u| crate::settings::units::get_unit_setting(u.unit_type).cost as f32)
+                    .sum::<f32>()
+        }
+        Stance::Unlock => 0.0,
+    };
+    let width = state.settings.size as i32;
+    let mut has_expand = false;
+    if width > 0 {
+        for (kind, idx) in &goal.orders {
+            if *kind != OrderKind::Expand {
+                continue;
+            }
+            has_expand = true;
+            let Some(tile) = state.tiles.get(idx) else {
+                continue;
+            };
+            // Unexplored (guessed) targets always pay approach — reading their
+            // owner would leak FOW. The completion bonus needs a real city
+            // capture, not a border-grown empty tile.
+            let approach = || {
+                let d = tribe
+                    .units
+                    .iter()
+                    .map(|u| cheb(u.coords.idx, *idx, width))
+                    .min()
+                    .unwrap_or(i32::MAX);
+                (SHAPE_PROX_CAP - d).max(0) as f32
+            };
+            let tiles = if !tile.explorers.contains(&player) {
+                approach()
+            } else if tile.owner == player {
+                if crate::functions::get_city_at(state, *idx).is_some() {
+                    SHAPE_PROX_CAP as f32 + SHAPE_GOAL_EXPAND_DONE
+                } else {
+                    0.0
+                }
+            } else if tile.owner != 0 {
+                0.0
+            } else {
+                approach()
+            };
+            phi += SHAPE_GOAL_EXPAND_PER_TILE * tiles;
+        }
+    }
+    // Scout term: with no known village to approach, revealing tiles IS the
+    // expansion progress. Retires once a target exists or expansion is done.
+    if goal.stance == Stance::Grow
+        && !has_expand
+        && tribe.cities.len() < crate::ai::oracle_macro::COMMIT_CITY_TARGET
+    {
+        let explored = state
+            .tiles
+            .iter()
+            .filter(|(_, t)| t.explorers.contains(&player))
+            .count();
+        phi += SHAPE_GOAL_SCOUT * explored as f32;
+    }
+    if let Some(aux) = aux {
+        let owned = aux
+            .recommended_techs
+            .iter()
+            .filter(|t| {
+                crate::settings::technology::is_tech_unlocked(&tribe.tech_vanilla, **t)
+            })
+            .count();
+        phi += SHAPE_GOAL_TECH_FIT * owned as f32;
+        if aux.rider_push {
+            let riders = tribe
+                .units
+                .iter()
+                .filter(|u| u.unit_type == crate::types::UnitType::Rider)
+                .count();
+            phi += SHAPE_GOAL_RIDER * riders as f32;
+        }
+    }
+    phi
+}
+
 /// The development potential Φ for `player`, in score-equivalent units.
 pub fn dev_potential(state: &GameState, player: i32) -> f32 {
     let Some(tribe) = state.tribes.get(&player) else {
@@ -362,6 +491,121 @@ mod shaping_tests {
         // dev_w does not leak into the pursuit-only run.
         let (my_both, _) = shaped_snapshot(&state, 1, 1.0, 1.0);
         assert!((my_both - my_dev_off - dev_potential(&state, 1)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn goal_potential_prices_each_stance_and_expand_progress() {
+        use crate::ai::oracle_macro::{MacroGoal, OrderKind, Stance};
+        let mut state = GameState::default();
+        add_visible_village(&mut state, 0);
+        let mut t1 = TribeState::default();
+        t1.units.push(unit_at(2, UnitType::Warrior)); // 2 tiles from village 0
+        state.tribes.insert(1, t1);
+
+        // ARM pays the army's star cost.
+        let arm = MacroGoal { orders: vec![], stance: Stance::Arm };
+        let cost = get_unit_setting(UnitType::Warrior).cost as f32;
+        assert!((goal_potential(&state, 1, &arm, None) - SHAPE_GOAL_ARM_PER_COST * cost).abs() < 1e-4);
+
+        // GROW pays SPT plus the scout term (no EXPAND target known, <3
+        // cities, one explored tile in this state).
+        let grow = MacroGoal { orders: vec![], stance: Stance::Grow };
+        let spt = crate::functions::get_tribe_spt(&state, state.tribes.get(&1).unwrap()) as f32;
+        let expected = SHAPE_GOAL_SPT * spt + SHAPE_GOAL_SCOUT;
+        assert!((goal_potential(&state, 1, &grow, None) - expected).abs() < 1e-4);
+
+        // EXPAND order: a one-tile close banks one step of the gradient.
+        let ex = |orders| MacroGoal { orders, stance: Stance::Arm };
+        let base = goal_potential(&state, 1, &ex(vec![(OrderKind::Expand, 0)]), None);
+        state.tribes.get_mut(&1).unwrap().units[0] = unit_at(1, UnitType::Warrior);
+        let closer = goal_potential(&state, 1, &ex(vec![(OrderKind::Expand, 0)]), None);
+        assert!((closer - base - SHAPE_GOAL_EXPAND_PER_TILE).abs() < 1e-3);
+
+        // Achieved target holds cap + completion bonus (no cliff on capture);
+        // enemy-owned pays 0. Capture makes the tile an owned CITY.
+        state.tiles.get_mut(&0).unwrap().owner = 1;
+        state.tribes.get_mut(&1).unwrap().cities.push(crate::states::CityState {
+            idx: 0,
+            ..Default::default()
+        });
+        let achieved = goal_potential(&state, 1, &ex(vec![(OrderKind::Expand, 0)]), None);
+        let arm_only = goal_potential(&state, 1, &arm, None);
+        let done = SHAPE_GOAL_EXPAND_PER_TILE * (SHAPE_PROX_CAP as f32 + SHAPE_GOAL_EXPAND_DONE);
+        assert!((achieved - arm_only - done).abs() < 1e-3);
+        assert!(achieved >= closer);
+        state.tiles.get_mut(&0).unwrap().owner = 2;
+        let lost = goal_potential(&state, 1, &ex(vec![(OrderKind::Expand, 0)]), None);
+        assert!((lost - arm_only).abs() < 1e-4);
+    }
+
+    #[test]
+    fn scout_term_pays_reveals_until_a_target_or_third_city() {
+        use crate::ai::oracle_macro::{MacroGoal, OrderKind, Stance};
+        let mut state = GameState::default();
+        let mut t1 = TribeState::default();
+        t1.units.push(unit_at(60, UnitType::Warrior));
+        state.tribes.insert(1, t1);
+        let grow = MacroGoal { orders: vec![], stance: Stance::Grow };
+
+        // Each newly explored tile banks SHAPE_GOAL_SCOUT.
+        let base = goal_potential(&state, 1, &grow, None);
+        let mut tile = TileState::default();
+        tile.explorers.insert(1);
+        state.tiles.insert(50, tile);
+        let one = goal_potential(&state, 1, &grow, None);
+        assert!((one - base - SHAPE_GOAL_SCOUT).abs() < 1e-4);
+
+        // A known EXPAND target retires the scout term: the potential is
+        // exactly SPT + approach gradient (unit at 60 is cheb 1 from 50).
+        let with_target = MacroGoal {
+            orders: vec![(OrderKind::Expand, 50)],
+            stance: Stance::Grow,
+        };
+        let anchored = goal_potential(&state, 1, &with_target, None);
+        let spt0 = crate::functions::get_tribe_spt(&state, state.tribes.get(&1).unwrap()) as f32;
+        let approach = SHAPE_GOAL_EXPAND_PER_TILE * (SHAPE_PROX_CAP - 1) as f32;
+        assert!((anchored - SHAPE_GOAL_SPT * spt0 - approach).abs() < 1e-3);
+        // ARM never scouts; neither does a 3-city tribe.
+        let arm = MacroGoal { orders: vec![], stance: Stance::Arm };
+        let arm_phi = goal_potential(&state, 1, &arm, None);
+        let cost = get_unit_setting(UnitType::Warrior).cost as f32;
+        assert!((arm_phi - SHAPE_GOAL_ARM_PER_COST * cost).abs() < 1e-4);
+        let t1 = state.tribes.get_mut(&1).unwrap();
+        for _ in 0..3 {
+            t1.cities.push(Default::default());
+        }
+        let done = goal_potential(&state, 1, &grow, None);
+        let spt = crate::functions::get_tribe_spt(&state, state.tribes.get(&1).unwrap()) as f32;
+        assert!((done - SHAPE_GOAL_SPT * spt).abs() < 1e-4);
+    }
+
+    #[test]
+    fn goal_aux_pays_tech_fit_and_riders() {
+        use crate::ai::oracle_macro::{GoalAux, MacroGoal, Stance};
+        use crate::states::TechnologyState;
+        use crate::types::TechnologyType;
+        let mut state = GameState::default();
+        let mut t1 = TribeState::default();
+        t1.units.push(unit_at(60, UnitType::Rider));
+        state.tribes.insert(1, t1);
+        let goal = MacroGoal { orders: vec![], stance: Stance::Grow };
+        let aux = GoalAux {
+            recommended_techs: vec![TechnologyType::Mining],
+            rider_push: true,
+            ..Default::default()
+        };
+        let base = goal_potential(&state, 1, &goal, None);
+        // Rider push pays per living Rider; the unowned recommendation pays 0.
+        let with_aux = goal_potential(&state, 1, &goal, Some(&aux));
+        assert!((with_aux - base - SHAPE_GOAL_RIDER).abs() < 1e-3);
+        // Owning the recommended tech banks the fit bonus.
+        state.tribes.get_mut(&1).unwrap().tech_vanilla.push(TechnologyState {
+            tech_type: TechnologyType::Mining,
+            discovered: true,
+            discovered_turn: 0,
+        });
+        let owned = goal_potential(&state, 1, &goal, Some(&aux));
+        assert!((owned - with_aux - SHAPE_GOAL_TECH_FIT).abs() < 1e-3);
     }
 
     #[test]

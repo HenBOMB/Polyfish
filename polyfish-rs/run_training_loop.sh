@@ -210,17 +210,29 @@ else
     echo "⚠️  Reward shaping disabled (-r): flat final-outcome value target only."
 fi
 
-# Default ON since Jul 28 (EXP_ELO_025): outcome-space labels — ±1 z in the
-# flat arm AND the TD arm (γ=1, root-value q-target bootstrap). Score-primary
-# labels are a documented anti-pattern (Pasqualini 2022: −1500 Elo vs winrate
-# twin; KataGo keeps score out of the value label). WL_LABELS=0 restores the
-# legacy score-ratio labels for comparison runs.
+# EXP_ELO_025 outcome-space labels (±1 z flat arm + outcome-space TD/q-target
+# arm). Default OFF — the experiment was ABANDONED unrun (Jul 28, Verdi:
+# shaped labels preferred per EXP_ELO_004); production keeps the legacy
+# reward-shaped score labels. WL_LABELS=1 opts in for comparison runs.
 WL_FLAG=""
-if [ "${WL_LABELS:-1}" = "1" ]; then
+if [ "${WL_LABELS:-0}" = "1" ]; then
     WL_FLAG="--wl-labels"
-    echo "⚖️  Win/loss value labels (default): z=±1 in flat arm + outcome-space TD/q-target arm."
-else
-    echo "⚠️  WL_LABELS=0: legacy score-primary value labels."
+    echo "⚖️  WL_LABELS=1: win/loss value labels (z=±1 flat arm + outcome-space TD/q-target arm)."
+fi
+
+# EXP_ELO_028 Phase 1: GOAL_CHANNELS=1 drives the appended goal channels with
+# the Stage-1 scripted goal-setter — self_play net seats get painted orders +
+# stance + star gate, and gauges/league probe the model WITH the script on so
+# the deployed policy is measured under the same conditioning it trains with.
+GOAL_FLAG=""
+GOAL_ARENA_FLAG=""
+if [ "${GOAL_CHANNELS:-0}" = "1" ]; then
+    # Phase 1c: GOAL_W_TREE prices the painted goal in the in-tree rewards
+    # (GROW→SPT, ARM→army value, EXPAND→approach progress). Default ON at the
+    # designed magnitude; GOAL_W_TREE=0 reverts to channels-only conditioning.
+    GOAL_FLAG="--goal-channels --goal-w-tree ${GOAL_W_TREE:-1}"
+    GOAL_ARENA_FLAG="--goal-script --goal-w-tree ${GOAL_W_TREE:-1}"
+    echo "🎯 GOAL_CHANNELS=1 (EXP_ELO_028): scripted orders/stance drive the goal channels (goal_w_tree=${GOAL_W_TREE:-1})."
 fi
 
 if [ "$BOOST" = true ]; then
@@ -523,14 +535,14 @@ do
     # One-line config echo so silent env misconfigurations (ITER_OFFSET,
     # LABEL_REL_W, BOOTSTRAP) are visible in the log — EXP_ELO_006 post-mortem:
     # two runs voided by a missing ITER_OFFSET that nothing surfaced.
-    echo "CONFIG iter=$i eff_iter=$EFF_ITER iter_offset=${ITER_OFFSET:-0} match=$MATCH_TYPE backend=${BACKEND_FLAG:---search-backend gumbel} anchor='${ANCHOR_FLAG}' td_w=${TD_W:-0.7} td_lambda=${TD_LAMBDA:-0.8} label_rel_w=${LABEL_REL_W:-default} wl_labels=${WL_LABELS:-1} shape_w_label=${SHAPE_W_LABEL:-0} shape_w_tree=${SHAPE_W_TREE:-0} pursuit_w_label=${PURSUIT_W_LABEL:-0} pursuit_w_tree=${PURSUIT_W_TREE:-0} unfreeze_opponent=${UNFREEZE_OPPONENT:-0} dagger_alpha=${DAGGER_ALPHA:-0} value_trust=$VALUE_TRUST games=${NUM_GAMES}x${SELF_PLAY_LOOPS} mcts=$MCTS_ITERS gauge_mcts=${GAUGE_MCTS:-$MCTS_ITERS} gauge_gumbel_scale=${GAUGE_GUMBEL_SCALE:-0} k=$GUMBEL_K kl_ref_model=${KL_REF_MODEL:-none} kl_ref_weight=${KL_REF_WEIGHT:-0}"
+    echo "CONFIG iter=$i eff_iter=$EFF_ITER iter_offset=${ITER_OFFSET:-0} match=$MATCH_TYPE backend=${BACKEND_FLAG:---search-backend gumbel} anchor='${ANCHOR_FLAG}' td_w=${TD_W:-0.7} td_lambda=${TD_LAMBDA:-0.8} label_rel_w=${LABEL_REL_W:-default} wl_labels=${WL_LABELS:-0} goal_channels=${GOAL_CHANNELS:-0} goal_w_tree=${GOAL_W_TREE:-1} shape_w_label=${SHAPE_W_LABEL:-0} shape_w_tree=${SHAPE_W_TREE:-0} pursuit_w_label=${PURSUIT_W_LABEL:-0} pursuit_w_tree=${PURSUIT_W_TREE:-0} unfreeze_opponent=${UNFREEZE_OPPONENT:-0} dagger_alpha=${DAGGER_ALPHA:-0} value_trust=$VALUE_TRUST games=${NUM_GAMES}x${SELF_PLAY_LOOPS} mcts=$MCTS_ITERS gauge_mcts=${GAUGE_MCTS:-$MCTS_ITERS} gauge_gumbel_scale=${GAUGE_GUMBEL_SCALE:-0} k=$GUMBEL_K kl_ref_model=${KL_REF_MODEL:-none} kl_ref_weight=${KL_REF_WEIGHT:-0}"
 
     SP_LOG=$(mktemp)
     for ((sp=1; sp<=SELF_PLAY_LOOPS; sp++)); do
         if [ "$SELF_PLAY_LOOPS" -gt 1 ]; then
             echo "🎲 Self-play pass $sp/$SELF_PLAY_LOOPS (-g $NUM_GAMES each)"
         fi
-        "$SELF_PLAY_BIN" --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $WL_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $BACKEND_FLAG $DECAY_LAST_ITER_FLAG --td-w "${TD_W:-0.7}" --td-lambda "${TD_LAMBDA:-0.8}" --outcome-scale "${OUTCOME_SCALE:-3.0}" $LABEL_REL_W_FLAG $SHAPE_FLAGS $UNFREEZE_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
+        "$SELF_PLAY_BIN" --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $WL_FLAG $GOAL_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $BACKEND_FLAG $DECAY_LAST_ITER_FLAG --td-w "${TD_W:-0.7}" --td-lambda "${TD_LAMBDA:-0.8}" --outcome-scale "${OUTCOME_SCALE:-3.0}" $LABEL_REL_W_FLAG $SHAPE_FLAGS $UNFREEZE_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
         SP_STATUS=${PIPESTATUS[0]}
         if [ "$SP_STATUS" -ne 0 ]; then
             echo "Self-play failed with exit code $SP_STATUS" >&2
@@ -650,12 +662,12 @@ do
             fi
             if [ -z "$1" ]; then
                 GUMBEL_SCALE="$GAUGE_SCALE" "$ARENA_BIN" --model1 model.safetensors --model2 model.safetensors \
-                    --backend1 gumbel --backend2 greedy \
+                    --backend1 gumbel --backend2 greedy $GOAL_ARENA_FLAG \
                     --mcts "$GAUGE_MCTS_EFF" --gumbel-k "$GUMBEL_K" $DUMP_FLAG \
                     --games "$2" --gamemode "$GAMEMODE" | tee "$GAUGE_LOG"
             else
                 GUMBEL_SCALE="$GAUGE_SCALE" "$ARENA_BIN" --model1 model.safetensors --model2 "$1" \
-                    --backend1 gumbel --backend2 gumbel \
+                    --backend1 gumbel --backend2 gumbel $GOAL_ARENA_FLAG \
                     --mcts "$GAUGE_MCTS_EFF" --gumbel-k "$GUMBEL_K" $DUMP_FLAG \
                     --games "$2" --gamemode "$GAMEMODE" | tee "$GAUGE_LOG"
             fi

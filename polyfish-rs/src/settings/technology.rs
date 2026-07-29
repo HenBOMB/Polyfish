@@ -3,7 +3,8 @@
 use crate::{
     settings::get_unit_setting,
     types::{
-        AbilityType, StructureType, TaskType, TechnologyType, TerrainType, TribeType, UnitType,
+        AbilityType, ResourceType, StructureType, TaskType, TechnologyType, TerrainType,
+        TribeType, UnitType,
     },
 };
 
@@ -21,7 +22,13 @@ pub struct TechnologySetting {
     pub unlocks_ability: Option<AbilityType>,
     pub unlocks_unit: Option<UnitType>,
     pub unlocks_special_units: Vec<UnitType>,
-    pub unlocks_other: i32,
+    /// Terrain this tech grants the 1.5x defense bonus on. Must mirror the
+    /// engine's `functions::get_defense_bonus` (pinned by test).
+    pub defense_bonus_terrain: Vec<TerrainType>,
+    /// Reveals all capital positions (Diplomacy).
+    pub unlocks_vision: bool,
+    /// Discounts all later tech purchases (Philosophy — see `get_tech_cost`).
+    pub tech_discount: bool,
     pub explicit_cost: Option<i32>,
     pub unlocks_terrain: Option<TerrainType>,
 }
@@ -131,7 +138,7 @@ fn build_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
             requires: Some(Strategy),
             unlocks_unit: Some(UnitType::Cloak),
             unlocks_structure: Some(StructureType::Embassy),
-            unlocks_other: 1, // capital vision
+            unlocks_vision: true,
             ..Default::default()
         },
 
@@ -139,7 +146,7 @@ fn build_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
             tier: Some(1),
             next: vec![Mining, Meditation],
             unlocks_terrain: Some(TerrainType::Mountain),
-            unlocks_other: 1, // pacifist
+            defense_bonus_terrain: vec![TerrainType::Mountain],
             ..Default::default()
         },
         Mining => TechnologySetting {
@@ -169,7 +176,7 @@ fn build_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
             requires: Some(Meditation),
             unlocks_unit: Some(UnitType::MindBender),
             unlocks_special_units: vec![UnitType::Shaman],
-            unlocks_other: 1, // discount
+            tech_discount: true,
             unlocks_task: vec![TaskType::Genius],
             unlocks_structure: Some(StructureType::MountainTemple),
             ..Default::default()
@@ -208,7 +215,7 @@ fn build_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
             tier: Some(3),
             requires: Some(Ramming),
             unlocks_structure: Some(StructureType::WaterTemple),
-            unlocks_other: 2, // water and ocean def
+            defense_bonus_terrain: vec![TerrainType::Water, TerrainType::Ocean],
             ..Default::default()
         },
 
@@ -222,7 +229,7 @@ fn build_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
             requires: Some(Hunting),
             next: vec![Spiritualism],
             unlocks_unit: Some(UnitType::Archer),
-            unlocks_other: 1, // forest def
+            defense_bonus_terrain: vec![TerrainType::Forest],
             unlocks_special_units: vec![UnitType::Phychi, UnitType::IceArcher],
             ..Default::default()
         },
@@ -283,6 +290,7 @@ fn build_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
             replaces_tech: Some(Aquatism),
             tribe_type: Some(TribeType::Polaris),
             unlocks_structure: Some(StructureType::IceTemple),
+            defense_bonus_terrain: vec![TerrainType::Water, TerrainType::Ocean],
             ..Default::default()
         },
 
@@ -357,6 +365,115 @@ fn build_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
             ..Default::default()
         },
     }
+}
+
+/// Functional annotation of one technology — everything it unlocks, grouped
+/// by what it is FOR. Derived from the settings tables (units/structures/
+/// resources), so it cannot drift from the engine. EXP_ELO_028 UNLOCK
+/// groundwork: the macro script and labelers query this, not raw settings.
+#[derive(Debug, Clone, Default)]
+pub struct TechEffects {
+    /// Unlocked standard units that can fight (attack > 0).
+    pub combat_units: Vec<UnitType>,
+    /// Unlocked standard non-combat units (transport / healer / converter).
+    pub support_units: Vec<UnitType>,
+    /// Special-tribe variants (Shaman, Hexapod, …) — listed but deliberately
+    /// excluded from the class predicates: vanilla-tribe training never
+    /// fields them; use `get_unlocked_units(tech, tribe)` for per-tribe truth.
+    pub special_units: Vec<UnitType>,
+    /// Terrain granted the 1.5x defense bonus (mirrors `get_defense_bonus`).
+    pub defense_bonus_terrain: Vec<TerrainType>,
+    /// Resources this tech makes harvestable (`ResourceSetting.tech_required`).
+    pub harvests: Vec<ResourceType>,
+    /// Unlocked structures paying population or stars.
+    pub eco_structures: Vec<StructureType>,
+    /// Unlocked structures paying score only (temples).
+    pub score_structures: Vec<StructureType>,
+    /// Terrain made passable (Climbing/Fishing/Sailing).
+    pub mobility_terrain: Option<TerrainType>,
+    /// Unlocked connector structures (roads, bridges).
+    pub mobility_structures: Vec<StructureType>,
+    /// Unlocked structures with no yield in this engine (e.g. Embassy).
+    pub other_structures: Vec<StructureType>,
+    pub abilities: Vec<AbilityType>,
+    pub tasks: Vec<TaskType>,
+    pub capital_vision: bool,
+    pub tech_discount: bool,
+}
+
+/// Get the derived annotation for a tech — cached `'static` like
+/// `get_technology_setting`.
+pub fn get_tech_effects(tech_type: TechnologyType) -> &'static TechEffects {
+    static TABLE: std::sync::LazyLock<rustc_hash::FxHashMap<TechnologyType, TechEffects>> =
+        std::sync::LazyLock::new(|| {
+            use strum::IntoEnumIterator;
+            TechnologyType::iter().map(|t| (t, build_tech_effects(t))).collect()
+        });
+    &TABLE[&tech_type]
+}
+
+fn build_tech_effects(tech_type: TechnologyType) -> TechEffects {
+    use strum::IntoEnumIterator;
+    let s = get_technology_setting(tech_type);
+    let mut e = TechEffects {
+        defense_bonus_terrain: s.defense_bonus_terrain.clone(),
+        mobility_terrain: s.unlocks_terrain,
+        abilities: s.unlocks_ability.iter().copied().collect(),
+        tasks: s.unlocks_task.clone(),
+        capital_vision: s.unlocks_vision,
+        tech_discount: s.tech_discount,
+        ..Default::default()
+    };
+    e.special_units = s.unlocks_special_units.clone();
+    if let Some(u) = s.unlocks_unit {
+        if get_unit_setting(u).attack > 0.0 {
+            e.combat_units.push(u);
+        } else {
+            e.support_units.push(u);
+        }
+    }
+    for st in s.unlocks_structure.iter().chain(&s.unlocks_special_structures) {
+        let ss = crate::settings::structures::get_structure_setting(*st);
+        let connector = matches!(
+            st,
+            StructureType::Road | StructureType::Bridge | StructureType::Mycelium
+        );
+        if connector {
+            e.mobility_structures.push(*st);
+        } else if ss.reward_pop > 0 || ss.reward_stars > 0 {
+            e.eco_structures.push(*st);
+        } else if ss.reward_score > 0 {
+            e.score_structures.push(*st);
+        } else {
+            e.other_structures.push(*st);
+        }
+    }
+    for r in ResourceType::iter() {
+        let rs = crate::settings::resources::get_resource_setting(r);
+        // Tribe-locked resources (Spores) must not classify a generic tech.
+        if r != ResourceType::None && rs.tech_required == tech_type && rs.tribe_type.is_none() {
+            e.harvests.push(r);
+        }
+    }
+    e
+}
+
+/// Military tech: fields combat units or grants a terrain defense bonus.
+pub fn is_military_tech(tech_type: TechnologyType) -> bool {
+    let e = get_tech_effects(tech_type);
+    !e.combat_units.is_empty() || !e.defense_bonus_terrain.is_empty()
+}
+
+/// Economy tech: opens harvests, yield structures, or the tech discount.
+pub fn is_eco_tech(tech_type: TechnologyType) -> bool {
+    let e = get_tech_effects(tech_type);
+    !e.harvests.is_empty() || !e.eco_structures.is_empty() || e.tech_discount
+}
+
+/// Mobility tech: opens terrain passage or connector structures.
+pub fn is_mobility_tech(tech_type: TechnologyType) -> bool {
+    let e = get_tech_effects(tech_type);
+    e.mobility_terrain.is_some() || !e.mobility_structures.is_empty()
 }
 
 /// Get the tech cost based on number of cities
@@ -497,5 +614,77 @@ pub fn is_unit_replaced_for_tribe(unit: UnitType, tribe: TribeType) -> bool {
         T::Polaris => matches!(unit, U::MindBender | U::Giant | U::Archer | U::Catapult),
         T::Nature => matches!(unit, U::Giant), // Elyrion
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod effects_tests {
+    use super::*;
+    use strum::IntoEnumIterator;
+
+    /// The defense annotation and `functions::get_defense_bonus` implement
+    /// the same rule table — this pin fails if either side changes alone.
+    #[test]
+    fn defense_annotation_matches_the_engine_rule_table() {
+        use TechnologyType as T;
+        use TerrainType as G;
+        let def = |t| &get_tech_effects(t).defense_bonus_terrain;
+        assert_eq!(def(T::Archery), &vec![G::Forest]);
+        assert_eq!(def(T::Aquatism), &vec![G::Water, G::Ocean]);
+        assert_eq!(def(T::Climbing), &vec![G::Mountain]);
+        for t in TechnologyType::iter() {
+            if !matches!(t, T::Archery | T::Aquatism | T::Climbing | T::Polarism) {
+                assert!(def(t).is_empty(), "{t:?} claims a defense bonus the engine lacks");
+            }
+        }
+    }
+
+    /// Every vanilla (tribe-agnostic, tiered) tech must annotate at least one
+    /// concrete effect — a blank entry means the lookup went stale.
+    #[test]
+    fn every_vanilla_tech_has_a_nonempty_annotation() {
+        for t in TechnologyType::iter() {
+            let s = get_technology_setting(t);
+            if s.tier.is_none() || s.tribe_type.is_some() {
+                continue;
+            }
+            let e = get_tech_effects(t);
+            let nonempty = !e.combat_units.is_empty()
+                || !e.support_units.is_empty()
+                || !e.defense_bonus_terrain.is_empty()
+                || !e.harvests.is_empty()
+                || !e.eco_structures.is_empty()
+                || !e.score_structures.is_empty()
+                || e.mobility_terrain.is_some()
+                || !e.mobility_structures.is_empty()
+                || !e.other_structures.is_empty()
+                || !e.abilities.is_empty()
+                || !e.tasks.is_empty()
+                || e.capital_vision
+                || e.tech_discount;
+            assert!(nonempty, "{t:?} has no annotated effects");
+        }
+    }
+
+    #[test]
+    fn class_predicates_match_canonical_examples() {
+        use TechnologyType as T;
+        // Pure economy: harvest/structure techs.
+        assert!(is_eco_tech(T::Farming) && !is_military_tech(T::Farming));
+        assert!(is_eco_tech(T::Organization) && !is_military_tech(T::Organization));
+        // Pure military: unit techs.
+        assert!(is_military_tech(T::Chivalry) && !is_eco_tech(T::Chivalry));
+        assert!(is_military_tech(T::Strategy) && !is_eco_tech(T::Strategy));
+        // Mixed: Smithery = Swordsman + Forge; Archery = Archer + forest def.
+        assert!(is_military_tech(T::Smithery) && is_eco_tech(T::Smithery));
+        assert!(is_military_tech(T::Archery));
+        // Mobility: terrain passage and roads.
+        assert!(is_mobility_tech(T::Climbing) && is_mobility_tech(T::Roads));
+        assert!(is_mobility_tech(T::Sailing));
+        // Derived harvests come from resources.rs, not hand annotation.
+        assert_eq!(get_tech_effects(T::Mining).harvests, vec![ResourceType::Metal]);
+        assert_eq!(get_tech_effects(T::Organization).harvests, vec![ResourceType::Fruit]);
+        // Support units don't make a tech military.
+        assert!(!is_military_tech(T::Philosophy)); // MindBender heals, attack 0
     }
 }

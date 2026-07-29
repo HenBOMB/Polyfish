@@ -79,6 +79,9 @@ pub struct Brain<'a> {
     /// Weight on the isolated pursuit-progress potential Φ in the Gumbel
     /// backend's in-tree edge rewards (EXP_ELO_018). `None` = 0.0.
     pursuit_shape_w: Option<f32>,
+    /// EXP_ELO_028 Phase 1c: weight on the goal potential (stance/order
+    /// priced in-tree shaping, Gumbel backend only). `None` = 0.0.
+    goal_shape_w: Option<f32>,
     /// EXP_ELO_017: unfreeze the opponent during in-tree EndTurn crossings
     /// (Gumbel backend only). `None` = false (legacy blind auto-skip).
     unfreeze_opponent: Option<bool>,
@@ -90,6 +93,8 @@ pub struct Brain<'a> {
     macro_goal: Option<crate::ai::oracle_macro::MacroGoal>,
     /// EXP_ELO_026/028 star gate flag applied alongside `macro_goal`.
     macro_star_gate: bool,
+    /// EXP_ELO_028 v2.3 aux context applied alongside `macro_goal`.
+    goal_aux: Option<crate::ai::oracle_macro::GoalAux>,
 }
 
 /// Internal enum wrapping whichever concrete agent the configured backend
@@ -197,6 +202,7 @@ pub fn make_search_agent(
     tree_q_weight: Option<f32>,
     reward_shape_w: Option<f32>,
     pursuit_shape_w: Option<f32>,
+    goal_shape_w: Option<f32>,
     unfreeze_opponent: Option<bool>,
 ) -> SearchAgent<'_> {
     match backend {
@@ -227,6 +233,9 @@ pub fn make_search_agent(
             if let Some(w) = pursuit_shape_w {
                 agent.pursuit_shape_w = w;
             }
+            if let Some(w) = goal_shape_w {
+                agent.goal_shape_w = w;
+            }
             if let Some(u) = unfreeze_opponent {
                 agent.unfreeze_opponent = u;
             }
@@ -254,10 +263,12 @@ impl<'a> Brain<'a> {
             tree_q_weight: None,
             reward_shape_w: None,
             pursuit_shape_w: None,
+            goal_shape_w: None,
             unfreeze_opponent: None,
             pending_trace: false,
             macro_goal: None,
             macro_star_gate: false,
+            goal_aux: None,
         }
     }
 
@@ -277,10 +288,12 @@ impl<'a> Brain<'a> {
             tree_q_weight: None,
             reward_shape_w: None,
             pursuit_shape_w: None,
+            goal_shape_w: None,
             unfreeze_opponent: None,
             pending_trace: false,
             macro_goal: None,
             macro_star_gate: false,
+            goal_aux: None,
         }
     }
 
@@ -294,6 +307,12 @@ impl<'a> Brain<'a> {
     ) {
         self.macro_goal = goal;
         self.macro_star_gate = star_gate;
+    }
+
+    /// EXP_ELO_028 v2.3: set the per-ply aux context (environment-fit tech
+    /// bias + whole-game purchase caps). Same lifecycle as `set_macro_goal`.
+    pub fn set_goal_aux(&mut self, aux: Option<crate::ai::oracle_macro::GoalAux>) {
+        self.goal_aux = aux;
     }
 
     /// Override the per-game virtual-loss mini-batch size (see `--leaf-batch`
@@ -332,6 +351,11 @@ impl<'a> Brain<'a> {
 
     /// Override the in-tree pursuit-progress shaping weight (EXP_ELO_018).
     /// Builder style: chain after `with_backend`.
+    pub fn with_goal_shape_w(mut self, goal_shape_w: f32) -> Self {
+        self.goal_shape_w = Some(goal_shape_w);
+        self
+    }
+
     pub fn with_pursuit_shape_w(mut self, pursuit_shape_w: f32) -> Self {
         self.pursuit_shape_w = Some(pursuit_shape_w);
         self
@@ -385,12 +409,14 @@ impl<'a> Brain<'a> {
                 self.tree_q_weight,
                 self.reward_shape_w,
                 self.pursuit_shape_w,
+                self.goal_shape_w,
                 self.unfreeze_opponent,
             ));
         }
         if let Some(SearchAgent::Gumbel(a)) = self.agent.as_mut() {
             a.macro_goal = self.macro_goal.clone();
             a.star_gate = self.macro_star_gate;
+            a.goal_aux = self.goal_aux.clone();
         }
         (self.agent.as_mut(), moves)
     }
