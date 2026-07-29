@@ -81,6 +81,22 @@ pub fn add_population(state: &mut GameState, city_tile_idx: i32, amount: i32) ->
                 // );
             }
 
+            while city.progress < 0 && city.level > 1 {
+                city.progress += city.level;
+                city.level -= 1;
+                city.production = (city.production - 1).max(1);
+
+                // Update structure level if it exists
+                if let Some(Some(struct_state)) = state.structures.get_mut(&city_tile_idx) {
+                    struct_state.level = struct_state.level.saturating_sub(1).max(1);
+                }
+
+                // Level down removes the 50 point bonus
+                let lvl_score_loss = crate::score::CITY_LEVEL_UP_SCORE;
+                tribe.score -= lvl_score_loss;
+                total_score -= lvl_score_loss;
+            }
+
             if total_score != 0 {
                 undos.push(Box::new(move |s: &mut GameState| {
                     if let Some(t) = s.tribes.get_mut(&pov_id) {
