@@ -65,12 +65,19 @@ mod tests {
         assert_eq!(city.progress, 0, "Progress resets to 0 after level up (2 - 2 = 0)");
 
         // Now destroy the Farm (-2 pop)
-        let _undo_destroy = destroy_structure(&mut state, 13);
+        let undo_destroy = destroy_structure(&mut state, 13);
 
         let city_after = &state.tribes.get(&1).unwrap().cities[0];
-        assert_eq!(city_after.level, 2, "City level does not decrease when progress goes negative");
+        assert_eq!(city_after.level, 1, "City level drops back to 1 when progress goes negative");
         assert_eq!(city_after.population, 0, "Total population is 0 (2 - 2 = 0)");
-        assert_eq!(city_after.progress, -2, "Progress becomes negative (-2)");
+        assert_eq!(city_after.progress, 0, "Progress returns to 0 after leveling down from level 2");
+
+        // Verify undo restores the level 2 city
+        undo_destroy(&mut state);
+        let city_undo = &state.tribes.get(&1).unwrap().cities[0];
+        assert_eq!(city_undo.level, 2, "City level restored to 2 on undo");
+        assert_eq!(city_undo.population, 2, "Population restored on undo");
+        assert_eq!(city_undo.progress, 0, "Progress restored on undo");
     }
 
     #[test]
