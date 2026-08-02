@@ -168,6 +168,13 @@ pub struct PolyZeroNet {
     v_fc_shared: Linear,
     v_win: Linear,
     v_progress: Linear,
+
+    /// v9: the ONE aux head mirrored into Rust — per-tile P(enemy unit under
+    /// fog), the fog-encounter signal the risk term needs. Every other `aux_*`
+    /// head stays training-only (see CLAUDE.md). Optional because one legacy
+    /// checkpoint (`model_gn_v1.safetensors`) predates the aux heads entirely
+    /// and the opponent loader must not start rejecting it.
+    aux_fog: Option<Conv2d>,
 }
 
 impl PolyZeroNet {
@@ -236,6 +243,13 @@ impl PolyZeroNet {
         let v_win = candle_nn::linear(filters, 1, vs.pp("v_win"))?;
         let v_progress = candle_nn::linear(filters, 1, vs.pp("v_progress"))?;
 
+        // train.py: nn.Conv2d(filters, 1, 1) -> [B, 1, H, W] logits.
+        let aux_fog = if vs.contains_tensor("aux_fog.weight") {
+            Some(conv(filters, 1, 1, 1, 0, vs.pp("aux_fog"))?)
+        } else {
+            None
+        };
+
         Ok(Self {
             conv1,
             bn1,
@@ -253,7 +267,16 @@ impl PolyZeroNet {
             v_fc_shared,
             v_win,
             v_progress,
+            aux_fog,
         })
+    }
+
+    /// True when this checkpoint carries the mirrored fog head. Callers must
+    /// branch on it rather than reading a silent zero — see the `progress`
+    /// precedent, where the tch and Metal backends stub the value to 0.0 and
+    /// every consumer has been reading a constant.
+    pub fn has_fog_head(&self) -> bool {
+        self.aux_fog.is_some()
     }
 
     pub fn forward_t(
@@ -318,7 +341,19 @@ impl PolyZeroNet {
         let v_win = self.v_win.forward(&v_latent)?.tanh()?;
         let v_progress = self.v_progress.forward(&v_latent)?;
 
-        Ok((policy_output, ValueOutput { win_value: v_win, progress_value: v_progress }))
+        // v9: mirrors train.py — the aux heads read the post-cross-attention
+        // trunk (`shared` here, `x` there), not the pre-attention conv stack.
+        let fog_probs = match &self.aux_fog {
+            Some(head) => Some(candle_nn::ops::sigmoid(
+                &head.forward(&shared)?.flatten_from(1)?,
+            )?),
+            None => None,
+        };
+
+        Ok((
+            policy_output,
+            ValueOutput { win_value: v_win, progress_value: v_progress, fog_probs },
+        ))
     }
 
     pub fn forward(
@@ -348,6 +383,10 @@ pub struct PolicyOutput {
 pub struct ValueOutput {
     pub win_value: Tensor, // [B, 1]
     pub progress_value: Tensor, // [B, 1]
+    /// v9: per-tile P(enemy unit under fog), [B, H*W], already through the
+    /// sigmoid. `None` when the checkpoint predates the aux heads — callers
+    /// must branch rather than read a zero.
+    pub fog_probs: Option<Tensor>,
 }
 
 /// Device-free policy output for a single leaf: one row of each decomposed
@@ -363,17 +402,27 @@ pub struct RawPolicyOutput {
     pub source_spatial: Vec<f32>,
     pub target_spatial: Vec<f32>,
     pub move_option: Vec<f32>,
+    /// v9: per-tile P(enemy unit under fog), H*W long, already sigmoided.
+    /// `None` when the backend or checkpoint cannot produce it — callers MUST
+    /// branch instead of reading a zero (the `progress` value is stubbed to
+    /// 0.0 on the tch and Metal paths; that trap is not repeated here).
+    pub fog: Option<Vec<f32>>,
 }
 
 impl PolicyOutput {
     /// Read this batched policy output to CPU and split it into one
     /// [`RawPolicyOutput`] per row (leaf). Call once per batch — the
     /// `to_vec1`/`to_vec2` reads are the only device ops involved.
-    pub fn to_raw_rows(&self) -> Result<Vec<RawPolicyOutput>> {
+    pub fn to_raw_rows(&self, fog: Option<&Tensor>) -> Result<Vec<RawPolicyOutput>> {
         let action_type = self.action_type.to_vec2::<f32>()?;
         let source_spatial = self.source_spatial.to_vec2::<f32>()?;
         let target_spatial = self.target_spatial.to_vec2::<f32>()?;
         let move_option = self.move_option.to_vec2::<f32>()?;
+
+        let fog_rows = match fog {
+            Some(t) => Some(t.to_vec2::<f32>()?),
+            None => None,
+        };
 
         let batch = action_type.len();
         let mut rows = Vec::with_capacity(batch);
@@ -383,8 +432,92 @@ impl PolicyOutput {
                 source_spatial: source_spatial[i].clone(),
                 target_spatial: target_spatial[i].clone(),
                 move_option: move_option[i].clone(),
+                fog: fog_rows.as_ref().map(|f| f[i].clone()),
             });
         }
         Ok(rows)
+    }
+}
+
+#[cfg(test)]
+mod fog_head_tests {
+    use super::*;
+    use candle_core::{DType, Device};
+
+    /// The fog head must be OPTIONAL: `model_gn_v1.safetensors` predates the
+    /// aux heads entirely, and the opponent loader is strict — a hard
+    /// requirement here would crash the first league iteration that drew it.
+    #[test]
+    fn fog_head_is_optional_and_absent_on_pre_aux_checkpoints() {
+        let path = std::path::Path::new("checkpoints/model_gn_v1.safetensors");
+        if !path.exists() {
+            return; // checkpoint set not present in this working copy
+        }
+        let vb = unsafe {
+            candle_nn::VarBuilder::from_mmaped_safetensors(
+                &[path],
+                DType::F32,
+                &Device::Cpu,
+            )
+        };
+        let Ok(vb) = vb else { return };
+        match PolyZeroNet::new(vb) {
+            // If it loads, the head must simply be absent — never a hard error.
+            Ok(net) => assert!(!net.has_fog_head()),
+            // It does NOT currently load, but for a pre-existing reason: it
+            // predates the 8-channel value pool (Jul 2026). The fog head must
+            // not become a NEW rejection reason, so pin that the failure is
+            // still the old shape mismatch.
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("v_pool_conv"),
+                    "legacy checkpoint must fail on its pre-existing arch gap, not on aux_fog: {msg}"
+                );
+            }
+        }
+    }
+
+    /// …and present on the live model, with train.py's shape (filters -> 1).
+    #[test]
+    fn fog_head_loads_from_the_live_model_and_produces_per_tile_probs() {
+        let path = std::path::Path::new("model.safetensors");
+        if !path.exists() {
+            return;
+        }
+        let vb = unsafe {
+            candle_nn::VarBuilder::from_mmaped_safetensors(&[path], DType::F32, &Device::Cpu)
+        };
+        let Ok(vb) = vb else { return };
+        let Ok(net) = PolyZeroNet::new(vb) else { return };
+        assert!(net.has_fog_head(), "live model.safetensors carries aux_fog");
+
+        let hw = crate::ai::features::MAP_SIZE;
+        let map = Tensor::zeros(
+            (1, crate::ai::features::NUM_CHANNELS, hw, hw),
+            DType::F32,
+            &Device::Cpu,
+        )
+        .unwrap();
+        let player = Tensor::zeros((1, 10), DType::F32, &Device::Cpu).unwrap();
+        let (_, value) = net.forward(&map, &player).unwrap();
+        let fog = value.fog_probs.expect("fog head present -> Some");
+        assert_eq!(fog.dims(), &[1, hw * hw], "one probability per tile");
+        let v = fog.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert!(
+            v.iter().all(|p| (0.0..=1.0).contains(p)),
+            "sigmoid output must be a probability"
+        );
+
+        // GROUND TRUTH: train.py's own PolyZeroNet, same weights, all-zero
+        // input (scratchpad/fog_vs_pytorch.py). Mirroring a head is only worth
+        // anything if the mirror is faithful — this pins the Rust side to
+        // PyTorch itself, not to another Rust implementation.
+        let pytorch = [0.013126_f32, 0.000581, 0.002658, 0.001453, 0.001953, 0.002195];
+        for (i, expect) in pytorch.iter().enumerate() {
+            assert!((v[i] - expect).abs() < 2e-5, "tile {i}: rust {} vs pytorch {expect}", v[i]);
+        }
+        let mean = v.iter().sum::<f32>() / v.len() as f32;
+        assert!((mean - 0.002248).abs() < 2e-5, "mean {mean} vs pytorch 0.002248");
     }
 }

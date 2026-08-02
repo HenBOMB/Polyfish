@@ -550,6 +550,40 @@ impl<'a> GumbelMctsAgent<'a> {
     fn finish_reused_root(&self, game: &mut Game, mut new_root: GumbelNode, start_turn: i32) -> GumbelNode {
         reset_stats_recursive(&mut new_root);
 
+        // v8: the promoted child's children were created as INTERIOR nodes, so
+        // they never met the root gates that `build_fresh_root` applies. Tree
+        // reuse is the common case mid-turn (~8 plies per game turn), so
+        // without this every root gate leaked on all but the first ply of a
+        // turn — measured Aug 2: the pop-discipline and road gates were fully
+        // inert until this was added. EndTurn is exempt so the root can never
+        // be emptied; the suppression below still removes it when it should.
+        if self.star_gate || self.goal_aux.is_some() {
+            let stance = self.macro_goal.as_ref().map(|g| g.stance);
+            new_root.children.retain(|c| {
+                let Some(m) = c.move_to_here.as_ref() else {
+                    return true;
+                };
+                if m.move_type() == MoveType::EndTurn {
+                    return true;
+                }
+                (!self.star_gate
+                    || crate::ai::oracle_macro::passes_star_gate(
+                        &game.state,
+                        m.as_ref(),
+                        stance,
+                        self.goal_aux.as_ref(),
+                    ))
+                    && self.goal_aux.as_ref().map_or(true, |a| {
+                        crate::ai::oracle_macro::passes_tech_caps(m.as_ref(), a)
+                            && crate::ai::oracle_macro::passes_ability_gate(&game.state, m.as_ref())
+                            && crate::ai::oracle_macro::passes_capture_first(
+                                &game.state,
+                                m.as_ref(),
+                            )
+                    })
+            });
+        }
+
         // Belt-and-suspenders: `extract_leaf_data` already drops EndTurn from
         // any expansion (root or interior) whenever another move exists, so
         // this is normally a no-op — kept in case a reused root's EndTurn
@@ -599,11 +633,15 @@ impl<'a> GumbelMctsAgent<'a> {
             let stance = self.macro_goal.as_ref().map(|g| g.stance);
             legal_moves.retain(|m| {
                 (!self.star_gate
-                    || crate::ai::oracle_macro::passes_star_gate(&game.state, m.as_ref(), stance))
-                    && self
-                        .goal_aux
-                        .as_ref()
-                        .map_or(true, |a| crate::ai::oracle_macro::passes_tech_caps(m.as_ref(), a))
+                    || crate::ai::oracle_macro::passes_star_gate(&game.state, m.as_ref(), stance, self.goal_aux.as_ref()))
+                    && self.goal_aux.as_ref().map_or(true, |a| {
+                        crate::ai::oracle_macro::passes_tech_caps(m.as_ref(), a)
+                            && crate::ai::oracle_macro::passes_ability_gate(&game.state, m.as_ref())
+                            && crate::ai::oracle_macro::passes_capture_first(
+                                &game.state,
+                                m.as_ref(),
+                            )
+                    })
             });
         }
         let map_size = game.state.settings.size as usize;
@@ -1302,6 +1340,7 @@ impl<'a> GumbelMctsAgent<'a> {
                     unit_type: m.unit_type().ok(),
                     tech_type: m.tech_type().ok(),
                     ability_type: m.ability_type().ok(),
+                    reward_type: m.reward_type().ok(),
                 });
             }
         }
@@ -1479,9 +1518,12 @@ fn reused_children_match_legal(
     if star_gate || goal_aux.is_some() {
         legal.retain(|m| {
             (!star_gate
-                || crate::ai::oracle_macro::passes_star_gate(&game.state, m.as_ref(), stance))
-                && goal_aux
-                    .map_or(true, |a| crate::ai::oracle_macro::passes_tech_caps(m.as_ref(), a))
+                || crate::ai::oracle_macro::passes_star_gate(&game.state, m.as_ref(), stance, goal_aux))
+                && goal_aux.map_or(true, |a| {
+                    crate::ai::oracle_macro::passes_tech_caps(m.as_ref(), a)
+                        && crate::ai::oracle_macro::passes_ability_gate(&game.state, m.as_ref())
+                        && crate::ai::oracle_macro::passes_capture_first(&game.state, m.as_ref())
+                })
         });
     }
     let has_other = legal.iter().any(|m| m.move_type() != MoveType::EndTurn);

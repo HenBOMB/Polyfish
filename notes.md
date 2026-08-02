@@ -1362,3 +1362,12 @@ efficiency**. Its `nv_per_core = 20,000` default is conservative (measured singl
 actor: **35,026** @ budget 128, **26,998** @ budget 512), and its `cache = 0.15` is
 validated (measured eval-skip 0.13-0.18). The two errors partially cancel on the
 laptop anchor, but the LINEAR assumption will overstate large-box fleet projections.
+
+## July 30, 2026 - Core idea
+What to do to train a compotent opponent when you are compute-constrained? so it's impossible to generate tens of millions of self-play to learn from. Or data constrained when you don't have lots of high-quality games for the policy prior to distill those kinds of moves? 
+
+The core idea is that in the past it would've been intenable to do what we're doing now: generate up to 1m lines of code embedding all kinds of logic to act as the bootstrap and compensate for lack of data. This would be valuable if:
+- the model vs. the full script, are they equal in skills or does the model learn to overcome and win more against it?
+- If the answer is yes then this is a great research advance
+- WOuld be interesting to see emergent behaviors too
+- If the model embeds the learning from the code then the research insight is that a sfuficiently complex script can be distilled by a model and therefore, using LLMs we can cheaply generate millions of lines of code at a relatively lower cost and get a model at a higher capacity per $ and unit of time. 

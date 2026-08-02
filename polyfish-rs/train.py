@@ -377,7 +377,7 @@ def train():
     
     # 2. Init Model
     MAP_SIZE = 11
-    SPATIAL_CHANNELS = 168  # mirror of features.rs NUM_CHANNELS (incl. obs memory, pursuit + EXP_ELO_028 goal channels)
+    SPATIAL_CHANNELS = 169  # mirror of features.rs NUM_CHANNELS (incl. obs memory, pursuit, goal channels + v7 SAVE stance plane)
     PLAYER_STATE_DIM = 10
 
     model = PolyZeroNet(SPATIAL_CHANNELS, PLAYER_STATE_DIM, MAP_SIZE, MAP_SIZE).to(DEVICE)

@@ -322,7 +322,10 @@ class MapRenderer {
             const className = ClassNameToId[unit.unitType || unit.type];
             if (className) {
                 const classes = ['unit'];
-                if (unit.moved || unit.attacked) classes.push('exausted');
+                // Only the POV player's own units get the spent look; enemy units always render at full color
+                const povTribe = state.tribes[currentTribeId];
+                const isOwnUnit = povTribe && unit.tribe.type === povTribe.type;
+                if (isOwnUnit && (unit.moved || unit.attacked)) classes.push('exausted');
                 if (unit.flipped) classes.push('flipped');
                 if (this.selectedIdx === idx) classes.push('selected-unit-highlight');
 
@@ -492,7 +495,7 @@ class MapRenderer {
             const road = tile.hasRoad;
 
             let html = `<strong>Tile ${idx} (${tile.coords.x}, ${tile.coords.y})</strong><br>`;
-            html += `⛰️ ${TRIBE_ID_2_NAME[tile.climate]} ${TerrainType[tile.type] || tile.type}<br>`;
+            html += `⛰️ ${CLASSIC_CLIMATE_NAMES[tile.climate] || 'Nature'} ${TerrainType[tile.type] || tile.type}<br>`;
             if (unit) html += `🪖 ${TRIBE_ID_2_NAME[unit.tribe.type]} ${ClassNameToId[unit.type || unit.unitType]} (${Math.floor(unit.health)}/${Math.floor(unit.maxHealth)})<br>`;
             if (struct) html += `🗼 ${tile.capitalOf > 0 ? `${tribe} Capital` : isCity ? 'City' : StructureTypes[struct.type] || struct.type}<br>`;
             if (road) html += `🛣️ Road<br>`;

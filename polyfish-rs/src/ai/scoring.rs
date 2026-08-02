@@ -201,7 +201,7 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                                     // If clearing gets us to the cost of a Road (2) or Harvest (2)
                                     if stars <= 1 {
                                         let pop_needed =
-                                            (city.level + 1).saturating_sub(city.population);
+                                            (city.level + 1).saturating_sub(city.progress);
 
                                         // Scenario A: Enables a 2-star building/harvest
                                         if pop_needed <= 2 {
@@ -450,7 +450,7 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                             .find(|c| c._territory.contains(&(target as i32)))
                         {
                             let needed = city.level + 1;
-                            let current = city.population;
+                            let current = city.progress;
 
                             if current + pop_gain < needed {
                                 score -= 4.0; // Doesn't finish level
@@ -1169,6 +1169,45 @@ mod tests {
         assert!(
             toward_score > side_score,
             "toward fog ({toward_score}) should beat sidestep ({side_score})"
+        );
+    }
+
+    #[test]
+    fn finish_level_uses_progress_not_population() {
+        // Level-3 city with lifetime population 7 but progress 1: a 1-pop
+        // harvest does NOT finish the level (needs 4). The old code read
+        // `population` and always awarded the finish bonus.
+        let player_id = 1;
+        let mut state = explored_field_state(player_id);
+        let target = 3 * 11 + 3;
+        state.resources.insert(
+            target,
+            Some(ResourceState {
+                resource_type: ResourceType::Fruit,
+            }),
+        );
+        let mut city = crate::states::CityState::default();
+        city.idx = 4 * 11 + 3;
+        city.owner = player_id;
+        city.level = 3;
+        city.population = 7;
+        city.progress = 1;
+        city._territory.push(target);
+        state.tribes.get_mut(&player_id).unwrap().cities.push(city);
+        state.tribes.get_mut(&player_id).unwrap().stars = 10;
+
+        let game = Game { state };
+        let harvest = crate::moves::harvest::HarvestMove::new(target);
+        let stranding = score_move(&game, &harvest);
+
+        // Same city at progress 3: the harvest completes the level.
+        let mut game2 = Game { state: game.state.clone() };
+        game2.state.tribes.get_mut(&player_id).unwrap().cities[0].progress = 3;
+        let finishing = score_move(&game2, &harvest);
+
+        assert!(
+            finishing > stranding,
+            "finishing harvest ({finishing}) must outscore stranding one ({stranding})"
         );
     }
 }

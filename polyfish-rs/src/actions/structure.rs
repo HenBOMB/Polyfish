@@ -216,20 +216,27 @@ pub fn build_structure(
         let city_tile_idx = city.idx;
         let mut reward_pop = settings.reward_pop;
 
-        // Handle adjacent multipliers (Windmill, Sawmill, Forge)
+        // Adjacent multipliers (Windmill, Sawmill, Forge): "one population
+        // per FRIENDLY adjacent partner" — only own-territory partners count,
+        // matching the build-legality gate in moves/build.rs.
         if !settings.adjacent_types.is_empty() {
             use crate::functions::get_adjacent_indices;
             use crate::functions::get_structure_at;
 
+            let pov_id = state.settings.current_player_turn_id;
             let adj = get_adjacent_indices(state, idx, 1);
             let adj_count = adj
                 .iter()
                 .filter(|&&adj_idx| {
-                    if let Some(s) = get_structure_at(state, adj_idx) {
-                        settings.adjacent_types.contains(&s.structure_type)
-                    } else {
-                        false
-                    }
+                    let friendly = state
+                        .tiles
+                        .get(&adj_idx)
+                        .map_or(false, |t| t.owner == pov_id);
+                    friendly
+                        && get_structure_at(state, adj_idx)
+                            .map_or(false, |s| {
+                                settings.adjacent_types.contains(&s.structure_type)
+                            })
                 })
                 .count() as i32;
             reward_pop *= adj_count;
@@ -237,6 +244,32 @@ pub fn build_structure(
 
         if reward_pop > 0 {
             undos.push(add_population(state, city_tile_idx, reward_pop));
+        }
+    }
+
+    // Retroactive adjacency pop (real-game rule): a new partner structure
+    // (e.g. Farm) also feeds already-built neighbors that list its type in
+    // adjacent_types (Windmill/Sawmill/Forge), paying their owning city.
+    // add_population only reaches the acting player's cities, so this pays
+    // pov-owned neighbors only (cross-border feeding stays unmodeled).
+    {
+        use crate::functions::{get_adjacent_indices, get_structure_at};
+        let pov_id = state.settings.current_player_turn_id;
+        for adj_idx in get_adjacent_indices(state, idx, 1) {
+            let feeds = get_structure_at(state, adj_idx).map(|s| s.structure_type);
+            if let Some(neighbor_type) = feeds {
+                let neighbor = get_structure_setting(neighbor_type);
+                if neighbor.reward_pop > 0
+                    && neighbor.adjacent_types.contains(&structure_type)
+                {
+                    let owned_city_idx = get_city_owning_tile(state, adj_idx)
+                        .filter(|c| c.owner == pov_id)
+                        .map(|c| c.idx);
+                    if let Some(city_tile_idx) = owned_city_idx {
+                        undos.push(add_population(state, city_tile_idx, neighbor.reward_pop));
+                    }
+                }
+            }
         }
     }
 

@@ -14,27 +14,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::collections::HashSet;
 
-fn tribe_to_climate(tribe: TribeType) -> TribeType {
-    match tribe {
-        TribeType::AiMo => TribeType::AiMo,
-        TribeType::Aquarion => TribeType::Aquarion,
-        TribeType::Bardur => TribeType::Bardur,
-        TribeType::Elyrion => TribeType::Elyrion,
-        TribeType::Hoodrick => TribeType::Hoodrick,
-        TribeType::Imperius => TribeType::Imperius,
-        TribeType::Kickoo => TribeType::Kickoo,
-        TribeType::Luxidoor => TribeType::Luxidoor,
-        TribeType::Oumaji => TribeType::Oumaji,
-        TribeType::Quetzali => TribeType::Quetzali,
-        TribeType::Vengir => TribeType::Vengir,
-        TribeType::XinXi => TribeType::XinXi,
-        TribeType::Yadakk => TribeType::Yadakk,
-        TribeType::Zebasi => TribeType::Zebasi,
-        TribeType::Polaris => TribeType::Polaris,
-        TribeType::Cymanti => TribeType::Cymanti,
-        _ => TribeType::Nature,
-    }
-}
+use crate::types::classic_climate_id;
 
 #[derive(Debug, Clone)]
 pub struct MapGenSettings {
@@ -55,6 +35,13 @@ impl Default for MapGenSettings {
             version: 115,
         }
     }
+}
+
+/// Map types that generate no water at all. Everything water-bound — naval
+/// units, ports, fish, the water tech lane — is dead here, so generation must
+/// not sneak a tile in through a tribe's starting resources either.
+pub fn is_fully_dry(map_type: MapType) -> bool {
+    matches!(map_type, MapType::Drylands)
 }
 
 // Intermediate tile representation during generation
@@ -390,7 +377,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
     // 3. Terrain Generation
     let land_ratio = match settings.map_type {
         MapType::None => 0.5,
-        MapType::Drylands => 0.95,
+        MapType::Drylands => 1.0,
         MapType::Lakes => 0.72,
         MapType::Continents => 0.45,
         MapType::Pangea => 0.50,
@@ -482,6 +469,11 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                 }
             }
         }
+    } else if is_fully_dry(settings.map_type) {
+        // Fully-dry map: every tile is land, so no water can survive the
+        // shallowing pass below (Aug 2026 — stray puddles made the water tech
+        // lane nominally legal on a map where it buys nothing).
+        is_land.iter_mut().for_each(|l| *l = true);
     } else {
         // Generic random scatter for other map types
         while current_land < target_land {
@@ -983,11 +975,17 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         let tribe = map[cap as usize]
             .tribe_affinity
             .unwrap_or(TribeType::Imperius);
+        // NB: this block WRITES `target_terrain` onto the chosen tile, so a
+        // fish start carves water. On a dry map the water tribes are served by
+        // the dedicated capital-pond block below instead, which pins the count
+        // at exactly 2 — running both would scatter up to 4.
+        let dry = is_fully_dry(settings.map_type);
         let (resource, target_terrain, quantity): (&str, TerrainType, i32) = match tribe {
             TribeType::Imperius => ("fruit", TerrainType::Field, 2),
             TribeType::Bardur => ("game", TerrainType::Forest, 2),
             TribeType::Zebasi => ("crop", TerrainType::Field, 1),
             TribeType::Elyrion => ("game", TerrainType::Forest, 2),
+            TribeType::Kickoo | TribeType::Aquarion if dry => ("", TerrainType::Field, 0),
             TribeType::Kickoo => ("fish", TerrainType::Water, 2),
             TribeType::Aquarion => ("fish", TerrainType::Water, 2),
             TribeType::Cymanti => ("spores", TerrainType::Field, 2),
@@ -1149,25 +1147,32 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         }
     }
 
-    // Drylands: Kickoo/Aquarion capitals get 2 water tiles with fish
-    if settings.map_type == MapType::Drylands {
+    // Water tribes are the standing exception to a dry map (Verdi, Aug 2026):
+    // Kickoo/Aquarion capitals always get exactly 2 adjacent fish ponds, so the
+    // tribe is playable. This is the ONLY water a fully-dry map may hold.
+    if is_fully_dry(settings.map_type) {
         for &cap in &capital_cells {
             let tribe = map[cap as usize]
                 .tribe_affinity
                 .unwrap_or(TribeType::Imperius);
-            if tribe == TribeType::Kickoo || tribe == TribeType::Aquarion {
-                let neighbors = plus_sign(cap, size);
-                let mut placed = 0;
-                for n in neighbors {
-                    if placed >= 2 {
-                        break;
-                    }
-                    if map[n as usize].terrain_type != TerrainType::Water {
-                        map[n as usize].terrain_type = TerrainType::Water;
-                        map[n as usize].above = Some("fish".to_string());
-                        placed += 1;
-                    }
+            if !matches!(tribe, TribeType::Kickoo | TribeType::Aquarion) {
+                continue;
+            }
+            let mut placed = 0;
+            // Orthogonal neighbours first (a pond behind a diagonal is harder
+            // to work), then any free neighbour, so the count is always 2.
+            let plus = plus_sign(cap, size);
+            let ring = get_square(cap, 1, size);
+            for n in plus.iter().chain(ring.iter().filter(|n| !plus.contains(n))) {
+                if placed >= 2 {
+                    break;
                 }
+                if *n == cap || map[*n as usize].above.is_some() || village_map[*n as usize] > 0 {
+                    continue;
+                }
+                map[*n as usize].terrain_type = TerrainType::Water;
+                map[*n as usize].above = Some("fish".to_string());
+                placed += 1;
             }
         }
     }
@@ -1331,9 +1336,9 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         if gen_tile.terrain_type == TerrainType::Water
             || gen_tile.terrain_type == TerrainType::Ocean
         {
-            t_state.climate = TribeType::Nature;
+            t_state.climate = 0;
         } else if let Some(tribe) = gen_tile.tribe_affinity {
-            t_state.climate = tribe_to_climate(tribe);
+            t_state.climate = classic_climate_id(tribe);
         }
         if let Some(ref s) = gen_tile.above {
             match s.as_str() {
@@ -1460,7 +1465,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                 if tile.terrain_type != TerrainType::Water
                     && tile.terrain_type != TerrainType::Ocean
                 {
-                    tile.climate = tribe_to_climate(tribe);
+                    tile.climate = classic_climate_id(tribe);
                 }
             }
         }
@@ -1506,6 +1511,84 @@ mod tests {
     use super::*;
     use crate::states::PlayerId;
     use crate::types::{MapSize, MapType, StructureType};
+
+    fn wet_tiles(state: &crate::states::GameState) -> Vec<i32> {
+        state
+            .tiles
+            .iter()
+            .filter(|(_, t)| matches!(t.terrain_type, TerrainType::Water | TerrainType::Ocean))
+            .map(|(idx, _)| *idx)
+            .collect()
+    }
+
+    /// Drylands is bone dry for land tribes — the stray puddles it used to
+    /// scatter made the (worthless) water tech lane nominally legal.
+    #[test]
+    fn drylands_generates_no_water_for_land_tribes() {
+        let tribe_sets = [
+            vec![TribeType::Imperius, TribeType::Bardur],
+            vec![TribeType::Zebasi, TribeType::Elyrion],
+            vec![TribeType::Bardur, TribeType::Cymanti],
+        ];
+        for size in [MapSize::Tiny, MapSize::Normal] {
+            for tribes in &tribe_sets {
+                for seed in 0..40 {
+                    let state = generate(MapGenSettings {
+                        size,
+                        map_type: MapType::Drylands,
+                        tribes: tribes.clone(),
+                        seed,
+                        version: 115,
+                    });
+                    let wet = wet_tiles(&state);
+                    assert!(
+                        wet.is_empty(),
+                        "seed {seed} {size:?} {tribes:?}: {} water tile(s) at {wet:?}",
+                        wet.len()
+                    );
+                }
+            }
+        }
+    }
+
+    /// Kickoo/Aquarion are the standing exception: exactly 2 fish ponds beside
+    /// the capital even on Drylands, and no other water anywhere on the map.
+    #[test]
+    fn water_tribes_get_exactly_two_capital_ponds_on_drylands() {
+        for size in [MapSize::Tiny, MapSize::Normal] {
+            for seed in 0..30 {
+                let state = generate(MapGenSettings {
+                    size,
+                    map_type: MapType::Drylands,
+                    tribes: vec![TribeType::Kickoo, TribeType::Bardur],
+                    seed,
+                    version: 115,
+                });
+                let wet = wet_tiles(&state);
+                assert_eq!(
+                    wet.len(),
+                    2,
+                    "seed {seed} {size:?}: expected 2 ponds, got {wet:?}"
+                );
+                let cap = state
+                    .tiles
+                    .values()
+                    .find(|t| t.capital_of == 1)
+                    .expect("Kickoo capital");
+                for idx in &wet {
+                    assert!(
+                        crate::functions::get_square_indices(cap.coords.idx, 1, state.settings.size)
+                            .contains(idx),
+                        "seed {seed}: pond {idx} is not adjacent to the capital"
+                    );
+                    assert!(
+                        matches!(state.resources.get(idx), Some(Some(_))),
+                        "seed {seed}: pond {idx} has no fish"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_no_edge_spawns() {

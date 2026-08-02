@@ -285,6 +285,10 @@ function App() {
       return n > 0 ? sum / n : undefined;
     };
     const NET = ['model', 'model_vs_anchor'];
+    // Net seats in vs-Greedy games ONLY. Combat comparisons must use this
+    // pool: in mirror games every net kill is another net seat's death, so
+    // NET-pooled kill/loss series are pinned symmetric by construction.
+    const VG = ['model_vs_anchor'];
     const GRE = ['anchor'];
     return Object.keys(runTempo)
       .map(Number)
@@ -292,7 +296,7 @@ function App() {
       .map(it => {
         const roles = runTempo[String(it)];
         const row: any = { iteration: it };
-        for (const [prefix, roleNames] of [['net', NET], ['gre', GRE]] as const) {
+        for (const [prefix, roleNames] of [['net', NET], ['netvg', VG], ['gre', GRE]] as const) {
           const names = roleNames as unknown as string[];
           for (const t of [10, 15, 20, 25]) {
             for (const f of ['cities', 'spt', 'units', 'army_stars', 'revealed', 'techs']) {
@@ -382,7 +386,11 @@ function App() {
       // matching the trained series — granted units (~3% of production) are
       // excluded, so this slightly understates units put at risk.
       row.net_trained_per_lost = divide(row.net_trained_end, row.net_lost_end);
+      row.netvg_trained_per_lost = divide(row.netvg_trained_end, row.netvg_lost_end);
       row.gre_trained_per_lost = divide(row.gre_trained_end, row.gre_lost_end);
+      // K/D vs Greedy, both sides from the same anchor games.
+      row.netvg_kd = divide(row.netvg_kills_end, row.netvg_lost_end);
+      row.gre_kd = divide(row.gre_kills_end, row.gre_lost_end);
       return row;
     });
   }, [runMetrics, tempoRows, metricsExtra]);
@@ -871,9 +879,11 @@ function App() {
                 />
 
                 {/* Tempo: Nth-city milestones. Cities INCLUDE the starting
-                    capital, so "2nd city" means one village captured. */}
+                    capital, and captured enemy cities count — so this can
+                    exceed the village-capture rate below. */}
                 <MetricChart
                   title="% of net games reaching Nth city"
+                  subtitle="Counts the capital + any city gained by ANY means (neutral village OR captured enemy city). Can exceed the 1st-village rate."
                   data={windowSize > 0 ? combinedRows.slice(-windowSize) : combinedRows}
                   series={[
                     { key: 't2c_2nd_pct', label: '2nd city', color: '#22d3ee' },
@@ -898,19 +908,22 @@ function App() {
                     captured, so "slow" and "never" were one number. */}
                 <MetricChart
                   title="1st village — turn (seats that captured)"
+                  subtitle="Avg turn of the first NEUTRAL-village capture, among seats that got one. Enemy-city captures don't count."
                   data={windowSize > 0 ? combinedRows.slice(-windowSize) : combinedRows}
                   series={[
                     { key: 'villages_t2c_first_cond', label: 'avg turn', color: '#14b8a6' },
                   ]}
                 />
 
-                <MetricChart
+                {/* hidden (Jul 2026): redundant with the Nth-city reach chart */}
+                {false && <MetricChart
                   title="1st village — % of net seats that captured one"
+                  subtitle="Neutral villages only — a seat that reaches city #2 by conquering enemy cities counts above but not here."
                   data={windowSize > 0 ? combinedRows.slice(-windowSize) : combinedRows}
                   series={[
                     { key: 'villages_first_pct', label: '% of seats', color: '#6366f1' },
                   ]}
-                />
+                />}
 
                 {/* Avg moves (steps) / game */}
                 <MetricChart
@@ -924,7 +937,6 @@ function App() {
                   title="Avg captures / game"
                   data={windowSize > 0 ? runMetrics.slice(-windowSize) : runMetrics}
                   series={[
-                    { key: 'avg_captures', label: 'total (incl. re-captures)', color: '#f87171' },
                     { key: 'avg_cap_capitals', label: 'capitals', color: '#a855f7' },
                     { key: 'avg_cap_cities', label: 'cities', color: '#f59e0b' },
                     { key: 'avg_cap_villages', label: 'villages', color: '#22c55e' },
@@ -991,17 +1003,18 @@ function App() {
 
               <h3 className="metrics-section-title">Military</h3>
               <div className="metrics-grid">
-                {/* Unit COUNTS per player-game. All four series come from the
-                tempo sidecar so net and greedy share one denominator.
+                {/* Unit COUNTS per player-game, vs-Greedy games only — mirror
+                seats would drown the greedy series in a different denominator.
                 "trained" is Summon only — ruins/conversions/level-up units are
                 the separate "granted" series. */}
                 <MetricChart
                   title="Unit count — trained vs granted vs lost"
+                  subtitle="Vs-Greedy games only (~12–16/iter after anchor decay — noisy). Mirror self-play seats excluded."
                   data={windowSize > 0 ? combinedRows.slice(-windowSize) : combinedRows}
                   series={[
-                    { key: 'net_trained_end', label: 'net trained', color: '#22c55e' },
-                    { key: 'net_granted_end', label: 'net granted', color: '#86efac' },
-                    { key: 'net_lost_end', label: 'net lost', color: '#15803d' },
+                    { key: 'netvg_trained_end', label: 'net trained', color: '#22c55e' },
+                    { key: 'netvg_granted_end', label: 'net granted', color: '#86efac' },
+                    { key: 'netvg_lost_end', label: 'net lost', color: '#15803d' },
                     { key: 'gre_trained_end', label: 'greedy trained', color: '#f87171' },
                     { key: 'gre_granted_end', label: 'greedy granted', color: '#fca5a5' },
                     { key: 'gre_lost_end', label: 'greedy lost', color: '#b91c1c' },
@@ -1011,35 +1024,41 @@ function App() {
                 {/* Unit WORTH in stars, both series at END of game: value still
                 alive vs cumulative value destroyed (a lost giant costs 10, a
                 lost warrior 2). */}
-                <MetricChart
+                {/* hidden (Jul 2026): unit-worth pair needs a clearer story first */}
+                {false && <MetricChart
                   title="Unit worth — held at end vs lost"
+                  subtitle="Vs-Greedy games only (~12–16/iter). Mirror seats excluded."
                   data={windowSize > 0 ? combinedRows.slice(-windowSize) : combinedRows}
                   series={[
-                    { key: 'net_army_stars_end', label: 'net held', color: '#22c55e' },
-                    { key: 'net_stars_lost_end', label: 'net lost', color: '#15803d' },
+                    { key: 'netvg_army_stars_end', label: 'net held', color: '#22c55e' },
+                    { key: 'netvg_stars_lost_end', label: 'net lost', color: '#15803d' },
                     { key: 'gre_army_stars_end', label: 'greedy held', color: '#f87171' },
                     { key: 'gre_stars_lost_end', label: 'greedy lost', color: '#b91c1c' },
                   ]}
-                />
+                />}
 
                 {/* Unit preservation. >1 = army growing; higher is better. The
                 measured gap is survival, not production: unit COUNT per city
                 already matches greedy (1.00x at t15), so both sides build at
                 the same rate and only one of them keeps what it builds. */}
-                <MetricChart
+                {/* hidden (Jul 2026): overlaps the K/D vs Greedy chart */}
+                {false && <MetricChart
                   title="Unit preservation (trained / lost)"
+                  subtitle="Vs-Greedy games only (~12–16/iter). Mirror seats excluded."
                   data={windowSize > 0 ? combinedRows.slice(-windowSize) : combinedRows}
                   series={[
-                    { key: 'net_trained_per_lost', label: 'net', color: '#22c55e' },
+                    { key: 'netvg_trained_per_lost', label: 'net', color: '#22c55e' },
                     { key: 'gre_trained_per_lost', label: 'greedy', color: '#f87171' },
                   ]}
-                />
+                />}
 
                 {/* Army composition. The greedy line is a target, not a rival —
                 with unit count per city already matched, this is purely a
                 which-units-do-we-buy gap (~2x at t25, Jul 2026). */}
-                <MetricChart
+                {/* hidden (Jul 2026): unit-worth pair needs a clearer story first */}
+                {false && <MetricChart
                   title="Unit worth (stars / unit)"
+                  subtitle="All net seats incl. mirror games (absolute ratio — low noise). Greedy line is a reference target, not the same games."
                   data={windowSize > 0 ? combinedRows.slice(-windowSize) : combinedRows}
                   series={[
                     { key: 'net_unit_worth_t15', label: 'net @t15', color: '#22c55e' },
@@ -1047,10 +1066,12 @@ function App() {
                     { key: 'gre_unit_worth_t15', label: 'greedy @t15', color: '#f87171' },
                     { key: 'gre_unit_worth_t25', label: 'greedy @t25', color: '#b91c1c' },
                   ]}
-                />
+                />}
 
-                <MetricChart
+                {/* hidden (Jul 2026): unclear metric, removed from view */}
+                {false && <MetricChart
                   title="Army stars / city"
+                  subtitle="All net seats incl. mirror games (absolute ratio — low noise). Greedy line is a reference target, not the same games."
                   data={windowSize > 0 ? combinedRows.slice(-windowSize) : combinedRows}
                   series={[
                     { key: 'net_army_per_city_t15', label: 'net @t15', color: '#22c55e' },
@@ -1058,16 +1079,31 @@ function App() {
                     { key: 'gre_army_per_city_t15', label: 'greedy @t15', color: '#f87171' },
                     { key: 'gre_army_per_city_t25', label: 'greedy @t25', color: '#b91c1c' },
                   ]}
-                />
+                />}
 
                 {/* Enemy units destroyed per player-game, from TribeState::kills
-                (conversions are not kills). */}
+                (conversions are not kills). Vs-Greedy games only: pooled over
+                mirror games this chart is pinned symmetric (every net kill is
+                another net seat's death) and cannot show combat progress. */}
                 <MetricChart
                   title="Avg kills / game"
+                  subtitle="Vs-Greedy games only (~12–16/iter after anchor decay — noisy). Mirror games pin kills = losses by construction."
                   data={windowSize > 0 ? combinedRows.slice(-windowSize) : combinedRows}
                   series={[
-                    { key: 'net_kills_end', label: 'net', color: '#22c55e' },
+                    { key: 'netvg_kills_end', label: 'net', color: '#22c55e' },
                     { key: 'gre_kills_end', label: 'greedy', color: '#f87171' },
+                  ]}
+                />
+
+                {/* Kills per unit lost, both sides from the SAME vs-Greedy
+                games — the honest K/D trend. */}
+                <MetricChart
+                  title="K/D vs Greedy (kills / lost)"
+                  subtitle="Vs-Greedy games only (~12–16/iter). >1 = net destroys more than it loses."
+                  data={windowSize > 0 ? combinedRows.slice(-windowSize) : combinedRows}
+                  series={[
+                    { key: 'netvg_kd', label: 'net', color: '#22c55e' },
+                    { key: 'gre_kd', label: 'greedy', color: '#f87171' },
                   ]}
                 />
 

@@ -8,50 +8,14 @@ use crate::states::GameState;
 use crate::types::{TerrainType, TribeType};
 use indexmap::IndexMap;
 
-/// Maps TribeType to corresponding TribeType
-pub fn climate_to_tribe(climate: TribeType) -> TribeType {
-    match climate {
-        TribeType::XinXi => TribeType::XinXi,
-        TribeType::Imperius => TribeType::Imperius,
-        TribeType::Bardur => TribeType::Bardur,
-        TribeType::Oumaji => TribeType::Oumaji,
-        TribeType::Kickoo => TribeType::Kickoo,
-        TribeType::Hoodrick => TribeType::Hoodrick,
-        TribeType::Luxidoor => TribeType::Luxidoor,
-        TribeType::Vengir => TribeType::Vengir,
-        TribeType::Zebasi => TribeType::Zebasi,
-        TribeType::AiMo => TribeType::AiMo,
-        TribeType::Aquarion => TribeType::Aquarion,
-        TribeType::Quetzali => TribeType::Quetzali,
-        TribeType::Elyrion => TribeType::Elyrion,
-        TribeType::Yadakk => TribeType::Yadakk,
-        TribeType::Polaris => TribeType::Polaris,
-        TribeType::Cymanti => TribeType::Cymanti,
-        TribeType::Nature | TribeType::None => TribeType::Nature,
-    }
+/// Predicted tribe for a classic climate id (see `types::classic_climate_id`).
+pub fn climate_to_tribe(climate: i32) -> TribeType {
+    crate::types::tribe_from_classic_climate(climate)
 }
 
-/// Maps TribeType to corresponding TribeType
-pub fn tribe_to_climate(tribe: TribeType) -> TribeType {
-    match tribe {
-        TribeType::XinXi => TribeType::XinXi,
-        TribeType::Imperius => TribeType::Imperius,
-        TribeType::Bardur => TribeType::Bardur,
-        TribeType::Oumaji => TribeType::Oumaji,
-        TribeType::Kickoo => TribeType::Kickoo,
-        TribeType::Hoodrick => TribeType::Hoodrick,
-        TribeType::Luxidoor => TribeType::Luxidoor,
-        TribeType::Vengir => TribeType::Vengir,
-        TribeType::Zebasi => TribeType::Zebasi,
-        TribeType::AiMo => TribeType::AiMo,
-        TribeType::Aquarion => TribeType::Aquarion,
-        TribeType::Quetzali => TribeType::Quetzali,
-        TribeType::Elyrion => TribeType::Elyrion,
-        TribeType::Yadakk => TribeType::Yadakk,
-        TribeType::Polaris => TribeType::Polaris,
-        TribeType::Cymanti => TribeType::Cymanti,
-        TribeType::Nature | TribeType::None => TribeType::Nature,
-    }
+/// Classic climate id a tribe's territory carries.
+pub fn tribe_to_climate(tribe: TribeType) -> i32 {
+    crate::types::classic_climate_id(tribe)
 }
 
 /// Validation for village candidates based on mapgen rules
@@ -109,7 +73,7 @@ pub fn predict_villages(state: &GameState) -> IndexMap<i32, (TribeType, bool)> {
         .unwrap_or(TribeType::None);
     let pov_climate = tribe_to_climate(pov_tribe_type);
 
-    let mut candidates: IndexMap<i32, (i32, TribeType)> = IndexMap::new();
+    let mut candidates: IndexMap<i32, (i32, i32)> = IndexMap::new();
 
     // Collect all known cities/villages
     let mut known_cities = std::collections::HashSet::new();
@@ -164,7 +128,7 @@ pub fn predict_villages(state: &GameState) -> IndexMap<i32, (TribeType, bool)> {
                         ) {
                             continue;
                         }
-                        let entry = candidates.entry(n_idx).or_insert((0, TribeType::Nature));
+                        let entry = candidates.entry(n_idx).or_insert((0, 0));
                         entry.0 += 5;
                     }
                 }
@@ -177,8 +141,7 @@ pub fn predict_villages(state: &GameState) -> IndexMap<i32, (TribeType, bool)> {
         if !tile.explorers.contains(&pov_id) {
             continue;
         }
-        if tile.owner != pov_id && tile.climate != pov_climate && tile.climate != TribeType::Nature
-        {
+        if tile.owner != pov_id && tile.climate != pov_climate && tile.climate != 0 {
             let around = get_adjacent_indices(state, tile_idx, 2);
             for idx in around {
                 let idx_explored = state
@@ -289,18 +252,19 @@ fn get_nearest_known_tribe(state: &GameState, idx: i32) -> Option<TribeType> {
     best_tribe
 }
 
-/// Predict terrain for fog tiles based on probabilistic mapgen rules
+/// Predict terrain for fog tiles based on probabilistic mapgen rules.
+/// The second tuple element is a classic climate id (types::classic_climate_id).
 pub fn predict_terrain(
     state: &GameState,
     fog_tiles: &[i32],
-) -> IndexMap<i32, (TerrainType, TribeType)> {
+) -> IndexMap<i32, (TerrainType, i32)> {
     let pov_id = state.settings.current_player_turn_id;
     let map_type = state.settings.map_type;
 
     // Base land chances for map types (rough estimates from mapgen.rs)
     let base_land_prob = match map_type {
         crate::MapType::None => 0.5,
-        crate::MapType::Drylands => 0.95,
+        crate::MapType::Drylands => 1.0,
         crate::MapType::Lakes => 0.72,
         crate::MapType::Continents => 0.45,
         crate::MapType::Pangea => 0.50,
@@ -372,7 +336,7 @@ pub fn predict_terrain(
 
         let final_climate =
             if terrain_type == TerrainType::Water || terrain_type == TerrainType::Ocean {
-                TribeType::Nature // Fluids are usually Nature or tribe-colored but functionally Nature for most things
+                0 // fluids are functionally Nature climate
             } else {
                 climate
             };
@@ -514,7 +478,7 @@ mod tests {
         let mut state = GameState::default();
         let size = 11;
         state.settings.size = size;
-        state.settings.map_type = crate::types::MapType::Drylands; // 95% land
+        state.settings.map_type = crate::types::MapType::Drylands; // all land
 
         // Setup Bardur Tribe
         let bardur_id = 2;
@@ -542,8 +506,8 @@ mod tests {
         assert_ne!(pred_terrain, TerrainType::Water);
         assert_ne!(pred_terrain, TerrainType::Ocean);
 
-        // 2. Should correspond to Bardur climate
-        assert_eq!(pred_climate, TribeType::Bardur);
+        // 2. Should correspond to Bardur climate (classic id 3)
+        assert_eq!(pred_climate, crate::types::classic_climate_id(TribeType::Bardur));
 
         // 3. Terrain Type Check (Probabilistic but deterministic seed)
         // With current deterministic RNG:

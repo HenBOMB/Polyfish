@@ -154,6 +154,7 @@ impl GreedyHeuristicAgent {
                 unit_type: m.unit_type().ok(),
                 tech_type: m.tech_type().ok(),
                 ability_type: m.ability_type().ok(),
+                reward_type: m.reward_type().ok(),
             })
             .collect();
 
@@ -242,6 +243,7 @@ impl HeuristicMctsAgent {
                     unit_type: m.unit_type().ok(),
                     tech_type: m.tech_type().ok(),
                     ability_type: m.ability_type().ok(),
+                    reward_type: m.reward_type().ok(),
                 })
             })
             .collect();

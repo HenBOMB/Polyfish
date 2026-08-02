@@ -199,6 +199,11 @@ impl TchPolyZeroNet {
         let move_option = self.linear(&p_latent, "pi_option"); // [B, 192]
         let source_spatial = self.conv2d(&x, "pi_source", 0).flatten(1, 3); // [B, 121]
         let target_spatial = self.conv2d(&x, "pi_target", 0).flatten(1, 3); // [B, 121]
+        // v9: mirrored aux head — per-tile P(enemy under fog), off the SAME
+        // post-attention `x` train.py uses. Optional: pre-aux checkpoints
+        // simply have no key, and the row shrinks accordingly.
+        let has_fog = self.w.contains_key("aux_fog.weight");
+        let fog = has_fog.then(|| self.conv2d(&x, "aux_fog", 0).flatten(1, 3).sigmoid());
 
         // Value head
         let v_pooled = self.conv2d(&x, "v_pool_conv", 0);
@@ -217,12 +222,15 @@ impl TchPolyZeroNet {
         const SS: usize = SPATIAL as usize; // 121
         const TS: usize = SPATIAL as usize; // 121
         const MO: usize = 192;
-        const ROW: usize = V + AT + SS + TS + MO; // 446
+        const FG: usize = SPATIAL as usize; // 121, only when the head exists
+        let row_len: usize = V + AT + SS + TS + MO + if has_fog { FG } else { 0 };
 
-        let row = Tensor::cat(
-            &[&win, &action_type, &source_spatial, &target_spatial, &move_option],
-            1,
-        ); // [B, 446], on-device
+        let mut parts: Vec<&Tensor> =
+            vec![&win, &action_type, &source_spatial, &target_spatial, &move_option];
+        if let Some(f) = fog.as_ref() {
+            parts.push(f);
+        }
+        let row = Tensor::cat(&parts, 1); // [B, row_len], on-device
         let flat: Vec<f32> = row
             .flatten(0, 1)
             .to_device(Device::Cpu)
@@ -232,7 +240,7 @@ impl TchPolyZeroNet {
         let mut values = Vec::with_capacity(batch);
         let mut policy = Vec::with_capacity(batch);
         for i in 0..batch {
-            let base = i * ROW;
+            let base = i * row_len;
             values.push(flat[base]); // win, len 1
             let at_off = base + V;
             let action_type = flat[at_off..at_off + AT].to_vec();
@@ -242,11 +250,14 @@ impl TchPolyZeroNet {
             let target_spatial = flat[ts_off..ts_off + TS].to_vec();
             let mo_off = ts_off + TS;
             let move_option = flat[mo_off..mo_off + MO].to_vec();
+            let fg_off = mo_off + MO;
+            let fog = has_fog.then(|| flat[fg_off..fg_off + FG].to_vec());
             policy.push(RawPolicyOutput {
                 action_type,
                 source_spatial,
                 target_spatial,
                 move_option,
+                fog,
             });
         }
         (values, policy)

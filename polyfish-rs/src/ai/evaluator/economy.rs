@@ -13,10 +13,11 @@ pub fn evaluate_economy(state: &GameState, player_id: PlayerId) -> f32 {
 
     // --- 1. Economy Score (0.0 - 1.0) ---
     // SPT (Stars Per Turn) - Soft cap around 25
-    // Note: city.production already includes the base 1 star per city
+    // Derived production: includes capital bonus, workshop/park rewards and
+    // Market/Clathrus adjacency income (raw city.production misses all of it).
     let mut income = 0.0;
     for city in &tribe.cities {
-        income += city.production as f32;
+        income += crate::functions::get_city_production(state, city) as f32;
     }
     let spt_score = (income / crate::states::default_max_spt() as f32).clamp(0.0, 1.0);
 
@@ -100,9 +101,9 @@ fn penalty_partial_cities(tribe: &crate::states::TribeState, mode: ModeType) -> 
             // In Perfection, reward population progress (negative penalty = bonus)
             let mut total_bonus = 0.0;
             for city in &tribe.cities {
-                if city.population > 0 {
+                if city.progress > 0 {
                     let needed = city.level + 1;
-                    let progress = (city.population as f32 / needed as f32).clamp(0.0, 0.99);
+                    let progress = (city.progress as f32 / needed as f32).clamp(0.0, 0.99);
                     // Small bonus per city with progress
                     total_bonus += progress * 0.03;
                 }
@@ -114,9 +115,9 @@ fn penalty_partial_cities(tribe: &crate::states::TribeState, mode: ModeType) -> 
             // In Domination, penalize stuck population
             let mut total_penalty = 0.0;
             for city in &tribe.cities {
-                if city.population > 0 {
+                if city.progress > 0 {
                     let needed = city.level + 1;
-                    let stuck_ratio = (city.population as f32 / needed as f32).clamp(0.0, 0.99);
+                    let stuck_ratio = (city.progress as f32 / needed as f32).clamp(0.0, 0.99);
                     total_penalty += stuck_ratio * 0.05;
                 }
             }

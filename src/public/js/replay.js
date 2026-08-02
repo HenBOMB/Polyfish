@@ -308,7 +308,9 @@ async function playReplayLoop(token) {
         if (!REPLAY_PLAYING || token !== REPLAY_PLAY_TOKEN) return; // paused/seeked mid-fetch
         if (!ok) { stopReplayPlayback(); return; }                  // pause so the error is visible
         const elapsed = ((typeof performance !== 'undefined') ? performance.now() : Date.now()) - t0;
-        await replaySleep(Math.max(250, REPLAY_INTERVAL_MS - elapsed));
+        // Inter-step breathing room, capped so short intervals aren't floored to 250ms
+        const minGap = Math.min(250, REPLAY_INTERVAL_MS * 0.5);
+        await replaySleep(Math.max(minGap, REPLAY_INTERVAL_MS - elapsed));
     }
 }
 

@@ -22,8 +22,11 @@ fn setup_state() -> (GameState, i32) {
     tribe.tribe_type = TribeType::Imperius;
     tribe.stars = 5;
 
-    // Add a capital city
+    // Add a capital city (owned, off tile 0 — a foreign-owned city under the
+    // test warrior would read as sieged by the derived-production evaluator)
     let mut city = CityState::default();
+    city.idx = 60;
+    city.owner = tribe_id;
     city.production = 2; // +1 base = 3 income
     city.level = 2;
     tribe.cities.push(city);

@@ -8,4 +8,5 @@ pub struct MoveVisit {
     pub unit_type: Option<crate::types::UnitType>,
     pub tech_type: Option<crate::types::TechnologyType>,
     pub ability_type: Option<crate::types::AbilityType>,
+    pub reward_type: Option<crate::types::CityRewardType>,
 }

@@ -271,8 +271,8 @@
 }
 
 .exausted {
-    opacity: 0.8 !important;
-    filter: grayscale(100%) !important;
+    opacity: 0.85 !important;
+    filter: grayscale(50%) brightness(0.92) !important;
 }
 
 .selected-unit-highlight {

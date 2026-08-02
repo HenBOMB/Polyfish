@@ -389,6 +389,10 @@ fn play_match(
     // v2.3 tech-cap counters for the model seat (goal_script only).
     let mut techs_bought = 0u32;
     let mut tier3_bought = 0u32;
+    // v3 archetype doctrine state for the model seat.
+    let mut archetype_state = polyfish::ai::oracle_macro::ArchetypeState::default();
+    // v7: standing macro commitment for the model seat (mirrors self_play).
+    let mut stance_commit = polyfish::ai::oracle_macro::StanceCommit::default();
 
     while !polyfish::functions::is_game_over(&game.state) && moves < 500 {
         if dump_stats_dir.is_some() && game.state.settings.turn != last_sampled_turn {
@@ -412,15 +416,27 @@ fn play_match(
 
         // EXP_ELO_028: scripted goal channels for config1.
         if goal_script && current_pid == model_player {
-            let goal = polyfish::ai::oracle_macro::scripted_goal(&game.state, model_player);
+            let goal = polyfish::ai::oracle_macro::update_goal(
+                &game.state,
+                model_player,
+                &mut stance_commit,
+                tier3_bought,
+            );
             let gate =
                 polyfish::ai::oracle_macro::goal_star_gate(&game.state, model_player, &goal);
+            polyfish::ai::oracle_macro::update_archetype(
+                &game.state,
+                model_player,
+                &goal,
+                &mut archetype_state,
+            );
             let aux = polyfish::ai::oracle_macro::scripted_goal_aux(
                 &game.state,
                 model_player,
                 &goal,
                 techs_bought,
                 tier3_bought,
+                Some(&archetype_state),
             );
             let model_agent = if swap { &mut agent_p2 } else { &mut agent_p1 };
             if let SearchAgent::Gumbel(a) = model_agent {

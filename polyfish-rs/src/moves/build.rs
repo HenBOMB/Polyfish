@@ -353,7 +353,10 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
     }
 }
 
-fn is_structure_unlocked(tribe: &crate::states::TribeState, struct_type: StructureType) -> bool {
+pub fn is_structure_unlocked(
+    tribe: &crate::states::TribeState,
+    struct_type: StructureType,
+) -> bool {
     use crate::settings::structures::get_structure_setting;
     use crate::settings::technology::get_technology_setting;
     use crate::types::TribeType;

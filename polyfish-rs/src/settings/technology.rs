@@ -3,7 +3,7 @@
 use crate::{
     settings::get_unit_setting,
     types::{
-        AbilityType, ResourceType, StructureType, TaskType, TechnologyType, TerrainType,
+        AbilityType, ResourceType, SkillType, StructureType, TaskType, TechnologyType, TerrainType,
         TribeType, UnitType,
     },
 };
@@ -470,6 +470,87 @@ pub fn is_eco_tech(tech_type: TechnologyType) -> bool {
     !e.harvests.is_empty() || !e.eco_structures.is_empty() || e.tech_discount
 }
 
+/// v7: a tier-3 tech is ECONOMIC when the structure it unlocks yields
+/// population or stars — Construction/Mathematics/Smithery/Trade/Philosophy/
+/// Aquatism/Spiritualism in, Chivalry/Navigation/Diplomacy out. Derived from
+/// the settings tables rather than a hand-written list, so it stays correct if
+/// the tables move (the exact discipline `max_affordable_pop` failed at).
+pub fn is_eco_tier3(tech_type: TechnologyType) -> bool {
+    let s = get_technology_setting(tech_type);
+    if s.tier != Some(3) {
+        return false;
+    }
+    s.unlocks_structure.map_or(false, |st| {
+        let ss = crate::settings::structures::get_structure_setting(st);
+        ss.reward_pop > 0 || ss.reward_stars > 0
+    })
+}
+
+fn terrain_is_water(terrain: TerrainType) -> bool {
+    matches!(terrain, TerrainType::Water | TerrainType::Ocean)
+}
+
+/// A hull, not an amphibian: `Float`/`Water` units cannot leave the water,
+/// whereas `Amphibious`/`Skate` units fight on land too.
+fn unit_is_naval(unit_type: UnitType) -> bool {
+    let s = get_unit_setting(unit_type);
+    s.skills.contains(&SkillType::Float) || s.skills.contains(&SkillType::Water)
+}
+
+fn structure_is_water_only(structure_type: StructureType) -> bool {
+    let s = crate::settings::structures::get_structure_setting(structure_type);
+    !s.terrain_types.is_empty() && s.terrain_types.iter().all(|t| terrain_is_water(*t))
+}
+
+/// True when EVERY unlock a tech grants is water-bound — naval hulls,
+/// water-only structures, water/ocean passage, a water defense bonus — and
+/// none of it is usable on land. Techs that grant nothing of their own (tribe
+/// stand-ins such as IceFishing) inherit the class of the tech they replace.
+/// Table-derived, pinned by `water_tech_classification_is_table_derived`.
+pub fn is_water_tech(tech_type: TechnologyType) -> bool {
+    let s = get_technology_setting(tech_type);
+    let (mut grants, mut water) = (0usize, 0usize);
+
+    if let Some(t) = s.unlocks_terrain {
+        grants += 1;
+        water += terrain_is_water(t) as usize;
+    }
+    for st in s.unlocks_structure.iter().chain(s.unlocks_special_structures.iter()) {
+        grants += 1;
+        water += structure_is_water_only(*st) as usize;
+    }
+    for u in s.unlocks_unit.iter().chain(s.unlocks_special_units.iter()) {
+        grants += 1;
+        water += unit_is_naval(*u) as usize;
+    }
+    if !s.defense_bonus_terrain.is_empty() {
+        grants += 1;
+        water += s.defense_bonus_terrain.iter().all(|t| terrain_is_water(*t)) as usize;
+    }
+    grants += s.unlocks_task.len();
+    grants += s.unlocks_ability.is_some() as usize;
+    grants += s.unlocks_vision as usize;
+    grants += s.tech_discount as usize;
+
+    if grants == 0 {
+        return s
+            .replaces_tech
+            .map_or(false, |base| base != tech_type && is_water_tech(base));
+    }
+    water == grants
+}
+
+/// A water tech with nothing but more water behind it, so masking it out on a
+/// map with no water costs the tribe no reachable option. Aquarion's FreeDiving
+/// is water-bound but gates Chivalry, so it deliberately survives this check.
+pub fn is_water_dead_end(tech_type: TechnologyType) -> bool {
+    is_water_tech(tech_type)
+        && get_technology_setting(tech_type)
+            .next
+            .iter()
+            .all(|n| is_water_tech(*n))
+}
+
 /// Mobility tech: opens terrain passage or connector structures.
 pub fn is_mobility_tech(tech_type: TechnologyType) -> bool {
     let e = get_tech_effects(tech_type);
@@ -686,5 +767,49 @@ mod effects_tests {
         assert_eq!(get_tech_effects(T::Organization).harvests, vec![ResourceType::Fruit]);
         // Support units don't make a tech military.
         assert!(!is_military_tech(T::Philosophy)); // MindBender heals, attack 0
+    }
+
+    /// The water lane is masked out wholesale on dry maps, so the exact
+    /// membership is pinned rather than trusted — a table edit that widened
+    /// this would silently delete a buyable tech from every Drylands game.
+    #[test]
+    fn water_tech_classification_is_table_derived() {
+        use strum::IntoEnumIterator;
+        use TechnologyType as T;
+
+        let names = |f: fn(T) -> bool| {
+            let mut v: Vec<String> = T::iter().filter(|t| f(*t)).map(|t| format!("{t:?}")).collect();
+            v.sort();
+            v
+        };
+        let expect = |list: &[&str]| {
+            let mut v: Vec<String> = list.iter().map(|s| s.to_string()).collect();
+            v.sort();
+            v
+        };
+        assert_eq!(
+            names(is_water_tech),
+            expect(&["Fishing", "Sailing", "Navigation", "Ramming", "Aquatism",
+                     "IceFishing", "Oceantology", "FreeDiving"]),
+            "water-tech set moved"
+        );
+
+        // Masking targets only the lane that leads nowhere else. FreeDiving is
+        // water-bound but gates Aquarion's Chivalry, so it must survive.
+        assert_eq!(
+            names(is_water_dead_end),
+            expect(&["Fishing", "Sailing", "Navigation", "Ramming", "Aquatism", "Oceantology"]),
+            "water dead-end set moved"
+        );
+        assert!(is_water_tech(T::FreeDiving) && !is_water_dead_end(T::FreeDiving));
+
+        // Land techs that merely touch water must not be swept in.
+        for t in [T::Riding, T::Roads, T::Trade, T::Construction, T::Smithery,
+                  T::Chivalry, T::Philosophy, T::Climbing, T::Hunting] {
+            assert!(!is_water_tech(t), "{t:?} misclassified as water");
+        }
+        // Amphibious / ice-walking tribe units are land-capable.
+        assert!(!is_water_tech(T::Spearing), "Tridention is amphibious");
+        assert!(!is_water_tech(T::Frostwork), "Mooni skates on land");
     }
 }

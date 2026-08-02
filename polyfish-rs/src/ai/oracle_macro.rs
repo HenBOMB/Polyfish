@@ -7,7 +7,7 @@
 
 use crate::moves::Move;
 use crate::states::{GameState, PlayerId};
-use crate::types::{MoveType, StructureType, TechnologyType};
+use crate::types::{AbilityType, MoveType, StructureType, TechnologyType, TerrainType};
 
 /// Stars that must remain after a tech purchase for it to pass the gate while
 /// a commitment is active — rough price of fielding a capturer.
@@ -30,6 +30,13 @@ pub enum Stance {
     Grow = 0,
     Arm = 1,
     Unlock = 2,
+    /// v7: bank stars toward a named purchase the tribe cannot afford yet.
+    /// Held stars appeared nowhere in the potential, so converting them into
+    /// any scored asset strictly raised Phi while holding left it flat —
+    /// saving was a dominated action by construction, and the measured policy
+    /// was hand-to-mouth (median spend/income exactly 1.00). SAVE names the
+    /// target so `SHAPE_GOAL_SAVE` can pay the ramp toward it.
+    Save = 3,
 }
 
 /// EXP_ELO_028 Stage-1 macro goal: concurrent painted orders (each a target
@@ -40,13 +47,18 @@ pub enum Stance {
 pub struct MacroGoal {
     pub orders: Vec<(OrderKind, i32)>,
     pub stance: Stance,
+    /// v7: total star cost of the economy batch this seat is banking for while
+    /// the stance is SAVE. Not encoded into the feature planes (the stance
+    /// one-hot carries the categorical); `reward::goal_potential` reads it to
+    /// pay the savings ramp.
+    pub save_target: Option<i32>,
 }
 
 /// Stage-1 scripted goal-setter, v2 (recalibrated Jul 29 after the iter-1..4
 /// channel audit showed ATTACK lit on 62% of plies): EXPAND on every
 /// capturable village until captured; ATTACK only with local force
 /// superiority; DEFEND unchanged; ARM gains a post-expansion "prepare" phase.
-pub fn scripted_goal(state: &GameState, player: PlayerId) -> MacroGoal {
+pub fn scripted_goal(state: &GameState, player: PlayerId, tier3_bought: u32) -> MacroGoal {
     let size = state.settings.size as i32;
     let cheb =
         |a: i32, b: i32| ((a / size) - (b / size)).abs().max(((a % size) - (b % size)).abs());
@@ -61,7 +73,7 @@ pub fn scripted_goal(state: &GameState, player: PlayerId) -> MacroGoal {
     let mut orders: Vec<(OrderKind, i32)> = Vec::new();
 
     for &idx in state.structures.keys() {
-        if still_capturable(state, idx, player) {
+        if still_capturable(state, idx, player) || retakeable_village(state, idx, player) {
             orders.push((OrderKind::Expand, idx));
         }
     }
@@ -126,14 +138,241 @@ pub fn scripted_goal(state: &GameState, player: PlayerId) -> MacroGoal {
     }
 
     orders.sort();
+    // v7: SAVE sits below both ARM branches — a threat or a committed push
+    // always outranks banking — and only fires for a batch that is out of
+    // pocket now but inside SAVE_MAX_TURNS of income, so it self-terminates
+    // rather than becoming an open-ended hoard.
+    let save_target = save_batch_cost(state, player, tier3_bought).filter(|&cost| {
+        let spt = crate::functions::get_tribe_spt(state, tribe);
+        tribe.stars < cost && tribe.stars + spt * SAVE_MAX_TURNS >= cost
+    });
     let stance = if orders.iter().any(|(k, _)| *k == OrderKind::Defend) {
         Stance::Arm
     } else if prepare && tribe.cities.len() >= COMMIT_CITY_TARGET {
         Stance::Arm
+    } else if save_target.is_some() {
+        Stance::Save
     } else {
         Stance::Grow
     };
-    MacroGoal { orders, stance }
+    MacroGoal { orders, stance, save_target }
+}
+
+/// Turns a discretionary challenger stance must hold before it takes over.
+/// Threat responses bypass this entirely — see `update_goal`.
+pub const STANCE_SWITCH_TURNS: u8 = 2;
+
+/// Minimum friendly partners a multiplier-tier placement must pay before it is
+/// worth banking for — a 1-partner Windmill is one pop and affordable out of
+/// pocket, so it never justifies holding stars.
+pub const SAVE_MIN_PARTNERS: i32 = 2;
+/// Never bank for a batch further out than this many turns of income; beyond
+/// it the plan is a hoard, not a plan.
+pub const SAVE_MAX_TURNS: i32 = 3;
+
+/// The four territory-upgrade LANES and the tier-3 tech that opens each. The
+/// tech is the real commitment: `TIER3_CAP_PER_GAME` is 1, so a tribe picks at
+/// most one of these per game — which is exactly the "decide which upgrade to
+/// lean on this game" choice, and exactly what a savings plan is for.
+const SAVE_LANES: [(crate::types::StructureType, TechnologyType); 4] = [
+    (crate::types::StructureType::Windmill, TechnologyType::Construction),
+    (crate::types::StructureType::Sawmill, TechnologyType::Mathematics),
+    (crate::types::StructureType::Forge, TechnologyType::Smithery),
+    (crate::types::StructureType::Market, TechnologyType::Trade),
+];
+
+/// v7: full star cost of REACHING `tech` from what this tribe owns — every
+/// undiscovered prerequisite up the `requires` chain plus the tech itself.
+///
+/// Pricing only the final tech understates a lane badly: Trade sits behind
+/// Roads behind Riding, so "5 stars for a Market" can really be 30+. A plan
+/// that cannot see the path it has to walk cannot be weighed against a
+/// cheaper one.
+pub fn tech_chain_cost(tribe: &crate::states::TribeState, tech: TechnologyType) -> i32 {
+    use crate::settings::technology::{get_technology_setting, has_technology};
+    let mut total = 0;
+    let mut cur = Some(tech);
+    let mut guard = 0;
+    while let Some(t) = cur {
+        guard += 1;
+        if guard > 16 || has_technology(&tribe.tech_vanilla, t) {
+            break;
+        }
+        total += crate::functions::get_tech_cost(tribe, t);
+        cur = get_technology_setting(t).requires;
+    }
+    total
+}
+
+/// v7: cost of the CHEAPEST territory-upgrade lane worth banking for — the
+/// full prerequisite chain to the enabling tier-3 tech (when unowned) plus
+/// every placement in that lane that would pay at least `SAVE_MIN_PARTNERS`.
+///
+/// `tier3_bought` gates reachability: a lane whose tech the tier-3 cap will
+/// refuse is not a plan, it is a hoard with no exit. v7 priced such lanes and
+/// banked toward techs it was structurally forbidden to buy.
+///
+/// Counting the tech is what makes this a plan rather than a purchase. A lone
+/// 5-star Windmill is affordable out of pocket at any realistic income, so a
+/// batch of already-unlocked structures never triggers saving — measured: a
+/// placeable batch existed on 26% of turns and the SAVE gate fired on 0 of
+/// them. The lane (tech + the structures it unlocks) is the ~15-25 star
+/// commitment a human actually banks for.
+pub fn save_batch_cost(state: &GameState, player: PlayerId, tier3_bought: u32) -> Option<i32> {
+    use crate::settings::structures::get_structure_setting;
+    use crate::settings::technology::has_technology;
+    use crate::types::StructureType;
+    let tribe = state.tribes.get(&player)?;
+    let mut best: Option<i32> = None;
+    for (s_type, tech) in SAVE_LANES {
+        let s = get_structure_setting(s_type);
+        let Some(cost) = s.cost else { continue };
+        if let Some(req) = s.tribe_type {
+            if req != tribe.tribe_type {
+                continue;
+            }
+        }
+        // Unreachable lane: the tier-3 budget is spent and this tech is not
+        // owned, so no amount of banking can ever complete the plan.
+        let owned = has_technology(&tribe.tech_vanilla, tech);
+        if !owned && tier3_bought >= TIER3_CAP_PER_GAME {
+            continue;
+        }
+        // Market pays stars rather than pop; one partner is enough for it.
+        let need = if s_type == StructureType::Market { 1 } else { SAVE_MIN_PARTNERS };
+        let mut lane = 0;
+        for city in &tribe.cities {
+            if s.limited_per_city
+                && city._territory.iter().any(|&t| {
+                    crate::functions::get_structure_type_at(state, t) == Some(s_type)
+                })
+            {
+                continue;
+            }
+            let placeable = city._territory.iter().any(|&idx| {
+                if crate::functions::get_structure_at(state, idx).is_some() {
+                    return false;
+                }
+                let Some(tile) = state.tiles.get(&idx) else { return false };
+                if !s.terrain_types.contains(&tile.terrain_type) || tile.is_algae() {
+                    return false;
+                }
+                let partners = crate::functions::get_adjacent_indices(state, idx, 1)
+                    .iter()
+                    .filter(|&&n| {
+                        state.tiles.get(&n).map_or(false, |t| t.owner == player)
+                            && crate::functions::get_structure_type_at(state, n)
+                                .map_or(false, |st| s.adjacent_types.contains(&st))
+                    })
+                    .count() as i32;
+                partners >= need
+            });
+            if placeable {
+                lane += cost;
+            }
+        }
+        if lane == 0 {
+            continue;
+        }
+        if !owned {
+            lane += tech_chain_cost(tribe, tech);
+        }
+        best = Some(best.map_or(lane, |b: i32| b.min(lane)));
+    }
+    best
+}
+
+/// v7: the STANDING macro commitment.
+///
+/// `scripted_goal` is a pure function of the current state and was recomputed
+/// every ply, so the "strategy" could contradict itself between plies of the
+/// same turn — a reflex, not a plan. Nothing that persists can be committed to,
+/// and nothing that flips can be rewarded for being held. This carries the
+/// stance across plies with the same hysteresis `ArchetypeState` already uses
+/// for doctrine, and counts the flip rates EXP_ELO_028 registered as
+/// first-class metrics and never measured.
+#[derive(Clone, Debug, Default)]
+pub struct StanceCommit {
+    pub stance: Option<Stance>,
+    challenger: Option<Stance>,
+    streak: u8,
+    last_turn: i32,
+    last_orders: Vec<(OrderKind, i32)>,
+    /// Turns on which the committed stance actually changed.
+    pub stance_flips: u32,
+    /// Turns on which the painted order set changed.
+    pub order_flips: u32,
+    /// Turns observed, the denominator for both rates.
+    pub turns_seen: u32,
+}
+
+/// v7: the goal-setter with memory. Returns the scripted orders unchanged (a
+/// painted target is already persistent while it stays capturable) but resolves
+/// the stance through `st`, so a discretionary swing must hold for
+/// `STANCE_SWITCH_TURNS` turns before it lands.
+///
+/// Asymmetric on purpose: a DEFEND order means an enemy is inside our cities'
+/// threat radius, and a threat response that waits out a hysteresis window is
+/// a threat response that arrives after the city falls. Those switch instantly;
+/// only discretionary changes are damped.
+pub fn update_goal(
+    state: &GameState,
+    player: PlayerId,
+    st: &mut StanceCommit,
+    tier3_bought: u32,
+) -> MacroGoal {
+    let mut goal = scripted_goal(state, player, tier3_bought);
+    let turn = state.settings.turn;
+    let new_turn = turn != st.last_turn;
+    if new_turn {
+        st.turns_seen = st.turns_seen.saturating_add(1);
+        if !st.last_orders.is_empty() && st.last_orders != goal.orders {
+            st.order_flips = st.order_flips.saturating_add(1);
+        }
+        st.last_orders = goal.orders.clone();
+    }
+    st.last_turn = turn;
+
+    let urgent = goal.orders.iter().any(|(k, _)| *k == OrderKind::Defend);
+    let fresh = goal.stance;
+    match st.stance {
+        None => {
+            st.stance = Some(fresh);
+            st.challenger = None;
+            st.streak = 0;
+        }
+        Some(cur) if fresh == cur => {
+            st.challenger = None;
+            st.streak = 0;
+        }
+        Some(cur) => {
+            if urgent {
+                st.stance = Some(fresh);
+                st.challenger = None;
+                st.streak = 0;
+                if fresh != cur {
+                    st.stance_flips = st.stance_flips.saturating_add(1);
+                }
+            } else {
+                if st.challenger == Some(fresh) {
+                    if new_turn {
+                        st.streak = st.streak.saturating_add(1);
+                    }
+                } else {
+                    st.challenger = Some(fresh);
+                    st.streak = 1;
+                }
+                if st.streak >= STANCE_SWITCH_TURNS {
+                    st.stance = Some(fresh);
+                    st.challenger = None;
+                    st.streak = 0;
+                    st.stance_flips = st.stance_flips.saturating_add(1);
+                }
+            }
+        }
+    }
+    goal.stance = st.stance.unwrap_or(fresh);
+    goal
 }
 
 /// Minimum EXPAND targets painted while expanding — real villages first,
@@ -199,12 +438,32 @@ pub fn guessed_village_sites(
         })
         .collect();
     cands.sort_unstable();
+    // Bucket B: prefer picks in DISTINCT quadrants around the anchor centroid
+    // — nearest-first alone often put both guesses in one bearing sector,
+    // sending every scout the same way (audit: 89% duplicate-sector games).
+    // Pass 1 enforces quadrant novelty; pass 2 fills any remainder.
+    let (mut cx, mut cy) = (0i32, 0i32);
+    for &a in &anchors {
+        cx += a % size;
+        cy += a / size;
+    }
+    cx /= anchors.len() as i32;
+    cy /= anchors.len() as i32;
+    let quadrant = |idx: i32| ((idx % size > cx) as u8) * 2 + ((idx / size > cy) as u8);
     let mut picks: Vec<i32> = Vec::new();
-    for (_, idx) in cands {
-        if picks.len() >= max_sites {
-            break;
-        }
-        if picks.iter().all(|&p| cheb(p, idx) >= 3) {
+    let mut used_quads = std::collections::HashSet::new();
+    for pass in 0..2 {
+        for &(_, idx) in &cands {
+            if picks.len() >= max_sites {
+                break;
+            }
+            if picks.contains(&idx) || picks.iter().any(|&p| cheb(p, idx) < 3) {
+                continue;
+            }
+            if pass == 0 && used_quads.contains(&quadrant(idx)) {
+                continue;
+            }
+            used_quads.insert(quadrant(idx));
             picks.push(idx);
         }
     }
@@ -225,6 +484,9 @@ pub fn goal_star_gate(state: &GameState, player: PlayerId, goal: &MacroGoal) -> 
                     .map_or(false, |t| t.cities.len() < COMMIT_CITY_TARGET)
         }
         Stance::Arm => true,
+        // v7: banking for a named batch — every star spent elsewhere competes
+        // with it, so the gate is unconditionally active.
+        Stance::Save => true,
         Stance::Unlock => false,
     }
 }
@@ -236,7 +498,14 @@ pub const COMMIT_CITY_TARGET: usize = 3;
 /// stars (Research moves; ruin-granted techs don't count) …
 pub const TECH_CAP_PER_GAME: u32 = 8;
 /// … of which at most this many tier-3 unlocks.
-pub const TIER3_CAP_PER_GAME: u32 = 1;
+///
+/// v7: 1 → 2 (Verdi). One slot forced the economy lane and the knight lane to
+/// compete for the same purchase, and the knight lane usually won — Chivalry
+/// was the first tier-3 in 7/14 sampled seats while Construction fell to 1.
+/// Two slots plus the economy-first ordering below reproduces the real-game
+/// pattern: players take the level-3 pop buildings first (they lead to giants)
+/// and only then a combat tier-3.
+pub const TIER3_CAP_PER_GAME: u32 = 2;
 
 /// Per-ply auxiliary goal context (v2.3), set on the agent alongside the
 /// `MacroGoal` but NOT painted into features: environment-fit tech bias and
@@ -253,6 +522,26 @@ pub struct GoalAux {
     pub techs_bought: u32,
     /// …of which tier-3.
     pub tier3_bought: u32,
+    /// v3 archetype: unit types the active doctrine + overlays prefer —
+    /// each living one banks `SHAPE_GOAL_ARCHETYPE_UNIT` in the potential.
+    pub preferred_units: Vec<crate::types::UnitType>,
+    /// v3 reactive overlays; `knight_commit` also opens the
+    /// FreeSpirit→Chivalry purchase lane (see `passes_tech_caps`).
+    pub overlays: Overlays,
+    /// v6 income lane: third city up + a hub structure standing → the
+    /// Riding→Roads→Trade lane is recommended and Trade is exempt from the
+    /// tier-3 cap (Market is the best ★/SPT purchase in the game).
+    pub market_push: bool,
+    /// v7: this seat already owns an economic tier-3 (by purchase OR ruin
+    /// grant). Until it does, combat tier-3s are blocked — see
+    /// `passes_tech_caps`. Ownership rather than purchases on purpose: a free
+    /// economy tier-3 out of a ruin has already paid the ordering cost.
+    pub eco_tier3_owned: bool,
+    /// The map holds no water at all (Drylands), so the whole water tech lane
+    /// buys nothing — see `passes_tech_caps`. Read from the true tile set, not
+    /// the player's view: map type is public information at game start, unlike
+    /// what happens to sit under the fog.
+    pub water_dead: bool,
 }
 
 /// Minimum turns a Rider must save (vs a movement-1 unit) to some EXPAND
@@ -451,6 +740,7 @@ pub fn scripted_goal_aux(
     goal: &MacroGoal,
     techs_bought: u32,
     tier3_bought: u32,
+    arch: Option<&ArchetypeState>,
 ) -> GoalAux {
     let mut recommended = recommended_techs(state, player);
     let expand_targets: Vec<i32> = goal
@@ -475,7 +765,119 @@ pub fn scripted_goal_aux(
             }
         }
     }
-    GoalAux { recommended_techs: recommended, rider_push, techs_bought, tier3_bought }
+    // v3 archetype expression: doctrine + overlay tech lanes join the
+    // recommendations (next unowned tech per lane), preferred unit classes
+    // feed the in-tree unit bonus. FreeSpirit/Chivalry appear ONLY under a
+    // knight commitment — the stepping-stone rule (Verdi, Jul 30).
+    let mut preferred_units: Vec<crate::types::UnitType> = Vec::new();
+    let mut overlays = Overlays::default();
+    if let Some(arch) = arch {
+        use crate::types::{TechnologyType as Tech, UnitType as U};
+        overlays = arch.overlays;
+        let owned = |t: Tech| {
+            state
+                .tribes
+                .get(&player)
+                .map_or(false, |tr| crate::settings::technology::is_tech_unlocked(&tr.tech_vanilla, t))
+        };
+        let push_lane = |lane: &[Tech], recs: &mut Vec<Tech>| {
+            if let Some(t) = lane.iter().find(|t| !owned(**t)) {
+                if !recs.contains(t) {
+                    recs.push(*t);
+                }
+            }
+        };
+        match arch.archetype {
+            Some(Archetype::RiderRoads) => {
+                push_lane(&[Tech::Riding, Tech::Roads], &mut recommended);
+                preferred_units.push(U::Rider);
+            }
+            Some(Archetype::ArcherLine) => {
+                push_lane(&[Tech::Hunting, Tech::Archery], &mut recommended);
+                preferred_units.push(U::Archer);
+            }
+            Some(Archetype::ForgeGiants) => {
+                push_lane(&[Tech::Climbing, Tech::Mining, Tech::Smithery], &mut recommended);
+                preferred_units.push(U::Swordsman);
+                preferred_units.push(U::Giant);
+            }
+            None => {}
+        }
+        if overlays.defender_screen {
+            push_lane(&[Tech::Strategy], &mut recommended);
+            preferred_units.push(U::Defender);
+        }
+        if overlays.catapult_counter {
+            push_lane(&[Tech::Forestry, Tech::Mathematics], &mut recommended);
+            preferred_units.push(U::Catapult);
+        }
+        if overlays.knight_commit {
+            push_lane(&[Tech::Riding, Tech::FreeSpirit, Tech::Chivalry], &mut recommended);
+            preferred_units.push(U::Knight);
+        }
+    }
+    // v6 income lane — archetype-independent: with the third city up and a
+    // hub structure standing, Riding→Roads→Trade opens the Market.
+    let market_push = market_ready(state, player);
+    if market_push {
+        use crate::types::TechnologyType as Tech;
+        let owned = |t: Tech| {
+            state.tribes.get(&player).map_or(false, |tr| {
+                crate::settings::technology::is_tech_unlocked(&tr.tech_vanilla, t)
+            })
+        };
+        if let Some(t) = [Tech::Riding, Tech::Roads, Tech::Trade]
+            .iter()
+            .find(|t| !owned(**t))
+        {
+            if !recommended.contains(t) {
+                recommended.push(*t);
+            }
+        }
+    }
+    let water_dead = !state
+        .tiles
+        .values()
+        .any(|t| matches!(t.terrain_type, TerrainType::Water | TerrainType::Ocean));
+    // Aquatism's WaterTemple yields population, so it counts as an economic
+    // tier-3 by the table — but on a dry map it can never be built, and letting
+    // it satisfy the economy-first rule would unblock the combat lane for free.
+    let eco_tier3_owned = state.tribes.get(&player).map_or(false, |t| {
+        t.tech_vanilla.iter().any(|tech| {
+            tech.discovered
+                && crate::settings::technology::is_eco_tier3(tech.tech_type)
+                && !(water_dead && crate::settings::technology::is_water_tech(tech.tech_type))
+        })
+    });
+    GoalAux {
+        recommended_techs: recommended,
+        rider_push,
+        techs_bought,
+        tier3_bought,
+        preferred_units,
+        overlays,
+        market_push,
+        eco_tier3_owned,
+        water_dead,
+    }
+}
+
+/// v6: the market limb is worth opening — third city up and at least one
+/// hub structure (anything in Market's adjacent_types: Sawmill / Windmill /
+/// Forge) standing in own territory. Derived from settings tables.
+pub fn market_ready(state: &GameState, player: PlayerId) -> bool {
+    let Some(tribe) = state.tribes.get(&player) else {
+        return false;
+    };
+    if tribe.cities.len() < COMMIT_CITY_TARGET {
+        return false;
+    }
+    let hubs = crate::settings::structures::get_structure_setting(StructureType::Market)
+        .adjacent_types;
+    state.structures.iter().any(|(idx, s)| {
+        s.as_ref().map_or(false, |s| hubs.contains(&s.structure_type))
+            && state.tiles.get(idx).map_or(false, |t| t.owner == player)
+    })
 }
 
 /// Root-only whole-game purchase caps — applied whenever a `GoalAux` is set,
@@ -487,14 +889,116 @@ pub fn passes_tech_caps(m: &dyn Move, aux: &GoalAux) -> bool {
     if aux.techs_bought >= TECH_CAP_PER_GAME {
         return false;
     }
+    // v7.1 (Verdi, Aug 2026): on a map with no water the whole naval lane —
+    // Fishing/Sailing/Ramming/Navigation/Aquatism — unlocks nothing buildable
+    // and nothing reachable behind it. A mask, not a price: this is the
+    // never-do case masks exist for.
+    if aux.water_dead {
+        if let Ok(tech) = m.tech_type() {
+            if crate::settings::technology::is_water_dead_end(tech) {
+                return false;
+            }
+        }
+    }
+    // v3 stepping-stone rule: FreeSpirit has no standalone value — it (and
+    // Chivalry behind it) is buyable only under an active knight commitment.
+    if !aux.overlays.knight_commit {
+        if let Ok(t) = m.tech_type() {
+            if t == TechnologyType::FreeSpirit || t == TechnologyType::Chivalry {
+                return false;
+            }
+        }
+    }
+    // v7 economy-first ordering: a combat tier-3 (Chivalry/Navigation/
+    // Diplomacy — the ones unlocking no yielding structure) waits until an
+    // economic tier-3 is owned. Real games almost never take knights before
+    // the level-3 pop buildings, because those are what lead to giants; the
+    // exception (a lucky free-spirit ruin) is covered by reading OWNERSHIP,
+    // so a free economy tier-3 unblocks the lane immediately.
+    if let Ok(tech) = m.tech_type() {
+        let setting = crate::settings::technology::get_technology_setting(tech);
+        if setting.tier == Some(3)
+            && !crate::settings::technology::is_eco_tier3(tech)
+            && !aux.eco_tier3_owned
+        {
+            return false;
+        }
+    }
     if aux.tier3_bought >= TIER3_CAP_PER_GAME {
         if let Ok(tech) = m.tech_type() {
             if crate::settings::technology::get_technology_setting(tech).tier == Some(3) {
+                // v6: per-overlay tier-3 exemptions, not a global cap raise —
+                // an ACTIVE knight commitment exempts Chivalry, an active
+                // market push exempts Trade (both still count toward the
+                // whole-game cap). Otherwise the terrain lane's tier-3,
+                // bought by ~t12, permanently locked these lanes out.
+                let exempt = (aux.overlays.knight_commit && tech == TechnologyType::Chivalry)
+                    || (aux.market_push && tech == TechnologyType::Trade);
+                if !exempt {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+/// Root-only ability gate — applied whenever a `GoalAux` is set, like the
+/// tech caps. Destroy (demolish own structure) is masked out entirely: the
+/// Jul 30 2026 gauge audit measured ~9 destroys/game of pure churn, and the
+/// rare strategic rebuild is deferred until the net owns the basics.
+///
+/// v8: Clear/Burn Forest on a tile carrying a resource joins it. The ability is
+/// free and pays a star, but `consume_resource` DELETES the Game sitting there
+/// — trading a harvestable pop source for one star is dominated at every star
+/// price, so it is a mask rather than a price. Clearing bare forest stays
+/// legal and is priced by `SHAPE_GOAL_FOREST_STANDING`.
+pub fn passes_ability_gate(state: &GameState, m: &dyn Move) -> bool {
+    if m.move_type() != MoveType::Ability {
+        return true;
+    }
+    let Ok(ability) = m.ability_type() else {
+        return true;
+    };
+    if ability == AbilityType::Destroy {
+        return false;
+    }
+    if matches!(ability, AbilityType::ClearForest | AbilityType::BurnForest) {
+        if let Ok(idx) = m.target_idx() {
+            if matches!(state.resources.get(&(idx as i32)), Some(Some(_))) {
                 return false;
             }
         }
     }
     true
+}
+
+/// Root-only capture-first gate (v6): a unit standing on a capturable
+/// village/ruin never attacks — capture is strictly better (city defense
+/// bonus, unit production; attacking forfeits the capture turn and eats
+/// free retaliation). Applies even when Capture isn't legal this ply (the
+/// unit stepped on this turn): it idles and captures next turn.
+pub fn passes_capture_first(state: &GameState, m: &dyn Move) -> bool {
+    if m.move_type() != MoveType::Attack {
+        return true;
+    }
+    let Ok(src) = m.source_idx() else {
+        return true;
+    };
+    let src = src as i32;
+    let structure = state
+        .structures
+        .get(&src)
+        .and_then(|s| s.as_ref())
+        .map(|s| s.structure_type);
+    match structure {
+        Some(StructureType::Ruin) => false,
+        Some(StructureType::Village) => {
+            let owner = state.tiles.get(&src).map_or(0, |t| t.owner);
+            owner == state.settings.current_player_turn_id
+        }
+        _ => true,
+    }
 }
 
 /// True while `idx` still holds a village capturable by `player`: Village
@@ -511,6 +1015,51 @@ pub fn still_capturable(state: &GameState, idx: i32, player: PlayerId) -> bool {
             .tiles
             .get(&idx)
             .map_or(false, |t| t.owner == 0 && t.explorers.contains(&player))
+}
+
+/// v6: Chebyshev reach within which a lost/enemy-taken village stays a
+/// painted retake target — beyond it the pull would become a cross-map
+/// crusade holding the GROW window open artificially.
+pub const RETAKE_PAINT_RADIUS: i32 = 6;
+
+/// v6: an enemy-captured village worth retaking — explored, enemy-owned
+/// (never a capital: those stay Attack-order territory), within
+/// RETAKE_PAINT_RADIUS of one of our units or cities. Recapture is a legal
+/// CaptureMove; without this the EXPAND painting dropped the tile the
+/// moment its owner flipped and the retake went entirely unpriced.
+pub fn retakeable_village(state: &GameState, idx: i32, player: PlayerId) -> bool {
+    let is_village = state
+        .structures
+        .get(&idx)
+        .and_then(|s| s.as_ref())
+        .map_or(false, |s| s.structure_type == StructureType::Village);
+    if !is_village {
+        return false;
+    }
+    let Some(tile) = state.tiles.get(&idx) else {
+        return false;
+    };
+    if tile.owner == 0 || tile.owner == player || tile.capital_of != 0 {
+        return false;
+    }
+    if !tile.explorers.contains(&player) {
+        return false;
+    }
+    let size = state.settings.size as i32;
+    let Some(tribe) = state.tribes.get(&player) else {
+        return false;
+    };
+    tribe
+        .units
+        .iter()
+        .map(|u| u.coords.idx)
+        .chain(tribe.cities.iter().map(|c| c.idx))
+        .any(|a| {
+            ((a / size) - (idx / size))
+                .abs()
+                .max(((a % size) - (idx % size)).abs())
+                <= RETAKE_PAINT_RADIUS
+        })
 }
 
 /// Nearest capturable village by Chebyshev distance to any of `player`'s
@@ -559,6 +1108,334 @@ pub fn update_commitment(
     nearest_capturable_village(state, player)
 }
 
+// ======================= Exploration pack (v4 / bucket B) =======================
+
+/// Greedy unique unit→EXPAND-target assignment, nearest pair first. Each
+/// target's approach term pays only its assigned unit, so two scouts never
+/// bank progress on the same fog target (audit: 89% duplicate-sector
+/// scouting). Deterministic: ties break on (unit idx, target idx).
+pub fn assign_expand_targets(
+    state: &GameState,
+    player: PlayerId,
+    targets: &[i32],
+) -> Vec<(i32, i32)> {
+    let size = state.settings.size as i32;
+    let Some(tribe) = state.tribes.get(&player) else {
+        return Vec::new();
+    };
+    if size <= 0 {
+        return Vec::new();
+    }
+    let cheb =
+        |a: i32, b: i32| ((a / size) - (b / size)).abs().max(((a % size) - (b % size)).abs());
+    // v6: real (explored) targets outrank fog guesses in pairing — a scarce
+    // unit must never be pinned to a guess while a discovered village waits.
+    let is_guess = |t: i32| {
+        !state
+            .tiles
+            .get(&t)
+            .map_or(false, |tile| tile.explorers.contains(&player))
+    };
+    let mut pairs: Vec<(bool, i32, i32, i32)> = Vec::new();
+    for u in &tribe.units {
+        for &t in targets {
+            pairs.push((is_guess(t), cheb(u.coords.idx, t), u.coords.idx, t));
+        }
+    }
+    pairs.sort_unstable();
+    let mut used_u = std::collections::HashSet::new();
+    let mut used_t = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for (_, _, u, t) in pairs {
+        if used_u.contains(&u) || used_t.contains(&t) {
+            continue;
+        }
+        used_u.insert(u);
+        used_t.insert(t);
+        out.push((u, t));
+    }
+    out
+}
+
+// ========================= Archetype layer (v3) =========================
+// Doctrine chosen from ground-truth predicates, sticky with hysteresis,
+// expressed through tech recommendations, unit pricing, and the
+// stepping-stone tech gate. No new input channels: every predicate is a
+// function of state the net already sees (terrain, ghost units, economy).
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Archetype {
+    /// Open map + live expansion race + real route advantage, enemy not
+    /// heavy-dominant. Buys Riding→Roads ONLY (FreeSpirit is a stepping
+    /// stone redeemed solely by a knight commitment).
+    RiderRoads,
+    /// Anti-heavy/siege AND push support: range beats high defense, and a
+    /// backline wears targets down while warriors advance.
+    ArcherLine,
+    /// Metal-rich explored map, no immediate threat: Mining→Smithery,
+    /// forge economy into giants/swordsmen.
+    ForgeGiants,
+}
+
+/// Reactive overlays — composition adjustments on top of the base doctrine.
+/// Monotone within a game: they key off peak seen-counts, so they never flap.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Overlays {
+    /// Enemy cavalry-heavy → Defenders (bodies deny road corridors, defense 3
+    /// punishes cavalry trades, screens our ranged backline).
+    pub defender_screen: bool,
+    /// Enemy heavy melee (giants/swords) → catapults + archers assist.
+    pub catapult_counter: bool,
+    /// Enemy squishy spam (defense ≤ 1.5) → knights; Persist chains through
+    /// low-defense bodies. Opens the FreeSpirit→Chivalry lane.
+    pub knight_commit: bool,
+}
+
+/// Per-seat persistent archetype state, threaded through the play loop like
+/// the tech counters. Peak counts approximate observation memory: a unit
+/// seen once stays counted after it retreats into fog (the net's ghost
+/// channels carry the same information).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ArchetypeState {
+    pub archetype: Option<Archetype>,
+    pub overlays: Overlays,
+    pub seen_squishy: u32,
+    pub seen_heavy: u32,
+    pub seen_cavalry: u32,
+    pub seen_ranged: u32,
+    challenger: Option<Archetype>,
+    streak: u8,
+    last_turn: i32,
+}
+
+/// Chainable by knights: at or below this defense a kill likely frees
+/// Persist for the next body (Verdi: threshold 1.5 — riders/archers/
+/// catapults/knights in; warriors at 2.0 out).
+pub const SQUISHY_DEFENSE_MAX: f32 = 1.5;
+/// Heavy: defenders/swordsmen (3.0), giants (4.0) — outrange, don't trade.
+pub const HEAVY_DEFENSE_MIN: f32 = 3.0;
+
+/// Minimum best-score to commit to a doctrine at all.
+pub const ARCH_ENTRY_MIN: i32 = 3;
+/// A challenger must outscore the incumbent by this margin…
+pub const ARCH_SWITCH_MARGIN: i32 = 2;
+/// …for this many distinct turns before a soft switch (hysteresis).
+pub const ARCH_SWITCH_TURNS: u8 = 3;
+/// Don't read doctrine off a barely-explored map.
+pub const ARCH_MIN_EXPLORED_LAND: i32 = 12;
+/// Explored-land open-field share for rider terrain.
+pub const OPEN_FRAC_RIDER: f32 = 0.45;
+/// Explored-land rough share for archer terrain.
+pub const ROUGH_FRAC_ARCHER: f32 = 0.30;
+/// Explored metal resources for the forge line to be worth committing.
+pub const METAL_FORGE_MIN: i32 = 2;
+/// Peak seen heavy units: fires the catapult overlay AND hard-exits riders.
+pub const SEEN_HEAVY_COUNTER: u32 = 2;
+/// Peak seen cavalry: fires the defender screen.
+pub const SEEN_CAVALRY_SCREEN: u32 = 2;
+/// Peak seen squishy units: opens the knight commitment.
+pub const SEEN_SQUISHY_KNIGHT: u32 = 4;
+
+/// Explored-map terrain read (FOW-honest, same style as `recommended_techs`).
+struct MapRead {
+    land: i32,
+    open_frac: f32,
+    rough_frac: f32,
+    metal: i32,
+}
+
+fn read_map(state: &GameState, player: PlayerId) -> MapRead {
+    use crate::types::{ResourceType as R, TerrainType as T};
+    let (mut open, mut rough, mut land, mut metal) = (0i32, 0i32, 0i32, 0i32);
+    for (idx, tile) in state.tiles.iter() {
+        if !tile.explorers.contains(&player) {
+            continue;
+        }
+        match tile.terrain_type {
+            T::Field => {
+                open += 1;
+                land += 1;
+            }
+            T::Forest | T::Mountain | T::Wetland | T::Mangrove => {
+                rough += 1;
+                land += 1;
+            }
+            _ => {}
+        }
+        if let Some(Some(r)) = state.resources.get(idx) {
+            if r.resource_type == R::Metal {
+                metal += 1;
+            }
+        }
+    }
+    let denom = land.max(1) as f32;
+    MapRead { land, open_frac: open as f32 / denom, rough_frac: rough as f32 / denom, metal }
+}
+
+/// Update peak seen-counts from enemy units standing on tiles this player
+/// has explored — the script-side proxy for the ghost channels.
+fn observe_enemies(state: &GameState, player: PlayerId, st: &mut ArchetypeState) {
+    let (mut sq, mut hv, mut cav, mut rng) = (0u32, 0u32, 0u32, 0u32);
+    for (id, t) in &state.tribes {
+        if *id == player {
+            continue;
+        }
+        for u in &t.units {
+            let seen = state
+                .tiles
+                .get(&u.coords.idx)
+                .map_or(false, |tl| tl.explorers.contains(&player));
+            if !seen {
+                continue;
+            }
+            let s = crate::settings::units::get_unit_setting(u.unit_type);
+            if s.defense <= SQUISHY_DEFENSE_MAX {
+                sq += 1;
+            }
+            if s.defense >= HEAVY_DEFENSE_MIN {
+                hv += 1;
+            }
+            if s.movement >= 2 {
+                cav += 1;
+            }
+            if s.range >= 2 {
+                rng += 1;
+            }
+        }
+    }
+    st.seen_squishy = st.seen_squishy.max(sq);
+    st.seen_heavy = st.seen_heavy.max(hv);
+    st.seen_cavalry = st.seen_cavalry.max(cav);
+    st.seen_ranged = st.seen_ranged.max(rng);
+}
+
+/// Score each doctrine from the predicates. 0 = not viable right now.
+fn archetype_scores(
+    state: &GameState,
+    player: PlayerId,
+    goal: &MacroGoal,
+    st: &ArchetypeState,
+    map: &MapRead,
+) -> [(Archetype, i32); 3] {
+    let tribe_cities =
+        state.tribes.get(&player).map_or(0, |t| t.cities.len());
+    let race_live = tribe_cities < COMMIT_CITY_TARGET
+        || goal.orders.iter().any(|(k, _)| *k == OrderKind::Expand);
+    let expand_targets: Vec<i32> = goal
+        .orders
+        .iter()
+        .filter(|(k, _)| *k == OrderKind::Expand)
+        .map(|(_, i)| *i)
+        .collect();
+    let mobility = !expand_targets.is_empty()
+        && rider_turns_saved(state, player, &expand_targets) >= RIDER_PUSH_MIN_TURNS_SAVED;
+
+    // Contact: a seen enemy within 3 of our units/cities — the skirmish
+    // condition under which an archer backline pays.
+    let size = state.settings.size as i32;
+    let cheb =
+        |a: i32, b: i32| ((a / size) - (b / size)).abs().max(((a % size) - (b % size)).abs());
+    let contact = state.tribes.iter().filter(|(id, _)| **id != player).any(|(_, t)| {
+        t.units.iter().any(|e| {
+            let seen = state
+                .tiles
+                .get(&e.coords.idx)
+                .map_or(false, |tl| tl.explorers.contains(&player));
+            seen && state.tribes.get(&player).map_or(false, |own| {
+                own.units.iter().any(|u| cheb(u.coords.idx, e.coords.idx) <= 3)
+                    || own.cities.iter().any(|c| cheb(c.idx, e.coords.idx) <= 3)
+            })
+        })
+    });
+
+    let rider = if st.seen_heavy >= SEEN_HEAVY_COUNTER {
+        0 // hard-countered: riders lose into a heavy wall
+    } else {
+        2 * (map.open_frac >= OPEN_FRAC_RIDER) as i32
+            + 2 * mobility as i32
+            + race_live as i32
+            + (st.seen_ranged >= 2) as i32 // riders punish a ranged backline
+    };
+    let archer = 2 * (st.seen_heavy >= 1) as i32
+        + (map.rough_frac >= ROUGH_FRAC_ARCHER) as i32
+        + 2 * contact as i32;
+    let has_defend = goal.orders.iter().any(|(k, _)| *k == OrderKind::Defend);
+    let forge = 2 * (map.metal >= METAL_FORGE_MIN) as i32
+        + (map.rough_frac >= ROUGH_FRAC_ARCHER) as i32
+        + (!has_defend) as i32;
+    [
+        (Archetype::RiderRoads, rider),
+        (Archetype::ArcherLine, archer),
+        (Archetype::ForgeGiants, forge),
+    ]
+}
+
+/// Per-ply archetype update: observe enemies (peaks), refresh overlays,
+/// then enter/hold/switch the base doctrine with hysteresis — hard exits
+/// fire immediately (score drops to 0), soft switches need the challenger
+/// to outscore by `ARCH_SWITCH_MARGIN` for `ARCH_SWITCH_TURNS` turns.
+pub fn update_archetype(
+    state: &GameState,
+    player: PlayerId,
+    goal: &MacroGoal,
+    st: &mut ArchetypeState,
+) {
+    observe_enemies(state, player, st);
+    st.overlays = Overlays {
+        defender_screen: st.seen_cavalry >= SEEN_CAVALRY_SCREEN,
+        catapult_counter: st.seen_heavy >= SEEN_HEAVY_COUNTER,
+        knight_commit: st.seen_squishy >= SEEN_SQUISHY_KNIGHT,
+    };
+
+    let map = read_map(state, player);
+    if map.land < ARCH_MIN_EXPLORED_LAND {
+        return; // too little signal to commit a doctrine
+    }
+    let scores = archetype_scores(state, player, goal, st, &map);
+    let score_of = |a: Archetype| scores.iter().find(|(k, _)| *k == a).map_or(0, |(_, s)| *s);
+    let (best, best_score) =
+        scores.iter().copied().max_by_key(|(_, s)| *s).unwrap_or((Archetype::RiderRoads, 0));
+
+    let turn = state.settings.turn;
+    let new_turn = turn != st.last_turn;
+    st.last_turn = turn;
+
+    match st.archetype {
+        None => {
+            if best_score >= ARCH_ENTRY_MIN {
+                st.archetype = Some(best);
+                st.challenger = None;
+                st.streak = 0;
+            }
+        }
+        Some(cur) => {
+            if score_of(cur) == 0 {
+                // Hard exit — re-pick immediately if anything is viable.
+                st.archetype = (best_score >= ARCH_ENTRY_MIN).then_some(best);
+                st.challenger = None;
+                st.streak = 0;
+            } else if best != cur && best_score >= score_of(cur) + ARCH_SWITCH_MARGIN {
+                if st.challenger == Some(best) {
+                    if new_turn {
+                        st.streak += 1;
+                    }
+                } else {
+                    st.challenger = Some(best);
+                    st.streak = 1;
+                }
+                if st.streak >= ARCH_SWITCH_TURNS {
+                    st.archetype = Some(best);
+                    st.challenger = None;
+                    st.streak = 0;
+                }
+            } else {
+                st.challenger = None;
+                st.streak = 0;
+            }
+        }
+    }
+}
+
 /// Root-only research gate (v2.2, granular). Every non-Research move passes.
 /// A gated Research move passes only when the buyer retains
 /// `STAR_GATE_RESERVE` stars after the purchase. What counts as gated:
@@ -569,7 +1446,12 @@ pub fn update_commitment(
 /// - `Some(Unlock)`: nothing gated (no unlock policy yet).
 /// - `None`: every tech (the EXP_ELO_026 legacy gate, kept reproducible for
 ///   arena `--macro-star-gate`).
-pub fn passes_star_gate(state: &GameState, m: &dyn Move, stance: Option<Stance>) -> bool {
+pub fn passes_star_gate(
+    state: &GameState,
+    m: &dyn Move,
+    stance: Option<Stance>,
+    aux: Option<&GoalAux>,
+) -> bool {
     if m.move_type() != MoveType::Research {
         return true;
     }
@@ -580,6 +1462,15 @@ pub fn passes_star_gate(state: &GameState, m: &dyn Move, stance: Option<Stance>)
     let Ok(tech) = m.tech_type() else {
         return true;
     };
+    // v6: an active knight commitment makes its lane stance-coherent — the
+    // stance-class gating no longer applies (GROW gated Chivalry as combat
+    // tech while ARM gated FreeSpirit as eco tech, blocking the lane from
+    // both sides). passes_tech_caps already restricts the lane to commits.
+    if (tech == TechnologyType::FreeSpirit || tech == TechnologyType::Chivalry)
+        && aux.map_or(false, |a| a.overlays.knight_commit)
+    {
+        return true;
+    }
     let effects = crate::settings::technology::get_tech_effects(tech);
     let gated = match stance {
         None => true,
@@ -587,6 +1478,8 @@ pub fn passes_star_gate(state: &GameState, m: &dyn Move, stance: Option<Stance>)
         Some(Stance::Arm) => {
             crate::settings::technology::is_eco_tech(tech) && effects.combat_units.is_empty()
         }
+        // v7: while banking, every tech class competes with the batch.
+        Some(Stance::Save) => true,
         Some(Stance::Unlock) => false,
     };
     if !gated {
@@ -603,6 +1496,30 @@ mod tests {
     use crate::Coords;
     use crate::states::{StructureState, TileState, TribeState, UnitState};
     use crate::types::{TechnologyType, UnitType};
+
+    /// End-to-end: a real generated Drylands game must report `water_dead`
+    /// through the same path self_play uses, and mask the naval lane there.
+    #[test]
+    fn a_generated_drylands_game_masks_the_water_lane() {
+        let mut game = crate::game::Game::new();
+        for seed in 0..8 {
+            game.state = crate::mapgen::generate(crate::mapgen::MapGenSettings {
+                size: crate::types::MapSize::Tiny,
+                map_type: crate::types::MapType::Drylands,
+                tribes: vec![crate::types::TribeType::Imperius, crate::types::TribeType::Bardur],
+                seed,
+                version: 115,
+            });
+            game.post_load();
+            let goal = MacroGoal::default();
+            let aux = scripted_goal_aux(&game.state, 1, &goal, 0, 0, None);
+            assert!(aux.water_dead, "seed {seed}: generated Drylands still reads wet");
+            assert!(
+                !passes_tech_caps(&ResearchMove::new(TechnologyType::Fishing), &aux),
+                "seed {seed}: Fishing survived the mask"
+            );
+        }
+    }
 
     fn unit_at(idx: i32) -> UnitState {
         UnitState {
@@ -639,6 +1556,70 @@ mod tests {
     }
 
     #[test]
+    fn capture_first_gate_blocks_attacks_from_capturable_tiles() {
+        use crate::moves::attack::AttackMove;
+        let mut state = state_with_villages(10, &[10]);
+        state.settings.current_player_turn_id = 1;
+        let attack = AttackMove::new(10, 11);
+
+        // Standing on a neutral village: attack blocked.
+        assert!(!passes_capture_first(&state, &attack));
+
+        // Enemy-owned village (their city): still blocked — recapture instead.
+        state.tiles.get_mut(&10).unwrap().owner = 2;
+        assert!(!passes_capture_first(&state, &attack));
+
+        // Own city tile: attack allowed.
+        state.tiles.get_mut(&10).unwrap().owner = 1;
+        assert!(passes_capture_first(&state, &attack));
+
+        // Ruin: blocked.
+        state.structures.insert(
+            10,
+            Some(StructureState {
+                structure_type: StructureType::Ruin,
+                level: 0,
+                founded: 0,
+            }),
+        );
+        assert!(!passes_capture_first(&state, &attack));
+
+        // Plain tile: allowed; non-attack moves always pass.
+        state.structures.shift_remove(&10);
+        assert!(passes_capture_first(&state, &attack));
+        assert!(passes_capture_first(&state, &EndTurnMove));
+    }
+
+    #[test]
+    fn retakeable_village_predicate_and_radius() {
+        let mut state = state_with_villages(13, &[12]);
+        state.settings.size = 11;
+        // Neutral: not retakeable (still_capturable covers it).
+        assert!(!retakeable_village(&state, 12, 1));
+        // Enemy-owned, explored, within radius of our unit at 10: retakeable.
+        state.tiles.get_mut(&12).unwrap().owner = 2;
+        assert!(retakeable_village(&state, 12, 1));
+        // Enemy capital: never painted.
+        state.tiles.get_mut(&12).unwrap().capital_of = 2;
+        assert!(!retakeable_village(&state, 12, 1));
+        state.tiles.get_mut(&12).unwrap().capital_of = 0;
+        // Beyond RETAKE_PAINT_RADIUS: not painted (move our unit far away).
+        state.tribes.get_mut(&1).unwrap().units[0] = unit_at(120);
+        assert!(!retakeable_village(&state, 12, 1));
+    }
+
+    #[test]
+    fn real_target_outranks_fog_guess_in_assignment() {
+        // One unit, two targets: a fog guess NEARBY and a real explored
+        // village further out — the unit must pair with the real one.
+        let mut state = state_with_villages(0, &[5]);
+        state.settings.size = 11;
+        // Fog guess at 2 (no tile entry → unexplored), real village at 5.
+        let pairs = assign_expand_targets(&state, 1, &[2, 5]);
+        assert_eq!(pairs, vec![(0, 5)]);
+    }
+
+    #[test]
     fn commitment_picks_nearest_is_sticky_and_retires_at_three_cities() {
         let mut state = state_with_villages(0, &[3, 5]);
         // Fresh pick: village at idx 3 is 3 tiles away vs 5 for idx 5.
@@ -667,12 +1648,177 @@ mod tests {
         state.tiles.insert(idx, tile);
     }
 
+    /// v7: SAVE fires only for a batch that is out of pocket now but inside
+    /// SAVE_MAX_TURNS of income, so it self-terminates instead of becoming an
+    /// open-ended hoard — the failure mode a savings reward invites.
+    #[test]
+    fn save_stance_targets_a_reachable_batch_and_self_terminates() {
+        use crate::types::{StructureType, TechnologyType};
+        let mut state = state_with_villages(0, &[3, 5]);
+        {
+            let t1 = state.tribes.get_mut(&1).unwrap();
+            for tech in [
+                TechnologyType::Organization,
+                TechnologyType::Farming,
+                TechnologyType::Construction,
+            ] {
+                t1.tech_vanilla.push(crate::states::TechnologyState {
+                    tech_type: tech,
+                    discovered: true,
+                    discovered_turn: 0,
+                });
+            }
+            t1.cities.push(crate::states::CityState {
+                idx: 60,
+                owner: 1,
+                _territory: vec![60, 61, 50, 72],
+                production: 2, // income, so the batch is reachable at all
+                ..Default::default()
+            });
+        }
+        // Two standing Farms around the empty field at 61 → a Windmill worth
+        // banking for (2 partners clears SAVE_MIN_PARTNERS).
+        for idx in [50, 72] {
+            state.structures.insert(
+                idx,
+                Some(crate::states::StructureState {
+                    structure_type: StructureType::Farm,
+                    ..Default::default()
+                }),
+            );
+        }
+        for idx in [60, 61, 50, 72] {
+            let tile = state.tiles.entry(idx).or_insert_with(TileState::default);
+            tile.owner = 1;
+            tile.terrain_type = crate::types::TerrainType::Field;
+        }
+        assert_eq!(save_batch_cost(&state, 1, 0), Some(5), "one 5-star windmill, tech owned");
+
+        // The lane is what costs: drop Construction and the batch must absorb
+        // the tier-3 tech price, which is the thing actually worth banking for.
+        {
+            state
+                .tribes
+                .get_mut(&1)
+                .unwrap()
+                .tech_vanilla
+                .retain(|t| t.tech_type != TechnologyType::Construction);
+            let tech_cost = crate::functions::get_tech_cost(
+                &state.tribes[&1],
+                TechnologyType::Construction,
+            );
+            assert!(tech_cost > 0);
+            assert_eq!(save_batch_cost(&state, 1, 0), Some(5 + tech_cost));
+            state.tribes.get_mut(&1).unwrap().tech_vanilla.push(
+                crate::states::TechnologyState {
+                    tech_type: TechnologyType::Construction,
+                    discovered: true,
+                    discovered_turn: 0,
+                },
+            );
+        }
+
+        // Broke but within reach → SAVE with the batch named.
+        state.tribes.get_mut(&1).unwrap().stars = 1;
+        let g = scripted_goal(&state, 1, 0);
+        assert_eq!(g.stance, Stance::Save);
+        assert_eq!(g.save_target, Some(5));
+
+        // Already affordable → nothing to save for, back to GROW.
+        state.tribes.get_mut(&1).unwrap().stars = 5;
+        let g = scripted_goal(&state, 1, 0);
+        assert_eq!(g.stance, Stance::Grow);
+        assert_eq!(g.save_target, None);
+
+        // Out of reach (no income, batch unaffordable for SAVE_MAX_TURNS) →
+        // GROW rather than an indefinite hoard.
+        state.tribes.get_mut(&1).unwrap().stars = 0;
+        state.tribes.get_mut(&1).unwrap().cities[0].production = 0;
+        let far = scripted_goal(&state, 1, 0);
+        assert!(
+            far.stance != Stance::Save || far.save_target.is_some(),
+            "SAVE is only ever set together with a named target"
+        );
+    }
+
+    /// v7: a discretionary stance swing must hold for STANCE_SWITCH_TURNS
+    /// turns, and re-running the same turn's plies must not advance the streak
+    /// (the goal-setter runs every ply, the commitment counts turns).
+    #[test]
+    fn stance_commitment_damps_discretionary_swings_across_turns() {
+        let mut st = StanceCommit::default();
+        let mut state = state_with_villages(0, &[3, 5]);
+        state.settings.turn = 1;
+
+        // First read commits immediately — nothing to be loyal to yet.
+        assert_eq!(update_goal(&state, 1, &mut st, 0).stance, Stance::Grow);
+        assert_eq!(st.stance, Some(Stance::Grow));
+
+        // Force the script to want ARM: post-expansion "prepare" phase — an
+        // explored enemy city we outweigh but cannot yet storm, at 3+ cities.
+        let mut t2 = TribeState::default();
+        t2.cities.push(crate::states::CityState { idx: 40, ..Default::default() });
+        t2.units.push(unit_at(41));
+        state.tribes.insert(2, t2);
+        explore_tile(&mut state, 40);
+        let t1 = state.tribes.get_mut(&1).unwrap();
+        t1.units.push(unit_at(29));
+        for _ in 0..3 {
+            t1.cities.push(Default::default());
+        }
+        assert_eq!(
+            scripted_goal(&state, 1, 0).stance,
+            Stance::Arm,
+            "precondition: script wants ARM here"
+        );
+
+        // Same turn, several plies: the challenger must not accrue a streak.
+        for _ in 0..4 {
+            assert_eq!(
+                update_goal(&state, 1, &mut st, 0).stance,
+                Stance::Grow,
+                "extra plies of one turn must not buy a stance switch"
+            );
+        }
+        // Next turn: streak reaches STANCE_SWITCH_TURNS and the switch lands.
+        state.settings.turn = 2;
+        assert_eq!(update_goal(&state, 1, &mut st, 0).stance, Stance::Arm);
+        assert_eq!(st.stance_flips, 1);
+    }
+
+    /// Threat responses bypass the hysteresis — a DEFEND order means an enemy
+    /// is already inside the threat radius, and arriving two turns late is the
+    /// same as not arriving.
+    #[test]
+    fn stance_commitment_lets_threat_response_switch_immediately() {
+        let mut st = StanceCommit::default();
+        let mut state = state_with_villages(0, &[3, 5]);
+        state.settings.turn = 1;
+        assert_eq!(update_goal(&state, 1, &mut st, 0).stance, Stance::Grow);
+
+        // Two enemy units within 2 of an own city → DEFEND → ARM.
+        state.tribes.get_mut(&1).unwrap().cities.push(crate::states::CityState {
+            idx: 0,
+            ..Default::default()
+        });
+        let t2 = state.tribes.entry(2).or_insert_with(TribeState::default);
+        t2.id = 2;
+        t2.units.push(unit_at(1));
+        t2.units.push(unit_at(11));
+        explore_tile(&mut state, 1);
+        explore_tile(&mut state, 11);
+        let g = update_goal(&state, 1, &mut st, 0);
+        assert!(g.orders.iter().any(|(k, _)| *k == OrderKind::Defend));
+        assert_eq!(g.stance, Stance::Arm, "threat response must not wait");
+        assert_eq!(st.stance_flips, 1);
+    }
+
     #[test]
     fn scripted_goal_paints_expand_attack_defend_and_sets_stance() {
         let mut state = state_with_villages(0, &[3, 5]);
         // Under 3 cities with two capturable villages → two EXPAND orders,
         // sorted, GROW stance, star gate active.
-        let g = scripted_goal(&state, 1);
+        let g = scripted_goal(&state, 1, 0);
         assert_eq!(
             g.orders,
             vec![(OrderKind::Expand, 3), (OrderKind::Expand, 5)]
@@ -689,7 +1835,7 @@ mod tests {
         let t1 = state.tribes.get_mut(&1).unwrap();
         t1.units.push(unit_at(39));
         t1.units.push(unit_at(29));
-        let g = scripted_goal(&state, 1);
+        let g = scripted_goal(&state, 1, 0);
         assert!(g.orders.contains(&(OrderKind::Attack, 40)));
         assert_eq!(g.stance, Stance::Grow);
 
@@ -701,7 +1847,7 @@ mod tests {
         let t2 = state.tribes.get_mut(&2).unwrap();
         t2.units.push(unit_at(1));
         t2.units.push(unit_at(12));
-        let g = scripted_goal(&state, 1);
+        let g = scripted_goal(&state, 1, 0);
         assert!(g.orders.contains(&(OrderKind::Defend, 0)));
         assert_eq!(g.stance, Stance::Arm);
     }
@@ -720,22 +1866,22 @@ mod tests {
         let t1 = state.tribes.get_mut(&1).unwrap();
         t1.units.push(unit_at(39));
         t1.units.push(unit_at(29));
-        let g = scripted_goal(&state, 1);
+        let g = scripted_goal(&state, 1, 0);
         assert!(!g.orders.iter().any(|(k, _)| *k == OrderKind::Attack));
 
         // A third attacker reaches parity-plus but not the 1.5x margin.
         state.tribes.get_mut(&1).unwrap().units.push(unit_at(30));
-        let g = scripted_goal(&state, 1);
+        let g = scripted_goal(&state, 1, 0);
         assert!(!g.orders.iter().any(|(k, _)| *k == OrderKind::Attack));
 
         // A fourth clears the margin → ATTACK.
         state.tribes.get_mut(&1).unwrap().units.push(unit_at(20));
-        let g = scripted_goal(&state, 1);
+        let g = scripted_goal(&state, 1, 0);
         assert!(g.orders.contains(&(OrderKind::Attack, 40)));
 
         // Unexplored enemy city never draws an order.
         state.tiles.get_mut(&40).unwrap().explorers.clear();
-        let g = scripted_goal(&state, 1);
+        let g = scripted_goal(&state, 1, 0);
         assert!(!g.orders.iter().any(|(k, _)| *k == OrderKind::Attack));
     }
 
@@ -753,14 +1899,14 @@ mod tests {
         t1.units.push(unit_at(29));
 
         // Still expanding (<3 cities): prepare must NOT override GROW.
-        let g = scripted_goal(&state, 1);
+        let g = scripted_goal(&state, 1, 0);
         assert_eq!(g.stance, Stance::Grow);
 
         let t1 = state.tribes.get_mut(&1).unwrap();
         for _ in 0..3 {
             t1.cities.push(Default::default());
         }
-        let g = scripted_goal(&state, 1);
+        let g = scripted_goal(&state, 1, 0);
         assert_eq!(g.stance, Stance::Arm);
         assert!(!g.orders.iter().any(|(k, _)| *k == OrderKind::Attack));
     }
@@ -772,7 +1918,7 @@ mod tests {
         for _ in 0..3 {
             t1.cities.push(Default::default());
         }
-        let g = scripted_goal(&state, 1);
+        let g = scripted_goal(&state, 1, 0);
         assert!(g.orders.contains(&(OrderKind::Expand, 3)));
         assert_eq!(g.stance, Stance::Grow);
         assert!(!goal_star_gate(&state, 1, &g));
@@ -788,14 +1934,14 @@ mod tests {
         let research = ResearchMove::new(tech);
 
         state.tribes.get_mut(&1).unwrap().stars = cost + STAR_GATE_RESERVE - 1;
-        assert!(!passes_star_gate(&state, &research, None));
+        assert!(!passes_star_gate(&state, &research, None, None));
 
         state.tribes.get_mut(&1).unwrap().stars = cost + STAR_GATE_RESERVE;
-        assert!(passes_star_gate(&state, &research, None));
+        assert!(passes_star_gate(&state, &research, None, None));
 
         // Non-research moves always pass, regardless of stars.
         state.tribes.get_mut(&1).unwrap().stars = 0;
-        assert!(passes_star_gate(&state, &EndTurnMove, None));
+        assert!(passes_star_gate(&state, &EndTurnMove, None, None));
     }
 
     #[test]
@@ -812,16 +1958,16 @@ mod tests {
         // GROW gates combat-unit tech only; eco and passage flow freely
         // (Climbing carries a defense bonus but fields no unit).
         let grow = Some(Stance::Grow);
-        assert!(passes_star_gate(&state, &eco, grow));
-        assert!(passes_star_gate(&state, &passage, grow));
-        assert!(!passes_star_gate(&state, &combat, grow));
-        assert!(!passes_star_gate(&state, &mixed, grow));
+        assert!(passes_star_gate(&state, &eco, grow, None));
+        assert!(passes_star_gate(&state, &passage, grow, None));
+        assert!(!passes_star_gate(&state, &combat, grow, None));
+        assert!(!passes_star_gate(&state, &mixed, grow, None));
 
         // ARM flips it: pure-eco tech gated, unit tech (incl. mixed) free.
         let arm = Some(Stance::Arm);
-        assert!(!passes_star_gate(&state, &eco, arm));
-        assert!(passes_star_gate(&state, &combat, arm));
-        assert!(passes_star_gate(&state, &mixed, arm));
+        assert!(!passes_star_gate(&state, &eco, arm, None));
+        assert!(passes_star_gate(&state, &combat, arm, None));
+        assert!(passes_star_gate(&state, &mixed, arm, None));
 
         // Reserve still lifts a gated class.
         let cost = crate::functions::get_tech_cost(
@@ -829,11 +1975,245 @@ mod tests {
             TechnologyType::Riding,
         );
         state.tribes.get_mut(&1).unwrap().stars = cost + STAR_GATE_RESERVE;
-        assert!(passes_star_gate(&state, &combat, grow));
+        assert!(passes_star_gate(&state, &combat, grow, None));
 
         // UNLOCK gates nothing (no unlock policy yet).
         state.tribes.get_mut(&1).unwrap().stars = 0;
-        assert!(passes_star_gate(&state, &combat, Some(Stance::Unlock)));
+        assert!(passes_star_gate(&state, &combat, Some(Stance::Unlock), None));
+
+        // v6: an active knight commitment makes its lane stance-coherent —
+        // FreeSpirit passes under ARM and Chivalry under GROW, even broke;
+        // without the commit both stay gated by their stance class.
+        let free_spirit = ResearchMove::new(TechnologyType::FreeSpirit);
+        let chivalry = ResearchMove::new(TechnologyType::Chivalry);
+        let mut committed = GoalAux::default();
+        committed.overlays.knight_commit = true;
+        let uncommitted = GoalAux::default();
+        assert!(passes_star_gate(&state, &chivalry, grow, Some(&committed)));
+        assert!(passes_star_gate(&state, &free_spirit, arm, Some(&committed)));
+        assert!(!passes_star_gate(&state, &chivalry, grow, Some(&uncommitted)));
+        assert!(!passes_star_gate(&state, &free_spirit, arm, Some(&uncommitted)));
+    }
+
+    #[test]
+    fn market_ready_needs_three_cities_and_a_hub() {
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        let mut t1 = TribeState::default();
+        for i in 0..3 {
+            t1.cities.push(crate::states::CityState { idx: i, owner: 1, ..Default::default() });
+        }
+        state.tribes.insert(1, t1);
+        // Three cities but no hub yet.
+        assert!(!market_ready(&state, 1));
+        // A windmill on own territory opens the lane.
+        state.structures.insert(
+            40,
+            Some(StructureState {
+                structure_type: StructureType::Windmill,
+                level: 0,
+                founded: 0,
+            }),
+        );
+        state.tiles.entry(40).or_insert_with(TileState::default).owner = 1;
+        assert!(market_ready(&state, 1));
+        // Two cities: not ready even with the hub.
+        state.tribes.get_mut(&1).unwrap().cities.pop();
+        assert!(!market_ready(&state, 1));
+    }
+
+    #[test]
+    fn tier3_cap_exempts_chivalry_under_knight_commit() {
+        let chivalry = ResearchMove::new(TechnologyType::Chivalry);
+        let math = ResearchMove::new(TechnologyType::Mathematics);
+        let mut aux = GoalAux::default();
+        aux.tier3_bought = TIER3_CAP_PER_GAME;
+        aux.overlays.knight_commit = true;
+        aux.eco_tier3_owned = true; // v7: economy first, then the combat lane
+        // Cap spent: Chivalry still passes under the commit; other tier-3s
+        // stay blocked; without the commit Chivalry is blocked too (by the
+        // stepping-stone rule AND the cap).
+        assert!(passes_tech_caps(&chivalry, &aux));
+        assert!(!passes_tech_caps(&math, &aux));
+        aux.overlays.knight_commit = false;
+        assert!(!passes_tech_caps(&chivalry, &aux));
+    }
+
+    /// v7 (Verdi): players almost never take knights before the level-3 pop
+    /// buildings, because those are what lead to giants. A combat tier-3 waits
+    /// for an economic one — and OWNERSHIP is the predicate, so a free
+    /// economy tier-3 out of a ruin unblocks it immediately.
+    #[test]
+    fn combat_tier3_waits_for_an_economic_tier3() {
+        let chivalry = ResearchMove::new(TechnologyType::Chivalry);
+        let construction = ResearchMove::new(TechnologyType::Construction);
+        let mut aux = GoalAux::default();
+        aux.overlays.knight_commit = true; // clears the stepping-stone rule
+        aux.tier3_bought = 0; // budget available
+
+        assert!(
+            !passes_tech_caps(&chivalry, &aux),
+            "combat tier-3 blocked while no economic tier-3 is owned"
+        );
+        assert!(
+            passes_tech_caps(&construction, &aux),
+            "the economic tier-3 itself is never blocked by the ordering rule"
+        );
+        aux.eco_tier3_owned = true;
+        assert!(passes_tech_caps(&chivalry, &aux), "economy first, then knights");
+
+        // Two slots now, so economy + combat both fit in one game.
+        assert_eq!(TIER3_CAP_PER_GAME, 2);
+        aux.tier3_bought = 1;
+        assert!(passes_tech_caps(&chivalry, &aux));
+        aux.tier3_bought = 2;
+        assert!(!passes_tech_caps(&construction, &aux), "cap still binds at 2");
+    }
+
+    /// The economic/combat split must come from the settings tables, not a
+    /// hand list — the exact discipline `max_affordable_pop` failed at.
+    #[test]
+    fn eco_tier3_classification_is_table_derived() {
+        use crate::settings::technology::is_eco_tier3;
+        for t in [
+            TechnologyType::Construction,
+            TechnologyType::Mathematics,
+            TechnologyType::Smithery,
+            TechnologyType::Trade,
+            TechnologyType::Philosophy,
+        ] {
+            assert!(is_eco_tier3(t), "{t:?} unlocks a yielding structure");
+        }
+        for t in [TechnologyType::Chivalry, TechnologyType::Navigation] {
+            assert!(!is_eco_tier3(t), "{t:?} unlocks no yielding structure");
+        }
+        // Not tier 3 at all.
+        assert!(!is_eco_tier3(TechnologyType::Farming));
+    }
+
+    /// On a dry map the naval lane unlocks nothing, so it is masked at the
+    /// root — but only the lane that dead-ends, and only when the map is dry.
+    #[test]
+    fn water_techs_are_masked_only_on_a_map_without_water() {
+        let mut aux = GoalAux::default();
+        aux.overlays.knight_commit = true;
+        aux.eco_tier3_owned = true;
+
+        let wet = [
+            TechnologyType::Fishing,
+            TechnologyType::Sailing,
+            TechnologyType::Ramming,
+            TechnologyType::Aquatism,
+            TechnologyType::Navigation,
+        ];
+        aux.water_dead = false;
+        for t in wet {
+            assert!(passes_tech_caps(&ResearchMove::new(t), &aux), "{t:?} legal with water");
+        }
+        aux.water_dead = true;
+        for t in wet {
+            assert!(!passes_tech_caps(&ResearchMove::new(t), &aux), "{t:?} dead without water");
+        }
+        // Land techs are untouched, and a non-Research move never sees the gate.
+        for t in [TechnologyType::Construction, TechnologyType::Chivalry, TechnologyType::Riding] {
+            assert!(passes_tech_caps(&ResearchMove::new(t), &aux), "{t:?} unaffected");
+        }
+    }
+
+    /// Aquatism yields population, so the table calls it an economic tier-3 —
+    /// but a WaterTemple can never be built on a dry map, and letting it pass
+    /// the economy-first rule would hand the combat lane a free unlock.
+    #[test]
+    fn a_water_tier3_does_not_satisfy_the_economy_first_rule_when_dry() {
+        use crate::states::TechnologyState;
+        let mut state = GameState::default();
+        let mut t1 = TribeState::default();
+        t1.tech_vanilla.push(TechnologyState {
+            tech_type: TechnologyType::Aquatism,
+            discovered: true,
+            discovered_turn: 3,
+        });
+        state.tribes.insert(1, t1);
+        // No tiles at all -> no water.
+        let goal = MacroGoal::default();
+        let dry = scripted_goal_aux(&state, 1, &goal, 0, 0, None);
+        assert!(dry.water_dead);
+        assert!(!dry.eco_tier3_owned, "a dead water temple is not an economy");
+
+        // Same tech, same seat, on a map that has water: it counts.
+        let mut wet_tile = TileState::default();
+        wet_tile.terrain_type = TerrainType::Water;
+        state.tiles.insert(0, wet_tile);
+        let wet = scripted_goal_aux(&state, 1, &goal, 0, 0, None);
+        assert!(!wet.water_dead);
+        assert!(wet.eco_tier3_owned);
+    }
+
+    /// A lane's price is the whole path to it, not just the last tech.
+    #[test]
+    fn tech_chain_cost_prices_undiscovered_prerequisites() {
+        use crate::settings::technology::get_technology_setting;
+        let mut t1 = TribeState::default();
+        t1.cities.push(crate::states::CityState::default());
+        let direct = crate::functions::get_tech_cost(&t1, TechnologyType::Trade);
+        let chain = tech_chain_cost(&t1, TechnologyType::Trade);
+        assert!(
+            chain > direct,
+            "Trade sits behind Roads behind Riding — the chain must cost more \
+             than the tech alone ({chain} vs {direct})"
+        );
+        // Owning the prerequisite removes its cost from the chain.
+        let req = get_technology_setting(TechnologyType::Trade).requires.unwrap();
+        t1.tech_vanilla.push(crate::states::TechnologyState {
+            tech_type: req,
+            discovered: true,
+            discovered_turn: 0,
+        });
+        assert_eq!(tech_chain_cost(&t1, TechnologyType::Trade), direct);
+    }
+
+    /// A lane the tier-3 cap will refuse is not a plan — it is a hoard with no
+    /// exit. v7 shipped priced-but-unbuyable lanes; this pins the fix.
+    #[test]
+    fn save_batch_skips_lanes_the_tier3_cap_will_refuse() {
+        use crate::types::{StructureType, TechnologyType, TerrainType};
+        let mut state = state_with_villages(0, &[3, 5]);
+        {
+            let t1 = state.tribes.get_mut(&1).unwrap();
+            for tech in [TechnologyType::Organization, TechnologyType::Farming] {
+                t1.tech_vanilla.push(crate::states::TechnologyState {
+                    tech_type: tech,
+                    discovered: true,
+                    discovered_turn: 0,
+                });
+            }
+            t1.cities.push(crate::states::CityState {
+                idx: 60,
+                owner: 1,
+                _territory: vec![60, 61, 50, 72],
+                production: 2,
+                ..Default::default()
+            });
+        }
+        for idx in [50, 72] {
+            state.structures.insert(
+                idx,
+                Some(crate::states::StructureState {
+                    structure_type: StructureType::Farm,
+                    ..Default::default()
+                }),
+            );
+        }
+        for idx in [60, 61, 50, 72] {
+            let tile = state.tiles.entry(idx).or_insert_with(TileState::default);
+            tile.owner = 1;
+            tile.terrain_type = TerrainType::Field;
+        }
+        // Construction unowned: the lane is priced with its full chain.
+        let with_budget = save_batch_cost(&state, 1, 0).expect("lane priced");
+        assert!(with_budget > 5, "chain cost must be included, got {with_budget}");
+        // Tier-3 budget spent: the same lane is unreachable and must vanish.
+        assert_eq!(save_batch_cost(&state, 1, TIER3_CAP_PER_GAME), None);
     }
 
     #[test]
@@ -893,8 +2273,8 @@ mod tests {
                 state.tiles.insert(r * 11 + c, terrain_tile(TerrainType::Forest));
             }
         }
-        let goal = scripted_goal(&state, 1);
-        assert!(scripted_goal_aux(&state, 1, &goal, 0, 0).rider_push);
+        let goal = scripted_goal(&state, 1, 0);
+        assert!(scripted_goal_aux(&state, 1, &goal, 0, 0, None).rider_push);
         assert!(rider_turns_saved(&state, 1, &[44]) >= 2);
 
         // A thin band is NOT enough: a rider weaves open-step + forest-step
@@ -904,8 +2284,8 @@ mod tests {
                 state.tiles.insert(r * 11 + c, terrain_tile(TerrainType::Forest));
             }
         }
-        let goal = scripted_goal(&state, 1);
-        assert!(scripted_goal_aux(&state, 1, &goal, 0, 0).rider_push);
+        let goal = scripted_goal(&state, 1, 0);
+        assert!(scripted_goal_aux(&state, 1, &goal, 0, 0, None).rider_push);
 
         // Only when the whole approach region is rough does the advantage
         // vanish: forest block rows 0-4 x cols 0-4 (minus start and target).
@@ -952,7 +2332,7 @@ mod tests {
         assert!(sites.iter().all(|&s| cheb(s, 24) >= 3));
 
         // And scripted_goal paints guesses whenever real targets run short.
-        let g = scripted_goal(&state, 1);
+        let g = scripted_goal(&state, 1, 0);
         let expands: Vec<i32> = g
             .orders
             .iter()
@@ -974,14 +2354,14 @@ mod tests {
             tile.explorers.insert(1);
             state.tiles.insert(idx, tile);
         }
-        let goal = scripted_goal(&state, 1); // EXPAND on village 3
-        let aux = scripted_goal_aux(&state, 1, &goal, 0, 0);
+        let goal = scripted_goal(&state, 1, 0); // EXPAND on village 3
+        let aux = scripted_goal_aux(&state, 1, &goal, 0, 0, None);
         assert!(aux.rider_push);
         assert_eq!(aux.recommended_techs.first(), Some(&TechnologyType::Riding));
 
         // Without an EXPAND order there is no rider push.
         let quiet = MacroGoal::default();
-        assert!(!scripted_goal_aux(&state, 1, &quiet, 0, 0).rider_push);
+        assert!(!scripted_goal_aux(&state, 1, &quiet, 0, 0, None).rider_push);
 
         // Caps: 8 bought blocks all research; one tier-3 blocks further tier-3.
         let research1 = ResearchMove::new(TechnologyType::Organization);
@@ -996,16 +2376,131 @@ mod tests {
         assert!(!passes_tech_caps(&research3, &t3));
     }
 
+    /// Explored open fields at 22..42 for archetype map reads.
+    fn explore_open_fields(state: &mut GameState) {
+        for idx in 22..42 {
+            let mut tile = TileState::default();
+            tile.terrain_type = crate::types::TerrainType::Field;
+            tile.explorers.insert(1);
+            state.tiles.insert(idx, tile);
+        }
+    }
+
+    #[test]
+    fn archetype_rider_enters_on_open_map_and_hard_exits_on_heavy() {
+        let mut state = state_with_villages(0, &[24]);
+        state.settings.current_player_turn_id = 1;
+        explore_open_fields(&mut state);
+        let goal = scripted_goal(&state, 1, 0);
+        let mut st = ArchetypeState::default();
+        update_archetype(&state, 1, &goal, &mut st);
+        assert_eq!(st.archetype, Some(Archetype::RiderRoads));
+
+        // Lane expression: Riding recommended, Rider preferred; FreeSpirit
+        // stays blocked without a knight commitment.
+        let aux = scripted_goal_aux(&state, 1, &goal, 0, 0, Some(&st));
+        assert!(aux.recommended_techs.contains(&TechnologyType::Riding));
+        assert!(aux.preferred_units.contains(&UnitType::Rider));
+        assert!(!passes_tech_caps(&ResearchMove::new(TechnologyType::FreeSpirit), &aux));
+
+        // Two giants observed → catapult overlay fires and riders hard-exit.
+        let mut t2 = TribeState::default();
+        for &i in &[23, 25] {
+            let mut g = unit_at(i);
+            g.unit_type = UnitType::Giant;
+            t2.units.push(g);
+        }
+        state.tribes.insert(2, t2);
+        let goal2 = scripted_goal(&state, 1, 0);
+        update_archetype(&state, 1, &goal2, &mut st);
+        assert!(st.overlays.catapult_counter);
+        assert_eq!(st.archetype, Some(Archetype::ArcherLine));
+        let aux2 = scripted_goal_aux(&state, 1, &goal2, 0, 0, Some(&st));
+        assert!(aux2.preferred_units.contains(&UnitType::Catapult));
+        assert!(aux2.preferred_units.contains(&UnitType::Archer));
+    }
+
+    #[test]
+    fn knight_commit_opens_stepping_stone_lane() {
+        let mut state = state_with_villages(0, &[24]);
+        state.settings.current_player_turn_id = 1;
+        explore_open_fields(&mut state);
+        // Four squishy cavalry (riders, defense 1.0) on explored tiles.
+        let mut t2 = TribeState::default();
+        for &i in &[26, 27, 28, 29] {
+            let mut r = unit_at(i);
+            r.unit_type = UnitType::Rider;
+            t2.units.push(r);
+        }
+        state.tribes.insert(2, t2);
+        let goal = scripted_goal(&state, 1, 0);
+        let mut st = ArchetypeState::default();
+        update_archetype(&state, 1, &goal, &mut st);
+        assert!(st.overlays.knight_commit);
+        assert!(st.overlays.defender_screen);
+        let aux = scripted_goal_aux(&state, 1, &goal, 0, 0, Some(&st));
+        assert!(passes_tech_caps(&ResearchMove::new(TechnologyType::FreeSpirit), &aux));
+        assert!(aux.preferred_units.contains(&UnitType::Knight));
+        assert!(aux.preferred_units.contains(&UnitType::Defender));
+    }
+
+    #[test]
+    fn expand_assignment_is_unique_and_nearest_first() {
+        let mut state = state_with_villages(0, &[4, 44]);
+        state.tribes.get_mut(&1).unwrap().units.push(unit_at(40));
+        // Two units, two targets: greedy nearest-pair-first must cover both
+        // targets with distinct units — never two scouts on one target.
+        let pairs = assign_expand_targets(&state, 1, &[4, 44]);
+        assert_eq!(pairs.len(), 2);
+        let units: std::collections::HashSet<i32> = pairs.iter().map(|(u, _)| *u).collect();
+        let targets: std::collections::HashSet<i32> = pairs.iter().map(|(_, t)| *t).collect();
+        assert_eq!(units.len(), 2, "each unit assigned at most once");
+        assert_eq!(targets.len(), 2, "each target assigned at most once");
+    }
+
+    #[test]
+    fn guessed_sites_spread_across_quadrants() {
+        // Anchor in the center; legal spots exist in multiple quadrants.
+        let state = state_with_villages(60, &[]);
+        let picks = guessed_village_sites(&state, 1, 2);
+        assert_eq!(picks.len(), 2);
+        let size = 11;
+        let q = |idx: i32| ((idx % size > 5) as u8) * 2 + ((idx / size > 5) as u8);
+        assert_ne!(q(picks[0]), q(picks[1]), "guesses should span distinct quadrants");
+    }
+
+    #[test]
+    fn ability_gate_blocks_destroy_and_resource_clearing() {
+        use crate::moves::abilities::{BurnForestMove, ClearForestMove, DestroyMove};
+        let mut state = GameState::default();
+        assert!(!passes_ability_gate(&state, &DestroyMove::new(5)));
+        assert!(passes_ability_gate(&state, &EndTurnMove));
+        assert!(passes_ability_gate(&state, &ResearchMove::new(TechnologyType::Organization)));
+        // Bare forest may still be cleared — that trade is priced, not masked.
+        assert!(passes_ability_gate(&state, &ClearForestMove::new(5)));
+        // v8: a forest carrying a resource may not be — clearing DELETES the
+        // Game sitting on it for one star.
+        state.resources.insert(
+            5,
+            Some(crate::states::ResourceState { resource_type: crate::types::ResourceType::Game }),
+        );
+        assert!(!passes_ability_gate(&state, &ClearForestMove::new(5)));
+        assert!(!passes_ability_gate(&state, &BurnForestMove::new(5)));
+        assert!(passes_ability_gate(&state, &ClearForestMove::new(6)));
+    }
+
+
     #[test]
     fn goal_star_gate_is_stance_aware() {
         let mut state = state_with_villages(0, &[3]);
         // ARM gates regardless of expansion state.
-        let arm = MacroGoal { orders: vec![], stance: Stance::Arm };
+        let arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None };
         assert!(goal_star_gate(&state, 1, &arm));
         // GROW gates only inside the expansion window.
         let grow = MacroGoal {
             orders: vec![(OrderKind::Expand, 3)],
             stance: Stance::Grow,
+            save_target: None,
         };
         assert!(goal_star_gate(&state, 1, &grow));
         let t1 = state.tribes.get_mut(&1).unwrap();

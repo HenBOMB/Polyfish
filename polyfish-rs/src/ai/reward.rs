@@ -210,6 +210,379 @@ pub const SHAPE_GOAL_EXPAND_DONE: f32 = 2.0;
 /// Score-equivalents per living Rider while the rider push is on (open
 /// terrain + active EXPAND).
 pub const SHAPE_GOAL_RIDER: f32 = 100.0;
+/// v3→v6: score-equivalents per STAR OF COST of living archetype/overlay-
+/// preferred units (GoalAux.preferred_units). Was 100 flat per head, which
+/// made a Knight (8★) worth 17.5 Φ/star against a Defender's 38 from the
+/// SAME overlay — the measured reason the knight lane researched but never
+/// converted. 33/cost keeps the cost-3 units (Rider/Archer/Defender)
+/// numerically unchanged (99 ≈ 100) while heavies price per star invested
+/// (Knight 264, Catapult 264, Giant 330). Stacks with SHAPE_GOAL_RIDER.
+pub const SHAPE_GOAL_ARCHETYPE_PER_COST: f32 = 33.0;
+/// v4: per-quadrant cap on scout-term tiles — tiles in a fresh quadrant keep
+/// paying after a covered quadrant has gone flat (audit: half of games left
+/// a quadrant unvisited).
+pub const SCOUT_QUADRANT_CAP: i32 = 20;
+/// v4: one-time score-equivalents per map corner explored (lighthouse →
+/// monument progress; audit: 29/64 games touched zero corners).
+pub const SHAPE_GOAL_LIGHTHOUSE: f32 = 120.0;
+/// v4 (amended per Verdi — encourage, never hard-gate): score-equivalents per
+/// Explorer reward taken, scaled by hidden_frac² (see the term). Re-sized
+/// Jul 31 from the measured root Q gap (--dump-reward-choices, 166 modal
+/// Explorer/Workshop plies): Workshop led by median +0.26 normalized at
+/// hidden≥0.5 and the old 150·h term (≈+0.12 effective at the horizon) lost
+/// 86% of those plies. Iterated against the measured dq shift (~0.085 per
+/// 100): 1000 overshot (83% take, SPT@t20 −5, wr −14pp matched); 600 sat at
+/// the exact flip point (dq −0.004, 52% take). 700 lands the dark-map take
+/// in the registered ≥60% band at roughly half of 1000's economic cost.
+pub const SHAPE_GOAL_EXPLORER: f32 = 700.0;
+/// v4: extra Explorer lift when an UNREVEALED map corner sits within the
+/// walk's plausible reach of the city. The 12-step fog-biased walk is
+/// deterministic — an exact corner hit is already priced through
+/// SHAPE_GOAL_LIGHTHOUSE in the simulated child — so this credits the
+/// near-miss chance the simulation can't see. Scaled with the main term
+/// (Jul 31 re-size, ~same ratio as the old 150:60).
+pub const SHAPE_GOAL_EXPLORER_LIGHTHOUSE: f32 = 230.0;
+/// Chebyshev radius for "corner within explorer reach". Verdi: a centrally
+/// located explorer reliably reaches one, sometimes two lighthouses — so 5
+/// (center-to-corner on 11x11) is in range, and the lift scales per
+/// reachable dark corner, capped at 2.
+pub const EXPLORER_WALK_RANGE: i32 = 5;
+/// Max dark corners credited per explorer (one, sometimes two).
+pub const EXPLORER_CORNER_CAP: usize = 2;
+/// v5: score-equivalents per unit of reward_pop per adjacency partner BEYOND
+/// the first, for owned yield structures (Windmill/Sawmill/Forge — anything
+/// in structures.rs with reward_pop > 0 and adjacent_types). Steers the tile
+/// choice toward multi-partner spots (audit: 52% of windmills sat next to a
+/// single farm). The first partner is the structure paying for itself — no
+/// bonus; a partner-less build stays unpriced rather than penalized.
+pub const SHAPE_GOAL_YIELD_ADJ: f32 = 100.0;
+/// v6: star-yield analog for Market (reward_stars > 0 + adjacent_types) —
+/// HALF the pop analog, deliberately: each partner's +1 SPT is already paid
+/// at SHAPE_GOAL_SPT through get_tribe_spt; this only sharpens the 2-3-hub
+/// placement choice.
+pub const SHAPE_GOAL_YIELD_ADJ_STARS: f32 = 50.0;
+/// v5: option value of a standing forest in own territory (future lumber
+/// hut / sawmill feed / grow line). Clearing or burning drops it, making
+/// the ~1/game follow-through-free clear (audit: 10% of clears fed no
+/// build, level-up, or sawmill) net-negative in-tree, while justified
+/// clears still win on their follow-up's much larger payoff.
+pub const SHAPE_GOAL_FOREST_STANDING: f32 = 50.0;
+
+
+/// v8: multiplier on the Explorer term while the tribe still holds only its
+/// capital. Measured Aug 1: the capital's first city reward was Explorer in
+/// **12/12 seats** — at t0 the map is maximally dark, so `hidden²` ≈ 1 and the
+/// term pays ~700-930 against Workshop's 150. That is not a distribution, it is
+/// a constant. Workshop's +1 SPT is worth most at t0 (longest compounding
+/// horizon), so the explorer edge is discounted for exactly the first reward
+/// and left untouched afterwards — the dark-map dial Verdi measured in July
+/// (1000 → wr −14pp, 600 → the flip point) is deliberately NOT reopened.
+pub const SHAPE_GOAL_EXPLORER_FIRST_CITY_SCALE: f32 = 0.15;
+
+/// v6: score-equivalents of penalty PER POINT of structurally stranded
+/// progress — pop sunk into a city whose next level can no longer be
+/// completed from its remaining territory resources/pop structures at ANY
+/// star budget. First fit (150/city, stars-dependent) fired both
+/// falsifiers: star-dependence taxed all spending (wr −12pp) while
+/// depth-blindness left extra pop into stranded cities free. Depth ×
+/// resource-structural has no spend-tax and prices exactly the
+/// harvest-into-a-dead-end Verdi flagged. Threatened cities exempt.
+pub const SHAPE_GOAL_STRANDED: f32 = 75.0;
+
+/// v7: savings ramp — Phi paid for holding `stars/cost` of the SAVE batch.
+/// Deliberately below `SHAPE_GOAL_SPT`: reaching the batch and spending it must
+/// beat sitting on a full bank, or the ramp becomes a reason to hoard forever.
+/// First fit — dial against the measured carried-balance and purchase rates
+/// per the q-gap method (first fits have overshot ~2x every time).
+pub const SHAPE_GOAL_SAVE: f32 = 100.0;
+
+/// v7: completion BONUS — pays progress toward a REACHABLE level (see
+/// `completion_progress`). Held below `SHAPE_GOAL_SPT` so a level-up, which
+/// zeroes the bonus and banks the SPT jump, is always the better move.
+pub const SHAPE_GOAL_COMPLETION: f32 = 75.0;
+
+/// v6: approach weight for an enemy-taken village painted as a retake
+/// target — pays slightly under a free village (the defender-adjusted
+/// odds); the recapture itself banks the full DONE bonus.
+pub const SHAPE_GOAL_RETAKE_W: f32 = 0.75;
+/// v6: a contested EXPAND target (visible enemy standing on it) pays the
+/// nearest second unit this fraction of the approach gradient — exactly
+/// one converger, so a squatter can be killed and the tile still taken.
+pub const SHAPE_GOAL_CONTEST_SECOND: f32 = 0.5;
+/// v6: score-equivalents per living unit up to a state-derived cap
+/// (min(cities+1, BODY_CAP_MAX)) while GROW holds and there is still map
+/// to take — the early bodies that scout and grab villages. Flat per head:
+/// warriors ARE the desired bodies; the cap kills summon spam. 75 clears
+/// the measured −0.118 summon Q deficit without doubling it (dial lesson).
+pub const SHAPE_GOAL_BODY: f32 = 75.0;
+/// Cap on bodies the GROW body term pays for.
+pub const BODY_CAP_MAX: usize = 3;
+
+/// Adjacency-multiplier tier: each pays `reward_pop × friendly adjacent
+/// partners` (see `actions::structure::build_structure`), one per city.
+const MULTIPLIER_TIER: [crate::types::StructureType; 3] = [
+    crate::types::StructureType::Windmill,
+    crate::types::StructureType::Sawmill,
+    crate::types::StructureType::Forge,
+];
+
+/// Pop-bearing terrain structures that need neither a resource nor a partner.
+const TERRAIN_POP_TIER: [crate::types::StructureType; 5] = [
+    crate::types::StructureType::Temple,
+    crate::types::StructureType::MountainTemple,
+    crate::types::StructureType::WaterTemple,
+    crate::types::StructureType::ForestTemple,
+    crate::types::StructureType::Port,
+];
+
+/// v7: max population this city could still buy, derived from the settings
+/// tables — every pop route the engine actually offers: resource harvests and
+/// their structures, LumberHuts on owned forest, the adjacency-multiplier tier
+/// (Windmill/Sawmill/Forge, whose yield scales with friendly partners the city
+/// could still build), and pop-bearing terrain structures. Greedy
+/// cheapest-per-pop knapsack under `stars`.
+///
+/// v6 counted resource tiles only, which mislabelled most level-4+ cities as
+/// dead ends — the level threshold grows as N+1 while resource tiles are finite
+/// and get consumed, so the multiplier tier IS the late-game pop engine. That
+/// omission taxed exactly the cities that make SPT (see the v6 regression
+/// diagnosis in the ledger).
+///
+/// Deliberately excludes pending monuments: free and worth 3 pop, but
+/// `check_task` over every TaskType is too costly for this leaf-path helper.
+/// The omission only ever makes the predicate more pessimistic.
+pub fn max_affordable_pop(state: &GameState, player: i32, city: &crate::states::CityState, stars: i32) -> i32 {
+    use crate::functions::{get_adjacent_indices, get_structure_at, get_structure_type_at};
+    use crate::settings::structures::get_structure_setting;
+    let Some(tribe) = state.tribes.get(&player) else {
+        return 0;
+    };
+    let owned = |tech: crate::types::TechnologyType| {
+        tribe
+            .tech_vanilla
+            .iter()
+            .any(|t| t.tech_type == tech && t.discovered)
+    };
+    // Mirrors the build-legality gate: empty, and not sat on by an enemy.
+    let open = |idx: i32| {
+        get_structure_at(state, idx).is_none()
+            && crate::functions::get_enemy_at(state, idx, player).is_none()
+    };
+    let mut options: Vec<(i32, i32)> = Vec::new(); // (cost, pop)
+    // Tiles a cheaper pass already spoke for, and what would stand there — the
+    // multiplier tier counts partners this city could still build, not just
+    // the ones standing today.
+    let mut claimed: std::collections::HashMap<i32, Option<crate::types::StructureType>> =
+        std::collections::HashMap::new();
+
+    for &idx in &city._territory {
+        if !open(idx) {
+            continue;
+        }
+        if let Some(Some(res)) = state.resources.get(&idx) {
+            let setting = crate::settings::resources::get_resource_setting(res.resource_type);
+            if setting.reward_pop <= 0 || setting.requires_capture || !owned(setting.tech_required)
+            {
+                continue;
+            }
+            match setting.struct_required {
+                None => {
+                    if let Some(cost) = setting.cost {
+                        options.push((cost, setting.reward_pop));
+                        claimed.insert(idx, None);
+                    }
+                }
+                Some(s_type) => {
+                    let s = get_structure_setting(s_type);
+                    if let Some(cost) = s.cost {
+                        options.push((cost, s.reward_pop));
+                        claimed.insert(idx, Some(s_type));
+                    }
+                }
+            }
+        } else if owned(crate::types::TechnologyType::Forestry) {
+            let is_forest = state
+                .tiles
+                .get(&idx)
+                .map_or(false, |t| t.terrain_type == crate::types::TerrainType::Forest);
+            if is_forest {
+                let hut = get_structure_setting(crate::types::StructureType::LumberHut);
+                if let Some(cost) = hut.cost {
+                    options.push((cost, hut.reward_pop));
+                    claimed.insert(idx, Some(crate::types::StructureType::LumberHut));
+                }
+            }
+        }
+    }
+
+    for m_type in MULTIPLIER_TIER {
+        if !crate::moves::build::is_structure_unlocked(tribe, m_type) {
+            continue;
+        }
+        let s = get_structure_setting(m_type);
+        let Some(cost) = s.cost else { continue };
+        if s.limited_per_city
+            && city
+                ._territory
+                .iter()
+                .any(|&t| get_structure_type_at(state, t) == Some(m_type))
+        {
+            continue;
+        }
+        // Best placement in this city — yield scales with partner count.
+        let mut best = 0;
+        for &idx in &city._territory {
+            if claimed.contains_key(&idx) || !open(idx) {
+                continue;
+            }
+            let Some(tile) = state.tiles.get(&idx) else { continue };
+            if !s.terrain_types.contains(&tile.terrain_type) || tile.is_algae() {
+                continue;
+            }
+            let partners = get_adjacent_indices(state, idx, 1)
+                .iter()
+                .filter(|&&n| {
+                    state.tiles.get(&n).map_or(false, |t| t.owner == player)
+                        && match claimed.get(&n) {
+                            Some(Some(planned)) => s.adjacent_types.contains(planned),
+                            _ => get_structure_type_at(state, n)
+                                .map_or(false, |st| s.adjacent_types.contains(&st)),
+                        }
+                })
+                .count() as i32;
+            best = best.max(partners);
+        }
+        if best > 0 {
+            options.push((cost, s.reward_pop * best));
+        }
+    }
+
+    for t_type in TERRAIN_POP_TIER {
+        if !crate::moves::build::is_structure_unlocked(tribe, t_type) {
+            continue;
+        }
+        let s = get_structure_setting(t_type);
+        let Some(cost) = s.cost else { continue };
+        if s.reward_pop <= 0 {
+            continue;
+        }
+        for &idx in &city._territory {
+            if claimed.contains_key(&idx) || !open(idx) {
+                continue;
+            }
+            let Some(tile) = state.tiles.get(&idx) else { continue };
+            if s.terrain_types.contains(&tile.terrain_type) && !tile.is_algae() {
+                options.push((cost, s.reward_pop));
+                claimed.insert(idx, Some(t_type));
+            }
+        }
+    }
+
+    // Cheapest stars-per-pop first.
+    options.sort_by(|a, b| (a.0 * b.1).cmp(&(b.0 * a.1)));
+    let mut budget = stars;
+    let mut pop = 0;
+    for (cost, p) in options {
+        if cost <= budget {
+            budget -= cost;
+            pop += p;
+        }
+    }
+    pop
+}
+
+/// A city can still finish its next level from remaining territory routes at
+/// any star budget. Stars are deliberately excluded — a stars-dependent
+/// predicate turns every purchase into a potential flip and taxes the whole
+/// economy (v6 first-fit, −12.5pp win rate).
+fn city_completable(state: &GameState, player: i32, city: &crate::states::CityState) -> bool {
+    city.progress + max_affordable_pop(state, player, city, i32::MAX) >= city.level + 1
+}
+
+/// v8: can this city reach its next level THIS TURN, out of the stars in hand?
+/// Distinct from `city_completable`, which asks whether the level is reachable
+/// at ANY star budget — that is the structural stranding question, this is the
+/// spend-timing one the pop-discipline gate acts on.
+pub fn city_completable_now(
+    state: &GameState,
+    player: i32,
+    city: &crate::states::CityState,
+    stars: i32,
+) -> bool {
+    city.progress + max_affordable_pop(state, player, city, stars) >= city.level + 1
+}
+
+/// v7: a stranded city is FLAGGED, not billed by depth. v6 summed every
+/// stranded pop point, which made a level-up that leaves 2 overflow progress
+/// book −150 against its own +150 of SPT — the level-ups we want paid for
+/// themselves. Capping at one point per city keeps the "don't start a level
+/// you cannot finish" signal (0 → 1 progress still costs a full unit) while
+/// pricing the DECISION rather than the sunk history.
+pub const STRANDED_PER_CITY_CAP: i32 = 1;
+
+/// v6: STRANDED PROGRESS — cities whose next level cannot complete from
+/// remaining territory routes. Threatened cities exempt (Verdi's
+/// harvest-under-threat case).
+pub fn completion_stranded(state: &GameState, player: i32) -> i32 {
+    let Some(tribe) = state.tribes.get(&player) else {
+        return 0;
+    };
+    tribe
+        .cities
+        .iter()
+        .filter(|c| {
+            c.progress > 0
+                && !city_completable(state, player, c)
+                && !city_threatened(state, player, c.idx)
+        })
+        .map(|c| c.progress.min(STRANDED_PER_CITY_CAP))
+        .sum()
+}
+
+/// v7 completion BONUS (the registered replacement for a deeper penalty —
+/// end-stranded sat at 70% after v6, above the 60% trigger). Progress toward a
+/// REACHABLE level pays a fraction of the way there, so each pop point into a
+/// completable city is a gain rather than a neutral step.
+///
+/// Fractional by design: the term is worth at most `progress/(level+1) < 1`
+/// unit, always less than the `SHAPE_GOAL_SPT` jump a level-up banks, so
+/// levelling up (which resets progress to overflow) is never self-defeating.
+/// Paying a flat amount per pop point would recreate exactly that trap.
+pub fn completion_progress(state: &GameState, player: i32) -> f32 {
+    let Some(tribe) = state.tribes.get(&player) else {
+        return 0.0;
+    };
+    tribe
+        .cities
+        .iter()
+        .filter(|c| c.progress > 0 && city_completable(state, player, c))
+        .map(|c| c.progress as f32 / (c.level + 1).max(1) as f32)
+        .sum()
+}
+
+/// v6: a city is threatened when a visible enemy unit stands within
+/// Chebyshev 2 of it — same radius as the Defend-order predicate. Used by
+/// the level-completion discipline (harvest-under-threat is exempt) and
+/// the level-completion dump.
+pub fn city_threatened(state: &GameState, player: i32, city_idx: i32) -> bool {
+    let width = state.settings.size as i32;
+    if width == 0 {
+        return false;
+    }
+    state
+        .tribes
+        .iter()
+        .filter(|(id, _)| **id != player)
+        .flat_map(|(_, t)| t.units.iter())
+        .any(|u| {
+            let idx = u.coords.idx;
+            cheb(idx, city_idx, width) <= 2
+                && state
+                    .tiles
+                    .get(&idx)
+                    .map_or(false, |t| t.explorers.contains(&player))
+        })
+}
 
 /// Goal potential Φ_goal for `player` under `goal` (score-equivalent units).
 pub fn goal_potential(
@@ -223,7 +596,9 @@ pub fn goal_potential(
         return 0.0;
     };
     let mut phi = match goal.stance {
-        Stance::Grow => {
+        // SAVE is an economy stance: it keeps GROW's whole potential and adds
+        // the ramp below, so banking never costs the economy gradient.
+        Stance::Grow | Stance::Save => {
             SHAPE_GOAL_SPT * crate::functions::get_tribe_spt(state, tribe) as f32
         }
         Stance::Arm => {
@@ -236,9 +611,33 @@ pub fn goal_potential(
         }
         Stance::Unlock => 0.0,
     };
+    // v6: stranded-progress discipline — GROW only (combat spending under
+    // ARM shouldn't be taxed for unfinished levels).
+    if matches!(goal.stance, Stance::Grow | Stance::Save) {
+        phi -= SHAPE_GOAL_STRANDED * completion_stranded(state, player) as f32;
+        phi += SHAPE_GOAL_COMPLETION * completion_progress(state, player);
+    }
+    // v7 savings ramp: progress toward the banked batch is itself scored, so
+    // holding stars climbs a gradient instead of sitting in a flat valley that
+    // any purchase strictly beats. This is what makes a multi-turn plan legible
+    // to a search whose horizon is one game turn — the ramp is visible at
+    // depth 1, so the tree never has to reach the purchase to value it.
+    if goal.stance == Stance::Save {
+        if let Some(cost) = goal.save_target.filter(|&c| c > 0) {
+            phi += SHAPE_GOAL_SAVE * (tribe.stars.clamp(0, cost) as f32) / cost as f32;
+        }
+    }
     let width = state.settings.size as i32;
     let mut has_expand = false;
     if width > 0 {
+        // v4: achieved/blocked targets price directly; approach-needing ones
+        // go through the per-unit assignment so two scouts never bank the
+        // same target. Unexplored (guessed) targets always pay approach —
+        // reading their owner would leak FOW; the completion bonus needs a
+        // real city capture, not a border-grown empty tile.
+        let mut approach_targets: Vec<i32> = Vec::new();
+        let mut target_weight: std::collections::HashMap<i32, f32> =
+            std::collections::HashMap::new();
         for (kind, idx) in &goal.orders {
             if *kind != OrderKind::Expand {
                 continue;
@@ -247,47 +646,215 @@ pub fn goal_potential(
             let Some(tile) = state.tiles.get(idx) else {
                 continue;
             };
-            // Unexplored (guessed) targets always pay approach — reading their
-            // owner would leak FOW. The completion bonus needs a real city
-            // capture, not a border-grown empty tile.
-            let approach = || {
+            let mut weight = 1.0;
+            if tile.explorers.contains(&player) {
+                if tile.owner == player {
+                    if crate::functions::get_city_at(state, *idx).is_some() {
+                        phi += SHAPE_GOAL_EXPAND_PER_TILE
+                            * (SHAPE_PROX_CAP as f32 + SHAPE_GOAL_EXPAND_DONE);
+                    }
+                    continue;
+                } else if tile.owner != 0 {
+                    // v6: enemy-taken village painted for retake — approach
+                    // pays slightly under a free village (defended odds);
+                    // recapture banks the full DONE bonus via the branch
+                    // above once the tile flips.
+                    weight = SHAPE_GOAL_RETAKE_W;
+                }
+            }
+            approach_targets.push(*idx);
+            target_weight.insert(*idx, weight);
+        }
+        if !approach_targets.is_empty() {
+            let w_of = |t: i32| target_weight.get(&t).copied().unwrap_or(1.0);
+            let pairs = crate::ai::oracle_macro::assign_expand_targets(
+                state,
+                player,
+                &approach_targets,
+            );
+            for (unit_idx, target) in &pairs {
+                let d = cheb(*unit_idx, *target, width);
+                phi += SHAPE_GOAL_EXPAND_PER_TILE
+                    * w_of(*target)
+                    * (SHAPE_PROX_CAP - d).max(0) as f32;
+            }
+            // Targets beyond the unit count keep their closest-unit gradient,
+            // so an under-scouted map still pulls.
+            let assigned: std::collections::HashSet<i32> =
+                pairs.iter().map(|(_, t)| *t).collect();
+            for target in approach_targets.iter().filter(|t| !assigned.contains(t)) {
                 let d = tribe
                     .units
                     .iter()
-                    .map(|u| cheb(u.coords.idx, *idx, width))
+                    .map(|u| cheb(u.coords.idx, *target, width))
                     .min()
                     .unwrap_or(i32::MAX);
-                (SHAPE_PROX_CAP - d).max(0) as f32
-            };
-            let tiles = if !tile.explorers.contains(&player) {
-                approach()
-            } else if tile.owner == player {
-                if crate::functions::get_city_at(state, *idx).is_some() {
-                    SHAPE_PROX_CAP as f32 + SHAPE_GOAL_EXPAND_DONE
-                } else {
-                    0.0
+                phi += SHAPE_GOAL_EXPAND_PER_TILE
+                    * w_of(*target)
+                    * (SHAPE_PROX_CAP - d).max(0) as f32;
+            }
+            // v6: a CONTESTED target (visible enemy unit standing on it) pays
+            // one extra converger — the nearest unit not already assigned to
+            // it — at half gradient. Exactly one; no dogpile.
+            for (unit_idx, target) in &pairs {
+                let occupied = crate::functions::get_unit_at(state, *target)
+                    .map_or(false, |u| u.owner != player)
+                    && state
+                        .tiles
+                        .get(target)
+                        .map_or(false, |t| t.explorers.contains(&player));
+                if !occupied {
+                    continue;
                 }
-            } else if tile.owner != 0 {
-                0.0
-            } else {
-                approach()
-            };
-            phi += SHAPE_GOAL_EXPAND_PER_TILE * tiles;
+                let second = tribe
+                    .units
+                    .iter()
+                    .map(|u| u.coords.idx)
+                    .filter(|idx| idx != unit_idx)
+                    .map(|idx| cheb(idx, *target, width))
+                    .min();
+                if let Some(d) = second {
+                    phi += SHAPE_GOAL_CONTEST_SECOND
+                        * SHAPE_GOAL_EXPAND_PER_TILE
+                        * w_of(*target)
+                        * (SHAPE_PROX_CAP - d).max(0) as f32;
+                }
+            }
         }
     }
-    // Scout term: with no known village to approach, revealing tiles IS the
-    // expansion progress. Retires once a target exists or expansion is done.
+    // v6: early body count — GROW pays per living unit up to min(cities+1,
+    // BODY_CAP_MAX) while there is still expansion or unexplored map. The
+    // 2nd/3rd warrior finally prices in against a 2-star harvest.
+    if goal.stance == Stance::Grow && width > 0 {
+        let revealed = state
+            .tiles
+            .values()
+            .filter(|t| t.explorers.contains(&player))
+            .count();
+        let map_unexplored = revealed < (width * width) as usize;
+        if has_expand || map_unexplored {
+            let cap = (tribe.cities.len() + 1).min(BODY_CAP_MAX);
+            phi += SHAPE_GOAL_BODY * tribe.units.len().min(cap) as f32;
+        }
+    }
+    // Scout term, v4: per-quadrant concave reveal payment — fresh quadrants
+    // keep paying after covered ones flatten. Full weight while no target is
+    // known; half weight alongside an active approach gradient.
     if goal.stance == Stance::Grow
-        && !has_expand
+        && width > 0
         && tribe.cities.len() < crate::ai::oracle_macro::COMMIT_CITY_TARGET
     {
-        let explored = state
-            .tiles
-            .iter()
-            .filter(|(_, t)| t.explorers.contains(&player))
-            .count();
-        phi += SHAPE_GOAL_SCOUT * explored as f32;
+        let half = width / 2;
+        let mut quad = [0i32; 4];
+        for (idx, t) in state.tiles.iter() {
+            if t.explorers.contains(&player) {
+                let q = ((idx % width > half) as usize) * 2 + ((idx / width > half) as usize);
+                quad[q] += 1;
+            }
+        }
+        let capped: i32 = quad.iter().map(|&c| c.min(SCOUT_QUADRANT_CAP)).sum();
+        let w = if has_expand { 0.5 } else { 1.0 };
+        phi += SHAPE_GOAL_SCOUT * w * capped as f32;
     }
+    // Lighthouse nudge (v4): each explored map corner pays once.
+    if width > 0 {
+        for c in [0, width - 1, width * (width - 1), width * width - 1] {
+            if state
+                .tiles
+                .get(&c)
+                .map_or(false, |t| t.explorers.contains(&player))
+            {
+                phi += SHAPE_GOAL_LIGHTHOUSE;
+            }
+        }
+    }
+    // Explorer preference (v4): each Explorer reward taken pays scaled by the
+    // hidden-map fraction — big on a dark map, ~nothing once revealed. The
+    // reveal itself additionally banks the scout/lighthouse terms above, and
+    // a city near a still-dark corner gets the lighthouse-chance lift.
+    if width > 0 {
+        let explorer_cities: Vec<i32> = tribe
+            .cities
+            .iter()
+            .filter(|c| c.rewards.contains(&crate::types::CityRewardType::Explorer))
+            .map(|c| c.idx)
+            .collect();
+        if !explorer_cities.is_empty() {
+            let revealed = state
+                .tiles
+                .values()
+                .filter(|t| t.explorers.contains(&player))
+                .count() as f32;
+            let hidden_frac = (1.0 - revealed / (width * width) as f32).max(0.0);
+            if hidden_frac > 0.0 {
+                let corners = [0, width - 1, width * (width - 1), width * width - 1];
+                for city in explorer_cities {
+                    let dark_in_reach = corners
+                        .iter()
+                        .filter(|&&k| {
+                            cheb(city, k, width) <= EXPLORER_WALK_RANGE
+                                && !state
+                                    .tiles
+                                    .get(&k)
+                                    .map_or(false, |t| t.explorers.contains(&player))
+                        })
+                        .count()
+                        .min(EXPLORER_CORNER_CAP);
+                    let mut bonus = SHAPE_GOAL_EXPLORER
+                        + SHAPE_GOAL_EXPLORER_LIGHTHOUSE * dark_in_reach as f32;
+                    // v8: the capital's first reward is a constant, not a
+                    // choice — discount it so Workshop's whole-game compounding
+                    // can win the one slot where it is worth the most.
+                    if tribe.cities.len() <= 1 {
+                        bonus *= SHAPE_GOAL_EXPLORER_FIRST_CITY_SCALE;
+                    }
+                    // hidden² (Jul 31): the reveal itself drains this Φ term
+                    // (the potential telescopes to the horizon's h), and a
+                    // linear ramp priced Explorer too high on mostly-lit
+                    // maps. Quadratic keeps the dark-map edge dominant and
+                    // the lit-map edge below Workshop's measured Q lead.
+                    phi += bonus * hidden_frac * hidden_frac;
+                }
+            }
+        }
+    }
+    // Yield-structure placement (v5/v6): owned adjacency-yield structures
+    // pay per partner beyond the first, derived from structures.rs —
+    // reward_pop-scaled for pop hubs (Windmill/Sawmill/Forge) and
+    // reward_stars-scaled at half weight for star hubs (Market).
+    for (&s_idx, s) in state.structures.iter() {
+        let Some(s) = s.as_ref() else { continue };
+        let setting = crate::settings::structures::get_structure_setting(s.structure_type);
+        if (setting.reward_pop <= 0 && setting.reward_stars <= 0)
+            || setting.adjacent_types.is_empty()
+        {
+            continue;
+        }
+        let owned = crate::functions::get_city_owning_tile(state, s_idx)
+            .map_or(false, |c| c.owner == player);
+        if !owned {
+            continue;
+        }
+        let partners = crate::functions::get_adjacent_indices(state, s_idx, 1)
+            .iter()
+            .filter(|&&adj| {
+                state.tiles.get(&adj).map_or(false, |t| t.owner == player)
+                    && crate::functions::get_structure_at(state, adj)
+                        .map_or(false, |a| setting.adjacent_types.contains(&a.structure_type))
+            })
+            .count() as i32;
+        let extra = (partners - 1).max(0) as f32;
+        phi += SHAPE_GOAL_YIELD_ADJ * setting.reward_pop.max(0) as f32 * extra;
+        phi += SHAPE_GOAL_YIELD_ADJ_STARS * setting.reward_stars.max(0) as f32 * extra;
+    }
+    // Standing-forest option value (v5): clearing pays only when the
+    // follow-up (build / level-up funding) outweighs the lost option.
+    let own_forests = state
+        .tiles
+        .values()
+        .filter(|t| t.owner == player && t.terrain_type == crate::types::TerrainType::Forest)
+        .count();
+    phi += SHAPE_GOAL_FOREST_STANDING * own_forests as f32;
     if let Some(aux) = aux {
         let owned = aux
             .recommended_techs
@@ -304,6 +871,15 @@ pub fn goal_potential(
                 .filter(|u| u.unit_type == crate::types::UnitType::Rider)
                 .count();
             phi += SHAPE_GOAL_RIDER * riders as f32;
+        }
+        if !aux.preferred_units.is_empty() {
+            let preferred = tribe
+                .units
+                .iter()
+                .filter(|u| aux.preferred_units.contains(&u.unit_type))
+                .map(|u| crate::settings::units::get_unit_setting(u.unit_type).cost)
+                .sum::<i32>();
+            phi += SHAPE_GOAL_ARCHETYPE_PER_COST * preferred as f32;
         }
     }
     phi
@@ -502,20 +1078,27 @@ mod shaping_tests {
         t1.units.push(unit_at(2, UnitType::Warrior)); // 2 tiles from village 0
         state.tribes.insert(1, t1);
 
-        // ARM pays the army's star cost.
-        let arm = MacroGoal { orders: vec![], stance: Stance::Arm };
+        // ARM pays the army's star cost (+ the lighthouse term: the explored
+        // village tile 0 is a map corner).
+        let arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None };
         let cost = get_unit_setting(UnitType::Warrior).cost as f32;
-        assert!((goal_potential(&state, 1, &arm, None) - SHAPE_GOAL_ARM_PER_COST * cost).abs() < 1e-4);
+        let corner = SHAPE_GOAL_LIGHTHOUSE;
+        assert!(
+            (goal_potential(&state, 1, &arm, None) - SHAPE_GOAL_ARM_PER_COST * cost - corner)
+                .abs()
+                < 1e-4
+        );
 
         // GROW pays SPT plus the scout term (no EXPAND target known, <3
-        // cities, one explored tile in this state).
-        let grow = MacroGoal { orders: vec![], stance: Stance::Grow };
+        // cities, one explored tile in this state) plus the v6 body term
+        // (1 unit within the cities+1 cap, map unexplored).
+        let grow = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None };
         let spt = crate::functions::get_tribe_spt(&state, state.tribes.get(&1).unwrap()) as f32;
-        let expected = SHAPE_GOAL_SPT * spt + SHAPE_GOAL_SCOUT;
+        let expected = SHAPE_GOAL_SPT * spt + SHAPE_GOAL_SCOUT + corner + SHAPE_GOAL_BODY;
         assert!((goal_potential(&state, 1, &grow, None) - expected).abs() < 1e-4);
 
         // EXPAND order: a one-tile close banks one step of the gradient.
-        let ex = |orders| MacroGoal { orders, stance: Stance::Arm };
+        let ex = |orders| MacroGoal { orders, stance: Stance::Arm, save_target: None };
         let base = goal_potential(&state, 1, &ex(vec![(OrderKind::Expand, 0)]), None);
         state.tribes.get_mut(&1).unwrap().units[0] = unit_at(1, UnitType::Warrior);
         let closer = goal_potential(&state, 1, &ex(vec![(OrderKind::Expand, 0)]), None);
@@ -535,17 +1118,20 @@ mod shaping_tests {
         assert!(achieved >= closer);
         state.tiles.get_mut(&0).unwrap().owner = 2;
         let lost = goal_potential(&state, 1, &ex(vec![(OrderKind::Expand, 0)]), None);
-        assert!((lost - arm_only).abs() < 1e-4);
+        // v6: an enemy-taken village pays the retake-weighted approach
+        // (unit at 1 is one tile out) instead of dropping to zero.
+        let retake = SHAPE_GOAL_RETAKE_W * SHAPE_GOAL_EXPAND_PER_TILE * (SHAPE_PROX_CAP - 1) as f32;
+        assert!((lost - arm_only - retake).abs() < 1e-3);
     }
 
     #[test]
-    fn scout_term_pays_reveals_until_a_target_or_third_city() {
+    fn scout_term_pays_full_then_half_with_target_until_third_city() {
         use crate::ai::oracle_macro::{MacroGoal, OrderKind, Stance};
         let mut state = GameState::default();
         let mut t1 = TribeState::default();
         t1.units.push(unit_at(60, UnitType::Warrior));
         state.tribes.insert(1, t1);
-        let grow = MacroGoal { orders: vec![], stance: Stance::Grow };
+        let grow = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None };
 
         // Each newly explored tile banks SHAPE_GOAL_SCOUT.
         let base = goal_potential(&state, 1, &grow, None);
@@ -555,18 +1141,24 @@ mod shaping_tests {
         let one = goal_potential(&state, 1, &grow, None);
         assert!((one - base - SHAPE_GOAL_SCOUT).abs() < 1e-4);
 
-        // A known EXPAND target retires the scout term: the potential is
-        // exactly SPT + approach gradient (unit at 60 is cheb 1 from 50).
+        // A known EXPAND target halves the scout term (v4 — info retains
+        // value alongside the approach gradient; unit at 60 is cheb 1 from 50).
         let with_target = MacroGoal {
             orders: vec![(OrderKind::Expand, 50)],
             stance: Stance::Grow,
+            save_target: None,
         };
         let anchored = goal_potential(&state, 1, &with_target, None);
         let spt0 = crate::functions::get_tribe_spt(&state, state.tribes.get(&1).unwrap()) as f32;
         let approach = SHAPE_GOAL_EXPAND_PER_TILE * (SHAPE_PROX_CAP - 1) as f32;
-        assert!((anchored - SHAPE_GOAL_SPT * spt0 - approach).abs() < 1e-3);
+        let half_scout = SHAPE_GOAL_SCOUT * 0.5;
+        // + v6 body term: 1 unit, 0 cities → cap 1.
+        assert!(
+            (anchored - SHAPE_GOAL_SPT * spt0 - approach - half_scout - SHAPE_GOAL_BODY).abs()
+                < 1e-3
+        );
         // ARM never scouts; neither does a 3-city tribe.
-        let arm = MacroGoal { orders: vec![], stance: Stance::Arm };
+        let arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None };
         let arm_phi = goal_potential(&state, 1, &arm, None);
         let cost = get_unit_setting(UnitType::Warrior).cost as f32;
         assert!((arm_phi - SHAPE_GOAL_ARM_PER_COST * cost).abs() < 1e-4);
@@ -576,7 +1168,9 @@ mod shaping_tests {
         }
         let done = goal_potential(&state, 1, &grow, None);
         let spt = crate::functions::get_tribe_spt(&state, state.tribes.get(&1).unwrap()) as f32;
-        assert!((done - SHAPE_GOAL_SPT * spt).abs() < 1e-4);
+        // Scout retires at 3 cities; the body term still pays its 1 unit
+        // while the map stays unexplored.
+        assert!((done - SHAPE_GOAL_SPT * spt - SHAPE_GOAL_BODY).abs() < 1e-4);
     }
 
     #[test]
@@ -588,7 +1182,7 @@ mod shaping_tests {
         let mut t1 = TribeState::default();
         t1.units.push(unit_at(60, UnitType::Rider));
         state.tribes.insert(1, t1);
-        let goal = MacroGoal { orders: vec![], stance: Stance::Grow };
+        let goal = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None };
         let aux = GoalAux {
             recommended_techs: vec![TechnologyType::Mining],
             rider_push: true,
@@ -606,6 +1200,507 @@ mod shaping_tests {
         });
         let owned = goal_potential(&state, 1, &goal, Some(&aux));
         assert!((owned - with_aux - SHAPE_GOAL_TECH_FIT).abs() < 1e-3);
+    }
+
+    #[test]
+    fn explorer_reward_pays_by_hidden_fraction() {
+        use crate::ai::oracle_macro::{MacroGoal, Stance};
+        use crate::types::CityRewardType;
+        let mut state = GameState::default();
+        let mut t1 = TribeState::default();
+        t1.cities.push(crate::states::CityState { idx: 24, ..Default::default() });
+        // v8: the first-city discount applies at 1 city, so a second city keeps
+        // this test on the full-rate branch it was written to measure.
+        t1.cities.push(crate::states::CityState { idx: 108, ..Default::default() });
+        state.tribes.insert(1, t1);
+        // Unlock stance isolates the explorer term (no SPT/scout/ARM terms).
+        let goal = MacroGoal { orders: vec![], stance: Stance::Unlock, save_target: None };
+        let before = goal_potential(&state, 1, &goal, None);
+        state.tribes.get_mut(&1).unwrap().cities[0].rewards.push(CityRewardType::Explorer);
+        // Fully hidden map, city 24 within EXPLORER_WALK_RANGE of corner 0:
+        // full bonus + the lighthouse-chance lift.
+        let dark = goal_potential(&state, 1, &goal, None);
+        assert!(
+            (dark - before - SHAPE_GOAL_EXPLORER - SHAPE_GOAL_EXPLORER_LIGHTHOUSE).abs() < 1e-3
+        );
+        // A center city reaches all four dark corners (cheb 5) but the lift
+        // caps at two — "one, sometimes two lighthouses per explorer".
+        let mut mid = GameState::default();
+        let mut t2 = TribeState::default();
+        let mut c = crate::states::CityState { idx: 60, ..Default::default() };
+        c.rewards.push(CityRewardType::Explorer);
+        t2.cities.push(c);
+        t2.cities.push(crate::states::CityState { idx: 12, ..Default::default() });
+        mid.tribes.insert(1, t2);
+        let mid_phi = goal_potential(&mid, 1, &goal, None);
+        let capped = SHAPE_GOAL_EXPLORER + 2.0 * SHAPE_GOAL_EXPLORER_LIGHTHOUSE;
+        assert!((mid_phi - capped).abs() < 1e-3);
+        // Fully revealed map: the bonus decays to ~0 (corners add lighthouse).
+        for idx in 0..121 {
+            let tile = state.tiles.entry(idx).or_insert_with(TileState::default);
+            tile.explorers.insert(1);
+        }
+        let lit = goal_potential(&state, 1, &goal, None);
+        assert!((lit - before - 4.0 * SHAPE_GOAL_LIGHTHOUSE).abs() < 1e-3);
+    }
+
+    #[test]
+    fn goal_potential_pays_archetype_preferred_units() {
+        use crate::ai::oracle_macro::{GoalAux, MacroGoal, Stance};
+        let mut state = GameState::default();
+        let mut t1 = TribeState::default();
+        t1.units.push(unit_at(60, UnitType::Archer));
+        t1.units.push(unit_at(61, UnitType::Warrior));
+        state.tribes.insert(1, t1);
+        // Unlock stance zeroes the stance term; only the unit bonus differs.
+        let goal = MacroGoal { orders: vec![], stance: Stance::Unlock, save_target: None };
+        let aux = GoalAux {
+            preferred_units: vec![UnitType::Archer],
+            ..Default::default()
+        };
+        let base = goal_potential(&state, 1, &goal, None);
+        let with = goal_potential(&state, 1, &goal, Some(&aux));
+        // Cost-scaled (v6): Archer costs 3 → 99, within 1% of the old flat 100.
+        let archer_cost = get_unit_setting(UnitType::Archer).cost as f32;
+        assert!((with - base - SHAPE_GOAL_ARCHETYPE_PER_COST * archer_cost).abs() < 1e-3);
+    }
+
+    #[test]
+    fn archetype_per_cost_prices_knight_above_defender() {
+        use crate::ai::oracle_macro::{GoalAux, MacroGoal, Stance};
+        let mut state = GameState::default();
+        let mut t1 = TribeState::default();
+        t1.units.push(unit_at(60, UnitType::Knight));
+        state.tribes.insert(1, t1);
+        let goal = MacroGoal { orders: vec![], stance: Stance::Unlock, save_target: None };
+        let aux = GoalAux {
+            preferred_units: vec![UnitType::Knight, UnitType::Defender],
+            ..Default::default()
+        };
+        let knight = goal_potential(&state, 1, &goal, Some(&aux));
+        state.tribes.get_mut(&1).unwrap().units[0] = unit_at(60, UnitType::Defender);
+        let defender = goal_potential(&state, 1, &goal, Some(&aux));
+        let k_cost = get_unit_setting(UnitType::Knight).cost as f32;
+        let d_cost = get_unit_setting(UnitType::Defender).cost as f32;
+        assert!((knight - SHAPE_GOAL_ARCHETYPE_PER_COST * k_cost).abs() < 1e-3);
+        assert!((defender - SHAPE_GOAL_ARCHETYPE_PER_COST * d_cost).abs() < 1e-3);
+        assert!(knight > defender, "a knight must out-price a defender head-for-head");
+    }
+
+    #[test]
+    fn yield_structures_pay_per_partner_beyond_first() {
+        use crate::ai::oracle_macro::{MacroGoal, Stance};
+        use crate::coords::Coords;
+        use crate::states::StructureState;
+        use crate::types::StructureType;
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        let mut t1 = TribeState::default();
+        t1.cities.push(crate::states::CityState { idx: 60, owner: 1, ..Default::default() });
+        state.tribes.insert(1, t1);
+        let rule = Coords { x: 5, y: 5, idx: 60 };
+        for idx in [59, 70] {
+            let tile = state.tiles.entry(idx).or_insert_with(TileState::default);
+            tile.ruling_city_coords = Some(rule.clone());
+        }
+        // Partner tiles must be FRIENDLY territory to count (real-game rule).
+        for idx in [58, 48, 69, 71] {
+            state.tiles.entry(idx).or_insert_with(TileState::default).owner = 1;
+        }
+        let farm = |st: &mut GameState, idx: i32| {
+            st.structures.insert(idx, Some(StructureState {
+                structure_type: StructureType::Farm,
+                ..Default::default()
+            }));
+        };
+        // Unlock stance isolates the term.
+        let goal = MacroGoal { orders: vec![], stance: Stance::Unlock, save_target: None };
+        state.structures.insert(59, Some(StructureState {
+            structure_type: StructureType::Windmill,
+            ..Default::default()
+        }));
+        farm(&mut state, 58);
+        // One partner: the windmill pays for itself, no bonus.
+        let one = goal_potential(&state, 1, &goal, None);
+        assert!(one.abs() < 1e-4);
+        // Second adjacent farm: +YIELD_ADJ × reward_pop(1) × 1.
+        farm(&mut state, 48);
+        let two = goal_potential(&state, 1, &goal, None);
+        assert!((two - one - SHAPE_GOAL_YIELD_ADJ).abs() < 1e-4);
+        // Forge scales by its reward_pop (2 per extra mine).
+        state.structures.insert(70, Some(StructureState {
+            structure_type: StructureType::Forge,
+            ..Default::default()
+        }));
+        let mine = |st: &mut GameState, idx: i32| {
+            st.structures.insert(idx, Some(StructureState {
+                structure_type: StructureType::Mine,
+                ..Default::default()
+            }));
+        };
+        mine(&mut state, 69);
+        mine(&mut state, 71);
+        let with_forge = goal_potential(&state, 1, &goal, None);
+        assert!((with_forge - two - 2.0 * SHAPE_GOAL_YIELD_ADJ).abs() < 1e-4);
+        // Enemy-ruled structures pay nothing.
+        state.tribes.get_mut(&1).unwrap().cities[0].owner = 2;
+        let enemy = goal_potential(&state, 1, &goal, None);
+        assert!(enemy.abs() < 1e-4);
+    }
+
+    #[test]
+    fn stranded_progress_penalizes_only_uncompletable_unthreatened_cities() {
+        use crate::ai::oracle_macro::{MacroGoal, Stance};
+        use crate::states::{ResourceState, TechnologyState};
+        use crate::types::{ResourceType, TechnologyType};
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        let mut t1 = TribeState::default();
+        t1.stars = 0;
+        let mut city = crate::states::CityState { idx: 60, owner: 1, ..Default::default() };
+        city.level = 2;
+        city.progress = 1; // needs 3 to level; nothing affordable at 0 stars
+        city._territory = vec![60, 61];
+        t1.cities.push(city);
+        state.tribes.insert(1, t1);
+        // Explored up front so later phases don't shift the scout term.
+        state.tiles.entry(61).or_insert_with(TileState::default).explorers.insert(1);
+        let grow = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None };
+        let arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None };
+
+        // No resources anywhere: progress 1 is structurally stranded.
+        let stranded = goal_potential(&state, 1, &grow, None);
+        // ARM is exempt from the discipline (and from GROW-only terms).
+        assert!(goal_potential(&state, 1, &arm, None).abs() < 1e-4);
+
+        // v7: FLAGGED, not billed by depth — deeper sunk progress costs no
+        // more, so a level-up landing in overflow cannot out-cost its own SPT.
+        state.tribes.get_mut(&1).unwrap().cities[0].progress = 2;
+        let deeper = goal_potential(&state, 1, &grow, None);
+        assert!(
+            (stranded - deeper).abs() < 1e-3,
+            "stranded penalty is capped per city, not summed over sunk progress"
+        );
+        state.tribes.get_mut(&1).unwrap().cities[0].progress = 1;
+
+        // Remaining territory resources covering the need lift the penalty
+        // REGARDLESS of stars (structural predicate): 2 fruit → 1+2 >= 3.
+        state.tribes.get_mut(&1).unwrap().tech_vanilla.push(TechnologyState {
+            tech_type: TechnologyType::Organization,
+            discovered: true,
+            discovered_turn: 0,
+        });
+        state.resources.insert(61, Some(ResourceState { resource_type: ResourceType::Fruit }));
+        state.tribes.get_mut(&1).unwrap().cities[0]._territory.push(62);
+        state.resources.insert(62, Some(ResourceState { resource_type: ResourceType::Fruit }));
+        let completable = goal_potential(&state, 1, &grow, None);
+        assert!(
+            (completable - stranded - SHAPE_GOAL_STRANDED - SHAPE_GOAL_COMPLETION / 3.0).abs()
+                < 1e-3,
+            "completable progress drops the penalty AND earns the v7 bonus (1 of 3 pop)"
+        );
+
+        // Threatened city (enemy adjacent) is exempt even when stranded.
+        state.resources.insert(61, None);
+        state.resources.insert(62, None);
+        let restranded = goal_potential(&state, 1, &grow, None);
+        assert!((restranded - stranded).abs() < 1e-3);
+        let mut t2 = TribeState::default();
+        t2.id = 2;
+        t2.units.push(unit_at(61, UnitType::Warrior));
+        state.tribes.insert(2, t2);
+        let threatened = goal_potential(&state, 1, &grow, None);
+        assert!(
+            (threatened - restranded - SHAPE_GOAL_STRANDED).abs() < 1e-3,
+            "threat exemption must lift the penalty"
+        );
+    }
+
+    /// v7: holding stars must climb a gradient. Before this, banked stars
+    /// appeared nowhere in Phi, so spending them on anything scored strictly
+    /// beat holding and the measured policy was hand-to-mouth.
+    #[test]
+    fn savings_ramp_pays_for_banked_stars_and_keeps_the_economy_potential() {
+        use crate::ai::oracle_macro::{MacroGoal, Stance};
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        let mut t1 = TribeState::default();
+        t1.id = 1;
+        t1.stars = 0;
+        state.tribes.insert(1, t1);
+        let grow = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None };
+        let saving =
+            MacroGoal { orders: vec![], stance: Stance::Save, save_target: Some(20) };
+
+        // Empty bank: SAVE must equal GROW — the stance itself costs nothing.
+        let base = goal_potential(&state, 1, &grow, None);
+        assert!((goal_potential(&state, 1, &saving, None) - base).abs() < 1e-3);
+
+        // Half banked pays half the ramp; full banked pays all of it.
+        state.tribes.get_mut(&1).unwrap().stars = 10;
+        let half = goal_potential(&state, 1, &saving, None);
+        assert!((half - base - SHAPE_GOAL_SAVE / 2.0).abs() < 1e-3);
+        state.tribes.get_mut(&1).unwrap().stars = 20;
+        let full = goal_potential(&state, 1, &saving, None);
+        assert!((full - base - SHAPE_GOAL_SAVE).abs() < 1e-3);
+
+        // Overshooting the target pays no more — the ramp is not a hoard bonus.
+        state.tribes.get_mut(&1).unwrap().stars = 60;
+        assert!((goal_potential(&state, 1, &saving, None) - full).abs() < 1e-3);
+
+        // Under GROW the same bank is worth nothing: the ramp is stance-gated.
+        assert!((goal_potential(&state, 1, &grow, None) - base).abs() < 1e-3);
+
+        // A full bank must never outweigh spending it — otherwise the agent
+        // banks forever rather than buying the batch it saved for.
+        assert!(SHAPE_GOAL_SAVE < SHAPE_GOAL_SPT);
+    }
+
+    /// The v6 trap, guarded: a level-up zeroes progress (or leaves overflow),
+    /// so if banked progress were worth more than the SPT jump, growing would
+    /// be self-defeating. Both v7 progress terms must stay under one level.
+    #[test]
+    fn completion_terms_never_outweigh_the_level_up_they_pay_for() {
+        // Worst case for the bonus: progress one short of the threshold.
+        for level in 1..8 {
+            let held = level as f32 / (level + 1) as f32;
+            assert!(
+                SHAPE_GOAL_COMPLETION * held < SHAPE_GOAL_SPT,
+                "level {level}: banked completion bonus must not exceed the +1 SPT a level-up banks"
+            );
+        }
+        // Worst case for the penalty: a level-up landing in stranded overflow.
+        assert!(
+            SHAPE_GOAL_STRANDED * (STRANDED_PER_CITY_CAP as f32) < SHAPE_GOAL_SPT,
+            "a stranded landing must not out-cost the level-up that caused it"
+        );
+    }
+
+    /// Builds a 1-city tribe holding `techs`, with `territory` owned by it.
+    fn city_with(techs: &[crate::types::TechnologyType], territory: Vec<i32>) -> GameState {
+        use crate::states::TechnologyState;
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        let mut t1 = TribeState::default();
+        t1.id = 1;
+        for &tech in techs {
+            t1.tech_vanilla.push(TechnologyState {
+                tech_type: tech,
+                discovered: true,
+                discovered_turn: 0,
+            });
+        }
+        let mut city = crate::states::CityState { idx: 60, owner: 1, ..Default::default() };
+        city.level = 4;
+        city._territory = territory.clone();
+        t1.cities.push(city);
+        state.tribes.insert(1, t1);
+        for idx in territory {
+            let tile = state.tiles.entry(idx).or_insert_with(TileState::default);
+            tile.owner = 1;
+            tile.terrain_type = crate::types::TerrainType::Field;
+        }
+        state
+    }
+
+    /// v7 regression: v6 saw only resource tiles, so a city whose crops were
+    /// already farmed read as a dead end even with a Windmill available.
+    #[test]
+    fn max_affordable_pop_counts_multiplier_tier_by_partner_count() {
+        use crate::types::{StructureType, TechnologyType, TerrainType};
+        let techs = [TechnologyType::Organization, TechnologyType::Farming, TechnologyType::Construction];
+        // Three standing Farms around 61, which is an empty Field.
+        let mut state = city_with(&techs, vec![60, 61, 50, 72, 62]);
+        for idx in [50, 72, 62] {
+            state.structures.insert(
+                idx,
+                Some(crate::states::StructureState {
+                    structure_type: StructureType::Farm,
+                    ..Default::default()
+                }),
+            );
+        }
+        let city = state.tribes[&1].cities[0].clone();
+        // Windmill on 61 pays 1 x 3 friendly adjacent Farms.
+        assert_eq!(
+            max_affordable_pop(&state, 1, &city, i32::MAX),
+            3,
+            "windmill yield must scale with adjacent friendly farms"
+        );
+
+        // Without Construction the windmill is not unlocked and nothing is left.
+        let bare = city_with(
+            &[TechnologyType::Organization, TechnologyType::Farming],
+            vec![60, 61, 50, 72, 62],
+        );
+        let mut bare = bare;
+        for idx in [50, 72, 62] {
+            bare.structures.insert(
+                idx,
+                Some(crate::states::StructureState {
+                    structure_type: StructureType::Farm,
+                    ..Default::default()
+                }),
+            );
+        }
+        let bare_city = bare.tribes[&1].cities[0].clone();
+        assert_eq!(max_affordable_pop(&bare, 1, &bare_city, i32::MAX), 0);
+
+        // A Mountain tile with Meditation adds a 20-star temple pop.
+        let mut with_temple = city_with(
+            &[TechnologyType::Climbing, TechnologyType::Philosophy],
+            vec![60, 40],
+        );
+        with_temple.tiles.get_mut(&40).unwrap().terrain_type = TerrainType::Mountain;
+        let tc = with_temple.tribes[&1].cities[0].clone();
+        assert_eq!(
+            max_affordable_pop(&with_temple, 1, &tc, i32::MAX),
+            1,
+            "mountain temple is a legal pop route"
+        );
+        // …and it is priced: a 19-star budget cannot buy it.
+        assert_eq!(max_affordable_pop(&with_temple, 1, &tc, 19), 0);
+    }
+
+    /// The multiplier tier counts partners the city could still build, not
+    /// only the ones standing today — otherwise a city with unfarmed crops
+    /// still reads as a dead end.
+    #[test]
+    fn max_affordable_pop_counts_buildable_partners() {
+        use crate::states::ResourceState;
+        use crate::types::{ResourceType, TechnologyType};
+        let techs = [TechnologyType::Organization, TechnologyType::Farming, TechnologyType::Construction];
+        let mut state = city_with(&techs, vec![60, 61, 50, 72]);
+        // Two unfarmed crops adjacent to the empty field at 61.
+        for idx in [50, 72] {
+            state.resources.insert(idx, Some(ResourceState { resource_type: ResourceType::Crop }));
+        }
+        let city = state.tribes[&1].cities[0].clone();
+        // 2 farms (2 pop each) + a windmill worth 1 x 2 planned partners.
+        assert_eq!(max_affordable_pop(&state, 1, &city, i32::MAX), 6);
+    }
+
+    #[test]
+    fn contested_target_pays_one_extra_converger() {
+        use crate::ai::oracle_macro::{MacroGoal, OrderKind, Stance};
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        add_visible_village(&mut state, 5);
+        let mut t1 = TribeState::default();
+        t1.units.push(unit_at(3, UnitType::Warrior)); // assigned, d=2
+        t1.units.push(unit_at(8, UnitType::Warrior)); // second, d=3
+        state.tribes.insert(1, t1);
+        let ex = MacroGoal {
+            orders: vec![(OrderKind::Expand, 5)],
+            stance: Stance::Arm,
+            save_target: None,
+        };
+        let uncontested = goal_potential(&state, 1, &ex, None);
+
+        // Enemy squatter on the village: the second unit's gradient pays at
+        // half weight on top.
+        let mut t2 = TribeState::default();
+        t2.id = 2;
+        t2.units.push(unit_at(5, UnitType::Warrior));
+        state.tribes.insert(2, t2);
+        let contested = goal_potential(&state, 1, &ex, None);
+        let second = SHAPE_GOAL_CONTEST_SECOND
+            * SHAPE_GOAL_EXPAND_PER_TILE
+            * (SHAPE_PROX_CAP - 3) as f32;
+        assert!(
+            (contested - uncontested - second).abs() < 1e-3,
+            "contested village must pay the second unit ({contested} vs {uncontested})"
+        );
+    }
+
+    #[test]
+    fn grow_body_term_pays_to_cap_only() {
+        use crate::ai::oracle_macro::{MacroGoal, Stance};
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        let mut t1 = TribeState::default();
+        t1.units.push(unit_at(60, UnitType::Warrior));
+        state.tribes.insert(1, t1);
+        let grow = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None };
+
+        // 0 cities → cap 1: the second unit adds nothing.
+        let one = goal_potential(&state, 1, &grow, None);
+        state.tribes.get_mut(&1).unwrap().units.push(unit_at(61, UnitType::Warrior));
+        let two = goal_potential(&state, 1, &grow, None);
+        assert!((two - one).abs() < 1e-4, "beyond-cap unit must not pay");
+
+        // A city raises the cap to 2: the second unit now pays.
+        state.tribes.get_mut(&1).unwrap().cities.push(crate::states::CityState {
+            idx: 0,
+            owner: 1,
+            ..Default::default()
+        });
+        let capped_two = goal_potential(&state, 1, &grow, None);
+        let one_city_one_unit = {
+            let mut s2 = state.clone();
+            s2.tribes.get_mut(&1).unwrap().units.pop();
+            goal_potential(&s2, 1, &grow, None)
+        };
+        assert!(
+            (capped_two - one_city_one_unit - SHAPE_GOAL_BODY).abs() < 1e-3,
+            "unit within raised cap must pay"
+        );
+    }
+
+    #[test]
+    fn market_pays_star_adjacency_beyond_first_partner() {
+        use crate::ai::oracle_macro::{MacroGoal, Stance};
+        use crate::coords::Coords;
+        use crate::states::StructureState;
+        use crate::types::StructureType;
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        let mut t1 = TribeState::default();
+        t1.cities.push(crate::states::CityState { idx: 60, owner: 1, ..Default::default() });
+        state.tribes.insert(1, t1);
+        let rule = Coords { x: 5, y: 5, idx: 60 };
+        state.tiles.entry(59).or_insert_with(TileState::default).ruling_city_coords =
+            Some(rule);
+        for idx in [58, 48, 59] {
+            state.tiles.entry(idx).or_insert_with(TileState::default).owner = 1;
+        }
+        let put = |st: &mut GameState, idx: i32, s: StructureType| {
+            st.structures.insert(idx, Some(StructureState {
+                structure_type: s,
+                ..Default::default()
+            }));
+        };
+        let goal = MacroGoal { orders: vec![], stance: Stance::Unlock, save_target: None };
+        put(&mut state, 59, StructureType::Market);
+        put(&mut state, 58, StructureType::Windmill);
+        // One hub partner: no bonus (the market pays for itself).
+        let one = goal_potential(&state, 1, &goal, None);
+        assert!(one.abs() < 1e-4);
+        // Second hub: +YIELD_ADJ_STARS × reward_stars(1) × 1.
+        put(&mut state, 48, StructureType::Sawmill);
+        let two = goal_potential(&state, 1, &goal, None);
+        assert!((two - one - SHAPE_GOAL_YIELD_ADJ_STARS).abs() < 1e-4);
+    }
+
+    #[test]
+    fn standing_forest_in_territory_holds_option_value() {
+        use crate::ai::oracle_macro::{MacroGoal, Stance};
+        use crate::types::TerrainType;
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        state.tribes.insert(1, TribeState::default());
+        let goal = MacroGoal { orders: vec![], stance: Stance::Unlock, save_target: None };
+        let tile = state.tiles.entry(60).or_insert_with(TileState::default);
+        tile.owner = 1;
+        tile.terrain_type = TerrainType::Forest;
+        let with = goal_potential(&state, 1, &goal, None);
+        assert!((with - SHAPE_GOAL_FOREST_STANDING).abs() < 1e-4);
+        // Cleared (Field) or enemy-owned forest pays nothing.
+        state.tiles.get_mut(&60).unwrap().terrain_type = TerrainType::Field;
+        assert!(goal_potential(&state, 1, &goal, None).abs() < 1e-4);
+        state.tiles.get_mut(&60).unwrap().terrain_type = TerrainType::Forest;
+        state.tiles.get_mut(&60).unwrap().owner = 2;
+        assert!(goal_potential(&state, 1, &goal, None).abs() < 1e-4);
     }
 
     #[test]

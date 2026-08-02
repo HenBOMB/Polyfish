@@ -167,6 +167,58 @@ pub enum TribeType {
     Cymanti = 17,
 }
 
+/// Classic climate/skin index — the numbering used by the game's assets
+/// (ground_N/mountain_N textures) and by real captured data in
+/// `tile.climate`: Xin-xi=1, Imperius=2, Bardur=3, Oumaji=4, Kickoo=5,
+/// Hoodrick=6, Luxidoor=7, Vengir=8, Zebasi=9, Ai-Mo=10, Aquarion=11,
+/// Quetzali=12, Elyrion=13, Yadakk=14, Polaris=15, Cymanti=16;
+/// Nature/None=0. DISTINCT from the modern `TribeType` ids above —
+/// conflating them rendered XinXi land as Elyrion (Jul 2026 bug).
+pub fn classic_climate_id(tribe: TribeType) -> i32 {
+    match tribe {
+        TribeType::XinXi => 1,
+        TribeType::Imperius => 2,
+        TribeType::Bardur => 3,
+        TribeType::Oumaji => 4,
+        TribeType::Kickoo => 5,
+        TribeType::Hoodrick => 6,
+        TribeType::Luxidoor => 7,
+        TribeType::Vengir => 8,
+        TribeType::Zebasi => 9,
+        TribeType::AiMo => 10,
+        TribeType::Aquarion => 11,
+        TribeType::Quetzali => 12,
+        TribeType::Elyrion => 13,
+        TribeType::Yadakk => 14,
+        TribeType::Polaris => 15,
+        TribeType::Cymanti => 16,
+        TribeType::Nature | TribeType::None => 0,
+    }
+}
+
+/// Inverse of `classic_climate_id`; unknown ids map to Nature.
+pub fn tribe_from_classic_climate(id: i32) -> TribeType {
+    match id {
+        1 => TribeType::XinXi,
+        2 => TribeType::Imperius,
+        3 => TribeType::Bardur,
+        4 => TribeType::Oumaji,
+        5 => TribeType::Kickoo,
+        6 => TribeType::Hoodrick,
+        7 => TribeType::Luxidoor,
+        8 => TribeType::Vengir,
+        9 => TribeType::Zebasi,
+        10 => TribeType::AiMo,
+        11 => TribeType::Aquarion,
+        12 => TribeType::Quetzali,
+        13 => TribeType::Elyrion,
+        14 => TribeType::Yadakk,
+        15 => TribeType::Polaris,
+        16 => TribeType::Cymanti,
+        _ => TribeType::Nature,
+    }
+}
+
 impl From<i32> for TribeType {
     fn from(v: i32) -> Self {
         Self::from_repr(v as i8).unwrap_or(TribeType::None)

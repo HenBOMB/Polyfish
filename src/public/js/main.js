@@ -1315,9 +1315,9 @@ function getStructureFile(type, climate) {
         13: `buildings/common/Sawmill`,
         21: `buildings/common/Mine`,
         22: `buildings/common/Forge`,
-        27: `buildings/${CLIMATE_IDS[climate]}/Default/Monuments/Monument5_${climate - 1}`,
-        28: `buildings/${CLIMATE_IDS[climate]}/Default/Monuments/Monument6_${climate - 1}`,
-        29: `buildings/${CLIMATE_IDS[climate]}/Default/Monuments/Monument7_${climate - 1}`,
+        27: `buildings/${CLASSIC_CLIMATE_NAMES[climate]}/Default/Monuments/Monument5_${climate - 1}`,
+        28: `buildings/${CLASSIC_CLIMATE_NAMES[climate]}/Default/Monuments/Monument6_${climate - 1}`,
+        29: `buildings/${CLASSIC_CLIMATE_NAMES[climate]}/Default/Monuments/Monument7_${climate - 1}`,
         37: `buildings/Cymanti/Default/Unique/spores_4`,
     };
     !map[type] && console.log(`MISSING STRUCTURE: ${type}`);

@@ -39,6 +39,11 @@ pub const OFFSET_STRUCTURES: usize = 0;
 pub const OFFSET_UNITS: usize = 48;
 pub const OFFSET_TECHS: usize = 112;
 pub const OFFSET_ABILITIES: usize = 160;
+/// City-reward choices (CityRewardType ids 1..=8 → 181..=188), carved from
+/// the unused tail of the ability block. Before Jul 2026 every Reward move
+/// shared slot 191, making Explorer-vs-Workshop invisible to the policy;
+/// old training shards with 191 targets remain readable (dead slot).
+pub const OFFSET_REWARDS: usize = 181;
 
 static STRUCTURE_MAP: LazyLock<HashMap<StructureType, usize>> = LazyLock::new(|| {
     StructureType::iter()
@@ -112,7 +117,7 @@ impl DecomposedMapper {
             MoveType::Summon => m.unit_type().ok().and_then(|u| Self::map_unit(u)),
             MoveType::Research => m.tech_type().ok().and_then(|t| Self::map_tech(t)),
             MoveType::Ability => m.ability_type().ok().and_then(|a| Self::map_ability(a)),
-            MoveType::Reward => Some(191), // Last slot for generic rewards
+            MoveType::Reward => m.reward_type().ok().and_then(Self::map_reward),
             // Harvesting / Capturing does not require a target type
             _ => None,
         };
@@ -143,7 +148,7 @@ impl DecomposedMapper {
             MoveType::Summon => mv.unit_type.and_then(|u| Self::map_unit(u)),
             MoveType::Research => mv.tech_type.and_then(|t| Self::map_tech(t)),
             MoveType::Ability => mv.ability_type.and_then(|a| Self::map_ability(a)),
-            MoveType::Reward => Some(191),
+            MoveType::Reward => mv.reward_type.and_then(Self::map_reward),
             _ => None,
         };
 
@@ -205,6 +210,15 @@ impl DecomposedMapper {
             }
             OFFSET_TECHS + i
         })
+    }
+
+    /// CityRewardType repr ids are stable (1..=8), so the slot is derived
+    /// from the id directly — no iteration-order fragility.
+    pub fn map_reward(r: crate::types::CityRewardType) -> Option<usize> {
+        if r == crate::types::CityRewardType::None {
+            return None;
+        }
+        Some(OFFSET_REWARDS + (r as i8 as usize) - 1)
     }
 
     pub fn map_ability(a: AbilityType) -> Option<usize> {

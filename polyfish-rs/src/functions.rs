@@ -522,11 +522,18 @@ pub fn get_city_production(state: &GameState, city: &CityState) -> i32 {
                     }
                 }
                 StructureType::Market => {
-                    // +X star for each adjacent "production" building (Windmill, Sawmill, Forge)
+                    // +X star for each adjacent friendly "production" building
+                    // (Windmill, Sawmill, Forge) — ownership check matches the
+                    // Clathrus/Sanctuary branches.
                     let adj = crate::functions::get_adjacent_indices(state, idx, 1);
                     for n_idx in adj {
                         if let Some(n_struct) = crate::functions::get_structure_at(state, n_idx) {
-                            if setting.adjacent_types.contains(&n_struct.structure_type) {
+                            let friendly = state
+                                .tiles
+                                .get(&n_idx)
+                                .map_or(false, |t| t.owner == city.owner);
+                            if friendly && setting.adjacent_types.contains(&n_struct.structure_type)
+                            {
                                 prod += setting.reward_stars;
                             }
                         }
@@ -615,7 +622,8 @@ pub fn is_enemy_city(state: &GameState, idx: i32, pov_id: PlayerId) -> bool {
 /// Check if a tile is frozen (has Ice terrain or Polaris climate)
 pub fn is_tile_frozen(state: &GameState, idx: i32) -> bool {
     state.tiles.get(&idx).map_or(false, |t| {
-        t.terrain_type == TerrainType::Ice || t.climate == TribeType::Polaris
+        t.terrain_type == TerrainType::Ice
+            || t.climate == crate::types::classic_climate_id(TribeType::Polaris)
     })
 }
 

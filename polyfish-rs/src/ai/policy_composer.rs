@@ -108,7 +108,10 @@ fn compute_move_priors_from_probs(
                 .ability_type()
                 .ok()
                 .and_then(|a| DecomposedMapper::map_ability(a)),
-            MoveType::Reward => Some(191),
+            MoveType::Reward => mv
+                .reward_type()
+                .ok()
+                .and_then(DecomposedMapper::map_reward),
             _ => None,
         };
 
@@ -225,7 +228,10 @@ fn compute_move_log_probs_from_logs(
                 .ability_type()
                 .ok()
                 .and_then(|a| DecomposedMapper::map_ability(a)),
-            MoveType::Reward => Some(191),
+            MoveType::Reward => mv
+                .reward_type()
+                .ok()
+                .and_then(DecomposedMapper::map_reward),
             _ => None,
         };
 
@@ -342,7 +348,7 @@ mod tests {
     #[test]
     fn raw_priors_match_tensor_priors_per_row() {
         let policy = synthetic_policy_output();
-        let raw_rows = policy.to_raw_rows().unwrap();
+        let raw_rows = policy.to_raw_rows(None).unwrap();
         assert_eq!(raw_rows.len(), 2);
 
         let legal_moves: Vec<Box<dyn Move>> = vec![Box::new(EndTurnMove)];

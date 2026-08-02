@@ -578,6 +578,13 @@ input:disabled, select:disabled, .cyber-slider:disabled {
   margin: 0;
 }
 
+.mc-subtitle {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin: 4px 16px 0;
+  line-height: 1.4;
+}
+
 .mc-actions {
   display: flex;
   gap: 8px;

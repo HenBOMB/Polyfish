@@ -170,7 +170,7 @@ pub const CH_ORDER_START: usize = CH_PURSUIT_END;
 pub const CH_ORDER_COUNT: usize = 3;
 pub const CH_ORDER_END: usize = CH_ORDER_START + CH_ORDER_COUNT;
 pub const CH_STANCE_START: usize = CH_ORDER_END;
-pub const CH_STANCE_COUNT: usize = 3;
+pub const CH_STANCE_COUNT: usize = 4;
 pub const CH_STANCE_END: usize = CH_STANCE_START + CH_STANCE_COUNT;
 
 /// Total number of feature channels (dynamically computed)
@@ -993,6 +993,7 @@ mod tests {
                 (OrderKind::Attack, 5),
             ],
             stance: Stance::Arm,
+            save_target: None,
         };
         let raw = state_to_cpu_features_goal(&game.state, 1, None, Some(&goal)).unwrap();
         let plane =
@@ -1119,6 +1120,7 @@ mod tests {
         );
         // Pinned: the trained model's conv1 input width. Bump deliberately
         // (with a weight migration) when adding channels.
-        assert_eq!(NUM_CHANNELS, 168);
+        // 168 -> 169: v7 SAVE stance plane (migrate_save_stance.py).
+        assert_eq!(NUM_CHANNELS, 169);
     }
 }

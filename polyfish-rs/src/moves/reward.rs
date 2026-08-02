@@ -67,20 +67,10 @@ impl Move for RewardMove {
 
             match reward_type {
                 CityRewardType::Workshop => {
-                    if let Some(tribe) = state.tribes.get_mut(&p_id) {
-                        if let Some(city) = tribe.cities.get_mut(c_idx) {
-                            if state.settings._verbose {
-                                state._messages.push(format!("Workshop (+1 Production) 🔨"));
-                            }
-                            city.production += 1;
-                            undos.push(Box::new(move |s: &mut GameState| {
-                                if let Some(t) = s.tribes.get_mut(&p_id) {
-                                    if let Some(c) = t.cities.get_mut(c_idx) {
-                                        c.production -= 1;
-                                    }
-                                }
-                            }) as UndoCallback);
-                        }
+                    // +1 SPT comes from the rewards count in get_city_production —
+                    // no stored production bump (it double-counted, Aug 2026 fix).
+                    if state.settings._verbose {
+                        state._messages.push(format!("Workshop (+1 Production) 🔨"));
                     }
                 }
                 CityRewardType::Explorer => {
@@ -133,22 +123,18 @@ impl Move for RewardMove {
                     }
                 }
                 CityRewardType::Park => {
+                    // +1 SPT via the rewards count in get_city_production (real
+                    // game: Park = +250 score AND +1 SPT, like Workshop).
                     if let Some(tribe) = state.tribes.get_mut(&p_id) {
-                        if let Some(city) = tribe.cities.get_mut(c_idx) {
-                            if state.settings._verbose {
-                                state._messages.push(format!("🏠 Park (+250 Score) 🌳"));
-                            }
-                            city.production += 1;
-                            tribe.score += 250;
-                            undos.push(Box::new(move |s: &mut GameState| {
-                                if let Some(t) = s.tribes.get_mut(&p_id) {
-                                    t.score -= 250;
-                                    if let Some(c) = t.cities.get_mut(c_idx) {
-                                        c.production -= 1;
-                                    }
-                                }
-                            }) as UndoCallback);
+                        if state.settings._verbose {
+                            state._messages.push(format!("🏠 Park (+250 Score) 🌳"));
                         }
+                        tribe.score += 250;
+                        undos.push(Box::new(move |s: &mut GameState| {
+                            if let Some(t) = s.tribes.get_mut(&p_id) {
+                                t.score -= 250;
+                            }
+                        }) as UndoCallback);
                     }
                 }
                 CityRewardType::SuperUnit => {

@@ -32,7 +32,8 @@ fn test_harvest_level_up_prioritization() {
         city1.owner = player_id;
         city1.idx = city1_idx;
         city1.level = 1;
-        city1.population = 1; // Level 2 needs 2 pop.
+        city1.population = 1;
+        city1.progress = 1; // Level 2 needs 2 pop; progress is the accumulator.
         city1._territory = vec![city1_idx, 11];
         tribe.cities.push(city1);
 

@@ -183,6 +183,77 @@ mod tests {
         assert!(f16_to_f32(0x7c00).is_infinite());
         assert!(f16_to_f32(0x7e00).is_nan());
     }
+
+    /// v9: the fog head must agree across the three backends that can produce
+    /// it. Mirroring a head is only useful if the mirror is faithful — a
+    /// silent divergence here would feed the risk term a different signal in
+    /// self-play (Metal/tch) than the one train.py supervised.
+    #[test]
+    fn fog_head_agrees_across_backends() {
+        let path = "model.safetensors";
+        if !std::path::Path::new(path).exists() {
+            return;
+        }
+        let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f32 / (1u64 << 53) as f32
+        };
+        let batch = 2usize;
+        let spatial: Vec<f32> = (0..batch * super::NUM_CHANNELS * super::SPATIAL)
+            .map(|_| next())
+            .collect();
+        let player: Vec<f32> = (0..batch * super::PLAYER_DIM).map(|_| next()).collect();
+
+        let metal = match super::MetalPolyZeroNet::load(path) {
+            Ok(n) => n,
+            Err(_) => return,
+        };
+        let (_, metal_rows) = metal.forward_batch(&spatial, &player, batch);
+        let Some(metal_fog) = metal_rows[0].fog.clone() else {
+            panic!("live model carries aux_fog; the Metal graph must emit it");
+        };
+        assert_eq!(metal_fog.len(), super::SPATIAL);
+        assert!(metal_fog.iter().all(|p| (0.0..=1.0).contains(p)));
+
+        // candle reference on CPU
+        use candle_core::{DType, Device, Tensor as CTensor};
+        let vb = unsafe {
+            candle_nn::VarBuilder::from_mmaped_safetensors(
+                &[std::path::Path::new(path)],
+                DType::F32,
+                &Device::Cpu,
+            )
+        };
+        let Ok(vb) = vb else { return };
+        let Ok(cnet) = crate::ai::network::PolyZeroNet::new(vb) else { return };
+        let cmap = CTensor::from_vec(
+            spatial.clone(),
+            (batch, super::NUM_CHANNELS, super::MAP_SIZE, super::MAP_SIZE),
+            &Device::Cpu,
+        )
+        .unwrap();
+        let cplayer =
+            CTensor::from_vec(player.clone(), (batch, super::PLAYER_DIM), &Device::Cpu).unwrap();
+        let (_, cval) = cnet.forward(&cmap, &cplayer).unwrap();
+        let cfog = cval.fog_probs.expect("candle must emit fog");
+        let cfog0 = cfog.get(0).unwrap().to_vec1::<f32>().unwrap();
+
+        let max_d = metal_fog
+            .iter()
+            .zip(cfog0.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_d < 2e-3,
+            "Metal and candle fog disagree by {max_d} (first few: metal {:?} candle {:?})",
+            &metal_fog[..4],
+            &cfog0[..4]
+        );
+    }
+
 }
 
 /// PolyZeroNet inference via a hand-composed MPSGraph. Holds the raw weight
@@ -194,6 +265,9 @@ mod tests {
 /// access).
 pub struct MetalPolyZeroNet {
     weights: HashMap<String, (Vec<usize>, Vec<f32>)>,
+    /// v9: whether this checkpoint carries the mirrored `aux_fog` head. Fixed
+    /// at load, so the compiled graph shape is stable across batch sizes.
+    has_fog: bool,
     device: MetalDevice,
     queue: CommandQueue,
     /// Shared descriptor for async submission (`waitUntilCompleted = false`);
@@ -280,6 +354,7 @@ impl MetalPolyZeroNet {
             .set_wait_until_completed(false)
             .map_err(|e| anyhow::anyhow!("failed to configure async descriptor: {e:?}"))?;
         Ok(Self {
+            has_fog: weights.contains_key("aux_fog.weight"),
             weights,
             device,
             queue,
@@ -618,6 +693,19 @@ impl MetalPolyZeroNet {
             .reshape(&target_conv, &[b, target_c * h * w], None)
             .expect("forward: flatten pi_target"); // [B, 121]
 
+        // v9: mirrored aux head — per-tile enemy-under-fog LOGITS off the same
+        // post-attention `x2` the policy spatial heads use. The bindings expose
+        // no sigmoid op, so the squash happens on the CPU in `slice_outputs`;
+        // every backend's `RawPolicyOutput.fog` is a probability.
+        let fog_spatial = self.has_fog.then(|| {
+            let fog_conv = self.conv2d(&graph, &x2, "aux_fog", 0);
+            let (fog_w_shape, _) = self.get("aux_fog.weight");
+            let fog_c = fog_w_shape[0];
+            graph
+                .reshape(&fog_conv, &[b, fog_c * h * w], None)
+                .expect("forward: flatten aux_fog")
+        });
+
         // Value head (linear 1-channel pool: no norm, no activation — see train.py)
         let v_pooled_conv = self.conv2d(&graph, &x2, "v_pool_conv", 0);
         let (v_pool_w_shape, _) = self.get("v_pool_conv.weight");
@@ -647,7 +735,11 @@ impl MetalPolyZeroNet {
                 data_type: data_type::FLOAT32,
             },
         ];
-        let targets: [&Tensor; 5] = [&win, &action_type, &source_spatial, &target_spatial, &move_option];
+        let mut targets: Vec<&Tensor> =
+            vec![&win, &action_type, &source_spatial, &target_spatial, &move_option];
+        if let Some(f) = fog_spatial.as_ref() {
+            targets.push(f);
+        }
         let executable = graph
             .compile(&self.device, &feed_descs, &targets)
             .expect("mpsgraph: graph.compile failed");
@@ -715,6 +807,7 @@ impl MetalPolyZeroNet {
             source: f32_buf(capacity_rows * SPATIAL),
             target: f32_buf(capacity_rows * SPATIAL),
             option: f32_buf(capacity_rows * OPTION_DIM),
+            fog: f32_buf(capacity_rows * SPATIAL),
         }
     }
 
@@ -747,13 +840,16 @@ impl MetalPolyZeroNet {
         // array, which the framework rejects). Order matches the compile
         // targets: win, action, source, target, option. No zero-fill: the
         // executable overwrites every element of each output.
-        let outputs = vec![
+        let mut outputs = vec![
             td(&set.win, &[batch, 1]),
             td(&set.action, &[batch, ACTION_DIM]),
             td(&set.source, &[batch, SPATIAL]),
             td(&set.target, &[batch, SPATIAL]),
             td(&set.option, &[batch, OPTION_DIM]),
         ];
+        if self.has_fog {
+            outputs.push(td(&set.fog, &[batch, SPATIAL]));
+        }
         let output_refs: Vec<&TensorData> = outputs.iter().collect();
 
         let mut executables = self.executables.borrow_mut();
@@ -839,6 +935,7 @@ struct BufferSet {
     source: MetalBuffer,
     target: MetalBuffer,
     option: MetalBuffer,
+    fog: MetalBuffer,
 }
 
 /// Copy an f32 slice into a shared-storage Metal buffer.
@@ -887,6 +984,8 @@ impl InFlightForward {
 /// per-row `(value, RawPolicyOutput)` CPU data. Shared by the sync and async
 /// paths so both produce byte-identical results.
 fn slice_outputs(results: &[TensorData], batch: usize) -> (Vec<f32>, Vec<RawPolicyOutput>) {
+    // The fog head is an optional 6th target (absent on pre-aux checkpoints).
+    let fog_v = results.get(5).map(|r| r.read_f32().expect("forward: read fog"));
     let win_v = results[0].read_f32().expect("forward: read win");
     let action_v = results[1].read_f32().expect("forward: read action");
     let source_v = results[2].read_f32().expect("forward: read source");
@@ -907,6 +1006,14 @@ fn slice_outputs(results: &[TensorData], batch: usize) -> (Vec<f32>, Vec<RawPoli
             source_spatial: source_v[i * SS..(i + 1) * SS].to_vec(),
             target_spatial: target_v[i * TS..(i + 1) * TS].to_vec(),
             move_option: option_v[i * MO..(i + 1) * MO].to_vec(),
+            // Logits -> probabilities here: MPSGraph's bindings expose no
+            // sigmoid, and 121 CPU exps per row is noise next to the forward.
+            fog: fog_v.as_ref().map(|f| {
+                f[i * SPATIAL..(i + 1) * SPATIAL]
+                    .iter()
+                    .map(|z| 1.0 / (1.0 + (-z).exp()))
+                    .collect()
+            }),
         });
     }
     (values, policy)

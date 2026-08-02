@@ -426,12 +426,90 @@ fn dump_failed_game(
 /// multi-turn 3rd-city pursuit analysis: the acting player's owned cities,
 /// FOW-visible uncaptured villages (open_villages seen by pov — same set the
 /// ThirdCity trace uses), and unit tiles. Row-major 11x11 tile indices.
+/// v7 belief tripwire: what actually happened to each painted EXPAND plan.
+///
+/// This is the discriminator for whether a belief state is the binding
+/// constraint. If plans mostly die to enemies that were NOT visible when we
+/// committed, the missing machinery is probabilistic opponent modelling. If
+/// they mostly die to our own goal churn, the missing machinery is commitment,
+/// and belief can wait.
+#[derive(Default)]
+struct PlanTracker {
+    /// target tile -> (turn first painted, enemy already visible near it then)
+    open: std::collections::HashMap<i32, (i32, bool)>,
+    achieved: u32,
+    contested_known: u32,
+    contested_surprise: u32,
+    dropped: u32,
+}
+
+/// A living enemy unit within `r` of `idx` that this seat can actually see.
+fn enemy_visible_near(state: &GameState, pov: PlayerId, idx: i32, r: i32) -> bool {
+    let w = state.settings.size as i32;
+    if w == 0 {
+        return false;
+    }
+    let (bx, by) = (idx % w, idx / w);
+    state
+        .tribes
+        .iter()
+        .filter(|(id, _)| **id != pov)
+        .flat_map(|(_, t)| t.units.iter())
+        .any(|u| {
+            let ui = u.coords.idx;
+            let (ax, ay) = (ui % w, ui / w);
+            (ax - bx).abs().max((ay - by).abs()) <= r
+                && state.tiles.get(&ui).map_or(false, |t| t.explorers.contains(&pov))
+        })
+}
+
+/// Opens a record for every newly painted EXPAND target and resolves the ones
+/// that left the goal since the last ply.
+fn update_plans(
+    state: &GameState,
+    pov: PlayerId,
+    goal: &polyfish::ai::oracle_macro::MacroGoal,
+    pt: &mut PlanTracker,
+) {
+    use polyfish::ai::oracle_macro::OrderKind;
+    let now: std::collections::HashSet<i32> = goal
+        .orders
+        .iter()
+        .filter(|(k, _)| *k == OrderKind::Expand)
+        .map(|(_, i)| *i)
+        .collect();
+    let turn = state.settings.turn;
+    for &t in &now {
+        pt.open.entry(t).or_insert_with(|| (turn, enemy_visible_near(state, pov, t, 3)));
+    }
+    let gone: Vec<i32> = pt.open.keys().copied().filter(|t| !now.contains(t)).collect();
+    for t in gone {
+        let Some((_, enemy_at_commit)) = pt.open.remove(&t) else { continue };
+        if state.tiles.get(&t).map_or(false, |ti| ti.owner == pov) {
+            pt.achieved += 1;
+        } else if enemy_visible_near(state, pov, t, 2) {
+            if enemy_at_commit {
+                pt.contested_known += 1;
+            } else {
+                pt.contested_surprise += 1;
+            }
+        } else {
+            pt.dropped += 1;
+        }
+    }
+}
+
 fn dump_turn_state(
     file: &mut File,
     game_idx: usize,
     state: &GameState,
     pov: PlayerId,
     open_villages: &std::collections::HashSet<i32>,
+    arch: &polyfish::ai::oracle_macro::ArchetypeState,
+    goal: Option<&polyfish::ai::oracle_macro::MacroGoal>,
+    commit: &polyfish::ai::oracle_macro::StanceCommit,
+    plans: &PlanTracker,
+    tier3_bought: u32,
 ) {
     let Some(tribe) = state.tribes.get(&pov) else {
         return;
@@ -448,14 +526,46 @@ fn dump_turn_state(
         })
         .collect();
     let units: Vec<i32> = tribe.units.iter().map(|u| u.coords.idx).collect();
+    let city_detail: Vec<serde_json::Value> = tribe
+        .cities
+        .iter()
+        .map(|c| {
+            json!({
+                "idx": c.idx,
+                "level": c.level,
+                "progress": c.progress,
+                "production": polyfish::functions::get_city_production(state, c),
+            })
+        })
+        .collect();
     let rec = json!({
         "game": game_idx,
         "turn": state.settings.turn,
         "player": pov,
         "cities": cities,
         "city_count": cities.len(),
+        "city_detail": city_detail,
         "visible_villages": visible_villages,
         "units": units,
+        "seen_squishy": arch.seen_squishy,
+        "seen_heavy": arch.seen_heavy,
+        "seen_cavalry": arch.seen_cavalry,
+        "knight_commit": arch.overlays.knight_commit,
+        // v7 commitment + plan outcomes.
+        "stance": goal.map(|g| format!("{:?}", g.stance)),
+        "save_target": goal.and_then(|g| g.save_target),
+        // Raw batch cost regardless of the SAVE gate: separates "no batch was
+        // ever placeable" (the tier-3 tech wall) from "a batch existed but the
+        // reachability gate rejected it". Without this a dead SAVE stance is
+        // indistinguishable from a correctly quiet one.
+        "save_batch": polyfish::ai::oracle_macro::save_batch_cost(state, pov, tier3_bought),
+        "stance_flips": commit.stance_flips,
+        "order_flips": commit.order_flips,
+        "turns_seen": commit.turns_seen,
+        "plan_achieved": plans.achieved,
+        "plan_contested_known": plans.contested_known,
+        "plan_contested_surprise": plans.contested_surprise,
+        "plan_dropped": plans.dropped,
     });
     if let Ok(s) = serde_json::to_string(&rec) {
         let _ = writeln!(file, "{s}");
@@ -1123,6 +1233,9 @@ fn play_single_game(
     dump_turn_states: Option<&str>,
     dump_city_rewards: Option<&str>,
     dump_star_spend: Option<&str>,
+    dump_reward_choices: Option<&str>,
+    dump_level_completion: Option<&str>,
+    dump_pop_spend_choices: Option<&str>,
     seat_roles: [&'static str; 2],
     shape_w_label: f32,
     shape_w_tree: f32,
@@ -1252,11 +1365,62 @@ fn play_single_game(
             }
         }
     }
-    const STAR_SPEND_TYPES: [polyfish::types::MoveType; 4] = [
+    // --dump-reward-choices: one JSONL record per city-reward choice ply with
+    // the full search trace of the (modal) candidate pair — per-candidate
+    // post-search Q, visits, prior, edge reward — for Q-gap sizing of the
+    // reward-choice pricing terms. Not combinable with --dump-failed-dir
+    // (that path consumes the trace first).
+    let mut reward_choice_file: Option<File> = None;
+    if let Some(dir) = dump_reward_choices {
+        let path = std::path::Path::new(dir);
+        if let Err(e) = std::fs::create_dir_all(path) {
+            eprintln!("[dump-reward-choices] failed to create {}: {e}", path.display());
+        } else {
+            match File::create(path.join(format!("game{game_idx}.jsonl"))) {
+                Ok(f) => reward_choice_file = Some(f),
+                Err(e) => eprintln!("[dump-reward-choices] failed to open game file: {e}"),
+            }
+        }
+    }
+
+    // --dump-level-completion: one JSONL record per executed Harvest/Build
+    // with owning-city level/progress and stars before/after.
+    let mut level_completion_file: Option<File> = None;
+    if let Some(dir) = dump_level_completion {
+        let path = std::path::Path::new(dir);
+        if let Err(e) = std::fs::create_dir_all(path) {
+            eprintln!("[dump-level-completion] failed to create {}: {e}", path.display());
+        } else {
+            match File::create(path.join(format!("game{game_idx}.jsonl"))) {
+                Ok(f) => level_completion_file = Some(f),
+                Err(e) => eprintln!("[dump-level-completion] failed to open game file: {e}"),
+            }
+        }
+    }
+
+    // --dump-pop-spend-choices: sampled early-economy ply traces for Q-gap
+    // sizing of the completion-discipline and body-count terms.
+    let mut pop_spend_file: Option<File> = None;
+    if let Some(dir) = dump_pop_spend_choices {
+        let path = std::path::Path::new(dir);
+        if let Err(e) = std::fs::create_dir_all(path) {
+            eprintln!("[dump-pop-spend-choices] failed to create {}: {e}", path.display());
+        } else {
+            match File::create(path.join(format!("game{game_idx}.jsonl"))) {
+                Ok(f) => pop_spend_file = Some(f),
+                Err(e) => eprintln!("[dump-pop-spend-choices] failed to open game file: {e}"),
+            }
+        }
+    }
+    let mut pop_spend_dumped: usize = 0;
+    let mut last_pop_spend_turn: i32 = -1;
+
+    const STAR_SPEND_TYPES: [polyfish::types::MoveType; 5] = [
         polyfish::types::MoveType::Research,
         polyfish::types::MoveType::Harvest,
         polyfish::types::MoveType::Build,
         polyfish::types::MoveType::Summon,
+        polyfish::types::MoveType::Ability,
     ];
 
     let prior_w = decay_crutch(
@@ -1366,6 +1530,14 @@ fn play_single_game(
     // techs never pass through a Research move, so they don't count).
     let mut techs_bought = [0u32; 2];
     let mut tier3_bought = [0u32; 2];
+    // v3 archetype doctrine state per seat (peak enemy sightings, sticky
+    // doctrine choice, overlays) — persists across plies like the counters.
+    let mut archetype_states: [polyfish::ai::oracle_macro::ArchetypeState; 2] =
+        Default::default();
+    // v7: standing macro commitment per seat — the goal-setter's memory.
+    let mut stance_commits: [polyfish::ai::oracle_macro::StanceCommit; 2] = Default::default();
+    // v7 belief tripwire: per-seat EXPAND plan outcomes.
+    let mut plan_trackers: [PlanTracker; 2] = Default::default();
     while !polyfish::functions::is_game_over(&game.state) {
         record_spt_at_turn_start(
             &game.state,
@@ -1386,12 +1558,43 @@ fn play_single_game(
 
         let pov = game.state.settings.current_player_turn_id;
 
+        // EXP_ELO_028 Stage 1: scripted macro goal for net seats. The SAME
+        // goal must appear in the recorded features and in every encode the
+        // agent performs, or training data and search would disagree.
+        // v7: resolved through the standing commitment, not recomputed cold,
+        // and taken before the turn dump so the snapshot sees this ply's goal.
+        let macro_goal = if goal_channels && is_net_seat(seat_roles, pov) {
+            let seat = ((pov - 1) as usize).min(1);
+            let g = polyfish::ai::oracle_macro::update_goal(
+                &game.state,
+                pov,
+                &mut stance_commits[seat],
+                tier3_bought[seat],
+            );
+            update_plans(&game.state, pov, &g, &mut plan_trackers[seat]);
+            Some(g)
+        } else {
+            None
+        };
+
         // Dump the start-of-player-turn snapshot once per (turn, pov), before
         // any move that turn mutates the state.
         if let Some(f) = turn_dump_file.as_mut() {
             let key = (game.state.settings.turn, pov);
             if last_dump_key != Some(key) {
-                dump_turn_state(f, game_idx, &game.state, pov, &open_villages);
+                let seat = ((pov - 1) as usize).min(1);
+                dump_turn_state(
+                    f,
+                    game_idx,
+                    &game.state,
+                    pov,
+                    &open_villages,
+                    &archetype_states[seat],
+                    macro_goal.as_ref(),
+                    &stance_commits[seat],
+                    &plan_trackers[seat],
+                    tier3_bought[seat],
+                );
                 last_dump_key = Some(key);
             }
         }
@@ -1409,14 +1612,6 @@ fn play_single_game(
             last_tempo_key = Some(tempo_key);
         }
 
-        // EXP_ELO_028 Stage 1: scripted macro goal for net seats. The SAME
-        // goal must appear in the recorded features and in every encode the
-        // agent performs, or training data and search would disagree.
-        let macro_goal = if goal_channels && is_net_seat(seat_roles, pov) {
-            Some(polyfish::ai::oracle_macro::scripted_goal(&game.state, pov))
-        } else {
-            None
-        };
 
         // Get state tensor
         let current_network = if pov == 1 { network1 } else { network2 };
@@ -1437,12 +1632,19 @@ fn play_single_game(
         });
         let seat = ((pov - 1) as usize).min(1);
         let goal_aux = macro_goal.as_ref().map(|g| {
+            polyfish::ai::oracle_macro::update_archetype(
+                &game.state,
+                pov,
+                g,
+                &mut archetype_states[seat],
+            );
             polyfish::ai::oracle_macro::scripted_goal_aux(
                 &game.state,
                 pov,
                 g,
                 techs_bought[seat],
                 tier3_bought[seat],
+                Some(&archetype_states[seat]),
             )
         });
         current_agent.set_macro_goal(macro_goal, star_gate);
@@ -1537,7 +1739,25 @@ fn play_single_game(
             None
         };
 
+        // Reward-choice ply? (modal — generate_reward_moves preempts all
+        // other moves, so the root is exactly the pending choice pair(s))
+        let reward_choice_ply = reward_choice_file.is_some() && {
+            let mut rm: Vec<Box<dyn polyfish::moves::Move>> = Vec::new();
+            polyfish::moves::reward::generate_reward_moves(&game.state, &mut rm);
+            !rm.is_empty()
+        };
+
+        // Sampled early-economy ply for the pop-spend Q-gap dump.
+        let pop_spend_ply = pop_spend_file.is_some()
+            && !reward_choice_ply
+            && game.state.settings.turn <= 15
+            && pop_spend_dumped < 12
+            && game.state.settings.turn > last_pop_spend_turn
+            && game.state.tribes.get(&pov).map_or(false, |t| t.stars >= 2);
+
         if trace_all
+            || reward_choice_ply
+            || pop_spend_ply
             || trigger_info.is_some()
             || harvest_capture.is_some()
             || pursuit_capture.is_some()
@@ -1557,6 +1777,101 @@ fn play_single_game(
         } else {
             None
         };
+
+        if reward_choice_ply {
+            if let Some(trace) = current_agent.take_trace() {
+                if let Some(f) = reward_choice_file.as_mut() {
+                    let width = game.state.settings.size as usize;
+                    let revealed = game
+                        .state
+                        .tiles
+                        .values()
+                        .filter(|t| t.explorers.contains(&pov))
+                        .count() as f32;
+                    let hidden_frac = (1.0 - revealed / (width * width) as f32).max(0.0);
+                    let cands: Vec<serde_json::Value> = trace
+                        .candidates
+                        .iter()
+                        .map(|c| {
+                            json!({
+                                "desc": c.description,
+                                "q": c.q_value,
+                                "visits": c.visits,
+                                "own_value": c.own_value,
+                                "edge_reward": c.edge_reward,
+                                "prior": c.search_prior_prob,
+                                "raw_prob": c.raw_net_prob,
+                            })
+                        })
+                        .collect();
+                    let row = json!({
+                        "turn": game.state.settings.turn,
+                        "player_id": pov,
+                        "hidden_frac": hidden_frac,
+                        "chosen_idx": trace.chosen_candidate_idx,
+                        "root_value": trace.root_search_value,
+                        "candidates": cands,
+                    });
+                    let _ = writeln!(f, "{row}");
+                }
+            }
+        }
+
+        if pop_spend_ply {
+            if let Some(trace) = current_agent.take_trace() {
+                if let Some(f) = pop_spend_file.as_mut() {
+                    const ECON_TYPES: [&str; 5] =
+                        ["Harvest", "Build", "Summon", "Research", "EndTurn"];
+                    let cands: Vec<serde_json::Value> = trace
+                        .candidates
+                        .iter()
+                        .filter(|c| ECON_TYPES.contains(&c.move_type.as_str()))
+                        .map(|c| {
+                            json!({
+                                "desc": c.description,
+                                "move_type": c.move_type,
+                                "q": c.q_value,
+                                "visits": c.visits,
+                                "prior": c.search_prior_prob,
+                                "own_value": c.own_value,
+                            })
+                        })
+                        .collect();
+                    if !cands.is_empty() {
+                        let chosen = trace
+                            .candidates
+                            .get(trace.chosen_candidate_idx)
+                            .map(|c| c.description.clone())
+                            .unwrap_or_default();
+                        let tribe = game.state.tribes.get(&pov);
+                        let cities: Vec<serde_json::Value> = tribe
+                            .map(|t| {
+                                t.cities
+                                    .iter()
+                                    .map(|c| json!({
+                                        "idx": c.idx,
+                                        "level": c.level,
+                                        "progress": c.progress,
+                                    }))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let row = json!({
+                            "turn": game.state.settings.turn,
+                            "player_id": pov,
+                            "stars": tribe.map(|t| t.stars).unwrap_or(0),
+                            "units": tribe.map(|t| t.units.len()).unwrap_or(0),
+                            "cities": cities,
+                            "chosen": chosen,
+                            "candidates": cands,
+                        });
+                        let _ = writeln!(f, "{row}");
+                        pop_spend_dumped += 1;
+                        last_pop_spend_turn = game.state.settings.turn;
+                    }
+                }
+            }
+        }
 
         if let Some((trigger_unit_idx, trigger_village_idx)) = trigger_info {
             if let Some(trace) = current_agent.take_trace() {
@@ -1868,6 +2183,23 @@ fn play_single_game(
                     .then(|| game.state.tribes.get(&pov).map(|t| t.stars).unwrap_or(0))
                     .map(|stars_before| (game.state.settings.turn, stars_before))
             });
+            // --dump-level-completion: snapshot the owning city pre-move.
+            let level_completion_pre = level_completion_file.as_ref().and_then(|_| {
+                if m_type != polyfish::types::MoveType::Harvest
+                    && m_type != polyfish::types::MoveType::Build
+                {
+                    return None;
+                }
+                let target = m.target_idx().ok()? as i32;
+                let city = polyfish::functions::get_city_owning_tile(&game.state, target)?;
+                if city.owner != pov {
+                    return None;
+                }
+                let stars = game.state.tribes.get(&pov).map(|t| t.stars).unwrap_or(0);
+                let threatened =
+                    polyfish::ai::reward::city_threatened(&game.state, pov, city.idx);
+                Some((target, city.idx, city.level, city.progress, stars, threatened))
+            });
             let _ = game.play_move(m.as_ref());
             if m_type == polyfish::types::MoveType::Research {
                 let seat = ((pov - 1) as usize).min(1);
@@ -1889,11 +2221,73 @@ fn play_single_game(
                     "turn": turn,
                     "player_id": pov,
                     "move_type": format!("{:?}", m_type),
+                    "ability": (m_type == polyfish::types::MoveType::Ability)
+                        .then(|| m.ability_type().ok())
+                        .flatten()
+                        .map(|a| format!("{:?}", a)),
+                    // v7: tech identity + tier, so an audit can check the
+                    // economy-first tier-3 ordering directly. Its absence was
+                    // a standing gap (EXP_ELO_028 Phase 0 flagged it) that
+                    // forced the Chivalry-crowds-out-Construction read to lean
+                    // on best-games replays.
+                    "tech": (m_type == polyfish::types::MoveType::Research)
+                        .then(|| m.tech_type().ok())
+                        .flatten()
+                        .map(|t| format!("{:?}", t)),
+                    "tech_tier": (m_type == polyfish::types::MoveType::Research)
+                        .then(|| m.tech_type().ok())
+                        .flatten()
+                        .and_then(|t| {
+                            polyfish::settings::technology::get_technology_setting(t).tier
+                        }),
+                    "tech_eco3": (m_type == polyfish::types::MoveType::Research)
+                        .then(|| m.tech_type().ok())
+                        .flatten()
+                        .map(polyfish::settings::technology::is_eco_tier3),
                     "stars_spent": (stars_before - stars_after).max(0),
                 });
                 if let Ok(s) = serde_json::to_string(&line) {
                     use std::io::Write;
                     let _ = writeln!(f, "{s}");
+                }
+            }
+            if let (
+                Some((target, city_idx, level_b, progress_b, stars_b, threatened)),
+                Some(f),
+            ) = (level_completion_pre, level_completion_file.as_mut())
+            {
+                let city = game
+                    .state
+                    .tribes
+                    .get(&pov)
+                    .and_then(|t| t.cities.iter().find(|c| c.idx == city_idx));
+                if let Some(c) = city {
+                    let stars_after =
+                        game.state.tribes.get(&pov).map(|t| t.stars).unwrap_or(0);
+                    let line = json!({
+                        "game_idx": game_idx,
+                        "turn": game.state.settings.turn,
+                        "player_id": pov,
+                        "move_type": format!("{:?}", m_type),
+                        "structure": (m_type == polyfish::types::MoveType::Build)
+                            .then(|| m.structure_type().ok())
+                            .flatten()
+                            .map(|s| format!("{:?}", s)),
+                        "target": target,
+                        "city_idx": city_idx,
+                        "level_before": level_b,
+                        "level_after": c.level,
+                        "progress_before": progress_b,
+                        "progress_after": c.progress,
+                        "stars_before": stars_b,
+                        "stars_after": stars_after,
+                        "completes": c.level > level_b,
+                        "threatened": threatened,
+                    });
+                    if let Ok(s) = serde_json::to_string(&line) {
+                        use std::io::Write;
+                        let _ = writeln!(f, "{s}");
+                    }
                 }
             }
 
@@ -2455,6 +2849,26 @@ fn main() -> anyhow::Result<()> {
         /// read as the real tribe.stars delta) to <dir>/game<idx>.jsonl.
         #[arg(long)]
         dump_star_spend: Option<String>,
+
+        /// Q-gap diagnostics: append one JSON record per city-reward choice
+        /// ply (the modal Explorer/Workshop-style pair) with per-candidate
+        /// post-search Q, visits and priors to <dir>/game<idx>.jsonl. Traces
+        /// only those plies; not combinable with --dump-failed-dir.
+        #[arg(long)]
+        dump_reward_choices: Option<String>,
+
+        /// v6 diagnostics: one JSON record per executed Harvest/Build with
+        /// the owning city's level/progress and tribe stars before/after —
+        /// the per-city level-completion discipline metric.
+        #[arg(long)]
+        dump_level_completion: Option<String>,
+
+        /// v6 Q-gap diagnostics: sampled traces (turn <= 15, stars >= 2, max
+        /// 12/game, one per turn) with per-candidate root Q for economy
+        /// candidates (Harvest/Build/Summon/Research/EndTurn). Not
+        /// combinable with --dump-failed-dir.
+        #[arg(long)]
+        dump_pop_spend_choices: Option<String>,
     }
 
     let args = Args::parse();
@@ -2790,6 +3204,9 @@ fn main() -> anyhow::Result<()> {
                             args.dump_turn_states.as_deref(),
                             args.dump_city_rewards.as_deref(),
                             args.dump_star_spend.as_deref(),
+                            args.dump_reward_choices.as_deref(),
+                            args.dump_level_completion.as_deref(),
+                            args.dump_pop_spend_choices.as_deref(),
                             seat_roles,
                             args.shape_w_label,
                             args.shape_w_tree,

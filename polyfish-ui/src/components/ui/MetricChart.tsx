@@ -14,6 +14,8 @@ interface RefLineConfig {
 
 interface MetricChartProps {
   title: string;
+  /** One-line definition shown under the title (what exactly counts). */
+  subtitle?: string;
   data: any[];
   series: SeriesConfig[];
   height?: number;
@@ -22,7 +24,7 @@ interface MetricChartProps {
   refLines?: RefLineConfig[];
 }
 
-function MetricChart({ title, data, series, height = 220, iterationKey = 'iteration', refLines }: MetricChartProps) {
+function MetricChart({ title, subtitle, data, series, height = 220, iterationKey = 'iteration', refLines }: MetricChartProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [hoveredCol, setHoveredCol] = useState<{
@@ -228,6 +230,8 @@ function MetricChart({ title, data, series, height = 220, iterationKey = 'iterat
           <button className="mc-png-btn" onClick={exportPNG} title="Export as PNG">PNG</button>
         </div>
       </div>
+
+      {subtitle && <p className="mc-subtitle">{subtitle}</p>}
 
       {series.length > 1 && (
         <div className="mc-legend">

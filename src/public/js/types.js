@@ -43,6 +43,15 @@ const TRIBE_ID_2_NAME = [
     'Xin-xi', 'Yădakk', 'Zebasi', 'Polaris', 'Cymanti'
 ];
 
+// Classic climate id -> display/asset-directory name. This is the ASSET
+// numbering (ground_N textures, Monument*_{N-1}) carried by tile.climate —
+// distinct from TRIBE_ID_2_NAME, which maps the modern ids in tribe.type.
+const CLASSIC_CLIMATE_NAMES = [
+    'Nature', 'Xin-xi', 'Imperius', 'Bardur', 'Oumaji', 'Kickoo',
+    'Hoodrick', 'Luxidoor', 'Vengir', 'Zebasi', 'Ai-Mo', 'Aquarion',
+    'Quetzali', '∑∫ỹriȱŋ', 'Yădakk', 'Polaris', 'Cymanti'
+];
+
 const TRIBE_COLORS = {
     1: '#0ea5e9', // Nature (Blue-ish)
     2: '#8b5cf6', // Ai-Mo (Purple)
