@@ -584,6 +584,214 @@ pub fn city_threatened(state: &GameState, player: i32, city_idx: i32) -> bool {
         })
 }
 
+
+/// v9 permanent floors (Verdi, Aug 2): all three drives always carry weight —
+/// "a floor that acts as a gentle nudge for all 3 vertexes whereas the net has
+/// the liberty to choose where to emphasize". The stance no longer switches a
+/// drive OFF, it only decides which one runs at full weight; an off-stance
+/// drive still pays this fraction. Deliberately a fraction rather than a
+/// wholesale restructure: EXP_ELO_005 found search reacts violently to reward
+/// changes, so the dominant term keeps its measured magnitude.
+pub const SHAPE_FLOOR_FRAC: f32 = 0.3;
+
+/// v9 economy depth: score-equivalents per point of HEADROOM a city still
+/// has — the distance between its level and ITS OWN structural ceiling (max
+/// level reachable from its territory routes at unlimited stars). Verdi
+/// rejected a fixed level-5/giant target: "some villages have the ability to
+/// scale beyond that, sometimes the ceiling is 4, for others it's 7".
+/// Deliberately BELOW `SHAPE_GOAL_SPT` so converting headroom into a level is
+/// always net-positive.
+///
+/// v9.1: capped at `HEADROOM_PER_CITY_CAP`. Uncapped, a fresh 4-level-headroom
+/// city banked 240 Φ while LEVELLING one only netted +90 (150 SPT − 60 released)
+/// — so grabbing land beat developing it, and the Aug 2 run shows exactly that:
+/// cities +8% by t25 but city_levels −31% at t3, harvests −25%, giants −22%.
+/// Same lesson as `STRANDED_PER_CITY_CAP`: FLAG that a city has room, do not
+/// bill by depth. Capped, acquiring banks 60 and levelling still banks the full
+/// 150 (the cap does not release until the last level), so development wins.
+pub const SHAPE_GOAL_CEILING: f32 = 60.0;
+
+/// Levels of headroom counted per city. See `SHAPE_GOAL_CEILING`.
+pub const HEADROOM_PER_CITY_CAP: i32 = 1;
+
+/// v9 territory: score-equivalents per owned tile. Territory is currently paid
+/// only through order-driven EXPAND gradients, so it vanishes entirely
+/// whenever no EXPAND order is live.
+pub const SHAPE_GOAL_TERRITORY: f32 = 8.0;
+
+/// v9 risk-adjusted star optionality (Verdi: "the reason we want to wait is
+/// because of risk… you'd rather have the stars to have the optionability to
+/// pivot"). Held stars are worth ~nothing today — spend/income median is
+/// exactly 1.00 in every arm ever measured — so "wait" is dominated whatever
+/// the net knows. Because Φ telescopes, the in-tree reward for spending
+/// becomes (purchase gain − option value released): risk RAISES the bar for
+/// spending rather than forbidding it, and goes to ~0 on a quiet board.
+/// Held below what a completed level pays, or it hoards.
+pub const SHAPE_GOAL_STAR_OPTION: f32 = 12.0;
+
+/// v9: HP-weighted unit worth. A 1hp Rider scored the same as a fresh one, so
+/// retaliation was free and standing in reach was unpriced.
+pub fn unit_value(unit: &crate::states::UnitState) -> f32 {
+    let cost = crate::settings::units::get_unit_setting(unit.unit_type).cost as f32;
+    let max_hp = crate::functions::get_unit_max_health(unit).max(1.0);
+    cost * (unit.health / max_hp).clamp(0.0, 1.0)
+}
+
+fn live_army_value(tribe: &crate::states::TribeState) -> f32 {
+    tribe.units.iter().map(unit_value).sum()
+}
+
+/// The highest level this city could ever reach from its own territory routes,
+/// ignoring stars. Walks `max_affordable_pop` against the `level+1` thresholds.
+pub fn city_ceiling(state: &GameState, player: i32, city: &crate::states::CityState) -> i32 {
+    let mut level = city.level;
+    let mut pop = city.progress + max_affordable_pop(state, player, city, i32::MAX);
+    let mut guard = 0;
+    while pop >= level + 1 && guard < 16 {
+        pop -= level + 1;
+        level += 1;
+        guard += 1;
+    }
+    level
+}
+
+
+/// v9 perf: one pass over the tile map. The Φ path previously walked
+/// `state.tiles` FOUR times per node (own forests, owned tiles, explored
+/// count, fog sum) — measured at ~47% of self-play throughput, since Φ is
+/// evaluated per node. Everything the map can answer is collected here once.
+struct TileScan {
+    owned: f32,
+    explored: f32,
+    total: f32,
+    own_forests: f32,
+    fog_sum: f32,
+    fog_n: f32,
+}
+
+fn scan_tiles(state: &GameState, player: i32, fog: Option<&[f32]>) -> TileScan {
+    let mut sc = TileScan {
+        owned: 0.0,
+        explored: 0.0,
+        total: 0.0,
+        own_forests: 0.0,
+        fog_sum: 0.0,
+        fog_n: 0.0,
+    };
+    for (idx, tile) in state.tiles.iter() {
+        sc.total += 1.0;
+        let mine = tile.owner == player;
+        if mine {
+            sc.owned += 1.0;
+            if tile.terrain_type == crate::types::TerrainType::Forest {
+                sc.own_forests += 1.0;
+            }
+        }
+        if tile.explorers.contains(&player) {
+            sc.explored += 1.0;
+        } else if let Some(probs) = fog {
+            // Unexplored only: this is P(enemy | we cannot see it).
+            if let Some(p) = probs.get(*idx as usize) {
+                sc.fog_sum += *p;
+                sc.fog_n += 1.0;
+            }
+        }
+    }
+    sc
+}
+
+/// v9 perf: one pass over the cities. `completion_stranded`, `completion_progress`
+/// and `city_ceiling` each called `max_affordable_pop(.., i32::MAX)` separately
+/// — the same expensive call three times per city per node. Computed once here.
+struct CityScan {
+    stranded: f32,
+    progress_bonus: f32,
+    headroom: f32,
+}
+
+fn scan_cities(state: &GameState, player: i32, tribe: &crate::states::TribeState) -> CityScan {
+    let mut sc = CityScan { stranded: 0.0, progress_bonus: 0.0, headroom: 0.0 };
+    for c in &tribe.cities {
+        let reachable = max_affordable_pop(state, player, c, i32::MAX);
+        let completable = c.progress + reachable >= c.level + 1;
+        if c.progress > 0 {
+            if completable {
+                sc.progress_bonus += c.progress as f32 / (c.level + 1).max(1) as f32;
+            } else if !city_threatened(state, player, c.idx) {
+                sc.stranded += c.progress.min(STRANDED_PER_CITY_CAP) as f32;
+            }
+        }
+        // Ceiling walk, reusing the same `reachable`.
+        let (mut level, mut pop) = (c.level, c.progress + reachable);
+        let mut guard = 0;
+        while pop >= level + 1 && guard < 16 {
+            pop -= level + 1;
+            level += 1;
+            guard += 1;
+        }
+        sc.headroom += (level - c.level).clamp(0, HEADROOM_PER_CITY_CAP) as f32;
+    }
+    sc
+}
+
+/// v9 risk in [0, 1]: how likely this position is to need stars for defence
+/// rather than growth. Blends state-side signals with the mirrored `aux_fog`
+/// head when the backend produced it (`None` on pre-aux checkpoints — the
+/// caller must never substitute a zero, see the `progress` stub).
+pub fn position_risk(state: &GameState, player: i32, fog: Option<&[f32]>) -> f32 {
+    let Some(tribe) = state.tribes.get(&player) else {
+        return 0.0;
+    };
+    risk_from_scan(state, player, tribe, &scan_tiles(state, player, fog), fog.is_some())
+}
+
+fn risk_from_scan(
+    state: &GameState,
+    player: i32,
+    tribe: &crate::states::TribeState,
+    sc: &TileScan,
+    has_fog: bool,
+) -> f32 {
+    // 1. Visible enemy pressure, relative to our own army.
+    let own = live_army_value(tribe).max(1.0);
+    let seen: f32 = state
+        .tribes
+        .iter()
+        .filter(|(id, _)| **id != player)
+        .flat_map(|(_, t)| t.units.iter())
+        .filter(|u| {
+            state
+                .tiles
+                .get(&u.coords.idx)
+                .map_or(false, |t| t.explorers.contains(&player))
+        })
+        .map(unit_value)
+        .sum();
+    let pressure = (seen / own).clamp(0.0, 1.0);
+
+    // v9.1: the raw unexplored FRACTION is gone. It made scouting a
+    // self-inflicted loss: exploring lowers `dark`, which lowered risk, which
+    // destroyed Φ the tribe was already banking on its held stars. Measured on
+    // the Aug 2 run as revealed tiles −25% at t3 and down at every later turn.
+    // The learned head does not have that defect — P(enemy | unexplored) falls
+    // when you look and find nothing, which is information updating, not a
+    // penalty for looking.
+
+    // 3. The learned head, where available: mean P(enemy) over tiles we cannot
+    //    see. This is the part that knows WHERE, and it is the reason the head
+    //    was mirrored into Rust at all.
+    let learned = if has_fog && sc.fog_n > 0.0 {
+        Some((sc.fog_sum / sc.fog_n).clamp(0.0, 1.0))
+    } else {
+        None
+    };
+
+    // Contact pressure dominates once it exists; before contact the learned
+    // fog head carries it. With no head available this degrades to
+    // threat-only risk rather than to a scouting penalty.
+    (0.6 * pressure + 0.4 * learned.unwrap_or(0.0)).clamp(0.0, 1.0)
+}
+
 /// Goal potential Φ_goal for `player` under `goal` (score-equivalent units).
 pub fn goal_potential(
     state: &GameState,
@@ -591,31 +799,64 @@ pub fn goal_potential(
     goal: &crate::ai::oracle_macro::MacroGoal,
     aux: Option<&crate::ai::oracle_macro::GoalAux>,
 ) -> f32 {
+    goal_potential_with_fog(state, player, goal, aux, None)
+}
+
+/// v9: `goal_potential` with the mirrored fog head's output for this state,
+/// which the risk term needs. `None` means the backend could not produce it.
+pub fn goal_potential_with_fog(
+    state: &GameState,
+    player: i32,
+    goal: &crate::ai::oracle_macro::MacroGoal,
+    aux: Option<&crate::ai::oracle_macro::GoalAux>,
+    fog: Option<&[f32]>,
+) -> f32 {
     use crate::ai::oracle_macro::{OrderKind, Stance};
     let Some(tribe) = state.tribes.get(&player) else {
         return 0.0;
     };
-    let mut phi = match goal.stance {
-        // SAVE is an economy stance: it keeps GROW's whole potential and adds
-        // the ramp below, so banking never costs the economy gradient.
-        Stance::Grow | Stance::Save => {
-            SHAPE_GOAL_SPT * crate::functions::get_tribe_spt(state, tribe) as f32
-        }
-        Stance::Arm => {
-            SHAPE_GOAL_ARM_PER_COST
-                * tribe
-                    .units
-                    .iter()
-                    .map(|u| crate::settings::units::get_unit_setting(u.unit_type).cost as f32)
-                    .sum::<f32>()
-        }
-        Stance::Unlock => 0.0,
-    };
+    // v9 permanent floors. The stance no longer switches a drive off — it
+    // decides which runs at full weight, and the others still pay
+    // SHAPE_FLOOR_FRAC. Stance-switched Φ was also not a function of STATE
+    // (StanceCommit carries history), so a flip moved Φ by ~150×SPT with no
+    // state change, breaking the invariance potential-based shaping needs.
+    let economy_on = matches!(goal.stance, Stance::Grow | Stance::Save);
+    let eco_w = if economy_on { 1.0 } else { SHAPE_FLOOR_FRAC };
+    let mil_w = if goal.stance == Stance::Arm { 1.0 } else { SHAPE_FLOOR_FRAC };
+
+    // v9 perf: ONE tile pass and ONE city pass feed every term below.
+    let scan = scan_tiles(state, player, fog);
+    let cities = scan_cities(state, player, tribe);
+
+    let mut phi = 0.0;
+    if goal.stance != Stance::Unlock {
+        // Economy: income now, plus depth toward each city's OWN ceiling.
+        phi += eco_w * SHAPE_GOAL_SPT * crate::functions::get_tribe_spt(state, tribe) as f32;
+        // HEADROOM, paid as a BONUS — not the gap as a penalty. The first cut
+        // subtracted it, which inverted the incentive: acquiring a resource
+        // raises a city's ceiling, so improving the city LOWERED Φ. Paid this
+        // way, a level-up converts 60 of headroom into 150 of SPT (net +90, so
+        // growing still wins), gaining territory is rewarded, and clearing a
+        // forest costs exactly the headroom it destroys — which is what
+        // "price a forest by what it is FOR" means.
+        phi += eco_w * SHAPE_GOAL_CEILING * cities.headroom;
+
+        // Territory: always paid, not only while an EXPAND order is live.
+        phi += eco_w * SHAPE_GOAL_TERRITORY * scan.owned;
+
+        // Military: HP-weighted, so damage destroys value.
+        phi += mil_w * SHAPE_GOAL_ARM_PER_COST * live_army_value(tribe);
+
+        // Risk-adjusted star optionality: holding is worth something exactly
+        // when the position might need a pivot.
+        let risk = risk_from_scan(state, player, tribe, &scan, fog.is_some());
+        phi += SHAPE_GOAL_STAR_OPTION * tribe.stars as f32 * risk;
+    }
     // v6: stranded-progress discipline — GROW only (combat spending under
     // ARM shouldn't be taxed for unfinished levels).
     if matches!(goal.stance, Stance::Grow | Stance::Save) {
-        phi -= SHAPE_GOAL_STRANDED * completion_stranded(state, player) as f32;
-        phi += SHAPE_GOAL_COMPLETION * completion_progress(state, player);
+        phi -= SHAPE_GOAL_STRANDED * cities.stranded;
+        phi += SHAPE_GOAL_COMPLETION * cities.progress_bonus;
     }
     // v7 savings ramp: progress toward the banked batch is itself scored, so
     // holding stars climbs a gradient instead of sitting in a flat valley that
@@ -849,12 +1090,7 @@ pub fn goal_potential(
     }
     // Standing-forest option value (v5): clearing pays only when the
     // follow-up (build / level-up funding) outweighs the lost option.
-    let own_forests = state
-        .tiles
-        .values()
-        .filter(|t| t.owner == player && t.terrain_type == crate::types::TerrainType::Forest)
-        .count();
-    phi += SHAPE_GOAL_FOREST_STANDING * own_forests as f32;
+    phi += SHAPE_GOAL_FOREST_STANDING * scan.own_forests;
     if let Some(aux) = aux {
         let owned = aux
             .recommended_techs
@@ -873,13 +1109,13 @@ pub fn goal_potential(
             phi += SHAPE_GOAL_RIDER * riders as f32;
         }
         if !aux.preferred_units.is_empty() {
-            let preferred = tribe
+            let preferred: f32 = tribe
                 .units
                 .iter()
                 .filter(|u| aux.preferred_units.contains(&u.unit_type))
-                .map(|u| crate::settings::units::get_unit_setting(u.unit_type).cost)
-                .sum::<i32>();
-            phi += SHAPE_GOAL_ARCHETYPE_PER_COST * preferred as f32;
+                .map(unit_value)
+                .sum();
+            phi += SHAPE_GOAL_ARCHETYPE_PER_COST * preferred;
         }
     }
     phi
@@ -946,11 +1182,15 @@ mod shaping_tests {
     use crate::types::{StructureType, TechnologyType, UnitType};
 
     fn unit_at(idx: i32, unit_type: UnitType) -> UnitState {
-        UnitState {
+        let mut u = UnitState {
             unit_type,
             coords: Coords::from_index(idx, 11),
             ..Default::default()
-        }
+        };
+        // v9: Φ scales unit worth by health, so an undamaged test unit must
+        // start at ITS max (Defender's is 15, not the struct default of 10).
+        u.health = crate::functions::get_unit_max_health(&u);
+        u
     }
 
     /// Village structure at `idx`, unowned, explored by player 1.
@@ -1078,24 +1318,40 @@ mod shaping_tests {
         t1.units.push(unit_at(2, UnitType::Warrior)); // 2 tiles from village 0
         state.tribes.insert(1, t1);
 
-        // ARM pays the army's star cost (+ the lighthouse term: the explored
-        // village tile 0 is a map corner).
-        let arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None };
-        let cost = get_unit_setting(UnitType::Warrior).cost as f32;
+        // v9 CONTRACT: the active stance's drive pays at full weight and the
+        // OTHER drives still pay SHAPE_FLOOR_FRAC — a stance no longer switches
+        // a drive off. (Stance-switched Φ was also not a function of state:
+        // StanceCommit carries history, so a flip moved Φ by ~150×SPT with no
+        // state change, breaking the invariance shaping depends on.)
         let corner = SHAPE_GOAL_LIGHTHOUSE;
+        let tribe = state.tribes.get(&1).unwrap();
+        let spt = crate::functions::get_tribe_spt(&state, tribe) as f32;
+        let army = SHAPE_GOAL_ARM_PER_COST * unit_value(&tribe.units[0]);
+        // Economy block: income, territory, and the gap to each city's ceiling.
+        // This tribe holds no cities and no tiles, so only SPT is non-zero.
+        let economy = SHAPE_GOAL_SPT * spt;
+        // No stars banked -> the risk-scaled star option contributes nothing.
+        assert_eq!(tribe.stars, 0);
+
+        let arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None };
+        let expect_arm = army + SHAPE_FLOOR_FRAC * economy + corner;
         assert!(
-            (goal_potential(&state, 1, &arm, None) - SHAPE_GOAL_ARM_PER_COST * cost - corner)
-                .abs()
-                < 1e-4
+            (goal_potential(&state, 1, &arm, None) - expect_arm).abs() < 1e-4,
+            "ARM pays the army in full and the economy at the floor"
         );
 
-        // GROW pays SPT plus the scout term (no EXPAND target known, <3
-        // cities, one explored tile in this state) plus the v6 body term
-        // (1 unit within the cities+1 cap, map unexplored).
+        // GROW pays the economy in full, the army at the floor, plus the scout
+        // term (no EXPAND target known, <3 cities) and the v6 body term.
         let grow = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None };
-        let spt = crate::functions::get_tribe_spt(&state, state.tribes.get(&1).unwrap()) as f32;
-        let expected = SHAPE_GOAL_SPT * spt + SHAPE_GOAL_SCOUT + corner + SHAPE_GOAL_BODY;
-        assert!((goal_potential(&state, 1, &grow, None) - expected).abs() < 1e-4);
+        let expect_grow = economy
+            + SHAPE_FLOOR_FRAC * army
+            + SHAPE_GOAL_SCOUT
+            + corner
+            + SHAPE_GOAL_BODY;
+        assert!(
+            (goal_potential(&state, 1, &grow, None) - expect_grow).abs() < 1e-4,
+            "GROW pays the economy in full and the army at the floor"
+        );
 
         // EXPAND order: a one-tile close banks one step of the gradient.
         let ex = |orders| MacroGoal { orders, stance: Stance::Arm, save_target: None };
@@ -1118,10 +1374,20 @@ mod shaping_tests {
         assert!(achieved >= closer);
         state.tiles.get_mut(&0).unwrap().owner = 2;
         let lost = goal_potential(&state, 1, &ex(vec![(OrderKind::Expand, 0)]), None);
+        // v9: losing the tile also moves the always-on territory term, so the
+        // baseline has to be re-taken in the SAME state — otherwise this
+        // measures the ownership change as well as the retake gradient.
+        let arm_lost = goal_potential(&state, 1, &arm, None);
         // v6: an enemy-taken village pays the retake-weighted approach
         // (unit at 1 is one tile out) instead of dropping to zero.
         let retake = SHAPE_GOAL_RETAKE_W * SHAPE_GOAL_EXPAND_PER_TILE * (SHAPE_PROX_CAP - 1) as f32;
-        assert!((lost - arm_only - retake).abs() < 1e-3);
+        assert!((lost - arm_lost - retake).abs() < 1e-3);
+        // …and the territory term did move: holding the tile is worth
+        // SHAPE_GOAL_TERRITORY at the active stance's weight.
+        assert!(
+            (arm_only - arm_lost - SHAPE_FLOOR_FRAC * SHAPE_GOAL_TERRITORY).abs() < 1e-3,
+            "an owned tile pays the territory term (ARM -> floor weight)"
+        );
     }
 
     #[test]
@@ -1149,19 +1415,26 @@ mod shaping_tests {
             save_target: None,
         };
         let anchored = goal_potential(&state, 1, &with_target, None);
-        let spt0 = crate::functions::get_tribe_spt(&state, state.tribes.get(&1).unwrap()) as f32;
+        let tribe = state.tribes.get(&1).unwrap();
+        let spt0 = crate::functions::get_tribe_spt(&state, tribe) as f32;
         let approach = SHAPE_GOAL_EXPAND_PER_TILE * (SHAPE_PROX_CAP - 1) as f32;
         let half_scout = SHAPE_GOAL_SCOUT * 0.5;
+        // v9: the army also pays its floor under GROW. No tiles are OWNED and
+        // no cities exist here, so the territory and ceiling terms are 0.
+        let army_floor = SHAPE_FLOOR_FRAC * SHAPE_GOAL_ARM_PER_COST * unit_value(&tribe.units[0]);
         // + v6 body term: 1 unit, 0 cities → cap 1.
         assert!(
-            (anchored - SHAPE_GOAL_SPT * spt0 - approach - half_scout - SHAPE_GOAL_BODY).abs()
+            (anchored - SHAPE_GOAL_SPT * spt0 - approach - half_scout - SHAPE_GOAL_BODY
+                - army_floor)
+                .abs()
                 < 1e-3
         );
         // ARM never scouts; neither does a 3-city tribe.
         let arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None };
         let arm_phi = goal_potential(&state, 1, &arm, None);
-        let cost = get_unit_setting(UnitType::Warrior).cost as f32;
-        assert!((arm_phi - SHAPE_GOAL_ARM_PER_COST * cost).abs() < 1e-4);
+        let army_full = SHAPE_GOAL_ARM_PER_COST * unit_value(&tribe.units[0]);
+        let eco_floor = SHAPE_FLOOR_FRAC * SHAPE_GOAL_SPT * spt0;
+        assert!((arm_phi - army_full - eco_floor).abs() < 1e-4);
         let t1 = state.tribes.get_mut(&1).unwrap();
         for _ in 0..3 {
             t1.cities.push(Default::default());
@@ -1169,8 +1442,9 @@ mod shaping_tests {
         let done = goal_potential(&state, 1, &grow, None);
         let spt = crate::functions::get_tribe_spt(&state, state.tribes.get(&1).unwrap()) as f32;
         // Scout retires at 3 cities; the body term still pays its 1 unit
-        // while the map stays unexplored.
-        assert!((done - SHAPE_GOAL_SPT * spt - SHAPE_GOAL_BODY).abs() < 1e-4);
+        // while the map stays unexplored, and v9's army floor pays alongside.
+        // The three default cities own no territory, so their ceiling gap is 0.
+        assert!((done - SHAPE_GOAL_SPT * spt - SHAPE_GOAL_BODY - army_floor).abs() < 1e-4);
     }
 
     #[test]
@@ -1370,8 +1644,24 @@ mod shaping_tests {
 
         // No resources anywhere: progress 1 is structurally stranded.
         let stranded = goal_potential(&state, 1, &grow, None);
-        // ARM is exempt from the discipline (and from GROW-only terms).
-        assert!(goal_potential(&state, 1, &arm, None).abs() < 1e-4);
+        // ARM is exempt from the STRANDED discipline (a GROW-only term), but
+        // v9's floors mean ARM is no longer identically zero here.
+        let tribe = state.tribes.get(&1).unwrap();
+        let arm_phi = goal_potential(&state, 1, &arm, None);
+        let eco_floor = SHAPE_FLOOR_FRAC
+            * (SHAPE_GOAL_SPT * crate::functions::get_tribe_spt(&state, tribe) as f32
+                + SHAPE_GOAL_TERRITORY
+                    * state.tiles.values().filter(|t| t.owner == 1).count() as f32
+                + SHAPE_GOAL_CEILING
+                    * tribe
+                        .cities
+                        .iter()
+                        .map(|c| (city_ceiling(&state, 1, c) - c.level).max(0) as f32)
+                        .sum::<f32>());
+        assert!(
+            (arm_phi - eco_floor).abs() < 1e-3,
+            "ARM skips the stranded discipline but still pays the economy floor"
+        );
 
         // v7: FLAGGED, not billed by depth — deeper sunk progress costs no
         // more, so a level-up landing in overflow cannot out-cost its own SPT.
@@ -1394,10 +1684,23 @@ mod shaping_tests {
         state.tribes.get_mut(&1).unwrap().cities[0]._territory.push(62);
         state.resources.insert(62, Some(ResourceState { resource_type: ResourceType::Fruit }));
         let completable = goal_potential(&state, 1, &grow, None);
+        // v9: the two fruit also lift this city's CEILING from 2 to 3 (1+2 pop
+        // clears the 3-pop threshold), so a point of headroom appears too.
+        // That is the interaction to watch: the stranded penalty and the
+        // headroom bonus are both built on `max_affordable_pop`, and they now
+        // move together — pulling the SAME way, which is what we want. If the
+        // headroom term had been signed as a gap penalty they would have
+        // cancelled, and territory gains would have read as losses.
+        let headroom_gained = SHAPE_GOAL_CEILING;
         assert!(
-            (completable - stranded - SHAPE_GOAL_STRANDED - SHAPE_GOAL_COMPLETION / 3.0).abs()
+            (completable
+                - stranded
+                - SHAPE_GOAL_STRANDED
+                - SHAPE_GOAL_COMPLETION / 3.0
+                - headroom_gained)
+                .abs()
                 < 1e-3,
-            "completable progress drops the penalty AND earns the v7 bonus (1 of 3 pop)"
+            "completable progress drops the penalty, earns the v7 bonus, and opens headroom"
         );
 
         // Threatened city (enemy adjacent) is exempt even when stranded.
@@ -1436,24 +1739,49 @@ mod shaping_tests {
         let base = goal_potential(&state, 1, &grow, None);
         assert!((goal_potential(&state, 1, &saving, None) - base).abs() < 1e-3);
 
+        // v9: TWO terms now scale with the bank — the SAVE ramp and the
+        // risk-adjusted star option. Risk depends only on units/tiles, not on
+        // stars, so it is constant across the three measurements below.
+        let risk = position_risk(&state, 1, None);
+        let option = |stars: i32| SHAPE_GOAL_STAR_OPTION * stars as f32 * risk;
+
         // Half banked pays half the ramp; full banked pays all of it.
         state.tribes.get_mut(&1).unwrap().stars = 10;
         let half = goal_potential(&state, 1, &saving, None);
-        assert!((half - base - SHAPE_GOAL_SAVE / 2.0).abs() < 1e-3);
+        assert!((half - base - SHAPE_GOAL_SAVE / 2.0 - option(10)).abs() < 1e-3);
         state.tribes.get_mut(&1).unwrap().stars = 20;
         let full = goal_potential(&state, 1, &saving, None);
-        assert!((full - base - SHAPE_GOAL_SAVE).abs() < 1e-3);
+        assert!((full - base - SHAPE_GOAL_SAVE - option(20)).abs() < 1e-3);
 
-        // Overshooting the target pays no more — the ramp is not a hoard bonus.
+        // Overshooting the TARGET pays no more ramp — but the option term does
+        // keep paying, because unspent stars really are worth more optionality.
         state.tribes.get_mut(&1).unwrap().stars = 60;
-        assert!((goal_potential(&state, 1, &saving, None) - full).abs() < 1e-3);
+        let over = goal_potential(&state, 1, &saving, None);
+        assert!((over - full - (option(60) - option(20))).abs() < 1e-3);
 
-        // Under GROW the same bank is worth nothing: the ramp is stance-gated.
-        assert!((goal_potential(&state, 1, &grow, None) - base).abs() < 1e-3);
+        // Under GROW the ramp is worth nothing (stance-gated) but the option
+        // term still pays: risk does not care which stance is active.
+        state.tribes.get_mut(&1).unwrap().stars = 20;
+        assert!((goal_potential(&state, 1, &grow, None) - base - option(20)).abs() < 1e-3);
 
         // A full bank must never outweigh spending it — otherwise the agent
         // banks forever rather than buying the batch it saved for.
         assert!(SHAPE_GOAL_SAVE < SHAPE_GOAL_SPT);
+
+        // v9 HOARDING INVARIANT. Holding one more star must be worth less than
+        // spending it, at MAXIMUM risk (=1.0) which is the option term's
+        // ceiling. The cheapest pop route is ~2★/pop and a level needs
+        // level+1 pop, so ~6★ buys the +1 SPT of a level-up at level 2 —
+        // i.e. a star spent productively is worth about SPT/6. If the option
+        // term ever exceeds that, waiting dominates buying at every price and
+        // spend/income collapses to zero instead of the 1.00 we measured.
+        const STARS_PER_SPT_POINT: f32 = 6.0;
+        assert!(
+            SHAPE_GOAL_STAR_OPTION < SHAPE_GOAL_SPT / STARS_PER_SPT_POINT,
+            "star option ({SHAPE_GOAL_STAR_OPTION}) must stay under the ~{} Φ a \
+             productively-spent star buys, or the model hoards",
+            SHAPE_GOAL_SPT / STARS_PER_SPT_POINT
+        );
     }
 
     /// The v6 trap, guarded: a level-up zeroes progress (or leaves overflow),
@@ -1623,11 +1951,21 @@ mod shaping_tests {
         state.tribes.insert(1, t1);
         let grow = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None };
 
-        // 0 cities → cap 1: the second unit adds nothing.
+        // v9: a unit is no longer paid ONLY by the body term — the military
+        // floor pays SHAPE_FLOOR_FRAC of its HP-weighted worth under every
+        // stance. So "beyond the cap" now means "the body term stops", not
+        // "the unit is free".
+        let floor_per_warrior =
+            SHAPE_FLOOR_FRAC * SHAPE_GOAL_ARM_PER_COST * unit_value(&unit_at(0, UnitType::Warrior));
+
+        // 0 cities → cap 1: the second unit adds only the floor.
         let one = goal_potential(&state, 1, &grow, None);
         state.tribes.get_mut(&1).unwrap().units.push(unit_at(61, UnitType::Warrior));
         let two = goal_potential(&state, 1, &grow, None);
-        assert!((two - one).abs() < 1e-4, "beyond-cap unit must not pay");
+        assert!(
+            (two - one - floor_per_warrior).abs() < 1e-4,
+            "beyond-cap unit must pay the military floor and nothing more"
+        );
 
         // A city raises the cap to 2: the second unit now pays.
         state.tribes.get_mut(&1).unwrap().cities.push(crate::states::CityState {
@@ -1642,8 +1980,8 @@ mod shaping_tests {
             goal_potential(&s2, 1, &grow, None)
         };
         assert!(
-            (capped_two - one_city_one_unit - SHAPE_GOAL_BODY).abs() < 1e-3,
-            "unit within raised cap must pay"
+            (capped_two - one_city_one_unit - SHAPE_GOAL_BODY - floor_per_warrior).abs() < 1e-3,
+            "unit within raised cap must pay the body term ON TOP of the floor"
         );
     }
 

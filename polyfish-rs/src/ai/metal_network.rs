@@ -190,7 +190,8 @@ mod tests {
     /// self-play (Metal/tch) than the one train.py supervised.
     #[test]
     fn fog_head_agrees_across_backends() {
-        let path = "model.safetensors";
+        // Frozen checkpoint: the live model is rewritten mid-run by training.
+        let path = "checkpoints/gauge_1785601511_iter5.safetensors";
         if !std::path::Path::new(path).exists() {
             return;
         }
@@ -1006,6 +1007,8 @@ fn slice_outputs(results: &[TensorData], batch: usize) -> (Vec<f32>, Vec<RawPoli
             source_spatial: source_v[i * SS..(i + 1) * SS].to_vec(),
             target_spatial: target_v[i * TS..(i + 1) * TS].to_vec(),
             move_option: option_v[i * MO..(i + 1) * MO].to_vec(),
+            // Logits -> probabilities here: MPSGraph's bindings expose no
+            // sigmoid, and 121 CPU exps per row is noise next to the forward.
             // Logits -> probabilities here: MPSGraph's bindings expose no
             // sigmoid, and 121 CPU exps per row is noise next to the forward.
             fog: fog_v.as_ref().map(|f| {
