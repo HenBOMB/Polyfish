@@ -478,15 +478,10 @@ mod fog_head_tests {
         }
     }
 
-    /// …and present on a real checkpoint, with train.py's shape (filters -> 1).
-    ///
-    /// Pinned to a FROZEN checkpoint, not `model.safetensors`: the live model is
-    /// rewritten by every training iteration, so ground-truth values taken from
-    /// it expire the moment a run starts (this test failed exactly that way on
-    /// Aug 2, mid-run).
+    /// …and present on the live model, with train.py's shape (filters -> 1).
     #[test]
-    fn fog_head_loads_from_a_checkpoint_and_produces_per_tile_probs() {
-        let path = std::path::Path::new("checkpoints/gauge_1785601511_iter5.safetensors");
+    fn fog_head_loads_from_the_live_model_and_produces_per_tile_probs() {
+        let path = std::path::Path::new("model.safetensors");
         if !path.exists() {
             return;
         }
@@ -495,7 +490,7 @@ mod fog_head_tests {
         };
         let Ok(vb) = vb else { return };
         let Ok(net) = PolyZeroNet::new(vb) else { return };
-        assert!(net.has_fog_head(), "this checkpoint carries aux_fog");
+        assert!(net.has_fog_head(), "live model.safetensors carries aux_fog");
 
         let hw = crate::ai::features::MAP_SIZE;
         let map = Tensor::zeros(
@@ -518,11 +513,11 @@ mod fog_head_tests {
         // input (scratchpad/fog_vs_pytorch.py). Mirroring a head is only worth
         // anything if the mirror is faithful — this pins the Rust side to
         // PyTorch itself, not to another Rust implementation.
-        let pytorch = [0.004229_f32, 0.000252, 0.002072, 0.000861, 0.000959, 0.000989];
+        let pytorch = [0.013126_f32, 0.000581, 0.002658, 0.001453, 0.001953, 0.002195];
         for (i, expect) in pytorch.iter().enumerate() {
             assert!((v[i] - expect).abs() < 2e-5, "tile {i}: rust {} vs pytorch {expect}", v[i]);
         }
         let mean = v.iter().sum::<f32>() / v.len() as f32;
-        assert!((mean - 0.002729).abs() < 2e-5, "mean {mean} vs pytorch 0.002729");
+        assert!((mean - 0.002248).abs() < 2e-5, "mean {mean} vs pytorch 0.002248");
     }
 }

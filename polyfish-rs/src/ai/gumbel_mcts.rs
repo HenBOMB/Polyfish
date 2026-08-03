@@ -141,14 +141,6 @@ pub struct GumbelMctsAgent<'a> {
     /// (the default) costs one `RefCell` borrow-check per call site and
     /// nothing else — see decision_trace.rs.
     trace: RefCell<Option<TraceBuilder>>,
-    /// v9: the mirrored `aux_fog` map from the ROOT evaluation of the current
-    /// search, reused for every in-tree Φ. Risk is a position property that
-    /// moves slowly inside a turn, so a per-ply read is a fair approximation
-    /// and costs nothing extra — a per-node read would mean threading each
-    /// node's eval into the reward path. `None` when the backend or the
-    /// checkpoint cannot produce it; `position_risk` then falls back to its
-    /// state-side signals rather than to a silent zero.
-    root_fog: RefCell<Option<std::sync::Arc<Vec<f32>>>>,
     /// The most recently completed search's root value (`root.q_value()`
     /// after backup — a discounted-return state-value estimate under the
     /// reward-aware backup, `None` if the root never accumulated a visit:
@@ -275,7 +267,6 @@ impl<'a> GumbelMctsAgent<'a> {
             iterations,
             k,
             batch_size: mcts_common::DEFAULT_BATCH_SIZE,
-            root_fog: RefCell::new(None),
             tree: None,
             last_chosen_idx: None,
             next_root_hash: None,
@@ -636,9 +627,6 @@ impl<'a> GumbelMctsAgent<'a> {
     fn build_fresh_root(&self, game: &mut Game, features: RawFeatures, start_turn: i32) -> GumbelNode {
         let results = self.evaluator.evaluate(vec![features]);
         let (root_value, root_progress, ref policy_row) = results[0];
-        // v9: stash this search's fog map for the reward path (see `root_fog`).
-        *self.root_fog.borrow_mut() =
-            policy_row.fog.as_ref().map(|f| std::sync::Arc::new(f.clone()));
 
         let mut legal_moves = game.legal_moves();
         if self.star_gate || self.goal_aux.is_some() {
@@ -916,15 +904,8 @@ impl<'a> GumbelMctsAgent<'a> {
             reward::shaped_snapshot(state, mover, self.reward_shape_w, self.pursuit_shape_w);
         if self.goal_shape_w != 0.0 && mover == root_player {
             if let Some(goal) = &self.macro_goal {
-                let fog = self.root_fog.borrow();
                 my += self.goal_shape_w
-                    * reward::goal_potential_with_fog(
-                        state,
-                        mover,
-                        goal,
-                        self.goal_aux.as_ref(),
-                        fog.as_ref().map(|f| f.as_slice()),
-                    );
+                    * reward::goal_potential(state, mover, goal, self.goal_aux.as_ref());
             }
         }
         (my, opp)
