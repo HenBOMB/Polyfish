@@ -557,7 +557,7 @@ impl<'a> GumbelMctsAgent<'a> {
         // turn — measured Aug 2: the pop-discipline and road gates were fully
         // inert until this was added. EndTurn is exempt so the root can never
         // be emptied; the suppression below still removes it when it should.
-        if self.star_gate || self.goal_aux.is_some() {
+        if (self.star_gate || self.goal_aux.is_some()) && reused_root_gates_enabled() {
             let stance = self.macro_goal.as_ref().map(|g| g.stance);
             new_root.children.retain(|c| {
                 let Some(m) = c.move_to_here.as_ref() else {
@@ -1436,6 +1436,15 @@ impl<'a> GumbelMctsAgent<'a> {
         self.last_chosen_idx = Some(best_idx);
         self.next_root_hash = next_hash;
     }
+}
+
+/// `POLYFISH_REUSED_ROOT_GATES=0` restores the pre-Aug-2 behavior where root
+/// gates applied only on fresh roots (~1 ply in 9). Default on; the off switch
+/// exists to measure what the gate-leak fix costs in activity, since the gates
+/// behind it were dialed while they were mostly inert.
+fn reused_root_gates_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("POLYFISH_REUSED_ROOT_GATES").as_deref() != Ok("0"))
 }
 
 /// Recursively zero `visits` / `value_sum` / `virtual_loss` across the

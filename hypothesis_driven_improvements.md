@@ -1650,3 +1650,91 @@ The A/B could not resolve any continuous endpoint at n=16 (the control arm alone
 **Open question flagged to Verdi before building:** mirroring `aux_fog` into `network.rs` breaks the standing dual-network rule ("do not add aux heads to network.rs"). The conv itself is trivial (filters→1, 1×1) and `model.safetensors` always comes from train.py so the weights are present — but the Rust opponent loader is strict, so every historical checkpoint used in league play must also carry the key or the first league iteration crashes (see `migrate-checkpoints-on-arch-change`). Needs a compatibility check across `checkpoints/` before committing to it.
 
 **Tension to watch:** permanent floors push toward doing a bit of everything, while the diagnosed failure is a LACK of commitment. Floors-plus-emergent-emphasis is the proposed resolution; if a run comes back with the net spreading thinner and finishing nothing, that is the mechanism to suspect first.
+
+### v9 + v9.1 — training ACTUALS (runs 1785702298 / 1785709634, 5 iters each, Aug 2–3 2026) — **NO MOVEMENT ON ANY REGISTERED ENDPOINT; PACKAGE REVERTED**
+
+**Registered endpoints, both failed.** v9.1's two changes (`HEADROOM_PER_CITY_CAP = 1`, risk without `dark`) predicted city_levels@t10 and revealed@t3 would recover. city_levels@t10 5.18 → 5.15; revealed@t3 38.53 → 39.67. Neither moved.
+
+**vs-Greedy scorecard** (`model_vs_anchor`, net seat, ± = SEM across the 5 iterations). Greedy is fixed, so this is the only cross-run-comparable instrument:
+
+| metric | v7.1 | v9 | v9.1 |
+|---|---|---|---|
+| SPT @ t10 | 9.12 ±0.38 | 9.32 ±0.24 | 8.87 ±0.52 |
+| SPT @ t20 | 16.30 ±0.85 | 15.96 ±0.50 | 16.12 ±1.96 |
+| avg city level @ t20 | 3.33 | 3.26 | **3.61** |
+| cities @ t20 | 3.91 ±0.33 | 3.96 ±0.11 | **3.50** ±0.43 |
+| K/D @ t10 / t20 | 1.45 / 1.02 | 1.31 / 1.03 | 1.49 / 0.97 |
+| army value @ t10 / t20 | 16.82 / 37.70 | 16.86 / 38.96 | 16.10 / 37.38 |
+| villages_first_rate | 0.92 | 0.88 | **0.87** |
+
+Everything overlaps inside one SEM except the last two rows. **The one real effect is a composition shift:** v9.1 runs fewer, deeper cities — exactly what the headroom cap was designed to do — but total SPT did not improve, so it bought depth at par, not profit.
+
+**Activity fell across the board, monotonically.** Not attrition (units lost @ t10: 1.78 / 2.09 / 1.71, flat) — the net simply *acts* less: builds 24.17 → 21.11 → 18.17 (−25%), harvests 7.49 → 5.82 → 5.44 (−27%), units trained 22.46 → 21.93 → 19.51, moves 262 → 244 → 217, revealed@t3 53.11 → 39.59 → 38.23 (−28%), units@t5 3.84 → 3.41 → 3.03 (−21%).
+
+**Two instrument errors found and corrected during this analysis — both had produced wrong verdicts:**
+1. **A direct `arena` head-to-head (512 games) ranked v9.1 above v7.1 and was void.** `arena` defaults to `goal_script: false, goal_w_tree: 0.0`; training runs `--goal-channels --goal-w-tree 1`. The match therefore ran with the 6 goal input planes **zeroed** and **all in-tree shaping off** — i.e. with the entire v9/v9.1 contribution deleted, on inputs neither net ever saw in training. Any future tip-vs-tip match MUST pass the training goal flags.
+2. **"Time to first village ≈ 6.0" was the wrong statistic.** Interpolating the turn at which the *mean city count* crosses 2.0 is dragged arbitrarily late by the 8–13% of games that never capture. The correct metric already exists: `villages_t2c_first_cond` (`self_play.rs:4112` — sums per-game capture turns, divides by games that got there) = **4.54 / 4.65 / 4.54**. Conditional speed is FLAT; it is the *rate* that fell.
+
+**Corrected read of the expansion regression:** the net is not slower, it expands in **fewer games**. Conditional turn-to-Nth-city is flat or slightly better (3rd city 10.36 → 10.02, 4th 15.00 → 14.07) while reach rates fall (village 0.92 → 0.87, 3rd city 0.76 → 0.71).
+
+**Also confirmed: `avg_score` from self-play is not a strength metric.** It is confounded by the opponent, which is the model itself. v9.1 averaged 3740 in its own run but 3815 against v7.1. Do not rank runs by it.
+
+### The regression predates v9 — audit across all 70 logged runs (Aug 3 2026)
+
+| | Jul 13–14 | v7.1 (Aug 1) | v9.1 (Aug 3) |
+|---|---|---|---|
+| villages_first_rate | **0.99** | 0.92 | 0.87 |
+| avg_cap_villages | **3.10** | 1.66 | 1.62 |
+| SPT @ t10 | **9.55** | 7.61 | 7.26 |
+| avg_moves | 548 | 262 | 217 |
+
+Count metrics are partly a game-length artifact (moves halved), but `villages_first_rate` is a rate and `SPT@t10` is a turn-10 snapshot — neither is length-dependent, and both fell hard. **Most of the damage was already done by v7.1**, somewhere in v6/v7. That hunt is still open.
+
+**Reverting further than v7.1 is not possible.** The best run (1783979192: 0.99 rate, 3.10 villages, SPT@t10 9.55) saved **no checkpoints**. The recoverable Jul 14 checkpoints do not load — the value head was widened in late July: `v_pool_conv` (1,64,1,1) → (8,64,1,1), `v_fc_shared` (64,121) → (64,968). Recovering them needs either an architecture revert across `network.rs`/`train.py`/`tch`/`metal`, or loading trunk+policy and re-initialising the value head.
+
+### Decision (Verdi, Aug 3 2026): revert to v7.1 weights, keep the correctness fixes, dial the gates
+
+- **Weights** → `checkpoints/gauge_1785601511_iter5.safetensors` (v7.1); prior tip preserved at `model_v91_tip_backup.safetensors`.
+- **Code** → `a1f62f2` reverted (commit `e137426`): removes the v9/v9.1 floors, headroom, territory, star-option and risk terms, the `SHAPE_GOAL_EXPLORER_FIRST_CITY_SCALE = 0.15` explorer de-weight, and the `aux_fog`/`root_fog` inference plumbing.
+- **Kept deliberately**: drylands/water-tech work, the ClearForest resource-tile mask, and the `finish_reused_root` gate-leak fix — the last of these is a genuine correctness fix and is NOT being reinstated as a bug.
+
+**⚠️ Standing hazard this creates:** v7.1's weights were trained on Aug 1, *before* `d896edf` (Aug 2) fixed the gate leak. They have never played under gates that fire on every ply. Loading them into the current binary is a mismatched weights/code pair — the same class of error as the void arena match, on the training side.
+
+## EXP_GATE_001 — what does the gate-leak fix cost in activity? (registered Aug 3 2026, BEFORE reading results)
+
+**Hypothesis.** `d896edf` (Aug 2) fixed root gates leaking on ~8 of every 9 plies (`finish_reused_root` promoted children were created as INTERIOR nodes and never met the root retain predicate). Four gates — `passes_star_gate`, `passes_tech_caps`, `passes_ability_gate`, `passes_capture_first` — went from firing on ~1 ply in 9 to firing on all of them, a ~9× simultaneous amplification, **and none were re-dialed afterward** (they had been tuned while mostly inert). This is the only single change that would suppress builds, harvests, research AND summons uniformly, and it sits exactly at the v7.1 → v9 step (villages_first_rate 0.92 → 0.88).
+
+**Method.** New env switch `POLYFISH_REUSED_ROOT_GATES=0` restores fresh-roots-only gating; default stays on. One binary, two arms, v7.1 weights, 128 games each vs the Greedy anchor at `--anchor-frac 1.0 --goal-channels --goal-w-tree 1 --mcts-iters 64 --gumbel-k 16`, matching the training search config.
+
+**Expected if the hypothesis holds.** Arm `off` shows materially more activity — builds and harvests up ≥15%, `villages_first_rate` up ≥3pp, revealed@t3 up — with win rate vs Greedy no worse.
+
+**Falsifier.** Arms within noise (`villages_first_rate` SE ≈ 0.026 at n=128, so ±5pp at 95%) ⇒ the gate amplification is NOT the mechanism, and the search is elsewhere: the v6/v7 packages committed in `b3d4421` and earlier.
+
+**Decision rule.** The fix stays either way — it is correct. If the amplification is confirmed, the individual gates get dialed down (and `--dump-gate-blocks` finally gets built to attribute the loss per gate) before any training run starts from the reverted tip.
+
+### EXP_GATE_001 — ACTUALS (Aug 4 2026, 128 games/arm, v7.1 weights vs Greedy anchor) — **FALSIFIER TRIGGERED; HYPOTHESIS WRONG AND THE PROPOSED REMEDY WOULD HAVE HURT**
+
+| metric | gates ON (current) | gates OFF (pre-Aug-2) | delta |
+|---|---|---|---|
+| **win rate vs Greedy** | **0.852** | 0.742 | **−10.9pp** (z=2.19, p≈0.03) |
+| villages_first_rate | 0.953 | 0.977 | +2.3pp (z=1.00, p≈0.32, **n.s.**) |
+| turn of 1st village (cond) | 4.541 | 4.320 | −0.22 |
+| turn of 2nd city | 5.608 | 5.336 | −0.27 |
+| villages captured | 2.078 | 2.312 | +11.3% |
+| builds | 26.750 | 31.844 | +19.0% |
+| units trained | 21.344 | 23.258 | +9.0% |
+| moves | 264.3 | 300.5 | +13.7% |
+| **units lost** | **11.836** | 14.539 | **+22.8%** |
+| owned tiles | 54.719 | 49.805 | −9.0% |
+
+**Registered falsifier fired.** `villages_first_rate` moved +2.3pp against a ±5.2pp noise floor — within noise. **The gate amplification is NOT the mechanism behind the village-capture regression.** The hunt moves upstream to the v6/v7 packages in `b3d4421` and earlier, exactly as the falsifier specified.
+
+**The activity-suppression half of the hypothesis was right, and the interpretation was wrong.** Gates on every ply do suppress activity — builds −16%, moves −12%, units trained −8% relative to the leaky arm. But that suppression is **productive**: the same arm wins **+10.9pp more games vs Greedy** and loses **19% fewer units**. The gates are pruning waste, not value. This also delivers the unit-preservation behavior Verdi asked for in replay critique #13 ("there needs to be a sense of preservation") — from a gate, not from a shaped risk term.
+
+**Consequence: DO NOT dial the gates down.** The remedy proposed when EXP_GATE_001 was registered ("if the amplification is confirmed, the individual gates get dialed down") is withdrawn — it would have traded ~11pp of strength for ~19% more builds and a faster first village. The `d896edf` gate-leak fix stands as both a correctness fix and a strength win.
+
+**Residual cost worth revisiting later, but not by turning gates off.** Gates on do cost expansion tempo: first village 4.54 vs 4.32, second city 5.61 vs 5.34, villages captured 2.08 vs 2.31. Attributing that per-gate needs `--dump-gate-blocks` (still unbuilt). `passes_capture_first` and `passes_star_gate` are the two plausible culprits for delaying a capture.
+
+**Caveats.** (i) Both arms ran v7.1 weights on post-`d896edf` code — the mismatched weights/code pair flagged in the revert decision. It is shared by both arms so the contrast is clean, but the absolute levels are not a prediction for a trained run. (ii) `--anchor-frac 1.0` means every game is vs Greedy, so absolute rates run far above the training log's mixed self-play population (0.95 here vs 0.92 there); only the between-arm contrast transfers. (iii) The 5.1 GB of games data from both arms was deleted — one arm had deliberately broken gating and must never enter the training corpus.
+
+**New standing tool.** `POLYFISH_REUSED_ROOT_GATES=0` (gumbel_mcts.rs) restores fresh-roots-only gating. Default on. Kept as a measurement dial for future gate work.
