@@ -85,10 +85,6 @@ name = "debug_stars"
 harness = false
 
 [[test]]
-name = "debug_mcts_undo"
-harness = false
-
-[[test]]
 name = "debug_water_sim"
 harness = false
 
