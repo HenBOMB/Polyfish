@@ -2719,6 +2719,14 @@ fn main() -> anyhow::Result<()> {
         #[arg(long, default_value_t = 0.0)]
         goal_w_tree: f32,
 
+        /// Base map seed (game i plays seed base + i). 0 = derive from the
+        /// wall clock, which is right for training but makes any two runs
+        /// play different maps. Fix it to pair A/B arms on identical maps —
+        /// map variance across 128 games is large enough to swamp the
+        /// behavioral effects these runs are usually measuring (EXP_GATE_001).
+        #[arg(long, default_value_t = 0)]
+        base_seed: u64,
+
         /// Current training iteration (for curriculum learning)
         #[arg(long, default_value_t = 1)]
         iteration: usize,
@@ -2920,7 +2928,11 @@ fn main() -> anyhow::Result<()> {
     // Load models (P1, and P2 defaulting to P1 when no opponent is given)
     let (network1, network2) = load_networks(&device, args.opponent.as_deref(), eval_backend_kind)?;
 
-    let base_seed = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let base_seed = if args.base_seed != 0 {
+        args.base_seed
+    } else {
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs()
+    };
 
     // Pool of tribes to draw from when tribe1/tribe2 aren't pinned via CLI args.
     // Each game in this run independently samples its own pair from this pool
@@ -4196,6 +4208,7 @@ fn main() -> anyhow::Result<()> {
             -1.0
         },
         "tempo_by_turn": tempo_by_turn,
+        "gate_blocks": polyfish::ai::gumbel_mcts::gate_stats::snapshot(),
     });
     std::fs::write(
         ".last_self_play_metrics.json",

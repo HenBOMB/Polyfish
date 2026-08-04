@@ -1738,3 +1738,52 @@ Count metrics are partly a game-length artifact (moves halved), but `villages_fi
 **Caveats.** (i) Both arms ran v7.1 weights on post-`d896edf` code — the mismatched weights/code pair flagged in the revert decision. It is shared by both arms so the contrast is clean, but the absolute levels are not a prediction for a trained run. (ii) `--anchor-frac 1.0` means every game is vs Greedy, so absolute rates run far above the training log's mixed self-play population (0.95 here vs 0.92 there); only the between-arm contrast transfers. (iii) The 5.1 GB of games data from both arms was deleted — one arm had deliberately broken gating and must never enter the training corpus.
 
 **New standing tool.** `POLYFISH_REUSED_ROOT_GATES=0` (gumbel_mcts.rs) restores fresh-roots-only gating. Default on. Kept as a measurement dial for future gate work.
+
+### EXP_GATE_002 — gate attribution instrument (built + measured Aug 4 2026)
+
+`POLYFISH_DUMP_GATE_BLOCKS=1` records every blocked root candidate by **gate × move type × turn band** into `.last_self_play_metrics.json` under `gate_blocks`. Implementation collapsed the gate predicate's **three** duplicated copies (`build_fresh_root`, `finish_reused_root`, `reused_children_match_legal`) into one `gate_block()` — hand-syncing those three is how the gate leak survived as long as it did. Attribution is FIRST-BLOCKER-WINS, so per-gate counts are lower bounds.
+
+128 games vs Greedy, v7.1 weights, production config:
+
+| gate | blocks | share | blocks only | t1–10 |
+|---|---|---|---|---|
+| tech_caps | 66,773 | 51.5% | Research | 4,370 |
+| star_gate | 46,414 | 35.8% | Research | 8,990 |
+| ability_gate | 15,951 | 12.3% | Ability | 421 |
+| **capture_first** | **566** | **0.4%** | Attack | 288 |
+
+Gates remove **4.77%** of all candidates (70.5 → 67.2 per ply); 75.6% of plies lose at least one. **87% of every block is a Research move**, rising to 95% in turns 1–10. **`passes_capture_first` is eliminated as a suspect for expansion tempo** — 566 blocks across 128 games is a rounding error. If the gates cost anything it is through research pacing, nothing else.
+
+### ⚠️ EXP_GATE_001 was UNPAIRED — most of its findings were map luck (found Aug 4 2026)
+
+`self_play.rs:2923` derived `base_seed` from the wall clock with **no override**, so the two arms played entirely different map sets. Two runs with *identical flags and identical weights* differed by more than the reported "effect" on 12 of 19 metrics — builds 26.75 vs 38.35 (noise **2.3×** the claimed effect), moves 264 vs 323 (1.6×), villages_first_rate 0.953 vs 0.992 (1.7×). Meanwhile `arena` has carried `--base-seed` all along, documented as *"Fix it to play identical maps across separate arena runs (paired A/B arms)"* — the discipline existed in one tool and was not applied to the other.
+
+**Fix:** `--base-seed` added to self_play (0 = wall clock, preserving training behavior).
+
+**RETRACTED from EXP_GATE_001:** "builds −16%", "units lost −19%", "moves −12%", and the **+10.9pp** win-rate magnitude. The direction survived re-testing; the magnitude was ~3.5× inflated by map luck.
+
+### EXP_GATE_001R — paired re-run with a measured noise floor (Aug 4 2026) — **GATES ARE A WIN, AND THE TEMPO CONCERN REVERSES**
+
+Three arms, 128 games each, seed 770425 fixed: **A** gates on, **B** gates off (identical maps), **C** gates on (repeat → noise floor). Pairing tightened the floor ~10×: win rate 0.078 → **0.008**, moves 58.9 → **5.1**, builds 11.6 → **1.9**.
+
+Effect = gates OFF − gates ON, reported only where it clears its own measured floor:
+
+| metric | A on | C on | noise | B off | effect | ratio |
+|---|---|---|---|---|---|---|
+| owned tiles | 51.719 | 51.695 | 0.023 | 51.500 | −0.219 | 9.3× |
+| units trained | 22.672 | 22.734 | 0.062 | 23.109 | +0.438 | 7.0× |
+| **win rate vs Greedy** | **0.805** | 0.812 | 0.008 | 0.773 | **−0.031** | 4.0× |
+| moves | 284.1 | 289.3 | 5.1 | 304.3 | +20.2 | 3.9× |
+| **turn of 1st village** | **4.325** | 4.282 | 0.043 | 4.463 | **+0.138** | 3.2× |
+| research | 6.492 | 6.555 | 0.062 | 6.680 | +0.188 | 3.0× |
+| turn of 3rd city | 9.548 | 9.327 | 0.221 | 10.145 | +0.597 | 2.7× |
+
+Indistinguishable from noise: village capture rate (**0.961 both, ratio 0.00**), villages captured, units lost, revealed tiles, giants, score, turn of 2nd city.
+
+**Gates ON is better on every metric that clears noise.** Gates OFF does strictly *more* — +7% moves, +12% builds, +3% research, +2% units trained — and achieves *less*: −3.1pp win rate, slower first village, slower third city, fewer owned tiles. The suppressed activity is waste, now on paired evidence rather than inference.
+
+**The motivating concern is dead and reversed.** EXP_GATE_001 (unpaired) showed gates delaying the first village 4.54 vs 4.32. Paired, gates ON is **faster** — 4.325 vs 4.463 — and faster to the 3rd city (9.55 vs 10.15). There is no expansion-tempo cost to buy back. Combined with `capture_first` at 0.4% of blocks, the "gates hurt expansion" line of inquiry is closed.
+
+**Caveats.** (i) The noise floor rests on ONE repeat; 0.008 on win rate could be 0.02 on another. Ratios near the 1.5–3× band (builds, harvests, turn of 3rd city) should not be leaned on. (ii) Same-seed arms are NOT bit-identical — `candidates_in` differs 8.9% between A and C, so trajectories diverge from Gumbel sampling / actor scheduling / MPSGraph float order even on identical maps; aggregate outcomes still reproduce to <1% on win rate. (iii) v7.1 weights on post-`d896edf` code, shared by all arms.
+
+**Standing rule going forward: every self_play A/B must pass `--base-seed` and carry a repeat arm.** Two rounds of conclusions have now been overturned by unmeasured noise; the floor is an output, never an assumption.

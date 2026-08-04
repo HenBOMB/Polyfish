@@ -559,29 +559,20 @@ impl<'a> GumbelMctsAgent<'a> {
         // be emptied; the suppression below still removes it when it should.
         if (self.star_gate || self.goal_aux.is_some()) && reused_root_gates_enabled() {
             let stance = self.macro_goal.as_ref().map(|g| g.stance);
+            let before = new_root.children.len();
             new_root.children.retain(|c| {
                 let Some(m) = c.move_to_here.as_ref() else {
                     return true;
                 };
-                if m.move_type() == MoveType::EndTurn {
-                    return true;
-                }
-                (!self.star_gate
-                    || crate::ai::oracle_macro::passes_star_gate(
-                        &game.state,
-                        m.as_ref(),
-                        stance,
-                        self.goal_aux.as_ref(),
-                    ))
-                    && self.goal_aux.as_ref().map_or(true, |a| {
-                        crate::ai::oracle_macro::passes_tech_caps(m.as_ref(), a)
-                            && crate::ai::oracle_macro::passes_ability_gate(&game.state, m.as_ref())
-                            && crate::ai::oracle_macro::passes_capture_first(
-                                &game.state,
-                                m.as_ref(),
-                            )
-                    })
+                gate_retain(
+                    &game.state,
+                    m.as_ref(),
+                    self.star_gate,
+                    stance,
+                    self.goal_aux.as_ref(),
+                )
             });
+            gate_stats::record_ply(before, new_root.children.len());
         }
 
         // Belt-and-suspenders: `extract_leaf_data` already drops EndTurn from
@@ -631,18 +622,17 @@ impl<'a> GumbelMctsAgent<'a> {
         let mut legal_moves = game.legal_moves();
         if self.star_gate || self.goal_aux.is_some() {
             let stance = self.macro_goal.as_ref().map(|g| g.stance);
+            let before = legal_moves.len();
             legal_moves.retain(|m| {
-                (!self.star_gate
-                    || crate::ai::oracle_macro::passes_star_gate(&game.state, m.as_ref(), stance, self.goal_aux.as_ref()))
-                    && self.goal_aux.as_ref().map_or(true, |a| {
-                        crate::ai::oracle_macro::passes_tech_caps(m.as_ref(), a)
-                            && crate::ai::oracle_macro::passes_ability_gate(&game.state, m.as_ref())
-                            && crate::ai::oracle_macro::passes_capture_first(
-                                &game.state,
-                                m.as_ref(),
-                            )
-                    })
+                gate_retain(
+                    &game.state,
+                    m.as_ref(),
+                    self.star_gate,
+                    stance,
+                    self.goal_aux.as_ref(),
+                )
             });
+            gate_stats::record_ply(before, legal_moves.len());
         }
         let map_size = game.state.settings.size as usize;
 
@@ -1447,6 +1437,160 @@ fn reused_root_gates_enabled() -> bool {
     *ON.get_or_init(|| std::env::var("POLYFISH_REUSED_ROOT_GATES").as_deref() != Ok("0"))
 }
 
+/// Which root gate rejects `m`, or `None` if it passes. Single source of truth
+/// for the three sites that filter root candidates.
+///
+/// Attribution is FIRST-BLOCKER-WINS: a move both gates would reject is
+/// charged only to the earlier one, so per-gate counts are lower bounds on
+/// what each gate would block in isolation.
+fn gate_block(
+    state: &crate::states::GameState,
+    m: &dyn Move,
+    star_gate: bool,
+    stance: Option<crate::ai::oracle_macro::Stance>,
+    aux: Option<&crate::ai::oracle_macro::GoalAux>,
+) -> Option<usize> {
+    if star_gate && !crate::ai::oracle_macro::passes_star_gate(state, m, stance, aux) {
+        return Some(0);
+    }
+    if let Some(a) = aux {
+        if !crate::ai::oracle_macro::passes_tech_caps(m, a) {
+            return Some(1);
+        }
+        if !crate::ai::oracle_macro::passes_ability_gate(state, m) {
+            return Some(2);
+        }
+        if !crate::ai::oracle_macro::passes_capture_first(state, m) {
+            return Some(3);
+        }
+    }
+    None
+}
+
+/// Retain predicate shared by both real gating sites, recording an attributed
+/// block when `POLYFISH_DUMP_GATE_BLOCKS=1`. EndTurn is always exempt so the
+/// root can never be emptied.
+fn gate_retain(
+    state: &crate::states::GameState,
+    m: &dyn Move,
+    star_gate: bool,
+    stance: Option<crate::ai::oracle_macro::Stance>,
+    aux: Option<&crate::ai::oracle_macro::GoalAux>,
+) -> bool {
+    if m.move_type() == MoveType::EndTurn {
+        return true;
+    }
+    match gate_block(state, m, star_gate, stance, aux) {
+        None => true,
+        Some(g) => {
+            gate_stats::record(g, m.move_type(), state.settings.turn);
+            false
+        }
+    }
+}
+
+/// Per-gate attribution of blocked root candidates, off unless
+/// `POLYFISH_DUMP_GATE_BLOCKS=1`. Lock-free counters: the gates run on every
+/// actor thread, and this must not perturb the thing it measures.
+pub mod gate_stats {
+    use crate::types::MoveType;
+    use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    pub const GATES: [&str; 4] = ["star_gate", "tech_caps", "ability_gate", "capture_first"];
+    const BANDS: [&str; 4] = ["t1_5", "t6_10", "t11_15", "t16up"];
+    const N_TYPES: usize = 12;
+
+    pub fn enabled() -> bool {
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| std::env::var("POLYFISH_DUMP_GATE_BLOCKS").as_deref() == Ok("1"))
+    }
+
+    fn counts() -> &'static Vec<AtomicU64> {
+        static C: OnceLock<Vec<AtomicU64>> = OnceLock::new();
+        C.get_or_init(|| {
+            (0..GATES.len() * N_TYPES * BANDS.len())
+                .map(|_| AtomicU64::new(0))
+                .collect()
+        })
+    }
+
+    fn totals() -> &'static Vec<AtomicU64> {
+        static T: OnceLock<Vec<AtomicU64>> = OnceLock::new();
+        // [plies seen, plies that lost >=1 candidate, candidates in, candidates out]
+        T.get_or_init(|| (0..4).map(|_| AtomicU64::new(0)).collect())
+    }
+
+    fn band(turn: i32) -> usize {
+        match turn {
+            ..=5 => 0,
+            6..=10 => 1,
+            11..=15 => 2,
+            _ => 3,
+        }
+    }
+
+    pub fn record(gate: usize, mt: MoveType, turn: i32) {
+        if !enabled() {
+            return;
+        }
+        let t = (mt as usize).min(N_TYPES - 1);
+        let idx = gate * (N_TYPES * BANDS.len()) + t * BANDS.len() + band(turn);
+        counts()[idx].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// One gated root: how many candidates went in and how many survived.
+    pub fn record_ply(before: usize, after: usize) {
+        if !enabled() {
+            return;
+        }
+        let t = totals();
+        t[0].fetch_add(1, Ordering::Relaxed);
+        if after < before {
+            t[1].fetch_add(1, Ordering::Relaxed);
+        }
+        t[2].fetch_add(before as u64, Ordering::Relaxed);
+        t[3].fetch_add(after as u64, Ordering::Relaxed);
+    }
+
+    pub fn snapshot() -> serde_json::Value {
+        if !enabled() {
+            return serde_json::Value::Null;
+        }
+        let c = counts();
+        let mut gates = serde_json::Map::new();
+        for (gi, gname) in GATES.iter().enumerate() {
+            let mut by_type = serde_json::Map::new();
+            for t in 0..N_TYPES {
+                let mut by_band = serde_json::Map::new();
+                let mut any = 0u64;
+                for (bi, bname) in BANDS.iter().enumerate() {
+                    let v = c[gi * (N_TYPES * BANDS.len()) + t * BANDS.len() + bi]
+                        .load(Ordering::Relaxed);
+                    any += v;
+                    by_band.insert((*bname).to_string(), v.into());
+                }
+                if any > 0 {
+                    by_band.insert("total".to_string(), any.into());
+                    by_type.insert(
+                        format!("{:?}", MoveType::from(t as i32)),
+                        serde_json::Value::Object(by_band),
+                    );
+                }
+            }
+            gates.insert((*gname).to_string(), serde_json::Value::Object(by_type));
+        }
+        let t = totals();
+        serde_json::json!({
+            "by_gate": gates,
+            "plies_gated": t[0].load(Ordering::Relaxed),
+            "plies_losing_a_candidate": t[1].load(Ordering::Relaxed),
+            "candidates_in": t[2].load(Ordering::Relaxed),
+            "candidates_out": t[3].load(Ordering::Relaxed),
+        })
+    }
+}
+
 /// Recursively zero `visits` / `value_sum` / `virtual_loss` across the
 /// subtree, keeping `is_expanded`, `children`, `logit`, `own_value`, and
 /// `move_to_here` intact. Used by structure-only root-shift reuse so the new
@@ -1525,14 +1669,11 @@ fn reused_children_match_legal(
 ) -> bool {
     let mut legal = game.legal_moves();
     if star_gate || goal_aux.is_some() {
+        // Consistency check, not a real gating decision — same predicate, but
+        // deliberately unrecorded so the stats count each ply exactly once.
         legal.retain(|m| {
-            (!star_gate
-                || crate::ai::oracle_macro::passes_star_gate(&game.state, m.as_ref(), stance, goal_aux))
-                && goal_aux.map_or(true, |a| {
-                    crate::ai::oracle_macro::passes_tech_caps(m.as_ref(), a)
-                        && crate::ai::oracle_macro::passes_ability_gate(&game.state, m.as_ref())
-                        && crate::ai::oracle_macro::passes_capture_first(&game.state, m.as_ref())
-                })
+            m.move_type() == MoveType::EndTurn
+                || gate_block(&game.state, m.as_ref(), star_gate, stance, goal_aux).is_none()
         });
     }
     let has_other = legal.iter().any(|m| m.move_type() != MoveType::EndTurn);
