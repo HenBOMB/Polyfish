@@ -70,6 +70,11 @@
     font-family: 'JetBrains Mono', monospace;
 }
 
+.replay-separator {
+    padding: 0 8px;
+    opacity: 0.5;
+}
+
 .replay-nav {
     display: flex;
     justify-content: center;
@@ -108,4 +113,5 @@
 .analysis-box .value {
     font-size: 0.95em;
     line-height: 1.4;
+    overflow-wrap: anywhere;
 }

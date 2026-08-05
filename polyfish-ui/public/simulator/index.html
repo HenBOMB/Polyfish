@@ -166,6 +166,8 @@
                         <button id="btn-train" class="rts-btn mini" title="Start Training">Train</button>
                         <button id="btn-replay" class="rts-btn mini purple" title="Replay Mode"
                             onclick="openReplayMenu()">Replay</button>
+                        <input id="replay-file-input" type="file" accept=".json,application/json" class="hidden"
+                            onchange="openReplayFile(this)">
                         <button id="btn-preview" class="rts-btn mini cyan" title="Preview Initial State"
                             onclick="previewInitialState()">Preview</button>
                     </div>
@@ -236,33 +238,36 @@
     <script src="js/actions.js?v=2"></script>
     <script src="js/map.js?v=2"></script>
     <script src="js/space-bg.js?v=2"></script>
-    <script src="js/replay.js?v=4"></script>
+    <script src="js/replay.js?v=5"></script>
     <script src="js/main.js?v=2"></script>
 
     <!-- Replay UI Overlay -->
     <div id="replay-controls" class="hidden">
         <div class="replay-header">
-            <span class="icon">📼</span> Replay Analysis
+            <span><span class="icon">📼</span> <span id="replay-title">Replay</span></span>
             <button class="replay-close" onclick="exitReplayMode()">✕</button>
         </div>
         <div class="replay-body">
             <div class="replay-turn-info">
                 Step: <span id="replay-step-val">0 / 0</span>
+                <span class="replay-separator">·</span>
+                <span id="replay-turn-player">Turn 0 · Player 1</span>
             </div>
             <div class="replay-nav">
-                <button class="rts-btn mini" onclick="jumpToStep(0)">⏮</button>
+                <button class="rts-btn mini" onclick="firstReplayStep()">⏮</button>
                 <button class="rts-btn mini" onclick="prevReplayStep()">◀ Prev</button>
+                <button id="replay-play" class="rts-btn mini purple" onclick="toggleReplayPlay()">Play</button>
                 <button class="rts-btn mini" onclick="nextReplayStep()">Next ▶</button>
-                <button class="rts-btn mini" onclick="jumpToStep(REPLAY_HISTORY.length)">⏭</button>
+                <button class="rts-btn mini" onclick="lastReplayStep()">⏭</button>
             </div>
             <div class="replay-analysis">
                 <div class="analysis-box user">
-                    <div class="label">You Played</div>
-                    <div id="replay-user-move" class="value">...</div>
+                    <div class="label">Next command</div>
+                    <div id="replay-command" class="value">—</div>
                 </div>
                 <div class="analysis-box ai">
-                    <div class="label">AI Suggests</div>
-                    <div id="replay-ai-move" class="value">...</div>
+                    <div class="label">Game result</div>
+                    <div id="replay-result" class="value">Result not recorded</div>
                 </div>
             </div>
         </div>
