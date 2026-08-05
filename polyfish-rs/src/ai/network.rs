@@ -4,6 +4,8 @@
 use candle_core::{Module, ModuleT, Result, Tensor};
 use candle_nn::{Conv2d, GroupNorm, LayerNorm, Linear, VarBuilder};
 
+pub const NUM_ACTION_TYPES: usize = 12;
+
 fn conv(
     in_c: usize,
     out_c: usize,

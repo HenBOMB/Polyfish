@@ -1,4 +1,3 @@
-use serde_json::Value;
 use std::env;
 use std::fs;
 
@@ -41,44 +40,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let entry = entry?;
         let path = entry.path();
 
-        if !path.is_file() || !path.to_string_lossy().ends_with(".json") {
+        if !path.is_file() || !path.to_string_lossy().ends_with(".replay.json") {
             continue;
         }
 
         let content = fs::read_to_string(&path)?;
-        let body: Value = match serde_json::from_str(&content) {
-            Ok(b) => b,
+        let replay = match polyfish::replay::load_replay(&path) {
+            Ok(replay) => replay,
             Err(e) => {
-                println!("Skipping {:?}, could not parse: {}", path, e);
+                println!("Skipping {:?}, invalid canonical replay: {}", path, e);
                 continue;
             }
         };
-
-        // Fallback for different replay schemas you may have
-        let is_mod_replay = body["turns"].is_array() && body["gameState"].is_object();
-        let is_legacy_replay = body["settings"].is_object(); // direct state
-
-        if !is_mod_replay && !is_legacy_replay {
-            println!("Skipping {:?} (unrecognized replay format)", path);
-            continue;
-        }
-
-        let game_state_obj = if is_mod_replay {
-            &body["gameState"]
+        let game_name = if replay.initial_state.settings.game_name.is_empty() {
+            replay.metadata.game_id.as_deref().unwrap_or("Unknown")
         } else {
-            &body
+            &replay.initial_state.settings.game_name
         };
-
-        let game_name = game_state_obj["settings"]["gameName"]
-            .as_str()
-            .unwrap_or("Unknown");
-
-        let seed = game_state_obj["initial_seed"]
-            .as_u64()
-            .or_else(|| game_state_obj["settings"]["seed"].as_u64())
-            .unwrap_or(0);
-
-        let uuid_val = body["uuid"].as_str().unwrap_or("").to_string();
+        let seed = replay.initial_state.initial_seed;
+        let uuid_val = replay.metadata.game_id.clone().unwrap_or_default();
 
         let db_url = if !uuid_val.is_empty() {
             format!(
@@ -121,7 +101,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap()
             .as_secs();
 
-        let file_name = format!("{}_{}.json", sanitize_storage_key(game_name), timestamp);
+        let file_name = format!(
+            "{}_{}.replay.json",
+            sanitize_storage_key(game_name),
+            timestamp
+        );
         let storage_url = format!(
             "{}/storage/v1/object/{}/{}",
             supabase_url.trim_end_matches('/'),

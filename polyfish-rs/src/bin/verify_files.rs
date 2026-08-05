@@ -121,20 +121,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let replay_json: Value = download_res.json().await?;
 
-            // Parse into ModReplay
-            let mut mod_replay: polyfish::replayer::ModReplay =
-                match serde_json::from_value(replay_json) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        eprintln!("❌ Failed to parse replay {}: {}", game_name, e);
-                        failed_replay_count += 1;
-                        continue;
-                    }
-                };
+            // Parse the canonical versioned replay.
+            let replay: polyfish::replay::Replay = match serde_json::from_value(replay_json) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("❌ Failed to parse replay {}: {}", game_name, e);
+                    failed_replay_count += 1;
+                    continue;
+                }
+            };
 
             // Replay the game
-            let mut game_instance = polyfish::game::Game::new();
-            match polyfish::replayer::replay_game(&mut game_instance, &mut mod_replay) {
+            match polyfish::replay::ReplayExecutor::execute(&replay) {
                 Ok(_) => {
                     println!("✨ Replay SUCCESS for game {}: {}", game_id, game_name);
 
