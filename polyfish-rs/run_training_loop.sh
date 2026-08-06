@@ -47,7 +47,8 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     # The tch-linked binary has no rpath for libtorch; point dyld at the venv's torch dylibs
     export DYLD_LIBRARY_PATH="$(.venv/bin/python3 -c "import torch, os; print(os.path.join(os.path.dirname(torch.__file__), 'lib'))")${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
 elif command -v nvcc >/dev/null 2>&1; then
-    # CUDA available (Linux/Windows with NVIDIA GPU)
+    # CUDA toolkit available; compile CUDA support into the binary.
+    # Runtime selection will verify that a usable CUDA device exists.
     echo "Building with CUDA support..."
     echo "CUDA compiler: $(nvcc --version | tail -n1)"
     # --no-default-features: opt out of the macOS `metal` default, which does
