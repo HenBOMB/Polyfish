@@ -24,11 +24,10 @@ use candle_core::{utils, Device};
 use crate::ai::eval_server::{BackendSpec, EvalHandle, EvalServer, EvalServerConfig, Evaluator, ShardedEvalHandle,};
 use crate::ai::network::PolyZeroNet;
 
-/// Select the compute device: Metal (macOS) > CUDA (NVIDIA) > CPU, unless
-/// overridden via `POLYFISH_DEVICE` (`cpu`|`metal`|`cuda`). Each call
-/// allocates a fresh device handle (own command queue), even for the same
-/// physical GPU — callers that need two isolated devices just call this
-/// twice.
+/// Select a compute device, unless `POLYFISH_DEVICE` overrides it.
+/// Accepted values are `cpu`, `metal`, and `cuda`.
+/// Automatic selection priority is CUDA, Metal, then CPU.
+/// Each call creates a fresh device handle and command queue.
 pub fn select_device() -> Result<Device> {
     let requested = std::env::var("POLYFISH_DEVICE")
         .unwrap_or_else(|_| "auto".to_owned())
