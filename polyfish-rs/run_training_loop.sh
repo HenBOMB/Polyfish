@@ -46,9 +46,10 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     PATH="$(pwd)/.venv/bin:$PATH" cargo build --bin polyfish --bin self_play --bin arena --release --features apple
     # The tch-linked binary has no rpath for libtorch; point dyld at the venv's torch dylibs
     export DYLD_LIBRARY_PATH="$(.venv/bin/python3 -c "import torch, os; print(os.path.join(os.path.dirname(torch.__file__), 'lib'))")${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
-elif false; then
+elif command -v nvcc >/dev/null 2>&1; then
     # CUDA available (Linux/Windows with NVIDIA GPU)
     echo "Building with CUDA support..."
+    echo "CUDA compiler: $(nvcc --version | tail -n1)"
     # --no-default-features: opt out of the macOS `metal` default, which does
     # not compile on Linux.
     cargo build --bin polyfish --bin self_play --bin arena --release --no-default-features --features cuda
