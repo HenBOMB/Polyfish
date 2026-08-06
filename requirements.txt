@@ -68,6 +68,7 @@ python-dateutil==2.9.0.post0
 pytz==2025.1
 pyzmq==26.4.0
 requests==2.32.3
+safetensors==0.8.0
 setuptools==76.0.0
 six==1.17.0
 stable_baselines3==2.5.0
