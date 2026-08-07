@@ -1787,3 +1787,258 @@ Indistinguishable from noise: village capture rate (**0.961 both, ratio 0.00**),
 **Caveats.** (i) The noise floor rests on ONE repeat; 0.008 on win rate could be 0.02 on another. Ratios near the 1.5–3× band (builds, harvests, turn of 3rd city) should not be leaned on. (ii) Same-seed arms are NOT bit-identical — `candidates_in` differs 8.9% between A and C, so trajectories diverge from Gumbel sampling / actor scheduling / MPSGraph float order even on identical maps; aggregate outcomes still reproduce to <1% on win rate. (iii) v7.1 weights on post-`d896edf` code, shared by all arms.
 
 **Standing rule going forward: every self_play A/B must pass `--base-seed` and carry a repeat arm.** Two rounds of conclusions have now been overturned by unmeasured noise; the floor is an output, never an assumption.
+
+### EXP_COMMIT_001 — the 0-capture slice and whether strategy flipping predicts losing (Aug 4 2026, 256 games vs Greedy, seed 770425, v7.1 weights)
+
+**A) 0-capture seats: 7/256 = 2.7%, and most of it is not a policy failure.**
+
+| cause | seats | share |
+|---|---|---|
+| saw a village ≤2 turns (game ended early) | 3 | 43% |
+| **saw one >2 turns and never took it** | **3** | **43%** |
+| never saw a village at all | 1 | 14% |
+
+0-capture seats end at median **t19** vs **t25** for all seats — these are mostly games the seat was losing, where the game ended before expansion could happen. The genuinely anomalous slice is **3 seats in 256 (1.2%)**, the clearest being `g105p2`: village visible from **turn 1**, visible for **13 turns**, full 30-turn game, zero captures. Worth a single-game decision trace; not a systemic defect.
+
+**B) Strategy flipping does NOT predict worse outcomes — the commitment hypothesis is unsupported.**
+
+| split | n | cities gained | prod@t10 | final prod |
+|---|---|---|---|---|
+| stance_flips ≤3 | 150 | 2.85 | 8.91 | 14.41 |
+| stance_flips >3 | 106 | 2.80 | 8.51 | 14.57 |
+| order_flips ≤11 | 145 | 2.77 | 8.86 | 14.71 |
+| order_flips >11 | 111 | **2.91** | 8.59 | 14.17 |
+
+Signs are **inconsistent across metrics and across the two flip types**: cities gained falls with stance flips but *rises* with order flips; final production rises with stance flips but falls with order flips. Every gap is 1–5%, inside the noise floor measured in EXP_GATE_001R. There is no correlation to explain.
+
+**Plans achieved 3.02/seat vs dropped 5.49/seat — a 65% abandonment rate that costs nothing measurable.** Either dropping is adaptive (circumstances genuinely changed) or the plans are low-stakes. Forcing the model to hold plans it currently drops would be an intervention with no evidence the held plans are worth holding.
+
+**Scope caveat:** `stance_flips`/`order_flips` measure the *scripted goal-setter*, not the net's own consistency of unit composition or tech line. An observation of "the net flips a lot" drawn from watching replays may be about behavior this metric does not capture; that would need a separate metric (e.g. unit-mix entropy per game) before it can be tested.
+
+### EXP_LANE_001..004 + EXP_HUB_001 — economy lane scoring (Aug 4–5 2026) — **ALL FAILED; the diagnosis is the deliverable**
+
+Four rewrites of `recommended_techs` and one Φ term. **SPT@t10 never moved**: 8.94 baseline → 8.82 → 9.08 → 9.06 → 8.90, every one inside the paired noise floor (±0.329). Registered decision rule ("flat a third time ⇒ lane selection is not the SPT lever") fired and I kept going one attempt too long.
+
+| variant | seed-4102 forest engine | win rate | SPT@t10 | giants | owned tiles |
+|---|---|---|---|---|---|
+| baseline (terrain counts) | Forestry t17, 5 huts, 0 saw | 0.809 | 8.94 | 0.907 | 51.71 |
+| 1 owned-territory only | — | — | 8.82 | 0.703 | 50.73 |
+| 2 prospective territory | t11, 4 huts, 2 saw | **0.828** | 9.08 | 0.672 | 53.01 |
+| 3 + border growth, 1st-step runner-up | **never, 0 huts** | 0.812 | 9.06 | **0.875** | **53.47** |
+| 4 whole-prefix runner-up | **t11, 7 huts, 3 saw** | **0.789** | 8.90 | 0.680 | 52.24 |
+
+**The forest engine is anti-correlated with winning.** The variant that builds it best has the worst win rate and 25% fewer giants; the one that never touches forest has the best giants and territory. Ranking lanes by best-prefix instead of whole-lane was also tried and was worse (Forestry fell to 7th pick) — lane scores sit within noise of each other on these maps, so any scoring tweak reshuffles the order arbitrarily.
+
+### ⭐ The actual bottleneck — planner/executor disagreement on hub placement
+
+Verdi asked the right question ("what is the average level of our sawmills?"). Measured on seed 4102:
+
+```
+7 LumberHuts at [16, 23, 28, 35, 37, 70, 79]
+hut-to-hut adjacency: 0.57 mean; 3 of 7 fully isolated
+Sawmills built t15@18 -> 1 partner, t17@11 -> 1, t20@80 -> 2   (avg level 1.33)
+BEST available site at end: tile 27 with 3 partners — adjacent to huts 16, 28, 37
+```
+
+A Sawmill costs 5★ and pays `reward_pop × adjacent partners` (`actions/structure.rs:222-242`). At 1 partner that is **5★ for 1 pop** — worse than a LumberHut (3.0★/pop) and worse than free Fruit (2.0★/pop). Those Sawmills destroy value.
+
+Meanwhile `max_affordable_pop` scores a hub at its **best** placement (`best = best.max(partners)`). So the planner ranks the forest lane on a Sawmill worth 3–4 pop, and the net delivers 1.33. **That is the whole paradox**: every increment of forest commitment buys more 5★-for-1-pop Sawmills, consuming stars that would otherwise become units or city levels — hence fewer giants and lower win rate, without forest being the wrong lane.
+
+Root cause of the scatter: **nothing prices hut clustering.** A LumberHut pays 1 pop wherever it sits and huts do not feed each other, so every forest tile is identical to the net. `SHAPE_GOAL_YIELD_ADJ` pays a hub only once it EXISTS — too late to influence the placements that determine its worth.
+
+**EXP_HUB_001 (failed):** priced the best unbuilt hub site at `SHAPE_GOAL_HUB_SITE × reward_pop × partners`. First cut was a sign error — site paid `60p` while a built hub pays `100(p−1)`, making the BUILD a Φ loss below 3 partners, so the net hoarded sites: 0 LumberHuts, score 1815. Corrected to `(p−1)` to mirror the hub formula; still 0 LumberHuts, Forestry never bought, 24 roads, score 3115. Reverted.
+
+**Open, and the right next target:** make hub placement good, either by pricing clustering at partner-placement time in a form that does not distort lane choice, or by accepting realistic placement in the planner so lanes stop being ranked on pop the net never realises. Note `max_affordable_pop` also deliberately excludes monuments (free, 3 pop), so it undercounts there too — Verdi flagged monuments as part of the 4-giant plan for this map.
+
+### Why Φ pricing could not fix hub placement — it is a SEARCH-REACHABILITY problem (Aug 5 2026)
+
+`--dump-pop-spend-choices`, 24 games, seed 4102. When a ply offers **two or more placements of the same structure**, how often does search visit any of them?
+
+| structure | plies with ≥2 placements | ≥1 placement searched |
+|---|---|---|
+| Farm | 39 | 12 (31%) |
+| **Windmill** (adjacency hub) | 17 | **3 (18%)** |
+| Road | 10 | 8 (80%) |
+| Sawmill | 1 | 0 |
+| LumberHut | 1 | 1 |
+
+The one Sawmill ply (turn 11, 12 candidate tiles) had **visits = 0 on every tile**, priors spanning 0.00018–0.00026 — a 1.4× ratio, but both far too small for Gumbel (k=16) to sample. Its zero Q-spread was an artifact of zero visits, not of the value head being blind; I nearly misread it as blindness.
+
+**So placement is decided by the raw policy prior, not by search.** That is why both attempts to price placement in Φ failed: Φ only changes what the search *evaluates*, and these moves are never evaluated. A reward term on an unsearched move is inert by construction — the same class of error as the v8 gates that were "fully inert" until the leak fix.
+
+**Caveats, deliberately not over-claimed.** Sawmill and LumberHut rows are n=1; only Farm (39) and Windmill (17) carry weight, and Windmill is the closest analogue to Sawmill. Per CLAUDE.md this is NOT a claim that economy priors are too low versus Step — that comparison is the documented analytical trap. The claim is narrower: *among placements of one structure type in one ply*, alternatives usually go unsearched.
+
+**Implication for the next attempt:** the lever is the PRIOR, not the potential — raise adjacency-hub Build candidates in proportion to partner count so the good tile is reachable, then let the existing `SHAPE_GOAL_YIELD_ADJ` do the valuing. The heuristic prior blend (`blend_heuristic_into_logits` / `prior_heuristic_weight`) is the existing mechanism, but it decays to zero during training, so a durable fix cannot live there.
+
+### EXP_PRIOR_001 — widen the heuristic placement gradient (Aug 5 2026) — **MECHANISM FIXED, OUTCOME FAILED, REVERTED**
+
+Verdi's call: raise the prior on good hub placements and accept that the crutch decays ("I'd expect the net to have distilled that into its prior").
+
+**The knowledge already existed.** `scoring.rs` scores hub placement by partner count (1 → −2, 2 → +5, 3 → +12, 4+ → +18) and has a "Future Adjacency Prediction" block paying `(others + 1) × 2.5` per adjacent empty tile that could host the hub. It reaches the search through `blend_heuristic_prior` → `blend_heuristic_into_logits`.
+
+**Why it never reached the net — the arithmetic.** `HEURISTIC_TEMP = 20`, so the −2..+12 spread is `14/20 = 0.7` in the softmax exponent → 2× between tiles; blended at `CRUTCH_FLOOR = 0.1` → **~1.4×** in the final prior. That is exactly the measured 0.00018 vs 0.00026 across 12 Sawmill tiles. The mechanism was never broken; it was calibrated an order of magnitude below what the blend preserves.
+
+**Widening worked on the mechanism.** Gradient → (−15, +5, +25, +40), clustering → `others × 7.5`. Prior ratio between best and worst placement of the same structure:
+
+| structure | plies | before | after |
+|---|---|---|---|
+| Windmill (adjacency hub) | 14 | **1.06** | **1.97** |
+| Farm | 31 | 1.47 | 2.16 |
+
+**But the outcome regressed hard, from a mean shift I claimed to have avoided.** The hub gradient was mean-preserved over 1–3 partners ((−15+5+25)/3 = 5.0 = (−2+5+12)/3). The clustering term was not: `(others+1) × 2.5 → others × 7.5` deletes a baseline that is summed **per adjacent empty tile**, so an isolated hut lost up to 12.5 on a base of 22. Ordinary economy builds collapsed — win rate −3.5pp, owned tiles −3.1 (133× noise), units −0.64, giants −0.14.
+
+Re-centred to `others × 7.5 + 2.5` (isolated placements score exactly as before, only the gradient sharpens). Territory and expansion flipped back to gains — owned tiles **+1.24** (52.8× noise), villages captured **+0.027** (3.5×), first village **0.11 turns faster** (2.6×) — but **win rate 0.797 sits below the registered 0.805 floor, SPT@t10 fell to 8.720, and units trained is down 0.758 (12.1× noise)**. Reverted.
+
+**Rule worth keeping: a softmax prior only cares about DIFFERENCES, so there is never a reason to move the mean when widening a spread.** Re-centre by construction, and check every term, not just the one whose arithmetic is easy.
+
+**Still unproven, not disproven:** the outcome could not be tested properly, because with the recommender reverted the model builds ~2 LumberHuts on seed 4102 and there is nothing to cluster. Judging hub placement needs a config where hubs actually get built.
+
+---
+
+### EXP_HUBLVL_001 — measure realized hub level, then re-test the placement prior against it (Aug 6 2026) — **PRE-REGISTERED**
+
+**Why this exists: EXP_PRIOR_001 was judged without ever measuring its own target.** It changed hub *placement*, verified that the *prior* moved (Windmill best-vs-worst ratio 1.06 → 1.97), and then accepted/rejected on downstream outcomes (win rate, SPT, units). The proximal quantity — how many partners a Sawmill/Windmill/Forge actually ends the game with — was never collected on either arm. The only number ever measured, **1.33 partners**, came from a single replay (seat 1 of `best_game_score_5705`, three Sawmills). n=3, one game, one map. Every inference built on it, including "that is the whole paradox," rests on that.
+
+**Instrument (shipped first, separately from any behavior change).** `self_play.rs` now walks the final state and, for every pop-bearing adjacency hub (`adjacent_types` non-empty *and* `reward_pop > 0` → exactly Windmill/Sawmill/Forge; Market self-excludes at `reward_pop 0`) standing on a **net seat's** tile, counts friendly-owned adjacent partners using the same predicate `actions::structure::build_structure` pays on. New `METRICS:` fields:
+
+- `avg_hub_level` — mean realized partners per hub (−1.0 if none built)
+- `hub_starved_frac` — share of hubs at ≤1 partner
+- `avg_hubs_built` — hubs per net game
+- `hub_levels_by_type` — `{built, mean_level, starved_frac}` per structure
+
+Two properties this has that the replay script did not: it covers **every game in the batch** (high-score replays are the best game of a batch — a biased sample that would have been read as signal), and it is measured **at game end**, so a hub placed at 2 partners that grows to 4 as later partners go down is credited at 4. Verdi's point, and the reason build-time counting would understate.
+
+Caveat to read the breakdown with: `starved ≤1` is the value-destroying line for Sawmill/Windmill (`reward_pop 1` → 5★ for 1 pop, worse than the 3★ LumberHut feeding it), but Forge is `reward_pop 2`, so a 1-partner Forge is 2.5★/pop and fine. Read per type, not by the aggregate, when Forges are present.
+
+**Smoke (n=8, baseline weights): 6 Windmills, `avg_hub_level` 1.17, `hub_starved_frac` 0.83, no Sawmills at all.** Consistent with the 1.33 single-replay figure and with the reverted recommender never buying Forestry early. Not yet a result — n=8.
+
+**Arms** (128 games, `--base-seed 770425`, vs Greedy at `--anchor-frac 1.0`, gumbel 64/k=16, same flags as `paired_A_on`; all three re-run on the new binary since the old arms carry no hub fields):
+
+- **A** — HEAD `scoring.rs`. Establishes the population answer to "what IS the average hub level," replacing the n=3 anecdote.
+- **B** — EXP_PRIOR_001's re-centred widening: gradient `(−15, +5, +25, +40)`, clustering `others × 7.5 + 2.5`.
+- **C** — repeat of A. `|A−C|` is the per-metric noise floor; nothing counts unless `|B−A|` clears it.
+
+**Primary endpoint is now the proximal metric, deliberately.** `avg_hub_level` and `hub_starved_frac` decide whether the intervention does what it claims. Outcomes (win rate, SPT@t10, owned tiles, units, giants) are recorded as secondary and do **not** get a veto in this run — EXP_PRIOR_001 already showed they can move for reasons unrelated to placement, and letting them adjudicate a mechanism question is what produced an uninterpretable result the first time.
+
+**Falsifier — the point of running this.** If `|B−A|` on `avg_hub_level` does not clear `|A−C|`, then widening the prior does not change where hubs actually land, the prior is **not** the lever, and the next move is the planner side: stop pricing hubs at their best placement in `max_affordable_pop` and price them at the realized distribution instead, so lane ranking stops assuming pop the net never delivers.
+
+**Reading it the other way is also a result.** If hub level rises materially *and* the secondary outcomes still fall, then good placement is not worth what the planner assumes it is, and the 1.33 diagnosis — that starved hubs are what drains the economy — is itself wrong and must be retracted rather than re-fixed.
+
+**ACTUALS (Aug 6 2026) — 3 arms × 128 games, seed 770425.**
+
+**1. The number the instrument was built to get.** Pooling the two baseline arms (A+C, 256 net games):
+
+| hub | n | mean realized level | share ending at ≤1 partner |
+|---|---|---|---|
+| **Sawmill** | 105 | **1.40** | **67%** |
+| **Windmill** | 174 | **1.56** | **58%** |
+| Forge | 7 | 1.00 | 100% |
+
+The n=3 single-replay figure of 1.33 **holds up at population scale**. Sawmills do not grow into their sites: two thirds finish the game at ≤1 partner, i.e. 5★ for 1 pop, worse than the 3★ LumberHut feeding them. Measured at game end, so late-arriving partners are already credited — the number is not a build-time artifact.
+
+**2. Did widening the placement prior move it? Not established — the endpoint is confounded by its own denominator.** Mean level rose `1.464 → 1.598` (+0.134), but arm B also built **22% fewer hubs** (0.977 → 0.758 per game). Mean level is conditional on building, so skipping marginal isolated hubs raises it by selection with no improvement in placement skill. Separating the two:
+
+| | A base | C base | B wide |
+|---|---|---|---|
+| hubs built / game | 0.977 | 1.258 | 0.758 |
+| pop delivered / game | 1.437 | 1.945 | **1.219** |
+| pop per star on hubs | 0.294 | 0.309 | 0.322 |
+
+Total hub pop per game is **lowest in arm B** and swamped by the A-vs-C gap. Pop-per-star is up ~9%, which is the one reading favourable to the change, and it is consistent with "builds fewer bad hubs" rather than "places good ones". Secondary outcomes: SPT@t20 +0.734 and owned tiles +0.797 both clear their gap; win rate 0.875 vs 0.828/0.781; SPT@t10, giants, units, villages all flat. Not shipped — the mechanism claim is unproven either way.
+
+**3. The methodological result, which outranks both: a single same-config repeat is NOT a noise floor.** The Aug 4 and Aug 6 pairs measure the identical quantity — `|A − C|` at n=128 on the same seed and config — and disagree by up to **24×**:
+
+| metric | \|A−C\| Aug 4 | \|A−C\| Aug 6 | ratio |
+|---|---|---|---|
+| units trained | 0.0625 | 1.5312 | **24.5×** |
+| owned tiles | 0.0234 | 0.2656 | 11.3× |
+| win rate | 0.0078 | 0.0469 | 6.0× |
+| villages captured | 0.0078 | 0.0469 | 6.0× |
+| giants | 0.0312 | 0.1641 | 5.2× |
+| SPT@t10 | 0.3288 | 0.6523 | 2.0× |
+
+`|A − C|` is one draw from a distribution, not its width. Dividing an effect by it produces a ratio that can be off by an order of magnitude in either direction — so **every "×noise" multiplier quoted in this session's entries is unreliable**, in both directions: the ones used to accept a finding (owned tiles "52.8× noise", "133× noise") and the ones used to reject one.
+
+**Consequence: EXP_PRIOR_001's rejection does not stand.** It was failed on win rate 0.797 against a registered 0.805 floor — a gap of 0.008, against a same-config repeat gap measured here at 0.047. Its SPT@t10 drop (0.22) is a third of the 0.652 repeat gap. At n=128 the binomial standard error on win rate alone is ≈0.033, so a 0.008 difference was never resolvable. **The verdict on EXP_PRIOR_001 is withdrawn: that run was uninformative, not negative.** It should not be cited as evidence against the placement prior.
+
+**Standing rule going forward:** an arm difference counts only against a variance estimated from the per-game distribution (bootstrap over games, or McNemar on paired per-game win/loss), never against one repeat. For a binary at n=128 that floor is ~0.03–0.05 in win rate — most of the win-rate deltas argued over this session sit under it.
+
+### Why same-seed arms diverge — argmax is real, determinism is not (Aug 7 2026)
+
+Verdi challenged the "MCTS noise" explanation: selection is argmax and the prior is heavily distilled, so a fixed seed should reproduce. **The argmax half is correct** — `TEMPERATURE_MOVE_THRESHOLD = 0` (`mcts_zero.rs:269`), so the visit-weighted sampling branch at `gumbel_mcts.rs:1372` is dead code and every move goes through `recommend_final_move`. There is no temperature sampling anywhere in self-play.
+
+**Determinism still fails, from two independent sources.** Same binary, same `--base-seed 4102`, same flags, run twice:
+
+| config | run 1 | run 2 | identical prefix |
+|---|---|---|---|
+| default (`GUMBEL_SCALE=1`) | 83 moves | 62 moves | **1 move** |
+| `GUMBEL_SCALE=0` | 55 moves | 67 moves | **20 moves** |
+
+1. **Root Gumbel from an unseeded `rand::thread_rng()`** (`gumbel_mcts.rs:598-601`, `660-666`). `--base-seed` seeds map generation only; it never reaches the search. Divergence at move 1.
+2. **The eval path itself.** With the Gumbel off, runs still diverge at move ~20 — the Metal/MPSGraph backend runs 14 actors with `max_batch=256, coalesce_us=1000`, so batch composition varies run to run, float reduction order varies with it, and argmax flips on near-ties.
+
+**The part that matters for placement — "argmax over Gumbel-perturbed logits" IS sampling from the policy.** By the Gumbel-max trick, `argmax(logit + Gumbel(0,1))` is exactly a categorical draw from `softmax(logit)`. For a candidate that Sequential Halving never visits there is no q̂ term to correct it, so the choice reduces to a pure sample from the prior. Placement candidates are unvisited in 69–82% of plies (EXP_PRIOR_001), which puts hub/hut placement squarely in that regime.
+
+Against a Gumbel(0,1) std of **1.283**, the measured best-vs-worst prior gaps are:
+
+| | logit gap | noise ÷ signal |
+|---|---|---|
+| Windmill, baseline weights | 0.058 | **22.0×** |
+| Windmill, widened (EXP_PRIOR_001) | 0.678 | 1.9× |
+| Farm, baseline | 0.385 | 3.3× |
+| Farm, widened | 0.770 | 1.7× |
+
+**This is the mechanism behind the 1.40 realized Sawmill level.** Placement is not a decision the net loses on merit — at a 22:1 noise-to-signal ratio it is close to a uniform draw over candidate tiles. It also explains why widening the prior helped only partially: it moved the ratio from 22× to 1.9×, which is better than random but still noise-dominated.
+
+**Consequences.**
+- Same-seed arms are *expected* to differ; `|A − C|` is measuring this, not a bug in the harness. It does not, however, rescue `|A − C|` as a noise estimator (see the 24× instability above).
+- Two levers exist that were never on the table: lower `GUMBEL_SCALE` at eval/measurement time, and seed the root RNG so `--base-seed` actually pins a run.
+- Any future placement work should quote its prior gap **in logits against 1.283**, not as a ratio — a "2× better prior" is still under the noise.
+
+### Hub metric corrected — attribution by builder (Aug 7 2026). ⚠️ SUPERSEDES the 1.40 figure above
+
+**The defect.** The first `hub_levels` implementation scanned the final map and counted every pop-bearing adjacency hub standing on a tile a net seat owned **at game end**. With `--anchor-frac 1.0` every game is against Greedy, and Greedy builds a real forest economy — so every hub the net *captured* was counted as the net's own placement. On seed 4102 this was the entire sample: the net built 4 Farms, 9 Roads and a GateOfPower and **no hubs at all**, Greedy built the 9 LumberHuts and a 3-partner Sawmill at tile 74, and the metric reported "1 net Sawmill at mean level 3.0."
+
+**The fix.** Hubs are now recorded at build time (`built_hubs`, pushed when a net seat executes a Build of a structure with non-empty `adjacent_types` and `reward_pop > 0`) and scored at game end. Partner counting stays ownership-based, matching what `build_structure` actually pays — a captured Farm does feed your Windmill — but the *placement decision* is attributed to whoever made it. New `hub_lost_frac` exposes the opposite confound: hubs the net built and no longer holds.
+
+Parity-checked against the replay on a single game: metric 3 Windmills / `starved_frac` 0.667 vs replay seat-1 builds 3 Windmills at 0, 2, 0 partners / 0.667. Exact agreement on the starved share; the mean differs (1.00 vs 0.67) only because the metric counts a captured adjacent Farm the replay script does not — the metric is right, the engine pays that Farm.
+
+**Corrected baseline, n=64, w=0.1, attributed by builder:**
+
+| hub | built | mean level | ≤1 partner | lost |
+|---|---|---|---|---|
+| **Sawmill** | 33 | **1.33** | **64%** | 3% |
+| **Windmill** | 38 | **1.16** | **76%** | 18% |
+| aggregate | 71 | **1.24** | 70% | 11% |
+
+Against the ownership-attributed reading of the same config (1.621 / 0.576), the net's own placement is **materially worse** than previously reported — it was being flattered by Greedy's well-placed hubs. Windmills are the weak leg: 76% sit at ≤1 Farm, i.e. 5★ for 1 pop.
+
+**Retractions.** The "1.40 mean Sawmill level over 256 games" and the whole per-structure table in the EXP_HUBLVL_001 ACTUALS are ownership-attributed and must not be cited. The EXP_HUBLVL_001 arm comparison and the w=0.1/w=0.5 blend probe both used the defective metric for their primary endpoint; their hub-level readings are void. The composition shift (Sawmill vs Windmill build counts) was also ownership-derived and needs re-deriving before it is claimed.
+
+**Incidental, and another data point on the noise problem.** The corrected run and `crutch64_W10` are the *same binary config and seed*, differing only by search/eval nondeterminism. Win rate came out 0.875 vs 0.797 (Δ0.078) and owned tiles 55.6 vs 51.0 (Δ4.6) — both larger than the entire w=0.1→w=0.5 effect measured earlier (Δ0.016 win rate). Nothing in that probe was resolvable.
+
+### First-Sawmill placement IS the lever (Aug 7 2026). ⚠️ SUPERSEDES the "placement is near-optimal" reading above
+
+**The metric that produced the wrong answer.** `best_available_partners` scored each candidate tile by the partners **actually standing there at game end**. The net builds ~3 LumberHuts a game, so no tile could score above ~3, and the measured "best available 1.73" was a restatement of the net's own hut policy, not a property of the map. It made placement look near-optimal (77% "optimal", rank pct 0.95) and produced the conclusion that perfect placement was worth ~7 pop across 128 games. That was circular and is withdrawn. Verdi caught it from the seed-4102 spawn screenshot: dense forest, a level-4 Sawmill site by the capital, level 3–4 off the eastern and northern cities.
+
+**The corrected measure — terrain ceiling.** For each candidate tile, count adjacent tiles that could *ever* host a partner, by terrain + resource alone (Forest → LumberHut; Field+Crop → Farm; Mountain+Metal → Mine), independent of what was built. n=128, seed 770425:
+
+| hub | games | sites | ceiling chosen | ceiling best | picks best site | realized |
+|---|---|---|---|---|---|---|
+| **Sawmill** | 17 | 27.4 | **2.00** | **3.29** | **29.4%** | 1.53 |
+| Windmill | 45 | 19.4 | 1.71 | 2.33 | 55.6% | 1.44 |
+
+**The net picks a max-potential Sawmill site only 29.4% of the time**, against ~27 candidates. It lands on 2.00 potential when 3.29 was available. Verdi's read off the map — level 3–4 sites exist — is confirmed at 3.29.
+
+**Decomposing the loss for the first Sawmill** (best possible 3.29 → realized 1.53):
+
+| term | partners lost | share |
+|---|---|---|
+| chose a lower-potential site | **1.29** | **73%** |
+| never developed the site it chose | 0.47 | 27% |
+
+Placement is the dominant term, not a rounding error. In star terms this is the difference between a good building and a bad one: a Sawmill on a fully-developed 3.29 site is **1.52★/pop**; as actually placed and developed it is **3.27★/pop**, i.e. worse than the 3.00★/pop LumberHut feeding it.
+
+**Consequences.** The prior-widening thread (EXP_PRIOR_001, the blend-weight probe) was aimed at a real and large lever after all — 1.29 partners on the first Sawmill alone — not the ~0.32 the broken metric implied. Their failure to move outcomes needs a different explanation than "the lever is too small," and the earlier finding still stands that both were measured with instruments too noisy to resolve anything.
+
+**Method note, third time this session.** A metric whose denominator or comparison set is produced by the very policy under test will always report that policy as near-optimal. `best_available_partners` (built partners), `avg_hub_level` (ownership-attributed), and `|A − C|` (single-repeat noise floor) all failed this way. Ask what the comparison set would look like under a *different* policy before trusting a ranking.

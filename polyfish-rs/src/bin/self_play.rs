@@ -956,6 +956,19 @@ struct GameResult {
     /// this still sums both seats).
     revealed_tiles: i32,
     captured_tiles: i32,
+    /// Realized level of the adjacency hubs a net seat BUILT, as
+    /// `(hubs, partner_sum, hubs_at_most_1, hubs_lost)` per structure type.
+    /// `max_affordable_pop` prices a hub at its BEST placement, so this is the
+    /// planned-vs-delivered pop gap; a hub at 1 partner costs 5★ for 1 pop,
+    /// worse than the LumberHut feeding it. Attribution is by builder, not by
+    /// end-of-game tile owner — the latter credits captured anchor hubs.
+    hub_levels: HashMap<polyfish::types::StructureType, (u32, i64, u32, u32)>,
+    /// First hub of each type the net built, as
+    /// `(partners_chosen, partners_best, sites_that_beat_it, sites_available,
+    /// terrain_ceiling_chosen, terrain_ceiling_best)`. The first pair is scored
+    /// on hubs actually built (so it inherits the net's hut policy); the ceiling
+    /// pair is terrain+resource only, i.e. the site's potential.
+    first_hub_rank: HashMap<polyfish::types::StructureType, (i64, i64, u32, u32, i64, i64)>,
     /// Turn by which 50%/80%/100% of the map's initial open villages (and
     /// ruins) had been captured by a NET-controlled seat — how *directly*
     /// the net seeks them out. Censored at max_turns when a game never gets
@@ -1353,6 +1366,13 @@ fn play_single_game(
     // tribe.stars before minus after). Reads the real star delta off game
     // state rather than re-deriving cost formulas, so it's exact even with
     // discounts (e.g. Philosophy's tech discount).
+    // Adjacency hubs a NET seat built itself, recorded at build time. Counting
+    // by end-of-game tile ownership instead would credit the net for hubs it
+    // captured from the anchor — with --anchor-frac 1.0 that is most of them.
+    let mut built_hubs: Vec<(i32, polyfish::types::StructureType, PlayerId)> = Vec::new();
+    // Per hub type: (chosen tile, builder, every tile it could legally have used).
+    let mut first_hub_sites: HashMap<polyfish::types::StructureType, (i32, PlayerId, Vec<i32>)> =
+        HashMap::new();
     let mut star_spend_file: Option<File> = None;
     if let Some(dir) = dump_star_spend {
         let path = std::path::Path::new(dir);
@@ -2200,7 +2220,56 @@ fn play_single_game(
                     polyfish::ai::reward::city_threatened(&game.state, pov, city.idx);
                 Some((target, city.idx, city.level, city.progress, stars, threatened))
             });
+            // First hub of each type the net builds: snapshot every tile the hub
+            // could legally have gone to at THIS ply (mirrors moves/build.rs —
+            // own-city territory, empty, terrain-legal, non-algae, and only
+            // cities without one since the tier is limited_per_city). Scored on
+            // FINAL adjacency at game end, so it asks the long-term question:
+            // of the sites available then, did it pick one that grew partners?
+            if m_type == polyfish::types::MoveType::Build && is_net_seat(seat_roles, pov) {
+                if let (Ok(target), Ok(s_type)) = (m.target_idx(), m.structure_type()) {
+                    let st = polyfish::settings::structures::get_structure_setting(s_type);
+                    if !st.adjacent_types.is_empty()
+                        && st.reward_pop > 0
+                        && !first_hub_sites.contains_key(&s_type)
+                    {
+                        let mut cands: Vec<i32> = Vec::new();
+                        if let Some(tribe) = game.state.tribes.get(&pov) {
+                            for city in &tribe.cities {
+                                let taken = city._territory.iter().any(|&t| {
+                                    polyfish::functions::get_structure_at(&game.state, t)
+                                        .is_some_and(|s| s.structure_type == s_type)
+                                });
+                                if taken {
+                                    continue;
+                                }
+                                for &t in &city._territory {
+                                    let Some(tile) = game.state.tiles.get(&t) else { continue };
+                                    if polyfish::functions::get_structure_at(&game.state, t).is_some()
+                                        || tile.is_algae()
+                                        || !st.terrain_types.contains(&tile.terrain_type)
+                                    {
+                                        continue;
+                                    }
+                                    cands.push(t);
+                                }
+                            }
+                        }
+                        if !cands.is_empty() {
+                            first_hub_sites.insert(s_type, (target as i32, pov, cands));
+                        }
+                    }
+                }
+            }
             let _ = game.play_move(m.as_ref());
+            if m_type == polyfish::types::MoveType::Build && is_net_seat(seat_roles, pov) {
+                if let (Ok(target), Ok(s_type)) = (m.target_idx(), m.structure_type()) {
+                    let st = polyfish::settings::structures::get_structure_setting(s_type);
+                    if !st.adjacent_types.is_empty() && st.reward_pop > 0 {
+                        built_hubs.push((target as i32, s_type, pov));
+                    }
+                }
+            }
             if m_type == polyfish::types::MoveType::Research {
                 let seat = ((pov - 1) as usize).min(1);
                 techs_bought[seat] += 1;
@@ -2421,6 +2490,88 @@ fn play_single_game(
         })
         .sum();
 
+    // Realized level of the hubs the net BUILT (see `built_hubs`), scored at
+    // game end so a hub that grows as later partners go down is credited —
+    // partners are counted the way `build_structure` pays them, but against the
+    // BUILDER's ownership, so value lost with the territory reads as lost.
+    let mut hub_levels: HashMap<polyfish::types::StructureType, (u32, i64, u32, u32)> =
+        HashMap::new();
+    for (idx, s_type, builder) in &built_hubs {
+        let settings = polyfish::settings::structures::get_structure_setting(*s_type);
+        let still_held = game
+            .state
+            .tiles
+            .get(idx)
+            .is_some_and(|t| t.owner == *builder);
+        let partners = polyfish::functions::get_adjacent_indices(&game.state, *idx, 1)
+            .into_iter()
+            .filter(|adj| {
+                game.state.tiles.get(adj).is_some_and(|t| t.owner == *builder)
+                    && polyfish::functions::get_structure_at(&game.state, *adj)
+                        .is_some_and(|p| settings.adjacent_types.contains(&p.structure_type))
+            })
+            .count() as i64;
+        let e = hub_levels.entry(*s_type).or_insert((0, 0, 0, 0));
+        e.0 += 1;
+        e.1 += partners;
+        e.2 += u32::from(partners <= 1);
+        e.3 += u32::from(!still_held);
+    }
+
+    // Rank the tile the net actually used against every tile it could have used,
+    // both scored on partners standing at game end.
+    let mut first_hub_rank: HashMap<polyfish::types::StructureType, (i64, i64, u32, u32, i64, i64)> =
+        HashMap::new();
+    for (s_type, (chosen, builder, cands)) in &first_hub_sites {
+        let settings = polyfish::settings::structures::get_structure_setting(*s_type);
+        let partners_at = |idx: i32| -> i64 {
+            polyfish::functions::get_adjacent_indices(&game.state, idx, 1)
+                .into_iter()
+                .filter(|adj| {
+                    game.state.tiles.get(adj).is_some_and(|t| t.owner == *builder)
+                        && polyfish::functions::get_structure_at(&game.state, *adj)
+                            .is_some_and(|p| settings.adjacent_types.contains(&p.structure_type))
+                })
+                .count() as i64
+        };
+        // TERRAIN ceiling: adjacent tiles that could ever host a partner, by
+        // terrain + resource alone. Independent of what the net actually built,
+        // so it does not inherit the hut-building policy the way `partners_at`
+        // does — this is the site's potential, which is the real question.
+        let ceiling_at = |idx: i32| -> i64 {
+            polyfish::functions::get_adjacent_indices(&game.state, idx, 1)
+                .into_iter()
+                .filter(|&adj| {
+                    let Some(tile) = game.state.tiles.get(&adj) else { return false };
+                    settings.adjacent_types.iter().any(|p| {
+                        let ps = polyfish::settings::structures::get_structure_setting(*p);
+                        if !ps.terrain_types.contains(&tile.terrain_type) || tile.is_algae() {
+                            return false;
+                        }
+                        match ps.resource_type {
+                            Some(r) => game
+                                .state
+                                .resources
+                                .get(&adj)
+                                .and_then(|o| o.as_ref())
+                                .is_some_and(|res| res.resource_type == r),
+                            None => true,
+                        }
+                    })
+                })
+                .count() as i64
+        };
+        let got = partners_at(*chosen);
+        let best = cands.iter().map(|&c| partners_at(c)).max().unwrap_or(got).max(got);
+        let n_better = cands.iter().filter(|&&c| partners_at(c) > got).count() as u32;
+        let ceil_got = ceiling_at(*chosen);
+        let ceil_best = cands.iter().map(|&c| ceiling_at(c)).max().unwrap_or(ceil_got).max(ceil_got);
+        first_hub_rank.insert(
+            *s_type,
+            (got, best, n_better, cands.len() as u32, ceil_got, ceil_best),
+        );
+    }
+
     let mut final_cities = HashMap::new();
     let mut total_cities = 0;
     for (id, t) in &game.state.tribes {
@@ -2495,6 +2646,8 @@ fn play_single_game(
         net_moves,
         revealed_tiles,
         captured_tiles,
+        hub_levels,
+        first_hub_rank,
         villages_t2c_p50: t2c_turn(&village_capture_turns, initial_villages, 0.5, max_turns),
         villages_t2c_p80: t2c_turn(&village_capture_turns, initial_villages, 0.8, max_turns),
         villages_t2c_all: t2c_turn(&village_capture_turns, initial_villages, 1.0, max_turns),
@@ -3396,6 +3549,11 @@ fn main() -> anyhow::Result<()> {
     let mut total_abilities = 0;
     let mut total_revealed_tiles: i64 = 0;
     let mut total_captured_tiles: i64 = 0;
+    let mut hub_totals: HashMap<polyfish::types::StructureType, (u32, i64, u32, u32)> =
+        HashMap::new();
+    // per type: (games, chosen_sum, best_sum, optimal_games, rank_pct_sum, cand_sum)
+    let mut site_totals: HashMap<polyfish::types::StructureType, (u32, i64, i64, u32, f64, u64, i64, i64, u32)> =
+        HashMap::new();
     let mut total_t2c = [0.0f64; 6]; // villages p50/p80/all, ruins p50/p80/all
     let (mut first_cap_seats, mut first_cap_captured) = (0u32, 0u32);
     let mut first_cap_turn_sum = 0.0f64;
@@ -3559,6 +3717,26 @@ fn main() -> anyhow::Result<()> {
         total_net_moves += result.net_moves;
         total_revealed_tiles += result.revealed_tiles as i64;
         total_captured_tiles += result.captured_tiles as i64;
+        for (k, (got, best, n_better, n_cands, cg, cb)) in &result.first_hub_rank {
+            let e = site_totals.entry(*k).or_insert((0, 0, 0, 0, 0.0, 0, 0, 0, 0));
+            e.0 += 1;
+            e.1 += got;
+            e.2 += best;
+            e.3 += u32::from(got >= best);
+            // 1.0 = no legal site would have ended with more partners.
+            e.4 += 1.0 - f64::from(*n_better) / f64::from((*n_cands).max(1));
+            e.5 += u64::from(*n_cands);
+            e.6 += cg;
+            e.7 += cb;
+            e.8 += u32::from(cg >= cb);
+        }
+        for (k, (n, sum, starved, lost)) in &result.hub_levels {
+            let e = hub_totals.entry(*k).or_insert((0, 0, 0, 0));
+            e.0 += n;
+            e.1 += sum;
+            e.2 += starved;
+            e.3 += lost;
+        }
         for (&turn, &spt) in &result.spt_at_turn {
             *spt_sums.entry(turn).or_default() += spt as f64;
             *spt_counts.entry(turn).or_default() += 1;
@@ -3971,6 +4149,65 @@ fn main() -> anyhow::Result<()> {
     let avg_abilities = per_net_game(total_abilities as i64) as f32;
     let avg_revealed_tiles = per_net_game(total_revealed_tiles) as f32;
     let avg_captured_tiles = per_net_game(total_captured_tiles) as f32;
+
+    // -1.0 when the net built no hubs at all: 0.0 is a legal level.
+    let (hub_n, hub_sum, hub_starved, hub_lost) = hub_totals.values().fold(
+        (0u32, 0i64, 0u32, 0u32),
+        |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2, a.3 + b.3),
+    );
+    let avg_hub_level = if hub_n > 0 {
+        hub_sum as f32 / hub_n as f32
+    } else {
+        -1.0
+    };
+    let hub_starved_frac = if hub_n > 0 {
+        hub_starved as f32 / hub_n as f32
+    } else {
+        -1.0
+    };
+    let first_hub_site: serde_json::Value = site_totals
+        .iter()
+        .map(|(k, (games, got, best, optimal, rank_pct, cands, cg, cb, ceil_opt))| {
+            let g = f64::from(*games).max(1.0);
+            (
+                format!("{k:?}"),
+                serde_json::json!({
+                    "games": games,
+                    "chosen_partners": *got as f64 / g,
+                    "best_available_partners": *best as f64 / g,
+                    "optimal_frac": f64::from(*optimal) / g,
+                    "mean_rank_pct": rank_pct / g,
+                    "sites_available": *cands as f64 / g,
+                    "ceiling_chosen": *cg as f64 / g,
+                    "ceiling_best_available": *cb as f64 / g,
+                    "ceiling_optimal_frac": f64::from(*ceil_opt) / g,
+                }),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>()
+        .into();
+
+    let hub_lost_frac = if hub_n > 0 {
+        hub_lost as f32 / hub_n as f32
+    } else {
+        -1.0
+    };
+    let avg_hubs_built = per_net_game(i64::from(hub_n)) as f32;
+    let hub_levels_by_type: serde_json::Value = hub_totals
+        .iter()
+        .map(|(k, (n, sum, starved, lost))| {
+            (
+                format!("{k:?}"),
+                serde_json::json!({
+                    "built": n,
+                    "mean_level": *sum as f32 / *n as f32,
+                    "starved_frac": *starved as f32 / *n as f32,
+                    "lost_frac": *lost as f32 / *n as f32,
+                }),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>()
+        .into();
     let avg_kills = per_net_game(net_kills) as f32;
 
     let avg_spt_at = |turn: i32| -> f32 {
@@ -4149,6 +4386,12 @@ fn main() -> anyhow::Result<()> {
         "avg_kills": avg_kills,
         "avg_revealed_tiles": avg_revealed_tiles,
         "avg_captured_tiles": avg_captured_tiles,
+        "first_hub_site": first_hub_site,
+        "avg_hub_level": avg_hub_level,
+        "avg_hubs_built": avg_hubs_built,
+        "hub_starved_frac": hub_starved_frac,
+        "hub_lost_frac": hub_lost_frac,
+        "hub_levels_by_type": hub_levels_by_type,
         "avg_spt_t0": avg_spt_at(0),
         "avg_spt_t5": avg_spt_at(5),
         "avg_spt_t10": avg_spt_at(10),
