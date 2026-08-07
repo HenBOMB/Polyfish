@@ -63,15 +63,18 @@ fn park_gives_score_and_single_spt() {
 fn market_ignores_enemy_owned_adjacent_hubs() {
     let mut state = state_with_city(2);
     // Market at 59 in the city's territory; windmills at 58 (friendly) and
-    // 48 (enemy-owned tile).
+    // 48 (enemy-owned tile). Each windmill gets one adjacent Farm on a tile its
+    // own side owns, so both are level 1 — the only difference is ownership.
     state.tribes.get_mut(&1).unwrap().cities[0]._territory.push(59);
-    for (idx, owner) in [(59, 1), (58, 1), (48, 2)] {
+    for (idx, owner) in [(59, 1), (58, 1), (57, 1), (48, 2), (37, 2)] {
         state.tiles.entry(idx).or_insert_with(TileState::default).owner = owner;
     }
     for (idx, st) in [
         (59, StructureType::Market),
         (58, StructureType::Windmill),
+        (57, StructureType::Farm),
         (48, StructureType::Windmill),
+        (37, StructureType::Farm),
     ] {
         state.structures.insert(
             idx,
@@ -81,8 +84,9 @@ fn market_ignores_enemy_owned_adjacent_hubs() {
             }),
         );
     }
+    // base 2 (level) + the friendly windmill's level of 1; the enemy windmill is
+    // also level 1 but sits on an enemy tile, so it pays nothing.
     let c = &state.tribes.get(&1).unwrap().cities[0];
-    // base 2 (level) + 1 friendly market partner; the enemy windmill pays 0.
     assert_eq!(get_city_production(&state, c), 3);
 }
 

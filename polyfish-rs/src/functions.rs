@@ -478,6 +478,33 @@ pub fn get_defense_bonus(state: &GameState, unit: &UnitState) -> f32 {
 }
 
 /// Get city production (stars per turn)
+/// A Market's own level is capped here, so its income is too.
+pub const MARKET_MAX_LEVEL: i32 = 8;
+
+/// Level of an adjacency-yield hub (Sawmill/Windmill/Forge) = the number of
+/// friendly adjacent partner structures it lists in `adjacent_types`. This is
+/// the same count `actions::structure::build_structure` multiplies `reward_pop`
+/// by, so pop and Market income read one definition of "level".
+pub fn hub_level(
+    state: &GameState,
+    idx: i32,
+    hub_type: StructureType,
+    owner: PlayerId,
+) -> i32 {
+    let hub = crate::settings::structures::get_structure_setting(hub_type);
+    if hub.adjacent_types.is_empty() {
+        return 0;
+    }
+    get_adjacent_indices(state, idx, 1)
+        .into_iter()
+        .filter(|&p| {
+            state.tiles.get(&p).map_or(false, |t| t.owner == owner)
+                && get_structure_at(state, p)
+                    .map_or(false, |s| hub.adjacent_types.contains(&s.structure_type))
+        })
+        .count() as i32
+}
+
 pub fn get_city_production(state: &GameState, city: &CityState) -> i32 {
     // If city is on riot or the tile is occupied by an enemy then production is nullified
     if is_under_siege(state, city.idx) {
@@ -502,6 +529,19 @@ pub fn get_city_production(state: &GameState, city: &CityState) -> i32 {
 
     // Clathrus and Market bonuses
     for &idx in &city._territory {
+        // `_territory` is the radius-2 square filtered by PLAYER ownership
+        // (game.rs post_load), so a tile 2 away from two of your cities sits in
+        // both sets — but `ruling_city_coords` says it belongs to exactly one.
+        // Without this, a Market in the overlap is paid to every city covering
+        // it. Tiles with no ruling city recorded fall through unchanged.
+        let ruled_elsewhere = state
+            .tiles
+            .get(&idx)
+            .and_then(|t| t.ruling_city_coords.as_ref())
+            .is_some_and(|rc| rc.idx != city.idx);
+        if ruled_elsewhere {
+            continue;
+        }
         if let Some(structure) = crate::functions::get_structure_at(state, idx) {
             let setting =
                 crate::settings::structures::get_structure_setting(structure.structure_type);
@@ -522,10 +562,18 @@ pub fn get_city_production(state: &GameState, city: &CityState) -> i32 {
                     }
                 }
                 StructureType::Market => {
-                    // +X star for each adjacent friendly "production" building
-                    // (Windmill, Sawmill, Forge) — ownership check matches the
-                    // Clathrus/Sanctuary branches.
+                    // +reward_stars per LEVEL of each adjacent friendly
+                    // Windmill/Sawmill/Forge, the Market's own level capped at
+                    // MARKET_MAX_LEVEL. A hub's level is its friendly adjacent
+                    // partner count — the same quantity `build_structure` pays
+                    // pop on — derived on read because nothing maintains
+                    // `structure.level` for non-city structures.
+                    //
+                    // Path of the Ocean changed this to 2 stars per *unique*
+                    // adjacent hub type, doubled beside a Port. Not modelled:
+                    // the engine targets the level-proportional rule.
                     let adj = crate::functions::get_adjacent_indices(state, idx, 1);
+                    let mut level_sum = 0;
                     for n_idx in adj {
                         if let Some(n_struct) = crate::functions::get_structure_at(state, n_idx) {
                             let friendly = state
@@ -534,10 +582,11 @@ pub fn get_city_production(state: &GameState, city: &CityState) -> i32 {
                                 .map_or(false, |t| t.owner == city.owner);
                             if friendly && setting.adjacent_types.contains(&n_struct.structure_type)
                             {
-                                prod += setting.reward_stars;
+                                level_sum += hub_level(state, n_idx, n_struct.structure_type, city.owner);
                             }
                         }
                     }
+                    prod += level_sum.min(MARKET_MAX_LEVEL) * setting.reward_stars;
                 }
                 StructureType::IceBank => {
                     // +2 stars for every 20 frozen tiles globally
@@ -1337,5 +1386,175 @@ pub fn analyze_expansion(state: &GameState, player_id: PlayerId) -> ExpansionAna
     ExpansionAnalysis {
         tile_values,
         threats,
+    }
+}
+
+#[cfg(test)]
+mod market_tests {
+    use super::*;
+    use crate::states::{CityState, StructureState, TileState};
+
+    /// 11x11 board, everything owned by player 1, no structures.
+    fn board() -> GameState {
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        for idx in 0..121 {
+            let mut tile = TileState::default();
+            tile.owner = 1;
+            state.tiles.insert(idx, tile);
+        }
+        state
+    }
+
+    fn put(state: &mut GameState, idx: i32, s: StructureType) {
+        state.structures.insert(
+            idx,
+            Some(StructureState {
+                structure_type: s,
+                level: 1,
+                founded: 0,
+            }),
+        );
+    }
+
+    fn city_over(idxs: &[i32]) -> CityState {
+        let mut city = CityState::default();
+        city.owner = 1;
+        city.idx = 60;
+        city._territory = idxs.to_vec();
+        city
+    }
+
+    /// Classic rule: the Market pays per LEVEL of each adjacent hub, and a hub's
+    /// level is its friendly adjacent partner count — not one star per hub.
+    #[test]
+    fn market_pays_the_summed_level_of_adjacent_hubs() {
+        let mut state = board();
+        // Sawmill at 50 fed by three LumberHuts -> level 3.
+        put(&mut state, 50, StructureType::Sawmill);
+        for hut in [38, 39, 40] {
+            put(&mut state, hut, StructureType::LumberHut);
+        }
+        assert_eq!(hub_level(&state, 50, StructureType::Sawmill, 1), 3);
+
+        // Market adjacent to that Sawmill earns its level, not 1.
+        put(&mut state, 51, StructureType::Market);
+        let city = city_over(&[50, 51]);
+        let base = {
+            let mut s2 = board();
+            put(&mut s2, 51, StructureType::Market);
+            get_city_production(&s2, &city_over(&[51]))
+        };
+        assert_eq!(get_city_production(&state, &city) - base, 3);
+    }
+
+    #[test]
+    fn market_income_is_capped_at_market_max_level() {
+        let mut state = board();
+        // Sawmill at 50 with all eight neighbours as LumberHuts -> level 8,
+        // plus a Windmill at 61 with two Farms -> would sum to 10 uncapped.
+        put(&mut state, 50, StructureType::Sawmill);
+        for hut in [38, 39, 40, 49, 51, 60, 61, 62] {
+            put(&mut state, hut, StructureType::LumberHut);
+        }
+        assert_eq!(hub_level(&state, 50, StructureType::Sawmill, 1), 8);
+
+        put(&mut state, 61, StructureType::Windmill);
+        for farm in [71, 72] {
+            put(&mut state, farm, StructureType::Farm);
+        }
+        // Market at 60 touches both hubs; raw sum exceeds the cap.
+        put(&mut state, 60, StructureType::Market);
+        let city = city_over(&[50, 60, 61]);
+        let base = {
+            let mut s2 = board();
+            put(&mut s2, 60, StructureType::Market);
+            get_city_production(&s2, &city_over(&[60]))
+        };
+        assert_eq!(get_city_production(&state, &city) - base, MARKET_MAX_LEVEL);
+    }
+
+    /// An unfed hub is level 0 and pays the Market nothing.
+    #[test]
+    fn market_earns_nothing_from_a_hub_with_no_partners() {
+        let mut state = board();
+        put(&mut state, 50, StructureType::Sawmill);
+        put(&mut state, 51, StructureType::Market);
+        assert_eq!(hub_level(&state, 50, StructureType::Sawmill, 1), 0);
+        let city = city_over(&[50, 51]);
+        let base = {
+            let mut s2 = board();
+            put(&mut s2, 51, StructureType::Market);
+            get_city_production(&s2, &city_over(&[51]))
+        };
+        assert_eq!(get_city_production(&state, &city) - base, 0);
+    }
+
+    /// `_territory` is "radius-2 square filtered by player ownership"
+    /// (game.rs post_load), so a tile 2 away from two of your cities lands in
+    /// BOTH territories — while `ruling_city_coords` says it belongs to exactly
+    /// one. Production must follow the ruling city, or a Market in the overlap
+    /// is paid to both cities.
+    #[test]
+    fn a_market_in_overlapping_territory_is_paid_once() {
+        use crate::game::Game;
+        let mut state = board();
+        // Sawmill at 49 fed by two huts; Market at 61 touches it.
+        put(&mut state, 49, StructureType::Sawmill);
+        put(&mut state, 38, StructureType::LumberHut);
+        put(&mut state, 39, StructureType::LumberHut);
+        put(&mut state, 61, StructureType::Market);
+
+        // Two cities 2 apart: tile 61 is within radius 2 of both.
+        let mut tribe = crate::states::TribeState::default();
+        tribe.id = 1;
+        for idx in [60, 62] {
+            tribe.cities.push(crate::states::CityState {
+                idx,
+                owner: 1,
+                ..Default::default()
+            });
+            put(&mut state, idx, StructureType::Village);
+        }
+        state.tribes.insert(1, tribe);
+        // The Market tile is ruled by the city at 60, not the one at 62.
+        state.tiles.get_mut(&61).unwrap().ruling_city_coords =
+            Some(crate::coords::Coords::from_index(60, 11));
+
+        let mut game = Game::new();
+        game.state = state;
+        game.post_load();
+
+        let cities = &game.state.tribes.get(&1).unwrap().cities;
+        let in_both = cities
+            .iter()
+            .filter(|c| c._territory.contains(&61))
+            .count();
+        assert_eq!(in_both, 2, "precondition: the tile really is in both territories");
+
+        let hub = hub_level(&game.state, 49, StructureType::Sawmill, 1);
+        assert_eq!(hub, 2);
+        let total: i32 = cities
+            .iter()
+            .map(|c| get_city_production(&game.state, c))
+            .sum();
+        let base: i32 = cities.iter().map(|c| c.production).sum();
+        assert_eq!(
+            total - base,
+            hub,
+            "Market income must be paid once, not once per city whose territory covers it"
+        );
+    }
+
+    /// Partners owned by someone else do not raise the hub's level.
+    #[test]
+    fn enemy_owned_partners_do_not_count_toward_hub_level() {
+        let mut state = board();
+        put(&mut state, 50, StructureType::Sawmill);
+        for hut in [38, 39, 40] {
+            put(&mut state, hut, StructureType::LumberHut);
+        }
+        state.tiles.get_mut(&39).unwrap().owner = 2;
+        assert_eq!(hub_level(&state, 50, StructureType::Sawmill, 1), 2);
     }
 }

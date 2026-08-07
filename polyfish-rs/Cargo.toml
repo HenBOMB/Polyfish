@@ -86,6 +86,9 @@ test = false
 name = "arena"
 test = false
 [[bin]]
+name = "eco_plan"
+test = false
+[[bin]]
 name = "benchmark"
 test = false
 [[bin]]

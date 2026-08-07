@@ -158,6 +158,159 @@ pub fn scripted_goal(state: &GameState, player: PlayerId, tier3_bought: u32) -> 
     MacroGoal { orders, stance, save_target }
 }
 
+/// Why ARM is elevated. Threat and momentum both want giants, so the planner
+/// can read `arm` alone — but they want OPPOSITE economy behaviour (under
+/// threat you need stars now; with momentum you can afford to invest), so the
+/// cause is kept separate rather than collapsed into the magnitude.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ArmCause {
+    #[default]
+    None,
+    Threat,
+    Momentum,
+}
+
+/// Continuous magnitudes behind the categorical `Stance`. The if-else ladder in
+/// `scripted_goal` thresholds these away — "enemy near a city" and "crushing
+/// attack advantage" both emit a bare `Stance::Arm` — so anything that needs to
+/// know HOW military the position is has to recompute them. Read-only; nothing
+/// in search or the feature planes consumes this yet.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct StanceStrength {
+    /// 0 = no military pressure or opportunity, 1 = maximal.
+    pub arm: f32,
+    /// 0 = no economic upside available, 1 = ample.
+    pub grow: f32,
+    pub cause: ArmCause,
+}
+
+/// Pop the planner treats as "ample immediate economy" for normalisation.
+const GROW_POP_FULL: f32 = 5.0;
+/// Capturable targets that count as full expansion pressure.
+const EXPAND_FULL: f32 = 3.0;
+/// Turns of income counted as spendable when sizing economic upside.
+const GROW_HORIZON_TURNS: i32 = 3;
+
+/// Magnitudes behind the stance, derived from the same signals the stance
+/// ladder tests. Pure function of state.
+pub fn stance_strength(state: &GameState, player: PlayerId) -> StanceStrength {
+    let size = state.settings.size as i32;
+    let cheb =
+        |a: i32, b: i32| ((a / size) - (b / size)).abs().max(((a % size) - (b % size)).abs());
+    let Some(tribe) = state.tribes.get(&player) else {
+        return StanceStrength::default();
+    };
+    let unit_cost =
+        |u: &crate::states::UnitState| crate::settings::units::get_unit_setting(u.unit_type).cost;
+
+    let our_army: i32 = tribe.units.iter().map(unit_cost).sum();
+    let their_army: i32 = state
+        .tribes
+        .iter()
+        .filter(|(id, _)| **id != player)
+        .flat_map(|(_, t)| t.units.iter())
+        .map(unit_cost)
+        .sum();
+
+    // THREAT: how much of my territory is contested, weighted by who holds the
+    // local balance. All cities pressed by a force I cannot match -> 1.0.
+    let (mut threatened, mut enemy_near, mut own_near) = (0, 0, 0);
+    for c in &tribe.cities {
+        let e: i32 = state
+            .tribes
+            .iter()
+            .filter(|(id, _)| **id != player)
+            .flat_map(|(_, t)| t.units.iter())
+            .filter(|u| cheb(u.coords.idx, c.idx) <= 2)
+            .map(unit_cost)
+            .sum();
+        if e > 0 {
+            threatened += 1;
+            enemy_near += e;
+            own_near += tribe
+                .units
+                .iter()
+                .filter(|u| cheb(u.coords.idx, c.idx) <= 2)
+                .map(unit_cost)
+                .sum::<i32>();
+        }
+    }
+    let threat = if tribe.cities.is_empty() || threatened == 0 {
+        0.0
+    } else {
+        let frac = threatened as f32 / tribe.cities.len() as f32;
+        let ratio = enemy_near as f32 / (enemy_near + own_near).max(1) as f32;
+        (frac * ratio).clamp(0.0, 1.0)
+    };
+
+    // MOMENTUM: army edge over the opponent, scaled by whether there is
+    // anything to spend it on. Parity or worse is no momentum at all.
+    let edge = if our_army + their_army == 0 {
+        0.0
+    } else {
+        let share = our_army as f32 / (our_army + their_army) as f32;
+        ((share - 0.5) * 2.0).clamp(0.0, 1.0)
+    };
+    let mut attackable = 0;
+    let mut enemy_cities = 0;
+    for (id, t) in &state.tribes {
+        if *id == player {
+            continue;
+        }
+        for c in &t.cities {
+            enemy_cities += 1;
+            let local: Vec<i32> = tribe
+                .units
+                .iter()
+                .filter(|u| cheb(u.coords.idx, c.idx) <= 3)
+                .map(unit_cost)
+                .collect();
+            let defenders: i32 = t
+                .units
+                .iter()
+                .filter(|u| cheb(u.coords.idx, c.idx) <= 2)
+                .map(unit_cost)
+                .sum();
+            // Same 1.5x margin the ATTACK order uses.
+            if local.len() >= 2 && 2 * local.iter().sum::<i32>() > 3 * defenders {
+                attackable += 1;
+            }
+        }
+    }
+    let opportunity = if enemy_cities == 0 {
+        0.0
+    } else {
+        (0.5 + 0.5 * attackable as f32 / enemy_cities as f32).min(1.0)
+    };
+    let momentum = (edge * opportunity).clamp(0.0, 1.0);
+
+    // GROW: pop I could convert stars into over the next few turns, plus open
+    // expansion targets. Uses the same knapsack the evaluator prices cities with.
+    let spt = crate::functions::get_tribe_spt(state, tribe);
+    let budget = tribe.stars + spt * GROW_HORIZON_TURNS;
+    let buyable = tribe
+        .cities
+        .iter()
+        .map(|c| crate::ai::reward::max_affordable_pop(state, player, c, budget))
+        .max()
+        .unwrap_or(0);
+    let expandable = state
+        .structures
+        .keys()
+        .filter(|&&idx| still_capturable(state, idx, player))
+        .count();
+    let grow = (buyable as f32 / GROW_POP_FULL)
+        .max(expandable as f32 / EXPAND_FULL)
+        .clamp(0.0, 1.0);
+
+    let (arm, cause) = if threat >= momentum {
+        (threat, if threat > 0.0 { ArmCause::Threat } else { ArmCause::None })
+    } else {
+        (momentum, ArmCause::Momentum)
+    };
+    StanceStrength { arm, grow, cause }
+}
+
 /// Turns a discretionary challenger stance must hold before it takes over.
 /// Threat responses bypass this entirely — see `update_goal`.
 pub const STANCE_SWITCH_TURNS: u8 = 2;
@@ -1553,6 +1706,118 @@ mod tests {
         t1.units.push(unit_at(unit_idx));
         state.tribes.insert(1, t1);
         state
+    }
+
+    /// A bare city with nothing happening: no military pressure either way.
+    #[test]
+    fn stance_strength_is_zero_arm_in_a_quiet_position() {
+        let mut state = GameState::default();
+        let mut t1 = TribeState::default();
+        t1.cities.push(crate::states::CityState { idx: 60, ..Default::default() });
+        state.tribes.insert(1, t1);
+        let s = stance_strength(&state, 1);
+        assert_eq!(s.arm, 0.0);
+        assert_eq!(s.cause, ArmCause::None);
+    }
+
+    /// The distinction the categorical stance throws away: one enemy scout near
+    /// one of three cities is a weak signal; a stack pressing the only city I
+    /// have, with nothing defending, is near-maximal. Both are `Stance::Arm`.
+    #[test]
+    fn threat_strength_scales_with_how_much_is_pressed() {
+        let mut state = GameState::default();
+        let mut t1 = TribeState::default();
+        for idx in [12, 60, 108] {
+            t1.cities.push(crate::states::CityState { idx, ..Default::default() });
+        }
+        // Own defenders sitting on each city.
+        for idx in [12, 60, 108] {
+            t1.units.push(unit_at(idx));
+        }
+        state.tribes.insert(1, t1);
+        let mut t2 = TribeState::default();
+        t2.units.push(unit_at(61)); // adjacent to city 60 only
+        state.tribes.insert(2, t2);
+
+        let weak = stance_strength(&state, 1);
+        assert_eq!(weak.cause, ArmCause::Threat);
+        assert!(weak.arm > 0.0 && weak.arm < 0.25, "one of three cities, defended: {}", weak.arm);
+
+        // Now: a single undefended city with three enemies on it.
+        let mut state = GameState::default();
+        let mut t1 = TribeState::default();
+        t1.cities.push(crate::states::CityState { idx: 60, ..Default::default() });
+        state.tribes.insert(1, t1);
+        let mut t2 = TribeState::default();
+        for idx in [59, 61, 71] {
+            t2.units.push(unit_at(idx));
+        }
+        state.tribes.insert(2, t2);
+
+        let dire = stance_strength(&state, 1);
+        assert_eq!(dire.cause, ArmCause::Threat);
+        assert!(dire.arm > 0.9, "sole city, undefended, surrounded: {}", dire.arm);
+        assert!(dire.arm > weak.arm * 3.0);
+    }
+
+    /// The other route to a high ARM: overwhelming force with somewhere to put
+    /// it. Reported as MOMENTUM, not THREAT — they want opposite economies.
+    #[test]
+    fn army_dominance_reads_as_momentum_not_threat() {
+        let mut state = GameState::default();
+        let mut t1 = TribeState::default();
+        t1.cities.push(crate::states::CityState { idx: 0, ..Default::default() });
+        // Six attackers massed on the enemy city at 60, far from home.
+        for idx in [48, 49, 50, 59, 61, 70] {
+            t1.units.push(unit_at(idx));
+        }
+        state.tribes.insert(1, t1);
+        let mut t2 = TribeState::default();
+        t2.cities.push(crate::states::CityState { idx: 60, ..Default::default() });
+        state.tribes.insert(2, t2);
+
+        let s = stance_strength(&state, 1);
+        assert_eq!(s.cause, ArmCause::Momentum);
+        assert!(s.arm > 0.9, "total army dominance with a target: {}", s.arm);
+    }
+
+    /// Parity is not momentum, however many units are on the board.
+    #[test]
+    fn even_armies_produce_no_momentum() {
+        let mut state = GameState::default();
+        let mut t1 = TribeState::default();
+        t1.cities.push(crate::states::CityState { idx: 0, ..Default::default() });
+        let mut t2 = TribeState::default();
+        t2.cities.push(crate::states::CityState { idx: 60, ..Default::default() });
+        for idx in [30, 31] {
+            t1.units.push(unit_at(idx));
+            t2.units.push(unit_at(idx + 50));
+        }
+        state.tribes.insert(1, t1);
+        state.tribes.insert(2, t2);
+        let s = stance_strength(&state, 1);
+        assert_eq!(s.arm, 0.0, "parity must not read as momentum");
+    }
+
+    /// GROW tracks available economy: open villages to take, or stars that
+    /// could already be converted into population.
+    #[test]
+    fn grow_strength_rises_with_capturable_villages() {
+        let quiet = {
+            let mut state = GameState::default();
+            let mut t1 = TribeState::default();
+            t1.cities.push(crate::states::CityState { idx: 60, ..Default::default() });
+            state.tribes.insert(1, t1);
+            stance_strength(&state, 1).grow
+        };
+        let mut state = state_with_villages(0, &[3, 5, 7]);
+        state.tribes.get_mut(&1).unwrap().cities.push(crate::states::CityState {
+            idx: 60,
+            ..Default::default()
+        });
+        let rich = stance_strength(&state, 1).grow;
+        assert!(rich > quiet, "three open villages must beat none: {rich} vs {quiet}");
+        assert!(rich >= 1.0);
     }
 
     #[test]
