@@ -894,12 +894,7 @@ pub fn dev_potential(state: &GameState, player: i32) -> f32 {
     let tech_score: f32 = tribe
         .tech_vanilla
         .iter()
-        .map(|t| {
-            100.0
-                * crate::settings::technology::get_technology_setting(t.tech_type)
-                    .tier
-                    .unwrap_or(1) as f32
-        })
+        .map(|t| 100.0 * crate::settings::technology::tech_tier(t.tech_type) as f32)
         .sum();
     let army_cost: f32 = tribe
         .units
@@ -941,7 +936,6 @@ pub fn shaped_snapshot(state: &GameState, player: i32, dev_w: f32, pursuit_w: f3
 mod shaping_tests {
     use super::*;
     use crate::coords::Coords;
-    use crate::settings::technology::get_technology_setting;
     use crate::settings::units::get_unit_setting;
     use crate::states::{StructureState, TechnologyState, TileState, TribeState, UnitState};
     use crate::types::{StructureType, TechnologyType, UnitType};
@@ -1002,7 +996,7 @@ mod shaping_tests {
             discovered_turn: 0,
         });
         state.tribes.insert(1, t1);
-        let tier = get_technology_setting(TechnologyType::Riding).tier.unwrap_or(1) as f32;
+        let tier = crate::settings::technology::tech_tier(TechnologyType::Riding) as f32;
         let expected = -SHAPE_TECH_DEWEIGHT * 100.0 * tier;
         assert!((dev_potential(&state, 1) - expected).abs() < 1e-4);
     }

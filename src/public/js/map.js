@@ -134,7 +134,7 @@ class MapRenderer {
                 { nx: x - 1, ny: y, edge: 'SW' }
             ];
 
-            const color = TRIBE_COLORS[state.tribes[owner]?.type] || '#ffffff';
+            const color = getPlayerColor(state.tribes[owner]?.type, owner, state);
 
             neighbors.forEach(({ nx, ny, edge }) => {
                 const nOwner = getOwner(nx, ny);
@@ -258,7 +258,7 @@ class MapRenderer {
             if (struct.type === 1 && citiesByIndex[idx]) {
                 this.removeLayer(idx, 'structure');
             } else {
-                const structFile = getStructureFile(struct.type, tile.climate);
+                const structFile = getStructureFile(struct.type, tile.climate, struct.level);
                 const classes = ['structure'];
                 if (struct.type === 1) classes.push('village');
                 if (struct.type === 2) classes.push('ruins');
@@ -273,7 +273,7 @@ class MapRenderer {
         const city = citiesByIndex[idx];
         if (city) {
             const tribeName = TRIBE_ID_2_NAME[city.tribe.type];
-            const tribeColor = TRIBE_COLORS[city.tribe.type] || 'rgba(0,0,0,0.5)';
+            const tribeColor = getPlayerColor(city.tribe.type, city.owner, state);
 
             const statsEl = this.updateLayer(idx, 'city-stats', '', pos, 4100, ['city-stats-layer']);
             statsEl.style.backgroundImage = 'none'; // No background for stats container
@@ -330,6 +330,7 @@ class MapRenderer {
                 if (this.selectedIdx === idx) classes.push('selected-unit-highlight');
 
                 const unitEl = this.updateLayer(idx, 'unit', `units/${tribeName}/default/${tribeName}_default_${className}`, pos, 5000, classes);
+                unitEl.style.setProperty('--tribe-outline', getPlayerColor(unit.tribe.type, unit.tribe.id, state));
                 unitEl.innerHTML = `<div class="health">${Math.floor(unit.health)}</div>`;
             }
         } else {

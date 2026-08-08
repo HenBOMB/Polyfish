@@ -101,6 +101,10 @@ impl Move for BuildMove {
         })
     }
 
+    fn cost(&self, _state: &GameState) -> Option<i32> {
+        crate::settings::structures::get_structure_setting(self.structure_type).cost
+    }
+
     #[inline]
     fn target_idx(&self) -> Result<usize, String> {
         Ok(self.target_index as usize)

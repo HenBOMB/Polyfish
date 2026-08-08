@@ -85,6 +85,18 @@
     filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.5));
 }
 
+/* Sprite icons: the thing the tech unlocks, as drawn on the map. */
+img.icon {
+    width: 62px;
+    height: 62px;
+    object-fit: contain;
+    image-rendering: auto;
+}
+
+.tech-node.locked img.icon {
+    filter: grayscale(1) brightness(0.7) drop-shadow(0 2px 4px rgba(0, 0, 0, 0.5));
+}
+
 .tech-node .cost {
     position: absolute;
     top: -10px;
@@ -130,6 +142,18 @@
     opacity: 0.5;
     cursor: default;
     filter: grayscale(0.8);
+}
+
+/* Reachable but unaffordable — distinct from locked-by-prerequisite. */
+.tech-node.expensive {
+    background: radial-gradient(circle at center, #7f1d1d, #450a0a);
+    border-color: #b91c1c;
+    opacity: 0.75;
+    filter: none;
+}
+
+.tech-node.expensive .cost {
+    color: #f87171;
 }
 
 /* Central Tribe Hub */

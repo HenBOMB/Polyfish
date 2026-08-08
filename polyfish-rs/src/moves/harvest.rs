@@ -70,6 +70,12 @@ impl Move for HarvestMove {
         })
     }
 
+    fn cost(&self, state: &GameState) -> Option<i32> {
+        use crate::settings::resources::get_resource_setting;
+        let res = state.resources.get(&self.target_index)?.as_ref()?;
+        get_resource_setting(res.resource_type).cost
+    }
+
     #[inline]
     fn target_idx(&self) -> Result<usize, String> {
         Ok(self.target_index as usize)

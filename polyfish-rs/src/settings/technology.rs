@@ -29,7 +29,6 @@ pub struct TechnologySetting {
     pub unlocks_vision: bool,
     /// Discounts all later tech purchases (Philosophy — see `get_tech_cost`).
     pub tech_discount: bool,
-    pub explicit_cost: Option<i32>,
     pub unlocks_terrain: Option<TerrainType>,
 }
 
@@ -42,6 +41,28 @@ pub fn get_technology_setting(tech_type: TechnologyType) -> &'static TechnologyS
             TechnologyType::iter().map(|t| (t, build_technology_setting(t))).collect()
         });
     &TABLE[&tech_type]
+}
+
+/// Cost/score tier of a technology.
+///
+/// Tribe replacement techs carry no `tier` of their own — they inherit the tier
+/// of the vanilla tech they replace, so a replacement is never cheaper than the
+/// thing it stands in for. Reading `.tier.unwrap_or(1)` directly priced all 13
+/// of them as tier 1; go through here instead.
+pub fn tech_tier(tech_type: TechnologyType) -> i32 {
+    let settings = get_technology_setting(tech_type);
+    if let Some(tier) = settings.tier {
+        return tier;
+    }
+    settings
+        .replaces_tech
+        .and_then(|vanilla| get_technology_setting(vanilla).tier)
+        .unwrap_or(1)
+}
+
+/// True when this tech prices as tier 3 (see [`tech_tier`]).
+pub fn is_tier3(tech_type: TechnologyType) -> bool {
+    tech_tier(tech_type) == 3
 }
 
 /// Build the settings for one tech type (called once per type at table init).
@@ -122,7 +143,6 @@ fn build_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
             requires: Some(Farming),
             unlocks_structure: Some(StructureType::Windmill),
             unlocks_ability: Some(AbilityType::BurnForest),
-            explicit_cost: Some(2),
             ..Default::default()
         },
         Strategy => TechnologySetting {
@@ -238,7 +258,6 @@ fn build_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
             requires: Some(Archery),
             unlocks_structure: Some(StructureType::ForestTemple),
             unlocks_ability: Some(AbilityType::GrowForest),
-            explicit_cost: Some(5),
             ..Default::default()
         },
         Forestry => TechnologySetting {
@@ -477,7 +496,7 @@ pub fn is_eco_tech(tech_type: TechnologyType) -> bool {
 /// the tables move (the exact discipline `max_affordable_pop` failed at).
 pub fn is_eco_tier3(tech_type: TechnologyType) -> bool {
     let s = get_technology_setting(tech_type);
-    if s.tier != Some(3) {
+    if !is_tier3(tech_type) {
         return false;
     }
     s.unlocks_structure.map_or(false, |st| {

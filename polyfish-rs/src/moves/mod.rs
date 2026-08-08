@@ -59,6 +59,15 @@ pub trait Move: std::fmt::Debug + Send + Sync + dyn_clone::DynClone {
     /// Serialize to JSON for network/storage
     fn serialize(&self) -> serde_json::Value;
 
+    /// Star cost of playing this move, or `None` when it is free.
+    /// State-dependent (tech cost scales with city count, ability costs with
+    /// game version), which is why it is not part of `serialize()` — that output
+    /// is the move-identity key compared against recorded history.
+    #[inline]
+    fn cost(&self, _state: &GameState) -> Option<i32> {
+        None
+    }
+
     // === Policy Composition Helpers ===
     // These methods extract components needed for decomposed policy heads
 

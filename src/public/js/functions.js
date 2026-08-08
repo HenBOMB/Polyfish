@@ -55,72 +55,13 @@ function getEnemyAt(state, idx, owner) {
 }
 
 /**
- * Calculate final city production including adjacency bonuses.
+ * Final city production, computed server-side by `functions::get_city_production`
+ * and serialized onto the city. The rule (siege, capital bonus, Park/Workshop,
+ * Market income by hub level, territory overlap) lives in Rust only — the
+ * re-implementation that used to sit here drifted on every one of those points.
  */
 function getCityProduction(state, city) {
-    if (!city) return 0;
-
-    // If city is on riot or the tile is occupied by an enemy then production is nullified
-    if (city._riot || getEnemyAt(state, city.idx, city.owner)) {
-        return 0;
-    }
-
-    let prod = city.level || 0;
-
-    // Capitals get a +1 star bonus
-    const centerTile = state.tiles[city.idx];
-    if (centerTile && centerTile.capitalOf === city.owner && centerTile.capitalOf !== 0) {
-        prod += 1;
-    }
-
-    const rewards = (city.rewards || []).filter(r => r === RewardTypes.Park || r === 2);
-    prod += rewards.length;
-
-    const size = state.settings.size;
-
-    // Adjacency Bonuses
-    if (city._territory) {
-        for (const idx of city._territory) {
-            const structure = getStructureAt(state, idx);
-            if (!structure) continue;
-
-            const type = structure.structureType || structure.type;
-
-            if (type === 120) { // Clathrus (Cymanti)
-                // +1 star for each adjacent Algae in friendly territory
-                const adj = getAdjacentIndices(idx, 1, size);
-                for (const nIdx of adj) {
-                    const nTile = state.tiles[nIdx];
-                    if (nTile && nTile.terrainType === 120 && nTile.owner === city.owner) { // Algae terrain = 120
-                        prod += 1;
-                    }
-                }
-            } else if (type === 50) { // Market
-                // +1 star for each adjacent "production" building (Sawmill=13, Windmill=6, Forge=22)
-                const adj = getAdjacentIndices(idx, 1, size);
-                for (const nIdx of adj) {
-                    const nStruct = getStructureAt(state, nIdx);
-                    if (nStruct) {
-                        const nType = nStruct.structureType || nStruct.type;
-                        if ([13, 6, 22].includes(nType)) {
-                            prod += 1;
-                        }
-                    }
-                }
-            } else if (type === 121) { // Sanctuary (Elyrion)
-                // +1 star for each adjacent animal (ResourceTypes: Game=1)
-                const adj = getAdjacentIndices(idx, 1, size);
-                for (const nIdx of adj) {
-                    const nRes = state.resources[nIdx];
-                    if (nRes && (nRes.resourceType === 1 || nRes.type === 1)) {
-                        prod += 1;
-                    }
-                }
-            }
-        }
-    }
-
-    return prod;
+    return city?.production ?? 0;
 }
 
 // Export for use in other scripts if needed, though most are just loaded via <script>

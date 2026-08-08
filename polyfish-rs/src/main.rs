@@ -214,8 +214,10 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
-/// Serialize `state.tribes` for the client, injecting a computed `maxHealth`
-/// into every unit.
+/// Serialize tribes for the UI, enriching them with values the client must not
+/// recompute: unit max health, per-tech cost, visible resource types, and
+/// per-city production. The client has no game rules of its own — everything
+/// rule-derived is resolved here so the two can never drift.
 fn tribes_json_with_max_health(state: &polyfish::states::GameState) -> Value {
     use polyfish::functions::get_unit_max_health;
     let mut tribes = serde_json::Map::new();
@@ -226,9 +228,68 @@ fn tribes_json_with_max_health(state: &polyfish::states::GameState) -> Value {
                 u_val["maxHealth"] = serde_json::json!(get_unit_max_health(u_state));
             }
         }
+        if let Some(cities) = tribe_val.get_mut("cities").and_then(|v| v.as_array_mut()) {
+            for (c_val, c_state) in cities.iter_mut().zip(tribe.cities.iter()) {
+                c_val["production"] =
+                    serde_json::json!(polyfish::functions::get_city_production(state, c_state));
+            }
+        }
+        tribe_val["techCosts"] = tech_costs_json(tribe);
+        tribe_val["visibleResources"] = visible_resources_json(state, *pid);
         tribes.insert(pid.to_string(), tribe_val);
     }
     Value::Object(tribes)
+}
+
+/// Cost of every researchable tech for one tribe, keyed by the *vanilla* tech id
+/// the UI draws its tree with (replacement techs resolve to their vanilla slot).
+/// Priced for locked techs too — the tech tree shows costs the legal-move list
+/// cannot supply.
+fn tech_costs_json(tribe: &polyfish::states::TribeState) -> Value {
+    use polyfish::settings::technology::resolve_tech_for_tribe;
+    use polyfish::types::TechnologyType;
+    use strum::IntoEnumIterator;
+
+    let mut costs = serde_json::Map::new();
+    for tech in TechnologyType::iter() {
+        if matches!(
+            tech,
+            TechnologyType::Basic | TechnologyType::BeyondComprehension
+        ) {
+            continue;
+        }
+        let resolved = resolve_tech_for_tribe(tech, tribe.tribe_type);
+        let cost = polyfish::functions::get_tech_cost(tribe, resolved);
+        costs.insert((tech as i32).to_string(), serde_json::json!(cost));
+    }
+    Value::Object(costs)
+}
+
+/// Resource types this tribe's techs reveal. Tile-level FOW is applied by the
+/// client; this is purely the tech gate.
+fn visible_resources_json(
+    state: &polyfish::states::GameState,
+    pid: polyfish::states::PlayerId,
+) -> Value {
+    use polyfish::types::ResourceType;
+    use strum::IntoEnumIterator;
+
+    let visible: Vec<i32> = ResourceType::iter()
+        .filter(|&rt| rt != ResourceType::None)
+        .filter(|&rt| polyfish::functions::is_resource_visible_to_tribe(state, rt, pid, None))
+        .map(|rt| rt as i32)
+        .collect();
+    serde_json::json!(visible)
+}
+
+/// Attach the star cost to a move's UI payload. `serialize()` itself must stay
+/// byte-identical — it is the identity key replay compares against history.
+fn serialize_move_for_ui(state: &polyfish::states::GameState, m: &dyn polyfish::moves::Move) -> Value {
+    let mut json = m.serialize();
+    if let Some(cost) = m.cost(state) {
+        json["cost"] = cost.into();
+    }
+    json
 }
 
 fn build_evaluation_json(state: &polyfish::states::GameState) -> Value {
@@ -283,7 +344,11 @@ async fn get_current_state(State(state): State<Arc<AppState>>) -> Json<Value> {
     let mut tiles: Vec<_> = game.state.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);
 
-    let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
+    let legal_moves: Vec<_> = game
+        .legal_moves()
+        .iter()
+        .map(|m| serialize_move_for_ui(&game.state, m.as_ref()))
+        .collect();
 
     let evaluation = build_evaluation_json(&game.state);
 
@@ -360,7 +425,11 @@ async fn auto_step(
     let mut tiles: Vec<_> = game.state.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);
 
-    let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
+    let legal_moves: Vec<_> = game
+        .legal_moves()
+        .iter()
+        .map(|m| serialize_move_for_ui(&game.state, m.as_ref()))
+        .collect();
     let evaluation = build_evaluation_json(&game.state);
 
     Json(serde_json::json!({
@@ -428,7 +497,11 @@ async fn rng_step(State(state): State<Arc<AppState>>) -> Json<Value> {
     let mut tiles: Vec<_> = game.state.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);
 
-    let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
+    let legal_moves: Vec<_> = game
+        .legal_moves()
+        .iter()
+        .map(|m| serialize_move_for_ui(&game.state, m.as_ref()))
+        .collect();
 
     let evaluation = build_evaluation_json(&game.state);
 
@@ -600,7 +673,11 @@ async fn manual_step(
     let mut tiles: Vec<_> = game.state.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);
 
-    let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
+    let legal_moves: Vec<_> = game
+        .legal_moves()
+        .iter()
+        .map(|m| serialize_move_for_ui(&game.state, m.as_ref()))
+        .collect();
 
     let evaluation = build_evaluation_json(&game.state);
 
@@ -644,7 +721,11 @@ async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {
     let mut tiles: Vec<_> = game.state.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);
 
-    let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
+    let legal_moves: Vec<_> = game
+        .legal_moves()
+        .iter()
+        .map(|m| serialize_move_for_ui(&game.state, m.as_ref()))
+        .collect();
 
     let evaluation = build_evaluation_json(&game.state);
 
@@ -1013,7 +1094,11 @@ async fn load_game(State(state): State<Arc<AppState>>) -> Json<Value> {
     let mut tiles: Vec<_> = game.state.tiles.values().collect();
     tiles.sort_by_key(|t| t.coords.idx);
 
-    let legal_moves: Vec<_> = game.legal_moves().iter().map(|m| m.serialize()).collect();
+    let legal_moves: Vec<_> = game
+        .legal_moves()
+        .iter()
+        .map(|m| serialize_move_for_ui(&game.state, m.as_ref()))
+        .collect();
 
     let evaluation = build_evaluation_json(&game.state);
 
@@ -1540,7 +1625,11 @@ async fn load_replay_endpoint(
                 tiles.sort_by_key(|t| t.coords.idx);
 
                 let legal_moves: Vec<_> =
-                    game.legal_moves().iter().map(|m| m.serialize()).collect();
+                    game
+                        .legal_moves()
+                        .iter()
+                        .map(|m| serialize_move_for_ui(&game.state, m.as_ref()))
+                        .collect();
 
                 let evaluation = build_evaluation_json(&game.state);
 
@@ -1698,7 +1787,11 @@ async fn load_initial_endpoint(
                     let mut tiles: Vec<_> = game.state.tiles.values().collect();
                     tiles.sort_by_key(|t| t.coords.idx);
                     let legal_moves: Vec<_> =
-                        game.legal_moves().iter().map(|m| m.serialize()).collect();
+                        game
+                        .legal_moves()
+                        .iter()
+                        .map(|m| serialize_move_for_ui(&game.state, m.as_ref()))
+                        .collect();
                     let evaluation = build_evaluation_json(&game.state);
 
                     let moves_path =

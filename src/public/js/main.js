@@ -114,13 +114,6 @@ const MOVE_TYPE_ICONS = {
     'None': '🎓'
 };
 
-const TECH_ICONS = {
-    0: '❓', 1: '🏇', 2: '🍃', 3: '🛡️', 4: '🛤️', 5: '⚖️',
-    6: '🍎', 7: '📜', 8: '🚜', 9: '🏗️', 10: '🎣',
-    12: '⚓', 13: '⛵', 14: '🔭', 15: '🏹', 16: '🌲',
-    17: '📐', 18: '🎯', 19: '✨', 20: '🧗', 21: '🧘',
-    22: '🧠', 23: '⛏️', 24: '🔨'
-};
 
 // Event Listener for AI VIS Toggle
 document.getElementById('btn-predictions').addEventListener('click', () => {
@@ -928,7 +921,7 @@ function updateSelectionInfo(clickX = null, clickY = null) {
 
         // Harvest
         if (harvestMove) {
-            const cost = 2; // Default harvest cost
+            const cost = harvestMove.cost ?? 0;
             const resEmoji = ResourceEmojis[resource.type] || "🥝";
             const resName = ResourceTypes[resource.type] || `ID=${resource.type}`;
             const isDisabled = currentStars < cost;
@@ -951,7 +944,7 @@ function updateSelectionInfo(clickX = null, clickY = null) {
             const structType = bm.type;
             const emoji = StructureEmojis[structType] || "🏗️";
             const name = StructureTypes[structType] || `ID=${structType}`;
-            const cost = StructureCosts[structType] || 5;
+            const cost = bm.cost ?? 0;
             const isDisabled = currentStars < cost;
 
             actionsHtml += `
@@ -965,26 +958,12 @@ function updateSelectionInfo(clickX = null, clickY = null) {
             `;
         });
 
-        const UnitCosts = {
-            2: 2, // Warrior
-            3: 3, // Rider
-            4: 8, // Knight
-            5: 3, // Defender
-            8: 8, // Catapult
-            9: 3, // Archer
-            10: 5, // MindBender
-            11: 5, // Swordsman
-            12: 10, // Giant (Super)
-            28: 3, // Hexapod
-            31: 3, // Kiton
-            32: 8, // Exida
-        };
         // Summons
         summonMoves.forEach(m => {
             const unitType = m.type || m.unitType;
             const emoji = UnitEmojis[unitType] || "🪖";
             const name = UnitTypes[unitType] || "Unknown";
-            const cost = UnitCosts[unitType] || 3;
+            const cost = m.cost ?? 0;
             const isDisabled = currentStars < cost;
 
             actionsHtml += `
@@ -1003,7 +982,7 @@ function updateSelectionInfo(clickX = null, clickY = null) {
             const abilityType = (am.type && typeof am.type === 'object') ? am.type.Ok : am.type;
             const emoji = AbilityEmojis[abilityType] || "🪄";
             const name = AbilityNames[abilityType] || `ID=${abilityType}`;
-            const costValue = AbilityCosts[abilityType] || 0;
+            const costValue = am.cost ?? 0;
             const isDisabled = costValue > 0 && currentStars < costValue;
 
             let costHtml = `<div class="cost-badge">⭐ ${costValue}</div>`;
@@ -1112,26 +1091,21 @@ function updateTechModal(tribe, modalBody, overlayEl) {
         node.style.left = `calc(50% + ${x}px - 45px)`;
         node.style.top = `calc(50% + ${y}px - 45px)`;
 
-        // Accurate Tech Cost Calculation
-        const numCities = (tribe.cities || []).length;
-        // Determine tier via BFS or hardcode?
-        // For visual simplicity, let's assume standard costs for now or fetch from backend if available.
-        // Actually, we can get tier from the tree depth.
-        // Or just generic:
-        const tier = 1; // Simplify for now as we don't have tier data in TechNodes yet, or we can look it up.
-        // Better:
-        let depth = 1;
-        // ... (We can improve tier calc later, or add it to TechNodes)
+        // Cost comes from the server for every node, researchable or not — the
+        // legal-move list only carries the ones we can afford right now, so it
+        // cannot price the rest of the tree.
+        const cost = tribe.techCosts?.[techId];
+        const prereqMet = parentId === 0 || unlockedTechs.includes(parentId);
+        if (!isUnlocked && !canResearch && prereqMet) node.classList.add('expensive');
 
-        const hasPhilosophy = unlockedTechs.includes(22);
-        // Fallback cost logic
-        const baseCost = 4 + (numCities * depth);
-        const cost = hasPhilosophy ? Math.ceil(baseCost * 0.77) : baseCost;
+        const iconHtml = meta.img
+            ? `<img class="icon" src="textures/${meta.img}.png" alt="${TechnologyNames[techId]}">`
+            : `<span class="icon">${meta.icon}</span>`;
 
         node.innerHTML = `
-            <span class="icon">${meta.icon}</span>
+            ${iconHtml}
             <div class="label">${TechnologyNames[techId]}</div>
-            ${canResearch ? `<div class="cost">⭐ ${cost}</div>` : ''}
+            ${isUnlocked || cost === undefined ? '' : `<div class="cost">⭐ ${cost}</div>`}
         `;
 
         if (canResearch) {
@@ -1267,31 +1241,14 @@ function checkRewardPopup() {
     }
 }
 
+// Which resources a tribe's techs reveal is a game rule, so the server decides
+// it (`functions::is_resource_visible_to_tribe`) and serializes the answer. The
+// hand-copied switch that used to live here had drifted from the Rust table in
+// both directions. Tile-level fog is applied separately, by the caller.
 function isResourceVisible(resourceType, tribe) {
     if (!resourceType || resourceType === 0) return true;
-    if (!tribe || !tribe.tech_vanilla) return true;
-
-    const hasTech = (techId) => tribe.tech_vanilla.some(t => t.type === techId && t.discovered);
-
-    switch (resourceType) {
-        case 6: // Fruit
-        case 7: // Spores
-            return true;
-        case 8: // Starfish
-            return hasTech(14); // Navigation (14)
-        case 2: // Crop
-            return hasTech(6) || hasTech(8); // Organization (6) or Farming (8)
-        case 5: // Metal
-            return hasTech(20); // Climbing (20)
-        case 1: // Game (Animal)
-            return hasTech(15); // Hunting (15)
-        case 3: // Fish
-            return hasTech(10); // Fishing (10)
-        case 9: // AquaCrop
-            return hasTech(25); // FreeDiving (25)
-        default:
-            return true;
-    }
+    if (!tribe || !tribe.visibleResources) return true;
+    return tribe.visibleResources.includes(resourceType);
 }
 
 function getUnitAt(idx) {
@@ -1303,22 +1260,46 @@ function getUnitAt(idx) {
     return null;
 }
 
-function getStructureFile(type, climate) {
+// Keys are StructureType ids (polyfish-rs/src/types.rs). Levelled sprites are
+// numbered on disk, so the clamp bounds below are what actually exists — a level
+// outside them resolves to a missing texture, not a fallback.
+function getStructureFile(type, climate, level = 1) {
+    const clamp = (lo, hi) => Math.min(Math.max(level || lo, lo), hi);
+    const monument = (n) =>
+        `buildings/${CLASSIC_CLIMATE_NAMES[climate]}/Default/Monuments/Monument${n}_${climate}`;
+
     const map = {
         1: `buildings/common/Tribe`,
         2: `terrain/misc/ResourceGFX_ruin`,
         3: `misc/Road`,
         5: `buildings/common/Farm`,
-        6: `buildings/common/Windmill`,
+        6: `buildings/common/Windmill_${clamp(0, 6)}`,
         8: `buildings/common/Port`,
         12: `buildings/common/Lumber Hut`,
-        13: `buildings/common/Sawmill`,
+        13: `buildings/common/Sawmill_${clamp(1, 8)}`,
+        17: `buildings/common/Temple_${clamp(1, 5)}`,
+        18: `buildings/common/Forest Temple_${clamp(1, 5)}`,
+        19: `buildings/common/Water Temple_${clamp(1, 5)}`,
+        20: `buildings/common/Mountain Temple_${clamp(1, 5)}`,
         21: `buildings/common/Mine`,
-        22: `buildings/common/Forge`,
-        27: `buildings/${CLASSIC_CLIMATE_NAMES[climate]}/Default/Monuments/Monument5_${climate - 1}`,
-        28: `buildings/${CLASSIC_CLIMATE_NAMES[climate]}/Default/Monuments/Monument6_${climate - 1}`,
-        29: `buildings/${CLASSIC_CLIMATE_NAMES[climate]}/Default/Monuments/Monument7_${climate - 1}`,
-        37: `buildings/Cymanti/Default/Unique/spores_4`,
+        22: `buildings/common/Forge_${clamp(1, 8)}`,
+        23: monument(1),
+        24: monument(2),
+        25: monument(3),
+        26: monument(4),
+        27: monument(5),
+        28: monument(6),
+        29: monument(7),
+        32: `buildings/∑∫ỹriȱŋ/Default/Unique/sanctuary_${clamp(1, 8)}`,
+        33: `buildings/Polaris/Default/Unique/iceport`,
+        34: `buildings/Polaris/Default/Unique/ice_bank_${clamp(1, 11)}`,
+        35: `buildings/common/Ice Temple_${clamp(1, 5)}`,
+        37: `buildings/Cymanti/Default/Unique/spores_${clamp(1, 4)}`,
+        38: `buildings/Cymanti/Default/Unique/swamp`,
+        39: `buildings/Cymanti/Default/Unique/Mycelium_${clamp(1, 4)}`,
+        47: `misc/lighthouse`,
+        48: `buildings/common/bridge`,
+        50: `buildings/common/Market01`,
     };
     !map[type] && console.log(`MISSING STRUCTURE: ${type}`);
 
@@ -1333,7 +1314,8 @@ function getResourceFile(type, climate) {
         5: `terrain/misc/ResourceGFX_metal`,
         6: `fruits/ResourceGFX_fruit_${climate === 17 ? 16 : climate}`,
         // 7: `buildings/Cymanti/Default/Unique/spores_4`, // requires different texture
-        8: `terrain/misc/ResourceGFX_starfish`
+        8: `terrain/misc/ResourceGFX_starfish`,
+        9: `terrain/misc/ResourceGFX_aquacrop`,
     };
     !map[type] && console.log(`MISSING RESOURCE: ${type}`);
     return map[type] || 'misc/missing';
@@ -1535,7 +1517,7 @@ async function requestAiHint() {
         // Determine Icon
         let icon = MOVE_TYPE_ICONS[data.moveName] || '🎓';
         if (data.moveName === 'Research' && data.proposedMove.type !== undefined) {
-            icon = TECH_ICONS[data.proposedMove.type] || '🧪';
+            icon = TechNodes[data.proposedMove.type]?.icon || '🧪';
         }
 
         // Show HUD

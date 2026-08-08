@@ -296,7 +296,9 @@ pub struct CityState {
     pub population: i32,
     #[serde(default)]
     pub progress: i32,
-    #[serde(default)]
+    /// Defaults to 1, not 0 — a 0 border collapses `_territory` to the city tile
+    /// alone and silently zeroes structure income on states that omit the field.
+    #[serde(default = "default_border_size")]
     pub border_size: i32,
     #[serde(default)]
     pub connected_to_capital: bool,
@@ -308,6 +310,10 @@ pub struct CityState {
     pub rewards: Vec<CityRewardType>,
     #[serde(default)]
     pub _territory: Vec<i32>,
+}
+
+fn default_border_size() -> i32 {
+    1
 }
 
 impl Default for CityState {

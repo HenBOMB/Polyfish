@@ -218,6 +218,21 @@ pub fn build_structure(
 
     let mut undos = Vec::new();
     let settings = get_structure_setting(structure_type);
+    let pov_id = state.settings.current_player_turn_id;
+
+    // Adjacency yield: one population per FRIENDLY adjacent partner. Uses the
+    // shared rule so pop payout, Market income, legality and every AI consumer
+    // read one definition of "partner". A hub's level IS this count.
+    let partners = if settings.adjacent_types.is_empty() {
+        None
+    } else {
+        Some(crate::rules::economy::partner_count_with(
+            state,
+            idx,
+            &settings.adjacent_types,
+            pov_id,
+        ))
+    };
 
     // 1. Spend stars
     if let Some(cost) = settings.cost {
@@ -225,25 +240,17 @@ pub fn build_structure(
     }
 
     // 2. Create structure
-    undos.push(create_structure(state, idx, structure_type, 1));
+    undos.push(create_structure(
+        state,
+        idx,
+        structure_type,
+        partners.unwrap_or(1),
+    ));
 
     // 3. Add population
     if let Some(city) = get_city_owning_tile(state, idx) {
         let city_tile_idx = city.idx;
-        let mut reward_pop = settings.reward_pop;
-
-        // Adjacency yield: one population per FRIENDLY adjacent partner. Uses
-        // the shared rule so pop payout, Market income, legality and every AI
-        // consumer read one definition of "partner".
-        if !settings.adjacent_types.is_empty() {
-            let pov_id = state.settings.current_player_turn_id;
-            reward_pop *= crate::rules::economy::partner_count_with(
-                state,
-                idx,
-                &settings.adjacent_types,
-                pov_id,
-            );
-        }
+        let reward_pop = settings.reward_pop * partners.unwrap_or(1);
 
         if reward_pop > 0 {
             undos.push(add_population(state, city_tile_idx, reward_pop));
@@ -255,21 +262,36 @@ pub fn build_structure(
     // adjacent_types (Windmill/Sawmill/Forge), paying their owning city.
     // add_population only reaches the acting player's cities, so this pays
     // pov-owned neighbors only (cross-border feeding stays unmodeled).
+    // The neighbor's stored level tracks the same partner count, so it is bumped
+    // here too — nothing in the engine reads it (income recomputes on read), but
+    // the UI selects hub sprites by level.
     {
         use crate::functions::{get_adjacent_indices, get_structure_at};
-        let pov_id = state.settings.current_player_turn_id;
         for adj_idx in get_adjacent_indices(state, idx, 1) {
             let feeds = get_structure_at(state, adj_idx).map(|s| s.structure_type);
             if let Some(neighbor_type) = feeds {
                 let neighbor = get_structure_setting(neighbor_type);
-                if neighbor.reward_pop > 0
-                    && neighbor.adjacent_types.contains(&structure_type)
-                {
+                if !neighbor.adjacent_types.contains(&structure_type) {
+                    continue;
+                }
+                if neighbor.reward_pop > 0 {
                     let owned_city_idx = get_city_owning_tile(state, adj_idx)
                         .filter(|c| c.owner == pov_id)
                         .map(|c| c.idx);
                     if let Some(city_tile_idx) = owned_city_idx {
                         undos.push(add_population(state, city_tile_idx, neighbor.reward_pop));
+                    }
+                }
+                if state.tiles.get(&adj_idx).is_some_and(|t| t.owner == pov_id) {
+                    if let Some(st) = state.structures.get_mut(&adj_idx).and_then(|s| s.as_mut()) {
+                        let old_level = st.level;
+                        st.level = old_level + 1;
+                        undos.push(Box::new(move |s: &mut GameState| {
+                            if let Some(st) = s.structures.get_mut(&adj_idx).and_then(|x| x.as_mut())
+                            {
+                                st.level = old_level;
+                            }
+                        }));
                     }
                 }
             }

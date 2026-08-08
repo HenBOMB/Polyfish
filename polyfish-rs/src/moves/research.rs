@@ -60,6 +60,11 @@ impl Move for ResearchMove {
         })
     }
 
+    fn cost(&self, state: &GameState) -> Option<i32> {
+        let tribe = state.tribes.get(&state.settings.current_player_turn_id)?;
+        Some(crate::functions::get_tech_cost(tribe, self.tech_type))
+    }
+
     #[inline]
     fn tech_type(&self) -> Result<TechnologyType, String> {
         Ok(self.tech_type)

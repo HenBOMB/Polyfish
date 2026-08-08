@@ -77,6 +77,10 @@ impl Move for EnchantAnimalMove {
         Ok(self.target_index as usize)
     }
 
+    fn cost(&self, state: &GameState) -> Option<i32> {
+        Some(crate::version_sync::get_polytaur_cost(state))
+    }
+
     #[inline]
     fn ability_type(&self) -> Result<AbilityType, String> {
         Ok(AbilityType::EnchantAnimal)

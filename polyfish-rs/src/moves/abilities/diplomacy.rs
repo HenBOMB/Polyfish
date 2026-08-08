@@ -332,6 +332,10 @@ impl Move for EstablishEmbassyMove {
         Ok(self.opponent_id as usize)
     }
 
+    fn cost(&self, _state: &GameState) -> Option<i32> {
+        Some(5)
+    }
+
     fn ability_type(&self) -> Result<AbilityType, String> {
         Ok(AbilityType::EstablishEmbassy)
     }

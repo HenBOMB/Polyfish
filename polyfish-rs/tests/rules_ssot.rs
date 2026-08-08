@@ -164,35 +164,67 @@ fn resource_visibility_comes_from_the_settings_table() {
     tribe.id = 1;
     state.tribes.insert(1, tribe);
 
-    // Fruit has no visibility requirement.
-    assert!(is_resource_visible_to_tribe(&state, ResourceType::Fruit, 1, None));
-    // Game needs Hunting.
-    assert!(!is_resource_visible_to_tribe(&state, ResourceType::Game, 1, None));
-    state
-        .tribes
-        .get_mut(&1)
-        .unwrap()
-        .tech_vanilla
-        .push(polyfish::states::TechnologyState {
-            tech_type: TechnologyType::Hunting,
-            discovered: true,
-            discovered_turn: 0,
-        });
-    assert!(is_resource_visible_to_tribe(&state, ResourceType::Game, 1, None));
+    let learn = |state: &mut polyfish::states::GameState, tech| {
+        state
+            .tribes
+            .get_mut(&1)
+            .unwrap()
+            .tech_vanilla
+            .push(polyfish::states::TechnologyState {
+                tech_type: tech,
+                discovered: true,
+                discovered_turn: 0,
+            });
+    };
+
+    // On the map from turn 1 — only Organization, Climbing and Navigation
+    // reveal anything in the real game.
+    for always in [
+        ResourceType::Fruit,
+        ResourceType::Game,
+        ResourceType::Fish,
+        ResourceType::AquaCrop,
+    ] {
+        assert!(
+            is_resource_visible_to_tribe(&state, always, 1, None),
+            "{always:?} needs no tech to see"
+        );
+    }
+
+    // Starfish waits for Navigation specifically, not the rest of its branch.
+    assert!(!is_resource_visible_to_tribe(&state, ResourceType::Starfish, 1, None));
+    learn(&mut state, TechnologyType::Fishing);
+    learn(&mut state, TechnologyType::Sailing);
+    assert!(
+        !is_resource_visible_to_tribe(&state, ResourceType::Starfish, 1, None),
+        "Fishing and Sailing must not reveal starfish"
+    );
+    learn(&mut state, TechnologyType::Navigation);
+    assert!(is_resource_visible_to_tribe(&state, ResourceType::Starfish, 1, None));
 
     // Any one of the listed techs suffices for Crop.
     assert!(!is_resource_visible_to_tribe(&state, ResourceType::Crop, 1, None));
-    state
-        .tribes
-        .get_mut(&1)
-        .unwrap()
-        .tech_vanilla
-        .push(polyfish::states::TechnologyState {
-            tech_type: TechnologyType::Construction,
-            discovered: true,
-            discovered_turn: 0,
-        });
+    learn(&mut state, TechnologyType::Construction);
     assert!(is_resource_visible_to_tribe(&state, ResourceType::Crop, 1, None));
+}
+
+/// Replacement techs inherit the tier of the tech they replace — reading
+/// `.tier.unwrap_or(1)` priced all 13 of them as tier 1.
+#[test]
+fn replacement_techs_price_at_the_tier_they_replace() {
+    use polyfish::settings::technology::{get_technology_setting, tech_tier};
+    use strum::IntoEnumIterator;
+
+    for tech in TechnologyType::iter() {
+        let Some(vanilla) = get_technology_setting(tech).replaces_tech else {
+            continue;
+        };
+        assert_eq!(
+            tech_tier(tech),
+            tech_tier(vanilla),
+            "{tech:?} replaces {vanilla:?} and must cost the same tier"
+        );
+    }
 }
 
 /// Terrain is irrelevant to the rule above — this pins that the table drives it,

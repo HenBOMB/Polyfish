@@ -66,6 +66,10 @@ impl Move for SummonMove {
         })
     }
 
+    fn cost(&self, _state: &GameState) -> Option<i32> {
+        Some(get_unit_setting(self.unit_type).cost)
+    }
+
     #[inline]
     fn source_idx(&self) -> Result<usize, String> {
         Ok(self.src_index as usize)

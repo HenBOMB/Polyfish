@@ -386,9 +386,7 @@ pub fn get_unit_movement(state: &GameState, unit: &UnitState) -> i32 {
 
 /// Get tech cost tier from a technology
 pub fn get_tech_tier(tech_type: TechnologyType) -> i32 {
-    crate::settings::technology::get_technology_setting(tech_type)
-        .tier
-        .unwrap_or(1)
+    crate::settings::technology::tech_tier(tech_type)
 }
 
 /// Get defense bonus multiplier for a unit on its current tile
@@ -1020,9 +1018,7 @@ pub fn idx_to_coords(idx: i32, size: i32) -> (i32, i32) {
 
 /// Get the tech cost based on number of cities and tier
 pub fn get_tech_cost(tribe: &TribeState, tech: TechnologyType) -> i32 {
-    let tier = crate::settings::technology::get_technology_setting(tech)
-        .tier
-        .unwrap_or(1);
+    let tier = crate::settings::technology::tech_tier(tech);
     let cities_count = tribe.cities.len() as i32;
     let has_philo = crate::settings::technology::has_technology(
         &tribe.tech_vanilla,
@@ -1119,10 +1115,7 @@ pub fn calculate_detailed_tribe_score(state: &GameState, player_id: PlayerId) ->
 
     // 100 per tech tier
     for tech in &tribe.tech_vanilla {
-        let tier = crate::settings::technology::get_technology_setting(tech.tech_type)
-            .tier
-            .unwrap_or(1);
-        score += 100 * tier;
+        score += 100 * crate::settings::technology::tech_tier(tech.tech_type);
     }
 
     score

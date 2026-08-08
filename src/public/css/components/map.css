@@ -270,6 +270,23 @@
     transition: left 0.4s ease-in-out, top 0.4s ease-in-out, transform 0.2s ease;
 }
 
+/* Unit sprites are pre-baked per tribe and cannot be recoloured, so ownership
+   reads off a coloured ring at the unit's feet — the only cue that separates
+   the two sides in a mirror match. */
+.unit::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: 26px;
+    width: 46px;
+    height: 22px;
+    transform: translateX(-50%);
+    border: 3px solid var(--tribe-outline, transparent);
+    border-radius: 50%;
+    box-shadow: 0 0 6px var(--tribe-outline, transparent);
+    pointer-events: none;
+}
+
 .exausted {
     opacity: 0.85 !important;
     filter: grayscale(50%) brightness(0.92) !important;

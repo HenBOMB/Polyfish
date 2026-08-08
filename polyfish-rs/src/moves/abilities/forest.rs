@@ -56,6 +56,11 @@ impl Move for ClearForestMove {
         Ok(self.target_index as usize)
     }
 
+    /// Negative: clearing pays the tribe rather than costing it.
+    fn cost(&self, state: &GameState) -> Option<i32> {
+        Some(-crate::version_sync::get_clear_forest_stars(state))
+    }
+
     #[inline]
     fn ability_type(&self) -> Result<AbilityType, String> {
         Ok(AbilityType::ClearForest)
@@ -110,6 +115,10 @@ impl Move for GrowForestMove {
     #[inline]
     fn target_idx(&self) -> Result<usize, String> {
         Ok(self.target_index as usize)
+    }
+
+    fn cost(&self, _state: &GameState) -> Option<i32> {
+        Some(5)
     }
 
     #[inline]
@@ -170,6 +179,10 @@ impl Move for BurnForestMove {
     #[inline]
     fn target_idx(&self) -> Result<usize, String> {
         Ok(self.target_index as usize)
+    }
+
+    fn cost(&self, state: &GameState) -> Option<i32> {
+        Some(crate::version_sync::get_burn_forest_cost(state))
     }
 
     #[inline]

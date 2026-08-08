@@ -52,25 +52,48 @@ const CLASSIC_CLIMATE_NAMES = [
     'Quetzali', '∑∫ỹriȱŋ', 'Yădakk', 'Polaris', 'Cymanti'
 ];
 
+// The real game's tribe palette, keyed by tribe.type.
 const TRIBE_COLORS = {
-    1: '#0ea5e9', // Nature (Blue-ish)
-    2: '#8b5cf6', // Ai-Mo (Purple)
-    3: '#3b82f6', // Aquarion (Blue)
-    4: '#1f2937', // Bardur (Black/Grey)
-    5: '#ec4899', // ∑∫ỹriȱŋ (Pink)
-    6: '#4ade80', // Hoodrick (Green)
-    7: '#0ea5e9', // Imperius (Blue)
-    8: '#22c55e', // Kickoo (Green)
-    9: '#fbbf24', // Luxidoor (Gold/Yellow)
-    10: '#f59e0b', // Oumaji (Yellow/Orange)
-    11: '#22c55e', // Quetzali (Green)
-    12: '#475569', // Vengir (Dark Grey)
-    13: '#ef4444', // Xin-xi (Red)
-    14: '#f97316', // Yădakk (Orange)
-    15: '#facc15', // Zebasi (Yellow)
-    16: '#38bdf8', // Polaris (Light Blue)
-    17: '#16a34a', // Cymanti (Green)
+    0: '#000000', // None
+    1: '#32CD32', // Nature
+    2: '#36e2aa', // Ai-Mo
+    3: '#f38381', // Aquarion
+    4: '#352514', // Bardur
+    5: '#ff0099', // ∑∫ỹriȱŋ
+    6: '#996600', // Hoodrick
+    7: '#0000ff', // Imperius
+    8: '#00ff00', // Kickoo
+    9: '#ab3bd6', // Luxidoor
+    10: '#ffff00', // Oumaji
+    11: '#275c4a', // Quetzali
+    12: '#ffffff', // Vengir
+    13: '#cc0000', // Xin-xi
+    14: '#7d231c', // Yădakk
+    15: '#ff9900', // Zebasi
+    16: '#b6a185', // Polaris
+    17: '#c2fd00', // Cymanti
 };
+
+// Mirror matches: both players share a tribe colour, so everyone past the first
+// gets one of these instead. Deliberately outside the palette above.
+const MIRROR_FALLBACK_COLORS = ['#00e5ff', '#ff6d00', '#d500f9', '#76ff03'];
+
+/// Colour for one player, disambiguating players who share a tribe.
+/// The lowest player id keeps the canonical tribe colour.
+function getPlayerColor(tribeType, playerId, state) {
+    const canonical = TRIBE_COLORS[tribeType] || '#ffffff';
+    if (!state || !state.tribes || playerId === undefined || playerId === null) return canonical;
+
+    const sharing = Object.entries(state.tribes)
+        .filter(([, t]) => t && t.type === tribeType)
+        .map(([id]) => Number(id))
+        .sort((a, b) => a - b);
+
+    if (sharing.length < 2) return canonical;
+    const rank = sharing.indexOf(Number(playerId));
+    if (rank <= 0) return canonical;
+    return MIRROR_FALLBACK_COLORS[(rank - 1) % MIRROR_FALLBACK_COLORS.length];
+}
 
 const ClassNameToId = {
     1: "Scout",
@@ -215,58 +238,39 @@ const TechNodes = {
     0: { x: 0, y: 0, icon: "🏛️" }, // Start
 
     // Organization Branch (0 deg - East)
-    6: { x: 160, y: 0, icon: "🤲" }, // Organization
-    8: { x: 260, y: 30, icon: "🌾" }, // Farming
-    9: { x: 360, y: 60, icon: "🏗️" }, // Construction
-    7: { x: 260, y: -30, icon: "🛡️" }, // Strategy
-    38: { x: 360, y: -60, icon: "🤝" }, // Diplomacy
+    6: { x: 160, y: 0, icon: "🤲", img: "buildings/common/Tribe" }, // Organization
+    8: { x: 260, y: 30, icon: "🌾", img: "buildings/common/Farm" }, // Farming
+    9: { x: 360, y: 60, icon: "🏗️", img: "buildings/common/Windmill_4" }, // Construction
+    7: { x: 260, y: -30, icon: "🛡️", img: "units/Imperius/default/Imperius_default_Defender" }, // Strategy
+    38: { x: 360, y: -60, icon: "🤝", img: "buildings/common/Tribe" }, // Diplomacy
 
     // Climbing Branch (72 deg - South East)
-    20: { x: 60, y: 160, icon: "🧗" }, // Climbing
-    23: { x: 100, y: 240, icon: "⛏️" }, // Mining
-    24: { x: 140, y: 320, icon: "⚔️" }, // Smithery
-    21: { x: 0, y: 240, icon: "🧘" }, // Meditation
-    22: { x: -20, y: 340, icon: "🦉" }, // Philosophy
+    20: { x: 60, y: 160, icon: "🧗", img: "terrain/mountains/mountain_1" }, // Climbing
+    23: { x: 100, y: 240, icon: "⛏️", img: "buildings/common/Mine" }, // Mining
+    24: { x: 140, y: 320, icon: "⚔️", img: "buildings/common/Forge_4" }, // Smithery
+    21: { x: 0, y: 240, icon: "🧘", img: "buildings/common/Temple_3" }, // Meditation
+    22: { x: -20, y: 340, icon: "🦉", img: "misc/literacy" }, // Philosophy
 
     // Fishing Branch (144 deg - South West)
-    10: { x: -130, y: 100, icon: "🎣" }, // Fishing
-    13: { x: -240, y: 120, icon: "⛵" }, // Sailing
-    14: { x: -340, y: 140, icon: "🧭" }, // Navigation
-    12: { x: -200, y: 200, icon: "🐢" }, // Aquatism
-    39: { x: -280, y: 280, icon: "🐏" }, // Ramming
+    10: { x: -130, y: 100, icon: "🎣", img: "animals/fish" }, // Fishing
+    13: { x: -240, y: 120, icon: "⛵", img: "buildings/common/Port" }, // Sailing
+    14: { x: -340, y: 140, icon: "🧭", img: "units/Imperius/default/Imperius_default_Battleship" }, // Navigation
+    12: { x: -200, y: 200, icon: "🐢", img: "buildings/common/Water Temple_3" }, // Aquatism
+    39: { x: -280, y: 280, icon: "🐏", img: "units/Imperius/default/Imperius_default_Rammership" }, // Ramming
 
     // Hunting Branch (-144 deg - North West)
-    15: { x: -130, y: -100, icon: "🏹" }, // Hunting
-    18: { x: -240, y: -120, icon: "🎯" }, // Archery
-    19: { x: -340, y: -140, icon: "👻" }, // Spiritualism
-    16: { x: -200, y: -200, icon: "🌲" }, // Forestry
-    17: { x: -280, y: -280, icon: "📐" }, // Mathematics
+    15: { x: -130, y: -100, icon: "🏹", img: "animals/horse0002" }, // Hunting
+    18: { x: -240, y: -120, icon: "🎯", img: "units/Imperius/default/Imperius_default_Archer" }, // Archery
+    19: { x: -340, y: -140, icon: "👻", img: "misc/magic" }, // Spiritualism
+    16: { x: -200, y: -200, icon: "🌲", img: "buildings/common/Lumber Hut" }, // Forestry
+    17: { x: -280, y: -280, icon: "📐", img: "units/Imperius/default/Imperius_default_Catapult" }, // Mathematics
 
     // Riding Branch (-72 deg - North East)
-    1: { x: 60, y: -160, icon: "🏇" }, // Riding
-    4: { x: 140, y: -250, icon: "🛣️" }, // Roads
-    5: { x: 200, y: -340, icon: "💰" }, // Trade (Far out)
-    2: { x: 0, y: -240, icon: "🕊️" }, // Free Spirit
-    3: { x: -40, y: -320, icon: "⚔️" }, // Chivalry
-};
-
-const StructureCosts = {
-    5: 5, // Farm
-    6: 5, // Windmill
-    8: 10, // Port
-    12: 3, // Lumber Hut
-    13: 5, // Sawmill
-    17: 20, // Temple
-    18: 20, // Forest Temple
-    19: 20, // Water Temple
-    20: 20, // Mountain Temple
-    21: 5, // Mine
-    22: 5, // Forge
-    25: 5, // Grand Bazaar
-    33: 5, // Outpost
-    50: 5, // Market
-    69: 20, // Ice Temple
-    71: 3, // Road
+    1: { x: 60, y: -160, icon: "🏇", img: "units/Imperius/default/Imperius_default_Rider" }, // Riding
+    4: { x: 140, y: -250, icon: "🛣️", img: "misc/Road" }, // Roads
+    5: { x: 200, y: -340, icon: "💰", img: "buildings/common/Market01" }, // Trade (Far out)
+    2: { x: 0, y: -240, icon: "🕊️", img: "buildings/common/Temple_3" }, // Free Spirit
+    3: { x: -40, y: -320, icon: "⚔️", img: "units/Imperius/default/Imperius_default_Knight" }, // Chivalry
 };
 
 const StructureTypes = {
@@ -485,22 +489,3 @@ const AbilityEmojis = {
     23: "🦄",
 };
 
-const AbilityCosts = {
-    1: 2, // Burn Forest
-    2: -1, // Clear Forest (Gains 1 star)
-    3: 5, // Grow Forest
-    4: 0, // Destroy
-    5: 0, // Decompose
-    6: 0, // Convert
-    7: 0, // Recover
-    8: 0, // Disband
-    9: 0, // Heal Others
-    11: 0, // Drain
-    13: 0, // Freeze Area
-    14: 0, // Boost
-    15: 0, // Explode
-    16: 0, // Promote
-    17: 0, // Break Ice
-    18: 0, // Break Peace
-    23: 3, // Enchant Animal
-};

@@ -8,10 +8,12 @@ pub struct ResourceSetting {
     pub cost: Option<i32>,
     pub tech_required: TechnologyType,
     pub struct_required: Option<StructureType>,
-    /// Techs that reveal this resource — ANY one suffices. Empty means always
-    /// visible (Fruit, Spores). Read by `functions::is_resource_visible_to_tribe`;
-    /// it used to be declared here and ignored, with a different rule hardcoded
-    /// in that function.
+    /// Techs that reveal this resource — ANY one suffices, so a branch is listed
+    /// in full. Empty means always visible: Fruit, Game, Fish, Spores and
+    /// AquaCrop are on the map from turn 1, matching the real game, where only
+    /// Organization ("reveals crop"), Climbing ("reveals metal") and Navigation
+    /// (deep water) uncover anything. Read by
+    /// `functions::is_resource_visible_to_tribe`.
     pub visible_required: Vec<TechnologyType>,
     pub requires_capture: bool,
     pub reward_pop: i32,
@@ -42,7 +44,6 @@ fn build_resource_setting(resource_type: ResourceType) -> ResourceSetting {
         Game => ResourceSetting {
             cost: Some(2),
             tech_required: Hunting,
-            visible_required: vec![Hunting],
             reward_pop: 1,
             ..Default::default()
         },
@@ -56,7 +57,6 @@ fn build_resource_setting(resource_type: ResourceType) -> ResourceSetting {
         Fish => ResourceSetting {
             cost: Some(2),
             tech_required: Fishing,
-            visible_required: vec![Fishing],
             reward_pop: 1,
             ..Default::default()
         },
@@ -82,14 +82,13 @@ fn build_resource_setting(resource_type: ResourceType) -> ResourceSetting {
         },
         Starfish => ResourceSetting {
             tech_required: Navigation,
-            visible_required: vec![Fishing, Sailing, Navigation],
+            visible_required: vec![Navigation],
             requires_capture: true,
             reward_stars: 8,
             ..Default::default()
         },
         AquaCrop => ResourceSetting {
             tech_required: BeyondComprehension,
-            visible_required: vec![FreeDiving],
             reward_pop: 2,
             ..Default::default()
         },

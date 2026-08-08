@@ -136,7 +136,11 @@ fn tech_bill(chain: &[TechnologyType], owned: &HashSet<TechnologyType>, cities: 
                     continue;
                 }
             }
-            bill += get_tech_cost(cities, s.tier.unwrap_or(1), false);
+            bill += get_tech_cost(
+                cities,
+                polyfish::settings::technology::tech_tier(*t),
+                false,
+            );
             have.insert(cur);
         }
     }
