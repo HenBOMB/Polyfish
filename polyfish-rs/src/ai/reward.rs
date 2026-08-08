@@ -143,13 +143,14 @@ fn village_proximity_tiles(state: &GameState, player: i32) -> f32 {
     let mut best: Option<i32> = None;
     for (&idx, s) in state.structures.iter() {
         let Some(s) = s else { continue };
-        if s.structure_type != crate::types::StructureType::Village {
-            continue;
-        }
-        let Some(tile) = state.tiles.get(&idx) else {
-            continue;
-        };
-        if tile.owner != 0 || !tile.explorers.contains(&player) {
+        let _ = s;
+        if !crate::rules::capture::is_capturable(
+            state,
+            idx,
+            player,
+            crate::rules::capture::CaptureKind::OPEN_VILLAGE,
+            true,
+        ) {
             continue;
         }
         for u in &tribe.units {
@@ -375,7 +376,7 @@ pub fn max_affordable_pop(state: &GameState, player: i32, city: &crate::states::
     let mut claimed: std::collections::HashMap<i32, Option<crate::types::StructureType>> =
         std::collections::HashMap::new();
 
-    for &idx in &city._territory {
+    for idx in crate::rules::economy::territory_tiles(state, city) {
         if !open(idx) {
             continue;
         }
@@ -431,7 +432,7 @@ pub fn max_affordable_pop(state: &GameState, player: i32, city: &crate::states::
         }
         // Best placement in this city — yield scales with partner count.
         let mut best = 0;
-        for &idx in &city._territory {
+        for idx in crate::rules::economy::territory_tiles(state, city) {
             if claimed.contains_key(&idx) || !open(idx) {
                 continue;
             }
@@ -466,7 +467,7 @@ pub fn max_affordable_pop(state: &GameState, player: i32, city: &crate::states::
         if s.reward_pop <= 0 {
             continue;
         }
-        for &idx in &city._territory {
+        for idx in crate::rules::economy::territory_tiles(state, city) {
             if claimed.contains_key(&idx) || !open(idx) {
                 continue;
             }
@@ -606,7 +607,7 @@ pub fn goal_potential(
                 * tribe
                     .units
                     .iter()
-                    .map(|u| crate::settings::units::get_unit_setting(u.unit_type).cost as f32)
+                    .map(|u| crate::rules::combat::unit_worth(u) as f32)
                     .sum::<f32>()
         }
         Stance::Unlock => 0.0,
@@ -877,7 +878,7 @@ pub fn goal_potential(
                 .units
                 .iter()
                 .filter(|u| aux.preferred_units.contains(&u.unit_type))
-                .map(|u| crate::settings::units::get_unit_setting(u.unit_type).cost)
+                .map(crate::rules::combat::unit_worth)
                 .sum::<i32>();
             phi += SHAPE_GOAL_ARCHETYPE_PER_COST * preferred as f32;
         }
@@ -903,7 +904,7 @@ pub fn dev_potential(state: &GameState, player: i32) -> f32 {
     let army_cost: f32 = tribe
         .units
         .iter()
-        .map(|u| crate::settings::units::get_unit_setting(u.unit_type).cost as f32)
+        .map(|u| crate::rules::combat::unit_worth(u) as f32)
         .sum();
     let spt = crate::functions::get_tribe_spt(state, tribe) as f32;
 

@@ -4,7 +4,6 @@ use crate::actions::city::claim_territory;
 use crate::actions::discovery::{discover_tiles, predict_explorer};
 use crate::actions::units::summon_unit;
 use crate::actions::{UndoCallback, chain_undos, gain_stars};
-use crate::functions::get_adjacent_indices;
 use crate::moves::{Move, MoveResult};
 use crate::settings::units::get_super_unit;
 use crate::states::GameState;
@@ -109,7 +108,11 @@ impl Move for RewardMove {
                                 state._messages.push(format!("🏠 Border growth! 🗺️"));
                             }
                             city.border_size += 1;
-                            let adj = get_adjacent_indices(state, target, 2);
+                            // Claim the square the city now rules, centre
+                            // included — not a hardcoded radius 2.
+                            let size = state.settings.size;
+                            let border = city.border_size;
+                            let adj = crate::functions::get_square_indices(target, border, size);
                             undos.push(claim_territory(state, &adj, target, false));
                             undos.push(discover_tiles(state, p_id, None, Some(adj)));
                             undos.push(Box::new(move |s: &mut GameState| {

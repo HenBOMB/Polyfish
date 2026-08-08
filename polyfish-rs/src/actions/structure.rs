@@ -144,8 +144,24 @@ pub fn destroy_structure(state: &mut GameState, idx: i32) -> UndoCallback {
             let settings = get_structure_setting(structure.structure_type);
 
             if settings.reward_pop > 0 {
-                // Reduce population (negative add)
-                undos.push(add_population(state, city_tile_idx, -settings.reward_pop));
+                // Refund what the structure actually paid, not its base yield:
+                // an adjacency hub was paid `reward_pop x partners` on build, so
+                // removing a level-4 Sawmill must remove 4 pop, not 1.
+                let pop = if settings.adjacent_types.is_empty() {
+                    settings.reward_pop
+                } else {
+                    let owner = state.tiles.get(&idx).map_or(0, |t| t.owner);
+                    settings.reward_pop
+                        * crate::rules::economy::partner_count_with(
+                            state,
+                            idx,
+                            &settings.adjacent_types,
+                            owner,
+                        )
+                };
+                if pop > 0 {
+                    undos.push(add_population(state, city_tile_idx, -pop));
+                }
             }
         }
     }
@@ -216,30 +232,17 @@ pub fn build_structure(
         let city_tile_idx = city.idx;
         let mut reward_pop = settings.reward_pop;
 
-        // Adjacent multipliers (Windmill, Sawmill, Forge): "one population
-        // per FRIENDLY adjacent partner" — only own-territory partners count,
-        // matching the build-legality gate in moves/build.rs.
+        // Adjacency yield: one population per FRIENDLY adjacent partner. Uses
+        // the shared rule so pop payout, Market income, legality and every AI
+        // consumer read one definition of "partner".
         if !settings.adjacent_types.is_empty() {
-            use crate::functions::get_adjacent_indices;
-            use crate::functions::get_structure_at;
-
             let pov_id = state.settings.current_player_turn_id;
-            let adj = get_adjacent_indices(state, idx, 1);
-            let adj_count = adj
-                .iter()
-                .filter(|&&adj_idx| {
-                    let friendly = state
-                        .tiles
-                        .get(&adj_idx)
-                        .map_or(false, |t| t.owner == pov_id);
-                    friendly
-                        && get_structure_at(state, adj_idx)
-                            .map_or(false, |s| {
-                                settings.adjacent_types.contains(&s.structure_type)
-                            })
-                })
-                .count() as i32;
-            reward_pop *= adj_count;
+            reward_pop *= crate::rules::economy::partner_count_with(
+                state,
+                idx,
+                &settings.adjacent_types,
+                pov_id,
+            );
         }
 
         if reward_pop > 0 {
@@ -419,12 +422,16 @@ pub fn capture_ruin(
                     level: 3,
                     production: 3,
                     owner: pov_id,
-                    rewards: vec![CityRewardType::CityWall],
+                    // A level-3 city has two reward slots consumed
+                    // (`required = level - 1`); granting only CityWall left the
+                    // counter short, so slot 2 was offered a second time.
+                    rewards: vec![CityRewardType::Workshop, CityRewardType::CityWall],
                     _territory: territory.clone(),
                 };
                 if let Some(tribe) = state.tribes.get_mut(&pov_id) {
-                    // Level 3 City: 100 (base) + 2 * 50 (levels) = 200 points
-                    let city_score = 100 + (3 - 1) * 50;
+                    // Derived, not a literal: population is 0 at founding, so
+                    // `get_city_score` is exactly base + per-level here.
+                    let city_score = crate::score::get_city_score(&city);
                     tribe.score += city_score;
                     tribe.cities.push(city.clone());
 
@@ -662,7 +669,8 @@ pub fn capture_ruin(
                 level: 3,
                 production: 3,
                 owner: pov_id,
-                rewards: vec![CityRewardType::CityWall], // Grant City Walls
+                // Both slots a level-3 city has already spent — see above.
+                rewards: vec![CityRewardType::Workshop, CityRewardType::CityWall],
                 _territory: territory.clone(),
             };
 

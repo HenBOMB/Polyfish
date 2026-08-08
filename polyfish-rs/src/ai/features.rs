@@ -663,7 +663,7 @@ pub fn state_to_cpu_features_goal(
                 CH_UNIT_KILLS,
                 x,
                 y,
-                (unit.kills as f32 / 3.0).clamp(0.0, 1.0),
+                (unit.kills as f32 / crate::rules::combat::PROMOTION_KILLS as f32).clamp(0.0, 1.0),
             );
             set_feat(
                 &mut data,
@@ -831,12 +831,14 @@ pub fn state_to_cpu_features_goal(
             .structures
             .iter()
             .filter_map(|(&idx, s)| {
-                let s = s.as_ref()?;
-                if s.structure_type != StructureType::Village {
-                    return None;
-                }
-                let tile = state.tiles.get(&idx)?;
-                if tile.owner != 0 || !tile.explorers.contains(&perspective) {
+                s.as_ref()?;
+                if !crate::rules::capture::is_capturable(
+                    state,
+                    idx,
+                    perspective,
+                    crate::rules::capture::CaptureKind::OPEN_VILLAGE,
+                    true,
+                ) {
                     return None;
                 }
                 Some((idx / map_size as i32, idx % map_size as i32)) // (row, col)

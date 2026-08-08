@@ -3,9 +3,8 @@
 use crate::actions::city::add_population;
 use crate::actions::{UndoCallback, chain_undos};
 use crate::functions::{get_adjacent_indices, get_capital_city};
-use crate::settings::has_skill;
 use crate::states::{GameState, PlayerId, UnitState};
-use crate::types::{SkillType, StructureType, TerrainType};
+use crate::types::{StructureType, TerrainType};
 
 /// Discover tiles around a unit or specific tiles
 pub fn discover_tiles(
@@ -20,17 +19,7 @@ pub fn discover_tiles(
     let tiles_to_check = if let Some(indices) = tile_indices {
         indices
     } else if let Some(u) = unit {
-        let range = if has_skill(u.unit_type, SkillType::Scout)
-            || state
-                .tiles
-                .get(&u.coords.idx)
-                .map(|t| t.terrain_type == TerrainType::Mountain)
-                .unwrap_or(false)
-        {
-            2
-        } else {
-            1
-        };
+        let range = crate::rules::vision::unit_vision_range(state, u);
         let mut adj = get_adjacent_indices(state, u.coords.idx, range);
         adj.push(u.coords.idx);
         adj

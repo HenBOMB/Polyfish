@@ -301,7 +301,8 @@ fn generate_econ_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
 
     // Iterate cities for territory-based econ moves
     for city in &tribe.cities {
-        for &tile_idx in &city._territory {
+        // Ruled tiles only — see the note in moves/build.rs.
+        for tile_idx in crate::rules::economy::territory_tiles(state, city) {
             // Check for enemy unit
             if get_enemy_at(state, tile_idx, pov_id).is_some() {
                 continue;
@@ -775,32 +776,10 @@ fn generate_attack_moves(
     }
 }
 
-/// Get all tile indices within range (for ranged units)
-fn get_tiles_in_range(state: &GameState, from_idx: i32, range: i32) -> Vec<i32> {
-    let map_size = state.settings.size;
-    let fx = from_idx % map_size;
-    let fy = from_idx / map_size;
-
-    let mut tiles = Vec::new();
-
-    for dy in -range..=range {
-        for dx in -range..=range {
-            if dx == 0 && dy == 0 {
-                continue;
-            }
-
-            let nx = fx + dx;
-            let ny = fy + dy;
-
-            if nx >= 0 && nx < map_size && ny >= 0 && ny < map_size {
-                if dx.abs().max(dy.abs()) <= range {
-                    tiles.push(ny * map_size + nx);
-                }
-            }
-        }
-    }
-
-    tiles
+/// Tiles within `range` of `idx` — delegates to the shared helper, which
+/// computes exactly this square (centre excluded).
+fn get_tiles_in_range(state: &GameState, idx: i32, range: i32) -> Vec<i32> {
+    crate::functions::get_adjacent_indices(state, idx, range)
 }
 
 fn is_steppable(state: &GameState, unit: &UnitState, idx: i32, strict: bool) -> bool {

@@ -106,7 +106,7 @@ pub fn assess_unit_power(game: &GameState, unit: &UnitState) -> f32 {
     }
 
     // Kills (max 3 -> +0.15)
-    status_val += unit.kills.min(3) as f32 * 0.05;
+    status_val += unit.kills.min(crate::rules::combat::PROMOTION_KILLS) as f32 * 0.05;
 
     // Debuffs
     if has_effect(unit, UnitEffect::Poison) {

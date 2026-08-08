@@ -146,15 +146,19 @@ fn penalty_unused_tech(state: &GameState, tribe: &crate::states::TribeState) -> 
     let mut penalty = 0.0;
 
     // --- 1. Resource techs: penalize unharvested resources in territory ---
-    let resource_techs: &[(TechnologyType, ResourceType)] = &[
-        (TechnologyType::Organization, ResourceType::Fruit),
-        (TechnologyType::Hunting, ResourceType::Game),
-        (TechnologyType::Fishing, ResourceType::Fish),
-        (TechnologyType::Farming, ResourceType::Crop),
-        (TechnologyType::Mining, ResourceType::Metal),
-    ];
+    // Read the harvest gate from the settings table rather than restating it.
+    use strum::IntoEnumIterator;
+    let resource_techs: Vec<(TechnologyType, ResourceType)> = ResourceType::iter()
+        .filter(|r| *r != ResourceType::None)
+        .map(|r| {
+            (
+                crate::settings::resources::get_resource_setting(r).tech_required,
+                r,
+            )
+        })
+        .collect();
 
-    for &(tech, res_type) in resource_techs {
+    for &(tech, res_type) in &resource_techs {
         if !has_technology(&tribe.tech_vanilla, tech) {
             continue;
         }
@@ -351,19 +355,22 @@ fn penalty_bad_structures(state: &GameState, tribe: &crate::states::TribeState) 
     let mut penalty: f32 = 0.0;
 
     // Adjacency structures and their prerequisites
-    let adjacency_pairs: &[(StructureType, &[StructureType])] = &[
-        (StructureType::Sawmill, &[StructureType::LumberHut]),
-        (StructureType::Forge, &[StructureType::Mine]),
-        (StructureType::Windmill, &[StructureType::Farm]),
-        (
-            StructureType::Market,
-            &[
-                StructureType::Sawmill,
-                StructureType::Windmill,
-                StructureType::Forge,
-            ],
-        ),
-    ];
+    // Every structure that yields on adjacency, straight from the table.
+    use strum::IntoEnumIterator;
+    let adjacency_pairs: Vec<(StructureType, &'static std::collections::HashSet<StructureType>)> =
+        StructureType::iter()
+            .filter(|st| {
+                !crate::settings::structures::get_structure_setting(*st)
+                    .adjacent_types
+                    .is_empty()
+            })
+            .map(|st| {
+                (
+                    st,
+                    &crate::settings::structures::get_structure_setting(st).adjacent_types,
+                )
+            })
+            .collect();
 
     for city in &tribe.cities {
         for &tile_idx in &city._territory {
@@ -373,7 +380,7 @@ fn penalty_bad_structures(state: &GameState, tribe: &crate::states::TribeState) 
             };
 
             // --- 1. Lonely adjacency structures ---
-            for &(adj_type, prereqs) in adjacency_pairs {
+            for &(adj_type, prereqs) in &adjacency_pairs {
                 if structure.structure_type != adj_type {
                     continue;
                 }

@@ -346,14 +346,14 @@ pub fn step_unit(
             let mut all_revealed = std::collections::HashSet::new();
 
             for &path_idx in &full_path {
-                let range = if has_skill(unit.unit_type, SkillType::Scout)
-                    || state.tiles.get(&path_idx).map_or(false, |t| {
+                // Vision is evaluated at each path tile, so the Mountain
+                // test uses that tile rather than the unit's current one.
+                let range = crate::rules::vision::unit_vision_range_with(
+                    &crate::settings::units::get_unit_setting(unit.unit_type).skills,
+                    state.tiles.get(&path_idx).map_or(false, |t| {
                         t.terrain_type == crate::types::TerrainType::Mountain
-                    }) {
-                    2
-                } else {
-                    1
-                };
+                    }),
+                );
                 let mut adj = crate::functions::get_adjacent_indices(state, path_idx, range);
                 adj.push(path_idx);
                 all_revealed.extend(adj);
@@ -1089,7 +1089,10 @@ pub fn attack_unit(
                     get_unit_max_health(adj_enemy),
                     get_defense_bonus(state, adj_enemy),
                 );
-                let individual_splash_damage = adj_res.splash_damage;
+                // Floor, as Stomp does — `splash_damage` is attack*0.5 and can be
+                // x.5, so leaving it unrounded made the two paths deal different
+                // damage for identical inputs.
+                let individual_splash_damage = adj_res.splash_damage.floor();
 
                 let adj_owner = adj_enemy.owner;
                 let mut unit_died = false;
@@ -1321,9 +1324,9 @@ pub fn attack_unit(
         let distance =
             crate::functions::get_chebyshev_distance(atk_coords, def_coords, state.settings.size);
 
-        let can_retaliate = !def_skills.contains(&SkillType::Stiff)
-            && !atk_skills.contains(&SkillType::Surprise)
-            && distance <= def_range;
+        let can_retaliate = crate::rules::combat::can_retaliate_with(
+            &atk_skills, def_skills, def_range, distance,
+        );
 
         let atk_damage = result.defense_damage;
         if atk_damage > 0.0 && can_retaliate {
@@ -2236,7 +2239,14 @@ pub fn upgrade_unit(
     if let Some(tribe) = state.tribes.get_mut(&unit_owner) {
         if let Some(unit) = tribe.units.get_mut(unit_idx) {
             let old_max_hp = crate::functions::get_unit_max_health(unit);
-            let damage = old_max_hp - unit.health;
+            let mut damage = old_max_hp - unit.health;
+
+            // Versions < 115 had a bug where damage was not inherited. The
+            // growth and centipede retype paths both gate on this; upgrade did
+            // not, which made it the odd one out.
+            if state.settings.version < 115 {
+                damage = 0.0;
+            }
 
             // Score adjustment
             let old_settings = get_unit_setting(old_type);
@@ -2268,12 +2278,13 @@ pub fn upgrade_unit(
 
     // 3. Discover around the newly upgraded unit
     let new_discovery_undo = {
-        let settings = get_unit_setting(target_type);
-        let range = if settings.skills.contains(&crate::types::SkillType::Scout) {
-            2
-        } else {
-            1
-        };
+        let range = crate::rules::vision::unit_vision_range_with(
+            &get_unit_setting(target_type).skills,
+            state
+                .tiles
+                .get(&tile_idx)
+                .map_or(false, |t| t.terrain_type == crate::types::TerrainType::Mountain),
+        );
         let mut adj = crate::functions::get_adjacent_indices(state, tile_idx, range);
         adj.push(tile_idx);
         crate::actions::discovery::discover_tiles(state, unit_owner, None, Some(adj))

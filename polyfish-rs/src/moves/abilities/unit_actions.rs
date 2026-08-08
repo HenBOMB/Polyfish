@@ -33,7 +33,7 @@ pub fn generate_unit_action_moves_for_unit(
     let idx = unit.coords.idx;
 
     // Promote
-    if !unit.veteran && unit.kills >= 3 && !functions::has_skill(unit, SkillType::Static) {
+    if crate::rules::combat::can_promote(unit) {
         moves.push(Box::new(PromoteMove::new(idx)));
     }
 

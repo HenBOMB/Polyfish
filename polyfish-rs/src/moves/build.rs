@@ -195,7 +195,9 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
 
         // Standard structures
         for city in &tribe.cities {
-            for &idx in &city._territory {
+            // Ruled tiles only: a tile in two cities' _territory would
+            // otherwise emit the same BuildMove twice.
+            for idx in crate::rules::economy::territory_tiles(state, city) {
                 if crate::functions::get_enemy_at(state, idx, pov_id).is_some() {
                     continue;
                 }
@@ -253,20 +255,17 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
                         }
                     }
 
-                    if !settings.adjacent_types.is_empty() {
-                        let adj = crate::functions::get_adjacent_indices(state, idx, 1);
-                        let has_required_adj = adj.iter().any(|&n_idx| {
-                            if let Some(s) = crate::functions::get_structure_at(state, n_idx)
-                                && state.tiles.get(&n_idx).unwrap().owner == pov_id
-                            {
-                                settings.adjacent_types.contains(&s.structure_type)
-                            } else {
-                                false
-                            }
-                        });
-                        if !has_required_adj {
-                            continue;
-                        }
+                    // Legality is the existential form of the adjacency count:
+                    // at least one friendly partner must already stand there.
+                    if !settings.adjacent_types.is_empty()
+                        && crate::rules::economy::partner_count_with(
+                            state,
+                            idx,
+                            &settings.adjacent_types,
+                            pov_id,
+                        ) == 0
+                    {
+                        continue;
                     }
 
                     if struct_type == StructureType::Bridge {

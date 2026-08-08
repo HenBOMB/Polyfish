@@ -8,7 +8,7 @@ use crate::actions::{
     try_discover_other_tribes, try_remove_effect, update_exploration,
 };
 use crate::functions::{
-    get_adjacent_indices, get_pov_tribe, get_total_production, is_game_over, sync_scores,
+    get_pov_tribe, get_total_production, is_game_over, sync_scores,
 };
 use crate::illegal_move_log::verbose_sim_failures;
 use crate::moves::{Move, generate_legal_moves};
@@ -106,8 +106,15 @@ impl Game {
         let mut territory_updates = Vec::new();
         for tribe in self.state.tribes.values() {
             for city in &tribe.cities {
-                // fetch nearby tiles and filter the ones we own
-                let territory = get_adjacent_indices(&self.state, city.idx, 2)
+                // Radius is the city's own border_size, and the city tile is a
+                // member — a fresh city rules its 3x3, nine tiles. This used to
+                // hardcode radius 2 and drop the centre, so loading a save
+                // silently reshaped every city's territory.
+                let territory = crate::functions::get_square_indices(
+                    city.idx,
+                    city.border_size,
+                    map_size,
+                )
                     .into_iter()
                     .filter(|&idx| {
                         self.state

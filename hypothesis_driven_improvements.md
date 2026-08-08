@@ -2042,3 +2042,51 @@ Placement is the dominant term, not a rounding error. In star terms this is the 
 **Consequences.** The prior-widening thread (EXP_PRIOR_001, the blend-weight probe) was aimed at a real and large lever after all — 1.29 partners on the first Sawmill alone — not the ~0.32 the broken metric implied. Their failure to move outcomes needs a different explanation than "the lever is too small," and the earlier finding still stands that both were measured with instruments too noisy to resolve anything.
 
 **Method note, third time this session.** A metric whose denominator or comparison set is produced by the very policy under test will always report that policy as near-optimal. `best_available_partners` (built partners), `avg_hub_level` (ownership-attributed), and `|A − C|` (single-repeat noise floor) all failed this way. Ask what the comparison set would look like under a *different* policy before trusting a ranking.
+
+---
+
+### SSOT consolidation — collapse duplicated game logic (Aug 8 2026)
+
+**Why.** Six bugs in one session all had one root cause: the same game rule implemented in several places, with the copies drifted apart. A three-part audit (combat / economy / shared primitives) found 11 independent implementations of "friendly adjacent partners" alone, across 7 files, plus 10 army-value sites, 7 build-legality checks, 12 capturability predicates and 4 hardcoded prereq tables.
+
+**Rule conflicts fixed (copies disagreed, one was wrong).**
+
+| fix | what was wrong |
+|---|---|
+| **Retaliation gate** | `calculate_combat_preview` applied none of `!Stiff && !Surprise && distance <= range`, so every ranged and Surprise attacker was predicted to take a counter it never receives — and `ai/scoring.rs:65` then priced those attacks **1.0 ("suicide")** instead of 50–95. Largest single correctness bug found. |
+| Rogue damage formula | `functions.rs:1368` used `(atk/(atk+def))*atk*4.5`, dropping both HP ratios and the defence bonus, never rounding. |
+| Splash rounding | Stomp floored, Splash did not — different damage for identical inputs. |
+| `upgrade_unit` | missing the `version < 115` damage-inheritance gate both other retype paths have. |
+| Post-upgrade vision | had lost the Mountain clause; a unit upgraded on a mountain revealed r=1 instead of 2. |
+| Hub destroy | refunded base `reward_pop`, so destroying a level-4 Sawmill removed 1 pop, not 4. |
+| Lost City | granted only `CityWall` on a level-3 city, desyncing `required = level - 1` so slot 2 was offered twice. Now grants `[Workshop, CityWall]`. |
+| `eco_plan` SPT | used a flat base of 1; the engine's base is `city.production`, which tracks **level**. A level-5 city yields 5. |
+| `ai/scoring.rs` pop | credited Market `adj_count` population though its `reward_pop` is 0, and hardcoded Forge's `×2`. |
+| Super units | `ai/scoring.rs` and `self_play.rs` tested `== UnitType::Giant`, so Gaami/Crab/DragonEgg/Centipede were invisible to the summon heuristic **and to `avg_giants_made`** — a metric this campaign has been steering by. |
+| Resource visibility | `settings/resources.rs::visible_required` was declared, populated for 3 of 8 resources, and **never read**; `functions.rs` hardcoded a different rule. Table completed and adopted (Verdi's call). Starfish now needs Fishing/Sailing/Navigation. |
+| Territory writers | four writers disagreed on radius and on whether the city tile is a member. Canonical (Verdi's call): `get_square_indices(city.idx, border_size, size)` — a fresh city rules **9 tiles, its own included**. `post_load` was rebuilding every city at a fixed radius 2 with the centre dropped. |
+
+**New `src/rules/`** — `combat`, `economy`, `vision`, `capture`. Two-tier shape: `foo_with(...)` takes resolved context and does no lookups (the engine's hot path calls this), `foo(...)` resolves and delegates. One body each, so they cannot drift. A parameter controls **cost, never the answer** — counterfactuals are separately named (`partner_count` / `_planned` / `_ceiling`) rather than flagged.
+
+**Migrated:** engine build pay + build legality + `save_batch_cost` → `partner_count_with`; 8 army-value sites → `unit_worth` (which counts passengers and zeroes converted units, as the engine's own score does); build and harvest **move generation** → `territory_tiles` (ruling-city dedupe — a tile in two of your cities' `_territory` no longer emits the move twice); 5 vision copies; 4 promotion-threshold copies; 4 hardcoded prereq tables and the tech→resource table → `settings/*` via `strum::iter`; 3 city-score copies; `get_tiles_in_range` and `get_neighbors` → the shared helpers; 6 chebyshev closures.
+
+**Deliberately not migrated:** ~90 raw `explorers.contains` reads. They differ from `is_tile_explored` only when `_fow == false`, which training never uses, and several are inside `fow.rs`/`prediction.rs` where they *implement* fog rather than consume it.
+
+**Measured (n=128, seed 770425, vs Greedy, paired on maps).** This is the COMBINED effect of every merged change — unattributable between them, which was the accepted trade.
+
+| | before | after | Δ |
+|---|---|---|---|
+| win rate vs Greedy | 0.773 | 0.750 | −0.023 |
+| SPT@t10 | 8.67 | 8.85 | +0.18 |
+| owned tiles | 50.7 | 47.4 | **−3.4** |
+| realized hub level | 1.352 | 1.420 | +0.068 |
+| Sawmills built | 36 | **49** | +36% |
+| Windmills built | 89 | **60** | −33% |
+
+**Win rate moved −0.023 against a same-config repeat floor measured at 0.078 earlier this session — well inside noise, so no detectable strength regression.** The clearest real shift is hub composition: a third fewer Windmills, a third more Sawmills, and Forges appearing at all. Consistent with `ai/scoring.rs` no longer crediting Market fake population and with legality/pay now sharing one partner count.
+
+**Throughput: no measurable change.** Three reps each: before 172.7/161.8/135.3, after 159.0/169.3/126.6. The 135–173 spread inside a single build swamps any difference. **The prediction that making `get_structure_setting`/`get_resource_setting` return `&'static` (removing two HashSet allocations per call, on a path `moves/build.rs` runs per candidate tile) would be a net speedup is NOT supported** — it is correct and allocation-free, but it was not the bottleneck.
+
+**Guard tests** (`tests/rules_ssot.rs`, 8): ranged attacker takes no predicted retaliation; a fresh city rules 9 tiles including its own; partner count is player-scoped not city-scoped; level thresholds and super-unit slots; per-tribe super units; unit worth counts passengers and ignores converted; resource visibility comes from the table. **230 tests green.**
+
+**Method note worth keeping: the territory reshape and the resource-visibility change are real rule changes and not one pre-existing test objected.** Coverage in those areas was nil, which is precisely how the original copies drifted unnoticed.

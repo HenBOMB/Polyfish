@@ -36,8 +36,23 @@ macro_rules! adjacent {
     }};
 }
 
-/// Get structure settings by type
-pub fn get_structure_setting(struct_type: StructureType) -> StructureSetting {
+/// Get structure settings by type — cached, returns a shared `'static` reference
+/// built once per type. Previously this allocated two `HashSet`s on every call,
+/// and `moves/build.rs` calls it inside the per-tile x per-structure loop of
+/// `generate_build_moves`, so every rollout was allocating per candidate tile.
+pub fn get_structure_setting(struct_type: StructureType) -> &'static StructureSetting {
+    static TABLE: std::sync::LazyLock<rustc_hash::FxHashMap<StructureType, StructureSetting>> =
+        std::sync::LazyLock::new(|| {
+            use strum::IntoEnumIterator;
+            StructureType::iter()
+                .map(|s| (s, build_structure_setting(s)))
+                .collect()
+        });
+    &TABLE[&struct_type]
+}
+
+/// Build the settings for one structure type (called once per type at table init).
+fn build_structure_setting(struct_type: StructureType) -> StructureSetting {
     match struct_type {
         StructureType::None
         | StructureType::Village

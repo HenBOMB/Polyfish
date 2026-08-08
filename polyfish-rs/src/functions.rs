@@ -151,7 +151,6 @@ pub fn is_resource_visible_to_tribe(
     idx: Option<i32>,
 ) -> bool {
     use crate::settings::technology::has_technology;
-    use crate::types::TechnologyType;
 
     let tribe = match state.tribes.get(&tribe_id) {
         Some(t) => t,
@@ -168,26 +167,12 @@ pub fn is_resource_visible_to_tribe(
         return false; // strict? should be only ruins but visually its the same thing
     }
 
-    match resource_type {
-        // Fruit, Starfish, and Spores are always visible
-        ResourceType::Fruit
-        | ResourceType::Starfish
-        | ResourceType::Spores
-        | ResourceType::None => true,
-        // Crop requires Organization OR Farming
-        ResourceType::Crop => {
-            has_technology(&tribe.tech_vanilla, TechnologyType::Organization)
-                || has_technology(&tribe.tech_vanilla, TechnologyType::Farming)
-        }
-        // Metal requires Climbing
-        ResourceType::Metal => has_technology(&tribe.tech_vanilla, TechnologyType::Climbing),
-        // Game (animal) requires Hunting
-        ResourceType::Game => has_technology(&tribe.tech_vanilla, TechnologyType::Hunting),
-        // Fish requires Fishing
-        ResourceType::Fish => has_technology(&tribe.tech_vanilla, TechnologyType::Fishing),
-        // AquaCrop (Aquarion) - requires FreeDiving
-        ResourceType::AquaCrop => has_technology(&tribe.tech_vanilla, TechnologyType::FreeDiving),
-    }
+    let visible = &crate::settings::resources::get_resource_setting(resource_type).visible_required;
+    // Empty means unconditional; otherwise any one of the listed techs reveals it.
+    visible.is_empty()
+        || visible
+            .iter()
+            .any(|t| has_technology(&tribe.tech_vanilla, *t))
 }
 
 /// Get resource at a tile (respects tech visibility and FOW for current player)
@@ -478,31 +463,17 @@ pub fn get_defense_bonus(state: &GameState, unit: &UnitState) -> f32 {
 }
 
 /// Get city production (stars per turn)
-/// A Market's own level is capped here, so its income is too.
-pub const MARKET_MAX_LEVEL: i32 = 8;
+pub use crate::rules::economy::MARKET_MAX_LEVEL;
 
-/// Level of an adjacency-yield hub (Sawmill/Windmill/Forge) = the number of
-/// friendly adjacent partner structures it lists in `adjacent_types`. This is
-/// the same count `actions::structure::build_structure` multiplies `reward_pop`
-/// by, so pop and Market income read one definition of "level".
+/// Level of an adjacency-yield hub. Delegates to the SSOT so pop payout, Market
+/// income and every AI consumer read one definition.
 pub fn hub_level(
     state: &GameState,
     idx: i32,
     hub_type: StructureType,
     owner: PlayerId,
 ) -> i32 {
-    let hub = crate::settings::structures::get_structure_setting(hub_type);
-    if hub.adjacent_types.is_empty() {
-        return 0;
-    }
-    get_adjacent_indices(state, idx, 1)
-        .into_iter()
-        .filter(|&p| {
-            state.tiles.get(&p).map_or(false, |t| t.owner == owner)
-                && get_structure_at(state, p)
-                    .map_or(false, |s| hub.adjacent_types.contains(&s.structure_type))
-        })
-        .count() as i32
+    crate::rules::economy::partner_count(state, idx, hub_type, owner)
 }
 
 pub fn get_city_production(state: &GameState, city: &CityState) -> i32 {
@@ -1071,14 +1042,16 @@ pub fn calculate_detailed_tribe_score(state: &GameState, player_id: PlayerId) ->
 
     // 100 per level, 20 per territory
     for city in &tribe.cities {
-        // City score: 100 + 50 per level above 1
+        // Base + per-level, from score.rs. Population is added separately below,
+        // which is why this is not `score::get_city_score`.
         let city_score = if city.level >= 1 {
-            100 + (city.level - 1) * 50
+            crate::score::CITY_BASE_SCORE
+                + (city.level - 1) * crate::score::CITY_LEVEL_UP_SCORE
         } else {
             0
         };
-        // Territory: 20 per tile
-        score += city_score + (city._territory.len() as i32 * 20);
+        score += city_score
+            + (city._territory.len() as i32 * crate::score::CITY_TERRITORY_SCORE);
 
         // Structure scores (Temples & Monuments)
         for &tile_idx in &city._territory {
@@ -1209,7 +1182,14 @@ pub fn calculate_combat_preview(
     );
 
     let damage_to_defender = result.attack_damage;
-    let damage_to_attacker = result.defense_damage;
+    // Retaliation is conditional (Stiff / Surprise / out of range). Without this
+    // gate every ranged and Surprise attack was predicted to take a full counter
+    // that never lands, and `ai::scoring` priced them as suicide.
+    let damage_to_attacker = if crate::rules::combat::can_retaliate(state, attacker, defender) {
+        result.defense_damage
+    } else {
+        0.0
+    };
     let defender_dies = def_health - damage_to_defender <= 0.0;
     let attacker_dies = atk_health - damage_to_attacker <= 0.0;
 
@@ -1364,8 +1344,20 @@ pub fn analyze_expansion(state: &GameState, player_id: PlayerId) -> ExpansionAna
                     let atk = get_unit_attack(state, enemy);
                     let def = get_unit_defense(unit);
 
-                    // Polytopia simplified non-retaliation calculation
-                    let dmg = (atk / (atk + def)) * atk * 4.5;
+                    // The real formula, not a simplification: the previous
+                    // inline version dropped both health ratios and the defence
+                    // bonus, so a full-HP attacker against a 1-HP walled
+                    // defender was scored wildly wrong.
+                    let dmg = crate::actions::units::calculate_combat(
+                        atk,
+                        enemy.health,
+                        get_unit_max_health(enemy),
+                        def,
+                        unit.health,
+                        get_unit_max_health(unit),
+                        get_defense_bonus(state, unit),
+                    )
+                    .attack_damage;
 
                     max_damage += dmg;
                     attackers.push(enemy.coords.idx);

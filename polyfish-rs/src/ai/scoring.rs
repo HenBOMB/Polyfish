@@ -4,7 +4,7 @@ use crate::game::Game;
 use crate::moves::Move;
 use crate::settings::get_structure_setting;
 use crate::types::{
-    AbilityType, CityRewardType, ModeType, MoveType, SkillType, StructureType, TerrainType,
+    AbilityType, CityRewardType, ModeType, MoveType, StructureType, TerrainType,
 };
 
 /// Score a move based on heuristics
@@ -270,9 +270,11 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                 score -= 15.0; // Avoid bloat if safe
             }
 
-            // 3. Super Unit / Giant preference
+            // 3. Super Unit preference — per tribe, not hardcoded to Giant
+            // (Polaris fields Gaami, Aquarion Crab, Elyrion DragonEgg, Cymanti
+            // Centipede).
             if let Ok(u_type) = mv.unit_type() {
-                if u_type == crate::types::UnitType::Giant {
+                if u_type == crate::settings::units::get_super_unit(tribe.tribe_type) {
                     score += 15.0;
                 }
             }
@@ -306,17 +308,7 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
 
                 // Adjacency and Roads
                 if let Ok(target) = mv.target_idx() {
-                    let prereqs: &[StructureType] = match s_type {
-                        StructureType::Sawmill => &[StructureType::LumberHut],
-                        StructureType::Forge => &[StructureType::Mine],
-                        StructureType::Windmill => &[StructureType::Farm],
-                        StructureType::Market => &[
-                            StructureType::Sawmill,
-                            StructureType::Windmill,
-                            StructureType::Forge,
-                        ],
-                        _ => &[],
-                    };
+                    let prereqs = &get_structure_setting(s_type).adjacent_types;
 
                     // Future Adjacency Prediction (Clustering Potential)
                     // If building a prereq, value empty tiles that could host the Hub.
@@ -407,17 +399,7 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                         | StructureType::Windmill
                         | StructureType::Market => {
                             // Re-calculate adj_count for pop estimation
-                            let prereqs: &[StructureType] = match s_type {
-                                StructureType::Sawmill => &[StructureType::LumberHut],
-                                StructureType::Forge => &[StructureType::Mine],
-                                StructureType::Windmill => &[StructureType::Farm],
-                                StructureType::Market => &[
-                                    StructureType::Sawmill,
-                                    StructureType::Windmill,
-                                    StructureType::Forge,
-                                ],
-                                _ => &[],
-                            };
+                            let prereqs = &get_structure_setting(s_type).adjacent_types;
                             let adj = get_adjacent_indices(state, target as i32, 1);
                             let adj_count = adj
                                 .iter()
@@ -433,10 +415,11 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                                 })
                                 .count();
 
-                            pop_gain = match s_type {
-                                StructureType::Forge => adj_count as i32 * 2,
-                                _ => adj_count as i32,
-                            };
+                            // Read the yield from the table. Market's reward_pop
+                            // is 0 — it pays stars — so crediting it population
+                            // invented pop that never arrives.
+                            pop_gain = get_structure_setting(s_type).reward_pop
+                                * adj_count as i32;
                         }
                         _ => {}
                     }
@@ -843,13 +826,14 @@ pub(crate) fn nearest_visible_capturable(
     let mut best: Option<(Coords, i32)> = None;
     for (&idx, structure) in state.structures.iter() {
         let Some(s) = structure else { continue };
-        if !matches!(s.structure_type, StructureType::Village | StructureType::Ruin) {
-            continue;
-        }
-        let Some(tile) = state.tiles.get(&idx) else {
-            continue;
-        };
-        if tile.owner != 0 || !tile.explorers.contains(&tribe_id) {
+        let _ = s;
+        if !crate::rules::capture::is_capturable(
+            state,
+            idx,
+            tribe_id,
+            crate::rules::capture::CaptureKind::NEUTRAL,
+            true,
+        ) {
             continue;
         }
         let coords = Coords::from_index(idx, map_size);
@@ -951,16 +935,14 @@ fn unit_vision_range(
     unit: &crate::states::UnitState,
     at_idx: i32,
 ) -> i32 {
-    if crate::functions::has_skill(unit, SkillType::Scout)
-        || state
+    // Evaluated at `at_idx`, which may not be where the unit currently stands.
+    crate::rules::vision::unit_vision_range_with(
+        &crate::settings::units::get_unit_setting(unit.unit_type).skills,
+        state
             .tiles
             .get(&at_idx)
-            .map_or(false, |t| t.terrain_type == TerrainType::Mountain)
-    {
-        2
-    } else {
-        1
-    }
+            .map_or(false, |t| t.terrain_type == TerrainType::Mountain),
+    )
 }
 
 /// How many unexplored tiles the unit would reveal by stepping to `dest_idx`:

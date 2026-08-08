@@ -8,6 +8,10 @@ pub struct ResourceSetting {
     pub cost: Option<i32>,
     pub tech_required: TechnologyType,
     pub struct_required: Option<StructureType>,
+    /// Techs that reveal this resource — ANY one suffices. Empty means always
+    /// visible (Fruit, Spores). Read by `functions::is_resource_visible_to_tribe`;
+    /// it used to be declared here and ignored, with a different rule hardcoded
+    /// in that function.
     pub visible_required: Vec<TechnologyType>,
     pub requires_capture: bool,
     pub reward_pop: i32,
@@ -16,7 +20,19 @@ pub struct ResourceSetting {
 }
 
 /// Get resource settings by type
-pub fn get_resource_setting(resource_type: ResourceType) -> ResourceSetting {
+pub fn get_resource_setting(resource_type: ResourceType) -> &'static ResourceSetting {
+    static TABLE: std::sync::LazyLock<rustc_hash::FxHashMap<ResourceType, ResourceSetting>> =
+        std::sync::LazyLock::new(|| {
+            use strum::IntoEnumIterator;
+            ResourceType::iter()
+                .map(|r| (r, build_resource_setting(r)))
+                .collect()
+        });
+    &TABLE[&resource_type]
+}
+
+/// Build the settings for one resource type (called once per type at table init).
+fn build_resource_setting(resource_type: ResourceType) -> ResourceSetting {
     use ResourceType::*;
     use TechnologyType::*;
 
@@ -26,6 +42,7 @@ pub fn get_resource_setting(resource_type: ResourceType) -> ResourceSetting {
         Game => ResourceSetting {
             cost: Some(2),
             tech_required: Hunting,
+            visible_required: vec![Hunting],
             reward_pop: 1,
             ..Default::default()
         },
@@ -39,6 +56,7 @@ pub fn get_resource_setting(resource_type: ResourceType) -> ResourceSetting {
         Fish => ResourceSetting {
             cost: Some(2),
             tech_required: Fishing,
+            visible_required: vec![Fishing],
             reward_pop: 1,
             ..Default::default()
         },
@@ -71,6 +89,7 @@ pub fn get_resource_setting(resource_type: ResourceType) -> ResourceSetting {
         },
         AquaCrop => ResourceSetting {
             tech_required: BeyondComprehension,
+            visible_required: vec![FreeDiving],
             reward_pop: 2,
             ..Default::default()
         },

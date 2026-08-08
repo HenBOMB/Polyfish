@@ -97,10 +97,7 @@ pub fn generate_promote_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>)
     if let Some(tribe) = state.tribes.get(&pov_id) {
         for unit in &tribe.units {
             // Check promotion criteria
-            if unit.kills >= 3
-                && !unit.veteran
-                && !crate::functions::has_skill(unit, crate::types::SkillType::Static)
-            {
+            if crate::rules::combat::can_promote(unit) {
                 // Polytopia: Can promote even if moved? Yes.
                 moves.push(Box::new(PromoteMove::new(unit.coords.idx)));
             }

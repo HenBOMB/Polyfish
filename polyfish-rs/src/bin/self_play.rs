@@ -618,7 +618,7 @@ fn tempo_sample(state: &GameState, pov: PlayerId) -> Option<TempoSample> {
     let army_stars: i32 = tribe
         .units
         .iter()
-        .map(|u| polyfish::settings::units::get_unit_setting(u.unit_type).cost)
+        .map(polyfish::rules::combat::unit_worth)
         .sum();
     Some(TempoSample {
         turn: state.settings.turn,
@@ -648,15 +648,18 @@ fn unit_tally(state: &GameState) -> HashMap<PlayerId, (i32, i32, i32)> {
         .tribes
         .iter()
         .map(|(id, t)| {
+            // Per-tribe super unit, not just Giant — Polaris/Aquarion/Elyrion/
+            // Cymanti super units were invisible to this metric.
+            let super_unit = polyfish::settings::units::get_super_unit(t.tribe_type);
             let giants = t
                 .units
                 .iter()
-                .filter(|u| u.unit_type == polyfish::types::UnitType::Giant)
+                .filter(|u| u.unit_type == super_unit)
                 .count() as i32;
             let stars: i32 = t
                 .units
                 .iter()
-                .map(|u| polyfish::settings::units::get_unit_setting(u.unit_type).cost)
+                .map(polyfish::rules::combat::unit_worth)
                 .sum();
             (*id, (t.units.len() as i32, giants, stars))
         })
@@ -1110,7 +1113,7 @@ fn mean_net_army_ratios(
         let stars: i32 = t
             .units
             .iter()
-            .map(|u| polyfish::settings::units::get_unit_setting(u.unit_type).cost)
+            .map(polyfish::rules::combat::unit_worth)
             .sum();
         if !t.units.is_empty() {
             worth += stars as f32 / t.units.len() as f32;

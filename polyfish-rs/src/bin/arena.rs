@@ -281,7 +281,7 @@ fn sample_turn(state: &polyfish::states::GameState, swap: bool) -> TurnSample {
             s.unit_cost[c] = t
                 .units
                 .iter()
-                .map(|u| polyfish::settings::units::get_unit_setting(u.unit_type).cost)
+                .map(polyfish::rules::combat::unit_worth)
                 .sum();
             s.techs[c] = t.tech_vanilla.len();
         }

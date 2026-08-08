@@ -161,21 +161,11 @@ fn count_terrain(
     count
 }
 
+/// Adjacent tiles — a thin shim over the shared helper, kept because callers
+/// here have no `&GameState` to hand.
 fn get_neighbors(idx: i32, size: i32) -> Vec<i32> {
-    let x = idx % size;
-    let y = idx / size;
-    let mut neighbors = Vec::new();
-    for dy in -1..=1 {
-        for dx in -1..=1 {
-            if dx == 0 && dy == 0 {
-                continue;
-            }
-            let nx = x + dx;
-            let ny = y + dy;
-            if nx >= 0 && nx < size && ny >= 0 && ny < size {
-                neighbors.push(ny * size + nx);
-            }
-        }
-    }
-    neighbors
+    crate::functions::get_square_indices(idx, 1, size)
+        .into_iter()
+        .filter(|&n| n != idx)
+        .collect()
 }

@@ -19,6 +19,7 @@ pub mod mapgen;
 pub mod moves;
 pub mod prediction;
 pub mod recorder;
+pub mod rules;
 pub mod replayer;
 pub mod score;
 pub mod settings;

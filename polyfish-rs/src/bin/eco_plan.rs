@@ -537,7 +537,9 @@ fn plan_city(
     // giant at every slot >=4, so it is deliberately not added -- the frontier
     // shows giants and SPT as competing uses of the same slots.
     let is_capital = state.tiles.get(&city_idx).map_or(false, |t| t.capital_of != 0);
-    let spt = 1 + i32::from(is_capital) + i32::from(level >= 2) + b.market_spt;
+    // Base production tracks the city's LEVEL (actions/city.rs increments it per
+    // level-up), so a level-5 city yields 5 — not the flat 1 this used to assume.
+    let spt = level + i32::from(is_capital) + i32::from(level >= 2) + b.market_spt;
 
     CityPlan {
         scenario: sc.name,
@@ -872,7 +874,7 @@ fn enumerate_empire(
             stars += b.stars;
             pop += city_pop;
             giants += giants_at_level(level);
-            spt += 1 + i32::from(is_capital) + i32::from(level >= 2) + income[ci];
+            spt += level + i32::from(is_capital) + i32::from(level >= 2) + income[ci];
         }
         if !feasible {
             continue;

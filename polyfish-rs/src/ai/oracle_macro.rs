@@ -61,12 +61,12 @@ pub struct MacroGoal {
 pub fn scripted_goal(state: &GameState, player: PlayerId, tier3_bought: u32) -> MacroGoal {
     let size = state.settings.size as i32;
     let cheb =
-        |a: i32, b: i32| ((a / size) - (b / size)).abs().max(((a % size) - (b % size)).abs());
+        |a: i32, b: i32| crate::functions::get_chebyshev_distance(a, b, size);
     let Some(tribe) = state.tribes.get(&player) else {
         return MacroGoal::default();
     };
-    let unit_cost =
-        |u: &crate::states::UnitState| crate::settings::units::get_unit_setting(u.unit_type).cost;
+    // Engine accounting: cost + passenger, zero once converted.
+    let unit_cost = |u: &crate::states::UnitState| crate::rules::combat::unit_worth(u);
     let own_units: Vec<(i32, i32)> =
         tribe.units.iter().map(|u| (u.coords.idx, unit_cost(u))).collect();
     let our_army: i32 = own_units.iter().map(|(_, c)| c).sum();
@@ -196,12 +196,12 @@ const GROW_HORIZON_TURNS: i32 = 3;
 pub fn stance_strength(state: &GameState, player: PlayerId) -> StanceStrength {
     let size = state.settings.size as i32;
     let cheb =
-        |a: i32, b: i32| ((a / size) - (b / size)).abs().max(((a % size) - (b % size)).abs());
+        |a: i32, b: i32| crate::functions::get_chebyshev_distance(a, b, size);
     let Some(tribe) = state.tribes.get(&player) else {
         return StanceStrength::default();
     };
-    let unit_cost =
-        |u: &crate::states::UnitState| crate::settings::units::get_unit_setting(u.unit_type).cost;
+    // Engine accounting: cost + passenger, zero once converted.
+    let unit_cost = |u: &crate::states::UnitState| crate::rules::combat::unit_worth(u);
 
     let our_army: i32 = tribe.units.iter().map(unit_cost).sum();
     let their_army: i32 = state
@@ -410,14 +410,12 @@ pub fn save_batch_cost(state: &GameState, player: PlayerId, tier3_bought: u32) -
                 if !s.terrain_types.contains(&tile.terrain_type) || tile.is_algae() {
                     return false;
                 }
-                let partners = crate::functions::get_adjacent_indices(state, idx, 1)
-                    .iter()
-                    .filter(|&&n| {
-                        state.tiles.get(&n).map_or(false, |t| t.owner == player)
-                            && crate::functions::get_structure_type_at(state, n)
-                                .map_or(false, |st| s.adjacent_types.contains(&st))
-                    })
-                    .count() as i32;
+                let partners = crate::rules::economy::partner_count_with(
+                    state,
+                    idx,
+                    &s.adjacent_types,
+                    player,
+                );
                 partners >= need
             });
             if placeable {
@@ -557,7 +555,7 @@ pub fn guessed_village_sites(
         return Vec::new();
     }
     let cheb =
-        |a: i32, b: i32| ((a / size) - (b / size)).abs().max(((a % size) - (b % size)).abs());
+        |a: i32, b: i32| crate::functions::get_chebyshev_distance(a, b, size);
     let explored =
         |idx: i32| state.tiles.get(&idx).map_or(false, |t| t.explorers.contains(&player));
 
@@ -1025,7 +1023,7 @@ pub fn market_ready(state: &GameState, player: PlayerId) -> bool {
     if tribe.cities.len() < COMMIT_CITY_TARGET {
         return false;
     }
-    let hubs = crate::settings::structures::get_structure_setting(StructureType::Market)
+    let hubs = &crate::settings::structures::get_structure_setting(StructureType::Market)
         .adjacent_types;
     state.structures.iter().any(|(idx, s)| {
         s.as_ref().map_or(false, |s| hubs.contains(&s.structure_type))
@@ -1158,16 +1156,13 @@ pub fn passes_capture_first(state: &GameState, m: &dyn Move) -> bool {
 /// structure on an unowned tile that `player` has explored (the pursuit
 /// channel's predicate — see features.rs).
 pub fn still_capturable(state: &GameState, idx: i32, player: PlayerId) -> bool {
-    let is_village = state
-        .structures
-        .get(&idx)
-        .and_then(|s| s.as_ref())
-        .map_or(false, |s| s.structure_type == StructureType::Village);
-    is_village
-        && state
-            .tiles
-            .get(&idx)
-            .map_or(false, |t| t.owner == 0 && t.explorers.contains(&player))
+    crate::rules::capture::is_capturable(
+        state,
+        idx,
+        player,
+        crate::rules::capture::CaptureKind::OPEN_VILLAGE,
+        true,
+    )
 }
 
 /// v6: Chebyshev reach within which a lost/enemy-taken village stays a
@@ -1229,7 +1224,7 @@ pub fn nearest_capturable_village(state: &GameState, player: PlayerId) -> Option
         return None;
     }
     let cheb =
-        |a: i32, b: i32| ((a / size) - (b / size)).abs().max(((a % size) - (b % size)).abs());
+        |a: i32, b: i32| crate::functions::get_chebyshev_distance(a, b, size);
     state
         .structures
         .keys()
@@ -1280,7 +1275,7 @@ pub fn assign_expand_targets(
         return Vec::new();
     }
     let cheb =
-        |a: i32, b: i32| ((a / size) - (b / size)).abs().max(((a % size) - (b % size)).abs());
+        |a: i32, b: i32| crate::functions::get_chebyshev_distance(a, b, size);
     // v6: real (explored) targets outrank fog guesses in pairing — a scarce
     // unit must never be pinned to a guess while a discovered village waits.
     let is_guess = |t: i32| {
@@ -1487,7 +1482,7 @@ fn archetype_scores(
     // condition under which an archer backline pays.
     let size = state.settings.size as i32;
     let cheb =
-        |a: i32, b: i32| ((a / size) - (b / size)).abs().max(((a % size) - (b % size)).abs());
+        |a: i32, b: i32| crate::functions::get_chebyshev_distance(a, b, size);
     let contact = state.tribes.iter().filter(|(id, _)| **id != player).any(|(_, t)| {
         t.units.iter().any(|e| {
             let seen = state
