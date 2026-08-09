@@ -1404,7 +1404,7 @@ fn materialize(
 
     let mut plan: Vec<(i32, StructureType)> = buys
         .iter()
-        .filter(|b| b.what == partner_name || b.what.ends_with(partner_name))
+        .filter(|b| is_partner_buy(b, partner_name))
         .map(|b| b.idx)
         .filter(|i| Some(*i) != hub)
         .map(|i| (i, lane_partner_type(sc.lane)))
@@ -1433,7 +1433,7 @@ fn plan_len(state: &GameState, territory: &[i32], sc: Scenario, hub: Option<i32>
     let (buys, _, _) = tile_options(state, territory, sc);
     let (_, partner_name) = lane_hub(sc.lane);
     buys.iter()
-        .filter(|b| b.what == partner_name || b.what.ends_with(partner_name))
+        .filter(|b| is_partner_buy(b, partner_name))
         .map(|b| b.idx)
         .filter(|i| Some(*i) != hub)
         .count()
