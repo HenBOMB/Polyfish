@@ -119,6 +119,17 @@ fn market_chain() -> [TechnologyType; 3] {
 }
 
 fn tech_bill(chain: &[TechnologyType], owned: &HashSet<TechnologyType>, cities: i32) -> i32 {
+    tech_bill_itemised(chain, owned, cities).0
+}
+
+/// The bill, plus the techs actually charged for — the build card needs to name
+/// them, and deriving the list separately would let it drift from the price.
+fn tech_bill_itemised(
+    chain: &[TechnologyType],
+    owned: &HashSet<TechnologyType>,
+    cities: i32,
+) -> (i32, Vec<TechnologyType>) {
+    let mut bought = Vec::new();
     let mut bill = 0;
     let mut have = owned.clone();
     for t in chain {
@@ -146,10 +157,11 @@ fn tech_bill(chain: &[TechnologyType], owned: &HashSet<TechnologyType>, cities: 
                 polyfish::settings::technology::tech_tier(cur),
                 false,
             );
+            bought.push(cur);
             have.insert(cur);
         }
     }
-    bill
+    (bill, bought)
 }
 
 /// The tech a structure needs, read off the tech table via the engine's own
@@ -828,11 +840,16 @@ fn allocate_mode(
 /// what it costs and yields.
 #[derive(Clone)]
 struct EmpirePlan {
-    scenario: &'static str,
+    scenario: Scenario,
     stars: i32,
     pop: i32,
     giants: i32,
     spt: i32,
+    /// Per-city pop and level, and the techs the plan pays for — carried so a
+    /// build card can be printed without re-deriving (and mis-deriving) them.
+    city_pop: Vec<i32>,
+    city_level: Vec<i32>,
+    techs: Vec<TechnologyType>,
     /// Monuments this plan consumes, per city. Empire-wide and earned, so this
     /// is a scarcity cost the star total cannot express.
     monuments: Vec<i32>,
@@ -922,7 +939,6 @@ fn enumerate_empire(
         })
         .collect();
 
-    let market_tech = tech_bill(&market_chain(), owned, num_cities);
 
     let mut combos: Vec<Vec<Option<i32>>> = Vec::new();
     let total: usize = cands.iter().map(|c| c.len()).product();
@@ -1051,6 +1067,8 @@ fn enumerate_empire(
         let mut stars = 0;
         let mut plan_techs: HashSet<TechnologyType> = HashSet::new();
         let (mut pop, mut giants, mut spt) = (0, 0, 0);
+        let mut city_pop_v = vec![0; n];
+        let mut city_level_v = vec![0; n];
         for ci in 0..n {
             let b = city_build(
                 state, &terr[ci], sc, alloc[ci], hubs[ci], markets[ci],
@@ -1061,6 +1079,8 @@ fn enumerate_empire(
                 city_pop += 3; // PopGrowth, the alternative to the border
             }
             let level = level_at_pop(city_pop);
+            city_pop_v[ci] = city_pop;
+            city_level_v[ci] = level;
             let is_capital =
                 state.tiles.get(&cities[ci]).map_or(false, |t| t.capital_of != 0);
             stars += b.stars;
@@ -1074,19 +1094,23 @@ fn enumerate_empire(
         let mut extra: Vec<TechnologyType> = plan_techs.into_iter().collect();
         extra.sort_by_key(|t| *t as i32);
         chain.extend(extra);
-        stars += tech_bill(&chain, owned, num_cities);
         if markets.iter().any(|m| m.is_some()) {
-            stars += market_tech;
+            chain.extend(market_chain());
         }
+        let (bill, bought) = tech_bill_itemised(&chain, owned, num_cities);
+        stars += bill;
         if !seen_score.insert((stars, giants, spt, alloc.iter().sum::<i32>())) {
             continue;
         }
         out.push(EmpirePlan {
-            scenario: sc.name,
+            scenario: sc,
             stars,
             pop,
             giants,
             spt,
+            city_pop: city_pop_v,
+            city_level: city_level_v,
+            techs: bought,
             monuments: alloc,
             hubs: hubs.clone(),
             levels: levels.clone(),
@@ -1499,6 +1523,142 @@ fn optimal_report(state: &GameState, cities: &[i32], monuments: i32, lane: Lane)
     }
 }
 
+
+/// What a plan is optimised FOR. The frontier answers "what are the options";
+/// these answer "give me the build for what I need right now".
+#[derive(Clone, Copy, PartialEq)]
+enum Goal {
+    Spt,
+    Military,
+    Giants,
+    Pop,
+    Cheap,
+    Eco,
+}
+
+fn parse_goal(s: &str) -> Option<Goal> {
+    match s.trim().to_lowercase().as_str() {
+        "spt" | "greed" => Some(Goal::Spt),
+        "military" | "army" => Some(Goal::Military),
+        "giants" => Some(Goal::Giants),
+        "pop" => Some(Goal::Pop),
+        "cheap" | "cheapest" => Some(Goal::Cheap),
+        "eco" | "efficiency" => Some(Goal::Eco),
+        _ => None,
+    }
+}
+
+fn goal_name(g: Goal) -> &'static str {
+    match g {
+        Goal::Spt => "MAX SPT (full greed)",
+        Goal::Military => "MILITARY NOW (cheapest stars per super unit)",
+        Goal::Giants => "MAX SUPER UNITS (ceiling, cost no object)",
+        Goal::Pop => "MAX POPULATION",
+        Goal::Cheap => "CHEAPEST VIABLE (fewest stars, then fewest monuments)",
+        Goal::Eco => "BEST ECONOMY (SPT per star)",
+    }
+}
+
+/// Pick the plan that best serves `g`. Every ordering ends with fewer stars and
+/// then fewer monuments, so ties resolve toward the plan that spends least.
+fn pick_for_goal<'a>(front: &'a [EmpirePlan], g: Goal) -> Option<&'a EmpirePlan> {
+    let thrift = |p: &EmpirePlan| (-p.stars, -p.monuments_used());
+    front.iter().max_by(|a, b| {
+        let key = |p: &EmpirePlan| match g {
+            Goal::Spt => (p.spt, p.giants, 0),
+            // Tempo, not ceiling: the best stars-per-super-unit rate. Plans with
+            // no super unit rank last rather than dividing by zero.
+            Goal::Military => {
+                if p.giants > 0 {
+                    (-(p.stars * 100 / p.giants), p.giants, p.spt)
+                } else {
+                    (i32::MIN, 0, 0)
+                }
+            }
+            Goal::Giants => (p.giants, p.spt, 0),
+            Goal::Pop => (p.pop, p.spt, 0),
+            // Monuments are earned, so the cheapest plan is the one that spends
+            // fewest of BOTH currencies before it starts trading up on output.
+            Goal::Cheap => (-p.stars, -p.monuments_used(), p.spt),
+            // Integer SPT per 100 stars, so the comparison stays exact.
+            Goal::Eco => (p.spt * 100 / p.stars.max(1), p.spt, p.giants),
+        };
+        key(a).cmp(&key(b)).then(thrift(a).cmp(&thrift(b)))
+    })
+}
+
+/// The full build for one plan: what to put where, what it costs, what it pays.
+fn print_build_card(
+    state: &GameState,
+    cities: &[i32],
+    plan: &EmpirePlan,
+    monuments: i32,
+    g: Goal,
+) {
+    let sc = plan.scenario;
+    let terr = allocate_value(state, cities, sc, monuments);
+    let (_, partner_name) = lane_hub(sc.lane);
+    let hub_type = lane_hub(sc.lane).0;
+
+    println!("\n{}", "=".repeat(112));
+    println!("  BUILD FOR: {}", goal_name(g));
+    println!("{}", "=".repeat(112));
+    println!(
+        "  strategy {} | {} stars | pop {} | level-driven giants {} | {} SPT | {} monument(s)",
+        sc.name,
+        plan.stars,
+        plan.pop,
+        plan.giants,
+        plan.spt,
+        plan.monuments_used()
+    );
+    if plan.techs.is_empty() {
+        println!("  techs to buy: none (already owned)");
+    } else {
+        let names: Vec<String> = plan.techs.iter().map(|t| format!("{t:?}")).collect();
+        println!("  techs to buy: {}", names.join(", "));
+    }
+
+    for (ci, &c) in cities.iter().enumerate() {
+        let (buys, _, _) = tile_options(state, &terr[ci], sc);
+        let hub = plan.hubs[ci];
+        let market = plan.markets[ci];
+        let displaced = |b: &Buy| b.occupies && (Some(b.idx) == hub || Some(b.idx) == market);
+        let mut by_kind: std::collections::BTreeMap<&str, Vec<i32>> = Default::default();
+        for b in buys.iter().filter(|b| !displaced(b)) {
+            by_kind.entry(b.what).or_default().push(b.idx);
+        }
+        println!(
+            "\n  city {c} — pop {} (level {}), {} monument(s)",
+            plan.city_pop[ci], plan.city_level[ci], plan.monuments[ci]
+        );
+        match hub {
+            Some(h) => {
+                let ring = if get_chebyshev_distance(h, c, state.settings.size) > 1 {
+                    "outer ring — needs BorderGrowth first"
+                } else {
+                    "inner ring"
+                };
+                println!(
+                    "    {:?} at {h}, level {} ({ring})",
+                    hub_type, plan.levels[ci]
+                );
+            }
+            None => println!("    no {hub_type:?}"),
+        }
+        if let Some(m) = market {
+            println!("    Market at {m}, +{} SPT", plan.market_income[ci]);
+        }
+        for (kind, tiles) in by_kind {
+            let tag = if kind == partner_name { " (feeds the hub)" } else { "" };
+            println!("    {kind:<12} x{:<3} {tiles:?}{tag}", tiles.len());
+        }
+    }
+    println!(
+        "\n  Note: \"giants\" counts super-unit reward slots (every city level >= 4), the only\n  military output this planner models. It prices the ECONOMY that funds an army,\n  not the army itself — read SPT as the sustain rate for unit production."
+    );
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let get = |flag: &str| -> Option<String> {
@@ -1561,6 +1721,15 @@ fn main() {
     // which city each one goes to.
     let monuments: i32 = get("--monuments").and_then(|s| s.parse().ok()).unwrap_or(3);
     let standalone = args.iter().any(|a| a == "--standalone");
+    let goal = get("--goal").and_then(|g| {
+        let parsed = parse_goal(&g);
+        if parsed.is_none() {
+            eprintln!(
+                "unknown --goal '{g}'; use spt | military | giants | pop | cheap | eco"
+            );
+        }
+        parsed
+    });
     let with_markets = !args.iter().any(|a| a == "--no-markets");
     if standalone {
         println!("STANDALONE: each city scored on its full square (tiles double-counted)");
@@ -1775,7 +1944,7 @@ fn main() {
         };
         println!(
             "  {:<20}{:>8}{:>7}{:>8}{:>7}{:>5}{:>10}  {:<26}{:<22}{}",
-            p.scenario,
+            p.scenario.name,
             p.stars,
             p.pop,
             p.giants,
@@ -1786,5 +1955,17 @@ fn main() {
             mkts.join(" "),
             tag
         );
+    }
+
+    // The frontier says what the options are; a goal says which one to build.
+    let goals: Vec<Goal> = match goal {
+        Some(g) => vec![g],
+        None => Vec::new(),
+    };
+    for g in goals {
+        match pick_for_goal(&front, g) {
+            Some(p) => print_build_card(&state, &cities, p, monuments, g),
+            None => println!("\n  no plan satisfies {}", goal_name(g)),
+        }
     }
 }
