@@ -717,15 +717,20 @@ fn plan_city(
 /// claimant's plan gains more pop from it. Nearest-city was the first rule and
 /// it was wrong — it handed the capital tiles it had no use for while capping a
 /// neighbour's Sawmill a level below what the map supports.
+/// The same scenario for every city — the pure (unmixed) empire.
+fn uniform(sc: Scenario, n: usize) -> Vec<Scenario> {
+    vec![sc; n]
+}
+
 fn allocate_value(
     state: &GameState,
     cities: &[i32],
-    sc: Scenario,
+    scs: &[Scenario],
     monuments: i32,
 ) -> Vec<Vec<i32>> {
-    let radius = if sc.border_growth { 2 } else { 1 };
     let mut claimants: HashMap<i32, Vec<usize>> = HashMap::new();
     for (ci, &c) in cities.iter().enumerate() {
+        let radius = if scs[ci].border_growth { 2 } else { 1 };
         for idx in get_adjacent_indices(state, c, radius).into_iter().chain([c]) {
             if state.tiles.contains_key(&idx) {
                 claimants.entry(idx).or_default().push(ci);
@@ -762,10 +767,11 @@ fn allocate_value(
             .iter()
             .map(|&ci| {
                 let mut with = terr[ci].clone();
-                let base = build_out(state, cities[ci], &with, sc, monuments).pop;
+                let base = build_out(state, cities[ci], &with, scs[ci], monuments).pop;
                 with.push(idx);
                 with.sort();
-                let gain = build_out(state, cities[ci], &with, sc, monuments).pop - base;
+                let gain =
+                    build_out(state, cities[ci], &with, scs[ci], monuments).pop - base;
                 (
                     -gain,
                     get_chebyshev_distance(idx, cities[ci], state.settings.size),
@@ -840,7 +846,9 @@ fn allocate_mode(
 /// what it costs and yields.
 #[derive(Clone)]
 struct EmpirePlan {
-    scenario: Scenario,
+    /// One scenario per city: a mixed empire can run the forest lane in a
+    /// wooded city and the farm lane next door.
+    scenarios: Vec<Scenario>,
     stars: i32,
     pop: i32,
     giants: i32,
@@ -863,6 +871,29 @@ impl EmpirePlan {
     fn monuments_used(&self) -> i32 {
         self.monuments.iter().sum()
     }
+
+    /// The scenario name when every city agrees, otherwise a per-city sketch.
+    fn label(&self) -> String {
+        let first = self.scenarios[0].name;
+        if self.scenarios.iter().all(|s| s.name == first) {
+            return first.to_string();
+        }
+        let parts: Vec<&str> = self.scenarios.iter().map(|s| sc_short(*s)).collect();
+        format!("mixed {}", parts.join("/"))
+    }
+}
+
+/// Compact scenario tag for mixed-empire rows: lane initial, +b for border,
+/// +bc when it also converts terrain.
+fn sc_short(sc: Scenario) -> &'static str {
+    match (sc.lane, sc.border_growth, sc.convert) {
+        (Lane::Forest, false, _) => "S",
+        (Lane::Forest, true, false) => "S+b",
+        (Lane::Forest, true, true) => "S+bc",
+        (Lane::Farm, false, _) => "W",
+        (Lane::Farm, true, false) => "W+b",
+        (Lane::Farm, true, true) => "W+bc",
+    }
 }
 
 /// Enumerate hub sites JOINTLY across cities. Markets are one per city but a
@@ -874,7 +905,7 @@ fn enumerate_empire(
     state: &GameState,
     cities: &[i32],
     terr: &[Vec<i32>],
-    sc: Scenario,
+    scs: &[Scenario],
     owned: &HashSet<TechnologyType>,
     monuments: i32,
     top_k: usize,
@@ -897,15 +928,30 @@ fn enumerate_empire(
         v.sort();
         v
     };
-    // Empire-wide partner tiles: what any hub can collect, wherever it sits.
-    let empire_partners: HashSet<i32> = {
-        let (buys, _, _) = tile_options(state, &union, sc);
-        let (_, partner_name) = lane_hub(sc.lane);
-        buys.iter()
+    // Empire-wide partner tiles, keyed by the structure that will actually stand
+    // there. With a mixed empire a tile holds whatever ITS OWN city's lane
+    // builds, so a Sawmill on a border collects the neighbour's LumberHuts only
+    // if that neighbour is running the forest lane.
+    let mut partners_by_type: HashMap<StructureType, HashSet<i32>> = HashMap::new();
+    for ci in 0..n {
+        let (buys, _, _) = tile_options(state, &terr[ci], scs[ci]);
+        let (_, partner_name) = lane_hub(scs[ci].lane);
+        let ptype = lane_partner_type(scs[ci].lane);
+        let e = partners_by_type.entry(ptype).or_default();
+        for b in buys
+            .iter()
             .filter(|b| b.what == partner_name || b.what.ends_with(partner_name))
-            .map(|b| b.idx)
-            .collect()
+        {
+            e.insert(b.idx);
+        }
+    }
+    let empty_partners: HashSet<i32> = HashSet::new();
+    let partners_for = |ci: usize| -> &HashSet<i32> {
+        partners_by_type
+            .get(&lane_partner_type(scs[ci].lane))
+            .unwrap_or(&empty_partners)
     };
+    let _ = &union;
 
     // Candidates PER CITY, scored on empire-wide partners but sited only on
     // tiles that city owns — so `limited_per_city` holds by construction and
@@ -919,13 +965,13 @@ fn enumerate_empire(
                     let Some(tile) = state.tiles.get(&t) else { return false };
                     polyfish::functions::get_structure_at(state, t).is_none()
                         && (tile.terrain_type == TerrainType::Field
-                            || (sc.lane == Lane::Forest
+                            || (scs[ci].lane == Lane::Forest
                                 && tile.terrain_type == TerrainType::Forest))
                 })
                 .map(|t| {
                     let n = get_adjacent_indices(state, t, 1)
                         .into_iter()
-                        .filter(|a| empire_partners.contains(a) && *a != t)
+                        .filter(|a| partners_for(ci).contains(a) && *a != t)
                         .count() as i32;
                     (-n, t)
                 })
@@ -958,8 +1004,8 @@ fn enumerate_empire(
         let base: Vec<BuildOut> = (0..n)
             .map(|ci| {
                 city_build(
-                    state, &terr[ci], sc, monuments, hubs[ci], None,
-                    Some(&empire_partners),
+                    state, &terr[ci], scs[ci], monuments, hubs[ci], None,
+                    Some(partners_for(ci)),
                 )
             })
             .collect();
@@ -1014,7 +1060,8 @@ fn enumerate_empire(
         let mut floor = vec![0i32; n];
         let mut feasible = true;
         for ci in 0..n {
-            match monuments_to_reach(state, cities[ci], &terr[ci], sc, hubs[ci], monuments) {
+            match monuments_to_reach(state, cities[ci], &terr[ci], scs[ci], hubs[ci], monuments)
+            {
                 Some(m) => floor[ci] = m,
                 None => {
                     feasible = false;
@@ -1041,8 +1088,8 @@ fn enumerate_empire(
                 .filter_map(|ci| {
                     let at = |m: i32| {
                         city_build(
-                            state, &terr[ci], sc, m, hubs[ci], markets[ci],
-                            Some(&empire_partners),
+                            state, &terr[ci], scs[ci], m, hubs[ci], markets[ci],
+                            Some(partners_for(ci)),
                         )
                         .pop
                     };
@@ -1071,11 +1118,11 @@ fn enumerate_empire(
         let mut city_level_v = vec![0; n];
         for ci in 0..n {
             let b = city_build(
-                state, &terr[ci], sc, alloc[ci], hubs[ci], markets[ci],
-                Some(&empire_partners),
+                state, &terr[ci], scs[ci], alloc[ci], hubs[ci], markets[ci],
+                Some(partners_for(ci)),
             );
             let mut city_pop = b.pop;
-            if !sc.border_growth && city_pop >= POP_FOR_LEVEL_4 {
+            if !scs[ci].border_growth && city_pop >= POP_FOR_LEVEL_4 {
                 city_pop += 3; // PopGrowth, the alternative to the border
             }
             let level = level_at_pop(city_pop);
@@ -1090,7 +1137,9 @@ fn enumerate_empire(
             spt += level + i32::from(is_capital) + i32::from(level >= 2) + income[ci];
         }
         // Techs are empire-wide, so the union across cities is billed once.
-        let mut chain = lane_chain(sc.lane, sc.convert);
+        let mut chain: Vec<TechnologyType> = (0..n)
+            .flat_map(|ci| lane_chain(scs[ci].lane, scs[ci].convert))
+            .collect();
         let mut extra: Vec<TechnologyType> = plan_techs.into_iter().collect();
         extra.sort_by_key(|t| *t as i32);
         chain.extend(extra);
@@ -1103,7 +1152,7 @@ fn enumerate_empire(
             continue;
         }
         out.push(EmpirePlan {
-            scenario: sc,
+            scenarios: scs.to_vec(),
             stars,
             pop,
             giants,
@@ -1121,26 +1170,40 @@ fn enumerate_empire(
     }
     out
 }
-/// Non-dominated plans: cheaper is better, more giants and more SPT are better,
-/// and FEWER monuments is better — they are earned, not bought, so a plan that
-/// reaches the same output without burning one is strictly preferable.
+/// Does `q` dominate `p`? Cheaper is better, more giants and more SPT are
+/// better, and FEWER monuments is better — they are earned, not bought, so a
+/// plan reaching the same output without burning one is strictly preferable.
+fn dominates(q: &EmpirePlan, p: &EmpirePlan) -> bool {
+    q.stars <= p.stars
+        && q.giants >= p.giants
+        && q.spt >= p.spt
+        && q.monuments_used() <= p.monuments_used()
+        && (q.stars < p.stars
+            || q.giants > p.giants
+            || q.spt > p.spt
+            || q.monuments_used() < p.monuments_used())
+}
+
+/// Add a plan to a running frontier, dropping whatever it dominates.
+///
+/// Incremental rather than a final O(n^2) sweep: widening the search to
+/// per-city lanes multiplies the candidate count by orders of magnitude, and
+/// the frontier itself stays small (tens of plans), so this is the difference
+/// between linear and quadratic in the thing that grows.
+fn frontier_insert(front: &mut Vec<EmpirePlan>, p: EmpirePlan) {
+    if front.iter().any(|q| dominates(q, &p)) {
+        return;
+    }
+    front.retain(|q| !dominates(&p, q));
+    front.push(p);
+}
+
 fn pareto(plans: &[EmpirePlan]) -> Vec<EmpirePlan> {
-    plans
-        .iter()
-        .filter(|p| {
-            !plans.iter().any(|q| {
-                q.stars <= p.stars
-                    && q.giants >= p.giants
-                    && q.spt >= p.spt
-                    && q.monuments_used() <= p.monuments_used()
-                    && (q.stars < p.stars
-                        || q.giants > p.giants
-                        || q.spt > p.spt
-                        || q.monuments_used() < p.monuments_used())
-            })
-        })
-        .cloned()
-        .collect()
+    let mut front: Vec<EmpirePlan> = Vec::new();
+    for p in plans {
+        frontier_insert(&mut front, p.clone());
+    }
+    front
 }
 
 /// Tile-by-tile dump for one city+scenario, so a number in the table can be
@@ -1283,7 +1346,7 @@ fn verify(state: &GameState, cities: &[i32], monuments: i32) -> bool {
     println!("  {}", "-".repeat(92));
 
     for sc in SCENARIOS {
-        let terr = allocate_value(state, cities, sc, monuments);
+        let terr = allocate_value(state, cities, &uniform(sc, cities.len()), monuments);
         for (ci, &city_idx) in cities.iter().enumerate() {
             // Monuments are excluded: they displace tiles but are not the
             // placement decision under test.
@@ -1431,7 +1494,7 @@ fn dominators_of(
 fn optimal_report(state: &GameState, cities: &[i32], monuments: i32, lane: Lane) {
     let hub_type = lane_hub(lane).0;
     for sc in SCENARIOS.iter().filter(|s| s.lane == lane) {
-        let terr = allocate_value(state, cities, *sc, monuments);
+        let terr = allocate_value(state, cities, &uniform(*sc, cities.len()), monuments);
         for (ci, &city_idx) in cities.iter().enumerate() {
             let chosen = build_out(state, city_idx, &terr[ci], *sc, 0).hub_site;
             let (_, site_space, _) = tile_options(state, &terr[ci], *sc);
@@ -1595,17 +1658,14 @@ fn print_build_card(
     monuments: i32,
     g: Goal,
 ) {
-    let sc = plan.scenario;
-    let terr = allocate_value(state, cities, sc, monuments);
-    let (_, partner_name) = lane_hub(sc.lane);
-    let hub_type = lane_hub(sc.lane).0;
+    let terr = allocate_value(state, cities, &plan.scenarios, monuments);
 
     println!("\n{}", "=".repeat(112));
     println!("  BUILD FOR: {}", goal_name(g));
     println!("{}", "=".repeat(112));
     println!(
         "  strategy {} | {} stars | pop {} | level-driven giants {} | {} SPT | {} monument(s)",
-        sc.name,
+        plan.label(),
         plan.stars,
         plan.pop,
         plan.giants,
@@ -1620,6 +1680,9 @@ fn print_build_card(
     }
 
     for (ci, &c) in cities.iter().enumerate() {
+        let sc = plan.scenarios[ci];
+        let (_, partner_name) = lane_hub(sc.lane);
+        let hub_type = lane_hub(sc.lane).0;
         let (buys, _, _) = tile_options(state, &terr[ci], sc);
         let hub = plan.hubs[ci];
         let market = plan.markets[ci];
@@ -1629,8 +1692,8 @@ fn print_build_card(
             by_kind.entry(b.what).or_default().push(b.idx);
         }
         println!(
-            "\n  city {c} — pop {} (level {}), {} monument(s)",
-            plan.city_pop[ci], plan.city_level[ci], plan.monuments[ci]
+            "\n  city {c} — {} — pop {} (level {}), {} monument(s)",
+            sc.name, plan.city_pop[ci], plan.city_level[ci], plan.monuments[ci]
         );
         match hub {
             Some(h) => {
@@ -1731,6 +1794,7 @@ fn main() {
         parsed
     });
     let with_markets = !args.iter().any(|a| a == "--no-markets");
+    let mix = !args.iter().any(|a| a == "--no-mix");
     if standalone {
         println!("STANDALONE: each city scored on its full square (tiles double-counted)");
     }
@@ -1748,7 +1812,7 @@ fn main() {
             let terr = if standalone {
                 allocate_mode(&state, &cities, sc.border_growth, true)
             } else {
-                allocate_value(&state, &cities, sc, monuments)
+                allocate_value(&state, &cities, &uniform(sc, cities.len()), monuments)
             };
             explain(&state, cities[ci], &terr[ci], sc);
         }
@@ -1768,7 +1832,7 @@ fn main() {
         let terr = if standalone {
             allocate_mode(&state, &cities, sc.border_growth, true)
         } else {
-            allocate_value(&state, &cities, sc, monuments)
+            allocate_value(&state, &cities, &uniform(sc, cities.len()), monuments)
         };
         for (ci, &c) in cities.iter().enumerate() {
             all.push((c, plan_city(&state, c, &terr[ci], sc, &owned, num_cities, monuments)));
@@ -1842,11 +1906,88 @@ fn main() {
         let terr = if standalone {
             allocate_mode(&state, &cities, sc.border_growth, true)
         } else {
-            allocate_value(&state, &cities, sc, monuments)
+            allocate_value(&state, &cities, &uniform(sc, cities.len()), monuments)
         };
         all_plans.extend(enumerate_empire(
-            &state, &cities, &terr, sc, &owned, monuments, 8, with_markets,
+            &state,
+            &cities,
+            &terr,
+            &uniform(sc, cities.len()),
+            &owned,
+            monuments,
+            8,
+            with_markets,
         ));
+    }
+
+    // ---- Mixed empires: each city picks its own lane. A wooded city should
+    // ---- sawmill while its neighbour farms, and the pure-scenario sweep above
+    // ---- can never express that. Mixed plans are ADDED to the pure ones, so
+    // ---- widening the search can only find better plans, never lose known ones.
+    if mix {
+        // Trim first: for each city, drop any scenario another scenario beats on
+        // every axis that matters in isolation — no more stars, at least as much
+        // pop, at least as good a hub. Only market coupling can rescue such a
+        // scenario, and that needs hub level, which is one of the axes kept.
+        let mut per_city: Vec<Vec<Scenario>> = Vec::new();
+        let mut dropped = 0usize;
+        for (ci, &c) in cities.iter().enumerate() {
+            let scored: Vec<(Scenario, i32, i32, i32)> = SCENARIOS
+                .iter()
+                .map(|&sc| {
+                    let terr = allocate_value(&state, &cities, &uniform(sc, cities.len()), monuments);
+                    let b = build_out(&state, c, &terr[ci], sc, monuments);
+                    (sc, b.stars, b.pop, b.partners)
+                })
+                .collect();
+            let keep: Vec<Scenario> = scored
+                .iter()
+                .filter(|&&(_, st, pop, lvl)| {
+                    !scored.iter().any(|&(_, st2, pop2, lvl2)| {
+                        st2 <= st
+                            && pop2 >= pop
+                            && lvl2 >= lvl
+                            && (st2 < st || pop2 > pop || lvl2 > lvl)
+                    })
+                })
+                .map(|&(sc, ..)| sc)
+                .collect();
+            dropped += SCENARIOS.len() - keep.len();
+            per_city.push(if keep.is_empty() { SCENARIOS.to_vec() } else { keep });
+        }
+
+        let combos: usize = per_city.iter().map(|v| v.len()).product();
+        println!(
+            "  mixed-lane search: {combos} assignments ({dropped} per-city scenarios trimmed as dominated)"
+        );
+
+        let mut idx = vec![0usize; cities.len()];
+        loop {
+            let scs: Vec<Scenario> = (0..cities.len()).map(|ci| per_city[ci][idx[ci]]).collect();
+            // Uniform assignments were already enumerated above.
+            if !scs.iter().all(|x| x.name == scs[0].name) {
+                let terr = allocate_value(&state, &cities, &scs, monuments);
+                all_plans.extend(enumerate_empire(
+                    &state, &cities, &terr, &scs, &owned, monuments, 5, with_markets,
+                ));
+            }
+            // Odometer over the per-city scenario lists.
+            let mut k = 0;
+            loop {
+                if k == cities.len() {
+                    break;
+                }
+                idx[k] += 1;
+                if idx[k] < per_city[k].len() {
+                    break;
+                }
+                idx[k] = 0;
+                k += 1;
+            }
+            if k == cities.len() {
+                break;
+            }
+        }
     }
     let front = pareto(&all_plans);
 
@@ -1944,7 +2085,7 @@ fn main() {
         };
         println!(
             "  {:<20}{:>8}{:>7}{:>8}{:>7}{:>5}{:>10}  {:<26}{:<22}{}",
-            p.scenario.name,
+            p.label(),
             p.stars,
             p.pop,
             p.giants,
