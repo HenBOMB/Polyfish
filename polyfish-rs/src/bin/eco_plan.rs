@@ -449,11 +449,73 @@ fn city_build(
     }
 }
 
-/// Greedy single-city build: best hub by partner count, market beside it.
-/// Used by the allocator and the per-city table; the empire frontier enumerates
-/// hubs jointly instead, because Market income couples the cities.
-fn build_out(state: &GameState, territory: &[i32], sc: Scenario, monuments: i32) -> BuildOut {
-    let hub = hub_candidates(state, territory, sc, 1).into_iter().next();
+/// How many hub sites to price before choosing. The `>= 2 partners` filter in
+/// `hub_candidates` already bounds the list well under this on Tiny maps, so in
+/// practice every surviving candidate is priced and the cap only guards a
+/// pathologically large territory.
+const HUB_TOP_K: usize = 32;
+
+/// The tiles a city rules BEFORE BorderGrowth — the inner 3x3.
+fn inner_ring(state: &GameState, city_idx: i32, territory: &[i32]) -> Vec<i32> {
+    territory
+        .iter()
+        .copied()
+        .filter(|&i| get_chebyshev_distance(i, city_idx, state.settings.size) <= 1)
+        .collect()
+}
+
+/// Can this city actually end up with its hub on `site`?
+///
+/// The outer ring is the level-4 reward, so the inner 3x3 must produce
+/// `POP_FOR_LEVEL_4` on its own before any outer tile is ownable. Hubs are
+/// `limited_per_city`, so the single hub is spent EITHER on that climb or on an
+/// outer-ring site — never both. An outer site therefore requires the inner
+/// ring to reach level 4 with no hub at all, which is a much harder ask and is
+/// what the old gate silently granted for free.
+fn site_reachable(
+    state: &GameState,
+    city_idx: i32,
+    territory: &[i32],
+    sc: Scenario,
+    monuments: i32,
+    site: i32,
+) -> bool {
+    if !sc.border_growth {
+        return true;
+    }
+    let inner = inner_ring(state, city_idx, territory);
+    let outer = get_chebyshev_distance(site, city_idx, state.settings.size) > 1;
+    let climb_hub = if outer { None } else { Some(site) };
+    city_build(state, &inner, sc, monuments, climb_hub, None, None).pop >= POP_FOR_LEVEL_4
+}
+
+/// Single-city build: the best hub by what it actually delivers, market beside
+/// it. Used by the allocator and the per-city table; the empire frontier
+/// enumerates hubs jointly instead, because Market income couples the cities.
+fn build_out(
+    state: &GameState,
+    city_idx: i32,
+    territory: &[i32],
+    sc: Scenario,
+    monuments: i32,
+) -> BuildOut {
+    // Rank by delivered pop then cost, not by partner count alone. Sites with
+    // equal partner counts still differ in stars — siting on Forest refunds the
+    // ClearForest star, and the hub displaces whatever that tile would have
+    // built — so the old lowest-tile-index tie-break could take a site strictly
+    // dominated by another paying the same pop for fewer stars. Unreachable
+    // sites are dropped BEFORE ranking, or the cheapest plan is one the city
+    // can never actually arrive at.
+    let mut ranked: Vec<(i32, i32, i32)> = hub_candidates(state, territory, sc, HUB_TOP_K)
+        .into_iter()
+        .filter(|&h| site_reachable(state, city_idx, territory, sc, monuments, h))
+        .map(|h| {
+            let b = city_build(state, territory, sc, monuments, Some(h), None, None);
+            (b.pop, b.stars, h)
+        })
+        .collect();
+    ranked.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    let hub = ranked.first().map(|&(_, _, h)| h);
     let mut b = city_build(state, territory, sc, monuments, hub, None, None);
     if let Some(h) = hub {
         if b.partners > 0 {
@@ -500,19 +562,25 @@ fn plan_city(
     // the inner 3x3 has produced 9 pop by itself. Checked with the same
     // build_out the plan uses, or the two would disagree.
     if sc.border_growth {
-        let inner: Vec<i32> = territory
-            .iter()
-            .copied()
-            .filter(|&i| get_chebyshev_distance(i, city_idx, state.settings.size) <= 1)
-            .collect();
-        let ib = build_out(state, &inner, sc, monuments);
-        if ib.pop < POP_FOR_LEVEL_4 {
+        let inner = inner_ring(state, city_idx, territory);
+        // Best the inner ring can do with the hub allowed — if even that misses
+        // level 4 the city never earns its outer ring at all. Per-SITE
+        // reachability is a stricter test applied inside `build_out`; this is
+        // only the "can this city ever grow" precondition.
+        let no_hub = city_build(state, &inner, sc, monuments, None, None, None).pop;
+        let best_inner = hub_candidates(state, &inner, sc, HUB_TOP_K)
+            .into_iter()
+            .map(|h| city_build(state, &inner, sc, monuments, Some(h), None, None).pop)
+            .chain(std::iter::once(no_hub))
+            .max()
+            .unwrap_or(no_hub);
+        if best_inner < POP_FOR_LEVEL_4 {
             return CityPlan {
                 scenario: sc.name,
                 territory: inner.len(),
-                max_pop: ib.pop,
+                max_pop: best_inner,
                 stars: 0,
-                level: level_at_pop(ib.pop),
+                level: level_at_pop(best_inner),
                 giants: 0,
                 spt: 0,
                 cost_per_giant: f64::INFINITY,
@@ -524,7 +592,7 @@ fn plan_city(
         }
     }
 
-    let b = build_out(state, territory, sc, monuments);
+    let b = build_out(state, city_idx, territory, sc, monuments);
     let mut pop = b.pop;
     // PopGrowth (+3) is the alternative to BorderGrowth in the same slot, so it
     // pays only when the city reaches level 4 and did not take the border.
@@ -613,10 +681,10 @@ fn allocate_value(
             .iter()
             .map(|&ci| {
                 let mut with = terr[ci].clone();
-                let base = build_out(state, &with, sc, monuments).pop;
+                let base = build_out(state, cities[ci], &with, sc, monuments).pop;
                 with.push(idx);
                 with.sort();
-                let gain = build_out(state, &with, sc, monuments).pop - base;
+                let gain = build_out(state, cities[ci], &with, sc, monuments).pop - base;
                 (
                     -gain,
                     get_chebyshev_distance(idx, cities[ci], state.settings.size),
@@ -926,7 +994,7 @@ fn explain(state: &GameState, city_idx: i32, territory: &[i32], sc: Scenario) {
         .filter(|b| b.what == partner_name || b.what.ends_with(partner_name))
         .map(|b| b.idx)
         .collect();
-    let b = build_out(state, territory, sc, 0);
+    let b = build_out(state, city_idx, territory, sc, 0);
     println!("\n  --- explain: city {city_idx}, {} ---", sc.name);
     println!("  territory ({} tiles): {:?}", territory.len(), territory);
     let mut sites: Vec<(i32, i32)> = hub_sites
@@ -953,6 +1021,347 @@ fn explain(state: &GameState, city_idx: i32, territory: &[i32], sc: Scenario) {
     }
     println!("  pop {}  stars(structures) {}  market {:?} (+{} SPT)",
              b.pop, b.stars, b.market_site, b.market_spt);
+}
+
+/// The partner structure each lane actually builds on a tile.
+fn lane_partner_type(lane: Lane) -> StructureType {
+    match lane {
+        Lane::Forest => StructureType::LumberHut,
+        Lane::Farm => StructureType::Farm,
+    }
+}
+
+/// Own `territory` outright for player 1 and hand them stars, so the engine's
+/// own build path can be run against the planner's tile set.
+fn owned_board(base: &GameState, city_idx: i32, territory: &[i32]) -> GameState {
+    let mut s = base.clone();
+    let size = s.settings.size;
+    s.settings.current_player_turn_id = 1;
+    if let Some(t) = s.tribes.get_mut(&1) {
+        t.stars = 100_000;
+    }
+    for &i in territory {
+        if let Some(t) = s.tiles.get_mut(&i) {
+            t.owner = 1;
+            t.ruling_city_coords = Some(polyfish::coords::Coords::from_index(city_idx, size));
+        }
+    }
+    s
+}
+
+/// Run the plan's builds through the engine in `order`, returning the finished
+/// board and the population the city actually gained.
+fn materialize(
+    base: &GameState,
+    city_idx: i32,
+    territory: &[i32],
+    sc: Scenario,
+    hub: Option<i32>,
+    order: &[usize],
+) -> (GameState, i32) {
+    let mut s = owned_board(base, city_idx, territory);
+    let (buys, _, _) = tile_options(&s, territory, sc);
+    let (hub_type, partner_name) = lane_hub(sc.lane);
+
+    let mut plan: Vec<(i32, StructureType)> = buys
+        .iter()
+        .filter(|b| b.what == partner_name || b.what.ends_with(partner_name))
+        .map(|b| b.idx)
+        .filter(|i| Some(*i) != hub)
+        .map(|i| (i, lane_partner_type(sc.lane)))
+        .collect();
+    if let Some(h) = hub {
+        plan.push((h, hub_type));
+    }
+
+    let pop_of = |s: &GameState| -> i32 {
+        s.tribes
+            .get(&1)
+            .and_then(|t| t.cities.iter().find(|c| c.idx == city_idx))
+            .map_or(0, |c| c.population)
+    };
+    let before = pop_of(&s);
+    for &k in order {
+        let (idx, st) = plan[k];
+        let _ = polyfish::actions::structure::build_structure(&mut s, idx, st);
+    }
+    let gained = pop_of(&s) - before;
+    (s, gained)
+}
+
+/// Number of builds in a plan, so orders can be generated without materializing.
+fn plan_len(state: &GameState, territory: &[i32], sc: Scenario, hub: Option<i32>) -> usize {
+    let (buys, _, _) = tile_options(state, territory, sc);
+    let (_, partner_name) = lane_hub(sc.lane);
+    buys.iter()
+        .filter(|b| b.what == partner_name || b.what.ends_with(partner_name))
+        .map(|b| b.idx)
+        .filter(|i| Some(*i) != hub)
+        .count()
+        + usize::from(hub.is_some())
+}
+
+/// Check the planner's placement claim against the engine rather than against
+/// a second copy of the planner. Per city and scenario:
+///   1. the hub's engine partner count equals the claimed level;
+///   2. the hub's stored level equals it too (the UI and Market read that);
+///   3. pop is a function of the built SET — build order changes nothing;
+///   4. the chosen site is argmax of engine partner count over every empty
+///      owned alternative on the same finished board.
+/// Returns false if any check failed.
+fn verify(state: &GameState, cities: &[i32], monuments: i32) -> bool {
+    let mut failures = 0;
+    let capital = cities[0];
+
+    println!("\n{}", "=".repeat(96));
+    println!("  VERIFY — planner claims vs engine, seed fixture");
+    println!("{}", "=".repeat(96));
+    println!(
+        "  {:<20} {:>5} {:>6} {:>8} {:>8} {:>9} {:>9}",
+        "scenario", "city", "hub", "claimed", "engine", "st.level", "argmax"
+    );
+    println!("  (pop = capital population delivered by the engine, identical across 3 build orders)");
+    println!("  {}", "-".repeat(92));
+
+    for sc in SCENARIOS {
+        let terr = allocate_value(state, cities, sc, monuments);
+        for (ci, &city_idx) in cities.iter().enumerate() {
+            // Monuments are excluded: they displace tiles but are not the
+            // placement decision under test.
+            let b = build_out(state, city_idx, &terr[ci], sc, 0);
+            let Some(hub) = b.hub_site else {
+                println!(
+                    "  {:<20} {:>5} {:>6} {:>8} {:>8} {:>9} {:>9}",
+                    sc.name, city_idx, "—", "—", "—", "—", "—"
+                );
+                continue;
+            };
+            let (hub_type, _) = lane_hub(sc.lane);
+            let n = plan_len(state, &terr[ci], sc, Some(hub));
+            let ident: Vec<usize> = (0..n).collect();
+            let (board, pop_ident) = materialize(state, city_idx, &terr[ci], sc, Some(hub), &ident);
+
+            let engine_partners =
+                polyfish::rules::economy::partner_count(&board, hub, hub_type, 1);
+            let stored_level = polyfish::functions::get_structure_at(&board, hub)
+                .map_or(-1, |s| s.level);
+
+            // 3. Build-order invariance, on the capital only — the other cities
+            //    are villages here, so no CityState collects their pop.
+            let mut order_ok = true;
+            if city_idx == capital {
+                let mut rev = ident.clone();
+                rev.reverse();
+                // Hub first, then partners in order: the retroactive-pay path.
+                let mut hub_first = vec![n - 1];
+                hub_first.extend(0..n - 1);
+                for alt in [rev, hub_first] {
+                    let (_, pop_alt) =
+                        materialize(state, city_idx, &terr[ci], sc, Some(hub), &alt);
+                    if pop_alt != pop_ident {
+                        order_ok = false;
+                        println!(
+                            "    ORDER-DEPENDENT: {} city {city_idx} pop {pop_ident} -> {pop_alt}",
+                            sc.name
+                        );
+                    }
+                }
+            }
+
+            // 4. Argmax over alternatives on the finished board. Candidates are
+            //    the planner's own site space (Field, plus Forest for the forest
+            //    lane, which ClearForest turns into Field) narrowed to tiles
+            //    still EMPTY once the plan is built — moving the hub onto an
+            //    occupied tile would displace a partner and change the set.
+            let (_, site_space, _) = tile_options(state, &terr[ci], sc);
+            // The site space is the planner's own, so guard it against the
+            // engine's terrain whitelist — otherwise argmax could pass by
+            // simply never offering the better tile.
+            let legal_terrain = &get_structure_setting(hub_type).terrain_types;
+            let uncovered: Vec<i32> = terr[ci]
+                .iter()
+                .copied()
+                .filter(|i| {
+                    polyfish::functions::get_structure_at(state, *i).is_none()
+                        && state
+                            .tiles
+                            .get(i)
+                            .is_some_and(|t| legal_terrain.contains(&t.terrain_type))
+                        && !site_space.contains(i)
+                })
+                .collect();
+            if !uncovered.is_empty() {
+                failures += 1;
+                println!(
+                    "    SITE-SPACE GAP: {} city {city_idx} omits legal tiles {uncovered:?}",
+                    sc.name
+                );
+            }
+            // Optimality is judged on the objective the planner actually
+            // optimizes — pop against stars — not on partner count, which is
+            // only a proxy and one the planner deliberately trades away.
+            let doms = dominators_of(state, city_idx, &terr[ci], sc, hub);
+            let argmax_ok = doms.is_empty();
+            let (best_site, best_n) = doms.first().map_or((hub, engine_partners), |&(p, _, s)| (s, p));
+
+            let level_ok = stored_level == b.partners;
+            let count_ok = engine_partners == b.partners;
+            let ok = level_ok && count_ok && argmax_ok && order_ok;
+            if !ok {
+                failures += 1;
+            }
+            println!(
+                "  {:<20} {:>5} {:>6} {:>8} {:>8} {:>9} {:>9}  {}",
+                sc.name,
+                city_idx,
+                hub,
+                b.partners,
+                engine_partners,
+                stored_level,
+                if argmax_ok { "yes".to_string() } else { format!("{best_site}@{best_n}") },
+                if ok { "ok" } else { "FAIL" }
+            );
+            if city_idx == capital {
+                println!("      builds {n}, pop delivered {pop_ident}, order-invariant {order_ok}");
+            }
+        }
+    }
+
+    println!("\n  {} failing (city, scenario) pairs", failures);
+    failures == 0
+}
+
+/// Sites that DOMINATE `chosen`: at least as much pop for no more stars, and
+/// strictly better on one. More pop for more stars is a different point on the
+/// frontier, not a mistake, so it is not a dominator.
+fn dominators_of(
+    state: &GameState,
+    city_idx: i32,
+    territory: &[i32],
+    sc: Scenario,
+    chosen: i32,
+) -> Vec<(i32, i32, i32)> {
+    let (_, site_space, _) = tile_options(state, territory, sc);
+    let score = |s: i32| {
+        let b = city_build(state, territory, sc, 0, Some(s), None, None);
+        (b.pop, b.stars)
+    };
+    let (cp, cs) = score(chosen);
+    let mut out: Vec<(i32, i32, i32)> = site_space
+        .iter()
+        .copied()
+        .filter(|&s| s != chosen)
+        // An unreachable site cannot dominate anything — the city never gets there.
+        .filter(|&s| site_reachable(state, city_idx, territory, sc, 0, s))
+        .filter_map(|s| {
+            let (p, st) = score(s);
+            (p >= cp && st <= cs && (p > cp || st < cs)).then_some((p, st, s))
+        })
+        .collect();
+    out.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    out
+}
+
+/// Is the greedy hub pick actually the best site available?
+///
+/// `hub_candidates` ranks sites by POTENTIAL partner count and `build_out` takes
+/// the top one. That is not the same objective as population: a site can touch
+/// more partners yet displace a better tile, and siting on Forest refunds a star
+/// via ClearForest. So this scores EVERY candidate with the planner's own
+/// `city_build` and ranks, to see whether greedy and exhaustive agree.
+fn optimal_report(state: &GameState, cities: &[i32], monuments: i32, lane: Lane) {
+    let hub_type = lane_hub(lane).0;
+    for sc in SCENARIOS.iter().filter(|s| s.lane == lane) {
+        let terr = allocate_value(state, cities, *sc, monuments);
+        for (ci, &city_idx) in cities.iter().enumerate() {
+            let chosen = build_out(state, city_idx, &terr[ci], *sc, 0).hub_site;
+            let (_, site_space, _) = tile_options(state, &terr[ci], *sc);
+
+            // (pop, -stars, site) so the sort puts most pop, then cheapest, first.
+            let mut ranked: Vec<(i32, i32, i32, i32)> = site_space
+                .iter()
+                .filter(|&&s| site_reachable(state, city_idx, &terr[ci], *sc, 0, s))
+                .map(|&s| {
+                    let b = city_build(state, &terr[ci], *sc, 0, Some(s), None, None);
+                    (b.pop, -b.stars, s, b.partners)
+                })
+                .collect();
+            ranked.sort_by(|a, b| b.cmp(a));
+
+            let blocked: Vec<i32> = site_space
+                .iter()
+                .copied()
+                .filter(|&s| !site_reachable(state, city_idx, &terr[ci], *sc, 0, s))
+                .collect();
+
+            let no_hub = city_build(state, &terr[ci], *sc, 0, None, None, None);
+            let best = ranked.first().copied();
+
+            println!("\n  {} — city {city_idx} ({} candidate sites)", sc.name, site_space.len());
+            println!("      no hub at all:            pop {:>3}  stars {:>4}", no_hub.pop, no_hub.stars);
+            for (pop, negstars, site, partners) in ranked.iter().take(5) {
+                let mark = if Some(*site) == chosen { "  <- GREEDY PICK" } else { "" };
+                let ring = if get_chebyshev_distance(*site, city_idx, state.settings.size) > 1 {
+                    "outer"
+                } else {
+                    "inner"
+                };
+                println!(
+                    "      site {site:>3} ({partners} partners, {ring}):  pop {pop:>3}  stars {:>4}{mark}",
+                    -negstars
+                );
+            }
+            if !blocked.is_empty() {
+                println!(
+                    "      unreachable ({} sites): {blocked:?} — inner ring cannot hit {POP_FOR_LEVEL_4} pop without the hub",
+                    blocked.len()
+                );
+            }
+            // A site only counts as better if it DOMINATES: at least as much pop
+            // for no more stars, strictly better on one. More pop for more stars
+            // is a different point on the frontier, not a mistake.
+            match chosen {
+                Some(c) => match ranked.iter().find(|r| r.2 == c).copied() {
+                    None => println!("      VERDICT: chosen site {c} is not in the candidate space"),
+                    Some((cp, cs, _, _)) => {
+                        let dominators: Vec<(i32, i32, i32)> = ranked
+                            .iter()
+                            .filter(|&&(p, s, site, _)| {
+                                site != c && p >= cp && s >= cs && (p > cp || s > cs)
+                            })
+                            .map(|&(p, s, site, _)| (p, -s, site))
+                            .collect();
+                        if dominators.is_empty() {
+                            println!("      VERDICT: greedy pick is on the frontier (not dominated)");
+                        } else {
+                            for (p, s, site) in &dominators {
+                                println!(
+                                    "      VERDICT: DOMINATED — site {site} gives pop {p} for {s} stars; chosen {c} gives pop {cp} for {} stars",
+                                    -cs
+                                );
+                            }
+                        }
+                    }
+                },
+                None if best.is_some_and(|(bp, _, _, _)| bp > no_hub.pop) => {
+                    let (bp, _, bsite, _) = best.unwrap();
+                    println!("      VERDICT: NO HUB CHOSEN but site {bsite} would pay pop {bp}");
+                }
+                None => println!("      VERDICT: no hub, none worthwhile"),
+            }
+
+            // Confirm the winner against the engine, not just the planner's model.
+            if let Some((_, _, bsite, bpartners)) = best {
+                let n = plan_len(state, &terr[ci], *sc, Some(bsite));
+                let order: Vec<usize> = (0..n).collect();
+                let (board, _) = materialize(state, city_idx, &terr[ci], *sc, Some(bsite), &order);
+                let engine = polyfish::rules::economy::partner_count(&board, bsite, hub_type, 1);
+                if engine != bpartners {
+                    println!("      ENGINE DISAGREES on site {bsite}: planner {bpartners}, engine {engine}");
+                }
+            }
+        }
+    }
 }
 
 fn main() {
@@ -1017,6 +1426,14 @@ fn main() {
     let with_markets = !args.iter().any(|a| a == "--no-markets");
     if standalone {
         println!("STANDALONE: each city scored on its full square (tiles double-counted)");
+    }
+    if args.iter().any(|a| a == "--optimal") {
+        let lane = if args.iter().any(|a| a == "--windmill") { Lane::Farm } else { Lane::Forest };
+        optimal_report(&state, &cities, monuments, lane);
+        return;
+    }
+    if args.iter().any(|a| a == "--verify") {
+        std::process::exit(i32::from(!verify(&state, &cities, monuments)));
     }
     if let Some(which) = get("--explain") {
         let ci: usize = which.parse().unwrap_or(0);
