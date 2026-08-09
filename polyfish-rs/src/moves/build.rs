@@ -237,7 +237,10 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
 
                 // 2. Terrain-based structures
                 for &(struct_type, ref settings) in &unlocked_structures {
-                    if struct_type != StructureType::Road {
+                    // A developed tile is closed; an undeveloped resource on it
+                    // is not, and the build crushes it
+                    // (`rules::economy::build_consumes_resource`).
+                    if crate::rules::economy::occupies_tile(struct_type) {
                         if existing_struct.is_some() {
                             continue;
                         }

@@ -2,7 +2,7 @@
 
 use crate::settings::structures::get_structure_setting;
 use crate::states::{CityState, GameState, PlayerId};
-use crate::types::StructureType;
+use crate::types::{ResourceType, StructureType};
 use std::collections::HashSet;
 
 /// A Market's own level, and so its income, is capped here.
@@ -26,6 +26,35 @@ pub fn level_at_pop(pop: i32) -> i32 {
 /// Super units available at a level: every reward slot from 4 up offers one.
 pub fn super_units_at_level(level: i32) -> i32 {
     (level - 4).max(0)
+}
+
+/// Does a structure of this type claim the tile it stands on?
+///
+/// Road is the one that does not: `create_structure` stores it as a tile flag
+/// instead of an occupant, and it may share a tile with a real structure.
+pub fn occupies_tile(struct_type: StructureType) -> bool {
+    struct_type != StructureType::Road
+}
+
+/// The structure that WORKS `resource` rather than crushing it — a Farm keeps
+/// its Crop, a Mine its Metal. The pairing lives in `settings/resources.rs`;
+/// `StructureSetting.resource_type` is the same fact read the other way, and
+/// `tests/rules_ssot.rs` holds the two to each other.
+pub fn worker_structure(resource: ResourceType) -> Option<StructureType> {
+    crate::settings::resources::get_resource_setting(resource).struct_required
+}
+
+/// Does building `struct_type` over `resource` destroy it?
+///
+/// Build legality deliberately ignores resources (`moves/build.rs` checks
+/// terrain and occupancy only), so an *undeveloped* Crop or Fruit field is a
+/// legal site for any terrain structure and the build crushes what stands
+/// there. A *developed* tile is protected by the occupancy check instead — you
+/// cannot build over a Farm, only destroy it first. The exception is the
+/// structure that works the resource, which is why it is allowed on that tile
+/// at all.
+pub fn build_consumes_resource(struct_type: StructureType, resource: ResourceType) -> bool {
+    occupies_tile(struct_type) && worker_structure(resource) != Some(struct_type)
 }
 
 /// How many friendly partners feed the adjacency structure on `idx`.

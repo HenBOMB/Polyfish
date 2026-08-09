@@ -21,6 +21,16 @@ fn board() -> GameState {
     state
 }
 
+/// The resource actually stored on the tile. `get_resource_at` is filtered by
+/// tech visibility, so it cannot tell "crushed" from "not yet discovered".
+fn raw_resource(state: &GameState, idx: i32) -> Option<ResourceType> {
+    state
+        .resources
+        .get(&idx)
+        .and_then(|r| r.as_ref())
+        .map(|r| r.resource_type)
+}
+
 fn unit(kind: UnitType, idx: i32, owner: i32) -> UnitState {
     let mut u = UnitState {
         unit_type: kind,
@@ -242,4 +252,104 @@ fn spores_need_no_tech_to_see() {
         1,
         None
     ));
+}
+
+/// Build legality never looks at resources, so a Market may be sited on an
+/// undeveloped Crop or Fruit field — and building there CRUSHES it.
+/// `build_structure` used to leave the resource standing under the new
+/// structure, where it kept feeding the feature planes and the map render.
+#[test]
+fn building_over_an_undeveloped_resource_crushes_it() {
+    let mut state = board();
+    state.tiles.get_mut(&60).unwrap().terrain_type = TerrainType::Field;
+    state.resources.insert(
+        60,
+        Some(polyfish::states::ResourceState {
+            resource_type: ResourceType::Crop,
+        }),
+    );
+    let mut tribe = TribeState::default();
+    tribe.id = 1;
+    tribe.stars = 50;
+    state.tribes.insert(1, tribe);
+
+    let undo = polyfish::actions::structure::build_structure(
+        &mut state,
+        60,
+        StructureType::Market,
+    );
+    assert!(
+        raw_resource(&state, 60).is_none(),
+        "the Market crushed the Crop it was built over"
+    );
+
+    undo(&mut state);
+    assert_eq!(
+        raw_resource(&state, 60),
+        Some(ResourceType::Crop),
+        "and undo puts it back"
+    );
+}
+
+/// The structure that WORKS a resource keeps it: a Farm stands on its Crop, a
+/// Mine on its Metal. `StructureSetting.resource_type` reads that pairing the
+/// other way round, so the two tables are held to each other here.
+#[test]
+fn the_structure_that_works_a_resource_does_not_crush_it() {
+    use polyfish::settings::structures::get_structure_setting;
+    use strum::IntoEnumIterator;
+
+    for resource in ResourceType::iter() {
+        let Some(worker) = rules::economy::worker_structure(resource) else {
+            continue;
+        };
+        assert!(
+            !rules::economy::build_consumes_resource(worker, resource),
+            "{worker:?} works {resource:?} rather than crushing it"
+        );
+        assert_eq!(
+            get_structure_setting(worker).resource_type,
+            Some(resource),
+            "settings/resources.rs and settings/structures.rs disagree about \
+             which structure works {resource:?}"
+        );
+        assert!(
+            rules::economy::build_consumes_resource(StructureType::Market, resource),
+            "any other structure crushes {resource:?}"
+        );
+    }
+
+    let mut state = board();
+    state.tiles.get_mut(&60).unwrap().terrain_type = TerrainType::Field;
+    state.resources.insert(
+        60,
+        Some(polyfish::states::ResourceState {
+            resource_type: ResourceType::Crop,
+        }),
+    );
+    let mut tribe = TribeState::default();
+    tribe.id = 1;
+    tribe.stars = 50;
+    state.tribes.insert(1, tribe);
+
+    polyfish::actions::structure::build_structure(&mut state, 60, StructureType::Farm);
+    assert_eq!(
+        raw_resource(&state, 60),
+        Some(ResourceType::Crop),
+        "the Farm keeps the Crop it works"
+    );
+}
+
+/// A Road shares its tile rather than claiming it, which is why it is the one
+/// structure allowed onto an occupied tile — and why it crushes nothing.
+#[test]
+fn a_road_claims_nothing_and_crushes_nothing() {
+    assert!(!rules::economy::occupies_tile(StructureType::Road));
+    assert!(rules::economy::occupies_tile(StructureType::Market));
+    for resource in [ResourceType::Fruit, ResourceType::Crop, ResourceType::Metal] {
+        assert!(!rules::economy::build_consumes_resource(
+            StructureType::Road,
+            resource
+        ));
+    }
 }

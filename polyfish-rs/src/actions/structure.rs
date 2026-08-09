@@ -33,7 +33,7 @@ pub fn create_structure(
         founded: state.settings.turn,
     };
 
-    if structure_type != StructureType::Road {
+    if crate::rules::economy::occupies_tile(structure_type) {
         state.structures.insert(idx, Some(structure));
     }
 
@@ -246,6 +246,21 @@ pub fn build_structure(
         structure_type,
         partners.unwrap_or(1),
     ));
+
+    // 2b. An undeveloped resource under the new structure is crushed. Legality
+    // never looks at resources, so a Market may be sited on a Crop or Fruit
+    // field and this is the only place the tile is cleaned up; leaving it made
+    // the resource keep feeding the feature planes and the map render.
+    let standing = state
+        .resources
+        .get(&idx)
+        .and_then(|r| r.as_ref())
+        .map(|r| r.resource_type);
+    if let Some(res) = standing {
+        if crate::rules::economy::build_consumes_resource(structure_type, res) {
+            undos.push(crate::actions::resource::consume_resource(state, idx, None));
+        }
+    }
 
     // 3. Add population
     if let Some(city) = get_city_owning_tile(state, idx) {
