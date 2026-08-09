@@ -732,8 +732,8 @@ def train():
                                 if do_flip:
                                     t = torch.flip(t, [3])
                                 batch_targets[head] = t.flatten(1)
-                        # The two tile-space aux targets must co-transform too.
-                        for head in ('aux_ownership', 'aux_fog_units'):
+                        # Every tile-space aux target must co-transform too.
+                        for head in ('aux_ownership', 'aux_fog_units', 'aux_city_spt'):
                             t = batch_aux[head].view(-1, 1, MAP_SIZE, MAP_SIZE)
                             if k > 0:
                                 t = torch.rot90(t, k, [2, 3])

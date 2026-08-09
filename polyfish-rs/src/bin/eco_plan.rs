@@ -2515,7 +2515,7 @@ fn main() {
             print_monument_ladder(&front, &cities, g, monuments);
         }
     }
-    if ladder && goal.is_none() {
+    if (ladder || monuments > 0) && goal.is_none() {
         print_monument_ladder(&front, &cities, Goal::Balanced, monuments);
     }
 }
