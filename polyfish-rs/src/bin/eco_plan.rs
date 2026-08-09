@@ -1718,30 +1718,38 @@ enum Goal {
     Giants,
 }
 
-/// Frontier maxima for SPT, super units and stars — the scale every knee is
-/// measured against. Never zero, so they are safe denominators.
-fn frontier_maxima(front: &[EmpirePlan]) -> (i64, i64, i64) {
+/// Frontier maxima for SPT, super units, stars and monuments — the scale every
+/// knee is measured against. Never zero, so they are safe denominators.
+fn frontier_maxima(front: &[EmpirePlan]) -> (i64, i64, i64, i64) {
     let m = |v: i64| v.max(1);
     (
         m(front.iter().map(|p| p.spt).max().unwrap_or(1) as i64),
         m(front.iter().map(|p| p.giants).max().unwrap_or(1) as i64),
         m(front.iter().map(|p| p.stars).max().unwrap_or(1) as i64),
+        m(front.iter().map(|p| p.monuments_used()).max().unwrap_or(1) as i64),
     )
 }
 
-/// The knee: value minus cost, with SPT, super units and stars each normalised
-/// to [0,1] across the frontier.
+/// The knee: value minus cost, with every axis normalised to [0,1] across the
+/// frontier.
 ///
 /// On normalised axes the chord from the cheapest plan to the richest IS the
 /// diagonal, so the maximum of (value - cost) is the point furthest above that
 /// chord — the elbow, with no hand-tuned exchange rate. `w_spt`/`w_su` choose
 /// what "value" means: (1,0) is income alone, (0,1) army alone, (1,1) both.
-/// Scaled to integers by the common denominator so ties are exact rather than
-/// float noise.
-fn knee_score(p: &EmpirePlan, w_spt: i64, w_su: i64, (ms, mg, mc): (i64, i64, i64)) -> i64 {
-    let value = w_spt * p.spt as i64 * mg * mc + w_su * p.giants as i64 * ms * mc;
-    let cost = (w_spt + w_su) * p.stars as i64 * ms * mg;
-    value - cost
+///
+/// COST IS BOTH CURRENCIES. Monuments were only a tiebreak, so a picker handed
+/// a budget of three always spent three if it gained anything at all, however
+/// marginal — it would take the border for one city over a plan four stars
+/// cheaper that kept all three in the bank. Monuments are earned, not bought,
+/// so they carry a full axis of cost: spend one only when it buys a lot.
+/// Everything is scaled by the common denominator so ties stay exact.
+fn knee_score(p: &EmpirePlan, w_spt: i64, w_su: i64, (ms, mg, mc, mm): (i64, i64, i64, i64)) -> i64 {
+    let w = w_spt + w_su;
+    let value = mm * (w_spt * p.spt as i64 * mg * mc + w_su * p.giants as i64 * ms * mc);
+    let star_cost = mm * w * p.stars as i64 * ms * mg;
+    let monument_cost = w * p.monuments_used() as i64 * ms * mg * mc;
+    value - star_cost - monument_cost
 }
 
 fn parse_goal(s: &str) -> Option<Goal> {
@@ -1930,7 +1938,9 @@ fn main() {
   --seed N            map seed (default 4102)
   --cities N          cities to plan for, capital first (default 3)
   --techs a,b,c       techs already owned (default organization)
-  --monuments N       monuments the EMPIRE ever earns (default 3; none at turn 0)
+  --monuments N       monuments the EMPIRE ever earns (default 0 — you hold
+                      none at turn 0, and each one costs a full axis in the
+                      knees, so a plan has to earn the ones it spends)
   --no-markets        plan without Markets
   --standalone        score each city on its full square, ignoring neighbours
   --no-mix            one lane for the whole empire (default mixes per city)
@@ -2008,7 +2018,9 @@ fn main() {
     // Empire-wide, not per city: monuments are earned from tasks, so a tribe
     // holds none at turn 0 and only ever has a handful. The frontier decides
     // which city each one goes to.
-    let monuments: i32 = get("--monuments").and_then(|s| s.parse().ok()).unwrap_or(3);
+    // Default NONE: a tribe holds no monument at turn 0, so the turn-0 truth is
+    // the honest headline and monument-funded plans are opted into.
+    let monuments: i32 = get("--monuments").and_then(|s| s.parse().ok()).unwrap_or(0);
     let standalone = args.iter().any(|a| a == "--standalone");
     let goal = get("--goal").and_then(|g| {
         let parsed = parse_goal(&g);
