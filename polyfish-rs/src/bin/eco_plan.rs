@@ -1771,6 +1771,33 @@ fn main() {
     let get = |flag: &str| -> Option<String> {
         args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned()
     };
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!(
+            r#"eco_plan — deterministic economy planner and its own ground truth.
+
+  --seed N            map seed (default 4102)
+  --cities N          cities to plan for, capital first (default 3)
+  --techs a,b,c       techs already owned (default organization)
+  --monuments N       monuments the EMPIRE ever earns (default 3; none at turn 0)
+  --no-markets        plan without Markets
+  --standalone        score each city on its full square, ignoring neighbours
+  --no-mix            one lane for the whole empire (default mixes per city)
+
+  --goal WHICH        print the full build for a stated need:
+                        spt       max stars/turn, full greed
+                        military  best stars per super unit — tempo, not ceiling
+                        giants    most super units, cost no object
+                        pop       max population
+                        cheap     fewest stars, then fewest monuments
+                        eco       most SPT per star
+
+  --explain CITY      per-scenario reasoning for one city (0-based)
+  --verify            check placements against the engine (exit 1 on failure)
+  --optimal           rank every hub site; --windmill / --forge for other lanes
+"#
+        );
+        return;
+    }
     let seed: i64 = get("--seed").and_then(|s| s.parse().ok()).unwrap_or(4102);
     let owned: HashSet<TechnologyType> = get("--techs")
         .map(|s| {
