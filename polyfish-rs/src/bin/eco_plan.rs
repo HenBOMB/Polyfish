@@ -510,6 +510,9 @@ fn city_build(
         .iter()
         .filter(|b| is_partner_buy(b, partner_name))
         .map(|b| b.idx)
+        // Partners already standing feed the hub too, and `tile_options` skips
+        // occupied tiles, so they appear in no buy.
+        .chain(standing(state, territory, lane_partner_type(sc.lane)))
         .collect();
     let adj_to_hub: HashSet<i32> = hub
         .map(|s| get_adjacent_indices(state, s, 1).into_iter().collect())
@@ -533,15 +536,26 @@ fn city_build(
         .count() as i32;
     pop += partners;
 
+    // You do not pay for what is already standing. On a generated map nothing
+    // is, and this reduces to the old unconditional charge; on a live state it
+    // is what makes the plan "what to do next" rather than "what the ideal
+    // would have been".
+    let already = |idx: i32, kind: StructureType| {
+        polyfish::functions::get_structure_type_at(state, idx) == Some(kind)
+    };
     if let Some(site) = hub {
-        stars += hub_cost;
-        // Siting the hub on a forest means clearing it, which pays out.
-        if state.tiles.get(&site).map(|t| t.terrain_type) == Some(TerrainType::Forest) {
-            stars -= polyfish::version_sync::get_clear_forest_stars(state);
+        if !already(site, hub_type) {
+            stars += hub_cost;
+            // Siting the hub on a forest means clearing it, which pays out.
+            if state.tiles.get(&site).map(|t| t.terrain_type) == Some(TerrainType::Forest) {
+                stars -= polyfish::version_sync::get_clear_forest_stars(state);
+            }
         }
     }
-    if market.is_some() {
-        stars += market_cost;
+    if let Some(m) = market {
+        if !already(m, StructureType::Market) {
+            stars += market_cost;
+        }
     }
 
     let (mon_tiles, mon_pop) = place_monuments(
@@ -630,7 +644,15 @@ fn build_out(
     // dominated by another paying the same pop for fewer stars. Unreachable
     // sites are dropped BEFORE ranking, or the cheapest plan is one the city
     // can never actually arrive at.
-    let mut ranked: Vec<(i32, i32, i32)> = hub_candidates(state, territory, sc, HUB_TOP_K)
+    // A hub already standing IS the hub: `limited_per_city` means the slot is
+    // spent, so there is nothing to choose and nothing to re-cost.
+    let built = standing(state, territory, lane_hub(sc.lane).0);
+    let sites: Vec<i32> = if built.is_empty() {
+        hub_candidates(state, territory, sc, HUB_TOP_K)
+    } else {
+        built
+    };
+    let mut ranked: Vec<(i32, i32, i32)> = sites
         .into_iter()
         .filter(|&h| site_reachable(state, city_idx, territory, sc, monuments, h))
         .map(|h| {
@@ -676,13 +698,28 @@ fn market_site_legal(state: &GameState, site: i32, is_hub_partner: bool) -> bool
         && polyfish::functions::get_structure_at(state, site).is_none()
 }
 
-/// Tiles this city's lane would cover with the hub's partner structure.
+/// Tiles already holding `kind` inside this territory. Empty on a generated
+/// map; on a live state this is what the plan must build around rather than
+/// re-propose.
+fn standing(state: &GameState, territory: &[i32], kind: StructureType) -> Vec<i32> {
+    territory
+        .iter()
+        .copied()
+        .filter(|&t| polyfish::functions::get_structure_type_at(state, t) == Some(kind))
+        .collect()
+}
+
+/// Tiles that will hold the hub's partner structure — the ones this lane plans
+/// to build, plus the ones already standing. `tile_options` skips occupied
+/// tiles, so without the second half a real Sawmill would count none of the
+/// LumberHuts already feeding it.
 fn partner_tiles_of(state: &GameState, territory: &[i32], sc: Scenario) -> HashSet<i32> {
     let (_, partner_name) = lane_hub(sc.lane);
     let (buys, _, _) = tile_options(state, territory, sc);
     buys.iter()
         .filter(|b| is_partner_buy(b, partner_name))
         .map(|b| b.idx)
+        .chain(standing(state, territory, lane_partner_type(sc.lane)))
         .collect()
 }
 
@@ -794,6 +831,26 @@ fn plan_city(
     }
 }
 
+/// The tiles each planned city actually rules, or `None` if any of them is not
+/// a real city with territory — which is the case for every generated map,
+/// where the "cities" past the capital are villages nobody has captured yet.
+///
+/// A tile a city rules is a tile its owner has explored, so planning over this
+/// cannot leak anything the seat has not seen.
+fn engine_territory(state: &GameState, cities: &[i32]) -> Option<Vec<Vec<i32>>> {
+    let mut out = Vec::with_capacity(cities.len());
+    for &idx in cities {
+        let city = state
+            .tribes
+            .values()
+            .flat_map(|t| t.cities.iter())
+            .find(|c| c.idx == idx)
+            .filter(|c| !c._territory.is_empty())?;
+        out.push(polyfish::rules::economy::territory_tiles(state, city).collect());
+    }
+    Some(out)
+}
+
 /// Assign every tile within radius 2 of any planned city to exactly one city —
 /// nearest wins, ties to the earlier city — so overlapping 5x5s are not
 /// double-counted.
@@ -812,6 +869,15 @@ fn allocate_value(
     scs: &[Scenario],
     monuments: i32,
 ) -> Vec<Vec<i32>> {
+    // Believe the state when it knows. The radius model below exists only
+    // because a generated map has no ownership yet; where every planned city is
+    // a real city that already rules tiles, the engine's own answer is not an
+    // approximation of the truth, it IS the truth, and modelling it can only
+    // disagree. All-or-nothing: a half-real allocation would mix the two rules.
+    if let Some(real) = engine_territory(state, cities) {
+        return real;
+    }
+
     let mut claimants: HashMap<i32, Vec<usize>> = HashMap::new();
     for (ci, &c) in cities.iter().enumerate() {
         let radius = if scs[ci].border_growth { 2 } else { 1 };
@@ -1045,6 +1111,9 @@ fn enumerate_empire(
         for b in buys.iter().filter(|b| is_partner_buy(b, partner_name)) {
             e.insert(b.idx);
         }
+        // Partners already standing count too — `tile_options` skips occupied
+        // tiles, so on a live state these would otherwise feed nothing.
+        e.extend(standing(state, &terr[ci], ptype));
     }
     let empty_partners: HashSet<i32> = HashSet::new();
     let partners_for = |ci: usize| -> &HashSet<i32> {
@@ -1059,6 +1128,11 @@ fn enumerate_empire(
     // nothing is generated just to be filtered out.
     let cands: Vec<Vec<Option<i32>>> = (0..n)
         .map(|ci| {
+            // A hub already standing leaves nothing to enumerate.
+            let built = standing(state, &terr[ci], lane_hub(scs[ci].lane).0);
+            if let Some(&h) = built.first() {
+                return vec![Some(h)];
+            }
             let mut scored: Vec<(i32, i32)> = terr[ci]
                 .iter()
                 .copied()
@@ -2011,6 +2085,9 @@ fn main() {
                         giants    ceiling on super units, cost no object
 
   --explain CITY      per-scenario reasoning for one city (0-based)
+  --state FILE.json   plan from a real position instead of a generated map:
+                      your cities, the ground they rule, and whatever is
+                      already built. Prices only what is left to do.
   --ladder            what each successive monument buys, and where it goes
                       (printed automatically whenever --monuments > 0)
   --map               print terrain, resources and the territory split
@@ -2042,36 +2119,69 @@ fn main() {
         })
         .unwrap_or_else(|| [TechnologyType::Organization].into_iter().collect());
 
-    let state = polyfish::mapgen::generate(polyfish::mapgen::MapGenSettings {
-        size: MapSize::Tiny,
-        map_type: MapType::Drylands,
-        tribes: vec![TribeType::Imperius, TribeType::Imperius],
-        seed,
-        ..Default::default()
-    });
+    // A real position beats a generated one: `--state` plans for the cities you
+    // actually hold, on the ground they actually rule, around what is already
+    // built. `--seed` stays for the offline reference the evaluator is checked
+    // against.
+    let (state, cities) = match get("--state") {
+        Some(path) => {
+            let json = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
+            // Two producers, two shapes: the mod writes a bare GameState
+            // (live_game.json), the recorder wraps one under `gameState`.
+            let loaded: GameState = serde_json::from_str(&json)
+                .or_else(|_| {
+                    serde_json::from_str::<serde_json::Value>(&json)
+                        .and_then(|v| serde_json::from_value(v["gameState"].clone()))
+                })
+                .unwrap_or_else(|e| panic!("{path} holds no GameState: {e}"));
+            let mut game = polyfish::game::Game::new();
+            game.state = loaded;
+            game.post_load(); // rebuilds tile indices, visibility and territory
+            let pov = game.state.settings.current_player_turn_id;
+            let cities: Vec<i32> = game
+                .state
+                .tribes
+                .get(&pov)
+                .map(|t| t.cities.iter().map(|c| c.idx).collect())
+                .unwrap_or_default();
+            assert!(!cities.is_empty(), "player {pov} holds no city in {path}");
+            println!("state {path} | player {pov} | cities {cities:?}");
+            (game.state, cities)
+        }
+        None => {
+            let state = polyfish::mapgen::generate(polyfish::mapgen::MapGenSettings {
+                size: MapSize::Tiny,
+                map_type: MapType::Drylands,
+                tribes: vec![TribeType::Imperius, TribeType::Imperius],
+                seed,
+                ..Default::default()
+            });
 
-    // Capital of player 1, then the nearest villages.
-    let capital = state
-        .tribes
-        .get(&1)
-        .and_then(|t| t.cities.first().map(|c| c.idx))
-        .expect("player 1 has no city");
-    let mut villages: Vec<i32> = state
-        .structures
-        .iter()
-        .filter_map(|(&i, s)| {
-            s.as_ref()
-                .filter(|s| s.structure_type == StructureType::Village)
-                .filter(|_| state.tiles.get(&i).map_or(false, |t| t.owner == 0))
-                .map(|_| i)
-        })
-        .collect();
-    villages.sort_by_key(|&v| get_chebyshev_distance(v, capital, state.settings.size));
-    let n_extra: usize = get("--cities").and_then(|s| s.parse().ok()).unwrap_or(3) - 1;
-    let mut cities = vec![capital];
-    cities.extend(villages.into_iter().take(n_extra));
-
-    println!("seed {seed} | capital {capital} | cities {cities:?}");
+            // Capital of player 1, then the nearest villages.
+            let capital = state
+                .tribes
+                .get(&1)
+                .and_then(|t| t.cities.first().map(|c| c.idx))
+                .expect("player 1 has no city");
+            let mut villages: Vec<i32> = state
+                .structures
+                .iter()
+                .filter_map(|(&i, s)| {
+                    s.as_ref()
+                        .filter(|s| s.structure_type == StructureType::Village)
+                        .filter(|_| state.tiles.get(&i).map_or(false, |t| t.owner == 0))
+                        .map(|_| i)
+                })
+                .collect();
+            villages.sort_by_key(|&v| get_chebyshev_distance(v, capital, state.settings.size));
+            let n_extra: usize = get("--cities").and_then(|s| s.parse().ok()).unwrap_or(3) - 1;
+            let mut cities = vec![capital];
+            cities.extend(villages.into_iter().take(n_extra));
+            println!("seed {seed} | capital {capital} | cities {cities:?}");
+            (state, cities)
+        }
+    };
     // Empire-wide, not per city: monuments are earned from tasks, so a tribe
     // holds none at turn 0 and only ever has a handful. The frontier decides
     // which city each one goes to.
@@ -2149,7 +2259,8 @@ fn main() {
 
     for &c in &cities {
         println!("\n{}", "=".repeat(104));
-        let role = if c == capital { "CAPITAL" } else { "city" };
+        let is_capital = state.tiles.get(&c).is_some_and(|t| t.capital_of != 0);
+        let role = if is_capital { "CAPITAL" } else { "city" };
         println!("  {role} @ tile {c}");
         {
             let mut census: std::collections::BTreeMap<String, i32> = Default::default();
