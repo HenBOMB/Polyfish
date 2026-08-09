@@ -236,7 +236,10 @@ fn tile_options(
                     convert_cost.insert(idx, GROW_FOREST_COST);
                     buys.push(Buy {
                         idx,
-                        what: "grow+Hut",
+                        // Named for the structure it ends up placing: the hub's
+                        // partner match is on the suffix, and "grow+Hut" missed
+                        // it, so grown huts fed no Sawmill.
+                        what: "grow+LumberHut",
                         cost: GROW_FOREST_COST + 3,
                         pop: 1,
                         occupies: true,
@@ -1099,11 +1102,20 @@ fn enumerate_empire(
     // Many hub combinations score identically; keep one representative each.
     let mut seen_score: HashSet<(i32, i32, i32, i32)> = HashSet::new();
     for hubs in combos {
+        // A tile holds ONE structure. `city_build` drops this city's own hub and
+        // market from its partner count, but the empire-wide set still offered
+        // every OTHER city's hub tile — so a Sawmill next to a neighbour's
+        // Sawmill counted it as a LumberHut, inflating both hub levels and the
+        // Market income read off them.
+        let hub_tiles: HashSet<i32> = hubs.iter().flatten().copied().collect();
+        let counted: Vec<HashSet<i32>> = (0..n)
+            .map(|ci| partners_for(ci).difference(&hub_tiles).copied().collect())
+            .collect();
         let base: Vec<BuildOut> = (0..n)
             .map(|ci| {
                 city_build(
                     state, &terr[ci], scs[ci], monuments, hubs[ci], None,
-                    Some(partners_for(ci)),
+                    Some(&counted[ci]),
                 )
             })
             .collect();
@@ -1193,7 +1205,7 @@ fn enumerate_empire(
                     let at = |m: i32| {
                         city_build(
                             state, &terr[ci], scs[ci], m, hubs[ci], markets[ci],
-                            Some(partners_for(ci)),
+                            Some(&counted[ci]),
                         )
                         .pop
                     };
@@ -1223,7 +1235,7 @@ fn enumerate_empire(
         for ci in 0..n {
             let b = city_build(
                 state, &terr[ci], scs[ci], alloc[ci], hubs[ci], markets[ci],
-                Some(partners_for(ci)),
+                Some(&counted[ci]),
             );
             let mut city_pop = b.pop;
             if !scs[ci].border_growth && city_pop >= POP_FOR_LEVEL_4 {
@@ -1869,7 +1881,7 @@ fn print_build_card(
             println!("    Market at {m}, +{} SPT", plan.market_income[ci]);
         }
         for (kind, tiles) in by_kind {
-            let tag = if kind == partner_name { " (feeds the hub)" } else { "" };
+            let tag = if kind.ends_with(partner_name) { " (feeds the hub)" } else { "" };
             println!("    {kind:<12} x{:<3} {tiles:?}{tag}", tiles.len());
         }
     }
