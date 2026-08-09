@@ -353,3 +353,86 @@ fn a_road_claims_nothing_and_crushes_nothing() {
         ));
     }
 }
+
+/// A hub's partners arrive turns after its tile is chosen, so `partner_count`
+/// cannot inform placement — `partner_ceiling` is what the site could ever
+/// collect. Terrain rule, unoccupied, and resource-worked partners (Farm on
+/// Crop) only where the resource stands.
+#[test]
+fn partner_ceiling_sees_the_sites_future_not_its_present() {
+    let mut state = board();
+    let put = |s: &mut GameState, idx: i32, k: StructureType| {
+        s.structures.insert(
+            idx,
+            Some(StructureState { structure_type: k, level: 1, founded: 0 }),
+        );
+    };
+    // Sawmill on 60. Neighbours 48,49,50,59,61,70,71,72.
+    for idx in [48, 49, 50, 59, 61, 70, 71, 72] {
+        state.tiles.get_mut(&idx).unwrap().terrain_type = TerrainType::Forest;
+    }
+    put(&mut state, 60, StructureType::Sawmill);
+
+    assert_eq!(
+        rules::economy::partner_count(&state, 60, StructureType::Sawmill, 1),
+        0,
+        "nothing is standing yet"
+    );
+    assert_eq!(
+        rules::economy::partner_ceiling(&state, 60, StructureType::Sawmill, 1),
+        8,
+        "every adjacent forest could take a LumberHut"
+    );
+
+    // A realized partner stays inside the ceiling rather than adding to it.
+    put(&mut state, 48, StructureType::LumberHut);
+    assert_eq!(rules::economy::partner_count(&state, 60, StructureType::Sawmill, 1), 1);
+    assert_eq!(rules::economy::partner_ceiling(&state, 60, StructureType::Sawmill, 1), 8);
+
+    // Wrong terrain, someone else's tile, and an occupied tile all drop out.
+    state.tiles.get_mut(&49).unwrap().terrain_type = TerrainType::Field;
+    state.tiles.get_mut(&50).unwrap().owner = 2;
+    put(&mut state, 59, StructureType::Temple);
+    assert_eq!(
+        rules::economy::partner_ceiling(&state, 60, StructureType::Sawmill, 1),
+        5,
+        "8 less a field, an enemy tile and an occupied one"
+    );
+}
+
+/// A Farm works a Crop, so a Windmill's ceiling is bounded by the crops on the
+/// map — not by how many fields happen to sit next to it.
+#[test]
+fn partner_ceiling_respects_resource_worked_partners() {
+    let mut state = board();
+    for idx in [48, 49, 50, 59, 61, 70, 71, 72] {
+        state.tiles.get_mut(&idx).unwrap().terrain_type = TerrainType::Field;
+    }
+    state.structures.insert(
+        60,
+        Some(StructureState {
+            structure_type: StructureType::Windmill,
+            level: 1,
+            founded: 0,
+        }),
+    );
+    assert_eq!(
+        rules::economy::partner_ceiling(&state, 60, StructureType::Windmill, 1),
+        0,
+        "eight empty fields and no crop: a Farm cannot stand on any of them"
+    );
+
+    for idx in [48, 61] {
+        state.resources.insert(
+            idx,
+            Some(polyfish::states::ResourceState {
+                resource_type: ResourceType::Crop,
+            }),
+        );
+    }
+    assert_eq!(
+        rules::economy::partner_ceiling(&state, 60, StructureType::Windmill, 1),
+        2,
+        "only the crops count"
+    );
+}

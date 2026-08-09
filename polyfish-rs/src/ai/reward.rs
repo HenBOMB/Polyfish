@@ -257,6 +257,14 @@ pub const EXPLORER_CORNER_CAP: usize = 2;
 /// single farm). The first partner is the structure paying for itself — no
 /// bonus; a partner-less build stays unpriced rather than penalized.
 pub const SHAPE_GOAL_YIELD_ADJ: f32 = 100.0;
+/// v8: per unit of reward_pop per partner the site could still collect but has
+/// not yet (`partner_ceiling` minus the realized count). Deliberately well
+/// below `SHAPE_GOAL_YIELD_ADJ`: a promise that never fills must not pay like
+/// a partner that got built, and realizing one has to remain an improvement.
+/// Starts conservative -- the Q-gap method's first fit overshoots ~2x because
+/// co-triggered phi terms compound, so this wants a measured dq median before
+/// it moves.
+pub const SHAPE_GOAL_YIELD_CEILING: f32 = 40.0;
 /// v6: star-yield analog for Market (reward_stars > 0 + adjacent_types) —
 /// HALF the pop analog, deliberately: each partner's +1 SPT is already paid
 /// at SHAPE_GOAL_SPT through get_tribe_spt; this only sharpens the 2-3-hub
@@ -847,6 +855,30 @@ pub fn goal_potential(
         let extra = (partners - 1).max(0) as f32;
         phi += SHAPE_GOAL_YIELD_ADJ * setting.reward_pop.max(0) as f32 * extra;
         phi += SHAPE_GOAL_YIELD_ADJ_STARS * setting.reward_stars.max(0) as f32 * extra;
+        // v8: the site's unrealized CEILING, discounted. Everything above
+        // prices partners that are already standing -- but a hub's partners
+        // are bought over the turns AFTER its tile is chosen, and a ~7-ply
+        // descent never reaches them, so placement was being decided blind.
+        // Audit that motivated it: 27 hubs across 32 games at mean level 1.78,
+        // twelve of them at level 1, against sites the map could fill to 5+.
+        //
+        // Only the UNREALIZED remainder is paid, so a partner arriving moves
+        // its weight from this term to the one above rather than being counted
+        // twice -- and since the ceiling rate is the lower of the two, actually
+        // building the partner still raises phi. Pop hubs only: a Market's
+        // partners are other hubs, and `limited_per_city` caps those at one
+        // per city, so a "ceiling" over adjacent buildable tiles would be
+        // fiction.
+        if setting.reward_pop > 0 {
+            let ceiling = crate::rules::economy::partner_ceiling_with(
+                state,
+                s_idx,
+                &setting.adjacent_types,
+                player,
+            );
+            let unrealized = (ceiling - partners).max(0) as f32;
+            phi += SHAPE_GOAL_YIELD_CEILING * setting.reward_pop.max(0) as f32 * unrealized;
+        }
     }
     // Standing-forest option value (v5): clearing pays only when the
     // follow-up (build / level-up funding) outweighs the lost option.

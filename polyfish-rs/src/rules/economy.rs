@@ -99,6 +99,78 @@ pub fn partner_count(
     )
 }
 
+/// Partners this site could EVER collect — the ceiling, not today's count.
+///
+/// `partner_count` answers "what feeds this hub now", which is the wrong
+/// question at the instant a hub is placed: its partners are bought over the
+/// following turns, and the search horizon (~7 plies, less than one game turn)
+/// never reaches them. Two tiles that will end up with five partners and one
+/// look identical to a realized count. The ceiling makes a site's future
+/// legible immediately, and it is a function of state alone, so a potential
+/// built on it stays policy-invariant.
+///
+/// A tile counts when it already holds a partner, or could: the partner's own
+/// terrain rule, on an unoccupied tile, and — for partners that WORK a
+/// resource (Farm on Crop, Mine on Metal) — only where that resource still
+/// stands. Terrain the owner could convert (burning forest to field for a
+/// Farm) is deliberately excluded: that is a plan, not a property of the tile.
+pub fn partner_ceiling_with(
+    state: &GameState,
+    idx: i32,
+    partners: &HashSet<StructureType>,
+    owner: PlayerId,
+) -> i32 {
+    if partners.is_empty() || owner == 0 {
+        return 0;
+    }
+    crate::functions::get_adjacent_indices(state, idx, 1)
+        .into_iter()
+        .filter(|&adj| {
+            let Some(tile) = state.tiles.get(&adj) else {
+                return false;
+            };
+            if tile.owner != owner {
+                return false;
+            }
+            match crate::functions::get_structure_at(state, adj) {
+                // The ceiling includes what is already realized.
+                Some(s) => partners.contains(&s.structure_type),
+                None => partners.iter().any(|&p| {
+                    let ps = get_structure_setting(p);
+                    if !ps.terrain_types.contains(&tile.terrain_type) {
+                        return false;
+                    }
+                    match ps.resource_type {
+                        // Read the map, not `get_resource_at`: that filters by
+                        // the acting player's tech visibility, and a potential
+                        // must not depend on whose turn it is.
+                        Some(r) => {
+                            state.resources.get(&adj).and_then(|x| x.as_ref())
+                                .map(|x| x.resource_type) == Some(r)
+                        }
+                        None => true,
+                    }
+                }),
+            }
+        })
+        .count() as i32
+}
+
+/// Partners a hub of `hub_type` sited on `idx` could ever collect.
+pub fn partner_ceiling(
+    state: &GameState,
+    idx: i32,
+    hub_type: StructureType,
+    owner: PlayerId,
+) -> i32 {
+    partner_ceiling_with(
+        state,
+        idx,
+        &get_structure_setting(hub_type).adjacent_types,
+        owner,
+    )
+}
+
 /// Tiles this city actually rules.
 ///
 /// `_territory` is the radius-2 square filtered by *player* ownership, so a tile
