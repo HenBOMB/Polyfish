@@ -2,6 +2,7 @@ use axum::{
     Json, Router,
     extract::State,
     handler::HandlerWithoutStateExt,
+    http::{HeaderValue, header},
     routing::{get, post},
 };
 use polyfish::mapgen::{MapGenSettings, generate};
@@ -21,6 +22,7 @@ use serde_json::Value;
 use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
+use tower_http::set_header::SetResponseHeaderLayer;
 
 use polyfish::recorder::GameRecorder;
 
@@ -204,6 +206,14 @@ async fn main() {
         )
         .layer(CorsLayer::permissive())
         .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 50))
+        // ServeDir sends Last-Modified but no Cache-Control, so browsers fall
+        // back to heuristic caching — a stale copy cached hours ago can outlive
+        // a same-day edit without ever revalidating. Force revalidation on
+        // every request; ServeDir still answers with 304 when nothing changed.
+        .layer(SetResponseHeaderLayer::overriding(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-cache"),
+        ))
         .with_state(shared_state);
 
     // Run our app
@@ -280,6 +290,23 @@ fn visible_resources_json(
         .map(|rt| rt as i32)
         .collect();
     serde_json::json!(visible)
+}
+
+/// Structure type ids whose `.level` means something (hub adjacency count or
+/// temple age-growth) — the client's hover tooltip uses this to decide
+/// whether to print "(lvl N)"; everything else stays flat at 1 forever.
+fn leveled_structure_types_json() -> Value {
+    use polyfish::settings::structures::has_meaningful_level;
+    use polyfish::types::StructureType;
+    use strum::IntoEnumIterator;
+
+    static IDS: std::sync::LazyLock<Vec<i32>> = std::sync::LazyLock::new(|| {
+        StructureType::iter()
+            .filter(|&t| has_meaningful_level(t))
+            .map(|t| t as i32)
+            .collect()
+    });
+    serde_json::json!(*IDS)
 }
 
 /// Attach the star cost to a move's UI payload. `serialize()` itself must stay
@@ -359,6 +386,7 @@ async fn get_current_state(State(state): State<Arc<AppState>>) -> Json<Value> {
             "structures": game.state.structures,
             "resources": game.state.resources,
             "tribes": tribes_json_with_max_health(&game.state),
+            "leveledStructureTypes": leveled_structure_types_json(),
             "_prediction": game.state._prediction,
             "_messages": game.state._messages,
         },
@@ -439,6 +467,7 @@ async fn auto_step(
             "structures": game.state.structures,
             "resources": game.state.resources,
             "tribes": tribes_json_with_max_health(&game.state),
+            "leveledStructureTypes": leveled_structure_types_json(),
             "_prediction": game.state._prediction,
             "_messages": game.state._messages,
         },
@@ -512,6 +541,7 @@ async fn rng_step(State(state): State<Arc<AppState>>) -> Json<Value> {
             "structures": game.state.structures,
             "resources": game.state.resources,
             "tribes": tribes_json_with_max_health(&game.state),
+            "leveledStructureTypes": leveled_structure_types_json(),
             "_prediction": game.state._prediction,
             "_messages": game.state._messages,
         },
@@ -688,6 +718,7 @@ async fn manual_step(
             "structures": game.state.structures,
             "resources": game.state.resources,
             "tribes": tribes_json_with_max_health(&game.state),
+            "leveledStructureTypes": leveled_structure_types_json(),
             "_prediction": game.state._prediction,
             "_messages": game.state._messages,
         },
@@ -736,6 +767,7 @@ async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {
             "structures": game.state.structures,
             "resources": game.state.resources,
             "tribes": tribes_json_with_max_health(&game.state),
+            "leveledStructureTypes": leveled_structure_types_json(),
             "_prediction": game.state._prediction,
             "_messages": game.state._messages,
         },
@@ -1109,6 +1141,7 @@ async fn load_game(State(state): State<Arc<AppState>>) -> Json<Value> {
             "structures": game.state.structures,
             "resources": game.state.resources,
             "tribes": tribes_json_with_max_health(&game.state),
+            "leveledStructureTypes": leveled_structure_types_json(),
             "_prediction": game.state._prediction,
             "_messages": game.state._messages,
         },
@@ -1642,6 +1675,7 @@ async fn load_replay_endpoint(
                         "structures": game.state.structures,
                         "resources": game.state.resources,
                         "tribes": tribes_json_with_max_health(&game.state),
+                        "leveledStructureTypes": leveled_structure_types_json(),
                         "_prediction": game.state._prediction,
                         "_messages": game.state._messages,
                         "history": game.state._history,
@@ -1810,6 +1844,7 @@ async fn load_initial_endpoint(
                             "structures": game.state.structures,
                             "resources": game.state.resources,
                             "tribes": tribes_json_with_max_health(&game.state),
+                            "leveledStructureTypes": leveled_structure_types_json(),
                             "_prediction": game.state._prediction,
                             "_messages": game.state._messages,
                         },
@@ -2011,6 +2046,7 @@ async fn analyze_replay_step(
             "structures": game.state.structures,
             "resources": game.state.resources,
             "tribes": tribes_json_with_max_health(&game.state),
+            "leveledStructureTypes": leveled_structure_types_json(),
             "_prediction": game.state._prediction,
             "_messages": game.state._messages,
         },

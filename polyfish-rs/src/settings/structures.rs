@@ -51,6 +51,28 @@ pub fn get_structure_setting(struct_type: StructureType) -> &'static StructureSe
     &TABLE[&struct_type]
 }
 
+/// The 5 vanilla temple types, which level 1-5 via age-based growth
+/// (`actions/mod.rs`'s temple-growth pass) rather than the adjacency
+/// mechanic `StructureSetting.adjacent_types` drives for hubs.
+pub fn is_temple(struct_type: StructureType) -> bool {
+    matches!(
+        struct_type,
+        StructureType::Temple
+            | StructureType::WaterTemple
+            | StructureType::ForestTemple
+            | StructureType::MountainTemple
+            | StructureType::IceTemple
+    )
+}
+
+/// True when `.level` on this structure type reflects something real — hub
+/// adjacency count or temple age-growth — as opposed to the flat `1` every
+/// other structure type is built with and keeps forever. Drives whether the
+/// UI is worth showing a level for.
+pub fn has_meaningful_level(struct_type: StructureType) -> bool {
+    is_temple(struct_type) || !get_structure_setting(struct_type).adjacent_types.is_empty()
+}
+
 /// Build the settings for one structure type (called once per type at table init).
 fn build_structure_setting(struct_type: StructureType) -> StructureSetting {
     match struct_type {

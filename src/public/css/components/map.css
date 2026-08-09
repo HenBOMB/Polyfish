@@ -42,9 +42,32 @@
 
 .structure {
     width: 100px !important;
+    /* Height was inherited from .tile's 128px, sized for the handful of
+       structures visible before the sprite-map fix. Several of the newly
+       added ones (Market, temples, monuments, IceBank...) are tall,
+       narrow towers that maxed out that box and towered over the tile.
+       Cap it, and shift margin-top to keep the box's bottom edge — where
+       buildings should visually sit — in the same place as before. */
+    height: 90px !important;
     margin-left: 15px !important;
-    margin-top: -30px !important;
+    margin-top: 8px !important;
     pointer-events: none !important;
+}
+
+.structure-level-badge {
+    position: absolute;
+    bottom: -4px;
+    right: -8px;
+    background: rgba(0, 0, 0, 0.75);
+    color: #fbbf24;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    padding: 2px 5px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    pointer-events: none;
+    z-index: 10;
 }
 
 .monument {

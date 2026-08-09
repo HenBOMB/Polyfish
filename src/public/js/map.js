@@ -263,7 +263,20 @@ class MapRenderer {
                 if (struct.type === 1) classes.push('village');
                 if (struct.type === 2) classes.push('ruins');
                 if (struct.type === 29) classes.push('monument');
-                this.updateLayer(idx, 'structure', structFile, pos, 2000, classes);
+                const structEl = this.updateLayer(idx, 'structure', structFile, pos, 2000, classes);
+
+                // Market (50) has exactly one sprite on disk — no per-level art
+                // like Sawmill/Windmill/Forge — so its level (adjacent hub
+                // count, drives its Market income bonus) is otherwise invisible.
+                if (struct.type === 50) {
+                    let badge = structEl.querySelector('.structure-level-badge');
+                    if (!badge) {
+                        badge = document.createElement('div');
+                        badge.className = 'structure-level-badge';
+                        structEl.appendChild(badge);
+                    }
+                    badge.textContent = `Lv ${struct.level}`;
+                }
             }
         } else {
             this.removeLayer(idx, 'structure');
@@ -498,7 +511,14 @@ class MapRenderer {
             let html = `<strong>Tile ${idx} (${tile.coords.x}, ${tile.coords.y})</strong><br>`;
             html += `⛰️ ${CLASSIC_CLIMATE_NAMES[tile.climate] || 'Nature'} ${TerrainType[tile.type] || tile.type}<br>`;
             if (unit) html += `🪖 ${TRIBE_ID_2_NAME[unit.tribe.type]} ${ClassNameToId[unit.type || unit.unitType]} (${Math.floor(unit.health)}/${Math.floor(unit.maxHealth)})<br>`;
-            if (struct) html += `🗼 ${tile.capitalOf > 0 ? `${tribe} Capital` : isCity ? 'City' : StructureTypes[struct.type] || struct.type}<br>`;
+            if (struct) {
+                const name = tile.capitalOf > 0 ? `${tribe} Capital` : isCity ? 'City' : StructureTypes[struct.type] || struct.type;
+                // Which structure types have a level worth showing (hub adjacency
+                // count, temple age-growth) is a game rule, not a UI concern — the
+                // server decides it and serializes the answer.
+                const leveled = GAME_STATE.leveledStructureTypes?.includes(struct.type);
+                html += `🗼 ${name}${leveled ? ` (lvl ${struct.level})` : ''}<br>`;
+            }
             if (road) html += `🛣️ Road<br>`;
             const povTribe = GAME_STATE.tribes[this.currentPovId];
             if (resource && isResourceVisible(resource.type, povTribe)) {

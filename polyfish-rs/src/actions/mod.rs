@@ -577,16 +577,7 @@ pub fn process_start_turn_effects(state: &mut GameState, player_id: PlayerId) ->
     // Given structure map is global, iterating it is O(S). S is small-ish.
     for (idx, structure_opt) in state.structures.iter() {
         if let Some(structure) = structure_opt {
-            let is_temple = matches!(
-                structure.structure_type,
-                StructureType::Temple
-                    | StructureType::WaterTemple
-                    | StructureType::ForestTemple
-                    | StructureType::MountainTemple
-                    | StructureType::IceTemple
-            );
-
-            if is_temple {
+            if crate::settings::structures::is_temple(structure.structure_type) {
                 // Check owner
                 if let Some(tile) = state.tiles.get(idx) {
                     if tile.owner == player_id {
