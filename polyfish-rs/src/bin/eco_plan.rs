@@ -62,6 +62,9 @@ struct Buy {
 enum Lane {
     Forest,
     Farm,
+    /// Forge eats Mines and pays 2 pop per partner — double the other hubs —
+    /// but only a mountainous city can feed it.
+    Mine,
 }
 
 #[derive(Clone, Copy)]
@@ -74,35 +77,34 @@ struct Scenario {
     convert: bool,
 }
 
-const SCENARIOS: [Scenario; 6] = [
+const SCENARIOS: [Scenario; 8] = [
     Scenario { name: "sawmill natural",      lane: Lane::Forest, border_growth: false, convert: false },
     Scenario { name: "sawmill +border",      lane: Lane::Forest, border_growth: true,  convert: false },
     Scenario { name: "sawmill max greed",    lane: Lane::Forest, border_growth: true,  convert: true  },
     Scenario { name: "windmill natural",     lane: Lane::Farm,   border_growth: false, convert: false },
     Scenario { name: "windmill +border",     lane: Lane::Farm,   border_growth: true,  convert: false },
     Scenario { name: "windmill max greed",   lane: Lane::Farm,   border_growth: true,  convert: true  },
+    // Forge needs no terrain conversion: it sits on Field or Forest already,
+    // and its partners are Mines on mountains, which nothing converts.
+    Scenario { name: "forge natural",        lane: Lane::Mine,   border_growth: false, convert: false },
+    Scenario { name: "forge +border",        lane: Lane::Mine,   border_growth: true,  convert: false },
 ];
 
 /// Techs a lane needs, in dependency order. Returned regardless of endowment;
 /// the caller prices only the ones not already owned.
 fn lane_chain(lane: Lane, convert: bool) -> Vec<TechnologyType> {
-    let mut v = match lane {
-        Lane::Forest => vec![
-            TechnologyType::Hunting,
-            TechnologyType::Forestry,
-            TechnologyType::Mathematics,
-        ],
-        Lane::Farm => vec![TechnologyType::Farming, TechnologyType::Construction],
-    };
+    // Derived from the structures the lane actually places, so adding a lane
+    // cannot forget to price its techs. Everything else a build-out touches is
+    // billed per-buy; only the terrain conversions are extra.
+    let mut v = structure_techs(lane_partner_type(lane));
+    v.extend(structure_techs(lane_hub(lane).0));
     if convert {
         match lane {
-            // GrowForest: Field -> Forest.
-            Lane::Forest => v.extend([
-                TechnologyType::Archery,
-                TechnologyType::Spiritualism,
-            ]),
+            // GrowForest: Field -> Forest. Its prerequisite is pulled in by
+            // `tech_bill`, so only the ability tech is named.
+            Lane::Forest => v.push(TechnologyType::Spiritualism),
             // BurnForest rides along with Construction, already in the chain.
-            Lane::Farm => {}
+            Lane::Farm | Lane::Mine => {}
         }
     }
     v
@@ -241,7 +243,7 @@ fn tile_options(
                 // star. So any forest is a candidate hub site for the forest
                 // lane -- which is how a Sawmill ends up in the middle of a
                 // forest cluster rather than on its edge.
-                if sc.lane == Lane::Forest {
+                if matches!(sc.lane, Lane::Forest | Lane::Mine) {
                     hub_sites.push(idx);
                 }
                 // Hunting the Game leaves the forest standing, so the tile can
@@ -313,6 +315,7 @@ fn lane_hub(lane: Lane) -> (StructureType, &'static str) {
     match lane {
         Lane::Forest => (StructureType::Sawmill, "LumberHut"),
         Lane::Farm => (StructureType::Windmill, "Farm"),
+        Lane::Mine => (StructureType::Forge, "Mine"),
     }
 }
 
@@ -383,6 +386,44 @@ fn place_monuments(
         gained += MONUMENT_POP - loss;
     }
     (used, gained)
+}
+
+/// Could this lane's hub ever stand here? A Forge needs two Mines beside one
+/// tile, which most maps never offer. Scoring the lane anyway costs a full
+/// allocation pass per city and returns the same hub-less build every time, so
+/// the lane is gated on the terrain rather than evaluated and discarded.
+fn lane_can_place_hub(state: &GameState, territory: &[i32], lane: Lane) -> bool {
+    if lane != Lane::Mine {
+        return true;
+    }
+    let metal: HashSet<i32> = territory
+        .iter()
+        .copied()
+        .filter(|i| {
+            state
+                .resources
+                .get(i)
+                .and_then(|r| r.as_ref())
+                .is_some_and(|r| r.resource_type == ResourceType::Metal)
+        })
+        .collect();
+    territory.iter().any(|&t| {
+        get_adjacent_indices(state, t, 1)
+            .into_iter()
+            .filter(|a| metal.contains(a))
+            .count()
+            >= 2
+    })
+}
+
+/// The radius-2 square a city could ever rule, for cheap pre-checks that must
+/// not depend on an allocation that has not happened yet.
+fn city_square(state: &GameState, city: i32) -> Vec<i32> {
+    get_adjacent_indices(state, city, 2)
+        .into_iter()
+        .chain([city])
+        .filter(|i| state.tiles.contains_key(i))
+        .collect()
 }
 
 /// Fewest monuments this city must be GIVEN before its border is reachable at
@@ -893,6 +934,8 @@ fn sc_short(sc: Scenario) -> &'static str {
         (Lane::Farm, false, _) => "W",
         (Lane::Farm, true, false) => "W+b",
         (Lane::Farm, true, true) => "W+bc",
+        (Lane::Mine, false, _) => "F",
+        (Lane::Mine, true, _) => "F+b",
     }
 }
 
@@ -1250,6 +1293,7 @@ fn lane_partner_type(lane: Lane) -> StructureType {
     match lane {
         Lane::Forest => StructureType::LumberHut,
         Lane::Farm => StructureType::Farm,
+        Lane::Mine => StructureType::Mine,
     }
 }
 
@@ -1799,7 +1843,13 @@ fn main() {
         println!("STANDALONE: each city scored on its full square (tiles double-counted)");
     }
     if args.iter().any(|a| a == "--optimal") {
-        let lane = if args.iter().any(|a| a == "--windmill") { Lane::Farm } else { Lane::Forest };
+        let lane = if args.iter().any(|a| a == "--windmill") {
+            Lane::Farm
+        } else if args.iter().any(|a| a == "--forge") {
+            Lane::Mine
+        } else {
+            Lane::Forest
+        };
         optimal_report(&state, &cities, monuments, lane);
         return;
     }
@@ -1903,6 +1953,12 @@ fn main() {
     // ---- touch every hub they can reach.
     let mut all_plans: Vec<EmpirePlan> = Vec::new();
     for sc in SCENARIOS {
+        if !cities
+            .iter()
+            .any(|&c| lane_can_place_hub(&state, &city_square(&state, c), sc.lane))
+        {
+            continue;
+        }
         let terr = if standalone {
             allocate_mode(&state, &cities, sc.border_growth, true)
         } else {
@@ -1932,18 +1988,31 @@ fn main() {
         let mut per_city: Vec<Vec<Scenario>> = Vec::new();
         let mut dropped = 0usize;
         for (ci, &c) in cities.iter().enumerate() {
+            let square = city_square(&state, c);
             let scored: Vec<(Scenario, i32, i32, i32)> = SCENARIOS
                 .iter()
+                .filter(|sc| lane_can_place_hub(&state, &square, sc.lane))
                 .map(|&sc| {
                     let terr = allocate_value(&state, &cities, &uniform(sc, cities.len()), monuments);
                     let b = build_out(&state, c, &terr[ci], sc, monuments);
                     (sc, b.stars, b.pop, b.partners)
                 })
                 .collect();
-            let keep: Vec<Scenario> = scored
+            // Collapse exact duplicates first. A lane that cannot place its hub
+            // here — Forge with fewer than two adjacent Mines, say — produces
+            // the identical hub-less build as every other inert lane, and
+            // dominance never separates equals, so all of them would survive
+            // and multiply the assignment space for nothing.
+            let mut seen: HashSet<(i32, i32, i32)> = HashSet::new();
+            let unique: Vec<(Scenario, i32, i32, i32)> = scored
+                .iter()
+                .filter(|&&(_, st, pop, lvl)| seen.insert((st, pop, lvl)))
+                .copied()
+                .collect();
+            let keep: Vec<Scenario> = unique
                 .iter()
                 .filter(|&&(_, st, pop, lvl)| {
-                    !scored.iter().any(|&(_, st2, pop2, lvl2)| {
+                    !unique.iter().any(|&(_, st2, pop2, lvl2)| {
                         st2 <= st
                             && pop2 >= pop
                             && lvl2 >= lvl
