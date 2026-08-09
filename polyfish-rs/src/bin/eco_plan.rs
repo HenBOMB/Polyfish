@@ -43,6 +43,12 @@ fn giants_at_level(level: i32) -> i32 {
     (level - 4).max(0)
 }
 
+/// Does this buy place the structure that feeds a hub? Conversions prefix the
+/// name (`burn+Farm`), so the match is on the suffix.
+fn is_partner_buy(b: &Buy, partner_name: &str) -> bool {
+    b.what == partner_name || b.what.ends_with(partner_name)
+}
+
 /// One buyable thing on one tile.
 #[derive(Clone, Debug)]
 struct Buy {
@@ -459,7 +465,7 @@ fn hub_candidates(state: &GameState, territory: &[i32], sc: Scenario, top_k: usi
     let (_, partner_name) = lane_hub(sc.lane);
     let partner_tiles: HashSet<i32> = buys
         .iter()
-        .filter(|b| b.what == partner_name || b.what.ends_with(partner_name))
+        .filter(|b| is_partner_buy(b, partner_name))
         .map(|b| b.idx)
         .collect();
     let mut scored: Vec<(i32, i32)> = hub_sites
@@ -499,7 +505,7 @@ fn city_build(
 
     let partner_tiles: HashSet<i32> = buys
         .iter()
-        .filter(|b| b.what == partner_name || b.what.ends_with(partner_name))
+        .filter(|b| is_partner_buy(b, partner_name))
         .map(|b| b.idx)
         .collect();
     let adj_to_hub: HashSet<i32> = hub
@@ -634,11 +640,19 @@ fn build_out(
     let mut b = city_build(state, territory, sc, monuments, hub, None, None);
     if let Some(h) = hub {
         if b.partners > 0 {
-            let market = market_sites(state, territory, h)
+            // Sites stopped being interchangeable once a Market may sit on a
+            // tile the plan would otherwise harvest or farm, so price each one
+            // instead of taking the lowest index.
+            let partners = partner_tiles_of(state, territory, sc);
+            let best = market_sites(state, territory, h, &partners)
                 .into_iter()
-                .next();
-            if let Some(m) = market {
-                b = city_build(state, territory, sc, monuments, hub, Some(m), None);
+                .map(|m| {
+                    let cb = city_build(state, territory, sc, monuments, hub, Some(m), None);
+                    (cb.pop, -cb.stars, -m)
+                })
+                .max();
+            if let Some((_, _, neg)) = best {
+                b = city_build(state, territory, sc, monuments, hub, Some(-neg), None);
                 b.market_spt = b.partners.min(MARKET_MAX_LEVEL);
             }
         }
@@ -646,17 +660,43 @@ fn build_out(
     b
 }
 
-/// Tiles in `territory` where a Market is legal and useful: Field terrain, empty,
-/// carrying no resource worth harvesting, and adjacent to `hub`.
-fn market_sites(state: &GameState, territory: &[i32], hub: i32) -> Vec<i32> {
+/// Is a Market legal on `site`?
+///
+/// A resource on the tile is NOT disqualifying. The engine's terrain-structure
+/// branch never looks at one (`moves/build.rs`), and a harvest CONSUMES it —
+/// so a Fruit tile the plan harvests anyway is a free Market site. The tile a
+/// Market must not take is a `is_hub_partner` one: displacing a partner costs
+/// its hub a level, and with it every Market touching that hub.
+fn market_site_legal(state: &GameState, site: i32, is_hub_partner: bool) -> bool {
+    !is_hub_partner
+        && state.tiles.get(&site).map(|t| t.terrain_type) == Some(TerrainType::Field)
+        && polyfish::functions::get_structure_at(state, site).is_none()
+}
+
+/// Tiles this city's lane would cover with the hub's partner structure.
+fn partner_tiles_of(state: &GameState, territory: &[i32], sc: Scenario) -> HashSet<i32> {
+    let (_, partner_name) = lane_hub(sc.lane);
+    let (buys, _, _) = tile_options(state, territory, sc);
+    buys.iter()
+        .filter(|b| is_partner_buy(b, partner_name))
+        .map(|b| b.idx)
+        .collect()
+}
+
+/// Tiles in `territory` where a Market is legal and useful — adjacent to `hub`,
+/// and not one of the partners feeding it.
+fn market_sites(
+    state: &GameState,
+    territory: &[i32],
+    hub: i32,
+    partners: &HashSet<i32>,
+) -> Vec<i32> {
     let mut v: Vec<i32> = territory
         .iter()
         .copied()
         .filter(|a| {
             *a != hub
-                && state.tiles.get(a).map(|t| t.terrain_type) == Some(TerrainType::Field)
-                && state.resources.get(a).map_or(true, |r| r.is_none())
-                && polyfish::functions::get_structure_at(state, *a).is_none()
+                && market_site_legal(state, *a, partners.contains(a))
                 && get_adjacent_indices(state, hub, 1).contains(a)
         })
         .collect();
@@ -801,7 +841,25 @@ fn allocate_value(
     }
     contested.sort_by_key(|(idx, _)| *idx);
 
+    // An inner-ring tile is not contestable. `claim_territory` takes only
+    // UNOWNED tiles, so a city's own 3x3 is its own from the moment it is
+    // founded or captured, and a neighbour's BorderGrowth — which is a
+    // level-4 reward, and so always later — can never take it back. Where two
+    // inner rings overlap the earlier city wins, and `cities` is already in
+    // capture order: capital first, then villages by distance.
+    let mut open: Vec<(i32, Vec<usize>)> = Vec::new();
     for (idx, who) in contested {
+        let inner = who
+            .iter()
+            .copied()
+            .find(|&ci| get_chebyshev_distance(idx, cities[ci], state.settings.size) <= 1);
+        match inner {
+            Some(ci) => terr[ci].push(idx),
+            None => open.push((idx, who)),
+        }
+    }
+
+    for (idx, who) in open {
         // Rank by (pop gained, nearer city, lower index) — every term
         // deterministic, so the allocation is reproducible.
         let mut ranked: Vec<(i32, i32, usize)> = who
@@ -981,10 +1039,7 @@ fn enumerate_empire(
         let (_, partner_name) = lane_hub(scs[ci].lane);
         let ptype = lane_partner_type(scs[ci].lane);
         let e = partners_by_type.entry(ptype).or_default();
-        for b in buys
-            .iter()
-            .filter(|b| b.what == partner_name || b.what.ends_with(partner_name))
-        {
+        for b in buys.iter().filter(|b| is_partner_buy(b, partner_name)) {
             e.insert(b.idx);
         }
     }
@@ -1068,10 +1123,16 @@ fn enumerate_empire(
                     .iter()
                     .copied()
                     .filter(|a| {
-                        state.tiles.get(a).map(|t| t.terrain_type) == Some(TerrainType::Field)
-                            && state.resources.get(a).map_or(true, |r| r.is_none())
-                            && polyfish::functions::get_structure_at(state, *a).is_none()
-                            && !hubs.iter().any(|h| *h == Some(*a))
+                        let adj = get_adjacent_indices(state, *a, 1);
+                        // Feeding ANY adjacent hub disqualifies the tile, whichever
+                        // city that hub belongs to — taking it would drop the level
+                        // stage 1 already priced, and every Market reading it.
+                        let feeds = (0..n).any(|cj| {
+                            hubs[cj].is_some_and(|h| adj.contains(&h))
+                                && partners_for(cj).contains(a)
+                        });
+                        !hubs.iter().any(|h| *h == Some(*a))
+                            && market_site_legal(state, *a, feeds)
                     })
                     .map(|a| {
                         let adj = get_adjacent_indices(state, a, 1);
@@ -1256,7 +1317,7 @@ fn explain(state: &GameState, city_idx: i32, territory: &[i32], sc: Scenario) {
     let (_, partner_name) = lane_hub(sc.lane);
     let partner_tiles: HashSet<i32> = buys
         .iter()
-        .filter(|b| b.what == partner_name || b.what.ends_with(partner_name))
+        .filter(|b| is_partner_buy(b, partner_name))
         .map(|b| b.idx)
         .collect();
     let b = build_out(state, city_idx, territory, sc, 0);
@@ -1694,6 +1755,57 @@ fn pick_for_goal<'a>(front: &'a [EmpirePlan], g: Goal) -> Option<&'a EmpirePlan>
     })
 }
 
+/// Terrain, resource and territory owner per tile — the ground truth every
+/// claim about "tile 14 is a Fruit field" has to be checked against.
+fn print_map(state: &GameState, cities: &[i32], terr: &[Vec<i32>], sc: Scenario) {
+    let size = state.settings.size;
+    println!("\n  MAP — terrain/resource, and the city each tile is allocated to");
+    println!("  terrain F=field f=forest M=mountain W=water    resource C=crop R=fruit G=game E=metal");
+    println!("  allocation is for '{}', which is what sets each city's territory\n", sc.name);
+    print!("        ");
+    for x in 0..size {
+        print!("{:>10}", format!("x{x}"));
+    }
+    println!();
+    for y in 0..size {
+        print!("   y{y:<3} ");
+        for x in 0..size {
+            let idx = y * size + x;
+            let t = match state.tiles.get(&idx).map(|t| t.terrain_type) {
+                Some(TerrainType::Field) => "F",
+                Some(TerrainType::Forest) => "f",
+                Some(TerrainType::Mountain) => "M",
+                Some(TerrainType::Water) | Some(TerrainType::Ocean) => "W",
+                _ => "?",
+            };
+            let r = match state
+                .resources
+                .get(&idx)
+                .and_then(|r| r.as_ref())
+                .map(|r| r.resource_type)
+            {
+                Some(ResourceType::Crop) => "C",
+                Some(ResourceType::Fruit) => "R",
+                Some(ResourceType::Game) => "G",
+                Some(ResourceType::Metal) => "E",
+                Some(_) => "x",
+                None => ".",
+            };
+            let s = polyfish::functions::get_structure_at(state, idx)
+                .map(|s| if s.structure_type == StructureType::Village { "v" } else { "s" })
+                .unwrap_or(" ");
+            let owner = terr
+                .iter()
+                .position(|t| t.contains(&idx))
+                .map(|ci| format!("c{}", cities[ci]))
+                .unwrap_or_else(|| "  ".into());
+            print!("{:>10}", format!("{idx}:{t}{r}{s}{owner}"));
+        }
+        println!();
+    }
+    println!("\n  cities {cities:?}; a tile with no cN is outside every planned territory");
+}
+
 /// The full build for one plan: what to put where, what it costs, what it pays.
 fn print_build_card(
     state: &GameState,
@@ -1792,6 +1904,7 @@ fn main() {
                         eco       most SPT per star
 
   --explain CITY      per-scenario reasoning for one city (0-based)
+  --map               print terrain, resources and the territory split
   --verify            check placements against the engine (exit 1 on failure)
   --optimal           rank every hub site; --windmill / --forge for other lanes
 "#
@@ -1868,6 +1981,12 @@ fn main() {
     let mix = !args.iter().any(|a| a == "--no-mix");
     if standalone {
         println!("STANDALONE: each city scored on its full square (tiles double-counted)");
+    }
+    if args.iter().any(|a| a == "--map") {
+        let sc = SCENARIOS[1]; // sawmill +border: full radius-2 territory
+        let terr = allocate_value(&state, &cities, &uniform(sc, cities.len()), monuments);
+        print_map(&state, &cities, &terr, sc);
+        return;
     }
     if args.iter().any(|a| a == "--optimal") {
         let lane = if args.iter().any(|a| a == "--windmill") {
