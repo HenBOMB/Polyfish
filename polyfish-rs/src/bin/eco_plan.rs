@@ -53,6 +53,9 @@ struct Buy {
     /// Places a structure, so it competes with a hub for the tile. Harvests
     /// (Fruit/Game/Fish) leave the tile empty and do not.
     occupies: bool,
+    /// Techs this buy needs. Charged only when the buy is actually taken, so a
+    /// plan that skips the Mountains never pays for Mining.
+    techs: Vec<TechnologyType>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -136,15 +139,25 @@ fn tech_bill(chain: &[TechnologyType], owned: &HashSet<TechnologyType>, cities: 
                     continue;
                 }
             }
+            // Price each tech at ITS OWN tier. Billing prerequisites at the
+            // target's tier over-charged every deep chain.
             bill += get_tech_cost(
                 cities,
-                polyfish::settings::technology::tech_tier(*t),
+                polyfish::settings::technology::tech_tier(cur),
                 false,
             );
             have.insert(cur);
         }
     }
     bill
+}
+
+/// The tech a structure needs, read off the tech table via the engine's own
+/// reverse lookup so this cannot drift from it.
+fn structure_techs(s: StructureType) -> Vec<TechnologyType> {
+    polyfish::settings::technology::get_tech_unlocking_structure(s)
+        .into_iter()
+        .collect()
 }
 
 /// Every tile a city could develop, after any terrain conversion the scenario
@@ -180,6 +193,7 @@ fn tile_options(
                 cost: rs.cost.unwrap_or(0),
                 pop: rs.reward_pop,
                 occupies: false,
+                techs: vec![rs.tech_required],
             })
         };
 
@@ -193,6 +207,7 @@ fn tile_options(
                         cost: get_structure_setting(StructureType::Farm).cost.unwrap_or(5),
                         pop: get_resource_setting(ResourceType::Crop).reward_pop,
                         occupies: true,
+                        techs: structure_techs(StructureType::Farm),
                     }),
                     Some(r) => buys.extend(harvest(r)),
                     None => {}
@@ -205,6 +220,7 @@ fn tile_options(
                         cost: GROW_FOREST_COST + 3,
                         pop: 1,
                         occupies: true,
+                        techs: structure_techs(StructureType::LumberHut),
                     });
                 }
             }
@@ -222,7 +238,14 @@ fn tile_options(
                     buys.extend(harvest(r));
                 }
                 if sc.lane == Lane::Forest || !sc.convert {
-                    buys.push(Buy { idx, what: "LumberHut", cost: 3, pop: 1, occupies: true });
+                    buys.push(Buy {
+                        idx,
+                        what: "LumberHut",
+                        cost: 3,
+                        pop: 1,
+                        occupies: true,
+                        techs: structure_techs(StructureType::LumberHut),
+                    });
                 } else {
                     convert_cost.insert(idx, burn);
                     buys.push(Buy {
@@ -231,6 +254,7 @@ fn tile_options(
                         cost: burn + get_structure_setting(StructureType::Farm).cost.unwrap_or(5),
                         pop: get_resource_setting(ResourceType::Crop).reward_pop,
                         occupies: true,
+                        techs: structure_techs(StructureType::Farm),
                     });
                 }
             }
@@ -242,6 +266,7 @@ fn tile_options(
                         cost: get_structure_setting(StructureType::Mine).cost.unwrap_or(5),
                         pop: get_resource_setting(ResourceType::Metal).reward_pop,
                         occupies: true,
+                        techs: structure_techs(StructureType::Mine),
                     });
                 }
             }
@@ -285,6 +310,9 @@ fn lane_hub(lane: Lane) -> (StructureType, &'static str) {
 struct BuildOut {
     pop: i32,
     stars: i32,
+    /// Techs the taken buys require — billed by `plan_city`, so a plan pays for
+    /// the Mining or Fishing it leans on instead of assuming it for free.
+    techs: HashSet<TechnologyType>,
     hub_site: Option<i32>,
     partners: i32,
     market_site: Option<i32>,
@@ -406,9 +434,11 @@ fn city_build(
     let displaced = |b: &Buy| b.occupies && (Some(b.idx) == hub || Some(b.idx) == market);
     let mut pop = 0;
     let mut stars = 0;
+    let mut techs: HashSet<TechnologyType> = HashSet::new();
     for b in buys.iter().filter(|b| !displaced(b)) {
         stars += b.cost;
         pop += b.pop;
+        techs.extend(b.techs.iter().copied());
     }
     let counted = empire_partners.unwrap_or(&partner_tiles);
     let partners = counted
@@ -437,10 +467,18 @@ fn city_build(
             stars -= b.cost;
         }
     }
+    // A tech is still owed if any surviving buy needs it.
+    let kept: HashSet<TechnologyType> = buys
+        .iter()
+        .filter(|b| !displaced(b) && !mon_tiles.contains(&b.idx))
+        .flat_map(|b| b.techs.iter().copied())
+        .collect();
+    techs.retain(|t| kept.contains(t));
 
     BuildOut {
         pop,
         stars,
+        techs,
         hub_site: hub,
         partners,
         market_site: market,
@@ -599,7 +637,14 @@ fn plan_city(
     if !sc.border_growth && pop >= POP_FOR_LEVEL_4 {
         pop += 3;
     }
-    let mut stars = b.stars + tech_bill(&lane_chain(sc.lane, sc.convert), owned, num_cities);
+    // Every tech the plan leans on, not just the lane's. A build-out that mines
+    // or fishes pays for Mining or Fishing like any other cost; it used to get
+    // them free, which flattered exactly the greediest plans.
+    let mut chain = lane_chain(sc.lane, sc.convert);
+    let mut extra: Vec<TechnologyType> = b.techs.iter().copied().collect();
+    extra.sort_by_key(|t| *t as i32); // HashSet order is not stable; the bill must be
+    chain.extend(extra);
+    let mut stars = b.stars + tech_bill(&chain, owned, num_cities);
     if b.market_site.is_some() {
         stars += tech_bill(&market_chain(), owned, num_cities);
     }
@@ -844,7 +889,6 @@ fn enumerate_empire(
         })
         .collect();
 
-    let lane_tech = tech_bill(&lane_chain(sc.lane, sc.convert), owned, num_cities);
     let market_tech = tech_bill(&market_chain(), owned, num_cities);
 
     let mut combos: Vec<Vec<Option<i32>>> = Vec::new();
@@ -910,24 +954,25 @@ fn enumerate_empire(
         }
 
         // STAGE 3 — cost it, route pop to cities, score.
-        let mut stars = lane_tech;
-        if markets.iter().any(|m| m.is_some()) {
-            stars += market_tech;
-        }
+        let mut stars = 0;
+        let mut plan_techs: HashSet<TechnologyType> = HashSet::new();
         let (mut pop, mut giants, mut spt) = (0, 0, 0);
         let mut feasible = true;
         for ci in 0..n {
+            // Hub-aware reachability: one hub per city, so an OUTER hub means
+            // the climb to level 4 happens with no hub at all.
             if sc.border_growth {
-                let inner: Vec<i32> = terr[ci]
-                    .iter()
-                    .copied()
-                    .filter(|&i| {
-                        get_chebyshev_distance(i, cities[ci], state.settings.size) <= 1
-                    })
-                    .collect();
-                if city_build(state, &inner, sc, monuments, None, None, None).pop
-                    < POP_FOR_LEVEL_4
-                {
+                let reachable = match hubs[ci] {
+                    Some(h) => {
+                        site_reachable(state, cities[ci], &terr[ci], sc, monuments, h)
+                    }
+                    None => {
+                        let inner = inner_ring(state, cities[ci], &terr[ci]);
+                        city_build(state, &inner, sc, monuments, None, None, None).pop
+                            >= POP_FOR_LEVEL_4
+                    }
+                };
+                if !reachable {
                     feasible = false;
                     break;
                 }
@@ -944,12 +989,22 @@ fn enumerate_empire(
             let is_capital =
                 state.tiles.get(&cities[ci]).map_or(false, |t| t.capital_of != 0);
             stars += b.stars;
+            plan_techs.extend(b.techs.iter().copied());
             pop += city_pop;
             giants += giants_at_level(level);
             spt += level + i32::from(is_capital) + i32::from(level >= 2) + income[ci];
         }
         if !feasible {
             continue;
+        }
+        // Techs are empire-wide, so the union across cities is billed once.
+        let mut chain = lane_chain(sc.lane, sc.convert);
+        let mut extra: Vec<TechnologyType> = plan_techs.into_iter().collect();
+        extra.sort_by_key(|t| *t as i32);
+        chain.extend(extra);
+        stars += tech_bill(&chain, owned, num_cities);
+        if markets.iter().any(|m| m.is_some()) {
+            stars += market_tech;
         }
         if !seen_score.insert((stars, giants, spt)) {
             continue;

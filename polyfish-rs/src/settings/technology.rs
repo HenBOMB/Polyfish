@@ -604,6 +604,21 @@ pub fn is_tech_unlocked(
     tech_list.iter().any(|t| t.tech_type == tech)
 }
 
+/// Helper to find which technology unlocks a specific structure. Derived from
+/// the tech table rather than a hand list, so it cannot drift from it.
+pub fn get_tech_unlocking_structure(struct_type: StructureType) -> Option<TechnologyType> {
+    use strum::IntoEnumIterator;
+    for tech in TechnologyType::iter() {
+        let settings = get_technology_setting(tech);
+        if settings.unlocks_structure == Some(struct_type)
+            || settings.unlocks_special_structures.contains(&struct_type)
+        {
+            return Some(tech);
+        }
+    }
+    None
+}
+
 /// Helper to find which technology unlocks a specific unit
 pub fn get_tech_unlocking_unit(unit_type: UnitType) -> Option<TechnologyType> {
     use strum::IntoEnumIterator;
