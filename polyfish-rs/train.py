@@ -247,6 +247,29 @@ class PolyZeroNet(nn.Module):
 
         return policy, values, aux
 
+def city_masked_mse(pred, target):
+    """MSE over the city tiles only, not all 121.
+
+    98% of every aux_city_spt row is empty board, so an unmasked mean makes
+    "output zero everywhere" overwhelmingly the cheapest answer: after ten
+    iterations the head had learned WHERE cities are (it separates city from
+    empty by +0.054) but not what they are worth — predicting mean 0.057
+    against a target mean of 0.187, for an R^2 of -1.73 on the cells that
+    actually carry the signal. Masking removes the 98% that was drowning it.
+
+    The mask is `target != 0`, so a city with zero production — under siege,
+    per get_city_production — is skipped rather than taught. Rare, and the
+    alternative is shipping a separate presence plane in the games file.
+
+    Scale note: this reads ~10x higher than the unmasked version did. It is a
+    different quantity, not a regression; readings before Aug 9 2026 are NOT
+    comparable.
+    """
+    m = (target != 0).float()
+    n = m.sum(dim=1).clamp(min=1.0)
+    return (((pred - target) ** 2) * m).sum(dim=1) / n
+
+
 def compute_loss(policy_pred, values_pred, policy_targets, value_target,
                  aux_pred=None, aux_targets=None, aux_mask=None,
                  ref_policy_pred=None, kl_ref_weight=0.0):
@@ -322,7 +345,7 @@ def compute_loss(policy_pred, values_pred, policy_targets, value_target,
             'aux_spt': lambda p, t: ((p - t) ** 2).mean(dim=1),
             'aux_opp_tech': lambda p, t: bce(p, t, reduction='none').mean(dim=1),
             'aux_pursuit': lambda p, t: ((p - t) ** 2).mean(dim=1),
-            'aux_city_spt': lambda p, t: ((p - t) ** 2).mean(dim=1),
+            'aux_city_spt': city_masked_mse,
         }
         for k, fn in per_sample.items():
             if AUX_WEIGHTS[k] == 0.0 or k not in aux_targets:
