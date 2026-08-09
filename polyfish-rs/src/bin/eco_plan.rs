@@ -1718,38 +1718,36 @@ enum Goal {
     Giants,
 }
 
-/// Frontier maxima for SPT, super units, stars and monuments — the scale every
-/// knee is measured against. Never zero, so they are safe denominators.
-fn frontier_maxima(front: &[EmpirePlan]) -> (i64, i64, i64, i64) {
+/// Frontier maxima for SPT, super units and stars — the scale every knee is
+/// measured against. Never zero, so they are safe denominators.
+fn frontier_maxima(front: &[EmpirePlan]) -> (i64, i64, i64) {
     let m = |v: i64| v.max(1);
     (
         m(front.iter().map(|p| p.spt).max().unwrap_or(1) as i64),
         m(front.iter().map(|p| p.giants).max().unwrap_or(1) as i64),
         m(front.iter().map(|p| p.stars).max().unwrap_or(1) as i64),
-        m(front.iter().map(|p| p.monuments_used()).max().unwrap_or(1) as i64),
     )
 }
 
-/// The knee: value minus cost, with every axis normalised to [0,1] across the
-/// frontier.
+/// The knee: value minus cost, with SPT, super units and stars each normalised
+/// to [0,1] across the frontier.
 ///
 /// On normalised axes the chord from the cheapest plan to the richest IS the
 /// diagonal, so the maximum of (value - cost) is the point furthest above that
 /// chord — the elbow, with no hand-tuned exchange rate. `w_spt`/`w_su` choose
 /// what "value" means: (1,0) is income alone, (0,1) army alone, (1,1) both.
+/// Scaled to integers by the common denominator so ties are exact.
 ///
-/// COST IS BOTH CURRENCIES. Monuments were only a tiebreak, so a picker handed
-/// a budget of three always spent three if it gained anything at all, however
-/// marginal — it would take the border for one city over a plan four stars
-/// cheaper that kept all three in the bank. Monuments are earned, not bought,
-/// so they carry a full axis of cost: spend one only when it buys a lot.
-/// Everything is scaled by the common denominator so ties stay exact.
-fn knee_score(p: &EmpirePlan, w_spt: i64, w_su: i64, (ms, mg, mc, mm): (i64, i64, i64, i64)) -> i64 {
-    let w = w_spt + w_su;
-    let value = mm * (w_spt * p.spt as i64 * mg * mc + w_su * p.giants as i64 * ms * mc);
-    let star_cost = mm * w * p.stars as i64 * ms * mg;
-    let monument_cost = w * p.monuments_used() as i64 * ms * mg * mc;
-    value - star_cost - monument_cost
+/// MONUMENTS ARE NOT PRICED HERE. A monument is 3 pop, and 3 pop is worth the
+/// reward slot it completes and nothing otherwise — threshold-shaped, not
+/// linear, so no single exchange rate against stars is right. Charging them a
+/// full axis made every knee refuse to spend one across 11 seeds; leaving them
+/// free made a picker drain its budget for a rounding error. The ladder shows
+/// the marginal value instead and the caller decides.
+fn knee_score(p: &EmpirePlan, w_spt: i64, w_su: i64, (ms, mg, mc): (i64, i64, i64)) -> i64 {
+    let value = w_spt * p.spt as i64 * mg * mc + w_su * p.giants as i64 * ms * mc;
+    let cost = (w_spt + w_su) * p.stars as i64 * ms * mg;
+    value - cost
 }
 
 fn parse_goal(s: &str) -> Option<Goal> {
@@ -1801,6 +1799,63 @@ fn pick_for_goal<'a>(front: &'a [EmpirePlan], g: Goal) -> Option<&'a EmpirePlan>
         };
         key(a).cmp(&key(b)).then(thrift(a).cmp(&thrift(b)))
     })
+}
+
+/// What each successive monument actually buys, and where it goes.
+///
+/// A monument's worth is threshold-shaped — it completes a reward slot or it
+/// does nothing — so pricing it against stars needs an exchange rate nobody can
+/// justify. This shows the curve instead: the best plan at each affordable
+/// count, and the margin over the count below. Read it against the reasons the
+/// planner cannot see (denying a frontier city space, answering a giant,
+/// breaking a siege) and spend accordingly.
+fn print_monument_ladder(front: &[EmpirePlan], cities: &[i32], g: Goal, budget: i32) {
+    // Owned, because each count's pick borrows a temporary filtered Vec.
+    let rows: Vec<(i32, EmpirePlan)> = (0..=budget)
+        .filter_map(|m| {
+            let at: Vec<EmpirePlan> =
+                front.iter().filter(|p| p.monuments_used() == m).cloned().collect();
+            pick_for_goal(&at[..], g).map(|p| (m, p.clone()))
+        })
+        .collect();
+
+    println!("\n  MONUMENT LADDER — best plan at each count, for {}", goal_name(g));
+    println!(
+        "  {:<5}{:>8}{:>7}{:>8}   {:<22}{:<24}{}",
+        "mon", "stars", "SPT", "giants", "margin over previous", "placed at", "strategy"
+    );
+    for (i, (m, p)) in rows.iter().enumerate() {
+        let margin = match i.checked_sub(1).and_then(|j| rows.get(j)) {
+            Some((_, q)) => format!(
+                "{:+}★  {:+} SPT  {:+} SU",
+                p.stars - q.stars,
+                p.spt - q.spt,
+                p.giants - q.giants
+            ),
+            None => "—".to_string(),
+        };
+        let placed: Vec<String> = cities
+            .iter()
+            .zip(&p.monuments)
+            .filter(|(_, n)| **n > 0)
+            .map(|(c, n)| format!("city {c} x{n}"))
+            .collect();
+        println!(
+            "  {:<5}{:>8}{:>7}{:>8}   {:<22}{:<24}{}",
+            m,
+            p.stars,
+            p.spt,
+            p.giants,
+            margin,
+            if placed.is_empty() { "—".into() } else { placed.join(", ") },
+            p.label(),
+        );
+    }
+    println!(
+        "\n  A monument is 3 pop, so it is worth the reward slot it completes and\n  \
+         nothing otherwise. This prices only what the planner can see: it cannot\n  \
+         value denying a frontier city space, answering a giant, or breaking a siege."
+    );
 }
 
 /// Terrain, resource and territory owner per tile — the ground truth every
@@ -1956,6 +2011,8 @@ fn main() {
                         giants    ceiling on super units, cost no object
 
   --explain CITY      per-scenario reasoning for one city (0-based)
+  --ladder            what each successive monument buys, and where it goes
+                      (printed automatically whenever --monuments > 0)
   --map               print terrain, resources and the territory split
   --verify            check placements against the engine (exit 1 on failure)
   --optimal           rank every hub site; --windmill / --forge for other lanes
@@ -2022,6 +2079,7 @@ fn main() {
     // the honest headline and monument-funded plans are opted into.
     let monuments: i32 = get("--monuments").and_then(|s| s.parse().ok()).unwrap_or(0);
     let standalone = args.iter().any(|a| a == "--standalone");
+    let ladder = args.iter().any(|a| a == "--ladder");
     let goal = get("--goal").and_then(|g| {
         let parsed = parse_goal(&g);
         if parsed.is_none() {
@@ -2342,5 +2400,11 @@ fn main() {
             Some(p) => print_build_card(&state, &cities, p, monuments, g),
             None => println!("\n  no plan satisfies {}", goal_name(g)),
         }
+        if monuments > 0 || ladder {
+            print_monument_ladder(&front, &cities, g, monuments);
+        }
+    }
+    if ladder && goal.is_none() {
+        print_monument_ladder(&front, &cities, Goal::Balanced, monuments);
     }
 }
