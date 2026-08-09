@@ -373,6 +373,30 @@ fn place_monuments(
     (used, gained)
 }
 
+/// Fewest monuments this city must be GIVEN before its border is reachable at
+/// all, or None if nothing within `budget` does it. Monuments are the only
+/// lever here that is not bought with stars, so a plan that needs one is
+/// spending a scarce earned resource rather than paying a price.
+fn monuments_to_reach(
+    state: &GameState,
+    city_idx: i32,
+    territory: &[i32],
+    sc: Scenario,
+    hub: Option<i32>,
+    budget: i32,
+) -> Option<i32> {
+    if !sc.border_growth {
+        return Some(0);
+    }
+    (0..=budget).find(|&m| match hub {
+        Some(h) => site_reachable(state, city_idx, territory, sc, m, h),
+        None => {
+            let inner = inner_ring(state, city_idx, territory);
+            city_build(state, &inner, sc, m, None, None, None).pop >= POP_FOR_LEVEL_4
+        }
+    })
+}
+
 /// Hub sites in a territory, best first by buildable partner count. A site
 /// paying only 1 partner is never worth 5* (worse than the partner feeding it),
 /// and a 0-partner hub is not even legal (`build.rs` requires an adjacent
@@ -809,10 +833,19 @@ struct EmpirePlan {
     pop: i32,
     giants: i32,
     spt: i32,
+    /// Monuments this plan consumes, per city. Empire-wide and earned, so this
+    /// is a scarcity cost the star total cannot express.
+    monuments: Vec<i32>,
     hubs: Vec<Option<i32>>,
     levels: Vec<i32>,
     markets: Vec<Option<i32>>,
     market_income: Vec<i32>,
+}
+
+impl EmpirePlan {
+    fn monuments_used(&self) -> i32 {
+        self.monuments.iter().sum()
+    }
 }
 
 /// Enumerate hub sites JOINTLY across cities. Markets are one per city but a
@@ -904,7 +937,7 @@ fn enumerate_empire(
 
     let mut out: Vec<EmpirePlan> = Vec::new();
     // Many hub combinations score identically; keep one representative each.
-    let mut seen_score: HashSet<(i32, i32, i32)> = HashSet::new();
+    let mut seen_score: HashSet<(i32, i32, i32, i32)> = HashSet::new();
     for hubs in combos {
         let base: Vec<BuildOut> = (0..n)
             .map(|ci| {
@@ -953,32 +986,74 @@ fn enumerate_empire(
             }
         }
 
-        // STAGE 3 — cost it, route pop to cities, score.
-        let mut stars = 0;
-        let mut plan_techs: HashSet<TechnologyType> = HashSet::new();
-        let (mut pop, mut giants, mut spt) = (0, 0, 0);
+        // STAGE 3 — allocate monuments, cost it, route pop to cities, score.
+        //
+        // Monuments are empire-wide, scarce and earned — none exist at turn 0 —
+        // so they are allocated from one budget rather than handed to every
+        // city. Reachability comes first: a city whose border is otherwise
+        // unreachable must be given its minimum or the whole combo dies. The
+        // remainder goes greedily to the best marginal pop, which is optimal
+        // because `place_monuments` takes lowest-loss tiles first, making the
+        // gain per extra monument non-increasing.
+        let mut floor = vec![0i32; n];
         let mut feasible = true;
         for ci in 0..n {
-            // Hub-aware reachability: one hub per city, so an OUTER hub means
-            // the climb to level 4 happens with no hub at all.
-            if sc.border_growth {
-                let reachable = match hubs[ci] {
-                    Some(h) => {
-                        site_reachable(state, cities[ci], &terr[ci], sc, monuments, h)
-                    }
-                    None => {
-                        let inner = inner_ring(state, cities[ci], &terr[ci]);
-                        city_build(state, &inner, sc, monuments, None, None, None).pop
-                            >= POP_FOR_LEVEL_4
-                    }
-                };
-                if !reachable {
+            match monuments_to_reach(state, cities[ci], &terr[ci], sc, hubs[ci], monuments) {
+                Some(m) => floor[ci] = m,
+                None => {
                     feasible = false;
                     break;
                 }
             }
+        }
+        let need: i32 = floor.iter().sum();
+        if !feasible || need > monuments {
+            continue;
+        }
+
+        // Emit a plan at EVERY affordable monument count, not just the full
+        // budget. Spending is always weakly pop-positive, so a greedy that
+        // always drains the budget would stamp the same count on every plan and
+        // the scarcity axis would compare nothing. Letting the count vary is
+        // what lets a 0-monument plan dominate a 3-monument one that bought
+        // nothing with them.
+        for m_total in need..=monuments {
+        let mut alloc = floor.clone();
+        let mut left = m_total - need;
+        while left > 0 {
+            let best = (0..n)
+                .filter_map(|ci| {
+                    let at = |m: i32| {
+                        city_build(
+                            state, &terr[ci], sc, m, hubs[ci], markets[ci],
+                            Some(&empire_partners),
+                        )
+                        .pop
+                    };
+                    let gain = at(alloc[ci] + 1) - at(alloc[ci]);
+                    (gain > 0).then_some((gain, ci))
+                })
+                .max();
+            match best {
+                Some((_, ci)) => {
+                    alloc[ci] += 1;
+                    left -= 1;
+                }
+                None => break,
+            }
+        }
+        // A count the greedy could not actually place is the same plan as the
+        // one below it; skip so the dedupe key does not fragment.
+        if alloc.iter().sum::<i32>() != m_total {
+            continue;
+        }
+
+        let mut stars = 0;
+        let mut plan_techs: HashSet<TechnologyType> = HashSet::new();
+        let (mut pop, mut giants, mut spt) = (0, 0, 0);
+        for ci in 0..n {
             let b = city_build(
-                state, &terr[ci], sc, monuments, hubs[ci], markets[ci],
+                state, &terr[ci], sc, alloc[ci], hubs[ci], markets[ci],
                 Some(&empire_partners),
             );
             let mut city_pop = b.pop;
@@ -994,9 +1069,6 @@ fn enumerate_empire(
             giants += giants_at_level(level);
             spt += level + i32::from(is_capital) + i32::from(level >= 2) + income[ci];
         }
-        if !feasible {
-            continue;
-        }
         // Techs are empire-wide, so the union across cities is billed once.
         let mut chain = lane_chain(sc.lane, sc.convert);
         let mut extra: Vec<TechnologyType> = plan_techs.into_iter().collect();
@@ -1006,7 +1078,7 @@ fn enumerate_empire(
         if markets.iter().any(|m| m.is_some()) {
             stars += market_tech;
         }
-        if !seen_score.insert((stars, giants, spt)) {
+        if !seen_score.insert((stars, giants, spt, alloc.iter().sum::<i32>())) {
             continue;
         }
         out.push(EmpirePlan {
@@ -1015,15 +1087,19 @@ fn enumerate_empire(
             pop,
             giants,
             spt,
-            hubs,
-            levels,
-            markets,
-            market_income: income,
+            monuments: alloc,
+            hubs: hubs.clone(),
+            levels: levels.clone(),
+            markets: markets.clone(),
+            market_income: income.clone(),
         });
+        }
     }
     out
 }
-/// Non-dominated plans: cheaper is better, more giants and more SPT are better.
+/// Non-dominated plans: cheaper is better, more giants and more SPT are better,
+/// and FEWER monuments is better — they are earned, not bought, so a plan that
+/// reaches the same output without burning one is strictly preferable.
 fn pareto(plans: &[EmpirePlan]) -> Vec<EmpirePlan> {
     plans
         .iter()
@@ -1032,7 +1108,11 @@ fn pareto(plans: &[EmpirePlan]) -> Vec<EmpirePlan> {
                 q.stars <= p.stars
                     && q.giants >= p.giants
                     && q.spt >= p.spt
-                    && (q.stars < p.stars || q.giants > p.giants || q.spt > p.spt)
+                    && q.monuments_used() <= p.monuments_used()
+                    && (q.stars < p.stars
+                        || q.giants > p.giants
+                        || q.spt > p.spt
+                        || q.monuments_used() < p.monuments_used())
             })
         })
         .cloned()
@@ -1476,7 +1556,10 @@ fn main() {
     cities.extend(villages.into_iter().take(n_extra));
 
     println!("seed {seed} | capital {capital} | cities {cities:?}");
-    let monuments: i32 = get("--monuments").and_then(|s| s.parse().ok()).unwrap_or(1);
+    // Empire-wide, not per city: monuments are earned from tasks, so a tribe
+    // holds none at turn 0 and only ever has a handful. The frontier decides
+    // which city each one goes to.
+    let monuments: i32 = get("--monuments").and_then(|s| s.parse().ok()).unwrap_or(3);
     let standalone = args.iter().any(|a| a == "--standalone");
     let with_markets = !args.iter().any(|a| a == "--no-markets");
     if standalone {
@@ -1507,7 +1590,9 @@ fn main() {
         owned.iter().map(|t| format!("{t:?}")).collect::<Vec<_>>()
     );
     let num_cities = cities.len() as i32;
-    println!("monuments allowed per city: {monuments}  (free, 3 pop, task-gated in play)");
+    println!(
+        "monuments available to the empire: {monuments}  (3 pop each, earned from tasks — none at turn 0)"
+    );
 
     let mut all: Vec<(i32, CityPlan)> = Vec::new();
     for sc in SCENARIOS {
@@ -1647,8 +1732,9 @@ fn main() {
         .map(|(i, _)| i);
 
     println!(
-        "  {:<20}{:>8}{:>7}{:>8}{:>7}{:>10}  {:<26}{:<22}{}",
-        "scenario", "stars", "pop", "giants", "SPT", "★/giant", "hubs @ level", "markets (+income)", ""
+        "  {:<20}{:>8}{:>7}{:>8}{:>7}{:>5}{:>10}  {:<26}{:<22}{}",
+        "scenario", "stars", "pop", "giants", "SPT", "mon", "★/giant", "hubs @ level",
+        "markets (+income)", ""
     );
     println!("  {}", "-".repeat(108));
     let mut rows: Vec<(usize, &EmpirePlan)> = front.iter().enumerate().collect();
@@ -1688,12 +1774,13 @@ fn main() {
             "—".into()
         };
         println!(
-            "  {:<20}{:>8}{:>7}{:>8}{:>7}{:>10}  {:<26}{:<22}{}",
+            "  {:<20}{:>8}{:>7}{:>8}{:>7}{:>5}{:>10}  {:<26}{:<22}{}",
             p.scenario,
             p.stars,
             p.pop,
             p.giants,
             p.spt,
+            p.monuments_used(),
             cpg,
             hubs.join(" "),
             mkts.join(" "),
