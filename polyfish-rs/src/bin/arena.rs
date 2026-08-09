@@ -255,6 +255,10 @@ struct TurnSample {
     cities: [usize; 2],
     units: [usize; 2],
     unit_cost: [i32; 2],
+    /// Super units alive, per tribe's own type — Giant for Imperius, Gaami for
+    /// Polaris. "Did we make giants, and how many by turn N" is a headline
+    /// behaviour question and unit COUNT alone cannot answer it.
+    super_units: [usize; 2],
     techs: [usize; 2],
 }
 
@@ -267,6 +271,7 @@ fn sample_turn(state: &polyfish::states::GameState, swap: bool) -> TurnSample {
         cities: [0; 2],
         units: [0; 2],
         unit_cost: [0; 2],
+        super_units: [0; 2],
         techs: [0; 2],
     };
     for c in 0..2 {
@@ -283,6 +288,8 @@ fn sample_turn(state: &polyfish::states::GameState, swap: bool) -> TurnSample {
                 .iter()
                 .map(polyfish::rules::combat::unit_worth)
                 .sum();
+            let super_type = polyfish::settings::units::get_super_unit(t.tribe_type);
+            s.super_units[c] = t.units.iter().filter(|u| u.unit_type == super_type).count();
             s.techs[c] = t.tech_vanilla.len();
         }
     }
@@ -516,6 +523,44 @@ fn play_match(
 
     if let Some(dir) = dump_stats_dir {
         samples.push(sample_turn(&game.state, swap)); // final post-game state
+        // End-state build-out for the model seat: what it actually put on the
+        // board and at what level, so a game can be held against eco_plan's
+        // frontier instead of inferred from SPT alone.
+        let model_pid: polyfish::states::PlayerId = if swap { 2 } else { 1 };
+        let model_tribe = game.state.tribes.get(&model_pid);
+        let mut territory: Vec<i32> = model_tribe
+            .map(|t| t.cities.iter().flat_map(|c| c._territory.iter().copied()).collect())
+            .unwrap_or_default();
+        territory.sort_unstable();
+        territory.dedup();
+        let model_structures: Vec<serde_json::Value> = territory
+            .iter()
+            .filter_map(|&idx| {
+                let st = polyfish::functions::get_structure_at(&game.state, idx)?;
+                Some(serde_json::json!({
+                    "idx": idx,
+                    "type": format!("{:?}", st.structure_type),
+                    "level": st.level,
+                }))
+            })
+            .collect();
+        let model_techs: Vec<String> = model_tribe
+            .map(|t| {
+                t.tech_vanilla
+                    .iter()
+                    .filter(|x| x.discovered)
+                    .map(|x| format!("{:?}", x.tech_type))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let model_city_levels: Vec<serde_json::Value> = model_tribe
+            .map(|t| {
+                t.cities
+                    .iter()
+                    .map(|c| serde_json::json!({"idx": c.idx, "level": c.level, "pop": c.population}))
+                    .collect()
+            })
+            .unwrap_or_default();
         let dump = serde_json::json!({
             "seed": seed,
             "swap": swap,
@@ -525,6 +570,9 @@ fn play_match(
             "macro_commit": macro_commit,
             "macro_star_gate": macro_star_gate,
             "samples": samples,
+            "model_structures": model_structures,
+            "model_techs": model_techs,
+            "model_city_levels": model_city_levels,
         });
         let name = format!("game_{}_{}.json", seed, if swap { "b" } else { "a" });
         let path = std::path::Path::new(dir).join(name);
