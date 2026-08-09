@@ -1706,23 +1706,50 @@ fn optimal_report(state: &GameState, cities: &[i32], monuments: i32, lane: Lane)
 
 /// What a plan is optimised FOR. The frontier answers "what are the options";
 /// these answer "give me the build for what I need right now".
+/// Two ceilings and three knees. The ceilings say what the map can do at any
+/// price; the knees say what it is worth paying for, on income, on army, and on
+/// the two together.
 #[derive(Clone, Copy, PartialEq)]
 enum Goal {
     Spt,
-    Military,
-    Giants,
-    Pop,
-    Cheap,
     Eco,
+    Balanced,
+    Army,
+    Giants,
+}
+
+/// Frontier maxima for SPT, super units and stars — the scale every knee is
+/// measured against. Never zero, so they are safe denominators.
+fn frontier_maxima(front: &[EmpirePlan]) -> (i64, i64, i64) {
+    let m = |v: i64| v.max(1);
+    (
+        m(front.iter().map(|p| p.spt).max().unwrap_or(1) as i64),
+        m(front.iter().map(|p| p.giants).max().unwrap_or(1) as i64),
+        m(front.iter().map(|p| p.stars).max().unwrap_or(1) as i64),
+    )
+}
+
+/// The knee: value minus cost, with SPT, super units and stars each normalised
+/// to [0,1] across the frontier.
+///
+/// On normalised axes the chord from the cheapest plan to the richest IS the
+/// diagonal, so the maximum of (value - cost) is the point furthest above that
+/// chord — the elbow, with no hand-tuned exchange rate. `w_spt`/`w_su` choose
+/// what "value" means: (1,0) is income alone, (0,1) army alone, (1,1) both.
+/// Scaled to integers by the common denominator so ties are exact rather than
+/// float noise.
+fn knee_score(p: &EmpirePlan, w_spt: i64, w_su: i64, (ms, mg, mc): (i64, i64, i64)) -> i64 {
+    let value = w_spt * p.spt as i64 * mg * mc + w_su * p.giants as i64 * ms * mc;
+    let cost = (w_spt + w_su) * p.stars as i64 * ms * mg;
+    value - cost
 }
 
 fn parse_goal(s: &str) -> Option<Goal> {
     match s.trim().to_lowercase().as_str() {
         "spt" | "greed" => Some(Goal::Spt),
-        "military" | "army" => Some(Goal::Military),
-        "giants" => Some(Goal::Giants),
-        "pop" => Some(Goal::Pop),
-        "cheap" | "cheapest" => Some(Goal::Cheap),
+        "army" | "military" | "war" => Some(Goal::Army),
+        "giants" | "su" => Some(Goal::Giants),
+        "balanced" | "middle" | "mid" => Some(Goal::Balanced),
         "eco" | "efficiency" => Some(Goal::Eco),
         _ => None,
     }
@@ -1730,38 +1757,39 @@ fn parse_goal(s: &str) -> Option<Goal> {
 
 fn goal_name(g: Goal) -> &'static str {
     match g {
-        Goal::Spt => "MAX SPT (full greed)",
-        Goal::Military => "MILITARY NOW (cheapest stars per super unit)",
+        Goal::Spt => "MAX SPT (ceiling on income, cost no object)",
+        Goal::Eco => "ECONOMY (knee: the most income the stars are worth)",
+        Goal::Balanced => "BALANCED (knee: income and army weighted evenly)",
+        Goal::Army => "ARMY (knee: the most super units the stars are worth)",
         Goal::Giants => "MAX SUPER UNITS (ceiling, cost no object)",
-        Goal::Pop => "MAX POPULATION",
-        Goal::Cheap => "CHEAPEST VIABLE (fewest stars, then fewest monuments)",
-        Goal::Eco => "BEST ECONOMY (SPT per star)",
     }
 }
+
+/// Short tag for the frontier listing, so a row says which goal claims it.
+fn goal_tag(g: Goal) -> &'static str {
+    match g {
+        Goal::Spt => " MAX-SPT",
+        Goal::Eco => " ECO",
+        Goal::Balanced => " BALANCED",
+        Goal::Army => " ARMY",
+        Goal::Giants => " MAX-GIANTS",
+    }
+}
+
+const GOALS: [Goal; 5] = [Goal::Spt, Goal::Eco, Goal::Balanced, Goal::Army, Goal::Giants];
 
 /// Pick the plan that best serves `g`. Every ordering ends with fewer stars and
 /// then fewer monuments, so ties resolve toward the plan that spends least.
 fn pick_for_goal<'a>(front: &'a [EmpirePlan], g: Goal) -> Option<&'a EmpirePlan> {
     let thrift = |p: &EmpirePlan| (-p.stars, -p.monuments_used());
+    let m = frontier_maxima(front);
     front.iter().max_by(|a, b| {
         let key = |p: &EmpirePlan| match g {
-            Goal::Spt => (p.spt, p.giants, 0),
-            // Tempo, not ceiling: the best stars-per-super-unit rate. Plans with
-            // no super unit rank last rather than dividing by zero.
-            Goal::Military => {
-                if p.giants > 0 {
-                    (-(p.stars * 100 / p.giants), p.giants, p.spt)
-                } else {
-                    (i32::MIN, 0, 0)
-                }
-            }
-            Goal::Giants => (p.giants, p.spt, 0),
-            Goal::Pop => (p.pop, p.spt, 0),
-            // Monuments are earned, so the cheapest plan is the one that spends
-            // fewest of BOTH currencies before it starts trading up on output.
-            Goal::Cheap => (-p.stars, -p.monuments_used(), p.spt),
-            // Integer SPT per 100 stars, so the comparison stays exact.
-            Goal::Eco => (p.spt * 100 / p.stars.max(1), p.spt, p.giants),
+            Goal::Spt => (p.spt as i64, p.giants as i64),
+            Goal::Giants => (p.giants as i64, p.spt as i64),
+            Goal::Eco => (knee_score(p, 1, 0, m), p.spt as i64),
+            Goal::Balanced => (knee_score(p, 1, 1, m), p.spt as i64),
+            Goal::Army => (knee_score(p, 0, 1, m), p.giants as i64),
         };
         key(a).cmp(&key(b)).then(thrift(a).cmp(&thrift(b)))
     })
@@ -1907,13 +1935,15 @@ fn main() {
   --standalone        score each city on its full square, ignoring neighbours
   --no-mix            one lane for the whole empire (default mixes per city)
 
-  --goal WHICH        print the full build for a stated need:
-                        spt       max stars/turn, full greed
-                        military  best stars per super unit — tempo, not ceiling
-                        giants    most super units, cost no object
-                        pop       max population
-                        cheap     fewest stars, then fewest monuments
-                        eco       most SPT per star
+  --goal WHICH        print the full build for a stated need. Two ceilings and
+                      three knees; a knee is value minus cost with SPT, super
+                      units and stars each normalised over the frontier, so it
+                      is the elbow with no hand-tuned exchange rate:
+                        spt       ceiling on stars/turn, cost no object
+                        eco       knee on income alone
+                        balanced  knee on income and army weighted evenly
+                        army      knee on super units alone
+                        giants    ceiling on super units, cost no object
 
   --explain CITY      per-scenario reasoning for one city (0-based)
   --map               print terrain, resources and the territory split
@@ -1984,7 +2014,7 @@ fn main() {
         let parsed = parse_goal(&g);
         if parsed.is_none() {
             eprintln!(
-                "unknown --goal '{g}'; use spt | military | giants | pop | cheap | eco"
+                "unknown --goal '{g}'; use spt | eco | balanced | army | giants"
             );
         }
         parsed
@@ -2226,47 +2256,16 @@ fn main() {
     );
     println!("{}", "=".repeat(112));
 
-    // Knee: on the giants/SPT plane, the point furthest from the chord joining
-    // the two extremes. No hand-tuned exchange rate, and unlike a weighted sum
-    // it can select points in a concave stretch of the frontier — which is
-    // where "slightly worse hub, much better market" plans live.
-    let (gmin, gmax) = (
-        front.iter().map(|p| p.giants).min().unwrap_or(0) as f32,
-        front.iter().map(|p| p.giants).max().unwrap_or(1) as f32,
-    );
-    let (smin, smax) = (
-        front.iter().map(|p| p.spt).min().unwrap_or(0) as f32,
-        front.iter().map(|p| p.spt).max().unwrap_or(1) as f32,
-    );
-    let norm = |p: &EmpirePlan| {
-        (
-            if gmax > gmin { (p.giants as f32 - gmin) / (gmax - gmin) } else { 0.0 },
-            if smax > smin { (p.spt as f32 - smin) / (smax - smin) } else { 0.0 },
-        )
-    };
-    let knee = front
+    // Tag each row with the goal that claims it, resolved through the SAME
+    // `pick_for_goal` the `--goal` flag uses — the listing and the build card
+    // cannot disagree about which plan is the knee.
+    let claimed: Vec<(usize, Goal)> = GOALS
         .iter()
-        .enumerate()
-        .max_by(|(_, a), (_, b)| {
-            let (ag, as_) = norm(a);
-            let (bg, bs) = norm(b);
-            // Distance from the x+y=1 chord; ties to the cheaper plan.
-            ((ag + as_ - 1.0).abs() * -1.0 + ag + as_)
-                .partial_cmp(&((bg + bs - 1.0).abs() * -1.0 + bg + bs))
-                .unwrap()
-                .then(b.stars.cmp(&a.stars))
+        .filter_map(|&g| {
+            let p = pick_for_goal(&front[..], g)?;
+            front.iter().position(|q| std::ptr::eq(q, p)).map(|i| (i, g))
         })
-        .map(|(i, _)| i);
-    let best_giants = front
-        .iter()
-        .enumerate()
-        .max_by(|(_, a), (_, b)| a.giants.cmp(&b.giants).then(b.stars.cmp(&a.stars)))
-        .map(|(i, _)| i);
-    let best_spt = front
-        .iter()
-        .enumerate()
-        .max_by(|(_, a), (_, b)| a.spt.cmp(&b.spt).then(b.stars.cmp(&a.stars)))
-        .map(|(i, _)| i);
+        .collect();
 
     println!(
         "  {:<20}{:>8}{:>7}{:>8}{:>7}{:>5}{:>10}  {:<26}{:<22}{}",
@@ -2296,14 +2295,10 @@ fn main() {
             })
             .collect();
         let mut tag = String::new();
-        if Some(i) == knee {
-            tag.push_str(" KNEE");
-        }
-        if Some(i) == best_giants {
-            tag.push_str(" MAX-GIANTS");
-        }
-        if Some(i) == best_spt {
-            tag.push_str(" MAX-SPT");
+        for &(idx, g) in &claimed {
+            if idx == i {
+                tag.push_str(goal_tag(g));
+            }
         }
         let cpg = if p.giants > 0 {
             format!("{:.1}", p.stars as f64 / p.giants as f64)
