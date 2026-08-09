@@ -55,13 +55,19 @@ USE_TEACHERS_DS = os.environ.get("USE_TEACHERS_DS", "1") == "1"
 # opponent tech). Rust inference loads model.safetensors by name and never
 # reads these. Targets ship in games files from Jul 2026; files without them
 # (old archives, teachers) are masked out per sample, never zero-filled.
-AUX_DIMS = {'aux_ownership': 121, 'aux_fog_units': 121, 'aux_spt': 2, 'aux_opp_tech': 42, 'aux_pursuit': 1}
+AUX_DIMS = {'aux_ownership': 121, 'aux_fog_units': 121, 'aux_spt': 2, 'aux_opp_tech': 42, 'aux_pursuit': 1,
+            'aux_city_spt': 121}
 AUX_WEIGHTS = {
     'aux_ownership': float(os.environ.get("AUX_OWN_W", "0.3")),
     'aux_fog_units': float(os.environ.get("AUX_FOG_W", "0.2")),
     'aux_spt': float(os.environ.get("AUX_SPT_W", "0.1")),
     'aux_opp_tech': float(os.environ.get("AUX_TECH_W", "0.1")),
     'aux_pursuit': float(os.environ.get("AUX_PURSUIT_W", "0.1")),
+    # Per-city SPT five turns out, on that city's tile. The question behind it
+    # is what a city's growth is worth -- whether unlocking its outer ring pays
+    # -- which nothing in the input says. Level and progress tell the net which
+    # city is near a threshold; this asks it to learn what crossing one buys.
+    'aux_city_spt': float(os.environ.get("AUX_CITY_SPT_W", "0.1")),
 }
 # EXP_ELO_013: persistent KL-anchor to a frozen reference policy (AlphaStar-
 # style — pulls the live policy toward a known-good checkpoint throughout RL,
@@ -191,6 +197,7 @@ class PolyZeroNet(nn.Module):
         self.aux_spt = nn.Linear(self.filters, 2)
         self.aux_opp_tech = nn.Linear(self.filters, 42)
         self.aux_pursuit = nn.Linear(self.filters, 1)
+        self.aux_city_spt = nn.Conv2d(self.filters, 1, 1)
 
     def forward(self, spatial_map, player_state):
         batch_size = spatial_map.size(0)
@@ -227,6 +234,7 @@ class PolyZeroNet(nn.Module):
         aux['aux_spt'] = self.aux_spt(gap)
         aux['aux_opp_tech'] = self.aux_opp_tech(gap)
         aux['aux_pursuit'] = self.aux_pursuit(gap)
+        aux['aux_city_spt'] = self.aux_city_spt(x).flatten(1)
 
         # --- Value Heads ---
         v_input = x.detach() if DETACH_VALUE_TRUNK else x
@@ -314,12 +322,14 @@ def compute_loss(policy_pred, values_pred, policy_targets, value_target,
             'aux_spt': lambda p, t: ((p - t) ** 2).mean(dim=1),
             'aux_opp_tech': lambda p, t: bce(p, t, reduction='none').mean(dim=1),
             'aux_pursuit': lambda p, t: ((p - t) ** 2).mean(dim=1),
+            'aux_city_spt': lambda p, t: ((p - t) ** 2).mean(dim=1),
         }
-        denom = aux_mask.sum().clamp(min=1.0)
         for k, fn in per_sample.items():
             if AUX_WEIGHTS[k] == 0.0 or k not in aux_targets:
                 continue
-            l = (fn(aux_pred[k], aux_targets[k]) * aux_mask).sum() / denom
+            mask_k = aux_mask[k]
+            denom = mask_k.sum().clamp(min=1.0)
+            l = (fn(aux_pred[k], aux_targets[k]) * mask_k).sum() / denom
             aux_losses[k] = l
             total_loss = total_loss + AUX_WEIGHTS[k] * l
 
@@ -467,7 +477,7 @@ def train():
             'action_type': [], 'source_spatial': [], 'target_spatial': [], 'move_option': []
         }
         c_aux = {k: [] for k in AUX_DIMS}
-        c_aux_mask = []
+        c_aux_mask = {k: [] for k in AUX_DIMS}
 
         for f in chunk_files:
             try:
@@ -510,18 +520,19 @@ def train():
                     else:
                         pass
 
-                # Aux targets: per-file all-or-nothing presence mask.
+                # Aux targets: presence is PER KEY, not per file. All-or-
+                # nothing meant adding one head silently unsupervised every
+                # other head on every file written before it existed.
                 # Masked, never zero-filled — a zero-filled target would
                 # silently train the head toward 0 on legacy samples.
                 n = data["values"].shape[0]
-                if all(k in data for k in AUX_DIMS):
-                    for k in AUX_DIMS:
+                for k, d in AUX_DIMS.items():
+                    if k in data:
                         c_aux[k].append(data[k].float())
-                    c_aux_mask.append(torch.ones(n))
-                else:
-                    for k, d in AUX_DIMS.items():
+                        c_aux_mask[k].append(torch.ones(n))
+                    else:
                         c_aux[k].append(torch.zeros(n, d))
-                    c_aux_mask.append(torch.zeros(n))
+                        c_aux_mask[k].append(torch.zeros(n))
 
             except Exception as e:
                 print(f"Error loading {f}: {e}")
@@ -556,7 +567,7 @@ def train():
             # Kept out of target_heads: the renorm guard above would
             # corrupt fog/ownership rows (their sums are counts, not mass).
             target_aux = {k: torch.cat(v) for k, v in c_aux.items()}
-            aux_mask = torch.cat(c_aux_mask)
+            aux_mask = {k: torch.cat(v) for k, v in c_aux_mask.items()}
 
         except RuntimeError as e:
             print(f"OOM loading chunk: {e}")
@@ -658,7 +669,7 @@ def train():
         target_sumsq_t = torch.zeros((), device=DEVICE)
         target_n = 0
         total_aux_t = {k: torch.zeros((), device=DEVICE) for k in AUX_DIMS}
-        total_aux_n_t = torch.zeros((), device=DEVICE)
+        total_aux_n_t = {k: torch.zeros((), device=DEVICE) for k in AUX_DIMS}
         total_kl_t = torch.zeros((), device=DEVICE)
 
         print(f"\n=== Epoch {epoch+1}/{EPOCHS} ===")
@@ -697,7 +708,7 @@ def train():
                 for head, tensor in target_heads.items():
                     batch_targets[head] = tensor[batch_idx].to(DEVICE)
                 batch_aux = {k: t[batch_idx].to(DEVICE) for k, t in target_aux.items()}
-                batch_aux_mask = aux_mask[batch_idx].to(DEVICE)
+                batch_aux_mask = {k: m[batch_idx].to(DEVICE) for k, m in aux_mask.items()}
 
                 # Reshape spatial to (B, C, H, W)
                 batch_spatial = batch_spatial.view(-1, SPATIAL_CHANNELS, MAP_SIZE, MAP_SIZE)
@@ -761,10 +772,10 @@ def train():
                 # Unconditional (no "if aux_n > 0" guard): a zero mask
                 # contributes exactly zero either way, and skipping it would
                 # require a .item() sync to evaluate the branch.
-                aux_n_t = batch_aux_mask.sum().detach()
-                total_aux_n_t += aux_n_t
                 for k, l in aux_losses.items():
-                    total_aux_t[k] += l.detach() * aux_n_t
+                    n_k = batch_aux_mask[k].sum().detach()
+                    total_aux_n_t[k] += n_k
+                    total_aux_t[k] += l.detach() * n_k
                 if kl_losses:
                     total_kl_t += sum(kl_losses.values()).detach()
 
@@ -816,9 +827,9 @@ def train():
     final_p_loss = (total_p_loss_t / total_batches).item() if total_batches > 0 else 0.0
     final_v_loss = (total_v_loss_t / total_batches).item() if total_batches > 0 else 0.0
     final_v_win = (total_v_win_t / total_batches).item() if total_batches > 0 else 0.0
-    total_aux_n = total_aux_n_t.item()
+    total_aux_n = {k: v.item() for k, v in total_aux_n_t.items()}
     final_aux = {
-        k: (total_aux_t[k].item() / total_aux_n if total_aux_n > 0 else 0.0)
+        k: (total_aux_t[k].item() / total_aux_n[k] if total_aux_n.get(k, 0) > 0 else 0.0)
         for k in AUX_DIMS
     }
     final_kl = (total_kl_t / total_batches).item() if total_batches > 0 else 0.0
@@ -870,6 +881,11 @@ def train():
                 "aux_spt_loss": round(final_aux['aux_spt'], 4),
                 "aux_tech_loss": round(final_aux['aux_opp_tech'], 4),
                 "aux_pursuit_loss": round(final_aux['aux_pursuit'], 4),
+                "aux_city_spt_loss": round(final_aux['aux_city_spt'], 4),
+                # Per-head supervised-sample counts. A head added later reads
+                # lower than the rest until legacy archives age out; a head
+                # reading 0 that used to read high means the mask broke.
+                "aux_supervised": {k: int(v) for k, v in total_aux_n.items()},
                 "kl_ref_loss": round(final_kl, 4),
             },
             f,

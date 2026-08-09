@@ -710,6 +710,9 @@ struct HistoryStep {
     enemy_units: Vec<f32>,
     my_spt: i32,
     opp_spt: i32,
+    /// `(city tile, production)` for every city the POV holds at decision time
+    /// — the raw material for the aux_city_spt target.
+    city_spt: Vec<(i32, i32)>,
     /// Pursuit proximity to the nearest capturable village at decision time,
     /// POV-relative, normalized to [0,1] — the aux_pursuit target.
     pursuit: f32,
@@ -874,6 +877,51 @@ fn spt_target(cps: Option<&Vec<SptStep>>, turn: i32, final_my: i32, final_opp: i
         c.get(i).map(|s| (s.my_spt, s.opp_spt))
     })
     .unwrap_or((final_my, final_opp))
+}
+
+/// Per-decision per-city production snapshot, the spatial counterpart of
+/// `SptStep`. Not `Copy` — one entry per city the POV holds.
+#[derive(Clone)]
+struct CitySptStep {
+    player_id: PlayerId,
+    turn: i32,
+    cities: Vec<(i32, i32)>,
+}
+
+/// First decision per (player, turn), like `spt_checkpoints_by_player`.
+fn city_spt_checkpoints(steps: &[CitySptStep]) -> HashMap<PlayerId, Vec<CitySptStep>> {
+    let mut out: HashMap<PlayerId, Vec<CitySptStep>> = HashMap::new();
+    for s in steps {
+        let list = out.entry(s.player_id).or_default();
+        if list.last().map_or(true, |c| c.turn != s.turn) {
+            list.push(s.clone());
+        }
+    }
+    out
+}
+
+/// Per-city production at the first same-player turn >= turn+5, painted onto a
+/// board-sized grid at each city's own tile and normalized like `aux_spt`.
+///
+/// Cities the POV no longer holds at the horizon simply do not appear, so the
+/// target says "nothing here" — which is true: a lost city yields you nothing.
+/// When the game ends inside the horizon the last checkpoint stands in for it;
+/// unlike `aux_spt` there is no separate final snapshot to fall back to, and
+/// the last decision of the game is the closest honest answer.
+fn city_spt_target(cps: Option<&Vec<CitySptStep>>, turn: i32, len: usize) -> Vec<f32> {
+    let mut g = vec![0.0f32; len];
+    let at = cps.and_then(|c| {
+        let i = c.partition_point(|s| s.turn < turn + 5);
+        c.get(i).or_else(|| c.last())
+    });
+    if let Some(step) = at {
+        for &(idx, prod) in &step.cities {
+            if let Some(slot) = g.get_mut(idx as usize) {
+                *slot = prod as f32 / 20.0;
+            }
+        }
+    }
+    g
 }
 
 /// Multi-hot over `TechnologyType::iter()` POSITION — discriminants are
@@ -2187,6 +2235,19 @@ fn play_single_game(
                 enemy_units: enemy_unit_grid(&game.state, pov, features::MAP_SIZE * features::MAP_SIZE),
                 my_spt: spt_of(pov),
                 opp_spt: spt_of(opp_id),
+                city_spt: game
+                    .state
+                    .tribes
+                    .get(&pov)
+                    .map(|t| {
+                        t.cities
+                            .iter()
+                            .map(|c| {
+                                (c.idx, polyfish::functions::get_city_production(&game.state, c))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 pursuit: reward::pursuit_potential(&game.state, pov)
                     / reward::SHAPE_PURSUIT_PER_TILE
                     / reward::SHAPE_PROX_CAP as f32,
@@ -3529,6 +3590,7 @@ fn main() -> anyhow::Result<()> {
     let mut collected_aux_spt: Vec<f32> = Vec::new(); // flat, 2 per step
     let mut collected_aux_tech: Vec<Vec<f32>> = Vec::new();
     let mut collected_aux_pursuit: Vec<f32> = Vec::new(); // scalar per step
+    let mut collected_aux_city_spt: Vec<Vec<f32>> = Vec::new(); // board-sized per step
 
     let mut max_score = 0;
     let mut best_recap: Option<ModReplay> = None;
@@ -3619,6 +3681,7 @@ fn main() -> anyhow::Result<()> {
         collected_aux_fog: Vec<Vec<f32>>,
         collected_aux_spt: Vec<f32>,
         collected_aux_pursuit: Vec<f32>,
+        collected_aux_city_spt: Vec<Vec<f32>>,
         collected_aux_tech: Vec<Vec<f32>>,
         num_techs: usize,
         device: &candle_core::Device,
@@ -3673,6 +3736,11 @@ fn main() -> anyhow::Result<()> {
         let aux_spt_tensor = Tensor::from_vec(collected_aux_spt, (total_steps, 2), device)?;
         let aux_pursuit_tensor =
             Tensor::from_vec(collected_aux_pursuit, (total_steps, 1), device)?;
+        let aux_city_spt_tensor = Tensor::from_vec(
+            flatten_vec(collected_aux_city_spt),
+            (total_steps, spatial_logit_dim),
+            device,
+        )?;
         let aux_tech_tensor = Tensor::from_vec(
             flatten_vec(collected_aux_tech),
             (total_steps, num_techs),
@@ -3693,6 +3761,7 @@ fn main() -> anyhow::Result<()> {
         tensors.insert("aux_spt".to_string(), aux_spt_tensor);
         tensors.insert("aux_opp_tech".to_string(), aux_tech_tensor);
         tensors.insert("aux_pursuit".to_string(), aux_pursuit_tensor);
+        tensors.insert("aux_city_spt".to_string(), aux_city_spt_tensor);
         // f16 on disk (Jul 28): halves file size. Every stored tensor is
         // bounded ([-1,1] targets, probabilities, normalized features), so
         // f16's ~3 significant digits lose nothing that matters.
@@ -3920,6 +3989,16 @@ fn main() -> anyhow::Result<()> {
             })
             .collect();
         let spt_cp = spt_checkpoints_by_player(&spt_steps);
+        let city_spt_steps: Vec<CitySptStep> = result
+            .history
+            .iter()
+            .map(|s| CitySptStep {
+                player_id: s.player_id,
+                turn: s.turn,
+                cities: s.city_spt.clone(),
+            })
+            .collect();
+        let city_spt_cp = city_spt_checkpoints(&city_spt_steps);
 
         let game_winner_id = result.winner_id;
 
@@ -4052,6 +4131,11 @@ fn main() -> anyhow::Result<()> {
             collected_aux_spt.push(spt_my as f32 / 20.0);
             collected_aux_spt.push(spt_opp as f32 / 20.0);
             collected_aux_pursuit.push(pursuit);
+            collected_aux_city_spt.push(city_spt_target(
+                city_spt_cp.get(&p_id),
+                turn,
+                features::MAP_SIZE * features::MAP_SIZE,
+            ));
             collected_aux_tech.push(
                 result
                     .final_tech
@@ -4080,6 +4164,7 @@ fn main() -> anyhow::Result<()> {
                 std::mem::take(&mut collected_aux_fog),
                 std::mem::take(&mut collected_aux_spt),
                 std::mem::take(&mut collected_aux_pursuit),
+                std::mem::take(&mut collected_aux_city_spt),
                 std::mem::take(&mut collected_aux_tech),
                 num_techs,
                 &device,
@@ -4267,6 +4352,7 @@ fn main() -> anyhow::Result<()> {
             std::mem::take(&mut collected_aux_fog),
             std::mem::take(&mut collected_aux_spt),
             std::mem::take(&mut collected_aux_pursuit),
+            std::mem::take(&mut collected_aux_city_spt),
             std::mem::take(&mut collected_aux_tech),
             num_techs,
             &device,
