@@ -10,6 +10,10 @@ use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime};
 
+/// Turn at which `--dump-stats-dir` freezes a mid-game board, chosen to sit
+/// inside the turn 10-17 window where hubs are actually committed.
+const MID_DUMP_TURN: i32 = 12;
+
 /// Arena: battle two configurations head-to-head.
 /// Each seed is played twice with sides swapped; wins are attributed to the
 /// configuration, not the seat. Per-move decision time is recorded per config.
@@ -411,6 +415,7 @@ fn play_match(
         }
     }
     let mut last_dump_key: Option<(i32, polyfish::states::PlayerId)> = None;
+    let mut mid_dumped = false;
 
     let mut moves = 0;
     let mut ns_config1: u64 = 0;
@@ -487,6 +492,26 @@ fn play_match(
                 a.macro_goal = Some(goal);
                 a.goal_shape_w = goal_w_tree;
                 a.goal_aux = Some(aux);
+            }
+        }
+
+        // A board frozen while the build-out is still live. Hubs are committed
+        // turns 10-17, so the final board -- every buildable tile already
+        // built -- is the least informative position to plan from.
+        if let Some(dir) = dump_stats_dir {
+            if !mid_dumped
+                && game.state.settings.turn >= MID_DUMP_TURN
+                && current_pid == model_player
+            {
+                mid_dumped = true;
+                let p = std::path::Path::new(dir).join(format!(
+                    "mid_{}_{}.json",
+                    seed,
+                    if swap { "b" } else { "a" }
+                ));
+                if let Ok(j) = serde_json::to_string(&game.state) {
+                    let _ = std::fs::write(&p, j);
+                }
             }
         }
 
@@ -732,18 +757,15 @@ fn play_match(
             "model_city_levels": model_city_levels,
             "placements": placements,
         });
-        // When the model actually holds a hub, drop the whole final board next
-        // to the summary. The server loads a bare GameState, so the partner
-        // count around a hub can be counted off the map rather than trusted.
-        if model_structures.iter().any(|s| {
-            let t = s["type"].as_str().unwrap_or("");
-            matches!(t, "Sawmill" | "Windmill" | "Forge")
-        }) {
-            let sp = std::path::Path::new(dir)
-                .join(format!("state_{}_{}.json", seed, if swap { "b" } else { "a" }));
-            if let Ok(j) = serde_json::to_string(&game.state) {
-                let _ = std::fs::write(&sp, j);
-            }
+        // Drop the whole final board next to the summary. The server loads a
+        // bare GameState, so the partner count around a hub can be counted off
+        // the map rather than trusted. Unconditional: gating this on the model
+        // holding a hub conditioned the board sample on the very thing an
+        // economy audit is trying to measure.
+        let sp = std::path::Path::new(dir)
+            .join(format!("state_{}_{}.json", seed, if swap { "b" } else { "a" }));
+        if let Ok(j) = serde_json::to_string(&game.state) {
+            let _ = std::fs::write(&sp, j);
         }
         let name = format!("game_{}_{}.json", seed, if swap { "b" } else { "a" });
         let path = std::path::Path::new(dir).join(name);
