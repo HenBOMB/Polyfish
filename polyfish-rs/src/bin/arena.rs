@@ -389,6 +389,12 @@ fn play_match(
     let mut moves_config2: u64 = 0;
     let mut samples: Vec<TurnSample> = Vec::new();
     let mut last_sampled_turn = i32::MIN;
+    // Hub-placement optimality: for every hub the model builds, the ceiling of
+    // the tile it chose against the best ceiling legally available to it at
+    // that instant. Measured AT THE DECISION, which end-state ceilings cannot
+    // see -- by the last turn every buildable tile is built and chosen and best
+    // collapse onto each other.
+    let mut placements: Vec<serde_json::Value> = Vec::new();
     // EXP_ELO_026: config1's sticky expansion commitment (None = retired or
     // no capturable village visible). Tracked even in a gate-only arm, since
     // the gate is defined as active "while committed".
@@ -484,6 +490,48 @@ fn play_match(
         }
 
         if let Some(m) = best_move {
+            if current_pid == model_player
+                && m.move_type() == polyfish::types::MoveType::Build
+            {
+                if let (Ok(kind), Ok(tile)) = (m.structure_type(), m.target_idx()) {
+                    let setting =
+                        polyfish::settings::structures::get_structure_setting(kind);
+                    if setting.reward_pop > 0 && !setting.adjacent_types.is_empty() {
+                        let chosen = tile as i32;
+                        let chosen_ceiling = polyfish::rules::economy::partner_ceiling(
+                            &game.state, chosen, kind, model_player,
+                        );
+                        // Every tile this same hub could legally go on right now.
+                        let mut alts: Vec<(i32, i32)> = Vec::new();
+                        for cand in polyfish::moves::generate_legal_moves(&game.state) {
+                            if cand.move_type() != polyfish::types::MoveType::Build {
+                                continue;
+                            }
+                            if cand.structure_type().ok() != Some(kind) {
+                                continue;
+                            }
+                            if let Ok(t) = cand.target_idx() {
+                                let t = t as i32;
+                                alts.push((
+                                    t,
+                                    polyfish::rules::economy::partner_ceiling(
+                                        &game.state, t, kind, model_player,
+                                    ),
+                                ));
+                            }
+                        }
+                        let best = alts.iter().map(|&(_, c)| c).max().unwrap_or(chosen_ceiling);
+                        placements.push(serde_json::json!({
+                            "turn": game.state.settings.turn,
+                            "kind": format!("{kind:?}"),
+                            "tile": chosen,
+                            "chosen_ceiling": chosen_ceiling,
+                            "best_ceiling": best,
+                            "n_options": alts.len(),
+                        }));
+                    }
+                }
+            }
             if goal_script
                 && current_pid == model_player
                 && m.move_type() == polyfish::types::MoveType::Research
@@ -584,7 +632,15 @@ fn play_match(
             .map(|t| {
                 t.cities
                     .iter()
-                    .map(|c| serde_json::json!({"idx": c.idx, "level": c.level, "pop": c.population}))
+                    .map(|c| serde_json::json!({
+                        "idx": c.idx,
+                        "level": c.level,
+                        "pop": c.population,
+                        // Which side of each level's fork the city took. The
+                        // level-3 slot is PopGrowth vs BorderGrowth, and border
+                        // is what grows the territory a hub's ceiling lives in.
+                        "rewards": c.rewards.iter().map(|r| format!("{r:?}")).collect::<Vec<_>>(),
+                    }))
                     .collect()
             })
             .unwrap_or_default();
@@ -600,6 +656,7 @@ fn play_match(
             "model_structures": model_structures,
             "model_techs": model_techs,
             "model_city_levels": model_city_levels,
+            "placements": placements,
         });
         let name = format!("game_{}_{}.json", seed, if swap { "b" } else { "a" });
         let path = std::path::Path::new(dir).join(name);
