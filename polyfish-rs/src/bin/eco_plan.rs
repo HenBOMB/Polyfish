@@ -688,6 +688,7 @@ fn build_out(
     territory: &[i32],
     sc: Scenario,
     monuments: i32,
+    goal: Goal,
 ) -> BuildOut {
     // Rank by delivered pop then cost, not by partner count alone. Sites with
     // equal partner counts still differ in stars — siting on Forest refunds the
@@ -713,11 +714,15 @@ fn build_out(
             (spt, giants, stars, h)
         })
         .collect();
-    // SPT first: it already carries pop (through level) AND the Market income
-    // the site enables, which ranking on pop alone could not see.
+    // Ordered for the STATED goal, through the same comparator `pick_for_goal`
+    // applies to whole plans. `site_value` above is the measurement and stays
+    // goal-agnostic; only the ordering is allowed to depend on intent.
+    let m = site_maxima(&ranked.iter().map(|&(a, b, c, _)| (a, b, c)).collect::<Vec<_>>());
     ranked.sort_by(|a, b| {
-        b.0.cmp(&a.0).then(b.1.cmp(&a.1)).then(a.2.cmp(&b.2)).then(a.3.cmp(&b.3))
-    }); // spt desc, giants desc, stars asc, tile asc
+        site_order_key(b.0, b.1, b.2, goal, m)
+            .cmp(&site_order_key(a.0, a.1, a.2, goal, m))
+            .then(a.3.cmp(&b.3))
+    });
     let hub = ranked.first().map(|&(_, _, _, h)| h);
     let mut b = city_build(state, territory, sc, monuments, hub, None, None);
     if let Some(h) = hub {
@@ -844,7 +849,7 @@ fn plan_city(
         }
     }
 
-    let b = build_out(state, city_idx, territory, sc, monuments);
+    let b = build_out(state, city_idx, territory, sc, monuments, Goal::Balanced);
     let mut pop = b.pop;
     // PopGrowth (+3) is the alternative to BorderGrowth in the same slot, so it
     // pays only when the city reaches level 4 and did not take the border.
@@ -992,11 +997,11 @@ fn allocate_value(
             .iter()
             .map(|&ci| {
                 let mut with = terr[ci].clone();
-                let base = build_out(state, cities[ci], &with, scs[ci], monuments).pop;
+                let base = build_out(state, cities[ci], &with, scs[ci], monuments, Goal::Balanced).pop;
                 with.push(idx);
                 with.sort();
                 let gain =
-                    build_out(state, cities[ci], &with, scs[ci], monuments).pop - base;
+                    build_out(state, cities[ci], &with, scs[ci], monuments, Goal::Balanced).pop - base;
                 (
                     -gain,
                     get_chebyshev_distance(idx, cities[ci], state.settings.size),
@@ -1463,7 +1468,7 @@ fn explain(state: &GameState, city_idx: i32, territory: &[i32], sc: Scenario) {
         .filter(|b| is_partner_buy(b, partner_name))
         .map(|b| b.idx)
         .collect();
-    let b = build_out(state, city_idx, territory, sc, 0);
+    let b = build_out(state, city_idx, territory, sc, 0, Goal::Balanced);
     println!("\n  --- explain: city {city_idx}, {} ---", sc.name);
     println!("  territory ({} tiles): {:?}", territory.len(), territory);
     let mut sites: Vec<(i32, i32)> = hub_sites
@@ -1598,7 +1603,7 @@ fn verify(state: &GameState, cities: &[i32], monuments: i32) -> bool {
         for (ci, &city_idx) in cities.iter().enumerate() {
             // Monuments are excluded: they displace tiles but are not the
             // placement decision under test.
-            let b = build_out(state, city_idx, &terr[ci], sc, 0);
+            let b = build_out(state, city_idx, &terr[ci], sc, 0, Goal::Balanced);
             let Some(hub) = b.hub_site else {
                 println!(
                     "  {:<20} {:>5} {:>6} {:>8} {:>8} {:>9} {:>9}",
@@ -1746,12 +1751,12 @@ fn dominators_of(
 /// more partners yet displace a better tile, and siting on Forest refunds a star
 /// via ClearForest. So this scores EVERY candidate with the planner's own
 /// `city_build` and ranks, to see whether greedy and exhaustive agree.
-fn optimal_report(state: &GameState, cities: &[i32], monuments: i32, lane: Lane) {
+fn optimal_report(state: &GameState, cities: &[i32], monuments: i32, lane: Lane, goal: Goal) {
     let hub_type = lane_hub(lane).0;
     for sc in SCENARIOS.iter().filter(|s| s.lane == lane) {
         let terr = allocate_value(state, cities, &uniform(*sc, cities.len()), monuments);
         for (ci, &city_idx) in cities.iter().enumerate() {
-            let chosen = build_out(state, city_idx, &terr[ci], *sc, 0).hub_site;
+            let chosen = build_out(state, city_idx, &terr[ci], *sc, 0, goal).hub_site;
             let (_, site_space, _) = tile_options(state, &terr[ci], *sc);
 
             // (pop, -stars, site) so the sort puts most pop, then cheapest, first.
@@ -1765,7 +1770,14 @@ fn optimal_report(state: &GameState, cities: &[i32], monuments: i32, lane: Lane)
                     (spt, giants, -stars, s, b.partners, pop)
                 })
                 .collect();
-            ranked.sort_by(|a, b| b.cmp(a));
+            let m = site_maxima(
+                &ranked.iter().map(|&(a, b, c, _, _, _)| (a, b, -c)).collect::<Vec<_>>(),
+            );
+            ranked.sort_by(|x, y| {
+                site_order_key(y.0, y.1, -y.2, goal, m)
+                    .cmp(&site_order_key(x.0, x.1, -x.2, goal, m))
+                    .then(x.3.cmp(&y.3))
+            });
 
             let blocked: Vec<i32> = site_space
                 .iter()
@@ -1891,10 +1903,57 @@ fn frontier_maxima(front: &[EmpirePlan]) -> (i64, i64, i64) {
 /// full axis made every knee refuse to spend one across 11 seeds; leaving them
 /// free made a picker drain its budget for a rounding error. The ladder shows
 /// the marginal value instead and the caller decides.
-fn knee_score(p: &EmpirePlan, w_spt: i64, w_su: i64, (ms, mg, mc): (i64, i64, i64)) -> i64 {
-    let value = w_spt * p.spt as i64 * mg * mc + w_su * p.giants as i64 * ms * mc;
-    let cost = (w_spt + w_su) * p.stars as i64 * ms * mg;
+fn knee_score(p: &EmpirePlan, w_spt: i64, w_su: i64, m: (i64, i64, i64)) -> i64 {
+    knee_raw(p.spt as i64, p.giants as i64, p.stars as i64, w_spt, w_su, m)
+}
+
+/// The knee on bare numbers, so a whole plan and a single hub site are scored
+/// by one implementation rather than two that can drift.
+fn knee_raw(
+    spt: i64,
+    giants: i64,
+    stars: i64,
+    w_spt: i64,
+    w_su: i64,
+    (ms, mg, mc): (i64, i64, i64),
+) -> i64 {
+    let value = w_spt * spt * mg * mc + w_su * giants * ms * mc;
+    let cost = (w_spt + w_su) * stars * ms * mg;
     value - cost
+}
+
+/// Rank one hub site FOR A STATED GOAL, mirroring `pick_for_goal` exactly.
+///
+/// `site_value` measures a site — that is a fact and stays goal-agnostic. This
+/// is the ordering, and the ordering is the part that must follow intent: an
+/// army build and an income build should not be handed the same tile just
+/// because one comparator was hardcoded. Ties break toward fewer stars.
+fn site_order_key(
+    spt: i32,
+    giants: i32,
+    stars: i32,
+    g: Goal,
+    m: (i64, i64, i64),
+) -> (i64, i64, i64) {
+    let (spt, giants, stars) = (spt as i64, giants as i64, stars as i64);
+    let (a, b) = match g {
+        Goal::Spt => (spt, giants),
+        Goal::Giants => (giants, spt),
+        Goal::Eco => (knee_raw(spt, giants, stars, 1, 0, m), spt),
+        Goal::Balanced => (knee_raw(spt, giants, stars, 1, 1, m), spt),
+        Goal::Army => (knee_raw(spt, giants, stars, 0, 1, m), giants),
+    };
+    (a, b, -stars)
+}
+
+/// Frontier maxima over a set of scored sites, for the knee's normalisation.
+fn site_maxima(v: &[(i32, i32, i32)]) -> (i64, i64, i64) {
+    let m = |x: i64| x.max(1);
+    (
+        m(v.iter().map(|t| t.0).max().unwrap_or(1) as i64),
+        m(v.iter().map(|t| t.1).max().unwrap_or(1) as i64),
+        m(v.iter().map(|t| t.2).max().unwrap_or(1) as i64),
+    )
 }
 
 fn parse_goal(s: &str) -> Option<Goal> {
@@ -2165,7 +2224,8 @@ fn main() {
                       (printed automatically whenever --monuments > 0)
   --map               print terrain, resources and the territory split
   --verify            check placements against the engine (exit 1 on failure)
-  --optimal           rank every hub site; --windmill / --forge for other lanes
+  --optimal           rank every hub site for --goal (balanced if unstated);
+                      --windmill / --forge for other lanes
 "#
         );
         return;
@@ -2291,7 +2351,8 @@ fn main() {
         } else {
             Lane::Forest
         };
-        optimal_report(&state, &cities, monuments, lane);
+        // Audit against the objective you asked about; balanced when unstated.
+        optimal_report(&state, &cities, monuments, lane, goal.unwrap_or(Goal::Balanced));
         return;
     }
     if args.iter().any(|a| a == "--verify") {
@@ -2436,7 +2497,7 @@ fn main() {
                 .filter(|sc| lane_can_place_hub(&state, &square, sc.lane))
                 .map(|&sc| {
                     let terr = allocate_value(&state, &cities, &uniform(sc, cities.len()), monuments);
-                    let b = build_out(&state, c, &terr[ci], sc, monuments);
+                    let b = build_out(&state, c, &terr[ci], sc, monuments, Goal::Balanced);
                     (sc, b.stars, b.pop, b.partners)
                 })
                 .collect();
