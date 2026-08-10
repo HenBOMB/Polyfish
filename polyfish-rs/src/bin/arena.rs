@@ -658,6 +658,19 @@ fn play_match(
             "model_city_levels": model_city_levels,
             "placements": placements,
         });
+        // When the model actually holds a hub, drop the whole final board next
+        // to the summary. The server loads a bare GameState, so the partner
+        // count around a hub can be counted off the map rather than trusted.
+        if model_structures.iter().any(|s| {
+            let t = s["type"].as_str().unwrap_or("");
+            matches!(t, "Sawmill" | "Windmill" | "Forge")
+        }) {
+            let sp = std::path::Path::new(dir)
+                .join(format!("state_{}_{}.json", seed, if swap { "b" } else { "a" }));
+            if let Ok(j) = serde_json::to_string(&game.state) {
+                let _ = std::fs::write(&sp, j);
+            }
+        }
         let name = format!("game_{}_{}.json", seed, if swap { "b" } else { "a" });
         let path = std::path::Path::new(dir).join(name);
         match serde_json::to_vec_pretty(&dump) {
