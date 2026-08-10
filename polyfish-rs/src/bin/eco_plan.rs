@@ -537,10 +537,33 @@ fn city_build(
         techs.extend(b.techs.iter().copied());
     }
     let counted = empire_partners.unwrap_or(&partner_tiles);
-    let partners = counted
+    let mut feeding: HashSet<i32> = counted
         .iter()
-        .filter(|t| adj_to_hub.contains(t) && Some(**t) != hub && Some(**t) != market)
-        .count() as i32;
+        .copied()
+        .filter(|t| adj_to_hub.contains(t) && Some(*t) != hub && Some(*t) != market)
+        .collect();
+    // Adjacency pay is PLAYER-scoped (`rules::economy::partner_count`), so a
+    // partner already standing under a neighbouring city feeds this hub too.
+    // `partner_tiles` only ever saw this city's ground, so every per-city
+    // consumer underpriced exactly the border sites `enumerate_empire` prices
+    // correctly — claimed 1 where the engine paid 4 (Aug 2026).
+    if let Some(h) = hub {
+        let pov = pov_of(state);
+        // The engine's own test, tile by tile: `partner_count` counts adjacent
+        // pov-owned tiles holding any of the hub's `adjacent_types`. A count
+        // cannot be used directly — `empire_partners` may already list some of
+        // these — so union the tiles and take the size.
+        let feeds = &get_structure_setting(hub_type).adjacent_types;
+        for a in get_adjacent_indices(state, h, 1) {
+            if state.tiles.get(&a).is_some_and(|t| t.owner == pov)
+                && polyfish::functions::get_structure_at(state, a)
+                    .is_some_and(|s| feeds.contains(&s.structure_type))
+            {
+                feeding.insert(a);
+            }
+        }
+    }
+    let partners = feeding.len() as i32;
     pop += partners;
 
     // You do not pay for what is already standing. On a generated map nothing
@@ -1551,6 +1574,36 @@ fn owned_board(base: &GameState, city_idx: i32, territory: &[i32]) -> GameState 
     s
 }
 
+/// The structures a plan puts on the board, partners first and the hub last.
+/// One definition, so `materialize` and `plan_len` cannot drift apart.
+fn plan_of(
+    state: &GameState,
+    territory: &[i32],
+    sc: Scenario,
+    hub: Option<i32>,
+) -> Vec<(i32, StructureType)> {
+    let (buys, _, _) = tile_options(state, territory, sc);
+    let (hub_type, partner_name) = lane_hub(sc.lane);
+    let mut plan: Vec<(i32, StructureType)> = buys
+        .iter()
+        .filter(|b| is_partner_buy(b, partner_name))
+        .map(|b| b.idx)
+        .filter(|i| Some(*i) != hub)
+        .map(|i| (i, lane_partner_type(sc.lane)))
+        .collect();
+    // A hub already standing is not a build. Re-creating it overwrites the
+    // structure and pays its adjacency bonus a SECOND time, which made the
+    // total depend on where the redundant build landed in the order: partners
+    // first paid 1x2, hub first paid 1x0 (Aug 2026). `city_build` already
+    // declines to re-cost a standing hub; this is the same fact, executed.
+    if let Some(h) = hub {
+        if polyfish::functions::get_structure_type_at(state, h) != Some(hub_type) {
+            plan.push((h, hub_type));
+        }
+    }
+    plan
+}
+
 /// Run the plan's builds through the engine in `order`, returning the finished
 /// board and the population the city actually gained.
 fn materialize(
@@ -1562,19 +1615,7 @@ fn materialize(
     order: &[usize],
 ) -> (GameState, i32) {
     let mut s = owned_board(base, city_idx, territory);
-    let (buys, _, _) = tile_options(&s, territory, sc);
-    let (hub_type, partner_name) = lane_hub(sc.lane);
-
-    let mut plan: Vec<(i32, StructureType)> = buys
-        .iter()
-        .filter(|b| is_partner_buy(b, partner_name))
-        .map(|b| b.idx)
-        .filter(|i| Some(*i) != hub)
-        .map(|i| (i, lane_partner_type(sc.lane)))
-        .collect();
-    if let Some(h) = hub {
-        plan.push((h, hub_type));
-    }
+    let plan = plan_of(&s, territory, sc, hub);
 
     let pov = pov_of(base);
     let pop_of = |s: &GameState| -> i32 {
@@ -1594,14 +1635,41 @@ fn materialize(
 
 /// Number of builds in a plan, so orders can be generated without materializing.
 fn plan_len(state: &GameState, territory: &[i32], sc: Scenario, hub: Option<i32>) -> usize {
-    let (buys, _, _) = tile_options(state, territory, sc);
-    let (_, partner_name) = lane_hub(sc.lane);
-    buys.iter()
-        .filter(|b| is_partner_buy(b, partner_name))
-        .map(|b| b.idx)
-        .filter(|i| Some(*i) != hub)
-        .count()
-        + usize::from(hub.is_some())
+    plan_of(state, territory, sc, hub).len()
+}
+
+/// Replay a plan one build at a time, reporting what each step paid.
+/// Printed only when `verify` catches an order-dependent plan — the step where
+/// two orders stop agreeing names the branch that lost the population.
+fn trace_order(
+    base: &GameState,
+    city_idx: i32,
+    territory: &[i32],
+    sc: Scenario,
+    hub: Option<i32>,
+    order: &[usize],
+    label: &str,
+) {
+    let mut s = owned_board(base, city_idx, territory);
+    let plan = plan_of(&s, territory, sc, hub);
+    let pov = pov_of(base);
+    let pop_of = |s: &GameState| -> i32 {
+        s.tribes
+            .get(&pov)
+            .and_then(|t| t.cities.iter().find(|c| c.idx == city_idx))
+            .map_or(0, |c| c.population)
+    };
+    print!("      {label:<14}");
+    let mut prev = pop_of(&s);
+    for &k in order {
+        let (idx, st) = plan[k];
+        let ruled = polyfish::functions::get_city_owning_tile(&s, idx).map(|c| c.idx);
+        let _ = polyfish::actions::structure::build_structure(&mut s, idx, st);
+        let now = pop_of(&s);
+        print!(" | {st:?}@{idx} ruled_by={ruled:?} +{}", now - prev);
+        prev = now;
+    }
+    println!(" = {prev}");
 }
 
 /// Check the planner's placement claim against the engine rather than against
@@ -1651,8 +1719,11 @@ fn verify(state: &GameState, cities: &[i32], monuments: i32) -> bool {
 
             // 3. Build-order invariance, on the capital only — the other cities
             //    are villages here, so no CityState collects their pop.
+            // Fewer than two builds has only one order. On a live board a city
+            // whose hub already stands and whose partners are all built plans
+            // nothing, so `n` can now be 0 and `n - 1` would underflow.
             let mut order_ok = true;
-            if city_idx == capital {
+            if city_idx == capital && n >= 2 {
                 let mut rev = ident.clone();
                 rev.reverse();
                 // Hub first, then partners in order: the retroactive-pay path.
@@ -1667,6 +1738,8 @@ fn verify(state: &GameState, cities: &[i32], monuments: i32) -> bool {
                             "    ORDER-DEPENDENT: {} city {city_idx} pop {pop_ident} -> {pop_alt}",
                             sc.name
                         );
+                        trace_order(state, city_idx, &terr[ci], sc, Some(hub), &ident, "plan order");
+                        trace_order(state, city_idx, &terr[ci], sc, Some(hub), &alt, "this order");
                     }
                 }
             }
@@ -1707,7 +1780,15 @@ fn verify(state: &GameState, cities: &[i32], monuments: i32) -> bool {
             let argmax_ok = doms.is_empty();
             let (best_site, best_n) = doms.first().map_or((hub, engine_partners), |&(p, _, s)| (s, p));
 
-            let level_ok = stored_level == b.partners;
+            // A hub the plan did not build carries a level from its own past:
+            // set when it was built, bumped for each partner added since, and
+            // never decremented when one is razed or its tile captured. On
+            // state_4114_a a Windmill stands at level 1 with no partner left
+            // alive. Only a hub this plan actually builds makes a claim about
+            // its stored level.
+            let plan_builds_hub =
+                polyfish::functions::get_structure_type_at(state, hub) != Some(hub_type);
+            let level_ok = !plan_builds_hub || stored_level == b.partners;
             let count_ok = engine_partners == b.partners;
             let ok = level_ok && count_ok && argmax_ok && order_ok;
             if !ok {

@@ -509,3 +509,53 @@ fn crushing_the_middle_crop_of_an_l_is_the_best_windmill_site() {
     // would be silently skipping resource tiles as hub sites.
     assert!(ceil(48) > 0, "an end-of-line crop is still a scorable site");
 }
+
+/// Total population from a hub and its partners does not depend on build order.
+///
+/// The engine pays a hub `reward_pop x partners` when it is built, and pays it
+/// again retroactively when a partner lands beside an already-standing hub
+/// (`actions/structure.rs`). Those two paths must add up to the same total, or
+/// MCTS values permutations of the same turn differently.
+#[test]
+fn hub_population_does_not_depend_on_build_order() {
+    let build = |order: &[(i32, StructureType)]| -> i32 {
+        let mut state = board();
+        let mut tribe = TribeState::default();
+        tribe.id = 1;
+        tribe.stars = 1000;
+        tribe.cities.push(CityState {
+            idx: 60,
+            owner: 1,
+            level: 1,
+            border_size: 1,
+            ..Default::default()
+        });
+        state.tribes.insert(1, tribe);
+        for idx in [49, 50, 51, 59, 60, 61, 69, 70, 71] {
+            state.tiles.get_mut(&idx).unwrap().terrain_type = TerrainType::Field;
+        }
+        let mut game = Game::new();
+        game.state = state;
+        game.post_load();
+        for &(idx, kind) in order {
+            let _ = polyfish::actions::structure::build_structure(&mut game.state, idx, kind);
+        }
+        game.state.tribes.get(&1).unwrap().cities[0].population
+    };
+
+    let hub = (50, StructureType::Windmill);
+    let farms = [(49, StructureType::Farm), (51, StructureType::Farm)];
+
+    let partners_first = build(&[farms[0], farms[1], hub]);
+    let hub_first = build(&[hub, farms[0], farms[1]]);
+    let interleaved = build(&[farms[0], hub, farms[1]]);
+
+    assert_eq!(
+        partners_first, hub_first,
+        "hub built last vs first: {partners_first} vs {hub_first} pop"
+    );
+    assert_eq!(
+        partners_first, interleaved,
+        "hub built last vs in the middle: {partners_first} vs {interleaved} pop"
+    );
+}
