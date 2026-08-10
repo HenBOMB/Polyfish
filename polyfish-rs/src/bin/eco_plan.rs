@@ -627,6 +627,58 @@ fn site_reachable(
     city_build(state, &inner, sc, monuments, climb_hub, None, None).pop >= POP_FOR_LEVEL_4
 }
 
+/// What a hub site is worth to its city, as the SPT the city ends up producing
+/// with the hub there and the best Market it enables.
+///
+/// One value function for every consumer that ranks sites. `build_out` used to
+/// rank on delivered POP and site a Market afterwards, while the joint frontier
+/// scores plans on SPT — so the two disagreed about the same city on the same
+/// state: on an L of four crops, ranking by pop declines to crush the middle
+/// one (10 pop vs 9) while SPT prefers it, because the crush buys a level-3 hub
+/// and a Market reads hub level at a star a turn, forever.
+///
+/// Cross-city Market coupling still belongs to the frontier alone — a Market
+/// can read hubs from two cities and a per-city view cannot see it. That is a
+/// legitimate reason for the two to differ; the OBJECTIVE is not.
+fn site_value(
+    state: &GameState,
+    city_idx: i32,
+    territory: &[i32],
+    sc: Scenario,
+    monuments: i32,
+    site: Option<i32>,
+) -> (i32, i32, i32, i32) {
+    let mut b = city_build(state, territory, sc, monuments, site, None, None);
+    if let Some(h) = site {
+        if b.partners > 0 {
+            let partners = partner_tiles_of(state, territory, sc);
+            if let Some((_, _, neg)) = market_sites(state, territory, h, &partners)
+                .into_iter()
+                .map(|m| {
+                    let cb = city_build(state, territory, sc, monuments, site, Some(m), None);
+                    (cb.pop, -cb.stars, -m)
+                })
+                .max()
+            {
+                b = city_build(state, territory, sc, monuments, site, Some(-neg), None);
+                b.market_spt = b.partners.min(MARKET_MAX_LEVEL);
+            }
+        }
+    }
+    let mut pop = b.pop;
+    if !sc.border_growth && pop >= POP_FOR_LEVEL_4 {
+        pop += 3;
+    }
+    let level = level_at_pop(pop);
+    let is_capital = state.tiles.get(&city_idx).is_some_and(|t| t.capital_of != 0);
+    let spt = level + i32::from(is_capital) + i32::from(level >= 2) + b.market_spt;
+    // The frontier's own axes, in its own order: more SPT, more super units,
+    // fewer stars. Pop is deliberately NOT one of them -- at equal SPT the
+    // level is equal, so extra pop inside a level buys nothing and ranking on
+    // it picks needlessly expensive sites. Returned last, for display only.
+    (spt, giants_at_level(level), b.stars, pop)
+}
+
 /// Single-city build: the best hub by what it actually delivers, market beside
 /// it. Used by the allocator and the per-city table; the empire frontier
 /// enumerates hubs jointly instead, because Market income couples the cities.
@@ -652,16 +704,21 @@ fn build_out(
     } else {
         built
     };
-    let mut ranked: Vec<(i32, i32, i32)> = sites
+    let mut ranked: Vec<(i32, i32, i32, i32)> = sites
         .into_iter()
         .filter(|&h| site_reachable(state, city_idx, territory, sc, monuments, h))
         .map(|h| {
-            let b = city_build(state, territory, sc, monuments, Some(h), None, None);
-            (b.pop, b.stars, h)
+            let (spt, giants, stars, _pop) =
+                site_value(state, city_idx, territory, sc, monuments, Some(h));
+            (spt, giants, stars, h)
         })
         .collect();
-    ranked.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
-    let hub = ranked.first().map(|&(_, _, h)| h);
+    // SPT first: it already carries pop (through level) AND the Market income
+    // the site enables, which ranking on pop alone could not see.
+    ranked.sort_by(|a, b| {
+        b.0.cmp(&a.0).then(b.1.cmp(&a.1)).then(a.2.cmp(&b.2)).then(a.3.cmp(&b.3))
+    }); // spt desc, giants desc, stars asc, tile asc
+    let hub = ranked.first().map(|&(_, _, _, h)| h);
     let mut b = city_build(state, territory, sc, monuments, hub, None, None);
     if let Some(h) = hub {
         if b.partners > 0 {
@@ -1655,11 +1712,17 @@ fn dominators_of(
     chosen: i32,
 ) -> Vec<(i32, i32, i32)> {
     let (_, site_space, _) = tile_options(state, territory, sc);
+    // Through `site_value`, the one place a site is scored. Verify used to
+    // judge on pop against stars while `build_out` chose on the same pair, and
+    // both were blind to the Market income a site enables -- so when the
+    // ranking moved to the frontier's axes this check kept failing correct
+    // picks. Three consumers, one objective.
     let score = |s: i32| {
-        let b = city_build(state, territory, sc, 0, Some(s), None, None);
-        (b.pop, b.stars)
+        let (spt, giants, stars, _pop) =
+            site_value(state, city_idx, territory, sc, 0, Some(s));
+        (spt, giants, stars)
     };
-    let (cp, cs) = score(chosen);
+    let (cspt, cg, cs) = score(chosen);
     let mut out: Vec<(i32, i32, i32)> = site_space
         .iter()
         .copied()
@@ -1667,8 +1730,9 @@ fn dominators_of(
         // An unreachable site cannot dominate anything — the city never gets there.
         .filter(|&s| site_reachable(state, city_idx, territory, sc, 0, s))
         .filter_map(|s| {
-            let (p, st) = score(s);
-            (p >= cp && st <= cs && (p > cp || st < cs)).then_some((p, st, s))
+            let (spt, g, st) = score(s);
+            (spt >= cspt && g >= cg && st <= cs && (spt > cspt || g > cg || st < cs))
+                .then_some((spt, st, s))
         })
         .collect();
     out.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
@@ -1691,12 +1755,14 @@ fn optimal_report(state: &GameState, cities: &[i32], monuments: i32, lane: Lane)
             let (_, site_space, _) = tile_options(state, &terr[ci], *sc);
 
             // (pop, -stars, site) so the sort puts most pop, then cheapest, first.
-            let mut ranked: Vec<(i32, i32, i32, i32)> = site_space
+            let mut ranked: Vec<(i32, i32, i32, i32, i32, i32)> = site_space
                 .iter()
                 .filter(|&&s| site_reachable(state, city_idx, &terr[ci], *sc, 0, s))
                 .map(|&s| {
+                    let (spt, giants, stars, pop) =
+                        site_value(state, cities[ci], &terr[ci], *sc, 0, Some(s));
                     let b = city_build(state, &terr[ci], *sc, 0, Some(s), None, None);
-                    (b.pop, -b.stars, s, b.partners)
+                    (spt, giants, -stars, s, b.partners, pop)
                 })
                 .collect();
             ranked.sort_by(|a, b| b.cmp(a));
@@ -1712,7 +1778,7 @@ fn optimal_report(state: &GameState, cities: &[i32], monuments: i32, lane: Lane)
 
             println!("\n  {} — city {city_idx} ({} candidate sites)", sc.name, site_space.len());
             println!("      no hub at all:            pop {:>3}  stars {:>4}", no_hub.pop, no_hub.stars);
-            for (pop, negstars, site, partners) in ranked.iter().take(5) {
+            for (_spt, _g, negstars, site, partners, pop) in ranked.iter().take(5) {
                 let mark = if Some(*site) == chosen { "  <- GREEDY PICK" } else { "" };
                 let ring = if get_chebyshev_distance(*site, city_idx, state.settings.size) > 1 {
                     "outer"
@@ -1734,37 +1800,44 @@ fn optimal_report(state: &GameState, cities: &[i32], monuments: i32, lane: Lane)
             // for no more stars, strictly better on one. More pop for more stars
             // is a different point on the frontier, not a mistake.
             match chosen {
-                Some(c) => match ranked.iter().find(|r| r.2 == c).copied() {
+                Some(c) => match ranked.iter().find(|r| r.3 == c).copied() {
                     None => println!("      VERDICT: chosen site {c} is not in the candidate space"),
-                    Some((cp, cs, _, _)) => {
+                    Some((cspt, cg, cs, _, _, cp)) => {
+                        // Dominance on the SAME axes the planner optimises:
+                        // SPT (which carries pop through level, plus Market
+                        // income) at no greater cost.
                         let dominators: Vec<(i32, i32, i32)> = ranked
                             .iter()
-                            .filter(|&&(p, s, site, _)| {
-                                site != c && p >= cp && s >= cs && (p > cp || s > cs)
+                            .filter(|&&(spt, g, st, site, _, _)| {
+                                site != c
+                                    && spt >= cspt
+                                    && g >= cg
+                                    && st >= cs
+                                    && (spt > cspt || g > cg || st > cs)
                             })
-                            .map(|&(p, s, site, _)| (p, -s, site))
+                            .map(|&(spt, _, st, site, _, _)| (spt, -st, site))
                             .collect();
                         if dominators.is_empty() {
                             println!("      VERDICT: greedy pick is on the frontier (not dominated)");
                         } else {
-                            for (p, s, site) in &dominators {
+                            for (spt, st, site) in &dominators {
                                 println!(
-                                    "      VERDICT: DOMINATED — site {site} gives pop {p} for {s} stars; chosen {c} gives pop {cp} for {} stars",
+                                    "      VERDICT: DOMINATED — site {site} gives {spt} SPT for {st} stars; chosen {c} gives {cspt} SPT for {} stars (pop {cp})",
                                     -cs
                                 );
                             }
                         }
                     }
                 },
-                None if best.is_some_and(|(bp, _, _, _)| bp > no_hub.pop) => {
-                    let (bp, _, bsite, _) = best.unwrap();
-                    println!("      VERDICT: NO HUB CHOSEN but site {bsite} would pay pop {bp}");
+                None if best.is_some_and(|(_, _, _, _, _, bp)| bp > no_hub.pop) => {
+                    let (bspt, _, _, bsite, _, bp) = best.unwrap();
+                    println!("      VERDICT: NO HUB CHOSEN but site {bsite} would pay pop {bp} / {bspt} SPT");
                 }
                 None => println!("      VERDICT: no hub, none worthwhile"),
             }
 
             // Confirm the winner against the engine, not just the planner's model.
-            if let Some((_, _, bsite, bpartners)) = best {
+            if let Some((_, _, _, bsite, bpartners, _)) = best {
                 let n = plan_len(state, &terr[ci], *sc, Some(bsite));
                 let order: Vec<usize> = (0..n).collect();
                 let (board, _) = materialize(state, city_idx, &terr[ci], *sc, Some(bsite), &order);

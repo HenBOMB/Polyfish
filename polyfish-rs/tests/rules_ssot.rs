@@ -436,3 +436,76 @@ fn partner_ceiling_respects_resource_worked_partners() {
         "only the crops count"
     );
 }
+
+/// Hubs are `limited_per_city`, so a better site under a DIFFERENT city is not
+/// an alternative to this city's placement — that city can still build its own.
+/// A hub-siting comparison that ignores this flags correct placements as wrong:
+/// it inflated a measured sub-optimality rate from 6% to 22% (Aug 2026).
+#[test]
+fn hub_alternatives_are_same_city_only() {
+    let mut state = board();
+    let mut tribe = TribeState::default();
+    tribe.id = 1;
+    for (idx, terr) in [(60, vec![48, 49, 59, 61, 71]), (64, vec![52, 53, 63, 65, 75])] {
+        let mut c = CityState { idx, owner: 1, level: 1, border_size: 1, ..Default::default() };
+        c._territory = terr.clone();
+        c._territory.push(idx);
+        for &t in &c._territory {
+            state.tiles.get_mut(&t).unwrap().ruling_city_coords =
+                Some(polyfish::Coords::from_index(idx, 11));
+        }
+        tribe.cities.push(c);
+    }
+    state.tribes.insert(1, tribe);
+
+    assert!(rules::economy::same_city(&state, 48, 59), "both rule under city 60");
+    assert!(rules::economy::same_city(&state, 52, 65), "both rule under city 64");
+    assert!(
+        !rules::economy::same_city(&state, 48, 52),
+        "city 60's tile and city 64's tile are not alternatives to each other"
+    );
+    assert!(
+        !rules::economy::same_city(&state, 48, 0),
+        "a tile no city rules is nobody's alternative"
+    );
+}
+
+/// Verdi's L-shape: four crops, three in a line plus one off the end. Crushing
+/// the MIDDLE crop of the long side to seat the Windmill there leaves it
+/// touching the other three, where any clean Field nearby touches at most two.
+///
+/// The trade is 2 pop (the Farm you crushed) for +1 hub level — worth +1 pop
+/// AND +1 star/turn to every Market touching that hub, so it pays over a game.
+/// `partner_ceiling` has to be able to SEE it, which means scoring a crop tile
+/// as a hub site rather than skipping it.
+#[test]
+fn crushing_the_middle_crop_of_an_l_is_the_best_windmill_site() {
+    let mut state = board();
+    for idx in 0..121 {
+        state.tiles.get_mut(&idx).unwrap().terrain_type = TerrainType::Field;
+    }
+    // Long side 48-49-50 (row 4), corner 61 (row 5) hanging off the 50 end.
+    for crop in [48, 49, 50, 61] {
+        state.resources.insert(
+            crop,
+            Some(polyfish::states::ResourceState { resource_type: ResourceType::Crop }),
+        );
+    }
+
+    let ceil = |idx| rules::economy::partner_ceiling(&state, idx, StructureType::Windmill, 1);
+
+    // The middle of the long side touches 48, 50 and 61.
+    assert_eq!(ceil(49), 3, "middle crop of the long side sees the other three");
+    // Clean Field neighbours do worse: 59 touches only 48 and 49.
+    assert_eq!(ceil(59), 2, "the clean field beside the line touches two");
+    assert_eq!(ceil(71), 1, "further out touches only the corner crop");
+    assert!(
+        ceil(49) > ceil(59) && ceil(49) > ceil(71),
+        "crushing the middle crop must rank ABOVE every clean alternative, \
+         or the planner cannot choose the play at all"
+    );
+
+    // And a crop tile must be a candidate in the first place — the failure mode
+    // would be silently skipping resource tiles as hub sites.
+    assert!(ceil(48) > 0, "an end-of-line crop is still a scorable site");
+}

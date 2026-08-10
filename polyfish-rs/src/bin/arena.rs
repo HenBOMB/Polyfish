@@ -137,6 +137,13 @@ struct Args {
     #[arg(long)]
     dump_turn_states: Option<String>,
 
+    /// Tribe for both seats. Spawn terrain is tribe-specific -- Bardur forest,
+    /// XinXi mountain/metal, Kickoo water/fruit -- and a hub's ceiling is a
+    /// property of the terrain around it, so any statement about hub quality is
+    /// tribe-scoped until this is varied.
+    #[arg(long, default_value = "imperius")]
+    tribe: String,
+
     /// EXP_ELO_026 oracle-macro steer for config 1 (gumbel backend only):
     /// while it holds <3 cities, focus the pursuit channel on one sticky
     /// FOW-visible neutral village (nearest to its units).
@@ -183,6 +190,28 @@ fn load_model(path: &str, device: &candle_core::Device) -> anyhow::Result<PolyZe
 /// (`neutral_villages`) plus the model player's FOW view
 /// (`model_visible_villages`). Row-major 11x11 tile indices. One file per game,
 /// so concurrent match workers never share a handle.
+/// Tribe name to type, mirroring self_play's parser.
+fn tribe_of(s: &str) -> TribeType {
+    match s.to_lowercase().as_str() {
+        "imperius" => TribeType::Imperius,
+        "bardur" => TribeType::Bardur,
+        "oumaji" => TribeType::Oumaji,
+        "kickoo" => TribeType::Kickoo,
+        "xinxi" => TribeType::XinXi,
+        "zebasi" => TribeType::Zebasi,
+        "hoodrick" => TribeType::Hoodrick,
+        "vengir" => TribeType::Vengir,
+        "luxidoor" => TribeType::Luxidoor,
+        "yadakk" => TribeType::Yadakk,
+        "aimo" => TribeType::AiMo,
+        "quetzali" => TribeType::Quetzali,
+        other => {
+            eprintln!("unknown tribe {other}, using imperius");
+            TribeType::Imperius
+        }
+    }
+}
+
 fn dump_turn_state(
     file: &mut std::fs::File,
     game_idx: usize,
@@ -333,11 +362,12 @@ fn play_match(
     macro_star_gate: bool,
     goal_script: bool,
     goal_w_tree: f32,
+    args_tribe: &str,
 ) -> MatchResult {
     let gen_settings = MapGenSettings {
         size: MapSize::Tiny,
         map_type: MapType::Drylands,
-        tribes: vec![TribeType::Imperius, TribeType::Imperius],
+        tribes: vec![tribe_of(&args_tribe), tribe_of(&args_tribe)],
         seed,
         ..Default::default()
     };
@@ -512,6 +542,13 @@ fn play_match(
                             }
                             if let Ok(t) = cand.target_idx() {
                                 let t = t as i32;
+                                // limited_per_city: only this city's tiles are
+                                // alternatives to this city's placement.
+                                if !polyfish::rules::economy::same_city(
+                                    &game.state, t, chosen,
+                                ) {
+                                    continue;
+                                }
                                 alts.push((
                                     t,
                                     polyfish::rules::economy::partner_ceiling(
@@ -521,6 +558,40 @@ fn play_match(
                             }
                         }
                         let best = alts.iter().map(|&(_, c)| c).max().unwrap_or(chosen_ceiling);
+                        let best_tile = alts
+                            .iter()
+                            .filter(|&&(_, c)| c == best)
+                            .map(|&(t, _)| t)
+                            .min()
+                            .unwrap_or(chosen);
+                        // What the model traded away. A tile can be a poor hub
+                        // site and still be worth keeping -- it may carry a
+                        // resource the hub would crush, or be a partner slot.
+                        let describe = |t: i32| {
+                            let res = game
+                                .state
+                                .resources
+                                .get(&t)
+                                .and_then(|r| r.as_ref())
+                                .map(|r| format!("{:?}", r.resource_type));
+                            let terr = game
+                                .state
+                                .tiles
+                                .get(&t)
+                                .map(|x| format!("{:?}", x.terrain_type));
+                            let city = polyfish::functions::get_city_owning_tile(&game.state, t)
+                                .map(|c| c.idx);
+                            serde_json::json!({
+                                "tile": t,
+                                "terrain": terr,
+                                "resource": res,
+                                "city": city,
+                                "dist_to_city": city.map(|c| {
+                                    polyfish::functions::get_chebyshev_distance(
+                                        t, c, game.state.settings.size)
+                                }),
+                            })
+                        };
                         placements.push(serde_json::json!({
                             "turn": game.state.settings.turn,
                             "kind": format!("{kind:?}"),
@@ -528,6 +599,9 @@ fn play_match(
                             "chosen_ceiling": chosen_ceiling,
                             "best_ceiling": best,
                             "n_options": alts.len(),
+                            "chosen_detail": describe(chosen),
+                            "best_detail": describe(best_tile),
+                            "stars": game.state.tribes.get(&model_player).map(|t| t.stars),
                         }));
                     }
                 }
@@ -864,6 +938,7 @@ fn main() -> anyhow::Result<()> {
         std::fs::create_dir_all(dir)?;
     }
     let dump_turn_states = args.dump_turn_states.as_deref();
+    let tribe_name: &str = &args.tribe;
 
     let arena_start = Instant::now();
     let completed = AtomicU32::new(0);
@@ -912,7 +987,7 @@ fn main() -> anyhow::Result<()> {
                             eval1, eval2, mcts1, mcts2, backend1, backend2, args.leaf_batch,
                             seed, swap, args.max_turns, args.gamemode, dump_stats_dir,
                             idx, dump_turn_states, args.macro_commit, args.macro_star_gate,
-                            args.goal_script, args.goal_w_tree,
+                            args.goal_script, args.goal_w_tree, tribe_name,
                         )
                     }));
 

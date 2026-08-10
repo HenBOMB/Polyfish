@@ -171,6 +171,21 @@ pub fn partner_ceiling(
     )
 }
 
+/// Do these two tiles answer to the same city?
+///
+/// Hubs are `limited_per_city`, so the alternatives to a hub placement are the
+/// tiles of the SAME city. A better site under a different city is not an
+/// option forgone — that city can still build its own hub there. Comparing
+/// across cities makes a correct placement look wrong: it flagged 25 of 34
+/// "sub-optimal" hub placements that were nothing of the kind (Aug 2026).
+pub fn same_city(state: &GameState, a: i32, b: i32) -> bool {
+    let city_of = |t: i32| crate::functions::get_city_owning_tile(state, t).map(|c| c.idx);
+    match (city_of(a), city_of(b)) {
+        (Some(x), Some(y)) => x == y,
+        _ => false,
+    }
+}
+
 /// Tiles this city actually rules.
 ///
 /// `_territory` is the radius-2 square filtered by *player* ownership, so a tile
