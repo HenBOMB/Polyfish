@@ -1527,16 +1527,24 @@ fn lane_partner_type(lane: Lane) -> StructureType {
 
 /// Own `territory` outright for player 1 and hand them stars, so the engine's
 /// own build path can be run against the planner's tile set.
+/// The seat being planned for. On a generated map that is always player 1; on a
+/// real board it is whoever `--state` was pointed at, and renumbering it to 1
+/// would merge the OPPONENT's tiles into the POV's — their LumberHut next to
+/// your Sawmill would count as a partner (Aug 2026).
+fn pov_of(state: &GameState) -> polyfish::states::PlayerId {
+    state.settings.current_player_turn_id
+}
+
 fn owned_board(base: &GameState, city_idx: i32, territory: &[i32]) -> GameState {
     let mut s = base.clone();
     let size = s.settings.size;
-    s.settings.current_player_turn_id = 1;
-    if let Some(t) = s.tribes.get_mut(&1) {
+    let pov = pov_of(base);
+    if let Some(t) = s.tribes.get_mut(&pov) {
         t.stars = 100_000;
     }
     for &i in territory {
         if let Some(t) = s.tiles.get_mut(&i) {
-            t.owner = 1;
+            t.owner = pov;
             t.ruling_city_coords = Some(polyfish::coords::Coords::from_index(city_idx, size));
         }
     }
@@ -1568,9 +1576,10 @@ fn materialize(
         plan.push((h, hub_type));
     }
 
+    let pov = pov_of(base);
     let pop_of = |s: &GameState| -> i32 {
         s.tribes
-            .get(&1)
+            .get(&pov)
             .and_then(|t| t.cities.iter().find(|c| c.idx == city_idx))
             .map_or(0, |c| c.population)
     };
@@ -1636,7 +1645,7 @@ fn verify(state: &GameState, cities: &[i32], monuments: i32) -> bool {
             let (board, pop_ident) = materialize(state, city_idx, &terr[ci], sc, Some(hub), &ident);
 
             let engine_partners =
-                polyfish::rules::economy::partner_count(&board, hub, hub_type, 1);
+                polyfish::rules::economy::partner_count(&board, hub, hub_type, pov_of(state));
             let stored_level = polyfish::functions::get_structure_at(&board, hub)
                 .map_or(-1, |s| s.level);
 
@@ -1914,7 +1923,8 @@ fn optimal_report(state: &GameState, cities: &[i32], monuments: i32, lane: Lane,
                 let n = plan_len(state, &terr[ci], *sc, Some(bsite));
                 let order: Vec<usize> = (0..n).collect();
                 let (board, _) = materialize(state, city_idx, &terr[ci], *sc, Some(bsite), &order);
-                let engine = polyfish::rules::economy::partner_count(&board, bsite, hub_type, 1);
+                let engine =
+                    polyfish::rules::economy::partner_count(&board, bsite, hub_type, pov_of(state));
                 if engine != bpartners {
                     println!("      ENGINE DISAGREES on site {bsite}: planner {bpartners}, engine {engine}");
                 }
