@@ -128,37 +128,18 @@ pub fn get_tribe_biome_rates(tribe: TribeType) -> BiomeRates {
     rates
 }
 
+/// P(resource | eligible terrain tile) inside a village's spawn zone.
+/// Bases are the real game's conditionals (mapgen_research.md): the wiki's
+/// land-tile fractions divided by the terrain share — NOT the fractions
+/// themselves, which an earlier port used directly (~7× too little metal).
+/// Outer ring (distance 2) = inner × 1/3, the game's border-expansion factor.
 pub fn get_resource_prob(key: &str, tribe: TribeType, inner: bool) -> f32 {
     let base = match key {
-        "fruit" => {
-            if inner {
-                0.18
-            } else {
-                0.06
-            }
-        }
-        "crop" | "spores" => {
-            if inner {
-                0.18
-            } else {
-                0.06
-            }
-        }
-        "game" => {
-            if inner {
-                0.19
-            } else {
-                0.06
-            }
-        }
-        "metal" => {
-            if inner {
-                0.11
-            } else {
-                0.03
-            }
-        }
-        "fish" => 0.50,
+        "fruit" | "crop" | "spores" => 0.375,
+        "game" => 0.5,
+        // Between the 0.85 Moonrise patch constant and the modern 11/14 table
+        "metal" => 0.8,
+        "fish" => 0.5,
         _ => 0.0,
     };
 
@@ -188,7 +169,7 @@ pub fn get_resource_prob(key: &str, tribe: TribeType, inner: bool) -> f32 {
         _ => 1.0,
     };
 
-    base * mult
+    if inner { base * mult } else { base * mult / 3.0 }
 }
 
 /// The main generation function
@@ -970,7 +951,72 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         }
     }
 
-    // Guaranteed Starting Resources
+    // Natural resource spawning. Resources exist only within 2 tiles of a
+    // village site: full rate at Chebyshev <=1 ("inner city territory"), 1/3
+    // of it at distance 2 ("border expansion"), zero beyond. One
+    // classification and one roll per tile; inner takes precedence when
+    // village zones overlap.
+    let village_positions: Vec<i32> = (0..tile_count)
+        .filter(|&i| village_map[i as usize] > 0)
+        .collect();
+
+    let mut spawn_zone = vec![0u8; tile_count as usize];
+    for &v in &village_positions {
+        for idx in get_square(v, 2, size) {
+            spawn_zone[idx as usize] = spawn_zone[idx as usize].max(1);
+        }
+    }
+    for &v in &village_positions {
+        for idx in get_square(v, 1, size) {
+            spawn_zone[idx as usize] = 2;
+        }
+    }
+
+    for i in 0..tile_count {
+        let zone = spawn_zone[i as usize];
+        if zone == 0 || map[i as usize].above.is_some() {
+            continue;
+        }
+        let inner = zone == 2;
+        let tribe = map[i as usize]
+            .tribe_affinity
+            .unwrap_or(TribeType::Luxidoor);
+        match map[i as usize].terrain_type {
+            TerrainType::Field => {
+                let fp = get_resource_prob("fruit", tribe, inner);
+                let (cp, res_name) = if tribe == TribeType::Cymanti {
+                    (get_resource_prob("spores", tribe, inner), "spores")
+                } else {
+                    (get_resource_prob("crop", tribe, inner), "crop")
+                };
+                let r: f32 = rng.r#gen();
+                if r < fp {
+                    map[i as usize].above = Some("fruit".to_string());
+                } else if r < fp + cp {
+                    map[i as usize].above = Some(res_name.to_string());
+                }
+            }
+            TerrainType::Forest => {
+                if rng.r#gen::<f32>() < get_resource_prob("game", tribe, inner) {
+                    map[i as usize].above = Some("game".to_string());
+                }
+            }
+            TerrainType::Mountain => {
+                if rng.r#gen::<f32>() < get_resource_prob("metal", tribe, inner) {
+                    map[i as usize].above = Some("metal".to_string());
+                }
+            }
+            TerrainType::Water => {
+                if rng.r#gen::<f32>() < get_resource_prob("fish", tribe, inner) {
+                    map[i as usize].above = Some("fish".to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Guaranteed starting resources — a top-up AFTER natural spawning (real
+    // game semantics: only add what the rolls didn't already provide).
     for &cap in &capital_cells {
         let tribe = map[cap as usize]
             .tribe_affinity
@@ -985,6 +1031,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
             TribeType::Bardur => ("game", TerrainType::Forest, 2),
             TribeType::Zebasi => ("crop", TerrainType::Field, 1),
             TribeType::Elyrion => ("game", TerrainType::Forest, 2),
+            TribeType::XinXi => ("metal", TerrainType::Mountain, 2),
             TribeType::Kickoo | TribeType::Aquarion if dry => ("", TerrainType::Field, 0),
             TribeType::Kickoo => ("fish", TerrainType::Water, 2),
             TribeType::Aquarion => ("fish", TerrainType::Water, 2),
@@ -1008,20 +1055,37 @@ pub fn generate(settings: MapGenSettings) -> GameState {
             continue;
         }
 
-        // Find eligible tiles in radius 1
+        let eligible_terrain = |n: i32| {
+            map[n as usize].terrain_type == target_terrain
+                || map[n as usize].terrain_type == TerrainType::Field
+                || map[n as usize].terrain_type == TerrainType::Forest
+                || map[n as usize].terrain_type == TerrainType::Mountain
+                || map[n as usize].terrain_type == TerrainType::Water
+        };
+        // Prefer untouched tiles; if natural spawning saturated the ring,
+        // overwrite other resources (never villages/capitals) so the
+        // guarantee actually guarantees.
         let mut candidates: Vec<i32> = radius1
             .iter()
             .cloned()
-            .filter(|&n| {
-                n != cap
-                    && map[n as usize].above.is_none()
-                    && (map[n as usize].terrain_type == target_terrain
-                        || map[n as usize].terrain_type == TerrainType::Field
-                        || map[n as usize].terrain_type == TerrainType::Forest
-                        || map[n as usize].terrain_type == TerrainType::Mountain
-                        || map[n as usize].terrain_type == TerrainType::Water)
-            })
+            .filter(|&n| n != cap && map[n as usize].above.is_none() && eligible_terrain(n))
             .collect();
+        if (candidates.len() as i32) < needed {
+            let overwritable: Vec<i32> = radius1
+                .iter()
+                .cloned()
+                .filter(|&n| {
+                    n != cap
+                        && matches!(
+                            map[n as usize].above.as_deref(),
+                            Some("fruit" | "crop" | "game" | "fish" | "spores")
+                                if map[n as usize].above.as_deref() != Some(resource)
+                        )
+                        && eligible_terrain(n)
+                })
+                .collect();
+            candidates.extend(overwritable);
+        }
 
         for _ in 0..needed {
             if candidates.is_empty() {
@@ -1030,120 +1094,6 @@ pub fn generate(settings: MapGenSettings) -> GameState {
             let idx = candidates.remove(rng.gen_range(0..candidates.len()));
             map[idx as usize].terrain_type = target_terrain;
             map[idx as usize].above = Some(resource.to_string());
-        }
-    }
-
-    // Resources: Iterate villages and their 2-tile radius
-    // Pre-compute village positions for efficiency
-    let village_positions: Vec<i32> = (0..tile_count)
-        .filter(|&i| village_map[i as usize] > 0)
-        .collect();
-
-    for &v in &village_positions {
-        let tribe = map[v as usize]
-            .tribe_affinity
-            .unwrap_or(TribeType::Luxidoor);
-
-        // Determine primary resource caps for initial territory (radius 1)
-        // User report: "5 or 6 fruit... is overkill". Guaranteed is 2. Cap at 3 for strictness.
-        let (primary_res, max_spawns) = match tribe {
-            TribeType::Imperius | TribeType::Quetzali | TribeType::Yadakk => ("fruit", 3),
-            TribeType::Bardur | TribeType::Elyrion | TribeType::Hoodrick => ("game", 3),
-            TribeType::Kickoo | TribeType::Aquarion => ("fish", 3),
-            TribeType::Zebasi => ("crop", 3),
-            TribeType::Cymanti => ("spores", 3),
-            _ => ("", 99),
-        };
-
-        let mut current_res_count = 0;
-        // Count existing primary resources in inner territory (radius 1)
-        if !primary_res.is_empty() {
-            let r1 = get_square(v, 1, size);
-            for &idx in &r1 {
-                if map[idx as usize].above.as_deref() == Some(primary_res) {
-                    current_res_count += 1;
-                }
-            }
-        }
-
-        // Iterate through radius 1 (inner) and radius 2 (outer)
-        for radius in 1..=2 {
-            let inner = radius == 1;
-            let square_tiles = get_square(v, radius, size);
-
-            for tile_idx in square_tiles {
-                if map[tile_idx as usize].above.is_some() {
-                    continue;
-                }
-
-                match map[tile_idx as usize].terrain_type {
-                    TerrainType::Field => {
-                        let mut fp = get_resource_prob("fruit", tribe, inner);
-                        // Apply cap for fruit
-                        if primary_res == "fruit" && inner && current_res_count >= max_spawns {
-                            fp = 0.0;
-                        }
-
-                        let (mut cp, res_name) = if tribe == TribeType::Cymanti {
-                            (get_resource_prob("spores", tribe, inner), "spores")
-                        } else {
-                            (get_resource_prob("crop", tribe, inner), "crop")
-                        };
-
-                        // Apply cap for crop/spores
-                        if primary_res == res_name && inner && current_res_count >= max_spawns {
-                            cp = 0.0;
-                        }
-
-                        let r: f32 = rng.r#gen();
-                        if r < fp {
-                            map[tile_idx as usize].above = Some("fruit".to_string());
-                            if primary_res == "fruit" && inner {
-                                current_res_count += 1;
-                            }
-                        } else if r < fp + cp {
-                            map[tile_idx as usize].above = Some(res_name.to_string());
-                            if primary_res == res_name && inner {
-                                current_res_count += 1;
-                            }
-                        }
-                    }
-                    TerrainType::Forest => {
-                        let mut gp = get_resource_prob("game", tribe, inner);
-                        // Apply cap for game
-                        if primary_res == "game" && inner && current_res_count >= max_spawns {
-                            gp = 0.0;
-                        }
-
-                        if rng.r#gen::<f32>() < gp {
-                            map[tile_idx as usize].above = Some("game".to_string());
-                            if primary_res == "game" && inner {
-                                current_res_count += 1;
-                            }
-                        }
-                    }
-                    TerrainType::Mountain => {
-                        if rng.r#gen::<f32>() < get_resource_prob("metal", tribe, inner) {
-                            map[tile_idx as usize].above = Some("metal".to_string());
-                        }
-                    }
-                    TerrainType::Water => {
-                        let mut fip = get_resource_prob("fish", tribe, inner);
-                        // Apply cap for fish
-                        if primary_res == "fish" && inner && current_res_count >= max_spawns {
-                            fip = 0.0;
-                        }
-
-                        if rng.r#gen::<f32>() < fip {
-                            map[tile_idx as usize].above = Some("fish".to_string());
-                            if primary_res == "fish" && inner {
-                                current_res_count += 1;
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
         }
     }
 
@@ -1161,18 +1111,29 @@ pub fn generate(settings: MapGenSettings) -> GameState {
             let mut placed = 0;
             // Orthogonal neighbours first (a pond behind a diagonal is harder
             // to work), then any free neighbour, so the count is always 2.
+            // Pass 1 reclaims resource tiles if spawning saturated the ring.
             let plus = plus_sign(cap, size);
             let ring = get_square(cap, 1, size);
-            for n in plus.iter().chain(ring.iter().filter(|n| !plus.contains(n))) {
-                if placed >= 2 {
-                    break;
+            for pass in 0..2 {
+                for n in plus.iter().chain(ring.iter().filter(|n| !plus.contains(n))) {
+                    if placed >= 2 {
+                        break;
+                    }
+                    if *n == cap || village_map[*n as usize] > 0 {
+                        continue;
+                    }
+                    let free = map[*n as usize].above.is_none();
+                    let overwritable = matches!(
+                        map[*n as usize].above.as_deref(),
+                        Some("fruit" | "crop" | "game" | "metal" | "spores")
+                    );
+                    if !(free || (pass == 1 && overwritable)) {
+                        continue;
+                    }
+                    map[*n as usize].terrain_type = TerrainType::Water;
+                    map[*n as usize].above = Some("fish".to_string());
+                    placed += 1;
                 }
-                if *n == cap || map[*n as usize].above.is_some() || village_map[*n as usize] > 0 {
-                    continue;
-                }
-                map[*n as usize].terrain_type = TerrainType::Water;
-                map[*n as usize].above = Some("fish".to_string());
-                placed += 1;
             }
         }
     }
@@ -1824,38 +1785,135 @@ mod tests {
         }
     }
 
+    /// Pooled conditional spawn rates near village sites must track the real
+    /// game (mapgen_research.md): metal 0.8, game 0.5, fruit 0.375 inner;
+    /// outer ring = 1/3 of inner. Luxidoor has no multipliers = pure base.
     #[test]
-    fn test_resource_density() {
+    fn test_resource_rates_match_real_game() {
+        use crate::functions::get_chebyshev_distance;
         use crate::types::{ResourceType, TribeType};
-        let mut settings = MapGenSettings::default();
-        settings.tribes = vec![TribeType::Imperius];
 
-        for i in 0..50 {
-            settings.seed = i as i64;
-            let gamestate = generate(settings.clone());
+        let mut inner_metal = [0u32; 2];
+        let mut outer_metal = [0u32; 2];
+        let mut inner_game = [0u32; 2];
+        let mut inner_fruit = [0u32; 2];
 
-            let cap_tile = gamestate
-                .tiles
-                .values()
-                .find(|t| t.capital_of == 1) // Imperius is player 1
-                .unwrap();
+        for seed in 0..30 {
+            let state = generate(MapGenSettings {
+                size: MapSize::Normal,
+                map_type: MapType::Drylands,
+                tribes: vec![TribeType::Luxidoor, TribeType::Luxidoor],
+                seed,
+                version: 115,
+            });
+            let size = state.settings.size;
+            let sites: Vec<i32> = state
+                .structures
+                .iter()
+                .filter(|(_, s)| {
+                    matches!(s, Some(s) if s.structure_type == StructureType::Village)
+                })
+                .map(|(idx, _)| *idx)
+                .collect();
 
-            let size = gamestate.settings.size;
-            let mut fruit_count = 0;
-
-            use crate::functions::get_square_indices;
-            for idx in get_square_indices(cap_tile.coords.idx, 1, size) {
-                if let Some(res) = gamestate.resources.get(&idx).unwrap_or(&None) {
-                    if res.resource_type == ResourceType::Fruit {
-                        fruit_count += 1;
+            for (idx, tile) in &state.tiles {
+                let d = sites
+                    .iter()
+                    .map(|&v| get_chebyshev_distance(*idx, v, size))
+                    .min()
+                    .unwrap_or(99);
+                if d > 2 {
+                    continue;
+                }
+                let res = state
+                    .resources
+                    .get(idx)
+                    .and_then(|r| r.as_ref())
+                    .map(|r| r.resource_type);
+                match tile.terrain_type {
+                    TerrainType::Mountain => {
+                        let b = if d <= 1 {
+                            &mut inner_metal
+                        } else {
+                            &mut outer_metal
+                        };
+                        b[0] += 1;
+                        if res == Some(ResourceType::Metal) {
+                            b[1] += 1;
+                        }
                     }
+                    TerrainType::Field if d <= 1 => {
+                        inner_fruit[0] += 1;
+                        if res == Some(ResourceType::Fruit) {
+                            inner_fruit[1] += 1;
+                        }
+                    }
+                    TerrainType::Forest if d <= 1 => {
+                        inner_game[0] += 1;
+                        if res == Some(ResourceType::Game) {
+                            inner_game[1] += 1;
+                        }
+                    }
+                    _ => {}
                 }
             }
+        }
+
+        let rate = |c: &[u32; 2]| c[1] as f64 / c[0].max(1) as f64;
+        assert!(
+            (0.70..=0.90).contains(&rate(&inner_metal)),
+            "inner metal rate {:?}",
+            inner_metal
+        );
+        assert!(
+            (0.15..=0.40).contains(&rate(&outer_metal)),
+            "outer metal rate {:?}",
+            outer_metal
+        );
+        assert!(
+            (0.40..=0.60).contains(&rate(&inner_game)),
+            "inner game rate {:?}",
+            inner_game
+        );
+        assert!(
+            (0.28..=0.47).contains(&rate(&inner_fruit)),
+            "inner fruit rate {:?}",
+            inner_fruit
+        );
+    }
+
+    /// Xin-xi's guaranteed capital resource is metal (Espark's decompiled
+    /// Starting Resource table): always >=2 within radius 1.
+    #[test]
+    fn xinxi_capital_always_has_metal() {
+        use crate::functions::get_square_indices;
+        use crate::types::{ResourceType, TribeType};
+
+        for seed in 0..30 {
+            let state = generate(MapGenSettings {
+                size: MapSize::Tiny,
+                map_type: MapType::Drylands,
+                tribes: vec![TribeType::XinXi, TribeType::Bardur],
+                seed,
+                version: 115,
+            });
+            let cap = state
+                .tiles
+                .values()
+                .find(|t| t.capital_of == 1)
+                .expect("XinXi capital");
+            let metal = get_square_indices(cap.coords.idx, 1, state.settings.size)
+                .into_iter()
+                .filter(|idx| {
+                    matches!(
+                        state.resources.get(idx),
+                        Some(Some(r)) if r.resource_type == ResourceType::Metal
+                    )
+                })
+                .count();
             assert!(
-                fruit_count <= 3,
-                "Seed {}: Found {} fruits, expected <= 3",
-                i,
-                fruit_count
+                metal >= 2,
+                "seed {seed}: XinXi capital has {metal} metal in radius 1"
             );
         }
     }

@@ -2090,3 +2090,25 @@ Placement is the dominant term, not a rounding error. In star terms this is the 
 **Guard tests** (`tests/rules_ssot.rs`, 8): ranged attacker takes no predicted retaliation; a fresh city rules 9 tiles including its own; partner count is player-scoped not city-scoped; level thresholds and super-unit slots; per-tribe super units; unit worth counts passengers and ignores converted; resource visibility comes from the table. **230 tests green.**
 
 **Method note worth keeping: the territory reshape and the resource-visibility change are real rule changes and not one pre-existing test objected.** Coverage in those areas was nil, which is precisely how the original copies drifted unnoticed.
+
+## MAPGEN_001 — resource spawn rates were the wiki's land-tile fractions misread as per-tile conditionals (fixed Aug 10 2026)
+
+**Not an experiment — a correctness fix to the world itself. Registered so every measurement discontinuity from this date has a written cause.** Full research with provenance: `mapgen_research.md` (repo root).
+
+**The bug.** `mapgen.rs::get_resource_prob` used the Polytopia wiki's Map Generation table numbers (metal 11%/3%, game 19%/6%, fruit/crop 18%/6%) directly as P(resource | matching terrain tile). The wiki lists **fractions of all land tiles** (14% of land is mountain, 11% of land is mountain-with-metal). Correct conditionals = joint ÷ terrain share. Verified against three real Steam-game turn-0 captures in `polyfish-rs/replays/` (vers 111/114/115): real near-village mountains carry metal 57–75% of the time; our generator produced 14–22%. Matched tribe pair (Cymanti+AiMo): real 75%/20% (inner/ring) vs ours 15%/4%.
+
+**The fix (all in `mapgen.rs`).**
+1. Conditional bases: metal 0.8 (between the 0.85 Moonrise patch constant and the modern 11/14 table), game 0.5, fruit/crop/spores 0.375, fish 0.5; outer ring = inner × 1/3 (the game's border-expansion factor, now applied to fish too — fish was flat 0.5 at distance 2, real is ~0.17).
+2. Resource pass restructured to the real game's shape: one inner/outer classification per tile (inner precedence across overlapping village zones) and one roll — the old per-village iteration both re-rolled failed inner tiles at outer rate and rolled the same tile once per nearby village, which would have compounded badly on top of corrected rates.
+3. Guarantee block now runs AFTER natural spawning as a top-up (real post-gen semantics), and **Xin-xi gets its guaranteed 2 capital metal** (Espark's decompiled Starting Resource table). Saturation fallback added (guarantees may overwrite other resources when the capital ring is full) — also for the Drylands Kickoo/Aquarion pond invariant.
+4. Removed the invented cap of 3 primary resources per capital (the "5 or 6 fruit is overkill" patch) — the real game does produce 4–6; the overkill impression came from the ×2 tribe multiplier sitting on a mis-scaled base.
+5. Tribe multipliers, terrain rates, phase order: unchanged (verified faithful to Espark's table).
+
+**Measured after fix (300 maps/pair, Drylands 11×11, same measurement as the real captures):** metal inner 80–81% base / 98–100% Xin-xi territory, ring 25% / 37–39%; game 52–56% in unpenalized climates; fruit 37–39% base. All within noise of the real captures. Xin-xi capitals: **3.9 metal in reach on average, was 0.65** (the one real Xin-xi capture: 5). Tests: suite green (239), old `test_resource_density` (asserted the cap) replaced by `test_resource_rates_match_real_game` + `xinxi_capital_always_has_metal`.
+
+**Every measurement crossing this date shifts. Expected directions:**
+- **Self-play/training metrics** (`training_log.csv`, moves_by_turn, dashboards): score, SPT, builds, harvests all up — maps are simply richer (~4× more metal-adjacent economy, ~2× game, ~2× fruit/crop). Do not read a cross-boundary jump as learning.
+- **Seed continuity is broken everywhere**: same seed → different map (RNG stream order changed). The frozen seed-770425 paired gauge is void across the boundary — re-baseline the noise floor before the next A/B. Old mid-game states replayed via regenerate-from-`initial_seed` (`main.rs` replay path) reconstruct the wrong initial map; full-state captures are unaffected.
+- **League/arena vs pre-fix checkpoints**: old nets trained on starved maps now play on rich ones — historical win rates are not comparable, and league results near the boundary are biased in an unknown direction.
+- **Tech/economy behavior**: Mining/Smithery/Forge lanes go from ~7×-underpriced to fairly priced; expect research and hub-lane distributions to shift (more Mines, Forge viable), and eco_plan goal frequencies to move.
+- **Any resumed run mixes distributions mid-run.** Start the next training campaign as a NEW run, not `--resume`, and treat pre/post-fix game archives as separate populations.
