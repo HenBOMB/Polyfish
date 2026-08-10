@@ -537,10 +537,37 @@ fn play_match(
             .iter()
             .filter_map(|&idx| {
                 let st = polyfish::functions::get_structure_at(&game.state, idx)?;
+                let setting =
+                    polyfish::settings::structures::get_structure_setting(st.structure_type);
+                // For an adjacency hub: what the site could ever collect vs what
+                // it did. Separates a bad tile (low ceiling) from an unfinished
+                // one (high ceiling, few partners built).
+                let ceiling = if setting.adjacent_types.is_empty() {
+                    -1
+                } else {
+                    polyfish::rules::economy::partner_ceiling(
+                        &game.state,
+                        idx,
+                        st.structure_type,
+                        model_pid,
+                    )
+                };
+                let realized = if setting.adjacent_types.is_empty() {
+                    -1
+                } else {
+                    polyfish::rules::economy::partner_count(
+                        &game.state,
+                        idx,
+                        st.structure_type,
+                        model_pid,
+                    )
+                };
                 Some(serde_json::json!({
                     "idx": idx,
                     "type": format!("{:?}", st.structure_type),
                     "level": st.level,
+                    "ceiling": ceiling,
+                    "realized": realized,
                 }))
             })
             .collect();

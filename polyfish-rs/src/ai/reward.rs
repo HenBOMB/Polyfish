@@ -258,13 +258,21 @@ pub const EXPLORER_CORNER_CAP: usize = 2;
 /// bonus; a partner-less build stays unpriced rather than penalized.
 pub const SHAPE_GOAL_YIELD_ADJ: f32 = 100.0;
 /// v8: per unit of reward_pop per partner the site could still collect but has
-/// not yet (`partner_ceiling` minus the realized count). Deliberately well
-/// below `SHAPE_GOAL_YIELD_ADJ`: a promise that never fills must not pay like
-/// a partner that got built, and realizing one has to remain an improvement.
-/// Starts conservative -- the Q-gap method's first fit overshoots ~2x because
-/// co-triggered phi terms compound, so this wants a measured dq median before
-/// it moves.
-pub const SHAPE_GOAL_YIELD_CEILING: f32 = 40.0;
+/// not yet (`partner_ceiling` minus the realized count).
+///
+/// Must stay strictly under `SHAPE_GOAL_YIELD_ADJ`: the two terms trade off as
+/// `unrealized` shrinks and `partners` grows, so at parity phi would be
+/// INDIFFERENT to actually building the partner and the follow-through gradient
+/// would vanish. At 75 each realization is still worth +25.
+///
+/// Raised from 40 after five iterations moved hub level 1.78 -> 1.82, i.e. not
+/// at all. At 40 the gap between a ceiling-4 site and a dead end came to 120,
+/// less than one SPT is worth (`SHAPE_GOAL_SPT` = 150) -- and since legality
+/// already requires one partner, that gap IS the entire placement signal. The
+/// discount is small rather than large because the measured fill rate is 100%
+/// (28 of 28 hubs realized their whole ceiling, 0 unfinished): this model keeps
+/// the promise, so pricing it as risky was pricing a risk it does not run.
+pub const SHAPE_GOAL_YIELD_CEILING: f32 = 75.0;
 /// v6: star-yield analog for Market (reward_stars > 0 + adjacent_types) —
 /// HALF the pop analog, deliberately: each partner's +1 SPT is already paid
 /// at SHAPE_GOAL_SPT through get_tribe_spt; this only sharpens the 2-3-hub
