@@ -470,19 +470,33 @@ fn monuments_to_reach(
 /// and a 0-partner hub is not even legal (`build.rs` requires an adjacent
 /// partner), so both are excluded.
 fn hub_candidates(state: &GameState, territory: &[i32], sc: Scenario, top_k: usize) -> Vec<i32> {
-    let (buys, hub_sites, _) = tile_options(state, territory, sc);
-    let (_, partner_name) = lane_hub(sc.lane);
-    let partner_tiles: HashSet<i32> = buys
-        .iter()
-        .filter(|b| is_partner_buy(b, partner_name))
-        .map(|b| b.idx)
-        .collect();
-    let mut scored: Vec<(i32, i32)> = hub_sites
+    let plot = Plot::new(state, territory, sc);
+    hub_candidates_on(state, &plot, top_k, &plot.partner_tiles)
+}
+
+/// Hub sites for one city, best first, capped at `top_k`.
+///
+/// Core form: the caller supplies the partner set, the way
+/// `rules::economy::partner_count_with` does. The joint frontier scores against
+/// the EMPIRE's partners because it knows every city's lane and a hub on a
+/// border collects across it; a single city can only see its own ground. That
+/// is the one thing the two callers are allowed to disagree about — the site
+/// space and the floor are shared, and used not to be: `enumerate_empire` kept
+/// its own copy that demanded two partners and refused Forest tiles to the
+/// Forge lane, so the frontier never saw sites the per-city ranker priced.
+fn hub_candidates_on(
+    state: &GameState,
+    plot: &Plot,
+    top_k: usize,
+    partners: &HashSet<i32>,
+) -> Vec<i32> {
+    let mut scored: Vec<(i32, i32)> = plot
+        .hub_sites
         .iter()
         .map(|&s| {
             let n = get_adjacent_indices(state, s, 1)
                 .into_iter()
-                .filter(|a| partner_tiles.contains(a) && *a != s)
+                .filter(|a| partners.contains(a))
                 .count() as i32;
             (-n, s)
         })
@@ -514,6 +528,7 @@ fn hub_candidates(state: &GameState, territory: &[i32], sc: Scenario, top_k: usi
 struct Plot<'a> {
     territory: &'a [i32],
     buys: Vec<Buy>,
+    hub_sites: Vec<i32>,
     standing_partners: Vec<i32>,
     /// Tiles this lane will hold a partner on: the partner buys plus whatever
     /// already stands. Independent of where the hub goes, so it is built once
@@ -523,7 +538,7 @@ struct Plot<'a> {
 
 impl<'a> Plot<'a> {
     fn new(state: &GameState, territory: &'a [i32], sc: Scenario) -> Self {
-        let (buys, _hub_sites, _conv) = tile_options(state, territory, sc);
+        let (buys, hub_sites, _conv) = tile_options(state, territory, sc);
         let standing_partners = standing(state, territory, lane_partner_type(sc.lane));
         let (_, partner_name) = lane_hub(sc.lane);
         let partner_tiles: HashSet<i32> = buys
@@ -532,7 +547,7 @@ impl<'a> Plot<'a> {
             .map(|b| b.idx)
             .chain(standing_partners.iter().copied())
             .collect();
-        Plot { territory, buys, standing_partners, partner_tiles }
+        Plot { territory, buys, hub_sites, standing_partners, partner_tiles }
     }
 }
 
@@ -1236,6 +1251,29 @@ fn sc_short(sc: Scenario) -> &'static str {
 /// hubs belonging to other cities — so two sawmills sited near a shared border
 /// can feed two markets at full value. A per-city greedy picker cannot see
 /// that; this is why the enumeration has to be joint.
+/// How many hub sites per city the frontier may consider.
+///
+/// The frontier enumerates `(k+1)^n` combinations, so the shortlist is the
+/// exponent's base and the only lever that does not change what a plan means.
+/// Past a few cities the full shortlist runs to millions of combinations, so it
+/// shrinks to hold the product under `COMBO_BUDGET`. The caller announces it
+/// when it bites: a search that truncates without saying so reads as an
+/// exhaustive one.
+fn shortlist(top_k: usize, n: usize, rounds: usize) -> usize {
+    // Inner iterations the whole frontier may spend. Calibrated on a 6-city
+    // board at roughly 4us per combination, so this is about 25 seconds.
+    const WORK_BUDGET: usize = 6_000_000;
+    if n == 0 || rounds == 0 {
+        return top_k;
+    }
+    let budget = (WORK_BUDGET / rounds).max(1);
+    let mut k = top_k;
+    while k > 1 && (k + 1).checked_pow(n as u32).is_none_or(|c| c > budget) {
+        k -= 1;
+    }
+    k
+}
+
 fn enumerate_empire(
     state: &GameState,
     cities: &[i32],
@@ -1299,28 +1337,11 @@ fn enumerate_empire(
             if let Some(&h) = built.first() {
                 return vec![Some(h)];
             }
-            let mut scored: Vec<(i32, i32)> = terr[ci]
-                .iter()
-                .copied()
-                .filter(|&t| {
-                    let Some(tile) = state.tiles.get(&t) else { return false };
-                    polyfish::functions::get_structure_at(state, t).is_none()
-                        && (tile.terrain_type == TerrainType::Field
-                            || (scs[ci].lane == Lane::Forest
-                                && tile.terrain_type == TerrainType::Forest))
-                })
-                .map(|t| {
-                    let n = get_adjacent_indices(state, t, 1)
-                        .into_iter()
-                        .filter(|a| partners_for(ci).contains(a) && *a != t)
-                        .count() as i32;
-                    (-n, t)
-                })
-                .filter(|&(negn, _)| -negn >= 2)
-                .collect();
-            scored.sort();
             let mut v: Vec<Option<i32>> =
-                scored.into_iter().take(top_k).map(|(_, t)| Some(t)).collect();
+                hub_candidates_on(state, &plots[ci], top_k, partners_for(ci))
+                    .into_iter()
+                    .map(Some)
+                    .collect();
             v.push(None);
             v
         })
@@ -2690,6 +2711,17 @@ fn main() {
     // ---- Joint frontier: hubs enumerated across cities, markets placed to
     // ---- touch every hub they can reach.
     let mut all_plans: Vec<EmpirePlan> = Vec::new();
+    const K_UNIFORM: usize = 8;
+    const K_MIXED: usize = 5;
+    let k_uniform = shortlist(K_UNIFORM, cities.len(), SCENARIOS.len());
+    if k_uniform < K_UNIFORM {
+        println!(
+            "  NOTE: {} cities — uniform-lane hub shortlist trimmed to {k_uniform} sites per \
+             city (from {K_UNIFORM}) to bound the search. Sites past the trim rank lower on \
+             partner count and were not priced.",
+            cities.len()
+        );
+    }
     for sc in SCENARIOS {
         if !cities
             .iter()
@@ -2709,7 +2741,7 @@ fn main() {
             &uniform(sc, cities.len()),
             &owned,
             monuments,
-            8,
+            k_uniform,
             with_markets,
         ));
     }
@@ -2764,9 +2796,21 @@ fn main() {
         }
 
         let combos: usize = per_city.iter().map(|v| v.len()).product();
+        // Total work is assignments x hub combinations, so the shortlist has to
+        // be set against the assignment count, not independently of it.
+        let k_mixed = shortlist(K_MIXED, cities.len(), combos);
         println!(
             "  mixed-lane search: {combos} assignments ({dropped} per-city scenarios trimmed as dominated)"
         );
+        if k_mixed < K_MIXED {
+            println!(
+                "  NOTE: mixed-lane hub shortlist trimmed to {k_mixed} sites per city (from \
+                 {K_MIXED}) — {combos} assignments x {}^{} combinations would not have \
+                 finished. Sites past the trim rank lower on partner count and were not priced.",
+                K_MIXED + 1,
+                cities.len()
+            );
+        }
 
         let mut idx = vec![0usize; cities.len()];
         loop {
@@ -2775,7 +2819,7 @@ fn main() {
             if !scs.iter().all(|x| x.name == scs[0].name) {
                 let terr = allocate_value(&state, &cities, &scs, monuments);
                 all_plans.extend(enumerate_empire(
-                    &state, &cities, &terr, &scs, &owned, monuments, 5, with_markets,
+                    &state, &cities, &terr, &scs, &owned, monuments, k_mixed, with_markets,
                 ));
             }
             // Odometer over the per-city scenario lists.
