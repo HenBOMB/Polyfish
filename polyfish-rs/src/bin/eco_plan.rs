@@ -353,12 +353,18 @@ fn place_monuments(
     territory: &[i32],
     buys: &[Buy],
     partner_tiles: &HashSet<i32>,
-    adj_to_hub: &HashSet<i32>,
+    adj_to_hub: &[i32],
     hub_site: Option<i32>,
     market_site: Option<i32>,
     budget: i32,
 ) -> (HashSet<i32>, i32) {
     const MONUMENT_POP: i32 = 3;
+    // `take(0)` already made the loop below a no-op at zero budget, but the
+    // scan, the two maps and the sort all ran first — on every priced plan, and
+    // no monuments is the default.
+    if budget <= 0 {
+        return (HashSet::new(), 0);
+    }
     let occupied: HashSet<i32> = buys.iter().filter(|b| b.occupies).map(|b| b.idx).collect();
     let pop_at: HashMap<i32, i32> = buys.iter().map(|b| (b.idx, b.pop)).collect();
 
@@ -495,9 +501,65 @@ fn hub_candidates(state: &GameState, territory: &[i32], sc: Scenario, top_k: usi
 
 /// One city's build-out with the hub and market sites SUPPLIED. Market income
 /// is not computed here — it depends on every city's hub, so the caller does it.
+/// A (territory, scenario) pair with its tile scan already done.
+///
+/// `city_build` used to run `tile_options` — a full territory scan — on every
+/// call, and the joint frontier calls it about `2n` times per hub combination,
+/// of which there are `(top_k+1)^n`. Scanning once per (city, scenario) is what
+/// makes the frontier's cost track the number of PLANS rather than the number
+/// of tiles times the number of plans.
+///
+/// Build a Plot against the same state it will be priced on: `materialize`
+/// works on an owned board whose tiles differ from the base.
+struct Plot<'a> {
+    territory: &'a [i32],
+    buys: Vec<Buy>,
+    standing_partners: Vec<i32>,
+    /// Tiles this lane will hold a partner on: the partner buys plus whatever
+    /// already stands. Independent of where the hub goes, so it is built once
+    /// instead of once per hub combination.
+    partner_tiles: HashSet<i32>,
+}
+
+impl<'a> Plot<'a> {
+    fn new(state: &GameState, territory: &'a [i32], sc: Scenario) -> Self {
+        let (buys, _hub_sites, _conv) = tile_options(state, territory, sc);
+        let standing_partners = standing(state, territory, lane_partner_type(sc.lane));
+        let (_, partner_name) = lane_hub(sc.lane);
+        let partner_tiles: HashSet<i32> = buys
+            .iter()
+            .filter(|b| is_partner_buy(b, partner_name))
+            .map(|b| b.idx)
+            .chain(standing_partners.iter().copied())
+            .collect();
+        Plot { territory, buys, standing_partners, partner_tiles }
+    }
+}
+
 fn city_build(
     state: &GameState,
     territory: &[i32],
+    sc: Scenario,
+    monuments: i32,
+    hub: Option<i32>,
+    market: Option<i32>,
+    empire_partners: Option<&HashSet<i32>>,
+) -> BuildOut {
+    city_build_on(
+        state,
+        &Plot::new(state, territory, sc),
+        sc,
+        monuments,
+        hub,
+        market,
+        empire_partners,
+        &[],
+    )
+}
+
+fn city_build_on(
+    state: &GameState,
+    plot: &Plot,
     sc: Scenario,
     monuments: i32,
     hub: Option<i32>,
@@ -507,22 +569,23 @@ fn city_build(
     // border collects partners on the far side too. Counting only this city's
     // tiles undervalues exactly the border hubs that feed a shared Market.
     empire_partners: Option<&HashSet<i32>>,
+    // Tiles other hubs stand on. A tile holds ONE structure, so a hub sited next
+    // to a neighbour's hub must not count it as a partner — the empire partner
+    // set offers every city's candidate tiles and cannot know which were spent
+    // on hubs in this combination.
+    taken: &[i32],
 ) -> BuildOut {
-    let (buys, _hub_sites, _conv) = tile_options(state, territory, sc);
-    let (hub_type, partner_name) = lane_hub(sc.lane);
+    let territory = plot.territory;
+    let buys = &plot.buys;
+    let (hub_type, _) = lane_hub(sc.lane);
     let hub_cost = get_structure_setting(hub_type).cost.unwrap_or(5);
     let market_cost = get_structure_setting(StructureType::Market).cost.unwrap_or(5);
 
-    let partner_tiles: HashSet<i32> = buys
-        .iter()
-        .filter(|b| is_partner_buy(b, partner_name))
-        .map(|b| b.idx)
-        // Partners already standing feed the hub too, and `tile_options` skips
-        // occupied tiles, so they appear in no buy.
-        .chain(standing(state, territory, lane_partner_type(sc.lane)))
-        .collect();
-    let adj_to_hub: HashSet<i32> = hub
-        .map(|s| get_adjacent_indices(state, s, 1).into_iter().collect())
+    let partner_tiles = &plot.partner_tiles;
+    // Neighbours of the hub, in a fixed buffer. This used to be a HashSet built
+    // per call, and the frontier makes millions of these calls.
+    let adj_to_hub: Vec<i32> = hub
+        .map(|s| get_adjacent_indices(state, s, 1))
         .unwrap_or_default();
 
     // A structure-placing buy is displaced by a hub or market on its tile;
@@ -536,34 +599,30 @@ fn city_build(
         pop += b.pop;
         techs.extend(b.techs.iter().copied());
     }
-    let counted = empire_partners.unwrap_or(&partner_tiles);
-    let mut feeding: HashSet<i32> = counted
-        .iter()
-        .copied()
-        .filter(|t| adj_to_hub.contains(t) && Some(*t) != hub && Some(*t) != market)
-        .collect();
-    // Adjacency pay is PLAYER-scoped (`rules::economy::partner_count`), so a
-    // partner already standing under a neighbouring city feeds this hub too.
-    // `partner_tiles` only ever saw this city's ground, so every per-city
+    // Walk the hub's <=8 neighbours and test each, rather than walking the
+    // partner set and testing adjacency: the neighbours are already unique, so
+    // no set is needed to dedupe and none is allocated.
+    // A neighbour feeds the hub if the plan will put a partner there, or if one
+    // already stands there on ground the PLAYER owns. The second half matters
+    // because adjacency pay is player-scoped (`rules::economy::partner_count`)
+    // while `partner_tiles` only ever saw this city's ground, so every per-city
     // consumer underpriced exactly the border sites `enumerate_empire` prices
     // correctly — claimed 1 where the engine paid 4 (Aug 2026).
-    if let Some(h) = hub {
-        let pov = pov_of(state);
-        // The engine's own test, tile by tile: `partner_count` counts adjacent
-        // pov-owned tiles holding any of the hub's `adjacent_types`. A count
-        // cannot be used directly — `empire_partners` may already list some of
-        // these — so union the tiles and take the size.
-        let feeds = &get_structure_setting(hub_type).adjacent_types;
-        for a in get_adjacent_indices(state, h, 1) {
-            if state.tiles.get(&a).is_some_and(|t| t.owner == pov)
-                && polyfish::functions::get_structure_at(state, a)
-                    .is_some_and(|s| feeds.contains(&s.structure_type))
-            {
-                feeding.insert(a);
-            }
-        }
-    }
-    let partners = feeding.len() as i32;
+    let counted = empire_partners.unwrap_or(partner_tiles);
+    let pov = pov_of(state);
+    let feeds = &get_structure_setting(hub_type).adjacent_types;
+    let partners = adj_to_hub
+        .iter()
+        .filter(|&&t| {
+            (counted.contains(&t)
+                && Some(t) != hub
+                && Some(t) != market
+                && !taken.contains(&t))
+                || (state.tiles.get(&t).is_some_and(|x| x.owner == pov)
+                    && polyfish::functions::get_structure_at(state, t)
+                        .is_some_and(|st| feeds.contains(&st.structure_type)))
+        })
+        .count() as i32;
     pop += partners;
 
     // You do not pay for what is already standing. On a generated map nothing
@@ -677,19 +736,20 @@ fn site_value(
     monuments: i32,
     site: Option<i32>,
 ) -> (i32, i32, i32, i32) {
-    let mut b = city_build(state, territory, sc, monuments, site, None, None);
+    let plot = Plot::new(state, territory, sc);
+    let mut b = city_build_on(state, &plot, sc, monuments, site, None, None, &[]);
     if let Some(h) = site {
         if b.partners > 0 {
             let partners = partner_tiles_of(state, territory, sc);
             if let Some((_, _, neg)) = market_sites(state, territory, h, &partners)
                 .into_iter()
                 .map(|m| {
-                    let cb = city_build(state, territory, sc, monuments, site, Some(m), None);
+                    let cb = city_build_on(state, &plot, sc, monuments, site, Some(m), None, &[]);
                     (cb.pop, -cb.stars, -m)
                 })
                 .max()
             {
-                b = city_build(state, territory, sc, monuments, site, Some(-neg), None);
+                b = city_build_on(state, &plot, sc, monuments, site, Some(-neg), None, &[]);
                 b.market_spt = b.partners.min(MARKET_MAX_LEVEL);
             }
         }
@@ -753,7 +813,8 @@ fn build_out(
             .then(a.3.cmp(&b.3))
     });
     let hub = ranked.first().map(|&(_, _, _, h)| h);
-    let mut b = city_build(state, territory, sc, monuments, hub, None, None);
+    let plot = Plot::new(state, territory, sc);
+    let mut b = city_build_on(state, &plot, sc, monuments, hub, None, None, &[]);
     if let Some(h) = hub {
         if b.partners > 0 {
             // Sites stopped being interchangeable once a Market may sit on a
@@ -763,12 +824,12 @@ fn build_out(
             let best = market_sites(state, territory, h, &partners)
                 .into_iter()
                 .map(|m| {
-                    let cb = city_build(state, territory, sc, monuments, hub, Some(m), None);
+                    let cb = city_build_on(state, &plot, sc, monuments, hub, Some(m), None, &[]);
                     (cb.pop, -cb.stars, -m)
                 })
                 .max();
             if let Some((_, _, neg)) = best {
-                b = city_build(state, territory, sc, monuments, hub, Some(-neg), None);
+                b = city_build_on(state, &plot, sc, monuments, hub, Some(-neg), None, &[]);
                 b.market_spt = b.partners.min(MARKET_MAX_LEVEL);
             }
         }
@@ -1207,17 +1268,18 @@ fn enumerate_empire(
     // builds, so a Sawmill on a border collects the neighbour's LumberHuts only
     // if that neighbour is running the forest lane.
     let mut partners_by_type: HashMap<StructureType, HashSet<i32>> = HashMap::new();
+    // One tile scan per city, reused for every hub combination below.
+    let plots: Vec<Plot> = (0..n).map(|ci| Plot::new(state, &terr[ci], scs[ci])).collect();
     for ci in 0..n {
-        let (buys, _, _) = tile_options(state, &terr[ci], scs[ci]);
         let (_, partner_name) = lane_hub(scs[ci].lane);
         let ptype = lane_partner_type(scs[ci].lane);
         let e = partners_by_type.entry(ptype).or_default();
-        for b in buys.iter().filter(|b| is_partner_buy(b, partner_name)) {
+        for b in plots[ci].buys.iter().filter(|b| is_partner_buy(b, partner_name)) {
             e.insert(b.idx);
         }
         // Partners already standing count too — `tile_options` skips occupied
         // tiles, so on a live state these would otherwise feed nothing.
-        e.extend(standing(state, &terr[ci], ptype));
+        e.extend(plots[ci].standing_partners.iter().copied());
     }
     let empty_partners: HashSet<i32> = HashSet::new();
     let partners_for = |ci: usize| -> &HashSet<i32> {
@@ -1265,6 +1327,23 @@ fn enumerate_empire(
         .collect();
 
 
+    // Adjacency and Market-site terrain do not depend on where the hubs go, but
+    // the scan below runs once per city per combination — the top of the
+    // profile before this was `get_adjacent_indices` handing back a fresh Vec.
+    let tile_count = (state.settings.size * state.settings.size) as usize;
+    let adj_tbl: Vec<Vec<i32>> = (0..tile_count)
+        .map(|i| get_adjacent_indices(state, i as i32, 1))
+        .collect();
+    let market_cands: Vec<Vec<i32>> = (0..n)
+        .map(|ci| {
+            terr[ci]
+                .iter()
+                .copied()
+                .filter(|&a| market_site_legal(state, a, false))
+                .collect()
+        })
+        .collect();
+
     let mut combos: Vec<Vec<Option<i32>>> = Vec::new();
     let total: usize = cands.iter().map(|c| c.len()).product();
     for mut code in 0..total {
@@ -1285,15 +1364,15 @@ fn enumerate_empire(
         // every OTHER city's hub tile — so a Sawmill next to a neighbour's
         // Sawmill counted it as a LumberHut, inflating both hub levels and the
         // Market income read off them.
-        let hub_tiles: HashSet<i32> = hubs.iter().flatten().copied().collect();
-        let counted: Vec<HashSet<i32>> = (0..n)
-            .map(|ci| partners_for(ci).difference(&hub_tiles).copied().collect())
-            .collect();
+        // `hub_tiles` used to be a HashSet and `counted` a fresh set per city,
+        // rebuilt for every combination. Both are at most `n` entries wide, so
+        // a slice the callee scans is cheaper than the sets were to allocate.
+        let hub_tiles: Vec<i32> = hubs.iter().flatten().copied().collect();
         let base: Vec<BuildOut> = (0..n)
             .map(|ci| {
-                city_build(
-                    state, &terr[ci], scs[ci], monuments, hubs[ci], None,
-                    Some(&counted[ci]),
+                city_build_on(
+                    state, &plots[ci], scs[ci], monuments, hubs[ci], None,
+                    Some(partners_for(ci)), &hub_tiles,
                 )
             })
             .collect();
@@ -1309,11 +1388,11 @@ fn enumerate_empire(
         let mut income = vec![0; n];
         if with_markets && !placed.is_empty() {
             for ci in 0..n {
-                let best = terr[ci]
+                let best = market_cands[ci]
                     .iter()
                     .copied()
                     .filter(|a| {
-                        let adj = get_adjacent_indices(state, *a, 1);
+                        let adj = &adj_tbl[*a as usize];
                         // Feeding ANY adjacent hub disqualifies the tile, whichever
                         // city that hub belongs to — taking it would drop the level
                         // stage 1 already priced, and every Market reading it.
@@ -1321,11 +1400,10 @@ fn enumerate_empire(
                             hubs[cj].is_some_and(|h| adj.contains(&h))
                                 && partners_for(cj).contains(a)
                         });
-                        !hubs.iter().any(|h| *h == Some(*a))
-                            && market_site_legal(state, *a, feeds)
+                        !feeds && !hubs.iter().any(|h| *h == Some(*a))
                     })
                     .map(|a| {
-                        let adj = get_adjacent_indices(state, a, 1);
+                        let adj = &adj_tbl[a as usize];
                         let sum: i32 = placed
                             .iter()
                             .filter(|(h, _)| adj.contains(h))
@@ -1381,9 +1459,9 @@ fn enumerate_empire(
             let best = (0..n)
                 .filter_map(|ci| {
                     let at = |m: i32| {
-                        city_build(
-                            state, &terr[ci], scs[ci], m, hubs[ci], markets[ci],
-                            Some(&counted[ci]),
+                        city_build_on(
+                            state, &plots[ci], scs[ci], m, hubs[ci], markets[ci],
+                            Some(partners_for(ci)), &hub_tiles,
                         )
                         .pop
                     };
@@ -1411,9 +1489,9 @@ fn enumerate_empire(
         let mut city_pop_v = vec![0; n];
         let mut city_level_v = vec![0; n];
         for ci in 0..n {
-            let b = city_build(
-                state, &terr[ci], scs[ci], alloc[ci], hubs[ci], markets[ci],
-                Some(&counted[ci]),
+            let b = city_build_on(
+                state, &plots[ci], scs[ci], alloc[ci], hubs[ci], markets[ci],
+                Some(partners_for(ci)), &hub_tiles,
             );
             let mut city_pop = b.pop;
             if !scs[ci].border_growth && city_pop >= POP_FOR_LEVEL_4 {
