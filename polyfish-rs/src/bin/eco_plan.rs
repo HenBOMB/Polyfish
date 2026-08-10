@@ -480,7 +480,14 @@ fn hub_candidates(state: &GameState, territory: &[i32], sc: Scenario, top_k: usi
                 .count() as i32;
             (-n, s)
         })
-        .filter(|&(negn, _)| -negn >= 2)
+        // >= 1, the engine's own legality floor: `moves/build.rs` requires one
+        // friendly partner to build a hub at all. This used to demand >= 2 as a
+        // proxy for a good site, which was defensible while ranking was on pop
+        // -- but a single-partner tile can win on SPT by being cheap or by
+        // enabling a better Market, and the verify goal-sweep caught exactly
+        // that: --goal army picking a dominated site because the site that
+        // dominated it had been filtered out before ranking ever saw it.
+        .filter(|&(negn, _)| -negn >= 1)
         .collect();
     scored.sort();
     scored.into_iter().take(top_k).map(|(_, s)| s).collect()
@@ -587,10 +594,9 @@ fn city_build(
     }
 }
 
-/// How many hub sites to price before choosing. The `>= 2 partners` filter in
-/// `hub_candidates` already bounds the list well under this on Tiny maps, so in
-/// practice every surviving candidate is priced and the cap only guards a
-/// pathologically large territory.
+/// How many hub sites to price before choosing. A Tiny map's territory is at
+/// most 25 tiles, so in practice every legal candidate is priced and the cap
+/// only guards a pathologically large territory.
 const HUB_TOP_K: usize = 32;
 
 /// The tiles a city rules BEFORE BorderGrowth — the inner 3x3.
@@ -1702,6 +1708,41 @@ fn verify(state: &GameState, cities: &[i32], monuments: i32) -> bool {
         }
     }
 
+    // Every goal, not just the one the table above audits. Pareto dominance is
+    // goal-INDEPENDENT — a site beaten on SPT, super units and stars at once is
+    // worse under any objective — so no goal may ever pick a dominated site.
+    // The table checks Balanced; this sweeps the rest and stays silent unless
+    // something breaks, which is what makes it useful as a regression net when
+    // a comparator changes.
+    let mut goal_failures = 0;
+    for &g in &GOALS {
+        for (ci, &city_idx) in cities.iter().enumerate() {
+            for sc in SCENARIOS.iter() {
+                let terr = allocate_value(state, cities, &uniform(*sc, cities.len()), monuments);
+                if !lane_can_place_hub(state, &terr[ci], sc.lane) {
+                    continue;
+                }
+                let Some(hub) = build_out(state, city_idx, &terr[ci], *sc, 0, g).hub_site else {
+                    continue;
+                };
+                let doms = dominators_of(state, city_idx, &terr[ci], *sc, hub);
+                if let Some(&(spt, st, site)) = doms.first() {
+                    goal_failures += 1;
+                    println!(
+                        "  GOAL SWEEP FAIL: --goal {} city {city_idx} {} picked site {hub}, \
+                         but site {site} gives {spt} SPT for {st} stars and dominates it",
+                        goal_tag(g).trim().to_lowercase(),
+                        sc.name
+                    );
+                }
+            }
+        }
+    }
+    if goal_failures == 0 {
+        println!("  goal sweep: every goal x scenario x city picks an undominated site");
+    }
+    failures += goal_failures;
+
     println!("\n  {} failing (city, scenario) pairs", failures);
     failures == 0
 }
@@ -1716,7 +1757,11 @@ fn dominators_of(
     sc: Scenario,
     chosen: i32,
 ) -> Vec<(i32, i32, i32)> {
-    let (_, site_space, _) = tile_options(state, territory, sc);
+    // The SAME space build_out chooses from -- `hub_candidates` applies the
+    // engine's one-partner legality floor, and a tile that cannot host a hub
+    // cannot dominate one that can. Scanning raw `tile_options` site space
+    // reported zero-partner tiles as dominators of legal picks.
+    let site_space = hub_candidates(state, territory, sc, usize::MAX);
     // Through `site_value`, the one place a site is scored. Verify used to
     // judge on pop against stars while `build_out` chose on the same pair, and
     // both were blind to the Market income a site enables -- so when the
@@ -1757,9 +1802,12 @@ fn optimal_report(state: &GameState, cities: &[i32], monuments: i32, lane: Lane,
         let terr = allocate_value(state, cities, &uniform(*sc, cities.len()), monuments);
         for (ci, &city_idx) in cities.iter().enumerate() {
             let chosen = build_out(state, city_idx, &terr[ci], *sc, 0, goal).hub_site;
-            let (_, site_space, _) = tile_options(state, &terr[ci], *sc);
+            // The space `build_out` actually chose from, so the ranking shown
+            // and the pick shown answer over the same set. Reading raw
+            // `tile_options` here listed tiles with no partner -- illegal hub
+            // sites -- and then reported them as dominating a legal pick.
+            let site_space = hub_candidates(state, &terr[ci], *sc, usize::MAX);
 
-            // (pop, -stars, site) so the sort puts most pop, then cheapest, first.
             let mut ranked: Vec<(i32, i32, i32, i32, i32, i32)> = site_space
                 .iter()
                 .filter(|&&s| site_reachable(state, city_idx, &terr[ci], *sc, 0, s))
@@ -1934,16 +1982,21 @@ fn site_order_key(
     stars: i32,
     g: Goal,
     m: (i64, i64, i64),
-) -> (i64, i64, i64) {
+) -> (i64, i64, i64, i64) {
     let (spt, giants, stars) = (spt as i64, giants as i64, stars as i64);
-    let (a, b) = match g {
-        Goal::Spt => (spt, giants),
-        Goal::Giants => (giants, spt),
-        Goal::Eco => (knee_raw(spt, giants, stars, 1, 0, m), spt),
-        Goal::Balanced => (knee_raw(spt, giants, stars, 1, 1, m), spt),
-        Goal::Army => (knee_raw(spt, giants, stars, 0, 1, m), giants),
+    // Every ordering ends with the axes its objective does NOT weight, so a
+    // goal can never throw away value it is merely indifferent to. Without
+    // this, --goal army (knee on super units alone) happily takes a site beaten
+    // outright on SPT at the same cost, which the verify goal-sweep catches as
+    // picking a Pareto-dominated site. Each key is now a refinement of Pareto.
+    let (a, b, c) = match g {
+        Goal::Spt => (spt, giants, -stars),
+        Goal::Giants => (giants, spt, -stars),
+        Goal::Eco => (knee_raw(spt, giants, stars, 1, 0, m), spt, giants),
+        Goal::Balanced => (knee_raw(spt, giants, stars, 1, 1, m), spt, giants),
+        Goal::Army => (knee_raw(spt, giants, stars, 0, 1, m), giants, spt),
     };
-    (a, b, -stars)
+    (a, b, c, -stars)
 }
 
 /// Frontier maxima over a set of scored sites, for the knee's normalisation.
@@ -1997,11 +2050,11 @@ fn pick_for_goal<'a>(front: &'a [EmpirePlan], g: Goal) -> Option<&'a EmpirePlan>
     let m = frontier_maxima(front);
     front.iter().max_by(|a, b| {
         let key = |p: &EmpirePlan| match g {
-            Goal::Spt => (p.spt as i64, p.giants as i64),
-            Goal::Giants => (p.giants as i64, p.spt as i64),
-            Goal::Eco => (knee_score(p, 1, 0, m), p.spt as i64),
-            Goal::Balanced => (knee_score(p, 1, 1, m), p.spt as i64),
-            Goal::Army => (knee_score(p, 0, 1, m), p.giants as i64),
+            Goal::Spt => (p.spt as i64, p.giants as i64, 0),
+            Goal::Giants => (p.giants as i64, p.spt as i64, 0),
+            Goal::Eco => (knee_score(p, 1, 0, m), p.spt as i64, p.giants as i64),
+            Goal::Balanced => (knee_score(p, 1, 1, m), p.spt as i64, p.giants as i64),
+            Goal::Army => (knee_score(p, 0, 1, m), p.giants as i64, p.spt as i64),
         };
         key(a).cmp(&key(b)).then(thrift(a).cmp(&thrift(b)))
     })
