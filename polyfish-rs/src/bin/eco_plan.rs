@@ -997,26 +997,39 @@ fn allocate_value(
     }
 
     for (idx, who) in open {
-        // Rank by (pop gained, nearer city, lower index) — every term
-        // deterministic, so the allocation is reproducible.
-        let mut ranked: Vec<(i32, i32, usize)> = who
+        // Rank by what the tile is worth to each claimant, on the same axes as
+        // every other consumer: SPT first, then super units. This used to rank
+        // on marginal POP, the last place still using the old yardstick -- and
+        // the most consequential, since the split it produces is the ground the
+        // frontier then plans on. A tile that lifts a hub a level and feeds a
+        // Market is worth more than one that adds raw population, and pop could
+        // not see the difference. Distance and index break ties, so the
+        // allocation stays deterministic and reproducible.
+        let value_of = |ci: usize, tiles: &[i32]| -> (i32, i32) {
+            let hub = build_out(state, cities[ci], tiles, scs[ci], monuments, Goal::Balanced)
+                .hub_site;
+            let (spt, giants, _stars, _pop) =
+                site_value(state, cities[ci], tiles, scs[ci], monuments, hub);
+            (spt, giants)
+        };
+        let mut ranked: Vec<(i32, i32, i32, usize)> = who
             .iter()
             .map(|&ci| {
+                let (base_spt, base_g) = value_of(ci, &terr[ci]);
                 let mut with = terr[ci].clone();
-                let base = build_out(state, cities[ci], &with, scs[ci], monuments, Goal::Balanced).pop;
                 with.push(idx);
                 with.sort();
-                let gain =
-                    build_out(state, cities[ci], &with, scs[ci], monuments, Goal::Balanced).pop - base;
+                let (spt, g) = value_of(ci, &with);
                 (
-                    -gain,
+                    -(spt - base_spt),
+                    -(g - base_g),
                     get_chebyshev_distance(idx, cities[ci], state.settings.size),
                     ci,
                 )
             })
             .collect();
         ranked.sort();
-        terr[ranked[0].2].push(idx);
+        terr[ranked[0].3].push(idx);
     }
     for v in terr.iter_mut() {
         v.sort();
