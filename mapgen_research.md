@@ -154,6 +154,45 @@ current metal constant (0.80 vs 0.85 — both round to the wiki's 11%/14%).
 - `main.rs` — the simulator the user plays (startup fallback, `reset_game`, replay
   reconstruction from `initial_seed`).
 
+## Addendum (Aug 10, later): placement / Forge-spot follow-up
+
+Question: beyond rates, does the real game *place* mountains differently (ridges/clumps),
+making Forge spots (flat tile, ≥2 adjacent metal mountains) easier to find?
+
+**No clustering mechanism exists in the real game.** All three real captures test
+consistent with uniform scatter — mean mountain-neighbors-per-mountain vs a
+uniform-shuffle null over eligible land: z = −1.07 (anjiian), −0.84 (assha), +0.00
+(basin). Era-1 code rolled terrain i.i.d. per tile; the modern quota system pins
+*counts*, and the captures show placement stays effectively uniform. (2 of 3 real maps
+lean slightly *anti*-clustered — not significant at n=3; unresolved observation only.)
+
+**Post-fix, our Forge-spot supply is at least comparable to the real game, possibly
+overshooting** (300 maps/config, same metric as the captures):
+
+| config | spots ≥2 adj metal per 100 land | maps with zero | best-spot ≥3 |
+|---|---|---|---|
+| real anjiian (Drylands 16, 6 tribes) | 2.8 (7 spots, n=1 map) | — | no (best=2) |
+| ours, same mix/size post-fix | 5.4 (13.7/map) | 0% | 78% of maps |
+| ours XinXi+Kickoo Tiny | 7.6 (9.1/map) | 0% | 76% |
+| ours Imperius+Bardur Tiny | 3.8 (4.6/map) | 11% | 33% |
+| real assha (Lakes 16, mt-poor tribes) | 0.5 | — | no |
+| real basin (Lakes 14, mt-rich tribes) | 6.1 | — | yes (best=3) |
+
+Xin-xi capitals: a ≥2-metal Forge spot within Chebyshev 2 of the capital in **100% of
+games**. Slight over-clustering appears only in Xin-xi configs (obs 1.17 vs null 1.00;
+Imperius+Bardur 0.88 vs 0.86) — that's the capital metal carve firing when the ring has
+<2 natural mountains, whose real-game placement mechanics are undocumented. Honest open
+item, direction = we may overshoot spot quality near capitals.
+
+**Residual real placement differences (measured, small):** no quota system → per-map
+mountain-count variance ±4-5 (real pins counts; 11% of our Imperius+Bardur maps still
+have zero good spots, 0% of Xin-xi maps); village spacing ours ≥3 vs real ≥2 (real has
+*more* villages yet measures *fewer* spots, so this cannot explain a perceived deficit).
+
+**The perceived deficit itself was the rates bug**: the simulator server running during
+this session started pre-fix (0.65 metal near a Xin-xi capital → adjacent metal *pairs*
+essentially never occurred). Restart the server to see post-fix maps.
+
 ## Implications (not acted on)
 
 - Mining/Smithery/Forge economics are systematically underrepresented in the training
