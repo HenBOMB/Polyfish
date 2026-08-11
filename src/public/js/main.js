@@ -200,7 +200,7 @@ let mctsParams = {
 
 async function runPassiveAnalysis(force = false) {
     if (!mctsParams.passive && !force) return;
-    if (pendingMctsMove || PENDING_AI_MOVE) {
+    if (pendingMctsMove || PENDING_AI_MOVE || window.MOVE_IN_FLIGHT) {
         if (!force) setTimeout(runPassiveAnalysis, 1000);
         return;
     }
@@ -303,6 +303,13 @@ const hoverEl = document.getElementById('hovertile');
 let pendingMctsMove = null;
 
 async function apiAction(endpoint, body) {
+    // Single-flight: the server holds the game lock during AI search, so
+    // stacked requests queue up and execute as duplicate moves. Drop instead.
+    if (window.MOVE_IN_FLIGHT) {
+        console.warn(`Dropped ${endpoint}: another request is in flight`);
+        return {};
+    }
+    window.MOVE_IN_FLIGHT = true;
     try {
         const res = await fetch(endpoint, {
             method: 'POST',
@@ -315,6 +322,7 @@ async function apiAction(endpoint, body) {
     } catch (e) {
         console.error("API Error:", e);
     } finally {
+        window.MOVE_IN_FLIGHT = false;
         document.querySelectorAll('.rts-btn').forEach(b => b.disabled = false);
     }
 }
@@ -902,9 +910,10 @@ function updateSelectionInfo(clickX = null, clickY = null) {
     `;
 
     // 2. UPDATE FLOATING ACTIONS (Polytopia Style)
-    // Only show city actions if we are NOT in unit selection mode for this tile
-    const harvestMove = !isUnitMode ? currentLegalMoves.find(m => m.moveType === 5 && (m.target === idx || m.target_index === idx)) : null;
-    const buildMovesCheck = !isUnitMode ? currentLegalMoves.filter(m => m.moveType === 6 && (m.target === idx || m.target_index === idx)) : [];
+    // Harvest/build stay visible even with your own unit on the tile (e.g. a
+    // warrior standing on a metal mountain must not hide "Build Mine").
+    const harvestMove = currentLegalMoves.find(m => m.moveType === 5 && (m.target === idx || m.target_index === idx));
+    const buildMovesCheck = currentLegalMoves.filter(m => m.moveType === 6 && (m.target === idx || m.target_index === idx));
     const summonMoves = !isUnitMode ? currentLegalMoves.filter(m => m.moveType === 4 && (m.src === idx || m.src_index === idx)) : [];
     const abilityMoves = currentLegalMoves.filter(m =>
         m.moveType === 3 && (m.target === idx || m.target_index === idx || m.src === idx || m.src_index === idx)

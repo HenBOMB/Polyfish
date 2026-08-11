@@ -1,5 +1,13 @@
 
 function playMove(move) {
+    // Single-flight: clicks during an in-flight request would queue on the
+    // server's game lock and execute as duplicate moves.
+    if (window.MOVE_IN_FLIGHT) {
+        showToast && showToast('⏳ Waiting for previous move…');
+        return;
+    }
+    window.MOVE_IN_FLIGHT = true;
+
     renderer.clearMoveHighlight();
     document.querySelectorAll('.move-overlay').forEach(el => el.remove());
     document.querySelectorAll('.combat-preview').forEach(el => el.remove());
@@ -29,6 +37,7 @@ function playMove(move) {
             showToast && showToast('❌ Move failed');
         })
         .finally(() => {
+            window.MOVE_IN_FLIGHT = false;
             document.querySelectorAll('.rts-btn').forEach(b => b.disabled = false);
         });
 }
