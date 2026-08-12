@@ -553,12 +553,16 @@ fn dump_turn_state(
         "knight_commit": arch.overlays.knight_commit,
         // v7 commitment + plan outcomes.
         "stance": goal.map(|g| format!("{:?}", g.stance)),
-        "save_target": goal.and_then(|g| g.save_target),
+        "save_target": goal.and_then(|g| g.save_target.as_ref().map(|l| l.cost)),
+        "save_lane": goal.and_then(|g| {
+            g.save_target.as_ref().map(|l| format!("{:?}+{:?}", l.tech, l.structure))
+        }),
         // Raw batch cost regardless of the SAVE gate: separates "no batch was
         // ever placeable" (the tier-3 tech wall) from "a batch existed but the
         // reachability gate rejected it". Without this a dead SAVE stance is
         // indistinguishable from a correctly quiet one.
-        "save_batch": polyfish::ai::oracle_macro::save_batch_cost(state, pov, tier3_bought),
+        "save_batch": polyfish::ai::oracle_macro::save_batch_plan(state, pov, tier3_bought)
+            .map(|l| l.cost),
         "stance_flips": commit.stance_flips,
         "order_flips": commit.order_flips,
         "turns_seen": commit.turns_seen,

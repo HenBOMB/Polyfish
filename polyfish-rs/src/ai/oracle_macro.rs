@@ -9,10 +9,6 @@ use crate::moves::Move;
 use crate::states::{GameState, PlayerId};
 use crate::types::{AbilityType, MoveType, StructureType, TechnologyType, TerrainType};
 
-/// Stars that must remain after a tech purchase for it to pass the gate while
-/// a commitment is active — rough price of fielding a capturer.
-pub const STAR_GATE_RESERVE: i32 = 5;
-
 /// EXP_ELO_028: order types painted into the goal channels. The discriminant
 /// is the channel offset from `features::CH_ORDER_START`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -43,15 +39,35 @@ pub enum Stance {
 /// tile) plus one global spending stance. Encoded into the appended goal
 /// channels; `orders` must stay sorted so identical goals produce identical
 /// feature bytes (the eval cache and tree reuse hash them).
+/// The economy batch a SAVE stance is banking for, with the lane it belongs to.
+///
+/// v10: this used to be a bare `Option<i32>` — `save_batch_plan` identified the
+/// lane and then discarded everything but the price, so nothing downstream
+/// could tell "saving for a Forge" from "saving for 21 stars". Search could not
+/// boost the very move the plan existed to reach.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SaveLane {
+    /// `tech_cost + structure_cost`, the number the ramp measures against.
+    pub cost: i32,
+    /// Chain cost of reaching `tech` from what the tribe owns; 0 once owned.
+    pub tech_cost: i32,
+    /// Placement cost summed over every city that can legally site one now.
+    pub structure_cost: i32,
+    /// Per-placement cost, for crediting partial completion.
+    pub structure_unit_cost: i32,
+    pub tech: TechnologyType,
+    pub structure: crate::types::StructureType,
+}
+
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct MacroGoal {
     pub orders: Vec<(OrderKind, i32)>,
     pub stance: Stance,
-    /// v7: total star cost of the economy batch this seat is banking for while
-    /// the stance is SAVE. Not encoded into the feature planes (the stance
-    /// one-hot carries the categorical); `reward::goal_potential` reads it to
-    /// pay the savings ramp.
-    pub save_target: Option<i32>,
+    /// v7: the economy batch this seat is banking for while the stance is
+    /// SAVE. Not encoded into the feature planes (the stance one-hot carries
+    /// the categorical); `reward::goal_potential` reads it to pay the savings
+    /// ramp and `advances_save_plan` reads it to boost the plan's own moves.
+    pub save_target: Option<SaveLane>,
 }
 
 /// Stage-1 scripted goal-setter, v2 (recalibrated Jul 29 after the iter-1..4
@@ -142,9 +158,9 @@ pub fn scripted_goal(state: &GameState, player: PlayerId, tier3_bought: u32) -> 
     // always outranks banking — and only fires for a batch that is out of
     // pocket now but inside SAVE_MAX_TURNS of income, so it self-terminates
     // rather than becoming an open-ended hoard.
-    let save_target = save_batch_cost(state, player, tier3_bought).filter(|&cost| {
+    let save_target = save_batch_plan(state, player, tier3_bought).filter(|lane| {
         let spt = crate::functions::get_tribe_spt(state, tribe);
-        tribe.stars < cost && tribe.stars + spt * SAVE_MAX_TURNS >= cost
+        tribe.stars < lane.cost && tribe.stars + spt * SAVE_MAX_TURNS >= lane.cost
     });
     let stance = if orders.iter().any(|(k, _)| *k == OrderKind::Defend) {
         Stance::Arm
@@ -371,12 +387,12 @@ pub fn tech_chain_cost(tribe: &crate::states::TribeState, tech: TechnologyType) 
 /// placeable batch existed on 26% of turns and the SAVE gate fired on 0 of
 /// them. The lane (tech + the structures it unlocks) is the ~15-25 star
 /// commitment a human actually banks for.
-pub fn save_batch_cost(state: &GameState, player: PlayerId, tier3_bought: u32) -> Option<i32> {
+pub fn save_batch_plan(state: &GameState, player: PlayerId, tier3_bought: u32) -> Option<SaveLane> {
     use crate::settings::structures::get_structure_setting;
     use crate::settings::technology::has_technology;
     use crate::types::StructureType;
     let tribe = state.tribes.get(&player)?;
-    let mut best: Option<i32> = None;
+    let mut best: Option<SaveLane> = None;
     for (s_type, tech) in SAVE_LANES {
         let s = get_structure_setting(s_type);
         let Some(cost) = s.cost else { continue };
@@ -425,12 +441,54 @@ pub fn save_batch_cost(state: &GameState, player: PlayerId, tier3_bought: u32) -
         if lane == 0 {
             continue;
         }
-        if !owned {
-            lane += tech_chain_cost(tribe, tech);
+        let tech_cost = if owned { 0 } else { tech_chain_cost(tribe, tech) };
+        let plan = SaveLane {
+            cost: lane + tech_cost,
+            tech_cost,
+            structure_cost: lane,
+            structure_unit_cost: cost,
+            tech,
+            structure: s_type,
+        };
+        if best.as_ref().map_or(true, |b| plan.cost < b.cost) {
+            best = Some(plan);
         }
-        best = Some(best.map_or(lane, |b: i32| b.min(lane)));
     }
     best
+}
+
+/// Does `m` advance the banked plan? The whole undiscovered `requires` chain
+/// counts, not just the final tech — `save_batch_plan` prices the chain
+/// (Market sits behind Roads behind Riding), so boosting only the last step
+/// would leave every multi-step lane exactly as stuck as it is today.
+///
+/// Structurally inert while banking: a Research/Build move is only generated
+/// once it is affordable, so this fires exactly when the purchase goes live.
+pub fn advances_save_plan(m: &dyn Move, lane: &SaveLane, tribe: &crate::states::TribeState) -> bool {
+    use crate::settings::technology::{get_technology_setting, has_technology};
+    match m.move_type() {
+        MoveType::Research => {
+            let Ok(t) = m.tech_type() else { return false };
+            let mut cur = Some(lane.tech);
+            let mut guard = 0;
+            while let Some(c) = cur {
+                if guard > 16 {
+                    break;
+                }
+                guard += 1;
+                if has_technology(&tribe.tech_vanilla, c) {
+                    break;
+                }
+                if c == t {
+                    return true;
+                }
+                cur = get_technology_setting(c).requires;
+            }
+            false
+        }
+        MoveType::Build => m.structure_type().ok() == Some(lane.structure),
+        _ => false,
+    }
 }
 
 /// v7: the STANDING macro commitment.
@@ -1584,18 +1642,25 @@ pub fn update_archetype(
     }
 }
 
-/// Root-only research gate (v2.2, granular). Every non-Research move passes.
-/// A gated Research move passes only when the buyer retains
-/// `STAR_GATE_RESERVE` stars after the purchase. What counts as gated:
-/// - `Some(Grow)`: techs fielding combat units (eco/mobility/defense tech is
-///   the point of GROW and passes freely — incl. Climbing/Sailing passage).
-/// - `Some(Arm)`: eco tech fielding no combat units (mixed tech like
-///   Smithery arms you and passes).
+/// Root-only research gate (v9, dual-exempt). Every non-Research move passes.
+/// A gated Research move is dropped outright — the old "unless you keep
+/// `STAR_GATE_RESERVE` stars" escape is gone. It read as a soft price but the
+/// measured policy is hand-to-mouth (median 1 star at EndTurn), so it opened on
+/// 0.5% of gated GROW plies: a constant pretending to be a decision.
+///
+/// A stance gates only the tech that is PURELY the other class. Dual-class tech
+/// serves both and is never dropped — Smithery fields a Swordsman AND opens the
+/// Forge, so gating it under GROW while ARM lets it through made the Forge lane
+/// hostage to a stance that is ARM 85% of the time after turn 10.
+/// - `Some(Grow)` / `Some(Save)`: pure-combat tech (no eco effect). Both are
+///   economy stances in `reward::goal_potential`; SAVE additionally cannot gate
+///   its own batch, whose cost includes an unowned tech chain.
+/// - `Some(Arm)`: pure-eco tech (fields no combat unit).
 /// - `Some(Unlock)`: nothing gated (no unlock policy yet).
 /// - `None`: every tech (the EXP_ELO_026 legacy gate, kept reproducible for
-///   arena `--macro-star-gate`).
+///   arena `--macro-star-gate`; now a hard drop rather than a reserve test).
 pub fn passes_star_gate(
-    state: &GameState,
+    _state: &GameState,
     m: &dyn Move,
     stance: Option<Stance>,
     aux: Option<&GoalAux>,
@@ -1603,10 +1668,6 @@ pub fn passes_star_gate(
     if m.move_type() != MoveType::Research {
         return true;
     }
-    let player = state.settings.current_player_turn_id;
-    let Some(tribe) = state.tribes.get(&player) else {
-        return true;
-    };
     let Ok(tech) = m.tech_type() else {
         return true;
     };
@@ -1620,20 +1681,15 @@ pub fn passes_star_gate(
         return true;
     }
     let effects = crate::settings::technology::get_tech_effects(tech);
+    let arms = !effects.combat_units.is_empty();
+    let grows = crate::settings::technology::is_eco_tech(tech);
     let gated = match stance {
         None => true,
-        Some(Stance::Grow) => !effects.combat_units.is_empty(),
-        Some(Stance::Arm) => {
-            crate::settings::technology::is_eco_tech(tech) && effects.combat_units.is_empty()
-        }
-        // v7: while banking, every tech class competes with the batch.
-        Some(Stance::Save) => true,
+        Some(Stance::Grow) | Some(Stance::Save) => arms && !grows,
+        Some(Stance::Arm) => grows && !arms,
         Some(Stance::Unlock) => false,
     };
-    if !gated {
-        return true;
-    }
-    tribe.stars - crate::functions::get_tech_cost(tribe, tech) >= STAR_GATE_RESERVE
+    !gated
 }
 
 #[cfg(test)]
@@ -1952,7 +2008,8 @@ mod tests {
             tile.owner = 1;
             tile.terrain_type = crate::types::TerrainType::Field;
         }
-        assert_eq!(save_batch_cost(&state, 1, 0), Some(5), "one 5-star windmill, tech owned");
+        assert_eq!(save_batch_plan(&state, 1, 0).map(|l| l.cost), Some(5),
+            "one 5-star windmill, tech owned");
 
         // The lane is what costs: drop Construction and the batch must absorb
         // the tier-3 tech price, which is the thing actually worth banking for.
@@ -1968,7 +2025,7 @@ mod tests {
                 TechnologyType::Construction,
             );
             assert!(tech_cost > 0);
-            assert_eq!(save_batch_cost(&state, 1, 0), Some(5 + tech_cost));
+            assert_eq!(save_batch_plan(&state, 1, 0).map(|l| l.cost), Some(5 + tech_cost));
             state.tribes.get_mut(&1).unwrap().tech_vanilla.push(
                 crate::states::TechnologyState {
                     tech_type: TechnologyType::Construction,
@@ -1982,7 +2039,7 @@ mod tests {
         state.tribes.get_mut(&1).unwrap().stars = 1;
         let g = scripted_goal(&state, 1, 0);
         assert_eq!(g.stance, Stance::Save);
-        assert_eq!(g.save_target, Some(5));
+        assert_eq!(g.save_target.as_ref().map(|l| l.cost), Some(5));
 
         // Already affordable → nothing to save for, back to GROW.
         state.tribes.get_mut(&1).unwrap().stars = 5;
@@ -2185,23 +2242,40 @@ mod tests {
     }
 
     #[test]
-    fn star_gate_blocks_only_underfunded_research() {
-        // Legacy (stance-less, EXP_ELO_026) arm: every tech is gated.
+    fn legacy_star_gate_blocks_research_at_any_star_count() {
+        // Legacy (stance-less, EXP_ELO_026) arm: every tech is gated, and v9
+        // removed the reserve escape — being rich no longer lifts it.
         let mut state = state_with_villages(0, &[3]);
         state.settings.current_player_turn_id = 1;
-        let tech = TechnologyType::Organization;
-        let cost = crate::functions::get_tech_cost(state.tribes.get(&1).unwrap(), tech);
-        let research = ResearchMove::new(tech);
+        let research = ResearchMove::new(TechnologyType::Organization);
 
-        state.tribes.get_mut(&1).unwrap().stars = cost + STAR_GATE_RESERVE - 1;
-        assert!(!passes_star_gate(&state, &research, None, None));
-
-        state.tribes.get_mut(&1).unwrap().stars = cost + STAR_GATE_RESERVE;
-        assert!(passes_star_gate(&state, &research, None, None));
+        for stars in [0, 5, 50, 500] {
+            state.tribes.get_mut(&1).unwrap().stars = stars;
+            assert!(!passes_star_gate(&state, &research, None, None));
+        }
 
         // Non-research moves always pass, regardless of stars.
         state.tribes.get_mut(&1).unwrap().stars = 0;
         assert!(passes_star_gate(&state, &EndTurnMove, None, None));
+    }
+
+    /// v9: the whole point of the dual-class exemption — Smithery opens the
+    /// Forge (giants) and fields a Swordsman, so no economy-or-army stance may
+    /// drop it. Same for Mathematics (Sawmill + Catapult).
+    #[test]
+    fn dual_class_tech_is_never_stance_gated() {
+        let mut state = state_with_villages(0, &[3]);
+        state.settings.current_player_turn_id = 1;
+        state.tribes.get_mut(&1).unwrap().stars = 0;
+        for tech in [TechnologyType::Smithery, TechnologyType::Mathematics] {
+            let m = ResearchMove::new(tech);
+            for stance in [Stance::Grow, Stance::Arm, Stance::Save] {
+                assert!(
+                    passes_star_gate(&state, &m, Some(stance), None),
+                    "{tech:?} gated under {stance:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -2215,13 +2289,13 @@ mod tests {
         let passage = ResearchMove::new(TechnologyType::Climbing);
         let mixed = ResearchMove::new(TechnologyType::Smithery);
 
-        // GROW gates combat-unit tech only; eco and passage flow freely
+        // GROW gates PURE-combat tech; eco, passage and dual-class flow freely
         // (Climbing carries a defense bonus but fields no unit).
         let grow = Some(Stance::Grow);
         assert!(passes_star_gate(&state, &eco, grow, None));
         assert!(passes_star_gate(&state, &passage, grow, None));
         assert!(!passes_star_gate(&state, &combat, grow, None));
-        assert!(!passes_star_gate(&state, &mixed, grow, None));
+        assert!(passes_star_gate(&state, &mixed, grow, None));
 
         // ARM flips it: pure-eco tech gated, unit tech (incl. mixed) free.
         let arm = Some(Stance::Arm);
@@ -2229,13 +2303,16 @@ mod tests {
         assert!(passes_star_gate(&state, &combat, arm, None));
         assert!(passes_star_gate(&state, &mixed, arm, None));
 
-        // Reserve still lifts a gated class.
-        let cost = crate::functions::get_tech_cost(
-            state.tribes.get(&1).unwrap(),
-            TechnologyType::Riding,
-        );
-        state.tribes.get_mut(&1).unwrap().stars = cost + STAR_GATE_RESERVE;
-        assert!(passes_star_gate(&state, &combat, grow, None));
+        // SAVE is an economy stance and gates the same class GROW does — it
+        // must not block the tech chain its own batch is priced to buy.
+        let save = Some(Stance::Save);
+        assert!(passes_star_gate(&state, &eco, save, None));
+        assert!(passes_star_gate(&state, &mixed, save, None));
+        assert!(!passes_star_gate(&state, &combat, save, None));
+
+        // v9: no reserve — being rich no longer lifts a gated class.
+        state.tribes.get_mut(&1).unwrap().stars = 500;
+        assert!(!passes_star_gate(&state, &combat, grow, None));
 
         // UNLOCK gates nothing (no unlock policy yet).
         state.tribes.get_mut(&1).unwrap().stars = 0;
@@ -2470,10 +2547,10 @@ mod tests {
             tile.terrain_type = TerrainType::Field;
         }
         // Construction unowned: the lane is priced with its full chain.
-        let with_budget = save_batch_cost(&state, 1, 0).expect("lane priced");
+        let with_budget = save_batch_plan(&state, 1, 0).expect("lane priced").cost;
         assert!(with_budget > 5, "chain cost must be included, got {with_budget}");
         // Tier-3 budget spent: the same lane is unreachable and must vanish.
-        assert_eq!(save_batch_cost(&state, 1, TIER3_CAP_PER_GAME), None);
+        assert!(save_batch_plan(&state, 1, TIER3_CAP_PER_GAME).is_none());
     }
 
     #[test]

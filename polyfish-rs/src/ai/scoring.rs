@@ -700,8 +700,12 @@ fn score_reward(state: &crate::states::GameState, mv: &dyn Move) -> f32 {
                 // In Perfection, super unit matters less than score
                 base + 8.0
             } else {
-                // In Domination, super unit is game-changing
-                base + 18.0
+                // In Domination, super unit is game-changing. v10: the gap over
+                // Park was 13 points, which through HEURISTIC_TEMP=20 softmaxes
+                // to ~2:1 — not the near-always the comment implied. 22 points
+                // is 3:1. Perfection is left alone: there a Park's +250 really
+                // does win a score race.
+                base + 27.0
             }
         }
 

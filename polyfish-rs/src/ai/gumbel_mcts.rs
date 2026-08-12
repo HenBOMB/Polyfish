@@ -607,6 +607,7 @@ impl<'a> GumbelMctsAgent<'a> {
         if self.prior_heuristic_weight > 0.0 && !new_root.heuristic_blended {
             blend_heuristic_prior(game, &mut new_root.children, self.prior_heuristic_weight);
         }
+        blend_goal_prior(game, &mut new_root.children, self.macro_goal.as_ref());
 
         let mut in_cut = self.build_in_cut(&new_root);
         self.run_search(game, &mut new_root, &mut in_cut, start_turn);
@@ -678,6 +679,7 @@ impl<'a> GumbelMctsAgent<'a> {
         if self.prior_heuristic_weight > 0.0 {
             blend_heuristic_prior(game, &mut root.children, self.prior_heuristic_weight);
         }
+        blend_goal_prior(game, &mut root.children, self.macro_goal.as_ref());
 
         let mut in_cut = self.build_in_cut(&root);
         self.record_root_candidates(game, &root, &in_cut, &raw_logits);
@@ -1348,6 +1350,10 @@ impl<'a> GumbelMctsAgent<'a> {
             return Some(Box::new(EndTurnMove));
         }
         let best_idx = self.recommend_final_move(&root);
+        // This path always argmaxes, so pass a move_count past the temperature
+        // threshold; without it an armed trace never finalizes here and
+        // `take_trace` silently returns None (arena had no traces at all).
+        self.record_final(&root, best_idx, usize::MAX);
         let best_move = clone_child_move(&root, best_idx);
         let next_hash = next_root_hash_for(game, best_move.as_deref(), self.pursuit_focus, self.macro_goal.as_ref());
         self.store_tree(root, best_idx, next_hash);
@@ -1631,6 +1637,70 @@ fn blend_heuristic_into_logits(logits: &mut [f32], heur_scores: &[f32], weight: 
         let p = (1.0 - weight) * p_net[i] + weight * p_heur[i];
         // Add a small epsilon to prevent log(0)
         *l = (p + 1e-9).ln();
+    }
+}
+
+/// Weight on the goal prior: mass reserved for moves that advance a SAVE
+/// batch. Sized against the measured deficit — the net's prior on the lane
+/// tech is ~3e-6 (median, 519 traced Smithery decisions), an 11.3-nat gap to
+/// the chosen move, which no amount of σ(Q) can bridge inside sequential
+/// halving. This buys the plan's own move enough visits for Q to arbitrate; it
+/// is not meant to make it win. FIRST FIT — dial against the measured cut-entry
+/// and eligibility rates before trusting it.
+fn goal_prior_weight() -> f32 {
+    static W: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *W.get_or_init(|| {
+        std::env::var("GOAL_PRIOR_W")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.15)
+    })
+}
+
+/// Mix mass onto the moves that advance the SAVE batch, in place.
+///
+/// The macro names a lane (tech + structure); until v10 it kept only the
+/// price, so the plan could not raise the prior on the one move it existed to
+/// reach. Applied before the top-k cut is built so the cut ranks on the
+/// boosted prior — the gates learned the hard way that a root-only fixup which
+/// skips `finish_reused_root` is inert on 7 of every 8 plies.
+fn blend_goal_prior(
+    game: &Game,
+    children: &mut [GumbelNode],
+    goal: Option<&crate::ai::oracle_macro::MacroGoal>,
+) {
+    let w = goal_prior_weight();
+    if w <= 0.0 || children.is_empty() {
+        return;
+    }
+    let Some(lane) = goal.and_then(|g| g.save_target.as_ref()) else {
+        return;
+    };
+    let pov = game.state.settings.current_player_turn_id;
+    let Some(tribe) = game.state.tribes.get(&pov) else {
+        return;
+    };
+    let hits: Vec<bool> = children
+        .iter()
+        .map(|c| {
+            c.move_to_here.as_ref().map_or(false, |m| {
+                crate::ai::oracle_macro::advances_save_plan(m.as_ref(), lane, tribe)
+            })
+        })
+        .collect();
+    let n_hit = hits.iter().filter(|&&h| h).count();
+    if n_hit == 0 {
+        return;
+    }
+    let mut logits: Vec<f32> = children.iter().map(|c| c.logit).collect();
+    let p_net = softmax(&logits);
+    let share = w / n_hit as f32;
+    for (i, l) in logits.iter_mut().enumerate() {
+        let p = (1.0 - w) * p_net[i] + if hits[i] { share } else { 0.0 };
+        *l = (p + 1e-9).ln();
+    }
+    for (child, l) in children.iter_mut().zip(logits.into_iter()) {
+        child.logit = l;
     }
 }
 

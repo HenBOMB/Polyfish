@@ -193,6 +193,12 @@ pub const SHAPE_GOAL_SPT: f32 = 150.0;
 /// Extra score-equivalents per star of living army while stance is ARM
 /// (on top of the game score's 5·cost).
 pub const SHAPE_GOAL_ARM_PER_COST: f32 = 50.0;
+/// v9: score-equivalents per star-per-turn of income while stance is ARM.
+/// Half `SHAPE_GOAL_SPT` on purpose — army stays the dominant term under ARM,
+/// but income stops being invisible for the 85% of post-t10 plies ARM holds.
+/// FIRST FIT: dial against the measured dq median before trusting it (every
+/// first fit in this file has overshot ~2x).
+pub const SHAPE_GOAL_ARM_SPT: f32 = 75.0;
 /// Score-equivalents per tile of closed distance toward a painted EXPAND
 /// target. Summed over targets; an achieved (self-owned) target holds the
 /// full cap so the final capture banks its step instead of cliffing -CAP.
@@ -257,6 +263,14 @@ pub const EXPLORER_CORNER_CAP: usize = 2;
 /// single farm). The first partner is the structure paying for itself — no
 /// bonus; a partner-less build stays unpriced rather than penalized.
 pub const SHAPE_GOAL_YIELD_ADJ: f32 = 100.0;
+/// v10: fraction of `SHAPE_GOAL_YIELD_ADJ` paid for UNFILLED partner capacity.
+/// Realized partners are the yield; capacity is the option on it. The PLACEMENT
+/// decision needs capacity, because partners are built after the hub (measured:
+/// chosen ceiling 2.00 == final level 2.00, so sites do fill in) and that is far
+/// past a 6.5-ply horizon — a Phi counting only what stands today cannot tell a
+/// ceiling-1 tile from a ceiling-3 one. Audit: 31 sub-optimal Forge sites, all
+/// in-city and legal at the time, 12 of them with no resource trade-off at all.
+pub const SHAPE_GOAL_YIELD_CAPACITY_W: f32 = 0.5;
 /// v6: star-yield analog for Market (reward_stars > 0 + adjacent_types) —
 /// HALF the pop analog, deliberately: each partner's +1 SPT is already paid
 /// at SHAPE_GOAL_SPT through get_tribe_spt; this only sharpens the 2-3-hub
@@ -296,6 +310,67 @@ pub const SHAPE_GOAL_STRANDED: f32 = 75.0;
 /// First fit — dial against the measured carried-balance and purchase rates
 /// per the q-gap method (first fits have overshot ~2x every time).
 pub const SHAPE_GOAL_SAVE: f32 = 100.0;
+
+/// Fraction of the SAVE batch already secured, counting BOUGHT components and
+/// not just the star balance.
+///
+/// v10: the ramp used to read `stars/cost` alone, so buying the lane tech —
+/// the whole point of banking — dropped Φ by the price of the tech (measured
+/// ~76 score-equivalents on the Forge lane at a 21-star target). It paid to
+/// accumulate and charged to make progress, and inside a 6.5-ply horizon only
+/// the charge is visible. Progress is monotone under plan-advancing purchases.
+pub fn save_progress(
+    state: &GameState,
+    player: i32,
+    lane: &crate::ai::oracle_macro::SaveLane,
+) -> f32 {
+    let Some(tribe) = state.tribes.get(&player) else {
+        return 0.0;
+    };
+    let mut banked = tribe.stars.max(0);
+    if lane.tech_cost > 0
+        && crate::settings::technology::has_technology(&tribe.tech_vanilla, lane.tech)
+    {
+        banked += lane.tech_cost;
+    }
+    if lane.structure_unit_cost > 0 {
+        let built: i32 = tribe
+            .cities
+            .iter()
+            .filter(|c| {
+                c._territory.iter().any(|&t| {
+                    crate::functions::get_structure_type_at(state, t) == Some(lane.structure)
+                })
+            })
+            .count() as i32;
+        banked += built * lane.structure_unit_cost;
+    }
+    (banked as f32 / lane.cost as f32).clamp(0.0, 1.0)
+}
+
+/// v10: score-equivalents for OWNING a super unit.
+///
+/// The level-5 reward is a binary pick: Park (+250 score AND +1 production) vs
+/// a super unit (cost 10 -> +50 score). Raw score prefers Park 5:1 and only
+/// ARM's `SHAPE_GOAL_ARM_PER_COST` ever overturned it. Measured park share of
+/// that pick: 8-12% under ARM, but 78-83% under GROW and 88% under SAVE.
+///
+/// Sized against the measured totals so the pick lands where a strong human
+/// puts it: ARM ~3:1 for the giant, GROW ~1.4:1, and SAVE only inverting to
+/// Park once the banked plan is nearly done. Super units are reward-only
+/// (`moves/reward.rs:143`), never summoned, so this cannot distort purchasing —
+/// it prices the pick and the cost of losing one.
+pub const SHAPE_GOAL_SUPER: f32 = 500.0;
+
+/// How much a nearly-complete SAVE plan damps `SHAPE_GOAL_SUPER`. At full
+/// progress the giant bonus drops to 40%, flipping the pick back to Park —
+/// which is right when +1 production finishes a plan this turn.
+///
+/// Deliberately keyed to `save_progress` ONLY, not `completion_progress`: under
+/// GROW the city nearest a level-up drives completion toward 1.0 exactly at the
+/// reward ply, so using it would damp the bonus at every single level-5 pick
+/// and quietly rebuild the pathology this term exists to fix.
+pub const SHAPE_GOAL_SUPER_ECON_DAMP: f32 = 0.6;
 
 /// v7: completion BONUS — pays progress toward a REACHABLE level (see
 /// `completion_progress`). Held below `SHAPE_GOAL_SPT` so a level-up, which
@@ -602,6 +677,10 @@ pub fn goal_potential(
         Stance::Grow | Stance::Save => {
             SHAPE_GOAL_SPT * crate::functions::get_tribe_spt(state, tribe) as f32
         }
+        // v9: ARM is no longer economy-blind. It holds 85% of plies after turn
+        // 10, and with only the army term the whole mid-game carried zero
+        // economy gradient — the window where a human is pushing cities to
+        // level 5. A giant IS an army purchase; it is bought with population.
         Stance::Arm => {
             SHAPE_GOAL_ARM_PER_COST
                 * tribe
@@ -609,14 +688,40 @@ pub fn goal_potential(
                     .iter()
                     .map(|u| crate::rules::combat::unit_worth(u) as f32)
                     .sum::<f32>()
+                + SHAPE_GOAL_ARM_SPT * crate::functions::get_tribe_spt(state, tribe) as f32
         }
         Stance::Unlock => 0.0,
     };
-    // v6: stranded-progress discipline — GROW only (combat spending under
-    // ARM shouldn't be taxed for unfinished levels).
+    // v9: the completion bonus now pays under ARM too — level 5 is where the
+    // super unit comes from, so progress toward it is armament, not a
+    // distraction. The stranded TAX stays off ARM for the v6 reason: combat
+    // spending shouldn't be penalised for levels it never planned to finish.
+    if matches!(goal.stance, Stance::Grow | Stance::Save | Stance::Arm) {
+        phi += SHAPE_GOAL_COMPLETION * completion_progress(state, player);
+    }
     if matches!(goal.stance, Stance::Grow | Stance::Save) {
         phi -= SHAPE_GOAL_STRANDED * completion_stranded(state, player) as f32;
-        phi += SHAPE_GOAL_COMPLETION * completion_progress(state, player);
+    }
+    // v10: pay for super units in EVERY stance. Only ARM ever outbid the Park's
+    // +250 score, so the level-5 pick inverted the moment the macro was not
+    // arming — and EXP_ELO_030, by producing more level-5 cities under SAVE,
+    // made that worse (supers 89 -> 85 while parks went 23 -> 34).
+    let supers = tribe
+        .units
+        .iter()
+        .filter(|u| {
+            !u.converted && crate::settings::units::get_unit_setting(u.unit_type).is_super
+        })
+        .count() as f32;
+    if supers > 0.0 {
+        let urgency = match goal.stance {
+            Stance::Save => goal
+                .save_target
+                .as_ref()
+                .map_or(0.0, |l| save_progress(state, player, l)),
+            _ => 0.0,
+        };
+        phi += SHAPE_GOAL_SUPER * (1.0 - SHAPE_GOAL_SUPER_ECON_DAMP * urgency) * supers;
     }
     // v7 savings ramp: progress toward the banked batch is itself scored, so
     // holding stars climbs a gradient instead of sitting in a flat valley that
@@ -624,8 +729,8 @@ pub fn goal_potential(
     // to a search whose horizon is one game turn — the ramp is visible at
     // depth 1, so the tree never has to reach the purchase to value it.
     if goal.stance == Stance::Save {
-        if let Some(cost) = goal.save_target.filter(|&c| c > 0) {
-            phi += SHAPE_GOAL_SAVE * (tribe.stars.clamp(0, cost) as f32) / cost as f32;
+        if let Some(lane) = goal.save_target.as_ref().filter(|l| l.cost > 0) {
+            phi += SHAPE_GOAL_SAVE * save_progress(state, player, lane);
         }
     }
     let width = state.settings.size as i32;
@@ -844,9 +949,23 @@ pub fn goal_potential(
                         .map_or(false, |a| setting.adjacent_types.contains(&a.structure_type))
             })
             .count() as i32;
-        let extra = (partners - 1).max(0) as f32;
-        phi += SHAPE_GOAL_YIELD_ADJ * setting.reward_pop.max(0) as f32 * extra;
-        phi += SHAPE_GOAL_YIELD_ADJ_STARS * setting.reward_stars.max(0) as f32 * extra;
+        // Owned tiles only (`partner_ceiling_with` filters on ownership), and
+        // owning a tile implies having explored it — so capacity carries no FOW
+        // leak. It does read the raw resource map, i.e. it can see metal under
+        // a mountain you own before Mining: a tech-visibility read the engine
+        // already makes here deliberately, so the potential does not depend on
+        // whose turn it is.
+        let ceiling = crate::rules::economy::partner_ceiling_with(
+            state,
+            s_idx,
+            &setting.adjacent_types,
+            player,
+        );
+        let extra_real = (partners - 1).max(0) as f32;
+        let extra_cap = (((ceiling - 1).max(0)) as f32 - extra_real).max(0.0);
+        let weight = extra_real + SHAPE_GOAL_YIELD_CAPACITY_W * extra_cap;
+        phi += SHAPE_GOAL_YIELD_ADJ * setting.reward_pop.max(0) as f32 * weight;
+        phi += SHAPE_GOAL_YIELD_ADJ_STARS * setting.reward_stars.max(0) as f32 * weight;
     }
     // Standing-forest option value (v5): clearing pays only when the
     // follow-up (build / level-up funding) outweighs the lost option.
@@ -1197,6 +1316,54 @@ mod shaping_tests {
         assert!((owned - with_aux - SHAPE_GOAL_TECH_FIT).abs() < 1e-3);
     }
 
+    /// v9 (EXP_ELO_029): ARM holds 85% of plies after turn 10, so an ARM
+    /// potential blind to income and city level left the whole mid-game
+    /// without an economy gradient. A giant is bought with population.
+    #[test]
+    fn arm_pays_for_income_and_level_progress() {
+        use crate::ai::oracle_macro::{MacroGoal, Stance};
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        let mut t1 = TribeState::default();
+        t1.cities.push(crate::states::CityState {
+            idx: 60,
+            owner: 1,
+            level: 1,
+            ..Default::default()
+        });
+        state.tribes.insert(1, t1);
+        let arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None };
+
+        // Income is visible under ARM: raising city production raises Phi by
+        // exactly the new per-SPT rate.
+        let spt = |s: &GameState| {
+            crate::functions::get_tribe_spt(s, s.tribes.get(&1).unwrap()) as f32
+        };
+        let before = goal_potential(&state, 1, &arm, None);
+        let spt_before = spt(&state);
+        state.tribes.get_mut(&1).unwrap().cities[0].production += 3;
+        let richer = goal_potential(&state, 1, &arm, None);
+        let spt_gain = spt(&state) - spt_before;
+        assert!(spt_gain > 0.0, "test setup did not move SPT");
+        assert!(
+            (richer - before - SHAPE_GOAL_ARM_SPT * spt_gain).abs() < 1e-3,
+            "ARM ignored income: {before} -> {richer} for +{spt_gain} SPT"
+        );
+
+        // ...and so is progress toward the next city level. The city must be
+        // COMPLETABLE for the term to pay (progress alone clears level+1 here;
+        // a bare CityState has no territory routes to harvest).
+        state.tribes.get_mut(&1).unwrap().cities[0].progress = 2;
+        let progressing = goal_potential(&state, 1, &arm, None);
+        assert!(
+            (progressing - richer - SHAPE_GOAL_COMPLETION * (2.0 / 2.0)).abs() < 1e-3,
+            "ARM ignored level progress: {richer} -> {progressing}"
+        );
+
+        // Army still dominates: one warrior outweighs a point of SPT.
+        assert!(SHAPE_GOAL_ARM_PER_COST * 2.0 > SHAPE_GOAL_ARM_SPT * 1.0);
+    }
+
     #[test]
     fn explorer_reward_pays_by_hidden_fraction() {
         use crate::ai::oracle_macro::{MacroGoal, Stance};
@@ -1411,6 +1578,135 @@ mod shaping_tests {
         );
     }
 
+    /// A Smithery/Forge-shaped lane: `cost = tech_cost + structure_cost`.
+    fn build_test_lane(cost: i32, tech_cost: i32, structure_cost: i32) -> crate::ai::oracle_macro::SaveLane {
+        crate::ai::oracle_macro::SaveLane {
+            cost,
+            tech_cost,
+            structure_cost,
+            structure_unit_cost: structure_cost,
+            tech: crate::types::TechnologyType::Smithery,
+            structure: crate::types::StructureType::Forge,
+        }
+    }
+
+    /// v10 invariant: buying the lane tech must never LOWER Φ. The old ramp
+    /// read the star balance alone, so the purchase the plan existed for cost
+    /// it the price of the tech.
+    #[test]
+    fn buying_the_lane_tech_does_not_lower_the_savings_ramp() {
+        use crate::ai::oracle_macro::{MacroGoal, Stance};
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        let mut t1 = TribeState::default();
+        t1.id = 1;
+        t1.stars = 16;
+        state.tribes.insert(1, t1);
+        let goal = MacroGoal {
+            orders: vec![],
+            stance: Stance::Save,
+            save_target: Some(build_test_lane(21, 16, 5)),
+        };
+        let before = goal_potential(&state, 1, &goal, None);
+
+        // Spend 16 on the tech: stars 16 -> 0, but the tech is now owned.
+        let t = state.tribes.get_mut(&1).unwrap();
+        t.stars = 0;
+        t.tech_vanilla.push(crate::states::TechnologyState {
+            tech_type: crate::types::TechnologyType::Smithery,
+            discovered: true,
+            discovered_turn: 1,
+        });
+        let after = goal_potential(&state, 1, &goal, None);
+        assert!(
+            after >= before - 1e-3,
+            "buying the lane tech dropped Phi: {before} -> {after}"
+        );
+    }
+
+    /// v10: the level-5 Park-vs-Giant pick, priced end to end (raw score AND
+    /// Phi) under every stance. These ratios are coupled to `SHAPE_GOAL_SPT`
+    /// and `SHAPE_GOAL_ARM_PER_COST`; if someone retunes those, this is the
+    /// test that catches the pick silently flipping back to Park.
+    #[test]
+    fn level_five_reward_pick_favours_the_giant_except_on_a_nearly_done_plan() {
+        use crate::ai::oracle_macro::{MacroGoal, Stance};
+        use crate::types::UnitType;
+
+        // Score side, from functions.rs: Park is +250, a Giant is 5 x cost 10.
+        const PARK_SCORE: f32 = 250.0;
+        const GIANT_SCORE: f32 = 5.0 * 10.0;
+
+        let mk = |stance, save: Option<crate::ai::oracle_macro::SaveLane>| MacroGoal {
+            orders: vec![],
+            stance,
+            save_target: save,
+        };
+        let base_state = || {
+            let mut s = GameState::default();
+            s.settings.size = 11;
+            let mut t = TribeState::default();
+            t.id = 1;
+            t.stars = 0;
+            s.tribes.insert(1, t);
+            s
+        };
+        // Park: +1 production on the city that just levelled.
+        let with_park = || {
+            let mut s = base_state();
+            s.tribes.get_mut(&1).unwrap().cities.push(crate::states::CityState {
+                idx: 60,
+                level: 5,
+                production: 1,
+                ..Default::default()
+            });
+            s
+        };
+        let with_giant = || {
+            let mut s = base_state();
+            s.tribes.get_mut(&1).unwrap().units.push(unit_at(60, UnitType::Giant));
+            s
+        };
+        let value = |s: &GameState, g: &MacroGoal, score: f32| {
+            score + goal_potential(s, 1, g, None)
+        };
+
+        for (label, stance, save, giant_should_win) in [
+            ("ARM", Stance::Arm, None, true),
+            ("GROW", Stance::Grow, None, true),
+            (
+                "SAVE, plan barely started",
+                Stance::Save,
+                Some(build_test_lane(20, 16, 4)),
+                true,
+            ),
+        ] {
+            let g = mk(stance, save);
+            let park = value(&with_park(), &g, PARK_SCORE);
+            let giant = value(&with_giant(), &g, GIANT_SCORE);
+            assert_eq!(
+                giant > park,
+                giant_should_win,
+                "{label}: park {park}, giant {giant}"
+            );
+        }
+
+        // A SAVE plan at full progress SHOULD prefer the Park: +1 production
+        // finishes the batch, and that is worth more than the unit right now.
+        let lane = build_test_lane(20, 16, 4);
+        let g = mk(Stance::Save, Some(lane.clone()));
+        let mut park_full = with_park();
+        park_full.tribes.get_mut(&1).unwrap().stars = lane.cost;
+        let mut giant_full = with_giant();
+        giant_full.tribes.get_mut(&1).unwrap().stars = lane.cost;
+        let park = value(&park_full, &g, PARK_SCORE);
+        let giant = value(&giant_full, &g, GIANT_SCORE);
+        assert!(
+            park > giant,
+            "a nearly-complete SAVE plan should take the Park: park {park}, giant {giant}"
+        );
+    }
+
     /// v7: holding stars must climb a gradient. Before this, banked stars
     /// appeared nowhere in Phi, so spending them on anything scored strictly
     /// beat holding and the measured policy was hand-to-mouth.
@@ -1424,8 +1720,11 @@ mod shaping_tests {
         t1.stars = 0;
         state.tribes.insert(1, t1);
         let grow = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None };
-        let saving =
-            MacroGoal { orders: vec![], stance: Stance::Save, save_target: Some(20) };
+        let saving = MacroGoal {
+            orders: vec![],
+            stance: Stance::Save,
+            save_target: Some(build_test_lane(20, 16, 4)),
+        };
 
         // Empty bank: SAVE must equal GROW — the stance itself costs nothing.
         let base = goal_potential(&state, 1, &grow, None);

@@ -141,6 +141,14 @@ struct Args {
     #[arg(long)]
     dump_turn_states: Option<String>,
 
+    /// Capture the full root decision (priors, top-k cut, visits, Q) on every
+    /// model ply where this tech is unowned, unlocked by its prerequisite, and
+    /// affordable — i.e. the plies where the purchase is a live choice.
+    /// Requires --dump-stats-dir. Arming invalidates the reused tree, so a
+    /// traced game diverges from an untraced one at the first matching ply.
+    #[arg(long)]
+    trace_tech: Option<String>,
+
     /// Tribe for both seats. Spawn terrain is tribe-specific -- Bardur forest,
     /// XinXi mountain/metal, Kickoo water/fruit -- and a hub's ceiling is a
     /// property of the terrain around it, so any statement about hub quality is
@@ -155,8 +163,9 @@ struct Args {
     macro_commit: bool,
 
     /// EXP_ELO_026 oracle-macro steer for config 1 (gumbel backend only):
-    /// while a commitment is active, drop root Research moves that would
-    /// leave fewer than STAR_GATE_RESERVE stars after purchase.
+    /// while a commitment is active, drop every root Research move. v9 removed
+    /// the old 5-star reserve escape, so this arm is now a hard block rather
+    /// than the affordability test the original experiment measured.
     #[arg(long, default_value_t = false)]
     macro_star_gate: bool,
 
@@ -367,6 +376,7 @@ fn play_match(
     goal_script: bool,
     goal_w_tree: f32,
     args_tribe: &str,
+    trace_tech: Option<polyfish::types::TechnologyType>,
 ) -> MatchResult {
     let gen_settings = MapGenSettings {
         size: MapSize::Tiny,
@@ -441,6 +451,15 @@ fn play_match(
     let mut archetype_state = polyfish::ai::oracle_macro::ArchetypeState::default();
     // v7: standing macro commitment for the model seat (mirrors self_play).
     let mut stance_commit = polyfish::ai::oracle_macro::StanceCommit::default();
+    // One row per model ply: the goal the script set, and the move that
+    // followed it. Separates "the plan was dropped" from "the plan was held
+    // and ignored" -- the flip counters alone cannot tell those apart.
+    /// Root traces are ~40 candidates plus every halving round each; cap them
+    /// so one game's dump stays readable.
+    const TRACE_CAP: usize = 12;
+    let mut tech_traces: Vec<serde_json::Value> = Vec::new();
+    let mut goal_trace: Vec<serde_json::Value> = Vec::new();
+    let mut pending_goal: Option<serde_json::Value> = None;
 
     while !polyfish::functions::is_game_over(&game.state) && moves < 500 {
         if dump_stats_dir.is_some() && game.state.settings.turn != last_sampled_turn {
@@ -486,6 +505,35 @@ fn play_match(
                 tier3_bought,
                 Some(&archetype_state),
             );
+            if dump_stats_dir.is_some() {
+                // The uncommitted goal too: `update_goal` returns the stance
+                // after hysteresis, so a script that wants to switch and a
+                // script that is content look identical in the result alone.
+                let fresh = polyfish::ai::oracle_macro::scripted_goal(
+                    &game.state,
+                    model_player,
+                    tier3_bought,
+                );
+                let tribe = game.state.tribes.get(&model_player);
+                pending_goal = Some(serde_json::json!({
+                    "turn": game.state.settings.turn,
+                    "stance": format!("{:?}", goal.stance),
+                    "stance_fresh": format!("{:?}", fresh.stance),
+                    "save_target": goal.save_target.as_ref().map(|l| l.cost),
+                    "save_lane": goal.save_target.as_ref()
+                        .map(|l| format!("{:?}+{:?}", l.tech, l.structure)),
+                    "save_target_fresh": fresh.save_target.as_ref().map(|l| l.cost),
+                    "orders": goal.orders.iter()
+                        .map(|(k, i)| serde_json::json!([format!("{k:?}"), i]))
+                        .collect::<Vec<_>>(),
+                    "star_gate": gate,
+                    "stars": tribe.map(|t| t.stars),
+                    "spt": tribe.map(|t| polyfish::functions::get_tribe_spt(&game.state, t)),
+                    "cities": tribe.map(|t| t.cities.len()),
+                    "techs_bought": techs_bought,
+                    "tier3_bought": tier3_bought,
+                }));
+            }
             let model_agent = if swap { &mut agent_p2 } else { &mut agent_p1 };
             if let SearchAgent::Gumbel(a) = model_agent {
                 a.star_gate = gate;
@@ -525,6 +573,42 @@ fn play_match(
             }
         }
 
+        // Arm the root trace only on plies where `trace_tech` is a live
+        // choice: prerequisite owned, tech not yet bought, cost affordable.
+        let mut armed_ctx: Option<serde_json::Value> = None;
+        if let Some(tech) = trace_tech {
+            if current_pid == model_player && tech_traces.len() < TRACE_CAP {
+                if let Some(t) = game.state.tribes.get(&model_player) {
+                    use polyfish::settings::technology as tech_mod;
+                    let owned = tech_mod::has_technology(&t.tech_vanilla, tech);
+                    let prereq = tech_mod::get_technology_setting(tech)
+                        .requires
+                        .map_or(true, |r| tech_mod::has_technology(&t.tech_vanilla, r));
+                    let cost = tech_mod::get_tech_cost(
+                        t.cities.len() as i32,
+                        tech_mod::tech_tier(tech),
+                        tech_mod::has_technology(
+                            &t.tech_vanilla,
+                            polyfish::types::TechnologyType::Philosophy,
+                        ),
+                    );
+                    if !owned && prereq && t.stars >= cost {
+                        armed_ctx = Some(serde_json::json!({
+                            "turn": game.state.settings.turn,
+                            "stars": t.stars,
+                            "cost": cost,
+                            "cities": t.cities.len(),
+                            "spt": polyfish::functions::get_tribe_spt(&game.state, t),
+                        }));
+                        let a = if swap { &mut agent_p2 } else { &mut agent_p1 };
+                        if let SearchAgent::Gumbel(g) = a {
+                            g.arm_trace();
+                        }
+                    }
+                }
+            }
+        }
+
         let t0 = Instant::now();
         // Search on a clone: MCTS execute/undo must never touch the scored
         // state (Brain::think_decomposed clones for the same reason).
@@ -535,6 +619,24 @@ fn play_match(
         };
         let dt = t0.elapsed().as_nanos() as u64;
 
+        if let Some(mut ctx) = armed_ctx {
+            let a = if swap { &mut agent_p2 } else { &mut agent_p1 };
+            if let SearchAgent::Gumbel(g) = a {
+                if let Some(tr) = g.take_trace() {
+                    ctx["stance"] = pending_goal
+                        .as_ref()
+                        .and_then(|p| p.get("stance").cloned())
+                        .unwrap_or(serde_json::Value::Null);
+                    ctx["save_target"] = pending_goal
+                        .as_ref()
+                        .and_then(|p| p.get("save_target").cloned())
+                        .unwrap_or(serde_json::Value::Null);
+                    ctx["trace"] = serde_json::to_value(&tr).unwrap_or_default();
+                    tech_traces.push(ctx);
+                }
+            }
+        }
+
         let cfg = if current_pid == 1 { p1_config } else { p2_config };
         if cfg == 1 {
             ns_config1 += dt;
@@ -542,6 +644,31 @@ fn play_match(
         } else {
             ns_config2 += dt;
             moves_config2 += 1;
+        }
+
+        if let Some(mut row) = pending_goal.take() {
+            let (kind, desc) = match &best_move {
+                Some(m) => (
+                    format!("{:?}", m.move_type()),
+                    m.describe(&game.state),
+                ),
+                None => ("None".to_string(), String::new()),
+            };
+            row["move_type"] = serde_json::json!(kind);
+            row["move"] = serde_json::json!(desc);
+            row["tech"] = match best_move.as_ref().and_then(|m| m.tech_type().ok()) {
+                Some(t) => serde_json::json!(format!("{t:?}")),
+                None => serde_json::Value::Null,
+            };
+            row["structure"] = match best_move.as_ref().and_then(|m| m.structure_type().ok()) {
+                Some(s) => serde_json::json!(format!("{s:?}")),
+                None => serde_json::Value::Null,
+            };
+            row["unit"] = match best_move.as_ref().and_then(|m| m.unit_type().ok()) {
+                Some(u) => serde_json::json!(format!("{u:?}")),
+                None => serde_json::Value::Null,
+            };
+            goal_trace.push(row);
         }
 
         if let Some(m) = best_move {
@@ -756,6 +883,11 @@ fn play_match(
             "model_techs": model_techs,
             "model_city_levels": model_city_levels,
             "placements": placements,
+            "goal_trace": goal_trace,
+            "tech_traces": tech_traces,
+            "stance_flips": stance_commit.stance_flips,
+            "order_flips": stance_commit.order_flips,
+            "goal_turns_seen": stance_commit.turns_seen,
         });
         // Drop the whole final board next to the summary. The server loads a
         // bare GameState, so the partner count around a hub can be counted off
@@ -835,10 +967,8 @@ fn main() -> anyhow::Result<()> {
     }
     if args.macro_commit || args.macro_star_gate {
         println!(
-            "ORACLE MACRO (EXP_ELO_026): commit={} star_gate={} (reserve={})",
-            args.macro_commit,
-            args.macro_star_gate,
-            polyfish::ai::oracle_macro::STAR_GATE_RESERVE,
+            "ORACLE MACRO (EXP_ELO_026): commit={} star_gate={} (v9: hard block, no reserve)",
+            args.macro_commit, args.macro_star_gate,
         );
     }
 
@@ -956,6 +1086,25 @@ fn main() -> anyhow::Result<()> {
     }
     let dump_stats_dir = args.dump_stats_dir.as_deref();
 
+    let trace_tech: Option<polyfish::types::TechnologyType> = match &args.trace_tech {
+        None => None,
+        Some(name) => {
+            use strum::IntoEnumIterator;
+            let found = polyfish::types::TechnologyType::iter()
+                .find(|t| format!("{t:?}").eq_ignore_ascii_case(name));
+            match found {
+                Some(t) => {
+                    println!("TRACE TECH: capturing root decisions where {t:?} is affordable and unowned");
+                    Some(t)
+                }
+                None => {
+                    eprintln!("unknown --trace-tech '{name}'");
+                    std::process::exit(2);
+                }
+            }
+        }
+    };
+
     if let Some(dir) = &args.dump_turn_states {
         std::fs::create_dir_all(dir)?;
     }
@@ -1009,7 +1158,7 @@ fn main() -> anyhow::Result<()> {
                             eval1, eval2, mcts1, mcts2, backend1, backend2, args.leaf_batch,
                             seed, swap, args.max_turns, args.gamemode, dump_stats_dir,
                             idx, dump_turn_states, args.macro_commit, args.macro_star_gate,
-                            args.goal_script, args.goal_w_tree, tribe_name,
+                            args.goal_script, args.goal_w_tree, tribe_name, trace_tech,
                         )
                     }));
 
