@@ -2112,3 +2112,520 @@ Placement is the dominant term, not a rounding error. In star terms this is the 
 - **League/arena vs pre-fix checkpoints**: old nets trained on starved maps now play on rich ones — historical win rates are not comparable, and league results near the boundary are biased in an unknown direction.
 - **Tech/economy behavior**: Mining/Smithery/Forge lanes go from ~7×-underpriced to fairly priced; expect research and hub-lane distributions to shift (more Mines, Forge viable), and eco_plan goal frequencies to move.
 - **Any resumed run mixes distributions mid-run.** Start the next training campaign as a NEW run, not `--resume`, and treat pre/post-fix game archives as separate populations.
+
+## EXP_ELO_029: ARM is economy-blind — pop growth under ARM + dual-class tech exemption + remove the star reserve
+
+**Status: PRE-REGISTERED, not yet run (Aug 11 2026). Code landed; the A/B has not.**
+
+### What prompted it
+
+Verdi played a Xin-xi game against the AI and reached **3 giants and +14 SPT by turn 10, with two level-2 Forges**. Measured against Greedy on the same tribe (64 games, mcts=256, gumbel k=16, goal script on, base-seed 1786400000):
+
+| | by t10 | by t20 |
+|---|---|---|
+| giants obtained (mean) | **0.06** | 1.61 |
+| games with 0 giants | **60 / 64** | 16 / 64 |
+| games with ≥3 | **0 / 64** | 16 / 64 |
+
+The human's turn 10 is outside the model's turn-10 distribution entirely. Turning the goal script OFF is much worse (0.38 giants by t20, 23.4% win vs 54.7%), so the macro is load-bearing — the question was *what* it is steering toward.
+
+### Diagnosis (new instrument)
+
+`arena.rs` now writes a **goal trace**: one row per model ply with the committed stance, the stance the script wanted that ply, the SAVE target, the star gate, stars/SPT/cities, and the move actually chosen. Also surfaces `StanceCommit`'s `stance_flips`/`order_flips`, which EXP_ELO_028 registered as first-class metrics and never read.
+
+Across 64 vs-Greedy games, 14,767 model plies:
+
+- **Stance is ARM 70.0% of plies** (GROW 24.4%, SAVE 5.7%), and the share is monotone in turn: 0% at t0, 48% at t8, **82% at t10, 91% at t14, 92% at t20**. Cause splits evenly — 5,243 plies from a real Defend order, 5,091 from the `prepare` branch.
+- **The plan is not being abandoned.** stance flips 0.12/turn, order flips 0.53/turn, hysteresis overriding the script on 16% of plies. It is held and followed. *Verdi's "decide at t7, abandon by t9" hypothesis is NOT supported.*
+- **ARM's potential had no economy term at all** (`reward.rs`): `SHAPE_GOAL_ARM_PER_COST × army`, and the stranded/completion discipline was `Grow | Save` only. So ~85% of every ply after turn 10 carried **zero economy gradient**.
+- **The star reserve was a constant, not a decision.** EndTurn stars: mean 1.37, median 1, ≤2 on 84% of turns. A gated tech needed `stars − cost ≥ 5`; Smithery would have cleared it on **12 of 2,584** gated GROW plies (0.5%).
+- **The stance classes gated the hub lanes backwards.** GROW gated `combat_units non-empty`; ARM gated `is_eco && no combat unit`. Smithery (Swordsman + Forge) and Mathematics (Catapult + Sawmill) are dual, so each was gated by exactly one stance; Construction and Mining are pure-eco, gated by the other. Trace confirms: Smithery researched **15× under ARM, 1× under GROW**; Mining **56× under GROW, 2× under ARM**.
+
+### Changes
+
+1. **`reward.rs`** — ARM gains `SHAPE_GOAL_ARM_SPT × get_tribe_spt` (new const, **75.0** = half `SHAPE_GOAL_SPT`), and `SHAPE_GOAL_COMPLETION × completion_progress` now pays under ARM as well as GROW/SAVE. The stranded **tax** stays off ARM (v6 reason unchanged: combat spending shouldn't be penalised for levels it never planned to finish). Rationale (Verdi): giants come from level-5 cities and a super unit is a military asset, so pop growth *is* armament.
+2. **`oracle_macro::passes_star_gate`** — a stance now gates only the tech that is **purely** the other class: GROW/SAVE gate `arms && !grows`, ARM gates `grows && !arms`. Dual-class tech is never dropped. SAVE moves from "gates everything" to GROW's rule — it is an economy stance in `goal_potential`, and gating all research meant a batch whose cost *includes an unowned tech chain* could not buy its own tech.
+3. **`STAR_GATE_RESERVE` deleted.** A gated tech is now dropped outright. This makes the legacy stance-less arm (`--macro-star-gate`, the EXP_ELO_026 instrument) a hard block rather than the affordability test that experiment measured — noted in the flag's doc.
+
+### Conflict with EXP_ELO_026, and why it is narrow
+
+EXP_ELO_026 measured the reserve rule as causally worth **+7.6pp reach** (28%→81% in flipped games). That instrument is the **stance-less** path, which still gates every tech and is now merely stricter. The *live* goal-script GROW gate never blocked eco tech at all — which is where the diverted stars actually went — and the reserve opened on 0.5% of gated plies. So the behavioural payload of this change is item 2 (dual-class exemption), not item 3.
+
+### Predictions (falsifiable, vs Greedy, Xin-xi, n=64, base-seed 1786400000, mcts=256, k=16)
+
+| metric | before | predicted after | falsified if |
+|---|---|---|---|
+| Smithery median turn | 12 | **≤ 8** | ≥ 11 |
+| games reaching Smithery | 25 / 64 | **≥ 38 / 64** | < 30 |
+| giants obtained by t20 | 1.61 | **≥ 2.1** | ≤ 1.7 |
+| giants obtained by t10 | 0.06 | ≥ 0.3 | ≤ 0.1 |
+| SPT @ t20 | 14.96 | ≥ 16.5 | ≤ 15.0 |
+| win rate vs Greedy | 54.7% | ≥ 54.7% − noise | < 45% |
+
+**Read Smithery timing and giants@t20 first; win% at n=64 is a ±12pp ruler and cannot adjudicate this on its own.** Both new weights (`SHAPE_GOAL_ARM_SPT = 75`, completion under ARM) are **first fits** — every first fit in `reward.rs` has overshot ~2×, so dial against the measured dq median per the q-gap method before trusting the level. The frozen seed-770425 gauge is void post-MAPGEN_001; base-seed 1786400000 is the replacement pair.
+
+**Risk to watch:** ARM's SPT term could simply buy back GROW behaviour and slow the army, losing the races EXP_ELO_026 showed convert at ~75%. The tell is cities@t20 and win% falling together while SPT rises.
+
+**Tests:** 147 lib + 33 integration green. New guards — `dual_class_tech_is_never_stance_gated` (Smithery and Mathematics pass GROW/ARM/SAVE at zero stars) and `legacy_star_gate_blocks_research_at_any_star_count` (being rich no longer lifts the stance-less gate).
+
+### EXP_ELO_029 — ACTUAL (Aug 12 2026). VERDICT: **falsified. No measurable effect; Smithery got slightly LATER.**
+
+Ran the after-arm byte-identically to two pre-change runs (Xin-xi vs Greedy, n=64, base-seed 1786400000, mcts=256, gumbel k=16, goal script on). Two independent BEFORE runs were available, which is what makes this readable.
+
+| | BEFORE a | BEFORE b | AFTER v9 | predicted | verdict |
+|---|---|---|---|---|---|
+| win vs Greedy | 54.7% | 48.4% | 48.4% | ≥54.7%−noise | flat (not falsified) |
+| Smithery: games | 25/64 | 20/64 | 23/64 | ≥38/64 | **FALSIFIED** |
+| Smithery: median turn | 12 | 12 | **14** | ≤8 | **FALSIFIED** |
+| giants by t10 | 0.06 | 0.08 | 0.06 | ≥0.3 | **FALSIFIED** |
+| giants by t20 | 1.61 | 1.20 | 1.25 | ≥2.1 | **FALSIFIED** |
+| SPT @ t20 | 15.03 | 13.45 | 13.98 | ≥16.5 | **FALSIFIED** |
+| cities @ t20 | 3.23 | 3.03 | 3.22 | — | flat (risk did not fire) |
+| Forges built | 49 | 20 | 35 | — | inside the before-spread |
+| Mines built | 344 | 247 | 280 | — | — |
+
+**The two BEFORE runs bracket the AFTER run on every single metric.** Measured same-config repeat floor: **6.2pp** on win rate, 0.41 on giants@t20, 1.58 on SPT@t20, and **29 on Forges built** (49 vs 20 at an identical config — that metric is near-useless at n=64).
+
+**The change is NOT inert — it reshuffles.** All 64 paired games diverged from BEFORE b (0/64 identical outcomes; scores swing ±2,000 either way). Play changes substantially per game; the means do not move.
+
+**Invariant check passed:** stance mix ARM 70.0% → 69.7%, GROW 24.4% → 23.9%, SAVE 5.7% → 6.4%. `scripted_goal` was untouched, and the ARM share is confirmed independent of the potential.
+
+**Why it failed — two mechanisms, both diagnosable in hindsight:**
+1. **The dual-class exemption had almost no surface to act on.** Smithery was *already* ungated under ARM, and ARM is 70% of plies (85–92% after t10). The exemption only added freedom under GROW — 24% overall, 1–3% after t14 — which is precisely not the window where a tier-3 tech gets bought. The measured payload was near zero, exactly where the pre-registration guessed the payload was.
+2. **An income term is the wrong shape for a two-step plan, and may cut against it.** SPT rises *immediately* from one more Mine (5★ → 2 pop → level → income). Smithery pays nothing until a *subsequent* 5★ Forge is built. Paying Phi for income per se strengthens the one-step purchase over the two-step plan. Signature matches: Mines up (247 → 280), Smithery *later* (t12 → t14).
+
+**Kept or reverted:** code left in place pending Verdi's call. Nothing measured a cost; nothing measured a benefit.
+
+**What this rules in.** The only mechanism that names a multi-step purchase is `Stance::Save`, and it is 5.7% of plies firing at median turn 14 because `save_batch_cost` demands `SAVE_MIN_PARTNERS = 2` partners *already standing* next to a placeable tile. On the Forge lane that means two Mines must exist before the plan to buy Smithery can even form. The next lever is that trigger — or a potential that prices the *unlocked* Forge rather than current income — not more weight on ARM.
+
+**Method note for the next A/B: n=64 with two before-runs 6.2pp apart cannot adjudicate an effect of this size.** Either raise n substantially, or make the arms paired-deterministic, before reading another economy A/B at this budget. Reporting a single 64-game arm against a single baseline here would have produced a confident wrong answer in either direction.
+
+---
+
+## EXP_ELO_030 — the macro names a lane; make the PRIOR and the RAMP agree with it
+
+**Registered 2026-08-12, before running.** Control arm includes the EXP_ELO_029
+ARM terms (still un-reverted), so attribution is v10-on-top-of-029.
+
+### Diagnosis this is built on (measured, not assumed)
+
+`SMTRACE/`, 519 root decisions where Smithery was affordable + unowned, 52 games,
+`--trace-tech Smithery` (new arena flag). `prior_heuristic_weight = 0.0`, so the
+root prior IS the net's policy.
+
+| stage | measured |
+|---|---|
+| policy prior on Research(Smithery) | median **3e-6**, gap to chosen **−11.3 nats** |
+| enters Gumbel top-k (k=16, ~40 cands) | 183/519 (**35%**) |
+| visits / max_visits when in the cut | median **0.10**; survives to the final halving round 18/183 |
+| tied at max visits → *eligible* under argmax-visits | **18/519 (3%)** |
+| bought | 4/519 |
+
+`edge_reward` already favours the purchase **85×** (+0.346 vs +0.004) and
+Q(Smithery) − Q(chosen) is only −0.17 median — so reward is NOT the binding
+constraint. Visits are. Reward reaches selection only through σ(Q), which is
+worth ~6 effective logits against an 11-nat prior deficit.
+
+Root cause of the missing signal: `MacroGoal.save_target` was `Option<i32>`.
+`save_batch_cost` identified the lane and discarded everything but the price, so
+outside its own tests `save_target` had exactly two consumers — where it is set,
+and the ramp in `reward.rs:642`. Not in `features.rs`, not in any gate, not in
+the prior.
+
+### Hypothesis
+
+The macro already names the right lane (it did so in 11/27 ready-but-failed
+games, held for runs up to 73 plies). The failure is that nothing downstream can
+act on the name. Carrying the lane identity and (a) reserving prior mass for
+plan-advancing moves and (b) making the ramp measure plan progress rather than
+star balance should move the funnel at the Smithery step.
+
+### Changes
+
+1. `SaveLane { cost, tech_cost, structure_cost, structure_unit_cost, tech, structure }`;
+   `save_batch_cost` → `save_batch_plan`; `MacroGoal.save_target: Option<SaveLane>`.
+2. `advances_save_plan` — matches Build(lane.structure) and **any undiscovered
+   tech on the `requires` chain** to `lane.tech` (Market sits behind Roads behind
+   Riding; matching only the last step would fix Forge and leave the rest stuck).
+3. `blend_goal_prior` — mixes `GOAL_PRIOR_W = 0.15` onto plan-advancing moves,
+   applied after the `raw_logits` trace snapshot and **before** `build_in_cut`, on
+   both the fresh-root and reused-root paths (root-only fixups are inert on 7 of
+   8 plies — the v8 gate lesson).
+4. `reward::save_progress` — ramp = `(stars + owned tech_cost + built×unit_cost)/cost`
+   instead of `stars/cost`. Guard test `buying_the_lane_tech_does_not_lower_the_savings_ramp`.
+
+### Predictions — stage-level, per the 029 method note
+
+Controls: **V9** for the funnel (untraced, same seeds, post-029), **SMTRACE** for
+the stage table (traced). n=64 win rate cannot adjudicate this; it is a guardrail
+only.
+
+| metric | control | predicted | falsified if |
+|---|---|---|---|
+| prior on Research(lane tech) | 3e-6 | ≥ 0.10 | < 0.02 |
+| enters top-k cut | 35% | ≥ 95% | < 70% |
+| eligible (tied at max visits) | 3% | ≥ 25% | < 10% |
+| Smithery researched | 16/64 (V9) | ≥ 30/64 | ≤ 22/64 |
+| Forges built | 16/64 games (V9) | ≥ 26/64 | ≤ 19/64 |
+| giants by t20 | 1.25 (V9) | ≥ 1.8 | ≤ 1.4 |
+| win vs Greedy (GUARDRAIL) | 48.4% | ≥ 40% | < 35% = harmful, revert |
+
+Stage 1–3 moving while the funnel does NOT move would be the interesting
+negative: it would mean the purchase is genuinely bad on this board and the net
+was right, which sends the next lever back to the macro's lane choice.
+
+### ACTUAL (2026-08-12) — mechanism confirmed, intermediate objective doubled, terminal objective did not move
+
+Arms: **V10** (untraced, funnel, vs V9 control) and **SMTRACE10** (traced stage
+table, vs SMTRACE control). Same seeds/budget as every prior run in this series.
+
+#### The mechanism does exactly what it was built to do — where it fires
+
+Splitting the traced plies by whether a live SAVE lane existed (the only
+condition under which `blend_goal_prior` can act):
+
+| | plies | prior on Research(Smithery) | enters top-k |
+|---|---|---|---|
+| SMTRACE, live SAVE lane | 65 | 0.000000 | 25% |
+| **SMTRACE10, live SAVE lane** | 22 | **0.150000** | **86%** |
+| SMTRACE, no lane | 454 | 0.000005 | 37% |
+| SMTRACE10, no lane | 366 | 0.000023 | 56% |
+
+`0.150000` is exactly `GOAL_PRIOR_W`. The blend is correct and precise.
+
+**But it only reaches 22 of 388 affordable plies (5.7%)** — SAVE is rare, and the
+boost is conditioned on it. That is why the *aggregate* stage numbers fall far
+short of the pre-registered targets, which were written against the aggregate.
+
+#### Predictions
+
+| metric | control | predicted | actual | verdict |
+|---|---|---|---|---|
+| prior (aggregate) | 3e-6 | ≥0.10 | 2.8e-5 | **FALSIFIED** (aggregate) |
+| prior (live lane only) | 0.000000 | — | **0.150** | mechanism confirmed |
+| cut entry (aggregate) | 35% | ≥95% | 58% | **FALSIFIED** (86% on live-lane plies) |
+| eligible at max visits | 3% | ≥25% | 11% | **FALSIFIED** |
+| **Smithery researched** | 16/64 | ≥30/64 | **33/64** | **CONFIRMED** |
+| **Forge games / built** | 16/64, 35 | ≥26/64 | **28/64, 51** | **CONFIRMED** |
+| giants by t20 | 1.25 | ≥1.8 | 1.20 | **FALSIFIED** |
+| win vs Greedy (guardrail) | 48.4% | ≥40% | 54.7% | passed |
+
+#### Outcomes, V9 → V10
+
+```
+win vs Greedy    48.4% -> 54.7%     giants t20      1.25 -> 1.20
+SPT @ t20        13.98 -> 14.38     giants FINAL    1.33 -> 1.28
+cities @ t20      3.22 -> 3.12      >=1 giant      47/64 -> 39/64
+level-5+ cities   1.06 -> 1.28      >=3 giants      8/64 -> 11/64
+Forges built         35 -> 51       avg score       4404 -> 4588
+Mines built         280 -> 291      Parks           40 -> 38
+city levels >=5      68 -> 82
+```
+
+Smithery +17 games on paired seeds is far outside any plausible repeat floor and
+is established. The giant regression (−8 games) is ~1–2σ at n=64 — **suggestive,
+not established**.
+
+#### Against the measured repeat floors — ONE established effect
+
+Applying the same-config floors measured in 029 (BEFORE a vs BEFORE b):
+
+| metric | V9 -> V10 | 029 repeat floor | established? |
+|---|---|---|---|
+| **Smithery researched** | **16 -> 33 games (+17)** | **5** | **YES** |
+| Forge games | 16 -> 28 (+12) | no direct floor; implied by Smithery x 0.85 conv | probably |
+| Forges built | 35 -> 51 (+16) | 29 | no |
+| win vs Greedy | +6.3pp | 6.2pp | at the floor |
+| SPT @ t20 | +0.40 | 1.58 | no |
+| avg score | +184 | 352 | no |
+| level-5+ cities/game | +0.22 | 0.53 | no |
+| giants by t20 | -0.05 | 0.41 | no |
+| >=1 giant | 47 -> 39 games | ~1-2 sigma at n=64 | no |
+
+**Exactly one effect clears its floor: the purchase roughly doubled.** Every
+other number — the economy gains AND the giant dip — sits inside the noise this
+harness resolves at n=64. An earlier draft of this entry claimed "economy
+improved across the board"; that repeated the 029 mistake and is retracted.
+
+#### Where the giants went — cohort re-composition, not a lane failure
+
+| | V9 | V10 |
+|---|---|---|
+| level>=5 reward events (sum of level-4) | 103 | 123 |
+| parks | 40 (39% of events) | 38 (31% of events) |
+| Forge games / their giants | 16 / 43 (2.69 ea) | 28 / 55 (1.96 ea) |
+| non-Forge games / their giants | 48 / 42 (0.88 ea) | 36 / 27 (0.75 ea) |
+| ALL giants | 85 | 82 |
+
+Reward events rose 19% while parks stayed flat, so the level-5 pick shifted
+*toward* giants (park share 39% -> 31%). The Forge cohort grew by 12 games and
+gained 12 giants — **a marginal yield of ~1.0 giants per added Forge game against
+the ~0.88 those same games averaged without one.** The marginal Forge is worth
+~0.1 giants. Not that the lane is harmful, and not that ambient giants were
+destroyed: forcing the lane into the games the net skipped buys almost nothing.
+
+The falling within-Forge mean (2.69 -> 1.96) is that same composition effect,
+not a degradation of the original 16 games.
+
+Two explanations are dead: **not Park displacement** (parks flat, share falling)
+and **not timing** (giants flat at every checkpoint: t10 0.06/0.06, t15 0.56/0.50,
+t20 1.25/1.20, final 1.33/1.28).
+
+#### Identified limitation: the boost switches off at plan maturity
+
+`scripted_goal` filters the plan with `tribe.stars < lane.cost`, so the moment
+the FULL batch (tech + structure) becomes affordable, `save_target` goes `None`,
+the stance leaves SAVE, and `blend_goal_prior` stops firing — at exactly the ply
+the plan matures. A plausible contributor to eligibility stalling at 11%, and a
+design gap rather than a tuning one. Supporting observation: traced plies with a
+live SAVE lane fell 65 -> 22, consistent with plans completing and states exiting
+the condition.
+
+#### Training-side note
+
+`blend_goal_prior` is library code, so the next `run_training_loop.sh` restart
+picks it up and boosted lane moves will enter the **policy targets** — the
+ownership path (prior -> visits -> targets -> net internalizes). Scripted arena
+play cannot measure that; it is a real argument for keeping the change even with
+giants flat here.
+
+#### Verdict
+
+The diagnosis was correct and the fix works exactly as designed: an 11-nat prior
+deficit was the binding constraint on the purchase, and closing it doubled
+Smithery. That is the one thing this run establishes.
+
+It did NOT establish that the lane produces giants. The marginal Forge game
+yields ~0.1 giants over its counterfactual, and every economy metric is inside
+the repeat floor. Combined with the trace — better-estimated Q likes the purchase
+*less* (Q(Smithery) > Q(chosen) fell 28% -> 17%; NN value after the purchase
+-0.289 vs root, was -0.119) — the live reading is that **the net's reluctance was
+partly informed**: it skipped the lane in games where it does not pay, and could
+not buy it in games where it does.
+
+The next question is therefore no longer about priors. It is whether
+`save_batch_plan` picks the right lane for the right board, and whether 30 turns
+is long enough for Forge -> pop -> level 5 -> giant to repay 21 stars.
+
+**Kept or reverted: left in place pending Verdi's call.** One established benefit
+(the purchase doubled), no established cost, guardrail passed, plus a
+training-side argument arena cannot measure.
+
+## MAPGEN_002 — is the current build's capital starting-resource mechanic hotter than top-up-2? (pre-registered Aug 12 2026, AWAITING DATA)
+
+**Trigger.** Verdi's current-build iPad games on Tiny 11×11 Drylands: Xin-xi capital
+Forge level 3 with NO border growth (⇒ ≥3 metal in the initial 3×3), level 4 after
+border growth, two games back to back. Under our generator that pattern is a 3.4%/game
+event (back-to-back ≈ 0.1%): probe over n=2000 Tiny maps gives capital-ring metal
+2: 77.7%, 3: 15.9%, ≥4: 6.5%, best no-BG Forge ≥3 in 8.6%.
+
+**What the record supports (all verified Aug 12).** Espark's decompiled table: Xin-xi
+mountain 1.5 / metal 1.5 (ours match). Era-1 generator `post_generate`: top-up
+(`while resources < quantity`), quantity 2. Real captures v111–115: every
+guarantee-relevant capital at the floor — anjiian's Vengir ring shows exactly 2 game
+against a ~0.15 natural expectation (pins quantity=2 top-up in v111); Xin-xi metal 2 on
+2 ring mountains. The wiki's quota system pins zone counts, not ring concentration.
+Full analysis: `mapgen_research.md` Aug-12 addenda.
+
+**Hypothesis.** The Aug-2026 live build (post-2025-Balance-Pass, which already touched
+Xin-xi starts) places starting resources ADDITIVELY (2 on top of natural spawns, carving
+terrain) or otherwise runs capitals hotter than top-up-2. Our newest real capture is
+Jun 2026; none covers the current build.
+
+**Experiment.** Step 0: confirm the Steam and iPad builds are the same version (the
+disputed games are iPad; the mod captures Steam) — else screenshot 2–3 fresh iPad Tiny
+Xin-xi turn-0 starts and count ring metal by eye. Then capture ≥5 fresh turn-0 Tiny
+11×11 Drylands Xin-xi-vs-Imperius games from the current Steam build via polyfish-mod
+and run `python3 capital_ring_check.py replays/<f>.json`. Keep Imperius as the opponent:
+its capital is a second, independent semantics probe (fruit's natural ring rate is high,
+so top-up predicts ~2.8 ring fruit vs additive ~4.5 — unlike Vengir, where both models
+predict 2).
+
+**Predictions.** Top-up (ours correct): ring metal mean ≈ 2.2, ≥3 in ~22% of capitals.
+Additive (we under-spawn): mean ≈ 3.4, ≥3 in ~78%. **Read the mean first** (~4σ apart at
+n=5, per-capital sd ≈ 0.6); the "≥4 of 5 capitals show ≥3" count is the conservative
+confirm (~1% false positive but only ~70% power — a 3/5 result is ambiguous on the count
+alone, not on the mean). Ring-mountain counts double as a free re-check of Xin-xi
+mountain 1.5 (mean 1.7/ring) vs the Moonrise 2.0 (mean 2.2/ring).
+
+**Committed consequence.** If falsified: switch the guarantee block in `mapgen.rs` to
+the measured semantics (new ledger entry, training-distribution discontinuity like
+MAPGEN_001 — new run, re-baselined gauges). If confirmed: Verdi's games were the ~5%
+tail + selection; close with no change. Probe source: `src/bin/forge_probe.rs`
+(untracked, delete on close).
+
+---
+
+## EXP_ELO_031 — price the super unit, and price hub CAPACITY not just realized partners
+
+**Registered 2026-08-12, before running.** Third layer on `goal_potential`;
+029 and 030 both still un-reverted, so the control is v10 (= 029+030).
+
+### Diagnosis (measured on V9/V10, 64 games each, gamemode 2 = Domination)
+
+**(a) Giants are lost at the level-5 reward pick, and it is stance-driven.**
+Park = +250 score AND +1 production (`functions.rs:495,1076`); a Giant is cost
+10 -> +50 score. Raw score prefers Park 5:1; only ARM's army term overturned it.
+
+| stance | V9 park/super | V10 park/super | park share |
+|---|---|---|---|
+| ARM | 11 / 82 | 7 / 81 | 8-12% |
+| GROW | 7 / 2 | 5 / 1 | 78-83% |
+| SAVE | 5 / 5 | 22 / 3 | 50% -> 88% |
+| total | 89 super, 23 park | 85 super, 34 park | |
+
+EXP_ELO_030 made this worse by producing more level-5 cities while in SAVE.
+There is **no 98/2 rule anywhere in the code** — the only super-unit preference
+is `score_reward`'s Domination gap of 13 points, ~2:1 through `HEURISTIC_TEMP=20`,
+and it is inert in arena (`prior_heuristic_weight = 0`).
+
+**(b) Hub placement: 68% optimal, and the misses are not boundary-limited.**
+31 sub-optimal Forge placements (V9+V10). **All 31 were in the SAME city and
+legal at that moment** — never outside the border, never needing border growth.
+12 had no resource trade-off at all (both tiles bare, ceiling gaps 1->2, 2->3,
+2->5); 16 put the Forge on a resource tile it then crushes; only 7 have a
+defensible reason (the better tile carried a resource).
+
+Cause: `SHAPE_GOAL_YIELD_ADJ` counts **realized** partners. At placement a
+ceiling-3 bare site and a ceiling-1 site both score 0, and the Mines that would
+distinguish them are built later — far past the 6.48-ply horizon.
+
+Forge ceiling on Xinxi confirmed: mean best available **2.40** (1:5, 2:37, 3:17,
+4:4, 5:2 over 65 placements); pop = `reward_pop(2) x partners`, so ~4.8 pop at
+ceiling. Forges reach the ceiling they are sited for (chosen 2.00 == final 2.00),
+so the loss is purely site choice.
+
+### Changes
+
+1. `SHAPE_GOAL_SUPER = 500` per super unit owned, **in every stance**, damped by
+   `SHAPE_GOAL_SUPER_ECON_DAMP = 0.6` x `save_progress` under SAVE only.
+   Keyed to `save_progress` and deliberately NOT `completion_progress`: under
+   GROW the latter approaches 1.0 exactly at the reward ply, which would damp
+   every pick and rebuild the pathology. Super units are reward-only, never
+   summoned, so this cannot distort purchasing.
+2. `SHAPE_GOAL_YIELD_CAPACITY_W = 0.5` — unfilled partner capacity paid at half
+   the realized rate, via `partner_ceiling_with`. Owned-tiles-only, so no FOW
+   leak (owning implies explored); it does read the raw resource map, the
+   tech-visibility read the engine already makes there on purpose.
+3. `score_reward` Domination SuperUnit `base+18 -> base+27` (gap 13 -> 22 ~= 3:1
+   at TEMP 20). Perfection untouched — there a Park's +250 really does win.
+
+### Measured pick ratios (end to end, raw score + Phi, via `goal_potential`)
+
+| corner | target | measured |
+|---|---|---|
+| ARM | 3:1 giant | **3.23:1 giant** |
+| GROW | ~1.5:1 giant | **1.56:1 giant** |
+| SAVE, plan barely started | giant | 1.38:1 giant |
+| SAVE, plan complete | ~1.5:1 park | **1.43:1 park** |
+
+Locked by `level_five_reward_pick_favours_the_giant_except_on_a_nearly_done_plan`.
+
+### Predictions
+
+Control **V10**, same seeds/budget. Primary metric is the reward-pick table, not
+win rate (the 029/030 lesson).
+
+| metric | V10 | predicted | falsified if |
+|---|---|---|---|
+| GROW park share | 83% | < 40% | > 60% |
+| SAVE park share (u<0.8) | 88% | < 40% | > 60% |
+| ARM park share | 8% | stays < 15% | > 20% |
+| total super units | 85 | >= 110 | <= 92 |
+| games with >=1 giant | 39/64 | >= 46/64 | <= 41/64 |
+| Forge placement optimal | 68% | >= 85% | < 75% |
+| ...of which the 12 both-bare errors | 12 | ~0 | > 6 |
+| mean chosen ceiling | 2.00 | >= 2.30 | < 2.15 |
+| win vs Greedy (GUARDRAIL) | 54.7% | >= 45% | < 40% = revert |
+
+Risk to watch: `SHAPE_GOAL_SUPER` also prices *losing* a giant at 500, which
+could make the agent hoard/over-protect it. Tell: super units alive at t30 rising
+while attacks-with-giant falls.
+
+**Stack note: this is the third un-adjudicated layer on `goal_potential`
+(029 ARM terms, 030 lane prior + ramp, 031 super + capacity). Recommend deciding
+029/030 keep-or-revert when this reads out — attribution degrades with each layer.**
+
+### ACTUAL (2026-08-12) — the reward pick flipped exactly as priced; placement moved partway
+
+Arm **V11** vs control **V10**, 64 paired Xinxi vs-Greedy games, same seeds/budget.
+
+#### Primary metric: the level-5 reward pick
+
+| stance | V10 park/super | V11 park/super | park share | predicted | verdict |
+|---|---|---|---|---|---|
+| ARM | 7 / 81 | **0 / 105** | 8% -> **0%** | stay <15% | **CONFIRMED** |
+| GROW | 5 / 1 | **2 / 5** | 83% -> **29%** | <40% | **CONFIRMED** |
+| SAVE | 22 / 3 | **6 / 10** | 88% -> **38%** | <40% | **CONFIRMED** |
+| total | 34 park, 85 super | **8 park, 120 super** | | supers >=110 | **CONFIRMED** |
+
+Parks fell 4x and supers rose 41%. The pick moved almost exactly where the
+measured ratio table said it would — this is the tightest mechanism-to-behaviour
+link in the whole EXP_ELO_02x/03x series.
+
+#### Giants
+
+| | V9 | V10 | **V11** |
+|---|---|---|---|
+| giants, final mean | 1.33 | 1.28 | **1.77** |
+| games with >=1 giant | 47/64 | 39/64 | **48/64** |
+| games with >=3 giants | 8/64 | 11/64 | **18/64** |
+| super units alive at end | — | 1.05 | 1.42 |
+
++0.49 on the mean clears the 029 giants floor (0.41), so this one is established
+— narrowly. `>=1 giant` merely recovers to V9; the real movement is in the tail
+(>=3 giants more than doubles vs V9).
+
+**Hoarding risk did NOT fire.** Survival rate (alive at end / total earned) is
+1.05/1.28 = 82% in V10 vs 1.42/1.77 = 80% in V11 — unchanged. Pricing the giant
+at 500 did not make the agent hide it.
+
+#### Placement — real movement, short of target
+
+| metric | V10 | V11 | predicted | verdict |
+|---|---|---|---|---|
+| optimal share | 68% | **75%** | >=85% (falsify <75%) | missed, not falsified |
+| both-bare errors | 10 | **4** | ~0 (falsify >6) | passed, not met |
+| mean chosen ceiling | 2.00 | **2.17** | >=2.30 (falsify <2.15) | missed, not falsified |
+| mean best available | 2.40 | 2.48 | — | — |
+
+Gap between best and chosen closed 0.40 -> 0.31, i.e. ~23% of the loss recovered.
+Consistent with a half-weight first fit. `SHAPE_GOAL_YIELD_CAPACITY_W = 0.5` is
+under-powered; the q-gap method says dial against this measurement rather than
+guessing again.
+
+#### Guardrail and costs
+
+```
+win vs Greedy   V9 48.4%   V10 54.7%   V11 46.9%    (spread 7.8pp ~= the 6.2pp floor: flat)
+SPT @ t20            13.98      14.38      13.05    (-1.33, floor 1.58: inside)
+cities @ t20          3.22       3.12       2.89    (-0.23, floor 0.20: marginally outside)
+avg score             4404       4588       4439    (-149, floor 352: inside)
+Mines built            280        291        231    (-60, ~21%: watch)
+Smithery              33/64      33/64      31/64
+Forge games           28/64      28/64      24/64
+```
+
+Win rate is flat across all three arms once the repeat floor is applied — V10's
+54.7% was the outlier, not V11's 46.9%. **Mines -60 is the one number worth
+chasing**: it is the largest un-floored move against the change and the Forge
+lane depends on Mines. Plausible mechanism: 500 score-equivalents per giant
+raises the value of giant-bearing states enough to pull search effort off
+economy plies. Unverified.
+
+#### Verdict
+
+The pricing hypothesis is **confirmed**. The level-5 pick was mis-priced, the
+mis-pricing was stance-shaped, and correcting it in `goal_potential` — the exec
+path, not just the training door — moved behaviour immediately and in the exact
+proportions the ratio table predicted. Giants rose 33% over the pre-030 baseline
+with the tail more than doubling, at no measurable cost to win rate.
+
+The placement half half-worked: the diagnosis (Phi counts realized partners, the
+placement decision needs capacity) is right, and 0.5 is simply too small a
+weight. Dial it, do not redesign it.
+
+**Kept or reverted: left in place pending Verdi's call.** Now three layers deep
+on `goal_potential` (029, 030, 031) with 029 and 030 still undecided; 031 is the
+only one of the three with a clean, established, mechanistically-explained
+benefit.
