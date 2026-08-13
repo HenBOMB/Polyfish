@@ -1,5 +1,6 @@
 use crate::ai::eval_server::Evaluator;
 use crate::ai::gumbel_mcts::GumbelMctsAgent;
+use crate::ai::macro_agent::{MacroLookaheadAgent, MacroParams, MacroScriptAgent};
 use crate::ai::mcts_types::MoveVisit;
 use crate::ai::mcts_zero::ZeroMctsAgent;
 use crate::game::Game;
@@ -16,6 +17,14 @@ pub enum SearchBackend {
     /// Zero-search softmax over `ordering::score_move` — the fastest teacher
     /// for bulk imitation corpora. No evaluator, no tree.
     Greedy,
+    /// EXP_ELO_032: scripted directive + deterministic whole-turn executor
+    /// (Stage 0 of the macro bootstrap). Params via `MacroParams`.
+    MacroScript,
+    /// EXP_ELO_032: shallow macro lookahead over candidate directives
+    /// (Stage 1). Params via `MacroParams`.
+    MacroLookahead,
+    /// EXP_ELO_033: adversarial turn-level MCTS over directives (Stage 2).
+    MacroMcts,
 }
 
 impl Default for SearchBackend {
@@ -32,6 +41,9 @@ pub enum SearchBackendArg {
     Gumbel,
     Heuristic,
     Greedy,
+    MacroScript,
+    MacroLookahead,
+    MacroMcts,
 }
 
 impl From<SearchBackendArg> for SearchBackend {
@@ -41,6 +53,9 @@ impl From<SearchBackendArg> for SearchBackend {
             SearchBackendArg::Gumbel => SearchBackend::Gumbel { k: 16 },
             SearchBackendArg::Heuristic => SearchBackend::Heuristic,
             SearchBackendArg::Greedy => SearchBackend::Greedy,
+            SearchBackendArg::MacroScript => SearchBackend::MacroScript,
+            SearchBackendArg::MacroLookahead => SearchBackend::MacroLookahead,
+            SearchBackendArg::MacroMcts => SearchBackend::MacroMcts,
         }
     }
 }
@@ -107,6 +122,9 @@ pub enum SearchAgent<'a> {
     Gumbel(GumbelMctsAgent<'a>),
     Heuristic(crate::ai::heuristic_mcts::HeuristicMctsAgent),
     Greedy(crate::ai::heuristic_mcts::GreedyHeuristicAgent),
+    MacroScript(MacroScriptAgent),
+    MacroLookahead(MacroLookaheadAgent<'a>),
+    MacroMcts(crate::ai::macro_mcts::MacroMctsAgent),
 }
 
 impl<'a> SearchAgent<'a> {
@@ -116,6 +134,9 @@ impl<'a> SearchAgent<'a> {
             SearchAgent::Gumbel(a) => a.select_move(game),
             SearchAgent::Heuristic(a) => a.select_move(game),
             SearchAgent::Greedy(a) => a.select_move(game),
+            SearchAgent::MacroScript(a) => a.select_move(game),
+            SearchAgent::MacroLookahead(a) => a.select_move(game),
+            SearchAgent::MacroMcts(a) => a.select_move(game),
         }
     }
 
@@ -129,6 +150,9 @@ impl<'a> SearchAgent<'a> {
             SearchAgent::Gumbel(a) => a.select_move_with_decomposed_visits(game, move_count),
             SearchAgent::Heuristic(a) => a.select_move_with_decomposed_visits(game, move_count),
             SearchAgent::Greedy(a) => a.select_move_with_decomposed_visits(game, move_count),
+            SearchAgent::MacroScript(a) => (a.select_move(game), Vec::new()),
+            SearchAgent::MacroLookahead(a) => (a.select_move(game), Vec::new()),
+            SearchAgent::MacroMcts(a) => (a.select_move(game), Vec::new()),
         }
     }
 
@@ -139,6 +163,9 @@ impl<'a> SearchAgent<'a> {
             // No NN priors to report stats over; the move is all callers need.
             SearchAgent::Heuristic(a) => (a.select_move(game), Vec::new()),
             SearchAgent::Greedy(a) => (a.select_move(game), Vec::new()),
+            SearchAgent::MacroScript(a) => (a.select_move(game), Vec::new()),
+            SearchAgent::MacroLookahead(a) => (a.select_move(game), Vec::new()),
+            SearchAgent::MacroMcts(a) => (a.select_move(game), Vec::new()),
         }
     }
 
@@ -204,6 +231,7 @@ pub fn make_search_agent(
     pursuit_shape_w: Option<f32>,
     goal_shape_w: Option<f32>,
     unfreeze_opponent: Option<bool>,
+    macro_params: Option<MacroParams>,
 ) -> SearchAgent<'_> {
     match backend {
         SearchBackend::Zero => {
@@ -247,6 +275,15 @@ pub fn make_search_agent(
         SearchBackend::Greedy => {
             SearchAgent::Greedy(crate::ai::heuristic_mcts::GreedyHeuristicAgent)
         }
+        SearchBackend::MacroScript => SearchAgent::MacroScript(MacroScriptAgent::new(
+            macro_params.unwrap_or_default().lambda,
+        )),
+        SearchBackend::MacroLookahead => SearchAgent::MacroLookahead(
+            MacroLookaheadAgent::new(evaluator, macro_params.unwrap_or_default()),
+        ),
+        SearchBackend::MacroMcts => SearchAgent::MacroMcts(
+            crate::ai::macro_mcts::MacroMctsAgent::new(macro_params.unwrap_or_default()),
+        ),
     }
 }
 
@@ -411,6 +448,7 @@ impl<'a> Brain<'a> {
                 self.pursuit_shape_w,
                 self.goal_shape_w,
                 self.unfreeze_opponent,
+                None,
             ));
         }
         if let Some(SearchAgent::Gumbel(a)) = self.agent.as_mut() {

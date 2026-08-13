@@ -1,5 +1,6 @@
 use clap::Parser;
 use polyfish::ai::brain::{SearchAgent, SearchBackend, SearchBackendArg, make_search_agent};
+use polyfish::ai::macro_agent::{MacroLeaf, MacroParams};
 use polyfish::ai::eval_backend::{self, EvalBackendKind, PlayerBackend};
 use polyfish::ai::eval_server::{EvalServerConfig, Evaluator};
 use polyfish::ai::network::PolyZeroNet;
@@ -141,6 +142,13 @@ struct Args {
     #[arg(long)]
     dump_turn_states: Option<String>,
 
+    /// EXP_ELO_034: maintain a per-seat belief state (capital posterior +
+    /// score-delta inference) from legal observables only, and log one
+    /// belief-vs-truth row per player-turn into each game's dump JSON.
+    /// Observation-only — no agent reads it. Requires --dump-stats-dir.
+    #[arg(long, default_value_t = false)]
+    belief_calib: bool,
+
     /// Capture the full root decision (priors, top-k cut, visits, Q) on every
     /// model ply where this tech is unowned, unlocked by its prerequisite, and
     /// affordable — i.e. the plies where the purchase is a live choice.
@@ -187,6 +195,34 @@ struct Args {
     /// --goal-script. 0.0 = off.
     #[arg(long, default_value_t = 0.0)]
     goal_w_tree: f32,
+
+    /// EXP_ELO_032: leaf scorer for a macro-lookahead backend.
+    #[arg(long, value_enum, default_value_t = MacroLeaf::Heuristic)]
+    macro_leaf: MacroLeaf,
+
+    /// EXP_ELO_032: max candidate directives per turn (base always kept).
+    #[arg(long, default_value_t = 4)]
+    macro_k: usize,
+
+    /// EXP_ELO_032: own turns simulated per rollout, incl. the candidate turn.
+    #[arg(long, default_value_t = 2)]
+    macro_horizon: u32,
+
+    /// EXP_ELO_032: λ on Δgoal_potential in the macro executor's ply ranking.
+    #[arg(long, default_value_t = 1.0)]
+    macro_lambda: f32,
+
+    /// EXP_ELO_033: simulations per turn-level tree search (macro-mcts only).
+    #[arg(long, default_value_t = 32)]
+    macro_sims: usize,
+
+    /// Override --macro-sims for config 1 (sims-sweep rungs).
+    #[arg(long)]
+    macro_sims1: Option<usize>,
+
+    /// Override --macro-sims for config 2.
+    #[arg(long)]
+    macro_sims2: Option<usize>,
 }
 
 fn load_model(path: &str, device: &candle_core::Device) -> anyhow::Result<PolyZeroNet> {
@@ -352,6 +388,8 @@ struct MatchResult {
     /// Search telemetry for config1:
     /// (depth_sum, depth_count, depth_max, horizon_hits, agree, decisions).
     depth_config1: Option<(u64, u64, u32, u64, u64, u64)>,
+    /// EXP_ELO_032, config1 macro-lookahead only: (divergent, planned) turns.
+    macro_divergence: Option<(u32, u32)>,
 }
 
 /// Play one game. `swap` puts config2 in the P1 seat and config1 in P2.
@@ -375,8 +413,11 @@ fn play_match(
     macro_star_gate: bool,
     goal_script: bool,
     goal_w_tree: f32,
+    macro_params1: MacroParams,
+    macro_params2: MacroParams,
     args_tribe: &str,
     trace_tech: Option<polyfish::types::TechnologyType>,
+    belief_calib: bool,
 ) -> MatchResult {
     let gen_settings = MapGenSettings {
         size: MapSize::Tiny,
@@ -397,16 +438,16 @@ fn play_match(
     // scores attribute to the right config when sides are swapped.
     let (mut agent_p1, p1_config, mut agent_p2, p2_config) = if swap {
         (
-            make_search_agent(backend2, eval2, mcts2, leaf_batch, None, None, None, None, None, None, Some(false)),
+            make_search_agent(backend2, eval2, mcts2, leaf_batch, None, None, None, None, None, None, Some(false), Some(macro_params2)),
             2u8,
-            make_search_agent(backend1, eval1, mcts1, leaf_batch, None, None, None, None, None, None, Some(false)),
+            make_search_agent(backend1, eval1, mcts1, leaf_batch, None, None, None, None, None, None, Some(false), Some(macro_params1)),
             1u8,
         )
     } else {
         (
-            make_search_agent(backend1, eval1, mcts1, leaf_batch, None, None, None, None, None, None, Some(false)),
+            make_search_agent(backend1, eval1, mcts1, leaf_batch, None, None, None, None, None, None, Some(false), Some(macro_params1)),
             1u8,
-            make_search_agent(backend2, eval2, mcts2, leaf_batch, None, None, None, None, None, None, Some(false)),
+            make_search_agent(backend2, eval2, mcts2, leaf_batch, None, None, None, None, None, None, Some(false), Some(macro_params2)),
             2u8,
         )
     };
@@ -460,6 +501,14 @@ fn play_match(
     let mut tech_traces: Vec<serde_json::Value> = Vec::new();
     let mut goal_trace: Vec<serde_json::Value> = Vec::new();
     let mut pending_goal: Option<serde_json::Value> = None;
+    // EXP_ELO_034: observation-only belief calibration. The harness reads
+    // true state solely to feed observables and log truth; no agent sees it.
+    let mut calib: Option<polyfish::ai::belief::CalibHarness> = if belief_calib {
+        Some(polyfish::ai::belief::CalibHarness::new(&game.state))
+    } else {
+        None
+    };
+    let mut last_calib_key: Option<(i32, polyfish::states::PlayerId)> = None;
 
     while !polyfish::functions::is_game_over(&game.state) && moves < 500 {
         if dump_stats_dir.is_some() && game.state.settings.turn != last_sampled_turn {
@@ -570,6 +619,16 @@ fn play_match(
             if last_dump_key != Some(key) {
                 dump_turn_state(f, game_idx, &game.state, model_player, greedy_player);
                 last_dump_key = Some(key);
+            }
+        }
+
+        // EXP_ELO_034: belief-vs-truth row at the start of the acting
+        // player's turn — the moment a planner would consume the belief.
+        if let Some(c) = calib.as_mut() {
+            let key = (game.state.settings.turn, current_pid);
+            if last_calib_key != Some(key) {
+                c.turn_row(&game.state, current_pid);
+                last_calib_key = Some(key);
             }
         }
 
@@ -772,6 +831,9 @@ fn play_match(
                 }
             }
             game.play_move(m.as_ref());
+            if let Some(c) = calib.as_mut() {
+                c.after_move(&game.state, current_pid, m.as_ref());
+            }
         } else {
             break;
         }
@@ -793,6 +855,17 @@ fn play_match(
         2
     } else {
         0
+    };
+
+    // EXP_ELO_032: how often lookahead overrode the scripted base directive.
+    // A flat lookahead-vs-script result is uninterpretable without this.
+    let macro_divergence = {
+        let model_agent = if swap { &agent_p2 } else { &agent_p1 };
+        match model_agent {
+            SearchAgent::MacroLookahead(a) => Some((a.divergent_turns, a.planned_turns)),
+            SearchAgent::MacroMcts(a) => Some((a.divergent_turns, a.planned_turns)),
+            _ => None,
+        }
     };
 
     if let Some(dir) = dump_stats_dir {
@@ -888,6 +961,9 @@ fn play_match(
             "stance_flips": stance_commit.stance_flips,
             "order_flips": stance_commit.order_flips,
             "goal_turns_seen": stance_commit.turns_seen,
+            "macro_divergent_turns": macro_divergence.map(|(d, _)| d),
+            "macro_planned_turns": macro_divergence.map(|(_, p)| p),
+            "belief_calib": calib.as_ref().map(|c| c.rows.clone()),
         });
         // Drop the whole final board next to the summary. The server loads a
         // bare GameState, so the partner count around a hub can be counted off
@@ -928,6 +1004,7 @@ fn play_match(
         ns_config2,
         moves_config2,
         depth_config1,
+        macro_divergence,
     }
 }
 
@@ -937,6 +1014,9 @@ fn backend_from_arg(arg: SearchBackendArg, k: usize) -> SearchBackend {
         SearchBackendArg::Gumbel => SearchBackend::Gumbel { k },
         SearchBackendArg::Heuristic => SearchBackend::Heuristic,
         SearchBackendArg::Greedy => SearchBackend::Greedy,
+        SearchBackendArg::MacroScript => SearchBackend::MacroScript,
+        SearchBackendArg::MacroLookahead => SearchBackend::MacroLookahead,
+        SearchBackendArg::MacroMcts => SearchBackend::MacroMcts,
     }
 }
 
@@ -953,6 +1033,57 @@ fn main() -> anyhow::Result<()> {
     }
     if args.goal_w_tree != 0.0 && !args.goal_script {
         anyhow::bail!("--goal-w-tree requires --goal-script (there is no goal to price without it)");
+    }
+    let is_macro = |b: SearchBackendArg| {
+        matches!(
+            b,
+            SearchBackendArg::MacroScript
+                | SearchBackendArg::MacroLookahead
+                | SearchBackendArg::MacroMcts
+        )
+    };
+    if (args.macro_k != 4
+        || args.macro_horizon != 2
+        || args.macro_leaf != MacroLeaf::Heuristic
+        || args.macro_lambda != 1.0
+        || args.macro_sims != 32)
+        && !is_macro(args.backend1)
+        && !is_macro(args.backend2)
+    {
+        anyhow::bail!(
+            "--macro-leaf / --macro-k / --macro-horizon / --macro-lambda / --macro-sims \
+             configure a macro backend; pass one via --backend1/--backend2 \
+             (EXP_ELO_032/033)"
+        );
+    }
+    // The turn-level tree scores leaves with the heuristic evaluator only.
+    if args.macro_leaf == MacroLeaf::Net
+        && (matches!(args.backend1, SearchBackendArg::MacroMcts)
+            || matches!(args.backend2, SearchBackendArg::MacroMcts))
+    {
+        anyhow::bail!("macro-mcts supports --macro-leaf heuristic only (EXP_ELO_033)");
+    }
+    let base_params = MacroParams {
+        k: args.macro_k,
+        horizon: args.macro_horizon,
+        leaf: args.macro_leaf,
+        lambda: args.macro_lambda,
+        sims: args.macro_sims,
+    };
+    let macro_params1 =
+        MacroParams { sims: args.macro_sims1.unwrap_or(args.macro_sims), ..base_params };
+    let macro_params2 =
+        MacroParams { sims: args.macro_sims2.unwrap_or(args.macro_sims), ..base_params };
+    if is_macro(args.backend1) || is_macro(args.backend2) {
+        println!(
+            "MACRO BOOTSTRAP (EXP_ELO_032/033): leaf={:?} k={} horizon={} lambda={} sims={}/{}",
+            args.macro_leaf,
+            args.macro_k,
+            args.macro_horizon,
+            args.macro_lambda,
+            macro_params1.sims,
+            macro_params2.sims
+        );
     }
     if args.goal_script {
         println!(
@@ -1086,6 +1217,10 @@ fn main() -> anyhow::Result<()> {
     }
     let dump_stats_dir = args.dump_stats_dir.as_deref();
 
+    if args.belief_calib && dump_stats_dir.is_none() {
+        anyhow::bail!("--belief-calib writes into the per-game dumps; pass --dump-stats-dir");
+    }
+
     let trace_tech: Option<polyfish::types::TechnologyType> = match &args.trace_tech {
         None => None,
         Some(name) => {
@@ -1158,7 +1293,8 @@ fn main() -> anyhow::Result<()> {
                             eval1, eval2, mcts1, mcts2, backend1, backend2, args.leaf_batch,
                             seed, swap, args.max_turns, args.gamemode, dump_stats_dir,
                             idx, dump_turn_states, args.macro_commit, args.macro_star_gate,
-                            args.goal_script, args.goal_w_tree, tribe_name, trace_tech,
+                            args.goal_script, args.goal_w_tree, macro_params1, macro_params2,
+                            tribe_name, trace_tech, args.belief_calib,
                         )
                     }));
 
@@ -1318,6 +1454,18 @@ fn main() -> anyhow::Result<()> {
             overrides,
             decisions1,
             100.0 * overrides as f64 / decisions1 as f64,
+        );
+    }
+    let (div1, planned1) = results.iter().filter_map(|r| r.macro_divergence).fold(
+        (0u64, 0u64),
+        |(d, p), (dd, pp)| (d + dd as u64, p + pp as u64),
+    );
+    if planned1 > 0 {
+        println!(
+            "MACRO DIVERGENCE Config 1: lookahead overrode the scripted base on {} / {} planned turns ({:.1}%)",
+            div1,
+            planned1,
+            100.0 * div1 as f64 / planned1 as f64,
         );
     }
     println!(

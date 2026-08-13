@@ -167,6 +167,11 @@ fn main() -> anyhow::Result<()> {
         SearchBackendArg::Gumbel => SearchBackend::Gumbel { k: args.gumbel_k },
         SearchBackendArg::Heuristic => SearchBackend::Heuristic,
         SearchBackendArg::Greedy => SearchBackend::Greedy,
+        SearchBackendArg::MacroScript
+        | SearchBackendArg::MacroLookahead
+        | SearchBackendArg::MacroMcts => {
+            anyhow::bail!("macro backends are arena-only (EXP_ELO_032/033)")
+        }
     };
 
     let num_actors = if args.actors > 0 {

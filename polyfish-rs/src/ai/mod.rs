@@ -1,3 +1,4 @@
+pub mod belief;
 pub mod book;
 pub mod brain;
 pub mod decision_trace;
@@ -8,6 +9,9 @@ pub mod features;
 pub mod gumbel_mcts;
 pub mod gumbel_qtransform;
 pub mod heuristic_mcts;
+pub mod macro_agent;
+pub mod macro_exec;
+pub mod macro_mcts;
 pub mod mapper;
 pub mod mcts;
 pub mod mcts_common;

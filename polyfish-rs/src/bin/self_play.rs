@@ -3135,6 +3135,13 @@ fn main() -> anyhow::Result<()> {
         SearchBackendArg::Gumbel => SearchBackend::Gumbel { k: args.gumbel_k },
         SearchBackendArg::Heuristic => SearchBackend::Heuristic,
         SearchBackendArg::Greedy => SearchBackend::Greedy,
+        // EXP_ELO_032/033: arena-only bootstrap backends; self-play has no
+        // macro-params plumbing (or use for it) yet.
+        SearchBackendArg::MacroScript
+        | SearchBackendArg::MacroLookahead
+        | SearchBackendArg::MacroMcts => {
+            anyhow::bail!("macro backends are arena-only (EXP_ELO_032/033)")
+        }
     };
 
     let device = eval_backend::select_device()?;
@@ -3302,6 +3309,9 @@ fn main() -> anyhow::Result<()> {
         SearchBackend::Gumbel { k } => format!("Gumbel k={k}"),
         SearchBackend::Heuristic => "Heuristic MCTS (no NN)".to_string(),
         SearchBackend::Greedy => "Greedy heuristic (no NN, no search)".to_string(),
+        SearchBackend::MacroScript => "Macro script (EXP_ELO_032)".to_string(),
+        SearchBackend::MacroLookahead => "Macro lookahead (EXP_ELO_032)".to_string(),
+        SearchBackend::MacroMcts => "Macro MCTS (EXP_ELO_033)".to_string(),
     };
     println!(
         "[selfplay] {match_label}: {} games, {} mcts-iters, {search_label}, tribes {tribe_label} | eval {backend_label} | {eval_servers} shard(s) cache={per_shard_cache:?} workers={} | {num_actors} actors max_batch={} coalesce_us={} leaf_batch={:?} | device {:?} (CANDLE_METAL_COMPUTE_PER_BUFFER={metal_compute_per_buffer})",
