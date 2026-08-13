@@ -33,13 +33,22 @@ pub fn replay_game(game: &mut Game, mod_replay: &mut ModReplay) -> Result<(), St
     }
     game.post_load();
 
-    // The first turn is inevitable to avoid auto-playing while extracting in the polyfish-mod
-    if !mod_replay.turns.is_empty()
-        && !mod_replay.turns[0].players.is_empty()
-        && mod_replay.turns[0].players[0].commands.len() >= 2
-    {
-        mod_replay.turns[0].players[0].commands.remove(0); // remove the -1 "start match command"
-        mod_replay.turns[0].players[0].commands.remove(0); // remove the first forced auto played move
+    // Steam-mod replays open with a moveType:-1 "start match" marker plus one
+    // forced auto-played move; strip them ONLY when the marker is present.
+    // Engine-generated recaps (self_play best-game replays) have no padding —
+    // unconditional stripping ate their first two real moves and desynced
+    // every command after (found via the Stage-3 XinXi observability probe).
+    if !mod_replay.turns.is_empty() && !mod_replay.turns[0].players.is_empty() {
+        let cmds = &mut mod_replay.turns[0].players[0].commands;
+        let has_marker = cmds
+            .first()
+            .and_then(|c| c.get("moveType"))
+            .and_then(|v| v.as_i64())
+            == Some(-1);
+        if has_marker && cmds.len() >= 2 {
+            cmds.remove(0); // the -1 "start match" marker
+            cmds.remove(0); // the forced auto-played first move
+        }
     }
 
     for turn_data in &mod_replay.turns {
@@ -133,4 +142,130 @@ pub fn replay_game(game: &mut Game, mod_replay: &mut ModReplay) -> Result<(), St
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Replay-checkpoint probe (manual): board/economy audit of a saved
+    /// replay at turn checkpoints, plus giant/hub timelines. Run:
+    ///   REPLAY_FILE=replays/<file>.json cargo test --lib replayer -- \
+    ///     --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn replay_checkpoint_probe() {
+        let path = std::env::var("REPLAY_FILE").expect("set REPLAY_FILE");
+        let src: ModReplay =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read")).expect("parse");
+        let total = src.turns.len();
+        let mut first_giant: Option<(i32, i32)> = None;
+        let mut giant_first_by_player: std::collections::HashMap<i32, i32> = Default::default();
+
+        for n in 1..=total {
+            let mut clip = src.clone();
+            clip.turns.truncate(n);
+            let mut game = Game::new();
+            if let Err(e) = replay_game(&mut game, &mut clip) {
+                eprintln!("replay error at prefix {n}: {e}");
+            }
+            let turn = clip.turns.last().map(|t| t.turn).unwrap_or(0);
+            for (pid, tr) in &game.state.tribes {
+                let g = tr
+                    .units
+                    .iter()
+                    .filter(|u| u.unit_type == crate::types::UnitType::Giant)
+                    .count();
+                if g > 0 {
+                    giant_first_by_player.entry(*pid).or_insert(turn);
+                    if first_giant.is_none() {
+                        first_giant = Some((turn, *pid));
+                    }
+                }
+            }
+            let checkpoint = matches!(turn, 10 | 15 | 20) && {
+                // only report each checkpoint once (first prefix reaching it)
+                clip.turns.len() == n
+                    && (n == total || src.turns.get(n).map(|t| t.turn) != Some(turn))
+            };
+            if checkpoint || n == total {
+                let state = &game.state;
+                println!("===== after turn {turn} (prefix {n}/{total}) =====");
+                for (pid, tr) in state.tribes.iter() {
+                    let spt = crate::functions::get_tribe_spt(state, tr);
+                    let giants = tr
+                        .units
+                        .iter()
+                        .filter(|u| u.unit_type == crate::types::UnitType::Giant)
+                        .count();
+                    println!(
+                        "P{pid}: spt={spt} stars={} score={} units={} giants={giants}",
+                        tr.stars,
+                        tr.score,
+                        tr.units.len()
+                    );
+                    for c in &tr.cities {
+                        let w = state.settings.size;
+                        println!(
+                            "  city@{} ({},{}) lvl {} pop {}/{}:",
+                            c.idx,
+                            c.idx % w,
+                            c.idx / w,
+                            c.level,
+                            c.population,
+                            c.level + 1
+                        );
+                        for &ti in &c._territory {
+                            let tile = match state.tiles.get(&ti) {
+                                Some(t) => t,
+                                None => continue,
+                            };
+                            let res = state
+                                .resources
+                                .get(&ti)
+                                .and_then(|r| r.as_ref())
+                                .map(|r| format!(" res:{:?}", r.resource_type))
+                                .unwrap_or_default();
+                            let st = crate::functions::get_structure_at(state, ti)
+                                .map(|s| format!(" bld:{:?}(l{})", s.structure_type, s.level))
+                                .unwrap_or_default();
+                            let un = tile
+                                ._unit_owner_id
+                                .and_then(|o| {
+                                    state.tribes.get(&o).and_then(|t| {
+                                        t.units
+                                            .iter()
+                                            .find(|u| u.coords.idx == ti)
+                                            .map(|u| format!(" unit:P{o}:{:?}", u.unit_type))
+                                    })
+                                })
+                                .unwrap_or_default();
+                            println!(
+                                "    t{ti}({},{}) {:?}{res}{st}{un}",
+                                ti % w,
+                                ti / w,
+                                tile.terrain_type
+                            );
+                        }
+                    }
+                    let hubs: Vec<String> = state
+                        .structures
+                        .iter()
+                        .filter_map(|(i, s)| s.as_ref().map(|s| (i, s)))
+                        .filter(|(i, s)| {
+                            state.tiles.get(*i).map(|t| t.owner) == Some(*pid)
+                                && !crate::settings::structures::get_structure_setting(
+                                    s.structure_type,
+                                )
+                                .adjacent_types
+                                .is_empty()
+                        })
+                        .map(|(i, s)| format!("{:?}@{i}(l{})", s.structure_type, s.level))
+                        .collect();
+                    println!("  hubs[{}]: {}", hubs.len(), hubs.join(", "));
+                }
+            }
+        }
+        println!("first giant: {first_giant:?} | per-player first-giant turns: {giant_first_by_player:?}");
+    }
 }
