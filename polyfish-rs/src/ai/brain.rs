@@ -152,7 +152,16 @@ impl<'a> SearchAgent<'a> {
             SearchAgent::Greedy(a) => a.select_move_with_decomposed_visits(game, move_count),
             SearchAgent::MacroScript(a) => (a.select_move(game), Vec::new()),
             SearchAgent::MacroLookahead(a) => (a.select_move(game), Vec::new()),
-            SearchAgent::MacroMcts(a) => (a.select_move(game), Vec::new()),
+            // Stage 3: the macro tree's executed move becomes a one-hot
+            // policy target — behavior-cloning data for the training loop.
+            SearchAgent::MacroMcts(a) => {
+                let m = a.select_move(game);
+                let visits = m
+                    .as_ref()
+                    .map(|mv| vec![MoveVisit::one_hot(mv.as_ref())])
+                    .unwrap_or_default();
+                (m, visits)
+            }
         }
     }
 
@@ -491,6 +500,16 @@ impl<'a> Brain<'a> {
     /// it actually finds a trace worth taking.
     pub fn request_trace(&mut self) {
         self.pending_trace = true;
+    }
+
+    /// Stage 3: the macro agent's committed directive for the current turn
+    /// (`None` for every other backend). Recorded features must carry the
+    /// goal the agent actually pursued this ply.
+    pub fn macro_committed_goal(&self) -> Option<crate::ai::oracle_macro::MacroGoal> {
+        match &self.agent {
+            Some(SearchAgent::MacroMcts(a)) => a.committed_goal().cloned(),
+            _ => None,
+        }
     }
 
     /// Retrieve the trace captured by the most recent `think_decomposed`

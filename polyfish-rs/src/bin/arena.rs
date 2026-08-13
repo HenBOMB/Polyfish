@@ -1,6 +1,6 @@
 use clap::Parser;
 use polyfish::ai::brain::{SearchAgent, SearchBackend, SearchBackendArg, make_search_agent};
-use polyfish::ai::macro_agent::{MacroLeaf, MacroParams};
+use polyfish::ai::macro_agent::{BeliefMode, MacroLeaf, MacroParams};
 use polyfish::ai::eval_backend::{self, EvalBackendKind, PlayerBackend};
 use polyfish::ai::eval_server::{EvalServerConfig, Evaluator};
 use polyfish::ai::network::PolyZeroNet;
@@ -149,6 +149,17 @@ struct Args {
     #[arg(long, default_value_t = false)]
     belief_calib: bool,
 
+    /// EXP_ELO_035: config 1's macro-mcts plans on a belief-materialized
+    /// view — believed capital, ghost units, and the inferred residual army
+    /// are written into the fogged root before the tree runs. Requires
+    /// --backend1 macro-mcts.
+    #[arg(long, default_value_t = false)]
+    macro_belief1: bool,
+
+    /// EXP_ELO_035: same as --macro-belief1, for config 2.
+    #[arg(long, default_value_t = false)]
+    macro_belief2: bool,
+
     /// Capture the full root decision (priors, top-k cut, visits, Q) on every
     /// model ply where this tech is unowned, unlocked by its prerequisite, and
     /// affordable — i.e. the plies where the purchase is a live choice.
@@ -223,6 +234,36 @@ struct Args {
     /// Override --macro-sims for config 2.
     #[arg(long)]
     macro_sims2: Option<usize>,
+
+    /// Override --macro-k for config 1 (candidate-width rungs, EXP_ELO_036).
+    #[arg(long)]
+    macro_k1: Option<usize>,
+
+    /// Override --macro-k for config 2.
+    #[arg(long)]
+    macro_k2: Option<usize>,
+
+    /// EXP_ELO_035/036: config 1's belief consumption (macro-mcts only).
+    /// `world` = materialize the plan view (035); `candidates` =
+    /// belief-conditioned fog-expansion candidates at the root (036 rung 1);
+    /// `both`. Overrides --macro-belief1 when set.
+    #[arg(long, value_enum, default_value_t = BeliefMode::Off)]
+    macro_belief_mode1: BeliefMode,
+
+    /// Same as --macro-belief-mode1, for config 2.
+    #[arg(long, value_enum, default_value_t = BeliefMode::Off)]
+    macro_belief_mode2: BeliefMode,
+
+    /// EXP_ELO_036b: config 1's weight on potential-based Δφ edge rewards in
+    /// the macro tree (own edges only; 0 = off). Credits the WORK of advance
+    /// toward the active directive inside the search objective — the 028
+    /// lesson at the macro layer.
+    #[arg(long, default_value_t = 0.0)]
+    macro_shape_w1: f32,
+
+    /// Same as --macro-shape-w1, for config 2.
+    #[arg(long, default_value_t = 0.0)]
+    macro_shape_w2: f32,
 }
 
 fn load_model(path: &str, device: &candle_core::Device) -> anyhow::Result<PolyZeroNet> {
@@ -390,6 +431,13 @@ struct MatchResult {
     depth_config1: Option<(u64, u64, u32, u64, u64, u64)>,
     /// EXP_ELO_032, config1 macro-lookahead only: (divergent, planned) turns.
     macro_divergence: Option<(u32, u32)>,
+    /// EXP_ELO_035, config1 belief-enabled macro-mcts only:
+    /// (capital-materialized turns, units materialized, planned turns).
+    belief_mat: Option<(u32, u32, u32)>,
+    /// EXP_ELO_036/038, config1 macro-mcts: winning-candidate class counts
+    /// (base/stance/real/attack/claim/contest/continuation), belief-target
+    /// re-picks, mid-turn fog-order strips.
+    belief_gen: Option<([u32; 7], u32, u32)>,
 }
 
 /// Play one game. `swap` puts config2 in the P1 seat and config1 in P2.
@@ -501,14 +549,21 @@ fn play_match(
     let mut tech_traces: Vec<serde_json::Value> = Vec::new();
     let mut goal_trace: Vec<serde_json::Value> = Vec::new();
     let mut pending_goal: Option<serde_json::Value> = None;
-    // EXP_ELO_034: observation-only belief calibration. The harness reads
-    // true state solely to feed observables and log truth; no agent sees it.
-    let mut calib: Option<polyfish::ai::belief::CalibHarness> = if belief_calib {
-        Some(polyfish::ai::belief::CalibHarness::new(&game.state))
-    } else {
-        None
-    };
+    // EXP_ELO_034/035/036: the belief feed. The harness reads true state
+    // solely to stream each observer its legal observables (and, for
+    // --belief-calib, to log truth rows). Belief-enabled macro seats consume
+    // clones per turn, per their MacroParams::belief_mode.
+    let feed_on = |p: &MacroParams| p.belief_mode != polyfish::ai::macro_agent::BeliefMode::Off;
+    let mut calib: Option<polyfish::ai::belief::CalibHarness> =
+        if belief_calib || feed_on(&macro_params1) || feed_on(&macro_params2) {
+            Some(polyfish::ai::belief::CalibHarness::new(&game.state))
+        } else {
+            None
+        };
     let mut last_calib_key: Option<(i32, polyfish::states::PlayerId)> = None;
+    // Which SEAT consumes belief (params are seat-swapped like configs).
+    let mb_p1 = feed_on(if swap { &macro_params2 } else { &macro_params1 });
+    let mb_p2 = feed_on(if swap { &macro_params1 } else { &macro_params2 });
 
     while !polyfish::functions::is_game_over(&game.state) && moves < 500 {
         if dump_stats_dir.is_some() && game.state.settings.turn != last_sampled_turn {
@@ -625,10 +680,23 @@ fn play_match(
         // EXP_ELO_034: belief-vs-truth row at the start of the acting
         // player's turn — the moment a planner would consume the belief.
         if let Some(c) = calib.as_mut() {
-            let key = (game.state.settings.turn, current_pid);
-            if last_calib_key != Some(key) {
-                c.turn_row(&game.state, current_pid);
-                last_calib_key = Some(key);
+            if belief_calib {
+                let key = (game.state.settings.turn, current_pid);
+                if last_calib_key != Some(key) {
+                    c.turn_row(&game.state, current_pid);
+                    last_calib_key = Some(key);
+                }
+            }
+        }
+
+        // EXP_ELO_035: hand the acting belief-enabled macro seat its current
+        // belief before it plans this ply's move.
+        if (current_pid == 1 && mb_p1) || (current_pid == 2 && mb_p2) {
+            if let Some(b) = calib.as_ref().and_then(|c| c.belief_for(current_pid)) {
+                let agent = if current_pid == 1 { &mut agent_p1 } else { &mut agent_p2 };
+                if let SearchAgent::MacroMcts(a) = agent {
+                    a.set_belief(b.clone());
+                }
             }
         }
 
@@ -867,6 +935,29 @@ fn play_match(
             _ => None,
         }
     };
+    // EXP_ELO_035: how often/how much materialization actually ran for
+    // config1 — a flat belief-vs-baseline result is uninterpretable without
+    // it (the posterior confirms fast, so the window may be turns 0-10 only).
+    let belief_mat = {
+        let model_agent = if swap { &agent_p2 } else { &agent_p1 };
+        match model_agent {
+            SearchAgent::MacroMcts(a) if a.belief.is_some() => {
+                Some((a.mat_capital_turns, a.mat_units, a.planned_turns))
+            }
+            _ => None,
+        }
+    };
+    // EXP_ELO_036: which candidate class won each planned turn for config1,
+    // plus consecutive-turn re-picks of the same belief fog target.
+    let belief_gen = {
+        let model_agent = if swap { &agent_p2 } else { &agent_p1 };
+        match model_agent {
+            SearchAgent::MacroMcts(a) => {
+                Some((a.class_picks, a.belief_repicks, a.intra_strips))
+            }
+            _ => None,
+        }
+    };
 
     if let Some(dir) = dump_stats_dir {
         samples.push(sample_turn(&game.state, swap)); // final post-game state
@@ -964,6 +1055,11 @@ fn play_match(
             "macro_divergent_turns": macro_divergence.map(|(d, _)| d),
             "macro_planned_turns": macro_divergence.map(|(_, p)| p),
             "belief_calib": calib.as_ref().map(|c| c.rows.clone()),
+            "mat_capital_turns": belief_mat.map(|(c, _, _)| c),
+            "mat_units": belief_mat.map(|(_, u, _)| u),
+            "class_picks": belief_gen.map(|(c, _, _)| c.to_vec()),
+            "belief_repicks": belief_gen.map(|(_, r, _)| r),
+            "intra_strips": belief_gen.map(|(_, _, s)| s),
         });
         // Drop the whole final board next to the summary. The server loads a
         // bare GameState, so the partner count around a hub can be counted off
@@ -1005,6 +1101,8 @@ fn play_match(
         moves_config2,
         depth_config1,
         macro_divergence,
+        belief_mat,
+        belief_gen,
     }
 }
 
@@ -1063,26 +1161,67 @@ fn main() -> anyhow::Result<()> {
     {
         anyhow::bail!("macro-mcts supports --macro-leaf heuristic only (EXP_ELO_033)");
     }
+    // Resolve belief modes: the enum flags win; the 035 bool flags alias World.
+    let belief_mode1 = if args.macro_belief_mode1 != BeliefMode::Off {
+        args.macro_belief_mode1
+    } else if args.macro_belief1 {
+        BeliefMode::World
+    } else {
+        BeliefMode::Off
+    };
+    let belief_mode2 = if args.macro_belief_mode2 != BeliefMode::Off {
+        args.macro_belief_mode2
+    } else if args.macro_belief2 {
+        BeliefMode::World
+    } else {
+        BeliefMode::Off
+    };
+    if (belief_mode1 != BeliefMode::Off && !matches!(args.backend1, SearchBackendArg::MacroMcts))
+        || (belief_mode2 != BeliefMode::Off
+            && !matches!(args.backend2, SearchBackendArg::MacroMcts))
+    {
+        anyhow::bail!(
+            "--macro-belief{{1,2}}/--macro-belief-mode{{1,2}} requires the matching \
+             --backend{{1,2}} macro-mcts (EXP_ELO_035/036)"
+        );
+    }
     let base_params = MacroParams {
         k: args.macro_k,
         horizon: args.macro_horizon,
         leaf: args.macro_leaf,
         lambda: args.macro_lambda,
         sims: args.macro_sims,
+        belief_mode: BeliefMode::Off,
+        shape_w: 0.0,
     };
-    let macro_params1 =
-        MacroParams { sims: args.macro_sims1.unwrap_or(args.macro_sims), ..base_params };
-    let macro_params2 =
-        MacroParams { sims: args.macro_sims2.unwrap_or(args.macro_sims), ..base_params };
+    let macro_params1 = MacroParams {
+        sims: args.macro_sims1.unwrap_or(args.macro_sims),
+        k: args.macro_k1.unwrap_or(args.macro_k),
+        belief_mode: belief_mode1,
+        shape_w: args.macro_shape_w1,
+        ..base_params
+    };
+    let macro_params2 = MacroParams {
+        sims: args.macro_sims2.unwrap_or(args.macro_sims),
+        k: args.macro_k2.unwrap_or(args.macro_k),
+        belief_mode: belief_mode2,
+        shape_w: args.macro_shape_w2,
+        ..base_params
+    };
     if is_macro(args.backend1) || is_macro(args.backend2) {
         println!(
-            "MACRO BOOTSTRAP (EXP_ELO_032/033): leaf={:?} k={} horizon={} lambda={} sims={}/{}",
+            "MACRO BOOTSTRAP (EXP_ELO_032/033): leaf={:?} k={}/{} horizon={} lambda={} sims={}/{} belief={:?}/{:?} shape_w={}/{}",
             args.macro_leaf,
-            args.macro_k,
+            macro_params1.k,
+            macro_params2.k,
             args.macro_horizon,
             args.macro_lambda,
             macro_params1.sims,
-            macro_params2.sims
+            macro_params2.sims,
+            macro_params1.belief_mode,
+            macro_params2.belief_mode,
+            macro_params1.shape_w,
+            macro_params2.shape_w,
         );
     }
     if args.goal_script {
@@ -1466,6 +1605,36 @@ fn main() -> anyhow::Result<()> {
             div1,
             planned1,
             100.0 * div1 as f64 / planned1 as f64,
+        );
+    }
+    let (mat_cap, mat_units, mat_planned) = results.iter().filter_map(|r| r.belief_mat).fold(
+        (0u64, 0u64, 0u64),
+        |(c, u, p), (cc, uu, pp)| (c + cc as u64, u + uu as u64, p + pp as u64),
+    );
+    if mat_planned > 0 {
+        println!(
+            "BELIEF MATERIALIZATION Config 1: capital on {} / {} planned turns ({:.1}%), {:.2} units/turn",
+            mat_cap,
+            mat_planned,
+            100.0 * mat_cap as f64 / mat_planned as f64,
+            mat_units as f64 / mat_planned as f64,
+        );
+    }
+    let (class_sum, repick_sum, strip_sum) = results.iter().filter_map(|r| r.belief_gen).fold(
+        ([0u64; 7], 0u64, 0u64),
+        |(mut c, r, s), (cc, rr, ss)| {
+            for i in 0..7 {
+                c[i] += cc[i] as u64;
+            }
+            (c, r + rr as u64, s + ss as u64)
+        },
+    );
+    let class_total: u64 = class_sum.iter().sum();
+    if class_total > 0 {
+        let pct = |i: usize| 100.0 * class_sum[i] as f64 / class_total as f64;
+        println!(
+            "CANDIDATE CLASS PICKS Config 1: base {:.1}% stance {:.1}% real {:.1}% attack {:.1}% claim {:.1}% contest {:.1}% continuation {:.1}% | repicks {} | mid-turn strips {}",
+            pct(0), pct(1), pct(2), pct(3), pct(4), pct(5), pct(6), repick_sum, strip_sum,
         );
     }
     println!(

@@ -2997,4 +2997,609 @@ mid-game unhandled. Risk+tell: witnessing misclassification polluting the
 residual pool — tell is hidden_cities_believed ≫ truth in capture-heavy
 games with P3 failing there specifically.
 
-### ACTUAL — (pending)
+### ACTUAL (2026-08-13) — P1/P2/P3 PASS, P4 falsified; belief is 035-ready
+
+250 games as pinned (macro-script won 53.2%, in the 032 E1 band — arm sane).
+~11k belief-vs-truth rows, 500 observer streams.
+
+- **P2 GUARDRAIL: 500/500 (100%)** — the true capital was inside the 3-cell
+  prior in every stream. The {24,29,79,84} generator support holds at scale.
+- **P1 PASS: cap_truth_p 0.858 at t10, 0.984 at t20; top-1 87% at t10.**
+  Autopsy: ZERO wrong-collapses in 500 streams — the only 3 streams ending
+  <0.5 are never-scouted splits honestly still at the prior. Corner-heuristic
+  baseline (predict_enemy_capitals replica): 16% at t10 — dominated 5×.
+- **P3 PASS: hidden-army MAE ratio 0.53** (belief 2.65 vs assume-zero 5.00
+  stars, t5–25) — the belief halves the empty-fog error. Decomposition
+  (advisor-prompted): ghost-memory-only 0.69, score-residual-only 0.77,
+  combined 0.53 — the components are complementary (ghosts = seen-then-hidden
+  units WITH positions; residuals = never-seen production), and neither alone
+  clears the 0.7 gate. Aggregate is near-unbiased: truth 5.00 ≈ residual 1.90
+  + ghost 3.19. Gate for 035 cleared. Unwitnessed share of opponent score
+  events: 36.9%. 035 materialization note: ghosts carry placement, residual
+  stars need a placement policy (e.g. around the believed/known capital).
+- **P4 FALSIFIED, and not by confounding:** turn-banded terciles show the
+  inversion inside every band (t11–17: 1.41 → 2.50 → 5.09). v1 confidence
+  counts build signals, so it grows with the pool, and absolute error grows
+  with the pool — it measures estimate SIZE, not reliability. Redesign before
+  036 uses it as a world-mixing weight (035 MAP materialization doesn't need
+  it; the capital side's confidence = posterior mass, calibrated by
+  construction — 98% mass ≙ 98% top-1 at t20).
+- **Instrument lesson (cost one rebuild): `tile.capital_of` is reassigned to
+  the capturer on capture (actions/city.rs:274)** — the first run's truth
+  query used live lookups and manufactured a fake 15% wrong-collapse plateau
+  (0.855 at t20). Truth for a spawn-location belief must be snapshotted at
+  game start. The belief itself was right all along.
+- Known v1 gap confirmed: hidden_cities overcounts ~10× late (belC 4.5 vs
+  truthC 0.1 at t25) — two causes: level-up composites (harvest +50 +20·k)
+  hit the ≥150 capture signature, and discovered cities never decrement the
+  believed count (no city-emergence accounting). Both are v2 items; nothing
+  in 035 consumes hidden_cities.
+
+#### Verdict — CONFIRMED for the 035 gate. Capital posterior: trust it
+(zero wrong-collapses, 98% collapsed by t20). Hidden-army estimate: use the
+point estimate, not the confidence. GO for EXP_ELO_035 (MAP materialization
+into the fogged clone, A/B vs empty-fog macro-mcts); fix hidden_cities and
+confidence semantics before 036.
+
+## EXP_ELO_034b — aux_fog calibration: is the learned belief head usable?
+
+**Registered 2026-08-14, before running.** Verdi's directive: before the
+learned per-tile P(enemy) head (`aux_fog`, mirrored in network.rs since v9)
+becomes the materializer's placement policy or the 036 world-sampler, vet it
+with the same offline-calibration discipline the hand belief got in 034.
+Training semantics (verified in code): target = TRUE non-invisible
+enemy-unit occupancy over ALL tiles (self_play.rs `enemy_unit_grid`), input
+= the POV's fogged-view features WITH goal channels painted — so explored
+tiles are perception (easy), fog tiles are inference (the signal we need).
+
+Instrument: `#[ignore]` probe test — 40 generated Tiny Drylands games,
+MacroScript both seats, moves applied via **`game.play_move`** (NOT the
+simulate path: `_are_you_sure` gates observation memory — verified
+game.rs:206 vs :275 — and simulate-driven games would starve the ghost
+input channels the head trained on; tripwire asserts ghosts appear in ≥30%
+of games). Features encoded EXACTLY as training does (verified
+self_play.rs:1694): `state_to_cpu_features_goal(&TRUE_state, pov, None,
+Some(&scripted_goal))` — the true state with pov-keyed masking inside the
+encoder, goal channels painted — not a fogged clone. Forward through a
+PINNED copy of model.safetensors (sha256 recorded in ACTUAL) on candle CPU;
+score `fog_probs` against the true enemy grid, partitioned explored/fog.
+
+Predictions:
+- **P0 (GUARDRAIL, instrument validity):** explored-tile AUC ≥ 0.90 — the
+  head sees visible units in its input; if it can't rank those, the probe's
+  feature encoding is broken, not the head. Any P1 read is void until P0
+  passes.
+- **P1 (headline):** fog-tile AUC ≥ 0.70 → usable placement signal.
+  Falsifier: < 0.60 — the head lacks utility for this purpose; do not build
+  the placement policy on it (fix would be training-side, e.g. fog-masked
+  loss weighting, not consumer-side).
+- **P2 (mass calibration, turn-banded — the 034-P4 lesson pre-applied):**
+  per-row Σ fog_probs over fog tiles vs true hidden unit count, Pearson r
+  computed WITHIN each band t5–10 / t11–17 / t18–25 (pooled r is
+  turn-confounded and not registered). Pass: r ≥ 0.4 in every band;
+  falsifier: any band < 0.2.
+- Context: per-turn AUC curve (does inference quality survive past the
+  early game?); mean predicted fog mass vs true hidden count by turn.
+
+Caveat in the registration: the head was trained on Gumbel self-play
+trajectories; the probe plays scripted-executor games — close (vs-Greedy
+anchors are in the training mix) but not identical distributions.
+
+### ACTUAL (2026-08-14) — CONFIRMED on every gate; aux_fog is a usable belief
+
+Model pinned: sha256 78f0f66cccee2fbd95a2371e64254d7acebe31d62fb29a865a895b3678b07b76.
+40 games, ~2.1k forwards, ghost tripwire 40/40 (observation memory
+accumulated in every game — the play_move decision mattered).
+
+- **P0 instrument guardrail: explored-tile AUC 1.000** — perception is
+  perfect, the feature parity is right, P1 is a valid read.
+- **P1 PASS: fog-tile AUC 0.848** (gate ≥ 0.70) — the head genuinely ranks
+  unexplored tiles by hidden-enemy likelihood.
+- **P2 PASS in every band: r = 0.675 (t5–10), 0.820 (t11–17), 0.797
+  (t18–25)** — predicted fog mass tracks the true hidden count, with a mild
+  ~1.25× over-prediction (e.g. 1.89 predicted vs 1.40 true at t11–17) that a
+  single scalar calibration would fix.
+- Per-turn curve: strongest exactly where the belief window matters —
+  0.85–0.93 through t10, 0.72–0.81 mid-game, noisy-but-positive late (small
+  n past t21). Open oddity flagged so it isn't rediscovered: a dip at t1–t2
+  (0.93 → 0.86 → 0.80, recovering to 0.92 by t3) sits exactly in the
+  earliest sampler window — plausibly tiny-positive-count noise (one scout
+  in fog), unexplained.
+
+#### Verdict — CONFIRMED. The learned head solves the hand belief's weakest
+sub-problem: WHERE (per-tile placement, AUC 0.85 in fog) — and P2's r
+0.68–0.82 says it plausibly covers HOW MUCH as well; whether the 034
+score-counting residual adds anything on top of aux_fog mass is UNMEASURED
+(the two probes ran on different game populations), so measure that overlap
+before 036 spends design effort fusing two systems one may satisfy alone.
+Cleared as the materializer's placement policy and the 036 world-sampler
+(with the ~1.25× mass calibration applied), **conditional on re-running this
+probe under the consumer's real trajectory mix** — a belief-driven planner
+steers games because of the belief, which moves the distribution off what
+was measured here; the permanent `#[ignore]` test makes that gate nearly
+free.
+
+## EXP_ELO_036 rung 1 — belief-conditioned fog-expansion candidates
+
+**Registered 2026-08-14, before running.** The twice-reinforced lever
+(033b, 035) plus the 035 post-mortem's sharpest lesson: belief-driven play
+("they spawned east → rush the safe NW villages, contest NE") was
+INEXPRESSIBLE — expansion orders were filtered to visible villages. This
+rung makes it expressible and prices it in the tree. One delta: candidate
+generation only — NO materialization (belief_mode=candidates), no eco
+model, no reality weighting.
+
+Changes: `enumerate_candidates_with_belief` (class-tagged; adds ClaimSafe =
+base + up to 2 safe-side predicted villages, Contest = base + nearest
+enemy-side predicted village; targets from the deterministic, fog-only
+`predict_villages`, partitioned by Chebyshev distance to own vs believed
+enemy capital — `capital_confirmed` preferred over the posterior peak;
+excludes the believed-capital ring and duplicate/visible targets; pushed
+before Real/Attack variants so k=7 always retains them). goal_potential
+already prices unexplored targets approach-only (reward.rs v4) — no pricing
+changes. `MacroParams.belief_mode {off,world,candidates,both}` (`--macro-
+belief-mode1/2`, 035's `--macro-belief1/2` alias World); per-side
+`--macro-k1/2`; telemetry = winning-candidate CLASS per planned turn
+(executions, not offers — the 035 lesson) + consecutive-turn re-picks of
+the same fog target (plan-stability tell). Scope note: belief conditions
+the ROOT enumeration only; deeper in-tree enumerations (own and opponent
+turns) stay belief-blind — the opponent's simulated counters never see
+pov's belief.
+
+Setup (pinned): config1 `--backend1 macro-mcts --macro-belief-mode1
+candidates --macro-k1 7`; config2 `--backend2 macro-mcts` (k=4 production
+generator); **both `--macro-sims 48`** — compute-matched, and baseline-at-48
+≈ baseline-at-32 strength per 033b's flat 32→64 (pinned so this arm isn't
+moving two dials silently). 500 seeds ×2 = 1000 games, base_seed
+1787000000, gamemode 2, max-turns 30, imperius, metal, GUMBEL_SCALE=0,
+dumps `replays/exp036/armA`.
+
+Predictions:
+- **P1:** config1 ≥ 52.5% (z ≥ 1.58) → CONFIRMED — **scoped: a win
+  confirms "richer fog-expansion candidates help"; attribution between
+  belief-partitioning and mere width is EXPLICITLY DEFERRED to the
+  pre-named ablation 036-abl** (same k=7, fog targets ranked by
+  distance-to-us only, posterior ignored) — the 035 star-ramp scoping
+  lesson applied prospectively. Falsifier: ≤ 50.0% — the offered plays
+  don't win directive selection or cost tempo when they do. 50.0–52.5% →
+  extend to 1250 seeds first.
+- **P2 (GUARDRAIL):** zero panicked/skipped games.
+- **P3 (GUARDRAIL):** ms/move config1 ≤ 1.4× config2 (k 7 vs 4 enlarges
+  rollout fan-out).
+- Context (gates interpretation): claim+contest must WIN ≥ 10% of planned
+  turns, else a flat P1 is "never picked", not "picked and worthless";
+  repick count reported for plan stability (flickering fog offers would
+  yank units mid-approach and read flat for a stability reason).
+
+Risk+tell: chasing wrong village predictions costs tempo — tell is P1
+falsified WITH a high claim-pick rate and config1's own score dropping
+(prediction-quality problem, fix predict_villages), vs falsified with ~0%
+picks (competitiveness problem, fix pricing/stance interaction).
+
+### ACTUAL (2026-08-14) — context gate FAILED: expressible ≠ competitive
+
+1000/1000 games (P2 pass, zero panics); ms/move 171 vs 171 — **k=7 is
+compute-free at matched sims** (P3 pass, 1.00×). P1 read 50.6% (z=+0.38),
+nominally the extend band — but the registered interpretability gate
+decides: **claim+contest won only 3.8% of 21,411 planned turns (gate ≥10%),
+so the arm answers competitiveness, not value — extending seeds would spend
+25 min measuring a play that barely fires.** The pre-registered "~0% picks"
+tell applies: fix why they lose directive selection before re-asking P1.
+Plan stability confirmed the advisor's predicted failure mode: 74 re-picks
+vs ~814 belief-class picks (~9% persistence) — a picked fog target must
+re-beat the scripted base from scratch every turn (update_goal's hysteresis
+has no memory of it) and usually loses. Divergence 42.0% (back in the 033
+band at sims=48).
+
+Diagnosis — three mechanisms examined, third quantified and EXONERATED by
+the `fog_offer_quality_probe` (20 scripted games, advisor-prompted): claim
+offers appear on 50–60% of player-turns FROM T0 (not sparse, not late —
+the northwest-rush window is covered), and 56–88% of predicted targets sit
+within 1 tile of a real village/city (mirror-Imperius scope; the climate
+heuristic being same-climate-dead did not materialize — orphan-resource
+evidence carries the predictor). Contest offers are rare (~2–20%): most
+predicted villages fall on the observer's side of the partition. So the
+tree DECLINES frequent, mostly-good offers — the two live mechanisms:
+1. **Leaf blindness to in-flight approach.** The macro tree's leaves are
+   `evaluate_state` only; λ·Δφ shapes PLY ranking inside rollouts but never
+   enters LEAF VALUES. A 4–7 tile walk to a predicted village pays only if
+   the capture completes inside the 2–3-own-turn effective horizon;
+   otherwise the leaf sees displaced units and no credit — the directive
+   loses to stance variants whose payoff (SPT) is leaf-visible immediately.
+   This is 028's core finding pointed at the macro layer: the goal must be
+   priced IN THE SEARCH OBJECTIVE, not only in move ordering.
+2. **No directive persistence** — nothing carries a chosen fog target into
+   the next turn's base, so multi-turn plays can't survive re-enumeration.
+
+#### Verdict — GATED NULL (not falsified, not confirmed): the vocabulary
+lever alone doesn't bind while the tree cannot CREDIT or SUSTAIN multi-turn
+expansion plays. Follow-up 036b (one delta each, in order): (a)
+potential-based shaping in the tree — Δφ of the node's ACTIVE directive
+accumulated on pov's own edges (telescoping to φ(leaf)−φ(root)), NOT naive
+φ-added-to-leaf, which would break the negamax antisymmetry invariant the
+backup rests on; extend the antisymmetry unit test to cover shaping, and
+expect the UCT c=0.05 to need re-dialing (it was dialed to the unshaped
+q-spread); (b) fog-target stickiness — committed expand targets join
+StanceCommit's hysteresis. Then re-ask this rung's P1; 036-abl
+(belief-blind width) stays queued for attribution only if the play becomes
+competitive.
+
+## EXP_ELO_038 — strategist memory: continuity by selection, not injection
+
+**Registered 2026-08-14, before running.** Verdi's architectural resolution
+after the 036b/037 chain: crediting the work of advance belongs to the
+EXECUTOR only (where it has lived since 032); the STRATEGIST gets memory
+instead of bribes. Two named deltas from 037 (a redesign, not a tuning arm
+— attribution between them deferred if needed):
+1. **Chooser shaping OFF** (shape_w=0) — removes the convicted −5pp
+  channel; plumbing kept for the still-untested approach-only variant.
+2. **Continuation candidates**: the agent remembers its last 3 picked
+  directives; each plan re-offers them on the ballot (deduped against the
+  enumerated set, fog orders the evidence has killed stripped before the
+  offer). The tree picks continuation when rollouts still like it and
+  pivots freely otherwise — the 036b forced base-injection is deleted.
+  Per-ply intra-turn stripping of the live goal stays (uncontroversial
+  hygiene). New CandidateClass::Continuation telemetry (class array → 7).
+
+Setup (pinned): config1 macro-mcts belief-mode candidates k1=7 (+ up to 3
+continuations appended past k), shape-w1 0; config2 production macro-mcts
+k=4; both sims=48; same base_seed 1787100000 (chain read); 500 seeds ×2 =
+1000 games; dumps `replays/exp038/armA`.
+
+Predictions:
+- **P1:** ≥ 52.5% vs production → CONFIRMED (strategist memory is worth
+  real ELO). Falsifier: ≤ 50.0% — memory doesn't bind at this decision
+  granularity. 50–52.5%: extend before verdict. Chain anchor: removing the
+  convicted shaping harm should alone recover toward rung-1's ~50.6%;
+  anything clearly above that is the memory's contribution.
+- **P2 (GUARDRAIL):** zero panics. **P3 (GUARDRAIL):** ms/move ≤ 1.15×
+  (shaping calls gone; a few extra candidates added).
+- Context (interpretability gates): continuation-pick rate ≥ 15% of
+  planned turns (else the memory is never used and a flat P1 says
+  nothing); divergence expected to DROP vs 037's 54.5% (chosen continuity
+  should stabilize strategy); claim/contest picks expected to fall back
+  toward rung-1 levels without shaping credit (the fog-play thread goes
+  dormant this arm — that's accepted; this arm tests MEMORY).
+
+Risk+tell: self-reinforcement — continuation re-picks compound (yesterday's
+choice crowds today's ballot) and the strategy ossifies; tell: continuation
+picks > 50% with divergence collapapsing toward zero AND P1 flat-negative.
+The dedup-against-base and the tree's freedom to pivot are the guards.
+
+### ACTUAL (2026-08-14) — P1 FALSIFIED at 48.6%: memory used, not useful
+
+1000/1000 (P2 pass; P3 pass at 0.99× — cheapest consumer arm yet).
+Continuation won 15.6% of 21.9k planned turns (interpretability gate ≥15%
+cleared exactly), divergence dropped 54.5→48.2% as predicted, ossification
+tell never fired. So: the strategist demonstrably used its memory, chose
+continuity over scratch-derived stance flips (stance picks 35→19%), and
+none of it bought wins — 48.6% vs production (z=−0.89), score dead even
+(4415 vs 4430). Chain: dropping the convicted shaping recovered +2pp
+(46.6→48.6); the remaining composite (k=7 + continuation + strips) sits at
+or slightly below plain rung-1 (50.6%, prior seed base).
+
+#### Verdict — FALSIFIED. Strategist memory as ballot candidates is
+neutral-to-slightly-negative at this decision granularity with heuristic
+leaves. PROGRAM-LEVEL READING after six consumer arms (035, 036r1, 036b,
+037, 038): no intervention that changes WHICH directive the tree picks has
+beaten the tree's own unshaped judgment over the production candidate set —
+harms when it forces (shaping, stickiness), neutral when it offers
+(candidates, memory). The selection layer is not starving for options or
+continuity; it is starving for EVALUATION — a heuristic leaf 2–3 own-turns
+deep cannot distinguish the futures these strategies create (033b's
+leaf-quality lever, still untouched). The macro program's next real forks:
+(1) Stage 3 — learned value at turn boundaries trained on macro-tree games
+(the original redesign endgame; the tree generates its own training data);
+(2) the eco-calibrated materializer + reality-weighted descent directives
+(still unbuilt); (3) integrate production macro-mcts (still the strongest
+agent in the repo, 66% over per-ply Gumbel) into the TRAINING loop as the
+self-play policy. All belief/hygiene/telemetry infrastructure survives for
+whichever runs.
+
+## EXP_ELO_037 — evidence-driven commitment retirement (menu item c)
+
+**Registered 2026-08-14, before running.** Single delta from 036b: the
+sticky commitment now CONSUMES the belief it serves (Verdi's spec). Four
+retirement rules + backstop, replacing the blind 6-turn cap:
+1. **Intra-turn strip**: select_move runs every ply on a fresh view — a fog
+   order seen explored-and-gone mid-turn is stripped from the LIVE goal that
+   ply (achieved orders exempt per 028's achieved-holds-cap semantics), and
+   the sticky commitment retires with it. Beliefs already updated per move;
+   the frozen directive was the only non-consumer.
+2. **Live-prediction re-validation** at plan time: a still-fogged target
+   must remain in the current predict_villages set — predictions move with
+   evidence, the commitment now moves with them.
+3. **No-progress retirement**: two consecutive plan turns where the closest
+   own unit failed to get closer → the order is a zombie distorting pricing
+   while nobody marches; retire.
+4. Achieved/adopted retirement, and **cap 4 as pure backstop** (not the
+   dose-slice 2: with evidence rules live, a 2-cap would amputate
+   legitimate 3–4-turn marches to real villages and dead-code rule 3).
+Telemetry: retirements by rule + mid-turn strips (STICKY RETIREMENTS line).
+
+Setup (pinned): IDENTICAL to 036b — config1 macro-mcts belief-mode
+candidates k1=7 shape-w1=1e-4, config2 production macro-mcts k=4, both
+sims=48, **same base_seed 1787100000** (cross-arm same-seed read vs 036b's
+45.3%, with the documented engine-flip caveat: σ_diff ≈ 2.2pp cross-run).
+500 seeds ×2 = 1000 games, dumps `replays/exp037/armA`.
+
+Predictions:
+- **P1a (mechanism, primary):** ≥ +3pp vs 036b's 45.3% (i.e. ≥ 48.3%) —
+  the retirement rules recover real value from the long-hold harm channel.
+  Falsifier: < +1.5pp — the 3+/6+ dose bands were mostly reverse causation
+  (losing games GENERATE long holds), channel A (selection-level shaping
+  double-pay) dominates → pivot to approach-only shaping.
+- **P1b (deployment, stretch):** ≥ 52.5% vs production → CONFIRMED. Honest
+  mix-math expectation if the dose slice is fully causal: converting the
+  276 long-hold games (~28% win) to short-hold behavior (~50–54%) predicts
+  ~+2–5pp → 47–50%; crossing 50% would beat that expectation.
+- **P2 (GUARDRAIL):** zero panics. **P3 (GUARDRAIL):** ms/move ≤ 1.25×.
+- Context: long-hold share (sticky_injected ≥3 per game) collapses vs
+  036b's 27.6%; retirements dominated by the evidence rules
+  (dead/unpredicted/no-progress), NOT the cap — cap-dominated retiring
+  would mean the rules never fire and the arm degenerates to cap-4.
+
+Risk+tell: over-eager retirement re-creates rung-1 flicker (units yanked
+mid-march from VALID targets) — tell: sticky_injected collapses toward
+zero AND claim picks stay high AND P1a fails; the no-progress rule (2
+strikes, not 1) and the achieved exemption are the guards.
+
+### ACTUAL (2026-08-14) — P1a FALSIFIED at +1.3pp: the dose bands were
+reverse causation; channel A convicted by elimination
+
+1000/1000 (P2 pass; P3 pass 1.12×). 46.6% vs production = **+1.3pp over
+036b's 45.3%, under the +1.5pp falsifier line** and inside σ_diff ≈ 2.2pp —
+statistically nothing. The over-eager-retirement tell did NOT fire
+(sticky_injected 1676 vs 1938, picks steady at 10.3%), and the machinery
+demonstrably worked: 3,778 mid-turn strips, retirements evidence-dominated
+(unpredicted 118, no-progress 82, achieved/adopted **814**, cap 3 — most
+commitments now END IN CAPTURE or script adoption). The plays complete;
+completing them doesn't win games.
+
+Three-arm causal chain, one delta each:
+- 036 rung 1 (candidates only): 50.6% — plays offered, never picked, flat.
+- 036b (+ shaping w=1e-4 + sticky): 45.3% — plays picked, −5pp.
+- 037 (036b + evidence retirement): 46.6% — commitment hygiene fixed,
+  ~nothing recovered.
+⇒ **The ~5pp harm lives in the selection-level shaping (channel A), not
+the commitment mechanics (channel B).** The 035/036b dose slices misled in
+exactly the direction their endogeneity caveats warned about.
+
+#### Verdict — FALSIFIED as registered; pivot to the named branch:
+**approach-only shaping** (strip GROW/ARM stance terms from the shaping
+potential; credit only Expand/Attack approach — the leaf-invisible
+quantity). The retirement engine stays (it's correct hygiene, near-free,
+and 814 capture-completions say the plays themselves now resolve
+properly); the next arm changes ONLY the potential. If approach-only
+shaping cannot reach parity while holding picks ≥8%, the conclusion
+hardens to: adherence credit at directive-selection is unsound in any
+form, and the macro tree should select on unshaped values with shaping
+confined to the executor (where 028 proved it).
+
+## EXP_ELO_036b — the enabler stack: credit the advance, keep the commitment
+
+**Registered 2026-08-14, before running.** Rung 1's gated null isolated two
+missing enablers, both solved before in this repo and now transplanted
+(Verdi's directive: "we need to reward hack — credit the work of advance"
+= 028's pricing lesson; "borrow the continuity solution" = StanceCommit/026
+sticky commitment):
+
+- **Δφ edge shaping in the macro tree** (`MacroParams.shape_w`,
+  `--macro-shape-w1/2`): potential-based reward w·(φ(s′,g)−φ(s,g)) on the
+  ROOT PLAYER's edges only, g = that edge's own directive, one GoalAux for
+  both sides of the difference (executor's edge_snapshot pattern — mixing
+  directives/auxes across the difference would mint reward on switches).
+  Backup is negamax-with-edge-rewards: v(parent) = r(edge) − v(child),
+  r=0 on opponent edges (reduces exactly to the old negation) — the sign
+  convention is pinned by `shaped_backup_matches_hand_computation` (4-node
+  prebuilt chain vs hand computation; a sign error would invert the
+  incentive at alternating depths). **w = 1e-4, dialed by probe** on
+  mid-window states: shaped bonuses land at +0.03–0.05, inside the measured
+  live q-band (0.01–0.07); 3e-4 is 2–3× the band; 1e-3 drives q>1
+  (pathological). At w=1e-4 the probed roots start PICKING claim/contest —
+  the credit mechanism works at the root.
+- **Sticky fog target** (026-style): a picked claim/contest target joins
+  the BASE directive on subsequent turns until captured, invalid
+  (explored & not capturable), adopted by the script itself, vetoed by a
+  RealFilter pick, or capped at 6 injected turns (a phantom prediction
+  must not pin base.orders forever — ~25% of targets are phantoms).
+  Telemetry: `sticky_injected` turns.
+
+Setup (pinned): config1 `--backend1 macro-mcts --macro-belief-mode1
+candidates --macro-k1 7 --macro-shape-w1 0.0001`; config2 `--backend2
+macro-mcts` (production: k=4, w=0, no belief). Both sims=48. 500 seeds ×2 =
+1000 games, base_seed 1787100000, gamemode 2, max-turns 30, imperius,
+metal, GUMBEL_SCALE=0, dumps `replays/exp036/armB`.
+
+**Attribution scoping (prospective, as in rung 1):** config1 bundles THREE
+deltas (belief candidates + shaping + stickiness), and shaping also prices
+BASE-directive adherence — a win confirms "the enabler stack works" and
+could in principle be carried by shaping alone. Pre-named ablations, run
+only on a win: 036b-abl1 = shaping-only (w=1e-4, no belief, k=4) vs
+production; 036b-abl2 = belief-blind width (k=7 distance-ranked) + shaping
++ stickiness vs 036b arm.
+
+Predictions:
+- **P1:** config1 ≥ 52.5% → CONFIRMED (scoped per above). Falsifier:
+  ≤ 50.0% — with credit AND persistence in place, if the plays still lose,
+  the rung-1 leaf-credit diagnosis was wrong or the plays are genuinely bad.
+  50.0–52.5% → extend before verdict.
+- **P2 (GUARDRAIL):** zero panicked games.
+- **P3 (GUARDRAIL):** ms/move config1 ≤ 1.3× (2 goal_potential calls per
+  own-edge expansion).
+- **Context, now EXPECTED to move (the mechanism test):** claim+contest
+  pick rate ≥ 10% (was 3.8%) — if it stays < 10% with shaping and
+  stickiness live, the credit diagnosis is falsified regardless of P1;
+  sticky_injected ≫ 0 and repicks ≫ 74 (persistence must be visible).
+
+Risk+tell: over-shaped adherence — the agent walks at fog mirages past
+real fights (tell: pick rate high, P1 falsified, score gap growing in
+CONTACT games specifically); w=1e-4 was chosen minimal-sufficient to
+bound this.
+
+### ACTUAL (2026-08-14) — P1 FALSIFIED HARD: 45.3% (z=−3.0). The enablers
+work mechanically; what they enable loses games.
+
+1000/1000 as pinned (P2 pass; P3 pass at 1.12×). Every context gate moved
+as demanded: claim+contest picks 10.2% (was 3.8%), sticky-injected 1938
+turns, divergence 42→56%. So the plays were selected AND sustained — and
+the stack loses by 4.7pp with its own score down ~400 (4095 vs 4502). The
+rung-1 "just make it selectable" theory is dead; the registered
+over-adherence tell fired.
+
+Behavioral autopsy (per-turn samples, orientation-verified): config1 runs
+FEWER units from t5 (2.43 vs 2.78), buys an early city lead by t10–15
+(2.32 vs 2.18 — the fog plays DO capture villages), then collapses by t20:
+units −1.4, SPT −1.5, and the city lead inverts (2.47 vs 2.68 — it LOSES
+cities while production grows). Early expansion bought with military tempo;
+production converts the army edge mid-game. NOT over-arming — the
+stance-pick inflation (25→35%) is INFERRED from the unit/SPT curves to be
+eco/expansion-leaning (class telemetry doesn't split Grow/Arm/Save).
+
+TWO harm channels, advisor-prompted split (the ACTUAL first named only one):
+- **Channel A — selection-level shaping double-pay** (tree, w=1e-4): see
+  design lesson below. Owns the t5 fewer-units signal (stickiness hasn't
+  accumulated by t5).
+- **Channel B — sticky phantom pursuit at EXECUTOR strength.** Stickiness
+  injects fog targets into base.orders, where the executor prices approach
+  at λ=1.0 — full production strength, not 1e-4 — for up to 6 turns; ~25%
+  of predictions are phantoms. Dose slice (endogeneity-caveated like 035's):
+  sticky 0 turns → 48.1%, **1–2 → 53.7% (above baseline — quick captures
+  look genuinely good)**, 3–5 → 34.0%, **6+ → 10.9%** (a target held to the
+  cap without capture = 6 turns of full-strength misdirection). The
+  city-lead inversion t10→t20 is at least as consistent with B as with A.
+
+Also unexamined (pinned so 036c doesn't inherit it silently): the
+pre-registered UCT re-dial never ran — w was dialed into the single-edge
+q-band, but shaped bonuses accumulate over multiple own edges on deep
+paths, so deep-path q inflation and premature concentration remain a
+possible contributor.
+
+Design lesson (channel A root): **shaping directive ADHERENCE at the
+directive-SELECTION level double-pays whatever the leaf already sees.**
+goal_potential mixes stance terms (GROW SPT, ARM army-stars — leaf-visible;
+evaluate_state already prices them) with order-approach terms (leaf-
+invisible). At the ply level (028) the goal is FIXED, so this is harmless
+steering; at the selection level every directive scores its own adherence,
+and the most pump-able φ terms (eco/expansion) win arguments they shouldn't.
+The uniquely legitimate shaping target is the leaf-INVISIBLE quantity:
+approach progress toward fog/attack targets.
+
+#### Verdict — FALSIFIED. Enabler machinery (shaping plumbing, sign-tested
+backup, stickiness, telemetry) is sound and kept; what it enables, as
+tuned, loses. Single-delta follow-up menu on kept machinery (each isolates
+one channel): (a) **036c approach-only shaping** — strip stance terms from
+the shaping potential, credit only Expand/Attack approach (kills the
+channel-A double-count); (b) **shaping-only** (no belief, k=4) —
+does channel A harm alone?; (c) **stickiness tuning** — three retirement rules (Verdi-specified): (1)
+INTRA-TURN order stripping — select_move runs every ply on a fresh view, so
+a fog target seen explored-and-not-capturable mid-turn is stripped from the
+live goal that same ply, not next plan (beliefs already update per move;
+the frozen directive was the only thing not consuming them); (2) retire
+when the target drops out of the LIVE prediction set at plan time; (3)
+retire after 2 consecutive no-approach-progress turns (closest own-unit
+distance to target failed to shrink — a zombie order distorting pricing
+while nobody marches). Plus cap 2. The 1–2-turn dose band sat ABOVE
+baseline at 53.7%, so short-hold fog plays may already be a win; (d)
+**stickiness-only** (rung-1 candidates + sticky, no shaping) — channel B
+in isolation. The dose slice makes (c) unusually promising for a tuning
+arm.
+
+## EXP_ELO_035 — MAP materialization: does a belief-fed opponent beat empty fog?
+
+**Registered 2026-08-13, before running.** Second rung of the belief ladder.
+The 034-calibrated belief is written into macro-mcts's fogged root before the
+tree runs: believed capital city at the posterior peak (engine-native via
+pov-swapped `capture_city`, pov-visible tiles stripped from the imagined
+border), ghost units at their recorded tiles, inferred residual army as
+warriors ringed around the capital hypothesis. `known_enemy_capital` re-keyed
+from exploration to presence so the materialized capital unlocks the
+attack-capital directive (obscure_fog deletes fogged enemy cities, so
+presence ⇔ sighted-or-materialized). Belief maintained by the arena harness
+(same validated 034 feed) and handed to the agent each turn.
+
+Changes: `belief.rs` (+`materialize_into`, `MaterializeStats`, `belief_for`,
+3 new tests incl. an 8-half-turn opponent-execution probe on materialized
+views), `macro_mcts.rs` (belief field + telemetry), `macro_agent.rs`
+(`known_enemy_capital`), arena `--macro-belief1/2` + `BELIEF MATERIALIZATION`
+line + dump fields.
+
+Deliberate decisions (in the ledger so the A/B is interpretable):
+- **Opp-star leak**: `obscure_fog` leaves the true star bank visible
+  (pre-existing since 033, mostly inert without fogged spend sites). The
+  belief arm REPLACES opp stars with a public ramp (2 + turn/2, cap 20) so a
+  materialized capital can't spend hidden information; the baseline arm keeps
+  the mostly-inert leak. A both-arms fix is out of scope here.
+- v1 scope cuts: naval ghosts skipped (land guard); residual materializes as
+  Warriors only; capital materializes at level 1/pop 0 (conservative floor);
+  only the TREE view is materialized (per-ply executor ranking sees the plain
+  fogged view); hidden_cities/confidence unused (034 verdict).
+
+Setup (pinned): arena `--backend1 macro-mcts --macro-belief1 --backend2
+macro-mcts`, both sims=32 k=4 λ=1.0 heuristic leaves; `--games 500` (=1000
+games, sides swapped); `--base-seed 1786900000`; `--gamemode 2 --max-turns 30
+--tribe imperius --eval-backend metal`; `GUMBEL_SCALE=0`; dumps
+`replays/exp035/armA`. Paired within-run A/B — the valid instrument given the
+16% engine-flip finding.
+
+Predictions:
+- **P1 (headline):** belief side ≥ 52.5% (z ≥ 1.58, σ=1.58pp at n=1000) →
+  CONFIRMED. Falsifier: ≤ 50.0% — materialization as built does not beat
+  empty fog (belief value doesn't survive contact with the tree, or the
+  imagined world misleads more than it informs). 50.0–52.5%: inconclusive →
+  extend to 1250 seeds before any verdict.
+- **P2 (GUARDRAIL):** zero panicked/skipped games — materialized views must
+  execute cleanly through full games.
+- **P3 (GUARDRAIL):** ms/move config1 ≤ 1.3× config2 (materialization is a
+  per-turn O(few-tiles) edit).
+- Context (gates interpretation, not a pass/fail): capital-materialization
+  rate expected ~10–40% of planned turns (posterior confirms by ~t10, after
+  which the real capital is in the view and materialization correctly
+  no-ops). If < 5%, a flat P1 is uninterpretable (window too small) — the
+  follow-up is widening what materialization covers, not a verdict.
+
+Risk+tell: the imagined army makes the agent over-cautious (turtling vs
+phantom warriors) — tell is P1 falsified WITH high materialization rate and
+the belief side losing on score at t30 in games that never reached contact.
+
+### ACTUAL (2026-08-13) — P1 FALSIFIED at a real dose: 49.7%, dead flat
+
+1000/1000 games completed as pinned (P2 guardrail pass — zero panics on
+materialized views across ~222k planned moves). ms/move 141 vs 121 (1.17×,
+P3 pass — imagined units genuinely enlarge rollout branching). Macro
+divergence 35.4%. **Capital materialized on 48.1% of planned turns, 1.27
+units/turn — the null is real, not window-starved: materialization ran on
+half of all plans and bought nothing (497/1000, z=−0.19).**
+
+Post-hoc dose slices (ENDOGENOUS — dose is not randomized; a large hidden
+enemy army causes both high materialization and losing, so read as
+hypothesis-generating only):
+- Inverted-U in capital dose: <25% of turns → 50.9% (n=165); 25–60% →
+  **55.8%** (n=548, nominal z≈2.7); >60% → **37.3%** (n=287, config1's own
+  score collapses to 3515 vs 4447).
+- Units materialized: <10/game → 85.6% wins (n=167); ≥30/game → 20.9%
+  (n=363). Consistent with the registered turtling tell (phantom warriors →
+  passivity) AND with reverse causation (losing → bigger hidden army → more
+  materialization). This arm cannot separate them.
+
+Read (SCOPED — advisor-prompted): the arm bundled TWO deltas —
+materialization AND the opp-star-ramp replacement — so the null is strictly
+"materialization + star-ramp does not beat empty-fog + leaked-true-stars."
+The leak is not inert in the baseline: sighted opp cities survive
+obscure_fog and the tree trains from them every rollout. Post-hoc bank check
+(mid_*.json boards at t12): true banks mean 5.2 / median 4 vs ramp 8 —
+**the ramp over-funds the belief arm's sim opponent 2× (64.8% of true banks
+sit below it)**, pushing the same direction as phantom-army turtling. What
+survives unscoped: root-world fidelity as consumed here is not the lever at
+k=4/sims=32/heuristic leaves; the mid-dose band hints at value in the
+normal confirmation window, causal arrow unresolved.
+
+#### Verdict — FALSIFIED (the second useful null of the macro program),
+scoped to the materialization+ramp bundle. The belief itself remains
+calibrated and cheap (034 stands); what failed is this consumer. Follow-up
+menu (each a one-knob arm on the kept infrastructure): (1) **candidate
+generator** — still top; both nulls point there and neither confounds that
+question; (2) 035b residuals-off (capital+ghosts only) — pins the
+phantom-army arrow; (3) 035c calibrated-ramp (median-bank ramp, ~turn/3) —
+pins the over-funding arrow. The bank check makes (3) at least as sharp as
+(2). Keep `--macro-belief1/2` + BELIEF MATERIALIZATION telemetry.

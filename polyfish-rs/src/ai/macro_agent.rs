@@ -35,13 +35,58 @@ pub struct MacroParams {
     pub lambda: f32,
     /// EXP_ELO_033: simulations per turn-level tree search (macro-mcts only).
     pub sims: usize,
+    /// EXP_ELO_035/036: what the agent does with its harness-fed belief.
+    pub belief_mode: BeliefMode,
+    /// EXP_ELO_036b: weight on potential-based Δφ edge rewards in the macro
+    /// tree (pov's own edges only; 0.0 = off, byte-identical to pre-036b).
+    pub shape_w: f32,
 }
 
 impl Default for MacroParams {
     fn default() -> Self {
-        Self { k: 4, horizon: 2, leaf: MacroLeaf::Heuristic, lambda: 1.0, sims: 32 }
+        Self {
+            k: 4,
+            horizon: 2,
+            leaf: MacroLeaf::Heuristic,
+            lambda: 1.0,
+            sims: 32,
+            belief_mode: BeliefMode::Off,
+            shape_w: 0.0,
+        }
     }
 }
+
+/// EXP_ELO_035/036: how a macro-mcts agent consumes its harness-fed belief.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum BeliefMode {
+    /// Belief ignored (production baseline).
+    Off,
+    /// 035: materialize the MAP world into the plan view before the tree.
+    World,
+    /// 036 rung 1: belief-conditioned fog-expansion candidates at the root
+    /// (claim safe side / contest enemy side over predicted villages).
+    Candidates,
+    /// World + Candidates.
+    Both,
+}
+
+/// Which generator rule produced a candidate — the class telemetry that
+/// makes a flat 036 result interpretable (picked-vs-offered, per class).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CandidateClass {
+    Base = 0,
+    Stance = 1,
+    RealFilter = 2,
+    AttackCapital = 3,
+    ClaimSafe = 4,
+    Contest = 5,
+    /// EXP_ELO_038: one of the strategist's last 3 picked directives,
+    /// re-offered — continuity by informed selection, never forced.
+    Continuation = 6,
+}
+
+/// Number of CandidateClass variants (telemetry array size).
+pub const CANDIDATE_CLASSES: usize = 7;
 
 /// Plans are made on the fogged view, so a chosen move can be illegal on the
 /// true state (arena ignores play_move failure and re-asks on unchanged state
@@ -128,20 +173,42 @@ pub fn enumerate_candidates(
     counters: TurnCounters,
     k: usize,
 ) -> Vec<MacroGoal> {
-    let mut out: Vec<MacroGoal> = vec![base.clone()];
-    let push = |mut g: MacroGoal, out: &mut Vec<MacroGoal>| {
+    enumerate_candidates_with_belief(state, pov, base, counters, k, None)
+        .into_iter()
+        .map(|(g, _)| g)
+        .collect()
+}
+
+/// EXP_ELO_036 rung 1: class-tagged enumeration. With a belief, the set
+/// grows by fog-expansion candidates over predicted villages partitioned by
+/// the capital posterior — "claim the safe side" / "contest the enemy side"
+/// (the play that was inexpressible while expansion orders were filtered to
+/// visible villages). goal_potential already prices unexplored targets as
+/// approach-only (reward.rs), so the directives are honest under FOW.
+pub fn enumerate_candidates_with_belief(
+    state: &GameState,
+    pov: PlayerId,
+    base: MacroGoal,
+    counters: TurnCounters,
+    k: usize,
+    belief: Option<&crate::ai::belief::BeliefState>,
+) -> Vec<(MacroGoal, CandidateClass)> {
+    let mut out: Vec<(MacroGoal, CandidateClass)> = vec![(base.clone(), CandidateClass::Base)];
+    let push = |mut g: MacroGoal, class: CandidateClass, out: &mut Vec<(MacroGoal, CandidateClass)>| {
         g.orders.sort();
-        if !out.contains(&g) {
-            out.push(g);
+        if !out.iter().any(|(o, _)| *o == g) {
+            out.push((g, class));
         }
     };
 
     push(
         MacroGoal { orders: base.orders.clone(), stance: Stance::Grow, save_target: None },
+        CandidateClass::Stance,
         &mut out,
     );
     push(
         MacroGoal { orders: base.orders.clone(), stance: Stance::Arm, save_target: None },
+        CandidateClass::Stance,
         &mut out,
     );
     if let Some(lane) = save_batch_plan(state, pov, counters.tier3_bought) {
@@ -151,8 +218,80 @@ pub fn enumerate_candidates(
                 stance: Stance::Save,
                 save_target: Some(lane),
             },
+            CandidateClass::Stance,
             &mut out,
         );
+    }
+    if let Some(b) = belief {
+        let own_cap = state
+            .tiles
+            .iter()
+            .find(|(_, t)| t.capital_of == pov)
+            .map(|(&i, _)| i);
+        // Confirmed sighting beats the posterior peak when available.
+        let enemy_cap = b
+            .capital_confirmed
+            .or_else(|| b.capital_top(1).first().map(|(c, _)| *c));
+        if let (Some(own), Some(enemy)) = (own_cap, enemy_cap) {
+            let w = state.settings.size;
+            let cheb =
+                |a: i32, t: i32| ((a % w - t % w).abs()).max((a / w - t / w).abs());
+            let mut safe: Vec<i32> = Vec::new();
+            let mut contested: Vec<i32> = Vec::new();
+            for (&idx, _) in &crate::prediction::predict_villages(state) {
+                if cheb(idx, enemy) <= 1 {
+                    continue; // that's their capital area, not a village
+                }
+                if base.orders.iter().any(|(_, t)| *t == idx) {
+                    continue;
+                }
+                // predict_villages is fog-only; belt+suspenders for World
+                // mode interactions later.
+                if state
+                    .tiles
+                    .get(&idx)
+                    .map(|t| t.explorers.contains(&pov))
+                    .unwrap_or(true)
+                {
+                    continue;
+                }
+                if cheb(idx, own) <= cheb(idx, enemy) {
+                    safe.push(idx);
+                } else {
+                    contested.push(idx);
+                }
+            }
+            safe.sort_by_key(|&i| cheb(i, own));
+            contested.sort_by_key(|&i| cheb(i, own));
+            if !safe.is_empty() {
+                let mut orders = base.orders.clone();
+                for &t in safe.iter().take(2) {
+                    orders.push((OrderKind::Expand, t));
+                }
+                push(
+                    MacroGoal {
+                        orders,
+                        stance: base.stance,
+                        save_target: base.save_target.clone(),
+                    },
+                    CandidateClass::ClaimSafe,
+                    &mut out,
+                );
+            }
+            if let Some(&t) = contested.first() {
+                let mut orders = base.orders.clone();
+                orders.push((OrderKind::Expand, t));
+                push(
+                    MacroGoal {
+                        orders,
+                        stance: base.stance,
+                        save_target: base.save_target.clone(),
+                    },
+                    CandidateClass::Contest,
+                    &mut out,
+                );
+            }
+        }
     }
     // Real capturable/retakeable targets only — drops generator-guessed sites.
     let real: Vec<(OrderKind, i32)> = base
@@ -168,15 +307,17 @@ pub fn enumerate_candidates(
     if real != base.orders {
         push(
             MacroGoal { orders: real, stance: base.stance, save_target: base.save_target.clone() },
+            CandidateClass::RealFilter,
             &mut out,
         );
     }
-    if let Some(cap) = explored_enemy_capital(state, pov) {
+    if let Some(cap) = known_enemy_capital(state, pov) {
         if !base.orders.contains(&(OrderKind::Attack, cap)) {
             let mut orders = base.orders.clone();
             orders.push((OrderKind::Attack, cap));
             push(
                 MacroGoal { orders, stance: base.stance, save_target: base.save_target.clone() },
+                CandidateClass::AttackCapital,
                 &mut out,
             );
         }
@@ -185,14 +326,18 @@ pub fn enumerate_candidates(
     out
 }
 
-fn explored_enemy_capital(state: &GameState, pov: PlayerId) -> Option<i32> {
+/// An enemy capital present in the planning view. Under FOW any enemy city
+/// in the view is either genuinely sighted (permanent vision) or
+/// deliberately materialized from belief (EXP_ELO_035) — both are valid
+/// attack anchors, so presence is the test, not exploration.
+fn known_enemy_capital(state: &GameState, pov: PlayerId) -> Option<i32> {
     for (id, t) in &state.tribes {
         if *id == pov {
             continue;
         }
         for c in &t.cities {
             let Some(tile) = state.tiles.get(&c.idx) else { continue };
-            if tile.capital_of == *id && tile.explorers.contains(&pov) {
+            if tile.capital_of == *id {
                 return Some(c.idx);
             }
         }

@@ -253,6 +253,182 @@ impl BeliefState {
     }
 }
 
+/// Result of writing a belief into a planning view (EXP_ELO_035 telemetry).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MaterializeStats {
+    pub capital: bool,
+    pub ghost_units: u32,
+    pub residual_units: u32,
+}
+
+fn explored_by(state: &GameState, idx: i32, pov: PlayerId) -> bool {
+    state
+        .tiles
+        .get(&idx)
+        .map(|t| t.explorers.contains(&pov))
+        .unwrap_or(true)
+}
+
+fn land_spawnable(state: &GameState, idx: i32, ty: crate::types::UnitType) -> bool {
+    use crate::types::{SkillType, TerrainType};
+    let terrain_ok = matches!(
+        state.tiles.get(&idx).map(|t| t.terrain_type),
+        Some(TerrainType::Field) | Some(TerrainType::Forest)
+    );
+    let unit_ok = {
+        let skills = &crate::settings::units::get_unit_setting(ty).skills;
+        !skills.contains(&SkillType::Float) && !skills.contains(&SkillType::Carry)
+    };
+    let free = state
+        .tiles
+        .get(&idx)
+        .map(|t| t._unit_owner_id.is_none())
+        .unwrap_or(false);
+    terrain_ok && unit_ok && free
+}
+
+/// EXP_ELO_035: write the belief's MAP world into a fogged planning view — a
+/// throwaway clone, never the true game. Adds the believed capital city at
+/// the posterior peak (unless already sighted), ghost units at their
+/// recorded tiles, and the inferred residual army as warriors near the
+/// capital hypothesis. Also REPLACES the opponent's star bank with a crude
+/// public-info ramp: `obscure_fog` leaks the true bank, and a materialized
+/// spend site would otherwise let rollouts consume hidden information.
+pub fn materialize_into(view: &mut crate::game::Game, belief: &BeliefState) -> MaterializeStats {
+    let pov = belief.observer;
+    let opp = belief.opponent;
+    let mut stats = MaterializeStats::default();
+    let turn = view.state.settings.turn;
+
+    if let Some(t) = view.state.tribes.get_mut(&opp) {
+        t.stars = (2 + turn / 2).min(20);
+    }
+
+    // Believed capital: engine-native creation via capture_city Case 2 with
+    // the current player temporarily swapped to the opponent.
+    let mut anchor: Option<i32> = belief.capital_confirmed;
+    if anchor.is_none() {
+        if let Some(&(cell, _)) = belief.capital_top(1).first() {
+            let has_city = view
+                .state
+                .tribes
+                .get(&opp)
+                .map(|t| t.cities.iter().any(|c| c.idx == cell))
+                .unwrap_or(false);
+            if !explored_by(&view.state, cell, pov) && !has_city {
+                if let Some(tile) = view.state.tiles.get_mut(&cell) {
+                    // Generator invariant: support cells are Field capitals.
+                    tile.terrain_type = crate::types::TerrainType::Field;
+                    tile.owner = 0;
+                    tile._unit_owner_id = None;
+                }
+                let saved = view.state.settings.current_player_turn_id;
+                view.state.settings.current_player_turn_id = opp;
+                let ok = matches!(
+                    crate::actions::city::capture_city(&mut view.state, cell),
+                    Ok(_undo)
+                );
+                view.state.settings.current_player_turn_id = saved;
+                if ok {
+                    if let Some(tile) = view.state.tiles.get_mut(&cell) {
+                        tile.capital_of = opp;
+                    }
+                    // Strip pov-visible tiles from the imagined border: the
+                    // player KNOWS there is no enemy territory there.
+                    let vis: Vec<i32> = view
+                        .state
+                        .tribes
+                        .get(&opp)
+                        .and_then(|t| t.cities.iter().find(|c| c.idx == cell))
+                        .map(|c| {
+                            c._territory
+                                .iter()
+                                .copied()
+                                .filter(|&i| i != cell && explored_by(&view.state, i, pov))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    for &i in &vis {
+                        if let Some(t) = view.state.tiles.get_mut(&i) {
+                            t.owner = 0;
+                            t.ruling_city_coords = None;
+                        }
+                    }
+                    if let Some(t) = view.state.tribes.get_mut(&opp) {
+                        t.score -= crate::score::CITY_TERRITORY_SCORE * vis.len() as i32;
+                        if let Some(c) = t.cities.iter_mut().find(|c| c.idx == cell) {
+                            c._territory.retain(|i| !vis.contains(i));
+                        }
+                    }
+                    stats.capital = true;
+                    anchor = Some(cell);
+                }
+            }
+        }
+    }
+
+    // Ghost units: known enemies last seen entering fog, at their tiles.
+    // Naval ghosts are skipped (land guard) — v1 scope cut, in the ledger.
+    let ghosts: Vec<(i32, crate::types::UnitType)> = view
+        .state
+        .tribes
+        .get(&pov)
+        .map(|t| {
+            t.enemy_ghosts
+                .iter()
+                .filter(|(_, g)| g.owner == opp)
+                .map(|(&i, g)| (i, g.unit_type))
+                .collect()
+        })
+        .unwrap_or_default();
+    for (idx, ty) in ghosts {
+        if !explored_by(&view.state, idx, pov) && land_spawnable(&view.state, idx, ty) {
+            let _ = crate::actions::units::spawn_unit(&mut view.state, opp, ty, idx, false);
+            stats.ghost_units += 1;
+        }
+    }
+
+    // Residual army: inferred never-seen production, as warriors ringed
+    // around the capital hypothesis (they know where home is; we don't know
+    // where they stand).
+    if let Some(a) = anchor {
+        let n = ((belief.residual_army_stars / 2.0).floor() as i32).clamp(0, 4);
+        if n > 0 {
+            let mut placed = 0u32;
+            let mut candidates = vec![a];
+            candidates.extend(crate::functions::get_square_indices(
+                a,
+                1,
+                view.state.settings.size,
+            ));
+            candidates.extend(crate::functions::get_square_indices(
+                a,
+                2,
+                view.state.settings.size,
+            ));
+            for idx in candidates {
+                if placed >= n as u32 {
+                    break;
+                }
+                if !explored_by(&view.state, idx, pov)
+                    && land_spawnable(&view.state, idx, crate::types::UnitType::Warrior)
+                {
+                    let _ = crate::actions::units::spawn_unit(
+                        &mut view.state,
+                        opp,
+                        crate::types::UnitType::Warrior,
+                        idx,
+                        false,
+                    );
+                    placed += 1;
+                }
+            }
+            stats.residual_units = placed;
+        }
+    }
+    stats
+}
+
 /// Tile indices a move touches, from its serialized form (`src`/`target`).
 /// Tile-less moves (Research, EndTurn) return empty — and are therefore
 /// always unwitnessed when made by the opponent.
@@ -274,6 +450,12 @@ pub fn involved_tiles(m: &dyn Move) -> Vec<i32> {
 
 struct ObserverTrack {
     belief: BeliefState,
+    /// Both ORIGINAL capital tiles, snapshotted at game start:
+    /// `tile.capital_of` is reassigned to the capturer on capture
+    /// (actions/city.rs), so live lookups break as truth after mid-game
+    /// captures. Spawn location — the belief's target — never moves.
+    opp_capital: i32,
+    own_capital: i32,
     explored: std::collections::HashSet<i32>,
     ghost_keys: std::collections::HashSet<i32>,
     visible_stars: f32,
@@ -363,6 +545,8 @@ impl CalibHarness {
                 let explored = explored_set(state, obs);
                 ObserverTrack {
                     belief: BeliefState::new(size, players.len(), capital_of(obs), obs, opp),
+                    opp_capital: capital_of(opp),
+                    own_capital: capital_of(obs),
                     ghost_keys: state
                         .tribes
                         .get(&obs)
@@ -393,10 +577,12 @@ impl CalibHarness {
                 .copied()
                 .collect();
             if !newly.is_empty() {
+                // Sighting = exploring the spawn-capital tile (the city on it
+                // is observer-visible at that moment, whoever holds it now).
                 let capital_seen = newly
                     .iter()
                     .copied()
-                    .find(|&i| state.tiles.get(&i).map(|t| t.capital_of) == Some(opp));
+                    .find(|&i| i == track.opp_capital);
                 track.belief.on_explored(&newly, capital_seen);
             }
 
@@ -457,6 +643,14 @@ impl CalibHarness {
         }
     }
 
+    /// The maintained belief for `observer` (EXP_ELO_035 consumers).
+    pub fn belief_for(&self, observer: PlayerId) -> Option<&BeliefState> {
+        self.tracks
+            .iter()
+            .map(|t| &t.belief)
+            .find(|b| b.observer == observer)
+    }
+
     /// Log one belief-vs-truth row for `observer` (call at the start of the
     /// observer's own turn — the moment a planner would consume the belief).
     pub fn turn_row(&mut self, state: &GameState, observer: PlayerId) {
@@ -471,12 +665,7 @@ impl CalibHarness {
         let opp = b.opponent;
         let turn = state.settings.turn;
 
-        let truth_capital = state
-            .tiles
-            .iter()
-            .find(|(_, t)| t.capital_of == opp)
-            .map(|(&i, _)| i)
-            .unwrap_or(-1);
+        let truth_capital = track.opp_capital;
         let top = b.capital_top(3);
         let truth_p = b
             .capital_posterior
@@ -491,12 +680,7 @@ impl CalibHarness {
         // radius 3, unexplored only) — replicated from predict_enemy_capitals.
         let corner_hit = {
             let size = state.settings.size;
-            let own_cap = state
-                .tiles
-                .iter()
-                .find(|(_, t)| t.capital_of == observer)
-                .map(|(&i, _)| i)
-                .unwrap_or(0);
+            let own_cap = track.own_capital.max(0);
             let (px, py) = (own_cap % size, own_cap / size);
             let tx = if px < size / 2 { size - 1 } else { 0 };
             let ty = if py < size / 2 { size - 1 } else { 0 };
@@ -683,6 +867,553 @@ mod tests {
         b.on_opponent_delta(5, 25, true, false);
         assert_eq!(b.hidden_techs, 0.0);
         assert_eq!(b.residual_army_stars, 0.0);
+    }
+
+    fn generated_game(seed: i64) -> crate::game::Game {
+        let mut game = crate::game::Game::new();
+        game.state = crate::mapgen::generate(crate::mapgen::MapGenSettings {
+            size: crate::types::MapSize::Tiny,
+            map_type: crate::types::MapType::Drylands,
+            tribes: vec![
+                crate::types::TribeType::Imperius,
+                crate::types::TribeType::Imperius,
+            ],
+            seed,
+            ..Default::default()
+        });
+        game.post_load();
+        game
+    }
+
+    fn own_capital(state: &GameState, pid: PlayerId) -> i32 {
+        state
+            .tiles
+            .iter()
+            .find(|(_, t)| t.capital_of == pid)
+            .map(|(&i, _)| i)
+            .unwrap()
+    }
+
+    #[test]
+    fn materialize_adds_capital_ghost_and_residuals() {
+        let mut game = generated_game(9_200_000);
+        let own = own_capital(&game.state, 1);
+        let mut b = BeliefState::new(11, 2, own, 1, 2);
+        b.residual_army_stars = 6.0;
+        let map_cell = b.capital_top(1)[0].0;
+        // Plant a ghost the observer once saw departing next to the MAP cell.
+        game.state.tribes.get_mut(&1).unwrap().enemy_ghosts.insert(
+            map_cell + 1,
+            crate::states::GhostRecord {
+                unit_type: crate::types::UnitType::Warrior,
+                owner: 2,
+                turn: 0,
+            },
+        );
+        let mut view = game.clone_for_mcts(1);
+        // Deterministic spawnability for the ghost tile (fog terrain is
+        // prediction-dependent).
+        view.state.tiles.get_mut(&(map_cell + 1)).unwrap().terrain_type =
+            crate::types::TerrainType::Field;
+        let stats = materialize_into(&mut view, &b);
+        assert!(stats.capital, "believed capital not materialized");
+        assert_eq!(stats.ghost_units, 1, "ghost unit not spawned");
+        assert!(stats.residual_units >= 1, "no residual warriors placed");
+        let opp = view.state.tribes.get(&2).unwrap();
+        let city = opp.cities.iter().find(|c| c.idx == map_cell).expect("city");
+        assert_eq!(view.state.tiles.get(&map_cell).unwrap().capital_of, 2);
+        // No imagined border on tiles the observer can see.
+        for &t in &city._territory {
+            assert!(
+                !view.state.tiles.get(&t).unwrap().explorers.contains(&1),
+                "imagined territory painted on a pov-visible tile {t}"
+            );
+        }
+        assert!(opp.units.iter().any(|u| u.coords.idx == map_cell + 1));
+    }
+
+    /// EXP_ELO_036 rung 1: with a belief, the generator offers claim-safe /
+    /// contest fog-expansion candidates; without one, the set is unchanged.
+    #[test]
+    fn belief_conditioned_candidates_offered_and_partitioned() {
+        use crate::ai::macro_agent::{
+            enumerate_candidates, enumerate_candidates_with_belief, CandidateClass,
+        };
+        use crate::ai::oracle_macro::{update_goal, StanceCommit};
+        let mut found_belief_candidate = false;
+        for seed in 0..8i64 {
+            let mut game = generated_game(9_400_000 + seed);
+            // A few scripted turns so exploration reveals evidence for
+            // predict_villages (it needs explored orphan resources/climate).
+            {
+                use crate::ai::macro_exec;
+                use crate::ai::oracle_macro::scripted_goal;
+                let mut arch = crate::ai::oracle_macro::ArchetypeState::default();
+                let mut counters = macro_exec::TurnCounters::default();
+                for _ in 0..6 {
+                    if game.state.settings._game_over {
+                        break;
+                    }
+                    let player = game.state.settings.current_player_turn_id;
+                    let goal = scripted_goal(&game.state, player, 0);
+                    if !macro_exec::execute_turn(
+                        &mut game, player, &goal, &mut arch, &mut counters, 1.0,
+                    ) {
+                        break;
+                    }
+                }
+            }
+            let pov = game.state.settings.current_player_turn_id;
+            let opp = if pov == 1 { 2 } else { 1 };
+            let own = own_capital(&game.state, pov);
+            let b = BeliefState::new(11, 2, own, pov, opp);
+            let view = game.clone_for_mcts(pov);
+            let mut commit = StanceCommit::default();
+            let base = update_goal(&view.state, pov, &mut commit, 0);
+            let tagged = enumerate_candidates_with_belief(
+                &view.state,
+                pov,
+                base.clone(),
+                crate::ai::macro_exec::TurnCounters::default(),
+                8,
+                Some(&b),
+            );
+            let untagged = enumerate_candidates(
+                &view.state,
+                pov,
+                base.clone(),
+                crate::ai::macro_exec::TurnCounters::default(),
+                8,
+            );
+            // Belief-blind path must be byte-identical to the old behavior.
+            assert!(untagged.iter().all(|g| tagged.iter().any(|(t, _)| t == g)));
+            let enemy_cap_guess = b.capital_top(1)[0].0;
+            for (g, class) in &tagged {
+                let mut sorted = g.orders.clone();
+                sorted.sort();
+                assert_eq!(sorted, g.orders, "orders must stay sorted");
+                if matches!(class, CandidateClass::ClaimSafe | CandidateClass::Contest) {
+                    found_belief_candidate = true;
+                    for (_, t) in g.orders.iter().filter(|o| !base.orders.contains(o)) {
+                        assert!(
+                            !view
+                                .state
+                                .tiles
+                                .get(t)
+                                .map(|x| x.explorers.contains(&pov))
+                                .unwrap_or(true),
+                            "belief candidate target {t} is not a fog tile"
+                        );
+                        let w = view.state.settings.size;
+                        let cheb = |a: i32, c: i32| {
+                            ((a % w - c % w).abs()).max((a / w - c / w).abs())
+                        };
+                        assert!(
+                            cheb(*t, enemy_cap_guess) > 1,
+                            "target {t} sits on the believed capital"
+                        );
+                    }
+                }
+            }
+        }
+        assert!(
+            found_belief_candidate,
+            "no claim/contest candidate offered across 8 seeds — generator dead"
+        );
+    }
+
+    #[test]
+    fn confirmed_capital_skips_materialization() {
+        let game = generated_game(9_200_001);
+        let own = own_capital(&game.state, 1);
+        let mut b = BeliefState::new(11, 2, own, 1, 2);
+        b.on_explored(&[b.capital_top(1)[0].0], Some(b.capital_top(1)[0].0));
+        let mut view = game.clone_for_mcts(1);
+        let cities_before = view.state.tribes.get(&2).unwrap().cities.len();
+        let stats = materialize_into(&mut view, &b);
+        assert!(!stats.capital);
+        assert_eq!(view.state.tribes.get(&2).unwrap().cities.len(), cities_before);
+    }
+
+    /// The novel engine surface is the OPPONENT acting at an imagined city
+    /// (summons, border growth, income) — run several full simulated rounds
+    /// on a materialized view and require clean execution.
+    #[test]
+    fn materialized_view_survives_simulated_rounds() {
+        use crate::ai::macro_exec;
+        use crate::ai::oracle_macro::{scripted_goal, ArchetypeState};
+        for seed in 0..4i64 {
+            let mut game = generated_game(9_210_000 + seed);
+            let own = own_capital(&game.state, 1);
+            let mut b = BeliefState::new(11, 2, own, 1, 2);
+            b.residual_army_stars = 8.0;
+            let mut sim = game.clone_for_mcts(1);
+            let stats = materialize_into(&mut sim, &b);
+            assert!(stats.capital, "seed {seed}: no capital materialized");
+            let mut arch = ArchetypeState::default();
+            let mut counters = macro_exec::TurnCounters::default();
+            for _ in 0..8 {
+                if sim.state.settings._game_over {
+                    break;
+                }
+                let player = sim.state.settings.current_player_turn_id;
+                let goal = scripted_goal(&sim.state, player, 0);
+                if !macro_exec::execute_turn(&mut sim, player, &goal, &mut arch, &mut counters, 1.0)
+                {
+                    break;
+                }
+            }
+            // True game must be untouched by everything above.
+            assert!(game
+                .state
+                .tribes
+                .get(&2)
+                .unwrap()
+                .cities
+                .iter()
+                .all(|c| c.idx != b.capital_top(1)[0].0
+                    || own_capital(&game.state, 2) == c.idx));
+            let _ = &mut game;
+        }
+    }
+
+    /// EXP_ELO_036 rung-1 post-mortem: offer quality/timing. Per turn of 20
+    /// scripted games: were claim/contest candidates OFFERED, how many
+    /// safe/contested targets existed, and do predicted targets sit within
+    /// 1 tile of a real village/city (truth query)? Distinguishes "tree
+    /// declined good offers" from "offers were sparse, late, or wrong".
+    #[test]
+    #[ignore]
+    fn fog_offer_quality_probe() {
+        use crate::ai::macro_agent::{enumerate_candidates_with_belief, CandidateClass};
+        use crate::ai::macro_exec;
+        use crate::ai::oracle_macro::{scripted_goal, update_goal, ArchetypeState, StanceCommit};
+
+        let mut per_turn: std::collections::BTreeMap<i32, (u32, u32, u32, u32, u32)> =
+            std::collections::BTreeMap::new(); // (rows, claim_off, contest_off, targets, good_targets)
+        for seed in 0..20i64 {
+            let mut game = generated_game(9_500_000 + seed);
+            game.state.settings.mode =
+                crate::types::ModeType::from_repr(2).unwrap_or(crate::types::ModeType::Perfection);
+            game.state.settings.max_turns = 30;
+            let mut arch = ArchetypeState::default();
+            let mut counters = macro_exec::TurnCounters::default();
+            let mut commits = [StanceCommit::default(), StanceCommit::default()];
+            let mut beliefs = [
+                BeliefState::new(11, 2, own_capital(&game.state, 1), 1, 2),
+                BeliefState::new(11, 2, own_capital(&game.state, 2), 2, 1),
+            ];
+            let mut prev_explored = [
+                explored_set(&game.state, 1),
+                explored_set(&game.state, 2),
+            ];
+            for _ in 0..60 {
+                if game.state.settings._game_over {
+                    break;
+                }
+                let pov = game.state.settings.current_player_turn_id;
+                let seat = ((pov - 1) as usize).min(1);
+                let opp: PlayerId = if pov == 1 { 2 } else { 1 };
+                // Keep the capital posterior honest via exploration updates.
+                let now = explored_set(&game.state, pov);
+                let newly: Vec<i32> =
+                    now.difference(&prev_explored[seat]).copied().collect();
+                if !newly.is_empty() {
+                    let opp_cap = game
+                        .state
+                        .tiles
+                        .iter()
+                        .find(|(_, t)| t.capital_of == opp)
+                        .map(|(&i, _)| i);
+                    let seen = opp_cap.filter(|c| newly.contains(c));
+                    beliefs[seat].on_explored(&newly, seen);
+                    prev_explored[seat] = now;
+                }
+                let view = game.clone_for_mcts(pov);
+                let base = update_goal(&view.state, pov, &mut commits[seat], 0);
+                let tagged = enumerate_candidates_with_belief(
+                    &view.state,
+                    pov,
+                    base.clone(),
+                    counters,
+                    8,
+                    Some(&beliefs[seat]),
+                );
+                let turn = game.state.settings.turn;
+                let e = per_turn.entry(turn).or_default();
+                e.0 += 1;
+                for (g, class) in &tagged {
+                    let is_claim = *class == CandidateClass::ClaimSafe;
+                    let is_contest = *class == CandidateClass::Contest;
+                    if is_claim {
+                        e.1 += 1;
+                    }
+                    if is_contest {
+                        e.2 += 1;
+                    }
+                    if is_claim || is_contest {
+                        for (_, t) in g.orders.iter().filter(|o| !base.orders.contains(o)) {
+                            e.3 += 1;
+                            // Truth: a real village/city within Chebyshev 1.
+                            let w = game.state.settings.size;
+                            let good = (-1..=1).any(|dy| {
+                                (-1..=1).any(|dx| {
+                                    let x = t % w + dx;
+                                    let y = t / w + dy;
+                                    if x < 0 || x >= w || y < 0 || y >= w {
+                                        return false;
+                                    }
+                                    let i = y * w + x;
+                                    crate::functions::get_structure_type_at(&game.state, i)
+                                        == Some(crate::types::StructureType::Village)
+                                        || game
+                                            .state
+                                            .tribes
+                                            .values()
+                                            .any(|tr| tr.cities.iter().any(|c| c.idx == i))
+                                })
+                            });
+                            if good {
+                                e.4 += 1;
+                            }
+                        }
+                    }
+                }
+                let player = pov;
+                let goal = scripted_goal(&game.state, player, 0);
+                if !macro_exec::execute_turn(&mut game, player, &goal, &mut arch, &mut counters, 1.0)
+                {
+                    break;
+                }
+            }
+        }
+        eprintln!("=== fog offer quality (20 games, per player-turn) ===");
+        eprintln!("turn rows claim% contest% targets good%");
+        for (t, (rows, cl, co, tg, gd)) in &per_turn {
+            eprintln!(
+                "  t{t:2} {rows:4} {:5.1} {:6.1} {tg:6} {:5.1}",
+                100.0 * *cl as f32 / (*rows).max(1) as f32,
+                100.0 * *co as f32 / (*rows).max(1) as f32,
+                100.0 * *gd as f32 / (*tg).max(1) as f32,
+            );
+        }
+    }
+
+    /// EXP_ELO_034b: aux_fog offline calibration. Heavy probe, run manually:
+    /// FOG_CALIB_MODEL=<pinned copy> cargo test --release --features apple \
+    ///   --lib ai::belief -- --ignored aux_fog_calibration_probe --nocapture
+    /// Games are play_move-driven (observation memory accumulates; the
+    /// simulate path would starve the ghost channels the head trained on)
+    /// and features copy self_play.rs:1694 exactly: TRUE state + pov +
+    /// painted scripted goal — not a fogged clone.
+    #[test]
+    #[ignore]
+    fn aux_fog_calibration_probe() {
+        use crate::ai::features;
+        use crate::ai::macro_agent::MacroScriptAgent;
+        use crate::ai::network::PolyZeroNet;
+        use crate::ai::oracle_macro::{update_goal, StanceCommit};
+        use candle_core::{DType, Device};
+
+        let model_path = std::env::var("FOG_CALIB_MODEL")
+            .unwrap_or_else(|_| "model.safetensors".to_string());
+        let device = Device::Cpu;
+        let vb = unsafe {
+            candle_nn::VarBuilder::from_mmaped_safetensors(&[&model_path], DType::F32, &device)
+        }
+        .expect("model load");
+        let net = PolyZeroNet::new(vb).expect("net build");
+        assert!(net.has_fog_head(), "pinned model must carry aux_fog");
+
+        // (pred, label) pools, partitioned; band pools for P2.
+        let mut vis: Vec<(f32, f32)> = Vec::new();
+        let mut fog: Vec<(f32, f32)> = Vec::new();
+        let mut fog_by_turn: std::collections::BTreeMap<i32, Vec<(f32, f32)>> =
+            std::collections::BTreeMap::new();
+        let mut mass_bands: [Vec<(f32, f32)>; 3] = Default::default();
+        let mut games_with_ghosts = 0usize;
+        const GAMES: i64 = 40;
+
+        for seed in 0..GAMES {
+            let mut game = generated_game(9_300_000 + seed);
+            game.state.settings.mode =
+                crate::types::ModeType::from_repr(2).unwrap_or(crate::types::ModeType::Perfection);
+            game.state.settings.max_turns = 30;
+            let mut agents = [MacroScriptAgent::new(1.0), MacroScriptAgent::new(1.0)];
+            let mut commits = [StanceCommit::default(), StanceCommit::default()];
+            let mut tier3 = [0u32, 0u32];
+            let mut last_key: Option<(i32, PlayerId)> = None;
+            let mut ghost_seen = false;
+            let mut moves = 0;
+            while !crate::functions::is_game_over(&game.state) && moves < 500 {
+                let pov = game.state.settings.current_player_turn_id;
+                let seat = ((pov - 1) as usize).min(1);
+                let key = (game.state.settings.turn, pov);
+                if last_key != Some(key) {
+                    last_key = Some(key);
+                    let goal = update_goal(&game.state, pov, &mut commits[seat], tier3[seat]);
+                    let feats = features::state_to_cpu_features_goal(
+                        &game.state,
+                        pov,
+                        None,
+                        Some(&goal),
+                    )
+                    .expect("features")
+                    .into_game_features(&device)
+                    .expect("tensors");
+                    let (_, value) = net
+                        .forward(&feats.spatial_map, &feats.player_state)
+                        .expect("forward");
+                    let probs: Vec<f32> = value
+                        .fog_probs
+                        .expect("fog head")
+                        .flatten_all()
+                        .unwrap()
+                        .to_vec1()
+                        .unwrap();
+                    let opp: PlayerId = if pov == 1 { 2 } else { 1 };
+                    let mut truth = vec![0.0f32; probs.len()];
+                    if let Some(t) = game.state.tribes.get(&opp) {
+                        for u in &t.units {
+                            if !u.effects.contains(&crate::types::UnitEffect::Invisible) {
+                                let i = u.coords.idx as usize;
+                                if i < truth.len() {
+                                    truth[i] = 1.0;
+                                }
+                            }
+                        }
+                    }
+                    let turn = game.state.settings.turn;
+                    let mut fog_mass = 0.0f32;
+                    let mut hidden_count = 0.0f32;
+                    for i in 0..probs.len() {
+                        let explored = explored_by(&game.state, i as i32, pov);
+                        if explored {
+                            vis.push((probs[i], truth[i]));
+                        } else {
+                            fog.push((probs[i], truth[i]));
+                            fog_by_turn.entry(turn).or_default().push((probs[i], truth[i]));
+                            fog_mass += probs[i];
+                            hidden_count += truth[i];
+                        }
+                    }
+                    let band = match turn {
+                        5..=10 => Some(0),
+                        11..=17 => Some(1),
+                        18..=25 => Some(2),
+                        _ => None,
+                    };
+                    if let Some(bi) = band {
+                        mass_bands[bi].push((fog_mass, hidden_count));
+                    }
+                    if game
+                        .state
+                        .tribes
+                        .get(&pov)
+                        .map(|t| !t.enemy_ghosts.is_empty())
+                        .unwrap_or(false)
+                    {
+                        ghost_seen = true;
+                    }
+                }
+                let Some(m) = agents[seat].select_move(&mut game) else { break };
+                if m.move_type() == crate::types::MoveType::Research {
+                    if let Ok(tech) = m.tech_type() {
+                        if crate::settings::technology::get_technology_setting(tech).tier
+                            == Some(3)
+                        {
+                            tier3[seat] += 1;
+                        }
+                    }
+                }
+                game.play_move(m.as_ref());
+                moves += 1;
+            }
+            if ghost_seen {
+                games_with_ghosts += 1;
+            }
+        }
+
+        fn auc(pairs: &mut [(f32, f32)]) -> f32 {
+            pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            let n = pairs.len();
+            let mut rank_sum_pos = 0.0f64;
+            let mut pos = 0.0f64;
+            let mut i = 0usize;
+            while i < n {
+                let mut j = i;
+                while j + 1 < n && pairs[j + 1].0 == pairs[i].0 {
+                    j += 1;
+                }
+                let avg_rank = ((i + 1 + j + 1) as f64) / 2.0;
+                for p in pairs.iter().take(j + 1).skip(i) {
+                    if p.1 > 0.5 {
+                        rank_sum_pos += avg_rank;
+                        pos += 1.0;
+                    }
+                }
+                i = j + 1;
+            }
+            let neg = n as f64 - pos;
+            if pos == 0.0 || neg == 0.0 {
+                return f32::NAN;
+            }
+            ((rank_sum_pos - pos * (pos + 1.0) / 2.0) / (pos * neg)) as f32
+        }
+
+        fn pearson(pairs: &[(f32, f32)]) -> f32 {
+            let n = pairs.len() as f64;
+            if n < 3.0 {
+                return f32::NAN;
+            }
+            let (mx, my) = pairs.iter().fold((0.0f64, 0.0f64), |(a, b), p| {
+                (a + p.0 as f64, b + p.1 as f64)
+            });
+            let (mx, my) = (mx / n, my / n);
+            let (mut sxy, mut sxx, mut syy) = (0.0f64, 0.0f64, 0.0f64);
+            for p in pairs {
+                let dx = p.0 as f64 - mx;
+                let dy = p.1 as f64 - my;
+                sxy += dx * dy;
+                sxx += dx * dx;
+                syy += dy * dy;
+            }
+            (sxy / (sxx.sqrt() * syy.sqrt()).max(1e-12)) as f32
+        }
+
+        let vis_auc = auc(&mut vis);
+        let fog_auc = auc(&mut fog);
+        eprintln!("=== EXP_ELO_034b aux_fog calibration ({GAMES} games) ===");
+        eprintln!("P0 explored-tile AUC: {vis_auc:.3} (guardrail >= 0.90)");
+        eprintln!("P1 fog-tile AUC:      {fog_auc:.3} (pass >= 0.70, falsified < 0.60)");
+        for (bi, name) in ["t5-10", "t11-17", "t18-25"].iter().enumerate() {
+            let r = pearson(&mass_bands[bi]);
+            let n = mass_bands[bi].len();
+            let mean_mass: f32 =
+                mass_bands[bi].iter().map(|p| p.0).sum::<f32>() / n.max(1) as f32;
+            let mean_true: f32 =
+                mass_bands[bi].iter().map(|p| p.1).sum::<f32>() / n.max(1) as f32;
+            eprintln!(
+                "P2 {name}: r={r:.3} (n={n}, mean predicted mass {mean_mass:.2} vs true hidden {mean_true:.2})"
+            );
+        }
+        eprintln!("per-turn fog AUC:");
+        for (t, pairs) in fog_by_turn.iter_mut() {
+            let a = auc(pairs);
+            eprintln!("  t{t:2}: auc={a:.3} n={}", pairs.len());
+        }
+        eprintln!(
+            "ghost tripwire: {games_with_ghosts}/{GAMES} games accumulated ghosts"
+        );
+
+        assert!(
+            games_with_ghosts * 10 >= GAMES as usize * 3,
+            "ghost tripwire: observation memory did not accumulate — instrument invalid"
+        );
+        assert!(
+            vis_auc >= 0.90,
+            "P0 instrument guardrail failed (explored AUC {vis_auc:.3}): feature parity bug, P1 void"
+        );
     }
 
     #[test]

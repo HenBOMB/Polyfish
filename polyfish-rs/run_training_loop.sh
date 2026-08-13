@@ -412,8 +412,18 @@ do
     # EXP_ELO_007: bootstrap mode — every game is Greedy-vs-Greedy demonstration
     # data (soft policy targets + TD labels recorded for BOTH seats); anchor
     # games are redundant while cloning, so ANCHOR_FLAG stays empty above.
+    # Stage 3 (Aug 2026): MACRO_GEN=1 — macro-mcts (the repo's strongest
+    # agent, NN-free) generates the games instead: one-hot behavior-cloning
+    # policy targets for the executed ply + outcome/TD value labels, with the
+    # tree's COMMITTED directive painted into the goal channels (not the
+    # script's — they disagree on ~40-55% of turns). The trained value head
+    # is the Stage-3 macro-leaf candidate; gate it with the registered paired
+    # A/B (net leaf vs heuristic leaf) before it touches the tree.
     BACKEND_FLAG=""
-    if [ -n "${BOOTSTRAP:-}" ]; then
+    if [ -n "${MACRO_GEN:-}" ]; then
+        BACKEND_FLAG="--search-backend macro-mcts"
+        echo "🌲 MACRO_GEN=1 (Stage 3): macro-mcts generates self-play games (behavior cloning + on-distribution value labels)."
+    elif [ -n "${BOOTSTRAP:-}" ]; then
         BACKEND_FLAG="--search-backend greedy"
     fi
 

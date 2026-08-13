@@ -88,6 +88,9 @@ struct Node {
     children: Vec<Option<usize>>,
     edge_visits: Vec<f32>,
     edge_values: Vec<f32>,
+    /// EXP_ELO_036b: potential-based edge reward w·(φ(s',g)−φ(s,g)) from the
+    /// EDGE OWNER's perspective; nonzero only on the root player's edges.
+    edge_shape: Vec<f32>,
     visits: f32,
     /// Terminal (game over) or depth-capped leaf value, from `player`'s
     /// perspective; computed once (the executor and evaluator are
@@ -127,6 +130,7 @@ impl Node {
             children: vec![None; n],
             edge_visits: vec![0.0; n],
             edge_values: vec![0.0; n],
+            edge_shape: vec![0.0; n],
             visits: 0.0,
             frozen_value,
         }
@@ -163,6 +167,8 @@ pub struct MacroMctsStats {
 
 pub struct MacroMctsSearch {
     nodes: Vec<Node>,
+    /// Root player: the only player whose edges earn Δφ shaping rewards.
+    pov: PlayerId,
     pub stats: MacroMctsStats,
 }
 
@@ -204,8 +210,10 @@ impl MacroMctsSearch {
         root.children = vec![None; n];
         root.edge_visits = vec![0.0; n];
         root.edge_values = vec![0.0; n];
+        root.edge_shape = vec![0.0; n];
 
-        let mut search = MacroMctsSearch { nodes: vec![root], stats: MacroMctsStats::default() };
+        let mut search =
+            MacroMctsSearch { nodes: vec![root], pov, stats: MacroMctsStats::default() };
         for _ in 0..params.sims.max(1) {
             search.simulate(0, root_turn, params);
         }
@@ -249,7 +257,10 @@ impl MacroMctsSearch {
                 } else {
                     f32::NAN
                 };
-                println!("    edge {i} [{}]: visits={} q={q:+.4}", cands_dbg[i], root.edge_visits[i]);
+                println!(
+                    "    edge {i} [{}]: visits={} q={q:+.4} shape={:+.4}",
+                    cands_dbg[i], root.edge_visits[i], root.edge_shape[i]
+                );
             }
         });
         (best, stats)
@@ -288,7 +299,11 @@ impl MacroMctsSearch {
             break;
         }
         for &(pidx, e) in path.iter().rev() {
-            value = -value;
+            // Negamax with edge rewards: the child's value arrives from the
+            // child's perspective; the edge belongs to the parent, so
+            // v(parent) = r(edge) − v(child). r is 0 on opponent edges,
+            // reducing to the plain negation this replaced (EXP_ELO_036b).
+            value = self.nodes[pidx].edge_shape[e] - value;
             let node = &mut self.nodes[pidx];
             node.visits += 1.0;
             node.edge_visits[e] += 1.0;
@@ -309,6 +324,23 @@ impl MacroMctsSearch {
             )
         };
         let s = seat(player);
+        // EXP_ELO_036b: pre-move potential of THIS edge's directive, with one
+        // GoalAux for both sides of the difference (the executor's
+        // edge_snapshot pattern) — mixing directives or auxes across the
+        // difference would mint reward on switches, not approach.
+        let shape_pre = if params.shape_w != 0.0 && player == self.pov {
+            let aux = crate::ai::oracle_macro::scripted_goal_aux(
+                &game.state,
+                player,
+                &goal,
+                counters[s].techs_bought,
+                counters[s].tier3_bought,
+                Some(&arch[s]),
+            );
+            Some((crate::ai::reward::goal_potential(&game.state, player, &goal, Some(&aux)), aux))
+        } else {
+            None
+        };
         // An executor anomaly leaves the state where it stopped; the node is
         // still scoreable, so treat it like any other boundary.
         let _ = macro_exec::execute_turn(
@@ -319,10 +351,19 @@ impl MacroMctsSearch {
             &mut counters[s],
             params.lambda,
         );
+        let shape = match &shape_pre {
+            Some((pre, aux)) => {
+                let post =
+                    crate::ai::reward::goal_potential(&game.state, player, &goal, Some(aux));
+                params.shape_w * (post - pre)
+            }
+            None => 0.0,
+        };
         let child = Node::new(game, other(player), counters, arch, root_turn, params.k);
         let child_idx = self.nodes.len();
         self.nodes.push(child);
         self.nodes[parent].children[edge] = Some(child_idx);
+        self.nodes[parent].edge_shape[edge] = shape;
         child_idx
     }
 }
@@ -339,6 +380,46 @@ pub struct MacroMctsAgent {
     pub divergent_turns: u32,
     pub planned_turns: u32,
     pub last_stats: MacroMctsStats,
+    /// EXP_ELO_035: belief handed in by the harness each turn; consumed per
+    /// `params.belief_mode` (World: materialize the plan view; Candidates:
+    /// belief-conditioned root enumeration; Both; Off: ignored).
+    pub belief: Option<crate::ai::belief::BeliefState>,
+    pub mat_capital_turns: u32,
+    pub mat_units: u32,
+    /// EXP_ELO_036/038: winning candidate class per planned turn, indexed by
+    /// `CandidateClass as usize` (base/stance/real/attack/claim/contest/
+    /// continuation).
+    pub class_picks: [u32; crate::ai::macro_agent::CANDIDATE_CLASSES],
+    /// Same belief fog-target re-picked on the very next planned turn
+    /// (fresh claim/contest picks only; sustained plays show as
+    /// Continuation picks since 038).
+    pub belief_repicks: u32,
+    last_belief_target: Option<i32>,
+    /// EXP_ELO_038 (Verdi spec): the strategist's last picked directives —
+    /// re-offered each plan as Continuation candidates. Continuity through
+    /// informed selection; the 036b/037 forced base-injection is gone.
+    recent_goals: std::collections::VecDeque<MacroGoal>,
+    /// EXP_ELO_037: fog orders stripped from the live goal MID-TURN when a
+    /// ply's own vision disconfirmed them (per-ply belief consumption).
+    pub intra_strips: u32,
+}
+
+/// EXP_ELO_038: how many recent picked directives stay on the ballot.
+const RECENT_GOALS: usize = 3;
+
+/// A fog-expansion order the observer's own vision has disconfirmed:
+/// explored, not ours-with-city (achieved orders keep paying by 028's
+/// achieved-holds-cap semantics), not capturable, not retakeable.
+fn fog_order_dead(state: &crate::states::GameState, t: i32, pov: PlayerId) -> bool {
+    let Some(tile) = state.tiles.get(&t) else { return true };
+    if !tile.explorers.contains(&pov) {
+        return false;
+    }
+    if tile.owner == pov && crate::functions::get_city_at(state, t).is_some() {
+        return false;
+    }
+    !crate::ai::oracle_macro::still_capturable(state, t, pov)
+        && !crate::ai::oracle_macro::retakeable_village(state, t, pov)
 }
 
 impl MacroMctsAgent {
@@ -353,18 +434,75 @@ impl MacroMctsAgent {
             divergent_turns: 0,
             planned_turns: 0,
             last_stats: MacroMctsStats::default(),
+            belief: None,
+            mat_capital_turns: 0,
+            mat_units: 0,
+            class_picks: [0; crate::ai::macro_agent::CANDIDATE_CLASSES],
+            belief_repicks: 0,
+            last_belief_target: None,
+            recent_goals: std::collections::VecDeque::new(),
+            intra_strips: 0,
         }
+    }
+
+    pub fn set_belief(&mut self, belief: crate::ai::belief::BeliefState) {
+        self.belief = Some(belief);
+    }
+
+    /// The directive committed for the current turn — the goal that actually
+    /// drove this ply, for feature painting (Stage 3: recorded features must
+    /// carry the goal the agent pursued, not the scripted base).
+    pub fn committed_goal(&self) -> Option<&MacroGoal> {
+        self.turn_goal.as_ref()
     }
 
     pub fn select_move(&mut self, game: &mut Game) -> Option<Box<dyn Move>> {
         let pov = game.state.settings.current_player_turn_id;
         let key = (game.state.settings.turn, pov);
         if self.plan_key != Some(key) {
-            let view0 = game.clone_for_mcts(pov);
+            use crate::ai::macro_agent::{BeliefMode, CandidateClass};
+            let mut view0 = game.clone_for_mcts(pov);
+            let use_world =
+                matches!(self.params.belief_mode, BeliefMode::World | BeliefMode::Both);
+            let use_cand =
+                matches!(self.params.belief_mode, BeliefMode::Candidates | BeliefMode::Both);
+            if use_world {
+                if let Some(b) = &self.belief {
+                    let st = crate::ai::belief::materialize_into(&mut view0, b);
+                    if st.capital {
+                        self.mat_capital_turns += 1;
+                    }
+                    self.mat_units += st.ghost_units + st.residual_units;
+                }
+            }
             let base =
                 update_goal(&view0.state, pov, &mut self.stance_commit, self.counters.tier3_bought);
-            let candidates =
-                enumerate_candidates(&view0.state, pov, base.clone(), self.counters, self.params.k);
+            let mut tagged = crate::ai::macro_agent::enumerate_candidates_with_belief(
+                &view0.state,
+                pov,
+                base.clone(),
+                self.counters,
+                self.params.k,
+                if use_cand { self.belief.as_ref() } else { None },
+            );
+            // EXP_ELO_038 (Verdi spec): the strategist's last picked
+            // directives join the ballot — continuity through informed
+            // selection, never injection. Orders the evidence has since
+            // killed are stripped before the offer; duplicates of candidates
+            // already on the ballot vanish.
+            for g in self.recent_goals.iter().rev() {
+                let mut cand = g.clone();
+                cand.orders.retain(|(kind, t)| {
+                    *kind != crate::ai::oracle_macro::OrderKind::Expand
+                        || !fog_order_dead(&view0.state, *t, pov)
+                });
+                cand.orders.sort();
+                if !tagged.iter().any(|(x, _)| *x == cand) {
+                    tagged.push((cand, CandidateClass::Continuation));
+                }
+            }
+            let candidates: Vec<MacroGoal> =
+                tagged.iter().map(|(g, _)| g.clone()).collect();
             let (pick, stats) = MacroMctsSearch::run(
                 &view0,
                 pov,
@@ -378,11 +516,55 @@ impl MacroMctsAgent {
             if pick != 0 {
                 self.divergent_turns += 1;
             }
+            let picked_class = tagged.get(pick).map(|(_, c)| *c);
+            if let Some(c) = picked_class {
+                self.class_picks[c as usize] += 1;
+            }
+            // Plan-stability: the same belief fog-target winning consecutive
+            // planned turns means units aren't being yanked mid-approach.
+            let belief_target = match picked_class {
+                Some(CandidateClass::ClaimSafe) | Some(CandidateClass::Contest) => tagged
+                    .get(pick)
+                    .and_then(|(g, _)| {
+                        g.orders
+                            .iter()
+                            .find(|o| !base.orders.contains(o))
+                            .map(|(_, t)| *t)
+                    }),
+                _ => None,
+            };
+            if belief_target.is_some() && belief_target == self.last_belief_target {
+                self.belief_repicks += 1;
+            }
+            self.last_belief_target = belief_target;
             self.turn_goal = candidates.into_iter().nth(pick);
+            // EXP_ELO_038: remember what we chose — tomorrow's ballot
+            // includes it.
+            if let Some(g) = &self.turn_goal {
+                self.recent_goals.push_back(g.clone());
+                while self.recent_goals.len() > RECENT_GOALS {
+                    self.recent_goals.pop_front();
+                }
+            }
             self.plan_key = Some(key);
         }
-        let goal = self.turn_goal.clone().unwrap_or_default();
         let mut view = game.clone_for_mcts(pov);
+        // EXP_ELO_037 rule 1: per-ply belief consumption — this ply's fresh
+        // view may have disconfirmed a fog order mid-turn (the directive was
+        // the only thing not consuming per-move belief updates). Strip dead
+        // fog orders from the LIVE goal now, not at the next plan.
+        if let Some(g) = self.turn_goal.as_mut() {
+            let before = g.orders.len();
+            g.orders.retain(|(kind, t)| {
+                *kind != crate::ai::oracle_macro::OrderKind::Expand
+                    || !fog_order_dead(&view.state, *t, pov)
+            });
+            let stripped = before - g.orders.len();
+            if stripped > 0 {
+                self.intra_strips += stripped as u32;
+            }
+        }
+        let goal = self.turn_goal.clone().unwrap_or_default();
         let ranked = crate::ai::macro_agent::rank_view(
             &mut view,
             pov,
@@ -412,6 +594,132 @@ mod tests {
         });
         game.post_load();
         game
+    }
+
+    /// EXP_ELO_036b: the negamax-with-edge-rewards backup, checked against a
+    /// hand computation on a prebuilt 4-node chain. A sign error here
+    /// silently inverts the shaping incentive at alternating depths.
+    /// Chain: n0(pov, r1) → n1(opp, 0) → n2(pov, r2) → n3(opp, frozen v).
+    /// Hand: n2.Q = r2−v; n1.Q = v−r2; n0.Q = r1+r2−v. With w=0 (all r=0)
+    /// the backup must reduce to the plain negation it replaced.
+    #[test]
+    fn shaped_backup_matches_hand_computation() {
+        let game = generated_game(3);
+        let root_turn = game.state.settings.turn;
+        let params = MacroParams::default();
+        let mk = |player: PlayerId, shape: f32, frozen: Option<f32>| {
+            let mut n = Node::new(
+                game.clone(),
+                player,
+                [TurnCounters::default(); 2],
+                Default::default(),
+                root_turn,
+                1,
+            );
+            n.candidates = vec![MacroGoal::default()];
+            n.children = vec![None];
+            n.edge_visits = vec![0.0];
+            n.edge_values = vec![0.0];
+            n.edge_shape = vec![shape];
+            n.frozen_value = frozen;
+            n
+        };
+        let (r1, r2, v) = (0.3f32, 0.2f32, 0.5f32);
+        for (s1, s2, expect_root, expect_n1, expect_n2) in [
+            (r1, r2, r1 + r2 - v, v - r2, r2 - v), // shaped
+            (0.0, 0.0, -v, v, -v),                 // w=0 regression: plain negation
+        ] {
+            let mut search = MacroMctsSearch {
+                nodes: vec![
+                    mk(1, s1, None),
+                    mk(2, 0.0, None),
+                    mk(1, s2, None),
+                    mk(2, 0.0, Some(v)),
+                ],
+                pov: 1,
+                stats: MacroMctsStats::default(),
+            };
+            search.nodes[0].children[0] = Some(1);
+            search.nodes[1].children[0] = Some(2);
+            search.nodes[2].children[0] = Some(3);
+            search.simulate(0, root_turn, &params);
+            assert!((search.nodes[0].edge_values[0] - expect_root).abs() < 1e-6,
+                "root Q {} != {expect_root}", search.nodes[0].edge_values[0]);
+            assert!((search.nodes[1].edge_values[0] - expect_n1).abs() < 1e-6,
+                "n1 Q {} != {expect_n1}", search.nodes[1].edge_values[0]);
+            assert!((search.nodes[2].edge_values[0] - expect_n2).abs() < 1e-6,
+                "n2 Q {} != {expect_n2}", search.nodes[2].edge_values[0]);
+        }
+    }
+
+    /// EXP_ELO_036b w-dial (q-gap method): root q spread vs shaped-edge
+    /// magnitudes at candidate w values, on mid-window scripted states with
+    /// belief-conditioned candidates. Run manually:
+    ///   cargo test --lib ai::macro_mcts -- --ignored shape_w_dial --nocapture
+    #[test]
+    #[ignore]
+    fn shape_w_dial_probe() {
+        use crate::ai::belief::BeliefState;
+        use crate::ai::macro_agent::enumerate_candidates_with_belief;
+        for seed in [11i64, 12, 13, 14] {
+            let mut game = generated_game(9_600_000 + seed);
+            // Advance to the belief window.
+            let mut arch = ArchetypeState::default();
+            let mut counters = TurnCounters::default();
+            for _ in 0..12 {
+                if game.state.settings._game_over {
+                    break;
+                }
+                let player = game.state.settings.current_player_turn_id;
+                let goal = scripted_goal(&game.state, player, 0);
+                if !macro_exec::execute_turn(&mut game, player, &goal, &mut arch, &mut counters, 1.0)
+                {
+                    break;
+                }
+            }
+            let pov = game.state.settings.current_player_turn_id;
+            let opp: PlayerId = if pov == 1 { 2 } else { 1 };
+            let own = game
+                .state
+                .tiles
+                .iter()
+                .find(|(_, t)| t.capital_of == pov)
+                .map(|(&i, _)| i)
+                .unwrap_or(24);
+            let b = BeliefState::new(11, 2, own, pov, opp);
+            let view = game.clone_for_mcts(pov);
+            let mut commit = StanceCommit::default();
+            let base = update_goal(&view.state, pov, &mut commit, 0);
+            let tagged = enumerate_candidates_with_belief(
+                &view.state,
+                pov,
+                base,
+                TurnCounters::default(),
+                7,
+                Some(&b),
+            );
+            let cands: Vec<MacroGoal> = tagged.iter().map(|(g, _)| g.clone()).collect();
+            let classes: Vec<String> =
+                tagged.iter().map(|(_, c)| format!("{c:?}")).collect();
+            for w in [0.0f32, 1e-4, 3e-4, 1e-3] {
+                let params = MacroParams {
+                    k: 7,
+                    sims: 48,
+                    shape_w: w,
+                    ..MacroParams::default()
+                };
+                println!("  seed {seed} t{} w={w}: classes={classes:?}", view.state.settings.turn);
+                let (pick, _) = MacroMctsSearch::run_probed(
+                    &view,
+                    pov,
+                    cands.clone(),
+                    TurnCounters::default(),
+                    &ArchetypeState::default(),
+                    &params,
+                );
+                println!("    -> pick={pick} [{}]", classes.get(pick).cloned().unwrap_or_default());
+            }
+        }
     }
 
     /// Negamax correctness depends on this: evaluate_state must be

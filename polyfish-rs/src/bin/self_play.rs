@@ -1688,17 +1688,8 @@ fn play_single_game(
         }
 
 
-        // Get state tensor
         let current_network = if pov == 1 { network1 } else { network2 };
         let device = current_network.device();
-        let state_t = features::state_to_cpu_features_goal(
-            &game.state,
-            pov,
-            None,
-            macro_goal.as_ref(),
-        )
-        .and_then(|r| r.into_game_features(&device))
-        .expect("BUG: Failed to create state tensor - game state is invalid");
 
         // MCTS Search - use the correct agent
         let current_agent = if pov == 1 { &mut agent1 } else { &mut agent2 };
@@ -1722,7 +1713,7 @@ fn play_single_game(
                 Some(&archetype_states[seat]),
             )
         });
-        current_agent.set_macro_goal(macro_goal, star_gate);
+        current_agent.set_macro_goal(macro_goal.clone(), star_gate);
         current_agent.set_goal_aux(goal_aux);
 
         let trigger_info = if trace_villages
@@ -1847,6 +1838,26 @@ fn play_single_game(
         // whichever earlier step's label lands here as its "next decision".
         let root_value = current_agent.last_root_value();
         let root_own_value = current_agent.last_root_own_value();
+
+        // State tensor for the training sample. Encoded AFTER the search:
+        // a macro agent commits its directive DURING think, and the recorded
+        // features must carry the goal that actually drove this ply (the
+        // committed directive when macro, the scripted goal otherwise —
+        // search itself never mutates `game`, so the state is still
+        // pre-move). Gated on goal_channels like every other paint.
+        let feat_goal = if goal_channels {
+            current_agent.macro_committed_goal().or_else(|| macro_goal.clone())
+        } else {
+            None
+        };
+        let state_t = features::state_to_cpu_features_goal(
+            &game.state,
+            pov,
+            None,
+            feat_goal.as_ref(),
+        )
+        .and_then(|r| r.into_game_features(&device))
+        .expect("BUG: Failed to create state tensor - game state is invalid");
         let step_trace = if trace_all {
             current_agent.take_trace()
         } else {
@@ -3135,12 +3146,12 @@ fn main() -> anyhow::Result<()> {
         SearchBackendArg::Gumbel => SearchBackend::Gumbel { k: args.gumbel_k },
         SearchBackendArg::Heuristic => SearchBackend::Heuristic,
         SearchBackendArg::Greedy => SearchBackend::Greedy,
-        // EXP_ELO_032/033: arena-only bootstrap backends; self-play has no
-        // macro-params plumbing (or use for it) yet.
-        SearchBackendArg::MacroScript
-        | SearchBackendArg::MacroLookahead
-        | SearchBackendArg::MacroMcts => {
-            anyhow::bail!("macro backends are arena-only (EXP_ELO_032/033)")
+        // Stage 3: macro-mcts generates training games (behavior-cloning
+        // policy targets + on-distribution value labels for the macro leaf).
+        SearchBackendArg::MacroMcts => SearchBackend::MacroMcts,
+        // EXP_ELO_032: arena-only bootstrap backends.
+        SearchBackendArg::MacroScript | SearchBackendArg::MacroLookahead => {
+            anyhow::bail!("macro-script/lookahead are arena-only (EXP_ELO_032)")
         }
     };
 
