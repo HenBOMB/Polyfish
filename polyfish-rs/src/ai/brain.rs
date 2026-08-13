@@ -124,7 +124,7 @@ pub enum SearchAgent<'a> {
     Greedy(crate::ai::heuristic_mcts::GreedyHeuristicAgent),
     MacroScript(MacroScriptAgent),
     MacroLookahead(MacroLookaheadAgent<'a>),
-    MacroMcts(crate::ai::macro_mcts::MacroMctsAgent),
+    MacroMcts(crate::ai::macro_mcts::MacroMctsAgent<'a>),
 }
 
 impl<'a> SearchAgent<'a> {
@@ -291,7 +291,7 @@ pub fn make_search_agent(
             MacroLookaheadAgent::new(evaluator, macro_params.unwrap_or_default()),
         ),
         SearchBackend::MacroMcts => SearchAgent::MacroMcts(
-            crate::ai::macro_mcts::MacroMctsAgent::new(macro_params.unwrap_or_default()),
+            crate::ai::macro_mcts::MacroMctsAgent::new(evaluator, macro_params.unwrap_or_default()),
         ),
     }
 }

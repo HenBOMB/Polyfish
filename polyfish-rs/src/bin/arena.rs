@@ -254,6 +254,15 @@ struct Args {
     #[arg(long, value_enum, default_value_t = BeliefMode::Off)]
     macro_belief_mode2: BeliefMode,
 
+    /// EXP_ELO_039: override --macro-leaf for config 1 (net-vs-heuristic
+    /// leaf A/B needs per-side leaves).
+    #[arg(long, value_enum)]
+    macro_leaf1: Option<MacroLeaf>,
+
+    /// Same as --macro-leaf1, for config 2.
+    #[arg(long, value_enum)]
+    macro_leaf2: Option<MacroLeaf>,
+
     /// EXP_ELO_036b: config 1's weight on potential-based Δφ edge rewards in
     /// the macro tree (own edges only; 0 = off). Credits the WORK of advance
     /// toward the active directive inside the search objective — the 028
@@ -1154,13 +1163,8 @@ fn main() -> anyhow::Result<()> {
              (EXP_ELO_032/033)"
         );
     }
-    // The turn-level tree scores leaves with the heuristic evaluator only.
-    if args.macro_leaf == MacroLeaf::Net
-        && (matches!(args.backend1, SearchBackendArg::MacroMcts)
-            || matches!(args.backend2, SearchBackendArg::MacroMcts))
-    {
-        anyhow::bail!("macro-mcts supports --macro-leaf heuristic only (EXP_ELO_033)");
-    }
+    // EXP_ELO_039 (Stage 3): macro-mcts accepts net leaves — the trained
+    // value head challenges the heuristic in the registered paired A/B.
     // Resolve belief modes: the enum flags win; the 035 bool flags alias World.
     let belief_mode1 = if args.macro_belief_mode1 != BeliefMode::Off {
         args.macro_belief_mode1
@@ -1199,6 +1203,7 @@ fn main() -> anyhow::Result<()> {
         k: args.macro_k1.unwrap_or(args.macro_k),
         belief_mode: belief_mode1,
         shape_w: args.macro_shape_w1,
+        leaf: args.macro_leaf1.unwrap_or(args.macro_leaf),
         ..base_params
     };
     let macro_params2 = MacroParams {
@@ -1206,12 +1211,14 @@ fn main() -> anyhow::Result<()> {
         k: args.macro_k2.unwrap_or(args.macro_k),
         belief_mode: belief_mode2,
         shape_w: args.macro_shape_w2,
+        leaf: args.macro_leaf2.unwrap_or(args.macro_leaf),
         ..base_params
     };
     if is_macro(args.backend1) || is_macro(args.backend2) {
         println!(
-            "MACRO BOOTSTRAP (EXP_ELO_032/033): leaf={:?} k={}/{} horizon={} lambda={} sims={}/{} belief={:?}/{:?} shape_w={}/{}",
-            args.macro_leaf,
+            "MACRO BOOTSTRAP (EXP_ELO_032/033): leaf={:?}/{:?} k={}/{} horizon={} lambda={} sims={}/{} belief={:?}/{:?} shape_w={}/{}",
+            macro_params1.leaf,
+            macro_params2.leaf,
             macro_params1.k,
             macro_params2.k,
             args.macro_horizon,

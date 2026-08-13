@@ -106,11 +106,16 @@ impl Node {
         arch: [ArchetypeState; 2],
         root_turn: i32,
         k: usize,
+        leaf_fn: &dyn Fn(&crate::states::GameState, PlayerId, u32) -> f32,
     ) -> Self {
         let frozen_value = if game.state.settings._game_over {
             Some(terminal_value(&game.state, player))
         } else if game.state.settings.turn - root_turn >= TURN_DEPTH_CAP {
-            Some(crate::ai::evaluate_state(&game.state, player))
+            Some(leaf_fn(
+                &game.state,
+                player,
+                counters[seat(player)].tier3_bought,
+            ))
         } else {
             None
         };
@@ -165,14 +170,43 @@ pub struct MacroMctsStats {
     pub root_visit_max_share: f32,
 }
 
-pub struct MacroMctsSearch {
+pub struct MacroMctsSearch<'a> {
     nodes: Vec<Node>,
     /// Root player: the only player whose edges earn Δφ shaping rewards.
     pov: PlayerId,
+    /// Stage 3: leaf scoring — heuristic `evaluate_state`, or the trained
+    /// value head when `leaf == Net` (macro-distilled model, EXP_ELO_039).
+    eval: &'a crate::ai::eval_server::Evaluator,
+    leaf: crate::ai::macro_agent::MacroLeaf,
     pub stats: MacroMctsStats,
 }
 
-impl MacroMctsSearch {
+/// Leaf value from `player`'s perspective. Net mode paints the SCRIPTED base
+/// goal for the leaf player (the committed directive is unknowable before
+/// the choice — a registered approximation) and reads win_value only
+/// (`.1` progress is stubbed 0.0 on tch/metal). Falls back to the heuristic
+/// on any feature/eval failure.
+fn leaf_value(
+    eval: &crate::ai::eval_server::Evaluator,
+    leaf: crate::ai::macro_agent::MacroLeaf,
+    state: &crate::states::GameState,
+    player: PlayerId,
+    tier3: u32,
+) -> f32 {
+    if leaf == crate::ai::macro_agent::MacroLeaf::Net {
+        let goal = scripted_goal(state, player, tier3);
+        if let Ok(f) =
+            crate::ai::features::state_to_cpu_features_goal(state, player, None, Some(&goal))
+        {
+            if let Some(r) = eval.evaluate(vec![f]).first() {
+                return r.0;
+            }
+        }
+    }
+    crate::ai::evaluate_state(state, player)
+}
+
+impl<'a> MacroMctsSearch<'a> {
     /// Run `sims` simulations from `root_game` (the acting player's fogged
     /// view) and return the winning root directive index. Root candidate 0
     /// must be the committed script base; ties break toward it.
@@ -183,10 +217,21 @@ impl MacroMctsSearch {
         own_counters: TurnCounters,
         own_arch: &ArchetypeState,
         params: &MacroParams,
+        evaluator: &crate::ai::eval_server::Evaluator,
     ) -> (usize, MacroMctsStats) {
-        Self::run_with(root_game, pov, root_candidates, own_counters, own_arch, params, |_| {})
+        Self::run_with(
+            root_game,
+            pov,
+            root_candidates,
+            own_counters,
+            own_arch,
+            params,
+            evaluator,
+            |_| {},
+        )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn run_with(
         root_game: &Game,
         pov: PlayerId,
@@ -194,6 +239,7 @@ impl MacroMctsSearch {
         own_counters: TurnCounters,
         own_arch: &ArchetypeState,
         params: &MacroParams,
+        evaluator: &crate::ai::eval_server::Evaluator,
         inspect: impl FnOnce(&MacroMctsSearch),
     ) -> (usize, MacroMctsStats) {
         debug_assert_eq!(root_game.state.tribes.len(), 2, "macro MCTS is 2-player only");
@@ -204,7 +250,11 @@ impl MacroMctsSearch {
         let mut arch: [ArchetypeState; 2] = Default::default();
         arch[seat(pov)] = own_arch.clone();
 
-        let mut root = Node::new(root_game.clone(), pov, counters, arch, root_turn, params.k);
+        let leaf = params.leaf;
+        let leaf_fn =
+            move |s: &crate::states::GameState, p: PlayerId, t3: u32| leaf_value(evaluator, leaf, s, p, t3);
+        let mut root =
+            Node::new(root_game.clone(), pov, counters, arch, root_turn, params.k, &leaf_fn);
         root.candidates = root_candidates;
         let n = root.candidates.len();
         root.children = vec![None; n];
@@ -212,8 +262,13 @@ impl MacroMctsSearch {
         root.edge_values = vec![0.0; n];
         root.edge_shape = vec![0.0; n];
 
-        let mut search =
-            MacroMctsSearch { nodes: vec![root], pov, stats: MacroMctsStats::default() };
+        let mut search = MacroMctsSearch {
+            nodes: vec![root],
+            pov,
+            eval: evaluator,
+            leaf,
+            stats: MacroMctsStats::default(),
+        };
         for _ in 0..params.sims.max(1) {
             search.simulate(0, root_turn, params);
         }
@@ -237,6 +292,7 @@ impl MacroMctsSearch {
 
     /// `run` plus a per-edge root dump on stdout (smoke instrumentation only).
     #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
     pub fn run_probed(
         root_game: &Game,
         pov: PlayerId,
@@ -244,12 +300,13 @@ impl MacroMctsSearch {
         own_counters: TurnCounters,
         own_arch: &ArchetypeState,
         params: &MacroParams,
+        evaluator: &crate::ai::eval_server::Evaluator,
     ) -> (usize, MacroMctsStats) {
         let cands_dbg: Vec<String> = root_candidates
             .iter()
             .map(|c| format!("{:?}/{}ord", c.stance, c.orders.len()))
             .collect();
-        let (best, stats) = Self::run_with(root_game, pov, root_candidates, own_counters, own_arch, params, |s| {
+        let (best, stats) = Self::run_with(root_game, pov, root_candidates, own_counters, own_arch, params, evaluator, |s| {
             let root = &s.nodes[0];
             for i in 0..root.candidates.len() {
                 let q = if root.edge_visits[i] > 0.0 {
@@ -279,7 +336,14 @@ impl MacroMctsSearch {
                 break;
             }
             if self.nodes[idx].candidates.is_empty() {
-                value = crate::ai::evaluate_state(&self.nodes[idx].game.state, self.nodes[idx].player);
+                let n = &self.nodes[idx];
+                value = leaf_value(
+                    self.eval,
+                    self.leaf,
+                    &n.game.state,
+                    n.player,
+                    n.counters[seat(n.player)].tier3_bought,
+                );
                 break;
             }
             let e = self.nodes[idx].select_edge();
@@ -290,9 +354,15 @@ impl MacroMctsSearch {
             }
             let child = self.expand(idx, e, root_turn, params);
             let cn = &self.nodes[child];
-            value = cn
-                .frozen_value
-                .unwrap_or_else(|| crate::ai::evaluate_state(&cn.game.state, cn.player));
+            value = cn.frozen_value.unwrap_or_else(|| {
+                leaf_value(
+                    self.eval,
+                    self.leaf,
+                    &cn.game.state,
+                    cn.player,
+                    cn.counters[seat(cn.player)].tier3_bought,
+                )
+            });
             // The child's value is from the child's perspective; the edge we
             // just descended belongs to the parent, so negate once here and
             // once per level in the unwind below.
@@ -359,7 +429,11 @@ impl MacroMctsSearch {
             }
             None => 0.0,
         };
-        let child = Node::new(game, other(player), counters, arch, root_turn, params.k);
+        let leaf = self.leaf;
+        let eval = self.eval;
+        let leaf_fn =
+            move |s: &crate::states::GameState, p: PlayerId, t3: u32| leaf_value(eval, leaf, s, p, t3);
+        let child = Node::new(game, other(player), counters, arch, root_turn, params.k, &leaf_fn);
         let child_idx = self.nodes.len();
         self.nodes.push(child);
         self.nodes[parent].children[edge] = Some(child_idx);
@@ -370,7 +444,9 @@ impl MacroMctsSearch {
 
 /// Stage 2 agent: per-turn directive commit like the Stage-1 lookahead, but
 /// the directive is chosen by the adversarial turn-level tree.
-pub struct MacroMctsAgent {
+pub struct MacroMctsAgent<'a> {
+    /// Stage 3: leaf evaluator when `params.leaf == Net` (idle otherwise).
+    evaluator: &'a crate::ai::eval_server::Evaluator,
     params: MacroParams,
     stance_commit: StanceCommit,
     archetype: ArchetypeState,
@@ -422,9 +498,10 @@ fn fog_order_dead(state: &crate::states::GameState, t: i32, pov: PlayerId) -> bo
         && !crate::ai::oracle_macro::retakeable_village(state, t, pov)
 }
 
-impl MacroMctsAgent {
-    pub fn new(params: MacroParams) -> Self {
+impl<'a> MacroMctsAgent<'a> {
+    pub fn new(evaluator: &'a crate::ai::eval_server::Evaluator, params: MacroParams) -> Self {
         Self {
+            evaluator,
             params,
             stance_commit: StanceCommit::default(),
             archetype: ArchetypeState::default(),
@@ -510,6 +587,7 @@ impl MacroMctsAgent {
                 self.counters,
                 &self.archetype,
                 &self.params,
+                self.evaluator,
             );
             self.last_stats = stats;
             self.planned_turns += 1;
@@ -582,6 +660,7 @@ impl MacroMctsAgent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::eval_server::{DummyEvalHandle, Evaluator};
 
     fn generated_game(seed: i64) -> Game {
         let mut game = Game::new();
@@ -607,6 +686,10 @@ mod tests {
         let game = generated_game(3);
         let root_turn = game.state.settings.turn;
         let params = MacroParams::default();
+        let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
+        let heur = |s: &crate::states::GameState, p: PlayerId, _t3: u32| {
+            crate::ai::evaluate_state(s, p)
+        };
         let mk = |player: PlayerId, shape: f32, frozen: Option<f32>| {
             let mut n = Node::new(
                 game.clone(),
@@ -615,6 +698,7 @@ mod tests {
                 Default::default(),
                 root_turn,
                 1,
+                &heur,
             );
             n.candidates = vec![MacroGoal::default()];
             n.children = vec![None];
@@ -637,6 +721,8 @@ mod tests {
                     mk(2, 0.0, Some(v)),
                 ],
                 pov: 1,
+                eval: &evaluator,
+                leaf: crate::ai::macro_agent::MacroLeaf::Heuristic,
                 stats: MacroMctsStats::default(),
             };
             search.nodes[0].children[0] = Some(1);
@@ -709,6 +795,7 @@ mod tests {
                     ..MacroParams::default()
                 };
                 println!("  seed {seed} t{} w={w}: classes={classes:?}", view.state.settings.turn);
+                let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
                 let (pick, _) = MacroMctsSearch::run_probed(
                     &view,
                     pov,
@@ -716,6 +803,7 @@ mod tests {
                     TurnCounters::default(),
                     &ArchetypeState::default(),
                     &params,
+                    &evaluator,
                 );
                 println!("    -> pick={pick} [{}]", classes.get(pick).cloned().unwrap_or_default());
             }
@@ -762,6 +850,7 @@ mod tests {
             let base = scripted_goal(&view.state, pov, 0);
             let cands = enumerate_candidates(&view.state, pov, base, TurnCounters::default(), 4);
             let k = cands.len();
+            let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
             let (_, stats) = MacroMctsSearch::run(
                 &view,
                 pov,
@@ -769,6 +858,7 @@ mod tests {
                 TurnCounters::default(),
                 &ArchetypeState::default(),
                 &MacroParams { sims: 32, ..Default::default() },
+                &evaluator,
             );
             assert!(
                 stats.nodes > k + 1,
@@ -779,11 +869,34 @@ mod tests {
         }
     }
 
+    /// Stage 3 net-leaf path: the tree must run and return a true-legal
+    /// move with `leaf: Net` (Dummy evaluator — exercises the feature-encode
+    /// + evaluate plumbing, not the values).
+    #[test]
+    fn net_leaf_tree_returns_true_legal_move() {
+        let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
+        let mut game = generated_game(5);
+        let mut agent = MacroMctsAgent::new(
+            &evaluator,
+            MacroParams {
+                sims: 16,
+                leaf: crate::ai::macro_agent::MacroLeaf::Net,
+                ..Default::default()
+            },
+        );
+        let m = agent.select_move(&mut game).unwrap();
+        let legal: Vec<String> =
+            game.legal_moves().iter().map(|x| x.serialize().to_string()).collect();
+        assert!(legal.contains(&m.serialize().to_string()), "net-leaf true-illegal move");
+    }
+
     #[test]
     fn mcts_agent_returns_true_legal_move() {
         for seed in 0..2i64 {
             let mut game = generated_game(seed);
-            let mut agent = MacroMctsAgent::new(MacroParams { sims: 16, ..Default::default() });
+            let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
+            let mut agent =
+                MacroMctsAgent::new(&evaluator, MacroParams { sims: 16, ..Default::default() });
             let m = agent.select_move(&mut game).unwrap();
             let legal: Vec<String> =
                 game.legal_moves().iter().map(|x| x.serialize().to_string()).collect();
@@ -834,6 +947,7 @@ mod tests {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(32);
             let t0 = std::time::Instant::now();
+            let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
             let (pick, stats) = MacroMctsSearch::run_probed(
                 &sim,
                 pov,
@@ -841,6 +955,7 @@ mod tests {
                 counters[seat(pov)],
                 &arch[seat(pov)],
                 &MacroParams { sims, ..Default::default() },
+                &evaluator,
             );
             println!(
                 "seed {seed} t{}: k={k} pick={pick} nodes={} depth={} share={:.2} ({}ms)",

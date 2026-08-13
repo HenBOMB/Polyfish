@@ -3224,6 +3224,61 @@ StanceCommit's hysteresis. Then re-ask this rung's P1; 036-abl
 (belief-blind width) stays queued for attribution only if the play becomes
 competitive.
 
+## EXP_ELO_039 — Stage 3 gate: does the macro-distilled value head beat the heuristic leaf?
+
+**Registered 2026-08-14, before running. RUN GATE: only after Verdi's
+20-iteration macro-distillation round completes and the model is
+SNAPSHOTTED (cp model.safetensors → a pinned path; record sha256 + iter
+count in the ACTUAL). Do not run against the live mutating file.**
+
+The bottleneck claim this tests (from the six-arm falsification program):
+macro directive selection starves for EVALUATION — a heuristic leaf 2–3
+own-turns deep cannot distinguish the futures competing strategies create.
+The counter-evidence standard was set in 032-E3 (net leaves were a wash),
+with the Stage-3 bet being that E3's net was OFF-distribution (per-ply
+Gumbel training, documented calibration problems) and a macro-distilled,
+on-distribution value head changes the answer.
+
+Changes: net-leaf path in the macro TREE (033 restricted it to lookahead):
+`MacroMctsAgent`/`MacroMctsSearch` carry the evaluator; leaf value =
+win_value on features painted with the SCRIPTED base goal for the leaf
+player (the committed directive is unknowable before the choice — a known
+approximation; `.1` progress stubbed on tch/metal, `.0` only; heuristic
+fallback on encode/eval failure). Arena: per-side `--macro-leaf1/2`, 033
+guard lifted. Dummy-evaluator tree test added.
+
+Setup (pinned at registration; model path filled at run time): config1
+`--backend1 macro-mcts --macro-leaf1 net --model1 <snapshot>`; config2
+`--backend2 macro-mcts` (heuristic leaf; model2 irrelevant/idle); both
+sims=32 k=4, no belief/shaping. Both arms SYMMETRICALLY carry the 038
+continuation-memory candidates (built unconditional; measured neutral in
+038, and symmetric here so it cannot confound the leaf read). 500 seeds
+×2 = 1000 games, fresh base_seed 1787300000, gamemode 2, max-turns 30,
+imperius, metal, GUMBEL_SCALE=0, dumps `replays/exp039/armA`.
+
+Predictions:
+- **P1 (the Stage-3 gate):** net leaf ≥ 52.5% → CONFIRMED — learned
+  evaluation beats the hand-written leaf at matched budget; the macro leaf
+  seat changes hands and the bottleneck diagnosis is validated. Falsifier:
+  ≤ 50.0% — distillation at this depth hasn't produced a discriminating
+  evaluator (more iterations / label changes before re-ask; the heuristic
+  keeps the seat). 50–52.5% → extend.
+- **P2 (mechanism, runs either way):** root q-spread probe on mid-game
+  states, net vs heuristic leaves — the bottleneck hypothesis predicts the
+  net WIDENS the measured 0.01–0.06 spreads. Widened spreads + P1 win =
+  clean confirmation; widened + P1 loss = discriminating but miscalibrated
+  (sign/scale work); unchanged spreads = the head learned the same
+  blindness (label problem).
+- **P3 (GUARDRAIL):** zero panics; ms/move config1 ≤ 3× config2 (one
+  batch-1 eval per sim, ~32/turn — the net leaf is not free).
+
+Risk+tell: value-head over-confidence transfers from the calibration
+diagnostic (documented pre-macro) — tell is P1 falsified with WIDE spreads
+and root_visit_max_share pinned near 1.0 (over-confident leaf collapses
+exploration).
+
+### ACTUAL — (pending; blocked on the 20-iter round + snapshot)
+
 ## EXP_ELO_038 — strategist memory: continuity by selection, not injection
 
 **Registered 2026-08-14, before running.** Verdi's architectural resolution
