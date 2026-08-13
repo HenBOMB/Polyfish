@@ -269,3 +269,66 @@ mod tests {
         println!("first giant: {first_giant:?} | per-player first-giant turns: {giant_first_by_player:?}");
     }
 }
+
+#[cfg(test)]
+mod stance_tests {
+    use super::*;
+
+    /// Per-turn raw stance signal audit for a replay (manual):
+    ///   REPLAY_FILE=... cargo test --lib stance_probe -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn stance_probe() {
+        let path = std::env::var("REPLAY_FILE").expect("set REPLAY_FILE");
+        let src: ModReplay =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read")).expect("parse");
+        println!("turn | P1 stance (raw) orders | enemy units seen <=2 of P1 cities | army stars P1/P2 | P1 stars");
+        for n in 1..=src.turns.len() {
+            let mut clip = src.clone();
+            clip.turns.truncate(n);
+            let mut game = Game::new();
+            let _ = replay_game(&mut game, &mut clip);
+            let turn = clip.turns.last().map(|t| t.turn).unwrap_or(0);
+            let state = &game.state;
+            let mut commit = crate::ai::oracle_macro::StanceCommit::default();
+            let g = crate::ai::oracle_macro::update_goal(state, 1, &mut commit, 0);
+            let w = state.settings.size;
+            let cheb = |a: i32, b: i32| ((a % w - b % w).abs()).max((a / w - b / w).abs());
+            let near = state
+                .tribes
+                .get(&2)
+                .map(|t| {
+                    t.units
+                        .iter()
+                        .filter(|u| {
+                            state
+                                .tiles
+                                .get(&u.coords.idx)
+                                .map(|x| x.explorers.contains(&1))
+                                .unwrap_or(false)
+                                && state.tribes.get(&1).map_or(false, |p1| {
+                                    p1.cities.iter().any(|c| cheb(c.idx, u.coords.idx) <= 2)
+                                })
+                        })
+                        .count()
+                })
+                .unwrap_or(0);
+            let stars_of = |pid: i32| {
+                state.tribes.get(&pid).map_or(0, |t| {
+                    t.units
+                        .iter()
+                        .map(|u| crate::settings::units::get_unit_setting(u.unit_type).cost)
+                        .sum()
+                })
+            };
+            println!(
+                "t{turn:2} | {:?} ({} orders) | {near} | {}/{} | {}",
+                g.stance,
+                g.orders.len(),
+                stars_of(1),
+                stars_of(2),
+                state.tribes.get(&1).map_or(0, |t| t.stars)
+            );
+        }
+    }
+}
