@@ -2629,3 +2629,372 @@ weight. Dial it, do not redesign it.
 on `goal_potential` (029, 030, 031) with 029 and 030 still undecided; 031 is the
 only one of the three with a clean, established, mechanistically-explained
 benefit.
+
+## EXP_ELO_032 — macro-decision bootstrap: scripted-directive executor + shallow turn-level lookahead
+
+**Registered 2026-08-12, before running.** Inference-only; no changes to
+training, network shapes, or the loop. This is the gate experiment for the
+hierarchical macro-MCTS redesign: search over per-turn directives with a
+deterministic executor for the plies.
+
+### Diagnosis
+
+Per-ply Gumbel at n=64 is depth-starved (~4 plies vs 8–20-ply turns,
+EXP_ELO_023) and the in-tree opponent is frozen. The redesign attacks all four
+documented tempo-learning failure mechanisms (credit horizon, V-not-Q, frozen
+opponent, contingent capture payoff) by making one search edge = one whole
+turn. Before building the tree: (0) is a scripted directive + deterministic
+whole-turn executor at least Greedy-strength, and (1) does enumerating K
+directives and rolling each out H turns (both seats, FOW-honest clones) beat
+the script alone?
+
+### Changes
+
+New `src/ai/macro_exec.rs` (goal-conditioned executor: the four oracle_macro
+root gates + `score_move + λ·Δgoal_potential` ranking, `execute_turn` via
+`simulate_single_end_turn`, `ghost_until` ghost-Greedy opponent turns) and
+`src/ai/macro_agent.rs` (`MacroScriptAgent` = Stage 0, `MacroLookaheadAgent` =
+Stage 1 with per-turn directive commit + divergence telemetry,
+`enumerate_candidates`: base + Grow/Arm/Save overrides + real-targets-only +
+attack-capital variants). New arena backends `macro-script` /
+`macro-lookahead` + flags `--macro-leaf/-k/-horizon/-lambda`; divergence in
+the dump JSON and stdout. Agents plan on `clone_for_mcts` fogged views
+(deliberate divergence from the 026/028 instrument, which reads the true
+state) and intersect ranked moves against the true legal set by `serialize()`
+(fog-planned moves can be true-illegal; arena ignores rejected moves, which
+would livelock). Rollouts never compose undos — fresh clone per candidate.
+
+### Setup (pinned)
+
+n=125 seeds ×2 orientations = 250 games/arm; base_seed 1786400000 (post-
+MAPGEN_001; the 770425 gauge is void); gamemode 2; max_turns 30; imperius
+both seats; --eval-backend metal; GUMBEL_SCALE=0 exported on every arm; model
+`model.safetensors` both configs (evaluators idle except E3/E4); macro params
+k=4 horizon=2 lambda=1.0; one binary (/tmp/exp032_target, --features apple);
+dumps `replays/exp032/arm{E1,C0a,E2,E3,C0b,E4}`.
+
+| arm | config1 | config2 |
+|---|---|---|
+| E1 | macro-script | greedy |
+| C0a | repeat of E1 | (determinism floor) |
+| E2 | macro-lookahead leaf=heuristic | macro-script |
+| E3 | macro-lookahead leaf=net | macro-script |
+| C0b | repeat of E3 | (net noise floor) |
+| E4 (opt.) | best lookahead | gumbel n=64 k=16 |
+
+Reads: within-arm z = (W−125)/7.91 over decisive games; seed-level paired
+read via `replays/exp026/analyze.py` + `causal_read.py`; C0 flip rates
+subtracted before believing any delta.
+
+### Predictions
+
+| arm | metric | predicted | falsified if |
+|---|---|---|---|
+| C0a | flip rate vs E1 | 0 | >0 → becomes the heuristic-arm noise floor |
+| C0b | flip rate vs E3 | <5% of games | >10% → net leaf unusable as-is |
+| E1 | Stage0 win vs Greedy | ≥50% | z < −1.96 (≤~110/250) = executor broken, halt |
+| E1 | win vs Greedy (GUARDRAIL) | ≥45% | <40% = do not read E2/E3 |
+| E2 | Stage1-heur win vs Stage0 | ≥56.4% (z ≥ 1.96) | <50% on two runs |
+| E3 | Stage1-net win vs Stage0 | ≥56.4% after C0b floor | <50% |
+| E2/E3 | divergent/planned turns | 15–50% | <10% = candidate set too narrow, no verdict |
+
+Go/no-go: E2 or E3 clearing z ≥ 1.96 past the noise floor = **GO** on the
+full macro-MCTS redesign. Flat with divergence ≥20% = no-go pending (H=3 /
+leaf quality first). Flat with divergence <10% = widen candidates, rerun.
+E3 vs E2 decides whether the redesign leans on net value leaves.
+
+Risk to watch: Stage 1 beating Stage 0 by exploiting its determinism
+(opponent-model overfit), not by better directives — Tell: E2 positive but E4
+collapses, with divergence concentrated in overrides that only pay against
+the script. Secondary: the fogged ghost opponent (invisible units absent)
+makes rollouts uniformly optimistic — watch win|reach conditionals in
+causal_read.py for inversion.
+
+**Stack note:** goal_potential is three undecided layers deep (029/030/031);
+the executor prices plies through the same Φ, so any later change to those
+layers invalidates cross-experiment comparisons of E-arm behaviour metrics,
+not the within-experiment paired reads.
+
+### ACTUAL (2026-08-12) — registered arms: gate passed, lookahead positive but under-powered; extension registered
+
+All five arms ran as pinned (250 games/arm, base_seed 1786400000, one binary).
+Runtime: script arms ~6s, lookahead arms ~40-46s per 250 games. ms/move:
+Greedy 0.7, MacroScript ~4.6, MacroLookahead ~33 (vs Gumbel n=64 ~166).
+
+| arm | metric | predicted | actual | verdict |
+|---|---|---|---|---|
+| C0a | flip rate vs E1 | 0 | **40/250 games (16.0%)**, net win% 55.2 vs 52.8 | **falsified** — the ENGINE is not run-to-run deterministic (pre-existing: no NN, no lookahead in these arms; movegen-order ties suspected). Identical-arm win% sd ≈ 2.5pp at n=250 |
+| C0b | flip rate vs E3 | <5% of games | 34/250 (13.6%) | falsified numerically, same cause as C0a — treated as the same engine floor, not a net-leaf pathology (C0b as an independent E3 replicate reads 52.0%) |
+| E1 | Stage0 win vs Greedy | >=50% | **55.2%** (138/250, z=+1.64) | CONFIRMED (gate + guardrail passed) |
+| E2 | Stage1-heur vs Stage0 | >=56.4% | 54.8% (137/250, z=+1.52) | not met — positive, under-powered |
+| E3 | Stage1-net vs Stage0 | >=56.4% | 53.6% (134/250, z=+1.14); pooled with C0b 264/500 = 52.8% | not met — positive, under-powered |
+| E2/E3 | divergent/planned turns | 15-50% | E2 42.4%, E3 60.4% | in/above band — candidate set is NOT too narrow |
+
+Secondaries (3-city reach, the causal bottleneck): **Stage0 76.8% vs Greedy
+62.4% (+14.4pp)** — the directive+executor moves the exact metric EXP_ELO_026
+proved causal. Lookahead's own reach is LOWER than standalone script
+(69.6-72.8%) while still winning more — it trades expansion for its overrides.
+
+Consequence of the C0 result: cross-arm seed-paired McNemar is invalidated
+(pairs are not stable across runs); the within-arm head-to-head z is the valid
+instrument, and game-level flip noise is already inside its binomial variance.
+
+#### Extension (registered 2026-08-12, before running): E1x/E2x/E3x at n=1250 seeds
+
+Same binary, same flags, base_seed **1786500000** (fresh non-overlapping
+range), 2500 games/arm — sigma = 1.0pp, so z>=1.96 needs >=52.0%.
+Predictions: E1x >= 52% (falsified if < 50%); E2x >= 52% (falsified if
+< 51%, i.e. the n=250 read was noise); E3x >= 52% (falsified if < 51%).
+GO on the redesign if E2x or E3x clears 52%; the E2x-vs-E3x ordering carries
+the leaf-choice read.
+
+#### ACTUAL (extension, 2026-08-12) — GO. Lookahead beats the script at z>5; leaf choice is a wash; Stage0 is Greedy-parity with far better reach
+
+2500 games/arm, base_seed 1786500000, same binary/flags. sigma = 1.0pp.
+
+| arm | predicted | actual | verdict |
+|---|---|---|---|
+| E1x Stage0 vs Greedy | >=52% (halt if <50%) | **50.9%** (1273/2500, z=+0.92) | prediction missed, halt condition clear — Stage0 is Greedy-PARITY in wins (the n=250 55.2% was mostly noise) while reaching 3 cities 74.6% vs 62.4% |
+| E2x Stage1-heur vs Stage0 | >=52% | **55.2%** (1379/2499 decisive, z=+5.18) | **CONFIRMED** |
+| E3x Stage1-net vs Stage0 | >=52% | **55.1%** (1377/2500, z=+5.08) | **CONFIRMED** |
+| divergence | — | E2x 42.3%, E3x 59.8% (stable vs n=250) | candidate set healthy |
+
+Reach (3+ cities), n=2500: E1x 74.6/62.4; E2x 72.2/64.0; E3x 74.2/62.0.
+
+Reads:
+- **The bootstrap thesis is CONFIRMED: one turn-level lookahead step over K=4
+  directives is worth +5.2pp head-to-head over the same executor without it**
+  (z>5, two independent leaf configurations replicating each other).
+- **E2x == E3x (55.2 vs 55.1): the net value head adds NOTHING over the
+  hand-written evaluator as a rollout leaf at H=2.** Consistent with the known
+  over-confidence miscalibration (EXP_ELO_021); the redesign must NOT assume
+  net leaves — value-head improvement is on the critical path only if later
+  stages show heuristic leaves saturating.
+- Stage0 alone converts a +12pp reach advantage into zero win margin vs
+  Greedy — directive-execution without directive-SELECTION leaves the gains on
+  the table; selection (lookahead) is where the wins come from. This is the
+  cleanest evidence yet for the macro-search direction.
+- Cost: MacroLookahead ~33 ms/move vs Gumbel n=64 ~166 ms/move — 5x cheaper
+  than production search while beating its own baseline, with zero NN calls in
+  the heuristic-leaf configuration.
+
+#### E4 (risk tell, run 2026-08-12 after E2x/E3x cleared): lookahead-heur vs production Gumbel n=64/k=16
+
+2500 games, base_seed 1786500000, GUMBEL_SCALE=0. Registered tell for the
+"lookahead exploits the script's determinism" risk: collapse here = overfit.
+
+**No collapse — the opposite: 62.5% (1562/2499 decisive, z=+12.5)** against
+the production model+search agent, at 16 vs 173 ms/move (10.8x faster) with
+zero NN calls. Divergence 45.0%, in line with E2x. The +5.2pp over Stage0 is
+real directive-selection strength that transfers to a completely different
+opponent; the NN-free lookahead agent is now plausibly the strongest agent in
+the repo at ~1/10 production compute. Risk retired.
+
+#### Verdict — GO (gate cleared)
+
+Proceed to Stage 2 of the redesign: a real macro-MCTS tree over directives
+(alternating turn-level nodes, Gumbel root over candidates, tree reuse), then
+Stage 3 AlphaZero-ification (macro policy head + value on turn boundaries).
+Heuristic leaves are the default evaluator until shown saturating.
+Kept: macro-script/macro-lookahead backends, EXP_ELO_032 harness and arms.
+
+## EXP_ELO_033 — Stage 2: adversarial turn-level MCTS over macro directives
+
+**Registered 2026-08-12, before running.** Follow-on to EXP_ELO_032's GO.
+Inference-only; arena-only backend `macro-mcts`.
+
+### Diagnosis
+
+EXP_ELO_032 proved one turn-level lookahead step over K=4 directives is worth
++5.2pp over its own executor (z>5) and beats production Gumbel n=64 62.5/37.5.
+Its two structural limits: the opponent is a scripted ghost (Greedy), and only
+the FIRST own turn varies (turns 2..H replay the script). Stage 2 replaces
+both with a real tree: nodes are turn boundaries, edges are directives
+executed by the deterministic executor, and — the first genuine attack on
+failure mechanism #3 — **the opponent's turns are searched adversarially**,
+choosing among its own K candidate directives instead of ghost-scripting.
+
+### Changes
+
+New `src/ai/macro_mcts.rs`: `MacroMctsSearch` (UCT over directive edges,
+exploration 0.6 on [0,1]-mapped values per the HeuristicMctsAgent
+calibration — classic 1.4 against evaluate_state's compressed band would
+degenerate to uniform visits), negamax backup (antisymmetry of
+`evaluate_state` is unit-tested, 2-player asserted), per-node owned state
+clones + per-seat counters/archetype, node player fixed BY ALTERNATION (a
+mid-edge game-over leaves current_player_turn_id unreliable — terminal value
+is score-compare from the alternation player's perspective), opponent root
+counters DERIVED from the fogged state (techs discovered after turn 0) so the
+tech caps bind in-tree, turn-depth cap 8, expand-one-per-sim, leaf =
+`evaluate_state` (heuristic only — the 032 leaf wash demoted net leaves; the
+stage-weight discontinuity at turns 9/21 is ACCEPTED for v1: variable-depth
+leaves straddle it, noted not fixed), root pick = argmax visits with ties to
+candidate 0 (base). Fresh tree per own-turn boundary (no reuse in v1).
+`MacroMctsAgent` = same per-turn commit surface as the Stage-1 lookahead.
+Backend `macro-mcts` + `--macro-sims` (default 32, in the arena guard).
+
+### Setup (pinned)
+
+n=1250 seeds ×2 = 2500 games/arm; base_seed **1786600000** (fresh range);
+gamemode 2; max_turns 30; imperius; --eval-backend metal; GUMBEL_SCALE=0;
+model model.safetensors both configs; macro params k=4 lambda=1.0 sims=32
+(lookahead arm keeps h=2, leaf=heuristic); one binary (/tmp/exp032_target).
+Dumps `replays/exp033/arm{A1,A2}`. Smoke first: visit concentration
+(root_visit_max_share), tree depth ≥2, ms/move.
+
+| arm | config1 | config2 | question |
+|---|---|---|---|
+| A1 (gate) | macro-mcts sims=32 | macro-lookahead k=4 h=2 heur | tree > one-ply lookahead? |
+| A2 (context) | macro-mcts sims=32 | gumbel n=64 k=16 | vs production, vs E4x's 62.5% |
+
+### Predictions
+
+| arm | metric | predicted | falsified if |
+|---|---|---|---|
+| A1 | mcts win vs lookahead | ≥52.0% (z≥1.96 at n=2500) | <51% AND root visits concentrated → tree adds nothing over one ply at sims=32 (a REAL finding: the adversarial opponent + depth were the new information) |
+| A1 | divergence (root pick ≠ base) | 30–65% | <15% = tree collapsed to the script |
+| A2 | mcts win vs gumbel n=64 | ≥62% (≥ E4x within noise) | <58% = the tree LOSES strength vs plain lookahead against a real opponent |
+| smoke | root_visit_max_share | concentrated (>1/k+10pp) | ~1/k = exploration swamps the value band; retune before arms |
+
+Depth-monotonicity sweep (sims 16/32/128) is the registered follow-up, NOT
+part of this gate. Risk to watch: per-node state clones + 32 executions/turn
+≈ 4× E2x cost — if ms/move lands >150 (worse than production Gumbel), the
+efficiency story weakens even if strength holds; Tell: smoke ms/move.
+
+### ACTUAL (2026-08-12) — CONFIRMED on both arms; Stage 2 works
+
+Smoke first, per registration: at the registered EXPLORATION=0.6 the falsifier
+fired — root visits uniform (share = 1/k) with measured root q01 spreads of
+only 0.01–0.06. Dialed c to 0.05 against the measured band BEFORE arms (the
+q-gap dial method): separated states then concentrate to share 0.69–0.81 with
+PV depth 5, genuine ties stay uniform. Constant + rationale documented at
+`macro_mcts.rs::EXPLORATION`.
+
+Arms (2500 games each registered; A2 stopped externally at 2234 dumps —
+time-truncated, outcome-blind, so the partial sample is unbiased):
+
+| arm | predicted | actual | verdict |
+|---|---|---|---|
+| A1 mcts vs lookahead | >=52.0% | **58.9%** (1472/2500, z=+8.9) | **CONFIRMED** |
+| A1 divergence | 30–65% | 38.6% | in band |
+| A2 mcts vs gumbel n=64 | >=62% | **66.0%** (1475/2234, z=+15.2) | **CONFIRMED** (E4x was 62.5% for one-ply lookahead; the tree adds ~+3.5pp against production too) |
+| smoke ms/move | <150 | 95.2 | passed — still 1.8x cheaper than production Gumbel (173) |
+
+Strength ladder now: script (Greedy-parity) < one-ply lookahead (+5.2pp over
+script) < turn-level adversarial tree (+8.9pp over lookahead, 66% over
+production Gumbel), all NN-free at the leaves.
+
+#### Verdict — CONFIRMED. The adversarial turn-level tree beats one-ply
+lookahead decisively at sims=32; the macro-search architecture compounds.
+Registered follow-ups: (i) sims sweep 16/32/128 (depth monotonicity at the
+macro level); (ii) Stage 3 — AlphaZero-ify: macro policy head trained on tree
+visit distributions + value head trained on turn-boundary states, replacing
+the heuristic leaf only when it beats it in a paired A/B.
+
+## EXP_ELO_033b — sims-64 rung: does macro depth buy strength head-to-head?
+
+**Registered 2026-08-12, before running.** Quick single rung of the registered
+depth-monotonicity sweep, on Verdi's ask. New arena `--macro-sims1/2` per-side
+overrides make it a PAIRED same-game comparison, not a cross-arm read.
+
+Setup: macro-mcts sims=64 (config1) vs macro-mcts sims=32 (config2), both
+k=4 lambda=1.0 heuristic leaves; n=500 seeds ×2 = 1000 games (quick — sigma
+1.6pp); base_seed 1786700000; GUMBEL_SCALE=0; metal; dumps
+replays/exp033/armB64. Probe at sims=64: max depth 5–6 player-turns (vs 4–5
+at 32), nodes 65, concentration 0.41–0.91.
+
+Predictions: sims=64 wins ≥52% (depth helps at the macro level too);
+falsified if ≤50% (z≤0) — macro depth saturates by 32 sims at k=4, itself a
+real finding (candidate set or leaf noise binds, not depth). Guardrail: ms/move
+config1 ≤ 2.2× config2.
+
+### ACTUAL (2026-08-12) — falsified: macro depth saturates by ~32 sims at k=4
+
+1000 games as pinned. sims=64: **48.4%** (484/998 decisive, z=-0.95) vs
+sims=32 — the >=52% prediction is falsified; flat-to-slightly-negative,
+indistinguishable from 50%. ms/move 219 vs 112 (1.96x, guardrail passed).
+Divergence 45.0% at sims=64 (42-45% band stable across budgets).
+
+Read: doubling macro-tree compute buys NOTHING at k=4 with heuristic leaves.
+At 32 sims each of the ~3-4 live candidates already gets ~8-10 visits — enough
+for UCT to resolve the measured 0.03-0.1 q gaps; extra sims only deepen the PV
+(probe: depth 5-6 vs 4-5), and deeper lines run on a degrading world model
+(fogged opponent, drifting counters/archetypes) scored by a leaf that cannot
+discriminate them. The binding constraints are now, in order of suspicion:
+(a) candidate-set richness (k / directive vocabulary), (b) leaf evaluation
+quality, (c) belief-state fidelity of long rollouts - NOT depth. Mirrors the
+ply-level story (only 64->256 ever cleared significance) but saturating at the
+point the candidate set is exhausted.
+
+#### Verdict — FALSIFIED (a useful null). Do not spend on --macro-sims.
+Stage-3 priority order updated: a learned/calibrated leaf and a richer
+candidate generator are the levers; depth is bought and banked at sims=32.
+
+## EXP_ELO_034 — belief state over hidden information: offline calibration
+
+**Registered 2026-08-13, before running.** First rung of the belief ladder
+(034 inference+calibration → 035 MAP materialization → 036 determinization
+ensemble; design locked in current_understanding.md). The macro tree's known
+bias is optimism: `obscure_fog` deletes unseen enemy assets, so rollouts play
+a weaker opponent than reality. Before any search change, this experiment
+builds the belief and **measures it against arena ground truth only** — no
+agent consumes it.
+
+Diagnosis feeding the design: score is public (leaderboard) and
+`calculate_detailed_tribe_score` is deterministic and invertible (units
+cost×5, tech 100×tier, capture +100 +20/territory +5/pop, exploration
++5/tile), so per-move opponent score deltas carry a decodable event stream.
+Mapgen (quadrant path, Tiny Drylands) provably confines capitals to one cell
+per quadrant — {24, 29, 79, 84} — verified by a 100-map generator probe
+BEFORE this registration (`capital_support_matches_generator_tiny_drylands`),
+so the opponent-capital prior is exactly 3 uniform hypotheses.
+
+Changes: `src/ai/belief.rs` — `BeliefState` (capital posterior over the
+generator support; unwitnessed-delta attribution: exploration / unit build /
+tech / capture signatures; ghost-departure disambiguation so a scout the
+observer watched leave doesn't read as hidden production; emergence
+accounting shrinks the inferred pool when hidden stars walk into vision;
+tanh-bounded confidences) + `CalibHarness` (the only truth-reading component;
+feeds observables, logs belief-vs-truth rows). Arena `--belief-calib`
+(observation-only; requires `--dump-stats-dir`; rows land in each game's
+dump JSON). 9 unit tests. Witnessing rule per advisor review: a move is
+witnessed iff mover==observer, or it has ≥1 involved tile and ALL are
+observer-explored — tile-less opponent moves (Research) are always
+unwitnessed, else all tech signal dies silently.
+
+Setup (pinned): arena `--backend1 macro-script --backend2 greedy` (the 035
+deployment shape, NN-free fast), `--games 125` (=250 games), `--base-seed
+1786800000`, `--gamemode 2 --max-turns 30 --tribe imperius --eval-backend
+metal`, `GUMBEL_SCALE=0`, `--belief-calib --dump-stats-dir
+replays/exp034/calib`. Analysis: `replays/exp034/analyze_calib.py`.
+
+Predictions:
+- **P1 (capital collapse):** mean posterior mass on the true capital cell
+  (`cap_truth_p`) ≥ 0.6 by t10 and ≥ 0.9 by t20; top-1 hit ≥ 60% by t10.
+  Falsifier: cap_truth_p ≤ 0.4 at t10 (no better than the 0.33 prior) —
+  elimination/sighting updates broken.
+- **P2 (GUARDRAIL, support validity):** true capital inside the initial
+  3-cell prior in ≥ 99% of games (cap_truth_p > 0 on the first row).
+  Falsifier: any systematic violation — the mapgen read is wrong; halt, all
+  downstream numbers void.
+- **P3 (hidden army beats assume-zero):** MAE(believed_hidden_army −
+  truth_hidden_army) ≤ 0.7 × MAE(assume-zero) averaged over t5–t25.
+  Assume-zero IS the empty-fog status quo, so this is the gate for 035:
+  falsified if ratio ≥ 0.9 — v1 attribution too noisy, fix inference before
+  any materialization (it would inject garbage).
+- **P4 (confidence reliability):** bucket rows by `army_conf` terciles;
+  hidden-army MAE must fall monotonically low→high bucket. Falsifier:
+  non-monotone — the tanh evidence model is miscalibrated.
+- Context (logged, not gated): unwitnessed share of opponent score events;
+  corner-heuristic (`predict_enemy_capitals` replica) hit rate vs belief
+  top-1 — expected to be dominated.
+
+Known v1 blind spots (deliberate, in the ledger so they're not rediscovered):
+converted units score 0 (score counting can't see them); cloaked units
+excluded from the visible scan; ghost records carry no passenger; territory
+bleed of a hidden capture into visible tiles is unmodeled; capital capture
+mid-game unhandled. Risk+tell: witnessing misclassification polluting the
+residual pool — tell is hidden_cities_believed ≫ truth in capture-heavy
+games with P3 failing there specifically.
+
+### ACTUAL — (pending)
