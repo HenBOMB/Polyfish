@@ -1136,7 +1136,7 @@ impl<'a> GumbelMctsAgent<'a> {
         let move_visits = self.extract_policy_targets(&root);
         let policy: Vec<f32> = move_visits.iter().map(|mv| mv.visits).collect();
         let best_idx = self.recommend_final_move(&root);
-        self.record_final(&root, best_idx, 0);
+        self.record_final(&root, best_idx, crate::ai::mcts_zero::ZeroMctsAgent::TEMPERATURE_MOVE_THRESHOLD);
         let best_move = clone_child_move(&root, best_idx);
         let next_hash = next_root_hash_for(game, best_move.as_deref());
         self.store_tree(root, best_idx, next_hash);

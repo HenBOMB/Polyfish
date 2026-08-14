@@ -343,8 +343,9 @@ async fn auto_step(
         }
     }
 
-    // 2. Fallback to heuristic analysis if no Gumbel trace was produced
-    let (h_best_move, mcts_analysis_json) = if let Some(mut trace_val) = gumbel_trace_json {
+    // 2. Fallback to heuristic analysis if no network is available
+    let (h_best_move, mcts_analysis_json) = if state.network.is_some() {
+        let mut trace_val = gumbel_trace_json.unwrap_or(serde_json::Value::Null);
         if let serde_json::Value::Object(ref mut map) = trace_val {
             map.insert("type".to_string(), serde_json::json!("gumbel"));
         }
