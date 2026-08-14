@@ -259,6 +259,12 @@ pub async fn api_moves_by_turn(Query(q): Query<RunFilter>) -> Json<Value> {
     Json(all)
 }
 
+pub async fn api_elo_ladder() -> Json<Value> {
+    let content = std::fs::read_to_string("elo_ratings.json").unwrap_or_else(|_| "{}".to_string());
+    let all: Value = serde_json::from_str(&content).unwrap_or_else(|_| json!({ "anchors": [], "readings": [] }));
+    Json(all)
+}
+
 #[derive(Debug, serde::Deserialize)]
 pub struct ValueDistQuery {
     pub file: Option<String>,
