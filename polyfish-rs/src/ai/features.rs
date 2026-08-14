@@ -445,6 +445,14 @@ pub fn state_to_cpu_features(state: &GameState, perspective: PlayerId) -> Result
                 continue;
             }
 
+            // Enemy invisible units are hidden from the perspective player.
+            // Own units are always visible regardless of Invisible effect.
+            if *player_id != perspective
+                && unit.effects.contains(&UnitEffect::Invisible)
+            {
+                continue;
+            }
+
             // Unit type channel
             let unit_ch = unit_to_channel(unit.unit_type);
             set_feat(&mut data, unit_ch, x, y, 1.0);
