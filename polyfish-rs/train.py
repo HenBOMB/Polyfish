@@ -671,18 +671,16 @@ def train(batch_size=BATCH_SIZE, epochs=EPOCHS, lr=LEARNING_RATE, chunk_size=Non
     final_p_loss = total_p_loss / total_batches if total_batches > 0 else 0.0
     final_v_loss = total_v_loss / total_batches if total_batches > 0 else 0.0
     final_o_loss = total_o_loss / total_batches if total_batches > 0 else 0.0
+    final_w_loss = total_w_loss / total_batches if total_batches > 0 else 0.0
 
     # R^2 of the value head against the LAST epoch's own target distribution:
     # 1 - MSE/Var. Small MSE alone is meaningless if the targets barely vary
     # (a constant-mean predictor would also score low MSE) — this is the
-    # number that actually says whether the head explains anything. final_v_loss
-    # has VALUE_LOSS_WEIGHT baked in (see compute_loss); unweight it first so
-    # it's comparable to the raw target variance.
-    if target_n > 0 and VALUE_LOSS_WEIGHT > 0:
+    # number that actually says whether the head explains anything.
+    if target_n > 0:
         target_mean = target_sum / target_n
         target_var = target_sumsq / target_n - target_mean * target_mean
-        raw_v_mse = final_v_loss / VALUE_LOSS_WEIGHT
-        value_r2 = 1.0 - raw_v_mse / target_var if target_var > 1e-8 else 0.0
+        value_r2 = 1.0 - final_w_loss / target_var if target_var > 1e-8 else 0.0
     else:
         value_r2 = 0.0
 
