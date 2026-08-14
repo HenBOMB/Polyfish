@@ -5,7 +5,7 @@
 //! adversarially instead of ghost-scripted. Two-player only; negamax backup
 //! over the antisymmetric heuristic `evaluate_state`.
 
-use crate::ai::macro_agent::{MacroParams, enumerate_candidates};
+use crate::ai::macro_agent::{MacroLeaf, MacroParams, enumerate_candidates};
 use crate::ai::macro_exec::{self, TurnCounters};
 use crate::ai::oracle_macro::{ArchetypeState, MacroGoal, StanceCommit, scripted_goal, update_goal};
 use crate::game::Game;
@@ -168,6 +168,10 @@ pub struct MacroMctsStats {
     pub nodes: usize,
     pub max_depth: usize,
     pub root_visit_max_share: f32,
+    /// Mean value of the WINNING root edge, from the root player's
+    /// perspective — the turn-level analogue of Gumbel's root value, used as
+    /// the TD bootstrap. `None` when the winning edge was never backed up.
+    pub root_q: Option<f32>,
 }
 
 pub struct MacroMctsSearch<'a> {
@@ -286,6 +290,11 @@ impl<'a> MacroMctsSearch<'a> {
             root.edge_visits.iter().cloned().fold(0.0, f32::max) / root.visits
         } else {
             0.0
+        };
+        search.stats.root_q = if root.edge_visits[best] > 0.0 {
+            Some((root.edge_values[best] / root.edge_visits[best]).clamp(-1.0, 1.0))
+        } else {
+            None
         };
         (best, search.stats)
     }
@@ -531,6 +540,17 @@ impl<'a> MacroMctsAgent<'a> {
     /// carry the goal the agent pursued, not the scripted base).
     pub fn committed_goal(&self) -> Option<&MacroGoal> {
         self.turn_goal.as_ref()
+    }
+
+    /// Root value of this turn's committed directive, for the TD bootstrap.
+    /// Only meaningful under a NET leaf — a heuristic-leaf Q is an
+    /// `evaluate_state` number, and feeding that back into the value target
+    /// would train the head toward the evaluator it is supposed to beat.
+    pub fn last_root_value(&self) -> Option<f32> {
+        match self.params.leaf {
+            MacroLeaf::Net => self.last_stats.root_q,
+            MacroLeaf::Heuristic => None,
+        }
     }
 
     pub fn select_move(&mut self, game: &mut Game) -> Option<Box<dyn Move>> {
@@ -902,6 +922,32 @@ mod tests {
                 game.legal_moves().iter().map(|x| x.serialize().to_string()).collect();
             assert!(legal.contains(&m.serialize().to_string()), "seed {seed}: true-illegal move");
         }
+    }
+
+    /// The macro agent must reach `Brain` with the params it was configured
+    /// with. Regression for a silently-live bug: `Brain::think` hard-coded
+    /// `None`, so every MACRO_GEN training round ran the HEURISTIC leaf no
+    /// matter what the run intended (and reported no root value, zeroing the
+    /// TD bootstrap).
+    #[test]
+    fn macro_params_reach_the_macro_agent_through_brain() {
+        use crate::ai::brain::{Brain, SearchBackend};
+        let mut game = generated_game(0);
+        let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
+        let mut brain = Brain::with_backend(&evaluator, 8, SearchBackend::MacroMcts)
+            .with_macro_params(MacroParams { sims: 5, leaf: MacroLeaf::Net, ..Default::default() });
+        let (mv, _) = brain.think_decomposed(&game, 0);
+        assert!(mv.is_some());
+        // A net leaf reports a root value; the heuristic leaf must not (its Q
+        // is an evaluate_state number and would train the head toward the
+        // evaluator it exists to beat).
+        assert!(brain.last_root_value().is_some(), "net leaf must expose a root value");
+
+        let mut heur = Brain::with_backend(&evaluator, 8, SearchBackend::MacroMcts)
+            .with_macro_params(MacroParams { sims: 5, ..Default::default() });
+        let _ = heur.think_decomposed(&game, 0);
+        assert!(heur.last_root_value().is_none(), "heuristic leaf must report no root value");
+        let _ = &mut game;
     }
 
     /// EXP_ELO_033 smoke probe (manual): advances each game to mid-game with

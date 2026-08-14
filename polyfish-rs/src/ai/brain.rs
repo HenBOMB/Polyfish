@@ -110,6 +110,10 @@ pub struct Brain<'a> {
     macro_star_gate: bool,
     /// EXP_ELO_028 v2.3 aux context applied alongside `macro_goal`.
     goal_aux: Option<crate::ai::oracle_macro::GoalAux>,
+    /// Macro-backend search parameters. `None` = `MacroParams::default()`
+    /// (heuristic leaf) — which is what every MACRO_GEN round silently ran
+    /// before this was threaded through.
+    macro_params: Option<MacroParams>,
 }
 
 /// Internal enum wrapping whichever concrete agent the configured backend
@@ -194,11 +198,14 @@ impl<'a> SearchAgent<'a> {
     }
 
     /// The most recently completed search's root value (see
-    /// `GumbelMctsAgent::last_root_value`). `None` for backends other than
-    /// Gumbel — they don't produce a TD-compatible bootstrap value.
+    /// `GumbelMctsAgent::last_root_value`). Gumbel reports per-ply; MacroMcts
+    /// reports the committed directive's root Q once per turn (net leaf only
+    /// — see `MacroMctsAgent::last_root_value`), which lands on the turn
+    /// boundary the TD checkpoints key off. `None` elsewhere.
     fn last_root_value(&self) -> Option<f32> {
         match self {
             SearchAgent::Gumbel(a) => a.last_root_value(),
+            SearchAgent::MacroMcts(a) => a.last_root_value(),
             _ => None,
         }
     }
@@ -315,6 +322,7 @@ impl<'a> Brain<'a> {
             macro_goal: None,
             macro_star_gate: false,
             goal_aux: None,
+            macro_params: None,
         }
     }
 
@@ -340,6 +348,7 @@ impl<'a> Brain<'a> {
             macro_goal: None,
             macro_star_gate: false,
             goal_aux: None,
+            macro_params: None,
         }
     }
 
@@ -365,6 +374,15 @@ impl<'a> Brain<'a> {
     /// in self_play). Builder-style: chain after `with_backend`.
     pub fn with_leaf_batch(mut self, leaf_batch: usize) -> Self {
         self.leaf_batch = Some(leaf_batch);
+        self
+    }
+
+    /// Macro-backend search parameters (leaf kind, sims, k, λ, shaping).
+    /// Builder-style: chain after `with_backend`. Without this the macro
+    /// backends run `MacroParams::default()` — notably the HEURISTIC leaf,
+    /// so the network is never consulted at the leaf.
+    pub fn with_macro_params(mut self, macro_params: MacroParams) -> Self {
+        self.macro_params = Some(macro_params);
         self
     }
 
@@ -457,7 +475,7 @@ impl<'a> Brain<'a> {
                 self.pursuit_shape_w,
                 self.goal_shape_w,
                 self.unfreeze_opponent,
-                None,
+                self.macro_params,
             ));
         }
         if let Some(SearchAgent::Gumbel(a)) = self.agent.as_mut() {

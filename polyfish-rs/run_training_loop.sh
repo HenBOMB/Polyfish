@@ -404,9 +404,18 @@ do
     # passivity actually loses and the relative value label carries signal;
     # it decays in-binary (see decay_crutch in self_play.rs) alongside
     # prior_heuristic_weight. ANCHOR_FRAC=0 disables.
+    # Under MACRO_GEN the anchor's stated rationale is void: Greedy anchors
+    # exist because Greedy is exactly what blend_heuristic_prior injects into
+    # the net's root — and that blending is Gumbel-only. Anchor games there
+    # are just macro-vs-Greedy blowouts diluting the cloning data, so the
+    # default drops to 0 (override with ANCHOR_FRAC to opt back in).
     ANCHOR_FLAG=""
     if [ "$MATCH_TYPE" = "selfplay" ] && [ -z "${BOOTSTRAP:-}" ]; then
-        ANCHOR_FLAG="--anchor-frac ${ANCHOR_FRAC:-0.25}"
+        if [ -n "${MACRO_GEN:-}" ]; then
+            ANCHOR_FLAG="--anchor-frac ${ANCHOR_FRAC:-0}"
+        else
+            ANCHOR_FLAG="--anchor-frac ${ANCHOR_FRAC:-0.25}"
+        fi
     fi
 
     # EXP_ELO_007: bootstrap mode — every game is Greedy-vs-Greedy demonstration
@@ -421,8 +430,12 @@ do
     # A/B (net leaf vs heuristic leaf) before it touches the tree.
     BACKEND_FLAG=""
     if [ -n "${MACRO_GEN:-}" ]; then
-        BACKEND_FLAG="--search-backend macro-mcts"
-        echo "🌲 MACRO_GEN=1 (Stage 3): macro-mcts generates self-play games (behavior cloning + on-distribution value labels)."
+        # MACRO_LEAF=net makes the tree consult the network at its leaves (and
+        # supplies a turn-level root value for the TD bootstrap). Until these
+        # flags existed the backend silently ran MacroParams::default(), i.e.
+        # the heuristic leaf, no matter what the run intended.
+        BACKEND_FLAG="--search-backend macro-mcts --macro-leaf ${MACRO_LEAF:-heuristic} --macro-sims ${MACRO_SIMS:-32} --macro-k ${MACRO_K:-4}"
+        echo "🌲 MACRO_GEN=1 (Stage 3): macro-mcts generates self-play games (behavior cloning + on-distribution value labels), leaf=${MACRO_LEAF:-heuristic} sims=${MACRO_SIMS:-32} k=${MACRO_K:-4}."
     elif [ -n "${BOOTSTRAP:-}" ]; then
         BACKEND_FLAG="--search-backend greedy"
     fi

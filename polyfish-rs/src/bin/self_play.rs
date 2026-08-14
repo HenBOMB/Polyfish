@@ -4,6 +4,7 @@
 use candle_core::{Device, Tensor};
 use polyfish::TribeType;
 use polyfish::ai::brain::{Brain, SearchBackend, SearchBackendArg};
+use polyfish::ai::macro_agent::{MacroLeaf, MacroParams};
 use polyfish::ai::eval_backend::{self, EvalBackendKind, PlayerBackend};
 use polyfish::ai::eval_server::{EvalServerConfig, EvalServerStats, Evaluator};
 use polyfish::ai::features::{self, GameFeatures};
@@ -784,12 +785,25 @@ fn checkpoints_by_player(history: &[LabelStep]) -> HashMap<PlayerId, Vec<Checkpo
 /// aligned 1:1. `label_rel_w` prices windows/terminal (EXP_ELO_006).
 /// With `wl_z` (EXP_ELO_025): ±1 win/loss terminal, zero window reward,
 /// undiscounted bootstrap through root values — a λ-blend of q-targets.
+/// What an n-step return does when its checkpoint has no root value (forced
+/// plies, or any backend that reports none).
+#[derive(Copy, Clone, PartialEq, Eq, Debug, clap::ValueEnum)]
+enum MissingBootstrap {
+    /// Bootstrap with 0.0 — a truncated return. Legacy semantics.
+    Zero,
+    /// Skip the checkpoint and carry its weight forward, so the label falls
+    /// back to the Monte-Carlo (λ=1) return over that region instead of
+    /// being pulled toward zero.
+    Mc,
+}
+
 fn td_lambda_labels(
     history: &[LabelStep],
     final_scores: &HashMap<i32, f32>,
     lambda: f32,
     label_rel_w: f32,
     wl_z: Option<&HashMap<i32, f32>>,
+    missing: MissingBootstrap,
 ) -> Vec<f32> {
     let checkpoints = checkpoints_by_player(history);
 
@@ -823,6 +837,9 @@ fn td_lambda_labels(
             let mut acc = 0.0f32;
             let mut remaining_weight = 1.0f32;
             for cp in &ahead[start..] {
+                if missing == MissingBootstrap::Mc && cp.root_value.is_none() {
+                    continue; // weight carries forward to the terminal return
+                }
                 // Outcome space carries no per-window reward and no discount —
                 // a γ<1 here would deflate early-game labels toward 0 by depth.
                 let n_step_return = if wl_z.is_some() {
@@ -1313,6 +1330,7 @@ fn play_single_game(
     dagger_alpha: f32,
     goal_channels: bool,
     goal_w_tree: f32,
+    macro_params: MacroParams,
 ) -> Option<GameResult> {
     // Curriculum logic — Tiny maps only, gradually increase turn count.
     let (map_size, max_turns) = if iteration <= 25 {
@@ -1512,6 +1530,9 @@ fn play_single_game(
         value_trust.unwrap_or_else(|| (iteration as f32 / POLICY_TARGET_Q_RAMP_ITERS).min(1.0));
 
     // Create two agents (they might share the same network, or be different)
+    // macro_params reach BOTH agents: agent2 carries the --opponent
+    // evaluator, so without it a league iteration under macro-mcts never
+    // consults the loaded checkpoint (a heuristic mirror wearing its name).
     let mut agent1 = Brain::with_backend(eval1, mcts_iters, backend1)
         .with_prior_heuristic_weight(prior_w)
         .with_policy_target_q_weight(q_target_w)
@@ -1519,7 +1540,8 @@ fn play_single_game(
         .with_reward_shape_w(shape_w_tree)
         .with_pursuit_shape_w(pursuit_w_tree)
         .with_goal_shape_w(goal_w_tree)
-        .with_unfreeze_opponent(unfreeze_opponent);
+        .with_unfreeze_opponent(unfreeze_opponent)
+        .with_macro_params(macro_params);
     let mut agent2 = Brain::with_backend(eval2, mcts_iters, backend2)
         .with_prior_heuristic_weight(prior_w)
         .with_policy_target_q_weight(q_target_w)
@@ -1527,7 +1549,8 @@ fn play_single_game(
         .with_reward_shape_w(shape_w_tree)
         .with_pursuit_shape_w(pursuit_w_tree)
         .with_goal_shape_w(goal_w_tree)
-        .with_unfreeze_opponent(unfreeze_opponent);
+        .with_unfreeze_opponent(unfreeze_opponent)
+        .with_macro_params(macro_params);
 
     if let Some(b) = leaf_batch {
         agent1 = agent1.with_leaf_batch(b);
@@ -2967,6 +2990,36 @@ fn main() -> anyhow::Result<()> {
         #[arg(long, value_enum, default_value_t = SearchBackendArg::Gumbel)]
         search_backend: SearchBackendArg,
 
+        /// macro-mcts leaf evaluator. `heuristic` = `evaluate_state`;
+        /// `net` consults the network (EXP_ELO_039). Until this existed the
+        /// backend silently ran the heuristic leaf in every MACRO_GEN round.
+        #[arg(long, value_enum, default_value_t = MacroLeaf::Heuristic)]
+        macro_leaf: MacroLeaf,
+
+        /// macro-mcts: simulations per turn-level search.
+        #[arg(long, default_value_t = 32)]
+        macro_sims: usize,
+
+        /// macro-mcts: max candidate directives on the root ballot.
+        #[arg(long, default_value_t = 4)]
+        macro_k: usize,
+
+        /// macro-mcts: λ on Δφ in per-ply executor ranking.
+        #[arg(long, default_value_t = 1.0)]
+        macro_lambda: f32,
+
+        /// macro-mcts: weight on potential-based edge shaping in the tree.
+        #[arg(long, default_value_t = 0.0)]
+        macro_shape_w: f32,
+
+        /// What an n-step return does when its checkpoint reports no root
+        /// value. `zero` bootstraps with 0.0 (legacy); `mc` carries the
+        /// weight to the terminal return instead of pulling the label toward
+        /// zero — which is what a heuristic-leaf macro run needs, since it
+        /// reports no root value at all.
+        #[arg(long, value_enum, default_value_t = MissingBootstrap::Zero)]
+        td_missing_bootstrap: MissingBootstrap,
+
         /// Gumbel: number of initial top-k candidates sampled at the root.
         /// Only used when --search-backend gumbel.
         #[arg(long, default_value_t = 16)]
@@ -3130,6 +3183,33 @@ fn main() -> anyhow::Result<()> {
     if args.goal_w_tree != 0.0 && !args.goal_channels {
         anyhow::bail!("--goal-w-tree requires --goal-channels (no goal is set without them)");
     }
+    let is_macro_backend = matches!(args.search_backend, SearchBackendArg::MacroMcts);
+    // The macro tree commits a directive during think; without goal channels
+    // the recorded features carry ZERO goal planes, so the data says nothing
+    // about what the teacher was pursuing. Silent before this guard.
+    if is_macro_backend && !args.goal_channels {
+        anyhow::bail!(
+            "--search-backend macro-mcts requires --goal-channels (the tree's committed \
+             directive would otherwise be dropped from the recorded features)"
+        );
+    }
+    if !is_macro_backend
+        && (args.macro_leaf != MacroLeaf::Heuristic
+            || args.macro_sims != 32
+            || args.macro_k != 4
+            || args.macro_lambda != 1.0
+            || args.macro_shape_w != 0.0)
+    {
+        anyhow::bail!("--macro-* flags require --search-backend macro-mcts");
+    }
+    let macro_params = MacroParams {
+        k: args.macro_k,
+        leaf: args.macro_leaf,
+        lambda: args.macro_lambda,
+        sims: args.macro_sims,
+        shape_w: args.macro_shape_w,
+        ..MacroParams::default()
+    };
 
     // Default Metal op-flush cadence to 1000 for better GPU efficiency on Metal
     if std::env::var("CANDLE_METAL_COMPUTE_PER_BUFFER").is_err() {
@@ -3470,6 +3550,7 @@ fn main() -> anyhow::Result<()> {
                             args.dagger_alpha,
                             args.goal_channels,
                             args.goal_w_tree,
+                            macro_params,
                         )
                     }))
                     .unwrap_or_else(|_| {
@@ -4001,6 +4082,7 @@ fn main() -> anyhow::Result<()> {
             args.td_lambda,
             args.label_rel_w,
             wl_z.as_ref(),
+            args.td_missing_bootstrap,
         );
 
         let spt_steps: Vec<SptStep> = result
@@ -4646,6 +4728,32 @@ mod td_lambda_tests {
         pairs.iter().map(|&(id, s)| (id, s as f32)).collect()
     }
 
+    /// A macro (heuristic-leaf) game reports no root value anywhere, so
+    /// under `zero` every label is a truncated return pulled toward 0. Under
+    /// `mc` the whole weight reaches the terminal return instead.
+    #[test]
+    fn mc_fallback_recovers_terminal_return_when_all_roots_missing() {
+        let history = vec![
+            step(1, 5, 1000, 800, None),
+            step(1, 6, 1100, 800, None),
+            step(1, 7, 1200, 800, None),
+        ];
+        let final_scores = finals(&[(1, 1600), (2, 900)]);
+        let expected = reward::normalized_reward(1000, 800, 1600, 900).clamp(-1.0, 1.0);
+
+        let mc = td_lambda_labels(&history, &final_scores, 0.5, reward::REL_W, None, MissingBootstrap::Mc);
+        assert!(
+            (mc[0] - expected).abs() < 1e-6,
+            "mc label {} should be the pure terminal return {expected}",
+            mc[0]
+        );
+        let zero = td_lambda_labels(&history, &final_scores, 0.5, reward::REL_W, None, MissingBootstrap::Zero);
+        assert!(
+            (zero[0] - expected).abs() > 1e-6,
+            "zero-bootstrap must still truncate (legacy semantics pinned elsewhere)"
+        );
+    }
+
     #[test]
     fn last_decision_of_game_is_pure_terminal_return_at_any_lambda() {
         // Only decision on record for player 1: no checkpoints ahead, so the
@@ -4656,7 +4764,7 @@ mod td_lambda_tests {
         let expected = reward::normalized_reward(1000, 800, 1300, 900).clamp(-1.0, 1.0);
 
         for lambda in [0.0, 0.5, 0.8, 0.95] {
-            let out = td_lambda_labels(&history, &final_scores, lambda, reward::REL_W, None);
+            let out = td_lambda_labels(&history, &final_scores, lambda, reward::REL_W, None, MissingBootstrap::Zero);
             assert!(
                 (out[0] - expected).abs() < 1e-6,
                 "lambda={lambda}: got {}, expected {expected}",
@@ -4679,7 +4787,7 @@ mod td_lambda_tests {
         ];
         let final_scores = finals(&[(1, 5000), (2, 800)]);
 
-        let out = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None);
+        let out = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Zero);
 
         let r = reward::normalized_reward(1000, 800, 1100, 800);
         let expected = (r + reward::GAMMA_TURN.powi(1) * 0.9).clamp(-1.0, 1.0);
@@ -4692,7 +4800,7 @@ mod td_lambda_tests {
         // Sanity: changing turn 7's root_value must NOT move the lambda=0 label.
         let mut history2 = history.clone();
         history2[3].root_value = Some(12345.0);
-        let out2 = td_lambda_labels(&history2, &final_scores, 0.0, reward::REL_W, None);
+        let out2 = td_lambda_labels(&history2, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Zero);
         assert!((out2[0] - out[0]).abs() < 1e-6);
     }
 
@@ -4708,7 +4816,7 @@ mod td_lambda_tests {
         ];
         let final_scores = finals(&[(1, 300), (2, 100)]);
 
-        let out = td_lambda_labels(&history, &final_scores, 0.5, reward::REL_W, None);
+        let out = td_lambda_labels(&history, &final_scores, 0.5, reward::REL_W, None, MissingBootstrap::Zero);
 
         let n1 = reward::normalized_reward(100, 100, 300, 100) + reward::GAMMA_TURN.powi(1) * 0.6;
         let terminal = reward::normalized_reward(100, 100, 300, 100);
@@ -4732,7 +4840,7 @@ mod td_lambda_tests {
         ];
         let final_scores = finals(&[(1, 1200), (2, 800)]);
 
-        let out = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None);
+        let out = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, None, MissingBootstrap::Zero);
         let expected = reward::normalized_reward(1000, 800, 1200, 800).clamp(-1.0, 1.0);
         assert!(
             (out[0] - expected).abs() < 1e-6,
@@ -4752,8 +4860,8 @@ mod td_lambda_tests {
         ];
         let final_scores = finals(&[(1, 1100), (2, 1200)]);
 
-        let abs_only = td_lambda_labels(&history, &final_scores, 0.0, 0.0, None);
-        let rel_only = td_lambda_labels(&history, &final_scores, 0.0, 1.0, None);
+        let abs_only = td_lambda_labels(&history, &final_scores, 0.0, 0.0, None, MissingBootstrap::Zero);
+        let rel_only = td_lambda_labels(&history, &final_scores, 0.0, 1.0, None, MissingBootstrap::Zero);
         assert!(abs_only[0] > 0.0, "abs-only label should be positive, got {}", abs_only[0]);
         assert!(rel_only[0] < 0.0, "rel-only label should be negative, got {}", rel_only[0]);
     }
@@ -4767,7 +4875,7 @@ mod td_lambda_tests {
         let z = finals(&[(1, 1), (2, -1)]);
 
         for lambda in [0.0, 0.5, 0.8, 0.95] {
-            let out = td_lambda_labels(&history, &final_scores, lambda, reward::REL_W, Some(&z));
+            let out = td_lambda_labels(&history, &final_scores, lambda, reward::REL_W, Some(&z), MissingBootstrap::Zero);
             assert!(
                 (out[0] - 1.0).abs() < 1e-6,
                 "lambda={lambda}: got {}, expected 1.0",
@@ -4787,7 +4895,7 @@ mod td_lambda_tests {
         let final_scores = finals(&[(1, 300), (2, 100)]);
         let z = finals(&[(1, -1), (2, 1)]);
 
-        let out = td_lambda_labels(&history, &final_scores, 0.5, reward::REL_W, Some(&z));
+        let out = td_lambda_labels(&history, &final_scores, 0.5, reward::REL_W, Some(&z), MissingBootstrap::Zero);
         let expected = 0.5f32 * 0.6 + 0.5 * -1.0;
         assert!(
             (out[0] - expected).abs() < 1e-6,
@@ -4800,7 +4908,7 @@ mod td_lambda_tests {
             step(1, 0, 5000, 1, Some(0.4)),
             step(1, 1, 9000, 1, Some(0.6)),
         ];
-        let out2 = td_lambda_labels(&history2, &final_scores, 0.5, reward::REL_W, Some(&z));
+        let out2 = td_lambda_labels(&history2, &final_scores, 0.5, reward::REL_W, Some(&z), MissingBootstrap::Zero);
         assert!((out2[0] - out[0]).abs() < 1e-6);
     }
 
@@ -4815,7 +4923,7 @@ mod td_lambda_tests {
         let final_scores = finals(&[(1, 5000), (2, 800)]);
         let z = finals(&[(1, 1), (2, -1)]);
 
-        let out = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, Some(&z));
+        let out = td_lambda_labels(&history, &final_scores, 0.0, reward::REL_W, Some(&z), MissingBootstrap::Zero);
         assert!(
             (out[0] - 0.9).abs() < 1e-6,
             "got {}, expected undiscounted 0.9",
