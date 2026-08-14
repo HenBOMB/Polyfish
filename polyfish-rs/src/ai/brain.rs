@@ -361,7 +361,7 @@ impl<'a> Brain<'a> {
         if want_trace {
             agent.arm_trace();
         }
-        agent.select_move_with_decomposed_visits(&mut game.clone(), move_count)
+        agent.select_move_with_decomposed_visits(&mut game.clone_for_mcts(game.current_player_id()), move_count)
     }
 
     /// Request that the next `think_decomposed` call capture a decision
