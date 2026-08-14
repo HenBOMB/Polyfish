@@ -4317,4 +4317,31 @@ gamemode 2, max-turns 30, metal, GUMBEL_SCALE=0.
   picks. A flat distribution means the +2 prior is too weak to matter
   against census scores that reach 6.
 
-ACTUAL: (pending)
+ACTUAL (2026-08-14, 250 paired games/arm, Oumaji mirror):
+- **P1: gate not cleared, but the SIGN FLIPS.** Committed+primed 175/250
+  (70.0%) vs per-ply 170/250 (68.0%) — **+2.0pp**, McNemar 22 old-only
+  vs 27 new-only, z = +0.71. Below the +4pp/|z|>=1.96 bar, so not a pass;
+  but against 045a's -5.2pp on the prior-less Imperius instrument this is
+  a 7.2pp swing attributable to the one thing that differs — whether the
+  tribe opens a lane.
+- **P2: the prior demonstrably works.** RiderRoads share 49.2% (vs 10.8%
+  on Imperius, where `tribe_lane_prior` returned None); ArcherLine 50.8%.
+  Just under the >50% line, so scored a near-miss rather than a pass, but
+  the mechanism is unambiguous: a +2 spawn bonus moves a rider tribe's
+  lane share by ~38pp. Stability improved too: 0.51 pivots/game, max 1
+  (vs 0.80/max 2), mean last-commit turn 7.2.
+- READ (both arms together): commitment ALONE is a cost; commitment plus
+  a lane the tribe was born into is roughly neutral-to-positive. That is
+  the shape Verdi's spec predicted ("your tribe sets the tone") and the
+  opposite of what 045a alone implied.
+- ⚠️ CONFOUND, discovered after both arms ran (advisor-caught, verified):
+  the new build removed lane SELECTION from `execute_turn` while
+  `run_with` seeds only `arch[pov]`, so the in-tree OPPONENT played
+  laneless for whole rollouts (no lane techs, no preferred-unit pricing)
+  where the baseline's rollouts selected per ply for both seats. Both
+  045a and 045a-b therefore compare trees that evaluate different
+  futures, not just different root commitment. Fixed in 67cae7f
+  (selection in `Node::new`, i.e. at the turn boundary a node already
+  is, for both seats) together with a refutation bypass mirroring the
+  stance layer's urgent path. Neither arm's number is retired — the
+  positive one cleared the handicap — but the clean read is 045a-v2.
