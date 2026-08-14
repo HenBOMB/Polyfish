@@ -16,6 +16,9 @@ def migrate_model(file_path):
         return
 
     print("Checking and migrating state_dict heads...")
+    if 'v_win.weight' not in state_dict:
+        print("Not a PolyZero checkpoint (no v_win.weight); nothing to migrate.")
+        return
     filters = state_dict['v_win.weight'].shape[1]
 
     migrated = False
