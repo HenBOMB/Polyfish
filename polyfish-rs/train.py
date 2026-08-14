@@ -484,7 +484,14 @@ def train(batch_size=BATCH_SIZE, epochs=EPOCHS, lr=LEARNING_RATE, chunk_size=Non
             for f in chunk_files:
                 try:
                     data = load_file(f)
-                    c_spatial.append(data["spatial_maps"])
+                    
+                    # Pad legacy spatial maps to current SPATIAL_CHANNELS
+                    smaps = data["spatial_maps"]
+                    if smaps.shape[1] < SPATIAL_CHANNELS:
+                        B, C, H, W = smaps.shape
+                        pad = torch.zeros(B, SPATIAL_CHANNELS - C, H, W, dtype=smaps.dtype)
+                        smaps = torch.cat([smaps, pad], dim=1)
+                    c_spatial.append(smaps)
                     c_player.append(data["player_states"])
                     c_win.append(data["values"])
                     if "progress" in data:

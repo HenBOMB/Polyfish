@@ -6,14 +6,16 @@ Comparable to: candle 71.7ms/forward, tch 15.2ms/forward (integrated, batch ~130
 """
 import time, numpy as np, torch
 from safetensors.torch import load_file
-from train import PolyZeroNet
+from train import PolyZeroNet, _migrate_checkpoint
 
 BATCH = 128
 ITERS = 60
 dev = torch.device("mps")
 
 net = PolyZeroNet(142, 16, 11, 11)
-net.load_state_dict(load_file("model.safetensors"))
+ckpt = load_file("model.safetensors")
+ckpt, _ = _migrate_checkpoint(ckpt, net, 16)
+net.load_state_dict(ckpt, strict=False)
 net.to(dev).eval()
 
 def one_forward():
