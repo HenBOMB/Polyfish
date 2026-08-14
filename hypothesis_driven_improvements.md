@@ -4003,3 +4003,84 @@ three-arm table (identical seeds; 041old = pre-040, 041new = 040):
   (teacher + student both under 042 semantics), re-measured on this
   same instrument. Armed knobs unspent: press need-math (don't press a
   losing fight), halve DEFEND_COVER/HOLD, decouple emission/Arm-flip.
+
+## EXP_ELO_043 — Tier 1: the net OWNS the root doctrine (map-context lane choice, ≤3 pivots)
+
+**Registered 2026-08-14, before running.** Verdi's architecture call: the
+product is the strategist at macro-mcts, in three tiers — (1) root
+doctrine, ONE per game, rarely flips, map+tribe-context driven; (2)
+map-driven orders, multiple per turn, reactive = macro-mcts; (3) units/
+stars/tech = deterministic executor. Every action traces up to a root
+cause. Tier 1 is LEARNED (net), not scripted: "I want the net to have
+the ability to pivot at most up to 3 lanes and the strategy chosen is
+map-context driven. Your tribe + your terrain on your first 2 villages
+sets the tone."
+
+Why the net can own Tier 1 when per-ply imitation of scripts failed
+(040/041/042: micro-dials moved, wins flat): CREDIT ASSIGNMENT RATIO.
+The doctrine is ~1–3 decisions per game with the outcome directly
+attributable — 1:1, versus ~600:1 for per-ply policy targets diluted
+across a 30-turn game. It is the cleanest learning signal in the
+system, and it is exactly the "which principle dominates here"
+judgment that determinism provably cannot do (034–038: heuristic leaf
+q-spreads 0.01–0.06).
+
+Design:
+- **Head:** `doctrine_logits = Linear(filters -> K)` off the pooled
+  trunk, K = 3–4 lanes. Mirrored in network.rs (inference consumer =
+  the macro agent) and train.py, loaded OPTIONALLY (`vs.contains_tensor`,
+  aux_fog precedent) so pre-043 checkpoints gain no rejection reason.
+  NO feature-layout change: tribe identity (CH_MY_TRIBE_TYPE) and
+  terrain planes already carry the census the head reads.
+- **Enforcement is structural, not learned:** `DoctrineCommit { lane,
+  pivots_used }` — max 3 lane changes/game, pivots proposable only at
+  evidence checkpoints (opponent identity revealed, lane blocked e.g.
+  no metal in reach, city-count break). The net JUDGES; rules CONSTRAIN.
+  "Sticking with it" becomes a structural guarantee instead of a
+  behaviour we hope the weights hold.
+- **Downward gating (the simplification):** chosen lane restricts tech
+  caps, `preferred_units`, and which Tier-2 candidates
+  `enumerate_candidates` proposes — the macro search space SHRINKS.
+- **Supervision is OUTCOME, not search.** Explicit non-goal: no
+  visit-count target for this head. A 2–3 turn tree with a heuristic
+  leaf cannot adjudicate lanes that mature over 10+ turns (034–038
+  measured); using search as the improvement operator here would
+  supervise noise.
+- **Counterfactual pairs (the sample-efficiency multiplier):** same
+  seed played under lane A and lane B yields a PREFERENCE label ("on
+  this tribe+spawn, A > B"), which is far stronger per game than an
+  absolute win/loss and matches the head's decision exactly. The
+  paired-seed arena harness already produces this shape.
+- **Exploration:** temperature/Dirichlet on the lane sample during
+  generation; a census heuristic seeds the prior with DECAYING weight
+  (bootstrap only — distilling the census outright would inherit its
+  ceiling, the documented teacher-cap failure mode).
+- **Explainability invariant:** every ply logs `ply <- order <-
+  doctrine`; a losing game is attributable to a TIER.
+
+Setup (pinned): starter library K=4 — Riders+Roads (mobility/expansion),
+Archery/Forest, Metal/Smithery→Giants, Eco/Parks — chosen because they
+map to distinguishable spawn censuses. Teacher-side first (macro agent
+consumes a lane), measured on the 041/042 instrument: same base_seed
+1787800000, 125 seeds x2, SIEGE DEFENSE + win rate, comparable
+row-for-row against all three prior arms.
+
+Predictions:
+- **P1 (doctrine coherence lifts the TEACHER):** committed-lane teacher
+  vs current teacher > +4pp (McNemar |z| >= 1.96). Rationale: the star
+  gate's committed-reach flip was 28%->81%; the fixture loss was a
+  doctrine failure (2 techs in 19 turns, no lane). Falsifier: flat ->
+  lane commitment alone is not worth the search-space restriction, and
+  Tier 1's value rests entirely on the net's context-conditional choice.
+- **P2 (context-conditionality is learnable):** the head's lane choice
+  correlates with spawn census better than chance on held-out seeds
+  (top-1 agreement with the counterfactual-winner label > 40% at K=4).
+  Falsifier: at-chance -> the census signal is too weak at this map
+  size, and doctrine collapses to a single global best lane (which is
+  still a valid, simpler product).
+- **G1 (no collapse):** lane entropy across a generation batch stays
+  > 0.5 nats; collapse to one lane means exploration is broken.
+- **G2 (dual-net sync):** identical logits Rust vs Python on a fixed
+  batch before any training run consumes the head.
+
+ACTUAL: (pending)
