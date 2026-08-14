@@ -996,21 +996,16 @@ pub fn scripted_goal_aux(
                 }
             }
         };
-        match arch.archetype {
-            Some(Archetype::RiderRoads) => {
-                push_lane(&[Tech::Riding, Tech::Roads], &mut recommended);
-                preferred_units.push(U::Rider);
+        if let Some(a) = arch.archetype {
+            push_lane(lane_techs(a), &mut recommended);
+            match a {
+                Archetype::RiderRoads => preferred_units.push(U::Rider),
+                Archetype::ArcherLine => preferred_units.push(U::Archer),
+                Archetype::ForgeGiants => {
+                    preferred_units.push(U::Swordsman);
+                    preferred_units.push(U::Giant);
+                }
             }
-            Some(Archetype::ArcherLine) => {
-                push_lane(&[Tech::Hunting, Tech::Archery], &mut recommended);
-                preferred_units.push(U::Archer);
-            }
-            Some(Archetype::ForgeGiants) => {
-                push_lane(&[Tech::Climbing, Tech::Mining, Tech::Smithery], &mut recommended);
-                preferred_units.push(U::Swordsman);
-                preferred_units.push(U::Giant);
-            }
-            None => {}
         }
         if overlays.defender_screen {
             push_lane(&[Tech::Strategy], &mut recommended);
@@ -1413,7 +1408,64 @@ pub struct ArchetypeState {
     challenger: Option<Archetype>,
     streak: u8,
     last_turn: i32,
+    /// Turn the current lane was committed (Tier-1 tenure).
+    pub committed_turn: Option<i32>,
+    /// Lane changes spent this game; capped at `MAX_PIVOTS`.
+    pub pivots_used: u8,
+    /// Turn of the last lane change — enforces `DWELL_MIN`.
+    pub last_pivot_turn: i32,
+    /// Consecutive turns the lane's next tech was proposed and gate-dropped.
+    /// A stranded lane (e.g. pure-eco prerequisites masked by the ARM eco
+    /// gate) is evidence for pivoting rather than a reason to keep waiting.
+    pub lane_blocked_turns: u8,
+    /// Last per-lane scores, in `LANES` order — recorded for the attribution
+    /// trace so a lane call is explainable, not merely logged.
+    pub last_scores: [f32; LANES],
 }
+
+/// Every lane the selector ranks, in a fixed order (also the plane order
+/// when the lane is painted into features).
+pub const LANES: usize = 3;
+pub const LANE_ORDER: [Archetype; LANES] =
+    [Archetype::RiderRoads, Archetype::ArcherLine, Archetype::ForgeGiants];
+
+/// The tech chain that *is* the lane — single source of truth, consumed by
+/// `scripted_goal_aux`'s recommendations and by the spawn tribe prior.
+pub fn lane_techs(a: Archetype) -> &'static [TechnologyType] {
+    use TechnologyType as T;
+    match a {
+        Archetype::RiderRoads => &[T::Riding, T::Roads],
+        Archetype::ArcherLine => &[T::Hunting, T::Archery],
+        Archetype::ForgeGiants => &[T::Climbing, T::Mining, T::Smithery],
+    }
+}
+
+/// Lane the tribe is born into: mapgen stamps one tribe tech at turn 0
+/// (`mapgen.rs`), and if it opens a lane's chain that lane starts ahead —
+/// "your tribe sets the tone" before any terrain is explored. Derived from
+/// `lane_techs`, so the two can never drift apart.
+pub fn tribe_lane_prior(state: &GameState, player: PlayerId) -> Option<Archetype> {
+    let tribe = state.tribes.get(&player)?;
+    let spawn_tech: Vec<TechnologyType> = tribe
+        .tech_vanilla
+        .iter()
+        .filter(|t| t.discovered && t.discovered_turn == 0)
+        .map(|t| t.tech_type)
+        .collect();
+    LANE_ORDER
+        .iter()
+        .copied()
+        .find(|a| lane_techs(*a).iter().any(|t| spawn_tech.contains(t)))
+}
+
+/// Lane changes allowed per game (Verdi: "pivot at most up to 3 lanes").
+pub const MAX_PIVOTS: u8 = 3;
+/// Minimum turns a lane must be held before it may be abandoned.
+pub const DWELL_MIN: i32 = 5;
+/// Turns of a stranded tech lane that count as pivot evidence.
+pub const LANE_BLOCKED_TRIGGER: u8 = 3;
+/// Score bonus for the tribe's birth lane.
+pub const TRIBE_PRIOR_BONUS: i32 = 2;
 
 /// Chainable by knights: at or below this defense a kill likely frees
 /// Persist for the next body (Verdi: threshold 1.5 — riders/archers/
@@ -1587,41 +1639,109 @@ pub fn update_archetype(
     goal: &MacroGoal,
     st: &mut ArchetypeState,
 ) {
+    observe_archetype(state, player, st);
+    select_playstyle(state, player, goal, st, None);
+}
+
+/// Per-ply half: peak enemy-type counts and the reactive overlays. Cheap,
+/// runs on every executor ply. Selection deliberately does NOT happen here —
+/// a lane recomputed 20x a turn is a running average, not an identity.
+pub fn observe_archetype(state: &GameState, player: PlayerId, st: &mut ArchetypeState) {
     observe_enemies(state, player, st);
     st.overlays = Overlays {
         defender_screen: st.seen_cavalry >= SEEN_CAVALRY_SCREEN,
         catapult_counter: st.seen_heavy >= SEEN_HEAVY_COUNTER,
         knight_commit: st.seen_squishy >= SEEN_SQUISHY_KNIGHT,
     };
+}
 
+/// Tier-1 selector — called once per turn. Scores EVERY lane (algorithmic
+/// census + tribe prior, plus `head` when the net supplies per-lane scores)
+/// and returns the committed lane. Switching away from a held lane must
+/// additionally clear the budget, the dwell floor, and the existing
+/// margin/streak hysteresis, so the call is stable by construction rather
+/// than by hoping the scores stay put.
+pub fn select_playstyle(
+    state: &GameState,
+    player: PlayerId,
+    goal: &MacroGoal,
+    st: &mut ArchetypeState,
+    head: Option<&[f32; LANES]>,
+) -> Option<Archetype> {
     let map = read_map(state, player);
-    if map.land < ARCH_MIN_EXPLORED_LAND {
-        return; // too little signal to commit a doctrine
-    }
-    let scores = archetype_scores(state, player, goal, st, &map);
-    let score_of = |a: Archetype| scores.iter().find(|(k, _)| *k == a).map_or(0, |(_, s)| *s);
-    let (best, best_score) =
-        scores.iter().copied().max_by_key(|(_, s)| *s).unwrap_or((Archetype::RiderRoads, 0));
-
     let turn = state.settings.turn;
+    let prior = tribe_lane_prior(state, player);
+
+    // Before the map says anything, the tribe still does: commit the birth
+    // lane rather than drifting laneless through the opening.
+    if map.land < ARCH_MIN_EXPLORED_LAND {
+        if st.archetype.is_none() {
+            if let Some(p) = prior {
+                st.archetype = Some(p);
+                st.committed_turn = Some(turn);
+            }
+        }
+        return st.archetype;
+    }
+
+    let mut scores = archetype_scores(state, player, goal, st, &map);
+    if let Some(p) = prior {
+        if let Some(e) = scores.iter_mut().find(|(a, _)| *a == p) {
+            e.1 += TRIBE_PRIOR_BONUS;
+        }
+    }
+    for (i, a) in LANE_ORDER.iter().enumerate() {
+        let algo = scores.iter().find(|(k, _)| k == a).map_or(0, |(_, s)| *s) as f32;
+        st.last_scores[i] = match head {
+            Some(h) => algo + h[i],
+            None => algo,
+        };
+    }
+    let score_of = |a: Archetype| {
+        LANE_ORDER.iter().position(|k| *k == a).map_or(0.0, |i| st.last_scores[i])
+    };
+    let (best, best_score) = LANE_ORDER
+        .iter()
+        .map(|a| (*a, score_of(*a)))
+        .fold((Archetype::RiderRoads, f32::NEG_INFINITY), |acc, x| {
+            if x.1 > acc.1 { x } else { acc }
+        });
+
     let new_turn = turn != st.last_turn;
     st.last_turn = turn;
+    let entry_min = ARCH_ENTRY_MIN as f32;
 
     match st.archetype {
         None => {
-            if best_score >= ARCH_ENTRY_MIN {
-                st.archetype = Some(best);
+            let pick = if best_score >= entry_min { Some(best) } else { prior };
+            if pick.is_some() {
+                st.archetype = pick;
+                st.committed_turn = Some(turn);
                 st.challenger = None;
                 st.streak = 0;
             }
         }
         Some(cur) => {
-            if score_of(cur) == 0 {
-                // Hard exit — re-pick immediately if anything is viable.
-                st.archetype = (best_score >= ARCH_ENTRY_MIN).then_some(best);
+            let budget_left = st.pivots_used < MAX_PIVOTS;
+            let dwell_ok = turn - st.last_pivot_turn >= DWELL_MIN;
+            let stranded = st.lane_blocked_turns >= LANE_BLOCKED_TRIGGER;
+            // Hard exit stays immediate — a lane scored 0 is refuted, not
+            // merely out-competed — but still costs budget.
+            if score_of(cur) <= 0.0 && budget_left {
+                st.archetype = (best_score >= entry_min).then_some(best);
+                if st.archetype.is_some() {
+                    st.pivots_used += 1;
+                    st.last_pivot_turn = turn;
+                    st.committed_turn = Some(turn);
+                }
                 st.challenger = None;
                 st.streak = 0;
-            } else if best != cur && best_score >= score_of(cur) + ARCH_SWITCH_MARGIN {
+                st.lane_blocked_turns = 0;
+            } else if budget_left
+                && (dwell_ok || stranded)
+                && best != cur
+                && best_score >= score_of(cur) + ARCH_SWITCH_MARGIN as f32
+            {
                 if st.challenger == Some(best) {
                     if new_turn {
                         st.streak += 1;
@@ -1632,8 +1752,12 @@ pub fn update_archetype(
                 }
                 if st.streak >= ARCH_SWITCH_TURNS {
                     st.archetype = Some(best);
+                    st.pivots_used += 1;
+                    st.last_pivot_turn = turn;
+                    st.committed_turn = Some(turn);
                     st.challenger = None;
                     st.streak = 0;
+                    st.lane_blocked_turns = 0;
                 }
             } else {
                 st.challenger = None;
@@ -1641,7 +1765,9 @@ pub fn update_archetype(
             }
         }
     }
+    st.archetype
 }
+
 
 /// Root-only research gate (v9, dual-exempt). Every non-Research move passes.
 /// A gated Research move is dropped outright — the old "unless you keep
@@ -1701,8 +1827,8 @@ mod tests {
     use crate::moves::EndTurnMove;
     use crate::moves::research::ResearchMove;
     use crate::Coords;
-    use crate::states::{StructureState, TileState, TribeState, UnitState};
-    use crate::types::{TechnologyType, UnitType};
+    use crate::states::{StructureState, TechnologyState, TileState, TribeState, UnitState};
+    use crate::types::{TechnologyType, TribeType, UnitType};
 
     /// End-to-end: a real generated Drylands game must report `water_dead`
     /// through the same path self_play uses, and mask the naval lane there.
@@ -2795,6 +2921,107 @@ mod tests {
         let aux2 = scripted_goal_aux(&state, 1, &goal2, 0, 0, Some(&st));
         assert!(aux2.preferred_units.contains(&UnitType::Catapult));
         assert!(aux2.preferred_units.contains(&UnitType::Archer));
+    }
+
+    /// Tier 1: the tribe's birth tech commits a lane before any terrain is
+    /// explored, and the mapping is derived from `lane_techs` (not a second
+    /// table that can drift from mapgen).
+    #[test]
+    fn tribe_prior_commits_a_lane_before_the_map_speaks() {
+        for (tribe, tech, lane) in [
+            (TribeType::Oumaji, TechnologyType::Riding, Archetype::RiderRoads),
+            (TribeType::Hoodrick, TechnologyType::Archery, Archetype::ArcherLine),
+            (TribeType::XinXi, TechnologyType::Climbing, Archetype::ForgeGiants),
+        ] {
+            let mut state = state_with_villages(0, &[24]);
+            {
+                let t1 = state.tribes.get_mut(&1).unwrap();
+                t1.tribe_type = tribe;
+                t1.tech_vanilla = vec![TechnologyState {
+                    tech_type: tech,
+                    discovered: true,
+                    discovered_turn: 0,
+                }];
+            }
+            assert_eq!(tribe_lane_prior(&state, 1), Some(lane), "{tribe:?}");
+            // Unexplored map (land < ARCH_MIN_EXPLORED_LAND): the census has
+            // nothing to say, but the tribe does.
+            let goal = scripted_goal(&state, 1, 0);
+            let mut st = ArchetypeState::default();
+            assert_eq!(select_playstyle(&state, 1, &goal, &mut st, None), Some(lane));
+            assert_eq!(st.committed_turn, Some(state.settings.turn));
+        }
+        // A tribe whose birth tech opens no lane gets no prior.
+        let mut state = state_with_villages(0, &[24]);
+        state.tribes.get_mut(&1).unwrap().tribe_type = TribeType::Imperius;
+        state.tribes.get_mut(&1).unwrap().tech_vanilla = vec![TechnologyState {
+            tech_type: TechnologyType::Organization,
+            discovered: true,
+            discovered_turn: 0,
+        }];
+        assert_eq!(tribe_lane_prior(&state, 1), None);
+    }
+
+    /// The lane is an identity, not a running recomputation: switching costs
+    /// budget, and the budget runs out.
+    #[test]
+    fn lane_switching_is_budgeted_and_dwell_gated() {
+        let mut state = state_with_villages(0, &[24]);
+        state.settings.current_player_turn_id = 1;
+        explore_open_fields(&mut state);
+        let goal = scripted_goal(&state, 1, 0);
+        let mut st = ArchetypeState::default();
+        select_playstyle(&state, 1, &goal, &mut st, None);
+        let first = st.archetype.expect("a lane is committed on an explored map");
+        assert_eq!(st.pivots_used, 0, "the first commit is not a pivot");
+
+        // Force a hard exit (score 0) repeatedly: each re-pick spends budget,
+        // and past MAX_PIVOTS the lane is frozen even under refutation.
+        let mut t2 = TribeState::default();
+        for &i in &[23, 25] {
+            let mut g = unit_at(i);
+            g.unit_type = UnitType::Giant;
+            t2.units.push(g);
+        }
+        state.tribes.insert(2, t2);
+        for turn in 1..=12 {
+            state.settings.turn = turn;
+            let g = scripted_goal(&state, 1, 0);
+            select_playstyle(&state, 1, &g, &mut st, None);
+        }
+        assert!(st.pivots_used <= MAX_PIVOTS, "budget must cap at {MAX_PIVOTS}");
+        let frozen = st.archetype;
+        st.pivots_used = MAX_PIVOTS;
+        for turn in 13..=20 {
+            state.settings.turn = turn;
+            let g = scripted_goal(&state, 1, 0);
+            select_playstyle(&state, 1, &g, &mut st, None);
+        }
+        assert_eq!(st.archetype, frozen, "no lane change once the budget is spent");
+        let _ = first;
+    }
+
+    /// The head's per-lane scores are additive on top of the census, so a
+    /// strong enough net opinion can outvote terrain — but only through the
+    /// same guards.
+    #[test]
+    fn head_scores_shift_the_selector() {
+        let mut state = state_with_villages(0, &[24]);
+        state.settings.current_player_turn_id = 1;
+        explore_open_fields(&mut state);
+        let goal = scripted_goal(&state, 1, 0);
+
+        let mut algo_only = ArchetypeState::default();
+        select_playstyle(&state, 1, &goal, &mut algo_only, None);
+        let census_pick = algo_only.archetype.unwrap();
+
+        let idx = LANE_ORDER.iter().position(|a| *a == census_pick).unwrap();
+        let mut head = [0.0f32; LANES];
+        head[(idx + 1) % LANES] = 50.0; // overwhelming opinion for another lane
+        let mut with_head = ArchetypeState::default();
+        let pick = select_playstyle(&state, 1, &goal, &mut with_head, Some(&head)).unwrap();
+        assert_ne!(pick, census_pick, "a decisive head score must move the call");
+        assert!(with_head.last_scores.iter().any(|s| *s >= 50.0), "scores recorded for the trace");
     }
 
     #[test]
