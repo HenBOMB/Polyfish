@@ -7,7 +7,7 @@
 use crate::ai::oracle_macro::{
     ArchetypeState, GoalAux, MacroGoal, Stance, goal_star_gate, passes_ability_gate,
     passes_capture_first, passes_star_gate, passes_tech_caps, scripted_goal_aux,
-    update_archetype,
+    observe_archetype,
 };
 use crate::ai::{reward, scoring};
 use crate::game::Game;
@@ -132,7 +132,7 @@ pub fn execute_turn(
         {
             return true;
         }
-        update_archetype(&game.state, player, goal, arch);
+        observe_archetype(&game.state, player, arch);
         let aux = scripted_goal_aux(
             &game.state,
             player,

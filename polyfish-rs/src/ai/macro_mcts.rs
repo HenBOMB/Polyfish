@@ -574,6 +574,18 @@ impl<'a> MacroMctsAgent<'a> {
             }
             let base =
                 update_goal(&view0.state, pov, &mut self.stance_commit, self.counters.tier3_bought);
+            // Tier 1, once per turn: score every lane and commit one. The
+            // executor plies below only OBSERVE, so the lane stays the
+            // turn's identity instead of drifting ply to ply. In-tree turns
+            // inherit this lane rather than re-selecting (v1).
+            crate::ai::oracle_macro::observe_archetype(&view0.state, pov, &mut self.archetype);
+            crate::ai::oracle_macro::select_playstyle(
+                &view0.state,
+                pov,
+                &base,
+                &mut self.archetype,
+                None,
+            );
             let mut tagged = crate::ai::macro_agent::enumerate_candidates_with_belief(
                 &view0.state,
                 pov,

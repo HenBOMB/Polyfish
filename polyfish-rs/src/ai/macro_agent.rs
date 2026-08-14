@@ -10,7 +10,7 @@ use crate::ai::macro_exec::{self, TurnCounters};
 use crate::ai::oracle_macro::{
     ArchetypeState, MacroGoal, OrderKind, Stance, StanceCommit, goal_star_gate,
     retakeable_village, save_batch_plan, scripted_goal, scripted_goal_aux, still_capturable,
-    update_archetype, update_goal,
+    observe_archetype, update_goal,
 };
 use crate::game::Game;
 use crate::moves::{EndTurnMove, Move};
@@ -150,7 +150,10 @@ pub(crate) fn rank_view(
     counters: &mut TurnCounters,
     lambda: f32,
 ) -> Vec<(f32, Box<dyn Move>)> {
-    update_archetype(&view.state, pov, goal, archetype);
+    // Per-ply: observe only. The LANE is a turn-level identity chosen by
+    // `select_playstyle` at the turn boundary — re-selecting it 20x a turn
+    // is what made it a running average instead of a strategy.
+    observe_archetype(&view.state, pov, archetype);
     let aux = scripted_goal_aux(
         &view.state,
         pov,

@@ -1633,6 +1633,10 @@ fn archetype_scores(
 /// then enter/hold/switch the base doctrine with hysteresis — hard exits
 /// fire immediately (score drops to 0), soft switches need the challenger
 /// to outscore by `ARCH_SWITCH_MARGIN` for `ARCH_SWITCH_TURNS` turns.
+/// Per-ply entry point for the script paths: observe every ply, but run the
+/// Tier-1 selector only at a turn boundary (or to make the very first
+/// commit). Callers that already sit on a turn boundary — the macro agent's
+/// replan branch — call `observe_archetype` + `select_playstyle` directly.
 pub fn update_archetype(
     state: &GameState,
     player: PlayerId,
@@ -1640,7 +1644,9 @@ pub fn update_archetype(
     st: &mut ArchetypeState,
 ) {
     observe_archetype(state, player, st);
-    select_playstyle(state, player, goal, st, None);
+    if state.settings.turn != st.last_turn || st.archetype.is_none() {
+        select_playstyle(state, player, goal, st, None);
+    }
 }
 
 /// Per-ply half: peak enemy-type counts and the reactive overlays. Cheap,
@@ -2915,9 +2921,17 @@ mod tests {
         }
         state.tribes.insert(2, t2);
         let goal2 = scripted_goal(&state, 1, 0);
+        // Tier 1: the lane is a turn-level identity. Mid-turn the sighting
+        // is OBSERVED (overlays react immediately) but the lane is not
+        // re-selected — that waits for the turn boundary.
         update_archetype(&state, 1, &goal2, &mut st);
         assert!(st.overlays.catapult_counter);
+        assert_eq!(st.archetype, Some(Archetype::RiderRoads), "no mid-turn lane flip");
+
+        state.settings.turn += 1;
+        update_archetype(&state, 1, &goal2, &mut st);
         assert_eq!(st.archetype, Some(Archetype::ArcherLine));
+        assert_eq!(st.pivots_used, 1, "a refuted lane costs budget");
         let aux2 = scripted_goal_aux(&state, 1, &goal2, 0, 0, Some(&st));
         assert!(aux2.preferred_units.contains(&UnitType::Catapult));
         assert!(aux2.preferred_units.contains(&UnitType::Archer));
