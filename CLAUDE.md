@@ -17,7 +17,7 @@ Polyfish is an AlphaZero-style AI (MCTS + neural network) that plays *The Battle
 
 ## Commands
 
-All `cargo` commands run from `polyfish-rs/`. The root `run-server.sh` and `polyfish-rs/run_training_loop.sh` `cd` there for you.
+All `cargo` commands run from `polyfish-rs/`. The root `run-server.sh` `cd`s there for you; `run_training_loop.sh` does **not** — it must be launched with `polyfish-rs/` as the working directory or its first `cargo build` fails with "could not find Cargo.toml".
 
 **Run the web server / simulator** (port 3000, serves `src/public`):
 ```bash
