@@ -496,10 +496,10 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                                 // Fixed priority just under an actual Capture
                                 // (100.1) and above any attack (<=90), so the
                                 // agent seizes the objective instead of
-                                if crate::functions::is_enemy_capital(state, target_idx, player_id) {
+                                if crate::functions::is_enemy_capital(state, target_idx.try_into().unwrap(), player_id) {
                                     return 99.0;
                                 }
-                                if crate::functions::is_enemy_city(state, target_idx, player_id) {
+                                if crate::functions::is_enemy_city(state, target_idx.try_into().unwrap(), player_id) {
                                     return 96.0;
                                 }
                             }
