@@ -40,9 +40,46 @@ impl Game {
         Self { state }
     }
 
-    /// Load game state from a JSON string
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
-        let state: GameState = serde_json::from_str(json)?;
+        let mut value: serde_json::Value = serde_json::from_str(json)?;
+
+        // Handle JS map wrapper if it exists (e.g. from raw scraper JSON)
+        if let Some(serde_json::Value::Object(mut map)) = value.as_object_mut().and_then(|obj| obj.remove("map")) {
+            for key in ["tiles", "structures", "resources"] {
+                if let Some(items) = map.remove(key) {
+                    let converted = if let Some(arr) = items.as_array() {
+                        let mut obj = serde_json::Map::new();
+                        for item in arr {
+                            let mut item = item.clone();
+                            if let Some(item_obj) = item.as_object_mut() {
+                                // Inject coords if missing
+                                if !item_obj.contains_key("coords") {
+                                    let x = item_obj.get("x").cloned().unwrap_or(serde_json::json!(0));
+                                    let y = item_obj.get("y").cloned().unwrap_or(serde_json::json!(0));
+                                    let idx = item_obj.get("idx").cloned().unwrap_or(serde_json::json!(0));
+                                    item_obj.insert("coords".to_string(), serde_json::json!({
+                                        "x": x,
+                                        "y": y,
+                                        "idx": idx
+                                    }));
+                                }
+                                if let Some(idx_val) = item_obj.get("idx").and_then(|i| i.as_i64()) {
+                                    obj.insert(idx_val.to_string(), item);
+                                }
+                            }
+                        }
+                        serde_json::Value::Object(obj)
+                    } else {
+                        items
+                    };
+                    if let Some(root_obj) = value.as_object_mut() {
+                        root_obj.insert(key.to_string(), converted);
+                    }
+                }
+            }
+        }
+
+        let state: GameState = serde_json::from_value(value)?;
         let mut game = Self { state };
         game.post_load();
         Ok(game)

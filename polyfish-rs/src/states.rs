@@ -532,7 +532,7 @@ impl Default for GameSettings {
             turn: default_turn(),
             max_turns: default_max_turns(),
             current_player_turn_id: 1,
-            version: 0,
+            version: 1,
             game_name: String::new(),
             seed: 0,
             win_by_capital: false,

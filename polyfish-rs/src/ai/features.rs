@@ -276,23 +276,39 @@ pub fn state_to_cpu_features(state: &GameState, perspective: PlayerId) -> Result
     let pov_tribe_type = pov_tribe.map(|t| t.tribe_type).unwrap_or(TribeType::None);
     let is_elyrion = pov_tribe_type == TribeType::Elyrion;
 
+    // Handle model versioning for normalization scales
+    let (scale_max_turns, scale_max_score, scale_max_stars, scale_max_spt, scale_max_units) = if state.settings.version <= 0 {
+        (30.0, 10000.0, 30.0, 30.0, 20.0) // Legacy scales for v0 models
+    } else {
+        (
+            crate::states::default_max_turns() as f32,
+            crate::states::default_max_score() as f32,
+            crate::states::default_max_stars() as f32,
+            crate::states::default_max_spt() as f32,
+            crate::states::default_max_units() as f32,
+        )
+    };
+
     // Global stats (same for all tiles)
     let turn_norm = (state.settings.turn as f32 / state.settings.max_turns as f32).clamp(0.0, 1.0);
-    let max_turns_norm = (state.settings.max_turns as f32
-        / crate::states::default_max_turns() as f32)
-        .clamp(0.0, 1.0);
+    let max_turns_norm = (state.settings.max_turns as f32 / scale_max_turns).clamp(0.0, 1.0);
     let stars_norm = pov_tribe
-        .map(|t| (t.stars as f32 / crate::states::default_max_stars() as f32).clamp(0.0, 1.0))
+        .map(|t| {
+            if state.settings.version <= 0 {
+                // Restore original log scale for v0 models
+                ((t.stars as f32 + 1.0).ln() / 100.0_f32.ln()).clamp(0.0, 1.0)
+            } else {
+                (t.stars as f32 / scale_max_stars).clamp(0.0, 1.0)
+            }
+        })
         .unwrap_or(0.0);
     let spt_norm = pov_tribe
         .map(|t| {
-            (crate::functions::get_tribe_spt(state, t) as f32
-                / crate::states::default_max_spt() as f32)
-                .clamp(0.0, 1.0)
+            (crate::functions::get_tribe_spt(state, t) as f32 / scale_max_spt).clamp(0.0, 1.0)
         })
         .unwrap_or(0.0);
     let score_norm = pov_tribe
-        .map(|t| (t.score as f32 / crate::states::default_max_score() as f32).clamp(0.0, 1.0))
+        .map(|t| (t.score as f32 / scale_max_score).clamp(0.0, 1.0))
         .unwrap_or(0.0);
     let tech_count = pov_tribe
         .map(|t| t.tech_vanilla.iter().filter(|tech| tech.discovered).count())
@@ -308,19 +324,19 @@ pub fn state_to_cpu_features(state: &GameState, perspective: PlayerId) -> Result
     let game_over = if state.settings._game_over { 1.0 } else { 0.0 };
     let total_cities =
         (pov_tribe.map(|t| t.cities.len()).unwrap_or(0) as f32 / 5.0).clamp(0.0, 1.0);
-    let total_units = (pov_tribe.map(|t| t.units.len()).unwrap_or(0) as f32 / 20.0).clamp(0.0, 1.0);
+    let total_units = (pov_tribe.map(|t| t.units.len()).unwrap_or(0) as f32 / scale_max_units).clamp(0.0, 1.0);
     // at turn 5 it stops tracking
     let pacifist_turns = pov_tribe
         .map(|t| (t.pacifist_turns as f32 / 5.0).clamp(0.0, 1.0))
         .unwrap_or(0.0);
     let tribe_kills = pov_tribe
-        .map(|t| (t.kills as f32 / crate::states::default_max_units() as f32).clamp(0.0, 1.0))
+        .map(|t| (t.kills as f32 / scale_max_units).clamp(0.0, 1.0))
         .unwrap_or(0.0);
     let tribe_casualties = pov_tribe
-        .map(|t| (t.casualties as f32 / crate::states::default_max_units() as f32).clamp(0.0, 1.0))
+        .map(|t| (t.casualties as f32 / scale_max_units).clamp(0.0, 1.0))
         .unwrap_or(0.0);
     let tribe_conversions = pov_tribe
-        .map(|t| (t.conversions as f32 / crate::states::default_max_units() as f32).clamp(0.0, 1.0))
+        .map(|t| (t.conversions as f32 / scale_max_units).clamp(0.0, 1.0))
         .unwrap_or(0.0);
     let attacked_this_turn = pov_tribe
         .map(|t| if t.attacked_this_turn { 1.0 } else { 0.0 })
