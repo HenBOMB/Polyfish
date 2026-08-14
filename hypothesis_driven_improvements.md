@@ -4083,4 +4083,87 @@ Predictions:
 - **G2 (dual-net sync):** identical logits Rust vs Python on a fixed
   batch before any training run consumes the head.
 
+**STATUS 2026-08-14: PARKED BEFORE RUNNING — kept as a written-down idea
+to revisit, per Verdi.** The reshaping of TRAINING (outcome/bandit
+supervision, counterfactual lane pairs as preference labels) is the
+part being deferred; the tier architecture it serves is not. Superseded
+for now by EXP_ELO_044, which reaches the same Tier-1 goal through the
+project's existing validated machinery (decaying script crutch ->
+prior, goal-conditioned feature painting, calibrated dial) instead of a
+new supervision regime. Revisit if 044's crutch never becomes "owned"
+(policy_loss gauge) or if the pivot hurdle proves un-callable from
+value differences.
+
+ACTUAL: (not run — parked)
+
+## EXP_ELO_044 — Playstyle as conditioned INPUT: crutch-distilled prior + learned pivot hurdle
+
+**Registered 2026-08-14, before running.** Verdi's revision of 043 (which
+is parked): keep Tier 1 in the net, but reach it with heavy script
+crutches and input conditioning rather than a new supervision regime.
+Three pieces: (1) a `playstyle_log[]` carried IN THE INPUT — the net's
+own past playstyle decisions fed forward into future turns; (2) a
+terrain/tribe census script that strongly picks the playstyle early
+(forest -> forestry, metal -> smithery/giants, ...) and is DISTILLED
+INTO THE PRIOR on the project's standard decaying-crutch schedule; (3)
+pivoting gated by a LEARNED estimate of whether the current playstyle
+can still win — the lane changes only when the hurdle is cleared.
+
+Why this is cheap: every mechanism already exists and is validated.
+- Input conditioning: EXP_ELO_028 goal channels already paint scripted
+  directives as planes; playstyle planes are the same pattern, appended
+  at the END of the spatial layout so old archives keep zero-padding at
+  load (train.py) — the documented safe path for channel growth.
+- Crutch -> prior: `blend_heuristic_prior` / `anchor_frac` /
+  `decay_crutch` are the same machinery that already bootstraps the
+  policy from Greedy. `policy_loss` is the owned-vs-rented gauge (memo:
+  goal-pricing-beats-masks) — no crutch removal until it closes.
+- Pivot estimate WITHOUT A NEW HEAD: `state_to_cpu_features_goal(...,
+  Some(&candidate))` already paints a hypothetical directive into the
+  features, so a lane-conditional value read is just re-encoding with
+  playstyle plane B and re-running the existing value head. Pivot iff
+  V(state | lane B) - V(state | current) > hurdle.
+
+Design pins:
+- Planes (appended at end): K current-lane one-hots + turns-in-lane
+  (normalized) + pivots-used (normalized). The history summary IS the
+  playstyle_log; no sequence model needed.
+- Hurdle calibration by the q-gap dial method (memo): fit against the
+  MEASURED distribution of lane-conditional value differences, expect
+  the first fit to overshoot ~2x, iterate. Plus structural guards: min
+  dwell turns and <= 3 pivots/game (Verdi's budget).
+- Value-head caveat: the head is ~2x overconfident when ahead (022
+  family). Comparing two conditional reads at the SAME state is a
+  difference, so calibration bias partially cancels — but the hurdle
+  must be set on measured spreads, never a guessed constant.
+
+Known negative prior (stated up front): EXP_ELO_038 fed the previous 3
+turn directives to the STRATEGIST for candidate generation and came
+back flat (48.6%). The mechanism here differs — the consumer is the
+NET'S PRIOR conditioning ~600 plies/game, not the tree's candidate set
+(which the tree could already reach). If 044's playstyle planes also
+read flat, that is two independent falsifications of directive memory
+and the idea should be retired, not re-skinned a third time.
+
+Predictions:
+- **P1 (the rule gets OWNED):** with the census crutch decaying, the
+  net's playstyle choice agrees with the census on held-out spawns at
+  a rate that keeps rising as crutch weight falls, and playstyle-head
+  policy_loss closes. Falsifier: agreement collapses the moment the
+  crutch decays -> rented, not owned; the input conditioning is doing
+  nothing the crutch was not already doing.
+- **P2 (the hurdle is callable):** lane-conditional value differences
+  at t~8 rank the actual better lane above chance on forced-lane
+  paired seeds (AUC > 0.6). Falsifier: AUC ~ 0.5 -> the value head
+  cannot rank lanes; fall back to script-only pivot triggers (evidence
+  gates: lane blocked / opponent identity), and note the pivot half of
+  this design as unsupported.
+- **G1 (stability):** <= 3 pivots/game and dwell >= N turns hold
+  structurally; lane entropy across a batch stays > 0.5 nats (no
+  collapse to one global lane).
+- **G2 (migration):** channels appended at end, train.py zero-pad path
+  exercised on a legacy archive, `checkpoints/` migrated (memo:
+  migrate-checkpoints-on-arch-change — the Rust opponent loader is
+  strict), dual-net logits identical on a fixed batch.
+
 ACTUAL: (pending)
