@@ -3749,4 +3749,42 @@ rounds two ways (Defend feature plane goes from ~never-painted to
 informative; in-tree --goal-w-tree shaping gains the defend terms) —
 current running round unaffected (binaries snapshotted at launch).
 
-ACTUAL: (pending)
+ACTUAL (2026-08-14, shipped commit 53b3fe0):
+- **P1 (fixture) — MECHANISM PASS, outcome unchanged.** On seed
+  1786670356 the Defend order fires AT the siege turn (raw read t2: Arm,
+  3 orders; the old proxy never fired), the wounded garrison holds and
+  RECOVERS in place at t3 instead of the walk-off, and the defense
+  concentrates (two attacks per turn t5–t8 — piecemeal gone). The city
+  still falls and the game is still lost ~t20: one wounded rider vs two
+  swordsmen is unwinnable locally, and the loss is production-layer
+  (army stars 3 vs 121 by t20) — the 034–038 evaluation bottleneck, not
+  coverage. Replay: replays/macro040_vs_greedy_1786670356.json.
+- **P2 (cost gate) — brushes the falsifier, not significant.** Old
+  61.6% (154/250) vs new 57.2% (143/250) vs Greedy on paired seeds:
+  −4.4pp point estimate, seed-level McNemar z = −1.51 (53 discordant:
+  32 old-only vs 21 new-only) — inside noise, but the direction is a
+  mild tax. Read: Greedy is not a rusher on most seeds, so defense
+  pricing buys resilience Greedy rarely punishes while costing some
+  expansion tempo. The value claim shifts to distillation semantics
+  (Defend plane now informative) and aggressive opponents, NOT teacher
+  Elo vs Greedy. Decision knob left armed: halve DEFEND_COVER/HOLD or
+  decouple emission from the Arm flip if the next training round shows
+  eco regression.
+- **G1 (throughput) — PASS after remedy.** Naive reach probes cost 46
+  moves/s (fixture); distance-banding (plain cheb decides inside
+  movement+range, exact road-aware search only in the band beyond) →
+  66 moves/s. Arena ms/move 103 → 174 (+69%) — the teacher pays real
+  compute for threat truth on contested turns.
+- **G2 (Arm inflation) — UNMEASURABLE from arena dumps** (stance_flips
+  gauge reads 0 under the macro backend — goal-script-path-only
+  counter). Observable shift: stance-override candidate picks 21.8% →
+  16.6%, continuation picks 13.2% → 23.0%, divergence 46.1% → 49.6%.
+  Defer the emission/flip decoupling call to the next training round's
+  Arm-fraction telemetry.
+- Tests: 181 lib tests pass incl. new defense module tests + the
+  miniature t3 walk-off regression (hold > step-off > out-of-leash in
+  Φ) + FOW-honesty (hidden units never threaten).
+- VERDICT: shipped. Behavior contract holds on the fixture; win-rate
+  cost vs Greedy n.s. negative at −4.4pp/+69% ms — accepted for the
+  distillation motive; re-judge on the next MACRO_GEN round where the
+  student sees painted Defend channels for the first time.
