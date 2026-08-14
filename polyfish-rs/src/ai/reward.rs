@@ -374,6 +374,18 @@ pub const SHAPE_GOAL_DEFEND_COVER: f32 = 600.0;
 /// garrison pinning, which the coverage design exists to avoid.
 pub const SHAPE_GOAL_DEFEND_HOLD: f32 = 400.0;
 
+/// EXP_ELO_042: symmetric offense pricing per unit pressing an
+/// Attack-ordered city (sat 1.0 in strike reach, 0.5 in the 2-turn ring).
+/// 500 beats the max single-ply Expand approach gain (2 × EXPAND_PER_TILE)
+/// so a committed attacker never abandons a push for a village pull, and
+/// sits below at-risk DEFEND_COVER+HOLD so home always outbids in a tie.
+pub const SHAPE_GOAL_ATTACK_PRESS: f32 = 500.0;
+
+/// A unit standing ON an enemy city pays PRESS × this, BY STATE-FACT —
+/// independent of Attack orders, so the pay survives order flicker when a
+/// co-attacker dies. Makes stepping off a siege a ≥250 Φ loss.
+pub const SHAPE_GOAL_SIEGE_HOLD_MULT: f32 = 1.5;
+
 /// How much a nearly-complete SAVE plan damps `SHAPE_GOAL_SUPER`. At full
 /// progress the giant bonus drops to 40%, flipping the pick back to Park —
 /// which is right when +1 production finishes a plan this turn.
@@ -847,6 +859,12 @@ pub fn goal_potential(
     // unassigned unit with an approach gradient. Threats recomputed from
     // state each eval, so prep outcomes (a trained unit, a road, a tech
     // that extends reach) raise Φ the ply they land — no discrete planner.
+    let attack_targets: Vec<i32> = goal
+        .orders
+        .iter()
+        .filter(|(k, _)| *k == OrderKind::Attack)
+        .map(|(_, i)| *i)
+        .collect();
     if width > 0 && goal.orders.iter().any(|(k, _)| *k == OrderKind::Defend) {
         let threats = crate::ai::defense::city_threats(state, player);
         for (kind, idx) in &goal.orders {
@@ -857,27 +875,73 @@ pub fn goal_potential(
                 continue; // stale order: threat cleared, nothing to pay
             };
             let urgency = if th.at_risk { 1.0 } else { 0.5 };
-            let plan = crate::ai::defense::defend_plan(state, player, th);
+            let plan = crate::ai::defense::defend_plan(state, player, th, &attack_targets);
             for (_, sat) in &plan.assigned {
                 phi += SHAPE_GOAL_DEFEND_COVER * urgency * sat;
             }
             if plan.hold_needed {
                 phi += SHAPE_GOAL_DEFEND_HOLD * urgency;
             }
+            // EXP_ELO_042: recall never conscripts attack-committed units;
+            // with none free, shortfall drives prep, not un-commitment.
             if plan.shortfall > 0.0 {
                 let assigned: std::collections::HashSet<i32> =
                     plan.assigned.iter().map(|(t, _)| *t).collect();
                 if let Some(d) = tribe
                     .units
                     .iter()
-                    .map(|u| u.coords.idx)
-                    .filter(|t| !assigned.contains(t))
-                    .map(|t| cheb(t, *idx, width))
+                    .filter(|u| {
+                        !assigned.contains(&u.coords.idx)
+                            && !crate::ai::defense::attack_committed(
+                                state,
+                                player,
+                                u,
+                                *idx,
+                                &attack_targets,
+                            )
+                    })
+                    .map(|u| cheb(u.coords.idx, *idx, width))
                     .min()
                 {
                     phi += SHAPE_GOAL_DEFEND_COVER * urgency * 0.5
                         * ((SHAPE_PROX_CAP - d).max(0) as f32 / SHAPE_PROX_CAP as f32);
                 }
+            }
+        }
+    }
+    // EXP_ELO_042: symmetric offense. Siege-hold pays by STATE-FACT (a unit
+    // standing on an enemy city keeps its pay through Attack-order flicker);
+    // ring units press toward ordered targets, capped and deterministic.
+    if width > 0 {
+        let mut sieging: Vec<i32> = Vec::new();
+        for u in &tribe.units {
+            if let Some(c) = crate::functions::get_city_at(state, u.coords.idx) {
+                if c.owner != player && c.owner != 0 {
+                    phi += SHAPE_GOAL_ATTACK_PRESS * SHAPE_GOAL_SIEGE_HOLD_MULT;
+                    sieging.push(u.coords.idx);
+                }
+            }
+        }
+        for &h in &attack_targets {
+            let mut cands: Vec<(i32, f32, i32)> = Vec::new(); // (tile, sat, dist)
+            for u in &tribe.units {
+                if sieging.contains(&u.coords.idx) {
+                    continue; // already paid by the latch
+                }
+                let d = cheb(u.coords.idx, h, width);
+                let m = crate::functions::get_unit_movement(state, u);
+                let sat = if crate::ai::defense::covers(state, u, h) {
+                    1.0
+                } else if d <= 2 * m {
+                    0.5
+                } else {
+                    continue;
+                };
+                cands.push((u.coords.idx, sat, d));
+            }
+            cands.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.2.cmp(&b.2)).then(a.0.cmp(&b.0)));
+            for &(_, sat, _) in cands.iter().take(4) {
+                phi += SHAPE_GOAL_ATTACK_PRESS * sat;
             }
         }
     }
@@ -2152,6 +2216,64 @@ mod shaping_tests {
         assert!(
             phi_near > phi_far + SHAPE_GOAL_DEFEND_COVER * 0.5,
             "coverage must separate the landing spots: near {phi_near} far {phi_far}"
+        );
+    }
+
+    /// EXP_ELO_042: a unit standing on an enemy city keeps its siege-hold
+    /// pay by state-fact — no Attack order involved — and stepping off
+    /// costs exactly the latch.
+    #[test]
+    fn siege_hold_outprices_stepping_off() {
+        use crate::ai::oracle_macro::{MacroGoal, Stance};
+        let mut state = defense_board(29);
+        state.tribes.get_mut(&2).unwrap().cities.push(crate::states::CityState {
+            owner: 2,
+            idx: 79,
+            ..Default::default()
+        });
+        state.tribes.get_mut(&1).unwrap().units.push(combat_unit(79, UnitType::Rider, 1));
+        let goal = MacroGoal {
+            orders: vec![],
+            stance: Stance::Grow,
+            save_target: None,
+        };
+        let phi_on = goal_potential(&state, 1, &goal, None);
+        state.tribes.get_mut(&1).unwrap().units[0].coords = Coords::from_index(80, 11);
+        let phi_off = goal_potential(&state, 1, &goal, None);
+        assert!(
+            (phi_on - phi_off - SHAPE_GOAL_ATTACK_PRESS * SHAPE_GOAL_SIEGE_HOLD_MULT).abs() < 1e-3,
+            "latch delta wrong: on {phi_on} off {phi_off}"
+        );
+    }
+
+    /// EXP_ELO_042: the shortfall recall gradient never conscripts an
+    /// attack-committed unit — the same unit at the same distance from the
+    /// threatened city pays recall when free and nothing when committed.
+    #[test]
+    fn recall_skips_attack_committed_units() {
+        use crate::ai::oracle_macro::{MacroGoal, OrderKind, Stance};
+        let mut state = defense_board(29);
+        state.tribes.get_mut(&1).unwrap().units.push(combat_unit(29, UnitType::Rider, 1));
+        state.tribes.get_mut(&2).unwrap().units.push(combat_unit(28, UnitType::Swordsman, 2));
+        let goal = MacroGoal {
+            orders: vec![(OrderKind::Defend, 29), (OrderKind::Attack, 79)],
+            stance: Stance::Arm,
+            save_target: None,
+        };
+        // Helper warrior, cheb 5 from B both times; H-side (35: cheb H=4,
+        // committed) vs far side (87: cheb H=8, free). Neither position
+        // covers B or presses H, so the recall term is the only difference.
+        let mut committed = state.clone();
+        committed.tribes.get_mut(&1).unwrap().units.push(combat_unit(35, UnitType::Warrior, 1));
+        let mut free = state.clone();
+        free.tribes.get_mut(&1).unwrap().units.push(combat_unit(87, UnitType::Warrior, 1));
+        let phi_committed = goal_potential(&committed, 1, &goal, None);
+        let phi_free = goal_potential(&free, 1, &goal, None);
+        let recall = SHAPE_GOAL_DEFEND_COVER * 1.0 * 0.5
+            * ((SHAPE_PROX_CAP - 5).max(0) as f32 / SHAPE_PROX_CAP as f32);
+        assert!(
+            (phi_free - phi_committed - recall).abs() < 1e-3,
+            "recall exemption delta wrong: free {phi_free} committed {phi_committed} expected {recall}"
         );
     }
 

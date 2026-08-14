@@ -196,10 +196,46 @@ pub fn city_threats(state: &GameState, player: PlayerId) -> Vec<CityThreat> {
     out
 }
 
+/// EXP_ELO_042 duty partition: is `unit` attack-committed relative to
+/// defend city `b`? True if it stands ON an enemy city (state-fact latch —
+/// survives Attack-order flicker) or some Attack target is STRICTLY closer
+/// than `b` (tie → defense). Comparative, not radius: a radius ring around
+/// H contains B itself on Tiny maps (capitals sit at cheb 5).
+pub fn attack_committed(
+    state: &GameState,
+    player: PlayerId,
+    unit: &UnitState,
+    b: i32,
+    attack_targets: &[i32],
+) -> bool {
+    if let Some(c) = crate::functions::get_city_at(state, unit.coords.idx) {
+        if c.owner != player && c.owner != 0 {
+            return true;
+        }
+    }
+    let size = state.settings.size;
+    let db = get_chebyshev_distance(unit.coords.idx, b, size);
+    attack_targets
+        .iter()
+        .any(|&h| get_chebyshev_distance(unit.coords.idx, h, size) < db)
+}
+
+/// Can `unit` strike a unit standing on `target` next turn (fresh flags)?
+/// Public wrapper for the press pricing in `reward.rs`.
+pub fn covers(state: &GameState, unit: &UnitState, target: i32) -> bool {
+    can_attack_tile(state, &probe(unit), target)
+}
+
 /// Min-diversion cover assignment for one threatened city: closest units
 /// first, full-cover before ring, until the kill damage is met. Ring units
-/// (arrive next turn) contribute at half weight. Deterministic.
-pub fn defend_plan(state: &GameState, player: PlayerId, threat: &CityThreat) -> DefendPlan {
+/// (arrive next turn) contribute at half weight. Attack-committed units
+/// (see `attack_committed`) are never conscripted. Deterministic.
+pub fn defend_plan(
+    state: &GameState,
+    player: PlayerId,
+    threat: &CityThreat,
+    attack_targets: &[i32],
+) -> DefendPlan {
     let size = state.settings.size;
     let sieger: Option<UnitState> = threat
         .attackers
@@ -213,6 +249,9 @@ pub fn defend_plan(state: &GameState, player: PlayerId, threat: &CityThreat) -> 
             let d = get_chebyshev_distance(u.coords.idx, threat.city, size);
             let m = get_unit_movement(state, u);
             if d > 2 * m + RING2_PAD {
+                continue;
+            }
+            if attack_committed(state, player, u, threat.city, attack_targets) {
                 continue;
             }
             let is_garrison = u.coords.idx == threat.city;
@@ -353,7 +392,7 @@ mod tests {
         t1.units.push(unit_at(38, UnitType::Rider, 1)); // cheb 2: rider m=2+Dash covers
         t1.units.push(unit_at(82, UnitType::Rider, 1)); // cheb 2: covers
         let threats = city_threats(&state, 1);
-        let plan = defend_plan(&state, 1, &threats[0]);
+        let plan = defend_plan(&state, 1, &threats[0], &[]);
         assert_eq!(plan.assigned.iter().filter(|&&(_, s)| s == 1.0).count(), 2);
         // Two rider hits do not kill a full swordsman: shortfall is honest.
         let sword_hp = threats[0].need_damage;
@@ -367,14 +406,57 @@ mod tests {
         state.tribes.get_mut(&1).unwrap().units.push(unit_at(60, UnitType::Rider, 1));
         state.tribes.get_mut(&2).unwrap().units.push(unit_at(59, UnitType::Swordsman, 2));
         let th = city_threats(&state, 1);
-        assert!(defend_plan(&state, 1, &th[0]).hold_needed);
+        assert!(defend_plan(&state, 1, &th[0], &[]).hold_needed);
         // Add enough outside cover to meet the kill damage without it.
         for idx in [38, 82, 48, 72] {
             state.tribes.get_mut(&1).unwrap().units.push(unit_at(idx, UnitType::Swordsman, 1));
         }
         let th = city_threats(&state, 1);
-        let plan = defend_plan(&state, 1, &th[0]);
+        let plan = defend_plan(&state, 1, &th[0], &[]);
         assert!(plan.shortfall == 0.0);
         assert!(!plan.hold_needed);
+    }
+
+    /// EXP_ELO_042: latch (on enemy city), strict comparative rule, and
+    /// tie-goes-to-defense — on real Tiny geometry (capitals cheb 5).
+    #[test]
+    fn duty_partition_latch_comparative_and_tie() {
+        let mut state = board(29); // own city B = 29 (7,2)
+        state.tribes.get_mut(&2).unwrap().cities.push(CityState {
+            owner: 2,
+            idx: 79, // enemy city H = 79 (2,7)
+            ..Default::default()
+        });
+        let latch = unit_at(79, UnitType::Rider, 1);
+        assert!(attack_committed(&state, 1, &latch, 29, &[]));
+        let closer_h = unit_at(35, UnitType::Warrior, 1); // cheb B=5, H=4
+        assert!(attack_committed(&state, 1, &closer_h, 29, &[79]));
+        assert!(!attack_committed(&state, 1, &closer_h, 29, &[]));
+        let tie = unit_at(60, UnitType::Warrior, 1); // cheb 3 to both
+        assert!(!attack_committed(&state, 1, &tie, 29, &[79]));
+    }
+
+    /// EXP_ELO_042: defend B while attacking H — the attacker standing on H
+    /// (inside B's candidate ring at Tiny distances!) is never conscripted;
+    /// the home defender is.
+    #[test]
+    fn attacker_on_enemy_city_is_never_conscripted() {
+        let mut state = board(60);
+        state.tribes.get_mut(&2).unwrap().cities.push(CityState {
+            owner: 2,
+            idx: 79, // cheb(79, 60) = 3: inside a rider's cover ring
+            ..Default::default()
+        });
+        {
+            let t1 = state.tribes.get_mut(&1).unwrap();
+            t1.units.push(unit_at(60, UnitType::Rider, 1)); // garrison
+            t1.units.push(unit_at(48, UnitType::Rider, 1)); // home defender
+            t1.units.push(unit_at(79, UnitType::Rider, 1)); // sieging H
+        }
+        state.tribes.get_mut(&2).unwrap().units.push(unit_at(59, UnitType::Swordsman, 2));
+        let th = city_threats(&state, 1);
+        let plan = defend_plan(&state, 1, &th[0], &[79]);
+        assert!(!plan.assigned.iter().any(|&(t, _)| t == 79));
+        assert!(plan.assigned.iter().any(|&(t, _)| t == 48));
     }
 }

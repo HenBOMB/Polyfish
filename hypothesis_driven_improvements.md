@@ -3890,3 +3890,79 @@ ACTUAL (2026-08-14, 250 paired games/arm, commit 144d02b):
   channels, re-measured on this same instrument (replays/exp041 seeds,
   SIEGE DEFENSE scoreboard). Knobs still armed: halve DEFEND_COVER/HOLD
   (offense-leash tax), decouple emission from the Arm flip.
+
+## EXP_ELO_042 — Two signals: defend city B while attacking city H (duty partitioning + attack press)
+
+**Registered 2026-08-14, before running.**
+
+Diagnosis (EXP_ELO_041 mirror data): defense pricing is asymmetric and
+un-partitioned. (1) The shortfall RECALL gradient prices the single
+nearest non-assigned unit's distance to the threatened city with no
+notion of duty — mid-offense, the net's attackers are often exactly
+that unit, so every in-tree step deeper into enemy land loses shaping
+value and the tree tilts attackers homeward. (2) Attack orders are
+worth 0 Φ (like Defend was before 040), so any pricing tie breaks
+toward the only spatial gradient that exists — home. Measured: Greedy's
+unsiege rate vs the net's own sieges 34% → 42%, sieges started but not
+finished. Verdi's spec: "need 2 different signals. I can defend city B
+while attacking city H."
+
+Changes (design pinned):
+- **Duty partitioning (COMPARATIVE, not radius — advisor catch: a
+  2m+2 ring around H contains B itself on Tiny maps, capitals cheb 5
+  apart, so a radius rule would defense-exempt the whole center):** a
+  unit is attack-committed for a given Defend city B iff it stands ON
+  an enemy city (state-fact latch — survives Attack-order flicker when
+  a co-attacker dies and the local.len()>=2 emission predicate drops
+  the order) OR some Attack-order target H is STRICTLY closer to it
+  than B (tie → defense). Committed units are excluded from
+  defend_plan assignment AND the shortfall recall gradient. If only
+  committed units remain, recall goes silent — shortfall drives prep
+  (train defenders at home, already outcome-priced) instead of
+  un-committing the army. The same geometry retro-explains 041: an
+  attacker standing on H at cheb 5 was INSIDE B's cover-candidate ring,
+  so assignment was stealing attackers directly, not just recall.
+- **Attack press (symmetric pricing):** per Attack order H, units in
+  H's press ring get SHAPE_GOAL_ATTACK_PRESS = 500 per unit (cap
+  MAX_ASSIGN; sat 1.0 in 1-turn strike reach, 0.5 in the 2-turn ring;
+  pick order sat-desc/dist-asc/tile-asc, deterministic like
+  defend_plan). A unit standing ON an enemy city pays PRESS ×
+  SIEGE_HOLD_MULT = 1.5 (750) BY STATE-FACT, independent of any order
+  (the flicker latch), and is skipped by the order-press assignment so
+  it is never double-paid. Sizing: 500 beats the max single-ply Expand
+  approach gain (2 tiles × 200) so a committed attacker never abandons
+  for a village pull; 750 makes stepping off a siege a ≥250 Φ loss;
+  both sit below at-risk DEFEND_COVER+HOLD (1000) so a unit that is
+  somehow both roles resolves home — but the partition makes that moot.
+  No need-math on the offense side v1: the Attack emission predicate
+  already gates on local superiority (1.5×).
+- Stance flip (Defend → Arm) deliberately UNTOUCHED: the granular
+  intensity gate keeps eco open below 0.98, and Arm is what lets home
+  cities train defenders. The armed decouple-knob stays armed, not
+  spent — this experiment fixes the SPATIAL interference only.
+
+Setup: unit tests (attacker at H exempt from cover/recall while home
+unit covers B — the defend-B-attack-H scenario in miniature; siege-hold
+on H outprices stepping off; recall skips committed units and goes
+silent when only they remain); full lib suite; then RERUN the exact 041
+instrument — same binary path, same base_seed 1787800000, same 125
+seeds ×2, net path (gumbel 64/16, goal-script, goal-w-tree 1, pinned
+pre-040 checkpoint) vs Greedy, dumps replays/exp042/new — comparable
+row-for-row against BOTH 041 arms.
+
+Predictions:
+- **P1 (offense conversion recovers, primary):** Greedy's unsiege rate
+  vs the net back below ~38% (from 041-new's 42%; 041-old read 34%), and
+  Greedy cities_lost/game back up toward the old arm's 1.09. Falsifier:
+  no recovery → the leash was not the offense regression's cause.
+- **P2 (defense holds):** net unsiege-given-siege stays ≥ ~37% and
+  lost-given-siege ≤ ~60% (the 041 gains kept). Falsifier: defense
+  conversion collapses back → the recall gradient was doing the real
+  defensive work and partitioning broke it.
+- **P3 (wins):** vs 041-old, McNemar on the same seeds; expected drift
+  positive but honestly unknown; any |z| < 1.96 reads as flat.
+- **G1 (exposure):** net sieges suffered/game between the two 041 arms
+  (1.67–1.98); if it rises FURTHER, attack press is overextending the
+  army and the press weight halves before any verdict.
+
+ACTUAL: (pending)
