@@ -412,12 +412,15 @@ pub fn generate(settings: MapGenSettings) -> GameState {
 
     if settings.map_type == MapType::Drylands {
         // Drylands is almost entirely land
-        while current_land < target_land {
+        let max_attempts = tile_count as usize * 10;
+        let mut attempts = 0;
+        while current_land < target_land && attempts < max_attempts {
             let idx = rng.gen_range(0..tile_count) as usize;
             if !is_land[idx] {
                 is_land[idx] = true;
                 current_land += 1;
             }
+            attempts += 1;
         }
     } else {
         // Polytopia-style 2D Procedural Noise Pipeline (GenerateNoise -> SmoothNoise -> SetTerrainFromNoise)
