@@ -1352,14 +1352,26 @@ pub fn generate(settings: MapGenSettings) -> GameState {
     // --- Symmetric Map Preset (CreateFromPreset / Competitive 1v1 Mirroring) ---
     // Reflects terrain, resources, forests, villages, and capitals across the center point for 1v1 matches.
     if settings.symmetric && settings.tribes.len() == 2 && capital_cells.len() == 2 {
-        let mut cap0 = capital_cells[0];
-        if cap0 >= tile_count / 2 {
-            cap0 = tile_count - 1 - cap0;
-        }
+        let mut cap0 = if capital_cells[0] < tile_count / 2 {
+            capital_cells[0]
+        } else if capital_cells[1] < tile_count / 2 {
+            capital_cells[1]
+        } else {
+            tile_count - 1 - capital_cells[0]
+        };
+
         if cap0 == tile_count / 2 {
             cap0 = (cap0 - 1).max(0);
         }
         let cap1 = tile_count - 1 - cap0;
+
+        for &old_cap in &capital_cells {
+            map[old_cap as usize].above = None;
+            village_map[old_cap as usize] = 0;
+            map[old_cap as usize].tribe_affinity = None;
+            map[old_cap as usize].orig_tribe_affinity = None;
+        }
+
         capital_cells = vec![cap0, cap1];
 
         for i in 0..(tile_count / 2) {
