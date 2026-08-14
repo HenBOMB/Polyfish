@@ -199,8 +199,8 @@ fn main() -> Result<()> {
     }
 
     // 6. Save Model
-    println!("Saving updated model to model.safetensors");
-    varmap.save("model.safetensors")?;
+    println!("Saving updated model to model_candle.safetensors");
+    varmap.save("model_candle.safetensors")?;
 
     Ok(())
 }
