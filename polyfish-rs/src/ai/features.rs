@@ -681,7 +681,7 @@ pub fn state_to_cpu_features(state: &GameState, perspective: PlayerId) -> Result
                     set_feat(&mut data, CH_MEM_ENEMY_SEEN, x, y, decay);
                     set_feat(&mut data, CH_MEM_ENEMY_HP, x, y, mem_unit.hp_norm);
                     let unit_setting = crate::settings::units::get_unit_setting(mem_unit.unit_type);
-                    set_feat(&mut data, CH_MEM_ENEMY_ATTACK, x, y, unit_setting.attack / 5.0);
+                    set_feat(&mut data, CH_MEM_ENEMY_ATTACK, x, y, (unit_setting.attack / 5.0).clamp(0.0, 1.0));
                     if unit_setting.range > 1 {
                         set_feat(&mut data, CH_MEM_ENEMY_RANGED, x, y, 1.0);
                     }
