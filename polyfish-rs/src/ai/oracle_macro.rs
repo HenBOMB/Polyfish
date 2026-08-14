@@ -1643,8 +1643,15 @@ pub fn update_archetype(
     goal: &MacroGoal,
     st: &mut ArchetypeState,
 ) {
+    let before = st.overlays;
     observe_archetype(state, player, st);
-    if state.settings.turn != st.last_turn || st.archetype.is_none() {
+    // Refutation bypasses the turn boundary, mirroring the stance layer's
+    // urgent-threat path (`update_goal`): new counter-evidence — the
+    // sighting that flips an overlay is exactly what zeroes a lane's score —
+    // must not wait a turn to be acted on. Discretionary switches still wait,
+    // and the pivot budget still binds either way.
+    let refuted = st.overlays != before;
+    if state.settings.turn != st.last_turn || st.archetype.is_none() || refuted {
         select_playstyle(state, player, goal, st, None);
     }
 }
@@ -2921,16 +2928,13 @@ mod tests {
         }
         state.tribes.insert(2, t2);
         let goal2 = scripted_goal(&state, 1, 0);
-        // Tier 1: the lane is a turn-level identity. Mid-turn the sighting
-        // is OBSERVED (overlays react immediately) but the lane is not
-        // re-selected — that waits for the turn boundary.
+        // Tier 1: discretionary switches wait for the turn boundary, but
+        // REFUTATION does not — the sighting that flips an overlay is what
+        // zeroes the lane's score, so it re-selects immediately (same
+        // precedent as the stance layer's urgent-threat bypass).
         update_archetype(&state, 1, &goal2, &mut st);
         assert!(st.overlays.catapult_counter);
-        assert_eq!(st.archetype, Some(Archetype::RiderRoads), "no mid-turn lane flip");
-
-        state.settings.turn += 1;
-        update_archetype(&state, 1, &goal2, &mut st);
-        assert_eq!(st.archetype, Some(Archetype::ArcherLine));
+        assert_eq!(st.archetype, Some(Archetype::ArcherLine), "refutation is immediate");
         assert_eq!(st.pivots_used, 1, "a refuted lane costs budget");
         let aux2 = scripted_goal_aux(&state, 1, &goal2, 0, 0, Some(&st));
         assert!(aux2.preferred_units.contains(&UnitType::Catapult));
@@ -3013,6 +3017,40 @@ mod tests {
         }
         assert_eq!(st.archetype, frozen, "no lane change once the budget is spent");
         let _ = first;
+    }
+
+    /// Pinned semantics of the budget's hard edge: `MAX_PIVOTS` is a cap on
+    /// ALL lane changes, refutation included. A lane refuted after the
+    /// budget is spent therefore stays committed — deliberate (Verdi's spec
+    /// is "at most 3 lanes"), and the tradeoff is recorded here rather than
+    /// discovered later: if dead-lane lock-in shows up in the data, this is
+    /// the assertion to revisit.
+    #[test]
+    fn a_spent_budget_outranks_refutation() {
+        let mut state = state_with_villages(0, &[24]);
+        state.settings.current_player_turn_id = 1;
+        explore_open_fields(&mut state);
+        let goal = scripted_goal(&state, 1, 0);
+        let mut st = ArchetypeState::default();
+        select_playstyle(&state, 1, &goal, &mut st, None);
+        st.pivots_used = MAX_PIVOTS;
+        let committed = st.archetype;
+
+        // Overwhelming counter-evidence: two giants refute a rider lane.
+        let mut t2 = TribeState::default();
+        for &i in &[23, 25] {
+            let mut g = unit_at(i);
+            g.unit_type = UnitType::Giant;
+            t2.units.push(g);
+        }
+        state.tribes.insert(2, t2);
+        for turn in 1..=6 {
+            state.settings.turn = turn;
+            let g = scripted_goal(&state, 1, 0);
+            update_archetype(&state, 1, &g, &mut st);
+        }
+        assert_eq!(st.archetype, committed, "the cap binds even under refutation");
+        assert_eq!(st.pivots_used, MAX_PIVOTS);
     }
 
     /// The head's per-lane scores are additive on top of the census, so a

@@ -103,7 +103,7 @@ impl Node {
         game: Game,
         player: PlayerId,
         counters: [TurnCounters; 2],
-        arch: [ArchetypeState; 2],
+        mut arch: [ArchetypeState; 2],
         root_turn: i32,
         k: usize,
         leaf_fn: &dyn Fn(&crate::states::GameState, PlayerId, u32) -> f32,
@@ -123,6 +123,20 @@ impl Node {
             Vec::new()
         } else {
             let base = scripted_goal(&game.state, player, counters[seat(player)].tier3_bought);
+            // A node IS a turn boundary, so the Tier-1 selector belongs here —
+            // for BOTH seats. The executor plies below only observe, so
+            // without this the simulated opponent would play laneless for the
+            // whole rollout (no lane techs, no preferred-unit pricing) and
+            // the tree would evaluate futures the real game never produces.
+            let s = seat(player);
+            crate::ai::oracle_macro::observe_archetype(&game.state, player, &mut arch[s]);
+            crate::ai::oracle_macro::select_playstyle(
+                &game.state,
+                player,
+                &base,
+                &mut arch[s],
+                None,
+            );
             enumerate_candidates(&game.state, player, base, counters[seat(player)], k)
         };
         let n = candidates.len();
