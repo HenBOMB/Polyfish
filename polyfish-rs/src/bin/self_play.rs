@@ -1417,40 +1417,11 @@ fn main() -> anyhow::Result<()> {
     // for the Metal cross-thread-tensor invariant this design preserves).
     let games_start = Instant::now();
 
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum EvalBackendKind {
-        Candle,
-        Tch,
-        Metal,
-    }
+    use polyfish::ai::eval_backend::{resolve_eval_backend_kind, EvalBackendKind};
 
     // Resolve the eval backend: explicit --eval-backend, else auto (metal
     // when compiled in, else tch when compiled in, else candle).
-    let eval_backend_kind = match args.eval_backend.as_str() {
-        "tch" => {
-            if !cfg!(feature = "tch-eval") {
-                anyhow::bail!("--eval-backend tch requires building with --features tch-eval");
-            }
-            EvalBackendKind::Tch
-        }
-        "metal" => {
-            if !cfg!(feature = "metal-eval") {
-                anyhow::bail!("--eval-backend metal requires building with --features metal-eval");
-            }
-            EvalBackendKind::Metal
-        }
-        "candle" => EvalBackendKind::Candle,
-        "" => {
-            if cfg!(feature = "metal-eval") {
-                EvalBackendKind::Metal
-            } else if cfg!(feature = "tch-eval") {
-                EvalBackendKind::Tch
-            } else {
-                EvalBackendKind::Candle
-            }
-        }
-        other => anyhow::bail!("unknown --eval-backend {other:?} (want candle|tch|metal)"),
-    };
+    let eval_backend_kind = resolve_eval_backend_kind(args.eval_backend.as_str())?;
     // Resolve shard count. We default to the best measured throughput
     let eval_servers = match args.eval_servers {
         0 => {
@@ -1484,65 +1455,14 @@ fn main() -> anyhow::Result<()> {
         cache_capacity: per_shard_cache,
         pipeline_workers: args.eval_workers,
     };
-    // Builds `n` backend specs for one player. For tch: every shard gets its
-    // own `BackendSpec::Tch` on the shared MPS device; each shard's thread
-    // loads its own `TchPolyZeroNet` (duplicated weights, a few MB). For
-    // metal: every shard gets its own `BackendSpec::MetalMps`, each shard's
-    // thread loads its own `MetalPolyZeroNet` and owns its own
-    // `MTLCommandQueue`. For candle: `n` clones of the passed
-    // `Arc<PolyZeroNet>` (player 1 vs player 2 networks differ in opponent
-    // mode).
-    let make_specs = |kind: EvalBackendKind,
-                      n: usize,
-                      model_path: &str,
-                      candle_net: &Arc<PolyZeroNet>|
-     -> Vec<BackendSpec> {
-        // `model_path` is only read by the tch/metal branches below; in
-        // builds with neither feature it's unused. Touch it so the closure
-        // compiles cleanly either way.
-        let _ = model_path;
-        match kind {
-            EvalBackendKind::Tch => {
-                #[cfg(feature = "tch-eval")]
-                {
-                    let dev = if tch::utils::has_mps() {
-                        tch::Device::Mps
-                    } else {
-                        tch::Device::Cpu
-                    };
-                    return (0..n)
-                        .map(|_| BackendSpec::Tch {
-                            model_path: model_path.to_string(),
-                            device: dev,
-                        })
-                        .collect();
-                }
-                #[cfg(not(feature = "tch-eval"))]
-                unreachable!("EvalBackendKind::Tch guarded by cfg above");
-            }
-            EvalBackendKind::Metal => {
-                #[cfg(feature = "metal-eval")]
-                {
-                    return (0..n)
-                        .map(|_| BackendSpec::MetalMps {
-                            model_path: model_path.to_string(),
-                        })
-                        .collect();
-                }
-                #[cfg(not(feature = "metal-eval"))]
-                unreachable!("EvalBackendKind::Metal guarded by cfg above");
-            }
-            EvalBackendKind::Candle => (0..n)
-                .map(|_| BackendSpec::Candle(candle_net.clone()))
-                .collect(),
-        }
-    };
+    use polyfish::ai::eval_backend::build_backend_specs;
+
     let p1_path = "model.safetensors";
     let p2_path = args.opponent.as_deref().unwrap_or("model.safetensors");
-    let p1_specs = make_specs(eval_backend_kind, eval_servers, p1_path, &network1);
+    let p1_specs = build_backend_specs(eval_backend_kind, eval_servers, p1_path, &network1);
     let has_opponent = args.opponent.is_some();
     let p2_specs = if has_opponent {
-        make_specs(eval_backend_kind, eval_servers, p2_path, &network2)
+        build_backend_specs(eval_backend_kind, eval_servers, p2_path, &network2)
     } else {
         Vec::new()
     };
