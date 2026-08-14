@@ -440,6 +440,19 @@ do
         BACKEND_FLAG="--search-backend greedy"
     fi
 
+    # A heuristic-leaf macro run reports no root value, so every n-step return
+    # bootstraps with 0.0 and the labels are systematically truncated. `mc`
+    # carries that weight to the terminal return instead; under a net leaf the
+    # root value exists and the flag never fires, so the default is safe there.
+    if [ -n "${TD_MISSING_BOOTSTRAP:-}" ]; then
+        TD_MISSING="$TD_MISSING_BOOTSTRAP"
+    elif [ -n "${MACRO_GEN:-}" ]; then
+        TD_MISSING="mc"
+    else
+        TD_MISSING="zero"
+    fi
+    TD_MISSING_FLAG="--td-missing-bootstrap $TD_MISSING"
+
     # EXP_ELO_006: label-only relative weight for TD labels; unset = binary
     # default (reward::REL_W), in-tree backup unaffected either way.
     LABEL_REL_W_FLAG=""
@@ -558,14 +571,14 @@ do
     # One-line config echo so silent env misconfigurations (ITER_OFFSET,
     # LABEL_REL_W, BOOTSTRAP) are visible in the log — EXP_ELO_006 post-mortem:
     # two runs voided by a missing ITER_OFFSET that nothing surfaced.
-    echo "CONFIG iter=$i eff_iter=$EFF_ITER iter_offset=${ITER_OFFSET:-0} match=$MATCH_TYPE backend=${BACKEND_FLAG:---search-backend gumbel} anchor='${ANCHOR_FLAG}' td_w=${TD_W:-0.7} td_lambda=${TD_LAMBDA:-0.8} label_rel_w=${LABEL_REL_W:-default} wl_labels=${WL_LABELS:-0} goal_channels=${GOAL_CHANNELS:-0} goal_w_tree=${GOAL_W_TREE:-1} shape_w_label=${SHAPE_W_LABEL:-0} shape_w_tree=${SHAPE_W_TREE:-0} pursuit_w_label=${PURSUIT_W_LABEL:-0} pursuit_w_tree=${PURSUIT_W_TREE:-0} unfreeze_opponent=${UNFREEZE_OPPONENT:-0} dagger_alpha=${DAGGER_ALPHA:-0} value_trust=$VALUE_TRUST games=${NUM_GAMES}x${SELF_PLAY_LOOPS} mcts=$MCTS_ITERS gauge_mcts=${GAUGE_MCTS:-$MCTS_ITERS} gauge_gumbel_scale=${GAUGE_GUMBEL_SCALE:-0} k=$GUMBEL_K kl_ref_model=${KL_REF_MODEL:-none} kl_ref_weight=${KL_REF_WEIGHT:-0}"
+    echo "CONFIG iter=$i eff_iter=$EFF_ITER iter_offset=${ITER_OFFSET:-0} match=$MATCH_TYPE backend=${BACKEND_FLAG:---search-backend gumbel} anchor='${ANCHOR_FLAG}' td_w=${TD_W:-0.7} td_lambda=${TD_LAMBDA:-0.8} label_rel_w=${LABEL_REL_W:-default} wl_labels=${WL_LABELS:-0} td_missing=${TD_MISSING} goal_channels=${GOAL_CHANNELS:-0} goal_w_tree=${GOAL_W_TREE:-1} shape_w_label=${SHAPE_W_LABEL:-0} shape_w_tree=${SHAPE_W_TREE:-0} pursuit_w_label=${PURSUIT_W_LABEL:-0} pursuit_w_tree=${PURSUIT_W_TREE:-0} unfreeze_opponent=${UNFREEZE_OPPONENT:-0} dagger_alpha=${DAGGER_ALPHA:-0} value_trust=$VALUE_TRUST games=${NUM_GAMES}x${SELF_PLAY_LOOPS} mcts=$MCTS_ITERS gauge_mcts=${GAUGE_MCTS:-$MCTS_ITERS} gauge_gumbel_scale=${GAUGE_GUMBEL_SCALE:-0} k=$GUMBEL_K kl_ref_model=${KL_REF_MODEL:-none} kl_ref_weight=${KL_REF_WEIGHT:-0}"
 
     SP_LOG=$(mktemp)
     for ((sp=1; sp<=SELF_PLAY_LOOPS; sp++)); do
         if [ "$SELF_PLAY_LOOPS" -gt 1 ]; then
             echo "🎲 Self-play pass $sp/$SELF_PLAY_LOOPS (-g $NUM_GAMES each)"
         fi
-        "$SELF_PLAY_BIN" --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $WL_FLAG $GOAL_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $BACKEND_FLAG $DECAY_LAST_ITER_FLAG --td-w "${TD_W:-0.7}" --td-lambda "${TD_LAMBDA:-0.8}" --outcome-scale "${OUTCOME_SCALE:-3.0}" $LABEL_REL_W_FLAG $SHAPE_FLAGS $UNFREEZE_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
+        "$SELF_PLAY_BIN" --num-games $NUM_GAMES --mcts-iters $MCTS_ITERS --gumbel-k $GUMBEL_K --actors $ACTORS --eval-servers $EVAL_SERVERS $REWARD_FLAG $WL_FLAG $GOAL_FLAG $OPPONENT_FLAG $ANCHOR_FLAG $BACKEND_FLAG $DECAY_LAST_ITER_FLAG --td-w "${TD_W:-0.7}" --td-lambda "${TD_LAMBDA:-0.8}" $TD_MISSING_FLAG --outcome-scale "${OUTCOME_SCALE:-3.0}" $LABEL_REL_W_FLAG $SHAPE_FLAGS $UNFREEZE_FLAG --value-trust "$VALUE_TRUST" --tribe1 "$TRIBE1" --tribe2 "$TRIBE2" --iteration "$EFF_ITER" --gamemode "$GAMEMODE" | tee "$SP_LOG"
         SP_STATUS=${PIPESTATUS[0]}
         if [ "$SP_STATUS" -ne 0 ]; then
             echo "Self-play failed with exit code $SP_STATUS" >&2

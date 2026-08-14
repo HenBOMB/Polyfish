@@ -4391,3 +4391,73 @@ with corrected TD labels (ea700e4). The three gates together —
 039 falsified, 045a/v2 neutral, 045a-b prior-positive — say the tier
 architecture's remaining upside is concentrated in the LEARNED half,
 which is exactly what the label bug has been suppressing.
+
+## EXP_ELO_046 — the corrected-label round: does a full-MC macro label restore the value head?
+
+STATUS: REGISTERED (Aug 15, 2026) — running.
+
+CONTEXT. Iterations 1-10 of run_id 1786710389 (Aug 14, macro-generated)
+were produced by a binary in which `Brain::think` hard-coded
+`macro_params = None` and `Brain::last_root_value()` returned `None` for
+the macro backend. Consequence: EVERY n-step return bootstrapped with
+0.0 at EVERY checkpoint, so the value labels of the whole round were
+systematically truncated toward zero — the fastest way to teach a value
+head that the future is worth nothing. EXP_ELO_039 then measured that
+head at the macro leaf and read 38.8% vs the heuristic leaf's 61.2%
+(z=-7.1). The 039 verdict was deliberately scoped to "this checkpoint,
+trained on those labels"; this round produces the checkpoint that makes
+the re-run meaningful.
+
+HYPOTHESIS. With `--td-missing-bootstrap mc` the missing checkpoint's
+weight carries forward to the terminal return instead of pulling the
+label to zero. Under the heuristic leaf NO checkpoint has a root value,
+so this collapses the labels to full Monte-Carlo (lambda=1) returns over
+each game. A value head trained on true returns should separate
+strategic futures materially better than one trained on truncated ones.
+
+CONFIG (resume of run_id 1786710389, iterations 11-20, EFF_ITER 126-135):
+  MACRO_GEN=1 GOAL_CHANNELS=1 ITER_OFFSET=115 TD_MISSING_BOOTSTRAP=mc
+  ./run_training_loop.sh --resume -i 10 -g 64 -n 32
+Leaf stays HEURISTIC: 039 says the net leaf plays worse today, and it
+generates ~30x slower (3.28 vs ~100 moves/s).
+
+THREE GENERATION DELTAS vs iterations 1-10 (all recorded because a
+re-run that flips must be attributable):
+  (a) TD bootstrap zero -> mc (the label fix; the point of the round).
+  (b) anchor-frac 0.25 -> 0 (committed default under MACRO_GEN: the
+      anchor exists to match what `blend_heuristic_prior` injects, and
+      that blending is Gumbel-only, so under macro generation the anchor
+      games are macro-vs-Greedy blowouts diluting the cloning data).
+  (c) the generation binary now carries the Stage-3a selector: committed
+      per-turn playstyle, tribe prior, in-tree lane selection for both
+      seats. Measured behaviour-NEUTRAL on the arena instrument
+      (-1.6pp / +1.2pp), but it shifts lane shares hard for tribes whose
+      spawn tech opens a lane — and Oumaji/Bardur/Kickoo are in the
+      training tribe rotation, so the generated distribution is not
+      identical to iterations 1-10's.
+
+EXPECTED, and the discontinuity to NOT misread. Value labels change
+semantics at iteration 11 INSIDE run_id 1786710389, so `value_loss` and
+`value_r2` will step at that boundary on the dashboard. That step is the
+label change, not a regression — do not stop the run over it. Full-MC
+labels are higher-variance than bootstrapped ones, so a value_loss rise
+with an unchanged or improved value_r2 is the expected shape.
+
+PREDICTIONS.
+  P1 (the gate): re-run EXP_ELO_039 exactly as registered against the
+     iteration-20 checkpoint. Net leaf >= 52.5% unblocks Stage 3b in
+     full; 50-52.5% ships it with w_algo held at its floor; <= 50% a
+     SECOND time retires the net-leaf idea rather than re-skinning it,
+     and Tier 1 keeps the algorithmic selector alone.
+  P2: value_r2 at iteration 20 >= its iteration-10 value (0.79). A
+     corrected label that does not improve the head's fit falsifies the
+     premise that labels were the binding constraint.
+  P3: the gauge-vs-Greedy win rate does not fall below its iteration-10
+     level — this round is a label correction, not a strength push, so
+     flat is a pass and a drop is a signal something else broke.
+
+CARRY FORWARD. If 039 fails again on corrected labels, the next suspect
+is already identified: the leaf paints `scripted_goal` while the training
+data painted the tree's COMMITTED directive, and those two disagree on
+40-55% of turns (MACRO DIVERGENCE, arena). That is a painting mismatch,
+not a label problem, and it is the cheaper of the two remaining fixes.
