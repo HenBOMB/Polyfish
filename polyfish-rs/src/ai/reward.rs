@@ -362,6 +362,18 @@ pub fn save_progress(
 /// it prices the pick and the cost of losing one.
 pub const SHAPE_GOAL_SUPER: f32 = 500.0;
 
+/// EXP_ELO_040: per assigned covering unit on a Defend-ordered city — full
+/// pay inside 1-turn strike reach, half in the 2-turn ring. Sized above the
+/// max single-ply Expand approach gain (2 tiles × EXPAND_PER_TILE) so an
+/// at-risk leash holds, while 0.5-urgency cover still loses to a 2-step
+/// expansion move: intensity calibrated to the actual need.
+pub const SHAPE_GOAL_DEFEND_COVER: f32 = 600.0;
+
+/// Tile-holding pay, only while the garrison is load-bearing
+/// (`DefendPlan::hold_needed`) — an unconditional term would re-create
+/// garrison pinning, which the coverage design exists to avoid.
+pub const SHAPE_GOAL_DEFEND_HOLD: f32 = 400.0;
+
 /// How much a nearly-complete SAVE plan damps `SHAPE_GOAL_SUPER`. At full
 /// progress the giant bonus drops to 40%, flipping the pick back to Park —
 /// which is right when +1 production finishes a plan this turn.
@@ -824,6 +836,47 @@ pub fn goal_potential(
                         * SHAPE_GOAL_EXPAND_PER_TILE
                         * w_of(*target)
                         * (SHAPE_PROX_CAP - d).max(0) as f32;
+                }
+            }
+        }
+    }
+    // EXP_ELO_040: Defend orders — coverage leash, not garrison pinning.
+    // Pay per assigned covering unit (full in 1-turn strike reach, half in
+    // the 2-turn ring) scaled by live urgency; pay tile-holding only while
+    // the garrison is load-bearing; on shortfall, recall the single nearest
+    // unassigned unit with an approach gradient. Threats recomputed from
+    // state each eval, so prep outcomes (a trained unit, a road, a tech
+    // that extends reach) raise Φ the ply they land — no discrete planner.
+    if width > 0 && goal.orders.iter().any(|(k, _)| *k == OrderKind::Defend) {
+        let threats = crate::ai::defense::city_threats(state, player);
+        for (kind, idx) in &goal.orders {
+            if *kind != OrderKind::Defend {
+                continue;
+            }
+            let Some(th) = threats.iter().find(|t| t.city == *idx) else {
+                continue; // stale order: threat cleared, nothing to pay
+            };
+            let urgency = if th.at_risk { 1.0 } else { 0.5 };
+            let plan = crate::ai::defense::defend_plan(state, player, th);
+            for (_, sat) in &plan.assigned {
+                phi += SHAPE_GOAL_DEFEND_COVER * urgency * sat;
+            }
+            if plan.hold_needed {
+                phi += SHAPE_GOAL_DEFEND_HOLD * urgency;
+            }
+            if plan.shortfall > 0.0 {
+                let assigned: std::collections::HashSet<i32> =
+                    plan.assigned.iter().map(|(t, _)| *t).collect();
+                if let Some(d) = tribe
+                    .units
+                    .iter()
+                    .map(|u| u.coords.idx)
+                    .filter(|t| !assigned.contains(t))
+                    .map(|t| cheb(t, *idx, width))
+                    .min()
+                {
+                    phi += SHAPE_GOAL_DEFEND_COVER * urgency * 0.5
+                        * ((SHAPE_PROX_CAP - d).max(0) as f32 / SHAPE_PROX_CAP as f32);
                 }
             }
         }
@@ -2012,5 +2065,82 @@ mod shaping_tests {
         state.tiles.get_mut(&0).unwrap().explorers.insert(1);
         state.tiles.get_mut(&0).unwrap().owner = 2; // captured by someone
         assert!((dev_potential(&state, 1) - fogged).abs() < 1e-4);
+    }
+
+    /// Full 11×11 field board, both players' explorers everywhere, P1 city
+    /// at `city_idx` — reach checks need real tiles to path over.
+    fn defense_board(city_idx: i32) -> GameState {
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        for i in 0..121 {
+            let mut tile = TileState::default();
+            tile.terrain_type = crate::types::TerrainType::Field;
+            tile.explorers.insert(1);
+            tile.explorers.insert(2);
+            state.tiles.insert(i, tile);
+        }
+        let mut t1 = TribeState::default();
+        t1.cities.push(crate::states::CityState {
+            owner: 1,
+            idx: city_idx,
+            ..Default::default()
+        });
+        state.tribes.insert(1, t1);
+        state.tribes.insert(2, TribeState::default());
+        state
+    }
+
+    fn combat_unit(idx: i32, unit_type: UnitType, owner: i32) -> UnitState {
+        let mut u = unit_at(idx, unit_type);
+        u.owner = owner;
+        u.health = crate::functions::get_unit_max_health(&u);
+        u
+    }
+
+    /// Miniature of the fixture-seed t3 walk-off: a load-bearing garrison
+    /// must out-price stepping off, and cover must out-price leaving the
+    /// leash entirely.
+    #[test]
+    fn defend_order_prices_hold_cover_and_leash() {
+        use crate::ai::oracle_macro::{MacroGoal, OrderKind, Stance};
+        let mut state = defense_board(60);
+        state.tribes.get_mut(&1).unwrap().units.push(combat_unit(60, UnitType::Rider, 1));
+        state.tribes.get_mut(&2).unwrap().units.push(combat_unit(59, UnitType::Swordsman, 2));
+        let goal = MacroGoal {
+            orders: vec![(OrderKind::Defend, 60)],
+            stance: Stance::Arm,
+            save_target: None,
+        };
+        let phi_hold = goal_potential(&state, 1, &goal, None);
+        // Step off to an adjacent tile: still full cover, hold term lost.
+        state.tribes.get_mut(&1).unwrap().units[0].coords = Coords::from_index(48, 11);
+        let phi_adjacent = goal_potential(&state, 1, &goal, None);
+        // March to the far corner: out of the leash, only the recall
+        // gradient pays.
+        state.tribes.get_mut(&1).unwrap().units[0].coords = Coords::from_index(0, 11);
+        let phi_far = goal_potential(&state, 1, &goal, None);
+        assert!(
+            phi_hold > phi_adjacent && phi_adjacent > phi_far,
+            "leash ordering violated: hold {phi_hold} adjacent {phi_adjacent} far {phi_far}"
+        );
+        assert!((phi_hold - phi_adjacent - SHAPE_GOAL_DEFEND_HOLD).abs() < 1e-3);
+    }
+
+    /// Without a Defend order the defense block prices nothing: enemy
+    /// presence must not leak into Φ.
+    #[test]
+    fn no_defend_order_means_no_defense_pricing() {
+        use crate::ai::oracle_macro::{MacroGoal, Stance};
+        let mut state = defense_board(60);
+        state.tribes.get_mut(&1).unwrap().units.push(combat_unit(60, UnitType::Rider, 1));
+        let goal = MacroGoal {
+            orders: vec![],
+            stance: Stance::Arm,
+            save_target: None,
+        };
+        let quiet = goal_potential(&state, 1, &goal, None);
+        state.tribes.get_mut(&2).unwrap().units.push(combat_unit(59, UnitType::Swordsman, 2));
+        let besieged = goal_potential(&state, 1, &goal, None);
+        assert!((quiet - besieged).abs() < 1e-4);
     }
 }

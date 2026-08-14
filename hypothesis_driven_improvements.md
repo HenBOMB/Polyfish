@@ -3658,3 +3658,95 @@ question; (2) 035b residuals-off (capital+ghosts only) — pins the
 phantom-army arrow; (3) 035c calibrated-ramp (median-bank ramp, ~turn/3) —
 pins the over-funding arrow. The bank check makes (3) at least as sharp as
 (2). Keep `--macro-belief1/2` + BELIEF MATERIALIZATION telemetry.
+
+## EXP_ELO_040 — Defense as a first-class executor capability (threat model + Defend pricing + coverage leash)
+
+**Registered 2026-08-14, before running.**
+
+Diagnosis (fixture seed 1786670356, both baselines committed d476308):
+the executor cannot defend a city because THREE layers are missing, not
+one. (1) Emission: `update_goal` fires Defend only at `near >= 2` enemy
+units within cheb 2 — a single sieging swordsman never emits a Defend
+order at all (both fixture games sat in this hole). (2) Pricing:
+`goal_potential`'s order loop skips every kind except Expand — Defend
+and Attack orders flip stance and paint feature planes but are worth
+exactly 0 Φ, so nothing in the executor's λ·Δφ holds or recalls units;
+Expand approach gradients actively pay a garrison to march off its own
+threatened city (macro game, t3). (3) Response sizing: nothing computes
+what the opponent can deliver or what counter-force suffices, so the
+contest is piecemeal — single attacks per turn against a 15hp swordsman
+(the ACTUAL failure that lost the macro game per the corrected read; the
+1hp-garrison walk-off itself was defensible).
+
+Changes (design pinned; Verdi's spec 2026-08-14):
+- New `src/ai/defense.rs`: `city_threats(state, player)` — per own city,
+  worst-case next-turn strike from FOW-visible enemy units using the real
+  engine math (`compute_reachable_tiles` Dijkstra → made pub(crate);
+  `calculate_combat` with `get_defense_bonus` on hypothetical placements
+  via coord-swapped unit clones — no hand-coded multipliers). At-risk =
+  active siege (enemy on city), reachable-while-unguarded, or strike ≥
+  RISK_MARGIN × garrison effective HP.
+- `defend_plans(...)`: `need_damage` = kill the strongest deliverable
+  attacker standing on the city (with ITS defense bonus — enemy units
+  get no city bonus, engine truth); min-diversion assignment of covering
+  units (prefer units not holding Expand assignments) until damage met;
+  `shortfall` recorded. Cover check: exact Dijkstra "can attack a unit
+  on C next turn" for units within cheb ≤ 2·movement+2 (roads/terrain
+  count — the rider-via-road case falls out of the movement graph);
+  2-turn half-cover ring approximated by cheb ≤ 2·movement (STATED
+  APPROXIMATION: underestimates road reach; fine for a soft leash).
+- Emission fix in `update_goal`: Defend fires on at-risk (single
+  attacker included), replacing `near >= 2`. Defend → Arm flip KEPT
+  as-is this pass (guardrail G2 measures the cost).
+- `goal_potential`: price Defend orders — per assigned unit,
+  SHAPE_GOAL_DEFEND_COVER (600) × urgency (0.5 base, 1.0 at-risk) ×
+  satisfaction (1.0 in 1-turn cover, 0.5 in the 2-turn ring, proximity
+  gradient below that); + SHAPE_GOAL_DEFEND_HOLD (400) × urgency for a
+  garrison ONLY when removing it creates shortfall (no unconditional
+  pinning — the leash must allow frontier pushing, per spec). Prep is
+  priced by OUTCOME only: a trained unit / new road / bought tech that
+  flips a unit into (or nearer) coverage raises Φ and the per-ply Δφ
+  pays each step — no discrete prep planner, no selection-level bonus;
+  dual-purpose purchases win ties via the existing TECH_FIT term.
+- Sizing rationale: full cover 600 > max single-ply Expand approach gain
+  (200×2 for a rider), so an at-risk leash holds; 0.5-urgency cover 300
+  < 400, so mild threat still loses to a 2-step expand — "intensity
+  calibrated to actual need."
+
+Setup: unit tests (emission single-attacker, zero-Φ-when-no-defend,
+coverage gradient monotonicity, hold-term-only-on-shortfall, miniature
+t3 walk-off state); fixture rerun seed 1786670356 teacher-vs-Greedy
+(new binary) vs committed baselines; paired A/B cost check old-teacher
+(`/tmp/exp040_baseline_arena`, snapshotted pre-rebuild) vs new-teacher,
+each vs Greedy, 125 seeds ×2, base_seed 1787600000, gamemode 2,
+max-turns 30, imperius, metal, GUMBEL_SCALE=0.
+
+Predictions:
+- **P1 (fixture, the behavior gate):** on seed 1786670356 the sieger at
+  the center city is killed before capture OR the city is held/retaken
+  with a concentrated (≥2-attack-per-turn) response — NOT judged by
+  "garrison never steps off" (a 1hp step-off into cover is correct).
+  Falsifier: same piecemeal pattern (≤1 attack/turn vs an at-risk city
+  while ≥2 covering units exist).
+- **P2 (A/B, the cost gate):** new teacher vs Greedy win rate within
+  [−4pp, +8pp] of old teacher (n=250/arm, σ≈3.2pp); expected +2–5pp.
+  Falsifier for the design: < −4pp means the leash/Arm-flip tax
+  exceeds the defense value.
+- **G1 (guardrail, throughput):** fixture-game generation throughput ≥
+  60 moves/s (baseline 106.6; Dijkstras only on defend-order turns).
+  Below → cap threat/cover rings before any verdict.
+- **G2 (guardrail, Arm inflation):** sensitized emission raises Arm
+  fraction; if pre-t10 Arm plies > 2× baseline AND the A/B SPT curve
+  regresses, the pre-committed follow-up is decoupling order emission
+  from the stance flip — measure, don't redesign now.
+
+Risk+Tell: enemy-dependent Φ terms make the potential move on opponent
+plies; executor Δφ is computed within own plies only (enemy static), and
+tree edge shaping stays shape_w=0 — the tell for a leak is
+shaped_backup_matches_hand_computation failing or λ-off A/A drift.
+Training semantics: this changes goal-script conditioning for FUTURE net
+rounds two ways (Defend feature plane goes from ~never-painted to
+informative; in-tree --goal-w-tree shaping gains the defend terms) —
+current running round unaffected (binaries snapshotted at launch).
+
+ACTUAL: (pending)

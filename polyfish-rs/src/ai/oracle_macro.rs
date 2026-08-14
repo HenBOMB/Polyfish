@@ -140,16 +140,11 @@ pub fn scripted_goal(state: &GameState, player: PlayerId, tier3_bought: u32) -> 
             }
         }
     }
-    let enemy_units: Vec<i32> = state
-        .tribes
-        .iter()
-        .filter(|(id, _)| **id != player)
-        .flat_map(|(_, t)| t.units.iter().map(|u| u.coords.idx))
-        .collect();
-    for c in &tribe.cities {
-        let near = enemy_units.iter().filter(|&&u| cheb(u, c.idx) <= 2).count();
-        if near >= 2 {
-            orders.push((OrderKind::Defend, c.idx));
+    // EXP_ELO_040: threat-driven Defend. The old `near >= 2` proxy was blind
+    // to a single sieging unit (fixture 1786670356, both baselines).
+    for th in crate::ai::defense::city_threats(state, player) {
+        if th.at_risk {
+            orders.push((OrderKind::Defend, th.city));
         }
     }
 
@@ -2121,7 +2116,8 @@ mod tests {
         state.settings.turn = 1;
         assert_eq!(update_goal(&state, 1, &mut st, 0).stance, Stance::Grow);
 
-        // Two enemy units within 2 of an own city → DEFEND → ARM.
+        // Visible deliverable strike on an own city → DEFEND → ARM (040:
+        // threat math, not the old position count — stats must be real).
         state.tribes.get_mut(&1).unwrap().cities.push(crate::states::CityState {
             idx: 0,
             ..Default::default()
@@ -2130,8 +2126,18 @@ mod tests {
         t2.id = 2;
         t2.units.push(unit_at(1));
         t2.units.push(unit_at(11));
+        explore_tile(&mut state, 0);
         explore_tile(&mut state, 1);
         explore_tile(&mut state, 11);
+        {
+            let t1 = state.tribes.get_mut(&1).unwrap();
+            t1.units[0].owner = 1;
+            t1.units[0].health = 10.0;
+        }
+        for u in state.tribes.get_mut(&2).unwrap().units.iter_mut() {
+            u.owner = 2;
+            u.health = 10.0;
+        }
         let g = update_goal(&state, 1, &mut st, 0);
         assert!(g.orders.iter().any(|(k, _)| *k == OrderKind::Defend));
         assert_eq!(g.stance, Stance::Arm, "threat response must not wait");
@@ -2164,7 +2170,9 @@ mod tests {
         assert!(g.orders.contains(&(OrderKind::Attack, 40)));
         assert_eq!(g.stance, Stance::Grow);
 
-        // Two enemy units within 2 of an own city → DEFEND + ARM stance.
+        // Threatened own city → DEFEND + ARM stance. 040 contract: a single
+        // VISIBLE enemy that can reach the unguarded city suffices (the old
+        // `near >= 2` proxy is gone, and hidden units never count).
         state.tribes.get_mut(&1).unwrap().cities.push(crate::states::CityState {
             idx: 0,
             ..Default::default()
@@ -2172,6 +2180,20 @@ mod tests {
         let t2 = state.tribes.get_mut(&2).unwrap();
         t2.units.push(unit_at(1));
         t2.units.push(unit_at(12));
+        explore_tile(&mut state, 0);
+        explore_tile(&mut state, 1);
+        explore_tile(&mut state, 12);
+        // 040 threat math reads real stats: garrison + attackers need owner
+        // and HP (the old proxy counted bare positions).
+        {
+            let t1 = state.tribes.get_mut(&1).unwrap();
+            t1.units[0].owner = 1;
+            t1.units[0].health = 10.0;
+        }
+        for u in state.tribes.get_mut(&2).unwrap().units.iter_mut() {
+            u.owner = 2;
+            u.health = 10.0;
+        }
         let g = scripted_goal(&state, 1, 0);
         assert!(g.orders.contains(&(OrderKind::Defend, 0)));
         assert_eq!(g.stance, Stance::Arm);

@@ -57,3 +57,22 @@ artifact — the teacher itself fails it, harder. Fix belongs in the
 executor's ply pricing (hold/garrison term or defend-order consumption),
 then re-distill. (stance_probe rows are the raw script read — fresh
 StanceCommit per turn, not the search-committed goal.)
+
+## EXP_ELO_040 teacher on the same seed (Aug 14, defense module)
+
+`replays/macro040_vs_greedy_1786670356.json` — same harness, teacher
+with threat-driven Defend emission + coverage/hold Φ pricing. The three
+targeted pathologies all moved: Defend order fires AT the siege (raw
+read t2: Arm, 3 orders — the old `near >= 2` proxy never fired on one
+attacker), the wounded garrison holds and RECOVERS in place at t3
+instead of walking off, and the defense is concentrated (two attacks
+per turn t5–t8, piecemeal gone). Outcome still a P2 kill (~t20): one
+wounded rider vs two swordsmen cannot hold the center, and the loss is
+production-layer (army stars 3 vs 121 by t20) — Vengir's rush must be
+answered by allocation/strategy, which is the evaluation bottleneck
+(034–038), not by coverage pricing.
+
+⚠️ Probe-semantics note: from EXP_ELO_040 on, `stance_probe` re-reads of
+OLD replays (incl. net_vs_greedy_8915) show MORE Arm turns than the
+rows quoted above — Defend emission is threat-driven now, so the same
+positions read differently. The quoted rows are the pre-040 script.

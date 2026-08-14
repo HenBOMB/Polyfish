@@ -399,14 +399,30 @@ fn generate_step_moves(state: &GameState, unit: &UnitState, moves: &mut Vec<Box<
     }
 }
 
-fn compute_reachable_tiles(
+pub(crate) fn compute_reachable_tiles(
     state: &GameState,
     unit: &UnitState,
 ) -> std::collections::HashMap<i32, f32> {
+    reach_search(state, unit, None).0
+}
+
+/// EXP_ELO_040 (defense hot path): same search with an early exit — returns
+/// as soon as a newly reached tile satisfies `stop`. The start tile is
+/// tested too (cost 0). Avoids materializing the full map per probe.
+pub(crate) fn reach_search(
+    state: &GameState,
+    unit: &UnitState,
+    stop: Option<&dyn Fn(i32) -> bool>,
+) -> (std::collections::HashMap<i32, f32>, bool) {
     let mut effective_movement = crate::functions::get_unit_movement(state, unit) as f32;
     // Cap movement at 1 if unit has segments attached
     if unit.child_unit_idx.is_some() {
         effective_movement = 1.0;
+    }
+    if let Some(f) = stop {
+        if f(unit.coords.idx) {
+            return (std::collections::HashMap::new(), true);
+        }
     }
     let mut reachable = std::collections::HashMap::new();
     let mut open_list = std::collections::BinaryHeap::new();
@@ -463,6 +479,11 @@ fn compute_reachable_tiles(
 
             let existing_cost = reachable.get(&n_idx);
             if existing_cost.is_none() || new_cost < *existing_cost.unwrap() {
+                if let Some(f) = stop {
+                    if f(n_idx) {
+                        return (reachable, true);
+                    }
+                }
                 reachable.insert(n_idx, new_cost);
                 open_list.push(ReachableNode {
                     index: n_idx,
@@ -473,7 +494,7 @@ fn compute_reachable_tiles(
         }
     }
 
-    reachable
+    (reachable, false)
 }
 
 pub fn compute_shortest_path(
