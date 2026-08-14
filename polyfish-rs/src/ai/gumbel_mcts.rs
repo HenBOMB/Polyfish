@@ -1234,11 +1234,27 @@ fn reused_children_match_legal(game: &Game, children: &[GumbelNode]) -> bool {
         legal.retain(|m| m.move_type() != MoveType::EndTurn);
     }
 
-    if legal.len() != children.len() {
+    // Mirror the EndTurn suppression applied to `legal`: interior expansion
+    // keeps EndTurn children, but `finish_reused_root` strips them after this
+    // check runs, so we must exclude them here too to avoid a count mismatch.
+    let filtered_children: Vec<&GumbelNode> = if has_other {
+        children
+            .iter()
+            .filter(|c| {
+                c.move_to_here
+                    .as_ref()
+                    .map_or(true, |m| m.move_type() != MoveType::EndTurn)
+            })
+            .collect()
+    } else {
+        children.iter().collect()
+    };
+
+    if legal.len() != filtered_children.len() {
         return false;
     }
     let mut remaining: Vec<serde_json::Value> = legal.iter().map(|m| m.serialize()).collect();
-    for child in children {
+    for child in &filtered_children {
         let Some(m) = child.move_to_here.as_ref() else {
             return false;
         };
