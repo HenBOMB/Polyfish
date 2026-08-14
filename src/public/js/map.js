@@ -755,7 +755,7 @@ class MapRenderer {
         // Clear existing heatmap overlays
         document.querySelectorAll('.mcts-overlay').forEach(el => el.remove());
 
-        if (!mctsAnalysis || !mctsAnalysis.evaluations || mctsAnalysis.evaluations.length === 0) return;
+        if (!mctsAnalysis || mctsAnalysis.type !== 'heuristic' || !mctsAnalysis.evaluations || mctsAnalysis.evaluations.length === 0) return;
         if (!SHOW_PREDICTIONS) return;
 
         const evaluations = mctsAnalysis.evaluations;

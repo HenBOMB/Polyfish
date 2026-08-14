@@ -828,7 +828,7 @@ function App() {
                   <div>
                     <h3 style={{ fontSize: '1rem', color: 'var(--text-main)', marginBottom: '12px', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '8px' }}>Top Move Evaluations</h3>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      {gameState.mctsAnalysis.evaluations?.slice(0, 10).map((evalItem: any, idx: number) => (
+                      {gameState.mctsAnalysis.type === 'heuristic' && gameState.mctsAnalysis.evaluations?.slice(0, 10).map((evalItem: any, idx: number) => (
                         <div key={idx} style={{ 
                           display: 'grid', 
                           gridTemplateColumns: '1fr 100px 100px', 

@@ -117,23 +117,21 @@ async fn main() {
 
     // Load trained neural network
     use candle_core::Device;
-    use candle_nn::VarMap;
     let device = Device::Cpu;
 
     let model_path = "model.safetensors";
-    let mut varmap = VarMap::new();
-
     let network = if std::path::Path::new(model_path).exists() {
         println!("✅ Loading trained AI model from {}", model_path);
-        varmap
-            .load(model_path)
-            .expect("Failed to load model weights");
-        polyfish::ai::network::PolyZeroNet::new(candle_nn::VarBuilder::from_varmap(
-            &varmap,
-            candle_core::DType::F32,
-            &device,
-        ))
-        .expect("Failed to build neural network")
+        let vb = unsafe {
+            candle_nn::VarBuilder::from_mmaped_safetensors(
+                &[model_path],
+                candle_core::DType::F32,
+                &device,
+            )
+            .expect("Failed to load model weights")
+        };
+        polyfish::ai::network::PolyZeroNet::new(vb)
+            .expect("Failed to build neural network")
     } else {
         panic!(
             "Model file {} not found! Please run init_model.py first.",
@@ -346,7 +344,10 @@ async fn auto_step(
     }
 
     // 2. Fallback to heuristic analysis if no Gumbel trace was produced
-    let (h_best_move, mcts_analysis_json) = if let Some(trace_val) = gumbel_trace_json {
+    let (h_best_move, mcts_analysis_json) = if let Some(mut trace_val) = gumbel_trace_json {
+        if let serde_json::Value::Object(ref mut map) = trace_val {
+            map.insert("type".to_string(), serde_json::json!("gumbel"));
+        }
         (None, trace_val)
     } else {
         use polyfish::ai::heuristic_mcts::HeuristicMctsAgent;
@@ -355,10 +356,11 @@ async fn auto_step(
             exploration_constant: 0.1,
         };
         let (bm, h_analysis) = analysis_agent.select_move_with_analysis(&mut game);
-        (
-            bm,
-            serde_json::to_value(&h_analysis).unwrap_or(serde_json::Value::Null),
-        )
+        let mut val = serde_json::to_value(&h_analysis).unwrap_or(serde_json::Value::Null);
+        if let serde_json::Value::Object(ref mut map) = val {
+            map.insert("type".to_string(), serde_json::json!("heuristic"));
+        }
+        (bm, val)
     };
 
     // If we don't have a network but we ARE supposed to move, use the heuristic best move
@@ -1005,10 +1007,13 @@ async fn get_trainer_hint(
         .with_tree_q_weight(1.0);
         brain.request_trace();
         let (bm, _stats) = brain.think_with_stats(&mut game);
-        let trace_val = brain
+        let mut trace_val = brain
             .take_trace()
             .map(|t| serde_json::to_value(&t).unwrap_or(serde_json::Value::Null))
             .unwrap_or(serde_json::Value::Null);
+        if let serde_json::Value::Object(ref mut map) = trace_val {
+            map.insert("type".to_string(), serde_json::json!("gumbel"));
+        }
         (bm, trace_val)
     } else {
         // 2. Fallback to Heuristic MCTS
@@ -1018,10 +1023,11 @@ async fn get_trainer_hint(
             exploration_constant: 0.4,
         };
         let (bm, h_analysis) = agent.select_move_with_analysis(&mut game);
-        (
-            bm,
-            serde_json::to_value(&h_analysis).unwrap_or(serde_json::Value::Null),
-        )
+        let mut val = serde_json::to_value(&h_analysis).unwrap_or(serde_json::Value::Null);
+        if let serde_json::Value::Object(ref mut map) = val {
+            map.insert("type".to_string(), serde_json::json!("heuristic"));
+        }
+        (bm, val)
     };
 
     // If we used the brain, let's still run a tiny heuristic analysis for the PV/Tree if requested?

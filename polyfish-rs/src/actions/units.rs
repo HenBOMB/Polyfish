@@ -492,6 +492,14 @@ pub fn step_unit(
                     (damage, def_health - damage <= 0.0)
                 };
 
+                if state.settings._are_you_sure && stomp_damage > 0.0 {
+                    undos.push(crate::memory::note_attacked(
+                        state,
+                        adj_owner,
+                        adj_tile_idx,
+                    ));
+                }
+
                 if stomp_damage > 0.0 {
                     if let Some(tribe) = state.tribes.get_mut(&adj_owner) {
                         if let Some(unit) = tribe.units.get_mut(adj_unit_idx) {
@@ -1099,6 +1107,15 @@ pub fn attack_unit(
                     .and_then(|t| t.units.iter().position(|u| u.coords.idx == adj_idx));
 
                 if let Some(adj_unit_idx) = current_adj_unit_idx {
+                    // Fog memory: splashed unit remembers being hit here.
+                    if state.settings._are_you_sure && individual_splash_damage > 0.0 {
+                        undos.push(crate::memory::note_attacked(
+                            state,
+                            adj_owner,
+                            adj_idx,
+                        ));
+                    }
+
                     // Apply Damage
                     if let Some(tribe) = state.tribes.get_mut(&adj_owner)
                         && individual_splash_damage > 0.0

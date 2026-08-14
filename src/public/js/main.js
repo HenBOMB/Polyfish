@@ -245,7 +245,7 @@ function updateMctsPanel_disabled(analysis) {
     const moveList = document.getElementById('mcts-moves-list');
     const pvContainer = document.getElementById('mcts-pv');
 
-    if (!analysis || !moveList || !pvContainer) {
+    if (!analysis || analysis.type !== 'heuristic' || !moveList || !pvContainer) {
         return;
     }
 
@@ -511,7 +511,7 @@ function updateMctsPanel(analysis) {
     const moveList = document.getElementById('mcts-moves-list');
     const pvContainer = document.getElementById('mcts-pv');
 
-    if (!analysis || !moveList || !pvContainer) {
+    if (!analysis || analysis.type !== 'heuristic' || !moveList || !pvContainer) {
         return;
     }
 
