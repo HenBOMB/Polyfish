@@ -1873,10 +1873,18 @@ fn main() -> anyhow::Result<()> {
 
     // P1-POV outcome per game, keyed by game_idx, for the mirror-pair label
     // adjustment (a game's partner is game_idx ^ 1; absent if it panicked).
-    let pair_outcomes: HashMap<usize, f32> = if args.mirror_labels {
+    let pair_outcomes: HashMap<usize, (f32, f32)> = if args.mirror_labels {
         results
             .iter()
-            .map(|r| (r.game_idx, outcome_for(r, 1, args.reward_shaping)))
+            .map(|r| {
+                (
+                    r.game_idx,
+                    (
+                        outcome_for(r, 1, args.reward_shaping),
+                        outcome_for(r, 2, args.reward_shaping),
+                    ),
+                )
+            })
             .collect()
     } else {
         HashMap::new()
@@ -1995,7 +2003,7 @@ fn main() -> anyhow::Result<()> {
         let game_decisive = result.decisive;
         let z_p1 = outcome_for(&result, 1, args.reward_shaping);
         let z_p2 = outcome_for(&result, 2, args.reward_shaping);
-        let partner_z1 = pair_outcomes.get(&(result.game_idx ^ 1)).copied();
+        let partner_outcomes = pair_outcomes.get(&(result.game_idx ^ 1)).copied();
         let hist_len = result.history.len();
         // Env-tunable so the win/loss tail vs dense score-shaping mix can be
         // swept without a recompile (default = const TD_W).
@@ -2038,9 +2046,9 @@ fn main() -> anyhow::Result<()> {
             // (where the pair hasn't diverged) take the pair mean; late states
             // keep the true own outcome. Spawn-luck wins thus stop training
             // the early game as if they were earned.
-            let final_outcome = match partner_z1 {
-                Some(pz1) => {
-                    let z_counterpart = if p_id == 1 { -pz1 } else { pz1 };
+            let final_outcome = match partner_outcomes {
+                Some((pz1, pz2)) => {
+                    let z_counterpart = if p_id == 1 { pz2 } else { pz1 };
                     let pair_mean = 0.5 * (own_outcome + z_counterpart);
                     let u = if hist_len > 1 {
                         step_idx as f32 / (hist_len - 1) as f32

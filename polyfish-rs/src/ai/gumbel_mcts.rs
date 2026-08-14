@@ -1228,7 +1228,12 @@ fn blend_heuristic_prior(game: &Game, children: &mut [GumbelNode], weight: f32) 
 /// Multiset-compare a reused root's cached child moves against the real
 /// state's legal moves. Any mismatch means the sim-built cache is stale.
 fn reused_children_match_legal(game: &Game, children: &[GumbelNode]) -> bool {
-    let legal = game.legal_moves();
+    let mut legal = game.legal_moves();
+    let has_other = legal.iter().any(|m| m.move_type() != MoveType::EndTurn);
+    if has_other {
+        legal.retain(|m| m.move_type() != MoveType::EndTurn);
+    }
+
     if legal.len() != children.len() {
         return false;
     }

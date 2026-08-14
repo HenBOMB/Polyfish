@@ -223,12 +223,47 @@ fn test_gumbel_tree_reuse_on_consecutive_same_player_search() {
     // don't end the turn). This is the root-shift case.
     let m1 = m1.unwrap();
     let ended_turn = m1.move_type() == polyfish::types::MoveType::EndTurn;
+    let mut sim_game = game.clone();
+    let _ = sim_game.simulate_move(m1.as_ref());
+    let sim_legal = sim_game.legal_moves();
+
     let _ = game.play_move(m1.as_ref());
 
     if ended_turn || game.state.settings.current_player_turn_id != pov {
         // The chosen move ended the turn (opponent to move next). Tree reuse
         // is scoped to within one player's own turn, so this scenario can't
         // exercise reuse — skip the reuse assertion rather than flake.
+        return;
+    }
+
+    let real_legal = game.legal_moves();
+    let cache_invalidated = if sim_legal.len() != real_legal.len() {
+        true
+    } else {
+        let mut remaining: Vec<_> = real_legal.iter().map(|m| m.serialize()).collect();
+        let mut mismatch = false;
+        for sim_m in &sim_legal {
+            let v = sim_m.serialize();
+            match remaining.iter().position(|r| *r == v) {
+                Some(i) => {
+                    remaining.swap_remove(i);
+                }
+                None => {
+                    mismatch = true;
+                    break;
+                }
+            }
+        }
+        mismatch
+    };
+
+    if cache_invalidated {
+        // FOW discovery or similar cache invalidation correctly prevented tree reuse
+        // by making the true legal moves differ from the simulated ones.
+        return;
+    }
+
+    if ended_turn || game.state.settings.current_player_turn_id != pov {
         return;
     }
 
