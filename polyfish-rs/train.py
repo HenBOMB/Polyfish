@@ -79,15 +79,15 @@ class ResBlock(nn.Module):
     def __init__(self, channels):
         super().__init__()
         self.c1 = nn.Conv2d(channels, channels, 3, padding=1)
-        self.bn1 = nn.BatchNorm2d(channels)
+        self.gn1 = nn.GroupNorm(8, channels)
         self.c2 = nn.Conv2d(channels, channels, 3, padding=1)
-        self.bn2 = nn.BatchNorm2d(channels)
+        self.gn2 = nn.GroupNorm(8, channels)
         self.relu = nn.ReLU()
 
     def forward(self, x):
         residual = x
-        out = self.relu(self.bn1(self.c1(x)))
-        out = self.bn2(self.c2(out))
+        out = self.relu(self.gn1(self.c1(x)))
+        out = self.gn2(self.c2(out))
         out += residual
         out = self.relu(out)
         return out
@@ -128,7 +128,7 @@ class PolyZeroNet(nn.Module):
         
         # Initial conv on spatial features
         self.conv1 = nn.Conv2d(spatial_channels, self.filters, 3, padding=1)
-        self.bn1 = nn.BatchNorm2d(self.filters)
+        self.gn1 = nn.GroupNorm(8, self.filters)
         self.relu = nn.ReLU()
         
         # ResBlocks (Match Rust config)
@@ -170,7 +170,7 @@ class PolyZeroNet(nn.Module):
         batch_size = spatial_map.size(0)
         
         # 1. Spatial Backbone
-        x = self.relu(self.bn1(self.conv1(spatial_map)))
+        x = self.relu(self.gn1(self.conv1(spatial_map)))
         for res_block in self.res_blocks:
             x = res_block(x)
         

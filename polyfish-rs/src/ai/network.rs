@@ -2,7 +2,7 @@
 // Based on the successful Python architecture
 
 use candle_core::{Module, ModuleT, Result, Tensor};
-use candle_nn::{BatchNorm, Conv2d, LayerNorm, Linear, VarBuilder};
+use candle_nn::{BatchNorm, Conv2d, GroupNorm, LayerNorm, Linear, VarBuilder};
 
 fn conv(
     in_c: usize,
@@ -24,30 +24,34 @@ fn batch_norm(c: usize, vs: VarBuilder) -> Result<BatchNorm> {
     candle_nn::batch_norm(c, 1e-5, vs)
 }
 
+fn group_norm(c: usize, vs: VarBuilder) -> Result<GroupNorm> {
+    candle_nn::group_norm(8, c, 1e-5, vs)
+}
+
 struct ResBlock {
     c1: Conv2d,
-    bn1: BatchNorm,
+    gn1: GroupNorm,
     c2: Conv2d,
-    bn2: BatchNorm,
+    gn2: GroupNorm,
 }
 
 impl ResBlock {
     fn new(c: usize, vs: VarBuilder) -> Result<Self> {
         let c1 = conv(c, c, 3, 1, 1, vs.pp("c1"))?;
-        let bn1 = batch_norm(c, vs.pp("bn1"))?;
+        let gn1 = group_norm(c, vs.pp("gn1"))?;
         let c2 = conv(c, c, 3, 1, 1, vs.pp("c2"))?;
-        let bn2 = batch_norm(c, vs.pp("bn2"))?;
-        Ok(Self { c1, bn1, c2, bn2 })
+        let gn2 = group_norm(c, vs.pp("gn2"))?;
+        Ok(Self { c1, gn1, c2, gn2 })
     }
 }
 
 impl ModuleT for ResBlock {
-    fn forward_t(&self, xs: &Tensor, train: bool) -> Result<Tensor> {
+    fn forward_t(&self, xs: &Tensor, _train: bool) -> Result<Tensor> {
         let ys = self.c1.forward(xs)?;
-        let ys = self.bn1.forward_t(&ys, train)?;
+        let ys = self.gn1.forward(&ys)?;
         let ys = ys.relu()?;
         let ys = self.c2.forward(&ys)?;
-        let ys = self.bn2.forward_t(&ys, train)?;
+        let ys = self.gn2.forward(&ys)?;
         (xs.add(&ys))?.relu()
     }
 }
@@ -143,7 +147,7 @@ impl CrossAttention {
 pub struct PolyZeroNet {
     // Backbone
     conv1: Conv2d,
-    bn1: BatchNorm,
+    gn1: GroupNorm,
     res_blocks: Vec<ResBlock>,
 
     // Cross-Attention integration
@@ -182,7 +186,7 @@ impl PolyZeroNet {
         let num_options = 192;
 
         let conv1 = conv(input_channels, filters, 3, 1, 1, vs.pp("conv1"))?;
-        let bn1 = batch_norm(filters, vs.pp("bn1"))?;
+        let gn1 = group_norm(filters, vs.pp("gn1"))?;
 
         let mut res_blocks = Vec::new();
         for i in 0..blocks {
@@ -236,7 +240,7 @@ impl PolyZeroNet {
 
         Ok(Self {
             conv1,
-            bn1,
+            gn1,
             res_blocks,
             player_feature_embeddings,
             player_pos_embeddings,
@@ -268,7 +272,7 @@ impl PolyZeroNet {
 
         // 1. Process map through backbone
         let mut x = self.conv1.forward(map_input)?;
-        x = self.bn1.forward_t(&x, train)?;
+        x = self.gn1.forward(&x)?;
         x = x.relu()?;
 
         for block in &self.res_blocks {

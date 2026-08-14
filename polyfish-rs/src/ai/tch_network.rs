@@ -45,6 +45,12 @@ impl TchPolyZeroNet {
             anyhow::bail!("Model file {path} not found (run init_model.py first)");
         }
         let named = Tensor::read_safetensors(path)?;
+        
+        // Reject older checkpoints that used BatchNorm to avoid subtle eval bugs
+        if named.keys().any(|k| k.contains("running_mean")) {
+            anyhow::bail!("Rejecting BatchNorm-era checkpoint (found running_mean)");
+        }
+
         let mut w = HashMap::with_capacity(named.len());
         for (name, tensor) in named {
             // Move each parameter onto the inference device once, up front.
@@ -90,13 +96,19 @@ impl TchPolyZeroNet {
         x * scale + shift
     }
 
+    fn group_norm(&self, x: &Tensor, prefix: &str) -> Tensor {
+        let weight = self.get(&format!("{prefix}.weight"));
+        let bias = self.get(&format!("{prefix}.bias"));
+        x.group_norm(8, Some(weight), Some(bias), 1e-5, true)
+    }
+
     fn res_block(&self, x: &Tensor, i: usize) -> Tensor {
         let p = format!("res_blocks.{i}");
         let residual = x.shallow_clone();
         let out = self.conv2d(x, &format!("{p}.c1"), 1);
-        let out = self.batch_norm(&out, &format!("{p}.bn1")).relu();
+        let out = self.group_norm(&out, &format!("{p}.gn1")).relu();
         let out = self.conv2d(&out, &format!("{p}.c2"), 1);
-        let out = self.batch_norm(&out, &format!("{p}.bn2"));
+        let out = self.group_norm(&out, &format!("{p}.gn2"));
         (out + residual).relu()
     }
 
@@ -168,7 +180,7 @@ impl TchPolyZeroNet {
 
         // 1. Spatial backbone
         let mut x = self.conv2d(&spatial, "conv1", 1);
-        x = self.batch_norm(&x, "bn1").relu();
+        x = self.group_norm(&x, "gn1").relu();
         for i in 0..NUM_RES_BLOCKS {
             x = self.res_block(&x, i);
         }
