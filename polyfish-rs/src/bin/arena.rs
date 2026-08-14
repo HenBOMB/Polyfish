@@ -503,6 +503,18 @@ fn main() -> anyhow::Result<()> {
                         swap,
                         panic_msg(e.as_ref())
                     );
+                    results_mutex.lock().unwrap().push(MatchResult {
+                        winner_config: 3,
+                        score_config1: 0,
+                        score_config2: 0,
+                        ns_config1: 0,
+                        moves_config1: 0,
+                        ns_config2: 0,
+                        moves_config2: 0,
+                        seed,
+                        swap,
+                        decisive: false,
+                    });
                 }
             }
 
@@ -561,6 +573,7 @@ fn main() -> anyhow::Result<()> {
             let result = match r.winner_config {
                 1 => "1",
                 2 => "2",
+                3 => "dropped",
                 _ => "draw",
             };
             let line = serde_json::json!({
@@ -608,6 +621,7 @@ fn main() -> anyhow::Result<()> {
         match r.winner_config {
             1 => config1_wins += 1,
             2 => config2_wins += 1,
+            3 => {}
             _ => draws += 1,
         }
         if r.decisive {
@@ -687,6 +701,11 @@ fn main() -> anyhow::Result<()> {
         total_games as f32 / arena_elapsed.as_secs_f32(),
         arena_elapsed.as_secs_f32() / total_games as f32,
     );
+
+    if skipped_count > 0 {
+        eprintln!("\nFailing run: {} game(s) were dropped due to panics.", skipped_count);
+        std::process::exit(1);
+    }
 
     Ok(())
 }

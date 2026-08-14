@@ -54,7 +54,10 @@ def load_games(path: str) -> list[tuple[str, str, float, bool]]:
             result = row.get("result")
             if not a or not b or a == b:
                 continue
-            score = {"1": 1.0, "2": 0.0, "draw": 0.5}.get(str(result))
+            res_str = str(result)
+            if res_str == "dropped":
+                raise ValueError(f"ledger contains dropped/incomplete game on line {lineno}")
+            score = {"1": 1.0, "2": 0.0, "draw": 0.5}.get(res_str)
             if score is None:
                 continue
             games.append((a, b, score, bool(row.get("decisive", False))))
