@@ -542,6 +542,14 @@ impl<'a> MacroMctsAgent<'a> {
         self.turn_goal.as_ref()
     }
 
+    /// Tier-1 state: the committed lane plus its tenure/budget/score
+    /// bookkeeping — the top of the `ply <- order <- playstyle` attribution
+    /// chain. The macro agent owns its own `ArchetypeState`; the script
+    /// path's copy (arena/self_play) is a different seat's.
+    pub fn committed_playstyle(&self) -> &ArchetypeState {
+        &self.archetype
+    }
+
     /// Root value of this turn's committed directive, for the TD bootstrap.
     /// Only meaningful under a NET leaf — a heuristic-leaf Q is an
     /// `evaluate_state` number, and feeding that back into the value target

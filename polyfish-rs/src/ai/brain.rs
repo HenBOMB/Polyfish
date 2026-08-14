@@ -217,6 +217,14 @@ impl<'a> SearchAgent<'a> {
         }
     }
 
+    /// Tier-1 state when this agent is the macro strategist.
+    pub fn macro_playstyle(&self) -> Option<&crate::ai::oracle_macro::ArchetypeState> {
+        match self {
+            SearchAgent::MacroMcts(a) => Some(a.committed_playstyle()),
+            _ => None,
+        }
+    }
+
     pub fn depth_stats(&self) -> Option<(u64, u64, u32, u64, u64, u64)> {
         match self {
             SearchAgent::Gumbel(a) => Some(a.depth_stats()),
@@ -375,6 +383,17 @@ impl<'a> Brain<'a> {
     pub fn with_leaf_batch(mut self, leaf_batch: usize) -> Self {
         self.leaf_batch = Some(leaf_batch);
         self
+    }
+
+    /// Tier-1 state of the macro agent (committed lane, tenure, budget,
+    /// last per-lane scores). `None` for every other backend.
+    pub fn macro_committed_playstyle(
+        &self,
+    ) -> Option<&crate::ai::oracle_macro::ArchetypeState> {
+        match &self.agent {
+            Some(SearchAgent::MacroMcts(a)) => Some(a.committed_playstyle()),
+            _ => None,
+        }
     }
 
     /// Macro-backend search parameters (leaf kind, sims, k, λ, shaping).

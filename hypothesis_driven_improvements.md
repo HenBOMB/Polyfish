@@ -3277,7 +3277,39 @@ diagnostic (documented pre-macro) — tell is P1 falsified with WIDE spreads
 and root_visit_max_share pinned near 1.0 (over-confident leaf collapses
 exploration).
 
-### ACTUAL — (pending; blocked on the 20-iter round + snapshot)
+### ACTUAL (2026-08-14, 1000 games) — **P1 FALSIFIED, and in the WRONG
+DIRECTION.** Net leaf 388/1000 (38.8%) vs heuristic leaf 612 (61.2%);
+z = (388-500)/15.8 = **-7.1**. The macro-distilled value head does not
+merely fail to beat `evaluate_state` at ranking macro futures (the 032-E3
+wash) — it ranks them actively WORSE than the hand-written evaluator.
+Avg score 4012 vs 4982; cost 436 vs 362 ms/move (+20%).
+
+Snapshot: `checkpoints/exp039_snapshot_iter125.safetensors`, sha256
+119b809760e81e12aabd9ce5cd15087cb47acb31245c10711ad0938eafab39a4, iter
+125 (the 10-iteration MACRO_GEN round: goal_channels=1, policy_loss 2.28,
+value_loss 0.45, value_r2 0.79).
+
+⚠️ **Scope: this is a verdict on THIS checkpoint trained on THOSE labels,
+not on "a net can never be the leaf."** The same session proved the
+labels defective: under MACRO_GEN the macro agent reported no root value
+(`brain.rs` returned None for every non-Gumbel backend), so every TD
+n-step return bootstrapped with 0.0 — systematically truncated returns,
+which teach a value head to under-weight exactly the long horizon a macro
+leaf must judge. Fixed in ea700e4 (macro root Q under a net leaf;
+`--td-missing-bootstrap mc` for the heuristic-leaf path). Re-run 039 on a
+round trained with corrected labels before drawing an architectural
+conclusion.
+
+Consequences taken (per the approved plan's outcome table):
+- Heuristic leaf keeps the seat; `MACRO_LEAF` stays `heuristic`.
+- Stage 3b (`aux_playstyle` head + the 169->173 channel migration across
+  ~210 checkpoints) is DEFERRED — a trunk that misranks futures at the
+  leaf is not a credible lane ranker, and the migration is only worth
+  paying once something can use it.
+- Stage 3a (the algorithmic selector) proceeds → EXP_ELO_045a.
+- Measured in passing: net-leaf GENERATION runs at 3.28 moves/s vs ~100
+  for the heuristic leaf (4 games, 2 actors) — a ~30x tax that would have
+  made a net-leaf training round impractical even had P1 confirmed.
 
 ## EXP_ELO_038 — strategist memory: continuity by selection, not injection
 

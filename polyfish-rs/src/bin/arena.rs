@@ -1115,6 +1115,9 @@ fn play_match(
                     .collect()
             })
             .unwrap_or_default();
+        // config1 sits in the P2 seat when sides are swapped.
+        let macro_playstyle =
+            if swap { agent_p2.macro_playstyle() } else { agent_p1.macro_playstyle() }.cloned();
         let dump = serde_json::json!({
             "seed": seed,
             "swap": swap,
@@ -1139,6 +1142,14 @@ fn play_match(
             "stance_flips": stance_commit.stance_flips,
             "order_flips": stance_commit.order_flips,
             "goal_turns_seen": stance_commit.turns_seen,
+            // EXP_ELO_045a: Tier-1 telemetry for config1's macro seat — the
+            // committed lane and how stable it was.
+            "playstyle": macro_playstyle
+                .as_ref()
+                .and_then(|p| p.archetype.map(|a| format!("{a:?}"))),
+            "playstyle_pivots_used": macro_playstyle.as_ref().map(|p| p.pivots_used),
+            "playstyle_committed_turn": macro_playstyle.as_ref().and_then(|p| p.committed_turn),
+            "playstyle_scores": macro_playstyle.as_ref().map(|p| p.last_scores.to_vec()),
             "macro_divergent_turns": macro_divergence.map(|(d, _)| d),
             "macro_planned_turns": macro_divergence.map(|(_, p)| p),
             "belief_calib": calib.as_ref().map(|c| c.rows.clone()),
