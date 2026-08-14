@@ -552,7 +552,9 @@ fn outcome_for(result: &GameResult, p_id: i32, reward_shaping: bool) -> f32 {
     };
 
     // Absolute value: final score vs fixed yardstick, not current scoreboard.
-    let abs_outcome = (my_final / GOOD_BOT_FINAL_SCORE).clamp(0.0, 1.0) * 2.0 - 1.0;
+    // We use `my_adjusted` so that asymmetric reward shaping (if enabled)
+    // applies to this absolute performance yardstick as well.
+    let abs_outcome = (my_adjusted / GOOD_BOT_FINAL_SCORE).clamp(0.0, 1.0) * 2.0 - 1.0;
     (FINAL_OUTCOME_REL_W * relative_outcome + (1.0 - FINAL_OUTCOME_REL_W) * abs_outcome)
         .clamp(-1.0, 1.0)
 }
@@ -1041,15 +1043,19 @@ struct AnchorRecord {
 /// Records at or beyond the current iteration are dropped on load, so reruns
 /// and fresh --reset campaigns self-heal without manual state cleanup.
 fn load_anchor_history(current_iteration: usize) -> Vec<AnchorRecord> {
-    std::fs::read_to_string(ANCHOR_STATE_PATH)
-        .ok()
-        .and_then(|s| serde_json::from_str::<Vec<AnchorRecord>>(&s).ok())
-        .map(|v: Vec<AnchorRecord>| {
-            v.into_iter()
-                .filter(|r| r.iteration < current_iteration)
-                .collect()
-        })
-        .unwrap_or_default()
+    let hist = match std::fs::read_to_string(ANCHOR_STATE_PATH) {
+        Ok(s) => match serde_json::from_str::<Vec<AnchorRecord>>(&s) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("Warning: Failed to parse anchor history: {}", e);
+                Vec::new()
+            }
+        },
+        Err(_) => Vec::new(),
+    };
+    hist.into_iter()
+        .filter(|r| r.iteration < current_iteration)
+        .collect()
 }
 
 fn append_anchor_record(current_iteration: usize, games: usize, model_wins: f32) {
@@ -1062,7 +1068,12 @@ fn append_anchor_record(current_iteration: usize, games: usize, model_wins: f32)
     });
     let skip = hist.len().saturating_sub(ANCHOR_STATE_KEEP);
     if let Ok(s) = serde_json::to_string(&hist[skip..]) {
-        let _ = std::fs::write(ANCHOR_STATE_PATH, s);
+        let temp_path = format!("{}.tmp.{}", ANCHOR_STATE_PATH, std::process::id());
+        if let Err(e) = std::fs::write(&temp_path, s) {
+            eprintln!("Warning: Failed to write anchor history: {}", e);
+        } else if let Err(e) = std::fs::rename(&temp_path, ANCHOR_STATE_PATH) {
+            eprintln!("Warning: Failed to rename anchor history: {}", e);
+        }
     }
 }
 
