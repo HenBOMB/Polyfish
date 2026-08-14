@@ -3858,4 +3858,35 @@ Predictions:
   vs Greedy on fresh seeds (~56% at the last gauge) — if OLD reads wildly
   off, the seed batch or harness changed and no cross-arm read is valid.
 
-ACTUAL: (pending)
+ACTUAL (2026-08-14, 250 paired games/arm, commit 144d02b):
+- **P2 (wins): FLAT.** Old 63.6% (159/250) vs new 60.8% (152/250);
+  McNemar 39 old-only vs 32 new-only, z = −0.83 — no significant win
+  effect either direction. The defense signal neither wins nor loses
+  games for the pre-040 checkpoint zero-shot.
+- **P1 (siege scoreboard): PARTIAL PASS — conversion better, exposure
+  up.** Conditional on being sieged the net defends better on BOTH
+  margins: unsiege-given-siege 34.9% → 37.8% (+2.9pp), lost-given-siege
+  62.2% → 59.4% (−2.8pp). But siege EXPOSURE rose +18% (1.67 → 1.98
+  episodes/game, paired t ≈ +2.8, the strongest effect in the data), so
+  ABSOLUTE cities lost still rose +0.14/game (t ≈ +1.6, n.s.). Read:
+  the in-tree Δφ (the only channel this untrained checkpoint can
+  consume — it has never learned the painted Defend plane) genuinely
+  improves defense once contact happens, while the conditioning shift
+  changes game shape toward more contact. Greedy-side mirror agrees:
+  the net's own sieges of Greedy convert WORSE (Greedy unsiege 34% →
+  42%) — the leash pulls attack support home mid-offense.
+- **G1: PASS** — old arm 63.6% on fresh seeds vs 56.2% at the n=32
+  gauge is within the n=32 noise (σ≈8.8pp).
+- Cost: net-path ms/move 154 → 194 (+25%) at n=250 — the +4.9% from
+  the n=16 probe under-measured; contested games hit the threat
+  computation hardest. Real but tolerable for gauge/league volume;
+  MACRO_GEN generation itself uses the macro backend and is unaffected
+  by this number.
+- VERDICT: the defense signal is consumed zero-shot at the margin
+  (conversion +3pp both ways) but does NOT yet buy victories; the
+  offense-conversion regression and the exposure rise are the costs of
+  shaping an untrained policy from outside. The decisive test stays the
+  next MACRO_GEN round: a student TRAINED on painted+priced Defend
+  channels, re-measured on this same instrument (replays/exp041 seeds,
+  SIEGE DEFENSE scoreboard). Knobs still armed: halve DEFEND_COVER/HOLD
+  (offense-leash tax), decouple emission from the Arm flip.
