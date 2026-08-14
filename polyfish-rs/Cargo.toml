@@ -80,9 +80,6 @@ debug = true
 name = "stats"
 harness = false
 
-[[test]]
-name = "debug_stars"
-harness = false
 
 [[test]]
 name = "debug_water_sim"
