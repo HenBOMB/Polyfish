@@ -3810,3 +3810,52 @@ ACTUAL (2026-08-14, shipped commit 53b3fe0):
   (halve DEFEND_COVER/HOLD; decouple emission from the Arm flip);
   re-judge on the next MACRO_GEN round where the student sees painted
   Defend channels for the first time.
+
+## EXP_ELO_041 — Full assessment: does the defense signal win the NET more games? (+ siege scoreboard)
+
+**Registered 2026-08-14, before running.**
+
+Question (Verdi): does the 040 defense signal lead to overall more
+victories — and how often does the net successfully unsiege vs lose a
+city? The 040 A/B answered this for the TEACHER only (−4.4pp n.s.); the
+production path is the NET under goal-script conditioning + in-tree
+shaping, measured at n=16 only (uninformative).
+
+Instrument (built first, commit pending): arena `SiegeTracker` — a siege
+is an enemy unit standing on an owned city tile, scanned after every
+move; episodes resolve as UNSIEGED (attacker gone, city kept) or LOST
+(ownership flipped). Per-game dump fields `sieges/unsieged/cities_lost`
+per config + `SIEGE DEFENSE` aggregate lines. The OLD arm is rebuilt
+from d476308 (pre-040) in a worktree WITH the same instrumented arena.rs
+(040 never touched arena.rs), so both arms report the metric under their
+own behavior.
+
+Setup: net path both arms — gumbel n=64/k=16, `--goal-script
+--goal-w-tree 1`, model pinned /tmp/net_check_1786669494.safetensors
+(pre-040 checkpoint BOTH arms — isolates the script/shaping change),
+vs Greedy, 125 seeds ×2 = 250 games/arm, base_seed 1787800000,
+gamemode 2, max-turns 30, imperius, metal, GUMBEL_SCALE=0, dumps
+replays/exp041/{old,new}.
+
+Known confound (accepted, stated up front): the pre-040 checkpoint is
+OFF-distribution for 040 conditioning (Arm/Defend painted far more
+often than its training data ever showed) — a win-rate drop can mean
+"the signal mis-steers THIS net," not "the signal is bad." The siege
+scoreboard is the disambiguator: defense value should show as higher
+unsiege rate / fewer cities lost even if raw win rate dips.
+
+Predictions:
+- **P1 (siege scoreboard, primary):** NEW arm unsiege rate > OLD arm,
+  and cities_lost per game lower. Falsifier: no improvement in either →
+  the net does not consume the painted Defend signal zero-shot; the
+  claim moves to post-training.
+- **P2 (win rate):** point estimate anywhere in [−6pp, +6pp] would not
+  surprise; only a paired McNemar |z| ≥ 1.96 counts as a real move.
+  A significant DROP + improved siege metrics = off-distribution tax
+  (expected recoverable via training); a significant drop + flat siege
+  metrics = the falsifier that the shaping itself mis-prices.
+- **G1 (sanity):** OLD arm win rate within noise of its 040-era readings
+  vs Greedy on fresh seeds (~56% at the last gauge) — if OLD reads wildly
+  off, the seed batch or harness changed and no cross-arm read is valid.
+
+ACTUAL: (pending)

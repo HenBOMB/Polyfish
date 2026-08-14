@@ -425,12 +425,69 @@ fn sample_turn(state: &polyfish::states::GameState, swap: bool) -> TurnSample {
 }
 
 /// Per-match result, attributed to configurations (1 or 2), not seats.
+/// EXP_ELO_041: per-seat siege bookkeeping. A "siege" is an enemy unit
+/// standing on an owned city tile; each episode resolves as UNSIEGED (enemy
+/// gone, city kept) or LOST (ownership flipped). Scanned after every move.
+struct SiegeTracker {
+    active: std::collections::HashSet<(i32, i32)>, // (owner pid, city idx)
+    sieges: [u32; 2],   // per SEAT (P1, P2): episodes started
+    unsieged: [u32; 2], // …resolved by clearing the attacker
+    lost: [u32; 2],     // …resolved by losing the city
+}
+
+impl SiegeTracker {
+    fn new() -> Self {
+        Self {
+            active: Default::default(),
+            sieges: [0; 2],
+            unsieged: [0; 2],
+            lost: [0; 2],
+        }
+    }
+
+    fn scan(&mut self, state: &polyfish::states::GameState) {
+        let (sieges, unsieged, lost) =
+            (&mut self.sieges, &mut self.unsieged, &mut self.lost);
+        self.active.retain(|&(owner, idx)| {
+            let seat = (owner - 1).clamp(0, 1) as usize;
+            let still_owned = state
+                .tribes
+                .get(&owner)
+                .map_or(false, |t| t.cities.iter().any(|c| c.idx == idx));
+            if !still_owned {
+                lost[seat] += 1;
+                return false;
+            }
+            let enemy_on = polyfish::functions::get_true_unit_at(state, idx)
+                .map_or(false, |u| u.owner != owner);
+            if !enemy_on {
+                unsieged[seat] += 1;
+                return false;
+            }
+            true
+        });
+        for (pid, t) in &state.tribes {
+            let seat = (*pid - 1).clamp(0, 1) as usize;
+            for c in &t.cities {
+                let enemy_on = polyfish::functions::get_true_unit_at(state, c.idx)
+                    .map_or(false, |u| u.owner != *pid);
+                if enemy_on && self.active.insert((*pid, c.idx)) {
+                    sieges[seat] += 1;
+                }
+            }
+        }
+    }
+}
+
 struct MatchResult {
     winner_config: u8,
     /// true = config 2 sat in the P1 seat this game.
     swap: bool,
     score_config1: i32,
     score_config2: i32,
+    /// EXP_ELO_041 per config: (sieges suffered, unsieged, cities lost).
+    siege_config1: (u32, u32, u32),
+    siege_config2: (u32, u32, u32),
     ns_config1: u64,
     moves_config1: u64,
     ns_config2: u64,
@@ -574,6 +631,7 @@ fn play_match(
     let mb_p1 = feed_on(if swap { &macro_params2 } else { &macro_params1 });
     let mb_p2 = feed_on(if swap { &macro_params1 } else { &macro_params2 });
 
+    let mut siege_tracker = SiegeTracker::new();
     while !polyfish::functions::is_game_over(&game.state) && moves < 500 {
         if dump_stats_dir.is_some() && game.state.settings.turn != last_sampled_turn {
             samples.push(sample_turn(&game.state, swap));
@@ -908,6 +966,7 @@ fn play_match(
                 }
             }
             game.play_move(m.as_ref());
+            siege_tracker.scan(&game.state);
             if let Some(c) = calib.as_mut() {
                 c.after_move(&game.state, current_pid, m.as_ref());
             }
@@ -924,6 +983,19 @@ fn play_match(
         (p2_score, p1_score)
     } else {
         (p1_score, p2_score)
+    };
+
+    let seat_siege = |i: usize| {
+        (
+            siege_tracker.sieges[i],
+            siege_tracker.unsieged[i],
+            siege_tracker.lost[i],
+        )
+    };
+    let (siege_config1, siege_config2) = if swap {
+        (seat_siege(1), seat_siege(0))
+    } else {
+        (seat_siege(0), seat_siege(1))
     };
 
     let winner_config = if score_config1 > score_config2 {
@@ -1049,6 +1121,12 @@ fn play_match(
             "winner_config": winner_config,
             "score_config1": score_config1,
             "score_config2": score_config2,
+            "sieges_config1": siege_config1.0,
+            "unsieged_config1": siege_config1.1,
+            "cities_lost_config1": siege_config1.2,
+            "sieges_config2": siege_config2.0,
+            "unsieged_config2": siege_config2.1,
+            "cities_lost_config2": siege_config2.2,
             "macro_commit": macro_commit,
             "macro_star_gate": macro_star_gate,
             "samples": samples,
@@ -1104,6 +1182,8 @@ fn play_match(
         swap,
         score_config1,
         score_config2,
+        siege_config1,
+        siege_config2,
         ns_config1,
         moves_config1,
         ns_config2,
@@ -1567,6 +1647,23 @@ fn main() -> anyhow::Result<()> {
     println!("---------------------");
     println!("Avg Score Config 1: {:.1}", score1_total as f32 / n);
     println!("Avg Score Config 2: {:.1}", score2_total as f32 / n);
+    // EXP_ELO_041: siege-defense scoreboard per config.
+    for (label, pick) in [
+        ("Config 1", &(|r: &MatchResult| r.siege_config1) as &dyn Fn(&MatchResult) -> (u32, u32, u32)),
+        ("Config 2", &|r: &MatchResult| r.siege_config2),
+    ] {
+        let (s, u, l) = results.iter().fold((0u64, 0u64, 0u64), |acc, r| {
+            let (s, u, l) = pick(r);
+            (acc.0 + s as u64, acc.1 + u as u64, acc.2 + l as u64)
+        });
+        let rate = if s > 0 { u as f32 / s as f32 * 100.0 } else { 0.0 };
+        println!(
+            "SIEGE DEFENSE {label}: sieges {s} unsieged {u} ({rate:.0}%) cities_lost {l} | per-game {:.2}/{:.2}/{:.2}",
+            s as f32 / n,
+            u as f32 / n,
+            l as f32 / n
+        );
+    }
     println!("---------------------");
     println!(
         "Avg ms/move Config 1: {:.2}  ({} moves, backend={:?}, mcts={})",
