@@ -100,8 +100,8 @@ formula: (explored - total * (1 - maxExploration)) / (total * maxExploration)
   discovery stars from.
 - **Walls**: Preferred if there are enemies nearby or city is under attack.
 - **Resources**: +5 stars, perfect for early game.
-- **Population Growth**: If border growth doesnt give access to terrain that is
-  worth is, choose this.
+- **Population Growth**: If border growth does not provide access to valuable
+  terrain, choose this.
 - **Border Growth**: Only if worth +3 population or more.
 - **Park**: Always choose in perfection gamemode, unless strictly losing and
   army needs more potential score.
