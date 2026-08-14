@@ -359,11 +359,21 @@ fn main() -> anyhow::Result<()> {
     let completed = AtomicU32::new(0);
     let progress_step = ((total_games / 10) as u32).max(1);
 
+    let per_thread_metal = device.is_metal();
+
     // Cap concurrent workers (= concurrent Metal devices on macOS) if requested.
-    let pool = if args.workers > 0 {
+    let num_workers = if args.workers > 0 {
+        args.workers
+    } else if per_thread_metal {
+        4 // safe Metal worker count
+    } else {
+        0
+    };
+
+    let pool = if num_workers > 0 {
         Some(
             ThreadPoolBuilder::new()
-                .num_threads(args.workers)
+                .num_threads(num_workers)
                 .build()
                 .expect("failed to build rayon pool"),
         )
@@ -380,7 +390,6 @@ fn main() -> anyhow::Result<()> {
     // a "new" logical task, which silently created far more than `--workers`
     // Metal devices over a long run (compounding GPU memory pressure over
     // time). broadcast runs its closure exactly once per real pool thread.
-    let per_thread_metal = device.is_metal();
     let job_counter = AtomicUsize::new(0);
     let skipped = AtomicU32::new(0);
     let results_mutex: Mutex<Vec<MatchResult>> = Mutex::new(Vec::with_capacity(total_games));

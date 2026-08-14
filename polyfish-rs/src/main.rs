@@ -653,8 +653,17 @@ struct ResetRequest {
 
 async fn reset_game(
     State(state): State<Arc<AppState>>,
-    payload: Option<Json<ResetRequest>>,
-) -> Json<Value> {
+    body_bytes: axum::body::Bytes,
+) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
+    let payload: Option<ResetRequest> = if body_bytes.is_empty() {
+        None
+    } else {
+        match serde_json::from_slice(&body_bytes) {
+            Ok(p) => Some(p),
+            Err(e) => return Err((axum::http::StatusCode::BAD_REQUEST, format!("Invalid JSON: {}", e))),
+        }
+    };
+
     let mut game = state.game.lock().unwrap();
 
     let mut settings = MapGenSettings::default();
@@ -667,7 +676,7 @@ async fn reset_game(
     game.state = initial_state;
     game.state.settings._verbose = true;
 
-    if let Some(Json(req)) = payload {
+    if let Some(req) = payload {
         if let Some(mt) = req.max_turns {
             game.state.settings.max_turns = mt;
         }
@@ -682,7 +691,7 @@ async fn reset_game(
 
     let evaluation = build_evaluation_json(&game.state);
 
-    Json(serde_json::json!({
+    Ok(Json(serde_json::json!({
         "state": {
             "settings": game.state.settings,
             "tiles": tiles,
@@ -694,7 +703,7 @@ async fn reset_game(
         },
         "legalMoves": legal_moves,
         "evaluation": evaluation
-    }))
+    })))
 }
 
 async fn trigger_training(State(state): State<Arc<AppState>>) -> Json<Value> {

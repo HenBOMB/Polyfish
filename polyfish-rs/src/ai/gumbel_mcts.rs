@@ -1287,9 +1287,10 @@ fn next_root_hash_for(game: &Game, m: Option<&dyn Move>) -> Option<u64> {
     let m = m?;
     let mut preview = game.clone();
     let _ = preview.play_move(m)?;
+    let mut mcts_preview = preview.clone_for_mcts(preview.current_player_id());
     let feat = features::state_to_cpu_features(
-        &preview.state,
-        preview.state.settings.current_player_turn_id,
+        &mcts_preview.state,
+        mcts_preview.state.settings.current_player_turn_id,
     )
     .ok()?;
     Some(feat.hash())
