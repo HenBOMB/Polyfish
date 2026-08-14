@@ -4345,3 +4345,49 @@ ACTUAL (2026-08-14, 250 paired games/arm, Oumaji mirror):
   is, for both seats) together with a refutation bypass mirroring the
   stance layer's urgent path. Neither arm's number is retired — the
   positive one cleared the handicap — but the clean read is 045a-v2.
+
+## EXP_ELO_045a-v2 — the selector, confound removed
+
+**Run 2026-08-14** after 67cae7f fixed the two divergences 045a/045a-b
+exposed: (1) lane selection restored in-tree at `Node::new` for BOTH
+seats (the observe/select split had left the simulated opponent laneless
+for whole rollouts, since `run_with` seeds only `arch[pov]`); (2)
+refutation bypasses the turn boundary, mirroring the stance layer's
+urgent path. Only the NEW arm re-ran — same baseline binary, same seeds,
+so the stored 045a/045a-b old arms remain the comparator.
+
+| instrument | baseline (per-ply) | v1 (committed) | v2 (fixed) |
+|---|---|---|---|
+| Imperius (no tribe prior) | 66.8% | 61.6% (-5.2pp) | **65.2% (-1.6pp, z=-0.54)** |
+| Oumaji (tribe prior fires) | 68.0% | 70.0% (+2.0pp) | **69.2% (+1.2pp, z=+0.52)** |
+
+Reads:
+- **The -5.2pp regression was mostly the confound, not commitment.**
+  Restoring in-tree lane selection recovered 3.6 of the 5.2 points; what
+  remains on Imperius is -1.6pp at z=-0.54, i.e. noise.
+- **Both instruments now sit inside noise** (|z| < 0.6). Committing to a
+  lane neither costs nor buys measurable strength against Greedy at
+  n=250 per arm. The registered +4pp gate is NOT cleared on either.
+- **The tribe prior remains the only component with a visible mechanical
+  effect**: RiderRoads share 15% (Imperius, prior inert) vs 52% (Oumaji,
+  prior fires) under identical code — a ~37pp swing driven by a +2 spawn
+  bonus. Stability also improves where the prior anchors the choice:
+  0.48 pivots/game max 1 (Oumaji) vs 0.76 max 2 (Imperius).
+- Throughput: 227 ms/move vs the baseline's 229 — the in-tree selection
+  restored is per-TURN, not per-ply, so the cost stayed flat.
+
+VERDICT: Tier 1's algorithmic half is **behaviour-neutral, not
+behaviour-positive**. It reshapes lane choice exactly as designed (and
+the tribe prior does what Verdi specified), at no measurable cost or
+benefit in win rate. That is a defensible foundation to keep — the value
+proposition was always that the SELECTOR becomes the place a learned
+signal plugs in (Stage 3b's per-lane head), and the fixed code is now
+the honest baseline for that test. It is NOT, on this evidence, a
+strength win on its own, and should not be reported as one.
+
+Standing decision (unchanged): Stage 3b's head + the 169->173 migration
+stay deferred behind a re-run of EXP_ELO_039 on a checkpoint trained
+with corrected TD labels (ea700e4). The three gates together —
+039 falsified, 045a/v2 neutral, 045a-b prior-positive — say the tier
+architecture's remaining upside is concentrated in the LEARNED half,
+which is exactly what the label bug has been suppressing.
