@@ -43,7 +43,7 @@ use std::time::Instant;
 const FILTERS: usize = 64;
 const NHEAD: usize = 4;
 const HEAD_DIM: usize = FILTERS / NHEAD; // 16
-const PLAYER_DIM: usize = 10;
+const PLAYER_DIM: usize = 16;
 const SPATIAL: usize = MAP_SIZE * MAP_SIZE; // 121
 const BN_EPS: f64 = 1e-5;
 const LN_EPS: f64 = 1e-5;
@@ -566,7 +566,7 @@ impl MetalPolyZeroNet {
             .transpose(&spatial_dhw, &[0, 2, 1], None)
             .expect("forward: transpose spatial tokens");
 
-        // player tokens: player[B,10,1] * embeddings[1,10,D] -> [B,10,D]
+        // player tokens: player[B,PLAYER_DIM,1] * embeddings[1,PLAYER_DIM,D] -> [B,PLAYER_DIM,D]
         let emb = self.const_shape(
             &graph,
             "player_feature_embeddings",
@@ -626,15 +626,31 @@ impl MetalPolyZeroNet {
             .reshape(&target_conv, &[b, target_c * h * w], None)
             .expect("forward: flatten pi_target"); // [B, 121]
 
-        // Value head (linear 1-channel pool: no norm, no activation — see train.py)
-        let v_pooled_conv = self.conv2d(&graph, &x2, "v_pool_conv", 0);
-        let (v_pool_w_shape, _) = self.get("v_pool_conv.weight");
-        let vp = v_pool_w_shape[0];
-        let v_pooled = graph
-            .reshape(&v_pooled_conv, &[b, vp * h * w], None)
-            .expect("forward: flatten v_pooled");
-        let v_latent_lin = self.linear(&graph, &v_pooled, "v_fc_shared");
-        let v_latent = graph.relu(&v_latent_lin, None).expect("forward: relu v_fc_shared");
+        // Value head (EXP_ARCH_001): global mean+max pool over the full trunk
+        // → 2-layer MLP. Mirrors tch_network.rs / train.py.
+        //
+        // v_mean = x2.mean(dim=(2,3))  → [B, FILTERS]
+        // v_max  = x2.amax(dim=(2,3))  → [B, FILTERS]
+        // v_feat = cat([v_mean, v_max], dim=1) → [B, 2*FILTERS]
+        let v_mean = graph
+            .mean(&x2, &[2, 3], None)
+            .expect("forward: v_mean (global avg pool)"); // [B, FILTERS, 1, 1] → reduced
+        let v_mean = graph
+            .reshape(&v_mean, &[b, FILTERS], None)
+            .expect("forward: reshape v_mean"); // [B, FILTERS]
+        let v_max = graph
+            .reduction_maximum(&x2, &[2, 3], None)
+            .expect("forward: v_max (global max pool)");
+        let v_max = graph
+            .reshape(&v_max, &[b, FILTERS], None)
+            .expect("forward: reshape v_max"); // [B, FILTERS]
+        let v_feat = graph
+            .concatenate(&[&v_mean, &v_max], 1, None)
+            .expect("forward: cat v_mean v_max"); // [B, 2*FILTERS]
+        let v_latent = self.linear(&graph, &v_feat, "v_fc1");
+        let v_latent = graph.relu(&v_latent, None).expect("forward: relu v_fc1");
+        let v_latent = self.linear(&graph, &v_latent, "v_fc2");
+        let v_latent = graph.relu(&v_latent, None).expect("forward: relu v_fc2");
         let win_raw = self.linear(&graph, &v_latent, "v_win");
         let win = graph
             .unary_arithmetic(UnaryArithmeticOp::Tanh, &win_raw, None)

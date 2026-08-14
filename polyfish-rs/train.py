@@ -285,6 +285,87 @@ def batch_report_indices(total_batches, max_reports=10):
         indices.add(batch_num)
     return indices
 
+def _migrate_checkpoint(state_dict, model, player_state_dim):
+    """Transform a legacy state_dict to match the current model architecture.
+
+    Returns (state_dict, migrations) where *migrations* is a list of
+    human-readable strings describing what was changed.  An empty list means
+    the checkpoint was already up-to-date.
+    """
+    migrations = []
+    filters = state_dict['v_win.weight'].shape[1]  # always 64
+
+    # ------------------------------------------------------------------
+    # 1. Value-head swap: v_pool_conv / v_fc_shared  →  v_fc1 / v_fc2
+    #    The old head collapsed the trunk to 1 channel then ran a single
+    #    linear; the new head uses global mean+max pool → 2-layer MLP.
+    #    Weights are not transferable, so we initialise from the model's
+    #    freshly-created parameters and delete the stale keys.
+    # ------------------------------------------------------------------
+    stale_value_prefixes = ("v_pool_conv.", "v_fc_shared.")
+    stale_keys = [k for k in state_dict if k.startswith(stale_value_prefixes)]
+    new_value_prefixes = ("v_fc1.", "v_fc2.")
+    new_keys_missing = any(
+        k.startswith(new_value_prefixes)
+        for k in model.state_dict()
+    ) and not any(
+        k.startswith(new_value_prefixes)
+        for k in state_dict
+    )
+    if stale_keys or new_keys_missing:
+        for k in stale_keys:
+            del state_dict[k]
+        # Seed v_fc1/v_fc2 from model's random init so load_state_dict
+        # won't report them as missing.
+        for k, v in model.state_dict().items():
+            if k.startswith(new_value_prefixes):
+                state_dict[k] = v.clone()
+        dropped = ", ".join(sorted(stale_keys)) if stale_keys else "(none)"
+        migrations.append(
+            f"value-head: dropped [{dropped}], initialised v_fc1/v_fc2 fresh"
+        )
+
+    # ------------------------------------------------------------------
+    # 2. Player embeddings: resize (old_dim, filters) → (player_state_dim, filters)
+    #    Preserve existing rows and pad new rows with the model's fresh init.
+    # ------------------------------------------------------------------
+    for name in ("player_pos_embeddings", "player_feature_embeddings"):
+        if name not in state_dict:
+            # Very old checkpoint; take the model's full init.
+            state_dict[name] = model.state_dict()[name].clone()
+            migrations.append(f"{name}: created ({player_state_dim}, {filters})")
+            continue
+        old = state_dict[name]
+        if old.shape[0] != player_state_dim:
+            new = model.state_dict()[name].clone()  # (player_state_dim, filters)
+            keep = min(old.shape[0], player_state_dim)
+            new[:keep] = old[:keep]
+            state_dict[name] = new
+            migrations.append(
+                f"{name}: resized ({old.shape[0]}, {filters}) → ({player_state_dim}, {filters})"
+            )
+
+    # ------------------------------------------------------------------
+    # 3. v_progress head (added after initial arch)
+    # ------------------------------------------------------------------
+    if "v_progress.weight" not in state_dict:
+        state_dict["v_progress.weight"] = torch.randn(1, filters) * 0.01
+        state_dict["v_progress.bias"] = torch.zeros(1)
+        migrations.append("v_progress: initialised fresh")
+
+    # ------------------------------------------------------------------
+    # 4. Fog-memory: zero-pad conv1 input channels 136 → 142
+    # ------------------------------------------------------------------
+    conv1 = state_dict.get("conv1.weight")
+    if conv1 is not None and conv1.shape[1] < 142:
+        old_ch = conv1.shape[1]
+        pad = torch.zeros(conv1.shape[0], 142 - old_ch, conv1.shape[2], conv1.shape[3])
+        state_dict["conv1.weight"] = torch.cat([conv1, pad], dim=1)
+        migrations.append(f"conv1.weight: padded input channels {old_ch} → 142")
+
+    return state_dict, migrations
+
+
 def train(batch_size=BATCH_SIZE, epochs=EPOCHS, lr=LEARNING_RATE, chunk_size=None, benchmark_mode=False):
     if chunk_size is None:
         chunk_size = int(os.environ.get("TRAIN_CHUNK_FILES", "10"))
@@ -320,11 +401,15 @@ def train(batch_size=BATCH_SIZE, epochs=EPOCHS, lr=LEARNING_RATE, chunk_size=Non
     model = PolyZeroNet(SPATIAL_CHANNELS, PLAYER_STATE_DIM, MAP_SIZE, MAP_SIZE).to(DEVICE)
     if os.path.exists("model.safetensors"):
         try:
+            ckpt = load_file("model.safetensors")
+            ckpt, migrations = _migrate_checkpoint(ckpt, model, PLAYER_STATE_DIM)
+            if migrations:
+                print(f"Checkpoint migrated: {'; '.join(migrations)}")
             # strict=False lets checkpoints that predate the aux ownership
             # head load in place (the head keeps its fresh init). Any OTHER
             # mismatch is still fatal so a wrong-architecture checkpoint
             # can't silently half-load.
-            missing, unexpected = model.load_state_dict(load_file("model.safetensors"), strict=False)
+            missing, unexpected = model.load_state_dict(ckpt, strict=False)
             hard_missing = [k for k in missing if not k.startswith("v_ownership.")]
             if hard_missing or unexpected:
                 raise RuntimeError(f"state_dict mismatch: missing={hard_missing} unexpected={list(unexpected)}")

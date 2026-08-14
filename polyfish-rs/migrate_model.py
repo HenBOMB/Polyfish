@@ -2,6 +2,11 @@ import torch
 from safetensors.torch import load_file, save_file
 import os
 
+# Must match train.py and features.rs
+PLAYER_STATE_DIM = 16
+FILTERS = 64
+
+
 def migrate_model(file_path):
     print(f"Loading {file_path}...")
     try:
@@ -11,27 +16,71 @@ def migrate_model(file_path):
         return
 
     print("Checking and migrating state_dict heads...")
-    # We need to match the filter size, which is 64.
-    # v_win.weight is [1, 64], v_win.bias is [1]
     filters = state_dict['v_win.weight'].shape[1]
-    
-    # Initialize v_progress weights (using Xavier/Kaiming init or similar, 
-    # here just a small random normal scaled to avoid huge initial gradients)
+
+    migrated = False
+
+    # ------------------------------------------------------------------
+    # 1. Value-head swap: v_pool_conv / v_fc_shared  →  v_fc1 / v_fc2
+    # ------------------------------------------------------------------
+    stale_value_prefixes = ("v_pool_conv.", "v_fc_shared.")
+    stale_keys = [k for k in state_dict if k.startswith(stale_value_prefixes)]
+    if stale_keys or "v_fc1.weight" not in state_dict:
+        for k in stale_keys:
+            print(f"  Removing stale key: {k}")
+            del state_dict[k]
+        if "v_fc1.weight" not in state_dict:
+            # v_fc1: Linear(2*filters, filters)
+            print("  Initialising v_fc1 (Linear(128, 64)) fresh")
+            state_dict["v_fc1.weight"] = torch.randn(filters, 2 * filters) * 0.01
+            state_dict["v_fc1.bias"] = torch.zeros(filters)
+        if "v_fc2.weight" not in state_dict:
+            # v_fc2: Linear(filters, filters)
+            print("  Initialising v_fc2 (Linear(64, 64)) fresh")
+            state_dict["v_fc2.weight"] = torch.randn(filters, filters) * 0.01
+            state_dict["v_fc2.bias"] = torch.zeros(filters)
+        migrated = True
+
+    # ------------------------------------------------------------------
+    # 2. v_progress head
+    # ------------------------------------------------------------------
     if "v_progress.weight" not in state_dict:
+        print("  Initialising v_progress fresh")
         state_dict["v_progress.weight"] = torch.randn(1, filters) * 0.01
         state_dict["v_progress.bias"] = torch.zeros(1)
-        
-    if "player_pos_embeddings" not in state_dict:
-        print("Adding player_pos_embeddings to state_dict...")
-        state_dict["player_pos_embeddings"] = torch.randn(10, filters) * 0.01
+        migrated = True
 
-    # Fog memory (Jul 2026): zero-pad conv1 input 136 -> 142 so the six new
-    # memory channels start invisible to a pre-memory checkpoint (notes-memory.md).
+    # ------------------------------------------------------------------
+    # 3. Player embeddings: resize to PLAYER_STATE_DIM
+    # ------------------------------------------------------------------
+    for name in ("player_pos_embeddings", "player_feature_embeddings"):
+        if name not in state_dict:
+            print(f"  Creating {name} ({PLAYER_STATE_DIM}, {filters})")
+            state_dict[name] = torch.randn(PLAYER_STATE_DIM, filters) * 0.01
+            migrated = True
+        elif state_dict[name].shape[0] != PLAYER_STATE_DIM:
+            old_dim = state_dict[name].shape[0]
+            print(f"  Resizing {name} ({old_dim}, {filters}) → ({PLAYER_STATE_DIM}, {filters})")
+            new_param = torch.randn(PLAYER_STATE_DIM, filters) * 0.01
+            keep = min(old_dim, PLAYER_STATE_DIM)
+            new_param[:keep] = state_dict[name][:keep]
+            state_dict[name] = new_param
+            migrated = True
+
+    # ------------------------------------------------------------------
+    # 4. Fog-memory: zero-pad conv1 input channels → 142
+    # ------------------------------------------------------------------
     conv1 = state_dict.get("conv1.weight")
-    if conv1 is not None and conv1.shape[1] == 136:
-        print(f"Padding conv1.weight input channels {conv1.shape[1]} -> 142...")
-        pad = torch.zeros(conv1.shape[0], 142 - conv1.shape[1], conv1.shape[2], conv1.shape[3])
+    if conv1 is not None and conv1.shape[1] < 142:
+        old_ch = conv1.shape[1]
+        print(f"  Padding conv1.weight input channels {old_ch} → 142")
+        pad = torch.zeros(conv1.shape[0], 142 - old_ch, conv1.shape[2], conv1.shape[3])
         state_dict["conv1.weight"] = torch.cat([conv1, pad], dim=1)
+        migrated = True
+
+    if not migrated:
+        print("Checkpoint is already up-to-date. No changes needed.")
+        return
 
     backup_path = file_path + ".bak"
     os.rename(file_path, backup_path)
@@ -39,6 +88,7 @@ def migrate_model(file_path):
 
     save_file(state_dict, file_path)
     print(f"Successfully saved migrated model to {file_path}")
+
 
 if __name__ == "__main__":
     if os.path.exists("model.safetensors"):

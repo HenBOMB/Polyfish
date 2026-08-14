@@ -38,7 +38,7 @@ async fn main() {
             "/api/value-distribution",
             get(polyfish::training_api::api_value_distribution),
         )
-        .route("/api/elo-ladder", get(polyfish::training_api::api_elo_ladder))
+
         .route("/train/status", get(train_status))
         .fallback_service(ServeDir::new("../src/public"))
         .layer(CorsLayer::permissive());

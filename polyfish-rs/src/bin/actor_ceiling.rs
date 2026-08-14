@@ -167,6 +167,8 @@ fn main() -> anyhow::Result<()> {
         SearchBackendArg::Gumbel => SearchBackend::Gumbel { k: args.gumbel_k },
         SearchBackendArg::Heuristic => SearchBackend::Heuristic,
         SearchBackendArg::Greedy => SearchBackend::Greedy,
+        SearchBackendArg::StateDiffGreedy => SearchBackend::StateDiffGreedy,
+        SearchBackendArg::Random => SearchBackend::Random,
     };
 
     let num_actors = if args.actors > 0 {

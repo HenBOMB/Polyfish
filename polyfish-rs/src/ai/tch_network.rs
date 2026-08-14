@@ -24,7 +24,7 @@ use tch::{Device, Kind, Tensor};
 const FILTERS: i64 = 64;
 const NHEAD: i64 = 4;
 const HEAD_DIM: i64 = FILTERS / NHEAD; // 16
-const PLAYER_DIM: i64 = 10;
+const PLAYER_DIM: i64 = 16;
 const SPATIAL: i64 = (MAP_SIZE * MAP_SIZE) as i64; // 121
 const BN_EPS: f64 = 1e-5;
 const LN_EPS: f64 = 1e-5;
