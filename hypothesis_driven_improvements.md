@@ -4167,3 +4167,67 @@ Predictions:
   strict), dual-net logits identical on a fixed batch.
 
 ACTUAL: (pending)
+
+## EXP_ELO_045a — Tier 1, algorithmic half: does a COMMITTED playstyle pay?
+
+**Registered 2026-08-14, before running.** Stage 3a of the approved tier
+refactor (plan: strategist at macro-mcts, three tiers). The cheap kill
+switch that must pass before any channel migration is paid.
+
+Diagnosis: `Archetype {RiderRoads, ArcherLine, ForgeGiants}` — exactly
+Verdi's three lanes — already existed with census predicates and
+hysteresis, but `update_archetype` ran on EVERY executor ply (via
+`rank_view`, `macro_agent.rs:153`, and inside `execute_turn`). A lane
+recomputed 20x a turn is a running average, not an identity, and nothing
+downstream treated it as a commitment.
+
+Changes (commits fec32c0, 5bf6af7):
+- Split: `observe_archetype` (per-ply peaks + overlays) vs
+  `select_playstyle` (turn boundary, scores EVERY lane, returns the call).
+  `rank_view`/`execute_turn` observe only; the macro agent selects once
+  per turn in its replan branch; the script-path wrapper selects only when
+  the turn advances (or to make the first commit).
+- Tribe prior: mapgen stamps one tribe tech at turn 0; if it opens a
+  lane's chain (`lane_techs`, now the single source of truth shared with
+  the recommendations) that lane commits BEFORE any terrain is explored
+  and scores +2 thereafter. Verified against mapgen: Oumaji/Aquarion →
+  Riding, Yadakk → Roads (RiderRoads); Bardur → Hunting, Hoodrick →
+  Archery (ArcherLine); XinXi → Climbing, Vengir → Smithery
+  (ForgeGiants); Imperius/Kickoo/Zebasi/AiMo/Quetzali → no prior.
+- Commitment: ≤3 pivots/game (`MAX_PIVOTS`), `DWELL_MIN=5` turns before a
+  discretionary switch, existing margin/streak hysteresis retained, and
+  `lane_blocked_turns >= 3` (the lane's next tech proposed and
+  gate-dropped) as pivot evidence for a lane stranded behind the ARM eco
+  mask. A refuted lane (score 0) still exits immediately but now COSTS
+  budget.
+- `select_playstyle` takes an optional per-lane `head: Option<&[f32; 3]>`
+  added on top of the census — the hook Stage 3b (the aux head) fills.
+  Unused in this arm (always `None`).
+
+Setup: the 041/042 instrument, so rows compare directly against those
+runs — arena, `--backend1 macro-mcts --backend2 greedy`, 125 seeds ×2,
+`base_seed 1787800000`, gamemode 2, max-turns 30, imperius, metal,
+`GUMBEL_SCALE=0`, SIEGE DEFENSE scoreboard + win rate + McNemar. BASELINE
+ARM is a snapshot of the pre-selector binary (`/tmp/exp045a_baseline_arena`,
+built at ea700e4 = Stage 1 only, whose changes do not touch arena's macro
+path), so the delta isolates the selector.
+
+Predictions:
+- **P1 (the gate):** committed-lane teacher ≥ +4pp over the per-ply
+  teacher with |z| ≥ 1.96 (McNemar, paired seeds). Rationale: the closest
+  precedent for commitment is the star gate (forced third-city reach
+  flipped 28%→81%), and the 042 fixture loss was a lane failure (2 techs
+  in 19 turns). **Falsifier: flat → lane persistence alone does not pay;
+  HOLD the Stage-3b channel migration** (210 checkpoint files + optimizer
+  reset) and reconsider whether Tier 1's value rests entirely on the
+  head's conditional choice.
+- **P2 (stability, mechanical):** ≤3 pivots/game and mean lane tenure ≥
+  DWELL_MIN turns across the run; lane distribution not collapsed to one
+  lane across seeds (each of the three appears on ≥10% of games).
+  Falsifier: collapse → the census+prior is degenerate on Tiny/Drylands
+  and the lane vocabulary needs work before the head can rank it.
+- **G1 (throughput):** ms/move within 1.3× of baseline — the selector
+  runs once per turn, so a bigger regression means it is still being
+  called per ply somewhere.
+
+ACTUAL: (pending)
