@@ -101,7 +101,7 @@ fn player_name(backend: SearchBackend, model: &str, mcts: usize) -> String {
         SearchBackend::StateDiffGreedy => "statediffgreedy".to_string(),
         SearchBackend::Heuristic => format!("heuristic{mcts}"),
         SearchBackend::Zero => format!("{stem}@zero{mcts}"),
-        SearchBackend::Gumbel { .. } => format!("{stem}@gumbel{mcts}"),
+        SearchBackend::Gumbel { k } => format!("{stem}@gumbel{mcts}k{k}"),
     }
 }
 
