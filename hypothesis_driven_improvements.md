@@ -3784,7 +3784,29 @@ ACTUAL (2026-08-14, shipped commit 53b3fe0):
 - Tests: 181 lib tests pass incl. new defense module tests + the
   miniature t3 walk-off regression (hold > step-off > out-of-leash in
   Φ) + FOW-honesty (hidden units never threaten).
-- VERDICT: shipped. Behavior contract holds on the fixture; win-rate
-  cost vs Greedy n.s. negative at −4.4pp/+69% ms — accepted for the
-  distillation motive; re-judge on the next MACRO_GEN round where the
-  student sees painted Defend channels for the first time.
+- Net-path cost (advisor check): gumbel n=64/k=16 + goal-script +
+  goal-w-tree 1, 16 games old vs new binary — 56.95 → 59.75 ms/move
+  (+4.9%): the training loop's generation phase is essentially
+  unaffected. ⚠️ Gauge discontinuity: goal-script conditioning now
+  emits Arm/Defend far more often than the pre-040 checkpoint's
+  training distribution — fixed-seed goal-script gauge reads are not
+  comparable across the 040 boundary for SCRIPT reasons (same class of
+  break as MAPGEN_001); judge the next round's student on its own data.
+- Fixture A/A: same binary + seed gives different games (349 vs 329
+  moves) — legal-move-ordering nondeterminism, the documented engine
+  property behind DecomposedMapper. Pinned-seed behavior asserts must
+  be property-based (Defend fired at siege turn, ≥2 attacks per defense
+  turn, no garrison walk-off while load-bearing), never exact-replay.
+- Prep mechanism demonstrated at unit level
+  (new_unit_inside_the_ring_outprices_the_same_unit_far_away): the same
+  purchased rider is worth ≥ half a cover slot more Φ landing in the
+  ring than far away — the gradient the train/road/tech chain climbs.
+  The full multi-turn chain is priced by construction; an end-to-end
+  fixture demonstration is still owed.
+- VERDICT: shipped. Behavior contract holds on the fixture; the
+  REGISTERED P2 falsifier fired on the point estimate (−4.4pp < −4pp)
+  and only the paired McNemar (z=−1.51, n.s.) rescues the ship
+  decision — shipped on the distillation motive with knobs armed
+  (halve DEFEND_COVER/HOLD; decouple emission from the Arm flip);
+  re-judge on the next MACRO_GEN round where the student sees painted
+  Defend channels for the first time.

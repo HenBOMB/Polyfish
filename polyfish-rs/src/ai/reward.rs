@@ -2126,6 +2126,35 @@ mod shaping_tests {
         assert!((phi_hold - phi_adjacent - SHAPE_GOAL_DEFEND_HOLD).abs() < 1e-3);
     }
 
+    /// The prep mechanism in miniature: a NEW unit that lands inside the
+    /// coverage ring is worth more Φ than the same unit far away — this is
+    /// what makes the executor's per-ply Δφ pay a defensive train/road/tech
+    /// chain step by step (outcome pricing, no discrete planner).
+    #[test]
+    fn new_unit_inside_the_ring_outprices_the_same_unit_far_away() {
+        use crate::ai::oracle_macro::{MacroGoal, OrderKind, Stance};
+        let mut state = defense_board(60);
+        state.tribes.get_mut(&1).unwrap().units.push(combat_unit(60, UnitType::Rider, 1));
+        state.tribes.get_mut(&2).unwrap().units.push(combat_unit(59, UnitType::Swordsman, 2));
+        let goal = MacroGoal {
+            orders: vec![(OrderKind::Defend, 60)],
+            stance: Stance::Arm,
+            save_target: None,
+        };
+        // Same purchase, two landing spots: covering (cheb 2, rider reach)
+        // vs remote corner. Army/stance terms cancel; coverage does not.
+        let mut near = state.clone();
+        near.tribes.get_mut(&1).unwrap().units.push(combat_unit(38, UnitType::Rider, 1));
+        let mut far = state.clone();
+        far.tribes.get_mut(&1).unwrap().units.push(combat_unit(10, UnitType::Rider, 1));
+        let phi_near = goal_potential(&near, 1, &goal, None);
+        let phi_far = goal_potential(&far, 1, &goal, None);
+        assert!(
+            phi_near > phi_far + SHAPE_GOAL_DEFEND_COVER * 0.5,
+            "coverage must separate the landing spots: near {phi_near} far {phi_far}"
+        );
+    }
+
     /// Without a Defend order the defense block prices nothing: enemy
     /// presence must not leak into Φ.
     #[test]
