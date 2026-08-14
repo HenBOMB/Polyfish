@@ -42,6 +42,8 @@ impl Game {
 
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
         let mut value: serde_json::Value = serde_json::from_str(json)?;
+        
+        let mut extracted_units = Vec::new();
 
         // Handle JS map wrapper if it exists (e.g. from raw scraper JSON)
         if let Some(serde_json::Value::Object(mut map)) = value.as_object_mut().and_then(|obj| obj.remove("map")) {
@@ -52,6 +54,23 @@ impl Game {
                         for item in arr {
                             let mut item = item.clone();
                             if let Some(item_obj) = item.as_object_mut() {
+                                // Extract unit if present
+                                if let Some(mut unit_val) = item_obj.remove("unit") {
+                                    if let Some(unit_obj) = unit_val.as_object_mut() {
+                                        if !unit_obj.contains_key("coords") {
+                                            let x = unit_obj.get("x").cloned().unwrap_or(serde_json::json!(0));
+                                            let y = unit_obj.get("y").cloned().unwrap_or(serde_json::json!(0));
+                                            let idx = unit_obj.get("idx").cloned().unwrap_or(serde_json::json!(0));
+                                            unit_obj.insert("coords".to_string(), serde_json::json!({
+                                                "x": x,
+                                                "y": y,
+                                                "idx": idx
+                                            }));
+                                        }
+                                        extracted_units.push(unit_val.clone());
+                                    }
+                                }
+
                                 // Inject coords if missing
                                 if !item_obj.contains_key("coords") {
                                     let x = item_obj.get("x").cloned().unwrap_or(serde_json::json!(0));
@@ -74,6 +93,26 @@ impl Game {
                     };
                     if let Some(root_obj) = value.as_object_mut() {
                         root_obj.insert(key.to_string(), converted);
+                    }
+                }
+            }
+        }
+
+        // Append extracted units to their respective tribes
+        if !extracted_units.is_empty() {
+            if let Some(root_obj) = value.as_object_mut() {
+                let tribes_val = root_obj.entry("tribes").or_insert_with(|| serde_json::json!({}));
+                if let Some(tribes_obj) = tribes_val.as_object_mut() {
+                    for unit in extracted_units {
+                        if let Some(owner) = unit.get("owner").and_then(|o| o.as_i64()) {
+                            let tribe_val = tribes_obj.entry(owner.to_string()).or_insert_with(|| serde_json::json!({}));
+                            if let Some(tribe_obj) = tribe_val.as_object_mut() {
+                                let units_arr = tribe_obj.entry("units").or_insert_with(|| serde_json::json!([]));
+                                if let Some(arr) = units_arr.as_array_mut() {
+                                    arr.push(unit);
+                                }
+                            }
+                        }
                     }
                 }
             }
