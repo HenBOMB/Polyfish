@@ -1,0 +1,351 @@
+
+running 1 test
+===== after turn 10 (prefix 11/29) =====
+P1: spt=7 stars=8 score=2105 units=6 giants=0
+  city@24 (2,2) lvl 2 pop 2/3:
+    t12(1,1) Mountain res:Metal
+    t13(2,1) Forest
+    t14(3,1) Forest res:Game
+    t23(1,2) Field res:Crop
+    t24(2,2) Field bld:Village(l1) unit:P1:Warrior
+    t25(3,2) Field res:Crop
+    t34(1,3) Mountain res:Metal
+    t35(2,3) Field
+    t36(3,3) Mountain res:Metal unit:P1:Warrior
+  city@63 (8,5) lvl 2 pop 2/3:
+    t51(7,4) Field
+    t52(8,4) Forest res:Game
+    t53(9,4) Field
+    t62(7,5) Mountain res:Metal
+    t63(8,5) Field bld:Village(l1) unit:P1:Warrior
+    t64(9,5) Field
+    t73(7,6) Field
+    t74(8,6) Forest res:Game
+    t75(9,6) Field res:Fruit
+  city@29 (7,2) lvl 1 pop 0/2:
+    t17(6,1) Forest res:Game
+    t18(7,1) Mountain res:Metal
+    t19(8,1) Field
+    t28(6,2) Forest
+    t29(7,2) Field bld:Village(l0) unit:P1:Warrior
+    t30(8,2) Mountain res:Metal
+    t39(6,3) Field res:Crop
+    t40(7,3) Mountain res:Metal
+    t41(8,3) Forest
+  hubs[0]: 
+P2: spt=9 stars=1 score=2340 units=4 giants=0
+  city@79 (2,7) lvl 3 pop 8/4:
+    t67(1,6) Field res:Crop
+    t68(2,6) Forest
+    t69(3,6) Field res:Crop
+    t78(1,7) Field
+    t79(2,7) Field bld:Village(l2) unit:P2:Warrior
+    t80(3,7) Mountain res:Metal
+    t89(1,8) Forest
+    t90(2,8) Mountain res:Metal bld:Mine(l1)
+    t91(3,8) Field
+  city@94 (6,8) lvl 2 pop 3/3:
+    t82(5,7) Forest
+    t83(6,7) Field res:Fruit
+    t84(7,7) Forest res:Game
+    t93(5,8) Mountain res:Metal
+    t94(6,8) Field bld:Village(l1) unit:P2:Warrior
+    t95(7,8) Forest res:Game
+    t104(5,9) Mountain res:Metal bld:Mine(l1) unit:P2:Warrior
+    t105(6,9) Field res:Crop
+    t106(7,9) Field res:Crop
+  city@60 (5,5) lvl 2 pop 3/3:
+    t48(4,4) Field res:Crop
+    t49(5,4) Field
+    t50(6,4) Mountain res:Metal bld:Mine(l1) unit:P1:Warrior
+    t59(4,5) Mountain res:Metal
+    t60(5,5) Field bld:Village(l1) unit:P2:Warrior
+    t61(6,5) Field res:Crop
+    t70(4,6) Mountain res:Metal
+    t71(5,6) Mountain res:Metal
+    t72(6,6) Field
+  hubs[0]: 
+===== after turn 15 (prefix 16/29) =====
+P1: spt=10 stars=10 score=2650 units=6 giants=0
+  city@24 (2,2) lvl 2 pop 4/3:
+    t12(1,1) Mountain res:Metal bld:Mine(l1)
+    t13(2,1) Forest
+    t14(3,1) Forest res:Game
+    t23(1,2) Field res:Crop
+    t24(2,2) Field bld:Village(l1) unit:P1:Warrior
+    t25(3,2) Field res:Crop
+    t34(1,3) Mountain res:Metal
+    t35(2,3) Field
+    t36(3,3) Mountain res:Metal
+  city@63 (8,5) lvl 3 pop 5/4:
+    t51(7,4) Field
+    t52(8,4) Forest res:Game
+    t53(9,4) Field
+    t62(7,5) Mountain res:Metal bld:Mine(l1)
+    t63(8,5) Field bld:Village(l2) unit:P1:Rider
+    t64(9,5) Field
+    t73(7,6) Field unit:P2:Warrior
+    t74(8,6) Forest res:Game
+    t75(9,6) Field
+  city@29 (7,2) lvl 1 pop 0/2:
+    t17(6,1) Forest res:Game
+    t18(7,1) Mountain res:Metal
+    t19(8,1) Field
+    t28(6,2) Forest
+    t29(7,2) Field bld:Village(l0) unit:P1:Rider
+    t30(8,2) Mountain res:Metal
+    t39(6,3) Field res:Crop
+    t40(7,3) Mountain res:Metal
+    t41(8,3) Forest
+  city@60 (5,5) lvl 2 pop 3/3:
+    t48(4,4) Field res:Crop
+    t49(5,4) Field unit:P1:Rider
+    t50(6,4) Mountain res:Metal bld:Mine(l1)
+    t59(4,5) Mountain res:Metal unit:P2:Swordsman
+    t60(5,5) Field bld:Village(l1) unit:P1:Rider
+    t61(6,5) Field res:Crop
+    t70(4,6) Mountain res:Metal
+    t71(5,6) Mountain res:Metal
+    t72(6,6) Field
+  hubs[0]: 
+P2: spt=10 stars=1 score=3910 units=7 giants=1
+  city@79 (2,7) lvl 5 pop 17/6:
+    t67(1,6) Field res:Crop
+    t68(2,6) Forest bld:ParkOfFortune(l1)
+    t69(3,6) Field res:Crop unit:P2:Warrior
+    t78(1,7) Field
+    t79(2,7) Field bld:Village(l4)
+    t80(3,7) Mountain res:Metal bld:Mine(l1) unit:P2:Giant
+    t89(1,8) Forest
+    t90(2,8) Mountain res:Metal bld:Mine(l1)
+    t91(3,8) Field
+    t55(0,5) Forest
+    t56(1,5) Field
+    t57(2,5) Mountain
+    t58(3,5) Forest
+    t66(0,6) Field
+    t77(0,7) Forest
+    t81(4,7) Field
+    t88(0,8) Forest
+    t92(4,8) Field
+    t99(0,9) Forest
+    t100(1,9) Forest
+    t101(2,9) Forest
+    t102(3,9) Field
+    t103(4,9) Forest
+  city@94 (6,8) lvl 3 pop 7/4:
+    t82(5,7) Forest bld:GateOfPower(l1) unit:P2:Warrior
+    t83(6,7) Field
+    t84(7,7) Forest res:Game unit:P2:Swordsman
+    t93(5,8) Mountain res:Metal
+    t94(6,8) Field bld:Village(l2) unit:P2:Warrior
+    t95(7,8) Forest res:Game
+    t104(5,9) Mountain res:Metal bld:Mine(l1)
+    t105(6,9) Field res:Crop
+    t106(7,9) Field res:Crop
+  hubs[0]: 
+===== after turn 20 (prefix 21/29) =====
+P1: spt=8 stars=10 score=2715 units=3 giants=0
+  city@24 (2,2) lvl 3 pop 5/4:
+    t12(1,1) Mountain res:Metal bld:Mine(l1)
+    t13(2,1) Forest
+    t14(3,1) Forest res:Game
+    t23(1,2) Field res:Crop
+    t24(2,2) Field bld:Village(l2) unit:P1:Rider
+    t25(3,2) Field res:Crop
+    t34(1,3) Mountain res:Metal
+    t35(2,3) Field
+    t36(3,3) Mountain res:Metal
+  city@63 (8,5) lvl 3 pop 5/4:
+    t51(7,4) Field
+    t52(8,4) Forest res:Game
+    t53(9,4) Field
+    t62(7,5) Mountain res:Metal bld:Mine(l1) unit:P2:Swordsman
+    t63(8,5) Field bld:Village(l2) unit:P1:Rider
+    t64(9,5) Field
+    t73(7,6) Field
+    t74(8,6) Forest res:Game
+    t75(9,6) Field
+  hubs[0]: 
+P2: spt=20 stars=1 score=5330 units=12 giants=3
+  city@79 (2,7) lvl 5 pop 17/6:
+    t67(1,6) Field res:Crop
+    t68(2,6) Forest bld:ParkOfFortune(l1)
+    t69(3,6) Field res:Crop
+    t78(1,7) Field
+    t79(2,7) Field bld:Village(l4) unit:P2:Swordsman
+    t80(3,7) Mountain res:Metal bld:Mine(l1)
+    t89(1,8) Forest
+    t90(2,8) Mountain res:Metal bld:Mine(l1)
+    t91(3,8) Field
+    t55(0,5) Forest
+    t56(1,5) Field
+    t57(2,5) Mountain
+    t58(3,5) Forest
+    t66(0,6) Field
+    t77(0,7) Forest
+    t81(4,7) Field
+    t88(0,8) Forest
+    t92(4,8) Field
+    t99(0,9) Forest
+    t100(1,9) Forest
+    t101(2,9) Forest
+    t102(3,9) Field
+    t103(4,9) Forest
+  city@94 (6,8) lvl 6 pop 20/7:
+    t82(5,7) Forest bld:GateOfPower(l1) unit:P2:Giant
+    t83(6,7) Field
+    t84(7,7) Forest
+    t93(5,8) Mountain res:Metal bld:Mine(l1)
+    t94(6,8) Field bld:Village(l5) unit:P2:Giant
+    t95(7,8) Forest unit:P2:Swordsman
+    t104(5,9) Mountain res:Metal bld:Mine(l1)
+    t105(6,9) Field bld:Forge(l3)
+    t106(7,9) Field res:Crop
+    t85(8,7) Field
+    t96(8,8) Mountain res:Metal
+    t107(8,9) Mountain
+    t114(4,10) Forest
+    t115(5,10) Mountain res:Metal bld:Mine(l1)
+    t116(6,10) Field
+    t117(7,10) Forest res:Game
+    t118(8,10) Field
+  city@29 (7,2) lvl 3 pop 5/4:
+    t17(6,1) Forest bld:GateOfPower(l1)
+    t18(7,1) Mountain res:Metal
+    t19(8,1) Field
+    t28(6,2) Forest
+    t29(7,2) Field bld:Village(l2) unit:P2:Swordsman
+    t30(8,2) Mountain res:Metal bld:Mine(l1)
+    t39(6,3) Field res:Crop
+    t40(7,3) Mountain res:Metal
+    t41(8,3) Forest
+  city@60 (5,5) lvl 3 pop 5/4:
+    t48(4,4) Field res:Crop
+    t49(5,4) Field unit:P2:Swordsman
+    t50(6,4) Mountain res:Metal bld:Mine(l1)
+    t59(4,5) Mountain res:Metal unit:P2:Warrior
+    t60(5,5) Field bld:Village(l2) unit:P2:Swordsman
+    t61(6,5) Field res:Crop unit:P2:Giant
+    t70(4,6) Mountain res:Metal
+    t71(5,6) Mountain res:Metal bld:Mine(l1) unit:P2:Swordsman
+    t72(6,6) Field unit:P2:Warrior
+  hubs[1]: Forge@105(l3)
+===== after turn 28 (prefix 29/29) =====
+P1: spt=0 stars=0 score=3005 units=0 giants=0
+  hubs[0]: 
+P2: spt=38 stars=33 score=8135 units=24 giants=7
+  city@79 (2,7) lvl 7 pop 28/8:
+    t67(1,6) Field res:Crop
+    t68(2,6) Forest bld:ParkOfFortune(l1)
+    t69(3,6) Field res:Crop bld:Farm(l1) unit:P2:Giant
+    t78(1,7) Field
+    t79(2,7) Field bld:Village(l6) unit:P2:Swordsman
+    t80(3,7) Mountain res:Metal bld:Mine(l1)
+    t89(1,8) Forest
+    t90(2,8) Mountain res:Metal bld:Mine(l1)
+    t91(3,8) Field
+    t55(0,5) Forest
+    t56(1,5) Field
+    t57(2,5) Mountain unit:P2:Giant
+    t58(3,5) Forest unit:P2:Swordsman
+    t66(0,6) Field
+    t77(0,7) Forest
+    t81(4,7) Field bld:Forge(l4) unit:P2:Swordsman
+    t88(0,8) Forest
+    t92(4,8) Field
+    t99(0,9) Forest
+    t100(1,9) Forest
+    t101(2,9) Forest
+    t102(3,9) Field
+    t103(4,9) Forest
+  city@94 (6,8) lvl 6 pop 25/7:
+    t82(5,7) Forest bld:GateOfPower(l1) unit:P2:Swordsman
+    t83(6,7) Field
+    t84(7,7) Forest
+    t93(5,8) Mountain res:Metal bld:Mine(l1) unit:P2:Defender
+    t94(6,8) Field bld:Village(l5) unit:P2:Swordsman
+    t95(7,8) Forest
+    t104(5,9) Mountain res:Metal bld:Mine(l1)
+    t105(6,9) Field bld:Forge(l3)
+    t106(7,9) Field res:Crop bld:Farm(l1)
+    t85(8,7) Field
+    t96(8,8) Mountain res:Metal bld:Mine(l1)
+    t107(8,9) Mountain
+    t114(4,10) Forest
+    t115(5,10) Mountain res:Metal bld:Mine(l1)
+    t116(6,10) Field
+    t117(7,10) Forest
+    t118(8,10) Field
+  city@29 (7,2) lvl 4 pop 10/5:
+    t17(6,1) Forest bld:GateOfPower(l1)
+    t18(7,1) Mountain res:Metal
+    t19(8,1) Field
+    t28(6,2) Forest
+    t29(7,2) Field bld:Village(l3) unit:P2:Swordsman
+    t30(8,2) Mountain res:Metal bld:Mine(l1)
+    t39(6,3) Field res:Crop bld:Farm(l1) unit:P2:Defender
+    t40(7,3) Mountain res:Metal bld:Mine(l1)
+    t41(8,3) Forest
+    t5(5,0) Field
+    t6(6,0) Mountain
+    t7(7,0) Field
+    t8(8,0) Mountain
+    t9(9,0) Field
+    t16(5,1) Forest
+    t20(9,1) Field
+    t27(5,2) Field
+    t31(9,2) Field
+    t38(5,3) Mountain unit:P2:Swordsman
+    t42(9,3) Field
+  city@60 (5,5) lvl 5 pop 16/6:
+    t48(4,4) Field res:Crop bld:Farm(l1) unit:P2:Swordsman
+    t49(5,4) Field unit:P2:Giant
+    t50(6,4) Mountain res:Metal bld:Mine(l1)
+    t59(4,5) Mountain res:Metal
+    t60(5,5) Field bld:Village(l4) unit:P2:Swordsman
+    t61(6,5) Field bld:Forge(l2) unit:P2:Swordsman
+    t70(4,6) Mountain res:Metal bld:Mine(l1) unit:P2:Warrior
+    t71(5,6) Mountain res:Metal bld:Mine(l1) unit:P2:Giant
+    t72(6,6) Field unit:P2:Giant
+  city@63 (8,5) lvl 5 pop 16/6:
+    t51(7,4) Field bld:Forge(l3) unit:P2:Swordsman
+    t52(8,4) Forest unit:P2:Swordsman
+    t53(9,4) Field
+    t62(7,5) Mountain res:Metal bld:Mine(l1) unit:P2:Swordsman
+    t63(8,5) Field bld:Village(l4) unit:P2:Swordsman
+    t64(9,5) Field
+    t73(7,6) Field unit:P2:Giant
+    t74(8,6) Forest
+    t75(9,6) Field
+  city@24 (2,2) lvl 6 pop 20/7:
+    t12(1,1) Mountain res:Metal bld:Mine(l1)
+    t13(2,1) Forest
+    t14(3,1) Forest res:Game
+    t23(1,2) Field res:Crop
+    t24(2,2) Field bld:Village(l5) unit:P2:Giant
+    t25(3,2) Field res:Crop
+    t34(1,3) Mountain res:Metal bld:Mine(l1)
+    t35(2,3) Field
+    t36(3,3) Mountain res:Metal bld:Mine(l1)
+    t0(0,0) Field bld:Lighthouse(l0)
+    t1(1,0) Forest bld:ParkOfFortune(l1)
+    t2(2,0) Field
+    t3(3,0) Field
+    t4(4,0) Field res:Crop
+    t11(0,1) Field
+    t15(4,1) Field
+    t22(0,2) Forest bld:EyeOfGod(l1)
+    t26(4,2) Mountain
+    t33(0,3) Field
+    t37(4,3) Forest
+    t44(0,4) Forest
+    t45(1,4) Mountain res:Metal bld:Mine(l1)
+    t46(2,4) Field
+    t47(3,4) Field
+  hubs[4]: Forge@105(l3), Forge@81(l4), Forge@61(l2), Forge@51(l3)
+first giant: Some((14, 2)) | per-player first-giant turns: {1: 25, 2: 14}
+test replayer::tests::replay_checkpoint_probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 180 filtered out; finished in 3.97s
+
