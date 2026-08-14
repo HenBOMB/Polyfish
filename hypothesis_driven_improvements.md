@@ -4262,4 +4262,59 @@ Predictions:
   runs once per turn, so a bigger regression means it is still being
   called per ply somewhere.
 
+ACTUAL (2026-08-14, 250 paired games/arm, commits fec32c0 + 5bf6af7):
+- **P1 FAILED.** Committed-lane 154/250 (61.6%) vs per-ply 167/250
+  (66.8%) — **-5.2pp**, McNemar 35 old-only vs 22 new-only, z = -1.72.
+  The gate wanted >= +4pp at |z| >= 1.96; this is a mild regression that
+  does not itself clear significance. Siege rows move the same way
+  (lost-given-siege 54.5% -> 58.3%).
+- ⚠️ **Instrument scope — the tribe prior was INERT in this run.** Arena
+  pins BOTH seats to one tribe (`arena.rs:539` uses `args_tribe` twice)
+  and the 041/042 instrument pins `--tribe imperius`; Imperius's spawn
+  tech is Organization, which opens no lane chain, so
+  `tribe_lane_prior` returned None in all 250 games. What this arm
+  actually measured is the COMMITMENT half alone (turn-boundary
+  selection + <=3 pivot budget + dwell), not "tribe sets the tone".
+  Follow-up registered below.
+- **P2 PASS (mechanically), with a skew worth noting.** Pivots: mean
+  0.80/game, max 2 (cap 3, never hit); 198/250 games pivot at least
+  once; mean last-commit turn 9.6. Lane distribution ArcherLine 72.0% /
+  ForgeGiants 17.2% / RiderRoads 10.8% — all three clear the 10% floor,
+  but ArcherLine dominates because its score fires on `seen_heavy >= 1`
+  (+2) plus contact (+2), both common in a Greedy matchup.
+- **G1 PASS, better than required:** 198.8 vs 229.4 ms/move (0.87x).
+  Selection moved from every ply to once per turn, and the wiring is
+  confirmed by the speedup itself.
+- READ: on Tiny/30-turn games against Greedy, continuous re-evaluation
+  beats a held identity. Most likely mechanism: refutation latency — the
+  per-ply version hard-exited a countered lane the moment two giants
+  appeared, while the committed version waits for the next turn boundary
+  (pinned deliberately in the archetype test). The stance layer solved
+  the same tension by letting THREAT responses bypass hysteresis
+  (`update_goal`'s `urgent` path); the lane layer currently has no such
+  bypass.
+- CONSEQUENCE: Stage 3b stays deferred (it already was, per 039). Tier 1
+  is NOT yet justified by evidence: the commitment half costs ~5pp, the
+  head half is deferred, and the tribe-prior half is unmeasured. Do not
+  build further on Tier 1 until 045a-b reads.
+
+## EXP_ELO_045a-b — the untested half: does the TRIBE prior pay?
+
+**Registered 2026-08-14, before running.** 045a's instrument nulled the
+tribe prior (Imperius has no lane tech). This arm pins a tribe that DOES
+have one so the feature is actually exercised: `--tribe oumaji` (spawn
+tech Riding -> RiderRoads, verified against `mapgen.rs:1254-1284`).
+Identical otherwise: baseline `/tmp/exp045a_baseline_arena` vs the
+selector build, macro-mcts vs Greedy, 125 seeds x2, base_seed 1787800000,
+gamemode 2, max-turns 30, metal, GUMBEL_SCALE=0.
+
+- **P1:** committed+primed lane beats per-ply by >= +4pp (|z| >= 1.96).
+  Falsifier: flat or negative -> the tribe prior does not rescue
+  commitment either, and Tier 1 as specified is unsupported on this
+  distribution; report that plainly rather than tuning toward a pass.
+- **P2:** RiderRoads share > 50% in the new arm (the prior should
+  visibly bend lane choice for a rider tribe), vs whatever the baseline
+  picks. A flat distribution means the +2 prior is too weak to matter
+  against census scores that reach 6.
+
 ACTUAL: (pending)
