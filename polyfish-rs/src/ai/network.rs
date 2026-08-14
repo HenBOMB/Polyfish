@@ -158,7 +158,6 @@ pub struct PolyZeroNet {
 
     // Decomposed Policy Heads
     p_pool_conv: Conv2d,
-    p_pool_bn: BatchNorm,
     p_fc_shared: Linear,
 
     pi_action: Linear, // Action type (12)
@@ -206,7 +205,6 @@ impl PolyZeroNet {
 
         // Shared policy processing
         let p_pool_conv = conv(filters, 1, 1, 1, 0, vs.pp("p_pool_conv"))?;
-        let p_pool_bn = batch_norm(1, vs.pp("p_pool_bn"))?;
         let p_fc_shared = candle_nn::linear(
             1 * crate::ai::features::MAP_SIZE * crate::ai::features::MAP_SIZE,
             filters,
@@ -234,7 +232,6 @@ impl PolyZeroNet {
             player_fc,
             cross_attention,
             p_pool_conv,
-            p_pool_bn,
             p_fc_shared,
             pi_action,
             pi_source,
@@ -287,8 +284,6 @@ impl PolyZeroNet {
 
         // 4. Policy Heads
         let p_pooled = self.p_pool_conv.forward(&shared)?;
-        let p_pooled = self.p_pool_bn.forward_t(&p_pooled, train)?;
-        let p_pooled = p_pooled.relu()?;
         let p_pooled = p_pooled.flatten_from(1)?;
         let p_latent = self.p_fc_shared.forward(&p_pooled)?.relu()?;
 

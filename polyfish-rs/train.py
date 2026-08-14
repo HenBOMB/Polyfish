@@ -141,7 +141,6 @@ class PolyZeroNet(nn.Module):
         # --- Decomposed Policy Heads ---
         # 1. Action Type (11 categories: Attack, Step, Build, etc.)
         self.p_pool_conv = nn.Conv2d(self.filters, 1, 1)
-        self.p_pool_bn = nn.BatchNorm2d(1)
         self.p_fc_shared = nn.Linear(map_height * map_width, self.filters)
         self.pi_action = nn.Linear(self.filters, 11)
         
@@ -185,7 +184,7 @@ class PolyZeroNet(nn.Module):
         x = x_attended.transpose(1, 2).view(batch_size, self.filters, self.map_height, self.map_width)
         
         # --- Policy Heads ---
-        p_pooled = self.relu(self.p_pool_bn(self.p_pool_conv(x)))
+        p_pooled = self.p_pool_conv(x)
         p_pooled = p_pooled.flatten(1)
         p_latent = self.relu(self.p_fc_shared(p_pooled))
         

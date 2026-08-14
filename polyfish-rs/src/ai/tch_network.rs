@@ -205,7 +205,7 @@ impl TchPolyZeroNet {
 
         // Policy heads
         let p_pooled = self.conv2d(&x, "p_pool_conv", 0);
-        let p_pooled = self.batch_norm(&p_pooled, "p_pool_bn").relu().flatten(1, 3);
+        let p_pooled = p_pooled.flatten(1, 3);
         let p_latent = self.linear(&p_pooled, "p_fc_shared").relu();
         let action_type = self.linear(&p_latent, "pi_action"); // [B, 11]
         let move_option = self.linear(&p_latent, "pi_option"); // [B, 192]
