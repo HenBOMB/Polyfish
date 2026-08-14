@@ -5,7 +5,7 @@ Opening book is a must, 99% always the best moves. `polyfish-rs/src/ai/book.rs`
 
 # GAME MODES
 
-#### Domination
+## Domination
 
 Maximize control and military potential? [PARTIAL] (Via Late Game Weights)
 
@@ -35,7 +35,7 @@ Score is all that matters?
   - Army Size Awareness: +10.0 if army is small, -10.0 if over 2x city count
     (unless threatened).
   - Giant Prioritization: +15.0 bonus.
-- [TODO] Self healing units, Heal others
+- [TODO] Self-healing units; heal other units.
 - Unit steps (steps that explore tiles descending)
 - Unit promotions (veterancy +3 kills)
 - Unit abilities (explode, boost, freeze, convert)
@@ -58,7 +58,7 @@ Score is all that matters?
 
 - Explored tiles value: [IMPLEMENTED]
 
-```
+```text
 maxExploration = 0.8
 formula: (explored - total * (1 - maxExploration)) / (total * maxExploration)
     Will reward 1 when exploring (maxExploration * 100)% of the map
@@ -78,14 +78,14 @@ formula: (explored - total * (1 - maxExploration)) / (total * maxExploration)
 - Boosted is worth more [IMPLEMENTED] (Via `heuristics::assess_unit_power`
   status modifiers)
 - Weak units, alone with no other units nearby are worth less [TODO]
-- Poorly placed roads that dont connect to nowhere [IMPLEMENTED] (Via
+- Poorly placed roads that don't connect anywhere. [IMPLEMENTED] (Via
   `evaluator::economy::penalty_bad_structures`)
 - Bad placed structures [IMPLEMENTED] (Via
   `evaluator::economy::penalty_bad_structures` — lonely adjacency structures)
 
 # HEURISTICS
 
-### Multipliers
+## Multipliers
 
 - **Game Stage**: [IMPLEMENTED] (Dynamic weights in `evaluator::player`)
   - Early game: Prioritize economic development (SPT), expansion (villages) and
@@ -114,10 +114,10 @@ formula: (explored - total * (1 - maxExploration)) / (total * maxExploration)
 
 ### Technology
 
-- Dont waste stars on technology that doesnt favor the explored territory, eg:
+- Don't waste stars on technology that doesn't favor the explored territory, eg:
   [IMPLEMENTED] (Via `evaluator::economy::penalty_unused_tech` — terrain-less
   tech chains penalized)
-  - If we dont have any forests, forestry tech is pointless, unless going for
+  - If we don't have any forests, forestry tech is pointless, unless going for
     mathematics.
   - If no mountains climbing is useless.
   - If no water, sailing is useless.

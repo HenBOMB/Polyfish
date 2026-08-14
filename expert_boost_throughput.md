@@ -186,8 +186,8 @@ Takeaways:
 
 1. **More lanes always wins** in the _sim_ until the ~1,650 actor ceiling — but
    real extra lanes regressed (core contention + batch starvation, see the metal
-   landscape). The sim overstates lane benefit because it charges lanes nothing
-   for CPU/cores.
+   landscape). The sim overstates lane benefit because it charges nothing for the
+   CPU/cores used by each lane.
 2. **At 1ms + 4 lanes** (metal-shaped) the idealized ceiling is ~925 — headroom
    exists.
 3. **128 actors is optimal** for 1000µs/4-lanes.
@@ -208,8 +208,8 @@ whole fight is the **578→925 eval-path gap** (~40%). This corrects the earlier
 "Stair 6 — actor-side engine cost is now the binding constraint" claim: Stair 6
 raises the ~1,650 ceiling and only matters once the eval path is fixed.
 
-The 925→578 gap has three tenants: **coalesce overhead**, **eval-worker CPU
-contending with 128 actors on 14 cores**, and **per-forward sync-dispatch
+The 925→578 gap has three contributors: **coalesce overhead**, **eval-worker CPU
+contending with 128 actors on 14 cores**, and **per-forward synchronous dispatch
 latency** (the sim assumes a flat 1ms; reality is jittery). Eval workers run
 ~90%+ busy at ~23K rows/s in-loop vs 32–40K in isolation — the deficit is CPU
 oversubscription + per-request latency, _not_ GPU capacity.
@@ -255,13 +255,14 @@ stderr line + `analyze_compiles.sh` were scaffolding, since removed):
 **Measured**
 (`--num-games 32 --mcts-iters 64 --actors 128 --eval-backend metal`):
 
-| timer scope                | compiles            | total compile time | distinct sizes |
-| -------------------------- | ------------------- | ------------------ | -------------- |
-| `compile()` only           | 256 (64/worker × 4) | 0.45 s             | 68             |
-| full build (trace+compile) | 258                 | **1.47 s**         | 69             |
+| timer scope                | compiles            | total compile time | distinct sizes (aggregate) |
+| -------------------------- | ------------------- | ------------------ | -------------------------- |
+| `compile()` only           | 256 (64/worker × 4) | 0.45 s             | 68                         |
+| full build (trace+compile) | 258                 | **1.47 s**         | 69                         |
 
-- Every size compiled **exactly once per worker** (histogram: each size = 4
-  compiles). Graph tracing is ~2× the compile step, hence 0.45 s → 1.47 s.
+- Each worker compiles a size **exactly once** when encountered (averaging ~64
+  compiles per worker out of the 68–69 globally distinct sizes). Graph tracing
+  is ~2× the compile step, hence 0.45 s → 1.47 s.
 - The 1.47 s is **summed across 4 workers warming concurrently** (~365 ms each).
   Wall-clock warmup window ≈ heaviest worker ≈ **0.38 s** — a low-single-digit %
   of a tens-of-seconds run, during which only actors routed to a still-compiling
