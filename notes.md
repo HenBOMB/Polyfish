@@ -314,7 +314,7 @@ village candidate's own_value ties the max own_value over all root candidates.
   worse than 36%. n=10-18 per cell. Contamination: 4 stray trace-run games files
   (~2% of samples, 10-turn iteration-1 games) got swept into iter-26 training as
   fresh and sit in the archive window; trace runs must end with rm -f
-  games_*.safetensors.
+  trace_games_*.safetensors.
 
 # Fable 5, Jul 8, 2026 — Phase-1 training-signal fixes (post-diagnosis)
 

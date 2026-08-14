@@ -608,7 +608,7 @@ impl StateDiffGreedyAgent {
             }
         }
 
-        best_move
+        best_move.or_else(|| Some(Box::new(crate::moves::EndTurnMove)))
     }
 
     pub fn select_move_with_decomposed_visits(
