@@ -439,6 +439,12 @@ pub fn generate(settings: MapGenSettings) -> GameState {
             *val = rng.gen_range(-0.5..0.5);
         }
 
+        let active_villages: Vec<usize> = village_map
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &v)| if v > 0 { Some(i) } else { None })
+            .collect();
+
         for y in 0..size {
             for x in 0..size {
                 let u = (x as f32 / size as f32) * (grid_size - 1) as f32;
@@ -482,13 +488,11 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                 let mut n_val = base_val + detail_val;
 
                 // Capital & Suburb positive elevation boost
-                for (v_idx, &v_type) in village_map.iter().enumerate() {
-                    if v_type > 0 {
-                        let dist = distance(idx as i32, v_idx as i32, size) as f32;
-                        if dist <= 3.0 {
-                            let boost = (1.0 - dist / 3.5) * 1.8;
-                            n_val += boost;
-                        }
+                for &v_idx in &active_villages {
+                    let dist = distance(idx as i32, v_idx as i32, size) as f32;
+                    if dist <= 3.0 {
+                        let boost = (1.0 - dist / 3.5) * 1.8;
+                        n_val += boost;
                     }
                 }
 
