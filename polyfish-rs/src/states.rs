@@ -699,10 +699,12 @@ impl GameState {
                 tribe
                     .units
                     .retain(|u| visible_tiles.contains(&u.coords.idx));
-                // We do NOT remove cities because that breaks production,
-                // but their exact coordinates could be an issue if the AI tries to attack a fog tile.
-                // For now, removing them is the safest way to prevent data leaks.
+                // Cities outside vision are removed to avoid leaking their
+                // coordinates; production for hidden cities is not simulated.
                 tribe.cities.retain(|c| visible_tiles.contains(&c.idx));
+                // Fog memory is private per tribe; never expose it to the POV state.
+                tribe.memory_units.clear();
+                tribe.memory_attacks.clear();
             }
         }
     }

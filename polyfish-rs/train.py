@@ -270,7 +270,7 @@ def compute_loss(policy_pred, values_pred, policy_targets, value_target):
     # Total loss
     total_loss = total_policy_loss + value_loss + ownership_loss
 
-    return total_loss, total_policy_loss, value_loss, ownership_loss
+    return total_loss, total_policy_loss, value_loss, ownership_loss, loss_win
 
 def batch_report_indices(total_batches, max_reports=10):
     """Pick up to `max_reports` evenly spaced batch numbers to log."""
@@ -436,6 +436,7 @@ def train(batch_size=BATCH_SIZE, epochs=EPOCHS, lr=LEARNING_RATE, chunk_size=Non
         total_p_loss = 0
         total_v_loss = 0
         total_o_loss = 0
+        total_w_loss = 0
         total_batches = 0
         # Streaming mean/variance of the value targets seen this epoch, so
         # value_r2 (below) compares MSE against the actual training-mix
@@ -621,7 +622,7 @@ def train(batch_size=BATCH_SIZE, epochs=EPOCHS, lr=LEARNING_RATE, chunk_size=Non
                 
                 policy_pred, values_pred = model(batch_spatial, batch_player)
                 
-                loss, p_loss, v_loss, o_loss = compute_loss(policy_pred, values_pred, batch_targets, batch_values)
+                loss, p_loss, v_loss, o_loss, w_loss = compute_loss(policy_pred, values_pred, batch_targets, batch_values)
 
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -631,6 +632,7 @@ def train(batch_size=BATCH_SIZE, epochs=EPOCHS, lr=LEARNING_RATE, chunk_size=Non
                 total_p_loss += p_loss.item()
                 total_v_loss += v_loss.item()
                 total_o_loss += o_loss.item()
+                total_w_loss += w_loss.item()
                 total_batches += 1
 
                 elapsed = time.time() - chunk_start_time

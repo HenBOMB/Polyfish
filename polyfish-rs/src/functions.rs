@@ -617,6 +617,16 @@ pub fn is_enemy_city(state: &GameState, idx: i32, pov_id: PlayerId) -> bool {
         .map_or(false, |t| is_enemy(state, pov_id, t.owner))
 }
 
+pub fn is_enemy_capital(state: &GameState, idx: i32, pov_id: PlayerId) -> bool {
+    if !is_enemy_city(state, idx, pov_id) {
+        return false;
+    }
+    state
+        .tiles
+        .get(&idx)
+        .map_or(false, |t| t.capital_of != pov_id)
+}
+
 /// Check if a tile is frozen (has Ice terrain or Polaris climate)
 pub fn is_tile_frozen(state: &GameState, idx: i32) -> bool {
     state.tiles.get(&idx).map_or(false, |t| {

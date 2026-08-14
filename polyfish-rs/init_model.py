@@ -8,6 +8,7 @@ Creates a model.safetensors file with random weights matching the new architectu
 - 1 value head (win)
 """
 
+import os
 import torch
 import torch.nn as nn
 from safetensors.torch import save_file
@@ -23,9 +24,8 @@ def init_model():
     PLAYER_STATE_DIM = 16
     
     # Check if model already exists to avoid overwriting trained weights!
-    import os
     if os.path.exists("model.safetensors"):
-        print("✅ loaded model.safetensors")
+        print("⚠️ Skipped initialization: model.safetensors already exists")
         return
 
     print("Initializing enhanced PolyZero network...")
