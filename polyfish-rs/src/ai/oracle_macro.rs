@@ -722,6 +722,11 @@ pub const TIER3_CAP_PER_GAME: u32 = 2;
 /// from a slightly older aux — acceptable staleness, like tree reuse itself.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GoalAux {
+    /// Stance-intensity (Verdi, Aug 14): measured ARM pressure 0..1 from
+    /// `stance_strength` — threat-vs-coverage truth, NOT the binary stance.
+    /// The eco-tech mask fires only when this is near-certain (>= 0.98);
+    /// below that ARM steers pricing, never masks.
+    pub arm_strength: f32,
     /// Environment-recommended techs (owned ones pay the in-tree fit bonus).
     pub recommended_techs: Vec<TechnologyType>,
     /// Path-aware: a Rider reaches some EXPAND target at least
@@ -1059,6 +1064,7 @@ pub fn scripted_goal_aux(
         })
     });
     GoalAux {
+        arm_strength: stance_strength(state, player).arm,
         recommended_techs: recommended,
         rider_push,
         techs_bought,
@@ -1686,7 +1692,9 @@ pub fn passes_star_gate(
     let gated = match stance {
         None => true,
         Some(Stance::Grow) | Some(Stance::Save) => arms && !grows,
-        Some(Stance::Arm) => grows && !arms,
+        // Verdi (Aug 14): masking is legitimate only at near-certain need —
+        // below that, a covered skirmish must not lock the eco lanes.
+        Some(Stance::Arm) => grows && !arms && aux.map_or(true, |a| a.arm_strength >= 0.98),
         Some(Stance::Unlock) => false,
     };
     !gated
@@ -2325,11 +2333,21 @@ mod tests {
         let chivalry = ResearchMove::new(TechnologyType::Chivalry);
         let mut committed = GoalAux::default();
         committed.overlays.knight_commit = true;
-        let uncommitted = GoalAux::default();
+        // Aug 14: the ARM eco-mask is intensity-conditional — it fires only
+        // at near-certain pressure (arm_strength >= 0.98). A covered
+        // skirmish (low strength) must NOT lock the eco lanes.
+        let mut uncommitted = GoalAux::default();
+        uncommitted.arm_strength = 1.0;
         assert!(passes_star_gate(&state, &chivalry, grow, Some(&committed)));
         assert!(passes_star_gate(&state, &free_spirit, arm, Some(&committed)));
         assert!(!passes_star_gate(&state, &chivalry, grow, Some(&uncommitted)));
         assert!(!passes_star_gate(&state, &free_spirit, arm, Some(&uncommitted)));
+        let mut covered = GoalAux::default();
+        covered.arm_strength = 0.3;
+        assert!(
+            passes_star_gate(&state, &free_spirit, arm, Some(&covered)),
+            "low-intensity ARM must not mask eco tech"
+        );
     }
 
     #[test]

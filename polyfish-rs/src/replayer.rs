@@ -321,8 +321,9 @@ mod stance_tests {
                         .sum()
                 })
             };
+            let arm_i = crate::ai::oracle_macro::stance_strength(state, 1).arm;
             println!(
-                "t{turn:2} | {:?} ({} orders) | {near} | {}/{} | {}",
+                "t{turn:2} | {:?} i={arm_i:.2} ({} orders) | {near} | {}/{} | {}",
                 g.stance,
                 g.orders.len(),
                 stars_of(1),

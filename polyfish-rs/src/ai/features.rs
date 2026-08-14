@@ -885,8 +885,18 @@ pub fn state_to_cpu_features_goal(
             }
         }
         let stance_ch = CH_STANCE_START + goal.stance as usize;
+        // Verdi (Aug 14): the ARM plane carries measured intensity, not a
+        // binary flag — graded urgency in [0.05,1] (floor keeps an active
+        // commitment visible when the threat has just faded).
+        let stance_val = if goal.stance == crate::ai::oracle_macro::Stance::Arm {
+            crate::ai::oracle_macro::stance_strength(state, perspective)
+                .arm
+                .clamp(0.05, 1.0)
+        } else {
+            1.0
+        };
         for i in 0..MAP_SIZE * MAP_SIZE {
-            data[stance_ch * (MAP_SIZE * MAP_SIZE) + i] = 1.0;
+            data[stance_ch * (MAP_SIZE * MAP_SIZE) + i] = stance_val;
         }
     }
 
@@ -1013,7 +1023,10 @@ mod tests {
         }
         assert!(plane(&raw, CH_ORDER_START + 1)[5] > 0.99);
         assert!(plane(&raw, CH_ORDER_START + 2).iter().all(|&v| v == 0.0));
-        assert!(plane(&raw, CH_STANCE_START + 1).iter().all(|&v| v == 1.0));
+        // Aug 14: the ARM plane is GRADED intensity (clamped to >= 0.05), not
+        // a binary flag — a quiet test board paints the 0.05 floor uniformly.
+        let arm_plane = plane(&raw, CH_STANCE_START + 1);
+        assert!(arm_plane.iter().all(|&v| v == arm_plane[0] && v > 0.0 && v <= 1.0));
         assert!(plane(&raw, CH_STANCE_START).iter().all(|&v| v == 0.0));
         assert!(plane(&raw, CH_STANCE_START + 2).iter().all(|&v| v == 0.0));
 
