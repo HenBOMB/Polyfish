@@ -940,12 +940,13 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                     is_land[i as usize]
                         && village_map[i as usize] == 0
                         && map[i as usize].terrain_type != TerrainType::Mountain
-                        && edge_dist >= 2     // Not within two tiles (0, 1)
+                        && edge_dist >= 2     // Not within two tiles
+                        && edge_dist != 3     // Not three tiles from edge
                         && village_map
                             .iter()
                             .enumerate()
                             .all(|(v_idx, &v)| v == 0 || distance(i, v_idx as i32, size) >= 3)
-                    // Not within two tiles (0, 1, 2)
+                    // Must be at least 3 tiles away from other villages
                 })
                 .collect();
 

@@ -113,8 +113,19 @@ pub const CH_CITY_BORDER_SIZE: usize = CH_CITY_STATS_START + 9;
 pub const CH_CITY_PROGRESS: usize = CH_CITY_STATS_START + 10;
 // +11 reserved
 
+pub const CH_MEM_START: usize = CH_CITY_STATS_END;
+pub const CH_MEM_COUNT: usize = 6;
+pub const CH_MEM_END: usize = CH_MEM_START + CH_MEM_COUNT;
+
+pub const CH_MEM_ENEMY_SEEN: usize = CH_MEM_START + 0;
+pub const CH_MEM_ENEMY_HP: usize = CH_MEM_START + 1;
+pub const CH_MEM_ENEMY_ATTACK: usize = CH_MEM_START + 2;
+pub const CH_MEM_ENEMY_RANGED: usize = CH_MEM_START + 3;
+pub const CH_MEM_ENEMY_NAVAL: usize = CH_MEM_START + 4;
+pub const CH_MEM_ATTACKED_HERE: usize = CH_MEM_START + 5;
+
 /// Total number of feature channels (dynamically computed)
-pub const NUM_CHANNELS: usize = CH_CITY_STATS_END;
+pub const NUM_CHANNELS: usize = CH_MEM_END;
 
 // ============================================================================
 // Runtime Lookup Tables (enum discriminant -> sequential index)
@@ -612,6 +623,73 @@ pub fn state_to_cpu_features(state: &GameState, perspective: PlayerId) -> Result
         }
     }
 
+    // Process memory units and attacks
+    if let Some(tribe) = pov_tribe {
+        let current_turn = state.settings.turn;
+
+        for (&idx, mem_unit) in &tribe.memory_units {
+            let x = (idx % state.settings.size) as usize;
+            let y = (idx / state.settings.size) as usize;
+            if x >= MAP_SIZE || y >= MAP_SIZE {
+                continue;
+            }
+
+            // Skip channels 0-4 if there's a visible enemy unit on this tile.
+            let mut has_visible_enemy = false;
+            for (player_id, other_tribe) in &state.tribes {
+                if *player_id == perspective {
+                    continue;
+                }
+                for unit in &other_tribe.units {
+                    if unit.coords.idx == idx {
+                        let unit_explored = state
+                            .tiles
+                            .get(&idx)
+                            .map(|t| t.explorers.contains(&perspective))
+                            .unwrap_or(false);
+                        if unit_explored && !unit.effects.contains(&UnitEffect::Invisible) {
+                            has_visible_enemy = true;
+                            break;
+                        }
+                    }
+                }
+                if has_visible_enemy {
+                    break;
+                }
+            }
+
+            if !has_visible_enemy {
+                let age = current_turn - mem_unit.last_seen_turn;
+                if age >= 0 {
+                    let decay = crate::memory::MEM_DECAY.powi(age);
+                    set_feat(&mut data, CH_MEM_ENEMY_SEEN, x, y, decay);
+                    set_feat(&mut data, CH_MEM_ENEMY_HP, x, y, mem_unit.hp_norm);
+                    let unit_setting = crate::settings::units::get_unit_setting(mem_unit.unit_type);
+                    set_feat(&mut data, CH_MEM_ENEMY_ATTACK, x, y, unit_setting.attack / 5.0);
+                    if unit_setting.range > 1 {
+                        set_feat(&mut data, CH_MEM_ENEMY_RANGED, x, y, 1.0);
+                    }
+                    if mem_unit.unit_type.is_naval() {
+                        set_feat(&mut data, CH_MEM_ENEMY_NAVAL, x, y, 1.0);
+                    }
+                }
+            }
+        }
+
+        for (&idx, &attack_turn) in &tribe.memory_attacks {
+            let x = (idx % state.settings.size) as usize;
+            let y = (idx / state.settings.size) as usize;
+            if x >= MAP_SIZE || y >= MAP_SIZE {
+                continue;
+            }
+            let age = current_turn - attack_turn;
+            if age >= 0 {
+                let decay = crate::memory::MEM_DECAY.powi(age);
+                set_feat(&mut data, CH_MEM_ATTACKED_HERE, x, y, decay);
+            }
+        }
+    }
+
     // Extract player state vector (16 features)
     let player_vec = vec![
         turn_norm,
@@ -764,6 +842,7 @@ mod tests {
                 + UNIT_COUNT
                 + CH_UNIT_STATS_COUNT
                 + CH_CITY_STATS_COUNT
+                + CH_MEM_COUNT
         );
     }
 }

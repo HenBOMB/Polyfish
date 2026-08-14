@@ -112,7 +112,7 @@ they recompile clean. Hardcodes to touch by hand:
 | `polyfish-rs/src/states.rs` | `MemUnit`, 2 fields on `TribeState` |
 | `polyfish-rs/src/game.rs` | U1/U2 hook at end of `play_move` real path |
 | `polyfish-rs/src/actions/*` (attack/death) | U3, U4 hooks (guard `_are_you_sure`) |
-| `polyfish-rs/train.py:257` | `SPATIAL_CHANNELS = 142` |
+| `polyfish-rs/train.py:398` | `SPATIAL_CHANNELS = 142` |
 | `polyfish-rs/init_model.py:22` | `SPATIAL_CHANNELS = 142` |
 | `polyfish-rs/migrate_model.py` | optional: zero-pad `conv1.weight` 136→142 |
 

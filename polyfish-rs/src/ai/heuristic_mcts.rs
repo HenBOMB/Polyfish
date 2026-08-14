@@ -20,7 +20,11 @@ struct Node {
 
 impl Node {
     fn new(move_to_here: Option<Box<dyn Move>>, game: &mut Game) -> Self {
-        let untried = if game.state.settings._game_over {
+        let is_end_turn = move_to_here
+            .as_ref()
+            .map_or(false, |m| m.move_type() == MoveType::EndTurn);
+
+        let untried = if game.state.settings._game_over || is_end_turn {
             None
         } else {
             let book_moves = crate::ai::book::Book::recommend(game);
