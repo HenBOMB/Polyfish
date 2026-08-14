@@ -3965,4 +3965,41 @@ Predictions:
   (1.67–1.98); if it rises FURTHER, attack press is overextending the
   army and the press weight halves before any verdict.
 
-ACTUAL: (pending)
+ACTUAL (2026-08-14, 250 games on the 041 seed batch, commit 2d92206):
+three-arm table (identical seeds; 041old = pre-040, 041new = 040):
+
+  arm     wins   NET sieged/g  unsiege%  lost|siege  GREEDY sieged/g  unsiege%  lost/g
+  041old  63.6%  1.67          34.9%     62.2%       1.79             34.2%     1.09
+  041new  60.8%  1.98          37.8%     59.4%       1.90             41.7%     1.04
+  042     60.0%  1.94          36.4%     58.4%       2.02             41.0%     1.15
+
+- **P1 (offense recovers): PARTIAL.** Greedy's escape rate barely moved
+  (41.7% → 41.0%, predicted < 38%), but conversion-given-siege
+  recovered half the 041 regression (54.7% → 56.9%; old 60.9%) and the
+  net now starts MORE sieges (2.02/g, highest) — so ABSOLUTE captures
+  of Greedy cities are the best of all three arms (1.15/g vs old 1.09).
+  The press works by volume more than by conversion.
+- **P2 (defense holds): PASS.** Lost-given-siege 58.4% is the best in
+  the family (041new 59.4%, old 62.2%); unsiege 36.4% gives back ~1.4pp
+  of 041new's gain but stays above old. Partitioning did not break the
+  defensive work the recall gradient was doing.
+- **P3 (wins): FLAT.** 60.0%; McNemar vs 041old z = −1.07, vs 041new
+  z = −0.26 — all three script variants statistically indistinguishable
+  at n=250. **G1 (exposure): PASS** — net sieged 1.94/g sits inside the
+  arm range; no press-halving mandated.
+- Cost note: ms/move 140 vs 041new's 194 (and old's 154) — the
+  partition prunes defend-plan candidates and games run shorter.
+- Fixture note: the 042 teacher on seed 1786670356 now reproduces
+  deterministically (183 moves, 3× identical) and loses FASTER (t14) —
+  partition removed the accidental home-drag, and on that adversarial
+  seed committed units press a losing center fight; press has no
+  need-math v1. Population data (G1) says this is not a systematic tax.
+- VERDICT: the two-signal separation does what it says mechanically
+  (best-in-family defense conversion + best-in-family absolute offense
+  output + stable exposure) and win rate stays flat — consistent across
+  040/041/042: ZERO-SHOT STEERING OF THIS CHECKPOINT MOVES MICRO-DIALS,
+  NOT VICTORIES. The signal stack is now behaviorally correct on both
+  axes; the win-rate claim rides on the next MACRO_GEN training round
+  (teacher + student both under 042 semantics), re-measured on this
+  same instrument. Armed knobs unspent: press need-math (don't press a
+  losing fight), halve DEFEND_COVER/HOLD, decouple emission/Arm-flip.
