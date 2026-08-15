@@ -1420,8 +1420,8 @@ fn play_single_game(
     let mut decision_log: Vec<TracedDecision> = Vec::new();
 
     // --dump-turn-states: one JSONL file per game, one record per player-turn
-    // (written at turn start in the loop below). Distinct game_idx => no
-    // cross-actor contention; created/truncated once here.
+    // (written post-search, pre-move — see the Stage 4 dump below). Distinct
+    // game_idx => no cross-actor contention; created/truncated once here.
     let mut turn_dump_file: Option<File> = None;
     if let Some(dir) = dump_turn_states {
         let path = std::path::Path::new(dir);
