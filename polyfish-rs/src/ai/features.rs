@@ -693,7 +693,7 @@ pub fn state_to_cpu_features(state: &GameState, perspective: PlayerId) -> Result
             if x >= MAP_SIZE || y >= MAP_SIZE {
                 continue;
             }
-            let age = current_turn - attack_turn;
+            let age = state.settings.turn - attack_turn;
             if age >= 0 {
                 let decay = crate::memory::MEM_DECAY.powi(age);
                 set_feat(&mut data, CH_MEM_ATTACKED_HERE, x, y, decay);
