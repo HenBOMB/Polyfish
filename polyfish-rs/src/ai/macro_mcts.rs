@@ -658,17 +658,17 @@ fn tier_probe(
     let Ok(path) = std::env::var("POLYFISH_TIER_PROBE") else {
         return;
     };
-    let run = |goal: &MacroGoal| -> Vec<crate::ai::macro_exec::PlyRec> {
+    let run = |goal: &MacroGoal| -> (Vec<crate::ai::macro_exec::PlyRec>, Game) {
         let mut g = view.clone();
         let mut a = arch.clone();
         let mut c = counters;
         let mut rec = Vec::new();
         macro_exec::execute_turn_recorded(&mut g, pov, goal, &mut a, &mut c, lambda, Some(&mut rec));
-        rec
+        (rec, g)
     };
-    let a = run(picked);
-    let b = run(base);
-    let c = run(&MacroGoal::default());
+    let (a, after_pick) = run(picked);
+    let (b, _) = run(base);
+    let (c, after_none) = run(&MacroGoal::default());
     // Multiset overlap on serialized moves: order-insensitive, so a reordered
     // but identical set of plies still reads as "the directive changed
     // nothing", which is the conservative direction for this question.
@@ -696,11 +696,49 @@ fn tier_probe(
     let (sa, sb, sc) = (spend(&a), spend(&b), spend(&c));
     let flips_phi = a.iter().filter(|p| p.flip_no_phi).count();
     let flips_goal = a.iter().filter(|p| p.flip_no_goal).count();
+    // Verdi's obedience test: for each order, how far is the nearest own unit
+    // from its target BEFORE the turn vs AFTER — under the directive, and
+    // under no directive at all. The control is the point: an order whose
+    // target gets closer just as fast without the order was never followed,
+    // it was coincided with.
+    let size = view.state.settings.size;
+    let dist = |state: &crate::states::GameState, target: i32| -> Option<i32> {
+        let t = crate::coords::Coords::from_index(target, size);
+        state
+            .tribes
+            .get(&pov)?
+            .units
+            .iter()
+            .map(|u| u.coords.chebyshev_distance_to(&t))
+            .min()
+    };
+    let owned = |state: &crate::states::GameState, target: i32| -> bool {
+        state
+            .tiles
+            .get(&target)
+            .map_or(false, |t| t.owner == pov as i32)
+    };
+    let orders: Vec<String> = picked
+        .orders
+        .iter()
+        .map(|(kind, t)| {
+            let f = |x: Option<i32>| x.map(|v| v.to_string()).unwrap_or("null".into());
+            format!(
+                "{{\"kind\":\"{kind:?}\",\"target\":{t},\"d_pre\":{},\"d_pick\":{},\"d_none\":{},\
+\"owned_pre\":{},\"owned_pick\":{}}}",
+                f(dist(&view.state, *t)),
+                f(dist(&after_pick.state, *t)),
+                f(dist(&after_none.state, *t)),
+                owned(&view.state, *t),
+                owned(&after_pick.state, *t),
+            )
+        })
+        .collect();
     let row = format!(
         "{{\"turn\":{},\"pov\":{},\"diverged\":{},\"plies\":{},\"spend_plies\":{},\
 \"overlap_pick_base\":{:.4},\"overlap_pick_none\":{:.4},\
 \"spend_overlap_pick_base\":{:.4},\"spend_overlap_pick_none\":{:.4},\
-\"flip_no_phi\":{},\"flip_no_goal\":{}}}\n",
+\"flip_no_phi\":{},\"flip_no_goal\":{},\"orders\":[{}]}}\n",
         view.state.settings.turn,
         pov,
         diverged,
@@ -712,6 +750,7 @@ fn tier_probe(
         overlap(&sa, &sc),
         flips_phi,
         flips_goal,
+        orders.join(","),
     );
     use std::io::Write;
     if let Ok(mut fh) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {

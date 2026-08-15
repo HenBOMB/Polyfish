@@ -4873,3 +4873,52 @@ Distinguishing probe (not run, not scheduled): on divergent roots, roll
 BOTH candidates out deep (to terminal or a long horizon, ghost opponent)
 and compare outcomes. Materially different outcomes => H2 and evaluation
 is the lever; equal outcomes => H3 and the generator is.
+
+### ACTUAL — obedience (Verdi's metric, Aug 15, 2026): distance from the
+nearest own unit to each order's target, BEFORE the turn vs AFTER, with
+the no-directive execution of the same turn as the control. 1637 roots,
+3205 orders (1.96 per directive: 71% Expand, 18% Attack, 11% Defend).
+
+| order | closer | unchanged | farther | progress w/ | control | **causal lift** |
+|---|---|---|---|---|---|---|
+| ALL | 53.4% | 38.5% | 8.1% | +0.549 | +0.096 | **+0.453** |
+| Expand | 60.7% | 32.8% | 6.4% | +0.645 | +0.123 | **+0.522** |
+| Attack | 42.1% | 49.6% | 8.4% | +0.422 | +0.077 | +0.346 |
+| Defend | 24.1% | 57.7% | 18.3% | +0.125 | −0.046 | +0.171 |
+
+(tiles/turn; median starting distance 2 tiles; a unit moves ~1 tile/turn.)
+
+TIER 3 OBEYS, AND THE OBEDIENCE IS CAUSAL. Orders are followed at about
+half a tile per turn against a control that drifts at a tenth — a ~5.7x
+causal lift, and 5.7x is the honest form of the number because the
+control is the SAME turn re-executed with the directive removed. Against
+a ~1 tile/turn movement budget and a 2-tile median target, +0.55 is
+roughly half the theoretical maximum, which is what a turn that must also
+harvest, research and build looks like. Per order vs its own control:
+34% strictly closer, 61% identical, 5% farther.
+
+THE INTERESTING PARTS ARE THE EXCEPTIONS.
+- **Defend is nearly inert**: +0.125 tiles/turn, 18.3% of Defend orders
+  end FARTHER from the city than they started, and it is the only kind
+  whose control is negative. Its median starting distance is 0 (a garrison
+  is already there), so "progress" is the wrong yardstick for it — but
+  "moved away from the city it was told to defend, 18% of the time" is
+  measured on the right one. That is the executor leaking a duty, and it
+  is exactly the behaviour EXP_ELO_040/042 built pricing for and could
+  not move.
+- **Fulfilment is 9.8%**: of orders on targets not yet owned, only one in
+  ten is captured during the turn it was issued. With a 2-tile median gap
+  that is arithmetically expected, not damning — but it means an order's
+  value is realised over ~2-3 turns, and the turn-level tree is scoring a
+  horizon where most of its own orders have not paid off yet.
+- Only 9.2% of orders are issued on targets >3 tiles away, so the
+  generator is not setting unreachable goals.
+
+WHAT THIS SETTLES. Combined with the ply-influence result, both halves of
+"does Tier 3 follow Tier 2" now answer YES: the directive owns ~half the
+plies, and those plies move toward the named target at ~5.7x the
+no-directive drift. **H1 is dead in both its forms** — neither the wiring
+nor the following is broken. The directive-layer nulls therefore mean the
+alternative directives are worth about the same (H2 evaluation / H3
+generator), which is exactly what the deep-rollout separator would
+distinguish.
