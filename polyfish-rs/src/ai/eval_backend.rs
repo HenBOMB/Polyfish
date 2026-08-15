@@ -18,25 +18,88 @@
 //! itself — it only sees pre-loaded `Arc<PolyZeroNet>`s — so it's on each
 //! `main()` call site.
 
-use crate::ai::eval_server::{BackendSpec, EvalHandle, EvalServer, EvalServerConfig, Evaluator, ShardedEvalHandle};
-use crate::ai::network::PolyZeroNet;
-use candle_core::Device;
 use std::sync::Arc;
+use anyhow::{bail, Context, Result};
+use candle_core::{utils, Device};
+use crate::ai::eval_server::{BackendSpec, EvalHandle, EvalServer, EvalServerConfig, Evaluator, ShardedEvalHandle,};
+use crate::ai::network::PolyZeroNet;
 
-/// Select the compute device: Metal (macOS) > CUDA (NVIDIA) > CPU, unless
-/// overridden via `POLYFISH_DEVICE` (`cpu`|`metal`|`cuda`). Each call
-/// allocates a fresh device handle (own command queue), even for the same
-/// physical GPU — callers that need two isolated devices just call this
-/// twice.
-pub fn select_device() -> anyhow::Result<Device> {
-    Ok(match std::env::var("POLYFISH_DEVICE").as_deref() {
-        Ok("cpu") => Device::Cpu,
-        Ok("metal") => Device::metal_if_available(0)?,
-        Ok("cuda") => Device::cuda_if_available(0)?,
-        _ => Device::metal_if_available(0)
-            .or_else(|_| Device::cuda_if_available(0))
-            .unwrap_or(Device::Cpu),
-    })
+/// Select a compute device, unless `POLYFISH_DEVICE` overrides it.
+/// Accepted values are `cpu`, `metal`, and `cuda`.
+/// Automatic selection priority is CUDA, Metal, then CPU.
+/// Each call creates a fresh device handle and command queue.
+pub fn select_device() -> Result<Device> {
+    let requested = std::env::var("POLYFISH_DEVICE")
+        .unwrap_or_else(|_| "auto".to_owned())
+        .trim()
+        .to_ascii_lowercase();
+
+    match requested.as_str() {
+        "" | "auto" => select_device_automatically(),
+
+        "cpu" => Ok(Device::Cpu),
+
+        "cuda" => select_cuda().context(
+            "POLYFISH_DEVICE=cuda was requested, but CUDA is unavailable",
+        ),
+
+        "metal" => select_metal().context(
+            "POLYFISH_DEVICE=metal was requested, but Metal is unavailable",
+        ),
+
+        other => bail!(
+            "invalid POLYFISH_DEVICE={other:?}; expected one of: auto, cpu, cuda, metal"
+        ),
+    }
+}
+
+fn select_device_automatically() -> Result<Device> {
+    // Prefer CUDA whenever this binary includes CUDA support and a CUDA
+    // device is available.
+    #[cfg(feature = "cuda")]
+    if utils::cuda_is_available() {
+        return Device::new_cuda(0).context("CUDA is available, but device 0 could not be initialized");
+    }
+
+    // The `metal` Cargo feature should enable Candle's Metal backend.
+    #[cfg(all(target_os = "macos", feature = "metal"))]
+    if utils::metal_is_available() {
+        return Device::new_metal(0).context("Metal is available, but device 0 could not be initialized");
+    }
+
+    Ok(Device::Cpu)
+}
+
+fn select_cuda() -> Result<Device> {
+    #[cfg(feature = "cuda")]
+    {
+        if !utils::cuda_is_available() {
+            bail!("CUDA was requested, but no usable CUDA device is available");
+        }
+
+        Device::new_cuda(0).context("failed to initialize CUDA device 0")
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    {
+        bail!("CUDA was requested, but this binary was built without the `cuda` feature");
+    }
+}
+
+fn select_metal() -> Result<Device> {
+    #[cfg(all(target_os = "macos", feature = "metal"))]
+    {
+        if !utils::metal_is_available() {
+            bail!("Metal was requested, but no usable Metal device is available");
+        }
+
+        Device::new_metal(0).context("failed to initialize Metal device 0")
+    }
+
+    #[cfg(not(all(target_os = "macos", feature = "metal")))]
+    {
+        bail!("Metal was requested, but this binary was built without Metal support");
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

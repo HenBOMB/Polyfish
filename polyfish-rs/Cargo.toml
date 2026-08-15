@@ -53,7 +53,7 @@ apple-metal = { version = "0.8.8", optional = true }
 [features]
 default = []
 cuda = ["candle-core/cuda", "candle-nn/cuda"]
-cudnn = ["candle-core/cudnn"]
+cudnn = ["cuda", "candle-core/cudnn"]
 metal = ["candle-core/metal", "candle-nn/metal"]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
 # Route self-play NN inference through libtorch/MPS (tch-rs) instead of candle
