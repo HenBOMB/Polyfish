@@ -768,7 +768,7 @@ fn play_single_game(
         let mut total_visits = 0.0;
 
         // Aggregate visits into distributions
-        for mv in move_visits {
+        for mv in &move_visits {
             total_visits += mv.visits;
 
             // Spatial and Option targets using DecomposedMapper
