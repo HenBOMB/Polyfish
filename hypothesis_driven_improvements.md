@@ -4688,3 +4688,29 @@ Probe hygiene: 1 of 1194 identical-painting rows showed a nonzero dV
 (0.08%), consistent with metal batch-coalescing nondeterminism rather
 than a probe bug — the analysis asserts this count and it is reported,
 not swept.
+
+### ACTUAL — Phase B1, the antisymmetrized leaf (Aug 15, 2026, 1000 games,
+53 min). **The defect was real; fixing it is not sufficient.**
+`MacroLeaf::NetAsym` scored **440/1000 (44.0%)** against the heuristic
+leaf. Paired against `replays/exp046/armA` (identical seeds, identical
+heuristic arm, same snapshot — only the leaf's zero-sum handling
+changed): **41.9% -> 44.0%, +2.1pp, McNemar z = +1.08** (old-only 177,
+new-only 198). Seat test vs the registered gate: z = -3.79 against 50%,
+so **>= 52.5% is not remotely cleared and the heuristic leaf keeps the
+seat.** Avg score 4200 vs 4809. Cost 450 vs 381 ms/move (both arms
+inflate vs 046's 298/232 — two forwards per leaf saturate the eval server
+and arena games run concurrently, so this is contention, not per-move
+work on the heuristic side).
+
+READ IT HONESTLY. A provably real defect — the negamax backup was
+carrying a median 0.386 error against a 0.03-0.05 decision margin, 13x —
+was removed cleanly (pinned by `net_asym_leaf_is_zero_sum`), and it
+bought +2.1pp that does not clear noise. Two consequences:
+  1. The zero-sum violation was NOT the reason the net leaf loses. It was
+     a genuine bug worth fixing on its own terms, and the fix stays.
+  2. Defect magnitude in value-units does not translate to win rate. This
+     is the third time in this program (038's memory, 045a's selector,
+     now 047-B1) that a mechanism confirmed to be doing exactly what it
+     was designed to do moved nothing. The pattern is now strong enough
+     to state plainly: the macro leaf's problem is not any single
+     identified defect in how the value is READ.
