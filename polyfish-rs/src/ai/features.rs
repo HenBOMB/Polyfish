@@ -641,7 +641,26 @@ pub fn state_to_cpu_features(state: &GameState, perspective: PlayerId) -> Result
 
     // Process memory units and attacks
     if let Some(tribe) = pov_tribe {
-        let current_turn = state.settings.turn;
+        let mut visible_enemy_tiles: std::collections::HashSet<i32> =
+            std::collections::HashSet::new();
+        for (player_id, other_tribe) in &state.tribes {
+            if *player_id == perspective {
+                continue;
+            }
+            for unit in &other_tribe.units {
+                if unit.effects.contains(&UnitEffect::Invisible) {
+                    continue;
+                }
+                let explored = state
+                    .tiles
+                    .get(&unit.coords.idx)
+                    .map(|t| t.explorers.contains(&perspective))
+                    .unwrap_or(false);
+                if explored {
+                    visible_enemy_tiles.insert(unit.coords.idx);
+                }
+            }
+        }
 
         for (&idx, mem_unit) in &tribe.memory_units {
             let x = (idx % state.settings.size) as usize;
@@ -650,38 +669,14 @@ pub fn state_to_cpu_features(state: &GameState, perspective: PlayerId) -> Result
                 continue;
             }
 
-            // Skip channels 0-4 if there's a visible enemy unit on this tile.
-            let mut has_visible_enemy = false;
-            for (player_id, other_tribe) in &state.tribes {
-                if *player_id == perspective {
-                    continue;
-                }
-                for unit in &other_tribe.units {
-                    if unit.coords.idx == idx {
-                        let unit_explored = state
-                            .tiles
-                            .get(&idx)
-                            .map(|t| t.explorers.contains(&perspective))
-                            .unwrap_or(false);
-                        if unit_explored && !unit.effects.contains(&UnitEffect::Invisible) {
-                            has_visible_enemy = true;
-                            break;
-                        }
-                    }
-                }
-                if has_visible_enemy {
-                    break;
-                }
-            }
-
-            if !has_visible_enemy {
+            if !visible_enemy_tiles.contains(&idx) {
                 let age = current_turn - mem_unit.last_seen_turn;
                 if age >= 0 {
                     let decay = crate::memory::MEM_DECAY.powi(age);
                     set_feat(&mut data, CH_MEM_ENEMY_SEEN, x, y, decay);
                     set_feat(&mut data, CH_MEM_ENEMY_HP, x, y, mem_unit.hp_norm);
                     let unit_setting = crate::settings::units::get_unit_setting(mem_unit.unit_type);
-                    set_feat(&mut data, CH_MEM_ENEMY_ATTACK, x, y, (unit_setting.attack / 5.0).clamp(0.0, 1.0));
+                    set_feat(&mut data, CH_MEM_ENEMY_ATTACK, x, y, unit_setting.attack / 5.0);
                     if unit_setting.range > 1 {
                         set_feat(&mut data, CH_MEM_ENEMY_RANGED, x, y, 1.0);
                     }
