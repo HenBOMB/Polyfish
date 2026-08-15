@@ -126,6 +126,34 @@ pub fn execute_turn(
     counters: &mut TurnCounters,
     lambda: f32,
 ) -> bool {
+    execute_turn_recorded(game, player, goal, arch, counters, lambda, None)
+}
+
+/// One executed ply, for the Tier-2/Tier-3 boundary probe (EXP_ELO_048).
+/// `flip_no_phi` / `flip_no_goal` answer "would this ply have been chosen
+/// anyway", with the directive's ranking term removed and with the directive
+/// removed entirely — i.e. how much of the executor's choice the directive
+/// actually owns.
+#[derive(Clone, Debug)]
+pub struct PlyRec {
+    pub mv: String,
+    pub kind: String,
+    pub flip_no_phi: bool,
+    pub flip_no_goal: bool,
+}
+
+/// `execute_turn` with an optional per-ply recorder. One implementation, so a
+/// probe can never drift from the executor it is measuring; the recording
+/// arms cost two extra `rank_plies` per ply and are OFF unless `rec` is set.
+pub fn execute_turn_recorded(
+    game: &mut Game,
+    player: PlayerId,
+    goal: &MacroGoal,
+    arch: &mut ArchetypeState,
+    counters: &mut TurnCounters,
+    lambda: f32,
+    mut rec: Option<&mut Vec<PlyRec>>,
+) -> bool {
     for _ in 0..MAX_EXEC_PLIES {
         if game.state.settings._game_over
             || game.state.settings.current_player_turn_id != player
@@ -149,6 +177,32 @@ pub fn execute_turn(
         let (_, best) = ranked.swap_remove(0);
         if best.move_type() == MoveType::EndTurn {
             break;
+        }
+        if let Some(r) = rec.as_deref_mut() {
+            let key = best.serialize().to_string();
+            // Same gate, no directive PULL: isolates the lambda*dphi term.
+            let no_phi = rank_plies(game, player, goal, &aux, gate, 0.0);
+            // No directive at all: gate open, default goal — the whole Tier-2
+            // channel removed, both filter and pull.
+            let bare = MacroGoal::default();
+            let bare_aux = scripted_goal_aux(
+                &game.state,
+                player,
+                &bare,
+                counters.techs_bought,
+                counters.tier3_bought,
+                Some(arch),
+            );
+            let no_goal = rank_plies(game, player, &bare, &bare_aux, false, 0.0);
+            let top = |v: &Vec<(f32, Box<dyn Move>)>| {
+                v.first().map(|(_, m)| m.serialize().to_string()).unwrap_or_default()
+            };
+            r.push(PlyRec {
+                kind: format!("{:?}", best.move_type()),
+                flip_no_phi: top(&no_phi) != key,
+                flip_no_goal: top(&no_goal) != key,
+                mv: key,
+            });
         }
         if game.simulate_move(best.as_ref()).is_none() {
             return false;

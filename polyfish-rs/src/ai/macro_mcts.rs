@@ -641,6 +641,84 @@ fn paint_probe(
     }
 }
 
+/// EXP_ELO_048: does Tier 3 follow Tier 2? Re-executes this root's turn on
+/// throwaway clones under three directives — the tree's pick, the scripted
+/// base, and no directive at all — and reports how much the executed PLY
+/// SEQUENCE actually changes. Env-gated (`POLYFISH_TIER_PROBE=<path>`).
+fn tier_probe(
+    view: &Game,
+    pov: PlayerId,
+    arch: &ArchetypeState,
+    counters: TurnCounters,
+    lambda: f32,
+    base: &MacroGoal,
+    picked: &MacroGoal,
+    diverged: bool,
+) {
+    let Ok(path) = std::env::var("POLYFISH_TIER_PROBE") else {
+        return;
+    };
+    let run = |goal: &MacroGoal| -> Vec<crate::ai::macro_exec::PlyRec> {
+        let mut g = view.clone();
+        let mut a = arch.clone();
+        let mut c = counters;
+        let mut rec = Vec::new();
+        macro_exec::execute_turn_recorded(&mut g, pov, goal, &mut a, &mut c, lambda, Some(&mut rec));
+        rec
+    };
+    let a = run(picked);
+    let b = run(base);
+    let c = run(&MacroGoal::default());
+    // Multiset overlap on serialized moves: order-insensitive, so a reordered
+    // but identical set of plies still reads as "the directive changed
+    // nothing", which is the conservative direction for this question.
+    let overlap = |x: &[crate::ai::macro_exec::PlyRec], y: &[crate::ai::macro_exec::PlyRec]| -> f32 {
+        let mut pool: Vec<&String> = y.iter().map(|p| &p.mv).collect();
+        let mut hit = 0usize;
+        for p in x {
+            if let Some(i) = pool.iter().position(|q| **q == p.mv) {
+                pool.remove(i);
+                hit += 1;
+            }
+        }
+        let denom = x.len().max(y.len());
+        if denom == 0 { 1.0 } else { hit as f32 / denom as f32 }
+    };
+    // Star-spending plies only: Steps shuffle cheaply, but Research/Build/
+    // Summon are where a turn's stars are actually committed — and the star
+    // gate is the one intervention that ever moved wins (EXP_ELO_026).
+    let spend = |v: &[crate::ai::macro_exec::PlyRec]| -> Vec<crate::ai::macro_exec::PlyRec> {
+        v.iter()
+            .filter(|p| matches!(p.kind.as_str(), "Research" | "Build" | "Summon"))
+            .cloned()
+            .collect()
+    };
+    let (sa, sb, sc) = (spend(&a), spend(&b), spend(&c));
+    let flips_phi = a.iter().filter(|p| p.flip_no_phi).count();
+    let flips_goal = a.iter().filter(|p| p.flip_no_goal).count();
+    let row = format!(
+        "{{\"turn\":{},\"pov\":{},\"diverged\":{},\"plies\":{},\"spend_plies\":{},\
+\"overlap_pick_base\":{:.4},\"overlap_pick_none\":{:.4},\
+\"spend_overlap_pick_base\":{:.4},\"spend_overlap_pick_none\":{:.4},\
+\"flip_no_phi\":{},\"flip_no_goal\":{}}}\n",
+        view.state.settings.turn,
+        pov,
+        diverged,
+        a.len(),
+        sa.len(),
+        overlap(&a, &b),
+        overlap(&a, &c),
+        overlap(&sa, &sb),
+        overlap(&sa, &sc),
+        flips_phi,
+        flips_goal,
+    );
+    use std::io::Write;
+    if let Ok(mut fh) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = fh.write_all(row.as_bytes());
+    }
+}
+
 impl<'a> MacroMctsAgent<'a> {
     pub fn new(evaluator: &'a crate::ai::eval_server::Evaluator, params: MacroParams) -> Self {
         Self {
@@ -801,6 +879,18 @@ impl<'a> MacroMctsAgent<'a> {
                 pick != 0,
                 &self.last_stats,
             );
+            if let Some(g) = self.turn_goal.as_ref() {
+                tier_probe(
+                    &view0,
+                    pov,
+                    &self.archetype,
+                    self.counters,
+                    self.params.lambda,
+                    &base,
+                    g,
+                    pick != 0,
+                );
+            }
             // EXP_ELO_038: remember what we chose — tomorrow's ballot
             // includes it.
             if let Some(g) = &self.turn_goal {

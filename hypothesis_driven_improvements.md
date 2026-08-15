@@ -4765,3 +4765,58 @@ prices both players as winning on 21% of roots (Phase A), and was
 calibration-flagged as 2x over-confident when ahead long before any of
 this. The next credible move is data/labels/scale, not another consumer
 of the same head.
+
+## EXP_ELO_048 — does Tier 3 follow Tier 2? (the boundary probe)
+
+STATUS: REGISTERED (Aug 15, 2026), Verdi-requested.
+
+WHY. Six-plus arms that changed WHICH directive the macro tree picks
+(033b sims, 035 belief world, 036 fog candidates, 038 memory, 045a lane
+commitment) all read flat. Two readings are consistent with that: the
+executor makes poor use of good directives, or the directive never
+reaches the plies at all. ⚠️ Correction on the record: EXP_ELO_039/047
+do NOT bear on this — they hold the executor fixed and vary only the leaf
+scorer, so they are evidence about the evaluator alone. Nor has a BETTER
+leaf than `evaluate_state` ever been tested (039/047 tested a worse one),
+so 038's "starving for evaluation" conclusion is still live, not refuted.
+
+WHAT IT MEASURES. At every planned root, re-execute that same turn on
+throwaway clones under three directives — the tree's pick, the scripted
+base, and `MacroGoal::default()` (no directive at all) — and compare the
+executed PLY SEQUENCES. Per ply of the pick's turn it also asks the
+counterfactual directly: would this ply have been chosen with the
+directive's ranking term removed (`flip_no_phi`, gate intact) and with
+the directive removed entirely (`flip_no_goal`)? One implementation, not
+two: `execute_turn` now delegates to `execute_turn_recorded`, so the
+probe cannot drift from the executor it measures. Env-gated
+(`POLYFISH_TIER_PROBE`), zero cost unset.
+
+Overlap is deliberately multiset (order-insensitive), so a reordered but
+identical set of plies reads as "the directive changed nothing" — the
+conservative direction for this question.
+
+PREDICTIONS (pre-registered).
+  P1 — the boundary: median `overlap_pick_none` (tree's directive vs NO
+     directive) over divergent roots.
+       > 0.9  -> the tier boundary LEAKS: Tier 2 cannot express itself
+                 through Tier 3, and every directive-layer null collapses
+                 into one explanation. Fixing the executor's ply CHOICE
+                 would not be the lever either — the wiring is.
+       < 0.6  -> the directive genuinely drives the turn; the nulls then
+                 mean the directives themselves are interchangeable in
+                 value, which points at the generator (H3) or the
+                 evaluator (H2), not the boundary.
+  P2 — where it leaks: the same overlap restricted to STAR-SPENDING plies
+     (Research/Build/Summon). Star allocation is the one channel with a
+     proven causal link to wins (EXP_ELO_026: 28%->81%). A directive that
+     reshuffles Steps but leaves the spend sequence identical is
+     decorative where it counts, even if total overlap looks moderate.
+  P3 — per-ply ownership: share of executed plies with `flip_no_phi`
+     (the lambda*dphi pull owns the pick) and `flip_no_goal` (the whole
+     directive channel owns it). This separates the two ways a directive
+     can act — the gate FILTER vs the ranking PULL — which the sequence
+     overlaps alone cannot.
+
+NOT A WIN-RATE EXPERIMENT. No arm, no A/B, no gate. It is a measurement
+of a mechanism, and its job is to say which of H1 (executor) / H2
+(evaluation) / H3 (generator) is worth spending on next.
