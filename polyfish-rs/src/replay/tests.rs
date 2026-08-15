@@ -13,6 +13,7 @@ fn replay_with(commands: Vec<ReplayCommand>) -> Replay {
         tribes: vec![TribeType::Imperius, TribeType::Bardur],
         seed: 731,
         version: 115,
+        symmetric: false,
     });
     Replay {
         schema_version: REPLAY_SCHEMA_VERSION,

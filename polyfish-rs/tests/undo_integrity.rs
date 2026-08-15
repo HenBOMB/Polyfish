@@ -62,7 +62,7 @@ fn descent_check(game: &mut Game, rng: &mut StdRng, depth: u32) {
     if moves.is_empty() {
         return;
     }
-    let m = &moves[rng.gen_range(0..moves.len())];
+    let m = &moves[rng.random_range(0..moves.len())];
     let desc = m.describe(&game.state);
     let turn = game.state.settings.turn;
 
@@ -134,7 +134,7 @@ fn test_simulate_undo_integrity() {
             if moves.is_empty() {
                 break;
             }
-            let m = &moves[rng.gen_range(0..moves.len())];
+            let m = &moves[rng.random_range(0..moves.len())];
             if game.play_move(m.as_ref()).is_none() {
                 break;
             }

@@ -178,9 +178,9 @@ mod tests {
     #[test]
     fn test_dotnet_random_rng_trait() {
         let mut rng = DotNetRandom::seed_from_u64(999);
-        let val: u32 = rng.r#gen();
+        let val: u32 = rng.random();
         assert!(val <= MBIG as u32);
-        let f: f32 = rng.r#gen();
+        let f: f32 = rng.random();
         assert!((0.0..=1.0).contains(&f));
     }
 }
