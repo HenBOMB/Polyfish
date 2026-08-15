@@ -96,6 +96,10 @@ struct Node {
     /// perspective; computed once (the executor and evaluator are
     /// deterministic within a process).
     frozen_value: Option<f32>,
+    /// The edge that produced this node: who executed the turn, and the
+    /// directive they executed. `None` at the root. This is the one piece of
+    /// committed-directive truth a leaf can have without searching.
+    from: Option<(PlayerId, MacroGoal)>,
 }
 
 impl Node {
@@ -106,6 +110,7 @@ impl Node {
         mut arch: [ArchetypeState; 2],
         root_turn: i32,
         k: usize,
+        from: Option<(PlayerId, MacroGoal)>,
         leaf_fn: &dyn Fn(&crate::states::GameState, PlayerId, u32) -> f32,
     ) -> Self {
         let frozen_value = if game.state.settings._game_over {
@@ -152,6 +157,7 @@ impl Node {
             edge_shape: vec![0.0; n],
             visits: 0.0,
             frozen_value,
+            from,
         }
     }
 
@@ -214,11 +220,24 @@ fn leaf_value(
     state: &crate::states::GameState,
     player: PlayerId,
     tier3: u32,
+    // The edge that produced this state: (the player who executed the turn,
+    // the directive they executed). `None` at the root. Only `NetAsymPaint`
+    // reads it — for that player the committed directive is KNOWN, which is
+    // the one painting inference can align with training for free.
+    from: Option<(PlayerId, &MacroGoal)>,
 ) -> f32 {
     use crate::ai::macro_agent::MacroLeaf;
+    let aligned = leaf == MacroLeaf::NetAsymPaint;
     let net = |p: PlayerId| -> Option<f32> {
-        let goal = scripted_goal(state, p, tier3);
-        crate::ai::features::state_to_cpu_features_goal(state, p, None, Some(&goal))
+        let scripted;
+        let goal = match from {
+            Some((mover, g)) if aligned && mover == p => g,
+            _ => {
+                scripted = scripted_goal(state, p, tier3);
+                &scripted
+            }
+        };
+        crate::ai::features::state_to_cpu_features_goal(state, p, None, Some(goal))
             .ok()
             .and_then(|f| eval.evaluate(vec![f]).first().map(|r| r.0))
     };
@@ -230,7 +249,7 @@ fn leaf_value(
         }
         // Both perspectives, halved: makes the zero-sum identity the negamax
         // backup assumes hold BY CONSTRUCTION, at two forwards per leaf.
-        MacroLeaf::NetAsym => {
+        MacroLeaf::NetAsym | MacroLeaf::NetAsymPaint => {
             let opp: PlayerId = if player == 1 { 2 } else { 1 };
             if let (Some(a), Some(b)) = (net(player), net(opp)) {
                 return (a - b) / 2.0;
@@ -286,10 +305,13 @@ impl<'a> MacroMctsSearch<'a> {
         arch[seat(pov)] = own_arch.clone();
 
         let leaf = params.leaf;
-        let leaf_fn =
-            move |s: &crate::states::GameState, p: PlayerId, t3: u32| leaf_value(evaluator, leaf, s, p, t3);
+        // The root has no incoming edge, so no committed directive is known
+        // for it — every leaf read there falls back to the scripted painting.
+        let leaf_fn = move |s: &crate::states::GameState, p: PlayerId, t3: u32| {
+            leaf_value(evaluator, leaf, s, p, t3, None)
+        };
         let mut root =
-            Node::new(root_game.clone(), pov, counters, arch, root_turn, params.k, &leaf_fn);
+            Node::new(root_game.clone(), pov, counters, arch, root_turn, params.k, None, &leaf_fn);
         root.candidates = root_candidates;
         let n = root.candidates.len();
         root.children = vec![None; n];
@@ -394,6 +416,7 @@ impl<'a> MacroMctsSearch<'a> {
                     &n.game.state,
                     n.player,
                     n.counters[seat(n.player)].tier3_bought,
+                    n.from.as_ref().map(|(p, g)| (*p, g)),
                 );
                 break;
             }
@@ -412,6 +435,7 @@ impl<'a> MacroMctsSearch<'a> {
                     &cn.game.state,
                     cn.player,
                     cn.counters[seat(cn.player)].tier3_bought,
+                    cn.from.as_ref().map(|(p, g)| (*p, g)),
                 )
             });
             // The child's value is from the child's perspective; the edge we
@@ -482,9 +506,22 @@ impl<'a> MacroMctsSearch<'a> {
         };
         let leaf = self.leaf;
         let eval = self.eval;
-        let leaf_fn =
-            move |s: &crate::states::GameState, p: PlayerId, t3: u32| leaf_value(eval, leaf, s, p, t3);
-        let child = Node::new(game, other(player), counters, arch, root_turn, params.k, &leaf_fn);
+        // The child's depth-capped value (computed inside `Node::new`) gets the
+        // same edge context every other leaf read of this node will get.
+        let from = (player, goal.clone());
+        let leaf_fn = move |s: &crate::states::GameState, p: PlayerId, t3: u32| {
+            leaf_value(eval, leaf, s, p, t3, Some((from.0, &from.1)))
+        };
+        let child = Node::new(
+            game,
+            other(player),
+            counters,
+            arch,
+            root_turn,
+            params.k,
+            Some((player, goal.clone())),
+            &leaf_fn,
+        );
         let child_idx = self.nodes.len();
         self.nodes.push(child);
         self.nodes[parent].children[edge] = Some(child_idx);
@@ -653,7 +690,9 @@ impl<'a> MacroMctsAgent<'a> {
     /// would train the head toward the evaluator it is supposed to beat.
     pub fn last_root_value(&self) -> Option<f32> {
         match self.params.leaf {
-            MacroLeaf::Net | MacroLeaf::NetAsym => self.last_stats.root_q,
+            MacroLeaf::Net | MacroLeaf::NetAsym | MacroLeaf::NetAsymPaint => {
+                self.last_stats.root_q
+            }
             MacroLeaf::Heuristic => None,
         }
     }
@@ -844,6 +883,7 @@ mod tests {
                 Default::default(),
                 root_turn,
                 1,
+                None,
                 &heur,
             );
             n.candidates = vec![MacroGoal::default()];
@@ -1047,12 +1087,25 @@ mod tests {
         use crate::ai::macro_agent::MacroLeaf;
         let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
         let game = generated_game(3);
-        let a = leaf_value(&evaluator, MacroLeaf::NetAsym, &game.state, 1, 0);
-        let b = leaf_value(&evaluator, MacroLeaf::NetAsym, &game.state, 2, 0);
+        let a = leaf_value(&evaluator, MacroLeaf::NetAsym, &game.state, 1, 0, None);
+        let b = leaf_value(&evaluator, MacroLeaf::NetAsym, &game.state, 2, 0, None);
         assert!(
             (a + b).abs() < 1e-6,
             "NetAsym leaf must be zero-sum: v(p1)={a} v(p2)={b} sum={}",
             a + b
+        );
+        // B2 paints the two halves DIFFERENTLY (mover gets the edge directive,
+        // the other side its scripted goal), so the identity is worth pinning
+        // again: it survives because both perspectives reuse the same pair of
+        // numbers with the sign swapped, not because the paintings match.
+        let edge = scripted_goal(&game.state, 1, 0);
+        let from = Some((1 as PlayerId, &edge));
+        let c = leaf_value(&evaluator, MacroLeaf::NetAsymPaint, &game.state, 1, 0, from);
+        let d = leaf_value(&evaluator, MacroLeaf::NetAsymPaint, &game.state, 2, 0, from);
+        assert!(
+            (c + d).abs() < 1e-6,
+            "NetAsymPaint leaf must stay zero-sum: v(p1)={c} v(p2)={d} sum={}",
+            c + d
         );
     }
 
