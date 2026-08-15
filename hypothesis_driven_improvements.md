@@ -4714,3 +4714,54 @@ bought +2.1pp that does not clear noise. Two consequences:
      was designed to do moved nothing. The pattern is now strong enough
      to state plainly: the macro leaf's problem is not any single
      identified defect in how the value is READ.
+
+### ACTUAL — Phase B2, aligned painting (Aug 15, 2026, 1000 games, 41 min).
+**FALSIFIED, and it made things WORSE.** `NetAsymPaint` scored
+**399/1000 (39.9%)** vs the heuristic leaf. Paired on identical seeds:
+
+| arm | leaf | painting | wins |
+|---|---|---|---|
+| 046 re-run | net | scripted | 419 (41.9%) |
+| 047-B1 | net, antisymmetrized | scripted | 440 (44.0%) |
+| 047-B2 | net, antisymmetrized | **aligned** | 399 (39.9%) |
+
+B2 vs B1 (the clean painting isolation — both antisymmetrized, only the
+mover's painting differs): **z = -2.15** (B1-only 202, B2-only 161). The
+aligned painting is not neutral; it is significantly WORSE than the
+scripted painting it replaced.
+
+WHY, and it invalidates my in-distribution argument rather than the
+measurement. The goal channels mean "the directive I am ABOUT TO
+EXECUTE" — every training sample is a pre-move ply painted with the
+directive that then drove it. A leaf state is POST-`execute_turn`: the
+mover's directive is finished, and the state has already advanced through
+the turn boundary (the next player's income and city production are
+applied). Painting the just-executed directive there asks the head "what
+is this state worth if I am about to do g" about a state where g has
+already happened and is no longer available — a strictly WORSE
+off-distribution query than the scripted goal, which at least names
+something the player might do next. Phase A's 1.46x was measured at the
+ROOT, where the acting player really is about to execute the directive;
+that quantity does not transfer to the leaf, and I over-read it when I
+designed B2. The measurement was right; the fix direction was wrong.
+
+CONSEQUENCE. The painting thread is CLOSED with evidence, not abandoned:
+the mismatch is real at the root, the only alignment available at a leaf
+makes it worse, and no third option exists that does not require knowing
+the leaf player's future directive (i.e. a nested search). `NetAsymPaint`
+stays in the tree as a selectable leaf for the record but is NOT the
+default and should not be used.
+
+WHAT SURVIVES 047: `MacroLeaf::NetAsym` (+2.1pp, z=+1.08 — a real bug
+fixed, an insignificant gain), the probe, `root_q_spread`, and the two
+zero-sum tests. The heuristic leaf keeps the seat under all three arms.
+
+THE PROGRAM-LEVEL READ. 039 (twice), 045a, 047-B1 and 047-B2 now say the
+same thing from four directions: every defect identified in HOW THE TREE
+READS the value has been fixed or measured, and the net leaf still loses
+by 12-20pp. What has never been fixed is WHAT THE HEAD KNOWS — it is
+trained on 64-game rounds at ~135 iterations, reads value_r2 0.807 yet
+prices both players as winning on 21% of roots (Phase A), and was
+calibration-flagged as 2x over-confident when ahead long before any of
+this. The next credible move is data/labels/scale, not another consumer
+of the same head.
