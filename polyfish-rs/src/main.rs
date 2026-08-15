@@ -407,8 +407,8 @@ async fn rng_step(State(state): State<Arc<AppState>>) -> Json<Value> {
             break;
         }
 
-        use rand::seq::SliceRandom;
-        let mut rng = rand::thread_rng();
+        use rand::seq::IndexedRandom;
+        let mut rng = rand::rng();
         let chosen = moves.choose(&mut rng).unwrap();
 
         move_name = format!("{:?}", chosen.move_type());

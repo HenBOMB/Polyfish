@@ -248,7 +248,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
 
             let q_idx = if capital_cells.is_empty() {
                 // First player picks randomly
-                rng.gen_range(0..available_quads.len())
+                rng.random_range(0..available_quads.len())
             } else {
                 // Subsequent players pick a quadrant that is reasonably far from existing capitals.
                 // We calculate the center of the available quadrants and compare to existing capitals.
@@ -282,7 +282,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                     .map(|(idx, _)| idx)
                     .collect();
 
-                candidates[rng.gen_range(0..candidates.len())]
+                candidates[rng.random_range(0..candidates.len())]
             };
 
             let quad = available_quads.remove(q_idx);
@@ -300,8 +300,8 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                 .max(start_y + 1)
                 .min(size - 2);
 
-            let cx = rng.gen_range(start_x..end_x);
-            let cy = rng.gen_range(start_y..end_y);
+            let cx = rng.random_range(start_x..end_x);
+            let cy = rng.random_range(start_y..end_y);
             let chosen = cy * size + cx;
 
             capital_cells.push(chosen);
@@ -328,7 +328,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
     if settings.map_type == MapType::Lakes || settings.map_type == MapType::Archipelago {
         // Suburbs (1-2 per capital, within radius 3, distance >= 3)
         for &cap in &capital_cells {
-            let mut sub_count = rng.gen_range(1..=2);
+            let mut sub_count = rng.random_range(1..=2);
             let mut candidates: Vec<i32> = get_square(cap, 3, size)
                 .into_iter()
                 .filter(|&idx| {
@@ -340,7 +340,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                 .collect();
 
             while sub_count > 0 && !candidates.is_empty() {
-                let idx = candidates.remove(rng.gen_range(0..candidates.len()));
+                let idx = candidates.remove(rng.random_range(0..candidates.len()));
                 village_map[idx as usize] = 1;
                 map[idx as usize].above = Some("village".to_string());
                 map[idx as usize].terrain_type = TerrainType::Field;
@@ -382,7 +382,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
 
         let mut placed = 0;
         while placed < pre_terrain_count && !all_candidates.is_empty() {
-            let idx = all_candidates.remove(rng.gen_range(0..all_candidates.len()));
+            let idx = all_candidates.remove(rng.random_range(0..all_candidates.len()));
             village_map[idx as usize] = 1;
             map[idx as usize].above = Some("village".to_string());
             map[idx as usize].terrain_type = TerrainType::Field;
@@ -415,7 +415,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         let max_attempts = tile_count as usize * 10;
         let mut attempts = 0;
         while current_land < target_land && attempts < max_attempts {
-            let idx = rng.gen_range(0..tile_count) as usize;
+            let idx = rng.random_range(0..tile_count) as usize;
             if !is_land[idx] {
                 is_land[idx] = true;
                 current_land += 1;
@@ -430,13 +430,13 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         let grid_size = 4.max(size / 3);
         let mut base_grid = vec![0.0f32; (grid_size * grid_size) as usize];
         for val in &mut base_grid {
-            *val = rng.gen_range(-1.0..1.0);
+            *val = rng.random_range(-1.0..1.0);
         }
 
         let detail_size = grid_size * 2;
         let mut detail_grid = vec![0.0f32; (detail_size * detail_size) as usize];
         for val in &mut detail_grid {
-            *val = rng.gen_range(-0.5..0.5);
+            *val = rng.random_range(-0.5..0.5);
         }
 
         let active_villages: Vec<usize> = village_map
@@ -603,7 +603,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                     })
                     .collect();
 
-                if let Some(&idx) = candidates.get(rng.gen_range(0..candidates.len().max(1))) {
+                if let Some(&idx) = candidates.get(rng.random_range(0..candidates.len().max(1))) {
                     village_map[idx as usize] = 1;
                     if map[idx as usize].terrain_type == TerrainType::Forest {
                         map[idx as usize].terrain_type = TerrainType::Field;
@@ -637,7 +637,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                     break;
                 }
 
-                let idx = candidates[rng.gen_range(0..candidates.len())];
+                let idx = candidates[rng.random_range(0..candidates.len())];
                 village_map[idx as usize] = 1;
                 if map[idx as usize].terrain_type == TerrainType::Forest {
                     map[idx as usize].terrain_type = TerrainType::Field;
@@ -759,7 +759,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                     break;
                 }
 
-                let idx = candidates[rng.gen_range(0..candidates.len())];
+                let idx = candidates[rng.random_range(0..candidates.len())];
                 village_map[idx as usize] = 1;
                 if map[idx as usize].terrain_type == TerrainType::Forest {
                     map[idx as usize].terrain_type = TerrainType::Field;
@@ -858,7 +858,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
             if active[i].is_empty() {
                 continue;
             }
-            let idx = rng.gen_range(0..active[i].len());
+            let idx = rng.random_range(0..active[i].len());
             let cell = active[i][idx];
             let neighbors = get_square(cell, 1, size);
             let mut valid: Vec<i32> = neighbors
@@ -874,7 +874,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                     .collect();
             }
             if !valid.is_empty() {
-                let chosen = valid[rng.gen_range(0..valid.len())];
+                let chosen = valid[rng.random_range(0..valid.len())];
                 map[chosen as usize].tribe_affinity = Some(settings.tribes[i]);
                 active[i].push(chosen);
                 done.insert(chosen);
@@ -919,7 +919,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                 .tribe_affinity
                 .unwrap_or(TribeType::Luxidoor);
             let rates = get_tribe_biome_rates(tribe);
-            let r: f32 = rng.r#gen();
+            let r: f32 = rng.random();
             if r < rates.mountain {
                 map[i as usize].terrain_type = TerrainType::Mountain;
             } else if r < rates.mountain + rates.forest {
@@ -958,7 +958,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                 break;
             }
 
-            let idx = candidates[rng.gen_range(0..candidates.len())];
+            let idx = candidates[rng.random_range(0..candidates.len())];
             village_map[idx as usize] = 1;
             // Convert forest to field if needed
             if map[idx as usize].terrain_type == TerrainType::Forest {
@@ -1001,7 +1001,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
 
         let mut placed = 0;
         while placed < island_count && !island_candidates.is_empty() {
-            let idx = island_candidates.remove(rng.gen_range(0..island_candidates.len()));
+            let idx = island_candidates.remove(rng.random_range(0..island_candidates.len()));
             village_map[idx as usize] = 1;
             map[idx as usize].above = Some("village".to_string());
             map[idx as usize].terrain_type = TerrainType::Field;
@@ -1061,7 +1061,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
             if candidates.is_empty() {
                 break;
             }
-            let idx = candidates.remove(rng.gen_range(0..candidates.len()));
+            let idx = candidates.remove(rng.random_range(0..candidates.len()));
             map[idx as usize].terrain_type = target_terrain;
             map[idx as usize].above = Some(resource.to_string());
         }
@@ -1129,7 +1129,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                             cp = 0.0;
                         }
 
-                        let r: f32 = rng.r#gen();
+                        let r: f32 = rng.random();
                         if r < fp {
                             map[tile_idx as usize].above = Some("fruit".to_string());
                             if primary_res == "fruit" && inner {
@@ -1149,7 +1149,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                             gp = 0.0;
                         }
 
-                        if rng.r#gen::<f32>() < gp {
+                        if rng.random::<f32>() < gp {
                             map[tile_idx as usize].above = Some("game".to_string());
                             if primary_res == "game" && inner {
                                 current_res_count += 1;
@@ -1157,7 +1157,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                         }
                     }
                     TerrainType::Mountain => {
-                        if rng.r#gen::<f32>() < get_resource_prob("metal", tribe, inner) {
+                        if rng.random::<f32>() < get_resource_prob("metal", tribe, inner) {
                             map[tile_idx as usize].above = Some("metal".to_string());
                         }
                     }
@@ -1168,7 +1168,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                             fip = 0.0;
                         }
 
-                        if rng.r#gen::<f32>() < fip {
+                        if rng.random::<f32>() < fip {
                             map[tile_idx as usize].above = Some("fish".to_string());
                             if primary_res == "fish" && inner {
                                 current_res_count += 1;
@@ -1246,8 +1246,8 @@ pub fn generate(settings: MapGenSettings) -> GameState {
                 let mut candidates = get_square(cap, 2, size);
                 // Shuffle candidates deterministically using rng
                 for _ in 0..candidates.len() {
-                    let a = rng.gen_range(0..candidates.len());
-                    let b = rng.gen_range(0..candidates.len());
+                    let a = rng.random_range(0..candidates.len());
+                    let b = rng.random_range(0..candidates.len());
                     candidates.swap(a, b);
                 }
 
@@ -1287,7 +1287,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         if placed >= ruin_count {
             break;
         }
-        let idx = rng.gen_range(0..tile_count);
+        let idx = rng.random_range(0..tile_count);
         let terrain = map[idx as usize].terrain_type;
         let is_water = terrain == TerrainType::Water || terrain == TerrainType::Ocean;
 
@@ -1323,7 +1323,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
         if placed_starfish >= starfish_count {
             break;
         }
-        let idx = rng.gen_range(0..tile_count);
+        let idx = rng.random_range(0..tile_count);
         if (map[idx as usize].terrain_type == TerrainType::Water
             || map[idx as usize].terrain_type == TerrainType::Ocean)
             && map[idx as usize].above.is_none()

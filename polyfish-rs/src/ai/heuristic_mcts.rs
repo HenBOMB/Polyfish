@@ -156,10 +156,10 @@ impl GreedyHeuristicAgent {
         let chosen = if move_count < crate::ai::mcts_zero::ZeroMctsAgent::TEMPERATURE_MOVE_THRESHOLD
             && moves.len() > 1
         {
-            use rand::distributions::{Distribution, WeightedIndex};
+            use rand::distr::{Distribution, weighted::WeightedIndex};
             WeightedIndex::new(&probs)
                 .ok()
-                .map(|d| d.sample(&mut rand::thread_rng()))
+                .map(|d| d.sample(&mut rand::rng()))
         } else {
             None
         };
@@ -221,7 +221,7 @@ impl RandomAgent {
             })
             .collect();
 
-        let idx = rand::thread_rng().gen_range(0..moves.len());
+        let idx = rand::rng().random_range(0..moves.len());
         (Some(moves.swap_remove(idx)), visits)
     }
 }
@@ -297,12 +297,12 @@ impl HeuristicMctsAgent {
             < crate::ai::mcts_zero::ZeroMctsAgent::TEMPERATURE_MOVE_THRESHOLD
             && root.children.len() > 1
         {
-            use rand::distributions::{Distribution, WeightedIndex};
+            use rand::distr::{Distribution, weighted::WeightedIndex};
             let weights: Vec<f32> = root.children.iter().map(|c| c.visits.max(0.0)).collect();
             // All-zero weights error out; fall through to argmax below.
             WeightedIndex::new(&weights)
                 .ok()
-                .map(|dist| dist.sample(&mut rand::thread_rng()))
+                .map(|dist| dist.sample(&mut rand::rng()))
         } else {
             None
         };

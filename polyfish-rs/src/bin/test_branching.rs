@@ -53,8 +53,8 @@ fn main() {
                 current_turn, current_player, move_count, total_moves
             );
 
-            use rand::seq::SliceRandom;
-            if let Some(m) = legal_moves.choose(&mut rand::thread_rng()) {
+            use rand::seq::IndexedRandom;
+            if let Some(m) = legal_moves.choose(&mut rand::rng()) {
                 let _ = game.play_move(m.as_ref());
                 turn_count += 1;
             }

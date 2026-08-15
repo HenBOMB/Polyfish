@@ -40,7 +40,7 @@ use crate::ai::reward;
 use crate::game::Game;
 use crate::moves::{EndTurnMove, Move};
 use crate::types::MoveType;
-use rand::distributions::Distribution;
+use rand::distr::Distribution;
 use rand_distr::Gumbel;
 use std::cell::{Cell, RefCell};
 
@@ -469,7 +469,7 @@ impl<'a> GumbelMctsAgent<'a> {
 
         // Re-sample Gumbel(0,1) on the new root's children: they were created
         // as non-root nodes with gumbel = 0.0, but root candidates need noise.
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let gumbel_dist = Gumbel::new(0.0, 1.0).expect("BUG: Gumbel distribution");
         for c in &mut new_root.children {
             c.gumbel = gumbel_dist.sample(&mut rng);
@@ -522,7 +522,7 @@ impl<'a> GumbelMctsAgent<'a> {
         let logits =
             policy_composer::compute_move_log_probs_raw(policy_row, &legal_moves, map_size);
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let gumbel_dist = Gumbel::new(0.0, 1.0).expect("BUG: Gumbel distribution");
         root.children = legal_moves
             .into_iter()
@@ -1105,10 +1105,10 @@ impl<'a> GumbelMctsAgent<'a> {
             < crate::ai::mcts_zero::ZeroMctsAgent::TEMPERATURE_MOVE_THRESHOLD
             && root.children.len() > 1
         {
-            use rand::distributions::WeightedIndex;
+            use rand::distr::weighted::WeightedIndex;
             let weights: Vec<f32> = root.children.iter().map(|c| c.visits.max(0.0)).collect();
             match WeightedIndex::new(&weights) {
-                Ok(dist) => dist.sample(&mut rand::thread_rng()),
+                Ok(dist) => dist.sample(&mut rand::rng()),
                 // All-zero weights (nothing searched) — fall back to the recommendation.
                 Err(_) => self.recommend_final_move(&root),
             }

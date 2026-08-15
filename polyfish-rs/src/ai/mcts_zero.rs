@@ -138,7 +138,7 @@ impl<'a> ZeroMctsAgent<'a> {
         // Instead, we shuffle and pop.
         let mut book_moves = Book::recommend(game);
         if !book_moves.is_empty() {
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
             book_moves.shuffle(&mut rng);
             if let Some(m) = book_moves.pop() {
                 return Some(m);
@@ -174,7 +174,7 @@ impl<'a> ZeroMctsAgent<'a> {
         // We need to handle book moves but also return valid stats (policy) matching the legal moves order.
         let mut book_moves = Book::recommend(game);
         if !book_moves.is_empty() {
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
             book_moves.shuffle(&mut rng);
             if let Some(book_move) = book_moves.pop() {
                 // To return correct policy vector, we must know the legal moves order.
@@ -282,7 +282,7 @@ impl<'a> ZeroMctsAgent<'a> {
 
         let mut book_moves = Book::recommend(game);
         if !book_moves.is_empty() {
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
             book_moves.shuffle(&mut rng);
             if let Some(selected_move) = book_moves.pop() {
                 // Create MoveVisit for this move with 100% probability (iterations count)
@@ -307,13 +307,22 @@ impl<'a> ZeroMctsAgent<'a> {
 
         // Add Dirichlet noise to root priors for diverse exploration during training
         if root.children.len() > 1 {
-            use rand_distr::{Dirichlet, Distribution};
+            use rand::distr::Distribution;
+            use rand_distr::Gamma;
             // Alpha 0.3 is standard for Chess (~30 moves). Polytopia has variable moves but 0.3 is a safe default.
             // In polytopia by move ~7 it ramps upto 80!
             let alpha = 0.3;
             let epsilon = 0.25; // 25% noise
-            let dirichlet = Dirichlet::new_with_size(alpha, root.children.len()).unwrap();
-            let noise = dirichlet.sample(&mut rand::thread_rng());
+            let gamma = Gamma::new(alpha, 1.0).unwrap();
+            let mut noise: Vec<f32> = (0..root.children.len())
+                .map(|_| gamma.sample(&mut rand::rng()))
+                .collect();
+            let sum: f32 = noise.iter().sum();
+            if sum > 0.0 {
+                for n in &mut noise { *n /= sum; }
+            } else {
+                for n in &mut noise { *n = 1.0 / root.children.len() as f32; }
+            }
 
             for (child, n) in root.children.iter_mut().zip(noise.iter()) {
                 child.prior = (1.0 - epsilon) * child.prior + epsilon * n;
@@ -357,10 +366,10 @@ impl<'a> ZeroMctsAgent<'a> {
 
         // in early game, sample proportional to visit counts instead of argmax
         if move_count < Self::TEMPERATURE_MOVE_THRESHOLD && root.children.len() > 1 {
-            use rand::distributions::{Distribution, WeightedIndex};
+            use rand::distr::{Distribution, weighted::WeightedIndex};
             let weights: Vec<f32> = root.children.iter().map(|c| c.visits.max(0.0)).collect();
             if let Ok(dist) = WeightedIndex::new(&weights) {
-                best_idx = dist.sample(&mut rand::thread_rng());
+                best_idx = dist.sample(&mut rand::rng());
             }
         }
 
