@@ -20,14 +20,27 @@ pub fn xxhash32(input: &[u8], seed: u32) -> u32 {
 
         let mut offset = 0;
         while offset <= limit {
-            v1 = round(v1, u32::from_le_bytes(input[offset..offset + 4].try_into().unwrap()));
-            v2 = round(v2, u32::from_le_bytes(input[offset + 4..offset + 8].try_into().unwrap()));
-            v3 = round(v3, u32::from_le_bytes(input[offset + 8..offset + 12].try_into().unwrap()));
-            v4 = round(v4, u32::from_le_bytes(input[offset + 12..offset + 16].try_into().unwrap()));
+            v1 = round(
+                v1,
+                u32::from_le_bytes(input[offset..offset + 4].try_into().unwrap()),
+            );
+            v2 = round(
+                v2,
+                u32::from_le_bytes(input[offset + 4..offset + 8].try_into().unwrap()),
+            );
+            v3 = round(
+                v3,
+                u32::from_le_bytes(input[offset + 8..offset + 12].try_into().unwrap()),
+            );
+            v4 = round(
+                v4,
+                u32::from_le_bytes(input[offset + 12..offset + 16].try_into().unwrap()),
+            );
             offset += 16;
         }
 
-        h32 = v1.rotate_left(1)
+        h32 = v1
+            .rotate_left(1)
             .wrapping_add(v2.rotate_left(7))
             .wrapping_add(v3.rotate_left(12))
             .wrapping_add(v4.rotate_left(18));
@@ -87,6 +100,9 @@ mod tests {
         assert_eq!(xxhash32(b"a", 0), 1426945110);
         assert_eq!(xxhash32(b"Hello World", 0), 2986153710);
         assert_eq!(xxhash32(b"Hello World", 12345), 782531257);
-        assert_eq!(xxhash32(b"Once upon a time in a galaxy far far away...", 0), 531163085);
+        assert_eq!(
+            xxhash32(b"Once upon a time in a galaxy far far away...", 0),
+            531163085
+        );
     }
 }

@@ -23,9 +23,8 @@ use tch::{Device, Kind, Tensor};
 
 const FILTERS: i64 = 64;
 const NHEAD: i64 = 4;
-const GN_GROUPS: i64 = 8;
 const HEAD_DIM: i64 = FILTERS / NHEAD; // 16
-const PLAYER_DIM: i64 = 10;
+const PLAYER_DIM: i64 = 16;
 const SPATIAL: i64 = (MAP_SIZE * MAP_SIZE) as i64; // 121
 const BN_EPS: f64 = 1e-5;
 const LN_EPS: f64 = 1e-5;
@@ -46,16 +45,16 @@ impl TchPolyZeroNet {
             anyhow::bail!("Model file {path} not found (run init_model.py first)");
         }
         let named = Tensor::read_safetensors(path)?;
+        
+        // Reject older checkpoints that used BatchNorm to avoid subtle eval bugs
+        if named.keys().any(|k| k.contains("running_mean")) {
+            anyhow::bail!("Rejecting BatchNorm-era checkpoint (found running_mean)");
+        }
+
         let mut w = HashMap::with_capacity(named.len());
         for (name, tensor) in named {
             // Move each parameter onto the inference device once, up front.
             w.insert(name, tensor.to_device(device).to_kind(Kind::Float));
-        }
-        if w.contains_key("bn1.running_mean") {
-            anyhow::bail!(
-                "{path} is a BatchNorm-era checkpoint (has bn1.running_mean); \
-                 this build uses GroupNorm — regenerate the model (init_model.py + retrain)"
-            );
         }
         Ok(Self { w, device })
     }
@@ -84,21 +83,19 @@ impl TchPolyZeroNet {
         x.conv2d(w, Some(b), [1, 1], [padding, padding], [1, 1], 1)
     }
 
-    /// GroupNorm (mirror of train.py's `nn.GroupNorm(GN_GROUPS, C)`): identical
-    /// function in train and eval — no running stats, no train/serve gap.
     fn group_norm(&self, x: &Tensor, prefix: &str) -> Tensor {
         let weight = self.get(&format!("{prefix}.weight"));
         let bias = self.get(&format!("{prefix}.bias"));
-        x.group_norm(GN_GROUPS, Some(weight), Some(bias), BN_EPS, false)
+        x.group_norm(8, Some(weight), Some(bias), 1e-5, true)
     }
 
     fn res_block(&self, x: &Tensor, i: usize) -> Tensor {
         let p = format!("res_blocks.{i}");
         let residual = x.shallow_clone();
         let out = self.conv2d(x, &format!("{p}.c1"), 1);
-        let out = self.group_norm(&out, &format!("{p}.bn1")).relu();
+        let out = self.group_norm(&out, &format!("{p}.gn1")).relu();
         let out = self.conv2d(&out, &format!("{p}.c2"), 1);
-        let out = self.group_norm(&out, &format!("{p}.bn2"));
+        let out = self.group_norm(&out, &format!("{p}.gn2"));
         (out + residual).relu()
     }
 
@@ -170,7 +167,7 @@ impl TchPolyZeroNet {
 
         // 1. Spatial backbone
         let mut x = self.conv2d(&spatial, "conv1", 1);
-        x = self.group_norm(&x, "bn1").relu();
+        x = self.group_norm(&x, "gn1").relu();
         for i in 0..NUM_RES_BLOCKS {
             x = self.res_block(&x, i);
         }
@@ -180,18 +177,20 @@ impl TchPolyZeroNet {
         let spatial_tokens = x.flatten(2, 3).transpose(1, 2);
         // player tokens: player[B,10,1] * embeddings[1,10,D] -> [B,10,D]
         let emb = self.get("player_feature_embeddings").unsqueeze(0);
-        let player_tokens = player.unsqueeze(-1) * emb;
+        let pos_emb = self.get("player_pos_embeddings").unsqueeze(0);
+        let player_tokens = player.unsqueeze(-1) * emb + pos_emb;
         let player_tokens = self.linear(&player_tokens, "player_fc").relu();
 
         // 3. Cross-attention, back to [B, D, H, W]
         let attended = self.cross_attention(&spatial_tokens, &player_tokens);
-        let x = attended
-            .transpose(1, 2)
-            .contiguous()
-            .view([b, FILTERS, MAP_SIZE as i64, MAP_SIZE as i64]);
+        let x = attended.transpose(1, 2).contiguous().view([
+            b,
+            FILTERS,
+            MAP_SIZE as i64,
+            MAP_SIZE as i64,
+        ]);
 
         // Policy heads
-        // Pool convs are linear: no norm/activation (unnormed ReLU here goes dead).
         let p_pooled = self.conv2d(&x, "p_pool_conv", 0);
         let p_pooled = p_pooled.flatten(1, 3);
         let p_latent = self.linear(&p_pooled, "p_fc_shared").relu();
@@ -200,11 +199,14 @@ impl TchPolyZeroNet {
         let source_spatial = self.conv2d(&x, "pi_source", 0).flatten(1, 3); // [B, 121]
         let target_spatial = self.conv2d(&x, "pi_target", 0).flatten(1, 3); // [B, 121]
 
-        // Value head
-        let v_pooled = self.conv2d(&x, "v_pool_conv", 0);
-        let v_pooled = v_pooled.flatten(1, 3);
-        let v_latent = self.linear(&v_pooled, "v_fc_shared").relu();
-        let win = self.linear(&v_latent, "v_win").tanh(); // [B, 1]
+        // Value head (EXP_ARCH_001): global mean+max pool over the full trunk
+        // -> MLP. Mirrors network.rs / train.py.
+        let v_mean = x.mean_dim([2i64, 3].as_slice(), false, Kind::Float); // [B, FILTERS]
+        let v_max = x.amax([2i64, 3].as_slice(), false); // [B, FILTERS]
+        let v_feat = Tensor::cat(&[&v_mean, &v_max], 1); // [B, 2*FILTERS]
+        let v_latent = self.linear(&v_feat, "v_fc1").relu();
+        let v_latent = self.linear(&v_latent, "v_fc2").relu();
+        let win = self.linear(&v_latent, "v_win"); // [B, 1]
 
         // Read value + 4 policy heads back to CPU in a SINGLE device->CPU
         // copy. Each .to_device(Cpu) on MPS forces a commit +
@@ -220,14 +222,16 @@ impl TchPolyZeroNet {
         const ROW: usize = V + AT + SS + TS + MO; // 446
 
         let row = Tensor::cat(
-            &[&win, &action_type, &source_spatial, &target_spatial, &move_option],
+            &[
+                &win,
+                &action_type,
+                &source_spatial,
+                &target_spatial,
+                &move_option,
+            ],
             1,
         ); // [B, 446], on-device
-        let flat: Vec<f32> = row
-            .flatten(0, 1)
-            .to_device(Device::Cpu)
-            .try_into()
-            .unwrap(); // single sync point
+        let flat: Vec<f32> = row.flatten(0, 1).to_device(Device::Cpu).try_into().unwrap(); // single sync point
 
         let mut values = Vec::with_capacity(batch);
         let mut policy = Vec::with_capacity(batch);

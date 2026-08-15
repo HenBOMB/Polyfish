@@ -8,6 +8,7 @@ Creates a model.safetensors file with random weights matching the new architectu
 - 1 value head (win)
 """
 
+import os
 import torch
 import torch.nn as nn
 from safetensors.torch import save_file
@@ -19,13 +20,12 @@ from train import PolyZeroNet
 
 def init_model():
     MAP_SIZE = 11
-    SPATIAL_CHANNELS = 161  # Mirror of features.rs NUM_CHANNELS
-    PLAYER_STATE_DIM = 10
+    SPATIAL_CHANNELS = 142  # 136 + 6 fog-memory channels (see notes-memory.md)
+    PLAYER_STATE_DIM = 16
     
     # Check if model already exists to avoid overwriting trained weights!
-    import os
     if os.path.exists("model.safetensors"):
-        print("✅ model.safetensors already exists. Skipping initialization.")
+        print("⚠️ Skipped initialization: model.safetensors already exists")
         return
 
     print("Initializing enhanced PolyZero network...")
@@ -41,7 +41,7 @@ def init_model():
             nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
-        elif isinstance(m, (nn.GroupNorm, nn.LayerNorm)):
+        elif isinstance(m, nn.GroupNorm):
             nn.init.constant_(m.weight, 1)
             nn.init.constant_(m.bias, 0)
         elif isinstance(m, nn.Linear):
@@ -77,18 +77,14 @@ def init_model():
     
     model2.eval()
     with torch.no_grad():
-        policy, values, aux = model2(spatial_input, player_input)
+        policy, values = model2(spatial_input, player_input)
     
-    print("  Policy outputs:")
+    print(f"  Policy outputs:")
     for name, tensor in policy.items():
         print(f"    {name}: {tensor.shape}")
     
-    print("  Value outputs:")
+    print(f"  Value outputs:")
     for name, tensor in values.items():
-        print(f"    {name}: {tensor.shape}")
-
-    print("  Aux outputs (training-only):")
-    for name, tensor in aux.items():
         print(f"    {name}: {tensor.shape}")
     
     print("\n✅ Model initialization complete!")

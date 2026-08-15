@@ -8,6 +8,13 @@ import os
 import random
 import gc
 import time
+import argparse
+
+# Disable advanced SDP backends that may lack kernel images on older Kaggle GPUs (e.g. P100/T4)
+if hasattr(torch.backends.cuda, 'enable_flash_sdp'):
+    torch.backends.cuda.enable_flash_sdp(False)
+if hasattr(torch.backends.cuda, 'enable_mem_efficient_sdp'):
+    torch.backends.cuda.enable_mem_efficient_sdp(False)
 
 # --- Configuration ---
 BATCH_SIZE = 256
@@ -30,62 +37,57 @@ VALUE_LOSS_WEIGHT = float(os.environ.get("VALUE_LOSS_WEIGHT", "3.0"))
 # Forward-pass values are identical either way, so this is training-only and
 # needs no change on the Rust/candle inference side.
 DETACH_VALUE_TRUNK = os.environ.get("DETACH_VALUE_TRUNK", "0") == "1"
-# Random rot90/flip per batch (D4 dihedral): 8x effective spatial data.
-# Geometrically valid (no feature plane, player scalar, or rule is
-# orientation-dependent) but OFF by default: enabling it MID-RUN on the
-# 586K-param net collapsed play for ~8 iterations (run 1783556259 — policy
-# lost its orientation-specific fit, degraded games then fed back through
-# self-play). Opt in only for from-scratch runs, where the net never learns
-# orientation shortcuts to begin with.
+# Weight on the auxiliary per-tile final-ownership loss (KataGo-style). Kept
+# small so the dense spatial gradient shapes the trunk without competing with
+# policy/value. Set to 0 to disable. Training-only: search never reads the
+# ownership head, and the head reads the trunk directly (NOT gated by
+# DETACH_VALUE_TRUNK — trunk gradient is its entire purpose).
+OWNERSHIP_LOSS_WEIGHT = float(os.environ.get("OWNERSHIP_LOSS_WEIGHT", "0.15"))
+# D4 symmetry augmentation (AlphaZero-style): apply a random rotation/reflection
+# per batch to the spatial input and every spatial target. Polytopia's rules are
+# D4-symmetric, so each sample is 8 legal samples; blocks the net from keying on
+# absolute coordinates (map memorization). Training-only. Enable: AUGMENT_D4=1.
 AUGMENT_D4 = os.environ.get("AUGMENT_D4", "0") == "1"
-# Auxiliary training-only heads (end-game ownership / fog occupancy / SPT+5 /
-# opponent tech). Rust inference loads model.safetensors by name and never
-# reads these. Targets ship in games files from Jul 2026; files without them
-# (old archives, teachers) are masked out per sample, never zero-filled.
-AUX_DIMS = {'aux_ownership': 121, 'aux_fog_units': 121, 'aux_spt': 2, 'aux_opp_tech': 42}
-AUX_WEIGHTS = {
-    'aux_ownership': float(os.environ.get("AUX_OWN_W", "0.3")),
-    'aux_fog_units': float(os.environ.get("AUX_FOG_W", "0.2")),
-    'aux_spt': float(os.environ.get("AUX_SPT_W", "0.1")),
-    'aux_opp_tech': float(os.environ.get("AUX_TECH_W", "0.1")),
-}
 
-# Device selection: MPS (Apple Silicon) > CUDA (NVIDIA) > CPU
+# Device selection: CUDA (NVIDIA) > MPS (Apple Silicon) > CPU
+# Each backend gets its own try/except so a probe failure in one
+# doesn't skip the other (e.g. MPS raising on Linux kills the CUDA path).
+DEVICE = "cpu"
 try:
-    if torch.backends.mps.is_available():
-        # Apple Silicon Metal Performance Shaders
-        t = torch.tensor([1.0], device="mps")
-        DEVICE = "mps"
-    elif torch.cuda.is_available():
-        # NVIDIA CUDA
+    if torch.cuda.is_available():
         t = torch.tensor([1.0], device="cuda")
         DEVICE = "cuda"
-    else:
-        DEVICE = "cpu"
 except Exception as e:
-    print(f"Warning: GPU available but failed to initialize ({e}). Fallback to CPU.")
-    DEVICE = "cpu"
+    print(f"Warning: CUDA available but failed to initialize ({e}).")
 
+if DEVICE == "cpu":
+    try:
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            t = torch.tensor([1.0], device="mps")
+            DEVICE = "mps"
+    except Exception as e:
+        print(f"Warning: MPS available but failed to initialize ({e}).")
+
+print(f"Device: {DEVICE}  |  torch {torch.__version__}  |  CUDA build: {torch.version.cuda}  |  cuda.is_available(): {torch.cuda.is_available()}")
+if DEVICE == "cuda":
+    print(f"GPU: {torch.cuda.get_device_name(0)}")
+elif DEVICE == "cpu":
+    print("WARNING: Running on CPU! Training will be extremely slow.")
+    
 # Architecture matching Rust `network.rs` (decomposed policy + auxiliary values)
-# GroupNorm everywhere (no BatchNorm): per-sample statistics mean the exact
-# same function runs in train and eval mode — no running stats, no train/serve
-# gap (the BN calibration gap measured Jul 2026 was eval R² -0.75..-2.0 vs
-# train +0.50). Must stay mirrored with the Rust backends (GN_GROUPS there).
-GN_GROUPS = 8
-
 class ResBlock(nn.Module):
     def __init__(self, channels):
         super().__init__()
         self.c1 = nn.Conv2d(channels, channels, 3, padding=1)
-        self.bn1 = nn.GroupNorm(GN_GROUPS, channels)
+        self.gn1 = nn.GroupNorm(8, channels)
         self.c2 = nn.Conv2d(channels, channels, 3, padding=1)
-        self.bn2 = nn.GroupNorm(GN_GROUPS, channels)
+        self.gn2 = nn.GroupNorm(8, channels)
         self.relu = nn.ReLU()
 
     def forward(self, x):
         residual = x
-        out = self.relu(self.bn1(self.c1(x)))
-        out = self.bn2(self.c2(out))
+        out = self.relu(self.gn1(self.c1(x)))
+        out = self.gn2(self.c2(out))
         out += residual
         out = self.relu(out)
         return out
@@ -120,12 +122,13 @@ class PolyZeroNet(nn.Module):
         # Player state tokens: Project each of the 10 features into 64-dim embeddings
         # We learn a base embedding for each feature index and scale it by the value
         self.player_feature_embeddings = nn.Parameter(torch.randn(player_state_dim, self.filters))
+        self.player_pos_embeddings = nn.Parameter(torch.randn(player_state_dim, self.filters))
         self.player_fc = nn.Linear(self.filters, self.filters)
         self.player_relu = nn.ReLU()
         
         # Initial conv on spatial features
         self.conv1 = nn.Conv2d(spatial_channels, self.filters, 3, padding=1)
-        self.bn1 = nn.GroupNorm(GN_GROUPS, self.filters)
+        self.gn1 = nn.GroupNorm(8, self.filters)
         self.relu = nn.ReLU()
         
         # ResBlocks (Match Rust config)
@@ -137,9 +140,6 @@ class PolyZeroNet(nn.Module):
         
         # --- Decomposed Policy Heads ---
         # 1. Action Type (11 categories: Attack, Step, Build, etc.)
-        # No norm and no activation on the 1-channel pools: a per-sample norm
-        # would erase the map's overall level, and an unnormed ReLU here goes
-        # irreversibly dead (killed the value/action heads, Jul 2026).
         self.p_pool_conv = nn.Conv2d(self.filters, 1, 1)
         self.p_fc_shared = nn.Linear(map_height * map_width, self.filters)
         self.pi_action = nn.Linear(self.filters, 11)
@@ -152,31 +152,31 @@ class PolyZeroNet(nn.Module):
         self.pi_target = nn.Conv2d(self.filters, 1, 1)
         
         # --- Value Heads ---
-        self.v_pool_conv = nn.Conv2d(self.filters, 1, 1)
-        self.v_fc_shared = nn.Linear(1 * map_height * map_width, self.filters)
+        # Heavy value head (EXP_ARCH_001): global mean+max pool over the FULL
+        # 64-channel trunk -> 2-layer MLP. The old head collapsed the trunk to
+        # ONE channel and ran a single linear layer — a near-linear probe that
+        # cannot represent "am I winning" for a strategic game. This can.
+        self.v_fc1 = nn.Linear(2 * self.filters, self.filters)
+        self.v_fc2 = nn.Linear(self.filters, self.filters)
         self.v_win = nn.Linear(self.filters, 1)
         self.v_progress = nn.Linear(self.filters, 1)
-
-        # --- Aux Heads (training-only; Rust inference ignores these keys) ---
-        # Spatial pair reads the trunk directly; scalar pair reads a global
-        # average pool — deliberately not v_latent, whose 1-channel pool is a
-        # known bottleneck.
-        self.aux_own = nn.Conv2d(self.filters, 1, 1)
-        self.aux_fog = nn.Conv2d(self.filters, 1, 1)
-        self.aux_spt = nn.Linear(self.filters, 2)
-        self.aux_opp_tech = nn.Linear(self.filters, 42)
+        # Aux spatial head: predicted end-of-game per-tile ownership
+        # (+1 mine / -1 enemy / 0 neutral), trained with a small-weight MSE
+        # purely to densify trunk gradient. Never used by search.
+        self.v_ownership = nn.Conv2d(self.filters, 1, 1)
 
     def forward(self, spatial_map, player_state):
         batch_size = spatial_map.size(0)
         
         # 1. Spatial Backbone
-        x = self.relu(self.bn1(self.conv1(spatial_map)))
+        x = self.relu(self.gn1(self.conv1(spatial_map)))
         for res_block in self.res_blocks:
             x = res_block(x)
         
         # 2. Prepare Cross-Attention Inputs
         spatial_tokens = x.flatten(2).transpose(1, 2)
         player_tokens = player_state.unsqueeze(-1) * self.player_feature_embeddings.unsqueeze(0)
+        player_tokens = player_tokens + self.player_pos_embeddings.unsqueeze(0)
         player_tokens = self.player_relu(self.player_fc(player_tokens))
         
         # 3. Apply Cross-Attention
@@ -184,7 +184,8 @@ class PolyZeroNet(nn.Module):
         x = x_attended.transpose(1, 2).view(batch_size, self.filters, self.map_height, self.map_width)
         
         # --- Policy Heads ---
-        p_pooled = self.p_pool_conv(x).flatten(1)
+        p_pooled = self.p_pool_conv(x)
+        p_pooled = p_pooled.flatten(1)
         p_latent = self.relu(self.p_fc_shared(p_pooled))
         
         policy = {}
@@ -193,27 +194,29 @@ class PolyZeroNet(nn.Module):
         policy['source_spatial'] = self.pi_source(x).flatten(1)
         policy['target_spatial'] = self.pi_target(x).flatten(1)
         
-        # --- Aux Heads (off x, before any value-trunk detach) ---
-        aux = {}
-        aux['aux_ownership'] = torch.tanh(self.aux_own(x)).flatten(1)
-        aux['aux_fog_units'] = self.aux_fog(x).flatten(1)  # logits
-        gap = x.mean(dim=[2, 3])
-        aux['aux_spt'] = self.aux_spt(gap)
-        aux['aux_opp_tech'] = self.aux_opp_tech(gap)
-
         # --- Value Heads ---
         v_input = x.detach() if DETACH_VALUE_TRUNK else x
-        v_pooled = self.v_pool_conv(v_input).flatten(1)
-        v_latent = self.relu(self.v_fc_shared(v_pooled))
-
+        v_mean = v_input.mean(dim=(2, 3))          # [B, filters]
+        v_max = v_input.amax(dim=(2, 3))           # [B, filters]
+        v_feat = torch.cat([v_mean, v_max], dim=1)  # [B, 2*filters]
+        v_latent = self.relu(self.v_fc2(self.relu(self.v_fc1(v_feat))))
+        
         values = {}
-        values['win'] = torch.tanh(self.v_win(v_latent))
+        values['win'] = self.v_win(v_latent)
         values['progress'] = self.v_progress(v_latent)
+        values['ownership'] = self.v_ownership(x).flatten(1)
 
-        return policy, values, aux
+        return policy, values
 
-def compute_loss(policy_pred, values_pred, policy_targets, value_target,
-                 aux_pred=None, aux_targets=None, aux_mask=None):
+def apply_d4(x, k, flip):
+    """Rotate 90°·k then optionally mirror, over the trailing (H, W) dims."""
+    if k:
+        x = torch.rot90(x, k, dims=(-2, -1))
+    if flip:
+        x = torch.flip(x, dims=(-1,))
+    return x
+
+def compute_loss(policy_pred, values_pred, policy_targets, value_target):
     """
     Compute multi-head loss using decomposed targets.
     policy_targets is a dict containing the 7 target tensors.
@@ -253,33 +256,21 @@ def compute_loss(policy_pred, values_pred, policy_targets, value_target,
     # Prioritize winning/losing.
     value_loss = VALUE_LOSS_WEIGHT * loss_win + loss_progress
 
+    # Aux ownership loss, masked per sample so pre-ownership game files
+    # (mask=0) contribute nothing. Reported separately from value_loss to
+    # keep the value_loss series and value_r2 comparable across runs.
+    ownership_loss = torch.tensor(0.0, device=values_pred['win'].device)
+    if OWNERSHIP_LOSS_WEIGHT > 0 and 'ownership' in value_target and 'ownership' in values_pred:
+        mask = value_target['ownership_mask']  # [B, 1]
+        n_valid = mask.sum()
+        if n_valid > 0:
+            per_sample = ((values_pred['ownership'] - value_target['ownership']) ** 2).mean(dim=1, keepdim=True)
+            ownership_loss = OWNERSHIP_LOSS_WEIGHT * (per_sample * mask).sum() / n_valid
+
     # Total loss
-    total_loss = total_policy_loss + value_loss
+    total_loss = total_policy_loss + value_loss + ownership_loss
 
-    # Aux heads: per-sample loss, masked to samples whose file carried aux
-    # targets (old archives/teachers never do). Raw values are returned for
-    # metrics; only the weighted sum joins total_loss — value_loss/loss_win
-    # semantics stay untouched.
-    aux_losses = {}
-    if aux_pred is not None and aux_targets and aux_mask is not None:
-        bce = nn.functional.binary_cross_entropy_with_logits
-        per_sample = {
-            'aux_ownership': lambda p, t: ((p - t) ** 2).mean(dim=1),
-            'aux_fog_units': lambda p, t: bce(p, t, reduction='none').mean(dim=1),
-            'aux_spt': lambda p, t: ((p - t) ** 2).mean(dim=1),
-            'aux_opp_tech': lambda p, t: bce(p, t, reduction='none').mean(dim=1),
-        }
-        denom = aux_mask.sum().clamp(min=1.0)
-        for k, fn in per_sample.items():
-            if AUX_WEIGHTS[k] == 0.0 or k not in aux_targets:
-                continue
-            l = (fn(aux_pred[k], aux_targets[k]) * aux_mask).sum() / denom
-            aux_losses[k] = l
-            total_loss = total_loss + AUX_WEIGHTS[k] * l
-
-    # loss_win returned raw (unweighted, no aux terms) — value_r2 needs it;
-    # value_loss alone can't be unweighted once loss_progress is mixed in.
-    return total_loss, total_policy_loss, value_loss, loss_win, aux_losses
+    return total_loss, total_policy_loss, value_loss, ownership_loss, loss_win
 
 def batch_report_indices(total_batches, max_reports=10):
     """Pick up to `max_reports` evenly spaced batch numbers to log."""
@@ -293,7 +284,91 @@ def batch_report_indices(total_batches, max_reports=10):
         indices.add(batch_num)
     return indices
 
-def train():
+def _migrate_checkpoint(state_dict, model, player_state_dim):
+    """Transform a legacy state_dict to match the current model architecture.
+
+    Returns (state_dict, migrations) where *migrations* is a list of
+    human-readable strings describing what was changed.  An empty list means
+    the checkpoint was already up-to-date.
+    """
+    migrations = []
+    filters = state_dict['v_win.weight'].shape[1]  # always 64
+
+    # ------------------------------------------------------------------
+    # 1. Value-head swap: v_pool_conv / v_fc_shared  →  v_fc1 / v_fc2
+    #    The old head collapsed the trunk to 1 channel then ran a single
+    #    linear; the new head uses global mean+max pool → 2-layer MLP.
+    #    Weights are not transferable, so we initialise from the model's
+    #    freshly-created parameters and delete the stale keys.
+    # ------------------------------------------------------------------
+    stale_value_prefixes = ("v_pool_conv.", "v_fc_shared.")
+    stale_keys = [k for k in state_dict if k.startswith(stale_value_prefixes)]
+    new_value_prefixes = ("v_fc1.", "v_fc2.")
+    new_keys_missing = any(
+        k.startswith(new_value_prefixes)
+        for k in model.state_dict()
+    ) and not any(
+        k.startswith(new_value_prefixes)
+        for k in state_dict
+    )
+    if stale_keys or new_keys_missing:
+        for k in stale_keys:
+            del state_dict[k]
+        # Seed v_fc1/v_fc2 from model's random init so load_state_dict
+        # won't report them as missing.
+        for k, v in model.state_dict().items():
+            if k.startswith(new_value_prefixes):
+                state_dict[k] = v.clone()
+        dropped = ", ".join(sorted(stale_keys)) if stale_keys else "(none)"
+        migrations.append(
+            f"value-head: dropped [{dropped}], initialised v_fc1/v_fc2 fresh"
+        )
+
+    # ------------------------------------------------------------------
+    # 2. Player embeddings: resize (old_dim, filters) → (player_state_dim, filters)
+    #    Preserve existing rows and pad new rows with the model's fresh init.
+    # ------------------------------------------------------------------
+    for name in ("player_pos_embeddings", "player_feature_embeddings"):
+        if name not in state_dict:
+            # Very old checkpoint; take the model's full init.
+            state_dict[name] = model.state_dict()[name].clone()
+            migrations.append(f"{name}: created ({player_state_dim}, {filters})")
+            continue
+        old = state_dict[name]
+        if old.shape[0] != player_state_dim:
+            new = model.state_dict()[name].clone()  # (player_state_dim, filters)
+            keep = min(old.shape[0], player_state_dim)
+            new[:keep] = old[:keep]
+            state_dict[name] = new
+            migrations.append(
+                f"{name}: resized ({old.shape[0]}, {filters}) → ({player_state_dim}, {filters})"
+            )
+
+    # ------------------------------------------------------------------
+    # 3. v_progress head (added after initial arch)
+    # ------------------------------------------------------------------
+    if "v_progress.weight" not in state_dict:
+        state_dict["v_progress.weight"] = torch.randn(1, filters) * 0.01
+        state_dict["v_progress.bias"] = torch.zeros(1)
+        migrations.append("v_progress: initialised fresh")
+
+    # ------------------------------------------------------------------
+    # 4. Fog-memory: zero-pad conv1 input channels 136 → 142
+    # ------------------------------------------------------------------
+    conv1 = state_dict.get("conv1.weight")
+    if conv1 is not None and conv1.shape[1] < 142:
+        old_ch = conv1.shape[1]
+        pad = torch.zeros(conv1.shape[0], 142 - old_ch, conv1.shape[2], conv1.shape[3])
+        state_dict["conv1.weight"] = torch.cat([conv1, pad], dim=1)
+        migrations.append(f"conv1.weight: padded input channels {old_ch} → 142")
+
+    return state_dict, migrations
+
+
+def train(batch_size=BATCH_SIZE, epochs=EPOCHS, lr=LEARNING_RATE, chunk_size=None, benchmark_mode=False):
+    if chunk_size is None:
+        chunk_size = int(os.environ.get("TRAIN_CHUNK_FILES", "10"))
+
     # 1. Load Data
     fresh_files = glob.glob("games_*.safetensors")
     archive_files = sorted(glob.glob("archive/games_*.safetensors"), key=os.path.getmtime, reverse=True)
@@ -310,6 +385,8 @@ def train():
 
     if not game_files:
         print("No training data found (checked ./, ./archive/, and ./teachers/)!")
+        if benchmark_mode:
+            return 0, 0
         return
 
     print(f"Training on {len(game_files)} files ({len(fresh_files)} fresh, "
@@ -317,37 +394,53 @@ def train():
     
     # 2. Init Model
     MAP_SIZE = 11
-    SPATIAL_CHANNELS = 161  # mirror of features.rs NUM_CHANNELS (incl. observation memory)
-    PLAYER_STATE_DIM = 10
+    SPATIAL_CHANNELS = 142  # 136 + 6 fog-memory channels (see notes-memory.md)
+    PLAYER_STATE_DIM = 16
 
     model = PolyZeroNet(SPATIAL_CHANNELS, PLAYER_STATE_DIM, MAP_SIZE, MAP_SIZE).to(DEVICE)
     if os.path.exists("model.safetensors"):
         try:
-            # strict=False: newly added heads (e.g. v_progress) are absent
-            # from older checkpoints and must start fresh WITHOUT discarding
-            # the trained trunk — a strict load would throw and silently
-            # reinitialize everything via the except branch below.
-            missing, unexpected = model.load_state_dict(
-                load_file("model.safetensors"), strict=False
-            )
-            if missing or unexpected:
-                print(f"Partial checkpoint load — missing: {missing}, unexpected: {unexpected}")
+            ckpt = load_file("model.safetensors")
+            ckpt, migrations = _migrate_checkpoint(ckpt, model, PLAYER_STATE_DIM)
+            if migrations:
+                print(f"Checkpoint migrated: {'; '.join(migrations)}")
+            # strict=False lets checkpoints that predate the aux ownership
+            # head load in place (the head keeps its fresh init). Any OTHER
+            # mismatch is still fatal so a wrong-architecture checkpoint
+            # can't silently half-load.
+            missing, unexpected = model.load_state_dict(ckpt, strict=False)
+            hard_missing = [k for k in missing if not k.startswith("v_ownership.")]
+            if hard_missing or unexpected:
+                raise RuntimeError(f"state_dict mismatch: missing={hard_missing} unexpected={list(unexpected)}")
+            if missing:
+                print(f"Checkpoint predates ownership head; initializing {missing} fresh.")
+        except RuntimeError:
+            raise
+        except FileNotFoundError:
+            print("No checkpoint found; starting from scratch.")
         except Exception as e:
             print(f"Could not load model: {e}")
             print("Starting from scratch.")
     model.train()
 
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    optimizer = optim.Adam(model.parameters(), lr=lr)
     # Use CosineAnnealing with Warm Restarts for better convergence on short cycles
     # T_0=5 means it resets every 5 epochs (which is exactly our run length)
-    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=EPOCHS, T_mult=1, eta_min=1e-5)
+    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=epochs, T_mult=1, eta_min=1e-5)
+
+    # In benchmark mode, limit to 1 epoch and max 2 chunks to save time
+    if benchmark_mode:
+        epochs = 1
+        num_benchmark_samples = 0
+        benchmark_start_time = 0
 
     # 3. Training Loop
-    for epoch in range(EPOCHS):
+    for epoch in range(epochs):
         total_loss = 0
         total_p_loss = 0
         total_v_loss = 0
-        total_v_win = 0
+        total_o_loss = 0
+        total_w_loss = 0
         total_batches = 0
         # Streaming mean/variance of the value targets seen this epoch, so
         # value_r2 (below) compares MSE against the actual training-mix
@@ -356,24 +449,28 @@ def train():
         target_sum = 0.0
         target_sumsq = 0.0
         target_n = 0
-        total_aux = {k: 0.0 for k in AUX_DIMS}
-        total_aux_n = 0.0
 
         random.shuffle(game_files)
 
         # Process in chunks. All files in a chunk are held in RAM at once, so
         # lower TRAIN_CHUNK_FILES when individual game files are large.
-        CHUNK_SIZE = int(os.environ.get("TRAIN_CHUNK_FILES", "10"))
-        num_chunks = (len(game_files) + CHUNK_SIZE - 1) // CHUNK_SIZE
+        num_chunks = (len(game_files) + chunk_size - 1) // chunk_size
 
-        print(f"\n=== Epoch {epoch+1}/{EPOCHS} ===")
+        # In benchmark mode, only process the first chunk to get throughput
+        if benchmark_mode:
+            num_chunks = 1
+
+        print(f"\n=== Epoch {epoch+1}/{epochs} ===")
 
         report_batch_indices = None
         epoch_batch_estimate = None
 
-        for i in range(0, len(game_files), CHUNK_SIZE):
-            chunk_files = game_files[i : i + CHUNK_SIZE]
-            chunk_idx = i // CHUNK_SIZE + 1
+        for i in range(0, len(game_files), chunk_size):
+            if benchmark_mode and (i // chunk_size) >= 1:
+                break
+            
+            chunk_files = game_files[i : i + chunk_size]
+            chunk_idx = i // chunk_size + 1
             print(f"Epoch {epoch+1}: Loading chunk {chunk_idx}/{num_chunks} ({len(chunk_files)} files)...")
             
             # Temporary storage for chunk data
@@ -381,57 +478,49 @@ def train():
             c_player = []
             c_win = []
             c_progress = []
-            
+            c_ownership = []
+            c_ownership_mask = []
+            c_n_samples = []
+
             c_heads = {
                 'action_type': [], 'source_spatial': [], 'target_spatial': [], 'move_option': []
             }
-            c_aux = {k: [] for k in AUX_DIMS}
-            c_aux_mask = []
 
-            expected_flat = SPATIAL_CHANNELS * MAP_SIZE * MAP_SIZE
-            legacy_flat = 154 * MAP_SIZE * MAP_SIZE  # pre-observation-memory layout
             for f in chunk_files:
                 try:
                     data = load_file(f)
-                    sp = data["spatial_maps"]
-                    if sp.shape[1] != expected_flat:
-                        # Channels were appended at the end of the layout, so old
-                        # files are index-stable: zero-pad the missing planes.
-                        if sp.shape[1] == legacy_flat:
-                            sp = torch.nn.functional.pad(sp, (0, expected_flat - legacy_flat))
-                        else:
-                            raise ValueError(
-                                f"{f}: spatial width {sp.shape[1]} matches neither "
-                                f"current ({expected_flat}) nor legacy ({legacy_flat}) layout"
-                            )
-                    c_spatial.append(sp)
+                    
+                    # Pad legacy spatial maps to current SPATIAL_CHANNELS
+                    smaps = data["spatial_maps"]
+                    if smaps.shape[1] < SPATIAL_CHANNELS:
+                        B, C, H, W = smaps.shape
+                        pad = torch.zeros(B, SPATIAL_CHANNELS - C, H, W, dtype=smaps.dtype)
+                        smaps = torch.cat([smaps, pad], dim=1)
+                    c_spatial.append(smaps)
                     c_player.append(data["player_states"])
                     c_win.append(data["values"])
                     if "progress" in data:
                         c_progress.append(data["progress"])
                     else:
                         c_progress.append(torch.zeros_like(data["values"]))
+                    n_samples = data["values"].shape[0]
+                    if "ownership" in data:
+                        c_ownership.append(data["ownership"])
+                        c_ownership_mask.append(torch.ones(n_samples, 1))
+                    else:
+                        # Pre-ownership file: zero-fill and mask out.
+                        c_ownership.append(torch.zeros(n_samples, MAP_SIZE * MAP_SIZE))
+                        c_ownership_mask.append(torch.zeros(n_samples, 1))
+                    
+                    c_n_samples.append(n_samples)
                     
                     # Load all policy heads
                     for head in c_heads.keys():
                         if head in data:
                             c_heads[head].append(data[head])
                         else:
-                            pass
-
-                    # Aux targets: per-file all-or-nothing presence mask.
-                    # Masked, never zero-filled — a zero-filled target would
-                    # silently train the head toward 0 on legacy samples.
-                    n = data["values"].shape[0]
-                    if all(k in data for k in AUX_DIMS):
-                        for k in AUX_DIMS:
-                            c_aux[k].append(data[k])
-                        c_aux_mask.append(torch.ones(n))
-                    else:
-                        for k, d in AUX_DIMS.items():
-                            c_aux[k].append(torch.zeros(n, d))
-                        c_aux_mask.append(torch.zeros(n))
-
+                            c_heads[head].append(None)
+                            
                 except Exception as e:
                     print(f"Error loading {f}: {e}")
                     continue
@@ -446,33 +535,31 @@ def train():
                 
                 targets_win = torch.cat(c_win)
                 targets_progress = torch.cat(c_progress) if c_progress else None
-                
+                targets_ownership = torch.cat(c_ownership) if c_ownership else None
+                targets_ownership_mask = torch.cat(c_ownership_mask) if c_ownership_mask else None
+
                 target_heads = {}
                 for head, tensors in c_heads.items():
-                    if tensors:
-                        target_heads[head] = torch.cat(tensors)
-
-                # Guard against unnormalized policy rows: games generated before
-                # Jul 2026 carry raw visit counts (sums up to 64) in move_option —
-                # each acts as a ~30-64x weighted sample and destabilizes training.
-                # Rows legitimately sum to <=1 (partial mass by design); only
-                # renormalize rows whose mass exceeds 1.
-                for head, t in target_heads.items():
-                    rs = t.sum(dim=1, keepdim=True)
-                    if (rs > 1.001).any():
-                        target_heads[head] = torch.where(rs > 1.001, t / rs, t)
-
-                # Kept out of target_heads: the renorm guard above would
-                # corrupt fog/ownership rows (their sums are counts, not mass).
-                target_aux = {k: torch.cat(v) for k, v in c_aux.items()}
-                aux_mask = torch.cat(c_aux_mask)
-
-            except RuntimeError as e:
+                    valid_tensors = [t for t in tensors if t is not None]
+                    if valid_tensors:
+                        head_shape = valid_tensors[0].shape[1:]
+                        head_dtype = valid_tensors[0].dtype
+                        filled = []
+                        for i, t in enumerate(tensors):
+                            if t is not None:
+                                filled.append(t)
+                            else:
+                                filled.append(torch.zeros((c_n_samples[i], *head_shape), dtype=head_dtype))
+                        target_heads[head] = torch.cat(filled)
+                    
+            except Exception as e:
+                if "out of memory" not in str(e).lower() and "OutOfMemoryError" not in e.__class__.__name__:
+                    raise e
                 print(f"OOM loading chunk: {e}")
                 continue
             
             # Cleanup lists
-            del c_spatial, c_player, c_win, c_progress, c_aux, c_aux_mask
+            del c_spatial, c_player, c_win, c_progress, c_ownership, c_ownership_mask
             gc.collect()
             
             dataset_size = len(spatial_maps)
@@ -480,7 +567,7 @@ def train():
 
             if epoch_batch_estimate is None and len(chunk_files) > 0:
                 est_samples = int(dataset_size / len(chunk_files) * len(game_files))
-                epoch_batch_estimate = (est_samples + BATCH_SIZE - 1) // BATCH_SIZE
+                epoch_batch_estimate = (est_samples + batch_size - 1) // batch_size
                 report_batch_indices = batch_report_indices(epoch_batch_estimate)
                 if epoch_batch_estimate <= 10:
                     print(f"  Reporting all {epoch_batch_estimate} batches.")
@@ -488,11 +575,14 @@ def train():
                     print(f"  Reporting ~10/{epoch_batch_estimate} sampled batches.")
 
             indices = torch.randperm(dataset_size)
-            num_batches_in_chunk = (dataset_size + BATCH_SIZE - 1) // BATCH_SIZE
+            num_batches_in_chunk = (dataset_size + batch_size - 1) // batch_size
             chunk_start_time = time.time()
+            if benchmark_mode and benchmark_start_time == 0:
+                benchmark_start_time = chunk_start_time
+                num_benchmark_samples = dataset_size
 
-            for batch_num, j in enumerate(range(0, dataset_size, BATCH_SIZE), start=1):
-                batch_idx = indices[j : j + BATCH_SIZE]
+            for batch_num, j in enumerate(range(0, dataset_size, batch_size), start=1):
+                batch_idx = indices[j : j + batch_size]
                 
                 batch_spatial = spatial_maps[batch_idx].to(DEVICE)
                 batch_player = player_states[batch_idx].to(DEVICE)
@@ -506,50 +596,37 @@ def train():
 
                 if targets_progress is not None:
                     batch_values['progress'] = targets_progress[batch_idx].to(DEVICE)
+                if targets_ownership is not None:
+                    batch_values['ownership'] = targets_ownership[batch_idx].to(DEVICE)
+                    batch_values['ownership_mask'] = targets_ownership_mask[batch_idx].to(DEVICE)
                 batch_targets = {}
                 for head, tensor in target_heads.items():
                     batch_targets[head] = tensor[batch_idx].to(DEVICE)
-                batch_aux = {k: t[batch_idx].to(DEVICE) for k, t in target_aux.items()}
-                batch_aux_mask = aux_mask[batch_idx].to(DEVICE)
-
+                
                 # Reshape spatial to (B, C, H, W)
                 batch_spatial = batch_spatial.view(-1, SPATIAL_CHANNELS, MAP_SIZE, MAP_SIZE)
 
-                # D4 dihedral augmentation: one random board symmetry per batch.
-                # Only the two spatial policy heads live in tile space and must
-                # co-transform; action/option/value/progress are orientation-free.
+                # --- DATA AUGMENTATION (Dihedral Group D4) ---
+                # One random transform per batch; global heads (action_type,
+                # move_option), player state, and value targets are invariant.
                 if AUGMENT_D4:
-                    k = random.randint(0, 3)
-                    do_flip = random.random() < 0.5
-                    if k > 0 or do_flip:
-                        if k > 0:
-                            batch_spatial = torch.rot90(batch_spatial, k, [2, 3])
-                        if do_flip:
-                            batch_spatial = torch.flip(batch_spatial, [3])
+                    k = random.randrange(4)
+                    flip = random.random() < 0.5
+                    if k or flip:
+                        batch_spatial = apply_d4(batch_spatial, k, flip)
                         for head in ('source_spatial', 'target_spatial'):
                             if head in batch_targets:
-                                t = batch_targets[head].view(-1, 1, MAP_SIZE, MAP_SIZE)
-                                if k > 0:
-                                    t = torch.rot90(t, k, [2, 3])
-                                if do_flip:
-                                    t = torch.flip(t, [3])
-                                batch_targets[head] = t.flatten(1)
-                        # The two tile-space aux targets must co-transform too.
-                        for head in ('aux_ownership', 'aux_fog_units'):
-                            t = batch_aux[head].view(-1, 1, MAP_SIZE, MAP_SIZE)
-                            if k > 0:
-                                t = torch.rot90(t, k, [2, 3])
-                            if do_flip:
-                                t = torch.flip(t, [3])
-                            batch_aux[head] = t.flatten(1)
+                                t = batch_targets[head].view(-1, MAP_SIZE, MAP_SIZE)
+                                batch_targets[head] = apply_d4(t, k, flip).reshape(-1, MAP_SIZE * MAP_SIZE)
+                        if 'ownership' in batch_values:
+                            t = batch_values['ownership'].view(-1, MAP_SIZE, MAP_SIZE)
+                            batch_values['ownership'] = apply_d4(t, k, flip).reshape(-1, MAP_SIZE * MAP_SIZE)
 
                 optimizer.zero_grad()
                 
-                policy_pred, values_pred, aux_pred = model(batch_spatial, batch_player)
-
-                loss, p_loss, v_loss, v_win_loss, aux_losses = compute_loss(
-                    policy_pred, values_pred, batch_targets, batch_values,
-                    aux_pred, batch_aux, batch_aux_mask)
+                policy_pred, values_pred = model(batch_spatial, batch_player)
+                
+                loss, p_loss, v_loss, o_loss, w_loss = compute_loss(policy_pred, values_pred, batch_targets, batch_values)
 
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -558,15 +635,9 @@ def train():
                 total_loss += loss.item()
                 total_p_loss += p_loss.item()
                 total_v_loss += v_loss.item()
-                total_v_win += v_win_loss.item()
+                total_o_loss += o_loss.item()
+                total_w_loss += w_loss.item()
                 total_batches += 1
-                # Mask-count-weighted: batches of teacher/legacy samples add
-                # zero weight, so the epoch average can't drift toward 0.
-                aux_n = batch_aux_mask.sum().item()
-                if aux_n > 0:
-                    total_aux_n += aux_n
-                    for k, l in aux_losses.items():
-                        total_aux[k] += l.item() * aux_n
 
                 elapsed = time.time() - chunk_start_time
                 global_batch_num = total_batches
@@ -577,11 +648,12 @@ def train():
                         f"{f'/{epoch_batch_estimate}' if epoch_batch_estimate else ''} "
                         f"(chunk {chunk_idx}/{num_chunks} {batch_num}/{num_batches_in_chunk}) "
                         f"- loss: {total_loss/total_batches:.4f} "
-                        f"(policy: {total_p_loss/total_batches:.4f}, value: {total_v_loss/total_batches:.4f}) "
+                        f"(policy: {total_p_loss/total_batches:.4f}, value: {total_v_loss/total_batches:.4f}, "
+                        f"ownership: {total_o_loss/total_batches:.4f}) "
                         f"- {batches_per_sec:.1f} batch/s"
                     )
 
-            del spatial_maps, player_states, targets_win, target_heads, target_aux, aux_mask
+            del spatial_maps, player_states, targets_win, targets_ownership, targets_ownership_mask, target_heads
             if DEVICE == "cuda":
                 torch.cuda.empty_cache()
             elif DEVICE == "mps":
@@ -592,37 +664,39 @@ def train():
             avg_loss = total_loss / total_batches
             avg_p_loss = total_p_loss / total_batches
             avg_v_loss = total_v_loss / total_batches
-            print(f"Epoch {epoch+1}/{EPOCHS} - Loss: {avg_loss:.4f} (Policy: {avg_p_loss:.4f}, Value: {avg_v_loss:.4f})")
+            avg_o_loss = total_o_loss / total_batches
+            print(f"Epoch {epoch+1}/{epochs} - Loss: {avg_loss:.4f} (Policy: {avg_p_loss:.4f}, Value: {avg_v_loss:.4f}, Ownership: {avg_o_loss:.4f})")
         else:
-            print(f"Epoch {epoch+1}/{EPOCHS} - No data processed")
+            print(f"Epoch {epoch+1}/{epochs} - No data processed")
 
         scheduler.step()
 
     final_loss = total_loss / total_batches if total_batches > 0 else 0.0
     final_p_loss = total_p_loss / total_batches if total_batches > 0 else 0.0
     final_v_loss = total_v_loss / total_batches if total_batches > 0 else 0.0
-    final_v_win = total_v_win / total_batches if total_batches > 0 else 0.0
-    final_aux = {
-        k: (total_aux[k] / total_aux_n if total_aux_n > 0 else 0.0)
-        for k in AUX_DIMS
-    }
+    final_o_loss = total_o_loss / total_batches if total_batches > 0 else 0.0
+    final_w_loss = total_w_loss / total_batches if total_batches > 0 else 0.0
 
-    # R^2 of the win head against the LAST epoch's own target distribution:
+    # R^2 of the value head against the LAST epoch's own target distribution:
     # 1 - MSE/Var. Small MSE alone is meaningless if the targets barely vary
     # (a constant-mean predictor would also score low MSE) — this is the
-    # number that actually says whether the head explains anything. Uses the
-    # raw win MSE tracked separately in compute_loss, so neither
-    # VALUE_LOSS_WEIGHT nor the aux progress loss bundled into value_loss
-    # can skew it.
+    # number that actually says whether the head explains anything.
     if target_n > 0:
         target_mean = target_sum / target_n
         target_var = target_sumsq / target_n - target_mean * target_mean
-        value_r2 = 1.0 - final_v_win / target_var if target_var > 1e-8 else 0.0
+        value_r2 = 1.0 - final_w_loss / target_var if target_var > 1e-8 else 0.0
     else:
         value_r2 = 0.0
 
-    # (BatchNorm recalibration used to live here; GroupNorm has no running
-    # stats and no train/eval duality, so there is nothing to calibrate.)
+    if benchmark_mode:
+        if num_benchmark_samples > 0 and benchmark_start_time > 0:
+            total_time = time.time() - benchmark_start_time
+            samples_per_sec = num_benchmark_samples / total_time
+            max_memory_mb = 0
+            if DEVICE == "cuda":
+                max_memory_mb = torch.cuda.max_memory_allocated() / (1024 * 1024)
+            return samples_per_sec, max_memory_mb
+        return 0, 0
 
     # 4. Save Model in f16 for blazing fast CPU inference
     half_state = {k: v.half() for k, v in model.state_dict().items()}
@@ -634,15 +708,66 @@ def train():
                 "loss": round(final_loss, 4),
                 "policy_loss": round(final_p_loss, 4),
                 "value_loss": round(final_v_loss, 4),
+                "ownership_loss": round(final_o_loss, 4),
                 "value_r2": round(value_r2, 4),
-                "aux_own_loss": round(final_aux['aux_ownership'], 4),
-                "aux_fog_loss": round(final_aux['aux_fog_units'], 4),
-                "aux_spt_loss": round(final_aux['aux_spt'], 4),
-                "aux_tech_loss": round(final_aux['aux_opp_tech'], 4),
             },
             f,
         )
 
+def run_benchmark():
+    print("=========================================================")
+    print("🚀 RUNNING TRAINING BENCHMARK")
+    print("Sweeping hyperparameters to maximize GPU throughput")
+    print("=========================================================")
+    
+    batch_sizes = [64, 128, 256, 512, 1024, 2048]
+    if DEVICE == "cuda":
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+        
+    results = []
+    
+    for bs in batch_sizes:
+        print(f"\n--- Testing Batch Size: {bs} ---")
+        try:
+            samples_per_sec, max_mem = train(batch_size=bs, epochs=1, benchmark_mode=True)
+            results.append((bs, samples_per_sec, max_mem))
+        except Exception as e:
+            if "out of memory" in str(e).lower() or "OutOfMemoryError" in e.__class__.__name__:
+                print(f"Batch size {bs} caused OUT OF MEMORY. Stopping sweep.")
+                if DEVICE == "cuda":
+                    torch.cuda.empty_cache()
+                break
+            else:
+                raise e
+    
+    print("\n=========================================================")
+    print("📊 BENCHMARK RESULTS")
+    print("=========================================================")
+    print(f"{'Batch Size':>12} | {'Samples/Sec':>15} | {'Peak VRAM (MB)':>15}")
+    print("-" * 50)
+    
+    best_bs = None
+    best_throughput = 0
+    for bs, sps, mem in results:
+        print(f"{bs:>12} | {sps:>15.2f} | {mem:>15.2f}")
+        if sps > best_throughput:
+            best_throughput = sps
+            best_bs = bs
+            
+    print("-" * 50)
+    if best_bs:
+        print(f"🏆 OPTIMAL BATCH SIZE: {best_bs} (Throughput: {best_throughput:.2f} samples/s)")
+        print(f"Update your train.py or environment variables to use BATCH_SIZE={best_bs}.")
+    print("=========================================================")
+
 if __name__ == "__main__":
-    train()
+    parser = argparse.ArgumentParser(description="Train PolyZero Net")
+    parser.add_argument("-b", "--benchmark", action="store_true", help="Run a benchmark to find optimal training parameters")
+    args = parser.parse_args()
+
+    if args.benchmark:
+        run_benchmark()
+    else:
+        train()
 

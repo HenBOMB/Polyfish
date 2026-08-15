@@ -14,7 +14,6 @@ use crate::moves::{Move, generate_legal_moves};
 use crate::settings::has_technology;
 use crate::states::*;
 use crate::types::*;
-use serde_json::Value;
 use std::fs;
 use std::path::Path;
 
@@ -23,14 +22,7 @@ pub const STARTING_OWNER_ID: PlayerId = 1;
 
 /// Diagnostic: how many EndTurn edges MCTS actually simulates (i.e. how often
 /// search crosses a turn boundary in-tree). Read/reset by self_play's summary.
-pub static SIM_END_TURN_EDGES: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
-
-/// Diagnostic: how many simulated moves failed to execute during MCTS descent.
-/// Nonzero means the tree held a move that is illegal in the replayed state — a
-/// state-divergence bug (see tests/gumbel_reuse_integrity.rs).
-pub static SIM_MOVE_FAILURES: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+pub static SIM_END_TURN_EDGES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The main game controller
 ///
@@ -48,11 +40,90 @@ impl Game {
         Self { state }
     }
 
-    /// Load game state from a JSON string
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
-        let mut root: Value = serde_json::from_str(json)?;
-        normalize_raw_game_json(&mut root);
-        let state: GameState = serde_json::from_value(root)?;
+        let mut value: serde_json::Value = serde_json::from_str(json)?;
+        
+        let mut extracted_units = Vec::new();
+
+        // Handle JS map wrapper if it exists (e.g. from raw scraper JSON)
+        if let Some(serde_json::Value::Object(mut map)) = value.as_object_mut().and_then(|obj| obj.remove("map")) {
+            for key in ["tiles", "structures", "resources"] {
+                if let Some(items) = map.remove(key) {
+                    let converted = if let Some(arr) = items.as_array() {
+                        let mut obj = serde_json::Map::new();
+                        for item in arr {
+                            let mut item = item.clone();
+                            if let Some(item_obj) = item.as_object_mut() {
+                                // Extract unit if present
+                                if let Some(mut unit_val) = item_obj.remove("unit") {
+                                    if let Some(unit_obj) = unit_val.as_object_mut() {
+                                        if !unit_obj.contains_key("coords") {
+                                            let x = unit_obj.get("x").cloned().unwrap_or(serde_json::json!(0));
+                                            let y = unit_obj.get("y").cloned().unwrap_or(serde_json::json!(0));
+                                            let idx = unit_obj.get("idx").cloned().unwrap_or(serde_json::json!(0));
+                                            unit_obj.insert("coords".to_string(), serde_json::json!({
+                                                "x": x,
+                                                "y": y,
+                                                "idx": idx
+                                            }));
+                                        }
+                                        extracted_units.push(unit_val.clone());
+                                    }
+                                }
+
+                                // Inject coords if missing
+                                if !item_obj.contains_key("coords") {
+                                    let x = item_obj.get("x").cloned().unwrap_or(serde_json::json!(0));
+                                    let y = item_obj.get("y").cloned().unwrap_or(serde_json::json!(0));
+                                    let idx = item_obj.get("idx").cloned().unwrap_or(serde_json::json!(0));
+                                    item_obj.insert("coords".to_string(), serde_json::json!({
+                                        "x": x,
+                                        "y": y,
+                                        "idx": idx
+                                    }));
+                                }
+                                if let Some(idx_val) = item_obj.get("idx").and_then(|i| i.as_i64()) {
+                                    obj.insert(idx_val.to_string(), item);
+                                }
+                            }
+                        }
+                        serde_json::Value::Object(obj)
+                    } else {
+                        items
+                    };
+                    if let Some(root_obj) = value.as_object_mut() {
+                        root_obj.insert(key.to_string(), converted);
+                    }
+                }
+            }
+        }
+
+        // Append extracted units to their respective tribes
+        if !extracted_units.is_empty() {
+            if let Some(root_obj) = value.as_object_mut() {
+                let tribes_val = root_obj.entry("tribes").or_insert_with(|| serde_json::json!({}));
+                if let Some(tribes_obj) = tribes_val.as_object_mut() {
+                    for unit in extracted_units {
+                        if let Some(owner) = unit.get("owner").and_then(|o| o.as_i64()) {
+                            let tribe_val = tribes_obj.entry(owner.to_string()).or_insert_with(|| {
+                                serde_json::json!({
+                                    "id": owner,
+                                    "type": 0
+                                })
+                            });
+                            if let Some(tribe_obj) = tribe_val.as_object_mut() {
+                                let units_arr = tribe_obj.entry("units").or_insert_with(|| serde_json::json!([]));
+                                if let Some(arr) = units_arr.as_array_mut() {
+                                    arr.push(unit);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let state: GameState = serde_json::from_value(value)?;
         let mut game = Self { state };
         game.post_load();
         Ok(game)
@@ -254,9 +325,15 @@ impl Game {
             }) as UndoCallback
         };
 
+        // Fog memory: record post-move observations (real moves only).
+        let mem_undo = crate::memory::observe_all(&mut self.state);
+
         self.state.settings._are_you_sure = false;
 
-        Some(undo)
+        Some(Box::new(move |s: &mut GameState| {
+            mem_undo(s);
+            undo(s);
+        }))
     }
 
     /// Simulate a move for MCTS (does NOT set _are_you_sure, preventing exploration)
@@ -315,7 +392,6 @@ impl Game {
         } else {
             let result = game_move.execute(&mut self.state);
             if let Err(e) = result {
-                SIM_MOVE_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 eprintln!("Error executing simulated move: {}", e);
                 return None;
             }
@@ -452,11 +528,6 @@ impl Game {
             undos.push(try_discover_other_tribes(state));
         }
 
-        // Observation-memory sweep: catches spawns/upgrades/growth that bypass
-        // the step/attack hooks; prunes stale ghosts. Real moves only,
-        // permanent (explorers archetype) — no undo.
-        actions::memory::end_of_turn_sweep(state);
-
         // Reward production if not the first turn
         if state.settings.turn > 0 {
             if let Some(tribe) = state.tribes.get(&new_pov) {
@@ -578,184 +649,6 @@ impl Clone for Game {
 
         cloned
     }
-}
-
-/// Accept legacy reader/mod JSON: `map.tiles` arrays, flat x/y/idx, units on tiles.
-fn normalize_raw_game_json(root: &mut Value) {
-    let Some(obj) = root.as_object_mut() else {
-        return;
-    };
-
-    let map_size = obj
-        .get("settings")
-        .and_then(|s| s.get("size"))
-        .and_then(|v| v.as_i64())
-        .or_else(|| {
-            obj.get("map")
-                .and_then(|m| m.get("size"))
-                .and_then(|v| v.as_i64())
-        })
-        .unwrap_or(11) as i32;
-
-    if !obj.contains_key("tiles") {
-        if let Some(map) = obj.get_mut("map").and_then(|m| m.as_object_mut()) {
-            if let Some(tiles) = map.remove("tiles") {
-                obj.insert("tiles".to_string(), tiles);
-            }
-        }
-    }
-
-    let Some(tiles_val) = obj.get_mut("tiles") else {
-        return;
-    };
-
-    let mut tile_map = serde_json::Map::new();
-    let mut units_by_owner: std::collections::HashMap<i32, Vec<Value>> =
-        std::collections::HashMap::new();
-
-    match tiles_val {
-        Value::Array(tiles) => {
-            for tile in tiles.drain(..) {
-                let (idx, mut normalized) = normalize_tile_entry(tile, map_size);
-                if let Some(unit) = normalized
-                    .as_object_mut()
-                    .and_then(|t| t.remove("unit"))
-                {
-                    let owner = unit
-                        .get("owner")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or_else(|| {
-                            normalized
-                                .get("owner")
-                                .and_then(|v| v.as_i64())
-                                .unwrap_or(1)
-                        }) as i32;
-                    let unit_val = normalize_unit_entry(unit, map_size, idx);
-                    units_by_owner.entry(owner).or_default().push(unit_val);
-                }
-                tile_map.insert(idx.to_string(), normalized);
-            }
-            *tiles_val = Value::Object(tile_map);
-        }
-        Value::Object(tiles) => {
-            let keys: Vec<String> = tiles.keys().cloned().collect();
-            for key in keys {
-                let tile = tiles.remove(&key).unwrap_or(Value::Null);
-                let (idx, mut normalized) = normalize_tile_entry(tile, map_size);
-                if let Some(unit) = normalized
-                    .as_object_mut()
-                    .and_then(|t| t.remove("unit"))
-                {
-                    let owner = unit
-                        .get("owner")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or_else(|| {
-                            normalized
-                                .get("owner")
-                                .and_then(|v| v.as_i64())
-                                .unwrap_or(1)
-                        }) as i32;
-                    let unit_val = normalize_unit_entry(unit, map_size, idx);
-                    units_by_owner.entry(owner).or_default().push(unit_val);
-                }
-                tiles.insert(idx.to_string(), normalized);
-            }
-        }
-        _ => {}
-    }
-
-    if units_by_owner.is_empty() {
-        return;
-    }
-
-    let tribes = obj
-        .entry("tribes")
-        .or_insert_with(|| Value::Object(serde_json::Map::new()));
-    let Some(tribes_obj) = tribes.as_object_mut() else {
-        return;
-    };
-
-    for (owner, units) in units_by_owner {
-        let tribe_key = owner.to_string();
-        let tribe = tribes_obj
-            .entry(tribe_key)
-            .or_insert_with(|| serde_json::json!({ "id": owner }));
-        if let Some(tribe_obj) = tribe.as_object_mut() {
-            let existing = tribe_obj
-                .entry("units")
-                .or_insert_with(|| Value::Array(vec![]));
-            if let Value::Array(arr) = existing {
-                arr.extend(units);
-            }
-        }
-    }
-}
-
-fn normalize_tile_entry(tile: Value, map_size: i32) -> (i32, Value) {
-    let mut tile = tile;
-    let Some(obj) = tile.as_object_mut() else {
-        return (0, tile);
-    };
-
-    let x = obj.get("x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-    let y = obj.get("y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-    let idx = obj
-        .get("idx")
-        .and_then(|v| v.as_i64())
-        .map(|v| v as i32)
-        .unwrap_or_else(|| obj
-            .get("coords")
-            .and_then(|c| c.get("idx"))
-            .and_then(|v| v.as_i64())
-            .map(|v| v as i32)
-            .unwrap_or(y * map_size + x));
-
-    if !obj.contains_key("coords") {
-        obj.insert(
-            "coords".to_string(),
-            serde_json::json!({ "x": x, "y": y, "idx": idx }),
-        );
-    }
-    obj.remove("x");
-    obj.remove("y");
-    obj.remove("idx");
-
-    (idx, tile)
-}
-
-fn normalize_unit_entry(unit: Value, map_size: i32, tile_idx: i32) -> Value {
-    let mut unit = unit;
-    let Some(obj) = unit.as_object_mut() else {
-        return unit;
-    };
-
-    let x = obj
-        .get("x")
-        .and_then(|v| v.as_i64())
-        .or_else(|| obj.get("coords").and_then(|c| c.get("x")).and_then(|v| v.as_i64()))
-        .unwrap_or((tile_idx % map_size) as i64) as i32;
-    let y = obj
-        .get("y")
-        .and_then(|v| v.as_i64())
-        .or_else(|| obj.get("coords").and_then(|c| c.get("y")).and_then(|v| v.as_i64()))
-        .unwrap_or((tile_idx / map_size) as i64) as i32;
-    let idx = obj
-        .get("idx")
-        .and_then(|v| v.as_i64())
-        .or_else(|| obj.get("coords").and_then(|c| c.get("idx")).and_then(|v| v.as_i64()))
-        .unwrap_or(tile_idx as i64) as i32;
-
-    if !obj.contains_key("coords") {
-        obj.insert(
-            "coords".to_string(),
-            serde_json::json!({ "x": x, "y": y, "idx": idx }),
-        );
-    }
-    obj.remove("x");
-    obj.remove("y");
-    obj.remove("idx");
-
-    unit
 }
 
 #[cfg(test)]
