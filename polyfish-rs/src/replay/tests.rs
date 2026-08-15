@@ -215,7 +215,7 @@ fn safetensors_writer_emits_expected_shapes() {
         tensors["spatial_maps"].dims(),
         &[1, features::NUM_CHANNELS * 121]
     );
-    assert_eq!(tensors["player_states"].dims(), &[1, 10]);
+    assert_eq!(tensors["player_states"].dims(), &[1, features::RawFeatures::PLAYER_STATE_DIM]);
     assert_eq!(tensors["action_type"].dims(), &[1, NUM_ACTION_TYPES]);
     assert_eq!(tensors["source_spatial"].dims(), &[1, 121]);
     assert_eq!(tensors["target_spatial"].dims(), &[1, 121]);
