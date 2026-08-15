@@ -5073,9 +5073,51 @@ PREDICTIONS (the 049 siege ledger is the instrument, same 120-game config).
      seat's own sieges/game falls too. Until then this is executor-side
      only, and must not be reported as a net result.
 
+AMENDED AGAIN (Aug 16) — **the Aug 15 cut had no gradient at all.**
+`rank_plies` computes `phi_pre` and `phi_post` from the SAME `aux`
+(macro_exec.rs:91-104). Carrying the assessment as a frozen (city, loss)
+pair meant the term's only state dependence was "is this city still mine",
+and a player never loses a city during their own ply — so Δφ = 0 for every
+candidate and the executor could not see a defensive ply. The assessment
+shipped; the response pricing did not. The tier split was right, the
+division of labour was not.
+
+Now: T2 hands down the FACTS its search paid for — `attackers` /
+`enterers` (tile indices, the expensive `reach_search` half), `breakable`,
+`worth` — and T3 re-resolves `defense::residual_risk` against LIVE
+occupancy: who is standing on the tile now, which named attackers are still
+alive. Same risk ladder, O(1) lookups, no second threat model. That gives a
+gradient to exactly the plies that should have one — garrison, vacate, and
+killing the approacher (its death drops it out of `enterers`). Losing the
+city reads `RISK_LOST`, so no line can buy potential by letting one fall.
+Pinned by `a_frozen_assessment_still_prices_the_garrison`, which fails on
+the Aug 15 code: it assesses ONCE and then varies only the state.
+
+Also: Defend emission gated on `needs_order()` (risk >= RISK_GARRISON_FALLS).
+Every risky city emitting an order would pin the stance to ARM from first
+contact onward; a garrison that merely HOLDS needs no order, while its
+vacating stays priced. And `RISK_TWO_TURN` was dead code — when `!sieged`,
+`arrives_next_turn ≡ threat_unit.is_some()`, so the branch below it was
+unreachable. Removed.
+
+SMOKE (Aug 16, n=4, NOT the registered A/B): seeds 1786807403-06, XinXi net
+vs pinned Greedy Imperius, GUMBEL_SCALE=0. 2W/2L. No Defend spam — 0.06,
+0.03, 0.92, 0.25 orders/turn; the ARM share (g2 84%, g3 79%) matches the
+known pre-050 baseline, so the `needs_order` gate holds. On the fixture map
+(g0) `Defend 24` now fires at t9, the turn the enemy stood adjacent, versus
+t10 in the original — the assessment miss is fixed. **The capital fell
+anyway**, and g2 is the sharper version of the same story: 5 cities and spt
+12 by t9, then every one lost (t11, t12, t14, t19, t24) to elimination,
+with T2 naming @85 and @60 for Defend on the turns they fell and 8-10 units
+on the board. T2 names it, T3 has the means, the city still falls — which
+points the next cut at the RESPONSE, consistent with 049 (Defend orders
+move the executor least, +0.125 tiles/turn). ⚠️ n=4, and `model.safetensors`
+also advanced (046 round) since the fixture, so g0 is not a clean A/B.
+
 NOT YET DONE (Verdi's other half): the lane -> `eco_plan` -> star-plan
 pricing, so "save toward the Forge" competes in the same currency as
 attack/defend/expand instead of a flat per-type bonus. ⚠️ `eco_plan` is a
 2934-line BINARY, not a library: it is the ORACLE to calibrate against, not
 something to call per ply. The hot path needs a cheap "next purchase on the
-lane's plan + turns-to-afford" query validated against it.
+lane's plan + turns-to-afford" query validated against it — computed once
+per turn at T2 and handed down, the same shape as the risk facts above.

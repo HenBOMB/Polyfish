@@ -119,19 +119,19 @@ fn can_attack_tile(state: &GameState, unit: &UnitState, target_tile: i32) -> boo
 /// holds is nearly free, and PREVENTION is what separates them — measured,
 /// not assumed (EXP_ELO_049: a parked Giant is cleared 6% of the time, and
 /// having a unit able to strike the besieger does not predict the outcome).
-const RISK_LOST: f32 = 1.0;
-const RISK_BREAKABLE: f32 = 0.45;
-const RISK_GARRISON_FALLS: f32 = 0.35;
-const RISK_GARRISON_HOLDS: f32 = 0.05;
-const RISK_TWO_TURN: f32 = 0.30;
+pub(crate) const RISK_LOST: f32 = 1.0;
+pub(crate) const RISK_BREAKABLE: f32 = 0.45;
+pub(crate) const RISK_GARRISON_FALLS: f32 = 0.35;
+pub(crate) const RISK_GARRISON_HOLDS: f32 = 0.05;
 /// Worth of a city in the score-equivalent units `goal_potential` uses:
 /// base plus per-level, so a developed capital outprices a frontier village.
 const CITY_WORTH_BASE: f32 = 12.0;
 const CITY_WORTH_PER_LEVEL: f32 = 6.0;
 
 /// What it would take the enemy to OWN this city, and whether I could undo
-/// it. One struct so the pricing needs no second query.
-#[derive(Debug, Clone)]
+/// it. T2 assesses this once; T3 re-resolves only the cheap, live part of it
+/// (`residual_risk`) so its own plies actually move the number.
+#[derive(Debug, Clone, PartialEq)]
 pub struct CityRisk {
     pub city: i32,
     /// An enemy is standing on it right now.
@@ -142,7 +142,13 @@ pub struct CityRisk {
     pub arrives_next_turn: bool,
     /// If they park there, my units could remove them within one turn.
     pub breakable: bool,
-    /// P(lose the city) proxy in [0,1].
+    /// Tile indices of visible enemies that can strike the city tile — the
+    /// reachability search is T2's, resolving damage against whoever ends up
+    /// standing there is T3's.
+    pub attackers: Vec<i32>,
+    /// Tile indices of visible enemies that can END their move on the tile.
+    pub enterers: Vec<i32>,
+    /// P(lose the city) proxy in [0,1], as assessed at turn start.
     pub risk: f32,
     /// Score-equivalent worth of the city.
     pub worth: f32,
@@ -151,6 +157,12 @@ pub struct CityRisk {
 impl CityRisk {
     pub fn expected_loss(&self) -> f32 {
         self.risk * self.worth
+    }
+    /// Worth a Defend order from T2. A garrison that merely *holds* is already
+    /// doing its job — naming it would pin the stance to ARM for the rest of
+    /// the game; its vacating is still priced through `residual_risk`.
+    pub fn needs_order(&self) -> bool {
+        self.risk >= RISK_GARRISON_FALLS
     }
 }
 
@@ -203,23 +215,35 @@ pub fn city_risks(state: &GameState, player: PlayerId) -> Vec<CityRisk> {
         let garrison = occupant.as_ref().filter(|u| u.owner == player);
         let open = occupant.is_none();
 
+        let enterers: Vec<i32> = if sieged {
+            Vec::new()
+        } else {
+            enemies
+                .iter()
+                .filter(|e| can_reach_tile(state, &probe(e), idx))
+                .map(|e| e.coords.idx)
+                .collect()
+        };
+        let attackers: Vec<i32> = enemies
+            .iter()
+            .filter(|e| can_attack_tile(state, &probe(e), idx))
+            .map(|e| e.coords.idx)
+            .collect();
+
         // Whoever is (or would be) standing there: can I remove them?
         let threat_unit: Option<&UnitState> = if sieged {
             occupant
         } else {
-            enemies
+            enterers
                 .iter()
-                .copied()
-                .filter(|e| can_reach_tile(state, &probe(e), idx))
+                .filter_map(|i| get_true_unit_at(state, *i))
                 .max_by(|a, b| {
                     get_unit_max_health(a)
                         .partial_cmp(&get_unit_max_health(b))
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
         };
-        let arrives_next_turn = !sieged
-            && threat_unit.is_some()
-            && enemies.iter().any(|e| can_reach_tile(state, &probe(e), idx));
+        let arrives_next_turn = !sieged && !enterers.is_empty();
         let breakable = match threat_unit {
             Some(t) => {
                 let mut dmg = 0.0;
@@ -234,9 +258,9 @@ pub fn city_risks(state: &GameState, player: PlayerId) -> Vec<CityRisk> {
         };
         // Damage the visible enemies could put on the garrison next turn.
         let on_garrison: f32 = garrison.map_or(0.0, |g| {
-            enemies
+            attackers
                 .iter()
-                .filter(|e| can_attack_tile(state, &probe(e), idx))
+                .filter_map(|i| get_true_unit_at(state, *i))
                 .map(|e| hypo_damage(state, &probe(e), g, idx))
                 .sum()
         });
@@ -253,12 +277,12 @@ pub fn city_risks(state: &GameState, player: PlayerId) -> Vec<CityRisk> {
             }
         } else if arrives_next_turn {
             if breakable { RISK_BREAKABLE } else { RISK_LOST }
-        } else if open && threat_unit.is_some() {
-            RISK_TWO_TURN
         } else {
             0.0
         };
-        if risk <= 0.0 {
+        // Keep any city a visible enemy could walk into even at risk 0 — a
+        // safely-held tile is exactly the one whose VACATING must be priced.
+        if risk <= 0.0 && enterers.is_empty() {
             continue;
         }
         out.push(CityRisk {
@@ -267,6 +291,8 @@ pub fn city_risks(state: &GameState, player: PlayerId) -> Vec<CityRisk> {
             open,
             arrives_next_turn,
             breakable,
+            attackers,
+            enterers,
             risk,
             worth: CITY_WORTH_BASE + CITY_WORTH_PER_LEVEL * city.level as f32,
         });
@@ -279,6 +305,59 @@ pub fn city_risks(state: &GameState, player: PlayerId) -> Vec<CityRisk> {
 /// exactly what it saves.
 pub fn expected_city_loss(state: &GameState, player: PlayerId) -> f32 {
     city_risks(state, player).iter().map(|r| r.expected_loss()).sum()
+}
+
+/// T3's live read of T2's assessment: the same risk ladder, re-resolved
+/// against who is standing on the tile NOW and which named attackers are
+/// still alive. The assessment is frozen for the turn, so this is the only
+/// part with a gradient — without it the term is a constant and `rank_plies`
+/// cannot see a defensive ply at all.
+pub fn residual_risk(state: &GameState, player: PlayerId, d: &CityRisk) -> f32 {
+    let still_mine = state
+        .tribes
+        .get(&player)
+        .map_or(false, |t| t.cities.iter().any(|c| c.idx == d.city));
+    if !still_mine {
+        return RISK_LOST;
+    }
+    let live = |i: &i32| get_true_unit_at(state, *i).filter(|u| u.owner != player);
+    match get_true_unit_at(state, d.city) {
+        Some(u) if u.owner != player => {
+            if d.breakable { RISK_BREAKABLE } else { RISK_LOST }
+        }
+        Some(g) => {
+            let dmg: f32 = d
+                .attackers
+                .iter()
+                .filter_map(live)
+                .map(|e| hypo_damage(state, &probe(e), g, d.city))
+                .sum();
+            if dmg <= 0.0 {
+                0.0
+            } else if dmg >= g.health {
+                RISK_GARRISON_FALLS
+            } else {
+                RISK_GARRISON_HOLDS
+            }
+        }
+        None => {
+            if d.enterers.iter().any(|i| live(i).is_some()) {
+                if d.breakable { RISK_BREAKABLE } else { RISK_LOST }
+            } else {
+                0.0
+            }
+        }
+    }
+}
+
+/// Score-equivalent expected loss under the CURRENT state, given T2's
+/// assessment. Losing the city outright reads `RISK_LOST`, so no line can
+/// win φ by letting one fall.
+pub fn residual_city_loss(state: &GameState, player: PlayerId, risks: &[CityRisk]) -> f32 {
+    risks
+        .iter()
+        .map(|d| d.worth * residual_risk(state, player, d))
+        .sum()
 }
 
 /// Per-city worst-case threat from FOW-visible enemy units. Cities with no
@@ -517,6 +596,95 @@ mod risk_tests {
     fn no_visible_enemy_means_no_risk_term() {
         let state = board(60);
         assert_eq!(expected_city_loss(&state, 1), 0.0);
+    }
+
+    /// The EXECUTOR contract, and the one the first cut of this term failed:
+    /// `rank_plies` holds `aux` FIXED across a turn's plies, so a potential
+    /// that only reads the frozen assessment has Δφ = 0 and cannot see a
+    /// defensive ply at all. Assess once, then vary only the state.
+    #[test]
+    fn a_frozen_assessment_still_prices_the_garrison() {
+        let mut state = board(60);
+        state
+            .tribes
+            .get_mut(&2)
+            .unwrap()
+            .units
+            .push(unit_at(61, UnitType::Warrior, 2));
+        let goal = MacroGoal::default();
+        let aux = crate::ai::oracle_macro::scripted_goal_aux(&state, 1, &goal, 0, 0, None);
+        let open = goal_potential(&state, 1, &goal, Some(&aux));
+
+        state
+            .tribes
+            .get_mut(&1)
+            .unwrap()
+            .units
+            .push(unit_at(60, UnitType::Warrior, 1));
+        let held = goal_potential(&state, 1, &goal, Some(&aux));
+        assert!(
+            held > open,
+            "same aux, garrison added: held {held} must beat open {open}"
+        );
+    }
+
+    /// Killing the unit that would walk in is a defense too — the attackers
+    /// T2 named are looked up live, so their death shows up in the price.
+    #[test]
+    fn removing_the_named_threat_clears_the_residual() {
+        let mut state = board(60);
+        state
+            .tribes
+            .get_mut(&2)
+            .unwrap()
+            .units
+            .push(unit_at(61, UnitType::Warrior, 2));
+        let risks = city_risks(&state, 1);
+        assert_eq!(risks.len(), 1);
+        assert!(residual_risk(&state, 1, &risks[0]) > 0.0);
+
+        state.tribes.get_mut(&2).unwrap().units.clear();
+        assert_eq!(residual_risk(&state, 1, &risks[0]), 0.0);
+    }
+
+    /// No line may buy potential by letting the city fall: dropping it from
+    /// my cities reads the maximum, never relief.
+    #[test]
+    fn losing_the_city_is_the_worst_residual() {
+        let mut state = board(60);
+        state
+            .tribes
+            .get_mut(&2)
+            .unwrap()
+            .units
+            .push(unit_at(61, UnitType::Warrior, 2));
+        let risks = city_risks(&state, 1);
+        let standing = residual_risk(&state, 1, &risks[0]);
+        state.tribes.get_mut(&1).unwrap().cities.clear();
+        assert_eq!(residual_risk(&state, 1, &risks[0]), RISK_LOST);
+        assert!(RISK_LOST >= standing);
+    }
+
+    /// A garrison that merely holds is doing its job — naming it would pin
+    /// the stance to ARM every turn after first contact.
+    #[test]
+    fn a_holding_garrison_asks_for_no_order() {
+        let mut state = board(60);
+        state
+            .tribes
+            .get_mut(&1)
+            .unwrap()
+            .units
+            .push(unit_at(60, UnitType::Warrior, 1));
+        state
+            .tribes
+            .get_mut(&2)
+            .unwrap()
+            .units
+            .push(unit_at(61, UnitType::Warrior, 2));
+        let risks = city_risks(&state, 1);
+        assert_eq!(risks.len(), 1, "the city stays on the books for pricing");
+        assert!(!risks[0].needs_order(), "risk {}", risks[0].risk);
     }
 }
 

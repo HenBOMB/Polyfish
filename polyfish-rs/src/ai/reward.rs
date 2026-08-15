@@ -737,21 +737,15 @@ pub fn goal_potential(
     // amount the ply that garrisons it earns. PREVENTION is what it buys:
     // 049 measured a parked Giant cleared 6% of the time, so the cheap move
     // is to never let the tile go empty in the first place.
-    // T2 assessed this once per turn and handed it down in the aux; the
-    // executor prices its RESPONSE, it does not re-run the threat model.
-    // Without an aux there is no assessment to price — the same convention
-    // every other aux-carried term follows.
+    // T2 assessed the threat facts and handed them down in the aux; T3 prices
+    // its RESPONSE by re-resolving `residual_risk` against live occupancy —
+    // the frozen assessment alone is constant across a turn's plies, so it
+    // would have no gradient. Losing the city reads RISK_LOST, so no line
+    // can win potential by letting one fall. Without an aux there is no
+    // assessment to price, the convention every aux-carried term follows.
     if let Some(a) = aux {
         phi -= SHAPE_GOAL_CITY_RISK
-            * a.city_risk
-                .iter()
-                .filter(|(c, _)| {
-                    // Only cities T2 actually ordered defended, and only while
-                    // they are still mine.
-                    tribe.cities.iter().any(|city| city.idx == *c)
-                })
-                .map(|(_, loss)| *loss)
-                .sum::<f32>();
+            * crate::ai::defense::residual_city_loss(state, player, &a.city_risk);
     }
     if matches!(goal.stance, Stance::Grow | Stance::Save) {
         phi -= SHAPE_GOAL_STRANDED * completion_stranded(state, player) as f32;
