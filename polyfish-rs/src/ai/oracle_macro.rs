@@ -340,10 +340,77 @@ pub const STANCE_SWITCH_TURNS: u8 = 2;
 /// Minimum friendly partners a multiplier-tier placement must pay before it is
 /// worth banking for — a 1-partner Windmill is one pop and affordable out of
 /// pocket, so it never justifies holding stars.
-pub const SAVE_MIN_PARTNERS: i32 = 2;
+pub const SAVE_MIN_PARTNERS: i32 = 1;
+
+/// EXP_ELO_051: how far this tribe has already walked toward `tech` — the
+/// number of techs in its prerequisite chain it already owns.
+///
+/// This is what makes the COMMITTED lane, not the cheapest sticker price,
+/// decide what to bank for. Verdi: "we should be saving towards a lane if
+/// that is what T1 says … the best computed path for that giant spam is
+/// forges, therefore these things should act as the justification to save
+/// for and buy forge." A tribe holding Climbing+Mining is walking the Forge
+/// lane whether or not a Windmill happens to be five stars cheaper.
+pub fn lane_investment(tribe: &crate::states::TribeState, tech: TechnologyType) -> i32 {
+    use crate::settings::technology::{get_technology_setting, has_technology};
+    let mut owned = 0;
+    let mut cur = Some(tech);
+    let mut guard = 0;
+    while let Some(t) = cur {
+        guard += 1;
+        if guard > 16 {
+            break;
+        }
+        if has_technology(&tribe.tech_vanilla, t) {
+            owned += 1;
+        }
+        cur = get_technology_setting(t).requires;
+    }
+    owned
+}
+
+/// Partners a hub site would have once the lane's OWN prerequisite builds go
+/// up: existing partner structures plus adjacent owned tiles that could take
+/// one. Counting only what stands today is circular — a Forge needs Mines,
+/// and nothing was banking for the Forge that would justify the Mines. In
+/// seed 1786807405 that loop cost the whole plan: `save_lane` stayed None
+/// until t9 because the mountains had no mines on them yet.
+fn potential_partner_count(
+    state: &GameState,
+    idx: i32,
+    partners: &std::collections::HashSet<crate::types::StructureType>,
+    owner: PlayerId,
+) -> i32 {
+    use crate::settings::structures::get_structure_setting;
+    if partners.is_empty() || owner == 0 {
+        return 0;
+    }
+    crate::functions::get_adjacent_indices(state, idx, 1)
+        .into_iter()
+        .filter(|&adj| {
+            let Some(tile) = state.tiles.get(&adj) else { return false };
+            if tile.owner != owner {
+                return false;
+            }
+            if let Some(s) = crate::functions::get_structure_at(state, adj) {
+                return partners.contains(&s.structure_type);
+            }
+            partners.iter().any(|p| {
+                let ps = get_structure_setting(*p);
+                ps.terrain_types.contains(&tile.terrain_type)
+                    && ps.resource_type.map_or(true, |r| {
+                        crate::functions::get_resource_at(state, adj) == Some(r)
+                    })
+            })
+        })
+        .count() as i32
+}
 /// Never bank for a batch further out than this many turns of income; beyond
 /// it the plan is a hoard, not a plan.
 pub const SAVE_MAX_TURNS: i32 = 3;
+/// Placements a single batch may bank for. The plan is "the tech and the
+/// first hubs", not "one hub in every city I will ever own".
+pub const SAVE_MAX_PLACEMENTS: i32 = 2;
 
 /// The four territory-upgrade LANES and the tier-3 tech that opens each. The
 /// tech is the real commitment: `TIER3_CAP_PER_GAME` is 1, so a tribe picks at
@@ -398,7 +465,7 @@ pub fn save_batch_plan(state: &GameState, player: PlayerId, tier3_bought: u32) -
     use crate::settings::technology::has_technology;
     use crate::types::StructureType;
     let tribe = state.tribes.get(&player)?;
-    let mut best: Option<SaveLane> = None;
+    let mut best: Option<(SaveLane, i32)> = None;
     for (s_type, tech) in SAVE_LANES {
         let s = get_structure_setting(s_type);
         let Some(cost) = s.cost else { continue };
@@ -432,13 +499,7 @@ pub fn save_batch_plan(state: &GameState, player: PlayerId, tier3_bought: u32) -
                 if !s.terrain_types.contains(&tile.terrain_type) || tile.is_algae() {
                     return false;
                 }
-                let partners = crate::rules::economy::partner_count_with(
-                    state,
-                    idx,
-                    &s.adjacent_types,
-                    player,
-                );
-                partners >= need
+                potential_partner_count(state, idx, &s.adjacent_types, player) >= need
             });
             if placeable {
                 lane += cost;
@@ -447,6 +508,11 @@ pub fn save_batch_plan(state: &GameState, player: PlayerId, tier3_bought: u32) -
         if lane == 0 {
             continue;
         }
+        // EXP_ELO_051: bank for the next placements, not for every one at
+        // once. Summing over all cities made the batch GROW with expansion —
+        // 44 stars across five cities in seed 1786807405 — so the plan became
+        // unaffordable exactly as the empire that justified it arrived.
+        lane = lane.min(cost * SAVE_MAX_PLACEMENTS);
         let tech_cost = if owned { 0 } else { tech_chain_cost(tribe, tech) };
         let plan = SaveLane {
             cost: lane + tech_cost,
@@ -456,11 +522,17 @@ pub fn save_batch_plan(state: &GameState, player: PlayerId, tier3_bought: u32) -
             tech,
             structure: s_type,
         };
-        if best.as_ref().map_or(true, |b| plan.cost < b.cost) {
-            best = Some(plan);
+        // The lane we are already walking wins; price only breaks ties among
+        // lanes we are equally committed to.
+        let invested = lane_investment(tribe, tech);
+        let better = best.as_ref().map_or(true, |(b, bi): &(SaveLane, i32)| {
+            invested > *bi || (invested == *bi && plan.cost < b.cost)
+        });
+        if better {
+            best = Some((plan, invested));
         }
     }
-    best
+    best.map(|(p, _)| p)
 }
 
 /// Does `m` advance the banked plan? The whole undiscovered `requires` chain
@@ -492,7 +564,18 @@ pub fn advances_save_plan(m: &dyn Move, lane: &SaveLane, tribe: &crate::states::
             }
             false
         }
-        MoveType::Build => m.structure_type().ok() == Some(lane.structure),
+        // The hub itself, and the partner builds that make it placeable. A
+        // Forge needs Mines; crediting only the Forge left every Mine priced
+        // as generic economy, and in seed 1786807405 `Build Mine at 69` lost
+        // to a Warrior at t6 despite higher q — which is why the Forge did
+        // not land until t15, five turns after the cities started falling.
+        MoveType::Build => {
+            let Ok(s) = m.structure_type() else { return false };
+            s == lane.structure
+                || crate::settings::structures::get_structure_setting(lane.structure)
+                    .adjacent_types
+                    .contains(&s)
+        }
         _ => false,
     }
 }
@@ -692,11 +775,15 @@ pub fn guessed_village_sites(
 pub fn goal_star_gate(state: &GameState, player: PlayerId, goal: &MacroGoal) -> bool {
     match goal.stance {
         Stance::Grow => {
-            goal.orders.iter().any(|(k, _)| *k == OrderKind::Expand)
-                && state
-                    .tribes
-                    .get(&player)
-                    .map_or(false, |t| t.cities.len() < COMMIT_CITY_TARGET)
+            // A live batch keeps star discipline on even while growing —
+            // otherwise the gate switches off at the third city and the lane
+            // stops mattering (Organization on t11 of seed 1786807403).
+            goal.save_target.is_some()
+                || goal.orders.iter().any(|(k, _)| *k == OrderKind::Expand)
+                    && state
+                        .tribes
+                        .get(&player)
+                        .map_or(false, |t| t.cities.len() < COMMIT_CITY_TARGET)
         }
         Stance::Arm => true,
         // v7: banking for a named batch — every star spent elsewhere competes
@@ -734,6 +821,11 @@ pub struct GoalAux {
     /// search happens here, once; T3 re-resolves only `residual_risk` against
     /// live occupancy, which is what gives its defensive plies a gradient.
     pub city_risk: Vec<crate::ai::defense::CityRisk>,
+    /// EXP_ELO_051: the batch this seat is banking for, carried down so the
+    /// star gate can ask "does this purchase advance the plan" instead of
+    /// only "is this tech the right CLASS for the stance". Class-only gating
+    /// is what let Organization through on a SAVE turn in seed 1786807403.
+    pub save_lane: Option<SaveLane>,
     /// Stance-intensity (Verdi, Aug 14): measured ARM pressure 0..1 from
     /// `stance_strength` — threat-vs-coverage truth, NOT the binary stance.
     /// The eco-tech mask fires only when this is near-certain (>= 0.98);
@@ -1073,6 +1165,7 @@ pub fn scripted_goal_aux(
     GoalAux {
         // T2 assesses; T3 prices its response against it.
         city_risk: crate::ai::defense::city_risks(state, player),
+        save_lane: goal.save_target.clone(),
         arm_strength: stance_strength(state, player).arm,
         recommended_techs: recommended,
         rider_push,
@@ -1838,6 +1931,28 @@ pub fn passes_star_gate(
         && aux.map_or(false, |a| a.overlays.knight_commit)
     {
         return true;
+    }
+    // EXP_ELO_051: a live savings plan outranks the stance classes. While we
+    // are banking for a named lane, a tech that does not advance it is the
+    // purchase that delays it — which is exactly the "random tech" Verdi
+    // flagged (Organization on t4-t5 of every fixture seed). Bounded by the
+    // plan's own lifetime: `save_batch_plan` self-terminates once the batch
+    // is affordable, so this never becomes an open-ended research freeze.
+    if let Some(lane) = aux.and_then(|a| a.save_lane.as_ref()) {
+        if let Some(tribe) = _state.tribes.get(&_state.settings.current_player_turn_id) {
+            return advances_save_plan(m, lane, tribe);
+        }
+    }
+    // …and even before a batch is affordable, the LANE is still the plan.
+    // Verdi: "the terrain is telling us we clearly just need to get metal and
+    // forge thats it." `recommended_techs` is the committed lane's next step
+    // plus whatever the overlays demand (defender screen, catapult counter,
+    // knight commit), so a genuine threat response still gets through — that
+    // is the judgment call, not a blanket freeze.
+    if let Some(recs) = aux.map(|a| &a.recommended_techs) {
+        if !recs.is_empty() {
+            return recs.contains(&tech);
+        }
     }
     let effects = crate::settings::technology::get_tech_effects(tech);
     let arms = !effects.combat_units.is_empty();
