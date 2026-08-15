@@ -74,7 +74,7 @@ pub enum ReplayError {
         declared: i32,
         actual: i32,
     },
-    #[error("engine refused selected legal move at {context:?}: {move_summary}")]
+    #[error("engine refused selected legal move at {context}: {move_summary}")]
     Execution {
         context: ReplayMoveContext,
         move_summary: String,

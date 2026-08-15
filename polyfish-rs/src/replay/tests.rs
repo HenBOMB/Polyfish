@@ -210,6 +210,9 @@ fn safetensors_writer_emits_expected_shapes() {
     let dir = std::env::temp_dir().join(format!("polyfish-replay-test-{}", std::process::id()));
     let paths = crate::replay::training::write_training_files(&samples, &dir, 10).unwrap();
     let tensors = candle_core::safetensors::load(&paths[0], &candle_core::Device::Cpu).unwrap();
+    let cleanup = || {
+        let _ = std::fs::remove_dir_all(&dir);
+    };
     assert_eq!(
         tensors["spatial_maps"].dims(),
         &[1, features::NUM_CHANNELS * 121]
@@ -242,7 +245,5 @@ fn safetensors_writer_emits_expected_shapes() {
             .sum::<f32>(),
         0.0
     );
-    std::fs::remove_file(format!("{}.manifest.json", paths[0].display())).unwrap();
-    std::fs::remove_file(&paths[0]).unwrap();
-    std::fs::remove_dir(&dir).unwrap();
+    cleanup();
 }

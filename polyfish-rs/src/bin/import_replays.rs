@@ -142,18 +142,28 @@ fn main() -> anyhow::Result<()> {
                 }
                 continue;
             }
-            let mut collector = TrainingCollector::new(&replay)?;
+            let mut collector = match TrainingCollector::new(&replay) {
+                Ok(c) => c,
+                Err(error) => {
+                    record_failure(&mut summary, path, "collector", error);
+                    if common.fail_fast {
+                        break;
+                    }
+                    continue;
+                }
+            };
             match ReplayExecutor::execute_with_observer(&replay, &mut collector) {
                 Ok(game) => match collector.finish(&game, replay.result.as_ref(), path) {
                     Ok(mut samples) => {
                         summary.valid_files += 1;
                         summary.training_eligible_files += 1;
                         summary.training_samples += samples.len();
+                        let sample_count = samples.len();
                         all_samples.append(&mut samples);
                         println!(
                             "VALID {} ({} samples)",
                             path.display(),
-                            replay.command_count()
+                            sample_count
                         );
                     }
                     Err(error) => {
@@ -190,16 +200,25 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    if let Some((output, samples_per_file)) = export {
-        if !all_samples.is_empty() {
-            summary.output_files = write_training_files(&all_samples, output, samples_per_file)?
-                .into_iter()
-                .map(|path| path.display().to_string())
-                .collect();
+    let export_error = if let Some((output, samples_per_file)) = export {
+        match write_training_files(&all_samples, output, samples_per_file) {
+            Ok(paths) => {
+                summary.output_files = paths
+                    .into_iter()
+                    .map(|path| path.display().to_string())
+                    .collect();
+                None
+            }
+            Err(e) => Some(e),
         }
-    }
+    } else {
+        None
+    };
     write_report(common.error_report.as_deref(), &summary)?;
     println!("{}", serde_json::to_string_pretty(&summary)?);
+    if let Some(e) = export_error {
+        return Err(e);
+    }
     if summary.invalid_files > 0 {
         anyhow::bail!(
             "{} of {} replay files failed; see the summary or --error-report",

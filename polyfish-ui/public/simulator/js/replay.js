@@ -86,6 +86,7 @@ async function jumpToStep(index) {
         if (!response.ok || data.status === 'error') throw new Error(data.message);
         applyReplayState(data);
     } catch (error) {
+        if (requestSeq !== REPLAY_REQUEST_SEQ) return;
         stopReplay();
         const message = error instanceof Error ? error.message : String(error);
         showToast(`Replay step failed: ${message}`);
@@ -151,7 +152,7 @@ function toggleReplayPlay() {
             jumpToStep(REPLAY_STEP_INDEX + 1);
         }
     }, 700);
-    updateReplayControls();
+    document.getElementById('replay-play').textContent = 'Pause';
 }
 
 function stopReplay() {

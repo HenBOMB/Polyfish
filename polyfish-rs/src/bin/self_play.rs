@@ -874,7 +874,20 @@ fn play_single_game(
                 }
             }
 
-            let replay_command = ReplayCommand::from_move(m.as_ref()).ok()?;
+            let replay_command = match ReplayCommand::from_move(m.as_ref()) {
+                Ok(cmd) => cmd,
+                Err(e) => {
+                    eprintln!(
+                        "[Game {}] Failed to convert move to ReplayCommand at turn {} player {}: {} (move: {})",
+                        game_idx,
+                        game.state.settings.turn,
+                        game.state.settings.current_player_turn_id,
+                        e,
+                        m.describe(&game.state)
+                    );
+                    return None;
+                }
+            };
             flat_recap.push((
                 game.state.settings.turn,
                 game.state.settings.current_player_turn_id,
@@ -943,16 +956,18 @@ fn play_single_game(
         .map(|(id, _)| *id)
         .collect();
 
-    let (winner_id, winner_score) = if alive_tribes.len() == 1 {
+    let (winner_id, winner_score, is_draw) = if alive_tribes.len() == 1 {
         let wid = alive_tribes[0];
-        (wid, *scores.get(&wid).unwrap_or(&0))
+        (wid, *scores.get(&wid).unwrap_or(&0), false)
     } else {
         // Timeout: use score tiebreaker
-        scores
+        let (id, score) = scores
             .iter()
             .max_by_key(|&(_, score)| score)
             .map(|(&id, &score)| (id, score))
-            .unwrap_or((0, 0))
+            .unwrap_or((0, 0));
+        let tied_count = scores.values().filter(|&&s| s == score).count();
+        (id, score, tied_count > 1)
     };
 
     let is_decisive = alive_tribes.len() == 1;
@@ -1020,7 +1035,7 @@ fn play_single_game(
         turns: group_recap(flat_recap),
         result: Some(ReplayResult {
             winner_player_id: Some(winner_id),
-            draw: false,
+            draw: is_draw,
             scores: scores.iter().map(|(&id, &score)| (id, score)).collect(),
             reason: Some(
                 if is_decisive {

@@ -311,6 +311,24 @@ pub fn write_training_files(
             output.display()
         ))
     })?;
+    for entry in fs::read_dir(output).map_err(|e| {
+        ReplayError::Training(format!("cannot read output directory {}: {e}", output.display()))
+    })? {
+        let entry = entry.map_err(|e| {
+            ReplayError::Training(format!("cannot list output directory: {e}"))
+        })?;
+        let name = entry.file_name();
+        if let Some(name_str) = name.to_str() {
+            if name_str.starts_with("games_pro_") && name_str.ends_with(".safetensors") {
+                fs::remove_file(entry.path()).map_err(|e| {
+                    ReplayError::Training(format!(
+                        "cannot remove stale shard {}: {e}",
+                        entry.path().display()
+                    ))
+                })?;
+            }
+        }
+    }
     let mut paths = Vec::new();
     for (part, chunk) in samples.chunks(samples_per_file).enumerate() {
         let path = output.join(format!("games_pro_{:06}.safetensors", part + 1));
@@ -343,14 +361,38 @@ fn write_chunk(samples: &[TrainingSample], path: &Path) -> Result<(), ReplayErro
     for (row, sample) in samples.iter().enumerate() {
         spatial.extend_from_slice(&sample.features.spatial);
         player.extend_from_slice(&sample.features.player);
+        if sample.targets.action_type >= NUM_ACTION_TYPES {
+            return Err(ReplayError::Training(format!(
+                "action_type {} exceeds NUM_ACTION_TYPES={} in sample from {}",
+                sample.targets.action_type, NUM_ACTION_TYPES, sample.source_file
+            )));
+        }
         action[row * NUM_ACTION_TYPES + sample.targets.action_type] = 1.0;
         if let Some(i) = sample.targets.source_spatial {
+            if i >= area {
+                return Err(ReplayError::Training(format!(
+                    "source_spatial {} exceeds area={} in sample from {}",
+                    i, area, sample.source_file
+                )));
+            }
             source[row * area + i] = 1.0;
         }
         if let Some(i) = sample.targets.target_spatial {
+            if i >= area {
+                return Err(ReplayError::Training(format!(
+                    "target_spatial {} exceeds area={} in sample from {}",
+                    i, area, sample.source_file
+                )));
+            }
             target[row * area + i] = 1.0;
         }
         if let Some(i) = sample.targets.target_type {
+            if i >= 192 {
+                return Err(ReplayError::Training(format!(
+                    "target_type {} exceeds 192 in sample from {}",
+                    i, sample.source_file
+                )));
+            }
             option[row * 192 + i] = 1.0;
         }
         values.push(sample.value);

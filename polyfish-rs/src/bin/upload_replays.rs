@@ -18,6 +18,18 @@ fn sanitize_storage_key(name: &str) -> String {
     result.trim_matches('-').to_string()
 }
 
+fn percent_encode(s: &str) -> String {
+    s.bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~' {
+                (b as char).to_string()
+            } else {
+                format!("%{:02X}", b)
+            }
+        })
+        .collect()
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = dotenvy::dotenv();
@@ -64,15 +76,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             format!(
                 "{}/rest/v1/games?uuid=eq.{}&select=id",
                 supabase_url.trim_end_matches('/'),
-                uuid_val
+                percent_encode(&uuid_val)
             )
         } else {
-            let safe_game_name = game_name.replace(" ", "%20");
             format!(
                 "{}/rest/v1/games?seed=eq.{}&game_name=eq.{}&select=id",
                 supabase_url.trim_end_matches('/'),
                 seed,
-                safe_game_name
+                percent_encode(game_name)
             )
         };
 

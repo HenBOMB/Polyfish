@@ -133,6 +133,14 @@ impl ReplayExecutor {
                 revealed_tiles,
                 technology,
             } => {
+                for &idx in revealed_tiles {
+                    if !game.state.tiles.contains_key(&idx) {
+                        return Err(ReplayError::validation(format!(
+                            "Capture hint contains out-of-bounds tile index {} at {}",
+                            idx, context
+                        )));
+                    }
+                }
                 let mut hinted = CaptureMove::new(*source);
                 hinted.reward = *reward;
                 hinted.revealed_tiles = revealed_tiles.clone();
@@ -144,6 +152,14 @@ impl ReplayExecutor {
                 reward,
                 revealed_tiles,
             } => {
+                for &idx in revealed_tiles {
+                    if !game.state.tiles.contains_key(&idx) {
+                        return Err(ReplayError::validation(format!(
+                            "Reward hint contains out-of-bounds tile index {} at {}",
+                            idx, context
+                        )));
+                    }
+                }
                 let mut hinted = RewardMove::new(*target, *reward);
                 hinted.revealed_tiles = revealed_tiles.clone();
                 game.play_move(&hinted)

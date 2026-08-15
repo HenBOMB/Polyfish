@@ -1188,8 +1188,16 @@ async fn save_replay_endpoint(
             return replay_error_json(format!("Replay must use canonical schema v1: {error}"));
         }
     };
-    if let Err(error) = ReplayExecutor::execute(&replay) {
-        return replay_error_json(error);
+    let validation_result = {
+        let replay_clone = replay.clone();
+        tokio::task::spawn_blocking(move || {
+            ReplayExecutor::execute(&replay_clone)
+        }).await
+    };
+    match validation_result {
+        Ok(Ok(_)) => {},
+        Ok(Err(error)) => return replay_error_json(error),
+        Err(e) => return replay_error_json(format!("Replay validation task failed: {}", e)),
     }
     // Create replays directory if not exists
     let _ = std::fs::create_dir_all("replays");
@@ -1365,6 +1373,13 @@ async fn save_replay_endpoint(
         )
     };
 
+    if let Err(e) = std::fs::create_dir_all("replays") {
+        return Json(serde_json::json!({
+            "status": "error",
+            "message": format!("Failed to create replays directory: {}", e)
+        }));
+    }
+
     match std::fs::write(&filename, content) {
         Ok(_) => Json(serde_json::json!({
             "status": "success",
@@ -1389,8 +1404,16 @@ async fn save_replay_local_endpoint(
             return replay_error_json(format!("Replay must use canonical schema v1: {error}"));
         }
     };
-    if let Err(error) = ReplayExecutor::execute(&replay) {
-        return replay_error_json(error);
+    let validation_result = {
+        let replay_clone = replay.clone();
+        tokio::task::spawn_blocking(move || {
+            ReplayExecutor::execute(&replay_clone)
+        }).await
+    };
+    match validation_result {
+        Ok(Ok(_)) => {},
+        Ok(Err(error)) => return replay_error_json(error),
+        Err(e) => return replay_error_json(format!("Replay validation task failed: {}", e)),
     }
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1412,6 +1435,13 @@ async fn save_replay_local_endpoint(
     let content = serde_json::to_string_pretty(&replay).unwrap();
 
     println!("✅ Successfully saved {} to Local Storage", game_name);
+
+    if let Err(e) = std::fs::create_dir_all("replays") {
+        return Json(serde_json::json!({
+            "status": "error",
+            "message": format!("Failed to create replays directory: {}", e)
+        }));
+    }
 
     match std::fs::write(&filename, content) {
         Ok(_) => Json(serde_json::json!({
@@ -1453,14 +1483,14 @@ async fn load_replay_endpoint(
         Ok(replay) => replay,
         Err(error) => return replay_error_json(error),
     };
-    install_replay(&state, replay, path.display().to_string())
+    install_replay(&state, replay, path.display().to_string()).await
 }
 
 async fn open_replay_endpoint(
     State(state): State<Arc<AppState>>,
     Json(replay): Json<Replay>,
 ) -> Json<Value> {
-    install_replay(&state, replay, "browser upload".to_string())
+    install_replay(&state, replay, "browser upload".to_string()).await
 }
 
 #[derive(serde::Deserialize)]
@@ -1473,25 +1503,39 @@ async fn replay_state_endpoint(
     State(state): State<Arc<AppState>>,
     Json(params): Json<ReplayStateParams>,
 ) -> Json<Value> {
-    let mut guard = state.replay.lock().unwrap();
-    let Some(playback) = guard.as_mut() else {
-        return Json(serde_json::json!({
+    let state_clone = Arc::clone(&state);
+    let seek_result = tokio::task::spawn_blocking(move || {
+        let mut guard = state_clone.replay.lock().unwrap();
+        let Some(playback) = guard.as_mut() else {
+            return Err("No replay playback session is loaded".to_string());
+        };
+        playback.seek(params.command_index).map_err(|e| e.to_string())?;
+        Ok(replay_playback_json(playback, None))
+    }).await;
+    match seek_result {
+        Ok(Ok(response)) => Json(response),
+        Ok(Err(msg)) => Json(serde_json::json!({
             "status": "error",
-            "message": "No replay playback session is loaded"
-        }));
-    };
-    if let Err(error) = playback.seek(params.command_index) {
-        return replay_error_json(error);
+            "message": msg
+        })),
+        Err(e) => Json(serde_json::json!({
+            "status": "error",
+            "message": format!("Replay seek task failed: {}", e)
+        })),
     }
-    Json(replay_playback_json(playback, None))
 }
 
-fn install_replay(state: &Arc<AppState>, replay: Replay, filename: String) -> Json<Value> {
+async fn install_replay(state: &Arc<AppState>, replay: Replay, filename: String) -> Json<Value> {
     // Loading is deliberately strict: execute every command once so malformed
     // or desynchronised files fail before the UI enters replay mode.
-    if let Err(error) = ReplayExecutor::execute(&replay) {
-        return replay_error_json(error);
-    }
+    let validation_result = tokio::task::spawn_blocking(move || {
+        ReplayExecutor::execute(&replay).map(|_| replay)
+    }).await;
+    let replay = match validation_result {
+        Ok(Ok(r)) => r,
+        Ok(Err(error)) => return replay_error_json(error),
+        Err(e) => return replay_error_json(format!("Replay validation task failed: {}", e)),
+    };
     let playback = match ReplayPlayback::new(replay) {
         Ok(playback) => playback,
         Err(error) => return replay_error_json(error),
