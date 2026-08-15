@@ -4461,3 +4461,46 @@ is already identified: the leaf paints `scripted_goal` while the training
 data painted the tree's COMMITTED directive, and those two disagree on
 40-55% of turns (MACRO DIVERGENCE, arena). That is a painting mismatch,
 not a label problem, and it is the cheaper of the two remaining fixes.
+
+### ACTUAL — training round (Aug 15, 2026, iterations 11-20 = EFF_ITER
+126-135, run_id 1786710389, ~2.5h wall clock). **P2 PASSED, P3 PASSED.**
+
+| | iter 10 (zero-bootstrap) | iter 20 (mc) |
+|---|---|---|
+| value_r2 | 0.7919 | **0.8072** |
+| value_loss | 0.4517 | 0.6009 |
+| policy_loss | 2.2822 | 2.1685 |
+| gauge vs anchor_iter5 (64g) | 62.5% | 65.6% |
+
+P2 (value_r2 >= 0.79): PASSED at 0.8072, the highest reading of the run,
+and it climbed monotonically over the second half (0.7811 -> 0.7944 ->
+0.7940 -> 0.7979 -> 0.8055 -> 0.8072). The value_loss RISE to 0.6009
+alongside it is the predicted shape, not a regression: full-MC labels are
+higher-variance than bootstrapped ones, so the same fit costs more raw
+MSE. Rising r2 with rising loss is exactly what a variance change looks
+like; a genuine regression would move them the same way.
+
+P3 (gauge does not fall): PASSED, 65.6% vs 62.5% at iteration 10. Both
+readings sit inside the 64-game gauge's +-12pp ruler, so the honest read
+is HELD, not improved.
+
+policy_loss fell 2.2822 -> 2.1685, continuing its trend — the
+owned-vs-rented gauge moving the right way while the label semantics
+changed under it.
+
+Behaviour was flat to slightly down over the round (score 4993 -> 4756,
+captures 5.89 -> 5.25, 3rd city 80%@t11.0 -> 72%@t12.5), with research up
+6.44 -> 7.20. Ten iterations at 64 games is far under this instrument's
+resolution, and the round changed generation in three ways at once
+(anchor games and the Stage-3a selector, not just the labels) — read
+these as "nothing broke", not as a behaviour result.
+
+OPERATIONAL NOTE (cost an exit-code-1 false alarm): the loop exited 1
+with every iteration complete and the model saved. Cause is its own EXIT
+trap: the background dashboard server it starts had already died on
+`AddrInUse` (port 3000 was held by a pre-existing polyfish server), so
+`kill $SERVER_PID` in the trap returned 1, and under `set -e` a failing
+command in an EXIT trap sets the shell's exit status. Training was never
+affected. Verified by reproduction:
+`bash -c 'set -e; trap "kill 999999 2>/dev/null; rm -f /tmp/x" EXIT; true'`
+-> exit 1.
