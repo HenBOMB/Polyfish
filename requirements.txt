@@ -20,7 +20,7 @@ grpcio==1.71.0
 gym==0.26.2
 gym-notices==0.0.8
 gymnasium==1.0.0
-idna==3.10
+idna==3.15
 ipykernel==6.29.5
 ipython==9.1.0
 ipython_pygments_lexers==1.1.1
