@@ -4,8 +4,8 @@ use crate::moves::EndTurnMove;
 use crate::moves::Move;
 use crate::states::PlayerId;
 use crate::types::MoveType;
-use rand::seq::SliceRandom;
-use rand::thread_rng;
+use rand::seq::IndexedRandom;
+use rand::rng;
 use serde::Serialize;
 
 /// Evaluation data for a single move candidate
@@ -235,7 +235,7 @@ impl MctsAgent {
 
         // Random rollout for simulation
         let max_rollout_depth = 20;
-        let mut rng = thread_rng();
+        let mut rng = rng();
 
         while !game.state.settings._game_over && moves_played < max_rollout_depth {
             let moves = game.legal_moves();

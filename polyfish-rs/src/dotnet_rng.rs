@@ -4,7 +4,7 @@
 //! algorithm. This ensures seed-for-seed and sequence-for-sequence RNG parity with
 //! the official Unity IL2CPP Polytopia engine.
 
-use rand::{Error, RngCore, SeedableRng};
+use rand::{RngCore, SeedableRng};
 
 const MBIG: i32 = 2147483647; // i32::MAX
 const MSEED: i32 = 161803398;
@@ -131,11 +131,6 @@ impl RngCore for DotNetRandom {
             dest[i..i + count].copy_from_slice(&bytes[..count]);
             i += count;
         }
-    }
-
-    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Error> {
-        self.fill_bytes(dest);
-        Ok(())
     }
 }
 

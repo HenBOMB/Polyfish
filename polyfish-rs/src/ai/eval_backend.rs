@@ -20,7 +20,7 @@
 
 use std::sync::Arc;
 use anyhow::{bail, Context, Result};
-use candle_core::{utils, Device};
+use candle_core::Device;
 use crate::ai::eval_server::{BackendSpec, EvalHandle, EvalServer, EvalServerConfig, Evaluator, ShardedEvalHandle,};
 use crate::ai::network::PolyZeroNet;
 

@@ -2,7 +2,7 @@ use clap::Parser;
 use polyfish::game::Game;
 use polyfish::mapgen::{MapGenSettings, generate};
 use polyfish::types::{MapSize, MapType, ModeType, MoveType, TribeType};
-use rand::seq::SliceRandom;
+use rand::seq::IndexedRandom;
 
 /// Stats: Calculate average moves available and played (Random Agent)
 #[derive(Parser, Debug)]
@@ -41,7 +41,7 @@ fn main() -> anyhow::Result<()> {
     let mut turn_branching_stats: std::collections::BTreeMap<i32, (u64, u64, usize)> =
         std::collections::BTreeMap::new();
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     for _i in 0..args.games {
         let gen_settings = MapGenSettings {

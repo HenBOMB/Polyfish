@@ -1446,7 +1446,7 @@ fn main() -> anyhow::Result<()> {
         tribe1_arg: &Option<String>,
         tribe2_arg: &Option<String>,
     ) -> (TribeType, TribeType) {
-        use rand::seq::SliceRandom;
+        use rand::seq::IndexedRandom;
         let t1 = match tribe1_arg {
             Some(s) => parse_tribe(s, TribeType::Imperius),
             None => *all_tribes.choose(rng).unwrap(),

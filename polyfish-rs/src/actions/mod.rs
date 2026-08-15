@@ -763,7 +763,7 @@ pub fn process_start_turn_effects(state: &mut GameState, player_id: PlayerId) ->
                             if !forest_candidates.is_empty() {
                                 // Select one at random using state seed for determinism
                                 use rand::SeedableRng;
-                                use rand::seq::SliceRandom;
+                                use rand::seq::IndexedRandom;
                                 let mut rng = rand::rngs::StdRng::seed_from_u64(
                                     (state.initial_seed as u64)
                                         ^ (state.settings.turn as u64)
