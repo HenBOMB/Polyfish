@@ -4626,3 +4626,65 @@ training so inference matches. That changes what the goal channels MEAN
 in all future macro data and knowingly mis-conditions the policy head on
 ~half of turns (MACRO DIVERGENCE 52.7%) — a training-semantics decision
 to be made with the Phase A numbers in hand, not fallen into.
+
+### ACTUAL — Phase A (Aug 15, 2026; 2500 macro roots over 120 games,
+exp046 snapshot, heuristic leaf so the trajectories are the DEPLOYED
+distribution). **P1 LIVE. P2 no bias. P3 falsified the planned Phase B
+implementation and found a larger defect than the one registered.**
+
+P1 — painting moves the value MORE than the tree's whole decision margin.
+On the 1306 divergent roots (52.2%, matching the arena's 52.7% MACRO
+DIVERGENCE): median |dV| **0.0754**, p90 0.443, against a median root
+q_spread of **0.0518** on the same rows. **Ratio 1.46x** — the
+registered LIVE threshold was 0.5x. Repainting the same state with the
+other directive perturbs the value by half again as much as the entire
+spread the tree is trying to resolve between competing directives. The
+mismatch is not a rounding error on the leaf; on divergent turns it is
+larger than the signal.
+
+P2 — no systematic bias: median dV +0.0018, mean +0.014, 53.0% positive.
+This is the WORST shape for ranking. A bias would shift all leaves
+together and partly cancel in the negamax; symmetric noise of larger
+magnitude than the signal just scrambles the ordering, and only on the
+~half of turns where the two paintings disagree.
+
+P3 — **the net is not zero-sum, and this is a bigger defect than the
+painting.** Median |V(s,p1) + V(s,p2)| = **0.386** (p90 1.067, max 1.94
+on a [-1,1] value); 21% of roots read BOTH players as winning. Control on
+the identical fogged states: the heuristic's |h(p1)+h(p2)| is
+**0.000000 at median, p90, AND max** — exactly antisymmetric, as its unit
+test requires. So fog does not explain it; this is the net's own defect,
+and it is ~13x the q_spread the tree resolves.
+
+WHY THAT MATTERS MORE: negamax backs a child's value to its parent by
+NEGATING it, which silently assumes the leaf scorer is zero-sum.
+`evaluate_state` satisfies this (there is a test —
+`evaluate_state_is_antisymmetric`); the net never had to. Every backup
+through a net leaf therefore carries a median 0.386 error against a
+0.03-0.05 decision margin. **This alone is sufficient to explain
+EXP_ELO_039's 41.9%, with no reference to painting at all** — and it was
+invisible to every previous experiment because the heuristic leaf, the
+only leaf ever deployed, satisfies the assumption for free.
+
+PHASE B AMENDED (Aug 15, dated per discipline). The registered Phase B
+(paint the edge directive, return its negation) is DEAD ON ARRIVAL: it
+depends on the very antisymmetry P3 just falsified. Replaced by, in
+order of measured size:
+  B1 — `MacroLeaf::NetAsym`: leaf value `(V(s,p) − V(s,opp))/2`, two
+     forwards per leaf, which makes the zero-sum identity hold BY
+     CONSTRUCTION. Painting unchanged (each side its own scripted goal),
+     so this is ONE variable. Pinned by `net_asym_leaf_is_zero_sum`.
+  B2 — aligned painting, only if B1 moves the number: NetAsym already
+     evaluates the mover's perspective, and for the mover the committed
+     directive IS known (it is the edge). B2 paints it there. Deliberately
+     NOT bundled with B1.
+Measurement for B1: one arena run, `--macro-leaf1 net-asym` vs heuristic,
+base_seed 1787300000, 500 seeds x2 — same seeds and same heuristic arm as
+046's re-run, so `replays/exp046/armA` is the stored comparator. McNemar
+against it isolates the antisymmetry fix; the absolute number is the seat
+test (>= 52.5%).
+
+Probe hygiene: 1 of 1194 identical-painting rows showed a nonzero dV
+(0.08%), consistent with metal batch-coalescing nondeterminism rather
+than a probe bug — the analysis asserts this count and it is reported,
+not swept.

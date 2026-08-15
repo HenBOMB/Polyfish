@@ -21,6 +21,12 @@ use crate::states::{GameState, PlayerId};
 pub enum MacroLeaf {
     Heuristic,
     Net,
+    /// EXP_ELO_047: the net, antisymmetrized — `(V(s,p) − V(s,opp))/2`.
+    /// Negamax backs a child's value up by negating it, which silently
+    /// assumes the leaf scorer is zero-sum. `evaluate_state` is (there is a
+    /// test); the net is NOT — measured `|V(s,p1)+V(s,p2)|` median 0.40 on
+    /// fogged macro roots, ~13x the q-spread the tree is trying to resolve.
+    NetAsym,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -451,7 +457,10 @@ impl<'a> MacroLookaheadAgent<'a> {
                 MacroLeaf::Heuristic => {
                     scores[i] = Some(crate::ai::evaluate_state(&sim.state, pov));
                 }
-                MacroLeaf::Net => {
+                // NetAsym collapses to Net here: this agent ranks every
+                // candidate from `pov` alone and never negates, so the
+                // zero-sum identity NetAsym exists to restore is not in play.
+                MacroLeaf::Net | MacroLeaf::NetAsym => {
                     // The candidate goal is painted into the leaf features, so
                     // win_value scores "this state, pursuing this goal".
                     match crate::ai::features::state_to_cpu_features_goal(

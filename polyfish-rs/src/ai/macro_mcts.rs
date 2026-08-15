@@ -215,15 +215,28 @@ fn leaf_value(
     player: PlayerId,
     tier3: u32,
 ) -> f32 {
-    if leaf == crate::ai::macro_agent::MacroLeaf::Net {
-        let goal = scripted_goal(state, player, tier3);
-        if let Ok(f) =
-            crate::ai::features::state_to_cpu_features_goal(state, player, None, Some(&goal))
-        {
-            if let Some(r) = eval.evaluate(vec![f]).first() {
-                return r.0;
+    use crate::ai::macro_agent::MacroLeaf;
+    let net = |p: PlayerId| -> Option<f32> {
+        let goal = scripted_goal(state, p, tier3);
+        crate::ai::features::state_to_cpu_features_goal(state, p, None, Some(&goal))
+            .ok()
+            .and_then(|f| eval.evaluate(vec![f]).first().map(|r| r.0))
+    };
+    match leaf {
+        MacroLeaf::Net => {
+            if let Some(v) = net(player) {
+                return v;
             }
         }
+        // Both perspectives, halved: makes the zero-sum identity the negamax
+        // backup assumes hold BY CONSTRUCTION, at two forwards per leaf.
+        MacroLeaf::NetAsym => {
+            let opp: PlayerId = if player == 1 { 2 } else { 1 };
+            if let (Some(a), Some(b)) = (net(player), net(opp)) {
+                return (a - b) / 2.0;
+            }
+        }
+        MacroLeaf::Heuristic => {}
     }
     crate::ai::evaluate_state(state, player)
 }
@@ -640,7 +653,7 @@ impl<'a> MacroMctsAgent<'a> {
     /// would train the head toward the evaluator it is supposed to beat.
     pub fn last_root_value(&self) -> Option<f32> {
         match self.params.leaf {
-            MacroLeaf::Net => self.last_stats.root_q,
+            MacroLeaf::Net | MacroLeaf::NetAsym => self.last_stats.root_q,
             MacroLeaf::Heuristic => None,
         }
     }
@@ -1021,6 +1034,26 @@ mod tests {
         let legal: Vec<String> =
             game.legal_moves().iter().map(|x| x.serialize().to_string()).collect();
         assert!(legal.contains(&m.serialize().to_string()), "net-leaf true-illegal move");
+    }
+
+    /// EXP_ELO_047: negamax negates a child's value to get the parent's, so a
+    /// leaf scorer must be zero-sum or every backup is off by the gap. The
+    /// net is not (measured median 0.40 on fogged macro roots, ~13x the
+    /// q-spread); `NetAsym` restores the identity by construction, and this
+    /// pins it — a Dummy evaluator returning per-seat-asymmetric values still
+    /// has to come out antisymmetric.
+    #[test]
+    fn net_asym_leaf_is_zero_sum() {
+        use crate::ai::macro_agent::MacroLeaf;
+        let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
+        let game = generated_game(3);
+        let a = leaf_value(&evaluator, MacroLeaf::NetAsym, &game.state, 1, 0);
+        let b = leaf_value(&evaluator, MacroLeaf::NetAsym, &game.state, 2, 0);
+        assert!(
+            (a + b).abs() < 1e-6,
+            "NetAsym leaf must be zero-sum: v(p1)={a} v(p2)={b} sum={}",
+            a + b
+        );
     }
 
     #[test]
