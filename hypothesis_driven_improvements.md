@@ -4504,3 +4504,48 @@ command in an EXIT trap sets the shell's exit status. Training was never
 affected. Verified by reproduction:
 `bash -c 'set -e; trap "kill 999999 2>/dev/null; rm -f /tmp/x" EXIT; true'`
 -> exit 1.
+
+### ACTUAL — P1, the EXP_ELO_039 re-run (Aug 15, 2026, 1000 games,
+37 min). **P1 FALSIFIED A SECOND TIME.** Net leaf 419/1000 (41.9%) vs
+heuristic leaf 580 (58.0%), 1 draw; z = (419-499.5)/15.8 = **-5.09**.
+Avg score 4071 vs 4821. Cost 298 vs 232 ms/move (+28%, inside the 3x
+guardrail). Snapshot `checkpoints/exp046_snapshot_iter135.safetensors`,
+sha256 4cbb9ddc61bc1fd2aad015d7ace7ddfd90069f23774289f47c9b646505e26e67
+(run 1786710389 iter 20 = EFF_ITER 135, value_r2 0.807, policy_loss
+2.169). Same arms, same 500 seeds, same base_seed 1787300000 as the
+original.
+
+Direction of travel, stated as directional only: 38.8% -> 41.9%
+(+3.1pp). The corrected labels moved the leaf the RIGHT way, and by
+more than the round's other metrics suggested — but nowhere near the
+50% it needs to take the seat. NOT a clean paired read: the re-run's
+binary carries 67cae7f (in-tree lane selection for both seats +
+refutation bypass), which is symmetric across the two arms here (so the
+net-vs-heuristic comparison inside this run is clean) but differs from
+the binary that produced the original 38.8%.
+
+Behaviour tell, new this round: the net-leaf arm plays a materially
+LOOSER game — 3.69 sieges/game suffered vs the heuristic arm's 2.22, and
+1.62 cities lost vs 1.19. It is not passively losing; it is picking
+fights and positions it cannot hold. That is a plan-quality failure at
+the leaf, not a timid evaluator.
+
+CONSEQUENCE (as pre-registered): the net leaf is RETIRED, not re-skinned.
+`MACRO_LEAF` stays `heuristic` in generation and in play. Two independent
+falsifications, the second on labels specifically corrected to address
+the first, is the standard this ledger set for retiring an idea.
+
+The one caveat that survives retirement, recorded so it is not silently
+re-litigated: the leaf paints `scripted_goal` for the leaf player because
+the committed directive is unknowable before the choice, while the
+training data painted the tree's COMMITTED directive — the two disagree
+on 40-55% of turns (MACRO DIVERGENCE, arena). So 039 is strictly a
+verdict on "the net leaf AS PAINTED", and a painting fix is a different
+experiment, not a re-run of this one. It is cheap and it is identified;
+it is not scheduled.
+
+STANDING: Stage 3b (`aux_playstyle` head + the 169->173 migration across
+~210 checkpoints) stays DEFERRED. Its premise was that a trunk which can
+rank futures at the leaf is a credible lane ranker; that premise has now
+been tested twice and failed twice. Tier 1 keeps its algorithmic
+selector (045a-v2: behaviour-neutral, tribe prior working as specified).
