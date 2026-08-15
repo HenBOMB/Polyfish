@@ -14,7 +14,10 @@ use polyfish::ai::mapper::DecomposedMapper;
 use polyfish::ai::network::PolyZeroNet;
 use polyfish::ai::reward;
 use polyfish::game::{Game, STARTING_OWNER_ID};
-use polyfish::replayer::{ModReplay, ReplayPlayer, ReplayTurn};
+use polyfish::replay::{
+    REPLAY_SCHEMA_VERSION, Replay, ReplayCommand, ReplayMetadata, ReplayPlayerMetadata,
+    ReplayResult, ReplaySource, ReplayTurn,
+};
 use polyfish::states::{GameState, PlayerId};
 use polyfish::types::MapSize;
 use serde_json::json;
@@ -24,6 +27,7 @@ use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use strum::IntoEnumIterator;
 
 const HEURISTIC_PRIOR_W0: f32 = 0.5; // net & heur blended 50/50 at start
 const HEURISTIC_PRIOR_DECAY: f32 = 0.97; // decays 0.5 -> 0.1 floor by ~iteration 47
@@ -192,6 +196,7 @@ fn write_decision_trace(
     }
 }
 
+
 /// Curriculum — Tiny maps only, turn cap grows with (effective) iteration.
 fn curriculum(iteration: usize) -> (MapSize, i32) {
     if iteration <= 10 {
@@ -223,7 +228,7 @@ fn finish_milestones(num_games: usize) -> Vec<usize> {
 
 /// Decomposed policy probability distributions for a single step
 struct DecomposedPolicyData {
-    action_type: Vec<f32>,    // [11]
+    action_type: Vec<f32>,    // [12]
     source_spatial: Vec<f32>, // [H * W]
     target_spatial: Vec<f32>, // [H * W]
     move_option: Vec<f32>,    // [192]
@@ -396,7 +401,7 @@ struct GameResult {
     decisive: bool,
     /// Seat (player id) the greedy anchor occupied; None for non-anchor games.
     anchor_seat: Option<i32>,
-    recap: ModReplay,
+    recap: Replay,
     cap_ruins: usize,
     cap_villages: usize,
     cap_cities: usize,
@@ -651,7 +656,7 @@ fn play_single_game(
     }
 
     let initial_state = game.state.clone();
-    let mut flat_recap: Vec<(i32, i32, serde_json::Value)> = Vec::new();
+    let mut flat_recap: Vec<(i32, i32, ReplayCommand)> = Vec::new();
 
     let mut cap_ruins = 0;
     let mut cap_villages = 0;
@@ -760,7 +765,7 @@ fn play_single_game(
         let fixed_map_width = features::MAP_SIZE;
         let fixed_spatial_size = features::MAP_SIZE * fixed_map_width;
 
-        let mut p_action = vec![0.0; 11];
+        let mut p_action = vec![0.0; polyfish::ai::network::NUM_ACTION_TYPES];
         let mut p_source = vec![0.0; fixed_spatial_size];
         let mut p_target = vec![0.0; fixed_spatial_size];
         let mut p_option = vec![0.0; 192]; // Unified option head (Expanded)
@@ -869,10 +874,11 @@ fn play_single_game(
                 }
             }
 
+            let replay_command = ReplayCommand::from_move(m.as_ref()).ok()?;
             flat_recap.push((
                 game.state.settings.turn,
                 game.state.settings.current_player_turn_id,
-                m.serialize(),
+                replay_command,
             ));
             // Snapshot scores/SPT at this moment (pre-move) for the TD label.
             let (my_score_now, opp_score_now) = reward::score_snapshot(&game.state, pov);
@@ -988,6 +994,45 @@ fn play_single_game(
         total_cities += t.cities.len() as i32;
     }
 
+    let replay_players = initial_state
+        .tribes
+        .iter()
+        .map(|(&player_id, tribe)| ReplayPlayerMetadata {
+            player_id,
+            tribe: tribe.tribe_type,
+            name: (!tribe.username.is_empty()).then(|| tribe.username.clone()),
+        })
+        .collect();
+    let recap = Replay {
+        schema_version: REPLAY_SCHEMA_VERSION,
+        metadata: ReplayMetadata {
+            source: ReplaySource::PolyfishSelfPlay,
+            game_id: Some(format!("selfplay-{iteration}-{game_idx}-{seed}")),
+            created_at: None,
+            map_width: initial_state.settings.size as usize,
+            map_height: initial_state.settings.size as usize,
+            max_turns: initial_state.settings.max_turns,
+            game_mode: initial_state.settings.mode,
+            players: replay_players,
+            source_diagnostics: None,
+        },
+        initial_state,
+        turns: group_recap(flat_recap),
+        result: Some(ReplayResult {
+            winner_player_id: Some(winner_id),
+            draw: false,
+            scores: scores.iter().map(|(&id, &score)| (id, score)).collect(),
+            reason: Some(
+                if is_decisive {
+                    "elimination"
+                } else {
+                    "scoreAtLimit"
+                }
+                .into(),
+            ),
+        }),
+    };
+
     Some(GameResult {
         game_idx,
         history: game_history,
@@ -1018,10 +1063,7 @@ fn play_single_game(
             (false, true) => Some(2),
             _ => None,
         },
-        recap: ModReplay {
-            game_state: initial_state,
-            turns: group_recap(flat_recap),
-        },
+        recap,
         cap_ruins,
         cap_villages,
         cap_cities,
@@ -1096,23 +1138,21 @@ fn rolling_anchor_winrate(current_iteration: usize) -> Option<f32> {
     (games > 0).then(|| wins / games as f32)
 }
 
-fn group_recap(flat: Vec<(i32, i32, serde_json::Value)>) -> Vec<ReplayTurn> {
+fn group_recap(flat: Vec<(i32, i32, ReplayCommand)>) -> Vec<ReplayTurn> {
     let mut turns: Vec<ReplayTurn> = Vec::new();
     for (turn_num, player_id, cmd) in flat {
-        if turns.is_empty() || turns.last().unwrap().turn != turn_num {
+        if turns.is_empty()
+            || turns.last().unwrap().turn_number != turn_num
+            || turns.last().unwrap().player_id != player_id
+        {
             turns.push(ReplayTurn {
-                turn: turn_num,
-                players: Vec::new(),
-            });
-        }
-        let turn = turns.last_mut().unwrap();
-        if turn.players.is_empty() || turn.players.last().unwrap().player_id != player_id {
-            turn.players.push(ReplayPlayer {
+                turn_number: turn_num,
                 player_id,
                 commands: Vec::new(),
             });
         }
-        turn.players.last_mut().unwrap().commands.push(cmd);
+        let turn = turns.last_mut().unwrap();
+        turn.commands.push(cmd);
     }
     turns
 }
@@ -1847,7 +1887,7 @@ fn main() -> anyhow::Result<()> {
     let mut kl_game_sum = 0.0f64;
     let mut kl_game_n = 0u32;
     let mut max_score = 0;
-    let mut best_recap: Option<ModReplay> = None;
+    let mut best_recap: Option<Replay> = None;
     let mut total_moves = 0;
 
     let mut p1_total = 0;
@@ -2226,7 +2266,7 @@ fn main() -> anyhow::Result<()> {
 
         let action_tensor = Tensor::from_vec(
             flatten_vec(collected_action_type),
-            (total_steps, 11),
+            (total_steps, polyfish::ai::network::NUM_ACTION_TYPES),
             &device,
         )?;
 
@@ -2272,7 +2312,7 @@ fn main() -> anyhow::Result<()> {
         // Save BEST game as replay
         if let Some(recap) = best_recap {
             let replay_filename = format!(
-                "replays/high_scores/best_game_score_{}_{}.json",
+                "replays/high_scores/best_game_score_{}_{}.replay.json",
                 max_score, timestamp
             );
             if let Ok(json) = serde_json::to_string_pretty(&recap) {

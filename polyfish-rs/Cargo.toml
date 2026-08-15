@@ -31,6 +31,7 @@ regex = "1.10"
 lru = "0.16"
 rustc-hash = "1.1"
 dyn-clone = "1.0"
+thiserror = "2.0"
 # tch 0.25 (targets PyTorch 2.12) — not yet on crates.io, pinned to the exact
 # rev that merged 2.12 support. Optional: only pulled in by the `tch-eval`
 # feature so default builds stay candle-only and lean.
@@ -89,4 +90,3 @@ required-features = ["metal-eval", "tch-eval"]
 [[example]]
 name = "tch_parity"
 required-features = ["tch-eval"]
-

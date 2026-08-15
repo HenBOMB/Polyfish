@@ -15,6 +15,7 @@ use polyfish::moves::{
         freeze_area::FreezeAreaMove, heal_others::HealOthersMove, promote::PromoteMove,
     },
 };
+use polyfish::replay::{Replay, ReplayExecutor, ReplayPlayback, load_replay};
 use polyfish::types::{AbilityType, MapSize, TribeType};
 use polyfish::{MapType, game::Game};
 use serde_json::Value;
@@ -26,6 +27,7 @@ use polyfish::recorder::GameRecorder;
 
 struct AppState {
     game: Mutex<Game>,
+    replay: Mutex<Option<ReplayPlayback>>,
     training_status: Mutex<Option<u32>>, // Store PID of running training
     network: Option<Arc<polyfish::ai::network::PolyZeroNet>>, // Trained neural network
     recorder: Arc<GameRecorder>,
@@ -64,34 +66,23 @@ async fn main() {
         }
     }
 
-    // 2. Try to load the latest mod replay from replays/ directory
+    // 2. Try to load the latest canonical replay from replays/.
     if !loaded {
         if let Ok(entries) = std::fs::read_dir("replays") {
-            let mut mod_replays: Vec<_> = entries
+            let mut canonical_replays: Vec<_> = entries
                 .flatten()
-                .filter(|e| e.file_name().to_string_lossy().starts_with("mod_replay_"))
+                .filter(|e| e.file_name().to_string_lossy().ends_with(".replay.json"))
                 .collect();
 
-            // Sort by modification time (latest first)
-            mod_replays.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
-            if let Some(latest) = mod_replays.last() {
-                if let Ok(json) = std::fs::read_to_string(latest.path()) {
-                    // Replay might be GameState OR { turns, gameState }
-                    let val: Value = serde_json::from_str(&json).unwrap_or(Value::Null);
-                    let state_res = if val["gameState"].is_object() {
-                        serde_json::from_value::<polyfish::states::GameState>(
-                            val["gameState"].clone(),
-                        )
-                    } else {
-                        serde_json::from_value::<polyfish::states::GameState>(val)
-                    };
-
-                    if let Ok(state) = state_res {
+            canonical_replays.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
+            if let Some(latest) = canonical_replays.last() {
+                if let Ok(replay) = load_replay(latest.path()) {
+                    if let Ok(replayed) = ReplayExecutor::execute(&replay) {
                         println!(
-                            "✅ Loading live game from latest replay: {:?}",
+                            "✅ Loading final state from canonical replay: {:?}",
                             latest.file_name()
                         );
-                        game.state = state;
+                        game = replayed;
                         loaded = true;
                     }
                 }
@@ -143,6 +134,7 @@ async fn main() {
 
     let shared_state = Arc::new(AppState {
         game: Mutex::new(game),
+        replay: Mutex::new(None),
         training_status: Mutex::new(None),
         network: Some(Arc::new(network)),
         recorder,
@@ -170,7 +162,8 @@ async fn main() {
         .route("/replay/save", post(save_replay_endpoint))
         .route("/replay/save-local", post(save_replay_local_endpoint))
         .route("/replay/load", post(load_replay_endpoint))
-        .route("/replay/analyze", post(analyze_replay_step))
+        .route("/replay/open", post(open_replay_endpoint))
+        .route("/replay/state", post(replay_state_endpoint))
         .route("/replay/load_initial", post(load_initial_endpoint))
         .route("/replay/list_initial", get(list_initial_endpoint))
         .route("/trainer/hint", post(get_trainer_hint))
@@ -1186,9 +1179,18 @@ fn sanitize_storage_key(name: &str) -> String {
 }
 
 async fn save_replay_endpoint(
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     body: Json<Value>,
 ) -> Json<Value> {
+    let replay: Replay = match serde_json::from_value(body.0.clone()) {
+        Ok(replay) => replay,
+        Err(error) => {
+            return replay_error_json(format!("Replay must use canonical schema v1: {error}"));
+        }
+    };
+    if let Err(error) = ReplayExecutor::execute(&replay) {
+        return replay_error_json(error);
+    }
     // Create replays directory if not exists
     let _ = std::fs::create_dir_all("replays");
 
@@ -1197,15 +1199,14 @@ async fn save_replay_endpoint(
         .unwrap()
         .as_secs();
 
-    let (filename, content) = if body["turns"].is_array() {
-        // get the name from body.gameState.settings.gameName
-        let game_name = body["gameState"]["settings"]["gameName"]
-            .as_str()
-            .unwrap_or("Unknown");
-        let seed = body["gameState"]["initial_seed"]
-            .as_u64()
-            .or_else(|| body["gameState"]["settings"]["seed"].as_u64())
-            .unwrap_or(0);
+    let (filename, content) = {
+        let game_name = replay
+            .metadata
+            .game_id
+            .as_deref()
+            .filter(|name| !name.is_empty())
+            .unwrap_or(&replay.initial_state.settings.game_name);
+        let seed = replay.initial_state.initial_seed;
 
         let supabase_key = std::env::var("SUPABASE_SERVICE_ROLE_KEY")
             .or_else(|_| std::env::var("SUPABASE_PUBLIC_ANON_KEY"))
@@ -1215,7 +1216,12 @@ async fn save_replay_endpoint(
         if !supabase_url.is_empty() && !supabase_key.is_empty() {
             let client = reqwest::Client::new();
 
-            let db_url = if let Some(uuid) = body["uuid"].as_str() {
+            let db_url = if let Some(uuid) = replay
+                .metadata
+                .game_id
+                .as_deref()
+                .filter(|uuid| !uuid.is_empty())
+            {
                 format!(
                     "{}/rest/v1/games?uuid=eq.{}&select=id",
                     supabase_url.trim_end_matches('/'),
@@ -1256,7 +1262,11 @@ async fn save_replay_endpoint(
             // Record does not exist, upload to Supabase Storage directly!
             let bucket_name =
                 std::env::var("SUPABASE_STORAGE_BUCKET").unwrap_or_else(|_| "games".to_string());
-            let file_name = format!("{}_{}.json", sanitize_storage_key(game_name), timestamp);
+            let file_name = format!(
+                "{}_{}.replay.json",
+                sanitize_storage_key(game_name),
+                timestamp
+            );
             let storage_url = format!(
                 "{}/storage/v1/object/{}/{}",
                 supabase_url.trim_end_matches('/'),
@@ -1269,7 +1279,7 @@ async fn save_replay_endpoint(
                 .header("apikey", &supabase_key)
                 .header("Authorization", format!("Bearer {}", supabase_key))
                 .header("Content-Type", "application/json")
-                .body(serde_json::to_string(&*body).unwrap_or_default());
+                .body(serde_json::to_string(&replay).unwrap_or_default());
 
             match upload_req.send().await {
                 Ok(res) => {
@@ -1295,7 +1305,7 @@ async fn save_replay_endpoint(
             let insert_url = format!("{}/rest/v1/games", supabase_url.trim_end_matches('/'));
 
             // Extract UUID if present (from the root of the serialized replay)
-            let uuid_val = body["uuid"].as_str().unwrap_or("").to_string();
+            let uuid_val = replay.metadata.game_id.clone().unwrap_or_default();
             let mut insert_payload = serde_json::json!({
                 "seed": seed,
                 "game_name": game_name,
@@ -1351,23 +1361,8 @@ async fn save_replay_endpoint(
                 sanitize_storage_key(game_name),
                 timestamp
             ),
-            serde_json::to_string_pretty(&*body).unwrap(),
+            serde_json::to_string_pretty(&replay).unwrap(),
         )
-    } else if let Some(name) = body["name"].as_str() {
-        // Legacy: save current server state under this name
-        let game = state.game.lock().unwrap();
-        let safe_name: String = name
-            .chars()
-            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
-            .collect();
-        (
-            format!("replays/{}_{}.json", safe_name, timestamp),
-            serde_json::to_string_pretty(&game.state).unwrap(),
-        )
-    } else {
-        return Json(
-            serde_json::json!({ "status": "error", "message": "Invalid replay data format" }),
-        );
     };
 
     match std::fs::write(&filename, content) {
@@ -1385,50 +1380,36 @@ async fn save_replay_endpoint(
 
 // instead of saving to the db, save to /replays
 async fn save_replay_local_endpoint(
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     body: Json<Value>,
 ) -> Json<Value> {
+    let replay: Replay = match serde_json::from_value(body.0.clone()) {
+        Ok(replay) => replay,
+        Err(error) => {
+            return replay_error_json(format!("Replay must use canonical schema v1: {error}"));
+        }
+    };
+    if let Err(error) = ReplayExecutor::execute(&replay) {
+        return replay_error_json(error);
+    }
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();
 
-    let game_name = body["gameState"]["settings"]["gameName"]
-        .as_str()
-        .unwrap_or("Unknown");
+    let game_name = replay
+        .metadata
+        .game_id
+        .as_deref()
+        .filter(|name| !name.is_empty())
+        .unwrap_or(&replay.initial_state.settings.game_name);
 
-    let (filename, content) = if body["turns"].is_array() {
-        // get the name from body.gameState.settings.gameName
-
-        let _seed = body["gameState"]["initial_seed"]
-            .as_u64()
-            .or_else(|| body["gameState"]["settings"]["seed"].as_u64())
-            .unwrap_or(0);
-
-        (
-            format!(
-                "replays/{}_{}.json",
+    let filename = format!(
+        "replays/{}_{}.replay.json",
                 sanitize_storage_key(game_name),
                 timestamp
-            ),
-            serde_json::to_string_pretty(&*body).unwrap(),
-        )
-    } else if let Some(name) = body["name"].as_str() {
-        // Legacy: save current server state under this name
-        let game = state.game.lock().unwrap();
-        let safe_name: String = name
-            .chars()
-            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
-            .collect();
-        (
-            format!("replays/{}_{}.json", safe_name, timestamp),
-            serde_json::to_string_pretty(&game.state).unwrap(),
-        )
-    } else {
-        return Json(
-            serde_json::json!({ "status": "error", "message": "Invalid replay data format" }),
-        );
-    };
+    );
+    let content = serde_json::to_string_pretty(&replay).unwrap();
 
     println!("✅ Successfully saved {} to Local Storage", game_name);
 
@@ -1454,42 +1435,89 @@ async fn load_replay_endpoint(
     State(state): State<Arc<AppState>>,
     Json(params): Json<LoadReplayParams>,
 ) -> Json<Value> {
-    let mut game = state.game.lock().unwrap();
-
-    // Security check: simple path traversal prevention
-    if params.filename.contains("..")
-        || params.filename.contains("/")
-        || params.filename.contains("\\")
+    let requested = params
+        .filename
+        .strip_prefix("replays/")
+        .unwrap_or(&params.filename);
+    if requested.is_empty()
+        || requested.contains("..")
+        || requested.contains('/')
+        || requested.contains('\\')
     {
-        // allow if it starts with "replays/"
-        if !params.filename.starts_with("replays/") {
-            return Json(serde_json::json!({ "status": "error", "message": "Invalid filename" }));
-        }
+        return Json(
+            serde_json::json!({ "status": "error", "message": "Replay filename must name one file inside replays/" }),
+        );
     }
-
-    let path = if params.filename.starts_with("replays/") {
-        params.filename.clone()
-    } else {
-        format!("replays/{}", params.filename)
+    let path = std::path::PathBuf::from("replays").join(requested);
+    let replay = match load_replay(&path) {
+        Ok(replay) => replay,
+        Err(error) => return replay_error_json(error),
     };
+    install_replay(&state, replay, path.display().to_string())
+}
 
-    match std::fs::read_to_string(&path) {
-        Ok(json) => match serde_json::from_str::<polyfish::states::GameState>(&json) {
-            Ok(loaded_state) => {
-                game.state = loaded_state;
-                game.post_load();
+async fn open_replay_endpoint(
+    State(state): State<Arc<AppState>>,
+    Json(replay): Json<Replay>,
+) -> Json<Value> {
+    install_replay(&state, replay, "browser upload".to_string())
+}
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReplayStateParams {
+    command_index: usize,
+}
+
+async fn replay_state_endpoint(
+    State(state): State<Arc<AppState>>,
+    Json(params): Json<ReplayStateParams>,
+) -> Json<Value> {
+    let mut guard = state.replay.lock().unwrap();
+    let Some(playback) = guard.as_mut() else {
+        return Json(serde_json::json!({
+            "status": "error",
+            "message": "No replay playback session is loaded"
+        }));
+    };
+    if let Err(error) = playback.seek(params.command_index) {
+        return replay_error_json(error);
+    }
+    Json(replay_playback_json(playback, None))
+}
+
+fn install_replay(state: &Arc<AppState>, replay: Replay, filename: String) -> Json<Value> {
+    // Loading is deliberately strict: execute every command once so malformed
+    // or desynchronised files fail before the UI enters replay mode.
+    if let Err(error) = ReplayExecutor::execute(&replay) {
+        return replay_error_json(error);
+    }
+    let playback = match ReplayPlayback::new(replay) {
+        Ok(playback) => playback,
+        Err(error) => return replay_error_json(error),
+    };
+    let response = replay_playback_json(&playback, Some(&filename));
+    *state.replay.lock().unwrap() = Some(playback);
+    Json(response)
+}
+
+fn replay_error_json(error: impl std::fmt::Display) -> Json<Value> {
+    Json(serde_json::json!({ "status": "error", "message": error.to_string() }))
+}
+
+fn replay_playback_json(playback: &ReplayPlayback, filename: Option<&str>) -> Value {
+    let game = playback.game();
                 let mut tiles: Vec<_> = game.state.tiles.values().collect();
-                tiles.sort_by_key(|t| t.coords.idx);
-
-                let legal_moves: Vec<_> =
-                    game.legal_moves().iter().map(|m| m.serialize()).collect();
-
-                let evaluation = build_evaluation_json(&game.state);
-
-                Json(serde_json::json!({
+    tiles.sort_by_key(|tile| tile.coords.idx);
+    serde_json::json!({
                     "status": "success",
-                    "filename": path,
+        "filename": filename,
+        "cursor": playback.cursor(),
+        "totalCommands": playback.total_commands(),
+        "context": playback.context(),
+        "currentCommand": playback.current_command(),
+        "metadata": playback.replay().metadata,
+        "result": playback.replay().result,
                     "state": {
                         "settings": game.state.settings,
                         "tiles": tiles,
@@ -1498,20 +1526,9 @@ async fn load_replay_endpoint(
                         "tribes": tribes_json_with_max_health(&game.state),
                         "_prediction": game.state._prediction,
                         "_messages": game.state._messages,
-                        "history": game.state._history,
                     },
-                    "legalMoves": legal_moves,
-                    "evaluation": evaluation
-                }))
-            }
-            Err(e) => Json(
-                serde_json::json!({ "status": "error", "message": format!("Failed to parse replay: {}", e) }),
-            ),
-        },
-        Err(e) => Json(
-            serde_json::json!({ "status": "error", "message": format!("Failed to read replay file: {}", e) }),
-        ),
-    }
+        "evaluation": build_evaluation_json(&game.state),
+    })
 }
 
 #[derive(serde::Deserialize)]
@@ -1680,183 +1697,6 @@ async fn load_initial_endpoint(
     }
 }
 
-#[derive(serde::Deserialize)]
-struct AnalyzeReplayParams {
-    filename: String,
-    step_index: usize,
-    iterations: usize,
-}
-
-async fn analyze_replay_step(
-    State(state): State<Arc<AppState>>,
-    Json(params): Json<AnalyzeReplayParams>,
-) -> Json<Value> {
-    if !state.network.is_some() {
-        return Json(serde_json::json!({
-            "status": "error",
-            "message": "No trained network available"
-        }));
-    }
-
-    // 1. Load the replay file to get initial seed and history
-    let path = if params.filename.starts_with("replays/") {
-        params.filename.clone()
-    } else {
-        format!("replays/{}", params.filename)
-    };
-
-    let replay_state: polyfish::states::GameState = match std::fs::read_to_string(&path) {
-        Ok(json) => serde_json::from_str(&json).unwrap_or_default(),
-        Err(e) => {
-            return Json(serde_json::json!({ "error": format!("Failed to load replay: {}", e) }));
-        }
-    };
-
-    if replay_state._history.len() <= params.step_index {
-        return Json(serde_json::json!({ "error": "Step index out of bounds" }));
-    }
-
-    // 2. Initialize a FRESH game with the SAME seed
-    let mut map_settings = MapGenSettings::default();
-    map_settings.size = match replay_state.settings.size {
-        11 => polyfish::types::MapSize::Tiny,
-        13 => polyfish::types::MapSize::Small,
-        16 => polyfish::types::MapSize::Normal,
-        24 => polyfish::types::MapSize::Large,
-        32 => polyfish::types::MapSize::Huge,
-        90 => polyfish::types::MapSize::Massive,
-        _ => polyfish::types::MapSize::Normal,
-    };
-    map_settings.seed = replay_state.initial_seed;
-    map_settings.map_type = replay_state.settings.map_type;
-
-    // Need to extract tribes from replay settings or state?
-    // GameSettings doesn't store the tribe list directly as TribeType enum vec, but state.tribes does
-    // Extract unique tribe types from replay_state.tribes
-    let mut tribes = Vec::new();
-    // Sort by ID to ensure consistent order if that matters
-    let mut sorted_tribes: Vec<_> = replay_state.tribes.values().collect();
-    sorted_tribes.sort_by_key(|t| t.id);
-    for t in sorted_tribes {
-        tribes.push(t.tribe_type);
-    }
-    map_settings.tribes = tribes;
-
-    let initial_state = generate(map_settings);
-    let mut game = Game::new();
-    game.state = initial_state;
-    // Restore initial seed again just in case generate() didn't set it (it should have used it)
-    game.state.initial_seed = replay_state.initial_seed;
-    game.post_load();
-
-    // 3. Replay moves up to step_index (exclusive? or inclusive? let's say we want to analyze the state BEFORE turn step_index is played)
-    // Wait, if we want to compare "User Move vs AI Move", we need the state *before* the user made the move at step_index.
-    // So we replay moves 0 to step_index - 1.
-
-    for i in 0..params.step_index {
-        if i >= replay_state._history.len() {
-            break;
-        }
-
-        let move_json = &replay_state._history[i];
-
-        // We need to parse this JSON back into a Box<dyn Move>
-        // Use a matching logic similar to manual_step... logic duplication is confusing.
-        // Better way: Implement Game::deserialize_move?
-        // For now, let's copy the deserialization logic or create a helper.
-        // Actually, since we only need to play it, we can identify it from legal moves if it matches?
-        // But some moves (like Build) have parameters that legal_moves might not fully capture if they are identical?
-        // Actually, `legal_moves` generates all distinct moves. We can find the one that matches the JSON.
-
-        // Find matching move in legal moves
-        let legal = game.legal_moves();
-        let mut found = false;
-
-        // serialized form comparison
-        for m in legal {
-            if m.serialize() == *move_json {
-                game.play_move(m.as_ref());
-                found = true;
-                break;
-            }
-        }
-
-        if !found {
-            return Json(serde_json::json!({
-                "error": format!("Failed to replay move at step {}: Move desync or invalid. JSON: {:?}", i, move_json)
-            }));
-        }
-    }
-
-    // 4. Now game is at the state just before the user played history[step_index]
-    // Run Gumbel AlphaZero analysis
-    use polyfish::ai::brain::Brain;
-    use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
-    let evaluator = Evaluator::Inline(InlineEvalHandle::new(
-        state.network.as_ref().unwrap().clone(),
-    ));
-    let mut brain = Brain::with_backend(
-        &evaluator,
-        params.iterations,
-        polyfish::ai::brain::SearchBackend::Gumbel { k: 16 },
-    )
-    .with_prior_heuristic_weight(0.1)
-    .with_policy_target_q_weight(1.0)
-    .with_tree_q_weight(1.0);
-    brain.request_trace();
-    let (best_move, _stats) = brain.think_with_stats(&mut game);
-    let mcts_analysis = brain
-        .take_trace()
-        .map(|t| serde_json::to_value(&t).unwrap_or(serde_json::Value::Null))
-        .unwrap_or(serde_json::Value::Null);
-
-    let ai_move_json = best_move
-        .as_ref()
-        .map(|m: &Box<dyn polyfish::moves::Move>| m.serialize());
-    let ai_move_desc = best_move
-        .as_ref()
-        .map(|m: &Box<dyn polyfish::moves::Move>| m.describe(&game.state))
-        .unwrap_or("None".to_string());
-
-    // User's actual move
-    let user_move_json = &replay_state._history[params.step_index];
-    // Find desc for user move
-    let legal = game.legal_moves();
-    let mut user_move_desc = "Unknown Move".to_string();
-    for m in legal {
-        if m.serialize() == *user_move_json {
-            user_move_desc = m.describe(&game.state);
-            break;
-        }
-    }
-
-    // Build state for frontend
-    let mut tiles: Vec<_> = game.state.tiles.values().collect();
-    tiles.sort_by_key(|t| t.coords.idx);
-
-    Json(serde_json::json!({
-        "stepIndex": params.step_index,
-        "state": {
-            "settings": game.state.settings,
-            "tiles": tiles,
-            "structures": game.state.structures,
-            "resources": game.state.resources,
-            "tribes": tribes_json_with_max_health(&game.state),
-            "_prediction": game.state._prediction,
-            "_messages": game.state._messages,
-        },
-        "userMove": {
-            "json": user_move_json,
-            "description": user_move_desc
-        },
-        "aiMove": {
-            "json": ai_move_json,
-            "description": ai_move_desc
-        },
-        "mctsAnalysis": mcts_analysis,
-        "evaluation": build_evaluation_json(&game.state)
-    }))
-}
 
 async fn list_initial_endpoint() -> Json<Value> {
     let path = "../src/scraper/data/training-data/";

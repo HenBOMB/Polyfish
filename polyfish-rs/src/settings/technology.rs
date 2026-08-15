@@ -247,6 +247,7 @@ pub fn get_technology_setting(tech_type: TechnologyType) -> TechnologySetting {
             tribe_type: Some(TribeType::Polaris),
             next: vec![Polarism],
             unlocks_unit: Some(UnitType::Mooni),
+            unlocks_special_structures: vec![StructureType::Outpost],
             ..Default::default()
         },
         Sledding => TechnologySetting {
