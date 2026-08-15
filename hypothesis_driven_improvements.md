@@ -5002,3 +5002,68 @@ coverage pricing (both tried, both null). It is (a) fielding units that
 can kill what shows up, and (b) not letting a Giant reach a city with 1
 star in the bank. Both are ECONOMY/COMPOSITION decisions, several turns
 upstream of the siege.
+
+## EXP_ELO_050 — city risk as a priced potential: prevention, not cure
+
+STATUS: REGISTERED (Aug 15, 2026), Verdi-specified.
+
+THE SPEC (Verdi): "using all of the enemy's units and tech in view, do they
+have a path to sieging my city and is that an unbreakable siege? If yes, I
+need counter-measures... choose the cheapest defense based on my goals, or
+accelerate my path towards something like a giant. I want this to be priced
+so that it can distill in the net."
+
+WHY THE OLD MODEL WAS WRONG. EXP_ELO_040 built the threat model around
+COVERAGE — can a unit of mine strike that tile — and EXP_ELO_049 then
+measured that yardstick to be uninformative: unsiege rate 26.6% with a
+responder vs 21.4% without, and a parked Giant cleared 6% of the time.
+Cure does not work; the fixture (seed 1786807403) shows why prevention
+does: the capital was lost on t10 after the garrison stepped off on t9,
+and the answering attack carried a policy prior of 0.0000.
+
+WHAT SHIPS.
+- `defense::city_risks` — per city: is it sieged now; is it OPEN (nothing of
+  mine on the tile); can a visible enemy END its move there next turn (real
+  movement, roads and tech included, via the banded `can_reach_tile`); and
+  if they park there, is the siege BREAKABLE (sum of my deliverable damage
+  on that tile >= their health, with the city's defense bonus applied to
+  the occupier). Risk dials, in doctrine order: unbreakable siege 1.0,
+  breakable 0.45, garrison that would fall 0.35, garrison that holds 0.05,
+  two-turn approach 0.30.
+- `defense::expected_city_loss` = Σ risk x worth, worth = 12 + 6·level, in
+  the score-equivalent units Φ already uses.
+- `reward::goal_potential` subtracts `SHAPE_GOAL_CITY_RISK` x that. Being a
+  POTENTIAL is the point: the ply that steps the last unit off a threatened
+  city pays exactly what the ply that garrisons it earns, it is live on
+  every stance and every turn, and it distills through the goal channels
+  into the net rather than living in a mask.
+
+CONTRACT CHANGED, DELIBERATELY. `no_defend_order_means_no_defense_pricing`
+(040) asserted that enemy presence must NOT move Φ without a Defend order.
+That rule is what the fixture lost the capital to — the t9 directive was
+Grow/Expand and `Defend 24` appeared only after the city was occupied. The
+test is now `city_risk_is_priced_without_any_defend_order` and asserts the
+opposite. The ORDER-keyed defend terms are unchanged and still require an
+order; only the RISK term is order-independent.
+
+PREDICTIONS (the 049 siege ledger is the instrument, same 120-game config).
+  P1 (the point): sieges SUFFERED per game falls — prevention. Gate: the
+     model's sieges/game drops from 1.45 by >= 20% with cities_lost/game
+     falling at least as fast.
+  P2: unsiege RATE is allowed to stay flat or even fall. Preventing the
+     easy sieges leaves a harder residue; reading a flat rate as failure
+     would be the exact mistake 049 warned about.
+  P3 (cost): no win-rate regression on the paired instrument
+     (base_seed 1787800000, 125 seeds x2), |z| < 1.96 against the stored
+     baseline; ms/move within 1.2x (city_risks runs inside `goal_potential`,
+     which the executor calls twice per ply per candidate).
+  P4 (the distillation claim, deferred): after one MACRO_GEN round, the net
+     seat's own sieges/game falls too. Until then this is executor-side
+     only, and must not be reported as a net result.
+
+NOT YET DONE (Verdi's other half): the lane -> `eco_plan` -> star-plan
+pricing, so "save toward the Forge" competes in the same currency as
+attack/defend/expand instead of a flat per-type bonus. ⚠️ `eco_plan` is a
+2934-line BINARY, not a library: it is the ORACLE to calibrate against, not
+something to call per ply. The hot path needs a cheap "next purchase on the
+lane's plan + turns-to-afford" query validated against it.

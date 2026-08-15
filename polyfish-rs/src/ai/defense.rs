@@ -113,6 +113,174 @@ fn can_attack_tile(state: &GameState, unit: &UnitState, target_tile: i32) -> boo
     .1
 }
 
+/// EXP_ELO_050 risk dials. `risk` is a P(lose this city) proxy, multiplied
+/// by the city's worth to give a score-equivalent expected loss. The ordering
+/// is the doctrine: an unbreakable siege is the disaster, a garrison that
+/// holds is nearly free, and PREVENTION is what separates them — measured,
+/// not assumed (EXP_ELO_049: a parked Giant is cleared 6% of the time, and
+/// having a unit able to strike the besieger does not predict the outcome).
+const RISK_LOST: f32 = 1.0;
+const RISK_BREAKABLE: f32 = 0.45;
+const RISK_GARRISON_FALLS: f32 = 0.35;
+const RISK_GARRISON_HOLDS: f32 = 0.05;
+const RISK_TWO_TURN: f32 = 0.30;
+/// Worth of a city in the score-equivalent units `goal_potential` uses:
+/// base plus per-level, so a developed capital outprices a frontier village.
+const CITY_WORTH_BASE: f32 = 12.0;
+const CITY_WORTH_PER_LEVEL: f32 = 6.0;
+
+/// What it would take the enemy to OWN this city, and whether I could undo
+/// it. One struct so the pricing needs no second query.
+#[derive(Debug, Clone)]
+pub struct CityRisk {
+    pub city: i32,
+    /// An enemy is standing on it right now.
+    pub sieged: bool,
+    /// Nothing of mine is standing on it.
+    pub open: bool,
+    /// A visible enemy can end its move on the tile next turn.
+    pub arrives_next_turn: bool,
+    /// If they park there, my units could remove them within one turn.
+    pub breakable: bool,
+    /// P(lose the city) proxy in [0,1].
+    pub risk: f32,
+    /// Score-equivalent worth of the city.
+    pub worth: f32,
+}
+
+impl CityRisk {
+    pub fn expected_loss(&self) -> f32 {
+        self.risk * self.worth
+    }
+}
+
+/// Can `unit` (fresh flags) END its move on `target_tile`? Same distance
+/// banding as `can_attack_tile`: plain distance inside one move, the exact
+/// road-aware search only in the band beyond it.
+fn can_reach_tile(state: &GameState, unit: &UnitState, target_tile: i32) -> bool {
+    let size = state.settings.size;
+    let m = get_unit_movement(state, unit);
+    let d = get_chebyshev_distance(unit.coords.idx, target_tile, size);
+    if d == 0 {
+        return true;
+    }
+    if d <= m {
+        return true;
+    }
+    if d > 2 * m {
+        return false;
+    }
+    crate::moves::reach_search(state, unit, Some(&|t: i32| t == target_tile)).1
+}
+
+/// Per-city expected loss: who can reach the tile, whether a siege there
+/// would be breakable, and what that costs me. FOW-honest — only visible
+/// enemy units, read with their real movement (roads and tech included).
+pub fn city_risks(state: &GameState, player: PlayerId) -> Vec<CityRisk> {
+    let Some(tribe) = state.tribes.get(&player) else {
+        return Vec::new();
+    };
+    let enemies: Vec<&UnitState> = state
+        .tribes
+        .iter()
+        .filter(|(id, _)| **id != player)
+        .flat_map(|(_, t)| t.units.iter())
+        .filter(|u| {
+            state
+                .tiles
+                .get(&u.coords.idx)
+                .map_or(false, |t| t.explorers.contains(&player))
+        })
+        .collect();
+    if enemies.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for city in &tribe.cities {
+        let idx = city.idx;
+        let occupant = get_true_unit_at(state, idx);
+        let sieged = occupant.as_ref().map_or(false, |u| u.owner != player);
+        let garrison = occupant.as_ref().filter(|u| u.owner == player);
+        let open = occupant.is_none();
+
+        // Whoever is (or would be) standing there: can I remove them?
+        let threat_unit: Option<&UnitState> = if sieged {
+            occupant
+        } else {
+            enemies
+                .iter()
+                .copied()
+                .filter(|e| can_reach_tile(state, &probe(e), idx))
+                .max_by(|a, b| {
+                    get_unit_max_health(a)
+                        .partial_cmp(&get_unit_max_health(b))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+        };
+        let arrives_next_turn = !sieged
+            && threat_unit.is_some()
+            && enemies.iter().any(|e| can_reach_tile(state, &probe(e), idx));
+        let breakable = match threat_unit {
+            Some(t) => {
+                let mut dmg = 0.0;
+                for u in tribe.units.iter().filter(|u| u.coords.idx != idx) {
+                    if can_attack_tile(state, &probe(u), idx) {
+                        dmg += hypo_damage(state, &probe(u), t, idx);
+                    }
+                }
+                dmg >= t.health
+            }
+            None => true,
+        };
+        // Damage the visible enemies could put on the garrison next turn.
+        let on_garrison: f32 = garrison.map_or(0.0, |g| {
+            enemies
+                .iter()
+                .filter(|e| can_attack_tile(state, &probe(e), idx))
+                .map(|e| hypo_damage(state, &probe(e), g, idx))
+                .sum()
+        });
+
+        let risk = if sieged {
+            if breakable { RISK_BREAKABLE } else { RISK_LOST }
+        } else if let Some(g) = garrison {
+            if on_garrison <= 0.0 {
+                0.0
+            } else if on_garrison >= g.health {
+                RISK_GARRISON_FALLS
+            } else {
+                RISK_GARRISON_HOLDS
+            }
+        } else if arrives_next_turn {
+            if breakable { RISK_BREAKABLE } else { RISK_LOST }
+        } else if open && threat_unit.is_some() {
+            RISK_TWO_TURN
+        } else {
+            0.0
+        };
+        if risk <= 0.0 {
+            continue;
+        }
+        out.push(CityRisk {
+            city: idx,
+            sieged,
+            open,
+            arrives_next_turn,
+            breakable,
+            risk,
+            worth: CITY_WORTH_BASE + CITY_WORTH_PER_LEVEL * city.level as f32,
+        });
+    }
+    out
+}
+
+/// Total score-equivalent expected loss across the player's cities — the
+/// quantity `goal_potential` subtracts, so any ply that lowers it is paid
+/// exactly what it saves.
+pub fn expected_city_loss(state: &GameState, player: PlayerId) -> f32 {
+    city_risks(state, player).iter().map(|r| r.expected_loss()).sum()
+}
+
 /// Per-city worst-case threat from FOW-visible enemy units. Cities with no
 /// deliverable threat produce no entry.
 pub fn city_threats(state: &GameState, player: PlayerId) -> Vec<CityThreat> {
@@ -305,13 +473,58 @@ pub fn defend_plan(
 }
 
 #[cfg(test)]
-mod tests {
+mod risk_tests {
+    use super::tests::{board, unit_at};
+    use super::*;
+    use crate::ai::oracle_macro::MacroGoal;
+    use crate::ai::reward::goal_potential;
+    use crate::types::UnitType;
+
+    /// The whole doctrine in one assertion: with an enemy able to walk onto
+    /// an empty city, the potential must PREFER the tile occupied.
+    #[test]
+    fn garrisoning_a_reachable_city_raises_the_potential() {
+        let mut state = board(60);
+        state
+            .tribes
+            .get_mut(&2)
+            .unwrap()
+            .units
+            .push(unit_at(61, UnitType::Warrior, 2));
+        let goal = MacroGoal::default();
+        let open = goal_potential(&state, 1, &goal, None);
+        assert!(expected_city_loss(&state, 1) > 0.0, "an empty reachable city must carry risk");
+
+        state
+            .tribes
+            .get_mut(&1)
+            .unwrap()
+            .units
+            .push(unit_at(60, UnitType::Warrior, 1));
+        let held = goal_potential(&state, 1, &goal, None);
+        assert!(
+            held > open,
+            "garrisoned city must outprice the open one: open {open}, held {held}"
+        );
+    }
+
+    /// The converse, so the term cannot tax quiet turns: no visible enemy,
+    /// no risk.
+    #[test]
+    fn no_visible_enemy_means_no_risk_term() {
+        let state = board(60);
+        assert_eq!(expected_city_loss(&state, 1), 0.0);
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
     use super::*;
     use crate::coords::Coords;
     use crate::states::{CityState, TileState, TribeState};
     use crate::types::{TerrainType, UnitType};
 
-    fn unit_at(idx: i32, unit_type: UnitType, owner: PlayerId) -> UnitState {
+    pub(crate) fn unit_at(idx: i32, unit_type: UnitType, owner: PlayerId) -> UnitState {
         UnitState {
             owner,
             unit_type,
@@ -326,7 +539,7 @@ mod tests {
 
     /// 11×11 all-field board, every tile explored by both players; a P1
     /// city at `city_idx`.
-    fn board(city_idx: i32) -> GameState {
+    pub(crate) fn board(city_idx: i32) -> GameState {
         let mut state = GameState::default();
         state.settings.size = 11;
         for i in 0..121 {

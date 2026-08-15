@@ -367,6 +367,11 @@ pub const SHAPE_GOAL_SUPER: f32 = 500.0;
 /// max single-ply Expand approach gain (2 tiles × EXPAND_PER_TILE) so an
 /// at-risk leash holds, while 0.5-urgency cover still loses to a 2-step
 /// expansion move: intensity calibrated to the actual need.
+/// EXP_ELO_050: weight on the score-equivalent expected city loss. The
+/// underlying quantity is already in Φ's units (city worth), so this is a
+/// trust dial, not a unit conversion — calibrate by the q-gap method against
+/// the measured dq, never by guess.
+pub const SHAPE_GOAL_CITY_RISK: f32 = 1.0;
 pub const SHAPE_GOAL_DEFEND_COVER: f32 = 600.0;
 
 /// Tile-holding pay, only while the garrison is load-bearing
@@ -723,6 +728,16 @@ pub fn goal_potential(
     if matches!(goal.stance, Stance::Grow | Stance::Save | Stance::Arm) {
         phi += SHAPE_GOAL_COMPLETION * completion_progress(state, player);
     }
+    // EXP_ELO_050: the cost of losing a city, priced into the potential
+    // itself rather than attached to a Defend order. Two consequences that
+    // the order-keyed version could not have: it is live on EVERY stance and
+    // every turn (the 049 fixture lost its capital on a Grow turn whose
+    // directive named no Defend at all), and because it is a potential, the
+    // ply that steps the last unit OFF a threatened city pays the same
+    // amount the ply that garrisons it earns. PREVENTION is what it buys:
+    // 049 measured a parked Giant cleared 6% of the time, so the cheap move
+    // is to never let the tile go empty in the first place.
+    phi -= SHAPE_GOAL_CITY_RISK * crate::ai::defense::expected_city_loss(state, player);
     if matches!(goal.stance, Stance::Grow | Stance::Save) {
         phi -= SHAPE_GOAL_STRANDED * completion_stranded(state, player) as f32;
     }
@@ -1689,8 +1704,11 @@ mod shaping_tests {
         t2.units.push(unit_at(61, UnitType::Warrior));
         state.tribes.insert(2, t2);
         let threatened = goal_potential(&state, 1, &grow, None);
+        // The enemy that triggers the exemption also creates city risk
+        // (EXP_ELO_050); add it back to read the exemption alone.
+        let risk = SHAPE_GOAL_CITY_RISK * crate::ai::defense::expected_city_loss(&state, 1);
         assert!(
-            (threatened - restranded - SHAPE_GOAL_STRANDED).abs() < 1e-3,
+            (threatened + risk - restranded - SHAPE_GOAL_STRANDED).abs() < 1e-3,
             "threat exemption must lift the penalty"
         );
     }
@@ -2175,10 +2193,18 @@ mod shaping_tests {
             stance: Stance::Arm,
             save_target: None,
         };
+        // EXP_ELO_050: Φ now also carries the city-risk term, and stepping
+        // off the tile moves it — so the order-keyed hold constant is only
+        // exact once the risk term is added back.
+        let risk = |s: &crate::states::GameState| {
+            SHAPE_GOAL_CITY_RISK * crate::ai::defense::expected_city_loss(s, 1)
+        };
         let phi_hold = goal_potential(&state, 1, &goal, None);
+        let pure_hold = phi_hold + risk(&state);
         // Step off to an adjacent tile: still full cover, hold term lost.
         state.tribes.get_mut(&1).unwrap().units[0].coords = Coords::from_index(48, 11);
         let phi_adjacent = goal_potential(&state, 1, &goal, None);
+        let pure_adjacent = phi_adjacent + risk(&state);
         // March to the far corner: out of the leash, only the recall
         // gradient pays.
         state.tribes.get_mut(&1).unwrap().units[0].coords = Coords::from_index(0, 11);
@@ -2187,7 +2213,13 @@ mod shaping_tests {
             phi_hold > phi_adjacent && phi_adjacent > phi_far,
             "leash ordering violated: hold {phi_hold} adjacent {phi_adjacent} far {phi_far}"
         );
-        assert!((phi_hold - phi_adjacent - SHAPE_GOAL_DEFEND_HOLD).abs() < 1e-3);
+        assert!((pure_hold - pure_adjacent - SHAPE_GOAL_DEFEND_HOLD).abs() < 1e-3);
+        // And the risk term must PILE ON rather than cancel: walking off a
+        // city an enemy can enter has to cost more than the hold term alone.
+        assert!(
+            phi_hold - phi_adjacent > SHAPE_GOAL_DEFEND_HOLD,
+            "risk term must add to the hold term, not offset it"
+        );
     }
 
     /// The prep mechanism in miniature: a NEW unit that lands inside the
@@ -2277,10 +2309,16 @@ mod shaping_tests {
         );
     }
 
-    /// Without a Defend order the defense block prices nothing: enemy
-    /// presence must not leak into Φ.
+    /// CONTRACT CHANGED (EXP_ELO_050, was `no_defend_order_means_no_defense
+    /// _pricing`): risk to a city is priced whether or not a Defend order
+    /// names it. The 040 rule — enemy presence must not leak into Φ without
+    /// an order — is exactly what lost the capital in the seed-1786807403
+    /// fixture: the directive was still Grow/Expand on the turn the garrison
+    /// walked off, and `Defend 24` only appeared after the city was already
+    /// occupied. The ORDER-keyed defend terms below still require an order;
+    /// the RISK term does not.
     #[test]
-    fn no_defend_order_means_no_defense_pricing() {
+    fn city_risk_is_priced_without_any_defend_order() {
         use crate::ai::oracle_macro::{MacroGoal, Stance};
         let mut state = defense_board(60);
         state.tribes.get_mut(&1).unwrap().units.push(combat_unit(60, UnitType::Rider, 1));
@@ -2292,6 +2330,10 @@ mod shaping_tests {
         let quiet = goal_potential(&state, 1, &goal, None);
         state.tribes.get_mut(&2).unwrap().units.push(combat_unit(59, UnitType::Swordsman, 2));
         let besieged = goal_potential(&state, 1, &goal, None);
-        assert!((quiet - besieged).abs() < 1e-4);
+        assert!(
+            besieged < quiet,
+            "a reachable enemy must cost potential even with no Defend order: \
+             quiet {quiet}, besieged {besieged}"
+        );
     }
 }
