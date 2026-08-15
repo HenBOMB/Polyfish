@@ -54,3 +54,21 @@ pub fn score_snapshot(state: &GameState, player: i32) -> (i32, i32) {
         .unwrap_or(0);
     (my, opp)
 }
+
+/// `(my_spt, best_opponent_spt)` for `player` in `state`. Feeds the
+/// potential-based SPT shaping term in self_play value labels.
+pub fn spt_snapshot(state: &GameState, player: i32) -> (i32, i32) {
+    let my = state
+        .tribes
+        .get(&player)
+        .map(|t| crate::functions::get_tribe_spt(state, t))
+        .unwrap_or(0);
+    let opp = state
+        .tribes
+        .iter()
+        .filter(|(id, _)| **id != player)
+        .map(|(_, t)| crate::functions::get_tribe_spt(state, t))
+        .max()
+        .unwrap_or(0);
+    (my, opp)
+}

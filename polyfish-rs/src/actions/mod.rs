@@ -5,7 +5,6 @@
 pub mod city;
 pub mod connection;
 pub mod discovery;
-pub mod memory;
 pub mod resource;
 pub mod structure;
 pub mod tech;
@@ -53,6 +52,21 @@ pub fn modify_terrain(state: &mut GameState, idx: i32, new_terrain: TerrainType)
 /// Gain stars for the current player
 pub fn gain_stars(state: &mut GameState, amount: i32) -> UndoCallback {
     spend_stars(state, -amount)
+}
+
+/// Affordability check for moves that spend stars in execute(); call before
+/// any state mutation so an unaffordable move rejects instead of panicking.
+pub fn require_stars(state: &GameState, cost: i32, what: &str) -> Result<(), String> {
+    let pov_id = state.settings.current_player_turn_id;
+    if let Some(tribe) = state.tribes.get(&pov_id) {
+        if tribe.stars < cost {
+            return Err(format!(
+                "Insufficient stars for {}: need {}, have {}",
+                what, cost, tribe.stars
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Spend stars for the current player
@@ -247,7 +261,10 @@ pub fn update_exploration(state: &mut GameState, player_id: PlayerId) -> UndoCal
                             || idx == map_size - 1
                             || idx == map_size * (map_size - 1)
                             || idx == map_size * map_size - 1;
-                        if state.tiles.get(&idx).map_or(false, |t| t.explorers.contains(&player_id))
+                        if state
+                            .tiles
+                            .get(&idx)
+                            .map_or(false, |t| t.explorers.contains(&player_id))
                             || (is_corner && idx != city.idx)
                         {
                             continue;

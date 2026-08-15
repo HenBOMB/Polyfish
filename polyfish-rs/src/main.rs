@@ -98,32 +98,31 @@ async fn main() {
             map_type: MapType::Drylands,
             tribes: vec![TribeType::Imperius, TribeType::Oumaji],
             version: 115,
+            ..Default::default()
         });
     }
 
     game.state.settings._verbose = true;
-    game.state.settings.max_turns = 10;
+    game.state.settings.max_turns = 30;
     game.post_load();
 
-    // Load trained neural network. NOTE: must be a file-backed VarBuilder —
-    // `VarMap::load` on an empty map is a silent no-op (it only fills
-    // pre-registered vars), which used to leave the server on random weights.
+    // Load trained neural network
     use candle_core::Device;
     let device = Device::Cpu;
 
     let model_path = "model.safetensors";
-
     let network = if std::path::Path::new(model_path).exists() {
         println!("✅ Loading trained AI model from {}", model_path);
-        let vs = unsafe {
+        let vb = unsafe {
             candle_nn::VarBuilder::from_mmaped_safetensors(
                 &[model_path],
                 candle_core::DType::F32,
                 &device,
             )
-        }
-        .expect("Failed to load model weights");
-        polyfish::ai::network::PolyZeroNet::new(vs).expect("Failed to build neural network")
+            .expect("Failed to load model weights")
+        };
+        polyfish::ai::network::PolyZeroNet::new(vb)
+            .expect("Failed to build neural network")
     } else {
         panic!(
             "Model file {} not found! Please run init_model.py first.",
@@ -182,14 +181,17 @@ async fn main() {
             "/api/value-distribution",
             get(polyfish::training_api::api_value_distribution),
         )
-        .route("/api/elo-ladder", get(polyfish::training_api::api_elo_ladder))
-        .nest_service("/assets", ServeDir::new("../src/public/assets"))
+        .route(
+            "/api/elo-ladder",
+            get(polyfish::training_api::api_elo_ladder),
+        )
+        .nest_service("/assets", ServeDir::new("../polyfish-ui/dist/assets"))
         .nest_service("/simulator", ServeDir::new("../polyfish-ui/dist/simulator"))
-        .nest_service("/static", ServeDir::new("../src/public"))
+        .nest_service("/static", ServeDir::new("../polyfish-ui/dist"))
         // Serve real files (training.html, js/, css/) from public; unmatched
         // paths still fall back to index.html for SPA routing.
         .fallback_service(
-            ServeDir::new("../src/public").not_found_service(spa_fallback.into_service()),
+            ServeDir::new("../polyfish-ui/dist").not_found_service(spa_fallback.into_service()),
         )
         .layer(CorsLayer::permissive())
         .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 50))
@@ -301,19 +303,30 @@ async fn auto_step(
     let mut best_move_json = None;
     let mut policy = serde_json::json!({});
 
+    let mut gumbel_trace_json = None;
+
     // 1. Try to get AI move from trained model if available
     if let Some(net) = &state.network {
         use polyfish::ai::brain::Brain;
         use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
         let evaluator = Evaluator::Inline(InlineEvalHandle::new(net.clone()));
-        let mut brain = Brain::with_backend(&evaluator, params.iterations, polyfish::ai::brain::SearchBackend::Gumbel { k: 16 })
-            .with_prior_heuristic_weight(0.1)
-            .with_policy_target_q_weight(1.0)
-            .with_tree_q_weight(1.0);
+        let mut brain = Brain::with_backend(
+            &evaluator,
+            params.iterations,
+            polyfish::ai::brain::SearchBackend::Gumbel { k: 16 },
+        )
+        .with_prior_heuristic_weight(0.1)
+        .with_policy_target_q_weight(1.0)
+        .with_tree_q_weight(1.0);
         game.state._messages.clear();
+        brain.request_trace();
         let (chosen_move, brain_policy) = brain.think_with_stats(&mut game);
         policy = brain_policy.into();
         best_move_json = chosen_move.as_ref().map(|m| m.serialize());
+        if let Some(trace) = brain.take_trace() {
+            gumbel_trace_json =
+                Some(serde_json::to_value(&trace).unwrap_or(serde_json::Value::Null));
+        }
 
         if !params.dry_run {
             if let Some(m) = chosen_move {
@@ -323,14 +336,26 @@ async fn auto_step(
         }
     }
 
-    // 2. Run heuristic MCTS for analysis panel (move descriptions + PV)
-    // This also acts as a fallback for move selection if no network is available
-    use polyfish::ai::heuristic_mcts::HeuristicMctsAgent;
-    let analysis_agent = HeuristicMctsAgent {
-        iterations: params.iterations,
-        exploration_constant: 0.1,
+    // 2. Fallback to heuristic analysis if no network is available
+    let (h_best_move, mcts_analysis_json) = if state.network.is_some() {
+        let mut trace_val = gumbel_trace_json.unwrap_or(serde_json::Value::Null);
+        if let serde_json::Value::Object(ref mut map) = trace_val {
+            map.insert("type".to_string(), serde_json::json!("gumbel"));
+        }
+        (None, trace_val)
+    } else {
+        use polyfish::ai::heuristic_mcts::HeuristicMctsAgent;
+        let analysis_agent = HeuristicMctsAgent {
+            iterations: params.iterations,
+            exploration_constant: 0.1,
+        };
+        let (bm, h_analysis) = analysis_agent.select_move_with_analysis(&mut game);
+        let mut val = serde_json::to_value(&h_analysis).unwrap_or(serde_json::Value::Null);
+        if let serde_json::Value::Object(ref mut map) = val {
+            map.insert("type".to_string(), serde_json::json!("heuristic"));
+        }
+        (bm, val)
     };
-    let (h_best_move, mcts_analysis) = analysis_agent.select_move_with_analysis(&mut game);
 
     // If we don't have a network but we ARE supposed to move, use the heuristic best move
     if state.network.is_none() && !params.dry_run {
@@ -365,7 +390,7 @@ async fn auto_step(
         "legalMoves": legal_moves,
         "policyDistribution": policy,
         "evaluation": evaluation,
-        "mctsAnalysis": mcts_analysis
+        "mctsAnalysis": mcts_analysis_json
     }))
 }
 
@@ -614,7 +639,24 @@ async fn save_training_data(State(state): State<Arc<AppState>>) -> Json<Value> {
     }
 }
 
-async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {
+#[derive(serde::Deserialize)]
+struct ResetRequest {
+    max_turns: Option<i32>,
+}
+
+async fn reset_game(
+    State(state): State<Arc<AppState>>,
+    body_bytes: axum::body::Bytes,
+) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
+    let payload: Option<ResetRequest> = if body_bytes.is_empty() {
+        None
+    } else {
+        match serde_json::from_slice(&body_bytes) {
+            Ok(p) => Some(p),
+            Err(e) => return Err((axum::http::StatusCode::BAD_REQUEST, format!("Invalid JSON: {}", e))),
+        }
+    };
+
     let mut game = state.game.lock().unwrap();
 
     let mut settings = MapGenSettings::default();
@@ -626,6 +668,13 @@ async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {
     let initial_state = generate(settings);
     game.state = initial_state;
     game.state.settings._verbose = true;
+
+    if let Some(req) = payload {
+        if let Some(mt) = req.max_turns {
+            game.state.settings.max_turns = mt;
+        }
+    }
+
     game.post_load();
 
     let mut tiles: Vec<_> = game.state.tiles.values().collect();
@@ -635,7 +684,7 @@ async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {
 
     let evaluation = build_evaluation_json(&game.state);
 
-    Json(serde_json::json!({
+    Ok(Json(serde_json::json!({
         "state": {
             "settings": game.state.settings,
             "tiles": tiles,
@@ -647,7 +696,7 @@ async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {
         },
         "legalMoves": legal_moves,
         "evaluation": evaluation
-    }))
+    })))
 }
 
 async fn trigger_training(State(state): State<Arc<AppState>>) -> Json<Value> {
@@ -706,8 +755,12 @@ async fn get_training_status(State(state): State<Arc<AppState>>) -> Json<Value> 
         if let Ok(pid_str) = fs::read_to_string(".training.pid") {
             if let Ok(parsed_pid) = pid_str.trim().parse::<u32>() {
                 // Verify the PID is actually alive
-                let alive = Command::new("ps").arg("-p").arg(parsed_pid.to_string()).output()
-                    .map(|out| out.status.success()).unwrap_or(false);
+                let alive = Command::new("ps")
+                    .arg("-p")
+                    .arg(parsed_pid.to_string())
+                    .output()
+                    .map(|out| out.status.success())
+                    .unwrap_or(false);
                 if alive {
                     is_running = true;
                     pid_opt = Some(parsed_pid);
@@ -742,20 +795,30 @@ async fn halt_training(State(state): State<Arc<AppState>>) -> Json<Value> {
     let pid_opt = *state.training_status.lock().unwrap();
     if let Some(pid) = pid_opt {
         // Kill child processes first to avoid orphans (like python train.py)
-        let _ = Command::new("pkill").arg("-P").arg(pid.to_string()).output();
+        let _ = Command::new("pkill")
+            .arg("-P")
+            .arg(pid.to_string())
+            .output();
         // Kill the parent bash script
         let _ = Command::new("kill").arg("-9").arg(pid.to_string()).output();
-        
+
         let mut status = state.training_status.lock().unwrap();
         *status = None;
 
-        return Json(serde_json::json!({ "status": "success", "message": format!("Halted PID {}", pid) }));
+        return Json(
+            serde_json::json!({ "status": "success", "message": format!("Halted PID {}", pid) }),
+        );
     }
     Json(serde_json::json!({ "status": "error", "message": "No training process active" }))
 }
 
 async fn set_config(Json(payload): Json<Value>) -> Json<Value> {
-    if std::fs::write("config.json", serde_json::to_string_pretty(&payload).unwrap_or_default()).is_ok() {
+    if std::fs::write(
+        "config.json",
+        serde_json::to_string_pretty(&payload).unwrap_or_default(),
+    )
+    .is_ok()
+    {
         return Json(serde_json::json!({ "status": "success", "config": payload }));
     }
     Json(serde_json::json!({ "status": "error", "message": "Failed to set config" }))
@@ -773,24 +836,25 @@ async fn get_config() -> Json<Value> {
 async fn get_metrics() -> Json<Value> {
     use std::fs::File;
     use std::io::{BufRead, BufReader};
-    
+
     let mut metrics = Vec::new();
     if let Ok(file) = File::open("training_log.csv") {
         let reader = BufReader::new(file);
         let mut lines = reader.lines().flatten();
-        
+
         let header_line = lines.next().unwrap_or_default();
         let headers: Vec<&str> = header_line.split(',').collect();
-        
+
         for line in lines {
             let parts: Vec<&str> = line.split(',').collect();
-            
-            let get_idx = |name: &str| -> Option<usize> {
-                headers.iter().position(|&h| h == name)
-            };
-            
+
+            let get_idx = |name: &str| -> Option<usize> { headers.iter().position(|&h| h == name) };
+
             let parse_f32 = |name: &str| -> f32 {
-                get_idx(name).and_then(|i| parts.get(i)).and_then(|s| s.parse().ok()).unwrap_or(0.0)
+                get_idx(name)
+                    .and_then(|i| parts.get(i))
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0.0)
             };
 
             let obj = serde_json::json!({
@@ -805,27 +869,36 @@ async fn get_metrics() -> Json<Value> {
                 "value_loss": parse_f32("value_loss"),
                 "value_r2": parse_f32("value_r2"),
                 "avg_captures": parse_f32("avg_captures"),
+                "avg_cap_ruins": parse_f32("avg_cap_ruins"),
+                "avg_cap_villages": parse_f32("avg_cap_villages"),
+                "avg_cap_cities": parse_f32("avg_cap_cities"),
+                "avg_cap_capitals": parse_f32("avg_cap_capitals"),
                 "avg_harvests": parse_f32("avg_harvests"),
                 "avg_builds": parse_f32("avg_builds"),
                 "avg_research": parse_f32("avg_research"),
                 "avg_attacks": parse_f32("avg_attacks"),
-                "avg_ability": parse_f32("avg_abilities"),
-                "avg_steps": parse_f32("avg_moves"),
+                "avg_ability": parse_f32("avg_ability"),
+                "avg_spt_t0": parse_f32("avg_spt_t0"),
+                "avg_spt_t5": parse_f32("avg_spt_t5"),
                 "avg_spt_t10": parse_f32("avg_spt_t10"),
+                "avg_spt_t15": parse_f32("avg_spt_t15"),
                 "avg_spt_t20": parse_f32("avg_spt_t20"),
+                "avg_spt_t25": parse_f32("avg_spt_t25"),
                 "avg_spt_t30": parse_f32("avg_spt_t30"),
                 "villages_t2c_first": parse_f32("villages_t2c_first"),
+                "villages_t2c_p50": parse_f32("villages_t2c_p50"),
                 "ruins_t2c_p50": parse_f32("ruins_t2c_p50"),
+                "avg_steps": parse_f32("avg_moves"),
             });
             metrics.push(obj);
         }
     }
-    
+
     let len = metrics.len();
     if len > 100 {
         metrics = metrics.into_iter().skip(len - 100).collect();
     }
-    
+
     Json(serde_json::json!({ "metrics": metrics }))
 }
 
@@ -939,28 +1012,29 @@ async fn get_trainer_hint(
 ) -> Json<Value> {
     let mut game = state.game.lock().unwrap();
 
-    let (best_move, mcts_analysis) = if let Some(net) = &state.network {
+    let (best_move, mcts_analysis_json) = if let Some(net) = &state.network {
         // 1. Use Neural Network (Gumbel MCTS) if available
         use polyfish::ai::brain::Brain;
         use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
         let evaluator = Evaluator::Inline(InlineEvalHandle::new(net.clone()));
-        let mut brain = Brain::with_backend(&evaluator, params.iterations, polyfish::ai::brain::SearchBackend::Gumbel { k: 16 })
-            .with_prior_heuristic_weight(0.1)
-            .with_policy_target_q_weight(1.0)
-            .with_tree_q_weight(1.0);
-        let (bm, _stats) = brain.think_with_stats(&mut game);
-        // Brain currently returns stats as Vec<f32>, convert to simpler MCTS analysis or similar
-        // For visual consistency, we actually prefer the full analysis from heuristic agent
-        // but we'll use the brain's move.
-        (
-            bm,
-            polyfish::ai::mcts::MctsAnalysis {
-                evaluations: vec![],
-                total_iterations: params.iterations,
-                principal_variation: vec![],
-                tree: None,
-            },
+        let mut brain = Brain::with_backend(
+            &evaluator,
+            params.iterations,
+            polyfish::ai::brain::SearchBackend::Gumbel { k: 16 },
         )
+        .with_prior_heuristic_weight(0.1)
+        .with_policy_target_q_weight(1.0)
+        .with_tree_q_weight(1.0);
+        brain.request_trace();
+        let (bm, _stats) = brain.think_with_stats(&mut game);
+        let mut trace_val = brain
+            .take_trace()
+            .map(|t| serde_json::to_value(&t).unwrap_or(serde_json::Value::Null))
+            .unwrap_or(serde_json::Value::Null);
+        if let serde_json::Value::Object(ref mut map) = trace_val {
+            map.insert("type".to_string(), serde_json::json!("gumbel"));
+        }
+        (bm, trace_val)
     } else {
         // 2. Fallback to Heuristic MCTS
         use polyfish::ai::heuristic_mcts::HeuristicMctsAgent;
@@ -968,7 +1042,12 @@ async fn get_trainer_hint(
             iterations: params.iterations,
             exploration_constant: 0.4,
         };
-        agent.select_move_with_analysis(&mut game)
+        let (bm, h_analysis) = agent.select_move_with_analysis(&mut game);
+        let mut val = serde_json::to_value(&h_analysis).unwrap_or(serde_json::Value::Null);
+        if let serde_json::Value::Object(ref mut map) = val {
+            map.insert("type".to_string(), serde_json::json!("heuristic"));
+        }
+        (bm, val)
     };
 
     // If we used the brain, let's still run a tiny heuristic analysis for the PV/Tree if requested?
@@ -989,7 +1068,7 @@ async fn get_trainer_hint(
         "proposedMove": move_json,
         "moveName": move_name,
         "moveDescription": move_description,
-        "mctsAnalysis": mcts_analysis,
+        "mctsAnalysis": mcts_analysis_json,
     }))
 }
 
@@ -1618,6 +1697,7 @@ async fn load_initial_endpoint(
     }
 }
 
+
 async fn list_initial_endpoint() -> Json<Value> {
     let path = "../src/scraper/data/training-data/";
     let mut files = Vec::new();
@@ -1698,12 +1778,16 @@ async fn get_cpu_usage() -> Json<Value> {
             for i in 0..stats1.len() {
                 let d_active = stats2[i].0 - stats1[i].0;
                 let d_total = stats2[i].1 - stats1[i].1;
-                let usage = if d_total > 0.0 { (d_active / d_total) * 100.0 } else { 0.0 };
+                let usage = if d_total > 0.0 {
+                    (d_active / d_total) * 100.0
+                } else {
+                    0.0
+                };
                 usages.push(usage);
             }
         }
     }
-    
+
     Json(serde_json::json!({ "cores": usages }))
 }
 

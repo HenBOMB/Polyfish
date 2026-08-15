@@ -1,6 +1,6 @@
 //! Technology actions
 
-use crate::actions::{spend_stars, UndoCallback};
+use crate::actions::{UndoCallback, spend_stars};
 use crate::functions::get_tech_cost;
 use crate::settings::technology::get_technology_setting;
 use crate::states::{GameState, TechnologyState};

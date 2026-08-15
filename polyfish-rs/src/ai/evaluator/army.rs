@@ -131,7 +131,7 @@ pub fn assess_unit_power(game: &GameState, unit: &UnitState) -> f32 {
         game.settings.mode,
         crate::types::ModeType::Domination | crate::types::ModeType::Might
     );
-    
+
     if is_domination {
         // Scan 3-tile radius for enemy structures
         let adj = crate::functions::get_adjacent_indices(game, unit.coords.idx, 3);

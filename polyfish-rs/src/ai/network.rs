@@ -22,38 +22,34 @@ fn conv(
     candle_nn::conv2d(in_c, out_c, k, config, vs)
 }
 
-/// Mirror of train.py's GN_GROUPS. GroupNorm has no train/eval duality —
-/// identical function in both modes, no running stats.
-const GN_GROUPS: usize = 8;
-
 fn group_norm(c: usize, vs: VarBuilder) -> Result<GroupNorm> {
-    candle_nn::group_norm(GN_GROUPS, c, 1e-5, vs)
+    candle_nn::group_norm(8, c, 1e-5, vs)
 }
 
 struct ResBlock {
     c1: Conv2d,
-    bn1: GroupNorm,
+    gn1: GroupNorm,
     c2: Conv2d,
-    bn2: GroupNorm,
+    gn2: GroupNorm,
 }
 
 impl ResBlock {
     fn new(c: usize, vs: VarBuilder) -> Result<Self> {
         let c1 = conv(c, c, 3, 1, 1, vs.pp("c1"))?;
-        let bn1 = group_norm(c, vs.pp("bn1"))?;
+        let gn1 = group_norm(c, vs.pp("gn1"))?;
         let c2 = conv(c, c, 3, 1, 1, vs.pp("c2"))?;
-        let bn2 = group_norm(c, vs.pp("bn2"))?;
-        Ok(Self { c1, bn1, c2, bn2 })
+        let gn2 = group_norm(c, vs.pp("gn2"))?;
+        Ok(Self { c1, gn1, c2, gn2 })
     }
 }
 
 impl ModuleT for ResBlock {
     fn forward_t(&self, xs: &Tensor, _train: bool) -> Result<Tensor> {
         let ys = self.c1.forward(xs)?;
-        let ys = self.bn1.forward(&ys)?;
+        let ys = self.gn1.forward(&ys)?;
         let ys = ys.relu()?;
         let ys = self.c2.forward(&ys)?;
-        let ys = self.bn2.forward(&ys)?;
+        let ys = self.gn2.forward(&ys)?;
         (xs.add(&ys))?.relu()
     }
 }
@@ -129,7 +125,7 @@ impl CrossAttention {
 
         // Scaled dot-product attention
         let scale = 1.0 / (head_dim as f64).sqrt();
-        let k_t = k.transpose(2, 3)?.contiguous()?;  // Make contiguous for Metal matmul
+        let k_t = k.transpose(2, 3)?.contiguous()?; // Make contiguous for Metal matmul
         let scores = (q.contiguous()?.matmul(&k_t)? * scale)?;
         let attn = candle_nn::ops::softmax(&scores, candle_core::D::Minus1)?;
         // Both operands must be contiguous for Metal matmul
@@ -149,11 +145,12 @@ impl CrossAttention {
 pub struct PolyZeroNet {
     // Backbone
     conv1: Conv2d,
-    bn1: GroupNorm,
+    gn1: GroupNorm,
     res_blocks: Vec<ResBlock>,
 
     // Cross-Attention integration
     player_feature_embeddings: Tensor, // [10, 64]
+    player_pos_embeddings: Tensor,     // [10, 64]
     player_fc: Linear,
     cross_attention: CrossAttention,
 
@@ -166,8 +163,8 @@ pub struct PolyZeroNet {
     pi_target: Conv2d, // Spatial target
     pi_option: Linear, // Unified 192 options head
 
-    v_pool_conv: Conv2d,
-    v_fc_shared: Linear,
+    v_fc1: Linear,
+    v_fc2: Linear,
     v_win: Linear,
     v_progress: Linear,
 }
@@ -177,24 +174,12 @@ impl PolyZeroNet {
         let filters = 64;
         let blocks = 6;
         let input_channels = crate::ai::features::NUM_CHANNELS;
-        let player_state_dim = 10;
+        let player_state_dim = crate::ai::features::RawFeatures::PLAYER_STATE_DIM;
         let num_action_types = 11;
         let num_options = 192;
 
-        // BN-era checkpoints carry bn1.weight/bias too, so they'd load into
-        // GroupNorm code silently and play garbage — refuse them loudly.
-        // Synthetic backends (e.g. VarBuilder::zeros) claim to contain every
-        // name, including this probe — they aren't checkpoints, skip them.
-        let synthetic_backend = vs.contains_tensor("__polyfish_bn_era_probe__");
-        if !synthetic_backend && vs.contains_tensor("bn1.running_mean") {
-            candle_core::bail!(
-                "model file is a BatchNorm-era checkpoint (has bn1.running_mean); \
-                 this build uses GroupNorm — regenerate the model (init_model.py + retrain)"
-            );
-        }
-
         let conv1 = conv(input_channels, filters, 3, 1, 1, vs.pp("conv1"))?;
-        let bn1 = group_norm(filters, vs.pp("bn1"))?;
+        let gn1 = group_norm(filters, vs.pp("gn1"))?;
 
         let mut res_blocks = Vec::new();
         for i in 0..blocks {
@@ -207,13 +192,16 @@ impl PolyZeroNet {
             (player_state_dim as usize, filters),
             "player_feature_embeddings",
         )?;
+        let player_pos_embeddings = vs.get(
+            (player_state_dim as usize, filters),
+            "player_pos_embeddings",
+        )?;
         let player_fc = candle_nn::linear(filters, filters, vs.pp("player_fc"))?;
 
         // Cross-Attention layer
         let cross_attention = CrossAttention::new(filters, 4, vs.pp("cross_attention"))?;
 
-        // Shared policy processing (no norm on the 1-channel pool: a
-        // per-sample norm would erase the map's overall level)
+        // Shared policy processing
         let p_pool_conv = conv(filters, 1, 1, 1, 0, vs.pp("p_pool_conv"))?;
         let p_fc_shared = candle_nn::linear(
             1 * crate::ai::features::MAP_SIZE * crate::ai::features::MAP_SIZE,
@@ -227,21 +215,18 @@ impl PolyZeroNet {
         let pi_target = conv(filters, 1, 1, 1, 0, vs.pp("pi_target"))?;
         let pi_option = candle_nn::linear(filters, num_options, vs.pp("pi_option"))?;
 
-        // Value processing
-        let v_pool_conv = conv(filters, 1, 1, 1, 0, vs.pp("v_pool_conv"))?;
-        let v_fc_shared = candle_nn::linear(
-            1 * crate::ai::features::MAP_SIZE * crate::ai::features::MAP_SIZE,
-            filters,
-            vs.pp("v_fc_shared"),
-        )?;
+        // Value processing (EXP_ARCH_001): global mean+max pool over the full
+        // trunk -> MLP, instead of collapsing to a single channel.
+        let v_fc1 = candle_nn::linear(2 * filters, filters, vs.pp("v_fc1"))?;
+        let v_fc2 = candle_nn::linear(filters, filters, vs.pp("v_fc2"))?;
         let v_win = candle_nn::linear(filters, 1, vs.pp("v_win"))?;
         let v_progress = candle_nn::linear(filters, 1, vs.pp("v_progress"))?;
-
         Ok(Self {
             conv1,
-            bn1,
+            gn1,
             res_blocks,
             player_feature_embeddings,
+            player_pos_embeddings,
             player_fc,
             cross_attention,
             p_pool_conv,
@@ -250,8 +235,8 @@ impl PolyZeroNet {
             pi_source,
             pi_target,
             pi_option,
-            v_pool_conv,
-            v_fc_shared,
+            v_fc1,
+            v_fc2,
             v_win,
             v_progress,
         })
@@ -268,7 +253,7 @@ impl PolyZeroNet {
 
         // 1. Process map through backbone
         let mut x = self.conv1.forward(map_input)?;
-        x = self.bn1.forward(&x)?;
+        x = self.gn1.forward(&x)?;
         x = x.relu()?;
 
         for block in &self.res_blocks {
@@ -284,6 +269,7 @@ impl PolyZeroNet {
         let p_tokens = player_input
             .unsqueeze(2)?
             .broadcast_mul(&self.player_feature_embeddings.unsqueeze(0)?)?;
+        let p_tokens = p_tokens.broadcast_add(&self.player_pos_embeddings.unsqueeze(0)?)?;
         let p_tokens = self.player_fc.forward(&p_tokens)?.relu()?;
 
         // 3. Apply Cross-Attention
@@ -295,7 +281,6 @@ impl PolyZeroNet {
             .reshape((batch_size, filters, h, w))?;
 
         // 4. Policy Heads
-        // Pool convs are linear: no norm/activation (unnormed ReLU here goes dead).
         let p_pooled = self.p_pool_conv.forward(&shared)?;
         let p_pooled = p_pooled.flatten_from(1)?;
         let p_latent = self.p_fc_shared.forward(&p_pooled)?.relu()?;
@@ -312,14 +297,24 @@ impl PolyZeroNet {
             move_option: pi_option,
         };
 
-        // 5. Value Heads
-        let v_pooled = self.v_pool_conv.forward(&shared)?;
-        let v_pooled = v_pooled.flatten_from(1)?;
-        let v_latent = self.v_fc_shared.forward(&v_pooled)?.relu()?;
-        let v_win = self.v_win.forward(&v_latent)?.tanh()?;
+        // 5. Value Heads (EXP_ARCH_001): pool the full trunk (mean+max over
+        // H*W) -> MLP, giving the value estimate a real feature basis.
+        let v_spatial = shared.flatten_from(2)?; // [B, filters, H*W]
+        let v_mean = v_spatial.mean(2)?; // [B, filters]
+        let v_max = v_spatial.max(2)?; // [B, filters]
+        let v_feat = Tensor::cat(&[&v_mean, &v_max], 1)?; // [B, 2*filters]
+        let v_latent = self.v_fc1.forward(&v_feat)?.relu()?;
+        let v_latent = self.v_fc2.forward(&v_latent)?.relu()?;
+        let v_win = self.v_win.forward(&v_latent)?;
         let v_progress = self.v_progress.forward(&v_latent)?;
 
-        Ok((policy_output, ValueOutput { win_value: v_win, progress_value: v_progress }))
+        Ok((
+            policy_output,
+            ValueOutput {
+                win_value: v_win,
+                progress_value: v_progress,
+            },
+        ))
     }
 
     pub fn forward(
@@ -347,7 +342,7 @@ pub struct PolicyOutput {
 
 #[derive(Debug)]
 pub struct ValueOutput {
-    pub win_value: Tensor, // [B, 1]
+    pub win_value: Tensor,      // [B, 1]
     pub progress_value: Tensor, // [B, 1]
 }
 
@@ -364,6 +359,36 @@ pub struct RawPolicyOutput {
     pub source_spatial: Vec<f32>,
     pub target_spatial: Vec<f32>,
     pub move_option: Vec<f32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_core::Device;
+    use candle_nn::VarMap;
+
+    fn forward_dummy(net: &PolyZeroNet, device: &Device) -> (PolicyOutput, ValueOutput) {
+        let map = Tensor::zeros(
+            (
+                2,
+                crate::ai::features::NUM_CHANNELS,
+                crate::ai::features::MAP_SIZE,
+                crate::ai::features::MAP_SIZE,
+            ),
+            candle_core::DType::F32,
+            device,
+        )
+        .unwrap();
+        let player = Tensor::zeros(
+            (2, crate::ai::features::RawFeatures::PLAYER_STATE_DIM),
+            candle_core::DType::F32,
+            device,
+        )
+        .unwrap();
+        net.forward(&map, &player).unwrap()
+    }
+
+
 }
 
 impl PolicyOutput {

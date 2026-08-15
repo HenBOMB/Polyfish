@@ -3,6 +3,7 @@ name = "polyfish"
 version = "0.1.0"
 edition = "2024"
 description = "Polytopia game simulator in Rust"
+license = "Apache-2.0"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
@@ -53,7 +54,7 @@ apple-metal = { version = "0.8.8", optional = true }
 [features]
 default = []
 cuda = ["candle-core/cuda", "candle-nn/cuda"]
-cudnn = ["candle-core/cudnn"]
+cudnn = ["cuda", "candle-core/cudnn"]
 metal = ["candle-core/metal", "candle-nn/metal"]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
 # Route self-play NN inference through libtorch/MPS (tch-rs) instead of candle
@@ -62,9 +63,6 @@ tch-eval = ["dep:tch"]
 # Route self-play NN inference through a hand-composed MPSGraph, bypassing
 # libtorch's serial MPS dispatch queue entirely. See metal_network.rs.
 metal-eval = ["dep:apple-mpsgraph", "dep:apple-metal"]
-# Catch-all for the full macOS build: everything Metal/Apple-related at once.
-# Keep the individual features above for isolating one backend during debugging.
-apple = ["metal", "accelerate", "tch-eval", "metal-eval"]
 
 [dev-dependencies]
 pretty_assertions = "1.4"
@@ -79,82 +77,7 @@ lto = false
 codegen-units = 16
 debug = true
 
-# Tool binaries: never pull them into `cargo test` (some run full-game MCTS loops).
-[[bin]]
-name = "actor_ceiling"
-test = false
-[[bin]]
-name = "arena"
-test = false
-[[bin]]
-name = "benchmark"
-test = false
-[[bin]]
-name = "compare_evaluators"
-test = false
-[[bin]]
-name = "dashboard"
-test = false
-[[bin]]
-name = "debug_mcts_undo"
-test = false
-[[bin]]
-name = "debug_stars"
-test = false
-[[bin]]
-name = "debug_summon"
-test = false
-[[bin]]
-name = "debug_water_sim"
-test = false
-[[bin]]
-name = "delete_all_replays"
-test = false
-[[bin]]
-name = "download_replay"
-test = false
-[[bin]]
-name = "extract_versions"
-test = false
-[[bin]]
-name = "inspect_seed"
-test = false
-[[bin]]
-name = "load_json"
-test = false
-[[bin]]
-name = "repro_loop"
-test = false
-[[bin]]
-name = "stats"
-test = false
-[[bin]]
-name = "test_branching"
-test = false
-[[bin]]
-name = "train"
-test = false
-[[bin]]
-name = "trainer"
-test = false
-[[bin]]
-name = "unverify_all"
-test = false
-[[bin]]
-name = "upload_replays"
-test = false
-[[bin]]
-name = "validate_csv"
-test = false
-[[bin]]
-name = "verify_files"
-test = false
-[[bin]]
-name = "verify_luxidor"
-test = false
-[[bin]]
-name = "verify_policy"
-test = false
+
 
 [[example]]
 name = "metal_bench"

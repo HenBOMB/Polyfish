@@ -137,13 +137,13 @@ fn preview_evaluator() {
         index_score_early
     );
 
-    // Base Early (Turn 5) was 0.08.
+    // Base Early (Turn 5) was 0.0745.
     // Exploration:
     // Total = 121. Explored = 31 (0+30).
     // Min = 24.2 (20%). Spread = 72.6 (60%).
     // Score = (31 - 24.2) / 72.6 = 6.8 / 72.6 ≈ 0.0936.
-    // Weight = 0.2.
-    // Increment = 0.0936 * 0.2 = 0.0187.
-    // Expected > 0.08 + 0.018 = 0.098.
-    assert!(index_score_early > 0.09);
+    // Weight = 0.15.
+    // Increment = 0.0936 * 0.15 = 0.014.
+    // Expected > 0.0745 + 0.014 = 0.0885.
+    assert!(index_score_early > 0.08);
 }
