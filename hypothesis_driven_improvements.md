@@ -4549,3 +4549,80 @@ STANDING: Stage 3b (`aux_playstyle` head + the 169->173 migration across
 rank futures at the leaf is a credible lane ranker; that premise has now
 been tested twice and failed twice. Tier 1 keeps its algorithmic
 selector (045a-v2: behaviour-neutral, tribe prior working as specified).
+
+## EXP_ELO_047 — the painting mismatch: does the goal the leaf paints even move the value?
+
+STATUS: REGISTERED (Aug 15, 2026), Verdi-requested after 046.
+
+FRAMING (load-bearing): this tests the PAINTING hypothesis. It does not
+re-open the net leaf's retirement. The leaf seat changes hands only if an
+aligned-painting arm clears the originally registered >= 52.5% gate
+against the heuristic leaf. Two falsifications stand until then.
+
+THE MISMATCH. Training (`self_play.rs:1871`) paints the tree's COMMITTED
+directive into the goal channels — the goal that actually drove the ply.
+Inference (`macro_mcts.rs:215`) paints `scripted_goal` at the leaf,
+because the committed directive is unknowable before the choice. Arena
+measures the two disagreeing on 40-55% of planned turns, so roughly half
+of all leaf queries are off-distribution in the conditioning channels.
+
+PHASE A — the diagnostic (cheap, decides whether Phase B is worth
+running). At every macro root, post-search, encode the SAME state twice —
+once painted with `base` (scripted) and once with the committed directive
+— and evaluate both. Emit one JSONL row per root:
+`{turn, pov, diverged, v_scripted, v_committed, v_opp, q_spread, q_best,
+q_base}`. Env-gated (`POLYFISH_PAINT_PROBE=<path>`), zero cost when unset.
+The root is exactly the state class a leaf is: a turn boundary, encoded
+from the acting player's perspective.
+
+⚠️ Analysis rule, pre-registered: ~47% of roots pick index 0, where
+committed == scripted and dV == 0 BY CONSTRUCTION. All reads below are
+computed on DIVERGENT rows only (`diverged == true`). Pooling the
+identical rows would dilute the median toward zero and falsely kill the
+hypothesis.
+
+  P1 (does painting matter?): median |dV| on divergent roots, against
+     median root q_spread (the value difference the tree must resolve to
+     rank one directive over another).
+       < 0.1x  -> painting hypothesis DEAD. The head barely reads the
+                  goal channels, the mismatch cannot explain 041.9%, and
+                  the thread closes WITH EVIDENCE rather than a shrug.
+       >= 0.5x -> LIVE. Proceed to Phase B.
+       0.1-0.5x -> report both numbers and the sign before choosing.
+  P2 (sign bias): median SIGNED dV = v_committed - v_scripted. A
+     systematic bias distorts leaf ranking even when |dV| is small,
+     because it applies to only ~half the leaves — the divergent ones.
+  P3 (antisymmetry, gates the Phase B implementation): median
+     |v_pov + v_opp| at the same root. Phase B's cheap form returns
+     -V(child, mover, g_edge) and relies on the net being approximately
+     antisymmetric — which is TESTED for `evaluate_state` and never
+     enforced for the net (per-seat labels). If this is large relative to
+     q_spread, the negation imports that gap into every leaf and Phase B
+     must restructure the negamax instead of negating.
+
+PHASE B — the fix, only if P1 says LIVE. Paint what the tree DOES know at
+a leaf: the child state was reached by executing edge directive `g` for
+player `p`, so paint `g` and evaluate from `p`'s perspective (returning
+its negation to keep the child-perspective convention). This is
+in-distribution by construction — training contains exactly
+(state during p's turn, p's pov, g committed) samples, and the last such
+ply of a turn is the pre-EndTurn state. Verified prerequisite: features
+carry NO to-move / current-player plane (grep of `features.rs`), so a
+post-EndTurn state read from the mover's perspective is not a state class
+the net has never seen. Implementation: store the incoming edge's
+(player, goal) on the Node at expand time; root and frozen paths keep the
+scripted fallback.
+
+MEASUREMENT (Phase B): ONE arena run, net-aligned vs heuristic leaf,
+`base_seed 1787300000`, 500 seeds x2 — the same seeds and the same
+binary-era arms as 046's re-run, whose `replays/exp046/armA` dumps are
+the stored comparator. The heuristic arm is untouched by the paint
+change, so this single run yields BOTH reads: McNemar vs armA isolates
+the painting delta, and the absolute win rate is the seat test (>= 52.5%).
+
+FALLBACK (a fork for Verdi, NOT a default): if P3 or the to-move check
+kills Phase B, the other direction is to paint the SCRIPTED goal in
+training so inference matches. That changes what the goal channels MEAN
+in all future macro data and knowingly mis-conditions the policy head on
+~half of turns (MACRO DIVERGENCE 52.7%) — a training-semantics decision
+to be made with the Phase A numbers in hand, not fallen into.
