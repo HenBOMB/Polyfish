@@ -268,6 +268,59 @@ mod tests {
         }
         println!("first giant: {first_giant:?} | per-player first-giant turns: {giant_first_by_player:?}");
     }
+
+    /// Per-turn economy/ownership audit of a saved replay (manual). One line
+    /// per player per turn — stars, spt, score, units, and every city with
+    /// level and population — plus a CITY CHANGED marker whenever a city
+    /// changes hands. Answers "what did it have to spend, and when did it
+    /// lose the capital" without stepping the UI. Run:
+    ///   REPLAY_FILE=replays/<file>.json cargo test --lib replay_turn_audit -- \
+    ///     --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn replay_turn_audit() {
+        let path = std::env::var("REPLAY_FILE").expect("set REPLAY_FILE");
+        let src: ModReplay =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read")).expect("parse");
+        let total = src.turns.len();
+        let mut prev_owner: std::collections::HashMap<i32, i32> = Default::default();
+        for n in 1..=total {
+            let mut clip = src.clone();
+            clip.turns.truncate(n);
+            let mut game = Game::new();
+            if let Err(e) = replay_game(&mut game, &mut clip) {
+                eprintln!("replay error at prefix {n}: {e}");
+            }
+            let turn = clip.turns.last().map(|t| t.turn).unwrap_or(0);
+            let state = &game.state;
+            let mut pids: Vec<i32> = state.tribes.keys().copied().collect();
+            pids.sort();
+            println!("===== after turn {turn} =====");
+            for pid in pids {
+                let Some(tr) = state.tribes.get(&pid) else { continue };
+                let cities: Vec<String> = tr
+                    .cities
+                    .iter()
+                    .map(|c| {
+                        format!("@{} lvl{} pop{}/{}", c.idx, c.level, c.population, c.level + 1)
+                    })
+                    .collect();
+                println!(
+                    "  P{pid}: stars={} spt={} score={} units={} | cities: {}",
+                    tr.stars,
+                    crate::functions::get_tribe_spt(state, tr),
+                    tr.score,
+                    tr.units.len(),
+                    cities.join(", ")
+                );
+                for c in &tr.cities {
+                    if prev_owner.insert(c.idx, pid).map_or(false, |o| o != pid) {
+                        println!("    ** CITY CHANGED HANDS: @{} -> P{pid} on turn {turn}", c.idx);
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
