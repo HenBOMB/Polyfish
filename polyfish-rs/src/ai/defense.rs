@@ -492,7 +492,10 @@ mod risk_tests {
             .units
             .push(unit_at(61, UnitType::Warrior, 2));
         let goal = MacroGoal::default();
-        let open = goal_potential(&state, 1, &goal, None);
+        let aux = |s: &GameState| {
+            crate::ai::oracle_macro::scripted_goal_aux(s, 1, &goal, 0, 0, None)
+        };
+        let open = goal_potential(&state, 1, &goal, Some(&aux(&state)));
         assert!(expected_city_loss(&state, 1) > 0.0, "an empty reachable city must carry risk");
 
         state
@@ -501,7 +504,7 @@ mod risk_tests {
             .unwrap()
             .units
             .push(unit_at(60, UnitType::Warrior, 1));
-        let held = goal_potential(&state, 1, &goal, None);
+        let held = goal_potential(&state, 1, &goal, Some(&aux(&state)));
         assert!(
             held > open,
             "garrisoned city must outprice the open one: open {open}, held {held}"

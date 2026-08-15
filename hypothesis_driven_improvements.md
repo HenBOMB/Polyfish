@@ -5046,6 +5046,18 @@ test is now `city_risk_is_priced_without_any_defend_order` and asserts the
 opposite. The ORDER-keyed defend terms are unchanged and still require an
 order; only the RISK term is order-independent.
 
+AMENDED (Aug 15, Verdi): **the assessment belongs to T2, not T3.** First
+cut put `expected_city_loss` inline in `goal_potential`, which meant the
+executor re-ran the threat model twice per ply per candidate — both a tier
+violation and a compute one. Now: `city_risks` runs ONCE per turn inside
+`scripted_goal_aux`, lands in `GoalAux.city_risk` as (city, expected loss),
+and T2 also emits a `Defend` order for each risky city — including the case
+the coverage model structurally cannot see, an EMPTY city an enemy can walk
+onto, which carries no "strike". T3 reads the handed-down number and prices
+its RESPONSE. With no aux there is no assessment and the term is silent,
+which is the same convention every other aux-carried term follows — and it
+restored the two 040 exact-equality tests to their original form.
+
 PREDICTIONS (the 049 siege ledger is the instrument, same 120-game config).
   P1 (the point): sieges SUFFERED per game falls — prevention. Gate: the
      model's sieges/game drops from 1.45 by >= 20% with cities_lost/game

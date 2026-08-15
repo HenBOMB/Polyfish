@@ -147,6 +147,15 @@ pub fn scripted_goal(state: &GameState, player: PlayerId, tier3_bought: u32) -> 
             orders.push((OrderKind::Defend, th.city));
         }
     }
+    // EXP_ELO_050: the risk model names cities the coverage model cannot —
+    // an EMPTY city a visible enemy can walk onto next turn carries no
+    // "strike" at all, and that is exactly what the seed-1786807403 fixture
+    // lost its capital to on t9 while the directive read Grow/Expand.
+    for r in crate::ai::defense::city_risks(state, player) {
+        if !orders.iter().any(|(k, t)| *k == OrderKind::Defend && *t == r.city) {
+            orders.push((OrderKind::Defend, r.city));
+        }
+    }
 
     orders.sort();
     // v7: SAVE sits below both ARM branches — a threat or a committed push
@@ -717,6 +726,11 @@ pub const TIER3_CAP_PER_GAME: u32 = 2;
 /// from a slightly older aux — acceptable staleness, like tree reuse itself.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GoalAux {
+    /// EXP_ELO_050: T2's risk assessment, handed DOWN to T3 — (city,
+    /// score-equivalent expected loss) for every city under threat. Computed
+    /// once per turn with the directive, never re-derived per ply: the
+    /// executor prices its response against this, it does not re-assess.
+    pub city_risk: Vec<(i32, f32)>,
     /// Stance-intensity (Verdi, Aug 14): measured ARM pressure 0..1 from
     /// `stance_strength` — threat-vs-coverage truth, NOT the binary stance.
     /// The eco-tech mask fires only when this is near-certain (>= 0.98);
@@ -1054,6 +1068,11 @@ pub fn scripted_goal_aux(
         })
     });
     GoalAux {
+        // T2 assesses; T3 prices against it. One evaluation per turn.
+        city_risk: crate::ai::defense::city_risks(state, player)
+            .into_iter()
+            .map(|r| (r.city, r.expected_loss()))
+            .collect(),
         arm_strength: stance_strength(state, player).arm,
         recommended_techs: recommended,
         rider_push,

@@ -737,7 +737,22 @@ pub fn goal_potential(
     // amount the ply that garrisons it earns. PREVENTION is what it buys:
     // 049 measured a parked Giant cleared 6% of the time, so the cheap move
     // is to never let the tile go empty in the first place.
-    phi -= SHAPE_GOAL_CITY_RISK * crate::ai::defense::expected_city_loss(state, player);
+    // T2 assessed this once per turn and handed it down in the aux; the
+    // executor prices its RESPONSE, it does not re-run the threat model.
+    // Without an aux there is no assessment to price — the same convention
+    // every other aux-carried term follows.
+    if let Some(a) = aux {
+        phi -= SHAPE_GOAL_CITY_RISK
+            * a.city_risk
+                .iter()
+                .filter(|(c, _)| {
+                    // Only cities T2 actually ordered defended, and only while
+                    // they are still mine.
+                    tribe.cities.iter().any(|city| city.idx == *c)
+                })
+                .map(|(_, loss)| *loss)
+                .sum::<f32>();
+    }
     if matches!(goal.stance, Stance::Grow | Stance::Save) {
         phi -= SHAPE_GOAL_STRANDED * completion_stranded(state, player) as f32;
     }
@@ -1704,11 +1719,8 @@ mod shaping_tests {
         t2.units.push(unit_at(61, UnitType::Warrior));
         state.tribes.insert(2, t2);
         let threatened = goal_potential(&state, 1, &grow, None);
-        // The enemy that triggers the exemption also creates city risk
-        // (EXP_ELO_050); add it back to read the exemption alone.
-        let risk = SHAPE_GOAL_CITY_RISK * crate::ai::defense::expected_city_loss(&state, 1);
         assert!(
-            (threatened + risk - restranded - SHAPE_GOAL_STRANDED).abs() < 1e-3,
+            (threatened - restranded - SHAPE_GOAL_STRANDED).abs() < 1e-3,
             "threat exemption must lift the penalty"
         );
     }
@@ -2193,18 +2205,10 @@ mod shaping_tests {
             stance: Stance::Arm,
             save_target: None,
         };
-        // EXP_ELO_050: Φ now also carries the city-risk term, and stepping
-        // off the tile moves it — so the order-keyed hold constant is only
-        // exact once the risk term is added back.
-        let risk = |s: &crate::states::GameState| {
-            SHAPE_GOAL_CITY_RISK * crate::ai::defense::expected_city_loss(s, 1)
-        };
         let phi_hold = goal_potential(&state, 1, &goal, None);
-        let pure_hold = phi_hold + risk(&state);
         // Step off to an adjacent tile: still full cover, hold term lost.
         state.tribes.get_mut(&1).unwrap().units[0].coords = Coords::from_index(48, 11);
         let phi_adjacent = goal_potential(&state, 1, &goal, None);
-        let pure_adjacent = phi_adjacent + risk(&state);
         // March to the far corner: out of the leash, only the recall
         // gradient pays.
         state.tribes.get_mut(&1).unwrap().units[0].coords = Coords::from_index(0, 11);
@@ -2213,13 +2217,7 @@ mod shaping_tests {
             phi_hold > phi_adjacent && phi_adjacent > phi_far,
             "leash ordering violated: hold {phi_hold} adjacent {phi_adjacent} far {phi_far}"
         );
-        assert!((pure_hold - pure_adjacent - SHAPE_GOAL_DEFEND_HOLD).abs() < 1e-3);
-        // And the risk term must PILE ON rather than cancel: walking off a
-        // city an enemy can enter has to cost more than the hold term alone.
-        assert!(
-            phi_hold - phi_adjacent > SHAPE_GOAL_DEFEND_HOLD,
-            "risk term must add to the hold term, not offset it"
-        );
+        assert!((phi_hold - phi_adjacent - SHAPE_GOAL_DEFEND_HOLD).abs() < 1e-3);
     }
 
     /// The prep mechanism in miniature: a NEW unit that lands inside the
@@ -2327,9 +2325,12 @@ mod shaping_tests {
             stance: Stance::Arm,
             save_target: None,
         };
-        let quiet = goal_potential(&state, 1, &goal, None);
+        let aux = |s: &crate::states::GameState| {
+            crate::ai::oracle_macro::scripted_goal_aux(s, 1, &goal, 0, 0, None)
+        };
+        let quiet = goal_potential(&state, 1, &goal, Some(&aux(&state)));
         state.tribes.get_mut(&2).unwrap().units.push(combat_unit(59, UnitType::Swordsman, 2));
-        let besieged = goal_potential(&state, 1, &goal, None);
+        let besieged = goal_potential(&state, 1, &goal, Some(&aux(&state)));
         assert!(
             besieged < quiet,
             "a reachable enemy must cost potential even with no Defend order: \
