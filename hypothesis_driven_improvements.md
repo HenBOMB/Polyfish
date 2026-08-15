@@ -4820,3 +4820,56 @@ PREDICTIONS (pre-registered).
 NOT A WIN-RATE EXPERIMENT. No arm, no A/B, no gate. It is a measurement
 of a mechanism, and its job is to say which of H1 (executor) / H2
 (evaluation) / H3 (generator) is worth spending on next.
+
+### ACTUAL (Aug 15, 2026; 1669 planned roots over 80 games, deployed
+config — macro-mcts heuristic leaf vs Greedy). **P1 ANSWERED: the
+boundary does NOT leak. Tier 3 follows Tier 2.**
+
+Turn shape for scale: median 7 executed plies/turn, of which 2 are
+star-spending.
+
+| metric (median) | all roots | divergent (53.2%) |
+|---|---|---|
+| ply overlap, pick vs scripted base | 0.850 | 0.594 |
+| ply overlap, pick vs NO directive | **0.545** | **0.556** |
+| SPEND-ply overlap, pick vs base | 1.000 | 0.500 |
+| SPEND-ply overlap, pick vs no directive | 0.500 | 0.500 |
+| plies owned by the lambda*dphi pull | 51.2% | 50.9% |
+| plies owned by the whole directive | 51.3% | 51.0% |
+
+P1: 0.545 is below the pre-registered 0.6 "drives" line and nowhere near
+the 0.9 "leaks" line. Removing the directive entirely changes about HALF
+the executed plies. The directive is not decorative, and the
+`ply <- order` link is real. (19.5% of turns do reproduce exactly with no
+directive — the quiet turns where only one sensible line exists.)
+
+P2: on divergent roots the spend overlap is 0.500 against a median of 2
+spend plies — i.e. the tree's directive changes one of the two star
+commitments of that turn. The directive reaches the channel with the only
+proven causal link to wins (EXP_ELO_026), not just the Steps.
+
+P3, the sharp one: `flip_no_phi` (51.2%) and `flip_no_goal` (51.3%) are
+the SAME to within a tenth of a point. All of the directive's influence
+flows through the lambda*dphi ranking PULL; the stance/star GATE adds
+essentially nothing on top of it. Anything that hopes to steer the
+executor by gating rather than pricing is steering a channel that is
+already carrying ~0 marginal signal — which retroactively explains why
+the mask-style arms lost to the pricing-style ones (goal-pricing-beats-
+masks, 028 P1c).
+
+VERDICT AND WHERE IT LEAVES THE PROGRAM. H1-as-wiring is FALSIFIED: the
+nulls are not caused by directives failing to reach the plies. Combined
+with the standing result that changing WHICH directive is picked does not
+change wins, the surviving reading is that **the candidates are
+value-degenerate — they produce materially different turns that are worth
+about the same.** That splits two ways, and they are distinguishable:
+  H2 (evaluation): the alternatives really do differ in value and the
+     tree cannot tell — still LIVE, and never tested with an evaluator
+     better than `evaluate_state` (039/047 tested worse ones).
+  H3 (generator): the alternatives are genuinely interchangeable, so no
+     amount of evaluation would help; the generator has to propose
+     strategically different turns, not variations.
+Distinguishing probe (not run, not scheduled): on divergent roots, roll
+BOTH candidates out deep (to terminal or a long horizon, ghost opponent)
+and compare outcomes. Materially different outcomes => H2 and evaluation
+is the lever; equal outcomes => H3 and the generator is.
