@@ -4922,3 +4922,83 @@ nor the following is broken. The directive-layer nulls therefore mean the
 alternative directives are worth about the same (H2 evaluation / H3
 generator), which is exactly what the deep-rollout separator would
 distinguish.
+
+## EXP_ELO_049 — the siege ledger: is the model besieged more, or worse at answering?
+
+STATUS: MEASURED (Aug 15, 2026), Verdi-requested. Instrument, not an A/B.
+
+WHAT WAS ALREADY IN HAND (SIEGE DEFENSE lines, all runs to date). The
+question is answerable from the aggregate alone: the model is besieged
+LESS and loses the city MORE.
+
+| run (config1 vs config2) | model sieges/game | unsiege% | cities lost/game |
+|---|---|---|---|
+| 048 macro vs Greedy | 1.46 / **2.58** | **32%** / 53% | 0.94 / 1.17 |
+| 045v2 macro vs Greedy | 1.60 / **3.04** | **45%** / 52% | 0.84 / 1.36 |
+| 045a-b macro vs Greedy | 1.70 / **4.62** | **40%** / 67% | 0.97 / 1.44 |
+| 041 NET (gumbel) vs Greedy | 1.98 / 1.90 | **38%** / 42% | 1.18 / 1.04 |
+
+NEW INSTRUMENT. `SiegeTracker` now closes each episode with the facts at
+the moment the attacker stepped onto the city — attacker type/health,
+city level, own units alive, nearest own unit, **responders** (own units
+that could strike that tile next turn, via `defense::covers`), stars
+banked, and whether Tier 2 had a Defend order on that very city — plus
+the outcome and how many turns it was held. Written into each game dump
+as `siege_episodes` (only with `--dump-stats-dir`).
+
+RESULT (60 seeds x2 = 120 games, deployed config vs Greedy, 462 episodes).
+
+| | MACRO (model) | GREEDY |
+|---|---|---|
+| sieges suffered | 166 | 296 |
+| unsieged | **25.3%** | **54.1%** |
+| city lost | 74.7% | 45.9% |
+| responders >= 1 at open | 74.7% | 71.3% |
+| nearest own unit | 2 tiles | 2 tiles |
+| stars banked | 1 | 1 |
+| Tier 2 ordered THIS city defended | 42.2% | n/a (script) |
+
+**THE ANSWER IS NEITHER "MORE SIEGES" NOR "WORSE DEFENDING" — IT IS WHO
+IS STANDING ON THE CITY.** Unsiege rate by attacker:
+
+| attacker on the city | model n | model unsieges | Greedy n | Greedy unsieges |
+|---|---|---|---|---|
+| Rider | 47 | **70%** | 168 | 82% |
+| Giant | 72 | **6%** | 42 | 24% |
+| Warrior | 20 | 5% | 57 | 18% |
+| Swordsman | 18 | 22% | 26 | 12% |
+
+The model's sieges are **43.4% Giants**; Greedy's are **14.2%**. Giants
+are ~unkillable once parked (6% cleared). Re-weighting the model's
+per-attacker rates onto Greedy's attacker mix lifts it from 25.3% to
+**43.7%** — i.e. **roughly two thirds of the entire unsiege gap is the
+attacker mix, not the defending**. The residual (43.7% vs Greedy's 54.1%)
+is real but secondary.
+
+THIS IS THE ARMY-COMPOSITION GAP, ARRIVING AS A DEFENSIVE SYMPTOM. The
+model fields the same unit COUNT as Greedy at half the value per unit
+(memory: army-composition-gap, $/unit 2.2 vs 4.4) — and here is the bill:
+Greedy spends up into Giants and parks them on the model's cities, while
+the model attacks with Riders that Greedy kills 82% of the time. The
+finding was DEMOTED earlier for not predicting wins on its own (AUC
+0.536); this is a causal channel by which it does.
+
+SECOND FINDING — `responders` DOES NOT PREDICT THE OUTCOME. Model
+unsieges 26.6% with >=1 responder vs 21.4% with none; Greedy 53.1% vs
+56.5% (inverted). Having a unit that can HIT the besieger is nearly
+uninformative, because what the tile needs is enough damage to KILL it.
+⚠️ This directly indicts the EXP_ELO_040 threat model, which prices
+coverage in `covers`/reach terms — it was built on the yardstick this
+measurement shows to be the wrong one, which is a better explanation for
+041/042's null than "zero-shot steering doesn't work".
+
+THIRD — Tier 2 named the besieged city in a Defend order only 42.2% of
+the time, and median stars at open is 1 (nothing to buy a defender with).
+Median turns held is 1: the answer must exist BEFORE the attacker
+arrives, not after.
+
+CONSEQUENCE. The defensive fix is not a better Defend order or better
+coverage pricing (both tried, both null). It is (a) fielding units that
+can kill what shows up, and (b) not letting a Giant reach a city with 1
+star in the bank. Both are ECONOMY/COMPOSITION decisions, several turns
+upstream of the siege.

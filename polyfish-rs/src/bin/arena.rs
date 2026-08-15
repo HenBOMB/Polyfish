@@ -429,39 +429,112 @@ fn sample_turn(state: &polyfish::states::GameState, swap: bool) -> TurnSample {
 /// standing on an owned city tile; each episode resolves as UNSIEGED (enemy
 /// gone, city kept) or LOST (ownership flipped). Scanned after every move.
 struct SiegeTracker {
-    active: std::collections::HashSet<(i32, i32)>, // (owner pid, city idx)
+    active: std::collections::HashMap<(i32, i32), serde_json::Value>, // (owner pid, city idx) -> open facts
     sieges: [u32; 2],   // per SEAT (P1, P2): episodes started
     unsieged: [u32; 2], // …resolved by clearing the attacker
     lost: [u32; 2],     // …resolved by losing the city
+    /// EXP_ELO_049: one closed record per episode, emitted into the game dump.
+    episodes: Vec<serde_json::Value>,
+    detail: bool,
 }
 
 impl SiegeTracker {
-    fn new() -> Self {
+    fn new(detail: bool) -> Self {
         Self {
             active: Default::default(),
             sieges: [0; 2],
             unsieged: [0; 2],
             lost: [0; 2],
+            episodes: Vec::new(),
+            detail,
         }
     }
 
-    fn scan(&mut self, state: &polyfish::states::GameState) {
+    /// Facts at the moment the attacker steps onto the city — the ones that
+    /// decide whether the defence was POSSIBLE, separately from whether it
+    /// happened: who can strike the tile next turn, how far the nearest
+    /// unit is, what the bank holds, and whether Tier 2 had even named this
+    /// city as something to defend.
+    fn open_facts(
+        state: &polyfish::states::GameState,
+        owner: i32,
+        idx: i32,
+        goal: Option<&polyfish::ai::oracle_macro::MacroGoal>,
+    ) -> serde_json::Value {
+        let size = state.settings.size;
+        let attacker = polyfish::functions::get_true_unit_at(state, idx);
+        let tribe = state.tribes.get(&owner);
+        let city_level = tribe
+            .and_then(|t| t.cities.iter().find(|c| c.idx == idx).map(|c| c.level))
+            .unwrap_or(0);
+        // Own units, excluding anything standing on the besieged tile.
+        let own: Vec<&polyfish::states::UnitState> = tribe
+            .map(|t| t.units.iter().filter(|u| u.coords.idx != idx).collect())
+            .unwrap_or_default();
+        let nearest = own
+            .iter()
+            .map(|u| polyfish::functions::get_chebyshev_distance(u.coords.idx, idx, size))
+            .min();
+        let responders = own
+            .iter()
+            .filter(|u| polyfish::ai::defense::covers(state, u, idx))
+            .count();
+        let ordered_defend = goal.map(|g| {
+            g.orders.iter().any(|(k, t)| {
+                *k == polyfish::ai::oracle_macro::OrderKind::Defend && *t == idx
+            })
+        });
+        serde_json::json!({
+            "owner": owner,
+            "city": idx,
+            "city_level": city_level,
+            "turn_open": state.settings.turn,
+            "attacker": attacker.map(|u| format!("{:?}", u.unit_type)),
+            "attacker_health": attacker.map(|u| u.health),
+            "own_units": own.len(),
+            "nearest_unit_dist": nearest,
+            // Units that could strike the besieging unit next turn — the
+            // capability the unsiege actually needs.
+            "responders": responders,
+            "stars": tribe.map(|t| t.stars),
+            "spt": tribe.map(|t| polyfish::functions::get_tribe_spt(state, t)),
+            "defend_ordered": ordered_defend,
+        })
+    }
+
+    fn scan(
+        &mut self,
+        state: &polyfish::states::GameState,
+        goals: [Option<&polyfish::ai::oracle_macro::MacroGoal>; 2],
+    ) {
         let (sieges, unsieged, lost) =
             (&mut self.sieges, &mut self.unsieged, &mut self.lost);
-        self.active.retain(|&(owner, idx)| {
+        let episodes = &mut self.episodes;
+        let detail = self.detail;
+        self.active.retain(|&(owner, idx), open| {
             let seat = (owner - 1).clamp(0, 1) as usize;
             let still_owned = state
                 .tribes
                 .get(&owner)
                 .map_or(false, |t| t.cities.iter().any(|c| c.idx == idx));
+            let mut close = |outcome: &str| {
+                if detail {
+                    let mut rec = open.clone();
+                    rec["outcome"] = serde_json::json!(outcome);
+                    rec["turn_close"] = serde_json::json!(state.settings.turn);
+                    episodes.push(rec);
+                }
+            };
             if !still_owned {
                 lost[seat] += 1;
+                close("lost");
                 return false;
             }
             let enemy_on = polyfish::functions::get_true_unit_at(state, idx)
                 .map_or(false, |u| u.owner != owner);
             if !enemy_on {
                 unsieged[seat] += 1;
+                close("unsieged");
                 return false;
             }
             true
@@ -471,7 +544,13 @@ impl SiegeTracker {
             for c in &t.cities {
                 let enemy_on = polyfish::functions::get_true_unit_at(state, c.idx)
                     .map_or(false, |u| u.owner != *pid);
-                if enemy_on && self.active.insert((*pid, c.idx)) {
+                if enemy_on && !self.active.contains_key(&(*pid, c.idx)) {
+                    let facts = if self.detail {
+                        Self::open_facts(state, *pid, c.idx, goals[seat])
+                    } else {
+                        serde_json::Value::Null
+                    };
+                    self.active.insert((*pid, c.idx), facts);
                     sieges[seat] += 1;
                 }
             }
@@ -631,7 +710,7 @@ fn play_match(
     let mb_p1 = feed_on(if swap { &macro_params2 } else { &macro_params1 });
     let mb_p2 = feed_on(if swap { &macro_params1 } else { &macro_params2 });
 
-    let mut siege_tracker = SiegeTracker::new();
+    let mut siege_tracker = SiegeTracker::new(dump_stats_dir.is_some());
     while !polyfish::functions::is_game_over(&game.state) && moves < 500 {
         if dump_stats_dir.is_some() && game.state.settings.turn != last_sampled_turn {
             samples.push(sample_turn(&game.state, swap));
@@ -1006,7 +1085,13 @@ fn play_match(
                 }
             }
             game.play_move(m.as_ref());
-            siege_tracker.scan(&game.state);
+            {
+                // The committed directive of each seat, so an episode records
+                // whether Tier 2 had even named this city as one to defend.
+                let g1 = agent_p1.macro_committed_goal();
+                let g2 = agent_p2.macro_committed_goal();
+                siege_tracker.scan(&game.state, [g1, g2]);
+            }
             if let Some(c) = calib.as_mut() {
                 c.after_move(&game.state, current_pid, m.as_ref());
             }
@@ -1178,6 +1263,9 @@ fn play_match(
             "model_city_levels": model_city_levels,
             "placements": placements,
             "goal_trace": goal_trace,
+            // EXP_ELO_049: one record per siege episode — the facts at the
+            // moment the attacker stepped on, and how it ended.
+            "siege_episodes": siege_tracker.episodes,
             "tech_traces": tech_traces,
             "stance_flips": stance_commit.stance_flips,
             "order_flips": stance_commit.order_flips,
