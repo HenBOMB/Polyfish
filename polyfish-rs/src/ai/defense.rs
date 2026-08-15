@@ -123,6 +123,16 @@ pub(crate) const RISK_LOST: f32 = 1.0;
 pub(crate) const RISK_BREAKABLE: f32 = 0.45;
 pub(crate) const RISK_GARRISON_FALLS: f32 = 0.35;
 pub(crate) const RISK_GARRISON_HOLDS: f32 = 0.05;
+/// EXP_ELO_051: an enemy that needs N turns to arrive is a real threat, just
+/// a discounted one. The one-move cliff is what let two cities go: both were
+/// vacated with the taker 2-3 tiles out, so the assessment saw nothing.
+pub(crate) const RISK_BY_TURNS: [f32; 3] = [1.0, 0.55, 0.25];
+/// Enemy turns of arrival the threat model looks ahead.
+pub(crate) const THREAT_HORIZON: i32 = 3;
+/// Sightings older than this are dropped rather than trusted.
+const GHOST_MAX_AGE: i32 = 4;
+/// Per-turn confidence decay on a remembered sighting.
+const GHOST_TRUST: f32 = 0.6;
 /// Worth of a city in the score-equivalent units `goal_potential` uses:
 /// base plus per-level, so a developed capital outprices a frontier village.
 const CITY_WORTH_BASE: f32 = 12.0;
@@ -146,12 +156,23 @@ pub struct CityRisk {
     /// reachability search is T2's, resolving damage against whoever ends up
     /// standing there is T3's.
     pub attackers: Vec<i32>,
-    /// Tile indices of visible enemies that can END their move on the tile.
-    pub enterers: Vec<i32>,
+    /// Threats that could END their move on the tile inside the horizon.
+    pub enterers: Vec<Enterer>,
     /// P(lose the city) proxy in [0,1], as assessed at turn start.
     pub risk: f32,
     /// Score-equivalent worth of the city.
     pub worth: f32,
+}
+
+/// One way the city could change hands: who, how soon, and how sure we are.
+/// `visible` separates a unit on the board (which T3 can kill, and then stop
+/// counting) from a remembered sighting under fog (which it cannot verify).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Enterer {
+    pub tile: i32,
+    pub turns: i32,
+    pub trust: f32,
+    pub visible: bool,
 }
 
 impl CityRisk {
@@ -170,29 +191,82 @@ impl CityRisk {
 /// banding as `can_attack_tile`: plain distance inside one move, the exact
 /// road-aware search only in the band beyond it.
 fn can_reach_tile(state: &GameState, unit: &UnitState, target_tile: i32) -> bool {
-    let size = state.settings.size;
-    let m = get_unit_movement(state, unit);
-    let d = get_chebyshev_distance(unit.coords.idx, target_tile, size);
-    if d == 0 {
-        return true;
-    }
-    if d <= m {
-        return true;
-    }
-    if d > 2 * m {
-        return false;
-    }
-    crate::moves::reach_search(state, unit, Some(&|t: i32| t == target_tile)).1
+    turns_to_reach(state, unit, target_tile, 1).is_some()
 }
 
-/// Per-city expected loss: who can reach the tile, whether a siege there
-/// would be breakable, and what that costs me. FOW-honest — only visible
-/// enemy units, read with their real movement (roads and tech included).
-pub fn city_risks(state: &GameState, player: PlayerId) -> Vec<CityRisk> {
-    let Some(tribe) = state.tribes.get(&player) else {
-        return Vec::new();
-    };
-    let enemies: Vec<&UnitState> = state
+/// EXP_ELO_051: how many enemy turns until `unit` could STAND on
+/// `target_tile`, or None beyond `max_turns`. The engine's own cost search
+/// does the work, so roads count — a Rider that a road chain puts three
+/// tiles further out reads as a one-turn threat, which is exactly the city
+/// snipe the one-move horizon was blind to.
+///
+/// Escape ("bounce") is honoured: a unit that may move again after a kill
+/// covers up to twice its movement in a turn, but only when there is
+/// something of mine in range to strike on the way through.
+fn turns_to_reach(
+    state: &GameState,
+    unit: &UnitState,
+    target_tile: i32,
+    max_turns: i32,
+) -> Option<i32> {
+    let size = state.settings.size;
+    let m = get_unit_movement(state, unit).max(1);
+    let d = get_chebyshev_distance(unit.coords.idx, target_tile, size);
+    if d == 0 {
+        return Some(0);
+    }
+    let per_turn = if bounce_reach(state, unit) { 2 * m } else { m };
+    // Chebyshev is a lower bound on path length: beyond this it cannot arrive.
+    if d > per_turn * max_turns {
+        return None;
+    }
+    if d <= per_turn {
+        return Some(1);
+    }
+    let budget = max_turns * if per_turn > m { 2 } else { 1 };
+    let (costs, _) = crate::moves::reach_search_turns(state, unit, budget, None);
+    // The city tile is usually blocked by its own garrison, and "could you
+    // stand here if it were empty" is the whole question — so price the
+    // step-in from a neighbour, not a landing the current occupant forbids.
+    let mut best = costs.get(&target_tile).copied();
+    for n in crate::functions::get_adjacent_indices(state, target_tile, 1) {
+        if let Some(&c) = costs.get(&n) {
+            let v = c + 1.0;
+            if best.map_or(true, |b| v < b) {
+                best = Some(v);
+            }
+        }
+    }
+    let turns = (best? / per_turn as f32).ceil() as i32;
+    (turns <= max_turns).then_some(turns.max(1))
+}
+
+/// Does this unit get a second move after a kill, with a victim in reach to
+/// trigger it? Rider carries Escape, which is how a "safe" city two moves
+/// away is taken in one turn.
+fn bounce_reach(state: &GameState, unit: &UnitState) -> bool {
+    if !has_skill(unit, SkillType::Escape) {
+        return false;
+    }
+    let size = state.settings.size;
+    let span = get_unit_movement(state, unit).max(1)
+        + get_unit_setting(unit.unit_type).range.max(1);
+    state.tribes.iter().any(|(id, t)| {
+        *id != unit.owner
+            && t.units
+                .iter()
+                .any(|v| get_chebyshev_distance(unit.coords.idx, v.coords.idx, size) <= span)
+    })
+}
+
+/// Enemies this player can reason about: everything visible, plus units last
+/// seen leaving into the fog (`TribeState::enemy_ghosts`). A sighting is not
+/// forgotten the instant it steps out of vision — the rider that bounced
+/// away is still out there, and pretending otherwise is what leaves a city
+/// open. Ghosts are placed at their last-seen tile and their contribution is
+/// discounted by age.
+fn threat_units(state: &GameState, player: PlayerId) -> Vec<(UnitState, f32)> {
+    let mut out: Vec<(UnitState, f32)> = state
         .tribes
         .iter()
         .filter(|(id, _)| **id != player)
@@ -203,8 +277,42 @@ pub fn city_risks(state: &GameState, player: PlayerId) -> Vec<CityRisk> {
                 .get(&u.coords.idx)
                 .map_or(false, |t| t.explorers.contains(&player))
         })
+        .map(|u| (probe(u), 1.0))
         .collect();
-    if enemies.is_empty() {
+    let Some(me) = state.tribes.get(&player) else {
+        return out;
+    };
+    let now = state.settings.turn;
+    for (&idx, g) in &me.enemy_ghosts {
+        let age = (now - g.turn).max(0);
+        if age > GHOST_MAX_AGE {
+            continue;
+        }
+        // Already accounted for if something visible stands there.
+        if out.iter().any(|(u, _)| u.coords.idx == idx) {
+            continue;
+        }
+        let mut u = UnitState {
+            owner: g.owner,
+            unit_type: g.unit_type,
+            coords: crate::coords::Coords::from_index(idx, state.settings.size),
+            ..Default::default()
+        };
+        u.health = get_unit_max_health(&u);
+        out.push((u, GHOST_TRUST.powi(age)));
+    }
+    out
+}
+
+/// Per-city expected loss: who can reach the tile, whether a siege there
+/// would be breakable, and what that costs me. FOW-honest — only visible
+/// enemy units, read with their real movement (roads and tech included).
+pub fn city_risks(state: &GameState, player: PlayerId) -> Vec<CityRisk> {
+    let Some(tribe) = state.tribes.get(&player) else {
+        return Vec::new();
+    };
+    let threats = threat_units(state, player);
+    if threats.is_empty() {
         return Vec::new();
     }
     let mut out = Vec::new();
@@ -215,19 +323,25 @@ pub fn city_risks(state: &GameState, player: PlayerId) -> Vec<CityRisk> {
         let garrison = occupant.as_ref().filter(|u| u.owner == player);
         let open = occupant.is_none();
 
-        let enterers: Vec<i32> = if sieged {
+        let enterers: Vec<Enterer> = if sieged {
             Vec::new()
         } else {
-            enemies
+            threats
                 .iter()
-                .filter(|e| can_reach_tile(state, &probe(e), idx))
-                .map(|e| e.coords.idx)
+                .filter_map(|(e, trust)| {
+                    turns_to_reach(state, e, idx, THREAT_HORIZON).map(|turns| Enterer {
+                        tile: e.coords.idx,
+                        turns: turns.max(1),
+                        trust: *trust,
+                        visible: *trust >= 1.0,
+                    })
+                })
                 .collect()
         };
-        let attackers: Vec<i32> = enemies
+        let attackers: Vec<i32> = threats
             .iter()
-            .filter(|e| can_attack_tile(state, &probe(e), idx))
-            .map(|e| e.coords.idx)
+            .filter(|(e, trust)| *trust >= 1.0 && can_attack_tile(state, e, idx))
+            .map(|(e, _)| e.coords.idx)
             .collect();
 
         // Whoever is (or would be) standing there: can I remove them?
@@ -236,14 +350,14 @@ pub fn city_risks(state: &GameState, player: PlayerId) -> Vec<CityRisk> {
         } else {
             enterers
                 .iter()
-                .filter_map(|i| get_true_unit_at(state, *i))
+                .filter_map(|e| get_true_unit_at(state, e.tile))
                 .max_by(|a, b| {
                     get_unit_max_health(a)
                         .partial_cmp(&get_unit_max_health(b))
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
         };
-        let arrives_next_turn = !sieged && !enterers.is_empty();
+        let arrives_next_turn = !sieged && enterers.iter().any(|e| e.turns <= 1);
         let breakable = match threat_unit {
             Some(t) => {
                 let mut dmg = 0.0;
@@ -265,23 +379,16 @@ pub fn city_risks(state: &GameState, player: PlayerId) -> Vec<CityRisk> {
                 .sum()
         });
 
+        let severity = if breakable { RISK_BREAKABLE } else { RISK_LOST };
         let risk = if sieged {
-            if breakable { RISK_BREAKABLE } else { RISK_LOST }
+            severity
         } else if let Some(g) = garrison {
-            if on_garrison <= 0.0 {
-                0.0
-            } else if on_garrison >= g.health {
-                RISK_GARRISON_FALLS
-            } else {
-                RISK_GARRISON_HOLDS
-            }
-        } else if arrives_next_turn {
-            if breakable { RISK_BREAKABLE } else { RISK_LOST }
+            garrison_risk(on_garrison, g.health, enterers.is_empty())
         } else {
-            0.0
+            arrival_factor(&enterers) * severity
         };
-        // Keep any city a visible enemy could walk into even at risk 0 — a
-        // safely-held tile is exactly the one whose VACATING must be priced.
+        // Keep any city a threat could walk into even at risk 0 — a safely
+        // held tile is exactly the one whose VACATING must be priced.
         if risk <= 0.0 && enterers.is_empty() {
             continue;
         }
@@ -298,6 +405,38 @@ pub fn city_risks(state: &GameState, player: PlayerId) -> Vec<CityRisk> {
         });
     }
     out
+}
+
+/// Soonest credible arrival, discounted by how far out it is and how much a
+/// remembered sighting is trusted.
+fn arrival_factor(enterers: &[Enterer]) -> f32 {
+    enterers
+        .iter()
+        .map(|e| {
+            let band = RISK_BY_TURNS
+                .get((e.turns - 1).max(0) as usize)
+                .copied()
+                .unwrap_or(0.0);
+            band * e.trust
+        })
+        .fold(0.0, f32::max)
+}
+
+/// Continuous in the garrison's health: a full-strength defender behind the
+/// city's defence bonus prices far better than a wounded one, so holding the
+/// tile at max health beats attacking out of it. The old three-step ladder
+/// read both as `RISK_GARRISON_HOLDS` and gave the executor no reason to
+/// keep its defender whole.
+fn garrison_risk(incoming: f32, health: f32, no_enterers: bool) -> f32 {
+    if incoming <= 0.0 && no_enterers {
+        return 0.0;
+    }
+    let ratio = if health > 0.0 {
+        (incoming / health).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    RISK_GARRISON_HOLDS + (RISK_GARRISON_FALLS - RISK_GARRISON_HOLDS) * ratio
 }
 
 /// Total score-equivalent expected loss across the player's cities — the
@@ -320,32 +459,29 @@ pub fn residual_risk(state: &GameState, player: PlayerId, d: &CityRisk) -> f32 {
     if !still_mine {
         return RISK_LOST;
     }
-    let live = |i: &i32| get_true_unit_at(state, *i).filter(|u| u.owner != player);
+    let live = |i: i32| get_true_unit_at(state, i).filter(|u| u.owner != player);
+    // A named threat still counts unless it is visible AND now dead: a
+    // remembered sighting cannot be disproved by looking at the board.
+    let standing: Vec<&Enterer> = d
+        .enterers
+        .iter()
+        .filter(|e| !e.visible || live(e.tile).is_some())
+        .collect();
+    let severity = if d.breakable { RISK_BREAKABLE } else { RISK_LOST };
     match get_true_unit_at(state, d.city) {
-        Some(u) if u.owner != player => {
-            if d.breakable { RISK_BREAKABLE } else { RISK_LOST }
-        }
+        Some(u) if u.owner != player => severity,
         Some(g) => {
             let dmg: f32 = d
                 .attackers
                 .iter()
-                .filter_map(live)
+                .filter_map(|i| live(*i))
                 .map(|e| hypo_damage(state, &probe(e), g, d.city))
                 .sum();
-            if dmg <= 0.0 {
-                0.0
-            } else if dmg >= g.health {
-                RISK_GARRISON_FALLS
-            } else {
-                RISK_GARRISON_HOLDS
-            }
+            garrison_risk(dmg, g.health, standing.is_empty())
         }
         None => {
-            if d.enterers.iter().any(|i| live(i).is_some()) {
-                if d.breakable { RISK_BREAKABLE } else { RISK_LOST }
-            } else {
-                0.0
-            }
+            let owned: Vec<Enterer> = standing.into_iter().cloned().collect();
+            arrival_factor(&owned) * severity
         }
     }
 }
@@ -663,6 +799,119 @@ mod risk_tests {
         state.tribes.get_mut(&1).unwrap().cities.clear();
         assert_eq!(residual_risk(&state, 1, &risks[0]), RISK_LOST);
         assert!(RISK_LOST >= standing);
+    }
+
+    /// EXP_ELO_051, the seed-1786807405 loss in one test. City 85 was vacated
+    /// on t9 with the taker THREE tiles out; the one-move horizon saw nothing,
+    /// so stepping off was priced at exactly 0.0000. An enemy beyond one move
+    /// must still make vacating cost something.
+    #[test]
+    fn an_enemy_two_moves_out_still_makes_vacating_cost() {
+        let mut state = board(60);
+        state
+            .tribes
+            .get_mut(&1)
+            .unwrap()
+            .units
+            .push(unit_at(60, UnitType::Warrior, 1));
+        // Chebyshev 2 from the city: outside a Warrior's single move.
+        state
+            .tribes
+            .get_mut(&2)
+            .unwrap()
+            .units
+            .push(unit_at(62, UnitType::Warrior, 2));
+        let risks = city_risks(&state, 1);
+        assert_eq!(risks.len(), 1, "a two-move threat must be on the books");
+        assert!(risks[0].enterers.iter().all(|e| e.turns >= 2));
+        let held = residual_risk(&state, 1, &risks[0]);
+
+        state.tribes.get_mut(&1).unwrap().units.clear();
+        let open = residual_risk(&state, 1, &risks[0]);
+        assert!(
+            open > held,
+            "vacating must cost: held {held}, open {open}"
+        );
+    }
+
+    /// The horizon is graded, not a second cliff: nearer is worse.
+    #[test]
+    fn risk_falls_off_with_distance() {
+        let mut at = |d: i32| {
+            let mut s = board(60);
+            s.tribes.get_mut(&2).unwrap().units.push(unit_at(60 + d, UnitType::Warrior, 2));
+            city_risks(&s, 1).first().map(|r| r.risk).unwrap_or(0.0)
+        };
+        let (near, mid, far) = (at(1), at(2), at(3));
+        assert!(near > mid && mid > far, "near {near}, mid {mid}, far {far}");
+        assert!(far > 0.0);
+    }
+
+    /// B2: holding at full health must price better than holding wounded, or
+    /// the executor has no reason to keep its defender whole (Verdi: "staying
+    /// put, and not even initiating an attack, is best").
+    #[test]
+    fn a_wounded_garrison_prices_worse_than_a_whole_one() {
+        let mut state = board(60);
+        state
+            .tribes
+            .get_mut(&2)
+            .unwrap()
+            .units
+            .push(unit_at(61, UnitType::Warrior, 2));
+        state
+            .tribes
+            .get_mut(&1)
+            .unwrap()
+            .units
+            .push(unit_at(60, UnitType::Warrior, 1));
+        let risks = city_risks(&state, 1);
+        let whole = residual_risk(&state, 1, &risks[0]);
+
+        state.tribes.get_mut(&1).unwrap().units[0].health = 2.0;
+        let hurt = residual_risk(&state, 1, &risks[0]);
+        assert!(hurt > whole, "whole {whole} must beat wounded {hurt}");
+    }
+
+    /// Verdi: "we had already seen the rider bounce away into the fog … theres
+    /// a chance its within reach". A sighting is not forgotten the moment it
+    /// leaves vision.
+    #[test]
+    fn a_remembered_sighting_still_counts() {
+        use crate::states::GhostRecord;
+        let mut state = board(60);
+        state.settings.turn = 5;
+        state.tribes.get_mut(&1).unwrap().enemy_ghosts.insert(
+            61,
+            GhostRecord { unit_type: UnitType::Rider, owner: 2, turn: 4 },
+        );
+        let risks = city_risks(&state, 1);
+        assert_eq!(risks.len(), 1, "a fog sighting must still raise a risk");
+        assert!(risks[0].risk > 0.0);
+        assert!(risks[0].enterers.iter().all(|e| !e.visible));
+        // …but discounted against a unit we can actually see.
+        let mut seen = board(60);
+        seen.tribes.get_mut(&2).unwrap().units.push(unit_at(61, UnitType::Rider, 2));
+        assert!(city_risks(&seen, 1)[0].risk > risks[0].risk);
+    }
+
+    /// A Rider carries Escape: with something to kill on the way it moves
+    /// again after the strike, so "two moves away" is a one-turn threat.
+    #[test]
+    fn escape_lets_a_rider_arrive_a_turn_sooner() {
+        let mut far = board(60);
+        far.tribes.get_mut(&2).unwrap().units.push(unit_at(64, UnitType::Rider, 2));
+        let alone = city_risks(&far, 1).first().map(|r| r.risk).unwrap_or(0.0);
+
+        let mut bait = far.clone();
+        bait.tribes.get_mut(&1).unwrap().units.push(unit_at(63, UnitType::Warrior, 1));
+        let with_victim = city_risks(&bait, 1)
+            .iter()
+            .find(|r| r.city == 60)
+            .map(|r| r.enterers.iter().map(|e| e.turns).min().unwrap_or(9))
+            .unwrap_or(9);
+        assert!(alone > 0.0);
+        assert_eq!(with_victim, 1, "a bounce puts the city one turn away");
     }
 
     /// A garrison that merely holds is doing its job — naming it would pin

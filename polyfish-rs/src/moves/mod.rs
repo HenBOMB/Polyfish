@@ -414,7 +414,22 @@ pub(crate) fn reach_search(
     unit: &UnitState,
     stop: Option<&dyn Fn(i32) -> bool>,
 ) -> (std::collections::HashMap<i32, f32>, bool) {
-    let mut effective_movement = crate::functions::get_unit_movement(state, unit) as f32;
+    reach_search_turns(state, unit, 1, stop)
+}
+
+/// EXP_ELO_051: the same search over a `turns`-turn movement budget, so a
+/// threat model can ask "how many turns until this unit could stand here"
+/// instead of only "could it get here now". Costs are the engine's own
+/// (roads, terrain), so a road network shortens the answer exactly as it
+/// does in play. `turns == 1` is `reach_search`.
+pub(crate) fn reach_search_turns(
+    state: &GameState,
+    unit: &UnitState,
+    turns: i32,
+    stop: Option<&dyn Fn(i32) -> bool>,
+) -> (std::collections::HashMap<i32, f32>, bool) {
+    let mut effective_movement =
+        crate::functions::get_unit_movement(state, unit) as f32 * turns.max(1) as f32;
     // Cap movement at 1 if unit has segments attached
     if unit.child_unit_idx.is_some() {
         effective_movement = 1.0;
