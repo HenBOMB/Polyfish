@@ -37,7 +37,7 @@
     "depd": "^2.0.0",
     "destroy": "^1.2.0",
     "detect-libc": "^2.0.4",
-    "diff": "^4.0.2",
+    "diff": "^4.0.4",
     "dotenv": "^16.4.7",
     "dunder-proto": "^1.0.1",
     "ee-first": "^1.1.1",
