@@ -9,13 +9,18 @@ use crate::moves::{Move, generate_legal_moves};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SearchBackend {
     Zero,
-    Gumbel { k: usize },
+    Gumbel {
+        k: usize,
+    },
     /// Network-free heuristic MCTS (`heuristic_mcts.rs`). Used to generate
     /// imitation/bootstrap corpora — the evaluator is never called.
     Heuristic,
     /// Zero-search softmax over `ordering::score_move` — the fastest teacher
     /// for bulk imitation corpora. No evaluator, no tree.
     Greedy,
+    StateDiffGreedy,
+    /// Uniform-random legal moves. The fixed 0-Elo anchor for `elo.py`.
+    Random,
 }
 
 impl Default for SearchBackend {
@@ -32,6 +37,8 @@ pub enum SearchBackendArg {
     Gumbel,
     Heuristic,
     Greedy,
+    StateDiffGreedy,
+    Random,
 }
 
 impl From<SearchBackendArg> for SearchBackend {
@@ -41,6 +48,8 @@ impl From<SearchBackendArg> for SearchBackend {
             SearchBackendArg::Gumbel => SearchBackend::Gumbel { k: 16 },
             SearchBackendArg::Heuristic => SearchBackend::Heuristic,
             SearchBackendArg::Greedy => SearchBackend::Greedy,
+            SearchBackendArg::StateDiffGreedy => SearchBackend::StateDiffGreedy,
+            SearchBackendArg::Random => SearchBackend::Random,
         }
     }
 }
@@ -88,6 +97,8 @@ pub enum SearchAgent<'a> {
     Gumbel(GumbelMctsAgent<'a>),
     Heuristic(crate::ai::heuristic_mcts::HeuristicMctsAgent),
     Greedy(crate::ai::heuristic_mcts::GreedyHeuristicAgent),
+    StateDiffGreedy(crate::ai::heuristic_mcts::StateDiffGreedyAgent),
+    Random(crate::ai::heuristic_mcts::RandomAgent),
 }
 
 impl<'a> SearchAgent<'a> {
@@ -97,6 +108,8 @@ impl<'a> SearchAgent<'a> {
             SearchAgent::Gumbel(a) => a.select_move(game),
             SearchAgent::Heuristic(a) => a.select_move(game),
             SearchAgent::Greedy(a) => a.select_move(game),
+            SearchAgent::StateDiffGreedy(a) => a.select_move(game),
+            SearchAgent::Random(a) => a.select_move(game),
         }
     }
 
@@ -110,6 +123,10 @@ impl<'a> SearchAgent<'a> {
             SearchAgent::Gumbel(a) => a.select_move_with_decomposed_visits(game, move_count),
             SearchAgent::Heuristic(a) => a.select_move_with_decomposed_visits(game, move_count),
             SearchAgent::Greedy(a) => a.select_move_with_decomposed_visits(game, move_count),
+            SearchAgent::StateDiffGreedy(a) => {
+                a.select_move_with_decomposed_visits(game, move_count)
+            }
+            SearchAgent::Random(a) => a.select_move_with_decomposed_visits(game, move_count),
         }
     }
 
@@ -120,6 +137,8 @@ impl<'a> SearchAgent<'a> {
             // No NN priors to report stats over; the move is all callers need.
             SearchAgent::Heuristic(a) => (a.select_move(game), Vec::new()),
             SearchAgent::Greedy(a) => (a.select_move(game), Vec::new()),
+            SearchAgent::StateDiffGreedy(a) => (a.select_move(game), Vec::new()),
+            SearchAgent::Random(a) => (a.select_move(game), Vec::new()),
         }
     }
 
@@ -154,6 +173,15 @@ impl<'a> SearchAgent<'a> {
     fn clear_last_root_value(&mut self) {
         if let SearchAgent::Gumbel(a) = self {
             a.clear_last_root_value();
+        }
+    }
+
+    /// KL(visits ‖ prior) of the most recent search (Gumbel only) — see
+    /// `GumbelMctsAgent::last_search_kl`.
+    fn last_search_kl(&self) -> Option<f32> {
+        match self {
+            SearchAgent::Gumbel(a) => a.last_search_kl(),
+            _ => None,
         }
     }
 }
@@ -198,6 +226,10 @@ pub fn make_search_agent(
         SearchBackend::Greedy => {
             SearchAgent::Greedy(crate::ai::heuristic_mcts::GreedyHeuristicAgent)
         }
+        SearchBackend::StateDiffGreedy => {
+            SearchAgent::StateDiffGreedy(crate::ai::heuristic_mcts::StateDiffGreedyAgent)
+        }
+        SearchBackend::Random => SearchAgent::Random(crate::ai::heuristic_mcts::RandomAgent),
     }
 }
 
@@ -329,7 +361,7 @@ impl<'a> Brain<'a> {
         if want_trace {
             agent.arm_trace();
         }
-        agent.select_move_with_decomposed_visits(&mut game.clone(), move_count)
+        agent.select_move_with_decomposed_visits(&mut game.clone_for_mcts(game.current_player_id()), move_count)
     }
 
     /// Request that the next `think_decomposed` call capture a decision
@@ -354,15 +386,33 @@ impl<'a> Brain<'a> {
         self.agent.as_ref().and_then(SearchAgent::last_root_value)
     }
 
+    /// The most recent search's KL(visit dist ‖ prior) — the "is search
+    /// adding information beyond the policy" health metric. `None` for
+    /// non-Gumbel backends or when no real search ran.
+    pub fn last_search_kl(&self) -> Option<f32> {
+        self.agent.as_ref().and_then(SearchAgent::last_search_kl)
+    }
+
     pub fn think_with_stats(&mut self, game: &Game) -> (Option<Box<dyn Move>>, Vec<f32>) {
+        let want_trace = self.pending_trace;
+        self.pending_trace = false;
+
         let (agent, mut moves) = self.think(game);
 
         if agent.is_none() {
+            if let Some(a) = &mut self.agent {
+                a.clear_last_root_value();
+            }
             return (moves.pop(), Vec::new());
         }
 
+        let agent = agent.unwrap();
+        if want_trace {
+            agent.arm_trace();
+        }
+
         let mut mcts_game = game.clone_for_mcts(game.current_player_id());
-        agent.unwrap().select_move_with_stats(&mut mcts_game)
+        agent.select_move_with_stats(&mut mcts_game)
     }
 }
 

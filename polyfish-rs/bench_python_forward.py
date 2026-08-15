@@ -6,25 +6,27 @@ Comparable to: candle 71.7ms/forward, tch 15.2ms/forward (integrated, batch ~130
 """
 import time, numpy as np, torch
 from safetensors.torch import load_file
-from train import PolyZeroNet
+from train import PolyZeroNet, _migrate_checkpoint
 
 BATCH = 128
 ITERS = 60
 dev = torch.device("mps")
 
-net = PolyZeroNet(161, 10, 11, 11)
-net.load_state_dict(load_file("model.safetensors"), strict=False)
+net = PolyZeroNet(142, 16, 11, 11)
+ckpt = load_file("model.safetensors")
+ckpt, _ = _migrate_checkpoint(ckpt, net, 16)
+net.load_state_dict(ckpt, strict=False)
 net.to(dev).eval()
 
 def one_forward():
     # fresh host data every call (matches eval_server building a Vec<f32> batch)
-    sp_host = np.random.rand(BATCH, 161, 11, 11).astype(np.float32)
-    pl_host = np.random.rand(BATCH, 10).astype(np.float32)
+    sp_host = np.random.rand(BATCH, 142, 11, 11).astype(np.float32)
+    pl_host = np.random.rand(BATCH, 16).astype(np.float32)
     # host -> MPS upload (matches Tensor::from_slice(...).to_device(Mps))
     sp = torch.from_numpy(sp_host).to(dev)
     pl = torch.from_numpy(pl_host).to(dev)
     with torch.no_grad():
-        policy, values, _aux = net(sp, pl)
+        policy, values = net(sp, pl)
     # full readback of all 5 outputs to CPU (matches reading value + 4 heads)
     _ = values["win"].cpu().numpy()
     for k in ("action_type", "move_option", "source_spatial", "target_spatial"):

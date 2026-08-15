@@ -89,7 +89,7 @@ pub fn resolve_eval_servers(kind: EvalBackendKind, requested: usize) -> anyhow::
                     "--eval-servers > 1 requires --eval-backend tch or metal \
                      (candle Metal corrupts when >1 thread encodes on the same device). \
                      Resolved backend: candle; compiled features: metal-eval={}, tch-eval={}. \
-                     If both are false, this binary was built without `--features apple` \
+                     If both are false, this binary was built without the required features \
                      (e.g. replaced by a concurrent `cargo build`/`cargo test`) — rebuild it.",
                     cfg!(feature = "metal-eval"),
                     cfg!(feature = "tch-eval")

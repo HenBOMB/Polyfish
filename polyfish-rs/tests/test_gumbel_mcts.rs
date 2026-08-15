@@ -205,7 +205,7 @@ fn test_gumbel_tree_reuse_on_consecutive_same_player_search() {
     // Sequential Halving never got around to expanding, which is a
     // legitimate (if rare) outcome, not a reuse bug — a bigger budget makes
     // the eventual winner reliably expanded so this test isn't flaky.
-    let mut agent = GumbelMctsAgent::new(&evaluator, 128, 8);
+    let mut agent = GumbelMctsAgent::new(&evaluator, 512, 8);
 
     // First search from the current player's seat. Search on a clone: the
     // agent's `next_root_hash_for` speculatively applies the chosen move to

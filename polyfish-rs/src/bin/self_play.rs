@@ -1,8 +1,14 @@
+// Raised from the default 128: the large METRICS `json!` object expands
+// recursively per field and EXP_ARCH_001 added value-composition fields.
+#![recursion_limit = "256"]
+
 use candle_core::{Device, Tensor};
 use polyfish::TribeType;
 use polyfish::ai::brain::{Brain, SearchBackend, SearchBackendArg};
-use polyfish::ai::eval_backend::{self, EvalBackendKind, PlayerBackend};
-use polyfish::ai::eval_server::{EvalServerConfig, EvalServerStats, Evaluator};
+use polyfish::ai::eval_server::{
+    BackendSpec, EvalHandle, EvalServer, EvalServerConfig, EvalServerStats, Evaluator,
+    ShardedEvalHandle,
+};
 use polyfish::ai::features::{self, GameFeatures, state_to_tensor};
 use polyfish::ai::mapper::DecomposedMapper;
 use polyfish::ai::network::PolyZeroNet;
@@ -13,7 +19,6 @@ use polyfish::states::{GameState, PlayerId};
 use polyfish::types::MapSize;
 use serde_json::json;
 use std::collections::HashMap;
-use strum::IntoEnumIterator;
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
@@ -21,27 +26,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const HEURISTIC_PRIOR_W0: f32 = 0.5; // net & heur blended 50/50 at start
-const HEURISTIC_PRIOR_DECAY: f32 = 0.97; // decays 0.5 -> 0.1 floor by ~iteration 53
-const ANCHOR_FRAC_DECAY: f32 = 0.97; // same rate as HEURISTIC_PRIOR_DECAY, own start value
-const CRUTCH_FLOOR: f32 = 0.1; // intermediate plateau shared by both crutches below
-
-/// Exponential decay from `w0` toward `CRUTCH_FLOOR`, then a hard cutover to
-/// 0 once `iteration >= decay_last_iter` (or immediately if `force_zero`).
-/// Shared by `prior_heuristic_weight` (self-play search prior blend) and
-/// `anchor_frac` (heuristic-anchor game rate) — both are training-time
-/// crutches meant to fully phase out, not asymptote at a permanent floor.
-fn decay_crutch(
-    w0: f32,
-    decay_rate: f32,
-    iteration: usize,
-    decay_last_iter: usize,
-    force_zero: bool,
-) -> f32 {
-    if force_zero || iteration >= decay_last_iter || w0 <= 0.0 {
-        return 0.0;
-    }
-    (w0 * decay_rate.powi(iteration as i32)).max(CRUTCH_FLOOR.min(w0))
-}
+const HEURISTIC_PRIOR_DECAY: f32 = 0.97; // decays 0.5 -> 0.1 floor by ~iteration 47
+const HEURISTIC_PRIOR_W_FLOOR: f32 = 0.1; // permanent behavioral floor, root + in-tree
 
 // Absolute yardstick for the value target; 8K points is a good place to end a 30T game
 const GOOD_BOT_FINAL_SCORE: f32 = 8000.0;
@@ -52,7 +38,7 @@ const GOOD_BOT_FINAL_SCORE: f32 = 8000.0;
 // antisymmetric — the opponent's progress isn't my loss — so any abs share
 // gets systematically corrupted through EndTurn-crossing lines, worse as
 // search deepens. The mirror-play "empty relative label" problem is fixed in
-// the DATA instead: anchor games vs the heuristic backend (--anchor-frac)
+// the DATA instead: anchor games vs the greedy backend (--anchor-frac)
 // make passivity actually lose, giving the relative label real signal.
 const FINAL_OUTCOME_REL_W: f32 = 1.0;
 
@@ -79,6 +65,16 @@ const NEAR_DELTA_W: f32 = 0.7;
 // games, not from a non-zero-sum label.
 const NEAR_DELTA_REL_W: f32 = 1.0;
 
+// Potential-based SPT shaping (economy credit). Φ = (my_spt - opp_spt) /
+// default_max_spt, clamped ±1; each step's label gets SPT_SHAPE_W *
+// (Φ at next own decision - Φ now). Within a turn the opponent's SPT is
+// frozen, so a level-up harvest is credited the instant SPT rises instead
+// of waiting for the score tail — dense credit the mirror-play relative
+// score label nets to ~0. Antisymmetric (zero-sum backup stays valid) and
+// potential-based (Ng et al. 1999), so it telescopes out of full returns
+// and cannot change the optimal policy, only the credit assignment.
+const SPT_SHAPE_W: f32 = 0.24;
+
 // Ramp (in iterations) for β on σ(Q) in the exported policy targets:
 // β = min(1, iteration/20). Early on the value head's Q ordering is noise
 // that min-max rescaling amplifies to full strength, so π' corrodes the
@@ -98,13 +94,14 @@ enum ProgressMode {
 
 impl ProgressMode {
     fn from_num_games(num_games: usize) -> Self {
-        if num_games >= 64 {
-            Self::SampledFinish
-        } else if num_games > 32 {
-            Self::Periodic
-        } else {
-            Self::Full
-        }
+        Self::SampledFinish
+        // if num_games >= 64 {
+        //     Self::SampledFinish
+        // } else if num_games > 32 {
+        //     Self::Periodic
+        // } else {
+        //     Self::Full
+        // }
     }
 }
 
@@ -182,7 +179,9 @@ fn write_decision_trace(
         eprintln!("[trace] failed to create decision_traces/: {e}");
         return;
     }
-    let path = dir.join(format!("iter{iteration}_game{game_idx}_turn{turn}_p{player_id}.json"));
+    let path = dir.join(format!(
+        "iter{iteration}_game{game_idx}_turn{turn}_p{player_id}.json"
+    ));
     match serde_json::to_vec_pretty(&wrapped) {
         Ok(bytes) => {
             if let Err(e) = std::fs::write(&path, bytes) {
@@ -193,69 +192,16 @@ fn write_decision_trace(
     }
 }
 
-/// One traced decision from a --dump-failed-dir game: what the search weighed
-/// (see decision_trace.rs) and what it picked. `trace` is None for zero-search
-/// seats (Greedy/Heuristic anchors have no Gumbel tree).
-#[derive(serde::Serialize)]
-struct TracedDecision {
-    turn: i32,
-    move_count: usize,
-    player_id: PlayerId,
-    chosen: String,
-    root_value: Option<f32>,
-    trace: Option<polyfish::ai::decision_trace::DecisionTrace>,
-}
-
-/// Dump one zero-capture game (no village taken by either player): a
-/// watcher-loadable replay plus the full per-decision trace log, tagged with
-/// the matchup and seat backends. One file pair per game — actor-safe.
-#[allow(clippy::too_many_arguments)]
-fn dump_failed_game(
-    dir: &str,
-    iteration: usize,
-    game_idx: usize,
-    seed: i64,
-    tribes: &[TribeType],
-    backend1: SearchBackend,
-    backend2: SearchBackend,
-    max_turns: i32,
-    scores: &HashMap<i32, i32>,
-    recap: &ModReplay,
-    decisions: &[TracedDecision],
-) {
-    let dir = std::path::Path::new(dir);
-    if let Err(e) = std::fs::create_dir_all(dir) {
-        eprintln!("[dump-failed] failed to create {}: {e}", dir.display());
-        return;
-    }
-    let base = format!("failed_iter{iteration}_game{game_idx}_seed{seed}");
-    match serde_json::to_vec_pretty(recap) {
-        Ok(bytes) => {
-            let path = dir.join(format!("{base}.replay.json"));
-            if let Err(e) = std::fs::write(&path, bytes) {
-                eprintln!("[dump-failed] failed to write {}: {e}", path.display());
-            }
-        }
-        Err(e) => eprintln!("[dump-failed] failed to serialize replay: {e}"),
-    }
-    let wrapped = json!({
-        "iteration": iteration,
-        "game_idx": game_idx,
-        "seed": seed,
-        "tribes": tribes.iter().map(|t| format!("{t:?}")).collect::<Vec<_>>(),
-        "backends": [format!("{backend1:?}"), format!("{backend2:?}")],
-        "max_turns": max_turns,
-        "final_scores": scores,
-        "decisions": decisions,
-    });
-    match serde_json::to_vec(&wrapped) {
-        Ok(bytes) => {
-            let path = dir.join(format!("{base}.decisions.json"));
-            if let Err(e) = std::fs::write(&path, bytes) {
-                eprintln!("[dump-failed] failed to write {}: {e}", path.display());
-            }
-        }
-        Err(e) => eprintln!("[dump-failed] failed to serialize decisions: {e}"),
+/// Curriculum — Tiny maps only, turn cap grows with (effective) iteration.
+fn curriculum(iteration: usize) -> (MapSize, i32) {
+    if iteration <= 10 {
+        (MapSize::Tiny, 10)
+    } else if iteration <= 20 {
+        (MapSize::Tiny, 15)
+    } else if iteration <= 30 {
+        (MapSize::Tiny, 20)
+    } else {
+        (MapSize::Tiny, 45)
     }
 }
 
@@ -294,13 +240,10 @@ struct HistoryStep {
     player_id: PlayerId,
     my_score: i32,
     opp_score: i32,
-    turn: i32,
-    root_value: Option<f32>,
-    /// Ground-truth (unfogged) non-invisible enemy-unit occupancy at decision
-    /// time, POV-relative — the aux_fog_units target.
-    enemy_units: Vec<f32>,
     my_spt: i32,
     opp_spt: i32,
+    turn: i32,
+    root_value: Option<f32>,
 }
 
 /// The subset of `HistoryStep` the TD(lambda) label computation needs —
@@ -312,6 +255,8 @@ struct LabelStep {
     turn: i32,
     my_score: i32,
     opp_score: i32,
+    my_spt: i32,
+    opp_spt: i32,
     root_value: Option<f32>,
 }
 
@@ -322,6 +267,8 @@ impl From<&HistoryStep> for LabelStep {
             turn: s.turn,
             my_score: s.my_score,
             opp_score: s.opp_score,
+            my_spt: s.my_spt,
+            opp_spt: s.opp_spt,
             root_value: s.root_value,
         }
     }
@@ -406,99 +353,49 @@ fn td_lambda_labels(
         .collect()
 }
 
-/// Per-decision SPT snapshot for the aux_spt target. Parallel to `LabelStep`
-/// rather than riding `Checkpoint`, whose within-turn replace rule is
-/// root-value-driven and unrelated to SPT semantics.
-#[derive(Clone, Copy)]
-struct SptStep {
-    player_id: PlayerId,
-    turn: i32,
-    my_spt: i32,
-    opp_spt: i32,
-}
+/// Per-step potential-based SPT shaping deltas, aligned 1:1 with `history`
+/// (see the doc comment on `SPT_SHAPE_W`). For step i of player p the delta
+/// is Φ(p's next recorded decision) - Φ(step i); a player's last recorded
+/// step gets 0.0 (terminal potential treated as its own — no phantom credit).
+fn spt_shaping_deltas(history: &[LabelStep]) -> Vec<f32> {
+    let norm = polyfish::states::default_max_spt() as f32;
+    let phi = |s: &LabelStep| ((s.my_spt - s.opp_spt) as f32 / norm).clamp(-1.0, 1.0);
 
-/// First decision per (player, turn) — SPT at the start of that player's turn.
-fn spt_checkpoints_by_player(steps: &[SptStep]) -> HashMap<PlayerId, Vec<SptStep>> {
-    let mut out: HashMap<PlayerId, Vec<SptStep>> = HashMap::new();
-    for s in steps {
-        let list = out.entry(s.player_id).or_default();
-        if list.last().map_or(true, |c| c.turn != s.turn) {
-            list.push(*s);
+    let mut out = vec![0.0f32; history.len()];
+    let mut next_phi: HashMap<PlayerId, f32> = HashMap::new();
+    for (i, step) in history.iter().enumerate().rev() {
+        let phi_now = phi(step);
+        if let Some(&phi_next) = next_phi.get(&step.player_id) {
+            out[i] = phi_next - phi_now;
         }
+        next_phi.insert(step.player_id, phi_now);
     }
     out
 }
 
-/// `[my, opp]` SPT at the first same-player turn >= turn+5, else the final
-/// values (game ended inside the horizon).
-fn spt_target(cps: Option<&Vec<SptStep>>, turn: i32, final_my: i32, final_opp: i32) -> (i32, i32) {
-    cps.and_then(|c| {
-        let i = c.partition_point(|s| s.turn < turn + 5);
-        c.get(i).map(|s| (s.my_spt, s.opp_spt))
-    })
-    .unwrap_or((final_my, final_opp))
-}
-
-/// Multi-hot over `TechnologyType::iter()` POSITION — discriminants are
-/// sparse (-1..121), so raw ids would need a 123-slot vector.
-fn tech_multihot(techs: &[polyfish::states::TechnologyState]) -> Vec<f32> {
-    let order: Vec<polyfish::types::TechnologyType> =
-        polyfish::types::TechnologyType::iter().collect();
-    let mut v = vec![0.0f32; order.len()];
-    for t in techs.iter().filter(|t| t.discovered) {
-        if let Some(p) = order.iter().position(|x| *x == t.tech_type) {
-            v[p] = 1.0;
-        }
-    }
-    v
-}
-
-/// Ground-truth enemy-unit occupancy from the unfogged master state. Skips
-/// `Invisible` units — the engine's single visibility rule.
-fn enemy_unit_grid(state: &GameState, pov: PlayerId, len: usize) -> Vec<f32> {
-    let mut g = vec![0.0f32; len];
-    for (id, t) in &state.tribes {
-        if *id == pov {
-            continue;
-        }
-        for u in &t.units {
-            if u.effects.contains(&polyfish::types::UnitEffect::Invisible) {
-                continue;
-            }
-            let i = u.coords.idx as usize;
-            if i < len {
-                g[i] = 1.0;
-            }
-        }
-    }
-    g
-}
-
-/// End-of-episode tile ownership mapped to the sample's POV: +1 mine,
-/// -1 any opponent, 0 unowned.
-fn ownership_from_pov(final_owner: &[i32], pov: PlayerId) -> Vec<f32> {
-    final_owner
-        .iter()
-        .map(|&o| {
-            if o == pov {
-                1.0
-            } else if o != 0 {
-                -1.0
-            } else {
-                0.0
-            }
-        })
-        .collect()
-}
-
 /// Result from a single game - contains all data needed for training
 struct GameResult {
+    /// Index within this run's game batch; games 2k/2k+1 form a mirror pair.
+    game_idx: usize,
     history: Vec<HistoryStep>,
     scores: HashMap<i32, i32>,
     final_cities: HashMap<i32, i32>,
     total_cities: i32,
+    /// End-of-game tile owner per grid cell (row-major y*MAP_SIZE+x, 0 =
+    /// neutral) — the aux ownership-head target, re-signed per sample POV.
+    final_tile_owners: Vec<i32>,
     moves: usize,
+    /// Mean KL(search visits ‖ policy prior) across this game's searched
+    /// decisions — the per-game "search adds information" health metric.
+    /// `None` when no decision ran a real search.
+    policy_kl: Option<f32>,
     winner_score: i32,
+    /// Winning player id (sole survivor, else score adjudication at the cap).
+    winner_id: i32,
+    /// Ended by elimination rather than score adjudication.
+    decisive: bool,
+    /// Seat (player id) the greedy anchor occupied; None for non-anchor games.
+    anchor_seat: Option<i32>,
     recap: ModReplay,
     cap_ruins: usize,
     cap_villages: usize,
@@ -519,20 +416,12 @@ struct GameResult {
     villages_t2c_p50: f32,
     villages_t2c_p80: f32,
     villages_t2c_all: f32,
-    /// Uncensored turn of the first village capture, -1.0 if none happened —
-    /// lets the aggregator split capture-rate from turn-given-captured.
-    villages_first_raw: f32,
     ruins_t2c_p50: f32,
     ruins_t2c_p80: f32,
     ruins_t2c_all: f32,
     /// Mean tribe SPT sampled at the start of game turns 0, 5, 10, … (player 1
     /// to act, before any moves on that turn).
     spt_at_turn: HashMap<i32, f32>,
-    /// End-of-game ground truth for the aux heads: raw per-tile owner ids,
-    /// per-player SPT, and per-player researched-tech multi-hot.
-    final_owner: Vec<i32>,
-    final_spt: HashMap<PlayerId, i32>,
-    final_tech: HashMap<PlayerId, Vec<f32>>,
 }
 
 const SPT_MILESTONES: [i32; 7] = [0, 5, 10, 15, 20, 25, 30];
@@ -584,19 +473,9 @@ fn t2c_turn(capture_turns: &[i32], initial: usize, frac: f64, censor: i32) -> f3
 
 /// Load the main network (and opponent network, defaulting to the main one)
 /// onto the given device from `model.safetensors`.
-///
-/// When `eval_backend_kind` is `Candle` and a distinct opponent is given, the
-/// opponent network is loaded on its own freshly-obtained device rather than
-/// `device`: under Candle, player 1 and player 2 each get an independent
-/// `EvalServer` thread, and candle's Metal backend corrupts if two threads
-/// encode ops (e.g. `forward_t`) against the same `Device` (see
-/// `eval_backend.rs`'s device-isolation contract). tch/metal shards load
-/// their own weights on the eval-server thread and never touch this candle
-/// device for inference, so sharing is harmless for them.
 fn load_networks(
     device: &Device,
     opponent: Option<&str>,
-    eval_backend_kind: EvalBackendKind,
 ) -> anyhow::Result<(Arc<PolyZeroNet>, Arc<PolyZeroNet>)> {
     let model_path = "model.safetensors";
     if !std::path::Path::new(model_path).exists() {
@@ -608,18 +487,21 @@ fn load_networks(
     // Inference-only load: `VarBuilder::from_mmaped_safetensors` loads by key from file;
     // VarMap::load fills only pre-registered vars.
     let vs1 = unsafe {
-        candle_nn::VarBuilder::from_mmaped_safetensors(&[model_path], candle_core::DType::F32, device)?
+        candle_nn::VarBuilder::from_mmaped_safetensors(
+            &[model_path],
+            candle_core::DType::F32,
+            device,
+        )?
     };
     let network1 = Arc::new(PolyZeroNet::new(vs1)?);
 
     let network2 = if let Some(opp_path) = opponent {
-        let device2 = if eval_backend_kind == EvalBackendKind::Candle {
-            eval_backend::select_device()?
-        } else {
-            device.clone()
-        };
         let vs2 = unsafe {
-            candle_nn::VarBuilder::from_mmaped_safetensors(&[opp_path], candle_core::DType::F32, &device2)?
+            candle_nn::VarBuilder::from_mmaped_safetensors(
+                &[opp_path],
+                candle_core::DType::F32,
+                device,
+            )?
         };
         Arc::new(PolyZeroNet::new(vs2)?)
     } else {
@@ -630,6 +512,53 @@ fn load_networks(
 
 /// Play a single game and return the result
 #[allow(clippy::too_many_arguments)]
+/// Final-outcome tail from `p_id`'s POV: ±1 on elimination, else the
+/// relative/absolute score blend. Must stay in sync with the value-label
+/// semantics (this IS the single source of truth for that computation).
+fn outcome_for(result: &GameResult, p_id: i32, reward_shaping: bool) -> f32 {
+    if result.decisive {
+        return if p_id == result.winner_id { 1.0 } else { -1.0 };
+    }
+    let my_final = result.scores.get(&p_id).copied().unwrap_or(0) as f32;
+    let opp_final = result
+        .scores
+        .iter()
+        .filter(|(id, _)| **id != p_id)
+        .map(|(_, score)| *score as f32)
+        .next()
+        .unwrap_or(0.0);
+
+    // Asymmetric reward shaping to fix P1 advantage
+    let (mut my_adjusted, mut opp_adjusted) = (my_final, opp_final);
+    if reward_shaping {
+        let penalty = 0.05;
+        if p_id == 1 {
+            my_adjusted = my_final * (1.0 - penalty);
+            opp_adjusted = opp_final * (1.0 + penalty);
+        } else if p_id == 2 {
+            my_adjusted = my_final * (1.0 + penalty);
+            opp_adjusted = opp_final * (1.0 - penalty);
+        }
+    }
+
+    // Normalized score differential, scaled into a useful training range.
+    let combined_score = my_adjusted + opp_adjusted;
+    let scaling_factor = 3.0;
+    let relative_outcome = if combined_score > 0.0 {
+        let ratio = (my_adjusted - opp_adjusted) / combined_score;
+        (ratio * scaling_factor).clamp(-1.0, 1.0)
+    } else {
+        0.0
+    };
+
+    // Absolute value: final score vs fixed yardstick, not current scoreboard.
+    // We use `my_adjusted` so that asymmetric reward shaping (if enabled)
+    // applies to this absolute performance yardstick as well.
+    let abs_outcome = (my_adjusted / GOOD_BOT_FINAL_SCORE).clamp(0.0, 1.0) * 2.0 - 1.0;
+    (FINAL_OUTCOME_REL_W * relative_outcome + (1.0 - FINAL_OUTCOME_REL_W) * abs_outcome)
+        .clamp(-1.0, 1.0)
+}
+
 fn play_single_game(
     network1: &PolyZeroNet,
     network2: &PolyZeroNet, // Added network2
@@ -640,8 +569,6 @@ fn play_single_game(
     seed: i64,
     tribes: Vec<TribeType>,
     iteration: usize,
-    decay_last_iter: usize,
-    force_zero_crutches: bool,
     gamemode: u8,
     backend1: SearchBackend,
     backend2: SearchBackend,
@@ -652,18 +579,8 @@ fn play_single_game(
     trace_trigger: TraceTrigger,
     trace_max: usize,
     trace_counter: &AtomicUsize,
-    dump_failed_dir: Option<&str>,
 ) -> Option<GameResult> {
-    // Curriculum logic — Tiny maps only, gradually increase turn count.
-    let (map_size, max_turns) = if iteration <= 25 {
-        (MapSize::Tiny, 10)
-    } else if iteration <= 50 {
-        (MapSize::Tiny, 15)
-    } else if iteration <= 75 {
-        (MapSize::Tiny, 20)
-    } else {
-        (MapSize::Tiny, 30)
-    };
+    let (map_size, max_turns) = curriculum(iteration);
 
     // Init Game using MapGen
     let gen_settings = polyfish::mapgen::MapGenSettings {
@@ -682,7 +599,8 @@ fn play_single_game(
 
     let mut game = Game::new();
     game.state = polyfish::mapgen::generate(gen_settings);
-    game.state.settings.mode = polyfish::types::ModeType::from_repr(gamemode).unwrap_or(polyfish::types::ModeType::Perfection);
+    game.state.settings.mode = polyfish::types::ModeType::from_repr(gamemode)
+        .unwrap_or(polyfish::types::ModeType::Perfection);
     game.state.settings.max_turns = max_turns;
     game.post_load();
 
@@ -709,33 +627,23 @@ fn play_single_game(
     let mut village_capture_turns: Vec<i32> = Vec::new();
     let mut ruin_capture_turns: Vec<i32> = Vec::new();
 
-    // --dump-failed-dir: trace every decision; the log is written out only
-    // if the game ends with zero village captures.
-    let trace_all = dump_failed_dir.is_some();
-    let mut decision_log: Vec<TracedDecision> = Vec::new();
-
-    let prior_w = decay_crutch(
-        HEURISTIC_PRIOR_W0,
-        HEURISTIC_PRIOR_DECAY,
-        iteration,
-        decay_last_iter,
-        force_zero_crutches,
-    );
+    let prior_w = (HEURISTIC_PRIOR_W0 * HEURISTIC_PRIOR_DECAY.powi(iteration as i32))
+        .max(HEURISTIC_PRIOR_W_FLOOR);
     // One trust scalar drives β on σ(Q) in both the exported targets and the
     // search tree itself. --value-trust overrides the iteration ramp, which
     // saturates immediately on ITER_OFFSET-shifted runs.
-    let q_target_w = value_trust
-        .unwrap_or_else(|| (iteration as f32 / POLICY_TARGET_Q_RAMP_ITERS).min(1.0));
+    let q_target_w =
+        value_trust.unwrap_or_else(|| (iteration as f32 / POLICY_TARGET_Q_RAMP_ITERS).min(1.0));
 
     // Create two agents (they might share the same network, or be different)
     let mut agent1 = Brain::with_backend(eval1, mcts_iters, backend1)
-    .with_prior_heuristic_weight(prior_w)
-    .with_policy_target_q_weight(q_target_w)
-    .with_tree_q_weight(q_target_w);
+        .with_prior_heuristic_weight(prior_w)
+        .with_policy_target_q_weight(q_target_w)
+        .with_tree_q_weight(q_target_w);
     let mut agent2 = Brain::with_backend(eval2, mcts_iters, backend2)
-    .with_prior_heuristic_weight(prior_w)
-    .with_policy_target_q_weight(q_target_w)
-    .with_tree_q_weight(q_target_w);
+        .with_prior_heuristic_weight(prior_w)
+        .with_policy_target_q_weight(q_target_w)
+        .with_tree_q_weight(q_target_w);
 
     if let Some(b) = leaf_batch {
         agent1 = agent1.with_leaf_batch(b);
@@ -753,8 +661,7 @@ fn play_single_game(
     // Game Loop
     let mut game_history: Vec<HistoryStep> = Vec::new();
     let mut action_counts: HashMap<polyfish::types::MoveType, usize> = HashMap::new();
-    let mut moves_by_turn: HashMap<i32, HashMap<polyfish::types::MoveType, usize>> =
-        HashMap::new();
+    let mut moves_by_turn: HashMap<i32, HashMap<polyfish::types::MoveType, usize>> = HashMap::new();
 
     let current_scores: Vec<(PlayerId, i32)> = game
         .state
@@ -782,12 +689,10 @@ fn play_single_game(
 
     let mut move_count = 0;
     let mut traced_in_this_game = false;
+    let mut kl_sum = 0.0f32;
+    let mut kl_n = 0u32;
     while !polyfish::functions::is_game_over(&game.state) {
-        record_spt_at_turn_start(
-            &game.state,
-            &mut spt_at_turn,
-            &mut next_spt_milestone,
-        );
+        record_spt_at_turn_start(&game.state, &mut spt_at_turn, &mut next_spt_milestone);
 
         if move_count > 50000 {
             // Reduced for safety
@@ -810,7 +715,6 @@ fn play_single_game(
         let current_agent = if pov == 1 { &mut agent1 } else { &mut agent2 };
 
         let trigger_info = if trace_villages
-            && !trace_all
             && !traced_in_this_game
             && trace_counter.load(Ordering::Relaxed) < trace_max
         {
@@ -818,7 +722,7 @@ fn play_single_game(
         } else {
             None
         };
-        if trace_all || trigger_info.is_some() {
+        if trigger_info.is_some() {
             current_agent.request_trace();
         }
 
@@ -827,7 +731,10 @@ fn play_single_game(
         // this is that state's own root value — the TD bootstrap target for
         // whichever earlier step's label lands here as its "next decision".
         let root_value = current_agent.last_root_value();
-        let step_trace = if trace_all { current_agent.take_trace() } else { None };
+        if let Some(kl) = current_agent.last_search_kl() {
+            kl_sum += kl;
+            kl_n += 1;
+        }
 
         if let Some((trigger_unit_idx, trigger_village_idx)) = trigger_info {
             if let Some(trace) = current_agent.take_trace() {
@@ -861,7 +768,7 @@ fn play_single_game(
         let mut total_visits = 0.0;
 
         // Aggregate visits into distributions
-        for mv in move_visits {
+        for mv in &move_visits {
             total_visits += mv.visits;
 
             // Spatial and Option targets using DecomposedMapper
@@ -902,9 +809,7 @@ fn play_single_game(
             for x in &mut p_target {
                 *x /= total_visits;
             }
-            for x in &mut p_option {
-                *x /= total_visits;
-            }
+            // ... (others)
         }
 
         let policy_data = DecomposedPolicyData {
@@ -914,17 +819,9 @@ fn play_single_game(
             move_option: p_option,
         };
 
+        let record_sample = !move_visits.is_empty();
+
         if let Some(m) = best_move {
-            if trace_all {
-                decision_log.push(TracedDecision {
-                    turn: game.state.settings.turn,
-                    move_count,
-                    player_id: pov,
-                    chosen: m.describe(&game.state),
-                    root_value,
-                    trace: step_trace,
-                });
-            }
             let m_type = m.move_type();
             *action_counts.entry(m_type).or_insert(0) += 1;
             *moves_by_turn
@@ -936,12 +833,19 @@ fn play_single_game(
             if m_type == polyfish::types::MoveType::Capture {
                 if let Ok(src) = m.source_idx() {
                     let idx = src as i32;
-                    
+
                     let struct_opt = game.state.structures.get(&idx).and_then(|s| s.as_ref());
-                    let is_ruin = struct_opt.map(|s| s.structure_type) == Some(polyfish::types::StructureType::Ruin);
-                    let is_village = struct_opt.map(|s| s.structure_type) == Some(polyfish::types::StructureType::Village);
+                    let is_ruin = struct_opt.map(|s| s.structure_type)
+                        == Some(polyfish::types::StructureType::Ruin);
+                    let is_village = struct_opt.map(|s| s.structure_type)
+                        == Some(polyfish::types::StructureType::Village);
                     let owner = game.state.tiles.get(&idx).map(|t| t.owner).unwrap_or(0);
-                    let is_capital = game.state.tiles.get(&idx).map(|t| t.capital_of > 0).unwrap_or(false);
+                    let is_capital = game
+                        .state
+                        .tiles
+                        .get(&idx)
+                        .map(|t| t.capital_of > 0)
+                        .unwrap_or(false);
 
                     if is_ruin {
                         cap_ruins += 1;
@@ -970,34 +874,22 @@ fn play_single_game(
                 game.state.settings.current_player_turn_id,
                 m.serialize(),
             ));
-            // Snapshot scores at this moment (pre-move) for the TD label.
+            // Snapshot scores/SPT at this moment (pre-move) for the TD label.
             let (my_score_now, opp_score_now) = reward::score_snapshot(&game.state, pov);
-            let opp_id = game
-                .state
-                .tribes
-                .keys()
-                .copied()
-                .find(|id| *id != pov)
-                .unwrap_or(pov);
-            let spt_of = |id: PlayerId| {
-                game.state
-                    .tribes
-                    .get(&id)
-                    .map(|t| polyfish::functions::get_tribe_spt(&game.state, t))
-                    .unwrap_or(0)
-            };
-            game_history.push(HistoryStep {
-                features: state_t,
-                policy: policy_data,
-                player_id: pov,
-                my_score: my_score_now,
-                opp_score: opp_score_now,
-                turn: game.state.settings.turn,
-                root_value,
-                enemy_units: enemy_unit_grid(&game.state, pov, fixed_spatial_size),
-                my_spt: spt_of(pov),
-                opp_spt: spt_of(opp_id),
-            });
+            let (my_spt_now, opp_spt_now) = reward::spt_snapshot(&game.state, pov);
+            if record_sample {
+                game_history.push(HistoryStep {
+                    features: state_t,
+                    policy: policy_data,
+                    player_id: pov,
+                    my_score: my_score_now,
+                    opp_score: opp_score_now,
+                    my_spt: my_spt_now,
+                    opp_spt: opp_spt_now,
+                    turn: game.state.settings.turn,
+                    root_value,
+                });
+            }
             if progress == ProgressMode::Full && move_count > 0 && move_count % 10 == 0 {
                 eprintln!(
                     "[Game {}]: Turn: {} Player: {} Move: {}",
@@ -1066,6 +958,16 @@ fn play_single_game(
     }
 
     let captured_tiles = game.state.tiles.values().filter(|t| t.owner != 0).count() as i32;
+
+    let mut final_tile_owners = vec![0i32; features::MAP_SIZE * features::MAP_SIZE];
+    let size = game.state.settings.size;
+    for (idx, tile) in &game.state.tiles {
+        let x = (idx % size) as usize;
+        let y = (idx / size) as usize;
+        if x < features::MAP_SIZE && y < features::MAP_SIZE {
+            final_tile_owners[y * features::MAP_SIZE + x] = tile.owner;
+        }
+    }
     let revealed_tiles: i32 = game
         .state
         .tribes
@@ -1086,49 +988,13 @@ fn play_single_game(
         total_cities += t.cities.len() as i32;
     }
 
-    // Aux-head ground truth; the final state is dropped when this returns.
-    let n_tiles = features::MAP_SIZE * features::MAP_SIZE;
-    let mut final_owner = vec![0i32; n_tiles];
-    for (&idx, tile) in &game.state.tiles {
-        let i = idx as usize;
-        if i < n_tiles {
-            final_owner[i] = tile.owner;
-        }
-    }
-    let mut final_spt = HashMap::new();
-    let mut final_tech = HashMap::new();
-    for (id, t) in &game.state.tribes {
-        final_spt.insert(*id, polyfish::functions::get_tribe_spt(&game.state, t));
-        final_tech.insert(*id, tech_multihot(&t.tech_vanilla));
-    }
-
-    let recap = ModReplay {
-        game_state: initial_state,
-        turns: group_recap(flat_recap),
-    };
-    if let Some(dir) = dump_failed_dir {
-        if village_capture_turns.is_empty() {
-            dump_failed_game(
-                dir,
-                iteration,
-                game_idx,
-                seed,
-                &tribes,
-                backend1,
-                backend2,
-                max_turns,
-                &scores,
-                &recap,
-                &decision_log,
-            );
-        }
-    }
-
     Some(GameResult {
+        game_idx,
         history: game_history,
         scores,
         final_cities,
         total_cities,
+        final_tile_owners,
         moves: move_count,
         revealed_tiles,
         captured_tiles,
@@ -1136,16 +1002,26 @@ fn play_single_game(
         villages_t2c_p50: t2c_turn(&village_capture_turns, initial_villages, 0.5, max_turns),
         villages_t2c_p80: t2c_turn(&village_capture_turns, initial_villages, 0.8, max_turns),
         villages_t2c_all: t2c_turn(&village_capture_turns, initial_villages, 1.0, max_turns),
-        villages_first_raw: village_capture_turns.first().map_or(-1.0, |&t| t as f32),
         ruins_t2c_p50: t2c_turn(&ruin_capture_turns, initial_ruins, 0.5, max_turns),
         ruins_t2c_p80: t2c_turn(&ruin_capture_turns, initial_ruins, 0.8, max_turns),
         ruins_t2c_all: t2c_turn(&ruin_capture_turns, initial_ruins, 1.0, max_turns),
         spt_at_turn,
-        final_owner,
-        final_spt,
-        final_tech,
         winner_score,
-        recap,
+        winner_id,
+        decisive: is_decisive,
+        policy_kl: (kl_n > 0).then(|| kl_sum / kl_n as f32),
+        anchor_seat: match (
+            backend1 == SearchBackend::Greedy,
+            backend2 == SearchBackend::Greedy,
+        ) {
+            (true, false) => Some(1),
+            (false, true) => Some(2),
+            _ => None,
+        },
+        recap: ModReplay {
+            game_state: initial_state,
+            turns: group_recap(flat_recap),
+        },
         cap_ruins,
         cap_villages,
         cap_cities,
@@ -1153,6 +1029,71 @@ fn play_single_game(
         action_counts,
         moves_by_turn,
     })
+}
+
+const ANCHOR_STATE_PATH: &str = ".anchor_state.json";
+const ANCHOR_WINRATE_WINDOW: usize = 3;
+const ANCHOR_STATE_KEEP: usize = 50;
+
+/// Model-vs-anchor outcome of one self_play run, persisted across
+/// invocations so the anchor gate can act on measured strength.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct AnchorRecord {
+    iteration: usize,
+    games: usize,
+    model_wins: f32,
+}
+
+/// Records at or beyond the current iteration are dropped on load, so reruns
+/// and fresh --reset campaigns self-heal without manual state cleanup.
+fn load_anchor_history(current_iteration: usize) -> Vec<AnchorRecord> {
+    let hist = match std::fs::read_to_string(ANCHOR_STATE_PATH) {
+        Ok(s) => match serde_json::from_str::<Vec<AnchorRecord>>(&s) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("Warning: Failed to parse anchor history: {}", e);
+                Vec::new()
+            }
+        },
+        Err(_) => Vec::new(),
+    };
+    hist.into_iter()
+        .filter(|r| r.iteration < current_iteration)
+        .collect()
+}
+
+fn append_anchor_record(current_iteration: usize, games: usize, model_wins: f32) {
+    let mut hist = load_anchor_history(current_iteration + 1);
+    hist.retain(|r| r.iteration != current_iteration);
+    hist.push(AnchorRecord {
+        iteration: current_iteration,
+        games,
+        model_wins,
+    });
+    let skip = hist.len().saturating_sub(ANCHOR_STATE_KEEP);
+    if let Ok(s) = serde_json::to_string(&hist[skip..]) {
+        let temp_path = format!("{}.tmp.{}", ANCHOR_STATE_PATH, std::process::id());
+        if let Err(e) = std::fs::write(&temp_path, s) {
+            eprintln!("Warning: Failed to write anchor history: {}", e);
+        } else if let Err(e) = std::fs::rename(&temp_path, ANCHOR_STATE_PATH) {
+            eprintln!("Warning: Failed to rename anchor history: {}", e);
+        }
+    }
+}
+
+/// Rolling model win rate over the last ANCHOR_WINRATE_WINDOW runs that
+/// actually played anchor games. None until any measurement exists.
+fn rolling_anchor_winrate(current_iteration: usize) -> Option<f32> {
+    let hist = load_anchor_history(current_iteration);
+    let recent: Vec<&AnchorRecord> = hist
+        .iter()
+        .rev()
+        .filter(|r| r.games > 0)
+        .take(ANCHOR_WINRATE_WINDOW)
+        .collect();
+    let games: usize = recent.iter().map(|r| r.games).sum();
+    let wins: f32 = recent.iter().map(|r| r.model_wins).sum();
+    (games > 0).then(|| wins / games as f32)
 }
 
 fn group_recap(flat: Vec<(i32, i32, serde_json::Value)>) -> Vec<ReplayTurn> {
@@ -1199,42 +1140,36 @@ fn main() -> anyhow::Result<()> {
         #[arg(long)]
         opponent: Option<String>,
 
-        /// STARTING fraction of games (0..1) played against the network-free
-        /// Heuristic search backend as an anchor opponent (seat alternates
-        /// between anchor games). Anchor games break mirror-play symmetry: a
-        /// passive net LOSES them, so the relative value label finally
-        /// carries an anti-passivity gradient. The anchor side's data is
-        /// recorded too (fresh teacher data, same as the BC corpus). Decays
-        /// with `iteration` the same way `prior_heuristic_weight` does (see
-        /// `decay_crutch`), then fully to 0 at --decay-last-iter. Mutually
-        /// exclusive with --opponent.
+        /// Fraction of games (0..1) played against the network-free Greedy
+        /// backend as an anchor opponent (seat alternates between anchor
+        /// games). Anchor games break mirror-play symmetry: greedy attacks
+        /// and ELIMINATES a passive net, so the relative value label carries
+        /// an anti-passivity gradient and the corpus contains real decisive
+        /// wins/losses. The anchor side's data is recorded too (fresh teacher
+        /// data, same as the BC corpus). This is a bootstrap: after
+        /// --anchor-hold-iters the effective fraction is gated on the
+        /// measured win rate vs greedy (see .anchor_state.json), annealing
+        /// smoothly to --anchor-probe-frac once the model reliably beats it.
+        /// Mutually exclusive with --opponent.
         #[arg(long, default_value_t = 0.0)]
         anchor_frac: f32,
 
-        /// Iteration at which both heuristic crutches (the search-prior
-        /// blend and anchor-game rate) hard-cut to 0, having spent the
-        /// iterations before that decaying down to a 10% floor. Default is
-        /// effectively "never" so standalone/benchmark runs aren't
-        /// surprised; the training loop passes an explicit value (see
-        /// DECAY_LAST_ITER in run_training_loop.sh).
-        #[arg(long, default_value_t = usize::MAX)]
-        decay_last_iter: usize,
+        /// Iterations to hold the anchor at full --anchor-frac before the
+        /// win-rate gate takes over.
+        #[arg(long, default_value_t = 10)]
+        anchor_hold_iters: usize,
 
-        /// EXP_ELO_002: iteration where the anchor-frac decay clock starts —
-        /// the anchor's effective decay iteration is `iteration - this`
-        /// (clamped at 0). The loop passes the current iteration to HOLD
-        /// anchor_frac at its starting rate until the model crosses 50% vs
-        /// Greedy, then pins the crossing iteration so decay runs from
-        /// there. The prior-blend decay is unaffected.
-        #[arg(long, default_value_t = 0)]
-        anchor_decay_start: usize,
+        /// Rolling win rate vs greedy at which the anchor counts as
+        /// graduated: effective frac anneals linearly from full at 50% down
+        /// to --anchor-probe-frac at this value. Must be in (0.5, 1].
+        #[arg(long, default_value_t = 0.55)]
+        anchor_graduate_winrate: f32,
 
-        /// Force both heuristic crutches to 0 immediately, regardless of
-        /// iteration or --decay-last-iter. Integration point for a future
-        /// strength-gated phase-out (model consistently beats the
-        /// heuristic-only backend) — not wired to any automatic check yet.
-        #[arg(long, default_value_t = false)]
-        force_zero_crutches: bool,
+        /// Residual anchor fraction kept after graduation so the win rate
+        /// stays measured and the anchor returns on regression (floored to
+        /// >= 1 game per run whenever the gate output is nonzero).
+        #[arg(long, default_value_t = 0.05)]
+        anchor_probe_frac: f32,
 
         /// Value-head trust in [0,1]: β on σ(completed-Q) both inside the
         /// search tree and in exported policy targets. Overrides the
@@ -1257,6 +1192,13 @@ fn main() -> anyhow::Result<()> {
         /// Without this flag, all actions get the same flat final-outcome value.
         #[arg(long, default_value_t = false)]
         reward_shaping: bool,
+
+        /// Mirror-relative value labels: games 2k/2k+1 replay the same seed
+        /// with seats swapped; each game's outcome tail is blended toward the
+        /// pair mean (fully at game start, not at all by game end), canceling
+        /// map/spawn/seat luck from the label. Disable: --mirror-labels=false.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        mirror_labels: bool,
 
         /// Current training iteration (for curriculum learning)
         #[arg(long, default_value_t = 1)]
@@ -1353,13 +1295,6 @@ fn main() -> anyhow::Result<()> {
         /// Ignored unless --trace-villages.
         #[arg(long, default_value_t = 20)]
         trace_max: usize,
-
-        /// Diagnostics: dump games where NO village was captured by either
-        /// player into this dir — <base>.replay.json (watcher-loadable) plus
-        /// <base>.decisions.json (search trace for every decision; forces
-        /// fresh root builds, so within-turn tree reuse is off).
-        #[arg(long)]
-        dump_failed_dir: Option<String>,
     }
 
     let args = Args::parse();
@@ -1369,6 +1304,14 @@ fn main() -> anyhow::Result<()> {
     }
     if !(0.0..=1.0).contains(&args.anchor_frac) {
         anyhow::bail!("--anchor-frac must be in [0, 1]");
+    }
+    if args.anchor_frac > 0.0 {
+        if !(args.anchor_graduate_winrate > 0.5 && args.anchor_graduate_winrate <= 1.0) {
+            anyhow::bail!("--anchor-graduate-winrate must be in (0.5, 1]");
+        }
+        if !(0.0..=1.0).contains(&args.anchor_probe_frac) {
+            anyhow::bail!("--anchor-probe-frac must be in [0, 1]");
+        }
     }
     if let Some(t) = args.value_trust {
         if !(0.0..=1.0).contains(&t) {
@@ -1391,19 +1334,22 @@ fn main() -> anyhow::Result<()> {
         SearchBackendArg::Gumbel => SearchBackend::Gumbel { k: args.gumbel_k },
         SearchBackendArg::Heuristic => SearchBackend::Heuristic,
         SearchBackendArg::Greedy => SearchBackend::Greedy,
+        SearchBackendArg::StateDiffGreedy => SearchBackend::StateDiffGreedy,
+        SearchBackendArg::Random => SearchBackend::Random,
     };
 
-    let device = eval_backend::select_device()?;
-
-    // Resolve the eval backend up front (explicit --eval-backend, else auto:
-    // metal when compiled in, else tch when compiled in, else candle) — the
-    // network load below needs it to decide whether player 2 gets an
-    // isolated device (see `load_networks`'s doc comment).
-    let eval_backend_kind = eval_backend::resolve_eval_backend_kind(&args.eval_backend)?;
-    let eval_servers = eval_backend::resolve_eval_servers(eval_backend_kind, args.eval_servers)?;
-
+    // Select device: CUDA (NVIDIA) > Metal (macOS) > CPU, unless overridden via POLYFISH_DEVICE
+    let device = match std::env::var("POLYFISH_DEVICE").as_deref() {
+        Ok("cpu") => Device::Cpu,
+        Ok("metal") => Device::metal_if_available(0)?,
+        Ok("cuda") => Device::cuda_if_available(0)?,
+        _ => match Device::cuda_if_available(0) {
+            Ok(Device::Cpu) | Err(_) => Device::metal_if_available(0).unwrap_or(Device::Cpu),
+            Ok(d) => d,
+        },
+    };
     // Load models (P1, and P2 defaulting to P1 when no opponent is given)
-    let (network1, network2) = load_networks(&device, args.opponent.as_deref(), eval_backend_kind)?;
+    let (network1, network2) = load_networks(&device, args.opponent.as_deref())?;
 
     let base_seed = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
@@ -1486,32 +1432,83 @@ fn main() -> anyhow::Result<()> {
     // for the Metal cross-thread-tensor invariant this design preserves).
     let games_start = Instant::now();
 
+    use polyfish::ai::eval_backend::{resolve_eval_backend_kind, EvalBackendKind};
+
+    // Resolve the eval backend: explicit --eval-backend, else auto (metal
+    // when compiled in, else tch when compiled in, else candle).
+    let eval_backend_kind = resolve_eval_backend_kind(args.eval_backend.as_str())?;
+    // Resolve shard count. We default to the best measured throughput
+    let eval_servers = match args.eval_servers {
+        0 => {
+            if eval_backend_kind == EvalBackendKind::Metal {
+                3
+            } else {
+                1
+            }
+        }
+        n => {
+            if n > 1 && eval_backend_kind == EvalBackendKind::Candle {
+                anyhow::bail!(
+                    "--eval-servers > 1 requires --eval-backend tch or metal \
+                     (candle Metal corrupts when >1 thread encodes on the same device)"
+                );
+            }
+            n
+        }
+    };
     // Each shard sees ~1/N of the working set (hash-routed), so dividing the
     // per-shard cache by N keeps total resident cache ~constant while
     // preserving the hit rate (cache / working-set ratio is unchanged).
-    let per_shard_cache = eval_backend::split_cache_capacity(args.cache_cap, eval_servers);
+    let per_shard_cache = if args.cache_cap == 0 {
+        None
+    } else {
+        Some(args.cache_cap / eval_servers)
+    };
     let eval_config = EvalServerConfig {
         max_batch: args.max_batch,
         coalesce_timeout: std::time::Duration::from_micros(args.coalesce_timeout_us),
         cache_capacity: per_shard_cache,
         pipeline_workers: args.eval_workers,
     };
+    use polyfish::ai::eval_backend::build_backend_specs;
+
     let p1_path = "model.safetensors";
     let p2_path = args.opponent.as_deref().unwrap_or("model.safetensors");
+    let p1_specs = build_backend_specs(eval_backend_kind, eval_servers, p1_path, &network1);
     let has_opponent = args.opponent.is_some();
+    let p2_specs = if has_opponent {
+        build_backend_specs(eval_backend_kind, eval_servers, p2_path, &network2)
+    } else {
+        Vec::new()
+    };
 
     // Spawn the shards. Each EvalServer owns its inference thread + device
     // context; the handles are collected into a ShardedEvalHandle that
-    // routes leaves by hash so each shard owns its own LRU cache. No
-    // opponent => player 2 shares player 1's shard set (one set of
-    // inference threads for the same weights).
-    let (p1_servers, p2_servers, eval1, eval2) = eval_backend::build_two_player_evaluators(
-        eval_backend_kind,
-        eval_servers,
-        eval_config,
-        PlayerBackend { model_path: p1_path, candle_net: &network1 },
-        has_opponent.then(|| PlayerBackend { model_path: p2_path, candle_net: &network2 }),
-    );
+    // routes leaves by hash so each shard owns its own LRU cache.
+    let mut p1_servers: Vec<EvalServer> = Vec::with_capacity(eval_servers);
+    let mut p1_handles: Vec<EvalHandle> = Vec::with_capacity(eval_servers);
+    for spec in p1_specs {
+        let (srv, h) = EvalServer::start(spec, eval_config);
+        p1_servers.push(srv);
+        p1_handles.push(h);
+    }
+    let (p2_servers, p2_handles) = if has_opponent {
+        // Opponent mode: independent shard set for player 2.
+        let mut s = Vec::with_capacity(eval_servers);
+        let mut h = Vec::with_capacity(eval_servers);
+        for spec in p2_specs {
+            let (srv, hh) = EvalServer::start(spec, eval_config);
+            s.push(srv);
+            h.push(hh);
+        }
+        (Some(s), h)
+    } else {
+        // Self-play against the same weights: both players share one shard
+        // set so we don't run 2× inference threads for the same network.
+        (None, p1_handles.clone())
+    };
+    let eval1 = Evaluator::Sharded(ShardedEvalHandle::new(p1_handles));
+    let eval2 = Evaluator::Sharded(ShardedEvalHandle::new(p2_handles));
 
     let num_actors = if args.actors > 0 {
         args.actors
@@ -1528,10 +1525,60 @@ fn main() -> anyhow::Result<()> {
         (None, Some(t2)) => format!("random vs {t2}"),
         (None, None) => "random".to_string(),
     };
+    // Greedy-anchor gate: hold the full --anchor-frac for the first
+    // --anchor-hold-iters, then scale by the measured rolling win rate vs
+    // greedy (.anchor_state.json, written by previous runs). Full frac while
+    // the model still loses (<= 50%), annealing linearly down to
+    // --anchor-probe-frac at --anchor-graduate-winrate; probe games keep the
+    // win rate measured so the anchor comes back on regression. Iteration is
+    // EFF_ITER, the same clock as the other curriculum gates.
+    let anchor_winrate = rolling_anchor_winrate(args.iteration);
+    let anchor_frac = if args.anchor_frac <= 0.0
+        || args.opponent.is_some()
+        || args.iteration <= args.anchor_hold_iters
+    {
+        args.anchor_frac
+    } else {
+        match anchor_winrate {
+            None => args.anchor_frac,
+            Some(wr) => {
+                let t = ((wr - 0.5) / (args.anchor_graduate_winrate - 0.5)).clamp(0.0, 1.0);
+                let probe = args.anchor_probe_frac.min(args.anchor_frac);
+                args.anchor_frac + t * (probe - args.anchor_frac)
+            }
+        }
+    };
+    // Floor a nonzero gate output to >= 1 mirror pair this run, else small
+    // probe fractions round to zero games and the win rate silently goes stale.
+    let anchor_frac = if anchor_frac > 0.0 {
+        anchor_frac.max(1.0 / args.num_games.div_ceil(2).max(1) as f32)
+    } else {
+        anchor_frac
+    };
+    if args.anchor_frac > 0.0 && args.opponent.is_none() {
+        match anchor_winrate {
+            Some(wr) => println!(
+                "[Self-Play] anchor gate: rolling winrate vs greedy {:.0}% -> effective anchor_frac {:.3} (hold <= iter {}, graduate at {:.0}%, probe {:.3})",
+                wr * 100.0,
+                anchor_frac,
+                args.anchor_hold_iters,
+                args.anchor_graduate_winrate * 100.0,
+                args.anchor_probe_frac,
+            ),
+            None => println!(
+                "[Self-Play] anchor gate: no measurements yet -> full anchor_frac {:.3}",
+                anchor_frac
+            ),
+        }
+    }
+
     let match_label = match &args.opponent {
         Some(opp) => format!("league vs {opp}"),
-        None if args.anchor_frac > 0.0 => {
-            format!("self-play + up to {:.0}% heuristic-anchor games (decaying)", args.anchor_frac * 100.0)
+        None if anchor_frac > 0.0 => {
+            format!(
+                "self-play + {:.0}% greedy-anchor games",
+                anchor_frac * 100.0
+            )
         }
         None => "self-play".to_string(),
     };
@@ -1545,9 +1592,11 @@ fn main() -> anyhow::Result<()> {
         SearchBackend::Gumbel { k } => format!("Gumbel k={k}"),
         SearchBackend::Heuristic => "Heuristic MCTS (no NN)".to_string(),
         SearchBackend::Greedy => "Greedy heuristic (no NN, no search)".to_string(),
+        SearchBackend::StateDiffGreedy => "State-diff exp greedy (no NN, no search)".to_string(),
+        SearchBackend::Random => "Uniform random (no NN, no search)".to_string(),
     };
     println!(
-        "[selfplay] {match_label}: {} games, {} mcts-iters, {search_label}, tribes {tribe_label} | eval {backend_label} | {eval_servers} shard(s) cache={per_shard_cache:?} workers={} | {num_actors} actors max_batch={} coalesce_us={} leaf_batch={:?} | device {:?} (CANDLE_METAL_COMPUTE_PER_BUFFER={metal_compute_per_buffer})",
+        "[Self-Play] {match_label}: {} games, {} mcts-iters, {search_label}, tribes {tribe_label} | eval {backend_label} | {eval_servers} shard(s) cache={per_shard_cache:?} workers={} | {num_actors} actors max_batch={} coalesce_us={} leaf_batch={:?} | device {:?} (CANDLE_METAL_COMPUTE_PER_BUFFER={metal_compute_per_buffer})",
         args.num_games,
         args.mcts_iters,
         args.eval_workers,
@@ -1584,7 +1633,10 @@ fn main() -> anyhow::Result<()> {
                         break;
                     }
 
-                    let seed = (base_seed + i as u64) as i64;
+                    // Mirror pairs: games 2k and 2k+1 share a seed (same map
+                    // and tribes) with controllers on swapped seats, so the
+                    // value labels can cancel per-map/spawn/seat luck.
+                    let seed = (base_seed + (i / 2) as u64) as i64;
                     let swap_players = i % 2 == 1; // Swap every other game
                     let (p1_net, p2_net, p1_eval, p2_eval) = if swap_players {
                         (&**network2, &**network1, eval2, eval1)
@@ -1592,29 +1644,15 @@ fn main() -> anyhow::Result<()> {
                         (&**network1, &**network2, eval1, eval2)
                     };
 
-                    // Anchor games: evenly spread across the run at rate
-                    // anchor_frac (decayed from its starting value the same
-                    // way prior_heuristic_weight is — see decay_crutch);
-                    // the anchor's seat alternates by anchor ordinal (game
-                    // parity alone would pin it to one seat at e.g. frac
-                    // 0.25, where anchor games are all odd-i).
-                    let anchor_frac = decay_crutch(
-                        args.anchor_frac,
-                        ANCHOR_FRAC_DECAY,
-                        args.iteration.saturating_sub(args.anchor_decay_start),
-                        args.decay_last_iter,
-                        args.force_zero_crutches,
-                    );
-                    let anchor_ordinal = (((i + 1) as f32) * anchor_frac).floor() as usize;
+                    // Anchor games are scheduled per PAIR (evenly spread at
+                    // rate anchor_frac) so both halves of a mirror pair are
+                    // anchor games, greedy taking opposite seats in each half.
+                    let pair_idx = i / 2;
                     let is_anchor = anchor_frac > 0.0
-                        && anchor_ordinal > ((i as f32) * anchor_frac).floor() as usize;
-                    // Greedy (score_move argmax), not the rollout Heuristic MCTS:
-                    // measured first-village capture 1.00/t6.5 vs 0.94/t8.9 — the
-                    // rollout noise drowned the ordering gradient. Greedy is also
-                    // the exact distribution blend_heuristic_prior injects into the
-                    // net's root, so anchor data and search priors agree.
+                        && (((pair_idx + 1) as f32) * anchor_frac).floor() as usize
+                            > ((pair_idx as f32) * anchor_frac).floor() as usize;
                     let (backend_seat1, backend_seat2) = if is_anchor {
-                        if anchor_ordinal % 2 == 0 {
+                        if i % 2 == 0 {
                             (SearchBackend::Greedy, backend)
                         } else {
                             (backend, SearchBackend::Greedy)
@@ -1644,8 +1682,6 @@ fn main() -> anyhow::Result<()> {
                             seed,
                             game_tribes,
                             args.iteration,
-                            args.decay_last_iter,
-                            args.force_zero_crutches,
                             args.gamemode,
                             backend_seat1,
                             backend_seat2,
@@ -1656,7 +1692,6 @@ fn main() -> anyhow::Result<()> {
                             args.trace_trigger,
                             args.trace_max,
                             &trace_counter,
-                            args.dump_failed_dir.as_deref(),
                         )
                     }))
                     .unwrap_or_else(|_| {
@@ -1669,12 +1704,24 @@ fn main() -> anyhow::Result<()> {
                             let done = games_completed.fetch_add(1, Ordering::Relaxed) + 1;
                             if finish_milestones.contains(&done) {
                                 eprintln!(
-                                    "[Progress] {}/{} games complete (game {} — {} moves, winner score {})",
+                                    "[Progress] {}/{} games complete (game {} — {} moves, winner score {}, decisive: {}, captures: {}, final spt: {})",
                                     done,
                                     args.num_games,
                                     i,
                                     result.moves,
                                     result.winner_score,
+                                    if result.decisive {
+                                        "yes"
+                                    } else {
+                                        "no"
+                                    },
+                                    result.cap_villages,
+                                    result
+                                        .spt_at_turn
+                                        .iter()
+                                        .max_by_key(|(turn, _)| *turn)
+                                        .map(|(_, spt)| *spt)
+                                        .unwrap_or(0.0),
                                 );
                             }
                         }
@@ -1687,12 +1734,21 @@ fn main() -> anyhow::Result<()> {
 
     let results: Vec<GameResult> = match Arc::try_unwrap(results_mutex) {
         Ok(mutex) => mutex.into_inner().unwrap(),
-        Err(_) => panic!("BUG: actor threads still hold a results_mutex reference after scope exit"),
+        Err(_) => {
+            panic!("BUG: actor threads still hold a results_mutex reference after scope exit")
+        }
     };
 
     let games_duration = games_start.elapsed();
-    println!("Game generation completed in: {:.2}s ({} games)", games_duration.as_secs_f32(), results.len());
-    println!("  Average: {:.2}s per game", games_duration.as_secs_f32() / results.len().max(1) as f32);
+    println!(
+        "🚀 Game generation completed in: {:.2}s ({} games)",
+        games_duration.as_secs_f32(),
+        results.len()
+    );
+    println!(
+        "  Average: {:.2}s per game",
+        games_duration.as_secs_f32() / results.len().max(1) as f32
+    );
     let total_moves_now: usize = results.iter().map(|r| r.moves).sum();
     let moves_per_sec = total_moves_now as f64 / games_duration.as_secs_f64().max(1e-9);
     println!(
@@ -1717,7 +1773,8 @@ fn main() -> anyhow::Result<()> {
     let wall_s = games_duration.as_secs_f64().max(1e-9);
 
     // Aggregate across shards.
-    let (mut agg_forwards, mut agg_rows, mut agg_max_batch, mut agg_busy_us) = (0u64, 0u64, 0u64, 0u64);
+    let (mut agg_forwards, mut agg_rows, mut agg_max_batch, mut agg_busy_us) =
+        (0u64, 0u64, 0u64, 0u64);
     let (mut agg_hits, mut agg_misses) = (0u64, 0u64);
     let (mut agg_compiles, mut agg_compile_us) = (0u64, 0u64);
     let (mut agg_prep_us, mut agg_wait_us, mut agg_post_us) = (0u64, 0u64, 0u64);
@@ -1765,7 +1822,11 @@ fn main() -> anyhow::Result<()> {
         agg_compiles,
         agg_compile_s,
         agg_compile_s / wall_s,
-        if agg_busy_s > 0.0 { agg_compile_s / agg_busy_s } else { 0.0 }
+        if agg_busy_s > 0.0 {
+            agg_compile_s / agg_busy_s
+        } else {
+            0.0
+        }
     );
 
     // Aggregate results
@@ -1780,15 +1841,11 @@ fn main() -> anyhow::Result<()> {
 
     let mut collected_values: Vec<f32> = Vec::new();
     let mut collected_progress: Vec<f32> = Vec::new();
-
-    // Aux-head targets (see the aux_* helpers above GameResult).
-    let num_techs = polyfish::types::TechnologyType::iter().count();
-    let mut collected_aux_own: Vec<Vec<f32>> = Vec::new();
-    let mut collected_aux_fog: Vec<Vec<f32>> = Vec::new();
-    let mut collected_aux_spt: Vec<f32> = Vec::new(); // flat, 2 per step
-    let mut collected_aux_tech: Vec<Vec<f32>> = Vec::new();
+    let mut collected_ownership: Vec<Vec<f32>> = Vec::new();
 
     let mut total_score = 0;
+    let mut kl_game_sum = 0.0f64;
+    let mut kl_game_n = 0u32;
     let mut max_score = 0;
     let mut best_recap: Option<ModReplay> = None;
     let mut total_moves = 0;
@@ -1807,21 +1864,74 @@ fn main() -> anyhow::Result<()> {
     let mut total_builds = 0;
     let mut total_research = 0;
     let mut total_attacks = 0;
-    let mut total_abilities = 0;
     let mut total_revealed_tiles: i64 = 0;
     let mut total_captured_tiles: i64 = 0;
     let mut total_t2c = [0.0f64; 7]; // villages first/p50/p80/all, ruins p50/p80/all
-    let mut first_cap_games = 0usize;
-    let mut first_cap_turn_sum = 0.0f64;
     let mut spt_sums: HashMap<i32, f64> = HashMap::new();
     let mut spt_counts: HashMap<i32, u32> = HashMap::new();
 
     let mut total_moves_by_turn: HashMap<i32, HashMap<polyfish::types::MoveType, usize>> =
         HashMap::new();
 
+    let mut decisive_games = 0usize;
+    let mut anchor_games_n = 0usize;
+    let mut anchor_model_wins = 0.0f32;
+
+    // EXP_ARCH_001 drowning meter: absolute contribution of each value-label
+    // term, summed over every step, so the logs show how much of the signal is
+    // genuine win/loss vs dense score-shaping.
+    let mut vlab_td_abs = 0.0f64;
+    let mut vlab_wl_abs = 0.0f64; // tail on decisive games = true win/loss
+    let mut vlab_scoretail_abs = 0.0f64; // tail on timeouts = score tiebreak
+    let mut vlab_spt_abs = 0.0f64;
+    let mut vlab_steps = 0u64;
+
+    // P1-POV outcome per game, keyed by game_idx, for the mirror-pair label
+    // adjustment (a game's partner is game_idx ^ 1; absent if it panicked).
+    let pair_outcomes: HashMap<usize, (f32, f32)> = if args.mirror_labels {
+        results
+            .iter()
+            .map(|r| {
+                (
+                    r.game_idx,
+                    (
+                        outcome_for(r, 1, args.reward_shaping),
+                        outcome_for(r, 2, args.reward_shaping),
+                    ),
+                )
+            })
+            .collect()
+    } else {
+        HashMap::new()
+    };
+    if args.mirror_labels {
+        let paired = results
+            .iter()
+            .filter(|r| pair_outcomes.contains_key(&(r.game_idx ^ 1)))
+            .count();
+        eprintln!(
+            "[MirrorLabels] {}/{} games have a live mirror partner",
+            paired,
+            results.len()
+        );
+    }
+
     for result in results {
+        if result.decisive {
+            decisive_games += 1;
+        }
+        if let Some(anchor_pid) = result.anchor_seat {
+            anchor_games_n += 1;
+            if result.winner_id != 0 && result.winner_id != anchor_pid {
+                anchor_model_wins += 1.0;
+            }
+        }
         total_score += result.winner_score;
         total_moves += result.moves;
+        if let Some(kl) = result.policy_kl {
+            kl_game_sum += kl as f64;
+            kl_game_n += 1;
+        }
         total_revealed_tiles += result.revealed_tiles as i64;
         total_captured_tiles += result.captured_tiles as i64;
         for (&turn, &spt) in &result.spt_at_turn {
@@ -1838,10 +1948,6 @@ fn main() -> anyhow::Result<()> {
             result.ruins_t2c_all,
         ]) {
             *acc += v as f64;
-        }
-        if result.villages_first_raw >= 0.0 {
-            first_cap_games += 1;
-            first_cap_turn_sum += result.villages_first_raw as f64;
         }
         if result.winner_score > max_score {
             max_score = result.winner_score;
@@ -1887,11 +1993,6 @@ fn main() -> anyhow::Result<()> {
             .get(&polyfish::types::MoveType::Attack)
             .copied()
             .unwrap_or(0);
-        total_abilities += result
-            .action_counts
-            .get(&polyfish::types::MoveType::Ability)
-            .copied()
-            .unwrap_or(0);
 
         for (turn, counts) in &result.moves_by_turn {
             let entry = total_moves_by_turn.entry(*turn).or_default();
@@ -1908,42 +2009,29 @@ fn main() -> anyhow::Result<()> {
 
         let label_steps: Vec<LabelStep> = result.history.iter().map(LabelStep::from).collect();
         let td_deltas = td_lambda_labels(&label_steps, final_scores, LAMBDA_RETURN);
+        let spt_shaping = spt_shaping_deltas(&label_steps);
 
-        let spt_steps: Vec<SptStep> = result
-            .history
-            .iter()
-            .map(|s| SptStep {
-                player_id: s.player_id,
-                turn: s.turn,
-                my_spt: s.my_spt,
-                opp_spt: s.opp_spt,
-            })
-            .collect();
-        let spt_cp = spt_checkpoints_by_player(&spt_steps);
-
-        // Determine the winner_id for this game
-        let game_winner_id = {
-            // Check who survived (alive = not killed)
-            // We stored scores; for decisive win, one player's score is dominant
-            // Use the result.winner_score to identify winner
-            let mut best_id = 0;
-            let mut best_s = i32::MIN;
-            for (&id, &s) in &result.scores {
-                if s > best_s {
-                    best_s = s;
-                    best_id = id;
-                }
-            }
-            best_id
-        };
+        // EXP_ARCH_001: reward WINNING, not score-hoarding. Winner = sole
+        // survivor (elimination) or, on timeout, the score leader — already
+        // adjudicated at game end. `decisive` marks a real elimination; on a
+        // timeout we fall back to the score tail below.
+        let game_decisive = result.decisive;
+        let z_p1 = outcome_for(&result, 1, args.reward_shaping);
+        let z_p2 = outcome_for(&result, 2, args.reward_shaping);
+        let partner_outcomes = pair_outcomes.get(&(result.game_idx ^ 1)).copied();
+        let hist_len = result.history.len();
+        // Env-tunable so the win/loss tail vs dense score-shaping mix can be
+        // swept without a recompile (default = const TD_W).
+        let td_w: f32 = std::env::var("TD_W")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(TD_W);
 
         for (step_idx, step) in result.history.into_iter().enumerate() {
             let HistoryStep {
                 features,
                 policy: policy_data,
                 player_id: p_id,
-                turn,
-                enemy_units,
                 ..
             } = step;
             let flat_map = features
@@ -1963,53 +2051,54 @@ fn main() -> anyhow::Result<()> {
             collected_target_spatial.push(policy_data.target_spatial);
             collected_option.push(policy_data.move_option);
 
-            // Perfection: Score-based value target
-            // Every game produces a meaningful score — use normalized differential
-            let my_final = final_scores.get(&p_id).copied().unwrap_or(0) as f32;
-            let opp_final = final_scores
-                .iter()
-                .filter(|(id, _)| **id != p_id)
-                .map(|(_, score)| *score as f32)
-                .next()
-                .unwrap_or(0.0);
+            // The long-horizon tail (EXP_ARCH_001): win(+1)/loss(-1) on a
+            // decisive game, score differential on a timeout (outcome_for).
+            let own_outcome = if p_id == 1 { z_p1 } else { z_p2 };
 
-            // Asymmetric Reward Shaping to fix P1 advantage
-            let (mut my_adjusted, mut opp_adjusted) = (my_final, opp_final);
-            if args.reward_shaping {
-                let penalty = 0.05; // 5% adjustment
-                if p_id == 1 {
-                    my_adjusted = my_final * (1.0 - penalty);
-                    opp_adjusted = opp_final * (1.0 + penalty);
-                } else if p_id == 2 {
-                    my_adjusted = my_final * (1.0 + penalty);
-                    opp_adjusted = opp_final * (1.0 - penalty);
+            // Mirror-relative adjustment: the partner game replays the same
+            // map with seats swapped, so the pair mean of this controller's
+            // outcomes estimates map/spawn/seat luck-free skill. Early states
+            // (where the pair hasn't diverged) take the pair mean; late states
+            // keep the true own outcome. Spawn-luck wins thus stop training
+            // the early game as if they were earned.
+            let final_outcome = match partner_outcomes {
+                Some((pz1, pz2)) => {
+                    let z_counterpart = if p_id == 1 { pz2 } else { pz1 };
+                    let pair_mean = 0.5 * (own_outcome + z_counterpart);
+                    let u = if hist_len > 1 {
+                        step_idx as f32 / (hist_len - 1) as f32
+                    } else {
+                        1.0
+                    };
+                    (1.0 - u) * pair_mean + u * own_outcome
                 }
-            }
-
-            // Normalize by combined economic activity with scaling multiplier
-            let combined_score = my_adjusted + opp_adjusted;
-            // to spread distribution into useful training range
-            let scaling_factor = 3.0;
-            let relative_outcome = if combined_score > 0.0 {
-                let ratio = (my_adjusted - opp_adjusted) / combined_score;
-                (ratio * scaling_factor).clamp(-1.0, 1.0)
-            } else {
-                0.0  // Both players scored 0 - treat as draw
+                None => own_outcome,
             };
 
-            // Absolute value: final score vs fixed yardstick, not current scoreboard.    
-            let abs_outcome = (my_final / GOOD_BOT_FINAL_SCORE).clamp(0.0, 1.0) * 2.0 - 1.0;
-            let final_outcome = (FINAL_OUTCOME_REL_W * relative_outcome
-                + (1.0 - FINAL_OUTCOME_REL_W) * abs_outcome)
-                .clamp(-1.0, 1.0);
-
             let value = if args.reward_shaping {
-                // TD delta carries per-action credit; the final-outcome tail
-                // carries the long-horizon signal.
-                (TD_W * td_deltas[step_idx] + (1.0 - TD_W) * final_outcome).clamp(-1.0, 1.0)
+                // TD delta carries dense per-action credit; the final-outcome
+                // tail now carries the WIN/LOSS signal; the SPT potential delta
+                // adds dense economy credit (see SPT_SHAPE_W). Lower TD_W (env)
+                // to let the win/loss tail dominate the dense score shaping.
+                (td_w * td_deltas[step_idx]
+                    + (1.0 - td_w) * final_outcome
+                    + SPT_SHAPE_W * spt_shaping[step_idx])
+                    .clamp(-1.0, 1.0)
             } else {
                 final_outcome.clamp(-1.0, 1.0)
             };
+
+            if args.reward_shaping {
+                vlab_td_abs += (td_w * td_deltas[step_idx]).abs() as f64;
+                let tail = ((1.0 - td_w) * final_outcome).abs() as f64;
+                if game_decisive {
+                    vlab_wl_abs += tail;
+                } else {
+                    vlab_scoretail_abs += tail;
+                }
+                vlab_spt_abs += (SPT_SHAPE_W * spt_shaping[step_idx]).abs() as f64;
+                vlab_steps += 1;
+            }
 
             collected_values.push(value);
 
@@ -2022,27 +2111,22 @@ fn main() -> anyhow::Result<()> {
             };
             collected_progress.push(progress_target);
 
-            let opp_id = final_scores
-                .keys()
-                .copied()
-                .find(|id| *id != p_id)
-                .unwrap_or(p_id);
-            collected_aux_own.push(ownership_from_pov(&result.final_owner, p_id));
-            collected_aux_fog.push(enemy_units);
-            let (spt_my, spt_opp) = spt_target(
-                spt_cp.get(&p_id),
-                turn,
-                result.final_spt.get(&p_id).copied().unwrap_or(0),
-                result.final_spt.get(&opp_id).copied().unwrap_or(0),
-            );
-            collected_aux_spt.push(spt_my as f32 / 20.0);
-            collected_aux_spt.push(spt_opp as f32 / 20.0);
-            collected_aux_tech.push(
+            // Final ownership re-signed to this sample's POV, matching the
+            // CH_TILE_OWNER input convention (+1 mine / -1 enemy / 0 neutral).
+            collected_ownership.push(
                 result
-                    .final_tech
-                    .get(&opp_id)
-                    .cloned()
-                    .unwrap_or_else(|| vec![0.0; num_techs]),
+                    .final_tile_owners
+                    .iter()
+                    .map(|&o| {
+                        if o == p_id {
+                            1.0
+                        } else if o != 0 {
+                            -1.0
+                        } else {
+                            0.0
+                        }
+                    })
+                    .collect(),
             );
         }
     }
@@ -2070,7 +2154,6 @@ fn main() -> anyhow::Result<()> {
     let avg_builds = total_builds as f32 / args.num_games as f32;
     let avg_research = total_research as f32 / args.num_games as f32;
     let avg_attacks = total_attacks as f32 / args.num_games as f32;
-    let avg_abilities = total_abilities as f32 / args.num_games as f32;
     let avg_revealed_tiles = total_revealed_tiles as f32 / args.num_games as f32;
     let avg_captured_tiles = total_captured_tiles as f32 / args.num_games as f32;
 
@@ -2165,23 +2248,9 @@ fn main() -> anyhow::Result<()> {
         // Values
         let values_tensor = Tensor::from_vec(collected_values, (total_steps, 1), &device)?;
         let progress_tensor = Tensor::from_vec(collected_progress, (total_steps, 1), &device)?;
-
-        // Aux-head targets — always emitted together (train.py's per-file
-        // presence mask treats them as all-or-nothing).
-        let aux_own_tensor = Tensor::from_vec(
-            flatten_vec(collected_aux_own),
+        let ownership_tensor = Tensor::from_vec(
+            flatten_vec(collected_ownership),
             (total_steps, spatial_logit_dim),
-            &device,
-        )?;
-        let aux_fog_tensor = Tensor::from_vec(
-            flatten_vec(collected_aux_fog),
-            (total_steps, spatial_logit_dim),
-            &device,
-        )?;
-        let aux_spt_tensor = Tensor::from_vec(collected_aux_spt, (total_steps, 2), &device)?;
-        let aux_tech_tensor = Tensor::from_vec(
-            flatten_vec(collected_aux_tech),
-            (total_steps, num_techs),
             &device,
         )?;
 
@@ -2196,11 +2265,7 @@ fn main() -> anyhow::Result<()> {
 
         tensors.insert("values".to_string(), values_tensor);
         tensors.insert("progress".to_string(), progress_tensor);
-
-        tensors.insert("aux_ownership".to_string(), aux_own_tensor);
-        tensors.insert("aux_fog_units".to_string(), aux_fog_tensor);
-        tensors.insert("aux_spt".to_string(), aux_spt_tensor);
-        tensors.insert("aux_opp_tech".to_string(), aux_tech_tensor);
+        tensors.insert("ownership".to_string(), ownership_tensor);
 
         candle_core::safetensors::save(&tensors, &games_file)?;
 
@@ -2220,14 +2285,40 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
-
     }
+
+    // EXP_ARCH_001 drowning meter (computed here, not inline, to keep the big
+    // json! macro under its recursion limit). vlab_wl_share is the headline:
+    // fraction of the value-label magnitude that is genuine win/loss.
+    let vlab_total = vlab_td_abs + vlab_wl_abs + vlab_scoretail_abs + vlab_spt_abs;
+    let vlab_wl_share = if vlab_total > 0.0 {
+        (vlab_wl_abs / vlab_total) as f32
+    } else {
+        0.0
+    };
+    let vlab_td_absmean = if vlab_steps > 0 {
+        (vlab_td_abs / vlab_steps as f64) as f32
+    } else {
+        0.0
+    };
+    let vlab_wl_absmean = if vlab_steps > 0 {
+        (vlab_wl_abs / vlab_steps as f64) as f32
+    } else {
+        0.0
+    };
+    let vlab_spt_absmean = if vlab_steps > 0 {
+        (vlab_spt_abs / vlab_steps as f64) as f32
+    } else {
+        0.0
+    };
 
     let metrics = json!({
         "num_games": args.num_games,
         "avg_score": avg_score,
         "max_score": max_score,
         "avg_moves": avr_moves,
+        "max_turns": curriculum(args.iteration).1,
+        "policy_kl": if kl_game_n > 0 { kl_game_sum / kl_game_n as f64 } else { -1.0 },
         "p1_avg": p1_avg,
         "p2_avg": p2_avg,
         "avg_captures": avg_captures,
@@ -2239,7 +2330,6 @@ fn main() -> anyhow::Result<()> {
         "avg_builds": avg_builds,
         "avg_research": avg_research,
         "avg_attacks": avg_attacks,
-        "avg_abilities": avg_abilities,
         "avg_revealed_tiles": avg_revealed_tiles,
         "avg_captured_tiles": avg_captured_tiles,
         "avg_spt_t0": avg_spt_at(0),
@@ -2250,23 +2340,19 @@ fn main() -> anyhow::Result<()> {
         "avg_spt_t25": avg_spt_at(25),
         "avg_spt_t30": avg_spt_at(30),
         "villages_t2c_first": (total_t2c[0] / args.num_games as f64) as f32,
-        "villages_first_rate": (first_cap_games as f64 / args.num_games as f64) as f32,
-        "villages_t2c_first_cond": if first_cap_games > 0 {
-            (first_cap_turn_sum / first_cap_games as f64) as f32
-        } else {
-            -1.0
-        },
-        "tribes": format!(
-            "{}+{}",
-            args.tribe1.as_deref().unwrap_or("random"),
-            args.tribe2.as_deref().unwrap_or("random")
-        ),
         "villages_t2c_p50": (total_t2c[1] / args.num_games as f64) as f32,
         "villages_t2c_p80": (total_t2c[2] / args.num_games as f64) as f32,
         "villages_t2c_all": (total_t2c[3] / args.num_games as f64) as f32,
         "ruins_t2c_p50": (total_t2c[4] / args.num_games as f64) as f32,
         "ruins_t2c_p80": (total_t2c[5] / args.num_games as f64) as f32,
         "ruins_t2c_all": (total_t2c[6] / args.num_games as f64) as f32,
+        "decisive_frac": decisive_games as f32 / args.num_games.max(1) as f32,
+        "vlab_wl_share": vlab_wl_share,
+        "vlab_td_absmean": vlab_td_absmean,
+        "vlab_wl_absmean": vlab_wl_absmean,
+        "vlab_spt_absmean": vlab_spt_absmean,
+        "anchor_games": anchor_games_n,
+        "anchor_model_wins": anchor_model_wins,
         "games_file": games_file,
         "moves_by_turn": moves_by_turn,
     });
@@ -2275,17 +2361,38 @@ fn main() -> anyhow::Result<()> {
         serde_json::to_string(&metrics)?,
     )?;
 
+    if args.anchor_frac > 0.0 && args.opponent.is_none() {
+        append_anchor_record(args.iteration, anchor_games_n, anchor_model_wins);
+        if anchor_games_n > 0 {
+            println!(
+                "[Self-Play] anchor games: {} | model wins {:.0} ({:.0}%) | decisive games this run: {}",
+                anchor_games_n,
+                anchor_model_wins,
+                100.0 * anchor_model_wins / anchor_games_n as f32,
+                decisive_games,
+            );
+        }
+    }
+
     let total_duration = start_time.elapsed();
     println!("\n=== Self-Play Complete ===");
     println!("Total time: {:.2}s", total_duration.as_secs_f32());
     println!("Breakdown:");
-    println!("  - Game generation: {:.2}s ({:.1}%)", games_duration.as_secs_f32(), 100.0 * games_duration.as_secs_f32() / total_duration.as_secs_f32());
+    println!(
+        "  - Game generation: {:.2}s ({:.1}%)",
+        games_duration.as_secs_f32(),
+        100.0 * games_duration.as_secs_f32() / total_duration.as_secs_f32()
+    );
     let final_moves_per_sec = total_moves as f64 / games_duration.as_secs_f64().max(1e-9);
-    println!("  - Throughput: {:.2} moves/sec ({} moves)", final_moves_per_sec, total_moves);
+    println!(
+        "  - Throughput: {:.2} moves/sec ({} moves)",
+        final_moves_per_sec, total_moves
+    );
     // How often search crossed a turn boundary in-tree (simulated EndTurn
     // edges only; real played moves don't count). ~0/move decision means the
     // tree essentially never sees beyond the current turn.
-    let sim_end_turns = polyfish::game::SIM_END_TURN_EDGES.load(std::sync::atomic::Ordering::Relaxed);
+    let sim_end_turns =
+        polyfish::game::SIM_END_TURN_EDGES.load(std::sync::atomic::Ordering::Relaxed);
     println!(
         "  - Sim EndTurn edges: {} total ({:.2} per move decision)",
         sim_end_turns,
@@ -2323,6 +2430,8 @@ mod td_lambda_tests {
             turn,
             my_score: my,
             opp_score: opp,
+            my_spt: 0,
+            opp_spt: 0,
             root_value: rv,
         }
     }
@@ -2395,8 +2504,7 @@ mod td_lambda_tests {
 
         let out = td_lambda_labels(&history, &final_scores, 0.5);
 
-        let n1 = reward::normalized_reward(100, 100, 300, 100)
-            + reward::GAMMA_TURN.powi(1) * 0.6;
+        let n1 = reward::normalized_reward(100, 100, 300, 100) + reward::GAMMA_TURN.powi(1) * 0.6;
         let terminal = reward::normalized_reward(100, 100, 300, 100);
         let expected = (0.5 * n1 + 0.5 * terminal).clamp(-1.0, 1.0);
 
@@ -2429,149 +2537,69 @@ mod td_lambda_tests {
 }
 
 #[cfg(test)]
-mod decay_crutch_tests {
+mod spt_shaping_tests {
     use super::*;
 
-    #[test]
-    fn decays_toward_floor_before_taper() {
-        let w0 = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 0, 150, false);
-        assert!((w0 - HEURISTIC_PRIOR_W0).abs() < 1e-6, "iteration 0 should equal w0, got {w0}");
-
-        let mid = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 23, 150, false);
-        assert!((mid - 0.25).abs() < 0.01, "iteration 23 should be ~0.25, got {mid}");
-
-        let floored = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 100, 150, false);
-        assert!((floored - CRUTCH_FLOOR).abs() < 1e-6, "past-decay iteration should sit at the floor, got {floored}");
-    }
-
-    #[test]
-    fn hard_cuts_to_zero_at_decay_last_iter() {
-        let at_cutoff = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 150, 150, false);
-        assert_eq!(at_cutoff, 0.0);
-
-        let past_cutoff = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 500, 150, false);
-        assert_eq!(past_cutoff, 0.0);
-
-        let just_before = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 149, 150, false);
-        assert!((just_before - CRUTCH_FLOOR).abs() < 1e-6);
-    }
-
-    #[test]
-    fn force_zero_overrides_regardless_of_iteration() {
-        let forced = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 0, usize::MAX, true);
-        assert_eq!(forced, 0.0);
-    }
-}
-
-#[cfg(test)]
-mod aux_target_tests {
-    use super::*;
-    use polyfish::coords::Coords;
-    use polyfish::states::{TechnologyState, TribeState, UnitState};
-    use polyfish::types::{TechnologyType, UnitEffect};
-
-    #[test]
-    fn tech_multihot_uses_iter_position_not_discriminant() {
-        let mk = |tech_type, discovered| TechnologyState {
-            tech_type,
-            discovered,
-            discovered_turn: 0,
-        };
-        let techs = vec![
-            mk(TechnologyType::Riding, true),
-            mk(TechnologyType::ShockTactics, true),
-            mk(TechnologyType::Rituals, true),
-            mk(TechnologyType::Fishing, false),
-        ];
-        let v = tech_multihot(&techs);
-        let n = TechnologyType::iter().count();
-        assert_eq!(v.len(), n);
-        assert_eq!(v.iter().filter(|&&x| x == 1.0).count(), 3);
-        let rituals_pos = TechnologyType::iter()
-            .position(|t| t == TechnologyType::Rituals)
-            .unwrap();
-        assert_eq!(v[rituals_pos], 1.0);
-        // Discriminant-indexed encoding would need a slot at 121 >= n.
-        assert!(TechnologyType::Rituals as usize >= n);
-    }
-
-    #[test]
-    fn ownership_from_pov_maps_signs() {
-        let owner = vec![0, 1, 2];
-        assert_eq!(ownership_from_pov(&owner, 1), vec![0.0, 1.0, -1.0]);
-        assert_eq!(ownership_from_pov(&owner, 2), vec![0.0, -1.0, 1.0]);
-    }
-
-    #[test]
-    fn enemy_unit_grid_excludes_pov_invisible_and_bounds() {
-        let unit = |owner: PlayerId, idx: i32, invisible: bool| {
-            let mut u = UnitState {
-                owner,
-                coords: Coords::from_index(idx, 11),
-                ..Default::default()
-            };
-            if invisible {
-                u.effects.insert(UnitEffect::Invisible);
-            }
-            u
-        };
-        let mut state = GameState::default();
-        let mut t1 = TribeState::default();
-        t1.units.push(unit(1, 5, false));
-        let mut t2 = TribeState::default();
-        t2.units.push(unit(2, 17, false));
-        t2.units.push(unit(2, 30, true)); // invisible: excluded
-        t2.units.push(unit(2, 500, false)); // out of range: excluded
-        state.tribes.insert(1, t1);
-        state.tribes.insert(2, t2);
-
-        let g = enemy_unit_grid(&state, 1, 121);
-        let set: Vec<usize> = g
-            .iter()
-            .enumerate()
-            .filter(|&(_, &v)| v == 1.0)
-            .map(|(i, _)| i)
-            .collect();
-        assert_eq!(set, vec![17]);
-    }
-
-    fn sstep(player_id: PlayerId, turn: i32, my: i32, opp: i32) -> SptStep {
-        SptStep {
+    fn step_spt(player_id: PlayerId, turn: i32, my_spt: i32, opp_spt: i32) -> LabelStep {
+        LabelStep {
             player_id,
             turn,
-            my_spt: my,
-            opp_spt: opp,
+            my_score: 0,
+            opp_score: 0,
+            my_spt,
+            opp_spt,
+            root_value: None,
         }
     }
 
-    #[test]
-    fn spt_checkpoints_keep_first_decision_per_turn() {
-        let steps = vec![sstep(1, 3, 5, 4), sstep(1, 3, 9, 9), sstep(1, 4, 6, 5)];
-        let cp = spt_checkpoints_by_player(&steps);
-        let c1 = &cp[&1];
-        assert_eq!(c1.len(), 2);
-        assert_eq!((c1[0].turn, c1[0].my_spt), (3, 5));
-        assert_eq!((c1[1].turn, c1[1].my_spt), (4, 6));
+    fn norm() -> f32 {
+        polyfish::states::default_max_spt() as f32
     }
 
     #[test]
-    fn spt_target_five_turn_lookup_and_final_fallback() {
-        let steps = vec![
-            sstep(1, 0, 2, 2),
-            sstep(1, 3, 4, 3),
-            sstep(1, 9, 8, 6),
-            sstep(1, 12, 10, 9),
+    fn level_up_move_gets_instant_positive_credit() {
+        // SPT 2 before the level-up harvest, 3 at the next own decision:
+        // the harvesting step itself carries the +1/norm credit.
+        let history = vec![step_spt(1, 3, 2, 2), step_spt(1, 3, 3, 2)];
+        let out = spt_shaping_deltas(&history);
+        assert!((out[0] - 1.0 / norm()).abs() < 1e-6, "got {}", out[0]);
+        // A player's last recorded step gets no phantom credit.
+        assert_eq!(out[1], 0.0);
+    }
+
+    #[test]
+    fn opponent_gain_is_charged_at_the_boundary_and_antisymmetric() {
+        // P1 ends turn 3 at parity; P2 levels up on their turn; P1's next
+        // decision sees the deficit. The drop lands on P1's boundary step,
+        // and P2's harvesting step carries the mirror-image positive credit.
+        let history = vec![
+            step_spt(1, 3, 2, 2), // P1's last move of turn 3
+            step_spt(2, 3, 2, 2), // P2's harvest decision (their POV)
+            step_spt(2, 3, 3, 2), // P2's next decision: their SPT is up
+            step_spt(1, 4, 2, 3), // P1's next turn: opponent SPT up
         ];
-        let cp = spt_checkpoints_by_player(&steps);
-        // T=3: first turn >= 8 is 9.
-        assert_eq!(spt_target(cp.get(&1), 3, 99, 99), (8, 6));
-        // T=4: exact boundary, turn 9 == 4+5.
-        assert_eq!(spt_target(cp.get(&1), 4, 99, 99), (8, 6));
-        // T=7: first turn >= 12 is 12 (present exactly).
-        assert_eq!(spt_target(cp.get(&1), 7, 0, 0), (10, 9));
-        // T=9: nothing at >= 14 -> final fallback.
-        assert_eq!(spt_target(cp.get(&1), 9, 99, 98), (99, 98));
-        // Unknown player -> final fallback.
-        assert_eq!(spt_target(cp.get(&7), 0, 1, 2), (1, 2));
+        let out = spt_shaping_deltas(&history);
+        assert!((out[0] + 1.0 / norm()).abs() < 1e-6, "got {}", out[0]);
+        assert!((out[1] - 1.0 / norm()).abs() < 1e-6, "got {}", out[1]);
+    }
+
+    #[test]
+    fn deltas_telescope_to_last_minus_first_potential_per_player() {
+        // Potential-based invariant: a player's summed deltas equal
+        // Φ(their last step) - Φ(their first step), so the shaping adds no
+        // net free reward over a game — it only relocates credit.
+        let history = vec![
+            step_spt(1, 0, 0, 0),
+            step_spt(2, 0, 0, 0),
+            step_spt(1, 1, 2, 1),
+            step_spt(2, 1, 1, 2),
+            step_spt(1, 2, 5, 3),
+            step_spt(2, 2, 3, 5),
+        ];
+        let out = spt_shaping_deltas(&history);
+        let p1_sum: f32 = out[0] + out[2] + out[4];
+        let p2_sum: f32 = out[1] + out[3] + out[5];
+        assert!((p1_sum - 2.0 / norm()).abs() < 1e-6, "got {p1_sum}");
+        assert!((p2_sum + 2.0 / norm()).abs() < 1e-6, "got {p2_sum}");
     }
 }

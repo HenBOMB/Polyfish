@@ -34,6 +34,7 @@ echo "Installing Python dependencies..."
 if ! .venv/bin/python3 -c "import torch; print(torch.__version__)" &> /dev/null; then
     echo "Installing PyTorch..."
     .venv/bin/pip install --pre --upgrade torch --index-url https://download.pytorch.org/whl/nightly/cu124
+    # .venv/bin/pip install --upgrade torch --index-url https://download.pytorch.org/whl/cu124
 else
     echo "PyTorch already installed. Skipping..."
 fi
@@ -44,7 +45,7 @@ fi
 echo "Building PolyFish (Release)..."
 # --no-default-features: opt out of the macOS `metal` default, which does not
 # compile on Linux.
-$HOME/.cargo/bin/cargo build --release --bin self_play --bin polyfish --bin benchmark --no-default-features --features cuda
+$HOME/.cargo/bin/cargo build --release --bin self_play --bin polyfish --bin benchmark --bin arena --no-default-features --features cuda
 
 echo "Setup Complete! You can now run the training loop."
 

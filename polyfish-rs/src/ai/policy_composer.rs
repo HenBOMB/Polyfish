@@ -31,7 +31,14 @@ pub fn compute_move_priors(
     // The option head is now 192 slots
     let option_probs = softmax_1d(&policy.move_option).unwrap_or_else(|_| vec![1.0 / 192.0; 192]);
 
-    compute_move_priors_from_probs(&action_probs, &source_probs, &target_probs, &option_probs, legal_moves, map_size)
+    compute_move_priors_from_probs(
+        &action_probs,
+        &source_probs,
+        &target_probs,
+        &option_probs,
+        legal_moves,
+        map_size,
+    )
 }
 
 /// Same as [`compute_move_priors`] but operates on a device-free
@@ -49,7 +56,14 @@ pub fn compute_move_priors_raw(
     let target_probs = softmax(&policy.target_spatial);
     let option_probs = softmax(&policy.move_option);
 
-    compute_move_priors_from_probs(&action_probs, &source_probs, &target_probs, &option_probs, legal_moves, map_size)
+    compute_move_priors_from_probs(
+        &action_probs,
+        &source_probs,
+        &target_probs,
+        &option_probs,
+        legal_moves,
+        map_size,
+    )
 }
 
 fn compute_move_priors_from_probs(
@@ -108,7 +122,12 @@ fn compute_move_priors_from_probs(
                 .ability_type()
                 .ok()
                 .and_then(|a| DecomposedMapper::map_ability(a)),
-            MoveType::Reward => Some(191),
+            MoveType::Reward => Some(
+                mv.reward_type()
+                    .ok()
+                    .and_then(DecomposedMapper::map_reward)
+                    .unwrap_or(crate::ai::mapper::REWARD_FALLBACK_SLOT),
+            ),
             _ => None,
         };
 
@@ -151,7 +170,14 @@ pub fn compute_move_log_probs(
 
     let option_logs = log_softmax_1d(&policy.move_option).unwrap_or_else(|_| vec![-5.25; 192]);
 
-    compute_move_log_probs_from_logs(&action_logs, &source_logs, &target_logs, &option_logs, legal_moves, map_size)
+    compute_move_log_probs_from_logs(
+        &action_logs,
+        &source_logs,
+        &target_logs,
+        &option_logs,
+        legal_moves,
+        map_size,
+    )
 }
 
 /// Same as [`compute_move_log_probs`] but operates on a device-free
@@ -167,7 +193,14 @@ pub fn compute_move_log_probs_raw(
     let target_logs = log_softmax(&policy.target_spatial);
     let option_logs = log_softmax(&policy.move_option);
 
-    compute_move_log_probs_from_logs(&action_logs, &source_logs, &target_logs, &option_logs, legal_moves, map_size)
+    compute_move_log_probs_from_logs(
+        &action_logs,
+        &source_logs,
+        &target_logs,
+        &option_logs,
+        legal_moves,
+        map_size,
+    )
 }
 
 fn compute_move_log_probs_from_logs(
@@ -225,7 +258,12 @@ fn compute_move_log_probs_from_logs(
                 .ability_type()
                 .ok()
                 .and_then(|a| DecomposedMapper::map_ability(a)),
-            MoveType::Reward => Some(191),
+            MoveType::Reward => Some(
+                mv.reward_type()
+                    .ok()
+                    .and_then(DecomposedMapper::map_reward)
+                    .unwrap_or(crate::ai::mapper::REWARD_FALLBACK_SLOT),
+            ),
             _ => None,
         };
 
@@ -367,15 +405,17 @@ mod tests {
             };
 
             let tensor_priors = compute_move_priors(&row_policy, &legal_moves, map_size, true);
-            let raw_priors =
-                compute_move_priors_raw(&raw_rows[row], &legal_moves, map_size, true);
+            let raw_priors = compute_move_priors_raw(&raw_rows[row], &legal_moves, map_size, true);
             assert_eq!(tensor_priors, raw_priors, "priors mismatch at row {row}");
 
             let tensor_logs = compute_move_log_probs(&row_policy, &legal_moves, map_size);
             let raw_logs = compute_move_log_probs_raw(&raw_rows[row], &legal_moves, map_size);
             assert_eq!(tensor_logs.len(), raw_logs.len());
             for (t, r) in tensor_logs.iter().zip(raw_logs.iter()) {
-                assert!((t - r).abs() < 1e-5, "log-prob mismatch at row {row}: {t} vs {r}");
+                assert!(
+                    (t - r).abs() < 1e-5,
+                    "log-prob mismatch at row {row}: {t} vs {r}"
+                );
             }
         }
     }
