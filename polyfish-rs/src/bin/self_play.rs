@@ -819,6 +819,8 @@ fn play_single_game(
             move_option: p_option,
         };
 
+        let record_sample = !move_visits.is_empty();
+
         if let Some(m) = best_move {
             let m_type = m.move_type();
             *action_counts.entry(m_type).or_insert(0) += 1;
@@ -875,17 +877,19 @@ fn play_single_game(
             // Snapshot scores/SPT at this moment (pre-move) for the TD label.
             let (my_score_now, opp_score_now) = reward::score_snapshot(&game.state, pov);
             let (my_spt_now, opp_spt_now) = reward::spt_snapshot(&game.state, pov);
-            game_history.push(HistoryStep {
-                features: state_t,
-                policy: policy_data,
-                player_id: pov,
-                my_score: my_score_now,
-                opp_score: opp_score_now,
-                my_spt: my_spt_now,
-                opp_spt: opp_spt_now,
-                turn: game.state.settings.turn,
-                root_value,
-            });
+            if record_sample {
+                game_history.push(HistoryStep {
+                    features: state_t,
+                    policy: policy_data,
+                    player_id: pov,
+                    my_score: my_score_now,
+                    opp_score: opp_score_now,
+                    my_spt: my_spt_now,
+                    opp_spt: opp_spt_now,
+                    turn: game.state.settings.turn,
+                    root_value,
+                });
+            }
             if progress == ProgressMode::Full && move_count > 0 && move_count % 10 == 0 {
                 eprintln!(
                     "[Game {}]: Turn: {} Player: {} Move: {}",
@@ -1544,10 +1548,10 @@ fn main() -> anyhow::Result<()> {
             }
         }
     };
-    // Floor a nonzero gate output to >= 1 game this run, else small probe
-    // fractions round to zero games and the win rate silently goes stale.
+    // Floor a nonzero gate output to >= 1 mirror pair this run, else small
+    // probe fractions round to zero games and the win rate silently goes stale.
     let anchor_frac = if anchor_frac > 0.0 {
-        anchor_frac.max(1.0 / args.num_games.max(1) as f32)
+        anchor_frac.max(1.0 / args.num_games.div_ceil(2).max(1) as f32)
     } else {
         anchor_frac
     };

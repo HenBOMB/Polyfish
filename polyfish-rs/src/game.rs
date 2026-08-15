@@ -105,7 +105,12 @@ impl Game {
                 if let Some(tribes_obj) = tribes_val.as_object_mut() {
                     for unit in extracted_units {
                         if let Some(owner) = unit.get("owner").and_then(|o| o.as_i64()) {
-                            let tribe_val = tribes_obj.entry(owner.to_string()).or_insert_with(|| serde_json::json!({}));
+                            let tribe_val = tribes_obj.entry(owner.to_string()).or_insert_with(|| {
+                                serde_json::json!({
+                                    "id": owner,
+                                    "type": 0
+                                })
+                            });
                             if let Some(tribe_obj) = tribe_val.as_object_mut() {
                                 let units_arr = tribe_obj.entry("units").or_insert_with(|| serde_json::json!([]));
                                 if let Some(arr) = units_arr.as_array_mut() {

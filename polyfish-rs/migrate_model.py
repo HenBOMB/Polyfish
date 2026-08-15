@@ -19,6 +19,15 @@ def migrate_model(file_path):
     if 'v_win.weight' not in state_dict:
         print("Not a PolyZero checkpoint (no v_win.weight); nothing to migrate.")
         return
+
+    # Reject BatchNorm-era checkpoints (GroupNorm-era only)
+    bn_keys = [k for k in state_dict if 'bn1.' in k or 'bn2.' in k or 'running_mean' in k]
+    if bn_keys:
+        print("ERROR: BatchNorm-era checkpoint detected (found keys like bn1.*, bn2.*, running_mean).")
+        print("These checkpoints are incompatible with current GroupNorm-only code.")
+        print("Please retrain with a GroupNorm-compatible model (checkpoints/bn_era/ holds old ones for reference).")
+        return
+
     filters = state_dict['v_win.weight'].shape[1]
 
     migrated = False

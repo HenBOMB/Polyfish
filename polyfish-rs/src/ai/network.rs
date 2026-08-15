@@ -2,7 +2,7 @@
 // Based on the successful Python architecture
 
 use candle_core::{Module, ModuleT, Result, Tensor};
-use candle_nn::{BatchNorm, Conv2d, GroupNorm, LayerNorm, Linear, VarBuilder};
+use candle_nn::{Conv2d, GroupNorm, LayerNorm, Linear, VarBuilder};
 
 fn conv(
     in_c: usize,
@@ -18,10 +18,6 @@ fn conv(
         ..Default::default()
     };
     candle_nn::conv2d(in_c, out_c, k, config, vs)
-}
-
-fn batch_norm(c: usize, vs: VarBuilder) -> Result<BatchNorm> {
-    candle_nn::batch_norm(c, 1e-5, vs)
 }
 
 fn group_norm(c: usize, vs: VarBuilder) -> Result<GroupNorm> {

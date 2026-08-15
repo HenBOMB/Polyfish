@@ -512,18 +512,6 @@ fn main() -> anyhow::Result<()> {
                         swap,
                         panic_msg(e.as_ref())
                     );
-                    results_mutex.lock().unwrap().push(MatchResult {
-                        winner_config: 3,
-                        score_config1: 0,
-                        score_config2: 0,
-                        ns_config1: 0,
-                        moves_config1: 0,
-                        ns_config2: 0,
-                        moves_config2: 0,
-                        seed,
-                        swap,
-                        decisive: false,
-                    });
                 }
             }
 

@@ -414,6 +414,10 @@ def train(batch_size=BATCH_SIZE, epochs=EPOCHS, lr=LEARNING_RATE, chunk_size=Non
                 raise RuntimeError(f"state_dict mismatch: missing={hard_missing} unexpected={list(unexpected)}")
             if missing:
                 print(f"Checkpoint predates ownership head; initializing {missing} fresh.")
+        except RuntimeError:
+            raise
+        except FileNotFoundError:
+            print("No checkpoint found; starting from scratch.")
         except Exception as e:
             print(f"Could not load model: {e}")
             print("Starting from scratch.")

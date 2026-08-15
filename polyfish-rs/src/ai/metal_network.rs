@@ -651,10 +651,7 @@ impl MetalPolyZeroNet {
         let v_latent = graph.relu(&v_latent, None).expect("forward: relu v_fc1");
         let v_latent = self.linear(&graph, &v_latent, "v_fc2");
         let v_latent = graph.relu(&v_latent, None).expect("forward: relu v_fc2");
-        let win_raw = self.linear(&graph, &v_latent, "v_win");
-        let win = graph
-            .unary_arithmetic(UnaryArithmeticOp::Tanh, &win_raw, None)
-            .expect("forward: tanh win"); // [B, 1]
+        let win = self.linear(&graph, &v_latent, "v_win"); // [B, 1]
 
         // Compile for this fixed batch size. The `Executable` is
         // self-contained; `graph` and its intermediate `Tensor`s (including

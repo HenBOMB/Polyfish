@@ -83,19 +83,6 @@ impl TchPolyZeroNet {
         x.conv2d(w, Some(b), [1, 1], [padding, padding], [1, 1], 1)
     }
 
-    /// BatchNorm2d in eval mode: uses stored running stats (no batch stats).
-    fn batch_norm(&self, x: &Tensor, prefix: &str) -> Tensor {
-        let weight = self.get(&format!("{prefix}.weight"));
-        let bias = self.get(&format!("{prefix}.bias"));
-        let rm = self.get(&format!("{prefix}.running_mean"));
-        let rv = self.get(&format!("{prefix}.running_var"));
-        let c = weight.size()[0];
-        let shape = [1, c, 1, 1];
-        let scale = (weight / (rv + BN_EPS).sqrt()).view(shape);
-        let shift = (bias - rm * &scale.view([c])).view(shape);
-        x * scale + shift
-    }
-
     fn group_norm(&self, x: &Tensor, prefix: &str) -> Tensor {
         let weight = self.get(&format!("{prefix}.weight"));
         let bias = self.get(&format!("{prefix}.bias"));

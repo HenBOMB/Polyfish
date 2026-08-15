@@ -10,6 +10,7 @@ interface GameState {
   };
   policyDistribution?: Record<string, number>;
   mctsAnalysis?: {
+    type?: 'heuristic' | 'gumbel';
     total_iterations: number;
     evaluations: any[];
     principal_variation?: string[];

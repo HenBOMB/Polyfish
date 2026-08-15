@@ -717,7 +717,7 @@ async fn trigger_training(State(state): State<Arc<AppState>>) -> Json<Value> {
     };
 
     let child = Command::new("bash")
-        .args(["run_training_loop.sh", "-n"])
+        .args(["run_training_loop.sh", "--no-server"])
         .current_dir(".")
         .stdout(Stdio::from(log_file.try_clone().unwrap()))
         .stderr(Stdio::from(log_file))
@@ -872,12 +872,29 @@ async fn get_metrics() -> Json<Value> {
                 "p1_avg": parse_f32("p1_avg"),
                 "p2_avg": parse_f32("p2_avg"),
                 "loss": parse_f32("loss"),
+                "policy_loss": parse_f32("policy_loss"),
+                "value_loss": parse_f32("value_loss"),
+                "value_r2": parse_f32("value_r2"),
                 "avg_captures": parse_f32("avg_captures"),
+                "avg_cap_ruins": parse_f32("avg_cap_ruins"),
+                "avg_cap_villages": parse_f32("avg_cap_villages"),
+                "avg_cap_cities": parse_f32("avg_cap_cities"),
+                "avg_cap_capitals": parse_f32("avg_cap_capitals"),
                 "avg_harvests": parse_f32("avg_harvests"),
                 "avg_builds": parse_f32("avg_builds"),
                 "avg_research": parse_f32("avg_research"),
                 "avg_attacks": parse_f32("avg_attacks"),
                 "avg_ability": parse_f32("avg_ability"),
+                "avg_spt_t0": parse_f32("avg_spt_t0"),
+                "avg_spt_t5": parse_f32("avg_spt_t5"),
+                "avg_spt_t10": parse_f32("avg_spt_t10"),
+                "avg_spt_t15": parse_f32("avg_spt_t15"),
+                "avg_spt_t20": parse_f32("avg_spt_t20"),
+                "avg_spt_t25": parse_f32("avg_spt_t25"),
+                "avg_spt_t30": parse_f32("avg_spt_t30"),
+                "villages_t2c_first": parse_f32("villages_t2c_first"),
+                "villages_t2c_p50": parse_f32("villages_t2c_p50"),
+                "ruins_t2c_p50": parse_f32("ruins_t2c_p50"),
                 "avg_steps": parse_f32("avg_moves"),
             });
             metrics.push(obj);
