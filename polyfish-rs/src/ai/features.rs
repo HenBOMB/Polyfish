@@ -670,7 +670,7 @@ pub fn state_to_cpu_features(state: &GameState, perspective: PlayerId) -> Result
             }
 
             if !visible_enemy_tiles.contains(&idx) {
-                let age = current_turn - mem_unit.last_seen_turn;
+                let age = state.settings.turn - mem_unit.last_seen_turn;
                 if age >= 0 {
                     let decay = crate::memory::MEM_DECAY.powi(age);
                     set_feat(&mut data, CH_MEM_ENEMY_SEEN, x, y, decay);
