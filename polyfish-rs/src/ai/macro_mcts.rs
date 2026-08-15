@@ -186,6 +186,10 @@ pub struct MacroMctsStats {
     /// perspective — the turn-level analogue of Gumbel's root value, used as
     /// the TD bootstrap. `None` when the winning edge was never backed up.
     pub root_q: Option<f32>,
+    /// Spread (max − min) of the backed-up edge means over visited root
+    /// edges — the value difference the tree must resolve to prefer one
+    /// directive over another. `None` when fewer than two edges were backed.
+    pub root_q_spread: Option<f32>,
 }
 
 pub struct MacroMctsSearch<'a> {
@@ -307,6 +311,17 @@ impl<'a> MacroMctsSearch<'a> {
         };
         search.stats.root_q = if root.edge_visits[best] > 0.0 {
             Some((root.edge_values[best] / root.edge_visits[best]).clamp(-1.0, 1.0))
+        } else {
+            None
+        };
+        let backed: Vec<f32> = (0..root.candidates.len())
+            .filter(|&i| root.edge_visits[i] > 0.0)
+            .map(|i| root.edge_values[i] / root.edge_visits[i])
+            .collect();
+        search.stats.root_q_spread = if backed.len() > 1 {
+            let hi = backed.iter().cloned().fold(f32::MIN, f32::max);
+            let lo = backed.iter().cloned().fold(f32::MAX, f32::min);
+            Some(hi - lo)
         } else {
             None
         };
@@ -521,6 +536,61 @@ fn fog_order_dead(state: &crate::states::GameState, t: i32, pov: PlayerId) -> bo
         && !crate::ai::oracle_macro::retakeable_village(state, t, pov)
 }
 
+/// EXP_ELO_047 Phase A. One JSONL row per planned root: the same state read
+/// under the two paintings that training and inference disagree about, plus
+/// the antisymmetry check the Phase B negation depends on. Env-gated
+/// (`POLYFISH_PAINT_PROBE=<path>`); no cost and no rows when unset.
+fn paint_probe(
+    eval: &crate::ai::eval_server::Evaluator,
+    state: &crate::states::GameState,
+    pov: PlayerId,
+    scripted: &MacroGoal,
+    committed: Option<&MacroGoal>,
+    diverged: bool,
+    stats: &MacroMctsStats,
+) {
+    let Ok(path) = std::env::var("POLYFISH_PAINT_PROBE") else {
+        return;
+    };
+    let v = |p: PlayerId, g: &MacroGoal| -> Option<f32> {
+        crate::ai::features::state_to_cpu_features_goal(state, p, None, Some(g))
+            .ok()
+            .and_then(|f| eval.evaluate(vec![f]).first().map(|r| r.0))
+    };
+    let opp: PlayerId = if pov == 1 { 2 } else { 1 };
+    let opp_scripted = scripted_goal(state, opp, 0);
+    let (Some(v_scripted), Some(v_committed), Some(v_opp)) = (
+        v(pov, scripted),
+        v(pov, committed.unwrap_or(scripted)),
+        v(opp, &opp_scripted),
+    ) else {
+        return;
+    };
+    // Control for P3: the heuristic on the SAME (fogged) states. Fog alone
+    // makes a view non-zero-sum for any evaluator, so the net's asymmetry is
+    // only the net's insofar as it exceeds this.
+    let h_pov = crate::ai::evaluate_state(state, pov);
+    let h_opp = crate::ai::evaluate_state(state, opp);
+    let f = |x: Option<f32>| x.map(|n| format!("{n:.5}")).unwrap_or("null".into());
+    let row = format!(
+        "{{\"turn\":{},\"pov\":{},\"diverged\":{},\"v_scripted\":{:.5},\"v_committed\":{:.5},\"v_opp\":{:.5},\"h_pov\":{:.5},\"h_opp\":{:.5},\"q_spread\":{},\"q_best\":{}}}\n",
+        state.settings.turn,
+        pov,
+        diverged,
+        v_scripted,
+        v_committed,
+        v_opp,
+        h_pov,
+        h_opp,
+        f(stats.root_q_spread),
+        f(stats.root_q),
+    );
+    use std::io::Write;
+    if let Ok(mut fh) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = fh.write_all(row.as_bytes());
+    }
+}
+
 impl<'a> MacroMctsAgent<'a> {
     pub fn new(evaluator: &'a crate::ai::eval_server::Evaluator, params: MacroParams) -> Self {
         Self {
@@ -670,6 +740,15 @@ impl<'a> MacroMctsAgent<'a> {
             }
             self.last_belief_target = belief_target;
             self.turn_goal = candidates.into_iter().nth(pick);
+            paint_probe(
+                self.evaluator,
+                &view0.state,
+                pov,
+                &base,
+                self.turn_goal.as_ref(),
+                pick != 0,
+                &self.last_stats,
+            );
             // EXP_ELO_038: remember what we chose — tomorrow's ballot
             // includes it.
             if let Some(g) = &self.turn_goal {

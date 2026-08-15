@@ -813,6 +813,46 @@ fn play_match(
         };
         let dt = t0.elapsed().as_nanos() as u64;
 
+        // Stage 4, the macro path's own trace: `ply <- order <- playstyle`.
+        // The scripted emitter above is gated on `--goal-script`, which arena
+        // refuses to combine with a non-Gumbel backend — so it never fires
+        // here. Same row schema, so downstream analysis stays one parser;
+        // filled AFTER the search because the macro agent commits its lane and
+        // directive during it.
+        if dump_stats_dir.is_some() && current_pid == model_player {
+            let model_agent = if swap { &agent_p2 } else { &agent_p1 };
+            if let Some(ps) = model_agent.macro_playstyle() {
+                let goal = model_agent.macro_committed_goal();
+                let tribe = game.state.tribes.get(&model_player);
+                pending_goal = Some(serde_json::json!({
+                    "turn": game.state.settings.turn,
+                    "source": "macro",
+                    "playstyle": ps.archetype.map(|a| format!("{a:?}")),
+                    "playstyle_committed_turn": ps.committed_turn,
+                    "playstyle_pivots_used": ps.pivots_used,
+                    "lane_blocked_turns": ps.lane_blocked_turns,
+                    // oracle_macro::LANE_ORDER: RiderRoads, ArcherLine, ForgeGiants.
+                    "playstyle_scores": ps.last_scores,
+                    "stance": goal.map(|g| format!("{:?}", g.stance)),
+                    "save_target": goal.and_then(|g| g.save_target.as_ref().map(|l| l.cost)),
+                    "save_lane": goal.and_then(|g| {
+                        g.save_target.as_ref().map(|l| format!("{:?}+{:?}", l.tech, l.structure))
+                    }),
+                    "orders": goal.map(|g| {
+                        g.orders
+                            .iter()
+                            .map(|(k, i)| serde_json::json!([format!("{k:?}"), i]))
+                            .collect::<Vec<_>>()
+                    }),
+                    "stars": tribe.map(|t| t.stars),
+                    "spt": tribe.map(|t| polyfish::functions::get_tribe_spt(&game.state, t)),
+                    "cities": tribe.map(|t| t.cities.len()),
+                    "techs_bought": techs_bought,
+                    "tier3_bought": tier3_bought,
+                }));
+            }
+        }
+
         if let Some(mut ctx) = armed_ctx {
             let a = if swap { &mut agent_p2 } else { &mut agent_p1 };
             if let SearchAgent::Gumbel(g) = a {

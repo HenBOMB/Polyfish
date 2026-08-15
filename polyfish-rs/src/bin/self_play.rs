@@ -507,6 +507,10 @@ fn dump_turn_state(
     pov: PlayerId,
     open_villages: &std::collections::HashSet<i32>,
     arch: &polyfish::ai::oracle_macro::ArchetypeState,
+    // The macro agent's OWN Tier-1 state when this seat searches with
+    // macro-mcts — a different `ArchetypeState` than the script path's, and
+    // the one that drove the ply, so it wins when present.
+    macro_arch: Option<&polyfish::ai::oracle_macro::ArchetypeState>,
     goal: Option<&polyfish::ai::oracle_macro::MacroGoal>,
     commit: &polyfish::ai::oracle_macro::StanceCommit,
     plans: &PlanTracker,
@@ -539,10 +543,27 @@ fn dump_turn_state(
             })
         })
         .collect();
+    // Stage 4 attribution: `ply <- order <- playstyle`. The lane is the root
+    // cause, the orders are the middle tier, and both are recorded from the
+    // state that actually drove this ply (dumped post-search, pre-move).
+    let ps = macro_arch.unwrap_or(arch);
     let rec = json!({
         "game": game_idx,
         "turn": state.settings.turn,
         "player": pov,
+        "playstyle": ps.archetype.map(|a| format!("{a:?}")),
+        "playstyle_source": if macro_arch.is_some() { "macro" } else { "script" },
+        "playstyle_committed_turn": ps.committed_turn,
+        "playstyle_pivots_used": ps.pivots_used,
+        "lane_blocked_turns": ps.lane_blocked_turns,
+        // In `oracle_macro::LANE_ORDER` order: RiderRoads, ArcherLine, ForgeGiants.
+        "playstyle_scores": ps.last_scores,
+        "orders": goal.map(|g| {
+            g.orders
+                .iter()
+                .map(|(kind, t)| json!({"kind": format!("{kind:?}"), "target": t}))
+                .collect::<Vec<_>>()
+        }),
         "cities": cities,
         "city_count": cities.len(),
         "city_detail": city_detail,
@@ -1675,27 +1696,6 @@ fn play_single_game(
             None
         };
 
-        // Dump the start-of-player-turn snapshot once per (turn, pov), before
-        // any move that turn mutates the state.
-        if let Some(f) = turn_dump_file.as_mut() {
-            let key = (game.state.settings.turn, pov);
-            if last_dump_key != Some(key) {
-                let seat = ((pov - 1) as usize).min(1);
-                dump_turn_state(
-                    f,
-                    game_idx,
-                    &game.state,
-                    pov,
-                    &open_villages,
-                    &archetype_states[seat],
-                    macro_goal.as_ref(),
-                    &stance_commits[seat],
-                    &plan_trackers[seat],
-                    tier3_bought[seat],
-                );
-                last_dump_key = Some(key);
-            }
-        }
 
         // Tempo curve: sample the acting player once per (turn, pov), pre-move.
         let tempo_key = (game.state.settings.turn, pov);
@@ -1886,6 +1886,30 @@ fn play_single_game(
         } else {
             None
         };
+
+        // Stage 4: one snapshot per (turn, pov), taken AFTER the search and
+        // before the move is applied — the only point where the state is
+        // still pre-move but the lane and directive that drove the ply are
+        // both committed. A turn-start dump would report last turn's lane.
+        if let Some(f) = turn_dump_file.as_mut() {
+            let key = (game.state.settings.turn, pov);
+            if last_dump_key != Some(key) {
+                dump_turn_state(
+                    f,
+                    game_idx,
+                    &game.state,
+                    pov,
+                    &open_villages,
+                    &archetype_states[seat],
+                    current_agent.macro_committed_playstyle(),
+                    feat_goal.as_ref(),
+                    &stance_commits[seat],
+                    &plan_trackers[seat],
+                    tier3_bought[seat],
+                );
+                last_dump_key = Some(key);
+            }
+        }
 
         if reward_choice_ply {
             if let Some(trace) = current_agent.take_trace() {

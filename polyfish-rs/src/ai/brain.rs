@@ -225,6 +225,14 @@ impl<'a> SearchAgent<'a> {
         }
     }
 
+    /// Tier-2: the directive the macro strategist committed for this turn.
+    pub fn macro_committed_goal(&self) -> Option<&crate::ai::oracle_macro::MacroGoal> {
+        match self {
+            SearchAgent::MacroMcts(a) => a.committed_goal(),
+            _ => None,
+        }
+    }
+
     pub fn depth_stats(&self) -> Option<(u64, u64, u32, u64, u64, u64)> {
         match self {
             SearchAgent::Gumbel(a) => Some(a.depth_stats()),
