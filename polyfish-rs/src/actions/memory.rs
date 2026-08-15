@@ -86,7 +86,11 @@ pub fn observe_unit_step(
             if let Some(g_idx) = ghost {
                 tribe.enemy_ghosts.insert(
                     g_idx,
-                    GhostRecord { unit_type: cur_type, owner: unit_owner, turn },
+                    GhostRecord {
+                        unit_type: cur_type,
+                        owner: unit_owner,
+                        turn,
+                    },
                 );
             }
         }
@@ -113,7 +117,11 @@ pub fn observe_attacker(
         if from_fog {
             tribe.enemy_ghosts.insert(
                 attacker_tile,
-                GhostRecord { unit_type: attacker_type, owner: attacker_owner, turn },
+                GhostRecord {
+                    unit_type: attacker_type,
+                    owner: attacker_owner,
+                    turn,
+                },
             );
         }
     }

@@ -21,16 +21,12 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
         MoveType::Reward => score_reward(state, mv),
 
         MoveType::Capture => {
-            // Above the max Attack score (kill + territory = 110): standing on
-            // a capturable, banking it beats any trade — measured on replays,
-            // units in contested-village fights attacked every turn instead of
-            // capturing, costing 2-3 turns on the first city.
             if let Ok(idx) = mv.source_idx() {
                 if let Some(s) = get_structure_at(state, idx as i32) {
                     match s.structure_type {
-                        StructureType::Ruin => 115.2,
-                        StructureType::Village => 115.0,
-                        _ => 115.5, // Capital or City
+                        StructureType::Ruin => 100.0,
+                        StructureType::Village => 99.8,
+                        _ => 100.1, // Capital or City
                     }
                 } else {
                     // Likely starfish
@@ -59,9 +55,11 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
             if let (Ok(src), Ok(target)) = (mv.source_idx(), mv.target_idx()) {
                 if let Some(preview) = calculate_combat_preview(state, src as i32, target as i32) {
                     if preview.defender_dies {
-                        95.0 + territory_bonus // Rivals a capture: removing the
-                        // opponent's ability to contest ground is nearly as
-                        // valuable as taking ground.
+                        // Must stay below both an actual Capture (100.1) and
+                        // stepping onto an enemy city (96.0): killing a defender
+                        // helps take/hold ground but must never outrank seizing
+                        // the objective itself. Max here is 75 + 15 = 90.
+                        75.0 + territory_bonus
                     } else if preview.attacker_dies {
                         1.0 // Suicide is very low priority regardless of context
                     } else if preview.damage_to_defender > 5.0 {
@@ -455,7 +453,17 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                             if current + pop_gain < needed {
                                 score -= 4.0; // Doesn't finish level
                             } else {
-                                score += 5.0; // Finishes level!
+                                // Instant level-up: decisive so completing growth
+                                // beats summons/idle steps, scaled by what the new
+                                // level unlocks (2: Workshop/Explorer, 3: Walls/
+                                // Resources, 4: Pop/Border, 5+: Park/SuperUnit).
+                                let milestone = match city.level + 1 {
+                                    2 => 4.0,
+                                    3 => 3.0,
+                                    4 => 3.0,
+                                    _ => 6.0,
+                                };
+                                score += 15.0 + milestone;
                             }
                         }
                     }
@@ -483,14 +491,22 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                             | StructureType::Village
                             | StructureType::Lighthouse => score += 43.0,
                             _ => {
-                                // Enemy city potentially
-                                // TODO: Doesnt check for peace treaty
-                                if tile.owner != player_id && tile.owner != 0 {
-                                    score += 50.0;
+                                // Enemy city/capital: stepping here is the
+                                // capture setup for the win-condition tile.
+                                // Fixed priority just under an actual Capture
+                                // (100.1) and above any attack (<=90), so the
+                                // agent seizes the objective instead of
+                                if crate::functions::is_enemy_capital(state, target_idx.try_into().unwrap(), player_id) {
+                                    return 99.0;
+                                }
+                                if crate::functions::is_enemy_city(state, target_idx.try_into().unwrap(), player_id) {
+                                    return 96.0;
                                 }
                             }
                         }
                     }
+
+                    let adj = crate::functions::get_adjacent_indices(state, target_idx as i32, 1);
 
                     // `openness` = fraction of a wider (radius-3) window around
                     // the destination that's still unexplored. Off-map tiles
@@ -500,30 +516,40 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                     // open interior region.
                     let openness = regional_openness(state, target_idx as i32, player_id, 3);
 
+                    // Exploration still matters (lighthouses, edge ruins), but
+                    // scaled by openness rather than a flat per-tile count —
+                    // previously uncapped (up to +16) and reliably pulled units
+                    // toward unexplored map edges over contested ground.
+                    score += openness * 6.0;
+
+                    // Resources on open, unowned ground are a proxy for a
+                    // nearby village — pulls movement toward likely villages
+                    // even under FOW, where the explicit gradient below can't
+                    // see anything yet. Also scaled by `openness`: a resource
+                    // sitting in an already-fully-explored dead end (e.g. a
+                    // corner near a lighthouse) has nothing left to discover by
+                    // chasing it and shouldn't keep exerting a pull once the
+                    // fog around it is gone — otherwise, since Harvest usually
+                    // isn't legal there (out of any city's territory), the unit
+                    // can perceive the resource forever without ever being able
+                    // to resolve it, and ends up oscillating between the 2-3
+                    // tiles adjacent to it.
+                    let mut resource_bonus = 0.0f32;
+                    for &n_idx in &adj {
+                        if let Some(tile) = state.tiles.get(&n_idx) {
+                            if tile.owner == 0
+                                && crate::functions::get_resource_at(state, n_idx).is_some()
+                            {
+                                resource_bonus += 2.0;
+                            }
+                        }
+                    }
+                    score += resource_bonus.min(6.0) * openness;
+
                     let map_size = state.map_size();
                     let target_coords = Coords::from_index(target_idx as i32, map_size);
                     if let Ok(src_idx) = mv.source_idx() {
                         let src_coords = Coords::from_index(src_idx as i32, map_size);
-
-                        let capturable =
-                            nearest_visible_capturable(state, player_id, src_coords);
-                        // On final approach (visible capturable within 2), damp the
-                        // curiosity terms: measured on replays, reveal-chasing beat
-                        // the closing gradient in 85% of d=2 episodes — the unit
-                        // veered into fog at the village doorstep. Curiosity can
-                        // wait one turn.
-                        let approaching = capturable.map_or(false, |(_, d)| d <= 2);
-                        let (openness_w, reveal_w) = if approaching {
-                            (2.0, 1.0)
-                        } else {
-                            (6.0, 4.0)
-                        };
-
-                        // Exploration still matters (lighthouses, edge ruins), but
-                        // scaled by openness rather than a flat per-tile count —
-                        // previously uncapped (up to +16) and reliably pulled units
-                        // toward unexplored map edges over contested ground.
-                        score += openness * openness_w;
 
                         // Prefer steps that actually reveal fog over sidesteps that
                         // make equal progress toward a village or resource.
@@ -533,36 +559,18 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                             src_idx as i32,
                             target_idx as i32,
                         );
-                        score += newly_revealed as f32 * reveal_w;
+                        score += newly_revealed as f32 * 4.0;
 
                         // Bonus for moving closer to the nearest explored, uncaptured village/ruin.
-                        // Flat bonus if closing distance; urgency steep enough near the
-                        // target that no curiosity term can outbid the final approach.
-                        if let Some((nearest_coords, src_dist)) = capturable {
-                            let dest_dist = nearest_coords.chebyshev_distance_to(&target_coords);
+                        // Flat bonus if closing distance; additional urgency as target is approached.
+                        if let Some((nearest_coords, src_dist)) =
+                            nearest_visible_capturable(state, player_id, src_coords)
+                        {
+                            let dest_dist = nearest_coords.distance_to(&target_coords);
                             if dest_dist < src_dist {
                                 score += 20.0;
                             }
-                            score += (18.0 - 4.0 * dest_dist as f32).max(0.0);
-                        } else if let Some((res_coords, res_src_dist)) =
-                            nearest_frontier_resource(state, player_id, src_coords)
-                        {
-                            // No capturable in sight: close on the nearest explored
-                            // resource with fog still around it — the spawn-time
-                            // "border fruit" hint that a village ring is spilling
-                            // into vision. Scaled by the fog left around the
-                            // resource, else a unit whose sight can't reach the
-                            // village parks on the resource forever; once its area
-                            // is swept the pull dies and fog/center take back over.
-                            let res_openness =
-                                regional_openness(state, res_coords.idx, player_id, 2);
-                            let dest_dist = res_coords.chebyshev_distance_to(&target_coords);
-                            let mut pull = 0.0;
-                            if dest_dist < res_src_dist {
-                                pull += 14.0;
-                            }
-                            pull += (8.0 - 1.5 * dest_dist as f32).max(0.0);
-                            score += pull * res_openness;
+                            score += (12.0 - 2.0 * dest_dist as f32).max(0.0);
                         }
                     }
 
@@ -822,7 +830,10 @@ fn is_territory_relevant(state: &crate::states::GameState, target_idx: i32, trib
             return true;
         }
         if let Some(s) = get_structure_at(state, idx) {
-            if matches!(s.structure_type, StructureType::Village | StructureType::Ruin) {
+            if matches!(
+                s.structure_type,
+                StructureType::Village | StructureType::Ruin
+            ) {
                 return true;
             }
         }
@@ -831,10 +842,9 @@ fn is_territory_relevant(state: &crate::states::GameState, target_idx: i32, trib
 }
 
 /// Returns (Coords, dist) to the nearest visible unclaimed Village/Ruin for `tribe_id`,
-/// or None if none. Dist is Chebyshev — units move diagonally, so Manhattan
-/// overstates reach and misses genuinely-closing diagonal steps.
+/// or None if none. Returns coordinates for progress comparison across positions.
 /// Full scan; called once per Step at MCTS root.
-pub(crate) fn nearest_visible_capturable(
+fn nearest_visible_capturable(
     state: &crate::states::GameState,
     tribe_id: i32,
     from: Coords,
@@ -843,7 +853,10 @@ pub(crate) fn nearest_visible_capturable(
     let mut best: Option<(Coords, i32)> = None;
     for (&idx, structure) in state.structures.iter() {
         let Some(s) = structure else { continue };
-        if !matches!(s.structure_type, StructureType::Village | StructureType::Ruin) {
+        if !matches!(
+            s.structure_type,
+            StructureType::Village | StructureType::Ruin
+        ) {
             continue;
         }
         let Some(tile) = state.tiles.get(&idx) else {
@@ -853,52 +866,7 @@ pub(crate) fn nearest_visible_capturable(
             continue;
         }
         let coords = Coords::from_index(idx, map_size);
-        let dist = coords.chebyshev_distance_to(&from);
-        if best.map_or(true, |(_, b)| dist < b) {
-            best = Some((coords, dist));
-        }
-    }
-    best
-}
-
-/// Nearest explored, unowned resource that still has unexplored tiles within
-/// Chebyshev 2 — mapgen spawns resources only inside a village/capital ring,
-/// so a resource at the fog frontier marks where a hidden village may sit
-/// (the "border fruit" a human steers toward at spawn). A fully-swept
-/// resource carries no information. Starfish excluded (open-water spawns,
-/// unrelated to villages). Dist is Chebyshev.
-pub(crate) fn nearest_frontier_resource(
-    state: &crate::states::GameState,
-    tribe_id: i32,
-    from: Coords,
-) -> Option<(Coords, i32)> {
-    let map_size = state.map_size();
-    let mut best: Option<(Coords, i32)> = None;
-    for (&idx, resource) in state.resources.iter() {
-        let Some(r) = resource else { continue };
-        if r.resource_type == crate::types::ResourceType::Starfish {
-            continue;
-        }
-        let Some(tile) = state.tiles.get(&idx) else {
-            continue;
-        };
-        if tile.owner != 0 || !tile.explorers.contains(&tribe_id) {
-            continue;
-        }
-        // A hidden generator village must sit on an unexplored tile within 2.
-        let has_fog_within_2 = crate::functions::get_square_indices(idx, 2, map_size)
-            .into_iter()
-            .any(|n| {
-                state
-                    .tiles
-                    .get(&n)
-                    .map_or(false, |t| !t.explorers.contains(&tribe_id))
-            });
-        if !has_fog_within_2 {
-            continue;
-        }
-        let coords = Coords::from_index(idx, map_size);
-        let dist = coords.chebyshev_distance_to(&from);
+        let dist = coords.distance_to(&from);
         if best.map_or(true, |(_, b)| dist < b) {
             best = Some((coords, dist));
         }
@@ -1017,88 +985,6 @@ mod tests {
     use crate::states::{ResourceState, TileState, TribeState};
     use crate::types::{ResourceType, TribeType, UnitType};
 
-    fn explored_field_state(player_id: i32) -> crate::states::GameState {
-        let mut state = crate::states::GameState::default();
-        state.settings.size = 11;
-        state.settings._fow = true;
-        state.settings.current_player_turn_id = player_id;
-        let mut tribe = TribeState::default();
-        tribe.id = player_id;
-        tribe.tribe_type = TribeType::Imperius;
-        state.tribes.insert(player_id, tribe);
-        for i in 0..121 {
-            let mut tile = TileState::default();
-            tile.terrain_type = TerrainType::Field;
-            tile.explorers.insert(player_id);
-            state.tiles.insert(i, tile);
-        }
-        state
-    }
-
-    #[test]
-    fn frontier_resource_needs_fog_within_two() {
-        let player_id = 1;
-        let mut state = explored_field_state(player_id);
-        let from = Coords::from_index(5 * 11 + 5, 11);
-        let fruit_idx = 2 * 11 + 3;
-        state.resources.insert(
-            fruit_idx,
-            Some(ResourceState {
-                resource_type: ResourceType::Fruit,
-            }),
-        );
-
-        // Fully-explored surroundings: no hidden village possible, no beacon.
-        assert!(nearest_frontier_resource(&state, player_id, from).is_none());
-
-        // Fog within 2 of the fruit: a village could hide there — beacon fires.
-        let fog_idx = 0 * 11 + 3;
-        state
-            .tiles
-            .get_mut(&fog_idx)
-            .unwrap()
-            .explorers
-            .remove(&player_id);
-        assert_eq!(
-            nearest_frontier_resource(&state, player_id, from).map(|(c, _)| c.idx),
-            Some(fruit_idx)
-        );
-
-        // A resource the player hasn't explored is invisible to the beacon.
-        state
-            .tiles
-            .get_mut(&fruit_idx)
-            .unwrap()
-            .explorers
-            .remove(&player_id);
-        assert!(nearest_frontier_resource(&state, player_id, from).is_none());
-    }
-
-    #[test]
-    fn starfish_and_owned_resources_are_not_beacons() {
-        let player_id = 1;
-        let mut state = explored_field_state(player_id);
-        let from = Coords::from_index(5 * 11 + 5, 11);
-
-        // Both resources have fog within 2, so only type/ownership excludes them.
-        state.resources.insert(
-            30,
-            Some(ResourceState {
-                resource_type: ResourceType::Starfish,
-            }),
-        );
-        state.resources.insert(
-            40,
-            Some(ResourceState {
-                resource_type: ResourceType::Game,
-            }),
-        );
-        state.tiles.get_mut(&8).unwrap().explorers.remove(&player_id);
-        state.tiles.get_mut(&18).unwrap().explorers.remove(&player_id);
-        state.tiles.get_mut(&40).unwrap().owner = 2;
-        assert!(nearest_frontier_resource(&state, player_id, from).is_none());
-    }
-
     #[test]
     fn test_basic_ordering() {
         let game = Game::new();
@@ -1133,7 +1019,12 @@ mod tests {
         for x in 0..3 {
             for y in 4..7 {
                 let idx = y * 11 + x;
-                state.tiles.get_mut(&idx).unwrap().explorers.remove(&player_id);
+                state
+                    .tiles
+                    .get_mut(&idx)
+                    .unwrap()
+                    .explorers
+                    .remove(&player_id);
             }
         }
 

@@ -267,7 +267,12 @@ mod tests {
         // never under-allocate when simulations are sufficient.
         let r = sequence_of_considered_visits(8, 64);
         let total: usize = r.iter().map(|(_, c, v)| c * v).sum();
-        assert!(total >= 64, "under-allocated: total={} rounds={:?}", total, r);
+        assert!(
+            total >= 64,
+            "under-allocated: total={} rounds={:?}",
+            total,
+            r
+        );
         // First round considers k, last round considers 2.
         assert_eq!(r.first().unwrap().1, 8);
         assert_eq!(r.last().unwrap().1, 2);

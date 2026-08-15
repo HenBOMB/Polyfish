@@ -39,6 +39,10 @@ pub const OFFSET_STRUCTURES: usize = 0;
 pub const OFFSET_UNITS: usize = 48;
 pub const OFFSET_TECHS: usize = 112;
 pub const OFFSET_ABILITIES: usize = 160;
+// Abilities only use 160..=180 (21 variants), so rewards fit in the same head.
+pub const OFFSET_REWARDS: usize = 181;
+// Legacy catch-all: pre-reward-slot data mapped every reward here.
+pub const REWARD_FALLBACK_SLOT: usize = 191;
 
 static STRUCTURE_MAP: LazyLock<HashMap<StructureType, usize>> = LazyLock::new(|| {
     StructureType::iter()
@@ -112,7 +116,12 @@ impl DecomposedMapper {
             MoveType::Summon => m.unit_type().ok().and_then(|u| Self::map_unit(u)),
             MoveType::Research => m.tech_type().ok().and_then(|t| Self::map_tech(t)),
             MoveType::Ability => m.ability_type().ok().and_then(|a| Self::map_ability(a)),
-            MoveType::Reward => Some(191), // Last slot for generic rewards
+            MoveType::Reward => Some(
+                m.reward_type()
+                    .ok()
+                    .and_then(Self::map_reward)
+                    .unwrap_or(REWARD_FALLBACK_SLOT),
+            ),
             // Harvesting / Capturing does not require a target type
             _ => None,
         };
@@ -143,7 +152,11 @@ impl DecomposedMapper {
             MoveType::Summon => mv.unit_type.and_then(|u| Self::map_unit(u)),
             MoveType::Research => mv.tech_type.and_then(|t| Self::map_tech(t)),
             MoveType::Ability => mv.ability_type.and_then(|a| Self::map_ability(a)),
-            MoveType::Reward => Some(191),
+            MoveType::Reward => Some(
+                mv.reward_type
+                    .and_then(Self::map_reward)
+                    .unwrap_or(REWARD_FALLBACK_SLOT),
+            ),
             _ => None,
         };
 
@@ -205,6 +218,25 @@ impl DecomposedMapper {
             }
             OFFSET_TECHS + i
         })
+    }
+
+    /// Explicit slots (not enum-iteration order) so the mapping stays stable
+    /// even if variants are reordered. Each city-reward choice gets its own
+    /// option-head slot — before this, every reward shared slot 191 and the
+    /// policy could not express Workshop-vs-Explorer etc. at all.
+    pub fn map_reward(r: CityRewardType) -> Option<usize> {
+        let i = match r {
+            CityRewardType::None => return None,
+            CityRewardType::CityWall => 0,
+            CityRewardType::Park => 1,
+            CityRewardType::Workshop => 2,
+            CityRewardType::Explorer => 3,
+            CityRewardType::BorderGrowth => 4,
+            CityRewardType::SuperUnit => 5,
+            CityRewardType::Resources => 6,
+            CityRewardType::PopGrowth => 7,
+        };
+        Some(OFFSET_REWARDS + i)
     }
 
     pub fn map_ability(a: AbilityType) -> Option<usize> {
