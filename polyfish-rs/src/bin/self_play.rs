@@ -376,6 +376,9 @@ struct TracedDecision {
 #[allow(clippy::too_many_arguments)]
 fn dump_failed_game(
     dir: &str,
+    // File-name stem: "failed" for the zero-capture filter, "game" for a
+    // plain observability dump — the name should not claim a verdict.
+    prefix: &str,
     iteration: usize,
     game_idx: usize,
     seed: i64,
@@ -392,7 +395,7 @@ fn dump_failed_game(
         eprintln!("[dump-failed] failed to create {}: {e}", dir.display());
         return;
     }
-    let base = format!("failed_iter{iteration}_game{game_idx}_seed{seed}");
+    let base = format!("{prefix}_iter{iteration}_game{game_idx}_seed{seed}");
     match serde_json::to_vec_pretty(recap) {
         Ok(bytes) => {
             let path = dir.join(format!("{base}.replay.json"));
@@ -1336,6 +1339,7 @@ fn play_single_game(
     trace_max: usize,
     trace_counter: &AtomicUsize,
     dump_failed_dir: Option<&str>,
+    dump_games_dir: Option<&str>,
     dump_turn_states: Option<&str>,
     dump_city_rewards: Option<&str>,
     dump_star_spend: Option<&str>,
@@ -1416,7 +1420,7 @@ fn play_single_game(
 
     // --dump-failed-dir: trace every decision; the log is written out only
     // if the game ends with zero village captures.
-    let trace_all = dump_failed_dir.is_some();
+    let trace_all = dump_failed_dir.is_some() || dump_games_dir.is_some();
     let mut decision_log: Vec<TracedDecision> = Vec::new();
 
     // --dump-turn-states: one JSONL file per game, one record per player-turn
@@ -2725,10 +2729,27 @@ fn play_single_game(
         game_state: initial_state,
         turns: group_recap(flat_recap),
     };
+    if let Some(dir) = dump_games_dir {
+        dump_failed_game(
+            dir,
+            "game",
+            iteration,
+            game_idx,
+            seed,
+            &tribes,
+            backend1,
+            backend2,
+            max_turns,
+            &scores,
+            &recap,
+            &decision_log,
+        );
+    }
     if let Some(dir) = dump_failed_dir {
         if village_capture_turns.is_empty() {
             dump_failed_game(
                 dir,
+                "failed",
                 iteration,
                 game_idx,
                 seed,
@@ -3139,6 +3160,21 @@ fn main() -> anyhow::Result<()> {
         #[arg(long)]
         dump_failed_dir: Option<String>,
 
+        /// Observability: dump EVERY game into this dir, not just the
+        /// zero-capture ones — <base>.replay.json (watcher-loadable) plus
+        /// <base>.decisions.json. Same machinery as --dump-failed-dir, no
+        /// capture filter. Forces fresh root builds (tree reuse off) and
+        /// writes a lot: use with a handful of games.
+        #[arg(long)]
+        dump_games_dir: Option<String>,
+
+        /// Pin the Greedy anchor to this seat (1 or 2) instead of
+        /// alternating by game ordinal. Lets a debug run put the NET in a
+        /// chosen seat, and therefore on a chosen tribe (--tribe1/--tribe2
+        /// are seat-keyed). Ignored unless --anchor-frac > 0.
+        #[arg(long)]
+        anchor_seat: Option<u8>,
+
         /// Trajectory diagnostics: append one JSON record per player-turn
         /// (at turn start, before any moves) to <dir>/game<idx>.jsonl — the
         /// acting player's owned cities, FOW-visible uncaptured villages, and
@@ -3495,8 +3531,15 @@ fn main() -> anyhow::Result<()> {
                     // rollout noise drowned the ordering gradient. Greedy is also
                     // the exact distribution blend_heuristic_prior injects into the
                     // net's root, so anchor data and search priors agree.
+                    // --anchor-seat pins the Greedy seat; otherwise it
+                    // alternates so neither seat accumulates a side bias.
+                    let anchor_first = match args.anchor_seat {
+                        Some(1) => true,
+                        Some(2) => false,
+                        _ => anchor_ordinal % 2 == 0,
+                    };
                     let (backend_seat1, backend_seat2) = if is_anchor {
-                        if anchor_ordinal % 2 == 0 {
+                        if anchor_first {
                             (SearchBackend::Greedy, backend)
                         } else {
                             (backend, SearchBackend::Greedy)
@@ -3510,7 +3553,7 @@ fn main() -> anyhow::Result<()> {
                     // contested population), "anchor" (Greedy reference
                     // curve), "opponent" (league checkpoint seat).
                     let seat_roles: [&'static str; 2] = if is_anchor {
-                        if anchor_ordinal % 2 == 0 {
+                        if anchor_first {
                             ["anchor", "model_vs_anchor"]
                         } else {
                             ["model_vs_anchor", "anchor"]
@@ -3559,6 +3602,7 @@ fn main() -> anyhow::Result<()> {
                             args.trace_max,
                             &trace_counter,
                             args.dump_failed_dir.as_deref(),
+                            args.dump_games_dir.as_deref(),
                             args.dump_turn_states.as_deref(),
                             args.dump_city_rewards.as_deref(),
                             args.dump_star_spend.as_deref(),
