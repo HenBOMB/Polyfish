@@ -763,6 +763,7 @@ fn play_match(
                     &game.state,
                     model_player,
                     tier3_bought,
+                    stance_commit.lane,
                 );
                 let tribe = game.state.tribes.get(&model_player);
                 pending_goal = Some(serde_json::json!({
