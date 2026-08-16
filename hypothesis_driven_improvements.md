@@ -5411,3 +5411,58 @@ GATE (the EXP_ELO_051/052 P4 instrument, XinXi 48 seeds base 1786807403,
 gumbel 64/16, `--goal-channels --goal-w-tree 1`): cities lost should stay
 at or below the last-shipped 19, off-lane techs at or below 66, wins at or
 above 46/48 — logged here once the run completes.
+
+## EXP_ELO_055 — road and tech-fit duplication: designed, deliberately NOT shipped this pass
+
+REGISTERED Aug 16, 2026, alongside the src/ai/ taxonomy reorg (Phase 5 of
+`ok-lets-draft-a-gleaming-emerson.md`). Two more near-duplicate pairs from
+the original algorithm audit, same shape as EXP_ELO_054's city_risks/
+city_threats: two independently-calibrated answers to the same question,
+one feeding live pricing.
+
+**Road/connection (3-way).** `scoring.rs::score_road` (hand-rolled on-path/
+near-path/adjacency heuristic, feeds T3's heuristic Build-move score) vs
+`oracle_macro.rs::connect_remaining` (real 0-1 BFS shortest-path-to-capital,
+feeds `reward.rs`'s `SHAPE_GOAL_CONNECT` in-tree Φ) vs
+`evaluator/economy.rs::bonus_capital_connections` (a flat
+connected/total ratio, feeds `evaluate_economy`). Design: `score_road`
+should price a candidate tile by how much it shortens `connect_remaining`'s
+BFS distance rather than its own hand-rolled detour heuristic; the plan's
+own instruction is to reprice for mobility/map-control, not population —
+the same correction EXP_ELO_052 already established roads must respect
+(roads lost to Windmill on population-only pricing: 9★+chain for +2 pop vs
+5★ for the same +2, `connected@t10` measured 0.00 across 4 iterations, 3
+tribes, 96 games). `bonus_capital_connections` should read
+`connect_remaining`'s output instead of its own boolean ratio.
+
+**Tech-fit.** `oracle_macro.rs::recommended_techs` (explored-tile terrain/
+resource counts into 4 hardcoded "lines", top-2 lines' next unowned tech,
+feeds `reward.rs:1136`'s tech-alignment term) vs
+`evaluator/research.rs::evaluate_tech_utility` (per-tech ROI from owned/
+visible resource counts, feeds `scoring.rs`'s T3 Research-move score and
+`evaluator/economy.rs`'s unused-tech penalty). Design: derive
+`recommended_techs`'s list from `evaluate_tech_utility`'s per-tech score
+instead of the separate line-grouping heuristic.
+
+⚠️ **NOT IMPLEMENTED THIS PASS, on purpose.** Two findings while scoping it
+that the earlier "mechanical, do it today" read missed:
+1. Both `score_road` and `recommended_techs` are real, independently-tuned
+   algorithms already feeding live `reward.rs` Φ terms — not simple
+   pass-throughs. Repricing them is calibration work, not a code move, and
+   this ledger's own history (EXP_ELO_051/052 took four iterations to get
+   road pricing right, and still hit a hard economic wall on goal R) is the
+   reason the *original* taxonomy plan filed this as "highest behavior
+   risk, goes last, gets its own measured A/B" rather than a mechanical
+   step — that risk tier was correct and this entry restores it.
+2. `bonus_capital_connections` is called from `evaluate_economy` →
+   `evaluate_player`, which is in `heuristic_mcts.rs`'s LEAF EVALUATION hot
+   path (the network-free MCTS behind fast UI analysis and the interactive
+   trainer). Swapping its O(cities) ratio for `connect_remaining`'s
+   map-wide BFS would be a real per-leaf cost increase in a latency-facing
+   path, not a free plumbing change — needs a benchmark, not just a
+   correctness check.
+
+STATUS: designed, not run. Next step when picked back up: implement
+`score_road`'s BFS-consult, benchmark `heuristic_mcts` leaf-eval latency
+before touching `bonus_capital_connections`, then the same seed-1786807403
+P4 instrument EXP_ELO_054 used.
