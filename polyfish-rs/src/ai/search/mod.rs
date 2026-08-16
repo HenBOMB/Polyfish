@@ -3,8 +3,10 @@
 //! not a domain — cuts across combat/movement/economy/belief the same way
 //! each of those buckets' own `derived.rs` cuts across complexity.
 
+pub mod archetype;
 pub mod book;
 pub mod brain;
+pub mod goal_aux;
 pub mod gumbel_mcts;
 pub mod gumbel_qtransform;
 pub mod heuristic_mcts;

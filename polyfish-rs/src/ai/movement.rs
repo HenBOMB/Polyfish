@@ -178,3 +178,81 @@ pub fn assign_expand_targets(
     }
     out
 }
+
+
+/// EXP_ELO_052: road tiles still needed to link each unconnected city into
+/// the capital's network, as (city, tiles_remaining).
+///
+/// The engine connects two adjacent tiles only when BOTH carry a road (city
+/// tiles and ports count as road for this purpose) and never through enemy
+/// ground — see `actions::connection`. So this is a shortest path from the
+/// capital's component where standing road/city tiles are free and buildable
+/// ground costs one.
+///
+/// Why it exists: a connection pays +1 population to the city AND +1 to the
+/// capital, but that lands only on the LAST road tile. Every earlier tile on
+/// the path earns nothing, so it loses every ballot to a harvest and no city
+/// ever connects — measured 0.00 connected cities at t10 across 96 games on
+/// three tribes. Handing the remaining-tile count down lets T3 price each
+/// tile by the progress it makes.
+pub fn connect_remaining(state: &GameState, player: PlayerId) -> Vec<(i32, i32)> {
+    use crate::types::StructureType;
+    let Some(tribe) = state.tribes.get(&player) else {
+        return Vec::new();
+    };
+    // Roads are the only way to build the path; without the tech there is no
+    // plan to price, only a constant.
+    if !crate::settings::technology::has_technology(&tribe.tech_vanilla, TechnologyType::Roads) {
+        return Vec::new();
+    }
+    let Some(cap) = crate::functions::get_capital_city(state, player) else {
+        return Vec::new();
+    };
+    let cities: Vec<i32> = tribe.cities.iter().map(|c| c.idx).collect();
+    let road_here = |idx: i32| {
+        cities.contains(&idx)
+            || crate::functions::get_structure_type_at(state, idx) == Some(StructureType::Road)
+    };
+    let buildable = |idx: i32| {
+        let Some(t) = state.tiles.get(&idx) else { return false };
+        if t.owner != 0 && t.owner != player {
+            return false;
+        }
+        if crate::functions::get_structure_at(state, idx).is_some() {
+            return false;
+        }
+        crate::settings::structures::get_structure_setting(StructureType::Road)
+            .terrain_types
+            .contains(&t.terrain_type)
+    };
+    // 0-1 BFS from the capital: free through standing road, cost 1 per tile
+    // we would have to build.
+    let mut dist: std::collections::HashMap<i32, i32> = std::collections::HashMap::new();
+    let mut dq: std::collections::VecDeque<i32> = std::collections::VecDeque::new();
+    dist.insert(cap.idx, 0);
+    dq.push_front(cap.idx);
+    while let Some(cur) = dq.pop_front() {
+        let d = dist[&cur];
+        for n in crate::functions::get_adjacent_indices(state, cur, 1) {
+            let free = road_here(n);
+            if !free && !buildable(n) {
+                continue;
+            }
+            let nd = d + if free { 0 } else { 1 };
+            if dist.get(&n).map_or(true, |&old| nd < old) {
+                dist.insert(n, nd);
+                if free {
+                    dq.push_front(n);
+                } else {
+                    dq.push_back(n);
+                }
+            }
+        }
+    }
+    tribe
+        .cities
+        .iter()
+        .filter(|c| c.idx != cap.idx && !c.connected_to_capital)
+        .filter_map(|c| dist.get(&c.idx).map(|&d| (c.idx, d)))
+        .collect()
+}
