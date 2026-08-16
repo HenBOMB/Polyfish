@@ -4,9 +4,9 @@
 //! When `_are_you_sure = false`, the engine uses these predictions instead of actual hidden data.
 
 use crate::ai::belief::BeliefState;
-use crate::functions::get_adjacent_indices;
-use crate::states::GameState;
-use crate::types::{TerrainType, TribeType};
+use crate::functions::{get_adjacent_indices, get_chebyshev_distance};
+use crate::states::{GameState, PlayerId};
+use crate::types::{StructureType, TerrainType, TribeType};
 use indexmap::IndexMap;
 
 /// Predicted tribe for a classic climate id (see `types::classic_climate_id`).
@@ -216,6 +216,98 @@ pub fn predict_villages(state: &GameState) -> IndexMap<i32, (TribeType, bool)> {
     }
 
     prediction_map
+}
+
+/// Guess likely undiscovered village sites from the generator's own Drylands
+/// rules + the observed map (FOW-honest — game knowledge, not map peeking).
+/// The generator fills villages to SATURATION over legal spots (land, edge
+/// distance ∈ {2,4,5...}, Chebyshev ≥3 from every village/capital), so an
+/// UNEXPLORED legal spot ≥3 from everything known must lie near an
+/// undiscovered village. Returns up to `max_sites`, nearest-to-units first,
+/// mutually ≥3 apart (the "first warrior center, second north/east" spread).
+///
+/// A sibling of `predict_villages` above rather than a merge with it (Aug
+/// 2026 taxonomy reorg): this one reasons from mapgen placement rules over
+/// the WHOLE map, that one from resource/climate density on EXPLORED tiles —
+/// different evidence, kept physically adjacent rather than forced into one
+/// signature.
+pub fn guessed_village_sites(state: &GameState, player: PlayerId, max_sites: usize) -> Vec<i32> {
+    let size = state.settings.size as i32;
+    let Some(tribe) = state.tribes.get(&player) else {
+        return Vec::new();
+    };
+    let anchors: Vec<i32> = if tribe.units.is_empty() {
+        tribe.cities.iter().map(|c| c.idx).collect()
+    } else {
+        tribe.units.iter().map(|u| u.coords.idx).collect()
+    };
+    if anchors.is_empty() || size <= 0 {
+        return Vec::new();
+    }
+    let cheb = |a: i32, b: i32| get_chebyshev_distance(a, b, size);
+    let explored =
+        |idx: i32| state.tiles.get(&idx).map_or(false, |t| t.explorers.contains(&player));
+
+    // Known spacing sources: explored villages + explored cities (capitals
+    // and captured villages count as villages in the generator's spacing).
+    let mut known: Vec<i32> = state
+        .structures
+        .iter()
+        .filter(|(idx, s)| {
+            s.as_ref().map_or(false, |s| s.structure_type == StructureType::Village)
+                && explored(**idx)
+        })
+        .map(|(idx, _)| *idx)
+        .collect();
+    for t in state.tribes.values() {
+        known.extend(t.cities.iter().map(|c| c.idx).filter(|&i| explored(i)));
+    }
+
+    let mut cands: Vec<(i32, i32)> = (0..size * size)
+        .filter(|&idx| {
+            let (r, c) = (idx / size, idx % size);
+            let edge = r.min(size - 1 - r).min(c).min(size - 1 - c);
+            !explored(idx)
+                && edge >= 2
+                && edge != 3
+                && known.iter().all(|&k| cheb(idx, k) >= 3)
+        })
+        .map(|idx| {
+            let d = anchors.iter().map(|&a| cheb(a, idx)).min().unwrap_or(i32::MAX);
+            (d, idx)
+        })
+        .collect();
+    cands.sort_unstable();
+    // Bucket B: prefer picks in DISTINCT quadrants around the anchor centroid
+    // — nearest-first alone often put both guesses in one bearing sector,
+    // sending every scout the same way (audit: 89% duplicate-sector games).
+    // Pass 1 enforces quadrant novelty; pass 2 fills any remainder.
+    let (mut cx, mut cy) = (0i32, 0i32);
+    for &a in &anchors {
+        cx += a % size;
+        cy += a / size;
+    }
+    cx /= anchors.len() as i32;
+    cy /= anchors.len() as i32;
+    let quadrant = |idx: i32| ((idx % size > cx) as u8) * 2 + ((idx / size > cy) as u8);
+    let mut picks: Vec<i32> = Vec::new();
+    let mut used_quads = std::collections::HashSet::new();
+    for pass in 0..2 {
+        for &(_, idx) in &cands {
+            if picks.len() >= max_sites {
+                break;
+            }
+            if picks.contains(&idx) || picks.iter().any(|&p| cheb(p, idx) < 3) {
+                continue;
+            }
+            if pass == 0 && used_quads.contains(&quadrant(idx)) {
+                continue;
+            }
+            used_quads.insert(quadrant(idx));
+            picks.push(idx);
+        }
+    }
+    picks
 }
 
 /// Find the tribe of the nearest known city/village to a given tile
