@@ -5121,3 +5121,80 @@ attack/defend/expand instead of a flat per-type bonus. ⚠️ `eco_plan` is a
 something to call per ply. The hot path needs a cheap "next purchase on the
 lane's plan + turns-to-afford" query validated against it — computed once
 per turn at T2 and handed down, the same shape as the risk facts above.
+
+## EXP_ELO_051 — a threat model that can see past one tile, and a lane worth banking for
+
+REGISTERED + RUN Aug 16, 2026. Verdi's three morning targets after watching
+`game_iter135_game2_seed1786807405`: stop losing cities to Greedy, make many
+giants quickly, stop buying irrelevant techs.
+
+⚠️ **HARNESS FINDING, and it invalidates the first four iterations of this
+experiment.** `self_play --goal-w-tree` defaults to **0.0**; training runs
+`--goal-channels --goal-w-tree 1` (loop line 233). A debug run that passes
+only `--goal-channels` therefore paints the goal planes but deletes the
+ENTIRE `goal_potential` channel from the in-tree rewards — every defense
+term, every lane term, silently inert. This is the same trap that voided the
+v9.1-vs-v7.1 arena match (see line ~1675). Every fixture run in EXP_ELO_049
+and EXP_ELO_050, and my own first four measurements here, were made on that
+config. **Any behaviour claim about T2 pricing measured without
+`--goal-w-tree 1` is void.** The gauge harness now passes it.
+
+HYPOTHESES.
+  H1 (defense): the one-move horizon is why cities fall. `can_reach_tile`
+     answered only "could this enemy stand here NOW", so both losses in the
+     fixture — each a garrison stepping off with the taker 2-3 tiles out —
+     produced no risk entry, no Defend order, and a vacate priced 0.0000.
+  H2 (economy): the save plan picked the CHEAPEST lane and counted only hub
+     sites placeable today. A Forge needs Mines that nothing was banking to
+     build, so `save_lane` stayed empty until t9 and nothing competed with a
+     junk tech.
+
+CHANGES.
+  - `turns_to_reach`: engine cost search over a multi-turn budget, so roads
+    shorten the answer as they do in play. Risk decays over a 3-turn horizon
+    (`RISK_BY_TURNS`) instead of falling off a cliff.
+  - Rider **Escape** honoured: with a victim in range it moves again after
+    the kill, putting a "safe" city two moves out one turn away.
+  - Reach measured as a step-in from a NEIGHBOUR, since the city tile is
+    normally blocked by the very garrison whose departure is being priced.
+    (First cut returned empty `enterers` for exactly this reason.)
+  - `enemy_ghosts` join the threat set, discounted by age — a sighting that
+    walks into fog is not forgotten, and T3 cannot disprove it by looking.
+  - Garrison risk continuous in health: holding whole beats holding wounded,
+    which is what makes "stay put, don't attack out" the priced answer.
+  - `needs_order()` so a merely-holding garrison raises no order (else the
+    stance pins to ARM from first contact) while its vacating stays priced.
+  - Save lane: most-invested lane wins (price only breaks ties), partners
+    counted on ground that COULD take a mine, batch capped at the next two
+    placements so it stops growing with the empire it serves.
+  - Lane discipline moved to `passes_tech_caps` (always on) — behind
+    `star_gate` it switched off under GROW at the third city.
+  - `SHAPE_GOAL_CITY_RISK` 1.0 → 4.0, dialled against the measured edge
+    distribution (a vacate priced −0.01 against Research at +0.167).
+
+ACTUAL — paired 48 seeds (base 1786807403), XinXi net vs pinned Greedy
+Imperius, gumbel 64/16, `--goal-channels --goal-w-tree 1`, GUMBEL_SCALE=0,
+against 9deec1d built from a clean worktree:
+
+| | baseline | after | |
+|---|---|---|---|
+| win rate | 39/48 (81.2%) | **47/48 (97.9%)** | discordant 8–0, **McNemar z = 2.47** |
+| cities lost | 56 | **26** | −54% |
+| off-lane techs (t≤12) | 158 | **99** | −37% |
+| giants (level-5 SuperUnit) | 200 | 181 | −10%, both ≫ target |
+
+VERDICT: **H1 and H2 both confirmed.** Win rate and city retention move
+together and significantly.
+
+⚠️ Two corrections to earlier readings in this ledger, both mine:
+  1. The "0 giants" alarm was a broken gauge — Giants arrive as the level-5
+     `Choose reward SuperUnit`, not a Train move. The nets were already
+     making ~4/game.
+  2. A `game1`/`game10` prefix collision made the first n=24 city-loss
+     numbers read the wrong turn file. Corrected above.
+
+OPEN (the next lever): **all 26 remaining losses are `garrisoned=false,
+defend_ordered=true`** — T2 names the city and the executor still does not
+put a unit on it. Median loss turn 17. The assessment is now right; what is
+missing is T3 choosing the cheapest goal-aligned response (garrison vs buy
+vs accelerate), which is the half of Verdi's Aug 15 note still unbuilt.
