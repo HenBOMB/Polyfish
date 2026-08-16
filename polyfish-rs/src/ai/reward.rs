@@ -905,7 +905,7 @@ pub fn goal_potential(
         .map(|(_, i)| *i)
         .collect();
     if width > 0 && goal.orders.iter().any(|(k, _)| *k == OrderKind::Defend) {
-        let threats = crate::ai::defense::city_threats(state, player);
+        let threats = crate::ai::defense::city_risks(state, player);
         for (kind, idx) in &goal.orders {
             if *kind != OrderKind::Defend {
                 continue;

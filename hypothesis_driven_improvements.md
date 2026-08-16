@@ -5366,3 +5366,48 @@ dial.
 STILL OPEN: G and H moved only on XinXi. The RiderRoads tribes have no cheap
 hub of their own, which is the real reason their giant counts trail — and
 that is an economy question, not a lane-discipline one.
+
+## EXP_ELO_054 — one city-threat model, not two (city_risks absorbs city_threats)
+
+REGISTERED Aug 16, 2026. `defense.rs` carried two independently-calibrated
+answers to "is this city in danger": `city_threats` (visible-only, ≤1-turn
+reach for the unguarded case, a `strike ≥ 0.8·health` garrison cliff) and
+`city_risks` (ghost-aware, `THREAT_HORIZON=3`-turn reach, a continuous
+garrison-risk ladder). `scripted_goal` already ran BOTH and unioned their
+Defend orders — the EXP_ELO_050 comment on the second loop says so
+explicitly ("the risk model names cities the coverage model cannot"), which
+is the same duplication Verdi flagged from the architecture doc.
+
+CHANGE. `CityRisk` gains `strike`/`need_damage`/`at_risk` (city_risks was
+already computing the raw ingredients — `on_garrison` and the strongest
+deliverable attacker's health — as locals; they're now stored, plus `at_risk`
+ported verbatim from `city_threats`'s boolean: sieged ∨ (open ∧
+arrives-next-turn) ∨ strike ≥ `RISK_MARGIN`·garrison-health). `needs_order()`
+becomes `risk ≥ RISK_GARRISON_FALLS ∨ at_risk` — required because `risk`
+*saturates* at `RISK_GARRISON_FALLS` for any incoming damage ≥ garrison
+health, so it alone cannot distinguish 80%-of-health incoming from 100%;
+without the OR, replacing `city_threats` would have silently dropped Defend
+orders for garrisons taking near- but not fully-lethal damage. `city_threats`
+and its struct are deleted; `defend_plan` takes `&CityRisk`; `scripted_goal`
+and `reward.rs`'s Φ pricing both now call `city_risks` alone.
+
+H1: Defend-order GENERATION is unchanged — the two old loops were already
+being unioned by a dedup check, and `needs_order()` reproduces that union in
+one call. A parity test belongs in `defense.rs` itself (both formulas are
+built on private helpers, so it has to live there).
+H2: Φ PRICING (`SHAPE_GOAL_DEFEND_COVER`/`_HOLD`, fed by `defend_plan`) can
+still move a little — `city_risks.attackers` (can-attack-this-turn, visible
+only) is a narrower pool than `city_threats.attackers` (anyone inside
+`2·movement + range`, accumulated across three branches), so `defend_plan`'s
+`sieger` pick and cover assignment are not guaranteed bit-identical even
+though `needs_order()` is. This is the reason this lands as its own commit
+with its own gauge rather than riding with the Phase 3 pure-move — see the
+regression guard below.
+
+VERIFICATION. Full `cargo test --lib --tests --bin self_play` green (205/205
+unit, all integration suites) both before and after — see the ledger's own
+Phase 1 precedent for why that bounds correctness but not calibration.
+GATE (the EXP_ELO_051/052 P4 instrument, XinXi 48 seeds base 1786807403,
+gumbel 64/16, `--goal-channels --goal-w-tree 1`): cities lost should stay
+at or below the last-shipped 19, off-lane techs at or below 66, wins at or
+above 46/48 — logged here once the run completes.

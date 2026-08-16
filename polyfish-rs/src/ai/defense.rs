@@ -22,23 +22,6 @@ const RING2_PAD: i32 = 2;
 const MAX_ASSIGN: usize = 4;
 
 #[derive(Debug, Clone)]
-pub struct CityThreat {
-    pub city: i32,
-    /// Worst-case total damage visible enemies can deliver to the current
-    /// garrison next enemy turn (0.0 when the city is unguarded).
-    pub strike: f32,
-    /// Damage required to kill the strongest deliverable attacker.
-    pub need_damage: f32,
-    /// Tile indices of contributing enemy units.
-    pub attackers: Vec<i32>,
-    /// An enemy unit is standing on the city right now.
-    pub sieged: bool,
-    /// City is unguarded and an enemy can end its move on it.
-    pub reachable_unguarded: bool,
-    pub at_risk: bool,
-}
-
-#[derive(Debug, Clone)]
 pub struct DefendPlan {
     pub city: i32,
     /// (unit tile, satisfaction): 1.0 = can strike an attacker on the city
@@ -162,6 +145,17 @@ pub struct CityRisk {
     pub risk: f32,
     /// Score-equivalent worth of the city.
     pub worth: f32,
+    /// Damage visible enemies could put on the current garrison next turn
+    /// (0.0 when the city is unguarded).
+    pub strike: f32,
+    /// Damage required to kill the strongest deliverable attacker.
+    pub need_damage: f32,
+    /// Sharp, this-turn danger flag: sieged, open-and-reachable-next-turn, or
+    /// the garrison is about to take near-lethal damage. Independent of
+    /// `risk` — `risk` saturates at `RISK_GARRISON_FALLS` for any incoming
+    /// damage at or above the garrison's health, so this is what still
+    /// distinguishes "80% of health incoming" from "already lethal".
+    pub at_risk: bool,
 }
 
 /// One way the city could change hands: who, how soon, and how sure we are.
@@ -181,9 +175,11 @@ impl CityRisk {
     }
     /// Worth a Defend order from T2. A garrison that merely *holds* is already
     /// doing its job — naming it would pin the stance to ARM for the rest of
-    /// the game; its vacating is still priced through `residual_risk`.
+    /// the game; its vacating is still priced through `residual_risk`. ORs in
+    /// `at_risk` so a garrison taking near-lethal (but not literally lethal)
+    /// damage still gets named — `risk` alone saturates before that point.
     pub fn needs_order(&self) -> bool {
-        self.risk >= RISK_GARRISON_FALLS
+        self.risk >= RISK_GARRISON_FALLS || self.at_risk
     }
 }
 
@@ -392,6 +388,9 @@ pub fn city_risks(state: &GameState, player: PlayerId) -> Vec<CityRisk> {
         if risk <= 0.0 && enterers.is_empty() {
             continue;
         }
+        let at_risk = sieged
+            || (open && arrives_next_turn)
+            || garrison.map_or(false, |g| on_garrison >= RISK_MARGIN * g.health);
         out.push(CityRisk {
             city: idx,
             sieged,
@@ -402,6 +401,9 @@ pub fn city_risks(state: &GameState, player: PlayerId) -> Vec<CityRisk> {
             enterers,
             risk,
             worth: CITY_WORTH_BASE + CITY_WORTH_PER_LEVEL * city.level as f32,
+            strike: on_garrison,
+            need_damage: threat_unit.map_or(0.0, |t| t.health),
+            at_risk,
         });
     }
     out
@@ -496,89 +498,6 @@ pub fn residual_city_loss(state: &GameState, player: PlayerId, risks: &[CityRisk
         .sum()
 }
 
-/// Per-city worst-case threat from FOW-visible enemy units. Cities with no
-/// deliverable threat produce no entry.
-pub fn city_threats(state: &GameState, player: PlayerId) -> Vec<CityThreat> {
-    let size = state.settings.size;
-    let Some(tribe) = state.tribes.get(&player) else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for c in &tribe.cities {
-        let garrison = get_true_unit_at(state, c.idx).filter(|u| u.owner == player);
-        let mut strike = 0.0f32;
-        let mut need = 0.0f32;
-        let mut attackers = Vec::new();
-        let mut sieged = false;
-        let mut reachable_unguarded = false;
-        for (id, t) in &state.tribes {
-            if *id == player {
-                continue;
-            }
-            for e in &t.units {
-                let visible = state
-                    .tiles
-                    .get(&e.coords.idx)
-                    .map_or(false, |tl| tl.explorers.contains(&player));
-                if !visible {
-                    continue;
-                }
-                if e.coords.idx == c.idx {
-                    sieged = true;
-                    attackers.push(e.coords.idx);
-                    need = need.max(e.health);
-                    continue;
-                }
-                let m = get_unit_movement(state, e);
-                let range = get_unit_setting(e.unit_type).range;
-                if get_chebyshev_distance(e.coords.idx, c.idx, size) > 2 * m + range {
-                    continue;
-                }
-                let pe = probe(e);
-                if let Some(g) = garrison {
-                    if can_attack_tile(state, &pe, c.idx) {
-                        strike += hypo_damage(state, &pe, g, c.idx);
-                        attackers.push(e.coords.idx);
-                        need = need.max(e.health);
-                    }
-                } else {
-                    let target = c.idx;
-                    let d = get_chebyshev_distance(pe.coords.idx, target, size);
-                    // Same banding as can_attack_tile: plain distance decides
-                    // inside one movement; the exact search covers the road band.
-                    let reaches = d <= m
-                        || (d <= 2 * m
-                            && crate::moves::reach_search(state, &pe, Some(&|t: i32| t == target)).1);
-                    if reaches {
-                        reachable_unguarded = true;
-                        attackers.push(e.coords.idx);
-                        need = need.max(e.health);
-                    } else if can_attack_tile(state, &pe, c.idx) {
-                        attackers.push(e.coords.idx);
-                        need = need.max(e.health);
-                    }
-                }
-            }
-        }
-        if attackers.is_empty() {
-            continue;
-        }
-        let at_risk = sieged
-            || reachable_unguarded
-            || garrison.map_or(false, |g| strike >= RISK_MARGIN * g.health);
-        out.push(CityThreat {
-            city: c.idx,
-            strike,
-            need_damage: need,
-            attackers,
-            sieged,
-            reachable_unguarded,
-            at_risk,
-        });
-    }
-    out
-}
-
 /// EXP_ELO_042 duty partition: is `unit` attack-committed relative to
 /// defend city `b`? True if it stands ON an enemy city (state-fact latch —
 /// survives Attack-order flicker) or some Attack target is STRICTLY closer
@@ -616,7 +535,7 @@ pub fn covers(state: &GameState, unit: &UnitState, target: i32) -> bool {
 pub fn defend_plan(
     state: &GameState,
     player: PlayerId,
-    threat: &CityThreat,
+    threat: &CityRisk,
     attack_targets: &[i32],
 ) -> DefendPlan {
     let size = state.settings.size;
@@ -986,22 +905,22 @@ pub(crate) mod tests {
         let mut state = board(60);
         state.tribes.get_mut(&1).unwrap().units.push(unit_at(60, UnitType::Rider, 1));
         state.tribes.get_mut(&2).unwrap().units.push(unit_at(59, UnitType::Swordsman, 2));
-        let threats = city_threats(&state, 1);
-        assert_eq!(threats.len(), 1);
-        let th = &threats[0];
-        assert_eq!(th.city, 60);
-        assert!(th.strike > 0.0);
-        assert!(th.at_risk, "strike {} vs rider hp", th.strike);
+        let risks = city_risks(&state, 1);
+        assert_eq!(risks.len(), 1);
+        let r = &risks[0];
+        assert_eq!(r.city, 60);
+        assert!(r.strike > 0.0);
+        assert!(r.at_risk, "strike {} vs rider hp", r.strike);
     }
 
     #[test]
     fn unguarded_city_with_reaching_enemy_is_at_risk() {
         let mut state = board(60);
         state.tribes.get_mut(&2).unwrap().units.push(unit_at(59, UnitType::Swordsman, 2));
-        let threats = city_threats(&state, 1);
-        assert_eq!(threats.len(), 1);
-        assert!(threats[0].reachable_unguarded);
-        assert!(threats[0].at_risk);
+        let risks = city_risks(&state, 1);
+        assert_eq!(risks.len(), 1);
+        assert!(risks[0].open && risks[0].arrives_next_turn);
+        assert!(risks[0].at_risk);
     }
 
     #[test]
@@ -1010,11 +929,11 @@ pub(crate) mod tests {
         state.tribes.get_mut(&1).unwrap().units.push(unit_at(60, UnitType::Rider, 1));
         // Far away: outside any strike ring.
         state.tribes.get_mut(&2).unwrap().units.push(unit_at(0, UnitType::Swordsman, 2));
-        assert!(city_threats(&state, 1).is_empty());
+        assert!(city_risks(&state, 1).is_empty());
         // Adjacent but under fog: FOW-honest, not counted.
         state.tribes.get_mut(&2).unwrap().units.push(unit_at(59, UnitType::Swordsman, 2));
         state.tiles.get_mut(&59).unwrap().explorers.remove(&1);
-        assert!(city_threats(&state, 1).is_empty());
+        assert!(city_risks(&state, 1).is_empty());
     }
 
     #[test]
@@ -1024,11 +943,11 @@ pub(crate) mod tests {
         let t1 = state.tribes.get_mut(&1).unwrap();
         t1.units.push(unit_at(38, UnitType::Rider, 1)); // cheb 2: rider m=2+Dash covers
         t1.units.push(unit_at(82, UnitType::Rider, 1)); // cheb 2: covers
-        let threats = city_threats(&state, 1);
-        let plan = defend_plan(&state, 1, &threats[0], &[]);
+        let risks = city_risks(&state, 1);
+        let plan = defend_plan(&state, 1, &risks[0], &[]);
         assert_eq!(plan.assigned.iter().filter(|&&(_, s)| s == 1.0).count(), 2);
         // Two rider hits do not kill a full swordsman: shortfall is honest.
-        let sword_hp = threats[0].need_damage;
+        let sword_hp = risks[0].need_damage;
         assert!(plan.shortfall > 0.0 && plan.shortfall < sword_hp);
     }
 
@@ -1038,14 +957,14 @@ pub(crate) mod tests {
         let mut state = board(60);
         state.tribes.get_mut(&1).unwrap().units.push(unit_at(60, UnitType::Rider, 1));
         state.tribes.get_mut(&2).unwrap().units.push(unit_at(59, UnitType::Swordsman, 2));
-        let th = city_threats(&state, 1);
-        assert!(defend_plan(&state, 1, &th[0], &[]).hold_needed);
+        let r = city_risks(&state, 1);
+        assert!(defend_plan(&state, 1, &r[0], &[]).hold_needed);
         // Add enough outside cover to meet the kill damage without it.
         for idx in [38, 82, 48, 72] {
             state.tribes.get_mut(&1).unwrap().units.push(unit_at(idx, UnitType::Swordsman, 1));
         }
-        let th = city_threats(&state, 1);
-        let plan = defend_plan(&state, 1, &th[0], &[]);
+        let r = city_risks(&state, 1);
+        let plan = defend_plan(&state, 1, &r[0], &[]);
         assert!(plan.shortfall == 0.0);
         assert!(!plan.hold_needed);
     }
@@ -1087,8 +1006,8 @@ pub(crate) mod tests {
             t1.units.push(unit_at(79, UnitType::Rider, 1)); // sieging H
         }
         state.tribes.get_mut(&2).unwrap().units.push(unit_at(59, UnitType::Swordsman, 2));
-        let th = city_threats(&state, 1);
-        let plan = defend_plan(&state, 1, &th[0], &[79]);
+        let r = city_risks(&state, 1);
+        let plan = defend_plan(&state, 1, &r[0], &[79]);
         assert!(!plan.assigned.iter().any(|&(t, _)| t == 79));
         assert!(plan.assigned.iter().any(|&(t, _)| t == 48));
     }

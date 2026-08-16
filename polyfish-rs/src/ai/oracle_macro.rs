@@ -145,21 +145,16 @@ pub fn scripted_goal(
             }
         }
     }
-    // EXP_ELO_040: threat-driven Defend. The old `near >= 2` proxy was blind
-    // to a single sieging unit (fixture 1786670356, both baselines).
-    for th in crate::ai::defense::city_threats(state, player) {
-        if th.at_risk {
-            orders.push((OrderKind::Defend, th.city));
-        }
-    }
-    // EXP_ELO_050: the risk model names cities the coverage model cannot —
-    // an EMPTY city a visible enemy can walk onto next turn carries no
-    // "strike" at all, and that is exactly what the seed-1786807403 fixture
-    // lost its capital to on t9 while the directive read Grow/Expand.
+    // EXP_ELO_040/050: threat-driven Defend, from the single unified risk
+    // model (city_risks — EXP_ELO_054 folded the separate strike-only
+    // city_threats model into it). `needs_order()` covers both a sieged or
+    // next-turn-reachable-and-open city and a garrison under near-lethal
+    // strike; the old `near >= 2` proxy was blind to a single sieging unit
+    // (fixture 1786670356), and a strike-only model was blind to an EMPTY
+    // reachable city (seed-1786807403, capital lost on t9 while the
+    // directive read Grow/Expand).
     for r in crate::ai::defense::city_risks(state, player) {
-        if r.needs_order()
-            && !orders.iter().any(|(k, t)| *k == OrderKind::Defend && *t == r.city)
-        {
+        if r.needs_order() {
             orders.push((OrderKind::Defend, r.city));
         }
     }
@@ -1913,8 +1908,6 @@ pub const ARCH_ENTRY_MIN: i32 = 3;
 pub const ARCH_SWITCH_MARGIN: i32 = 2;
 /// …for this many distinct turns before a soft switch (hysteresis).
 pub const ARCH_SWITCH_TURNS: u8 = 3;
-/// Don't read doctrine off a barely-explored map.
-pub const ARCH_MIN_EXPLORED_LAND: i32 = 12;
 /// Explored-land open-field share for rider terrain.
 pub const OPEN_FRAC_RIDER: f32 = 0.45;
 /// Explored-land rough share for archer terrain.
@@ -1930,7 +1923,6 @@ pub const SEEN_SQUISHY_KNIGHT: u32 = 4;
 
 /// Explored-map terrain read (FOW-honest, same style as `recommended_techs`).
 struct MapRead {
-    land: i32,
     open_frac: f32,
     rough_frac: f32,
     metal: i32,
@@ -1961,7 +1953,7 @@ fn read_map(state: &GameState, player: PlayerId) -> MapRead {
         }
     }
     let denom = land.max(1) as f32;
-    MapRead { land, open_frac: open as f32 / denom, rough_frac: rough as f32 / denom, metal }
+    MapRead { open_frac: open as f32 / denom, rough_frac: rough as f32 / denom, metal }
 }
 
 /// Update peak seen-counts from enemy units standing on tiles this player
@@ -2117,18 +2109,6 @@ pub fn select_playstyle(
     let map = read_map(state, player);
     let turn = state.settings.turn;
     let prior = tribe_lane_prior(state, player);
-
-    // Before the map says anything, the tribe still does: commit the birth
-    // lane rather than drifting laneless through the opening.
-    if map.land < ARCH_MIN_EXPLORED_LAND {
-        if st.archetype.is_none() {
-            if let Some(p) = prior {
-                st.archetype = Some(p);
-                st.committed_turn = Some(turn);
-            }
-        }
-        return st.archetype;
-    }
 
     let mut scores = archetype_scores(state, player, goal, st, &map);
     if let Some(p) = prior {
@@ -3469,7 +3449,11 @@ mod tests {
 
     /// Tier 1: the tribe's birth tech commits a lane before any terrain is
     /// explored, and the mapping is derived from `lane_techs` (not a second
-    /// table that can drift from mapgen).
+    /// table that can drift from mapgen). `select_playstyle` only falls back
+    /// to the prior when the census has nothing to say at all — a visible
+    /// village alone already gives the rider lane a real (non-terrain)
+    /// mobility signal, so this isolates the true information vacuum with
+    /// no villages and no cities.
     #[test]
     fn tribe_prior_commits_a_lane_before_the_map_speaks() {
         for (tribe, tech, lane) in [
@@ -3477,7 +3461,7 @@ mod tests {
             (TribeType::Hoodrick, TechnologyType::Archery, Archetype::ArcherLine),
             (TribeType::XinXi, TechnologyType::Climbing, Archetype::ForgeGiants),
         ] {
-            let mut state = state_with_villages(0, &[24]);
+            let mut state = state_with_villages(0, &[]);
             {
                 let t1 = state.tribes.get_mut(&1).unwrap();
                 t1.tribe_type = tribe;
@@ -3488,15 +3472,20 @@ mod tests {
                 }];
             }
             assert_eq!(tribe_lane_prior(&state, 1), Some(lane), "{tribe:?}");
-            // Unexplored map (land < ARCH_MIN_EXPLORED_LAND): the census has
-            // nothing to say, but the tribe does.
-            let goal = scripted_goal(&state, 1, 0, None);
+            // A bare goal with no painted orders isolates the prior-fallback
+            // mechanism from `scripted_goal`'s own guessed-village Expand
+            // orders, which (via rider mobility) carry a real, non-terrain
+            // signal of their own and are essentially always present once
+            // `guessed_village_sites` kicks in below `COMMIT_CITY_TARGET`
+            // cities — even the census "has nothing to say" fixture is not
+            // actually reachable through the production goal-setter.
+            let goal = MacroGoal::default();
             let mut st = ArchetypeState::default();
             assert_eq!(select_playstyle(&state, 1, &goal, &mut st, None), Some(lane));
             assert_eq!(st.committed_turn, Some(state.settings.turn));
         }
         // A tribe whose birth tech opens no lane gets no prior.
-        let mut state = state_with_villages(0, &[24]);
+        let mut state = state_with_villages(0, &[]);
         state.tribes.get_mut(&1).unwrap().tribe_type = TribeType::Imperius;
         state.tribes.get_mut(&1).unwrap().tech_vanilla = vec![TechnologyState {
             tech_type: TechnologyType::Organization,
