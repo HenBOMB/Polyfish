@@ -391,6 +391,26 @@ pub fn city_risks(state: &GameState, player: PlayerId) -> Vec<CityRisk> {
         let at_risk = sieged
             || (open && arrives_next_turn)
             || garrison.map_or(false, |g| on_garrison >= RISK_MARGIN * g.health);
+        // EXP_ELO_054 fix: sourced from `attackers` (this-turn-only), the same
+        // pool `defend_plan`'s `sieger` reads — NOT `threat_unit` (sourced from
+        // the broader multi-turn `enterers`). The two used to be the same set
+        // by construction in the old city_threats model; decoupling them left
+        // `need_damage` > 0 with no `attackers` entry to back it, so
+        // `defend_plan`'s `sieger` came back `None`, every candidate's damage
+        // contribution silently computed as 0, and `fill()` never met the
+        // (unreachable) damage target — so it grabbed MAX_ASSIGN units on
+        // every multi-turn-only threat regardless of whether they helped.
+        // Measured: this alone was the EXP_ELO_054 regression (cities lost
+        // 31 vs the 19 gate).
+        let need_damage = if sieged {
+            occupant.map_or(0.0, |u| u.health)
+        } else {
+            attackers
+                .iter()
+                .filter_map(|&i| get_true_unit_at(state, i))
+                .map(|u| u.health)
+                .fold(0.0, f32::max)
+        };
         out.push(CityRisk {
             city: idx,
             sieged,
@@ -402,7 +422,7 @@ pub fn city_risks(state: &GameState, player: PlayerId) -> Vec<CityRisk> {
             risk,
             worth: CITY_WORTH_BASE + CITY_WORTH_PER_LEVEL * city.level as f32,
             strike: on_garrison,
-            need_damage: threat_unit.map_or(0.0, |t| t.health),
+            need_damage,
             at_risk,
         });
     }
@@ -751,6 +771,41 @@ mod risk_tests {
             open > held,
             "vacating must cost: held {held}, open {open}"
         );
+    }
+
+    /// EXP_ELO_054 regression: a multi-turn-only threat (no `attackers` this
+    /// turn) must not make `defend_plan` grab units it cannot justify.
+    /// `need_damage` used to be sourced from the broader `enterers` set while
+    /// `defend_plan`'s `sieger` reads only `attackers` — decoupled, `sieger`
+    /// came back `None`, every candidate's damage silently computed as 0,
+    /// and `fill()` never met the (unreachable) target, so it grabbed
+    /// `MAX_ASSIGN` nearby units on every such city regardless of whether
+    /// they helped. Measured as the actual cause of the 054 gate failure
+    /// (cities lost 31 vs the 19 gate, 42/48 wins vs the 46/48 gate).
+    #[test]
+    fn a_multi_turn_only_threat_does_not_over_recruit_defenders() {
+        let mut state = board(60);
+        state.tribes.get_mut(&1).unwrap().units.push(unit_at(60, UnitType::Warrior, 1));
+        // Chebyshev 3: beyond even Dash's move+range=2 reach (so nothing can
+        // strike this turn), but within the 3-turn horizon (on the books).
+        state.tribes.get_mut(&2).unwrap().units.push(unit_at(63, UnitType::Warrior, 2));
+        // Bystanders that a broken defend_plan would wrongly recruit.
+        for idx in [38, 82, 48] {
+            state.tribes.get_mut(&1).unwrap().units.push(unit_at(idx, UnitType::Warrior, 1));
+        }
+        let risks = city_risks(&state, 1);
+        assert_eq!(risks.len(), 1);
+        assert!(risks[0].attackers.is_empty(), "nothing can strike this turn");
+        assert_eq!(risks[0].need_damage, 0.0, "no this-turn attacker to size a kill against");
+
+        let plan = defend_plan(&state, 1, &risks[0], &[]);
+        assert!(
+            plan.assigned.is_empty(),
+            "an unreachable target must not recruit bystanders: {:?}",
+            plan.assigned
+        );
+        assert_eq!(plan.shortfall, 0.0);
+        assert!(!plan.hold_needed);
     }
 
     /// The horizon is graded, not a second cliff: nearer is worse.
