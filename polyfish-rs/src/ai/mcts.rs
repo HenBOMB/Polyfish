@@ -165,7 +165,7 @@ impl MctsAgent {
             .collect();
 
         // Sort by visits (most visited first)
-        evaluations.sort_by(|a, b| b.visits.partial_cmp(&a.visits).unwrap());
+        evaluations.sort_by(|a, b| b.visits.total_cmp(&a.visits));
 
         let analysis = MctsAnalysis {
             evaluations,

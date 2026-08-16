@@ -329,7 +329,7 @@ impl HeuristicMctsAgent {
             })
             .collect();
 
-        evaluations.sort_by(|a, b| b.visits.partial_cmp(&a.visits).unwrap());
+        evaluations.sort_by(|a, b| b.visits.total_cmp(&a.visits));
 
         // Extract principal variation (best line) by following most-visited children
         let mut pv = Vec::new();

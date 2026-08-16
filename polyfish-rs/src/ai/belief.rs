@@ -247,7 +247,7 @@ impl BeliefState {
     /// Posterior cells, most probable first.
     pub fn capital_top(&self, n: usize) -> Vec<(i32, f32)> {
         let mut v = self.capital_posterior.clone();
-        v.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        v.sort_by(|a, b| b.1.total_cmp(&a.1));
         v.truncate(n);
         v
     }
@@ -1335,7 +1335,7 @@ mod tests {
         }
 
         fn auc(pairs: &mut [(f32, f32)]) -> f32 {
-            pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
             let n = pairs.len();
             let mut rank_sum_pos = 0.0f64;
             let mut pos = 0.0f64;
