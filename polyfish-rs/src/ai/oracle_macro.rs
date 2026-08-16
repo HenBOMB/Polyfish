@@ -826,6 +826,10 @@ pub struct GoalAux {
     /// only "is this tech the right CLASS for the stance". Class-only gating
     /// is what let Organization through on a SAVE turn in seed 1786807403.
     pub save_lane: Option<SaveLane>,
+    /// The one tech that batch is actually waiting on — the deepest unowned
+    /// step of its prerequisite chain. While banking, this is the only
+    /// research that is not a delay.
+    pub save_next_tech: Option<TechnologyType>,
     /// Stance-intensity (Verdi, Aug 14): measured ARM pressure 0..1 from
     /// `stance_strength` — threat-vs-coverage truth, NOT the binary stance.
     /// The eco-tech mask fires only when this is near-certain (>= 0.98);
@@ -1148,6 +1152,31 @@ pub fn scripted_goal_aux(
             }
         }
     }
+    // EXP_ELO_051: the batch we are banking for is by definition on-plan, so
+    // its own next step joins the whitelist — otherwise `passes_tech_caps`
+    // would gate the very purchase the savings exist to make.
+    let mut save_next_tech = None;
+    if let Some(lane) = goal.save_target.as_ref() {
+        if let Some(tribe) = state.tribes.get(&player) {
+            let mut cur = Some(lane.tech);
+            let mut guard = 0;
+            while let Some(t) = cur {
+                guard += 1;
+                if guard > 16
+                    || crate::settings::technology::has_technology(&tribe.tech_vanilla, t)
+                {
+                    break;
+                }
+                save_next_tech = Some(t);
+                cur = crate::settings::technology::get_technology_setting(t).requires;
+            }
+            if let Some(t) = save_next_tech {
+                if !recommended.contains(&t) {
+                    recommended.push(t);
+                }
+            }
+        }
+    }
     let water_dead = !state
         .tiles
         .values()
@@ -1166,6 +1195,7 @@ pub fn scripted_goal_aux(
         // T2 assesses; T3 prices its response against it.
         city_risk: crate::ai::defense::city_risks(state, player),
         save_lane: goal.save_target.clone(),
+        save_next_tech,
         arm_strength: stance_strength(state, player).arm,
         recommended_techs: recommended,
         rider_push,
@@ -1205,6 +1235,41 @@ pub fn passes_tech_caps(m: &dyn Move, aux: &GoalAux) -> bool {
     }
     if aux.techs_bought >= TECH_CAP_PER_GAME {
         return false;
+    }
+    // EXP_ELO_051 lane discipline. This lives here, not behind `star_gate`,
+    // because that gate switches OFF under GROW once the third city is up —
+    // which is exactly when the fixtures bought Organization. Tech discipline
+    // is not conditional on the spending stance.
+    //
+    // Verdi: "the terrain is telling us we clearly just need to get metal and
+    // forge thats it." While a batch is live, only purchases that advance it
+    // pass; before one is affordable, `recommended_techs` — the committed
+    // lane's next step PLUS whatever the overlays demand (defender screen,
+    // catapult counter, knight commit, the market lane) — is the whitelist.
+    // Overlays are what keep this a judgment call rather than a freeze: a
+    // real threat still buys its answer.
+    if let Ok(tech) = m.tech_type() {
+        // A committed knight lane is a whole chain, not just its next step —
+        // the exemption `passes_star_gate` already grants it.
+        let knight_lane = aux.overlays.knight_commit
+            && matches!(
+                tech,
+                TechnologyType::Riding | TechnologyType::FreeSpirit | TechnologyType::Chivalry
+            );
+        if !knight_lane {
+            if let Some(next) = aux.save_next_tech {
+                // Banking: the batch's own next step is the only purchase
+                // that is not a delay. `save_batch_plan` self-terminates once
+                // the batch is affordable, so this never freezes research.
+                if tech != next {
+                    return false;
+                }
+            } else if !aux.recommended_techs.is_empty()
+                && !aux.recommended_techs.contains(&tech)
+            {
+                return false;
+            }
+        }
     }
     // v7.1 (Verdi, Aug 2026): on a map with no water the whole naval lane —
     // Fishing/Sailing/Ramming/Navigation/Aquatism — unlocks nothing buildable
@@ -1938,22 +2003,6 @@ pub fn passes_star_gate(
     // flagged (Organization on t4-t5 of every fixture seed). Bounded by the
     // plan's own lifetime: `save_batch_plan` self-terminates once the batch
     // is affordable, so this never becomes an open-ended research freeze.
-    if let Some(lane) = aux.and_then(|a| a.save_lane.as_ref()) {
-        if let Some(tribe) = _state.tribes.get(&_state.settings.current_player_turn_id) {
-            return advances_save_plan(m, lane, tribe);
-        }
-    }
-    // …and even before a batch is affordable, the LANE is still the plan.
-    // Verdi: "the terrain is telling us we clearly just need to get metal and
-    // forge thats it." `recommended_techs` is the committed lane's next step
-    // plus whatever the overlays demand (defender screen, catapult counter,
-    // knight commit), so a genuine threat response still gets through — that
-    // is the judgment call, not a blanket freeze.
-    if let Some(recs) = aux.map(|a| &a.recommended_techs) {
-        if !recs.is_empty() {
-            return recs.contains(&tech);
-        }
-    }
     let effects = crate::settings::technology::get_tech_effects(tech);
     let arms = !effects.combat_units.is_empty();
     let grows = crate::settings::technology::is_eco_tech(tech);

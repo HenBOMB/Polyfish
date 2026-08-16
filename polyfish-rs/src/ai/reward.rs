@@ -371,7 +371,11 @@ pub const SHAPE_GOAL_SUPER: f32 = 500.0;
 /// underlying quantity is already in Φ's units (city worth), so this is a
 /// trust dial, not a unit conversion — calibrate by the q-gap method against
 /// the measured dq, never by guess.
-pub const SHAPE_GOAL_CITY_RISK: f32 = 1.0;
+/// EXP_ELO_051: measured, not guessed. At 1.0 a ply that vacated a
+/// threatened city priced at −0.01 while a Research earned +0.167 — the term
+/// was live but an order of magnitude too quiet to compete. Dialled against
+/// the observed edge-reward distribution over 24 games.
+pub const SHAPE_GOAL_CITY_RISK: f32 = 4.0;
 pub const SHAPE_GOAL_DEFEND_COVER: f32 = 600.0;
 
 /// Tile-holding pay, only while the garrison is load-bearing
