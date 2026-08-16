@@ -399,7 +399,13 @@ fn potential_partner_count(
                 let ps = get_structure_setting(*p);
                 ps.terrain_types.contains(&tile.terrain_type)
                     && ps.resource_type.map_or(true, |r| {
-                        crate::functions::get_resource_at(state, adj) == Some(r)
+                        // Judged for the OWNER, not `current_player_turn_id`:
+                        // this runs inside rollouts where the pov is not the
+                        // player being planned for.
+                        state.resources.get(&adj).and_then(|x| x.as_ref())
+                            .map_or(false, |res| res.resource_type == r)
+                            && crate::functions::is_resource_visible_to_tribe(
+                                state, r, owner, Some(adj))
                     })
             })
         })
@@ -2287,6 +2293,90 @@ mod tests {
         let mut tile = TileState::default();
         tile.explorers.insert(1);
         state.tiles.insert(idx, tile);
+    }
+
+    /// EXP_ELO_051 — Verdi: "we should be saving towards a lane if that is
+    /// what T1 says … the best computed path for that giant spam is forges."
+    /// A tribe holding Climbing+Mining is walking the Forge lane even when a
+    /// Windmill is cheaper, and a mountain that could take a Mine counts as a
+    /// Forge partner before the Mine is standing — otherwise the plan waits
+    /// on builds that nothing is planning.
+    #[test]
+    fn the_invested_lane_wins_and_future_mines_count_as_partners() {
+        use crate::types::{TechnologyType as T, TerrainType};
+        let mut state = state_with_villages(0, &[3, 5]);
+        {
+            let t1 = state.tribes.get_mut(&1).unwrap();
+            for tech in [T::Climbing, T::Mining, T::Organization, T::Farming] {
+                t1.tech_vanilla.push(crate::states::TechnologyState {
+                    tech_type: tech,
+                    discovered: true,
+                    discovered_turn: 0,
+                });
+            }
+            t1.cities.push(crate::states::CityState {
+                idx: 60,
+                owner: 1,
+                _territory: vec![60, 61, 50, 72],
+                production: 3,
+                ..Default::default()
+            });
+        }
+        // 61 is bare field (a Forge site); 50 and 72 are ore mountains with no
+        // mine on them yet — the exact board that used to price zero.
+        for idx in [60, 61, 50, 72] {
+            let tile = state.tiles.entry(idx).or_insert_with(TileState::default);
+            tile.owner = 1;
+            // Resource visibility is FOW-honest: unexplored ground is not a plan.
+            tile.explorers.insert(1);
+            tile.terrain_type = if idx == 50 || idx == 72 {
+                TerrainType::Mountain
+            } else {
+                TerrainType::Field
+            };
+        }
+        for idx in [50, 72] {
+            state.resources.insert(
+                idx,
+                Some(crate::states::ResourceState {
+                    resource_type: crate::types::ResourceType::Metal,
+                }),
+            );
+        }
+        let plan = save_batch_plan(&state, 1, 0).expect("an unbuilt mine still makes a site");
+        assert_eq!(
+            plan.structure,
+            crate::types::StructureType::Forge,
+            "the invested lane must win, got {:?}",
+            plan.structure
+        );
+        assert_eq!(plan.tech, T::Smithery);
+
+        // …and the batch never grows past the next two placements.
+        assert!(
+            plan.structure_cost <= plan.structure_unit_cost * SAVE_MAX_PLACEMENTS,
+            "structure_cost {} exceeds two placements",
+            plan.structure_cost
+        );
+    }
+
+    /// While banking, research that is not the batch's own next step is the
+    /// purchase that delays it — the Organization buy Verdi flagged.
+    #[test]
+    fn banking_gates_research_that_is_not_the_plan() {
+        use crate::types::TechnologyType as T;
+        let mut aux = GoalAux::default();
+        aux.save_next_tech = Some(T::Mining);
+        aux.recommended_techs = vec![T::Mining];
+        assert!(passes_tech_caps(&ResearchMove::new(T::Mining), &aux));
+        assert!(!passes_tech_caps(&ResearchMove::new(T::Organization), &aux));
+        // No batch: the committed lane's recommendations are the whitelist.
+        aux.save_next_tech = None;
+        assert!(passes_tech_caps(&ResearchMove::new(T::Mining), &aux));
+        assert!(!passes_tech_caps(&ResearchMove::new(T::Organization), &aux));
+        // No opinion at all: nothing is gated on lane grounds.
+        aux.recommended_techs.clear();
+        assert!(passes_tech_caps(&ResearchMove::new(T::Organization), &aux));
     }
 
     /// v7: SAVE fires only for a batch that is out of pocket now but inside
