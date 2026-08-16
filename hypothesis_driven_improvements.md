@@ -5550,3 +5550,113 @@ STATUS: designed, not run. Next step when picked back up: implement
 `score_road`'s BFS-consult, benchmark `heuristic_mcts` leaf-eval latency
 before touching `bonus_capital_connections`, then the same seed-1786807403
 P4 instrument EXP_ELO_054 used.
+
+### EXP_ELO_055 IMPLEMENTED — scope cut to two merges, gates registered before measurement
+
+Implemented Aug 17, 2026, after the `oracle_macro.rs`/`reward.rs`/
+`gumbel_mcts.rs` file-size splits. Two changes to scope from the design
+above, both found by re-reading the actual call sites rather than the
+original one-line summary:
+
+1. **`bonus_capital_connections` is OUT.** It reads the engine's own
+   `connected_to_capital` boolean on `CityState` — ground truth, not a
+   duplicate pathfinder. It was never answering the same question as
+   `connect_remaining` (one asks "am I connected", the other "how far from
+   connected"). Reclassified as a derived state read; left untouched. The
+   `heuristic_mcts` leaf-eval latency risk this ledger flagged above no
+   longer applies — there is nothing to benchmark.
+2. **Verdi's call on Road cost: leave it at 3** (not the real game's 2).
+   EXP_ELO_052 measured roads economically dominated by a Windmill *at cost
+   3* — a connection needs ~9★ (3 road tiles × 3★) plus the Riding→Roads
+   chain for +2 pop, against a Windmill's flat 5★ for the same +2. Holding
+   cost at 3 means this pass's road repricing is being asked to win a fight
+   EXP_ELO_052 already measured as structurally lost. A clean null result
+   here — roads still don't get built even with a correctly-priced signal —
+   is therefore a LEGITIMATE, informative outcome (it would show the prior
+   failure was economics, not signal quality), not a failed implementation.
+   The gate below is written to distinguish the two.
+
+**Tech-fit merge (economy.rs::recommended_techs).** Kept the four hardcoded
+lines (forest/mountain/farm/water) — chain semantics preserved by
+construction, each line still scored as a whole via its own next-unowned
+tech, never by ranking every tech in the game individually (which would let
+a downstream tech like Mathematics outrank its own line's earlier
+prerequisite). Only the RANKING SIGNAL changed: each line's score is now
+`evaluator::research::evaluate_tech_utility(state, player, line's next
+unowned tech)` instead of the old raw terrain/resource census
+(`forest + 2*game_r`, etc). Top-2 lines with score ≥ 0.0 win, same
+next-unowned-tech return as before.
+
+⚠️ **A bigger behavior change than the one-line summary implied, found
+while fixing the two tests this broke.** `evaluate_tech_utility` counts
+resources/terrain from CITY TERRITORY (`tribe.cities[].{_territory}`), not
+every explored tile the way the old census did — and its per-tech formulas
+aren't a relabeling of the same evidence: Organization's utility is driven
+by counted FRUIT resources specifically, where the old farm-line score also
+credited bare Field terrain directly (`field/2 + ...`). A map with open
+fields but no discovered Fruit tiles now scores that line at 0 rather than
+positive. Net effect: `recommended_techs` will (a) return nothing at all
+before a tribe's first city exists (previously it read the whole explored
+map), and (b) rank each line more strictly on the SPECIFIC resource
+`evaluate_tech_utility` associates with it rather than general terrain
+coverage. Both are real, not bugs — but they mean the tech-fit Φ term
+(`SHAPE_GOAL_TECH_FIT`) and the `passes_tech_caps` lane whitelist may both
+fire measurably less often pre-second-city. This is exactly what the
+off-lane-techs metric and the paired win-rate gate below exist to catch.
+
+**Road merge (scoring.rs::score_road + movement.rs::road_relief).**
+`connect_remaining`'s 0-1 BFS is factored into a shared `connect_dist_map`
+helper (`force_free: Option<i32>` — treat one extra tile as already-roaded).
+New `movement::road_relief(state, player, tile_idx)` runs it twice — once
+real, once with `tile_idx` forced free — and returns the total BFS-distance
+reduction across every unconnected city: the real graph-aware relief a road
+at that tile would buy, in the same units `connect_remaining` already prices
+`reward.rs`'s `SHAPE_GOAL_CONNECT` term with. `score_road` now prices
+`-3.0 + RELIEF_PER_TILE(5.0) * relief`, replacing the old straight-line
+"is this near the shortest path between two of my cities" heuristic
+entirely — mobility/map-control (does this tile actually shorten the real
+path), not the connection's population payoff, matching the plan's
+instruction. `RELIEF_PER_TILE = 5.0` is a FIRST FIT — every first fit in
+this ledger has overshot ~2x; dial by the q-gap method against measured
+effect, not by guess.
+
+⚠️ **`score_road` also feeds Greedy's own build scoring** (`scoring.rs` is
+the shared heuristic both the net's in-tree blending AND the pinned Greedy
+anchor use) — so this change moves BOTH seats' behavior, not just the net's.
+The historical 48-seed gate numbers (19 cities lost / 66 off-lane techs /
+46+ wins) are therefore **not a valid baseline for this run**: the opponent
+itself changed. Verification must be a PAIRED A/B on the same 48 seeds
+(arm A = HEAD before this change, arm B = HEAD with it), compared arm-to-arm,
+not against the historical numbers — the EXP_GATE_001 pairing lesson
+(~10x tighter noise floor than an unpaired comparison against a stale
+number).
+
+VERIFICATION SO FAR. `cargo test --lib --tests --bin self_play` green,
+207/207 unit + all integration suites, both before and after. Two existing
+unit tests needed fixture fixes (not logic changes) to reflect the
+territory-scoped tech-fit signal: `recommended_techs_follow_the_environment`
+needed a city added to its fixture (had none — every real game has at least
+a capital, so this was an unrealistic edge case, not a regression); the
+tier-3-cap sub-case of `tech_caps_and_rider_push` needed
+`recommended_techs` cleared before asserting, to isolate what it was
+actually testing (the tier-3 cap) from the lane whitelist, which a
+no-cities fixture now legitimately leaves non-empty via the rider-push
+insert. As always, unit-test-green bounds correctness, not calibration.
+
+GATES (paired A/B, XinXi 48 seeds base 1786807403, gumbel 64/16,
+`--goal-channels --goal-w-tree 1`, anchor-seat 2 / Greedy pinned to
+Imperius, matching every prior instrument in this ledger):
+- Off-lane techs (t≤12), arm B vs arm A: must not regress beyond the
+  measurement's own noise floor. Parser to be written and validated against
+  arm A reproducing ~66 (the last-shipped number) before arm B is trusted.
+- Cities lost, arm B vs arm A: must not regress beyond noise floor
+  (`score_road` moving Greedy's play could change combat outcomes as a
+  side effect independent of roads).
+- Wins, arm B vs arm A: must not regress beyond noise floor.
+- `connected@t10` / roads-researched / first-Rider: reported, not gated —
+  per the ⚠️ above, a flat 0.00 here is an acceptable, informative result
+  at Road cost 3, not a failure condition, as long as the three gates above
+  hold (i.e., the repriced signal isn't making anything WORSE even though
+  it may not be enough to overcome the cost-3 economics).
+
+STATUS: implemented, gates registered, measurement not yet run.

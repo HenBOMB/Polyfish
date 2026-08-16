@@ -195,22 +195,28 @@ pub fn assign_expand_targets(
 /// ever connects — measured 0.00 connected cities at t10 across 96 games on
 /// three tribes. Handing the remaining-tile count down lets T3 price each
 /// tile by the progress it makes.
-pub fn connect_remaining(state: &GameState, player: PlayerId) -> Vec<(i32, i32)> {
+/// Shared 0-1 BFS from the capital behind `connect_remaining`/`road_relief`:
+/// free through standing road, cost 1 per tile that would need building.
+/// `force_free`, if given, is treated as already-roaded regardless of its
+/// real state — the device `road_relief` uses to ask "what would this one
+/// tile change".
+fn connect_dist_map(
+    state: &GameState,
+    player: PlayerId,
+    force_free: Option<i32>,
+) -> Option<std::collections::HashMap<i32, i32>> {
     use crate::types::StructureType;
-    let Some(tribe) = state.tribes.get(&player) else {
-        return Vec::new();
-    };
+    let tribe = state.tribes.get(&player)?;
     // Roads are the only way to build the path; without the tech there is no
     // plan to price, only a constant.
     if !crate::settings::technology::has_technology(&tribe.tech_vanilla, TechnologyType::Roads) {
-        return Vec::new();
+        return None;
     }
-    let Some(cap) = crate::functions::get_capital_city(state, player) else {
-        return Vec::new();
-    };
+    let cap = crate::functions::get_capital_city(state, player)?;
     let cities: Vec<i32> = tribe.cities.iter().map(|c| c.idx).collect();
     let road_here = |idx: i32| {
-        cities.contains(&idx)
+        Some(idx) == force_free
+            || cities.contains(&idx)
             || crate::functions::get_structure_type_at(state, idx) == Some(StructureType::Road)
     };
     let buildable = |idx: i32| {
@@ -225,8 +231,6 @@ pub fn connect_remaining(state: &GameState, player: PlayerId) -> Vec<(i32, i32)>
             .terrain_types
             .contains(&t.terrain_type)
     };
-    // 0-1 BFS from the capital: free through standing road, cost 1 per tile
-    // we would have to build.
     let mut dist: std::collections::HashMap<i32, i32> = std::collections::HashMap::new();
     let mut dq: std::collections::VecDeque<i32> = std::collections::VecDeque::new();
     dist.insert(cap.idx, 0);
@@ -249,10 +253,76 @@ pub fn connect_remaining(state: &GameState, player: PlayerId) -> Vec<(i32, i32)>
             }
         }
     }
+    Some(dist)
+}
+
+/// EXP_ELO_052: road tiles still needed to link each unconnected city into
+/// the capital's network, as (city, tiles_remaining).
+///
+/// The engine connects two adjacent tiles only when BOTH carry a road (city
+/// tiles and ports count as road for this purpose) and never through enemy
+/// ground — see `actions::connection`. So this is a shortest path from the
+/// capital's component where standing road/city tiles are free and buildable
+/// ground costs one.
+///
+/// Why it exists: a connection pays +1 population to the city AND +1 to the
+/// capital, but that lands only on the LAST road tile. Every earlier tile on
+/// the path earns nothing, so it loses every ballot to a harvest and no city
+/// ever connects — measured 0.00 connected cities at t10 across 96 games on
+/// three tribes. Handing the remaining-tile count down lets T3 price each
+/// tile by the progress it makes.
+pub fn connect_remaining(state: &GameState, player: PlayerId) -> Vec<(i32, i32)> {
+    let Some(dist) = connect_dist_map(state, player, None) else {
+        return Vec::new();
+    };
+    let Some(tribe) = state.tribes.get(&player) else {
+        return Vec::new();
+    };
+    let Some(cap) = crate::functions::get_capital_city(state, player) else {
+        return Vec::new();
+    };
     tribe
         .cities
         .iter()
         .filter(|c| c.idx != cap.idx && !c.connected_to_capital)
         .filter_map(|c| dist.get(&c.idx).map(|&d| (c.idx, d)))
         .collect()
+}
+
+/// EXP_ELO_055: real capital-network relief a road built at `tile_idx` would
+/// give — total BFS tiles-still-needed removed across every unconnected
+/// city, from the SAME shortest-path model `connect_remaining` prices with
+/// (terrain/ownership/standing-road aware), not a straight-line distance
+/// between a city pair. Priced for mobility/map-control: this measures how
+/// much closer the road network gets, independent of what the tile yields.
+pub fn road_relief(state: &GameState, player: PlayerId, tile_idx: i32) -> i32 {
+    let Some(tribe) = state.tribes.get(&player) else {
+        return 0;
+    };
+    let Some(cap) = crate::functions::get_capital_city(state, player) else {
+        return 0;
+    };
+    let targets: Vec<i32> = tribe
+        .cities
+        .iter()
+        .filter(|c| c.idx != cap.idx && !c.connected_to_capital)
+        .map(|c| c.idx)
+        .collect();
+    if targets.is_empty() {
+        return 0;
+    }
+    let Some(before) = connect_dist_map(state, player, None) else {
+        return 0;
+    };
+    let Some(after) = connect_dist_map(state, player, Some(tile_idx)) else {
+        return 0;
+    };
+    targets
+        .iter()
+        .filter_map(|t| {
+            let b = *before.get(t)?;
+            let a = *after.get(t)?;
+            Some((b - a).max(0))
+        })
+        .sum()
 }

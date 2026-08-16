@@ -406,8 +406,14 @@ fn tech_caps_and_rider_push() {
     capped.techs_bought = TECH_CAP_PER_GAME;
     assert!(!passes_tech_caps(&research1, &capped));
     assert!(passes_tech_caps(&EndTurnMove, &capped));
+    // Isolate the tier-3 cap from the lane whitelist: this fixture has no
+    // cities, so EXP_ELO_055's territory-scoped recommended_techs recommends
+    // nothing of its own here (only the rider-push insert), which would
+    // otherwise gate Organization out for lane reasons unrelated to what
+    // this assertion is testing.
     let mut t3 = aux.clone();
     t3.tier3_bought = TIER3_CAP_PER_GAME;
+    t3.recommended_techs.clear();
     assert!(passes_tech_caps(&research1, &t3));
     assert!(!passes_tech_caps(&research3, &t3));
 }

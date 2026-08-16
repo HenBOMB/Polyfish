@@ -595,11 +595,21 @@ fn recommended_techs_follow_the_environment() {
     let mut state = GameState::default();
     let mut t1 = TribeState::default();
     t1.units.push(unit_at(0));
+    // EXP_ELO_055: recommended_techs now ranks via evaluate_tech_utility,
+    // which counts resources/terrain from CITY TERRITORY, not every explored
+    // tile — so the fixture needs a city whose territory covers the ridge.
+    t1.cities.push(crate::states::CityState {
+        idx: 12,
+        owner: 1,
+        _territory: (10..16).collect(),
+        ..Default::default()
+    });
     state.tribes.insert(1, t1);
     // Explored mountain ridge with metal → mountain line: Climbing first.
     for idx in 10..16 {
         let mut tile = TileState::default();
         tile.terrain_type = crate::types::TerrainType::Mountain;
+        tile.owner = 1;
         tile.explorers.insert(1);
         state.tiles.insert(idx, tile);
     }

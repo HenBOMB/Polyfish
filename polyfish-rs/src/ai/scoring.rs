@@ -715,88 +715,51 @@ fn score_reward(state: &crate::states::GameState, mv: &dyn Move) -> f32 {
 
 /// Score a road placement based on how well it connects cities.
 /// Returns a bonus/penalty relative to the base Build score.
+///
+/// EXP_ELO_055: priced off the real capital-network shortest path
+/// (`movement::road_relief`, the same BFS `connect_remaining` prices
+/// `reward.rs`'s Φ term with) instead of straight-line distance to a city
+/// pair — for mobility/map-control, not the population a connection happens
+/// to pay. FIRST FIT: dial `RELIEF_PER_TILE` against the measured effect
+/// per the project's q-gap method before trusting it.
+const RELIEF_PER_TILE: f32 = 5.0;
+
 fn score_road(state: &crate::states::GameState, tile_idx: i32) -> f32 {
     let player_id = state.settings.current_player_turn_id;
-    let map_size = state.map_size();
-    let road_pos = Coords::from_index(tile_idx, map_size);
 
-    // Gather our cities and their positions
     let tribe = match state.tribes.get(&player_id) {
         Some(t) => t,
         None => return 0.0,
     };
 
-    let cities: Vec<(Coords, bool)> = tribe
-        .cities
-        .iter()
-        .map(|c| (Coords::from_index(c.idx, map_size), c.connected_to_capital))
-        .collect();
-
-    if cities.len() < 2 {
+    if tribe.cities.len() < 2 {
         return -3.0; // Only 1 city — roads are not useful yet
     }
 
+    let relief = crate::ai::movement::road_relief(state, player_id, tile_idx);
+    let mut score = -3.0 + RELIEF_PER_TILE * relief as f32;
+
     let adj = get_adjacent_indices(state, tile_idx, 1);
 
-    // Check adjacency context
+    // Bonus for extending an existing road chain
     let adj_to_road = adj.iter().any(|&idx| {
         state
             .tiles
             .get(&idx)
             .map_or(false, |t| t.owner == player_id && t.has_road)
     });
-
+    if adj_to_road {
+        score += 2.0;
+    }
+    // Bonus for being adjacent to a city (starting or ending a connection)
     let adj_to_city = adj
         .iter()
         .any(|&idx| tribe.cities.iter().any(|c| c.idx == idx));
-
-    // Find the best city pair this road could help connect
-    let mut best_score: f32 = -3.0;
-
-    for (i, (city_a, connected_a)) in cities.iter().enumerate() {
-        for (city_b, connected_b) in cities.iter().skip(i + 1) {
-            // Most valuable: connecting an unconnected city to the capital
-            let connection_bonus = if *connected_a != *connected_b {
-                8.0 // One connected, one not — this road helps connect them
-            } else if !*connected_a && !*connected_b {
-                4.0 // Neither connected — still useful
-            } else {
-                1.0 // Both already connected — lower priority
-            };
-
-            let city_dist = city_a.distance_to(city_b);
-            if city_dist == 0 {
-                continue;
-            }
-
-            // Check if this road tile lies roughly on the path between the two cities
-            // If dist(A, road) + dist(road, B) is close to dist(A, B), it's on-path
-            let dist_a = road_pos.distance_to(city_a);
-            let dist_b = road_pos.distance_to(city_b);
-            let detour = (dist_a + dist_b) - city_dist;
-
-            if detour <= 1 {
-                // On or very near the shortest path
-                let path_score = connection_bonus + 5.0 - (city_dist as f32 * 0.2).min(4.0);
-                best_score = best_score.max(path_score);
-            } else if detour <= 3 {
-                // Slightly off path but still reasonable
-                let path_score = connection_bonus + 1.0;
-                best_score = best_score.max(path_score);
-            }
-        }
-    }
-
-    // Bonus for extending an existing road chain
-    if adj_to_road {
-        best_score += 2.0;
-    }
-    // Bonus for being adjacent to a city (starting or ending a connection)
     if adj_to_city {
-        best_score += 3.0;
+        score += 3.0;
     }
 
-    best_score
+    score
 }
 
 /// True when fighting at `target_idx` serves territory — on/adjacent to an
