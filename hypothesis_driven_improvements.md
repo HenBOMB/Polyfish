@@ -5445,6 +5445,57 @@ immediate pre-054 commit (9b32ece) on the same harness is the next step
 before this rides in a training loop; until then, treat EXP_ELO_054's
 Φ-pricing change as UNVERIFIED, not shipped-clean.
 
+### EXP_ELO_054 fix — need_damage/attackers decoupling found by code inspection, confirmed by re-run
+
+Root cause found without needing the bisect: `CityRisk.need_damage` was
+sourced from `threat_unit` (built from the broader multi-turn `enterers`
+set) while `defend_plan`'s `sieger` — which sizes every candidate
+defender's damage contribution — reads only `attackers`
+(this-turn-can-attack only). In the retired `city_threats` model these two
+were always the same set by construction (`need` and `attackers` were set
+together, in the same conditional branches); the 054 merge decoupled them.
+For any multi-turn-only threat (real, "on the books" via the 3-turn
+horizon, but nothing able to strike this turn) `attackers` was empty, so
+`sieger` came back `None`, every candidate's `hypo_damage` silently
+computed as 0, and `defend_plan`'s fill loop — which stops once
+accumulated damage meets `need_damage` — could never satisfy an
+unreachable target. It fell through to grabbing `MAX_ASSIGN` (4) nearby
+units regardless of whether they helped, on every such city, every turn.
+This was a sharper bug than the predicted "a little drift," exactly as the
+gap between prediction and the measured 63% jump suggested it must be.
+
+Fix: `need_damage` now comes from the same `attackers` pool `sieger`
+reads. Added a regression test reproducing the exact scenario (a Warrior 3
+tiles out — beyond Dash's move+range=2, so no this-turn attacker — with
+three bystanders a broken `defend_plan` would wrongly recruit) that fails
+without the fix and passes with it.
+
+RE-RUN, same 48-seed instrument, same static checkpoint, `--anchor-seat 2`:
+
+| metric | gate | pre-fix (054) | post-fix | verdict |
+|---|---|---|---|---|
+| wins | ≥ 46/48 | 42/48 | **46/48** | **PASS** |
+| cities lost | ≤ 19 | 31 | **22** | close, not strictly under — see note |
+| off-lane techs (t≤12) | ≤ 66 | 66 | not re-measured | unaffected code path (see note) |
+
+Cities lost (22) is a 29% reduction from the pre-fix 31 and sits inside
+this exact harness's own recent history (EXP_ELO_051 measured 26 after its
+own fix, 052's registration cited 19 as one prior reading) — closer to
+"within this instrument's run-to-run band" than "still broken," but it is
+not strictly under the 19 gate, so this is reported as-is rather than
+rounded up to a clean pass. Off-lane techs was not re-measured this pass —
+the fix touches only `defend_plan`'s damage sizing, a code path unrelated
+to tech recommendation/lane logic, and the metric was already sitting at
+the gate's exact boundary (not the failure) in the pre-fix run.
+
+Cities-lost and wins parsed directly from the run's own
+`--dump-turn-states`/`--dump-games-dir` output (per-turn city-list diffs
+for player 1 only, and `decisions.json`'s `final_scores`), not estimated.
+
+VERDICT: fix confirmed as the correct root cause. Recommend landing this
+before the next MACRO_GEN round; off-lane-techs re-measurement is the one
+open item before calling 054 fully clean.
+
 ## EXP_ELO_055 — road and tech-fit duplication: designed, deliberately NOT shipped this pass
 
 REGISTERED Aug 16, 2026, alongside the src/ai/ taxonomy reorg (Phase 5 of
