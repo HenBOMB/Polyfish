@@ -5224,3 +5224,42 @@ claim from EXP_ELO_050 the live question rather than a deferred one.
 found in-tree potentials hold behaviour shifts masks cannot, and the pricing
 is already correct — a mask would paper over an untrained prior and remove
 the very gradient the training round needs.
+
+### EXP_ELO_051 final — the distillation round (run_id 1786710389, iters 21-60)
+
+MACRO_GEN, macro-mcts + heuristic leaf, sims 32 / k 4, `--goal-channels
+--goal-w-tree 1`, ITER_OFFSET=115. All 60 iterations completed.
+
+LEARNING. `value_r2` 0.793 (pre, last 8) → **0.846** at iter 60, clearing the
+pre-change ceiling of 0.807 and rising throughout. `value_loss` 0.563 →
+0.533. `policy_loss` stepped UP 2.215 → 2.39 when the teacher changed and
+walked back to 2.238 — the owned-vs-rented shape, recovering not diverging.
+
+BEHAVIOUR — 48 paired seeds, same harness, same binary family, weights the
+only intended difference:
+
+| | pre-training | trained | |
+|---|---|---|---|
+| cities lost | 26 | **18** | −31% |
+| plies that leave one of my cities | 1617 | **1428** | −12% |
+| …of those, priced negative | 36% | 36% | shaping identical |
+| mean net prior on those plies | 0.592 | **0.544** | −8% |
+| off-lane techs (t≤12) | 99 | **73** | −26% |
+| wins | 47/48 | 46/48 | at ceiling, uninformative |
+
+The shaping term is unchanged between the two arms (36% negative in both),
+so the drop in both frequency and prior is the POLICY moving toward the
+teacher. **This confirms EXP_ELO_050's deferred P4**: the pricing distils.
+
+FULL ARC vs the pre-051 baseline (9deec1d): cities lost **56 → 26 → 18**
+(−68%), off-lane techs **158 → 99 → 73** (−54%), win rate 81.2% → 97.9%
+(McNemar z = 2.47 on the code change alone).
+
+⚠️ Caveat: the trained arm ran on 54d4829, the pre-training arm on 351e66f.
+The delta is the rollout-only pov resource-visibility fix and the
+`total_cmp` sort fix; neither should move city retention, but this is not a
+weights-only A/B and should not be quoted as one.
+
+STILL OPEN: 18/18 remaining losses are still `garrisoned=false,
+defend_ordered=true`, median loss turn 14 (was 17 — they now happen earlier,
+i.e. the late-game leaks closed first). Task: T3 ranking the RESPONSE.
