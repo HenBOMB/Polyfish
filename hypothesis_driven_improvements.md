@@ -5412,6 +5412,39 @@ gumbel 64/16, `--goal-channels --goal-w-tree 1`): cities lost should stay
 at or below the last-shipped 19, off-lane techs at or below 66, wins at or
 above 46/48 — logged here once the run completes.
 
+### EXP_ELO_054 ACTUAL — gate FAILED, root cause not yet isolated
+
+Run Aug 16 2026 against HEAD (6bb3f96), same instrument as the gate above,
+anchor-seat 2 (Greedy pinned to Imperius), `--iteration 135` holding
+anchor_frac at its ceiling, fast Metal/MPSGraph eval path.
+
+| metric | gate | measured | verdict |
+|---|---|---|---|
+| cities lost | ≤ 19 | **31** | **FAIL** (+63%) |
+| off-lane techs (t≤12) | ≤ 66 | 66 | pass, exact boundary |
+| wins | ≥ 46/48 | **42/48** | **FAIL** |
+
+Win count cross-validated two ways (decision-log score parse and
+self_play's own `anchor_net_wr: 0.875` METRICS line) — agree exactly, not a
+parsing artifact. Model-checkpoint confound checked and ruled out:
+`model.safetensors` mtime matches `training_log.csv`'s last row (run_id
+1786710389, iteration 60) with no later training activity — this is the
+same static checkpoint 052/053 were measured against.
+
+⚠️ **Not yet isolated to the 054 diff specifically.** HEAD also carries
+1b2cc7a (053, hub-lane ranking), 8b7db46 (eco_plan split, pure move — no
+plausible mechanism), and 9b32ece (Phase 2, UI-only capital-suspect swap —
+no plausible mechanism, `predict_enemy_capitals` isn't read by any
+in-tree/training path). Of the four, 054 is the only one that touches live
+Defend-order generation and Φ pricing, and H2 above already flagged the
+mechanism (`city_risks.attackers` is a narrower can-attack-this-turn pool
+than `city_threats.attackers`'s wider `2·movement+range` band) — but "a
+little drift" was the prediction, not a 63% jump in city losses, so there
+may be a sharper bug beyond calibration drift. A bisect against the
+immediate pre-054 commit (9b32ece) on the same harness is the next step
+before this rides in a training loop; until then, treat EXP_ELO_054's
+Φ-pricing change as UNVERIFIED, not shipped-clean.
+
 ## EXP_ELO_055 — road and tech-fit duplication: designed, deliberately NOT shipped this pass
 
 REGISTERED Aug 16, 2026, alongside the src/ai/ taxonomy reorg (Phase 5 of
