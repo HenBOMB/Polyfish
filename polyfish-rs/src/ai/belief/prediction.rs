@@ -20,12 +20,7 @@ pub fn tribe_to_climate(tribe: TribeType) -> i32 {
 }
 
 /// Validation for village candidates based on mapgen rules
-fn validate_village_candidate(
-    state: &GameState,
-    idx: i32,
-    current_predictions: &IndexMap<i32, (TribeType, bool)>,
-    known_cities: &std::collections::HashSet<i32>,
-) -> bool {
+fn validate_village_candidate(state: &GameState, idx: i32, known: &[i32]) -> bool {
     let size = state.settings.size;
 
     // 1. Cardinal Neighbor Rule: No Ocean neighbors
@@ -47,191 +42,44 @@ fn validate_village_candidate(
         return false;
     }
 
-    // 3. Distance-3 Rule (Chebyshev) from known cities
-    for &city_idx in known_cities {
-        if crate::functions::get_chebyshev_distance(idx, city_idx, size) < 3 {
-            return false;
-        }
-    }
-
-    // 4. Distance-3 Rule (Chebyshev) from other predictions
-    for &pred_idx in current_predictions.keys() {
-        if crate::functions::get_chebyshev_distance(idx, pred_idx, size) < 3 {
-            return false;
-        }
-    }
-
-    true
+    // 3. Distance-3 Rule (Chebyshev) from every known village/capital
+    known.iter().all(|&k| get_chebyshev_distance(idx, k, size) >= 3)
 }
 
-/// Predict village locations in fog based on climate density AND orphan resources
-pub fn predict_villages(state: &GameState) -> IndexMap<i32, (TribeType, bool)> {
-    let pov_id = state.settings.current_player_turn_id;
-    let pov_tribe_type = state
-        .tribes
-        .get(&pov_id)
-        .map(|t| t.tribe_type)
-        .unwrap_or(TribeType::None);
-    let pov_climate = tribe_to_climate(pov_tribe_type);
-
-    let mut candidates: IndexMap<i32, (i32, i32)> = IndexMap::new();
-
-    // Collect all known cities/villages
-    let mut known_cities = std::collections::HashSet::new();
-    for (&idx, tile) in &state.tiles {
-        if tile.capital_of > 0
-            || (tile.explorers.contains(&pov_id)
-                && crate::functions::get_structure_type_at(state, idx)
-                    == Some(crate::types::StructureType::Village))
-        {
-            known_cities.insert(idx);
-        }
-    }
-
-    // Orphan helper
-    let is_orphan = |res_idx: i32| -> bool {
-        if known_cities.contains(&res_idx) {
-            return false;
-        }
-        let (rx, ry) = (res_idx % state.settings.size, res_idx / state.settings.size);
-        for &city_idx in &known_cities {
-            let (cx, cy) = (
-                city_idx % state.settings.size,
-                city_idx / state.settings.size,
-            );
-            if (rx - cx).abs() <= 1 && (ry - cy).abs() <= 1 {
-                return false;
-            }
-        }
-        true
-    };
-
-    // 1. Resource Heuristic - iterate over explored tiles
-    for (&tile_idx, tile) in &state.tiles {
-        if !tile.explorers.contains(&pov_id) {
-            continue;
-        }
-        if let Some(res_opt) = state.resources.get(&tile_idx) {
-            if res_opt.is_some() && is_orphan(tile_idx) {
-                let neighbors = get_adjacent_indices(state, tile_idx, 1);
-                for n_idx in neighbors {
-                    let n_explored = state
-                        .tiles
-                        .get(&n_idx)
-                        .map(|t| t.explorers.contains(&pov_id))
-                        .unwrap_or(false);
-                    if !n_explored {
-                        if !validate_village_candidate(
-                            state,
-                            n_idx,
-                            &IndexMap::new(),
-                            &known_cities,
-                        ) {
-                            continue;
-                        }
-                        let entry = candidates.entry(n_idx).or_insert((0, 0));
-                        entry.0 += 5;
-                    }
-                }
-            }
-        }
-    }
-
-    // 2. Climate Heuristic - iterate over explored tiles
-    for (&tile_idx, tile) in &state.tiles {
-        if !tile.explorers.contains(&pov_id) {
-            continue;
-        }
-        if tile.owner != pov_id && tile.climate != pov_climate && tile.climate != 0 {
-            let around = get_adjacent_indices(state, tile_idx, 2);
-            for idx in around {
-                let idx_explored = state
-                    .tiles
-                    .get(&idx)
-                    .map(|t| t.explorers.contains(&pov_id))
-                    .unwrap_or(false);
-                if !idx_explored {
-                    if !validate_village_candidate(state, idx, &IndexMap::new(), &known_cities) {
-                        continue;
-                    }
-                    let entry = candidates.entry(idx).or_insert((0, tile.climate));
-                    entry.0 += 1;
-                }
-            }
-        }
-    }
-
-    // 3. Resource Cluster Density & Tribe Bias (Exploit: Cities prefer areas with many resources)
-    let candidate_indices: Vec<i32> = candidates.keys().cloned().collect();
-    for idx in candidate_indices {
-        let mut res_count = 0;
-        let neighbors = get_adjacent_indices(state, idx, 1);
-        for n_idx in neighbors {
-            if let Some(res_opt) = state.resources.get(&n_idx) {
-                if res_opt.is_some() {
-                    res_count += 1;
-                }
-            }
-        }
-
-        if let Some(entry) = candidates.get_mut(&idx) {
-            if res_count >= 2 {
-                entry.0 += 10; // Massive bonus for clusters
-            }
-
-            // Tribe Bias (Bardur doesn't have crops, Imperius loves fruit)
-            let predicted_tribe = climate_to_tribe(entry.1);
-            if predicted_tribe == TribeType::Bardur {
-                // Check if any nearby resource is a crop? (Wait, we might not know resource type if hidden)
-                // But we can check visible neighboring crops
-                for n_idx in get_adjacent_indices(state, idx, 1) {
-                    if let Some(Some(res)) = state.resources.get(&n_idx) {
-                        if res.resource_type == crate::types::ResourceType::Crop {
-                            entry.0 -= 20; // Extremely unlikely to be Bardur if there are crops
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    let mut prediction_map: IndexMap<i32, (TribeType, bool)> = IndexMap::new();
-    let mut sorted: Vec<_> = candidates.into_iter().collect();
-    sorted.sort_by_key(|(_, (count, _))| -count);
-
-    for (best_idx, (count, climate)) in &sorted {
-        if *count > 2 {
-            if validate_village_candidate(state, *best_idx, &prediction_map, &known_cities) {
-                prediction_map.insert(*best_idx, (climate_to_tribe(*climate), true));
-            }
-        }
-        if prediction_map.len() >= 5 {
-            break;
-        }
-    }
-
-    if prediction_map.is_empty() && !sorted.is_empty() {
-        let (best_idx, (_, climate)) = sorted[0];
-        prediction_map.insert(best_idx, (climate_to_tribe(climate), true));
-    }
-
-    prediction_map
+/// One guessed undiscovered village site: where, which tribe if the nearby
+/// explored evidence points to one, and how confident that evidence is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VillageGuess {
+    pub tile: i32,
+    pub tribe: Option<TribeType>,
+    pub confidence: f32,
 }
 
-/// Guess likely undiscovered village sites from the generator's own Drylands
-/// rules + the observed map (FOW-honest — game knowledge, not map peeking).
-/// The generator fills villages to SATURATION over legal spots (land, edge
-/// distance ∈ {2,4,5...}, Chebyshev ≥3 from every village/capital), so an
-/// UNEXPLORED legal spot ≥3 from everything known must lie near an
-/// undiscovered village. Returns up to `max_sites`, nearest-to-units first,
-/// mutually ≥3 apart (the "first warrior center, second north/east" spread).
+/// Guess likely undiscovered village sites, from two evidence sources merged
+/// into one guesser (Aug 2026 — previously two separate functions,
+/// `guessed_village_sites` and `predict_villages`, answering the same
+/// question from different angles):
 ///
-/// A sibling of `predict_villages` above rather than a merge with it (Aug
-/// 2026 taxonomy reorg): this one reasons from mapgen placement rules over
-/// the WHOLE map, that one from resource/climate density on EXPLORED tiles —
-/// different evidence, kept physically adjacent rather than forced into one
-/// signature.
-pub fn guessed_village_sites(state: &GameState, player: PlayerId, max_sites: usize) -> Vec<i32> {
+/// - **Where**: the generator's own placement rules decide candidate
+///   SELECTION. It fills villages to SATURATION over legal spots (land, edge
+///   distance ∈ {2,4,5...}, Chebyshev ≥3 from every known village/capital
+///   and from every other guess), so an UNEXPLORED legal spot ≥3 from
+///   everything known must lie near an undiscovered village. Picks are
+///   nearest-to-units first, spread across distinct quadrants around the
+///   anchor centroid — nearest-first alone put guesses in one bearing sector
+///   88% of the time, sending every scout the same way.
+/// - **How confident, and which tribe**: resource/climate evidence on
+///   EXPLORED tiles near each selected site — an orphaned resource (not
+///   already claimed by a known city), a resource cluster, or a
+///   climate-mismatched neighbour all raise confidence; a crop next to a
+///   site the climate evidence points to as Bardur (who have none) rules
+///   Bardur back out. This evidence does NOT drive which tiles get picked —
+///   letting it do so would reintroduce exactly the one-direction-only bug
+///   the quadrant spread above exists to prevent, since resource evidence is
+///   often lopsided toward one explored corner of the map.
+///
+/// Returns up to `max_sites`, mutually ≥3 apart.
+pub fn guess_villages(state: &GameState, player: PlayerId, max_sites: usize) -> Vec<VillageGuess> {
     let size = state.settings.size as i32;
     let Some(tribe) = state.tribes.get(&player) else {
         return Vec::new();
@@ -263,14 +111,11 @@ pub fn guessed_village_sites(state: &GameState, player: PlayerId, max_sites: usi
         known.extend(t.cities.iter().map(|c| c.idx).filter(|&i| explored(i)));
     }
 
+    // --- Selection: generator geometry alone (unchanged from the old
+    // guessed_village_sites) ---
     let mut cands: Vec<(i32, i32)> = (0..size * size)
         .filter(|&idx| {
-            let (r, c) = (idx / size, idx % size);
-            let edge = r.min(size - 1 - r).min(c).min(size - 1 - c);
-            !explored(idx)
-                && edge >= 2
-                && edge != 3
-                && known.iter().all(|&k| cheb(idx, k) >= 3)
+            !explored(idx) && validate_village_candidate(state, idx, &known)
         })
         .map(|idx| {
             let d = anchors.iter().map(|&a| cheb(a, idx)).min().unwrap_or(i32::MAX);
@@ -278,10 +123,6 @@ pub fn guessed_village_sites(state: &GameState, player: PlayerId, max_sites: usi
         })
         .collect();
     cands.sort_unstable();
-    // Bucket B: prefer picks in DISTINCT quadrants around the anchor centroid
-    // — nearest-first alone often put both guesses in one bearing sector,
-    // sending every scout the same way (audit: 89% duplicate-sector games).
-    // Pass 1 enforces quadrant novelty; pass 2 fills any remainder.
     let (mut cx, mut cy) = (0i32, 0i32);
     for &a in &anchors {
         cx += a % size;
@@ -307,7 +148,62 @@ pub fn guessed_village_sites(state: &GameState, player: PlayerId, max_sites: usi
             picks.push(idx);
         }
     }
+
+    // --- Confidence + tribe: resource/climate evidence near each pick ---
+    let pov_climate = tribe_to_climate(tribe.tribe_type);
+    let is_orphan = |res_idx: i32| known.iter().all(|&k| cheb(res_idx, k) > 1);
     picks
+        .into_iter()
+        .map(|site| {
+            let mut score = 0i32;
+            let mut climate_evidence = 0i32;
+            for n in get_adjacent_indices(state, site, 1) {
+                if explored(n)
+                    && is_orphan(n)
+                    && matches!(state.resources.get(&n), Some(Some(_)))
+                {
+                    score += 5;
+                }
+            }
+            let res_neighbors = get_adjacent_indices(state, site, 1)
+                .into_iter()
+                .filter(|&n| matches!(state.resources.get(&n), Some(Some(_))))
+                .count();
+            if res_neighbors >= 2 {
+                score += 10;
+            }
+            for n in get_adjacent_indices(state, site, 2) {
+                if let Some(t) = state.tiles.get(&n) {
+                    if explored(n) && t.owner != player && t.climate != pov_climate && t.climate != 0
+                    {
+                        score += 1;
+                        climate_evidence = t.climate;
+                    }
+                }
+            }
+            let mut guessed_tribe =
+                (climate_evidence != 0).then(|| climate_to_tribe(climate_evidence));
+            if guessed_tribe == Some(TribeType::Bardur) {
+                let crop_nearby = get_adjacent_indices(state, site, 1).into_iter().any(|n| {
+                    matches!(
+                        state.resources.get(&n),
+                        Some(Some(r)) if r.resource_type == crate::types::ResourceType::Crop
+                    )
+                });
+                if crop_nearby {
+                    score -= 20;
+                    guessed_tribe = None;
+                }
+            }
+            VillageGuess {
+                tile: site,
+                tribe: guessed_tribe,
+                // Purely geometric picks still carry a real (if modest) floor —
+                // the generator-saturation reasoning alone is solid evidence.
+                confidence: (0.3 + score as f32 / 20.0).clamp(0.05, 1.0),
+            }
+        })
+        .collect()
 }
 
 /// Find the tribe of the nearest known city/village to a given tile
@@ -461,10 +357,13 @@ pub fn get_border_clouds(state: &GameState) -> Vec<i32> {
 }
 
 pub fn update_predictions(state: &mut GameState) {
-    let villages = predict_villages(state);
+    let pov_id = state.settings.current_player_turn_id;
+    let villages: IndexMap<i32, (TribeType, bool)> = guess_villages(state, pov_id, 5)
+        .into_iter()
+        .map(|g| (g.tile, (g.tribe.unwrap_or(TribeType::None), true)))
+        .collect();
 
     // Prediction for ALL unexplored tiles (Mental Image)
-    let pov_id = state.settings.current_player_turn_id;
     let mut fog_tiles = Vec::new();
     for (&idx, tile) in &state.tiles {
         if !tile.explorers.contains(&pov_id) {
@@ -527,7 +426,6 @@ mod tests {
     use super::*;
     use crate::states::{GameState, TileState, TribeState};
     use crate::types::{TerrainType, TribeType};
-    use std::collections::HashSet;
 
     #[test]
     fn test_village_prediction_constraints() {
@@ -547,32 +445,67 @@ mod tests {
         pov_tribe.tribe_type = TribeType::Imperius;
         state.tribes.insert(pov_id, pov_tribe);
 
-        let known_cities = HashSet::new();
+        let known_cities: Vec<i32> = Vec::new();
         let ocean_idx = 2 * size + 2;
         state.tiles.get_mut(&ocean_idx).unwrap().terrain_type = TerrainType::Ocean;
         let adj_idx = 2 * size + 3;
-        assert!(!validate_village_candidate(
-            &state,
-            adj_idx,
-            &IndexMap::new(),
-            &known_cities
-        ));
+        assert!(!validate_village_candidate(&state, adj_idx, &known_cities));
 
         let city_idx = 5 * size + 5;
-        let mut cities = HashSet::new();
-        cities.insert(city_idx);
-        assert!(!validate_village_candidate(
-            &state,
-            city_idx + 1,
-            &IndexMap::new(),
-            &cities
-        ));
-        assert!(validate_village_candidate(
-            &state,
-            city_idx + 3,
-            &IndexMap::new(),
-            &cities
-        ));
+        let cities = vec![city_idx];
+        assert!(!validate_village_candidate(&state, city_idx + 1, &cities));
+        assert!(validate_village_candidate(&state, city_idx + 3, &cities));
+    }
+
+    /// The merge's whole point: geometry alone gives a real but modest floor
+    /// confidence, and nearby resource/climate evidence raises it — without
+    /// changing WHICH tile got picked (that's still generator geometry only).
+    #[test]
+    fn resource_evidence_raises_confidence_without_changing_the_pick() {
+        let mut state = GameState::default();
+        let size = 11;
+        state.settings.size = size;
+        for i in 0..(size * size) {
+            let mut tile = TileState::default();
+            tile.coords = crate::coords::Coords::from_index(i, size);
+            tile.terrain_type = TerrainType::Field;
+            state.tiles.insert(i, tile);
+        }
+        let pov_id = 1;
+        state.settings.current_player_turn_id = pov_id;
+        let mut t1 = TribeState::default();
+        t1.id = pov_id;
+        t1.tribe_type = TribeType::Imperius;
+        t1.cities.push(crate::states::CityState { idx: 60, ..Default::default() });
+        state.tribes.insert(pov_id, t1);
+        state.tiles.get_mut(&60).unwrap().explorers.insert(pov_id);
+
+        let baseline = guess_villages(&state, pov_id, 1);
+        assert_eq!(baseline.len(), 1);
+        let site = baseline[0].tile;
+        assert_eq!(baseline[0].confidence, 0.3, "no evidence: pure geometric floor");
+
+        // Explore one neighbour of the pick and drop an orphaned resource on
+        // it — evidence must not exist until the tile is actually seen.
+        let evidence_idx = crate::functions::get_adjacent_indices(&state, site, 1)
+            .into_iter()
+            .find(|&n| n != 60)
+            .expect("a neighbour other than the capital exists on an 11x11 board");
+        state.tiles.get_mut(&evidence_idx).unwrap().explorers.insert(pov_id);
+        state.resources.insert(
+            evidence_idx,
+            Some(crate::states::ResourceState { resource_type: crate::types::ResourceType::Game }),
+        );
+
+        let with_evidence = guess_villages(&state, pov_id, 1);
+        assert_eq!(with_evidence.len(), 1);
+        assert_eq!(with_evidence[0].tile, site, "evidence must not change the pick");
+        assert!(
+            with_evidence[0].confidence > baseline[0].confidence,
+            "resource evidence must raise confidence: {} vs baseline {}",
+            with_evidence[0].confidence,
+            baseline[0].confidence
+        );
     }
 
     #[test]

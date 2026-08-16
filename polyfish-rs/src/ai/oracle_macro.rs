@@ -102,8 +102,8 @@ pub fn scripted_goal(
     // generator-informed guesses stand in for undiscovered villages, so the
     // approach gradient drives scouting toward likely sites instead of idling.
     if tribe.cities.len() < COMMIT_CITY_TARGET && orders.len() < EXPAND_TARGET_MIN {
-        for idx in guessed_village_sites(state, player, EXPAND_TARGET_MIN - orders.len()) {
-            orders.push((OrderKind::Expand, idx));
+        for g in guess_villages(state, player, EXPAND_TARGET_MIN - orders.len()) {
+            orders.push((OrderKind::Expand, g.tile));
         }
     }
 
@@ -889,9 +889,9 @@ pub fn update_goal(
 /// generator-informed guesses fill the remainder (v2.4).
 pub const EXPAND_TARGET_MIN: usize = 2;
 
-/// Moved to `belief::prediction` (Aug 2026 taxonomy reorg) — co-located with
-/// `predict_villages`, the other FOW village-guesser it duplicates.
-pub use crate::ai::belief::prediction::guessed_village_sites;
+/// Moved to `belief::prediction` and merged with `predict_villages` (Aug
+/// 2026) — one village-guesser instead of two.
+pub use crate::ai::belief::prediction::{guess_villages, VillageGuess};
 
 /// Whether the goal-conditioned research gate is active (v2.2, stance-aware):
 /// GROW gates during the expansion window (EXPAND painted, under
@@ -3249,7 +3249,7 @@ mod tests {
         state.tribes.insert(1, t1);
         explore_tile(&mut state, 60);
 
-        let sites = guessed_village_sites(&state, 1, 2);
+        let sites: Vec<i32> = guess_villages(&state, 1, 2).iter().map(|g| g.tile).collect();
         assert_eq!(sites.len(), 2);
         let cheb = |a: i32, b: i32| ((a / 11) - (b / 11)).abs().max(((a % 11) - (b % 11)).abs());
         for &s in &sites {
@@ -3263,8 +3263,8 @@ mod tests {
 
         // A known village nearby suppresses guesses in its exclusion zone.
         add_visible_village(&mut state, 24); // (2,2)
-        let sites = guessed_village_sites(&state, 1, 4);
-        assert!(sites.iter().all(|&s| cheb(s, 24) >= 3));
+        let sites = guess_villages(&state, 1, 4);
+        assert!(sites.iter().all(|g| cheb(g.tile, 24) >= 3));
 
         // And scripted_goal paints guesses whenever real targets run short.
         let g = scripted_goal(&state, 1, 0, None);
@@ -3389,7 +3389,7 @@ mod tests {
             // mechanism from `scripted_goal`'s own guessed-village Expand
             // orders, which (via rider mobility) carry a real, non-terrain
             // signal of their own and are essentially always present once
-            // `guessed_village_sites` kicks in below `COMMIT_CITY_TARGET`
+            // `guess_villages` kicks in below `COMMIT_CITY_TARGET`
             // cities — even the census "has nothing to say" fixture is not
             // actually reachable through the production goal-setter.
             let goal = MacroGoal::default();
@@ -3546,7 +3546,7 @@ mod tests {
     fn guessed_sites_spread_across_quadrants() {
         // Anchor in the center; legal spots exist in multiple quadrants.
         let state = state_with_villages(60, &[]);
-        let picks = guessed_village_sites(&state, 1, 2);
+        let picks: Vec<i32> = guess_villages(&state, 1, 2).iter().map(|g| g.tile).collect();
         assert_eq!(picks.len(), 2);
         let size = 11;
         let q = |idx: i32| ((idx % size > 5) as u8) * 2 + ((idx / size > 5) as u8);

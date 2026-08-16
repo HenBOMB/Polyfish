@@ -253,14 +253,15 @@ pub fn enumerate_candidates_with_belief(
                 |a: i32, t: i32| ((a % w - t % w).abs()).max((a / w - t / w).abs());
             let mut safe: Vec<i32> = Vec::new();
             let mut contested: Vec<i32> = Vec::new();
-            for (&idx, _) in &crate::prediction::predict_villages(state) {
+            for g in crate::prediction::guess_villages(state, pov, 5) {
+                let idx = g.tile;
                 if cheb(idx, enemy) <= 1 {
                     continue; // that's their capital area, not a village
                 }
                 if base.orders.iter().any(|(_, t)| *t == idx) {
                     continue;
                 }
-                // predict_villages is fog-only; belt+suspenders for World
+                // guess_villages is fog-only; belt+suspenders for World
                 // mode interactions later.
                 if state
                     .tiles
