@@ -3,6 +3,7 @@
 //! Provides prediction functions for MCTS simulations to avoid accessing ground truth data.
 //! When `_are_you_sure = false`, the engine uses these predictions instead of actual hidden data.
 
+use crate::ai::belief::BeliefState;
 use crate::functions::get_adjacent_indices;
 use crate::states::GameState;
 use crate::types::{TerrainType, TribeType};
@@ -390,26 +391,35 @@ pub fn update_predictions(state: &mut GameState) {
     });
 }
 
+/// Suspected enemy capital tiles, ranked by the mapgen quadrant posterior
+/// (the same prior `BeliefState` seeds itself with — see `ai::belief`) and
+/// filtered to tiles this player hasn't explored. Replaces the old one-shot
+/// mirror-geometry guess, which ignored the generator's actual placement
+/// rules and only ever pointed at the map-diagonal opposite corner.
 pub fn predict_enemy_capitals(state: &GameState) -> Vec<i32> {
     let size = state.settings.size;
     let pov_id = state.settings.current_player_turn_id;
-    let mut pov_cap = None;
-    for tribe in state.tribes.values() {
-        if tribe.id == pov_id && !tribe.cities.is_empty() {
-            pov_cap = Some(tribe.cities[0].idx);
-            break;
-        }
-    }
-    let Some(cap) = pov_cap else {
+    let Some(own_cap) = state
+        .tiles
+        .iter()
+        .find(|(_, t)| t.capital_of == pov_id)
+        .map(|(&idx, _)| idx)
+    else {
         return Vec::new();
     };
-    let (px, py) = (cap % size, cap / size);
-    let tx = if px < size / 2 { size - 1 } else { 0 };
-    let ty = if py < size / 2 { size - 1 } else { 0 };
-    let target = ty * size + tx;
+    let player_count = state.tribes.len();
+    let opponent = state
+        .tribes
+        .keys()
+        .copied()
+        .find(|&id| id != pov_id)
+        .unwrap_or(pov_id);
 
-    get_adjacent_indices(state, target, 3)
+    let belief = BeliefState::new(size, player_count, own_cap, pov_id, opponent);
+    belief
+        .capital_top(8)
         .into_iter()
+        .map(|(idx, _)| idx)
         .filter(|idx| {
             !state
                 .tiles
