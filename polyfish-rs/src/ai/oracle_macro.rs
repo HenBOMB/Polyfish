@@ -137,7 +137,7 @@ pub fn scripted_goal(
     // (fixture 1786670356), and a strike-only model was blind to an EMPTY
     // reachable city (seed-1786807403, capital lost on t9 while the
     // directive read Grow/Expand).
-    for r in crate::ai::defense::city_risks(state, player) {
+    for r in crate::ai::combat::city_risks(state, player) {
         if r.needs_order() {
             orders.push((OrderKind::Defend, r.city));
         }
@@ -567,7 +567,7 @@ pub struct GoalAux {
     /// city is worth) for every city under threat. The expensive reachability
     /// search happens here, once; T3 re-resolves only `residual_risk` against
     /// live occupancy, which is what gives its defensive plies a gradient.
-    pub city_risk: Vec<crate::ai::defense::CityRisk>,
+    pub city_risk: Vec<crate::ai::combat::CityRisk>,
     /// EXP_ELO_051: the batch this seat is banking for, carried down so the
     /// star gate can ask "does this purchase advance the plan" instead of
     /// only "is this tech the right CLASS for the stance". Class-only gating
@@ -781,7 +781,7 @@ pub fn scripted_goal_aux(
     });
     GoalAux {
         // T2 assesses; T3 prices its response against it.
-        city_risk: crate::ai::defense::city_risks(state, player),
+        city_risk: crate::ai::combat::city_risks(state, player),
         save_lane: goal.save_target.clone(),
         save_next_tech,
         lane_next_tech,

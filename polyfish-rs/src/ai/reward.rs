@@ -760,7 +760,7 @@ pub fn goal_potential(
     }
     if let Some(a) = aux {
         phi -= SHAPE_GOAL_CITY_RISK
-            * crate::ai::defense::residual_city_loss(state, player, &a.city_risk);
+            * crate::ai::combat::residual_city_loss(state, player, &a.city_risk);
     }
     if matches!(goal.stance, Stance::Grow | Stance::Save) {
         phi -= SHAPE_GOAL_STRANDED * completion_stranded(state, player) as f32;
@@ -905,7 +905,7 @@ pub fn goal_potential(
         .map(|(_, i)| *i)
         .collect();
     if width > 0 && goal.orders.iter().any(|(k, _)| *k == OrderKind::Defend) {
-        let threats = crate::ai::defense::city_risks(state, player);
+        let threats = crate::ai::combat::city_risks(state, player);
         for (kind, idx) in &goal.orders {
             if *kind != OrderKind::Defend {
                 continue;
@@ -914,7 +914,7 @@ pub fn goal_potential(
                 continue; // stale order: threat cleared, nothing to pay
             };
             let urgency = if th.at_risk { 1.0 } else { 0.5 };
-            let plan = crate::ai::defense::defend_plan(state, player, th, &attack_targets);
+            let plan = crate::ai::combat::defend_plan(state, player, th, &attack_targets);
             for (_, sat) in &plan.assigned {
                 phi += SHAPE_GOAL_DEFEND_COVER * urgency * sat;
             }
@@ -931,7 +931,7 @@ pub fn goal_potential(
                     .iter()
                     .filter(|u| {
                         !assigned.contains(&u.coords.idx)
-                            && !crate::ai::defense::attack_committed(
+                            && !crate::ai::combat::attack_committed(
                                 state,
                                 player,
                                 u,
@@ -969,7 +969,7 @@ pub fn goal_potential(
                 }
                 let d = cheb(u.coords.idx, h, width);
                 let m = crate::functions::get_unit_movement(state, u);
-                let sat = if crate::ai::defense::covers(state, u, h) {
+                let sat = if crate::ai::combat::covers(state, u, h) {
                     1.0
                 } else if d <= 2 * m {
                     0.5

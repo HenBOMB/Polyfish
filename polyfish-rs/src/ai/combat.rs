@@ -1,6 +1,8 @@
-//! EXP_ELO_040: city threat model + defense coverage plans for the macro
-//! executor. Pure functions of state, FOW-honest (visible enemies only),
-//! built on the real engine math: `compute_reachable_tiles` for reach
+//! The combat bucket (Aug 2026 taxonomy reorg; renamed from `defense.rs` to
+//! sit next to `rules::combat` — AI-level judgment vs. engine-level
+//! primitive): EXP_ELO_040's city threat model + defense coverage plans for
+//! the macro executor. Pure functions of state, FOW-honest (visible enemies
+//! only), built on the real engine math: `compute_reachable_tiles` for reach
 //! (roads/terrain count) and `calculate_combat`/`get_defense_bonus` on
 //! coord-swapped unit clones for hypothetical placements.
 

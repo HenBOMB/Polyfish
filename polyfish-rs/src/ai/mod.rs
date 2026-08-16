@@ -1,6 +1,6 @@
 pub mod belief;
+pub mod combat;
 pub mod decision_trace;
-pub mod defense;
 pub mod economy;
 pub mod eval_backend;
 pub mod eval_server;

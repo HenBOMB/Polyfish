@@ -477,7 +477,7 @@ impl SiegeTracker {
             .min();
         let responders = own
             .iter()
-            .filter(|u| polyfish::ai::defense::covers(state, u, idx))
+            .filter(|u| polyfish::ai::combat::covers(state, u, idx))
             .count();
         let ordered_defend = goal.map(|g| {
             g.orders.iter().any(|(k, t)| {
