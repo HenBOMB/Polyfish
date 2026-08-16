@@ -5263,3 +5263,58 @@ weights-only A/B and should not be quoted as one.
 STILL OPEN: 18/18 remaining losses are still `garrisoned=false,
 defend_ordered=true`, median loss turn 14 (was 17 — they now happen earlier,
 i.e. the late-game leaks closed first). Task: T3 ranking the RESPONSE.
+
+## EXP_ELO_052 — the save lane must be the lane T1 committed to
+
+REGISTERED Aug 16, 2026. Verdi's three goals: (G) more giants sooner on
+XinXi/Imperius, (H) more hubs and higher average hub level, (R) Imperius and
+Bardur commit RiderRoads and execute it — first Rider by t3, cities
+road-connected by t10.
+
+BASELINE (32 games/tribe, net = tribe1 vs pinned Greedy, gumbel 64/16,
+`--goal-channels --goal-w-tree 1`, GUMBEL_SCALE=0, model 8a19941…):
+
+| | XinXi | Imperius | Bardur |
+|---|---|---|---|
+| lane commit | ForgeGiants 32/32 | RiderRoads 29/32 | RiderRoads 28/32 |
+| giants by t10 / t15 | 0.47 / 2.00 | 0.34 / 1.12 | 0.19 / 0.50 |
+| games ≥2 giants by t15 | 72% | 41% | 6% |
+| hubs @t15 / avg partners | 1.81 / 2.29 | 0.94 / 1.33 | 1.12 / 1.42 |
+| first Rider | t13.7 | t11.6 | t10.8 |
+| **cities connected @t10** | **0.00** | **0.00** | **0.00** |
+| Riding researched | t12.1 | t10.7 | t9.9 |
+| Roads researched | t16.4 (7/32) | t13.8 (15/32) | t13.5 (11/32) |
+
+**Lane SELECTION is not the problem** — Imperius and Bardur already commit
+RiderRoads ~90% of games. EXECUTION is: the lane's first tech lands ~t10 and
+its second ~t14, so a t10 connection is arithmetically impossible, and in
+half the games Roads never arrives at all. Not one city connected to its
+capital by t10 in 96 games.
+
+⚠️ ROOT CAUSE, AND IT IS A REGRESSION I INTRODUCED IN EXP_ELO_051.
+`save_batch_plan` picks its lane by `lane_investment` — how much of a
+structure's TECH CHAIN the tribe already owns — as a proxy for "the lane T1
+committed to". For XinXi the proxy is exact (Climbing is a Smithery
+prerequisite, so ForgeGiants wins). For Imperius it inverts: the tribe
+spawns with **Organization**, a Construction prerequisite, so the plan banks
+for **Construction+Windmill** on a RiderRoads-committed seat (measured: 69
+of 224 net plies at t≤6, never the committed lane). 051's tech gate then
+lets ONLY `save_next_tech` through — so Riding, the committed lane's own
+first tech, is GATED OUT by the lane-discipline machinery meant to serve it.
+Measured consequence: `Research Riding` appears on the ballot in **8 of 764**
+plies over t0–t5, while Hunting (25×) and Farming (22×) get bought.
+
+H1: make the save lane follow the COMMITTED ARCHETYPE, falling back to
+    investment/price only when no lane is committed. RiderRoads maps to the
+    Market lane, whose chain is Trade ← Roads ← Riding — so `save_next_tech`
+    becomes Riding and the gate FORCES it early instead of forbidding it.
+    Predicts: Riding and Roads move several turns earlier on Imperius/Bardur,
+    first Rider falls toward t3, connections at t10 become non-zero.
+H2: connections are +1 pop to the city AND +1 to the capital, so H1 should
+    also lift city levels → giants (G) without any giant-specific change.
+
+GATES. P1 (R): first Rider ≤ t6 mean and connected@t10 > 0 on both
+Imperius and Bardur. P2 (G): giants by t15 up on all three tribes, ≥2-by-t15
+share up. P3 (H): hubs@t15 and avg partners up or flat. P4 (regression, the
+051 instrument, XinXi 48 seeds base 1786807403): cities lost ≤ 18, off-lane
+techs ≤ 73, wins ≥ 46/48.

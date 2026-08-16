@@ -543,9 +543,35 @@ fn dump_turn_state(
                 "level": c.level,
                 "progress": c.progress,
                 "production": polyfish::functions::get_city_production(state, c),
+                "connected": c.connected_to_capital,
             })
         })
         .collect();
+    // Hub census: the multiplier-tier structures and how many partners each
+    // actually pays on. `partner_count` is the hub's LEVEL in the sense that
+    // matters — a Forge with one mine is a different building from a Forge
+    // with four.
+    let hubs: Vec<serde_json::Value> = {
+        use polyfish::types::StructureType as S;
+        const HUBS: [S; 4] = [S::Forge, S::Windmill, S::Sawmill, S::Market];
+        tribe
+            .cities
+            .iter()
+            .flat_map(|c| c._territory.iter().copied())
+            .filter_map(|idx| {
+                let s = polyfish::functions::get_structure_at(state, idx)?;
+                if !HUBS.contains(&s.structure_type) {
+                    return None;
+                }
+                Some(json!({
+                    "idx": idx,
+                    "type": format!("{:?}", s.structure_type),
+                    "partners": polyfish::rules::economy::partner_count(
+                        state, idx, s.structure_type, pov),
+                }))
+            })
+            .collect()
+    };
     // Stage 4 attribution: `ply <- order <- playstyle`. The lane is the root
     // cause, the orders are the middle tier, and both are recorded from the
     // state that actually drove this ply (dumped post-search, pre-move).
@@ -570,6 +596,8 @@ fn dump_turn_state(
         "cities": cities,
         "city_count": cities.len(),
         "city_detail": city_detail,
+        "hubs": hubs,
+        "connected_cities": tribe.cities.iter().filter(|c| c.connected_to_capital).count(),
         "visible_villages": visible_villages,
         "units": units,
         "seen_squishy": arch.seen_squishy,
