@@ -416,6 +416,16 @@ pub fn advances_save_plan(m: &dyn Move, lane: &SaveLane, tribe: &crate::states::
 /// a WHOLE (via its own next-unowned tech), never by ranking every tech in
 /// the game individually — that would recommend a downstream tech (e.g.
 /// Mathematics) ahead of its own line's earlier, unowned prerequisite.
+///
+/// EXP_ELO_055 follow-up: `evaluate_tech_utility` counts resources/terrain
+/// from CITY TERRITORY, which is too little ground to rank reliably before a
+/// second city exists — measured cost was +10 off-lane techs across 48
+/// games (sign test p≈0.011), from the committed lane's own next tech
+/// sometimes losing to an off-lane pickup in exactly this window. Below two
+/// cities, fall back to the old map-wide explored-tile census (the same
+/// scoring this function used before EXP_ELO_055); switch to the
+/// territory-scoped ROI signal once there's a second city's worth of ground
+/// to score it against.
 pub fn recommended_techs(state: &GameState, player: PlayerId) -> Vec<TechnologyType> {
     let Some(tribe) = state.tribes.get(&player) else {
         return Vec::new();
@@ -426,14 +436,58 @@ pub fn recommended_techs(state: &GameState, player: PlayerId) -> Vec<TechnologyT
     let farm_line: &[Tech] = &[Tech::Organization, Tech::Farming, Tech::Construction];
     let water_line: &[Tech] = &[Tech::Fishing];
     let lines: [&[Tech]; 4] = [forest_line, mountain_line, farm_line, water_line];
+    let next_unowned = |line: &[Tech]| -> Option<Tech> {
+        line.iter()
+            .copied()
+            .find(|t| !crate::settings::technology::is_tech_unlocked(&tribe.tech_vanilla, *t))
+    };
+
+    if tribe.cities.len() < 2 {
+        use crate::types::{ResourceType as R, TerrainType as T};
+        let (mut forest, mut mountain, mut field, mut water) = (0i32, 0i32, 0i32, 0i32);
+        let (mut game_r, mut fruit, mut crop, mut metal, mut fish) = (0i32, 0i32, 0i32, 0i32, 0i32);
+        for (idx, tile) in state.tiles.iter() {
+            if !tile.explorers.contains(&player) {
+                continue;
+            }
+            match tile.terrain_type {
+                T::Forest => forest += 1,
+                T::Mountain => mountain += 1,
+                T::Field => field += 1,
+                T::Water | T::Ocean => water += 1,
+                _ => {}
+            }
+            if let Some(Some(r)) = state.resources.get(idx) {
+                match r.resource_type {
+                    R::Game => game_r += 1,
+                    R::Fruit => fruit += 1,
+                    R::Crop => crop += 1,
+                    R::Metal => metal += 1,
+                    R::Fish => fish += 1,
+                    _ => {}
+                }
+            }
+        }
+        let census: [i32; 4] = [
+            forest + 2 * game_r,
+            mountain + 2 * metal,
+            field / 2 + 2 * (fruit + crop),
+            water / 2 + 2 * fish,
+        ];
+        let mut ranked: Vec<(i32, usize)> = census.into_iter().zip(0..4).collect();
+        ranked.sort_by_key(|(score, _)| -*score);
+        return ranked
+            .into_iter()
+            .take(2)
+            .filter(|(score, _)| *score > 0)
+            .filter_map(|(_, i)| next_unowned(lines[i]))
+            .collect();
+    }
 
     let mut scored: Vec<(f32, Tech)> = lines
         .iter()
         .filter_map(|line| {
-            let next = line
-                .iter()
-                .copied()
-                .find(|t| !crate::settings::technology::is_tech_unlocked(&tribe.tech_vanilla, *t))?;
+            let next = next_unowned(line)?;
             let score = crate::ai::evaluator::research::evaluate_tech_utility(state, player, next);
             Some((score, next))
         })

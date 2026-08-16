@@ -5660,3 +5660,106 @@ Imperius, matching every prior instrument in this ledger):
   it may not be enough to overcome the cost-3 economics).
 
 STATUS: implemented, gates registered, measurement not yet run.
+
+### EXP_ELO_055 ACTUAL — road merge clean win, tech-fit merge a real regression
+
+Run Aug 17, 2026, paired A/B on the P4 instrument (arm A = `44a8b89`, HEAD
+before this change; arm B = `bf09283`, HEAD with it), same 48 seeds (base
+1786807403), same pinned checkpoint (`model.safetensors` sha256 `8a19941…`,
+the same checkpoint EXP_ELO_052 cites), gumbel 64/16, `--goal-channels
+--goal-w-tree 1`, anchor-seat 2 / Greedy pinned to Imperius.
+
+Off-lane-techs parser (previously ad hoc, now a reusable script) validated
+against three independent historical datasets (`base48`/`new48`/`trained48`
+from EXP_ELO_051's own replays) before trusting it — exact match on wins,
+cities lost, and off-lane techs on all three. A fresh arm-A rerun then
+landed at 45/48 W, 25 lost, 65 off-lane — within noise of the last-shipped
+46/48, 22, 66, and cross-validated the same two ways EXP_ELO_054 used
+(decision-log parse + self_play's own `anchor_net_wr`, exact agreement).
+
+| metric | arm A (before) | arm B (after) | delta | gate | verdict |
+|---|---|---|---|---|---|
+| wins | 45/48 | **48/48** | +3 | must not regress | PASS (improvement; n=3 discordant, not itself significant) |
+| cities lost | 25 | **20** | −5 | must not regress | PASS (improvement) |
+| off-lane techs (t≤12) | 65 | **75** | **+10** | must not regress | **FAIL** |
+| connected@t10 | 0.000 | 0.000 | flat | report only | as anticipated — Road cost pinned at 3★ |
+| roads researched | 13/48, t18.2 | 13/48, t17.3 | flat | report only | no material change |
+| first Rider | 28/48, t14.5 | 30/48, t13.6 | mild | report only | not notable |
+
+All 48 seeds committed the same lane (ForgeGiants) in both arms, so the
+off-lane count is apples-to-apples — no lane-identity confound.
+
+**The off-lane-techs regression is real, not noise.** Per-seed deltas: 13
+seeds +1, 3 seeds −1, 32 flat. A sign test on the 16 non-zero pairs
+(13-3 split) gives one-sided p≈0.011 — pairing already controls for
+seed/map, so a symmetric jitter source can't produce that skew, and it
+clears both this project's own rebuild-only noise estimate for this metric
+(≈1 count: historical 66 → arm-A rerun 65) and the task's looser
+proportional guideline. Mechanism matches the ⚠️ this entry registered
+in advance: `recommended_techs` now scores off territory-owned resources
+(`evaluate_tech_utility`) instead of a general terrain census, so
+pre-second-city it sometimes fails to recommend the committed lane's own
+next tech, letting an off-lane pickup (mostly Organization/Farming/Riding)
+through the SAVE gate. Effect size is modest (~0.2 extra off-lane
+techs/game) and broadly distributed across seeds, not driven by a few
+outliers.
+
+**The wins/cities-lost gain and the road merge are the more likely story,
+not the tech-fit merge.** The 3 flipped-win seeds are exactly the 3 largest
+city-retention swings (4→1, 2→1, 2→0 cities lost) — one underlying effect,
+not two. `score_road` also feeds Greedy's own move scoring (registered
+above), so part of this could be the opponent playing differently, not the
+net — exactly why arm-to-arm comparison was required instead of trusting
+the historical gate.
+
+CAVEATS carried from the measuring agent: the harness's
+`--anchor-decay-start 135` flag was reconstructed (not read off a
+checked-in script), though corroborated by a prior scratchpad artifact and
+by 100% anchor-rate holding across all historical 48-seed data;
+`connected@t10` is a newly-defined operational metric (turn==10 snapshot,
+no prior script to check it against); run-to-run float jitter exists even
+at `GUMBEL_SCALE=0` (arm A's 45/25/65 vs. the historically-reported
+46/22/66 on code that should be equivalent), which bounds confidence on the
+win/cities-lost deltas specifically more than it does the off-lane delta
+(the sign test on the latter argues it survives that jitter).
+
+VERDICT: two of three gated metrics pass with a real improvement; the third
+fails with a real, mechanistically-understood, modest regression. Net
+effect is a genuine trade-off, not a clean win or a clean revert — logged
+here unsoftened; see the follow-up entry for the decision on what ships.
+
+### EXP_ELO_055 follow-up — territory fallback below two cities
+
+Verdi's call: try a targeted fix for the identified gap rather than revert
+the tech-fit merge outright or ship the regression as-is.
+
+CHANGE. `recommended_techs` (economy.rs) now branches on
+`tribe.cities.len() < 2`: below two cities it falls back to the EXACT
+pre-EXP_ELO_055 map-wide explored-tile census (unchanged code, just no
+longer the only path); at two-plus cities it uses the
+`evaluate_tech_utility`-ranked signal this entry shipped. Chain semantics
+(next-unowned-tech-of-the-line, never a bare per-tech ranking) are
+unaffected in both branches.
+
+H: the measured regression is concentrated in exactly the window this
+targets — a tribe spawns with one city, and the committed lane's own next
+tech needs the map-wide census (which the old code always used) rather than
+a one-city territory sample to rank reliably. Restoring the old signal for
+that window while keeping the new one from the second city onward should
+recover most or all of the +10 off-lane-techs cost without touching the
+signal-consistency benefit the merge exists to buy in the mid-game, where
+territory is a much less noisy proxy for "what is this map suited for."
+
+VERIFICATION. `cargo test --lib --tests --bin self_play`: 207/207 unit +
+full integration suite green (one `test_gumbel_tree_reuse_on_consecutive_
+same_player_search` failure on the first full-suite run did not reproduce
+on an isolated rerun of its own binary or on a second full-suite run —
+resource-contention flake from running many test binaries at once,
+unrelated to this change; not a search-determinism regression).
+
+GATE: same paired-A/B instrument, same 48 seeds, same checkpoint, arm A
+still `44a8b89` (pre-EXP_ELO_055) — off-lane techs should land materially
+closer to arm A's 65 than the un-patched 75; wins/cities-lost should hold
+their EXP_ELO_055 gains (nothing about this fix touches the road merge).
+
+STATUS: implemented, re-measurement pending.
