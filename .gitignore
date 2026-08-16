@@ -45,6 +45,7 @@ polyfish-rs/illegal_moves/
 polyfish-fs/replays/autospy_*/*
 /polyfish-rs/replays/gauge_stats
 /polyfish-rs/replays/exp**
+/polyfish-rs/replays/**/*.json*
 
 # Binary model weights (use releases/LFS for these)
 polyfish-rs/models/*
