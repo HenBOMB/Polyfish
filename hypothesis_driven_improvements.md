@@ -5762,4 +5762,38 @@ still `44a8b89` (pre-EXP_ELO_055) — off-lane techs should land materially
 closer to arm A's 65 than the un-patched 75; wins/cities-lost should hold
 their EXP_ELO_055 gains (nothing about this fix touches the road merge).
 
-STATUS: implemented, re-measurement pending.
+### EXP_ELO_055 follow-up ACTUAL — fix recovered ~90% of the regression, all gates clear
+
+Run Aug 17 2026, same instrument, arm B2 = `3940d83` (the fallback fix), run
+in the foreground this time (no backgrounding flakiness in the harness
+itself). Checkpoint sha256 verified identical across all three builds.
+Win count cross-validated against `anchor_net_wr: 0.9583` (46/48), exact.
+
+| metric | arm A (before, 44a8b89) | arm B unpatched (bf09283) | arm B2 post-fix (3940d83) |
+|---|---|---|---|
+| wins | 45/48 | 48/48 | **46/48** |
+| cities lost | 25 | 20 | **19** |
+| off-lane techs (t≤12) | 65 | 75 | **66** |
+
+B2 vs arm A: off-lane techs +1 (65→66), sign-test two-sided p≈0.73 —
+statistically indistinguishable from noise, landing on the historical ~66
+boundary this ledger has cited since EXP_ELO_052/054. Cities lost −6,
+improvement fully retained (19 is the best of all three arms). Wins +1,
+not significant (McNemar z=0.58) but not a loss either.
+
+B2 vs unpatched arm B: off-lane techs −9 (75→66), recovering ~90% of the
+regression the first measurement found. Cities lost held (−1, marginally
+better). Wins gave back 2 of the original 3 flipped wins — immaterial,
+since that 3-0 flip was never itself significant (p=0.25).
+
+VERDICT: all three gates now clear against arm A. The fallback fix isolated
+the pre-second-city gap cleanly without touching the 2+-city behavior
+driving the defense/win gains. `connected@t10`/roads-researched/first-Rider
+stayed flat and uninteresting across all three arms, as anticipated at Road
+cost 3★ — the road merge's contribution here is entirely through combat/
+defense play (Greedy's own move-scoring shifted too, per the registered ⚠️
+above), not through actually getting a city connected.
+
+STATUS: SHIPPED. `3940d83` is the final state of EXP_ELO_055; no further
+action pending. Road cost 2-vs-3 remains open as a separate, deliberately
+un-reopened game-rule question (Verdi: leave at 3).
