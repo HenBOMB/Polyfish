@@ -5198,3 +5198,29 @@ defend_ordered=true`** — T2 names the city and the executor still does not
 put a unit on it. Median loss turn 17. The assessment is now right; what is
 missing is T3 choosing the cheapest goal-aligned response (garrison vs buy
 vs accelerate), which is the half of Verdi's Aug 15 note still unbuilt.
+
+### EXP_ELO_051 addendum (Aug 16) — where the last 26 losses actually come from
+
+Traced every loss in the n=48 arm back past the "last turn we still held it"
+window, which was misleading: by then an enemy already stood on the tile, so
+the ballot carried no Train and no Step-in (100% of cases). The decision is
+2-3 turns earlier.
+
+  - **26/26 losses trace to a garrison LEAVING**, not to being overwhelmed.
+  - Gap from vacate to loss: **2 turns in 18 cases, 3 in 7, 6 in 1** — all
+    inside `THREAT_HORIZON`, so the assessment does see it.
+  - **14 of the 15 recoverable vacating plies are now priced NEGATIVE**
+    (−0.002 to −0.257). Before 051 this was 0 of 97: the term is working.
+  - What beats it is the **policy prior**, which sits at 0.97 / 0.83 / 0.82 /
+    0.67 on the very moves that leave the city.
+
+So the remaining gap is not assessment and not pricing — both now do the
+right thing. It is that the net has never been trained on this behaviour.
+That is precisely what the MACRO_GEN round started Aug 16 02:0x (run_id
+1786710389, resumed at iter 21) is for, and it makes the P4 distillation
+claim from EXP_ELO_050 the live question rather than a deferred one.
+
+⚠️ Deliberately NOT adding a mask here. `goal-pricing-beats-masks` (028 P1c)
+found in-tree potentials hold behaviour shifts masks cannot, and the pricing
+is already correct — a mask would paper over an untrained prior and remove
+the very gradient the training round needs.
