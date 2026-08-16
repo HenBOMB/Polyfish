@@ -17,7 +17,9 @@ pub mod hash;
 pub mod illegal_move_log;
 pub mod mapgen;
 pub mod moves;
-pub mod prediction;
+// Moved into ai::belief (Aug 2026 taxonomy reorg) — re-exported flat so every
+// existing `crate::prediction::X` / `polyfish::prediction::X` path still resolves.
+pub use ai::belief::prediction;
 pub mod recorder;
 pub mod rules;
 pub mod replayer;

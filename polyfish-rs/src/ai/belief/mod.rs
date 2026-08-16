@@ -4,6 +4,12 @@
 //! `BeliefState` never touches true state; `CalibHarness` is the single
 //! component allowed to read it, to feed observables and to log ground truth
 //! for offline calibration.
+//!
+//! [`prediction`] sits alongside it: cheaper, non-Bayesian FOW guesses
+//! (village sites, terrain, capital suspects) used where MCTS needs a fast
+//! stand-in for hidden state rather than this module's tracked posterior.
+
+pub mod prediction;
 
 use crate::moves::Move;
 use crate::states::{GameState, PlayerId};
