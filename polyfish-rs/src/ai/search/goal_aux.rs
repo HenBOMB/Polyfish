@@ -1,14 +1,14 @@
 //! Per-ply auxiliary goal context (Aug 2026 taxonomy reorg: split out of
 //! oracle_macro.rs to keep every file in `ai::` under ~1000 lines): `GoalAux`
 //! plus the root-only move gates that consume it (tech caps, ability gate,
-//! capture-first, star gate) and `scripted_goal_aux`/`market_ready`, which
+//! capture-first, star gate) and `compute_goal_aux`/`market_ready`, which
 //! build it. Re-exported through `oracle_macro` so existing
 //! `crate::ai::oracle_macro::X` call sites keep resolving.
 
 use crate::ai::economy::{recommended_techs, SaveLane};
 use crate::ai::movement::{connect_remaining, rider_turns_saved, RIDER_PUSH_MIN_TURNS_SAVED};
 use crate::ai::oracle_macro::{
-    stance_strength, MacroGoal, OrderKind, Stance, COMMIT_CITY_TARGET, TECH_CAP_PER_GAME,
+    stance_pressure, MacroGoal, OrderKind, Stance, COMMIT_CITY_TARGET, TECH_CAP_PER_GAME,
     TIER3_CAP_PER_GAME,
 };
 use crate::ai::search::archetype::{lane_techs, Archetype, ArchetypeState, Overlays};
@@ -48,7 +48,7 @@ pub struct GoalAux {
     /// road tile by the progress it makes.
     pub connect_remaining: Vec<(i32, i32)>,
     /// Stance-intensity (Verdi, Aug 14): measured ARM pressure 0..1 from
-    /// `stance_strength` — threat-vs-coverage truth, NOT the binary stance.
+    /// `stance_pressure` — threat-vs-coverage truth, NOT the binary stance.
     /// The eco-tech mask fires only when this is near-certain (>= 0.98);
     /// below that ARM steers pricing, never masks.
     pub arm_strength: f32,
@@ -65,7 +65,7 @@ pub struct GoalAux {
     /// each living one banks `SHAPE_GOAL_ARCHETYPE_UNIT` in the potential.
     pub preferred_units: Vec<crate::types::UnitType>,
     /// v3 reactive overlays; `knight_commit` also opens the
-    /// FreeSpirit→Chivalry purchase lane (see `passes_tech_caps`).
+    /// FreeSpirit→Chivalry purchase lane (see `passes_tech_purchase_limits`).
     pub overlays: Overlays,
     /// v6 income lane: third city up + a hub structure standing → the
     /// Riding→Roads→Trade lane is recommended and Trade is exempt from the
@@ -73,11 +73,11 @@ pub struct GoalAux {
     pub market_push: bool,
     /// v7: this seat already owns an economic tier-3 (by purchase OR ruin
     /// grant). Until it does, combat tier-3s are blocked — see
-    /// `passes_tech_caps`. Ownership rather than purchases on purpose: a free
+    /// `passes_tech_purchase_limits`. Ownership rather than purchases on purpose: a free
     /// economy tier-3 out of a ruin has already paid the ordering cost.
     pub eco_tier3_owned: bool,
     /// The map holds no water at all (Drylands), so the whole water tech lane
-    /// buys nothing — see `passes_tech_caps`. Read from the true tile set, not
+    /// buys nothing — see `passes_tech_purchase_limits`. Read from the true tile set, not
     /// the player's view: map type is public information at game start, unlike
     /// what happens to sit under the fog.
     pub water_dead: bool,
@@ -87,7 +87,7 @@ pub struct GoalAux {
 /// the path-aware rider push (a Rider beats a walker to some EXPAND target
 /// → Riding joins the recommendations while unowned), and the caller-tracked
 /// purchase counters.
-pub fn scripted_goal_aux(
+pub fn compute_goal_aux(
     state: &GameState,
     player: PlayerId,
     goal: &MacroGoal,
@@ -184,7 +184,7 @@ pub fn scripted_goal_aux(
         }
     }
     // EXP_ELO_051: the batch we are banking for is by definition on-plan, so
-    // its own next step joins the whitelist — otherwise `passes_tech_caps`
+    // its own next step joins the whitelist — otherwise `passes_tech_purchase_limits`
     // would gate the very purchase the savings exist to make.
     // The committed lane's own next step — the chain walked to its deepest
     // unowned tech, so a two-step lane buys Riding before Roads.
@@ -244,7 +244,7 @@ pub fn scripted_goal_aux(
         save_next_tech,
         lane_next_tech,
         connect_remaining: connect_remaining(state, player),
-        arm_strength: stance_strength(state, player).arm,
+        arm_strength: stance_pressure(state, player).arm,
         recommended_techs: recommended,
         rider_push,
         techs_bought,
@@ -277,7 +277,7 @@ pub fn market_ready(state: &GameState, player: PlayerId) -> bool {
 
 /// Root-only whole-game purchase caps — applied whenever a `GoalAux` is set,
 /// independent of the stance gate's window. Non-Research moves always pass.
-pub fn passes_tech_caps(m: &dyn Move, aux: &GoalAux) -> bool {
+pub fn passes_tech_purchase_limits(m: &dyn Move, aux: &GoalAux) -> bool {
     if m.move_type() != MoveType::Research {
         return true;
     }
@@ -298,7 +298,7 @@ pub fn passes_tech_caps(m: &dyn Move, aux: &GoalAux) -> bool {
     // real threat still buys its answer.
     if let Ok(tech) = m.tech_type() {
         // A committed knight lane is a whole chain, not just its next step —
-        // the exemption `passes_star_gate` already grants it.
+        // the exemption `passes_stance_tech_mask` already grants it.
         let knight_lane = aux.overlays.knight_commit
             && matches!(
                 tech,
@@ -321,7 +321,7 @@ pub fn passes_tech_caps(m: &dyn Move, aux: &GoalAux) -> bool {
                 // allowed
             } else if let Some(next) = aux.save_next_tech {
                 // Lane complete: bank for the hub, and only its next step is
-                // not a delay. `save_batch_plan` self-terminates once the
+                // not a delay. `pick_save_lane` self-terminates once the
                 // batch is affordable, so this never freezes research.
                 if tech != next {
                     return false;
@@ -463,7 +463,7 @@ pub fn passes_capture_first(state: &GameState, m: &dyn Move) -> bool {
 /// - `Some(Unlock)`: nothing gated (no unlock policy yet).
 /// - `None`: every tech (the EXP_ELO_026 legacy gate, kept reproducible for
 ///   arena `--macro-star-gate`; now a hard drop rather than a reserve test).
-pub fn passes_star_gate(
+pub fn passes_stance_tech_mask(
     _state: &GameState,
     m: &dyn Move,
     stance: Option<Stance>,
@@ -478,7 +478,7 @@ pub fn passes_star_gate(
     // v6: an active knight commitment makes its lane stance-coherent — the
     // stance-class gating no longer applies (GROW gated Chivalry as combat
     // tech while ARM gated FreeSpirit as eco tech, blocking the lane from
-    // both sides). passes_tech_caps already restricts the lane to commits.
+    // both sides). passes_tech_purchase_limits already restricts the lane to commits.
     if (tech == TechnologyType::FreeSpirit || tech == TechnologyType::Chivalry)
         && aux.map_or(false, |a| a.overlays.knight_commit)
     {
@@ -488,7 +488,7 @@ pub fn passes_star_gate(
     // are banking for a named lane, a tech that does not advance it is the
     // purchase that delays it — which is exactly the "random tech" Verdi
     // flagged (Organization on t4-t5 of every fixture seed). Bounded by the
-    // plan's own lifetime: `save_batch_plan` self-terminates once the batch
+    // plan's own lifetime: `pick_save_lane` self-terminates once the batch
     // is affordable, so this never becomes an open-ended research freeze.
     let effects = crate::settings::technology::get_tech_effects(tech);
     let arms = !effects.combat_units.is_empty();

@@ -773,7 +773,7 @@ use crate::types::UnitType;
             save_target: None,
         };
         let aux = |s: &crate::states::GameState| {
-            crate::ai::oracle_macro::scripted_goal_aux(s, 1, &goal, 0, 0, None)
+            crate::ai::oracle_macro::compute_goal_aux(s, 1, &goal, 0, 0, None)
         };
         let quiet = goal_potential(&state, 1, &goal, Some(&aux(&state)));
         state.tribes.get_mut(&2).unwrap().units.push(combat_unit(59, UnitType::Swordsman, 2));

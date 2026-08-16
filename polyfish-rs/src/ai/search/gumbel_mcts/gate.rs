@@ -29,11 +29,11 @@ pub(super) fn gate_block(
     stance: Option<crate::ai::oracle_macro::Stance>,
     aux: Option<&crate::ai::oracle_macro::GoalAux>,
 ) -> Option<usize> {
-    if star_gate && !crate::ai::oracle_macro::passes_star_gate(state, m, stance, aux) {
+    if star_gate && !crate::ai::oracle_macro::passes_stance_tech_mask(state, m, stance, aux) {
         return Some(0);
     }
     if let Some(a) = aux {
-        if !crate::ai::oracle_macro::passes_tech_caps(m, a) {
+        if !crate::ai::oracle_macro::passes_tech_purchase_limits(m, a) {
             return Some(1);
         }
         if !crate::ai::oracle_macro::passes_ability_gate(state, m) {

@@ -945,7 +945,7 @@ mod tests {
         use crate::ai::macro_agent::{
             enumerate_candidates, enumerate_candidates_with_belief, CandidateClass,
         };
-        use crate::ai::oracle_macro::{update_goal, StanceCommit};
+        use crate::ai::oracle_macro::{commit_macro_goal, StanceCommit};
         let mut found_belief_candidate = false;
         for seed in 0..8i64 {
             let mut game = generated_game(9_400_000 + seed);
@@ -953,7 +953,7 @@ mod tests {
             // predict_villages (it needs explored orphan resources/climate).
             {
                 use crate::ai::macro_exec;
-                use crate::ai::oracle_macro::scripted_goal;
+                use crate::ai::oracle_macro::compute_macro_goal;
                 let mut arch = crate::ai::oracle_macro::ArchetypeState::default();
                 let mut counters = macro_exec::TurnCounters::default();
                 for _ in 0..6 {
@@ -961,7 +961,7 @@ mod tests {
                         break;
                     }
                     let player = game.state.settings.current_player_turn_id;
-                    let goal = scripted_goal(&game.state, player, 0, None);
+                    let goal = compute_macro_goal(&game.state, player, 0, None);
                     if !macro_exec::execute_turn(
                         &mut game, player, &goal, &mut arch, &mut counters, 1.0,
                     ) {
@@ -975,7 +975,7 @@ mod tests {
             let b = BeliefState::new(11, 2, own, pov, opp);
             let view = game.clone_for_mcts(pov);
             let mut commit = StanceCommit::default();
-            let base = update_goal(&view.state, pov, &mut commit, 0);
+            let base = commit_macro_goal(&view.state, pov, &mut commit, 0);
             let tagged = enumerate_candidates_with_belief(
                 &view.state,
                 pov,
@@ -1047,7 +1047,7 @@ mod tests {
     #[test]
     fn materialized_view_survives_simulated_rounds() {
         use crate::ai::macro_exec;
-        use crate::ai::oracle_macro::{scripted_goal, ArchetypeState};
+        use crate::ai::oracle_macro::{compute_macro_goal, ArchetypeState};
         for seed in 0..4i64 {
             let mut game = generated_game(9_210_000 + seed);
             let own = own_capital(&game.state, 1);
@@ -1063,7 +1063,7 @@ mod tests {
                     break;
                 }
                 let player = sim.state.settings.current_player_turn_id;
-                let goal = scripted_goal(&sim.state, player, 0, None);
+                let goal = compute_macro_goal(&sim.state, player, 0, None);
                 if !macro_exec::execute_turn(&mut sim, player, &goal, &mut arch, &mut counters, 1.0)
                 {
                     break;
@@ -1093,7 +1093,7 @@ mod tests {
     fn fog_offer_quality_probe() {
         use crate::ai::macro_agent::{enumerate_candidates_with_belief, CandidateClass};
         use crate::ai::macro_exec;
-        use crate::ai::oracle_macro::{scripted_goal, update_goal, ArchetypeState, StanceCommit};
+        use crate::ai::oracle_macro::{compute_macro_goal, commit_macro_goal, ArchetypeState, StanceCommit};
 
         let mut per_turn: std::collections::BTreeMap<i32, (u32, u32, u32, u32, u32)> =
             std::collections::BTreeMap::new(); // (rows, claim_off, contest_off, targets, good_targets)
@@ -1136,7 +1136,7 @@ mod tests {
                     prev_explored[seat] = now;
                 }
                 let view = game.clone_for_mcts(pov);
-                let base = update_goal(&view.state, pov, &mut commits[seat], 0);
+                let base = commit_macro_goal(&view.state, pov, &mut commits[seat], 0);
                 let tagged = enumerate_candidates_with_belief(
                     &view.state,
                     pov,
@@ -1186,7 +1186,7 @@ mod tests {
                     }
                 }
                 let player = pov;
-                let goal = scripted_goal(&game.state, player, 0, None);
+                let goal = compute_macro_goal(&game.state, player, 0, None);
                 if !macro_exec::execute_turn(&mut game, player, &goal, &mut arch, &mut counters, 1.0)
                 {
                     break;
@@ -1218,7 +1218,7 @@ mod tests {
         use crate::ai::features;
         use crate::ai::macro_agent::MacroScriptAgent;
         use crate::ai::network::PolyZeroNet;
-        use crate::ai::oracle_macro::{update_goal, StanceCommit};
+        use crate::ai::oracle_macro::{commit_macro_goal, StanceCommit};
         use candle_core::{DType, Device};
 
         let model_path = std::env::var("FOG_CALIB_MODEL")
@@ -1257,7 +1257,7 @@ mod tests {
                 let key = (game.state.settings.turn, pov);
                 if last_key != Some(key) {
                     last_key = Some(key);
-                    let goal = update_goal(&game.state, pov, &mut commits[seat], tier3[seat]);
+                    let goal = commit_macro_goal(&game.state, pov, &mut commits[seat], tier3[seat]);
                     let feats = features::state_to_cpu_features_goal(
                         &game.state,
                         pov,

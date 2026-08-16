@@ -344,7 +344,7 @@ mod stance_tests {
             let turn = clip.turns.last().map(|t| t.turn).unwrap_or(0);
             let state = &game.state;
             let mut commit = crate::ai::oracle_macro::StanceCommit::default();
-            let g = crate::ai::oracle_macro::update_goal(state, 1, &mut commit, 0);
+            let g = crate::ai::oracle_macro::commit_macro_goal(state, 1, &mut commit, 0);
             let w = state.settings.size;
             let cheb = |a: i32, b: i32| ((a % w - b % w).abs()).max((a / w - b / w).abs());
             let near = state
@@ -374,7 +374,7 @@ mod stance_tests {
                         .sum()
                 })
             };
-            let arm_i = crate::ai::oracle_macro::stance_strength(state, 1).arm;
+            let arm_i = crate::ai::oracle_macro::stance_pressure(state, 1).arm;
             println!(
                 "t{turn:2} | {:?} i={arm_i:.2} ({} orders) | {near} | {}/{} | {}",
                 g.stance,

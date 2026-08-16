@@ -13,7 +13,7 @@ fn stance_strength_is_zero_arm_in_a_quiet_position() {
     let mut t1 = TribeState::default();
     t1.cities.push(crate::states::CityState { idx: 60, ..Default::default() });
     state.tribes.insert(1, t1);
-    let s = stance_strength(&state, 1);
+    let s = stance_pressure(&state, 1);
     assert_eq!(s.arm, 0.0);
     assert_eq!(s.cause, ArmCause::None);
 }
@@ -36,7 +36,7 @@ fn threat_strength_scales_with_how_much_is_pressed() {
     t2.units.push(unit_at(61)); // adjacent to city 60 only
     state.tribes.insert(2, t2);
 
-    let weak = stance_strength(&state, 1);
+    let weak = stance_pressure(&state, 1);
     assert_eq!(weak.cause, ArmCause::Threat);
     assert!(weak.arm > 0.0 && weak.arm < 0.25, "one of three cities, defended: {}", weak.arm);
 
@@ -51,7 +51,7 @@ fn threat_strength_scales_with_how_much_is_pressed() {
     }
     state.tribes.insert(2, t2);
 
-    let dire = stance_strength(&state, 1);
+    let dire = stance_pressure(&state, 1);
     assert_eq!(dire.cause, ArmCause::Threat);
     assert!(dire.arm > 0.9, "sole city, undefended, surrounded: {}", dire.arm);
     assert!(dire.arm > weak.arm * 3.0);
@@ -72,7 +72,7 @@ fn army_dominance_reads_as_momentum_not_threat() {
     t2.cities.push(crate::states::CityState { idx: 60, ..Default::default() });
     state.tribes.insert(2, t2);
 
-    let s = stance_strength(&state, 1);
+    let s = stance_pressure(&state, 1);
     assert_eq!(s.cause, ArmCause::Momentum);
     assert!(s.arm > 0.9, "total army dominance with a target: {}", s.arm);
 }
@@ -90,7 +90,7 @@ fn even_armies_produce_no_momentum() {
     }
     state.tribes.insert(1, t1);
     state.tribes.insert(2, t2);
-    let s = stance_strength(&state, 1);
+    let s = stance_pressure(&state, 1);
     assert_eq!(s.arm, 0.0, "parity must not read as momentum");
 }
 /// GROW tracks available economy: open villages to take, or stars that
@@ -102,14 +102,14 @@ fn grow_strength_rises_with_capturable_villages() {
         let mut t1 = TribeState::default();
         t1.cities.push(crate::states::CityState { idx: 60, ..Default::default() });
         state.tribes.insert(1, t1);
-        stance_strength(&state, 1).grow
+        stance_pressure(&state, 1).grow
     };
     let mut state = state_with_villages(0, &[3, 5, 7]);
     state.tribes.get_mut(&1).unwrap().cities.push(crate::states::CityState {
         idx: 60,
         ..Default::default()
     });
-    let rich = stance_strength(&state, 1).grow;
+    let rich = stance_pressure(&state, 1).grow;
     assert!(rich > quiet, "three open villages must beat none: {rich} vs {quiet}");
     assert!(rich >= 1.0);
 }
@@ -209,7 +209,7 @@ fn the_invested_lane_wins_and_future_mines_count_as_partners() {
             }),
         );
     }
-    let plan = save_batch_plan(&state, 1, 0, None).expect("an unbuilt mine still makes a site");
+    let plan = pick_save_lane(&state, 1, 0, None).expect("an unbuilt mine still makes a site");
     assert_eq!(
         plan.structure,
         crate::types::StructureType::Forge,
@@ -270,7 +270,7 @@ fn save_stance_targets_a_reachable_batch_and_self_terminates() {
         tile.owner = 1;
         tile.terrain_type = crate::types::TerrainType::Field;
     }
-    assert_eq!(save_batch_plan(&state, 1, 0, None).map(|l| l.cost), Some(5),
+    assert_eq!(pick_save_lane(&state, 1, 0, None).map(|l| l.cost), Some(5),
         "one 5-star windmill, tech owned");
 
     // The lane is what costs: drop Construction and the batch must absorb
@@ -287,7 +287,7 @@ fn save_stance_targets_a_reachable_batch_and_self_terminates() {
             TechnologyType::Construction,
         );
         assert!(tech_cost > 0);
-        assert_eq!(save_batch_plan(&state, 1, 0, None).map(|l| l.cost), Some(5 + tech_cost));
+        assert_eq!(pick_save_lane(&state, 1, 0, None).map(|l| l.cost), Some(5 + tech_cost));
         state.tribes.get_mut(&1).unwrap().tech_vanilla.push(
             crate::states::TechnologyState {
                 tech_type: TechnologyType::Construction,
@@ -299,13 +299,13 @@ fn save_stance_targets_a_reachable_batch_and_self_terminates() {
 
     // Broke but within reach → SAVE with the batch named.
     state.tribes.get_mut(&1).unwrap().stars = 1;
-    let g = scripted_goal(&state, 1, 0, None);
+    let g = compute_macro_goal(&state, 1, 0, None);
     assert_eq!(g.stance, Stance::Save);
     assert_eq!(g.save_target.as_ref().map(|l| l.cost), Some(5));
 
     // Already affordable → nothing to save for, back to GROW.
     state.tribes.get_mut(&1).unwrap().stars = 5;
-    let g = scripted_goal(&state, 1, 0, None);
+    let g = compute_macro_goal(&state, 1, 0, None);
     assert_eq!(g.stance, Stance::Grow);
     assert_eq!(g.save_target, None);
 
@@ -313,7 +313,7 @@ fn save_stance_targets_a_reachable_batch_and_self_terminates() {
     // GROW rather than an indefinite hoard.
     state.tribes.get_mut(&1).unwrap().stars = 0;
     state.tribes.get_mut(&1).unwrap().cities[0].production = 0;
-    let far = scripted_goal(&state, 1, 0, None);
+    let far = compute_macro_goal(&state, 1, 0, None);
     assert!(
         far.stance != Stance::Save || far.save_target.is_some(),
         "SAVE is only ever set together with a named target"
@@ -329,7 +329,7 @@ fn stance_commitment_damps_discretionary_swings_across_turns() {
     state.settings.turn = 1;
 
     // First read commits immediately — nothing to be loyal to yet.
-    assert_eq!(update_goal(&state, 1, &mut st, 0).stance, Stance::Grow);
+    assert_eq!(commit_macro_goal(&state, 1, &mut st, 0).stance, Stance::Grow);
     assert_eq!(st.stance, Some(Stance::Grow));
 
     // Force the script to want ARM: post-expansion "prepare" phase — an
@@ -345,7 +345,7 @@ fn stance_commitment_damps_discretionary_swings_across_turns() {
         t1.cities.push(Default::default());
     }
     assert_eq!(
-        scripted_goal(&state, 1, 0, None).stance,
+        compute_macro_goal(&state, 1, 0, None).stance,
         Stance::Arm,
         "precondition: script wants ARM here"
     );
@@ -353,14 +353,14 @@ fn stance_commitment_damps_discretionary_swings_across_turns() {
     // Same turn, several plies: the challenger must not accrue a streak.
     for _ in 0..4 {
         assert_eq!(
-            update_goal(&state, 1, &mut st, 0).stance,
+            commit_macro_goal(&state, 1, &mut st, 0).stance,
             Stance::Grow,
             "extra plies of one turn must not buy a stance switch"
         );
     }
     // Next turn: streak reaches STANCE_SWITCH_TURNS and the switch lands.
     state.settings.turn = 2;
-    assert_eq!(update_goal(&state, 1, &mut st, 0).stance, Stance::Arm);
+    assert_eq!(commit_macro_goal(&state, 1, &mut st, 0).stance, Stance::Arm);
     assert_eq!(st.stance_flips, 1);
 }
 /// Threat responses bypass the hysteresis — a DEFEND order means an enemy
@@ -371,7 +371,7 @@ fn stance_commitment_lets_threat_response_switch_immediately() {
     let mut st = StanceCommit::default();
     let mut state = state_with_villages(0, &[3, 5]);
     state.settings.turn = 1;
-    assert_eq!(update_goal(&state, 1, &mut st, 0).stance, Stance::Grow);
+    assert_eq!(commit_macro_goal(&state, 1, &mut st, 0).stance, Stance::Grow);
 
     // Visible deliverable strike on an own city → DEFEND → ARM (040:
     // threat math, not the old position count — stats must be real).
@@ -395,7 +395,7 @@ fn stance_commitment_lets_threat_response_switch_immediately() {
         u.owner = 2;
         u.health = 10.0;
     }
-    let g = update_goal(&state, 1, &mut st, 0);
+    let g = commit_macro_goal(&state, 1, &mut st, 0);
     assert!(g.orders.iter().any(|(k, _)| *k == OrderKind::Defend));
     assert_eq!(g.stance, Stance::Arm, "threat response must not wait");
     assert_eq!(st.stance_flips, 1);
@@ -405,13 +405,13 @@ fn scripted_goal_paints_expand_attack_defend_and_sets_stance() {
     let mut state = state_with_villages(0, &[3, 5]);
     // Under 3 cities with two capturable villages → two EXPAND orders,
     // sorted, GROW stance, star gate active.
-    let g = scripted_goal(&state, 1, 0, None);
+    let g = compute_macro_goal(&state, 1, 0, None);
     assert_eq!(
         g.orders,
         vec![(OrderKind::Expand, 3), (OrderKind::Expand, 5)]
     );
     assert_eq!(g.stance, Stance::Grow);
-    assert!(goal_star_gate(&state, 1, &g));
+    assert!(tech_discipline_active(&state, 1, &g));
 
     // Explored enemy city at 40 = (3,7), two own units within Chebyshev 3
     // (39 = (3,6) and 29 = (2,7)), no defenders → superiority → ATTACK.
@@ -422,7 +422,7 @@ fn scripted_goal_paints_expand_attack_defend_and_sets_stance() {
     let t1 = state.tribes.get_mut(&1).unwrap();
     t1.units.push(unit_at(39));
     t1.units.push(unit_at(29));
-    let g = scripted_goal(&state, 1, 0, None);
+    let g = compute_macro_goal(&state, 1, 0, None);
     assert!(g.orders.contains(&(OrderKind::Attack, 40)));
     assert_eq!(g.stance, Stance::Grow);
 
@@ -450,7 +450,7 @@ fn scripted_goal_paints_expand_attack_defend_and_sets_stance() {
         u.owner = 2;
         u.health = 10.0;
     }
-    let g = scripted_goal(&state, 1, 0, None);
+    let g = compute_macro_goal(&state, 1, 0, None);
     assert!(g.orders.contains(&(OrderKind::Defend, 0)));
     assert_eq!(g.stance, Stance::Arm);
 }
@@ -468,22 +468,22 @@ fn attack_requires_local_superiority() {
     let t1 = state.tribes.get_mut(&1).unwrap();
     t1.units.push(unit_at(39));
     t1.units.push(unit_at(29));
-    let g = scripted_goal(&state, 1, 0, None);
+    let g = compute_macro_goal(&state, 1, 0, None);
     assert!(!g.orders.iter().any(|(k, _)| *k == OrderKind::Attack));
 
     // A third attacker reaches parity-plus but not the 1.5x margin.
     state.tribes.get_mut(&1).unwrap().units.push(unit_at(30));
-    let g = scripted_goal(&state, 1, 0, None);
+    let g = compute_macro_goal(&state, 1, 0, None);
     assert!(!g.orders.iter().any(|(k, _)| *k == OrderKind::Attack));
 
     // A fourth clears the margin → ATTACK.
     state.tribes.get_mut(&1).unwrap().units.push(unit_at(20));
-    let g = scripted_goal(&state, 1, 0, None);
+    let g = compute_macro_goal(&state, 1, 0, None);
     assert!(g.orders.contains(&(OrderKind::Attack, 40)));
 
     // Unexplored enemy city never draws an order.
     state.tiles.get_mut(&40).unwrap().explorers.clear();
-    let g = scripted_goal(&state, 1, 0, None);
+    let g = compute_macro_goal(&state, 1, 0, None);
     assert!(!g.orders.iter().any(|(k, _)| *k == OrderKind::Attack));
 }
 #[test]
@@ -500,14 +500,14 @@ fn prepare_arms_post_expansion_when_massing_would_win() {
     t1.units.push(unit_at(29));
 
     // Still expanding (<3 cities): prepare must NOT override GROW.
-    let g = scripted_goal(&state, 1, 0, None);
+    let g = compute_macro_goal(&state, 1, 0, None);
     assert_eq!(g.stance, Stance::Grow);
 
     let t1 = state.tribes.get_mut(&1).unwrap();
     for _ in 0..3 {
         t1.cities.push(Default::default());
     }
-    let g = scripted_goal(&state, 1, 0, None);
+    let g = compute_macro_goal(&state, 1, 0, None);
     assert_eq!(g.stance, Stance::Arm);
     assert!(!g.orders.iter().any(|(k, _)| *k == OrderKind::Attack));
 }
@@ -518,10 +518,10 @@ fn expand_persists_past_third_city_but_gate_retires() {
     for _ in 0..3 {
         t1.cities.push(Default::default());
     }
-    let g = scripted_goal(&state, 1, 0, None);
+    let g = compute_macro_goal(&state, 1, 0, None);
     assert!(g.orders.contains(&(OrderKind::Expand, 3)));
     assert_eq!(g.stance, Stance::Grow);
-    assert!(!goal_star_gate(&state, 1, &g));
+    assert!(!tech_discipline_active(&state, 1, &g));
 }
 /// A lane's price is the whole path to it, not just the last tech.
 #[test]
@@ -584,10 +584,10 @@ fn save_batch_skips_lanes_the_tier3_cap_will_refuse() {
         tile.terrain_type = TerrainType::Field;
     }
     // Construction unowned: the lane is priced with its full chain.
-    let with_budget = save_batch_plan(&state, 1, 0, None).expect("lane priced").cost;
+    let with_budget = pick_save_lane(&state, 1, 0, None).expect("lane priced").cost;
     assert!(with_budget > 5, "chain cost must be included, got {with_budget}");
     // Tier-3 budget spent: the same lane is unreachable and must vanish.
-    assert!(save_batch_plan(&state, 1, TIER3_CAP_PER_GAME, None).is_none());
+    assert!(pick_save_lane(&state, 1, TIER3_CAP_PER_GAME, None).is_none());
 }
 #[test]
 fn recommended_techs_follow_the_environment() {
@@ -663,8 +663,8 @@ fn guessed_sites_respect_generator_rules_and_spread() {
     let sites = guess_villages(&state, 1, 4);
     assert!(sites.iter().all(|g| cheb(g.tile, 24) >= 3));
 
-    // And scripted_goal paints guesses whenever real targets run short.
-    let g = scripted_goal(&state, 1, 0, None);
+    // And compute_macro_goal paints guesses whenever real targets run short.
+    let g = compute_macro_goal(&state, 1, 0, None);
     let expands: Vec<i32> = g
         .orders
         .iter()
@@ -702,17 +702,17 @@ fn goal_star_gate_is_stance_aware() {
     let mut state = state_with_villages(0, &[3]);
     // ARM gates regardless of expansion state.
     let arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None };
-    assert!(goal_star_gate(&state, 1, &arm));
+    assert!(tech_discipline_active(&state, 1, &arm));
     // GROW gates only inside the expansion window.
     let grow = MacroGoal {
         orders: vec![(OrderKind::Expand, 3)],
         stance: Stance::Grow,
         save_target: None,
     };
-    assert!(goal_star_gate(&state, 1, &grow));
+    assert!(tech_discipline_active(&state, 1, &grow));
     let t1 = state.tribes.get_mut(&1).unwrap();
     for _ in 0..3 {
         t1.cities.push(Default::default());
     }
-    assert!(!goal_star_gate(&state, 1, &grow));
+    assert!(!tech_discipline_active(&state, 1, &grow));
 }

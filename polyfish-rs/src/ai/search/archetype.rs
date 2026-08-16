@@ -83,7 +83,7 @@ pub const LANE_ORDER: [Archetype; LANES] =
     [Archetype::RiderRoads, Archetype::ArcherLine, Archetype::ForgeGiants];
 
 /// The tech chain that *is* the lane — single source of truth, consumed by
-/// `scripted_goal_aux`'s recommendations and by the spawn tribe prior.
+/// `compute_goal_aux`'s recommendations and by the spawn tribe prior.
 pub fn lane_techs(a: Archetype) -> &'static [TechnologyType] {
     use TechnologyType as T;
     match a {
@@ -153,7 +153,7 @@ struct MapRead {
     metal: i32,
 }
 
-fn read_map(state: &GameState, player: PlayerId) -> MapRead {
+fn census_explored_terrain(state: &GameState, player: PlayerId) -> MapRead {
     use crate::types::{ResourceType as R, TerrainType as T};
     let (mut open, mut rough, mut land, mut metal) = (0i32, 0i32, 0i32, 0i32);
     for (idx, tile) in state.tiles.iter() {
@@ -296,7 +296,7 @@ pub fn update_archetype(
     let before = st.overlays;
     observe_archetype(state, player, st);
     // Refutation bypasses the turn boundary, mirroring the stance layer's
-    // urgent-threat path (`update_goal`): new counter-evidence — the
+    // urgent-threat path (`commit_macro_goal`): new counter-evidence — the
     // sighting that flips an overlay is exactly what zeroes a lane's score —
     // must not wait a turn to be acted on. Discretionary switches still wait,
     // and the pivot budget still binds either way.
@@ -331,7 +331,7 @@ pub fn select_playstyle(
     st: &mut ArchetypeState,
     head: Option<&[f32; LANES]>,
 ) -> Option<Archetype> {
-    let map = read_map(state, player);
+    let map = census_explored_terrain(state, player);
     let turn = state.settings.turn;
     let prior = tribe_lane_prior(state, player);
 
@@ -423,7 +423,7 @@ pub fn select_playstyle(
 mod tests {
     use super::*;
     use crate::ai::oracle_macro::test_support::*;
-    use crate::ai::oracle_macro::{scripted_goal, scripted_goal_aux, passes_tech_caps};
+    use crate::ai::oracle_macro::{compute_macro_goal, compute_goal_aux, passes_tech_purchase_limits};
     use crate::moves::research::ResearchMove;
     use crate::states::{TechnologyState, TribeState};
     use crate::types::{TechnologyType, TribeType, UnitType};
@@ -433,17 +433,17 @@ mod tests {
         let mut state = state_with_villages(0, &[24]);
         state.settings.current_player_turn_id = 1;
         explore_open_fields(&mut state);
-        let goal = scripted_goal(&state, 1, 0, None);
+        let goal = compute_macro_goal(&state, 1, 0, None);
         let mut st = ArchetypeState::default();
         update_archetype(&state, 1, &goal, &mut st);
         assert_eq!(st.archetype, Some(Archetype::RiderRoads));
 
         // Lane expression: Riding recommended, Rider preferred; FreeSpirit
         // stays blocked without a knight commitment.
-        let aux = scripted_goal_aux(&state, 1, &goal, 0, 0, Some(&st));
+        let aux = compute_goal_aux(&state, 1, &goal, 0, 0, Some(&st));
         assert!(aux.recommended_techs.contains(&TechnologyType::Riding));
         assert!(aux.preferred_units.contains(&UnitType::Rider));
-        assert!(!passes_tech_caps(&ResearchMove::new(TechnologyType::FreeSpirit), &aux));
+        assert!(!passes_tech_purchase_limits(&ResearchMove::new(TechnologyType::FreeSpirit), &aux));
 
         // Two giants observed → catapult overlay fires and riders hard-exit.
         let mut t2 = TribeState::default();
@@ -453,7 +453,7 @@ mod tests {
             t2.units.push(g);
         }
         state.tribes.insert(2, t2);
-        let goal2 = scripted_goal(&state, 1, 0, None);
+        let goal2 = compute_macro_goal(&state, 1, 0, None);
         // Tier 1: discretionary switches wait for the turn boundary, but
         // REFUTATION does not — the sighting that flips an overlay is what
         // zeroes the lane's score, so it re-selects immediately (same
@@ -462,7 +462,7 @@ mod tests {
         assert!(st.overlays.catapult_counter);
         assert_eq!(st.archetype, Some(Archetype::ArcherLine), "refutation is immediate");
         assert_eq!(st.pivots_used, 1, "a refuted lane costs budget");
-        let aux2 = scripted_goal_aux(&state, 1, &goal2, 0, 0, Some(&st));
+        let aux2 = compute_goal_aux(&state, 1, &goal2, 0, 0, Some(&st));
         assert!(aux2.preferred_units.contains(&UnitType::Catapult));
         assert!(aux2.preferred_units.contains(&UnitType::Archer));
     }
@@ -492,7 +492,7 @@ mod tests {
             }
             assert_eq!(tribe_lane_prior(&state, 1), Some(lane), "{tribe:?}");
             // A bare goal with no painted orders isolates the prior-fallback
-            // mechanism from `scripted_goal`'s own guessed-village Expand
+            // mechanism from `compute_macro_goal`'s own guessed-village Expand
             // orders, which (via rider mobility) carry a real, non-terrain
             // signal of their own and are essentially always present once
             // `guess_villages` kicks in below `COMMIT_CITY_TARGET`
@@ -520,7 +520,7 @@ mod tests {
         let mut state = state_with_villages(0, &[24]);
         state.settings.current_player_turn_id = 1;
         explore_open_fields(&mut state);
-        let goal = scripted_goal(&state, 1, 0, None);
+        let goal = compute_macro_goal(&state, 1, 0, None);
         let mut st = ArchetypeState::default();
         select_playstyle(&state, 1, &goal, &mut st, None);
         let first = st.archetype.expect("a lane is committed on an explored map");
@@ -537,7 +537,7 @@ mod tests {
         state.tribes.insert(2, t2);
         for turn in 1..=12 {
             state.settings.turn = turn;
-            let g = scripted_goal(&state, 1, 0, None);
+            let g = compute_macro_goal(&state, 1, 0, None);
             select_playstyle(&state, 1, &g, &mut st, None);
         }
         assert!(st.pivots_used <= MAX_PIVOTS, "budget must cap at {MAX_PIVOTS}");
@@ -545,7 +545,7 @@ mod tests {
         st.pivots_used = MAX_PIVOTS;
         for turn in 13..=20 {
             state.settings.turn = turn;
-            let g = scripted_goal(&state, 1, 0, None);
+            let g = compute_macro_goal(&state, 1, 0, None);
             select_playstyle(&state, 1, &g, &mut st, None);
         }
         assert_eq!(st.archetype, frozen, "no lane change once the budget is spent");
@@ -562,7 +562,7 @@ mod tests {
         let mut state = state_with_villages(0, &[24]);
         state.settings.current_player_turn_id = 1;
         explore_open_fields(&mut state);
-        let goal = scripted_goal(&state, 1, 0, None);
+        let goal = compute_macro_goal(&state, 1, 0, None);
         let mut st = ArchetypeState::default();
         select_playstyle(&state, 1, &goal, &mut st, None);
         st.pivots_used = MAX_PIVOTS;
@@ -578,7 +578,7 @@ mod tests {
         state.tribes.insert(2, t2);
         for turn in 1..=6 {
             state.settings.turn = turn;
-            let g = scripted_goal(&state, 1, 0, None);
+            let g = compute_macro_goal(&state, 1, 0, None);
             update_archetype(&state, 1, &g, &mut st);
         }
         assert_eq!(st.archetype, committed, "the cap binds even under refutation");
@@ -592,7 +592,7 @@ mod tests {
         let mut state = state_with_villages(0, &[24]);
         state.settings.current_player_turn_id = 1;
         explore_open_fields(&mut state);
-        let goal = scripted_goal(&state, 1, 0, None);
+        let goal = compute_macro_goal(&state, 1, 0, None);
 
         let mut algo_only = ArchetypeState::default();
         select_playstyle(&state, 1, &goal, &mut algo_only, None);
@@ -619,13 +619,13 @@ mod tests {
             t2.units.push(r);
         }
         state.tribes.insert(2, t2);
-        let goal = scripted_goal(&state, 1, 0, None);
+        let goal = compute_macro_goal(&state, 1, 0, None);
         let mut st = ArchetypeState::default();
         update_archetype(&state, 1, &goal, &mut st);
         assert!(st.overlays.knight_commit);
         assert!(st.overlays.defender_screen);
-        let aux = scripted_goal_aux(&state, 1, &goal, 0, 0, Some(&st));
-        assert!(passes_tech_caps(&ResearchMove::new(TechnologyType::FreeSpirit), &aux));
+        let aux = compute_goal_aux(&state, 1, &goal, 0, 0, Some(&st));
+        assert!(passes_tech_purchase_limits(&ResearchMove::new(TechnologyType::FreeSpirit), &aux));
         assert!(aux.preferred_units.contains(&UnitType::Knight));
         assert!(aux.preferred_units.contains(&UnitType::Defender));
     }

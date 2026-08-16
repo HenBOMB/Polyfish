@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::ai::oracle_macro::test_support::*;
-use crate::ai::oracle_macro::{scripted_goal, MacroGoal, Stance};
+use crate::ai::oracle_macro::{compute_macro_goal, MacroGoal, Stance};
 use crate::moves::EndTurnMove;
 use crate::moves::research::ResearchMove;
 use crate::states::{StructureState, TileState, TribeState};
@@ -24,10 +24,10 @@ fn a_generated_drylands_game_masks_the_water_lane() {
         });
         game.post_load();
         let goal = MacroGoal::default();
-        let aux = scripted_goal_aux(&game.state, 1, &goal, 0, 0, None);
+        let aux = compute_goal_aux(&game.state, 1, &goal, 0, 0, None);
         assert!(aux.water_dead, "seed {seed}: generated Drylands still reads wet");
         assert!(
-            !passes_tech_caps(&ResearchMove::new(TechnologyType::Fishing), &aux),
+            !passes_tech_purchase_limits(&ResearchMove::new(TechnologyType::Fishing), &aux),
             "seed {seed}: Fishing survived the mask"
         );
     }
@@ -74,15 +74,15 @@ fn banking_gates_research_that_is_not_the_plan() {
     let mut aux = GoalAux::default();
     aux.save_next_tech = Some(T::Mining);
     aux.recommended_techs = vec![T::Mining];
-    assert!(passes_tech_caps(&ResearchMove::new(T::Mining), &aux));
-    assert!(!passes_tech_caps(&ResearchMove::new(T::Organization), &aux));
+    assert!(passes_tech_purchase_limits(&ResearchMove::new(T::Mining), &aux));
+    assert!(!passes_tech_purchase_limits(&ResearchMove::new(T::Organization), &aux));
     // No batch: the committed lane's recommendations are the whitelist.
     aux.save_next_tech = None;
-    assert!(passes_tech_caps(&ResearchMove::new(T::Mining), &aux));
-    assert!(!passes_tech_caps(&ResearchMove::new(T::Organization), &aux));
+    assert!(passes_tech_purchase_limits(&ResearchMove::new(T::Mining), &aux));
+    assert!(!passes_tech_purchase_limits(&ResearchMove::new(T::Organization), &aux));
     // No opinion at all: nothing is gated on lane grounds.
     aux.recommended_techs.clear();
-    assert!(passes_tech_caps(&ResearchMove::new(T::Organization), &aux));
+    assert!(passes_tech_purchase_limits(&ResearchMove::new(T::Organization), &aux));
 }
 #[test]
 fn legacy_star_gate_blocks_research_at_any_star_count() {
@@ -94,12 +94,12 @@ fn legacy_star_gate_blocks_research_at_any_star_count() {
 
     for stars in [0, 5, 50, 500] {
         state.tribes.get_mut(&1).unwrap().stars = stars;
-        assert!(!passes_star_gate(&state, &research, None, None));
+        assert!(!passes_stance_tech_mask(&state, &research, None, None));
     }
 
     // Non-research moves always pass, regardless of stars.
     state.tribes.get_mut(&1).unwrap().stars = 0;
-    assert!(passes_star_gate(&state, &EndTurnMove, None, None));
+    assert!(passes_stance_tech_mask(&state, &EndTurnMove, None, None));
 }
 /// v9: the whole point of the dual-class exemption — Smithery opens the
 /// Forge (giants) and fields a Swordsman, so no economy-or-army stance may
@@ -113,7 +113,7 @@ fn dual_class_tech_is_never_stance_gated() {
         let m = ResearchMove::new(tech);
         for stance in [Stance::Grow, Stance::Arm, Stance::Save] {
             assert!(
-                passes_star_gate(&state, &m, Some(stance), None),
+                passes_stance_tech_mask(&state, &m, Some(stance), None),
                 "{tech:?} gated under {stance:?}"
             );
         }
@@ -133,31 +133,31 @@ fn stance_gate_is_granular_by_tech_class() {
     // GROW gates PURE-combat tech; eco, passage and dual-class flow freely
     // (Climbing carries a defense bonus but fields no unit).
     let grow = Some(Stance::Grow);
-    assert!(passes_star_gate(&state, &eco, grow, None));
-    assert!(passes_star_gate(&state, &passage, grow, None));
-    assert!(!passes_star_gate(&state, &combat, grow, None));
-    assert!(passes_star_gate(&state, &mixed, grow, None));
+    assert!(passes_stance_tech_mask(&state, &eco, grow, None));
+    assert!(passes_stance_tech_mask(&state, &passage, grow, None));
+    assert!(!passes_stance_tech_mask(&state, &combat, grow, None));
+    assert!(passes_stance_tech_mask(&state, &mixed, grow, None));
 
     // ARM flips it: pure-eco tech gated, unit tech (incl. mixed) free.
     let arm = Some(Stance::Arm);
-    assert!(!passes_star_gate(&state, &eco, arm, None));
-    assert!(passes_star_gate(&state, &combat, arm, None));
-    assert!(passes_star_gate(&state, &mixed, arm, None));
+    assert!(!passes_stance_tech_mask(&state, &eco, arm, None));
+    assert!(passes_stance_tech_mask(&state, &combat, arm, None));
+    assert!(passes_stance_tech_mask(&state, &mixed, arm, None));
 
     // SAVE is an economy stance and gates the same class GROW does — it
     // must not block the tech chain its own batch is priced to buy.
     let save = Some(Stance::Save);
-    assert!(passes_star_gate(&state, &eco, save, None));
-    assert!(passes_star_gate(&state, &mixed, save, None));
-    assert!(!passes_star_gate(&state, &combat, save, None));
+    assert!(passes_stance_tech_mask(&state, &eco, save, None));
+    assert!(passes_stance_tech_mask(&state, &mixed, save, None));
+    assert!(!passes_stance_tech_mask(&state, &combat, save, None));
 
     // v9: no reserve — being rich no longer lifts a gated class.
     state.tribes.get_mut(&1).unwrap().stars = 500;
-    assert!(!passes_star_gate(&state, &combat, grow, None));
+    assert!(!passes_stance_tech_mask(&state, &combat, grow, None));
 
     // UNLOCK gates nothing (no unlock policy yet).
     state.tribes.get_mut(&1).unwrap().stars = 0;
-    assert!(passes_star_gate(&state, &combat, Some(Stance::Unlock), None));
+    assert!(passes_stance_tech_mask(&state, &combat, Some(Stance::Unlock), None));
 
     // v6: an active knight commitment makes its lane stance-coherent —
     // FreeSpirit passes under ARM and Chivalry under GROW, even broke;
@@ -171,14 +171,14 @@ fn stance_gate_is_granular_by_tech_class() {
     // skirmish (low strength) must NOT lock the eco lanes.
     let mut uncommitted = GoalAux::default();
     uncommitted.arm_strength = 1.0;
-    assert!(passes_star_gate(&state, &chivalry, grow, Some(&committed)));
-    assert!(passes_star_gate(&state, &free_spirit, arm, Some(&committed)));
-    assert!(!passes_star_gate(&state, &chivalry, grow, Some(&uncommitted)));
-    assert!(!passes_star_gate(&state, &free_spirit, arm, Some(&uncommitted)));
+    assert!(passes_stance_tech_mask(&state, &chivalry, grow, Some(&committed)));
+    assert!(passes_stance_tech_mask(&state, &free_spirit, arm, Some(&committed)));
+    assert!(!passes_stance_tech_mask(&state, &chivalry, grow, Some(&uncommitted)));
+    assert!(!passes_stance_tech_mask(&state, &free_spirit, arm, Some(&uncommitted)));
     let mut covered = GoalAux::default();
     covered.arm_strength = 0.3;
     assert!(
-        passes_star_gate(&state, &free_spirit, arm, Some(&covered)),
+        passes_stance_tech_mask(&state, &free_spirit, arm, Some(&covered)),
         "low-intensity ARM must not mask eco tech"
     );
 }
@@ -219,10 +219,10 @@ fn tier3_cap_exempts_chivalry_under_knight_commit() {
     // Cap spent: Chivalry still passes under the commit; other tier-3s
     // stay blocked; without the commit Chivalry is blocked too (by the
     // stepping-stone rule AND the cap).
-    assert!(passes_tech_caps(&chivalry, &aux));
-    assert!(!passes_tech_caps(&math, &aux));
+    assert!(passes_tech_purchase_limits(&chivalry, &aux));
+    assert!(!passes_tech_purchase_limits(&math, &aux));
     aux.overlays.knight_commit = false;
-    assert!(!passes_tech_caps(&chivalry, &aux));
+    assert!(!passes_tech_purchase_limits(&chivalry, &aux));
 }
 /// v7 (Verdi): players almost never take knights before the level-3 pop
 /// buildings, because those are what lead to giants. A combat tier-3 waits
@@ -237,22 +237,22 @@ fn combat_tier3_waits_for_an_economic_tier3() {
     aux.tier3_bought = 0; // budget available
 
     assert!(
-        !passes_tech_caps(&chivalry, &aux),
+        !passes_tech_purchase_limits(&chivalry, &aux),
         "combat tier-3 blocked while no economic tier-3 is owned"
     );
     assert!(
-        passes_tech_caps(&construction, &aux),
+        passes_tech_purchase_limits(&construction, &aux),
         "the economic tier-3 itself is never blocked by the ordering rule"
     );
     aux.eco_tier3_owned = true;
-    assert!(passes_tech_caps(&chivalry, &aux), "economy first, then knights");
+    assert!(passes_tech_purchase_limits(&chivalry, &aux), "economy first, then knights");
 
     // Two slots now, so economy + combat both fit in one game.
     assert_eq!(TIER3_CAP_PER_GAME, 2);
     aux.tier3_bought = 1;
-    assert!(passes_tech_caps(&chivalry, &aux));
+    assert!(passes_tech_purchase_limits(&chivalry, &aux));
     aux.tier3_bought = 2;
-    assert!(!passes_tech_caps(&construction, &aux), "cap still binds at 2");
+    assert!(!passes_tech_purchase_limits(&construction, &aux), "cap still binds at 2");
 }
 /// The economic/combat split must come from the settings tables, not a
 /// hand list — the exact discipline `max_affordable_pop` failed at.
@@ -291,15 +291,15 @@ fn water_techs_are_masked_only_on_a_map_without_water() {
     ];
     aux.water_dead = false;
     for t in wet {
-        assert!(passes_tech_caps(&ResearchMove::new(t), &aux), "{t:?} legal with water");
+        assert!(passes_tech_purchase_limits(&ResearchMove::new(t), &aux), "{t:?} legal with water");
     }
     aux.water_dead = true;
     for t in wet {
-        assert!(!passes_tech_caps(&ResearchMove::new(t), &aux), "{t:?} dead without water");
+        assert!(!passes_tech_purchase_limits(&ResearchMove::new(t), &aux), "{t:?} dead without water");
     }
     // Land techs are untouched, and a non-Research move never sees the gate.
     for t in [TechnologyType::Construction, TechnologyType::Chivalry, TechnologyType::Riding] {
-        assert!(passes_tech_caps(&ResearchMove::new(t), &aux), "{t:?} unaffected");
+        assert!(passes_tech_purchase_limits(&ResearchMove::new(t), &aux), "{t:?} unaffected");
     }
 }
 /// Aquatism yields population, so the table calls it an economic tier-3 —
@@ -318,7 +318,7 @@ fn a_water_tier3_does_not_satisfy_the_economy_first_rule_when_dry() {
     state.tribes.insert(1, t1);
     // No tiles at all -> no water.
     let goal = MacroGoal::default();
-    let dry = scripted_goal_aux(&state, 1, &goal, 0, 0, None);
+    let dry = compute_goal_aux(&state, 1, &goal, 0, 0, None);
     assert!(dry.water_dead);
     assert!(!dry.eco_tier3_owned, "a dead water temple is not an economy");
 
@@ -326,7 +326,7 @@ fn a_water_tier3_does_not_satisfy_the_economy_first_rule_when_dry() {
     let mut wet_tile = TileState::default();
     wet_tile.terrain_type = TerrainType::Water;
     state.tiles.insert(0, wet_tile);
-    let wet = scripted_goal_aux(&state, 1, &goal, 0, 0, None);
+    let wet = compute_goal_aux(&state, 1, &goal, 0, 0, None);
     assert!(!wet.water_dead);
     assert!(wet.eco_tier3_owned);
 }
@@ -351,8 +351,8 @@ fn rider_push_is_path_aware() {
             state.tiles.insert(r * 11 + c, terrain_tile(TerrainType::Forest));
         }
     }
-    let goal = scripted_goal(&state, 1, 0, None);
-    assert!(scripted_goal_aux(&state, 1, &goal, 0, 0, None).rider_push);
+    let goal = compute_macro_goal(&state, 1, 0, None);
+    assert!(compute_goal_aux(&state, 1, &goal, 0, 0, None).rider_push);
     assert!(rider_turns_saved(&state, 1, &[44]) >= 2);
 
     // A thin band is NOT enough: a rider weaves open-step + forest-step
@@ -362,8 +362,8 @@ fn rider_push_is_path_aware() {
             state.tiles.insert(r * 11 + c, terrain_tile(TerrainType::Forest));
         }
     }
-    let goal = scripted_goal(&state, 1, 0, None);
-    assert!(scripted_goal_aux(&state, 1, &goal, 0, 0, None).rider_push);
+    let goal = compute_macro_goal(&state, 1, 0, None);
+    assert!(compute_goal_aux(&state, 1, &goal, 0, 0, None).rider_push);
 
     // Only when the whole approach region is rough does the advantage
     // vanish: forest block rows 0-4 x cols 0-4 (minus start and target).
@@ -390,22 +390,22 @@ fn tech_caps_and_rider_push() {
         tile.explorers.insert(1);
         state.tiles.insert(idx, tile);
     }
-    let goal = scripted_goal(&state, 1, 0, None); // EXPAND on village 3
-    let aux = scripted_goal_aux(&state, 1, &goal, 0, 0, None);
+    let goal = compute_macro_goal(&state, 1, 0, None); // EXPAND on village 3
+    let aux = compute_goal_aux(&state, 1, &goal, 0, 0, None);
     assert!(aux.rider_push);
     assert_eq!(aux.recommended_techs.first(), Some(&TechnologyType::Riding));
 
     // Without an EXPAND order there is no rider push.
     let quiet = MacroGoal::default();
-    assert!(!scripted_goal_aux(&state, 1, &quiet, 0, 0, None).rider_push);
+    assert!(!compute_goal_aux(&state, 1, &quiet, 0, 0, None).rider_push);
 
     // Caps: 8 bought blocks all research; one tier-3 blocks further tier-3.
     let research1 = ResearchMove::new(TechnologyType::Organization);
     let research3 = ResearchMove::new(TechnologyType::Smithery);
     let mut capped = aux.clone();
     capped.techs_bought = TECH_CAP_PER_GAME;
-    assert!(!passes_tech_caps(&research1, &capped));
-    assert!(passes_tech_caps(&EndTurnMove, &capped));
+    assert!(!passes_tech_purchase_limits(&research1, &capped));
+    assert!(passes_tech_purchase_limits(&EndTurnMove, &capped));
     // Isolate the tier-3 cap from the lane whitelist: this fixture has no
     // cities, so EXP_ELO_055's territory-scoped recommended_techs recommends
     // nothing of its own here (only the rider-push insert), which would
@@ -414,8 +414,8 @@ fn tech_caps_and_rider_push() {
     let mut t3 = aux.clone();
     t3.tier3_bought = TIER3_CAP_PER_GAME;
     t3.recommended_techs.clear();
-    assert!(passes_tech_caps(&research1, &t3));
-    assert!(!passes_tech_caps(&research3, &t3));
+    assert!(passes_tech_purchase_limits(&research1, &t3));
+    assert!(!passes_tech_purchase_limits(&research3, &t3));
 }
 #[test]
 fn ability_gate_blocks_destroy_and_resource_clearing() {

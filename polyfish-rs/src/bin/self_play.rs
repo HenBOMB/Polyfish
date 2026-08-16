@@ -614,7 +614,7 @@ fn dump_turn_state(
         // ever placeable" (the tier-3 tech wall) from "a batch existed but the
         // reachability gate rejected it". Without this a dead SAVE stance is
         // indistinguishable from a correctly quiet one.
-        "save_batch": polyfish::ai::oracle_macro::save_batch_plan(state, pov, tier3_bought, ps.archetype)
+        "save_batch": polyfish::ai::oracle_macro::pick_save_lane(state, pov, tier3_bought, ps.archetype)
             .map(|l| l.cost),
         "stance_flips": commit.stance_flips,
         "order_flips": commit.order_flips,
@@ -1716,7 +1716,7 @@ fn play_single_game(
         // and taken before the turn dump so the snapshot sees this ply's goal.
         let macro_goal = if goal_channels && is_net_seat(seat_roles, pov) {
             let seat = ((pov - 1) as usize).min(1);
-            let g = polyfish::ai::oracle_macro::update_goal(
+            let g = polyfish::ai::oracle_macro::commit_macro_goal(
                 &game.state,
                 pov,
                 &mut stance_commits[seat],
@@ -1749,7 +1749,7 @@ fn play_single_game(
         // MCTS Search - use the correct agent
         let current_agent = if pov == 1 { &mut agent1 } else { &mut agent2 };
         let star_gate = macro_goal.as_ref().map_or(false, |g| {
-            polyfish::ai::oracle_macro::goal_star_gate(&game.state, pov, g)
+            polyfish::ai::oracle_macro::tech_discipline_active(&game.state, pov, g)
         });
         let seat = ((pov - 1) as usize).min(1);
         let goal_aux = macro_goal.as_ref().map(|g| {
@@ -1762,7 +1762,7 @@ fn play_single_game(
             // EXP_ELO_052: the lane the selector just committed becomes the
             // lane the savings plan banks for on the NEXT goal update.
             stance_commits[seat].lane = archetype_states[seat].archetype;
-            polyfish::ai::oracle_macro::scripted_goal_aux(
+            polyfish::ai::oracle_macro::compute_goal_aux(
                 &game.state,
                 pov,
                 g,

@@ -121,7 +121,7 @@ pub struct GumbelMctsAgent<'a> {
     /// tree-reuse checks both key on the encoded feature bytes.
     pub pursuit_focus: Option<i32>,
     /// EXP_ELO_026 star gate: when true, root-level Research moves failing
-    /// `oracle_macro::passes_star_gate` are dropped (root only — the tree
+    /// `oracle_macro::passes_stance_tech_mask` are dropped (root only — the tree
     /// below stays unrestricted).
     pub star_gate: bool,
     /// EXP_ELO_028 Stage-1 macro goal: painted into the appended goal

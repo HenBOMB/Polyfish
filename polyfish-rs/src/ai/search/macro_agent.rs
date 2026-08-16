@@ -8,9 +8,9 @@
 use crate::ai::eval_server::Evaluator;
 use crate::ai::macro_exec::{self, TurnCounters};
 use crate::ai::oracle_macro::{
-    ArchetypeState, MacroGoal, OrderKind, Stance, StanceCommit, goal_star_gate,
-    retakeable_village, save_batch_plan, scripted_goal, scripted_goal_aux, still_capturable,
-    observe_archetype, update_goal,
+    ArchetypeState, MacroGoal, OrderKind, Stance, StanceCommit, tech_discipline_active,
+    retakeable_village, pick_save_lane, compute_macro_goal, compute_goal_aux, still_capturable,
+    observe_archetype, commit_macro_goal,
 };
 use crate::game::Game;
 use crate::moves::{EndTurnMove, Move};
@@ -143,7 +143,7 @@ impl MacroScriptAgent {
     pub fn select_move(&mut self, game: &mut Game) -> Option<Box<dyn Move>> {
         let pov = game.state.settings.current_player_turn_id;
         let mut view = game.clone_for_mcts(pov);
-        let goal = update_goal(&view.state, pov, &mut self.stance_commit, self.counters.tier3_bought);
+        let goal = commit_macro_goal(&view.state, pov, &mut self.stance_commit, self.counters.tier3_bought);
         let ranked = rank_view(&mut view, pov, &goal, &mut self.archetype, &mut self.counters, self.lambda);
         let m = first_true_legal(game, ranked);
         self.counters.count(m.as_ref());
@@ -166,7 +166,7 @@ pub(crate) fn rank_view(
     // `select_playstyle` at the turn boundary — re-selecting it 20x a turn
     // is what made it a running average instead of a strategy.
     observe_archetype(&view.state, pov, archetype);
-    let aux = scripted_goal_aux(
+    let aux = compute_goal_aux(
         &view.state,
         pov,
         goal,
@@ -174,7 +174,7 @@ pub(crate) fn rank_view(
         counters.tier3_bought,
         Some(archetype),
     );
-    let gate = goal_star_gate(&view.state, pov, goal);
+    let gate = tech_discipline_active(&view.state, pov, goal);
     macro_exec::rank_plies(view, pov, goal, &aux, gate, lambda)
 }
 
@@ -226,7 +226,7 @@ pub fn enumerate_candidates_with_belief(
         CandidateClass::Stance,
         &mut out,
     );
-    if let Some(lane) = save_batch_plan(state, pov, counters.tier3_bought, None) {
+    if let Some(lane) = pick_save_lane(state, pov, counters.tier3_bought, None) {
         push(
             MacroGoal {
                 orders: base.orders.clone(),
@@ -415,7 +415,7 @@ impl<'a> MacroLookaheadAgent<'a> {
         let view0 = game.clone_for_mcts(pov);
         // The turn's single StanceCommit advance — production hysteresis
         // semantics stay on the script track even when an override wins.
-        let base = update_goal(&view0.state, pov, &mut self.stance_commit, self.counters.tier3_bought);
+        let base = commit_macro_goal(&view0.state, pov, &mut self.stance_commit, self.counters.tier3_bought);
         let candidates =
             enumerate_candidates(&view0.state, pov, base.clone(), self.counters, self.params.k);
 
@@ -430,7 +430,7 @@ impl<'a> MacroLookaheadAgent<'a> {
                 let goal_h = if h == 0 {
                     cand.clone()
                 } else {
-                    scripted_goal(&sim.state, pov, counters.tier3_bought, arch.archetype)
+                    compute_macro_goal(&sim.state, pov, counters.tier3_bought, arch.archetype)
                 };
                 if !macro_exec::execute_turn(&mut sim, pov, &goal_h, &mut arch, &mut counters, self.params.lambda)
                     || sim.state.settings._game_over
@@ -568,7 +568,7 @@ mod tests {
         for seed in 0..4i64 {
             let game = generated_game(seed);
             let pov = game.state.settings.current_player_turn_id;
-            let base = scripted_goal(&game.state, pov, 0, None);
+            let base = compute_macro_goal(&game.state, pov, 0, None);
             let cands =
                 enumerate_candidates(&game.state, pov, base.clone(), TurnCounters::default(), 6);
             assert!(!cands.is_empty() && cands.len() <= 6);

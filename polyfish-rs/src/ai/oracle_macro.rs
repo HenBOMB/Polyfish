@@ -6,7 +6,7 @@
 //! that would leave the capture unfunded). Nothing here touches training.
 //!
 //! Aug 2026: the Archetype (T1) selector split to `search::archetype`, and
-//! `GoalAux`/`scripted_goal_aux`/its gates split to `search::goal_aux`, so no
+//! `GoalAux`/`compute_goal_aux`/its gates split to `search::goal_aux`, so no
 //! file in `ai::` exceeds ~1000 lines. Both are re-exported below so every
 //! `crate::ai::oracle_macro::X` call site keeps resolving unchanged.
 
@@ -62,7 +62,7 @@ pub struct MacroGoal {
 /// channel audit showed ATTACK lit on 62% of plies): EXPAND on every
 /// capturable village until captured; ATTACK only with local force
 /// superiority; DEFEND unchanged; ARM gains a post-expansion "prepare" phase.
-pub fn scripted_goal(
+pub fn compute_macro_goal(
     state: &GameState,
     player: PlayerId,
     tier3_bought: u32,
@@ -154,7 +154,7 @@ pub fn scripted_goal(
     // rather than becoming an open-ended hoard.
     // EXP_ELO_052: bank for the lane T1 committed to, not for whichever
     // structure happens to be cheapest.
-    let save_target = save_batch_plan(state, player, tier3_bought, lane).filter(|l| {
+    let save_target = pick_save_lane(state, player, tier3_bought, lane).filter(|l| {
         let spt = crate::functions::get_tribe_spt(state, tribe);
         tribe.stars < l.cost && tribe.stars + spt * SAVE_MAX_TURNS >= l.cost
     });
@@ -183,12 +183,12 @@ pub enum ArmCause {
 }
 
 /// Continuous magnitudes behind the categorical `Stance`. The if-else ladder in
-/// `scripted_goal` thresholds these away — "enemy near a city" and "crushing
+/// `compute_macro_goal` thresholds these away — "enemy near a city" and "crushing
 /// attack advantage" both emit a bare `Stance::Arm` — so anything that needs to
 /// know HOW military the position is has to recompute them. Read-only; nothing
 /// in search or the feature planes consumes this yet.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
-pub struct StanceStrength {
+pub struct StancePressure {
     /// 0 = no military pressure or opportunity, 1 = maximal.
     pub arm: f32,
     /// 0 = no economic upside available, 1 = ample.
@@ -205,12 +205,12 @@ const GROW_HORIZON_TURNS: i32 = 3;
 
 /// Magnitudes behind the stance, derived from the same signals the stance
 /// ladder tests. Pure function of state.
-pub fn stance_strength(state: &GameState, player: PlayerId) -> StanceStrength {
+pub fn stance_pressure(state: &GameState, player: PlayerId) -> StancePressure {
     let size = state.settings.size as i32;
     let cheb =
         |a: i32, b: i32| crate::functions::get_chebyshev_distance(a, b, size);
     let Some(tribe) = state.tribes.get(&player) else {
-        return StanceStrength::default();
+        return StancePressure::default();
     };
     // Engine accounting: cost + passenger, zero once converted.
     let unit_cost = |u: &crate::states::UnitState| crate::rules::combat::unit_worth(u);
@@ -320,25 +320,25 @@ pub fn stance_strength(state: &GameState, player: PlayerId) -> StanceStrength {
     } else {
         (momentum, ArmCause::Momentum)
     };
-    StanceStrength { arm, grow, cause }
+    StancePressure { arm, grow, cause }
 }
 
 /// Turns a discretionary challenger stance must hold before it takes over.
-/// Threat responses bypass this entirely — see `update_goal`.
+/// Threat responses bypass this entirely — see `commit_macro_goal`.
 pub const STANCE_SWITCH_TURNS: u8 = 2;
 
 /// Moved to `ai::economy` (Aug 2026 taxonomy reorg): SAVE_MIN_PARTNERS,
 /// lane_investment, potential_partner_count, SAVE_MAX_TURNS,
 /// SAVE_MAX_PLACEMENTS, SAVE_LANES, lane_yield_per_star, lane_save_structure,
-/// tech_chain_cost, save_batch_plan, advances_save_plan, recommended_techs.
+/// tech_chain_cost, pick_save_lane, advances_save_plan, recommended_techs.
 pub use crate::ai::economy::{
-    advances_save_plan, lane_investment, lane_save_structure, recommended_techs, save_batch_plan,
+    advances_save_plan, lane_investment, lane_save_structure, recommended_techs, pick_save_lane,
     tech_chain_cost, SAVE_MAX_PLACEMENTS, SAVE_MAX_TURNS, SAVE_MIN_PARTNERS,
 };
 
 /// v7: the STANDING macro commitment.
 ///
-/// `scripted_goal` is a pure function of the current state and was recomputed
+/// `compute_macro_goal` is a pure function of the current state and was recomputed
 /// every ply, so the "strategy" could contradict itself between plies of the
 /// same turn — a reflex, not a plan. Nothing that persists can be committed to,
 /// and nothing that flips can be rewarded for being held. This carries the
@@ -374,13 +374,13 @@ pub struct StanceCommit {
 /// threat radius, and a threat response that waits out a hysteresis window is
 /// a threat response that arrives after the city falls. Those switch instantly;
 /// only discretionary changes are damped.
-pub fn update_goal(
+pub fn commit_macro_goal(
     state: &GameState,
     player: PlayerId,
     st: &mut StanceCommit,
     tier3_bought: u32,
 ) -> MacroGoal {
-    let mut goal = scripted_goal(state, player, tier3_bought, st.lane);
+    let mut goal = compute_macro_goal(state, player, tier3_bought, st.lane);
     let turn = state.settings.turn;
     let new_turn = turn != st.last_turn;
     if new_turn {
@@ -445,8 +445,8 @@ pub use crate::ai::belief::prediction::{guess_villages, VillageGuess};
 /// Whether the goal-conditioned research gate is active (v2.2, stance-aware):
 /// GROW gates during the expansion window (EXPAND painted, under
 /// `COMMIT_CITY_TARGET` cities); ARM gates whenever it holds — each stance
-/// gates only the tech class that contradicts it (see `passes_star_gate`).
-pub fn goal_star_gate(state: &GameState, player: PlayerId, goal: &MacroGoal) -> bool {
+/// gates only the tech class that contradicts it (see `passes_stance_tech_mask`).
+pub fn tech_discipline_active(state: &GameState, player: PlayerId, goal: &MacroGoal) -> bool {
     match goal.stance {
         Stance::Grow => {
             // A live batch keeps star discipline on even while growing —
@@ -491,8 +491,8 @@ pub use crate::ai::search::archetype::{
     SEEN_SQUISHY_KNIGHT, SQUISHY_DEFENSE_MAX, TRIBE_PRIOR_BONUS,
 };
 pub use crate::ai::search::goal_aux::{
-    market_ready, passes_ability_gate, passes_capture_first, passes_star_gate, passes_tech_caps,
-    scripted_goal_aux, GoalAux,
+    market_ready, passes_ability_gate, passes_capture_first, passes_stance_tech_mask, passes_tech_purchase_limits,
+    compute_goal_aux, GoalAux,
 };
 pub use crate::ai::movement::connect_remaining;
 

@@ -889,7 +889,7 @@ pub fn state_to_cpu_features_goal(
         // binary flag — graded urgency in [0.05,1] (floor keeps an active
         // commitment visible when the threat has just faded).
         let stance_val = if goal.stance == crate::ai::oracle_macro::Stance::Arm {
-            crate::ai::oracle_macro::stance_strength(state, perspective)
+            crate::ai::oracle_macro::stance_pressure(state, perspective)
                 .arm
                 .clamp(0.05, 1.0)
         } else {

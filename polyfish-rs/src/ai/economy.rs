@@ -12,7 +12,7 @@ use crate::types::{MoveType, TechnologyType};
 /// The economy batch a SAVE stance is banking for, with the lane it belongs
 /// to.
 ///
-/// v10: this used to be a bare `Option<i32>` — `save_batch_plan` identified
+/// v10: this used to be a bare `Option<i32>` — `pick_save_lane` identified
 /// the lane and then discarded everything but the price, so nothing
 /// downstream could tell "saving for a Forge" from "saving for 21 stars".
 /// Search could not boost the very move the plan existed to reach.
@@ -262,7 +262,7 @@ pub fn tech_chain_cost(tribe: &crate::states::TribeState, tech: TechnologyType) 
 /// placeable batch existed on 26% of turns and the SAVE gate fired on 0 of
 /// them. The lane (tech + the structures it unlocks) is the ~15-25 star
 /// commitment a human actually banks for.
-pub fn save_batch_plan(
+pub fn pick_save_lane(
     state: &GameState,
     player: PlayerId,
     tier3_bought: u32,
@@ -338,7 +338,7 @@ pub fn save_batch_plan(
         // banking through Riding→Roads→Trade (30+ stars, as `tech_chain_cost`
         // warns), and those seats then built no hub at all — measured hubs@t15
         // 0.94 → 0.31 on Imperius. The lane gets priority over TECHS instead,
-        // in `passes_tech_caps`.
+        // in `passes_tech_purchase_limits`.
         // A lane you cannot reach is not a plan. Reachability is checked HERE,
         // before ranking, so an unaffordable best-ratio lane yields to the
         // next one instead of leaving the seat with no plan at all — which is
@@ -361,7 +361,7 @@ pub fn save_batch_plan(
 }
 
 /// Does `m` advance the banked plan? The whole undiscovered `requires` chain
-/// counts, not just the final tech — `save_batch_plan` prices the chain
+/// counts, not just the final tech — `pick_save_lane` prices the chain
 /// (Market sits behind Roads behind Riding), so boosting only the last step
 /// would leave every multi-step lane exactly as stuck as it is today.
 ///

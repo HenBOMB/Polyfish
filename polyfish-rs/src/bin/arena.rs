@@ -477,7 +477,7 @@ impl SiegeTracker {
             .min();
         let responders = own
             .iter()
-            .filter(|u| polyfish::ai::combat::covers(state, u, idx))
+            .filter(|u| polyfish::ai::combat::unit_covers_threat(state, u, idx))
             .count();
         let ordered_defend = goal.map(|g| {
             g.orders.iter().any(|(k, t)| {
@@ -733,21 +733,21 @@ fn play_match(
 
         // EXP_ELO_028: scripted goal channels for config1.
         if goal_script && current_pid == model_player {
-            let goal = polyfish::ai::oracle_macro::update_goal(
+            let goal = polyfish::ai::oracle_macro::commit_macro_goal(
                 &game.state,
                 model_player,
                 &mut stance_commit,
                 tier3_bought,
             );
             let gate =
-                polyfish::ai::oracle_macro::goal_star_gate(&game.state, model_player, &goal);
+                polyfish::ai::oracle_macro::tech_discipline_active(&game.state, model_player, &goal);
             polyfish::ai::oracle_macro::update_archetype(
                 &game.state,
                 model_player,
                 &goal,
                 &mut archetype_state,
             );
-            let aux = polyfish::ai::oracle_macro::scripted_goal_aux(
+            let aux = polyfish::ai::oracle_macro::compute_goal_aux(
                 &game.state,
                 model_player,
                 &goal,
@@ -756,10 +756,10 @@ fn play_match(
                 Some(&archetype_state),
             );
             if dump_stats_dir.is_some() {
-                // The uncommitted goal too: `update_goal` returns the stance
+                // The uncommitted goal too: `commit_macro_goal` returns the stance
                 // after hysteresis, so a script that wants to switch and a
                 // script that is content look identical in the result alone.
-                let fresh = polyfish::ai::oracle_macro::scripted_goal(
+                let fresh = polyfish::ai::oracle_macro::compute_macro_goal(
                     &game.state,
                     model_player,
                     tier3_bought,

@@ -546,7 +546,7 @@ pub fn attack_committed(
 
 /// Can `unit` strike a unit standing on `target` next turn (fresh flags)?
 /// Public wrapper for the press pricing in `reward.rs`.
-pub fn covers(state: &GameState, unit: &UnitState, target: i32) -> bool {
+pub fn unit_covers_threat(state: &GameState, unit: &UnitState, target: i32) -> bool {
     can_attack_tile(state, &probe(unit), target)
 }
 
@@ -649,7 +649,7 @@ mod risk_tests {
             .push(unit_at(61, UnitType::Warrior, 2));
         let goal = MacroGoal::default();
         let aux = |s: &GameState| {
-            crate::ai::oracle_macro::scripted_goal_aux(s, 1, &goal, 0, 0, None)
+            crate::ai::oracle_macro::compute_goal_aux(s, 1, &goal, 0, 0, None)
         };
         let open = goal_potential(&state, 1, &goal, Some(&aux(&state)));
         assert!(expected_city_loss(&state, 1) > 0.0, "an empty reachable city must carry risk");
@@ -689,7 +689,7 @@ mod risk_tests {
             .units
             .push(unit_at(61, UnitType::Warrior, 2));
         let goal = MacroGoal::default();
-        let aux = crate::ai::oracle_macro::scripted_goal_aux(&state, 1, &goal, 0, 0, None);
+        let aux = crate::ai::oracle_macro::compute_goal_aux(&state, 1, &goal, 0, 0, None);
         let open = goal_potential(&state, 1, &goal, Some(&aux));
 
         state

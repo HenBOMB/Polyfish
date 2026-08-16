@@ -280,7 +280,7 @@ pub fn goal_potential(
                 }
                 let d = cheb(u.coords.idx, h, width);
                 let m = crate::functions::get_unit_movement(state, u);
-                let sat = if crate::ai::combat::covers(state, u, h) {
+                let sat = if crate::ai::combat::unit_covers_threat(state, u, h) {
                     1.0
                 } else if d <= 2 * m {
                     0.5

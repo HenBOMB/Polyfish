@@ -5,8 +5,8 @@
 //! `score_move + λ·Δgoal_potential` (the edge_snapshot pattern).
 
 use crate::ai::oracle_macro::{
-    ArchetypeState, GoalAux, MacroGoal, Stance, goal_star_gate, passes_ability_gate,
-    passes_capture_first, passes_star_gate, passes_tech_caps, scripted_goal_aux,
+    ArchetypeState, GoalAux, MacroGoal, Stance, tech_discipline_active, passes_ability_gate,
+    passes_capture_first, passes_stance_tech_mask, passes_tech_purchase_limits, compute_goal_aux,
     observe_archetype,
 };
 use crate::ai::{reward, scoring};
@@ -51,11 +51,11 @@ pub fn gate_ok(
     if m.move_type() == MoveType::EndTurn {
         return true;
     }
-    if star_gate && !passes_star_gate(state, m, stance, aux) {
+    if star_gate && !passes_stance_tech_mask(state, m, stance, aux) {
         return false;
     }
     if let Some(a) = aux {
-        if !passes_tech_caps(m, a)
+        if !passes_tech_purchase_limits(m, a)
             || !passes_ability_gate(state, m)
             || !passes_capture_first(state, m)
         {
@@ -161,7 +161,7 @@ pub fn execute_turn_recorded(
             return true;
         }
         observe_archetype(&game.state, player, arch);
-        let aux = scripted_goal_aux(
+        let aux = compute_goal_aux(
             &game.state,
             player,
             goal,
@@ -169,7 +169,7 @@ pub fn execute_turn_recorded(
             counters.tier3_bought,
             Some(arch),
         );
-        let gate = goal_star_gate(&game.state, player, goal);
+        let gate = tech_discipline_active(&game.state, player, goal);
         let mut ranked = rank_plies(game, player, goal, &aux, gate, lambda);
         if ranked.is_empty() {
             break;
@@ -185,7 +185,7 @@ pub fn execute_turn_recorded(
             // No directive at all: gate open, default goal — the whole Tier-2
             // channel removed, both filter and pull.
             let bare = MacroGoal::default();
-            let bare_aux = scripted_goal_aux(
+            let bare_aux = compute_goal_aux(
                 &game.state,
                 player,
                 &bare,
@@ -250,7 +250,7 @@ pub fn ghost_until(game: &mut Game, pov: PlayerId) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ai::oracle_macro::{scripted_goal, update_goal, StanceCommit};
+    use crate::ai::oracle_macro::{compute_macro_goal, commit_macro_goal, StanceCommit};
 
     fn generated_game(seed: i64) -> Game {
         let mut game = Game::new();
@@ -271,7 +271,7 @@ mod tests {
             let game = generated_game(seed);
             let pov = game.state.settings.current_player_turn_id;
             let mut sim = game.clone_for_mcts(pov);
-            let goal = scripted_goal(&sim.state, pov, 0, None);
+            let goal = compute_macro_goal(&sim.state, pov, 0, None);
             let mut arch = ArchetypeState::default();
             let mut counters = TurnCounters::default();
             let ok = execute_turn(&mut sim, pov, &goal, &mut arch, &mut counters, 1.0);
@@ -292,7 +292,7 @@ mod tests {
             let mut history = Vec::new();
             for _ in 0..2 {
                 let mut sim = game.clone_for_mcts(pov);
-                let goal = scripted_goal(&sim.state, pov, 0, None);
+                let goal = compute_macro_goal(&sim.state, pov, 0, None);
                 let mut arch = ArchetypeState::default();
                 let mut counters = TurnCounters::default();
                 execute_turn(&mut sim, pov, &goal, &mut arch, &mut counters, 1.0);
@@ -308,9 +308,9 @@ mod tests {
             let mut game = generated_game(seed);
             let pov = game.state.settings.current_player_turn_id;
             let mut commit = StanceCommit::default();
-            let goal = update_goal(&game.state, pov, &mut commit, 0);
+            let goal = commit_macro_goal(&game.state, pov, &mut commit, 0);
             // Saturated caps: every Research is gated, the turn must still end.
-            let aux = scripted_goal_aux(
+            let aux = compute_goal_aux(
                 &game.state,
                 pov,
                 &goal,
@@ -335,7 +335,7 @@ mod tests {
             let game = generated_game(seed);
             let pov = game.state.settings.current_player_turn_id;
             let mut sim = game.clone_for_mcts(pov);
-            let goal = scripted_goal(&sim.state, pov, 0, None);
+            let goal = compute_macro_goal(&sim.state, pov, 0, None);
             let mut arch = ArchetypeState::default();
             let mut counters = TurnCounters::default();
             assert!(execute_turn(&mut sim, pov, &goal, &mut arch, &mut counters, 1.0));
