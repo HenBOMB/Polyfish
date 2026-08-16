@@ -21,5 +21,6 @@
 
 pub mod capture;
 pub mod combat;
+pub mod eco_plan;
 pub mod economy;
 pub mod vision;
