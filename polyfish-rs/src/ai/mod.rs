@@ -7,6 +7,7 @@ pub mod eval_server;
 pub mod evaluator;
 pub mod features;
 pub mod mapper;
+pub mod movement;
 pub mod network;
 pub mod oracle_macro;
 pub mod search;
