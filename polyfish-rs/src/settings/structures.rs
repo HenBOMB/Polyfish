@@ -116,9 +116,18 @@ fn build_structure_setting(struct_type: StructureType) -> StructureSetting {
         },
 
         StructureType::Road => StructureSetting {
-            cost: Some(3), // THIS IS ARGUABLY VERY UH.. IDK BACKWARDS INCOMPATIBLE
-            // LEAVING IT AT 2 FOR NOW, UNTIL DYNAMICALLY SET WITH VERSION COMPATIBILITY
-            // CHANGED TO 3 FOR TRAINING
+            // 3 is CORRECT and deliberate (Verdi, Aug 2026) — not a training
+            // stopgap. The old comment here read as though 2 were the true
+            // value and invited a "fix"; it is not.
+            //
+            // Roads are not an economic build. On a 121-tile map a road net
+            // never earns a monument and the connection bonus is a couple of
+            // pop at best. What it buys is MOVEMENT: map control, reach, and
+            // the ability to overwhelm an opponent — and above all the
+            // rider+roads pattern, where a Rider strikes and then withdraws
+            // three tiles out of reach. Price roads against that, never
+            // against population per star.
+            cost: Some(3),
             terrain_types: terrains![
                 TerrainType::Field,
                 TerrainType::Forest,

@@ -436,6 +436,86 @@ const SAVE_LANES: [(crate::types::StructureType, TechnologyType); 4] = [
     (crate::types::StructureType::Market, TechnologyType::Trade),
 ];
 
+/// EXP_ELO_053: what a hub lane is actually worth ON THIS MAP, as population
+/// per star. This is the pareto ratio the planner was missing.
+///
+/// `lane_investment` ranked lanes by how much of their TECH CHAIN the tribe
+/// already owned, which is blind to terrain: forest-rich Imperius spawns with
+/// Organization, a Construction prerequisite, and so banked for a **Windmill**
+/// — a hub that eats Farms, which need a Crop resource the map does not have.
+/// Verdi: "It's not that good of a tech since imperius is mostly forest rich
+/// rather than crop rich. This is a failure of our computation."
+///
+/// Yield is the engine's own: a hub pays `reward_pop × partner_count`, and
+/// each partner pays its own `reward_pop`. Cost is the full prerequisite
+/// chain plus the hub plus the partners still to build. Sites are scored
+/// individually because only ADJACENT partners feed a hub.
+fn lane_yield_per_star(
+    state: &GameState,
+    player: PlayerId,
+    hub: crate::types::StructureType,
+    tech: TechnologyType,
+) -> f32 {
+    use crate::settings::structures::get_structure_setting;
+    let Some(tribe) = state.tribes.get(&player) else { return 0.0 };
+    let hs = get_structure_setting(hub);
+    let Some(hub_cost) = hs.cost else { return 0.0 };
+    let mut best = 0.0f32;
+    for city in &tribe.cities {
+        for &site in &city._territory {
+            let Some(tile) = state.tiles.get(&site) else { continue };
+            if !hs.terrain_types.contains(&tile.terrain_type) || tile.is_algae() {
+                continue;
+            }
+            if crate::functions::get_structure_at(state, site).is_some() {
+                continue;
+            }
+            // Adjacent ground that already feeds, or could.
+            let mut pop = 0;
+            let mut cost = hub_cost;
+            let mut partners = 0;
+            for adj in crate::functions::get_adjacent_indices(state, site, 1) {
+                let Some(t) = state.tiles.get(&adj) else { continue };
+                if t.owner != player {
+                    continue;
+                }
+                if let Some(st) = crate::functions::get_structure_at(state, adj) {
+                    if hs.adjacent_types.contains(&st.structure_type) {
+                        partners += 1; // already standing: free
+                    }
+                    continue;
+                }
+                // Buildable partner on this ground?
+                if let Some(p) = hs.adjacent_types.iter().find(|p| {
+                    let ps = get_structure_setting(**p);
+                    ps.terrain_types.contains(&t.terrain_type)
+                        && ps.resource_type.map_or(true, |r| {
+                            state.resources.get(&adj).and_then(|x| x.as_ref())
+                                .map_or(false, |res| res.resource_type == r)
+                                && crate::functions::is_resource_visible_to_tribe(
+                                    state, r, player, Some(adj))
+                        })
+                }) {
+                    let ps = get_structure_setting(*p);
+                    partners += 1;
+                    pop += ps.reward_pop;
+                    cost += ps.cost.unwrap_or(0);
+                }
+            }
+            if partners == 0 {
+                continue;
+            }
+            pop += hs.reward_pop * partners;
+            let total = cost + tech_chain_cost(tribe, tech);
+            let ratio = pop as f32 / total.max(1) as f32;
+            if ratio > best {
+                best = ratio;
+            }
+        }
+    }
+    best
+}
+
 /// EXP_ELO_052: road tiles still needed to link each unconnected city into
 /// the capital's network, as (city, tiles_remaining).
 ///
@@ -646,7 +726,17 @@ pub fn save_batch_plan(
         // warns), and those seats then built no hub at all — measured hubs@t15
         // 0.94 → 0.31 on Imperius. The lane gets priority over TECHS instead,
         // in `passes_tech_caps`.
-        let rank = lane_investment(tribe, tech);
+        // A lane you cannot reach is not a plan. Reachability is checked HERE,
+        // before ranking, so an unaffordable best-ratio lane yields to the
+        // next one instead of leaving the seat with no plan at all — which is
+        // what took Bardur to 0.22 hubs and 18/32 wins.
+        let spt = crate::functions::get_tribe_spt(state, tribe);
+        if plan.cost > tribe.stars + spt * SAVE_MAX_TURNS {
+            continue;
+        }
+        // Pareto: population per star ON THIS MAP. Scaled to an integer so
+        // the existing tie-break on price still applies between equals.
+        let rank = (lane_yield_per_star(state, player, s_type, tech) * 1000.0) as i32;
         let better = best.as_ref().map_or(true, |(b, bi): &(SaveLane, i32)| {
             rank > *bi || (rank == *bi && plan.cost < b.cost)
         });
@@ -2474,6 +2564,7 @@ mod tests {
                     discovered_turn: 0,
                 });
             }
+            t1.stars = 30;
             t1.cities.push(crate::states::CityState {
                 idx: 60,
                 owner: 1,
@@ -2548,6 +2639,7 @@ mod tests {
         let mut state = state_with_villages(0, &[3, 5]);
         {
             let t1 = state.tribes.get_mut(&1).unwrap();
+            t1.stars = 40;
             for tech in [
                 TechnologyType::Organization,
                 TechnologyType::Farming,
@@ -3129,6 +3221,7 @@ mod tests {
         let mut state = state_with_villages(0, &[3, 5]);
         {
             let t1 = state.tribes.get_mut(&1).unwrap();
+            t1.stars = 40;
             for tech in [TechnologyType::Organization, TechnologyType::Farming] {
                 t1.tech_vanilla.push(crate::states::TechnologyState {
                     tech_type: tech,
