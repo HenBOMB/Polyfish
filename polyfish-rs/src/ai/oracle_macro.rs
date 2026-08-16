@@ -74,7 +74,12 @@ pub struct MacroGoal {
 /// channel audit showed ATTACK lit on 62% of plies): EXPAND on every
 /// capturable village until captured; ATTACK only with local force
 /// superiority; DEFEND unchanged; ARM gains a post-expansion "prepare" phase.
-pub fn scripted_goal(state: &GameState, player: PlayerId, tier3_bought: u32) -> MacroGoal {
+pub fn scripted_goal(
+    state: &GameState,
+    player: PlayerId,
+    tier3_bought: u32,
+    lane: Option<Archetype>,
+) -> MacroGoal {
     let size = state.settings.size as i32;
     let cheb =
         |a: i32, b: i32| crate::functions::get_chebyshev_distance(a, b, size);
@@ -164,9 +169,11 @@ pub fn scripted_goal(state: &GameState, player: PlayerId, tier3_bought: u32) -> 
     // always outranks banking — and only fires for a batch that is out of
     // pocket now but inside SAVE_MAX_TURNS of income, so it self-terminates
     // rather than becoming an open-ended hoard.
-    let save_target = save_batch_plan(state, player, tier3_bought).filter(|lane| {
+    // EXP_ELO_052: bank for the lane T1 committed to, not for whichever
+    // structure happens to be cheapest.
+    let save_target = save_batch_plan(state, player, tier3_bought, lane).filter(|l| {
         let spt = crate::functions::get_tribe_spt(state, tribe);
-        tribe.stars < lane.cost && tribe.stars + spt * SAVE_MAX_TURNS >= lane.cost
+        tribe.stars < l.cost && tribe.stars + spt * SAVE_MAX_TURNS >= l.cost
     });
     let stance = if orders.iter().any(|(k, _)| *k == OrderKind::Defend) {
         Stance::Arm
@@ -429,6 +436,102 @@ const SAVE_LANES: [(crate::types::StructureType, TechnologyType); 4] = [
     (crate::types::StructureType::Market, TechnologyType::Trade),
 ];
 
+/// EXP_ELO_052: road tiles still needed to link each unconnected city into
+/// the capital's network, as (city, tiles_remaining).
+///
+/// The engine connects two adjacent tiles only when BOTH carry a road (city
+/// tiles and ports count as road for this purpose) and never through enemy
+/// ground — see `actions::connection`. So this is a shortest path from the
+/// capital's component where standing road/city tiles are free and buildable
+/// ground costs one.
+///
+/// Why it exists: a connection pays +1 population to the city AND +1 to the
+/// capital, but that lands only on the LAST road tile. Every earlier tile on
+/// the path earns nothing, so it loses every ballot to a harvest and no city
+/// ever connects — measured 0.00 connected cities at t10 across 96 games on
+/// three tribes. Handing the remaining-tile count down lets T3 price each
+/// tile by the progress it makes.
+pub fn connect_remaining(state: &GameState, player: PlayerId) -> Vec<(i32, i32)> {
+    use crate::types::StructureType;
+    let Some(tribe) = state.tribes.get(&player) else {
+        return Vec::new();
+    };
+    // Roads are the only way to build the path; without the tech there is no
+    // plan to price, only a constant.
+    if !crate::settings::technology::has_technology(&tribe.tech_vanilla, TechnologyType::Roads) {
+        return Vec::new();
+    }
+    let Some(cap) = crate::functions::get_capital_city(state, player) else {
+        return Vec::new();
+    };
+    let cities: Vec<i32> = tribe.cities.iter().map(|c| c.idx).collect();
+    let road_here = |idx: i32| {
+        cities.contains(&idx)
+            || crate::functions::get_structure_type_at(state, idx) == Some(StructureType::Road)
+    };
+    let buildable = |idx: i32| {
+        let Some(t) = state.tiles.get(&idx) else { return false };
+        if t.owner != 0 && t.owner != player {
+            return false;
+        }
+        if crate::functions::get_structure_at(state, idx).is_some() {
+            return false;
+        }
+        crate::settings::structures::get_structure_setting(StructureType::Road)
+            .terrain_types
+            .contains(&t.terrain_type)
+    };
+    // 0-1 BFS from the capital: free through standing road, cost 1 per tile
+    // we would have to build.
+    let mut dist: std::collections::HashMap<i32, i32> = std::collections::HashMap::new();
+    let mut dq: std::collections::VecDeque<i32> = std::collections::VecDeque::new();
+    dist.insert(cap.idx, 0);
+    dq.push_front(cap.idx);
+    while let Some(cur) = dq.pop_front() {
+        let d = dist[&cur];
+        for n in crate::functions::get_adjacent_indices(state, cur, 1) {
+            let free = road_here(n);
+            if !free && !buildable(n) {
+                continue;
+            }
+            let nd = d + if free { 0 } else { 1 };
+            if dist.get(&n).map_or(true, |&old| nd < old) {
+                dist.insert(n, nd);
+                if free {
+                    dq.push_front(n);
+                } else {
+                    dq.push_back(n);
+                }
+            }
+        }
+    }
+    tribe
+        .cities
+        .iter()
+        .filter(|c| c.idx != cap.idx && !c.connected_to_capital)
+        .filter_map(|c| dist.get(&c.idx).map(|&d| (c.idx, d)))
+        .collect()
+}
+
+/// EXP_ELO_052: the economic lane each Tier-1 playstyle banks toward. This
+/// is the "T1 says giants, so save for forges" mapping stated directly,
+/// replacing the `lane_investment` PROXY that inferred it from owned techs.
+/// The proxy is exact for XinXi (Climbing is a Smithery prerequisite) and
+/// inverts for Imperius, which spawns with Organization and therefore banked
+/// for a Windmill on a RiderRoads seat — gating its own first tech out.
+///
+/// RiderRoads maps to the Market, whose chain is Trade ← Roads ← Riding: the
+/// savings plan then names Riding as its next step, which is exactly the
+/// lane's opening move.
+pub fn lane_save_structure(a: Archetype) -> crate::types::StructureType {
+    use crate::types::StructureType as S;
+    match a {
+        Archetype::RiderRoads => S::Market,
+        Archetype::ArcherLine => S::Sawmill,
+        Archetype::ForgeGiants => S::Forge,
+    }
+}
+
 /// v7: full star cost of REACHING `tech` from what this tribe owns — every
 /// undiscovered prerequisite up the `requires` chain plus the tech itself.
 ///
@@ -466,7 +569,16 @@ pub fn tech_chain_cost(tribe: &crate::states::TribeState, tech: TechnologyType) 
 /// placeable batch existed on 26% of turns and the SAVE gate fired on 0 of
 /// them. The lane (tech + the structures it unlocks) is the ~15-25 star
 /// commitment a human actually banks for.
-pub fn save_batch_plan(state: &GameState, player: PlayerId, tier3_bought: u32) -> Option<SaveLane> {
+pub fn save_batch_plan(
+    state: &GameState,
+    player: PlayerId,
+    tier3_bought: u32,
+    committed: Option<Archetype>,
+) -> Option<SaveLane> {
+    // Before the selector has committed, the spawn tribe tech already says
+    // which lane this tribe is born into — so the plan is right from ply one
+    // and every caller resolves it identically.
+    let committed = committed.or_else(|| tribe_lane_prior(state, player));
     use crate::settings::structures::get_structure_setting;
     use crate::settings::technology::has_technology;
     use crate::types::StructureType;
@@ -528,14 +640,18 @@ pub fn save_batch_plan(state: &GameState, player: PlayerId, tier3_bought: u32) -
             tech,
             structure: s_type,
         };
-        // The lane we are already walking wins; price only breaks ties among
-        // lanes we are equally committed to.
-        let invested = lane_investment(tribe, tech);
+        // EXP_ELO_052 iter 2: the hub is chosen by reachability and price,
+        // NOT by the committed lane. Forcing RiderRoads onto the Market meant
+        // banking through Riding→Roads→Trade (30+ stars, as `tech_chain_cost`
+        // warns), and those seats then built no hub at all — measured hubs@t15
+        // 0.94 → 0.31 on Imperius. The lane gets priority over TECHS instead,
+        // in `passes_tech_caps`.
+        let rank = lane_investment(tribe, tech);
         let better = best.as_ref().map_or(true, |(b, bi): &(SaveLane, i32)| {
-            invested > *bi || (invested == *bi && plan.cost < b.cost)
+            rank > *bi || (rank == *bi && plan.cost < b.cost)
         });
         if better {
-            best = Some((plan, invested));
+            best = Some((plan, rank));
         }
     }
     best.map(|(p, _)| p)
@@ -597,6 +713,11 @@ pub fn advances_save_plan(m: &dyn Move, lane: &SaveLane, tribe: &crate::states::
 /// first-class metrics and never measured.
 #[derive(Clone, Debug, Default)]
 pub struct StanceCommit {
+    /// EXP_ELO_052: the Tier-1 lane this seat has committed to, so the
+    /// savings plan banks for what T1 actually chose rather than inferring
+    /// it from which techs happen to be owned. `None` falls back to the
+    /// spawn prior, then to price.
+    pub lane: Option<Archetype>,
     pub stance: Option<Stance>,
     challenger: Option<Stance>,
     streak: u8,
@@ -625,7 +746,7 @@ pub fn update_goal(
     st: &mut StanceCommit,
     tier3_bought: u32,
 ) -> MacroGoal {
-    let mut goal = scripted_goal(state, player, tier3_bought);
+    let mut goal = scripted_goal(state, player, tier3_bought, st.lane);
     let turn = state.settings.turn;
     let new_turn = turn != st.last_turn;
     if new_turn {
@@ -836,6 +957,14 @@ pub struct GoalAux {
     /// step of its prerequisite chain. While banking, this is the only
     /// research that is not a delay.
     pub save_next_tech: Option<TechnologyType>,
+    /// EXP_ELO_052: the committed Tier-1 lane's next unowned tech. This
+    /// outranks the hub batch: a lane is a plan for the whole game, the batch
+    /// is a plan for the next few turns.
+    pub lane_next_tech: Option<TechnologyType>,
+    /// EXP_ELO_052: (city, road tiles still needed) for every city not yet
+    /// linked to the capital. T2 runs the path search once; T3 prices each
+    /// road tile by the progress it makes.
+    pub connect_remaining: Vec<(i32, i32)>,
     /// Stance-intensity (Verdi, Aug 14): measured ARM pressure 0..1 from
     /// `stance_strength` — threat-vs-coverage truth, NOT the binary stance.
     /// The eco-tech mask fires only when this is near-certain (>= 0.98);
@@ -1161,6 +1290,21 @@ pub fn scripted_goal_aux(
     // EXP_ELO_051: the batch we are banking for is by definition on-plan, so
     // its own next step joins the whitelist — otherwise `passes_tech_caps`
     // would gate the very purchase the savings exist to make.
+    // The committed lane's own next step — the chain walked to its deepest
+    // unowned tech, so a two-step lane buys Riding before Roads.
+    // Only the lane's OPENING tech is privileged. Iteration 3 privileged the
+    // whole chain and Imperius spent its early stars walking Riding→Roads, a
+    // chain whose payoff (a connection: 9 stars of road for +2 pop) is
+    // dominated by a 5-star Windmill for the same +2 — so it lost its hub and
+    // its giants (hubs@t15 0.94 → 0.44, giants 1.12 → 0.78). The opening tech
+    // is the commitment; the rest of the chain competes on price like
+    // everything else.
+    let lane_next_tech = arch.and_then(|a| a.archetype).and_then(|a| {
+        let tribe = state.tribes.get(&player)?;
+        let first = *lane_techs(a).first()?;
+        (!crate::settings::technology::has_technology(&tribe.tech_vanilla, first))
+            .then_some(first)
+    });
     let mut save_next_tech = None;
     if let Some(lane) = goal.save_target.as_ref() {
         if let Some(tribe) = state.tribes.get(&player) {
@@ -1202,6 +1346,8 @@ pub fn scripted_goal_aux(
         city_risk: crate::ai::defense::city_risks(state, player),
         save_lane: goal.save_target.clone(),
         save_next_tech,
+        lane_next_tech,
+        connect_remaining: connect_remaining(state, player),
         arm_strength: stance_strength(state, player).arm,
         recommended_techs: recommended,
         rider_push,
@@ -1263,10 +1409,24 @@ pub fn passes_tech_caps(m: &dyn Move, aux: &GoalAux) -> bool {
                 TechnologyType::Riding | TechnologyType::FreeSpirit | TechnologyType::Chivalry
             );
         if !knight_lane {
-            if let Some(next) = aux.save_next_tech {
-                // Banking: the batch's own next step is the only purchase
-                // that is not a delay. `save_batch_plan` self-terminates once
-                // the batch is affordable, so this never freezes research.
+            // EXP_ELO_052: the COMMITTED LANE'S OWN TECHS COME FIRST. Before
+            // this, a RiderRoads seat could have Riding gated out by a
+            // Windmill batch — the lane-discipline machinery forbidding the
+            // lane's opening move. Measured: `Research Riding` reached the
+            // ballot in 8 of 764 plies over t0-t5 on Imperius, and the first
+            // Rider landed t11.6 against a target of t3.
+            // The lane's own next tech is always permitted — never gated by
+            // a hub batch, which is the bug that kept Riding off a
+            // RiderRoads ballot. It is NOT exclusive: iteration 2 made it so
+            // and starved the economy (Imperius hubs@t15 0.94 -> 0.09,
+            // giants 1.12 -> 0.38), because no eco tech could be bought while
+            // the lane was unfinished.
+            if aux.lane_next_tech == Some(tech) {
+                // allowed
+            } else if let Some(next) = aux.save_next_tech {
+                // Lane complete: bank for the hub, and only its next step is
+                // not a delay. `save_batch_plan` self-terminates once the
+                // batch is affordable, so this never freezes research.
                 if tech != next {
                     return false;
                 }
@@ -2343,7 +2503,7 @@ mod tests {
                 }),
             );
         }
-        let plan = save_batch_plan(&state, 1, 0).expect("an unbuilt mine still makes a site");
+        let plan = save_batch_plan(&state, 1, 0, None).expect("an unbuilt mine still makes a site");
         assert_eq!(
             plan.structure,
             crate::types::StructureType::Forge,
@@ -2423,7 +2583,7 @@ mod tests {
             tile.owner = 1;
             tile.terrain_type = crate::types::TerrainType::Field;
         }
-        assert_eq!(save_batch_plan(&state, 1, 0).map(|l| l.cost), Some(5),
+        assert_eq!(save_batch_plan(&state, 1, 0, None).map(|l| l.cost), Some(5),
             "one 5-star windmill, tech owned");
 
         // The lane is what costs: drop Construction and the batch must absorb
@@ -2440,7 +2600,7 @@ mod tests {
                 TechnologyType::Construction,
             );
             assert!(tech_cost > 0);
-            assert_eq!(save_batch_plan(&state, 1, 0).map(|l| l.cost), Some(5 + tech_cost));
+            assert_eq!(save_batch_plan(&state, 1, 0, None).map(|l| l.cost), Some(5 + tech_cost));
             state.tribes.get_mut(&1).unwrap().tech_vanilla.push(
                 crate::states::TechnologyState {
                     tech_type: TechnologyType::Construction,
@@ -2452,13 +2612,13 @@ mod tests {
 
         // Broke but within reach → SAVE with the batch named.
         state.tribes.get_mut(&1).unwrap().stars = 1;
-        let g = scripted_goal(&state, 1, 0);
+        let g = scripted_goal(&state, 1, 0, None);
         assert_eq!(g.stance, Stance::Save);
         assert_eq!(g.save_target.as_ref().map(|l| l.cost), Some(5));
 
         // Already affordable → nothing to save for, back to GROW.
         state.tribes.get_mut(&1).unwrap().stars = 5;
-        let g = scripted_goal(&state, 1, 0);
+        let g = scripted_goal(&state, 1, 0, None);
         assert_eq!(g.stance, Stance::Grow);
         assert_eq!(g.save_target, None);
 
@@ -2466,7 +2626,7 @@ mod tests {
         // GROW rather than an indefinite hoard.
         state.tribes.get_mut(&1).unwrap().stars = 0;
         state.tribes.get_mut(&1).unwrap().cities[0].production = 0;
-        let far = scripted_goal(&state, 1, 0);
+        let far = scripted_goal(&state, 1, 0, None);
         assert!(
             far.stance != Stance::Save || far.save_target.is_some(),
             "SAVE is only ever set together with a named target"
@@ -2499,7 +2659,7 @@ mod tests {
             t1.cities.push(Default::default());
         }
         assert_eq!(
-            scripted_goal(&state, 1, 0).stance,
+            scripted_goal(&state, 1, 0, None).stance,
             Stance::Arm,
             "precondition: script wants ARM here"
         );
@@ -2561,7 +2721,7 @@ mod tests {
         let mut state = state_with_villages(0, &[3, 5]);
         // Under 3 cities with two capturable villages → two EXPAND orders,
         // sorted, GROW stance, star gate active.
-        let g = scripted_goal(&state, 1, 0);
+        let g = scripted_goal(&state, 1, 0, None);
         assert_eq!(
             g.orders,
             vec![(OrderKind::Expand, 3), (OrderKind::Expand, 5)]
@@ -2578,7 +2738,7 @@ mod tests {
         let t1 = state.tribes.get_mut(&1).unwrap();
         t1.units.push(unit_at(39));
         t1.units.push(unit_at(29));
-        let g = scripted_goal(&state, 1, 0);
+        let g = scripted_goal(&state, 1, 0, None);
         assert!(g.orders.contains(&(OrderKind::Attack, 40)));
         assert_eq!(g.stance, Stance::Grow);
 
@@ -2606,7 +2766,7 @@ mod tests {
             u.owner = 2;
             u.health = 10.0;
         }
-        let g = scripted_goal(&state, 1, 0);
+        let g = scripted_goal(&state, 1, 0, None);
         assert!(g.orders.contains(&(OrderKind::Defend, 0)));
         assert_eq!(g.stance, Stance::Arm);
     }
@@ -2625,22 +2785,22 @@ mod tests {
         let t1 = state.tribes.get_mut(&1).unwrap();
         t1.units.push(unit_at(39));
         t1.units.push(unit_at(29));
-        let g = scripted_goal(&state, 1, 0);
+        let g = scripted_goal(&state, 1, 0, None);
         assert!(!g.orders.iter().any(|(k, _)| *k == OrderKind::Attack));
 
         // A third attacker reaches parity-plus but not the 1.5x margin.
         state.tribes.get_mut(&1).unwrap().units.push(unit_at(30));
-        let g = scripted_goal(&state, 1, 0);
+        let g = scripted_goal(&state, 1, 0, None);
         assert!(!g.orders.iter().any(|(k, _)| *k == OrderKind::Attack));
 
         // A fourth clears the margin → ATTACK.
         state.tribes.get_mut(&1).unwrap().units.push(unit_at(20));
-        let g = scripted_goal(&state, 1, 0);
+        let g = scripted_goal(&state, 1, 0, None);
         assert!(g.orders.contains(&(OrderKind::Attack, 40)));
 
         // Unexplored enemy city never draws an order.
         state.tiles.get_mut(&40).unwrap().explorers.clear();
-        let g = scripted_goal(&state, 1, 0);
+        let g = scripted_goal(&state, 1, 0, None);
         assert!(!g.orders.iter().any(|(k, _)| *k == OrderKind::Attack));
     }
 
@@ -2658,14 +2818,14 @@ mod tests {
         t1.units.push(unit_at(29));
 
         // Still expanding (<3 cities): prepare must NOT override GROW.
-        let g = scripted_goal(&state, 1, 0);
+        let g = scripted_goal(&state, 1, 0, None);
         assert_eq!(g.stance, Stance::Grow);
 
         let t1 = state.tribes.get_mut(&1).unwrap();
         for _ in 0..3 {
             t1.cities.push(Default::default());
         }
-        let g = scripted_goal(&state, 1, 0);
+        let g = scripted_goal(&state, 1, 0, None);
         assert_eq!(g.stance, Stance::Arm);
         assert!(!g.orders.iter().any(|(k, _)| *k == OrderKind::Attack));
     }
@@ -2677,7 +2837,7 @@ mod tests {
         for _ in 0..3 {
             t1.cities.push(Default::default());
         }
-        let g = scripted_goal(&state, 1, 0);
+        let g = scripted_goal(&state, 1, 0, None);
         assert!(g.orders.contains(&(OrderKind::Expand, 3)));
         assert_eq!(g.stance, Stance::Grow);
         assert!(!goal_star_gate(&state, 1, &g));
@@ -2999,10 +3159,10 @@ mod tests {
             tile.terrain_type = TerrainType::Field;
         }
         // Construction unowned: the lane is priced with its full chain.
-        let with_budget = save_batch_plan(&state, 1, 0).expect("lane priced").cost;
+        let with_budget = save_batch_plan(&state, 1, 0, None).expect("lane priced").cost;
         assert!(with_budget > 5, "chain cost must be included, got {with_budget}");
         // Tier-3 budget spent: the same lane is unreachable and must vanish.
-        assert!(save_batch_plan(&state, 1, TIER3_CAP_PER_GAME).is_none());
+        assert!(save_batch_plan(&state, 1, TIER3_CAP_PER_GAME, None).is_none());
     }
 
     #[test]
@@ -3062,7 +3222,7 @@ mod tests {
                 state.tiles.insert(r * 11 + c, terrain_tile(TerrainType::Forest));
             }
         }
-        let goal = scripted_goal(&state, 1, 0);
+        let goal = scripted_goal(&state, 1, 0, None);
         assert!(scripted_goal_aux(&state, 1, &goal, 0, 0, None).rider_push);
         assert!(rider_turns_saved(&state, 1, &[44]) >= 2);
 
@@ -3073,7 +3233,7 @@ mod tests {
                 state.tiles.insert(r * 11 + c, terrain_tile(TerrainType::Forest));
             }
         }
-        let goal = scripted_goal(&state, 1, 0);
+        let goal = scripted_goal(&state, 1, 0, None);
         assert!(scripted_goal_aux(&state, 1, &goal, 0, 0, None).rider_push);
 
         // Only when the whole approach region is rough does the advantage
@@ -3121,7 +3281,7 @@ mod tests {
         assert!(sites.iter().all(|&s| cheb(s, 24) >= 3));
 
         // And scripted_goal paints guesses whenever real targets run short.
-        let g = scripted_goal(&state, 1, 0);
+        let g = scripted_goal(&state, 1, 0, None);
         let expands: Vec<i32> = g
             .orders
             .iter()
@@ -3143,7 +3303,7 @@ mod tests {
             tile.explorers.insert(1);
             state.tiles.insert(idx, tile);
         }
-        let goal = scripted_goal(&state, 1, 0); // EXPAND on village 3
+        let goal = scripted_goal(&state, 1, 0, None); // EXPAND on village 3
         let aux = scripted_goal_aux(&state, 1, &goal, 0, 0, None);
         assert!(aux.rider_push);
         assert_eq!(aux.recommended_techs.first(), Some(&TechnologyType::Riding));
@@ -3180,7 +3340,7 @@ mod tests {
         let mut state = state_with_villages(0, &[24]);
         state.settings.current_player_turn_id = 1;
         explore_open_fields(&mut state);
-        let goal = scripted_goal(&state, 1, 0);
+        let goal = scripted_goal(&state, 1, 0, None);
         let mut st = ArchetypeState::default();
         update_archetype(&state, 1, &goal, &mut st);
         assert_eq!(st.archetype, Some(Archetype::RiderRoads));
@@ -3200,7 +3360,7 @@ mod tests {
             t2.units.push(g);
         }
         state.tribes.insert(2, t2);
-        let goal2 = scripted_goal(&state, 1, 0);
+        let goal2 = scripted_goal(&state, 1, 0, None);
         // Tier 1: discretionary switches wait for the turn boundary, but
         // REFUTATION does not — the sighting that flips an overlay is what
         // zeroes the lane's score, so it re-selects immediately (same
@@ -3237,7 +3397,7 @@ mod tests {
             assert_eq!(tribe_lane_prior(&state, 1), Some(lane), "{tribe:?}");
             // Unexplored map (land < ARCH_MIN_EXPLORED_LAND): the census has
             // nothing to say, but the tribe does.
-            let goal = scripted_goal(&state, 1, 0);
+            let goal = scripted_goal(&state, 1, 0, None);
             let mut st = ArchetypeState::default();
             assert_eq!(select_playstyle(&state, 1, &goal, &mut st, None), Some(lane));
             assert_eq!(st.committed_turn, Some(state.settings.turn));
@@ -3260,7 +3420,7 @@ mod tests {
         let mut state = state_with_villages(0, &[24]);
         state.settings.current_player_turn_id = 1;
         explore_open_fields(&mut state);
-        let goal = scripted_goal(&state, 1, 0);
+        let goal = scripted_goal(&state, 1, 0, None);
         let mut st = ArchetypeState::default();
         select_playstyle(&state, 1, &goal, &mut st, None);
         let first = st.archetype.expect("a lane is committed on an explored map");
@@ -3277,7 +3437,7 @@ mod tests {
         state.tribes.insert(2, t2);
         for turn in 1..=12 {
             state.settings.turn = turn;
-            let g = scripted_goal(&state, 1, 0);
+            let g = scripted_goal(&state, 1, 0, None);
             select_playstyle(&state, 1, &g, &mut st, None);
         }
         assert!(st.pivots_used <= MAX_PIVOTS, "budget must cap at {MAX_PIVOTS}");
@@ -3285,7 +3445,7 @@ mod tests {
         st.pivots_used = MAX_PIVOTS;
         for turn in 13..=20 {
             state.settings.turn = turn;
-            let g = scripted_goal(&state, 1, 0);
+            let g = scripted_goal(&state, 1, 0, None);
             select_playstyle(&state, 1, &g, &mut st, None);
         }
         assert_eq!(st.archetype, frozen, "no lane change once the budget is spent");
@@ -3303,7 +3463,7 @@ mod tests {
         let mut state = state_with_villages(0, &[24]);
         state.settings.current_player_turn_id = 1;
         explore_open_fields(&mut state);
-        let goal = scripted_goal(&state, 1, 0);
+        let goal = scripted_goal(&state, 1, 0, None);
         let mut st = ArchetypeState::default();
         select_playstyle(&state, 1, &goal, &mut st, None);
         st.pivots_used = MAX_PIVOTS;
@@ -3319,7 +3479,7 @@ mod tests {
         state.tribes.insert(2, t2);
         for turn in 1..=6 {
             state.settings.turn = turn;
-            let g = scripted_goal(&state, 1, 0);
+            let g = scripted_goal(&state, 1, 0, None);
             update_archetype(&state, 1, &g, &mut st);
         }
         assert_eq!(st.archetype, committed, "the cap binds even under refutation");
@@ -3334,7 +3494,7 @@ mod tests {
         let mut state = state_with_villages(0, &[24]);
         state.settings.current_player_turn_id = 1;
         explore_open_fields(&mut state);
-        let goal = scripted_goal(&state, 1, 0);
+        let goal = scripted_goal(&state, 1, 0, None);
 
         let mut algo_only = ArchetypeState::default();
         select_playstyle(&state, 1, &goal, &mut algo_only, None);
@@ -3362,7 +3522,7 @@ mod tests {
             t2.units.push(r);
         }
         state.tribes.insert(2, t2);
-        let goal = scripted_goal(&state, 1, 0);
+        let goal = scripted_goal(&state, 1, 0, None);
         let mut st = ArchetypeState::default();
         update_archetype(&state, 1, &goal, &mut st);
         assert!(st.overlays.knight_commit);

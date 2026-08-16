@@ -127,7 +127,7 @@ impl Node {
         let candidates = if frozen_value.is_some() {
             Vec::new()
         } else {
-            let base = scripted_goal(&game.state, player, counters[seat(player)].tier3_bought);
+            let base = scripted_goal(&game.state, player, counters[seat(player)].tier3_bought, arch[seat(player)].archetype);
             // A node IS a turn boundary, so the Tier-1 selector belongs here —
             // for BOTH seats. The executor plies below only observe, so
             // without this the simulated opponent would play laneless for the
@@ -233,7 +233,7 @@ fn leaf_value(
         let goal = match from {
             Some((mover, g)) if aligned && mover == p => g,
             _ => {
-                scripted = scripted_goal(state, p, tier3);
+                scripted = scripted_goal(state, p, tier3, None);
                 &scripted
             }
         };
@@ -608,7 +608,7 @@ fn paint_probe(
             .and_then(|f| eval.evaluate(vec![f]).first().map(|r| r.0))
     };
     let opp: PlayerId = if pov == 1 { 2 } else { 1 };
-    let opp_scripted = scripted_goal(state, opp, 0);
+    let opp_scripted = scripted_goal(state, opp, 0, None);
     let (Some(v_scripted), Some(v_committed), Some(v_opp)) = (
         v(pov, scripted),
         v(pov, committed.unwrap_or(scripted)),
@@ -1072,7 +1072,7 @@ mod tests {
                     break;
                 }
                 let player = game.state.settings.current_player_turn_id;
-                let goal = scripted_goal(&game.state, player, 0);
+                let goal = scripted_goal(&game.state, player, 0, None);
                 if !macro_exec::execute_turn(&mut game, player, &goal, &mut arch, &mut counters, 1.0)
                 {
                     break;
@@ -1141,7 +1141,7 @@ mod tests {
                     break;
                 }
                 let player = sim.state.settings.current_player_turn_id;
-                let goal = scripted_goal(&sim.state, player, 0);
+                let goal = scripted_goal(&sim.state, player, 0, None);
                 let mut arch = ArchetypeState::default();
                 let mut counters = TurnCounters::default();
                 if !macro_exec::execute_turn(&mut sim, player, &goal, &mut arch, &mut counters, 1.0)
@@ -1162,7 +1162,7 @@ mod tests {
             let game = generated_game(seed);
             let pov = game.state.settings.current_player_turn_id;
             let view = game.clone_for_mcts(pov);
-            let base = scripted_goal(&view.state, pov, 0);
+            let base = scripted_goal(&view.state, pov, 0, None);
             let cands = enumerate_candidates(&view.state, pov, base, TurnCounters::default(), 4);
             let k = cands.len();
             let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
@@ -1227,7 +1227,7 @@ mod tests {
         // the other side its scripted goal), so the identity is worth pinning
         // again: it survives because both perspectives reuse the same pair of
         // numbers with the sign swapped, not because the paintings match.
-        let edge = scripted_goal(&game.state, 1, 0);
+        let edge = scripted_goal(&game.state, 1, 0, None);
         let from = Some((1 as PlayerId, &edge));
         let c = leaf_value(&evaluator, MacroLeaf::NetAsymPaint, &game.state, 1, 0, from);
         let d = leaf_value(&evaluator, MacroLeaf::NetAsymPaint, &game.state, 2, 0, from);
@@ -1296,7 +1296,7 @@ mod tests {
                     break;
                 }
                 let p = sim.state.settings.current_player_turn_id;
-                let goal = scripted_goal(&sim.state, p, counters[seat(p)].tier3_bought);
+                let goal = scripted_goal(&sim.state, p, counters[seat(p)].tier3_bought, None);
                 if !macro_exec::execute_turn(
                     &mut sim,
                     p,
@@ -1312,7 +1312,7 @@ mod tests {
                 continue;
             }
             let pov = sim.state.settings.current_player_turn_id;
-            let base = scripted_goal(&sim.state, pov, counters[seat(pov)].tier3_bought);
+            let base = scripted_goal(&sim.state, pov, counters[seat(pov)].tier3_bought, None);
             let cands =
                 enumerate_candidates(&sim.state, pov, base, counters[seat(pov)], 4);
             let k = cands.len();

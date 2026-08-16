@@ -226,7 +226,7 @@ pub fn enumerate_candidates_with_belief(
         CandidateClass::Stance,
         &mut out,
     );
-    if let Some(lane) = save_batch_plan(state, pov, counters.tier3_bought) {
+    if let Some(lane) = save_batch_plan(state, pov, counters.tier3_bought, None) {
         push(
             MacroGoal {
                 orders: base.orders.clone(),
@@ -429,7 +429,7 @@ impl<'a> MacroLookaheadAgent<'a> {
                 let goal_h = if h == 0 {
                     cand.clone()
                 } else {
-                    scripted_goal(&sim.state, pov, counters.tier3_bought)
+                    scripted_goal(&sim.state, pov, counters.tier3_bought, arch.archetype)
                 };
                 if !macro_exec::execute_turn(&mut sim, pov, &goal_h, &mut arch, &mut counters, self.params.lambda)
                     || sim.state.settings._game_over
@@ -567,7 +567,7 @@ mod tests {
         for seed in 0..4i64 {
             let game = generated_game(seed);
             let pov = game.state.settings.current_player_turn_id;
-            let base = scripted_goal(&game.state, pov, 0);
+            let base = scripted_goal(&game.state, pov, 0, None);
             let cands =
                 enumerate_candidates(&game.state, pov, base.clone(), TurnCounters::default(), 6);
             assert!(!cands.is_empty() && cands.len() <= 6);

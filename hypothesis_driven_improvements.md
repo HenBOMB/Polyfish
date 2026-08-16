@@ -5318,3 +5318,51 @@ Imperius and Bardur. P2 (G): giants by t15 up on all three tribes, ≥2-by-t15
 share up. P3 (H): hubs@t15 and avg partners up or flat. P4 (regression, the
 051 instrument, XinXi 48 seeds base 1786807403): cities lost ≤ 18, off-lane
 techs ≤ 73, wins ≥ 46/48.
+
+### EXP_ELO_052 ACTUAL — H1 confirmed as a bug fix, goal R blocked by engine economics
+
+Four iterations, 32 games/tribe each, same harness and pinned model.
+
+**The bug was real and is fixed.** On a RiderRoads-committed Imperius the
+savings plan banked for Construction+Windmill (spawn tech Organization is a
+Construction prerequisite), and 051's gate then admitted ONLY
+`save_next_tech` — so **Riding, the committed lane's own opening move, was
+gated out by the lane-discipline machinery meant to serve it**. The lane's
+opening tech is now never gated by a hub batch. Riding is no longer absent
+from the ballot.
+
+| | baseline | shipped (iter 4) |
+|---|---|---|
+| XinXi hubs@t15 / partners | 1.81 / 2.29 | **2.16 / 2.25** |
+| XinXi giants by t15 / ≥2-share | 2.00 / 72% | **2.09 / 72%** |
+| Imperius first Rider | t11.6 | **t10.1** |
+| Bardur first Rider | t10.8 | **t10.2** |
+| Imperius hubs / giants@t15 | 0.94 / 1.12 | 0.56 / 0.94 |
+| Bardur hubs / giants@t15 | 1.12 / 0.50 | 1.12 / 0.34 |
+| 051 guard (XinXi 48) | 18 lost / 73 techs / 46W | **19 / 66 / 46W** |
+
+⚠️ **GOAL R IS NOT ACHIEVABLE BY PRICING — the action is economically
+dominated in this engine.** Measured: median capital→city distance at t10 is
+**4 tiles**, so a connection needs ~3 road tiles at **3 stars each = 9
+stars**, plus the Riding→Roads chain, and pays **+2 population**. A
+**Windmill pays the same +2 for 5 stars** with no chain. The AI declining to
+build roads is correct play, not a pricing failure. `connected@t10` stayed
+**0.00 across all 4 iterations and all 3 tribes** — and `connect_remaining`
+cannot even produce a gradient before t10, because Roads lands ~t13.5.
+
+⚠️ Note `settings/structures.rs`: Road `cost: Some(3)` carries the comment
+"LEAVING IT AT 2 FOR NOW … CHANGED TO 3 FOR TRAINING". Real Polytopia prices
+roads at 2. At 2 stars a median connection is 6 rather than 9 — still worse
+per population than a Windmill, but close enough that movement value could
+tip it. **This is a game-rule question for Verdi, not a tuning knob.**
+
+FALSIFIED, twice, by iterations 1 and 2: that harder lane priority buys R
+without cost. Forcing the hub choice onto the lane (RiderRoads→Market, a
+30+ star chain) took Imperius hubs 0.94 → 0.31; making the lane's whole tech
+chain exclusive took them to **0.09** and giants to 0.38. Every step toward
+R traded monotonically against G, H and wins. The trade is structural, not a
+dial.
+
+STILL OPEN: G and H moved only on XinXi. The RiderRoads tribes have no cheap
+hub of their own, which is the real reason their giant counts trail — and
+that is an economy question, not a lane-discipline one.

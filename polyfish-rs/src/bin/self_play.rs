@@ -614,7 +614,7 @@ fn dump_turn_state(
         // ever placeable" (the tier-3 tech wall) from "a batch existed but the
         // reachability gate rejected it". Without this a dead SAVE stance is
         // indistinguishable from a correctly quiet one.
-        "save_batch": polyfish::ai::oracle_macro::save_batch_plan(state, pov, tier3_bought)
+        "save_batch": polyfish::ai::oracle_macro::save_batch_plan(state, pov, tier3_bought, ps.archetype)
             .map(|l| l.cost),
         "stance_flips": commit.stance_flips,
         "order_flips": commit.order_flips,
@@ -1759,6 +1759,9 @@ fn play_single_game(
                 g,
                 &mut archetype_states[seat],
             );
+            // EXP_ELO_052: the lane the selector just committed becomes the
+            // lane the savings plan banks for on the NEXT goal update.
+            stance_commits[seat].lane = archetype_states[seat].archetype;
             polyfish::ai::oracle_macro::scripted_goal_aux(
                 &game.state,
                 pov,

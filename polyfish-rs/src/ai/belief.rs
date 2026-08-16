@@ -955,7 +955,7 @@ mod tests {
                         break;
                     }
                     let player = game.state.settings.current_player_turn_id;
-                    let goal = scripted_goal(&game.state, player, 0);
+                    let goal = scripted_goal(&game.state, player, 0, None);
                     if !macro_exec::execute_turn(
                         &mut game, player, &goal, &mut arch, &mut counters, 1.0,
                     ) {
@@ -1057,7 +1057,7 @@ mod tests {
                     break;
                 }
                 let player = sim.state.settings.current_player_turn_id;
-                let goal = scripted_goal(&sim.state, player, 0);
+                let goal = scripted_goal(&sim.state, player, 0, None);
                 if !macro_exec::execute_turn(&mut sim, player, &goal, &mut arch, &mut counters, 1.0)
                 {
                     break;
@@ -1180,7 +1180,7 @@ mod tests {
                     }
                 }
                 let player = pov;
-                let goal = scripted_goal(&game.state, player, 0);
+                let goal = scripted_goal(&game.state, player, 0, None);
                 if !macro_exec::execute_turn(&mut game, player, &goal, &mut arch, &mut counters, 1.0)
                 {
                     break;

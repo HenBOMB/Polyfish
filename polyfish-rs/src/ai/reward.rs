@@ -206,6 +206,13 @@ pub const SHAPE_GOAL_EXPAND_PER_TILE: f32 = 200.0;
 /// Score-equivalents per OWNED environment-recommended tech (GoalAux) —
 /// buying the map-fit tech banks this in-tree; off-fit tech banks nothing.
 pub const SHAPE_GOAL_TECH_FIT: f32 = 150.0;
+/// EXP_ELO_052: score-equivalents per road tile still needed to link a city
+/// to the capital. A connection pays +1 pop to the city and +1 to the
+/// capital, but only the LAST tile of the path collects it — so every tile
+/// before it lost its ballot to a harvest and no city ever connected (0.00
+/// at t10 over 96 games). Paying down the remaining count gives each tile on
+/// the path the share of that reward it actually earns.
+pub const SHAPE_GOAL_CONNECT: f32 = 120.0;
 /// v2.4 scout term: score-equivalents per explored tile while GROW holds,
 /// no EXPAND target is known, and expansion is unfinished — pays the
 /// "find your village" step the audit showed nothing was paying for.
@@ -747,6 +754,10 @@ pub fn goal_potential(
     // would have no gradient. Losing the city reads RISK_LOST, so no line
     // can win potential by letting one fall. Without an aux there is no
     // assessment to price, the convention every aux-carried term follows.
+    if let Some(a) = aux {
+        phi -= SHAPE_GOAL_CONNECT
+            * a.connect_remaining.iter().map(|(_, n)| *n as f32).sum::<f32>();
+    }
     if let Some(a) = aux {
         phi -= SHAPE_GOAL_CITY_RISK
             * crate::ai::defense::residual_city_loss(state, player, &a.city_risk);
