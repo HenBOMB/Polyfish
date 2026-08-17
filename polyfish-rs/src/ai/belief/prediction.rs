@@ -78,6 +78,14 @@ pub struct VillageGuess {
 ///   the quadrant spread above exists to prevent, since resource evidence is
 ///   often lopsided toward one explored corner of the map.
 ///
+/// Count of tiles this player has explored — the exact fingerprint of
+/// `guess_villages`'s dependencies (candidate selection, spacing, and
+/// confidence evidence are all gated on `explorers`, nothing else), so a
+/// caller that sees this count unchanged can safely reuse a cached guess.
+pub fn explored_tile_count(state: &GameState, player: PlayerId) -> usize {
+    state.tiles.values().filter(|t| t.explorers.contains(&player)).count()
+}
+
 /// Returns up to `max_sites`, mutually ≥3 apart.
 pub fn guess_villages(state: &GameState, player: PlayerId, max_sites: usize) -> Vec<VillageGuess> {
     let size = state.settings.size as i32;

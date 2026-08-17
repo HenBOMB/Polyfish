@@ -58,6 +58,70 @@ pub struct MacroGoal {
     pub save_target: Option<SaveTarget>,
 }
 
+/// Turn-scoped memo for `compute_macro_goal`'s two expensive sub-computations
+/// (EXP_ELO_056): `guess_villages` and `pick_save_lane` were being recomputed
+/// on every ply of a turn — including plies that bought a tech and touched
+/// nothing map-related — even though `commit_macro_goal`'s own hysteresis
+/// mostly discards that ply-to-ply churn anyway. Lives inside `StanceCommit`
+/// so it only ever sees one real trajectory (one seat, one game, no branching)
+/// — never threaded into MCTS candidate/rollout code, which evaluates several
+/// hypothetical goals at the same turn and would alias under a turn-keyed
+/// cache. Plain `compute_macro_goal` is unaffected; only `commit_macro_goal`
+/// (the live executor and self-play's goal-channel path) uses this.
+#[derive(Clone, Debug, Default)]
+pub struct GoalCache {
+    village_key: Option<(i32, usize)>,
+    village_guesses: Vec<VillageGuess>,
+    save_key: Option<(i32, u32, Option<Lane>, usize, usize)>,
+    save_target: Option<SaveTarget>,
+}
+
+impl GoalCache {
+    /// Up to `EXPAND_TARGET_MIN` guesses. Exact w.r.t. `guess_villages`'s real
+    /// dependencies: candidate selection, spacing, and confidence evidence are
+    /// all gated on `explorers`, and `explored_tile_count` is that count
+    /// exactly — so an unchanged count means an unchanged answer. The one
+    /// inexactness is unit-position drift: `guess_villages` uses live unit
+    /// positions as anchors for its nearest/quadrant tie-break, and units
+    /// move within a turn, so a cache hit may rank guesses by a slightly
+    /// stale anchor. Registered as acceptable staleness, not a correctness
+    /// bug — see EXP_ELO_056.
+    fn village_guesses(&mut self, state: &GameState, player: PlayerId) -> &[VillageGuess] {
+        let key = (state.settings.turn, explored_tile_count(state, player));
+        if self.village_key != Some(key) {
+            self.village_guesses = guess_villages(state, player, EXPAND_TARGET_MIN);
+            self.village_key = Some(key);
+        }
+        &self.village_guesses
+    }
+
+    /// `pick_save_lane`'s pre-affordability answer (its own stars-affordability
+    /// filter reads live `tribe.stars`, so it stays outside this cache and is
+    /// re-applied by the caller every call — see `compute_macro_goal_cached`).
+    /// Keyed on the geometric inputs that can change mid-turn: a tech buy that
+    /// reveals a resource (`is_resource_visible_to_tribe`) changes which sites
+    /// are placeable, so tech count is in the key even though exploration alone
+    /// is not.
+    fn save_target(
+        &mut self,
+        state: &GameState,
+        player: PlayerId,
+        tier3_bought: u32,
+        lane: Option<Lane>,
+    ) -> Option<SaveTarget> {
+        let (tech_count, cities) = state
+            .tribes
+            .get(&player)
+            .map_or((0, 0), |t| (t.tech_vanilla.iter().filter(|t| t.discovered).count(), t.cities.len()));
+        let key = (state.settings.turn, tier3_bought, lane, tech_count, cities);
+        if self.save_key != Some(key) {
+            self.save_target = pick_save_lane(state, player, tier3_bought, lane);
+            self.save_key = Some(key);
+        }
+        self.save_target.clone()
+    }
+}
+
 /// Stage-1 scripted goal-setter, v2 (recalibrated Jul 29 after the iter-1..4
 /// channel audit showed ATTACK lit on 62% of plies): EXPAND on every
 /// capturable village until captured; ATTACK only with local force
@@ -67,6 +131,21 @@ pub fn compute_macro_goal(
     player: PlayerId,
     tier3_bought: u32,
     lane: Option<Lane>,
+) -> MacroGoal {
+    compute_macro_goal_cached(state, player, tier3_bought, lane, None)
+}
+
+/// Same as `compute_macro_goal`, with an optional turn-scoped cache for the
+/// two expensive sub-computations. `cache: None` is byte-for-byte identical
+/// to `compute_macro_goal`'s old body — every existing caller (tests, in-tree
+/// rollouts, the MCTS candidate/replan path) keeps calling the unchanged
+/// public function and is unaffected by this.
+pub fn compute_macro_goal_cached(
+    state: &GameState,
+    player: PlayerId,
+    tier3_bought: u32,
+    lane: Option<Lane>,
+    mut cache: Option<&mut GoalCache>,
 ) -> MacroGoal {
     let size = state.settings.size as i32;
     let cheb =
@@ -90,7 +169,12 @@ pub fn compute_macro_goal(
     // generator-informed guesses stand in for undiscovered villages, so the
     // approach gradient drives scouting toward likely sites instead of idling.
     if tribe.cities.len() < COMMIT_CITY_TARGET && orders.len() < EXPAND_TARGET_MIN {
-        for g in guess_villages(state, player, EXPAND_TARGET_MIN - orders.len()) {
+        let need = EXPAND_TARGET_MIN - orders.len();
+        let guesses: Vec<VillageGuess> = match &mut cache {
+            Some(c) => c.village_guesses(state, player).to_vec(),
+            None => guess_villages(state, player, EXPAND_TARGET_MIN),
+        };
+        for g in guesses.into_iter().take(need) {
             orders.push((OrderKind::Expand, g.tile));
         }
     }
@@ -154,7 +238,11 @@ pub fn compute_macro_goal(
     // rather than becoming an open-ended hoard.
     // EXP_ELO_052: bank for the lane T1 committed to, not for whichever
     // structure happens to be cheapest.
-    let save_target = pick_save_lane(state, player, tier3_bought, lane).filter(|l| {
+    let raw_save_target = match &mut cache {
+        Some(c) => c.save_target(state, player, tier3_bought, lane),
+        None => pick_save_lane(state, player, tier3_bought, lane),
+    };
+    let save_target = raw_save_target.filter(|l| {
         let spt = crate::functions::get_tribe_spt(state, tribe);
         tribe.stars < l.cost && tribe.stars + spt * SAVE_MAX_TURNS >= l.cost
     });
@@ -363,6 +451,9 @@ pub struct StanceCommit {
     pub order_flips: u32,
     /// Turns observed, the denominator for both rates.
     pub turns_seen: u32,
+    /// EXP_ELO_056: memo for `guess_villages`/`pick_save_lane`, safe here
+    /// because a `StanceCommit` only ever advances along one real trajectory.
+    cache: GoalCache,
 }
 
 /// v7: the goal-setter with memory. Returns the scripted orders unchanged (a
@@ -380,7 +471,7 @@ pub fn commit_macro_goal(
     st: &mut StanceCommit,
     tier3_bought: u32,
 ) -> MacroGoal {
-    let mut goal = compute_macro_goal(state, player, tier3_bought, st.lane);
+    let mut goal = compute_macro_goal_cached(state, player, tier3_bought, st.lane, Some(&mut st.cache));
     let turn = state.settings.turn;
     let new_turn = turn != st.last_turn;
     if new_turn {
@@ -440,7 +531,7 @@ pub const EXPAND_TARGET_MIN: usize = 2;
 
 /// Moved to `belief::prediction` and merged with `predict_villages` (Aug
 /// 2026) — one village-guesser instead of two.
-pub use crate::ai::belief::prediction::{guess_villages, VillageGuess};
+pub use crate::ai::belief::prediction::{explored_tile_count, guess_villages, VillageGuess};
 
 /// Whether the goal-conditioned research gate is active (v2.2, stance-aware):
 /// GROW gates during the expansion window (EXPAND painted, under
