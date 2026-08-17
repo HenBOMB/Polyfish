@@ -22,7 +22,7 @@ let REPLAY_INTERVAL_MS = 1500;
 async function openReplayMenu() {
     // For now, just prompt for a filename or list them
     // Ideally we'd have a modal. Let's use a simple prompt for MVP.
-    const filename = prompt("Enter replay filename (e.g. 'game_123.json'):");
+    const filename = prompt("Enter replay filename, relative to replays/ (e.g. 'game_123.json' or 'subfolder/game_123.json'):");
     if (filename) {
         await loadReplay(filename);
     }

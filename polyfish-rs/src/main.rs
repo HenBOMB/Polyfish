@@ -1630,15 +1630,10 @@ async fn load_replay_endpoint(
 ) -> Json<Value> {
     let mut game = state.game.lock().unwrap();
 
-    // Security check: simple path traversal prevention
-    if params.filename.contains("..")
-        || params.filename.contains("/")
-        || params.filename.contains("\\")
-    {
-        // allow if it starts with "replays/"
-        if !params.filename.starts_with("replays/") {
-            return Json(serde_json::json!({ "status": "error", "message": "Invalid filename" }));
-        }
+    // Security check: block path traversal, including a `..` component
+    // buried inside a nested subfolder path (e.g. "sub/../../etc/passwd").
+    if params.filename.contains("..") {
+        return Json(serde_json::json!({ "status": "error", "message": "Invalid filename" }));
     }
 
     let path = if params.filename.starts_with("replays/") {
