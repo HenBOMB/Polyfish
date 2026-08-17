@@ -6269,3 +6269,42 @@ warnings), the T1→T2 layering violation the user named is gone
 T1 predicate), the dead `lane` parameter chain is deleted end-to-end
 rather than left as unread plumbing, and the one behavior gate this
 family can adjudicate (win rate) shows no regression.
+
+## Self-play turn-count curriculum dropped — flat 50-turn cap
+
+DECIDED Aug 17, 2026. Prompted by watching a traced XinXi-vs-Imperius game
+that hit `max_turns` mid-buildout — 10 turns wasn't enough for a hub
+economy or a giants push to mature (consistent with 057's own read that
+this instrument's games "only run to about turn 10-14... a giant requires
+reaching city level 4-5"). Verdi: "lets drop the turns ramp up thing pls.
+we should default to 50 turns max period across the board."
+
+CHANGE. `self_play.rs::play_single_game`'s curriculum
+(`iteration≤25→10, ≤50→15, ≤75→20, else→30`, map size always Tiny) is now
+a flat `(MapSize::Tiny, 50)` — no iteration dependence. `iteration` is
+still used elsewhere in the same function (heuristic-prior decay,
+`--value-trust` ramp) so it stays a live parameter, not dead. Mirrored in
+`actor_ceiling.rs::play_game` (its own doc comment already says "identical
+to self_play so the sim workload matches") — its `iteration` parameter
+was ONLY used for this curriculum, so it's removed outright rather than
+left unread, with the one call site updated. `run_training_loop.sh`'s
+`ITER_OFFSET` comment and `benchmark_self_play.py`'s `--iteration` help
+text both referenced the old 10/15/20/30 (and a separately-drifted
+50/100/150 in actor_ceiling's copy) — updated so neither describes
+turn-count behavior that no longer exists; `ITER_OFFSET` itself is
+unchanged, it still paces the heuristic-prior/anchor-frac decay ramps.
+
+VERIFICATION. Clean build (`cargo build --lib --tests --bin self_play
+--bin actor_ceiling`), zero new warnings. `cargo test --lib --tests --bin
+self_play`: 207/207 lib + full integration suite green, no fixture
+depended on the old thresholds.
+
+TRADEOFF, flagged not measured: every self-play game is now up to 5x
+longer than the iteration-1 baseline (10→50 turns) and up to 1.7x longer
+than the fully-ramped steady state (30→50). Wall-clock games/hour drops
+proportionally — this was a deliberate call to let hub economy and
+giants-tier techs actually mature in the training data, not a
+throughput-neutral change. No A/B run against the old curriculum;
+this is a config decision, not a behavior hypothesis to adjudicate.
+
+STATUS: SHIPPED.

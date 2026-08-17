@@ -43,20 +43,12 @@ fn play_game(
     game_idx: usize,
     seed: i64,
     tribes: Vec<TribeType>,
-    iteration: usize,
     backend: SearchBackend,
     leaf_batch: Option<usize>,
 ) -> GameTally {
-    // Curriculum — identical to self_play so the sim workload matches.
-    let (map_size, max_turns) = if iteration <= 50 {
-        (MapSize::Tiny, 10)
-    } else if iteration <= 100 {
-        (MapSize::Tiny, 15)
-    } else if iteration <= 150 {
-        (MapSize::Tiny, 20)
-    } else {
-        (MapSize::Tiny, 30)
-    };
+    // Curriculum — identical to self_play so the sim workload matches
+    // (flat 50-turn cap, no iteration ramp — see self_play.rs).
+    let (map_size, max_turns) = (MapSize::Tiny, 50);
 
     let gen_settings = MapGenSettings {
         size: map_size,
@@ -312,7 +304,6 @@ fn main() -> anyhow::Result<()> {
                         i,
                         seed,
                         vec![t1, t2],
-                        args.iteration,
                         backend,
                         args.leaf_batch,
                     );

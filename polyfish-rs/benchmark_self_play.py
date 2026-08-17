@@ -10,9 +10,9 @@ Usage:
   python3 benchmark_self_play.py --label native_arm64 --target aarch64-apple-darwin --build
   python3 benchmark_self_play.py --label eval_server --build --notes "after eval server landed"
 
-  # Eval-server knobs (forwarded to self_play). Use --iteration >150 to
-  # benchmark the 30-turn steady-state curriculum rather than the 10-turn
-  # warm-up that iteration=1 exercises.
+  # Eval-server knobs (forwarded to self_play). max_turns is a flat 50
+  # regardless of --iteration (self_play's turn-count curriculum was
+  # dropped); --iteration still drives the heuristic-prior/anchor decay.
   python3 benchmark_self_play.py --label eval_server_gumbel_64 \
       --backend gumbel --gumbel-k 16 --mcts 64 --games 128 --iteration 200 \
       --actors 96 --max-batch 256 --coalesce-timeout-us 1000 --leaf-batch 4 \
@@ -193,7 +193,7 @@ def main():
                          "(0 disables; default keeps self_play's compiled 524288)")
     ap.add_argument("--iteration", type=int, default=1,
                     help="training iteration passed to self_play; drives the "
-                         "max_turns curriculum (use >150 for 30-turn steady state)")
+                         "heuristic-prior/anchor decay ramps (max_turns is a flat 50)")
     args = ap.parse_args()
 
     if args.build:

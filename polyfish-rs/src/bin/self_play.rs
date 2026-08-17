@@ -1385,16 +1385,10 @@ fn play_single_game(
     goal_w_tree: f32,
     macro_params: MacroParams,
 ) -> Option<GameResult> {
-    // Curriculum logic — Tiny maps only, gradually increase turn count.
-    let (map_size, max_turns) = if iteration <= 25 {
-        (MapSize::Tiny, 10)
-    } else if iteration <= 50 {
-        (MapSize::Tiny, 15)
-    } else if iteration <= 75 {
-        (MapSize::Tiny, 20)
-    } else {
-        (MapSize::Tiny, 30)
-    };
+    // Verdi: drop the turn-count ramp — Tiny maps, flat 50-turn cap
+    // regardless of iteration (was 10/15/20/30 ramping by iteration; games
+    // this short couldn't mature a hub economy or a giants push).
+    let (map_size, max_turns) = (MapSize::Tiny, 50);
 
     // Init Game using MapGen
     let gen_settings = polyfish::mapgen::MapGenSettings {

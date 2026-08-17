@@ -546,11 +546,12 @@ do
     TRIBE1=${SELECTED_TRIBES[0]}
     TRIBE2=${SELECTED_TRIBES[1]}
     
-    # Curriculum pacing is keyed to GAMES seen, not loop count: self_play's
-    # iteration thresholds (50/100/150) were tuned at BASELINE_GAMES/iter.
+    # EFF_ITER pacing is keyed to GAMES seen, not loop count, and still drives
+    # the heuristic-prior/anchor-frac decay ramps (self_play's turn-count
+    # curriculum was dropped — max_turns is now a flat 50, see self_play.rs).
     # ITER_OFFSET (env, default 0) shifts the schedule forward — e.g.
-    # ITER_OFFSET=76 starts at the 30-turn curriculum stage with the heuristic
-    # prior mostly annealed, for resuming from a behavior-cloned model.
+    # ITER_OFFSET=76 starts with the heuristic prior mostly annealed, for
+    # resuming from a behavior-cloned model.
     EFF_ITER=$(awk -v i="$i" -v b="$BASELINE_GAMES" -v g="$NUM_GAMES" \
         'BEGIN { print int((i - 1) * g / b) + 1 }')
     EFF_ITER=$((EFF_ITER + ${ITER_OFFSET:-0}))
