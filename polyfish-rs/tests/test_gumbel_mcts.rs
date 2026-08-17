@@ -94,33 +94,16 @@ fn test_gumbel_policy_target_covers_full_legal_set() {
         legal_count
     );
 
-    // The Gumbel root suppresses EndTurn when other moves exist (mirroring
-    // Zero), so the policy target covers the non-EndTurn legal set.
-    let has_other = legal_moves
-        .iter()
-        .any(|m| m.move_type() != polyfish::types::MoveType::EndTurn);
-    let expected_count = if has_other {
-        legal_moves
-            .iter()
-            .filter(|m| m.move_type() != polyfish::types::MoveType::EndTurn)
-            .count()
-    } else {
-        legal_count
-    };
-    assert!(
-        expected_count > 1,
-        "test setup: expected >1 non-EndTurn legal move, got {}",
-        expected_count
-    );
-
+    // EndTurn is no longer suppressed at the root (Aug 2026 — Verdi: the
+    // early-training passivity guard doesn't need a hard gate anymore), so
+    // the policy target covers the true full legal set, EndTurn included.
     let mut agent = GumbelMctsAgent::new(&evaluator, 32, 4);
     let (_best_move, move_visits) = agent.select_move_with_decomposed_visits(&mut game, 0);
 
     assert_eq!(
         move_visits.len(),
-        expected_count,
-        "policy target must cover the full (EndTurn-filtered) root legal set \
-        (bug #4 regression)"
+        legal_count,
+        "policy target must cover the full root legal set (bug #4 regression)"
     );
 
     // π' is a softmax over all root children, so it must sum to ~1.

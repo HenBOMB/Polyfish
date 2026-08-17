@@ -9,7 +9,6 @@ use super::reuse::{blend_goal_prior, blend_heuristic_prior, reset_stats_recursiv
 use crate::ai::features::{self, RawFeatures};
 use crate::ai::policy_composer;
 use crate::game::Game;
-use crate::types::MoveType;
 use rand::distributions::Distribution;
 use rand_distr::Gumbel;
 
@@ -78,8 +77,8 @@ impl<'a> GumbelMctsAgent<'a> {
         self.build_fresh_root(game, features, start_turn)
     }
     /// Re-root continuation: take the promoted child (already confirmed
-    /// expanded with children), reset stats, re-sample Gumbel, suppress
-    /// EndTurn, rebuild `in_cut`, and run Sequential Halving.
+    /// expanded with children), reset stats, re-sample Gumbel, rebuild
+    /// `in_cut`, and run Sequential Halving.
     pub(super) fn finish_reused_root(&self, game: &mut Game, mut new_root: GumbelNode, start_turn: i32) -> GumbelNode {
         reset_stats_recursive(&mut new_root);
 
@@ -89,7 +88,7 @@ impl<'a> GumbelMctsAgent<'a> {
         // without this every root gate leaked on all but the first ply of a
         // turn — measured Aug 2: the pop-discipline and road gates were fully
         // inert until this was added. EndTurn is exempt so the root can never
-        // be emptied; the suppression below still removes it when it should.
+        // be emptied.
         if (self.star_gate || self.goal_aux.is_some()) && reused_root_gates_enabled() {
             let stance = self.macro_goal.as_ref().map(|g| g.stance);
             let before = new_root.children.len();
@@ -106,24 +105,6 @@ impl<'a> GumbelMctsAgent<'a> {
                 )
             });
             gate_stats::record_ply(before, new_root.children.len());
-        }
-
-        // Belt-and-suspenders: `extract_leaf_data` already drops EndTurn from
-        // any expansion (root or interior) whenever another move exists, so
-        // this is normally a no-op — kept in case a reused root's EndTurn
-        // was its sole child at expansion time (then legitimately present)
-        // but other moves are available now.
-        let has_other = new_root.children.iter().any(|c| {
-            c.move_to_here
-                .as_ref()
-                .map_or(false, |m| m.move_type() != MoveType::EndTurn)
-        });
-        if has_other {
-            new_root.children.retain(|c| {
-                c.move_to_here
-                    .as_ref()
-                    .map_or(true, |m| m.move_type() != MoveType::EndTurn)
-            });
         }
 
         // Re-sample Gumbel(0,1) on the new root's children: they were created
@@ -176,15 +157,6 @@ impl<'a> GumbelMctsAgent<'a> {
 
         if legal_moves.is_empty() {
             return root;
-        }
-
-        // Suppress EndTurn at the root when any other move exists to prevent
-        // passive play.
-        let has_other = legal_moves
-            .iter()
-            .any(|m| m.move_type() != MoveType::EndTurn);
-        if has_other {
-            legal_moves.retain(|m| m.move_type() != MoveType::EndTurn);
         }
 
         let logits =

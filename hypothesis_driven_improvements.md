@@ -6308,3 +6308,92 @@ throughput-neutral change. No A/B run against the old curriculum;
 this is a config decision, not a behavior hypothesis to adjudicate.
 
 STATUS: SHIPPED.
+
+## Lighthouse FOW exception + drop Gumbel's EndTurn suppression
+
+DECIDED Aug 17, 2026, from a traced XinXi-vs-Imperius game's decision-by-
+decision review (moves 16, 110, 130 of `watch_xinxi_vs_imperius_gumbel0`).
+
+**1. Lighthouse discovery is now visible to simulation.** `discover_tiles`'s
+FOW-honest simulated branch (`_are_you_sure=false`) never looked at
+`state.structures`, so a lighthouse's +1 pop bonus (real branch only,
+`add_population` on `!simulating`) was invisible to MCTS no matter how deep
+search looked — a representation gap, not an exploration-budget problem
+(traced: move 110/130's `Step 24→12` toward the corner got 1-2 of 64
+visits, its Q never resolved). Verdi: "a lighthouse is an exception because
+it's a well known game fact that there's always a lighthouse in every 4
+corners... There is 0 mystery." Confirmed in `mapgen.rs`: `corners =
+[0, size-1, size*(size-1), size*size-1]`, unconditional for any
+`version>=114` map, no randomness. New `is_lighthouse_corner(state, idx)`
+(`discovery.rs`) checks only position + version — no structure lookup, so
+it can't leak anything else under fog. Wired into the simulating branch
+alongside the existing shadow-set credit; the real branch's ground-truth
+structure check is untouched. 3 new tests (`lighthouse_corner.rs`):
+simulated match real, non-corner grants nothing, pre-v114 grants nothing
+(all with undo-restores-population checks).
+
+**2. Gumbel's EndTurn suppression is dropped.** Traced move 16: Attack was
+forced because `extract_leaf_data`/`build_fresh_root`/`finish_reused_root`
+all stripped EndTurn from the candidate set whenever any other move was
+legal, so "do nothing more this ply" was never an option — and per Verdi,
+the fix wasn't the choice of Attack vs Build Mine specifically, it was that
+neither should have been forced at all: "the right thing to do would have
+been to do nothing... even if we do that at that ply, the next ply might
+still suggest an attack instead of ending turn." Confirmed exactly:
+suppression re-fires every ply, so nothing short of exhausting all legal
+moves ever reaches EndTurn. Verdi: "It was useful early on for training
+but now we can do away with it and let the model start learning when
+enough is enough." Removed from all 3 Gumbel sites (`mcts_common.rs`'s
+`extract_leaf_data`, shared by both Gumbel and Zero interior-node
+expansion; `gumbel_mcts/root.rs`'s `build_fresh_root` and
+`finish_reused_root`). Deliberately scoped to Gumbel only — the identical
+pattern exists in `mcts_zero.rs` (`SearchBackend::Zero`, parameterized via
+`allow_end_turn`, not a hard gate) and `heuristic_mcts.rs`
+(`SearchBackend::Heuristic`, also serves the interactive trainer's "play
+all useful moves first" UX) — neither is exercised by
+`run_training_loop.sh`'s default `--search-backend gumbel` path, and
+`heuristic_mcts.rs`'s copy may exist for a genuinely different (UX, not
+training-data) reason. Left both untouched; flagged, not silently ignored.
+
+**Bug found while fixing this, not by it:** `reused_children_match_legal`
+(`gumbel_mcts/reuse.rs`) multiset-compares a reused root's cached children
+against a fresh `game.legal_moves()` call to detect staleness. It carried
+its own copy of the old EndTurn-stripping logic on the fresh-legal-moves
+side, to match what the cached children (built through the now-fixed
+filtered paths) used to look like. Once EndTurn stopped being stripped
+from the caches, that copy went stale and started comparing an unfiltered
+cached set against an artificially-filtered fresh set — a spurious
+one-item mismatch on every ply where EndTurn was legal, which is nearly
+every ply. Manifested as `agent.tree_reuses` staying 0
+(`test_gumbel_tree_reuse_on_consecutive_same_player_search`, ~50% flaky
+even at 2x the iteration budget — budget was never the actual variable).
+Removed the stale normalization; 8/8 clean at the original 128-iteration
+budget once fixed, confirming it was a real logic bug, not flakiness to
+budget around.
+
+**Also found, unrelated to the two decisions above:**
+`test_gumbel_state_restored_after_search` passed the *live* `Game` object
+directly into `select_move_with_decomposed_visits` instead of a clone.
+`next_root_hash_for` speculatively applies the recommended move for real
+(`Game::play_move`, undo intentionally dropped) to precompute next call's
+reuse hash — production code (`Brain::think_decomposed`) already clones
+before calling for exactly this reason, and another Gumbel test's own
+comment already documents the contract. The live-game test read as
+"restored" only because EndTurn was rarely the recommended move before;
+now that it's normal, recommending it permanently advances the *live* game
+via that speculative apply, a real assertion failure that has nothing to
+do with search-internal undo correctness. Fixed the test to clone, per
+the documented contract — not a production bug, since `Brain` was already
+doing this correctly.
+
+VERIFICATION. Clean build, zero new warnings across `discovery.rs`,
+`mcts_common.rs`, `gumbel_mcts/root.rs`, `gumbel_mcts/reuse.rs`. `cargo
+test --lib --tests --bin self_play`: 207/207 lib + 305 total passed, full
+integration suite green. The two tests this surfaced as broken
+(`test_gumbel_policy_target_covers_full_legal_set`,
+`test_gumbel_tree_reuse_on_consecutive_same_player_search`) and the one
+unrelated pre-existing fragile assumption
+(`test_gumbel_state_restored_after_search`) were all updated to match the
+new, correct behavior/contract rather than papered over.
+
+STATUS: SHIPPED.

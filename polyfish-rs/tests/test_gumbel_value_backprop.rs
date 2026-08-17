@@ -38,6 +38,16 @@ fn make_evaluator(network: &Arc<PolyZeroNet>) -> Evaluator {
 /// `select_move_with_decomposed_visits` call. Mirrors the Zero-side test in
 /// `test_value_backprop.rs`, but exercised through Gumbel's round-robin leaf
 /// collection path.
+///
+/// Search on a clone, not the retained `game`: `next_root_hash_for`
+/// speculatively applies the recommended move for real (`Game::play_move`,
+/// undo intentionally dropped) to precompute the hash the next call must
+/// match — the same contract `Brain::think_decomposed` and arena's
+/// `play_match` already respect. Passing the live game directly used to
+/// read as "restored" only because EndTurn was rarely the recommended move
+/// (root-suppressed); now that it's a normal candidate, recommending it
+/// would permanently advance the live game's turn via that speculative
+/// apply — a real assertion failure, not a search-undo bug.
 #[test]
 fn test_gumbel_state_restored_after_search() {
     use polyfish::moves::EndTurnMove;
@@ -60,7 +70,7 @@ fn test_gumbel_state_restored_after_search() {
     let initial_turn = game.state.settings.turn;
 
     let mut agent = GumbelMctsAgent::new(&evaluator, 32, 8);
-    let (best_move, _visits) = agent.select_move_with_decomposed_visits(&mut game, 0);
+    let (best_move, _visits) = agent.select_move_with_decomposed_visits(&mut game.clone(), 0);
     assert!(best_move.is_some());
 
     assert_eq!(

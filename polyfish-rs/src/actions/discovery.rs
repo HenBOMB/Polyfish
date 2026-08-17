@@ -6,6 +6,20 @@ use crate::functions::{get_adjacent_indices, get_capital_city};
 use crate::states::{GameState, PlayerId, UnitState};
 use crate::types::{StructureType, TerrainType};
 
+/// Lighthouses always occupy every map corner, unconditionally
+/// (`mapgen.rs`: `corners = [0, size-1, size*(size-1), size*size-1]`) — a
+/// fixed rule of map generation, not hidden state. A real player already
+/// knows a corner tile is a lighthouse before exploring it, so this lets
+/// FOW-honest MCTS simulation credit that one narrow fact without peeking at
+/// `state.structures` for anything else under fog.
+fn is_lighthouse_corner(state: &GameState, idx: i32) -> bool {
+    if state.settings.version < 114 {
+        return false;
+    }
+    let size = state.settings.size;
+    idx == 0 || idx == size - 1 || idx == size * (size - 1) || idx == size * size - 1
+}
+
 /// Discover tiles around a unit or specific tiles
 pub fn discover_tiles(
     state: &mut GameState,
@@ -72,6 +86,21 @@ pub fn discover_tiles(
         // legal-move gen keep seeing fog. The shadow set makes the credit
         // once-per-tile per simulation line (unwound by the undo), instead of
         // re-crediting the same frontier every time a sim path re-contacts it.
+        //
+        // Exception: a corner tile is a lighthouse with certainty (see
+        // `is_lighthouse_corner`), so its +1 pop bonus is real, known
+        // information, not a peek — credit it here the same way the real
+        // (non-simulating) branch below does.
+        for &idx in &newly_discovered {
+            if is_lighthouse_corner(state, idx) {
+                let city_to_reward = get_capital_city(state, pov_id).map(|c| c.idx).or_else(|| {
+                    state.tribes.get(&pov_id).and_then(|t| t.cities.first().map(|c| c.idx))
+                });
+                if let Some(city_idx) = city_to_reward {
+                    undos.push(add_population(state, city_idx, 1));
+                }
+            }
+        }
         let credited = newly_discovered;
         let set = state.settings._sim_explored.entry(pov_id).or_default();
         for &idx in &credited {

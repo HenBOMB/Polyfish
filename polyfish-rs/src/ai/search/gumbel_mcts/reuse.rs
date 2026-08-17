@@ -133,13 +133,10 @@ pub(super) fn blend_heuristic_prior(game: &Game, children: &mut [GumbelNode], we
 /// Multiset-compare a reused root's cached child moves against the real
 /// state's legal moves. Any mismatch means the sim-built cache is stale.
 ///
-/// Every expansion path (`build_fresh_root`, and `extract_leaf_data` in
-/// `mcts_common.rs` for interior nodes) drops `EndTurn` from a node's
-/// children whenever another move is legal, keeping it only when it's the
-/// sole option. The cached `children` were built through one of those paths,
-/// so the comparison must apply the same normalization to `game.legal_moves()`
-/// — otherwise EndTurn's presence in the raw legal set spuriously fails the
-/// match on every reuse attempt where any other move exists.
+/// `EndTurn` is no longer filtered out of any expansion path (`build_fresh_root`,
+/// `finish_reused_root`, or `extract_leaf_data` for interior nodes — Aug 2026),
+/// so the cached `children` and a fresh `game.legal_moves()` are directly
+/// comparable without any normalization.
 pub(super) fn reused_children_match_legal(
     game: &Game,
     children: &[GumbelNode],
@@ -155,10 +152,6 @@ pub(super) fn reused_children_match_legal(
             m.move_type() == MoveType::EndTurn
                 || gate_block(&game.state, m.as_ref(), star_gate, stance, goal_aux).is_none()
         });
-    }
-    let has_other = legal.iter().any(|m| m.move_type() != MoveType::EndTurn);
-    if has_other {
-        legal.retain(|m| m.move_type() != MoveType::EndTurn);
     }
     if legal.len() != children.len() {
         return false;

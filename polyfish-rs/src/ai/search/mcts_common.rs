@@ -11,7 +11,6 @@
 use crate::ai::features::{RawFeatures, state_to_cpu_features_goal};
 use crate::game::Game;
 use crate::moves::Move;
-use crate::types::MoveType;
 use std::cell::RefCell;
 
 /// Default virtual-loss amount applied during parallel leaf collection.
@@ -84,8 +83,10 @@ pub(crate) fn compute_terminal_outcome(game: &Game) -> f32 {
 /// Build the `LeafData` for the current (post-descent, pre-undo) `game`
 /// state. This is the three-way branch shared by both agents:
 ///   - terminal: outcome from `compute_terminal_outcome`, no features / moves
-///   - needs expansion: features + legal moves (EndTurn filtered out when
-///     other moves exist, since batched expansion always allows EndTurn)
+///   - needs expansion: features + legal moves (EndTurn included alongside
+///     every other legal move — Verdi, Aug 2026: the early-training
+///     passivity risk this used to guard against no longer needs a hard
+///     gate; the model should learn when a turn is actually done)
 ///   - horizon: features only (evaluated by NN but not expanded)
 ///
 /// `indices_stack` and `path_players` are moved into the returned `LeafData`.
@@ -124,15 +125,7 @@ pub(crate) fn extract_leaf_data(
         )
         .expect("BUG: Failed to create features at MCTS leaf");
 
-        let mut legal_moves = game.legal_moves();
-        // In batched expansion we always allow EndTurn (allow_end_turn=true),
-        // so only keep EndTurn if it is the sole option.
-        let has_other = legal_moves
-            .iter()
-            .any(|m| m.move_type() != MoveType::EndTurn);
-        if has_other {
-            legal_moves.retain(|m| m.move_type() != MoveType::EndTurn);
-        }
+        let legal_moves = game.legal_moves();
 
         return LeafData {
             path_indices: indices_stack,
