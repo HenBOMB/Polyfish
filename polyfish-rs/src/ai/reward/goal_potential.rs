@@ -466,7 +466,7 @@ pub fn goal_potential(
                 .filter(|u| aux.preferred_units.contains(&u.unit_type))
                 .map(crate::rules::combat::unit_worth)
                 .sum::<i32>();
-            phi += SHAPE_GOAL_ARCHETYPE_PER_COST * preferred as f32;
+            phi += SHAPE_GOAL_LANE_PER_COST * preferred as f32;
         }
     }
     phi

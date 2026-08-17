@@ -509,11 +509,11 @@ fn dump_turn_state(
     state: &GameState,
     pov: PlayerId,
     open_villages: &std::collections::HashSet<i32>,
-    arch: &polyfish::ai::oracle_macro::ArchetypeState,
+    lane_state: &polyfish::ai::oracle_macro::LaneState,
     // The macro agent's OWN Tier-1 state when this seat searches with
-    // macro-mcts — a different `ArchetypeState` than the script path's, and
+    // macro-mcts — a different `LaneState` than the script path's, and
     // the one that drove the ply, so it wins when present.
-    macro_arch: Option<&polyfish::ai::oracle_macro::ArchetypeState>,
+    macro_lane_state: Option<&polyfish::ai::oracle_macro::LaneState>,
     goal: Option<&polyfish::ai::oracle_macro::MacroGoal>,
     commit: &polyfish::ai::oracle_macro::StanceCommit,
     plans: &PlanTracker,
@@ -575,13 +575,13 @@ fn dump_turn_state(
     // Stage 4 attribution: `ply <- order <- playstyle`. The lane is the root
     // cause, the orders are the middle tier, and both are recorded from the
     // state that actually drove this ply (dumped post-search, pre-move).
-    let ps = macro_arch.unwrap_or(arch);
+    let ps = macro_lane_state.unwrap_or(lane_state);
     let rec = json!({
         "game": game_idx,
         "turn": state.settings.turn,
         "player": pov,
-        "playstyle": ps.archetype.map(|a| format!("{a:?}")),
-        "playstyle_source": if macro_arch.is_some() { "macro" } else { "script" },
+        "playstyle": ps.lane.map(|a| format!("{a:?}")),
+        "playstyle_source": if macro_lane_state.is_some() { "macro" } else { "script" },
         "playstyle_committed_turn": ps.committed_turn,
         "playstyle_pivots_used": ps.pivots_used,
         "lane_blocked_turns": ps.lane_blocked_turns,
@@ -600,10 +600,10 @@ fn dump_turn_state(
         "connected_cities": tribe.cities.iter().filter(|c| c.connected_to_capital).count(),
         "visible_villages": visible_villages,
         "units": units,
-        "seen_squishy": arch.seen_squishy,
-        "seen_heavy": arch.seen_heavy,
-        "seen_cavalry": arch.seen_cavalry,
-        "knight_commit": arch.overlays.knight_commit,
+        "seen_squishy": lane_state.seen_squishy,
+        "seen_heavy": lane_state.seen_heavy,
+        "seen_cavalry": lane_state.seen_cavalry,
+        "knight_commit": lane_state.overlays.knight_commit,
         // v7 commitment + plan outcomes.
         "stance": goal.map(|g| format!("{:?}", g.stance)),
         "save_target": goal.and_then(|g| g.save_target.as_ref().map(|l| l.cost)),
@@ -614,7 +614,7 @@ fn dump_turn_state(
         // ever placeable" (the tier-3 tech wall) from "a batch existed but the
         // reachability gate rejected it". Without this a dead SAVE stance is
         // indistinguishable from a correctly quiet one.
-        "save_batch": polyfish::ai::oracle_macro::pick_save_lane(state, pov, tier3_bought, ps.archetype)
+        "save_batch": polyfish::ai::oracle_macro::pick_save_lane(state, pov, tier3_bought, ps.lane)
             .map(|l| l.cost),
         "stance_flips": commit.stance_flips,
         "order_flips": commit.order_flips,
@@ -1681,9 +1681,9 @@ fn play_single_game(
     // techs never pass through a Research move, so they don't count).
     let mut techs_bought = [0u32; 2];
     let mut tier3_bought = [0u32; 2];
-    // v3 archetype doctrine state per seat (peak enemy sightings, sticky
+    // v3 lane doctrine state per seat (peak enemy sightings, sticky
     // doctrine choice, overlays) — persists across plies like the counters.
-    let mut archetype_states: [polyfish::ai::oracle_macro::ArchetypeState; 2] =
+    let mut lane_states: [polyfish::ai::oracle_macro::LaneState; 2] =
         Default::default();
     // v7: standing macro commitment per seat — the goal-setter's memory.
     let mut stance_commits: [polyfish::ai::oracle_macro::StanceCommit; 2] = Default::default();
@@ -1753,22 +1753,22 @@ fn play_single_game(
         });
         let seat = ((pov - 1) as usize).min(1);
         let goal_aux = macro_goal.as_ref().map(|g| {
-            polyfish::ai::oracle_macro::update_archetype(
+            polyfish::ai::oracle_macro::update_lane_state(
                 &game.state,
                 pov,
                 g,
-                &mut archetype_states[seat],
+                &mut lane_states[seat],
             );
             // EXP_ELO_052: the lane the selector just committed becomes the
             // lane the savings plan banks for on the NEXT goal update.
-            stance_commits[seat].lane = archetype_states[seat].archetype;
+            stance_commits[seat].lane = lane_states[seat].lane;
             polyfish::ai::oracle_macro::compute_goal_aux(
                 &game.state,
                 pov,
                 g,
                 techs_bought[seat],
                 tier3_bought[seat],
-                Some(&archetype_states[seat]),
+                Some(&lane_states[seat]),
             )
         });
         current_agent.set_macro_goal(macro_goal.clone(), star_gate);
@@ -1935,7 +1935,7 @@ fn play_single_game(
                     &game.state,
                     pov,
                     &open_villages,
-                    &archetype_states[seat],
+                    &lane_states[seat],
                     current_agent.macro_committed_playstyle(),
                     feat_goal.as_ref(),
                     &stance_commits[seat],

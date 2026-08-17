@@ -51,14 +51,14 @@ pub const SHAPE_GOAL_EXPAND_DONE: f32 = 2.0;
 /// Score-equivalents per living Rider while the rider push is on (open
 /// terrain + active EXPAND).
 pub const SHAPE_GOAL_RIDER: f32 = 100.0;
-/// v3→v6: score-equivalents per STAR OF COST of living archetype/overlay-
+/// v3→v6: score-equivalents per STAR OF COST of living lane/overlay-
 /// preferred units (GoalAux.preferred_units). Was 100 flat per head, which
 /// made a Knight (8★) worth 17.5 Φ/star against a Defender's 38 from the
 /// SAME overlay — the measured reason the knight lane researched but never
 /// converted. 33/cost keeps the cost-3 units (Rider/Archer/Defender)
 /// numerically unchanged (99 ≈ 100) while heavies price per star invested
 /// (Knight 264, Catapult 264, Giant 330). Stacks with SHAPE_GOAL_RIDER.
-pub const SHAPE_GOAL_ARCHETYPE_PER_COST: f32 = 33.0;
+pub const SHAPE_GOAL_LANE_PER_COST: f32 = 33.0;
 /// v4: per-quadrant cap on scout-term tiles — tiles in a fresh quadrant keep
 /// paying after a covered quadrant has gone flat (audit: half of games left
 /// a quadrant unvisited).
@@ -156,7 +156,7 @@ pub const SHAPE_GOAL_SAVE: f32 = 100.0;
 pub fn save_progress(
     state: &GameState,
     player: i32,
-    lane: &crate::ai::oracle_macro::SaveLane,
+    lane: &crate::ai::oracle_macro::SaveTarget,
 ) -> f32 {
     let Some(tribe) = state.tribes.get(&player) else {
         return 0.0;

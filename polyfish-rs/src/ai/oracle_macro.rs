@@ -5,7 +5,7 @@
 //! one sticky capturable village) and a star gate (drop root tech purchases
 //! that would leave the capture unfunded). Nothing here touches training.
 //!
-//! Aug 2026: the Archetype (T1) selector split to `search::archetype`, and
+//! Aug 2026: the Lane (T1) selector split to `search::lane`, and
 //! `GoalAux`/`compute_goal_aux`/its gates split to `search::goal_aux`, so no
 //! file in `ai::` exceeds ~1000 lines. Both are re-exported below so every
 //! `crate::ai::oracle_macro::X` call site keeps resolving unchanged.
@@ -45,7 +45,7 @@ pub enum Stance {
 /// feature bytes (the eval cache and tree reuse hash them).
 /// Moved to `ai::economy` (Aug 2026 taxonomy reorg), re-exported here since
 /// `MacroGoal.save_target` below needs it in scope.
-pub use crate::ai::economy::SaveLane;
+pub use crate::ai::economy::SaveTarget;
 
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct MacroGoal {
@@ -55,7 +55,7 @@ pub struct MacroGoal {
     /// SAVE. Not encoded into the feature planes (the stance one-hot carries
     /// the categorical); `reward::goal_potential` reads it to pay the savings
     /// ramp and `advances_save_plan` reads it to boost the plan's own moves.
-    pub save_target: Option<SaveLane>,
+    pub save_target: Option<SaveTarget>,
 }
 
 /// Stage-1 scripted goal-setter, v2 (recalibrated Jul 29 after the iter-1..4
@@ -66,7 +66,7 @@ pub fn compute_macro_goal(
     state: &GameState,
     player: PlayerId,
     tier3_bought: u32,
-    lane: Option<Archetype>,
+    lane: Option<Lane>,
 ) -> MacroGoal {
     let size = state.settings.size as i32;
     let cheb =
@@ -342,7 +342,7 @@ pub use crate::ai::economy::{
 /// every ply, so the "strategy" could contradict itself between plies of the
 /// same turn — a reflex, not a plan. Nothing that persists can be committed to,
 /// and nothing that flips can be rewarded for being held. This carries the
-/// stance across plies with the same hysteresis `ArchetypeState` already uses
+/// stance across plies with the same hysteresis `LaneState` already uses
 /// for doctrine, and counts the flip rates EXP_ELO_028 registered as
 /// first-class metrics and never measured.
 #[derive(Clone, Debug, Default)]
@@ -351,7 +351,7 @@ pub struct StanceCommit {
     /// savings plan banks for what T1 actually chose rather than inferring
     /// it from which techs happen to be owned. `None` falls back to the
     /// spawn prior, then to price.
-    pub lane: Option<Archetype>,
+    pub lane: Option<Lane>,
     pub stance: Option<Stance>,
     challenger: Option<Stance>,
     streak: u8,
@@ -483,9 +483,9 @@ pub const TECH_CAP_PER_GAME: u32 = 8;
 /// and only then a combat tier-3.
 pub const TIER3_CAP_PER_GAME: u32 = 2;
 
-pub use crate::ai::search::archetype::{
-    lane_techs, observe_archetype, select_playstyle, tribe_lane_prior, update_archetype,
-    Archetype, ArchetypeState, Overlays, ARCH_ENTRY_MIN, ARCH_SWITCH_MARGIN, ARCH_SWITCH_TURNS,
+pub use crate::ai::search::lane::{
+    lane_techs, observe_lane_state, select_lane, tribe_lane_prior, update_lane_state,
+    Lane, LaneState, Overlays, LANE_ENTRY_MIN, LANE_SWITCH_MARGIN, LANE_SWITCH_TURNS,
     DWELL_MIN, HEAVY_DEFENSE_MIN, LANES, LANE_BLOCKED_TRIGGER, LANE_ORDER, MAX_PIVOTS,
     METAL_FORGE_MIN, OPEN_FRAC_RIDER, ROUGH_FRAC_ARCHER, SEEN_CAVALRY_SCREEN, SEEN_HEAVY_COUNTER,
     SEEN_SQUISHY_KNIGHT, SQUISHY_DEFENSE_MAX, TRIBE_PRIOR_BONUS,
@@ -607,7 +607,7 @@ pub use crate::ai::movement::assign_expand_targets;
 
 
 /// Test-only helpers shared by oracle_macro.rs's own tests and by
-/// search::archetype / search::goal_aux (split out of this file, Aug 2026).
+/// search::lane / search::goal_aux (split out of this file, Aug 2026).
 #[cfg(test)]
 pub(crate) mod test_support {
     use super::*;
@@ -652,7 +652,7 @@ pub(crate) mod test_support {
         tile.explorers.insert(1);
         state.tiles.insert(idx, tile);
     }
-    /// Explored open fields at 22..42 for archetype map reads.
+    /// Explored open fields at 22..42 for lane map reads.
     pub(crate) fn explore_open_fields(state: &mut GameState) {
         for idx in 22..42 {
             let mut tile = TileState::default();

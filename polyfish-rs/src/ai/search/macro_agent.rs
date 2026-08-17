@@ -8,9 +8,9 @@
 use crate::ai::eval_server::Evaluator;
 use crate::ai::macro_exec::{self, TurnCounters};
 use crate::ai::oracle_macro::{
-    ArchetypeState, MacroGoal, OrderKind, Stance, StanceCommit, tech_discipline_active,
+    LaneState, MacroGoal, OrderKind, Stance, StanceCommit, tech_discipline_active,
     retakeable_village, pick_save_lane, compute_macro_goal, compute_goal_aux, still_capturable,
-    observe_archetype, commit_macro_goal,
+    observe_lane_state, commit_macro_goal,
 };
 use crate::game::Game;
 use crate::moves::{EndTurnMove, Move};
@@ -126,7 +126,7 @@ pub(crate) fn first_true_legal(
 pub struct MacroScriptAgent {
     lambda: f32,
     stance_commit: StanceCommit,
-    archetype: ArchetypeState,
+    lane_state: LaneState,
     counters: TurnCounters,
 }
 
@@ -135,7 +135,7 @@ impl MacroScriptAgent {
         Self {
             lambda,
             stance_commit: StanceCommit::default(),
-            archetype: ArchetypeState::default(),
+            lane_state: LaneState::default(),
             counters: TurnCounters::default(),
         }
     }
@@ -144,7 +144,7 @@ impl MacroScriptAgent {
         let pov = game.state.settings.current_player_turn_id;
         let mut view = game.clone_for_mcts(pov);
         let goal = commit_macro_goal(&view.state, pov, &mut self.stance_commit, self.counters.tier3_bought);
-        let ranked = rank_view(&mut view, pov, &goal, &mut self.archetype, &mut self.counters, self.lambda);
+        let ranked = rank_view(&mut view, pov, &goal, &mut self.lane_state, &mut self.counters, self.lambda);
         let m = first_true_legal(game, ranked);
         self.counters.count(m.as_ref());
         Some(m)
@@ -158,21 +158,21 @@ pub(crate) fn rank_view(
     view: &mut Game,
     pov: PlayerId,
     goal: &MacroGoal,
-    archetype: &mut ArchetypeState,
+    lane_state: &mut LaneState,
     counters: &mut TurnCounters,
     lambda: f32,
 ) -> Vec<(f32, Box<dyn Move>)> {
     // Per-ply: observe only. The LANE is a turn-level identity chosen by
-    // `select_playstyle` at the turn boundary — re-selecting it 20x a turn
+    // `select_lane` at the turn boundary — re-selecting it 20x a turn
     // is what made it a running average instead of a strategy.
-    observe_archetype(&view.state, pov, archetype);
+    observe_lane_state(&view.state, pov, lane_state);
     let aux = compute_goal_aux(
         &view.state,
         pov,
         goal,
         counters.techs_bought,
         counters.tier3_bought,
-        Some(archetype),
+        Some(lane_state),
     );
     let gate = tech_discipline_active(&view.state, pov, goal);
     macro_exec::rank_plies(view, pov, goal, &aux, gate, lambda)
@@ -366,7 +366,7 @@ pub struct MacroLookaheadAgent<'a> {
     evaluator: &'a Evaluator,
     params: MacroParams,
     stance_commit: StanceCommit,
-    archetype: ArchetypeState,
+    lane_state: LaneState,
     counters: TurnCounters,
     /// (settings.turn, pov) of the current plan — replan when it changes.
     plan_key: Option<(i32, PlayerId)>,
@@ -382,7 +382,7 @@ impl<'a> MacroLookaheadAgent<'a> {
             evaluator,
             params,
             stance_commit: StanceCommit::default(),
-            archetype: ArchetypeState::default(),
+            lane_state: LaneState::default(),
             counters: TurnCounters::default(),
             plan_key: None,
             turn_goal: None,
@@ -401,7 +401,7 @@ impl<'a> MacroLookaheadAgent<'a> {
         let goal = self.turn_goal.clone().unwrap_or_default();
         let mut view = game.clone_for_mcts(pov);
         let ranked =
-            rank_view(&mut view, pov, &goal, &mut self.archetype, &mut self.counters, self.params.lambda);
+            rank_view(&mut view, pov, &goal, &mut self.lane_state, &mut self.counters, self.params.lambda);
         let m = first_true_legal(game, ranked);
         self.counters.count(m.as_ref());
         Some(m)
@@ -424,15 +424,15 @@ impl<'a> MacroLookaheadAgent<'a> {
 
         for (i, cand) in candidates.iter().enumerate() {
             let mut sim = view0.clone();
-            let mut arch = self.archetype.clone();
+            let mut lane_state = self.lane_state.clone();
             let mut counters = self.counters;
             for h in 0..self.params.horizon.max(1) {
                 let goal_h = if h == 0 {
                     cand.clone()
                 } else {
-                    compute_macro_goal(&sim.state, pov, counters.tier3_bought, arch.archetype)
+                    compute_macro_goal(&sim.state, pov, counters.tier3_bought, lane_state.lane)
                 };
-                if !macro_exec::execute_turn(&mut sim, pov, &goal_h, &mut arch, &mut counters, self.params.lambda)
+                if !macro_exec::execute_turn(&mut sim, pov, &goal_h, &mut lane_state, &mut counters, self.params.lambda)
                     || sim.state.settings._game_over
                     || !macro_exec::ghost_until(&mut sim, pov)
                     || sim.state.settings._game_over

@@ -681,8 +681,8 @@ fn play_match(
     // v2.3 tech-cap counters for the model seat (goal_script only).
     let mut techs_bought = 0u32;
     let mut tier3_bought = 0u32;
-    // v3 archetype doctrine state for the model seat.
-    let mut archetype_state = polyfish::ai::oracle_macro::ArchetypeState::default();
+    // v3 lane doctrine state for the model seat.
+    let mut lane_state = polyfish::ai::oracle_macro::LaneState::default();
     // v7: standing macro commitment for the model seat (mirrors self_play).
     let mut stance_commit = polyfish::ai::oracle_macro::StanceCommit::default();
     // One row per model ply: the goal the script set, and the move that
@@ -741,11 +741,11 @@ fn play_match(
             );
             let gate =
                 polyfish::ai::oracle_macro::tech_discipline_active(&game.state, model_player, &goal);
-            polyfish::ai::oracle_macro::update_archetype(
+            polyfish::ai::oracle_macro::update_lane_state(
                 &game.state,
                 model_player,
                 &goal,
-                &mut archetype_state,
+                &mut lane_state,
             );
             let aux = polyfish::ai::oracle_macro::compute_goal_aux(
                 &game.state,
@@ -753,7 +753,7 @@ fn play_match(
                 &goal,
                 techs_bought,
                 tier3_bought,
-                Some(&archetype_state),
+                Some(&lane_state),
             );
             if dump_stats_dir.is_some() {
                 // The uncommitted goal too: `commit_macro_goal` returns the stance
@@ -907,7 +907,7 @@ fn play_match(
                 pending_goal = Some(serde_json::json!({
                     "turn": game.state.settings.turn,
                     "source": "macro",
-                    "playstyle": ps.archetype.map(|a| format!("{a:?}")),
+                    "playstyle": ps.lane.map(|a| format!("{a:?}")),
                     "playstyle_committed_turn": ps.committed_turn,
                     "playstyle_pivots_used": ps.pivots_used,
                     "lane_blocked_turns": ps.lane_blocked_turns,
@@ -1275,7 +1275,7 @@ fn play_match(
             // committed lane and how stable it was.
             "playstyle": macro_playstyle
                 .as_ref()
-                .and_then(|p| p.archetype.map(|a| format!("{a:?}"))),
+                .and_then(|p| p.lane.map(|a| format!("{a:?}"))),
             "playstyle_pivots_used": macro_playstyle.as_ref().map(|p| p.pivots_used),
             "playstyle_committed_turn": macro_playstyle.as_ref().and_then(|p| p.committed_turn),
             "playstyle_scores": macro_playstyle.as_ref().map(|p| p.last_scores.to_vec()),

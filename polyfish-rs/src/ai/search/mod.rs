@@ -3,7 +3,7 @@
 //! not a domain — cuts across combat/movement/economy/belief the same way
 //! each of those buckets' own `derived.rs` cuts across complexity.
 
-pub mod archetype;
+pub mod lane;
 pub mod book;
 pub mod brain;
 pub mod goal_aux;

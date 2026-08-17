@@ -5,13 +5,13 @@
 //! build it. Re-exported through `oracle_macro` so existing
 //! `crate::ai::oracle_macro::X` call sites keep resolving.
 
-use crate::ai::economy::{recommended_techs, SaveLane};
+use crate::ai::economy::{recommended_techs, SaveTarget};
 use crate::ai::movement::{connect_remaining, rider_turns_saved, RIDER_PUSH_MIN_TURNS_SAVED};
 use crate::ai::oracle_macro::{
     stance_pressure, MacroGoal, OrderKind, Stance, COMMIT_CITY_TARGET, TECH_CAP_PER_GAME,
     TIER3_CAP_PER_GAME,
 };
-use crate::ai::search::archetype::{lane_techs, Archetype, ArchetypeState, Overlays};
+use crate::ai::search::lane::{lane_techs, Lane, LaneState, Overlays};
 use crate::moves::Move;
 use crate::states::GameState;
 use crate::states::PlayerId;
@@ -34,7 +34,7 @@ pub struct GoalAux {
     /// star gate can ask "does this purchase advance the plan" instead of
     /// only "is this tech the right CLASS for the stance". Class-only gating
     /// is what let Organization through on a SAVE turn in seed 1786807403.
-    pub save_lane: Option<SaveLane>,
+    pub save_lane: Option<SaveTarget>,
     /// The one tech that batch is actually waiting on — the deepest unowned
     /// step of its prerequisite chain. While banking, this is the only
     /// research that is not a delay.
@@ -61,8 +61,8 @@ pub struct GoalAux {
     pub techs_bought: u32,
     /// …of which tier-3.
     pub tier3_bought: u32,
-    /// v3 archetype: unit types the active doctrine + overlays prefer —
-    /// each living one banks `SHAPE_GOAL_ARCHETYPE_UNIT` in the potential.
+    /// v3 lane: unit types the active doctrine + overlays prefer —
+    /// each living one banks `SHAPE_GOAL_LANE_PER_COST` in the potential.
     pub preferred_units: Vec<crate::types::UnitType>,
     /// v3 reactive overlays; `knight_commit` also opens the
     /// FreeSpirit→Chivalry purchase lane (see `passes_tech_purchase_limits`).
@@ -93,7 +93,7 @@ pub fn compute_goal_aux(
     goal: &MacroGoal,
     techs_bought: u32,
     tier3_bought: u32,
-    arch: Option<&ArchetypeState>,
+    lane_state: Option<&LaneState>,
 ) -> GoalAux {
     let mut recommended = recommended_techs(state, player);
     let expand_targets: Vec<i32> = goal
@@ -118,15 +118,15 @@ pub fn compute_goal_aux(
             }
         }
     }
-    // v3 archetype expression: doctrine + overlay tech lanes join the
+    // v3 lane expression: doctrine + overlay tech lanes join the
     // recommendations (next unowned tech per lane), preferred unit classes
     // feed the in-tree unit bonus. FreeSpirit/Chivalry appear ONLY under a
     // knight commitment — the stepping-stone rule (Verdi, Jul 30).
     let mut preferred_units: Vec<crate::types::UnitType> = Vec::new();
     let mut overlays = Overlays::default();
-    if let Some(arch) = arch {
+    if let Some(lane_state) = lane_state {
         use crate::types::{TechnologyType as Tech, UnitType as U};
-        overlays = arch.overlays;
+        overlays = lane_state.overlays;
         let owned = |t: Tech| {
             state
                 .tribes
@@ -140,12 +140,12 @@ pub fn compute_goal_aux(
                 }
             }
         };
-        if let Some(a) = arch.archetype {
+        if let Some(a) = lane_state.lane {
             push_lane(lane_techs(a), &mut recommended);
             match a {
-                Archetype::RiderRoads => preferred_units.push(U::Rider),
-                Archetype::ArcherLine => preferred_units.push(U::Archer),
-                Archetype::ForgeGiants => {
+                Lane::RiderRoads => preferred_units.push(U::Rider),
+                Lane::ArcherLine => preferred_units.push(U::Archer),
+                Lane::ForgeGiants => {
                     preferred_units.push(U::Swordsman);
                     preferred_units.push(U::Giant);
                 }
@@ -164,7 +164,7 @@ pub fn compute_goal_aux(
             preferred_units.push(U::Knight);
         }
     }
-    // v6 income lane — archetype-independent: with the third city up and a
+    // v6 income lane — lane-independent: with the third city up and a
     // hub structure standing, Riding→Roads→Trade opens the Market.
     let market_push = market_ready(state, player);
     if market_push {
@@ -195,7 +195,7 @@ pub fn compute_goal_aux(
     // its giants (hubs@t15 0.94 → 0.44, giants 1.12 → 0.78). The opening tech
     // is the commitment; the rest of the chain competes on price like
     // everything else.
-    let lane_next_tech = arch.and_then(|a| a.archetype).and_then(|a| {
+    let lane_next_tech = lane_state.and_then(|a| a.lane).and_then(|a| {
         let tribe = state.tribes.get(&player)?;
         let first = *lane_techs(a).first()?;
         (!crate::settings::technology::has_technology(&tribe.tech_vanilla, first))

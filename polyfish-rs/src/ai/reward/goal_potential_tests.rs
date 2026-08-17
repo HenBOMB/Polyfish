@@ -9,8 +9,8 @@ use crate::states::{TileState, TribeState, UnitState};
 use crate::types::UnitType;
 
     /// A Smithery/Forge-shaped lane: `cost = tech_cost + structure_cost`.
-    fn build_test_lane(cost: i32, tech_cost: i32, structure_cost: i32) -> crate::ai::oracle_macro::SaveLane {
-        crate::ai::oracle_macro::SaveLane {
+    fn build_test_lane(cost: i32, tech_cost: i32, structure_cost: i32) -> crate::ai::oracle_macro::SaveTarget {
+        crate::ai::oracle_macro::SaveTarget {
             cost,
             tech_cost,
             structure_cost,
@@ -266,7 +266,7 @@ use crate::types::UnitType;
         assert!((lit - before - 4.0 * SHAPE_GOAL_LIGHTHOUSE).abs() < 1e-3);
     }
     #[test]
-    fn goal_potential_pays_archetype_preferred_units() {
+    fn goal_potential_pays_lane_preferred_units() {
         use crate::ai::oracle_macro::{GoalAux, MacroGoal, Stance};
         let mut state = GameState::default();
         let mut t1 = TribeState::default();
@@ -283,10 +283,10 @@ use crate::types::UnitType;
         let with = goal_potential(&state, 1, &goal, Some(&aux));
         // Cost-scaled (v6): Archer costs 3 → 99, within 1% of the old flat 100.
         let archer_cost = get_unit_setting(UnitType::Archer).cost as f32;
-        assert!((with - base - SHAPE_GOAL_ARCHETYPE_PER_COST * archer_cost).abs() < 1e-3);
+        assert!((with - base - SHAPE_GOAL_LANE_PER_COST * archer_cost).abs() < 1e-3);
     }
     #[test]
-    fn archetype_per_cost_prices_knight_above_defender() {
+    fn lane_per_cost_prices_knight_above_defender() {
         use crate::ai::oracle_macro::{GoalAux, MacroGoal, Stance};
         let mut state = GameState::default();
         let mut t1 = TribeState::default();
@@ -302,8 +302,8 @@ use crate::types::UnitType;
         let defender = goal_potential(&state, 1, &goal, Some(&aux));
         let k_cost = get_unit_setting(UnitType::Knight).cost as f32;
         let d_cost = get_unit_setting(UnitType::Defender).cost as f32;
-        assert!((knight - SHAPE_GOAL_ARCHETYPE_PER_COST * k_cost).abs() < 1e-3);
-        assert!((defender - SHAPE_GOAL_ARCHETYPE_PER_COST * d_cost).abs() < 1e-3);
+        assert!((knight - SHAPE_GOAL_LANE_PER_COST * k_cost).abs() < 1e-3);
+        assert!((defender - SHAPE_GOAL_LANE_PER_COST * d_cost).abs() < 1e-3);
         assert!(knight > defender, "a knight must out-price a defender head-for-head");
     }
     #[test]
@@ -412,7 +412,7 @@ use crate::types::UnitType;
         const PARK_SCORE: f32 = 250.0;
         const GIANT_SCORE: f32 = 5.0 * 10.0;
 
-        let mk = |stance, save: Option<crate::ai::oracle_macro::SaveLane>| MacroGoal {
+        let mk = |stance, save: Option<crate::ai::oracle_macro::SaveTarget>| MacroGoal {
             orders: vec![],
             stance,
             save_target: save,

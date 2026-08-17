@@ -218,7 +218,7 @@ impl<'a> SearchAgent<'a> {
     }
 
     /// Tier-1 state when this agent is the macro strategist.
-    pub fn macro_playstyle(&self) -> Option<&crate::ai::oracle_macro::ArchetypeState> {
+    pub fn macro_playstyle(&self) -> Option<&crate::ai::oracle_macro::LaneState> {
         match self {
             SearchAgent::MacroMcts(a) => Some(a.committed_playstyle()),
             _ => None,
@@ -397,7 +397,7 @@ impl<'a> Brain<'a> {
     /// last per-lane scores). `None` for every other backend.
     pub fn macro_committed_playstyle(
         &self,
-    ) -> Option<&crate::ai::oracle_macro::ArchetypeState> {
+    ) -> Option<&crate::ai::oracle_macro::LaneState> {
         match &self.agent {
             Some(SearchAgent::MacroMcts(a)) => Some(a.committed_playstyle()),
             _ => None,

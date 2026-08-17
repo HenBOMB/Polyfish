@@ -954,7 +954,7 @@ mod tests {
             {
                 use crate::ai::macro_exec;
                 use crate::ai::oracle_macro::compute_macro_goal;
-                let mut arch = crate::ai::oracle_macro::ArchetypeState::default();
+                let mut lane_state = crate::ai::oracle_macro::LaneState::default();
                 let mut counters = macro_exec::TurnCounters::default();
                 for _ in 0..6 {
                     if game.state.settings._game_over {
@@ -963,7 +963,7 @@ mod tests {
                     let player = game.state.settings.current_player_turn_id;
                     let goal = compute_macro_goal(&game.state, player, 0, None);
                     if !macro_exec::execute_turn(
-                        &mut game, player, &goal, &mut arch, &mut counters, 1.0,
+                        &mut game, player, &goal, &mut lane_state, &mut counters, 1.0,
                     ) {
                         break;
                     }
@@ -1047,7 +1047,7 @@ mod tests {
     #[test]
     fn materialized_view_survives_simulated_rounds() {
         use crate::ai::macro_exec;
-        use crate::ai::oracle_macro::{compute_macro_goal, ArchetypeState};
+        use crate::ai::oracle_macro::{compute_macro_goal, LaneState};
         for seed in 0..4i64 {
             let mut game = generated_game(9_210_000 + seed);
             let own = own_capital(&game.state, 1);
@@ -1056,7 +1056,7 @@ mod tests {
             let mut sim = game.clone_for_mcts(1);
             let stats = materialize_into(&mut sim, &b);
             assert!(stats.capital, "seed {seed}: no capital materialized");
-            let mut arch = ArchetypeState::default();
+            let mut lane_state = LaneState::default();
             let mut counters = macro_exec::TurnCounters::default();
             for _ in 0..8 {
                 if sim.state.settings._game_over {
@@ -1064,7 +1064,7 @@ mod tests {
                 }
                 let player = sim.state.settings.current_player_turn_id;
                 let goal = compute_macro_goal(&sim.state, player, 0, None);
-                if !macro_exec::execute_turn(&mut sim, player, &goal, &mut arch, &mut counters, 1.0)
+                if !macro_exec::execute_turn(&mut sim, player, &goal, &mut lane_state, &mut counters, 1.0)
                 {
                     break;
                 }
@@ -1093,7 +1093,7 @@ mod tests {
     fn fog_offer_quality_probe() {
         use crate::ai::macro_agent::{enumerate_candidates_with_belief, CandidateClass};
         use crate::ai::macro_exec;
-        use crate::ai::oracle_macro::{compute_macro_goal, commit_macro_goal, ArchetypeState, StanceCommit};
+        use crate::ai::oracle_macro::{compute_macro_goal, commit_macro_goal, LaneState, StanceCommit};
 
         let mut per_turn: std::collections::BTreeMap<i32, (u32, u32, u32, u32, u32)> =
             std::collections::BTreeMap::new(); // (rows, claim_off, contest_off, targets, good_targets)
@@ -1102,7 +1102,7 @@ mod tests {
             game.state.settings.mode =
                 crate::types::ModeType::from_repr(2).unwrap_or(crate::types::ModeType::Perfection);
             game.state.settings.max_turns = 30;
-            let mut arch = ArchetypeState::default();
+            let mut lane_state = LaneState::default();
             let mut counters = macro_exec::TurnCounters::default();
             let mut commits = [StanceCommit::default(), StanceCommit::default()];
             let mut beliefs = [
@@ -1187,7 +1187,7 @@ mod tests {
                 }
                 let player = pov;
                 let goal = compute_macro_goal(&game.state, player, 0, None);
-                if !macro_exec::execute_turn(&mut game, player, &goal, &mut arch, &mut counters, 1.0)
+                if !macro_exec::execute_turn(&mut game, player, &goal, &mut lane_state, &mut counters, 1.0)
                 {
                     break;
                 }

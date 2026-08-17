@@ -4,7 +4,7 @@
 //! re-exports the public items below so existing `crate::ai::oracle_macro::X`
 //! call sites keep resolving) and by `reward.rs`'s savings-ramp pricing.
 
-use crate::ai::oracle_macro::{tribe_lane_prior, Archetype, TIER3_CAP_PER_GAME};
+use crate::ai::oracle_macro::{tribe_lane_prior, Lane, TIER3_CAP_PER_GAME};
 use crate::moves::Move;
 use crate::states::{GameState, PlayerId};
 use crate::types::{MoveType, TechnologyType};
@@ -17,7 +17,7 @@ use crate::types::{MoveType, TechnologyType};
 /// downstream could tell "saving for a Forge" from "saving for 21 stars".
 /// Search could not boost the very move the plan existed to reach.
 #[derive(Clone, Debug, PartialEq)]
-pub struct SaveLane {
+pub struct SaveTarget {
     /// `tech_cost + structure_cost`, the number the ramp measures against.
     pub cost: i32,
     /// Chain cost of reaching `tech` from what the tribe owns; 0 once owned.
@@ -216,12 +216,12 @@ fn lane_yield_per_star(
 /// RiderRoads maps to the Market, whose chain is Trade ← Roads ← Riding: the
 /// savings plan then names Riding as its next step, which is exactly the
 /// lane's opening move.
-pub fn lane_save_structure(a: Archetype) -> crate::types::StructureType {
+pub fn lane_save_structure(a: Lane) -> crate::types::StructureType {
     use crate::types::StructureType as S;
     match a {
-        Archetype::RiderRoads => S::Market,
-        Archetype::ArcherLine => S::Sawmill,
-        Archetype::ForgeGiants => S::Forge,
+        Lane::RiderRoads => S::Market,
+        Lane::ArcherLine => S::Sawmill,
+        Lane::ForgeGiants => S::Forge,
     }
 }
 
@@ -266,8 +266,8 @@ pub fn pick_save_lane(
     state: &GameState,
     player: PlayerId,
     tier3_bought: u32,
-    committed: Option<Archetype>,
-) -> Option<SaveLane> {
+    committed: Option<Lane>,
+) -> Option<SaveTarget> {
     // Before the selector has committed, the spawn tribe tech already says
     // which lane this tribe is born into — so the plan is right from ply one
     // and every caller resolves it identically.
@@ -276,7 +276,7 @@ pub fn pick_save_lane(
     use crate::settings::technology::has_technology;
     use crate::types::StructureType;
     let tribe = state.tribes.get(&player)?;
-    let mut best: Option<(SaveLane, i32)> = None;
+    let mut best: Option<(SaveTarget, i32)> = None;
     for (s_type, tech) in SAVE_LANES {
         let s = get_structure_setting(s_type);
         let Some(cost) = s.cost else { continue };
@@ -325,7 +325,7 @@ pub fn pick_save_lane(
         // unaffordable exactly as the empire that justified it arrived.
         lane = lane.min(cost * SAVE_MAX_PLACEMENTS);
         let tech_cost = if owned { 0 } else { tech_chain_cost(tribe, tech) };
-        let plan = SaveLane {
+        let plan = SaveTarget {
             cost: lane + tech_cost,
             tech_cost,
             structure_cost: lane,
@@ -350,7 +350,7 @@ pub fn pick_save_lane(
         // Pareto: population per star ON THIS MAP. Scaled to an integer so
         // the existing tie-break on price still applies between equals.
         let rank = (lane_yield_per_star(state, player, s_type, tech) * 1000.0) as i32;
-        let better = best.as_ref().map_or(true, |(b, bi): &(SaveLane, i32)| {
+        let better = best.as_ref().map_or(true, |(b, bi): &(SaveTarget, i32)| {
             rank > *bi || (rank == *bi && plan.cost < b.cost)
         });
         if better {
@@ -367,7 +367,7 @@ pub fn pick_save_lane(
 ///
 /// Structurally inert while banking: a Research/Build move is only generated
 /// once it is affordable, so this fires exactly when the purchase goes live.
-pub fn advances_save_plan(m: &dyn Move, lane: &SaveLane, tribe: &crate::states::TribeState) -> bool {
+pub fn advances_save_plan(m: &dyn Move, lane: &SaveTarget, tribe: &crate::states::TribeState) -> bool {
     use crate::settings::technology::{get_technology_setting, has_technology};
     match m.move_type() {
         MoveType::Research => {

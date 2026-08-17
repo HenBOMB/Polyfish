@@ -5,9 +5,9 @@
 //! `score_move + λ·Δgoal_potential` (the edge_snapshot pattern).
 
 use crate::ai::oracle_macro::{
-    ArchetypeState, GoalAux, MacroGoal, Stance, tech_discipline_active, passes_ability_gate,
+    LaneState, GoalAux, MacroGoal, Stance, tech_discipline_active, passes_ability_gate,
     passes_capture_first, passes_stance_tech_mask, passes_tech_purchase_limits, compute_goal_aux,
-    observe_archetype,
+    observe_lane_state,
 };
 use crate::ai::{reward, scoring};
 use crate::game::Game;
@@ -122,11 +122,11 @@ pub fn execute_turn(
     game: &mut Game,
     player: PlayerId,
     goal: &MacroGoal,
-    arch: &mut ArchetypeState,
+    lane_state: &mut LaneState,
     counters: &mut TurnCounters,
     lambda: f32,
 ) -> bool {
-    execute_turn_recorded(game, player, goal, arch, counters, lambda, None)
+    execute_turn_recorded(game, player, goal, lane_state, counters, lambda, None)
 }
 
 /// One executed ply, for the Tier-2/Tier-3 boundary probe (EXP_ELO_048).
@@ -149,7 +149,7 @@ pub fn execute_turn_recorded(
     game: &mut Game,
     player: PlayerId,
     goal: &MacroGoal,
-    arch: &mut ArchetypeState,
+    lane_state: &mut LaneState,
     counters: &mut TurnCounters,
     lambda: f32,
     mut rec: Option<&mut Vec<PlyRec>>,
@@ -160,14 +160,14 @@ pub fn execute_turn_recorded(
         {
             return true;
         }
-        observe_archetype(&game.state, player, arch);
+        observe_lane_state(&game.state, player, lane_state);
         let aux = compute_goal_aux(
             &game.state,
             player,
             goal,
             counters.techs_bought,
             counters.tier3_bought,
-            Some(arch),
+            Some(lane_state),
         );
         let gate = tech_discipline_active(&game.state, player, goal);
         let mut ranked = rank_plies(game, player, goal, &aux, gate, lambda);
@@ -191,7 +191,7 @@ pub fn execute_turn_recorded(
                 &bare,
                 counters.techs_bought,
                 counters.tier3_bought,
-                Some(arch),
+                Some(lane_state),
             );
             let no_goal = rank_plies(game, player, &bare, &bare_aux, false, 0.0);
             let top = |v: &Vec<(f32, Box<dyn Move>)>| {
@@ -272,9 +272,9 @@ mod tests {
             let pov = game.state.settings.current_player_turn_id;
             let mut sim = game.clone_for_mcts(pov);
             let goal = compute_macro_goal(&sim.state, pov, 0, None);
-            let mut arch = ArchetypeState::default();
+            let mut lane_state = LaneState::default();
             let mut counters = TurnCounters::default();
-            let ok = execute_turn(&mut sim, pov, &goal, &mut arch, &mut counters, 1.0);
+            let ok = execute_turn(&mut sim, pov, &goal, &mut lane_state, &mut counters, 1.0);
             assert!(ok, "seed {seed}: executor bailed on its own turn");
             assert!(
                 sim.state.settings.current_player_turn_id != pov
@@ -293,9 +293,9 @@ mod tests {
             for _ in 0..2 {
                 let mut sim = game.clone_for_mcts(pov);
                 let goal = compute_macro_goal(&sim.state, pov, 0, None);
-                let mut arch = ArchetypeState::default();
+                let mut lane_state = LaneState::default();
                 let mut counters = TurnCounters::default();
-                execute_turn(&mut sim, pov, &goal, &mut arch, &mut counters, 1.0);
+                execute_turn(&mut sim, pov, &goal, &mut lane_state, &mut counters, 1.0);
                 history.push(sim.state._history.clone());
             }
             assert_eq!(history[0], history[1], "seed {seed}: two runs diverged");
@@ -336,9 +336,9 @@ mod tests {
             let pov = game.state.settings.current_player_turn_id;
             let mut sim = game.clone_for_mcts(pov);
             let goal = compute_macro_goal(&sim.state, pov, 0, None);
-            let mut arch = ArchetypeState::default();
+            let mut lane_state = LaneState::default();
             let mut counters = TurnCounters::default();
-            assert!(execute_turn(&mut sim, pov, &goal, &mut arch, &mut counters, 1.0));
+            assert!(execute_turn(&mut sim, pov, &goal, &mut lane_state, &mut counters, 1.0));
             if sim.state.settings._game_over {
                 continue;
             }

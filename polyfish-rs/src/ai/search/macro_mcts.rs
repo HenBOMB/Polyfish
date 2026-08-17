@@ -7,7 +7,7 @@
 
 use crate::ai::macro_agent::{MacroLeaf, MacroParams, enumerate_candidates};
 use crate::ai::macro_exec::{self, TurnCounters};
-use crate::ai::oracle_macro::{ArchetypeState, MacroGoal, StanceCommit, compute_macro_goal, commit_macro_goal};
+use crate::ai::oracle_macro::{LaneState, MacroGoal, StanceCommit, compute_macro_goal, commit_macro_goal};
 use crate::game::Game;
 use crate::moves::Move;
 use crate::states::{GameState, PlayerId};
@@ -83,7 +83,7 @@ struct Node {
     game: Game,
     player: PlayerId,
     counters: [TurnCounters; 2],
-    arch: [ArchetypeState; 2],
+    lane_states: [LaneState; 2],
     candidates: Vec<MacroGoal>,
     children: Vec<Option<usize>>,
     edge_visits: Vec<f32>,
@@ -107,7 +107,7 @@ impl Node {
         game: Game,
         player: PlayerId,
         counters: [TurnCounters; 2],
-        mut arch: [ArchetypeState; 2],
+        mut lane_states: [LaneState; 2],
         root_turn: i32,
         k: usize,
         from: Option<(PlayerId, MacroGoal)>,
@@ -127,19 +127,19 @@ impl Node {
         let candidates = if frozen_value.is_some() {
             Vec::new()
         } else {
-            let base = compute_macro_goal(&game.state, player, counters[seat(player)].tier3_bought, arch[seat(player)].archetype);
+            let base = compute_macro_goal(&game.state, player, counters[seat(player)].tier3_bought, lane_states[seat(player)].lane);
             // A node IS a turn boundary, so the Tier-1 selector belongs here —
             // for BOTH seats. The executor plies below only observe, so
             // without this the simulated opponent would play laneless for the
             // whole rollout (no lane techs, no preferred-unit pricing) and
             // the tree would evaluate futures the real game never produces.
             let s = seat(player);
-            crate::ai::oracle_macro::observe_archetype(&game.state, player, &mut arch[s]);
-            crate::ai::oracle_macro::select_playstyle(
+            crate::ai::oracle_macro::observe_lane_state(&game.state, player, &mut lane_states[s]);
+            crate::ai::oracle_macro::select_lane(
                 &game.state,
                 player,
                 &base,
-                &mut arch[s],
+                &mut lane_states[s],
                 None,
             );
             enumerate_candidates(&game.state, player, base, counters[seat(player)], k)
@@ -149,7 +149,7 @@ impl Node {
             game,
             player,
             counters,
-            arch,
+            lane_states,
             candidates,
             children: vec![None; n],
             edge_visits: vec![0.0; n],
@@ -269,7 +269,7 @@ impl<'a> MacroMctsSearch<'a> {
         pov: PlayerId,
         root_candidates: Vec<MacroGoal>,
         own_counters: TurnCounters,
-        own_arch: &ArchetypeState,
+        own_lane_state: &LaneState,
         params: &MacroParams,
         evaluator: &crate::ai::eval_server::Evaluator,
     ) -> (usize, MacroMctsStats) {
@@ -278,7 +278,7 @@ impl<'a> MacroMctsSearch<'a> {
             pov,
             root_candidates,
             own_counters,
-            own_arch,
+            own_lane_state,
             params,
             evaluator,
             |_| {},
@@ -291,7 +291,7 @@ impl<'a> MacroMctsSearch<'a> {
         pov: PlayerId,
         root_candidates: Vec<MacroGoal>,
         own_counters: TurnCounters,
-        own_arch: &ArchetypeState,
+        own_lane_state: &LaneState,
         params: &MacroParams,
         evaluator: &crate::ai::eval_server::Evaluator,
         inspect: impl FnOnce(&MacroMctsSearch),
@@ -301,8 +301,8 @@ impl<'a> MacroMctsSearch<'a> {
         let mut counters = [TurnCounters::default(); 2];
         counters[seat(pov)] = own_counters;
         counters[seat(other(pov))] = derive_counters(&root_game.state, other(pov));
-        let mut arch: [ArchetypeState; 2] = Default::default();
-        arch[seat(pov)] = own_arch.clone();
+        let mut lane_states: [LaneState; 2] = Default::default();
+        lane_states[seat(pov)] = own_lane_state.clone();
 
         let leaf = params.leaf;
         // The root has no incoming edge, so no committed directive is known
@@ -311,7 +311,7 @@ impl<'a> MacroMctsSearch<'a> {
             leaf_value(evaluator, leaf, s, p, t3, None)
         };
         let mut root =
-            Node::new(root_game.clone(), pov, counters, arch, root_turn, params.k, None, &leaf_fn);
+            Node::new(root_game.clone(), pov, counters, lane_states, root_turn, params.k, None, &leaf_fn);
         root.candidates = root_candidates;
         let n = root.candidates.len();
         root.children = vec![None; n];
@@ -371,7 +371,7 @@ impl<'a> MacroMctsSearch<'a> {
         pov: PlayerId,
         root_candidates: Vec<MacroGoal>,
         own_counters: TurnCounters,
-        own_arch: &ArchetypeState,
+        own_lane_state: &LaneState,
         params: &MacroParams,
         evaluator: &crate::ai::eval_server::Evaluator,
     ) -> (usize, MacroMctsStats) {
@@ -379,7 +379,7 @@ impl<'a> MacroMctsSearch<'a> {
             .iter()
             .map(|c| format!("{:?}/{}ord", c.stance, c.orders.len()))
             .collect();
-        let (best, stats) = Self::run_with(root_game, pov, root_candidates, own_counters, own_arch, params, evaluator, |s| {
+        let (best, stats) = Self::run_with(root_game, pov, root_candidates, own_counters, own_lane_state, params, evaluator, |s| {
             let root = &s.nodes[0];
             for i in 0..root.candidates.len() {
                 let q = if root.edge_visits[i] > 0.0 {
@@ -458,13 +458,13 @@ impl<'a> MacroMctsSearch<'a> {
     }
 
     fn expand(&mut self, parent: usize, edge: usize, root_turn: i32, params: &MacroParams) -> usize {
-        let (mut game, player, mut counters, mut arch, goal) = {
+        let (mut game, player, mut counters, mut lane_states, goal) = {
             let p = &self.nodes[parent];
             (
                 p.game.clone(),
                 p.player,
                 p.counters,
-                p.arch.clone(),
+                p.lane_states.clone(),
                 p.candidates[edge].clone(),
             )
         };
@@ -480,7 +480,7 @@ impl<'a> MacroMctsSearch<'a> {
                 &goal,
                 counters[s].techs_bought,
                 counters[s].tier3_bought,
-                Some(&arch[s]),
+                Some(&lane_states[s]),
             );
             Some((crate::ai::reward::goal_potential(&game.state, player, &goal, Some(&aux)), aux))
         } else {
@@ -492,7 +492,7 @@ impl<'a> MacroMctsSearch<'a> {
             &mut game,
             player,
             &goal,
-            &mut arch[s],
+            &mut lane_states[s],
             &mut counters[s],
             params.lambda,
         );
@@ -516,7 +516,7 @@ impl<'a> MacroMctsSearch<'a> {
             game,
             other(player),
             counters,
-            arch,
+            lane_states,
             root_turn,
             params.k,
             Some((player, goal.clone())),
@@ -537,7 +537,7 @@ pub struct MacroMctsAgent<'a> {
     evaluator: &'a crate::ai::eval_server::Evaluator,
     params: MacroParams,
     stance_commit: StanceCommit,
-    archetype: ArchetypeState,
+    lane_state: LaneState,
     counters: TurnCounters,
     plan_key: Option<(i32, PlayerId)>,
     turn_goal: Option<MacroGoal>,
@@ -648,7 +648,7 @@ fn paint_probe(
 fn tier_probe(
     view: &Game,
     pov: PlayerId,
-    arch: &ArchetypeState,
+    lane_state: &LaneState,
     counters: TurnCounters,
     lambda: f32,
     base: &MacroGoal,
@@ -660,7 +660,7 @@ fn tier_probe(
     };
     let run = |goal: &MacroGoal| -> (Vec<crate::ai::macro_exec::PlyRec>, Game) {
         let mut g = view.clone();
-        let mut a = arch.clone();
+        let mut a = lane_state.clone();
         let mut c = counters;
         let mut rec = Vec::new();
         macro_exec::execute_turn_recorded(&mut g, pov, goal, &mut a, &mut c, lambda, Some(&mut rec));
@@ -764,7 +764,7 @@ impl<'a> MacroMctsAgent<'a> {
             evaluator,
             params,
             stance_commit: StanceCommit::default(),
-            archetype: ArchetypeState::default(),
+            lane_state: LaneState::default(),
             counters: TurnCounters::default(),
             plan_key: None,
             turn_goal: None,
@@ -795,10 +795,10 @@ impl<'a> MacroMctsAgent<'a> {
 
     /// Tier-1 state: the committed lane plus its tenure/budget/score
     /// bookkeeping — the top of the `ply <- order <- playstyle` attribution
-    /// chain. The macro agent owns its own `ArchetypeState`; the script
+    /// chain. The macro agent owns its own `LaneState`; the script
     /// path's copy (arena/self_play) is a different seat's.
-    pub fn committed_playstyle(&self) -> &ArchetypeState {
-        &self.archetype
+    pub fn committed_playstyle(&self) -> &LaneState {
+        &self.lane_state
     }
 
     /// Root value of this turn's committed directive, for the TD bootstrap.
@@ -839,12 +839,12 @@ impl<'a> MacroMctsAgent<'a> {
             // executor plies below only OBSERVE, so the lane stays the
             // turn's identity instead of drifting ply to ply. In-tree turns
             // inherit this lane rather than re-selecting (v1).
-            crate::ai::oracle_macro::observe_archetype(&view0.state, pov, &mut self.archetype);
-            crate::ai::oracle_macro::select_playstyle(
+            crate::ai::oracle_macro::observe_lane_state(&view0.state, pov, &mut self.lane_state);
+            crate::ai::oracle_macro::select_lane(
                 &view0.state,
                 pov,
                 &base,
-                &mut self.archetype,
+                &mut self.lane_state,
                 None,
             );
             let mut tagged = crate::ai::macro_agent::enumerate_candidates_with_belief(
@@ -878,7 +878,7 @@ impl<'a> MacroMctsAgent<'a> {
                 pov,
                 candidates.clone(),
                 self.counters,
-                &self.archetype,
+                &self.lane_state,
                 &self.params,
                 self.evaluator,
             );
@@ -922,7 +922,7 @@ impl<'a> MacroMctsAgent<'a> {
                 tier_probe(
                     &view0,
                     pov,
-                    &self.archetype,
+                    &self.lane_state,
                     self.counters,
                     self.params.lambda,
                     &base,
@@ -961,7 +961,7 @@ impl<'a> MacroMctsAgent<'a> {
             &mut view,
             pov,
             &goal,
-            &mut self.archetype,
+            &mut self.lane_state,
             &mut self.counters,
             self.params.lambda,
         );
@@ -1065,7 +1065,7 @@ mod tests {
         for seed in [11i64, 12, 13, 14] {
             let mut game = generated_game(9_600_000 + seed);
             // Advance to the belief window.
-            let mut arch = ArchetypeState::default();
+            let mut lane_state = LaneState::default();
             let mut counters = TurnCounters::default();
             for _ in 0..12 {
                 if game.state.settings._game_over {
@@ -1073,7 +1073,7 @@ mod tests {
                 }
                 let player = game.state.settings.current_player_turn_id;
                 let goal = compute_macro_goal(&game.state, player, 0, None);
-                if !macro_exec::execute_turn(&mut game, player, &goal, &mut arch, &mut counters, 1.0)
+                if !macro_exec::execute_turn(&mut game, player, &goal, &mut lane_state, &mut counters, 1.0)
                 {
                     break;
                 }
@@ -1116,7 +1116,7 @@ mod tests {
                     pov,
                     cands.clone(),
                     TurnCounters::default(),
-                    &ArchetypeState::default(),
+                    &LaneState::default(),
                     &params,
                     &evaluator,
                 );
@@ -1142,9 +1142,9 @@ mod tests {
                 }
                 let player = sim.state.settings.current_player_turn_id;
                 let goal = compute_macro_goal(&sim.state, player, 0, None);
-                let mut arch = ArchetypeState::default();
+                let mut lane_state = LaneState::default();
                 let mut counters = TurnCounters::default();
-                if !macro_exec::execute_turn(&mut sim, player, &goal, &mut arch, &mut counters, 1.0)
+                if !macro_exec::execute_turn(&mut sim, player, &goal, &mut lane_state, &mut counters, 1.0)
                 {
                     break;
                 }
@@ -1171,7 +1171,7 @@ mod tests {
                 pov,
                 cands,
                 TurnCounters::default(),
-                &ArchetypeState::default(),
+                &LaneState::default(),
                 &MacroParams { sims: 32, ..Default::default() },
                 &evaluator,
             );
@@ -1289,7 +1289,7 @@ mod tests {
             let game = generated_game(seed);
             let pov = game.state.settings.current_player_turn_id;
             let mut sim = game.clone_for_mcts(pov);
-            let mut arch: [ArchetypeState; 2] = Default::default();
+            let mut lane_states: [LaneState; 2] = Default::default();
             let mut counters = [TurnCounters::default(); 2];
             for _ in 0..8 {
                 if sim.state.settings._game_over {
@@ -1301,7 +1301,7 @@ mod tests {
                     &mut sim,
                     p,
                     &goal,
-                    &mut arch[seat(p)],
+                    &mut lane_states[seat(p)],
                     &mut counters[seat(p)],
                     1.0,
                 ) {
@@ -1327,7 +1327,7 @@ mod tests {
                 pov,
                 cands,
                 counters[seat(pov)],
-                &arch[seat(pov)],
+                &lane_states[seat(pov)],
                 &MacroParams { sims, ..Default::default() },
                 &evaluator,
             );
