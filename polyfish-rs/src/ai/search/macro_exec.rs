@@ -271,7 +271,7 @@ mod tests {
             let game = generated_game(seed);
             let pov = game.state.settings.current_player_turn_id;
             let mut sim = game.clone_for_mcts(pov);
-            let goal = compute_macro_goal(&sim.state, pov, 0, None);
+            let goal = compute_macro_goal(&sim.state, pov, 0);
             let mut lane_state = LaneState::default();
             let mut counters = TurnCounters::default();
             let ok = execute_turn(&mut sim, pov, &goal, &mut lane_state, &mut counters, 1.0);
@@ -292,7 +292,7 @@ mod tests {
             let mut history = Vec::new();
             for _ in 0..2 {
                 let mut sim = game.clone_for_mcts(pov);
-                let goal = compute_macro_goal(&sim.state, pov, 0, None);
+                let goal = compute_macro_goal(&sim.state, pov, 0);
                 let mut lane_state = LaneState::default();
                 let mut counters = TurnCounters::default();
                 execute_turn(&mut sim, pov, &goal, &mut lane_state, &mut counters, 1.0);
@@ -335,7 +335,7 @@ mod tests {
             let game = generated_game(seed);
             let pov = game.state.settings.current_player_turn_id;
             let mut sim = game.clone_for_mcts(pov);
-            let goal = compute_macro_goal(&sim.state, pov, 0, None);
+            let goal = compute_macro_goal(&sim.state, pov, 0);
             let mut lane_state = LaneState::default();
             let mut counters = TurnCounters::default();
             assert!(execute_turn(&mut sim, pov, &goal, &mut lane_state, &mut counters, 1.0));

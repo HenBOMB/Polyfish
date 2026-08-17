@@ -741,12 +741,7 @@ fn play_match(
             );
             let gate =
                 polyfish::ai::oracle_macro::tech_discipline_active(&game.state, model_player, &goal);
-            polyfish::ai::oracle_macro::update_lane_state(
-                &game.state,
-                model_player,
-                &goal,
-                &mut lane_state,
-            );
+            polyfish::ai::oracle_macro::update_lane_state(&game.state, model_player, &mut lane_state);
             let aux = polyfish::ai::oracle_macro::compute_goal_aux(
                 &game.state,
                 model_player,
@@ -763,7 +758,6 @@ fn play_match(
                     &game.state,
                     model_player,
                     tier3_bought,
-                    stance_commit.lane,
                 );
                 let tribe = game.state.tribes.get(&model_player);
                 pending_goal = Some(serde_json::json!({

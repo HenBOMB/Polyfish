@@ -6076,3 +6076,196 @@ determinism, and the one adjudicable behavior gate (win rate, no
 regression) all clear. The giants-production claim is open, flagged
 honestly, and belongs to a follow-up run with a turn horizon long enough
 for the hub economy it's supposed to measure to actually mature.
+
+## EXP_ELO_058 — drop the dead lane parameter; re-source lane_scores off state, not T2's goal
+
+REGISTERED + IMPLEMENTED Aug 17, 2026. Verdi, after the "why does a lane
+switch land a turn later but a Defend order lands immediately" question:
+"lets clean up the pointless lane arg and if that fixes the circular
+dependencies we should clean that up. We said that select_lane() reads
+the goal.orders as input but my question is why? T1 should not be
+depending on T2's data. If we are doing it to see what we were committed
+to previously that is something we should cache at the T1 level and read
+from that cache."
+
+Investigation (advisor-reviewed before implementation) found two distinct
+things under one complaint, not one:
+
+1. **A dead edge.** `pick_save_lane`'s `_committed: Option<Lane>` param
+   (already unused since EXP_ELO_052 iter 2 — see 057) was still being fed
+   by a real pipe: `StanceCommit.lane`, written once per ply in
+   self_play.rs (`stance_commits[seat].lane = lane_states[seat].lane`,
+   comment: "the lane the selector just committed becomes the lane the
+   savings plan banks for on the NEXT goal update") and read once in
+   `commit_macro_goal` to build the `lane` argument threaded through
+   `compute_macro_goal_cached` → `GoalCache::save_target` →
+   `pick_save_lane` — where it was discarded. Not a caching decision (the
+   user's "cache it at T1" hypothesis) — the value was never read at all.
+2. **A live edge, but not the one hypothesized.** `lane_scores` (T1) reads
+   `goal.orders` (T2's assembled output) for exactly two signals:
+   `race_live`/`mobility`'s Expand targets, and `has_defend`. This is NOT
+   T1 recalling its own prior commitment (`LaneState.lane`/
+   `committed_turn` already do that, entirely inside T1, untouched by this
+   item) — it is T1 free-riding on T2's already-built board-read for two
+   facts T1 could compute itself: every capturable/retakeable village is a
+   `pub fn(state, idx, player)` predicate (`still_capturable`,
+   `retakeable_village`) that `compute_macro_goal` itself calls to build
+   Expand orders, and every Defend-worthy city risk is `pub fn
+   city_risks(state, player)`, the same pure state read T2 uses to build
+   Defend orders. Neither predicate needs T2's assembled `MacroGoal` —
+   T1 was reaching through T2 for facts it had direct access to the whole
+   time.
+
+Neither of these is a circular dependency (T2 never read anything T1
+computed downstream of this edge) — it's one dead edge to delete and one
+live edge to re-source, so "fixes the circular dependency" doesn't
+apply literally, but the outcome the user asked for (T1 no longer reads
+T2's data) is the same either way.
+
+CHANGE.
+- **Dead edge removal**: `lane: Option<Lane>` dropped from
+  `compute_macro_goal`/`compute_macro_goal_cached`/`GoalCache::save_target`
+  (and its cache-key tuple); `_committed` dropped from `pick_save_lane`'s
+  signature entirely (not just renamed-unused, per 057's finding that it
+  was already dead — this removes the parameter, not just the read).
+  `StanceCommit.lane` field deleted outright (it had no other reader —
+  confirmed via a full-tree grep before deleting, including the one
+  non-obvious debug read at `arena.rs:762`'s `--dump-stats` fresh-goal
+  recompute). The self_play.rs sync line quoted above is deleted with it.
+  ~30 call sites updated (mostly tests passing a trailing `None`);
+  the compiler caught every one via the type-checker, no runtime-only
+  misses possible.
+- **Live-edge re-sourcing**: new `oracle_macro::expand_targets(state,
+  player, cache: Option<&mut GoalCache>) -> Vec<i32>` — the exact
+  capturable/retakeable/guessed-village scan `compute_macro_goal_cached`
+  ran inline, extracted so both T2 (with its cache) and T1 (`lane_scores`,
+  with `None`) call the identical logic instead of T1 reading T2's output.
+  `has_defend` becomes an inline
+  `combat::city_risks(state, player).iter().any(|r| r.needs_order())` —
+  not worth its own helper for a one-line predicate. `select_lane`,
+  `update_lane_state`, and `lane_scores` all drop their `goal: &MacroGoal`
+  parameter; ~10 more call sites updated the same mechanical way.
+
+LANDMINE (advisor-flagged, confirmed real before writing the fix):
+`tribe_prior_commits_a_lane_before_the_map_speaks` isolated "the census
+has nothing to say" by passing `MacroGoal::default()` — an empty goal —
+directly into `select_lane`. That trick stops working once `select_lane`
+computes its own targets from `state`: on the test's actual fixture
+(`state_with_villages(0, &[])`, zero explored tiles), `guess_villages`
+still paints two sites, because FOW-honest pathfinding
+(`ai::movement::move_class`) reads an **unexplored** tile as open/passable
+by design (optimistic scouting) — an empty `state.tiles` map is not an
+information vacuum, it's every tile reading as traversable field. Traced
+the actual score arithmetic: `race_live` fires either way (0 cities <
+`COMMIT_CITY_TARGET`), but `mobility` (rider vs. walker turns to the
+guessed sites) now also fires unconditionally, worth +2 to `RiderRoads`
+regardless of which tribe is being tested — exactly `TRIBE_PRIOR_BONUS`,
+so it ties or beats the Hoodrick/XinXi fixtures' own prior-boosted lane.
+Fixed by exploring the entire grid (`explore_tile` over every index, no
+structures/resources placed) before calling `select_lane`, so
+`guess_villages`'s `!explored(idx)` filter has nothing left to select —
+a real information vacuum instead of a fake one, achieved by actually
+building the state the test claims to have rather than by handing
+`select_lane` a goal object it no longer consults. Confirmed by tracing
+the pre-fix arithmetic (`rider=3` before any prior bonus, clearing
+`LANE_ENTRY_MIN` unconditionally) that this would have failed the
+Hoodrick/XinXi cases had it shipped unfixed, not merely risked it.
+
+VERIFICATION. Clean compile on an isolated `CARGO_TARGET_DIR`, zero new
+warnings (no leftover unused `goal`/`MacroGoal`/`OrderKind` imports —
+checked explicitly, not just "no error"). `cargo test --lib --tests --bin
+self_play`: 207/207 lib tests (steady from pre-058; the landmine test
+passes with the reworked fixture, all other `lane.rs` tests pass with
+`goal`/`g` bindings that are now used only where `compute_goal_aux` still
+needs them, dropped where they'd become genuinely dead). `cargo build
+--bin arena` also checked directly (arena.rs has `test = false`, so it
+never runs under `cargo test`, and this item touches it).
+
+Equivalent-by-construction, with one registered drift source: T1's own
+`expand_targets(state, player, None)` call recomputes `guess_villages`
+fresh every time `select_lane` runs (turn boundary or refutation), while
+T2's copy is served from `GoalCache` (EXP_ELO_056) and can be up to one
+ply stale by unit-position anchor. Both were already independently true
+before this item (056 registered the cache's staleness; this item just
+means T1 and T2 can now, in principle, disagree mid-turn on a guess
+ranking they previously were both fed differently anyway, T2 from cache,
+T1 from `goal.orders` a ply behind T2). Bounded, not chased.
+
+### EXP_ELO_058 ACTUAL — cleanly attributable A/B, no regression, shipped
+
+Run Aug 17 2026. Paired A/B, arm A = `5a35640` (HEAD before this change,
+built in a separate worktree, isolated `CARGO_TARGET_DIR`) — the first
+058-family measurement not needing a combined-effect caveat, since this
+item's whole diff sits cleanly on top of a real commit. Arm B = this
+change, uncommitted at measurement time. Both release-built
+(`--features apple`), identical pinned checkpoint. Same P4 instrument as
+056/057: `--num-games 48 --base-seed 1786807403 --mcts-iters 64
+--gumbel-k 16 --goal-channels --goal-w-tree 1 --tribe1 xinxi --tribe2
+imperius --anchor-frac 1.0 --anchor-seat 2 --eval-backend metal`
+(`GUMBEL_SCALE=0` omitted, consistent with 056/057 — both arms equally
+affected, valid pairing, not comparable to this ledger's older absolute
+numbers).
+
+| metric | arm A (`5a35640`) | arm B (this change) |
+|---|---|---|
+| anchor_net_wr | 23/46 (50.0%) | 26/46 (56.5%) |
+| avg_score | 2387.7 | 2470.0 |
+| avg_giants_made | 0.24 | 0.44 |
+| avg_hub_level | 1.533 | 1.484 |
+| hub_starved_frac | 0.533 | 0.581 |
+| villages_first_rate | 0.86 | 0.78 |
+| villages_t2c_first_cond | 5.56 | 5.03 |
+| t2c_2nd_rate | 0.88 | 0.80 |
+| t2c_3rd_rate | 0.34 | 0.36 |
+| moves/sec | 290.78 | 265.01 |
+
+READ. Win rate +6.5pp — inside this ledger's own established noise floor
+for this n (056 read +8.7pp at n=46 as clean/non-regressive; the 64-game
+gauge's floor is documented at ±12pp — see `metrics-noise-floor` — and
+n=46 is smaller, so its floor is at least as wide). No metric moves in a
+single consistent direction: score and win rate both favor arm B,
+`villages_first_rate`/`t2c_2nd_rate`/`hub_level` all favor arm A, `t2c_3rd_rate`
+is flat — the signature of sampling noise across independent metrics, not
+a systematic strength or weakness shift.
+
+`avg_giants_made` moved the most (0.24 → 0.44, ~11 → ~21 giants across
+48 games) — traced before writing this verdict, not waved off by
+pattern-matching to 057's own giants swing. `lane_scores`'s SpamGiants
+term (`spam_viable`/`rough_frac`/`has_defend`) is byte-identical code
+before and after this item; the only things this item touched
+(`race_live`/`mobility`'s targets, `has_defend`'s source) feed the
+**RiderRoads/ArcherLine** terms, not SpamGiants's own score, and are
+called on the exact same state at the exact same call site
+(`update_lane_state`/`select_lane` fire on the same ply `commit_macro_goal`
+built `goal` from) in both old and new code — `expand_targets(state,
+player, None)` and `goal.orders`'s Expand/Defend entries are the same
+predicates over the same state, differing only in the one already-
+registered `guess_villages` cache-staleness edge case, which cannot
+apply here since T1 and T2 read the same, not-yet-diverged, state on this
+call. No mechanism in the diff explains a giants shift this size. Same
+low-count-rare-event caveat 057 registered applies with more force here:
+giants require city level 4-5, these games run to only turn ~10-14, and
+11 vs 21 is still a small-n count of a rare event this instrument was
+never built to resolve. Registering as noise-consistent, not as a second
+data point toward a real effect — a real code-driven effect would push
+this metric the same direction 057 did (down); this run pushes the
+opposite way, which is what an unbiased noise source does and a bug
+generally does not.
+
+VERDICT: no regression on the adjudicable gate (win rate). Every other
+metric's spread is consistent with sampling noise at this n, including
+the large but mechanistically unexplained giants swing. Advisor's
+predicted framing holds: this was not a circular-dependency fix (there
+was no cycle — `StanceCommit.lane` was a dead pipe, `lane_scores`'s
+`goal.orders` read was a live but unnecessary one), and the refactor is
+equivalent by construction, confirmed empirically by the cleanest A/B
+this experiment family has run (real commit vs. real diff, no
+combined-effect caveat).
+
+STATUS: SHIPPED. Correctness (207/207 lib tests, `cargo build --bin
+arena` checked separately since it's excluded from `cargo test`, zero new
+warnings), the T1→T2 layering violation the user named is gone
+(`lane_scores` is a pure function of `state` again, matching every other
+T1 predicate), the dead `lane` parameter chain is deleted end-to-end
+rather than left as unread plumbing, and the one behavior gate this
+family can adjudicate (win rate) shows no regression.

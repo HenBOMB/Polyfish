@@ -72,7 +72,7 @@ pub struct MacroGoal {
 pub struct GoalCache {
     village_key: Option<(i32, usize)>,
     village_guesses: Vec<VillageGuess>,
-    save_key: Option<(i32, u32, Option<Lane>, usize, usize)>,
+    save_key: Option<(i32, u32, usize, usize)>,
     save_target: Option<SaveTarget>,
 }
 
@@ -107,15 +107,14 @@ impl GoalCache {
         state: &GameState,
         player: PlayerId,
         tier3_bought: u32,
-        lane: Option<Lane>,
     ) -> Option<SaveTarget> {
         let (tech_count, cities) = state
             .tribes
             .get(&player)
             .map_or((0, 0), |t| (t.tech_vanilla.iter().filter(|t| t.discovered).count(), t.cities.len()));
-        let key = (state.settings.turn, tier3_bought, lane, tech_count, cities);
+        let key = (state.settings.turn, tier3_bought, tech_count, cities);
         if self.save_key != Some(key) {
-            self.save_target = pick_save_lane(state, player, tier3_bought, lane);
+            self.save_target = pick_save_lane(state, player, tier3_bought);
             self.save_key = Some(key);
         }
         self.save_target.clone()
@@ -130,9 +129,8 @@ pub fn compute_macro_goal(
     state: &GameState,
     player: PlayerId,
     tier3_bought: u32,
-    lane: Option<Lane>,
 ) -> MacroGoal {
-    compute_macro_goal_cached(state, player, tier3_bought, lane, None)
+    compute_macro_goal_cached(state, player, tier3_bought, None)
 }
 
 /// Same as `compute_macro_goal`, with an optional turn-scoped cache for the
@@ -144,7 +142,6 @@ pub fn compute_macro_goal_cached(
     state: &GameState,
     player: PlayerId,
     tier3_bought: u32,
-    lane: Option<Lane>,
     mut cache: Option<&mut GoalCache>,
 ) -> MacroGoal {
     let size = state.settings.size as i32;
@@ -158,26 +155,10 @@ pub fn compute_macro_goal_cached(
     let own_units: Vec<(i32, i32)> =
         tribe.units.iter().map(|u| (u.coords.idx, unit_cost(u))).collect();
     let our_army: i32 = own_units.iter().map(|(_, c)| c).sum();
-    let mut orders: Vec<(OrderKind, i32)> = Vec::new();
-
-    for &idx in state.structures.keys() {
-        if still_capturable(state, idx, player) || retakeable_village(state, idx, player) {
-            orders.push((OrderKind::Expand, idx));
-        }
-    }
-    // v2.4: while expanding, keep at least EXPAND_TARGET_MIN targets painted —
-    // generator-informed guesses stand in for undiscovered villages, so the
-    // approach gradient drives scouting toward likely sites instead of idling.
-    if tribe.cities.len() < COMMIT_CITY_TARGET && orders.len() < EXPAND_TARGET_MIN {
-        let need = EXPAND_TARGET_MIN - orders.len();
-        let guesses: Vec<VillageGuess> = match &mut cache {
-            Some(c) => c.village_guesses(state, player).to_vec(),
-            None => guess_villages(state, player, EXPAND_TARGET_MIN),
-        };
-        for g in guesses.into_iter().take(need) {
-            orders.push((OrderKind::Expand, g.tile));
-        }
-    }
+    let mut orders: Vec<(OrderKind, i32)> = expand_targets(state, player, cache.as_deref_mut())
+        .into_iter()
+        .map(|idx| (OrderKind::Expand, idx))
+        .collect();
 
     // ATTACK needs assembled superiority; a merely winnable-if-massed city
     // sets `prepare` instead (post-expansion ARM below). Defender count is
@@ -236,11 +217,9 @@ pub fn compute_macro_goal_cached(
     // always outranks banking — and only fires for a batch that is out of
     // pocket now but inside SAVE_MAX_TURNS of income, so it self-terminates
     // rather than becoming an open-ended hoard.
-    // EXP_ELO_052: bank for the lane T1 committed to, not for whichever
-    // structure happens to be cheapest.
     let raw_save_target = match &mut cache {
-        Some(c) => c.save_target(state, player, tier3_bought, lane),
-        None => pick_save_lane(state, player, tier3_bought, lane),
+        Some(c) => c.save_target(state, player, tier3_bought),
+        None => pick_save_lane(state, player, tier3_bought),
     };
     let save_target = raw_save_target.filter(|l| {
         let spt = crate::functions::get_tribe_spt(state, tribe);
@@ -440,11 +419,6 @@ pub use crate::ai::economy::{
 /// first-class metrics and never measured.
 #[derive(Clone, Debug, Default)]
 pub struct StanceCommit {
-    /// EXP_ELO_052: the Tier-1 lane this seat has committed to, so the
-    /// savings plan banks for what T1 actually chose rather than inferring
-    /// it from which techs happen to be owned. `None` falls back to the
-    /// spawn prior, then to price.
-    pub lane: Option<Lane>,
     pub stance: Option<Stance>,
     challenger: Option<Stance>,
     streak: u8,
@@ -476,7 +450,7 @@ pub fn commit_macro_goal(
     st: &mut StanceCommit,
     tier3_bought: u32,
 ) -> MacroGoal {
-    let mut goal = compute_macro_goal_cached(state, player, tier3_bought, st.lane, Some(&mut st.cache));
+    let mut goal = compute_macro_goal_cached(state, player, tier3_bought, Some(&mut st.cache));
     let turn = state.settings.turn;
     let new_turn = turn != st.last_turn;
     if new_turn {
@@ -648,6 +622,37 @@ pub fn retakeable_village(state: &GameState, idx: i32, player: PlayerId) -> bool
                 .max(((a % size) - (idx % size)).abs())
                 <= RETAKE_PAINT_RADIUS
         })
+}
+
+/// This turn's Expand targets: every still-capturable or retakeable village,
+/// topped up with `guess_villages` sites (mapgen-legal, spaced) until
+/// `EXPAND_TARGET_MIN` while the tribe is still under `COMMIT_CITY_TARGET`
+/// cities. Single source of truth for T2's Expand orders AND T1's own
+/// race/mobility read (`lane_scores`) — T1 used to infer this from T2's
+/// already-assembled `goal.orders`, a layering violation with no upside since
+/// both predicates it fed (`still_capturable`/`retakeable_village`) are pure
+/// state reads T1 can call directly.
+pub fn expand_targets(
+    state: &GameState,
+    player: PlayerId,
+    mut cache: Option<&mut GoalCache>,
+) -> Vec<i32> {
+    let mut targets: Vec<i32> = state
+        .structures
+        .keys()
+        .copied()
+        .filter(|&idx| still_capturable(state, idx, player) || retakeable_village(state, idx, player))
+        .collect();
+    let tribe_cities = state.tribes.get(&player).map_or(0, |t| t.cities.len());
+    if tribe_cities < COMMIT_CITY_TARGET && targets.len() < EXPAND_TARGET_MIN {
+        let need = EXPAND_TARGET_MIN - targets.len();
+        let guesses: Vec<VillageGuess> = match &mut cache {
+            Some(c) => c.village_guesses(state, player).to_vec(),
+            None => guess_villages(state, player, EXPAND_TARGET_MIN),
+        };
+        targets.extend(guesses.into_iter().take(need).map(|g| g.tile));
+    }
+    targets
 }
 
 /// Nearest capturable village by Chebyshev distance to any of `player`'s

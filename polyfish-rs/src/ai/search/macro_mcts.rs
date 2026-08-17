@@ -127,7 +127,7 @@ impl Node {
         let candidates = if frozen_value.is_some() {
             Vec::new()
         } else {
-            let base = compute_macro_goal(&game.state, player, counters[seat(player)].tier3_bought, lane_states[seat(player)].lane);
+            let base = compute_macro_goal(&game.state, player, counters[seat(player)].tier3_bought);
             // A node IS a turn boundary, so the Tier-1 selector belongs here —
             // for BOTH seats. The executor plies below only observe, so
             // without this the simulated opponent would play laneless for the
@@ -135,13 +135,7 @@ impl Node {
             // the tree would evaluate futures the real game never produces.
             let s = seat(player);
             crate::ai::oracle_macro::observe_lane_state(&game.state, player, &mut lane_states[s]);
-            crate::ai::oracle_macro::select_lane(
-                &game.state,
-                player,
-                &base,
-                &mut lane_states[s],
-                None,
-            );
+            crate::ai::oracle_macro::select_lane(&game.state, player, &mut lane_states[s], None);
             enumerate_candidates(&game.state, player, base, counters[seat(player)], k)
         };
         let n = candidates.len();
@@ -233,7 +227,7 @@ fn leaf_value(
         let goal = match from {
             Some((mover, g)) if aligned && mover == p => g,
             _ => {
-                scripted = compute_macro_goal(state, p, tier3, None);
+                scripted = compute_macro_goal(state, p, tier3);
                 &scripted
             }
         };
@@ -608,7 +602,7 @@ fn paint_probe(
             .and_then(|f| eval.evaluate(vec![f]).first().map(|r| r.0))
     };
     let opp: PlayerId = if pov == 1 { 2 } else { 1 };
-    let opp_scripted = compute_macro_goal(state, opp, 0, None);
+    let opp_scripted = compute_macro_goal(state, opp, 0);
     let (Some(v_scripted), Some(v_committed), Some(v_opp)) = (
         v(pov, scripted),
         v(pov, committed.unwrap_or(scripted)),
@@ -840,13 +834,7 @@ impl<'a> MacroMctsAgent<'a> {
             // turn's identity instead of drifting ply to ply. In-tree turns
             // inherit this lane rather than re-selecting (v1).
             crate::ai::oracle_macro::observe_lane_state(&view0.state, pov, &mut self.lane_state);
-            crate::ai::oracle_macro::select_lane(
-                &view0.state,
-                pov,
-                &base,
-                &mut self.lane_state,
-                None,
-            );
+            crate::ai::oracle_macro::select_lane(&view0.state, pov, &mut self.lane_state, None);
             let mut tagged = crate::ai::macro_agent::enumerate_candidates_with_belief(
                 &view0.state,
                 pov,
@@ -1072,7 +1060,7 @@ mod tests {
                     break;
                 }
                 let player = game.state.settings.current_player_turn_id;
-                let goal = compute_macro_goal(&game.state, player, 0, None);
+                let goal = compute_macro_goal(&game.state, player, 0);
                 if !macro_exec::execute_turn(&mut game, player, &goal, &mut lane_state, &mut counters, 1.0)
                 {
                     break;
@@ -1141,7 +1129,7 @@ mod tests {
                     break;
                 }
                 let player = sim.state.settings.current_player_turn_id;
-                let goal = compute_macro_goal(&sim.state, player, 0, None);
+                let goal = compute_macro_goal(&sim.state, player, 0);
                 let mut lane_state = LaneState::default();
                 let mut counters = TurnCounters::default();
                 if !macro_exec::execute_turn(&mut sim, player, &goal, &mut lane_state, &mut counters, 1.0)
@@ -1162,7 +1150,7 @@ mod tests {
             let game = generated_game(seed);
             let pov = game.state.settings.current_player_turn_id;
             let view = game.clone_for_mcts(pov);
-            let base = compute_macro_goal(&view.state, pov, 0, None);
+            let base = compute_macro_goal(&view.state, pov, 0);
             let cands = enumerate_candidates(&view.state, pov, base, TurnCounters::default(), 4);
             let k = cands.len();
             let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
@@ -1227,7 +1215,7 @@ mod tests {
         // the other side its scripted goal), so the identity is worth pinning
         // again: it survives because both perspectives reuse the same pair of
         // numbers with the sign swapped, not because the paintings match.
-        let edge = compute_macro_goal(&game.state, 1, 0, None);
+        let edge = compute_macro_goal(&game.state, 1, 0);
         let from = Some((1 as PlayerId, &edge));
         let c = leaf_value(&evaluator, MacroLeaf::NetAsymPaint, &game.state, 1, 0, from);
         let d = leaf_value(&evaluator, MacroLeaf::NetAsymPaint, &game.state, 2, 0, from);
@@ -1296,7 +1284,7 @@ mod tests {
                     break;
                 }
                 let p = sim.state.settings.current_player_turn_id;
-                let goal = compute_macro_goal(&sim.state, p, counters[seat(p)].tier3_bought, None);
+                let goal = compute_macro_goal(&sim.state, p, counters[seat(p)].tier3_bought);
                 if !macro_exec::execute_turn(
                     &mut sim,
                     p,
@@ -1312,7 +1300,7 @@ mod tests {
                 continue;
             }
             let pov = sim.state.settings.current_player_turn_id;
-            let base = compute_macro_goal(&sim.state, pov, counters[seat(pov)].tier3_bought, None);
+            let base = compute_macro_goal(&sim.state, pov, counters[seat(pov)].tier3_bought);
             let cands =
                 enumerate_candidates(&sim.state, pov, base, counters[seat(pov)], 4);
             let k = cands.len();

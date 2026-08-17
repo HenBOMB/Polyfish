@@ -351,7 +351,7 @@ fn rider_push_is_path_aware() {
             state.tiles.insert(r * 11 + c, terrain_tile(TerrainType::Forest));
         }
     }
-    let goal = compute_macro_goal(&state, 1, 0, None);
+    let goal = compute_macro_goal(&state, 1, 0);
     assert!(compute_goal_aux(&state, 1, &goal, 0, 0, None).rider_push);
     assert!(rider_turns_saved(&state, 1, &[44]) >= 2);
 
@@ -362,7 +362,7 @@ fn rider_push_is_path_aware() {
             state.tiles.insert(r * 11 + c, terrain_tile(TerrainType::Forest));
         }
     }
-    let goal = compute_macro_goal(&state, 1, 0, None);
+    let goal = compute_macro_goal(&state, 1, 0);
     assert!(compute_goal_aux(&state, 1, &goal, 0, 0, None).rider_push);
 
     // Only when the whole approach region is rough does the advantage
@@ -390,7 +390,7 @@ fn tech_caps_and_rider_push() {
         tile.explorers.insert(1);
         state.tiles.insert(idx, tile);
     }
-    let goal = compute_macro_goal(&state, 1, 0, None); // EXPAND on village 3
+    let goal = compute_macro_goal(&state, 1, 0); // EXPAND on village 3
     let aux = compute_goal_aux(&state, 1, &goal, 0, 0, None);
     assert!(aux.rider_push);
     assert_eq!(aux.recommended_techs.first(), Some(&TechnologyType::Riding));

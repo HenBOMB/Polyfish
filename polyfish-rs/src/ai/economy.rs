@@ -4,7 +4,7 @@
 //! re-exports the public items below so existing `crate::ai::oracle_macro::X`
 //! call sites keep resolving) and by `reward.rs`'s savings-ramp pricing.
 
-use crate::ai::oracle_macro::{Lane, TIER3_CAP_PER_GAME};
+use crate::ai::oracle_macro::TIER3_CAP_PER_GAME;
 use crate::moves::Move;
 use crate::states::{GameState, PlayerId};
 use crate::types::{MoveType, TechnologyType};
@@ -186,11 +186,6 @@ pub fn pick_save_lane(
     state: &GameState,
     player: PlayerId,
     tier3_bought: u32,
-    // Unused since EXP_ELO_052 iter 2 (see the note below the reachability
-    // check): the hub is chosen by reachability and price, not the committed
-    // lane. Kept in the signature — every caller already threads a lane
-    // through here and `SaveTarget` still names the structure it picked.
-    _committed: Option<Lane>,
 ) -> Option<SaveTarget> {
     use crate::settings::structures::get_structure_setting;
     use crate::settings::technology::has_technology;

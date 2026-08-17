@@ -7,7 +7,7 @@
 //! `oracle_macro` so existing `crate::ai::oracle_macro::X` call sites keep
 //! resolving.
 
-use crate::ai::oracle_macro::{MacroGoal, OrderKind, COMMIT_CITY_TARGET};
+use crate::ai::oracle_macro::{expand_targets, COMMIT_CITY_TARGET};
 use crate::ai::movement::{rider_turns_saved, RIDER_PUSH_MIN_TURNS_SAVED};
 use crate::states::{GameState, PlayerId};
 use crate::types::TechnologyType;
@@ -215,25 +215,19 @@ fn observe_enemies(state: &GameState, player: PlayerId, st: &mut LaneState) {
 }
 
 /// Score each doctrine from the predicates. 0 = not viable right now.
-fn lane_scores(
-    state: &GameState,
-    player: PlayerId,
-    goal: &MacroGoal,
-    st: &LaneState,
-    map: &MapRead,
-) -> [(Lane, i32); 3] {
-    let tribe_cities =
-        state.tribes.get(&player).map_or(0, |t| t.cities.len());
-    let race_live = tribe_cities < COMMIT_CITY_TARGET
-        || goal.orders.iter().any(|(k, _)| *k == OrderKind::Expand);
-    let expand_targets: Vec<i32> = goal
-        .orders
-        .iter()
-        .filter(|(k, _)| *k == OrderKind::Expand)
-        .map(|(_, i)| *i)
-        .collect();
-    let mobility = !expand_targets.is_empty()
-        && rider_turns_saved(state, player, &expand_targets) >= RIDER_PUSH_MIN_TURNS_SAVED;
+///
+/// Pure state — no `MacroGoal` input. Until Aug 2026 this read T2's
+/// already-assembled `goal.orders` for `race_live`/`mobility`'s targets and
+/// for `has_defend`, a T1-depends-on-T2 layering violation with no upside:
+/// both signals are available straight from state (`expand_targets` is the
+/// same predicate scan `compute_macro_goal` itself runs; `city_risks` is the
+/// same pure state read `compute_macro_goal` uses to build Defend orders).
+fn lane_scores(state: &GameState, player: PlayerId, st: &LaneState, map: &MapRead) -> [(Lane, i32); 3] {
+    let tribe_cities = state.tribes.get(&player).map_or(0, |t| t.cities.len());
+    let targets = expand_targets(state, player, None);
+    let race_live = tribe_cities < COMMIT_CITY_TARGET || !targets.is_empty();
+    let mobility = !targets.is_empty()
+        && rider_turns_saved(state, player, &targets) >= RIDER_PUSH_MIN_TURNS_SAVED;
 
     // Contact: a seen enemy within 3 of our units/cities — the skirmish
     // condition under which an archer backline pays.
@@ -264,7 +258,7 @@ fn lane_scores(
     let archer = 2 * (st.seen_heavy >= 1) as i32
         + (map.rough_frac >= ROUGH_FRAC_ARCHER) as i32
         + 2 * contact as i32;
-    let has_defend = goal.orders.iter().any(|(k, _)| *k == OrderKind::Defend);
+    let has_defend = crate::ai::combat::city_risks(state, player).iter().any(|r| r.needs_order());
     // EXP_ELO_057: whether this territory's best city could produce a giant
     // off a Mine-fed Forge, per `rules::eco_plan::plan_city` (the same
     // single source of truth `bin/eco_plan --verify` checks against) —
@@ -293,12 +287,7 @@ fn lane_scores(
 /// Tier-1 selector only at a turn boundary (or to make the very first
 /// commit). Callers that already sit on a turn boundary — the macro agent's
 /// replan branch — call `observe_lane_state` + `select_lane` directly.
-pub fn update_lane_state(
-    state: &GameState,
-    player: PlayerId,
-    goal: &MacroGoal,
-    st: &mut LaneState,
-) {
+pub fn update_lane_state(state: &GameState, player: PlayerId, st: &mut LaneState) {
     let before = st.overlays;
     observe_lane_state(state, player, st);
     // Refutation bypasses the turn boundary, mirroring the stance layer's
@@ -308,7 +297,7 @@ pub fn update_lane_state(
     // and the pivot budget still binds either way.
     let refuted = st.overlays != before;
     if state.settings.turn != st.last_turn || st.lane.is_none() || refuted {
-        select_lane(state, player, goal, st, None);
+        select_lane(state, player, st, None);
     }
 }
 
@@ -333,7 +322,6 @@ pub fn observe_lane_state(state: &GameState, player: PlayerId, st: &mut LaneStat
 pub fn select_lane(
     state: &GameState,
     player: PlayerId,
-    goal: &MacroGoal,
     st: &mut LaneState,
     head: Option<&[f32; LANES]>,
 ) -> Option<Lane> {
@@ -341,7 +329,7 @@ pub fn select_lane(
     let turn = state.settings.turn;
     let prior = tribe_lane_prior(state, player);
 
-    let mut scores = lane_scores(state, player, goal, st, &map);
+    let mut scores = lane_scores(state, player, st, &map);
     if let Some(p) = prior {
         if let Some(e) = scores.iter_mut().find(|(a, _)| *a == p) {
             e.1 += TRIBE_PRIOR_BONUS;
@@ -439,9 +427,9 @@ mod tests {
         let mut state = state_with_villages(0, &[24]);
         state.settings.current_player_turn_id = 1;
         explore_open_fields(&mut state);
-        let goal = compute_macro_goal(&state, 1, 0, None);
+        let goal = compute_macro_goal(&state, 1, 0);
         let mut st = LaneState::default();
-        update_lane_state(&state, 1, &goal, &mut st);
+        update_lane_state(&state, 1, &mut st);
         assert_eq!(st.lane, Some(Lane::RiderRoads));
 
         // Lane expression: Riding recommended, Rider preferred; FreeSpirit
@@ -459,12 +447,12 @@ mod tests {
             t2.units.push(g);
         }
         state.tribes.insert(2, t2);
-        let goal2 = compute_macro_goal(&state, 1, 0, None);
+        let goal2 = compute_macro_goal(&state, 1, 0);
         // Tier 1: discretionary switches wait for the turn boundary, but
         // REFUTATION does not — the sighting that flips an overlay is what
         // zeroes the lane's score, so it re-selects immediately (same
         // precedent as the stance layer's urgent-threat bypass).
-        update_lane_state(&state, 1, &goal2, &mut st);
+        update_lane_state(&state, 1, &mut st);
         assert!(st.overlays.catapult_counter);
         assert_eq!(st.lane, Some(Lane::ArcherLine), "refutation is immediate");
         assert_eq!(st.pivots_used, 1, "a refuted lane costs budget");
@@ -497,16 +485,22 @@ mod tests {
                 }];
             }
             assert_eq!(tribe_lane_prior(&state, 1), Some(lane), "{tribe:?}");
-            // A bare goal with no painted orders isolates the prior-fallback
-            // mechanism from `compute_macro_goal`'s own guessed-village Expand
-            // orders, which (via rider mobility) carry a real, non-terrain
-            // signal of their own and are essentially always present once
-            // `guess_villages` kicks in below `COMMIT_CITY_TARGET`
-            // cities — even the census "has nothing to say" fixture is not
-            // actually reachable through the production goal-setter.
-            let goal = MacroGoal::default();
+            // Explore the whole grid (no structures, no resources) so
+            // `guess_villages` has no unexplored legal spot left to guess —
+            // real isolation of the prior-fallback mechanism, now that
+            // `select_lane` sources its own Expand targets from state
+            // instead of a caller-supplied `MacroGoal`. An unexplored
+            // fixture is NOT an information vacuum here: FOW-honest
+            // pathfinding reads unexplored tiles as open, so `guess_villages`
+            // still paints sites and rider mobility fires on them regardless
+            // of tribe — the vacuum has to come from exploration, not from a
+            // hand-built empty goal.
+            let size = state.settings.size;
+            for idx in 0..size * size {
+                explore_tile(&mut state, idx);
+            }
             let mut st = LaneState::default();
-            assert_eq!(select_lane(&state, 1, &goal, &mut st, None), Some(lane));
+            assert_eq!(select_lane(&state, 1, &mut st, None), Some(lane));
             assert_eq!(st.committed_turn, Some(state.settings.turn));
         }
         // A tribe whose birth tech opens no lane gets no prior.
@@ -526,9 +520,8 @@ mod tests {
         let mut state = state_with_villages(0, &[24]);
         state.settings.current_player_turn_id = 1;
         explore_open_fields(&mut state);
-        let goal = compute_macro_goal(&state, 1, 0, None);
         let mut st = LaneState::default();
-        select_lane(&state, 1, &goal, &mut st, None);
+        select_lane(&state, 1, &mut st, None);
         let first = st.lane.expect("a lane is committed on an explored map");
         assert_eq!(st.pivots_used, 0, "the first commit is not a pivot");
 
@@ -543,16 +536,14 @@ mod tests {
         state.tribes.insert(2, t2);
         for turn in 1..=12 {
             state.settings.turn = turn;
-            let g = compute_macro_goal(&state, 1, 0, None);
-            select_lane(&state, 1, &g, &mut st, None);
+            select_lane(&state, 1, &mut st, None);
         }
         assert!(st.pivots_used <= MAX_PIVOTS, "budget must cap at {MAX_PIVOTS}");
         let frozen = st.lane;
         st.pivots_used = MAX_PIVOTS;
         for turn in 13..=20 {
             state.settings.turn = turn;
-            let g = compute_macro_goal(&state, 1, 0, None);
-            select_lane(&state, 1, &g, &mut st, None);
+            select_lane(&state, 1, &mut st, None);
         }
         assert_eq!(st.lane, frozen, "no lane change once the budget is spent");
         let _ = first;
@@ -568,9 +559,8 @@ mod tests {
         let mut state = state_with_villages(0, &[24]);
         state.settings.current_player_turn_id = 1;
         explore_open_fields(&mut state);
-        let goal = compute_macro_goal(&state, 1, 0, None);
         let mut st = LaneState::default();
-        select_lane(&state, 1, &goal, &mut st, None);
+        select_lane(&state, 1, &mut st, None);
         st.pivots_used = MAX_PIVOTS;
         let committed = st.lane;
 
@@ -584,8 +574,7 @@ mod tests {
         state.tribes.insert(2, t2);
         for turn in 1..=6 {
             state.settings.turn = turn;
-            let g = compute_macro_goal(&state, 1, 0, None);
-            update_lane_state(&state, 1, &g, &mut st);
+            update_lane_state(&state, 1, &mut st);
         }
         assert_eq!(st.lane, committed, "the cap binds even under refutation");
         assert_eq!(st.pivots_used, MAX_PIVOTS);
@@ -598,17 +587,16 @@ mod tests {
         let mut state = state_with_villages(0, &[24]);
         state.settings.current_player_turn_id = 1;
         explore_open_fields(&mut state);
-        let goal = compute_macro_goal(&state, 1, 0, None);
 
         let mut algo_only = LaneState::default();
-        select_lane(&state, 1, &goal, &mut algo_only, None);
+        select_lane(&state, 1, &mut algo_only, None);
         let census_pick = algo_only.lane.unwrap();
 
         let idx = LANE_ORDER.iter().position(|a| *a == census_pick).unwrap();
         let mut head = [0.0f32; LANES];
         head[(idx + 1) % LANES] = 50.0; // overwhelming opinion for another lane
         let mut with_head = LaneState::default();
-        let pick = select_lane(&state, 1, &goal, &mut with_head, Some(&head)).unwrap();
+        let pick = select_lane(&state, 1, &mut with_head, Some(&head)).unwrap();
         assert_ne!(pick, census_pick, "a decisive head score must move the call");
         assert!(with_head.last_scores.iter().any(|s| *s >= 50.0), "scores recorded for the trace");
     }
@@ -625,9 +613,9 @@ mod tests {
             t2.units.push(r);
         }
         state.tribes.insert(2, t2);
-        let goal = compute_macro_goal(&state, 1, 0, None);
+        let goal = compute_macro_goal(&state, 1, 0);
         let mut st = LaneState::default();
-        update_lane_state(&state, 1, &goal, &mut st);
+        update_lane_state(&state, 1, &mut st);
         assert!(st.overlays.knight_commit);
         assert!(st.overlays.defender_screen);
         let aux = compute_goal_aux(&state, 1, &goal, 0, 0, Some(&st));

@@ -961,7 +961,7 @@ mod tests {
                         break;
                     }
                     let player = game.state.settings.current_player_turn_id;
-                    let goal = compute_macro_goal(&game.state, player, 0, None);
+                    let goal = compute_macro_goal(&game.state, player, 0);
                     if !macro_exec::execute_turn(
                         &mut game, player, &goal, &mut lane_state, &mut counters, 1.0,
                     ) {
@@ -1063,7 +1063,7 @@ mod tests {
                     break;
                 }
                 let player = sim.state.settings.current_player_turn_id;
-                let goal = compute_macro_goal(&sim.state, player, 0, None);
+                let goal = compute_macro_goal(&sim.state, player, 0);
                 if !macro_exec::execute_turn(&mut sim, player, &goal, &mut lane_state, &mut counters, 1.0)
                 {
                     break;
@@ -1186,7 +1186,7 @@ mod tests {
                     }
                 }
                 let player = pov;
-                let goal = compute_macro_goal(&game.state, player, 0, None);
+                let goal = compute_macro_goal(&game.state, player, 0);
                 if !macro_exec::execute_turn(&mut game, player, &goal, &mut lane_state, &mut counters, 1.0)
                 {
                     break;
