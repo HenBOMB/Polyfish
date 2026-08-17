@@ -37,7 +37,10 @@ fn explain(state: &GameState, city_idx: i32, territory: &[i32], sc: Scenario) {
         })
         .collect();
     sites.sort_by_key(|&(s, n)| (-n, s));
-    println!("  hub sites by partner count: {:?}", &sites[..sites.len().min(8)]);
+    println!(
+        "  hub sites by partner count: {:?}",
+        &sites[..sites.len().min(8)]
+    );
     println!("  chosen hub {:?} at level {}", b.hub_site, b.partners);
     let mut by_kind: std::collections::BTreeMap<&str, Vec<i32>> = Default::default();
     for x in buys.iter().filter(|x| Some(x.idx) != b.hub_site) {
@@ -46,8 +49,10 @@ fn explain(state: &GameState, city_idx: i32, territory: &[i32], sc: Scenario) {
     for (k, v) in by_kind {
         println!("    {k:<12} x{:<3} {:?}", v.len(), v);
     }
-    println!("  pop {}  stars(structures) {}  market {:?} (+{} SPT)",
-             b.pop, b.stars, b.market_site, b.market_spt);
+    println!(
+        "  pop {}  stars(structures) {}  market {:?} (+{} SPT)",
+        b.pop, b.stars, b.market_site, b.market_spt
+    );
 }
 
 /// The partner structure each lane actually builds on a tile.
@@ -185,7 +190,9 @@ fn verify(state: &GameState, cities: &[i32], monuments: i32) -> bool {
         "  {:<20} {:>5} {:>6} {:>8} {:>8} {:>9} {:>9}",
         "scenario", "city", "hub", "claimed", "engine", "st.level", "argmax"
     );
-    println!("  (pop = capital population delivered by the engine, identical across 3 build orders)");
+    println!(
+        "  (pop = capital population delivered by the engine, identical across 3 build orders)"
+    );
     println!("  {}", "-".repeat(92));
 
     for sc in SCENARIOS {
@@ -208,8 +215,8 @@ fn verify(state: &GameState, cities: &[i32], monuments: i32) -> bool {
 
             let engine_partners =
                 polyfish::rules::economy::partner_count(&board, hub, hub_type, pov_of(state));
-            let stored_level = polyfish::functions::get_structure_at(&board, hub)
-                .map_or(-1, |s| s.level);
+            let stored_level =
+                polyfish::functions::get_structure_at(&board, hub).map_or(-1, |s| s.level);
 
             // 3. Build-order invariance, on the capital only — the other cities
             //    are villages here, so no CityState collects their pop.
@@ -224,16 +231,31 @@ fn verify(state: &GameState, cities: &[i32], monuments: i32) -> bool {
                 let mut hub_first = vec![n - 1];
                 hub_first.extend(0..n - 1);
                 for alt in [rev, hub_first] {
-                    let (_, pop_alt) =
-                        materialize(state, city_idx, &terr[ci], sc, Some(hub), &alt);
+                    let (_, pop_alt) = materialize(state, city_idx, &terr[ci], sc, Some(hub), &alt);
                     if pop_alt != pop_ident {
                         order_ok = false;
                         println!(
                             "    ORDER-DEPENDENT: {} city {city_idx} pop {pop_ident} -> {pop_alt}",
                             sc.name
                         );
-                        trace_order(state, city_idx, &terr[ci], sc, Some(hub), &ident, "plan order");
-                        trace_order(state, city_idx, &terr[ci], sc, Some(hub), &alt, "this order");
+                        trace_order(
+                            state,
+                            city_idx,
+                            &terr[ci],
+                            sc,
+                            Some(hub),
+                            &ident,
+                            "plan order",
+                        );
+                        trace_order(
+                            state,
+                            city_idx,
+                            &terr[ci],
+                            sc,
+                            Some(hub),
+                            &alt,
+                            "this order",
+                        );
                     }
                 }
             }
@@ -272,7 +294,9 @@ fn verify(state: &GameState, cities: &[i32], monuments: i32) -> bool {
             // only a proxy and one the planner deliberately trades away.
             let doms = dominators_of(state, city_idx, &terr[ci], sc, hub);
             let argmax_ok = doms.is_empty();
-            let (best_site, best_n) = doms.first().map_or((hub, engine_partners), |&(p, _, s)| (s, p));
+            let (best_site, best_n) = doms
+                .first()
+                .map_or((hub, engine_partners), |&(p, _, s)| (s, p));
 
             // A hub the plan did not build carries a level from its own past:
             // set when it was built, bumped for each partner added since, and
@@ -296,7 +320,11 @@ fn verify(state: &GameState, cities: &[i32], monuments: i32) -> bool {
                 b.partners,
                 engine_partners,
                 stored_level,
-                if argmax_ok { "yes".to_string() } else { format!("{best_site}@{best_n}") },
+                if argmax_ok {
+                    "yes".to_string()
+                } else {
+                    format!("{best_site}@{best_n}")
+                },
                 if ok { "ok" } else { "FAIL" }
             );
             if city_idx == capital {
@@ -365,8 +393,7 @@ fn dominators_of(
     // ranking moved to the frontier's axes this check kept failing correct
     // picks. Three consumers, one objective.
     let score = |s: i32| {
-        let (spt, giants, stars, _pop) =
-            site_value(state, city_idx, territory, sc, 0, Some(s));
+        let (spt, giants, stars, _pop) = site_value(state, city_idx, territory, sc, 0, Some(s));
         (spt, giants, stars)
     };
     let (cspt, cg, cs) = score(chosen);
@@ -416,7 +443,10 @@ fn optimal_report(state: &GameState, cities: &[i32], monuments: i32, lane: Lane,
                 })
                 .collect();
             let m = site_maxima(
-                &ranked.iter().map(|&(a, b, c, _, _, _)| (a, b, -c)).collect::<Vec<_>>(),
+                &ranked
+                    .iter()
+                    .map(|&(a, b, c, _, _, _)| (a, b, -c))
+                    .collect::<Vec<_>>(),
             );
             ranked.sort_by(|x, y| {
                 site_order_key(y.0, y.1, -y.2, goal, m)
@@ -433,10 +463,21 @@ fn optimal_report(state: &GameState, cities: &[i32], monuments: i32, lane: Lane,
             let no_hub = city_build(state, &terr[ci], *sc, 0, None, None, None);
             let best = ranked.first().copied();
 
-            println!("\n  {} — city {city_idx} ({} candidate sites)", sc.name, site_space.len());
-            println!("      no hub at all:            pop {:>3}  stars {:>4}", no_hub.pop, no_hub.stars);
+            println!(
+                "\n  {} — city {city_idx} ({} candidate sites)",
+                sc.name,
+                site_space.len()
+            );
+            println!(
+                "      no hub at all:            pop {:>3}  stars {:>4}",
+                no_hub.pop, no_hub.stars
+            );
             for (_spt, _g, negstars, site, partners, pop) in ranked.iter().take(5) {
-                let mark = if Some(*site) == chosen { "  <- GREEDY PICK" } else { "" };
+                let mark = if Some(*site) == chosen {
+                    "  <- GREEDY PICK"
+                } else {
+                    ""
+                };
                 let ring = if get_chebyshev_distance(*site, city_idx, state.settings.size) > 1 {
                     "outer"
                 } else {
@@ -458,7 +499,9 @@ fn optimal_report(state: &GameState, cities: &[i32], monuments: i32, lane: Lane,
             // is a different point on the frontier, not a mistake.
             match chosen {
                 Some(c) => match ranked.iter().find(|r| r.3 == c).copied() {
-                    None => println!("      VERDICT: chosen site {c} is not in the candidate space"),
+                    None => {
+                        println!("      VERDICT: chosen site {c} is not in the candidate space")
+                    }
                     Some((cspt, cg, cs, _, _, cp)) => {
                         // Dominance on the SAME axes the planner optimises:
                         // SPT (which carries pop through level, plus Market
@@ -475,7 +518,9 @@ fn optimal_report(state: &GameState, cities: &[i32], monuments: i32, lane: Lane,
                             .map(|&(spt, _, st, site, _, _)| (spt, -st, site))
                             .collect();
                         if dominators.is_empty() {
-                            println!("      VERDICT: greedy pick is on the frontier (not dominated)");
+                            println!(
+                                "      VERDICT: greedy pick is on the frontier (not dominated)"
+                            );
                         } else {
                             for (spt, st, site) in &dominators {
                                 println!(
@@ -488,7 +533,9 @@ fn optimal_report(state: &GameState, cities: &[i32], monuments: i32, lane: Lane,
                 },
                 None if best.is_some_and(|(_, _, _, _, _, bp)| bp > no_hub.pop) => {
                     let (bspt, _, _, bsite, _, bp) = best.unwrap();
-                    println!("      VERDICT: NO HUB CHOSEN but site {bsite} would pay pop {bp} / {bspt} SPT");
+                    println!(
+                        "      VERDICT: NO HUB CHOSEN but site {bsite} would pay pop {bp} / {bspt} SPT"
+                    );
                 }
                 None => println!("      VERDICT: no hub, none worthwhile"),
             }
@@ -501,14 +548,14 @@ fn optimal_report(state: &GameState, cities: &[i32], monuments: i32, lane: Lane,
                 let engine =
                     polyfish::rules::economy::partner_count(&board, bsite, hub_type, pov_of(state));
                 if engine != bpartners {
-                    println!("      ENGINE DISAGREES on site {bsite}: planner {bpartners}, engine {engine}");
+                    println!(
+                        "      ENGINE DISAGREES on site {bsite}: planner {bpartners}, engine {engine}"
+                    );
                 }
             }
         }
     }
 }
-
-
 
 fn parse_goal(s: &str) -> Option<Goal> {
     match s.trim().to_lowercase().as_str() {
@@ -542,8 +589,13 @@ fn goal_tag(g: Goal) -> &'static str {
     }
 }
 
-const GOALS: [Goal; 5] = [Goal::Spt, Goal::Eco, Goal::Balanced, Goal::Army, Goal::Giants];
-
+const GOALS: [Goal; 5] = [
+    Goal::Spt,
+    Goal::Eco,
+    Goal::Balanced,
+    Goal::Army,
+    Goal::Giants,
+];
 
 /// What each successive monument actually buys, and where it goes.
 ///
@@ -557,13 +609,19 @@ fn print_monument_ladder(front: &[EmpirePlan], cities: &[i32], g: Goal, budget: 
     // Owned, because each count's pick borrows a temporary filtered Vec.
     let rows: Vec<(i32, EmpirePlan)> = (0..=budget)
         .filter_map(|m| {
-            let at: Vec<EmpirePlan> =
-                front.iter().filter(|p| p.monuments_used() == m).cloned().collect();
+            let at: Vec<EmpirePlan> = front
+                .iter()
+                .filter(|p| p.monuments_used() == m)
+                .cloned()
+                .collect();
             pick_for_goal(&at[..], g).map(|p| (m, p.clone()))
         })
         .collect();
 
-    println!("\n  MONUMENT LADDER — best plan at each count, for {}", goal_name(g));
+    println!(
+        "\n  MONUMENT LADDER — best plan at each count, for {}",
+        goal_name(g)
+    );
     println!(
         "  {:<5}{:>8}{:>7}{:>8}   {:<22}{:<24}{}",
         "mon", "stars", "SPT", "giants", "margin over previous", "placed at", "strategy"
@@ -591,7 +649,11 @@ fn print_monument_ladder(front: &[EmpirePlan], cities: &[i32], g: Goal, budget: 
             p.spt,
             p.giants,
             margin,
-            if placed.is_empty() { "—".into() } else { placed.join(", ") },
+            if placed.is_empty() {
+                "—".into()
+            } else {
+                placed.join(", ")
+            },
             p.label(),
         );
     }
@@ -607,8 +669,13 @@ fn print_monument_ladder(front: &[EmpirePlan], cities: &[i32], g: Goal, budget: 
 fn print_map(state: &GameState, cities: &[i32], terr: &[Vec<i32>], sc: Scenario) {
     let size = state.settings.size;
     println!("\n  MAP — terrain/resource, and the city each tile is allocated to");
-    println!("  terrain F=field f=forest M=mountain W=water    resource C=crop R=fruit G=game E=metal");
-    println!("  allocation is for '{}', which is what sets each city's territory\n", sc.name);
+    println!(
+        "  terrain F=field f=forest M=mountain W=water    resource C=crop R=fruit G=game E=metal"
+    );
+    println!(
+        "  allocation is for '{}', which is what sets each city's territory\n",
+        sc.name
+    );
     print!("        ");
     for x in 0..size {
         print!("{:>10}", format!("x{x}"));
@@ -639,7 +706,13 @@ fn print_map(state: &GameState, cities: &[i32], terr: &[Vec<i32>], sc: Scenario)
                 None => ".",
             };
             let s = polyfish::functions::get_structure_at(state, idx)
-                .map(|s| if s.structure_type == StructureType::Village { "v" } else { "s" })
+                .map(|s| {
+                    if s.structure_type == StructureType::Village {
+                        "v"
+                    } else {
+                        "s"
+                    }
+                })
                 .unwrap_or(" ");
             let owner = terr
                 .iter()
@@ -654,13 +727,7 @@ fn print_map(state: &GameState, cities: &[i32], terr: &[Vec<i32>], sc: Scenario)
 }
 
 /// The full build for one plan: what to put where, what it costs, what it pays.
-fn print_build_card(
-    state: &GameState,
-    cities: &[i32],
-    plan: &EmpirePlan,
-    monuments: i32,
-    g: Goal,
-) {
+fn print_build_card(state: &GameState, cities: &[i32], plan: &EmpirePlan, monuments: i32, g: Goal) {
     let terr = allocate_value(state, cities, &plan.scenarios, monuments);
 
     println!("\n{}", "=".repeat(112));
@@ -716,7 +783,11 @@ fn print_build_card(
             println!("    Market at {m}, +{} SPT", plan.market_income[ci]);
         }
         for (kind, tiles) in by_kind {
-            let tag = if kind.ends_with(partner_name) { " (feeds the hub)" } else { "" };
+            let tag = if kind.ends_with(partner_name) {
+                " (feeds the hub)"
+            } else {
+                ""
+            };
             println!("    {kind:<12} x{:<3} {tiles:?}{tag}", tiles.len());
         }
     }
@@ -728,7 +799,10 @@ fn print_build_card(
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let get = |flag: &str| -> Option<String> {
-        args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned()
+        args.iter()
+            .position(|a| a == flag)
+            .and_then(|i| args.get(i + 1))
+            .cloned()
     };
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
@@ -864,9 +938,7 @@ fn main() {
     let goal = get("--goal").and_then(|g| {
         let parsed = parse_goal(&g);
         if parsed.is_none() {
-            eprintln!(
-                "unknown --goal '{g}'; use spt | eco | balanced | army | giants"
-            );
+            eprintln!("unknown --goal '{g}'; use spt | eco | balanced | army | giants");
         }
         parsed
     });
@@ -890,7 +962,13 @@ fn main() {
             Lane::Forest
         };
         // Audit against the objective you asked about; balanced when unstated.
-        optimal_report(&state, &cities, monuments, lane, goal.unwrap_or(Goal::Balanced));
+        optimal_report(
+            &state,
+            &cities,
+            monuments,
+            lane,
+            goal.unwrap_or(Goal::Balanced),
+        );
         return;
     }
     if args.iter().any(|a| a == "--verify") {
@@ -925,7 +1003,10 @@ fn main() {
             allocate_value(&state, &cities, &uniform(sc, cities.len()), monuments)
         };
         for (ci, &c) in cities.iter().enumerate() {
-            all.push((c, plan_city(&state, c, &terr[ci], sc, &owned, num_cities, monuments)));
+            all.push((
+                c,
+                plan_city(&state, c, &terr[ci], sc, &owned, num_cities, monuments),
+            ));
         }
     }
 
@@ -937,14 +1018,18 @@ fn main() {
         {
             let mut census: std::collections::BTreeMap<String, i32> = Default::default();
             for idx in get_adjacent_indices(&state, c, 2).into_iter().chain([c]) {
-                let Some(t) = state.tiles.get(&idx) else { continue };
+                let Some(t) = state.tiles.get(&idx) else {
+                    continue;
+                };
                 let r = state
                     .resources
                     .get(&idx)
                     .and_then(|r| r.as_ref())
                     .map(|r| format!("+{:?}", r.resource_type))
                     .unwrap_or_default();
-                *census.entry(format!("{:?}{}", t.terrain_type, r)).or_default() += 1;
+                *census
+                    .entry(format!("{:?}{}", t.terrain_type, r))
+                    .or_default() += 1;
             }
             let line: Vec<String> = census.iter().map(|(k, v)| format!("{k} {v}")).collect();
             println!("  5x5 terrain: {}", line.join(", "));
@@ -952,7 +1037,16 @@ fn main() {
         println!("{}", "=".repeat(104));
         println!(
             "  {:<20}{:>6}{:>7}{:>8}{:>7}{:>8}{:>7}{:>12}{:>10}{:>8}",
-            "scenario", "tiles", "pop", "stars", "level", "giants", "SPT", "★/giant", "hub@lvl", "market"
+            "scenario",
+            "tiles",
+            "pop",
+            "stars",
+            "level",
+            "giants",
+            "SPT",
+            "★/giant",
+            "hub@lvl",
+            "market"
         );
         println!("  {}", "-".repeat(100));
         for (city, p) in all.iter().filter(|(city, _)| *city == c) {
@@ -965,8 +1059,16 @@ fn main() {
             if !p.feasible {
                 println!(
                     "  {:<20}{:>6}{:>7}{:>8}{:>7}{:>8}{:>7}{:>12}{:>10}{:>8}",
-                    p.scenario, p.territory, p.max_pop, "—", p.level, "—", "—",
-                    "unreachable", "—", "—"
+                    p.scenario,
+                    p.territory,
+                    p.max_pop,
+                    "—",
+                    p.level,
+                    "—",
+                    "—",
+                    "unreachable",
+                    "—",
+                    "—"
                 );
                 continue;
             }
@@ -1045,7 +1147,8 @@ fn main() {
                 .iter()
                 .filter(|sc| lane_can_place_hub(&state, &square, sc.lane))
                 .map(|&sc| {
-                    let terr = allocate_value(&state, &cities, &uniform(sc, cities.len()), monuments);
+                    let terr =
+                        allocate_value(&state, &cities, &uniform(sc, cities.len()), monuments);
                     let b = build_out(&state, c, &terr[ci], sc, monuments, Goal::Balanced);
                     (sc, b.stars, b.pop, b.partners)
                 })
@@ -1074,7 +1177,11 @@ fn main() {
                 .map(|&(sc, ..)| sc)
                 .collect();
             dropped += SCENARIOS.len() - keep.len();
-            per_city.push(if keep.is_empty() { SCENARIOS.to_vec() } else { keep });
+            per_city.push(if keep.is_empty() {
+                SCENARIOS.to_vec()
+            } else {
+                keep
+            });
         }
 
         let combos: usize = per_city.iter().map(|v| v.len()).product();
@@ -1101,7 +1208,14 @@ fn main() {
             if !scs.iter().all(|x| x.name == scs[0].name) {
                 let terr = allocate_value(&state, &cities, &scs, monuments);
                 all_plans.extend(enumerate_empire(
-                    &state, &cities, &terr, &scs, &owned, monuments, k_mixed, with_markets,
+                    &state,
+                    &cities,
+                    &terr,
+                    &scs,
+                    &owned,
+                    monuments,
+                    k_mixed,
+                    with_markets,
                 ));
             }
             // Odometer over the per-city scenario lists.
@@ -1139,14 +1253,25 @@ fn main() {
         .iter()
         .filter_map(|&g| {
             let p = pick_for_goal(&front[..], g)?;
-            front.iter().position(|q| std::ptr::eq(q, p)).map(|i| (i, g))
+            front
+                .iter()
+                .position(|q| std::ptr::eq(q, p))
+                .map(|i| (i, g))
         })
         .collect();
 
     println!(
         "  {:<20}{:>8}{:>7}{:>8}{:>7}{:>5}{:>10}  {:<26}{:<22}{}",
-        "scenario", "stars", "pop", "giants", "SPT", "mon", "★/giant", "hubs @ level",
-        "markets (+income)", ""
+        "scenario",
+        "stars",
+        "pop",
+        "giants",
+        "SPT",
+        "mon",
+        "★/giant",
+        "hubs @ level",
+        "markets (+income)",
+        ""
     );
     println!("  {}", "-".repeat(108));
     let mut rows: Vec<(usize, &EmpirePlan)> = front.iter().enumerate().collect();
