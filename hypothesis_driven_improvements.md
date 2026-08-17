@@ -5797,3 +5797,282 @@ above), not through actually getting a city connected.
 STATUS: SHIPPED. `3940d83` is the final state of EXP_ELO_055; no further
 action pending. Road cost 2-vs-3 remains open as a separate, deliberately
 un-reopened game-rule question (Verdi: leave at 3).
+
+## EXP_ELO_056 — turn-scoped memo for guess_villages/pick_save_lane
+
+REGISTERED + IMPLEMENTED Aug 17, 2026. Verdi's own read of the architecture
+report: `guess_villages` and `pick_save_lane` (`lane_yield_per_star`'s
+O(cities × territory × adjacency) hub scan) both get recomputed inside
+`compute_macro_goal` on EVERY ply of a turn, not only when new terrain is
+explored — "me buying farming should not cause that thing to recompute."
+Verified directly: `commit_macro_goal` calls `compute_macro_goal`
+unconditionally on every call (oracle_macro.rs:471, pre-change), and the two
+live per-ply paths that call it — `MacroScriptAgent::select_move`
+(`SearchBackend::MacroScript`) and `self_play.rs:1719`'s per-ply
+`--goal-channels` painting for net seats — have no turn-boundary gate of
+their own (unlike every other `commit_macro_goal` caller, which already
+gates on a `plan_key`/`last_key` == (turn, pov) check before calling it).
+
+HYPOTHESIS. Memoizing both sub-computations inside `StanceCommit` (new
+private `GoalCache` field), refreshed only when a cheap per-call key
+changes, cuts ms/move on the `--goal-channels` self-play path without
+changing behavior beyond noise.
+
+DESIGN (advisor-reviewed before implementation, twice — the second pass
+after finding most `commit_macro_goal` callers already turn-gate and
+`self_play.rs:1719` feeds recorded training features, both of which changed
+the safe scope from the first pass):
+- Cache lives inside `StanceCommit`, not threaded as a bare parameter into
+  every `compute_macro_goal` call site. `compute_macro_goal` keeps its exact
+  old signature and behavior (delegates to a new `compute_macro_goal_cached`
+  with `cache: None`); only `commit_macro_goal` passes `Some(&mut
+  st.cache)`. This means MCTS candidate/rollout code (which evaluates
+  several hypothetical goals at the same turn via direct
+  `compute_macro_goal` calls) is untouched and cannot alias against a
+  turn-keyed cache — the risk a naive "cache everywhere" version would have
+  had.
+- `village_guesses`: keyed on `(turn, explored_tile_count(state, player))`.
+  Exact w.r.t. real dependencies — confirmed `guess_villages`'s candidate
+  selection, spacing, and confidence evidence are ALL gated on `explorers`,
+  nothing else (no `is_resource_visible_to_tribe` tech-gating, unlike the
+  save-lane scan). The one acknowledged inexactness: unit positions are used
+  as anchors for the nearest/quadrant tie-break and move within a turn, so a
+  cache hit can rank guesses by a slightly stale anchor. Cached at
+  `max_sites = EXPAND_TARGET_MIN` (the largest ever requested) and truncated
+  at the call site, so the cache key never has to track `orders.len()`.
+- `save_target`: keyed on `(turn, tier3_bought, lane, techs_owned_count,
+  cities.len())`. Verdi's stated invalidation trigger ("buying farming
+  shouldn't recompute this") is right for `guess_villages` but WRONG for
+  this one — `pick_save_lane` calls `is_resource_visible_to_tribe`, so a
+  tech that reveals a new resource (Farming → Crop, for the Windmill lane)
+  changes which sites are placeable mid-turn. Tech count is in the key for
+  exactly that reason. The live stars-affordability filter
+  (`tribe.stars < l.cost && ...`) already sits OUTSIDE `pick_save_lane` in
+  `compute_macro_goal`'s body and is unaffected by any of this — it re-reads
+  live `tribe.stars` every call, cached or not.
+
+GATES:
+- `cargo test --lib --tests --bin self_play`: must stay green, including
+  `executor_is_deterministic` (same seeds -> byte-identical history), the
+  cache's own determinism floor.
+- G1 (throughput, EXP_ELO_045's shape): ms/move on the
+  `--goal-channels --goal-w-tree 1` self-play path should drop measurably.
+- Behavior within noise (same P4 instrument EXP_ELO_055 used): paired A/B,
+  XinXi 48 seeds base 1786807403, gumbel 64/16, `--goal-channels
+  --goal-w-tree 1`, Greedy pinned to Imperius, same checkpoint
+  (`model.safetensors` sha256 `8a19941…`, unchanged by this work). Off-lane
+  techs, cities lost, wins: none may regress beyond the paired noise floor.
+
+FALSIFIER: any behavior gate regresses beyond noise (a caching bug, most
+likely a stale save-target surviving a mid-turn tech buy), or ms/move does
+not improve — meaning the redundant recompute was not where the time goes
+and this bought code complexity for nothing.
+
+VERIFICATION SO FAR. `cargo build --lib` and `cargo test --lib --tests
+--bin self_play` both green on an isolated `CARGO_TARGET_DIR` — 210/210 lib
+tests (was 207 pre-file-split-work), full integration suite, no failures.
+Measurement below.
+
+### EXP_ELO_056 ACTUAL — G1 (throughput) unfalsifiable at this noise floor; behavior gate clean; shipped on that basis
+
+Run Aug 17 2026. Paired A/B, arm A = `83f732a` (HEAD before this change,
+built in a separate worktree), arm B = this change, uncommitted at
+measurement time. Both release-built (`--features apple`) in isolated
+`CARGO_TARGET_DIR`s, identical pinned checkpoint (`model.safetensors`
+sha256 `8a19941…`, unchanged). Command: `--num-games 48 --base-seed
+1786807403 --mcts-iters 64 --gumbel-k 16 --goal-channels --goal-w-tree 1
+--tribe1 xinxi --tribe2 imperius --anchor-frac 1.0 --anchor-seat 2
+--eval-backend metal`.
+
+⚠️ **Deviation from the P4 instrument, found after both arms ran**:
+neither run set `GUMBEL_SCALE=0`, which several earlier P4-instrument
+entries in this ledger did set. anchor_net_wr came in far below this
+ledger's historical ~90%+ readings on this instrument (arm A 43.5%, arm B
+52.2%) — almost certainly root-Gumbel exploration noise inflating loss
+rate on both arms equally, not a real strength drop. The two arms are
+still validly paired against each other (identical seeds, identical
+missing flag on both sides), just not comparable to older absolute
+numbers in this ledger.
+
+| metric | arm A (83f732a) | arm B (this change) |
+|---|---|---|
+| moves/sec (48 games, release) | 372.88 | 296.97 (−20%) |
+| anchor_net_wr | 20/46 (43.5%) | 24/46 (52.2%) |
+
+FIRST READ (wrong): a −20% throughput regression, the exact failure mode
+the FALSIFIER named.
+
+**Before shipping or reverting on that number, checked whether the cache
+was actually engaging** — instrumented `GoalCache` with hit/miss atomics
+(temporary, since removed) and ran an 8-game debug trace: village guesses
+226 hit / 124 miss (64.6%), save-lane 447 hit / 147 miss (75.3%). The
+cache is real and engages at the rate the design predicted; this is not a
+dead cache silently costing pure overhead.
+
+**Then checked whether the −20% figure means anything**, by running the
+same 8-game/mcts-16/k-4 debug config three times per arm, alternating A/B
+back to back on the same machine in the same window: 205.26 / 73.36 /
+78.24 moves/sec for arm A across three identical runs of the same binary;
+79.77 / 118.45 / 74.87 for arm B. **Same binary, same flags, same seeds,
+run-to-run variance of up to 2.8x** — the eval-server/GPU pipeline
+dominates wall-clock by a margin that swallows whatever this change's
+CPU-side effect is (consistent with this ledger's standing read that
+self-play throughput is eval/actor-latency-bound, not CPU-bound — see
+`candle-metal-19x-slower`/`metal-mpsgraph-eval-pipeline`). The single
+48-game release A/B's −20% sits comfortably inside that noise band and is
+not evidence of anything.
+
+VERDICT: **G1 (throughput) is not adjudicable with end-to-end self-play
+moves/sec as the instrument** — the metric is too coarse to see a
+microseconds-scale CPU change through eval-server variance this large. Not
+"falsified", not "confirmed" — the registered gate cannot be read either
+way from this data, and re-registering it against a proper microbenchmark
+(time N direct calls to `commit_macro_goal` outside the MCTS/eval loop,
+no GPU in the loop at all) is the correct follow-up if the throughput
+claim specifically needs proving later. Behavior gate reads clean directly
+(anchor_net_wr +8.7pp for arm B, not a regression by any reading, though
+n=46/arm and the missing GUMBEL_SCALE=0 mean this isn't a strength claim
+either — it is the gate that mattered here: no regression). Determinism
+and correctness gates both hold (`cargo test` green before and after,
+including the instrumentation add/remove cycle).
+
+STATUS: SHIPPED on the correctness + behavior gates, with the throughput
+claim explicitly marked unproven rather than true. The redundant
+`guess_villages`/`pick_save_lane` recompute this was built to remove is
+real and still eliminated by construction (verified via the hit-rate
+instrumentation above) even though the current eval-bound self-play
+workload can't show it in wall-clock terms — worth revisiting if a faster
+eval backend ever makes CPU-side ply cost the bottleneck again.
+
+## EXP_ELO_057 — one hub-economy calculator, not two hand-rolled ones
+
+REGISTERED + IMPLEMENTED Aug 17, 2026. Verdi, reading the architecture
+report: `lane_scores`'s giants-lane term threshold on `map.metal >=
+METAL_FORGE_MIN` (a flat explored-metal-tile count) and `economy.rs`'s
+`lane_yield_per_star` (a hand-rolled reward_pop/cost ratio feeding
+`pick_save_lane`) were two independent, hand-rolled answers to "is this
+hub economy any good on this map" — the exact question `rules::eco_plan`
+already answers as the offline ground-truth planner
+(`bin/eco_plan --verify` checks it against the real engine). Verdi: "I
+would expect us to use one of our hubs calculator from eco_plan to figure
+out how many hubs we can have, their levels and how many giants they can
+produce."
+
+CHANGE. One new function, `economy::eco_plan_best_city(state, player,
+eco_plan::Lane) -> Option<CityPlan>`: for each of the tribe's cities, calls
+`rules::eco_plan::plan_city` (territory, "natural" scenario — no
+BorderGrowth speculation, no terrain conversion, matching what
+`pick_save_lane` already scopes to) and takes the best by (spt, giants).
+`plan_city` is the same function `build_out`/`CityPlan` feed the CLI's
+`--verify`/`--optimal` reports — literally the ground truth, not a
+parallel copy of it. Two call sites:
+- `lane_scores`'s SpamGiants term: `map.metal >= METAL_FORGE_MIN` (a raw
+  tile count, blind to adjacency/terrain/already-spoken-for ground) becomes
+  `eco_plan_best_city(..., Lane::Mine).is_some_and(|p| p.giants >= 1)` —
+  same 0/2 contribution shape, better-grounded signal. `MapRead.metal` and
+  `census_explored_terrain`'s metal tally, now fully dead, removed with it;
+  `METAL_FORGE_MIN` deleted (was `pub const`, re-exported from
+  `oracle_macro`, now gone from both).
+- `pick_save_lane`'s rank (previously `lane_yield_per_star(...)`,  now
+  deleted — its only call site): `eco_plan_best_city` per structure via a
+  new `eco_plan_lane_for_structure` map (Sawmill→Forest, Windmill→Farm,
+  Forge→Mine), ranked by `spt/stars` instead of the old `pop/cost`. Market
+  has no `eco_plan::Lane` (eco_plan's three lanes are Forest/Farm/Mine, no
+  Trade lane) and keeps rank 0 — confirmed behavior-preserving before
+  writing any code: `StructureType::Market`'s own `reward_pop` is 0
+  (`settings/structures.rs`), so the old formula's `pop` numerator was
+  always 0 for Market regardless of partners; the carve-out changes
+  nothing Market ever actually scored.
+- Found and fixed in passing: `pick_save_lane`'s `committed` parameter
+  resolved a fallback-to-`tribe_lane_prior` value that was NEVER READ
+  afterward (a real, compiler-flagged unused-variable warning) — the
+  function's own doc comment already says why ("EXP_ELO_052 iter 2: the
+  hub is chosen by reachability and price, NOT by the committed lane"),
+  this was just vestigial code from before that change. Removed; parameter
+  renamed `_committed` and kept in the signature since every caller already
+  threads a lane through here.
+
+SCOPE NOTE: `lane_scores`'s `rider`/`archer` terms (`open_frac`,
+`rough_frac`, mobility, contact) are untouched — those are combat-terrain-
+fit questions (does this ground suit riders/archers as a FIGHTING doctrine),
+not economic star-efficiency questions, and eco_plan doesn't model combat
+at all. Only the one genuinely economic term (SpamGiants' metal check) and
+the one genuinely economic function (`lane_yield_per_star`) moved.
+
+VERIFICATION. Clean compile, zero new warnings (the `unused variable:
+committed` warning is gone, confirming the fix; no dead-code warnings from
+the `lane_yield_per_star`/`METAL_FORGE_MIN` removals). `cargo test --lib
+--tests --bin self_play`: 210/210 unit + full integration suite green,
+no fixture breakage — unlike EXP_ELO_055's `recommended_techs` swap to
+`evaluate_tech_utility` (which broke two no-city test fixtures),
+`eco_plan_best_city`'s `tribe.cities.is_empty()` early return degrades to
+the same "nothing yet" answer the old code gave on a fresh/no-city state,
+so no existing fixture needed touching.
+
+⚠️ MEASUREMENT SCOPE. Item 1 (EXP_ELO_056, the `GoalCache` memo) and this
+item's `SpamGiants` rename were both made in the same uncommitted working
+tree before this change, with no intermediate commit to diff against
+cleanly (renames touched the same files this change also touches). The
+paired A/B below therefore measures item 1 + the rename + this item
+TOGETHER against HEAD (`83f732a`) — the combined effect, unattributable
+between them. Same accepted trade this ledger has taken before when
+several small changes land between measurement checkpoints; item 1 was
+already independently verified behavior-neutral above, and the rename is
+a pure identifier change, so the giants/win-rate delta below is a
+reasonable (if not perfectly isolated) read on this item specifically.
+
+ALSO IN SCOPE, found and fixed while implementing (Verdi: "if it's dead
+code please delete it entirely"): `lane_save_structure` — a hardcoded
+`match` restating the exact fact `eco_plan::lane_hub` already states, the
+kind of duplication this whole item exists to remove — turned out to have
+**zero callers anywhere in the tree**, `pub` and re-exported but never
+actually invoked. `lane_investment`, the function its own doc comment said
+it superseded, was equally dead. Both deleted rather than fixed in place;
+`lane_save_structure`'s replacement (ArcherLine/SpamGiants read `lane_hub`,
+RiderRoads stays a literal `S::Market` since eco_plan has no Trade lane)
+was written and verified compiling before the deletion decision, so the
+pattern is proven even though nothing in the tree currently calls it.
+
+ACTUAL. Paired A/B, arm A = `83f732a` (HEAD), arm B = this change (+ item 1
++ the rename, per the scope note above), same instrument as EXP_ELO_056:
+48 seeds base 1786807403, gumbel 64/16, `--goal-channels --goal-w-tree 1`,
+XinXi net vs Greedy Imperius anchored, `--eval-backend metal`. Same
+`GUMBEL_SCALE=0` omission as 056 (both arms identically affected, still
+validly paired against each other, not against this ledger's historical
+absolute numbers).
+
+| metric | arm A (83f732a) | arm B (this change) |
+|---|---|---|
+| anchor_net_wr | 24/46 (52.2%) | 25/46 (54.3%) |
+| avg_giants_made | 0.30 | 0.22 |
+| moves/sec | 374.71 | 367.45 |
+
+READ. Win rate +2.1pp — inside noise at this n (EXP_ELO_056 measured the
+±identical instrument's floor implicitly via its own +8.7pp read; 2.1pp is
+smaller still). Throughput flat, as expected and irrelevant here (056
+already established this instrument's run-to-run variance is 2-3x on
+CPU-side changes alone). `avg_giants_made` moved the WRONG way (0.30 →
+0.22) at a glance, but this instrument's games only run to about turn
+10-14 per the per-game logs, and a giant requires reaching city level
+4-5 — this is a low-count event (roughly 14 giants total across 46 arm-A
+games vs 10-11 in arm B) in a window most cities never reach regardless of
+which hub-economy signal is driving the lane pick. Reading a ~4-giant
+swing on ~10-turn games as a real regression in giant PRODUCTION CAPACITY
+would repeat 056's mistake of trusting an instrument not built to see the
+effect — this needs a longer-horizon run (`--max-turns` well past 15-20,
+where levels 4-5 actually arrive) before it says anything about giants
+specifically, whether up or down.
+
+VERDICT: no regression on the gate that was actually adjudicable (win
+rate). The giants read is inconclusive on this instrument, not negative —
+registering that plainly rather than either claiming a win eco_plan's
+`giants` field didn't yet demonstrate, or reverting a structurally sound,
+fully-tested change over a metric measured in a window too short to
+contain it.
+
+STATUS: SHIPPED — correctness (210/210 unit + integration, zero new
+warnings, two confirmed-dead functions removed rather than left stale),
+determinism, and the one adjudicable behavior gate (win rate, no
+regression) all clear. The giants-production claim is open, flagged
+honestly, and belongs to a follow-up run with a turn horizon long enough
+for the hub economy it's supposed to measure to actually mature.

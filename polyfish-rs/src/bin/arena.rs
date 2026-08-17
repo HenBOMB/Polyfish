@@ -911,7 +911,7 @@ fn play_match(
                     "playstyle_committed_turn": ps.committed_turn,
                     "playstyle_pivots_used": ps.pivots_used,
                     "lane_blocked_turns": ps.lane_blocked_turns,
-                    // oracle_macro::LANE_ORDER: RiderRoads, ArcherLine, ForgeGiants.
+                    // oracle_macro::LANE_ORDER: RiderRoads, ArcherLine, SpamGiants.
                     "playstyle_scores": ps.last_scores,
                     "stance": goal.map(|g| format!("{:?}", g.stance)),
                     "save_target": goal.and_then(|g| g.save_target.as_ref().map(|l| l.cost)),

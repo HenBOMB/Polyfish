@@ -585,7 +585,7 @@ fn dump_turn_state(
         "playstyle_committed_turn": ps.committed_turn,
         "playstyle_pivots_used": ps.pivots_used,
         "lane_blocked_turns": ps.lane_blocked_turns,
-        // In `oracle_macro::LANE_ORDER` order: RiderRoads, ArcherLine, ForgeGiants.
+        // In `oracle_macro::LANE_ORDER` order: RiderRoads, ArcherLine, SpamGiants.
         "playstyle_scores": ps.last_scores,
         "orders": goal.map(|g| {
             g.orders

@@ -27,9 +27,13 @@ pub enum Lane {
     /// Anti-heavy/siege AND push support: range beats high defense, and a
     /// backline wears targets down while warriors advance.
     ArcherLine,
-    /// Metal-rich explored map, no immediate threat: Mining→Smithery,
-    /// forge economy into giants/swordsmen.
-    ForgeGiants,
+    /// Metal-rich explored map, no immediate threat: Mining→Smithery funds
+    /// the giant/swordsman push on this tribe's terrain. Not XinXi-exclusive
+    /// in spirit — any tribe whose territory suits a resource-hub economy
+    /// (XinXi's Mines here; a forest-rich Kickoo or Imperius could run the
+    /// same play through Sawmill) can spam giants, this is just the one
+    /// tech chain currently wired to trigger it.
+    SpamGiants,
 }
 
 /// Reactive overlays — composition adjustments on top of the base doctrine.
@@ -80,7 +84,7 @@ pub struct LaneState {
 /// when the lane is painted into features).
 pub const LANES: usize = 3;
 pub const LANE_ORDER: [Lane; LANES] =
-    [Lane::RiderRoads, Lane::ArcherLine, Lane::ForgeGiants];
+    [Lane::RiderRoads, Lane::ArcherLine, Lane::SpamGiants];
 
 /// The tech chain that *is* the lane — single source of truth, consumed by
 /// `compute_goal_aux`'s recommendations and by the spawn tribe prior.
@@ -89,7 +93,7 @@ pub fn lane_techs(a: Lane) -> &'static [TechnologyType] {
     match a {
         Lane::RiderRoads => &[T::Riding, T::Roads],
         Lane::ArcherLine => &[T::Hunting, T::Archery],
-        Lane::ForgeGiants => &[T::Climbing, T::Mining, T::Smithery],
+        Lane::SpamGiants => &[T::Climbing, T::Mining, T::Smithery],
     }
 }
 
@@ -137,8 +141,6 @@ pub const LANE_SWITCH_TURNS: u8 = 3;
 pub const OPEN_FRAC_RIDER: f32 = 0.45;
 /// Explored-land rough share for archer terrain.
 pub const ROUGH_FRAC_ARCHER: f32 = 0.30;
-/// Explored metal resources for the forge line to be worth committing.
-pub const METAL_FORGE_MIN: i32 = 2;
 /// Peak seen heavy units: fires the catapult overlay AND hard-exits riders.
 pub const SEEN_HEAVY_COUNTER: u32 = 2;
 /// Peak seen cavalry: fires the defender screen.
@@ -150,13 +152,12 @@ pub const SEEN_SQUISHY_KNIGHT: u32 = 4;
 struct MapRead {
     open_frac: f32,
     rough_frac: f32,
-    metal: i32,
 }
 
 fn census_explored_terrain(state: &GameState, player: PlayerId) -> MapRead {
-    use crate::types::{ResourceType as R, TerrainType as T};
-    let (mut open, mut rough, mut land, mut metal) = (0i32, 0i32, 0i32, 0i32);
-    for (idx, tile) in state.tiles.iter() {
+    use crate::types::TerrainType as T;
+    let (mut open, mut rough, mut land) = (0i32, 0i32, 0i32);
+    for (_, tile) in state.tiles.iter() {
         if !tile.explorers.contains(&player) {
             continue;
         }
@@ -171,14 +172,9 @@ fn census_explored_terrain(state: &GameState, player: PlayerId) -> MapRead {
             }
             _ => {}
         }
-        if let Some(Some(r)) = state.resources.get(idx) {
-            if r.resource_type == R::Metal {
-                metal += 1;
-            }
-        }
     }
     let denom = land.max(1) as f32;
-    MapRead { open_frac: open as f32 / denom, rough_frac: rough as f32 / denom, metal }
+    MapRead { open_frac: open as f32 / denom, rough_frac: rough as f32 / denom }
 }
 
 /// Update peak seen-counts from enemy units standing on tiles this player
@@ -269,13 +265,23 @@ fn lane_scores(
         + (map.rough_frac >= ROUGH_FRAC_ARCHER) as i32
         + 2 * contact as i32;
     let has_defend = goal.orders.iter().any(|(k, _)| *k == OrderKind::Defend);
-    let forge = 2 * (map.metal >= METAL_FORGE_MIN) as i32
+    // EXP_ELO_057: whether this territory's best city could produce a giant
+    // off a Mine-fed Forge, per `rules::eco_plan::plan_city` (the same
+    // single source of truth `bin/eco_plan --verify` checks against) —
+    // replacing a flat metal-tile count, which said nothing about whether
+    // those tiles could actually feed a hub (adjacency, terrain, already-
+    // spoken-for ground).
+    let spam_viable = crate::ai::economy::eco_plan_best_city(
+        state, player, crate::rules::eco_plan::Lane::Mine,
+    )
+    .is_some_and(|p| p.giants >= 1);
+    let spam = 2 * spam_viable as i32
         + (map.rough_frac >= ROUGH_FRAC_ARCHER) as i32
         + (!has_defend) as i32;
     [
         (Lane::RiderRoads, rider),
         (Lane::ArcherLine, archer),
-        (Lane::ForgeGiants, forge),
+        (Lane::SpamGiants, spam),
     ]
 }
 
@@ -478,7 +484,7 @@ mod tests {
         for (tribe, tech, lane) in [
             (TribeType::Oumaji, TechnologyType::Riding, Lane::RiderRoads),
             (TribeType::Hoodrick, TechnologyType::Archery, Lane::ArcherLine),
-            (TribeType::XinXi, TechnologyType::Climbing, Lane::ForgeGiants),
+            (TribeType::XinXi, TechnologyType::Climbing, Lane::SpamGiants),
         ] {
             let mut state = state_with_villages(0, &[]);
             {

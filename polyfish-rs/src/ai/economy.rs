@@ -4,7 +4,7 @@
 //! re-exports the public items below so existing `crate::ai::oracle_macro::X`
 //! call sites keep resolving) and by `reward.rs`'s savings-ramp pricing.
 
-use crate::ai::oracle_macro::{tribe_lane_prior, Lane, TIER3_CAP_PER_GAME};
+use crate::ai::oracle_macro::{Lane, TIER3_CAP_PER_GAME};
 use crate::moves::Move;
 use crate::states::{GameState, PlayerId};
 use crate::types::{MoveType, TechnologyType};
@@ -34,37 +34,6 @@ pub struct SaveTarget {
 /// worth banking for — a 1-partner Windmill is one pop and affordable out of
 /// pocket, so it never justifies holding stars.
 pub const SAVE_MIN_PARTNERS: i32 = 1;
-
-/// EXP_ELO_051: how far this tribe has already walked toward `tech` — the
-/// number of techs in its prerequisite chain it already owns.
-///
-/// This is what makes the COMMITTED lane, not the cheapest sticker price,
-/// decide what to bank for. Verdi: "we should be saving towards a lane if
-/// that is what T1 says … the best computed path for that giant spam is
-/// forges, therefore these things should act as the justification to save
-/// for and buy forge." A tribe holding Climbing+Mining is walking the Forge
-/// lane whether or not a Windmill happens to be five stars cheaper.
-///
-/// Superseded by `lane_save_structure` (EXP_ELO_052, the lane is now stated
-/// directly instead of inferred) but kept — some callers may still want the
-/// raw investment count rather than the direct mapping.
-pub fn lane_investment(tribe: &crate::states::TribeState, tech: TechnologyType) -> i32 {
-    use crate::settings::technology::{get_technology_setting, has_technology};
-    let mut owned = 0;
-    let mut cur = Some(tech);
-    let mut guard = 0;
-    while let Some(t) = cur {
-        guard += 1;
-        if guard > 16 {
-            break;
-        }
-        if has_technology(&tribe.tech_vanilla, t) {
-            owned += 1;
-        }
-        cur = get_technology_setting(t).requires;
-    }
-    owned
-}
 
 /// Partners a hub site would have once the lane's OWN prerequisite builds go
 /// up: existing partner structures plus adjacent owned tiles that could take
@@ -126,103 +95,54 @@ const SAVE_LANES: [(crate::types::StructureType, TechnologyType); 4] = [
     (crate::types::StructureType::Market, TechnologyType::Trade),
 ];
 
-/// EXP_ELO_053: what a hub lane is actually worth ON THIS MAP, as population
-/// per star. This is the pareto ratio the planner was missing.
-///
-/// `lane_investment` ranked lanes by how much of their TECH CHAIN the tribe
-/// already owned, which is blind to terrain: forest-rich Imperius spawns with
-/// Organization, a Construction prerequisite, and so banked for a **Windmill**
-/// — a hub that eats Farms, which need a Crop resource the map does not have.
-/// Verdi: "It's not that good of a tech since imperius is mostly forest rich
-/// rather than crop rich. This is a failure of our computation."
-///
-/// Yield is the engine's own: a hub pays `reward_pop × partner_count`, and
-/// each partner pays its own `reward_pop`. Cost is the full prerequisite
-/// chain plus the hub plus the partners still to build. Sites are scored
-/// individually because only ADJACENT partners feed a hub.
-fn lane_yield_per_star(
-    state: &GameState,
-    player: PlayerId,
-    hub: crate::types::StructureType,
-    tech: TechnologyType,
-) -> f32 {
-    use crate::settings::structures::get_structure_setting;
-    let Some(tribe) = state.tribes.get(&player) else { return 0.0 };
-    let hs = get_structure_setting(hub);
-    let Some(hub_cost) = hs.cost else { return 0.0 };
-    let mut best = 0.0f32;
-    for city in &tribe.cities {
-        for &site in &city._territory {
-            let Some(tile) = state.tiles.get(&site) else { continue };
-            if !hs.terrain_types.contains(&tile.terrain_type) || tile.is_algae() {
-                continue;
-            }
-            if crate::functions::get_structure_at(state, site).is_some() {
-                continue;
-            }
-            // Adjacent ground that already feeds, or could.
-            let mut pop = 0;
-            let mut cost = hub_cost;
-            let mut partners = 0;
-            for adj in crate::functions::get_adjacent_indices(state, site, 1) {
-                let Some(t) = state.tiles.get(&adj) else { continue };
-                if t.owner != player {
-                    continue;
-                }
-                if let Some(st) = crate::functions::get_structure_at(state, adj) {
-                    if hs.adjacent_types.contains(&st.structure_type) {
-                        partners += 1; // already standing: free
-                    }
-                    continue;
-                }
-                // Buildable partner on this ground?
-                if let Some(p) = hs.adjacent_types.iter().find(|p| {
-                    let ps = get_structure_setting(**p);
-                    ps.terrain_types.contains(&t.terrain_type)
-                        && ps.resource_type.map_or(true, |r| {
-                            state.resources.get(&adj).and_then(|x| x.as_ref())
-                                .map_or(false, |res| res.resource_type == r)
-                                && crate::functions::is_resource_visible_to_tribe(
-                                    state, r, player, Some(adj))
-                        })
-                }) {
-                    let ps = get_structure_setting(*p);
-                    partners += 1;
-                    pop += ps.reward_pop;
-                    cost += ps.cost.unwrap_or(0);
-                }
-            }
-            if partners == 0 {
-                continue;
-            }
-            pop += hs.reward_pop * partners;
-            let total = cost + tech_chain_cost(tribe, tech);
-            let ratio = pop as f32 / total.max(1) as f32;
-            if ratio > best {
-                best = ratio;
-            }
-        }
+/// The `rules::eco_plan` lane a save-lane structure belongs to, or `None` for
+/// Market — eco_plan has no Trade/Market lane (its 3 lanes are Forest/Farm/
+/// Mine, keyed by which resource-hub they build), so Market keeps its own
+/// path in `pick_save_lane` rather than a fabricated mapping.
+fn eco_plan_lane_for_structure(s: crate::types::StructureType) -> Option<crate::rules::eco_plan::Lane> {
+    use crate::rules::eco_plan::Lane as EcoLane;
+    use crate::types::StructureType as S;
+    match s {
+        S::Sawmill => Some(EcoLane::Forest),
+        S::Windmill => Some(EcoLane::Farm),
+        S::Forge => Some(EcoLane::Mine),
+        _ => None,
     }
-    best
 }
 
-/// EXP_ELO_052: the economic lane each Tier-1 playstyle banks toward. This
-/// is the "T1 says giants, so save for forges" mapping stated directly,
-/// replacing the `lane_investment` PROXY that inferred it from owned techs.
-/// The proxy is exact for XinXi (Climbing is a Smithery prerequisite) and
-/// inverts for Imperius, which spawns with Organization and therefore banked
-/// for a Windmill on a RiderRoads seat — gating its own first tech out.
-///
-/// RiderRoads maps to the Market, whose chain is Trade ← Roads ← Riding: the
-/// savings plan then names Riding as its next step, which is exactly the
-/// lane's opening move.
-pub fn lane_save_structure(a: Lane) -> crate::types::StructureType {
-    use crate::types::StructureType as S;
-    match a {
-        Lane::RiderRoads => S::Market,
-        Lane::ArcherLine => S::Sawmill,
-        Lane::ForgeGiants => S::Forge,
+/// EXP_ELO_057: the tribe's best-city reading for one `rules::eco_plan` hub
+/// lane — `plan_city`, the same single source of truth `bin/eco_plan --verify`
+/// checks against, replacing hand-rolled terrain/yield estimates that used to
+/// answer this question independently in two places (`lane_scores`'s giants
+/// term and this file's old `lane_yield_per_star`). The "natural" scenario
+/// (no BorderGrowth speculation, no terrain conversion) matches what
+/// `pick_save_lane` already scopes to — ground the tribe controls right now.
+/// `None` with no cities yet: nothing to plan against.
+pub fn eco_plan_best_city(
+    state: &GameState,
+    player: PlayerId,
+    lane: crate::rules::eco_plan::Lane,
+) -> Option<crate::rules::eco_plan::CityPlan> {
+    use crate::rules::eco_plan::{plan_city, SCENARIOS};
+    let tribe = state.tribes.get(&player)?;
+    if tribe.cities.is_empty() {
+        return None;
     }
+    let sc = *SCENARIOS
+        .iter()
+        .find(|s| s.lane == lane && !s.border_growth && !s.convert)?;
+    let owned: std::collections::HashSet<TechnologyType> = tribe
+        .tech_vanilla
+        .iter()
+        .filter(|t| t.discovered)
+        .map(|t| t.tech_type)
+        .collect();
+    let num_cities = tribe.cities.len() as i32;
+    tribe
+        .cities
+        .iter()
+        .map(|c| plan_city(state, c.idx, &c._territory, sc, &owned, num_cities, 0))
+        .max_by(|a, b| a.spt.cmp(&b.spt).then(a.giants.cmp(&b.giants)))
 }
 
 /// v7: full star cost of REACHING `tech` from what this tribe owns — every
@@ -266,12 +186,12 @@ pub fn pick_save_lane(
     state: &GameState,
     player: PlayerId,
     tier3_bought: u32,
-    committed: Option<Lane>,
+    // Unused since EXP_ELO_052 iter 2 (see the note below the reachability
+    // check): the hub is chosen by reachability and price, not the committed
+    // lane. Kept in the signature — every caller already threads a lane
+    // through here and `SaveTarget` still names the structure it picked.
+    _committed: Option<Lane>,
 ) -> Option<SaveTarget> {
-    // Before the selector has committed, the spawn tribe tech already says
-    // which lane this tribe is born into — so the plan is right from ply one
-    // and every caller resolves it identically.
-    let committed = committed.or_else(|| tribe_lane_prior(state, player));
     use crate::settings::structures::get_structure_setting;
     use crate::settings::technology::has_technology;
     use crate::types::StructureType;
@@ -347,9 +267,18 @@ pub fn pick_save_lane(
         if plan.cost > tribe.stars + spt * SAVE_MAX_TURNS {
             continue;
         }
-        // Pareto: population per star ON THIS MAP. Scaled to an integer so
-        // the existing tie-break on price still applies between equals.
-        let rank = (lane_yield_per_star(state, player, s_type, tech) * 1000.0) as i32;
+        // Pareto: star-per-turn yield ON THIS MAP, from `rules::eco_plan`'s
+        // own best-city reading — Market has no eco_plan lane and keeps its
+        // old rank of 0 (its hub pays stars, not `reward_pop`, so `pop` was
+        // always 0 under the pre-eco_plan formula too; this is not a
+        // behavior change for Market). Scaled to an integer so the existing
+        // tie-break on price still applies between equals.
+        let rank = match eco_plan_lane_for_structure(s_type) {
+            Some(eco_lane) => eco_plan_best_city(state, player, eco_lane)
+                .filter(|p| p.stars > 0)
+                .map_or(0, |p| ((p.spt as f32 / p.stars as f32) * 1000.0) as i32),
+            None => 0,
+        };
         let better = best.as_ref().map_or(true, |(b, bi): &(SaveTarget, i32)| {
             rank > *bi || (rank == *bi && plan.cost < b.cost)
         });

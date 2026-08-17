@@ -145,7 +145,7 @@ pub fn compute_goal_aux(
             match a {
                 Lane::RiderRoads => preferred_units.push(U::Rider),
                 Lane::ArcherLine => preferred_units.push(U::Archer),
-                Lane::ForgeGiants => {
+                Lane::SpamGiants => {
                     preferred_units.push(U::Swordsman);
                     preferred_units.push(U::Giant);
                 }

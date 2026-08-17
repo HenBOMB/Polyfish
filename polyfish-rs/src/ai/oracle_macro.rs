@@ -416,11 +416,16 @@ pub fn stance_pressure(state: &GameState, player: PlayerId) -> StancePressure {
 pub const STANCE_SWITCH_TURNS: u8 = 2;
 
 /// Moved to `ai::economy` (Aug 2026 taxonomy reorg): SAVE_MIN_PARTNERS,
-/// lane_investment, potential_partner_count, SAVE_MAX_TURNS,
-/// SAVE_MAX_PLACEMENTS, SAVE_LANES, lane_yield_per_star, lane_save_structure,
+/// potential_partner_count, SAVE_MAX_TURNS, SAVE_MAX_PLACEMENTS, SAVE_LANES,
 /// tech_chain_cost, pick_save_lane, advances_save_plan, recommended_techs.
+/// `lane_yield_per_star` (its own hand-rolled yield estimate) and
+/// `lane_save_structure`/`lane_investment` (a hardcoded lane→structure match
+/// and its superseded proxy, both dead code — zero callers anywhere in the
+/// tree) retired EXP_ELO_057: hub-structure lookups now go through
+/// `eco_plan::lane_hub`, and yield through `eco_plan_best_city`, which reads
+/// `rules::eco_plan::plan_city` directly instead of restating its answer.
 pub use crate::ai::economy::{
-    advances_save_plan, lane_investment, lane_save_structure, recommended_techs, pick_save_lane,
+    advances_save_plan, recommended_techs, pick_save_lane,
     tech_chain_cost, SAVE_MAX_PLACEMENTS, SAVE_MAX_TURNS, SAVE_MIN_PARTNERS,
 };
 
@@ -578,7 +583,7 @@ pub use crate::ai::search::lane::{
     lane_techs, observe_lane_state, select_lane, tribe_lane_prior, update_lane_state,
     Lane, LaneState, Overlays, LANE_ENTRY_MIN, LANE_SWITCH_MARGIN, LANE_SWITCH_TURNS,
     DWELL_MIN, HEAVY_DEFENSE_MIN, LANES, LANE_BLOCKED_TRIGGER, LANE_ORDER, MAX_PIVOTS,
-    METAL_FORGE_MIN, OPEN_FRAC_RIDER, ROUGH_FRAC_ARCHER, SEEN_CAVALRY_SCREEN, SEEN_HEAVY_COUNTER,
+    OPEN_FRAC_RIDER, ROUGH_FRAC_ARCHER, SEEN_CAVALRY_SCREEN, SEEN_HEAVY_COUNTER,
     SEEN_SQUISHY_KNIGHT, SQUISHY_DEFENSE_MAX, TRIBE_PRIOR_BONUS,
 };
 pub use crate::ai::search::goal_aux::{
