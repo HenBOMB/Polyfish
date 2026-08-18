@@ -244,6 +244,50 @@ grep -n 'DETACH_VALUE_TRUNK' polyfish-rs/run_training_loop.sh
 grep -n -i 'detach' hypothesis_driven_improvements.md   # → no verdict recorded
 ```
 
+#### What the switch actually does
+
+The net is a shared trunk with two heads. The trunk reads the board; the policy
+head picks moves from it; the value head answers "am I winning" from it. Normally
+both heads push gradient back into the trunk, so the trunk learns to represent
+what both need. `DETACH_VALUE_TRUNK=1` cuts the value head's gradient path: the
+head still trains, but only on whatever representation the trunk built for
+move-picking. It cannot cause the trunk to represent winning-ness at all.
+
+This matters because MCTS queries the value head at every leaf of every search.
+A value head that is a passenger on policy features makes the search weak no
+matter how good the policy is.
+
+The defensible reason to have set it: two heads sharing a trunk can genuinely
+fight, and a noisy value signal can degrade the policy. Detaching isolates that.
+
+#### Recommendation — default it off, but only after A2b
+
+Remove `export DETACH_VALUE_TRUNK=1` from `run_training_loop.sh` and let the
+value gradient reach the trunk. **Sequence it after the A2b label fix, not
+before.**
+
+The reasoning is that A2b changes the prior on why the switch exists. Detaching
+only pays if value gradient was actively harming the policy — and A2b now shows
+the value label is built on a quantity that is ~8pp worse than an available
+alternative at every turn, and that actively degrades in the late game. A
+plausible history is: the value signal genuinely was harmful, someone correctly
+observed the policy suffering, and detaching treated the symptom rather than the
+cause. If that is what happened, removing the detach *before* fixing the label
+would reproduce the original harm and look like a failed experiment.
+
+Fix the label first, then the value gradient is far more likely to help than
+hurt, and the arm becomes worth running:
+
+1. Land A2b (reweight the label toward army value).
+2. Land P1/P2/M1 so the gauge produces comparable readings.
+3. Run the arm both ways at equal budget on a fixed seed set.
+4. Record the result in `hypothesis_driven_improvements.md` as the verdict that
+   was never written.
+
+Do not remove the export as a standalone change before those steps — with the
+current label there is a real chance it measures worse and gets wrongly
+re-litigated as "value gradient hurts the trunk".
+
 ### A2 · Two reward definitions disagree about zero-sum
 **Status:** OPEN · **CONFIRMED** · Effort: hours
 
@@ -585,9 +629,12 @@ until 1–4 are done, because until then there is no working instrument.
    1783556259).
 5. **Re-baseline.** With a working, seeded, aligned gauge, take a fresh reading.
    The "cannot beat its own greedy anchor" premise may not survive it.
-6. **A2b**, then A1 — the label is measured against the wrong quantity in
-   Domination; settle that before tuning A2's relative/absolute constant, and run
-   the detach arm both ways now that a gauge exists to judge it.
+6. **A2b, then A1, in that order.** Reweight the value label toward army value —
+   measured at ~8pp better than score at every turn of a Domination game. Settle
+   that before tuning A2's relative/absolute constant, and before removing the
+   detach export: with the current label, removing it early risks reproducing the
+   harm it was probably introduced to mask. Once the label is fixed and a gauge
+   exists, run the detach arm both ways and record the verdict.
 7. **T1 + T2** — parity test and an end-to-end smoke run, so this class of break
    cannot recur silently.
 8. **R1**, then R2/R3 — architecture work, scheduled against the new baseline.
