@@ -657,7 +657,7 @@ impl MetalPolyZeroNet {
             .reshape(&v_max, &[b, FILTERS], None)
             .expect("forward: reshape v_max"); // [B, FILTERS]
         let v_feat = graph
-            .concatenate(&[&v_mean, &v_max], 1, None)
+            .concat_pair(&v_mean, &v_max, 1, None)
             .expect("forward: cat v_mean v_max"); // [B, 2*FILTERS]
         let v_latent = self.linear(&graph, &v_feat, "v_fc1");
         let v_latent = graph.relu(&v_latent, None).expect("forward: relu v_fc1");

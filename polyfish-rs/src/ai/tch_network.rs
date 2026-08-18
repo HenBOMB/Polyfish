@@ -49,7 +49,7 @@ impl TchPolyZeroNet {
         let named = Tensor::read_safetensors(path)?;
         
         // Reject older checkpoints that used BatchNorm to avoid subtle eval bugs
-        if named.keys().any(|k| k.contains("running_mean")) {
+        if named.iter().any(|(k, _)| k.contains("running_mean")) {
             anyhow::bail!("Rejecting BatchNorm-era checkpoint (found running_mean)");
         }
 
