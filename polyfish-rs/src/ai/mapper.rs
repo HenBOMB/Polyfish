@@ -76,11 +76,38 @@ const TECH_SLOTS: usize = repr_variant_count!(
     TechnologyType,
     TechnologyType::Basic | TechnologyType::BeyondComprehension
 );
-// The ability block is full: 21 variants in 21 slots. `ability_slot` is
-// exhaustive, so a new AbilityType fails to build there instead of silently
-// aliasing onto the reward block.
+// The ability block is full: 21 variants in 21 slots, with no free slot on
+// either side of it. `ability_slot` is exhaustive, so a new AbilityType fails
+// to build there rather than silently aliasing onto the reward block — but
+// that only forces you to *write* an arm, and writing `=> 21` would compile
+// and land the new ability on `OFFSET_REWARDS`. The const block below checks
+// the mapping itself rather than this count, so that case fails to build too.
+// Growing the block at all means re-laying-out the option head, which
+// invalidates every trained `move_option` slot; treat it as a checkpoint
+// migration, not an edit.
 const ABILITY_SLOTS: usize = 21;
 const REWARD_SLOTS: usize = 8;
+
+// Every ability lands inside the ability block, and no two share a slot. This
+// checks `ability_slot` itself; `ABILITY_SLOTS` below is a hardcoded count and
+// asserting on it says nothing about a newly added variant.
+const _: () = {
+    let mut seen = [false; MAX_ABILITIES];
+    let mut repr = i8::MIN;
+    loop {
+        if let Some(a) = AbilityType::from_repr(repr) {
+            if let Some(slot) = ability_slot(a) {
+                assert!(slot < MAX_ABILITIES, "ability slot escapes the ability block");
+                assert!(!seen[slot], "two AbilityTypes share an option slot");
+                seen[slot] = true;
+            }
+        }
+        if repr == i8::MAX {
+            break;
+        }
+        repr += 1;
+    }
+};
 
 // Every family must fit between its own offset and the next one.
 const _: () = {

@@ -344,10 +344,7 @@ async fn auto_step(
         (None, trace_val)
     } else {
         use polyfish::ai::heuristic_mcts::HeuristicMctsAgent;
-        let analysis_agent = HeuristicMctsAgent {
-            iterations: params.iterations,
-            exploration_constant: 0.1,
-        };
+        let analysis_agent = HeuristicMctsAgent::with_exploration(params.iterations, 0.1);
         let (bm, h_analysis) = analysis_agent.select_move_with_analysis(&mut game);
         let mut val = serde_json::to_value(&h_analysis).unwrap_or(serde_json::Value::Null);
         if let serde_json::Value::Object(ref mut map) = val {
@@ -1037,10 +1034,7 @@ async fn get_trainer_hint(
     } else {
         // 2. Fallback to Heuristic MCTS
         use polyfish::ai::heuristic_mcts::HeuristicMctsAgent;
-        let agent = HeuristicMctsAgent {
-            iterations: params.iterations,
-            exploration_constant: 0.4,
-        };
+        let agent = HeuristicMctsAgent::with_exploration(params.iterations, 0.4);
         let (bm, h_analysis) = agent.select_move_with_analysis(&mut game);
         let mut val = serde_json::to_value(&h_analysis).unwrap_or(serde_json::Value::Null);
         if let serde_json::Value::Object(ref mut map) = val {

@@ -143,3 +143,81 @@ fn agents_do_not_share_a_stream_by_default() {
     }
     assert!(seen.len() > 1, "freshly constructed agents all searched identically");
 }
+
+/// The other three search agents own their streams too. `gumbel_mcts` is what
+/// training runs, but `heuristic_mcts` supplies the greedy teacher (so its
+/// randomness reaches training data) and `RandomAgent` is the ladder's Elo-0
+/// floor, so a gauge reading depends on it.
+mod other_agents {
+    use super::make_game;
+    use polyfish::ai::heuristic_mcts::{GreedyHeuristicAgent, HeuristicMctsAgent, RandomAgent};
+
+    fn play_random(seed: u64, plies: usize) -> Vec<String> {
+        let mut game = make_game(4242);
+        let agent = RandomAgent::new().with_search_seed(seed);
+        let mut out = Vec::new();
+        for _ in 0..plies {
+            match agent.select_move(&mut game) {
+                Some(m) => {
+                    out.push(format!("{m:?}"));
+                    if game.play_move(m.as_ref()).is_none() {
+                        break;
+                    }
+                }
+                None => break,
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn random_agent_replays_under_a_seed() {
+        let a = play_random(7, 20);
+        assert!(a.len() > 3, "too few moves to prove anything");
+        assert_eq!(a, play_random(7, 20));
+    }
+
+    #[test]
+    fn random_agent_actually_uses_its_seed() {
+        let seen: std::collections::HashSet<_> = (0..12).map(|s| play_random(s, 20)).collect();
+        assert!(seen.len() > 1, "every seed played the same game");
+    }
+
+    #[test]
+    fn heuristic_agent_replays_under_a_seed() {
+        let run = |seed: u64| {
+            let mut game = make_game(4242);
+            let agent = HeuristicMctsAgent::new(24).with_search_seed(seed);
+            (0..4)
+                .filter_map(|_| {
+                    let m = agent.select_move(&mut game)?;
+                    let s = format!("{m:?}");
+                    game.play_move(m.as_ref())?;
+                    Some(s)
+                })
+                .collect::<Vec<_>>()
+        };
+        let a = run(99);
+        assert!(!a.is_empty());
+        assert_eq!(a, run(99));
+    }
+
+    #[test]
+    fn greedy_teacher_replays_under_a_seed() {
+        let run = |seed: u64| {
+            let mut game = make_game(4242);
+            let agent = GreedyHeuristicAgent::new().with_search_seed(seed);
+            (0..6)
+                .filter_map(|_| {
+                    let m = agent.select_move(&mut game)?;
+                    let s = format!("{m:?}");
+                    game.play_move(m.as_ref())?;
+                    Some(s)
+                })
+                .collect::<Vec<_>>()
+        };
+        let a = run(5);
+        assert!(!a.is_empty());
+        assert_eq!(a, run(5));
+    }
+}

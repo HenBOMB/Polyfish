@@ -772,3 +772,33 @@ mod tests {
         assert!(get_node_by_path(&root, &[0, 1]).is_none());
     }
 }
+
+/// A fresh RNG stream for a search agent.
+///
+/// Agents own their randomness rather than drawing from the thread-local
+/// generator, so a search can be replayed — nothing could pin search behaviour
+/// in a test, and no search experiment was reproducible (audit T3).
+///
+/// `POLYFISH_SEARCH_SEED` pins the base. Each agent still gets a *distinct*
+/// stream (base + a process-wide counter): a seed shared across actors would
+/// give every actor identical noise and collapse self-play to one game played N
+/// times. That makes a single-actor run reproducible; with many actors the
+/// per-agent seeds are deterministic but which agent runs which game is not, so
+/// use each agent's `with_search_seed` when a test needs an exact stream.
+pub fn next_search_rng() -> rand::rngs::SmallRng {
+    use rand::SeedableRng;
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    match std::env::var("POLYFISH_SEARCH_SEED")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+    {
+        Some(base) => {
+            let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // Odd multiplier so successive agents land far apart in the stream.
+            rand::rngs::SmallRng::seed_from_u64(
+                base.wrapping_add(n.wrapping_mul(0x9E37_79B9_7F4A_7C15)),
+            )
+        }
+        None => rand::rngs::SmallRng::from_os_rng(),
+    }
+}

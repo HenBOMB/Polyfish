@@ -1059,6 +1059,15 @@ in favour of value-label composition, decisive-game rate and policy KL.
 
 ALSO FIXED: `train.py` has a test suite, and search is reproducible.
 
+**The mapper's ability-block guard was vacuous.** The audit claimed a 23rd
+`AbilityType` would fail the build. `ability_slot`'s match is exhaustive, so a
+new variant does force you to write an arm — but writing `=> 21` compiled fine
+and landed the ability on `OFFSET_REWARDS`, because `ABILITY_SLOTS` is a
+hardcoded `21` and the assertion was against that count, not against the
+mapping. A const block now walks `AbilityType::from_repr` and checks each slot
+lands inside the block and that no two share one; both arms of it were verified
+to fail the build.
+
 `tests/test_train.py` and `tests/test_ladder.py` (stdlib `unittest`, no new
 pinned dependency; `scripts/run_python_tests.sh`, CI job `python-tests`) cover
 the helpers whose failure mode is silent — the holdout split's partition and
@@ -1067,9 +1076,14 @@ group action, and the Rust↔Python width contract read from the Python side,
 which runs without torch.
 
 **Search reproducibility took two fixes, and the second was the real one.**
-`GumbelMctsAgent` now owns a seeded `SmallRng` (`with_search_seed`, or
-`POLYFISH_SEARCH_SEED` for a pinned base stream that still differs per agent —
-a shared stream across actors would make every actor play the same game). That
+Every search agent now owns a seeded `SmallRng` — `GumbelMctsAgent`,
+`ZeroMctsAgent`, `HeuristicMctsAgent`, `GreedyHeuristicAgent` and `RandomAgent`,
+via `mcts_common::next_search_rng` and a per-agent `with_search_seed`, or
+`POLYFISH_SEARCH_SEED` for a pinned base stream that still differs per agent (a
+shared stream across actors would make every actor play the same game). The last
+three matter beyond tests: the heuristic agents are the greedy teacher, so their
+randomness reaches training data, and `RandomAgent` is the ladder's Elo-0 floor.
+That
 alone did not make a search replayable: `generate_legal_moves` returned the same
 moves in a **different order** on every run. Two containers in movegen were
 iterated to emit moves — `compute_reachable_tiles`'s `HashMap` for step targets

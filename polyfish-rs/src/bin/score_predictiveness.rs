@@ -89,7 +89,7 @@ fn play_game(seed: i64, max_turns: i32, gamemode: u8, max_moves: usize) -> GameO
     game.state.settings.max_turns = max_turns;
     game.post_load();
 
-    let agent = GreedyHeuristicAgent;
+    let agent = GreedyHeuristicAgent::new();
     let mut snapshots = vec![snapshot(&game)];
     let mut last_turn = game.state.settings.turn;
     let mut moves = 0usize;

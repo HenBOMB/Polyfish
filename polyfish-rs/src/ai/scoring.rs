@@ -1166,7 +1166,7 @@ mod tests {
         const SAMPLE_TURN: i32 = 12;
         const CITY_TURN: i32 = 13;
 
-        let agent = GreedyHeuristicAgent;
+        let agent = GreedyHeuristicAgent::new();
         let mut n = 0.0f32;
         let (mut cities12, mut units12, mut army12, mut techs12, mut spt12) =
             (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);

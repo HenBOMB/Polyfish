@@ -45,7 +45,6 @@ use rand::rngs::SmallRng;
 use rand::SeedableRng;
 use rand_distr::Gumbel;
 use std::cell::{Cell, RefCell};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 pub struct GumbelMctsAgent<'a> {
     pub evaluator: &'a Evaluator,
@@ -112,28 +111,6 @@ pub struct GumbelMctsAgent<'a> {
     rng: RefCell<SmallRng>,
 }
 
-/// Seed for a freshly constructed agent.
-///
-/// `POLYFISH_SEARCH_SEED` pins the stream. Each agent still takes a *distinct*
-/// stream (base + a process-wide counter) — a shared seed across actors would
-/// give every actor identical Gumbel noise and collapse self-play to one game
-/// played N times. That makes a single-actor run reproducible; with many actors
-/// the per-agent seeds are deterministic but which agent runs which game is
-/// not, so use `with_search_seed` when a test needs an exact stream.
-fn next_search_rng() -> SmallRng {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    match std::env::var("POLYFISH_SEARCH_SEED")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-    {
-        Some(base) => {
-            let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-            // Odd multiplier so successive agents land far apart in the stream.
-            SmallRng::seed_from_u64(base.wrapping_add(n.wrapping_mul(0x9E37_79B9_7F4A_7C15)))
-        }
-        None => SmallRng::from_os_rng(),
-    }
-}
 
 struct GumbelNode {
     visits: f32,
@@ -249,7 +226,7 @@ impl<'a> GumbelMctsAgent<'a> {
             trace: RefCell::new(None),
             last_root_value: None,
             last_search_kl: None,
-            rng: RefCell::new(next_search_rng()),
+            rng: RefCell::new(mcts_common::next_search_rng()),
         }
     }
 

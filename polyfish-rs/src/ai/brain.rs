@@ -224,12 +224,12 @@ pub fn make_search_agent(
             crate::ai::heuristic_mcts::HeuristicMctsAgent::new(iterations),
         ),
         SearchBackend::Greedy => {
-            SearchAgent::Greedy(crate::ai::heuristic_mcts::GreedyHeuristicAgent)
+            SearchAgent::Greedy(crate::ai::heuristic_mcts::GreedyHeuristicAgent::new())
         }
         SearchBackend::StateDiffGreedy => {
             SearchAgent::StateDiffGreedy(crate::ai::heuristic_mcts::StateDiffGreedyAgent)
         }
-        SearchBackend::Random => SearchAgent::Random(crate::ai::heuristic_mcts::RandomAgent),
+        SearchBackend::Random => SearchAgent::Random(crate::ai::heuristic_mcts::RandomAgent::new()),
     }
 }
 

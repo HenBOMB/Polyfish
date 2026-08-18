@@ -481,6 +481,7 @@ pub enum SkillType {
     Deserialize_repr,
     Default,
     strum_macros::EnumIter,
+    strum_macros::FromRepr,
 )]
 #[repr(i8)]
 pub enum AbilityType {
