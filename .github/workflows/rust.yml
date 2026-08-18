@@ -56,6 +56,38 @@ jobs:
         working-directory: ./polyfish-rs
         run: python3 scripts/check_cli_contract.py --no-build
 
+  # The Python half of the pipeline: ladder.py owns every strength verdict and
+  # train.py is the trainer the loop actually runs. Neither had a test before
+  # (audit T3). Runs twice on purpose - bare python3 first, so the suite is
+  # proven to work on a box with no torch, then with the pinned wheel so the
+  # torch-dependent cases (holdout split, spatial padding, D4) actually execute.
+  python-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./polyfish-rs
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Suite without torch (torch-dependent cases skip)
+        run: ./scripts/run_python_tests.sh
+
+      - name: Install pinned Python deps
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements.txt
+          TORCH=$(sed -n 's/^# POLYFISH_TORCH_VERSION=//p' requirements.txt)
+          .venv/bin/pip install "torch==$TORCH" --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Full suite
+        run: ./scripts/run_python_tests.sh
+
   lint:
     runs-on: ubuntu-latest
     defaults:

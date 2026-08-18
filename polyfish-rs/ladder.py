@@ -19,6 +19,10 @@ FREEZE_WR = 0.80
 PLATEAU_WINDOW = 8  # gauge readings vs the same anchor (= 80 iters at interval 10)
 PLATEAU_STRIKES = 2  # consecutive flagged readings before the loop stops
 CI_Z = 1.96  # 95%
+# The effect size the registered experiment bars are written against (EXP_ELO_002
+# used +8pp). Readings whose own resolution is coarser than this get flagged:
+# a 64-game reading resolves to ~+/-11pp and cannot adjudicate +8pp on its own.
+MIN_DETECTABLE_EFFECT = float(os.environ.get("GAUGE_MIN_EFFECT", "0.08"))
 
 
 def _now():
@@ -62,6 +66,66 @@ def _wilson(win_rate, games, z=CI_Z):
     center = (p + z * z / (2.0 * games)) / d
     half = z * math.sqrt(p * (1.0 - p) / games + z * z / (4.0 * games * games)) / d
     return [round(max(0.0, center - half), 4), round(min(1.0, center + half), 4)]
+
+
+def _half_width(win_rate, games, z=CI_Z):
+    """Half-width of the Wilson interval, in percentage points. This is the
+    resolution of a reading: the smallest difference it can adjudicate."""
+    lo, hi = _wilson(win_rate, games, z)
+    return round(100.0 * (hi - lo) / 2.0, 2)
+
+
+def _z_from_tail(tail):
+    """Inverse standard normal at an upper-tail probability, via the Beasley-
+    Springer-Moro rational approximation. Avoids a scipy dependency — this file
+    is called from the training loop, which pins no scientific stack."""
+    p = 1.0 - tail
+    if not 0.0 < p < 1.0:
+        raise ValueError("tail must be in (0, 1)")
+    a = [-39.69683028665376, 220.9460984245205, -275.9285104469687,
+         138.3577518672690, -30.66479806614716, 2.506628277459239]
+    b = [-54.47609879822406, 161.5858368580409, -155.6989798598866,
+         66.80131188771972, -13.28068155288572]
+    c = [-0.007784894002430293, -0.3223964580411365, -2.400758277161838,
+         -2.549732539343734, 4.374664141464968, 2.938163982698783]
+    d = [0.007784695709041462, 0.3224671290700398, 2.445134137142996,
+         3.754408661907416]
+    lo, hi = 0.02425, 1.0 - 0.02425
+    if p < lo:
+        q = math.sqrt(-2.0 * math.log(p))
+        return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / \
+               ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0)
+    if p > hi:
+        q = math.sqrt(-2.0 * math.log(1.0 - p))
+        return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / \
+                ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0)
+    q = p - 0.5
+    r = q * q
+    return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / \
+           (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1.0)
+
+
+def required_games(baseline, delta, power=0.80, alpha=0.05):
+    """Games per reading needed to call a `delta` change from `baseline` at
+    `power`, two-sided `alpha`, comparing two independent readings.
+
+    This is the number M3 asks for: size the budget against the effect you
+    actually want to detect, instead of reading a verdict off an interval that
+    was never wide enough to carry one. Unpaired, so it is the conservative
+    figure — a paired analysis over the seeded map set (both readings now run
+    the same seeds) needs fewer, by a factor that depends on how correlated the
+    per-seed outcomes are, which nothing measures yet.
+    """
+    p0 = min(max(baseline, 1e-6), 1.0 - 1e-6)
+    p1 = min(max(baseline + delta, 1e-6), 1.0 - 1e-6)
+    if p0 == p1:
+        return None
+    z_a = _z_from_tail(alpha / 2.0)
+    z_b = _z_from_tail(1.0 - power)
+    pbar = (p0 + p1) / 2.0
+    num = z_a * math.sqrt(2.0 * pbar * (1.0 - pbar)) + \
+        z_b * math.sqrt(p0 * (1.0 - p0) + p1 * (1.0 - p1))
+    return math.ceil(num * num / ((p1 - p0) ** 2))
 
 
 def _counts(reading):
@@ -206,6 +270,10 @@ def _append_reading(data, args, kind, opponent):
         "win_rate": win_rate,
         "win_rate_ci": ci,
         "ci_level": 0.95,
+        # Half-width of that interval in pp: the smallest difference this
+        # reading can adjudicate. Recorded per reading so a verdict drawn from
+        # a smaller difference is visibly unsupported (audit M3).
+        "resolves_pp": _half_width(win_rate, games),
         "elo_est": _elo(win_rate, opponent["elo"]),
         "elo_ci": [_elo(ci[0], opponent["elo"]), _elo(ci[1], opponent["elo"])],
         "avg_score_model": args.avg_score_model,
@@ -255,10 +323,17 @@ def cmd_record(args):
         "opponent": opponent["name"],
         "win_rate": reading["win_rate"],
         "win_rate_ci": reading["win_rate_ci"],
+        "resolves_pp": reading["resolves_pp"],
         "elo_est": reading["elo_est"],
         "elo_ci": reading["elo_ci"],
         "plateau_strikes": data["plateau_strikes"],
     }
+    # A single reading this size cannot carry a verdict about a difference
+    # smaller than its own resolution. Say so on every reading rather than
+    # leaving the next reader to rediscover it from the interval.
+    if reading["resolves_pp"] > 100.0 * MIN_DETECTABLE_EFFECT:
+        verdict["underpowered_for_pp"] = round(100.0 * MIN_DETECTABLE_EFFECT, 1)
+        verdict["games_needed"] = required_games(reading["win_rate"], MIN_DETECTABLE_EFFECT)
     if "behavior" in reading:
         b = reading["behavior"]
         verdict["cities_curve"] = {
@@ -289,12 +364,39 @@ def cmd_freeze(args):
     print(json.dumps(new_anchor))
 
 
+def cmd_power(args):
+    """Answer 'how many games do I need' before spending the compute, and
+    'what could this reading have detected' after."""
+    out = {
+        "baseline": args.baseline,
+        "effect_pp": round(100.0 * args.effect, 2),
+        "power": args.power,
+        "alpha": args.alpha,
+        "games_per_reading": required_games(args.baseline, args.effect, args.power, args.alpha),
+        "paired": False,
+    }
+    if args.games:
+        out["at_games"] = args.games
+        out["resolves_pp"] = _half_width(args.baseline, args.games)
+        out["ci_at_games"] = _wilson(args.baseline, args.games)
+    print(json.dumps(out, indent=2))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("active").set_defaults(func=cmd_active)
     sub.add_parser("audit-opponents").set_defaults(func=cmd_audit_opponents)
+
+    pw = sub.add_parser("power", help="sample size for a target effect (audit M3)")
+    pw.add_argument("--baseline", type=float, default=0.33, help="assumed win rate")
+    pw.add_argument("--effect", type=float, default=MIN_DETECTABLE_EFFECT,
+                    help="difference to detect, as a fraction (0.08 = 8pp)")
+    pw.add_argument("--power", type=float, default=0.80)
+    pw.add_argument("--alpha", type=float, default=0.05)
+    pw.add_argument("--games", type=int, help="also report what this many games resolves to")
+    pw.set_defaults(func=cmd_power)
 
     def match_args(p):
         p.add_argument("--run-id", default="")

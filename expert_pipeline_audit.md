@@ -308,18 +308,34 @@ plateau test compares pooled halves by interval overlap rather than by mean
 (`:106-116`). The dashboard draws the band (`src/public/training.html`, elo
 chart).
 
-**Still open:** the sample size itself. `GAUGE_GAMES` still defaults to 32 seeds
-(64 games), so a single reading still resolves to roughly ±12pp — now visible
-rather than invisible. Size the budget against the effect you want to detect
-before the re-baseline.
+**Also landed:** the budget is now sized rather than assumed. `ladder.py`
+computes the games a target effect needs (`required_games`, exposed as
+`python3 ladder.py power --baseline 0.33 --games 64`), stores each reading's own
+resolution as `resolves_pp`, and flags a reading that cannot adjudicate the
+effect the registered bars are written against. The loop echoes that flag at the
+moment the reading is taken (`run_training_loop.sh`, gauge block), so the caveat
+travels with the number instead of being rediscovered from the interval later.
+`tests/test_ladder.py` pins the statistics, including that a lucky 17-of-20 does
+not clear the freeze bar.
 
-At `GAUGE_GAMES=32` (64 games after swapping) and p≈0.33, binomial SE ≈5.9pp →
-95% interval ≈±11.5pp. EXP_ELO_002's registered bar was +8pp, observed +1pp; the
-30.7→36.7% within-run drift was called "suggestive". Both sit inside the noise.
+The number that calculation returns is the finding: **detecting +8pp at a ≈33%
+baseline, 80% power, α=0.05, needs ~571 games per reading.** The gauge spends 64.
+It is ~9× too small for the bar EXP_ELO_002 registered against it — not
+marginally underpowered, an order of magnitude. The observed +1pp and the
+30.7→36.7% within-run drift were never separable from noise by a single reading.
 
-Fix M1 first (free variance reduction), then size the remaining budget against
-the effect you want to detect, and store the interval in `ladder.json` alongside
-every reading.
+**Still open:** actually spending them. Three ways out, in cost order:
+
+1. **Trend, not readings.** The plateau gate already pools eight readings (~512
+   games), which is why it is meaningful at this budget. Any verdict drawn from
+   *one* reading is not.
+2. **A paired analysis.** M1 means both sides now play the same seeded map set,
+   so the per-seed outcomes are correlated and a paired test needs materially
+   fewer games than the unpaired ~571. Nothing measures that correlation yet;
+   `arena --dump-stats-dir` already writes per-game records, so it is
+   computable without new match compute.
+3. **Raise `GAUGE_GAMES`.** Honest and linear in gauge wall-clock. Decide it
+   against the effect size, not against how long it feels acceptable to wait.
 
 ### M4 · Gauge plays a shorter game than training generates
 **Status:** FIXED (`73dafb9`) · **CONFIRMED** · Effort: hours
@@ -377,12 +393,18 @@ it measured weights alone.
 ## A — Learning signal
 
 ### A1 · `DETACH_VALUE_TRUNK=1` is exported in the production loop
-**Status:** OPEN — unchanged · **CONFIRMED** · Effort: hours
+**Status:** REGISTERED, arm not yet run · **CONFIRMED** · Effort: hours
 
-Still exported at `run_training_loop.sh:21`; still a bisect arm in
-`bisect_arm.sh:15`; still no verdict in `hypothesis_driven_improvements.md`. The
-sequencing below is unchanged and its first two prerequisites (P1/P2/M1, and a
-label decision) are now met, so this is runnable as soon as a baseline exists.
+**What landed:** the switch is registered as `EXP_TRUNK_001` in
+`hypothesis_driven_improvements.md` — hypothesis, the A2b sequencing below,
+expected results and a falsifier — so it is an open variable on the record rather
+than an unexplained export. `run_training_loop.sh:23` now reads
+`export DETACH_VALUE_TRUNK="${DETACH_VALUE_TRUNK:-1}"`, so the off arm runs
+without editing the driver (`DETACH_VALUE_TRUNK=0 ./run_training_loop.sh`).
+Production behaviour is unchanged: the default is still 1.
+
+**What remains:** running the arm. That is the verdict, and it is sequenced after
+A2b — see below. Its other prerequisites (P1/P2/M1/M2/M4) are now closed.
 
 `run_training_loop.sh:17`. `train.py:35–39` documents it as "bisect Arm D", and
 `bisect_arm.sh:14` treats it as a diagnostic. With it on, no value-loss gradient

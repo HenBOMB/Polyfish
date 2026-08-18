@@ -564,6 +564,69 @@ before.
 ### Actual Results
 NOT YET RUN.
 
+## EXP_TRUNK_001: `DETACH_VALUE_TRUNK` — let value gradient reach the trunk
+*Aug 18, 2026 · REGISTERED, NOT YET RUN · the verdict audit A1 says was never written*
+
+`run_training_loop.sh:23` exports `DETACH_VALUE_TRUNK=1`. `train.py:44-48`
+documents it as bisect Arm D and `bisect_arm.sh:14` treats it as a diagnostic;
+CLAUDE.md's own rule is that anything exported unconditionally from the loop is
+a production setting. It has been on for the whole recorded history of this fork
+with **no entry in this file** — which is precisely the state #12 documents for
+`AUGMENT_D4`, where a measured rationale was lost and the setting then read as an
+oversight.
+
+Provenance is unrecoverable: this repo is a fork and the switch was set upstream.
+So it is settled empirically rather than archaeologically, and this entry exists
+so the next reader inherits a registered arm instead of an unexplained export.
+
+**What the switch does.** With it on, no value-loss gradient reaches `conv1`, the
+ResBlocks, or the cross-attention. The value head still trains at full strength,
+but only on whatever representation the trunk built for move-picking — it cannot
+cause the trunk to represent winning-ness at all. MCTS queries that head at every
+leaf of every search, so a value head riding as a passenger on policy features
+caps search quality no matter how good the policy is. The defensible reason to
+have set it: two heads on one trunk can genuinely fight, and a noisy value signal
+can degrade the policy. Detaching isolates that.
+
+**Change:** run the arm both ways at equal budget on a fixed seed set. The switch
+is now overridable rather than hardcoded (`run_training_loop.sh:23`), so the off
+arm needs no edit to the driver:
+
+```bash
+DETACH_VALUE_TRUNK=0 ./run_training_loop.sh --new-run -i 20 -l 5
+```
+
+### Prerequisite — sequencing, not optional
+Run this **after** the A2b label fix, not before. A2b changes the prior on why
+the switch exists: detaching only pays if value gradient was actively harming the
+policy, and A2b shows the value label is built on a quantity ~8pp worse than an
+available alternative at every turn, degrading in the late game. A plausible
+history is that the value signal genuinely was harmful, someone correctly saw the
+policy suffering, and detaching treated the symptom rather than the cause. Remove
+the detach *before* fixing the label and you reproduce the original harm and read
+it as "value gradient hurts the trunk".
+
+It also needs a gauge baseline (#1, #2, #4, #5, #7 — all now closed) so the two
+arms are read on a common map set.
+
+### Expected Results
+With `DETACH_VALUE_TRUNK=0`: `value_r2_holdout` up materially — the trunk can
+finally build features for the value question. vs-Greedy win rate up, because
+the search's leaf evaluations improve. Policy CE flat or slightly worse early
+(the trunk is now serving two objectives) and recovering.
+
+### Falsifier
+Policy CE materially worse and vs-Greedy win rate not up after 20 iterations →
+detaching was load-bearing. Record that as the verdict and stop treating the
+export as an accident.
+
+Read `value_r2_holdout` rather than `value_r2`: in-sample R² rises under either
+arm and cannot distinguish them.
+
+### Actual Results
+NOT YET RUN.
+
+
 ## Also landed Aug 18 — behaviour-affecting, not separately registered
 
 Correctness and integrity fixes with no free parameter to tune, listed so a

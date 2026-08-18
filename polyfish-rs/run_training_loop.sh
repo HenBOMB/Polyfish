@@ -16,9 +16,11 @@ NUM_GAMES=64
 export MCTS_ITERS=64
 # Open variable, NOT a known-good setting: audit A1 records no verdict for it
 # anywhere, and the recommendation is to default it off only AFTER the A2b label
-# fix lands, then run the arm both ways (bisect_arm.sh Arm D) and write the
-# verdict. Left on until then so the change is measured, not flipped blind.
-export DETACH_VALUE_TRUNK=1
+# fix lands, then run the arm both ways and write the verdict. Left on until
+# then so the change is measured, not flipped blind. Registered as EXP_TRUNK_001
+# in hypothesis_driven_improvements.md; run the off arm without editing this
+# file: `DETACH_VALUE_TRUNK=0 ./run_training_loop.sh --new-run ...`.
+export DETACH_VALUE_TRUNK="${DETACH_VALUE_TRUNK:-1}"
 # 128 actors measured best on an M3 Max with metal (~578 moves/s @ 128 games+).
 # Throughput scales with concurrent games; small NUM_GAMES (-g) is a real limiter, not this knob.
 # See expert_boost_throughput.md for details.
@@ -582,6 +584,12 @@ do
             fi
         }
 
+        # GAUGE_GAMES is per side-swapped pair, so 32 => 64 games. That
+        # resolves to about +/-11pp at a ~33% win rate, which is coarser than
+        # the +8pp bar the registered experiments are written against
+        # (`python3 ladder.py power --baseline 0.33 --games 64`). Raising it is
+        # the honest fix and costs gauge wall-clock linearly; until then the
+        # plateau gate pools eight readings, which is what makes it meaningful.
         # A failed reading is fatal: the ladder is the instrument every
         # experiment is judged on, and continuing past a broken gauge is what
         # left the whole campaign without a single recorded reading.
@@ -599,6 +607,17 @@ do
             --stats-dir "$GAUGE_STATS_DIR")
         echo "GAUGE: $VERDICT"
         GAUGE_ACTION=$(json_get action "" <<< "$VERDICT")
+
+        # Audit M3: a reading cannot adjudicate a difference smaller than its
+        # own resolution. ladder.py sets these when it cannot, so the log says
+        # so at the time the number is taken rather than leaving the next reader
+        # to work it out from the interval months later.
+        GAUGE_UNDERPOWERED=$(json_get underpowered_for_pp "" <<< "$VERDICT")
+        if [ -n "$GAUGE_UNDERPOWERED" ]; then
+            echo "GAUGE: this reading resolves to +/-$(json_get resolves_pp "?" <<< "$VERDICT")pp;" \
+                 "calling a ${GAUGE_UNDERPOWERED}pp effect needs ~$(json_get games_needed "?" <<< "$VERDICT")" \
+                 "games (GAUGE_GAMES=$(( ${GAUGE_GAMES:-32} * 2 )) here). Trend across readings, not one reading."
+        fi
 
         # EXP_ELO_002: first >=50% reading vs the greedy anchor starts
         # the anchor-frac decay clock (EFF_ITER units, matching
