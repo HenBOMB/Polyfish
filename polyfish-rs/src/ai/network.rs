@@ -175,6 +175,17 @@ pub struct PolyZeroNet {
     /// checkpoint (`model_gn_v1.safetensors`) predates the aux heads entirely
     /// and the opponent loader must not start rejecting it.
     aux_fog: Option<Conv2d>,
+
+    /// EXP_ELO_061 (Stage 3b): macro-mcts root prior, mirrored into Rust for
+    /// the same reason as `aux_fog` — it's consumed at inference (macro
+    /// root candidate scoring), not just during training. Softmax over
+    /// `Stance` (4-way). Optional: no checkpoint carries this yet.
+    pi_macro_stance: Option<Linear>,
+    /// Per-tile P(order of this kind targets this tile), one channel per
+    /// `OrderKind` (3) — a sigmoid intensity map, NOT a spatial softmax,
+    /// because a goal's orders are non-exclusive across kinds and across
+    /// same-kind targets (see EXP_ELO_061's overnight ballot analysis).
+    pi_macro_order: Option<Conv2d>,
 }
 
 impl PolyZeroNet {
@@ -250,6 +261,21 @@ impl PolyZeroNet {
             None
         };
 
+        // EXP_ELO_061: macro policy head, optional (no checkpoint carries it
+        // yet). Both tensors are always trained/saved together; gating each
+        // independently on its own tensor name matches the aux_fog pattern
+        // and stays robust to a partially-written checkpoint either way.
+        let pi_macro_stance = if vs.contains_tensor("pi_macro_stance.weight") {
+            Some(candle_nn::linear(filters, 4, vs.pp("pi_macro_stance"))?)
+        } else {
+            None
+        };
+        let pi_macro_order = if vs.contains_tensor("pi_macro_order.weight") {
+            Some(conv(filters, 3, 1, 1, 0, vs.pp("pi_macro_order"))?)
+        } else {
+            None
+        };
+
         Ok(Self {
             conv1,
             bn1,
@@ -268,6 +294,8 @@ impl PolyZeroNet {
             v_win,
             v_progress,
             aux_fog,
+            pi_macro_stance,
+            pi_macro_order,
         })
     }
 
@@ -277,6 +305,14 @@ impl PolyZeroNet {
     /// every consumer has been reading a constant.
     pub fn has_fog_head(&self) -> bool {
         self.aux_fog.is_some()
+    }
+
+    /// True when this checkpoint carries the mirrored macro policy head
+    /// (EXP_ELO_061). Same silent-zero caveat as `has_fog_head`: callers on
+    /// the tch/Metal eval backends must branch on this once this head is
+    /// threaded through `EvalResult`, not yet done as of this head's landing.
+    pub fn has_macro_policy_head(&self) -> bool {
+        self.pi_macro_stance.is_some() && self.pi_macro_order.is_some()
     }
 
     pub fn forward_t(
@@ -350,9 +386,33 @@ impl PolyZeroNet {
             None => None,
         };
 
+        // EXP_ELO_061: macro-mcts root prior. Stance is a 4-way softmax
+        // (mutually exclusive, off `v_latent` — reuses the value trunk's
+        // pooling rather than adding a third pool conv). Order is a per-tile
+        // sigmoid intensity, one channel per OrderKind (like aux_fog, not
+        // like the softmaxed ply-level policy heads), because a goal's
+        // orders are non-exclusive across kinds and across same-kind
+        // targets — see the overnight ballot analysis in the ledger.
+        let macro_stance_probs = match &self.pi_macro_stance {
+            Some(head) => Some(candle_nn::ops::softmax(&head.forward(&v_latent)?, 1)?),
+            None => None,
+        };
+        let macro_order_maps = match &self.pi_macro_order {
+            Some(head) => Some(candle_nn::ops::sigmoid(
+                &head.forward(&shared)?.flatten_from(1)?,
+            )?),
+            None => None,
+        };
+
         Ok((
             policy_output,
-            ValueOutput { win_value: v_win, progress_value: v_progress, fog_probs },
+            ValueOutput {
+                win_value: v_win,
+                progress_value: v_progress,
+                fog_probs,
+                macro_stance_probs,
+                macro_order_maps,
+            },
         ))
     }
 
@@ -387,6 +447,16 @@ pub struct ValueOutput {
     /// sigmoid. `None` when the checkpoint predates the aux heads — callers
     /// must branch rather than read a zero.
     pub fog_probs: Option<Tensor>,
+    /// EXP_ELO_061: macro-mcts root prior, stance half. [B, 4], already
+    /// through softmax (`Stance` order: Grow, Arm, Unlock, Save). `None`
+    /// until a checkpoint carries this head.
+    pub macro_stance_probs: Option<Tensor>,
+    /// EXP_ELO_061: macro-mcts root prior, order half. [B, 3*H*W] (one
+    /// H*W-tile plane per `OrderKind`, row-major within each plane),
+    /// already through sigmoid — independent per-tile intensities, not a
+    /// spatial softmax (orders are non-exclusive). `None` until a
+    /// checkpoint carries this head.
+    pub macro_order_maps: Option<Tensor>,
 }
 
 /// Device-free policy output for a single leaf: one row of each decomposed
@@ -523,5 +593,65 @@ mod fog_head_tests {
         }
         let mean = v.iter().sum::<f32>() / v.len() as f32;
         assert!((mean - 0.002729).abs() < 2e-5, "mean {mean} vs pytorch 0.002729");
+    }
+}
+
+#[cfg(test)]
+mod macro_policy_head_tests {
+    use super::*;
+    use candle_core::{DType, Device};
+
+    /// EXP_ELO_061: absent on every checkpoint that exists today — no
+    /// checkpoint has been trained with this head yet. Same optional-load
+    /// contract as aux_fog: loading must succeed, the head must just be None.
+    #[test]
+    fn macro_policy_head_is_optional_and_absent_on_current_checkpoints() {
+        let path = std::path::Path::new("checkpoints/gauge_1785601511_iter5.safetensors");
+        if !path.exists() {
+            return;
+        }
+        let vb = unsafe {
+            candle_nn::VarBuilder::from_mmaped_safetensors(&[path], DType::F32, &Device::Cpu)
+        };
+        let Ok(vb) = vb else { return };
+        let Ok(net) = PolyZeroNet::new(vb) else { return };
+        assert!(!net.has_macro_policy_head());
+    }
+
+    /// Shape/activation correctness in isolation from any trained weights:
+    /// `VarBuilder::zeros` satisfies `contains_tensor` for every name (a
+    /// synthetic backend, not a checkpoint — see the `synthetic_backend`
+    /// guard in `PolyZeroNet::new`), so this exercises the real forward path
+    /// end to end without needing train.py to have shipped the head first.
+    #[test]
+    fn macro_policy_head_shapes_and_activations_are_correct() {
+        let vb = candle_nn::VarBuilder::zeros(DType::F32, &Device::Cpu);
+        let net = PolyZeroNet::new(vb).expect("zeros backend must satisfy every tensor request");
+        assert!(net.has_macro_policy_head());
+
+        let hw = crate::ai::features::MAP_SIZE;
+        let map = Tensor::zeros(
+            (1, crate::ai::features::NUM_CHANNELS, hw, hw),
+            DType::F32,
+            &Device::Cpu,
+        )
+        .unwrap();
+        let player = Tensor::zeros((1, 10), DType::F32, &Device::Cpu).unwrap();
+        let (_, value) = net.forward(&map, &player).unwrap();
+
+        let stance = value.macro_stance_probs.expect("stance head present -> Some");
+        assert_eq!(stance.dims(), &[1, 4], "one probability per Stance variant");
+        let sv = stance.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let sum: f32 = sv.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-5, "softmax must sum to 1, got {sum}");
+        assert!(sv.iter().all(|p| (0.0..=1.0).contains(p)));
+
+        let order = value.macro_order_maps.expect("order head present -> Some");
+        assert_eq!(order.dims(), &[1, 3 * hw * hw], "3 OrderKind planes, flattened");
+        let ov = order.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert!(
+            ov.iter().all(|p| (0.0..=1.0).contains(p)),
+            "sigmoid output must be a probability, independent per tile/kind"
+        );
     }
 }
