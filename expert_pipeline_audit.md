@@ -365,13 +365,36 @@ underfitting and overfitting can be told apart; the dashboard plots both. `arena
 records every game it drops in its per-game JSON and the loop no longer ignores
 its exit code (P2).
 
-STILL OPEN, unchanged: `config.json` is still re-read *inside* the iteration loop
-(`run_training_loop.sh:377-391`), so dashboard edits still change a run mid-flight
-— only `MCTS_ITERS` is now pinned for the run (`:379`). Nothing else records
-per-run configuration. Readings now carry their search budget
-(`ladder.py:214-218`) but the plateau detector still pools across budgets
-(`:106-116`), so ladder Elo is still a function of (weights × sims) chained as if
-it measured weights alone.
+ALSO FIXED: the record now says what it was taken under.
+
+- **The holdout number reached nothing.** `train.py` has emitted
+  `value_r2_holdout` since the split landed and `training.html` has had the chart
+  code to draw it, but `training_log.py`'s `HEADER` had no such column, so the
+  trainer computed the one diagnostic the plateau question turns on and the CSV
+  dropped it on the floor. `value_r2_insample`, `value_r2_holdout`,
+  `holdout_samples` and `ownership_loss` are columns now, and the endpoint serves
+  them (verified against a running server, not by inspection).
+- **Per-iteration configuration is recorded.** `config.json` is still re-read
+  inside the loop — that is the dashboard's live-control feature, not an accident
+  — but every row now carries the settings it actually ran at: `tribe1`,
+  `tribe2`, `cfg_mcts_iters`, `cfg_gumbel_k`, `cfg_num_games`, `cfg_gamemode`,
+  `cfg_anchor_frac`, `cfg_value_trust`, `cfg_detach_value_trunk`. A mid-flight
+  edit is now visible in the record instead of invisible, and the tribe-pair
+  block effect can finally be conditioned on rather than merely deplored.
+- **The plateau detector no longer mixes search budgets.** `_gauge_series`
+  restricts the window to the budget the latest reading used, so a 16-sim stint
+  cannot be chained with 64-sim readings as if it measured the weights. Ladders
+  whose readings predate the `budget` field keep the old pool-everything
+  behaviour rather than silently emptying the window.
+- **A dropped game no longer hides.** `arena` reports `Unpaired Seeds:` — seeds
+  that lost one half of their side swap, which is the pairing the seeded design
+  buys — and the loop carries `games_attempted`, `games_dropped` and
+  `unpaired_seeds` into the reading, surfaced in the verdict.
+
+STILL OPEN: the search-budget confound is contained, not resolved — restricting
+the window is correct but it means a budget change silently shortens the plateau
+series rather than flagging it. And no reading has yet been taken with any of
+this in place.
 
 - `elo.py` is orphaned and anchored to a player that never plays; the ratings
   actually used are un-intervalled chained win rates.

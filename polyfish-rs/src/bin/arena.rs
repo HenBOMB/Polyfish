@@ -887,6 +887,16 @@ fn main() -> anyhow::Result<()> {
     };
 
     println!("\n=== ARENA RESULTS ===");
+    // A dropped game breaks the side-swap pairing for its seed, which is the
+    // variance reduction the whole seeded design buys. Count it explicitly:
+    // "48 of 64 completed" hides whether the survivors are still balanced.
+    let unpaired_seeds = {
+        let mut per_seed: std::collections::HashMap<i64, u32> = std::collections::HashMap::new();
+        for r in &results {
+            *per_seed.entry(r.seed).or_default() += 1;
+        }
+        per_seed.values().filter(|&&c| c != 2).count()
+    };
     println!(
         "Total Games: {} completed / {} attempted ({} seeds, sides swapped){}",
         results.len(),
@@ -898,6 +908,7 @@ fn main() -> anyhow::Result<()> {
             String::new()
         }
     );
+    println!("Unpaired Seeds: {unpaired_seeds}");
     println!(
         "Config 1 Wins: {} ({:.1}%)",
         config1_wins,

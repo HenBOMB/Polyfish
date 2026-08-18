@@ -66,7 +66,43 @@ HEADER = [
     "vlab_wl_absmean",
     "vlab_spt_absmean",
     "match_type",
+    # value_r2 above is IN-SAMPLE. train.py has computed the holdout figure
+    # since the split landed, and this file dropped it on the floor — the gap
+    # between the two IS the underfitting-vs-overfitting diagnostic the plateau
+    # question turns on (audit M5).
+    "value_r2_insample",
+    "value_r2_holdout",
+    "holdout_samples",
+    "ownership_loss",
+    # The configuration that produced this row. config.json is re-read inside
+    # the iteration loop, so a dashboard edit changes a run mid-flight; nothing
+    # recorded what any given iteration actually ran at (audit M5). The tribe
+    # pair in particular is reshuffled every iteration and its block effect on
+    # the behaviour metrics is comparable to the whole campaign's measured
+    # improvement, so a per-iteration metric was not interpretable without it.
+    "tribe1",
+    "tribe2",
+    "cfg_mcts_iters",
+    "cfg_gumbel_k",
+    "cfg_num_games",
+    "cfg_gamemode",
+    "cfg_anchor_frac",
+    "cfg_value_trust",
+    "cfg_detach_value_trunk",
 ]
+
+# Keys of the --config-json payload, mapped to their cfg_* column.
+CONFIG_COLUMNS = {
+    "tribe1": "tribe1",
+    "tribe2": "tribe2",
+    "mcts_iters": "cfg_mcts_iters",
+    "gumbel_k": "cfg_gumbel_k",
+    "num_games": "cfg_num_games",
+    "gamemode": "cfg_gamemode",
+    "anchor_frac": "cfg_anchor_frac",
+    "value_trust": "cfg_value_trust",
+    "detach_value_trunk": "cfg_detach_value_trunk",
+}
 
 OLD_13 = [
     "iteration",
@@ -492,6 +528,7 @@ def append_row(
     game_metrics: dict[str, Any],
     train_metrics: dict[str, Any],
     match_type: str,
+    config: dict[str, Any] | None = None,
 ) -> None:
     migrate_csv()
     archived = games_file
@@ -540,7 +577,15 @@ def append_row(
         "vlab_wl_absmean": game_metrics.get("vlab_wl_absmean", ""),
         "vlab_spt_absmean": game_metrics.get("vlab_spt_absmean", ""),
         "match_type": normalize_match_type(match_type),
+        "value_r2_insample": train_metrics.get("value_r2_insample", ""),
+        "value_r2_holdout": train_metrics.get("value_r2_holdout", ""),
+        "holdout_samples": train_metrics.get("holdout_samples", ""),
+        "ownership_loss": train_metrics.get("ownership_loss", ""),
+        **{col: "" for col in CONFIG_COLUMNS.values()},
     }
+    for key, col in CONFIG_COLUMNS.items():
+        value = (config or {}).get(key, "")
+        row[col] = "" if value is None else value
 
     file_exists = os.path.exists(CSV_PATH) and os.path.getsize(CSV_PATH) > 0
     with open(CSV_PATH, "a", newline="", encoding="utf-8") as f:
@@ -636,6 +681,8 @@ def main() -> None:
     p_append.add_argument("--game-json", required=True)
     p_append.add_argument("--train-json", required=True)
     p_append.add_argument("--match-type", default="selfplay")
+    p_append.add_argument("--config-json", default="{}",
+                          help="effective configuration this iteration ran at")
     p_append.set_defaults(
         func=lambda a: append_row(
             a.run_id,
@@ -645,6 +692,7 @@ def main() -> None:
             json.loads(a.game_json),
             json.loads(a.train_json),
             a.match_type,
+            json.loads(a.config_json),
         )
     )
 

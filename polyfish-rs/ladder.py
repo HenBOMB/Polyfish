@@ -162,9 +162,30 @@ def _anchor_by_name(data, name):
     raise SystemExit(f"unknown anchor: {name}")
 
 
+def _budget_key(reading):
+    """What a reading was taken at. Ladder Elo is a function of (weights x
+    sims); chaining readings across different budgets attributes a search
+    change to the weights (audit M5). EXP_ELO_002 had to hand-quarantine a
+    16-sim stint for exactly this."""
+    b = reading.get("budget")
+    if not b:
+        return None
+    return (b.get("mcts"), b.get("gumbel_k"))
+
+
 def _gauge_series(data):
+    """Gauge readings vs the active anchor, restricted to the search budget the
+    most recent one used. Readings from before `budget` was recorded carry no
+    key, so those ladders keep the old pool-everything behaviour rather than
+    silently emptying the window."""
     active = data["anchors"][-1]["name"]
-    return [r for r in data["readings"] if r["kind"] == "gauge" and r["opponent"] == active]
+    series = [r for r in data["readings"] if r["kind"] == "gauge" and r["opponent"] == active]
+    if not series:
+        return series
+    latest = _budget_key(series[-1])
+    if latest is None:
+        return series
+    return [r for r in series if _budget_key(r) == latest]
 
 
 def _plateau(series):
@@ -288,6 +309,21 @@ def _append_reading(data, args, kind, opponent):
     if getattr(args, "wins_p1", None) is not None:
         reading["wins_as_p1"] = args.wins_p1
         reading["wins_as_p2"] = args.wins_p2
+    # A panicked game is dropped by arena. Recording only the surviving count
+    # makes a damaged reading indistinguishable from a clean one, and a drop
+    # also unbalances the side-swap pairing the seeded map set buys (audit M5).
+    attempted = getattr(args, "games_attempted", 0) or 0
+    dropped = getattr(args, "games_dropped", 0) or 0
+    unpaired = getattr(args, "unpaired_seeds", 0) or 0
+    if attempted or dropped or unpaired:
+        reading["games_attempted"] = attempted
+        reading["games_dropped"] = dropped
+        reading["unpaired_seeds"] = unpaired
+    # The tribe pair is reshuffled every iteration and was never recorded, so a
+    # behaviour metric moving between readings could not be separated from the
+    # block effect of a different matchup (audit M5).
+    if getattr(args, "tribes", None):
+        reading["tribes"] = args.tribes
     if getattr(args, "stats_dir", None):
         behavior = _summarize_stats(args.stats_dir)
         if behavior is not None:
@@ -331,6 +367,9 @@ def cmd_record(args):
     # A single reading this size cannot carry a verdict about a difference
     # smaller than its own resolution. Say so on every reading rather than
     # leaving the next reader to rediscover it from the interval.
+    if reading.get("games_dropped") or reading.get("unpaired_seeds"):
+        verdict["games_dropped"] = reading.get("games_dropped", 0)
+        verdict["unpaired_seeds"] = reading.get("unpaired_seeds", 0)
     if reading["resolves_pp"] > 100.0 * MIN_DETECTABLE_EFFECT:
         verdict["underpowered_for_pp"] = round(100.0 * MIN_DETECTABLE_EFFECT, 1)
         verdict["games_needed"] = required_games(reading["win_rate"], MIN_DETECTABLE_EFFECT)
@@ -413,6 +452,13 @@ def main():
         p.add_argument("--wins-p1", type=int, help="model wins seated as P1")
         p.add_argument("--wins-p2", type=int, help="model wins seated as P2")
         p.add_argument("--stats-dir", help="arena --dump-stats-dir to summarize into the reading")
+        p.add_argument("--games-attempted", type=int, default=0,
+                       help="games arena started, before panicked ones were dropped")
+        p.add_argument("--games-dropped", type=int, default=0,
+                       help="seeds arena dropped after an in-game panic")
+        p.add_argument("--unpaired-seeds", type=int, default=0,
+                       help="seeds that lost one half of their side swap")
+        p.add_argument("--tribes", default="", help="tribe pair this reading was taken on")
 
     rec = sub.add_parser("record")
     match_args(rec)

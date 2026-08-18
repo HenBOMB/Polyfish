@@ -190,6 +190,60 @@ class VerdictTest(unittest.TestCase):
         short = self._series(*([20] * (self.ladder.PLATEAU_WINDOW - 1)))
         self.assertFalse(self.ladder._plateau(short))
 
+    def test_series_excludes_a_different_search_budget(self):
+        # Ladder Elo is a function of (weights x sims). A 16-sim stint pooled
+        # with 64-sim readings reads a search change as a weights change.
+        data = {"anchors": [{"name": "greedy"}], "readings": [
+            {"kind": "gauge", "opponent": "greedy", "games": 64, "wins": 20,
+             "losses": 44, "draws": 0, "budget": {"mcts": 16, "gumbel_k": 16}},
+            {"kind": "gauge", "opponent": "greedy", "games": 64, "wins": 30,
+             "losses": 34, "draws": 0, "budget": {"mcts": 64, "gumbel_k": 16}},
+        ]}
+        series = self.ladder._gauge_series(data)
+        self.assertEqual(len(series), 1)
+        self.assertEqual(series[0]["budget"]["mcts"], 64)
+
+    def test_series_keeps_legacy_readings_with_no_budget(self):
+        data = {"anchors": [{"name": "greedy"}], "readings": [
+            {"kind": "gauge", "opponent": "greedy", "games": 64, "wins": 20,
+             "losses": 44, "draws": 0},
+            {"kind": "gauge", "opponent": "greedy", "games": 64, "wins": 30,
+             "losses": 34, "draws": 0},
+        ]}
+        self.assertEqual(len(self.ladder._gauge_series(data)), 2)
+
+    def test_series_ignores_readings_against_another_anchor(self):
+        data = {"anchors": [{"name": "greedy"}], "readings": [
+            {"kind": "gauge", "opponent": "iter50", "games": 64, "wins": 20,
+             "losses": 44, "draws": 0},
+            {"kind": "link", "opponent": "greedy", "games": 64, "wins": 30,
+             "losses": 34, "draws": 0},
+            {"kind": "gauge", "opponent": "greedy", "games": 64, "wins": 30,
+             "losses": 34, "draws": 0},
+        ]}
+        self.assertEqual(len(self.ladder._gauge_series(data)), 1)
+
+    def test_dropped_games_are_recorded_not_hidden(self):
+        class Args:
+            pass
+
+        a = Args()
+        a.run_id, a.iteration = "t", 1
+        a.wins, a.losses, a.draws = 20, 28, 0
+        a.avg_score_model = a.avg_score_opponent = 0.0
+        a.mcts, a.gumbel_k, a.eval_backend = 64, 16, "candle"
+        a.wins_p1 = a.wins_p2 = None
+        a.stats_dir = None
+        a.games_attempted, a.games_dropped, a.unpaired_seeds = 64, 16, 8
+        a.tribes = "Imperius,Bardur"
+        data = self.ladder._load()
+        r = self.ladder._append_reading(data, a, "gauge", data["anchors"][-1])
+        self.assertEqual(r["games"], 48)
+        self.assertEqual(r["games_attempted"], 64)
+        self.assertEqual(r["games_dropped"], 16)
+        self.assertEqual(r["unpaired_seeds"], 8)
+        self.assertEqual(r["tribes"], "Imperius,Bardur")
+
     def test_pooling_beats_a_single_reading_on_resolution(self):
         # Why the plateau test pools: 8 x 64 games resolves ~2.8x tighter than
         # any one of them, which is the only reason the gate is meaningful at

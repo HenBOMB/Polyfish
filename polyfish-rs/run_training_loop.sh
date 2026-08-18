@@ -469,6 +469,23 @@ do
     LOSS=$(echo "$TRAIN_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('loss',''))")
 
     # 3. Log
+    # Record the configuration this iteration actually ran at. config.json is
+    # re-read inside this loop, so a dashboard edit shifts a run mid-flight;
+    # without this the CSV cannot say which iterations ran under which settings
+    # (audit M5). The tribe pair matters most: it is reshuffled every iteration
+    # and its block effect on the behaviour metrics rivals the whole campaign's
+    # measured improvement.
+    ITER_CONFIG=$(TRIBE1="$TRIBE1" TRIBE2="$TRIBE2" MCTS_ITERS="$MCTS_ITERS" \
+        GUMBEL_K="$GUMBEL_K" NUM_GAMES="$NUM_GAMES" GAMEMODE="$GAMEMODE" \
+        ANCHOR_FRAC_EFF="$([ -n "$ANCHOR_FLAG" ] && echo "${ANCHOR_FRAC:-0.25}" || echo 0)" \
+        VALUE_TRUST="$VALUE_TRUST" DETACH="${DETACH_VALUE_TRUNK:-}" \
+        .venv/bin/python3 -c 'import json, os; print(json.dumps({
+            "tribe1": os.environ["TRIBE1"], "tribe2": os.environ["TRIBE2"],
+            "mcts_iters": os.environ["MCTS_ITERS"], "gumbel_k": os.environ["GUMBEL_K"],
+            "num_games": os.environ["NUM_GAMES"], "gamemode": os.environ["GAMEMODE"],
+            "anchor_frac": os.environ["ANCHOR_FRAC_EFF"], "value_trust": os.environ["VALUE_TRUST"],
+            "detach_value_trunk": os.environ["DETACH"],
+        }))')
     .venv/bin/python3 training_log.py append-row \
         --run-id "$RUN_ID" \
         --iter-started-at "$ITER_STARTED_AT" \
@@ -476,6 +493,7 @@ do
         --games-file "$GAMES_FILE" \
         --game-json "$GAME_JSON" \
         --train-json "$TRAIN_JSON" \
+        --config-json "$ITER_CONFIG" \
         --match-type "$MATCH_TYPE"
     AVG_SCORE=$(echo "$GAME_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('avg_score',''))")
     AVG_CAPTURES=$(echo "$GAME_JSON" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin).get('avg_captures',''))")
@@ -578,6 +596,13 @@ do
             GAUGE_WP1=$(sed -n 's/^Config 1 Wins as P1: \([0-9][0-9]*\).*/\1/p' "$GAUGE_LOG")
             GAUGE_WP2=$(sed -n 's/^Config 1 Wins as P2: \([0-9][0-9]*\).*/\1/p' "$GAUGE_LOG")
             GAUGE_BACKEND=$(sed -n 's/.*| eval \([a-z]*\).*/\1/p' "$GAUGE_LOG" | head -1)
+            # A panicked game is dropped by arena, which silently shrinks n and
+            # unbalances the side-swap pairing the seeded design depends on.
+            # Carry both into the reading instead of recording a clean-looking
+            # count (audit M5).
+            GAUGE_ATTEMPTED=$(sed -n 's/^Total Games: [0-9]* completed \/ \([0-9][0-9]*\) attempted.*/\1/p' "$GAUGE_LOG")
+            GAUGE_DROPPED=$(sed -n 's/^Total Games:.*, \([0-9][0-9]*\) seed(s) dropped.*/\1/p' "$GAUGE_LOG")
+            GAUGE_UNPAIRED=$(sed -n 's/^Unpaired Seeds: \([0-9][0-9]*\).*/\1/p' "$GAUGE_LOG")
             if [ -z "$GAUGE_W" ] || [ -z "$GAUGE_L" ]; then
                 echo "GAUGE: arena exited 0 but its win counts did not parse (opponent '${1:-greedy}') — output format changed?" >&2
                 return 1
@@ -604,6 +629,9 @@ do
             --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}" \
             --mcts "$MCTS_ITERS" --gumbel-k "$GUMBEL_K" --eval-backend "${GAUGE_BACKEND:-}" \
             --wins-p1 "${GAUGE_WP1:-0}" --wins-p2 "${GAUGE_WP2:-0}" \
+            --games-attempted "${GAUGE_ATTEMPTED:-0}" --games-dropped "${GAUGE_DROPPED:-0}" \
+            --unpaired-seeds "${GAUGE_UNPAIRED:-0}" \
+            --tribes "$TRIBE1,$TRIBE2" \
             --stats-dir "$GAUGE_STATS_DIR")
         echo "GAUGE: $VERDICT"
         GAUGE_ACTION=$(json_get action "" <<< "$VERDICT")
