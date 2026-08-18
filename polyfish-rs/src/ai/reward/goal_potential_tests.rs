@@ -224,6 +224,123 @@ use crate::types::UnitType;
         // Army still dominates: one warrior outweighs a point of SPT.
         assert!(SHAPE_GOAL_ARM_PER_COST * 2.0 > SHAPE_GOAL_ARM_SPT * 1.0);
     }
+    /// v11: ARM's Φ should blend LINEARLY with `arm_strength` — full intensity
+    /// reproduces the old flat formula exactly (no aux defaults to full, so
+    /// this also pins the no-aux fallback), and the same army composition at
+    /// half intensity must land exactly at the midpoint between the full- and
+    /// zero-intensity readings (a straight line, not just "somewhere lower").
+    #[test]
+    fn arm_phi_blends_linearly_with_intensity() {
+        use crate::ai::oracle_macro::{GoalAux, MacroGoal, Stance};
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        let mut t1 = TribeState::default();
+        t1.cities.push(crate::states::CityState {
+            idx: 60,
+            owner: 1,
+            level: 1,
+            production: 3,
+            ..Default::default()
+        });
+        t1.units.push(unit_at(60, UnitType::Warrior));
+        state.tribes.insert(1, t1);
+        let arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None };
+
+        let full = GoalAux { arm_strength: 1.0, ..Default::default() };
+        let zero = GoalAux { arm_strength: 0.0, ..Default::default() };
+        let half = GoalAux { arm_strength: 0.5, ..Default::default() };
+
+        let arm_full = goal_potential(&state, 1, &arm, Some(&full));
+        let arm_default = goal_potential(&state, 1, &arm, None);
+        assert!(
+            (arm_full - arm_default).abs() < 1e-3,
+            "no-aux fallback should match full intensity: {arm_default} vs {arm_full}"
+        );
+
+        let arm_zero = goal_potential(&state, 1, &arm, Some(&zero));
+        assert!(
+            (arm_full - arm_zero).abs() > 1.0,
+            "test setup: ARM's and GROW's SPT rate must actually differ here: \
+             full {arm_full}, zero {arm_zero}"
+        );
+
+        let arm_half = goal_potential(&state, 1, &arm, Some(&half));
+        let expected_half = 0.5 * arm_full + 0.5 * arm_zero;
+        assert!(
+            (arm_half - expected_half).abs() < 1e-3,
+            "half intensity did not land at the midpoint: {arm_half} vs {expected_half}"
+        );
+    }
+    /// v11: army VALUE must price identically regardless of intensity — only
+    /// the SPT rate blends. A besieged state (same army, an enemy now near)
+    /// must not score higher than a quiet one purely because the higher
+    /// intensity "reveals" the value of units that were there all along;
+    /// `city_risk_is_priced_without_any_defend_order` is the sharper version
+    /// of this with a real risk assessment — this pins the mechanism directly.
+    #[test]
+    fn arm_army_value_does_not_depend_on_intensity() {
+        use crate::ai::oracle_macro::{GoalAux, MacroGoal, Stance};
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        let mut t1 = TribeState::default();
+        t1.units.push(unit_at(60, UnitType::Warrior));
+        state.tribes.insert(1, t1);
+        let arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None };
+        let low = GoalAux { arm_strength: 0.1, ..Default::default() };
+        let high = GoalAux { arm_strength: 0.9, ..Default::default() };
+
+        // Same army, no SPT (no cities), so the SPT-rate blend contributes
+        // nothing at all — any remaining gap would be the army term leaking.
+        let phi_low = goal_potential(&state, 1, &arm, Some(&low));
+        let phi_high = goal_potential(&state, 1, &arm, Some(&high));
+        assert!(
+            (phi_low - phi_high).abs() < 1e-3,
+            "army value must not depend on intensity: low {phi_low} vs high {phi_high}"
+        );
+    }
+    /// v11: a live SAVE plan must not go fully dark just because a marginal
+    /// ARM signal won the discrete stance pick — it pays the
+    /// `(1 - arm_strength)` remainder of the ramp instead of zero.
+    #[test]
+    fn savings_ramp_stays_partially_live_under_marginal_arm() {
+        use crate::ai::oracle_macro::{GoalAux, MacroGoal, Stance};
+        let mut state = GameState::default();
+        state.settings.size = 11;
+        let mut t1 = TribeState::default();
+        t1.id = 1;
+        t1.stars = 10;
+        state.tribes.insert(1, t1);
+        let lane = build_test_lane(20, 16, 4);
+        let bare_arm = MacroGoal { orders: vec![], stance: Stance::Arm, save_target: None };
+        let arming = MacroGoal {
+            orders: vec![],
+            stance: Stance::Arm,
+            save_target: Some(lane.clone()),
+        };
+        let saving = MacroGoal { orders: vec![], stance: Stance::Save, save_target: Some(lane) };
+        let bare_grow = MacroGoal { orders: vec![], stance: Stance::Grow, save_target: None };
+
+        let ramp_at_save =
+            goal_potential(&state, 1, &saving, None) - goal_potential(&state, 1, &bare_grow, None);
+        assert!(ramp_at_save > 1.0, "test setup: half-banked ramp should be well above zero");
+
+        // Full-intensity ARM: the plan carries none of the ramp, exactly like
+        // before this change (a real emergency shouldn't pay to keep banking).
+        let full = GoalAux { arm_strength: 1.0, ..Default::default() };
+        let paid_full = goal_potential(&state, 1, &arming, Some(&full))
+            - goal_potential(&state, 1, &bare_arm, Some(&full));
+        assert!(paid_full.abs() < 1e-3, "full-intensity ARM should pay zero savings ramp: {paid_full}");
+
+        // Marginal ARM (0.3 intensity): the plan carries 70% of the ramp it
+        // would under SAVE outright.
+        let marginal = GoalAux { arm_strength: 0.3, ..Default::default() };
+        let paid_marginal = goal_potential(&state, 1, &arming, Some(&marginal))
+            - goal_potential(&state, 1, &bare_arm, Some(&marginal));
+        assert!(
+            (paid_marginal - 0.7 * ramp_at_save).abs() < 1e-3,
+            "marginal ARM paid {paid_marginal}, expected 70% of {ramp_at_save}"
+        );
+    }
     #[test]
     fn explorer_reward_pays_by_hidden_fraction() {
         use crate::ai::oracle_macro::{MacroGoal, Stance};

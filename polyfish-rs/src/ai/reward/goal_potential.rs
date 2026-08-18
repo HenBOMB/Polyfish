@@ -22,24 +22,36 @@ pub fn goal_potential(
     let Some(tribe) = state.tribes.get(&player) else {
         return 0.0;
     };
+    let spt = crate::functions::get_tribe_spt(state, tribe) as f32;
     let mut phi = match goal.stance {
         // SAVE is an economy stance: it keeps GROW's whole potential and adds
         // the ramp below, so banking never costs the economy gradient.
-        Stance::Grow | Stance::Save => {
-            SHAPE_GOAL_SPT * crate::functions::get_tribe_spt(state, tribe) as f32
-        }
+        Stance::Grow | Stance::Save => SHAPE_GOAL_SPT * spt,
         // v9: ARM is no longer economy-blind. It holds 85% of plies after turn
         // 10, and with only the army term the whole mid-game carried zero
         // economy gradient — the window where a human is pushing cities to
         // level 5. A giant IS an army purchase; it is bought with population.
+        // v11 (Verdi, Aug 2026): ARM is a magnitude, not a bit. The discrete
+        // stance can commit on a marginal signal (one visible unit, a slim
+        // momentum edge — see `stance_pressure`), and the old flat switch
+        // paid full army pricing and zero GROW rate the instant it did.
+        // Blend the SPT RATE (the economy-vs-military spending priority) by
+        // `arm_strength`, the same continuous read `passes_stance_tech_mask`
+        // gates the hard tech mask on: at 1.0 this is identical to the old
+        // formula, and as intensity falls the rate interpolates toward
+        // GROW's instead of cutting the economy gradient off a cliff.
+        // The army-VALUE term is deliberately NOT blended: it prices units
+        // already held, which does not become less true as intensity falls,
+        // and blending it made a besieged state score higher than a quiet
+        // one purely by "revealing" an unrelated unit's value, overpowering
+        // the city_risk penalty below (caught by
+        // `city_risk_is_priced_without_any_defend_order`).
         Stance::Arm => {
-            SHAPE_GOAL_ARM_PER_COST
-                * tribe
-                    .units
-                    .iter()
-                    .map(|u| crate::rules::combat::unit_worth(u) as f32)
-                    .sum::<f32>()
-                + SHAPE_GOAL_ARM_SPT * crate::functions::get_tribe_spt(state, tribe) as f32
+            let army_value: f32 =
+                tribe.units.iter().map(|u| crate::rules::combat::unit_worth(u) as f32).sum();
+            let intensity = aux.map_or(1.0, |a| a.arm_strength);
+            let spt_rate = intensity * SHAPE_GOAL_ARM_SPT + (1.0 - intensity) * SHAPE_GOAL_SPT;
+            SHAPE_GOAL_ARM_PER_COST * army_value + spt_rate * spt
         }
         Stance::Unlock => 0.0,
     };
@@ -102,9 +114,21 @@ pub fn goal_potential(
     // any purchase strictly beats. This is what makes a multi-turn plan legible
     // to a search whose horizon is one game turn — the ramp is visible at
     // depth 1, so the tree never has to reach the purchase to value it.
-    if goal.stance == Stance::Save {
-        if let Some(lane) = goal.save_target.as_ref().filter(|l| l.cost > 0) {
-            phi += SHAPE_GOAL_SAVE * save_progress(state, player, lane);
+    // v11: `goal.save_target` is carried regardless of which stance won the
+    // discrete pick (`compute_macro_goal_cached` never clears it when Arm
+    // pre-empts Save) — previously the ramp went fully dark the instant a
+    // marginal Arm signal won, so a Forge/Smithery plan lost its whole
+    // gradient over a covered skirmish. Pay it in full under SAVE, pay the
+    // (1 - arm_strength) remainder under ARM so the plan stays visible in
+    // proportion to how little the threat actually earns.
+    if let Some(lane) = goal.save_target.as_ref().filter(|l| l.cost > 0) {
+        let save_weight = match goal.stance {
+            Stance::Save => 1.0,
+            Stance::Arm => (1.0 - aux.map_or(1.0, |a| a.arm_strength)).clamp(0.0, 1.0),
+            _ => 0.0,
+        };
+        if save_weight > 0.0 {
+            phi += SHAPE_GOAL_SAVE * save_weight * save_progress(state, player, lane);
         }
     }
     let width = state.settings.size as i32;

@@ -252,8 +252,11 @@ pub enum ArmCause {
 /// Continuous magnitudes behind the categorical `Stance`. The if-else ladder in
 /// `compute_macro_goal` thresholds these away — "enemy near a city" and "crushing
 /// attack advantage" both emit a bare `Stance::Arm` — so anything that needs to
-/// know HOW military the position is has to recompute them. Read-only; nothing
-/// in search or the feature planes consumes this yet.
+/// know HOW military the position is has to recompute them. Consumed downstream
+/// as `GoalAux::arm_strength`: gates the hard tech mask at 0.98
+/// (`passes_stance_tech_mask`), paints the ARM feature plane's graded value
+/// (`features.rs`), and blends ARM's in-tree Φ toward GROW's rate below full
+/// intensity (`goal_potential`).
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct StancePressure {
     /// 0 = no military pressure or opportunity, 1 = maximal.
