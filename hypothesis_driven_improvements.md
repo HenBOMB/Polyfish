@@ -6397,3 +6397,410 @@ unrelated pre-existing fragile assumption
 new, correct behavior/contract rather than papered over.
 
 STATUS: SHIPPED.
+
+## ARM stance: bit to magnitude, part 2 — proportional Φ pricing and a live SAVE ramp under marginal threat
+
+DECIDED Aug 17, 2026. The Aug 14 audit ("ARM gate is a hair-trigger")
+already shipped two of its three pieces: the hard eco-tech research mask
+now fires only at `arm_strength >= 0.98` (`passes_stance_tech_mask`), and
+the ARM feature plane already paints the continuous `[0.05, 1]` intensity
+instead of a flat 1.0 (`features.rs`). The third piece — "below that
+threshold ARM shifts pricing proportionally and the Smithery/Forge
+SAVE-lane stays live" — was still unbuilt: `goal_potential`'s Stance::Arm
+branch paid the full army/SPT formula and zero GROW rate the instant the
+*discrete* stance flipped to Arm, regardless of how marginal the
+underlying `arm_strength` reading was, and the savings ramp
+(`SHAPE_GOAL_SAVE * save_progress`) was hard-gated to `Stance::Save` only —
+so a live Forge/Smithery plan went completely dark on any Arm pick, even
+a momentary one triggered by a single covered skirmish.
+
+**1. ARM's SPT rate now blends by `arm_strength`.** At intensity 1.0 the
+formula is byte-identical to before (`50/army-value + 75/SPT`); as
+intensity falls toward 0, the *SPT rate* interpolates toward GROW's
+150/SPT instead of staying pinned at ARM's 75/SPT. Deliberately does NOT
+blend the army-VALUE term — first attempt did, and broke
+`city_risk_is_priced_without_any_defend_order`: blending army value made a
+besieged state score *higher* than a quiet one, purely by "revealing" the
+value of units that were already there as intensity rose, which
+overpowered the actual risk penalty below it. Army value is priced the
+same regardless of threat level; only the economy-vs-military spending
+*priority* (the SPT rate) responds to intensity. Caught by the existing
+test suite, not by inspection — a reminder that a plausible-sounding blend
+can still get the wrong variable.
+
+**2. The savings ramp now pays under marginal ARM too.**
+`goal.save_target` is carried on `MacroGoal` regardless of which stance
+won the discrete pick (`compute_macro_goal_cached` never clears it when
+Arm pre-empts Save), so the data was already there — `goal_potential` just
+wasn't reading it under Arm. Now pays `SHAPE_GOAL_SAVE * (1 -
+arm_strength) * save_progress(...)` under Stance::Arm, so a near-certain
+threat (intensity ~1.0) still zeroes the ramp exactly as before, but a
+marginal one lets the plan keep most of its gradient instead of resetting
+to zero and restarting once the stance settles back to Save.
+
+Both fixes key off `GoalAux::arm_strength` (`stance_pressure(...).arm`),
+already threaded through every live call site (ply-level Gumbel search's
+`edge_snapshot`, `macro_exec.rs`, `macro_mcts.rs`) — no new plumbing
+needed. `aux.map_or(1.0, |a| a.arm_strength)` on both new terms: when aux
+is unavailable, both fall back to today's exact behavior (full ARM
+pricing, zero ramp), consistent with the fallback `passes_stance_tech_mask`
+already uses.
+
+VERIFICATION. 3 new tests (`goal_potential_tests.rs`):
+`arm_phi_blends_linearly_with_intensity` (full/zero/half intensity land on
+a straight line, no-aux matches full), `arm_army_value_does_not_depend_on_
+intensity` (same army at low vs high intensity must price identically —
+the mechanism `city_risk_is_priced_without_any_defend_order` exercises
+indirectly), `savings_ramp_stays_partially_live_under_marginal_arm` (zero
+at full intensity, exactly 70% of SAVE's own reading at 0.3 intensity).
+`cargo test --release --lib`: 210/210 passed, zero regressions —
+`city_risk_is_priced_without_any_defend_order` in particular is the test
+that caught the first (wrong) design and passed clean on the corrected one.
+
+STATUS: SHIPPED, not yet measured. This is a pricing-mechanism build, not
+a behavior A/B — per the project's own gotcha
+(`goal-w-tree harness trap`), any self_play/arena measurement of this MUST
+pass the goal-w-tree weight explicitly or the whole Φ channel is silently
+off and the run measures nothing. No training or arena run has been done
+against this change yet.
+
+## EXP_ELO_059 — does more MACRO_GEN training rescue the net-asym leaf? (re-test at eff_iter175)
+
+STATUS: RUN COMPLETE (Aug 17, 2026), Verdi-requested.
+
+HYPOTHESIS (Verdi, Aug 16). EXP_ELO_047 Phase B1 found `NetAsym` scored
+44.0% against the heuristic leaf at `exp046_snapshot_iter135` — a real
+bug fix (zero-sum by construction) that didn't clear the noise floor.
+Verdi's read: maybe the value head simply hadn't had enough training yet
+to judge macro-mcts leaves well. The Aug 14-16 run continued the exact
+same MACRO_GEN=1 lineage (heuristic-leaf data generation, corrected
+`TD_MISSING_BOOTSTRAP=mc` labels) for 60 more iterations (run_id
+1786710389, eff_iter 116->175). If "not enough training" was the limiting
+factor, `NetAsym` should score measurably higher at iter175 than the
+44.0% measured at iter135.
+
+PROTOCOL: identical to 047's Phase B1 registration — `--macro-leaf1
+net-asym --macro-leaf2 heuristic`, `--macro-sims 32 --macro-k 4`,
+`base_seed 1787300000`, 500 seeds x2 sides = 1000 games, gamemode 2,
+max_turns 30, tribe imperius, eval backend metal. Only variable changed:
+checkpoint (`exp046_snapshot_iter135.safetensors` ->
+`checkpoints/exp_leaf_recheck_eff_iter175.safetensors`, a fresh snapshot
+of the live model, sha256-verified, no training running concurrently).
+
+ACTUAL (Aug 17, 2026, 1000 games, 6287s / ~105 min). Worse, not better.
+`NetAsym` scored **350/1000 (35.0%)** against the heuristic leaf — DOWN
+from 44.0% at iter135. z = -9.49 against the 50% break-even. Comparing
+the two checkpoints directly (44.0% vs 35.0%, both n=1000, unpaired
+pooled-proportion z — the checkpoints differ so this is not a true
+McNemar pairing): z ~= 4.12 in the WORSENING direction. Avg score 4022.1
+vs 5234.5. Play quality collapsed across the board when net-asym holds
+the leaf seat, not just the win/loss coin flip: 3.66 sieges/game vs 1.87,
+1.63 cities lost/game vs 1.15 — the losing side is materially worse at
+defending, not just unlucky. Cost also rose: 915.67 ms/move vs 736.60
+(1.24x), so this is not "same quality, cheaper."
+
+READ IT HONESTLY. This falsifies the "just needs more training"
+hypothesis, and does so more strongly than a null result would have — 40
+additional full MACRO_GEN iterations, continuing the exact regime
+hypothesized to teach the head this task, moved the number backward by
+9pp. Combined with 047's finding that value_r2 sat at 0.807 while 21% of
+leaf roots priced both players as winning, this is now the second
+independent signal that ordinary continued training under the current
+data/label regime is not converging this head toward being a usable leaf
+judge — more of the same recipe made it worse, not slowly better. This
+closes the door Verdi asked to re-open ("it could be the value head
+performed poorly because it didn't get a chance to learn") — it did get
+the chance, under the exact protocol that would have rewarded it, and the
+result went the wrong way.
+
+This does not by itself explain WHY training under MACRO_GEN=1 pushes a
+leaf-judgment metric down — that is the open question, not "give it more
+time." Two structural candidates worth naming rather than guessing
+further: (1) the training distribution's value labels come from
+Monte-Carlo returns over heuristic-leaf-driven games (`td_missing=mc`),
+so the head is fit to predict outcomes of a policy it does not itself
+produce — more iterations may mean more overfitting to heuristic-driven
+trajectories in ways that generalize worse to the positions its own
+search actually reaches; (2) the pre-047 calibration defect (2x
+over-confident when ahead) may be worsening rather than healing as the
+value distribution sharpens toward the +-1 outcome labels with more
+training — sharper, not more correct.
+
+NEXT: the program-level read from 047 stands and is now reinforced — "the
+next credible move is data/labels/scale, not another consumer of the same
+head." Given this result, the more urgent open question is whether the
+value head is actively regressing on this task as training continues —
+which argues for a smaller, targeted diagnostic (e.g. value_r2 or
+calibration specifically on macro-leaf-shaped states at iter135 vs
+iter175) before spending another 1000-game run — rather than immediately
+trying the K-candidate-generation half of the original ask. Not run yet —
+for Verdi to weigh in on before the next step.
+
+## EXP_ELO_060 — value-head calibration, iter135 vs iter175 (quick dump)
+
+STATUS: REGISTERED (Aug 18, 2026), Verdi-requested follow-on to 059.
+
+HYPOTHESIS: 059 found value_r2 climbing (0.762->0.855) over the same 60
+MACRO_GEN iterations that made `NetAsym`'s leaf win rate fall (44.0%->
+35.0%). One live suspect: R2 is rising by fitting the easy, MC-saturated
+part of the label (outcome-near ±1) while calibration against the ACTUAL
+outcome gets no better, or worse. `--dump-value-calib` (existing tool,
+EXP_ELO_021) measures exactly this — root_value/raw_value vs final_outcome
+per net-seat ply — with zero new code needed.
+
+METHOD: self_play, mirror self-play (no --opponent, single model both
+seats so every net-seat row is unambiguously attributable), backend
+macro-mcts, `--macro-leaf net-asym` (the leaf actually under test),
+`--macro-sims 32 --macro-k 4` (the validated/saturated config, 033b),
+`--goal-channels --goal-w-tree 1` (goal-w-tree harness trap — omitting
+this silently zeroes the Φ channel and the run would not match production
+conditioning), `--td-missing-bootstrap mc` (matches the training config
+that produced both checkpoints). Run once per checkpoint from an isolated
+scratch cwd with that checkpoint copied to `model.safetensors` (self_play
+hardcodes the primary model path to cwd-relative `model.safetensors`, no
+CLI override exists — the live file is never touched). base_seed
+1787400000, 60 games/checkpoint, eval-backend metal.
+
+This is the calibration half only. The rank-correlation-vs-converged-Q
+half (does the net order same-position candidates the way the tree's own
+search settles on) needs new probe code — not a "quick dump" — and is
+scoped as a separate follow-up, not bundled here.
+
+### ACTUAL (Aug 18, 2026). Aggregate r2 flat; the value distribution
+saturated hard; the net's edge over the scoreboard flipped negative.
+
+Run cost overran the "quick" estimate badly — self_play hardcodes
+`max_turns = 50` (no CLI override; every prior arena comparison in this
+program used 30) and `net-asym` costs 2 forwards/leaf, so iter135's 60
+games took 4031s (67s/game) instead of the assumed ~10-20 min. iter175
+was cut to 18 games (same base_seed, so a seed-subset of iter135's maps)
+and finished in 180s (10s/game) — a 6.7x speed gap on identical settings,
+explained by a side-finding: iter135 logged 13x more sim-move-failures
+per decision (1.21 vs 0.09) despite near-identical moves/game (484 vs
+498) — an engineering artifact of the rollout candidate generator, not a
+calibration finding, noted and set aside.
+
+n=28024 (iter135) / n=8229 (iter175) net-seat rows.
+
+| metric | iter135 | iter175 |
+|---|---|---|
+| r2(root_value, final_outcome) | 0.452 | 0.440 |
+| r2(score_ratio, final_outcome) [scoreboard baseline] | 0.369 | **0.470** |
+| net beats scoreboard by | +0.083 r2 | **-0.030 r2** |
+| share of rows with \|root_value\|>0.8 | 27.9% | **59.7%** |
+| turn[30,40) r2 | 0.489 (n=980) | 0.016 (n=122) |
+
+Aggregate r2 alone is flat (Fisher z=1.19, not significant at these n) —
+does NOT reproduce 059's training-log value_r2 climb (0.762->0.855) on
+this held-out calibration read. Three things DO move, all the same
+direction as the overconfidence/label-saturation suspect from 059/021:
+
+1. **Saturation more than doubled.** The share of predictions landing
+   above 0.8 confidence went 27.9% -> 59.7% between checkpoints on
+   overlapping map seeds. The value head isn't getting more discriminating
+   with training — it's collapsing more of its output mass into "very
+   confident," win or lose.
+2. **The net's edge over a trivial scoreboard-ratio baseline flipped
+   sign.** At iter135 the net still beat "just read the score" by +0.083
+   r2. At iter175 the net LOSES to the scoreboard baseline by -0.030 r2.
+   Not a formally paired significance test (same-sample dependent
+   correlations, Steiger's test not run) — reported as a directional
+   finding, not a proven effect size.
+3. **Mid-confidence calibration bins are noisier and non-monotonic at
+   iter175** (e.g. [-0.6,-0.4) reads mean_outcome +0.03 while the
+   adjacent, less-negative [-0.4,-0.2) bin reads -0.75 — an inversion) —
+   though n per bin is thin (191-482) at 18 games, so treat as suggestive,
+   not confirmed.
+4. **turn[30,40) r2 collapses 0.489 -> 0.016** — small n (122) at iter175,
+   one data point, but it lands in exactly the game phase (mid-late turn
+   boundary, board mostly decided but not yet terminal) that matters most
+   for a macro leaf. Flagged, not confirmed — deserves a same-scale rerun
+   before being treated as established.
+
+READ: this is the calibration probe's version of what 059 already showed
+behaviorally — more of the current MACRO_GEN training recipe is not
+converging the value head toward a better leaf judge. The new information
+here is a candidate MECHANISM with a named lever: `--outcome-scale`
+(self_play's own default 3.0 "saturates ~32% of outcomes at +-1"; EXP_ELO_
+021's original note already flagged lowering it as the de-saturation
+fix). The saturation-share jump (27.9%->59.7%) is consistent with more
+training pushing further into that regime, not less.
+
+NOT YET DONE: a same-game-count rerun (18 vs 18, or 60 vs 60) to remove
+the n-mismatch caveat on findings 2-4; the rank-correlation-vs-converged-Q
+probe (still unbuilt); and any test of the `--outcome-scale` lever itself.
+STATUS: DATA GATHERED, mechanism candidate identified, no fix attempted.
+
+## EXP_ELO_061 — Stage 3b: a learned macro policy head (registered plan)
+
+STATUS: REGISTERED (Aug 18, 2026), Verdi-directed. Step 1 SHIPPED
+(commit `e8df22f`); steps 2+ in progress overnight, autonomous per
+Verdi's explicit instruction ("I want you to progress towards it...
+I won't be here to give feedback... commit on a semi-regular interval").
+
+NORTH STAR (Verdi, stated plainly): the project fails its own goal if
+the neural net is not the main driver of value — hand-written
+heuristics (`evaluate_state`, `enumerate_candidates`, `rank_plies`) are
+scaffolding the net is meant to eventually stand mostly on its own
+without, not the destination. This entry is not a new direction; it is
+`EXP_ELO_033`'s own registered next stage ("Stage 3 — AlphaZero-ify:
+macro policy head trained on tree visit distributions + value head
+trained on turn-boundary states"), finally being started.
+
+### The problem this attacks
+
+Macro-mcts's root candidates come entirely from `enumerate_candidates`
+(a scripted Lane+risk generator) — no learned prior proposes or
+re-weights them. The tree searches over a fixed, hand-authored ballot
+every time. Nothing about this can improve with more self-play; the
+generator does not learn.
+
+### Three rungs, not one leap
+
+1. **Prior over the existing scripted candidates.** Train a head on the
+   tree's own post-search visit distribution (behavior distillation,
+   not hand-labels); feed its output as a PUCT-style prior term into
+   macro-mcts's UCT selection over the SAME <=k scripted candidates it
+   searches today (currently plain UCT with no prior term at all,
+   `EXPLORATION=0.05`, argmax-visits root pick). Contained: doesn't
+   touch candidate generation, so it cannot make the ballot worse.
+2. Net proposes ADDITIONAL candidates alongside the scripted ballot.
+3. Net replaces `enumerate_candidates` outright — Verdi's stated end
+   state ("instead of some K enumerated candidates").
+
+**Why rung 1 first isn't just caution.** `EXP_ELO_016`'s postmortem
+(Jul 20) found reward-shaping a move's price did nothing because the
+ply-level Gumbel policy prior never sampled Build/Harvest into the
+candidate set in the first place — a proposal-starvation failure. That
+mechanism cannot recur at rung 1: the macro root has <=6 candidates
+(k=6 as of this entry, see below) and expand-one-per-sim at 64 sims
+visits all of them structurally. Starvation only re-enters at rung 3.
+
+### The two engineering traps this WILL hit if not built carefully
+
+1. **The metal-eval backend trap** (CLAUDE.md's own documented
+   gotcha): the tch and Metal eval backends stub new `EvalResult`
+   fields to zero — only the candle path computes them. `aux_fog`
+   (Aug 2026) is the one existing exception, deliberately mirrored into
+   `network.rs` AND the metal MPSGraph backend for exactly this reason.
+   A macro-prior head consumed at inference MUST get the same
+   treatment or every future A/B (which all run on
+   `--eval-backend metal`) measures a prior that silently reads zero —
+   this project's `goal-w-tree` trap wearing a new hat.
+2. **The aux-head supervision trap**: per the project's own aux-head
+   lesson, a new head must join the `aux_supervised` per-key mask (or
+   it silently unsupervises every legacy training archive) and any
+   spatial target plane must join the D4 rotation.
+
+### Step 1 (SHIPPED, commit `e8df22f`): export the raw supervision signal
+
+`Node.edge_visits` existed inside `macro_mcts.rs` but was never
+exported — the 60 iterations of MACRO_GEN data already on disk (run_id
+1786710389) cannot supervise this head; nothing captured it.
+`MacroMctsStats` gained `root_candidates`/`root_visits` (populated in
+`run_with` regardless of leaf kind); `MacroMctsAgent::last_root_ballot`
+and `Brain::macro_root_ballot` expose it; `self_play.rs` gained
+`--dump-macro-policy <dir>` (one JSON record per macro root decision,
+raw candidate ballot + visit counts, no head-shape encoding baked in
+yet — that waits for real data). 213/213 lib tests pass. Smoke-tested
+(sims=64, k=6, 3 games): rows well-formed, visit counts sum to
+macro-sims as expected.
+
+### Config change alongside this (Verdi-directed): macro-sims 32->64, macro-k 4->6
+
+Applied to `run_training_loop.sh`'s `MACRO_GEN` defaults. Flagged
+honestly: `EXP_ELO_033b` found sims=64 alone at FIXED k=4 bought
+nothing (48.4% vs sims=32, z=-0.95) — depth saturated because only
+~3-4 candidates were ever live and 32 sims already gave each ~8-10
+visits. Raising k to 6 changes the denominator (more candidates
+competing for the sim budget), which is a different regime than what
+033b tested — Verdi's own reasoning ("more breadth and eventually some
+depth as we halve into the winning candidates") targets exactly that
+distinction. Not re-tested as a strength claim here; this run is a data
+generator, not a competitive A/B, so the params only need to be
+reasonable, not proven.
+
+### Step 2 (in progress): accumulate real ballot/visit data overnight
+
+Launching MACRO_GEN self-play with `--dump-macro-policy` at the new
+sims=64/k=6 config, isolated scratch output, running unattended.
+Purpose: real candidate-count / visit-concentration / stance-order-
+target marginal distributions to design the head's exact output shape
+against, rather than guessing the encoding blind.
+
+### Step 3 (conditional on step 2 + time): head design + dual-sync implementation
+
+Planned shape (subject to revision once real data is in): a stance
+head (4-way, matching `Stance`), an order head (matching the 3
+`OrderKind` planes), a target-spatial head (11x11, reusing the
+existing goal-channel target convention) — mirroring how the existing
+ply-level `DecomposedMapper` already decomposes action_type/source/
+target/option instead of a flat action index, for the same reason
+(raw candidate ordering is not stable across states).
+
+Safety boundary for autonomous work, self-imposed: implement following
+the `aux_fog` optional-load precedent (backward compatible,
+`vs.contains_tensor`-gated, existing checkpoints unaffected), validate
+with unit tests + a small local smoke train (loss computes, no NaN,
+checkpoint round-trips Rust<->Python) — but do NOT touch the live
+production `model.safetensors`, and do NOT launch a long, unattended
+"does this actually make the net stronger" training+arena campaign
+without Verdi's morning review. That class of claim has a five-deep
+falsification history on this exact axis (`EXP_ELO_016`, `039`, `046`,
+`047`, `059`) and deserves a human decision on whether to spend the
+compute, not a unilateral overnight one.
+
+### Step 2 ACTUAL (Aug 18, 2026 overnight) — real data, head shape settled
+
+6537 macro-root decisions, 154 games, sims=64/k=6, heuristic leaf,
+random tribes, from the overnight `--dump-macro-policy` run (still
+running, more data accumulating past this read).
+
+- **Ballot size**: 2-9 candidates, mode k=6 (26.4%), k=5-7 covers 65.7%
+  — small and bounded, consistent with a decomposed-then-recomposed
+  scoring approach rather than a flat per-candidate classifier.
+- **Visit concentration is genuinely soft, not degenerate**: median
+  top-1 share 0.266, rising with turn (0.286 @t0-10 -> 0.479 @t40-50)
+  — real distillation signal, not near-one-hot noise, especially early.
+- **Stance visit-mass**: Arm 44.2%, Grow 35.3%, Save 20.5%, **Unlock
+  0%** (present in the enum, essentially never live in this sample —
+  worth knowing, not a problem for a softmax head).
+- **OrderKind visit-mass**: Expand 61.0%, Defend 22.3%, Attack 16.8% —
+  all three kinds meaningfully represented.
+- **Orders per candidate**: 1-4 orders covers 83.5%; a candidate
+  routinely carries MULTIPLE orders of different kinds, and can carry
+  multiple targets of the SAME kind (matches `features.rs`'s existing
+  "same-kind targets max-merged into one plane" input convention — a
+  single-argmax-target design would be lossy here; a per-kind spatial
+  intensity map is not).
+- **Target vocabulary is small and concentrated**: only 34 distinct
+  tile indices ever targeted across the whole sample (capitals, hubs,
+  frontier villages) — well within a spatial conv head's capacity, and
+  matches how `pi_source`/`pi_target`/`aux_fog` already handle "which
+  tile" questions.
+
+**Head shape (settled, informed by the above, not guessed):**
+- `pi_macro_stance`: `Linear(filters, 4)` off the pooled trunk (mirrors
+  `v_win`'s pattern) — softmax over `Stance`, supervised by the
+  visit-mass-weighted stance marginal per root (a soft target, per the
+  concentration numbers above, not one-hot).
+- `pi_macro_order`: `Conv2d(filters, 3, 1, 1, 0)` (mirrors `aux_fog`'s
+  exact shape, 3 output channels instead of 1 — one per `OrderKind`) —
+  per-tile sigmoid intensity, NOT a spatial softmax, since a goal's
+  orders are non-exclusive both across kinds and across same-kind
+  targets. Supervised per-channel BCE against the visit-weighted
+  target-tile mass for that kind.
+- At inference, a candidate's prior score recomposes as
+  `stance_prob[c.stance] * agg(order_map[kind][target] for (kind,
+  target) in c.orders)` (aggregation TBD — mean vs product, to settle
+  empirically), normalized across the K candidates on the ballot —
+  the same decompose-then-recompose pattern the ply-level
+  `DecomposedMapper` already uses for exactly the same reason (raw
+  candidate identity isn't a stable index across states).
+
+Next: implement `pi_macro_stance`/`pi_macro_order` in `network.rs`
+following the `aux_fog` optional-load precedent (Rust side first,
+self-contained and testable without touching the training pipeline);
+train.py mirror + the actual training-data wiring (turning the raw
+JSONL export into real tensor targets) follows once the Rust side is
+validated.
