@@ -208,7 +208,9 @@ impl Game {
         let undo = if game_move.move_type() == MoveType::EndTurn {
             let end_undo = self.end_turn();
             let old_recent_moves = std::mem::take(&mut self.state.settings._recent_moves);
+            self.state._history.push(game_move.serialize());
             Box::new(move |s: &mut GameState| {
+                s._history.pop();
                 end_undo(s);
                 s.settings._recent_moves = old_recent_moves;
             }) as UndoCallback
