@@ -20,6 +20,13 @@ seconds. Update `Status:` as items are fixed. Confidence tiers:
 - **FLAGGED** — from the audit sweep, survived an adversarial verification pass,
   but not independently reproduced. Treat citations as leads.
 
+**Scope:** the **Polaris** tribe is out of scope — skip Polaris-specific
+mechanics and any finding that only affects them. Items marked
+"Resolved (owner)" carry a decision from the repo owner and should not be
+re-litigated. Note this repo is a **fork**; upstream development happens under
+`HenBOMB/Polyfish`, so the provenance of a setting is often unrecoverable from
+here — prefer settling such questions by measurement rather than archaeology.
+
 ---
 
 ## Correction to the first draft of this audit
@@ -114,9 +121,25 @@ grep -n 'NUM_ACTION_TYPES\|num_action_types = ' polyfish-rs/src/ai/network.rs
 grep -n 'pi_action = nn.Linear' polyfish-rs/train.py
 ```
 
-Fix: decide whether Resign is a real action, make both sides read one constant
-(`network.rs:178` should use `NUM_ACTION_TYPES`), and add a producer/consumer
-width assertion so they cannot drift again.
+**Resolved (owner):** Resign stays — resigning a clearly lost game is legitimate.
+So the fix is to **widen both heads to 12**, not to drop the mapping. Make
+`network.rs:178` read `NUM_ACTION_TYPES` instead of a literal, mirror the width
+in `train.py:145`, migrate checkpoints, and add a producer/consumer width
+assertion so the two cannot drift again.
+
+Follow-on that this exposes: `ResignMove` is **never generated as a legal move**.
+It is a bare struct at `moves/mod.rs:139` and is only ever constructed by hand at
+`main.rs:575` (the web/API move-by-index path). `generate_legal_moves` never
+emits it, so slot 11 would receive zero self-play gradient and the net could
+never learn to use it. Wiring the width is therefore necessary but not
+sufficient — resignation has to become a generated move (or be injected by a
+value threshold) before the head slot means anything.
+
+```bash
+# Verify Resign is unreachable from search
+grep -rn 'ResignMove' polyfish-rs/src/ | grep -v 'struct\|impl Move\|use '
+# → only main.rs:575
+```
 
 ---
 
@@ -207,8 +230,13 @@ a linear probe on features selected for something else.
 
 Nuance: the export predates the `3893daf` re-import (present at `5ecdb5d~1` too),
 so it is a long-standing setting rather than a fresh accident. But there is **no
-recorded verdict for it** in `hypothesis_driven_improvements.md`. Establish
-whether it is deliberate before removing it — and if it is, record why.
+recorded verdict for it** in `hypothesis_driven_improvements.md`.
+
+**Resolved (owner):** provenance is unrecoverable — this repo is a fork and the
+switch was set upstream. So stop trying to establish intent and settle it
+empirically instead: run the arm both ways once the gauge works (P1/P2/M1) and
+record the result as the missing verdict. Until then treat it as an open
+variable, not as a known-good setting.
 
 ```bash
 # Verify
@@ -232,6 +260,69 @@ every turn boundary (`mcts_common.rs`). Both comments are internally reasoned an
 mutually exclusive. Pick one convention, make it one constant.
 
 Also: `GOOD_BOT_FINAL_SCORE` (`self_play.rs:37`) is dead while `REL_W` is 1.0.
+
+### A2b · The value label is built from `score`, but training plays Domination
+**Status:** OPEN · **CONFIRMED** · Effort: days · *Raised by the owner*
+
+This is the deeper version of A2, and it may be the single best explanation for
+why the net cannot beat the teacher it was distilled from.
+
+Every TD label term routes through the raw scoreboard:
+
+```rust
+// ai/reward.rs:46 — the only quantity the reward ever reads
+let my = state.tribes.get(&player).map(|t| t.score).unwrap_or(0);
+```
+
+But training runs **Domination** (`run_training_loop.sh:377,389` default
+`GAMEMODE=2`; `ModeType::Domination = 2` at `types.rs:25`), where the win
+condition is elimination — `self_play.rs:939` resolves the winner as the sole
+surviving tribe, falling back to score only on timeout. In Domination the
+scoreboard is not the objective; it is a loosely correlated side-channel.
+
+The codebase already knows this. The heuristic scorer branches on exactly this
+distinction, using the owner's own example:
+
+```rust
+// ai/scoring.rs:713-730
+CityRewardType::Park => {
+    if is_perfection {
+        base + 20.0   // "Always choose Park in Perfection — +250 score is massive"
+    } else {
+        base + 5.0    // "In Domination, Park is +1 SPT but no tactical advantage"
+    }
+}
+CityRewardType::SuperUnit => {
+    if is_perfection { base + 8.0 }
+    else { base + 18.0 }   // "In Domination, super unit is game-changing"
+}
+```
+
+So at a level-5 city in Domination the greedy teacher correctly prefers the
+Giant, while the TD value label — reading `t.score` — credits the Park's +250 and
+teaches the net that the teacher's move was the worse one. The heuristic is mode-
+aware; the learning signal is not. Anywhere score and winning diverge (parks,
+monuments, tech tier bought for points, score-dense but tactically idle play) the
+label actively pulls against the teacher it is meant to distil.
+
+That also predicts the specific failure EXP_ELO_001 recorded — over-investment in
+research (17.3 techs vs Greedy's 12.1 by turn 24) — since tech tier pays score
+directly.
+
+Fix, in increasing order of ambition:
+1. Make the reward mode-aware: in Domination, drop or heavily discount the score
+   terms that do not translate to winning, or weight score by a Domination-
+   relevant subset (army value, city count, territory) rather than the raw total.
+2. Better, replace the proxy: build the TD label from a win-relevant potential —
+   elimination progress, city/territory differential, army value differential —
+   and keep the terminal label as the actual outcome.
+3. Cheapest diagnostic first: log score-vs-outcome correlation over a set of
+   finished Domination games. If score at turn *n* predicts the winner weakly,
+   that quantifies the ceiling the current label imposes.
+
+Note this cuts against A2's framing: making the label zero-sum in `score` does
+not help if `score` is the wrong quantity. Resolve A2b before spending effort on
+A2's constant.
 
 ### A3 · Optimizer and LR schedule reset every iteration
 **Status:** OPEN · **CONFIRMED** · Effort: days
@@ -342,7 +433,9 @@ exists for exactly this.
 ### E2 · Engine correctness items
 **Status:** OPEN · **FLAGGED**
 
-- `freeze_area` never freezes, and its undo permanently turns water into Ice.
+- ~~`freeze_area` never freezes, and its undo permanently turns water into Ice.~~
+  **OUT OF SCOPE (owner):** Polaris is out of scope. Do not spend effort on
+  Polaris-specific mechanics; the same applies to any other Polaris finding.
 - `max_turns_ahead` ignores its `max_turns` argument and hard-codes a 20-turn
   game, collapsing the search horizon to 2 turns from turn 18 onward.
 - The search cannot reveal fog, so multi-turn expansion into unexplored ground is
@@ -441,14 +534,20 @@ until 1–4 are done, because until then there is no working instrument.
 1. **P1 + P2** — restore the flag contract, make the gauge fail loudly.
 2. **P3** — reconcile the action-head width, add a width assertion.
 3. **M1 + M2 + M4** — seed control, aligned search knobs, matched `max_turns`.
-4. **A1 + A2 + A4** — resolve the detach switch, unify `REL_W`, restore the D4 caveat.
+4. **A4** — restore the deleted D4 caveat (minutes, prevents a repeat of run
+   1783556259).
 5. **Re-baseline.** With a working, seeded, aligned gauge, take a fresh reading.
    The "cannot beat its own greedy anchor" premise may not survive it.
-6. **T1 + T2** — parity test and an end-to-end smoke run, so this class of break
+6. **A2b**, then A1 — the label is measured against the wrong quantity in
+   Domination; settle that before tuning A2's relative/absolute constant, and run
+   the detach arm both ways now that a gauge exists to judge it.
+7. **T1 + T2** — parity test and an end-to-end smoke run, so this class of break
    cannot recur silently.
-7. **R1**, then R2/R3 — architecture work, scheduled against the new baseline.
+8. **R1**, then R2/R3 — architecture work, scheduled against the new baseline.
 
-Steps 1–4 are all hours of work.
+Steps 1–4 are all hours of work. A2b is the first item that is genuinely a
+design change rather than a repair, which is why it sits after the re-baseline —
+it needs a working instrument to be judged against.
 
 ---
 
