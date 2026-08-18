@@ -747,6 +747,11 @@ async fn reset_game(State(state): State<Arc<AppState>>) -> Json<Value> {
     let initial_state = generate(settings);
     game.state = initial_state;
     game.state.settings._verbose = true;
+    // GameSettings::default_max_turns() is 10 -- fine as the network-feature
+    // normalization baseline (features.rs), wrong as a game length for an
+    // interactive session. self_play.rs already overrides this the same way
+    // for training games; this path never did.
+    game.state.settings.max_turns = 50;
     game.post_load();
 
     let mut tiles: Vec<_> = game.state.tiles.values().collect();

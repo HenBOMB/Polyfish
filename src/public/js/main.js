@@ -1186,17 +1186,15 @@ function checkRewardPopup() {
 
         // Polytopia usually forces selection if there are multiple rewards (e.g. Workshop vs Explorer)
         if (rewardMoves.length >= 1) {
-            // Debugging Teacher Mode Popup Prevention
-            if (INTERACTIVE_MODE) {
-                console.log("Teacher Mode Reward Check:", {
-                    turn: GAME_STATE.settings.currentPlayerTurnId,
-                    isHuman: GAME_STATE.settings.currentPlayerTurnId === 1
-                });
-            }
-
-            // In Teacher Mode, if it's AI's turn, do NOT show the popup. Let the AI propose.
-            if (INTERACTIVE_MODE && GAME_STATE.settings.currentPlayerTurnId !== 1) {
-                console.log("Skipping Reward Popup for AI Teacher Mode");
+            // currentLegalMoves always reflects whichever player currently
+            // has the turn, so a reward move here can belong to the AI's own
+            // city (post-autostep). This check used to be gated behind
+            // INTERACTIVE_MODE, which meant it was a no-op during normal
+            // play (autostep for the opponent, not teacher mode) -- the
+            // popup showed for the enemy's level-up choices too. It must
+            // fire unconditionally: only the human's own reward moves should
+            // ever prompt.
+            if (GAME_STATE.settings.currentPlayerTurnId !== 1) {
                 return;
             }
 
@@ -1557,9 +1555,23 @@ function enableOverride() {
     showToast("👉 Play your move now");
 }
 
-// Keyboard shortcuts for Assistant
+// Explicit click wiring for the teacher HUD: this is the reliable path.
+// The buttons had no handler at all before this fix — the keyboard shortcut
+// below was the ONLY functional way to accept/reject, and it fires on ANY
+// 'y'/'n' keystroke anywhere on the page (no input-focus check), silently
+// applying the AI's suggested move on any incidental keypress while the HUD
+// happened to be visible. Root cause of moves the user never intended to make.
+document.getElementById('btn-teach-accept').onclick = acceptAiMove;
+document.getElementById('btn-teach-override').onclick = enableOverride;
+
+// Keyboard shortcuts for Assistant: convenience only now that the buttons
+// work. Ignored while focus is in a text input/textarea/contenteditable, so
+// typing elsewhere on the page can't be misread as an accept/reject.
 window.addEventListener('keydown', (e) => {
     if (!INTERACTIVE_MODE || teacherHud.classList.contains('hidden')) return;
+    const t = document.activeElement;
+    const isTyping = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+    if (isTyping) return;
 
     if (e.key.toLowerCase() === 'y') {
         acceptAiMove();
