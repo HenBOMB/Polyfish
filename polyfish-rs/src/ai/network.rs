@@ -477,19 +477,40 @@ pub struct RawPolicyOutput {
     /// branch instead of reading a zero (the `progress` value is stubbed to
     /// 0.0 on the tch and Metal paths; that trap is not repeated here).
     pub fog: Option<Vec<f32>>,
+    /// EXP_ELO_061: macro-mcts root prior, stance half. 4 long, already
+    /// softmaxed. Mirrored on candle and Metal (the production eval
+    /// backend); tch is NOT wired (stays `None` there always, like
+    /// `progress` — a documented, lower-priority gap, not a silent one).
+    pub macro_stance: Option<Vec<f32>>,
+    /// EXP_ELO_061: macro-mcts root prior, order half. 3*H*W long, already
+    /// sigmoided. Same backend coverage as `macro_stance`.
+    pub macro_order: Option<Vec<f32>>,
 }
 
 impl PolicyOutput {
     /// Read this batched policy output to CPU and split it into one
     /// [`RawPolicyOutput`] per row (leaf). Call once per batch — the
     /// `to_vec1`/`to_vec2` reads are the only device ops involved.
-    pub fn to_raw_rows(&self, fog: Option<&Tensor>) -> Result<Vec<RawPolicyOutput>> {
+    pub fn to_raw_rows(
+        &self,
+        fog: Option<&Tensor>,
+        macro_stance: Option<&Tensor>,
+        macro_order: Option<&Tensor>,
+    ) -> Result<Vec<RawPolicyOutput>> {
         let action_type = self.action_type.to_vec2::<f32>()?;
         let source_spatial = self.source_spatial.to_vec2::<f32>()?;
         let target_spatial = self.target_spatial.to_vec2::<f32>()?;
         let move_option = self.move_option.to_vec2::<f32>()?;
 
         let fog_rows = match fog {
+            Some(t) => Some(t.to_vec2::<f32>()?),
+            None => None,
+        };
+        let stance_rows = match macro_stance {
+            Some(t) => Some(t.to_vec2::<f32>()?),
+            None => None,
+        };
+        let order_rows = match macro_order {
             Some(t) => Some(t.to_vec2::<f32>()?),
             None => None,
         };
@@ -503,6 +524,8 @@ impl PolicyOutput {
                 target_spatial: target_spatial[i].clone(),
                 move_option: move_option[i].clone(),
                 fog: fog_rows.as_ref().map(|f| f[i].clone()),
+                macro_stance: stance_rows.as_ref().map(|f| f[i].clone()),
+                macro_order: order_rows.as_ref().map(|f| f[i].clone()),
             });
         }
         Ok(rows)

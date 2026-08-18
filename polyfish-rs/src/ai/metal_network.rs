@@ -53,6 +53,9 @@ const GN_GROUPS: usize = 8;
 // Output head widths (rows are [win 1, action 11, source 121, target 121, option 192]).
 const ACTION_DIM: usize = 11;
 const OPTION_DIM: usize = 192;
+// EXP_ELO_061: macro-mcts root prior widths (both optional, gated by has_macro_policy).
+const MACRO_STANCE_DIM: usize = 4;
+const MACRO_ORDER_DIM: usize = 3 * SPATIAL;
 
 /// Smallest pooled-buffer capacity, in rows. Capacities are
 /// `batch.next_power_of_two().max(MIN_POOL_ROWS)`, so a worker ends up with a
@@ -254,6 +257,101 @@ mod tests {
         );
     }
 
+    /// EXP_ELO_061: same discipline as `fog_head_agrees_across_backends`,
+    /// for the macro policy head. Uses `checkpoints/macro_policy_head_ref.
+    /// safetensors` (gitignored like every other checkpoint fixture — see
+    /// `ai::network::macro_policy_head_tests` for how to regenerate it) since
+    /// no checkpoint that reaches `model.safetensors` carries this head yet.
+    /// That fixture also happens to carry aux_fog (a full Python
+    /// PolyZeroNet's state_dict, saved whole), so this run exercises the
+    /// "both optional heads present" positional-index case in
+    /// `slice_outputs` for free — not just "macro alone".
+    #[test]
+    fn macro_policy_head_agrees_across_backends() {
+        let path = "checkpoints/macro_policy_head_ref.safetensors";
+        if !std::path::Path::new(path).exists() {
+            return;
+        }
+        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f32 / (1u64 << 53) as f32
+        };
+        let batch = 2usize;
+        let spatial: Vec<f32> = (0..batch * super::NUM_CHANNELS * super::SPATIAL)
+            .map(|_| next())
+            .collect();
+        let player: Vec<f32> = (0..batch * super::PLAYER_DIM).map(|_| next()).collect();
+
+        let metal = match super::MetalPolyZeroNet::load(path) {
+            Ok(n) => n,
+            Err(_) => return,
+        };
+        let (_, metal_rows) = metal.forward_batch(&spatial, &player, batch);
+        let Some(metal_stance) = metal_rows[0].macro_stance.clone() else {
+            panic!("fixture carries pi_macro_stance; the Metal graph must emit it");
+        };
+        let Some(metal_order) = metal_rows[0].macro_order.clone() else {
+            panic!("fixture carries pi_macro_order; the Metal graph must emit it");
+        };
+        assert_eq!(metal_stance.len(), super::MACRO_STANCE_DIM);
+        assert_eq!(metal_order.len(), super::MACRO_ORDER_DIM);
+        let stance_sum: f32 = metal_stance.iter().sum();
+        assert!((stance_sum - 1.0).abs() < 1e-4, "stance softmax must sum to 1, got {stance_sum}");
+        assert!(metal_order.iter().all(|p| (0.0..=1.0).contains(p)));
+        // Also confirm fog (this fixture's other optional head) still reads
+        // sane — the real regression this test guards against is the two
+        // optional heads' positional indices colliding.
+        assert!(metal_rows[0].fog.is_some(), "fixture also carries aux_fog");
+
+        use candle_core::{DType, Device, Tensor as CTensor};
+        let vb = unsafe {
+            candle_nn::VarBuilder::from_mmaped_safetensors(
+                &[std::path::Path::new(path)],
+                DType::F32,
+                &Device::Cpu,
+            )
+        };
+        let Ok(vb) = vb else { return };
+        let Ok(cnet) = crate::ai::network::PolyZeroNet::new(vb) else { return };
+        let cmap = CTensor::from_vec(
+            spatial.clone(),
+            (batch, super::NUM_CHANNELS, super::MAP_SIZE, super::MAP_SIZE),
+            &Device::Cpu,
+        )
+        .unwrap();
+        let cplayer =
+            CTensor::from_vec(player.clone(), (batch, super::PLAYER_DIM), &Device::Cpu).unwrap();
+        let (_, cval) = cnet.forward(&cmap, &cplayer).unwrap();
+        let cstance = cval.macro_stance_probs.expect("candle must emit macro_stance");
+        let corder = cval.macro_order_maps.expect("candle must emit macro_order");
+        let cstance0 = cstance.get(0).unwrap().to_vec1::<f32>().unwrap();
+        let corder0 = corder.get(0).unwrap().to_vec1::<f32>().unwrap();
+
+        let stance_d = metal_stance
+            .iter()
+            .zip(cstance0.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            stance_d < 2e-3,
+            "Metal and candle macro_stance disagree by {stance_d} (metal {metal_stance:?} candle {cstance0:?})"
+        );
+        let order_d = metal_order
+            .iter()
+            .zip(corder0.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            order_d < 2e-3,
+            "Metal and candle macro_order disagree by {order_d} (first few: metal {:?} candle {:?})",
+            &metal_order[..4],
+            &corder0[..4]
+        );
+    }
+
 }
 
 /// PolyZeroNet inference via a hand-composed MPSGraph. Holds the raw weight
@@ -268,6 +366,11 @@ pub struct MetalPolyZeroNet {
     /// v9: whether this checkpoint carries the mirrored `aux_fog` head. Fixed
     /// at load, so the compiled graph shape is stable across batch sizes.
     has_fog: bool,
+    /// EXP_ELO_061: whether this checkpoint carries the mirrored macro
+    /// policy head (both pi_macro_stance and pi_macro_order always land
+    /// together — one flag, not two, matching how they're always
+    /// trained/saved as a pair).
+    has_macro_policy: bool,
     device: MetalDevice,
     queue: CommandQueue,
     /// Shared descriptor for async submission (`waitUntilCompleted = false`);
@@ -355,6 +458,7 @@ impl MetalPolyZeroNet {
             .map_err(|e| anyhow::anyhow!("failed to configure async descriptor: {e:?}"))?;
         Ok(Self {
             has_fog: weights.contains_key("aux_fog.weight"),
+            has_macro_policy: weights.contains_key("pi_macro_stance.weight"),
             weights,
             device,
             queue,
@@ -720,6 +824,22 @@ impl MetalPolyZeroNet {
             .unary_arithmetic(UnaryArithmeticOp::Tanh, &win_raw, None)
             .expect("forward: tanh win"); // [B, 1]
 
+        // EXP_ELO_061: macro-mcts root prior. Stance off v_latent (same
+        // trunk tensor as candle/train.py); order off x2 like aux_fog. The
+        // bindings expose neither softmax nor sigmoid, so both activations
+        // apply on the CPU in slice_outputs, same reasoning as fog.
+        let macro_stance_raw = self
+            .has_macro_policy
+            .then(|| self.linear(&graph, &v_latent, "pi_macro_stance")); // [B, 4]
+        let macro_order_spatial = self.has_macro_policy.then(|| {
+            let order_conv = self.conv2d(&graph, &x2, "pi_macro_order", 0);
+            let (order_w_shape, _) = self.get("pi_macro_order.weight");
+            let order_c = order_w_shape[0];
+            graph
+                .reshape(&order_conv, &[b, order_c * h * w], None)
+                .expect("forward: flatten pi_macro_order")
+        });
+
         // Compile for this fixed batch size. The `Executable` is
         // self-contained; `graph` and its intermediate `Tensor`s (including
         // the placeholders) are dropped when this function returns.
@@ -735,10 +855,22 @@ impl MetalPolyZeroNet {
                 data_type: data_type::FLOAT32,
             },
         ];
+        // Output order is a fixed convention shared by build_and_compile,
+        // submit_set, and slice_outputs: win, action, source, target,
+        // option, [fog], [macro_stance], [macro_order] — each optional slot
+        // present iff its has_X flag is true. The three sites MUST check in
+        // this same order or the positional indices in slice_outputs drift
+        // out of sync with what was actually compiled.
         let mut targets: Vec<&Tensor> =
             vec![&win, &action_type, &source_spatial, &target_spatial, &move_option];
         if let Some(f) = fog_spatial.as_ref() {
             targets.push(f);
+        }
+        if let Some(s) = macro_stance_raw.as_ref() {
+            targets.push(s);
+        }
+        if let Some(o) = macro_order_spatial.as_ref() {
+            targets.push(o);
         }
         let executable = graph
             .compile(&self.device, &feed_descs, &targets)
@@ -788,7 +920,7 @@ impl MetalPolyZeroNet {
             .run(&self.queue, &[&spatial_data, &player_data])
             .expect("mpsgraph: executable.run failed");
 
-        slice_outputs(&results, batch)
+        slice_outputs(&results, batch, self.has_fog, self.has_macro_policy)
     }
 
     /// Allocate a fresh buffer set sized for `capacity_rows` rows.
@@ -808,6 +940,8 @@ impl MetalPolyZeroNet {
             target: f32_buf(capacity_rows * SPATIAL),
             option: f32_buf(capacity_rows * OPTION_DIM),
             fog: f32_buf(capacity_rows * SPATIAL),
+            macro_stance: f32_buf(capacity_rows * MACRO_STANCE_DIM),
+            macro_order: f32_buf(capacity_rows * MACRO_ORDER_DIM),
         }
     }
 
@@ -850,6 +984,10 @@ impl MetalPolyZeroNet {
         if self.has_fog {
             outputs.push(td(&set.fog, &[batch, SPATIAL]));
         }
+        if self.has_macro_policy {
+            outputs.push(td(&set.macro_stance, &[batch, MACRO_STANCE_DIM]));
+            outputs.push(td(&set.macro_order, &[batch, MACRO_ORDER_DIM]));
+        }
         let output_refs: Vec<&TensorData> = outputs.iter().collect();
 
         let mut executables = self.executables.borrow_mut();
@@ -878,6 +1016,8 @@ impl MetalPolyZeroNet {
             outputs,
             barrier,
             pool: Rc::clone(&self.pool),
+            has_fog: self.has_fog,
+            has_macro_policy: self.has_macro_policy,
         }
     }
 
@@ -936,6 +1076,8 @@ struct BufferSet {
     target: MetalBuffer,
     option: MetalBuffer,
     fog: MetalBuffer,
+    macro_stance: MetalBuffer,
+    macro_order: MetalBuffer,
 }
 
 /// Copy an f32 slice into a shared-storage Metal buffer.
@@ -959,6 +1101,12 @@ pub struct InFlightForward {
     outputs: Vec<TensorData>,
     barrier: CommandBuffer,
     pool: Rc<RefCell<Vec<BufferSet>>>,
+    /// Captured at submit time (not read off `self.outputs`' length at
+    /// readback) — see `slice_outputs`' doc comment on why presence must be
+    /// explicit rather than inferred from array length once there are two
+    /// independent optional heads.
+    has_fog: bool,
+    has_macro_policy: bool,
 }
 
 impl InFlightForward {
@@ -972,7 +1120,7 @@ impl InFlightForward {
     /// Read the outputs back to CPU floats and return the buffer set to the
     /// pool. Only valid after [`wait`](Self::wait).
     pub fn readback(mut self) -> (Vec<f32>, Vec<RawPolicyOutput>) {
-        let out = slice_outputs(&self.outputs, self.batch);
+        let out = slice_outputs(&self.outputs, self.batch, self.has_fog, self.has_macro_policy);
         if let Some(set) = self.set.take() {
             self.pool.borrow_mut().push(set);
         }
@@ -980,17 +1128,49 @@ impl InFlightForward {
     }
 }
 
-/// Slice the five output tensors (win, action, source, target, option) into
-/// per-row `(value, RawPolicyOutput)` CPU data. Shared by the sync and async
-/// paths so both produce byte-identical results.
-fn slice_outputs(results: &[TensorData], batch: usize) -> (Vec<f32>, Vec<RawPolicyOutput>) {
-    // The fog head is an optional 6th target (absent on pre-aux checkpoints).
-    let fog_v = results.get(5).map(|r| r.read_f32().expect("forward: read fog"));
+/// Slice the fixed five output tensors (win, action, source, target,
+/// option) plus whichever optional heads are present into per-row
+/// `(value, RawPolicyOutput)` CPU data. Shared by the sync and async paths
+/// so both produce byte-identical results.
+///
+/// `has_fog`/`has_macro_policy` MUST match what `build_and_compile`
+/// actually compiled into the executable that produced `results` — passed
+/// explicitly (not inferred from `results.len()`) because two independent
+/// optional heads make length ambiguous on its own (fog contributes 1 slot,
+/// macro_policy contributes 2 — several `(has_fog, has_macro_policy)`
+/// combinations are still uniquely decodable by length, but inferring that
+/// silently is exactly the kind of positional bug this comment exists to
+/// prevent). The read order below — fog, then macro_stance, then
+/// macro_order — MUST match the push order in `build_and_compile`'s
+/// `targets` and `submit_set`'s `outputs`.
+fn slice_outputs(
+    results: &[TensorData],
+    batch: usize,
+    has_fog: bool,
+    has_macro_policy: bool,
+) -> (Vec<f32>, Vec<RawPolicyOutput>) {
     let win_v = results[0].read_f32().expect("forward: read win");
     let action_v = results[1].read_f32().expect("forward: read action");
     let source_v = results[2].read_f32().expect("forward: read source");
     let target_v = results[3].read_f32().expect("forward: read target");
     let option_v = results[4].read_f32().expect("forward: read option");
+
+    let mut next = 5;
+    let fog_v = has_fog.then(|| {
+        let v = results[next].read_f32().expect("forward: read fog");
+        next += 1;
+        v
+    });
+    let stance_v = has_macro_policy.then(|| {
+        let v = results[next].read_f32().expect("forward: read macro_stance");
+        next += 1;
+        v
+    });
+    let order_v = has_macro_policy.then(|| {
+        let v = results[next].read_f32().expect("forward: read macro_order");
+        next += 1;
+        v
+    });
 
     const AT: usize = 11;
     const SS: usize = SPATIAL; // 121
@@ -1010,6 +1190,21 @@ fn slice_outputs(results: &[TensorData], batch: usize) -> (Vec<f32>, Vec<RawPoli
             // sigmoid, and 121 CPU exps per row is noise next to the forward.
             fog: fog_v.as_ref().map(|f| {
                 f[i * SPATIAL..(i + 1) * SPATIAL]
+                    .iter()
+                    .map(|z| 1.0 / (1.0 + (-z).exp()))
+                    .collect()
+            }),
+            // EXP_ELO_061: softmax on the CPU — same reasoning as fog's
+            // sigmoid, and 4 elements/row is free next to the forward.
+            macro_stance: stance_v.as_ref().map(|f| {
+                let row = &f[i * MACRO_STANCE_DIM..(i + 1) * MACRO_STANCE_DIM];
+                let max = row.iter().cloned().fold(f32::MIN, f32::max);
+                let exps: Vec<f32> = row.iter().map(|z| (z - max).exp()).collect();
+                let sum: f32 = exps.iter().sum();
+                exps.iter().map(|e| e / sum).collect()
+            }),
+            macro_order: order_v.as_ref().map(|f| {
+                f[i * MACRO_ORDER_DIM..(i + 1) * MACRO_ORDER_DIM]
                     .iter()
                     .map(|z| 1.0 / (1.0 + (-z).exp()))
                     .collect()

@@ -6956,3 +6956,75 @@ inference yet), and any real training run at nonzero weight. The
 smoke checks above answer "does the pipeline work," not "does the head
 learn anything useful" — that needs real training + measurement, which
 this entry is not claiming.
+
+### Step 3d: EvalResult/eval_server.rs/metal_network.rs wiring — the metal-eval trap, closed for real
+
+`RawPolicyOutput` (the device-free per-leaf struct `EvalResult` carries)
+gained `macro_stance`/`macro_order`, mirroring `fog`'s existing `Option`
+contract exactly. `to_raw_rows` gained two params to fill them; both
+`eval_server.rs` call sites, `DummyEvalHandle`, and a third
+`to_raw_rows` call site in `policy_composer.rs`'s own test suite all
+needed updating (found by letting the compiler enumerate every
+construction site, not by guessing).
+
+**tch** (`tch_network.rs`): mirrored per CLAUDE.md's own rule ("plumb
+into both tch and metal, or it reads a silent zero the same way") —
+this head is inference-critical like `fog`, unlike the candle-only
+`progress` gap. tch has real softmax/sigmoid ops, so both activations
+apply inline rather than needing a CPU pass. Builds clean under
+`--features tch-eval` (needs `LIBTORCH_USE_PYTORCH=1` +
+`LIBTORCH_BYPASS_VERSION_CHECK=1` + the venv on `PATH`, same recipe
+`run_training_loop.sh` already uses).
+
+**Metal** (`metal_network.rs`) — the actual production backend, and the
+one the risk in this whole step lives in. Graph nodes for stance
+(`Linear` off `v_latent`) and order (`Conv2d` off the post-attention
+trunk) follow `aux_fog`'s exact pattern. The real hazard: MPSGraph's
+bindings expose neither softmax nor sigmoid, so both activate on CPU in
+`slice_outputs` (same as fog) — and with a SECOND independent optional
+head now in the picture (fog contributes 1 output slot, macro_policy
+contributes 2, always together), inferring presence from `results.
+len()` the way the fog-only code did becomes genuinely ambiguous
+territory to reason about by eye. Rewrote `slice_outputs` to take
+`has_fog`/`has_macro_policy` as explicit bool parameters — computed
+once at load (`weights.contains_key(...)`), threaded through
+`InFlightForward` (new fields, captured at submit time so the async
+readback path doesn't have to re-derive them) — rather than inferring
+anything from array length. Indices are tracked with an explicit
+running counter, not hardcoded positions.
+
+**Validated, not assumed**, same discipline as `fog_head_agrees_
+across_backends`: new test `macro_policy_head_agrees_across_backends`
+loads `checkpoints/macro_policy_head_ref.safetensors` (the same
+reference fixture from step 3a/b — gitignored, regenerate via
+`ai::network::macro_policy_head_tests`' instructions if absent) through
+BOTH the Metal and candle backends on identical random input, and pins
+agreement to <2e-3. That fixture happens to carry aux_fog too (a full
+Python `state_dict` saved whole), so this test exercises the "both
+optional heads present" positional case for free — not just "macro
+alone" — which is exactly the case the length-inference approach would
+have gotten wrong first. 217/217 lib tests pass (216 + this one); the
+pre-existing `fog_head_agrees_across_backends` and `async_submit_
+matches_sync_forward` tests still pass unchanged, confirming the
+`slice_outputs` refactor didn't regress the head it was already
+carrying. Full `--features apple` build (metal-eval + tch-eval
+together, matching production) succeeds for `self_play`, `arena`,
+`polyfish`, and `train`.
+
+**Deliberately not done**: `macro_mcts.rs` doesn't consume
+`macro_stance`/`macro_order` in its UCT selection yet. This is the
+correct stopping point, not a shortcut — no real checkpoint has been
+trained with this head (train.py's loss weights are still 0 by
+convention), so the values a search would read right now are random,
+untrained noise. Wiring the PUCT consumption before there's anything
+worth consulting would add complexity and risk to the live search path
+for a feature that can't help yet. That step waits on an actual
+training run.
+
+**Where this leaves EXP_ELO_061 overall**: every piece up through "the
+net CAN be trained on real self-play data and its output CAN be read
+at inference on the production backend" is built and independently
+validated. What's left is entirely in the "does it help" category —
+train it for real, then wire the UCT consumption, then measure against
+the heuristic-leaf baseline the way every other arm on this axis has
+been measured. Verdi's call on when to spend that compute.

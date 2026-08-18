@@ -283,7 +283,11 @@ impl InferenceBackend {
                     .to_vec1::<f32>()
                     .expect("BUG: progress_value to_vec1");
                 let policy_rows = policy_out
-                    .to_raw_rows(value_out.fog_probs.as_ref())
+                    .to_raw_rows(
+                value_out.fog_probs.as_ref(),
+                value_out.macro_stance_probs.as_ref(),
+                value_out.macro_order_maps.as_ref(),
+            )
                     .expect("BUG: failed to read policy batch to CPU");
                 (values, progress, policy_rows)
             }
@@ -907,7 +911,11 @@ impl InlineEvalHandle {
             .to_vec1::<f32>()
             .expect("BUG: progress_value to_vec1");
         let policy_rows = policy_out
-            .to_raw_rows(value_out.fog_probs.as_ref())
+            .to_raw_rows(
+                value_out.fog_probs.as_ref(),
+                value_out.macro_stance_probs.as_ref(),
+                value_out.macro_order_maps.as_ref(),
+            )
             .expect("BUG: failed to read policy batch to CPU");
 
         values
@@ -973,6 +981,8 @@ impl DummyEvalHandle {
         Self {
             uniform: Arc::new(RawPolicyOutput {
                 fog: None,
+                macro_stance: None,
+                macro_order: None,
                 action_type: vec![0.0; 11],
                 source_spatial: vec![0.0; spatial],
                 target_spatial: vec![0.0; spatial],

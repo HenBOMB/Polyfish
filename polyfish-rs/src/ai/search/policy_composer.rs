@@ -348,7 +348,7 @@ mod tests {
     #[test]
     fn raw_priors_match_tensor_priors_per_row() {
         let policy = synthetic_policy_output();
-        let raw_rows = policy.to_raw_rows(None).unwrap();
+        let raw_rows = policy.to_raw_rows(None, None, None).unwrap();
         assert_eq!(raw_rows.len(), 2);
 
         let legal_moves: Vec<Box<dyn Move>> = vec![Box::new(EndTurnMove)];

@@ -211,6 +211,17 @@ impl TchPolyZeroNet {
         let v_latent = self.linear(&v_pooled, "v_fc_shared").relu();
         let win = self.linear(&v_latent, "v_win").tanh(); // [B, 1]
 
+        // EXP_ELO_061: macro-mcts root prior, mirrored on tch same as fog —
+        // CLAUDE.md's own rule ("plumb into both tch and metal") since this
+        // is consumed at inference, unlike the candle-only `progress` gap.
+        // tch has real softmax/sigmoid ops, unlike the Metal graph bindings,
+        // so both activations apply here directly rather than on CPU later.
+        let has_macro_policy = self.w.contains_key("pi_macro_stance.weight");
+        let macro_stance = has_macro_policy
+            .then(|| self.linear(&v_latent, "pi_macro_stance").softmax(-1, Kind::Float));
+        let macro_order = has_macro_policy
+            .then(|| self.conv2d(&x, "pi_macro_order", 0).flatten(1, 3).sigmoid());
+
         // Read value + 4 policy heads back to CPU in a SINGLE device->CPU
         // copy. Each .to_device(Cpu) on MPS forces a commit +
         // waitUntilCompleted, so per-head readbacks stall the stream ~5x per
@@ -223,12 +234,26 @@ impl TchPolyZeroNet {
         const TS: usize = SPATIAL as usize; // 121
         const MO: usize = 192;
         const FG: usize = SPATIAL as usize; // 121, only when the head exists
-        let row_len: usize = V + AT + SS + TS + MO + if has_fog { FG } else { 0 };
+        const MST: usize = 4; // macro_stance, only when the head exists
+        const MOR: usize = 3 * SPATIAL as usize; // macro_order, only when the head exists
+        let row_len: usize = V
+            + AT
+            + SS
+            + TS
+            + MO
+            + if has_fog { FG } else { 0 }
+            + if has_macro_policy { MST + MOR } else { 0 };
 
         let mut parts: Vec<&Tensor> =
             vec![&win, &action_type, &source_spatial, &target_spatial, &move_option];
         if let Some(f) = fog.as_ref() {
             parts.push(f);
+        }
+        if let Some(s) = macro_stance.as_ref() {
+            parts.push(s);
+        }
+        if let Some(o) = macro_order.as_ref() {
+            parts.push(o);
         }
         let row = Tensor::cat(&parts, 1); // [B, row_len], on-device
         let flat: Vec<f32> = row
@@ -252,12 +277,18 @@ impl TchPolyZeroNet {
             let move_option = flat[mo_off..mo_off + MO].to_vec();
             let fg_off = mo_off + MO;
             let fog = has_fog.then(|| flat[fg_off..fg_off + FG].to_vec());
+            let ms_off = fg_off + if has_fog { FG } else { 0 };
+            let macro_stance = has_macro_policy.then(|| flat[ms_off..ms_off + MST].to_vec());
+            let mor_off = ms_off + MST;
+            let macro_order = has_macro_policy.then(|| flat[mor_off..mor_off + MOR].to_vec());
             policy.push(RawPolicyOutput {
                 action_type,
                 source_spatial,
                 target_spatial,
                 move_option,
                 fog,
+                macro_stance,
+                macro_order,
             });
         }
         (values, policy)
