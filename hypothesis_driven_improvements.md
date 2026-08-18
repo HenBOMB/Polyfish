@@ -6856,3 +6856,22 @@ answers "does this work" — a real training run + measured A/B against
 the current heuristic-leaf-selection baseline. That last step needs
 Verdi's own review before spending the compute, per this entry's own
 registered safety boundary.
+
+### Step 2, larger sample (Aug 18, overnight, still running at this read)
+
+34,027 macro-root decisions, 804 games (up from 6,537/154 at the first
+read) — same run, same config, no restart. Every statistic held within
+noise of the first read: ballot size distribution, visit concentration
+(mean 0.346 vs 0.348, median 0.266 vs 0.266), stance marginal (Arm
+43.6/Grow 36.1/Save 20.3 vs 44.2/35.3/20.5, Unlock still 0%), OrderKind
+marginal (Expand 61.1/Defend 22.2/Attack 16.7, essentially unchanged),
+orders-per-candidate distribution, and — notably — still EXACTLY 34
+distinct target tiles at 5x the sample, the same tiles dominant
+(capitals + hub-adjacent frontier). One refinement: turn-banded
+concentration, which the small sample read as still climbing through
+turn 40-50, actually PLATEAUS around 0.42-0.43 from turn 20 onward (the
+small sample's continued-climb read was 22 datapoints, noise). Nothing
+here changes the settled head shape; it just confirms the design wasn't
+fit to a small-sample fluke. Run left going (target 3000 games, disk
+footprint negligible at 17MB/804 games, zero panics/errors in the log)
+— will keep accumulating past this read.
