@@ -629,6 +629,40 @@ fn dump_turn_state(
     }
 }
 
+/// Stage 3b (macro policy head, first step): one JSON record per macro root
+/// decision — the candidate ballot the tree searched and its own post-search
+/// visit count per candidate, raw. `candidates`/`visits` are parallel arrays
+/// (same indexing); no (stance/order/target) encoding decided yet — that
+/// waits until there's real data to design the head shape against.
+fn dump_macro_policy_row(
+    file: &mut File,
+    turn: i32,
+    pov: PlayerId,
+    candidates: &[polyfish::ai::oracle_macro::MacroGoal],
+    visits: &[f32],
+) {
+    let cand_json: Vec<serde_json::Value> = candidates
+        .iter()
+        .map(|g| {
+            json!({
+                "stance": format!("{:?}", g.stance),
+                "orders": g.orders.iter()
+                    .map(|(kind, t)| json!([format!("{kind:?}"), t]))
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    let rec = json!({
+        "turn": turn,
+        "pov": pov,
+        "candidates": cand_json,
+        "visits": visits,
+    });
+    if let Ok(s) = serde_json::to_string(&rec) {
+        let _ = writeln!(file, "{s}");
+    }
+}
+
 /// One per-player development-tempo sample, taken at the start of that
 /// player's turn (before any of their moves).
 #[derive(Clone)]
@@ -1374,6 +1408,7 @@ fn play_single_game(
     dump_reward_choices: Option<&str>,
     dump_level_completion: Option<&str>,
     dump_pop_spend_choices: Option<&str>,
+    dump_macro_policy: Option<&str>,
     seat_roles: [&'static str; 2],
     shape_w_label: f32,
     shape_w_tree: f32,
@@ -1461,6 +1496,23 @@ fn play_single_game(
         }
     }
     let mut last_dump_key: Option<(i32, PlayerId)> = None;
+
+    // --dump-macro-policy: one JSONL file per game, one record per macro
+    // root decision (Stage 3b first step — see the Stage 4 dump below for
+    // the write, same once-per-(turn,pov) dedup as turn_dump_file).
+    let mut macro_policy_file: Option<File> = None;
+    if let Some(dir) = dump_macro_policy {
+        let path = std::path::Path::new(dir);
+        if let Err(e) = std::fs::create_dir_all(path) {
+            eprintln!("[dump-macro-policy] failed to create {}: {e}", path.display());
+        } else {
+            match File::create(path.join(format!("game{game_idx}.jsonl"))) {
+                Ok(f) => macro_policy_file = Some(f),
+                Err(e) => eprintln!("[dump-macro-policy] failed to open game file: {e}"),
+            }
+        }
+    }
+    let mut last_macro_policy_key: Option<(i32, PlayerId)> = None;
 
     // --dump-city-rewards: one JSONL file per game, one record per city
     // level-up reward choice — (turn, player, city level pre-choice, tribe
@@ -1929,6 +1981,22 @@ fn play_single_game(
                     tier3_bought[seat],
                 );
                 last_dump_key = Some(key);
+            }
+        }
+
+        // Stage 3b (macro policy head, first step): same once-per-(turn,pov)
+        // point as the Stage 4 dump above — the ballot is stable for every
+        // ply within a turn (the macro agent only re-searches on a new
+        // (turn, pov)), so writing on every ply would just repeat the row.
+        if let Some(f) = macro_policy_file.as_mut() {
+            let key = (game.state.settings.turn, pov);
+            if last_macro_policy_key != Some(key) {
+                if let Some((candidates, visits)) = current_agent.macro_root_ballot() {
+                    if !candidates.is_empty() {
+                        dump_macro_policy_row(f, game.state.settings.turn, pov, &candidates, &visits);
+                        last_macro_policy_key = Some(key);
+                    }
+                }
             }
         }
 
@@ -3239,6 +3307,14 @@ fn main() -> anyhow::Result<()> {
         /// combinable with --dump-failed-dir.
         #[arg(long)]
         dump_pop_spend_choices: Option<String>,
+
+        /// Stage 3b (macro policy head, first step): one JSON record per
+        /// macro root decision (turn, pov, candidate ballot, post-search
+        /// visit counts) to <dir>/game<idx>.jsonl. Raw supervision for a
+        /// future macro policy head — no encoding decisions baked in yet.
+        /// Only macro-mcts backends produce rows; a no-op otherwise.
+        #[arg(long)]
+        dump_macro_policy: Option<String>,
     }
 
     let args = Args::parse();
@@ -3626,6 +3702,7 @@ fn main() -> anyhow::Result<()> {
                             args.dump_reward_choices.as_deref(),
                             args.dump_level_completion.as_deref(),
                             args.dump_pop_spend_choices.as_deref(),
+                            args.dump_macro_policy.as_deref(),
                             seat_roles,
                             args.shape_w_label,
                             args.shape_w_tree,

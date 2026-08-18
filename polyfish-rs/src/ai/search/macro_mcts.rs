@@ -177,7 +177,7 @@ impl Node {
 }
 
 /// Search telemetry from the last `run` call (smoke instrumentation).
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct MacroMctsStats {
     pub nodes: usize,
     pub max_depth: usize,
@@ -190,6 +190,14 @@ pub struct MacroMctsStats {
     /// edges — the value difference the tree must resolve to prefer one
     /// directive over another. `None` when fewer than two edges were backed.
     pub root_q_spread: Option<f32>,
+    /// First step toward a macro policy head (Stage 3b): the root's own
+    /// candidate ballot and post-search visit counts, parallel arrays.
+    /// Populated regardless of leaf kind — a heuristic-leaf tree's visit
+    /// distribution is still real behavior-cloning supervision. Raw, not
+    /// pre-encoded into any (stance/order/target) head shape yet: encoding
+    /// decisions wait until there's real data to design against.
+    pub root_candidates: Vec<MacroGoal>,
+    pub root_visits: Vec<f32>,
 }
 
 pub struct MacroMctsSearch<'a> {
@@ -354,6 +362,8 @@ impl<'a> MacroMctsSearch<'a> {
         } else {
             None
         };
+        search.stats.root_candidates = root.candidates.clone();
+        search.stats.root_visits = root.edge_visits.clone();
         (best, search.stats)
     }
 
@@ -806,6 +816,15 @@ impl<'a> MacroMctsAgent<'a> {
             }
             MacroLeaf::Heuristic => None,
         }
+    }
+
+    /// The current turn's root ballot: candidate directives and the tree's
+    /// own post-search visit count per candidate, parallel arrays. Available
+    /// under every leaf kind (unlike `last_root_value`) — the visit
+    /// distribution is real search output regardless of what scored the
+    /// leaves. Empty before the first search of the run.
+    pub fn last_root_ballot(&self) -> (&[MacroGoal], &[f32]) {
+        (&self.last_stats.root_candidates, &self.last_stats.root_visits)
     }
 
     pub fn select_move(&mut self, game: &mut Game) -> Option<Box<dyn Move>> {

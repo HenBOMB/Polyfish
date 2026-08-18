@@ -557,6 +557,21 @@ impl<'a> Brain<'a> {
         }
     }
 
+    /// Stage 3b (macro policy head, first step): this turn's root ballot —
+    /// candidate directives and the tree's own post-search visit count per
+    /// candidate. `None` for every non-macro backend.
+    pub fn macro_root_ballot(
+        &self,
+    ) -> Option<(Vec<crate::ai::oracle_macro::MacroGoal>, Vec<f32>)> {
+        match &self.agent {
+            Some(SearchAgent::MacroMcts(a)) => {
+                let (c, v) = a.last_root_ballot();
+                Some((c.to_vec(), v.to_vec()))
+            }
+            _ => None,
+        }
+    }
+
     /// Retrieve the trace captured by the most recent `think_decomposed`
     /// call, if `request_trace` was called beforehand and search actually
     /// reached a final selection.
