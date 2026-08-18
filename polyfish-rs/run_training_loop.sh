@@ -434,8 +434,12 @@ do
         # supplies a turn-level root value for the TD bootstrap). Until these
         # flags existed the backend silently ran MacroParams::default(), i.e.
         # the heuristic leaf, no matter what the run intended.
-        BACKEND_FLAG="--search-backend macro-mcts --macro-leaf ${MACRO_LEAF:-heuristic} --macro-sims ${MACRO_SIMS:-32} --macro-k ${MACRO_K:-4}"
-        echo "🌲 MACRO_GEN=1 (Stage 3): macro-mcts generates self-play games (behavior cloning + on-distribution value labels), leaf=${MACRO_LEAF:-heuristic} sims=${MACRO_SIMS:-32} k=${MACRO_K:-4}."
+        # sims=64/k=6 (Aug 18, Verdi): EXP_ELO_033b found sims=64 alone at
+        # k=4 didn't help (depth saturated at 32 with only ~4 live
+        # candidates); raising k too means more candidates competing for the
+        # same sim budget, which is a different regime -- see EXP_ELO_061.
+        BACKEND_FLAG="--search-backend macro-mcts --macro-leaf ${MACRO_LEAF:-heuristic} --macro-sims ${MACRO_SIMS:-64} --macro-k ${MACRO_K:-6}"
+        echo "🌲 MACRO_GEN=1 (Stage 3): macro-mcts generates self-play games (behavior cloning + on-distribution value labels), leaf=${MACRO_LEAF:-heuristic} sims=${MACRO_SIMS:-64} k=${MACRO_K:-6}."
     elif [ -n "${BOOTSTRAP:-}" ]; then
         BACKEND_FLAG="--search-backend greedy"
     fi
