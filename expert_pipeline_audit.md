@@ -262,7 +262,7 @@ mutually exclusive. Pick one convention, make it one constant.
 Also: `GOOD_BOT_FINAL_SCORE` (`self_play.rs:37`) is dead while `REL_W` is 1.0.
 
 ### A2b · The value label is built from `score`, but training plays Domination
-**Status:** OPEN · **CONFIRMED** · Effort: days · *Raised by the owner*
+**Status:** MEASURED (option c done) · **CONFIRMED** · Effort: days · *Raised by the owner*
 
 This is the deeper version of A2, and it may be the single best explanation for
 why the net cannot beat the teacher it was distilled from.
@@ -309,16 +309,63 @@ That also predicts the specific failure EXP_ELO_001 recorded — over-investment
 research (17.3 techs vs Greedy's 12.1 by turn 24) — since tech tier pays score
 directly.
 
-Fix, in increasing order of ambition:
-1. Make the reward mode-aware: in Domination, drop or heavily discount the score
-   terms that do not translate to winning, or weight score by a Domination-
-   relevant subset (army value, city count, territory) rather than the raw total.
-2. Better, replace the proxy: build the TD label from a win-relevant potential —
-   elimination progress, city/territory differential, army value differential —
-   and keep the terminal label as the actual outcome.
-3. Cheapest diagnostic first: log score-vs-outcome correlation over a set of
-   finished Domination games. If score at turn *n* predicts the winner weakly,
-   that quantifies the ceiling the current label imposes.
+#### Measured (option c, run Aug 2026)
+
+`src/bin/score_predictiveness.rs` plays greedy-vs-greedy Domination games and
+asks, at each turn, how often the leader on a given quantity goes on to win.
+Games decided by the turn cap are excluded — score trivially predicts a winner
+it defined.
+
+```bash
+cargo build --release --no-default-features --bin score_predictiveness
+./target/release/score_predictiveness --games 400 --max-turns 45
+```
+
+400 games, 235 decided by elimination, 165 (41%) by turn cap:
+
+| turn | score | cities | units | n |
+|-----:|------:|-------:|------:|---:|
+|  6 | 0.592 | 0.534 | **0.658** | 234 |
+|  9 | 0.693 | 0.612 | **0.741** | 228 |
+| 12 | 0.766 | 0.745 | **0.846** | 218 |
+| 15 | 0.851 | 0.824 | **0.934** | 188 |
+| 18 | 0.875 | 0.885 | **0.938** | 152 |
+| 21 | 0.870 | 0.908 | **0.978** | 92 |
+| 24 | 0.846 | 0.942 | **0.990** | 52 |
+
+**This refines the claim above rather than confirming it.** Score is *not*
+uninformative — 0.85 by turn 15 is far from a coin flip, so the hypothesis as
+originally written ("the label optimizes a proxy that isn't the win condition")
+was too strong. Three real results stand:
+
+1. **Unit count beats score at every turn measured**, by ~8pp through the
+   decision-relevant window (turn 12: 0.846 vs 0.766; turn 15: 0.934 vs 0.851;
+   turn 21: 0.978 vs 0.870). At n≈190–220 the standard error is ≈0.026, so an
+   8pp gap is ~3 SE — and it is consistent across every row, which is stronger
+   evidence than any single row.
+2. **Score degrades late while the others sharpen.** Score peaks around turn 18
+   (0.875) and then *falls* — 0.870, 0.846, 0.812 — while cities and units climb
+   monotonically toward 1.0. As a Domination game approaches its decision, the
+   quantity the label is built from gets worse at predicting who wins. That is
+   the park-versus-giant effect showing up in aggregate.
+3. **41% of games never reach the win condition.** For those the outcome label
+   is a score comparison, so score predicts it by construction — the label is
+   circular in nearly half the training corpus.
+
+Caveats: greedy-vs-greedy, not NN self-play, so the state distribution differs
+from real training games. Unit *count* is a crude stand-in for army value
+(ignores type, HP, veteran status) — a proper army-value metric would likely do
+better still. And this measures aggregate predictiveness, not per-decision
+correctness; it does not by itself prove the park/giant case, it shows the
+signal quality the label inherits.
+
+#### Recommended next step
+
+Reweight rather than replace. Keep a score term, add an army-value term, and
+weight toward the latter in Domination — the data says that strictly dominates
+raw score at every point in the game. Then re-measure with this same tool using
+a proper army-value function instead of unit count, and re-run once the gauge
+works (P1/P2/M1) to confirm the label change moves strength, not just the proxy.
 
 Note this cuts against A2's framing: making the label zero-sum in `score` does
 not help if `score` is the wrong quantity. Resolve A2b before spending effort on
