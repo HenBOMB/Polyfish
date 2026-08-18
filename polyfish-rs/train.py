@@ -57,6 +57,13 @@ USE_TEACHERS_DS = os.environ.get("USE_TEACHERS_DS", "1") == "1"
 # (old archives, teachers) are masked out per sample, never zero-filled.
 AUX_DIMS = {'aux_ownership': 121, 'aux_fog_units': 121, 'aux_spt': 2, 'aux_opp_tech': 42, 'aux_pursuit': 1,
             'aux_city_spt': 121}
+# EXP_ELO_061 (Stage 3b): macro policy head. NOT in AUX_DIMS/AUX_WEIGHTS --
+# unlike the aux_* heads this one IS mirrored into Rust (network.rs) and
+# consumed at inference, and its targets are masked per-ROW (macro_mask),
+# not per-file. Both default to 0.0: existing training is bit-for-bit
+# unaffected until explicitly turned on.
+MACRO_STANCE_W = float(os.environ.get("MACRO_STANCE_W", "0.0"))
+MACRO_ORDER_W = float(os.environ.get("MACRO_ORDER_W", "0.0"))
 AUX_WEIGHTS = {
     'aux_ownership': float(os.environ.get("AUX_OWN_W", "0.3")),
     'aux_fog_units': float(os.environ.get("AUX_FOG_W", "0.2")),
@@ -298,7 +305,8 @@ def city_masked_mse(pred, target):
 
 def compute_loss(policy_pred, values_pred, policy_targets, value_target,
                  aux_pred=None, aux_targets=None, aux_mask=None,
-                 ref_policy_pred=None, kl_ref_weight=0.0):
+                 ref_policy_pred=None, kl_ref_weight=0.0,
+                 macro_stance_target=None, macro_order_target=None, macro_mask=None):
     """
     Compute multi-head loss using decomposed targets.
     policy_targets is a dict containing the 7 target tensors.
@@ -382,9 +390,38 @@ def compute_loss(policy_pred, values_pred, policy_targets, value_target,
             aux_losses[k] = l
             total_loss = total_loss + AUX_WEIGHTS[k] * l
 
+    # EXP_ELO_061: macro policy head, masked per-row via macro_mask (not the
+    # aux heads' per-file convention -- see the loading-side comment).
+    # values_pred['macro_stance']/['macro_order'] are ALREADY through
+    # softmax/sigmoid (unlike the with-logits aux heads), so this compares
+    # probabilities directly rather than using a from-logits loss.
+    macro_losses = {}
+    if (
+        macro_stance_target is not None
+        and macro_order_target is not None
+        and macro_mask is not None
+        and 'macro_stance' in values_pred
+        and 'macro_order' in values_pred
+    ):
+        mask = macro_mask.squeeze(-1) if macro_mask.dim() > 1 else macro_mask
+        denom = mask.sum().clamp(min=1.0)
+        if MACRO_STANCE_W > 0.0:
+            p = values_pred['macro_stance'].clamp(min=1e-8)
+            per_sample = -(macro_stance_target * torch.log(p)).sum(dim=1)
+            l = (per_sample * mask).sum() / denom
+            macro_losses['macro_stance'] = l
+            total_loss = total_loss + MACRO_STANCE_W * l
+        if MACRO_ORDER_W > 0.0:
+            per_sample = nn.functional.binary_cross_entropy(
+                values_pred['macro_order'], macro_order_target, reduction='none'
+            ).mean(dim=1)
+            l = (per_sample * mask).sum() / denom
+            macro_losses['macro_order'] = l
+            total_loss = total_loss + MACRO_ORDER_W * l
+
     # loss_win returned raw (unweighted, no aux terms) — value_r2 needs it;
     # value_loss alone can't be unweighted once loss_progress is mixed in.
-    return total_loss, total_policy_loss, value_loss, loss_win, aux_losses, kl_losses
+    return total_loss, total_policy_loss, value_loss, loss_win, aux_losses, kl_losses, macro_losses
 
 def hash_state_dict(state_dict):
     """Fingerprint of a model's weights, used to verify optimizer_state.pt was
@@ -528,6 +565,18 @@ def train():
         c_aux = {k: [] for k in AUX_DIMS}
         c_aux_mask = {k: [] for k in AUX_DIMS}
 
+        # EXP_ELO_061 (Stage 3b): macro policy targets. NOT folded into the
+        # AUX_DIMS loop below -- those mask per FILE (a head either exists in
+        # a shard or it doesn't); this masks per ROW, via self_play's own
+        # macro_mask tensor, because even a macro-mcts-heavy run has
+        # unsupervised steps (the opponent seat, an anchor game) mixed into
+        # files that otherwise carry real targets. Old shards missing all
+        # three keys get zero targets + an all-zero mask, same effect as the
+        # per-file convention for anything written before this landed.
+        c_macro_stance = []
+        c_macro_order = []
+        c_macro_mask = []
+
         for f in chunk_files:
             try:
                 data = load_file(f)
@@ -583,6 +632,19 @@ def train():
                         c_aux[k].append(torch.zeros(n, d))
                         c_aux_mask[k].append(torch.zeros(n))
 
+                # EXP_ELO_061: macro policy targets, per-row masked via
+                # self_play's own macro_mask tensor (see the comment above
+                # c_macro_stance) rather than the per-file AUX_DIMS pattern.
+                order_dim = 3 * MAP_SIZE * MAP_SIZE
+                if "macro_stance" in data and "macro_order" in data and "macro_mask" in data:
+                    c_macro_stance.append(data["macro_stance"].float())
+                    c_macro_order.append(data["macro_order"].float())
+                    c_macro_mask.append(data["macro_mask"].float())
+                else:
+                    c_macro_stance.append(torch.zeros(n, 4))
+                    c_macro_order.append(torch.zeros(n, order_dim))
+                    c_macro_mask.append(torch.zeros(n, 1))
+
             except Exception as e:
                 print(f"Error loading {f}: {e}")
                 continue
@@ -618,12 +680,17 @@ def train():
             target_aux = {k: torch.cat(v) for k, v in c_aux.items()}
             aux_mask = {k: torch.cat(v) for k, v in c_aux_mask.items()}
 
+            target_macro_stance = torch.cat(c_macro_stance)
+            target_macro_order = torch.cat(c_macro_order)
+            macro_mask = torch.cat(c_macro_mask)
+
         except RuntimeError as e:
             print(f"OOM loading chunk: {e}")
             return None
 
         # Cleanup lists
         del c_spatial, c_player, c_win, c_progress, c_aux, c_aux_mask
+        del c_macro_stance, c_macro_order, c_macro_mask
         gc.collect()
 
         dataset_size = len(spatial_maps)
@@ -637,6 +704,9 @@ def train():
             "target_heads": target_heads,
             "target_aux": target_aux,
             "aux_mask": aux_mask,
+            "target_macro_stance": target_macro_stance,
+            "target_macro_order": target_macro_order,
+            "macro_mask": macro_mask,
             "dataset_size": dataset_size,
             "chunk_idx": chunk_idx,
         }
@@ -720,6 +790,8 @@ def train():
         total_aux_t = {k: torch.zeros((), device=DEVICE) for k in AUX_DIMS}
         total_aux_n_t = {k: torch.zeros((), device=DEVICE) for k in AUX_DIMS}
         total_kl_t = torch.zeros((), device=DEVICE)
+        total_macro_t = {'macro_stance': torch.zeros((), device=DEVICE), 'macro_order': torch.zeros((), device=DEVICE)}
+        total_macro_n_t = {'macro_stance': torch.zeros((), device=DEVICE), 'macro_order': torch.zeros((), device=DEVICE)}
 
         print(f"\n=== Epoch {epoch+1}/{EPOCHS} ===")
 
@@ -731,6 +803,9 @@ def train():
             target_heads = chunk["target_heads"]
             target_aux = chunk["target_aux"]
             aux_mask = chunk["aux_mask"]
+            target_macro_stance = chunk["target_macro_stance"]
+            target_macro_order = chunk["target_macro_order"]
+            macro_mask = chunk["macro_mask"]
             dataset_size = chunk["dataset_size"]
             chunk_idx = chunk["chunk_idx"]
 
@@ -758,6 +833,9 @@ def train():
                     batch_targets[head] = tensor[batch_idx].to(DEVICE)
                 batch_aux = {k: t[batch_idx].to(DEVICE) for k, t in target_aux.items()}
                 batch_aux_mask = {k: m[batch_idx].to(DEVICE) for k, m in aux_mask.items()}
+                batch_macro_stance = target_macro_stance[batch_idx].to(DEVICE)
+                batch_macro_order = target_macro_order[batch_idx].to(DEVICE)
+                batch_macro_mask = macro_mask[batch_idx].to(DEVICE)
 
                 # Reshape spatial to (B, C, H, W)
                 batch_spatial = batch_spatial.view(-1, SPATIAL_CHANNELS, MAP_SIZE, MAP_SIZE)
@@ -789,6 +867,16 @@ def train():
                             if do_flip:
                                 t = torch.flip(t, [3])
                             batch_aux[head] = t.flatten(1)
+                        # macro_order is 3 tile-space planes (one per
+                        # OrderKind), not 1 -- same rotation, all 3 channels
+                        # together so a kind's plane never separates from
+                        # its own tiles.
+                        t = batch_macro_order.view(-1, 3, MAP_SIZE, MAP_SIZE)
+                        if k > 0:
+                            t = torch.rot90(t, k, [2, 3])
+                        if do_flip:
+                            t = torch.flip(t, [3])
+                        batch_macro_order = t.flatten(1)
 
                 optimizer.zero_grad()
 
@@ -802,10 +890,11 @@ def train():
                     with torch.no_grad():
                         ref_policy_pred, _, _ = ref_model(batch_spatial, batch_player)
 
-                loss, p_loss, v_loss, v_win_loss, aux_losses, kl_losses = compute_loss(
+                loss, p_loss, v_loss, v_win_loss, aux_losses, kl_losses, macro_losses = compute_loss(
                     policy_pred, values_pred, batch_targets, batch_values,
                     aux_pred, batch_aux, batch_aux_mask,
-                    ref_policy_pred, KL_REF_WEIGHT)
+                    ref_policy_pred, KL_REF_WEIGHT,
+                    batch_macro_stance, batch_macro_order, batch_macro_mask)
 
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -827,6 +916,11 @@ def train():
                     total_aux_t[k] += l.detach() * n_k
                 if kl_losses:
                     total_kl_t += sum(kl_losses.values()).detach()
+                if macro_losses:
+                    n_macro = batch_macro_mask.sum().detach()
+                    for k, l in macro_losses.items():
+                        total_macro_n_t[k] += n_macro
+                        total_macro_t[k] += l.detach() * n_macro
 
                 global_batch_num = total_batches
                 if global_batch_num in report_batch_indices:
@@ -882,6 +976,17 @@ def train():
         for k in AUX_DIMS
     }
     final_kl = (total_kl_t / total_batches).item() if total_batches > 0 else 0.0
+    total_macro_n = {k: v.item() for k, v in total_macro_n_t.items()}
+    final_macro = {
+        k: (total_macro_t[k].item() / total_macro_n[k] if total_macro_n.get(k, 0) > 0 else 0.0)
+        for k in ('macro_stance', 'macro_order')
+    }
+    if MACRO_STANCE_W > 0.0 or MACRO_ORDER_W > 0.0:
+        print(
+            f"  macro_stance_loss={final_macro['macro_stance']:.4f} "
+            f"macro_order_loss={final_macro['macro_order']:.4f} "
+            f"(supervised rows: {int(total_macro_n['macro_stance'])}/{target_n})"
+        )
 
     # R^2 of the win head against the LAST epoch's own target distribution:
     # 1 - MSE/Var. Small MSE alone is meaningless if the targets barely vary

@@ -6875,3 +6875,84 @@ here changes the settled head shape; it just confirms the design wasn't
 fit to a small-sample fluke. Run left going (target 3000 games, disk
 footprint negligible at 17MB/804 games, zero panics/errors in the log)
 — will keep accumulating past this read.
+
+**Update (Aug 18):** stopped at Verdi's request, 2086 games / 88,806
+decisions kept intact (the JSONL dump writes unbuffered per-decision;
+only the last, unflushed partial shard of the unrelated games_*.safetensors
+output was lost, and nothing was consuming that output anyway). Also:
+the 3000-game target itself was oversized for the question — the 154-
+and 804-game reads had already converged on the same numbers, so most
+of the run bought nothing. Logged as a standing correction (memory:
+`feedback-size-data-runs-to-the-question`) — size data-generation runs
+to the information need, not to the length of an available window.
+
+### Step 3c (Verdi-directed, Aug 18): the training-data pipeline + loss term
+
+Verdi: "proceed with the next steps." Built and validated the two
+pieces after the architecture landed — turning the raw `--dump-macro-
+policy` JSONL into real per-step tensor targets, and the loss term that
+trains against them.
+
+**self_play.rs**: `HistoryStep` gained `macro_ballot: Option<(Vec<
+MacroGoal>, Vec<f32>)>`, captured at the same point `macro_committed_
+goal()` already is. New `macro_policy_targets()` marginalizes a ballot
+into `(stance[4], order[3*H*W])` — visit-mass weighted, normalized by
+total visits, matching the head shape settled in step 2's analysis.
+Collected per-row (not gated behind a CLI flag — unlike `--goal-
+channels`-style behavior changes, this is purely additive new columns,
+cheap to compute, so there's no reason to make it opt-in on the write
+side). **Masked per ROW, not per file** — deliberately more granular
+than the existing `AUX_DIMS` convention, because even a macro-mcts-
+heavy run has unsupervised steps (the opponent seat, an anchor game)
+mixed into files that otherwise carry real targets; zero-filling those
+without a mask would be exactly the aux-head-per-key-mask mistake this
+project already learned from, just at finer grain. New `macro_stance`/
+`macro_order`/`macro_mask` tensors land in every shard unconditionally.
+
+**train.py**: mirrors the per-row mask on load (bespoke code, not
+folded into the generic `AUX_DIMS` loop, since that loop's masking is
+file-level only). New `MACRO_STANCE_W`/`MACRO_ORDER_W` env-var weights,
+**both default 0.0** — the established pattern for every knob in this
+codebase. `compute_loss` gained a 7th return value (`macro_losses`);
+the one call site updated. Stance loss: cross-entropy against an
+already-softmaxed prediction (not the with-logits variant `aux_fog_
+units` uses, since `values['macro_stance']` is activated inline in
+`forward()`, unlike the aux dict's raw-logit convention). Order loss:
+plain BCE against an already-sigmoid prediction, same reasoning.
+`macro_order`'s D4 augmentation added as its own 3-channel co-transform
+block (parallel to the 1-channel aux tile-space heads, not merged with
+them — a kind's plane must never separate from its own tiles under
+rotation/flip).
+
+**Validated, not assumed** — two targeted single-batch gradient-flow
+checks (not a full training run; this is a "does the wiring work"
+question, not a "does it help" question, and sizing to that distinction
+is the whole point of the correction two paragraphs up):
+- Weights ON (`MACRO_STANCE_W=MACRO_ORDER_W=1.0`): loss finite (3.386
+  total; stance 1.658, order 0.681 — both in a plausible range for a
+  freshly-initialized head), gradients reach both heads (norms 4.25 and
+  0.058), one optimizer step moves both heads' weights (max |delta|
+  0.001, Adam's expected first-step magnitude).
+- Weights OFF (both 0.0, the production default): `macro_losses` comes
+  back an empty dict and `pi_macro_stance.weight.grad` is `None` after
+  `.backward()` — not just zero-magnitude, literally never entered the
+  autograd graph. Existing training is bit-for-bit unaffected until
+  this is explicitly turned on.
+
+Both checks loaded the OLD (pre-macro-head) checkpoint via `strict=
+False` first, confirming the exact 4 expected keys (`pi_macro_stance.
+{weight,bias}`, `pi_macro_order.{weight,bias}`) report missing and
+nothing reports unexpected — the graceful-init path this whole design
+depends on works for real, not just in principle. Data checked before
+training: a real 3-game shard's `macro_mask` was 1.0 on all 1754 rows
+(both seats were macro-mcts, no anchor game in the sample), stance rows
+summed to 1.0, order values landed in [0,1]. 216/216 Rust lib tests
+still pass; train.py syntax-checked clean.
+
+STILL NOT DONE: `EvalResult`/`eval_server.rs`/`metal_network.rs` wiring
+(needed before macro_mcts.rs can actually consult a trained head at the
+T2 root — the head can be trained now, but nothing reads its output at
+inference yet), and any real training run at nonzero weight. The
+smoke checks above answer "does the pipeline work," not "does the head
+learn anything useful" — that needs real training + measurement, which
+this entry is not claiming.

@@ -807,6 +807,13 @@ struct HistoryStep {
     /// Pursuit proximity to the nearest capturable village at decision time,
     /// POV-relative, normalized to [0,1] — the aux_pursuit target.
     pursuit: f32,
+    /// EXP_ELO_061 (Stage 3b): the macro root's own candidate ballot and
+    /// post-search visit counts at this decision, when this seat searched
+    /// with macro-mcts (`None` otherwise, or on a ply where the macro agent
+    /// didn't just re-search — see `Brain::macro_root_ballot`). Raw
+    /// material for the macro_stance/macro_order targets; marginalized in
+    /// post-game processing, not here.
+    macro_ballot: Option<(Vec<polyfish::ai::oracle_macro::MacroGoal>, Vec<f32>)>,
 }
 
 /// The subset of `HistoryStep` the TD(lambda) label computation needs —
@@ -1081,6 +1088,42 @@ fn ownership_from_pov(final_owner: &[i32], pov: PlayerId) -> Vec<f32> {
             }
         })
         .collect()
+}
+
+/// EXP_ELO_061 (Stage 3b): marginalize a macro root ballot into the
+/// (stance[4], order[3*H*W]) soft targets `network.rs`'s
+/// pi_macro_stance/pi_macro_order heads are shaped for. Visit-mass
+/// weighted, normalized by total visits — stance sums to 1 (softmax
+/// target), order entries land in [0,1] per tile/kind (sigmoid target,
+/// non-exclusive by construction: a tile can accumulate visit mass from
+/// multiple candidates that share that (kind, target) pair).
+fn macro_policy_targets(
+    candidates: &[polyfish::ai::oracle_macro::MacroGoal],
+    visits: &[f32],
+) -> (Vec<f32>, Vec<f32>) {
+    use polyfish::ai::features::MAP_SIZE;
+    let board = MAP_SIZE * MAP_SIZE;
+    let mut stance = vec![0.0f32; 4];
+    let mut order = vec![0.0f32; 3 * board];
+    let total: f32 = visits.iter().sum();
+    if total <= 0.0 {
+        return (stance, order);
+    }
+    for (goal, &v) in candidates.iter().zip(visits.iter()) {
+        stance[goal.stance as usize] += v;
+        for &(kind, target) in &goal.orders {
+            if let Some(idx) = usize::try_from(target).ok().filter(|&t| t < board) {
+                order[kind as usize * board + idx] += v;
+            }
+        }
+    }
+    for s in stance.iter_mut() {
+        *s /= total;
+    }
+    for o in order.iter_mut() {
+        *o = (*o / total).min(1.0);
+    }
+    (stance, order)
 }
 
 /// Result from a single game - contains all data needed for training
@@ -2383,6 +2426,7 @@ fn play_single_game(
                 turn: game.state.settings.turn,
                 root_value,
                 root_own_value,
+                macro_ballot: current_agent.macro_root_ballot(),
                 enemy_units: enemy_unit_grid(&game.state, pov, features::MAP_SIZE * features::MAP_SIZE),
                 my_spt: spt_of(pov),
                 opp_spt: spt_of(opp_id),
@@ -3860,6 +3904,15 @@ fn main() -> anyhow::Result<()> {
     let mut collected_aux_pursuit: Vec<f32> = Vec::new(); // scalar per step
     let mut collected_aux_city_spt: Vec<Vec<f32>> = Vec::new(); // board-sized per step
 
+    // EXP_ELO_061 (Stage 3b): macro policy targets. Per-ROW mask, not just
+    // per-file — even a macro-mcts-heavy run has steps with no ballot (the
+    // opponent seat, an anchor game). Zero-filled + mask=0 there, matching
+    // the aux-head-per-key-mask lesson: never let an absent target train
+    // toward a fake zero.
+    let mut collected_macro_stance: Vec<Vec<f32>> = Vec::new();
+    let mut collected_macro_order: Vec<Vec<f32>> = Vec::new();
+    let mut collected_macro_mask: Vec<f32> = Vec::new();
+
     let mut max_score = 0;
     let mut best_recap: Option<ModReplay> = None;
     let mut total_moves = 0; // both seats — throughput + sim-ratio denominators
@@ -3952,6 +4005,9 @@ fn main() -> anyhow::Result<()> {
         collected_aux_city_spt: Vec<Vec<f32>>,
         collected_aux_tech: Vec<Vec<f32>>,
         num_techs: usize,
+        collected_macro_stance: Vec<Vec<f32>>,
+        collected_macro_order: Vec<Vec<f32>>,
+        collected_macro_mask: Vec<f32>,
         device: &candle_core::Device,
         path: &str,
     ) -> anyhow::Result<()> {
@@ -4015,6 +4071,20 @@ fn main() -> anyhow::Result<()> {
             device,
         )?;
 
+        // EXP_ELO_061 (Stage 3b): macro policy targets. Per-row mask (not
+        // the aux heads' per-file convention) since even a macro-mcts-heavy
+        // run has unsupervised steps (opponent seat, anchor games) — see
+        // the collection site's comment.
+        let macro_stance_tensor =
+            Tensor::from_vec(flatten_vec(collected_macro_stance), (total_steps, 4), device)?;
+        let macro_order_tensor = Tensor::from_vec(
+            flatten_vec(collected_macro_order),
+            (total_steps, 3 * spatial_logit_dim),
+            device,
+        )?;
+        let macro_mask_tensor =
+            Tensor::from_vec(collected_macro_mask, (total_steps, 1), device)?;
+
         let mut tensors = HashMap::new();
         tensors.insert("spatial_maps".to_string(), spatial_maps_tensor);
         tensors.insert("player_states".to_string(), player_states_tensor);
@@ -4030,6 +4100,9 @@ fn main() -> anyhow::Result<()> {
         tensors.insert("aux_opp_tech".to_string(), aux_tech_tensor);
         tensors.insert("aux_pursuit".to_string(), aux_pursuit_tensor);
         tensors.insert("aux_city_spt".to_string(), aux_city_spt_tensor);
+        tensors.insert("macro_stance".to_string(), macro_stance_tensor);
+        tensors.insert("macro_order".to_string(), macro_order_tensor);
+        tensors.insert("macro_mask".to_string(), macro_mask_tensor);
         // f16 on disk (Jul 28): halves file size. Every stored tensor is
         // bounded ([-1,1] targets, probabilities, normalized features), so
         // f16's ~3 significant digits lose nothing that matters.
@@ -4283,6 +4356,7 @@ fn main() -> anyhow::Result<()> {
                 opp_score: step_opp_score,
                 root_value: step_root_value,
                 root_own_value: step_root_own_value,
+                macro_ballot,
                 ..
             } = step;
             let flat_map = features
@@ -4400,6 +4474,16 @@ fn main() -> anyhow::Result<()> {
             collected_aux_spt.push(spt_my as f32 / 20.0);
             collected_aux_spt.push(spt_opp as f32 / 20.0);
             collected_aux_pursuit.push(pursuit);
+            if let Some((candidates, visits)) = &macro_ballot {
+                let (stance, order) = macro_policy_targets(candidates, visits);
+                collected_macro_stance.push(stance);
+                collected_macro_order.push(order);
+                collected_macro_mask.push(1.0);
+            } else {
+                collected_macro_stance.push(vec![0.0; 4]);
+                collected_macro_order.push(vec![0.0; 3 * features::MAP_SIZE * features::MAP_SIZE]);
+                collected_macro_mask.push(0.0);
+            }
             collected_aux_city_spt.push(city_spt_target(
                 city_spt_cp.get(&p_id),
                 turn,
@@ -4436,6 +4520,9 @@ fn main() -> anyhow::Result<()> {
                 std::mem::take(&mut collected_aux_city_spt),
                 std::mem::take(&mut collected_aux_tech),
                 num_techs,
+                std::mem::take(&mut collected_macro_stance),
+                std::mem::take(&mut collected_macro_order),
+                std::mem::take(&mut collected_macro_mask),
                 &device,
                 &path,
             )?;
@@ -4624,6 +4711,9 @@ fn main() -> anyhow::Result<()> {
             std::mem::take(&mut collected_aux_city_spt),
             std::mem::take(&mut collected_aux_tech),
             num_techs,
+            std::mem::take(&mut collected_macro_stance),
+            std::mem::take(&mut collected_macro_order),
+            std::mem::take(&mut collected_macro_mask),
             &device,
             &path,
         )?;
