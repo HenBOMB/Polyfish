@@ -118,7 +118,13 @@ pub fn get_squared_euclidean_distance(a: i32, b: i32, size: i32) -> i32 {
 pub fn get_adjacent_indices(state: &GameState, idx: i32, range: i32) -> Vec<i32> {
     let size = state.settings.size;
     let coords = Coords::from_index(idx, size);
-    let mut result = Vec::new();
+    // Exact upper bound (the full (2r+1)x(2r+1) square minus the center) --
+    // pre-sized so the push loop below never reallocates. Profiling
+    // (EXP_ELO_061 throughput investigation, Aug 2026) found this call was
+    // hot enough under macro-mcts's per-ply move ranking that its realloc
+    // churn showed up as a distinct line in the CPU profile.
+    let cap = ((2 * range + 1) * (2 * range + 1) - 1).max(0) as usize;
+    let mut result = Vec::with_capacity(cap);
 
     for dy in -range..=range {
         for dx in -range..=range {

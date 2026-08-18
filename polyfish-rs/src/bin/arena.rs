@@ -1408,6 +1408,10 @@ fn main() -> anyhow::Result<()> {
         horizon: args.macro_horizon,
         leaf: args.macro_leaf,
         lambda: args.macro_lambda,
+        // EXP_ELO_061: arena measures strength, not throughput -- keep the
+        // rollout/commit split unified (current behavior) here. No CLI
+        // override wired in yet; add one if/when quality needs measuring.
+        rollout_lambda: args.macro_lambda,
         sims: args.macro_sims,
         belief_mode: BeliefMode::Off,
         shape_w: 0.0,

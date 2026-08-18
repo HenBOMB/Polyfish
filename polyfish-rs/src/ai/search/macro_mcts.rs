@@ -492,13 +492,16 @@ impl<'a> MacroMctsSearch<'a> {
         };
         // An executor anomaly leaves the state where it stopped; the node is
         // still scoreable, so treat it like any other boundary.
+        // EXP_ELO_061: rollout_lambda, not lambda -- this runs up to `sims`
+        // times per real turn (once per node expansion), vs the real
+        // per-ply commit's one call in select_move.
         let _ = macro_exec::execute_turn(
             &mut game,
             player,
             &goal,
             &mut lane_states[s],
             &mut counters[s],
-            params.lambda,
+            params.rollout_lambda,
         );
         let shape = match &shape_pre {
             Some((pre, aux)) => {

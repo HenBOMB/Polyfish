@@ -1462,11 +1462,15 @@ fn play_single_game(
     goal_channels: bool,
     goal_w_tree: f32,
     macro_params: MacroParams,
+    max_turns: i32,
 ) -> Option<GameResult> {
     // Verdi: drop the turn-count ramp — Tiny maps, flat 50-turn cap
     // regardless of iteration (was 10/15/20/30 ramping by iteration; games
-    // this short couldn't mature a hub economy or a giants push).
-    let (map_size, max_turns) = (MapSize::Tiny, 50);
+    // this short couldn't mature a hub economy or a giants push). max_turns
+    // is now a CLI override (default 50, unchanged) for throughput
+    // experiments that don't need full-maturity games — see EXP_ELO_061's
+    // throughput investigation.
+    let map_size = MapSize::Tiny;
 
     // Init Game using MapGen
     let gen_settings = polyfish::mapgen::MapGenSettings {
@@ -2985,6 +2989,14 @@ fn main() -> anyhow::Result<()> {
         #[arg(long, default_value_t = 2)]
         gamemode: u8,
 
+        /// Turn cap for generated games. Default 50 matches the flat cap
+        /// Verdi set deliberately (games shorter than this couldn't mature
+        /// a hub economy or a giants push) -- lowering it is a real
+        /// speed/data-quality tradeoff, not a free win, for runs that don't
+        /// need full-maturity games (e.g. throughput experiments).
+        #[arg(long, default_value_t = 50)]
+        max_turns: i32,
+
         /// Number of games to play
         #[arg(long, default_value_t = 10)]
         num_games: usize,
@@ -3178,9 +3190,25 @@ fn main() -> anyhow::Result<()> {
         #[arg(long, default_value_t = 4)]
         macro_k: usize,
 
-        /// macro-mcts: λ on Δφ in per-ply executor ranking.
+        /// macro-mcts: λ on Δφ in per-ply executor ranking. Applies to the
+        /// ONE real per-ply commit (rank_view, once per game ply).
         #[arg(long, default_value_t = 1.0)]
         macro_lambda: f32,
+
+        /// macro-mcts: λ for the INTERNAL search tree's own turn rollouts
+        /// (expand-one-per-sim -- up to `macro_sims` calls per real turn,
+        /// vs macro_lambda's one). Defaults to macro_lambda (current
+        /// behavior, unchanged) when unset. EXP_ELO_061 throughput
+        /// investigation: profiling found the Delta-phi ranking pass
+        /// (goal_potential's city_risks) dominating actor CPU time --
+        /// setting this to 0.0 skips it entirely for the 64x-more-frequent
+        /// rollout calls while the real per-ply decision keeps full
+        /// quality. Real tradeoff, not a free win: 0.0 rollouts rank
+        /// candidates by score_move alone, so the tree's leaf values
+        /// reflect a less goal-aware simulated policy -- measure before
+        /// shipping as a default.
+        #[arg(long)]
+        macro_rollout_lambda: Option<f32>,
 
         /// macro-mcts: weight on potential-based edge shaping in the tree.
         #[arg(long, default_value_t = 0.0)]
@@ -3395,6 +3423,7 @@ fn main() -> anyhow::Result<()> {
             || args.macro_sims != 32
             || args.macro_k != 4
             || args.macro_lambda != 1.0
+            || args.macro_rollout_lambda.is_some()
             || args.macro_shape_w != 0.0)
     {
         anyhow::bail!("--macro-* flags require --search-backend macro-mcts");
@@ -3403,6 +3432,7 @@ fn main() -> anyhow::Result<()> {
         k: args.macro_k,
         leaf: args.macro_leaf,
         lambda: args.macro_lambda,
+        rollout_lambda: args.macro_rollout_lambda.unwrap_or(args.macro_lambda),
         sims: args.macro_sims,
         shape_w: args.macro_shape_w,
         ..MacroParams::default()
@@ -3757,6 +3787,7 @@ fn main() -> anyhow::Result<()> {
                             args.goal_channels,
                             args.goal_w_tree,
                             macro_params,
+                            args.max_turns,
                         )
                     }))
                     .unwrap_or_else(|_| {

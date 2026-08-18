@@ -43,8 +43,15 @@ pub struct MacroParams {
     pub horizon: u32,
     pub leaf: MacroLeaf,
     /// λ on Δgoal_potential in ply ranking (production GOAL_W_TREE=1; φ is
-    /// score-equivalent, so 1.0 is calibrated, not arbitrary).
+    /// score-equivalent, so 1.0 is calibrated, not arbitrary). Applies to
+    /// the ONE real per-ply commit (`rank_view`).
     pub lambda: f32,
+    /// EXP_ELO_061: λ for the search tree's OWN internal turn rollouts
+    /// (`expand`, up to `sims` calls per real turn vs `lambda`'s one).
+    /// Defaults to `lambda` (unchanged behavior) unless explicitly
+    /// overridden -- see `--macro-rollout-lambda`'s doc comment for the
+    /// tradeoff a lower value buys.
+    pub rollout_lambda: f32,
     /// EXP_ELO_033: simulations per turn-level tree search (macro-mcts only).
     pub sims: usize,
     /// EXP_ELO_035/036: what the agent does with its harness-fed belief.
@@ -61,6 +68,7 @@ impl Default for MacroParams {
             horizon: 2,
             leaf: MacroLeaf::Heuristic,
             lambda: 1.0,
+            rollout_lambda: 1.0,
             sims: 32,
             belief_mode: BeliefMode::Off,
             shape_w: 0.0,

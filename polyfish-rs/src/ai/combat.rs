@@ -263,7 +263,7 @@ fn bounce_reach(state: &GameState, unit: &UnitState) -> bool {
 /// away is still out there, and pretending otherwise is what leaves a city
 /// open. Ghosts are placed at their last-seen tile and their contribution is
 /// discounted by age.
-fn threat_units(state: &GameState, player: PlayerId) -> Vec<(UnitState, f32)> {
+pub(crate) fn threat_units(state: &GameState, player: PlayerId) -> Vec<(UnitState, f32)> {
     let mut out: Vec<(UnitState, f32)> = state
         .tribes
         .iter()
@@ -306,10 +306,26 @@ fn threat_units(state: &GameState, player: PlayerId) -> Vec<(UnitState, f32)> {
 /// would be breakable, and what that costs me. FOW-honest — only visible
 /// enemy units, read with their real movement (roads and tech included).
 pub fn city_risks(state: &GameState, player: PlayerId) -> Vec<CityRisk> {
+    let threats = threat_units(state, player);
+    city_risks_with_threats(state, player, &threats)
+}
+
+/// Same as [`city_risks`], but takes an already-computed threat list instead
+/// of scanning for one. `threat_units` depends only on the OPPONENT's units
+/// and ghosts — never on the acting player's own move — so a caller ranking
+/// many of ITS OWN candidate moves against the same board (e.g.
+/// `macro_exec::rank_plies`) can compute it once per ply instead of once per
+/// candidate. Profiling (EXP_ELO_061 throughput investigation, Aug 2026)
+/// found `city_risks`'s per-candidate re-scan was 64-86% of actor CPU time
+/// under macro-mcts — this split is the fix.
+pub fn city_risks_with_threats(
+    state: &GameState,
+    player: PlayerId,
+    threats: &[(UnitState, f32)],
+) -> Vec<CityRisk> {
     let Some(tribe) = state.tribes.get(&player) else {
         return Vec::new();
     };
-    let threats = threat_units(state, player);
     if threats.is_empty() {
         return Vec::new();
     }

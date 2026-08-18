@@ -18,6 +18,24 @@ pub fn goal_potential(
     goal: &crate::ai::oracle_macro::MacroGoal,
     aux: Option<&crate::ai::oracle_macro::GoalAux>,
 ) -> f32 {
+    goal_potential_with_threats(state, player, goal, aux, None)
+}
+
+/// Same as [`goal_potential`], but reuses an already-computed threat list
+/// (see `combat::threat_units`) for the Defend-order term's `city_risks`
+/// call instead of re-scanning for threats. Enemy threats never depend on
+/// the acting player's own move, so a caller ranking many of its own
+/// candidates against the same board (`macro_exec::rank_plies`) can compute
+/// threats once per ply instead of once per candidate — `city_risks`'s
+/// per-candidate re-scan was 64-86% of actor CPU time under macro-mcts
+/// before this split (EXP_ELO_061 throughput investigation, Aug 2026).
+pub fn goal_potential_with_threats(
+    state: &GameState,
+    player: i32,
+    goal: &crate::ai::oracle_macro::MacroGoal,
+    aux: Option<&crate::ai::oracle_macro::GoalAux>,
+    threats: Option<&[(crate::states::UnitState, f32)]>,
+) -> f32 {
     use crate::ai::oracle_macro::{OrderKind, Stance};
     let Some(tribe) = state.tribes.get(&player) else {
         return 0.0;
@@ -240,12 +258,15 @@ pub fn goal_potential(
         .map(|(_, i)| *i)
         .collect();
     if width > 0 && goal.orders.iter().any(|(k, _)| *k == OrderKind::Defend) {
-        let threats = crate::ai::combat::city_risks(state, player);
+        let city_threats = match threats {
+            Some(t) => crate::ai::combat::city_risks_with_threats(state, player, t),
+            None => crate::ai::combat::city_risks(state, player),
+        };
         for (kind, idx) in &goal.orders {
             if *kind != OrderKind::Defend {
                 continue;
             }
-            let Some(th) = threats.iter().find(|t| t.city == *idx) else {
+            let Some(th) = city_threats.iter().find(|t| t.city == *idx) else {
                 continue; // stale order: threat cleared, nothing to pay
             };
             let urgency = if th.at_risk { 1.0 } else { 0.5 };

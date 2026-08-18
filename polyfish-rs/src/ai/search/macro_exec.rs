@@ -88,8 +88,19 @@ pub fn rank_plies(
         return vec![(0.0, Box::new(EndTurnMove) as Box<dyn Move>)];
     }
 
+    // EXP_ELO_061 throughput fix: `threat_units` depends only on the
+    // OPPONENT's units/ghosts, never on the acting player's own candidate
+    // move, so it's computed once per ply here instead of once per
+    // candidate inside goal_potential's city_risks call. Profiling found
+    // that per-candidate re-scan was 64-86% of actor CPU time under
+    // macro-mcts (see combat::city_risks_with_threats's doc comment).
+    let threats = if lambda != 0.0 {
+        Some(crate::ai::combat::threat_units(&game.state, player))
+    } else {
+        None
+    };
     let phi_pre = if lambda != 0.0 {
-        reward::goal_potential(&game.state, player, goal, Some(aux))
+        reward::goal_potential_with_threats(&game.state, player, goal, Some(aux), threats.as_deref())
     } else {
         0.0
     };
@@ -99,7 +110,13 @@ pub fn rank_plies(
             let mut s = scoring::score_move(game, m.as_ref());
             if lambda != 0.0 && m.move_type() != MoveType::EndTurn {
                 if let Some(undo) = game.simulate_move(m.as_ref()) {
-                    let phi_post = reward::goal_potential(&game.state, player, goal, Some(aux));
+                    let phi_post = reward::goal_potential_with_threats(
+                        &game.state,
+                        player,
+                        goal,
+                        Some(aux),
+                        threats.as_deref(),
+                    );
                     undo(&mut game.state);
                     s += lambda * (phi_post - phi_pre);
                 }
