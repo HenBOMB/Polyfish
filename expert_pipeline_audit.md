@@ -41,10 +41,10 @@ report the opposite of what their trailing comment predicts.
 | M2 gauge/self-play mismatch | FIXED | R2 player state | OPEN |
 | M3 reading resolution | PARTLY FIXED | R3 product-of-marginals | OPEN (verified; dedup fixed) |
 | M4 gauge game length | FIXED | R4 receptive field | REFINED — no action |
-| M5 misc measurement | PARTLY FIXED | E1 metal GN keys | FIXED IN SOURCE, UNVERIFIED |
-| A1 `DETACH_VALUE_TRUNK` | OPEN (unchanged) | E2 engine correctness | VERIFIED; 6 of 7 fixed |
+| M5 misc measurement | PARTLY FIXED | E1 metal GN keys | FIXED; compiles in CI, runtime unverified |
+| A1 `DETACH_VALUE_TRUNK` | REGISTERED, arm not run | E2 engine correctness | VERIFIED; 6 of 7 fixed |
 | A2 two reward conventions | FIXED | E3 hot-path allocation | OPEN (unchanged) |
-| A2b label vs win condition | OPEN (measured, not acted on) | T1 forward parity | PARTLY FIXED |
+| A2b label vs win condition | OPEN (measured, not acted on) | T1 forward parity | FIXED (found a live candle bug) |
 | | | T2 CI coverage | FIXED |
 | | | T3 misc testing/ops | MOSTLY FIXED |
 
@@ -835,17 +835,38 @@ working gauge.
 ## E — Engine and backends
 
 ### E1 · `metal_network.rs` looks up BatchNorm-era tensor names
-**Status:** FIXED IN SOURCE, UNVERIFIED AT RUNTIME (`73dafb9`) · **CONFIRMED** · Effort: hours
+**Status:** FIXED; COMPILES IN CI, RUNTIME UNVERIFIED (`73dafb9`, `ce35b31`, `f605deb`) · **CONFIRMED** · Effort: hours
 
 **What landed:** the `bn*` prefixes are renamed to the `gn*` names checkpoints
 actually store (`src/ai/metal_network.rs`), and `examples/metal_parity.rs` /
 `examples/tch_parity.rs` now assert instead of printing, ignoring the
 deliberately Python-only `aux_*` heads.
 
-**UNVERIFIED:** `metal-eval` and `tch-eval` cannot be compiled on the Linux box
-this work was done on — no macOS frameworks, no libtorch. The fix was verified by
-reading the renamed keys against the real safetensors key list, nothing more. The
-first person on Apple hardware should run:
+**Now covered automatically, in two ways the original fix was not.**
+
+1. **It compiles.** The CI feature matrix added for T2 builds `metal-eval` and
+   `tch-eval` on `macos-latest`. On its first run all three GPU backend jobs
+   failed, and two of the breaks predated this work entirely: `eval_backend.rs`
+   called `utils::cuda_is_available()` / `utils::metal_is_available()` without
+   importing `utils` (so neither the `cuda` nor the `metal` path had compiled
+   since that helper was written), and `metal_network.rs` called
+   `graph.concatenate(...)`, which apple-mpsgraph does not have — that one sits
+   on the value head's mean+max pool, so **`metal-eval` had not compiled since
+   EXP_ARCH_001 landed**. Fixed in `ce35b31`; all four backends now build.
+   Consequence for `expert_boost_throughput.md`: its ~610–650 moves/s was
+   measured on a backend the tree could not build, so those numbers need
+   re-taking before they are quoted again.
+2. **The key contract is checked without Apple hardware.**
+   `tests/test_backend_weight_keys.py` reads the weight keys each backend looks
+   up straight out of the Rust source and diffs them against the state_dict
+   `init_model.py` writes — including an explicit "no backend asks for a
+   BatchNorm-era key" case, which is this finding. Both backends panic on a
+   missing key at graph-build time, so a name-level check catches the whole
+   failure mode statically.
+
+**STILL UNVERIFIED — runtime.** Neither backend has been *executed* against a
+current checkpoint; compiling and asking for the right key names is not the same
+as producing correct numbers. The first person on Apple hardware should run:
 
 ```bash
 cd polyfish-rs && cargo run --release --features metal,metal-eval --example metal_parity
