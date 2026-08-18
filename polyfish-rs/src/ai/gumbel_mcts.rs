@@ -1287,6 +1287,12 @@ fn next_root_hash_for(game: &Game, m: Option<&dyn Move>) -> Option<u64> {
     let m = m?;
     let mut preview = game.clone();
     let _ = preview.play_move(m)?;
+    // Never re-root across a handover: the stored subtree under an EndTurn
+    // child belongs to the OPPONENT and was built from this player's belief
+    // state, so promoting it would search the wrong side's tree.
+    if preview.state.settings.current_player_turn_id != game.state.settings.current_player_turn_id {
+        return None;
+    }
     let mut mcts_preview = preview.clone_for_mcts(preview.current_player_id());
     let feat = features::state_to_cpu_features(
         &mcts_preview.state,

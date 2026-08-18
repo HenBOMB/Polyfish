@@ -2,8 +2,8 @@ use crate::ai::brain::max_turns_ahead;
 use crate::ai::eval_server::Evaluator;
 use crate::ai::features::{self, RawFeatures};
 use crate::ai::mcts_common::{
-    BackpropNode, LeafData, TreeNode, backpropagate_and_remove_virtual_loss, extract_leaf_data,
-    get_node_by_path, get_node_by_path_mut,
+    self, BackpropNode, LeafData, TreeNode, backpropagate_and_remove_virtual_loss,
+    extract_leaf_data, get_node_by_path, get_node_by_path_mut,
 };
 use crate::ai::network::RawPolicyOutput;
 use crate::game::Game;
@@ -50,14 +50,22 @@ impl ZeroNode {
         self.visits + *self.virtual_loss.borrow()
     }
 
-    /// Get effective value including virtual loss penalty
-    fn effective_value(&self, virtual_loss_value: f32) -> f32 {
+    /// Value in this node's PARENT's perspective. `backpropagate_and_remove_virtual_loss`
+    /// stores each node's value in its own player's perspective, so a child
+    /// reached across a handover must be negated before siblings are compared —
+    /// otherwise the parent picks the move that is best for the opponent.
+    fn effective_value_for_parent(&self, virtual_loss_value: f32) -> f32 {
         let vl = *self.virtual_loss.borrow();
-        if self.visits + vl == 0.0 {
-            0.0
-        } else {
-            (self.value_sum + vl * virtual_loss_value) / (self.visits + vl)
+        let denom = self.visits + vl;
+        if denom == 0.0 {
+            return 0.0;
         }
+        let sum = if mcts_common::edge_hands_over(self.move_to_here.as_deref()) {
+            -self.value_sum
+        } else {
+            self.value_sum
+        };
+        (sum + vl * virtual_loss_value) / denom
     }
 
     fn select_child_with_virtual_loss(
@@ -72,11 +80,11 @@ impl ZeroNode {
             .enumerate()
             .max_by(|(_, a), (_, b)| {
                 let a_visits = a.effective_visits();
-                let a_value = a.effective_value(virtual_loss_value);
+                let a_value = a.effective_value_for_parent(virtual_loss_value);
                 let a_score = a_value + c_puct * a.prior * sqrt_n / (1.0 + a_visits);
 
                 let b_visits = b.effective_visits();
-                let b_value = b.effective_value(virtual_loss_value);
+                let b_value = b.effective_value_for_parent(virtual_loss_value);
                 let b_score = b_value + c_puct * b.prior * sqrt_n / (1.0 + b_visits);
 
                 a_score.partial_cmp(&b_score).unwrap_or_else(|| {

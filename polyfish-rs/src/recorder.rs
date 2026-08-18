@@ -1,15 +1,27 @@
 use crate::ai::features::{GameFeatures, state_to_tensor};
 use crate::ai::mapper::{DecomposedMapper, DecomposedTargets};
+use crate::ai::network::NUM_ACTION_TYPES;
 use crate::moves::Move;
-use crate::states::GameState;
+use crate::states::{GameState, PlayerId};
 use candle_core::{Device, Tensor};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// One recorded (state, move) pair. `win` stays `None` until the game it came
+/// from ends and `finish_game` supplies the outcome.
+struct Step {
+    features: GameFeatures,
+    player_state: Tensor,
+    targets: DecomposedTargets,
+    pov: PlayerId,
+    win: Option<f32>,
+    eco: f32,
+    mil: f32,
+}
+
 /// Records game states and human moves for training
 pub struct GameRecorder {
-    // Buffer stores: (Features, PlayerState, DecomposedTargets, ValueTargets)
-    buffer: Mutex<Vec<(GameFeatures, Tensor, DecomposedTargets, Vec<f32>)>>,
+    buffer: Mutex<Vec<Step>>,
     device: Device,
 }
 
@@ -48,14 +60,34 @@ impl GameRecorder {
         let map_size = state.map_size() as usize;
         let targets = DecomposedMapper::move_to_targets(move_obj, map_size);
 
-        // 3. Value target
-        // We'll set Win=0.0 (unknown) for now
-        let value_target = vec![0.0, eco_val, mil_val];
-
-        let mut buf = self.buffer.lock().unwrap();
         // features.spatial_map is [1, C, H, W], features.player_state is [1, P_DIM]
         let p_state = features.player_state.clone();
-        buf.push((features, p_state, targets, value_target));
+        self.buffer.lock().unwrap().push(Step {
+            features,
+            player_state: p_state,
+            targets,
+            pov,
+            win: None,
+            eco: eco_val,
+            mil: mil_val,
+        });
+    }
+
+    /// Attach the outcome to every step recorded since the last call, from
+    /// each step's own point of view. `winner` is `None` only for a genuine
+    /// draw; a game whose result is unknown must not be finished at all.
+    pub fn finish_game(&self, winner: Option<PlayerId>) -> usize {
+        let mut buf = self.buffer.lock().unwrap();
+        let mut n = 0;
+        for step in buf.iter_mut().filter(|s| s.win.is_none()) {
+            step.win = Some(match winner {
+                Some(w) if w == step.pov => 1.0,
+                Some(_) => -1.0,
+                None => 0.0,
+            });
+            n += 1;
+        }
+        n
     }
 
     /// Save buffered games to .safetensors
@@ -65,13 +97,24 @@ impl GameRecorder {
             return Ok("Buffer empty".to_string());
         }
 
+        let unlabeled = buf.iter().filter(|s| s.win.is_none()).count();
+        if unlabeled > 0 {
+            anyhow::bail!(
+                "{unlabeled} of {} recorded steps have no outcome; call \
+                 GameRecorder::finish_game(winner) when the game ends. A \
+                 guessed win label trains the value head toward that guess on \
+                 every state it covers, so refusing to write is the safe half.",
+                buf.len()
+            );
+        }
+
         let n = buf.len();
         println!("Saving {} human steps...", n);
 
         // We need to collate data into tensors matching train.rs expectations:
         // "spatial_maps": [N, C, H, W]
         // "player_states": [N, P_DIM]
-        // "action_type": [N, 11]
+        // "action_type": [N, NUM_ACTION_TYPES]
         // "source_spatial": [N, H*W]
         // "target_spatial": [N, H*W]
         // "move_option": [N, 192]
@@ -79,8 +122,7 @@ impl GameRecorder {
         // "eco_targets": [N, 1]
         // "mil_targets": [N, 1] (optional in train.rs, but we can save them)
 
-        let (first_feats, _, _, _) = &buf[0];
-        let (_b, _c, h, w) = first_feats.spatial_map.shape().dims4()?;
+        let (_b, _c, h, w) = buf[0].features.spatial_map.shape().dims4()?;
         let map_area = h * w;
 
         // -- Accumulate Tensors --
@@ -113,18 +155,24 @@ impl GameRecorder {
             Ok(Tensor::from_vec(v, (1, size), device)?)
         }
 
-        for (feat, p_state, tgt, val) in buf.iter() {
-            t_spatial.push(feat.spatial_map.clone());
-            t_player.push(p_state.clone());
+        for step in buf.iter() {
+            let tgt = &step.targets;
+            t_spatial.push(step.features.spatial_map.clone());
+            t_player.push(step.player_state.clone());
 
-            t_action.push(one_hot_tensor(Some(tgt.action_type), 11, &self.device)?);
+            t_action.push(one_hot_tensor(
+                Some(tgt.action_type),
+                NUM_ACTION_TYPES,
+                &self.device,
+            )?);
             t_source.push(one_hot_tensor(tgt.source_spatial, map_area, &self.device)?);
             t_target.push(one_hot_tensor(tgt.target_spatial, map_area, &self.device)?);
             t_option.push(one_hot_tensor(tgt.target_type, 192, &self.device)?);
 
-            t_win.push(Tensor::from_vec(vec![val[0]], (1, 1), &self.device)?);
-            t_eco.push(Tensor::from_vec(vec![val[1]], (1, 1), &self.device)?);
-            t_mil.push(Tensor::from_vec(vec![val[2]], (1, 1), &self.device)?);
+            let win = step.win.unwrap_or(0.0);
+            t_win.push(Tensor::from_vec(vec![win], (1, 1), &self.device)?);
+            t_eco.push(Tensor::from_vec(vec![step.eco], (1, 1), &self.device)?);
+            t_mil.push(Tensor::from_vec(vec![step.mil], (1, 1), &self.device)?);
         }
 
         let batch_spatial = Tensor::cat(&t_spatial, 0)?;

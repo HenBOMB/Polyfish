@@ -12,9 +12,12 @@ enemy info, per POV player, computed from facts stored in `TribeState`.
    is by stepping onto a never-explored tile — or dying. Memory therefore only
    needs to answer: "what did I last see, where, and how long ago?"
 2. **Real moves are cleanly separated from MCTS sims** via
-   `settings._are_you_sure` (set in `game.rs:120,185`; deliberately NOT set in
-   the sim path at `game.rs:263`). Memory mutates only on real moves → MCTS
-   undo callbacks never need to touch it.
+   `settings._are_you_sure` (set in `Game::play_move`, `game.rs:311`, and
+   temporarily inside `post_load`'s initial-vision pass, `:230-236`;
+   deliberately NOT set in `Game::simulate_move`, `:385-395`). Memory mutates
+   only on real moves → MCTS undo callbacks never need to touch it.
+   *(Citations refreshed Aug 18, 2026 — the previous `game.rs:120,185` / `:263`
+   had drifted.)*
 3. **Features are re-encoded from `GameState` at every use site** (self_play
    history steps, MCTS leaf eval, server). If memory lives inside the state and
    `state_to_cpu_features` reads it, every consumer gets it for free — no
@@ -142,3 +145,20 @@ branch fresh is also fine. Pick one before running.
    real move so expected noise-level.
 5. Training smoke: `--reset` short run → value/policy losses behave as before;
    the new channels can only help once conv1 learns to read them.
+
+---
+
+## Aug 18, 2026 — one interaction to know about
+
+`Game::clone_for_mcts` now does more than `obscure_fog` when
+`game::adversarial_search()` is on: it also clears `tile.explorers` for every
+tile the POV player has not explored, so the in-tree opponent generates moves
+against the same tiles we can see rather than against terrain, owners and
+resources the obscured state has already erased.
+
+That only touches the **search clone**, never a real state, so nothing here
+changes: fact 1 above (exploration is permanent and is the only fog) still
+describes the real game, and the memory channels are still computed from
+`TribeState` facts recorded on real moves only. Worth knowing if you ever read
+`explorers` from inside a search: under adversarial search it means "explored by
+the root player", not "explored by this tile's viewer".

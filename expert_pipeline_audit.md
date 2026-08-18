@@ -5,11 +5,48 @@ run at commit `2bc3160` (branch `main`). Companion to `expert_review.md` (search
 and learning-signal review) and `expert_boost_throughput.md` (throughput).
 Rendered report: https://claude.ai/code/artifact/fdc8836d-b4ac-4ff0-bef3-642c3e88c588
 
-**Headline:** the training loop cannot execute at HEAD, and the strength gauge
-has never produced a reading. Three shell-to-binary contract breaks account for
-both. Every conclusion in `hypothesis_driven_improvements.md` that depends on a
-gauge reading — the plateau verdict, EXP_ELO_002's "success bar not met" — was
-drawn from an instrument that was returning parse failures.
+**Headline (as written, at `2bc3160`):** the training loop cannot execute at
+HEAD, and the strength gauge has never produced a reading. Three shell-to-binary
+contract breaks account for both. Every conclusion in
+`hypothesis_driven_improvements.md` that depends on a gauge reading — the plateau
+verdict, EXP_ELO_002's "success bar not met" — was drawn from an instrument that
+was returning parse failures.
+
+## Status — Aug 18, 2026
+
+Two repair waves have landed since the audit was written: commit `73dafb9`
+(blockers + gauge + head widths) and the wave that follows it in the working
+tree (engine correctness, adversarial search, self-play data, ops, dashboard).
+`cargo test --no-default-features --lib --tests --bin self_play` is green and an
+end-to-end `self_play → train.py → self_play` run completes.
+
+**The three blockers are fixed and the gauge is repaired. No gauge reading has
+been taken on the repaired instrument yet.** Every verdict in this file and in
+`hypothesis_driven_improvements.md` that rests on a reading is therefore still
+provisional, and step 5 of the order of operations (re-baseline) is the next
+thing that should happen.
+
+Per-item statuses below are updated in place; the original finding text is left
+intact so the history of what was found is not erased. `**What landed:**` blocks
+carry the file:line citations and the re-verify command as it stands today. The
+original `# Verify` snippets are kept as written — for a FIXED item they now
+report the opposite of what their trailing comment predicts.
+
+| Item | Status | Item | Status |
+|---|---|---|---|
+| P1 blocker flags | FIXED | A3 optimizer reset | FIXED |
+| P2 gauge swallows errors | FIXED | A4 D4 caveat | FIXED |
+| P3 action-head width | FIXED (Resign still ungenerated) | A5 misc signal | PARTLY FIXED |
+| M1 seed control | FIXED | R1 policy rank-1 bottleneck | OPEN (verified) |
+| M2 gauge/self-play mismatch | FIXED | R2 player state | OPEN |
+| M3 reading resolution | PARTLY FIXED | R3 product-of-marginals | OPEN (verified; dedup fixed) |
+| M4 gauge game length | FIXED | R4 receptive field | REFINED — no action |
+| M5 misc measurement | PARTLY FIXED | E1 metal GN keys | FIXED IN SOURCE, UNVERIFIED |
+| A1 `DETACH_VALUE_TRUNK` | OPEN (unchanged) | E2 engine correctness | VERIFIED; 6 of 7 fixed |
+| A2 two reward conventions | FIXED | E3 hot-path allocation | OPEN (unchanged) |
+| A2b label vs win condition | OPEN (measured, not acted on) | T1 forward parity | PARTLY FIXED |
+| | | T2 CI coverage | FIXED |
+| | | T3 misc testing/ops | MOSTLY FIXED |
 
 ## How to use this file
 
@@ -55,7 +92,19 @@ lead the next reader to flip it on mid-run and repeat run 1783556259. See A4.
 ## P — Blockers (pipeline does not run)
 
 ### P1 · `self_play` rejects `--decay-last-iter`; the loop exits on iteration 1
-**Status:** OPEN · **CONFIRMED** · Effort: hours
+**Status:** FIXED (`73dafb9`) · **CONFIRMED** · Effort: hours
+
+**What landed:** both arguments are back on `self_play` (`--decay-last-iter`
+`src/bin/self_play.rs:1291`, `--anchor-decay-start` `:1300`) and both now drive a
+real phase-out: `decay_crutch` (`:41`) takes the search prior blend and the
+greedy-anchor game rate to zero instead of asymptoting at a floor, and the two
+gates are combined tightest-wins at `:1716-1720`.
+
+```bash
+# Re-verify
+grep -n 'decay_last_iter\|anchor_decay_start' polyfish-rs/src/bin/self_play.rs
+# → hits at :1291, :1300, :1716-1720 = wired
+```
 
 `run_training_loop.sh:364` builds the flag unconditionally; `:425` passes it.
 `self_play` parses with a single strict clap `Args::parse()` (`self_play.rs:1340`,
@@ -78,7 +127,19 @@ them from the script; decide which by whether the EXP_ELO_002 decay machinery is
 still wanted.
 
 ### P2 · `arena` rejects `--dump-stats-dir`; every gauge reading is a swallowed error
-**Status:** OPEN · **CONFIRMED** · Effort: hours
+**Status:** FIXED (`73dafb9`) · **CONFIRMED** · Effort: hours
+
+**What landed:** `arena --dump-stats-dir` writes one JSON per game (seed, seat
+assignment, tribes, winner, turns, and whether the game was dropped), and the
+failure is no longer swallowed — `run_gauge_match` checks arena's exit status
+(`run_training_loop.sh:549-552`), and a failed reading now aborts the run rather
+than printing "failed to parse" and continuing (`:573-577`).
+
+```bash
+# Re-verify
+grep -n 'dump_stats_dir' polyfish-rs/src/bin/arena.rs
+grep -n 'arena_status' polyfish-rs/run_training_loop.sh
+```
 
 `run_gauge_match` is always called with a stats directory (`:547`), so
 `DUMP_FLAG` (`:523`) is always set. `arena` has no `dump` argument at all.
@@ -99,7 +160,28 @@ for the whole run.
 Fix: restore the flag **and** make the gauge fail loudly on a non-zero exit.
 
 ### P3 · `action_type` targets are 12 wide; the head is 11
-**Status:** OPEN · **CONFIRMED** · Effort: hours
+**Status:** FIXED (`73dafb9`) · **CONFIRMED** · Effort: hours
+
+**What landed:** `NUM_ACTION_TYPES = 12` (`src/ai/network.rs:10`) is the single
+source of truth — the candle layer is built from it (`:227`), `train.py` derives
+its width from a named constant (`train.py:96`, layer at `:165`), a const
+assertion keeps `MoveType::Resign` inside the head (`network.rs:20`,
+`mapper.rs:97-102`), and `tests/parity_widths.rs` fails the build if the Rust and
+Python widths ever disagree again. `migrate_model.py` / `train.py:391-406` pad
+existing 11-row checkpoints.
+
+**Still open — the follow-on, unchanged:** `ResignMove` is still never generated.
+`generate_legal_moves` does not emit it; the only construction site remains the
+web move-by-index path (`src/main.rs:574`). Slot 11 therefore still receives zero
+self-play gradient. Widening the head was necessary, not sufficient.
+
+```bash
+# Re-verify the width
+cd polyfish-rs && cargo test --no-default-features --test parity_widths
+# Re-verify Resign is still unreachable from search
+grep -rn 'ResignMove' polyfish-rs/src/ | grep -v 'struct\|impl Move\|use \|test'
+# → only main.rs:574 and mapper.rs tests
+```
 
 `network.rs` contradicts itself in one file:
 
@@ -146,7 +228,19 @@ grep -rn 'ResignMove' polyfish-rs/src/ | grep -v 'struct\|impl Move\|use '
 ## M — Measurement (readings are not comparable)
 
 ### M1 · No seed control anywhere; every reading uses different maps
-**Status:** OPEN · **CONFIRMED** · Effort: hours
+**Status:** FIXED (`73dafb9`) · **CONFIRMED** · Effort: hours
+
+**What landed:** `arena --seed` pins the evaluation map set (`src/bin/arena.rs:99-102`,
+consumed at `:536-545`) and composes with the existing side-swap, so seed N is
+played by both seats. The gauge passes a fixed default
+(`run_training_loop.sh:539`, `GAUGE_SEED:-20260811`), making readings paired
+across iterations.
+
+```bash
+# Re-verify
+grep -n 'seed' polyfish-rs/src/bin/arena.rs | head
+grep -n 'GAUGE_SEED' polyfish-rs/run_training_loop.sh
+```
 
 `arena.rs:348` derives `base_seed` from `SystemTime::now()` and exposes no
 `--seed`. Side-swapping is already implemented (`:465–467`), so seat bias is
@@ -159,7 +253,31 @@ between-reading comparisons into paired ones for zero extra compute. This is
 also a prerequisite for reproducing any past experiment.
 
 ### M2 · The gauge grades a different agent than self-play trains
-**Status:** OPEN · **CONFIRMED** · Effort: hours
+**Status:** FIXED (`73dafb9` + this wave) · **CONFIRMED** · Effort: hours
+
+**What landed (two halves).** `arena` now threads all three search knobs and
+defaults them to the self-play values (`src/bin/arena.rs:111-119`, `:515-519`),
+so the ladder grades the agent training produces. The second half was found while
+verifying E2: `arena` was calling `select_move` on the REAL, un-obscured game
+while self-play searches a fog-obscured clone, so the graded agent could see
+through fog the trained agent never gets. `arena` now searches
+`game.clone_for_mcts(current_pid)` like self-play does (`arena.rs:306-313`).
+
+**A gap opened by the same wave, and closed in it.** `self_play --symmetric`
+defaults to true (`src/bin/self_play.rs:1342`) while `arena --symmetric`
+defaulted to false, and `run_gauge_match` did not pass it — training would have
+run on point-symmetric maps while the gauge read asymmetric ones. `arena` now
+defaults `--symmetric` to true with the same `ArgAction::Set` shape self_play
+uses (`arena.rs:90-94`), and `run_gauge_match` passes it explicitly as
+`--symmetric "${GAUGE_SYMMETRIC:-true}"` so the gauge's map family is visible at
+the call site rather than inherited from a default.
+
+```bash
+# Re-verify the knobs
+grep -n 'prior_heuristic\|policy_target_q\|tree_q\|clone_for_mcts' polyfish-rs/src/bin/arena.rs
+# Re-verify the symmetry gap
+grep -n 'symmetric' polyfish-rs/src/bin/arena.rs polyfish-rs/src/bin/self_play.rs polyfish-rs/run_training_loop.sh
+```
 
 `self_play.rs:644–650` configures three search knobs; `arena.rs:173` passes
 `None` for all four parameters:
@@ -180,7 +298,20 @@ this is a plausible strength ceiling: the net is trained toward targets produced
 by a net+heuristic blend, so it never has to learn the 10% the heuristic supplies.
 
 ### M3 · 64 games resolves ~±12pp; verdicts are drawn from 1–6pp
-**Status:** OPEN · **FLAGGED** · Effort: days
+**Status:** PARTLY FIXED (`73dafb9`) · **FLAGGED** · Effort: days
+
+**What landed:** M1 removed the map-variance component for free, and every
+reading now stores its Wilson interval (`ladder.py:194`, `:210`) plus the search
+budget it was taken at (`:214-218`). Both gates are interval-aware: an anchor
+freeze requires the interval's LOWER bound to clear 80% (`:275-281`), and the
+plateau test compares pooled halves by interval overlap rather than by mean
+(`:106-116`). The dashboard draws the band (`src/public/training.html`, elo
+chart).
+
+**Still open:** the sample size itself. `GAUGE_GAMES` still defaults to 32 seeds
+(64 games), so a single reading still resolves to roughly ±12pp — now visible
+rather than invisible. Size the budget against the effect you want to detect
+before the re-baseline.
 
 At `GAUGE_GAMES=32` (64 games after swapping) and p≈0.33, binomial SE ≈5.9pp →
 95% interval ≈±11.5pp. EXP_ELO_002's registered bar was +8pp, observed +1pp; the
@@ -191,14 +322,40 @@ the effect you want to detect, and store the interval in `ladder.json` alongside
 every reading.
 
 ### M4 · Gauge plays a shorter game than training generates
-**Status:** OPEN · **CONFIRMED** · Effort: hours
+**Status:** FIXED (`73dafb9`) · **CONFIRMED** · Effort: hours
+
+**What landed:** the gauge asks `self_play` for the curriculum rather than
+mirroring its thresholds — `self_play --print-curriculum --iteration N` emits the
+stage, and the loop passes its `max_turns` to arena
+(`run_training_loop.sh:524`, `:539`).
+
+```bash
+# Re-verify
+grep -n 'print-curriculum\|GAUGE_MAX_TURNS' polyfish-rs/run_training_loop.sh
+```
 
 `curriculum()` (`self_play.rs:201–211`) runs `max_turns = 45` past iteration 30.
 The gauge never passes `--max-turns`, so arena uses its default of 30
 (`arena.rs:57`). Late-game strength is outside the measured window.
 
 ### M5 · Other measurement gaps
-**Status:** OPEN · **FLAGGED**
+**Status:** PARTLY FIXED · **FLAGGED**
+
+FIXED: `elo.py` now fits ratings from `ladder.json`'s own readings against its
+Elo-0 greedy floor (`elo.py:10-11`, `:84-98`), so it grades the same matches the
+ladder records. `value_r2` gained a holdout split **by game file**, not by
+position (`train.py:475-494`), reported next to the in-sample number so
+underfitting and overfitting can be told apart; the dashboard plots both. `arena`
+records every game it drops in its per-game JSON and the loop no longer ignores
+its exit code (P2).
+
+STILL OPEN, unchanged: `config.json` is still re-read *inside* the iteration loop
+(`run_training_loop.sh:377-391`), so dashboard edits still change a run mid-flight
+— only `MCTS_ITERS` is now pinned for the run (`:379`). Nothing else records
+per-run configuration. Readings now carry their search budget
+(`ladder.py:214-218`) but the plateau detector still pools across budgets
+(`:106-116`), so ladder Elo is still a function of (weights × sims) chained as if
+it measured weights alone.
 
 - `elo.py` is orphaned and anchored to a player that never plays; the ratings
   actually used are un-intervalled chained win rates.
@@ -220,7 +377,12 @@ The gauge never passes `--max-turns`, so arena uses its default of 30
 ## A — Learning signal
 
 ### A1 · `DETACH_VALUE_TRUNK=1` is exported in the production loop
-**Status:** OPEN · **CONFIRMED** · Effort: hours
+**Status:** OPEN — unchanged · **CONFIRMED** · Effort: hours
+
+Still exported at `run_training_loop.sh:21`; still a bisect arm in
+`bisect_arm.sh:15`; still no verdict in `hypothesis_driven_improvements.md`. The
+sequencing below is unchanged and its first two prerequisites (P1/P2/M1, and a
+label decision) are now met, so this is runnable as soon as a baseline exists.
 
 `run_training_loop.sh:17`. `train.py:35–39` documents it as "bisect Arm D", and
 `bisect_arm.sh:14` treats it as a diagnostic. With it on, no value-loss gradient
@@ -289,7 +451,23 @@ current label there is a real chance it measures worse and gets wrongly
 re-litigated as "value gradient hurts the trunk".
 
 ### A2 · Two reward definitions disagree about zero-sum
-**Status:** OPEN · **CONFIRMED** · Effort: hours
+**Status:** FIXED (`73dafb9`) · **CONFIRMED** · Effort: hours
+
+**What landed:** one constant, one convention. `reward::REL_W = 1.0`
+(`src/ai/reward.rs:26`) is read by both the TD body (`:47`) and the final-outcome
+tail (`src/bin/self_play.rs:560`); `FINAL_OUTCOME_REL_W` is gone. The label is
+antisymmetric again, which is what the negamax backup in `mcts_common.rs`
+requires. `GOOD_BOT_FINAL_SCORE` (`self_play.rs:49`) is live again as the
+absolute yardstick, reachable only if `REL_W` is lowered.
+
+This changed ~70% of the value label's weighting and is pre-registered as
+**EXP_LABEL_001** in `hypothesis_driven_improvements.md`. It has NOT been
+measured — see the status note at the top of this file.
+
+```bash
+# Re-verify there is only one constant
+grep -rn 'REL_W' polyfish-rs/src/ai/reward.rs polyfish-rs/src/bin/self_play.rs
+```
 
 ```rust
 // self_play.rs:47 — "an absolute own-progress component is NOT antisymmetric"
@@ -306,7 +484,14 @@ mutually exclusive. Pick one convention, make it one constant.
 Also: `GOOD_BOT_FINAL_SCORE` (`self_play.rs:37`) is dead while `REL_W` is 1.0.
 
 ### A2b · The value label is built from `score`, but training plays Domination
-**Status:** MEASURED (option c done) · **CONFIRMED** · Effort: days · *Raised by the owner*
+**Status:** OPEN — measured, not acted on · **CONFIRMED** · Effort: days · *Raised by the owner*
+
+**Aug 18:** the recommended reweight has NOT landed. `src/ai/reward.rs` still
+reads only `t.score` (`score_snapshot`, `:54`); there is no army-value term
+anywhere in it. A2's
+constant was settled ahead of A2b (see A2), which the note at the end of this
+item advises against — so if the re-baseline reads worse, this is the first
+confound to check.
 
 This is the deeper version of A2, and it may be the single best explanation for
 why the net cannot beat the teacher it was distilled from.
@@ -416,7 +601,18 @@ not help if `score` is the wrong quantity. Resolve A2b before spending effort on
 A2's constant.
 
 ### A3 · Optimizer and LR schedule reset every iteration
-**Status:** OPEN · **CONFIRMED** · Effort: days
+**Status:** FIXED (`73dafb9`) · **CONFIRMED** · Effort: days
+
+**What landed:** Adam moments and the scheduler step are persisted across
+invocations in `optimizer_state.pt` (`train.py:412`, load `:423-457`, save
+`:459-466`, wired at `:651` and `:943`), keyed by `run_id` so a new run starts
+clean. The cosine schedule now spans the run instead of restarting at top LR on
+every call.
+
+```bash
+# Re-verify
+grep -n 'OPTIMIZER_STATE_PATH\|load_optimizer_state\|save_optimizer_state' polyfish-rs/train.py
+```
 
 `train.py:426` constructs a fresh `Adam` per invocation and `:429` a
 `CosineAnnealingWarmRestarts` that restarts at the top LR on every call — a
@@ -424,7 +620,15 @@ sawtooth, not a schedule, and Adam's moments are discarded each time.
 `expert_review.md` listed "persistent optimizer" as a cleanup; not landed.
 
 ### A4 · The measured rationale for `AUGMENT_D4` was deleted from its comment
-**Status:** OPEN · **CONFIRMED** · Effort: minutes
+**Status:** FIXED (`73dafb9`) · **CONFIRMED** · Effort: minutes
+
+**What landed:** the measured caveat is back at `train.py:57-64`, naming run
+1783556259 and restricting D4 to from-scratch runs.
+
+```bash
+# Re-verify
+sed -n '56,65p' polyfish-rs/train.py   # → mentions run 1783556259
+```
 
 See the correction section above. The current comment (`train.py:46–50`) reads as
 an unconditional endorsement; the measured mid-run collapse (run 1783556259) is
@@ -432,7 +636,30 @@ gone. Restore the caveat. D4 remains a legitimate multiplier **for from-scratch
 runs only**.
 
 ### A5 · Other learning-signal items
-**Status:** OPEN · **FLAGGED**
+**Status:** PARTLY FIXED · **FLAGGED**
+
+FIXED: move-selection temperature is back, as opening-move sampling —
+`self_play --opening-temp-moves` (default 8 plies, `src/bin/self_play.rs:1349`)
+plays a draw from the search's improved policy π′ instead of its argmax
+(`sample_opening_move`, `:580`; applied at `:866-873`), while the policy target
+stays π′. Registered as **EXP_DATA_002**, unmeasured. The training glob no longer
+swallows `games_human_*` / `games_pro_*` (`train.py:575`, `:589`), and
+`GameRecorder` now refuses to write steps that have no outcome at all rather than
+labelling them `0.0` (`src/recorder.rs:79-108`).
+
+FIXED: the `move_option` target, on both sides. The consumer normalizes each
+policy target row by its own sum (`train.py:264-270`), and the producer now
+divides `p_option` by `total_visits` alongside the other three heads — the
+`// ... (others)` placeholder is gone (`src/bin/self_play.rs:842-857`). This
+matters for consumers that do not renormalize, notably `src/bin/train.rs:168`,
+whose option-head loss was scaled by N. The consumer-side normalize is
+idempotent (it clamps the divisor at 1.0), so it is safe on both old and new
+data files.
+
+STILL OPEN, unchanged: no playout-cap randomization, no resignation, equal
+per-step weighting; the `progress` head trains on a per-game-constant label at
+full weight while two of three inference backends stub it to 0; weights still
+round-trip through f16 every iteration (`train.py:942`).
 
 - Move-selection temperature is disabled (`TEMPERATURE_MOVE_THRESHOLD = 0`), so
   there is no opening diversity within an iteration.
@@ -452,7 +679,18 @@ runs only**.
 ## R — Representation and architecture
 
 ### R1 · Rank-1 bottleneck on `pi_action` and `pi_option`
-**Status:** OPEN · **CONFIRMED** · Effort: days
+**Status:** OPEN — independently verified, no code change · **CONFIRMED** · Effort: days
+
+**Aug 18 verification, with a scope correction.** The bottleneck is real and
+still present: `p_pool_conv` is `Conv2d(64 → 1, k=1)` (`src/ai/network.rs:223`,
+`train.py:163`) feeding `p_fc_shared` `Linear(121 → 64)` (`network.rs:224`,
+`train.py:164`), which feeds `pi_action` (`network.rs:227`) and `pi_option`
+(`:230`) only. Correction to the text below: `pi_source` / `pi_target` are
+per-tile `Conv2d(64 → 1)` and read all 64 channels, so they are NOT
+channel-bottlenecked — the pathology is confined to the two heads that choose
+*what to do*. The value head was already fixed by EXP_ARCH_001 (mean+max pool
+over all 64 channels, `network.rs:234`, forward at `:316-319`).
+Unchanged recommendation, still blocked on a working gauge.
 
 ```python
 # train.py:142-148, mirrored at network.rs:205-216
@@ -483,7 +721,24 @@ bitmask changes `PLAYER_STATE_DIM` — a coordinated `features.rs` + `network.rs
 `train.py` change plus migration. Schedule deliberately.
 
 ### R3 · Product-of-marginals policy
-**Status:** OPEN · **FLAGGED** · Effort: days
+**Status:** OPEN — now CONFIRMED; the duplicate-generation half is FIXED · **FLAGGED** · Effort: days
+
+**Aug 18 verification.** `src/ai/policy_composer.rs` composes a pure product of
+four independently-softmaxed marginals, in probability space
+(`compute_move_priors_from_probs`, `:69`, used by `mcts_zero`) and in log space
+(`compute_move_log_probs_from_logs`, `:206`, used by the Gumbel backend training
+actually runs). Move types consume 1 to 4 factors — `EndTurn` 1;
+`Capture`/`Harvest`/`Research` 2; `Step`/`Attack`/`Build`/`Summon`/`Reward` and
+single-spatial abilities 3; two-spatial abilities (convert, diplomacy) 4. With
+uniform heads the resulting priors span 9.1e-2 down to 3.2e-8: a ~2.8-million-fold
+arity skew that renormalizing over the legal set does not remove.
+
+FIXED — the "unit-ability moves are generated twice" sub-claim was true and is
+gone. `generate_legal_moves` called `generate_unit_action_moves` on top of the
+per-unit emission inside `generate_unit_moves`; the redundant call and the
+now-unused function are deleted (`src/moves/mod.rs:210-214`, per-unit emission at
+`:242`). Two identical children at one policy coordinate can no longer happen
+that way.
 
 Search forms `P(move) ∝ P(action)·P(source)·P(target)·P(option)`; training fits
 each marginal independently. Move types using fewer heads are multiplied by fewer
@@ -494,19 +749,63 @@ Related: unit-ability moves are reportedly generated twice, putting two identica
 children at one policy coordinate.
 
 ### R4 · Receptive field and cross-attention
-**Status:** OPEN · **FLAGGED**
+**Status:** REFINED — measured, no action recommended · **FLAGGED**
 
 Audit reports an effective receptive field of ~±3 tiles with no global spatial
 mixing, and that cross-attention is the terminal layer — no feed-forward
 sublayer, no post-injection nonlinearity. Worth checking against the 6-block
 trunk before acting.
 
+**Aug 18 measurement (three parts, two of them corrections).**
+
+1. *Receptive field* — "±3 tiles" is not a support limit. The trunk is 13 conv
+   layers, all 3×3 / stride 1 / pad 1 / dilation 1 (stem + 6 ResBlocks × 2), so
+   the theoretical radius is 13, larger than the 11×11 map's diameter of 10. It
+   is a fair description of the EFFECTIVE field: measuring d(logit)/d(input) on
+   the real PyTorch net over 5 seeds gives a per-axis gradient-weighted std of
+   2.47 tiles for `pi_source`/`pi_target`, with 68.5% of sensitivity mass inside
+   Chebyshev radius 3 — and a non-trivial 31% outside it.
+2. *"No global spatial mixing"* — true for `pi_source`/`pi_target` only, refuted
+   for the rest of the net. Cross-attention adds no spatial mixing (spatial
+   tokens are queries; K/V are the 16 player tokens). `p_fc_shared` IS fully
+   connected over all 121 tiles, but feeds only `pi_action`/`pi_option`. The
+   value head's global mean+max pool (`network.rs:316-319`) is a sibling branch
+   off `shared` and contributes nothing to the spatial heads at inference; the
+   only coupling is training-time gradient through the trunk, which is exactly
+   what `DETACH_VALUE_TRUNK` switches off.
+3. *Cross-attention as terminal layer* — CONFIRMED in both implementations
+   (`network.rs:290` → reshape → heads; `train.py:203` → heads). No feed-forward
+   sublayer (q/k/v/o + one LayerNorm, `network.rs:114` / `train.py:119`), and no
+   nonlinearity between the attention output and `pi_source`/`pi_target`. One
+   ReLU does exist downstream on the action/option path (`network.rs:300` /
+   `train.py:209`), so the claim is exactly true for the spatial heads and
+   slightly overstated for action/option. `train.py:120` declares an unused
+   `self.relu` inside `CrossAttention`.
+
+No architecture change recommended on this item; like R1 it is blocked on a
+working gauge.
+
 ---
 
 ## E — Engine and backends
 
 ### E1 · `metal_network.rs` looks up BatchNorm-era tensor names
-**Status:** OPEN · **CONFIRMED** · Effort: hours
+**Status:** FIXED IN SOURCE, UNVERIFIED AT RUNTIME (`73dafb9`) · **CONFIRMED** · Effort: hours
+
+**What landed:** the `bn*` prefixes are renamed to the `gn*` names checkpoints
+actually store (`src/ai/metal_network.rs`), and `examples/metal_parity.rs` /
+`examples/tch_parity.rs` now assert instead of printing, ignoring the
+deliberately Python-only `aux_*` heads.
+
+**UNVERIFIED:** `metal-eval` and `tch-eval` cannot be compiled on the Linux box
+this work was done on — no macOS frameworks, no libtorch. The fix was verified by
+reading the renamed keys against the real safetensors key list, nothing more. The
+first person on Apple hardware should run:
+
+```bash
+cd polyfish-rs && cargo run --release --features metal,metal-eval --example metal_parity
+cd polyfish-rs && cargo run --release --features tch-eval --example tch_parity
+```
 
 ```rust
 // metal_network.rs:554
@@ -522,7 +821,67 @@ only the key names were missed in the migration. This is the backend the entire
 exists for exactly this.
 
 ### E2 · Engine correctness items
-**Status:** OPEN · **FLAGGED**
+**Status:** VERIFIED (was FLAGGED) — 6 of 7 fixed, 1 documented as deliberate
+
+All seven claims were checked against the source and reproduced with throwaway
+integration probes; six CONFIRMED, `Research` PARTIALLY_CONFIRMED. The
+per-claim outcome is below; the original list follows unchanged.
+
+- **In-tree `EndTurn` deletes the opponent's turn** — CONFIRMED, and it was the
+  largest behaviour defect in the repo. Proven: `simulate_move(EndTurn)` left
+  player 1 to move while the opponent collected income (stars 5→7) and had its
+  units refreshed; a 60-ply descent across 15 turn boundaries visited only player
+  1; production `self_play` reported `Sim EndTurn edges: 2076 total (5.06 per
+  move decision)` at only 16 MCTS iterations. FIXED, **opt-in**:
+  `game::adversarial_search()` (`src/game.rs:34`, override
+  `set_adversarial_search` `:51`, env `POLYFISH_ADVERSARIAL_SEARCH=1`) makes the
+  `EndTurn` branch of `simulate_move` (`:390`) hand over once instead of looping
+  back to the mover. The blocker shipped with it: `clone_for_mcts` (`:258`) now
+  confines the in-tree opponent to the root player's vision, so it plays a
+  belief-state army rather than moving units the search state has erased. Sign
+  handling was audited across all backends — `mcts_zero` negates a handover
+  child before comparing siblings (`src/ai/mcts_zero.rs:57`,
+  `mcts_common::edge_hands_over` `:159`), the plain `mcts.rs` minimises at
+  opponent nodes (`:72`), and Gumbel's tree reuse refuses to re-root across a
+  handover (`src/ai/gumbel_mcts.rs:1290`). **Default is OFF and nothing in
+  `run_training_loop.sh` sets it** — registered as EXP_SEARCH_001, unmeasured.
+  `arena --adversarial` grades it.
+- **`max_turns_ahead` ignores its `max_turns` argument** — CONFIRMED. FIXED:
+  `(max_turns - current_turn).clamp(MIN_TURNS_AHEAD, MAX_TURNS_AHEAD)`
+  (`src/ai/brain.rs:430`, bounds at `:421`/`:426`). Registered as EXP_SEARCH_002.
+- **`freeze_area` never freezes, and its undo permanently turns water into Ice** —
+  CONFIRMED. Marked out of scope as Polaris-only, but it was fixed anyway because
+  a non-round-tripping undo corrupts the MCTS tree for everyone: the mutation is
+  applied forward and the OLD terrain is captured in the undo
+  (`src/actions/mod.rs:430`, tile branch at `:444-450`), `AutoFreeze` is applied
+  on unit movement
+  (`src/actions/units.rs:568`), and `tests/freeze_undo.rs` pins the round-trip.
+- **`Research` is close to a no-op inside the search** — PARTIALLY_CONFIRMED
+  (`discovered` was gated on `_are_you_sure`, which the sim path never sets).
+  FIXED: `unlock_tech` always marks the tech discovered
+  (`src/actions/tech.rs:37`), so the search can plan "research X, then use X".
+  The dead sibling helper `technology::is_tech_unlocked` — documented as the
+  simulation-aware check and never called from anywhere — was removed.
+- **The search cannot reveal fog** — CONFIRMED as behaviour, but it is the
+  deliberate anti-cheating design (`_are_you_sure` is intentionally not set on
+  the sim path, `src/game.rs:385-395`). **Documented, not "fixed"** — do not
+  schedule it.
+- **`self_play` records a sample for a move, then silently drops the move if
+  `execute` fails** — CONFIRMED. FIXED: nothing is recorded until the move
+  actually lands, and a rejected legal move discards the whole game and counts
+  into a new `aborted_games` metric instead of vanishing
+  (`src/bin/self_play.rs:933`, `:962`, metric at `:2506-2514`).
+- **Self-play maps are asymmetric (Drylands seat imbalance)** — CONFIRMED, and
+  worse than stated. Over 500 seeds of the exact Tiny/Drylands config self_play
+  generates, player 2 started on an island with ≤2 land neighbours in 166/500
+  games (33%) versus 0/500 for player 1; mean land in the 8 tiles around the
+  capital was P1 8.00 vs P2 6.01; 469/500 seeds gave materially different seats.
+  With `symmetric: true` every metric is identical and island starts drop to
+  0/500. FIXED for training: `self_play --symmetric` now defaults to true
+  (`src/bin/self_play.rs:1342`), and `symmetric_maps_give_both_seats_the_same_start`
+  (`src/mapgen.rs:1712`) pins seat equality over 120 seeds; the measurement itself
+  is kept as an `--ignored` diagnostic at `:1729`. **NOT fixed for the gauge** —
+  see M2.
 
 - ~~`freeze_area` never freezes, and its undo permanently turns water into Ice.~~
   **OUT OF SCOPE (owner):** Polaris is out of scope. Do not spend effort on
@@ -543,7 +902,7 @@ exists for exactly this.
   exists but is unused for training.
 
 ### E3 · Hot-path allocation
-**Status:** OPEN · **FLAGGED** · Effort: days
+**Status:** OPEN — unchanged · **FLAGGED** · Effort: days
 
 Audit estimates, not profiles — measure before changing, per
 `expert_boost_throughput.md`'s own rule:
@@ -567,7 +926,17 @@ Release profile is already tuned (`lto = "fat"`, `codegen-units = 1`); only
 ## T — Testing, CI, and ops
 
 ### T1 · No Rust↔Python forward-parity test
-**Status:** OPEN · **FLAGGED** · Effort: days
+**Status:** PARTLY FIXED (`73dafb9`) · **FLAGGED** · Effort: days
+
+**What landed:** `tests/parity_widths.rs` runs in CI and fails if any Rust head
+width, channel count or player-state dim disagrees with the constant `train.py`
+declares — that half would have caught P3. `examples/tch_parity.rs` and
+`examples/metal_parity.rs` now assert on output agreement instead of printing.
+
+**Still missing:** a forward-output parity test that runs on Linux CI. The two
+asserting examples need macOS/libtorch, so the candle↔PyTorch numerical
+comparison — the half that would have caught E1 — is still not exercised by any
+automated job.
 
 Nothing loads a Python-produced `model.safetensors` into the Rust network and
 compares outputs. The parity examples never assert. Given four backends must
@@ -575,7 +944,22 @@ agree byte-for-byte, this is the highest-value missing test in the repo — and 
 would have caught P3 and E1.
 
 ### T2 · CI cannot catch the failure modes that actually occur
-**Status:** OPEN · **CONFIRMED** · Effort: days
+**Status:** FIXED (`73dafb9`) · **CONFIRMED** · Effort: days
+
+**What landed:** `.github/workflows/rust.yml` gained the width-parity test, a
+shell→binary CLI contract check (`scripts/check_cli_contract.py --no-build`, run
+against freshly built binaries), correctness clippy as a gate plus a full clippy
+and `cargo fmt` advisory pass, a Python syntax compile pass, and a feature-flag
+compile matrix. `.github/workflows/smoke.yml` is a nightly (and
+`workflow_dispatch`) end-to-end run of `scripts/smoke_train_loop.sh` — self_play
+→ `games_*.safetensors` → train.py → model.safetensors plus one arena gauge
+reading — which is the seam all three blockers hid in.
+
+```bash
+# Re-verify locally
+cd polyfish-rs && python3 scripts/check_cli_contract.py
+cd polyfish-rs && bash scripts/smoke_train_loop.sh
+```
 
 `.github/workflows/rust.yml` builds and tests with `--no-default-features` only.
 No clippy, no fmt, no release build, no feature-flag builds, no Python tests, and
@@ -584,7 +968,31 @@ P3 are all invisible to it. A one-iteration end-to-end smoke run would catch all
 three.
 
 ### T3 · Other testing and ops items
-**Status:** OPEN · **FLAGGED**
+**Status:** MOSTLY FIXED · **FLAGGED**
+
+FIXED: the decomposed mapper has tests, and its option block now carries a
+compile-time assertion per family (`src/ai/mapper.rs:86-92`) so a 23rd
+`AbilityType` fails the build instead of silently aliasing onto
+`CityRewardType::CityWall`. `model.safetensors` is written atomically
+(`train.py:416-420`, `:942`) and a present-but-unloadable checkpoint is fatal
+rather than a silent restart from random weights. The experiment record is no
+longer single-machine: `training_log.csv` and `ladder.json` are tracked in git
+(`.gitignore`) and `scripts/backup_experiment_record.sh` snapshots the record
+(plus `checkpoints/`, which stays gitignored) to another disk or a remote, with a
+MANIFEST and SHA256SUMS. The Python env is pinned and consistent
+(`requirements.txt`, single `POLYFISH_TORCH_VERSION` pin read by all three setup
+scripts, each installing the torch wheel its target needs — `local_setup.sh` no
+longer installs none). The dashboard now emits every column `training_log.csv`
+records, header-driven rather than a fixed struct (`src/main.rs:1839`,
+`src/bin/dashboard.rs:55`), and `training.html` drops the charts nothing produced
+in favour of value-label composition, decisive-game rate and policy KL.
+
+STILL OPEN, unchanged: `train.py` has no test infrastructure. Search agents still
+draw from the unseeded global RNG, so no test can pin search behaviour. Crash
+recovery still restores `checkpoints/model_checkpoint_iter*` by version sort
+regardless of which run produced it (`run_training_loop.sh:305-309`) — the new
+per-launch snapshot (`:252`) gives a correct restore point but the automatic path
+does not use it.
 
 - `train.py`, the primary trainer, has no test infrastructure at all.
 - The decomposed mapper has no tests; its ability block has zero headroom — a
@@ -594,7 +1002,13 @@ three.
 - `model.safetensors` is written non-atomically, and a failed load falls back
   silently to "starting from scratch". `ladder.py` already does this correctly
   (`.tmp` + `os.replace`) — copy that pattern.
-- Crash recovery restores a checkpoint from the wrong run.
+- ~~Crash recovery restores a checkpoint from the wrong run.~~ FIXED: periodic
+  checkpoints now carry the writing run's id
+  (`model_checkpoint_iter${i}_run${RUN_ID}_${TS}.safetensors`, still matching the
+  glob the pruning logic uses), and the resume path restores only from this run —
+  its own periodic checkpoints first, then its launch snapshot. If neither
+  exists it aborts and names the newest untagged checkpoint rather than silently
+  adopting another run's weights (`run_training_loop.sh:303-325`).
 - `training_log.csv`, `ladder.json` and `checkpoints/` are gitignored with no
   off-box durability — every experiment record lives on one machine.
 - Python env is unpinned and inconsistent across the three setup scripts;
@@ -643,6 +1057,27 @@ Steps 1–4 are all hours of work. A2b is the first item that is genuinely a
 design change rather than a repair, which is why it sits after the re-baseline —
 it needs a working instrument to be judged against.
 
+### Where the chain actually stands (Aug 18, 2026)
+
+Steps 1, 2, 3, 4 and 7 are **done**. Step 5 — the re-baseline — is the next
+action and nothing downstream of it should be started first.
+
+Two things must be settled *before* the re-baseline reading is taken, or it will
+measure the wrong thing:
+
+- **What the baseline is a baseline OF.** This wave landed several behaviour
+  changes that are pre-registered but unmeasured (`EXP_LABEL_001`,
+  `EXP_SEARCH_002`, `EXP_DATA_001`, `EXP_DATA_002`, `EXP_TEACH_001`,
+  `EXP_TRAIN_001` in `hypothesis_driven_improvements.md`). They are all ON by
+  default and cannot be separated by a single reading. `EXP_SEARCH_001`
+  (adversarial in-tree search) is the exception — it is OFF by default and is the
+  one arm that can be A/B'd against the same baseline.
+
+Step 6 is unchanged and its ordering warning now matters more, not less: **A2 was
+settled ahead of A2b** (one zero-sum constant landed; the label still reads raw
+`score`). If the re-baseline reads worse than the old band, check that before
+concluding anything about the search changes.
+
 ---
 
 ## Method and coverage
@@ -657,6 +1092,12 @@ FLAGGED items as leads rather than conclusions — one of the two refutations
 Not covered in depth: the `polyfish-mod` C# side, `polyfish-scraper`, the replay
 subsystem's correctness, and the `polyfish-ui` fork. The engine dimension (E2)
 returned more than is captured here and deserves its own pass.
+
+**Aug 18:** E2 got that pass — all seven claims reproduced with throwaway
+integration probes, six of them fixed (see E2). R1/R3/R4 were independently
+re-verified against the source and the live PyTorch net; R4 came back materially
+different from how it was written. The `polyfish-mod` C# side, `polyfish-scraper`
+and the replay subsystem are still unaudited.
 
 CLAUDE.md was corrected in the same session (commit `459a32b`) — its
 dual-network sync section had the wrong channel count, player-state dim, and

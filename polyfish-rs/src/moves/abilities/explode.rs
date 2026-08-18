@@ -76,7 +76,13 @@ impl Move for ExplodeMove {
             units_to_explode.sort_by(|a, b| b.0.cmp(&a.0));
 
             for &(explode_u_idx, explode_tile_idx) in &units_to_explode {
-                let atk = 4.0; // Segment/Centipede attack is 4
+                // UNVERIFIED (v115), and off the training path (no Cymanti in self_play's
+                // pool): this deals a flat 2.0 hp to every adjacent enemy, ignoring both
+                // stats — 4.0 is stale (Segment attacks for 2.0, Doomux 3.5). Sources split
+                // between "50% of the exploder's current hp, ignoring modifiers" and "attack
+                // result halved" (defence-sensitive); settle it from a polyfish-mod capture
+                // of a Segment and a Doomux exploding beside a known-defence unit.
+                let atk = 4.0;
 
                 // 1. Deal AOE Damage
                 let adj = crate::functions::get_adjacent_indices(state, explode_tile_idx, 1);

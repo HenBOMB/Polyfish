@@ -63,3 +63,11 @@ polyfish-rs/.current_run
 !/polyfish-rs/replays/high_scores/
 /polyfish-rs/replays/high_scores/*
 !/polyfish-rs/replays/high_scores/.gitkeep
+# Experiment record: small text files that ARE the record of every run, so they
+# are tracked despite the broad *.csv / polyfish-rs/*.json rules above.
+# checkpoints/ stays ignored (multi-MB weights belong in backups, not git) —
+# see polyfish-rs/scripts/backup_experiment_record.sh for off-box durability.
+!polyfish-rs/training_log.csv
+!polyfish-rs/ladder.json
+polyfish-rs/*.json.tmp
+polyfish-rs/.anchor_decay_start

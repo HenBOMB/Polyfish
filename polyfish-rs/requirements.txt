@@ -1,5 +1,18 @@
+# Shared Python core for every target. Pinned: an unpinned training env means a
+# result cannot be reproduced later. Verified against Python 3.11 and 3.13.
+# The per-target extras (torch wheel index, CUDA build, Rust build) live in
+# local_setup.sh / remote_setup.sh / vast_setup.sh, which all install this file.
+safetensors==0.8.0
+numpy==2.4.6
+packaging==26.3
+tqdm==4.70.0
 
-safetensors
-numpy
-packaging
-tqdm
+# torch is NOT installed from here: each target needs a different wheel index
+# (PyPI/MPS, CPU, cu128). All three setup scripts read the pin from the next
+# line, so it stays a single source of truth instead of drifting per script.
+# POLYFISH_TORCH_VERSION=2.12.1
+#
+# 2.12.x is required by the tch-eval backend: tch 0.25 targets PyTorch 2.12 and
+# LIBTORCH_BYPASS_VERSION_CHECK is only justified across 2.12 patch releases
+# (Cargo.toml, tch dependency comment). Candle-only builds tolerate newer torch,
+# but raising this pin means re-checking tch-rs first.

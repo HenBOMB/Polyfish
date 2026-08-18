@@ -691,8 +691,12 @@ pub fn get_best_capital(state: &GameState, player_id: PlayerId) -> Option<&CityS
         return Some(orig);
     }
 
-    // 2. Otherwise, find the highest level city that is currently a capital
-    // TODO: fix
+    // 2. Otherwise, the highest-level city that is currently a capital. Unreachable for
+    // engine-generated states: capture rewrites `capital_of` to the capturer, so every
+    // owned capital already matches step 1 (which therefore returns *a* capital, not
+    // necessarily the original). It only fires on loaded states if the mod/reader keeps
+    // the ORIGINAL owner's id in `capitalOf` — capture a capital with polyfish-mod
+    // attached and read that field; if it keeps the original id, step 1 is the bug.
     tribe
         .cities
         .iter()

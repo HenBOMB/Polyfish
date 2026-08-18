@@ -416,13 +416,17 @@ impl<'a> Brain<'a> {
     }
 }
 
-/// Returns the maximum number of game turns the MCTS tree should look ahead
-/// from the current turn. This prevents the search from going absurdly deep
-/// and getting stuck in long rollouts during mid-game when branching is high.
-pub fn max_turns_ahead(_current_turn: i32, _max_turns: i32) -> i32 {
-    if _current_turn < 8 {
-        5
-    } else {
-        (20 - _current_turn).max(2).min(20) // idea: do not look ahead more than the last turn (20 turns, default)
-    }
+/// Floor on the in-tree turn horizon: below two turns the search cannot see
+/// past its own EndTurn, so a plan is never worth starting.
+pub const MIN_TURNS_AHEAD: i32 = 2;
+
+/// Cap on the in-tree turn horizon. `settings.turn` advances once per full
+/// turn order in both search modes, so this counts the *root player's* own
+/// turns either way — adversarial search buys the same depth for ~2x the plies.
+pub const MAX_TURNS_AHEAD: i32 = 5;
+
+/// Game turns the MCTS tree may look ahead from `current_turn`, never past the
+/// game's own end. Monotonically non-increasing in `current_turn`.
+pub fn max_turns_ahead(current_turn: i32, max_turns: i32) -> i32 {
+    (max_turns - current_turn).clamp(MIN_TURNS_AHEAD, MAX_TURNS_AHEAD)
 }

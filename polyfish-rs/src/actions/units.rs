@@ -565,6 +565,11 @@ pub fn step_unit(
         }
     }
 
+    // AutoFreeze: freezes adjacent water and enemies as the unit moves
+    if has_skill(old_type, SkillType::AutoFreeze) {
+        undos.push(crate::actions::freeze_area(state, unit_owner, to_tile_idx));
+    }
+
     // Clathrus: Poisons enemy units that move onto it
     if let Some(dest_tile) = state.tiles.get(&to_tile_idx) {
         if let Some(dest_struct) = get_structure_type_at(state, to_tile_idx) {

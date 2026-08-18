@@ -560,6 +560,37 @@ fn outcome_for(result: &GameResult, p_id: i32, reward_shaping: bool) -> f32 {
     (reward::REL_W * relative_outcome + (1.0 - reward::REL_W) * abs_outcome).clamp(-1.0, 1.0)
 }
 
+/// Every field `MoveVisit` carries, so a sampled entry resolves back to the
+/// one legal move it was built from.
+fn move_matches(m: &dyn polyfish::moves::Move, mv: &polyfish::ai::mcts_types::MoveVisit) -> bool {
+    m.move_type() == mv.move_type
+        && m.source_idx().ok() == mv.source_idx
+        && m.target_idx().ok() == mv.target_idx
+        && m.structure_type().ok() == mv.structure_type
+        && m.unit_type().ok() == mv.unit_type
+        && m.tech_type().ok() == mv.tech_type
+        && m.ability_type().ok() == mv.ability_type
+        && m.reward_type().ok() == mv.reward_type
+}
+
+/// Draw a move from the search's improved policy pi' (`MoveVisit::visits`) and
+/// resolve it against `state`'s legal moves. `None` for a degenerate
+/// distribution or a draw that is not legal in the un-obscured state (the
+/// search ran on a fog-obscured clone), leaving the caller on the argmax.
+fn sample_opening_move(
+    state: &GameState,
+    move_visits: &[polyfish::ai::mcts_types::MoveVisit],
+) -> Option<Box<dyn polyfish::moves::Move>> {
+    use rand::distr::{Distribution, weighted::WeightedIndex};
+
+    let weights: Vec<f32> = move_visits.iter().map(|mv| mv.visits.max(0.0)).collect();
+    let dist = WeightedIndex::new(&weights).ok()?;
+    let pick = &move_visits[dist.sample(&mut rand::rng())];
+    polyfish::moves::generate_legal_moves(state)
+        .into_iter()
+        .find(|m| move_matches(m.as_ref(), pick))
+}
+
 fn play_single_game(
     network1: &PolyZeroNet,
     network2: &PolyZeroNet, // Added network2
@@ -577,10 +608,13 @@ fn play_single_game(
     value_trust: Option<f32>,
     leaf_batch: Option<usize>,
     progress: ProgressMode,
+    symmetric: bool,
+    opening_temp_moves: usize,
     trace_villages: bool,
     trace_trigger: TraceTrigger,
     trace_max: usize,
     trace_counter: &AtomicUsize,
+    aborted_games: &AtomicUsize,
 ) -> Option<GameResult> {
     let (map_size, max_turns) = curriculum(iteration);
 
@@ -590,6 +624,7 @@ fn play_single_game(
         map_type: polyfish::types::MapType::Drylands,
         tribes: tribes.clone(),
         seed,
+        symmetric,
         ..Default::default()
     };
     if progress == ProgressMode::Full {
@@ -815,7 +850,9 @@ fn play_single_game(
             for x in &mut p_target {
                 *x /= total_visits;
             }
-            // ... (others)
+            for x in &mut p_option {
+                *x /= total_visits;
+            }
         }
 
         let policy_data = DecomposedPolicyData {
@@ -826,6 +863,15 @@ fn play_single_game(
         };
 
         let record_sample = !move_visits.is_empty();
+
+        // Opening diversity: play a sample from pi' rather than its argmax for
+        // the first `opening_temp_moves` plies. The policy target stays pi'
+        // either way, which is what AlphaZero/Gumbel train on.
+        let best_move = if move_count < opening_temp_moves && move_visits.len() > 1 {
+            sample_opening_move(&game.state, &move_visits).or(best_move)
+        } else {
+            best_move
+        };
 
         if let Some(m) = best_move {
             let m_type = m.move_type();
@@ -875,15 +921,51 @@ fn play_single_game(
                 }
             }
 
-            let replay_command = ReplayCommand::from_move(m.as_ref()).ok()?;
-            flat_recap.push((
-                game.state.settings.turn,
-                game.state.settings.current_player_turn_id,
-                replay_command,
-            ));
+            let turn_now = game.state.settings.turn;
+            let replay_command = match ReplayCommand::from_move(m.as_ref()) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!(
+                        "[Game {}] BUG: move '{}' at turn {} failed to serialise ({}) — discarding this game",
+                        game_idx,
+                        m.describe(&game.state),
+                        turn_now,
+                        e,
+                    );
+                    aborted_games.fetch_add(1, Ordering::Relaxed);
+                    return None;
+                }
+            };
             // Snapshot scores/SPT at this moment (pre-move) for the TD label.
             let (my_score_now, opp_score_now) = reward::score_snapshot(&game.state, pov);
             let (my_spt_now, opp_spt_now) = reward::spt_snapshot(&game.state, pov);
+            if progress == ProgressMode::Full && move_count > 0 && move_count % 10 == 0 {
+                eprintln!(
+                    "[Game {}]: Turn: {} Player: {} Move: {}",
+                    game_idx,
+                    turn_now,
+                    pov,
+                    m.describe(&game.state),
+                );
+            }
+
+            // Nothing is recorded until the move actually lands: `execute`
+            // failing on a legal move is an engine bug, and a sample or a
+            // replay entry for a transition that never happened is training
+            // data for a state the game cannot reach.
+            if game.play_move(m.as_ref()).is_none() {
+                eprintln!(
+                    "[Game {}] BUG: play_move rejected legal move '{}' (player {}, turn {}) — discarding this game",
+                    game_idx,
+                    m.describe(&game.state),
+                    pov,
+                    turn_now,
+                );
+                aborted_games.fetch_add(1, Ordering::Relaxed);
+                return None;
+            }
+
+            flat_recap.push((turn_now, pov, replay_command));
             if record_sample {
                 game_history.push(HistoryStep {
                     features: state_t,
@@ -893,20 +975,10 @@ fn play_single_game(
                     opp_score: opp_score_now,
                     my_spt: my_spt_now,
                     opp_spt: opp_spt_now,
-                    turn: game.state.settings.turn,
+                    turn: turn_now,
                     root_value,
                 });
             }
-            if progress == ProgressMode::Full && move_count > 0 && move_count % 10 == 0 {
-                eprintln!(
-                    "[Game {}]: Turn: {} Player: {} Move: {}",
-                    game_idx,
-                    game.state.settings.turn,
-                    pov,
-                    m.describe(&game.state),
-                );
-            }
-            let _ = game.play_move(m.as_ref());
 
             if progress == ProgressMode::Periodic {
                 while next_milestone < milestones.len()
@@ -1263,6 +1335,20 @@ fn main() -> anyhow::Result<()> {
         /// map/spawn/seat luck from the label. Disable: --mirror-labels=false.
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         mirror_labels: bool,
+
+        /// Point-symmetric (180deg-rotated) 1v1 maps, so both seats start
+        /// from an identical position. Asymmetric Drylands maroons seat 2 on
+        /// an island in ~1/3 of Tiny games, which puts a seat term in every
+        /// value label. Disable: --symmetric=false.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        symmetric: bool,
+
+        /// Plies at the start of each game played by SAMPLING the search's
+        /// improved policy pi' instead of taking its argmax, for opening
+        /// diversity within an iteration. Counted in plies, not game turns
+        /// (~8 plies make one Polytopia turn). 0 disables sampling.
+        #[arg(long, default_value_t = 8)]
+        opening_temp_moves: usize,
 
         /// Current training iteration (for curriculum learning)
         #[arg(long, default_value_t = 1)]
@@ -1710,6 +1796,7 @@ fn main() -> anyhow::Result<()> {
     let job_counter = Arc::new(AtomicUsize::new(0));
     let games_completed = Arc::new(AtomicUsize::new(0));
     let trace_counter = Arc::new(AtomicUsize::new(0));
+    let aborted_games = Arc::new(AtomicUsize::new(0));
     let finish_milestones = finish_milestones(args.num_games);
     let results_mutex: Arc<std::sync::Mutex<Vec<GameResult>>> =
         Arc::new(std::sync::Mutex::new(Vec::with_capacity(args.num_games)));
@@ -1720,6 +1807,7 @@ fn main() -> anyhow::Result<()> {
             let results_mutex = results_mutex.clone();
             let games_completed = games_completed.clone();
             let trace_counter = trace_counter.clone();
+            let aborted_games = aborted_games.clone();
             let finish_milestones = finish_milestones.clone();
             let network1 = &network1;
             let network2 = &network2;
@@ -1790,10 +1878,13 @@ fn main() -> anyhow::Result<()> {
                             args.value_trust,
                             args.leaf_batch,
                             progress_mode,
+                            args.symmetric,
+                            args.opening_temp_moves,
                             args.trace_villages,
                             args.trace_trigger,
                             args.trace_max,
                             &trace_counter,
+                            &aborted_games,
                         )
                     }))
                     .unwrap_or_else(|_| {
@@ -2414,6 +2505,16 @@ fn main() -> anyhow::Result<()> {
         0.0
     };
 
+    // A game the engine could not finish is a bug, not attrition: count it in
+    // the metrics so a silent drop can never be invisible again.
+    let aborted_games_n = aborted_games.load(Ordering::Relaxed);
+    if aborted_games_n > 0 {
+        eprintln!(
+            "[Self-Play] WARNING: {aborted_games_n}/{} games discarded — the engine rejected a legal move mid-game",
+            args.num_games
+        );
+    }
+
     let metrics = json!({
         "num_games": args.num_games,
         "avg_score": avg_score,
@@ -2455,6 +2556,7 @@ fn main() -> anyhow::Result<()> {
         "vlab_spt_absmean": vlab_spt_absmean,
         "anchor_games": anchor_games_n,
         "anchor_model_wins": anchor_model_wins,
+        "aborted_games": aborted_games_n,
         "games_file": games_file,
         "moves_by_turn": moves_by_turn,
     });

@@ -169,10 +169,7 @@ async fn main() {
         .route("/trainer/hint", post(get_trainer_hint))
         .route("/system/cpu", get(get_cpu_usage))
         .route("/api/runs", get(polyfish::training_api::api_runs))
-        .route(
-            "/api/training-metrics",
-            get(polyfish::training_api::api_training_metrics),
-        )
+        .route("/api/training-metrics", get(api_training_metrics))
         .route(
             "/api/moves-by-turn",
             get(polyfish::training_api::api_moves_by_turn),
@@ -188,11 +185,13 @@ async fn main() {
         .nest_service("/assets", ServeDir::new("../polyfish-ui/dist/assets"))
         .nest_service("/simulator", ServeDir::new("../polyfish-ui/dist/simulator"))
         .nest_service("/static", ServeDir::new("../polyfish-ui/dist"))
-        // Serve real files (training.html, js/, css/) from public; unmatched
-        // paths still fall back to index.html for SPA routing.
-        .fallback_service(
-            ServeDir::new("../polyfish-ui/dist").not_found_service(spa_fallback.into_service()),
-        )
+        // Built SPA first, then the static UI in src/public (training.html, js/,
+        // css/) that ships unbuilt; unmatched paths fall back to SPA routing.
+        // `fallback` keeps the second dir's own status — `not_found_service`
+        // would stamp 404 onto files it serves successfully.
+        .fallback_service(ServeDir::new("../polyfish-ui/dist").fallback(
+            ServeDir::new("../src/public").not_found_service(spa_fallback.into_service()),
+        ))
         .layer(CorsLayer::permissive())
         .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 50))
         .with_state(shared_state);
@@ -1789,6 +1788,66 @@ async fn get_cpu_usage() -> Json<Value> {
     }
 
     Json(serde_json::json!({ "cores": usages }))
+}
+
+/// Columns kept as strings even when they parse as numbers: `run_id` is a unix
+/// timestamp the dashboard compares and formats as text.
+const CSV_TEXT_COLUMNS: &[&str] = &[
+    "run_id",
+    "iter_started_at",
+    "run_started_at",
+    "games_file",
+    "match_type",
+];
+
+/// Every column of `training_log.csv` verbatim — numbers where the cell parses,
+/// null for blanks. Reading the header instead of a fixed struct means a column
+/// added to the CSV reaches the dashboard without a change here.
+fn training_csv_rows() -> Vec<Value> {
+    let content = std::fs::read_to_string("training_log.csv").unwrap_or_default();
+    let mut lines = content.lines().filter(|l| !l.trim().is_empty());
+    let Some(header) = lines.next() else {
+        return Vec::new();
+    };
+    let headers: Vec<&str> = header.split(',').collect();
+    lines
+        .filter(|line| line.split(',').count() >= 5)
+        .map(|line| {
+            let cells: Vec<&str> = line.split(',').collect();
+            let row: serde_json::Map<String, Value> = headers
+                .iter()
+                .enumerate()
+                .map(|(i, name)| {
+                    let cell = cells.get(i).copied().unwrap_or("").trim();
+                    let value = if CSV_TEXT_COLUMNS.contains(name) {
+                        Value::from(cell)
+                    } else if cell.is_empty() {
+                        Value::Null
+                    } else {
+                        cell.parse::<f64>()
+                            .map(Value::from)
+                            .unwrap_or_else(|_| Value::from(cell))
+                    };
+                    ((*name).to_string(), value)
+                })
+                .collect();
+            Value::Object(row)
+        })
+        .collect()
+}
+
+async fn api_training_metrics(
+    axum::extract::Query(q): axum::extract::Query<polyfish::training_api::RunFilter>,
+) -> Json<Value> {
+    let rows: Vec<Value> = training_csv_rows()
+        .into_iter()
+        .filter(|r| {
+            q.run
+                .as_ref()
+                .is_none_or(|id| r.get("run_id").and_then(Value::as_str) == Some(id.as_str()))
+        })
+        .collect();
+    Json(Value::Array(rows))
 }
 
 async fn spa_fallback() -> impl axum::response::IntoResponse {

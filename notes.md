@@ -74,6 +74,9 @@ Max\
 polytopia has a narrower but much deeper search tree per turn compared to Chess
 you must look ~8 steps deep just to complete one game turn
 
+(see "Aug 18, 2026 — what the adversarial-search fix does to this analysis" at
+the end of this file: the plies-per-turn figure stands, what a ply BUYS changed)
+
 --
 
 # Verdi, Jul 3, 2026
@@ -364,3 +367,58 @@ phase-2 gate is still hold-then-beat 7.7 / 9.1. If captures still slide with
 anchors on, next lever is a potential-based shaping bonus from an auxiliary
 own-progress head (dense credit without touching the zero-sum backup), NOT more
 abs share in the label.
+
+
+# Aug 18, 2026 — what the adversarial-search fix does to this analysis
+
+Annotation, not a correction. The branching-factor table above and the "~8 plies
+to complete one game turn" figure are still right — they are properties of the
+game, measured from legal-move generation, and nothing about them changed. What
+changed is what a ply of search **buys**, and that is the half of this analysis
+that the MCTS depth and iteration choices were derived from.
+
+**What was actually happening.** `Game::simulate_move`'s `EndTurn` branch looped
+`end_turn()` until control came back to the mover, deleting every opponent turn
+in between (its own comment: "Single-player MCTS: skip enemy turns"). The
+opponent still collected income and had its units refreshed — it simply never
+acted. So a descent of D plies spent all D on the root player and covered D/8 of
+*its own* turns, against an opponent modelled as a thing that banks stars and
+passes. Measured before the fix: 5.06 in-tree `EndTurn` edges per move decision
+at only 16 MCTS iterations; a 60-ply probe descent crossed 15 turn boundaries and
+never once saw player 2 on the path.
+
+**What it is now.** `game::adversarial_search()` (default OFF, env
+`POLYFISH_ADVERSARIAL_SEARCH=1`, `arena --adversarial`) makes an in-tree
+`EndTurn` hand over exactly once, like the real `play_move` does. With it on, the
+same D plies are split between both players, so reaching the same lookahead
+*measured in the root player's own turns* costs roughly 2× the plies — and the
+opponent it looks ahead against is a belief-state army: `clone_for_mcts` confines
+it to what the root player can currently see.
+
+**Consequences for the numbers this file reasons from.**
+
+- The "64 sims → winning root child gets ~15 visits, so the tree is 2-3 plies
+  deep vs ~8 plies per turn" calculation (in the Jul 5-6 campaign log) still
+  describes the shape of the problem, but under adversarial search those visits
+  are split across two movers. The tree gets shallower in own-turns for the same
+  budget.
+- **EXP 3 (64 → 256 sims, REJECTED) does not transfer.** It was measured against
+  the null opponent AND with `max_turns_ahead` hard-coded to a 20-turn game — see
+  below. Whether depth pays is an open question again for the adversarial
+  configuration; do not treat that REJECTED as settled there.
+- `max_turns_ahead` (`ai/brain.rs`) ignored its `max_turns` argument and
+  hard-coded 20, so from turn 18 onward it returned its floor of 2 turns — for
+  the whole of every 30- and 45-turn curriculum game. It is now
+  `(max_turns - current_turn).clamp(2, 5)`. Any conclusion here about late-game
+  search depth was drawn from a search that had almost none.
+- One caveat on the table itself: until Aug 18, 2026 `generate_legal_moves`
+  emitted unit-ability moves twice (a per-unit pass *and* a whole-tribe pass,
+  the latter added in `a7cbd5c`, Jul 6 2026). If the 1k-game count post-dates
+  that, the averages above include duplicates for every ability-capable unit and
+  are an upper bound. The shape of the curve is unaffected. To re-measure,
+  `src/bin/test_branching.rs` is the closest tool — note it currently runs
+  Small/Perfection, not the Tiny/Drylands the table used.
+
+Both changes are registered as EXP_SEARCH_001 and EXP_SEARCH_002 in
+`hypothesis_driven_improvements.md` and **neither has been measured** — there is
+no gauge reading on the repaired instrument yet.

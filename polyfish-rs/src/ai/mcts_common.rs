@@ -152,6 +152,18 @@ pub(crate) fn extract_leaf_data(
     }
 }
 
+/// Does descending this edge hand the turn to another player? Only then does a
+/// child's accumulated value live in a different perspective from its parent's.
+/// `Resign` always ends the mover's turn; in-tree `EndTurn` only does so under
+/// `adversarial_search()`.
+pub(crate) fn edge_hands_over(m: Option<&dyn Move>) -> bool {
+    match m.map(|m| m.move_type()) {
+        Some(MoveType::EndTurn) => crate::game::adversarial_search(),
+        Some(MoveType::Resign) => true,
+        _ => false,
+    }
+}
+
 /// Tree-shape trait: any node that exposes a slice of children of the same
 /// type. Used by the generic `get_node_by_path` / `get_node_by_path_mut`
 /// helpers so both agents share the same path-walking logic.
@@ -204,10 +216,10 @@ pub(crate) trait BackpropNode: TreeNode {
 /// path and adding one visit + the (sign-flipped) value to each node's
 /// running sums.
 ///
-/// Sign flipping: the value is negated each time the player to move changes
-/// between consecutive nodes on the path (i.e. across an `EndTurn` boundary).
-/// The root is handled explicitly relative to the leaf player; interior nodes
-/// flip relative to their parent.
+/// Sign flipping: every node is credited in its own player's perspective. The
+/// root is anchored by comparing it to the leaf player; the walk then negates
+/// once per player change, so node k ends up with `+value` iff it shares the
+/// leaf's player.
 ///
 /// This is the single load-bearing correctness path that was previously
 /// duplicated across `mcts_zero.rs` and `gumbel_mcts.rs`. Both agents now
@@ -234,6 +246,11 @@ pub(crate) fn backpropagate_and_remove_virtual_loss<N: BackpropNode>(
     *root.virtual_loss().borrow_mut() -= virtual_loss_amount;
     *root.visits_mut() += 1.0;
     *root.value_sum_mut() += root_value;
+
+    // The walk must start from the ROOT's perspective, not the leaf's: it
+    // negates forward from the root, so seeding it with the leaf-perspective
+    // value inverts every node below a path with an odd number of flips.
+    value = root_value;
 
     let mut current: &mut N = root;
     let mut prev_player = root_player;
@@ -286,11 +303,10 @@ pub(crate) fn backpropagate_and_remove_virtual_loss<N: BackpropNode>(
 /// `backpropagate_and_remove_virtual_loss`'s (a value is negated when
 /// crossing an edge where the mover changes) but is applied per-edge in
 /// each node's own local perspective rather than accumulated as parity from
-/// the root; the two conventions coincide whenever the path has at most one
-/// player change (root vs. leaf) — true of every real search tree in this
-/// codebase (single-player; see module docs) and this function's own
-/// same-player tests — and only diverge on synthetic multi-flip paths
-/// nothing here actually produces.
+/// the root. Under `adversarial_search()` real paths alternate movers, so
+/// both conventions are exercised for real; they differ only in WHOSE frame a
+/// node's stored number lives in — here the parent's (an action value), there
+/// the node's own.
 ///
 /// Setting every reward to 0 does **not** collapse to the plain-value
 /// function's behavior unless `gamma == 1.0` — discounting the whole future
@@ -451,13 +467,10 @@ mod tests {
 
     #[test]
     fn backprop_flips_across_player_change() {
-        // path_players = [1, 2, 2], indices = [0, 0], leaf value = +0.5
-        // (leaf player = 2). This locks in the exact sign sequence produced
-        // by the pre-extraction reference implementation in `mcts_zero.rs`:
-        //   root_value  = -(0.5) = -0.5            (root player 1 != leaf 2)
-        //   i=0: child_player 2 != prev 1 -> flip  -> child      = -0.5
-        //   i=1: child_player 2 == prev 2 -> no flip -> grandchild = -0.5
-        // The shared fn must reproduce these values byte-for-byte.
+        // path_players = [1, 2, 2], indices = [0, 0], leaf value = +0.5 from
+        // the leaf (player 2) perspective. Every node is credited in its own
+        // player's frame: root is player 1 so it gets -0.5; child and
+        // grandchild are both player 2 so they keep +0.5.
         let mut root = build_two_ply_tree();
 
         backpropagate_and_remove_virtual_loss(
@@ -470,11 +483,11 @@ mod tests {
 
         assert!((root.value_sum - (-0.5)).abs() < 1e-6, "root value_sum");
         assert!(
-            (root.children[0].value_sum - (-0.5)).abs() < 1e-6,
+            (root.children[0].value_sum - 0.5).abs() < 1e-6,
             "child value_sum"
         );
         assert!(
-            (root.children[0].children[0].value_sum - (-0.5)).abs() < 1e-6,
+            (root.children[0].children[0].value_sum - 0.5).abs() < 1e-6,
             "grandchild value_sum"
         );
     }
@@ -693,12 +706,10 @@ mod tests {
         // player 2) in player 2's frame: child and leaf are BOTH player 2,
         // no flip needed, so it stays +0.5 — this is where this function
         // intentionally diverges from `backpropagate_and_remove_virtual_loss`
-        // (which gives -0.5 here): that function accumulates sign flips as
-        // parity-from-root rather than locally per edge, so a node 2+ hops
-        // past the one real perspective change gets a stale sign. Per-edge
-        // local perspective is the mathematically consistent choice (and
-        // the two conventions agree on every real search tree, which is
-        // always single-player — see module docs).
+        // (which gives +0.5 here): that function stores a node's value in the
+        // node's OWN frame, while this one stores the action value of the edge
+        // into the node, i.e. the PARENT's frame. Both are self-consistent;
+        // each agent's child-selection rule matches its own convention.
         let mut root = build_two_ply_tree();
         backpropagate_return_with_rewards(
             &mut root,

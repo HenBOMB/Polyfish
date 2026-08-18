@@ -29,9 +29,12 @@ pub fn unlock_tech(
         undos.push(spend_stars(state, cost));
     }
 
+    // Always `discovered`: real states only ever carry discovered techs, so a
+    // simulated research must unlock the same units/structures/harvests a real
+    // one does, or the search can never plan "research X, then use X".
     let tech_state = TechnologyState {
         tech_type,
-        discovered: state.settings._are_you_sure,
+        discovered: true,
         discovered_turn: state.settings.turn,
     };
 
@@ -50,9 +53,6 @@ pub fn unlock_tech(
             }
         }));
     }
-
-    // TODO: Update available moves/resources based on new tech?
-    // Usually verified dynamically by MoveGenerators
 
     use crate::actions::chain_undos;
     Ok(chain_undos(undos))

@@ -89,7 +89,7 @@ fn bonus_capital_connections(tribe: &crate::states::TribeState) -> f32 {
 /// - **Domination**: Penalizes stuck population (investment not yet converted to a level-up).
 ///   Encourages completing level-ups quickly rather than spreading pop thinly.
 /// - **Perfection**: Rewards population progress (each pop point is progress toward score).
-///   Encourages adding population even if the level-up isn't immediate.
+/// - **Custom/Sandbox/Tutorial/None**: neutral — no win condition to infer from.
 fn penalty_partial_cities(tribe: &crate::states::TribeState, mode: ModeType) -> f32 {
     if tribe.cities.is_empty() {
         return 0.0;
@@ -123,11 +123,10 @@ fn penalty_partial_cities(tribe: &crate::states::TribeState, mode: ModeType) -> 
             total_penalty.min(0.15)
         }
 
-        ModeType::Custom | ModeType::Sandbox | ModeType::Tutorial | ModeType::None => {
-            todo!(
-                "penalty_partial_cities not implemented for Glory/Custom/Might/Sandbox/Diplomacy/Tutorial mode"
-            );
-        }
+        // No defined win condition, so neither polarity is justified: stuck
+        // population is only bad if tempo decides the game, and only good if
+        // score does. Stay neutral rather than guess.
+        ModeType::Custom | ModeType::Sandbox | ModeType::Tutorial | ModeType::None => 0.0,
     }
 }
 
@@ -517,4 +516,42 @@ fn penalty_urgency(state: &GameState) -> f32 {
     }
 
     score.min(1.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::states::{CityState, TribeState};
+
+    /// Every `ModeType` must evaluate; the win-condition-less modes used to
+    /// hit a `todo!()` in `penalty_partial_cities`.
+    #[test]
+    fn evaluate_economy_handles_every_mode() {
+        let mut state = GameState::default();
+        state.settings.size = 11;
+
+        let mut tribe = TribeState::default();
+        tribe.id = 1;
+        tribe.cities.push(CityState {
+            population: 1,
+            level: 2,
+            ..Default::default()
+        });
+        state.tribes.insert(1, tribe);
+
+        for mode in [
+            ModeType::None,
+            ModeType::Perfection,
+            ModeType::Domination,
+            ModeType::Glory,
+            ModeType::Might,
+            ModeType::Custom,
+            ModeType::Sandbox,
+            ModeType::Tutorial,
+        ] {
+            state.settings.mode = mode;
+            let score = evaluate_economy(&state, 1);
+            assert!(score.is_finite(), "{mode:?} produced {score}");
+        }
+    }
 }

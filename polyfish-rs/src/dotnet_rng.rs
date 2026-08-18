@@ -37,18 +37,20 @@ impl DotNetRandom {
         for i in 1..55 {
             let ii = (21 * i) % 55;
             seed_array[ii] = mk;
-            mk = mj - mk;
+            mk = mj.wrapping_sub(mk);
             if mk < 0 {
                 mk += MBIG;
             }
             mj = seed_array[ii];
         }
 
-        // 3. Four warm-up rounds over SeedArray (Fibonacci lag 31 / 24 recurrence)
+        // 3. Four warm-up rounds over SeedArray (Fibonacci lag 31 / 24 recurrence).
+        // Both subtractions here wrap: seed_array[55] starts negative for any
+        // seed > MSEED, and .NET runs this ctor in an unchecked context.
         for _ in 1..=4 {
             for i in 1..56 {
                 let other_idx = 1 + (i + 30) % 55;
-                let mut val = seed_array[i] - seed_array[other_idx];
+                let mut val = seed_array[i].wrapping_sub(seed_array[other_idx]);
                 if val < 0 {
                     val += MBIG;
                 }
@@ -172,6 +174,26 @@ mod tests {
 
             let r = rng.next_range(5, 10);
             assert!((5..10).contains(&r));
+        }
+    }
+
+    /// Wall-clock-scale seeds drive `seed_array[55]` far negative, so the
+    /// warm-up subtraction overflows i32 unless it wraps like .NET.
+    #[test]
+    fn seeds_above_mseed_do_not_overflow() {
+        for seed in [
+            161_803_399,
+            1_500_000_000,
+            i32::MAX,
+            i32::MIN,
+            -1_500_000_000,
+            (1_755_000_000_000i64 % i32::MAX as i64) as i32,
+        ] {
+            let mut rng = DotNetRandom::new(seed);
+            for _ in 0..64 {
+                let v = rng.internal_sample();
+                assert!((0..MBIG).contains(&v), "seed {seed} produced {v}");
+            }
         }
     }
 

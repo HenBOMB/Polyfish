@@ -88,8 +88,10 @@ pub fn update_capital_connections(state: &mut GameState, tribe_id: i32) -> UndoC
                     connected = true;
                 }
             } else if tribe_type == TribeType::Polaris {
-                // TODO: Polaris disabled
-                // TODO Outposts 5x5 ice connections
+                // Polaris has no city-connection network here: it should connect through
+                // Outposts over a 5x5 ice radius, and Outpost is unimplemented
+                // (settings::structures::unimplemented_reason). Polaris therefore plays
+                // with zero connection income; it is not in self_play's tribe pool.
             } else {
                 // Standard road connection
                 if current_has_road && n_has_road {

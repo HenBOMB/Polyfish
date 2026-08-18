@@ -208,10 +208,10 @@ pub fn generate_legal_moves(state: &GameState) -> Vec<Box<dyn Move>> {
     moves.push(Box::new(EndTurnMove));
 
     // 2. Army Moves (Units, Summons, Upgrades)
+    // Unit-action moves are emitted per unit inside generate_unit_moves.
     generate_unit_moves(state, &mut moves);
     crate::moves::summon::generate_summon_moves(state, &mut moves);
     crate::moves::upgrade::generate_upgrade_moves(state, &mut moves);
-    crate::moves::abilities::unit_actions::generate_unit_action_moves(state, &mut moves);
 
     // 3. Econ Moves (Research, Build, Harvest, Econ Abilities)
     generate_econ_moves(state, &mut moves);
@@ -705,14 +705,12 @@ fn is_roadpath_and_usable(state: &GameState, unit: &UnitState, idx: i32) -> bool
         return false;
     }
 
-    // Usable if friendly or neutral or peace treaty or Infiltrate
+    // Usable if friendly, neutral or at peace. Infiltrate is purely an attack-targeting
+    // skill (only adjacent enemy cities); the road/terrain exemptions its carriers enjoy
+    // come from Creep (Cloak) or Fly (Moth), handled in compute_movement_cost/is_terminal.
     tile.owner == unit.owner
         || tile.owner == 0
         || crate::functions::is_at_peace(state, unit.owner, tile.owner)
-        || get_unit_setting(unit.unit_type)
-            .skills
-            // TODO not sure infiltrate influences movement range..?
-            .contains(&SkillType::Infiltrate)
 }
 
 fn is_naval_unit(unit_type: UnitType) -> bool {

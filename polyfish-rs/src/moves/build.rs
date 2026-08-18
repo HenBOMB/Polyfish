@@ -39,6 +39,10 @@ impl Move for BuildMove {
         let settings = get_structure_setting(self.structure_type);
 
         // 0. Validation
+        if let Some(reason) = crate::settings::structures::unimplemented_reason(self.structure_type)
+        {
+            return Err(reason.to_string());
+        }
         if self.structure_type == StructureType::Road
             && crate::functions::is_city(state, self.target_index)
         {
@@ -127,6 +131,10 @@ pub fn generate_build_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
             let settings = get_structure_setting(struct_type);
 
             if settings.cost.is_none() || settings.resource_type.is_some() {
+                continue;
+            }
+
+            if crate::settings::structures::unimplemented_reason(struct_type).is_some() {
                 continue;
             }
 

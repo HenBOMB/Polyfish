@@ -3,22 +3,10 @@ use crate::moves::Move;
 use crate::moves::{DisbandMove, PromoteMove, RecoverMove};
 use crate::settings::technology;
 use crate::states::{GameState, TribeState, UnitState};
-use crate::types::{SkillType, StructureType, TechnologyType, UnitEffect};
+use crate::types::{SkillType, StructureType, TechnologyType, TerrainType, UnitEffect};
 
 use super::break_ice::generate_break_ice_moves_for_unit;
 use super::*;
-
-pub fn generate_unit_action_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
-    let pov_id = state.settings.current_player_turn_id;
-    let tribe = match state.tribes.get(&pov_id) {
-        Some(t) => t,
-        None => return,
-    };
-
-    for unit in &tribe.units {
-        generate_unit_action_moves_for_unit(state, tribe, unit, moves);
-    }
-}
 
 pub fn generate_unit_action_moves_for_unit(
     state: &GameState,
@@ -81,14 +69,18 @@ pub fn generate_unit_action_moves_for_unit(
             moves.push(Box::new(BoostMove::new(idx)));
         }
     } else if functions::has_skill(unit, SkillType::FreezeArea) {
+        // Worth using if there is an unfrozen enemy OR unfrozen water to freeze.
         let stuff_around = get_adjacent_indices(state, idx, 1).iter().any(|&adj| {
             if let Some(enemy) = functions::get_enemy_at(state, adj, pov_id) {
-                if !has_effect(enemy, UnitEffect::Frozen) || !functions::is_tile_frozen(state, adj)
-                {
+                if !has_effect(enemy, UnitEffect::Frozen) {
                     return true;
                 }
             }
-            false
+            state
+                .tiles
+                .get(&adj)
+                .map(|t| matches!(t.terrain_type, TerrainType::Water | TerrainType::Ocean))
+                .unwrap_or(false)
         });
         if stuff_around {
             moves.push(Box::new(FreezeAreaMove::new(idx)));

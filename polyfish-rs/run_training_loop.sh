@@ -302,10 +302,26 @@ portable_shuf() {
 echo "Initializing/Checking model..."
 # If resuming but model.safetensors is missing, restore latest checkpoint
 if [ "$START_ITER" -gt 1 ] && [ ! -f "model.safetensors" ]; then
-    LATEST_CP=$(ls checkpoints/model_checkpoint_iter*.safetensors 2>/dev/null | sort -V | tail -n 1 || true)
+    # Restore only from THIS run. Taking the global latest by iteration silently
+    # adopts another run's weights, which is worse than failing to resume.
+    LATEST_CP=$(ls checkpoints/model_checkpoint_iter*_run${RUN_ID}_*.safetensors 2>/dev/null | sort -V | tail -n 1 || true)
+    if [ -z "$LATEST_CP" ]; then
+        LATEST_CP=$(ls checkpoints/run_${RUN_ID}_iter*_start.safetensors 2>/dev/null | sort -V | tail -n 1 || true)
+    fi
     if [ -n "$LATEST_CP" ]; then
-        echo "🔄 Resuming: Restoring latest checkpoint $(basename $LATEST_CP) to model.safetensors"
+        echo "🔄 Resuming run $RUN_ID: restoring $(basename "$LATEST_CP") to model.safetensors"
         cp "$LATEST_CP" model.safetensors
+    else
+        UNTAGGED=$(ls checkpoints/model_checkpoint_iter*.safetensors 2>/dev/null | sort -V | tail -n 1 || true)
+        if [ -n "$UNTAGGED" ]; then
+            echo "ERROR: resuming run $RUN_ID at iteration $START_ITER but no checkpoint belongs to it." >&2
+            echo "       Newest untagged checkpoint is $(basename "$UNTAGGED") (written before checkpoints" >&2
+            echo "       carried a run id, or by a different run). Copy it to model.safetensors by hand if" >&2
+            echo "       that is really the run you mean to continue." >&2
+        else
+            echo "ERROR: resuming run $RUN_ID at iteration $START_ITER with no model.safetensors and no checkpoint." >&2
+        fi
+        exit 1
     fi
 fi
 .venv/bin/python3 init_model.py
@@ -474,7 +490,7 @@ do
     if [ $((i % CHECKPOINT_EVERY)) -eq 0 ]; then
         TS=$(date +%Y%m%d_%H%M%S)
         echo "Creating checkpoint for iteration $i (Timestamp: $TS)..."
-        cp model.safetensors "checkpoints/model_checkpoint_iter${i}_${TS}.safetensors"
+        cp model.safetensors "checkpoints/model_checkpoint_iter${i}_run${RUN_ID}_${TS}.safetensors"
     fi
     
     # Smart Pruning: Keep recent density and historical milestones
@@ -536,7 +552,8 @@ do
             local -a cmd=("$ARENA_BIN" --model1 model.safetensors
                 --mcts "$MCTS_ITERS" --gumbel-k "$GUMBEL_K"
                 --games "$2" --gamemode "$GAMEMODE"
-                --max-turns "$GAUGE_MAX_TURNS" --seed "${GAUGE_SEED:-20260811}")
+                --max-turns "$GAUGE_MAX_TURNS" --seed "${GAUGE_SEED:-20260811}"
+                --symmetric "${GAUGE_SYMMETRIC:-true}")
             if [ -z "$1" ]; then
                 cmd+=(--model2 model.safetensors --backend1 gumbel --backend2 greedy)
             else

@@ -398,8 +398,10 @@ pub enum SkillType {
     Splash = 14,
     // Unknown, not used anywhere
     // Decay = 15,
-    /// TODO REMOVE FROM THE GAME AND FIND PROPER REPLACEMENT
-    /// Removed: Allowed a unit to move in water or ocean even if no required technology is researched but prevents the unit from moving onto land, except for those with cities and villages.
+    /// Removed from the real game: allowed movement on water/ocean without the required
+    /// tech while blocking land except cities/villages. No unit in `settings/units.rs`
+    /// carries it, so the four `SkillType::Navigate` branches in `moves/` are dead code.
+    /// Kept because it is wire id 16 and a loaded real-game state could still carry it.
     Navigate = 16,
     // Unknown, not used anywhere
     // Crush = 17,
@@ -555,10 +557,10 @@ pub enum StructureType {
     EyeOfGod = 29,
     // EnchantAnimal = 30, // same here, more abilities
     // EnchantWhale = 31,
-    Sanctuary = 32, // TODO add new building (elyrion)
-    Outpost = 33,   // TODO new
-    IceBank = 34,   // TODO new
-    IceTemple = 35, // TODO new
+    Sanctuary = 32, // Elyrion: income + animal spawning implemented
+    Outpost = 33,   // Polaris: NOT implemented, see settings::structures::unimplemented_reason
+    IceBank = 34,   // Polaris: +2 stars per 20 frozen tiles, implemented
+    IceTemple = 35, // Polaris: levels and scores as a temple, implemented
     // PolarisClimate = 36, // no idea
     Fungi = 37, // cymanti like temple
     Algae = 38,

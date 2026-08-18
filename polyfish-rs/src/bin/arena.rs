@@ -87,9 +87,16 @@ struct Args {
     #[arg(long)]
     name2: Option<String>,
 
-    /// Generate mirrored / symmetric 1v1 maps for Elo evaluation.
-    #[arg(long, default_value_t = false)]
+    /// Point-symmetric (180deg-rotated) 1v1 maps. Defaults to on to match
+    /// `self_play --symmetric`: the gauge must read the same map family
+    /// training generates, or seat bias re-enters every reading.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     symmetric: bool,
+
+    /// In-tree EndTurn hands control to the opponent instead of skipping its
+    /// turn. Process-wide: both configurations search adversarially.
+    #[arg(long, default_value_t = false)]
+    adversarial: bool,
 
     /// Base map seed; seed N is played by both seats (paired). Omit to seed
     /// from the wall clock, which re-rolls the map set every run.
@@ -298,11 +305,15 @@ fn play_match(
             }
         }
 
+        // Search an obscured clone, exactly as self_play does — searching the
+        // real game would let the graded agent see through fog that the
+        // trained agent never gets.
+        let mut search_view = game.clone_for_mcts(current_pid);
         let t0 = Instant::now();
         let best_move = if current_pid == 1 {
-            agent_p1.select_move(&mut game)
+            agent_p1.select_move(&mut search_view)
         } else {
-            agent_p2.select_move(&mut game)
+            agent_p2.select_move(&mut search_view)
         };
         let dt = t0.elapsed().as_nanos() as u64;
 
@@ -466,6 +477,9 @@ fn backend_from_arg(arg: SearchBackendArg, k: usize) -> SearchBackend {
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    if args.adversarial {
+        polyfish::game::set_adversarial_search(true);
+    }
     // Select best available device: CUDA (NVIDIA) > Metal (macOS) > CPU
     let device = match Device::cuda_if_available(0) {
         Ok(Device::Cpu) | Err(_) => Device::metal_if_available(0).unwrap_or(Device::Cpu),
@@ -514,6 +528,11 @@ fn main() -> anyhow::Result<()> {
     println!(
         "Search tuning: prior_heuristic={} policy_target_q={} tree_q={}",
         tuning.prior_heuristic, tuning.policy_target_q, tuning.tree_q
+    );
+    println!(
+        "Symmetric maps: {} | Adversarial search: {}",
+        args.symmetric,
+        polyfish::game::adversarial_search()
     );
 
     let (base_seed, seed_source) = match args.seed {

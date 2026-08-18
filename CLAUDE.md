@@ -31,9 +31,9 @@ On startup `main.rs` tries to load game state from `live_game.json`, `saved_stat
 cd polyfish-rs && cargo build --release --bin polyfish --bin self_play --bin arena
 ```
 
-**Tests** (tool binaries in `src/bin/` set `test = false` in `Cargo.toml`; `#[ignore]` marks heavy integration probes — neither runs in CI):
+**Tests** (tool binaries in `src/bin/` set `test = false` in `Cargo.toml`; `#[ignore]` marks heavy probes and measurement tools, which CI does not run):
 ```bash
-# CI-equivalent — note --no-default-features, which is what .github/workflows/rust.yml runs
+# The main gate — note --no-default-features, which is what .github/workflows/rust.yml runs
 cd polyfish-rs && cargo test --no-default-features --lib --tests --bin self_play
 
 cd polyfish-rs && cargo test --test integration my_test_name       # a single libtest case
@@ -41,29 +41,42 @@ cd polyfish-rs && cargo test -- --ignored test_min_capital_distance_1v1   # heav
 cd polyfish-rs && cargo run --bin stats -- --games 50              # manual diagnostic tool
 ```
 
+CI (`.github/workflows/rust.yml`) also runs, and these are worth running locally before touching what they cover:
+```bash
+cd polyfish-rs && cargo test --no-default-features --test parity_widths   # Rust vs train.py head widths
+cd polyfish-rs && python3 scripts/check_cli_contract.py                   # shell -> binary flag contract
+cd polyfish-rs && cargo clippy --no-default-features --all-targets        # gated on a correctness subset
+cd polyfish-rs && cargo fmt --check                                       # advisory
+```
+`.github/workflows/smoke.yml` runs `scripts/smoke_train_loop.sh` nightly (and on demand): a real one-iteration `self_play` → `games_*.safetensors` → `train.py` → `model.safetensors` pass plus an `arena` gauge reading, into a scratch dir under `target/smoke/`. That seam is where all three of the 2026 pipeline blockers hid — run it after changing `run_training_loop.sh`, `train.py`, or either binary's CLI.
+
 **Python training setup** (creates `polyfish-rs/.venv` from `requirements.txt`):
 ```bash
-cd polyfish-rs && ./local_setup.sh           # or remote_setup.sh / vast_setup.sh on a GPU box
+cd polyfish-rs && ./local_setup.sh           # macOS/Apple silicon or plain Linux CPU
+cd polyfish-rs && ./remote_setup.sh          # generic CUDA box (also installs Rust, builds release)
+cd polyfish-rs && ./vast_setup.sh            # Vast.ai; additionally builds tch-eval
 ```
+`requirements.txt` holds the shared, pinned core and **deliberately does not list torch** — each target needs a different wheel index. All three scripts read the single version pin from the `# POLYFISH_TORCH_VERSION=` line in `requirements.txt` and install the matching wheel (PyPI on macOS, CPU index on Linux, cu128 on a GPU box). Raising that pin means re-checking `tch-rs` first: `tch-eval` links against this exact torch.
 
 **Full self-play + train loop** (the main training driver):
 ```bash
 cd polyfish-rs && ./run_training_loop.sh [flags]
 ```
-Short flags (getopts `fbcri:g:n:a:e:l:k:`): `-f` force-train, `-b` boost-threads, `-c` chill, `-r` reward-shaping, `-i` iterations, `-g` games-per-iter, `-n` mcts-iters, `-a` actors, `-e` eval-servers, `-l` league/gauge interval (default 10), `-k` gumbel-k. Long flags: `--resume [run_id]`, `--reset`.
+Short flags (getopts `fbcri:g:n:a:e:l:k:`): `-f` force-train, `-b` boost-threads, `-c` chill, `-r` reward-shaping, `-i` iterations, `-g` games-per-iter, `-n` mcts-iters, `-a` actors, `-e` eval-servers, `-l` league/gauge interval (default 10), `-k` gumbel-k. Long flags: `--resume [run_id]`, `--new-run`/`-N`, `--reset`, `--no-server`.
 
-The loop is: `init_model.py` → `self_play` (Rust, generates `games_*.safetensors`) → `train.py` (Python/PyTorch, updates `model.safetensors`) → log a CSV row → checkpoint every 50 iters into `checkpoints/` → archive consumed games, plus a strength-gauge match every `-l` iterations. CUDA is opt-in via the `cuda`/`cudnn` Cargo features. `--reset` deletes `model.safetensors` and all self-play game data (`games_*.safetensors` in root and `archive/`) before starting; it forces a new run (overrides `--resume`) and leaves `checkpoints/`, `training_log.csv`, and `moves_by_turn.json` untouched. Each run is a **new run** by default; `--resume` continues the latest.
+The loop is: `init_model.py` → `self_play` (Rust, generates `games_*.safetensors`) → `train.py` (Python/PyTorch, updates `model.safetensors`) → log a CSV row → checkpoint every 50 iters into `checkpoints/` → archive consumed games, plus a strength-gauge match every `-l` iterations. A failed gauge reading is now fatal — the loop aborts rather than continuing blind, which is what left an entire campaign without a single recorded reading. CUDA is opt-in via the `cuda`/`cudnn` Cargo features. `--reset` deletes `model.safetensors`, all self-play game data (`games_*.safetensors` in root and `archive/`) and `.anchor_decay_start` before starting; it forces a new run (overrides `--resume`) and leaves `checkpoints/`, `training_log.csv`, and `moves_by_turn.json` untouched. Each run is a **new run** by default; `--resume` continues the latest.
 
 **Head-to-head evaluation:**
 ```bash
-cd polyfish-rs && cargo run --release --bin arena -- --model1 a.safetensors --model2 b.safetensors --games 32 --mcts 64
+cd polyfish-rs && cargo run --release --bin arena -- --model1 a.safetensors --model2 b.safetensors --games 32 --mcts 64 --seed 20260811
 ```
+Pass `--seed` for anything you intend to compare: without it `arena` seeds from the wall clock and re-rolls the map set every run.
 
 ## Architecture
 
 ### Game engine (`polyfish-rs/src/`)
 - `states.rs` / `types.rs` — the `GameState` data model and all enums (tribes, units, tech, moves, etc.). `GameState` (de)serializes to/from the JSON produced by the mod and reader.
-- `game.rs` — the `Game` controller: load state, run `post_load()` (recompute tile indices/visibility), apply moves, manage turns. The engine is intended to be "perfect": legal-move generation and `execute` should never panic on valid input — panics are treated as bugs to surface, not suppress.
+- `game.rs` — the `Game` controller: load state, run `post_load()` (recompute tile indices/visibility), apply moves, manage turns. The engine is intended to be "perfect": legal-move generation and `execute` should never panic on valid input — panics are treated as bugs to surface, not suppress. `play_move` is the real path; `simulate_move` is the in-tree path (it does not set `_are_you_sure`, so the search never reveals fog — deliberate anti-cheating, not a bug). `simulate_move`'s `EndTurn` branch is the one place the two diverge in game semantics: see the adversarial-search switch below.
 - `moves/` — the `Move` trait and `generate_legal_moves(state)`. Moves split into **economy moves** (city/tech/structure — mostly keyed by `target_index`) and **army moves** (step/attack/capture/abilities — mostly keyed by `src_index`). Unit abilities live in `moves/abilities/`.
 - `actions/` — lower-level reusable state mutations (gain stars, exploration, effects) that moves compose, with undo-callback support for MCTS rollouts.
 - `settings/` — static game data tables: `units.rs`, `technology.rs`, `structures.rs`, `resources.rs`, `tasks.rs`.
@@ -72,12 +85,13 @@ cd polyfish-rs && cargo run --release --bin arena -- --model1 a.safetensors --mo
 
 ### AI (`polyfish-rs/src/ai/`)
 - `mcts_zero.rs` — the AlphaZero-style MCTS (`ZeroMctsAgent`). `gumbel_mcts.rs` is the Gumbel variant and the one training actually uses; `heuristic_mcts.rs` is a network-free MCTS for fast UI analysis and the interactive trainer. `mcts_common.rs` holds the shared backup/descent logic; `mcts.rs` and `original_mcts_zero.rs` are older implementations — check whether a change needs to land in more than one.
-- `brain.rs` — top-level agent wiring. `Brain::with_backend(...)` plus the `with_prior_heuristic_weight` / `with_policy_target_q_weight` / `with_tree_q_weight` builders decide what the agent actually is. **These knobs are set in `self_play.rs` and left at their defaults in `arena.rs`** — if you change search behavior, check both call sites or training and evaluation will silently diverge.
+- **Two backup conventions, deliberately.** `mcts_common::backpropagate_and_remove_virtual_loss` stores each node's value in **its own player's** perspective (used by `mcts_zero`), while `backpropagate_return_with_rewards` stores the action value of the edge into the node, i.e. the **parent's** perspective (used by `gumbel_mcts`). Both are self-consistent; each agent's child-selection rule has to match its own convention — `mcts_zero` negates a handover child before comparing siblings (`effective_value_for_parent`), Gumbel compares `q_value()` directly. Get this wrong and the parent picks the move that is best for the opponent. `mcts_common::edge_hands_over` is the shared "does this edge change the mover" test.
+- `brain.rs` — top-level agent wiring. `Brain::with_backend(...)` plus the `with_prior_heuristic_weight` / `with_policy_target_q_weight` / `with_tree_q_weight` builders decide what the agent actually is. `arena.rs` now threads all three and defaults them to the self-play values, so the gauge grades the agent training produces; both binaries also search a fog-obscured `clone_for_mcts` view. Still check both call sites when you change search behavior — nothing enforces the alignment. `max_turns_ahead` here is the in-tree turn horizon (`MIN_TURNS_AHEAD` / `MAX_TURNS_AHEAD`).
 - `network.rs` — `PolyZeroNet`, the candle network: player-state embedding + ResBlocks + cross-attention + a **decomposed policy** and a value head.
 - `features.rs` — encodes `GameState` into the input tensor. Key constants: `MAP_SIZE = 11`, `NUM_CHANNELS`, `RawFeatures::PLAYER_STATE_DIM`. Maps are 11×11.
 - `mapper.rs` — `DecomposedMapper` / `DecomposedTargets`: the policy is decomposed into four heads — `action_type`, `source_spatial` (H·W), `target_spatial` (H·W), and a unified `move_option` (192, with offset blocks for structures/units/techs/abilities). This decomposition exists because raw legal-move ordering is non-deterministic across states, so moves are mapped to stable semantic coordinates instead of a flat action index.
 - `evaluator/` — heuristic state evaluation split by concern: `economy.rs`, `army.rs`, `research.rs`, `exploration.rs`, `expansion.rs`, `gamestate.rs`, `player.rs`. Used to shape/guide self-play and for non-NN play.
-- `reward.rs` — the shared per-move reward used by both TD value labels and reward-aware MCTS backup. Note `reward::REL_W` and `self_play.rs`'s `FINAL_OUTCOME_REL_W` both control relative-vs-absolute weighting and are currently set inconsistently; read both comment blocks before touching either.
+- `reward.rs` — the shared per-move reward used by both TD value labels and reward-aware MCTS backup. `reward::REL_W` is now the **single** relative-vs-absolute constant, read by both the TD body and self_play's final-outcome tail (`self_play.rs`'s separate `FINAL_OUTCOME_REL_W` is gone). It is 1.0 = pure relative, because the backup negates across every player-turn boundary and that is only valid for an antisymmetric value. Read the comment block on the constant before lowering it; `GOOD_BOT_FINAL_SCORE` is the absolute yardstick it would reintroduce.
 - `book.rs` — opening-move library; `ordering.rs` — move ordering; `policy_composer.rs` — assembles head outputs into a move distribution; `decision_trace.rs` — search introspection.
 
 ### Inference backends
@@ -94,11 +108,14 @@ The network architecture is implemented in **Rust (candle) and Python (PyTorch)*
 - Rust: `polyfish-rs/src/ai/network.rs` — used by `self_play`, `arena`, the server, and the Rust `train` binary.
 - Python: `polyfish-rs/train.py` — the primary trainer used by `run_training_loop.sh`; `init_model.py` creates the initial weights from this definition.
 
-If you change layer shapes, channel counts, or head sizes in one, you must mirror it in the other (**and** in `tch_network.rs` / `metal_network.rs`, and in `features.rs` / `mapper.rs` constants). Current values: spatial channels **142** (`features.rs` `NUM_CHANNELS`, `train.py` `SPATIAL_CHANNELS`; = 136 + 6 fog-memory channels), player-state dim **16** (`features.rs:216`, `train.py` `PLAYER_STATE_DIM`), map 11×11, 6 ResBlocks on a 64-filter trunk, policy heads = action + source + target + option(192), normalization = GroupNorm(`GN_GROUPS = 8`) — no BatchNorm anywhere; the 1-channel pool convs are fully linear (no norm, no activation, since an unnormed ReLU there dies irreversibly). Mismatches surface as safetensors load errors or silent garbage. Legacy 136-channel training data is zero-padded at load by `train.py` (channels were appended at the end of the layout); BatchNorm-era checkpoints are rejected at load.
+If you change layer shapes, channel counts, or head sizes in one, you must mirror it in the other (**and** in `tch_network.rs` / `metal_network.rs`, and in `features.rs` / `mapper.rs` constants). Current values: spatial channels **142** (`features.rs` `NUM_CHANNELS`, `train.py` `SPATIAL_CHANNELS`; = 136 + 6 fog-memory channels), player-state dim **16** (`features.rs:216`, `train.py` `PLAYER_STATE_DIM`), map 11×11, 6 ResBlocks on a 64-filter trunk, policy heads = action + source + target + option(192), normalization = GroupNorm(`GN_GROUPS = 8`) — no BatchNorm anywhere; the 1-channel pool convs are fully linear (no norm, no activation, since an unnormed ReLU there dies irreversibly). Mismatches surface as safetensors load errors or silent garbage. Legacy 136-channel training data is zero-padded at load by `train.py` (`pad_spatial`, channels were appended at the end of the layout), as are pre-widening 11-column `action_type` targets; BatchNorm-era checkpoints are rejected by `migrate_model.py:25-30`.
 
-**Known trap:** `network.rs` exports `NUM_ACTION_TYPES = 12` (used by the self-play/replay writers to size the `action_type` target) while the `pi_action` layer is built with a hardcoded `11` in both `network.rs` and `train.py`. `mapper.rs` maps `MoveType::Resign → 11`, one past the head. Verify this is reconciled before trusting any freshly written `games_*.safetensors`.
+**Resolved trap, kept as context:** `network.rs` used to export `NUM_ACTION_TYPES = 12` for the self-play/replay writers while building `pi_action` with a hardcoded `11` in both `network.rs` and `train.py` — so every target the writers produced was one column wider than the head, because `mapper.rs` maps `MoveType::Resign → 11`. Both sides now derive from the constant (`network.rs:10`, layer at `:227`; `train.py:96`, layer at `:165`), a const assertion keeps `Resign` inside the head (`network.rs:20`), and `tests/parity_widths.rs` fails the build if the Rust and Python widths ever disagree again. Add the same kind of assertion for any new width you introduce. Note `ResignMove` is still never emitted by `generate_legal_moves`, so slot 11 gets no self-play gradient — widening the head did not make resignation learnable.
 
 **Exception:** the `aux_*` heads (train.py `AUX_DIMS`: ownership/fog/SPT+5/opp-tech) are training-only and deliberately NOT mirrored in Rust — every Rust backend loads weights by name and ignores the extra keys. Do not add them to `network.rs`, and never save `model.safetensors` from `src/bin/train.rs` (candle `VarMap::save` strips them; it saves to `model_candle.safetensors` instead).
+
+### Runtime switch: adversarial in-tree search
+`game::adversarial_search()` decides whether an in-tree `EndTurn` hands control to the next player (adversarial) or cycles straight back to the mover, deleting the opponent's turn (the legacy single-player behaviour). **Default off.** Enable with `POLYFISH_ADVERSARIAL_SEARCH=1`, `game::set_adversarial_search(true)`, or `arena --adversarial`; it is process-wide and read on every in-tree `EndTurn`, so tests that touch it must serialize. With it on, `clone_for_mcts` also confines the in-tree opponent to the root player's vision, so the opponent it searches against is a belief-state army, not the real one. Nothing in `run_training_loop.sh` sets it — it is an unmeasured arm, registered as EXP_SEARCH_001.
 
 ### Training-only environment switches
 `train.py` reads several env vars that materially change training and are set by the shell driver, not by any config file. Check these before diagnosing a training result:
@@ -110,25 +127,26 @@ If you change layer shapes, channel counts, or head sizes in one, you must mirro
 `bisect_arm.sh` is where diagnostic arms belong; anything exported unconditionally from `run_training_loop.sh` is a production setting.
 
 ### Binaries (`polyfish-rs/src/bin/`)
-27 binaries; the load-bearing ones:
-- `self_play.rs` — generates training games (`--num-games`, `--mcts-iters`, `--tribe1/2`, `--opponent <checkpoint>`, `--anchor-frac`, `--value-trust`, `--reward-shaping`, `--iteration`); emits `METRICS:` JSON lines parsed by the loop script and writes `games_*.safetensors`. Also owns the value-label definition and the curriculum.
-- `arena.rs` — battle two configurations head-to-head (`--model1 --model2 --games --mcts --backend1/2`). Plays each seed twice with sides swapped.
+28 binaries; the load-bearing ones:
+- `self_play.rs` — generates training games (`--num-games`, `--mcts-iters`, `--tribe1/2`, `--opponent <checkpoint>`, `--anchor-frac`, `--value-trust`, `--reward-shaping`, `--iteration`, `--decay-last-iter`, `--anchor-decay-start`, `--symmetric` (default true), `--opening-temp-moves` (default 8), `--print-curriculum`); emits `METRICS:` JSON lines parsed by the loop script and writes `games_*.safetensors`. Also owns the value-label definition and the curriculum — `--print-curriculum` is how other tools ask for it instead of mirroring its thresholds.
+- `arena.rs` — battle two configurations head-to-head (`--model1 --model2 --games --mcts --backend1/2 --seed --max-turns --dump-stats-dir --symmetric --adversarial`). Plays each seed twice with sides swapped; `--seed` pins the map set so readings are paired.
 - `train.rs` — Rust/candle trainer (alternative to `train.py`).
 - `trainer.rs` — interactive CLI to play against the AI and correct its moves.
 - Diagnostics: `benchmark.rs`, `actor_ceiling.rs`, `compare_evaluators.rs`, `repro_loop.rs`, `validate_csv.rs`, `stats.rs`, `debug_*.rs`, `verify_*.rs`.
 - Replay management: `import_replays.rs`, `upload_replays.rs`, `download_replay.rs`, `delete_all_replays.rs`, `extract_versions.rs`.
 
-Any binary invoked by a shell script forms a **CLI contract with that script**. Nothing in CI checks it — if you rename or remove an argument, grep `run_training_loop.sh` and `auto_train.sh` in the same change.
+Any binary invoked by a shell script forms a **CLI contract with that script**. `scripts/check_cli_contract.py` checks it in CI now (it builds the binaries and diffs every long flag the shell scripts pass against that binary's `--help`, and fails closed on anything it cannot resolve), but still grep `run_training_loop.sh` and `auto_train.sh` when you rename or remove an argument — three such breaks once stopped the pipeline running at all.
 
 ### Strength measurement
 Separate from the training metrics, and the instrument every experiment depends on:
-- `arena` plays the matches; `ladder.py` owns `ladder.json` (frozen anchors, gauge readings, freeze/plateau verdicts); `elo.py` computes ratings.
-- `run_training_loop.sh` runs a gauge match every `-l` iterations against the ladder's active anchor, records the reading, and can freeze a new anchor (≥80% win rate) or stop the run (plateau).
+- `arena` plays the matches; `ladder.py` owns `ladder.json` (frozen anchors, gauge readings, freeze/plateau verdicts); `elo.py` fits ratings from those readings against the Elo-0 greedy floor.
+- `run_training_loop.sh` runs a gauge match every `-l` iterations against the ladder's active anchor, records the reading, and can freeze a new anchor or stop the run (plateau). Both gates are interval-aware: a freeze needs the reading's Wilson lower bound to clear 80%, and the plateau test compares pooled halves by interval overlap. A failed reading aborts the run.
+- The gauge pins its map set (`--seed`), matches self-play's search knobs, and asks `self_play --print-curriculum` for the same `max_turns` training is generating.
 - `.anchor_state.json` / `.anchor_decay_start` persist anchor-gate state across invocations.
-- `arena` seeds from the wall clock and has no seed flag, so readings are not on a common map set — keep that in mind when comparing readings across iterations.
+- Both `self_play` and `arena` default `--symmetric` to true, and `run_gauge_match` passes it explicitly (`GAUGE_SYMMETRIC`), so the ladder reads the same map family training generates. **Known gap:** a ~64-game reading still only resolves to about ±12pp — `ladder.json` stores the interval, so use it rather than the point estimate.
 
 ### Data flow
-Steam game → `polyfish-mod` (C#) / the C++ reader → JSON game states (`live_game.json`, `replays/`) → loaded by `polyfish` server or the replay subsystem. Separately, `self_play` → `games_*.safetensors` → `train.py` → `model.safetensors` → `checkpoints/`. Training metrics go to `training_log.csv` (canonical store, keyed by `run_id` per training campaign) plus a `moves_by_turn.json` sidecar; `run_training_loop.sh` uses `training_log.py` to parse METRICS and append rows. Live dashboard: `http://localhost:3000/training.html` (Chart.js, reads `/api/runs`, `/api/training-metrics`, `/api/moves-by-turn`, `/api/value-distribution` from the Rust server). `training_metrics_schema.sql` + root `telegram_agent.js`/`run_analysis_now.js` push progress to Supabase/Telegram. `session.log` is a raw debug transcript only.
+Steam game → `polyfish-mod` (C#) / the C++ reader → JSON game states (`live_game.json`, `replays/`) → loaded by `polyfish` server or the replay subsystem. Separately, `self_play` → `games_*.safetensors` → `train.py` → `model.safetensors` → `checkpoints/`. Training metrics go to `training_log.csv` (canonical store, keyed by `run_id` per training campaign) plus a `moves_by_turn.json` sidecar; `run_training_loop.sh` uses `training_log.py` to parse METRICS and append rows. `training_log.csv` and `ladder.json` are **tracked in git** (they are the experiment record); `checkpoints/` is not — `scripts/backup_experiment_record.sh` snapshots all of it to another disk or a remote. Live dashboard: `http://localhost:3000/training.html` (Chart.js, reads `/api/runs`, `/api/training-metrics`, `/api/moves-by-turn`, `/api/value-distribution`, `/api/elo-ladder` from the Rust server). `/api/training-metrics` is served by a header-driven CSV reader in `main.rs` / `bin/dashboard.rs`, so a column added to the CSV reaches the dashboard without a Rust change. `training_metrics_schema.sql` + root `telegram_agent.js`/`run_analysis_now.js` push progress to Supabase/Telegram. `session.log` is a raw debug transcript only.
 
 ## Comments
 
@@ -149,6 +167,6 @@ Do not add comments for every variable, branch, or trivial operation. Do not res
 ## Notes
 - `notes.md` and `notes-heuristics.md` document design rationale and the branching-factor analysis (Polytopia has a narrow but very deep per-turn search tree — ~8 plies to complete one game turn — which drives the MCTS depth/iteration choices). Read them before changing search or evaluation behavior. `notes-memory.md` covers the observation-memory channels.
 - `hypothesis_driven_improvements.md` is a pre-registered experiment log (EXP 1–11, EXP_ELO_*) with COMMITTED/REJECTED verdicts. Read it before proposing a change — several obvious ideas have already been tried and measured. `expert_review.md` and `expert_boost_throughput.md` hold a prior architecture review and a measured throughput investigation (including a "What NOT to do" section).
-- **`expert_pipeline_audit.md` (Aug 2026) is the open-work list — read it first.** It records three shell↔binary contract breaks that stop `run_training_loop.sh` from running at all and that have prevented the strength gauge from ever recording a reading, plus the rest of the audit with per-item status and re-verify commands. Any gauge-derived conclusion in the experiment log predates those breaks being found.
+- **`expert_pipeline_audit.md` (Aug 2026) is the open-work list — read it first.** Its "Status — Aug 18, 2026" block is the index: the three shell↔binary contract breaks and the gauge repairs have landed, and each item carries a status plus a re-verify command. **No gauge reading has been taken on the repaired instrument yet**, so every gauge-derived conclusion in the experiment log — the plateau verdict, EXP_ELO_002's "success bar not met" — is provisional pending a re-baseline, and several landed behaviour changes are registered-but-unmeasured.
 - A verdict recorded in those docs means the experiment ran, not that the code still reflects it. Confirm in the source before relying on it. The reverse also happens: a measured rationale can be lost when a comment is rewritten (see the `AUGMENT_D4` case in the audit) — check `git log -S` on a constant before assuming its current comment is the whole story.
 - `main` is the default branch and PRs target it.
