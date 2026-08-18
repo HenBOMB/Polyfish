@@ -1032,12 +1032,41 @@ records, header-driven rather than a fixed struct (`src/main.rs:1839`,
 `src/bin/dashboard.rs:55`), and `training.html` drops the charts nothing produced
 in favour of value-label composition, decisive-game rate and policy KL.
 
-STILL OPEN, unchanged: `train.py` has no test infrastructure. Search agents still
-draw from the unseeded global RNG, so no test can pin search behaviour. Crash
-recovery still restores `checkpoints/model_checkpoint_iter*` by version sort
-regardless of which run produced it (`run_training_loop.sh:305-309`) — the new
-per-launch snapshot (`:252`) gives a correct restore point but the automatic path
-does not use it.
+ALSO FIXED: `train.py` has a test suite, and search is reproducible.
+
+`tests/test_train.py` and `tests/test_ladder.py` (stdlib `unittest`, no new
+pinned dependency; `scripts/run_python_tests.sh`, CI job `python-tests`) cover
+the helpers whose failure mode is silent — the holdout split's partition and
+stability invariants, `pad_spatial`'s append-don't-prepend contract, D4 as a
+group action, and the Rust↔Python width contract read from the Python side,
+which runs without torch.
+
+**Search reproducibility took two fixes, and the second was the real one.**
+`GumbelMctsAgent` now owns a seeded `SmallRng` (`with_search_seed`, or
+`POLYFISH_SEARCH_SEED` for a pinned base stream that still differs per agent —
+a shared stream across actors would make every actor play the same game). That
+alone did not make a search replayable: `generate_legal_moves` returned the same
+moves in a **different order** on every run. Two containers in movegen were
+iterated to emit moves — `compute_reachable_tiles`'s `HashMap` for step targets
+(`src/moves/mod.rs:377`) and `generate_research_moves`'s `HashSet`
+(`src/moves/research.rs:113`) — and Rust seeds each map instance separately.
+Order decides which move receives which Gumbel draw, so a permuted list is a
+different search. Both are ordered now (`BTreeMap`, and a sort before emission),
+and `tests/search_determinism.rs` holds it. Note this is invisible to a
+move-*type* comparison: the permutation is within a type, which is why an
+earlier order check passed while the search still diverged.
+
+**Correction — the crash-recovery item above was stale.** Re-verified at
+`ce35b31`: the automatic path is already run-scoped
+(`run_training_loop.sh:306-328`). It restores only
+`model_checkpoint_iter*_run${RUN_ID}_*`, falls back to this run's per-launch
+snapshot, and when neither exists it **exits 1** naming the newest untagged
+checkpoint rather than adopting it. Nothing left to do here.
+
+STILL OPEN: nothing in this item. The remaining T3-adjacent gap is that
+determinism now holds for the search and for movegen order, but a full run is
+still not reproducible end to end — mapgen seeds, actor scheduling and the
+eval-server batching order are all outside what these tests pin.
 
 - `train.py`, the primary trainer, has no test infrastructure at all.
 - The decomposed mapper has no tests; its ability block has zero headroom — a

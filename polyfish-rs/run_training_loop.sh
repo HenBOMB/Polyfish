@@ -25,6 +25,16 @@ export DETACH_VALUE_TRUNK="${DETACH_VALUE_TRUNK:-1}"
 # Throughput scales with concurrent games; small NUM_GAMES (-g) is a real limiter, not this knob.
 # See expert_boost_throughput.md for details.
 ACTORS=128
+# Seeds per gauge reading; each is played twice with sides swapped, so the
+# reading's n is 2x this. Deliberately a declared number rather than an inline
+# default: at 32 (64 games, p~0.33) a reading resolves to about +/-11pp, and
+# calling the +8pp effect the registered experiments are written against needs
+# ~571 games — `.venv/bin/python3 ladder.py power --baseline 0.33 --games 64`.
+# It is left at 32 because raising it costs gauge wall-clock linearly and the
+# plateau gate already pools eight readings; what changed is that the shortfall
+# is now recorded on every reading (`resolves_pp`) and echoed in the log rather
+# than being rediscovered from the interval later. See audit M3.
+GAUGE_GAMES="${GAUGE_GAMES:-32}"
 # Auto-select 3 servers on the dedicated Metal backend and 1 on tch/candle.
 # This preserves the measured Metal optimum without making CPU/Candle runs
 # fail at startup. An explicit -e still overrides the automatic selection.
@@ -609,16 +619,10 @@ do
             fi
         }
 
-        # GAUGE_GAMES is per side-swapped pair, so 32 => 64 games. That
-        # resolves to about +/-11pp at a ~33% win rate, which is coarser than
-        # the +8pp bar the registered experiments are written against
-        # (`python3 ladder.py power --baseline 0.33 --games 64`). Raising it is
-        # the honest fix and costs gauge wall-clock linearly; until then the
-        # plateau gate pools eight readings, which is what makes it meaningful.
         # A failed reading is fatal: the ladder is the instrument every
         # experiment is judged on, and continuing past a broken gauge is what
         # left the whole campaign without a single recorded reading.
-        if ! run_gauge_match "$ANCHOR_PATH" "${GAUGE_GAMES:-32}" "replays/gauge_stats/${RUN_ID}_iter${i}"; then
+        if ! run_gauge_match "$ANCHOR_PATH" "$GAUGE_GAMES" "replays/gauge_stats/${RUN_ID}_iter${i}"; then
             rm -f "$GAUGE_LOG"
             echo "GAUGE: strength reading failed at iteration $i — aborting instead of continuing blind." >&2
             exit 1
@@ -644,7 +648,7 @@ do
         if [ -n "$GAUGE_UNDERPOWERED" ]; then
             echo "GAUGE: this reading resolves to +/-$(json_get resolves_pp "?" <<< "$VERDICT")pp;" \
                  "calling a ${GAUGE_UNDERPOWERED}pp effect needs ~$(json_get games_needed "?" <<< "$VERDICT")" \
-                 "games (GAUGE_GAMES=$(( ${GAUGE_GAMES:-32} * 2 )) here). Trend across readings, not one reading."
+                 "games (this reading: $(( GAUGE_GAMES * 2 ))). Trend across readings, not one reading."
         fi
 
         # EXP_ELO_002: first >=50% reading vs the greedy anchor starts
@@ -694,7 +698,7 @@ do
                 AUD_PATH=$(json_get path "" <<< "$AUD")
                 # Cross-check rows, not the reading the run steers on: report a
                 # failure and keep going rather than aborting the whole run.
-                if ! run_gauge_match "$AUD_PATH" "${GAUGE_GAMES:-32}" "replays/gauge_stats/${RUN_ID}_iter${i}_audit_${AUD_NAME}"; then
+                if ! run_gauge_match "$AUD_PATH" "$GAUGE_GAMES" "replays/gauge_stats/${RUN_ID}_iter${i}_audit_${AUD_NAME}"; then
                     echo "GAUGE: audit match vs $AUD_NAME failed — audit row skipped (non-fatal)" >&2
                     continue
                 fi

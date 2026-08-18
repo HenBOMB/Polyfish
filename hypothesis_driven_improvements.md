@@ -655,3 +655,22 @@ behaviour change is never mistaken for noise:
   (`src/bin/arena.rs:306-313`) — a measurement-alignment fix (audit M2), but it
   changes what the graded agent can see, so old and new arena readings are not
   directly comparable.
+- **`generate_legal_moves` returns a deterministic order.** Two containers in
+  movegen were iterated to emit moves — `compute_reachable_tiles`'s `HashMap` of
+  step targets (`src/moves/mod.rs:377`) and `generate_research_moves`'s
+  `HashSet` (`src/moves/research.rs:113`) — and Rust seeds each map instance
+  separately, so the same position produced the same moves in a different order
+  on every run. The *policy* was insulated (`mapper.rs` maps moves to stable
+  semantic coordinates precisely because raw ordering was not stable), but the
+  **search** was not: root children are zipped with Gumbel draws by index, so a
+  permuted list assigns different noise to different moves. This is why no
+  search experiment was ever replayable. Ordered now (`BTreeMap`, and a sort
+  before emission) and held by `tests/search_determinism.rs`. Behaviour-
+  affecting: it changes which move gets which draw and how ties break, so
+  self-play trajectories differ from any previous run even at a fixed seed.
+- **The Gumbel agent owns its RNG.** `GumbelMctsAgent::with_search_seed(u64)`
+  pins the stream; `POLYFISH_SEARCH_SEED` pins a base that still differs per
+  agent, because a stream shared across actors would make every actor play the
+  same game. Previously all three draw sites used the thread-local generator,
+  so no test could pin search behaviour (audit T3). Not behaviour-affecting on
+  its own — the default path is still seeded from OS entropy.

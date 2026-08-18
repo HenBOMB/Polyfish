@@ -389,16 +389,21 @@ fn generate_step_moves(state: &GameState, unit: &UnitState, moves: &mut Vec<Box<
     }
 }
 
+/// Reachable tiles keyed by index. A `BTreeMap` rather than a `HashMap`
+/// because `generate_step_moves` iterates it to emit moves: hash order varies
+/// between map instances, so the legal-move list came out permuted run to run
+/// and no search could be replayed (audit T3). Ordering is also not a cost
+/// here — the graph is <=121 nodes and this drops a SipHash per probe.
 fn compute_reachable_tiles(
     state: &GameState,
     unit: &UnitState,
-) -> std::collections::HashMap<i32, f32> {
+) -> std::collections::BTreeMap<i32, f32> {
     let mut effective_movement = crate::functions::get_unit_movement(state, unit) as f32;
     // Cap movement at 1 if unit has segments attached
     if unit.child_unit_idx.is_some() {
         effective_movement = 1.0;
     }
-    let mut reachable = std::collections::HashMap::new();
+    let mut reachable = std::collections::BTreeMap::new();
     let mut open_list = std::collections::BinaryHeap::new();
 
     open_list.push(ReachableNode {

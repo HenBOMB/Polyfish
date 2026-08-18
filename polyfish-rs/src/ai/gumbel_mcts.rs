@@ -41,8 +41,11 @@ use crate::game::Game;
 use crate::moves::{EndTurnMove, Move};
 use crate::types::MoveType;
 use rand::distr::Distribution;
+use rand::rngs::SmallRng;
+use rand::SeedableRng;
 use rand_distr::Gumbel;
 use std::cell::{Cell, RefCell};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub struct GumbelMctsAgent<'a> {
     pub evaluator: &'a Evaluator,
@@ -101,6 +104,35 @@ pub struct GumbelMctsAgent<'a> {
     /// prior. ~0 means search is just echoing the policy and the AlphaZero
     /// improvement operator is idle. `None` when no real search ran.
     last_search_kl: Option<f32>,
+    /// The search's own Gumbel/temperature RNG. Owned rather than drawn from
+    /// the thread-local generator so a search can be replayed: nothing could
+    /// pin search behaviour in a test, and no search experiment was
+    /// reproducible (audit T3). Two of the three draw sites are behind `&self`,
+    /// hence the cell.
+    rng: RefCell<SmallRng>,
+}
+
+/// Seed for a freshly constructed agent.
+///
+/// `POLYFISH_SEARCH_SEED` pins the stream. Each agent still takes a *distinct*
+/// stream (base + a process-wide counter) — a shared seed across actors would
+/// give every actor identical Gumbel noise and collapse self-play to one game
+/// played N times. That makes a single-actor run reproducible; with many actors
+/// the per-agent seeds are deterministic but which agent runs which game is
+/// not, so use `with_search_seed` when a test needs an exact stream.
+fn next_search_rng() -> SmallRng {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    match std::env::var("POLYFISH_SEARCH_SEED")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+    {
+        Some(base) => {
+            let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+            // Odd multiplier so successive agents land far apart in the stream.
+            SmallRng::seed_from_u64(base.wrapping_add(n.wrapping_mul(0x9E37_79B9_7F4A_7C15)))
+        }
+        None => SmallRng::from_os_rng(),
+    }
 }
 
 struct GumbelNode {
@@ -217,7 +249,15 @@ impl<'a> GumbelMctsAgent<'a> {
             trace: RefCell::new(None),
             last_root_value: None,
             last_search_kl: None,
+            rng: RefCell::new(next_search_rng()),
         }
+    }
+
+    /// Pin the search's RNG stream. The only way to make a search reproducible
+    /// across runs regardless of how many agents were constructed first.
+    pub fn with_search_seed(self, seed: u64) -> Self {
+        *self.rng.borrow_mut() = SmallRng::seed_from_u64(seed);
+        self
     }
 
     /// The completed search's root value (see `last_root_value` field docs),
@@ -469,11 +509,12 @@ impl<'a> GumbelMctsAgent<'a> {
 
         // Re-sample Gumbel(0,1) on the new root's children: they were created
         // as non-root nodes with gumbel = 0.0, but root candidates need noise.
-        let mut rng = rand::rng();
+        let mut rng = self.rng.borrow_mut();
         let gumbel_dist = Gumbel::new(0.0, 1.0).expect("BUG: Gumbel distribution");
         for c in &mut new_root.children {
-            c.gumbel = gumbel_dist.sample(&mut rng);
+            c.gumbel = gumbel_dist.sample(&mut *rng);
         }
+        drop(rng);
 
         // Bootstrap with the priors from the heuristic mcts agent. Skip if
         // this node's children were already blended at in-tree expansion
@@ -522,16 +563,17 @@ impl<'a> GumbelMctsAgent<'a> {
         let logits =
             policy_composer::compute_move_log_probs_raw(policy_row, &legal_moves, map_size);
 
-        let mut rng = rand::rng();
+        let mut rng = self.rng.borrow_mut();
         let gumbel_dist = Gumbel::new(0.0, 1.0).expect("BUG: Gumbel distribution");
         root.children = legal_moves
             .into_iter()
             .zip(logits.into_iter())
             .map(|(m, l)| {
-                let g = gumbel_dist.sample(&mut rng);
+                let g = gumbel_dist.sample(&mut *rng);
                 GumbelNode::new(l, g, Some(m))
             })
             .collect();
+        drop(rng);
 
         // Snapshot pre-blend logits for trace capture below; blend below
         // overwrites child.logit in place, so this is the only chance to see
@@ -1108,7 +1150,7 @@ impl<'a> GumbelMctsAgent<'a> {
             use rand::distr::weighted::WeightedIndex;
             let weights: Vec<f32> = root.children.iter().map(|c| c.visits.max(0.0)).collect();
             match WeightedIndex::new(&weights) {
-                Ok(dist) => dist.sample(&mut rand::rng()),
+                Ok(dist) => dist.sample(&mut *self.rng.borrow_mut()),
                 // All-zero weights (nothing searched) — fall back to the recommendation.
                 Err(_) => self.recommend_final_move(&root),
             }
