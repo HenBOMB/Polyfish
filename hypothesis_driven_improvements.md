@@ -6804,3 +6804,55 @@ self-contained and testable without touching the training pipeline);
 train.py mirror + the actual training-data wiring (turning the raw
 JSONL export into real tensor targets) follows once the Rust side is
 validated.
+
+### Step 3a ACTUAL: Rust head shipped; step 3b: train.py mirror + cross-language validation
+
+`network.rs` gained `pi_macro_stance`/`pi_macro_order`, both `Option`,
+both gated on their own tensor's presence (aux_fog pattern exactly),
+landing as two new `Option<Tensor>` fields on `ValueOutput` (only one
+construction site in the whole codebase, no exhaustive destructuring
+anywhere else — additive, nothing else to update). Deliberately NOT
+wired into `EvalResult`/`eval_server.rs`/`metal_network.rs` — the
+actual T2-root inference consumption is a separate, careful pass, not
+rushed in tonight. Validated by 2 tests: existing checkpoints still
+load with the head absent; a `VarBuilder::zeros` synthetic network
+produces correctly-shaped, correctly-activated output (softmax sums to
+1, sigmoid in [0,1]) with no trained weights needed.
+
+`train.py` then got the mirror: `self.pi_macro_stance = nn.Linear(
+filters, 4)`, `self.pi_macro_order = nn.Conv2d(filters, 3, 1)`, computed
+in `forward()` off the same trunk tensors as Rust (`v_latent` for
+stance, `x`/`shared` for order) with the SAME activation applied inline
+(softmax, sigmoid) rather than left as aux-dict-style raw logits — a
+deliberate divergence from the `aux_fog` convention, flagged in-code so
+it isn't "fixed" to match aux_fog by a future editor who doesn't read
+this far. `init_model.py`'s generic `model.apply(init_weights)` picks up
+the new `nn.Linear`/`nn.Conv2d` automatically — no changes needed there.
+Confirmed the live training loop's resume path (`strict=False`
+`load_state_dict`, `train.py:451`) already handles a checkpoint missing
+these keys gracefully (prints `missing: [...]`, starts them fresh,
+keeps the trained trunk) — this head can land without breaking the NEXT
+real resume of the live `model.safetensors`.
+
+**Cross-language fidelity, checked, not assumed**: generated a real
+(seed 1787, non-trivial — zeros would trivially agree regardless of
+which tensor either side actually reads) PyTorch checkpoint, forwarded
+a constant-0.1 input through Python, saved the checkpoint, loaded the
+SAME file in Rust, forwarded the SAME input. Stance and order outputs
+match to < 2e-5 (`macro_policy_head_matches_pytorch_reference`,
+`network.rs`) — pinned against PyTorch itself, the same discipline the
+`aux_fog` test uses, not against another Rust read of the same
+question. 216/216 lib tests pass. Reference checkpoint
+(`checkpoints/macro_policy_head_ref.safetensors`) and its generator
+script are gitignored like every other checkpoint fixture in this repo
+(`aux_fog`'s own reference script never made it into the tracked tree
+either) — regenerate locally if absent; the test skips gracefully.
+
+STILL NOT DONE (by design, deferred): the actual training-data pipeline
+(turning `--dump-macro-policy`'s raw JSONL into real tensor targets a
+DataLoader can batch), the loss term, `EvalResult`/eval_server wiring
+for T2-root inference consumption, and — the only thing that actually
+answers "does this work" — a real training run + measured A/B against
+the current heuristic-leaf-selection baseline. That last step needs
+Verdi's own review before spending the compute, per this entry's own
+registered safety boundary.

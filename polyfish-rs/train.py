@@ -199,6 +199,26 @@ class PolyZeroNet(nn.Module):
         self.aux_pursuit = nn.Linear(self.filters, 1)
         self.aux_city_spt = nn.Conv2d(self.filters, 1, 1)
 
+        # --- Macro policy head (EXP_ELO_061, Stage 3b) ---
+        # Unlike the aux_* heads above, this one IS mirrored into Rust
+        # (macro-mcts root prior at inference, like aux_fog) -- see
+        # network.rs's pi_macro_stance/pi_macro_order for the Rust side,
+        # which this must match exactly: same shapes, same trunk source,
+        # same activation APPLIED HERE (not left as loss-friendly logits
+        # the way the aux dict is) so `values`-style consumers on both
+        # sides read the same probabilities. Stance: mutually exclusive
+        # over Stance (Grow/Arm/Unlock/Save), off v_latent, softmax. Order:
+        # one per-tile intensity plane per OrderKind (3), off the trunk
+        # directly like aux_fog, sigmoid -- non-exclusive across kinds and
+        # across same-kind targets (a goal routinely carries more than one
+        # order), so per-tile independent probabilities, not a spatial
+        # softmax. When the training loss for this head is wired, it reads
+        # these post-activation values with BCE/NLL rather than the raw
+        # logits (a deliberate divergence from the aux_fog convention,
+        # noted so it isn't "fixed" to match aux_fog by mistake later).
+        self.pi_macro_stance = nn.Linear(self.filters, 4)
+        self.pi_macro_order = nn.Conv2d(self.filters, 3, 1)
+
     def forward(self, spatial_map, player_state):
         batch_size = spatial_map.size(0)
         
@@ -244,6 +264,12 @@ class PolyZeroNet(nn.Module):
         values = {}
         values['win'] = torch.tanh(self.v_win(v_latent))
         values['progress'] = self.v_progress(v_latent)
+
+        # EXP_ELO_061: reads v_latent (stance) / x (order) -- the SAME
+        # trunk tensors network.rs's mirror reads (v_latent there too,
+        # `shared` there == x here), post cross-attention either way.
+        values['macro_stance'] = torch.softmax(self.pi_macro_stance(v_latent), dim=1)
+        values['macro_order'] = torch.sigmoid(self.pi_macro_order(x).flatten(1))
 
         return policy, values, aux
 

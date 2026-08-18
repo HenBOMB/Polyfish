@@ -654,4 +654,56 @@ mod macro_policy_head_tests {
             "sigmoid output must be a probability, independent per tile/kind"
         );
     }
+
+    /// GROUND TRUTH: train.py's own PolyZeroNet (seed 1787, real non-trivial
+    /// weights — not zeros, which would trivially agree regardless of which
+    /// tensor either side actually reads), constant 0.1 input, saved via
+    /// `scratchpad/gen_macro_head_ref.py` to
+    /// `checkpoints/macro_policy_head_ref.safetensors` (gitignored like every
+    /// other checkpoint fixture — regenerate locally if absent). Mirroring a
+    /// head is only worth anything if the mirror is faithful: same trunk
+    /// tensor, same weights, same activation, checked against PyTorch itself
+    /// rather than against another Rust implementation.
+    #[test]
+    fn macro_policy_head_matches_pytorch_reference() {
+        let path = std::path::Path::new("checkpoints/macro_policy_head_ref.safetensors");
+        if !path.exists() {
+            return;
+        }
+        let vb = unsafe {
+            candle_nn::VarBuilder::from_mmaped_safetensors(&[path], DType::F32, &Device::Cpu)
+        };
+        let Ok(vb) = vb else { return };
+        let Ok(net) = PolyZeroNet::new(vb) else { return };
+        assert!(net.has_macro_policy_head());
+
+        let hw = crate::ai::features::MAP_SIZE;
+        let map = (Tensor::ones(
+            (1, crate::ai::features::NUM_CHANNELS, hw, hw),
+            DType::F32,
+            &Device::Cpu,
+        )
+        .unwrap()
+            * 0.1)
+            .unwrap();
+        let player = (Tensor::ones((1, 10), DType::F32, &Device::Cpu).unwrap() * 0.1).unwrap();
+        let (_, value) = net.forward(&map, &player).unwrap();
+
+        let stance = value.macro_stance_probs.expect("stance head present -> Some");
+        let sv = stance.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let pytorch_stance = [0.1972564309835434_f32, 0.3269766569137573, 0.23765535652637482, 0.23811152577400208];
+        for (i, expect) in pytorch_stance.iter().enumerate() {
+            assert!((sv[i] - expect).abs() < 2e-5, "stance[{i}]: rust {} vs pytorch {expect}", sv[i]);
+        }
+
+        let order = value.macro_order_maps.expect("order head present -> Some");
+        let ov = order.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert_eq!(ov.len(), 3 * hw * hw);
+        let pytorch_order_first6 = [0.6025543808937073_f32, 0.5542975068092346, 0.5799309015274048, 0.5303328633308411, 0.5658227205276489, 0.5697625279426575];
+        for (i, expect) in pytorch_order_first6.iter().enumerate() {
+            assert!((ov[i] - expect).abs() < 2e-5, "order[{i}]: rust {} vs pytorch {expect}", ov[i]);
+        }
+        let mean = ov.iter().sum::<f32>() / ov.len() as f32;
+        assert!((mean - 0.6129000892159696).abs() < 2e-5, "order mean {mean} vs pytorch 0.6129000892159696");
+    }
 }
