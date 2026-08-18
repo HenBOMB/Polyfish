@@ -4,7 +4,9 @@
 Anchors are frozen model files (greedy = Elo 0 floor); the last anchor is
 "active". `record --kind gauge` appends an arena reading and answers:
 continue / freeze (>=80% vs active) / stop (plateau, see _plateau).
-Win/loss counts are always from the current model's side.
+Win/loss counts are always from the current model's side. Every reading
+carries a Wilson interval and both verdicts are drawn from it, not from the
+point estimate a ~64-game reading resolves to only +/-12pp.
 """
 import argparse
 import json
@@ -16,6 +18,7 @@ LADDER_FILE = os.environ.get("LADDER_FILE", "ladder.json")
 FREEZE_WR = 0.80
 PLATEAU_WINDOW = 8  # gauge readings vs the same anchor (= 80 iters at interval 10)
 PLATEAU_STRIKES = 2  # consecutive flagged readings before the loop stops
+CI_Z = 1.96  # 95%
 
 
 def _now():
@@ -48,6 +51,41 @@ def _win_rate(wins, losses, draws):
     return (wins + 0.5 * draws) / games if games else 0.0
 
 
+def _wilson(win_rate, games, z=CI_Z):
+    """Wilson score interval for a win rate. Unlike the normal approximation it
+    stays inside [0, 1] and keeps its coverage near 0 and 1, which is where the
+    freeze bar (0.80) and the greedy-anchor readings sit."""
+    if games <= 0:
+        return [0.0, 1.0]
+    p = min(max(win_rate, 0.0), 1.0)
+    d = 1.0 + z * z / games
+    center = (p + z * z / (2.0 * games)) / d
+    half = z * math.sqrt(p * (1.0 - p) / games + z * z / (4.0 * games * games)) / d
+    return [round(max(0.0, center - half), 4), round(min(1.0, center + half), 4)]
+
+
+def _counts(reading):
+    """(score, games) for a reading, draws counted as half a win. Readings
+    written before the counts existed fall back to win_rate x games."""
+    games = reading.get("games")
+    if games is None:
+        games = reading.get("wins", 0) + reading.get("losses", 0) + reading.get("draws", 0)
+    if "wins" in reading:
+        return reading["wins"] + 0.5 * reading.get("draws", 0), games
+    return reading.get("win_rate", 0.0) * games, games
+
+
+def _pool(readings):
+    """(win_rate, games) over a group of readings, as one combined sample."""
+    score = sum(_counts(r)[0] for r in readings)
+    games = sum(_counts(r)[1] for r in readings)
+    return (score / games if games else 0.0), games
+
+
+def _overlap(a, b):
+    return a[0] <= b[1] and b[0] <= a[1]
+
+
 def _elo(win_rate, base):
     p = min(max(win_rate, 0.005), 0.995)
     return round(base + 400.0 * math.log10(p / (1.0 - p)), 1)
@@ -67,19 +105,15 @@ def _gauge_series(data):
 
 def _plateau(series):
     """True when the last PLATEAU_WINDOW readings vs the same anchor show no
-    gain: second-half mean <= first-half mean AND regression slope <= 0."""
+    measurable gain: pooling each half and comparing intervals, the second
+    half's interval still overlaps the first's, so any apparent movement is
+    inside the noise a single ~64-game reading cannot resolve."""
     if len(series) < PLATEAU_WINDOW:
         return False
-    w = [r["win_rate"] for r in series[-PLATEAU_WINDOW:]]
+    window = series[-PLATEAU_WINDOW:]
     half = PLATEAU_WINDOW // 2
-    if sum(w[half:]) / half > sum(w[:half]) / half:
-        return False
-    n = len(w)
-    xbar, ybar = (n - 1) / 2, sum(w) / n
-    slope = sum((i - xbar) * (y - ybar) for i, y in enumerate(w)) / sum(
-        (i - xbar) ** 2 for i in range(n)
-    )
-    return slope <= 0
+    first, second = _pool(window[:half]), _pool(window[half:])
+    return _overlap(_wilson(*first), _wilson(*second))
 
 
 def cmd_active(_args):
@@ -156,6 +190,8 @@ def _summarize_stats(stats_dir):
 
 def _append_reading(data, args, kind, opponent):
     win_rate = round(_win_rate(args.wins, args.losses, args.draws), 4)
+    games = args.wins + args.losses + args.draws
+    ci = _wilson(win_rate, games)
     reading = {
         "at": _now(),
         "run_id": args.run_id,
@@ -163,12 +199,15 @@ def _append_reading(data, args, kind, opponent):
         "kind": kind,
         "model": f"model@iter{args.iteration}",
         "opponent": opponent["name"],
-        "games": args.wins + args.losses + args.draws,
+        "games": games,
         "wins": args.wins,
         "losses": args.losses,
         "draws": args.draws,
         "win_rate": win_rate,
+        "win_rate_ci": ci,
+        "ci_level": 0.95,
         "elo_est": _elo(win_rate, opponent["elo"]),
+        "elo_ci": [_elo(ci[0], opponent["elo"]), _elo(ci[1], opponent["elo"])],
         "avg_score_model": args.avg_score_model,
         "avg_score_opponent": args.avg_score_opponent,
     }
@@ -199,7 +238,9 @@ def cmd_record(args):
 
     action = "continue"
     if args.kind == "gauge":
-        if reading["win_rate"] >= FREEZE_WR:
+        # The freeze bar is on the lower bound: a point estimate at 0.80 with a
+        # +/-0.12 interval is not evidence the model beats the anchor 4:1.
+        if reading["win_rate_ci"][0] >= FREEZE_WR:
             action = "freeze"
             data["plateau_strikes"] = 0
         elif _plateau(_gauge_series(data)):
@@ -213,7 +254,9 @@ def cmd_record(args):
         "action": action,
         "opponent": opponent["name"],
         "win_rate": reading["win_rate"],
+        "win_rate_ci": reading["win_rate_ci"],
         "elo_est": reading["elo_est"],
+        "elo_ci": reading["elo_ci"],
         "plateau_strikes": data["plateau_strikes"],
     }
     if "behavior" in reading:
@@ -229,10 +272,13 @@ def cmd_freeze(args):
     data = _load()
     outgoing = data["anchors"][-1]
     link_wr = _win_rate(args.wins, args.losses, args.draws)
+    link_ci = _wilson(link_wr, args.wins + args.losses + args.draws)
     new_anchor = {
         "name": os.path.splitext(os.path.basename(args.path))[0],
         "path": args.path,
         "elo": _elo(link_wr, outgoing["elo"]),
+        # Link-match uncertainty, so the chain's accumulated error stays visible.
+        "elo_ci": [_elo(link_ci[0], outgoing["elo"]), _elo(link_ci[1], outgoing["elo"])],
         "frozen_iteration": args.iteration,
         "frozen_at": _now(),
     }

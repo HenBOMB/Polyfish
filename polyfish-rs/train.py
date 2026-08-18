@@ -3,7 +3,9 @@ import torch.nn as nn
 import torch.optim as optim
 from safetensors.torch import load_file, save_file
 import glob
+import hashlib
 import json
+import math
 import os
 import random
 import gc
@@ -21,9 +23,18 @@ BATCH_SIZE = 256
 EPOCHS = int(os.environ.get("TRAIN_EPOCHS", "2"))
 # sqrt-scaled with the 64->256 batch bump (Adam responds closer to sqrt than
 # linear scaling; 0.004 linear would risk instability on a small net).
-# TRAIN_LR override: use a lower value (e.g. 0.0005) when re-running on the
-# same data — the cosine scheduler restarts at this LR every invocation.
+# This is the peak of a cosine decay that spans the whole RUN (see
+# TRAIN_TOTAL_ITERS), not a per-invocation restart.
 LEARNING_RATE = float(os.environ.get("TRAIN_LR", "0.002"))
+# Run identity and length, used to span the LR schedule and the Adam moments
+# across the loop's per-iteration invocations. Exported by run_training_loop.sh;
+# absent (a bare `python train.py`) the schedule falls back to these defaults
+# and the sidecar is still honoured.
+RUN_ID = os.environ.get("TRAIN_RUN_ID", "")
+TOTAL_ITERS = max(1, int(os.environ.get("TRAIN_TOTAL_ITERS", "500")))
+# Fraction of training FILES permanently held out from fitting so value_r2 can
+# be read out-of-sample. 0 disables the holdout entirely.
+HOLDOUT_FRAC = float(os.environ.get("TRAIN_HOLDOUT_FRAC", "0.15"))
 # Weight on the value loss's contribution to the shared trunk's gradient.
 # Default 3.0: with TD labels (Jul 2026) the value target carries real per-move
 # signal, and at 1.0 its gradient (~0.02) is invisible next to policy (~2.0) —
@@ -43,10 +54,14 @@ DETACH_VALUE_TRUNK = os.environ.get("DETACH_VALUE_TRUNK", "0") == "1"
 # ownership head, and the head reads the trunk directly (NOT gated by
 # DETACH_VALUE_TRUNK — trunk gradient is its entire purpose).
 OWNERSHIP_LOSS_WEIGHT = float(os.environ.get("OWNERSHIP_LOSS_WEIGHT", "0.15"))
-# D4 symmetry augmentation (AlphaZero-style): apply a random rotation/reflection
-# per batch to the spatial input and every spatial target. Polytopia's rules are
-# D4-symmetric, so each sample is 8 legal samples; blocks the net from keying on
-# absolute coordinates (map memorization). Training-only. Enable: AUGMENT_D4=1.
+# D4 symmetry augmentation (AlphaZero-style): a random rotation/reflection per
+# batch on the spatial input and every spatial target. Geometrically valid — no
+# feature plane, player scalar, or rule is orientation-dependent — but OFF by
+# default, and this is a measured result, not caution: enabling it MID-RUN
+# collapsed play for ~8 iterations (run 1783556259; the policy lost its
+# orientation-specific fit and the degraded games fed back through self-play).
+# Legitimate ONLY for from-scratch runs, where the net never learns orientation
+# shortcuts to begin with. Training-only. Enable: AUGMENT_D4=1.
 AUGMENT_D4 = os.environ.get("AUGMENT_D4", "0") == "1"
 
 # Device selection: CUDA (NVIDIA) > MPS (Apple Silicon) > CPU
@@ -75,6 +90,11 @@ elif DEVICE == "cpu":
     print("WARNING: Running on CPU! Training will be extremely slow.")
     
 # Architecture matching Rust `network.rs` (decomposed policy + auxiliary values)
+# Width of the action_type head. Mirrors NUM_ACTION_TYPES in src/ai/network.rs:
+# MoveType has 12 variants (Resign = 11) and both sides read the same
+# model.safetensors, so a drift here is a silent load failure or garbage.
+NUM_ACTION_TYPES = 12
+
 class ResBlock(nn.Module):
     def __init__(self, channels):
         super().__init__()
@@ -139,10 +159,10 @@ class PolyZeroNet(nn.Module):
         self.cross_attention = CrossAttention(self.filters, nhead=4)
         
         # --- Decomposed Policy Heads ---
-        # 1. Action Type (11 categories: Attack, Step, Build, etc.)
+        # 1. Action Type (Attack, Step, Build, etc.)
         self.p_pool_conv = nn.Conv2d(self.filters, 1, 1)
         self.p_fc_shared = nn.Linear(map_height * map_width, self.filters)
-        self.pi_action = nn.Linear(self.filters, 11)
+        self.pi_action = nn.Linear(self.filters, NUM_ACTION_TYPES)
         
         # 2. Unified Options (192 categories: Structures, Units, Techs, Abilities, Rewards)
         self.pi_option = nn.Linear(self.filters, 192)
@@ -243,6 +263,11 @@ def compute_loss(policy_pred, values_pred, policy_targets, value_target):
 
     for head_name, target in policy_targets.items():
         if head_name in policy_pred:
+            # self_play normalizes action/source/target by total visits but
+            # leaves move_option as raw visit COUNTS, which scales that head's
+            # loss by N. Rows already summing to <=1 (and all-zero rows, which
+            # correctly contribute nothing) pass through untouched.
+            target = target / target.sum(dim=1, keepdim=True).clamp(min=1.0)
             pred = policy_pred[head_name]
             head_loss = soft_cross_entropy(pred, target)
             total_policy_loss += head_loss * weights.get(head_name, 1.0)
@@ -362,7 +387,171 @@ def _migrate_checkpoint(state_dict, model, player_state_dim):
         state_dict["conv1.weight"] = torch.cat([conv1, pad], dim=1)
         migrations.append(f"conv1.weight: padded input channels {old_ch} → 142")
 
+    # ------------------------------------------------------------------
+    # 5. action_type head widened to NUM_ACTION_TYPES (Resign = 11 was one
+    #    past the old 11-wide head). Pad with a zero row/bias so the existing
+    #    11 categories keep their learned weights.
+    # ------------------------------------------------------------------
+    pi_w = state_dict.get("pi_action.weight")
+    if pi_w is not None and pi_w.shape[0] < NUM_ACTION_TYPES:
+        old_n = pi_w.shape[0]
+        state_dict["pi_action.weight"] = torch.cat(
+            [pi_w, torch.zeros(NUM_ACTION_TYPES - old_n, pi_w.shape[1], dtype=pi_w.dtype)], dim=0
+        )
+        pi_b = state_dict.get("pi_action.bias")
+        if pi_b is not None:
+            state_dict["pi_action.bias"] = torch.cat(
+                [pi_b, torch.zeros(NUM_ACTION_TYPES - old_n, dtype=pi_b.dtype)], dim=0
+            )
+        migrations.append(f"pi_action: padded {old_n} → {NUM_ACTION_TYPES} action types")
+
     return state_dict, migrations
+
+
+MODEL_PATH = "model.safetensors"
+OPTIMIZER_STATE_PATH = "optimizer_state.pt"
+METRICS_PATH = ".last_train_metrics.json"
+
+
+def atomic_write(path, write_fn):
+    """Write through `path`.tmp + os.replace so a crash can't leave a torn file."""
+    tmp = path + ".tmp"
+    write_fn(tmp)
+    os.replace(tmp, path)
+
+
+def load_optimizer_state(optimizer, model, run_id):
+    """Restore Adam moments and the schedule position from the sidecar.
+
+    Returns the schedule step to resume at (0 when nothing usable was found).
+    Every failure path degrades to a fresh optimizer with a loud warning.
+    """
+    if not os.path.exists(OPTIMIZER_STATE_PATH):
+        return 0
+    try:
+        blob = torch.load(OPTIMIZER_STATE_PATH, map_location="cpu", weights_only=True)
+    except Exception as e:
+        print(f"WARNING: {OPTIMIZER_STATE_PATH} unreadable ({e}); Adam moments reset.")
+        return 0
+
+    saved_run = blob.get("run_id", "")
+    if run_id and saved_run and saved_run != run_id:
+        print(f"WARNING: optimizer state is from run {saved_run}, not {run_id}; Adam moments reset.")
+        return 0
+
+    shapes = [list(p.shape) for p in model.parameters()]
+    if blob.get("param_shapes") != shapes:
+        print("WARNING: model architecture changed since the optimizer state was written; "
+              "Adam moments reset (this is expected on the iteration a head is resized).")
+        return 0
+
+    try:
+        optimizer.load_state_dict(blob["optimizer"])
+    except Exception as e:
+        print(f"WARNING: optimizer state incompatible ({e}); Adam moments reset.")
+        return 0
+
+    step = int(blob.get("sched_step", 0))
+    print(f"Resumed optimizer state at schedule step {step}.")
+    return step
+
+
+def save_optimizer_state(optimizer, model, run_id, sched_step):
+    blob = {
+        "optimizer": optimizer.state_dict(),
+        "param_shapes": [list(p.shape) for p in model.parameters()],
+        "run_id": run_id,
+        "sched_step": sched_step,
+    }
+    atomic_write(OPTIMIZER_STATE_PATH, lambda p: torch.save(blob, p))
+
+
+def cosine_lr(base_lr, step, total, eta_min=1e-5):
+    """Closed-form cosine decay spanning the whole run, not one invocation."""
+    t = min(max(step, 0), total) / float(total)
+    return eta_min + 0.5 * (base_lr - eta_min) * (1.0 + math.cos(math.pi * t))
+
+
+def is_holdout_file(path, frac):
+    """Membership is a function of the basename alone, so a file stays on the
+    same side for its whole life in the buffer (a per-iteration reshuffle would
+    train on last iteration's holdout and inflate the reading)."""
+    if frac <= 0:
+        return False
+    h = int(hashlib.sha1(os.path.basename(path).encode()).hexdigest()[:8], 16)
+    return (h % 10000) < frac * 10000
+
+
+def split_holdout(files, frac):
+    """Split the buffer into (train, holdout) by FILE, returning both lists.
+
+    Not by position: games_*.safetensors records no game boundaries, so a
+    position-level split would put positions from the same game on both sides
+    and report a falsely good holdout. Files never split a game, so this leaks
+    nothing — it is just coarser than a per-game split, and with a stable
+    per-file rule the holdout can come out empty on a small buffer.
+    """
+    held = [f for f in files if is_holdout_file(f, frac)]
+    kept = [f for f in files if not is_holdout_file(f, frac)]
+    if not kept:
+        return list(files), []
+    return kept, held
+
+
+def pad_spatial(smaps, channels, map_size):
+    """Zero-pad legacy spatial maps up to `channels` (channels were appended)."""
+    if smaps.dim() == 4:
+        if smaps.shape[1] >= channels:
+            return smaps
+        b, c, h, w = smaps.shape
+        return torch.cat([smaps, torch.zeros(b, channels - c, h, w, dtype=smaps.dtype)], dim=1)
+    area = map_size * map_size
+    old_c = smaps.shape[1] // area
+    if old_c >= channels:
+        return smaps
+    pad = torch.zeros(smaps.shape[0], (channels - old_c) * area, dtype=smaps.dtype)
+    return torch.cat([smaps, pad], dim=1)
+
+
+def evaluate_value_holdout(model, files, batch_size, spatial_channels, map_size):
+    """Win-head MSE / target variance on files the trainer never fit.
+
+    Returns (r2, n_samples); r2 is None when the holdout has no usable data.
+    """
+    sq_err = 0.0
+    tgt_sum = 0.0
+    tgt_sumsq = 0.0
+    n = 0
+    was_training = model.training
+    model.eval()
+    with torch.no_grad():
+        for f in files:
+            try:
+                data = load_file(f)
+                smaps = pad_spatial(data["spatial_maps"], spatial_channels, map_size)
+                players = data["player_states"]
+                wins = data["values"]
+            except Exception as e:
+                print(f"Holdout: skipping {f} ({e})")
+                continue
+            for j in range(0, wins.shape[0], batch_size):
+                bs = smaps[j : j + batch_size].to(DEVICE).view(-1, spatial_channels, map_size, map_size)
+                bp = players[j : j + batch_size].to(DEVICE)
+                bw = wins[j : j + batch_size].to(DEVICE)
+                _, values_pred = model(bs, bp)
+                sq_err += ((values_pred["win"] - bw) ** 2).sum().item()
+                tgt_sum += bw.sum().item()
+                tgt_sumsq += (bw * bw).sum().item()
+                n += bw.numel()
+    if was_training:
+        model.train()
+    if n == 0:
+        return None, 0
+    mean = tgt_sum / n
+    var = tgt_sumsq / n - mean * mean
+    if var <= 1e-8:
+        return None, n
+    return 1.0 - (sq_err / n) / var, n
 
 
 def train(batch_size=BATCH_SIZE, epochs=EPOCHS, lr=LEARNING_RATE, chunk_size=None, benchmark_mode=False):
@@ -370,8 +559,23 @@ def train(batch_size=BATCH_SIZE, epochs=EPOCHS, lr=LEARNING_RATE, chunk_size=Non
         chunk_size = int(os.environ.get("TRAIN_CHUNK_FILES", "10"))
 
     # 1. Load Data
-    fresh_files = glob.glob("games_*.safetensors")
-    archive_files = sorted(glob.glob("archive/games_*.safetensors"), key=os.path.getmtime, reverse=True)
+    # `games_*` also matches the two non-self-play writers, which must NOT be
+    # trained on as self-play: games_human_* (recorder.rs hardcodes win = 0.0,
+    # so it drags the value head toward 0 on strong human positions) and
+    # games_pro_* (behaviour-cloning exports — real labels, but they belong in
+    # teachers/, not in the archive/prune rotation).
+    def self_play_only(paths):
+        kept, skipped = [], []
+        for p in paths:
+            (skipped if os.path.basename(p).startswith(("games_human_", "games_pro_")) else kept).append(p)
+        for p in skipped:
+            print(f"Skipping non-self-play file {p} (bogus or imitation value labels).")
+        return kept
+
+    fresh_files = self_play_only(glob.glob("games_*.safetensors"))
+    archive_files = self_play_only(
+        sorted(glob.glob("archive/games_*.safetensors"), key=os.path.getmtime, reverse=True)
+    )
     # Replay window in FILES; run_training_loop.sh exports REPLAY_BUFFER_FILES
     # scaled by its -g so the buffer stays ~constant in GAMES (default 10
     # files ≈ 700 games at 64 games/file). Each sample is trained ~20 times
@@ -380,7 +584,11 @@ def train(batch_size=BATCH_SIZE, epochs=EPOCHS, lr=LEARNING_RATE, chunk_size=Non
     # Teacher anchor: always mix these into every iteration so gradients keep
     # pulling toward known-good play regardless of self-play drift (RLHF-style
     # reference anchor). Never archived or pruned.
-    teacher_files = sorted(glob.glob("teachers/games_*.safetensors"))
+    # games_pro_* IS welcome here (real ±1 outcome labels); games_human_* never is.
+    teacher_files = [
+        f for f in sorted(glob.glob("teachers/games_*.safetensors"))
+        if not os.path.basename(f).startswith("games_human_")
+    ]
     game_files = fresh_files + archive_files[:replay_buffer_size] + teacher_files
 
     if not game_files:
@@ -391,16 +599,28 @@ def train(batch_size=BATCH_SIZE, epochs=EPOCHS, lr=LEARNING_RATE, chunk_size=Non
 
     print(f"Training on {len(game_files)} files ({len(fresh_files)} fresh, "
           f"{len(archive_files[:replay_buffer_size])} archived, {len(teacher_files)} teacher).")
-    
+
+    holdout_files = []
+    if not benchmark_mode:
+        game_files, holdout_files = split_holdout(game_files, HOLDOUT_FRAC)
+        if holdout_files:
+            print(f"Holdout: {len(holdout_files)} file(s) withheld from fitting "
+                  f"({', '.join(os.path.basename(f) for f in holdout_files)}).")
+        elif HOLDOUT_FRAC > 0:
+            print("Holdout: no file in this buffer hashes into the holdout bucket; "
+                  "value_r2 is in-sample only this iteration.")
+
     # 2. Init Model
     MAP_SIZE = 11
     SPATIAL_CHANNELS = 142  # 136 + 6 fog-memory channels (see notes-memory.md)
     PLAYER_STATE_DIM = 16
 
     model = PolyZeroNet(SPATIAL_CHANNELS, PLAYER_STATE_DIM, MAP_SIZE, MAP_SIZE).to(DEVICE)
-    if os.path.exists("model.safetensors"):
+    if os.path.exists(MODEL_PATH):
+        # A checkpoint that exists but will not load is FATAL. Silently falling
+        # back to random weights mid-run throws the run away without a trace.
         try:
-            ckpt = load_file("model.safetensors")
+            ckpt = load_file(MODEL_PATH)
             ckpt, migrations = _migrate_checkpoint(ckpt, model, PLAYER_STATE_DIM)
             if migrations:
                 print(f"Checkpoint migrated: {'; '.join(migrations)}")
@@ -414,19 +634,22 @@ def train(batch_size=BATCH_SIZE, epochs=EPOCHS, lr=LEARNING_RATE, chunk_size=Non
                 raise RuntimeError(f"state_dict mismatch: missing={hard_missing} unexpected={list(unexpected)}")
             if missing:
                 print(f"Checkpoint predates ownership head; initializing {missing} fresh.")
-        except RuntimeError:
-            raise
-        except FileNotFoundError:
-            print("No checkpoint found; starting from scratch.")
         except Exception as e:
-            print(f"Could not load model: {e}")
-            print("Starting from scratch.")
+            raise RuntimeError(
+                f"{MODEL_PATH} exists but could not be loaded: {e}. Refusing to restart "
+                f"training from random weights — restore a checkpoint from checkpoints/ "
+                f"(or delete {MODEL_PATH} deliberately to start over)."
+            ) from e
+    else:
+        print(f"No {MODEL_PATH} found; initializing fresh weights (expected only on iteration 1).")
     model.train()
 
     optimizer = optim.Adam(model.parameters(), lr=lr)
-    # Use CosineAnnealing with Warm Restarts for better convergence on short cycles
-    # T_0=5 means it resets every 5 epochs (which is exactly our run length)
-    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=epochs, T_mult=1, eta_min=1e-5)
+    # Adam moments and the cosine position live in a sidecar so they survive the
+    # loop's per-iteration re-invocation; rebuilding them every call threw the
+    # moment estimates away and restarted the LR at its peak (a sawtooth).
+    sched_step = load_optimizer_state(optimizer, model, RUN_ID)
+    total_sched_steps = max(1, TOTAL_ITERS * max(1, epochs))
 
     # In benchmark mode, limit to 1 epoch and max 2 chunks to save time
     if benchmark_mode:
@@ -460,7 +683,11 @@ def train(batch_size=BATCH_SIZE, epochs=EPOCHS, lr=LEARNING_RATE, chunk_size=Non
         if benchmark_mode:
             num_chunks = 1
 
-        print(f"\n=== Epoch {epoch+1}/{epochs} ===")
+        epoch_lr = cosine_lr(lr, sched_step, total_sched_steps)
+        for group in optimizer.param_groups:
+            group["lr"] = epoch_lr
+
+        print(f"\n=== Epoch {epoch+1}/{epochs} === (schedule step {sched_step}/{total_sched_steps}, lr {epoch_lr:.2e})")
 
         report_batch_indices = None
         epoch_batch_estimate = None
@@ -490,12 +717,7 @@ def train(batch_size=BATCH_SIZE, epochs=EPOCHS, lr=LEARNING_RATE, chunk_size=Non
                 try:
                     data = load_file(f)
                     
-                    # Pad legacy spatial maps to current SPATIAL_CHANNELS
-                    smaps = data["spatial_maps"]
-                    if smaps.shape[1] < SPATIAL_CHANNELS:
-                        B, C, H, W = smaps.shape
-                        pad = torch.zeros(B, SPATIAL_CHANNELS - C, H, W, dtype=smaps.dtype)
-                        smaps = torch.cat([smaps, pad], dim=1)
+                    smaps = pad_spatial(data["spatial_maps"], SPATIAL_CHANNELS, MAP_SIZE)
                     c_spatial.append(smaps)
                     c_player.append(data["player_states"])
                     c_win.append(data["values"])
@@ -517,7 +739,12 @@ def train(batch_size=BATCH_SIZE, epochs=EPOCHS, lr=LEARNING_RATE, chunk_size=Non
                     # Load all policy heads
                     for head in c_heads.keys():
                         if head in data:
-                            c_heads[head].append(data[head])
+                            t = data[head]
+                            # Files written before the action head widened.
+                            if head == "action_type" and t.shape[1] < NUM_ACTION_TYPES:
+                                pad = torch.zeros(t.shape[0], NUM_ACTION_TYPES - t.shape[1], dtype=t.dtype)
+                                t = torch.cat([t, pad], dim=1)
+                            c_heads[head].append(t)
                         else:
                             c_heads[head].append(None)
                             
@@ -669,7 +896,7 @@ def train(batch_size=BATCH_SIZE, epochs=EPOCHS, lr=LEARNING_RATE, chunk_size=Non
         else:
             print(f"Epoch {epoch+1}/{epochs} - No data processed")
 
-        scheduler.step()
+        sched_step += 1
 
     final_loss = total_loss / total_batches if total_batches > 0 else 0.0
     final_p_loss = total_p_loss / total_batches if total_batches > 0 else 0.0
@@ -698,21 +925,40 @@ def train(batch_size=BATCH_SIZE, epochs=EPOCHS, lr=LEARNING_RATE, chunk_size=Non
             return samples_per_sec, max_memory_mb
         return 0, 0
 
+    # `value_r2` above is IN-SAMPLE — the buffer the net just fit. Compare it
+    # against the holdout number: in-sample high / holdout low is overfitting,
+    # both low is underfitting. That contrast is the diagnostic, so report both.
+    holdout_r2, holdout_n = evaluate_value_holdout(
+        model, holdout_files, batch_size, SPATIAL_CHANNELS, MAP_SIZE
+    )
+    if holdout_r2 is None:
+        print(f"value_r2: {value_r2:.4f} in-sample | holdout unavailable ({holdout_n} samples)")
+    else:
+        print(f"value_r2: {value_r2:.4f} in-sample | {holdout_r2:.4f} holdout "
+              f"({holdout_n} samples, {len(holdout_files)} file(s))")
+
     # 4. Save Model in f16 for blazing fast CPU inference
     half_state = {k: v.half() for k, v in model.state_dict().items()}
-    save_file(half_state, "model.safetensors")
+    atomic_write(MODEL_PATH, lambda p: save_file(half_state, p))
+    save_optimizer_state(optimizer, model, RUN_ID, sched_step)
 
-    with open(".last_train_metrics.json", "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "loss": round(final_loss, 4),
-                "policy_loss": round(final_p_loss, 4),
-                "value_loss": round(final_v_loss, 4),
-                "ownership_loss": round(final_o_loss, 4),
-                "value_r2": round(value_r2, 4),
-            },
-            f,
-        )
+    metrics = {
+        "loss": round(final_loss, 4),
+        "policy_loss": round(final_p_loss, 4),
+        "value_loss": round(final_v_loss, 4),
+        "ownership_loss": round(final_o_loss, 4),
+        "value_r2": round(value_r2, 4),
+        "value_r2_insample": round(value_r2, 4),
+        "value_r2_holdout": round(holdout_r2, 4) if holdout_r2 is not None else "",
+        "holdout_samples": holdout_n,
+        "holdout_files": len(holdout_files),
+    }
+
+    def _write_metrics(path):
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(metrics, f)
+
+    atomic_write(METRICS_PATH, _write_metrics)
 
 def run_benchmark():
     print("=========================================================")

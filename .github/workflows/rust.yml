@@ -24,9 +24,154 @@ jobs:
         with:
           workspaces: "./polyfish-rs -> target"
 
-
       - name: Build
         run: cargo build --no-default-features --verbose
 
       - name: Run tests
         run: cargo test --no-default-features --lib --tests --bin self_play --verbose
+
+      # Called out separately from the suite above: this is the Rust<->Python
+      # width parity check, and a failure here means model.safetensors will not
+      # round-trip between self_play and train.py.
+      - name: Rust/Python width parity
+        run: cargo test --no-default-features --test parity_widths -- --nocapture
+
+  # Every long flag run_training_loop.sh passes must actually parse. Nothing
+  # else checks this seam, and three broken flags shipped undetected.
+  cli-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./polyfish-rs -> target"
+
+      - name: Build the binaries the shell drivers call
+        working-directory: ./polyfish-rs
+        run: cargo build --no-default-features --bin self_play --bin arena --bin polyfish --bin actor_ceiling
+
+      - name: Check shell -> binary CLI contract
+        working-directory: ./polyfish-rs
+        run: python3 scripts/check_cli_contract.py --no-build
+
+  lint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./polyfish-rs
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./polyfish-rs -> target"
+
+      # BLOCKING. The clippy correctness group minus the two lints that already
+      # fire at HEAD (absurd_extreme_comparisons in gumbel_mcts/heuristic_mcts/
+      # mcts_zero, never_loop in mcts_zero). Fix those six sites and delete the
+      # two -A lines to make the whole group blocking.
+      - name: Clippy (correctness)
+        run: |
+          cargo clippy --no-default-features --all-targets -- \
+            -D clippy::correctness \
+            -A clippy::absurd_extreme_comparisons \
+            -A clippy::never_loop
+
+      # NON-BLOCKING. Measured 2026-08-18: 395 warnings across lib + tests, of
+      # which 241 are collapsible_if (the edition-2024 let-chain suggestion) and
+      # 24 each are map_or / field_reassign_with_default. Turn this into
+      # `-D warnings` once that backlog is cleared; gating on it today would
+      # fail every PR on day one.
+      - name: Clippy (full report, advisory)
+        continue-on-error: true
+        run: cargo clippy --no-default-features --all-targets -- -D warnings
+
+      # NON-BLOCKING. Measured 2026-08-18: 47 of ~200 source files are
+      # unformatted (178 diff hunks), so this reports drift instead of gating.
+      # Run `cargo fmt` across the tree, then drop continue-on-error.
+      - name: cargo fmt (advisory)
+        continue-on-error: true
+        run: cargo fmt --check
+
+      - name: Python syntax
+        working-directory: .
+        run: python3 -m compileall -q -x '(^|/)(target|\.venv|node_modules|__pycache__)($|/)' .
+
+  # Compile-check each inference backend. Honest status:
+  #   no-default-features (candle CPU) - really checked, on every run.
+  #   metal / accelerate / metal-eval  - macOS only, advisory: these have never
+  #                                      run in CI before, so a first failure is
+  #                                      a CI bug to fix, not a merge blocker.
+  #   tch-eval                         - macOS only, advisory: needs a pinned
+  #                                      PyTorch 2.12 from pip plus the bypass
+  #                                      env vars in Cargo.toml.
+  #   cuda / cudnn                     - NOT checked anywhere. No hosted runner
+  #                                      here has nvcc; wiring one up needs a
+  #                                      CUDA toolkit action or a self-hosted
+  #                                      box. Do not assume they compile.
+  backends:
+    name: backend (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.advisory }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: candle-cpu
+            os: ubuntu-latest
+            features: ""
+            advisory: false
+          - label: candle-metal
+            os: macos-latest
+            features: "metal"
+            advisory: true
+          - label: accelerate
+            os: macos-latest
+            features: "accelerate"
+            advisory: true
+          - label: metal-eval
+            os: macos-latest
+            features: "metal-eval"
+            advisory: true
+          - label: tch-eval
+            os: macos-latest
+            features: "tch-eval"
+            advisory: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./polyfish-rs -> target"
+          key: ${{ matrix.label }}
+
+      - name: Install PyTorch for tch-eval
+        if: matrix.label == 'tch-eval'
+        working-directory: ./polyfish-rs
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install 'torch==2.12.*'
+
+      - name: Compile-check
+        working-directory: ./polyfish-rs
+        env:
+          LIBTORCH_USE_PYTORCH: 1
+          LIBTORCH_BYPASS_VERSION_CHECK: 1
+        run: |
+          if [ -d .venv/bin ]; then PATH="$(pwd)/.venv/bin:$PATH"; export PATH; fi
+          if [ -z "${{ matrix.features }}" ]; then
+            cargo check --no-default-features --all-targets
+          else
+            cargo check --no-default-features --features "${{ matrix.features }}" --all-targets
+          fi

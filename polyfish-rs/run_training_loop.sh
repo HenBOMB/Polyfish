@@ -14,6 +14,10 @@ BASELINE_GAMES=64
 ITERATIONS=500
 NUM_GAMES=64
 export MCTS_ITERS=64
+# Open variable, NOT a known-good setting: audit A1 records no verdict for it
+# anywhere, and the recommendation is to default it off only AFTER the A2b label
+# fix lands, then run the arm both ways (bisect_arm.sh Arm D) and write the
+# verdict. Left on until then so the change is measured, not flipped blind.
 export DETACH_VALUE_TRUNK=1
 # 128 actors measured best on an M3 Max with metal (~578 moves/s @ 128 games+).
 # Throughput scales with concurrent games; small NUM_GAMES (-g) is a real limiter, not this knob.
@@ -514,24 +518,38 @@ do
         ANCHOR_NAME=$(json_get name "" <<< "$ACTIVE_JSON")
         GAUGE_LOG=$(mktemp)
 
+        # M4: measure the same game length self-play is currently generating.
+        # self_play's curriculum() is the source of truth; ask it rather than
+        # mirroring its thresholds here.
+        GAUGE_MAX_TURNS=$("$SELF_PLAY_BIN" --print-curriculum --iteration "$EFF_ITER" | json_get max_turns 30)
+
         # $1 = opponent model path ("" = greedy backend), $2 = seeds (games x2),
-        # $3 = per-turn stats dump dir (optional; summarized into the reading)
+        # $3 = per-turn stats dump dir (optional; summarized into the reading).
+        # Returns non-zero if arena failed OR its output did not parse — callers
+        # must not swallow that (a swallowed error meant the ladder recorded no
+        # readings at all for the whole campaign).
         run_gauge_match () {
             GAUGE_STATS_DIR="$3"
-            DUMP_FLAG=""
-            if [ -n "$GAUGE_STATS_DIR" ]; then
-                DUMP_FLAG="--dump-stats-dir $GAUGE_STATS_DIR"
-            fi
+            # Fixed seed set: arena otherwise seeds from the wall clock, so
+            # readings would not share a map set and could not be compared
+            # across iterations.
+            local -a cmd=("$ARENA_BIN" --model1 model.safetensors
+                --mcts "$MCTS_ITERS" --gumbel-k "$GUMBEL_K"
+                --games "$2" --gamemode "$GAMEMODE"
+                --max-turns "$GAUGE_MAX_TURNS" --seed "${GAUGE_SEED:-20260811}")
             if [ -z "$1" ]; then
-                "$ARENA_BIN" --model1 model.safetensors --model2 model.safetensors \
-                    --backend1 gumbel --backend2 greedy \
-                    --mcts "$MCTS_ITERS" --gumbel-k "$GUMBEL_K" $DUMP_FLAG \
-                    --games "$2" --gamemode "$GAMEMODE" | tee "$GAUGE_LOG"
+                cmd+=(--model2 model.safetensors --backend1 gumbel --backend2 greedy)
             else
-                "$ARENA_BIN" --model1 model.safetensors --model2 "$1" \
-                    --backend1 gumbel --backend2 gumbel \
-                    --mcts "$MCTS_ITERS" --gumbel-k "$GUMBEL_K" $DUMP_FLAG \
-                    --games "$2" --gamemode "$GAMEMODE" | tee "$GAUGE_LOG"
+                cmd+=(--model2 "$1" --backend1 gumbel --backend2 gumbel)
+            fi
+            if [ -n "$GAUGE_STATS_DIR" ]; then
+                cmd+=(--dump-stats-dir "$GAUGE_STATS_DIR")
+            fi
+            "${cmd[@]}" | tee "$GAUGE_LOG"
+            local arena_status=${PIPESTATUS[0]}
+            if [ "$arena_status" -ne 0 ]; then
+                echo "GAUGE: arena exited $arena_status (opponent '${1:-greedy}', $2 seeds)" >&2
+                return "$arena_status"
             fi
             GAUGE_W=$(sed -n 's/^Config 1 Wins: \([0-9][0-9]*\).*/\1/p' "$GAUGE_LOG")
             GAUGE_L=$(sed -n 's/^Config 2 Wins: \([0-9][0-9]*\).*/\1/p' "$GAUGE_LOG")
@@ -541,78 +559,89 @@ do
             GAUGE_WP1=$(sed -n 's/^Config 1 Wins as P1: \([0-9][0-9]*\).*/\1/p' "$GAUGE_LOG")
             GAUGE_WP2=$(sed -n 's/^Config 1 Wins as P2: \([0-9][0-9]*\).*/\1/p' "$GAUGE_LOG")
             GAUGE_BACKEND=$(sed -n 's/.*| eval \([a-z]*\).*/\1/p' "$GAUGE_LOG" | head -1)
+            if [ -z "$GAUGE_W" ] || [ -z "$GAUGE_L" ]; then
+                echo "GAUGE: arena exited 0 but its win counts did not parse (opponent '${1:-greedy}') — output format changed?" >&2
+                return 1
+            fi
         }
 
-        run_gauge_match "$ANCHOR_PATH" "${GAUGE_GAMES:-32}" "replays/gauge_stats/${RUN_ID}_iter${i}"
-        if [ -n "$GAUGE_W" ] && [ -n "$GAUGE_L" ]; then
-            VERDICT=$(.venv/bin/python3 ladder.py record --kind gauge \
-                --run-id "$RUN_ID" --iteration "$i" \
-                --wins "$GAUGE_W" --losses "$GAUGE_L" --draws "${GAUGE_D:-0}" \
-                --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}" \
-                --mcts "$MCTS_ITERS" --gumbel-k "$GUMBEL_K" --eval-backend "${GAUGE_BACKEND:-}" \
-                --wins-p1 "${GAUGE_WP1:-0}" --wins-p2 "${GAUGE_WP2:-0}" \
-                --stats-dir "$GAUGE_STATS_DIR")
-            echo "GAUGE: $VERDICT"
-            GAUGE_ACTION=$(json_get action "" <<< "$VERDICT")
+        # A failed reading is fatal: the ladder is the instrument every
+        # experiment is judged on, and continuing past a broken gauge is what
+        # left the whole campaign without a single recorded reading.
+        if ! run_gauge_match "$ANCHOR_PATH" "${GAUGE_GAMES:-32}" "replays/gauge_stats/${RUN_ID}_iter${i}"; then
+            rm -f "$GAUGE_LOG"
+            echo "GAUGE: strength reading failed at iteration $i — aborting instead of continuing blind." >&2
+            exit 1
+        fi
+        VERDICT=$(.venv/bin/python3 ladder.py record --kind gauge \
+            --run-id "$RUN_ID" --iteration "$i" \
+            --wins "$GAUGE_W" --losses "$GAUGE_L" --draws "${GAUGE_D:-0}" \
+            --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}" \
+            --mcts "$MCTS_ITERS" --gumbel-k "$GUMBEL_K" --eval-backend "${GAUGE_BACKEND:-}" \
+            --wins-p1 "${GAUGE_WP1:-0}" --wins-p2 "${GAUGE_WP2:-0}" \
+            --stats-dir "$GAUGE_STATS_DIR")
+        echo "GAUGE: $VERDICT"
+        GAUGE_ACTION=$(json_get action "" <<< "$VERDICT")
 
-            # EXP_ELO_002: first >=50% reading vs the greedy anchor starts
-            # the anchor-frac decay clock (EFF_ITER units, matching
-            # --anchor-decay-start above).
-            if [ ! -f .anchor_decay_start ] && [ "$ANCHOR_NAME" = "greedy" ]; then
-                CROSSED=$(awk -v w="$GAUGE_W" -v l="$GAUGE_L" -v d="${GAUGE_D:-0}" \
-                    'BEGIN { n = w + l + d; if (n > 0 && (w + d / 2) / n >= 0.5) print 1; else print 0 }')
-                if [ "$CROSSED" = "1" ]; then
-                    echo "$EFF_ITER" > .anchor_decay_start
-                    echo "GAUGE: crossed 50% vs greedy at EFF_ITER $EFF_ITER — anchor-frac decay clock started (EXP_ELO_002)"
-                fi
+        # EXP_ELO_002: first >=50% reading vs the greedy anchor starts
+        # the anchor-frac decay clock (EFF_ITER units, matching
+        # --anchor-decay-start above).
+        if [ ! -f .anchor_decay_start ] && [ "$ANCHOR_NAME" = "greedy" ]; then
+            CROSSED=$(awk -v w="$GAUGE_W" -v l="$GAUGE_L" -v d="${GAUGE_D:-0}" \
+                'BEGIN { n = w + l + d; if (n > 0 && (w + d / 2) / n >= 0.5) print 1; else print 0 }')
+            if [ "$CROSSED" = "1" ]; then
+                echo "$EFF_ITER" > .anchor_decay_start
+                echo "GAUGE: crossed 50% vs greedy at EFF_ITER $EFF_ITER — anchor-frac decay clock started (EXP_ELO_002)"
             fi
+        fi
 
-            if [ "$GAUGE_ACTION" = "freeze" ]; then
-                TS=$(date +%Y%m%d_%H%M%S)
-                NEW_ANCHOR="checkpoints/anchor_iter${i}_${TS}.safetensors"
-                if cp model.safetensors "$NEW_ANCHOR"; then
-                    echo "GAUGE: >=80% vs active anchor — freezing $NEW_ANCHOR, link match (n=64)..."
-                    run_gauge_match "$ANCHOR_PATH" 64 "replays/gauge_stats/${RUN_ID}_iter${i}_link"
-                    if [ -n "$GAUGE_W" ] && [ -n "$GAUGE_L" ]; then
-                        .venv/bin/python3 ladder.py freeze --run-id "$RUN_ID" --iteration "$i" \
-                            --path "$NEW_ANCHOR" \
-                            --wins "${GAUGE_W:-0}" --losses "${GAUGE_L:-0}" --draws "${GAUGE_D:-0}" \
-                            --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}"
-                    else
-                        echo "GAUGE: link match failed to parse — skipping anchor freeze" >&2
-                    fi
-                else
-                    echo "GAUGE: failed to snapshot $NEW_ANCHOR — skipping anchor freeze" >&2
-                fi
-            elif [ "$GAUGE_ACTION" = "stop" ]; then
+        if [ "$GAUGE_ACTION" = "freeze" ]; then
+            TS=$(date +%Y%m%d_%H%M%S)
+            NEW_ANCHOR="checkpoints/anchor_iter${i}_${TS}.safetensors"
+            if ! cp model.safetensors "$NEW_ANCHOR"; then
                 rm -f "$GAUGE_LOG"
-                echo "=================================================="
-                echo "PLATEAU STOP at iteration $i: two consecutive 8-reading"
-                echo "windows with no gain vs the active anchor (see ladder.json)."
-                echo "=================================================="
-                break
+                echo "GAUGE: failed to snapshot $NEW_ANCHOR — aborting instead of skipping the anchor freeze." >&2
+                exit 1
             fi
+            echo "GAUGE: >=80% vs active anchor — freezing $NEW_ANCHOR, link match (n=64)..."
+            if ! run_gauge_match "$ANCHOR_PATH" 64 "replays/gauge_stats/${RUN_ID}_iter${i}_link"; then
+                rm -f "$GAUGE_LOG"
+                echo "GAUGE: link match failed at iteration $i — aborting instead of freezing an unlinked anchor." >&2
+                exit 1
+            fi
+            .venv/bin/python3 ladder.py freeze --run-id "$RUN_ID" --iteration "$i" \
+                --path "$NEW_ANCHOR" \
+                --wins "${GAUGE_W:-0}" --losses "${GAUGE_L:-0}" --draws "${GAUGE_D:-0}" \
+                --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}"
+        elif [ "$GAUGE_ACTION" = "stop" ]; then
+            rm -f "$GAUGE_LOG"
+            echo "=================================================="
+            echo "PLATEAU STOP at iteration $i: two consecutive 8-reading"
+            echo "windows with no gain vs the active anchor (see ladder.json)."
+            echo "=================================================="
+            break
+        fi
 
-            # Audit block every 5th gauge: greedy + one retired anchor,
-            # rotating — observed vs chain-predicted win rate flags cycles.
-            if [ $((i % (LEAGUE_INTERVAL * 5))) -eq 0 ]; then
-                .venv/bin/python3 ladder.py audit-opponents | json_array_items | while read -r AUD; do
-                    AUD_NAME=$(json_get name "" <<< "$AUD")
-                    AUD_PATH=$(json_get path "" <<< "$AUD")
-                    run_gauge_match "$AUD_PATH" "${GAUGE_GAMES:-32}" "replays/gauge_stats/${RUN_ID}_iter${i}_audit_${AUD_NAME}"
-                    if [ -n "$GAUGE_W" ] && [ -n "$GAUGE_L" ]; then
-                        .venv/bin/python3 ladder.py record --kind audit --opponent "$AUD_NAME" \
-                            --run-id "$RUN_ID" --iteration "$i" \
-                            --wins "$GAUGE_W" --losses "$GAUGE_L" --draws "${GAUGE_D:-0}" \
-                            --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}" \
-                            --mcts "$MCTS_ITERS" --gumbel-k "$GUMBEL_K" --eval-backend "${GAUGE_BACKEND:-}" \
-                            --wins-p1 "${GAUGE_WP1:-0}" --wins-p2 "${GAUGE_WP2:-0}" \
-                            --stats-dir "$GAUGE_STATS_DIR"
-                    fi
-                done
-            fi
-        else
-            echo "GAUGE: arena reading failed to parse — skipping this reading" >&2
+        # Audit block every 5th gauge: greedy + one retired anchor,
+        # rotating — observed vs chain-predicted win rate flags cycles.
+        if [ $((i % (LEAGUE_INTERVAL * 5))) -eq 0 ]; then
+            while read -r AUD; do
+                AUD_NAME=$(json_get name "" <<< "$AUD")
+                AUD_PATH=$(json_get path "" <<< "$AUD")
+                # Cross-check rows, not the reading the run steers on: report a
+                # failure and keep going rather than aborting the whole run.
+                if ! run_gauge_match "$AUD_PATH" "${GAUGE_GAMES:-32}" "replays/gauge_stats/${RUN_ID}_iter${i}_audit_${AUD_NAME}"; then
+                    echo "GAUGE: audit match vs $AUD_NAME failed — audit row skipped (non-fatal)" >&2
+                    continue
+                fi
+                .venv/bin/python3 ladder.py record --kind audit --opponent "$AUD_NAME" \
+                    --run-id "$RUN_ID" --iteration "$i" \
+                    --wins "$GAUGE_W" --losses "$GAUGE_L" --draws "${GAUGE_D:-0}" \
+                    --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}" \
+                    --mcts "$MCTS_ITERS" --gumbel-k "$GUMBEL_K" --eval-backend "${GAUGE_BACKEND:-}" \
+                    --wins-p1 "${GAUGE_WP1:-0}" --wins-p2 "${GAUGE_WP2:-0}" \
+                    --stats-dir "$GAUGE_STATS_DIR"
+            done < <(.venv/bin/python3 ladder.py audit-opponents | json_array_items)
         fi
         rm -f "$GAUGE_LOG"
     fi

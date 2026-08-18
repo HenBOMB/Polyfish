@@ -30,21 +30,23 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use strum::IntoEnumIterator;
 
 const HEURISTIC_PRIOR_W0: f32 = 0.5; // net & heur blended 50/50 at start
-const HEURISTIC_PRIOR_DECAY: f32 = 0.97; // decays 0.5 -> 0.1 floor by ~iteration 47
-const HEURISTIC_PRIOR_W_FLOOR: f32 = 0.1; // permanent behavioral floor, root + in-tree
+const HEURISTIC_PRIOR_DECAY: f32 = 0.97; // decays 0.5 -> 0.1 floor by ~iteration 53
+const ANCHOR_FRAC_DECAY: f32 = 0.97; // same rate as HEURISTIC_PRIOR_DECAY, own start value
+const CRUTCH_FLOOR: f32 = 0.1; // intermediate plateau shared by both crutches
+
+/// Exponential decay from `w0` toward `CRUTCH_FLOOR`, then a hard cutover to 0
+/// once `iteration >= decay_last_iter`. Shared by `prior_heuristic_weight`
+/// (search prior blend) and `anchor_frac` (greedy-anchor game rate) — both are
+/// training-time crutches meant to phase out, not asymptote at a floor.
+fn decay_crutch(w0: f32, decay_rate: f32, iteration: usize, decay_last_iter: usize) -> f32 {
+    if iteration >= decay_last_iter {
+        return 0.0;
+    }
+    (w0 * decay_rate.powi(iteration as i32)).max(CRUTCH_FLOOR.min(w0))
+}
 
 // Absolute yardstick for the value target; 8K points is a good place to end a 30T game
 const GOOD_BOT_FINAL_SCORE: f32 = 8000.0;
-// How much to weight relative (vs opponent) vs absolute (vs yardstick) final outcome.
-// 1.0 = pure relative (zero-sum). The value backup negates across every
-// player-turn boundary (mcts_common.rs), which is only valid when
-// v(mine) = -v(theirs); an absolute own-progress component is NOT
-// antisymmetric — the opponent's progress isn't my loss — so any abs share
-// gets systematically corrupted through EndTurn-crossing lines, worse as
-// search deepens. The mirror-play "empty relative label" problem is fixed in
-// the DATA instead: anchor games vs the greedy backend (--anchor-frac)
-// make passivity actually lose, giving the relative label real signal.
-const FINAL_OUTCOME_REL_W: f32 = 1.0;
 
 // Weight of the TD(lambda) delta vs the final-outcome tail.
 const TD_W: f32 = 0.7;
@@ -63,11 +65,6 @@ const NEAR_DELTA_NORM_FRAC: f32 = 0.15;
 const NEAR_DELTA_NORM_FLOOR: f32 = 600.0;
 // Weight of the near-term delta vs the final-outcome tail.
 const NEAR_DELTA_W: f32 = 0.7;
-// Weight of the relative (vs opponent) component within the near-term delta.
-// 1.0 = pure relative, for the same negamax-antisymmetry reason as
-// FINAL_OUTCOME_REL_W above. The signal against passivity comes from anchor
-// games, not from a non-zero-sum label.
-const NEAR_DELTA_REL_W: f32 = 1.0;
 
 // Potential-based SPT shaping (economy credit). Φ = (my_spt - opp_spt) /
 // default_max_spt, clamped ±1; each step's label gets SPT_SHAPE_W *
@@ -560,8 +557,7 @@ fn outcome_for(result: &GameResult, p_id: i32, reward_shaping: bool) -> f32 {
     // We use `my_adjusted` so that asymmetric reward shaping (if enabled)
     // applies to this absolute performance yardstick as well.
     let abs_outcome = (my_adjusted / GOOD_BOT_FINAL_SCORE).clamp(0.0, 1.0) * 2.0 - 1.0;
-    (FINAL_OUTCOME_REL_W * relative_outcome + (1.0 - FINAL_OUTCOME_REL_W) * abs_outcome)
-        .clamp(-1.0, 1.0)
+    (reward::REL_W * relative_outcome + (1.0 - reward::REL_W) * abs_outcome).clamp(-1.0, 1.0)
 }
 
 fn play_single_game(
@@ -574,6 +570,7 @@ fn play_single_game(
     seed: i64,
     tribes: Vec<TribeType>,
     iteration: usize,
+    decay_last_iter: usize,
     gamemode: u8,
     backend1: SearchBackend,
     backend2: SearchBackend,
@@ -632,8 +629,12 @@ fn play_single_game(
     let mut village_capture_turns: Vec<i32> = Vec::new();
     let mut ruin_capture_turns: Vec<i32> = Vec::new();
 
-    let prior_w = (HEURISTIC_PRIOR_W0 * HEURISTIC_PRIOR_DECAY.powi(iteration as i32))
-        .max(HEURISTIC_PRIOR_W_FLOOR);
+    let prior_w = decay_crutch(
+        HEURISTIC_PRIOR_W0,
+        HEURISTIC_PRIOR_DECAY,
+        iteration,
+        decay_last_iter,
+    );
     // One trust scalar drives β on σ(Q) in both the exported targets and the
     // search tree itself. --value-trust overrides the iteration ramp, which
     // saturates immediately on ITER_OFFSET-shifted runs.
@@ -1211,6 +1212,29 @@ fn main() -> anyhow::Result<()> {
         #[arg(long, default_value_t = 0.05)]
         anchor_probe_frac: f32,
 
+        /// Iteration at which both heuristic crutches (the search-prior blend
+        /// and the anchor-game rate) hard-cut to 0, having spent the
+        /// iterations before that decaying to a 10% floor. Default is
+        /// effectively "never" so standalone runs are not surprised; the
+        /// training loop passes DECAY_LAST_ITER explicitly.
+        #[arg(long, default_value_t = u32::MAX)]
+        decay_last_iter: u32,
+
+        /// EXP_ELO_002: iteration where the anchor-frac decay clock starts —
+        /// the anchor's effective decay iteration is `iteration - this`
+        /// (clamped at 0). The loop passes the current iteration to HOLD
+        /// anchor_frac at its starting rate until the model crosses 50% vs
+        /// greedy, then pins the crossing iteration so decay runs from there.
+        /// The prior-blend decay is unaffected.
+        #[arg(long, default_value_t = 0)]
+        anchor_decay_start: u32,
+
+        /// Print this iteration's curriculum (map size, turn cap) as JSON and
+        /// exit. The gauge match reads max_turns from here so it measures the
+        /// same game length self-play generates.
+        #[arg(long, default_value_t = false)]
+        print_curriculum: bool,
+
         /// Value-head trust in [0,1]: β on σ(completed-Q) both inside the
         /// search tree and in exported policy targets. Overrides the
         /// iteration-based ramp (min(1, iteration/20)), which saturates
@@ -1338,6 +1362,19 @@ fn main() -> anyhow::Result<()> {
     }
 
     let args = Args::parse();
+
+    if args.print_curriculum {
+        let (map_size, max_turns) = curriculum(args.iteration);
+        println!(
+            "{}",
+            json!({
+                "iteration": args.iteration,
+                "map_size": format!("{map_size:?}"),
+                "max_turns": max_turns,
+            })
+        );
+        return Ok(());
+    }
 
     if args.anchor_frac > 0.0 && args.opponent.is_some() {
         anyhow::bail!("--anchor-frac and --opponent are mutually exclusive");
@@ -1588,6 +1625,21 @@ fn main() -> anyhow::Result<()> {
             }
         }
     };
+    // EXP_ELO_002 decay clock, independent of the win-rate gate above: the
+    // rate holds at its starting value until --anchor-decay-start (the loop
+    // pins the iteration at which a gauge reading first crossed 50% vs
+    // greedy), then decays to the crutch floor and hard-cuts at
+    // --decay-last-iter. Two phase-out gates on one quantity — tightest wins.
+    let decay_last_iter = args.decay_last_iter as usize;
+    let anchor_decay_iter = args
+        .iteration
+        .saturating_sub(args.anchor_decay_start as usize);
+    let anchor_frac = anchor_frac.min(decay_crutch(
+        args.anchor_frac,
+        ANCHOR_FRAC_DECAY,
+        anchor_decay_iter,
+        decay_last_iter,
+    ));
     // Floor a nonzero gate output to >= 1 mirror pair this run, else small
     // probe fractions round to zero games and the win rate silently goes stale.
     let anchor_frac = if anchor_frac > 0.0 {
@@ -1596,6 +1648,15 @@ fn main() -> anyhow::Result<()> {
         anchor_frac
     };
     if args.anchor_frac > 0.0 && args.opponent.is_none() {
+        let cut = if args.decay_last_iter == u32::MAX {
+            "never".to_string()
+        } else {
+            args.decay_last_iter.to_string()
+        };
+        println!(
+            "[Self-Play] crutch decay: anchor decay iter {anchor_decay_iter} (clock starts at {}), hard cut at {cut}",
+            args.anchor_decay_start,
+        );
         match anchor_winrate {
             Some(wr) => println!(
                 "[Self-Play] anchor gate: rolling winrate vs greedy {:.0}% -> effective anchor_frac {:.3} (hold <= iter {}, graduate at {:.0}%, probe {:.3})",
@@ -1606,7 +1667,7 @@ fn main() -> anyhow::Result<()> {
                 args.anchor_probe_frac,
             ),
             None => println!(
-                "[Self-Play] anchor gate: no measurements yet -> full anchor_frac {:.3}",
+                "[Self-Play] anchor gate: no measurements yet -> effective anchor_frac {:.3}",
                 anchor_frac
             ),
         }
@@ -1722,6 +1783,7 @@ fn main() -> anyhow::Result<()> {
                             seed,
                             game_tribes,
                             args.iteration,
+                            decay_last_iter,
                             args.gamemode,
                             backend_seat1,
                             backend_seat2,
@@ -2641,5 +2703,53 @@ mod spt_shaping_tests {
         let p2_sum: f32 = out[1] + out[3] + out[5];
         assert!((p1_sum - 2.0 / norm()).abs() < 1e-6, "got {p1_sum}");
         assert!((p2_sum + 2.0 / norm()).abs() < 1e-6, "got {p2_sum}");
+    }
+}
+
+#[cfg(test)]
+mod decay_crutch_tests {
+    use super::*;
+
+    #[test]
+    fn decays_from_w0_toward_the_floor() {
+        let start = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 0, 150);
+        assert!((start - HEURISTIC_PRIOR_W0).abs() < 1e-6, "got {start}");
+
+        let mid = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 23, 150);
+        assert!((mid - 0.25).abs() < 0.01, "got {mid}");
+
+        let floored = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 100, 150);
+        assert!((floored - CRUTCH_FLOOR).abs() < 1e-6, "got {floored}");
+    }
+
+    #[test]
+    fn hard_cuts_to_zero_at_decay_last_iter() {
+        assert_eq!(
+            decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 150, 150),
+            0.0
+        );
+        assert_eq!(
+            decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 500, 150),
+            0.0
+        );
+        let just_before = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 149, 150);
+        assert!((just_before - CRUTCH_FLOOR).abs() < 1e-6, "got {just_before}");
+    }
+
+    #[test]
+    fn never_raises_a_rate_that_starts_below_the_floor() {
+        let probe = decay_crutch(0.05, ANCHOR_FRAC_DECAY, 40, usize::MAX);
+        assert!(probe <= 0.05, "got {probe}");
+        assert_eq!(decay_crutch(0.0, ANCHOR_FRAC_DECAY, 0, usize::MAX), 0.0);
+    }
+
+    #[test]
+    fn anchor_decay_start_holds_the_rate_until_the_clock_starts() {
+        // The loop passes --anchor-decay-start == iteration until a gauge
+        // reading crosses 50% vs greedy, which pins the exponent at 0.
+        let held = decay_crutch(0.25, ANCHOR_FRAC_DECAY, 60usize.saturating_sub(60), 150);
+        assert!((held - 0.25).abs() < 1e-6, "got {held}");
+        let decaying = decay_crutch(0.25, ANCHOR_FRAC_DECAY, 60usize.saturating_sub(40), 150);
+        assert!(decaying < 0.25 && decaying >= CRUTCH_FLOOR, "got {decaying}");
     }
 }

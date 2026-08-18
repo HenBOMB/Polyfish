@@ -12,11 +12,18 @@ use crate::states::GameState;
 /// label it replaces. See notes.md, decision-trace section.
 pub const GAMMA_TURN: f32 = 0.9;
 
-/// Weight of the relative (vs opponent) component within a reward. Abs-
-/// dominant: in mirror self-play both copies gain roughly in lockstep, so a
-/// capture's relative swing nets to ~0 and teaches nothing; an absolute
-/// anchor on my own score progress rewards it regardless of the opponent.
-pub const REL_W: f32 = 0.4;
+/// Weight of the relative (vs opponent) component in every reward and value
+/// label — the single zero-sum convention for both the TD body here and the
+/// final-outcome tail in self_play. 1.0 = pure relative. The backup negates
+/// across every player-turn boundary (mcts_common.rs), which is only valid
+/// when v(mine) = -v(theirs); absolute own-progress is NOT antisymmetric (the
+/// opponent's progress isn't my loss), so any abs share is corrupted through
+/// EndTurn-crossing lines, worse as search deepens. The measured mirror-play
+/// failure that once motivated an abs share (decision traces, Jul 7-8 2026:
+/// relative swings net to ~0 in mirror play, so the label was empty) is
+/// attacked in the DATA instead — greedy-anchor games (--anchor-frac) make
+/// passivity actually lose. See notes.md, "Phase-1 training-signal fixes".
+pub const REL_W: f32 = 1.0;
 
 /// Reward normalization scales with the game's economy: a saturating swing
 /// is ~15% of combined score, floored for the small opening turns.

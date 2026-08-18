@@ -12,6 +12,10 @@ set -e
 #   Arm A (baseline):            ./bisect_arm.sh
 #   Arm B (LR/optimizer restart): ARM_LABEL=B TRAIN_LR=0.00001 ./bisect_arm.sh
 #   Arm C (value-trunk interference): ARM_LABEL=C VALUE_LOSS_WEIGHT=0 ./bisect_arm.sh
+#   Arm D (value-trunk detach):   ARM_LABEL=D DETACH_VALUE_TRUNK=1 ./bisect_arm.sh
+#
+# Arm A leaves DETACH_VALUE_TRUNK at train.py's default 0, which is NOT what
+# run_training_loop.sh exports (=1); set it explicitly to reproduce production.
 #
 # Output: bisect_<ARM_LABEL>.csv, one row per iteration.
 

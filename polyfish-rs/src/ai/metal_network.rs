@@ -27,7 +27,8 @@
 //! investigation) for why bucketing/padding those sizes is net-negative.
 
 use crate::ai::features::{RawFeatures, MAP_SIZE, NUM_CHANNELS};
-use crate::ai::network::RawPolicyOutput;
+use crate::ai::mapper::NUM_MOVE_OPTIONS;
+use crate::ai::network::{RawPolicyOutput, NUM_ACTION_TYPES};
 use apple_metal::{CommandBuffer, CommandQueue, MetalBuffer, MetalDevice};
 use apple_mpsgraph::{
     data_type, padding_style, tensor_named_data_layout, Convolution2DDescriptor,
@@ -45,14 +46,14 @@ const NHEAD: usize = 4;
 const HEAD_DIM: usize = FILTERS / NHEAD; // 16
 const PLAYER_DIM: usize = 16;
 const SPATIAL: usize = MAP_SIZE * MAP_SIZE; // 121
-const BN_EPS: f64 = 1e-5;
+const GN_EPS: f64 = 1e-5;
 const LN_EPS: f64 = 1e-5;
 const NUM_RES_BLOCKS: usize = 6;
 const GN_GROUPS: usize = 8;
 
-// Output head widths (rows are [win 1, action 11, source 121, target 121, option 192]).
-const ACTION_DIM: usize = 11;
-const OPTION_DIM: usize = 192;
+// Output head widths (rows are [win 1, action, source 121, target 121, option]).
+const ACTION_DIM: usize = NUM_ACTION_TYPES;
+const OPTION_DIM: usize = NUM_MOVE_OPTIONS;
 
 /// Smallest pooled-buffer capacity, in rows. Capacities are
 /// `batch.next_power_of_two().max(MIN_POOL_ROWS)`, so a worker ends up with a
@@ -269,6 +270,17 @@ impl MetalPolyZeroNet {
                  this build uses GroupNorm — regenerate the model (init_model.py + retrain)"
             );
         }
+        // The output buffers are sized from ACTION_DIM, so a narrower stored
+        // head would silently misalign every readback.
+        let action_rows = weights
+            .get("pi_action.weight")
+            .and_then(|(shape, _)| shape.first().copied())
+            .ok_or_else(|| anyhow::anyhow!("model file has no usable pi_action.weight"))?;
+        anyhow::ensure!(
+            action_rows == ACTION_DIM,
+            "checkpoint pi_action head is {action_rows} wide, expected {ACTION_DIM} \
+             (load it once through train.py to migrate the head)"
+        );
         let device = MetalDevice::system_default()
             .ok_or_else(|| anyhow::anyhow!("no Metal device available"))?;
         let queue = device
@@ -374,7 +386,7 @@ impl MetalPolyZeroNet {
         let sq = graph.multiplication(&diff, &diff, None).expect("gn: sq");
         let var = graph.mean(&sq, &[2], None).expect("gn: var");
         let eps = graph
-            .constant_scalar(BN_EPS, data_type::FLOAT32)
+            .constant_scalar(GN_EPS, data_type::FLOAT32)
             .expect("gn: eps constant");
         let var_eps = graph.addition(&var, &eps, None).expect("gn: var+eps");
         let std = graph
@@ -396,10 +408,10 @@ impl MetalPolyZeroNet {
     fn res_block(&self, graph: &Graph, x: &Tensor, i: usize, batch: usize) -> Tensor {
         let p = format!("res_blocks.{i}");
         let out = self.conv2d(graph, x, &format!("{p}.c1"), 1);
-        let out_gn = self.group_norm(graph, &out, &format!("{p}.bn1"), batch);
+        let out_gn = self.group_norm(graph, &out, &format!("{p}.gn1"), batch);
         let out = graph.relu(&out_gn, None).expect("res_block: relu1");
         let out = self.conv2d(graph, &out, &format!("{p}.c2"), 1);
-        let out = self.group_norm(graph, &out, &format!("{p}.bn2"), batch);
+        let out = self.group_norm(graph, &out, &format!("{p}.gn2"), batch);
         let summed = graph.addition(&out, x, None).expect("res_block: residual add");
         graph.relu(&summed, None).expect("res_block: relu2")
     }
@@ -551,8 +563,8 @@ impl MetalPolyZeroNet {
 
         // 1. Spatial backbone
         let mut x = self.conv2d(&graph, &spatial_ph, "conv1", 1);
-        let x_gn = self.group_norm(&graph, &x, "bn1", b);
-        x = graph.relu(&x_gn, None).expect("forward: relu bn1");
+        let x_gn = self.group_norm(&graph, &x, "gn1", b);
+        x = graph.relu(&x_gn, None).expect("forward: relu gn1");
         for i in 0..NUM_RES_BLOCKS {
             x = self.res_block(&graph, &x, i, b);
         }
@@ -609,8 +621,8 @@ impl MetalPolyZeroNet {
             .expect("forward: flatten p_pooled");
         let p_latent_lin = self.linear(&graph, &p_pooled, "p_fc_shared");
         let p_latent = graph.relu(&p_latent_lin, None).expect("forward: relu p_fc_shared");
-        let action_type = self.linear(&graph, &p_latent, "pi_action"); // [B, 11]
-        let move_option = self.linear(&graph, &p_latent, "pi_option"); // [B, 192]
+        let action_type = self.linear(&graph, &p_latent, "pi_action"); // [B, ACTION_DIM]
+        let move_option = self.linear(&graph, &p_latent, "pi_option"); // [B, OPTION_DIM]
 
         let source_conv = self.conv2d(&graph, &x2, "pi_source", 0);
         let (source_w_shape, _) = self.get("pi_source.weight");
@@ -914,10 +926,10 @@ fn slice_outputs(results: &[TensorData], batch: usize) -> (Vec<f32>, Vec<RawPoli
     let target_v = results[3].read_f32().expect("forward: read target");
     let option_v = results[4].read_f32().expect("forward: read option");
 
-    const AT: usize = 11;
+    const AT: usize = ACTION_DIM;
     const SS: usize = SPATIAL; // 121
     const TS: usize = SPATIAL; // 121
-    const MO: usize = 192;
+    const MO: usize = OPTION_DIM;
 
     let mut values = Vec::with_capacity(batch);
     let mut policy = Vec::with_capacity(batch);

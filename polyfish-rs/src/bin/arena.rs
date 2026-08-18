@@ -5,8 +5,11 @@ use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
 use polyfish::ai::network::PolyZeroNet;
 use polyfish::game::Game;
 use polyfish::mapgen::{MapGenSettings, generate};
+use polyfish::settings::units::get_unit_setting;
+use polyfish::states::GameState;
 use polyfish::types::{MapSize, MapType, ModeType, TribeType};
 use rayon::ThreadPoolBuilder;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime};
@@ -53,8 +56,9 @@ struct Args {
     #[arg(long, default_value_t = 16)]
     gumbel_k: usize,
 
-    /// Max game turns. Higher = more decisive but slower.
-    #[arg(long, default_value_t = 30)]
+    /// Max game turns. Matches the self_play curriculum's terminal cap so the
+    /// gauge measures the same late game training generates.
+    #[arg(long, default_value_t = 45)]
     max_turns: i32,
 
     /// Game mode (ModeType repr; 2 = Domination to match training). In
@@ -86,6 +90,82 @@ struct Args {
     /// Generate mirrored / symmetric 1v1 maps for Elo evaluation.
     #[arg(long, default_value_t = false)]
     symmetric: bool,
+
+    /// Base map seed; seed N is played by both seats (paired). Omit to seed
+    /// from the wall clock, which re-rolls the map set every run.
+    #[arg(long)]
+    seed: Option<u64>,
+
+    /// Write one JSON file per game (outcome + per-turn behaviour samples)
+    /// into this directory. Consumed by ladder.py's reading summary.
+    #[arg(long)]
+    dump_stats_dir: Option<PathBuf>,
+
+    /// Heuristic/network prior blend, gumbel backends only.
+    #[arg(long)]
+    prior_heuristic_weight: Option<f32>,
+
+    /// Weight of sigma(Q) in the root policy target, gumbel backends only.
+    #[arg(long)]
+    policy_target_q_weight: Option<f32>,
+
+    /// Weight of sigma(Q) inside the search tree, gumbel backends only.
+    #[arg(long)]
+    tree_q_weight: Option<f32>,
+}
+
+// Converged self_play.rs search knobs, duplicated because they are `const` in
+// a binary crate: HEURISTIC_PRIOR_W_FLOOR, and the POLICY_TARGET_Q_RAMP_ITERS
+// ramp at saturation. The gauge must grade the agent training produces.
+const SELF_PLAY_PRIOR_HEURISTIC_W: f32 = 0.1;
+const SELF_PLAY_Q_WEIGHT: f32 = 1.0;
+
+/// Search knobs applied to both configurations.
+#[derive(Clone, Copy)]
+struct SearchTuning {
+    prior_heuristic: f32,
+    policy_target_q: f32,
+    tree_q: f32,
+}
+
+/// Per-turn behaviour snapshot; every metric is indexed [config1, config2].
+#[derive(Default, serde::Serialize)]
+struct TurnSample {
+    turn: i32,
+    score: [i32; 2],
+    spt: [i32; 2],
+    cities: [usize; 2],
+    units: [usize; 2],
+    unit_cost: [f32; 2],
+    techs: [usize; 2],
+}
+
+fn sample_turn(state: &GameState, swap: bool) -> TurnSample {
+    let seats: [i32; 2] = if swap { [2, 1] } else { [1, 2] };
+    let mut s = TurnSample {
+        turn: state.settings.turn,
+        ..Default::default()
+    };
+    for (i, pid) in seats.iter().enumerate() {
+        let Some(t) = state.tribes.get(pid) else {
+            continue;
+        };
+        s.score[i] = t.score;
+        s.spt[i] = polyfish::functions::get_tribe_spt(state, t);
+        s.cities[i] = t.cities.len();
+        s.units[i] = t.units.len();
+        s.unit_cost[i] = if t.units.is_empty() {
+            0.0
+        } else {
+            t.units
+                .iter()
+                .map(|u| get_unit_setting(u.unit_type).cost as f32)
+                .sum::<f32>()
+                / t.units.len() as f32
+        };
+        s.techs[i] = t.tech_vanilla.iter().filter(|x| x.discovered).count();
+    }
+    s
 }
 
 /// Stable ledger identity: network-free backends need no model, so their name
@@ -134,9 +214,13 @@ struct MatchResult {
     swap: bool,
     /// True when the game ended by elimination rather than score at the cap.
     decisive: bool,
+    turns: i32,
+    moves: u32,
+    tribes: [String; 2],
 }
 
 /// Play one game. `swap` puts config2 in the P1 seat and config1 in P2.
+/// `samples`, when present, collects one behaviour snapshot per game turn.
 #[allow(clippy::too_many_arguments)]
 fn play_match(
     eval1: &Evaluator,
@@ -150,6 +234,8 @@ fn play_match(
     max_turns: i32,
     gamemode: u8,
     symmetric: bool,
+    tuning: SearchTuning,
+    mut samples: Option<&mut Vec<TurnSample>>,
 ) -> MatchResult {
     let gen_settings = MapGenSettings {
         size: MapSize::Tiny,
@@ -166,20 +252,31 @@ fn play_match(
     game.state.settings.max_turns = max_turns;
     game.post_load();
 
+    let agent = |backend, eval, mcts| {
+        make_search_agent(
+            backend,
+            eval,
+            mcts,
+            None,
+            Some(tuning.prior_heuristic),
+            Some(tuning.policy_target_q),
+            Some(tuning.tree_q),
+        )
+    };
     // p1_config / p2_config map each seat to its configuration so timing and
     // scores attribute to the right config when sides are swapped.
     let (mut agent_p1, p1_config, mut agent_p2, p2_config) = if swap {
         (
-            make_search_agent(backend2, eval2, mcts2, None, None, None, None),
+            agent(backend2, eval2, mcts2),
             2u8,
-            make_search_agent(backend1, eval1, mcts1, None, None, None, None),
+            agent(backend1, eval1, mcts1),
             1u8,
         )
     } else {
         (
-            make_search_agent(backend1, eval1, mcts1, None, None, None, None),
+            agent(backend1, eval1, mcts1),
             1u8,
-            make_search_agent(backend2, eval2, mcts2, None, None, None, None),
+            agent(backend2, eval2, mcts2),
             2u8,
         )
     };
@@ -190,8 +287,16 @@ fn play_match(
     let mut ns_config2: u64 = 0;
     let mut moves_config2: u64 = 0;
 
+    let mut last_sampled_turn = i32::MIN;
     while !polyfish::functions::is_game_over(&game.state) && moves < 500 {
         let current_pid = game.state.settings.current_player_turn_id;
+
+        if current_pid == 1 && game.state.settings.turn != last_sampled_turn {
+            last_sampled_turn = game.state.settings.turn;
+            if let Some(s) = samples.as_mut() {
+                s.push(sample_turn(&game.state, swap));
+            }
+        }
 
         let t0 = Instant::now();
         let best_move = if current_pid == 1 {
@@ -280,6 +385,19 @@ fn play_match(
         );
     }
 
+    let tribe_name = |pid: i32| {
+        game.state
+            .tribes
+            .get(&pid)
+            .map(|t| format!("{:?}", t.tribe_type))
+            .unwrap_or_else(|| "unknown".to_string())
+    };
+    let tribes = if swap {
+        [tribe_name(2), tribe_name(1)]
+    } else {
+        [tribe_name(1), tribe_name(2)]
+    };
+
     MatchResult {
         winner_config,
         score_config1,
@@ -291,7 +409,48 @@ fn play_match(
         seed,
         swap,
         decisive,
+        turns: game.state.settings.turn,
+        moves: moves as u32,
+        tribes,
     }
+}
+
+/// One JSON file per game in `--dump-stats-dir`. `samples` is what ladder.py
+/// summarizes; the rest is the outcome record, including dropped games.
+fn write_game_stats(
+    dir: &std::path::Path,
+    idx: usize,
+    seed: i64,
+    swap: bool,
+    samples: &[TurnSample],
+    result: Option<&MatchResult>,
+    panic: Option<&str>,
+) -> std::io::Result<()> {
+    let mut doc = serde_json::json!({
+        "seed": seed,
+        "swap": swap,
+        "config1_seat": if swap { 2 } else { 1 },
+        "config2_seat": if swap { 1 } else { 2 },
+        "dropped": result.is_none(),
+        "samples": samples,
+    });
+    if let Some(r) = result {
+        doc["winner_config"] = serde_json::json!(r.winner_config);
+        doc["decisive"] = serde_json::json!(r.decisive);
+        doc["turns"] = serde_json::json!(r.turns);
+        doc["moves"] = serde_json::json!(r.moves);
+        doc["final_score"] = serde_json::json!([r.score_config1, r.score_config2]);
+        doc["tribes"] = serde_json::json!(r.tribes);
+    }
+    if let Some(p) = panic {
+        doc["panic"] = serde_json::json!(p);
+    }
+    // Dropped games get a different stem so ladder.py's `game_*.json` glob
+    // summarizes complete games only.
+    let stem = if result.is_some() { "game" } else { "dropped" };
+    let bytes = serde_json::to_vec_pretty(&doc)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    std::fs::write(dir.join(format!("{stem}_{idx:05}.json")), bytes)
 }
 
 fn backend_from_arg(arg: SearchBackendArg, k: usize) -> SearchBackend {
@@ -340,14 +499,38 @@ fn main() -> anyhow::Result<()> {
     let backend1 = backend_from_arg(args.backend1, args.gumbel_k);
     let backend2 = backend_from_arg(args.backend2, args.gumbel_k);
 
+    let tuning = SearchTuning {
+        prior_heuristic: args
+            .prior_heuristic_weight
+            .unwrap_or(SELF_PLAY_PRIOR_HEURISTIC_W),
+        policy_target_q: args.policy_target_q_weight.unwrap_or(SELF_PLAY_Q_WEIGHT),
+        tree_q: args.tree_q_weight.unwrap_or(SELF_PLAY_Q_WEIGHT),
+    };
+
     println!(
         "Config 1 backend: {:?} (mcts={}), Config 2 backend: {:?} (mcts={}), max_turns={}",
         backend1, mcts1, backend2, mcts2, args.max_turns
     );
+    println!(
+        "Search tuning: prior_heuristic={} policy_target_q={} tree_q={}",
+        tuning.prior_heuristic, tuning.policy_target_q, tuning.tree_q
+    );
 
-    let base_seed = SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_secs();
+    let (base_seed, seed_source) = match args.seed {
+        Some(s) => (s, "fixed"),
+        None => (
+            SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_secs(),
+            "wall clock",
+        ),
+    };
+    println!("Base seed: {base_seed} ({seed_source})");
+
+    if let Some(dir) = &args.dump_stats_dir {
+        std::fs::create_dir_all(dir)?;
+        println!("Per-game stats -> {}", dir.display());
+    }
 
     let total_games = args.games * 2;
     println!(
@@ -395,6 +578,14 @@ fn main() -> anyhow::Result<()> {
     let results_mutex: Mutex<Vec<MatchResult>> = Mutex::new(Vec::with_capacity(total_games));
 
     let use_eval_server = !device.is_metal();
+    // The "| eval <backend>" shape is what run_training_loop.sh greps to record
+    // the reading's evaluation conditions.
+    println!(
+        "Arena conditions | eval {} | device {:?}",
+        if use_eval_server { "server" } else { "inline" },
+        device
+    );
+
     let (server1, handle1) = if use_eval_server {
         let config = polyfish::ai::eval_server::EvalServerConfig {
             max_batch: 256,
@@ -466,6 +657,12 @@ fn main() -> anyhow::Result<()> {
             let swap = (idx % 2) != 0;
             let seed = (base_seed + seed_idx as u64) as i64;
 
+            let mut samples: Vec<TurnSample> = Vec::new();
+            let sink = if args.dump_stats_dir.is_some() {
+                Some(&mut samples)
+            } else {
+                None
+            };
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 play_match(
                     &eval1,
@@ -479,8 +676,20 @@ fn main() -> anyhow::Result<()> {
                     args.max_turns,
                     args.gamemode,
                     args.symmetric,
+                    tuning,
+                    sink,
                 )
             }));
+
+            if let Some(dir) = &args.dump_stats_dir {
+                let (res, panic) = match &r {
+                    Ok(m) => (Some(m), None),
+                    Err(e) => (None, Some(panic_msg(e.as_ref()))),
+                };
+                if let Err(e) = write_game_stats(dir, idx, seed, swap, &samples, res, panic) {
+                    eprintln!("  ⚠ failed to write game stats for seed {seed}: {e}");
+                }
+            }
 
             match r {
                 Ok(r) => {
@@ -538,6 +747,10 @@ fn main() -> anyhow::Result<()> {
         rayon::broadcast(worker);
     }
 
+    // shutdown() joins the server thread, which only exits once every
+    // EvalHandle is gone — main's own handles have to go first or it deadlocks.
+    drop(handle1);
+    drop(handle2);
     if let Some(s) = server1 {
         s.shutdown();
     }
@@ -604,6 +817,8 @@ fn main() -> anyhow::Result<()> {
     }
 
     let mut config1_wins = 0u32;
+    let mut config1_wins_p1 = 0u32;
+    let mut config1_wins_p2 = 0u32;
     let mut config2_wins = 0u32;
     let mut draws = 0u32;
     let mut decisive_games = 0u32;
@@ -616,7 +831,14 @@ fn main() -> anyhow::Result<()> {
 
     for r in &results {
         match r.winner_config {
-            1 => config1_wins += 1,
+            1 => {
+                config1_wins += 1;
+                if r.swap {
+                    config1_wins_p2 += 1;
+                } else {
+                    config1_wins_p1 += 1;
+                }
+            }
             2 => config2_wins += 1,
             3 => {}
             _ => draws += 1,
@@ -662,6 +884,8 @@ fn main() -> anyhow::Result<()> {
         config1_wins,
         (config1_wins as f32 / n) * 100.0
     );
+    println!("Config 1 Wins as P1: {}", config1_wins_p1);
+    println!("Config 1 Wins as P2: {}", config1_wins_p2);
     println!(
         "Config 2 Wins: {} ({:.1}%)",
         config2_wins,
