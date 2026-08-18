@@ -668,6 +668,21 @@ behaviour change is never mistaken for noise:
   before emission) and held by `tests/search_determinism.rs`. Behaviour-
   affecting: it changes which move gets which draw and how ties break, so
   self-play trajectories differ from any previous run even at a fixed seed.
+- **Cross-attention was wrong for every batch row after the first, on the
+  default backend.** `network.rs` fed the attention's `q_proj` a strided view
+  (`x.flatten_from(2)?.transpose(1, 2)?`), and `candle_nn::Linear` on that
+  layout returns different values from its contiguous equivalent for every row
+  but row 0 — position, not contents: it reproduces with all rows identical.
+  The eval server batches leaf evaluations by design, so on Linux and CUDA runs
+  (candle is the default and the only non-Apple backend) most leaf evaluations
+  in every search returned corrupted policy and value. `tch`/`metal` were
+  unaffected — libtorch and MPSGraph handle the stride — so an Apple run was
+  reading a different network from a Linux run of the same weights.
+  **Behaviour-affecting in the strongest sense**: search quality on every
+  non-Apple run changes, and any behaviour metric taken from one is not
+  comparable with one taken after this fix. Found by the new
+  `scripts/run_forward_parity.sh` on its first run; see audit T1 for the
+  measurements, including why a batch-invariance test does not catch it.
 - **The Gumbel agent owns its RNG.** `GumbelMctsAgent::with_search_seed(u64)`
   pins the stream; `POLYFISH_SEARCH_SEED` pins a base that still differs per
   agent, because a stream shared across actors would make every actor play the

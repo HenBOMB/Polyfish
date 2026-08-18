@@ -47,6 +47,8 @@ cd polyfish-rs && cargo test --no-default-features --test parity_widths   # Rust
 cd polyfish-rs && python3 scripts/check_cli_contract.py                   # shell -> binary flag contract
 cd polyfish-rs && cargo clippy --no-default-features --all-targets        # gated on a correctness subset
 cd polyfish-rs && cargo fmt --check                                       # advisory
+cd polyfish-rs && ./scripts/run_python_tests.sh                          # ladder.py + train.py (stdlib unittest)
+cd polyfish-rs && ./scripts/run_forward_parity.sh                        # candle CPU vs train.py on one checkpoint
 ```
 `.github/workflows/smoke.yml` runs `scripts/smoke_train_loop.sh` nightly (and on demand): a real one-iteration `self_play` → `games_*.safetensors` → `train.py` → `model.safetensors` pass plus an `arena` gauge reading, into a scratch dir under `target/smoke/`. That seam is where all three of the 2026 pipeline blockers hid — run it after changing `run_training_loop.sh`, `train.py`, or either binary's CLI.
 
@@ -101,7 +103,9 @@ Four implementations read the same `model.safetensors`, selected by Cargo featur
 - `metal_network.rs` (`metal-eval`) — hand-composed MPSGraph, bypassing libtorch's serial MPS dispatch queue. Fastest on Apple silicon.
 - `eval_backend.rs` / `eval_server.rs` — the batching layer that fans leaf evaluations across actors.
 
-`examples/tch_parity.rs` and `examples/metal_parity.rs` exist to check backends against each other — run them after any architecture change.
+`examples/tch_parity.rs` and `examples/metal_parity.rs` exist to check backends against each other — run them after any architecture change. Neither runs off Apple hardware; **`polyfish-rs/scripts/run_forward_parity.sh` is the one that does** (candle CPU vs `train.py`'s PyTorch on the same `model.safetensors`, CI job `forward-parity`). Run it after touching `network.rs`, `train.py`, `features.rs` or `mapper.rs`.
+
+⚠️ **candle and strided tensors.** `candle_nn::Linear` on a non-contiguous 3-D input returns wrong values for every batch row after the first — by position, not contents. `network.rs` hit this on the cross-attention query tokens and every batched evaluation on the default backend was corrupted for all but one row (see audit T1). Call `.contiguous()` on anything that reaches a matmul after a `transpose`. A batch-invariance test does **not** catch it; only an oracle outside candle does.
 
 ### ⚠️ The multi-implementation sync constraint
 The network architecture is implemented in **Rust (candle) and Python (PyTorch)** and must stay byte-compatible because they read/write the same `model.safetensors`:

@@ -276,7 +276,15 @@ impl PolyZeroNet {
 
         // 2. Tokenize inputs for Cross-Attention
         // Spatial tokens: [B, H*W, Filters]
-        let spatial_tokens = x.flatten_from(2)?.transpose(1, 2)?;
+        //
+        // `.contiguous()` is load-bearing, not tidiness. `transpose` leaves a
+        // strided view, and a matmul against a strided batch (which is what the
+        // attention's q_proj Linear does first) reads the wrong elements for
+        // every batch item after the first — item 0 has offset 0 and comes out
+        // right, so a batch-1 test cannot see it. Caught by
+        // scripts/py_parity.py against train.py; see the note in
+        // hypothesis_driven_improvements.md.
+        let spatial_tokens = x.flatten_from(2)?.transpose(1, 2)?.contiguous()?;
 
         // Player tokens: [B, 10, Filters]
         // player_tokens = player_input[B, 10, 1] * embeddings[1, 10, 64]

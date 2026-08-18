@@ -971,22 +971,47 @@ Release profile is already tuned (`lto = "fat"`, `codegen-units = 1`); only
 ## T — Testing, CI, and ops
 
 ### T1 · No Rust↔Python forward-parity test
-**Status:** PARTLY FIXED (`73dafb9`) · **FLAGGED** · Effort: days
+**Status:** FIXED · **CONFIRMED** · Effort: days
 
-**What landed:** `tests/parity_widths.rs` runs in CI and fails if any Rust head
-width, channel count or player-state dim disagrees with the constant `train.py`
-declares — that half would have caught P3. `examples/tch_parity.rs` and
-`examples/metal_parity.rs` now assert on output agreement instead of printing.
+**What landed earlier (`73dafb9`):** `tests/parity_widths.rs` runs in CI and
+fails if any Rust head width, channel count or player-state dim disagrees with
+the constant `train.py` declares — that half would have caught P3.
+`examples/tch_parity.rs` and `examples/metal_parity.rs` assert on output
+agreement instead of printing, but both need macOS/libtorch.
 
-**Still missing:** a forward-output parity test that runs on Linux CI. The two
-asserting examples need macOS/libtorch, so the candle↔PyTorch numerical
-comparison — the half that would have caught E1 — is still not exercised by any
-automated job.
+**What landed now:** the numerical half, on Linux CPU, in CI.
+`examples/py_parity.rs` loads a `model.safetensors` into the candle network and
+emits its raw outputs; `scripts/py_parity.py` builds `train.py`'s PyTorch
+definition on the same file and the same closed-form input and compares raw
+logits at 1e-3. `scripts/run_forward_parity.sh` runs both halves and
+initialises a checkpoint if the tree has none, so a clean checkout can run it.
+CI job: `forward-parity`.
 
-Nothing loads a Python-produced `model.safetensors` into the Rust network and
-compares outputs. The parity examples never assert. Given four backends must
-agree byte-for-byte, this is the highest-value missing test in the repo — and it
-would have caught P3 and E1.
+**It found a real bug on its first run, and the bug was in the default
+backend.** `network.rs` built its cross-attention query tokens as
+`x.flatten_from(2)?.transpose(1, 2)?` — a strided view — and fed that straight
+into the attention's `q_proj`. What was measured:
+
+- without a `.contiguous()`, candle disagrees with PyTorch by O(10) on every
+  head at batch 4, and agrees at batch 1;
+- with it, candle matches PyTorch to ~1e-4 at both batch sizes, on a freshly
+  initialised checkpoint and on the tree's own `model.safetensors`;
+- in isolation, `candle_nn::Linear` on that exact strided layout returns
+  different values from its contiguous equivalent for every row after the
+  first — including when all rows carry identical data, so it is the row's
+  position, not its contents.
+
+`tch_network.rs` builds the same strided view (`:192`) but hands it to
+libtorch, and `metal_network.rs` composes an MPSGraph; neither has the problem.
+Candle is the default backend and the only one on non-Apple hardware, so this
+was live for every Linux and CUDA run, on every batched evaluation — which is
+what the eval server does by design.
+
+**Note for whoever extends this.** A batch-invariance test — batched row *k*
+against row *k* evaluated alone — does **not** catch it, and was tried. candle's
+batched matmul is bitwise row-independent, so both paths return the same wrong
+answer and the test passes cleanly with the bug present. An oracle outside
+candle is required, which is precisely why this test is worth its cost.
 
 ### T2 · CI cannot catch the failure modes that actually occur
 **Status:** FIXED (`73dafb9`) · **CONFIRMED** · Effort: days

@@ -88,6 +88,41 @@ jobs:
       - name: Full suite
         run: ./scripts/run_python_tests.sh
 
+  # The Rust<->Python forward parity the audit calls the highest-value missing
+  # test in the repo: load one model.safetensors into network.rs (candle CPU)
+  # and train.py (PyTorch CPU) and compare raw logits. This is what caught the
+  # strided cross-attention bug, which every other check passed straight
+  # through. Needs both toolchains, hence its own job.
+  forward-parity:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./polyfish-rs
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./polyfish-rs -> target"
+          key: forward-parity
+
+      - name: Install pinned Python deps
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements.txt
+          TORCH=$(sed -n 's/^# POLYFISH_TORCH_VERSION=//p' requirements.txt)
+          .venv/bin/pip install "torch==$TORCH" --index-url https://download.pytorch.org/whl/cpu
+
+      - name: candle CPU vs PyTorch CPU
+        run: ./scripts/run_forward_parity.sh
+
   lint:
     runs-on: ubuntu-latest
     defaults:
