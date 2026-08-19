@@ -1554,6 +1554,26 @@ fn main() -> anyhow::Result<()> {
 
     let total_games = args.games * 2;
 
+    // EXP_ELO_061: the 4x-oversubscription default assumes workers park
+    // awaiting eval-server replies. That's true for Zero/Gumbel/net-leaf
+    // macro-mcts, but a heuristic-leaf match-worker never touches the eval
+    // server (forwards=0) — it's 100% CPU for the whole match, so 4x core
+    // count is pure OS-scheduler contention, not extra throughput (see the
+    // matched profiling in self_play's --actors doc). If NEITHER config
+    // touches the eval server, match to core count instead.
+    let touches_eval = |backend: SearchBackendArg, leaf: MacroLeaf| match backend {
+        SearchBackendArg::Zero | SearchBackendArg::Gumbel => true,
+        // Net, NetAsymPaint, NetAsym all consult the network; only Heuristic
+        // is CPU-only.
+        SearchBackendArg::MacroMcts => leaf != MacroLeaf::Heuristic,
+        SearchBackendArg::Heuristic
+        | SearchBackendArg::Greedy
+        | SearchBackendArg::MacroScript
+        | SearchBackendArg::MacroLookahead => false,
+    };
+    let either_touches_eval = touches_eval(args.backend1, args.macro_leaf1.unwrap_or(args.macro_leaf))
+        || touches_eval(args.backend2, args.macro_leaf2.unwrap_or(args.macro_leaf));
+
     let concurrency = match args.workers.filter(|&w| w > 0) {
         Some(w) => {
             eprintln!("--workers is deprecated, use --concurrency");
@@ -1566,7 +1586,8 @@ fn main() -> anyhow::Result<()> {
         // more than that is pure overhead, not extra throughput.
         None => {
             let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
-            (cores * 4).clamp(1, total_games.max(1))
+            let multiplier = if either_touches_eval { 4 } else { 1 };
+            (cores * multiplier).clamp(1, total_games.max(1))
         }
     };
     println!(

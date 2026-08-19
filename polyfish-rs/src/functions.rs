@@ -25,6 +25,7 @@ use crate::settings::get_unit_setting;
 use crate::settings::has_technology;
 use crate::states::*;
 use crate::types::*;
+use std::sync::{OnceLock, RwLock};
 
 /// Get the current player's tribe (POV = Point of View)
 pub fn get_pov_tribe(state: &GameState) -> Option<&TribeState> {
@@ -115,8 +116,22 @@ pub fn get_squared_euclidean_distance(a: i32, b: i32, size: i32) -> i32 {
 }
 
 /// Get adjacent tile indices
+/// (map_size, idx, range) -> neighbor indices. Pure geometry -- depends on
+/// nothing but the map's fixed size, never on tile/unit/tribe contents -- so
+/// once computed for a given map a result never changes for the rest of the
+/// process. Keyed on size (not hardcoded to 11x11) since eco_plan and other
+/// tools run this against arbitrary map sizes.
+static ADJACENCY_CACHE: OnceLock<RwLock<HashMap<(i32, i32, i32), Vec<i32>>>> = OnceLock::new();
+
 pub fn get_adjacent_indices(state: &GameState, idx: i32, range: i32) -> Vec<i32> {
     let size = state.settings.size;
+    let key = (size, idx, range);
+    let cache = ADJACENCY_CACHE.get_or_init(|| RwLock::new(HashMap::new()));
+
+    if let Some(cached) = cache.read().unwrap().get(&key) {
+        return cached.clone();
+    }
+
     let coords = Coords::from_index(idx, size);
     // Exact upper bound (the full (2r+1)x(2r+1) square minus the center) --
     // pre-sized so the push loop below never reallocates. Profiling
@@ -139,6 +154,7 @@ pub fn get_adjacent_indices(state: &GameState, idx: i32, range: i32) -> Vec<i32>
         }
     }
 
+    cache.write().unwrap().insert(key, result.clone());
     result
 }
 

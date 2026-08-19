@@ -158,6 +158,7 @@ while getopts "fbcri:g:n:a:e:l:k:p:" opt; do
       ;;
     a)
       ACTORS=$OPTARG
+      ACTORS_SET=true
       ;;
     e)
       EVAL_SERVERS=$OPTARG
@@ -237,11 +238,13 @@ fi
 
 if [ "$BOOST" = true ]; then
     ACTORS=$((ACTORS * 2))
+    ACTORS_SET=true
     echo "🚀 Boost mode enabled! Using $ACTORS actors"
 fi
 
 if [ "$CHILL" = true ]; then
     ACTORS=8
+    ACTORS_SET=true
     echo "❄️ Chill mode! Using $ACTORS actors"
 fi
 
@@ -440,6 +443,22 @@ do
         # same sim budget, which is a different regime -- see EXP_ELO_061.
         BACKEND_FLAG="--search-backend macro-mcts --macro-leaf ${MACRO_LEAF:-heuristic} --macro-sims ${MACRO_SIMS:-64} --macro-k ${MACRO_K:-6}"
         echo "🌲 MACRO_GEN=1 (Stage 3): macro-mcts generates self-play games (behavior cloning + on-distribution value labels), leaf=${MACRO_LEAF:-heuristic} sims=${MACRO_SIMS:-64} k=${MACRO_K:-6}."
+
+        # EXP_ELO_061 (Aug 2026): ACTORS=128 below is tuned for the eval-server-
+        # bound Gumbel/net-leaf path, where actors park (no CPU) awaiting a
+        # reply and oversubscribing past core count is free. A heuristic-leaf
+        # macro-mcts actor never touches the eval server (EVAL_SERVER_STATS
+        # shows forwards=0) -- it's 100% CPU the whole time it runs, so 128 raw
+        # OS threads on a 14-core M3 Max is pure scheduler contention, not
+        # useful work. Profiling at the real training argv (macro-sims=64,
+        # macro-k=6, goal-channels) found semaphore_wait_trap alone eating more
+        # sampled time than any single application function. Auto-scale down
+        # to core count unless the user explicitly set -a/-b/-c.
+        if [ "${MACRO_LEAF:-heuristic}" = "heuristic" ] && [ "${ACTORS_SET:-false}" != true ]; then
+            CORE_COUNT=$(sysctl -n hw.physicalcpu 2>/dev/null || nproc 2>/dev/null || echo 14)
+            ACTORS=$CORE_COUNT
+            echo "🐌 Heuristic-leaf macro-mcts: auto-scaling actors to core count ($ACTORS) instead of the GPU-tuned default -- override with -a N if measured otherwise."
+        fi
     elif [ -n "${BOOTSTRAP:-}" ]; then
         BACKEND_FLAG="--search-backend greedy"
     fi
