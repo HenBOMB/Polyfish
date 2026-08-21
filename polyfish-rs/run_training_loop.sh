@@ -227,16 +227,14 @@ if [ "$CHILL" = true ]; then
     echo "❄️ Chill mode! Using $ACTORS actors"
 fi
 
-if [ "$FORCE_TRAIN" = true ]; then
-    echo "Force training flag detected! Running training immediately..."
-    .venv/bin/python3 train.py
-fi
-
 if [ "$RESET" = true ]; then
     echo "🗑️  Reset flag detected! Deleting model.safetensors and self-play game data to seed a fresh model..."
     rm -f model.safetensors
     rm -f games_*.safetensors
     rm -f archive/games_*.safetensors
+    # Adam moments + cosine position belong to the model they were fit on (#30);
+    # keeping them would hand a from-scratch run a floored LR.
+    rm -f optimizer_state.pt
     # EXP_ELO_002: the anchor decay clock belongs to the model it graduated.
     rm -f .anchor_decay_start
     if [ -n "$RESUME_RUN" ]; then
@@ -256,6 +254,17 @@ RUN_ID=$(echo "$RUN_INFO" | .venv/bin/python3 -c "import sys,json; print(json.lo
 RUN_STARTED_AT=$(echo "$RUN_INFO" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin)['run_started_at'])")
 START_ITER=$(echo "$RUN_INFO" | .venv/bin/python3 -c "import sys,json; print(json.load(sys.stdin)['start_iter'])")
 echo "Training run_id=$RUN_ID started_at=$RUN_STARTED_AT starting at iteration $START_ITER"
+
+# Run-scope the trainer (#30): train.py spans its cosine LR schedule and Adam
+# moments across per-iteration invocations keyed by these. On resume the
+# sidecar keeps the schedule position, so total = prior iterations + this launch.
+export TRAIN_RUN_ID="$RUN_ID"
+export TRAIN_TOTAL_ITERS=$((START_ITER - 1 + ITERATIONS))
+
+if [ "$FORCE_TRAIN" = true ]; then
+    echo "Force training flag detected! Running training immediately..."
+    .venv/bin/python3 train.py
+fi
 
 # Restore point: snapshot the model at every launch (new run or resume), so
 # no experiment can ever start without a recoverable "before" state.

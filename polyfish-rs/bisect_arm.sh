@@ -29,6 +29,14 @@ export REPLAY_BUFFER_FILES=0
 export RUST_BACKTRACE=1
 export PYTHONUNBUFFERED=1
 
+# Arm-local run identity and optimizer sidecar (#30): without these a
+# diagnostic arm resumes the production run's Adam moments and schedule
+# position, and then overwrites the production sidecar. TRAIN_TOTAL_ITERS is
+# deliberately left at train.py's default so the LR stays ~flat at peak
+# across the arm — a decaying LR would confound the trainer-corrosion read.
+export TRAIN_RUN_ID="bisect_${ARM_LABEL}"
+export TRAIN_OPTIMIZER_STATE="optimizer_state_bisect_${ARM_LABEL}.pt"
+
 # self_play is linked against libtorch (tch-eval/metal-eval features) with no
 # rpath baked in — without this, dyld aborts on load ("no LC_RPATH's found").
 if [[ "$OSTYPE" == "darwin"* ]]; then

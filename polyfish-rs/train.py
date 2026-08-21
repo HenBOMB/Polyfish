@@ -409,7 +409,9 @@ def _migrate_checkpoint(state_dict, model, player_state_dim):
 
 
 MODEL_PATH = "model.safetensors"
-OPTIMIZER_STATE_PATH = "optimizer_state.pt"
+# Overridable so diagnostic arms (bisect_arm.sh) neither resume nor overwrite
+# the production sidecar.
+OPTIMIZER_STATE_PATH = os.environ.get("TRAIN_OPTIMIZER_STATE", "optimizer_state.pt")
 METRICS_PATH = ".last_train_metrics.json"
 
 
