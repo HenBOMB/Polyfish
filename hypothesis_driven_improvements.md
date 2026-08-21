@@ -8160,3 +8160,53 @@ phase flagged as broken is now well-calibrated. Saturation remains a real,
 unresolved weakness — worth a future pass, not blocking. `outcome_scale=1.5`
 + this training run is a genuine improvement to the leaf-judgment quality
 the war room's item 2 was asking about, not just a relabeling exercise.
+
+**Task 71 — root-prior A/B, round 2, with the retrained head and the fixed
+inference-side painting (`None`, not the scripted stand-in — see EXP_ELO_066's
+fix commit).** Same harness as EXP_ELO_066 (n=128, base_seed 770425, Imperius/
+Imperius, anchor-frac 1.0 vs Greedy, macro-sims 16/k 4), against this run's
+final checkpoint. First re-verified the binary itself wasn't stale: it was —
+`.run_bin_prior/self_play` had been built at 10:59, the painting fix landed
+at 12:17, so the first attempt at this A/B would have silently re-tested the
+OLD broken code path. Rebuilt before running.
+
+| | arm A: root_prior_w=0.0 | arm B: root_prior_w=1.0 |
+|---|---|---|
+| anchor_net_wr | 70.31% | **45.31% (−24.99pp)** |
+| avg_score | 5982.3 | 4662.9 (−22.0%) |
+| avg_captures | 5.99 | 4.33 (−27.7%) |
+| avg_hubs_built | 3.375 | **1.898 (−43.8%)** |
+| avg_kills | 16.35 | 17.83 (+9.1%, only metric that moved the other way) |
+| avg_research | 7.47 | 7.77 (flat-ish) |
+
+**This is worse than EXP_ELO_066's first attempt (−18.75pp), not better.**
+Both the known bug (wrong painting convention) AND the training-data leak
+it was reading from are now fixed, and the loss trajectory looked
+genuinely encouraging (converged below the old plateau, not stuck at
+ceiling) — yet the behavioral result regressed further. This rules out
+"it was just the painting bug" as a complete explanation. Live hypotheses,
+none yet confirmed:
+1. `root_prior_w=1.0` may simply be too strong — an imperfect prior with a
+   large PUCT weight can dominate the tree's own Q-value-driven
+   exploration even when the head is directionally reasonable on average;
+   an untested lower weight (0.1, 0.01) would discriminate this from #2.
+2. The head may be a good fit for its OWN training objective (predicting
+   the search's aggregate, marginalized visit distribution in cross-entropy)
+   without that translating into "reliably ranks THIS specific root's
+   candidates correctly" — average-case accuracy and per-decision
+   discrimination are different things, and nothing in training validates
+   the latter.
+3. Not yet ruled out: a further coordinate/indexing mismatch beyond the
+   one already found and fixed (spot-checked the kind-major order-plane
+   indexing between `macro_policy_targets`, `decode_macro_prior`, and
+   train.py's `.flatten(1)` — all three agree — but a subtler bug
+   elsewhere in the decode path hasn't been exhaustively ruled out).
+
+**Disposition: item 3 (root-prior injection) is NOT resolved and should
+NOT ship at any tested weight.** Two independent attempts, two large
+regressions, the second one worse despite fixing a real, confirmed bug.
+This needs weight-sweep + per-candidate diagnostic work before another
+attempt, not more blind A/B iteration — exactly the kind of open,
+unresolved item that belongs in the evening report rather than a rushed
+third try. `root_prior_w` stays default-off (0.0); nothing here changes
+shipped behavior.
