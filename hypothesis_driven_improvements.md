@@ -7728,3 +7728,107 @@ ratio, paired behavior A/B) exists to catch, and it hasn't been measured
 yet — no Rust wiring for inference exists at this point in the plan, only
 harvest instrumentation. **Read this envelope as an upper bound on the
 win, not a promised number.**
+
+### Phase 0c interim (offline gate, undertrained — do not treat as final)
+
+Trained two small offline PyTorch models on the production-config harvest
+(2000 calls, ~112K candidates, 80/20 split by call_id): a `state` model
+(conv trunk over the painted features + player vector, feeding per-tile
+source/target heads and global action/option heads — mirrors network.rs's
+decomposed policy heads) and a `blind` baseline (same additive coordinate
+decomposition, but four learned CONSTANT tables, no state input at all).
+10/40 epochs respectively (state/blind). Held-out top-1 agreement
+(`argmax(score_move + λ·dphi_pred)` vs the true pick, reconstructing the
+*real* ranking rather than a dphi-only strawman, since `rank_plies` ranks
+on both terms):
+
+| | top-1 agreement | huber (held-out) |
+|---|---|---|
+| state model | 37.8% | 92.40 |
+| blind baseline | 39.0% | 113.86 |
+| **score_move alone (dphi≡0)** | **44.0%** | — |
+
+Both trained models score *below* simply ignoring Δφ entirely. Not a clean
+kill, though — three things complicate a naive read: (1) the state model's
+train huber was still falling at epoch 9 (102.10→83.16, no plateau) while
+blind had already converged by epoch 10 — an unfair, undertrained
+comparison; (2) held-out huber (state 92.40 vs blind 113.86) shows the
+state model IS a better *value* predictor, so regression error and argmax
+agreement are diverging — the classic ranking-vs-regression mismatch, where
+a noisy predictor flips argmax among near-tied candidates at zero real
+cost but scores as total disagreement here; (3) by move_type the picture is
+sharply bimodal, not uniform:
+
+| move_type | n | state | blind | score_move-only |
+|---|---|---|---|---|
+| Step (74% of volume) | 210 | 33.8% | 36.7% | 47.6% |
+| Attack | 47 | 31.9% | 21.3% | **70.2%** |
+| Summon | 41 | 34.1% | 46.3% | 9.8% |
+| Research | 19 | **78.9%** | **73.7%** | 5.3% |
+| Reward | 18 | 83.3% | 83.3% | 72.2% |
+
+Research — the one type 0a flagged as GoalAux-load-bearing — is the
+clearest win for both trained models over score_move-only (which is
+essentially blind there, 5.3%). Attack is the opposite: score_move alone
+already picks correctly 70% of the time, and both crude models add noise
+on top of an already-good signal. Interim read: raw top-1 agreement is not
+by itself a trustworthy gate at this training budget — it needs (a) a
+converged state model (retrain to ~40 epochs to match blind), (b) a regret
+metric (`true_score(true_top) − true_score(model_top)`, not just hit/miss),
+and (c) per-call Δφ centering before that retrain, none of which were run
+yet (timeboxed out — see the behavioral A/B below, which turned out to be
+the more decisive check).
+
+### The behavioral A/B (real system, not offline) — the actual throughput answer tonight
+
+The zero-dphi control above is itself the cheapest possible "distilled
+scorer": skip Δφ in rollouts entirely. The codebase already has the exact
+seam for this — `MacroParams.rollout_lambda` vs `lambda`, a **pre-existing,
+already-shipped CLI flag** (`--macro-rollout-lambda`, self_play.rs) that
+was added during EXP_ELO_061's throughput profiling and never measured.
+Ran the real behavioral test instead of extending the offline gate:
+paired-seed (`--base-seed 770425`, fixed Imperius/Imperius, `--anchor-frac
+1.0` vs the Greedy anchor, `--macro-sims 16 --macro-k 4`, sequential arms
+per tonight's OOM lesson — never concurrent), 48 games/arm, no probe env
+var set:
+
+| | baseline (λ=1/1) | rollout-λ=0 |
+|---|---|---|
+| **moves/sec** | 104.12 | **470.82 (4.52x)** |
+| anchor_net_wr (vs Greedy) | 68.75% | 62.5% (−6.25pp) |
+| avg_score | 5492.4 | 5135.8 (−6.5%) |
+| avg_kills | 13.48 | 11.92 (−11.6%) |
+| avg_research | 7.23 | 6.98 (−3.5%) |
+| avg_hubs_built | 2.73 | 2.60 (−4.8%) |
+| avg_moves/game | 259.4 | 278.0 (+7.2%, games run longer/less decisively) |
+| avg_revealed_tiles | 108.8 | 109.6 (flat) |
+| Sim move failures | 6229 | 0 |
+
+**The throughput number is now measured, not projected — 4.52x, landing
+inside the 3.3-5.0x envelope computed above, achieved with zero network
+code, zero GPU, one existing CLI flag.** No single metric clears n=48's
+noise floor alone (the n=128 same-config repeat floor is 7.8pp per
+[[seed-770425-gauge-harness]]; n=48 inflates that to ~12-13pp), but the
+gauge's own standard — coherent co-movement beats an isolated win-rate
+delta — is met here: score, kills, research, and hubs all moved the same
+(worse) direction together, and avg_moves moved consistent with weaker
+play (longer, less decisive games). This is a real, if moderate, quality
+cost, not free-throughput noise.
+
+**This recalibrates the whole Phase 0c question.** Skipping Δφ isn't a
+free lunch (measured: real regret), but it also isn't catastrophic (48
+games isn't enough to call it decisive, and the drop is single-digit
+percent on every metric). A distilled head only earns its complexity if it
+beats *this* regret at a fraction of rollout-λ=1's cost — that's the bar,
+not "is top-1 agreement high." The offline gate's argmax metric never
+measured this; the behavioral A/B does, directly, and is now the reference
+point for any future distilled-head verdict.
+
+**Disposition (interim, task 62 not yet closed):** the immediate,
+zero-code-change throughput lever (`--macro-rollout-lambda 0.0`) is
+real and already shippable pending a bigger-n confirmation of the quality
+cost (n=128+, same paired seed, to get under the noise floor cleanly)
+and a decision on whether that cost is acceptable. The distilled-head path
+remains open but its offline evidence so far is genuinely mixed, not a
+green light — needs the retrain-with-regret-metric pass before Phase 1
+commits to the harvesting infrastructure build-out.
