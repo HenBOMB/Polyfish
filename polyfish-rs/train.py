@@ -64,6 +64,18 @@ AUX_DIMS = {'aux_ownership': 121, 'aux_fog_units': 121, 'aux_spt': 2, 'aux_opp_t
 # unaffected until explicitly turned on.
 MACRO_STANCE_W = float(os.environ.get("MACRO_STANCE_W", "0.0"))
 MACRO_ORDER_W = float(os.environ.get("MACRO_ORDER_W", "0.0"))
+# EXP_ELO_066: every macro_stance/macro_order training row's spatial input
+# is painted with the search's own COMMITTED (already-chosen) goal -- the
+# label is that same search's visit-mass marginalization, so the head could
+# partly learn to echo its own input rather than predict blind. Invisible
+# in training loss; it broke root-prior inference, where no committed goal
+# exists yet by definition. Fix: forward a goal-blind copy (order+stance
+# channels zeroed) through the trunk and read macro_stance/macro_order off
+# THAT forward instead -- policy/value/aux stay on the normal, unmodified
+# batch. CH_ORDER_START..CH_STANCE_END are the last CH_ORDER_COUNT(3) +
+# CH_STANCE_COUNT(4) = 7 channels (features.rs asserts CH_STANCE_END ==
+# NUM_CHANNELS), so slicing to SPATIAL_CHANNELS covers both planes.
+GOAL_CHANNEL_START = 162
 AUX_WEIGHTS = {
     'aux_ownership': float(os.environ.get("AUX_OWN_W", "0.3")),
     'aux_fog_units': float(os.environ.get("AUX_FOG_W", "0.2")),
@@ -881,6 +893,22 @@ def train():
                 optimizer.zero_grad()
 
                 policy_pred, values_pred, aux_pred = model(batch_spatial, batch_player)
+
+                # EXP_ELO_066: macro_stance/macro_order must NOT be read off
+                # the forward above -- batch_spatial carries the committed
+                # goal already painted into it (the thing macro_stance/order
+                # are trying to predict), so those two heads get a second,
+                # goal-blind forward instead. Post-D4 batch_spatial is used
+                # so the blind copy stays orientation-consistent with the
+                # (also D4-rotated) macro_order target. Real extra compute,
+                # not free, but training time isn't this project's
+                # bottleneck -- self-play generation is.
+                if MACRO_STANCE_W > 0.0 or MACRO_ORDER_W > 0.0:
+                    blind_spatial = batch_spatial.clone()
+                    blind_spatial[:, GOAL_CHANNEL_START:, :, :] = 0.0
+                    _, blind_values_pred, _ = model(blind_spatial, batch_player)
+                    values_pred['macro_stance'] = blind_values_pred['macro_stance']
+                    values_pred['macro_order'] = blind_values_pred['macro_order']
 
                 # EXP_ELO_013: ref forward pass on the identical (possibly
                 # D4-augmented) batch, so its spatial heads align tile-for-

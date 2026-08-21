@@ -441,8 +441,25 @@ do
         # k=4 didn't help (depth saturated at 32 with only ~4 live
         # candidates); raising k too means more candidates competing for the
         # same sim budget, which is a different regime -- see EXP_ELO_061.
-        BACKEND_FLAG="--search-backend macro-mcts --macro-leaf ${MACRO_LEAF:-heuristic} --macro-sims ${MACRO_SIMS:-64} --macro-k ${MACRO_K:-6}"
-        echo "🌲 MACRO_GEN=1 (Stage 3): macro-mcts generates self-play games (behavior cloning + on-distribution value labels), leaf=${MACRO_LEAF:-heuristic} sims=${MACRO_SIMS:-64} k=${MACRO_K:-6}."
+        # EXP_ELO_065 (Aug 21): measured 4.5-6.7x self-play throughput with
+        # no detected behavioral cost at n=128 vs Greedy by skipping Δφ
+        # scoring in the tree's OWN internal rollouts (score_move alone
+        # there; the one real per-ply commit stays exact). Unset by default
+        # -- current behavior -- set MACRO_ROLLOUT_LAMBDA=0.0 to use it.
+        MACRO_ROLLOUT_LAMBDA_FLAG=""
+        if [ -n "${MACRO_ROLLOUT_LAMBDA:-}" ]; then
+            MACRO_ROLLOUT_LAMBDA_FLAG="--macro-rollout-lambda ${MACRO_ROLLOUT_LAMBDA}"
+        fi
+        # EXP_ELO_066 (Aug 21): PUCT-style prior at the search root from the
+        # macro_stance/macro_order head. Unset by default -- current
+        # behavior. Only meaningful once that head is retrained goal-blind
+        # (see train.py's GOAL_CHANNEL_START forward); set nonzero to use it.
+        MACRO_ROOT_PRIOR_FLAG=""
+        if [ -n "${MACRO_ROOT_PRIOR_W:-}" ]; then
+            MACRO_ROOT_PRIOR_FLAG="--macro-root-prior-w ${MACRO_ROOT_PRIOR_W}"
+        fi
+        BACKEND_FLAG="--search-backend macro-mcts --macro-leaf ${MACRO_LEAF:-heuristic} --macro-sims ${MACRO_SIMS:-64} --macro-k ${MACRO_K:-6} $MACRO_ROLLOUT_LAMBDA_FLAG $MACRO_ROOT_PRIOR_FLAG"
+        echo "🌲 MACRO_GEN=1 (Stage 3): macro-mcts generates self-play games (behavior cloning + on-distribution value labels), leaf=${MACRO_LEAF:-heuristic} sims=${MACRO_SIMS:-64} k=${MACRO_K:-6} rollout_lambda=${MACRO_ROLLOUT_LAMBDA:-default} root_prior_w=${MACRO_ROOT_PRIOR_W:-0}."
 
         # EXP_ELO_061 (Aug 2026): ACTORS=128 below is tuned for the eval-server-
         # bound Gumbel/net-leaf path, where actors park (no CPU) awaiting a

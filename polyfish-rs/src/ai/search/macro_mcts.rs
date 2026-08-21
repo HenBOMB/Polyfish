@@ -393,22 +393,29 @@ impl<'a> MacroMctsSearch<'a> {
         root.edge_values = vec![0.0; n];
         root.edge_shape = vec![0.0; n];
 
-        // War-room item 3: inject the (previously orphaned — trained via
-        // macro_policy_targets, never consumed) macro policy head as a
-        // PUCT-style prior at the root only, one eval call per real turn
-        // decision (not per rollout — cheap). Root has no committed
-        // directive yet, so paint the scripted base goal, matching
-        // `leaf_value`'s existing fallback convention for the same
-        // situation. Off (0.0 weight) by default: skips the eval call
-        // entirely and leaves `edge_prior` empty, so `select_edge` is
-        // byte-identical to plain UCT unless explicitly turned on.
+        // War-room item 3: inject the macro policy head as a PUCT-style
+        // prior at the root only, one eval call per real turn decision (not
+        // per rollout — cheap). EXP_ELO_066: the first version of this
+        // painted the scripted base goal here, matching `leaf_value`'s
+        // fallback convention — but that convention was WRONG for this
+        // specific head. Every existing macro_stance/macro_order training
+        // row is painted with the search's own COMMITTED (post-search,
+        // already-chosen) goal, so the head partly learned to echo its own
+        // input rather than predict blind, and painting anything at the
+        // root (which by definition has no committed goal yet) fed it an
+        // out-of-distribution input — measured as a real −18.75pp
+        // regression, not a weak prior. The fix is training-side (repaint
+        // those label rows `None` = goal-blind) and this call must paint
+        // the SAME way for the two to agree once retrained. Off (0.0
+        // weight) by default: skips the eval call entirely and leaves
+        // `edge_prior` empty, so `select_edge` is byte-identical to plain
+        // UCT unless explicitly turned on.
         if params.root_prior_w > 0.0 && n > 0 {
-            let scripted_goal = compute_macro_goal(&root_game.state, pov, own_counters.tier3_bought);
             if let Ok(feats) = crate::ai::features::state_to_cpu_features_goal(
                 &root_game.state,
                 pov,
                 None,
-                Some(&scripted_goal),
+                None,
             ) {
                 if let Some(result) = evaluator.evaluate(vec![feats]).into_iter().next() {
                     if let (Some(stance), Some(order)) =
