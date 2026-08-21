@@ -8210,3 +8210,40 @@ attempt, not more blind A/B iteration — exactly the kind of open,
 unresolved item that belongs in the evening report rather than a rushed
 third try. `root_prior_w` stays default-off (0.0); nothing here changes
 shipped behavior.
+
+**Weight sweep, round 1 (Verdi's request — is there a small-weight sweet
+spot?):** found a second, real bug before the sweep even had a chance to
+answer the question. Cold-start (`select_edge`, unvisited-edges-first
+branch) picked `argmax(edge_prior[i])`, and `edge_prior[i] = decoded[i] *
+root_prior_w` — for any `w > 0`, `argmax(w·p) == argmax(p)` regardless of
+`w`'s magnitude, so cold-start reordering was a hard on/off switch, not a
+dial. With `sims`=16 split across a handful of candidates, cold start
+alone can consume most of the tree's visit budget. Measured: `w=0.05`
+regressed almost as hard as `w=1.0` (53.1% vs 45.31%, both far below the
+70.31% baseline) — that flat, weight-insensitive shape was the tell.
+
+**Fix (commit after this entry):** cold-start now always visits unvisited
+edges in list order, matching plain UCT byte-for-byte regardless of
+whether a prior is loaded. The prior only acts through the PUCT-style
+`prior/(1+n)` bonus once every edge has a visit — genuinely continuous in
+`root_prior_w` now, unlike before.
+
+**Weight sweep, round 2 (post-fix), n=32/point (screening scale, not a
+final confirmation):**
+
+| weight | anchor_net_wr | avg_score | avg_hubs_built | avg_captures |
+|---|---|---|---|---|
+| 0 (baseline, n=128) | 70.31% | 5982.3 | 3.375 | 5.99 |
+| 0.1 | 56.25% | 5082.5 | 2.31 | 4.59 |
+| 0.2 | 50.0% | 4808.6 | **1.59** | 4.41 |
+
+The fix measurably helped at low weight (0.1 now reads better than the
+pre-fix mechanism's comparable-weight readings), but the trend is still
+monotonically declining as weight rises from 0.1 to 0.2, not flattening
+into a plateau — `avg_hubs_built` in particular keeps dropping. This
+argues against "cold-start was the whole story" and for hypothesis #2
+above: the head's predictions may not be reliable enough per-decision to
+weight positively at *any* meaningful level yet, so more weight on a
+not-yet-trustworthy signal just buys more bias away from otherwise-sound
+pure-Q exploration. If a sweet spot exists at all under this trend, it's
+close to zero, not in the 0.1-0.2 range Verdi asked to check first.
