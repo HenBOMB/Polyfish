@@ -7987,3 +7987,58 @@ macro_order label rows with a goal-blind convention and retrain), not on
 more inference-side work. Recommend holding here rather than continuing to
 iterate blind on `root_prior_w` — the −18.75pp isn't a dial to tune away,
 it's the label leak surfacing.
+
+**Fix landed** (commit `198d761`): train.py runs a second, goal-blind
+forward (order+stance channels zeroed) and reads macro_stance/macro_order
+off that instead — needs no new Rust plumbing, existing archived shards
+work as-is. Inference-side painting switched to match (`None`, not the
+scripted stand-in).
+
+## EXP_ELO_067 — the training run: validates items 2 (value labels), 3 (retrain the goal-blind head), and 4 (watch it improve) together (registered)
+
+STATUS: REGISTERED, about to launch. Verdi is out for the day; work the
+list independently, report on return.
+
+CONTEXT: items 2/3/4 all converge on the same resource — one training run.
+Item 2's validation needs a real training run (label-saturation stats
+alone, EXP_ELO_064, don't say whether calibration improves). Item 3's fix
+(above) needs fresh training to matter at all. Item 4 IS a training run.
+One loop serves all three instead of three sequential projects.
+
+LAUNCH CONFIG: fresh run_id (no `--resume`, no `--reset` — keeps the
+existing `model.safetensors` as the starting checkpoint, just labels this
+campaign separately for clean metrics). Same env as EXP_ELO_061 Step 5
+(`MACRO_GEN=1 GOAL_CHANNELS=1 MACRO_STANCE_W=0.1 MACRO_ORDER_W=0.1`) plus
+`MACRO_ROLLOUT_LAMBDA=0.0` (EXP_ELO_065's measured throughput win, now the
+generation default for this run) and `OUTCOME_SCALE=1.5` (EXP_ELO_064's
+de-saturation lever). `MACRO_ROOT_PRIOR_W` left unset — generation
+shouldn't use an undertrained root prior on itself; that gets validated
+separately once the retrained head looks real. `-i 40` first (validate,
+don't commit 8 hours blind); extend via `--resume` afterward if the
+predictions below hold.
+
+TWO FALSIFIABLE PREDICTIONS, pre-registered:
+
+1. **Item 3's retrain**: goal-blind `macro_stance` loss should land well
+   ABOVE the old leaky run's ~0.97 (Step 5's plateau) — the echo shortcut
+   is gone, the task got honestly harder. Ceiling check: uniform-baseline
+   cross-entropy is ln(4)≈1.386. Lands near 1.38 → the board state carries
+   no real root-prior signal, item 3's premise fails honestly, stop there.
+   Lands meaningfully below 1.38 (and below-but-not-equal to the old 0.97,
+   since some real signal should survive the fix) → real head, worth a
+   fresh n=128 root-prior A/B (EXP_ELO_066's harness, unchanged) before
+   calling it done.
+2. **Item 2's actual validation**: `--dump-value-calib` (EXP_ELO_060
+   protocol) against a checkpoint from this run, at outcome_scale=1.5,
+   should show improved calibration vs. the baseline reading on record —
+   distinct from and stronger evidence than the label-saturation stats
+   alone (EXP_ELO_064 showed the labels change; this is whether the head's
+   actual judgment gets better). Run this as a separate, standalone
+   self_play invocation against a mid/late checkpoint once the loop has
+   margin — not concurrently with the loop (today's OOM and the arm-A
+   3x-slowdown were both contention from running two heavy processes at
+   once).
+
+Item 4 itself: read directly off the loop's own metrics (training_log.csv,
+value_r2, gauge win-rate trend, SPT/territory curves) — no separate
+validation needed, that IS the training run.
