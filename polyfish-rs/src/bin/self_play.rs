@@ -4986,6 +4986,7 @@ fn main() -> anyhow::Result<()> {
         rank_plies_candidates,
         rank_plies_candidates as f64 / (rank_plies_calls as f64).max(1.0)
     );
+    polyfish::ai::search::macro_exec::dphi_probe_flush();
 
     // Deterministic teardown. Drop the evaluator handles first — these hold the
     // only remaining request-channel senders, so dropping them makes each eval

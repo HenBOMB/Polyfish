@@ -53,18 +53,63 @@ pub static RANK_PLIES_CANDIDATES: std::sync::atomic::AtomicU64 =
 /// one JSONL row per scored candidate with its decomposed move coordinates
 /// and both the real (aux-aware) Δφ and an aux-free Δφ, so the GoalAux-
 /// dependence and coordinate-collision questions can be answered offline
-/// without touching the shard format. Doubles the `goal_potential_with_threats`
-/// cost per candidate ONLY while the env var is set; a no-op (one cached
-/// `OnceLock` read) otherwise.
+/// without touching the shard format. A no-op (one cached `OnceLock` read)
+/// when the env var is unset.
+///
+/// Sampled 1-in-`DPHI_PROBE_SAMPLE_EVERY` calls and capped at
+/// `DPHI_PROBE_MAX_ROWS` total rows, written through one persistent buffered
+/// handle instead of open+write+close per row: an unsampled, unbuffered
+/// version of this probe wrote ~111k rows/game via ~2.8k file opens, which
+/// was enough of a write-storm to trip jetsam on a memory-pressured host
+/// (EXP_ELO_065 Phase 0 harvest, Aug 2026) even though the run itself used
+/// negligible RSS. Sampling by `call_id` also skips the aux-free
+/// recomputation for unsampled calls, so it cuts CPU, not just IO.
+const DPHI_PROBE_SAMPLE_EVERY: u64 = 20;
+const DPHI_PROBE_MAX_ROWS: u64 = 2_000_000;
+static DPHI_PROBE_ROWS_WRITTEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn dphi_probe_path() -> Option<&'static str> {
     static PATH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     PATH.get_or_init(|| std::env::var("POLYFISH_DPHI_PROBE").ok())
         .as_deref()
 }
 
+/// `Some(path)` only for sampled calls; `None` otherwise so callers skip the
+/// aux-free Δφ work entirely for the 19-in-20 calls that won't be written.
+fn dphi_probe_path_sampled(call_id: u64) -> Option<&'static str> {
+    dphi_probe_path().filter(|_| call_id % DPHI_PROBE_SAMPLE_EVERY == 0)
+}
+
+fn dphi_probe_writer(
+    path: &'static str,
+) -> &'static std::sync::Mutex<std::io::BufWriter<std::fs::File>> {
+    static WRITER: std::sync::OnceLock<std::sync::Mutex<std::io::BufWriter<std::fs::File>>> =
+        std::sync::OnceLock::new();
+    WRITER.get_or_init(|| {
+        let fh = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .expect("POLYFISH_DPHI_PROBE path must be writable");
+        std::sync::Mutex::new(std::io::BufWriter::new(fh))
+    })
+}
+
+/// Flush any buffered probe rows. Statics never run `Drop` at process exit,
+/// so without this the last (sub-8KB) buffered chunk would be silently lost;
+/// call once from `self_play`'s teardown. No-op if the probe was never used.
+pub fn dphi_probe_flush() {
+    if let Some(path) = dphi_probe_path() {
+        use std::io::Write;
+        if let Ok(mut w) = dphi_probe_writer(path).lock() {
+            let _ = w.flush();
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn dphi_probe_row(
-    path: &str,
+    path: &'static str,
     call_id: u64,
     turn: i32,
     player: PlayerId,
@@ -73,6 +118,11 @@ fn dphi_probe_row(
     dphi_full: f32,
     dphi_no_aux: f32,
 ) {
+    if DPHI_PROBE_ROWS_WRITTEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        >= DPHI_PROBE_MAX_ROWS
+    {
+        return;
+    }
     let t = crate::ai::mapper::DecomposedMapper::move_to_targets(m, map_size);
     let f = |x: Option<usize>| x.map(|v| v.to_string()).unwrap_or_else(|| "null".into());
     let row = format!(
@@ -84,8 +134,8 @@ fn dphi_probe_row(
         f(t.target_type),
     );
     use std::io::Write;
-    if let Ok(mut fh) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-        let _ = fh.write_all(row.as_bytes());
+    if let Ok(mut w) = dphi_probe_writer(path).lock() {
+        let _ = w.write_all(row.as_bytes());
     }
 }
 
@@ -161,7 +211,7 @@ pub fn rank_plies(
     } else {
         0.0
     };
-    let probe_path = dphi_probe_path();
+    let probe_path = dphi_probe_path_sampled(call_id);
     let phi_pre_no_aux = probe_path
         .map(|_| reward::goal_potential_with_threats(&game.state, player, goal, None, None));
     let turn = game.state.settings.turn;
