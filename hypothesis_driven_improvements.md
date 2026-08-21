@@ -7832,3 +7832,55 @@ and a decision on whether that cost is acceptable. The distilled-head path
 remains open but its offline evidence so far is genuinely mixed, not a
 green light — needs the retrain-with-regret-metric pass before Phase 1
 commits to the harvesting infrastructure build-out.
+
+**Correction — n=128 re-run (same night, same paired seed): the n=48
+"coherent degradation" was itself noise.** Ran the exact same A/B at
+n=128 (clears the established 7.8pp win-rate noise floor cleanly, vs
+n=48's inflated ~12-13pp):
+
+| | baseline (λ=1/1), n=128 | rollout-λ=0, n=128 |
+|---|---|---|
+| **moves/sec** | 89.24 | **594.04 (6.66x)** |
+| anchor_net_wr | 67.19% | 66.41% (**−0.78pp — inside the 7.8pp noise floor**) |
+| avg_score | 5627.5 | 5641.9 (+0.25%) |
+| avg_captures | 5.63 | 5.84 (+3.7%) |
+| avg_hubs_built | 2.63 | 3.19 (**+21%**) |
+| avg_research | 7.35 | 7.27 (−1.1%) |
+| avg_kills | 15.21 | 14.21 (−6.6%) |
+| avg_moves/game | 279.2 | 284.0 (+1.7%) |
+| avg_revealed_tiles | 110.23 | 110.03 (flat) |
+
+The n=48 pattern I read as "coherent multi-metric degradation, therefore
+real despite being sub-noise-floor" did not reproduce at a properly-powered
+sample. Win rate is now flat within noise; score/captures/hubs are
+flat-to-*better*; only avg_kills still shows a real-looking but modest
+(−6.6%) drop, down from n=48's −11.6% reading. **Lesson for this session,
+not just this experiment: "coherent co-movement" from a small sample is
+not automatically stronger evidence than an isolated metric — it can be
+the same underlying noise expressing itself correlatedly across score-
+derived metrics that all move together within one game (a few unlucky/
+lucky games at n=48 move score, kills, AND research together because
+they're computed on the same small set of game outcomes, not because
+they're independently confirming a real effect).** Always prefer the
+bigger n over a "coherent" small one when both are cheap to get.
+
+Throughput also came in *higher* at n=128 (6.66x vs n=48's 4.52x) — both
+clear, and in fact exceed, the 3.3-5.0x envelope computed earlier from the
+70-80% Δφ-CPU-share estimate, suggesting either that share is a
+conservative floor in this exact config or there's a secondary win from
+skipping `threat_units`/`phi_pre` entirely at λ=0 (both gated behind
+`lambda != 0.0`, not just the per-candidate scoring loop).
+
+**Revised disposition: `--macro-rollout-lambda 0.0` is a real, ~5-6.7x
+throughput win with no detected behavioral cost at n=128 vs the Greedy
+anchor.** This is the single highest-confidence, immediately actionable
+result of tonight's work — a one-flag change already in the shipped
+binary, no Rust/network work needed, gated on nothing but the user's
+sign-off. It doesn't fully close task 62 (this only tests the *complete
+removal* of rollout Δφ scoring, not whether a learned head could add
+value beyond score_move-only elsewhere), but it answers the war room's
+throughput question more directly and more cheaply than the distillation
+plan it was meant to validate a slice of. The distilled-head path is now
+explicitly optional, not required for the throughput goal — its remaining
+case would have to be a *quality* argument (e.g. Research pricing, per
+Phase 0a) rather than a throughput one.
