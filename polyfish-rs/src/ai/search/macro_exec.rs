@@ -95,18 +95,76 @@ fn dphi_probe_writer(
     })
 }
 
-/// Flush any buffered probe rows. Statics never run `Drop` at process exit,
-/// so without this the last (sub-8KB) buffered chunk would be silently lost;
-/// call once from `self_play`'s teardown. No-op if the probe was never used.
+/// Derived path for the Phase 0c state-feature dump (one entry per sampled
+/// call, not per candidate — a full `RawFeatures` is ~82KB, so per-candidate
+/// would repeat it 20-300x for no reason). Binary, not JSONL: `[call_id: u64
+/// LE][n_spatial: u32][n_player: u32][spatial f32...][player f32...]`.
+fn dphi_probe_features_path() -> Option<&'static str> {
+    static PATH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| dphi_probe_path().map(|p| format!("{p}.features.bin")))
+        .as_deref()
+}
+
+fn dphi_probe_features_writer(
+    path: &'static str,
+) -> &'static std::sync::Mutex<std::io::BufWriter<std::fs::File>> {
+    static WRITER: std::sync::OnceLock<std::sync::Mutex<std::io::BufWriter<std::fs::File>>> =
+        std::sync::OnceLock::new();
+    WRITER.get_or_init(|| {
+        let fh = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .expect("dphi probe features path must be writable");
+        std::sync::Mutex::new(std::io::BufWriter::new(fh))
+    })
+}
+
+/// Encodes the same way the real distilled head would see this state at
+/// inference (goal channels painted from `goal`); `pursuit_focus` is left
+/// `None` — not load-bearing for the Phase 0c agreement check.
+fn dphi_probe_write_state(call_id: u64, state: &GameState, player: PlayerId, goal: &MacroGoal) {
+    let Some(path) = dphi_probe_features_path() else {
+        return;
+    };
+    let Ok(feats) =
+        crate::ai::features::state_to_cpu_features_goal(state, player, None, Some(goal))
+    else {
+        return;
+    };
+    use std::io::Write;
+    if let Ok(mut w) = dphi_probe_features_writer(path).lock() {
+        let _ = w.write_all(&call_id.to_le_bytes());
+        let _ = w.write_all(&(feats.spatial.len() as u32).to_le_bytes());
+        let _ = w.write_all(&(feats.player.len() as u32).to_le_bytes());
+        for v in feats.spatial.iter().chain(feats.player.iter()) {
+            let _ = w.write_all(&v.to_le_bytes());
+        }
+    }
+}
+
+/// Flush any buffered probe rows/features. Statics never run `Drop` at
+/// process exit, so without this the last (sub-8KB) buffered chunk would be
+/// silently lost; call once from `self_play`'s teardown. No-op if the probe
+/// was never used.
 pub fn dphi_probe_flush() {
+    use std::io::Write;
     if let Some(path) = dphi_probe_path() {
-        use std::io::Write;
         if let Ok(mut w) = dphi_probe_writer(path).lock() {
+            let _ = w.flush();
+        }
+    }
+    if let Some(path) = dphi_probe_features_path() {
+        if let Ok(mut w) = dphi_probe_features_writer(path).lock() {
             let _ = w.flush();
         }
     }
 }
 
+/// `score_move`/`lambda` are logged alongside Δφ because `rank_plies` ranks
+/// on `score_move + λ·Δφ`, not Δφ alone — the Phase 0c offline gate has to
+/// reconstruct that same sum (with a predicted Δφ) to measure the real
+/// top-1 agreement, and `score_move` can't be recomputed from Python.
 #[allow(clippy::too_many_arguments)]
 fn dphi_probe_row(
     path: &'static str,
@@ -115,6 +173,8 @@ fn dphi_probe_row(
     player: PlayerId,
     m: &dyn Move,
     map_size: usize,
+    score_move: f32,
+    lambda: f32,
     dphi_full: f32,
     dphi_no_aux: f32,
 ) {
@@ -126,7 +186,7 @@ fn dphi_probe_row(
     let t = crate::ai::mapper::DecomposedMapper::move_to_targets(m, map_size);
     let f = |x: Option<usize>| x.map(|v| v.to_string()).unwrap_or_else(|| "null".into());
     let row = format!(
-        "{{\"call_id\":{call_id},\"turn\":{turn},\"player\":{player},\"move_type\":\"{:?}\",\"action_type\":{},\"source\":{},\"target\":{},\"option\":{},\"dphi_full\":{dphi_full:.6},\"dphi_no_aux\":{dphi_no_aux:.6}}}\n",
+        "{{\"call_id\":{call_id},\"turn\":{turn},\"player\":{player},\"move_type\":\"{:?}\",\"action_type\":{},\"source\":{},\"target\":{},\"option\":{},\"score_move\":{score_move:.6},\"lambda\":{lambda:.6},\"dphi_full\":{dphi_full:.6},\"dphi_no_aux\":{dphi_no_aux:.6}}}\n",
         m.move_type(),
         t.action_type,
         f(t.source_spatial),
@@ -214,6 +274,9 @@ pub fn rank_plies(
     let probe_path = dphi_probe_path_sampled(call_id);
     let phi_pre_no_aux = probe_path
         .map(|_| reward::goal_potential_with_threats(&game.state, player, goal, None, None));
+    if probe_path.is_some() {
+        dphi_probe_write_state(call_id, &game.state, player, goal);
+    }
     let turn = game.state.settings.turn;
     let map_size = game.state.settings.size as usize;
     let mut scored: Vec<(f32, Box<dyn Move>)> = moves
@@ -244,6 +307,8 @@ pub fn rank_plies(
                             player,
                             m.as_ref(),
                             map_size,
+                            s,
+                            lambda,
                             phi_post - phi_pre,
                             phi_post_no_aux - phi_pre_no_aux.unwrap_or(0.0),
                         );
