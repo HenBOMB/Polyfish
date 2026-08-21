@@ -8102,3 +8102,22 @@ off the paired-seed A/B until the full 40-iteration run completes
 (checkpoint's macro head has clearly converged already, but the loop is
 still making real progress on policy/value — no reason to interrupt it,
 and "one heavy process at a time" still applies).
+
+**Run complete (iteration 40/40, exit code 0, ~5.5h wall-clock 12:20-17:47,
+run_id 1787307645):** final reading `macro_stance_loss=0.9450
+macro_order_loss=0.0229` — kept improving through the whole run rather
+than plateauing early, finishing clearly below both the mid-run
+0.955-0.968 band and the old leaky run's 0.974 floor. General loop health:
+`value_r2` closed at 0.8293 (dipped to ~0.81 around iter 25-30, recovered
+— read as training noise, not a real degradation, given `avg_score` never
+wavered from its healthy 4200-4900 range across the whole run). No
+crashes, no anomalies. `model.safetensors` updated to the final checkpoint
+(17:47) — live and ready for validation. Checkpoints saved every 5
+iterations (`checkpoints/gauge_1787307645_iter{5..40}.safetensors`).
+
+**Prediction 1 verdict:** the loss trajectory alone now clearly supports
+"real, board-conditioned signal survives the fix" over "still leaking" or
+"no signal" — a genuinely leak-dependent head would be expected to
+plateau near or above the old floor once its shortcut is removed, not
+keep improving past it for 40 iterations. Moving to the decisive test:
+the paired-seed root-prior A/B (task #71) against this checkpoint.
