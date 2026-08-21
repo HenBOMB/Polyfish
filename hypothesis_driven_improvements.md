@@ -7669,3 +7669,62 @@ Tasks #60/#61 (this doc's originating TaskCreate list) done; proceeding to
 0c (offline top-1 agreement gate) next — that one still needs its own
 harvest, since this probe never captured state features, only move coords
 + Δφ.
+
+### Throughput envelope (task 64, production-config harvest, Aug 21 ~04:40)
+
+Extended the probe (commit 59b6672) with `score_move`/`lambda` per row (the
+real ranking is `score_move + λ·Δφ`, not Δφ alone) and a per-call
+`state_to_cpu_features_goal` dump, then re-ran at the **originally
+registered production config** (`--macro-sims 64 --macro-k 6`, not the
+8/4 used for OOM-safety earlier) — the write-storm fix held: 8 games, exit
+0, 318.89s. Confirms at production scale: **178,392 `rank_plies` calls,
+48.58/move decision, 47.7 candidates/call** — consistent with two earlier,
+independently-measured readings this session (48.19/42.5 and 46.62/61.4),
+so this ratio looks stable across macro-sims/k settings, not an artifact of
+the smaller Phase-0a/0b harvest config.
+
+This run's own throughput reading (11.52 moves/sec) is **not** used as the
+clean baseline — it's contaminated by the probe's own overhead (aux-free
+recompute + feature encode on sampled calls) and this host's ongoing memory
+pressure, the same caveat already logged for EXP_ELO_064's concurrent run.
+The clean reference is the 15.89 moves/sec unconstrained baseline arm
+(macro-mcts, production config, no instrumentation) already established
+this session.
+
+**The envelope:** distillation replaces ~2290 raw Δφ evaluations/move
+(48 calls × 47.7 candidates, each a simulate_move→score→undo cycle, 70-80%
+of actor CPU per EXP_ELO_062) with **~48 batched net forwards/move** — one
+per `rank_plies` call, scoring all its candidates in one pass via decomposed
+coordinates, mirroring how the main policy head already amortizes ~25
+candidates into one forward. At the 15.89 moves/sec baseline pace that's
+~763 new forwards/sec aggregate demand — well inside the measured MPSGraph
+ceiling (22K/s single-queue, up to 40K/s at 4 queues, see
+[[metal-mpsgraph-eval-pipeline]]), so raw eval *capacity* is not the binding
+constraint.
+
+**Ceiling, assuming perfect elimination:** 1/(1−0.70) to 1/(1−0.80) =
+**3.3x-5.0x**, i.e. ~53-79 moves/sec off the clean baseline — matching (and
+the actual source of) the plan document's stated "3-4x, not 10x." Since
+Phase 4's hybrid design only replaces Δφ inside `expand()`'s rollouts (the
+sims:1-dominant majority of the ~48 calls/move) and leaves the one real
+per-ply commit (`rank_view`) on exact scoring, this ceiling should be
+largely reachable without full replacement — though rollout-vs-real-commit
+call counts haven't been separately tagged yet (a cheap Phase 1 addition:
+mark each probe row/call by call site).
+
+**What's NOT resolved by this number, and is the real risk:** macro-mcts
+currently makes **zero** eval-server calls (`"forwards": 0` in every
+`EVAL_SERVER_STATS_AGG` this session, including this run's own) — wiring
+ply-distillation in means macro-mcts touches that channel for the first
+time, at a call rate (~48/move) far above anything currently exercising it,
+from deep inside a synchronous CPU rollout loop. This project has already
+measured two "should obviously help" throughput levers (`--leaf-batch`
+4→6, coalesce-timeout 1000µs→2000µs) land net-negative because the system
+is actor-*latency*-bound, not batch-size-bound — so whether this new call
+pattern coalesces well across concurrent actors or instead serializes each
+one on round-trips is a real open question, not a formality. This is
+exactly what the plan's Phase 4 gate (`EVAL_SERVER_STATS_AGG` rows/forwards
+ratio, paired behavior A/B) exists to catch, and it hasn't been measured
+yet — no Rust wiring for inference exists at this point in the plan, only
+harvest instrumentation. **Read this envelope as an upper bound on the
+win, not a promised number.**
