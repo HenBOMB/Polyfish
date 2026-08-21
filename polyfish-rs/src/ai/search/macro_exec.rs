@@ -65,6 +65,7 @@ fn dphi_probe_path() -> Option<&'static str> {
 #[allow(clippy::too_many_arguments)]
 fn dphi_probe_row(
     path: &str,
+    call_id: u64,
     turn: i32,
     player: PlayerId,
     m: &dyn Move,
@@ -75,7 +76,7 @@ fn dphi_probe_row(
     let t = crate::ai::mapper::DecomposedMapper::move_to_targets(m, map_size);
     let f = |x: Option<usize>| x.map(|v| v.to_string()).unwrap_or_else(|| "null".into());
     let row = format!(
-        "{{\"turn\":{turn},\"player\":{player},\"move_type\":\"{:?}\",\"action_type\":{},\"source\":{},\"target\":{},\"option\":{},\"dphi_full\":{dphi_full:.6},\"dphi_no_aux\":{dphi_no_aux:.6}}}\n",
+        "{{\"call_id\":{call_id},\"turn\":{turn},\"player\":{player},\"move_type\":\"{:?}\",\"action_type\":{},\"source\":{},\"target\":{},\"option\":{},\"dphi_full\":{dphi_full:.6},\"dphi_no_aux\":{dphi_no_aux:.6}}}\n",
         m.move_type(),
         t.action_type,
         f(t.source_spatial),
@@ -128,7 +129,11 @@ pub fn rank_plies(
     star_gate: bool,
     lambda: f32,
 ) -> Vec<(f32, Box<dyn Move>)> {
-    RANK_PLIES_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // Pre-increment value doubles as a unique per-call ID for the dphi
+    // probe below — two rows sharing a call_id came from the same ply
+    // decision; two rows sharing only (turn, player) may not (many
+    // rollout branches revisit the same turn number).
+    let call_id = RANK_PLIES_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut moves = game.legal_moves();
     moves.retain(|m| gate_ok(&game.state, m.as_ref(), star_gate, Some(goal.stance), Some(aux)));
     let has_other = moves.iter().any(|m| m.move_type() != MoveType::EndTurn);
@@ -184,6 +189,7 @@ pub fn rank_plies(
                         );
                         dphi_probe_row(
                             path,
+                            call_id,
                             turn,
                             player,
                             m.as_ref(),
