@@ -8271,8 +8271,51 @@ regression.** The onset is near-immediate at the lightest touch, and it
 gets worse again at 0.2, not better. This points away from "just needs a
 smaller dose" and back toward hypothesis #2 — the head's per-decision
 discrimination isn't trustworthy yet, independent of how lightly it's
-weighted. `root_prior_w` stays at 0 (default, shipped behavior). Next
-real diagnostic (not run, scoped for a future session): inspect what the
-prior actually ranks first vs. what the tree's own unweighted search
-converges to on a sample of real root states, to see whether the head's
-top pick is merely noisy or systematically wrong.
+weighted.
+
+**Round 4 (Verdi, correctly suspicious of "0.02 already catastrophic" —
+pushed further down to 0.01/0.005/0.001).** Before running more blind
+sweep points, checked the actual numbers: this same file's `EXPLORATION`
+constant doc comment documents the MEASURED root Q-value spread between
+candidates as **0.01–0.06** — razor thin, and `EXPLORATION=0.05` was
+hand-tuned specifically against that tiny margin. The PUCT bonus term is
+`prior · root_prior_w · √visits / (1+edge_visits)`; at `sims=16`
+(√16=4), a typical prior mass ~0.3, and an under-visited edge (visits=1),
+that term is `0.3 · w · 4/2 = 0.6w`. At `w=0.02` that's ~0.012 — already
+the same order of magnitude as the ENTIRE native signal (0.01–0.06) the
+search exists to resolve. "Small" in absolute terms was never small
+relative to this specific root's decision margin. Predicted a real floor
+should exist once `w` drops far enough below that ratio (~0.01 and under).
+
+| weight | anchor_net_wr |
+|---|---|
+| 0 (baseline, n=128) | 70.31% |
+| **0.001** | **68.75%** |
+| **0.005** | **75.0%** |
+| 0.01 | 56.25% |
+| 0.02 | 56.25% |
+| 0.05 | 56.25% |
+| 0.1 | 56.25% |
+| 0.2 | 50.0% |
+
+**Confirmed, not just plausible: there is a sharp threshold between 0.005
+and 0.01.** Both 0.001 and 0.005 land at or above the n=128 baseline
+(0.005 even nominally exceeds it, though at n=32 that specific point isn't
+distinguishable from "at baseline" — the real finding is that both clear
+the regression cluster entirely) while every weight from 0.01 up falls
+into the same tight 50-56% band. This directly falsifies the "the head's
+predictions aren't trustworthy at any weight" reading from round 3 —
+the mechanism was a genuine scale mismatch between the PUCT bonus term
+and this root's unusually tiny native Q-spread, not an indictment of the
+head's judgment itself. Verdi's instinct to keep pushing was correct: an
+18-25pp regression appearing at a "small" weight like 0.02 WAS suspicious,
+and the suspicion had a real, findable cause.
+
+**Next step (not yet run):** confirm at n=128 whether `root_prior_w` in
+[0.001, 0.005] is a genuine improvement over baseline or landed inside
+noise at n=32 — the two points bracket a real floor, but n=32 isn't
+enough to certify a positive result, only to rule out the catastrophic
+regression. `root_prior_w` stays at its default 0.0 for the overnight
+training run below (self-play generation should not risk an unconfirmed
+prior corrupting the data the macro head itself is learning from) — this
+becomes the first thing to validate once the loop finishes.
