@@ -8086,3 +8086,19 @@ more iterations to settle — not re-running it against an 8-iteration
 checkpoint given the old leaky head needed ~12 to plateau. Letting the
 loop continue toward its full 40 iterations before that check, per the
 "one heavy process at a time" rule (no A/B concurrent with the loop).
+
+**Update, iterations 9-21:** the loss kept falling past the old plateau
+rather than converging back to it — 0.9745 (iter 9) → 0.9574 (iter 15) →
+stabilizing in a 0.955-0.968 band through iter 21 (macro_order_loss
+similarly flat/slightly improved, ~0.024). This is a real, if modest,
+result: the goal-blind head converges to a *lower* loss than the leaky
+head ever reached (0.974), not a higher one — consistent with the
+leaky version's "echo the input" solution actually being a *worse* local
+optimum than what the optimizer finds once that shortcut is unavailable
+and it's forced to use genuine board-state features from the start. Not
+dramatic, but it directly contradicts the "task got harder, loss goes up"
+half of the registered prediction, in the encouraging direction. Holding
+off the paired-seed A/B until the full 40-iteration run completes
+(checkpoint's macro head has clearly converged already, but the loop is
+still making real progress on policy/value — no reason to interrupt it,
+and "one heavy process at a time" still applies).
