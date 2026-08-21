@@ -163,21 +163,21 @@ impl Node {
     }
 
     /// UCT over edges on [0,1]-mapped Q; unvisited edges first, in candidate
-    /// order (base first) — UNLESS `edge_prior` is populated (root-only,
-    /// `root_prior_w > 0.0`), in which case cold-start visits the
-    /// highest-prior unvisited edge first, and the exploration score gets a
-    /// PUCT-style `prior/(1+n)` bonus on top of the existing UCT term (added,
-    /// not replacing it, so `EXPLORATION`'s existing tuning stays valid when
-    /// the prior is off).
+    /// order (base first) — ALWAYS, regardless of `edge_prior`. A first
+    /// version let the prior reorder cold-start too, but `argmax(w·p)` picks
+    /// the same edge for every `w > 0` — that reordering was a hard on/off
+    /// switch, not a dial, and with only `sims`=16-64 split across a handful
+    /// of candidates, cold start alone can dominate the whole tree's visit
+    /// budget. Measured: `root_prior_w=0.05` regressed nearly as hard as
+    /// `1.0` (EXP_ELO_067 sweep, Aug 21) — the smoking gun for exactly this.
+    /// Cold start now stays prior-agnostic on principle (byte-identical to
+    /// plain UCT at this stage, prior or not); once every edge has a visit,
+    /// the exploration score gets a PUCT-style `prior/(1+n)` bonus on top of
+    /// the existing UCT term (added, not replacing it), which IS genuinely
+    /// continuous in `root_prior_w` — this is the only place the prior acts.
     fn select_edge(&self) -> usize {
         if let Some(i) = self.edge_visits.iter().position(|&v| v == 0.0) {
-            if self.edge_prior.is_empty() {
-                return i;
-            }
-            return (0..self.candidates.len())
-                .filter(|&j| self.edge_visits[j] == 0.0)
-                .max_by(|&a, &b| self.edge_prior[a].total_cmp(&self.edge_prior[b]))
-                .unwrap_or(i);
+            return i;
         }
         let ln_n = self.visits.max(1.0).ln();
         let sqrt_n = self.visits.max(1.0).sqrt();
@@ -1559,15 +1559,18 @@ mod tests {
         assert_eq!(n.select_edge(), 1, "highest-Q edge once all are visited, prior absent");
     }
 
-    /// With `edge_prior` populated, cold-start should visit the
-    /// highest-prior UNVISITED edge first, not just list order.
+    /// Cold-start stays list-order even with `edge_prior` populated — the
+    /// prior only acts once every edge has a visit (see `select_edge`'s doc
+    /// comment: a first version let the prior reorder cold-start too, which
+    /// turned out to be a hard on/off switch rather than a dial, since
+    /// argmax(w*p) doesn't depend on w for any w>0).
     #[test]
-    fn select_edge_prior_guides_cold_start() {
+    fn select_edge_cold_start_ignores_prior() {
         let game = generated_game(1);
         let root_turn = game.state.settings.turn;
         let mut n = bare_node(&game, root_turn, 3);
         n.edge_prior = vec![0.1, 0.7, 0.2]; // edge 1 is the prior's clear favorite
-        assert_eq!(n.select_edge(), 1, "cold-start should pick the highest-prior edge, not edge 0");
+        assert_eq!(n.select_edge(), 0, "cold-start picks list order regardless of prior");
     }
 
     /// Once every edge has visits, a strong prior on a mediocre-Q edge
