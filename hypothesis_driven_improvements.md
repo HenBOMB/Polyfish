@@ -7884,3 +7884,40 @@ plan it was meant to validate a slice of. The distilled-head path is now
 explicitly optional, not required for the throughput goal — its remaining
 case would have to be a *quality* argument (e.g. Research pricing, per
 Phase 0a) rather than a throughput one.
+
+## EXP_ELO_066 — War-room item 3: wire the macro policy head as a root PUCT prior (registered)
+
+STATUS: REGISTERED, implementation committed (`fc44256`), behavioral A/B
+about to run.
+
+CONTEXT: `pi_macro_stance`/`pi_macro_order` have been trained since
+EXP_ELO_061 Step 5 (self_play.rs's `macro_policy_targets` marginalizes the
+root's post-search visit distribution into (stance[4], order[3·H·W]) soft
+targets) but were never consumed anywhere at inference — `select_edge` ran
+plain UCT with no prior term. This is exactly the war room's item 3: "the
+NN inject prior at the root of the macro-mcts... to help guide its search."
+
+HYPOTHESIS: seeding the root's edge selection with the trained head's
+(stance, order) prediction — PUCT-style: highest-prior unvisited edge
+first at cold start, then `+ prior/(1+n)` added to the existing UCT score
+— should let the tree converge on the winning directive with fewer wasted
+visits on low-value candidates, showing up as a higher win rate and/or
+higher root_visit_max_share at matched sims, without needing to touch the
+ply-level executor at all (unlike the shelved distillation plan, a stale
+prior here only costs search efficiency, not correctness — the tree still
+truth-checks every candidate via the same exact, live-config-reading
+heuristic Δφ/score_move regardless of what the prior suggested. Materially
+safer on the version-resilience axis Verdi raised for the ply-distillation
+plan).
+
+METHOD: paired-seed A/B, same harness as the rollout-lambda measurement —
+`--base-seed 770425`, fixed Imperius/Imperius, `--anchor-frac 1.0` vs the
+Greedy anchor, `--macro-sims 16 --macro-k 4`, n=128 (going straight to the
+noise-floor-clearing sample size this time, having measured tonight that
+n=48 produces misleading "coherent" noise). Arm A: `root_prior_w=0.0`
+(current shipped behavior). Arm B: `root_prior_w=1.0` (untuned, O(1)
+AlphaZero-convention starting point — not swept). Sequential, not
+concurrent. `model.safetensors` unchanged between arms (same mtime check
+as the gauge harness — the prior reads the currently-shipped
+macro_stance/macro_order weights, so this specifically tests THIS
+checkpoint's head quality, not the mechanism in the abstract).
