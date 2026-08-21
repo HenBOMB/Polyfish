@@ -25,7 +25,6 @@ use crate::settings::get_unit_setting;
 use crate::settings::has_technology;
 use crate::states::*;
 use crate::types::*;
-use std::sync::{OnceLock, RwLock};
 
 /// Get the current player's tribe (POV = Point of View)
 pub fn get_pov_tribe(state: &GameState) -> Option<&TribeState> {
@@ -115,29 +114,15 @@ pub fn get_squared_euclidean_distance(a: i32, b: i32, size: i32) -> i32 {
     dx * dx + dy * dy
 }
 
-/// Get adjacent tile indices
-/// (map_size, idx, range) -> neighbor indices. Pure geometry -- depends on
-/// nothing but the map's fixed size, never on tile/unit/tribe contents -- so
-/// once computed for a given map a result never changes for the rest of the
-/// process. Keyed on size (not hardcoded to 11x11) since eco_plan and other
-/// tools run this against arbitrary map sizes.
-static ADJACENCY_CACHE: OnceLock<RwLock<HashMap<(i32, i32, i32), Vec<i32>>>> = OnceLock::new();
-
+/// Get adjacent tile indices in a (2*range+1)x(2*range+1) square, excluding
+/// the center. Pure geometry -- a global RwLock<HashMap> cache sat here
+/// (Aug 2026, meant to dodge Vec realloc churn) but under 128 self-play
+/// actors it became a lock-contention bottleneck (~40x actor-side slowdown,
+/// confirmed via `sample`: this frame alone dominated the profile) for a
+/// problem the pre-sized capacity below already solves without a cache.
 pub fn get_adjacent_indices(state: &GameState, idx: i32, range: i32) -> Vec<i32> {
     let size = state.settings.size;
-    let key = (size, idx, range);
-    let cache = ADJACENCY_CACHE.get_or_init(|| RwLock::new(HashMap::new()));
-
-    if let Some(cached) = cache.read().unwrap().get(&key) {
-        return cached.clone();
-    }
-
     let coords = Coords::from_index(idx, size);
-    // Exact upper bound (the full (2r+1)x(2r+1) square minus the center) --
-    // pre-sized so the push loop below never reallocates. Profiling
-    // (EXP_ELO_061 throughput investigation, Aug 2026) found this call was
-    // hot enough under macro-mcts's per-ply move ranking that its realloc
-    // churn showed up as a distinct line in the CPU profile.
     let cap = ((2 * range + 1) * (2 * range + 1) - 1).max(0) as usize;
     let mut result = Vec::with_capacity(cap);
 
@@ -154,7 +139,6 @@ pub fn get_adjacent_indices(state: &GameState, idx: i32, range: i32) -> Vec<i32>
         }
     }
 
-    cache.write().unwrap().insert(key, result.clone());
     result
 }
 
