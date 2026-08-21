@@ -8247,3 +8247,32 @@ weight positively at *any* meaningful level yet, so more weight on a
 not-yet-trustworthy signal just buys more bias away from otherwise-sound
 pure-Q exploration. If a sweet spot exists at all under this trend, it's
 close to zero, not in the 0.1-0.2 range Verdi asked to check first.
+
+**Weight sweep, round 3 — pushed down to 0.02/0.05 per Verdi's request, to
+check for a low-weight sweet spot:**
+
+| weight | anchor_net_wr | avg_score | avg_hubs_built | avg_captures |
+|---|---|---|---|---|
+| 0 (baseline, n=128) | 70.31% | 5982.3 | 3.375 | 5.99 |
+| 0.02 (n=32) | 56.25% | 4984.7 | 1.78 | 4.75 |
+| 0.05 (n=32) | 56.25% | 5018.6 | 2.66 | 4.53 |
+| 0.1 (n=32) | 56.25% | 5082.5 | 2.31 | 4.59 |
+| 0.2 (n=32) | 50.0% | 4808.6 | 1.59 | 4.41 |
+
+**No sweet spot found down to 0.02.** Win rate lands on the exact same
+56.25% at three different weights spanning a 5x range (0.02, 0.05, 0.1) —
+under the same paired seed, consistent with a fairly discrete set of
+individual game-decisions flipping once the prior engages at all, rather
+than damage scaling continuously from zero. If this were pure n=32 noise
+around the true baseline, at least some of these four points would be
+expected to land close to 70%; instead all four cluster 14-20pp below it.
+**Verdict: there is no tested weight in [0.02, 0.2] that avoids the
+regression.** The onset is near-immediate at the lightest touch, and it
+gets worse again at 0.2, not better. This points away from "just needs a
+smaller dose" and back toward hypothesis #2 — the head's per-decision
+discrimination isn't trustworthy yet, independent of how lightly it's
+weighted. `root_prior_w` stays at 0 (default, shipped behavior). Next
+real diagnostic (not run, scoped for a future session): inspect what the
+prior actually ranks first vs. what the tree's own unweighted search
+converges to on a sample of real root states, to see whether the head's
+top pick is merely noisy or systematically wrong.
