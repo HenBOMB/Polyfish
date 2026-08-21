@@ -8121,3 +8121,42 @@ iterations (`checkpoints/gauge_1787307645_iter{5..40}.safetensors`).
 plateau near or above the old floor once its shortcut is removed, not
 keep improving past it for 40 iterations. Moving to the decisive test:
 the paired-seed root-prior A/B (task #71) against this checkpoint.
+
+**Prediction 2 (item 2's actual validation) — `--dump-value-calib` against
+the final checkpoint, EXP_ELO_060 protocol** (mirror self-play, net-asym
+leaf, macro-sims 32/k 4, goal-channels, base_seed 1787400000, 60 games,
+random tribes; n=25868 net-seat rows — hit the tch/libtorch DYLD_LIBRARY_PATH
+issue first run, `.run_bin/self_play` links tch-eval even when
+`--eval-backend metal` is selected, fixed by exporting the same env vars
+`run_training_loop.sh` itself sets):
+
+| metric | iter135 (old) | iter175 (old, regressed) | this checkpoint |
+|---|---|---|---|
+| r2(root_value, final_outcome) | 0.452 | 0.440 | 0.427 |
+| r2(score_ratio, final_outcome) [scoreboard] | 0.369 | 0.470 | 0.201 |
+| **net edge over scoreboard** | +0.083 | **−0.030** | **+0.226** |
+| saturation \|root_value\|>0.8 | 27.9% | 59.7% | 55.4% |
+| turn[30,40) r2 | 0.489 (n=980) | **0.016 (n=122)** | **0.972 (n=758)** |
+
+Aggregate r2 alone reads flat-to-slightly-lower (0.427 vs 0.44-0.45) —
+but that number isn't directly comparable across checkpoints: `final_outcome`
+itself is a different, less-saturated target under `outcome_scale=1.5` than
+under the old runs' `3.0`, so the raw r2 floor moves with the label, not
+just the head. The scoreboard baseline dropping to 0.201 in this sample is
+the same effect on the OTHER side of the comparison. **The edge over that
+matched, same-sample baseline is the clean read, and it's decisively
+positive**: +0.226, nearly 3x the best historical edge (+0.083) and a full
+reversal of iter175's negative regression (−0.030). The turn[30,40) slice
+— explicitly flagged in EXP_ELO_060 as the phase that matters most for a
+macro leaf and where iter175 had collapsed to r2=0.016 — reads 0.972 here,
+at a comparable sample size (758 vs 980/122). Saturation is still elevated
+(55.4%, down from 59.7% but nowhere near iter135's 27.9%) — the head is
+still overconfident more often than not, so this isn't a clean sweep.
+
+**Disposition: item 2's actual validation lands positive**, not just the
+label-saturation stats from EXP_ELO_064. The value head's real predictive
+edge over a naive baseline improved substantially and the specific game
+phase flagged as broken is now well-calibrated. Saturation remains a real,
+unresolved weakness — worth a future pass, not blocking. `outcome_scale=1.5`
++ this training run is a genuine improvement to the leaf-judgment quality
+the war room's item 2 was asking about, not just a relabeling exercise.
