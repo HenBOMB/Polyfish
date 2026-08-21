@@ -100,6 +100,12 @@ struct Node {
     /// directive they executed. `None` at the root. This is the one piece of
     /// committed-directive truth a leaf can have without searching.
     from: Option<(PlayerId, MacroGoal)>,
+    /// Root-only PUCT-style prior over `candidates`, decoded from the macro
+    /// policy head's (stance, order) prediction at this node's state and
+    /// pre-scaled by `MacroParams::root_prior_w`. Empty for every non-root
+    /// node and for the root when the weight is 0.0 (the default) — in both
+    /// cases `select_edge` runs the original plain-UCT path unchanged.
+    edge_prior: Vec<f32>,
 }
 
 impl Node {
@@ -152,21 +158,37 @@ impl Node {
             visits: 0.0,
             frozen_value,
             from,
+            edge_prior: Vec::new(),
         }
     }
 
     /// UCT over edges on [0,1]-mapped Q; unvisited edges first, in candidate
-    /// order (base first).
+    /// order (base first) — UNLESS `edge_prior` is populated (root-only,
+    /// `root_prior_w > 0.0`), in which case cold-start visits the
+    /// highest-prior unvisited edge first, and the exploration score gets a
+    /// PUCT-style `prior/(1+n)` bonus on top of the existing UCT term (added,
+    /// not replacing it, so `EXPLORATION`'s existing tuning stays valid when
+    /// the prior is off).
     fn select_edge(&self) -> usize {
         if let Some(i) = self.edge_visits.iter().position(|&v| v == 0.0) {
-            return i;
+            if self.edge_prior.is_empty() {
+                return i;
+            }
+            return (0..self.candidates.len())
+                .filter(|&j| self.edge_visits[j] == 0.0)
+                .max_by(|&a, &b| self.edge_prior[a].total_cmp(&self.edge_prior[b]))
+                .unwrap_or(i);
         }
         let ln_n = self.visits.max(1.0).ln();
+        let sqrt_n = self.visits.max(1.0).sqrt();
         let mut best = 0;
         let mut best_score = f32::NEG_INFINITY;
         for i in 0..self.candidates.len() {
             let q01 = (self.edge_values[i] / self.edge_visits[i] + 1.0) / 2.0;
-            let score = q01 + EXPLORATION * (ln_n / self.edge_visits[i]).sqrt();
+            let mut score = q01 + EXPLORATION * (ln_n / self.edge_visits[i]).sqrt();
+            if let Some(&p) = self.edge_prior.get(i) {
+                score += p * sqrt_n / (1.0 + self.edge_visits[i]);
+            }
             if score > best_score {
                 best_score = score;
                 best = i;
@@ -174,6 +196,56 @@ impl Node {
         }
         best
     }
+}
+
+/// Decode the macro policy head's marginalized (stance[4], order[3·H·W])
+/// prediction into a per-candidate prior, mirroring `self_play.rs`'s
+/// `macro_policy_targets` in reverse: that function sums visit-mass INTO
+/// stance/order; this scores each candidate's (stance, orders) choice
+/// AGAINST the predicted marginals. Orders were never trained as a joint
+/// distribution (each (kind, target) slot is an independent sigmoid), so a
+/// candidate with multiple orders is scored by their geometric mean, not
+/// product — a plain product would shrink toward 0 with every extra order
+/// regardless of how well each one matches, penalizing goals for having
+/// more concurrent orders rather than for being a worse match. Returns a
+/// distribution over `candidates` (sums to 1); falls back to uniform if the
+/// decoded scores are degenerate (all ~0 or non-finite).
+fn decode_macro_prior(
+    stance_probs: &[f32],
+    order_maps: &[f32],
+    candidates: &[MacroGoal],
+    map_size: usize,
+) -> Vec<f32> {
+    let board = map_size * map_size;
+    let mut raw: Vec<f32> = candidates
+        .iter()
+        .map(|g| {
+            let stance_p = stance_probs.get(g.stance as usize).copied().unwrap_or(0.0).max(1e-6);
+            if g.orders.is_empty() {
+                return stance_p;
+            }
+            let log_sum: f32 = g
+                .orders
+                .iter()
+                .map(|&(kind, target)| {
+                    let idx = kind as usize * board
+                        + usize::try_from(target).unwrap_or(0).min(board.saturating_sub(1));
+                    order_maps.get(idx).copied().unwrap_or(0.0).max(1e-6).ln()
+                })
+                .sum();
+            let geo_mean = (log_sum / g.orders.len() as f32).exp();
+            stance_p * geo_mean
+        })
+        .collect();
+    let total: f32 = raw.iter().sum();
+    if total <= 0.0 || !total.is_finite() {
+        let n = candidates.len().max(1);
+        return vec![1.0 / n as f32; candidates.len()];
+    }
+    for r in raw.iter_mut() {
+        *r /= total;
+    }
+    raw
 }
 
 /// Search telemetry from the last `run` call (smoke instrumentation).
@@ -320,6 +392,36 @@ impl<'a> MacroMctsSearch<'a> {
         root.edge_visits = vec![0.0; n];
         root.edge_values = vec![0.0; n];
         root.edge_shape = vec![0.0; n];
+
+        // War-room item 3: inject the (previously orphaned — trained via
+        // macro_policy_targets, never consumed) macro policy head as a
+        // PUCT-style prior at the root only, one eval call per real turn
+        // decision (not per rollout — cheap). Root has no committed
+        // directive yet, so paint the scripted base goal, matching
+        // `leaf_value`'s existing fallback convention for the same
+        // situation. Off (0.0 weight) by default: skips the eval call
+        // entirely and leaves `edge_prior` empty, so `select_edge` is
+        // byte-identical to plain UCT unless explicitly turned on.
+        if params.root_prior_w > 0.0 && n > 0 {
+            let scripted_goal = compute_macro_goal(&root_game.state, pov, own_counters.tier3_bought);
+            if let Ok(feats) = crate::ai::features::state_to_cpu_features_goal(
+                &root_game.state,
+                pov,
+                None,
+                Some(&scripted_goal),
+            ) {
+                if let Some(result) = evaluator.evaluate(vec![feats]).into_iter().next() {
+                    if let (Some(stance), Some(order)) =
+                        (&result.2.macro_stance, &result.2.macro_order)
+                    {
+                        let map_size = root_game.state.settings.size as usize;
+                        let prior = decode_macro_prior(stance, order, &root.candidates, map_size);
+                        root.edge_prior =
+                            prior.iter().map(|p| p * params.root_prior_w).collect();
+                    }
+                }
+            }
+        }
 
         let mut search = MacroMctsSearch {
             nodes: vec![root],
@@ -985,6 +1087,7 @@ impl<'a> MacroMctsAgent<'a> {
 mod tests {
     use super::*;
     use crate::ai::eval_server::{DummyEvalHandle, Evaluator};
+    use crate::ai::oracle_macro::{OrderKind, Stance};
 
     fn generated_game(seed: i64) -> Game {
         let mut game = Game::new();
@@ -1360,5 +1463,121 @@ mod tests {
             assert_eq!(c.techs_bought, 0, "fresh game should derive 0 bought techs");
             assert_eq!(c.tier3_bought, 0);
         }
+    }
+
+    /// War-room item 3: `decode_macro_prior` should rank a candidate whose
+    /// stance and orders match the head's high-probability picks above one
+    /// that doesn't, and always return a valid distribution (sums to 1).
+    #[test]
+    fn decode_macro_prior_favors_matching_stance_and_orders() {
+        let map_size = 3; // board = 9, keep the order maps small and readable
+        let board = map_size * map_size;
+        let mut stance_probs = vec![0.1f32; 4];
+        stance_probs[Stance::Arm as usize] = 0.7; // head strongly prefers Arm
+        let mut order_maps = vec![0.05f32; 3 * board];
+        order_maps[OrderKind::Attack as usize * board + 4] = 0.9; // Attack@tile4 strongly preferred
+
+        let matching = MacroGoal {
+            orders: vec![(OrderKind::Attack, 4)],
+            stance: Stance::Arm,
+            save_target: None,
+        };
+        let mismatched = MacroGoal {
+            orders: vec![(OrderKind::Defend, 0)],
+            stance: Stance::Grow,
+            save_target: None,
+        };
+        let candidates = vec![matching, mismatched];
+
+        let prior = decode_macro_prior(&stance_probs, &order_maps, &candidates, map_size);
+        assert_eq!(prior.len(), 2);
+        assert!(
+            (prior.iter().sum::<f32>() - 1.0).abs() < 1e-5,
+            "prior must sum to 1, got {prior:?}"
+        );
+        assert!(
+            prior[0] > prior[1],
+            "the stance+order-matching candidate should outrank the mismatched one: {prior:?}"
+        );
+    }
+
+    /// Degenerate input (all-zero maps) must fall back to uniform, not NaN
+    /// or a divide-by-zero panic -- `select_edge`'s cold-start path does a
+    /// `max_by` over this vector and a NaN would silently wreck the pick.
+    #[test]
+    fn decode_macro_prior_degenerate_input_is_uniform_not_nan() {
+        let map_size = 3;
+        let board = map_size * map_size;
+        let stance_probs = vec![0.0f32; 4];
+        let order_maps = vec![0.0f32; 3 * board];
+        let candidates = vec![MacroGoal::default(), MacroGoal::default(), MacroGoal::default()];
+        let prior = decode_macro_prior(&stance_probs, &order_maps, &candidates, map_size);
+        for p in prior {
+            assert!((p - 1.0 / 3.0).abs() < 1e-6, "expected ~1/3, got {p}");
+        }
+    }
+
+    fn bare_node(game: &Game, root_turn: i32, candidates: usize) -> Node {
+        let heur = |s: &crate::states::GameState, p: PlayerId, _t3: u32| crate::ai::evaluate_state(s, p);
+        let mut n = Node::new(
+            game.clone(),
+            1,
+            [TurnCounters::default(); 2],
+            Default::default(),
+            root_turn,
+            candidates,
+            None,
+            &heur,
+        );
+        n.candidates = vec![MacroGoal::default(); candidates];
+        n.children = vec![None; candidates];
+        n.edge_visits = vec![0.0; candidates];
+        n.edge_values = vec![0.0; candidates];
+        n
+    }
+
+    /// With `edge_prior` empty (the default, and the case whenever
+    /// `root_prior_w == 0.0`), `select_edge` must behave exactly as before
+    /// this change: unvisited edges in list order, then plain UCT.
+    #[test]
+    fn select_edge_unchanged_when_prior_empty() {
+        let game = generated_game(1);
+        let root_turn = game.state.settings.turn;
+        let mut n = bare_node(&game, root_turn, 3);
+        assert_eq!(n.select_edge(), 0, "first unvisited edge, list order");
+
+        n.edge_visits = vec![5.0, 5.0, 5.0];
+        n.edge_values = vec![1.0, 3.0, 2.0]; // edge 1 has the best mean Q
+        n.visits = 15.0;
+        assert_eq!(n.select_edge(), 1, "highest-Q edge once all are visited, prior absent");
+    }
+
+    /// With `edge_prior` populated, cold-start should visit the
+    /// highest-prior UNVISITED edge first, not just list order.
+    #[test]
+    fn select_edge_prior_guides_cold_start() {
+        let game = generated_game(1);
+        let root_turn = game.state.settings.turn;
+        let mut n = bare_node(&game, root_turn, 3);
+        n.edge_prior = vec![0.1, 0.7, 0.2]; // edge 1 is the prior's clear favorite
+        assert_eq!(n.select_edge(), 1, "cold-start should pick the highest-prior edge, not edge 0");
+    }
+
+    /// Once every edge has visits, a strong prior on a mediocre-Q edge
+    /// should be able to overturn the plain-UCT pick -- otherwise the
+    /// prior would only ever affect cold start and never bias search
+    /// toward the head's judgment during actual exploration.
+    #[test]
+    fn select_edge_prior_can_overturn_plain_uct_pick() {
+        let game = generated_game(1);
+        let root_turn = game.state.settings.turn;
+        let mut n = bare_node(&game, root_turn, 2);
+        n.edge_visits = vec![5.0, 5.0];
+        n.edge_values = vec![1.0, 0.8]; // edge 0 wins on Q alone
+        n.visits = 10.0;
+        assert_eq!(n.select_edge(), 0, "sanity: edge 0 wins without a prior");
+
+        n.edge_prior = vec![0.0, 5.0]; // large weight, all on edge 1
+        assert_eq!(n.select_edge(), 1, "a strong prior should be able to flip the pick");
     }
 }

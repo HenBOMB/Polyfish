@@ -3214,6 +3214,14 @@ fn main() -> anyhow::Result<()> {
         #[arg(long, default_value_t = 0.0)]
         macro_shape_w: f32,
 
+        /// War-room item 3: weight on the macro policy head's PUCT-style
+        /// prior at the search root (0 = off, plain UCT — the default).
+        /// Costs one eval-server call per real turn decision (not per
+        /// rollout) when nonzero; the heuristic path otherwise never
+        /// touches the eval server at all.
+        #[arg(long, default_value_t = 0.0)]
+        macro_root_prior_w: f32,
+
         /// What an n-step return does when its checkpoint reports no root
         /// value. `zero` bootstraps with 0.0 (legacy); `mc` carries the
         /// weight to the terminal return instead of pulling the label toward
@@ -3424,7 +3432,8 @@ fn main() -> anyhow::Result<()> {
             || args.macro_k != 4
             || args.macro_lambda != 1.0
             || args.macro_rollout_lambda.is_some()
-            || args.macro_shape_w != 0.0)
+            || args.macro_shape_w != 0.0
+            || args.macro_root_prior_w != 0.0)
     {
         anyhow::bail!("--macro-* flags require --search-backend macro-mcts");
     }
@@ -3435,6 +3444,7 @@ fn main() -> anyhow::Result<()> {
         rollout_lambda: args.macro_rollout_lambda.unwrap_or(args.macro_lambda),
         sims: args.macro_sims,
         shape_w: args.macro_shape_w,
+        root_prior_w: args.macro_root_prior_w,
         ..MacroParams::default()
     };
 

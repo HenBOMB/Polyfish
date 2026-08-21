@@ -59,6 +59,13 @@ pub struct MacroParams {
     /// EXP_ELO_036b: weight on potential-based Δφ edge rewards in the macro
     /// tree (pov's own edges only; 0.0 = off, byte-identical to pre-036b).
     pub shape_w: f32,
+    /// War-room item 3: weight on the macro policy head's PUCT-style prior
+    /// at the search root (0.0 = off, byte-identical plain UCT — the
+    /// default, since this requires an eval-server call the heuristic path
+    /// otherwise never makes). See `select_edge`'s doc comment for the
+    /// formula and `decode_macro_prior` for how (stance, order) predictions
+    /// become a per-candidate score.
+    pub root_prior_w: f32,
 }
 
 impl Default for MacroParams {
@@ -72,6 +79,7 @@ impl Default for MacroParams {
             sims: 32,
             belief_mode: BeliefMode::Off,
             shape_w: 0.0,
+            root_prior_w: 0.0,
         }
     }
 }

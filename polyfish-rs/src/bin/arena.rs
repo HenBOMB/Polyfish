@@ -273,6 +273,16 @@ struct Args {
     /// Same as --macro-shape-w1, for config 2.
     #[arg(long, default_value_t = 0.0)]
     macro_shape_w2: f32,
+
+    /// War-room item 3: config 1's weight on the macro policy head's
+    /// PUCT-style prior at the search root (0 = off, plain UCT). Requires
+    /// an eval-server call the heuristic path otherwise never makes.
+    #[arg(long, default_value_t = 0.0)]
+    macro_root_prior_w1: f32,
+
+    /// Same as --macro-root-prior-w1, for config 2.
+    #[arg(long, default_value_t = 0.0)]
+    macro_root_prior_w2: f32,
 }
 
 fn load_model(path: &str, device: &candle_core::Device) -> anyhow::Result<PolyZeroNet> {
@@ -1415,12 +1425,14 @@ fn main() -> anyhow::Result<()> {
         sims: args.macro_sims,
         belief_mode: BeliefMode::Off,
         shape_w: 0.0,
+        root_prior_w: 0.0,
     };
     let macro_params1 = MacroParams {
         sims: args.macro_sims1.unwrap_or(args.macro_sims),
         k: args.macro_k1.unwrap_or(args.macro_k),
         belief_mode: belief_mode1,
         shape_w: args.macro_shape_w1,
+        root_prior_w: args.macro_root_prior_w1,
         leaf: args.macro_leaf1.unwrap_or(args.macro_leaf),
         ..base_params
     };
@@ -1429,6 +1441,7 @@ fn main() -> anyhow::Result<()> {
         k: args.macro_k2.unwrap_or(args.macro_k),
         belief_mode: belief_mode2,
         shape_w: args.macro_shape_w2,
+        root_prior_w: args.macro_root_prior_w2,
         leaf: args.macro_leaf2.unwrap_or(args.macro_leaf),
         ..base_params
     };
