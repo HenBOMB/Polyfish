@@ -8042,3 +8042,47 @@ TWO FALSIFIABLE PREDICTIONS, pre-registered:
 Item 4 itself: read directly off the loop's own metrics (training_log.csv,
 value_r2, gauge win-rate trend, SPT/territory curves) — no separate
 validation needed, that IS the training run.
+
+**ACTUAL — prediction 1 interim reading (iterations 1-8, run_id
+1787307645):** launched cleanly (confirmed the goal-blind zeroing slice is
+mechanically correct on real archived data first: goal-channel abs-sum
+121-184 before, exactly 0.0 after, non-goal channels byte-identical). No
+crashes; loop health is good and improving — `value_r2` 0.8375→0.8549,
+`avg_score` stable 4200-4790, no degradation.
+
+Macro loss trend, isolated to this run only (careful — `session.log` is a
+long-lived file interleaved with the OLD pre-fix run's history, which
+independently shows the exact same 1.00→0.97 decay by iteration 12 quoted
+in EXP_ELO_066; cross-checked against `training_log.csv`'s run_id column
+to avoid conflating the two):
+
+| iter | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+|---|---|---|---|---|---|---|---|---|
+| stance | 1.0044 | 0.9975 | 0.9956 | 0.9936 | 0.9878 | 0.9849 | 0.9806 | 0.9760 |
+| order | 0.0254 | 0.0250 | 0.0248 | 0.0249 | 0.0249 | 0.0250 | 0.0248 | 0.0246 |
+
+This is converging back toward the OLD leaky run's ~0.97-0.98 plateau, not
+staying elevated toward it — by iteration 8 it's already at 0.9760, right
+in the old run's final range, and order loss hasn't moved at all. Neither
+of the two pre-registered branches fits cleanly: it's nowhere near the
+1.386 uniform-baseline ceiling (rules out "zero signal"), but it isn't
+converging *above* the old value either, the way "the shortcut is gone and
+the task got honestly harder" predicted.
+
+**Reframing, not abandoning, the prediction:** the flat premise — leaky
+loss low, blind loss high — assumed the goal channels were the *only*
+route to predicting the search's own conclusion. They aren't. Raw board
+state (army composition, territory, city development, enemy positions)
+independently constrains what a sane macro-mcts search would converge to
+— an army massed at the border implies Arm+Attack whether or not a goal
+channel says so. So a comparable achievable loss with vs. without the
+goal channels painted is also consistent with "the head found genuine
+board-conditioned signal that doesn't need the leak at all," which is
+exactly what a useful root prior needs — not a failure mode. The loss
+number alone can't distinguish this from "still leaking somewhere else";
+only the behavioral test can. **Deferring the verdict to the paired-seed
+A/B (task #71) against this retrained head**, once the checkpoint has had
+more iterations to settle — not re-running it against an 8-iteration
+checkpoint given the old leaky head needed ~12 to plateau. Letting the
+loop continue toward its full 40 iterations before that check, per the
+"one heavy process at a time" rule (no A/B concurrent with the loop).
