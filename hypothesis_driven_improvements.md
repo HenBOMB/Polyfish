@@ -7921,3 +7921,69 @@ concurrent. `model.safetensors` unchanged between arms (same mtime check
 as the gauge harness — the prior reads the currently-shipped
 macro_stance/macro_order weights, so this specifically tests THIS
 checkpoint's head quality, not the mechanism in the abstract).
+
+**ACTUAL:**
+
+| | arm A: root_prior_w=0.0 | arm B: root_prior_w=1.0 |
+|---|---|---|
+| anchor_net_wr | 64.06% | **45.31% (−18.75pp)** |
+| avg_score | 5477.4 | 4531.9 (−17.3%) |
+| avg_captures | 5.51 | 4.54 (−17.6%) |
+| avg_hubs_built | 2.73 | 2.03 (−25.6%) |
+| avg_moves/game | 280.8 | 256.2 |
+| avg_research | 7.46 | 7.58 (flat) |
+| avg_kills | 14.98 | 14.35 (flat-ish) |
+
+−18.75pp is nowhere near the 7.8pp noise floor — this is a real, large,
+unambiguous regression, not noise (unlike tonight's earlier n=48 scare).
+Absolute throughput isn't usable as a clean read here — arm A logged
+31.41 moves/sec (2209s) and arm B logged 67.48 moves/sec (1071s) *despite
+arm B doing strictly more work* (3342 extra eval-server forwards vs arm
+A's 0), which only makes sense as ambient host contention swinging between
+runs, not a code effect; the win-rate/score/captures/hubs comparison is
+still trustworthy since both arms ran back-to-back under whatever
+conditions applied at the time.
+
+**Root cause, confirmed by reading the training pipeline (not guessed):**
+`self_play.rs:1991` paints every training row's spatial features with
+`current_agent.macro_committed_goal().or_else(|| macro_goal.clone())` —
+**the goal the search already CHOSE**, post-search. `macro_stance`/
+`macro_order` (self_play.rs:4518, `macro_policy_targets`) are the visit-mass
+marginalization of that SAME search's root ballot — and the committed goal
+is, by construction, the highest-visit candidate. So the label the head
+was trained to predict is heavily weighted toward a candidate whose own
+identity is already painted into the input it's predicting from. The head
+didn't need to learn "what makes a good directive" — it could partially
+solve the task by learning to echo what's already sitting in its own
+goal-channel input, a leak baked into the pipeline the day this head's
+targets were added, invisible until something tried to read the head
+at a point where the true answer ISN'T known yet (the root, before search
+— exactly where a prior is supposed to be useful).
+
+At inference, the root doesn't have a committed goal (that's what the
+search is FOR), so `run_with` paints the scripted/base goal instead —
+correctly matching `leaf_value`'s existing convention for the same "no
+committed directive yet" situation, but a convention this specific head
+was **never trained on**. The mismatch doesn't produce a merely-uninformative
+prior; it produces a confidently-wrong one, because the network still
+partially reads its input goal channels as "the answer" and now those
+channels show the wrong (unchosen, scripted-baseline) directive — actively
+steering the tree toward it.
+
+This is not fixable by reweighting `root_prior_w`, tuning the decode
+formula, or picking a different inference-time painting (there is no
+correct painting to choose — the true committed goal is unknowable at the
+root by definition). It requires retraining `macro_stance`/`macro_order`
+on a goal-blind (or scripted-goal-only) feature convention that actually
+matches the situation a root prior faces, which is a real, separate
+training-pipeline change, not a follow-up tuning pass.
+
+**Disposition:** implementation (PUCT wiring, `decode_macro_prior`, tests)
+is sound and kept — `root_prior_w` defaults to 0.0, so nothing shipped
+changes current behavior. The mechanism is real and reusable the moment a
+correctly-trained head exists; today's head is not that head. War-room
+item 3 is **blocked on a training-data fix** (repaint the macro_stance/
+macro_order label rows with a goal-blind convention and retrain), not on
+more inference-side work. Recommend holding here rather than continuing to
+iterate blind on `root_prior_w` — the −18.75pp isn't a dial to tune away,
+it's the label leak surfacing.
