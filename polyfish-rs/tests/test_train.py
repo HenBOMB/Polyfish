@@ -247,5 +247,54 @@ class WidthParityTest(unittest.TestCase):
         self.assertEqual(declared, self._rust_tripwire("PLAYER_STATE_DIM"))
 
 
+class EnvContractTest(unittest.TestCase):
+    """Every env var train.py reads must be exported by run_training_loop.sh or
+    be a declared optional knob (#30: TRAIN_RUN_ID/TRAIN_TOTAL_ITERS were read
+    but never exported, so run scoping was dead code and the cosine LR pinned
+    at its floor across campaigns). Source-level, so it runs without torch."""
+
+    # Knobs a user sets by hand for an off-default run; the loop deliberately
+    # does not export them. Adding a var here is a claim that train.py's
+    # default is the production behavior.
+    OPTIONAL = {
+        "TRAIN_EPOCHS",
+        "TRAIN_LR",
+        "TRAIN_HOLDOUT_FRAC",
+        "TRAIN_CHUNK_FILES",
+        "TRAIN_OPTIMIZER_STATE",
+        "VALUE_LOSS_WEIGHT",
+        "OWNERSHIP_LOSS_WEIGHT",
+        "AUGMENT_D4",
+    }
+
+    @staticmethod
+    def _read(path):
+        with open(os.path.join(ROOT, path)) as f:
+            return f.read()
+
+    def test_every_env_read_is_exported_or_declared_optional(self):
+        reads = set(
+            re.findall(r'os\.environ(?:\.get\(|\[)\s*"([A-Z0-9_]+)"', self._read("train.py"))
+        )
+        self.assertTrue(reads, "no os.environ reads found in train.py — regex rotted?")
+        exports = set(
+            re.findall(r'^\s*export ([A-Z0-9_]+)=', self._read("run_training_loop.sh"), re.M)
+        )
+        unaccounted = reads - exports - self.OPTIONAL
+        self.assertEqual(
+            unaccounted, set(),
+            f"train.py reads {sorted(unaccounted)} but run_training_loop.sh never exports "
+            "them and they are not on the optional-knob allowlist. Export from the loop or "
+            "add to EnvContractTest.OPTIONAL — silently falling back to the default is how "
+            "run scoping became dead code (#30).",
+        )
+
+    def test_run_scoping_is_exported(self):
+        exports = set(
+            re.findall(r'^\s*export ([A-Z0-9_]+)=', self._read("run_training_loop.sh"), re.M)
+        )
+        self.assertLessEqual({"TRAIN_RUN_ID", "TRAIN_TOTAL_ITERS"}, exports)
+
+
 if __name__ == "__main__":
     unittest.main()
