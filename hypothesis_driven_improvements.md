@@ -7028,3 +7028,644 @@ validated. What's left is entirely in the "does it help" category —
 train it for real, then wire the UCT consumption, then measure against
 the heuristic-leaf baseline the way every other arm on this axis has
 been measured. Verdi's call on when to spend that compute.
+
+### Step 4 (registered, Aug 19): first real training at nonzero weight
+
+Verdi: "wire that so the policy head can actually start learning and
+improving." On investigation the wiring already existed end-to-end
+(Rust capture → shard serialization → train.py loss computation →
+`total_loss` summation, all previously validated in step 3c/3d) — the
+only actual gap was `MACRO_STANCE_W`/`MACRO_ORDER_W` defaulting to 0.0,
+so the layers existed in `model.safetensors` (random-init) but had
+never received a nonzero gradient. `macro_mcts.rs`'s UCT consumption
+still deliberately waits (step 3d's own stopping point) — this step is
+scoped to "does the head learn," not "does search improve."
+
+**Hypothesis**: with `MACRO_GEN=1` (real macro-mcts self-play, non-
+zero `macro_mask` rows exist) and `MACRO_STANCE_W=MACRO_ORDER_W=0.1`
+(chosen to match the existing `AUX_WEIGHTS` convention of 0.1-0.3 — the
+step-3c smoke test's 1.0 was a gradient-flow check only, not a tuned
+value; at 1.0 the fresh-init losses (stance 1.658, order 0.681) would
+be ~1/3 of total_loss against a ~3.6-4.5 policy loss, too large a
+share for an unproven head's first real run), `macro_stance`/
+`macro_order` loss should appear in the training log (previously
+absent — the `if MACRO_STANCE_W > 0.0` gate skipped the block
+entirely) and DECLINE across iterations on fresh (non-archived) data —
+archived pre-step-1 shards (including all of run 1786710389's 60
+MACRO_GEN iterations) predate the macro tensors and are correctly
+zero-masked, so the supervised fraction is smaller than 100% while
+old archives are still in the training mix.
+
+**Expected**: within-iteration loss decline is trivial (any fresh
+head fits noise short-term); the real signal is decline ACROSS
+iterations. Sized to `-i 3` to `-i 5` (a probe, not a long unattended
+run — matching `feedback-size-data-runs-to-the-question`). Also
+free: iteration 1's self-play wall-clock under `MACRO_GEN=1` is the
+still-open measurement from EXP_ELO_063's scope correction (does the
+`get_adjacent_indices` fix help macro-heur generation, vs. the Aug 16
+baseline of 7-12 min/iteration pre-`8288f82`).
+
+**Actual (Aug 19, `-i 4`, `MACRO_GEN=1 GOAL_CHANNELS=1 MACRO_STANCE_W=0.1
+MACRO_ORDER_W=0.1 ./run_training_loop.sh -i 4`)** — one launch blocker
+found and fixed on the way: `--search-backend macro-mcts` hard-requires
+`--goal-channels` (self_play's own precondition check, unrelated to this
+step — "the tree's committed directive would otherwise be dropped from
+the recorded features"); `GOAL_CHANNELS=1` wasn't set on the first
+attempt and self_play refused to run rather than silently dropping data.
+Backend verified three ways per the registered discipline: the `🌲
+MACRO_GEN=1` echo, the CONFIG line (`backend=--search-backend macro-mcts
+... goal_channels=1 ... macro_stance_w=0.1 macro_order_w=0.1`), and
+ground truth on the fresh shard (`macro_mask` mean 0.9398 over 25749
+rows — the vast majority of decisions genuinely supervised).
+
+**CONFIRMED: the head is learning.** Both loss terms declined
+monotonically across all 4 real iterations, with supervised row count
+climbing each iteration as fresh macro-mcts shards accumulate and
+pre-step-1 archives (which predate the macro tensors, correctly
+zero-masked) get diluted out of the training mix:
+
+| iter | macro_stance_loss | macro_order_loss | supervised rows | fraction |
+|---|---|---|---|---|
+| 1 | 1.0056 | 0.0307 | 40,050 / 415,885 | 9.6% |
+| 2 | 1.0005 | 0.0279 | 69,322 / 438,870 | 15.8% |
+| 3 | 0.9920 | 0.0260 | 96,313 / 464,750 | 20.7% |
+| 4 | 0.9886 | 0.0250 | 112,983 / 482,570 | 23.4% |
+
+Stance loss (0.99, iter 4) sits meaningfully below the uniform-guess
+baseline (ln(4) ≈ 1.386) and below the step-3c smoke test's fresh-init
+value (1.658) after just one real epoch, confirming genuine
+discrimination rather than the smoke test's single-batch gradient
+check. Order loss's absolute value is less interpretable alone (BCE
+against a sparse per-tile target rewards "predict near-zero" even
+without learning) but the consistent downward trend alongside stance's
+is corroborating, not the primary signal.
+
+**Two side findings, both investigated and resolved as non-issues**:
+(1) `Sim move failures: 15691/25749 (61%)` on iteration 1's self-play —
+every prior gumbel run this session read exactly 0 here. Traced to
+`game.rs:333`/`SIM_MOVE_FAILURES`, explicitly documented as "MCTS
+stale-tree reuse, expected & self-healed" — macro-mcts's much deeper
+adversarial tree search hits this self-healing path far more than
+Gumbel's search structure does; not a new bug. (2) Iteration 1's
+self-play wall-clock: **460.54s (56.18 moves/sec)** — within the Aug 16
+pre-`8288f82` baseline range (7-12 min/iteration), confirming
+EXP_ELO_063's scope correction empirically: **the `get_adjacent_indices`
+fix does NOT meaningfully speed up the macro-heur generation path.**
+The 70-80%-of-cost Δφ/threat-scoring bottleneck
+(`macro-heur-generation-is-structurally-slow` memory) remains
+unaddressed and is the real lever for generation throughput.
+
+**Deliberately NOT done, per the registered plan's own sequencing**:
+`macro_mcts.rs` still doesn't consume `pi_macro_stance`/`pi_macro_order`
+in its UCT selection — this step was scoped to "does the head learn,"
+not "does search improve." That's the natural next step now that
+there's something real to consult, but it's a separate, larger change
+to the live search path and gets its own decision to spend the compute.
+
+**Disposition: Step 4 confirmed, not yet shipped as a standing default.**
+`MACRO_STANCE_W`/`MACRO_ORDER_W` stay 0.0 by convention until a longer
+run + the UCT-consumption step + a real A/B settle whether this helps
+strength, per every other arm on this axis. What's proven now: the
+pipeline is not just wired, it demonstrably learns from real production
+data. `run_training_loop.sh`'s CONFIG echo (line 598) now includes both
+weights for future auditability — this is what caught the earlier
+gumbel-backend mistakes and should catch the next one too.
+
+**Step 5 (registered, Aug 19): resume the same run for a longer stretch,
+same question — does loss keep dropping.** Step 4's 4 iterations showed a
+monotonic but small decline (stance 1.0056→0.9886, order 0.0307→0.0250)
+with supervised-row fraction still climbing (9.6%→23.4%, not yet
+saturated as fresh macro-mcts data keeps diluting the old zero-masked
+archive). Too short to tell whether the head is still in the fast part of
+its curve or already flattening. **Hypothesis**: continuing the same run
+(`--resume`, same `run_id=1787139710`, same weights) for several more
+iterations continues the decline, roughly tracking the supervised-fraction
+climb, until either the fraction saturates (all archived data now
+macro-tagged) or the loss visibly plateaus first. **Expected**: both
+losses keep declining monotonically or near-monotonically; if either
+flattens well before the supervised fraction saturates, that's the more
+interesting result (suggests 0.1 weight or head capacity, not data
+scarcity, is the limiter). **Not yet decided**: how many iterations is
+enough to answer this — starting with a modest extension and checking
+the trend rather than committing to a long unattended run up front, per
+the project's own past correction against over-sizing exploratory runs.
+Launch: `MACRO_GEN=1 GOAL_CHANNELS=1 MACRO_STANCE_W=0.1 MACRO_ORDER_W=0.1
+./run_training_loop.sh --resume -i 8`.
+
+**Actual (Aug 19-20, iterations 5-12, same run_id=1787139710):**
+
+| iter | macro_stance_loss | macro_order_loss | supervised rows | fraction |
+|---|---|---|---|---|
+| 5 | 0.9846 | 0.0246 | 142,375 / 460,342 | 30.9% |
+| 6 | 0.9831 | 0.0242 | 169,964 / 445,730 | 38.1% |
+| 7 | 0.9843 | 0.0237 | 199,515 / 407,940 | 48.9% |
+| 8 | 0.9831 | 0.0236 | 231,529 / 381,934 | 60.6% |
+| 9 | 0.9848 | 0.0235 | 258,410 / 355,242 | 72.7% |
+| 10 (league) | 0.9820 | 0.0234 | 287,072 / 342,358 | 83.9% |
+| 11 | 0.9808 | 0.0231 | 317,400 / 332,240 | 95.5% |
+| 12 | **0.9742** | 0.0231 | 323,588 / 338,825 | 95.5% |
+
+**Order loss** kept declining through iteration 11 then flattened (0.0231→0.0231
+across 11-12) — plausibly near its floor for a BCE target against a sparse
+per-tile map (predicting near-zero everywhere already scores well).
+
+**Stance loss did NOT track the supervised-fraction climb the way Step 4's
+short run suggested it might.** It plateaued in a tight 0.9808-0.9848 band
+for iterations 6-11 despite coverage climbing 38%→95.5% over that stretch —
+directly answering this step's own registered question: **the limiter
+through iteration 11 was NOT data scarcity** (coverage kept climbing with no
+matching loss movement), consistent with weight (0.1) or head capacity being
+the binding constraint instead. Iteration 12 then broke below the whole
+plateau (0.9742, the run's lowest reading) with coverage essentially flat
+(95.5%→95.5%) — a real move, not more data diluting in, but a single point
+right at the end of this stretch. Read with appropriate caution: could be
+the head finally finding traction, could be one favorable batch. Coverage
+is now saturated, so a further extension would be a cleaner test of "is 12
+the start of a second decline phase or noise" than Step 4/5 could offer,
+uncontaminated by the coverage confound.
+
+**Disposition: Step 5 confirmed the head keeps learning on order, and
+surfaced a real open question on stance** (plateau-then-break, cause
+unconfirmed) rather than settling it. `MACRO_STANCE_W`/`MACRO_ORDER_W` stay
+0.0 by convention; nothing here changes Step 4's disposition on shipping,
+UCT-consumption, or the A/B requirement.
+
+## EXP_ELO_062 — per-ply move-generation cache (`PlyMoveCache`): built, proven correct, measured slower
+
+**Hypothesis**: `execute_turn`'s ply loop (`macro_exec.rs`) regenerates and
+rescores every unit's legal army moves (capture/action/attack/step) from
+scratch on every single ply of a turn, even though most plies only change a
+small, local part of the board. Memoizing each unit's candidate moves across
+plies within one turn — invalidating only units whose own fingerprint or
+footprint tiles actually changed — should recover the wasted regen work and
+raise self-play throughput. (Note: the commit-message/comment label
+`EXP_ELO_061` used during this investigation's early throughput-profiling
+work, before this entry was written, collides with the already-shipped
+macro_policy/macro_stance/macro_order head-wiring experiment above — that
+number was taken. This entry and the surviving code comments use
+`EXP_ELO_062`; the already-committed mislabeled comments in
+`run_training_loop.sh`, `arena.rs`, `functions.rs`, and `combat.rs` from the
+actor-scaling/adjacency-memoization commit (`8288f82`) were left as-is
+rather than retroactively edited — cosmetic only, not touched here.)
+
+**Expected**: fewer redundant `generate_army_moves_for_unit` calls per turn
+→ measurably higher self-play moves/sec at production config
+(`--macro-sims 64 --macro-k 6`), heuristic-leaf macro-mcts.
+
+**Built**: `ai::search::ply_cache::PlyMoveCache`, turn-scoped (constructed
+fresh at the top of `execute_turn_recorded`, dropped at turn end — no
+statics, no cross-turn/cross-actor sharing). A unit's cached moves are
+reused only if (a) its own fingerprint (type/moved/attacked/health/veteran/
+kills/passenger/effects) is unchanged, and (b) no tile in its footprint (a
+Chebyshev-disc superset of true movement+attack reach) changed, per a full
+per-tile fingerprint diffed every ply. `rank_plies_cached` is a drop-in
+alternative to the existing `rank_plies`, sharing the same `gate_and_score`
+tail so it cannot drift from the uncached path except in the one piece it
+replaces.
+
+**Correctness — three real bugs found and fixed via shadow validation**
+(running both the cached and uncached rankings on identical state every ply
+of real self-play games and diffing them), not by inspection:
+1. `UnitFingerprint` didn't track a unit's `effects` set — a unit gaining
+   `Boosted` (+1 movement) mid-turn kept serving its pre-boost, shorter-reach
+   cached step list.
+2. No tribe-level tech-gating invalidation — `is_navigationable_terrain`
+   gates Water/Ocean/Mountain passability off `tribe.tech_vanilla`, global
+   state no per-unit footprint represents. Fixed by hashing the tribe's tech
+   list and clearing the whole per-unit cache on change.
+3. **The subtle one**: bug #2's fingerprint hashed only `t.discovered`
+   entries, mirroring `has_technology`'s convention. But
+   `is_navigationable_terrain` (like several other terrain/passability
+   checks) reads tech list PRESENCE, not `discovered` — matching a second,
+   deliberately different helper, `is_tech_unlocked` ("used for unlocking
+   units/actions during MCTS simulations"). A tech bought mid-rollout
+   (`_are_you_sure=false`, so `discovered=false`) already unlocks its
+   terrain for the rest of that rollout by design — not an engine bug, not
+   undo residue (`unlock_tech`'s `.pop()` undo is fine; probes are
+   sequential push/pop pairs) — just a fingerprint using the wrong helper's
+   semantics. Root-caused only after exhaustively ruling out everything else
+   (full raw `TileState` and `UnitState` snapshots at cache time vs. now,
+   both byte-identical; generation confirmed deterministic when called twice
+   back-to-back) — the tech list was the one piece of state never
+   fingerprinted at all. Fixed by hashing tech PRESENCE
+   (`(tech_type, discovered)` pairs, not filtered), matching what generation
+   actually reads.
+
+After fix #3: generation-time mismatches (cached move set vs. a fresh
+`generate_legal_moves` call at the same instant, before any scoring) went
+from 8 to 0 across a 4-game/4-actor validation run. 217/217 lib tests pass.
+One residual score-only mismatch remained in the verify harness (same move
+set both sides, a few Δφ scores differ) — attributed to the harness's own
+multi-pass-per-ply scoring (cached pass + two self-check passes + baseline
+pass, each with its own simulate/undo probing) rather than a production
+issue, since production runs exactly one scoring pass per ply through the
+same shared `gate_and_score`; unconfirmed (the planned same-seed game-log
+A/B to settle it turned out to be invalid — see below) but doesn't block
+anything, since the cache is shipping default-off regardless (see verdict).
+
+**Actual — throughput regression, not a win**: two independent A/B runs at
+production config (`--macro-sims 64 --macro-k 6`, same seed, `VERIFY_PLY_
+CACHE` off), cached vs. an env-gated bypass to the uncached `rank_plies`:
+~8.6 vs ~12.5 moves/sec (contaminated by TEMP debug fields — see below), and
+after stripping those fields, 9.94 vs 12.63 moves/sec — the cache is
+**~20-25% SLOWER**, consistently, not faster. (The debug-field
+contamination itself is a real lesson: `UnitCacheEntry` briefly carried a
+full raw `TileState` clone per footprint tile — ~49 clones per cache miss —
+plus a full `UnitState` clone and tech-list clone, all populated
+unconditionally on every miss regardless of whether `VERIFY_PLY_CACHE` was
+set to actually print anything. First throughput read was silently
+contaminated by this; always strip or env-gate ALL debug instrumentation,
+not just its output, before trusting a perf number.)
+
+**Why it loses**: the fixed per-ply cost of maintaining the cache —
+`refresh_tiles` fingerprinting all 121 tiles of an 11×11 map plus building a
+full cross-tribe occupant map, every ply, hit or miss — plus per-unit
+footprint-containment checks against the `changed` set, appears to exceed
+the cost of the redundant `generate_army_moves_for_unit` calls it saves. On
+a small map with a handful of units, plies dirty tiles inside the
+overlapping radius-2+ footprints of clustered units often enough that the
+hit rate doesn't amortize the fixed cost within one turn's short (~5-15 ply)
+cache lifetime. Not measured directly (an env-gated hit/miss counter would
+take three lines and a short run to confirm) but consistent with the
+`PLY_CACHE_DECISION` hit/miss trace captured during debugging, which showed
+frequent misses even on units with an existing cache entry.
+
+**Side-finding, unrelated to the cache but load-bearing for future A/Bs**:
+same-seed `self_play` runs are **not** reproducible process-to-process —
+the uncached-bypass arm's move count differed between two identical-config,
+identical-seed runs (1214 vs. 1179 moves). Likely std `HashMap`/`HashSet`
+iteration order feeding a tied-score sort somewhere (e.g. `reachable` in
+`generate_step_moves`). This invalidates same-seed same-process-count game-
+log diffing as a correctness-proof technique — the planned cached-vs-
+bypassed log diff for this experiment was abandoned for that reason: the
+correctness claim here rests entirely on the shadow-validation harness
+(GEN=0 at scale), not on log identity.
+
+**Verdict: NEGATIVE at 11×11 scale.** The memoization idea is sound and the
+implementation is now provably correct, but the map is small enough and
+turns short enough that per-ply cache maintenance overhead exceeds what it
+saves. Shipping recommendation: default the cache OFF (invert
+`PLY_CACHE_BYPASS` into an opt-in `PLY_CACHE=1`, or revert `ply_cache.rs`/
+`rank_plies_cached` entirely and keep only the harmless, independently-
+useful `moves/mod.rs` extraction of `generate_army_moves_for_unit`/
+`generate_non_army_moves` as standalone functions) — Verdi's call, not
+committed either way by this entry.
+
+**Next lever**: the premise that per-ply army-move regeneration dominates
+actor CPU time didn't survive contact with this measurement. Next step is a
+fresh `sample` profile of the *uncached* binary at production config to see
+what actually dominates now that this hypothesis is closed — not run as
+part of this entry, per the project's own "explain before running"
+convention.
+
+**Follow-up: why, precisely — and disposition.** Verdi pushed back on the
+negative result being counter-intuitive (a cached function should always
+beat calling it "dozens of times"), which was the right challenge — it
+motivated actually measuring instead of trusting the A/B alone. Two
+numbers close the loop: (1) a real hit-rate counter (`PLY_CACHE_HITS`/
+`PLY_CACHE_MISSES` atomics, mirroring `game::SIM_END_TURN_EDGES`'s existing
+pattern) showed **24.0% hit rate** (166,436 / 694,460 lookups) over a real
+3-game production run — misses dominate, so the cache pays its own
+overhead on top of *most* of the regen cost, not instead of it. (2) A
+`sample` profile with the relevant functions forced `#[inline(never)]`
+(temporarily, reverted after measuring) gave an exact breakdown:
+`generate_army_moves_for_unit` itself cost ~98-99 samples in BOTH arms
+(the function is genuinely cheap on an 11×11 map with a handful of units),
+while `PlyMoveCache::army_moves`'s own bookkeeping (full-board
+`refresh_tiles` fingerprinting + footprint-containment checks + hashmap
+churn, minus the regen call inside it) cost ~101 samples — i.e. **the
+bookkeeping alone costs about as much as regenerating everything from
+scratch would have**. A separate, larger factor also caps the ceiling:
+`gate_and_score`'s Δφ scoring (`goal_potential_with_threats`/
+`city_risks_with_threats`, shared code identical in both paths) is
+70-80% of a ply's cost regardless — move generation was never more than
+~12-15% of the per-ply budget to begin with.
+
+**Disposition: reverted.** `ply_cache.rs` deleted, `rank_plies_cached`/
+`PlyMoveCache`/the `VERIFY_PLY_CACHE`/`PLY_CACHE_BYPASS` harness and the
+`self_play.rs` hit-rate printout all removed; `execute_turn_recorded`/
+`execute_turn`/`macro_mcts.rs`'s call site restored to their pre-experiment
+form. Kept: the `moves/mod.rs` extraction of `generate_army_moves_for_unit`/
+`generate_non_army_moves` as standalone functions — a harmless, independently
+useful refactor with no behavior change, doc comments no longer reference
+the now-deleted `ply_cache` module. The actor-scaling and adjacency-
+memoization wins from `8288f82` are unaffected and remain shipped.
+
+**Correction (EXP_ELO_063 below): the adjacency-memoization half of `8288f82`
+was NOT unaffected — it was itself a severe regression.** See the next entry.
+
+## EXP_ELO_063 — `get_adjacent_indices`'s global RwLock cache was the "training gets stuck" bug
+
+**Context**: separately from the ply-cache work above, a resumed training run
+(`run_training_loop.sh --resume -i 5`, production config: `--actors 128
+--mcts-iters 64`) appeared to stall — CPU busy but declining (1340%→594%)
+over several minutes with almost no game progress. Killed after confirming
+it wasn't deadlocked (just severely under-throughput), then investigated
+*why*, since this had reportedly happened intermittently before.
+
+**First hypothesis (actor/games-ratio starvation) — tested, did not hold up**:
+`self_play.rs`'s actor loop hands out exactly `--num-games` jobs via a shared
+`AtomicUsize` counter with no backlog; `run_training_loop.sh` defaults to
+`ACTORS=128` but `NUM_GAMES=64`, so once the 64 games drain, half the actors
+sit idle for the tail while the other half finish long games — a real,
+already-documented mismatch (`expert_boost_throughput.md`'s 128-actor tuning
+assumed ≥128 concurrent games). Ran a same-seed A/B at `--mcts-iters 16`
+(chosen for speed; the mechanism doesn't depend on search depth) comparing
+`--num-games 64` vs `128` at `--actors 128`: **108.70 → 112.61 moves/sec
+(+3.6%), avg_batch 2.81 → 2.71 (flat/worse), wall-clock landed at ~1.00x the
+predicted 2x-scaling time, not under it.** No meaningful efficiency gain —
+this hypothesis does not explain the stall.
+
+**Second hypothesis (own recent "optimization" caused a regression) —
+confirmed**: reasoned from the same A/B data plus the July throughput
+baseline (`expert_boost_throughput.md`: ~1650 moves/s actor-side capacity at
+mcts-iters=64 on this box, dummy-eval) that both A/B arms were CPU-saturated
+throughout (~13 cores pinned) regardless of games count, and that per-move
+actor CPU cost at matched settings had grown roughly **40x** since that
+baseline — a magnitude no amount of games/actors rebalancing could fix,
+because the actors themselves had gotten pathologically slow. The timeline
+pointed at `8288f82` (Aug 19, 02:57): "memoize pure adjacency geometry" added
+a global `static ADJACENCY_CACHE: OnceLock<RwLock<HashMap<(i32,i32,i32),
+Vec<i32>>>>` to `get_adjacent_indices` (`src/functions.rs`), called from
+~90 sites codebase-wide. That commit's own validation was against the
+**heuristic-leaf macro-mcts path only** (`macro-sims=64 macro-k=6`, no eval
+server, actors auto-scaled down to physical core count, ~13-14 concurrent
+callers) — it never touched or re-measured `self_play.rs`'s production
+Gumbel path, which stays at the `--actors 128` default and hammers the same
+global lock from 128 threads simultaneously.
+
+**Verification**: `sample`-profiled a live 128-actor run (`--num-games 64
+--mcts-iters 16 --actors 128`, pre-fix binary) for 10s. `get_adjacent_indices`
+dominated the profile (2407 of ~50k sampled call-stack lines — far more than
+its main caller `reach_search` at 838). Reading the function confirmed why
+the cache was unnecessary even on its own terms: the same function already
+pre-sizes its result `Vec` with `Vec::with_capacity(cap)` from an exact
+upper bound — the *stated original motivation* for the cache (realloc
+churn) — so the `RwLock`+`HashMap`+clone-on-every-hit machinery was pure
+added contention layered on a problem that direct computation (a handful of
+integer ops over at most a 7x7 grid) already solved for free.
+
+**Fix**: removed `ADJACENCY_CACHE` and the `OnceLock`/`RwLock`/`HashMap`
+machinery entirely; `get_adjacent_indices` goes back to computing directly
+into the pre-sized `Vec`, no lock, no cache. `cargo test --release --lib
+--tests --bin self_play --features apple`: 217 passed, 0 failed, 8 ignored
+— no correctness change, this was purely a performance bug.
+
+**Measured** (same session, `--num-games 64 --mcts-iters 16 --actors 128
+--eval-servers 3`, Kickoo vs Imperius, matched seed for pre/post):
+| | moves/sec | avg_batch | total time |
+|---|---|---|---|
+| original arm A (seed 909001, pre-fix) | 108.70 | 2.81 | 512.64s |
+| pre-fix rerun (seed 909002, same session) | 145.18 | 3.09 | 459.27s |
+| **post-fix (seed 909002, same session)** | **964.05** | **8.29** | **74.88s** |
+
+**6.6x–8.9x throughput recovery**, and `avg_batch` nearly tripled — evidence
+the actors weren't just faster, they were finally able to keep the eval
+server properly fed instead of trickling requests in one lock-starved thread
+at a time.
+
+**Disposition: shipped, but scope the claim correctly.** The `--resume -i 5`
+run that triggered this whole investigation was, on inspection, launched
+bare (`backend=--search-backend gumbel`, confirmed via its own logged CONFIG
+line) — the same bare-defaults mistake made twice this session, before
+`MACRO_GEN` was known. So this fix is confirmed root cause **for the
+gumbel/128-actor path specifically**, not for the project's actual
+production self-play generator: `MACRO_GEN=1` (macro-mcts, heuristic leaf),
+which auto-scales actors down to physical core count (~13-14) via the same
+`8288f82` commit. At that much lower concurrency the RwLock existed but was
+never shown to be *the* bottleneck — `8288f82`'s own profiling (at
+macro-sims=64/k=6, low actor count) flagged `semaphore_wait_trap`
+(OS-scheduler contention), not this lock. Whether this fix meaningfully
+speeds up macro-heur generation is **unmeasured** and should not be assumed
+from the gumbel number. Separately, macro-heur generation was already slow
+before this bug existed (Aug 16, run 1786710389 iterations 57-60: 7-12
+min/iteration, pre-dating `8288f82` entirely) — that's a structural cost
+(100% CPU, adversarial negamax over both players' turns via the real
+engine, no eval server to offload to), not this regression. Do not let this
+entry's fix stand in for "macro-heur generation is now fast." The lesson for future perf
+changes in shared, high-fan-out helpers (`~90 call sites`): validate at the
+concurrency level of every hot caller, not just the one being profiled at
+the time, and prefer no-lock/no-cache when the "expensive" thing you're
+caching is already cheap (a handful of integer ops) — a shared lock is very
+rarely a good trade against that, however uncontended it looks in isolation.
+
+## EXP_ELO_064 — does lowering `--outcome-scale` de-saturate value labels? (cheap pre-training check)
+
+STATUS: RUN COMPLETE (Aug 21, 2026), Verdi-requested, label-only, no training.
+
+HYPOTHESIS (from EXP_ELO_060/021's diagnosis): default `--outcome-scale 3.0`
+clamps `relative_outcome` to ±1 whenever a game's score ratio exceeds ±1/3,
+destroying the value head's ability to distinguish "ahead" from "crushing."
+Lowering the scale should reduce this without needing any training — the
+saturation share is a property of the raw generated label, computable
+directly from a small fresh self-play sample.
+
+METHOD: `.run_bin/self_play --num-games 4 --search-backend macro-mcts
+--macro-leaf heuristic --macro-sims 64 --macro-k 6 --goal-channels
+--goal-w-tree 1 --td-missing-bootstrap mc --base-seed 1787500000 --tribe1
+Imperius --tribe2 Bardur`, run twice — `--outcome-scale 3.0` (baseline) then
+`1.5` (test) — comparing the `values` tensor's saturation share
+(`|v|>=0.999` and `|v|>0.8`) between shards. Same base-seed was intended to
+pair the two arms on identical games; it did not (1193 vs 1514 steps
+written) — confirms `same-seed-not-reproducible` (HashMap tie-break order)
+applies here too, so this is two independent small samples, not a true
+pair. `FINAL_OUTCOME_REL_W` checked (=1.0, `self_play.rs:61`) — `abs_outcome`
+contributes nothing to `final_outcome` as currently configured; the whole
+label is `clamp(ratio * outcome_scale, -1, 1)`.
+
+ACTUAL: exact-clamp share (`|v|>=0.999`) went **89.4% (1067/1193) -> 0.0%
+(0/1514)** — the knob mechanically does what it's supposed to: at scale=1.5
+no row in either sample hits the hard clamp boundary at all. The softer
+`|v|>0.8` share barely moved (94.3% -> 90.7%) — but given REL_W=1.0, this
+residual mass is NOT evidence the fix is insufficient; it means these 4
+games (fixed tribe pair, apparently decisive-heavy — 3 of 4 finished
+"Decisive: true" in-log) have real score ratios in the 0.53-0.67 range,
+which correctly land near-but-not-at ±1 under the de-saturated formula.
+That's the intended behavior, not a failure of it.
+
+CAVEATS: n=4 games/arm is an effective sample of 4, not the ~1200-1500
+rows reported (every ply of a game inherits ~the same outcome-derived
+label). Absolute percentages here (89-94%) are far above the previously-
+cited "~32%" population figure — expected given this sample's small size,
+single tribe pairing, and decisive-game skew, not a contradiction of the
+earlier number (which was measured over a much larger, more diverse
+population). Do not cite 89%/94% as the corrected population saturation
+rate; only the 89.4%->0.0% *exact-clamp* delta is a clean, low-noise
+result at this sample size (it's a boundary-crossing question, not a
+distributional one).
+
+READ: the mechanism is confirmed on the one thing this sample size can
+confirm cleanly — lowering `outcome_scale` stops the hard clamp from
+firing. Whether it meaningfully improves the value head's real
+discrimination on a representative game mix is still open. NEXT (not run):
+a modestly larger label-only sample (32-64 games, mixed tribes, still no
+training) to check de-saturation holds on a representative population,
+before committing any multi-iteration training run to this lever. This is
+a pre-training gate, not a green light to retrain yet.
+
+**Follow-up run (registered, overnight autonomous, Aug 21):** the NEXT
+above, executed. 32 games, no fixed `--tribe1/--tribe2` (random, for
+diversity — the n=4 run's fixed Imperius/Bardur pairing plus decisive-game
+skew was the leading suspect for the 89%-vs-32% gap), `--base-seed`
+omitted (independent samples anyway, per the same-seed-non-reproducibility
+finding — no pairing benefit to lose), same macro-mcts/goal-channels
+config as the n=4 probe, run twice at outcome-scale 3.0 and 1.5. Same
+metric: exact-clamp share (`|v|>=0.999`) and `|v|>0.8` share, this time
+also broken out with a per-game (not just per-row) view where feasible.
+Run concurrently with EXP_ELO_065's harvest (idle-CPU use, not resource-
+starved — neither measurement is wall-clock-sensitive).
+
+**ACTUAL:** correction to the plan above — running concurrently WAS
+resource-starved (the concurrent dphi-probe attempt OOM-killed itself,
+see EXP_ELO_065; this run survived but throughput read 4.22 moves/sec vs
+15.89 for the unconstrained baseline arm). Throughput numbers from this
+specific run are contaminated and not used for anything; label-saturation
+stats are a property of the computed values, unaffected by how slowly
+they were computed, and stand as reported.
+
+| | scale=3.0 (n=13772 rows) | scale=1.5 (n=16588 rows) |
+|---|---|---|
+| exact-clamp (\|v\|>=0.999) | 79.5% | **11.9%** |
+| \|v\|>0.8 | 90.0% | **77.5%** |
+
+Both metrics moved substantially this time, not just exact-clamp — at
+n=4 the softer >0.8 share barely moved (94.3%->90.7%); at n=32 it dropped
+12.5pp. Larger, more diverse sample shows a stronger, cleaner signal:
+lowering outcome_scale is doing real de-saturation work, not just
+shaving the hard boundary.
+
+The persistent gap from the historically-cited "~32%" figure (79.5%/90.0%
+here vs ~32%) has a clean explanation now, not just a sampling-noise
+shrug: EXP_ELO_021 (Jul 2026) predates `MACRO_GEN` (introduced Aug 14) by
+a month, so that figure was almost certainly measured on GUMBEL self-play
+games, not macro-mcts ones. Macro-mcts is a measurably stronger, more
+decisive search (66.0% vs production Gumbel) — it plausibly produces more
+lopsided final score ratios than Gumbel-vs-Gumbel self-play did, which
+would inflate saturation independent of any sample-size or pairing
+artifact. Not confirmed directly (would need the same metric computed on
+a contemporaneous Gumbel-generated shard), but a more precise hypothesis
+than "small sample" for anyone who picks this back up.
+
+**Disposition: the pre-training gate for this lever is now cleared at a
+real sample size**, not just suggested at n=4. `outcome_scale` genuinely
+de-saturates macro-mcts-generated labels. This still doesn't say whether
+it improves the value head's actual leaf-judgment quality (that needs a
+real training run + the `--dump-value-calib` protocol EXP_ELO_060 already
+used) — the war-room item is advanced, not closed.
+
+## EXP_ELO_065 — Phase 0 of the ply-distillation plan (registered, overnight autonomous run, Aug 21)
+
+STATUS: REGISTERED. Verdi authorized overnight autonomous work on the
+approved plan (`/Users/verdi/.claude/plans/ok-lets-draft-a-gleaming-emerson.md`):
+distill macro-mcts's per-ply Δφ scoring (`rank_plies`/`goal_potential_with_threats`,
+70-80% of actor CPU per EXP_ELO_062) into one net forward pass per ply-node,
+in decomposed move coordinates.
+
+HYPOTHESIS (0a): several `goal_potential` terms read `GoalAux` (city_risk,
+connect_remaining, tech-fit, rider/preferred-unit, part of the save ramp),
+which `state_to_cpu_features_goal` does not currently paint into any input
+channel. If Δφ_full and Δφ_no_aux diverge sharply (esp. on Defend/Attack/
+Research-heavy plies), painting GoalAux is required for v1, not deferrable.
+
+HYPOTHESIS (0b): a ply's real candidate count and `DecomposedMapper`
+coordinate-collision rate are unknown quantities needed to size the shard
+format (padding width K) and flag which move types (expected: Attack/
+Capture/Harvest, no `move_option`) need a collision mitigation.
+
+METHOD: built (commit 539b5a1) always-on `RANK_PLIES_CALLS`/
+`RANK_PLIES_CANDIDATES` atomic counters (throughput-envelope input, zero
+cost) and an opt-in `POLYFISH_DPHI_PROBE=<path>` JSONL dump inside
+`rank_plies` (per-candidate `DecomposedMapper` coords + aux-aware Δφ +
+aux-free Δφ; only doubles `goal_potential_with_threats` cost when the env
+var is set). Harvest run: `.run_bin/self_play` (fresh snapshot),
+macro-mcts, heuristic leaf, macro-sims 64/k 6, goal-channels, random
+tribes (diversity over the paired-seed convention used for EXP_ELO_064,
+since this measurement wants representative candidate variety, not a
+controlled A/B).
+
+NEXT: run the harvest, then two offline Python analyses over the JSONL —
+(a) Δφ_full vs Δφ_no_aux correlation by move_type, (b) candidate-count
+distribution (pick K at p99) and coordinate-collision rate/spread by
+move_type. Both gate whether GoalAux painting is in-scope for Phase 1.
+
+**ACTUAL — blocker + fix (overnight autonomous, Aug 21 ~03:00-04:30):** the
+harvest itself was blocked for hours by a self-inflicted OOM. The unsampled
+probe opened+wrote+closed the JSONL file once per candidate; on this host
+(WiFiAgent leaking ~12GB wired, `memory_pressure` showing ~200MB genuinely
+free out of 36GB total, `Pages wired down` ~20GB) that write-storm alone
+(~111k opens/game) was enough to trip jetsam — confirmed by a discriminating
+run: identical minimal config with `POLYFISH_DPHI_PROBE` unset completed
+cleanly (exit 0, 129 moves/sec) while four consecutive probe-enabled
+attempts at shrinking footprint (14→2→1 actors, sims 64→8) all hit exit 137,
+including one bare 1-actor/1-game run whose log was completely empty (killed
+before first output). Fix (commit d919d66): one persistent buffered writer
+instead of per-row open/close, 1-in-20 call-level sampling (also skips the
+aux-free recompute on unsampled calls), and a 2M-row hard cap; explicit
+flush on `self_play` teardown since a `'static` writer never runs `Drop`.
+Also found and fixed a background-Bash cwd trap along the way: this
+session's shell cwd had reverted to the repo root after a run of git
+commands, so `self_play`'s relative `model.safetensors` lookup failed
+silently under `run_in_background` — the exit code from `cmd > log; echo
+"EXIT CODE: $?" >> log` as two unchained statements is the *echo's* code
+(always 0), not the command's, so the first two retries looked like false
+successes until the log was actually read.
+
+Harvest that actually ran: `.run_bin_dphi/self_play` (post-fix), macro-mcts,
+heuristic leaf, **`--macro-sims 8 --macro-k 4`** (deliberately smaller than
+the registered 64/6 — OOM-safety margin on a still memory-pressured host,
+not a methodology change: candidate-count-per-ply and Δφ-correlation are
+properties of the game states `rank_plies` is called on, independent of the
+outer macro-mcts tree's branching width; only the *number* of calls scales
+with sims/k, not what each call sees), random tribes, 12 games, 3 actors.
+32,362 `rank_plies` calls, 67,642 sampled probe rows across 1,432 distinct
+plies.
+
+**0a results** (Pearson r and mean |Δφ_full − Δφ_no_aux| by move_type):
+
+| move_type | n | r | mean\|full−no_aux\| |
+|---|---|---|---|
+| Step | 50138 | 0.997 | 5.83 |
+| Build | 7923 | 0.992 | 0.96 |
+| Ability | 5274 | 0.982 | 13.57 |
+| Attack | 1655 | 0.941 | 32.75 |
+| Harvest | 1292 | 0.985 | 1.47 |
+| Summon | 715 | 0.986 | 46.70 |
+| Research | 422 | **0.854** | **145.59** |
+| Capture | 119 | 0.998 | 19.55 |
+| Reward | 104 | 0.999 | 2.14 |
+| **overall** | 67642 | 0.989 | — |
+
+Research is the clear outlier — lowest correlation by a wide margin and by
+far the largest absolute divergence (~5-10x every other type), exactly
+matching the hypothesis: the tech-fit `GoalAux` term is load-bearing for
+Research-move scoring. Attack is a secondary, milder case (r=0.941),
+consistent with city_risk/threat aux terms mattering there. Every other
+type — including Step, which is 74% of all candidate volume — correlates
+above 0.98 with the aux-free version, i.e. GoalAux is not doing meaningful
+work for the bulk of candidate volume.
+
+**0b results:** candidates/ply across 1,432 plies: min=1, p50=23, p90=122,
+**p99=283**, max=370 → pick **K≈288** (round up from p99, not max) for the
+padded candidate dimension. Coordinate collisions: 713/1432 plies (49.8%)
+have ≥1 colliding pair, but entirely concentrated in **Ability** (2284
+collision groups) and **Build** (38 groups) — Step/Attack/Capture/Harvest/
+Summon/Research/Reward show **zero** collisions in this sample (the
+no-`move_option` risk the plan flagged for Attack/Capture/Harvest didn't
+materialize here — same-ply duplicate source+target pairs for those types
+turned out to be rare/absent). More importantly, every single Ability/Build
+collision group has **mean spread = 0.0000** — the colliding candidates are
+scored identically, not just coordinate-aliased. That's a materially more
+benign failure mode than the plan worried about: aliasing two candidates
+that already deserve the same label costs a distilled scorer nothing.
+
+**Disposition:** both Phase 0 hypotheses were directionally correct but
+narrower in practice than feared. GoalAux painting is **not** required
+broadly for v1 (Step dominates volume and is barely aux-sensitive) but
+**is** needed specifically for Research (tech-fit) before trusting a
+distilled score on tech decisions — scope that as a small, targeted
+follow-up, not a blocking v1 requirement. Coordinate collisions are common
+by ply-count (49.8%) but zero-cost by construction in this sample. K=288.
+Tasks #60/#61 (this doc's originating TaskCreate list) done; proceeding to
+0c (offline top-1 agreement gate) next — that one still needs its own
+harvest, since this probe never captured state features, only move coords
++ Δφ.
