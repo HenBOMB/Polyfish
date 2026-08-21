@@ -218,16 +218,25 @@ pub fn generate_legal_moves(state: &GameState) -> Vec<Box<dyn Move>> {
 
     // 2. Army Moves (Units, Summons, Upgrades)
     generate_unit_moves(state, &mut moves);
-    crate::moves::summon::generate_summon_moves(state, &mut moves);
-    crate::moves::upgrade::generate_upgrade_moves(state, &mut moves);
-    crate::moves::abilities::unit_actions::generate_unit_action_moves(state, &mut moves);
-
-    // 3. Econ Moves (Research, Build, Harvest, Econ Abilities)
-    generate_econ_moves(state, &mut moves);
-    crate::moves::abilities::unit_actions::generate_economic_ability_moves(state, &mut moves);
-    crate::moves::abilities::diplomacy::generate_diplomacy_moves(state, &mut moves);
+    generate_non_army_moves(state, &mut moves);
 
     moves
+}
+
+/// Everything `generate_legal_moves` generates OTHER than the per-unit army
+/// moves (capture/action/attack/step) -- split out so a caller that
+/// generates the per-unit pass itself can still produce the exact rest of
+/// the legal-move list through this one shared path, instead of a second
+/// hand-maintained copy that could drift from this function.
+pub(crate) fn generate_non_army_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
+    crate::moves::summon::generate_summon_moves(state, moves);
+    crate::moves::upgrade::generate_upgrade_moves(state, moves);
+    crate::moves::abilities::unit_actions::generate_unit_action_moves(state, moves);
+
+    // 3. Econ Moves (Research, Build, Harvest, Econ Abilities)
+    generate_econ_moves(state, moves);
+    crate::moves::abilities::unit_actions::generate_economic_ability_moves(state, moves);
+    crate::moves::abilities::diplomacy::generate_diplomacy_moves(state, moves);
 }
 
 fn generate_unit_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
@@ -240,27 +249,40 @@ fn generate_unit_moves(state: &GameState, moves: &mut Vec<Box<dyn Move>>) {
     };
 
     for unit in &tribe.units {
-        // PER UNIT ORDER: captures, actions, attacks, steps
+        generate_army_moves_for_unit(state, tribe, unit, moves);
+    }
+}
 
-        // 1. Capture
-        if !unit.moved && !unit.attacked {
-            generate_capture_moves(state, unit, moves);
-        }
+/// One unit's own army moves (capture/actions/attack/step), in the same
+/// fixed order `generate_unit_moves` always used. Split out so a caller can
+/// regenerate a single unit's candidates in isolation instead of
+/// re-deriving every unit's moves to get at one of them.
+pub(crate) fn generate_army_moves_for_unit(
+    state: &GameState,
+    tribe: &crate::states::TribeState,
+    unit: &UnitState,
+    moves: &mut Vec<Box<dyn Move>>,
+) {
+    // PER UNIT ORDER: captures, actions, attacks, steps
 
-        // 2. Actions (Promote, Disband, Recover, Ability skills)
-        crate::moves::abilities::unit_actions::generate_unit_action_moves_for_unit(
-            state, tribe, unit, moves,
-        );
+    // 1. Capture
+    if !unit.moved && !unit.attacked {
+        generate_capture_moves(state, unit, moves);
+    }
 
-        // 3. Attack (Requires positive health)
-        if !unit.attacked && unit.health > 0.0 {
-            generate_attack_moves(state, unit, unit.coords.idx, moves);
-        }
+    // 2. Actions (Promote, Disband, Recover, Ability skills)
+    crate::moves::abilities::unit_actions::generate_unit_action_moves_for_unit(
+        state, tribe, unit, moves,
+    );
 
-        // 4. Steps (Escape units will have moved=false after attacking, so this covers them)
-        if !unit.moved {
-            generate_step_moves(state, unit, moves);
-        }
+    // 3. Attack (Requires positive health)
+    if !unit.attacked && unit.health > 0.0 {
+        generate_attack_moves(state, unit, unit.coords.idx, moves);
+    }
+
+    // 4. Steps (Escape units will have moved=false after attacking, so this covers them)
+    if !unit.moved {
+        generate_step_moves(state, unit, moves);
     }
 }
 
