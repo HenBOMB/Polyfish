@@ -38,6 +38,56 @@ impl TurnCounters {
     }
 }
 
+/// Diagnostic: how many times `rank_plies` has been called (rollout +
+/// real-commit sites combined) and how many candidate moves it scored in
+/// total, across the process. Ratio to `self_play`'s own "moves" count
+/// gives calls-per-real-move — the input to the ply-distillation throughput
+/// envelope (EXP_ELO_061 GPU-ply-work plan, Phase 0). Always-on, one atomic
+/// add per call/candidate — negligible cost, mirrors `SIM_MOVE_FAILURES`.
+pub static RANK_PLIES_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static RANK_PLIES_CANDIDATES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Phase 0 instrumentation for the ply-distillation plan (not a standing
+/// feature): when `POLYFISH_DPHI_PROBE=<path>` is set, `rank_plies` appends
+/// one JSONL row per scored candidate with its decomposed move coordinates
+/// and both the real (aux-aware) Δφ and an aux-free Δφ, so the GoalAux-
+/// dependence and coordinate-collision questions can be answered offline
+/// without touching the shard format. Doubles the `goal_potential_with_threats`
+/// cost per candidate ONLY while the env var is set; a no-op (one cached
+/// `OnceLock` read) otherwise.
+fn dphi_probe_path() -> Option<&'static str> {
+    static PATH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| std::env::var("POLYFISH_DPHI_PROBE").ok())
+        .as_deref()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dphi_probe_row(
+    path: &str,
+    turn: i32,
+    player: PlayerId,
+    m: &dyn Move,
+    map_size: usize,
+    dphi_full: f32,
+    dphi_no_aux: f32,
+) {
+    let t = crate::ai::mapper::DecomposedMapper::move_to_targets(m, map_size);
+    let f = |x: Option<usize>| x.map(|v| v.to_string()).unwrap_or_else(|| "null".into());
+    let row = format!(
+        "{{\"turn\":{turn},\"player\":{player},\"move_type\":\"{:?}\",\"action_type\":{},\"source\":{},\"target\":{},\"option\":{},\"dphi_full\":{dphi_full:.6},\"dphi_no_aux\":{dphi_no_aux:.6}}}\n",
+        m.move_type(),
+        t.action_type,
+        f(t.source_spatial),
+        f(t.target_spatial),
+        f(t.target_type),
+    );
+    use std::io::Write;
+    if let Ok(mut fh) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = fh.write_all(row.as_bytes());
+    }
+}
+
 /// The four oracle_macro root gates, EndTurn always exempt (mirrors
 /// gumbel_mcts::gate_retain, which stays private to keep its attribution
 /// counters off this path).
@@ -78,6 +128,7 @@ pub fn rank_plies(
     star_gate: bool,
     lambda: f32,
 ) -> Vec<(f32, Box<dyn Move>)> {
+    RANK_PLIES_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut moves = game.legal_moves();
     moves.retain(|m| gate_ok(&game.state, m.as_ref(), star_gate, Some(goal.stance), Some(aux)));
     let has_other = moves.iter().any(|m| m.move_type() != MoveType::EndTurn);
@@ -87,6 +138,7 @@ pub fn rank_plies(
     if moves.is_empty() {
         return vec![(0.0, Box::new(EndTurnMove) as Box<dyn Move>)];
     }
+    RANK_PLIES_CANDIDATES.fetch_add(moves.len() as u64, std::sync::atomic::Ordering::Relaxed);
 
     // EXP_ELO_061 throughput fix: `threat_units` depends only on the
     // OPPONENT's units/ghosts, never on the acting player's own candidate
@@ -104,6 +156,11 @@ pub fn rank_plies(
     } else {
         0.0
     };
+    let probe_path = dphi_probe_path();
+    let phi_pre_no_aux = probe_path
+        .map(|_| reward::goal_potential_with_threats(&game.state, player, goal, None, None));
+    let turn = game.state.settings.turn;
+    let map_size = game.state.settings.size as usize;
     let mut scored: Vec<(f32, Box<dyn Move>)> = moves
         .into_iter()
         .map(|m| {
@@ -117,6 +174,24 @@ pub fn rank_plies(
                         Some(aux),
                         threats.as_deref(),
                     );
+                    if let Some(path) = probe_path {
+                        let phi_post_no_aux = reward::goal_potential_with_threats(
+                            &game.state,
+                            player,
+                            goal,
+                            None,
+                            None,
+                        );
+                        dphi_probe_row(
+                            path,
+                            turn,
+                            player,
+                            m.as_ref(),
+                            map_size,
+                            phi_post - phi_pre,
+                            phi_post_no_aux - phi_pre_no_aux.unwrap_or(0.0),
+                        );
+                    }
                     undo(&mut game.state);
                     s += lambda * (phi_post - phi_pre);
                 }

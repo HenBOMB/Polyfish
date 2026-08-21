@@ -4971,6 +4971,21 @@ fn main() -> anyhow::Result<()> {
         sim_move_failures,
         sim_move_failures as f64 / (total_moves as f64).max(1.0)
     );
+    // Ply-distillation throughput envelope input (EXP_ELO_061 GPU-ply-work
+    // plan, Phase 0): how many rank_plies calls (rollout + real-commit)
+    // and candidate moves per real move decision under macro-mcts. Zero
+    // under gumbel (rank_plies is macro-mcts-only).
+    let rank_plies_calls =
+        polyfish::ai::search::macro_exec::RANK_PLIES_CALLS.load(std::sync::atomic::Ordering::Relaxed);
+    let rank_plies_candidates = polyfish::ai::search::macro_exec::RANK_PLIES_CANDIDATES
+        .load(std::sync::atomic::Ordering::Relaxed);
+    println!(
+        "  - rank_plies calls: {} total ({:.2} per move decision), {} candidates total ({:.1} per call)",
+        rank_plies_calls,
+        rank_plies_calls as f64 / (total_moves as f64).max(1.0),
+        rank_plies_candidates,
+        rank_plies_candidates as f64 / (rank_plies_calls as f64).max(1.0)
+    );
 
     // Deterministic teardown. Drop the evaluator handles first — these hold the
     // only remaining request-channel senders, so dropping them makes each eval
