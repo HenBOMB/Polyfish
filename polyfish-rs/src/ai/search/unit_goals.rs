@@ -114,42 +114,69 @@ fn goal_outcome(state: &GameState, target: i32, player: PlayerId) -> Option<bool
 /// assign idle units to unclaimed Expand targets from this turn's
 /// `MacroGoal`. Pure bookkeeping — callers read `store.active(id)` for
 /// pricing; this function doesn't touch reward itself.
-pub fn reconcile_unit_goals(state: &GameState, player: PlayerId, goal: &MacroGoal, store: &mut UnitGoalStore) {
+///
+/// Returns each live unit's `GoalStatus` this ply, for observability
+/// (`POLYFISH_PLY_TRACE`) -- a unit completed/invalidated and immediately
+/// reassigned in the same ply reports `Assigned` (the newer fact), not
+/// both; the trace's `goal` field still shows the target actually changed.
+pub fn reconcile_unit_goals(
+    state: &GameState,
+    player: PlayerId,
+    goal: &MacroGoal,
+    store: &mut UnitGoalStore,
+) -> FxHashMap<u32, GoalStatus> {
+    let mut status: FxHashMap<u32, GoalStatus> = FxHashMap::default();
     let Some(tribe) = state.tribes.get(&player) else {
         store.goals.clear();
-        return;
+        return status;
     };
 
     let live_ids: FxHashSet<u32> = tribe.units.iter().map(|u| u.id).collect();
     store.retain_ids(&live_ids);
 
     for unit in &tribe.units {
-        let Some(g) = store.active(unit.id) else { continue };
+        let Some(g) = store.active(unit.id) else {
+            status.insert(unit.id, GoalStatus::Idle);
+            continue;
+        };
         if g.kind != OrderKind::Expand {
+            status.insert(unit.id, GoalStatus::Pursuing);
             continue;
         }
-        if let Some(_completed) = goal_outcome(state, g.target, player) {
-            store.advance(unit.id);
+        match goal_outcome(state, g.target, player) {
+            Some(true) => {
+                store.advance(unit.id);
+                status.insert(unit.id, GoalStatus::Completed);
+            }
+            Some(false) => {
+                store.advance(unit.id);
+                status.insert(unit.id, GoalStatus::Invalidated);
+            }
+            None => {
+                status.insert(unit.id, GoalStatus::Pursuing);
+            }
         }
     }
 
     let expand_targets: Vec<i32> = goal.orders.iter().filter(|(k, _)| *k == OrderKind::Expand).map(|(_, t)| *t).collect();
     if expand_targets.is_empty() {
-        return;
+        return status;
     }
     let claimed = store.active_targets();
     let unclaimed: Vec<i32> = expand_targets.into_iter().filter(|t| !claimed.contains(t)).collect();
     if unclaimed.is_empty() {
-        return;
+        return status;
     }
     let idle_units: Vec<&crate::states::UnitState> = tribe.units.iter().filter(|u| store.active(u.id).is_none()).collect();
     if idle_units.is_empty() {
-        return;
+        return status;
     }
 
     for (id, target) in assign_expand_targets_by_id(state, player, &idle_units, &unclaimed) {
         store.assign(id, UnitGoal { kind: OrderKind::Expand, target });
+        status.insert(id, GoalStatus::Assigned);
     }
+    status
 }
 
 #[cfg(test)]

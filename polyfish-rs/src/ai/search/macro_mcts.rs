@@ -32,6 +32,7 @@ fn dump_ply_decision(
     player: PlayerId,
     goal: &MacroGoal,
     candidates: Vec<serde_json::Value>,
+    unit_goals: Vec<serde_json::Value>,
     chosen: &dyn Move,
 ) {
     let row = serde_json::json!({
@@ -44,6 +45,10 @@ fn dump_ply_decision(
                 .collect::<Vec<_>>(),
         },
         "candidates": candidates,
+        // Per-unit-goal design (Aug 2026): what each unit is trying to do
+        // right now, as a queryable fact -- the actual deliverable this
+        // whole design exists for.
+        "unit_goals": unit_goals,
         "chosen": {
             "move_type": format!("{:?}", chosen.move_type()),
             "move": chosen.serialize(),
@@ -1127,7 +1132,8 @@ impl<'a> MacroMctsAgent<'a> {
             }
         }
         let goal = self.turn_goal.clone().unwrap_or_default();
-        crate::ai::search::unit_goals::reconcile_unit_goals(&view.state, pov, &goal, &mut self.unit_goals);
+        let unit_status =
+            crate::ai::search::unit_goals::reconcile_unit_goals(&view.state, pov, &goal, &mut self.unit_goals);
         let ranked = crate::ai::macro_agent::rank_view(
             &mut view,
             pov,
@@ -1149,8 +1155,31 @@ impl<'a> MacroMctsAgent<'a> {
                     })
                 })
                 .collect();
+            let unit_goals_trace: Vec<serde_json::Value> = view
+                .state
+                .tribes
+                .get(&pov)
+                .map(|t| {
+                    t.units
+                        .iter()
+                        .map(|u| {
+                            let g = self.unit_goals.active(u.id);
+                            serde_json::json!({
+                                "unit_id": u.id,
+                                "unit_type": format!("{:?}", u.unit_type),
+                                "coords": u.coords.idx,
+                                "goal": g.map(|g| serde_json::json!({
+                                    "kind": format!("{:?}", g.kind),
+                                    "target": g.target,
+                                })),
+                                "status": unit_status.get(&u.id).map(|s| format!("{s:?}")),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             let m = crate::ai::macro_agent::first_true_legal(game, ranked);
-            dump_ply_decision(path, turn, pov, &goal, candidates, m.as_ref());
+            dump_ply_decision(path, turn, pov, &goal, candidates, unit_goals_trace, m.as_ref());
             self.counters.count(m.as_ref());
             return Some(m);
         }
