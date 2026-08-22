@@ -8384,3 +8384,50 @@ confirmation of `root_prior_w ∈ [0.001, 0.005]` against this final,
 further-improved checkpoint — the natural next step once someone is back
 to review results, since this checkpoint's macro head is measurably
 better than the one the weight-sweep was run against.
+
+## EXP_ELO_068 — n=128 confirmation of root_prior_w 0.001/0.005 (post-overnight checkpoint)
+
+Ran the deferred confirmation above, same day. Same harness (base_seed
+770425, Imperius/Imperius, macro-sims 16/k4, anchor-frac 1.0 vs Greedy),
+n=128/arm, sequential, against the overnight run's final checkpoint
+(iteration 115 — note this is a DIFFERENT, further-trained checkpoint than
+the one the n=32 screening ran against yesterday, so the baseline itself
+moved: 61.72% here vs 70.31% there. Not a regression in the checkpoint —
+absolute win rate vs this particular Greedy config isn't the thing being
+tracked run-to-run, the root_prior_w deltas WITHIN this batch are):
+
+| weight | anchor_net_wr | Δ vs baseline | avg_score | Δ vs baseline |
+|---|---|---|---|---|
+| 0 (baseline) | 61.72% | — | 5357.3 | — |
+| 0.001 | **66.41%** | **+4.69pp** | 5469.4 | +2.1% |
+| 0.005 | 62.50% | +0.78pp | 5165.4 | **−3.6%** |
+
+**The screening result at n=32 was misleading about WHICH weight is
+better, even though it correctly ruled out catastrophe at both.** At n=32,
+0.005 looked like the standout (75.0% vs baseline's 70.31%) and 0.001
+looked merely baseline-ish (68.75%). At n=128 the ranking flips: 0.001 is
+the one clear positive result, 0.005 is statistically indistinguishable
+from baseline — its win-rate edge is small and its score trends the wrong
+way. This is exactly what a 32-game sample does: enough to rule out a
+catastrophic regression cluster, not enough to correctly RANK two
+similarly-sized small effects against each other.
+
+**Calibrating against the noise floor:** the established n=128 same-config
+repeat noise floor is 7.8pp ([[seed-770425-gauge-harness]]). Neither
+delta here (+4.69pp, +0.78pp) individually clears that floor with
+certainty. So the honest verdict is: **no catastrophic regression
+confirmed at either weight (holds up from the screening), but neither
+result is unambiguously "significant" on win rate alone** — 0.001 is
+directionally the more promising of the two (positive on both win rate
+and score, not just one), 0.005 reads as roughly neutral-to-mildly-negative
+now that sample size is adequate.
+
+**Disposition:** `root_prior_w=0.001` is the best-supported candidate
+value found so far — real signal, no detected cost, but not yet
+proven past the noise floor on its own. Before shipping as a default:
+either a repeated n=128 run at 0.001 to see if the +4.69pp direction holds
+(cheapest next step), or a larger single run (n=256+) to clear the noise
+floor outright. `root_prior_w` stays at its 0.0 default until one of those
+lands. `root_prior_w=0.005` is downgraded from "confirmed good" (its n=32
+reading) to "not distinguishable from off" — do not treat the earlier 75%
+reading as representative going forward.
