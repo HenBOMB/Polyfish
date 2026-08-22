@@ -1,6 +1,7 @@
 use candle_core::Device;
 use clap::Parser;
 use polyfish::ai::brain::{SearchBackend, SearchBackendArg, make_search_agent};
+use polyfish::ai::curriculum::{CONVERGED_PRIOR_HEURISTIC_W, CONVERGED_Q_WEIGHT};
 use polyfish::ai::eval_server::{Evaluator, InlineEvalHandle};
 use polyfish::ai::network::PolyZeroNet;
 use polyfish::game::Game;
@@ -120,12 +121,6 @@ struct Args {
     #[arg(long)]
     tree_q_weight: Option<f32>,
 }
-
-// Converged self_play.rs search knobs, duplicated because they are `const` in
-// a binary crate: HEURISTIC_PRIOR_W_FLOOR, and the POLICY_TARGET_Q_RAMP_ITERS
-// ramp at saturation. The gauge must grade the agent training produces.
-const SELF_PLAY_PRIOR_HEURISTIC_W: f32 = 0.1;
-const SELF_PLAY_Q_WEIGHT: f32 = 1.0;
 
 /// Search knobs applied to both configurations.
 #[derive(Clone, Copy)]
@@ -513,12 +508,16 @@ fn main() -> anyhow::Result<()> {
     let backend1 = backend_from_arg(args.backend1, args.gumbel_k);
     let backend2 = backend_from_arg(args.backend2, args.gumbel_k);
 
+    // No iteration in hand, so fall back to the converged end of self-play's
+    // ramps rather than mirroring their values. Early in a run the real knobs
+    // are far from these (prior 0.5, q 0.0 at iteration 0), which is why the
+    // gauge passes the iteration's own schedule — see run_gauge_match (#32).
     let tuning = SearchTuning {
         prior_heuristic: args
             .prior_heuristic_weight
-            .unwrap_or(SELF_PLAY_PRIOR_HEURISTIC_W),
-        policy_target_q: args.policy_target_q_weight.unwrap_or(SELF_PLAY_Q_WEIGHT),
-        tree_q: args.tree_q_weight.unwrap_or(SELF_PLAY_Q_WEIGHT),
+            .unwrap_or(CONVERGED_PRIOR_HEURISTIC_W),
+        policy_target_q: args.policy_target_q_weight.unwrap_or(CONVERGED_Q_WEIGHT),
+        tree_q: args.tree_q_weight.unwrap_or(CONVERGED_Q_WEIGHT),
     };
 
     println!(

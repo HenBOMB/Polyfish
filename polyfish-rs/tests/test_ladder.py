@@ -260,6 +260,23 @@ class VerdictTest(unittest.TestCase):
         self.assertEqual(len(series), 1)
         self.assertEqual(series[0]["budget"]["max_turns"], 45)
 
+    def test_ramped_search_knobs_do_not_fragment_the_window(self):
+        # The gauge tracks self-play's prior/sigma(Q) ramps (#32), so these
+        # change every iteration by design. They are recorded, not keyed: key
+        # on them and every reading is its own budget, so no plateau window
+        # ever accumulates.
+        data = {"anchors": [{"name": "greedy"}], "readings": [
+            {"kind": "gauge", "opponent": "greedy", "games": 64, "wins": 20,
+             "losses": 44, "draws": 0,
+             "budget": {"mcts": 64, "gumbel_k": 16, "max_turns": 45,
+                        "prior_heuristic_w": 0.5, "q_weight": 0.0}},
+            {"kind": "gauge", "opponent": "greedy", "games": 64, "wins": 30,
+             "losses": 34, "draws": 0,
+             "budget": {"mcts": 64, "gumbel_k": 16, "max_turns": 45,
+                        "prior_heuristic_w": 0.1, "q_weight": 1.0}},
+        ]}
+        self.assertEqual(len(self.ladder._gauge_series(data)), 2)
+
     def test_series_is_scoped_to_the_latest_run(self):
         # A previous campaign's readings are a different model's; pooling them
         # into this run's window judges a trend that never happened.

@@ -335,6 +335,12 @@ def _append_reading(data, args, kind, opponent):
             "gumbel_k": args.gumbel_k,
             "eval_backend": args.eval_backend,
             "max_turns": getattr(args, "max_turns", None),
+            # Deliberately not in _budget_key: these ramp every iteration to
+            # track the searcher self-play is generating with, so keying on
+            # them would give every reading its own budget and no window would
+            # ever accumulate. Recorded so the drift is visible in the series.
+            "prior_heuristic_w": getattr(args, "prior_heuristic_w", None),
+            "q_weight": getattr(args, "q_weight", None),
         }
     if getattr(args, "wins_p1", None) is not None:
         reading["wins_as_p1"] = args.wins_p1
@@ -499,6 +505,12 @@ def main():
         p.add_argument("--max-turns", type=int,
                        help="turn cap this reading was played at (the loop varies it "
                             "with the curriculum, so it is part of the budget key)")
+        p.add_argument("--prior-heuristic-w", type=float,
+                       help="heuristic/net prior blend the gauge searched with; ramps "
+                            "with the iteration to match self-play")
+        p.add_argument("--q-weight", type=float,
+                       help="sigma(Q) weight in-tree and in the root policy target, "
+                            "matching self-play's value-trust ramp")
 
     rec = sub.add_parser("record")
     match_args(rec)
