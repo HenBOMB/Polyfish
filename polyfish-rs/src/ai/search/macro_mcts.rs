@@ -12,6 +12,51 @@ use crate::game::Game;
 use crate::moves::Move;
 use crate::states::{GameState, PlayerId};
 
+/// Single-game deep inspection (not a standing feature, not sampled): when
+/// `POLYFISH_PLY_TRACE=<path>` is set, `MacroMctsAgent::select_move` appends
+/// one JSONL row per REAL ply decision — the turn's committed goal, every
+/// legal candidate move `rank_view` scored (already-computed, no extra
+/// search cost), and which one was actually chosen. Unlike the training
+/// harvest probes elsewhere in this file, this fires once per real ply only
+/// (not once per internal rollout `expand()` call), so a whole game is a few
+/// hundred rows — no sampling needed, no write-storm risk.
+fn ply_trace_path() -> Option<&'static str> {
+    static PATH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| std::env::var("POLYFISH_PLY_TRACE").ok())
+        .as_deref()
+}
+
+fn dump_ply_decision(
+    path: &str,
+    turn: i32,
+    player: PlayerId,
+    goal: &MacroGoal,
+    candidates: Vec<serde_json::Value>,
+    chosen: &dyn Move,
+) {
+    let row = serde_json::json!({
+        "turn": turn,
+        "player": player,
+        "goal": {
+            "stance": format!("{:?}", goal.stance),
+            "orders": goal.orders.iter()
+                .map(|(kind, t)| serde_json::json!([format!("{kind:?}"), t]))
+                .collect::<Vec<_>>(),
+        },
+        "candidates": candidates,
+        "chosen": {
+            "move_type": format!("{:?}", chosen.move_type()),
+            "move": chosen.serialize(),
+        },
+    });
+    if let Ok(s) = serde_json::to_string(&row) {
+        use std::io::Write;
+        if let Ok(mut fh) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(fh, "{s}");
+        }
+    }
+}
+
 /// UCT exploration on [0,1]-mapped values, dialed to the MEASURED root q01
 /// spread between directives (0.01–0.06, smoke probe 2026-08-12): at c=0.6
 /// (and even the HeuristicMctsAgent 0.6 precedent) the bonus is 6–30x the
@@ -1084,6 +1129,23 @@ impl<'a> MacroMctsAgent<'a> {
             &mut self.counters,
             self.params.lambda,
         );
+        if let Some(path) = ply_trace_path() {
+            let turn = game.state.settings.turn;
+            let candidates: Vec<serde_json::Value> = ranked
+                .iter()
+                .map(|(score, mv)| {
+                    serde_json::json!({
+                        "score": score,
+                        "move_type": format!("{:?}", mv.move_type()),
+                        "move": mv.serialize(),
+                    })
+                })
+                .collect();
+            let m = crate::ai::macro_agent::first_true_legal(game, ranked);
+            dump_ply_decision(path, turn, pov, &goal, candidates, m.as_ref());
+            self.counters.count(m.as_ref());
+            return Some(m);
+        }
         let m = crate::ai::macro_agent::first_true_legal(game, ranked);
         self.counters.count(m.as_ref());
         Some(m)
