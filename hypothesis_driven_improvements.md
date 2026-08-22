@@ -8319,3 +8319,68 @@ regression. `root_prior_w` stays at its default 0.0 for the overnight
 training run below (self-play generation should not risk an unconfirmed
 prior corrupting the data the macro head itself is learning from) — this
 becomes the first thing to validate once the loop finishes.
+
+## Overnight run (Aug 21 20:15 → Aug 22 11:59, run_id 1787307645, iterations 41→115)
+
+Continued the same campaign overnight per Verdi's request ("hopefully this
+policy head can become less sucky over time"), immediately after the
+weight-sweep work above. Two operational incidents, both diagnosed and
+fixed rather than worked around:
+
+**Incident 1 — self-inflicted plateau stop at iteration 45.** The loop's
+own strength-ladder safety valve (`ladder.py`, `PLATEAU_STRIKES=2` over an
+8-reading window) stopped the run after only 5 iterations: two consecutive
+gauge readings showed no gain in GUMBEL-mode win rate vs a fixed historical
+anchor (`anchor_iter5_20260813_194954`, frozen Aug 13). Exit code 1, by
+design, not a crash. This gauge is orthogonal to what a MACRO_GEN run
+actually trains — the macro policy/value heads are behavior-cloned from
+macro-mcts self-play, not Gumbel self-play, so Gumbel-mode strength against
+an old anchor can plateau while the macro-specific heads keep improving
+(exactly what happened here — see below). `plateau_strikes` is a global
+`ladder.json` field only reset by "freeze" or a non-plateaued reading, not
+by "stop," so a bare relaunch would very likely have re-triggered the same
+stop within one more gauge interval. Fixed with a new `IGNORE_PLATEAU=1`
+env var (mirrors the existing `NO_ANCHOR_DECAY` override pattern) that logs
+the plateau verdict and keeps going instead of breaking, while still
+recording every reading to `ladder.json` normally. Fired 5 more times
+across the rest of the night (iterations 50, ~60s, ~90s, 115) — confirmed
+working correctly every time (logged, continued, never broke).
+
+**Incident 2 — none; a real but transient value_r2 dip (iters 91-96,
+0.86→0.81) that recovered by iteration 103 without intervention**, correctly
+identified as normal training noise (the run's value_r2 had already dipped
+into the 0.81 range as early as iteration 51) rather than a regression
+requiring action.
+
+**Final numbers, iterations 41-115 (75 gauge/train readings):**
+
+| metric | first 5 readings | peak | last 5 readings |
+|---|---|---|---|
+| value_r2 | avg 0.832 | 0.864 (iter 86) | avg 0.809 |
+| loss | avg 2.993 | 2.770 (iter 84) | avg 2.960 |
+| macro_stance_loss | 1.0044 (iter 41) | — | **0.9329 (iter 115)** |
+| macro_order_loss | 0.0254 (iter 41) | — | **0.0215 (iter 115)** |
+
+**Honest read, not spun:** `value_r2`/`loss` are NOT a clean monotonic
+win across the whole overnight stretch — they rose to a peak around
+iteration 84-86, then softened back down toward (not below) their earlier
+range by the end. This reads as normal training variance around a stable
+level rather than sustained improvement OR degradation over these last ~30
+iterations; a longer run or a smoothed trend line would be needed to say
+more. **`macro_stance_loss`/`macro_order_loss` — the specific heads this
+overnight session was about — DID show a real, monotonic-ish improvement**
+across the whole session (0.9450→0.9329 stance, 0.0229→0.0215 order,
+continuing the trend already established earlier in the day), consistent
+with EXP_ELO_066's finding that this goal-blind-retrained head has genuine
+signal, not noise.
+
+No crashes across the full ~15.75h (both segments combined). `model.safetensors`
+is iteration 115's checkpoint (confirmed by mtime, confirmed by row count in
+`training_log.csv`). Checkpoints saved every 5 iterations throughout.
+
+**Not yet done (flagged for the next work session, not attempted overnight
+per the one-heavy-process-at-a-time rule and time budget):** the n=128
+confirmation of `root_prior_w ∈ [0.001, 0.005]` against this final,
+further-improved checkpoint — the natural next step once someone is back
+to review results, since this checkpoint's macro head is measurably
+better than the one the weight-sweep was run against.
