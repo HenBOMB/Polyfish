@@ -115,7 +115,6 @@ pub struct GumbelMctsAgent<'a> {
 struct GumbelNode {
     visits: f32,
     value_sum: f32,
-    progress_sum: f32,
     logit: f32,
     /// Gumbel(0,1) noise sampled at the root. `0.0` for non-root nodes.
     gumbel: f32,
@@ -128,7 +127,6 @@ struct GumbelNode {
     /// visited by this or a prior search. Survives re-root (kept out of
     /// `reset_stats_recursive`) like `own_value`/`logit`.
     edge_reward: Cell<Option<f32>>,
-    own_progress: f32,
     children: Vec<GumbelNode>,
     move_to_here: Option<Box<dyn Move>>,
     is_expanded: bool,
@@ -144,12 +142,10 @@ impl GumbelNode {
         Self {
             visits: 0.0,
             value_sum: 0.0,
-            progress_sum: 0.0,
             logit,
             gumbel,
             own_value: 0.0,
             edge_reward: Cell::new(None),
-            own_progress: 0.0,
             children: Vec::new(),
             move_to_here,
             is_expanded: false,
@@ -158,13 +154,20 @@ impl GumbelNode {
         }
     }
 
+    /// Mean action value of the edge into this node, in the **parent's**
+    /// perspective (Gumbel convention, see `mcts_common`). The `v_progress`
+    /// head is deliberately not folded in here: only candle computes it
+    /// (tch and metal stub it to 0), and this value is the TD bootstrap for
+    /// training labels, so including it made labels backend-dependent. It
+    /// is also the node's own mover's quantity, so under adversarial search
+    /// a handover child would gain the opponent's progress un-negated.
+    /// It remains a trained aux head (EXP_LABEL_002).
     fn q_value(&self) -> f32 {
-        let q = if self.visits == 0.0 {
+        if self.visits == 0.0 {
             0.0
         } else {
             self.value_sum / self.visits
-        };
-        q + self.own_progress
+        }
     }
 
     fn effective_visits(&self) -> f32 {
@@ -514,14 +517,13 @@ impl<'a> GumbelMctsAgent<'a> {
         start_turn: i32,
     ) -> GumbelNode {
         let results = self.evaluator.evaluate(vec![features]);
-        let (root_value, root_progress, ref policy_row) = results[0];
+        let (root_value, _progress, ref policy_row) = results[0];
 
         let mut legal_moves = game.legal_moves();
         let map_size = game.state.settings.size as usize;
 
         let mut root = GumbelNode::new(0.0, 0.0, None);
         root.own_value = root_value;
-        root.own_progress = root_progress;
         root.is_expanded = true;
 
         if legal_moves.is_empty() {
@@ -734,7 +736,7 @@ impl<'a> GumbelMctsAgent<'a> {
             total_collected += leaves.len();
 
             let values = self.batched_evaluate_and_expand(root, &leaves);
-            for (leaf, &(value, _progress)) in leaves.iter().zip(values.iter()) {
+            for (leaf, &value) in leaves.iter().zip(values.iter()) {
                 backpropagate_return_with_rewards(
                     root,
                     &leaf.data.path_indices,
@@ -915,14 +917,14 @@ impl<'a> GumbelMctsAgent<'a> {
         &self,
         root: &mut GumbelNode,
         leaves: &[GumbelLeaf],
-    ) -> Vec<(f32, f32)> {
-        let mut values = vec![(0.0f32, 0.0f32); leaves.len()];
+    ) -> Vec<f32> {
+        let mut values = vec![0.0f32; leaves.len()];
         let mut indices_needing_eval: Vec<usize> = Vec::new();
         let mut eval_batch: Vec<RawFeatures> = Vec::new();
 
         for (i, leaf) in leaves.iter().enumerate() {
             if let Some(tv) = leaf.data.terminal_value {
-                values[i] = (tv, 0.0); // Progress is 0.0 at terminal state
+                values[i] = tv;
             } else if let Some(ref feat) = leaf.data.features {
                 indices_needing_eval.push(i);
                 eval_batch.push(RawFeatures {
@@ -936,8 +938,8 @@ impl<'a> GumbelMctsAgent<'a> {
             let results = self.evaluator.evaluate(eval_batch);
 
             for (local_idx, &global_idx) in indices_needing_eval.iter().enumerate() {
-                let (value, progress, ref policy_row) = results[local_idx];
-                values[global_idx] = (value, progress);
+                let (value, _progress, ref policy_row) = results[local_idx];
+                values[global_idx] = value;
 
                 let leaf = &leaves[global_idx];
                 let node = get_node_by_path_mut(root, &leaf.data.path_indices)
@@ -950,7 +952,6 @@ impl<'a> GumbelMctsAgent<'a> {
                     leaf.data.map_size,
                     policy_row,
                     value,
-                    progress,
                     leaf.data.heuristic_scores.as_deref(),
                 );
             }
@@ -972,14 +973,12 @@ impl<'a> GumbelMctsAgent<'a> {
         map_size: usize,
         policy: &RawPolicyOutput,
         own_value: f32,
-        own_progress: f32,
         heuristic_scores: Option<&[f32]>,
     ) {
         if node.is_expanded {
             return;
         }
         node.own_value = own_value;
-        node.own_progress = own_progress;
 
         if legal_moves.is_empty() {
             node.is_expanded = true;
