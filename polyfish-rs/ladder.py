@@ -7,6 +7,15 @@ continue / freeze (>=80% vs active) / stop (plateau, see _plateau).
 Win/loss counts are always from the current model's side. Every reading
 carries a Wilson interval and both verdicts are drawn from it, not from the
 point estimate a ~64-game reading resolves to only +/-12pp.
+
+Scope: the gauge is a fixed Imperius-mirror instrument while self-play trains
+on a 5-tribe pool. Pinning the pair is deliberate variance control — the tribe
+block effect rivals a campaign's whole measured improvement — but it makes
+every ladder Elo a statement about Imperius-vs-Imperius play, not about the
+distribution training optimizes. `--kind tribe_audit` rows are the cross-check
+on that gap; they carry the pair they were played on and never enter a verdict.
+`--tribes` is the pair the *match* used, read off arena, never the pair
+self-play trained on that iteration (#34).
 """
 import argparse
 import json
@@ -15,6 +24,17 @@ import os
 from datetime import datetime, timezone
 
 LADDER_FILE = os.environ.get("LADDER_FILE", "ladder.json")
+# Recorded into ladder.json itself: a reader of the experiment record should not
+# have to find this file to learn what the numbers in it are a measurement of.
+# Rewritten from here on every save, so the stored note cannot drift from the code.
+SCOPE_NOTE = (
+    "Readings are taken on the fixed tribe pair in each reading's `tribes` "
+    "field (the gauge pins an Imperius mirror) while self-play trains on the "
+    "5-tribe pool in config.json. The pin is variance control: the tribe block "
+    "effect rivals a campaign's measured improvement. Ladder Elo is therefore "
+    "Imperius-mirror strength, not pool strength; `kind: tribe_audit` readings "
+    "are the periodic cross-check and take no part in any verdict."
+)
 FREEZE_WR = 0.80
 PLATEAU_WINDOW = 8  # gauge readings vs the same anchor (= 80 iters at interval 10)
 PLATEAU_STRIKES = 2  # consecutive flagged readings before the loop stops
@@ -32,8 +52,11 @@ def _now():
 def _load():
     if os.path.exists(LADDER_FILE):
         with open(LADDER_FILE) as f:
-            return json.load(f)
+            data = json.load(f)
+        data["scope"] = SCOPE_NOTE
+        return data
     return {
+        "scope": SCOPE_NOTE,
         "anchors": [
             {"name": "greedy", "path": "", "elo": 0.0, "frozen_iteration": None, "frozen_at": None}
         ],
@@ -355,9 +378,10 @@ def _append_reading(data, args, kind, opponent):
         reading["games_attempted"] = attempted
         reading["games_dropped"] = dropped
         reading["unpaired_seeds"] = unpaired
-    # The tribe pair is reshuffled every iteration and was never recorded, so a
-    # behaviour metric moving between readings could not be separated from the
-    # block effect of a different matchup (audit M5).
+    # The pair this match was played on, read off arena's own output. It used to
+    # be handed self-play's shuffled training pair for a match arena hardcoded to
+    # an Imperius mirror, which made the permanent record disagree with both the
+    # instrument and its own per-game JSONs (#34, audit M5).
     if getattr(args, "tribes", None):
         reading["tribes"] = args.tribes
     if getattr(args, "stats_dir", None):
@@ -370,7 +394,10 @@ def _append_reading(data, args, kind, opponent):
 
 def cmd_record(args):
     data = _load()
-    if args.kind == "gauge":
+    # A tribe_audit is the gauge match on a different tribe pair, so it reads
+    # against the same active anchor -- the difference between the two rows is
+    # the block effect the pinned pair buys away.
+    if args.kind in ("gauge", "tribe_audit"):
         opponent = data["anchors"][-1]
     else:
         opponent = _anchor_by_name(data, args.opponent)
@@ -501,7 +528,9 @@ def main():
                        help="seeds arena dropped after an in-game panic")
         p.add_argument("--unpaired-seeds", type=int, default=0,
                        help="seeds that lost one half of their side swap")
-        p.add_argument("--tribes", default="", help="tribe pair this reading was taken on")
+        p.add_argument("--tribes", default="",
+                       help="tribe pair the match was played on, from arena's `Tribes:` "
+                            "line -- not the pair self-play trained on this iteration")
         p.add_argument("--max-turns", type=int,
                        help="turn cap this reading was played at (the loop varies it "
                             "with the curriculum, so it is part of the budget key)")
@@ -514,7 +543,10 @@ def main():
 
     rec = sub.add_parser("record")
     match_args(rec)
-    rec.add_argument("--kind", choices=["gauge", "audit"], default="gauge")
+    rec.add_argument("--kind", choices=["gauge", "audit", "tribe_audit"], default="gauge",
+                     help="gauge steers the run; audit cross-checks the anchor chain; "
+                          "tribe_audit re-reads the active anchor on another tribe pair. "
+                          "Only gauge carries a verdict or enters the plateau window.")
     rec.add_argument("--opponent", help="anchor name (required for --kind audit)")
     rec.set_defaults(func=cmd_record)
 

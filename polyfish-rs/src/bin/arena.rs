@@ -120,6 +120,27 @@ struct Args {
     /// Weight of sigma(Q) inside the search tree, gumbel backends only.
     #[arg(long)]
     tree_q_weight: Option<f32>,
+
+    /// Tribe in the P1 seat. Unknown names are rejected, not defaulted: a
+    /// silently substituted tribe is how the reading and its record diverge.
+    #[arg(long, default_value = "Imperius")]
+    tribe1: String,
+
+    /// Tribe in the P2 seat. With a pair the side swap pairs the tribe as well
+    /// as the seat, so each configuration plays each tribe once per seed.
+    #[arg(long, default_value = "Imperius")]
+    tribe2: String,
+}
+
+/// Tribe by name, case-insensitively. Errors rather than falling back: arena is
+/// the measurement instrument, so a wrong tribe must stop the run, not the
+/// reading (#34).
+fn parse_tribe(s: &str) -> anyhow::Result<TribeType> {
+    use strum::IntoEnumIterator;
+    TribeType::iter()
+        .filter(|t| !matches!(t, TribeType::None | TribeType::Nature))
+        .find(|t| format!("{t:?}").eq_ignore_ascii_case(s))
+        .ok_or_else(|| anyhow::anyhow!("unknown tribe {s:?}"))
 }
 
 /// Search knobs applied to both configurations.
@@ -236,13 +257,17 @@ fn play_match(
     max_turns: i32,
     gamemode: u8,
     symmetric: bool,
+    tribes: [TribeType; 2],
     tuning: SearchTuning,
     mut samples: Option<&mut Vec<TurnSample>>,
 ) -> MatchResult {
+    // Tribes are a property of the seat, not the configuration: seed N always
+    // generates the same map, and the side swap therefore gives each config one
+    // game as each tribe. `MatchResult::tribes` re-attributes them to configs.
     let gen_settings = MapGenSettings {
         size: MapSize::Tiny,
         map_type: MapType::Drylands,
-        tribes: vec![TribeType::Imperius, TribeType::Imperius],
+        tribes: tribes.to_vec(),
         seed,
         symmetric,
         ..Default::default()
@@ -472,6 +497,8 @@ fn backend_from_arg(arg: SearchBackendArg, k: usize) -> SearchBackend {
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    // Before the model load: a bad tribe name should cost a parse, not a minute.
+    let tribes = [parse_tribe(&args.tribe1)?, parse_tribe(&args.tribe2)?];
     if args.adversarial {
         polyfish::game::set_adversarial_search(true);
     }
@@ -533,6 +560,10 @@ fn main() -> anyhow::Result<()> {
         args.symmetric,
         polyfish::game::adversarial_search()
     );
+    // The pair the reading is actually taken on. run_training_loop.sh greps
+    // this line for what it records on the ladder, so the record can no longer
+    // disagree with the match (#34); keep the `Tribes: A,B` shape.
+    println!("Tribes: {:?},{:?}", tribes[0], tribes[1]);
 
     let (base_seed, seed_source) = match args.seed {
         Some(s) => (s, "fixed"),
@@ -694,6 +725,7 @@ fn main() -> anyhow::Result<()> {
                     args.max_turns,
                     args.gamemode,
                     args.symmetric,
+                    tribes,
                     tuning,
                     sink,
                 )
