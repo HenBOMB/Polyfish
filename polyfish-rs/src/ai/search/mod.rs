@@ -18,3 +18,4 @@ pub mod mcts_common;
 pub mod mcts_types;
 pub mod mcts_zero;
 pub mod policy_composer;
+pub mod unit_goals;

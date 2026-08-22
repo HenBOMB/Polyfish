@@ -4,7 +4,7 @@
 //! in-tree shaping; re-exported through `oracle_macro` so existing
 //! `crate::ai::oracle_macro::X` call sites keep resolving.
 
-use crate::states::{GameState, PlayerId};
+use crate::states::{GameState, PlayerId, UnitState};
 use crate::types::TechnologyType;
 
 /// Minimum turns a Rider must save (vs a movement-1 unit) to some EXPAND
@@ -132,6 +132,51 @@ pub fn rider_turns_saved(state: &GameState, player: PlayerId, targets: &[i32]) -
         .unwrap_or(0)
 }
 
+/// Shared greedy nearest-pair core behind `assign_expand_targets`/
+/// `assign_expand_targets_by_id`: `units` is (identifying key, current
+/// tile) per candidate — the legacy tile-keyed caller uses the same value
+/// for both; the id-keyed caller doesn't. Real (explored) targets outrank
+/// fog guesses (v6: a scarce unit must never be pinned to a guess while a
+/// discovered village waits); ties break on `(key, target)` via the tuple
+/// sort. Deterministic, unique per unit AND per target.
+fn assign_targets_greedy<K: Ord + Copy + std::hash::Hash>(
+    state: &GameState,
+    player: PlayerId,
+    units: &[(K, i32)],
+    targets: &[i32],
+) -> Vec<(K, i32)> {
+    let size = state.settings.size as i32;
+    if size <= 0 {
+        return Vec::new();
+    }
+    let cheb = |a: i32, b: i32| crate::functions::get_chebyshev_distance(a, b, size);
+    let is_guess = |t: i32| {
+        !state
+            .tiles
+            .get(&t)
+            .map_or(false, |tile| tile.explorers.contains(&player))
+    };
+    let mut pairs: Vec<(bool, i32, K, i32)> = Vec::new();
+    for &(key, pos) in units {
+        for &t in targets {
+            pairs.push((is_guess(t), cheb(pos, t), key, t));
+        }
+    }
+    pairs.sort_unstable();
+    let mut used_u = std::collections::HashSet::new();
+    let mut used_t = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for (_, _, key, t) in pairs {
+        if used_u.contains(&key) || used_t.contains(&t) {
+            continue;
+        }
+        used_u.insert(key);
+        used_t.insert(t);
+        out.push((key, t));
+    }
+    out
+}
+
 /// Greedy unique unit→EXPAND-target assignment, nearest pair first. Each
 /// target's approach term pays only its assigned unit, so two scouts never
 /// bank progress on the same fog target (audit: 89% duplicate-sector
@@ -141,42 +186,26 @@ pub fn assign_expand_targets(
     player: PlayerId,
     targets: &[i32],
 ) -> Vec<(i32, i32)> {
-    let size = state.settings.size as i32;
     let Some(tribe) = state.tribes.get(&player) else {
         return Vec::new();
     };
-    if size <= 0 {
-        return Vec::new();
-    }
-    let cheb =
-        |a: i32, b: i32| crate::functions::get_chebyshev_distance(a, b, size);
-    // v6: real (explored) targets outrank fog guesses in pairing — a scarce
-    // unit must never be pinned to a guess while a discovered village waits.
-    let is_guess = |t: i32| {
-        !state
-            .tiles
-            .get(&t)
-            .map_or(false, |tile| tile.explorers.contains(&player))
-    };
-    let mut pairs: Vec<(bool, i32, i32, i32)> = Vec::new();
-    for u in &tribe.units {
-        for &t in targets {
-            pairs.push((is_guess(t), cheb(u.coords.idx, t), u.coords.idx, t));
-        }
-    }
-    pairs.sort_unstable();
-    let mut used_u = std::collections::HashSet::new();
-    let mut used_t = std::collections::HashSet::new();
-    let mut out = Vec::new();
-    for (_, _, u, t) in pairs {
-        if used_u.contains(&u) || used_t.contains(&t) {
-            continue;
-        }
-        used_u.insert(u);
-        used_t.insert(t);
-        out.push((u, t));
-    }
-    out
+    let units: Vec<(i32, i32)> = tribe.units.iter().map(|u| (u.coords.idx, u.coords.idx)).collect();
+    assign_targets_greedy(state, player, &units, targets)
+}
+
+/// ID-keyed variant for the persistent per-unit goal store (`unit_goals.rs`):
+/// same greedy nearest-pair algorithm, restricted to an explicit unit
+/// subset (callers pass only units with no active goal) and an explicit
+/// target subset (callers pass only unclaimed targets), keyed by the
+/// caller's stable `UnitState::id` instead of tile position.
+pub fn assign_expand_targets_by_id(
+    state: &GameState,
+    player: PlayerId,
+    units: &[&UnitState],
+    targets: &[i32],
+) -> Vec<(u32, i32)> {
+    let keyed: Vec<(u32, i32)> = units.iter().map(|u| (u.id, u.coords.idx)).collect();
+    assign_targets_greedy(state, player, &keyed, targets)
 }
 
 
