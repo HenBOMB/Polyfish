@@ -48,6 +48,16 @@ pub const SHAPE_GOAL_SCOUT: f32 = 25.0;
 /// (on top of the held cap) — makes the final Capture-vs-Step choice a
 /// ~0.4-normalized landslide instead of one more step of gradient.
 pub const SHAPE_GOAL_EXPAND_DONE: f32 = 2.0;
+/// Per-unit-goal (Aug 2026) sibling of `SHAPE_GOAL_EXPAND_PER_TILE`, used
+/// only when a `UnitGoalStore` is threaded in (`goal_potential_with_unit_goals`'s
+/// `Some` arm on the real trajectory) — a separate dial from the legacy
+/// ephemeral-matching term so tuning one never silently retunes the other.
+/// First fit at calibration parity with the legacy constant.
+pub const SHAPE_UNIT_GOAL_PER_TILE: f32 = 200.0;
+/// Per-unit-goal sibling of `SHAPE_GOAL_EXPAND_DONE`. FIRST FIT at
+/// DONE-parity — dial against the measured dq median before trusting it,
+/// same convention as every other first fit in this file.
+pub const SHAPE_UNIT_GOAL_COMPLETE: f32 = 2.0;
 /// Score-equivalents per living Rider while the rider push is on (open
 /// terrain + active EXPAND).
 pub const SHAPE_GOAL_RIDER: f32 = 100.0;

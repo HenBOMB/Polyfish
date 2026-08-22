@@ -36,7 +36,23 @@ pub fn goal_potential_with_threats(
     aux: Option<&crate::ai::oracle_macro::GoalAux>,
     threats: Option<&[(crate::states::UnitState, f32)]>,
 ) -> f32 {
-    use crate::ai::oracle_macro::{OrderKind, Stance};
+    goal_potential_with_unit_goals(state, player, goal, aux, threats, None)
+}
+
+/// Same as [`goal_potential_with_threats`], but additionally prices EXPAND
+/// against a persistent per-unit `UnitGoalStore` instead of re-deriving the
+/// unit<->target matching fresh on every call. `None` (the only value every
+/// caller except `MacroMctsAgent`'s real trajectory passes) is byte-for-byte
+/// the legacy ephemeral-matching behavior.
+pub fn goal_potential_with_unit_goals(
+    state: &GameState,
+    player: i32,
+    goal: &crate::ai::oracle_macro::MacroGoal,
+    aux: Option<&crate::ai::oracle_macro::GoalAux>,
+    threats: Option<&[(crate::states::UnitState, f32)]>,
+    unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
+) -> f32 {
+    use crate::ai::oracle_macro::{retakeable_village, still_capturable, OrderKind, Stance};
     let Some(tribe) = state.tribes.get(&player) else {
         return 0.0;
     };
@@ -160,6 +176,8 @@ pub fn goal_potential_with_threats(
         let mut approach_targets: Vec<i32> = Vec::new();
         let mut target_weight: std::collections::HashMap<i32, f32> =
             std::collections::HashMap::new();
+        let mut achieved_targets: std::collections::HashSet<i32> =
+            std::collections::HashSet::new();
         for (kind, idx) in &goal.orders {
             if *kind != OrderKind::Expand {
                 continue;
@@ -174,6 +192,7 @@ pub fn goal_potential_with_threats(
                     if crate::functions::get_city_at(state, *idx).is_some() {
                         phi += SHAPE_GOAL_EXPAND_PER_TILE
                             * (SHAPE_PROX_CAP as f32 + SHAPE_GOAL_EXPAND_DONE);
+                        achieved_targets.insert(*idx);
                     }
                     continue;
                 } else if tile.owner != 0 {
@@ -187,59 +206,170 @@ pub fn goal_potential_with_threats(
             approach_targets.push(*idx);
             target_weight.insert(*idx, weight);
         }
-        if !approach_targets.is_empty() {
-            let w_of = |t: i32| target_weight.get(&t).copied().unwrap_or(1.0);
-            let pairs = crate::ai::oracle_macro::assign_expand_targets(
-                state,
-                player,
-                &approach_targets,
-            );
-            for (unit_idx, target) in &pairs {
-                let d = cheb(*unit_idx, *target, width);
-                phi += SHAPE_GOAL_EXPAND_PER_TILE
-                    * w_of(*target)
-                    * (SHAPE_PROX_CAP - d).max(0) as f32;
-            }
-            // Targets beyond the unit count keep their closest-unit gradient,
-            // so an under-scouted map still pulls.
-            let assigned: std::collections::HashSet<i32> =
-                pairs.iter().map(|(_, t)| *t).collect();
-            for target in approach_targets.iter().filter(|t| !assigned.contains(t)) {
-                let d = tribe
-                    .units
-                    .iter()
-                    .map(|u| cheb(u.coords.idx, *target, width))
-                    .min()
-                    .unwrap_or(i32::MAX);
-                phi += SHAPE_GOAL_EXPAND_PER_TILE
-                    * w_of(*target)
-                    * (SHAPE_PROX_CAP - d).max(0) as f32;
-            }
-            // v6: a CONTESTED target (visible enemy unit standing on it) pays
-            // one extra converger — the nearest unit not already assigned to
-            // it — at half gradient. Exactly one; no dogpile.
-            for (unit_idx, target) in &pairs {
-                let occupied = crate::functions::get_unit_at(state, *target)
-                    .map_or(false, |u| u.owner != player)
-                    && state
-                        .tiles
-                        .get(target)
-                        .map_or(false, |t| t.explorers.contains(&player));
-                if !occupied {
-                    continue;
+        match unit_goals {
+            None => {
+                if !approach_targets.is_empty() {
+                    let w_of = |t: i32| target_weight.get(&t).copied().unwrap_or(1.0);
+                    let pairs = crate::ai::oracle_macro::assign_expand_targets(
+                        state,
+                        player,
+                        &approach_targets,
+                    );
+                    for (unit_idx, target) in &pairs {
+                        let d = cheb(*unit_idx, *target, width);
+                        phi += SHAPE_GOAL_EXPAND_PER_TILE
+                            * w_of(*target)
+                            * (SHAPE_PROX_CAP - d).max(0) as f32;
+                    }
+                    // Targets beyond the unit count keep their closest-unit
+                    // gradient, so an under-scouted map still pulls.
+                    let assigned: std::collections::HashSet<i32> =
+                        pairs.iter().map(|(_, t)| *t).collect();
+                    for target in approach_targets.iter().filter(|t| !assigned.contains(t)) {
+                        let d = tribe
+                            .units
+                            .iter()
+                            .map(|u| cheb(u.coords.idx, *target, width))
+                            .min()
+                            .unwrap_or(i32::MAX);
+                        phi += SHAPE_GOAL_EXPAND_PER_TILE
+                            * w_of(*target)
+                            * (SHAPE_PROX_CAP - d).max(0) as f32;
+                    }
+                    // v6: a CONTESTED target (visible enemy unit standing on
+                    // it) pays one extra converger — the nearest unit not
+                    // already assigned to it — at half gradient. Exactly
+                    // one; no dogpile.
+                    for (unit_idx, target) in &pairs {
+                        let occupied = crate::functions::get_unit_at(state, *target)
+                            .map_or(false, |u| u.owner != player)
+                            && state
+                                .tiles
+                                .get(target)
+                                .map_or(false, |t| t.explorers.contains(&player));
+                        if !occupied {
+                            continue;
+                        }
+                        let second = tribe
+                            .units
+                            .iter()
+                            .map(|u| u.coords.idx)
+                            .filter(|idx| idx != unit_idx)
+                            .map(|idx| cheb(idx, *target, width))
+                            .min();
+                        if let Some(d) = second {
+                            phi += SHAPE_GOAL_CONTEST_SECOND
+                                * SHAPE_GOAL_EXPAND_PER_TILE
+                                * w_of(*target)
+                                * (SHAPE_PROX_CAP - d).max(0) as f32;
+                        }
+                    }
                 }
-                let second = tribe
+            }
+            Some(store) => {
+                // Sticky per-unit pricing: `pairs` reads the store's frozen
+                // assignment directly — no re-matching — so one unit's
+                // candidate move can never shift which target a different,
+                // non-moving unit is priced against (the cross-talk the
+                // legacy fresh-match-every-call design had). Independent of
+                // whether `goal.orders` still names the target this ply: a
+                // stance flip that drops Expand from the ballot must not
+                // cut a mid-pursuit unit's pull, or it wanders back — the
+                // bug that motivated this design.
+                let pairs: Vec<(i32, i32)> = tribe
                     .units
                     .iter()
-                    .map(|u| u.coords.idx)
-                    .filter(|idx| idx != unit_idx)
-                    .map(|idx| cheb(idx, *target, width))
-                    .min();
-                if let Some(d) = second {
-                    phi += SHAPE_GOAL_CONTEST_SECOND
-                        * SHAPE_GOAL_EXPAND_PER_TILE
+                    .filter_map(|u| {
+                        let g = store.active(u.id)?;
+                        (g.kind == OrderKind::Expand).then_some((u.coords.idx, g.target))
+                    })
+                    .collect();
+                let w_of = |t: i32| {
+                    target_weight.get(&t).copied().unwrap_or_else(|| {
+                        // Unexplored (fog-guess) fallback targets always pay
+                        // approach at weight 1.0 -- reading their owner
+                        // would leak FOW, same reasoning as the goal.orders
+                        // pre-loop above.
+                        state.tiles.get(&t).map_or(1.0, |tile| {
+                            if tile.explorers.contains(&player) && tile.owner != 0 && tile.owner != player {
+                                SHAPE_GOAL_RETAKE_W
+                            } else {
+                                1.0
+                            }
+                        })
+                    })
+                };
+                for (unit_idx, target) in &pairs {
+                    if achieved_targets.contains(target) {
+                        continue; // already paid by the goal.orders-scoped branch above
+                    }
+                    let Some(tile) = state.tiles.get(target) else {
+                        continue;
+                    };
+                    if tile.owner == player && crate::functions::get_city_at(state, *target).is_some() {
+                        // Reached this ply, but the target had already
+                        // dropped out of `goal.orders` (a churned ballot) —
+                        // read completion straight from state instead of
+                        // relying on the branch above.
+                        phi += SHAPE_UNIT_GOAL_PER_TILE
+                            * (SHAPE_PROX_CAP as f32 + SHAPE_UNIT_GOAL_COMPLETE);
+                        continue;
+                    }
+                    // Unexplored targets can't be disconfirmed (mirrors
+                    // `goal_outcome`'s same guard) -- skip straight to
+                    // approach pricing instead of reading still_capturable/
+                    // retakeable_village, which both require exploration
+                    // and would otherwise invalidate every fog-guess pair.
+                    if tile.explorers.contains(&player)
+                        && !still_capturable(state, *target, player)
+                        && !retakeable_village(state, *target, player)
+                    {
+                        continue; // invalidated -- reconcile pops it next ply
+                    }
+                    let d = cheb(*unit_idx, *target, width);
+                    phi += SHAPE_UNIT_GOAL_PER_TILE
                         * w_of(*target)
                         * (SHAPE_PROX_CAP - d).max(0) as f32;
+                }
+                // Orders-listed targets no unit is currently assigned to
+                // (more painted targets than idle units at reconcile time)
+                // keep their closest-unit gradient, same as the legacy path.
+                let assigned: std::collections::HashSet<i32> =
+                    pairs.iter().map(|(_, t)| *t).collect();
+                for target in approach_targets.iter().filter(|t| !assigned.contains(t)) {
+                    let d = tribe
+                        .units
+                        .iter()
+                        .map(|u| cheb(u.coords.idx, *target, width))
+                        .min()
+                        .unwrap_or(i32::MAX);
+                    phi += SHAPE_UNIT_GOAL_PER_TILE
+                        * w_of(*target)
+                        * (SHAPE_PROX_CAP - d).max(0) as f32;
+                }
+                for (unit_idx, target) in &pairs {
+                    let occupied = crate::functions::get_unit_at(state, *target)
+                        .map_or(false, |u| u.owner != player)
+                        && state
+                            .tiles
+                            .get(target)
+                            .map_or(false, |t| t.explorers.contains(&player));
+                    if !occupied {
+                        continue;
+                    }
+                    let second = tribe
+                        .units
+                        .iter()
+                        .map(|u| u.coords.idx)
+                        .filter(|idx| idx != unit_idx)
+                        .map(|idx| cheb(idx, *target, width))
+                        .min();
+                    if let Some(d) = second {
+                        phi += SHAPE_GOAL_CONTEST_SECOND
+                            * SHAPE_UNIT_GOAL_PER_TILE
+                            * w_of(*target)
+                            * (SHAPE_PROX_CAP - d).max(0) as f32;
+                    }
                 }
             }
         }

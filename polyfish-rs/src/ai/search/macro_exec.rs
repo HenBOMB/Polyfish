@@ -238,6 +238,7 @@ pub fn rank_plies(
     aux: &GoalAux,
     star_gate: bool,
     lambda: f32,
+    unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
 ) -> Vec<(f32, Box<dyn Move>)> {
     // Pre-increment value doubles as a unique per-call ID for the dphi
     // probe below — two rows sharing a call_id came from the same ply
@@ -267,7 +268,7 @@ pub fn rank_plies(
         None
     };
     let phi_pre = if lambda != 0.0 {
-        reward::goal_potential_with_threats(&game.state, player, goal, Some(aux), threats.as_deref())
+        reward::goal_potential_with_unit_goals(&game.state, player, goal, Some(aux), threats.as_deref(), unit_goals)
     } else {
         0.0
     };
@@ -285,12 +286,13 @@ pub fn rank_plies(
             let mut s = scoring::score_move(game, m.as_ref());
             if lambda != 0.0 && m.move_type() != MoveType::EndTurn {
                 if let Some(undo) = game.simulate_move(m.as_ref()) {
-                    let phi_post = reward::goal_potential_with_threats(
+                    let phi_post = reward::goal_potential_with_unit_goals(
                         &game.state,
                         player,
                         goal,
                         Some(aux),
                         threats.as_deref(),
+                        unit_goals,
                     );
                     if let Some(path) = probe_path {
                         let phi_post_no_aux = reward::goal_potential_with_threats(
@@ -383,7 +385,10 @@ pub fn execute_turn_recorded(
             Some(lane_state),
         );
         let gate = tech_discipline_active(&game.state, player, goal);
-        let mut ranked = rank_plies(game, player, goal, &aux, gate, lambda);
+        // Rollout branches never see the real trajectory's UnitGoalStore
+        // (Fork 2 of the per-unit-goal design: real-trajectory-only for
+        // v1) -- this call stays byte-identical to pre-store behavior.
+        let mut ranked = rank_plies(game, player, goal, &aux, gate, lambda, None);
         if ranked.is_empty() {
             break;
         }
@@ -394,7 +399,7 @@ pub fn execute_turn_recorded(
         if let Some(r) = rec.as_deref_mut() {
             let key = best.serialize().to_string();
             // Same gate, no directive PULL: isolates the lambda*dphi term.
-            let no_phi = rank_plies(game, player, goal, &aux, gate, 0.0);
+            let no_phi = rank_plies(game, player, goal, &aux, gate, 0.0, None);
             // No directive at all: gate open, default goal — the whole Tier-2
             // channel removed, both filter and pull.
             let bare = MacroGoal::default();
@@ -406,7 +411,7 @@ pub fn execute_turn_recorded(
                 counters.tier3_bought,
                 Some(lane_state),
             );
-            let no_goal = rank_plies(game, player, &bare, &bare_aux, false, 0.0);
+            let no_goal = rank_plies(game, player, &bare, &bare_aux, false, 0.0, None);
             let top = |v: &Vec<(f32, Box<dyn Move>)>| {
                 v.first().map(|(_, m)| m.serialize().to_string()).unwrap_or_default()
             };
@@ -531,7 +536,7 @@ mod tests {
                 crate::ai::oracle_macro::TIER3_CAP_PER_GAME,
                 None,
             );
-            let ranked = rank_plies(&mut game, pov, &goal, &aux, true, 1.0);
+            let ranked = rank_plies(&mut game, pov, &goal, &aux, true, 1.0, None);
             assert!(!ranked.is_empty(), "seed {seed}: rank_plies returned empty");
             assert!(
                 ranked

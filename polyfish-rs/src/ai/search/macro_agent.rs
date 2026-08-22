@@ -160,7 +160,11 @@ impl MacroScriptAgent {
         let pov = game.state.settings.current_player_turn_id;
         let mut view = game.clone_for_mcts(pov);
         let goal = commit_macro_goal(&view.state, pov, &mut self.stance_commit, self.counters.tier3_bought);
-        let ranked = rank_view(&mut view, pov, &goal, &mut self.lane_state, &mut self.counters, self.lambda);
+        // No UnitGoalStore: MacroScriptAgent is a fixed comparison arm
+        // (arena constructs it per match) -- pricing must stay byte-
+        // identical so past-vs-future measurements don't silently move.
+        let ranked =
+            rank_view(&mut view, pov, &goal, &mut self.lane_state, &mut self.counters, self.lambda, None);
         let m = first_true_legal(game, ranked);
         self.counters.count(m.as_ref());
         Some(m)
@@ -177,6 +181,7 @@ pub(crate) fn rank_view(
     lane_state: &mut LaneState,
     counters: &mut TurnCounters,
     lambda: f32,
+    unit_goals: Option<&crate::ai::search::unit_goals::UnitGoalStore>,
 ) -> Vec<(f32, Box<dyn Move>)> {
     // Per-ply: observe only. The LANE is a turn-level identity chosen by
     // `select_lane` at the turn boundary — re-selecting it 20x a turn
@@ -191,7 +196,7 @@ pub(crate) fn rank_view(
         Some(lane_state),
     );
     let gate = tech_discipline_active(&view.state, pov, goal);
-    macro_exec::rank_plies(view, pov, goal, &aux, gate, lambda)
+    macro_exec::rank_plies(view, pov, goal, &aux, gate, lambda, unit_goals)
 }
 
 /// Candidate directive set: the committed script base first, then stance
@@ -416,8 +421,17 @@ impl<'a> MacroLookaheadAgent<'a> {
         }
         let goal = self.turn_goal.clone().unwrap_or_default();
         let mut view = game.clone_for_mcts(pov);
-        let ranked =
-            rank_view(&mut view, pov, &goal, &mut self.lane_state, &mut self.counters, self.params.lambda);
+        // Same reasoning as MacroScriptAgent above: no UnitGoalStore here,
+        // this per-unit-goal design (v1) only wires into MacroMctsAgent.
+        let ranked = rank_view(
+            &mut view,
+            pov,
+            &goal,
+            &mut self.lane_state,
+            &mut self.counters,
+            self.params.lambda,
+            None,
+        );
         let m = first_true_legal(game, ranked);
         self.counters.count(m.as_ref());
         Some(m)

@@ -99,6 +99,9 @@ fn goal_outcome(state: &GameState, target: i32, player: PlayerId) -> Option<bool
     if tile.owner == player && get_city_at(state, target).is_some() {
         return Some(true);
     }
+    if !tile.explorers.contains(&player) {
+        return None; // unexplored (a fog guess) -- can't disconfirm what we can't see
+    }
     if !still_capturable(state, target, player) && !retakeable_village(state, target, player) {
         return Some(false);
     }

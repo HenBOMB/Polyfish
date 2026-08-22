@@ -727,6 +727,11 @@ pub struct MacroMctsAgent<'a> {
     /// EXP_ELO_037: fog orders stripped from the live goal MID-TURN when a
     /// ply's own vision disconfirmed them (per-ply belief consumption).
     pub intra_strips: u32,
+    /// Per-unit-goal design (Aug 2026): real-trajectory-only persistent
+    /// EXPAND assignment, reconciled once per real ply in `select_move`.
+    /// Never threaded into rollouts (Fork 2) -- rollouts stay on the
+    /// ephemeral `None` path, byte-identical to before this field existed.
+    unit_goals: crate::ai::search::unit_goals::UnitGoalStore,
 }
 
 /// EXP_ELO_038: how many recent picked directives stay on the ballot.
@@ -940,6 +945,7 @@ impl<'a> MacroMctsAgent<'a> {
             last_belief_target: None,
             recent_goals: std::collections::VecDeque::new(),
             intra_strips: 0,
+            unit_goals: crate::ai::search::unit_goals::UnitGoalStore::default(),
         }
     }
 
@@ -1121,6 +1127,7 @@ impl<'a> MacroMctsAgent<'a> {
             }
         }
         let goal = self.turn_goal.clone().unwrap_or_default();
+        crate::ai::search::unit_goals::reconcile_unit_goals(&view.state, pov, &goal, &mut self.unit_goals);
         let ranked = crate::ai::macro_agent::rank_view(
             &mut view,
             pov,
@@ -1128,6 +1135,7 @@ impl<'a> MacroMctsAgent<'a> {
             &mut self.lane_state,
             &mut self.counters,
             self.params.lambda,
+            Some(&self.unit_goals),
         );
         if let Some(path) = ply_trace_path() {
             let turn = game.state.settings.turn;
@@ -1418,6 +1426,44 @@ mod tests {
             "NetAsymPaint leaf must stay zero-sum: v(p1)={c} v(p2)={d} sum={}",
             c + d
         );
+    }
+
+    /// Per-unit-goal design (Aug 2026), Step 3 verification: extends
+    /// `macro_exec::executor_is_deterministic`'s pattern to the full agent
+    /// with the `UnitGoalStore` wired in (`reconcile_unit_goals` +
+    /// `Some(&self.unit_goals)` in `select_move`). Two independent, real
+    /// two-player games from the same seed must produce byte-identical
+    /// `_history` -- correctness now additionally depends on
+    /// `tribe.units`' Vec order staying stable, a pre-existing invariant
+    /// (see `executor_is_deterministic`) this is a new consumer of, not a
+    /// new one.
+    #[test]
+    fn mcts_agent_with_unit_goals_is_deterministic() {
+        for seed in 0..2i64 {
+            let base = generated_game(seed);
+            let mut histories = Vec::new();
+            for _ in 0..2 {
+                let mut game = base.clone();
+                let evaluator = Evaluator::Dummy(DummyEvalHandle::new());
+                let params = MacroParams { sims: 8, ..Default::default() };
+                let mut agent1 = MacroMctsAgent::new(&evaluator, params.clone());
+                let mut agent2 = MacroMctsAgent::new(&evaluator, params);
+                for _ in 0..40 {
+                    if game.state.settings._game_over {
+                        break;
+                    }
+                    let pid = game.state.settings.current_player_turn_id;
+                    let agent = if pid == 1 { &mut agent1 } else { &mut agent2 };
+                    let Some(m) = agent.select_move(&mut game) else { break };
+                    game.play_move(m.as_ref());
+                }
+                histories.push(game.state._history.clone());
+            }
+            assert_eq!(
+                histories[0], histories[1],
+                "seed {seed}: two MacroMctsAgent (UnitGoalStore wired in) runs diverged"
+            );
+        }
     }
 
     #[test]

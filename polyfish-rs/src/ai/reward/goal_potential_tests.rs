@@ -901,3 +901,85 @@ use crate::types::UnitType;
              quiet {quiet}, besieged {besieged}"
         );
     }
+
+    /// Per-unit-goal design (Aug 2026), Step 3 verification: the legacy
+    /// EXPAND pricing (`None`) re-matches unit<->target fresh on every
+    /// `goal_potential` call, so one unit's candidate move can change which
+    /// target a completely different, NON-moving unit is priced against.
+    /// Threading a frozen `UnitGoalStore` (`Some`) must make that
+    /// non-moving unit's contribution invariant to the other unit's move.
+    ///
+    /// Fixture: two Warriors, two explored villages, positioned so the
+    /// nearest-pair greedy match picks (A->V1, B->V2) initially, then A
+    /// teleports next to V2 -- flipping the fresh match to (A->V2, B->V1)
+    /// even though B never moved. All non-Expand Φ terms are position-
+    /// independent here (no cities/economy/other orders), so the total Φ
+    /// delta between the two states is exactly the Expand block's delta --
+    /// no decomposition needed to observe the effect.
+    #[test]
+    fn unit_goal_store_makes_a_non_moving_units_pricing_invariant_to_a_teammates_move() {
+        use crate::ai::oracle_macro::{MacroGoal, OrderKind, Stance};
+        use crate::ai::search::unit_goals::{UnitGoal, UnitGoalStore};
+
+        const V1: i32 = 5; // row0,col5
+        const V2: i32 = 115; // row10,col5
+        const A_ID: u32 = 1;
+        const B_ID: u32 = 2;
+
+        let mut before = GameState::default();
+        before.settings.size = 11;
+        add_visible_village(&mut before, V1);
+        add_visible_village(&mut before, V2);
+        let mut t1 = TribeState::default();
+        t1.units.push(UnitState { id: A_ID, ..unit_at(0, UnitType::Warrior) }); // row0,col0: d(V1)=5, d(V2)=10
+        t1.units.push(UnitState { id: B_ID, ..unit_at(110, UnitType::Warrior) }); // row10,col0: d(V1)=10, d(V2)=5
+        before.tribes.insert(1, t1);
+
+        let mut after = before.clone();
+        // A teleports to row10,col4: d(V1)=10, d(V2)=1. B is untouched.
+        after.tribes.get_mut(&1).unwrap().units[0] = UnitState { id: A_ID, ..unit_at(114, UnitType::Warrior) };
+
+        let goal = MacroGoal {
+            orders: vec![(OrderKind::Expand, V1), (OrderKind::Expand, V2)],
+            stance: Stance::Grow,
+            save_target: None,
+        };
+
+        // Legacy (None): fresh greedy match every call -- B's implied
+        // target flips from V2 (d=5) to V1 (d=10) purely because A moved.
+        let phi_before_none = goal_potential(&before, 1, &goal, None);
+        let phi_after_none = goal_potential(&after, 1, &goal, None);
+        let term = |d: i32| SHAPE_GOAL_EXPAND_PER_TILE * (SHAPE_PROX_CAP - d).max(0) as f32;
+        let predicted_none_delta = (term(1) + term(10)) - (term(5) + term(5));
+        assert!(
+            (phi_after_none - phi_before_none - predicted_none_delta).abs() < 1e-3,
+            "None: expected legacy delta {predicted_none_delta}, got {}",
+            phi_after_none - phi_before_none
+        );
+        assert!(
+            phi_after_none != phi_before_none,
+            "sanity: the fixture must actually trigger a reassignment under the legacy path"
+        );
+
+        // Store-backed (Some): the assignment made at `before` (mirroring
+        // what the legacy match would have picked at that same state) is
+        // frozen and reused for `after` -- B's target stays V2, d=5,
+        // completely unaffected by A having moved.
+        let mut store = UnitGoalStore::default();
+        store.assign(A_ID, UnitGoal { kind: OrderKind::Expand, target: V1 });
+        store.assign(B_ID, UnitGoal { kind: OrderKind::Expand, target: V2 });
+        let phi_before_some = goal_potential_with_unit_goals(&before, 1, &goal, None, None, Some(&store));
+        let phi_after_some = goal_potential_with_unit_goals(&after, 1, &goal, None, None, Some(&store));
+        // Before-state pricing is identical either way (same assignment).
+        assert!((phi_before_some - phi_before_none).abs() < 1e-3);
+        let predicted_some_delta = (term(10) + term(5)) - (term(5) + term(5)); // only A's own term moves
+        assert!(
+            (phi_after_some - phi_before_some - predicted_some_delta).abs() < 1e-3,
+            "Some: expected store-backed delta {predicted_some_delta}, got {}",
+            phi_after_some - phi_before_some
+        );
+        assert!(
+            phi_after_some != phi_after_none,
+            "the frozen store must diverge from the legacy re-match once A has moved"
+        );
+    }
