@@ -35,6 +35,14 @@ ACTORS=128
 # is now recorded on every reading (`resolves_pp`) and echoed in the log rather
 # than being rediscovered from the interval later. See audit M3.
 GAUGE_GAMES="${GAUGE_GAMES:-32}"
+# Seeds for the link match that ties a newly frozen anchor to the outgoing one;
+# it sets the Elo scale of the whole chain, so leave it at 64 for a real run.
+# Declared as a knob only so the smoke can exercise the freeze branch, which no
+# reading it can afford would otherwise ever reach (#35).
+GAUGE_LINK_GAMES="${GAUGE_LINK_GAMES:-64}"
+# Audit cross-checks (greedy + a rotating retired anchor, plus the training-pair
+# row) run every this-many gauge readings.
+GAUGE_AUDIT_EVERY="${GAUGE_AUDIT_EVERY:-5}"
 # Auto-select 3 servers on the dedicated Metal backend and 1 on tch/candle.
 # This preserves the measured Metal optimum without making CPU/Candle runs
 # fail at startup. An explicit -e still overrides the automatic selection.
@@ -709,8 +717,8 @@ do
                 echo "GAUGE: failed to snapshot $NEW_ANCHOR — aborting instead of skipping the anchor freeze." >&2
                 exit 1
             fi
-            echo "GAUGE: >=80% vs active anchor — freezing $NEW_ANCHOR, link match (n=64)..."
-            if ! run_gauge_match "$ANCHOR_PATH" 64 "replays/gauge_stats/${RUN_ID}_iter${i}_link"; then
+            echo "GAUGE: cleared the freeze bar vs active anchor — freezing $NEW_ANCHOR, link match (n=$((GAUGE_LINK_GAMES * 2)))..."
+            if ! run_gauge_match "$ANCHOR_PATH" "$GAUGE_LINK_GAMES" "replays/gauge_stats/${RUN_ID}_iter${i}_link"; then
                 rm -f "$GAUGE_LOG"
                 echo "GAUGE: link match failed at iteration $i — aborting instead of freezing an unlinked anchor." >&2
                 exit 1
@@ -730,9 +738,9 @@ do
             break
         fi
 
-        # Audit block every 5th gauge: greedy + one retired anchor,
-        # rotating — observed vs chain-predicted win rate flags cycles.
-        if [ $((i % (LEAGUE_INTERVAL * 5))) -eq 0 ]; then
+        # Audit block every GAUGE_AUDIT_EVERY-th gauge: greedy + one retired
+        # anchor, rotating — observed vs chain-predicted win rate flags cycles.
+        if [ $((i % (LEAGUE_INTERVAL * GAUGE_AUDIT_EVERY))) -eq 0 ]; then
             while read -r AUD; do
                 AUD_NAME=$(json_get name "" <<< "$AUD")
                 AUD_PATH=$(json_get path "" <<< "$AUD")
@@ -760,7 +768,11 @@ do
             if [ "$GAUGE_TRIBE1,$GAUGE_TRIBE2" != "$TRIBE1,$TRIBE2" ]; then
                 if run_gauge_match "$ANCHOR_PATH" "$GAUGE_GAMES" \
                         "replays/gauge_stats/${RUN_ID}_iter${i}_tribes" "$TRIBE1" "$TRIBE2"; then
+                    # --opponent, not the active anchor: a freeze earlier in
+                    # this same iteration has already retired the anchor this
+                    # match was actually played against.
                     .venv/bin/python3 ladder.py record --kind tribe_audit \
+                        --opponent "$ANCHOR_NAME" \
                         --run-id "$RUN_ID" --iteration "$i" \
                         --wins "$GAUGE_W" --losses "$GAUGE_L" --draws "${GAUGE_D:-0}" \
                         --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}" \

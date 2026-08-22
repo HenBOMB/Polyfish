@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Verify that every long flag the shell drivers pass to a Rust binary parses.
+"""Verify that every long flag the shell drivers pass to a CLI actually parses.
 
-The shell scripts form an unchecked CLI contract with the binaries in
-src/bin/: renaming a clap field breaks training at runtime and nothing else
-notices. This extracts the flags each script passes to each binary and diffs
-them against that binary's --help.
+The shell scripts form an unchecked CLI contract with the binaries in src/bin/
+and with the python CLIs beside them: renaming a clap field or an argparse
+option breaks training at runtime and nothing else notices. This extracts the
+flags each script passes to each target and diffs them against that target's
+--help. Python targets are keyed per subcommand ("ladder.py freeze"), since
+each subparser accepts a different set — and `freeze` / `audit-opponents` are
+reached from run_training_loop.sh alone, on a branch no test had ever entered
+(#35).
 
-Fails closed: a script it cannot parse, a binary whose --help it cannot read,
+Fails closed: a script it cannot parse, a target whose --help it cannot read,
 or a flag-bearing shell variable it cannot resolve is an error, not a pass.
 """
 
@@ -23,7 +27,11 @@ WORKSPACE_ROOT = os.path.dirname(REPO_ROOT)
 # A required binary that goes missing fails loudly, so a restructured script
 # cannot pass by yielding an empty flag set.
 CONTRACTS = {
-    "polyfish-rs/run_training_loop.sh": {"self_play", "arena", "polyfish"},
+    "polyfish-rs/run_training_loop.sh": {
+        "self_play", "arena", "polyfish",
+        "ladder.py active", "ladder.py record", "ladder.py freeze",
+        "ladder.py audit-opponents", "training_log.py append-row",
+    },
     "polyfish-rs/bisect_arm.sh": {"self_play"},
     "polyfish-rs/bench_actor_ceiling.sh": {"actor_ceiling"},
     "polyfish-rs/bench_eval_sweep.sh": {"self_play"},
@@ -36,6 +44,13 @@ PREFIX_WORDS = {
     "if", "then", "do", "!", "exec", "command", "time", "env", "sudo", "nohup",
     "local", "declare", "typeset", "export", "readonly", "-a",
 }
+
+# Python CLIs the shell drivers drive, by basename. `python3 -c '...'` never
+# matches: the interpreter must be followed by a .py path.
+PY_SCRIPTS = {"ladder.py", "training_log.py"}
+PY_INVOKE_RE = re.compile(
+    r"(?:^|[\s(<`\"'])[\w./-]*python3?\s+([\w./-]+\.py)(?:\s+([a-z][a-z0-9-]*))?"
+)
 
 FLAG_RE = re.compile(r"(?<![\w-])--[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 VAR_RE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
@@ -272,12 +287,48 @@ def cargo_run_target(tokens, bins):
     return name, rest_at
 
 
+def resolve_flag_vars(rest, flag_vars, path, target):
+    """Long flags in one argument region, with flag-bearing variables expanded."""
+    found = set(FLAG_RE.findall(rest))
+    for var in VAR_RE.findall(rest):
+        if var in flag_vars:
+            found |= flag_vars[var]
+        elif FLAG_VAR_NAME_RE.search(var):
+            raise ContractError(
+                f"{path}: cannot resolve ${var} passed to {target} — "
+                "the extractor would silently skip its flags"
+            )
+    return found
+
+
+def collect_python_usage(lines, flag_vars, path):
+    """Return {"script.py subcommand": {flags}} for the python CLIs a script drives."""
+    usage = {}
+    for line in lines:
+        for segment in split_segments(line):
+            calls = list(PY_INVOKE_RE.finditer(segment))
+            for idx, call in enumerate(calls):
+                if os.path.basename(call.group(1)) not in PY_SCRIPTS:
+                    continue
+                target = os.path.basename(call.group(1))
+                if call.group(2):
+                    target = f"{target} {call.group(2)}"
+                # Stop at the next invocation in the same segment, so one
+                # command's flags are never charged to the one before it.
+                end = calls[idx + 1].start() if idx + 1 < len(calls) else len(segment)
+                rest = strip_command_subs(segment[call.end():end])
+                usage.setdefault(target, set()).update(
+                    resolve_flag_vars(rest, flag_vars, path, target)
+                )
+    return usage
+
+
 def collect_usage(path, bins):
-    """Return {binary: {flags}} used by one shell script."""
+    """Return {target: {flags}} used by one shell script."""
     with open(path, encoding="utf-8") as fh:
         lines = logical_lines(fh.read())
     aliases, flag_vars = collect_assignments(lines, bins)
-    usage = {}
+    usage = collect_python_usage(lines, flag_vars, path)
     array_owner = {}
 
     for line in lines:
@@ -306,17 +357,31 @@ def collect_usage(path, bins):
             if array_name:
                 array_owner[array_name] = target
             rest = " ".join(tokens[rest_at:])
-            found = set(FLAG_RE.findall(rest))
-            for var in VAR_RE.findall(rest):
-                if var in flag_vars:
-                    found |= flag_vars[var]
-                elif FLAG_VAR_NAME_RE.search(var):
-                    raise ContractError(
-                        f"{path}: cannot resolve ${var} passed to {target} — "
-                        "the extractor would silently skip its flags"
-                    )
-            usage.setdefault(target, set()).update(found)
+            usage.setdefault(target, set()).update(
+                resolve_flag_vars(rest, flag_vars, path, target)
+            )
     return usage
+
+
+def python_help_flags(target):
+    """Long flags one `script.py [subcommand] --help` accepts."""
+    script, _, subcommand = target.partition(" ")
+    cmd = [sys.executable, os.path.join(REPO_ROOT, script)]
+    if subcommand:
+        cmd.append(subcommand)
+    cmd.append("--help")
+    try:
+        proc = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired as err:
+        raise ContractError(f"{target} --help did not exit within 60s") from err
+    if proc.returncode != 0:
+        raise ContractError(
+            f"{target} --help exited {proc.returncode}: {(proc.stderr or proc.stdout)[:200]!r}"
+        )
+    flags = set(FLAG_RE.findall(proc.stdout))
+    if not flags:
+        raise ContractError(f"{target} --help produced no long flags: {proc.stdout[:200]!r}")
+    return flags
 
 
 def help_flags(binary, bin_dir, build):
@@ -373,32 +438,35 @@ def main():
             failures.append(str(err))
             continue
 
-        missing_bins = required - set(usage)
-        if missing_bins:
+        missing = required - set(usage)
+        if missing:
             failures.append(
-                f"{rel}: expected invocations of {sorted(missing_bins)} but found none — "
+                f"{rel}: expected invocations of {sorted(missing)} but found none — "
                 "extraction is stale or the script was restructured"
             )
 
-        for binary in sorted(usage):
-            used = usage[binary]
+        for target in sorted(usage):
+            used = usage[target]
             total_flags += len(used)
             if not used:
-                print(f"[ok] {rel} -> {binary}: invoked with no long flags")
+                print(f"[ok] {rel} -> {target}: invoked with no long flags")
                 continue
             try:
-                known = help_flags(binary, args.bin_dir, not args.no_build)
+                if target.split(" ")[0].endswith(".py"):
+                    known = python_help_flags(target)
+                else:
+                    known = help_flags(target, args.bin_dir, not args.no_build)
             except (ContractError, subprocess.CalledProcessError) as err:
-                failures.append(f"{rel}: {binary}: {err}")
+                failures.append(f"{rel}: {target}: {err}")
                 continue
             unknown = sorted(used - known)
             status = "FAIL" if unknown else "ok"
-            print(f"[{status}] {rel} -> {binary}: {len(used)} flags")
+            print(f"[{status}] {rel} -> {target}: {len(used)} flags")
             for flag in sorted(used):
                 mark = "!!" if flag in unknown else "  "
                 print(f"    {mark} {flag}")
             for flag in unknown:
-                failures.append(f"{rel}: {binary} does not accept {flag}")
+                failures.append(f"{rel}: {target} does not accept {flag}")
 
     if total_flags == 0:
         failures.append("no flags extracted from any contract script — extractor is broken")

@@ -415,6 +415,23 @@ ALSO FIXED: the record now says what it was taken under.
   re-reads the anchor on the training pair as a cross-check (kept out of both
   `_gauge_series` and the `elo.py` fit). `scripts/smoke_train_loop.sh` now fails
   if a recorded pair disagrees with the one `arena` printed.
+- **The freeze/audit branch now runs somewhere other than a live campaign
+  (#35).** `ladder.py freeze` and `audit-opponents` are invoked from
+  `run_training_loop.sh` and nowhere else, and nothing could reach them: the
+  smoke's 2-game reading cannot clear the 0.80 Wilson bar, and the audit block
+  additionally needs `i % (LEAGUE_INTERVAL * 5) == 0`. In a loop that now aborts
+  on a failed reading, the first execution of that shell↔argparse contract would
+  have been the first good reading of the re-baseline campaign. The smoke forces
+  both branches (`GAUGE_FREEZE_WR`, `GAUGE_LINK_GAMES`, `GAUGE_AUDIT_EVERY`) and
+  asserts the anchor snapshot, the link reading and the audit rows appear;
+  `tests/test_ladder.py` runs the same command lines as subprocesses, with the
+  flags extracted from the loop script itself; and the CLI contract check now
+  covers python CLIs per subcommand, not just Rust binaries. A moved freeze bar
+  is recorded on the reading it decided, so a forced freeze can never pass for
+  an earned one. The interaction the branch surfaced is fixed too: an audit
+  cadence landing on a freeze iteration plays its cross-checks against the
+  outgoing anchor, which by then is no longer `anchors[-1]`, so the loop names
+  that anchor explicitly on the `tribe_audit` row.
 
 STILL OPEN: the search-budget confound is contained, not resolved — restricting
 the window is correct but it means a budget change silently shortens the plateau
@@ -1069,7 +1086,9 @@ and `cargo fmt` advisory pass, a Python syntax compile pass, and a feature-flag
 compile matrix. `.github/workflows/smoke.yml` is a nightly (and
 `workflow_dispatch`) end-to-end run of `scripts/smoke_train_loop.sh` — self_play
 → `games_*.safetensors` → train.py → model.safetensors plus one arena gauge
-reading — which is the seam all three blockers hid in.
+reading — which is the seam all three blockers hid in. The smoke also forces the
+anchor-freeze and audit branches, and the contract check covers the shell's
+python CLIs per subcommand (#35).
 
 ```bash
 # Re-verify locally

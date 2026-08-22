@@ -502,6 +502,236 @@ def elo_module():
     return elo
 
 
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LOOP_SCRIPT = os.path.join(ROOT, "run_training_loop.sh")
+
+# One representative value per flag run_training_loop.sh passes to ladder.py.
+# A flag the loop gains and this table has not is a hard failure, not a skip:
+# the point of these tests is that the command lines the loop builds are the
+# ones that get run.
+SHELL_FLAG_VALUES = {
+    "--run-id": "1755000000",
+    "--iteration": "7",
+    "--wins": "13",
+    "--losses": "3",
+    "--draws": "0",
+    "--avg-score-model": "1200.5",
+    "--avg-score-opponent": "900.25",
+    "--mcts": "64",
+    "--gumbel-k": "16",
+    "--eval-backend": "candle",
+    "--wins-p1": "7",
+    "--wins-p2": "6",
+    "--games-attempted": "16",
+    "--games-dropped": "0",
+    "--unpaired-seeds": "0",
+    "--tribes": "Imperius,Imperius",
+    "--max-turns": "45",
+    "--prior-heuristic-w": "0.5",
+    "--q-weight": "0.0",
+    "--stats-dir": "",
+    "--path": "checkpoints/anchor_iter7_20260822_010203.safetensors",
+    "--kind": "gauge",
+    "--opponent": None,
+}
+
+
+def _contract_module():
+    """scripts/check_cli_contract.py, which already knows how to read a shell
+    script's flags. Importing it keeps these command lines tied to the loop
+    instead of to a copy of it that can drift."""
+    import importlib.util
+
+    path = os.path.join(ROOT, "scripts", "check_cli_contract.py")
+    spec = importlib.util.spec_from_file_location("check_cli_contract", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class ShellCommandLineTest(unittest.TestCase):
+    """#35: `freeze` and `audit-opponents` are reached from run_training_loop.sh
+    and nowhere else, on a branch no smoke, test or CI check had ever entered —
+    so the first execution of this shell<->argparse contract would have been
+    mid-campaign, in a loop that aborts on a failed reading. These run the
+    command lines the loop builds, with the flags read back off the loop."""
+
+    @classmethod
+    def setUpClass(cls):
+        contract = _contract_module()
+        with open(LOOP_SCRIPT, encoding="utf-8") as fh:
+            lines = contract.logical_lines(fh.read())
+        _, flag_vars = contract.collect_assignments(lines, contract.known_binaries())
+        usage = contract.collect_python_usage(lines, flag_vars, LOOP_SCRIPT)
+        cls.shell_usage = {
+            target[len("ladder.py "):]: flags
+            for target, flags in usage.items()
+            if target.startswith("ladder.py ")
+        }
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ladder_file = os.path.join(self.tmp.name, "ladder.json")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _flags(self, subcommand):
+        self.assertIn(subcommand, self.shell_usage,
+                      f"run_training_loop.sh no longer invokes `ladder.py {subcommand}`")
+        return self.shell_usage[subcommand]
+
+    def _run(self, subcommand, overrides=None, env=None, check=True):
+        """Invoke ladder.py exactly as the loop does: every flag the loop passes
+        to this subcommand, with a representative value."""
+        import subprocess
+
+        values = dict(SHELL_FLAG_VALUES, **(overrides or {}))
+        argv = [sys.executable, os.path.join(ROOT, "ladder.py"), subcommand]
+        for flag in sorted(self._flags(subcommand)):
+            self.assertIn(flag, values,
+                          f"run_training_loop.sh passes {flag} to `{subcommand}` "
+                          "but this test has no value for it")
+            if values[flag] is not None:
+                argv += [flag, values[flag]]
+        proc = subprocess.run(
+            argv, capture_output=True, text=True,
+            env=dict(os.environ, LADDER_FILE=self.ladder_file, **(env or {})),
+        )
+        if check:
+            self.assertEqual(proc.returncode, 0,
+                             f"{' '.join(argv[1:])}\n{proc.stderr}")
+        return proc
+
+    def _ladder(self):
+        with open(self.ladder_file) as f:
+            return json.load(f)
+
+    def _freeze(self, path=None, iteration="7"):
+        overrides = {"--iteration": iteration}
+        if path is not None:
+            overrides["--path"] = path
+        return self._run("freeze", overrides)
+
+    def test_the_loop_s_freeze_command_line_registers_an_anchor(self):
+        anchor = self._freeze()
+        registered = json.loads(anchor.stdout)
+        data = self._ladder()
+        self.assertEqual(data["anchors"][-1], registered)
+        self.assertEqual(registered["path"], SHELL_FLAG_VALUES["--path"])
+        self.assertEqual(registered["name"], "anchor_iter7_20260822_010203")
+        self.assertEqual(registered["frozen_iteration"], 7)
+        # The link match is what puts the new anchor on the outgoing one's Elo
+        # scale, so it has to land as a reading, against the outgoing anchor.
+        link = [r for r in data["readings"] if r["kind"] == "link"]
+        self.assertEqual(len(link), 1)
+        self.assertEqual(link[0]["opponent"], "greedy")
+        self.assertEqual(link[0]["tribes"], SHELL_FLAG_VALUES["--tribes"])
+
+    def test_a_freeze_clears_the_plateau_strikes_of_the_run_it_names(self):
+        self._freeze()
+        data = self._ladder()
+        self.assertEqual(data["plateau_strikes"], 0)
+        self.assertEqual(data["plateau_run_id"], SHELL_FLAG_VALUES["--run-id"])
+
+    def test_audit_opponents_emits_what_the_loop_pipes_into_json_array_items(self):
+        # Before any freeze the active anchor is greedy and there is nothing to
+        # cross-check against, so the loop's while-read body must run zero times.
+        self.assertEqual(json.loads(self._run("audit-opponents").stdout), [])
+
+        self._freeze()
+        opponents = json.loads(self._run("audit-opponents").stdout)
+        self.assertEqual([o["name"] for o in opponents], ["greedy"])
+        # `json_get name` / `json_get path` are what the loop reads off each item.
+        for opponent in opponents:
+            self.assertIn("name", opponent)
+            self.assertIn("path", opponent)
+
+    def test_audit_opponents_rotates_through_the_retired_net_anchors(self):
+        self._freeze(path="checkpoints/anchor_iter7_a.safetensors")
+        self._freeze(path="checkpoints/anchor_iter8_b.safetensors", iteration="8")
+        names = [o["name"] for o in json.loads(self._run("audit-opponents").stdout)]
+        self.assertEqual(names, ["greedy", "anchor_iter7_a"])
+
+    def test_the_loop_s_audit_command_line_records_a_cross_check_row(self):
+        self._freeze()
+        verdict = json.loads(
+            self._run("record", {"--kind": "audit", "--opponent": "greedy"}).stdout
+        )
+        self.assertEqual(verdict["action"], "continue")
+        self.assertEqual(verdict["opponent"], "greedy")
+        row = self._ladder()["readings"][-1]
+        self.assertEqual(row["kind"], "audit")
+        self.assertEqual(row["opponent"], "greedy")
+
+    def test_an_audit_row_needs_the_anchor_the_loop_read_off_audit_opponents(self):
+        proc = self._run("record", {"--kind": "audit", "--opponent": None}, check=False)
+        self.assertNotEqual(proc.returncode, 0)
+
+    def test_a_tribe_audit_names_the_anchor_its_match_was_played_against(self):
+        """The audit cadence can land on a freeze iteration, and the loop plays
+        every cross-check of that iteration against the anchor the gauge used —
+        which the freeze has by then retired."""
+        self._freeze()
+        outgoing = "greedy"
+        self._run("record", {"--kind": "tribe_audit", "--opponent": outgoing,
+                             "--tribes": "Bardur,Kickoo"})
+        row = self._ladder()["readings"][-1]
+        self.assertEqual(row["kind"], "tribe_audit")
+        self.assertEqual(row["opponent"], outgoing)
+        self.assertEqual(row["tribes"], "Bardur,Kickoo")
+
+    def test_a_tribe_audit_without_an_opponent_still_reads_the_active_anchor(self):
+        self._run("record", {"--kind": "tribe_audit", "--opponent": None,
+                             "--tribes": "Bardur,Kickoo"})
+        self.assertEqual(self._ladder()["readings"][-1]["opponent"], "greedy")
+
+    def test_the_gauge_command_line_answers_with_a_verdict_the_loop_can_read(self):
+        verdict = json.loads(self._run("record", {"--kind": "gauge"}).stdout)
+        # json_get action / underpowered_for_pp / resolves_pp / games_needed.
+        self.assertIn(verdict["action"], ("continue", "freeze", "stop"))
+        self.assertIn("resolves_pp", verdict)
+        self.assertNotIn("freeze_wr", verdict)
+
+    def test_a_lowered_freeze_bar_reaches_the_branch_and_says_so(self):
+        """What the smoke leans on: at the production bar no reading it can
+        afford reaches the freeze branch, so the bar is lowered there — and a
+        forced freeze must never be indistinguishable from an earned one."""
+        verdict = json.loads(
+            self._run("record", {"--kind": "gauge", "--wins": "0", "--losses": "16"},
+                      env={"GAUGE_FREEZE_WR": "0"}).stdout
+        )
+        self.assertEqual(verdict["action"], "freeze")
+        self.assertEqual(verdict["freeze_wr"], 0.0)
+        self.assertEqual(self._ladder()["readings"][-1]["freeze_wr"], 0.0)
+
+    def test_the_production_bar_is_unmoved_by_the_hook(self):
+        import ladder
+
+        self.assertEqual(ladder.DEFAULT_FREEZE_WR, 0.80)
+        verdict = json.loads(
+            self._run("record", {"--kind": "gauge", "--wins": "0", "--losses": "16"}).stdout
+        )
+        self.assertEqual(verdict["action"], "continue")
+
+    def test_every_flag_the_loop_passes_is_a_real_option(self):
+        """The static half: the loop's flags checked against the parser itself,
+        with no subprocess and no values. scripts/check_cli_contract.py runs the
+        same check in CI over --help; this one fails in the fast test job too."""
+        import ladder
+
+        subparsers = ladder.build_parser()._subparsers._group_actions[0].choices
+        self.assertTrue(self.shell_usage, "no ladder.py invocations found in the loop")
+        for subcommand in ("active", "record", "freeze", "audit-opponents"):
+            self.assertIn(subcommand, self.shell_usage,
+                          f"run_training_loop.sh no longer invokes `ladder.py {subcommand}`")
+        for subcommand, flags in sorted(self.shell_usage.items()):
+            known = {opt for action in subparsers[subcommand]._actions
+                     for opt in action.option_strings}
+            self.assertEqual(sorted(flags - known), [],
+                             f"`ladder.py {subcommand}` does not accept these")
+
+
 class PowerCommandTest(unittest.TestCase):
     def test_cli_emits_parseable_json(self):
         import subprocess

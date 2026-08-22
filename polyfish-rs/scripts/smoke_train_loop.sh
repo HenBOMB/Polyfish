@@ -5,7 +5,8 @@
 # Runs the real driver at toy settings inside an isolated copy under
 # target/smoke, so it never touches the checked-out model, training_log.csv,
 # checkpoints or archive. Env knobs: SMOKE_DIR, SMOKE_VENV, SMOKE_GAMES,
-# SMOKE_MCTS, SMOKE_ACTORS, SMOKE_GUMBEL_K, SMOKE_LEAGUE, SMOKE_TIMEOUT.
+# SMOKE_MCTS, SMOKE_ACTORS, SMOKE_GUMBEL_K, SMOKE_LEAGUE, SMOKE_TIMEOUT,
+# SMOKE_FORCE_FREEZE.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -20,6 +21,7 @@ ACTORS="${SMOKE_ACTORS:-2}"
 GUMBEL_K="${SMOKE_GUMBEL_K:-2}"
 LEAGUE="${SMOKE_LEAGUE:-1}"
 TIMEOUT="${SMOKE_TIMEOUT:-5400}"
+FORCE_FREEZE="${SMOKE_FORCE_FREEZE:-1}"
 
 case "$SMOKE_DIR" in
     /*/*smoke*) ;;
@@ -46,6 +48,14 @@ tar -C "$REPO" -cf - \
 ln -s "$SMOKE_VENV" "$SMOKE_DIR/.venv"
 ln -s "$SMOKE_CARGO_DIR" "$SMOKE_DIR/target"
 
+# Pin the training tribe pool the loop would otherwise write for itself. The
+# gauge's own pair is pinned to an Imperius mirror, and its training-pair audit
+# row only fires when the two differ — an Imperius-free pool makes that
+# deterministic instead of leaving it to the loop's per-iteration shuffle.
+cat > "$SMOKE_DIR/config.json" <<JSON
+{"gamemode": 2, "mctsIters": $MCTS, "cores": 2, "tribes": ["Bardur", "Kickoo"]}
+JSON
+
 # The release profile is lto = "fat" + codegen-units = 1; a smoke test only
 # needs the binaries to run, not to be fast.
 export CARGO_PROFILE_RELEASE_LTO=false
@@ -54,6 +64,17 @@ export CARGO_PROFILE_RELEASE_DEBUG=false
 export CARGO_PROFILE_RELEASE_OPT_LEVEL=1
 # Keep the gauge match to a single seed pair; the default 32 is a real reading.
 export GAUGE_GAMES="${GAUGE_GAMES:-1}"
+# #35: at the production freeze bar (Wilson lower bound >= 0.80) no reading this
+# smoke can afford could ever reach the anchor-freeze branch, and the audit block
+# only fires every 5th gauge — so `ladder.py freeze` and `audit-opponents` had
+# never executed anywhere, and their first run would have been mid-campaign in a
+# fail-fatal loop. Force both here, one seed each. The lowered bar is recorded on
+# the reading itself, so a forced freeze is never mistaken for an earned one.
+if [ "$FORCE_FREEZE" = 1 ]; then
+    export GAUGE_FREEZE_WR=0
+    export GAUGE_LINK_GAMES="${GAUGE_LINK_GAMES:-1}"
+    export GAUGE_AUDIT_EVERY=1
+fi
 
 echo "smoke: run_training_loop.sh -i 1 -g $GAMES -n $MCTS -a $ACTORS -k $GUMBEL_K -l $LEAGUE"
 set +e
@@ -91,6 +112,55 @@ print(json.load(open(sys.argv[1]))["readings"][0].get("tribes",""))' "$SMOKE_DIR
     [ -n "$PLAYED" ] || fail "arena printed no tribe pair for the gauge match"
     [ "$PLAYED" = "$RECORDED" ] \
         || fail "ladder recorded tribes '$RECORDED' for a match arena played on '$PLAYED'"
+fi
+
+# The branch this smoke exists to reach at all (#35): a freeze snapshots an
+# anchor, links it to the outgoing one, and the audit block cross-checks the
+# chain. Nothing else in the repo executes any of it.
+if [ "$LEAGUE" -gt 0 ] && [ "$FORCE_FREEZE" = 1 ]; then
+    compgen -G "$SMOKE_DIR/checkpoints/anchor_iter*.safetensors" > /dev/null \
+        || fail "the freeze branch snapshotted no anchor into checkpoints/"
+    "$SMOKE_VENV/bin/python3" - "$SMOKE_DIR/ladder.json" <<'LADDER_ASSERTS' \
+        || fail "the freeze/audit branch did not leave the rows the ladder needs"
+import json
+import sys
+
+data = json.load(open(sys.argv[1]))
+by_kind = {}
+for r in data["readings"]:
+    by_kind.setdefault(r["kind"], []).append(r)
+problems = [f"no {k} reading" for k in ("gauge", "link", "audit", "tribe_audit")
+            if k not in by_kind]
+
+if len(data["anchors"]) < 2:
+    problems.append("no anchor was frozen")
+else:
+    frozen = data["anchors"][-1]
+    if not frozen.get("path", "").startswith("checkpoints/anchor_iter"):
+        problems.append(f"frozen anchor path is {frozen.get('path')!r}")
+    if frozen.get("frozen_iteration") != 1:
+        problems.append(f"anchor frozen_iteration is {frozen.get('frozen_iteration')!r}, want 1")
+
+gauge = (by_kind.get("gauge") or [{}])[0]
+if gauge.get("freeze_wr") != 0.0:
+    problems.append("the lowered freeze bar is not recorded on the reading it decided")
+
+# Every row here was played against greedy, which the freeze in this same
+# iteration has already retired -- so each must name the anchor its own match
+# used, not whichever one is active by the time the row is written.
+for kind in ("link", "audit", "tribe_audit"):
+    for r in by_kind.get(kind, []):
+        if r.get("opponent") != "greedy":
+            problems.append(f"{kind} row names opponent {r.get('opponent')!r}, want greedy")
+
+for r in by_kind.get("tribe_audit", []):
+    if r.get("tribes") == gauge.get("tribes"):
+        problems.append(f"tribe_audit was played on the pinned pair {gauge.get('tribes')!r}")
+
+if problems:
+    print("smoke: ladder freeze/audit branch: " + "; ".join(problems), file=sys.stderr)
+    sys.exit(1)
+LADDER_ASSERTS
 fi
 
 echo "smoke: OK (artifacts in $SMOKE_DIR)"
