@@ -9,6 +9,8 @@ python3.
 
     python3 -m unittest discover -s tests -p 'test_*.py'
 """
+import contextlib
+import io
 import json
 import math
 import os
@@ -180,11 +182,51 @@ class VerdictTest(unittest.TestCase):
         return [{"kind": "gauge", "opponent": "greedy", "games": 64,
                  "wins": w, "losses": 64 - w, "draws": 0} for w in wins]
 
-    def test_plateau_needs_non_overlapping_pooled_halves(self):
-        flat = self._series(*([20] * 8))
-        self.assertTrue(self.ladder._plateau(flat))
-        climbing = self._series(*([10] * 4 + [55] * 4))
-        self.assertFalse(self.ladder._plateau(climbing))
+    def test_a_flat_series_strikes(self):
+        self.assertTrue(self.ladder._plateau(self._series(*([20] * 8))))
+
+    def test_a_declining_series_strikes(self):
+        self.assertTrue(self.ladder._plateau(self._series(30, 28, 26, 24, 22, 20, 18, 16)))
+
+    def test_a_steady_climb_does_not_strike(self):
+        """The regression this gate was rewritten for. +1pp per reading is
+        +8pp across the window — EXP_ELO_002's registered effect size — and the
+        interval-overlap rule struck on it every time, stopping the run two
+        gauge cycles into a real improvement."""
+        climb = self._series(21, 22, 22, 23, 24, 24, 25, 26)
+        self.assertFalse(self.ladder._plateau(climb))
+        # ...and it is not that the climb is obvious: the pooled halves' Wilson
+        # intervals still overlap, which is exactly what the old rule read.
+        first = self.ladder._wilson(*self.ladder._pool(climb[:4]))
+        second = self.ladder._wilson(*self.ladder._pool(climb[4:]))
+        self.assertTrue(first[0] <= second[1] and second[0] <= first[1])
+
+    def test_a_big_jump_does_not_strike(self):
+        self.assertFalse(self.ladder._plateau(self._series(*([10] * 4 + [55] * 4))))
+
+    def test_both_conditions_are_required(self):
+        """The rule is a conjunction, so either half can veto a strike."""
+        # Halves flat-or-down, but the window trends up (a late surge).
+        late_surge = self._series(20, 24, 24, 22, 10, 10, 20, 46)
+        self.assertLessEqual(
+            self.ladder._pool(late_surge[4:])[0], self.ladder._pool(late_surge[:4])[0]
+        )
+        self.assertGreater(self.ladder._slope(late_surge), 0.0)
+        self.assertFalse(self.ladder._plateau(late_surge))
+
+        # Halves up, but the window trends down (an early spike carrying them).
+        early_spike = self._series(50, 10, 10, 10, 20, 20, 20, 22)
+        self.assertGreater(
+            self.ladder._pool(early_spike[4:])[0], self.ladder._pool(early_spike[:4])[0]
+        )
+        self.assertLess(self.ladder._slope(early_spike), 0.0)
+        self.assertFalse(self.ladder._plateau(early_spike))
+
+    def test_slope_signs_the_trend(self):
+        self.assertGreater(self.ladder._slope(self._series(10, 20, 30, 40)), 0.0)
+        self.assertLess(self.ladder._slope(self._series(40, 30, 20, 10)), 0.0)
+        self.assertEqual(self.ladder._slope(self._series(20, 20, 20, 20)), 0.0)
+        self.assertEqual(self.ladder._slope(self._series(20)), 0.0)
 
     def test_plateau_needs_a_full_window(self):
         short = self._series(*([20] * (self.ladder.PLATEAU_WINDOW - 1)))
@@ -202,6 +244,43 @@ class VerdictTest(unittest.TestCase):
         series = self.ladder._gauge_series(data)
         self.assertEqual(len(series), 1)
         self.assertEqual(series[0]["budget"]["mcts"], 64)
+
+    def test_series_excludes_a_different_turn_cap(self):
+        # The loop varies GAUGE_MAX_TURNS with self_play's curriculum, so a
+        # 10-turn-cap reading and a 45-turn-cap one are different instruments.
+        data = {"anchors": [{"name": "greedy"}], "readings": [
+            {"kind": "gauge", "opponent": "greedy", "games": 64, "wins": 20,
+             "losses": 44, "draws": 0,
+             "budget": {"mcts": 64, "gumbel_k": 16, "max_turns": 10}},
+            {"kind": "gauge", "opponent": "greedy", "games": 64, "wins": 30,
+             "losses": 34, "draws": 0,
+             "budget": {"mcts": 64, "gumbel_k": 16, "max_turns": 45}},
+        ]}
+        series = self.ladder._gauge_series(data)
+        self.assertEqual(len(series), 1)
+        self.assertEqual(series[0]["budget"]["max_turns"], 45)
+
+    def test_series_is_scoped_to_the_latest_run(self):
+        # A previous campaign's readings are a different model's; pooling them
+        # into this run's window judges a trend that never happened.
+        data = {"anchors": [{"name": "greedy"}], "readings": [
+            {"kind": "gauge", "opponent": "greedy", "run_id": "old", "games": 64,
+             "wins": 20, "losses": 44, "draws": 0},
+            {"kind": "gauge", "opponent": "greedy", "run_id": "new", "games": 64,
+             "wins": 30, "losses": 34, "draws": 0},
+        ]}
+        series = self.ladder._gauge_series(data)
+        self.assertEqual(len(series), 1)
+        self.assertEqual(series[0]["run_id"], "new")
+
+    def test_series_keeps_readings_with_no_run_id(self):
+        data = {"anchors": [{"name": "greedy"}], "readings": [
+            {"kind": "gauge", "opponent": "greedy", "run_id": "", "games": 64,
+             "wins": 20, "losses": 44, "draws": 0},
+            {"kind": "gauge", "opponent": "greedy", "run_id": "", "games": 64,
+             "wins": 30, "losses": 34, "draws": 0},
+        ]}
+        self.assertEqual(len(self.ladder._gauge_series(data)), 2)
 
     def test_series_keeps_legacy_readings_with_no_budget(self):
         data = {"anchors": [{"name": "greedy"}], "readings": [
@@ -243,6 +322,63 @@ class VerdictTest(unittest.TestCase):
         self.assertEqual(r["games_dropped"], 16)
         self.assertEqual(r["unpaired_seeds"], 8)
         self.assertEqual(r["tribes"], "Imperius,Bardur")
+
+    def _record_cmd(self, run_id, wins, losses, iteration=1, max_turns=45):
+        """Drive the real `record` entry point and return its verdict JSON."""
+        class Args:
+            pass
+
+        a = Args()
+        a.run_id, a.iteration = run_id, iteration
+        a.wins, a.losses, a.draws = wins, losses, 0
+        a.avg_score_model = a.avg_score_opponent = 0.0
+        a.mcts, a.gumbel_k, a.eval_backend = 64, 16, "candle"
+        a.max_turns = max_turns
+        a.wins_p1 = a.wins_p2 = None
+        a.stats_dir = None
+        a.kind, a.opponent = "gauge", None
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.ladder.cmd_record(a)
+        return json.loads(buf.getvalue())
+
+    def _seed_plateaued_run(self, run_id):
+        """A ladder mid-campaign: one strike on the board and a full flat
+        window behind it, so the next flat reading is the stopping one."""
+        data = self.ladder._load()
+        data["plateau_strikes"] = 1
+        data["plateau_run_id"] = run_id
+        for i in range(self.ladder.PLATEAU_WINDOW):
+            data["readings"].append({
+                "kind": "gauge", "opponent": "greedy", "run_id": run_id,
+                "iteration": i, "games": 64, "wins": 20, "losses": 44, "draws": 0,
+                "budget": {"mcts": 64, "gumbel_k": 16, "max_turns": 45},
+            })
+        self.ladder._save(data)
+
+    def test_a_second_strike_in_the_same_run_stops_it(self):
+        self._seed_plateaued_run("runA")
+        verdict = self._record_cmd("runA", 20, 44, iteration=99)
+        self.assertEqual(verdict["action"], "stop")
+        self.assertEqual(verdict["plateau_strikes"], self.ladder.PLATEAU_STRIKES)
+
+    def test_a_new_run_does_not_inherit_the_previous_run_s_strike(self):
+        """Defects 2 and 3 together: strikes used to persist in ladder.json and
+        the window pooled across run_ids, so a fresh campaign could stop two
+        readings in, on a previous model's evidence."""
+        self._seed_plateaued_run("runA")
+        verdict = self._record_cmd("runB", 20, 44, iteration=1)
+        self.assertEqual(verdict["action"], "continue")
+        self.assertEqual(verdict["plateau_strikes"], 0)
+
+    def test_a_reading_records_the_turn_cap_it_was_played_at(self):
+        self._record_cmd("runA", 20, 44, max_turns=10)
+        with open(os.environ["LADDER_FILE"]) as f:
+            reading = json.load(f)["readings"][-1]
+        self.assertEqual(reading["budget"]["max_turns"], 10)
+        self.assertEqual(
+            self.ladder._budget_key(reading), (64, 16, 10)
+        )
 
     def test_pooling_beats_a_single_reading_on_resolution(self):
         # Why the plateau test pools: 8 x 64 games resolves ~2.8x tighter than

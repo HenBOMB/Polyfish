@@ -39,6 +39,7 @@ def _load():
         ],
         "readings": [],
         "plateau_strikes": 0,
+        "plateau_run_id": None,
     }
 
 
@@ -146,10 +147,6 @@ def _pool(readings):
     return (score / games if games else 0.0), games
 
 
-def _overlap(a, b):
-    return a[0] <= b[1] and b[0] <= a[1]
-
-
 def _elo(win_rate, base):
     p = min(max(win_rate, 0.005), 0.995)
     return round(base + 400.0 * math.log10(p / (1.0 - p)), 1)
@@ -163,42 +160,74 @@ def _anchor_by_name(data, name):
 
 
 def _budget_key(reading):
-    """What a reading was taken at. Ladder Elo is a function of (weights x
-    sims); chaining readings across different budgets attributes a search
-    change to the weights (audit M5). EXP_ELO_002 had to hand-quarantine a
-    16-sim stint for exactly this."""
+    """What a reading was taken at. Ladder Elo is a function of (weights x sims
+    x turn cap); chaining readings across budgets attributes a search or
+    curriculum change to the weights (audit M5). EXP_ELO_002 had to
+    hand-quarantine a 16-sim stint for exactly this, and the loop varies
+    `max_turns` with the curriculum, so a 10-turn and a 45-turn reading are not
+    the same instrument either."""
     b = reading.get("budget")
     if not b:
         return None
-    return (b.get("mcts"), b.get("gumbel_k"))
+    return (b.get("mcts"), b.get("gumbel_k"), b.get("max_turns"))
 
 
 def _gauge_series(data):
-    """Gauge readings vs the active anchor, restricted to the search budget the
-    most recent one used. Readings from before `budget` was recorded carry no
-    key, so those ladders keep the old pool-everything behaviour rather than
-    silently emptying the window."""
+    """Gauge readings vs the active anchor, restricted to the run and the search
+    budget the most recent one used. A previous campaign's readings are a
+    different model's, so pooling them into this run's window judged a trend
+    that never happened. Readings from before `run_id`/`budget` were recorded
+    carry no key, so those ladders keep the old pool-everything behaviour rather
+    than silently emptying the window."""
     active = data["anchors"][-1]["name"]
     series = [r for r in data["readings"] if r["kind"] == "gauge" and r["opponent"] == active]
     if not series:
         return series
+    latest_run = series[-1].get("run_id")
+    if latest_run:
+        series = [r for r in series if r.get("run_id") == latest_run]
     latest = _budget_key(series[-1])
     if latest is None:
         return series
     return [r for r in series if _budget_key(r) == latest]
 
 
+def _slope(readings):
+    """Least-squares slope of win rate over reading index, in win-rate units per
+    reading. The trend half of the EXP 11 plateau rule."""
+    n = len(readings)
+    if n < 2:
+        return 0.0
+    ys = []
+    for r in readings:
+        score, games = _counts(r)
+        ys.append(score / games if games else 0.0)
+    x_mean = (n - 1) / 2.0
+    y_mean = sum(ys) / n
+    denom = sum((i - x_mean) ** 2 for i in range(n))
+    if denom == 0:
+        return 0.0
+    return sum((i - x_mean) * (y - y_mean) for i, y in enumerate(ys)) / denom
+
+
 def _plateau(series):
     """True when the last PLATEAU_WINDOW readings vs the same anchor show no
-    measurable gain: pooling each half and comparing intervals, the second
-    half's interval still overlaps the first's, so any apparent movement is
-    inside the noise a single ~64-game reading cannot resolve."""
+    gain, by the rule EXP 11 registered: pooled window halves flat-or-down AND
+    least-squares slope <= 0.
+
+    Both conditions are directional, and that is the point. The interval-overlap
+    test this replaces struck whenever a climb could not be *proven*, and at
+    64 games a reading resolves to only ~+/-12pp — so a steady +1pp/reading
+    climb (+8pp across the window, exactly the effect EXP_ELO_002 was registered
+    against) struck every time, and two gauge cycles later stopped the run
+    mid-improvement. A false stop costs a campaign; a late stop costs compute.
+    """
     if len(series) < PLATEAU_WINDOW:
         return False
     window = series[-PLATEAU_WINDOW:]
     half = PLATEAU_WINDOW // 2
     first, second = _pool(window[:half]), _pool(window[half:])
-    return _overlap(_wilson(*first), _wilson(*second))
+    return second[0] <= first[0] and _slope(window) <= 0.0
 
 
 def cmd_active(_args):
@@ -305,6 +334,7 @@ def _append_reading(data, args, kind, opponent):
             "mcts": args.mcts,
             "gumbel_k": args.gumbel_k,
             "eval_backend": args.eval_backend,
+            "max_turns": getattr(args, "max_turns", None),
         }
     if getattr(args, "wins_p1", None) is not None:
         reading["wins_as_p1"] = args.wins_p1
@@ -342,6 +372,12 @@ def cmd_record(args):
 
     action = "continue"
     if args.kind == "gauge":
+        # A strike is evidence about one campaign. Strikes persisted in
+        # ladder.json across runs, so a fresh run could inherit one and stop
+        # two readings into its own series.
+        if data.get("plateau_run_id") != args.run_id:
+            data["plateau_strikes"] = 0
+            data["plateau_run_id"] = args.run_id
         # The freeze bar is on the lower bound: a point estimate at 0.80 with a
         # +/-0.12 interval is not evidence the model beats the anchor 4:1.
         if reading["win_rate_ci"][0] >= FREEZE_WR:
@@ -399,6 +435,7 @@ def cmd_freeze(args):
     _append_reading(data, args, "link", outgoing)
     data["anchors"].append(new_anchor)
     data["plateau_strikes"] = 0
+    data["plateau_run_id"] = args.run_id
     _save(data)
     print(json.dumps(new_anchor))
 
@@ -459,6 +496,9 @@ def main():
         p.add_argument("--unpaired-seeds", type=int, default=0,
                        help="seeds that lost one half of their side swap")
         p.add_argument("--tribes", default="", help="tribe pair this reading was taken on")
+        p.add_argument("--max-turns", type=int,
+                       help="turn cap this reading was played at (the loop varies it "
+                            "with the curriculum, so it is part of the budget key)")
 
     rec = sub.add_parser("record")
     match_args(rec)
