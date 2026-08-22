@@ -566,7 +566,8 @@ do
     # 5. Strength gauge (EXP 10/11): paired arena reading vs the ladder's
     # active anchor. ladder.py owns ladder.json (anchors, readings, verdicts):
     # >=80% freezes the model as the next anchor (n=64 link match); two
-    # consecutive 8-reading windows with no gain stop the run (plateau).
+    # consecutive 8-reading windows that are flat-or-down with slope <= 0 stop
+    # the run (plateau, EXP 11's registered rule).
     if [ "$LEAGUE_INTERVAL" -gt 0 ] && [ $((i % LEAGUE_INTERVAL)) -eq 0 ]; then
         ACTIVE_JSON=$(.venv/bin/python3 ladder.py active)
         ANCHOR_PATH=$(json_get path "" <<< "$ACTIVE_JSON")
@@ -645,6 +646,7 @@ do
             --games-attempted "${GAUGE_ATTEMPTED:-0}" --games-dropped "${GAUGE_DROPPED:-0}" \
             --unpaired-seeds "${GAUGE_UNPAIRED:-0}" \
             --tribes "$TRIBE1,$TRIBE2" \
+            --max-turns "$GAUGE_MAX_TURNS" \
             --stats-dir "$GAUGE_STATS_DIR")
         echo "GAUGE: $VERDICT"
         GAUGE_ACTION=$(json_get action "" <<< "$VERDICT")
@@ -694,7 +696,8 @@ do
             rm -f "$GAUGE_LOG"
             echo "=================================================="
             echo "PLATEAU STOP at iteration $i: two consecutive 8-reading"
-            echo "windows with no gain vs the active anchor (see ladder.json)."
+            echo "windows flat-or-down with slope <= 0 vs the active anchor"
+            echo "(see ladder.json)."
             echo "=================================================="
             break
         fi

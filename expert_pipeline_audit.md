@@ -308,6 +308,14 @@ plateau test compares pooled halves by interval overlap rather than by mean
 (`:106-116`). The dashboard draws the band (`src/public/training.html`, elo
 chart).
 
+**Superseded (#31):** the interval-overlap plateau test described above was
+itself the defect — it made failure-to-*prove*-improvement count as a plateau,
+which at this budget is every climb below ~12pp, including the +8pp EXP_ELO_002
+was registered against. It has been replaced by EXP 11's registered rule (halves
+flat-or-down AND slope ≤ 0). The freeze bar is unaffected; a lower bound is the
+right test for "beats the anchor 4:1", it was only wrong as a test for "is still
+improving".
+
 **Also landed:** the budget is now sized rather than assumed. `ladder.py`
 computes the games a target effect needs (`required_games`, exposed as
 `python3 ladder.py power --baseline 0.33 --games 64`), stores each reading's own
@@ -385,7 +393,10 @@ ALSO FIXED: the record now says what it was taken under.
   restricts the window to the budget the latest reading used, so a 16-sim stint
   cannot be chained with 64-sim readings as if it measured the weights. Ladders
   whose readings predate the `budget` field keep the old pool-everything
-  behaviour rather than silently emptying the window.
+  behaviour rather than silently emptying the window. *(#31 extended this: the
+  window is also scoped to the current `run_id`, `max_turns` joined the budget
+  key since the loop varies it with the curriculum, and strikes reset on a run
+  change instead of carrying into the next campaign.)*
 - **A dropped game no longer hides.** `arena` reports `Unpaired Seeds:` — seeds
   that lost one half of their side swap, which is the pairing the seeded design
   buys — and the loop carries `games_attempted`, `games_dropped` and

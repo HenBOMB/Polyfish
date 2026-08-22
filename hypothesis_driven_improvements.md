@@ -207,6 +207,14 @@ Next stint: readings every 10 iters climb from ~25–34% vs Greedy toward the >5
 ### Actual Results
 It worked but we see it actually plateauing and the trained NN unable to beat the teacher enough to be made an anchor. It wins ~25% of the time against greedy-only.
 
+**Note (Aug 2026, #31):** the shipped gate drifted from the rule registered
+above — the slope conjunction was dropped for a Wilson-interval overlap test,
+which strikes on any climb it cannot prove and so would have stopped a run
+improving at exactly EXP_ELO_002's registered rate. The registered rule is
+restored. This does not rehabilitate the plateau verdict recorded here: that
+reading came from an instrument that never recorded a reading at all (audit P2),
+and remains withdrawn pending the re-baseline.
+
 ---
 
 *From here on, experiments are named by track: `EXP_ELO_*` targets the strength gauge (win rate vs the Greedy anchor / Elo curve). Other tracks get their own prefixes as they open.*
