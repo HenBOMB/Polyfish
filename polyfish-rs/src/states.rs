@@ -256,6 +256,14 @@ pub struct UnitState {
     #[serde(default)]
     pub last_attack_coords: Option<Coords>,
     pub coords: Coords,
+    /// Stable identity, minted once at creation (`spawn_unit`/`summon_unit`)
+    /// and never reassigned — unlike `coords` (changes every move) or a Vec
+    /// index (unstable across removals, explicitly re-patched elsewhere for
+    /// `parent_unit_idx`/`child_unit_idx`). `0` = unassigned/backfill-pending;
+    /// `Game::post_load` stamps any unit still at `0` (mapgen output, loaded
+    /// JSON, hand-built test fixtures never route through `spawn_unit`).
+    #[serde(default)]
+    pub id: u32,
 }
 
 impl Default for UnitState {
@@ -281,6 +289,7 @@ impl Default for UnitState {
             parent_unit_idx: None,
             child_unit_idx: None,
             last_attack_coords: None,
+            id: 0,
         }
     }
 }
@@ -620,6 +629,15 @@ pub struct GameState {
     pub _history: Vec<serde_json::Value>,
     #[serde(default)]
     pub initial_seed: i64,
+    /// Next value `UnitState::id` will be minted with — global across both
+    /// tribes, not per-tribe, so a converted (Mind Bender) unit never needs
+    /// cross-tribe ID remapping. `Game::post_load` raises this to cover any
+    /// unit it backfills; not rewound on undo (a simulated-then-undone
+    /// Summon permanently burns an id, same as an auto-increment key
+    /// skipping values on a rolled-back transaction — costs compactness
+    /// only, never uniqueness).
+    #[serde(default)]
+    pub _next_unit_id: u32,
 }
 
 impl Default for GameState {
@@ -635,6 +653,7 @@ impl Default for GameState {
             _messages: Vec::new(),
             _history: Vec::new(),
             initial_seed: 0,
+            _next_unit_id: 0,
         }
     }
 }
@@ -658,6 +677,13 @@ impl GameState {
     /// Get the current player's tribe mutably
     pub fn current_tribe_mut(&mut self) -> Option<&mut TribeState> {
         self.tribes.get_mut(&self.settings.current_player_turn_id)
+    }
+
+    /// Mint a fresh, never-reused `UnitState::id`. Callers: `spawn_unit`/
+    /// `summon_unit` (real minting) and `Game::post_load` (backfill).
+    pub fn next_unit_id(&mut self) -> u32 {
+        self._next_unit_id += 1;
+        self._next_unit_id
     }
 
     /// Obscure all information hidden by the Fog of War for a specific player.

@@ -1599,6 +1599,7 @@ pub fn spawn_unit(
     let settings = get_unit_setting(unit_type);
     let independent = force_independent || settings.skills.contains(&SkillType::Independent);
     let map_size = state.settings.size;
+    let unit_id = state.next_unit_id();
 
     let new_unit = UnitState {
         owner,
@@ -1625,6 +1626,7 @@ pub fn spawn_unit(
         parent_unit_idx: None,
         child_unit_idx: None,
         last_attack_coords: None,
+        id: unit_id,
     };
 
     let old_unit_owner: Option<PlayerId> =

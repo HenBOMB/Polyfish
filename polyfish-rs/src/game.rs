@@ -102,6 +102,30 @@ impl Game {
             tribe.starting_tile_coords.compute_idx(map_size);
         }
 
+        // 2.5. Backfill stable unit IDs. Idempotent: raises `_next_unit_id`
+        // to cover any IDs already present first (so re-running post_load on
+        // an already-stamped state never collides), then mints fresh IDs
+        // only for units still at the `0` sentinel — mapgen output, loaded
+        // JSON, and hand-built test fixtures never route through
+        // `spawn_unit`, so this is their only path to a real ID.
+        {
+            let mut next_id = self.state._next_unit_id;
+            for tribe in self.state.tribes.values() {
+                for unit in &tribe.units {
+                    next_id = next_id.max(unit.id);
+                }
+            }
+            for tribe in self.state.tribes.values_mut() {
+                for unit in &mut tribe.units {
+                    if unit.id == 0 {
+                        next_id += 1;
+                        unit.id = next_id;
+                    }
+                }
+            }
+            self.state._next_unit_id = next_id;
+        }
+
         // 3. Calculate _territory for cities
         let mut territory_updates = Vec::new();
         for tribe in self.state.tribes.values() {
@@ -807,6 +831,7 @@ fn normalize_unit_entry(unit: Value, map_size: i32, tile_idx: i32) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Coords;
 
     #[test]
     fn test_new_game() {
@@ -828,6 +853,68 @@ mod tests {
         let cloned = game.clone_game();
         assert_eq!(game.map_size(), cloned.map_size());
         assert_eq!(game.turn(), cloned.turn());
+    }
+
+    #[test]
+    fn spawn_unit_mints_distinct_ids() {
+        let mut game = Game::new();
+        game.state.tribes.insert(1, TribeState::default());
+        let _ = crate::actions::units::spawn_unit(&mut game.state, 1, UnitType::Warrior, 10, false);
+        let _ = crate::actions::units::spawn_unit(&mut game.state, 1, UnitType::Warrior, 20, false);
+        let _ = crate::actions::units::spawn_unit(&mut game.state, 1, UnitType::Warrior, 30, false);
+        let ids: Vec<u32> = game.state.tribes[&1].units.iter().map(|u| u.id).collect();
+        assert_eq!(ids.len(), 3);
+        assert!(ids.iter().all(|&id| id != 0), "no unit should keep the unassigned sentinel: {ids:?}");
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), 3, "ids must be pairwise distinct: {ids:?}");
+    }
+
+    #[test]
+    fn post_load_backfills_zero_ids_without_collision() {
+        let mut game = Game::new();
+        game.state.settings.size = 11;
+        let mut tribe = TribeState::default();
+        // One unit already has a real (non-spawn_unit) id, simulating a
+        // loaded save; two more sit at the unassigned sentinel, simulating
+        // mapgen output / hand-built fixtures.
+        let mut existing = UnitState { coords: Coords::from_index(5, 11), ..Default::default() };
+        existing.id = 7;
+        let mut zero_a = UnitState { coords: Coords::from_index(6, 11), ..Default::default() };
+        zero_a.id = 0;
+        let mut zero_b = UnitState { coords: Coords::from_index(7, 11), ..Default::default() };
+        zero_b.id = 0;
+        tribe.units.push(existing);
+        tribe.units.push(zero_a);
+        tribe.units.push(zero_b);
+        game.state.tribes.insert(1, tribe);
+
+        game.post_load();
+
+        let ids: Vec<u32> = game.state.tribes[&1].units.iter().map(|u| u.id).collect();
+        assert_eq!(ids[0], 7, "an already-stamped id must survive backfill unchanged");
+        assert!(ids[1] != 0 && ids[2] != 0, "sentinel ids must be backfilled: {ids:?}");
+        assert!(ids[1] > 7 && ids[2] > 7, "backfilled ids must not collide with the existing 7: {ids:?}");
+        assert_ne!(ids[1], ids[2], "backfilled ids must be pairwise distinct: {ids:?}");
+    }
+
+    #[test]
+    fn post_load_is_idempotent_on_unit_ids() {
+        let mut game = Game::new();
+        game.state.settings.size = 11;
+        let mut tribe = TribeState::default();
+        let mut zero = UnitState { coords: Coords::from_index(6, 11), ..Default::default() };
+        zero.id = 0;
+        tribe.units.push(zero);
+        game.state.tribes.insert(1, tribe);
+
+        game.post_load();
+        let ids_first: Vec<u32> = game.state.tribes[&1].units.iter().map(|u| u.id).collect();
+        game.post_load();
+        let ids_second: Vec<u32> = game.state.tribes[&1].units.iter().map(|u| u.id).collect();
+
+        assert_eq!(ids_first, ids_second, "calling post_load twice must not re-stamp or collide");
     }
 
     #[test]
