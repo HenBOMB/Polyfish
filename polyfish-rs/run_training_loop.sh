@@ -805,11 +805,27 @@ do
                     --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}"
             elif [ "$GAUGE_ACTION" = "stop" ]; then
                 rm -f "$GAUGE_LOG"
-                echo "=================================================="
-                echo "PLATEAU STOP at iteration $i: two consecutive 8-reading"
-                echo "windows with no gain vs the active anchor (see ladder.json)."
-                echo "=================================================="
-                break
+                if [ -n "${IGNORE_PLATEAU:-}" ]; then
+                    echo "=================================================="
+                    echo "PLATEAU flagged at iteration $i (two consecutive"
+                    echo "8-reading windows with no gain vs the active anchor)"
+                    echo "-- IGNORE_PLATEAU=1 set, continuing anyway. This"
+                    echo "gauge measures Gumbel-mode strength vs a fixed"
+                    echo "anchor, which is orthogonal to a MACRO_GEN run's"
+                    echo "actual training target (the macro policy/value"
+                    echo "heads, behavior-cloned from macro-mcts, not Gumbel"
+                    echo "self-play) -- plateauing here doesn't mean those"
+                    echo "heads have stopped improving. ladder.json still"
+                    echo "records the reading normally either way."
+                    echo "=================================================="
+                else
+                    echo "=================================================="
+                    echo "PLATEAU STOP at iteration $i: two consecutive 8-reading"
+                    echo "windows with no gain vs the active anchor (see ladder.json)."
+                    echo "Set IGNORE_PLATEAU=1 to keep going anyway."
+                    echo "=================================================="
+                    break
+                fi
             fi
 
             # Audit block every 5th gauge: greedy + one retired anchor,
