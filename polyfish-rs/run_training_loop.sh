@@ -574,10 +574,16 @@ do
         ANCHOR_NAME=$(json_get name "" <<< "$ACTIVE_JSON")
         GAUGE_LOG=$(mktemp)
 
-        # M4: measure the same game length self-play is currently generating.
-        # self_play's curriculum() is the source of truth; ask it rather than
-        # mirroring its thresholds here.
-        GAUGE_MAX_TURNS=$("$SELF_PLAY_BIN" --print-curriculum --iteration "$EFF_ITER" | json_get max_turns 30)
+        # M4/#32: match what self-play is currently generating AND the searcher
+        # it is generating it with. self_play's schedules are the source of
+        # truth; ask it rather than mirroring them here. --decay-last-iter and
+        # --value-trust are the same flags the generation call above passes, so
+        # the reported knobs are the ones self-play actually searched with.
+        GAUGE_CURRICULUM=$("$SELF_PLAY_BIN" --print-curriculum --iteration "$EFF_ITER" \
+            $DECAY_LAST_ITER_FLAG --value-trust "$VALUE_TRUST")
+        GAUGE_MAX_TURNS=$(json_get max_turns 30 <<< "$GAUGE_CURRICULUM")
+        GAUGE_PRIOR_W=$(json_get prior_heuristic_w 0.1 <<< "$GAUGE_CURRICULUM")
+        GAUGE_Q_W=$(json_get policy_target_q_w 1.0 <<< "$GAUGE_CURRICULUM")
 
         # $1 = opponent model path ("" = greedy backend), $2 = seeds (games x2),
         # $3 = per-turn stats dump dir (optional; summarized into the reading).
@@ -593,7 +599,10 @@ do
                 --mcts "$MCTS_ITERS" --gumbel-k "$GUMBEL_K"
                 --games "$2" --gamemode "$GAMEMODE"
                 --max-turns "$GAUGE_MAX_TURNS" --seed "${GAUGE_SEED:-20260811}"
-                --symmetric "${GAUGE_SYMMETRIC:-true}")
+                --symmetric "${GAUGE_SYMMETRIC:-true}"
+                --prior-heuristic-weight "$GAUGE_PRIOR_W"
+                --policy-target-q-weight "$GAUGE_Q_W"
+                --tree-q-weight "$GAUGE_Q_W")
             if [ -z "$1" ]; then
                 cmd+=(--model2 model.safetensors --backend1 gumbel --backend2 greedy)
             else
@@ -647,6 +656,7 @@ do
             --unpaired-seeds "${GAUGE_UNPAIRED:-0}" \
             --tribes "$TRIBE1,$TRIBE2" \
             --max-turns "$GAUGE_MAX_TURNS" \
+            --prior-heuristic-w "$GAUGE_PRIOR_W" --q-weight "$GAUGE_Q_W" \
             --stats-dir "$GAUGE_STATS_DIR")
         echo "GAUGE: $VERDICT"
         GAUGE_ACTION=$(json_get action "" <<< "$VERDICT")
@@ -720,6 +730,7 @@ do
                     --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}" \
                     --mcts "$MCTS_ITERS" --gumbel-k "$GUMBEL_K" --eval-backend "${GAUGE_BACKEND:-}" \
                     --wins-p1 "${GAUGE_WP1:-0}" --wins-p2 "${GAUGE_WP2:-0}" \
+                    --prior-heuristic-w "$GAUGE_PRIOR_W" --q-weight "$GAUGE_Q_W" \
                     --stats-dir "$GAUGE_STATS_DIR"
             done < <(.venv/bin/python3 ladder.py audit-opponents | json_array_items)
         fi

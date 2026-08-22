@@ -29,21 +29,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use strum::IntoEnumIterator;
 
-const HEURISTIC_PRIOR_W0: f32 = 0.5; // net & heur blended 50/50 at start
-const HEURISTIC_PRIOR_DECAY: f32 = 0.97; // decays 0.5 -> 0.1 floor by ~iteration 53
-const ANCHOR_FRAC_DECAY: f32 = 0.97; // same rate as HEURISTIC_PRIOR_DECAY, own start value
-const CRUTCH_FLOOR: f32 = 0.1; // intermediate plateau shared by both crutches
-
-/// Exponential decay from `w0` toward `CRUTCH_FLOOR`, then a hard cutover to 0
-/// once `iteration >= decay_last_iter`. Shared by `prior_heuristic_weight`
-/// (search prior blend) and `anchor_frac` (greedy-anchor game rate) — both are
-/// training-time crutches meant to phase out, not asymptote at a floor.
-fn decay_crutch(w0: f32, decay_rate: f32, iteration: usize, decay_last_iter: usize) -> f32 {
-    if iteration >= decay_last_iter {
-        return 0.0;
-    }
-    (w0 * decay_rate.powi(iteration as i32)).max(CRUTCH_FLOOR.min(w0))
-}
+// The prior/σ(Q) schedules live in the library so `arena` grades the searcher
+// these produce rather than mirroring their converged values (#32).
+use polyfish::ai::curriculum::{
+    ANCHOR_FRAC_DECAY, decay_crutch, policy_target_q_weight, prior_heuristic_weight,
+};
 
 // Absolute yardstick for the value target; 8K points is a good place to end a 30T game
 const GOOD_BOT_FINAL_SCORE: f32 = 8000.0;
@@ -75,12 +65,6 @@ const NEAR_DELTA_W: f32 = 0.7;
 // potential-based (Ng et al. 1999), so it telescopes out of full returns
 // and cannot change the optimal policy, only the credit assignment.
 const SPT_SHAPE_W: f32 = 0.24;
-
-// Ramp (in iterations) for β on σ(Q) in the exported policy targets:
-// β = min(1, iteration/20). Early on the value head's Q ordering is noise
-// that min-max rescaling amplifies to full strength, so π' corrodes the
-// prior; let search re-ranking into the targets only as the head matures.
-const POLICY_TARGET_Q_RAMP_ITERS: f32 = 20.0;
 
 /// Console verbosity for long self-play runs.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -664,17 +648,11 @@ fn play_single_game(
     let mut village_capture_turns: Vec<i32> = Vec::new();
     let mut ruin_capture_turns: Vec<i32> = Vec::new();
 
-    let prior_w = decay_crutch(
-        HEURISTIC_PRIOR_W0,
-        HEURISTIC_PRIOR_DECAY,
-        iteration,
-        decay_last_iter,
-    );
+    let prior_w = prior_heuristic_weight(iteration, decay_last_iter);
     // One trust scalar drives β on σ(Q) in both the exported targets and the
     // search tree itself. --value-trust overrides the iteration ramp, which
     // saturates immediately on ITER_OFFSET-shifted runs.
-    let q_target_w =
-        value_trust.unwrap_or_else(|| (iteration as f32 / POLICY_TARGET_Q_RAMP_ITERS).min(1.0));
+    let q_target_w = value_trust.unwrap_or_else(|| policy_target_q_weight(iteration));
 
     // Create two agents (they might share the same network, or be different)
     let mut agent1 = Brain::with_backend(eval1, mcts_iters, backend1)
@@ -1451,12 +1429,22 @@ fn main() -> anyhow::Result<()> {
 
     if args.print_curriculum {
         let (map_size, max_turns) = curriculum(args.iteration);
+        // The search knobs are on the same footing as max_turns: callers that
+        // must reproduce this iteration's searcher (the gauge) ask for them
+        // rather than mirroring the schedules (#32).
+        let prior_w = prior_heuristic_weight(args.iteration, args.decay_last_iter as usize);
+        let q_w = args
+            .value_trust
+            .unwrap_or_else(|| policy_target_q_weight(args.iteration));
         println!(
             "{}",
             json!({
                 "iteration": args.iteration,
                 "map_size": format!("{map_size:?}"),
                 "max_turns": max_turns,
+                "prior_heuristic_w": prior_w,
+                "policy_target_q_w": q_w,
+                "tree_q_w": q_w,
             })
         );
         return Ok(());
@@ -2805,53 +2793,5 @@ mod spt_shaping_tests {
         let p2_sum: f32 = out[1] + out[3] + out[5];
         assert!((p1_sum - 2.0 / norm()).abs() < 1e-6, "got {p1_sum}");
         assert!((p2_sum + 2.0 / norm()).abs() < 1e-6, "got {p2_sum}");
-    }
-}
-
-#[cfg(test)]
-mod decay_crutch_tests {
-    use super::*;
-
-    #[test]
-    fn decays_from_w0_toward_the_floor() {
-        let start = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 0, 150);
-        assert!((start - HEURISTIC_PRIOR_W0).abs() < 1e-6, "got {start}");
-
-        let mid = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 23, 150);
-        assert!((mid - 0.25).abs() < 0.01, "got {mid}");
-
-        let floored = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 100, 150);
-        assert!((floored - CRUTCH_FLOOR).abs() < 1e-6, "got {floored}");
-    }
-
-    #[test]
-    fn hard_cuts_to_zero_at_decay_last_iter() {
-        assert_eq!(
-            decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 150, 150),
-            0.0
-        );
-        assert_eq!(
-            decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 500, 150),
-            0.0
-        );
-        let just_before = decay_crutch(HEURISTIC_PRIOR_W0, HEURISTIC_PRIOR_DECAY, 149, 150);
-        assert!((just_before - CRUTCH_FLOOR).abs() < 1e-6, "got {just_before}");
-    }
-
-    #[test]
-    fn never_raises_a_rate_that_starts_below_the_floor() {
-        let probe = decay_crutch(0.05, ANCHOR_FRAC_DECAY, 40, usize::MAX);
-        assert!(probe <= 0.05, "got {probe}");
-        assert_eq!(decay_crutch(0.0, ANCHOR_FRAC_DECAY, 0, usize::MAX), 0.0);
-    }
-
-    #[test]
-    fn anchor_decay_start_holds_the_rate_until_the_clock_starts() {
-        // The loop passes --anchor-decay-start == iteration until a gauge
-        // reading crosses 50% vs greedy, which pins the exponent at 0.
-        let held = decay_crutch(0.25, ANCHOR_FRAC_DECAY, 60usize.saturating_sub(60), 150);
-        assert!((held - 0.25).abs() < 1e-6, "got {held}");
-        let decaying = decay_crutch(0.25, ANCHOR_FRAC_DECAY, 60usize.saturating_sub(40), 150);
-        assert!(decaying < 0.25 && decaying >= CRUTCH_FLOOR, "got {decaying}");
     }
 }
