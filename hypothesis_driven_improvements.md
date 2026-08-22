@@ -8431,3 +8431,37 @@ floor outright. `root_prior_w` stays at its 0.0 default until one of those
 lands. `root_prior_w=0.005` is downgraded from "confirmed good" (its n=32
 reading) to "not distinguishable from off" — do not treat the earlier 75%
 reading as representative going forward.
+
+## EXP_ELO_069 — quick re-check: has NetAsym leaf quality moved since EXP_ELO_047's 44.0%?
+
+STATUS: REGISTERED, about to run. Verdi-requested, same-day follow-on
+after tonight's value-calib validation (EXP_ELO_067: edge over scoreboard
+baseline flipped from -0.030 to +0.226; turn[30,40) r2 0.016→0.972).
+
+CONTEXT: `MacroLeaf::NetAsym` was retired Aug 15 after EXP_ELO_039/046/047
+(38.8% → 41.9% → 44.0% vs heuristic leaf across three checkpoints/fixes),
+with the standing diagnosis "what has never been fixed is WHAT THE HEAD
+KNOWS... the next credible move is data/labels/scale, not another
+consumer of the same head." Tonight's work is exactly that kind of fix.
+This is a directional recheck, not a full re-litigation — not attempting
+to re-clear the original >=52.5% seat-test gate at this sample size.
+
+METHOD: same harness as EXP_ELO_047-B1 (the historical NetAsym reading),
+scaled down for a same-day "quick" check rather than the historical
+1000-game run: `arena --model1 model.safetensors --model2
+model.safetensors --backend1 macro-mcts --backend2 macro-mcts
+--macro-leaf1 net-asym --macro-sims 32 --macro-k 4 --tribe Imperius
+--base-seed 1787300000 --games 128` (256 total games, swapped sides;
+config2 defaults to heuristic leaf). Same base_seed as history (first 128
+seeds are a subset of the original 500), same sims/k, same tribe — only
+the checkpoint differs (today's, vs Aug 15's exp046/047 snapshot).
+
+PREDICTION: directional only, not a formal paired test against the old
+1000-game data (different sample, no stored per-seed comparator loaded).
+z-score against the null of 50% computed the same way EXP_ELO_047 did.
+Meaningfully above 44.0% (say, 48%+) → the data/labels fix moved the
+needle on the actual open question, worth a full-scale re-run. Flat
+around 40-46% → no detectable change from tonight's fix; the head's
+average-case calibration improved but per-decision discrimination at the
+macro leaf still hasn't. Below 40% → net leaf got worse, investigate
+before drawing any positive conclusion elsewhere tonight.
