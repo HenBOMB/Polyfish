@@ -317,6 +317,75 @@ zero-sum label built on the wrong quantity is not evidence against zero-sum.
 ### Actual Results
 NOT YET RUN.
 
+## EXP_LABEL_002: The `v_progress` head leaves the search Q (aux-only)
+*Aug 22, 2026 · REGISTERED, NOT YET RUN · corrective, no measurement bar*
+
+`GumbelNode::q_value()` returned `value_sum / visits + own_progress`, and the
+root q_value is the TD bootstrap for the value label (`last_root_value`
+→ `self_play.rs`'s `td_lambda_labels`). Two consequences, neither intended:
+
+1. **The label was backend-dependent.** Only candle computes the head
+   (`eval_server.rs:279-288`); tch (`:299-300`) and metal (`:657-659`, "MPSGraph
+   doesn't compute the progress head") stub it to `0`. Identical games therefore
+   produced different training data depending on which box generated them, and
+   gauge readings taken on different backends were not comparable. This is the
+   same failure family as the candle strided-tensor bug — an Apple run and a
+   Linux run of the same weights were not training the same learner.
+2. **It mis-signed under adversarial search.** `value_sum` holds the edge value
+   in the **parent's** perspective (Gumbel convention, `mcts_common.rs`), while
+   `own_progress` is the node's own mover's predicted city share. A handover
+   child's Q therefore gained the *opponent's* progress un-negated, confounding
+   EXP_SEARCH_001 — the one landed-but-unmeasured arm that can be cleanly A/B'd
+   against the re-baseline.
+
+3. **It reached the exported policy targets, not just the value label.**
+   Beyond what #33 records: `extract_policy_targets` builds π′ from
+   `sigma_completed_q(child_qvalues, ...)` (`gumbel_mcts.rs`), and those are
+   `q_value()`s — so the *policy* target written into every training sample
+   carried the progress term as well. Worse, `own_progress` is `0.0` on an
+   unexpanded child, so within one node the term was added to in-cut children
+   and not to out-of-cut ones, biasing π′ toward whatever the search happened
+   to expand. `recommend_final_move` reads the same values, so it moved the
+   played move too.
+
+The term was not small: `progress_target` is a city share rescaled to ±1
+(`self_play.rs:2300-2304`), the same magnitude as Q itself.
+
+**Change:** `q_value()` returns the mean action value only; the `own_progress`
+field and the vestigial `progress_sum` are gone from `gumbel_mcts.rs`, as is the
+`(value, progress)` leaf tuple that existed only to feed them. `mcts_zero.rs`
+already ignored the head, so the two search implementations now agree. The head
+itself is untouched and still trained — `network.rs`'s `v_progress`, `train.py`'s
+MSE on the `progress` target, and the target `self_play` writes are all as they
+were. It is now aux-only, like the `aux_*` heads.
+
+This is a **correction, not a hypothesis**: `git log -S own_progress` puts its
+introduction in `0290a89` ("fixed improper city / capital target scoring") with
+no registered rationale, and no verdict in this log depends on it. Nothing is
+being traded away, so there is no success bar — but it changes what the search
+computes, so it must land *before* the re-baseline rather than during it.
+
+### Expected Results
+Root values return to the value head's own scale (a perturbation probe moved
+`last_root_value` from −0.46 to 273.55 before this change). Candle-generated and
+tch/metal-generated training data — both value labels and policy targets —
+become interchangeable. Because π′ changes, self-play trajectories differ from
+any previous run even at a fixed seed, so this is behaviour-affecting in the
+same sense as the movegen-ordering fix: no metric taken before it is comparable
+with one taken after.
+
+### Falsifier
+Not falsifiable as a strength claim, and should not be treated as one. The one
+outcome that would argue for the *other* repair — implementing the head in
+tch/metal and sign-flipping it across handover edges — is a re-baseline that
+comes in materially below the pre-change candle band, which would suggest the
+progress term was carrying real signal rather than noise. Held by
+`tests/test_progress_head_not_in_search.rs`, which perturbs `v_progress` and
+asserts the search does not move; it was verified to fail before this change.
+
+### Actual Results
+NOT YET RUN.
+
 ## EXP_SEARCH_001: Adversarial in-tree search — give the opponent its turn
 *Aug 18, 2026 · REGISTERED, NOT YET RUN · off by default*
 
