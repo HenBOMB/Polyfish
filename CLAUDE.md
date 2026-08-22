@@ -128,6 +128,7 @@ If you change layer shapes, channel counts, or head sizes in one, you must mirro
 - `VALUE_LOSS_WEIGHT`, `OWNERSHIP_LOSS_WEIGHT` — head weighting.
 - `AUGMENT_D4` — D4 symmetry augmentation; implemented, off unless explicitly exported.
 - `TRAIN_EPOCHS`, `LEARNING_RATE`, `BATCH_SIZE`.
+- `TRAIN_HOLDOUT_FRAC` — fraction of the buffer withheld from fitting to give `value_r2_holdout` (default 0.15). The split is by file and keyed on a hash of the basename so membership is stable for a file's whole life in the buffer; it runs over fresh + archive self-play only — `teachers/games_*.safetensors` always train, since they never rotate out and a permanently withheld teacher would also put static positions into the holdout reading (#36).
 
 `bisect_arm.sh` is where diagnostic arms belong; anything exported unconditionally from `run_training_loop.sh` is a production setting.
 

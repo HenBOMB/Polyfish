@@ -500,6 +500,21 @@ def split_holdout(files, frac):
     return kept, held
 
 
+def partition_buffer(self_play_files, teacher_files, frac):
+    """(train, holdout) for one iteration's buffer. Teachers always train.
+
+    They are kept out of the split entirely, not just off the holdout side:
+    membership is a stable function of the basename and teachers never rotate
+    out of the buffer, so a teacher that hashed in would be withheld from
+    fitting for the whole campaign — and its static known-good positions would
+    contaminate a reading whose only job is to say how the net generalizes on
+    fresh self-play (#36). An out-of-sample teacher number, if ever wanted, is
+    its own series, not this one.
+    """
+    kept, held = split_holdout(self_play_files, frac)
+    return kept + list(teacher_files), held
+
+
 def pad_spatial(smaps, channels, map_size):
     """Zero-pad legacy spatial maps up to `channels` (channels were appended)."""
     if smaps.dim() == 4:
@@ -591,7 +606,8 @@ def train(batch_size=BATCH_SIZE, epochs=EPOCHS, lr=LEARNING_RATE, chunk_size=Non
         f for f in sorted(glob.glob("teachers/games_*.safetensors"))
         if not os.path.basename(f).startswith("games_human_")
     ]
-    game_files = fresh_files + archive_files[:replay_buffer_size] + teacher_files
+    self_play_files = fresh_files + archive_files[:replay_buffer_size]
+    game_files = self_play_files + teacher_files
 
     if not game_files:
         print("No training data found (checked ./, ./archive/, and ./teachers/)!")
@@ -604,13 +620,15 @@ def train(batch_size=BATCH_SIZE, epochs=EPOCHS, lr=LEARNING_RATE, chunk_size=Non
 
     holdout_files = []
     if not benchmark_mode:
-        game_files, holdout_files = split_holdout(game_files, HOLDOUT_FRAC)
+        game_files, holdout_files = partition_buffer(
+            self_play_files, teacher_files, HOLDOUT_FRAC
+        )
         if holdout_files:
-            print(f"Holdout: {len(holdout_files)} file(s) withheld from fitting "
+            print(f"Holdout: {len(holdout_files)} self-play file(s) withheld from fitting "
                   f"({', '.join(os.path.basename(f) for f in holdout_files)}).")
         elif HOLDOUT_FRAC > 0:
-            print("Holdout: no file in this buffer hashes into the holdout bucket; "
-                  "value_r2 is in-sample only this iteration.")
+            print("Holdout: no self-play file in this buffer hashes into the holdout "
+                  "bucket; value_r2 is in-sample only this iteration.")
 
     # 2. Init Model
     MAP_SIZE = 11

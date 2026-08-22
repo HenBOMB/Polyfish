@@ -382,6 +382,19 @@ ALSO FIXED: the record now says what it was taken under.
   dropped it on the floor. `value_r2_insample`, `value_r2_holdout`,
   `holdout_samples` and `ownership_loss` are columns now, and the endpoint serves
   them (verified against a running server, not by inspection).
+- **The holdout is self-play only (#36).** The split ran over the combined file
+  list, teachers included, and membership is a deliberately stable function of
+  the basename — so a teacher file that hashed into the bucket was withheld from
+  fitting *permanently* (teachers never rotate out of the buffer the way
+  self-play files do at ~`REPLAY_BUFFER_FILES` iterations), and its static
+  known-good positions contaminated `value_r2_holdout`, the one series that is
+  supposed to say how the net generalizes on fresh self-play. `partition_buffer`
+  (`train.py`) now splits fresh + archive only and appends the teachers to the
+  training side; an out-of-sample teacher number, if ever wanted, is its own
+  series. The small-buffer case went with it: the guard against an empty
+  training set now sees the self-play buffer alone, so an iteration can no
+  longer end up fitting teachers only while withholding every self-play file it
+  had.
 - **Per-iteration configuration is recorded.** `config.json` is still re-read
   inside the loop — that is the dashboard's live-control feature, not an accident
   — but every row now carries the settings it actually ran at: `tribe1`,
@@ -1136,9 +1149,10 @@ to fail the build.
 `tests/test_train.py` and `tests/test_ladder.py` (stdlib `unittest`, no new
 pinned dependency; `scripts/run_python_tests.sh`, CI job `python-tests`) cover
 the helpers whose failure mode is silent — the holdout split's partition and
-stability invariants, `pad_spatial`'s append-don't-prepend contract, D4 as a
-group action, and the Rust↔Python width contract read from the Python side,
-which runs without torch.
+stability invariants, its exclusion of the teacher anchor files (#36),
+`pad_spatial`'s append-don't-prepend contract, D4 as a group action, the
+shell↔`ladder.py` command lines the training loop builds (#35), and the
+Rust↔Python width contract read from the Python side, which runs without torch.
 
 **Search reproducibility took two fixes, and the second was the real one.**
 Every search agent now owns a seeded `SmallRng` — `GumbelMctsAgent`,
