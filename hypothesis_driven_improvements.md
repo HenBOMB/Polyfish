@@ -8465,3 +8465,49 @@ around 40-46% → no detectable change from tonight's fix; the head's
 average-case calibration improved but per-decision discrimination at the
 macro leaf still hasn't. Below 40% → net leaf got worse, investigate
 before drawing any positive conclusion elsewhere tonight.
+
+### ACTUAL (Aug 22, 2026, 256 games, ~33 min) — landed in the "below 40%,
+worse" bucket, and by a wide, clearly significant margin.
+
+**NetAsym leaf: 79/256 (30.9%)** vs heuristic leaf, today's checkpoint.
+z vs the 50% null = **-6.12** (unambiguously losing). z vs the historical
+44.0% baseline (Aug 15, n=1000) = **-3.81** — this is not noise around
+the old number, it is a real, significant regression from it. Avg score
+3713.9 vs 5346.8. Cost 1480ms vs 514ms/move (2.88x, though per the
+historical B1 note this arm's ms/move is inflated by eval-server
+contention from concurrent games, not necessarily comparable across runs
+on its own).
+
+**This directly contradicts the hope this recheck was registered to
+test.** Tonight's value-calib validation (EXP_ELO_067) showed the value
+head's edge over a naive scoreboard baseline improved substantially
+(-0.030 → +0.226) and a previously-broken game phase (turn 30-40) went
+from r2=0.016 to 0.972. The natural expectation was that this would also
+help — or at least not hurt — the net leaf's actual behavioral quality.
+Instead the net leaf's win rate against heuristic dropped by 13pp from
+the already-losing Aug 15 baseline.
+
+**Reading this honestly, not spun:** this is the SAME pattern EXP_ELO_046
+already documented once — "fit improved and discrimination did not
+follow... the head still ranks macro futures worse than hand-written
+evaluate_state" (value_r2 climbed 0.792→0.807 there while behavior held
+flat). Calibration (does the value correlate with final outcome, in
+aggregate, across many games) and discrimination (can it correctly rank
+which of two specific candidate futures is better, the one thing NetAsym
+leaf actually needs) are measuring different things, and improving one
+has not been shown to improve the other across three separate rounds now
+(046, and now this recheck makes it a clean repeat, not a new mechanism).
+If anything this result is WORSE than 046's "flat," which raises a
+distinct possibility not yet investigated: whether something about
+tonight's specific training changes (the goal-blind macro_stance/
+macro_order retrain, sharing the same trunk/cross-attention backbone as
+the value head) had a side effect on the value head's discrimination
+specifically, separate from its calibration. Not confirmed — flagged as
+the concrete next question if this gets picked up again.
+
+**Disposition:** the net leaf's retirement stands, more firmly than
+before this recheck started. `MACRO_LEAF` stays `heuristic` in generation
+and play. Do not read tonight's value-calib win as license to reconsider
+this without a dedicated investigation into why discrimination specifically
+regressed alongside calibration improving — that is now the standing open
+question, not "will the labels fix eventually help."
