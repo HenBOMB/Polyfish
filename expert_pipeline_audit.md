@@ -401,6 +401,20 @@ ALSO FIXED: the record now says what it was taken under.
   that lost one half of their side swap, which is the pairing the seeded design
   buys — and the loop carries `games_attempted`, `games_dropped` and
   `unpaired_seeds` into the reading, surfaced in the verdict.
+- **The tribe pair on a reading is the pair the match was played on (#34).** The
+  fix above landed correctly in the CSV and incorrectly in the ladder: the loop
+  passed self-play's shuffled *training* pair to `ladder.py record` for a match
+  `arena` had hardcoded to an Imperius mirror, so the permanent record carried
+  metadata about a variable the gauge never varied, and disagreed with its own
+  `--dump-stats-dir` JSONs. `arena` now takes `--tribe1/--tribe2` (rejecting an
+  unknown name rather than defaulting it) and prints the pair it played; the loop
+  reads that line back and records *that*, failing the reading if it does not
+  parse. The pin itself stays — the block effect is exactly why the gauge should
+  not vary it — but the scope limit is now written into `ladder.json`'s `scope`
+  field instead of being tacit, and a `tribe_audit` row at the audit cadence
+  re-reads the anchor on the training pair as a cross-check (kept out of both
+  `_gauge_series` and the `elo.py` fit). `scripts/smoke_train_loop.sh` now fails
+  if a recorded pair disagrees with the one `arena` printed.
 
 STILL OPEN: the search-budget confound is contained, not resolved — restricting
 the window is correct but it means a budget change silently shortens the plateau

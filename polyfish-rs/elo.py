@@ -11,8 +11,10 @@ Two sources, same fit:
   --source ladder   ladder.json's readings, anchor `greedy` (its Elo-0 floor).
 The ladder source replaces run_training_loop.sh's chained per-reading win rates
 with one joint fit over every gauge, audit and link match ever recorded, with
-bootstrap intervals. Ladder rows carry no elimination flag, so finish% is 0
-there.
+bootstrap intervals. `tribe_audit` readings are excluded (EXCLUDED_KINDS): they
+replay the gauge match on another tribe pair, so pooling them would fold the
+block effect the pinned pair exists to remove back into the rating. Ladder rows
+carry no elimination flag, so finish% is 0 there.
 
 Usage:
   python3 elo.py fit    [--source ladder] [--ladder ladder.json]
@@ -81,6 +83,13 @@ def _ladder_node(reading: dict) -> str:
     return f"{run}/{model}" if run else model
 
 
+# Cross-check readings, not rating evidence: a tribe_audit replays the gauge
+# match on another tribe pair, and its games share the (model, anchor) node pair
+# with the pinned reading. Pooling them would fold the tribe block effect the pin
+# exists to remove straight back into the ladder Elo (#34).
+EXCLUDED_KINDS = {"tribe_audit"}
+
+
 def load_ladder_games(path: str) -> list[tuple[str, str, float, bool]]:
     """ladder.json readings -> the same rows as the arena ledger, expanded from
     each reading's W/D/L. Each anchor is aliased back to the model it was frozen
@@ -89,7 +98,7 @@ def load_ladder_games(path: str) -> list[tuple[str, str, float, bool]]:
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
 
-    readings = data.get("readings", [])
+    readings = [r for r in data.get("readings", []) if r.get("kind") not in EXCLUDED_KINDS]
     links = {
         r.get("iteration"): _ladder_node(r) for r in readings if r.get("kind") == "link"
     }

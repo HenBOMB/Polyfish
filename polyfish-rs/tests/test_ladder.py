@@ -407,6 +407,101 @@ class VerdictTest(unittest.TestCase):
         self.assertLess(pooled[1] - pooled[0], one[1] - one[0])
 
 
+class TribeScopeTest(unittest.TestCase):
+    """#34: the ladder recorded self-play's shuffled training pair on a match
+    arena hardcoded to an Imperius mirror, so the permanent experiment record
+    carried metadata about a variable the gauge never varied."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["LADDER_FILE"] = os.path.join(self.tmp.name, "ladder.json")
+        sys.modules.pop("ladder", None)
+        import ladder
+
+        self.ladder = ladder
+
+    def tearDown(self):
+        del os.environ["LADDER_FILE"]
+        sys.modules.pop("ladder", None)
+        self.tmp.cleanup()
+
+    def _args(self, kind="gauge", tribes="Imperius,Imperius", iteration=1):
+        class Args:
+            pass
+
+        a = Args()
+        a.run_id, a.iteration = "t", iteration
+        a.wins, a.losses, a.draws = 20, 44, 0
+        a.avg_score_model = a.avg_score_opponent = 0.0
+        a.mcts, a.gumbel_k, a.eval_backend = 64, 16, "candle"
+        a.max_turns = 45
+        a.wins_p1 = a.wins_p2 = None
+        a.stats_dir = None
+        a.tribes = tribes
+        a.kind, a.opponent = kind, None
+        return a
+
+    def _record(self, args):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.ladder.cmd_record(args)
+        return json.loads(buf.getvalue())
+
+    def _readings(self):
+        with open(os.environ["LADDER_FILE"]) as f:
+            return json.load(f)["readings"]
+
+    def test_the_store_records_what_its_numbers_are_a_measurement_of(self):
+        self._record(self._args())
+        with open(os.environ["LADDER_FILE"]) as f:
+            self.assertIn("Imperius", json.load(f)["scope"])
+
+    def test_a_legacy_ladder_gains_the_scope_note_on_its_next_write(self):
+        with open(os.environ["LADDER_FILE"], "w") as f:
+            json.dump({"anchors": [{"name": "greedy", "path": "", "elo": 0.0}],
+                       "readings": []}, f)
+        self._record(self._args())
+        with open(os.environ["LADDER_FILE"]) as f:
+            self.assertEqual(json.load(f)["scope"], self.ladder.SCOPE_NOTE)
+
+    def test_a_tribe_audit_reads_against_the_same_anchor_as_the_gauge(self):
+        gauge = self._record(self._args())
+        audit = self._record(self._args(kind="tribe_audit", tribes="Bardur,Kickoo"))
+        self.assertEqual(audit["opponent"], gauge["opponent"])
+        self.assertEqual(self._readings()[-1]["tribes"], "Bardur,Kickoo")
+
+    def test_a_tribe_audit_carries_no_verdict_and_no_strike(self):
+        for i in range(self.ladder.PLATEAU_WINDOW * 2):
+            self._record(self._args(kind="tribe_audit", iteration=i,
+                                    tribes="Bardur,Kickoo"))
+        verdict = self._record(self._args(kind="tribe_audit", iteration=99,
+                                          tribes="Bardur,Kickoo"))
+        self.assertEqual(verdict["action"], "continue")
+        self.assertEqual(verdict["plateau_strikes"], 0)
+
+    def test_a_tribe_audit_stays_out_of_the_plateau_window(self):
+        for i in range(self.ladder.PLATEAU_WINDOW):
+            self._record(self._args(kind="tribe_audit", iteration=i,
+                                    tribes="Bardur,Kickoo"))
+        self.assertEqual(self.ladder._gauge_series(self.ladder._load()), [])
+
+    def test_a_tribe_audit_stays_out_of_the_elo_fit(self):
+        """Its games share the (model, anchor) node pair with the pinned
+        reading, so pooling them would refold the block effect into the Elo."""
+        self._record(self._args())
+        pinned = elo_module().load_ladder_games(os.environ["LADDER_FILE"])
+        self._record(self._args(kind="tribe_audit", tribes="Bardur,Kickoo"))
+        self.assertEqual(
+            elo_module().load_ladder_games(os.environ["LADDER_FILE"]), pinned
+        )
+
+
+def elo_module():
+    import elo
+
+    return elo
+
+
 class PowerCommandTest(unittest.TestCase):
     def test_cli_emits_parseable_json(self):
         import subprocess

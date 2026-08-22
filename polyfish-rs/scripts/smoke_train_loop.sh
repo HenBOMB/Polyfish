@@ -82,6 +82,15 @@ compgen -G "$SMOKE_DIR/archive/games_*.safetensors" > /dev/null \
 [ -s "$SMOKE_DIR/.last_train_metrics.json" ] || fail "train.py recorded no metrics"
 if [ "$LEAGUE" -gt 0 ]; then
     [ -s "$SMOKE_DIR/ladder.json" ] || fail "the strength gauge recorded no ladder reading"
+    # #34: the reading's metadata must describe the match arena actually played.
+    # It used to be handed self-play's shuffled training pair for a match arena
+    # hardcoded to an Imperius mirror, and nothing downstream could notice.
+    PLAYED=$(sed -n 's/^Tribes: \(.*\)$/\1/p' "$SMOKE_DIR/session.log" | head -1)
+    RECORDED=$("$SMOKE_VENV/bin/python3" -c 'import json,sys
+print(json.load(open(sys.argv[1]))["readings"][0].get("tribes",""))' "$SMOKE_DIR/ladder.json")
+    [ -n "$PLAYED" ] || fail "arena printed no tribe pair for the gauge match"
+    [ "$PLAYED" = "$RECORDED" ] \
+        || fail "ladder recorded tribes '$RECORDED' for a match arena played on '$PLAYED'"
 fi
 
 echo "smoke: OK (artifacts in $SMOKE_DIR)"

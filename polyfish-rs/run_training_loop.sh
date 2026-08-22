@@ -585,13 +585,24 @@ do
         GAUGE_PRIOR_W=$(json_get prior_heuristic_w 0.1 <<< "$GAUGE_CURRICULUM")
         GAUGE_Q_W=$(json_get policy_target_q_w 1.0 <<< "$GAUGE_CURRICULUM")
 
+        # The gauge's tribe pair is pinned, unlike self-play's: the tribe block
+        # effect rivals a whole campaign's measured improvement, so a reshuffled
+        # pair would move readings for a reason that is not strength. That fixes
+        # the instrument's scope to an Imperius mirror while training optimizes
+        # the 5-tribe pool -- recorded on every reading and in ladder.json's
+        # `scope` note, not assumed (#34).
+        GAUGE_TRIBE1="${GAUGE_TRIBE1:-Imperius}"
+        GAUGE_TRIBE2="${GAUGE_TRIBE2:-Imperius}"
+
         # $1 = opponent model path ("" = greedy backend), $2 = seeds (games x2),
-        # $3 = per-turn stats dump dir (optional; summarized into the reading).
+        # $3 = per-turn stats dump dir (optional; summarized into the reading),
+        # $4/$5 = tribe pair (optional; defaults to the pinned gauge pair).
         # Returns non-zero if arena failed OR its output did not parse — callers
         # must not swallow that (a swallowed error meant the ladder recorded no
         # readings at all for the whole campaign).
         run_gauge_match () {
             GAUGE_STATS_DIR="$3"
+            local tribe1="${4:-$GAUGE_TRIBE1}" tribe2="${5:-$GAUGE_TRIBE2}"
             # Fixed seed set: arena otherwise seeds from the wall clock, so
             # readings would not share a map set and could not be compared
             # across iterations.
@@ -600,6 +611,7 @@ do
                 --games "$2" --gamemode "$GAMEMODE"
                 --max-turns "$GAUGE_MAX_TURNS" --seed "${GAUGE_SEED:-20260811}"
                 --symmetric "${GAUGE_SYMMETRIC:-true}"
+                --tribe1 "$tribe1" --tribe2 "$tribe2"
                 --prior-heuristic-weight "$GAUGE_PRIOR_W"
                 --policy-target-q-weight "$GAUGE_Q_W"
                 --tree-q-weight "$GAUGE_Q_W")
@@ -625,6 +637,11 @@ do
             GAUGE_WP1=$(sed -n 's/^Config 1 Wins as P1: \([0-9][0-9]*\).*/\1/p' "$GAUGE_LOG")
             GAUGE_WP2=$(sed -n 's/^Config 1 Wins as P2: \([0-9][0-9]*\).*/\1/p' "$GAUGE_LOG")
             GAUGE_BACKEND=$(sed -n 's/.*| eval \([a-z]*\).*/\1/p' "$GAUGE_LOG" | head -1)
+            # From arena's own output, never from self-play's shuffled pair: the
+            # ladder used to be handed the training tribes for a match arena had
+            # hardcoded to an Imperius mirror, so the permanent record carried
+            # metadata about a variable the gauge never varied (#34).
+            GAUGE_TRIBES=$(sed -n 's/^Tribes: \(.*\)$/\1/p' "$GAUGE_LOG" | head -1)
             # A panicked game is dropped by arena, which silently shrinks n and
             # unbalances the side-swap pairing the seeded design depends on.
             # Carry both into the reading instead of recording a clean-looking
@@ -632,8 +649,8 @@ do
             GAUGE_ATTEMPTED=$(sed -n 's/^Total Games: [0-9]* completed \/ \([0-9][0-9]*\) attempted.*/\1/p' "$GAUGE_LOG")
             GAUGE_DROPPED=$(sed -n 's/^Total Games:.*, \([0-9][0-9]*\) seed(s) dropped.*/\1/p' "$GAUGE_LOG")
             GAUGE_UNPAIRED=$(sed -n 's/^Unpaired Seeds: \([0-9][0-9]*\).*/\1/p' "$GAUGE_LOG")
-            if [ -z "$GAUGE_W" ] || [ -z "$GAUGE_L" ]; then
-                echo "GAUGE: arena exited 0 but its win counts did not parse (opponent '${1:-greedy}') — output format changed?" >&2
+            if [ -z "$GAUGE_W" ] || [ -z "$GAUGE_L" ] || [ -z "$GAUGE_TRIBES" ]; then
+                echo "GAUGE: arena exited 0 but its win counts or tribe pair did not parse (opponent '${1:-greedy}') — output format changed?" >&2
                 return 1
             fi
         }
@@ -654,7 +671,7 @@ do
             --wins-p1 "${GAUGE_WP1:-0}" --wins-p2 "${GAUGE_WP2:-0}" \
             --games-attempted "${GAUGE_ATTEMPTED:-0}" --games-dropped "${GAUGE_DROPPED:-0}" \
             --unpaired-seeds "${GAUGE_UNPAIRED:-0}" \
-            --tribes "$TRIBE1,$TRIBE2" \
+            --tribes "$GAUGE_TRIBES" \
             --max-turns "$GAUGE_MAX_TURNS" \
             --prior-heuristic-w "$GAUGE_PRIOR_W" --q-weight "$GAUGE_Q_W" \
             --stats-dir "$GAUGE_STATS_DIR")
@@ -701,7 +718,8 @@ do
             .venv/bin/python3 ladder.py freeze --run-id "$RUN_ID" --iteration "$i" \
                 --path "$NEW_ANCHOR" \
                 --wins "${GAUGE_W:-0}" --losses "${GAUGE_L:-0}" --draws "${GAUGE_D:-0}" \
-                --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}"
+                --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}" \
+                --tribes "$GAUGE_TRIBES"
         elif [ "$GAUGE_ACTION" = "stop" ]; then
             rm -f "$GAUGE_LOG"
             echo "=================================================="
@@ -730,9 +748,31 @@ do
                     --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}" \
                     --mcts "$MCTS_ITERS" --gumbel-k "$GUMBEL_K" --eval-backend "${GAUGE_BACKEND:-}" \
                     --wins-p1 "${GAUGE_WP1:-0}" --wins-p2 "${GAUGE_WP2:-0}" \
+                    --tribes "$GAUGE_TRIBES" \
                     --prior-heuristic-w "$GAUGE_PRIOR_W" --q-weight "$GAUGE_Q_W" \
                     --stats-dir "$GAUGE_STATS_DIR"
             done < <(.venv/bin/python3 ladder.py audit-opponents | json_array_items)
+
+            # Same match, same anchor, this iteration's *training* pair: the one
+            # row that says whether the pinned Imperius reading generalizes to
+            # the pool training actually optimizes. Cross-check only — recorded
+            # under its own kind so it never enters the gauge's window (#34).
+            if [ "$GAUGE_TRIBE1,$GAUGE_TRIBE2" != "$TRIBE1,$TRIBE2" ]; then
+                if run_gauge_match "$ANCHOR_PATH" "$GAUGE_GAMES" \
+                        "replays/gauge_stats/${RUN_ID}_iter${i}_tribes" "$TRIBE1" "$TRIBE2"; then
+                    .venv/bin/python3 ladder.py record --kind tribe_audit \
+                        --run-id "$RUN_ID" --iteration "$i" \
+                        --wins "$GAUGE_W" --losses "$GAUGE_L" --draws "${GAUGE_D:-0}" \
+                        --avg-score-model "${GAUGE_S1:-0}" --avg-score-opponent "${GAUGE_S2:-0}" \
+                        --mcts "$MCTS_ITERS" --gumbel-k "$GUMBEL_K" --eval-backend "${GAUGE_BACKEND:-}" \
+                        --wins-p1 "${GAUGE_WP1:-0}" --wins-p2 "${GAUGE_WP2:-0}" \
+                        --tribes "$GAUGE_TRIBES" --max-turns "$GAUGE_MAX_TURNS" \
+                        --prior-heuristic-w "$GAUGE_PRIOR_W" --q-weight "$GAUGE_Q_W" \
+                        --stats-dir "$GAUGE_STATS_DIR"
+                else
+                    echo "GAUGE: per-tribe audit ($TRIBE1,$TRIBE2) failed — row skipped (non-fatal)" >&2
+                fi
+            fi
         fi
         rm -f "$GAUGE_LOG"
     fi
