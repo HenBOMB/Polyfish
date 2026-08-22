@@ -158,7 +158,22 @@ pub fn reconcile_unit_goals(
         }
     }
 
-    let expand_targets: Vec<i32> = goal.orders.iter().filter(|(k, _)| *k == OrderKind::Expand).map(|(_, t)| *t).collect();
+    // `goal.orders` legitimately keeps an ACHIEVED target listed all turn
+    // (it needs to keep paying the flat completion bonus, target-keyed, in
+    // `goal_potential`) -- but that doesn't mean it should be offered for
+    // FRESH per-unit assignment. Without this filter, the unit that just
+    // captured it gets immediately reassigned right back to the tile it's
+    // already standing on (distance 0 always wins the greedy match),
+    // stranding it there for the rest of the turn instead of freeing it up
+    // for a genuinely new target. Same predicate `goal_outcome` uses to
+    // decide whether an ALREADY-assigned goal should advance.
+    let expand_targets: Vec<i32> = goal
+        .orders
+        .iter()
+        .filter(|(k, _)| *k == OrderKind::Expand)
+        .map(|(_, t)| *t)
+        .filter(|t| goal_outcome(state, *t, player).is_none())
+        .collect();
     if expand_targets.is_empty() {
         return status;
     }
