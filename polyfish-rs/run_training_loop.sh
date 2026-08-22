@@ -41,7 +41,7 @@ GAUGE_GAMES="${GAUGE_GAMES:-32}"
 # reading it can afford would otherwise ever reach (#35).
 GAUGE_LINK_GAMES="${GAUGE_LINK_GAMES:-64}"
 # Audit cross-checks (greedy + a rotating retired anchor, plus the training-pair
-# row) run every this-many gauge readings.
+# row) run every this-many gauge readings; 0 disables them, as 0 does for -l.
 GAUGE_AUDIT_EVERY="${GAUGE_AUDIT_EVERY:-5}"
 # Auto-select 3 servers on the dedicated Metal backend and 1 on tch/candle.
 # This preserves the measured Metal optimum without making CPU/Candle runs
@@ -740,7 +740,7 @@ do
 
         # Audit block every GAUGE_AUDIT_EVERY-th gauge: greedy + one retired
         # anchor, rotating — observed vs chain-predicted win rate flags cycles.
-        if [ $((i % (LEAGUE_INTERVAL * GAUGE_AUDIT_EVERY))) -eq 0 ]; then
+        if [ "$GAUGE_AUDIT_EVERY" -gt 0 ] && [ $((i % (LEAGUE_INTERVAL * GAUGE_AUDIT_EVERY))) -eq 0 ]; then
             while read -r AUD; do
                 AUD_NAME=$(json_get name "" <<< "$AUD")
                 AUD_PATH=$(json_get path "" <<< "$AUD")

@@ -23,9 +23,10 @@ import sys
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORKSPACE_ROOT = os.path.dirname(REPO_ROOT)
 
-# Shell drivers to check, with the binaries each one must be seen invoking.
-# A required binary that goes missing fails loudly, so a restructured script
-# cannot pass by yielding an empty flag set.
+# Shell drivers to check, with the targets each one must be seen invoking
+# (a binary, or "script.py subcommand"). A required target that goes missing
+# fails loudly, so a restructured script cannot pass by yielding an empty flag
+# set.
 CONTRACTS = {
     "polyfish-rs/run_training_loop.sh": {
         "self_play", "arena", "polyfish",
@@ -366,7 +367,10 @@ def collect_usage(path, bins):
 def python_help_flags(target):
     """Long flags one `script.py [subcommand] --help` accepts."""
     script, _, subcommand = target.partition(" ")
-    cmd = [sys.executable, os.path.join(REPO_ROOT, script)]
+    path = os.path.join(REPO_ROOT, script)
+    if not os.path.exists(path):
+        raise ContractError(f"{path} does not exist")
+    cmd = [sys.executable, path]
     if subcommand:
         cmd.append(subcommand)
     cmd.append("--help")
