@@ -97,6 +97,7 @@ SERVER_BIN="$RUN_BIN_DIR/polyfish"
 
 # Parse long options first, then short options via getopts
 RESUME_RUN=""
+NEW_RUN_EXPLICIT=false
 RESET=false
 START_SERVER=true
 PASSTHROUGH=()
@@ -113,6 +114,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --new-run|-N)
       RESUME_RUN=""
+      NEW_RUN_EXPLICIT=true
       shift
       ;;
     --reset)
@@ -249,6 +251,32 @@ if [ "$RESET" = true ]; then
         echo "   (ignoring --resume since --reset always starts a fresh run)"
         RESUME_RUN=""
     fi
+fi
+
+# A bare launch is a NEW run, which keeps model.safetensors but rewinds every
+# iteration-keyed mechanism to iteration 1: curriculum back to 10-turn Tiny
+# maps, heuristic prior back to 0.5, value-trust to ~0, anchor-frac to 0.25.
+# On a mature model that is ~30 iterations of degenerate data plus 10-turn
+# gauge readings joining the ladder series, all looking like a fresh experiment
+# in the CSV. Refuse to guess which was meant (#37).
+if [ "$RESET" != true ] && [ "$NEW_RUN_EXPLICIT" != true ] && [ -z "$RESUME_RUN" ] \
+   && [ -f model.safetensors ] && [ -f training_log.csv ] \
+   && [ "$(wc -l < training_log.csv)" -gt 1 ]; then
+    echo "" >&2
+    echo "================================================================" >&2
+    echo " REFUSING TO START: this would be a NEW run on an EXISTING model." >&2
+    echo "" >&2
+    echo " model.safetensors and training_log.csv history are both present," >&2
+    echo " but no --resume was given. A new run rewinds the curriculum, the" >&2
+    echo " heuristic prior, value-trust and anchor-frac to iteration 1 while" >&2
+    echo " keeping the trained weights — ~30 iterations of degenerate data," >&2
+    echo " and short-cap gauge readings joining the ladder series." >&2
+    echo "" >&2
+    echo " Continue the campaign:   ./run_training_loop.sh --resume [run_id]" >&2
+    echo " Deliberately start over: ./run_training_loop.sh --new-run" >&2
+    echo " From scratch (no model): ./run_training_loop.sh --reset" >&2
+    echo "================================================================" >&2
+    exit 1
 fi
 
 # Migrate legacy CSV and resolve run (new run by default; --resume to continue)
@@ -551,7 +579,10 @@ do
         echo "$ALL_FILES" | while read -r FILE; do
             idx=$((idx + 1))
             # Extract iteration number from filename
-            ITER_VAL=$(echo "$FILE" | sed -n 's/.*iter\([0-9]\+\)_.*/\1/p')
+            # [0-9][0-9]* not [0-9]\+: BSD sed's BRE has no \+, so on the macOS
+            # training box ITER_VAL parsed empty and every milestone past the
+            # newest 50 was pruned (#37).
+            ITER_VAL=$(echo "$FILE" | sed -n 's/.*iter\([0-9][0-9]*\)_.*/\1/p')
             
             KEEP=false
             if [ $idx -le 50 ]; then
@@ -571,7 +602,20 @@ do
         done
     fi
 
-    # 5. Strength gauge (EXP 10/11): paired arena reading vs the ladder's
+    # 5. Cleanup (Fresh Games Only)
+    # Move played games to archive so train.py only sees new ones next time.
+    # Before the gauge, not after: a failed reading aborts the run (below), and
+    # a trained-on file left in root is re-trained as fresh next launch (#37).
+    mkdir -p archive
+    # Use || true to avoid script exit if no games were generated
+    mv games_*.safetensors archive/ 2>/dev/null || true
+    
+    # Keep only ARCHIVE_KEEP game files — a constant ~10*BASELINE_GAMES-game
+    # replay window regardless of -g (train.py reads the same value via
+    # REPLAY_BUFFER_FILES)
+    ls -t archive/games_*.safetensors 2>/dev/null | tail -n +$((ARCHIVE_KEEP + 1)) | xargs -r rm
+
+    # 6. Strength gauge (EXP 10/11): paired arena reading vs the ladder's
     # active anchor. ladder.py owns ladder.json (anchors, readings, verdicts):
     # >=80% freezes the model as the next anchor (n=64 link match); two
     # consecutive 8-reading windows that are flat-or-down with slope <= 0 stop
@@ -788,16 +832,5 @@ do
         fi
         rm -f "$GAUGE_LOG"
     fi
-
-    # 6. Cleanup (Fresh Games Only)
-    # Move played games to archive so train.py only sees new ones next time
-    mkdir -p archive
-    # Use || true to avoid script exit if no games were generated
-    mv games_*.safetensors archive/ 2>/dev/null || true
-    
-    # Keep only ARCHIVE_KEEP game files — a constant ~10*BASELINE_GAMES-game
-    # replay window regardless of -g (train.py reads the same value via
-    # REPLAY_BUFFER_FILES)
-    ls -t archive/games_*.safetensors 2>/dev/null | tail -n +$((ARCHIVE_KEEP + 1)) | xargs -r rm
 
 done
