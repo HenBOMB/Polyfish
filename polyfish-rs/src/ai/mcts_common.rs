@@ -52,10 +52,34 @@ pub(crate) struct LeafData {
 /// Convert a terminal game state into a signed outcome in `[-1, 1]` from the
 /// perspective of the player whose turn it currently is.
 ///
-/// Extracted verbatim from the duplicated blocks in `mcts_zero.rs` and
-/// `gumbel_mcts.rs`.
+/// Survival decides first: training plays Domination, so a sole survivor has
+/// won regardless of points (most score outlives its owner — tech, monuments,
+/// parks and exploration are never zeroed on death). Score only breaks
+/// turn-limit terminals, and then only among tribes still alive.
 pub(crate) fn compute_terminal_outcome(game: &Game) -> f32 {
     let current_player = game.state.settings.current_player_turn_id;
+
+    let alive: Vec<i32> = game
+        .state
+        .tribes
+        .iter()
+        .filter(|(_, t)| t.killed_turn <= 0 && t.resigned_turn <= 0)
+        .map(|(id, _)| *id)
+        .collect();
+
+    if alive.len() <= 1 {
+        return match alive.first() {
+            Some(&id) if id == current_player => 1.0,
+            Some(_) => -1.0,
+            None => 0.0, // mutual elimination
+        };
+    }
+
+    // Turn limit with several tribes standing: score decides, among the living.
+    if !alive.contains(&current_player) {
+        return -1.0;
+    }
+
     let my_score = game
         .state
         .tribes
@@ -67,7 +91,7 @@ pub(crate) fn compute_terminal_outcome(game: &Game) -> f32 {
         .state
         .tribes
         .iter()
-        .filter(|(id, _)| **id != current_player)
+        .filter(|(id, _)| **id != current_player && alive.contains(id))
         .map(|(_, t)| t.score)
         .max()
         .unwrap_or(0);
@@ -374,6 +398,67 @@ pub(crate) fn backpropagate_return_with_rewards<N: BackpropNode>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::states::TribeState;
+
+    /// Two-tribe terminal state: `(id, score, killed)` per tribe, `turn_id` to move.
+    fn terminal_game(tribes: &[(i32, i32, bool)], turn_id: i32) -> Game {
+        let mut game = Game::new();
+        game.state.tribes.clear();
+        for &(id, score, killed) in tribes {
+            game.state.tribes.insert(
+                id,
+                TribeState {
+                    id,
+                    score,
+                    killed_turn: if killed { 3 } else { 0 },
+                    ..Default::default()
+                },
+            );
+        }
+        game.state.settings.current_player_turn_id = turn_id;
+        game.state.settings._game_over = true;
+        game
+    }
+
+    #[test]
+    fn elimination_win_beats_the_opponent_score_lead() {
+        // The mover just killed an opponent who still leads on points; most
+        // score survives death, so a score comparison would invert this.
+        let game = terminal_game(&[(0, 40, false), (1, 900, true)], 0);
+        assert_eq!(compute_terminal_outcome(&game), 1.0);
+    }
+
+    #[test]
+    fn elimination_loss_is_negative_even_when_ahead_on_score() {
+        let game = terminal_game(&[(0, 900, true), (1, 40, false)], 0);
+        assert_eq!(compute_terminal_outcome(&game), -1.0);
+    }
+
+    #[test]
+    fn turn_limit_terminal_still_decides_on_score() {
+        let ahead = terminal_game(&[(0, 100, false), (1, 40, false)], 0);
+        assert_eq!(compute_terminal_outcome(&ahead), 1.0);
+
+        let behind = terminal_game(&[(0, 40, false), (1, 100, false)], 0);
+        assert_eq!(compute_terminal_outcome(&behind), -1.0);
+
+        let level = terminal_game(&[(0, 40, false), (1, 40, false)], 0);
+        assert_eq!(compute_terminal_outcome(&level), 0.0);
+    }
+
+    #[test]
+    fn turn_limit_score_ignores_dead_tribes() {
+        // Tribe 2 is dead and still holds the highest score; it must not
+        // decide a turn-limit terminal between the two survivors.
+        let game = terminal_game(&[(0, 100, false), (1, 40, false), (2, 900, true)], 0);
+        assert_eq!(compute_terminal_outcome(&game), 1.0);
+    }
+
+    #[test]
+    fn mutual_elimination_is_a_draw() {
+        let game = terminal_game(&[(0, 100, true), (1, 40, true)], 0);
+        assert_eq!(compute_terminal_outcome(&game), 0.0);
+    }
 
     /// Minimal node for exercising `backpropagate_and_remove_virtual_loss`
     /// in pure isolation from `Game` / `Move` / network machinery.
