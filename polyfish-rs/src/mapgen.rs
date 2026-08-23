@@ -1219,8 +1219,7 @@ pub fn generate(settings: MapGenSettings) -> GameState {
 
     // Place Lighthouses on all 4 corners if version >= 114
     if settings.version >= 114 {
-        let corners = [0, size - 1, size * (size - 1), size * size - 1];
-        for &idx in &corners {
+        for &idx in &crate::coords::map_corners(size) {
             map[idx as usize].above = Some("lighthouse".to_string());
         }
     }

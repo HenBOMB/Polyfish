@@ -605,6 +605,27 @@ pub fn score_move(game: &Game, mv: &dyn Move) -> f32 {
                             pull += (8.0 - 1.5 * dest_dist as f32).max(0.0);
                             score += pull * res_openness;
                         }
+
+                        // Lighthouse pull: additive, not exclusive with the
+                        // capture/frontier terms above -- a corner is a
+                        // certain (not fogged-guess) Lighthouse once
+                        // version >= 114, and revealing it banks a real +1
+                        // population to the capital regardless of how
+                        // "interesting" the surrounding fog otherwise looks
+                        // (see `discover_tiles`). Openness-scaled curiosity
+                        // alone can starve a low-traffic corner of any pull;
+                        // this gives it one that doesn't depend on that.
+                        // Zeroes out the instant the corner's `explorers`
+                        // set contains us -- no separate flag to desync.
+                        if let Some((corner_coords, corner_src_dist)) =
+                            nearest_unrevealed_lighthouse_corner(state, player_id, src_coords)
+                        {
+                            let dest_dist = corner_coords.chebyshev_distance_to(&target_coords);
+                            if dest_dist < corner_src_dist {
+                                score += 10.0;
+                            }
+                            score += (12.0 - 2.0 * dest_dist as f32).max(0.0);
+                        }
                     }
 
                     // Mild center-of-map pull — controlling the center
@@ -904,6 +925,38 @@ pub(crate) fn nearest_frontier_resource(
                     .map_or(false, |t| !t.explorers.contains(&tribe_id))
             });
         if !has_fog_within_2 {
+            continue;
+        }
+        let coords = Coords::from_index(idx, map_size);
+        let dist = coords.chebyshev_distance_to(&from);
+        if best.map_or(true, |(_, b)| dist < b) {
+            best = Some((coords, dist));
+        }
+    }
+    best
+}
+
+/// Nearest map corner that's a certain Lighthouse (`version >= 114`, see
+/// `actions::discovery::is_lighthouse_corner`) not yet explored by
+/// `tribe_id`. Unlike `nearest_frontier_resource`, this isn't a guess from
+/// fog placement -- corners are guaranteed Lighthouse locations, so a real
+/// player already knows to head there. Dist is Chebyshev.
+pub(crate) fn nearest_unrevealed_lighthouse_corner(
+    state: &crate::states::GameState,
+    tribe_id: i32,
+    from: Coords,
+) -> Option<(Coords, i32)> {
+    let map_size = state.map_size();
+    let mut best: Option<(Coords, i32)> = None;
+    for idx in crate::coords::map_corners(map_size) {
+        if !crate::actions::discovery::is_lighthouse_corner(state, idx) {
+            continue;
+        }
+        let explored = state
+            .tiles
+            .get(&idx)
+            .map_or(false, |t| t.explorers.contains(&tribe_id));
+        if explored {
             continue;
         }
         let coords = Coords::from_index(idx, map_size);
@@ -1416,6 +1469,72 @@ mod tests {
             plain_score - hub_worthy_score >= 14.0,
             "a Monument on a tile that would make a good hub ({hub_worthy_score}) must score \
              meaningfully below a plain tile ({plain_score}), not tie with it"
+        );
+    }
+
+    /// The "flag" the pull is gated on is derived (explored-ness of the
+    /// corner tile), not stored -- this pins the derivation itself: no pull
+    /// pre-114 (corners aren't guaranteed Lighthouses yet), a hit once
+    /// version >= 114 and the corner is still unexplored, and nothing once
+    /// it's been seen.
+    #[test]
+    fn nearest_unrevealed_lighthouse_corner_only_fires_for_true_certain_corners() {
+        let player_id = 1;
+        let mut state = explored_field_state(player_id);
+        let from = Coords::from_index(5 * 11 + 5, 11);
+        state.tiles.get_mut(&0).unwrap().explorers.remove(&player_id);
+
+        assert!(
+            nearest_unrevealed_lighthouse_corner(&state, player_id, from).is_none(),
+            "pre-114 maps don't guarantee a corner is a Lighthouse -- must not fire"
+        );
+
+        state.settings.version = 114;
+        assert_eq!(
+            nearest_unrevealed_lighthouse_corner(&state, player_id, from).map(|(c, _)| c.idx),
+            Some(0)
+        );
+
+        state.tiles.get_mut(&0).unwrap().explorers.insert(player_id);
+        assert!(
+            nearest_unrevealed_lighthouse_corner(&state, player_id, from).is_none(),
+            "an already-explored corner must not fire even under version >= 114"
+        );
+    }
+
+    /// The actual ask: an extra pull toward a certain-but-unrevealed
+    /// Lighthouse corner, additive on top of whatever generic fog/frontier
+    /// terms already apply, that disappears entirely once the corner is
+    /// revealed -- not a stored flag, but the same effect. Unit/targets are
+    /// placed far enough from the corner that the generic openness/reveal
+    /// windows (radius <= 3) never touch it, isolating this term exactly:
+    /// the two states are identical except for the corner's explored-ness,
+    /// so the whole score delta must equal the lighthouse pull and nothing
+    /// else (+10 closing since 5 < 6, +12-2*5=+2 distance term = +12 total).
+    #[test]
+    fn lighthouse_pull_decays_to_zero_once_the_corner_is_revealed() {
+        let player_id = 1;
+        let unit_idx = 6 * 11 + 6;
+        let target_idx = 5 * 11 + 5;
+        let step = StepMove::new(unit_idx, target_idx);
+
+        let mut unrevealed = explored_field_state(player_id);
+        unrevealed.settings.version = 114;
+        unrevealed.tiles.get_mut(&0).unwrap().explorers.remove(&player_id);
+        let _ = summon_unit(&mut unrevealed, UnitType::Warrior, unit_idx, false, false);
+        let score_unrevealed = score_move(&Game { state: unrevealed }, &step);
+
+        let mut revealed = explored_field_state(player_id);
+        revealed.settings.version = 114;
+        let _ = summon_unit(&mut revealed, UnitType::Warrior, unit_idx, false, false);
+        let score_revealed = score_move(&Game { state: revealed }, &step);
+
+        assert!(
+            (score_unrevealed - score_revealed - 12.0).abs() < 0.01,
+            "closing on an unrevealed, certain Lighthouse corner ({score_unrevealed}) must beat \
+             the identical move once that corner is already revealed ({score_revealed}) by \
+             exactly the lighthouse pull (+12) and nothing else -- once revealed, the pull must \
+             vanish entirely"
         );
     }
 }

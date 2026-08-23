@@ -506,7 +506,7 @@ pub fn goal_potential_with_unit_goals(
     }
     // Lighthouse nudge (v4): each explored map corner pays once.
     if width > 0 {
-        for c in [0, width - 1, width * (width - 1), width * width - 1] {
+        for c in crate::coords::map_corners(width) {
             if state
                 .tiles
                 .get(&c)
@@ -535,7 +535,7 @@ pub fn goal_potential_with_unit_goals(
                 .count() as f32;
             let hidden_frac = (1.0 - revealed / (width * width) as f32).max(0.0);
             if hidden_frac > 0.0 {
-                let corners = [0, width - 1, width * (width - 1), width * width - 1];
+                let corners = crate::coords::map_corners(width);
                 for city in explorer_cities {
                     let dark_in_reach = corners
                         .iter()

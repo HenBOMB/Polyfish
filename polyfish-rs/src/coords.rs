@@ -81,6 +81,14 @@ impl Coords {
     }
 }
 
+/// The four corner tile indices of a square map. SSOT for corner geometry --
+/// mapgen places Lighthouses here, and several AI modules price around that
+/// (reveal reward, exploration pull); all of them read this instead of
+/// re-deriving the formula.
+pub fn map_corners(size: i32) -> [i32; 4] {
+    [0, size - 1, size * (size - 1), size * size - 1]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

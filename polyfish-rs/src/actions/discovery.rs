@@ -7,17 +7,16 @@ use crate::states::{GameState, PlayerId, UnitState};
 use crate::types::{StructureType, TerrainType};
 
 /// Lighthouses always occupy every map corner, unconditionally
-/// (`mapgen.rs`: `corners = [0, size-1, size*(size-1), size*size-1]`) — a
-/// fixed rule of map generation, not hidden state. A real player already
-/// knows a corner tile is a lighthouse before exploring it, so this lets
-/// FOW-honest MCTS simulation credit that one narrow fact without peeking at
+/// (`coords::map_corners`, placed by `mapgen.rs`) — a fixed rule of map
+/// generation, not hidden state. A real player already knows a corner tile
+/// is a lighthouse before exploring it, so this lets FOW-honest MCTS
+/// simulation credit that one narrow fact without peeking at
 /// `state.structures` for anything else under fog.
-fn is_lighthouse_corner(state: &GameState, idx: i32) -> bool {
+pub(crate) fn is_lighthouse_corner(state: &GameState, idx: i32) -> bool {
     if state.settings.version < 114 {
         return false;
     }
-    let size = state.settings.size;
-    idx == 0 || idx == size - 1 || idx == size * (size - 1) || idx == size * size - 1
+    crate::coords::map_corners(state.settings.size).contains(&idx)
 }
 
 /// Discover tiles around a unit or specific tiles
