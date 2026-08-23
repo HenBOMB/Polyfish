@@ -408,6 +408,10 @@ struct GameResult {
     /// Mean tribe SPT sampled at the start of game turns 0, 5, 10, … (player 1
     /// to act, before any moves on that turn).
     spt_at_turn: HashMap<i32, f32>,
+    /// Largest |incremental score − canonical recompute| at game end. The
+    /// value label and the reward-aware backup are built from the incremental
+    /// score, so anything but 0 is a silent bias in the training signal (#40).
+    score_drift: i32,
 }
 
 const SPT_MILESTONES: [i32; 7] = [0, 5, 10, 15, 20, 25, 30];
@@ -1111,6 +1115,7 @@ fn play_single_game(
 
     Some(GameResult {
         game_idx,
+        score_drift: polyfish::score::max_abs_score_drift(&game.state),
         history: game_history,
         scores,
         final_cities,
@@ -2080,6 +2085,8 @@ fn main() -> anyhow::Result<()> {
         HashMap::new();
 
     let mut decisive_games = 0usize;
+    let mut score_drift_max = 0i32;
+    let mut score_drift_games = 0usize;
     let mut anchor_games_n = 0usize;
     let mut anchor_model_wins = 0.0f32;
 
@@ -2125,6 +2132,10 @@ fn main() -> anyhow::Result<()> {
     for result in results {
         if result.decisive {
             decisive_games += 1;
+        }
+        if result.score_drift != 0 {
+            score_drift_games += 1;
+            score_drift_max = score_drift_max.max(result.score_drift);
         }
         if let Some(anchor_pid) = result.anchor_seat {
             anchor_games_n += 1;
@@ -2535,6 +2546,16 @@ fn main() -> anyhow::Result<()> {
         );
     }
 
+    // Score parity: the value label and the reward-aware backup both read the
+    // incremental score, so a divergence from the canonical recompute is a
+    // bias no other training metric shows (#40).
+    if score_drift_games > 0 {
+        eprintln!(
+            "[Self-Play] WARNING: incremental score diverged from the recompute in {score_drift_games}/{} games (max |drift| {score_drift_max})",
+            args.num_games
+        );
+    }
+
     let metrics = json!({
         "num_games": args.num_games,
         "avg_score": avg_score,
@@ -2577,6 +2598,8 @@ fn main() -> anyhow::Result<()> {
         "anchor_games": anchor_games_n,
         "anchor_model_wins": anchor_model_wins,
         "aborted_games": aborted_games_n,
+        "score_drift_max": score_drift_max,
+        "score_drift_games": score_drift_games,
         "games_file": games_file,
         "moves_by_turn": moves_by_turn,
     });
@@ -2867,18 +2890,26 @@ mod opening_sampler_tests {
     }
 
     /// Openings drawn from one game's stream, as comparable strings.
-    fn draws(seed: i64, game_idx: usize, game: &Game, visits: &[MoveVisit], n: usize) -> Vec<String> {
+    fn draws(
+        seed: i64,
+        game_idx: usize,
+        game: &Game,
+        visits: &[MoveVisit],
+        n: usize,
+    ) -> Vec<String> {
         let mut rng = opening_rng_for(seed, game_idx);
         (0..n)
-            .map(|_| match sample_opening_move(&game.state, visits, &mut rng) {
-                Some(m) => format!(
-                    "{:?}:{:?}:{:?}",
-                    m.move_type(),
-                    m.source_idx().ok(),
-                    m.target_idx().ok()
-                ),
-                None => "none".to_string(),
-            })
+            .map(
+                |_| match sample_opening_move(&game.state, visits, &mut rng) {
+                    Some(m) => format!(
+                        "{:?}:{:?}:{:?}",
+                        m.move_type(),
+                        m.source_idx().ok(),
+                        m.target_idx().ok()
+                    ),
+                    None => "none".to_string(),
+                },
+            )
             .collect()
     }
 

@@ -65,6 +65,11 @@ HEADER = [
     "vlab_td_absmean",
     "vlab_wl_absmean",
     "vlab_spt_absmean",
+    # Score parity (#40): the value label and the reward-aware backup are built
+    # from the incremental tribe score. A nonzero drift from the canonical
+    # recompute biases the label in a way no other metric here shows.
+    "score_drift_max",
+    "score_drift_games",
     "match_type",
     # value_r2 above is IN-SAMPLE. train.py has computed the holdout figure
     # since the split landed, and this file dropped it on the floor — the gap
@@ -605,6 +610,8 @@ def append_row(
         "vlab_td_absmean": game_metrics.get("vlab_td_absmean", ""),
         "vlab_wl_absmean": game_metrics.get("vlab_wl_absmean", ""),
         "vlab_spt_absmean": game_metrics.get("vlab_spt_absmean", ""),
+        "score_drift_max": game_metrics.get("score_drift_max", ""),
+        "score_drift_games": game_metrics.get("score_drift_games", ""),
         "match_type": normalize_match_type(match_type),
         "value_r2_insample": train_metrics.get("value_r2_insample", ""),
         "value_r2_holdout": train_metrics.get("value_r2_holdout", ""),

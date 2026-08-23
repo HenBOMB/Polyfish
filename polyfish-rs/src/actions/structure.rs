@@ -18,6 +18,13 @@ fn next_rng_xxhash(current_seed: &mut i64, initial_seed: i64) -> i64 {
     *current_seed
 }
 
+/// Player whose score a structure at `idx` counts toward: the tile's owner,
+/// or nobody on neutral ground — the recompute scores structures through tile
+/// ownership (#40).
+fn structure_score_owner(state: &GameState, idx: i32) -> Option<crate::states::PlayerId> {
+    state.tiles.get(&idx).map(|t| t.owner).filter(|&o| o > 0)
+}
+
 /// Create a structure at a tile
 pub fn create_structure(
     state: &mut GameState,
@@ -32,6 +39,7 @@ pub fn create_structure(
         level,
         founded: state.settings.turn,
     };
+    let structure_score = crate::score::get_structure_score(&structure);
 
     if structure_type != StructureType::Road {
         state.structures.insert(idx, Some(structure));
@@ -64,20 +72,29 @@ pub fn create_structure(
         ));
     }
 
-    // Award score for structure (e.g. Monuments giving 400)
-    let settings = get_structure_setting(structure_type);
-    if settings.reward_score > 0 {
+    // Award score for the structure (monuments 400, temples 100 per level).
+    // The recompute credits the owner of the city holding the tile, so credit
+    // that player here rather than whoever is to move (#40).
+    let score_gain = structure_score;
+    if score_gain > 0 {
         if let Some(tribe) = state.tribes.get_mut(&pov_id) {
-            tribe.score += settings.reward_score;
             tribe.built_unique_improvements.insert(structure_type);
         }
-        let score_gain = settings.reward_score;
         undos.push(Box::new(move |s| {
             if let Some(t) = s.tribes.get_mut(&pov_id) {
-                t.score -= score_gain;
                 t.built_unique_improvements.remove(&structure_type);
             }
         }));
+        if let Some(score_owner) = structure_score_owner(state, idx) {
+            if let Some(tribe) = state.tribes.get_mut(&score_owner) {
+                tribe.score += score_gain;
+            }
+            undos.push(Box::new(move |s| {
+                if let Some(t) = s.tribes.get_mut(&score_owner) {
+                    t.score -= score_gain;
+                }
+            }));
+        }
     }
 
     undos.push(Box::new(move |s| {
@@ -115,20 +132,21 @@ pub fn destroy_structure(state: &mut GameState, idx: i32) -> UndoCallback {
     state.structures.shift_remove(&idx);
 
     let mut undos: Vec<UndoCallback> = Vec::new();
-    let pov_id = state.settings.current_player_turn_id;
 
-    // Handle score reduction (e.g. Monuments)
-    let settings = get_structure_setting(structure.structure_type);
-    if settings.reward_score > 0 {
-        if let Some(tribe) = state.tribes.get_mut(&pov_id) {
-            tribe.score -= settings.reward_score;
-        }
-        let score_loss = settings.reward_score;
-        undos.push(Box::new(move |s| {
-            if let Some(t) = s.tribes.get_mut(&pov_id) {
-                t.score += score_loss;
+    // Handle score reduction, off the player the build credited — the tile's
+    // owner, who may no longer be the player to move (#40).
+    let score_loss = crate::score::get_structure_score(&structure);
+    if score_loss > 0 {
+        if let Some(score_owner) = structure_score_owner(state, idx) {
+            if let Some(tribe) = state.tribes.get_mut(&score_owner) {
+                tribe.score -= score_loss;
             }
-        }));
+            undos.push(Box::new(move |s| {
+                if let Some(t) = s.tribes.get_mut(&score_owner) {
+                    t.score += score_loss;
+                }
+            }));
+        }
     }
 
     // Restore structure on undo
@@ -389,9 +407,8 @@ pub fn capture_ruin(
                     rewards: vec![CityRewardType::CityWall],
                     _territory: territory.clone(),
                 };
+                let city_score = crate::score::get_city_transfer_score(&city);
                 if let Some(tribe) = state.tribes.get_mut(&pov_id) {
-                    // Level 3 City: 100 (base) + 2 * 50 (levels) = 200 points
-                    let city_score = 100 + (3 - 1) * 50;
                     tribe.score += city_score;
                     tribe.cities.push(city.clone());
 
@@ -399,15 +416,6 @@ pub fn capture_ruin(
                         if let Some(t) = st.tribes.get_mut(&pov_id) {
                             t.score -= city_score;
                             t.cities.pop();
-                        }
-                    }));
-                }
-                if let Some(tile) = state.tiles.get_mut(&tile_idx) {
-                    let old_owner = tile.owner;
-                    tile.owner = pov_id;
-                    undos.push(Box::new(move |st: &mut GameState| {
-                        if let Some(t) = st.tiles.get_mut(&tile_idx) {
-                            t.owner = old_owner;
                         }
                     }));
                 }
@@ -634,25 +642,20 @@ pub fn capture_ruin(
             };
 
             // 3. Add to tribe
+            let city_score = crate::score::get_city_transfer_score(&city);
             if let Some(tribe) = s.tribes.get_mut(&pov_id) {
                 tribe.cities.push(city.clone());
+                tribe.score += city_score;
                 undos.push(Box::new(move |st: &mut GameState| {
                     if let Some(t) = st.tribes.get_mut(&pov_id) {
                         t.cities.pop();
+                        t.score -= city_score;
                     }
                 }) as UndoCallback);
             }
 
-            // 4. Update tile
-            if let Some(tile) = s.tiles.get_mut(&tile_idx) {
-                let old_owner = tile.owner;
-                tile.owner = pov_id;
-                undos.push(Box::new(move |st: &mut GameState| {
-                    if let Some(t) = st.tiles.get_mut(&tile_idx) {
-                        t.owner = old_owner;
-                    }
-                }) as UndoCallback);
-            }
+            // Tile ownership (and its 20 points) is transferred by the
+            // `claim_territory` call in step 6.
 
             // 5. 4 adjacent shallow water tiles
             let adj = crate::functions::get_adjacent_indices(s, tile_idx, 1);

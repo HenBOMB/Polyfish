@@ -622,10 +622,7 @@ pub fn is_enemy_capital(state: &GameState, idx: i32, pov_id: PlayerId) -> bool {
     if !is_enemy_city(state, idx, pov_id) {
         return false;
     }
-    state
-        .tiles
-        .get(&idx)
-        .map_or(false, |t| t.capital_of != 0)
+    state.tiles.get(&idx).map_or(false, |t| t.capital_of != 0)
 }
 
 /// Check if a tile is frozen (has Ice terrain or Polaris climate)
@@ -1032,47 +1029,17 @@ pub fn calculate_detailed_tribe_score(state: &GameState, player_id: PlayerId) ->
 
     let mut score = 0;
 
-    // 100 per level, 20 per territory
+    // Cities carry their level, population and parks; territory and the
+    // structures standing on it are scored by tile ownership, which is what
+    // the incremental path moves. Both halves are `score::` helpers shared
+    // with the capture/claim paths so they cannot disagree (#40).
     for city in &tribe.cities {
-        // City score: 100 + 50 per level above 1
-        let city_score = if city.level >= 1 {
-            100 + (city.level - 1) * 50
-        } else {
-            0
-        };
-        // Territory: 20 per tile
-        score += city_score + (city._territory.len() as i32 * 20);
-
-        // Structure scores (Temples & Monuments)
-        for &tile_idx in &city._territory {
-            if let Some(structure) = crate::functions::get_structure_at(state, tile_idx) {
-                match structure.structure_type {
-                    StructureType::Temple
-                    | StructureType::WaterTemple
-                    | StructureType::ForestTemple
-                    | StructureType::MountainTemple
-                    | StructureType::IceTemple => {
-                        // Temples: 100 per level
-                        score += structure.level * 100;
-                    }
-                    _ => {
-                        // Monuments and others
-                        let settings = crate::settings::structures::get_structure_setting(
-                            structure.structure_type,
-                        );
-                        score += settings.reward_score;
-                    }
-                }
-            }
+        score += crate::score::get_city_transfer_score(city);
+    }
+    for (&idx, tile) in &state.tiles {
+        if tile.owner == player_id {
+            score += crate::score::get_tile_score(state, idx);
         }
-
-        // Park: 250 points
-        if city.has_park() {
-            score += 250;
-        }
-
-        // Population: 5 points per population
-        score += city.population * 5;
     }
 
     // Except for Luxidoor, which already starts with a level 3 city (capital)
@@ -1092,19 +1059,7 @@ pub fn calculate_detailed_tribe_score(state: &GameState, player_id: PlayerId) ->
 
     // 5 per star of unit cost
     for unit in &tribe.units {
-        // Converted units do not change score (worth 0 for new owner)
-        if unit.converted {
-            continue;
-        }
-
-        // Score = 5 * (Stars spent on unit + Stars spent on its passenger/original carrier)
-        let cost = crate::settings::units::get_unit_setting(unit.unit_type).cost
-            + unit
-                .passenger_type
-                .map(|p| crate::settings::units::get_unit_setting(p).cost)
-                .unwrap_or(0);
-
-        score += cost * 5;
+        score += crate::score::get_unit_score(unit);
     }
 
     // 100 per tech tier

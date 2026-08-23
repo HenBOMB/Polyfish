@@ -493,11 +493,7 @@ pub fn step_unit(
                 };
 
                 if state.settings._are_you_sure && stomp_damage > 0.0 {
-                    undos.push(crate::memory::note_attacked(
-                        state,
-                        adj_owner,
-                        adj_tile_idx,
-                    ));
+                    undos.push(crate::memory::note_attacked(state, adj_owner, adj_tile_idx));
                 }
 
                 if stomp_damage > 0.0 {
@@ -588,6 +584,15 @@ pub fn step_unit(
     }
 
     // Check embark/disembark
+    // Embark retypes the unit in place (Cloak 8★ → Dinghy 2★) and score
+    // prices the current type, so the difference is settled after the chain
+    // below rather than left to drift (#40).
+    let unit_score_before = state
+        .tribes
+        .get(&unit_owner)
+        .and_then(|t| t.units.get(unit_idx))
+        .map(crate::score::get_unit_score)
+        .unwrap_or(0);
     let struct_at_dest = get_structure_type_at(state, to_tile_idx);
     let is_port = struct_at_dest == Some(StructureType::Port);
     let mut should_remove_invis = false;
@@ -665,6 +670,24 @@ pub fn step_unit(
                 unit.effects.insert(UnitEffect::Invisible);
             }
         }
+    }
+
+    let unit_score_after = state
+        .tribes
+        .get(&unit_owner)
+        .and_then(|t| t.units.get(unit_idx))
+        .map(crate::score::get_unit_score)
+        .unwrap_or(unit_score_before);
+    if unit_score_after != unit_score_before {
+        let delta = unit_score_after - unit_score_before;
+        if let Some(tribe) = state.tribes.get_mut(&unit_owner) {
+            tribe.score += delta;
+        }
+        undos.push(Box::new(move |s| {
+            if let Some(t) = s.tribes.get_mut(&unit_owner) {
+                t.score -= delta;
+            }
+        }));
     }
 
     let has_dash = crate::functions::has_skill(
@@ -1114,11 +1137,7 @@ pub fn attack_unit(
                 if let Some(adj_unit_idx) = current_adj_unit_idx {
                     // Fog memory: splashed unit remembers being hit here.
                     if state.settings._are_you_sure && individual_splash_damage > 0.0 {
-                        undos.push(crate::memory::note_attacked(
-                            state,
-                            adj_owner,
-                            adj_idx,
-                        ));
+                        undos.push(crate::memory::note_attacked(state, adj_owner, adj_idx));
                     }
 
                     // Apply Damage
